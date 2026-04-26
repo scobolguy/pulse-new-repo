@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cluster/Gateway Config</title>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 2em; }
+        label, input, select { font-size: 1.2em; }
+        input[type=text] { width: 200px; }
+        button { font-size: 1.1em; }
+    </style>
+</head>
+<body>
+    <h2>Cluster & Gateway Configuration</h2>
+    <form id="clusterForm">
+        <label for="clusterId">Cluster ID:</label>
+        <input type="text" id="clusterId" name="clusterId" required><br><br>
+        <label for="isGateway">Gateway Node:</label>
+        <select id="isGateway" name="isGateway">
+            <option value="false">No</option>
+            <option value="true">Yes</option>
+        </select><br><br>
+        <button type="submit">Save Config</button>
+    </form>
+    <div id="configResult"></div>
+    <script>
+    async function loadConfig() {
+        const res = await fetch('/config/get');
+        const cfg = await res.json();
+        document.getElementById('clusterId').value = cfg.clusterId;
+        document.getElementById('isGateway').value = cfg.isGateway ? 'true' : 'false';
+    }
+    document.getElementById('clusterForm').onsubmit = async function(e) {
+        e.preventDefault();
+        const clusterId = document.getElementById('clusterId').value;
+        const isGateway = document.getElementById('isGateway').value;
+        const params = new URLSearchParams({ clusterId, isGateway });
+        const res = await fetch('/config/set', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: params.toString()
+        });
+        document.getElementById('configResult').innerText = await res.text();
+    };
+    loadConfig();
+    </script>
+</body>
+</html>

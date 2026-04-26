@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Set Node Name</title>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 2em; }
+        label, input { font-size: 1.2em; }
+        input[type=text] { width: 200px; }
+        button { font-size: 1.1em; }
+    </style>
+</head>
+<body>
+    <h2>Provision Device</h2>
+    <form id="provisionForm">
+        <label for="ssid">WiFi SSID:</label>
+        <input type="text" id="ssid" name="ssid" required><br><br>
+        <label for="password">WiFi Password:</label>
+        <input type="password" id="password" name="password" required><br><br>
+        <label for="nodeName">Node Name:</label>
+        <input type="text" id="nodeName" name="nodeName" value="{{NODE_NAME}}" required><br><br>
+        <button type="submit">Provision</button>
+    </form>
+    <div id="result"></div>
+    <div id="qrcode"></div>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+    <script>
+    document.getElementById('provisionForm').onsubmit = async function(e) {
+        e.preventDefault();
+        const ssid = document.getElementById('ssid').value;
+        const password = document.getElementById('password').value;
+        const nodeName = document.getElementById('nodeName').value;
+        const params = new URLSearchParams({ ssid, password, nodeName });
+        const res = await fetch('/provision', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: params.toString()
+        });
+        document.getElementById('result').innerText = await res.text();
+    };
+    // Optionally show a QR code for WiFi connection
+    function showQRCode() {
+        const ssid = document.getElementById('ssid').value;
+        const password = document.getElementById('password').value;
+        if (ssid && password) {
+            const wifiString = `WIFI:T:WPA;S:${ssid};P:${password};;`;
+            QRCode.toCanvas(document.getElementById('qrcode'), wifiString, { width: 200 }, function (error) {
+                if (error) document.getElementById('qrcode').innerText = 'QR error';
+            });
+        }
+    }
+    document.getElementById('ssid').addEventListener('input', showQRCode);
+    document.getElementById('password').addEventListener('input', showQRCode);
+    </script>
+</body>
+</html>

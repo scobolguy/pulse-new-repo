@@ -1,0 +1,11 @@
+ESP Virtual P Machine — 
+Architecture Specification v1.0
+A Portable Pcode Runtime for Constrained Embedded Systems
+Date: April 2026
+Status: DRAFT
+Classification: Internal Engineering Reference
+Authors: ESPVM Architecture Working Group
+
+[Full document content as provided above]
+
+ESP Virtual P Machine Architecture — Draft v1.0 — April 2026
