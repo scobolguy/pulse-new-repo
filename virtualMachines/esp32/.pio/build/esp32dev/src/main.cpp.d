@@ -138,7 +138,7 @@
  .pio/libdeps/esp32dev/ArduinoJson/src/ArduinoJson.h \
  .pio/libdeps/esp32dev/ArduinoJson/src/ArduinoJson.hpp \
  .pio/libdeps/esp32dev/ArduinoJson/src/ArduinoJson/Configuration.hpp \
- src/pmachine.h \
+ src/ConfigSchema.h src/pmachine.h \
  C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFi.h \
  C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/cores/esp32/Print.h \
  C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/cores/esp32/IPv6Address.h \

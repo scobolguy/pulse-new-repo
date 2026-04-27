@@ -1,0 +1,31 @@
+<program> ::= 'program' <identifier> ';' { <declaration> } 'begin' { <statement> } 'end' '.'
+<declaration> ::= <var_decl> | <proc_decl>
+<var_decl> ::= 'var' <var_list> ';'
+<var_list> ::= <identifier> { ',' <identifier> } ':' <type>
+<type> ::= 'integer' | 'boolean' | 'real' | <array_type> | <record_type>
+<array_type> ::= 'array' '[' <int_lit> '..' <int_lit> ']' 'of' <type>
+<record_type> ::= 'record' { <var_list> ';' } 'end'
+<proc_decl> ::= 'procedure' <identifier> [ '(' <param_list> ')' ] ';' { <declaration> } 'begin' { <statement> } 'end' ';'
+<param_list> ::= <param> { ';' <param> }
+<param> ::= <identifier> { ',' <identifier> } ':' <type>
+<statement> ::= <assign_stmt> | <if_stmt> | <while_stmt> | <for_stmt> | <proc_call> | <spawn_stmt> | <send_stmt> | <recv_stmt> | ';'
+<assign_stmt> ::= <identifier> ':=' <expr> ';'
+<if_stmt> ::= 'if' <expr> 'then' <statement> [ 'else' <statement> ]
+<while_stmt> ::= 'while' <expr> 'do' <statement>
+<for_stmt> ::= 'for' <identifier> ':=' <expr> 'to' <expr> 'do' <statement>
+<proc_call> ::= <identifier> [ '(' [ <expr> { ',' <expr> } ] ')' ] ';'
+<spawn_stmt> ::= 'spawn' <identifier> [ '(' [ <expr> { ',' <expr> } ] ')' ] ';'
+<send_stmt> ::= 'send' '(' <identifier> { ',' <expr> } ')' ';'
+<recv_stmt> ::= 'receive' '(' <identifier> { ',' <identifier> } ')' ';'
+<expr> ::= <simple_expr> [ <relop> <simple_expr> ]
+<simple_expr> ::= <term> { <addop> <term> }
+<term> ::= <factor> { <mulop> <factor> }
+<factor> ::= <identifier> | <int_lit> | <bool_lit> | '(' <expr> ')'
+<relop> ::= '=' | '<>' | '<' | '<=' | '>' | '>='
+<addop> ::= '+' | '-' | 'or'
+<mulop> ::= '*' | '/' | 'and'
+<identifier> ::= letter { letter | digit | '_' }
+<int_lit> ::= digit { digit }
+<bool_lit> ::= 'true' | 'false'
+letter ::= 'A'..'Z' | 'a'..'z'
+digit ::= '0'..'9'

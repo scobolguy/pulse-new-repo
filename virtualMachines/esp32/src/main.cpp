@@ -2,55 +2,47 @@
 #include <FS.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+#include "ConfigSchema.h"
+#include "pmachine.h"
+
 #define CONFIG_PATH "/config.json"
+
 
 struct ClusterConfig {
     String clusterId = "default";
     bool isGateway = false;
+    static const FieldDescriptor schema[2];
+    static constexpr size_t schemaSize = 2;
 };
 
-ClusterConfig clusterConfig;
+struct WifiConfig {
+    String ssid = "";
+    String password = "";
+    static const FieldDescriptor schema[2];
+    static constexpr size_t schemaSize = 2;
+};
 
-void loadClusterConfig() {
-    File f = LittleFS.open(CONFIG_PATH, "r");
-    if (!f) return;
-    StaticJsonDocument<256> doc;
-    DeserializationError err = deserializeJson(doc, f);
-    if (!err) {
-        clusterConfig.clusterId = doc["clusterId"] | "default";
-        clusterConfig.isGateway = doc["isGateway"] | false;
-    }
-    f.close();
-}
+const FieldDescriptor ClusterConfig::schema[2] = {
+    FIELD_DESC(ClusterConfig, clusterId, FieldType::StringType),
+    FIELD_DESC(ClusterConfig, isGateway, FieldType::BoolType)
+};
+const FieldDescriptor WifiConfig::schema[2] = {
+    FIELD_DESC(WifiConfig, ssid, FieldType::StringType),
+    FIELD_DESC(WifiConfig, password, FieldType::StringType)
+};
 
-void saveClusterConfig() {
-    File f = LittleFS.open(CONFIG_PATH, "w");
-    if (!f) return;
-    StaticJsonDocument<256> doc;
-    doc["clusterId"] = clusterConfig.clusterId;
-    doc["isGateway"] = clusterConfig.isGateway;
-    serializeJson(doc, f);
-    f.close();
-}
-#include "pmachine.h"
-
-// main.cpp
-// ESP32 VM minimal network provisioning and presence announcement using PlatformIO
-// Features:
-// - WiFiManager for smartphone provisioning
-// - UDP broadcast for presence and node discovery
-// - Non-blocking UDP receive for node discovery
-// - Web UI for cluster/gateway configuration at /web/cluster.html
-// - Cluster/gateway config saved to LittleFS and used at runtime
-// - PMachine service endpoints for VM control and status
-
-
+#define CONFIG_PATH "/config.json"
+#define WIFI_CONFIG_PATH "/wifi.json"
+#define NODE_NAME_PATH "/node_name.txt"
 
 #include <WiFi.h>
 #include <WiFiUdp.h>
-#include <LittleFS.h>
 #include <ESPAsyncWebServer.h>
-#define NODE_NAME_PATH "/node_name.txt"
+
+// Global config and PMachine instances
+ClusterConfig clusterConfig;
+WifiConfig wifiConfig;
+pmachine::PMachine pm;
 
 
 #include <map>
@@ -70,8 +62,7 @@ void notFound(AsyncWebServerRequest *request) {
     request->send(404, "text/plain", "Not found");
 }
 
-// Global PMachine instance for all endpoints
-static pmachine::PMachine pm;
+// ...existing code...
 
 void setupWebServer() {
                     // Serve cluster config UI
@@ -87,9 +78,10 @@ void setupWebServer() {
                     });
                 // Cluster config endpoints
                 server.on("/config/get", HTTP_GET, [](AsyncWebServerRequest *request){
-                    String json = "{";
-                    json += "\"clusterId\":\"" + clusterConfig.clusterId + "\",";
-                    json += "\"isGateway\":" + String(clusterConfig.isGateway ? "true" : "false") + "}";
+                    StaticJsonDocument<256> doc;
+                    serializeWithSchema(clusterConfig, ClusterConfig::schema, 2, doc);
+                    String json;
+                    serializeJson(doc, json);
                     request->send(200, "application/json", json);
                 });
                 server.on("/config/set", HTTP_POST, [](AsyncWebServerRequest *request){
@@ -97,7 +89,7 @@ void setupWebServer() {
                         clusterConfig.clusterId = request->getParam("clusterId", true)->value();
                     if (request->hasParam("isGateway", true))
                         clusterConfig.isGateway = request->getParam("isGateway", true)->value() == "true";
-                    saveClusterConfig();
+                    saveConfigToFile(clusterConfig, ClusterConfig::schema, 2, CONFIG_PATH);
                     request->send(200, "text/plain", "Config updated");
                 });
             // PMachine status endpoint
@@ -177,8 +169,7 @@ void setupWebServer() {
                 pm.clearAllBreakpoints();
                 request->send(200, "text/plain", "All breakpoints cleared");
             });
-    // Global PMachine instance for all endpoints
-    static pmachine::PMachine pm;
+    // ...existing code...
 
         // PMachine service endpoints
         server.on("/pmachine/pcode", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -255,8 +246,10 @@ void setupWebServer() {
                 f.close();
             }
             WiFi.setHostname(nodeName.c_str());
-            // Optionally: save WiFi credentials to LittleFS or NVS for custom logic
-            // For now, just respond and reboot
+            // Save WiFi credentials to LittleFS
+            wifiConfig.ssid = ssid;
+            wifiConfig.password = password;
+            saveConfigToFile(wifiConfig, WifiConfig::schema, 2, WIFI_CONFIG_PATH);
             request->send(200, "text/plain", "Provisioned. Rebooting...");
             delay(1000);
             ESP.restart();
@@ -339,7 +332,9 @@ void announcePresence() {
 }
 
 void setup() {
-        loadClusterConfig();
+        /* TODO: If you want to load config at startup, use:
+        loadConfigFromFile(clusterConfig, ClusterConfig::schema, 2, CONFIG_PATH);
+        */
     Serial.begin(9600);
     delay(1000);
     if (!LittleFS.begin()) {
@@ -349,15 +344,6 @@ void setup() {
     // Load node name if exists
     File f = LittleFS.open(NODE_NAME_PATH, "r");
     if (f) {
-    // Remove nodes not seen in last 10 minutes (600000 ms)
-    unsigned long now = millis();
-    for (auto it = discoveredNodeTable.begin(); it != discoveredNodeTable.end(); ) {
-        if (now - it->second.lastSeen > 600000) {
-            it = discoveredNodeTable.erase(it);
-        } else {
-            ++it;
-        }
-    }
         nodeName = f.readString();
         f.close();
     }
@@ -370,11 +356,14 @@ void setup() {
     nodeName += macSuffix;
     WiFi.setHostname(nodeName.c_str());
 
-    // Always connect to WiFi using fixed credentials
-    const char* fixedSSID = "Home";
-    const char* fixedPassword = "Brady123";
+    // Load WiFi credentials from LittleFS
+    /* TODO: If you want to load WiFi config at startup, use:
+    loadConfigFromFile(wifiConfig, WifiConfig::schema, 2, WIFI_CONFIG_PATH);
+    */
     WiFi.mode(WIFI_STA);
-    WiFi.begin(fixedSSID, fixedPassword);
+    const char* ssid = wifiConfig.ssid.length() ? wifiConfig.ssid.c_str() : "Home";
+    const char* password = wifiConfig.password.length() ? wifiConfig.password.c_str() : "Brady123";
+    WiFi.begin(ssid, password);
     Serial.print("Connecting to WiFi");
     int retries = 0;
     while (WiFi.status() != WL_CONNECTED && retries < 30) {
