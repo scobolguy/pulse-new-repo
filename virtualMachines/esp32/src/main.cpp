@@ -3,7 +3,10 @@
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 #include "ConfigSchema.h"
+#ifdef ENABLE_PMACHINE
 #include "pmachine.h"
+#endif
+#include "ffs/FederatedFileSystem.h"
 
 #define CONFIG_PATH "/config.json"
 
@@ -39,10 +42,14 @@ const FieldDescriptor WifiConfig::schema[2] = {
 #include <WiFiUdp.h>
 #include <ESPAsyncWebServer.h>
 
-// Global config and PMachine instances
+// Global config, PMachine, and FederatedFileSystem instances
 ClusterConfig clusterConfig;
 WifiConfig wifiConfig;
+#ifdef ENABLE_PMACHINE
 pmachine::PMachine pm;
+#endif
+FederatedFileSystem federatedFS;
+bool ffsUp = false;
 
 
 #include <map>
@@ -65,156 +72,159 @@ void notFound(AsyncWebServerRequest *request) {
 // ...existing code...
 
 void setupWebServer() {
-                    // Serve cluster config UI
-                    server.on("/web/cluster.html", HTTP_GET, [](AsyncWebServerRequest *request){
-                        File file = LittleFS.open("/web/cluster.html", "r");
-                        if (!file) {
-                            request->send(500, "text/plain", "Config page not found");
-                            return;
-                        }
-                        String html = file.readString();
-                        request->send(200, "text/html", html);
-                        file.close();
-                    });
-                // Cluster config endpoints
-                server.on("/config/get", HTTP_GET, [](AsyncWebServerRequest *request){
-                    StaticJsonDocument<256> doc;
-                    serializeWithSchema(clusterConfig, ClusterConfig::schema, 2, doc);
-                    String json;
-                    serializeJson(doc, json);
-                    request->send(200, "application/json", json);
-                });
-                server.on("/config/set", HTTP_POST, [](AsyncWebServerRequest *request){
-                    if (request->hasParam("clusterId", true))
-                        clusterConfig.clusterId = request->getParam("clusterId", true)->value();
-                    if (request->hasParam("isGateway", true))
-                        clusterConfig.isGateway = request->getParam("isGateway", true)->value() == "true";
-                    saveConfigToFile(clusterConfig, ClusterConfig::schema, 2, CONFIG_PATH);
-                    request->send(200, "text/plain", "Config updated");
-                });
-            // PMachine status endpoint
-            server.on("/pmachine/status", HTTP_GET, [](AsyncWebServerRequest *request){
-                auto s = pm.getStatus();
-                String json = "{";
-                json += "\"numPages\":" + String(s.numPages) + ",";
-                json += "\"backingFile\":\"" + String(s.backingFile.c_str()) + "\",";
-                json += "\"maxSpace\":" + String((unsigned long)s.maxSpace) + ",";
-                json += "\"dynamicLibs\":[";
-                for (size_t i = 0; i < s.dynamicLibs.size(); ++i) {
-                    if (i > 0) json += ",";
-                    json += "\"" + String(s.dynamicLibs[i].c_str()) + "\"";
-                }
-                json += "],";
-                json += "\"running\":" + String(s.running ? "true" : "false") + ",";
-                json += "\"pc\":" + String(s.pc) + ",";
-                json += "\"breakpoints\":[";
-                for (size_t i = 0; i < s.breakpoints.size(); ++i) {
-                    if (i > 0) json += ",";
-                    json += String(s.breakpoints[i]);
-                }
-                json += "]}";
-                request->send(200, "application/json", json);
-            });
+    // Serve cluster config UI
+    server.on("/web/cluster.html", HTTP_GET, [](AsyncWebServerRequest *request){
+        File file = LittleFS.open("/web/cluster.html", "r");
+        if (!file) {
+            request->send(500, "text/plain", "Config page not found");
+            return;
+        }
+        String html = file.readString();
+        request->send(200, "text/html", html);
+        file.close();
+    });
+    // Cluster config endpoints
+    server.on("/config/get", HTTP_GET, [](AsyncWebServerRequest *request){
+        JsonDocument doc;
+        serializeWithSchema(clusterConfig, ClusterConfig::schema, 2, doc);
+        String json;
+        serializeJson(doc, json);
+        request->send(200, "application/json", json);
+    });
+    server.on("/config/set", HTTP_POST, [](AsyncWebServerRequest *request){
+        if (request->hasParam("clusterId", true))
+            clusterConfig.clusterId = request->getParam("clusterId", true)->value();
+        if (request->hasParam("isGateway", true))
+            clusterConfig.isGateway = request->getParam("isGateway", true)->value() == "true";
+        saveConfigToFile(clusterConfig, ClusterConfig::schema, 2, CONFIG_PATH);
+        saveConfigToFile(clusterConfig, ClusterConfig::schema, 2, CONFIG_PATH, LittleFS);
+        request->send(200, "text/plain", "Config updated");
+    });
 
-            // PMachine program load (POST, expects raw binary in body, plus ?file= and ?max=)
-            server.on("/pmachine/load", HTTP_POST, [](AsyncWebServerRequest *request){
-                if (!request->hasParam("file") || !request->hasParam("max")) {
-                    request->send(400, "text/plain", "Missing file or max param");
-                    return;
-                }
-                String file = request->getParam("file")->value();
-                size_t max = request->getParam("max")->value().toInt();
-                // Read binary from body
-                std::vector<uint8_t> pcode;
-                if (request->hasParam("pcode", true)) {
-                    String bin = request->getParam("pcode", true)->value();
-                    pcode.assign(bin.begin(), bin.end());
-                }
-                bool ok = pm.loadProgram(pcode, file.c_str(), max);
-                request->send(ok ? 200 : 500, "text/plain", ok ? "Loaded" : "Load failed");
-            });
+#ifdef ENABLE_PMACHINE
+    // PMachine status endpoint
+    server.on("/pmachine/status", HTTP_GET, [](AsyncWebServerRequest *request){
+        auto s = pm.getStatus();
+        String json = "{";
+        json += "\"numPages\":" + String(s.numPages) + ",";
+        json += "\"backingFile\":\"" + String(s.backingFile.c_str()) + "\",";
+        json += "\"maxSpace\":" + String((unsigned long)s.maxSpace) + ",";
+        json += "\"dynamicLibs\":[";
+        for (size_t i = 0; i < s.dynamicLibs.size(); ++i) {
+            if (i > 0) json += ",";
+            json += "\"" + String(s.dynamicLibs[i].c_str()) + "\"";
+        }
+        json += "],";
+        json += "\"running\":" + String(s.running ? "true" : "false") + ",";
+        json += "\"pc\":" + String(s.pc) + ",";
+        json += "\"breakpoints\":[";
+        for (size_t i = 0; i < s.breakpoints.size(); ++i) {
+            if (i > 0) json += ",";
+            json += String(s.breakpoints[i]);
+        }
+        json += "]}";
+        request->send(200, "application/json", json);
+    });
 
-            // PMachine run
-            server.on("/pmachine/run", HTTP_POST, [](AsyncWebServerRequest *request){
-                pm.run();
-                request->send(200, "text/plain", "Run complete");
-            });
+    // PMachine program load (POST, expects raw binary in body, plus ?file= and ?max=)
+    server.on("/pmachine/load", HTTP_POST, [](AsyncWebServerRequest *request){
+        if (!request->hasParam("file") || !request->hasParam("max")) {
+            request->send(400, "text/plain", "Missing file or max param");
+            return;
+        }
+        String file = request->getParam("file")->value();
+        size_t max = request->getParam("max")->value().toInt();
+        // Read binary from body
+        std::vector<uint8_t> pcode;
+        if (request->hasParam("pcode", true)) {
+            String bin = request->getParam("pcode", true)->value();
+            pcode.assign(bin.begin(), bin.end());
+        }
+        bool ok = pm.loadProgram(pcode, file.c_str(), max);
+        request->send(ok ? 200 : 500, "text/plain", ok ? "Loaded" : "Load failed");
+    });
 
-            // PMachine single step
-            server.on("/pmachine/step", HTTP_POST, [](AsyncWebServerRequest *request){
-                pm.singleStep();
-                request->send(200, "text/plain", "Step complete");
-            });
+    // PMachine run
+    server.on("/pmachine/run", HTTP_POST, [](AsyncWebServerRequest *request){
+        pm.run();
+        request->send(200, "text/plain", "Run complete");
+    });
 
-            // PMachine breakpoints
-            server.on("/pmachine/break/set", HTTP_POST, [](AsyncWebServerRequest *request){
-                if (!request->hasParam("pc")) {
-                    request->send(400, "text/plain", "Missing pc param");
-                    return;
-                }
-                uint16_t pc = request->getParam("pc")->value().toInt();
-                pm.setBreakpoint(pc);
-                request->send(200, "text/plain", "Breakpoint set");
-            });
-            server.on("/pmachine/break/clear", HTTP_POST, [](AsyncWebServerRequest *request){
-                if (!request->hasParam("pc")) {
-                    request->send(400, "text/plain", "Missing pc param");
-                    return;
-                }
-                uint16_t pc = request->getParam("pc")->value().toInt();
-                pm.clearBreakpoint(pc);
-                request->send(200, "text/plain", "Breakpoint cleared");
-            });
-            server.on("/pmachine/break/clearall", HTTP_POST, [](AsyncWebServerRequest *request){
-                pm.clearAllBreakpoints();
-                request->send(200, "text/plain", "All breakpoints cleared");
-            });
-    // ...existing code...
+    // PMachine single step
+    server.on("/pmachine/step", HTTP_POST, [](AsyncWebServerRequest *request){
+        pm.singleStep();
+        request->send(200, "text/plain", "Step complete");
+    });
 
-        // PMachine service endpoints
-        server.on("/pmachine/pcode", HTTP_GET, [](AsyncWebServerRequest *request){
-            String json = "{";
-            bool first = true;
-            for (const auto& pair : pm.getPCodeMap()) {
-                if (!first) json += ",";
-                json += "\"" + String(pair.first) + "\":\"0x" + String(pair.second, HEX) + "\"";
-                first = false;
-            }
-            json += "}";
-            request->send(200, "application/json", json);
-        });
-        server.on("/pmachine/memory", HTTP_GET, [](AsyncWebServerRequest *request){
-            String json = "{";
-            bool first = true;
-            for (const auto& pair : pm.getMemoryMap()) {
-                if (!first) json += ",";
-                json += "\"" + String(pair.first) + "\":\"0x" + String(pair.second, HEX) + "\"";
-                first = false;
-            }
-            json += "}";
-            request->send(200, "application/json", json);
-        });
-        server.on("/pmachine/strings", HTTP_GET, [](AsyncWebServerRequest *request){
-            String json = "[";
-            auto pool = pm.getStringPool();
-            for (size_t i = 0; i < pool.size(); ++i) {
-                if (i > 0) json += ",";
-                json += "\"" + String(pool[i].c_str()) + "\"";
-            }
-            json += "]";
-            request->send(200, "application/json", json);
-        });
-        server.on("/pmachine/enums", HTTP_GET, [](AsyncWebServerRequest *request){
-            String json = "{";
-            bool first = true;
-            for (const auto& pair : pm.getEnumTypes()) {
-                if (!first) json += ",";
-                json += "\"" + String(pair.first.c_str()) + "\":" + String(pair.second);
-                first = false;
-            }
-            json += "}";
-            request->send(200, "application/json", json);
-        });
+    // PMachine breakpoints
+    server.on("/pmachine/break/set", HTTP_POST, [](AsyncWebServerRequest *request){
+        if (!request->hasParam("pc")) {
+            request->send(400, "text/plain", "Missing pc param");
+            return;
+        }
+        uint16_t pc = request->getParam("pc")->value().toInt();
+        pm.setBreakpoint(pc);
+        request->send(200, "text/plain", "Breakpoint set");
+    });
+    server.on("/pmachine/break/clear", HTTP_POST, [](AsyncWebServerRequest *request){
+        if (!request->hasParam("pc")) {
+            request->send(400, "text/plain", "Missing pc param");
+            return;
+        }
+        uint16_t pc = request->getParam("pc")->value().toInt();
+        pm.clearBreakpoint(pc);
+        request->send(200, "text/plain", "Breakpoint cleared");
+    });
+    server.on("/pmachine/break/clearall", HTTP_POST, [](AsyncWebServerRequest *request){
+        pm.clearAllBreakpoints();
+        request->send(200, "text/plain", "All breakpoints cleared");
+    });
+
+    // PMachine service endpoints
+    server.on("/pmachine/pcode", HTTP_GET, [](AsyncWebServerRequest *request){
+        String json = "{";
+        bool first = true;
+        for (const auto& pair : pm.getPCodeMap()) {
+            if (!first) json += ",";
+            json += "\"" + String(pair.first) + "\":\"0x" + String(pair.second, HEX) + "\"";
+            first = false;
+        }
+        json += "}";
+        request->send(200, "application/json", json);
+    });
+    server.on("/pmachine/memory", HTTP_GET, [](AsyncWebServerRequest *request){
+        String json = "{";
+        bool first = true;
+        for (const auto& pair : pm.getMemoryMap()) {
+            if (!first) json += ",";
+            json += "\"" + String(pair.first) + "\":\"0x" + String(pair.second, HEX) + "\"";
+            first = false;
+        }
+        json += "}";
+        request->send(200, "application/json", json);
+    });
+    server.on("/pmachine/strings", HTTP_GET, [](AsyncWebServerRequest *request){
+        String json = "[";
+        auto pool = pm.getStringPool();
+        for (size_t i = 0; i < pool.size(); ++i) {
+            if (i > 0) json += ",";
+            json += "\"" + String(pool[i].c_str()) + "\"";
+        }
+        json += "]";
+        request->send(200, "application/json", json);
+    });
+    server.on("/pmachine/enums", HTTP_GET, [](AsyncWebServerRequest *request){
+        String json = "{";
+        bool first = true;
+        for (const auto& pair : pm.getEnumTypes()) {
+            if (!first) json += ",";
+            json += "\"" + String(pair.first.c_str()) + ":" + String(pair.second);
+            first = false;
+        }
+        json += "}";
+        request->send(200, "application/json", json);
+    });
+#endif
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
         File file = LittleFS.open("/web/index.html", "r");
         if (!file) {
@@ -250,6 +260,7 @@ void setupWebServer() {
             wifiConfig.ssid = ssid;
             wifiConfig.password = password;
             saveConfigToFile(wifiConfig, WifiConfig::schema, 2, WIFI_CONFIG_PATH);
+            saveConfigToFile(wifiConfig, WifiConfig::schema, 2, WIFI_CONFIG_PATH, LittleFS);
             request->send(200, "text/plain", "Provisioned. Rebooting...");
             delay(1000);
             ESP.restart();
@@ -262,7 +273,17 @@ void setupWebServer() {
         String json = "{";
         json += "\"hardware\":\"ESP32\",";
         json += "\"nodeName\":\"" + nodeName + "\",";
-        json += "\"services\":[\"FFS\"]";
+        json += "\"services\":[";
+        bool firstService = true;
+        if (ffsUp) {
+            json += "\"FFS\"";
+            firstService = false;
+        }
+        #ifdef ENABLE_PMACHINE
+        if (!firstService) json += ",";
+        json += "\"pmachine\"";
+        #endif
+        json += "]";
         json += ",\"discoveredNodes\":[";
         bool first = true;
         for (const auto& pair : discoveredNodeTable) {
@@ -379,6 +400,14 @@ void setup() {
     }
     udp.begin(ANNOUNCE_PORT);
     announcePresence();
+
+    // Initialize FederatedFileSystem (LittleFS backend for now)
+    ffsUp = federatedFS.begin(FFSBackend::LittleFS, LittleFS);
+    if (ffsUp) {
+        Serial.println("FederatedFileSystem is UP (LittleFS backend)");
+    } else {
+        Serial.println("FederatedFileSystem failed to initialize");
+    }
 
     // Web server for node name config (Async)
     setupWebServer();

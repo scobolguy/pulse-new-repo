@@ -65,7 +65,7 @@ template<typename T>
 bool saveToFile(const T& obj, const char* path, fs::FS& fs = LittleFS) {
     File f = fs.open(path, "w");
     if (!f) return false;
-    StaticJsonDocument<256> doc;
+    JsonDocument doc;
     serializeConfig(obj, doc);
     serializeJson(doc, f);
     f.close();
@@ -77,7 +77,7 @@ template<typename T>
 bool loadFromFile(T& obj, const char* path, fs::FS& fs = LittleFS) {
     File f = fs.open(path, "r");
     if (!f) return false;
-    StaticJsonDocument<256> doc;
+    JsonDocument doc;
     DeserializationError err = deserializeJson(doc, f);
     if (err) { f.close(); return false; }
     deserializeConfig(obj, doc);

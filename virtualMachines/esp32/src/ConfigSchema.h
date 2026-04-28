@@ -22,7 +22,6 @@ struct FieldDescriptor {
 
 // Helper to get offset of member
 #define FIELD_OFFSET(type, member) (size_t)(&(((type*)0)->member))
-
 // Macro to define schema for a struct
 #define CONFIG_SCHEMA(type, ...) \
     static constexpr FieldDescriptor schema[] = { __VA_ARGS__ };
@@ -31,7 +30,9 @@ struct FieldDescriptor {
 #define FIELD_DESC(type, member, ftype) { #member, ftype, FIELD_OFFSET(type, member) }
 
 // Serialize using schema
-template<typename T>
+
+
+    template<typename T>
 void serializeWithSchema(const T& obj, const FieldDescriptor* schema, size_t fieldCount, JsonDocument& doc) {
     for (size_t i = 0; i < fieldCount; ++i) {
         const FieldDescriptor& desc = schema[i];
@@ -81,7 +82,7 @@ template<typename T>
 bool saveConfigToFile(const T& obj, const FieldDescriptor* schema, size_t fieldCount, const char* path, fs::FS& fs = LittleFS) {
     File f = fs.open(path, "w");
     if (!f) return false;
-    StaticJsonDocument<256> doc;
+    JsonDocument doc;
     serializeWithSchema(obj, schema, fieldCount, doc);
     serializeJson(doc, f);
     f.close();
@@ -92,7 +93,7 @@ template<typename T>
 bool loadConfigFromFile(T& obj, const FieldDescriptor* schema, size_t fieldCount, const char* path, fs::FS& fs = LittleFS) {
     File f = fs.open(path, "r");
     if (!f) return false;
-    StaticJsonDocument<256> doc;
+    JsonDocument doc;
     DeserializationError err = deserializeJson(doc, f);
     if (err) { f.close(); return false; }
     deserializeWithSchema(obj, schema, fieldCount, doc);
