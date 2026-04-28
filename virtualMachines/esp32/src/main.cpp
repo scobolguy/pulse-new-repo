@@ -81,6 +81,132 @@ void notFound(AsyncWebServerRequest *request) {
 // ...existing code...
 
 void setupWebServer() {
+                #ifdef ENABLE_PMACHINE
+                    // PMachine file open
+                    server.on("/pmachine/file/open", HTTP_POST, [](AsyncWebServerRequest *request){
+                        if (!request->hasParam("file", true) || !request->hasParam("mode", true)) {
+                            request->send(400, "text/plain", "Missing file or mode param");
+                            return;
+                        }
+                        String file = request->getParam("file", true)->value();
+                        String mode = request->getParam("mode", true)->value();
+                        int handle = pm.openFile(file, mode);
+                        if (handle == 0) {
+                            request->send(500, "text/plain", "Failed to open file");
+                        } else {
+                            request->send(200, "application/json", String(handle));
+                        }
+                    });
+
+                    // PMachine file close
+                    server.on("/pmachine/file/close", HTTP_POST, [](AsyncWebServerRequest *request){
+                        if (!request->hasParam("handle", true)) {
+                            request->send(400, "text/plain", "Missing handle param");
+                            return;
+                        }
+                        int handle = request->getParam("handle", true)->value().toInt();
+                        bool ok = pm.closeFile(handle);
+                        request->send(ok ? 200 : 500, "text/plain", ok ? "Closed" : "Failed to close");
+                    });
+
+                    // PMachine file read line
+                    server.on("/pmachine/file/readline", HTTP_GET, [](AsyncWebServerRequest *request){
+                        if (!request->hasParam("handle")) {
+                            request->send(400, "text/plain", "Missing handle param");
+                            return;
+                        }
+                        int handle = request->getParam("handle")->value().toInt();
+                        String line;
+                        bool ok = pm.readLine(handle, line);
+                        if (!ok) {
+                            request->send(404, "text/plain", "No line or invalid handle");
+                        } else {
+                            request->send(200, "text/plain", line);
+                        }
+                    });
+
+                    // PMachine file write line
+                    server.on("/pmachine/file/writeline", HTTP_POST, [](AsyncWebServerRequest *request){
+                        if (!request->hasParam("handle", true) || !request->hasParam("line", true)) {
+                            request->send(400, "text/plain", "Missing handle or line param");
+                            return;
+                        }
+                        int handle = request->getParam("handle", true)->value().toInt();
+                        String line = request->getParam("line", true)->value();
+                        bool ok = pm.writeLine(handle, line);
+                        request->send(ok ? 200 : 500, "text/plain", ok ? "Written" : "Failed to write");
+                    });
+                #endif
+                // FFS: Create directory endpoint
+                server.on("/ffs/mkdir", HTTP_POST, [](AsyncWebServerRequest *request){
+                    if (!request->hasParam("dir", true)) {
+                        request->send(400, "text/plain", "Missing dir param");
+                        return;
+                    }
+                    String dir = request->getParam("dir", true)->value();
+                    bool ok = false;
+            #if defined(ESP32)
+                    if (dir.startsWith("sd/")) {
+                        String sdPath = dir.substring(3);
+                        ok = SD.mkdir(sdPath);
+                    } else {
+                        ok = LittleFS.mkdir(dir);
+                    }
+            #else
+                    ok = LittleFS.mkdir(dir);
+            #endif
+                    request->send(ok ? 200 : 500, "text/plain", ok ? "Directory created" : "Failed to create directory");
+                });
+
+                // FFS: Remove directory endpoint
+                server.on("/ffs/rmdir", HTTP_POST, [](AsyncWebServerRequest *request){
+                    if (!request->hasParam("dir", true)) {
+                        request->send(400, "text/plain", "Missing dir param");
+                        return;
+                    }
+                    String dir = request->getParam("dir", true)->value();
+                    bool ok = false;
+            #if defined(ESP32)
+                    if (dir.startsWith("sd/")) {
+                        String sdPath = dir.substring(3);
+                        ok = SD.rmdir(sdPath);
+                    } else {
+                        ok = LittleFS.rmdir(dir);
+                    }
+            #else
+                    ok = LittleFS.rmdir(dir);
+            #endif
+                    request->send(ok ? 200 : 500, "text/plain", ok ? "Directory removed" : "Failed to remove directory");
+                });
+
+                // FFS: Delete file endpoint
+                server.on("/ffs/delete", HTTP_POST, [](AsyncWebServerRequest *request){
+                    if (!request->hasParam("file", true)) {
+                        request->send(400, "text/plain", "Missing file param");
+                        return;
+                    }
+                    String file = request->getParam("file", true)->value();
+                    FFSStatus st = federatedFS.remove(file);
+                    request->send(st == FFSStatus::OK ? 200 : 500, "text/plain", st == FFSStatus::OK ? "File deleted" : "Failed to delete file");
+                });
+
+                // FFS: Upload file endpoint (raw body)
+                server.on("/ffs/upload", HTTP_POST, [](AsyncWebServerRequest *request){
+                    if (!request->hasParam("file", true)) {
+                        request->send(400, "text/plain", "Missing file param");
+                        return;
+                    }
+                    String file = request->getParam("file", true)->value();
+                    // Get raw body data
+                    if (!request->hasParam("body", true)) {
+                        request->send(400, "text/plain", "Missing body param");
+                        return;
+                    }
+                    String body = request->getParam("body", true)->value();
+                    std::vector<uint8_t> data(body.begin(), body.end());
+                    FFSStatus st = federatedFS.write(file, data.data(), data.size());
+                    request->send(st == FFSStatus::OK ? 200 : 500, "text/plain", st == FFSStatus::OK ? "File uploaded" : "Failed to upload file");
+                });
             // FFS: List files endpoint
             server.on("/ffs/list", HTTP_GET, [](AsyncWebServerRequest *request){
                 std::vector<String> files;
@@ -501,6 +627,7 @@ void setup() {
     udp.begin(ANNOUNCE_PORT);
     announcePresence();
 
+
     // Initialize FederatedFileSystem with SD if available, else LittleFS
 #if defined(ESP32)
     if (sdAvailable) {
@@ -525,6 +652,10 @@ void setup() {
     } else {
         Serial.println("FederatedFileSystem failed to initialize LittleFS");
     }
+#endif
+
+#ifdef ENABLE_PMACHINE
+    pm.setFFS(&federatedFS);
 #endif
 
     // Web server for node name config (Async)

@@ -46,10 +46,23 @@ struct FFSChunkInfo {
     size_t length;
 };
 
+// File handle table for open files (simple integer handle)
+#include <map>
+
+struct FFSOpenFile {
+    File file;
+    String mode;
+};
+
 class FederatedFileSystem {
 public:
     FederatedFileSystem();
     bool begin(FFSBackend backend, fs::FS &fs, const String &basePath = "/");
+    // File handle/line I/O
+    int openFile(const String &logicalName, const String &mode);
+    bool closeFile(int handle);
+    bool readLine(int handle, String &outLine);
+    bool writeLine(int handle, const String &line);
 
     // Basic file ops
     FFSStatus write(const String &logicalName, const uint8_t *data, size_t len);
@@ -81,6 +94,8 @@ private:
     fs::FS *_fs;
     String _basePath;
     bool _inTransaction;
+    int _nextHandle = 1;
+    std::map<int, FFSOpenFile> _openFiles;
     // TODO: chunk index, journal, transaction log, federation state, etc.
 };
 

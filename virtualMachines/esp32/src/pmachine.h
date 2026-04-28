@@ -1,3 +1,4 @@
+#include "ffs/FederatedFileSystem.h"
 // pmachine.h
 // ESPVM Portable P Machine - Header
 #pragma once
@@ -44,6 +45,13 @@ struct Status {
 
 class PMachine {
 public:
+    // File handle/line I/O (delegates to FFS)
+    int openFile(const String &logicalName, const String &mode);
+    bool closeFile(int handle);
+    bool readLine(int handle, String &outLine);
+    bool writeLine(int handle, const String &line);
+    // Set the FederatedFileSystem pointer after construction
+    void setFFS(FederatedFileSystem *ffsPtr) { ffs = ffsPtr; }
     PMachine();
     // Service interface
     const PCodeMap& getPCodeMap() const;
@@ -59,6 +67,7 @@ public:
     void clearBreakpoint(uint16_t pc);
     void clearAllBreakpoints();
 private:
+    FederatedFileSystem *ffs = nullptr;
     PCodeMap pcodeMap;
     MemoryMap memoryMap;
     StringPool stringPool;

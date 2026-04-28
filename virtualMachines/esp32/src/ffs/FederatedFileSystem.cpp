@@ -1,4 +1,55 @@
 // FederatedFileSystem.cpp
+#include "FederatedFileSystem.h"
+#if defined(ESP32)
+#include <SD.h>
+#include <LittleFS.h>
+#elif defined(ESP8266)
+#include <LittleFS.h>
+#endif
+// --- File handle/line I/O ---
+int FederatedFileSystem::openFile(const String &logicalName, const String &mode) {
+    String path = logicalName;
+    File f;
+#if defined(ESP32)
+    if (path.startsWith("sd/")) {
+        String sdPath = path.substring(3);
+        f = SD.open(sdPath, mode.c_str());
+    } else {
+        f = LittleFS.open(path, mode.c_str());
+    }
+#else
+    f = LittleFS.open(path, mode.c_str());
+#endif
+    if (!f) return 0;
+    int handle = _nextHandle++;
+    _openFiles[handle] = {f, mode};
+    return handle;
+}
+
+bool FederatedFileSystem::closeFile(int handle) {
+    auto it = _openFiles.find(handle);
+    if (it == _openFiles.end()) return false;
+    it->second.file.close();
+    _openFiles.erase(it);
+    return true;
+}
+
+bool FederatedFileSystem::readLine(int handle, String &outLine) {
+    auto it = _openFiles.find(handle);
+    if (it == _openFiles.end()) return false;
+    outLine = it->second.file.readStringUntil('\n');
+    // Remove trailing \r or \n
+    outLine.trim();
+    return outLine.length() > 0;
+}
+
+bool FederatedFileSystem::writeLine(int handle, const String &line) {
+    auto it = _openFiles.find(handle);
+    if (it == _openFiles.end()) return false;
+    size_t written = it->second.file.print(line + "\n");
+    return written == (line.length() + 1);
+}
+// FederatedFileSystem.cpp
 // ESP32 Federated File System (FFS) core implementation
 // Supports SD (SD_MMC/SD) and LittleFS backends
 // C++11, Arduino compatible

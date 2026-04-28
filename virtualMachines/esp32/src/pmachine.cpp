@@ -1,3 +1,4 @@
+#include "ffs/FederatedFileSystem.h"
 
 // pmachine.cpp
 // ESPVM Portable P Machine - Implementation
@@ -5,7 +6,6 @@
 #include <algorithm>
 
 namespace pmachine {
-
 // StringPool implementation
 uint16_t StringPool::add(const std::string& str) {
     for (uint16_t i = 0; i < pool.size(); ++i) {
@@ -25,6 +25,7 @@ std::vector<std::string> StringPool::getAll() const {
 
 // PMachine implementation
 PMachine::PMachine() {
+    // ffs pointer must be set externally after construction
     // Example: populate enumTypes
     enumTypes["TYPE_INT"] = static_cast<int>(GlobalType::TYPE_INT);
     enumTypes["TYPE_FLOAT"] = static_cast<int>(GlobalType::TYPE_FLOAT);
@@ -43,6 +44,26 @@ PMachine::PMachine() {
     running = false;
     pc = 0;
     breakpoints.clear();
+}
+
+int PMachine::openFile(const String &logicalName, const String &mode) {
+    if (!ffs) return 0;
+    return ffs->openFile(logicalName, mode);
+}
+
+bool PMachine::closeFile(int handle) {
+    if (!ffs) return false;
+    return ffs->closeFile(handle);
+}
+
+bool PMachine::readLine(int handle, String &outLine) {
+    if (!ffs) return false;
+    return ffs->readLine(handle, outLine);
+}
+
+bool PMachine::writeLine(int handle, const String &line) {
+    if (!ffs) return false;
+    return ffs->writeLine(handle, line);
 }
 pmachine::Status PMachine::getStatus() const {
     Status s;
