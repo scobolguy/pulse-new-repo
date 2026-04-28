@@ -1,12 +1,16 @@
 #include <Arduino.h>
 #include <FS.h>
 #include <LittleFS.h>
+
 #include <ArduinoJson.h>
 #include "ConfigSchema.h"
 #ifdef ENABLE_PMACHINE
 #include "pmachine.h"
 #endif
 #include "ffs/FederatedFileSystem.h"
+#if defined(ESP32)
+#include <SD.h>
+#endif
 
 #define CONFIG_PATH "/config.json"
 
@@ -38,8 +42,13 @@ const FieldDescriptor WifiConfig::schema[2] = {
 #define WIFI_CONFIG_PATH "/wifi.json"
 #define NODE_NAME_PATH "/node_name.txt"
 
+#if defined(ESP32)
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#elif defined(ESP8266)
+#include <ESP8266WiFi.h>
+#include <WiFiUdp.h>
+#endif
 #include <ESPAsyncWebServer.h>
 
 // Global config, PMachine, and FederatedFileSystem instances
@@ -72,6 +81,72 @@ void notFound(AsyncWebServerRequest *request) {
 // ...existing code...
 
 void setupWebServer() {
+            // FFS: List files endpoint
+            server.on("/ffs/list", HTTP_GET, [](AsyncWebServerRequest *request){
+                std::vector<String> files;
+                if (federatedFS.listFiles(files) != FFSStatus::OK) {
+                    request->send(500, "application/json", "[]");
+                    return;
+                }
+                String json = "[";
+                for (size_t i = 0; i < files.size(); ++i) {
+                    if (i > 0) json += ",";
+                    json += "\"" + files[i] + "\"";
+                }
+                json += "]";
+                request->send(200, "application/json", json);
+            });
+
+            // FFS: List discovered nodes endpoint
+            server.on("/ffs/nodes", HTTP_GET, [](AsyncWebServerRequest *request){
+                String json = "[";
+                bool first = true;
+                for (const auto& pair : discoveredNodeTable) {
+                    if (!first) json += ",";
+                    json += "{\"mac\":\"" + pair.second.mac + "\",\"ip\":\"" + pair.second.ip + "\"}";
+                    first = false;
+                }
+                json += "]";
+                request->send(200, "application/json", json);
+            });
+        // Federated file chunk endpoint: /ffs/chunk?file=...&chunk=...&size=...
+        server.on("/ffs/chunk", HTTP_GET, [](AsyncWebServerRequest *request){
+            if (!request->hasParam("file") || !request->hasParam("chunk")) {
+                request->send(400, "text/plain", "Missing file or chunk param");
+                return;
+            }
+            String file = request->getParam("file")->value();
+            size_t chunkIdx = request->getParam("chunk")->value().toInt();
+            size_t chunkSize = 512;
+            if (request->hasParam("size")) chunkSize = request->getParam("size")->value().toInt();
+            std::vector<uint8_t> data;
+            if (federatedFS.read(file, data) != FFSStatus::OK) {
+                request->send(404, "text/plain", "File not found");
+                return;
+            }
+            size_t offset = chunkIdx * chunkSize;
+            if (offset >= data.size()) {
+                request->send(416, "text/plain", "Chunk out of range");
+                return;
+            }
+            size_t actualSize = std::min(chunkSize, data.size() - offset);
+            // Compute CRC32
+            uint32_t crc = 0xFFFFFFFF;
+            for (size_t i = 0; i < actualSize; ++i) {
+                uint8_t b = data[offset + i];
+                crc ^= b;
+                for (int k = 0; k < 8; ++k)
+                    crc = (crc >> 1) ^ (0xEDB88320 & (-(crc & 1)));
+            }
+            crc ^= 0xFFFFFFFF;
+            // Prepare response
+            AsyncWebServerResponse *response = request->beginResponse_P(200, "application/octet-stream", &data[offset], actualSize);
+            response->addHeader("X-Chunk-CRC32", String(crc, HEX));
+            response->addHeader("X-Chunk-Offset", String(offset));
+            response->addHeader("X-Chunk-Size", String(actualSize));
+            response->addHeader("X-File-Size", String(data.size()));
+            request->send(response);
+        });
     // Serve cluster config UI
     server.on("/web/cluster.html", HTTP_GET, [](AsyncWebServerRequest *request){
         File file = LittleFS.open("/web/cluster.html", "r");
@@ -255,7 +330,11 @@ void setupWebServer() {
                 f.print(nodeName);
                 f.close();
             }
+            #if defined(ESP32)
             WiFi.setHostname(nodeName.c_str());
+            #elif defined(ESP8266)
+            WiFi.hostname(nodeName.c_str());
+            #endif
             // Save WiFi credentials to LittleFS
             wifiConfig.ssid = ssid;
             wifiConfig.password = password;
@@ -271,7 +350,11 @@ void setupWebServer() {
     // Status endpoint: returns JSON with node info, services, discovered nodes
     server.on("/status", HTTP_GET, [](AsyncWebServerRequest *request){
         String json = "{";
+        #if defined(ESP32)
         json += "\"hardware\":\"ESP32\",";
+        #elif defined(ESP8266)
+        json += "\"hardware\":\"ESP8266\",";
+        #endif
         json += "\"nodeName\":\"" + nodeName + "\",";
         json += "\"services\":[";
         bool firstService = true;
@@ -358,10 +441,27 @@ void setup() {
         */
     Serial.begin(9600);
     delay(1000);
+
+#if defined(ESP32)
+    bool sdAvailable = false;
+    if (SD.begin()) {
+        Serial.println("SD card detected and mounted");
+        sdAvailable = true;
+    } else {
+        Serial.println("No SD card detected, falling back to LittleFS");
+    }
+    if (!sdAvailable) {
+        if (!LittleFS.begin()) {
+            Serial.println("LittleFS mount failed");
+            while (1) delay(1000);
+        }
+    }
+#else
     if (!LittleFS.begin()) {
         Serial.println("LittleFS mount failed");
         while (1) delay(1000);
     }
+#endif
     // Load node name if exists
     File f = LittleFS.open(NODE_NAME_PATH, "r");
     if (f) {
@@ -401,13 +501,31 @@ void setup() {
     udp.begin(ANNOUNCE_PORT);
     announcePresence();
 
-    // Initialize FederatedFileSystem (LittleFS backend for now)
+    // Initialize FederatedFileSystem with SD if available, else LittleFS
+#if defined(ESP32)
+    if (sdAvailable) {
+        ffsUp = federatedFS.begin(FFSBackend::SD, SD);
+        if (ffsUp) {
+            Serial.println("FederatedFileSystem is UP (SD backend)");
+        } else {
+            Serial.println("FederatedFileSystem failed to initialize SD");
+        }
+    } else {
+        ffsUp = federatedFS.begin(FFSBackend::LittleFS, LittleFS);
+        if (ffsUp) {
+            Serial.println("FederatedFileSystem is UP (LittleFS backend)");
+        } else {
+            Serial.println("FederatedFileSystem failed to initialize LittleFS");
+        }
+    }
+#else
     ffsUp = federatedFS.begin(FFSBackend::LittleFS, LittleFS);
     if (ffsUp) {
         Serial.println("FederatedFileSystem is UP (LittleFS backend)");
     } else {
-        Serial.println("FederatedFileSystem failed to initialize");
+        Serial.println("FederatedFileSystem failed to initialize LittleFS");
     }
+#endif
 
     // Web server for node name config (Async)
     setupWebServer();
