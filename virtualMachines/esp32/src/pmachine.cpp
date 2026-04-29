@@ -1,142 +1,172 @@
-#include "ffs/FederatedFileSystem.h"
 
-// pmachine.cpp
-// ESPVM Portable P Machine - Implementation
+
+
+
+#include <sstream>
 #include "pmachine.h"
-#include <algorithm>
 
 namespace pmachine {
-// StringPool implementation
-uint16_t StringPool::add(const std::string& str) {
-    for (uint16_t i = 0; i < pool.size(); ++i) {
-        if (pool[i] == str) return i;
-    }
-    pool.push_back(str);
-    return pool.size() - 1;
-}
 
-const std::string& StringPool::get(uint16_t idx) const {
-    return pool.at(idx);
-}
+uint16_t StringPool::add(const std::string&) { return 0; }
 
-std::vector<std::string> StringPool::getAll() const {
-    return pool;
-}
 
-// PMachine implementation
-PMachine::PMachine() {
-    // ffs pointer must be set externally after construction
-    // Example: populate enumTypes
-    enumTypes["TYPE_INT"] = static_cast<int>(GlobalType::TYPE_INT);
-    enumTypes["TYPE_FLOAT"] = static_cast<int>(GlobalType::TYPE_FLOAT);
-    enumTypes["TYPE_STRING"] = static_cast<int>(GlobalType::TYPE_STRING);
-    enumTypes["TYPE_BOOL"] = static_cast<int>(GlobalType::TYPE_BOOL);
-    // Example: populate string pool
-    stringPool.add("example");
-    // Example: populate pcode and memory map
-    pcodeMap[0] = 0x01;
-    memoryMap[0] = 0xDEADBEEF;
-    // Example: status fields
-    numPages = 1;
-    backingFile = "/pmachine.bin";
-    maxSpace = 4096;
-    dynamicLibs = {"libmath", "libio"};
-    running = false;
-    pc = 0;
-    breakpoints.clear();
-}
+const std::string& StringPool::get(uint16_t) const { static std::string s; return s; }
 
-int PMachine::openFile(const String &logicalName, const String &mode) {
-    if (!ffs) return 0;
-    return ffs->openFile(logicalName, mode);
-}
 
-bool PMachine::closeFile(int handle) {
-    if (!ffs) return false;
-    return ffs->closeFile(handle);
-}
+// PMachine method stubs
+PMachine::PMachine() = default;
 
-bool PMachine::readLine(int handle, String &outLine) {
-    if (!ffs) return false;
-    return ffs->readLine(handle, outLine);
-}
-
-bool PMachine::writeLine(int handle, const String &line) {
-    if (!ffs) return false;
-    return ffs->writeLine(handle, line);
-}
-pmachine::Status PMachine::getStatus() const {
-    Status s;
-    s.numPages = numPages;
-    s.backingFile = backingFile;
-    s.maxSpace = maxSpace;
-    s.dynamicLibs = dynamicLibs;
-    s.running = running;
-    s.pc = pc;
-    s.breakpoints = breakpoints;
-    return s;
-}
-
-bool PMachine::loadProgram(const std::vector<uint8_t>& pcode, const std::string& backingFile_, size_t maxSpace_) {
-    pcodeMap.clear();
-    for (size_t i = 0; i < pcode.size(); ++i) {
-        pcodeMap[(uint16_t)i] = pcode[i];
-    }
-    backingFile = backingFile_;
-    maxSpace = maxSpace_;
-    numPages = (maxSpace_ + 255) / 256;
-    pc = 0;
-    running = false;
-    return true;
-}
-
+int PMachine::openFile(const String&, const String&) { return -1; }
+bool PMachine::closeFile(int) { return false; }
+bool PMachine::readLine(int, String&) { return false; }
+bool PMachine::writeLine(int, const String&) { return false; }
+const PCodeMap& PMachine::getPCodeMap() const { static PCodeMap m; return m; }
+const MemoryMap& PMachine::getMemoryMap() const { static MemoryMap m; return m; }
+const std::vector<std::string> PMachine::getStringPool() const { static std::vector<std::string> v; return v; }
+std::map<std::string, int> PMachine::getEnumTypes() const { return {}; }
+Status PMachine::getStatus() const { return Status{}; }
+bool PMachine::loadProgram(const std::vector<uint8_t>&, const std::string&, size_t) { return false; }
 void PMachine::run() {
-    running = true;
-    // Simulate execution (stub)
-    while (pc < pcodeMap.size() &&
-           std::find(breakpoints.begin(), breakpoints.end(), pc) == breakpoints.end()) {
-        // ... execute instruction ...
-        ++pc;
-    }
-    running = false;
-}
+	struct StackValue {
+		OperandType type;
+		int intValue;
+		std::string strValue;
+	};
+	std::vector<StackValue> stack;
+	Serial.println("[DEBUG] Executing pinstructions:");
+	for (size_t i = 0; i < pinstructions.size(); ++i) {
+		const auto& instr = pinstructions[i];
+		Serial.print("[STEP] ");
+		Serial.print(i);
+		Serial.print(": opcode=0x");
+		Serial.print(instr.opcode, HEX);
+		Serial.print(", type=");
+		Serial.print((int)instr.type);
+		Serial.print(", intOperand=");
+		Serial.print(instr.intOperand);
+		Serial.print(", strOperand='");
+		Serial.print(instr.strOperand.c_str());
+		Serial.print("' | stack: [");
+		for (size_t j = 0; j < stack.size(); ++j) {
+			if (stack[j].type == OperandType::INT) {
+				Serial.print(stack[j].intValue);
+			} else if (stack[j].type == OperandType::STRING) {
+				Serial.print('"');
+				Serial.print(stack[j].strValue.c_str());
+				Serial.print('"');
+			}
+			if (j + 1 < stack.size()) Serial.print(", ");
+		}
+		Serial.println("]");
 
-void PMachine::singleStep() {
-    running = true;
-    if (pc < pcodeMap.size()) {
-        // ... execute instruction ...
-        ++pc;
-    }
-    running = false;
+		// Simulate execution
+		switch (instr.opcode) {
+			case OP_PUSH_STR:
+				stack.push_back({OperandType::STRING, 0, instr.strOperand});
+				break;
+			case OP_PUSH_INT:
+				stack.push_back({OperandType::INT, instr.intOperand, ""});
+				break;
+			case OP_ADD:
+			case OP_SUB:
+			case OP_MUL:
+			case OP_DIV:
+				if (stack.size() < 2 && stack.size() > 0) {
+					Serial.println("[ERROR] Not enough values on stack for arithmetic");
+					break;
+				}
+				if (stack[stack.size()-1].type != OperandType::INT || stack[stack.size()-2].type != OperandType::INT) {
+					Serial.println("[ERROR] Type error: expected two integers");
+					break;
+				}
+				{
+					int b = stack.back().intValue; stack.pop_back();
+					int a = stack.back().intValue; stack.pop_back();
+					int result = 0;
+					if (instr.opcode == OP_ADD) result = a + b;
+					else if (instr.opcode == OP_SUB) result = a - b;
+					else if (instr.opcode == OP_MUL) result = a * b;
+					else if (instr.opcode == OP_DIV) result = (b != 0) ? a / b : 0;
+					stack.push_back({OperandType::INT, result, ""});
+				}
+				break;
+			case OP_PRINT:
+				if (!stack.empty() && stack.back().type == OperandType::STRING) {
+					Serial.print("[PRINT] ");
+					Serial.println(stack.back().strValue.c_str());
+					stack.pop_back();
+				} else {
+					Serial.println("[PRINT] Stack underflow or type error");
+				}
+				break;
+			case OP_PRINT_INT:
+				if (!stack.empty() && stack.back().type == OperandType::INT) {
+					Serial.print("[PRINT_INT] ");
+					Serial.println(stack.back().intValue);
+					stack.pop_back();
+				} else {
+					Serial.println("[PRINT_INT] Stack underflow or type error");
+				}
+				break;
+			case OP_HALT:
+				Serial.println("[HALT]");
+				return;
+			default:
+				break;
+		}
+	}
+	Serial.println("[DEBUG] Execution finished.");
 }
+void PMachine::singleStep() {}
+void PMachine::setBreakpoint(uint16_t) {}
+void PMachine::clearBreakpoint(uint16_t) {}
+void PMachine::clearAllBreakpoints() {}
+bool PMachine::loadTextPCode(const std::string& text) {
+	pinstructions.clear();
+	std::istringstream iss(text);
+	std::string line;
+	while (std::getline(iss, line)) {
+		// Remove comments and trim
+		auto comment = line.find('#');
+		if (comment != std::string::npos) line = line.substr(0, comment);
+		size_t first = line.find_first_not_of(" \t\r\n");
+		if (first == std::string::npos) continue;
+		size_t last = line.find_last_not_of(" \t\r\n");
+		line = line.substr(first, last - first + 1);
+		if (line.empty()) continue;
 
-void PMachine::setBreakpoint(uint16_t pc_) {
-    if (std::find(breakpoints.begin(), breakpoints.end(), pc_) == breakpoints.end())
-        breakpoints.push_back(pc_);
-}
+		std::istringstream lss(line);
+		std::string mnemonic;
+		lss >> mnemonic;
+		uint8_t opcode = opcodeFromMnemonic(mnemonic);
+		PInstruction instr;
+		instr.opcode = opcode;
+		instr.type = OperandType::NONE;
+		instr.intOperand = 0;
+		instr.strOperand = "";
 
-void PMachine::clearBreakpoint(uint16_t pc_) {
-    breakpoints.erase(std::remove(breakpoints.begin(), breakpoints.end(), pc_), breakpoints.end());
-}
-
-void PMachine::clearAllBreakpoints() {
-    breakpoints.clear();
-}
-
-const PCodeMap& PMachine::getPCodeMap() const {
-    return pcodeMap;
-}
-
-const MemoryMap& PMachine::getMemoryMap() const {
-    return memoryMap;
-}
-
-const std::vector<std::string> PMachine::getStringPool() const {
-    return stringPool.getAll();
-}
-
-std::map<std::string, int> PMachine::getEnumTypes() const {
-    return enumTypes;
+		if (opcode == OP_PUSH_STR) {
+			std::string rest;
+			std::getline(lss, rest);
+			size_t q1 = rest.find('"');
+			size_t q2 = rest.find('"', q1 + 1);
+			if (q1 != std::string::npos && q2 != std::string::npos && q2 > q1) {
+				instr.strOperand = rest.substr(q1 + 1, q2 - q1 - 1);
+				instr.type = OperandType::STRING;
+			}
+		} else if (opcode == OP_PUSH_INT) {
+			int value;
+			lss >> value;
+			instr.intOperand = value;
+			instr.type = OperandType::INT;
+		} else if (opcode == OP_ADD || opcode == OP_SUB || opcode == OP_MUL || opcode == OP_DIV) {
+			instr.type = OperandType::NONE;
+		} else if (opcode == OP_PRINT_INT) {
+			instr.type = OperandType::NONE;
+		}
+		pinstructions.push_back(instr);
+	}
+	return true;
 }
 
 } // namespace pmachine

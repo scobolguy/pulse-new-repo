@@ -1,0 +1,22 @@
+# Example test pcode for pmachine
+# Pushes "hello, world" onto the stack and prints it
+PUSH_STR "hello, world"
+PRINT
+# Integer operations
+PUSH_INT 10
+PUSH_INT 32
+ADD
+PRINT_INT
+PUSH_INT 100
+PUSH_INT 7
+SUB
+PRINT_INT
+PUSH_INT 6
+PUSH_INT 7
+MUL
+PRINT_INT
+PUSH_INT 42
+PUSH_INT 2
+DIV
+PRINT_INT
+HALT
