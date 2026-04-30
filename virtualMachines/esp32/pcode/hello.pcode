@@ -1,0 +1,5 @@
+# Example pcode for: print "hello, world"
+# (Assuming a simple stack-based VM with PUSH_STR and PRINT)
+
+PUSH_STR "hello, world"
+PRINT
