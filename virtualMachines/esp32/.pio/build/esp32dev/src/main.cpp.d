@@ -134,11 +134,12 @@
  C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/cores/esp32/io_pin_remap.h \
  C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/cores/esp32/Arduino.h \
  C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/libraries/FS/src/FS.h \
- C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/libraries/LittleFS/src/LittleFS.h \
+ src/main_globals.h src/ConfigSchema.h \
  .pio/libdeps/esp32dev/ArduinoJson/src/ArduinoJson.h \
  .pio/libdeps/esp32dev/ArduinoJson/src/ArduinoJson.hpp \
  .pio/libdeps/esp32dev/ArduinoJson/src/ArduinoJson/Configuration.hpp \
- src/ConfigSchema.h src/provision_routes.h \
+ C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/libraries/LittleFS/src/LittleFS.h \
+ src/ClusterConfig.h src/ffs/FederatedFileSystem.h \
  .pio/libdeps/esp32dev/ESP\ Async\ WebServer/src/ESPAsyncWebServer.h \
  .pio/libdeps/esp32dev/AsyncTCP/src/AsyncTCP.h \
  C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/cores/esp32/IPv6Address.h \
@@ -206,7 +207,7 @@
  .pio/libdeps/esp32dev/ESP\ Async\ WebServer/src/AsyncWebSocket.h \
  .pio/libdeps/esp32dev/ESP\ Async\ WebServer/src/WebHandlerImpl.h \
  .pio/libdeps/esp32dev/ESP\ Async\ WebServer/src/WebResponseImpl.h \
- src/cluster_routes.h src/pmachine.h src/ffs/FederatedFileSystem.h \
+ src/provision_routes.h src/cluster_routes.h src/pmachine.h \
  src/StringPool.h src/pmachine_routes.h \
  src/ffs/FederatedFileSystemRoutes.h src/ffs/../NodeDiscovery.h \
  src/ffs/FederatedFileSystem.h \

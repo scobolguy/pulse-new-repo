@@ -1,9 +1,11 @@
 #include <Arduino.h>
 #include <FS.h>
+#include "main_globals.h"
 #include <LittleFS.h>
 
 #include <ArduinoJson.h>
 #include "ConfigSchema.h"
+#include "ClusterConfig.h"
 #include "provision_routes.h"
 #include "cluster_routes.h"
 
@@ -21,22 +23,6 @@ static pmachine::PMachine pm;
 #include <SD.h>
 #endif
 
-#define CONFIG_PATH "/config.json"
-
-
-struct ClusterConfig {
-    String clusterId = "default";
-    bool isGateway = false;
-    static const FieldDescriptor schema[2];
-    static constexpr size_t schemaSize = 2;
-};
-
-struct WifiConfig {
-    String ssid = "";
-    String password = "";
-    static const FieldDescriptor schema[2];
-    static constexpr size_t schemaSize = 2;
-};
 
 const FieldDescriptor ClusterConfig::schema[2] = {
     FIELD_DESC(ClusterConfig, clusterId, FieldType::StringType),
@@ -46,10 +32,6 @@ const FieldDescriptor WifiConfig::schema[2] = {
     FIELD_DESC(WifiConfig, ssid, FieldType::StringType),
     FIELD_DESC(WifiConfig, password, FieldType::StringType)
 };
-
-#define CONFIG_PATH "/config.json"
-#define WIFI_CONFIG_PATH "/wifi.json"
-#define NODE_NAME_PATH "/node_name.txt"
 
 #if defined(ESP32)
 #include <WiFi.h>
