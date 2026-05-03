@@ -1,3 +1,8 @@
+#include "SensorService.h"
+#include "DevicePin.h"
+#include <map>
+std::map<int, DevicePin*> devicePins;
+DeviceConfiguration deviceConfig;
 #include <Arduino.h>
 #include <FS.h>
 #include <LittleFS.h>
@@ -21,23 +26,10 @@ static pmachine::PMachine pm;
 #include <SD.h>
 #endif
 
-#define CONFIG_PATH "/config.json"
 
+#include "config_types.h"
 
-struct ClusterConfig {
-    String clusterId = "default";
-    bool isGateway = false;
-    static const FieldDescriptor schema[2];
-    static constexpr size_t schemaSize = 2;
-};
-
-struct WifiConfig {
-    String ssid = "";
-    String password = "";
-    static const FieldDescriptor schema[2];
-    static constexpr size_t schemaSize = 2;
-};
-
+// FieldDescriptor arrays (definitions)
 const FieldDescriptor ClusterConfig::schema[2] = {
     FIELD_DESC(ClusterConfig, clusterId, FieldType::StringType),
     FIELD_DESC(ClusterConfig, isGateway, FieldType::BoolType)
@@ -46,10 +38,6 @@ const FieldDescriptor WifiConfig::schema[2] = {
     FIELD_DESC(WifiConfig, ssid, FieldType::StringType),
     FIELD_DESC(WifiConfig, password, FieldType::StringType)
 };
-
-#define CONFIG_PATH "/config.json"
-#define WIFI_CONFIG_PATH "/wifi.json"
-#define NODE_NAME_PATH "/node_name.txt"
 
 #if defined(ESP32)
 #include <WiFi.h>
@@ -62,6 +50,8 @@ const FieldDescriptor WifiConfig::schema[2] = {
 
 #include <ESPAsyncWebServer.h>
 #include "NodeDiscovery.h"
+
+#include "NodeConfig.h"
 
 bool ffsUp = false;
 // Global config, PMachine, and FederatedFileSystem instances
@@ -87,33 +77,8 @@ void notFound(AsyncWebServerRequest *request) {
 // ...existing code...
 
 void setupWebServer() {
-    #ifdef ENABLE_PMACHINE
-    // Register example enum type for testing
-    enumManager.registerEnum("Color", {"RED", "GREEN", "BLUE"});
-    pm.setEnumManager(&enumManager);
-    // Register all PMachine endpoints in one call
-    registerPMachineRoutes(server, pm);
-    #endif
-    // Register all FFS endpoints in one call
-    registerFFSRoutes(server, federatedFS);     
-    // Register all Cluster endpoints in one call
-    cluster::registerClusterRoutes(server);
 
-    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-        File file = LittleFS.open("/web/index.html", "r");
-        if (!file) {
-            request->send(500, "text/plain", "Web page not found");
-            return;
-        }
-        String html = file.readString();
-        html.replace("{{NODE_NAME}}", nodeName);
-        request->send(200, "text/html", html);
-        file.close();
-    });
-
-    // Register all Provision endpoints in one call
-    provision::registerProvisionRoutes(server);
-    // Status endpoint: returns JSON with node info, services, discovered nodes
+    // GET /sensor/read?pin=4&type=DHT22&unit=C
     server.on("/status", HTTP_GET, [](AsyncWebServerRequest *request){
         String json = "{";
         #if defined(ESP32)
@@ -131,6 +96,7 @@ void setupWebServer() {
         #ifdef ENABLE_PMACHINE
         if (!firstService) json += ",";
         json += "\"pmachine\"";
+        firstService = false;
         #endif
         json += "]";
         json += ",\"discoveredNodes\":[";
@@ -228,12 +194,12 @@ void announcePresence() {
 }
 
 void setup() {
-        /* TODO: If you want to load config at startup, use:
-        loadConfigFromFile(clusterConfig, ClusterConfig::schema, 2, CONFIG_PATH);
-        */
-    Serial.begin(9600);
-    delay(1000);
 
+    Serial.begin(9600);     
+    delay(100);
+    Serial.println("[BOOT] setup() starting...");
+
+    // 1. Mount filesystem (SD or LittleFS)
 #if defined(ESP32)
     bool sdAvailable = false;
     if (SD.begin()) {
@@ -254,30 +220,13 @@ void setup() {
         while (1) delay(1000);
     }
 #endif
-    // Load node name if exists
-    File f = LittleFS.open(NODE_NAME_PATH, "r");
-    if (f) {
-        nodeName = f.readString();
-        f.close();
-    }
-    // Append last 4 hex digits of MAC for uniqueness
-    uint8_t mac[6];
-    WiFi.macAddress(mac);
-    char macSuffix[5];
-    sprintf(macSuffix, "%02X%02X", mac[4], mac[5]);
-    nodeName += "-";
-    nodeName += macSuffix;
-    WiFi.setHostname(nodeName.c_str());
 
-    // Load WiFi credentials from LittleFS
-    /* TODO: If you want to load WiFi config at startup, use:
-    loadConfigFromFile(wifiConfig, WifiConfig::schema, 2, WIFI_CONFIG_PATH);
-    */
+    // 2. WiFi connection logic
+    Serial.println("[BOOT] Connecting to WiFi...");
     WiFi.mode(WIFI_STA);
     const char* ssid = wifiConfig.ssid.length() ? wifiConfig.ssid.c_str() : "Home";
     const char* password = wifiConfig.password.length() ? wifiConfig.password.c_str() : "Brady123";
     WiFi.begin(ssid, password);
-    Serial.print("Connecting to WiFi");
     int retries = 0;
     while (WiFi.status() != WL_CONNECTED && retries < 30) {
         delay(500);
@@ -286,18 +235,91 @@ void setup() {
     }
     Serial.println();
     if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("WiFi connected: " + WiFi.localIP().toString());
+        Serial.print("[BOOT] WiFi connected: ");
+        Serial.println(WiFi.localIP());
     } else {
-        Serial.println("WiFi connection failed");
+        Serial.println("[BOOT] WiFi connection failed");
     }
+
+    // 3. Ensure /devices and /services directories exist at root at boot
+    File root = LittleFS.open("/");
+    bool foundDevices = false, foundServices = false;
+    Serial.println("Looking for services and devices");
+    if (root && root.isDirectory()) {
+        File entry = root.openNextFile();
+        while (entry) {
+            String name = String(entry.name());
+            if (entry.isDirectory()) {
+                if (name == "/devices") foundDevices = true;
+                if (name == "/services") foundServices = true;
+            }
+            entry = root.openNextFile();
+        }
+        root.close();
+    }
+    Serial.println("Making sure we have devices and services");
+    if (!foundDevices) LittleFS.mkdir("/devices");
+    if (!foundServices) LittleFS.mkdir("/services");
+
+    // 4. LEDPIN device creation after WiFi connection and directory creation
+    Serial.println("[DEBUG] Checking WiFi status for LEDPIN device creation...");
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("[LEDPIN] Creating /devices/LEDPIN.json after WiFi connection...");
+        if (LittleFS.exists("/devices")) {
+            File f = LittleFS.open("/devices/LEDPIN.json", "w");
+            if (f) {
+                JsonDocument doc;
+                doc["type"] = "device";
+                doc["name"] = "LEDPIN";
+                doc["pin"] = 2;
+                auto arr = doc["actions"].to<JsonArray>();
+                arr.add("set_output");
+                arr.add("raise");
+                arr.add("lower");
+                String json;
+                serializeJson(doc, json);
+                f.print(json);
+                f.close();
+                Serial.println("[LEDPIN] /devices/LEDPIN.json created.");
+            } else {
+                Serial.println("[LEDPIN] Failed to create /devices/LEDPIN.json!");
+            }
+            pinMode(2, OUTPUT);
+            digitalWrite(2, LOW);
+            Serial.println("[LEDPIN] Pin 2 set as OUTPUT and LOW (LED off)");
+        } else {
+            Serial.println("[LEDPIN] /devices directory does NOT exist!");
+        }
+    } else {
+        Serial.println("[LEDPIN] WiFi not connected, skipping LEDPIN device creation!");
+    }
+
+    // 5. Load node config from /ffs/.NodeConfig.json if present
+    NodeConfig nodeConfig;
+    if (loadNodeConfig(nodeConfig) && nodeConfig.nodeName.length()) {
+        nodeName = nodeConfig.nodeName;
+    } else {
+        // Fallback: Load node name if exists
+        File f = LittleFS.open(NODE_NAME_PATH, "r");
+        if (f) {
+            nodeName = f.readString();
+            f.close();
+        }
+        // Append last 4 hex digits of MAC for uniqueness
+        uint8_t mac[6];
+        WiFi.macAddress(mac);
+        char macSuffix[5];
+        sprintf(macSuffix, "%02X%02X", mac[4], mac[5]);
+        nodeName += "-";
+        nodeName += macSuffix;
+    }
+
+    // 6. Set hostname, start UDP, and announce presence (must be after WiFi is up and nodeName is set)
+    WiFi.setHostname(nodeName.c_str());
     udp.begin(ANNOUNCE_PORT);
     announcePresence();
-        /* UDP announcement disabled */
-        // udp.begin(ANNOUNCE_PORT);
-        // announcePresence();
 
-
-    // Initialize FederatedFileSystem with SD if available, else LittleFS
+    // 7. Initialize FederatedFileSystem with SD if available, else LittleFS
 #if defined(ESP32)
     if (sdAvailable) {
         ffsUp = federatedFS.begin(FFSBackend::SD, SD);
@@ -327,7 +349,7 @@ void setup() {
     pm.setFFS(&federatedFS);
 #endif
 
-    // Web server for node name config (Async)
+    // 8. Web server for node name config (Async)
     setupWebServer();
 }
 
