@@ -185,7 +185,13 @@ FFSStatus FederatedFileSystem::listFiles(std::vector<String> &outNames) {
     if (lfsRoot && lfsRoot.isDirectory()) {
         File file = lfsRoot.openNextFile();
         while (file) {
-            outNames.push_back(String(file.name()));
+            String name = String(file.name());
+            if (file.isDirectory()) {
+                // Mark as directory (for FFS listing)
+                outNames.push_back(name + "/");
+            } else {
+                outNames.push_back(name);
+            }
             file = lfsRoot.openNextFile();
         }
         lfsRoot.close();

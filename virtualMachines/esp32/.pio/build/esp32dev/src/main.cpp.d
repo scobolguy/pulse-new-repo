@@ -1,4 +1,4 @@
-.pio/build/esp32dev/src/main.cpp.o: src/main.cpp \
+.pio/build/esp32dev/src/main.cpp.o: src/main.cpp src/SensorService.h \
  C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/cores/esp32/Arduino.h \
  C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp_arduino_version.h \
  C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/freertos/include/freertos/FreeRTOS.h \
@@ -133,11 +133,12 @@
  C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/esp_hw_support/include/soc/esp32/spiram.h \
  C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/cores/esp32/io_pin_remap.h \
  C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/cores/esp32/Arduino.h \
- C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/libraries/FS/src/FS.h \
- C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/libraries/LittleFS/src/LittleFS.h \
  .pio/libdeps/esp32dev/ArduinoJson/src/ArduinoJson.h \
  .pio/libdeps/esp32dev/ArduinoJson/src/ArduinoJson.hpp \
  .pio/libdeps/esp32dev/ArduinoJson/src/ArduinoJson/Configuration.hpp \
+ src/DevicePin.h \
+ C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/libraries/FS/src/FS.h \
+ C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/libraries/LittleFS/src/LittleFS.h \
  src/ConfigSchema.h src/provision_routes.h \
  .pio/libdeps/esp32dev/ESP\ Async\ WebServer/src/ESPAsyncWebServer.h \
  .pio/libdeps/esp32dev/AsyncTCP/src/AsyncTCP.h \
@@ -214,4 +215,6 @@
  C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/libraries/SPI/src/SPI.h \
  C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal-spi.h \
  C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/libraries/SD/src/sd_defines.h \
- C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFiUdp.h
+ src/config_types.h \
+ C:/Users/scobo/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFiUdp.h \
+ src/NodeConfig.h

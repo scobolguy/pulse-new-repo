@@ -1,3 +1,4 @@
+#include "DevicePin.h"
 #include "FederatedFileSystemRoutes.h"
 #include <vector>
 #include <Arduino.h>
@@ -7,6 +8,44 @@
 #include <LittleFS.h>
 
 void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS) {
+
+            // FFS: List all device definitions
+            server.on("/ffs/devices", HTTP_GET, [](AsyncWebServerRequest *request){
+                String json = "[";
+                if (LittleFS.exists("/devices")) {
+                    File dir = LittleFS.open("/devices");
+                    bool first = true;
+                    File entry = dir.openNextFile();
+                    while (entry) {
+                        if (!first) json += ",";
+                        String content = entry.readString();
+                        json += content;
+                        first = false;
+                        entry = dir.openNextFile();
+                    }
+                }
+                json += "]";
+                request->send(200, "application/json", json);
+            });
+
+            // FFS: List all service definitions
+            server.on("/ffs/services", HTTP_GET, [](AsyncWebServerRequest *request){
+                String json = "[";
+                if (LittleFS.exists("/services")) {
+                    File dir = LittleFS.open("/services");
+                    bool first = true;
+                    File entry = dir.openNextFile();
+                    while (entry) {
+                        if (!first) json += ",";
+                        String content = entry.readString();
+                        json += content;
+                        first = false;
+                        entry = dir.openNextFile();
+                    }
+                }
+                json += "]";
+                request->send(200, "application/json", json);
+            });
         // FFS: List discovered nodes endpoint
         server.on("/ffs/nodes", HTTP_GET, [](AsyncWebServerRequest *request){
             extern std::map<String, DiscoveredNode> discoveredNodeTable;
@@ -191,9 +230,34 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
             return;
         }
         String json = "[";
+        // Add files
         for (size_t i = 0; i < files.size(); ++i) {
             if (i > 0) json += ",";
             json += "\"" + files[i] + "\"";
+        }
+
+        // Add /devices directory and its children
+        if (LittleFS.exists("/devices")) {
+            if (!files.empty()) json += ",";
+            json += "{\"type\":\"directory\",\"name\":\"devices\",\"children\":[";
+            File dir = LittleFS.open("/devices");
+            bool first = true;
+            File entry = dir.openNextFile();
+            while (entry) {
+                if (!first) json += ",";
+                String fname = entry.name();
+                // Read device file content for details
+                String content = entry.readString();
+                json += content;
+                first = false;
+                entry = dir.openNextFile();
+            }
+            json += "]}";
+        }
+        // Add /services directory and its children
+        if (LittleFS.exists("/services")) {
+            json += ",{";
+            json += "\"type\":\"directory\",\"name\":\"services\",\"children\":[]}";
         }
         json += "]";
         request->send(200, "application/json", json);

@@ -109,6 +109,10 @@ void setupWebServer() {
         json += "]}";
         request->send(200, "application/json", json);
     });
+    registerFFSRoutes(server, federatedFS);
+#ifdef ENABLE_PMACHINE
+    registerPMachineRoutes(server, pm);
+#endif
     server.onNotFound(notFound);
     server.begin();
 }

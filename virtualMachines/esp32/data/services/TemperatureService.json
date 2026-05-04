@@ -1,0 +1,11 @@
+{
+  "type": "service",
+  "name": "TemperatureService",
+  "description": "Provides temperature, humidity, and pressure readings from DHT, BME280, and BMP280 sensors via /sensor/read. Supports C/F units.",
+  "actions": [
+    {
+      "name": "read",
+      "description": "Read temperature, humidity, and pressure from the sensor. Parameters: pin, type (DHT11, DHT21, DHT22, BME280, BMP280), unit (C/F)."
+    }
+  ]
+}

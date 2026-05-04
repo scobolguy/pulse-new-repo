@@ -59,6 +59,8 @@ enum Opcode : uint8_t {
     OP_PRINT_INT = 0x15,
     OP_PUSH_ENUM = 0x20,
     OP_PRINT_ENUM = 0x21,
+    OP_JMP = 0x30,
+    OP_JZ = 0x31,
     OP_HALT = 0xFF
 };
 
@@ -70,6 +72,7 @@ enum Opcode : uint8_t {
         int intOperand = 0;
         std::string strOperand;
         std::string enumType; // for enum instructions
+        std::string label;    // for JMP/JZ, label name (resolved to intOperand after parsing)
     };
 
     inline uint8_t opcodeFromMnemonic(const std::string& mnemonic) {
@@ -83,6 +86,8 @@ enum Opcode : uint8_t {
         if (mnemonic == "PRINT_INT") return OP_PRINT_INT;
         if (mnemonic == "PUSH_ENUM") return OP_PUSH_ENUM;
         if (mnemonic == "PRINT_ENUM") return OP_PRINT_ENUM;
+        if (mnemonic == "JMP") return OP_JMP;
+        if (mnemonic == "JZ") return OP_JZ;
         if (mnemonic == "HALT") return OP_HALT;
         if (mnemonic == "NOP") return OP_NOP;
         return 0xFE;

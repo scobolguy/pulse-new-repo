@@ -1,8 +1,9 @@
+
+#include "config_types.h"
 #include "main_globals.h"
 #include "cluster_routes.h"
 #include <LittleFS.h>
 #include <ArduinoJson.h>
-#include "ConfigSchema.h"
 
 
 namespace cluster {
