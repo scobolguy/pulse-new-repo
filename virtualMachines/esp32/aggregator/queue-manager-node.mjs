@@ -1,6 +1,7 @@
 import express from 'express';
 import os from 'os';
 import fetch from 'node-fetch';
+import path from 'path';
 import QueueManager from './src/broker/QueueManager.mjs';
 
 function getArg(name, fallback) {
@@ -30,9 +31,10 @@ const nodeId = getArg('node-id', os.hostname());
 const managerId = getArg('manager-id', `${nodeId}-qm-${port}`);
 const managerName = getArg('name', managerId);
 const heartbeatMs = Number(getArg('heartbeat-ms', '5000'));
+const persistPath = path.join(process.cwd(), 'data'); // Persist config locally
 
 const app = express();
-const queueManager = new QueueManager(managerName);
+const queueManager = new QueueManager(managerName, persistPath);
 app.use(express.json());
 
 function getQueueNames() {
@@ -114,9 +116,35 @@ app.get('/queues/:queueName/status', (req, res) => {
   });
 });
 
+// Apply config change from another peer
+app.post('/apply-config-change', (req, res) => {
+  try {
+    const operation = req.body;
+    console.log(`[QM] Applying config change: ${operation.type} - ${operation.queueName}`);
+    queueManager.applyConfigChange(operation);
+    res.json({ status: 'applied', operation });
+  } catch (e) {
+    console.error(`[QM] Error applying config change:`, e.message);
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Get current config and version for sync detection
+app.get('/config', (req, res) => {
+  res.json(queueManager.getAllQueueConfigs());
+});
+
 app.listen(port, host, () => {
   console.log(`[QM] ${managerId} listening on http://${host}:${port}`);
   console.log(`[QM] advertising ${advertiseIp}:${port} to ${aggregatorUrl}`);
+  
+  // Register callback to notify aggregator of config changes
+  queueManager.onConfigChange((operation) => {
+    console.log(`[QM] Local config changed: ${operation.type} - ${operation.queueName}`);
+    // In production, would HTTP POST to aggregator endpoint
+    // for notification to other peer instances
+  });
+  
   sendHeartbeat().catch(err => console.error('[QM] initial heartbeat failed:', err.message));
   setInterval(() => {
     sendHeartbeat().catch(err => console.error('[QM] heartbeat failed:', err.message));

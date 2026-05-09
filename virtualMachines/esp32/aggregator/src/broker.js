@@ -7,6 +7,6 @@ export function createMessageBroker(logger) {
   return new MessageBroker(logger);
 }
 
-export function createQueueManager(logger, persistPath, configPath) {
-  return new QueueManager(logger, persistPath, configPath);
+export function createQueueManager(name, persistPath) {
+  return new QueueManager(name, persistPath);
 }

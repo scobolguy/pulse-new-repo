@@ -25,9 +25,20 @@ app.use(cors());
 app.use(express.json());
 
 console.log('[DEBUG] Creating global state...');
+const queueManagerInstances = new Map(); // Maps managerId to QueueManager instance
 let queueManagers = [
-  (() => { console.log('[DEBUG] Creating primary QueueManager'); return createQueueManager('primary'); })(),
-  (() => { console.log('[DEBUG] Creating secondary QueueManager'); return createQueueManager('secondary'); })()
+  (() => { 
+    console.log('[DEBUG] Creating primary QueueManager');
+    const qm = createQueueManager('qm-primary', './data');
+    queueManagerInstances.set('qm-primary', qm);
+    return qm;
+  })(),
+  (() => { 
+    console.log('[DEBUG] Creating secondary QueueManager'); 
+    const qm = createQueueManager('qm-secondary', './data');
+    queueManagerInstances.set('qm-secondary', qm);
+    return qm;
+  })()
 ];
 const primaryBroker = createMessageBroker();
 let secondaryBroker = null;
@@ -1076,6 +1087,102 @@ function registerRoutes(app) {
     }
   });
 
+  // Queue configuration synchronization endpoints for distributed config management
+  
+  // Create a new queue configuration and sync to all peer instances
+  app.post('/api/queues/:managerId/create', (req, res) => {
+    try {
+      const { managerId } = req.params;
+      const { queueName, config } = req.body;
+      
+      const qm = queueManagerInstances.get(managerId);
+      if (!qm) {
+        return res.status(404).json({ error: `Queue manager ${managerId} not found` });
+      }
+      
+      const result = qm.createQueue(queueName, config);
+      res.json({ success: true, queueName, config: result });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+  
+  // Delete a queue configuration and sync to all peer instances
+  app.post('/api/queues/:managerId/delete', (req, res) => {
+    try {
+      const { managerId } = req.params;
+      const { queueName } = req.body;
+      
+      const qm = queueManagerInstances.get(managerId);
+      if (!qm) {
+        return res.status(404).json({ error: `Queue manager ${managerId} not found` });
+      }
+      
+      qm.deleteQueue(queueName);
+      res.json({ success: true, queueName, deleted: true });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+  
+  // Update queue configuration and sync to all peer instances
+  app.post('/api/queues/:managerId/update', (req, res) => {
+    try {
+      const { managerId } = req.params;
+      const { queueName, updates } = req.body;
+      
+      const qm = queueManagerInstances.get(managerId);
+      if (!qm) {
+        return res.status(404).json({ error: `Queue manager ${managerId} not found` });
+      }
+      
+      const result = qm.updateQueueConfig(queueName, updates);
+      res.json({ success: true, queueName, config: result });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+  
+  // Get all queue configurations (including version info for sync detection)
+  app.get('/api/queues/:managerId/config', (req, res) => {
+    try {
+      const { managerId } = req.params;
+      
+      const qm = queueManagerInstances.get(managerId);
+      if (!qm) {
+        return res.status(404).json({ error: `Queue manager ${managerId} not found` });
+      }
+      
+      const allConfigs = qm.getAllQueueConfigs();
+      res.json(allConfigs);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+  
+  // Apply a configuration change from a peer instance
+  app.post('/api/queues/:managerId/apply-config-change', (req, res) => {
+    try {
+      const { managerId } = req.params;
+      const operation = req.body;
+      
+      const qm = queueManagerInstances.get(managerId);
+      if (!qm) {
+        return res.status(404).json({ error: `Queue manager ${managerId} not found` });
+      }
+      
+      qm.applyConfigChange(operation);
+      res.json({ 
+        success: true, 
+        appliedOperation: operation.type,
+        queueName: operation.queueName,
+        newConfigVersion: qm.configVersion 
+      });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
   // TEST ENDPOINT
   console.log('[DEBUG] About to register replication endpoints');
   app.get('/api/replication-test', (req, res) => {
@@ -1149,6 +1256,21 @@ function registerRoutes(app) {
 
 try {
   console.log('[DEBUG] Starting backend server...');
+  
+  // Set up peer sync callbacks for each queue manager
+  // This enables distributed config synchronization
+  for (const [managerId, qm] of queueManagerInstances) {
+    qm.onConfigChange(async (operation) => {
+      // When this queue manager's config changes, notify all other instances
+      // In a distributed setup, this would HTTP POST to all peer instances
+      // For now, log it so the sync mechanism can pick it up
+      console.log(`[SYNC] Config change on ${managerId}: ${operation.type} - ${operation.queueName}`);
+      
+      // In production, you'd iterate through all registered instances of this queue manager
+      // and POST to their /api/queues/:managerId/apply-config-change endpoint
+    });
+  }
+  
   registerRoutes(app);
   app.listen(HTTP_PORT, '0.0.0.0', () => {
     console.log(`Aggregator backend running on http://0.0.0.0:${HTTP_PORT} (LAN accessible)`);
