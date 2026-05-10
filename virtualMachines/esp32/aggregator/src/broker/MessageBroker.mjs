@@ -1,10 +1,37 @@
 // MessageBroker.mjs
 // ESM version of MessageBroker
 
+
+import fs from 'fs';
+import path from 'path';
+
+const SUBSCRIBERS_PATH = path.join('./data', 'broker-subscribers.json');
+
 export default class MessageBroker {
   constructor(logger) {
-    this.subscribers = {};
     this.logger = logger;
+    this.subscribers = this.loadSubscribers();
+  }
+
+  saveSubscribers() {
+    try {
+      fs.mkdirSync(path.dirname(SUBSCRIBERS_PATH), { recursive: true });
+      fs.writeFileSync(SUBSCRIBERS_PATH, JSON.stringify(this.subscribers, null, 2));
+    } catch (e) {
+      console.error('[MessageBroker] Failed to save subscribers:', e.message);
+    }
+  }
+
+  loadSubscribers() {
+    try {
+      if (fs.existsSync(SUBSCRIBERS_PATH)) {
+        const data = fs.readFileSync(SUBSCRIBERS_PATH, 'utf-8');
+        return JSON.parse(data);
+      }
+    } catch (e) {
+      console.error('[MessageBroker] Failed to load subscribers:', e.message);
+    }
+    return {};
   }
 
   subscribe(topic, serviceName, handler) {
@@ -12,6 +39,7 @@ export default class MessageBroker {
       this.subscribers[topic] = [];
     }
     this.subscribers[topic].push({ serviceName, handler });
+    this.saveSubscribers();
   }
 
   publish(topic, message, sourceService) {
@@ -31,5 +59,27 @@ export default class MessageBroker {
       });
     }
     subscribers.forEach(sub => sub.handler(message, topic, sourceService));
+  }
+
+  // For API: get all subscriptions (without handlers)
+  getSubscriptions() {
+    // Remove handler functions for serialization
+    const result = {};
+    for (const topic of Object.keys(this.subscribers)) {
+      result[topic] = this.subscribers[topic].map(({ serviceName }) => ({ serviceName }));
+    }
+    return result;
+  }
+
+  // For API: add a subscription (handler is a no-op)
+  addSubscription(topic, serviceName) {
+    if (!this.subscribers[topic]) {
+      this.subscribers[topic] = [];
+    }
+    // Prevent duplicate
+    if (!this.subscribers[topic].some(sub => sub.serviceName === serviceName)) {
+      this.subscribers[topic].push({ serviceName, handler: () => {} });
+      this.saveSubscribers();
+    }
   }
 }

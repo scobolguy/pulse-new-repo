@@ -47,45 +47,53 @@ private:
 
 namespace pmachine {
 
+
+// PL/0-style opcodes
 enum Opcode : uint8_t {
     OP_NOP = 0x00,
-    OP_PUSH_STR = 0x01,
-    OP_PRINT = 0x02,
-    OP_PUSH_INT = 0x10,
-    OP_ADD = 0x11,
-    OP_SUB = 0x12,
-    OP_MUL = 0x13,
-    OP_DIV = 0x14,
-    OP_PRINT_INT = 0x15,
-    OP_PUSH_ENUM = 0x20,
-    OP_PRINT_ENUM = 0x21,
-    OP_JMP = 0x30,
-    OP_JZ = 0x31,
-    OP_HALT = 0xFF
+    OP_LIT = 0x01,      // LIT 0, a: Push constant a
+    OP_OPR = 0x02,      // OPR 0, a: Operator (return, arithmetic, etc)
+    OP_LOD = 0x03,      // LOD l, a: Load variable at level l, address a
+    OP_STO = 0x04,      // STO l, a: Store variable at level l, address a
+    OP_CAL = 0x05,      // CAL l, a: Call procedure at level l, address a
+    OP_INT = 0x06,      // INT 0, a: Increment stack for locals
+    OP_JMP = 0x07,      // JMP 0, a: Jump to address a
+    OP_JZ  = 0x08,      // JZ  0, a: Jump if zero
+    OP_PUSH_INT = 0x09, // Push integer operand
+    OP_PUSH_STR = 0x0A, // Push string operand
+    OP_PUSH_ENUM = 0x0B,// Push enum operand
+    OP_ADD = 0x0C,      // Add
+    OP_SUB = 0x0D,      // Subtract
+    OP_MUL = 0x0E,      // Multiply
+    OP_DIV = 0x0F,      // Divide
+    OP_PRINT_INT = 0x10,// Print integer
+    OP_PRINT_ENUM = 0x11,// Print enum
+    OP_HALT = 0xFF      // HALT
 };
 
     enum class OperandType { NONE, INT, STRING };
 
+
     struct PInstruction {
         uint8_t opcode;
+        int level = 0;         // Lexical level (for LOD, STO, CAL)
+        int address = 0;       // Address/offset (for LOD, STO, CAL, JMP, etc)
+        int value = 0;         // For LIT, INT, OPR
+        std::string label;     // For JMP/JZ, label name (resolved to address after parsing)
+        // Added fields for extended operand support
         OperandType type = OperandType::NONE;
         int intOperand = 0;
         std::string strOperand;
-        std::string enumType; // for enum instructions
-        std::string label;    // for JMP/JZ, label name (resolved to intOperand after parsing)
+        std::string enumType;
     };
 
     inline uint8_t opcodeFromMnemonic(const std::string& mnemonic) {
-        if (mnemonic == "PUSH_STR") return OP_PUSH_STR;
-        if (mnemonic == "PUSH_INT") return OP_PUSH_INT;
-        if (mnemonic == "ADD") return OP_ADD;
-        if (mnemonic == "SUB") return OP_SUB;
-        if (mnemonic == "MUL") return OP_MUL;
-        if (mnemonic == "DIV") return OP_DIV;
-        if (mnemonic == "PRINT") return OP_PRINT;
-        if (mnemonic == "PRINT_INT") return OP_PRINT_INT;
-        if (mnemonic == "PUSH_ENUM") return OP_PUSH_ENUM;
-        if (mnemonic == "PRINT_ENUM") return OP_PRINT_ENUM;
+        if (mnemonic == "LIT") return OP_LIT;
+        if (mnemonic == "OPR") return OP_OPR;
+        if (mnemonic == "LOD") return OP_LOD;
+        if (mnemonic == "STO") return OP_STO;
+        if (mnemonic == "CAL") return OP_CAL;
+        if (mnemonic == "INT") return OP_INT;
         if (mnemonic == "JMP") return OP_JMP;
         if (mnemonic == "JZ") return OP_JZ;
         if (mnemonic == "HALT") return OP_HALT;
@@ -144,6 +152,16 @@ private:
     uint16_t pc = 0;
     std::vector<uint16_t> breakpoints;
     ::EnumManager* enumManager = nullptr;
+
+    // Handler table for opcode dispatch
+    using HandlerFunc = void (*)(PMachine&, const PInstruction&, int*, int&, int&, int&);
+    HandlerFunc handler_table[256] = {nullptr};
+    void init_handler_table();
+public:
+    // Register a native extension handler for an opcode
+    void register_extension(uint8_t opcode, HandlerFunc func);
+    // (For testing/diagnostics) Get handler for an opcode
+    HandlerFunc get_handler(uint8_t opcode) const { return handler_table[opcode]; }
 };
 
 // Standalone loader function

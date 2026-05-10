@@ -1,27 +1,41 @@
 import './App.css';
-
-
 import TopologyDashboard from './TopologyDashboard';
 import QueueManagerDashboard from './QueueManagerDashboard';
-import QueueManagerLauncher from './QueueManagerLauncher';
-import SecondaryBrokerLauncher from './SecondaryBrokerLauncher';
+import DataLibrarian from './DataLibrarian';
 import React, { useState } from 'react';
 
+const SCREENS = [
+  { id: 'topology', label: 'Network Topology' },
+  { id: 'queue', label: 'Queue Manager' },
+  { id: 'librarian', label: 'Data Librarian' },
+];
 
 function App() {
   const [screen, setScreen] = useState('topology');
   return (
     <div className="App">
-      <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
-        <button onClick={() => setScreen('topology')} style={{ fontWeight: screen === 'topology' ? 'bold' : 'normal' }}>Topology</button>
-        <button onClick={() => setScreen('queue')} style={{ fontWeight: screen === 'queue' ? 'bold' : 'normal' }}>Queue Manager</button>
-        <button onClick={() => setScreen('queue-launcher')} style={{ fontWeight: screen === 'queue-launcher' ? 'bold' : 'normal' }}>Queue Manager Launcher</button>
-        <button onClick={() => setScreen('secondary')} style={{ fontWeight: screen === 'secondary' ? 'bold' : 'normal' }}>Secondary Broker Launcher</button>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, borderBottom: '2px solid #e0e7ef', paddingBottom: 8 }}>
+        {SCREENS.map(s => (
+          <button
+            key={s.id}
+            onClick={() => setScreen(s.id)}
+            style={{
+              fontWeight: screen === s.id ? 'bold' : 'normal',
+              borderBottom: screen === s.id ? '2px solid #1a73e8' : '2px solid transparent',
+              background: 'none',
+              border: 'none',
+              borderBottom: screen === s.id ? '2px solid #1a73e8' : '2px solid transparent',
+              cursor: 'pointer',
+              padding: '6px 14px',
+              fontSize: 14,
+              color: screen === s.id ? '#1a73e8' : '#444',
+            }}
+          >{s.label}</button>
+        ))}
       </div>
       {screen === 'topology' && <TopologyDashboard />}
       {screen === 'queue' && <QueueManagerDashboard />}
-      {screen === 'queue-launcher' && <QueueManagerLauncher />}
-      {screen === 'secondary' && <SecondaryBrokerLauncher />}
+      {screen === 'librarian' && <DataLibrarian />}
     </div>
   );
 }

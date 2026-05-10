@@ -1,0 +1,18 @@
+; Macro assembler feature demo
+.define FOO
+.ifdef FOO
+  .macro PRINTX x
+    x := 123;
+  .endmacro
+  PRINTX y
+.else
+  y := 0;
+.endif
+.struct Point
+  x: integer
+  y: integer
+.endstruct
+.include "test_include.pulse0"
+program Demo;
+begin
+end.

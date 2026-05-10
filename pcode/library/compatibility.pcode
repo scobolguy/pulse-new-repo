@@ -1,0 +1,25 @@
+# compatibility.pcode
+# Macro definitions for legacy/test instructions to PL/0-style opcodes
+# Include this file in your .pcode sources for compatibility
+
+# Integer push
+#define PUSH_INT(x) LIT x
+
+# Arithmetic
+#define ADD OPR 2
+#define SUB OPR 3
+#define MUL OPR 4
+#define DIV OPR 5
+
+# Print integer (assume OPR 10 is print_int, or map to a library call if needed)
+#define PRINT_INT OPR 10
+
+# HALT
+#define HALT HALT
+
+# (Optional) String and enum support (requires library or extension)
+# For now, these macros are placeholders and can be expanded as needed
+#define PUSH_STR(x)  # Not supported in core PL/0, map to library or extension
+#define PRINT        # Not supported in core PL/0, map to library or extension
+#define PUSH_ENUM(t, v) # Not supported in core PL/0, map to library or extension
+#define PRINT_ENUM   # Not supported in core PL/0, map to library or extension

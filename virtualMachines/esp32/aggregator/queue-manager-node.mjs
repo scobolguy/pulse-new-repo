@@ -50,6 +50,7 @@ async function sendHeartbeat() {
     port,
     status: 'up',
     queues: getQueueNames(),
+    persistence: queueManager.getPersistenceStatus(),
   };
 
   const response = await fetch(`${aggregatorUrl}/api/registry/heartbeat`, {
@@ -73,16 +74,35 @@ app.get('/health', (req, res) => {
     ip: advertiseIp,
     port,
     queues: getQueueNames(),
+    persistence: queueManager.getPersistenceStatus(),
   });
 });
 
 app.post('/enqueue', (req, res) => {
-  const { queueName, message, sourceService } = req.body || {};
+  const { queueName, message, sourceService, messageId } = req.body || {};
   if (!queueName) {
     return res.status(400).json({ error: 'queueName is required' });
   }
-  queueManager.enqueue(queueName, message, sourceService || 'remote-producer');
-  res.json({ status: 'enqueued', managerId, queueName, queueLength: queueManager.getQueueLength(queueName) });
+  const acceptedMessageId = queueManager.enqueue(queueName, message, sourceService || 'remote-producer', messageId || null);
+  res.json({ status: 'enqueued', managerId, queueName, queueLength: queueManager.getQueueLength(queueName), messageId: acceptedMessageId });
+});
+
+app.post('/replicate-enqueue', (req, res) => {
+  const { queueName, message, sourceService, messageId } = req.body || {};
+  if (!queueName) {
+    return res.status(400).json({ error: 'queueName is required' });
+  }
+  queueManager.enqueueReplicated(queueName, message, sourceService || 'replication', messageId);
+  res.json({ status: 'replicated', managerId, queueName, queueLength: queueManager.getQueueLength(queueName) });
+});
+
+app.post('/replicate-dequeue', (req, res) => {
+  const { queueName, removedMessage } = req.body || {};
+  if (!queueName) {
+    return res.status(400).json({ error: 'queueName is required' });
+  }
+  const removed = queueManager.dequeueReplicated(queueName, removedMessage || null);
+  res.json({ status: 'replicated', managerId, queueName, removed, queueLength: queueManager.getQueueLength(queueName) });
 });
 
 app.post('/dequeue', (req, res) => {
@@ -114,6 +134,20 @@ app.get('/queues/:queueName/status', (req, res) => {
     status: queueManager.getStatus(queueName),
     length: queueManager.getQueueLength(queueName),
   });
+});
+
+app.get('/snapshot', (req, res) => {
+  res.json({ managerId, snapshot: queueManager.getSnapshot() });
+});
+
+app.post('/replication/apply-snapshot', (req, res) => {
+  try {
+    const { snapshot } = req.body || {};
+    queueManager.applySnapshot(snapshot);
+    res.json({ status: 'snapshot-applied', managerId, queueCount: Object.keys(queueManager.queueConfig || {}).length });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 // Apply config change from another peer

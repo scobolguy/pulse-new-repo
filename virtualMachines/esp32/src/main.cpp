@@ -77,6 +77,268 @@ void notFound(AsyncWebServerRequest *request) {
 // ...existing code...
 
 void setupWebServer() {
+            // Service broker endpoint: aggregator can notify this node when a service is assigned or released
+            server.on("/service-broker/announce", HTTP_POST, [](AsyncWebServerRequest *request){
+                if (!request->hasParam("service", true) || !request->hasParam("busy", true)) {
+                    request->send(400, "text/plain", "Missing service or busy param");
+                    return;
+                }
+                String service = request->getParam("service", true)->value();
+                bool busy = request->getParam("busy", true)->value() == "true";
+                // Store busy status in a global map
+                static std::map<String, bool> serviceBusyMap;
+                serviceBusyMap[service] = busy;
+                request->send(200, "text/plain", String(service) + " set to " + (busy ? "busy" : "free"));
+            });
+    // Self-describing services endpoint
+    server.on("/services/describe", HTTP_GET, [](AsyncWebServerRequest *request){
+        JsonDocument doc;
+        #if defined(ESP32)
+        doc["hardware"] = "ESP32";
+        #elif defined(ESP8266)
+        doc["hardware"] = "ESP8266";
+        #else
+        doc["hardware"] = "Unknown";
+        #endif
+        doc["nodeName"] = nodeName;
+        auto services = doc["services"].to<JsonArray>();
+
+        // Devices section: enumerate devices and their documentation/visibility
+        JsonArray devices = doc["devices"].to<JsonArray>();
+        if (LittleFS.exists("/devices")) {
+            File dir = LittleFS.open("/devices");
+            File entry = dir.openNextFile();
+            while (entry) {
+                String devName = String(entry.name());
+                if (devName.startsWith("/devices/")) devName = devName.substring(9);
+                if (devName.endsWith(".json")) devName = devName.substring(0, devName.length() - 5);
+                // Read device JSON
+                String devJsonStr = entry.readString();
+                entry.close();
+                DynamicJsonDocument devDoc(512);
+                DeserializationError err = deserializeJson(devDoc, devJsonStr);
+                JsonObject devObj = devices.add<JsonObject>();
+                devObj["name"] = devName;
+                // Visibility: default private, can be set to public in device JSON
+                String visibility = "private";
+                if (!err && devDoc.containsKey("visibility")) {
+                    visibility = devDoc["visibility"].as<String>();
+                }
+                devObj["visibility"] = visibility;
+                // Load documentation from FFS if available
+                String docText;
+                String docPath = String("/devices/docs/") + devName + ".txt";
+                File docFile = LittleFS.open(docPath, "r");
+                if (docFile) {
+                    docText = docFile.readString();
+                    docFile.close();
+                } else {
+                    docText = String("Device: ") + devName;
+                }
+                devObj["description"] = docText;
+                // Optionally, add device actions/commands if present in JSON
+                if (!err && devDoc.containsKey("actions")) {
+                    JsonArray actions = devObj["actions"].to<JsonArray>();
+                    for (JsonVariant v : devDoc["actions"].as<JsonArray>()) {
+                        String actionName = v.as<String>();
+                        String actionDocPath = String("/devices/docs/") + devName + "_" + actionName + ".txt";
+                        String actionDoc;
+                        File actionDocFile = LittleFS.open(actionDocPath, "r");
+                        if (actionDocFile) { actionDoc = actionDocFile.readString(); actionDocFile.close(); }
+                        else { actionDoc = String("Action: ") + actionName; }
+                        JsonObject act = actions.add<JsonObject>();
+                        act["name"] = actionName;
+                        act["description"] = actionDoc;
+                    }
+                }
+                entry = dir.openNextFile();
+            }
+        }
+
+        // FFS Service
+        auto ffs = services.add<JsonObject>();
+        ffs["name"] = "FFS";
+        {
+            String docText;
+            File docFile = LittleFS.open("/services/docs/ffs.txt", "r");
+            if (docFile) {
+                docText = docFile.readString();
+                docFile.close();
+            } else {
+                docText = "Federated File System: provides distributed file storage and access.";
+            }
+            ffs["description"] = docText;
+        }
+        // Check if broker has marked this service busy
+        extern std::map<String, bool> serviceBusyMap;
+        String ffsStatus = ffsUp ? "up" : "down";
+        if (serviceBusyMap.count("FFS") && serviceBusyMap["FFS"]) ffsStatus = "busy";
+        ffs["status"] = ffsStatus;
+        auto ffsCmds = ffs["commands"].to<JsonArray>();
+        {
+            JsonObject cmd = ffsCmds.add<JsonObject>();
+            cmd["name"] = "listFiles";
+            String docText;
+            File docFile = LittleFS.open("/services/docs/ffs_listFiles.txt", "r");
+            if (docFile) { docText = docFile.readString(); docFile.close(); }
+            else { docText = "List all files in the file system."; }
+            cmd["description"] = docText;
+        }
+        {
+            JsonObject cmd = ffsCmds.add<JsonObject>();
+            cmd["name"] = "write";
+            String docText;
+            File docFile = LittleFS.open("/services/docs/ffs_write.txt", "r");
+            if (docFile) { docText = docFile.readString(); docFile.close(); }
+            else { docText = "Write data to a file."; }
+            cmd["description"] = docText;
+        }
+        {
+            JsonObject cmd = ffsCmds.add<JsonObject>();
+            cmd["name"] = "read";
+            String docText;
+            File docFile = LittleFS.open("/services/docs/ffs_read.txt", "r");
+            if (docFile) { docText = docFile.readString(); docFile.close(); }
+            else { docText = "Read data from a file."; }
+            cmd["description"] = docText;
+        }
+        {
+            JsonObject cmd = ffsCmds.add<JsonObject>();
+            cmd["name"] = "remove";
+            String docText;
+            File docFile = LittleFS.open("/services/docs/ffs_remove.txt", "r");
+            if (docFile) { docText = docFile.readString(); docFile.close(); }
+            else { docText = "Remove a file from the file system."; }
+            cmd["description"] = docText;
+        }
+        {
+            JsonObject cmd = ffsCmds.add<JsonObject>();
+            cmd["name"] = "sync";
+            String docText;
+            File docFile = LittleFS.open("/services/docs/ffs_sync.txt", "r");
+            if (docFile) { docText = docFile.readString(); docFile.close(); }
+            else { docText = "Synchronize file system to storage."; }
+            cmd["description"] = docText;
+        }
+
+        // PMachine Service
+        #ifdef ENABLE_PMACHINE
+        extern pmachine::PMachine pm;
+        auto pmObj = services.add<JsonObject>();
+        pmObj["name"] = "pmachine";
+        {
+            String docText;
+            File docFile = LittleFS.open("/services/docs/pmachine.txt", "r");
+            if (docFile) {
+                docText = docFile.readString();
+                docFile.close();
+            } else {
+                docText = "PL/0-style virtual machine for executing pcode programs.";
+            }
+            pmObj["description"] = docText;
+        }
+        auto s = pm.getStatus();
+        String pmStatus = s.running ? "running" : "stopped";
+        if (serviceBusyMap.count("pmachine") && serviceBusyMap["pmachine"]) pmStatus = "busy";
+        pmObj["status"] = pmStatus;
+        auto pmCmds = pmObj["commands"].to<JsonArray>();
+        {
+            JsonObject cmd = pmCmds.add<JsonObject>();
+            cmd["name"] = "loadProgram";
+            String docText;
+            File docFile = LittleFS.open("/services/docs/pmachine_loadProgram.txt", "r");
+            if (docFile) { docText = docFile.readString(); docFile.close(); }
+            else { docText = "Load a pcode program into the VM."; }
+            cmd["description"] = docText;
+        }
+        {
+            JsonObject cmd = pmCmds.add<JsonObject>();
+            cmd["name"] = "run";
+            String docText;
+            File docFile = LittleFS.open("/services/docs/pmachine_run.txt", "r");
+            if (docFile) { docText = docFile.readString(); docFile.close(); }
+            else { docText = "Run the loaded program."; }
+            cmd["description"] = docText;
+        }
+        {
+            JsonObject cmd = pmCmds.add<JsonObject>();
+            cmd["name"] = "singleStep";
+            String docText;
+            File docFile = LittleFS.open("/services/docs/pmachine_singleStep.txt", "r");
+            if (docFile) { docText = docFile.readString(); docFile.close(); }
+            else { docText = "Execute a single instruction."; }
+            cmd["description"] = docText;
+        }
+        {
+            JsonObject cmd = pmCmds.add<JsonObject>();
+            cmd["name"] = "setBreakpoint";
+            String docText;
+            File docFile = LittleFS.open("/services/docs/pmachine_setBreakpoint.txt", "r");
+            if (docFile) { docText = docFile.readString(); docFile.close(); }
+            else { docText = "Set a breakpoint at a given address."; }
+            cmd["description"] = docText;
+        }
+        {
+            JsonObject cmd = pmCmds.add<JsonObject>();
+            cmd["name"] = "clearBreakpoint";
+            String docText;
+            File docFile = LittleFS.open("/services/docs/pmachine_clearBreakpoint.txt", "r");
+            if (docFile) { docText = docFile.readString(); docFile.close(); }
+            else { docText = "Clear a breakpoint at a given address."; }
+            cmd["description"] = docText;
+        }
+        {
+            JsonObject cmd = pmCmds.add<JsonObject>();
+            cmd["name"] = "getStatus";
+            String docText;
+            File docFile = LittleFS.open("/services/docs/pmachine_getStatus.txt", "r");
+            if (docFile) { docText = docFile.readString(); docFile.close(); }
+            else { docText = "Get the current status of the VM."; }
+            cmd["description"] = docText;
+        }
+        #endif
+
+        // Sensor Service (example, static)
+        auto sensor = services.add<JsonObject>();
+        sensor["name"] = "SensorService";
+        {
+            String docText;
+            File docFile = LittleFS.open("/services/docs/sensor.txt", "r");
+            if (docFile) {
+                docText = docFile.readString();
+                docFile.close();
+            } else {
+                docText = "Provides access to connected sensors (e.g., DHT22, BME280).";
+            }
+            sensor["description"] = docText;
+        }
+        String sensorStatus = "ready";
+        if (serviceBusyMap.count("SensorService") && serviceBusyMap["SensorService"]) sensorStatus = "busy";
+        sensor["status"] = sensorStatus;
+        auto sensorCmds = sensor["commands"].to<JsonArray>();
+        {
+            JsonObject cmd = sensorCmds.add<JsonObject>();
+            cmd["name"] = "readSensor";
+            String docText;
+            File docFile = LittleFS.open("/services/docs/sensor_readSensor.txt", "r");
+            if (docFile) { docText = docFile.readString(); docFile.close(); }
+            else { docText = "Read values from a sensor."; }
+            cmd["description"] = docText;
+        }
+        {
+            JsonObject cmd = sensorCmds.add<JsonObject>();
+            cmd["name"] = "resultToJson";
+            String docText;
+            File docFile = LittleFS.open("/services/docs/sensor_resultToJson.txt", "r");
+            if (docFile) { docText = docFile.readString(); docFile.close(); }
+            else { docText = "Convert sensor result to JSON."; }
+            cmd["description"] = docText;
+        }
+
+        String json;
+        serializeJson(doc, json);
+        request->send(200, "application/json", json);
+    });
 
     // GET /sensor/read?pin=4&type=DHT22&unit=C
     server.on("/status", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -120,9 +382,52 @@ void setupWebServer() {
 
 #define ANNOUNCE_PORT 4210
 #define ANNOUNCE_INTERVAL 10000 // ms
+#define WIFI_RECONNECT_INTERVAL 5000 // ms
 
 WiFiUDP udp;
 unsigned long lastAnnounce = 0;
+unsigned long lastWifiReconnectAttempt = 0;
+bool udpReady = false;
+String wifiSsid;
+String wifiPassword;
+
+bool ensureUdpReady() {
+    if (udpReady) return true;
+    udpReady = udp.begin(ANNOUNCE_PORT);
+    if (udpReady) {
+        Serial.print("[UDP] Listening on port ");
+        Serial.println(ANNOUNCE_PORT);
+    } else {
+        Serial.println("[UDP] Failed to bind announce port");
+    }
+    return udpReady;
+}
+
+void maintainConnectivity() {
+    const wl_status_t status = WiFi.status();
+    if (status == WL_CONNECTED) {
+        if (!udpReady) {
+            Serial.println("[WIFI] Connected, restoring UDP listener");
+            ensureUdpReady();
+        }
+        return;
+    }
+
+    // Force UDP rebind after WiFi returns.
+    udpReady = false;
+
+    const unsigned long now = millis();
+    if (now - lastWifiReconnectAttempt < WIFI_RECONNECT_INTERVAL) {
+        return;
+    }
+
+    lastWifiReconnectAttempt = now;
+    Serial.print("[WIFI] Disconnected (status=");
+    Serial.print((int)status);
+    Serial.println(") attempting reconnect...");
+    WiFi.disconnect();
+    WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
+}
 
 // Helper to process incoming UDP packets (non-blocking)
 void processIncomingUDP() {
@@ -191,10 +496,29 @@ void announcePresence() {
 #endif
 
 void announcePresence() {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[ANNOUNCE] Skipped: WiFi not connected");
+        return;
+    }
+
+    if (!ensureUdpReady()) {
+        Serial.println("[ANNOUNCE] Skipped: UDP not ready");
+        return;
+    }
+
     String msg = String("ESP32-VM online: ") + WiFi.macAddress() + " IP: " + WiFi.localIP().toString();
-    udp.beginPacket("255.255.255.255", ANNOUNCE_PORT);
-    udp.write((const uint8_t*)msg.c_str(), msg.length());
-    udp.endPacket();
+    int beginOk = udp.beginPacket("255.255.255.255", ANNOUNCE_PORT);
+    size_t written = udp.write((const uint8_t*)msg.c_str(), msg.length());
+    int endOk = udp.endPacket();
+
+    Serial.print("[ANNOUNCE] begin=");
+    Serial.print(beginOk);
+    Serial.print(" write=");
+    Serial.print((unsigned int)written);
+    Serial.print(" end=");
+    Serial.print(endOk);
+    Serial.print(" ip=");
+    Serial.println(WiFi.localIP());
 }
 
 void setup() {
@@ -228,9 +552,11 @@ void setup() {
     // 2. WiFi connection logic
     Serial.println("[BOOT] Connecting to WiFi...");
     WiFi.mode(WIFI_STA);
-    const char* ssid = wifiConfig.ssid.length() ? wifiConfig.ssid.c_str() : "Home";
-    const char* password = wifiConfig.password.length() ? wifiConfig.password.c_str() : "Brady123";
-    WiFi.begin(ssid, password);
+    WiFi.setAutoReconnect(true);
+    WiFi.persistent(false);
+    wifiSsid = wifiConfig.ssid.length() ? wifiConfig.ssid : "Home";
+    wifiPassword = wifiConfig.password.length() ? wifiConfig.password : "Brady123";
+    WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
     int retries = 0;
     while (WiFi.status() != WL_CONNECTED && retries < 30) {
         delay(500);
@@ -320,7 +646,7 @@ void setup() {
 
     // 6. Set hostname, start UDP, and announce presence (must be after WiFi is up and nodeName is set)
     WiFi.setHostname(nodeName.c_str());
-    udp.begin(ANNOUNCE_PORT);
+    ensureUdpReady();
     announcePresence();
 
     // 7. Initialize FederatedFileSystem with SD if available, else LittleFS
@@ -358,6 +684,8 @@ void setup() {
 }
 
 void loop() {
+    maintainConnectivity();
+
     // Non-blocking UDP receive for node discovery
     processIncomingUDP();
         /* UDP announcement disabled */

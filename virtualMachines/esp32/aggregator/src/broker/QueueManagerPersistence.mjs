@@ -83,4 +83,33 @@ export class QueueManagerPersistence {
       console.error(`Error clearing data for ${this.queueManagerName}:`, e.message);
     }
   }
+
+  getFileAttributes(filePath) {
+    if (!fs.existsSync(filePath)) {
+      return {
+        exists: false,
+        sizeBytes: 0,
+        mtimeMs: null,
+        mtimeIso: null,
+      };
+    }
+
+    const stat = fs.statSync(filePath);
+    return {
+      exists: true,
+      sizeBytes: Number(stat.size || 0),
+      mtimeMs: Number(stat.mtimeMs || 0),
+      mtimeIso: stat.mtime ? stat.mtime.toISOString() : null,
+    };
+  }
+
+  getPersistenceStatus() {
+    return {
+      queueManagerName: this.queueManagerName,
+      basePath: this.basePath,
+      config: this.getFileAttributes(this.configPath),
+      operations: this.getFileAttributes(this.operationsPath),
+      checkedAt: new Date().toISOString(),
+    };
+  }
 }

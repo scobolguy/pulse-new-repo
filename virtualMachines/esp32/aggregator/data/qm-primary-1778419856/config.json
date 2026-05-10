@@ -1,0 +1,50 @@
+{
+  "queueConfig": {
+    "new-queue": {
+      "name": "new-queue",
+      "createdAt": 1778368734221,
+      "frozen": false,
+      "createdByUser": true
+    },
+    "sync-check-queue": {
+      "name": "sync-check-queue",
+      "createdAt": 1778369432426,
+      "frozen": false
+    },
+    "sync-check-queue-2": {
+      "name": "sync-check-queue-2",
+      "createdAt": 1778369538593,
+      "frozen": false
+    },
+    "sync-parity-1778369637": {
+      "name": "sync-parity-1778369637",
+      "createdAt": 1778369637838,
+      "frozen": false
+    },
+    "probe-1778369669": {
+      "name": "probe-1778369669",
+      "createdAt": 1778369700442,
+      "frozen": false
+    },
+    "smoke-sync-1778419338": {
+      "name": "smoke-sync-1778419338",
+      "createdAt": 1778419338817,
+      "frozen": false,
+      "createdByUser": true
+    },
+    "smoke-sync-1778419365": {
+      "name": "smoke-sync-1778419365",
+      "createdAt": 1778419365455,
+      "frozen": false,
+      "createdByUser": true
+    },
+    "smoke-sync-1778419442": {
+      "name": "smoke-sync-1778419442",
+      "createdAt": 1778419442654,
+      "frozen": false,
+      "createdByUser": true
+    }
+  },
+  "configVersion": 13,
+  "timestamp": 1778419857043
+}

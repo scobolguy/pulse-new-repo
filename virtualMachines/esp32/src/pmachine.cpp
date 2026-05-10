@@ -7,7 +7,109 @@
 namespace pmachine {
 
 
-PMachine::PMachine() = default;
+PMachine::PMachine() {
+    init_handler_table();
+}
+// Handler implementations for core opcodes
+namespace {
+    void handle_LIT(PMachine& vm, const PInstruction& instr, int* stack, int& sp, int& bp, int& pc) {
+        stack[sp++] = instr.value;
+        ++pc;
+    }
+    void handle_OPR(PMachine& vm, const PInstruction& instr, int* stack, int& sp, int& bp, int& pc) {
+        switch (instr.value) {
+            case 0: // RET
+                sp = bp;
+                pc = stack[sp + 2]; // return address
+                bp = stack[sp + 1]; // dynamic link
+                break;
+            case 1: // NEG
+                stack[sp-1] = -stack[sp-1];
+                ++pc;
+                break;
+            case 2: // ADD
+                --sp; stack[sp-1] += stack[sp]; ++pc;
+                break;
+            case 3: // SUB
+                --sp; stack[sp-1] -= stack[sp]; ++pc;
+                break;
+            case 4: // MUL
+                --sp; stack[sp-1] *= stack[sp]; ++pc;
+                break;
+            case 5: // DIV
+                --sp; stack[sp-1] /= stack[sp]; ++pc;
+                break;
+            default:
+                ++pc;
+                break;
+        }
+    }
+    void handle_LOD(PMachine& vm, const PInstruction& instr, int* stack, int& sp, int& bp, int& pc) {
+        auto base = [&](int l, int b) -> int {
+            int b1 = b;
+            while (l > 0) { b1 = stack[b1]; --l; }
+            return b1;
+        };
+        stack[sp++] = stack[base(instr.level, bp) + instr.address];
+        ++pc;
+    }
+    void handle_STO(PMachine& vm, const PInstruction& instr, int* stack, int& sp, int& bp, int& pc) {
+        auto base = [&](int l, int b) -> int {
+            int b1 = b;
+            while (l > 0) { b1 = stack[b1]; --l; }
+            return b1;
+        };
+        stack[base(instr.level, bp) + instr.address] = stack[--sp];
+        ++pc;
+    }
+    void handle_CAL(PMachine& vm, const PInstruction& instr, int* stack, int& sp, int& bp, int& pc) {
+        stack[sp] = 0; // static link (filled below)
+        stack[sp+1] = bp; // dynamic link
+        stack[sp+2] = pc + 1; // return address
+        // static link
+        auto base = [&](int l, int b) -> int {
+            int b1 = b;
+            while (l > 0) { b1 = stack[b1]; --l; }
+            return b1;
+        };
+        stack[sp] = base(instr.level, bp);
+        bp = sp;
+        pc = instr.address;
+    }
+    void handle_INT(PMachine&, const PInstruction& instr, int* /*stack*/, int& sp, int& /*bp*/, int& pc) {
+        sp += instr.value;
+        ++pc;
+    }
+    void handle_JMP(PMachine&, const PInstruction& instr, int* /*stack*/, int& /*sp*/, int& /*bp*/, int& pc) {
+        pc = instr.address;
+    }
+    void handle_JZ(PMachine&, const PInstruction& instr, int* stack, int& sp, int& /*bp*/, int& pc) {
+        if (stack[--sp] == 0) pc = instr.address; else ++pc;
+    }
+    void handle_HALT(PMachine&, const PInstruction&, int*, int&, int&, int&) {
+        // No-op: run() will exit after handler returns
+    }
+    void handle_NOP(PMachine&, const PInstruction&, int*, int&, int&, int&) {
+        // No operation
+    }
+}
+
+void PMachine::init_handler_table() {
+    handler_table[OP_LIT] = handle_LIT;
+    handler_table[OP_OPR] = handle_OPR;
+    handler_table[OP_LOD] = handle_LOD;
+    handler_table[OP_STO] = handle_STO;
+    handler_table[OP_CAL] = handle_CAL;
+    handler_table[OP_INT] = handle_INT;
+    handler_table[OP_JMP] = handle_JMP;
+    handler_table[OP_JZ] = handle_JZ;
+    handler_table[OP_HALT] = handle_HALT;
+    handler_table[OP_NOP] = handle_NOP;
+}
+
+void PMachine::register_extension(uint8_t opcode, HandlerFunc func) {
+    handler_table[opcode] = func;
+}
 int PMachine::openFile(const String&, const String&) { return -1; }
 bool PMachine::closeFile(int) { return false; }
 bool PMachine::readLine(int, String&) { return false; }
@@ -115,147 +217,44 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
 }
 
 void PMachine::run(const std::vector<PInstruction>& instructions) {
-    struct StackValue {
-        pmachine::OperandType type;
-        int intValue;
-        std::string strValue;
-        std::string enumType;
-    };
-    std::vector<StackValue> stack;
+    static const int STACK_SIZE = 1024;
+    int stack[STACK_SIZE] = {0};
+    int sp = 0;
+    int bp = 0;
+    int pc = 0;
     PMTRACE(Serial.println("[DEBUG] Executing pinstructions:"));
-    size_t pc = 0;
-    while (pc < instructions.size()) {
+    while (pc < (int)instructions.size()) {
         const auto& instr = instructions[pc];
         PMTRACE({
             Serial.print("[STEP] ");
             Serial.print(pc);
             Serial.print(": opcode=0x");
             Serial.print(instr.opcode, HEX);
-            Serial.print(", type=");
-            Serial.print((int)instr.type);
-            Serial.print(", intOperand=");
-            Serial.print(instr.intOperand);
-            Serial.print(", strOperand='");
-            Serial.print(instr.strOperand.c_str());
-            Serial.print("', label=");
+            Serial.print(", level=");
+            Serial.print(instr.level);
+            Serial.print(", address=");
+            Serial.print(instr.address);
+            Serial.print(", value=");
+            Serial.print(instr.value);
+            Serial.print(", label=");
             Serial.print(instr.label.c_str());
             Serial.print(" | stack: [");
-            for (size_t j = 0; j < stack.size(); ++j) {
-                if (stack[j].type == pmachine::OperandType::INT) {
-                    Serial.print(stack[j].intValue);
-                } else if (stack[j].type == pmachine::OperandType::STRING) {
-                    Serial.print('"');
-                    Serial.print(stack[j].strValue.c_str());
-                    Serial.print('"');
-                }
-                if (j + 1 < stack.size()) Serial.print(", ");
+            for (int j = 0; j < sp; ++j) {
+                Serial.print(stack[j]);
+                if (j + 1 < sp) Serial.print(", ");
             }
             Serial.println("]");
         });
-
-        switch (instr.opcode) {
-            case pmachine::OP_PUSH_STR:
-                stack.push_back({pmachine::OperandType::STRING, 0, instr.strOperand, ""});
-                ++pc;
-                break;
-            case pmachine::OP_PUSH_INT:
-                stack.push_back({pmachine::OperandType::INT, instr.intOperand, "", ""});
-                ++pc;
-                break;
-            case pmachine::OP_PUSH_ENUM:
-                if (enumManager && enumManager->hasEnum(instr.enumType)) {
-                    int val = enumManager->getValue(instr.enumType, instr.strOperand);
-                    stack.push_back({pmachine::OperandType::INT, val, "", instr.enumType});
-                } else {
-                    PMTRACE(Serial.println("[ERROR] Enum type not found"));
-                }
-                ++pc;
-                break;
-            case pmachine::OP_ADD:
-            case pmachine::OP_SUB:
-            case pmachine::OP_MUL:
-            case pmachine::OP_DIV:
-                if (stack.size() < 2) {
-                    PMTRACE(Serial.println("[ERROR] Not enough values on stack for arithmetic"));
-                    ++pc;
-                    break;
-                }
-                if (stack[stack.size()-1].type != pmachine::OperandType::INT || stack[stack.size()-2].type != pmachine::OperandType::INT) {
-                    PMTRACE(Serial.println("[ERROR] Type error: expected two integers"));
-                    ++pc;
-                    break;
-                }
-                {
-                    int b = stack.back().intValue; stack.pop_back();
-                    int a = stack.back().intValue; stack.pop_back();
-                    int result = 0;
-                    if (instr.opcode == pmachine::OP_ADD) result = a + b;
-                    else if (instr.opcode == pmachine::OP_SUB) result = a - b;
-                    else if (instr.opcode == pmachine::OP_MUL) result = a * b;
-                    else if (instr.opcode == pmachine::OP_DIV) result = (b != 0) ? a / b : 0;
-                    stack.push_back({pmachine::OperandType::INT, result, "", ""});
-                }
-                ++pc;
-                break;
-            case pmachine::OP_PRINT:
-                if (!stack.empty() && stack.back().type == pmachine::OperandType::STRING) {
-                    Serial.print("[PRINT] ");
-                    Serial.println(stack.back().strValue.c_str());
-                    stack.pop_back();
-                } else {
-                    PMTRACE(Serial.println("[PRINT] Stack underflow or type error"));
-                }
-                ++pc;
-                break;
-            case pmachine::OP_PRINT_INT:
-                if (!stack.empty() && stack.back().type == pmachine::OperandType::INT) {
-                    Serial.print("[PRINT_INT] ");
-                    Serial.println(stack.back().intValue);
-                    stack.pop_back();
-                } else {
-                    PMTRACE(Serial.println("[PRINT_INT] Stack underflow or type error"));
-                }
-                ++pc;
-                break;
-            case pmachine::OP_PRINT_ENUM:
-                if (!stack.empty() && !stack.back().enumType.empty() && enumManager) {
-                    std::string name = enumManager->getName(stack.back().enumType, stack.back().intValue);
-                    Serial.print("[PRINT_ENUM] ");
-                    Serial.println(name.c_str());
-                    stack.pop_back();
-                } else {
-                    PMTRACE(Serial.println("[PRINT_ENUM] Stack underflow or type error"));
-                }
-                ++pc;
-                break;
-            case pmachine::OP_JMP:
-                if (instr.intOperand >= 0 && static_cast<size_t>(instr.intOperand) < instructions.size()) {
-                    pc = static_cast<size_t>(instr.intOperand);
-                } else {
-                    PMTRACE(Serial.println("[JMP] Invalid jump target"));
-                    ++pc;
-                }
-                break;
-            case pmachine::OP_JZ:
-                if (!stack.empty() && stack.back().type == pmachine::OperandType::INT) {
-                    int val = stack.back().intValue;
-                    stack.pop_back();
-                    if (val == 0 && instr.intOperand >= 0 && static_cast<size_t>(instr.intOperand) < instructions.size()) {
-                        pc = static_cast<size_t>(instr.intOperand);
-                    } else {
-                        ++pc;
-                    }
-                } else {
-                    PMTRACE(Serial.println("[JZ] Stack underflow or type error"));
-                    ++pc;
-                }
-                break;
-            case pmachine::OP_HALT:
+        HandlerFunc handler = handler_table[instr.opcode];
+        if (handler) {
+            handler(*this, instr, stack, sp, bp, pc);
+            if (instr.opcode == OP_HALT) {
                 PMTRACE(Serial.println("[HALT]"));
                 return;
-            default:
-                ++pc;
-                break;
+            }
+        } else {
+            // Unknown opcode: skip
+            ++pc;
         }
     }
     PMTRACE(Serial.println("[DEBUG] Execution finished."));
