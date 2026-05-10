@@ -7,7 +7,7 @@
 
 
 namespace provision {
-
+ 
 void registerProvisionRoutes(AsyncWebServer& server) {
     server.on("/provision", HTTP_POST, [](AsyncWebServerRequest *request){
         String ssid, password, newName;
@@ -34,8 +34,8 @@ void registerProvisionRoutes(AsyncWebServer& server) {
             // Save WiFi credentials to LittleFS
             wifiConfig.ssid = ssid;
             wifiConfig.password = password;
-            saveConfigToFile(wifiConfig, WifiConfig::schema, 2, WIFI_CONFIG_PATH);
-            saveConfigToFile(wifiConfig, WifiConfig::schema, 2, WIFI_CONFIG_PATH, LittleFS);
+            //saveConfigToFile(wifiConfig, WifiConfig::schema, 2, WIFI_CONFIG_PATH);
+            //saveConfigToFile(wifiConfig, WifiConfig::schema, 2, WIFI_CONFIG_PATH, LittleFS);
             request->send(200, "text/plain", "Provisioned. Rebooting...");
             delay(1000);
             ESP.restart();

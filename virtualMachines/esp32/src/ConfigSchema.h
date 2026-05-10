@@ -1,10 +1,4 @@
-#pragma once
-#include <ArduinoJson.h>
-#include <type_traits>
-#include <cstring>
-#include <FS.h>
-#include <LittleFS.h>
-
+#ifdef ARDUINO
 // Supported field types
 enum class FieldType {
     StringType,
@@ -19,6 +13,46 @@ struct FieldDescriptor {
     FieldType type;
     size_t offset;
 };
+#endif
+#pragma once
+#include <ArduinoJson.h>
+#include <type_traits>
+/*
+    JsonDocument doc;
+    serializeWithSchema(obj, schema, fieldCount, doc);
+    serializeJson(doc, f);
+    f.close();
+    return true;
+}
+*/
+template<typename T>
+bool loadConfigFromFile(T& obj, const FieldDescriptor* schema, size_t fieldCount, const char* path) {
+    /*File f = fs.open(path, "r");
+    if (!f) return false;
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, f);
+    if (err) { f.close(); return false; }
+    deserializeWithSchema(obj, schema, fieldCount, doc);
+    f.close();
+    */
+    return true;
+}
+
+struct WifiConfig {
+    String ssid = "";
+    String password = "";
+    static const FieldDescriptor schema[2];
+    static constexpr size_t schemaSize = 2;
+};
+
+#pragma once
+#include <ArduinoJson.h>
+#include <type_traits>
+#include <cstring>
+#include <FS.h>
+#include <LittleFS.h>
+
+
 
 // Helper to get offset of member
 #define FIELD_OFFSET(type, member) (size_t)(&(((type*)0)->member))
@@ -32,7 +66,7 @@ struct FieldDescriptor {
 // Serialize using schema
 
 
-    template<typename T>
+   /* template<typename T>
 void serializeWithSchema(const T& obj, const FieldDescriptor* schema, size_t fieldCount, JsonDocument& doc) {
     for (size_t i = 0; i < fieldCount; ++i) {
         const FieldDescriptor& desc = schema[i];
@@ -53,6 +87,7 @@ void serializeWithSchema(const T& obj, const FieldDescriptor* schema, size_t fie
         }
     }
 }
+
 
 template<typename T>
 void deserializeWithSchema(T& obj, const FieldDescriptor* schema, size_t fieldCount, const JsonDocument& doc) {
@@ -76,9 +111,9 @@ void deserializeWithSchema(T& obj, const FieldDescriptor* schema, size_t fieldCo
         }
     }
 }
-
+*/
 // Helper functions for file I/O using schema
-template<typename T>
+/*template<typename T>
 bool saveConfigToFile(const T& obj, const FieldDescriptor* schema, size_t fieldCount, const char* path, fs::FS& fs = LittleFS) {
     File f = fs.open(path, "w");
     if (!f) return false;
@@ -88,8 +123,8 @@ bool saveConfigToFile(const T& obj, const FieldDescriptor* schema, size_t fieldC
     f.close();
     return true;
 }
-
-template<typename T>
+*/
+/*template<typename T>
 bool loadConfigFromFile(T& obj, const FieldDescriptor* schema, size_t fieldCount, const char* path, fs::FS& fs = LittleFS) {
     File f = fs.open(path, "r");
     if (!f) return false;
@@ -100,3 +135,4 @@ bool loadConfigFromFile(T& obj, const FieldDescriptor* schema, size_t fieldCount
     f.close();
     return true;
 }
+    */
