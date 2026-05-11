@@ -4,12 +4,16 @@
 
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
-const SUBSCRIBERS_PATH = path.join('./data', 'broker-subscribers.json');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Resolve relative to the broker file itself so the path is stable regardless of cwd
+const SUBSCRIBERS_PATH = path.resolve(__dirname, '../../data/broker-subscribers.json');
 
 export default class MessageBroker {
   constructor(logger) {
     this.logger = logger;
+    console.log('[MessageBroker] Subscribers file:', SUBSCRIBERS_PATH);
     this.subscribers = this.loadSubscribers();
   }
 

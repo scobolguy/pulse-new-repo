@@ -29,6 +29,8 @@ static pmachine::PMachine pm;
 
 #include "config_types.h"
 
+std::map<String, bool> serviceBusyMap;
+
 // FieldDescriptor arrays (definitions)
 const FieldDescriptor ClusterConfig::schema[2] = {
     FIELD_DESC(ClusterConfig, clusterId, FieldType::StringType),
@@ -85,8 +87,6 @@ void setupWebServer() {
                 }
                 String service = request->getParam("service", true)->value();
                 bool busy = request->getParam("busy", true)->value() == "true";
-                // Store busy status in a global map
-                static std::map<String, bool> serviceBusyMap;
                 serviceBusyMap[service] = busy;
                 request->send(200, "text/plain", String(service) + " set to " + (busy ? "busy" : "free"));
             });
@@ -115,13 +115,13 @@ void setupWebServer() {
                 // Read device JSON
                 String devJsonStr = entry.readString();
                 entry.close();
-                DynamicJsonDocument devDoc(512);
+                JsonDocument devDoc;
                 DeserializationError err = deserializeJson(devDoc, devJsonStr);
                 JsonObject devObj = devices.add<JsonObject>();
                 devObj["name"] = devName;
                 // Visibility: default private, can be set to public in device JSON
                 String visibility = "private";
-                if (!err && devDoc.containsKey("visibility")) {
+                if (!err && devDoc["visibility"].is<const char*>()) {
                     visibility = devDoc["visibility"].as<String>();
                 }
                 devObj["visibility"] = visibility;
@@ -137,7 +137,7 @@ void setupWebServer() {
                 }
                 devObj["description"] = docText;
                 // Optionally, add device actions/commands if present in JSON
-                if (!err && devDoc.containsKey("actions")) {
+                if (!err && devDoc["actions"].is<JsonArray>()) {
                     JsonArray actions = devObj["actions"].to<JsonArray>();
                     for (JsonVariant v : devDoc["actions"].as<JsonArray>()) {
                         String actionName = v.as<String>();

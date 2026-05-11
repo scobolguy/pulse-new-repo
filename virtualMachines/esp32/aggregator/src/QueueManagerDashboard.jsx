@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 
 export default function QueueManagerDashboard() {
@@ -6,6 +6,8 @@ export default function QueueManagerDashboard() {
     maxSize: 1000,
     priority: 'normal',
     frozen: false,
+    dataTypeId: 'text-string',
+    dataTypeIds: ['text-string'],
     createdByUser: true,
   };
 
@@ -18,11 +20,19 @@ export default function QueueManagerDashboard() {
   const [configuredQueuesByManager, setConfiguredQueuesByManager] = useState({});
   const [queueLengthsByManager, setQueueLengthsByManager] = useState({});
   const [routes, setRoutes] = useState([]);
+  const [dataTypes, setDataTypes] = useState([]);
+
+  const prevManagersRef = useRef(null);
+  const prevQueuesRef = useRef(null);
+  const prevConfiguredRef = useRef(null);
+  const prevLengthsRef = useRef(null);
+  const isInitialLoadRef = useRef(true);
   const [publishQueue, setPublishQueue] = useState('default');
   const [publishPayload, setPublishPayload] = useState('hello');
   const [publishResult, setPublishResult] = useState('');
   const [loading, setLoading] = useState(false);
   const [contextMenu, setContextMenu] = useState(null);
+  const [queueDialog, setQueueDialog] = useState(null);
   const [expandedGroups, setExpandedGroups] = useState({});
   const [expandedInstances, setExpandedInstances] = useState({});
   const [expandedMaintenanceFolders, setExpandedMaintenanceFolders] = useState({});
@@ -85,8 +95,16 @@ export default function QueueManagerDashboard() {
   }
 
   async function refresh() {
-    setLoading(true);
+    if (isInitialLoadRef.current) setLoading(true);
     try {
+      const typesPromise = fetch('/api/librarian/data-types')
+        .then(async res => {
+          if (!res.ok) return [];
+          const payload = await res.json();
+          return Array.isArray(payload.types) ? payload.types : [];
+        })
+        .catch(() => []);
+
       const [mgrRes, queueRes, routeRes] = await Promise.all([
         fetch('/api/registry/queue-managers'),
         fetch('/api/registry/queues'),
@@ -98,9 +116,21 @@ export default function QueueManagerDashboard() {
         readJsonResponse(routeRes, 'Broker routes'),
       ]);
       const managerList = Array.isArray(mgrData.queueManagers) ? mgrData.queueManagers : [];
-      setManagers(managerList);
-      setQueues(Array.isArray(queueData.queues) ? queueData.queues : []);
+      const managersSerialized = JSON.stringify(managerList);
+      if (managersSerialized !== prevManagersRef.current) {
+        prevManagersRef.current = managersSerialized;
+        setManagers(managerList);
+      }
+
+      const queueList = Array.isArray(queueData.queues) ? queueData.queues : [];
+      const queuesSerialized = JSON.stringify(queueList);
+      if (queuesSerialized !== prevQueuesRef.current) {
+        prevQueuesRef.current = queuesSerialized;
+        setQueues(queueList);
+      }
+
       setRoutes(Array.isArray(routeData.routes) ? routeData.routes : []);
+      setDataTypes(await typesPromise);
 
       // Load configured queues per manager so newly created queues show immediately
       const configuredEntries = await Promise.all(
@@ -115,12 +145,27 @@ export default function QueueManagerDashboard() {
           }
         })
       );
-      setConfiguredQueuesByManager(Object.fromEntries(configuredEntries.map(([managerId, data]) => [managerId, data.queues])));
-      setQueueLengthsByManager(Object.fromEntries(configuredEntries.map(([managerId, data]) => [managerId, data.queueLengths])));
+      const newConfigured = Object.fromEntries(configuredEntries.map(([managerId, data]) => [managerId, data.queues]));
+      const newLengths = Object.fromEntries(configuredEntries.map(([managerId, data]) => [managerId, data.queueLengths]));
+
+      const configuredSerialized = JSON.stringify(newConfigured);
+      if (configuredSerialized !== prevConfiguredRef.current) {
+        prevConfiguredRef.current = configuredSerialized;
+        setConfiguredQueuesByManager(newConfigured);
+      }
+
+      const lengthsSerialized = JSON.stringify(newLengths);
+      if (lengthsSerialized !== prevLengthsRef.current) {
+        prevLengthsRef.current = lengthsSerialized;
+        setQueueLengthsByManager(newLengths);
+      }
     } catch (e) {
       setPublishResult(`Refresh failed: ${e.message || e}`);
     }
-    setLoading(false);
+    if (isInitialLoadRef.current) {
+      isInitialLoadRef.current = false;
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -165,6 +210,8 @@ export default function QueueManagerDashboard() {
         byName.set(queueItem.queueName, {
           queueName: queueItem.queueName,
           queueLength: queueItem.queueLength ?? knownLengths[queueItem.queueName] ?? null,
+          dataTypeId: configuredEntry.dataTypeId || 'text-string',
+          dataTypeIds: normalizeTypeIdsForQueue(configuredEntry),
           configuredOnly: false,
           createdByUser: configuredEntry.createdByUser === true,
         });
@@ -174,6 +221,8 @@ export default function QueueManagerDashboard() {
           byName.set(queueName, {
             queueName,
             queueLength: knownLengths[queueName] ?? null,
+            dataTypeId: queueConfig?.dataTypeId || 'text-string',
+            dataTypeIds: normalizeTypeIdsForQueue(queueConfig),
             configuredOnly: true,
             createdByUser: queueConfig?.createdByUser === true,
           });
@@ -184,6 +233,27 @@ export default function QueueManagerDashboard() {
     }
     return merged;
   }, [managers, queuesByManager, configuredQueuesByManager, queueLengthsByManager]);
+
+  const totalQueueCount = useMemo(
+    () => Object.values(visibleQueuesByManager).reduce((sum, arr) => sum + arr.length, 0),
+    [visibleQueuesByManager]
+  );
+
+  const availableDataTypes = useMemo(() => {
+    const sorted = [...dataTypes].sort((a, b) => String(a.id || '').localeCompare(String(b.id || '')));
+    if (sorted.some(item => item.id === 'text-string')) {
+      return sorted;
+    }
+    return [{ id: 'text-string', label: 'Text String' }, ...sorted];
+  }, [dataTypes]);
+
+  function normalizeTypeIdsForQueue(config) {
+    const raw = Array.isArray(config?.dataTypeIds)
+      ? config.dataTypeIds
+      : (config?.dataTypeId ? [config.dataTypeId] : ['text-string']);
+    const normalized = raw.map(item => String(item || '').trim().toLowerCase()).filter(Boolean);
+    return normalized.length > 0 ? Array.from(new Set(normalized)) : ['text-string'];
+  }
 
   function getManagerGroupId(managerId) {
     return String(managerId || '').replace(/-\d+$/, '');
@@ -234,6 +304,33 @@ export default function QueueManagerDashboard() {
       return next;
     });
   }, [managerGroups]);
+
+  function getDefaultTypeId() {
+    return availableDataTypes[0]?.id || 'text-string';
+  }
+
+  function getDefaultTypeIds() {
+    return [getDefaultTypeId()];
+  }
+
+  function normalizeQueueTypeIds(candidateIds, primaryTypeId) {
+    const uniqueIds = Array.from(new Set((candidateIds || []).map(item => String(item || '').trim().toLowerCase()).filter(Boolean)));
+    const normalizedPrimary = String(primaryTypeId || uniqueIds[0] || getDefaultTypeId()).trim().toLowerCase();
+    const reordered = [normalizedPrimary, ...uniqueIds.filter(typeId => typeId !== normalizedPrimary)];
+    return reordered.length > 0 ? reordered : getDefaultTypeIds();
+  }
+
+  function getGroupQueueEntries(group) {
+    const byName = new Map();
+    for (const instance of group.instances) {
+      for (const queueItem of visibleQueuesByManager[instance.managerId] || []) {
+        if (!byName.has(queueItem.queueName)) {
+          byName.set(queueItem.queueName, queueItem);
+        }
+      }
+    }
+    return Array.from(byName.values()).sort((a, b) => a.queueName.localeCompare(b.queueName));
+  }
 
   function isGroupExpanded(groupId) {
     return expandedGroups[groupId] !== false;
@@ -394,54 +491,81 @@ export default function QueueManagerDashboard() {
     return successCount;
   }
 
-  async function createQueue(group) {
+  function openCreateQueueDialog(group) {
+    setContextMenu(null);
+    const defaultTypes = getDefaultTypeIds();
+    setQueueDialog({
+      mode: 'create',
+      group,
+      queueName: '',
+      dataTypeIds: defaultTypes,
+      primaryTypeId: defaultTypes[0],
+      queueOptions: [],
+    });
+  }
+
+  function openUpdateQueueDialog(group, preferredQueueName = null) {
+    setContextMenu(null);
+    const queueOptions = getGroupQueueEntries(group);
+    if (queueOptions.length === 0) {
+      setPublishResult(`Modify queue cancelled: ${group.groupId} has no queues.`);
+      return;
+    }
+    const initialSelection = preferredQueueName
+      ? queueOptions.find(item => item.queueName === preferredQueueName) || queueOptions[0]
+      : queueOptions[0];
+    setQueueDialog({
+      mode: 'update',
+      group,
+      queueName: initialSelection.queueName,
+      dataTypeIds: initialSelection.dataTypeIds || getDefaultTypeIds(),
+      primaryTypeId: (initialSelection.dataTypeIds || getDefaultTypeIds())[0],
+      queueOptions,
+    });
+  }
+
+  async function submitQueueDialog() {
+    if (!queueDialog) return;
+    const queueName = queueDialog.queueName.trim();
+    const dataTypeIds = normalizeQueueTypeIds(queueDialog.dataTypeIds, queueDialog.primaryTypeId);
+    if (!queueName) {
+      setPublishResult(`${queueDialog.mode === 'create' ? 'Create' : 'Modify'} queue cancelled: queue name is required.`);
+      return;
+    }
+    if (dataTypeIds.length === 0) {
+      setPublishResult(`${queueDialog.mode === 'create' ? 'Create' : 'Modify'} queue cancelled: at least one queue data type is required.`);
+      return;
+    }
+
+    const group = queueDialog.group;
+    setQueueDialog(null);
+
+    try {
+      if (queueDialog.mode === 'create') {
+        const config = { ...DEFAULT_QUEUE_CONFIG, dataTypeId: dataTypeIds[0], dataTypeIds };
+        const applied = await runQueueActionAcrossGroup(group, 'create', { queueName, config });
+        setPublishResult(`Queue created for ${group.groupId}: ${queueName} [types=${dataTypeIds.join(', ')}] on ${applied} instance(s)`);
+      } else {
+        const updates = { ...DEFAULT_QUEUE_UPDATES, dataTypeId: dataTypeIds[0], dataTypeIds };
+        const applied = await runQueueActionAcrossGroup(group, 'update', { queueName, updates });
+        setPublishResult(`Queue modified for ${group.groupId}: ${queueName} [types=${dataTypeIds.join(', ')}] on ${applied} instance(s)`);
+      }
+      await refresh();
+    } catch (e) {
+      setPublishResult(`${queueDialog.mode === 'create' ? 'Create' : 'Modify'} queue failed: ${e.message || e}`);
+    }
+  }
+
+  async function deleteQueue(group, initialQueueName = null) {
     setContextMenu(null);
     try {
-      const queueName = window.prompt(`Queue name to create on queue manager ${group.groupId}:`, 'new-queue');
+      const queueName = String(initialQueueName || '').trim() || (() => {
+        const queueNameInput = window.prompt(`Queue name to delete from queue manager ${group.groupId}:`, '');
+        if (queueNameInput === null) return null;
+        return queueNameInput.trim();
+      })();
+
       if (queueName === null) return;
-      const normalizedQueueName = queueName.trim();
-      if (!normalizedQueueName) {
-        setPublishResult('Create queue cancelled: queue name is required.');
-        return;
-      }
-
-      const config = { ...DEFAULT_QUEUE_CONFIG };
-
-      const applied = await runQueueActionAcrossGroup(group, 'create', { queueName: normalizedQueueName, config });
-      setPublishResult(`Queue created for ${group.groupId}: ${normalizedQueueName} on ${applied} instance(s)`);
-      await refresh();
-    } catch (e) {
-      setPublishResult(`Create queue failed: ${e.message || e}`);
-    }
-  }
-
-  async function updateQueue(group) {
-    setContextMenu(null);
-    try {
-      const queueNameInput = window.prompt(`Queue name to modify on queue manager ${group.groupId}:`, '');
-      if (queueNameInput === null) return;
-      const queueName = queueNameInput.trim();
-      if (!queueName) {
-        setPublishResult('Modify queue cancelled: queue name is required.');
-        return;
-      }
-
-      const updates = { ...DEFAULT_QUEUE_UPDATES };
-
-      const applied = await runQueueActionAcrossGroup(group, 'update', { queueName, updates });
-      setPublishResult(`Queue modified for ${group.groupId}: ${queueName} on ${applied} instance(s)`);
-      await refresh();
-    } catch (e) {
-      setPublishResult(`Modify queue failed: ${e.message || e}`);
-    }
-  }
-
-  async function deleteQueue(group) {
-    setContextMenu(null);
-    try {
-      const queueNameInput = window.prompt(`Queue name to delete from queue manager ${group.groupId}:`, '');
-      if (queueNameInput === null) return;
-      const queueName = queueNameInput.trim();
       if (!queueName) {
         setPublishResult('Delete queue cancelled: queue name is required.');
         return;
@@ -456,6 +580,68 @@ export default function QueueManagerDashboard() {
       await refresh();
     } catch (e) {
       setPublishResult(`Delete queue failed: ${e.message || e}`);
+    }
+  }
+
+  function getGroupForManagerId(managerId) {
+    const groupId = getManagerGroupId(managerId);
+    return managerGroups.find(group => group.groupId === groupId) || null;
+  }
+
+  function handleQueueContextMenu(event, instance, queueItem) {
+    event.preventDefault();
+    const group = getGroupForManagerId(instance.managerId);
+    if (!group) {
+      setPublishResult(`Queue action unavailable: could not resolve queue manager group for ${instance.managerId}.`);
+      return;
+    }
+    setContextMenu({
+      type: 'queue',
+      target: {
+        queue: queueItem,
+        queueName: queueItem.queueName,
+        managerId: instance.managerId,
+        group,
+      },
+      x: event.clientX,
+      y: event.clientY,
+    });
+  }
+
+  function copyQueueToFile(target) {
+    try {
+      const queueName = target.queueName;
+      const managerId = target.managerId;
+      const queueConfig = configuredQueuesByManager?.[managerId]?.[queueName] || {};
+      const payload = {
+        queueName,
+        managerId,
+        groupId: target.group.groupId,
+        exportedAt: new Date().toISOString(),
+        config: {
+          ...queueConfig,
+          dataTypeId: target.queue.dataTypeIds?.[0] || target.queue.dataTypeId || queueConfig.dataTypeId || 'text-string',
+          dataTypeIds: target.queue.dataTypeIds || normalizeTypeIdsForQueue(queueConfig),
+          createdByUser: target.queue.createdByUser === true,
+        },
+      };
+
+      const fileSafeQueueName = queueName.replace(/[^a-z0-9-_]+/gi, '-').replace(/^-+|-+$/g, '') || 'queue';
+      const filename = `${fileSafeQueueName}.queue.json`;
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setPublishResult(`Queue exported to file: ${filename}`);
+    } catch (e) {
+      setPublishResult(`Copy queue to file failed: ${e.message || e}`);
+    } finally {
+      setContextMenu(null);
     }
   }
 
@@ -481,52 +667,11 @@ export default function QueueManagerDashboard() {
 
   return (
     <div className="dashboard-container" style={{ position: 'relative' }}>
-      {/* Broker Subscriptions Panel */}
-      <div style={{ border: '1px solid #ccc', borderRadius: 6, padding: 16, background: '#fff', marginBottom: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Broker Subscriptions</h3>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
-          <input value={newSubTopic} onChange={e => setNewSubTopic(e.target.value)} placeholder="topic" style={{ minWidth: 120 }} />
-          <input value={newSubService} onChange={e => setNewSubService(e.target.value)} placeholder="service name" style={{ minWidth: 120 }} />
-          <button onClick={handleAddSubscription}>Add Subscription</button>
-        </div>
-        {subResult && <div style={{ fontSize: 12, color: '#444', marginBottom: 6 }}>{subResult}</div>}
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-          <thead>
-            <tr>
-              <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: '6px 4px' }}>Topic</th>
-              <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: '6px 4px' }}>Service Name</th>
-            </tr>
-          </thead>
-          <tbody>
-            {Object.keys(subscriptions).length === 0 && (
-              <tr><td colSpan={2} style={{ color: '#888', fontSize: 12 }}>No subscriptions found.</td></tr>
-            )}
-            {Object.entries(subscriptions).map(([topic, subs]) => (
-              subs.map((sub, idx) => (
-                <tr key={topic + ':' + sub.serviceName + ':' + idx}>
-                  <td style={{ borderBottom: '1px solid #f0f0f0', padding: '6px 4px' }}>{topic}</td>
-                  <td style={{ borderBottom: '1px solid #f0f0f0', padding: '6px 4px' }}>{sub.serviceName}</td>
-                </tr>
-              ))
-            ))}
-          </tbody>
-        </table>
-      </div>
       <h2>Queue Manager Dashboard (Live)</h2>
       <div style={{ marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <button onClick={refresh}>Refresh</button>
-        <span style={{ fontSize: 12, color: '#555' }}>{loading ? 'Loading...' : `${managers.length} managers, ${queues.length} queues`}</span>
-        <span style={{ fontSize: 12, color: '#777' }}>Right-click a queue manager for queue actions. Right-click an instance for lifecycle actions.</span>
-      </div>
-
-      <div style={{ border: '1px solid #ccc', borderRadius: 6, padding: 12, marginBottom: 16, background: '#fff' }}>
-        <h3 style={{ marginTop: 0 }}>Publish Test Message</h3>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <input value={publishQueue} onChange={e => setPublishQueue(e.target.value)} placeholder="queue name" />
-          <input value={publishPayload} onChange={e => setPublishPayload(e.target.value)} placeholder="message payload" style={{ minWidth: 260 }} />
-          <button onClick={handlePublish}>Publish</button>
-        </div>
-        <div style={{ marginTop: 8, fontSize: 12, color: '#444', whiteSpace: 'pre-wrap' }}>{publishResult}</div>
+        <span style={{ fontSize: 12, color: '#555' }}>{loading ? 'Loading...' : `${managers.length} managers, ${totalQueueCount} queues`}</span>
+        <span style={{ fontSize: 12, color: '#777' }}>Right-click a queue manager for queue actions, an instance for lifecycle actions, or an individual queue for modify/delete/copy actions.</span>
       </div>
 
       <div style={{ border: '1px solid #ccc', borderRadius: 6, padding: 16, background: '#fafbfc', minWidth: 320 }}>
@@ -582,10 +727,29 @@ export default function QueueManagerDashboard() {
                         <ul style={{ listStyle: 'none', paddingLeft: 20, marginTop: 2 }}>
                           {(visibleQueuesByManager[instance.managerId] || []).filter(q => !isMaintenanceQueue(q)).map(q => (
                             <li key={`${instance.managerId}:${q.queueName}`} style={{ marginBottom: 2 }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '1px 4px' }}>
+                              <div
+                                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '1px 4px' }}
+                                onContextMenu={event => handleQueueContextMenu(event, instance, q)}
+                              >
                                 <span style={{ width: 12, color: '#5a6b7b' }}>•</span>
                                 <span>📬</span>
                                 <span style={{ fontSize: 12 }}>{q.queueName}</span>
+                                {(q.dataTypeIds || [q.dataTypeId || 'text-string']).map((typeId, index) => (
+                                  <span
+                                    key={`${q.queueName}:${typeId}`}
+                                    style={{
+                                      fontSize: 10,
+                                      color: index === 0 ? '#143b6f' : '#1e4c9a',
+                                      background: index === 0 ? '#d6e7ff' : '#e6f0ff',
+                                      borderRadius: 10,
+                                      padding: '1px 6px',
+                                      fontWeight: index === 0 ? 700 : 400,
+                                    }}
+                                    title={index === 0 ? 'Primary message type' : 'Allowed message type'}
+                                  >
+                                    {index === 0 ? '★ ' : ''}{typeId}
+                                  </span>
+                                ))}
                                 <span style={{ fontSize: 10, color: '#555' }}>len: {q.queueLength ?? 'n/a'}</span>
                                 {q.configuredOnly && <span style={{ fontSize: 10, color: '#777' }}>configured</span>}
                               </div>
@@ -608,10 +772,29 @@ export default function QueueManagerDashboard() {
                                 <ul style={{ listStyle: 'none', paddingLeft: 20, marginTop: 2 }}>
                                   {(visibleQueuesByManager[instance.managerId] || []).filter(q => isMaintenanceQueue(q)).map(q => (
                                     <li key={`${instance.managerId}:maintenance:${q.queueName}`} style={{ marginBottom: 2 }}>
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '1px 4px' }}>
+                                      <div
+                                        style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '1px 4px' }}
+                                        onContextMenu={event => handleQueueContextMenu(event, instance, q)}
+                                      >
                                         <span style={{ width: 12, color: '#5a6b7b' }}>•</span>
                                         <span>🧰</span>
                                         <span style={{ fontSize: 12 }}>{q.queueName}</span>
+                                        {(q.dataTypeIds || [q.dataTypeId || 'text-string']).map((typeId, index) => (
+                                          <span
+                                            key={`${q.queueName}:maintenance:${typeId}`}
+                                            style={{
+                                              fontSize: 10,
+                                              color: index === 0 ? '#143b6f' : '#1e4c9a',
+                                              background: index === 0 ? '#d6e7ff' : '#e6f0ff',
+                                              borderRadius: 10,
+                                              padding: '1px 6px',
+                                              fontWeight: index === 0 ? 700 : 400,
+                                            }}
+                                            title={index === 0 ? 'Primary message type' : 'Allowed message type'}
+                                          >
+                                            {index === 0 ? '★ ' : ''}{typeId}
+                                          </span>
+                                        ))}
                                         <span style={{ fontSize: 10, color: '#555' }}>len: {q.queueLength ?? 'n/a'}</span>
                                         {q.configuredOnly && <span style={{ fontSize: 10, color: '#777' }}>configured</span>}
                                       </div>
@@ -636,31 +819,6 @@ export default function QueueManagerDashboard() {
         </ul>
       </div>
 
-      <div style={{ border: '1px solid #ccc', borderRadius: 6, padding: 16, background: '#fff', marginTop: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Broker Route Table</h3>
-        {routes.length === 0 && <div style={{ color: '#888', fontSize: 12 }}>No routes assigned yet. Publish a message to create one.</div>}
-        {routes.length > 0 && (
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead>
-              <tr>
-                <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: '6px 4px' }}>Queue</th>
-                <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: '6px 4px' }}>Manager</th>
-                <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: '6px 4px' }}>Assigned</th>
-              </tr>
-            </thead>
-            <tbody>
-              {routes.map(route => (
-                <tr key={`${route.queueName}:${route.managerId}`}>
-                  <td style={{ borderBottom: '1px solid #f0f0f0', padding: '6px 4px' }}>{route.queueName}</td>
-                  <td style={{ borderBottom: '1px solid #f0f0f0', padding: '6px 4px' }}>{route.managerId}</td>
-                  <td style={{ borderBottom: '1px solid #f0f0f0', padding: '6px 4px' }}>{route.assignedAt || '-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
       {contextMenu && (
         <div
           style={{
@@ -678,19 +836,23 @@ export default function QueueManagerDashboard() {
           onClick={event => event.stopPropagation()}
         >
           <div style={{ padding: '10px 12px', fontSize: 12, color: '#546e7a', borderBottom: '1px solid #eceff1' }}>
-            {contextMenu.type === 'group' ? contextMenu.target.groupId : contextMenu.target.managerId}
+            {contextMenu.type === 'group'
+              ? contextMenu.target.groupId
+              : contextMenu.type === 'instance'
+                ? contextMenu.target.managerId
+                : `${contextMenu.target.queueName} (${contextMenu.target.group.groupId})`}
           </div>
           {contextMenu.type === 'group' && (
             <>
               <button
                 style={{ width: '100%', border: 'none', background: '#fff', textAlign: 'left', padding: '10px 12px', cursor: 'pointer', fontSize: 13 }}
-                onClick={() => createQueue(contextMenu.target)}
+                onClick={() => openCreateQueueDialog(contextMenu.target)}
               >
                 Add queue
               </button>
               <button
                 style={{ width: '100%', border: 'none', background: '#fff', textAlign: 'left', padding: '10px 12px', cursor: 'pointer', fontSize: 13 }}
-                onClick={() => updateQueue(contextMenu.target)}
+                onClick={() => openUpdateQueueDialog(contextMenu.target)}
               >
                 Modify queue
               </button>
@@ -748,6 +910,156 @@ export default function QueueManagerDashboard() {
               </button>
             </>
           )}
+          {contextMenu.type === 'queue' && (
+            <>
+              <button
+                style={{ width: '100%', border: 'none', background: '#fff', textAlign: 'left', padding: '10px 12px', cursor: 'pointer', fontSize: 13 }}
+                onClick={() => openUpdateQueueDialog(contextMenu.target.group, contextMenu.target.queueName)}
+              >
+                Modify queue
+              </button>
+              <button
+                style={{ width: '100%', border: 'none', background: '#fff', textAlign: 'left', padding: '10px 12px', cursor: 'pointer', fontSize: 13 }}
+                onClick={() => deleteQueue(contextMenu.target.group, contextMenu.target.queueName)}
+              >
+                Delete queue
+              </button>
+              <button
+                style={{ width: '100%', border: 'none', background: '#fff', textAlign: 'left', padding: '10px 12px', cursor: 'pointer', fontSize: 13 }}
+                onClick={() => copyQueueToFile(contextMenu.target)}
+              >
+                Copy queue to file
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {queueDialog && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.35)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1100,
+            padding: 16,
+          }}
+          onClick={() => setQueueDialog(null)}
+        >
+          <div
+            style={{
+              width: 'min(520px, 100%)',
+              background: '#fff',
+              borderRadius: 10,
+              border: '1px solid #d7dee5',
+              boxShadow: '0 16px 40px rgba(0, 0, 0, 0.18)',
+              padding: 18,
+            }}
+            onClick={event => event.stopPropagation()}
+          >
+            <h3 style={{ marginTop: 0, marginBottom: 12 }}>
+              {queueDialog.mode === 'create' ? 'Add Queue' : 'Modify Queue'}
+            </h3>
+            <div style={{ fontSize: 12, color: '#666', marginBottom: 12 }}>
+              Queue manager: {queueDialog.group.groupId}
+            </div>
+            <div style={{ display: 'grid', gap: 12 }}>
+              {queueDialog.mode === 'create' ? (
+                <label style={{ fontSize: 12, color: '#444' }}>
+                  Queue Name
+                  <input
+                    autoFocus
+                    value={queueDialog.queueName}
+                    onChange={e => setQueueDialog(prev => ({ ...prev, queueName: e.target.value }))}
+                    placeholder="new-queue"
+                    style={{ display: 'block', width: '100%', marginTop: 4 }}
+                  />
+                </label>
+              ) : (
+                <label style={{ fontSize: 12, color: '#444' }}>
+                  Queue Name
+                  <select
+                    autoFocus
+                    value={queueDialog.queueName}
+                    onChange={e => {
+                      const nextQueueName = e.target.value;
+                      const selected = queueDialog.queueOptions.find(item => item.queueName === nextQueueName);
+                      setQueueDialog(prev => ({
+                        ...prev,
+                        queueName: nextQueueName,
+                        dataTypeIds: selected?.dataTypeIds || prev.dataTypeIds,
+                      }));
+                    }}
+                    style={{ display: 'block', width: '100%', marginTop: 4 }}
+                  >
+                    {queueDialog.queueOptions.map(item => (
+                      <option key={item.queueName} value={item.queueName}>{item.queueName}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              <label style={{ fontSize: 12, color: '#444' }}>
+                Allowed Message Types
+                <div style={{ display: 'grid', gap: 6, marginTop: 6, maxHeight: 180, overflowY: 'auto', border: '1px solid #d7dee5', borderRadius: 6, padding: 8, background: '#fafbfc' }}>
+                  {availableDataTypes.map(item => {
+                    const checked = (queueDialog.dataTypeIds || []).includes(item.id);
+                    return (
+                      <label key={item.id} style={{ fontSize: 12, color: '#444', display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={e => setQueueDialog(prev => ({
+                            ...prev,
+                            dataTypeIds: e.target.checked
+                              ? Array.from(new Set([...(prev.dataTypeIds || []), item.id]))
+                              : (prev.dataTypeIds || []).filter(typeId => typeId !== item.id),
+                          }))}
+                        />
+                        <span>{item.id}{item.label ? ` (${item.label})` : ''}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </label>
+
+              <label style={{ fontSize: 12, color: '#444' }}>
+                Primary Message Type
+                <select
+                  value={queueDialog.primaryTypeId || queueDialog.dataTypeIds?.[0] || getDefaultTypeId()}
+                  onChange={e => {
+                    const nextPrimary = e.target.value;
+                    setQueueDialog(prev => {
+                      const nextIds = Array.from(new Set([...(prev.dataTypeIds || []), nextPrimary]));
+                      return {
+                        ...prev,
+                        primaryTypeId: nextPrimary,
+                        dataTypeIds: normalizeQueueTypeIds(nextIds, nextPrimary),
+                      };
+                    });
+                  }}
+                  style={{ display: 'block', width: '100%', marginTop: 4 }}
+                >
+                  {availableDataTypes.map(item => (
+                    <option key={item.id} value={item.id}>
+                      {item.id}{item.label ? ` (${item.label})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+              <button type="button" onClick={() => setQueueDialog(null)}>
+                Cancel
+              </button>
+              <button type="button" onClick={submitQueueDialog}>
+                {queueDialog.mode === 'create' ? 'Create Queue' : 'Save Queue'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

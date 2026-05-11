@@ -1900,6 +1900,63 @@ function registerRoutes(app) {
 
   // Queue configuration synchronization endpoints for distributed config management
 
+  function resolveLibrarianOrigin() {
+    return process.env.LIBRARIAN_URL || 'http://127.0.0.1:4100';
+  }
+
+  async function getAllowedDataTypeIds() {
+    try {
+      const response = await fetch(`${resolveLibrarianOrigin()}/api/librarian/data-types`, { method: 'GET' });
+      if (!response.ok) {
+        throw new Error(`Librarian returned ${response.status}`);
+      }
+      const payload = await response.json();
+      const ids = new Set((payload.types || []).map(item => String(item.id || '').trim().toLowerCase()).filter(Boolean));
+      // Always allow the built-in fallback in case librarian payload is missing it.
+      ids.add('text-string');
+      return ids;
+    } catch {
+      // Safe fallback if librarian is unavailable.
+      return new Set(['text-string']);
+    }
+  }
+
+  async function normalizeAndValidateDataTypeId(candidate) {
+    const normalized = String(candidate || '').trim().toLowerCase();
+    if (!normalized) {
+      throw new Error('Queue data type is required');
+    }
+    const allowed = await getAllowedDataTypeIds();
+    if (!allowed.has(normalized)) {
+      throw new Error(`Invalid queue data type: ${normalized}`);
+    }
+    return normalized;
+  }
+
+  async function normalizeAndValidateDataTypeIds(candidate) {
+    const rawValues = Array.isArray(candidate)
+      ? candidate
+      : (candidate === undefined || candidate === null || candidate === '')
+        ? ['text-string']
+        : [candidate];
+
+    const normalizedUnique = [];
+    const seen = new Set();
+    for (const value of rawValues) {
+      const normalized = await normalizeAndValidateDataTypeId(value);
+      if (!seen.has(normalized)) {
+        seen.add(normalized);
+        normalizedUnique.push(normalized);
+      }
+    }
+
+    if (normalizedUnique.length === 0) {
+      normalizedUnique.push('text-string');
+    }
+
+    return normalizedUnique;
+  }
+
   async function applyQueueConfigOperation(managerId, operation) {
     const qm = queueManagerInstances.get(managerId);
     if (qm) {
@@ -1995,8 +2052,15 @@ function registerRoutes(app) {
     try {
       const { managerId } = req.params;
       const { queueName, config } = req.body;
+      if (!queueName || !String(queueName).trim()) {
+        throw new Error('queueName is required');
+      }
+      const selectedTypes = config?.dataTypeIds ?? config?.dataTypeId ?? config?.messageTypeId ?? 'text-string';
+      const dataTypeIds = await normalizeAndValidateDataTypeIds(selectedTypes);
       const normalizedConfig = {
         ...(config || {}),
+        dataTypeId: dataTypeIds[0],
+        dataTypeIds,
         createdByUser: config?.createdByUser === true,
       };
 
@@ -2034,9 +2098,29 @@ function registerRoutes(app) {
     try {
       const { managerId } = req.params;
       const { queueName, updates } = req.body;
-      const normalizedUpdates = updates && Object.prototype.hasOwnProperty.call(updates, 'createdByUser')
-        ? { ...updates, createdByUser: updates.createdByUser === true }
-        : updates;
+      if (!queueName || !String(queueName).trim()) {
+        throw new Error('queueName is required');
+      }
+
+      const normalizedUpdates = { ...(updates || {}) };
+
+      if (Object.prototype.hasOwnProperty.call(normalizedUpdates, 'messageTypeId') && !Object.prototype.hasOwnProperty.call(normalizedUpdates, 'dataTypeId') && !Object.prototype.hasOwnProperty.call(normalizedUpdates, 'dataTypeIds')) {
+        normalizedUpdates.dataTypeId = normalizedUpdates.messageTypeId;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(normalizedUpdates, 'dataTypeIds') || Object.prototype.hasOwnProperty.call(normalizedUpdates, 'dataTypeId')) {
+        const normalizedIds = await normalizeAndValidateDataTypeIds(
+          Object.prototype.hasOwnProperty.call(normalizedUpdates, 'dataTypeIds')
+            ? normalizedUpdates.dataTypeIds
+            : normalizedUpdates.dataTypeId
+        );
+        normalizedUpdates.dataTypeIds = normalizedIds;
+        normalizedUpdates.dataTypeId = normalizedIds[0];
+      }
+
+      if (Object.prototype.hasOwnProperty.call(normalizedUpdates, 'createdByUser')) {
+        normalizedUpdates.createdByUser = normalizedUpdates.createdByUser === true;
+      }
 
       const applied = await applyQueueConfigOperation(managerId, {
         type: 'updateQueueConfig',
@@ -2098,7 +2182,26 @@ function registerRoutes(app) {
   app.use('/api/fileserver', fileServer.router);
 
   // --- Proxy to data-librarian service ---
-  const LIBRARIAN_ORIGIN = process.env.LIBRARIAN_URL || 'http://127.0.0.1:4100';
+  const LIBRARIAN_ORIGIN = resolveLibrarianOrigin();
+
+  // Binary upload route — must be registered before the generic JSON proxy below
+  app.post('/api/librarian/upload/:dest', express.raw({ type: '*/*', limit: '50mb' }), async (req, res) => {
+    const url = `${LIBRARIAN_ORIGIN}/api/librarian/upload/${req.params.dest}`;
+    try {
+      const upstream = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'content-type': req.get('content-type') || 'application/octet-stream',
+          'x-filename': req.get('x-filename') || 'upload',
+        },
+        body: req.body,
+      });
+      res.status(upstream.status).json(await upstream.json());
+    } catch (e) {
+      res.status(502).json({ error: 'Librarian service unavailable', details: e.message });
+    }
+  });
+
   app.use('/api/librarian', async (req, res) => {
     const url = `${LIBRARIAN_ORIGIN}/api/librarian${req.path}${req.search || (req.url.includes('?') ? '?' + req.url.split('?')[1] : '')}`;
     try {
