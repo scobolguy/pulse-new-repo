@@ -3,5 +3,30 @@
     "id": "msmq",
     "label": "Msmq",
     "builtin": false
+  },
+  {
+    "id": "pacs",
+    "label": "ISO 20022 — Payments Clearing and Settlement (pacs)",
+    "builtin": false
+  },
+  {
+    "id": "pain",
+    "label": "ISO 20022 — Payments Initiation (pain)",
+    "builtin": false
+  },
+  {
+    "id": "camt",
+    "label": "ISO 20022 — Cash Management (camt)",
+    "builtin": false
+  },
+  {
+    "id": "remt",
+    "label": "ISO 20022 — Payments Remittance Advice (remt)",
+    "builtin": false
+  },
+  {
+    "id": "head",
+    "label": "ISO 20022 — Business Application Header (head)",
+    "builtin": false
   }
 ]

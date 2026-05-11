@@ -38,6 +38,20 @@ async function listFiles(dir, relBase = '', filter = null) {
 
 // Utility: Parse schema file name for metadata (type, name, version)
 function parseSchemaFilename(filename) {
+  // ISO 20022 format: pacs.002.001.12.xsd, pain.001.001.03.xsd, etc.
+  const iso20022Match = filename.match(/^([a-z]{3,4})\.(\d{3})\.(\d{3})\.(\d{2,3})\.xsd$/i);
+  if (iso20022Match) {
+    const area = iso20022Match[1].toLowerCase();
+    const msgCode = iso20022Match[2];
+    const ver1 = iso20022Match[3];
+    const ver2 = iso20022Match[4];
+    return {
+      name: `${area}.${msgCode}.${ver1}.${ver2}`,
+      version: parseInt(ver2, 10),
+      type: 'xsd',
+      area,
+    };
+  }
   // Example: order.v1.xsd, customer.v2.avro, payment.json-schema, legacy.copybook
   const match = filename.match(/^([\w-]+)(?:\.v(\d+))?\.(xsd|avro|json-schema|copybook|cpy|cbl|sql|proto|csv|xml|json)$/i);
   if (!match) return null;
@@ -50,6 +64,7 @@ function parseSchemaFilename(filename) {
 }
 
 function inferTypeIdFromSchema(meta) {
+  if (meta?.area) return meta.area;
   return String(meta?.name || '').trim().toLowerCase() || null;
 }
 
