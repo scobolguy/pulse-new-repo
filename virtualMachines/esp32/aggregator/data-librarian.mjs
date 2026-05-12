@@ -297,11 +297,15 @@ function buildXsdTree(content) {
     if (tagName.endsWith('element')) {
       const elementName = attrs.match(/\bname="([^"]+)"/i)?.[1] || 'element';
       const typeName = attrs.match(/\btype="([^"]+)"/i)?.[1] || null;
+      const minOccursRaw = attrs.match(/\bminOccurs="([^"]+)"/i)?.[1] || null;
+      const minOccurs = minOccursRaw == null ? 1 : Number.parseInt(minOccursRaw, 10);
+      const required = Number.isNaN(minOccurs) ? true : minOccurs > 0;
       const isLeaf = selfClosing || !!typeName;
       const node = {
         name: elementName,
         kind: isLeaf ? 'leaf' : 'branch',
         valueType: typeName || 'complex',
+        required,
         children: [],
       };
       stack[stack.length - 1].children.push(node);

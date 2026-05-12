@@ -28,7 +28,7 @@ function flattenStructure(node, prefix = '', depth = 0) {
     const path = prefix ? `${prefix}.${childName}` : childName;
     const kind = child.kind === 'branch' ? 'branch' : 'leaf';
     const valueType = String(child.valueType || 'unknown').toLowerCase();
-    rows.push({ name: childName, path, kind, valueType, depth });
+    rows.push({ name: childName, path, kind, valueType, depth, required: child.required === true });
     rows.push(...flattenStructure(child, path, depth + 1));
   }
   return rows;
@@ -394,6 +394,7 @@ export default function DataMapper() {
     const hasChildren = children.length > 0;
     const isExpanded = expandedPaths.has(node.path);
     const typeText = String(node.valueType || 'unknown');
+    const isRequired = node.required === true;
 
     const row = (
       <div
@@ -436,8 +437,10 @@ export default function DataMapper() {
         >
           {hasChildren ? (isExpanded ? '▾' : '▸') : '•'}
         </button>
-        <span>{getXsdDisplayName(node)}</span>
-        <span style={{ color: '#64748b' }}>({typeText})</span>
+        <span style={{ color: isRequired ? '#b91c1c' : '#111827', fontWeight: isRequired ? 600 : 400 }}>
+          {getXsdDisplayName(node)}
+        </span>
+        <span style={{ color: isRequired ? '#dc2626' : '#64748b' }}>({typeText})</span>
       </div>
     );
 
@@ -594,6 +597,7 @@ export default function DataMapper() {
                     ? sourceRoots.flatMap(node => renderXsdTreeNode(node, 'source', 0))
                     : sourceNodes.map((node, index) => {
                       const isLinked = linkedSourcePaths.has(node.path);
+                      const isRequired = node.required === true;
                       const displayPath = labelForPath(node.path, sourceMtFieldDefs);
                       return (
                         <div
@@ -614,7 +618,7 @@ export default function DataMapper() {
                           title="Drag to destination"
                         >
                           <span>{node.kind === 'branch' ? '▸' : '•'}</span>
-                          <span>{displayPath}</span>
+                          <span style={{ color: isRequired ? '#b91c1c' : '#111827', fontWeight: isRequired ? 600 : 400 }}>{displayPath}</span>
                         </div>
                       );
                     })}
@@ -628,6 +632,7 @@ export default function DataMapper() {
                     ? targetRoots.flatMap(node => renderXsdTreeNode(node, 'target', 0))
                     : targetNodes.map((node, index) => {
                       const isLinked = linkedTargetPaths.has(node.path);
+                      const isRequired = node.required === true;
                       const displayPath = labelForPath(node.path, targetMtFieldDefs);
                       return (
                         <div
@@ -648,7 +653,7 @@ export default function DataMapper() {
                           title="Drop source node here"
                         >
                           <span>{node.kind === 'branch' ? '▸' : '•'}</span>
-                          <span>{displayPath}</span>
+                          <span style={{ color: isRequired ? '#b91c1c' : '#111827', fontWeight: isRequired ? 600 : 400 }}>{displayPath}</span>
                         </div>
                       );
                     })}
