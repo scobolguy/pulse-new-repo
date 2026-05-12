@@ -410,5 +410,114 @@
     ],
     "updatedAt": "2026-05-12T01:44:22.966Z",
     "createdAt": "2026-05-12T00:45:16.433Z"
+  },
+  {
+    "id": "mt202cov-to-pacs",
+    "name": "MT202COV to PACS.009",
+    "sourceTypeId": "swift-mt202cov",
+    "targetTypeId": "pacs",
+    "sourceSchemaPath": "schemas/swift-mt202cov.json",
+    "targetSchemaPath": "schemas/pacs.009.001.13.xsd",
+    "enabled": true,
+    "items": [
+      {
+        "sourcePath": "finEnvelope.block4.fields.20",
+        "targetPath": "Document.FIToFICdtTrf.GrpHdr.MsgId",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := trim(src);"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.21",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.PmtId.EndToEndId",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := trim(src);"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.32A.components.valueDate",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrBkSttlmDt",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := yymmddtoiso(src);"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.32A.components.currency",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := upper(src);"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.32A.components.amount",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := mtamounttodecimal(src);"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.50a",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.Dbtr.Nm",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := trim(src);"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.52A",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := upper(src);"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.56A",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrmyAgt1.FinInstnId.BICFI",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := upper(src);"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.57A",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := upper(src);"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.58A",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.Cdtr.FinInstnId.BICFI",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := upper(src);"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.59a",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.Cdtr.Nm",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := trim(src);"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.72",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.InstrForNxtAgt.InstrInf",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := trim(src);"
+      }
+    ],
+    "updatedAt": "2026-05-12T01:44:22.966Z",
+    "createdAt": "2026-05-12T00:45:16.433Z"
   }
 ]

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document>
+  <FIToFICdtTrf>
+    <GrpHdr>
+      <MsgId>REFCOV12345</MsgId>
+    </GrpHdr>
+    <CdtTrfTxInf>
+      <PmtId>
+        <EndToEndId>E2E-COV-999</EndToEndId>
+      </PmtId>
+      <IntrBkSttlmDt>2026-05-20</IntrBkSttlmDt>
+      <IntrBkSttlmAmt Ccy="GBP">500000.00</IntrBkSttlmAmt>
+      <Dbtr>
+        <Nm>Originating Bank Name</Nm>
+      </Dbtr>
+      <DbtrAgt>
+        <FinInstnId>
+          <BICFI>DEUTDEDD</BICFI>
+        </FinInstnId>
+      </DbtrAgt>
+      <IntrmyAgt1>
+        <FinInstnId>
+          <BICFI>NORSEIT2X10</BICFI>
+        </FinInstnId>
+      </IntrmyAgt1>
+      <CdtrAgt>
+        <FinInstnId>
+          <BICFI>CHQABEBBXXX</BICFI>
+        </FinInstnId>
+      </CdtrAgt>
+      <Cdtr>
+        <FinInstnId>
+          <BICFI>IRVTIT2XXXX</BICFI>
+        </FinInstnId>
+        <Nm>Beneficiary Bank Name</Nm>
+      </Cdtr>
+      <InstrForNxtAgt>
+        <InstrInf>COVER PAYMENT FOR MT103</InstrInf>
+      </InstrForNxtAgt>
+    </CdtTrfTxInf>
+  </FIToFICdtTrf>
+</Document>
