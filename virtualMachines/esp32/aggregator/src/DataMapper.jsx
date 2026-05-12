@@ -118,9 +118,52 @@ function isMtSchemaPath(schemaPath) {
   return /swift-mt/i.test(String(schemaPath || ''));
 }
 
+function isXsdSchemaPath(schemaPath) {
+  return /\.xsd$/i.test(String(schemaPath || ''));
+}
+
+function getParentPath(path) {
+  const raw = String(path || '');
+  const lastDot = raw.lastIndexOf('.');
+  if (lastDot < 0) return '';
+  return raw.slice(0, lastDot);
+}
+
+function getPathTail(path) {
+  const raw = String(path || '');
+  const lastDot = raw.lastIndexOf('.');
+  if (lastDot < 0) return raw;
+  return raw.slice(lastDot + 1);
+}
+
+function buildNodeIndex(nodes) {
+  const nodeByPath = new Map();
+  const childrenByParent = new Map();
+
+  for (const node of nodes) {
+    nodeByPath.set(node.path, node);
+  }
+
+  for (const node of nodes) {
+    const parentPath = getParentPath(node.path);
+    const siblings = childrenByParent.get(parentPath) || [];
+    siblings.push(node);
+    childrenByParent.set(parentPath, siblings);
+  }
+
+  return { nodeByPath, childrenByParent };
+}
+
+function getInitialExpandedPaths(indexData) {
+  const roots = indexData.childrenByParent.get('') || [];
+  const hasDocument = roots.some(node => node.path === 'Document');
+  if (hasDocument) return new Set(['Document']);
+  return new Set(roots.map(node => node.path));
+}
+
 function filterNodesForSchema(nodes, schemaPath) {
   if (!isMtSchemaPath(schemaPath)) return nodes;
-  return nodes.filter(node => String(node.path || '').startsWith('finEnvelope.block4.fields.'));
+  return nodes.filter(node => /^finEnvelope\.block4\.fields\.[A-Za-z0-9]+$/.test(String(node.path || '')));
 }
 
 export default function DataMapper() {
@@ -140,6 +183,8 @@ export default function DataMapper() {
   const [items, setItems] = useState([]);
   const [sourceMtFieldDefs, setSourceMtFieldDefs] = useState(null);
   const [targetMtFieldDefs, setTargetMtFieldDefs] = useState(null);
+  const [expandedSourcePaths, setExpandedSourcePaths] = useState(new Set());
+  const [expandedTargetPaths, setExpandedTargetPaths] = useState(new Set());
 
   async function loadAll() {
     try {
@@ -214,6 +259,42 @@ export default function DataMapper() {
     return filterNodesForSchema(allNodes, targetSchemaPath);
   }, [targetSchema, targetSchemaPath]);
 
+  const effectiveSourceSchemaPath = sourceSchema?.path || sourceSchemaPath;
+  const effectiveTargetSchemaPath = targetSchema?.path || targetSchemaPath;
+  const sourceIsXsd = isXsdSchemaPath(effectiveSourceSchemaPath);
+  const targetIsXsd = isXsdSchemaPath(effectiveTargetSchemaPath);
+
+  const sourceIndex = useMemo(() => buildNodeIndex(sourceNodes), [sourceNodes]);
+  const targetIndex = useMemo(() => buildNodeIndex(targetNodes), [targetNodes]);
+
+  const sourceRoots = useMemo(() => {
+    const roots = sourceIndex.childrenByParent.get('') || [];
+    const documentNode = roots.find(node => node.path === 'Document');
+    return documentNode ? [documentNode] : roots;
+  }, [sourceIndex]);
+
+  const targetRoots = useMemo(() => {
+    const roots = targetIndex.childrenByParent.get('') || [];
+    const documentNode = roots.find(node => node.path === 'Document');
+    return documentNode ? [documentNode] : roots;
+  }, [targetIndex]);
+
+  useEffect(() => {
+    if (!sourceIsXsd) {
+      setExpandedSourcePaths(new Set());
+      return;
+    }
+    setExpandedSourcePaths(getInitialExpandedPaths(sourceIndex));
+  }, [sourceIsXsd, sourceIndex, sourceSchemaPath]);
+
+  useEffect(() => {
+    if (!targetIsXsd) {
+      setExpandedTargetPaths(new Set());
+      return;
+    }
+    setExpandedTargetPaths(getInitialExpandedPaths(targetIndex));
+  }, [targetIsXsd, targetIndex, targetSchemaPath]);
+
   const sourceNodeByPath = useMemo(() => {
     const map = new Map();
     for (const node of sourceNodes) map.set(node.path, node);
@@ -235,6 +316,79 @@ export default function DataMapper() {
   const linkedTargetPaths = useMemo(() => {
     return new Set(items.map(item => String(item.targetPath || '')).filter(Boolean));
   }, [items]);
+
+  function toggleExpandPath(path, pane) {
+    const setter = pane === 'source' ? setExpandedSourcePaths : setExpandedTargetPaths;
+    setter(prev => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }
+
+  function renderXsdTreeNode(node, pane, depth = 0) {
+    const isSourcePane = pane === 'source';
+    const indexData = isSourcePane ? sourceIndex : targetIndex;
+    const linkedPaths = isSourcePane ? linkedSourcePaths : linkedTargetPaths;
+    const expandedPaths = isSourcePane ? expandedSourcePaths : expandedTargetPaths;
+
+    const isLinked = linkedPaths.has(node.path);
+    const children = indexData.childrenByParent.get(node.path) || [];
+    const hasChildren = children.length > 0;
+    const isExpanded = expandedPaths.has(node.path);
+    const typeText = String(node.valueType || 'unknown');
+
+    const row = (
+      <div
+        key={`${pane}:${node.path}`}
+        draggable={isSourcePane}
+        onDragStart={isSourcePane ? (event => onSourceDragStart(event, node)) : undefined}
+        onDragOver={!isSourcePane ? (event => event.preventDefault()) : undefined}
+        onDrop={!isSourcePane ? (event => onTargetDrop(event, node)) : undefined}
+        style={{
+          marginLeft: depth * 14,
+          padding: '4px 8px',
+          borderBottom: '1px solid #eef2f7',
+          fontSize: 12,
+          cursor: isSourcePane ? 'grab' : 'default',
+          background: isSourcePane ? (isLinked ? '#fff6e8' : '#fff') : (isLinked ? '#eaf8ef' : '#fff'),
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+        }}
+        title={isSourcePane ? 'Drag to destination' : 'Drop source node here'}
+      >
+        <button
+          type="button"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (hasChildren) toggleExpandPath(node.path, pane);
+          }}
+          style={{
+            border: 'none',
+            background: 'transparent',
+            padding: 0,
+            cursor: hasChildren ? 'pointer' : 'default',
+            width: 14,
+            textAlign: 'center',
+            color: '#475569',
+          }}
+          disabled={!hasChildren}
+          aria-label={hasChildren ? (isExpanded ? 'Collapse node' : 'Expand node') : 'Leaf node'}
+        >
+          {hasChildren ? (isExpanded ? '▾' : '▸') : '•'}
+        </button>
+        <span>{getPathTail(node.path)}</span>
+        <span style={{ color: '#64748b' }}>({typeText})</span>
+      </div>
+    );
+
+    if (!hasChildren || !isExpanded) return [row];
+    const descendants = children.flatMap(child => renderXsdTreeNode(child, pane, depth + 1));
+    return [row, ...descendants];
+  }
 
   function openMapping(mapping) {
     setEditingId(String(mapping.id || ''));
@@ -380,63 +534,68 @@ export default function DataMapper() {
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Source</div>
                 <div style={PANEL_STYLE}>
-                  {sourceNodes.map((node, index) => {
-                    const isLinked = linkedSourcePaths.has(node.path);
-                    const displayPath = labelForPath(node.path, sourceMtFieldDefs);
-                    return (
-                    <div
-                      key={`src:${index}:${node.path}`}
-                      draggable
-                      onDragStart={event => onSourceDragStart(event, node)}
-                      style={{
-                        marginLeft: node.depth * 14,
-                        padding: '4px 8px',
-                        cursor: 'grab',
-                        borderBottom: '1px solid #eef2f7',
-                        fontSize: 12,
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 8,
-                        background: isLinked ? '#fff6e8' : '#fff',
-                      }}
-                      title="Drag to destination"
-                    >
-                      <span>{node.kind === 'branch' ? '▸' : '•'}</span>
-                      <span>{displayPath}</span>
-                    </div>
-                  );})}
+                  {sourceIsXsd
+                    ? sourceRoots.flatMap(node => renderXsdTreeNode(node, 'source', 0))
+                    : sourceNodes.map((node, index) => {
+                      const isLinked = linkedSourcePaths.has(node.path);
+                      const displayPath = labelForPath(node.path, sourceMtFieldDefs);
+                      return (
+                        <div
+                          key={`src:${index}:${node.path}`}
+                          draggable
+                          onDragStart={event => onSourceDragStart(event, node)}
+                          style={{
+                            marginLeft: node.depth * 14,
+                            padding: '4px 8px',
+                            cursor: 'grab',
+                            borderBottom: '1px solid #eef2f7',
+                            fontSize: 12,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8,
+                            background: isLinked ? '#fff6e8' : '#fff',
+                          }}
+                          title="Drag to destination"
+                        >
+                          <span>{node.kind === 'branch' ? '▸' : '•'}</span>
+                          <span>{displayPath}</span>
+                        </div>
+                      );
+                    })}
                 </div>
               </div>
 
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Destination</div>
                 <div style={PANEL_STYLE}>
-                  {targetNodes.map((node, index) => {
-                    const isLinked = linkedTargetPaths.has(node.path);
-                    const displayPath = labelForPath(node.path, targetMtFieldDefs);
-                    return (
-                      <div
-                        key={`dst:${index}:${node.path}`}
-                        onDragOver={event => event.preventDefault()}
-                        onDrop={event => onTargetDrop(event, node)}
-                        style={{
-                          marginLeft: node.depth * 14,
-                          padding: '4px 8px',
-                          borderBottom: '1px solid #eef2f7',
-                          fontSize: 12,
-                          cursor: 'default',
-                          background: isLinked ? '#eaf8ef' : '#fff',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 8,
-                        }}
-                        title="Drop source node here"
-                      >
-                        <span>{node.kind === 'branch' ? '▸' : '•'}</span>
-                        <span>{displayPath}</span>
-                      </div>
-                    );
-                  })}
+                  {targetIsXsd
+                    ? targetRoots.flatMap(node => renderXsdTreeNode(node, 'target', 0))
+                    : targetNodes.map((node, index) => {
+                      const isLinked = linkedTargetPaths.has(node.path);
+                      const displayPath = labelForPath(node.path, targetMtFieldDefs);
+                      return (
+                        <div
+                          key={`dst:${index}:${node.path}`}
+                          onDragOver={event => event.preventDefault()}
+                          onDrop={event => onTargetDrop(event, node)}
+                          style={{
+                            marginLeft: node.depth * 14,
+                            padding: '4px 8px',
+                            borderBottom: '1px solid #eef2f7',
+                            fontSize: 12,
+                            cursor: 'default',
+                            background: isLinked ? '#eaf8ef' : '#fff',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8,
+                          }}
+                          title="Drop source node here"
+                        >
+                          <span>{node.kind === 'branch' ? '▸' : '•'}</span>
+                          <span>{displayPath}</span>
+                        </div>
+                      );
+                    })}
                 </div>
               </div>
             </div>
