@@ -214,70 +214,80 @@
         "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
         "kind": "leaf",
         "sourceValueType": "unknown",
-        "targetValueType": "unknown"
+        "targetValueType": "unknown",
+        "conversionRule": "trim(src)"
       },
       {
         "sourcePath": "finEnvelope.block4.fields.21",
         "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId",
         "kind": "leaf",
         "sourceValueType": "unknown",
-        "targetValueType": "unknown"
+        "targetValueType": "unknown",
+        "conversionRule": "trim(src)"
       },
       {
         "sourcePath": "finEnvelope.block4.fields.32A.components.valueDate",
         "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt",
         "kind": "leaf",
         "sourceValueType": "unknown",
-        "targetValueType": "unknown"
+        "targetValueType": "unknown",
+        "conversionRule": "yyMMddToIso(src)"
       },
       {
         "sourcePath": "finEnvelope.block4.fields.32A.components.currency",
         "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
         "kind": "leaf",
         "sourceValueType": "unknown",
-        "targetValueType": "unknown"
+        "targetValueType": "unknown",
+        "conversionRule": "upper(src)"
       },
       {
         "sourcePath": "finEnvelope.block4.fields.32A.components.amount",
         "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
         "kind": "leaf",
         "sourceValueType": "unknown",
-        "targetValueType": "unknown"
+        "targetValueType": "unknown",
+        "conversionRule": "mtAmountToDecimal(src)"
       },
       {
         "sourcePath": "finEnvelope.block4.fields.50K",
         "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm",
         "kind": "leaf",
         "sourceValueType": "unknown",
-        "targetValueType": "unknown"
+        "targetValueType": "unknown",
+        "conversionRule": "mtPartyName(src)"
       },
       {
         "sourcePath": "finEnvelope.block4.fields.59",
         "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm",
         "kind": "leaf",
         "sourceValueType": "unknown",
-        "targetValueType": "unknown"
+        "targetValueType": "unknown",
+        "conversionRule": "mtPartyName(src)"
       },
       {
         "sourcePath": "finEnvelope.block4.fields.70",
         "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.RmtInf.Ustrd",
         "kind": "leaf",
         "sourceValueType": "unknown",
-        "targetValueType": "unknown"
+        "targetValueType": "unknown",
+        "conversionRule": "trim(src)"
       },
       {
         "sourcePath": "finEnvelope.block4.fields.71A",
         "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgBr",
         "kind": "leaf",
         "sourceValueType": "unknown",
-        "targetValueType": "unknown"
+        "targetValueType": "unknown",
+        "conversionRule": "mtChargeBearerToIso(src)"
       },
       {
         "sourcePath": "finEnvelope.block4.fields.72",
         "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstrForNxtAgt.InstrInf",
         "kind": "leaf",
         "sourceValueType": "unknown",
-        "targetValueType": "unknown"
+        "targetValueType": "unknown",
+        "conversionRule": "trim(src)"
       }
     ],
     "updatedAt": "2026-05-12T00:45:16.428Z",

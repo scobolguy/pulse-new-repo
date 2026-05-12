@@ -17,6 +17,44 @@ const PANEL_STYLE = {
   background: '#fafbfd',
 };
 
+function validateConversionRule(ruleText) {
+  const text = String(ruleText || '').trim();
+  if (!text) return { valid: true };
+  if (text.length > 500) return { valid: false, error: 'too long (max 500 chars)' };
+  if (!/^[\w\s\.,()'"\[\]\-+*/%:<>!=|&?#@]+$/.test(text)) {
+    return { valid: false, error: 'unsupported characters' };
+  }
+
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let quote = null;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === '(') parenDepth += 1;
+    if (ch === ')') parenDepth -= 1;
+    if (ch === '[') bracketDepth += 1;
+    if (ch === ']') bracketDepth -= 1;
+    if (parenDepth < 0 || bracketDepth < 0) {
+      return { valid: false, error: 'unbalanced brackets/parentheses' };
+    }
+  }
+  if (quote || parenDepth !== 0 || bracketDepth !== 0) {
+    return { valid: false, error: 'unbalanced quotes/brackets/parentheses' };
+  }
+  if (!/^[A-Za-z_][\w]*\s*\(.*\)$/.test(text)) {
+    return { valid: false, error: 'must be a function call, e.g. trim(src)' };
+  }
+  return { valid: true };
+}
+
 function flattenStructure(node, prefix = '', depth = 0) {
   if (!node) return [];
   const children = Array.isArray(node.children) ? node.children : [];
@@ -469,6 +507,15 @@ export default function DataMapper() {
     return new Set(items.map(item => String(item.targetPath || '')).filter(Boolean));
   }, [items]);
 
+  const conversionRuleErrors = useMemo(() => {
+    return items.map((item) => {
+      const result = validateConversionRule(item.conversionRule);
+      return result.valid ? '' : result.error || 'invalid rule';
+    });
+  }, [items]);
+
+  const hasConversionRuleErrors = useMemo(() => conversionRuleErrors.some(Boolean), [conversionRuleErrors]);
+
   function toggleExpandPath(path, pane) {
     const setter = pane === 'source' ? setExpandedSourcePaths : setExpandedTargetPaths;
     setter(prev => {
@@ -607,6 +654,10 @@ export default function DataMapper() {
 
   async function saveMapping() {
     try {
+      if (hasConversionRuleErrors) {
+        setStatus('Save failed: one or more conversion rules are invalid');
+        return;
+      }
       const payload = {
         id: editingId,
         name: String(name || '').trim() || `${sourceTypeId} -> ${targetTypeId}`,
@@ -692,7 +743,7 @@ export default function DataMapper() {
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button type="button" onClick={() => setItems([])}>Clear Links</button>
-                <button type="button" onClick={saveMapping} disabled={items.length === 0}>Save</button>
+                <button type="button" onClick={saveMapping} disabled={items.length === 0 || hasConversionRuleErrors}>Save</button>
               </div>
             </div>
 
@@ -779,13 +830,25 @@ export default function DataMapper() {
                   <div style={{ fontFamily: 'Consolas, monospace' }}>
                     {labelForPath(item.sourcePath, sourceMtFieldDefs)} {'->'} {labelForPath(item.targetPath, targetMtFieldDefs)}
                   </div>
-                  <input
-                    type="text"
-                    value={String(item.conversionRule || '')}
-                    onChange={(event) => updateItemConversionRule(index, event.target.value)}
-                    placeholder="move(src)"
-                    style={{ width: '100%', fontSize: 12, padding: '4px 6px', border: '1px solid #cbd5e1', borderRadius: 4, fontFamily: 'Consolas, monospace' }}
-                  />
+                  <div>
+                    <input
+                      type="text"
+                      value={String(item.conversionRule || '')}
+                      onChange={(event) => updateItemConversionRule(index, event.target.value)}
+                      placeholder="move(src)"
+                      style={{
+                        width: '100%',
+                        fontSize: 12,
+                        padding: '4px 6px',
+                        border: conversionRuleErrors[index] ? '1px solid #ef4444' : '1px solid #cbd5e1',
+                        borderRadius: 4,
+                        fontFamily: 'Consolas, monospace',
+                      }}
+                    />
+                    {conversionRuleErrors[index] && (
+                      <div style={{ marginTop: 4, fontSize: 11, color: '#b91c1c' }}>Rule error: {conversionRuleErrors[index]}</div>
+                    )}
+                  </div>
                   <button type="button" onClick={() => removeItem(index)}>Remove</button>
                 </div>
               ))}

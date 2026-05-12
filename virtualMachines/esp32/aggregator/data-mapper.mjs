@@ -19,6 +19,48 @@ function buildMappingId(sourceTypeId, targetTypeId) {
   return `${sanitizeId(sourceTypeId)}-to-${sanitizeId(targetTypeId)}-${Date.now().toString(36)}`;
 }
 
+function validateConversionRule(ruleText) {
+  const text = String(ruleText || '').trim();
+  if (!text) return { valid: true };
+  if (text.length > 500) return { valid: false, error: 'conversionRule is too long (max 500 chars)' };
+
+  if (!/^[\w\s\.,()'"\[\]\-+*/%:<>!=|&?#@]+$/.test(text)) {
+    return { valid: false, error: 'conversionRule contains unsupported characters' };
+  }
+
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let quote = null;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === '(') parenDepth += 1;
+    if (ch === ')') parenDepth -= 1;
+    if (ch === '[') bracketDepth += 1;
+    if (ch === ']') bracketDepth -= 1;
+    if (parenDepth < 0 || bracketDepth < 0) {
+      return { valid: false, error: 'conversionRule has unbalanced brackets/parentheses' };
+    }
+  }
+
+  if (quote || parenDepth !== 0 || bracketDepth !== 0) {
+    return { valid: false, error: 'conversionRule has unbalanced quotes/brackets/parentheses' };
+  }
+
+  // v1: accept function-call style expressions, for example trim(src), yyMMddToIso(src)
+  if (!/^[A-Za-z_][\w]*\s*\(.*\)$/.test(text)) {
+    return { valid: false, error: 'conversionRule must be a function call expression' };
+  }
+  return { valid: true };
+}
+
 function normalizeMappingItem(item) {
   const sourcePath = String(item?.sourcePath || '').trim();
   const targetPath = String(item?.targetPath || '').trim();
@@ -26,12 +68,16 @@ function normalizeMappingItem(item) {
   const sourceValueType = String(item?.sourceValueType || '').trim().toLowerCase() || 'unknown';
   const targetValueType = String(item?.targetValueType || '').trim().toLowerCase() || 'unknown';
   const conversionRule = String(item?.conversionRule || '').trim();
+  const conversionRuleValidation = validateConversionRule(conversionRule);
 
   if (!sourcePath || !targetPath) {
     throw new Error('Each mapping item requires sourcePath and targetPath');
   }
   if (kind !== 'leaf' && kind !== 'branch') {
     throw new Error(`Invalid mapping kind for ${sourcePath}: expected leaf or branch`);
+  }
+  if (!conversionRuleValidation.valid) {
+    throw new Error(`Invalid conversionRule for ${sourcePath} -> ${targetPath}: ${conversionRuleValidation.error}`);
   }
 
   return {
