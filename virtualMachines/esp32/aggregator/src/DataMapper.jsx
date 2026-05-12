@@ -43,13 +43,83 @@ function flattenStructure(node, prefix = '', depth = 0) {
   return rows;
 }
 
-function isCompatible(sourceNode, targetNode) {
+const CONVERSION_RULES = {
+  xsd_to_xsd: {
+    strictShape: true,
+    liberalType: false,
+  },
+  mx_to_mt: {
+    strictShape: false,
+    liberalType: true,
+  },
+  mt_to_mx: {
+    strictShape: false,
+    liberalType: true,
+  },
+  fallback: {
+    strictShape: true,
+    liberalType: false,
+  },
+};
+
+function getSchemaFamily(schemaPath) {
+  if (isMtSchemaPath(schemaPath)) return 'mt';
+  if (isXsdSchemaPath(schemaPath)) return 'xsd';
+  return 'other';
+}
+
+function normalizeLogicalType(valueType) {
+  const raw = String(valueType || 'unknown').toLowerCase();
+  if (!raw || raw === 'unknown') return 'unknown';
+  if (raw === 'object' || raw === 'array' || raw === 'group') return 'container';
+  if (raw.includes('date') || raw.includes('time')) return 'date';
+  if (raw.includes('decimal') || raw.includes('amount') || raw.includes('number') || raw.includes('numeric') || raw.includes('int') || raw.includes('float')) return 'number';
+  if (raw.includes('bool') || raw.includes('indicator')) return 'boolean';
+  if (raw.includes('code') || raw.includes('text') || raw.includes('string') || raw.includes('char') || raw.includes('id')) return 'string';
+  if (raw.includes('bic') || raw.includes('iban') || raw.includes('account') || raw.includes('party') || raw.includes('composite')) return 'string';
+  return 'string';
+}
+
+function isTypeConvertible(sourceType, targetType, liberalType) {
+  if (sourceType === targetType) return true;
+  if (sourceType === 'unknown' || targetType === 'unknown') return true;
+  if (liberalType) return true;
+
+  const key = `${sourceType}->${targetType}`;
+  const strictPairs = new Set([
+    'string->date',
+    'date->string',
+    'string->number',
+    'number->string',
+    'string->boolean',
+    'boolean->string',
+  ]);
+  return strictPairs.has(key);
+}
+
+function getCompatibilityProfile(sourceSchemaPath, targetSchemaPath) {
+  const sourceFamily = getSchemaFamily(sourceSchemaPath);
+  const targetFamily = getSchemaFamily(targetSchemaPath);
+  if (sourceFamily === 'xsd' && targetFamily === 'xsd') return CONVERSION_RULES.xsd_to_xsd;
+  if (sourceFamily === 'xsd' && targetFamily === 'mt') return CONVERSION_RULES.mx_to_mt;
+  if (sourceFamily === 'mt' && targetFamily === 'xsd') return CONVERSION_RULES.mt_to_mx;
+  return CONVERSION_RULES.fallback;
+}
+
+function isCompatible(sourceNode, targetNode, sourceSchemaPath, targetSchemaPath) {
   if (!sourceNode || !targetNode) return false;
-  if (sourceNode.kind !== targetNode.kind) return false;
-  if (sourceNode.kind === 'branch') return true;
-  if (sourceNode.valueType === targetNode.valueType) return true;
-  if (sourceNode.valueType === 'unknown' || targetNode.valueType === 'unknown') return true;
-  return false;
+
+  const profile = getCompatibilityProfile(sourceSchemaPath, targetSchemaPath);
+  if (profile.strictShape && sourceNode.kind !== targetNode.kind) return false;
+
+  // Keep complex/container mapping conservative unless both sides are explicitly branches.
+  if (sourceNode.kind === 'branch' || targetNode.kind === 'branch') {
+    return sourceNode.kind === targetNode.kind;
+  }
+
+  const sourceType = normalizeLogicalType(sourceNode.valueType);
+  const targetType = normalizeLogicalType(targetNode.valueType);
+  return isTypeConvertible(sourceType, targetType, profile.liberalType);
 }
 
 function mappingTitle(mapping) {
@@ -244,7 +314,7 @@ function filterNodesForSchema(nodes, schemaPath) {
       ...node,
       // Treat MT top-level tags as terminal mapping fields.
       kind: 'leaf',
-      valueType: node.valueType || 'unknown',
+      valueType: node.valueType || 'string',
     }));
 }
 
@@ -503,7 +573,7 @@ export default function DataMapper() {
       const payloadRaw = event.dataTransfer.getData('application/json');
       if (!payloadRaw) return;
       const sourceNode = JSON.parse(payloadRaw);
-      if (!isCompatible(sourceNode, targetNode)) {
+      if (!isCompatible(sourceNode, targetNode, sourceSchemaPath, targetSchemaPath)) {
         setStatus(`Incompatible mapping: ${sourceNode.path} -> ${targetNode.path}`);
         return;
       }
@@ -514,6 +584,7 @@ export default function DataMapper() {
         kind: sourceNode.kind,
         sourceValueType: sourceNode.valueType,
         targetValueType: targetNode.valueType,
+        conversionRule: '',
       };
 
       setItems(prev => {
@@ -528,6 +599,10 @@ export default function DataMapper() {
 
   function removeItem(index) {
     setItems(prev => prev.filter((_, i) => i !== index));
+  }
+
+  function updateItemConversionRule(index, conversionRule) {
+    setItems(prev => prev.map((item, i) => (i === index ? { ...item, conversionRule } : item)));
   }
 
   async function saveMapping() {
@@ -694,15 +769,23 @@ export default function DataMapper() {
             </div>
 
             <div style={{ marginTop: 14, border: '1px solid #dce3eb', borderRadius: 6, overflow: 'hidden' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, padding: '8px 10px', background: '#f7f9fc', fontSize: 12, fontWeight: 600 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8, padding: '8px 10px', background: '#f7f9fc', fontSize: 12, fontWeight: 600 }}>
                 <div>Link (Source {'->'} Destination)</div>
+                <div>Conversion Rule</div>
                 <div>Action</div>
               </div>
               {items.map((item, index) => (
-                <div key={`item:${index}`} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, padding: '8px 10px', borderTop: '1px solid #edf2f7', fontSize: 12, alignItems: 'center' }}>
+                <div key={`item:${index}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8, padding: '8px 10px', borderTop: '1px solid #edf2f7', fontSize: 12, alignItems: 'center' }}>
                   <div style={{ fontFamily: 'Consolas, monospace' }}>
                     {labelForPath(item.sourcePath, sourceMtFieldDefs)} {'->'} {labelForPath(item.targetPath, targetMtFieldDefs)}
                   </div>
+                  <input
+                    type="text"
+                    value={String(item.conversionRule || '')}
+                    onChange={(event) => updateItemConversionRule(index, event.target.value)}
+                    placeholder="move(src)"
+                    style={{ width: '100%', fontSize: 12, padding: '4px 6px', border: '1px solid #cbd5e1', borderRadius: 4, fontFamily: 'Consolas, monospace' }}
+                  />
                   <button type="button" onClick={() => removeItem(index)}>Remove</button>
                 </div>
               ))}

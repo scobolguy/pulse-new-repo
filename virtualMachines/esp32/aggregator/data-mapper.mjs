@@ -25,6 +25,7 @@ function normalizeMappingItem(item) {
   const kind = String(item?.kind || '').trim().toLowerCase();
   const sourceValueType = String(item?.sourceValueType || '').trim().toLowerCase() || 'unknown';
   const targetValueType = String(item?.targetValueType || '').trim().toLowerCase() || 'unknown';
+  const conversionRule = String(item?.conversionRule || '').trim();
 
   if (!sourcePath || !targetPath) {
     throw new Error('Each mapping item requires sourcePath and targetPath');
@@ -39,6 +40,7 @@ function normalizeMappingItem(item) {
     kind,
     sourceValueType,
     targetValueType,
+    conversionRule,
   };
 }
 
