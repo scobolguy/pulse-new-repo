@@ -28,7 +28,16 @@ function flattenStructure(node, prefix = '', depth = 0) {
     const path = prefix ? `${prefix}.${childName}` : childName;
     const kind = child.kind === 'branch' ? 'branch' : 'leaf';
     const valueType = String(child.valueType || 'unknown').toLowerCase();
-    rows.push({ name: childName, path, kind, valueType, depth, required: child.required === true });
+    rows.push({
+      name: childName,
+      path,
+      kind,
+      valueType,
+      depth,
+      required: child.required === true,
+      isEnum: child.isEnum === true,
+      enumValues: Array.isArray(child.enumValues) ? child.enumValues : undefined,
+    });
     rows.push(...flattenStructure(child, path, depth + 1));
   }
   return rows;
@@ -94,6 +103,7 @@ function extractMtFieldDefs(rawSchema) {
     byTag.set(String(tag), {
       name: String(def.name || tag),
       format: String(def.format || ''),
+      required: def.required === true,
     });
   }
   return byTag;
@@ -113,6 +123,15 @@ function formatPathForDisplay(path, mtFieldDefs) {
 
 function labelForPath(path, mtFieldDefs) {
   return formatPathForDisplay(path, mtFieldDefs);
+}
+
+function isMtRequiredPath(path, mtFieldDefs) {
+  if (!mtFieldDefs) return false;
+  const raw = String(path || '');
+  const match = raw.match(/^finEnvelope\.block4\.fields\.([A-Za-z0-9]+)$/);
+  if (!match) return false;
+  const meta = mtFieldDefs.get(String(match[1]));
+  return meta?.required === true;
 }
 
 function isMtSchemaPath(schemaPath) {
@@ -395,6 +414,7 @@ export default function DataMapper() {
     const isExpanded = expandedPaths.has(node.path);
     const typeText = String(node.valueType || 'unknown');
     const isRequired = node.required === true;
+    const isEnum = node.isEnum === true;
 
     const row = (
       <div
@@ -441,6 +461,11 @@ export default function DataMapper() {
           {getXsdDisplayName(node)}
         </span>
         <span style={{ color: isRequired ? '#dc2626' : '#64748b' }}>({typeText})</span>
+        {isEnum && (
+          <span style={{ color: '#0f766e', fontSize: 11, border: '1px solid #99f6e4', borderRadius: 999, padding: '0 6px', lineHeight: '16px' }}>
+            enum
+          </span>
+        )}
       </div>
     );
 
@@ -597,7 +622,7 @@ export default function DataMapper() {
                     ? sourceRoots.flatMap(node => renderXsdTreeNode(node, 'source', 0))
                     : sourceNodes.map((node, index) => {
                       const isLinked = linkedSourcePaths.has(node.path);
-                      const isRequired = node.required === true;
+                      const isRequired = node.required === true || isMtRequiredPath(node.path, sourceMtFieldDefs);
                       const displayPath = labelForPath(node.path, sourceMtFieldDefs);
                       return (
                         <div
@@ -632,7 +657,7 @@ export default function DataMapper() {
                     ? targetRoots.flatMap(node => renderXsdTreeNode(node, 'target', 0))
                     : targetNodes.map((node, index) => {
                       const isLinked = linkedTargetPaths.has(node.path);
-                      const isRequired = node.required === true;
+                      const isRequired = node.required === true || isMtRequiredPath(node.path, targetMtFieldDefs);
                       const displayPath = labelForPath(node.path, targetMtFieldDefs);
                       return (
                         <div

@@ -278,6 +278,24 @@ function buildCopybookTree(content) {
 function buildXsdTree(content) {
   const root = { name: 'root', kind: 'branch', valueType: 'xsd', children: [] };
   const stack = [root];
+  const simpleTypes = new Map();
+
+  const simpleTypeRegex = /<xs:simpleType\b[^>]*name="([^"]+)"[^>]*>([\s\S]*?)<\/xs:simpleType>/gi;
+  for (const simpleTypeMatch of String(content || '').matchAll(simpleTypeRegex)) {
+    const simpleTypeName = String(simpleTypeMatch[1] || '');
+    const simpleTypeBody = String(simpleTypeMatch[2] || '');
+    const enumValues = [];
+    for (const enumMatch of simpleTypeBody.matchAll(/<xs:enumeration\b[^>]*value="([^"]+)"/gi)) {
+      enumValues.push(String(enumMatch[1] || ''));
+    }
+    const baseType = simpleTypeBody.match(/<xs:restriction\b[^>]*base="([^"]+)"/i)?.[1] || null;
+    simpleTypes.set(simpleTypeName, {
+      enumValues,
+      isEnum: enumValues.length > 0,
+      baseType,
+    });
+  }
+
   const tokens = String(content || '').match(/<\/?[^>]+>/g) || [];
 
   for (const token of tokens) {
@@ -297,6 +315,8 @@ function buildXsdTree(content) {
     if (tagName.endsWith('element')) {
       const elementName = attrs.match(/\bname="([^"]+)"/i)?.[1] || 'element';
       const typeName = attrs.match(/\btype="([^"]+)"/i)?.[1] || null;
+      const typeNoPrefix = typeName && typeName.includes(':') ? typeName.split(':').pop() : typeName;
+      const simpleTypeMeta = (typeNoPrefix && simpleTypes.get(typeNoPrefix)) || (typeName && simpleTypes.get(typeName)) || null;
       const minOccursRaw = attrs.match(/\bminOccurs="([^"]+)"/i)?.[1] || null;
       const minOccurs = minOccursRaw == null ? 1 : Number.parseInt(minOccursRaw, 10);
       const required = Number.isNaN(minOccurs) ? true : minOccurs > 0;
@@ -306,6 +326,7 @@ function buildXsdTree(content) {
         kind: isLeaf ? 'leaf' : 'branch',
         valueType: typeName || 'complex',
         required,
+        ...(simpleTypeMeta?.isEnum ? { isEnum: true, enumValues: simpleTypeMeta.enumValues } : {}),
         children: [],
       };
       stack[stack.length - 1].children.push(node);
