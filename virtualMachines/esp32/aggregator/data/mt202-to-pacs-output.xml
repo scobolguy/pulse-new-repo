@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document>
+  <FIToFICdtTrf>
+    <GrpHdr>
+      <MsgId>REF987654321</MsgId>
+    </GrpHdr>
+    <CdtTrfTxInf>
+      <PmtId>
+        <EndToEndId>E2E-123456789</EndToEndId>
+      </PmtId>
+      <IntrBkSttlmDt>2026-05-15</IntrBkSttlmDt>
+      <IntrBkSttlmAmt Ccy="USD">50000.00</IntrBkSttlmAmt>
+      <DbtrAgt>
+        <FinInstnId>
+          <BICFI>DEUTDEDD</BICFI>
+        </FinInstnId>
+      </DbtrAgt>
+      <IntrmyAgt1>
+        <FinInstnId>
+          <BICFI>NORSEIT2X10</BICFI>
+        </FinInstnId>
+      </IntrmyAgt1>
+      <CdtrAgt>
+        <FinInstnId>
+          <BICFI>CHQABEBBXXX</BICFI>
+        </FinInstnId>
+      </CdtrAgt>
+      <Cdtr>
+        <FinInstnId>
+          <BICFI>IRVTIT2XXXX</BICFI>
+        </FinInstnId>
+      </Cdtr>
+      <InstrForNxtAgt>
+        <InstrInf>/BENEFICIARY/DETAILS</InstrInf>
+      </InstrForNxtAgt>
+    </CdtTrfTxInf>
+  </FIToFICdtTrf>
+</Document>
