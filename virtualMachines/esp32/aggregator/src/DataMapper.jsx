@@ -136,12 +136,28 @@ function getPathTail(path) {
   return raw.slice(lastDot + 1);
 }
 
+function getXsdDisplayName(node) {
+  const direct = String(node?.name || '').trim();
+  if (direct) return direct;
+  const tail = getPathTail(node?.path || '');
+  if (tail) return tail;
+  return String(node?.valueType || 'field');
+}
+
+function isXsdWrapperNode(node) {
+  const name = String(node?.name || '').toLowerCase();
+  const valueType = String(node?.valueType || '').toLowerCase();
+  return name === 'sequence' || name === 'choice' || name === 'all' || valueType === 'sequence' || valueType === 'choice' || valueType === 'all' || valueType === 'complextype';
+}
+
 function buildNodeIndex(nodes) {
   const nodeByPath = new Map();
+  const nodeByPathLower = new Map();
   const childrenByParent = new Map();
 
   for (const node of nodes) {
     nodeByPath.set(node.path, node);
+    nodeByPathLower.set(String(node.path || '').toLowerCase(), node);
   }
 
   for (const node of nodes) {
@@ -151,7 +167,45 @@ function buildNodeIndex(nodes) {
     childrenByParent.set(parentPath, siblings);
   }
 
-  return { nodeByPath, childrenByParent };
+  return { nodeByPath, nodeByPathLower, childrenByParent };
+}
+
+function collectMeaningfulXsdChildren(parentPath, indexData) {
+  const children = indexData.childrenByParent.get(parentPath) || [];
+  const result = [];
+  for (const child of children) {
+    if (isXsdWrapperNode(child)) {
+      result.push(...collectMeaningfulXsdChildren(child.path, indexData));
+    } else {
+      result.push(child);
+    }
+  }
+  return result;
+}
+
+function resolveTypeNode(typeName, indexData) {
+  const raw = String(typeName || '').trim();
+  if (!raw) return null;
+  const direct = indexData.nodeByPath.get(raw);
+  if (direct) return direct;
+  const noPrefix = raw.includes(':') ? raw.split(':').pop() : raw;
+  const byNoPrefix = indexData.nodeByPath.get(noPrefix);
+  if (byNoPrefix) return byNoPrefix;
+  return indexData.nodeByPathLower.get(raw.toLowerCase()) || indexData.nodeByPathLower.get(noPrefix.toLowerCase()) || null;
+}
+
+function getXsdNodeChildren(node, indexData) {
+  const directChildren = collectMeaningfulXsdChildren(node.path, indexData);
+  if (directChildren.length > 0) return directChildren;
+
+  const typeNode = resolveTypeNode(node.valueType, indexData);
+  if (!typeNode) return [];
+
+  const typeChildren = collectMeaningfulXsdChildren(typeNode.path, indexData);
+  return typeChildren.map((child) => ({
+    ...child,
+    path: `${node.path}.${String(child.name || '')}`,
+  }));
 }
 
 function getInitialExpandedPaths(indexData) {
@@ -334,7 +388,7 @@ export default function DataMapper() {
     const expandedPaths = isSourcePane ? expandedSourcePaths : expandedTargetPaths;
 
     const isLinked = linkedPaths.has(node.path);
-    const children = indexData.childrenByParent.get(node.path) || [];
+    const children = getXsdNodeChildren(node, indexData);
     const hasChildren = children.length > 0;
     const isExpanded = expandedPaths.has(node.path);
     const typeText = String(node.valueType || 'unknown');
@@ -380,7 +434,7 @@ export default function DataMapper() {
         >
           {hasChildren ? (isExpanded ? '▾' : '▸') : '•'}
         </button>
-        <span>{getPathTail(node.path)}</span>
+        <span>{getXsdDisplayName(node)}</span>
         <span style={{ color: '#64748b' }}>({typeText})</span>
       </div>
     );
