@@ -24,10 +24,11 @@ function flattenStructure(node, prefix = '', depth = 0) {
 
   const rows = [];
   for (const child of children) {
-    const path = prefix ? `${prefix}.${child.name}` : String(child.name || '');
+    const childName = String(child.name || '');
+    const path = prefix ? `${prefix}.${childName}` : childName;
     const kind = child.kind === 'branch' ? 'branch' : 'leaf';
     const valueType = String(child.valueType || 'unknown').toLowerCase();
-    rows.push({ path, kind, valueType, depth });
+    rows.push({ name: childName, path, kind, valueType, depth });
     rows.push(...flattenStructure(child, path, depth + 1));
   }
   return rows;
@@ -204,6 +205,7 @@ function getXsdNodeChildren(node, indexData) {
   const typeChildren = collectMeaningfulXsdChildren(typeNode.path, indexData);
   return typeChildren.map((child) => ({
     ...child,
+    name: String(child.name || ''),
     path: `${node.path}.${String(child.name || '')}`,
   }));
 }
