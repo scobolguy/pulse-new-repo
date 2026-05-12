@@ -1,0 +1,369 @@
+[
+  {
+    "id": "pacs-to-mt103",
+    "name": "PACS.008 to MT103",
+    "sourceTypeId": "pacs",
+    "targetTypeId": "swift-mt103",
+    "sourceSchemaPath": "schemas/pacs.008.001.14.xsd",
+    "targetSchemaPath": "schemas/swift-mt103.json",
+    "enabled": true,
+    "items": [
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+        "targetPath": "MT103:20",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId",
+        "targetPath": "MT103:21",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt",
+        "targetPath": "MT103:32A.date",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+        "targetPath": "MT103:32A.currency",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+        "targetPath": "MT103:32A.amount",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm",
+        "targetPath": "MT103:50K.name",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.DbtrAcct.Id.IBAN",
+        "targetPath": "MT103:50K.account",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI",
+        "targetPath": "MT103:52A",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI",
+        "targetPath": "MT103:57A",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm",
+        "targetPath": "MT103:59.name",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.CdtrAcct.Id.IBAN",
+        "targetPath": "MT103:59.account",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.RmtInf.Ustrd",
+        "targetPath": "MT103:70",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgBr",
+        "targetPath": "MT103:71A",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstrForNxtAgt.InstrInf",
+        "targetPath": "MT103:72",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      }
+    ],
+    "updatedAt": "2026-05-12T00:45:16.417Z",
+    "createdAt": "2026-05-11T21:21:03.166Z"
+  },
+  {
+    "id": "pacs-to-mt202",
+    "name": "PACS.009 to MT202",
+    "sourceTypeId": "pacs",
+    "targetTypeId": "swift-mt202",
+    "sourceSchemaPath": "schemas/pacs.009.001.13.xsd",
+    "targetSchemaPath": "schemas/swift-mt202.json",
+    "enabled": true,
+    "items": [
+      {
+        "sourcePath": "Document.FIToFICdtTrf.GrpHdr.MsgId",
+        "targetPath": "MT202:20",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICdtTrf.CdtTrfTxInf.PmtId.EndToEndId",
+        "targetPath": "MT202:21",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrBkSttlmDt",
+        "targetPath": "MT202:32A.date",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+        "targetPath": "MT202:32A.currency",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+        "targetPath": "MT202:32A.amount",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICdtTrf.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI",
+        "targetPath": "MT202:52A",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICdtTrf.CdtTrfTxInf.PrvsInstgAgt1.FinInstnId.BICFI",
+        "targetPath": "MT202:53A",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrmyAgt1.FinInstnId.BICFI",
+        "targetPath": "MT202:56A",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICdtTrf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI",
+        "targetPath": "MT202:57A",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICdtTrf.CdtTrfTxInf.Cdtr.FinInstnId.BICFI",
+        "targetPath": "MT202:58A",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "Document.FIToFICdtTrf.CdtTrfTxInf.InstrForNxtAgt.InstrInf",
+        "targetPath": "MT202:72",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      }
+    ],
+    "updatedAt": "2026-05-12T00:45:16.423Z",
+    "createdAt": "2026-05-12T00:45:16.423Z"
+  },
+  {
+    "id": "mt103-to-pacs",
+    "name": "MT103 to PACS.008",
+    "sourceTypeId": "swift-mt103",
+    "targetTypeId": "pacs",
+    "sourceSchemaPath": "schemas/swift-mt103.json",
+    "targetSchemaPath": "schemas/pacs.008.001.14.xsd",
+    "enabled": true,
+    "items": [
+      {
+        "sourcePath": "finEnvelope.block4.fields.20",
+        "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.21",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.32A.components.valueDate",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.32A.components.currency",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.32A.components.amount",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.50K",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.59",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.70",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.RmtInf.Ustrd",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.71A",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgBr",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.72",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstrForNxtAgt.InstrInf",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      }
+    ],
+    "updatedAt": "2026-05-12T00:45:16.428Z",
+    "createdAt": "2026-05-12T00:45:16.428Z"
+  },
+  {
+    "id": "mt202-to-pacs",
+    "name": "MT202 to PACS.009",
+    "sourceTypeId": "swift-mt202",
+    "targetTypeId": "pacs",
+    "sourceSchemaPath": "schemas/swift-mt202.json",
+    "targetSchemaPath": "schemas/pacs.009.001.13.xsd",
+    "enabled": true,
+    "items": [
+      {
+        "sourcePath": "finEnvelope.block4.fields.20",
+        "targetPath": "Document.FIToFICdtTrf.GrpHdr.MsgId",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.21",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.PmtId.EndToEndId",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.32A.components.valueDate",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrBkSttlmDt",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.32A.components.currency",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.32A.components.amount",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.52A",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.56A",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrmyAgt1.FinInstnId.BICFI",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.57A",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.58A",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.Cdtr.FinInstnId.BICFI",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.72",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.InstrForNxtAgt.InstrInf",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown"
+      }
+    ],
+    "updatedAt": "2026-05-12T00:45:16.433Z",
+    "createdAt": "2026-05-12T00:45:16.433Z"
+  }
+]

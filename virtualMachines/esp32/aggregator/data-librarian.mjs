@@ -74,14 +74,154 @@ function summarizeValueType(value) {
   return typeof value;
 }
 
+function normalizeEnumValues(values) {
+  if (!Array.isArray(values)) return null;
+  return values.map((value) => {
+    const valueType = summarizeValueType(value);
+    if (valueType === 'string' || valueType === 'number' || valueType === 'boolean' || valueType === 'null') {
+      return value;
+    }
+    return JSON.stringify(value);
+  });
+}
+
+function inferJsonSchemaValueType(schemaNode) {
+  if (!schemaNode || typeof schemaNode !== 'object') return 'unknown';
+  if (Array.isArray(schemaNode.type)) return String(schemaNode.type[0] || 'unknown');
+  if (typeof schemaNode.type === 'string') return schemaNode.type;
+  if (Array.isArray(schemaNode.enum)) return 'enum';
+  if (schemaNode.properties && typeof schemaNode.properties === 'object') return 'object';
+  if (schemaNode.items) return 'array';
+  return 'unknown';
+}
+
+function inferSwiftFieldDefaults(fieldTag) {
+  const tag = String(fieldTag || '').toUpperCase();
+  const known = {
+    '16R': { type: 'marker', format: '3!c' },
+    '16S': { type: 'marker', format: '3!c' },
+    '20': { type: 'string', format: '16x' },
+    '21': { type: 'string', format: '16x' },
+    '21R': { type: 'string', format: '16x' },
+    '22A': { type: 'code', format: '4!c' },
+    '22B': { type: 'code', format: '4!c' },
+    '22F': { type: 'code', format: '4!c[/30x]' },
+    '23': { type: 'code', format: '4!c' },
+    '23B': { type: 'code', format: '4!c' },
+    '26E': { type: 'number', format: '3n' },
+    '30': { type: 'date', format: '6!n (YYMMDD)' },
+    '31C': { type: 'date', format: '6!n (YYMMDD)' },
+    '31D': { type: 'composite', format: '6!n29x' },
+    '32A': { type: 'composite', format: '6!n3!a15d' },
+    '32B': { type: 'amount', format: '3!a15d' },
+    '33B': { type: 'amount', format: '3!a15d' },
+    '35B': { type: 'instrument', format: '4*35x' },
+    '36': { type: 'number', format: '15d' },
+    '40A': { type: 'code', format: '24x' },
+    '41A': { type: 'bic+code', format: '4!a2!a2!c[3!c]/1!a' },
+    '50': { type: 'party', format: '4*35x' },
+    '50A': { type: 'bic', format: '4!a2!a2!c[3!c]' },
+    '50F': { type: 'party', format: '4*35x' },
+    '50H': { type: 'party', format: '4*35x' },
+    '50K': { type: 'party', format: '/34x and 4*35x' },
+    '52A': { type: 'bic', format: '4!a2!a2!c[3!c]' },
+    '53A': { type: 'bic', format: '4!a2!a2!c[3!c]' },
+    '54A': { type: 'bic', format: '4!a2!a2!c[3!c]' },
+    '56A': { type: 'bic', format: '4!a2!a2!c[3!c]' },
+    '57A': { type: 'bic', format: '4!a2!a2!c[3!c]' },
+    '58A': { type: 'bic', format: '4!a2!a2!c[3!c]' },
+    '59': { type: 'party', format: '/34x and 4*35x' },
+    '59A': { type: 'bic', format: '4!a2!a2!c[3!c]' },
+    '70': { type: 'text', format: '4*35x' },
+    '70E': { type: 'text', format: '10*35x' },
+    '71A': { type: 'code', format: '3!a' },
+    '71B': { type: 'text', format: '6*35x' },
+    '71D': { type: 'text', format: '6*35x' },
+    '72': { type: 'text', format: '6*35x' },
+    '73': { type: 'text', format: '6*35x' },
+    '75': { type: 'text', format: '35*50x' },
+    '76': { type: 'text', format: '35*50x' },
+    '77B': { type: 'text', format: '3*35x' },
+    '77C': { type: 'text', format: '35*50x' },
+    '77J': { type: 'text', format: '20*35x' },
+    '79': { type: 'text', format: '35*50x' },
+    '97A': { type: 'account', format: '35x' },
+    '98A': { type: 'date', format: '8!n' },
+  };
+  if (known[tag]) return known[tag];
+  if (/^\d{2}[A-Z]$/.test(tag)) return { type: 'string', format: 'variable' };
+  if (/^\d{2}$/.test(tag)) return { type: 'string', format: 'variable' };
+  return { type: 'string', format: 'variable' };
+}
+
+function enrichSwiftFieldMetadata(parsed) {
+  if (!parsed || typeof parsed !== 'object') return;
+  const messageType = String(parsed.messageType || '').toUpperCase();
+  if (!/^MT\d{3}/.test(messageType)) return;
+
+  function visit(node) {
+    if (!node || typeof node !== 'object') return;
+    if (node.fields && typeof node.fields === 'object' && !Array.isArray(node.fields)) {
+      for (const [fieldTag, fieldDef] of Object.entries(node.fields)) {
+        if (!fieldDef || typeof fieldDef !== 'object' || Array.isArray(fieldDef)) continue;
+        const defaults = inferSwiftFieldDefaults(fieldTag);
+        if (!fieldDef.type) fieldDef.type = defaults.type;
+        if (!fieldDef.format) fieldDef.format = defaults.format;
+        if (!fieldDef.length) fieldDef.length = fieldDef.format || defaults.format;
+      }
+    }
+    for (const value of Object.values(node)) {
+      if (value && typeof value === 'object') visit(value);
+    }
+  }
+
+  visit(parsed);
+}
+
+function buildJsonSchemaTree(name, schemaNode) {
+  const valueType = inferJsonSchemaValueType(schemaNode);
+  const enumValues = normalizeEnumValues(schemaNode?.enum);
+  const node = {
+    name,
+    kind: valueType === 'object' || valueType === 'array' ? 'branch' : 'leaf',
+    valueType,
+    children: [],
+  };
+
+  if (enumValues && enumValues.length > 0) {
+    node.enumValues = enumValues;
+  }
+
+  if (valueType === 'object' && schemaNode?.properties && typeof schemaNode.properties === 'object') {
+    node.children = Object.entries(schemaNode.properties).map(([childName, childSchema]) => buildJsonSchemaTree(childName, childSchema));
+    return node;
+  }
+
+  if (valueType === 'array') {
+    if (Array.isArray(schemaNode?.items)) {
+      node.children = schemaNode.items.map((itemSchema, index) => buildJsonSchemaTree(`[${index}]`, itemSchema));
+    } else if (schemaNode?.items && typeof schemaNode.items === 'object') {
+      node.children = [buildJsonSchemaTree('[*]', schemaNode.items)];
+    }
+    return node;
+  }
+
+  return node;
+}
+
 function buildJsonValueTree(name, value) {
   const nodeType = summarizeValueType(value);
   if (nodeType === 'array') {
+    const enumValues = value.every((item) => {
+      const itemType = summarizeValueType(item);
+      return itemType !== 'object' && itemType !== 'array';
+    }) ? value : null;
     const sample = value[0];
     return {
       name,
       kind: 'branch',
       valueType: 'array',
+      ...(enumValues ? { enumValues } : {}),
       children: sample === undefined ? [] : [buildJsonValueTree('[0]', sample)],
     };
   }
@@ -232,22 +372,10 @@ async function extractStructureForFile(filePath, schemaType) {
       return null;
     }
     const parsed = JSON.parse(content);
+    enrichSwiftFieldMetadata(parsed);
 
-    if (parsed && typeof parsed === 'object' && parsed.type === 'object' && parsed.properties && typeof parsed.properties === 'object') {
-      const children = Object.entries(parsed.properties).map(([childName, childSchema]) => ({
-        name: childName,
-        kind: childSchema?.type === 'object' || childSchema?.type === 'array' ? 'branch' : 'leaf',
-        valueType: childSchema?.type || 'unknown',
-        children: childSchema?.type === 'object' && childSchema?.properties
-          ? Object.entries(childSchema.properties).map(([nestedName, nestedSchema]) => ({
-              name: nestedName,
-              kind: nestedSchema?.type === 'object' || nestedSchema?.type === 'array' ? 'branch' : 'leaf',
-              valueType: nestedSchema?.type || 'unknown',
-              children: [],
-            }))
-          : [],
-      }));
-      return { name: 'root', kind: 'branch', valueType: 'object', children };
+    if (parsed && typeof parsed === 'object' && (parsed.type === 'object' || parsed.properties || parsed.items || parsed.enum)) {
+      return buildJsonSchemaTree('root', parsed);
     }
 
     return buildJsonValueTree('root', parsed);

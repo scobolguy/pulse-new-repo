@@ -1,0 +1,12 @@
+{
+  "messageType": "MT734",
+  "description": "Advice of Refusal",
+  "finEnvelope": { "block4": { "fields": {
+    "20": { "name": "SenderReference", "required": true },
+    "21": { "name": "RelatedReference", "required": true },
+    "30": { "name": "DateOfRefusal", "required": false },
+    "32B": { "name": "Amount", "required": false },
+    "73": { "name": "ChargesClaimed", "required": false },
+    "77J": { "name": "Discrepancies", "required": true }
+  } } }
+}

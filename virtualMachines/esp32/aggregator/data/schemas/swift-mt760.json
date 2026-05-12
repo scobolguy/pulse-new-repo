@@ -1,0 +1,14 @@
+{
+  "messageType": "MT760",
+  "description": "Guarantee or Standby Letter of Credit",
+  "finEnvelope": { "block4": { "fields": {
+    "20": { "name": "TransactionReferenceNumber", "required": true },
+    "23": { "name": "FurtherIdentification", "required": false },
+    "30": { "name": "DateOfIssue", "required": true },
+    "40C": { "name": "ApplicableRules", "required": false },
+    "32B": { "name": "CurrencyCodeAmount", "required": true },
+    "50": { "name": "Applicant", "required": true },
+    "59": { "name": "Beneficiary", "required": true },
+    "77C": { "name": "DetailsOfGuarantee", "required": true }
+  } } }
+}

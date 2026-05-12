@@ -1,0 +1,13 @@
+{
+  "messageType": "MT756",
+  "description": "Advice of Reimbursement or Payment",
+  "finEnvelope": { "block4": { "fields": {
+    "20": { "name": "SenderReference", "required": true },
+    "21": { "name": "RelatedReference", "required": false },
+    "30": { "name": "Date", "required": false },
+    "32B": { "name": "CurrencyCodeAmount", "required": true },
+    "53A": { "name": "SenderCorrespondent", "required": false },
+    "57A": { "name": "AccountWithInstitution", "required": false },
+    "72": { "name": "SenderToReceiverInformation", "required": false }
+  } } }
+}

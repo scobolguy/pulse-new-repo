@@ -1,0 +1,12 @@
+{
+  "messageType": "MT747",
+  "description": "Amendment to an Authorization to Reimburse",
+  "finEnvelope": { "block4": { "fields": {
+    "20": { "name": "SendingBankReference", "required": true },
+    "21": { "name": "ReimbursingBankReference", "required": true },
+    "30": { "name": "DateOfAmendment", "required": true },
+    "26E": { "name": "AmendmentNumber", "required": false },
+    "32B": { "name": "AmendedAmount", "required": false },
+    "79": { "name": "Narrative", "required": false }
+  } } }
+}

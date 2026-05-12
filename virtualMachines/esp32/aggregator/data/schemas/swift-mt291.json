@@ -1,0 +1,17 @@
+{
+  "messageType": "MT291",
+  "description": "Request for Payment of Charges, Interest and Other Expenses",
+  "finEnvelope": {
+    "block4": {
+      "fields": {
+        "20": { "name": "TransactionReferenceNumber", "required": true },
+        "21": { "name": "RelatedReference", "required": false },
+        "32B": { "name": "RequestedCurrencyAmount", "required": true },
+        "52A": { "name": "OrderingInstitution", "required": false },
+        "57A": { "name": "AccountWithInstitution", "required": false },
+        "58A": { "name": "BeneficiaryInstitution", "required": false },
+        "72": { "name": "SenderToReceiverInformation", "required": false }
+      }
+    }
+  }
+}

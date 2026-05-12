@@ -1,0 +1,12 @@
+{
+  "messageType": "MT754",
+  "description": "Advice of Payment/Acceptance/Negotiation",
+  "finEnvelope": { "block4": { "fields": {
+    "20": { "name": "SendingBankReference", "required": true },
+    "21": { "name": "DocumentaryCreditNumber", "required": true },
+    "30": { "name": "DateOfPaymentAcceptanceNegotiation", "required": true },
+    "32B": { "name": "AmountPaidAcceptedNegotiated", "required": true },
+    "71D": { "name": "Charges", "required": false },
+    "72": { "name": "SenderToReceiverInformation", "required": false }
+  } } }
+}

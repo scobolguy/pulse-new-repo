@@ -1,0 +1,13 @@
+{
+  "messageType": "MT701",
+  "description": "Issue of a Documentary Credit (Continuation)",
+  "finEnvelope": { "block4": { "fields": {
+    "27": { "name": "SequenceOfTotal", "required": true },
+    "20": { "name": "DocumentaryCreditNumber", "required": true },
+    "45A": { "name": "DescriptionOfGoodsServices", "required": false },
+    "46A": { "name": "DocumentsRequired", "required": false },
+    "47A": { "name": "AdditionalConditions", "required": false },
+    "71B": { "name": "Charges", "required": false },
+    "48": { "name": "PeriodForPresentation", "required": false }
+  } } }
+}

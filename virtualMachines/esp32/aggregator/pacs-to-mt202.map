@@ -1,0 +1,66 @@
+{
+  "id": "pacs-to-mt202",
+  "name": "PACS to MT202",
+  "description": "Mapping rules from ISO 20022 pacs.009 to SWIFT FIN MT202.",
+  "sourceTypeId": "pacs",
+  "targetTypeId": "swift-mt202",
+  "sourceSchemaPath": "schemas/pacs.009.001.13.xsd",
+  "targetSchemaPath": "schemas/swift-mt202.json",
+  "rules": [
+    {
+      "sourcePath": "Document.FIToFICdtTrf.GrpHdr.MsgId",
+      "targetPath": "MT202:20",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICdtTrf.CdtTrfTxInf.PmtId.EndToEndId",
+      "targetPath": "MT202:21",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrBkSttlmDt",
+      "targetPath": "MT202:32A.date",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+      "targetPath": "MT202:32A.currency",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+      "targetPath": "MT202:32A.amount",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICdtTrf.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI",
+      "targetPath": "MT202:52A",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICdtTrf.CdtTrfTxInf.PrvsInstgAgt1.FinInstnId.BICFI",
+      "targetPath": "MT202:53A",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrmyAgt1.FinInstnId.BICFI",
+      "targetPath": "MT202:56A",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICdtTrf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI",
+      "targetPath": "MT202:57A",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICdtTrf.CdtTrfTxInf.Cdtr.FinInstnId.BICFI",
+      "targetPath": "MT202:58A",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICdtTrf.CdtTrfTxInf.InstrForNxtAgt.InstrInf",
+      "targetPath": "MT202:72",
+      "kind": "leaf"
+    }
+  ]
+}

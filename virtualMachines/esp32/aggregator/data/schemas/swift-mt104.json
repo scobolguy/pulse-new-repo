@@ -1,0 +1,21 @@
+{
+  "messageType": "MT104",
+  "description": "Direct Debit and Request for Debit Transfer",
+  "finEnvelope": {
+    "block4": {
+      "fields": {
+        "20": { "name": "SenderReference", "required": true },
+        "21": { "name": "RelatedReference", "required": false },
+        "30": { "name": "RequestedExecutionDate", "required": false },
+        "32B": { "name": "CurrencyAmount", "required": true },
+        "50": { "name": "OrderingCustomer", "required": true },
+        "52A": { "name": "OrderingInstitution", "required": false },
+        "57A": { "name": "AccountWithInstitution", "required": false },
+        "59": { "name": "BeneficiaryCustomer", "required": true },
+        "70": { "name": "RemittanceInformation", "required": false },
+        "71A": { "name": "DetailsOfCharges", "required": true },
+        "72": { "name": "SenderToReceiverInformation", "required": false }
+      }
+    }
+  }
+}

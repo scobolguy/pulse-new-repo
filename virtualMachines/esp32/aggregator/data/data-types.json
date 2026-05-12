@@ -1,32 +1,1621 @@
 [
-  {
-    "id": "msmq",
-    "label": "Msmq",
-    "builtin": false
-  },
-  {
-    "id": "pacs",
-    "label": "ISO 20022 — Payments Clearing and Settlement (pacs)",
-    "builtin": false
-  },
-  {
-    "id": "pain",
-    "label": "ISO 20022 — Payments Initiation (pain)",
-    "builtin": false
-  },
-  {
-    "id": "camt",
-    "label": "ISO 20022 — Cash Management (camt)",
-    "builtin": false
-  },
-  {
-    "id": "remt",
-    "label": "ISO 20022 — Payments Remittance Advice (remt)",
-    "builtin": false
-  },
-  {
-    "id": "head",
-    "label": "ISO 20022 — Business Application Header (head)",
-    "builtin": false
-  }
+    {
+        "id":  "camt",
+        "label":  "ISO 20022 - Cash Management (camt)",
+        "builtin":  false
+    },
+    {
+        "id":  "head",
+        "label":  "ISO 20022 - Business Application Header (head)",
+        "builtin":  false
+    },
+    {
+        "label":  "LegacySwift",
+        "builtin":  false,
+        "id":  "legacyswift",
+        "kind":  "category"
+    },
+    {
+        "id":  "msmq",
+        "label":  "Msmq",
+        "builtin":  false
+    },
+    {
+        "id":  "pacs",
+        "label":  "ISO 20022 - Payments Clearing and Settlement (pacs)",
+        "builtin":  false
+    },
+    {
+        "id":  "pain",
+        "label":  "ISO 20022 - Payments Initiation (pain)",
+        "builtin":  false
+    },
+    {
+        "id":  "remt",
+        "label":  "ISO 20022 - Payments Remittance Advice (remt)",
+        "builtin":  false
+    },
+    {
+        "id":  "swift-mt0xx",
+        "label":  "SWIFT FIN MT0xx - System Messages",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mtxxx",
+        "kind":  "category"
+    },
+    {
+        "id":  "swift-mt101",
+        "label":  "SWIFT FIN Message - MT101 Request for Transfer",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt1xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt102",
+        "label":  "SWIFT FIN Message - MT102 Multiple Customer Credit Transfer",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt1xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt103",
+        "label":  "SWIFT FIN Message - MT103 Single Customer Credit Transfer",
+        "categoryId":  "legacyswift",
+        "parentTypeId":  "swift-mt1xx",
+        "kind":  "message",
+        "builtin":  false
+    },
+    {
+        "id":  "swift-mt103plus",
+        "label":  "SWIFT FIN Message - MT103+ Single Customer Credit Transfer Plus",
+        "categoryId":  "legacyswift",
+        "parentTypeId":  "swift-mt1xx",
+        "kind":  "message",
+        "builtin":  false
+    },
+    {
+        "id":  "swift-mt104",
+        "label":  "SWIFT FIN Message - MT104 Direct Debit and Request for Debit Transfer",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt1xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt110",
+        "label":  "SWIFT FIN Message - MT110 Advice of Cheque(s)",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt1xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt111",
+        "label":  "SWIFT FIN Message - MT111 Request for Stop Payment of a Cheque",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt1xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt112",
+        "label":  "SWIFT FIN Message - MT112 Status of a Request for Stop Payment of a Cheque",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt1xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt190",
+        "label":  "SWIFT FIN Message - MT190 Advice of Charges, Interest and Other Adjustments",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt1xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt191",
+        "label":  "SWIFT FIN Message - MT191 Request for Payment of Charges, Interest and Other Expenses",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt1xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt192",
+        "label":  "SWIFT FIN Message - MT192 Request for Cancellation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt1xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt195",
+        "label":  "SWIFT FIN Message - MT195 Queries",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt1xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt196",
+        "label":  "SWIFT FIN Message - MT196 Answers",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt1xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt199",
+        "label":  "SWIFT FIN Message - MT199 Free Format Message",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt1xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt1xx",
+        "label":  "SWIFT FIN MT1xx - Customer Payments and Cheques",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mtxxx",
+        "kind":  "category"
+    },
+    {
+        "id":  "swift-mt200",
+        "label":  "SWIFT FIN Message - MT200 Financial Institution Transfer for Own Account",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt2xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt201",
+        "label":  "SWIFT FIN Message - MT201 Multiple Financial Institution Transfer for Own Account",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt2xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt202",
+        "label":  "SWIFT FIN Message - MT202 General Financial Institution Transfer",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt2xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt202cov",
+        "label":  "SWIFT FIN Message - MT202COV General Financial Institution Transfer (Cover)",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt2xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt203",
+        "label":  "SWIFT FIN Message - MT203 Multiple General Financial Institution Transfer",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt2xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt204",
+        "label":  "SWIFT FIN Message - MT204 Financial Institution Transfer Execution Advice",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt2xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt205",
+        "label":  "SWIFT FIN Message - MT205 Financial Institution Transfer Execution",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt2xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt205cov",
+        "label":  "SWIFT FIN Message - MT205COV Financial Institution Transfer Execution (Cover)",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt2xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt210",
+        "label":  "SWIFT FIN Message - MT210 Notice to Receive",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt2xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt290",
+        "label":  "SWIFT FIN Message - MT290 Advice of Charges, Interest and Other Adjustments",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt2xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt291",
+        "label":  "SWIFT FIN Message - MT291 Request for Payment of Charges, Interest and Other Expenses",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt2xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt292",
+        "label":  "SWIFT FIN Message - MT292 Request for Cancellation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt2xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt295",
+        "label":  "SWIFT FIN Message - MT295 Queries",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt2xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt296",
+        "label":  "SWIFT FIN Message - MT296 Answers",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt2xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt299",
+        "label":  "SWIFT FIN Message - MT299 Free Format Message",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt2xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt2xx",
+        "label":  "SWIFT FIN MT2xx - Financial Institution Transfers",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mtxxx",
+        "kind":  "category"
+    },
+    {
+        "id":  "swift-mt300",
+        "label":  "SWIFT FIN Message - MT300 Foreign Exchange Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt3xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt303",
+        "label":  "SWIFT FIN Message - MT303 Foreign Exchange Deal Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt3xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt304",
+        "label":  "SWIFT FIN Message - MT304 Advice/Instruction of a Third Party Deal",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt3xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt305",
+        "label":  "SWIFT FIN Message - MT305 Foreign Currency Option Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt3xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt306",
+        "label":  "SWIFT FIN Message - MT306 Foreign Currency Option Exercise/Assignment Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt3xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt320",
+        "label":  "SWIFT FIN Message - MT320 Fixed Loan/Deposit Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt3xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt330",
+        "label":  "SWIFT FIN Message - MT330 Interest Rate Swap Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt3xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt340",
+        "label":  "SWIFT FIN Message - MT340 Forward Rate Agreement Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt3xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt341",
+        "label":  "SWIFT FIN Message - MT341 Forward Rate Agreement Detailed Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt3xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt350",
+        "label":  "SWIFT FIN Message - MT350 Advice of Loan/Deposit Interest Payment",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt3xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt360",
+        "label":  "SWIFT FIN Message - MT360 Interest Rate Swap Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt3xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt361",
+        "label":  "SWIFT FIN Message - MT361 Cross Currency Interest Rate Swap Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt3xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt362",
+        "label":  "SWIFT FIN Message - MT362 Interest Rate Cap/Floor Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt3xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt390",
+        "label":  "SWIFT FIN Message - MT390 Advice of Charges, Interest and Other Adjustments",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt3xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt391",
+        "label":  "SWIFT FIN Message - MT391 Request for Payment of Charges, Interest and Other Expenses",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt3xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt392",
+        "label":  "SWIFT FIN Message - MT392 Request for Cancellation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt3xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt395",
+        "label":  "SWIFT FIN Message - MT395 Queries",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt3xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt396",
+        "label":  "SWIFT FIN Message - MT396 Answers",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt3xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt399",
+        "label":  "SWIFT FIN Message - MT399 Free Format Message",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt3xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt3xx",
+        "label":  "SWIFT FIN MT3xx - Treasury Markets",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mtxxx",
+        "kind":  "category"
+    },
+    {
+        "id":  "swift-mt400",
+        "label":  "SWIFT FIN Message - MT400 Advice of Payment",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt4xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt410",
+        "label":  "SWIFT FIN Message - MT410 Acknowledgement",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt4xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt412",
+        "label":  "SWIFT FIN Message - MT412 Advice of Acceptance",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt4xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt416",
+        "label":  "SWIFT FIN Message - MT416 Advice of Non-Payment/Non-Acceptance",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt4xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt420",
+        "label":  "SWIFT FIN Message - MT420 Tracer",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt4xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt422",
+        "label":  "SWIFT FIN Message - MT422 Advice of Fate and Request for Instructions",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt4xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt430",
+        "label":  "SWIFT FIN Message - MT430 Amendment of Instructions",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt4xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt450",
+        "label":  "SWIFT FIN Message - MT450 Cash Letter Advice",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt4xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt455",
+        "label":  "SWIFT FIN Message - MT455 Cash Letter Adjustment Advice",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt4xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt456",
+        "label":  "SWIFT FIN Message - MT456 Advice of Dishonour",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt4xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt490",
+        "label":  "SWIFT FIN Message - MT490 Advice of Charges, Interest and Other Adjustments",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt4xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt491",
+        "label":  "SWIFT FIN Message - MT491 Request for Payment of Charges, Interest and Other Expenses",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt4xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt492",
+        "label":  "SWIFT FIN Message - MT492 Request for Cancellation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt4xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt495",
+        "label":  "SWIFT FIN Message - MT495 Queries",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt4xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt496",
+        "label":  "SWIFT FIN Message - MT496 Answers",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt4xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt499",
+        "label":  "SWIFT FIN Message - MT499 Free Format Message",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt4xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt4xx",
+        "label":  "SWIFT FIN MT4xx - Collections and Cash Letters",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mtxxx",
+        "kind":  "category"
+    },
+    {
+        "id":  "swift-mt500",
+        "label":  "SWIFT FIN Message - MT500 Instruction to Register",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt501",
+        "label":  "SWIFT FIN Message - MT501 Confirmation of Registration",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt502",
+        "label":  "SWIFT FIN Message - MT502 Order to Buy or Sell",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt503",
+        "label":  "SWIFT FIN Message - MT503 Collateral Instructions and Statement",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt504",
+        "label":  "SWIFT FIN Message - MT504 Collateral Allocation and Substitution Instruction",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt505",
+        "label":  "SWIFT FIN Message - MT505 Report of Purchase or Sale of Securities",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt506",
+        "label":  "SWIFT FIN Message - MT506 Statement of Payments Against Securities",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt507",
+        "label":  "SWIFT FIN Message - MT507 Notification to Receive Securities",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt508",
+        "label":  "SWIFT FIN Message - MT508 Notification to Deliver Securities",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt509",
+        "label":  "SWIFT FIN Message - MT509 Trade Status Message",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt510",
+        "label":  "SWIFT FIN Message - MT510 Status Advice on Registration",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt515",
+        "label":  "SWIFT FIN Message - MT515 Client Confirmation of Purchase or Sale",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt518",
+        "label":  "SWIFT FIN Message - MT518 Market-Side Securities Trade Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt524",
+        "label":  "SWIFT FIN Message - MT524 Adjustment Advice",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt527",
+        "label":  "SWIFT FIN Message - MT527 Triparty Collateral and Exposure Statement",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt528",
+        "label":  "SWIFT FIN Message - MT528 Statement of Pending Transactions",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt530",
+        "label":  "SWIFT FIN Message - MT530 Transaction Processing Command",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt535",
+        "label":  "SWIFT FIN Message - MT535 Statement of Holdings",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt536",
+        "label":  "SWIFT FIN Message - MT536 Statement of Transactions",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt537",
+        "label":  "SWIFT FIN Message - MT537 Statement of Pending Transactions",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt538",
+        "label":  "SWIFT FIN Message - MT538 Statement of Intra-Position Movements",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt540",
+        "label":  "SWIFT FIN Message - MT540 Receive Free",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt541",
+        "label":  "SWIFT FIN Message - MT541 Receive Against Payment",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt542",
+        "label":  "SWIFT FIN Message - MT542 Deliver Free",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt543",
+        "label":  "SWIFT FIN Message - MT543 Deliver Against Payment",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt544",
+        "label":  "SWIFT FIN Message - MT544 Receive Free Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt545",
+        "label":  "SWIFT FIN Message - MT545 Receive Against Payment Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt546",
+        "label":  "SWIFT FIN Message - MT546 Deliver Free Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt547",
+        "label":  "SWIFT FIN Message - MT547 Deliver Against Payment Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt548",
+        "label":  "SWIFT FIN Message - MT548 Settlement Status and Processing Advice",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt549",
+        "label":  "SWIFT FIN Message - MT549 Allegement Message",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt558",
+        "label":  "SWIFT FIN Message - MT558 Triparty Collateral Instruction",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt564",
+        "label":  "SWIFT FIN Message - MT564 Corporate Action Notification",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt565",
+        "label":  "SWIFT FIN Message - MT565 Corporate Action Instruction",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt566",
+        "label":  "SWIFT FIN Message - MT566 Corporate Action Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt567",
+        "label":  "SWIFT FIN Message - MT567 Corporate Action Status and Processing Advice",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt568",
+        "label":  "SWIFT FIN Message - MT568 Narrative",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt569",
+        "label":  "SWIFT FIN Message - MT569 Triparty Collateral and Exposure Statement",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt574",
+        "label":  "SWIFT FIN Message - MT574 Cash Withdrawal/Deposit Notification",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt576",
+        "label":  "SWIFT FIN Message - MT576 Statement of Allocated Securities and Collateral",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt578",
+        "label":  "SWIFT FIN Message - MT578 Settlement Allegement",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt586",
+        "label":  "SWIFT FIN Message - MT586 Statement of Fees",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt590",
+        "label":  "SWIFT FIN Message - MT590 Advice of Charges, Interest and Other Adjustments",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt595",
+        "label":  "SWIFT FIN Message - MT595 Queries",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt596",
+        "label":  "SWIFT FIN Message - MT596 Answers",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt599",
+        "label":  "SWIFT FIN Message - MT599 Free Format Message",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt5xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt5xx",
+        "label":  "SWIFT FIN MT5xx - Securities Markets",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mtxxx",
+        "kind":  "category"
+    },
+    {
+        "id":  "swift-mt600",
+        "label":  "SWIFT FIN Message - MT600 Commodity Option Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt6xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt601",
+        "label":  "SWIFT FIN Message - MT601 Commodity Option Exercise/Assignment Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt6xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt604",
+        "label":  "SWIFT FIN Message - MT604 Commodity Trade Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt6xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt605",
+        "label":  "SWIFT FIN Message - MT605 Commodity Confirmation of Exercise/Assignment",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt6xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt606",
+        "label":  "SWIFT FIN Message - MT606 Commodity Swap Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt6xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt607",
+        "label":  "SWIFT FIN Message - MT607 Commodity Forward Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt6xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt608",
+        "label":  "SWIFT FIN Message - MT608 Commodity Precious Metals Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt6xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt609",
+        "label":  "SWIFT FIN Message - MT609 Commodity Allocation and Settlement Details",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt6xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt620",
+        "label":  "SWIFT FIN Message - MT620 Precious Metal Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt6xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt621",
+        "label":  "SWIFT FIN Message - MT621 Precious Metal Allocation and Settlement Details",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt6xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt649",
+        "label":  "SWIFT FIN Message - MT649 Free Format Commodity Message",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt6xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt690",
+        "label":  "SWIFT FIN Message - MT690 Advice of Charges, Interest and Other Adjustments",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt6xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt691",
+        "label":  "SWIFT FIN Message - MT691 Request for Payment of Charges, Interest and Other Expenses",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt6xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt695",
+        "label":  "SWIFT FIN Message - MT695 Queries",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt6xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt696",
+        "label":  "SWIFT FIN Message - MT696 Answers",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt6xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt699",
+        "label":  "SWIFT FIN Message - MT699 Free Format Message",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt6xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt6xx",
+        "label":  "SWIFT FIN MT6xx - Metals and Syndications",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mtxxx",
+        "kind":  "category"
+    },
+    {
+        "id":  "swift-mt700",
+        "label":  "SWIFT FIN Message - MT700 Issue of a Documentary Credit",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt701",
+        "label":  "SWIFT FIN Message - MT701 Issue of a Documentary Credit",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt705",
+        "label":  "SWIFT FIN Message - MT705 Pre-Advice of a Documentary Credit",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt707",
+        "label":  "SWIFT FIN Message - MT707 Amendment to a Documentary Credit",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt710",
+        "label":  "SWIFT FIN Message - MT710 Advice of a Documentary Credit",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt720",
+        "label":  "SWIFT FIN Message - MT720 Transfer of a Documentary Credit",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt721",
+        "label":  "SWIFT FIN Message - MT721 Transfer of a Documentary Credit",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt730",
+        "label":  "SWIFT FIN Message - MT730 Acknowledgement",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt732",
+        "label":  "SWIFT FIN Message - MT732 Advice of Discharge",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt734",
+        "label":  "SWIFT FIN Message - MT734 Advice of Refusal",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt740",
+        "label":  "SWIFT FIN Message - MT740 Authorization to Reimburse",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt742",
+        "label":  "SWIFT FIN Message - MT742 Reimbursement Claim",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt747",
+        "label":  "SWIFT FIN Message - MT747 Amendment to an Authorization to Reimburse",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt750",
+        "label":  "SWIFT FIN Message - MT750 Advice of Discrepancy",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt752",
+        "label":  "SWIFT FIN Message - MT752 Authorization to Pay, Accept or Negotiate",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt754",
+        "label":  "SWIFT FIN Message - MT754 Advice of Payment/Acceptance/Negotiation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt756",
+        "label":  "SWIFT FIN Message - MT756 Advice of Reimbursement or Payment",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt759",
+        "label":  "SWIFT FIN Message - MT759 Ancillary Trade Structured Message",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt760",
+        "label":  "SWIFT FIN Message - MT760 Guarantee or Standby Letter of Credit",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt767",
+        "label":  "SWIFT FIN Message - MT767 Amendment to a Guarantee or Standby Letter of Credit",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt768",
+        "label":  "SWIFT FIN Message - MT768 Acknowledgement of a Guarantee or Standby Letter of Credit",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt769",
+        "label":  "SWIFT FIN Message - MT769 Advice of Reduction or Release",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt790",
+        "label":  "SWIFT FIN Message - MT790 Advice of Charges, Interest and Other Adjustments",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt791",
+        "label":  "SWIFT FIN Message - MT791 Request for Payment of Charges, Interest and Other Expenses",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt792",
+        "label":  "SWIFT FIN Message - MT792 Request for Cancellation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt795",
+        "label":  "SWIFT FIN Message - MT795 Queries",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt796",
+        "label":  "SWIFT FIN Message - MT796 Answers",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt799",
+        "label":  "SWIFT FIN Message - MT799 Free Format Message",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt7xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt7xx",
+        "label":  "SWIFT FIN MT7xx - Documentary Credits and Guarantees",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mtxxx",
+        "kind":  "category"
+    },
+    {
+        "id":  "swift-mt800",
+        "label":  "SWIFT FIN Message - MT800 Travellers Cheques Letter of Acknowledgement",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt8xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt801",
+        "label":  "SWIFT FIN Message - MT801 Travellers Cheques Adjustment Advice",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt8xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt802",
+        "label":  "SWIFT FIN Message - MT802 Travellers Cheques Settlement Confirmation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt8xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt810",
+        "label":  "SWIFT FIN Message - MT810 Travellers Cheques Advice of Reimbursement",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt8xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt812",
+        "label":  "SWIFT FIN Message - MT812 Travellers Cheques Advice of Settlement",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt8xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt813",
+        "label":  "SWIFT FIN Message - MT813 Travellers Cheques Demand for Payment",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt8xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt820",
+        "label":  "SWIFT FIN Message - MT820 Travellers Cheques Services Message",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt8xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt890",
+        "label":  "SWIFT FIN Message - MT890 Advice of Charges, Interest and Other Adjustments",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt8xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt891",
+        "label":  "SWIFT FIN Message - MT891 Request for Payment of Charges, Interest and Other Expenses",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt8xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt892",
+        "label":  "SWIFT FIN Message - MT892 Request for Cancellation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt8xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt895",
+        "label":  "SWIFT FIN Message - MT895 Queries",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt8xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt896",
+        "label":  "SWIFT FIN Message - MT896 Answers",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt8xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt899",
+        "label":  "SWIFT FIN Message - MT899 Free Format Message",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt8xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt8xx",
+        "label":  "SWIFT FIN MT8xx - Travellers Cheques",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mtxxx",
+        "kind":  "category"
+    },
+    {
+        "id":  "swift-mt900",
+        "label":  "SWIFT FIN Message - MT900 Confirmation of Debit",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt9xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt910",
+        "label":  "SWIFT FIN Message - MT910 Confirmation of Credit",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt9xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt920",
+        "label":  "SWIFT FIN Message - MT920 Request Message",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt9xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt935",
+        "label":  "SWIFT FIN Message - MT935 Rate Change Advice",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt9xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt940",
+        "label":  "SWIFT FIN Message - MT940 Customer Statement Message",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt9xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt941",
+        "label":  "SWIFT FIN Message - MT941 Balance Report",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt9xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt942",
+        "label":  "SWIFT FIN Message - MT942 Interim Transaction Report",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt9xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt950",
+        "label":  "SWIFT FIN Message - MT950 Statement Message",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt9xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt970",
+        "label":  "SWIFT FIN Message - MT970 Cash Reporting Request",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt9xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt971",
+        "label":  "SWIFT FIN Message - MT971 Balance Reporting Request",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt9xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt972",
+        "label":  "SWIFT FIN Message - MT972 Request for Transaction(s)",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt9xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt973",
+        "label":  "SWIFT FIN Message - MT973 Status Request Message",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt9xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt985",
+        "label":  "SWIFT FIN Message - MT985 Status Report",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt9xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt986",
+        "label":  "SWIFT FIN Message - MT986 Statement of Fees",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt9xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt990",
+        "label":  "SWIFT FIN Message - MT990 Advice of Charges, Interest and Other Adjustments",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt9xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt992",
+        "label":  "SWIFT FIN Message - MT992 Request for Cancellation",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt9xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt995",
+        "label":  "SWIFT FIN Message - MT995 Queries",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt9xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt996",
+        "label":  "SWIFT FIN Message - MT996 Answers",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt9xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt998",
+        "label":  "SWIFT FIN Message - MT998 Status Message",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt9xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt999",
+        "label":  "SWIFT FIN Message - MT999 Free Format Message",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mt9xx",
+        "kind":  "message"
+    },
+    {
+        "id":  "swift-mt9xx",
+        "label":  "SWIFT FIN MT9xx - Cash Management and Customer Status",
+        "categoryId":  "legacyswift",
+        "builtin":  false,
+        "parentTypeId":  "swift-mtxxx",
+        "kind":  "category"
+    },
+    {
+        "label":  "SWIFT FIN MT Messages - All Categories (MTxxx)",
+        "categoryId":  "legacyswift",
+        "id":  "swift-mtxxx",
+        "builtin":  false,
+        "kind":  "category"
+    }
 ]

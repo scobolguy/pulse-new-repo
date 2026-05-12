@@ -1,0 +1,16 @@
+{
+  "messageType": "MT190",
+  "description": "Advice of Charges, Interest and Other Adjustments",
+  "finEnvelope": {
+    "block4": {
+      "fields": {
+        "20": { "name": "TransactionReferenceNumber", "required": true },
+        "21": { "name": "RelatedReference", "required": false },
+        "32B": { "name": "CurrencyAmount", "required": true },
+        "52A": { "name": "OrderingInstitution", "required": false },
+        "57A": { "name": "AccountWithInstitution", "required": false },
+        "72": { "name": "SenderToReceiverInformation", "required": false }
+      }
+    }
+  }
+}

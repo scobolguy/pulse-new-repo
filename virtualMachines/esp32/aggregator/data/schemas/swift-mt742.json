@@ -1,0 +1,12 @@
+{
+  "messageType": "MT742",
+  "description": "Reimbursement Claim",
+  "finEnvelope": { "block4": { "fields": {
+    "20": { "name": "ClaimingBankReference", "required": true },
+    "21": { "name": "ReimbursingBankReference", "required": true },
+    "32B": { "name": "ClaimedAmount", "required": true },
+    "52A": { "name": "IssuingBank", "required": false },
+    "57A": { "name": "AccountWithInstitution", "required": false },
+    "72": { "name": "SenderToReceiverInformation", "required": false }
+  } } }
+}

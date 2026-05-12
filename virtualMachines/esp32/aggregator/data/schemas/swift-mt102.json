@@ -1,0 +1,28 @@
+{
+  "messageType": "MT102",
+  "description": "Multiple Customer Credit Transfer",
+  "finEnvelope": {
+    "block4": {
+      "fields": {
+        "20": { "name": "TransactionReferenceNumber", "required": true },
+        "23": { "name": "BankOperationCode", "required": false },
+        "32A": { "name": "ValueDateCurrencyTotalAmount", "required": true },
+        "50A": { "name": "OrderingCustomer", "required": false },
+        "52A": { "name": "OrderingInstitution", "required": false },
+        "56A": { "name": "IntermediaryInstitution", "required": false },
+        "57A": { "name": "AccountWithInstitution", "required": false },
+        "58A": { "name": "BeneficiaryInstitution", "required": false },
+        "72": { "name": "SenderToReceiverInformation", "required": false }
+      },
+      "transactions": {
+        "fields": {
+          "21": { "name": "TransactionReference", "required": true },
+          "32B": { "name": "CurrencyAmount", "required": true },
+          "59": { "name": "BeneficiaryCustomer", "required": true },
+          "70": { "name": "RemittanceInformation", "required": false },
+          "71A": { "name": "DetailsOfCharges", "required": true }
+        }
+      }
+    }
+  }
+}

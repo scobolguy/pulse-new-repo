@@ -1,0 +1,61 @@
+{
+  "id": "mt202-to-pacs",
+  "name": "MT202 to PACS",
+  "description": "Mapping rules from SWIFT FIN MT202 to ISO 20022 pacs.009.",
+  "sourceTypeId": "swift-mt202",
+  "targetTypeId": "pacs",
+  "sourceSchemaPath": "schemas/swift-mt202.json",
+  "targetSchemaPath": "schemas/pacs.009.001.13.xsd",
+  "rules": [
+    {
+      "sourcePath": "finEnvelope.block4.fields.20",
+      "targetPath": "Document.FIToFICdtTrf.GrpHdr.MsgId",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.21",
+      "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.PmtId.EndToEndId",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.32A.components.valueDate",
+      "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrBkSttlmDt",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.32A.components.currency",
+      "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.32A.components.amount",
+      "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.52A",
+      "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.56A",
+      "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrmyAgt1.FinInstnId.BICFI",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.57A",
+      "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.58A",
+      "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.Cdtr.FinInstnId.BICFI",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.72",
+      "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.InstrForNxtAgt.InstrInf",
+      "kind": "leaf"
+    }
+  ]
+}

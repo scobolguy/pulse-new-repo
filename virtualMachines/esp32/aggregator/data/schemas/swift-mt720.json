@@ -1,0 +1,14 @@
+{
+  "messageType": "MT720",
+  "description": "Transfer of a Documentary Credit",
+  "finEnvelope": { "block4": { "fields": {
+    "20": { "name": "SenderReference", "required": true },
+    "21": { "name": "DocumentaryCreditNumber", "required": true },
+    "32B": { "name": "CurrencyCodeAmount", "required": true },
+    "50": { "name": "FirstBeneficiary", "required": true },
+    "59": { "name": "SecondBeneficiary", "required": true },
+    "39A": { "name": "PercentageCreditAmountTolerance", "required": false },
+    "40A": { "name": "FormOfDocumentaryCredit", "required": false },
+    "72": { "name": "SenderToReceiverInformation", "required": false }
+  } } }
+}

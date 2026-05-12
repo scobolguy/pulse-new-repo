@@ -1,0 +1,11 @@
+{
+  "messageType": "MT759",
+  "description": "Ancillary Trade Structured Message",
+  "finEnvelope": { "block4": { "fields": {
+    "20": { "name": "Reference", "required": true },
+    "21": { "name": "RelatedReference", "required": false },
+    "22": { "name": "FunctionOfMessage", "required": false },
+    "79": { "name": "Narrative", "required": true },
+    "72": { "name": "SenderToReceiverInformation", "required": false }
+  } } }
+}

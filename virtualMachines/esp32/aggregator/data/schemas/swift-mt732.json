@@ -1,0 +1,10 @@
+{
+  "messageType": "MT732",
+  "description": "Advice of Discharge",
+  "finEnvelope": { "block4": { "fields": {
+    "20": { "name": "SenderReference", "required": true },
+    "21": { "name": "DocumentaryCreditNumber", "required": false },
+    "30": { "name": "DateOfDischarge", "required": false },
+    "79": { "name": "Narrative", "required": true }
+  } } }
+}

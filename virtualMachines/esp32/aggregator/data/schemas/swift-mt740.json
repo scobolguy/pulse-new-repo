@@ -1,0 +1,13 @@
+{
+  "messageType": "MT740",
+  "description": "Authorization to Reimburse",
+  "finEnvelope": { "block4": { "fields": {
+    "20": { "name": "SendingBankReference", "required": true },
+    "21": { "name": "DocumentaryCreditNumber", "required": true },
+    "31C": { "name": "DateOfIssue", "required": false },
+    "31D": { "name": "ExpiryDateAndPlace", "required": false },
+    "32B": { "name": "CurrencyCodeAmount", "required": true },
+    "58A": { "name": "BeneficiaryBank", "required": false },
+    "72": { "name": "SenderToReceiverInformation", "required": false }
+  } } }
+}

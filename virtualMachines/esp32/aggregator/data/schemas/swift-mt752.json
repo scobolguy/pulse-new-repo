@@ -1,0 +1,12 @@
+{
+  "messageType": "MT752",
+  "description": "Authorization to Pay, Accept or Negotiate",
+  "finEnvelope": { "block4": { "fields": {
+    "20": { "name": "SendingBankReference", "required": true },
+    "21": { "name": "RelatedReference", "required": true },
+    "32B": { "name": "AuthorizedAmount", "required": true },
+    "53A": { "name": "SenderCorrespondent", "required": false },
+    "57A": { "name": "AccountWithInstitution", "required": false },
+    "72": { "name": "SenderToReceiverInformation", "required": false }
+  } } }
+}

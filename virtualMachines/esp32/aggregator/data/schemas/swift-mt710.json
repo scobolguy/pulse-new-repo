@@ -1,0 +1,14 @@
+{
+  "messageType": "MT710",
+  "description": "Advice of a Third Bank's Documentary Credit",
+  "finEnvelope": { "block4": { "fields": {
+    "20": { "name": "SendingBankReference", "required": true },
+    "21": { "name": "DocumentaryCreditNumber", "required": true },
+    "30": { "name": "DateOfMessageBeingAdvised", "required": true },
+    "31D": { "name": "DateAndPlaceOfExpiry", "required": true },
+    "50": { "name": "Applicant", "required": false },
+    "59": { "name": "Beneficiary", "required": true },
+    "32B": { "name": "CurrencyCodeAmount", "required": true },
+    "71B": { "name": "Charges", "required": false }
+  } } }
+}

@@ -1,0 +1,14 @@
+{
+  "messageType": "MT700",
+  "description": "Issue of a Documentary Credit",
+  "finEnvelope": { "block4": { "fields": {
+    "20": { "name": "DocumentaryCreditNumber", "required": true, "type": "string", "format": "16x" },
+    "31C": { "name": "DateOfIssue", "required": true, "type": "date", "format": "6!n (YYMMDD)" },
+    "40A": { "name": "FormOfDocumentaryCredit", "required": true, "type": "code", "format": "24x" },
+    "31D": { "name": "DateAndPlaceOfExpiry", "required": true, "type": "composite", "format": "6!n29x" },
+    "50": { "name": "Applicant", "required": true, "type": "party", "format": "4*35x" },
+    "59": { "name": "Beneficiary", "required": true, "type": "party", "format": "4*35x" },
+    "32B": { "name": "CurrencyCodeAmount", "required": true, "type": "amount", "format": "3!a15d" },
+    "41A": { "name": "AvailableWithBy", "required": true, "type": "bic+code", "format": "4!a2!a2!c[3!c]/1!a" }
+  } } }
+}

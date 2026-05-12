@@ -1,0 +1,70 @@
+﻿{
+    "messageType":  "MT607",
+    "description":  "SWIFT FIN Message - MT607 Commodity Forward Confirmation",
+    "finEnvelope":  {
+                        "block4":  {
+                                       "fields":  {
+                                                      "20":  {
+                                                                 "format":  "16x",
+                                                                 "name":  "SenderReference",
+                                                                 "type":  "string",
+                                                                 "required":  true
+                                                             },
+                                                      "21":  {
+                                                                 "format":  "16x",
+                                                                 "name":  "RelatedReference",
+                                                                 "type":  "string",
+                                                                 "required":  false
+                                                             },
+                                                      "22A":  {
+                                                                  "format":  "4!c",
+                                                                  "name":  "TypeOfOperation",
+                                                                  "type":  "code",
+                                                                  "required":  false
+                                                              },
+                                                      "22B":  {
+                                                                  "format":  "4!c",
+                                                                  "name":  "TypeOfEvent",
+                                                                  "type":  "code",
+                                                                  "required":  false
+                                                              },
+                                                      "30":  {
+                                                                 "format":  "6!n",
+                                                                 "name":  "Date",
+                                                                 "type":  "date",
+                                                                 "required":  false
+                                                             },
+                                                      "32B":  {
+                                                                  "format":  "3!a15d",
+                                                                  "name":  "CurrencyCodeAmount",
+                                                                  "type":  "amount",
+                                                                  "required":  false
+                                                              },
+                                                      "33B":  {
+                                                                  "format":  "3!a15d",
+                                                                  "name":  "CurrencyOriginalAmount",
+                                                                  "type":  "amount",
+                                                                  "required":  false
+                                                              },
+                                                      "57A":  {
+                                                                  "format":  "4!a2!a2!c[3!c]",
+                                                                  "name":  "AccountWithInstitution",
+                                                                  "type":  "bic",
+                                                                  "required":  false
+                                                              },
+                                                      "72":  {
+                                                                 "format":  "6*35x",
+                                                                 "name":  "SenderToReceiverInformation",
+                                                                 "type":  "text",
+                                                                 "required":  false
+                                                             },
+                                                      "79":  {
+                                                                 "format":  "35*50x",
+                                                                 "name":  "Narrative",
+                                                                 "type":  "text",
+                                                                 "required":  false
+                                                             }
+                                                  }
+                                   }
+                    }
+}

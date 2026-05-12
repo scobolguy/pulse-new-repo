@@ -1,0 +1,14 @@
+{
+  "messageType": "MT195",
+  "description": "Queries",
+  "finEnvelope": {
+    "block4": {
+      "fields": {
+        "20": { "name": "TransactionReferenceNumber", "required": true },
+        "21": { "name": "RelatedReference", "required": false },
+        "75": { "name": "Queries", "required": true },
+        "79": { "name": "Narrative", "required": false }
+      }
+    }
+  }
+}

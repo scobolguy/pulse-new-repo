@@ -1,0 +1,70 @@
+﻿{
+    "messageType":  "MT546",
+    "description":  "SWIFT FIN Message - MT546 Deliver Free Confirmation",
+    "finEnvelope":  {
+                        "block4":  {
+                                       "fields":  {
+                                                      "20":  {
+                                                                 "format":  "16x",
+                                                                 "name":  "SenderReference",
+                                                                 "type":  "string",
+                                                                 "required":  true
+                                                             },
+                                                      "23":  {
+                                                                 "format":  "4!c",
+                                                                 "name":  "MessageFunction",
+                                                                 "type":  "code",
+                                                                 "required":  false
+                                                             },
+                                                      "35B":  {
+                                                                  "format":  "4*35x",
+                                                                  "name":  "IdentificationOfFinancialInstrument",
+                                                                  "type":  "instrument",
+                                                                  "required":  false
+                                                              },
+                                                      "36":  {
+                                                                 "format":  "15d",
+                                                                 "name":  "QuantityOfFinancialInstrument",
+                                                                 "type":  "number",
+                                                                 "required":  false
+                                                             },
+                                                      "22F":  {
+                                                                  "format":  "4!c[/30x]",
+                                                                  "name":  "Indicator",
+                                                                  "type":  "code",
+                                                                  "required":  false
+                                                              },
+                                                      "97A":  {
+                                                                  "format":  "35x",
+                                                                  "name":  "Account",
+                                                                  "type":  "account",
+                                                                  "required":  false
+                                                              },
+                                                      "16R":  {
+                                                                  "format":  "3!c",
+                                                                  "name":  "StartOfBlock",
+                                                                  "type":  "marker",
+                                                                  "required":  false
+                                                              },
+                                                      "16S":  {
+                                                                  "format":  "3!c",
+                                                                  "name":  "EndOfBlock",
+                                                                  "type":  "marker",
+                                                                  "required":  false
+                                                              },
+                                                      "70E":  {
+                                                                  "format":  "10*35x",
+                                                                  "name":  "Narrative",
+                                                                  "type":  "text",
+                                                                  "required":  false
+                                                              },
+                                                      "98A":  {
+                                                                  "format":  "8!n",
+                                                                  "name":  "DateTime",
+                                                                  "type":  "date",
+                                                                  "required":  false
+                                                              }
+                                                  }
+                                   }
+                    }
+}

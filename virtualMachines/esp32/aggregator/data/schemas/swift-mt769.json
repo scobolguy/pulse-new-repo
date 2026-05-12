@@ -1,0 +1,11 @@
+{
+  "messageType": "MT769",
+  "description": "Advice of Reduction or Release",
+  "finEnvelope": { "block4": { "fields": {
+    "20": { "name": "TransactionReferenceNumber", "required": true },
+    "21": { "name": "RelatedReference", "required": true },
+    "30": { "name": "DateOfAdvice", "required": true },
+    "32B": { "name": "ReducedOrReleasedAmount", "required": false },
+    "79": { "name": "Narrative", "required": true }
+  } } }
+}

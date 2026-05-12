@@ -1,0 +1,17 @@
+{
+  "messageType": "MT111",
+  "description": "Request for Stop Payment of a Cheque",
+  "finEnvelope": {
+    "block4": {
+      "fields": {
+        "20": { "name": "SenderReference", "required": true },
+        "21": { "name": "ChequeReference", "required": true },
+        "30": { "name": "DateOfIssue", "required": false },
+        "32A": { "name": "ValueDateCurrencyAmount", "required": false },
+        "50": { "name": "OrderingCustomer", "required": false },
+        "59": { "name": "BeneficiaryCustomer", "required": false },
+        "72": { "name": "ReasonAndInstructions", "required": true }
+      }
+    }
+  }
+}

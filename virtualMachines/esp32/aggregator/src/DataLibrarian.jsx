@@ -270,12 +270,68 @@ export default function DataLibrarian() {
     [dataTypes, schemaSearch]
   );
 
-  const typeTreeItems = useMemo(() => filteredTypes.map(typeItem => ({
-    ...typeItem,
-    formats: filteredSchemas
-      .filter(schema => (schema.typeId || schema.name) === typeItem.id)
-      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))),
-  })), [filteredTypes, filteredSchemas]);
+  const typeTreeItems = useMemo(() => {
+    const itemById = new Map();
+    for (const typeItem of filteredTypes) {
+      const id = String(typeItem.id || '').trim();
+      if (!id) continue;
+      itemById.set(id, {
+        ...typeItem,
+        id,
+        formats: filteredSchemas
+          .filter(schema => String(schema.typeId || schema.name) === id)
+          .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))),
+      });
+    }
+
+    const childrenByParentId = new Map();
+    const rootIds = [];
+    for (const item of itemById.values()) {
+      const candidateParentIds = [];
+      if (item.parentTypeId) candidateParentIds.push(String(item.parentTypeId));
+      if (item.categoryId && item.categoryId !== item.id) candidateParentIds.push(String(item.categoryId));
+      const parentId = candidateParentIds.find(parent => itemById.has(parent));
+
+      if (!parentId) {
+        rootIds.push(item.id);
+        continue;
+      }
+      if (!childrenByParentId.has(parentId)) childrenByParentId.set(parentId, []);
+      childrenByParentId.get(parentId).push(item.id);
+    }
+
+    for (const [parentId, childIds] of childrenByParentId.entries()) {
+      childrenByParentId.set(parentId, childIds.sort((a, b) => a.localeCompare(b)));
+    }
+
+    const sortedRootIds = rootIds.sort((a, b) => a.localeCompare(b));
+    const flattened = [];
+
+    function visit(id, depth, ancestors) {
+      const item = itemById.get(id);
+      if (!item) return;
+      const childIds = childrenByParentId.get(id) || [];
+      flattened.push({
+        ...item,
+        depth,
+        ancestors,
+        hasChildren: childIds.length > 0,
+      });
+      for (const childId of childIds) {
+        visit(childId, depth + 1, [...ancestors, id]);
+      }
+    }
+
+    for (const rootId of sortedRootIds) {
+      visit(rootId, 0, []);
+    }
+
+    return flattened;
+  }, [filteredTypes, filteredSchemas]);
+
+  const visibleTypeTreeItems = useMemo(() => {
+    return typeTreeItems.filter(item => item.ancestors.every(ancestorId => itemExpanded[`type:${ancestorId}`]));
+  }, [typeTreeItems, itemExpanded]);
 
   const untypedSchemas = useMemo(() => {
     const knownTypeIds = new Set(filteredTypes.map(item => String(item.id || '').trim().toLowerCase()).filter(Boolean));
@@ -333,13 +389,17 @@ export default function DataLibrarian() {
   function renderStructureNode(node, keyPrefix = 'node') {
     if (!node) return null;
     const children = Array.isArray(node.children) ? node.children : [];
+    const enumValues = Array.isArray(node.enumValues) ? node.enumValues : [];
     return (
       <li key={`${keyPrefix}:${node.name}`} style={{ marginBottom: 2 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '1px 4px' }} aria-label={`${node.name}, ${children.length > 0 ? 'branch' : 'leaf'}, ${node.valueType || 'unknown'}`}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '1px 4px', flexWrap: 'wrap' }} aria-label={`${node.name}, ${children.length > 0 ? 'branch' : 'leaf'}, ${node.valueType || 'unknown'}${enumValues.length > 0 ? `, enum ${enumValues.join(', ')}` : ''}`}>
           <span style={{ width: 12, color: '#5a6b7b' }}>{children.length > 0 ? '▸' : '•'}</span>
           <span>{children.length > 0 ? '🌿' : '🍃'}</span>
           <span style={{ fontSize: 12 }}>{node.name}</span>
           <span style={{ fontSize: 10, color: '#777' }}>{node.valueType || 'unknown'}</span>
+          {enumValues.length > 0 && (
+            <span style={{ fontSize: 10, color: '#8a5a00' }}>enum: {enumValues.join(', ')}</span>
+          )}
         </div>
         {children.length > 0 && (
           <ul style={{ listStyle: 'none', paddingLeft: 20, marginTop: 2 }}>
@@ -468,12 +528,14 @@ export default function DataLibrarian() {
               >
                 <span style={{ width: 12, color: '#5a6b7b' }}>{treeExpanded.types ? '▾' : '▸'}</span>
                 <span>📁 Types</span>
-                <span style={{ fontSize: 11, color: '#777' }}>{typeTreeItems.length}</span>
+                <span style={{ fontSize: 11, color: '#777' }}>{filteredTypes.length}</span>
               </div>
               {treeExpanded.types && (
                 <ul style={{ listStyle: 'none', paddingLeft: 20, borderLeft: '1px solid #dfe6eb', marginLeft: 10, marginTop: 2 }}>
-                  {typeTreeItems.map(item => (
-                    <li key={item.id} style={{ marginBottom: 4, paddingLeft: 6 }}>
+                  {visibleTypeTreeItems.map(item => {
+                    const expandable = item.hasChildren || item.formats.length > 0;
+                    return (
+                    <li key={item.id} style={{ marginBottom: 4, paddingLeft: 6 + (item.depth * 16) }}>
                       <div
                         onClick={() => setItemExpanded(prev => ({ ...prev, [`type:${item.id}`]: !prev[`type:${item.id}`] }))}
                         style={{
@@ -487,13 +549,13 @@ export default function DataLibrarian() {
                           userSelect: 'none'
                         }}
                       >
-                        <span style={{ width: 12, color: '#5a6b7b' }}>{itemExpanded[`type:${item.id}`] ? '▾' : '▸'}</span>
-                        <span style={{ marginRight: 1 }}>🏷️</span>
+                        <span style={{ width: 12, color: '#5a6b7b' }}>{expandable ? (itemExpanded[`type:${item.id}`] ? '▾' : '▸') : '•'}</span>
+                        <span style={{ marginRight: 1 }}>{item.kind === 'category' ? '🗂️' : '🏷️'}</span>
                         <span style={{ fontWeight: 600, fontSize: 12 }}>{item.id}</span>
                         <span style={{ fontSize: 11, color: '#777' }}>{item.label}</span>
                         <span style={{ fontSize: 10, color: '#777' }}>{item.formats.length} format(s)</span>
                         <span style={{ fontSize: 10, borderRadius: 12, padding: '2px 8px', background: item.builtin ? '#eef2ff' : '#eaf7ee', color: item.builtin ? '#2f3b8f' : '#1d6b2a' }}>
-                          {item.builtin ? 'built-in' : 'forward defined'}
+                          {item.kind === 'category' ? 'category' : (item.builtin ? 'built-in' : 'forward defined')}
                         </span>
                       </div>
                       {itemExpanded[`type:${item.id}`] && (
@@ -571,11 +633,11 @@ export default function DataLibrarian() {
                               </li>
                             );
                           })}
-                          {item.formats.length === 0 && <li style={{ fontSize: 12, color: '#888', paddingLeft: 4 }}>No attached formats yet.</li>}
+                          {item.formats.length === 0 && !item.hasChildren && <li style={{ fontSize: 12, color: '#888', paddingLeft: 4 }}>No attached formats yet.</li>}
                         </ul>
                       )}
                     </li>
-                  ))}
+                  );})}
                   {filteredTypes.length === 0 && <li style={{ fontSize: 12, color: '#888' }}>No type definitions.</li>}
                 </ul>
               )}

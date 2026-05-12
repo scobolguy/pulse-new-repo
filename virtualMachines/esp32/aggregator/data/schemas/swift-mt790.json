@@ -1,0 +1,10 @@
+{
+  "messageType": "MT790",
+  "description": "Advice of Charges, Interest and Other Adjustments",
+  "finEnvelope": { "block4": { "fields": {
+    "20": { "name": "TransactionReferenceNumber", "required": true },
+    "21": { "name": "RelatedReference", "required": false },
+    "32B": { "name": "CurrencyCodeAmount", "required": false },
+    "79": { "name": "Narrative", "required": true }
+  } } }
+}

@@ -1,0 +1,13 @@
+{
+  "messageType": "MT767",
+  "description": "Amendment to a Guarantee or Standby Letter of Credit",
+  "finEnvelope": { "block4": { "fields": {
+    "20": { "name": "TransactionReferenceNumber", "required": true },
+    "21": { "name": "RelatedReference", "required": true },
+    "23": { "name": "FurtherIdentification", "required": false },
+    "30": { "name": "DateOfAmendment", "required": true },
+    "26E": { "name": "AmendmentNumber", "required": false },
+    "32B": { "name": "AmendedAmount", "required": false },
+    "79": { "name": "Narrative", "required": false }
+  } } }
+}

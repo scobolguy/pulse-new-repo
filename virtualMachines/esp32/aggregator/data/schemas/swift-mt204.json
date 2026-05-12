@@ -1,0 +1,17 @@
+{
+  "messageType": "MT204",
+  "description": "Financial Institution Transfer Execution Advice",
+  "finEnvelope": {
+    "block4": {
+      "fields": {
+        "20": { "name": "SenderReference", "required": true },
+        "21": { "name": "RelatedReference", "required": false },
+        "32A": { "name": "ValueDateCurrencyAmount", "required": true },
+        "52A": { "name": "OrderingInstitution", "required": false },
+        "57A": { "name": "AccountWithInstitution", "required": false },
+        "58A": { "name": "BeneficiaryInstitution", "required": true },
+        "72": { "name": "SenderToReceiverInformation", "required": false }
+      }
+    }
+  }
+}

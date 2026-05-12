@@ -1,0 +1,131 @@
+{
+  "messageType": "MT103",
+  "description": "SWIFT FIN MT103 Single Customer Credit Transfer",
+  "finEnvelope": {
+    "block1": {
+      "applicationId": "F",
+      "serviceId": "01",
+      "logicalTerminal": "BANKBEBBAXXX",
+      "sessionNumber": "0000",
+      "sequenceNumber": "000000"
+    },
+    "block2": {
+      "inputOutputId": "I",
+      "messageType": "103",
+      "destinationAddress": "BANKDEFFXXXX",
+      "priority": "N"
+    },
+    "block3": {
+      "optional": true,
+      "tags": {
+        "108": "MUR"
+      }
+    },
+    "block4": {
+      "fields": {
+        "20": {
+          "tag": "20",
+          "name": "SenderReference",
+          "format": "16x",
+          "required": true
+        },
+        "23B": {
+          "tag": "23B",
+          "name": "BankOperationCode",
+          "format": "4!c",
+          "required": true
+        },
+        "32A": {
+          "tag": "32A",
+          "name": "ValueDateCurrencyAmount",
+          "format": "6!n3!a15d",
+          "required": true,
+          "components": {
+            "valueDate": "YYMMDD",
+            "currency": "ISO4217",
+            "amount": "Decimal"
+          }
+        },
+        "33B": {
+          "tag": "33B",
+          "name": "CurrencyInstructedAmount",
+          "format": "3!a15d",
+          "required": false
+        },
+        "50A": {
+          "tag": "50A",
+          "name": "OrderingCustomerOptionA",
+          "format": "/34x and 4*35x",
+          "required": false
+        },
+        "50F": {
+          "tag": "50F",
+          "name": "OrderingCustomerOptionF",
+          "format": "4*35x",
+          "required": false
+        },
+        "50K": {
+          "tag": "50K",
+          "name": "OrderingCustomerOptionK",
+          "format": "/34x and 4*35x",
+          "required": false
+        },
+        "59": {
+          "tag": "59",
+          "name": "BeneficiaryCustomer",
+          "format": "/34x and 4*35x",
+          "required": true
+        },
+        "59A": {
+          "tag": "59A",
+          "name": "BeneficiaryCustomerOptionA",
+          "format": "4!a2!a2!c[3!c]",
+          "required": false
+        },
+        "70": {
+          "tag": "70",
+          "name": "RemittanceInformation",
+          "format": "4*35x",
+          "required": false
+        },
+        "71A": {
+          "tag": "71A",
+          "name": "DetailsOfCharges",
+          "format": "3!a",
+          "required": true
+        },
+        "71F": {
+          "tag": "71F",
+          "name": "SenderCharges",
+          "format": "3!a15d",
+          "required": false
+        },
+        "71G": {
+          "tag": "71G",
+          "name": "ReceiverCharges",
+          "format": "3!a15d",
+          "required": false
+        },
+        "72": {
+          "tag": "72",
+          "name": "SenderToReceiverInformation",
+          "format": "6*35x",
+          "required": false
+        },
+        "77B": {
+          "tag": "77B",
+          "name": "RegulatoryReporting",
+          "format": "3*35x",
+          "required": false
+        }
+      }
+    },
+    "block5": {
+      "optional": true,
+      "tags": {
+        "CHK": "Checksum",
+        "TNG": "Trailer"
+      }
+    }
+  }
+}

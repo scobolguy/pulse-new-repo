@@ -1,0 +1,14 @@
+{
+  "messageType": "MT192",
+  "description": "Request for Cancellation",
+  "finEnvelope": {
+    "block4": {
+      "fields": {
+        "20": { "name": "TransactionReferenceNumber", "required": true },
+        "21": { "name": "RelatedReference", "required": false },
+        "11S": { "name": "MessageInputReference", "required": false },
+        "79": { "name": "Narrative", "required": true }
+      }
+    }
+  }
+}

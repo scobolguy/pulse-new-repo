@@ -1904,6 +1904,10 @@ function registerRoutes(app) {
     return process.env.LIBRARIAN_URL || 'http://127.0.0.1:4100';
   }
 
+  function resolveMapperOrigin() {
+    return process.env.MAPPER_URL || 'http://127.0.0.1:4200';
+  }
+
   async function getAllowedDataTypeIds() {
     try {
       const response = await fetch(`${resolveLibrarianOrigin()}/api/librarian/data-types`, { method: 'GET' });
@@ -2183,6 +2187,7 @@ function registerRoutes(app) {
 
   // --- Proxy to data-librarian service ---
   const LIBRARIAN_ORIGIN = resolveLibrarianOrigin();
+  const MAPPER_ORIGIN = resolveMapperOrigin();
 
   // Binary upload route — must be registered before the generic JSON proxy below
   app.post('/api/librarian/upload/:dest', express.raw({ type: '*/*', limit: '50mb' }), async (req, res) => {
@@ -2221,6 +2226,30 @@ function registerRoutes(app) {
       }
     } catch (e) {
       res.status(502).json({ error: 'Librarian service unavailable', details: e.message });
+    }
+  });
+
+  // --- Proxy to data-mapper service ---
+  app.use('/api/mapper', async (req, res) => {
+    const query = req.search || (req.url.includes('?') ? '?' + req.url.split('?')[1] : '');
+    const url = `${MAPPER_ORIGIN}/api/mapper${req.path}${query}`;
+    try {
+      const method = req.method;
+      const hasBody = !['GET', 'HEAD'].includes(method);
+      const upstream = await fetch(url, {
+        method,
+        headers: { 'content-type': 'application/json' },
+        body: hasBody ? JSON.stringify(req.body) : undefined,
+      });
+      const contentType = upstream.headers.get('content-type') || '';
+      res.status(upstream.status);
+      if (contentType.includes('application/json')) {
+        res.json(await upstream.json());
+      } else {
+        res.send(await upstream.text());
+      }
+    } catch (e) {
+      res.status(502).json({ error: 'Mapper service unavailable', details: e.message });
     }
   });
   app.get('/status', (req, res) => {
@@ -2317,9 +2346,34 @@ try {
       console.warn(`[Librarian] Exited with code=${code} signal=${signal}`);
     }
   });
-  process.on('exit', () => librarian.kill());
-  process.on('SIGINT', () => { librarian.kill(); process.exit(); });
-  process.on('SIGTERM', () => { librarian.kill(); process.exit(); });
+
+  // --- Start Data Mapper as a child process ---
+  const mapperPath = fileURLToPath(new URL('./data-mapper.mjs', import.meta.url));
+  const mapper = spawn(process.execPath, [mapperPath], {
+    stdio: 'inherit',
+    env: { ...process.env },
+  });
+  mapper.on('error', err => console.error('[Mapper] Failed to start:', err.message));
+  mapper.on('exit', (code, signal) => {
+    if (code !== 0 && signal !== 'SIGTERM') {
+      console.warn(`[Mapper] Exited with code=${code} signal=${signal}`);
+    }
+  });
+
+  process.on('exit', () => {
+    librarian.kill();
+    mapper.kill();
+  });
+  process.on('SIGINT', () => {
+    librarian.kill();
+    mapper.kill();
+    process.exit();
+  });
+  process.on('SIGTERM', () => {
+    librarian.kill();
+    mapper.kill();
+    process.exit();
+  });
 
 } catch (err) {
   console.error('[ERROR] Backend failed to start:', err);

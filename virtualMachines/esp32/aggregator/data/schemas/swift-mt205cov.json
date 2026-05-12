@@ -1,0 +1,30 @@
+{
+  "messageType": "MT205COV",
+  "description": "Financial Institution Transfer Execution (Cover)",
+  "finEnvelope": {
+    "block4": {
+      "sequenceA": {
+        "fields": {
+          "20": { "name": "SenderReference", "required": true },
+          "21": { "name": "RelatedReference", "required": false },
+          "32A": { "name": "ValueDateCurrencyAmount", "required": true },
+          "52A": { "name": "OrderingInstitution", "required": false },
+          "53A": { "name": "SenderCorrespondent", "required": false },
+          "54A": { "name": "ReceiverCorrespondent", "required": false },
+          "56A": { "name": "IntermediaryInstitution", "required": false },
+          "57A": { "name": "AccountWithInstitution", "required": false },
+          "58A": { "name": "BeneficiaryInstitution", "required": true }
+        }
+      },
+      "sequenceB": {
+        "fields": {
+          "50A": { "name": "OrderingCustomer", "required": false },
+          "50F": { "name": "OrderingCustomerStructured", "required": false },
+          "59A": { "name": "BeneficiaryCustomer", "required": false },
+          "59": { "name": "BeneficiaryCustomerNoLetterOption", "required": false },
+          "72": { "name": "SenderToReceiverInformation", "required": false }
+        }
+      }
+    }
+  }
+}

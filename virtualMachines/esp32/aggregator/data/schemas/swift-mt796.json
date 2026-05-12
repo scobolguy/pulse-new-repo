@@ -1,0 +1,10 @@
+{
+  "messageType": "MT796",
+  "description": "Answers",
+  "finEnvelope": { "block4": { "fields": {
+    "20": { "name": "TransactionReferenceNumber", "required": true },
+    "21": { "name": "RelatedReference", "required": false },
+    "76": { "name": "Answers", "required": true },
+    "79": { "name": "Narrative", "required": false }
+  } } }
+}

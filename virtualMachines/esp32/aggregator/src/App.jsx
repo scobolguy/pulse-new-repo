@@ -2,12 +2,14 @@ import './App.css';
 import TopologyDashboard from './TopologyDashboard';
 import QueueManagerDashboard from './QueueManagerDashboard';
 import DataLibrarian from './DataLibrarian';
+import DataMapper from './DataMapper';
 import React, { useState } from 'react';
 
 const SCREENS = [
   { id: 'topology', label: 'Network Topology' },
   { id: 'queue', label: 'Queue Manager' },
   { id: 'librarian', label: 'Data Librarian' },
+  { id: 'mapper', label: 'Data Mapper' },
 ];
 
 function App() {
@@ -36,6 +38,7 @@ function App() {
       {screen === 'topology' && <TopologyDashboard />}
       {screen === 'queue' && <QueueManagerDashboard />}
       {screen === 'librarian' && <DataLibrarian />}
+      {screen === 'mapper' && <DataMapper />}
     </div>
   );
 }

@@ -1,0 +1,14 @@
+{
+  "messageType": "MT707",
+  "description": "Amendment to a Documentary Credit",
+  "finEnvelope": { "block4": { "fields": {
+    "20": { "name": "DocumentaryCreditNumber", "required": true },
+    "21": { "name": "ReferenceToOriginalMessage", "required": true },
+    "30": { "name": "DateOfAmendment", "required": true },
+    "26E": { "name": "AmendmentNumber", "required": true },
+    "31C": { "name": "DateOfIssue", "required": false },
+    "59": { "name": "Beneficiary", "required": false },
+    "32B": { "name": "IncreaseDecreaseAmount", "required": false },
+    "79": { "name": "Narrative", "required": false }
+  } } }
+}

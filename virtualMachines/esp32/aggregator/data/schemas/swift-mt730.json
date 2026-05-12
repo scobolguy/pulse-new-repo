@@ -1,0 +1,10 @@
+{
+  "messageType": "MT730",
+  "description": "Acknowledgement",
+  "finEnvelope": { "block4": { "fields": {
+    "20": { "name": "SenderReference", "required": true },
+    "21": { "name": "RelatedReference", "required": false },
+    "30": { "name": "DateOfMessage", "required": false },
+    "72": { "name": "SenderToReceiverInformation", "required": false }
+  } } }
+}

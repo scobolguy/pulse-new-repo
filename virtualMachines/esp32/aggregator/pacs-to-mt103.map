@@ -1,0 +1,81 @@
+{
+  "id": "pacs-to-mt103",
+  "name": "PACS to MT103",
+  "description": "Mapping rules from ISO 20022 pacs.008 to SWIFT FIN MT103.",
+  "sourceTypeId": "pacs",
+  "targetTypeId": "swift-mt103",
+  "sourceSchemaPath": "schemas/pacs.008.001.14.xsd",
+  "targetSchemaPath": "schemas/swift-mt103.json",
+  "rules": [
+    {
+      "sourcePath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+      "targetPath": "MT103:20",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId",
+      "targetPath": "MT103:21",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt",
+      "targetPath": "MT103:32A.date",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+      "targetPath": "MT103:32A.currency",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+      "targetPath": "MT103:32A.amount",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm",
+      "targetPath": "MT103:50K.name",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.DbtrAcct.Id.IBAN",
+      "targetPath": "MT103:50K.account",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI",
+      "targetPath": "MT103:52A",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI",
+      "targetPath": "MT103:57A",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm",
+      "targetPath": "MT103:59.name",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.CdtrAcct.Id.IBAN",
+      "targetPath": "MT103:59.account",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.RmtInf.Ustrd",
+      "targetPath": "MT103:70",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgBr",
+      "targetPath": "MT103:71A",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstrForNxtAgt.InstrInf",
+      "targetPath": "MT103:72",
+      "kind": "leaf"
+    }
+  ]
+}

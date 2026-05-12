@@ -1,0 +1,14 @@
+{
+  "messageType": "MT705",
+  "description": "Pre-Advice of a Documentary Credit",
+  "finEnvelope": { "block4": { "fields": {
+    "20": { "name": "DocumentaryCreditNumber", "required": true },
+    "23": { "name": "ReferenceToPreAdvice", "required": false },
+    "31C": { "name": "DateOfIssue", "required": false },
+    "40A": { "name": "FormOfDocumentaryCredit", "required": false },
+    "31D": { "name": "DateAndPlaceOfExpiry", "required": false },
+    "50": { "name": "Applicant", "required": false },
+    "59": { "name": "Beneficiary", "required": false },
+    "72": { "name": "SenderToReceiverInformation", "required": false }
+  } } }
+}

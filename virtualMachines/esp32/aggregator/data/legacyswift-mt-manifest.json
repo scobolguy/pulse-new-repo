@@ -1,0 +1,108 @@
+{
+  "category": {
+    "id": "legacyswift",
+    "label": "LegacySwift"
+  },
+  "families": [
+    {
+      "id": "swift-mt0xx",
+      "label": "SWIFT FIN MT0xx - System Messages"
+    },
+    {
+      "id": "swift-mt1xx",
+      "label": "SWIFT FIN MT1xx - Customer Payments and Cheques"
+    },
+    {
+      "id": "swift-mt2xx",
+      "label": "SWIFT FIN MT2xx - Financial Institution Transfers"
+    },
+    {
+      "id": "swift-mt3xx",
+      "label": "SWIFT FIN MT3xx - Treasury Markets"
+    },
+    {
+      "id": "swift-mt4xx",
+      "label": "SWIFT FIN MT4xx - Collections and Cash Letters"
+    },
+    {
+      "id": "swift-mt5xx",
+      "label": "SWIFT FIN MT5xx - Securities Markets"
+    },
+    {
+      "id": "swift-mt6xx",
+      "label": "SWIFT FIN MT6xx - Metals and Syndications"
+    },
+    {
+      "id": "swift-mt7xx",
+      "label": "SWIFT FIN MT7xx - Documentary Credits and Guarantees"
+    },
+    {
+      "id": "swift-mt8xx",
+      "label": "SWIFT FIN MT8xx - Travellers Cheques"
+    },
+    {
+      "id": "swift-mt9xx",
+      "label": "SWIFT FIN MT9xx - Cash Management and Customer Status"
+    }
+  ],
+  "messages": [
+    {
+      "id": "swift-mt101",
+      "label": "SWIFT FIN Message - MT101 Request for Transfer",
+      "familyId": "swift-mt1xx",
+      "layoutFile": "mt101.map"
+    },
+    {
+      "id": "swift-mt102",
+      "label": "SWIFT FIN Message - MT102 Multiple Customer Credit Transfer",
+      "familyId": "swift-mt1xx",
+      "layoutFile": "mt102.map"
+    },
+    {
+      "id": "swift-mt103",
+      "label": "SWIFT FIN Message - MT103 Single Customer Credit Transfer",
+      "familyId": "swift-mt1xx",
+      "layoutFile": "mt103.map"
+    },
+    {
+      "id": "swift-mt103plus",
+      "label": "SWIFT FIN Message - MT103+ Single Customer Credit Transfer Plus",
+      "familyId": "swift-mt1xx",
+      "layoutFile": "mt103plus.map"
+    },
+    {
+      "id": "swift-mt202",
+      "label": "SWIFT FIN Message - MT202 General Financial Institution Transfer",
+      "familyId": "swift-mt2xx",
+      "layoutFile": "mt202.map"
+    },
+    {
+      "id": "swift-mt202cov",
+      "label": "SWIFT FIN Message - MT202COV General Financial Institution Transfer (Cover)",
+      "familyId": "swift-mt2xx",
+      "layoutFile": "mt202cov.map"
+    }
+  ],
+  "templates": [
+    {
+      "file": "docs/legacyswift-mt-templates.md",
+      "purpose": "Human-readable layout summary"
+    },
+    {
+      "file": "mt103plus.map",
+      "purpose": "Mapping rules template; layout metadata lives in librarian schemas"
+    },
+    {
+      "file": "mt202.map",
+      "purpose": "Mapping rules template; layout metadata lives in librarian schemas"
+    },
+    {
+      "file": "mt202cov.map",
+      "purpose": "Mapping rules template; layout metadata lives in librarian schemas"
+    },
+    {
+      "file": "pacs-to-mt103.map",
+      "purpose": "Exercise mapping from PACS to MT103"
+    }
+  ]
+}

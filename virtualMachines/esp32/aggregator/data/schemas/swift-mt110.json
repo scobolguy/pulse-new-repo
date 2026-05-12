@@ -1,0 +1,17 @@
+{
+  "messageType": "MT110",
+  "description": "Advice of Cheque(s)",
+  "finEnvelope": {
+    "block4": {
+      "fields": {
+        "20": { "name": "SenderReference", "required": true },
+        "21": { "name": "RelatedReference", "required": false },
+        "30": { "name": "DateOfIssue", "required": false },
+        "32A": { "name": "ValueDateCurrencyAmount", "required": true },
+        "50": { "name": "OrderingCustomer", "required": false },
+        "59": { "name": "BeneficiaryCustomer", "required": true },
+        "72": { "name": "SenderToReceiverInformation", "required": false }
+      }
+    }
+  }
+}

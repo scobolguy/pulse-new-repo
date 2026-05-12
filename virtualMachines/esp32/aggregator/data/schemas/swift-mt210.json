@@ -1,0 +1,19 @@
+{
+  "messageType": "MT210",
+  "description": "Notice to Receive",
+  "finEnvelope": {
+    "block4": {
+      "fields": {
+        "20": { "name": "TransactionReferenceNumber", "required": true },
+        "21": { "name": "RelatedReference", "required": false },
+        "30": { "name": "ValueDate", "required": true },
+        "32B": { "name": "CurrencyAmountExpected", "required": true },
+        "50": { "name": "OrderingCustomer", "required": false },
+        "52A": { "name": "OrderingInstitution", "required": false },
+        "56A": { "name": "IntermediaryInstitution", "required": false },
+        "57A": { "name": "AccountWithInstitution", "required": false },
+        "72": { "name": "SenderToReceiverInformation", "required": false }
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "messageType": "MT750",
+  "description": "Advice of Discrepancy",
+  "finEnvelope": { "block4": { "fields": {
+    "20": { "name": "SendingBankReference", "required": true },
+    "21": { "name": "DocumentaryCreditNumber", "required": true },
+    "30": { "name": "DateOfAdvice", "required": false },
+    "32B": { "name": "Amount", "required": false },
+    "77J": { "name": "Discrepancies", "required": true },
+    "72": { "name": "SenderToReceiverInformation", "required": false }
+  } } }
+}
