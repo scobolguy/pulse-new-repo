@@ -519,5 +519,82 @@
     ],
     "updatedAt": "2026-05-12T01:44:22.966Z",
     "createdAt": "2026-05-12T00:45:16.433Z"
+  },
+  {
+    "id": "pacs-to-lynx",
+    "name": "PACS.008 to LYNX (pacs.009)",
+    "sourceTypeId": "pacs",
+    "targetTypeId": "lynx",
+    "sourceSchemaPath": "schemas/pacs.008.001.14.xsd",
+    "targetSchemaPath": "schemas/pacs.009.001.13.xsd",
+    "enabled": true,
+    "items": [
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+        "targetPath": "Document.FIToFICdtTrf.GrpHdr.MsgId",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := trim(src);"
+      },
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.PmtId.EndToEndId",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := trim(src);"
+      },
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrBkSttlmDt",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := trim(src);"
+      },
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := upper(src);"
+      },
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := trim(src);"
+      },
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := upper(src);"
+      },
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := upper(src);"
+      },
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.RmtInf.Ustrd",
+        "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.RmtInf.Ustrd",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := trim(src);"
+      }
+    ],
+    "updatedAt": "2026-05-12T01:44:22.966Z",
+    "createdAt": "2026-05-12T00:45:16.433Z"
   }
 ]

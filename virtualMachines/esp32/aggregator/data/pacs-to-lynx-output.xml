@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document>
+  <FIToFICdtTrf>
+    <GrpHdr>
+      <MsgId>PACS-LYNX-001</MsgId>
+    </GrpHdr>
+    <CdtTrfTxInf>
+      <PmtId>
+        <EndToEndId>E2E-LYNX-123</EndToEndId>
+      </PmtId>
+      <IntrBkSttlmDt>2026-05-15</IntrBkSttlmDt>
+      <IntrBkSttlmAmt Ccy="CAD">100000.00</IntrBkSttlmAmt>
+      <DbtrAgt>
+        <FinInstnId>
+          <BICFI>ROYCCAT2</BICFI>
+        </FinInstnId>
+      </DbtrAgt>
+      <CdtrAgt>
+        <FinInstnId>
+          <BICFI>TDOMCAT2</BICFI>
+        </FinInstnId>
+      </CdtrAgt>
+      <RmtInf>
+        <Ustrd>Payment for goods and services</Ustrd>
+      </RmtInf>
+    </CdtTrfTxInf>
+  </FIToFICdtTrf>
+</Document>
