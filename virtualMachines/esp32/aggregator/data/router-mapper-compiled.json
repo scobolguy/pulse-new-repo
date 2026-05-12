@@ -1,0 +1,230 @@
+{
+  "version": 1,
+  "compiledAt": "2026-05-12T22:01:57.211Z",
+  "serviceId": "aggregator-router-service",
+  "ast": {
+    "type": "Program",
+    "serviceId": "aggregator-router-service",
+    "routers": [
+      {
+        "type": "RouterDecl",
+        "id": "mt103-correspondent-and-lynx-fanout",
+        "inputQueue": "swift.mt103.parsed",
+        "description": "One MT103 to correspondent and LYNX flows",
+        "enabled": true,
+        "serviceId": null,
+        "outputs": [
+          {
+            "type": "OutputDecl",
+            "queueName": "correspondent.pacs008.outbound",
+            "whenRule": "BEGIN OUTPUT := 1; END",
+            "transformRule": "BEGIN OUTPUT := MAP (\"mt103-to-pacs\", src); END"
+          },
+          {
+            "type": "OutputDecl",
+            "queueName": "lynx.pacs009.outbound",
+            "whenRule": "BEGIN OUTPUT := 1; END",
+            "transformRule": "BEGIN OUTPUT := MAP (\"pacs-to-lynx\", MAP (\"mt103-to-pacs\", src)); END"
+          }
+        ]
+      },
+      {
+        "type": "RouterDecl",
+        "id": "swift-fanout-default",
+        "inputQueue": "swift.inbound",
+        "description": "Default fanout by MT type",
+        "enabled": true,
+        "serviceId": null,
+        "outputs": [
+          {
+            "type": "OutputDecl",
+            "queueName": "audit.all",
+            "whenRule": "output := 1;",
+            "transformRule": "output := src;"
+          },
+          {
+            "type": "OutputDecl",
+            "queueName": "payments.mt103",
+            "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
+            "transformRule": "output := src;"
+          },
+          {
+            "type": "OutputDecl",
+            "queueName": "payments.mt202",
+            "whenRule": "IF startswith(upper(src), \"MT202\") THEN output := 1 ELSE output := 0;",
+            "transformRule": "output := src;"
+          }
+        ]
+      }
+    ],
+    "mappers": [
+      {
+        "type": "MapperDecl",
+        "id": "mt103-to-pacs-mini",
+        "sourceTypeId": "swift-mt103",
+        "targetTypeId": "pacs",
+        "description": "Minimal MT103 to PACS sample",
+        "enabled": true,
+        "maps": [
+          {
+            "type": "MapDecl",
+            "sourcePath": "finEnvelope.block4.fields.20",
+            "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+            "conversionRule": "BEGIN OUTPUT := trim (src); END"
+          },
+          {
+            "type": "MapDecl",
+            "sourcePath": "finEnvelope.block4.fields.32A.components.currency",
+            "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+            "conversionRule": "output := upper(src);"
+          },
+          {
+            "type": "MapDecl",
+            "sourcePath": "finEnvelope.block4.fields.32A.components.amount",
+            "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+            "conversionRule": "output := mtamounttodecimal(src);"
+          }
+        ]
+      },
+      {
+        "type": "MapperDecl",
+        "id": "pacs-to-lynx-mini",
+        "sourceTypeId": "pacs",
+        "targetTypeId": "pacs-lynx",
+        "description": "Minimal PACS to LYNX sample",
+        "enabled": true,
+        "maps": [
+          {
+            "type": "MapDecl",
+            "sourcePath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+            "targetPath": "LynxEnvelope.Header.MessageId",
+            "conversionRule": "output := trim(src);"
+          },
+          {
+            "type": "MapDecl",
+            "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+            "targetPath": "LynxEnvelope.Payment.Currency",
+            "conversionRule": "output := upper(src);"
+          }
+        ]
+      }
+    ]
+  },
+  "routerRules": [
+    {
+      "id": "mt103-correspondent-and-lynx-fanout",
+      "name": "mt103-correspondent-and-lynx-fanout",
+      "serviceId": "aggregator-router-service",
+      "enabled": true,
+      "inputQueue": "swift.mt103.parsed",
+      "description": "One MT103 to correspondent and LYNX flows",
+      "outputs": [
+        {
+          "queueName": "correspondent.pacs008.outbound",
+          "whenRule": "BEGIN OUTPUT := 1; END",
+          "transformRule": "BEGIN OUTPUT := MAP (\"mt103-to-pacs\", src); END"
+        },
+        {
+          "queueName": "lynx.pacs009.outbound",
+          "whenRule": "BEGIN OUTPUT := 1; END",
+          "transformRule": "BEGIN OUTPUT := MAP (\"pacs-to-lynx\", MAP (\"mt103-to-pacs\", src)); END"
+        }
+      ],
+      "createdAt": "2026-05-12T22:01:57.203Z",
+      "updatedAt": "2026-05-12T22:01:57.203Z"
+    },
+    {
+      "id": "swift-fanout-default",
+      "name": "swift-fanout-default",
+      "serviceId": "aggregator-router-service",
+      "enabled": true,
+      "inputQueue": "swift.inbound",
+      "description": "Default fanout by MT type",
+      "outputs": [
+        {
+          "queueName": "audit.all",
+          "whenRule": "output := 1;",
+          "transformRule": "output := src;"
+        },
+        {
+          "queueName": "payments.mt103",
+          "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
+          "transformRule": "output := src;"
+        },
+        {
+          "queueName": "payments.mt202",
+          "whenRule": "IF startswith(upper(src), \"MT202\") THEN output := 1 ELSE output := 0;",
+          "transformRule": "output := src;"
+        }
+      ],
+      "createdAt": "2026-05-12T22:01:57.203Z",
+      "updatedAt": "2026-05-12T22:01:57.203Z"
+    }
+  ],
+  "dataMappings": [
+    {
+      "id": "mt103-to-pacs-mini",
+      "name": "mt103-to-pacs-mini",
+      "sourceTypeId": "swift-mt103",
+      "targetTypeId": "pacs",
+      "enabled": true,
+      "description": "Minimal MT103 to PACS sample",
+      "items": [
+        {
+          "sourcePath": "finEnvelope.block4.fields.20",
+          "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+          "kind": "leaf",
+          "sourceValueType": "unknown",
+          "targetValueType": "unknown",
+          "conversionRule": "BEGIN OUTPUT := trim (src); END"
+        },
+        {
+          "sourcePath": "finEnvelope.block4.fields.32A.components.currency",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+          "kind": "leaf",
+          "sourceValueType": "unknown",
+          "targetValueType": "unknown",
+          "conversionRule": "output := upper(src);"
+        },
+        {
+          "sourcePath": "finEnvelope.block4.fields.32A.components.amount",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+          "kind": "leaf",
+          "sourceValueType": "unknown",
+          "targetValueType": "unknown",
+          "conversionRule": "output := mtamounttodecimal(src);"
+        }
+      ],
+      "createdAt": "2026-05-12T22:01:57.211Z",
+      "updatedAt": "2026-05-12T22:01:57.211Z"
+    },
+    {
+      "id": "pacs-to-lynx-mini",
+      "name": "pacs-to-lynx-mini",
+      "sourceTypeId": "pacs",
+      "targetTypeId": "pacs-lynx",
+      "enabled": true,
+      "description": "Minimal PACS to LYNX sample",
+      "items": [
+        {
+          "sourcePath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+          "targetPath": "LynxEnvelope.Header.MessageId",
+          "kind": "leaf",
+          "sourceValueType": "unknown",
+          "targetValueType": "unknown",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+          "targetPath": "LynxEnvelope.Payment.Currency",
+          "kind": "leaf",
+          "sourceValueType": "unknown",
+          "targetValueType": "unknown",
+          "conversionRule": "output := upper(src);"
+        }
+      ],
+      "createdAt": "2026-05-12T22:01:57.211Z",
+      "updatedAt": "2026-05-12T22:01:57.211Z"
+    }
+  ]
+}

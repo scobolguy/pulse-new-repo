@@ -1,0 +1,36 @@
+{
+  "queueConfig": {
+    "correspondent.pacs008.outbound": {
+      "name": "correspondent.pacs008.outbound",
+      "createdAt": 1778610002513,
+      "frozen": false,
+      "createdByUser": true,
+      "dataTypeId": "pacs",
+      "dataTypeIds": [
+        "pacs"
+      ]
+    },
+    "lynx.pacs009.outbound": {
+      "name": "lynx.pacs009.outbound",
+      "createdAt": 1778610002528,
+      "frozen": false,
+      "createdByUser": true,
+      "dataTypeId": "pacs",
+      "dataTypeIds": [
+        "pacs"
+      ]
+    },
+    "swift.mt103.parsed": {
+      "name": "swift.mt103.parsed",
+      "createdAt": 1778610499842,
+      "frozen": false,
+      "createdByUser": true,
+      "dataTypeId": "swift-mt103",
+      "dataTypeIds": [
+        "swift-mt103"
+      ]
+    }
+  },
+  "configVersion": 6,
+  "timestamp": 1778623621098
+}

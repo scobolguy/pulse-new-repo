@@ -43,8 +43,38 @@
       "createdAt": 1778419442654,
       "frozen": false,
       "createdByUser": true
+    },
+    "correspondent.pacs008.outbound": {
+      "name": "correspondent.pacs008.outbound",
+      "createdAt": 1778610002460,
+      "frozen": false,
+      "createdByUser": true,
+      "dataTypeId": "pacs",
+      "dataTypeIds": [
+        "pacs"
+      ]
+    },
+    "lynx.pacs009.outbound": {
+      "name": "lynx.pacs009.outbound",
+      "createdAt": 1778610002497,
+      "frozen": false,
+      "createdByUser": true,
+      "dataTypeId": "pacs",
+      "dataTypeIds": [
+        "pacs"
+      ]
+    },
+    "swift.mt103.parsed": {
+      "name": "swift.mt103.parsed",
+      "createdAt": 1778610499825,
+      "frozen": false,
+      "createdByUser": true,
+      "dataTypeId": "swift-mt103",
+      "dataTypeIds": [
+        "swift-mt103"
+      ]
     }
   },
-  "configVersion": 13,
-  "timestamp": 1778419442654
+  "configVersion": 21,
+  "timestamp": 1778623809388
 }

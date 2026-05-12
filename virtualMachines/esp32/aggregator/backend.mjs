@@ -15,11 +15,15 @@ import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { createMessageBroker, createQueueManager } from './src/broker.js';
 import { createFileServer } from './fileServer.js';
+import { createRouterEngine } from './router-engine.mjs';
 import crypto from 'crypto';
 
 const HTTP_PORT = 4000;
 const UDP_PORT = 4210;
 const BROKER_SERVICE = 'broker';
+const ROUTER_SERVICE = 'router';
+const FILE_SERVER_SERVICE = 'file-server';
+const QUEUE_SERVICE = 'queue-manager';
 
 const app = express();
 app.use(cors());
@@ -79,9 +83,161 @@ const pendingManagerSync = new Map();
 const remoteAgentRegistry = new Map();
 const remoteQueueManagerProcesses = new Map();
 const queueManagerScriptPath = fileURLToPath(new URL('./queue-manager-node.mjs', import.meta.url));
+const QUEUE_VALIDATION_LOG_PATH = './data/queue-validation-errors.jsonl';
+const queueValidationErrors = [];
+const MAX_QUEUE_VALIDATION_ERRORS = 500;
+
+const EXPLICIT_QUEUE_TYPE_HINTS = {
+  'swift.mt103.parsed': ['swift-mt103'],
+  'correspondent.pacs008.outbound': ['pacs'],
+  'lynx.pacs009.outbound': ['pacs'],
+  'pacs.outbound': ['pacs']
+};
 
 function normalizeNodeId(value) {
   return (value || '').toString().trim();
+}
+
+function inferQueueDataTypeIds(queueName) {
+  const normalizedName = String(queueName || '').trim().toLowerCase();
+  if (!normalizedName) return ['text-string'];
+
+  if (EXPLICIT_QUEUE_TYPE_HINTS[normalizedName]) {
+    return EXPLICIT_QUEUE_TYPE_HINTS[normalizedName];
+  }
+
+  if (normalizedName.includes('pacs')) return ['pacs'];
+  if (normalizedName.includes('mt103')) return ['swift-mt103'];
+  if (normalizedName.includes('mt202cov')) return ['swift-mt202cov'];
+  if (normalizedName.includes('mt202')) return ['swift-mt202'];
+
+  return ['text-string'];
+}
+
+function detectMessageShape(message) {
+  if (message == null) return 'null';
+  if (typeof message === 'string') return 'string';
+  if (Array.isArray(message)) return 'array';
+  if (typeof message !== 'object') return typeof message;
+  if (message.Document && typeof message.Document === 'object') return 'iso20022-document';
+  if (message.finEnvelope && typeof message.finEnvelope === 'object') return 'swift-fin-envelope';
+  return 'object';
+}
+
+function summarizeMessage(message) {
+  try {
+    const json = JSON.stringify(message);
+    if (!json) return '';
+    return json.length > 600 ? `${json.slice(0, 600)}...` : json;
+  } catch {
+    return '[unserializable-message]';
+  }
+}
+
+function validateMessageAgainstDataType(typeId, message) {
+  const normalizedType = String(typeId || '').trim().toLowerCase();
+  if (!normalizedType || normalizedType === 'text-string') {
+    return { valid: true };
+  }
+
+  if (normalizedType === 'pacs') {
+    const ok = (
+      message
+      && typeof message === 'object'
+      && message.Document
+      && typeof message.Document === 'object'
+    );
+    return {
+      valid: ok,
+      reason: ok ? null : 'Expected ISO 20022 PACS object with top-level Document'
+    };
+  }
+
+  if (normalizedType === 'swift-mt103') {
+    const ok = (
+      (typeof message === 'string' && message.toUpperCase().startsWith('MT103'))
+      || (
+        message
+        && typeof message === 'object'
+        && message.finEnvelope
+        && message.finEnvelope.block4
+        && message.finEnvelope.block4.fields
+      )
+    );
+    return {
+      valid: ok,
+      reason: ok ? null : 'Expected MT103 string starting with MT103 or parsed swift finEnvelope.block4.fields'
+    };
+  }
+
+  if (normalizedType === 'swift-mt202' || normalizedType === 'swift-mt202cov') {
+    const prefix = normalizedType === 'swift-mt202cov' ? 'MT202COV' : 'MT202';
+    const ok = (
+      (typeof message === 'string' && message.toUpperCase().startsWith(prefix))
+      || (
+        message
+        && typeof message === 'object'
+        && message.finEnvelope
+        && message.finEnvelope.block4
+        && message.finEnvelope.block4.fields
+      )
+    );
+    return {
+      valid: ok,
+      reason: ok ? null : `Expected ${prefix} string or parsed swift finEnvelope.block4.fields`
+    };
+  }
+
+  return { valid: true };
+}
+
+function logQueueValidationError(entry) {
+  const item = {
+    timestamp: new Date().toISOString(),
+    ...entry
+  };
+
+  queueValidationErrors.push(item);
+  if (queueValidationErrors.length > MAX_QUEUE_VALIDATION_ERRORS) {
+    queueValidationErrors.splice(0, queueValidationErrors.length - MAX_QUEUE_VALIDATION_ERRORS);
+  }
+
+  try {
+    fs.mkdirSync('./data', { recursive: true });
+    fs.appendFileSync(QUEUE_VALIDATION_LOG_PATH, `${JSON.stringify(item)}\n`, 'utf-8');
+  } catch (e) {
+    console.warn(`[QUEUE-VALIDATION] Failed to persist validation error log: ${e.message}`);
+  }
+
+  console.warn(`[QUEUE-VALIDATION] ${item.queueName} expected=${item.expectedType} shape=${item.detectedShape}: ${item.reason}`);
+}
+
+function ensureMessageMatchesQueueType({ queueName, message, sourceService, managerId, dataTypeIds }) {
+  const normalizedTypes = Array.isArray(dataTypeIds) && dataTypeIds.length > 0 ? dataTypeIds : ['text-string'];
+
+  for (const typeId of normalizedTypes) {
+    const check = validateMessageAgainstDataType(typeId, message);
+    if (check.valid) continue;
+
+    const details = {
+      queueName,
+      expectedType: String(typeId || ''),
+      reason: check.reason || 'Message did not match expected queue type',
+      managerId: managerId || null,
+      sourceService: sourceService || null,
+      detectedShape: detectMessageShape(message),
+      messageSummary: summarizeMessage(message),
+      message
+    };
+
+    logQueueValidationError(details);
+
+    const err = new Error(`Queue ${queueName} rejected message for type ${typeId}: ${details.reason}`);
+    err.statusCode = 422;
+    err.code = 'QUEUE_TYPE_VALIDATION_FAILED';
+    err.validation = details;
+    throw err;
+  }
 }
 
 function getOrCreateBrokerInstance(instanceId) {
@@ -201,6 +357,46 @@ function upsertServiceInstance({ serviceName, instanceId, nodeId, ip, port, stat
     metadata: metadata || prev.metadata || {},
     lastHeartbeat: Date.now()
   });
+}
+
+function registerLocalServiceHeartbeats() {
+  const localNodeId = os.hostname() || '127.0.0.1';
+  const localIp = '127.0.0.1';
+
+  const localServices = [
+    {
+      serviceName: BROKER_SERVICE,
+      instanceId: `${BROKER_SERVICE}:local:${HTTP_PORT}`,
+      metadata: { api: '/api/broker', label: 'Message Broker' }
+    },
+    {
+      serviceName: ROUTER_SERVICE,
+      instanceId: `${ROUTER_SERVICE}:local:${HTTP_PORT}`,
+      metadata: { api: '/api/router', label: 'Router Service' }
+    },
+    {
+      serviceName: QUEUE_SERVICE,
+      instanceId: `${QUEUE_SERVICE}:local:${HTTP_PORT}`,
+      metadata: { api: '/api/queue', label: 'Queue Manager' }
+    },
+    {
+      serviceName: FILE_SERVER_SERVICE,
+      instanceId: `${FILE_SERVER_SERVICE}:local:${HTTP_PORT}`,
+      metadata: { api: '/api/fileserver', label: 'File Server' }
+    }
+  ];
+
+  for (const svc of localServices) {
+    upsertServiceInstance({
+      serviceName: svc.serviceName,
+      instanceId: svc.instanceId,
+      nodeId: localNodeId,
+      ip: localIp,
+      port: HTTP_PORT,
+      status: 'up',
+      metadata: svc.metadata
+    });
+  }
 }
 
 function setNodeLifecycleState(nodeId, state) {
@@ -606,6 +802,21 @@ async function enqueueViaRoute(route, queueName, message, sourceService) {
 
   if (manager.local) {
     const qm = queueManagers[manager.localIndex];
+    let dataTypeIds = inferQueueDataTypeIds(queueName);
+    if (!qm.getConfig(queueName)?.name) {
+      qm.createQueue(queueName, {
+        dataTypeId: dataTypeIds[0],
+        dataTypeIds,
+        createdByUser: false
+      });
+    } else {
+      const cfg = qm.getConfig(queueName) || {};
+      const configured = cfg.dataTypeIds || cfg.dataTypeId;
+      dataTypeIds = Array.isArray(configured) ? configured : (configured ? [configured] : dataTypeIds);
+    }
+
+    ensureMessageMatchesQueueType({ queueName, message, sourceService, managerId: manager.managerId, dataTypeIds });
+
     qm.enqueue(queueName, message, sourceService || 'unknown', messageId);
     replicateEnqueueToFollowers(queueName, message, sourceService, route.managerId, messageId)
       .catch(e => console.warn(`[REPLICATION] Fan-out error: ${e.message}`));
@@ -613,6 +824,21 @@ async function enqueueViaRoute(route, queueName, message, sourceService) {
   }
 
   const url = `http://${manager.ip}:${manager.port}/enqueue`;
+  const dataTypeIds = inferQueueDataTypeIds(queueName);
+  ensureMessageMatchesQueueType({ queueName, message, sourceService, managerId: manager.managerId, dataTypeIds });
+  await fetch(`http://${manager.ip}:${manager.port}/apply-config-change`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      type: 'createQueue',
+      queueName,
+      config: {
+        dataTypeId: dataTypeIds[0],
+        dataTypeIds,
+        createdByUser: false
+      }
+    })
+  }).catch(() => null);
   const remoteRes = await fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -740,6 +966,101 @@ async function replicateDequeueToFollowers(queueName, removedMessage, leaderMana
       console.warn(`[REPLICATION] Failed to replicate dequeue to ${follower.managerId}: ${e.message}`);
     }
   }
+}
+
+const messageRouter = createRouterEngine({
+  rulesPath: './data/router-rules.json',
+  mappingsPath: './data/data-mappings.json',
+  serviceId: 'aggregator-router-service',
+  publishToQueue: async ({ queueName, message, sourceService }) => {
+    let route = ensureRoute(queueName);
+    if (!route) {
+      throw new Error(`No available queue managers for queue ${queueName}`);
+    }
+
+    try {
+      return await enqueueViaRoute(route, queueName, message, sourceService || 'router');
+    } catch (e) {
+      const manager = queueManagerRegistry.get(route.managerId);
+      if (manager) {
+        manager.status = 'down';
+        queueManagerRegistry.set(route.managerId, manager);
+      }
+      queueRoutes.delete(queueName);
+      route = ensureRoute(queueName);
+      if (!route) {
+        throw new Error(`Publish failed and no failover route for queue ${queueName}: ${e.message}`);
+      }
+      return enqueueViaRoute(route, queueName, message, sourceService || 'router');
+    }
+  },
+  dequeueFromQueue: async ({ inputQueue, consumerService }) => {
+    return dequeueViaRoute(inputQueue, consumerService || 'router');
+  }
+});
+
+const routerWorkers = new Map();
+
+function getRouterWorkersPayload() {
+  return Array.from(routerWorkers.values()).map(worker => ({
+    inputQueue: worker.inputQueue,
+    intervalMs: worker.intervalMs,
+    batchSize: worker.batchSize,
+    consumerService: worker.consumerService,
+    processedMessages: worker.processedMessages,
+    lastRunAt: worker.lastRunAt,
+    lastError: worker.lastError || null,
+    startedAt: worker.startedAt
+  }));
+}
+
+function stopRouterWorker(inputQueue) {
+  const key = String(inputQueue || '');
+  const worker = routerWorkers.get(key);
+  if (!worker) return false;
+  clearInterval(worker.intervalId);
+  routerWorkers.delete(key);
+  return true;
+}
+
+function startRouterWorker({ inputQueue, intervalMs = 1000, batchSize = 10, consumerService = 'router-worker' }) {
+  const key = String(inputQueue || '').trim();
+  if (!key) {
+    throw new Error('inputQueue is required');
+  }
+
+  stopRouterWorker(key);
+
+  const workerState = {
+    inputQueue: key,
+    intervalMs: Number(intervalMs) > 0 ? Number(intervalMs) : 1000,
+    batchSize: Number(batchSize) > 0 ? Number(batchSize) : 10,
+    consumerService,
+    processedMessages: 0,
+    lastRunAt: null,
+    lastError: null,
+    startedAt: new Date().toISOString(),
+    intervalId: null
+  };
+
+  workerState.intervalId = setInterval(async () => {
+    try {
+      const result = await messageRouter.processFromQueue(workerState.inputQueue, {
+        maxMessages: workerState.batchSize,
+        consumerService: workerState.consumerService
+      });
+      workerState.processedMessages += Number(result.processed || 0);
+      workerState.lastRunAt = new Date().toISOString();
+      workerState.lastError = null;
+    } catch (e) {
+      workerState.lastError = e.message;
+      workerState.lastRunAt = new Date().toISOString();
+      console.warn(`[ROUTER] Worker ${workerState.inputQueue} error: ${e.message}`);
+    }
+  }, workerState.intervalMs);
+
+  routerWorkers.set(key, workerState);
+  return workerState;
 }
 
 // --- UDP Node Discovery ---
@@ -1552,6 +1873,9 @@ function registerRoutes(app) {
       const delivery = await enqueueViaRoute(route, queueName, message, sourceService || 'unknown');
       return res.json({ status: 'published', route, delivery });
     } catch (e) {
+      if (e && e.statusCode) {
+        return res.status(e.statusCode).json({ error: e.message, code: e.code, validation: e.validation });
+      }
       const manager = queueManagerRegistry.get(route.managerId);
       if (manager) {
         manager.status = 'down';
@@ -1568,9 +1892,100 @@ function registerRoutes(app) {
         const delivery = await enqueueViaRoute(route, queueName, message, sourceService || 'unknown');
         return res.json({ status: 'published-with-failover', route, delivery, priorError: e.message });
       } catch (e2) {
+        if (e2 && e2.statusCode) {
+          return res.status(e2.statusCode).json({ error: e2.message, code: e2.code, validation: e2.validation, priorError: e.message });
+        }
         return res.status(503).json({ error: 'Publish failed after failover', details: e2.message, priorError: e.message });
       }
     }
+  });
+
+  app.get('/api/router/rules', async (req, res) => {
+    try {
+      const rules = await messageRouter.listRules();
+      res.json({ rules });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/router/rules', async (req, res) => {
+    try {
+      const rule = await messageRouter.upsertRule(req.body || {});
+      res.json({ status: 'upserted', rule });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.delete('/api/router/rules/:ruleId', async (req, res) => {
+    try {
+      const removed = await messageRouter.deleteRule(req.params.ruleId);
+      if (!removed) {
+        return res.status(404).json({ error: 'Rule not found' });
+      }
+      res.json({ status: 'deleted', ruleId: req.params.ruleId });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/router/ingest', async (req, res) => {
+    try {
+      const { inputQueue, message, sourceService } = req.body || {};
+      if (!inputQueue) {
+        return res.status(400).json({ error: 'inputQueue is required' });
+      }
+      const result = await messageRouter.ingest({ inputQueue, message, sourceService: sourceService || 'webapi' });
+      res.json({ status: 'routed', mode: 'api', result });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/router/process/:inputQueue', async (req, res) => {
+    try {
+      const { inputQueue } = req.params;
+      const { maxMessages, consumerService } = req.body || {};
+      const result = await messageRouter.processFromQueue(inputQueue, {
+        maxMessages: maxMessages || 1,
+        consumerService: consumerService || 'router-worker'
+      });
+      res.json({ status: 'processed', mode: 'queue', result });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/router/workers', (req, res) => {
+    res.json({ workers: getRouterWorkersPayload() });
+  });
+
+  app.post('/api/router/workers/start', (req, res) => {
+    try {
+      const { inputQueue, intervalMs, batchSize, consumerService } = req.body || {};
+      if (!inputQueue) {
+        return res.status(400).json({ error: 'inputQueue is required' });
+      }
+      const worker = startRouterWorker({ inputQueue, intervalMs, batchSize, consumerService });
+      res.json({ status: 'started', worker: {
+        inputQueue: worker.inputQueue,
+        intervalMs: worker.intervalMs,
+        batchSize: worker.batchSize,
+        consumerService: worker.consumerService,
+        startedAt: worker.startedAt
+      } });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/router/workers/:inputQueue/stop', (req, res) => {
+    const removed = stopRouterWorker(req.params.inputQueue);
+    if (!removed) {
+      return res.status(404).json({ error: 'Worker not found' });
+    }
+    res.json({ status: 'stopped', inputQueue: req.params.inputQueue });
   });
 
     // UDP discovery for primary broker
@@ -1647,8 +2062,18 @@ function registerRoutes(app) {
       const delivery = await enqueueViaRoute(route, queueName, message, sourceService);
       res.json({ status: 'enqueued', delivery });
     } catch (e) {
+      if (e && e.statusCode) {
+        return res.status(e.statusCode).json({ error: e.message, code: e.code, validation: e.validation });
+      }
       res.status(500).json({ error: e.message });
     }
+  });
+
+  app.get('/api/queue/validation-errors', (req, res) => {
+    const limitRaw = Number(req.query.limit || 100);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 1000) : 100;
+    const items = queueValidationErrors.slice(-limit).reverse();
+    res.json({ count: items.length, totalBuffered: queueValidationErrors.length, items });
   });
   app.post('/api/queue/:queueName/dequeue', async (req, res) => {
     const { queueName } = req.params;
@@ -2059,7 +2484,7 @@ function registerRoutes(app) {
       if (!queueName || !String(queueName).trim()) {
         throw new Error('queueName is required');
       }
-      const selectedTypes = config?.dataTypeIds ?? config?.dataTypeId ?? config?.messageTypeId ?? 'text-string';
+      const selectedTypes = config?.dataTypeIds ?? config?.dataTypeId ?? config?.messageTypeId ?? inferQueueDataTypeIds(queueName);
       const dataTypeIds = await normalizeAndValidateDataTypeIds(selectedTypes);
       const normalizedConfig = {
         ...(config || {}),
@@ -2256,8 +2681,10 @@ function registerRoutes(app) {
     res.json(getBrokerNodeDetails());
   });
   app.get('/services/describe', (req, res) => {
-    res.json({ services: [BROKER_SERVICE] });
+    res.json({ services: [BROKER_SERVICE, ROUTER_SERVICE, QUEUE_SERVICE, FILE_SERVER_SERVICE] });
   });
+  registerLocalServiceHeartbeats();
+  setInterval(registerLocalServiceHeartbeats, 10000);
   setInterval(updateVirtualNodes, 3000);
   console.log('[DEBUG] All routes registered');
   app.get('/api/nodes', (req, res) => {
@@ -2271,6 +2698,7 @@ function registerRoutes(app) {
         hardware: 'Server',
         services: [
           { name: 'Message Broker', status: 'online', api: '/api/broker' },
+          { name: 'Router Service', status: 'online', api: '/api/router' },
           { name: 'Queue Manager', status: 'online', api: '/api/queue' },
           { name: 'File Server', status: 'online', api: '/api/fileserver' }
         ],

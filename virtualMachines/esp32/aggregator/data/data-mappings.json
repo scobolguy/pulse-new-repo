@@ -291,6 +291,22 @@
         "conversionRule": "output := mtpartyname(src);"
       },
       {
+        "sourcePath": "finEnvelope.block4.fields.52A",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := upper(src);"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.57A",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := upper(src);"
+      },
+      {
         "sourcePath": "finEnvelope.block4.fields.70",
         "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.RmtInf.Ustrd",
         "kind": "leaf",

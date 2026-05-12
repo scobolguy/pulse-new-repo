@@ -777,10 +777,29 @@ class Interpreter {
         return this.toString(argValues[0]).trim().replace(',', '.');
 
       case 'mtpartyname': {
-        const lines = this.toString(argValues[0])
-          .split(/\r?\n/)
-          .map(line => line.trim())
+        const party = argValues[0];
+        let lines = [];
+
+        if (party && typeof party === 'object') {
+          if (Array.isArray(party.lines)) {
+            lines = party.lines.map(line => this.toString(line));
+          } else if (typeof party.name === 'string') {
+            lines = [party.name];
+          } else if (typeof party.text === 'string') {
+            lines = party.text.split(/\r?\n/);
+          } else if (party.components && typeof party.components === 'object') {
+            lines = Object.values(party.components).map(value => this.toString(value));
+          }
+        }
+
+        if (lines.length === 0) {
+          lines = this.toString(party).split(/\r?\n/);
+        }
+
+        lines = lines
+          .map(line => this.toString(line).trim())
           .filter(Boolean);
+
         const nonAccount = lines.filter(line => !line.startsWith('/'));
         return nonAccount[0] || lines[0] || '';
       }

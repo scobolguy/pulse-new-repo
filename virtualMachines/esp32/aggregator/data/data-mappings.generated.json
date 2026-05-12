@@ -1,0 +1,66 @@
+[
+  {
+    "id": "mt103-to-pacs-mini",
+    "name": "mt103-to-pacs-mini",
+    "sourceTypeId": "swift-mt103",
+    "targetTypeId": "pacs",
+    "enabled": true,
+    "description": "Minimal MT103 to PACS sample",
+    "items": [
+      {
+        "sourcePath": "finEnvelope.block4.fields.20",
+        "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "BEGIN OUTPUT := trim (src); END"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.32A.components.currency",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := upper(src);"
+      },
+      {
+        "sourcePath": "finEnvelope.block4.fields.32A.components.amount",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := mtamounttodecimal(src);"
+      }
+    ],
+    "createdAt": "2026-05-12T22:01:57.211Z",
+    "updatedAt": "2026-05-12T22:01:57.211Z"
+  },
+  {
+    "id": "pacs-to-lynx-mini",
+    "name": "pacs-to-lynx-mini",
+    "sourceTypeId": "pacs",
+    "targetTypeId": "pacs-lynx",
+    "enabled": true,
+    "description": "Minimal PACS to LYNX sample",
+    "items": [
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+        "targetPath": "LynxEnvelope.Header.MessageId",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := trim(src);"
+      },
+      {
+        "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+        "targetPath": "LynxEnvelope.Payment.Currency",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := upper(src);"
+      }
+    ],
+    "createdAt": "2026-05-12T22:01:57.211Z",
+    "updatedAt": "2026-05-12T22:01:57.211Z"
+  }
+]

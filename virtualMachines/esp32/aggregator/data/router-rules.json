@@ -1,0 +1,73 @@
+[
+  {
+    "id": "swift-fanout-default",
+    "name": "SWIFT inbound fan-out",
+    "serviceId": "aggregator-router-service",
+    "enabled": true,
+    "inputQueue": "swift.inbound",
+    "description": "Route inbound SWIFT messages to audit and conditional payment queues",
+    "outputs": [
+      {
+        "queueName": "audit.all",
+        "whenRule": "output := 1;",
+        "transformRule": "output := src;"
+      },
+      {
+        "queueName": "payments.mt103",
+        "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
+        "transformRule": "output := src;"
+      },
+      {
+        "queueName": "payments.mt202",
+        "whenRule": "IF startswith(upper(src), \"MT202\") THEN output := 1 ELSE output := 0;",
+        "transformRule": "output := src;"
+      }
+    ],
+    "createdAt": "2026-05-12T00:45:16.433Z",
+    "updatedAt": "2026-05-12T01:44:22.966Z"
+  },
+  {
+    "id": "mt202cov-map-to-pacs",
+    "name": "MT202COV parsed JSON to PACS fan-out",
+    "serviceId": "aggregator-router-service",
+    "enabled": true,
+    "inputQueue": "swift.mt202cov.parsed",
+    "description": "Use mapping file transform from DSL then publish to PACS queue and audit",
+    "outputs": [
+      {
+        "queueName": "audit.all",
+        "whenRule": "output := 1;",
+        "transformRule": "output := src;"
+      },
+      {
+        "queueName": "pacs.outbound",
+        "whenRule": "output := 1;",
+        "transformRule": "output := map(\"mt202cov-to-pacs\", src);"
+      }
+    ],
+    "createdAt": "2026-05-12T16:59:08.468Z",
+    "updatedAt": "2026-05-12T16:59:08.468Z"
+  },
+  {
+    "id": "mt103-correspondent-and-lynx-fanout",
+    "name": "MT103 to correspondent PACS and LYNX PACS",
+    "serviceId": "aggregator-router-service",
+    "enabled": true,
+    "inputQueue": "swift.mt103.parsed",
+    "description": "One MT103 in, publish PACS.008 to correspondent flow and PACS.009 to LYNX flow",
+    "outputs": [
+      {
+        "queueName": "correspondent.pacs008.outbound",
+        "whenRule": "output := 1;",
+        "transformRule": "output := map(\"mt103-to-pacs\", src);"
+      },
+      {
+        "queueName": "lynx.pacs009.outbound",
+        "whenRule": "output := 1;",
+        "transformRule": "output := map(\"pacs-to-lynx\", map(\"mt103-to-pacs\", src));"
+      }
+    ],
+    "createdAt": "2026-05-12T16:59:08.468Z",
+    "updatedAt": "2026-05-12T16:59:08.468Z"
+  }
+]
