@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document>
+  <FIToFICstmrCdtTrf>
+    <GrpHdr>
+      <MsgId>REF123456789</MsgId>
+    </GrpHdr>
+    <CdtTrfTxInf>
+      <PmtId>
+        <EndToEndId>E2E-987654321</EndToEndId>
+      </PmtId>
+      <IntrBkSttlmDt>2025-05-12</IntrBkSttlmDt>
+      <IntrBkSttlmAmt Ccy="USD">12345.67</IntrBkSttlmAmt>
+      <Dbtr>
+        <Nm>JOHN DOE</Nm>
+      </Dbtr>
+      <Cdtr>
+        <Nm>JANE RECEIVER</Nm>
+      </Cdtr>
+      <RmtInf>
+        <Ustrd>INVOICE 2026-0512</Ustrd>
+      </RmtInf>
+      <ChrgBr>SHA</ChrgBr>
+      <InstrForNxtAgt>
+        <InstrInf>/INS/NOTES</InstrInf>
+      </InstrForNxtAgt>
+    </CdtTrfTxInf>
+  </FIToFICstmrCdtTrf>
+</Document>

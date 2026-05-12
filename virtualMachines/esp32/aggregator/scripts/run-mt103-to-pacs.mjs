@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { runPL0 } from './pl0-interpreter.mjs';
 
 const ROOT = path.resolve('.');
 const MAPPINGS_PATH = path.join(ROOT, 'data', 'data-mappings.json');
@@ -25,111 +26,12 @@ function setPathValue(obj, dotPath, value) {
   cursor[keys[keys.length - 1]] = value;
 }
 
-function splitArgs(text) {
-  const args = [];
-  let current = '';
-  let quote = null;
-  let depth = 0;
-  for (let i = 0; i < text.length; i += 1) {
-    const ch = text[i];
-    if (quote) {
-      current += ch;
-      if (ch === quote) quote = null;
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch;
-      current += ch;
-      continue;
-    }
-    if (ch === '(') depth += 1;
-    if (ch === ')') depth -= 1;
-    if (ch === ',' && depth === 0) {
-      args.push(current.trim());
-      current = '';
-      continue;
-    }
-    current += ch;
-  }
-  if (current.trim()) args.push(current.trim());
-  return args;
-}
-
-function parseRule(ruleText) {
-  const text = String(ruleText || '').trim();
-  if (!text) return { fnName: 'move', args: ['src'] };
-  const m = text.match(/^([A-Za-z_][\w]*)\s*\((.*)\)$/);
-  if (!m) throw new Error(`Unsupported rule syntax: ${text}`);
-  return { fnName: m[1], args: splitArgs(m[2]) };
-}
-
-function stripQuotes(raw) {
-  const s = String(raw || '').trim();
-  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
-    return s.slice(1, -1);
-  }
-  return s;
-}
-
-function yyMMddToIso(value) {
-  const src = String(value || '').trim();
-  if (!/^\d{6}$/.test(src)) return src;
-  const yy = Number.parseInt(src.slice(0, 2), 10);
-  const mm = src.slice(2, 4);
-  const dd = src.slice(4, 6);
-  const yyyy = yy >= 70 ? 1900 + yy : 2000 + yy;
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-function mtAmountToDecimal(value) {
-  return String(value || '').trim().replace(',', '.');
-}
-
-function mtPartyName(value) {
-  const lines = String(value || '')
-    .split(/\r?\n/)
-    .map(line => line.trim())
-    .filter(Boolean);
-  const nonAccount = lines.filter(line => !line.startsWith('/'));
-  return nonAccount[0] || lines[0] || '';
-}
-
-function mtChargeBearerToIso(value) {
-  const code = String(value || '').trim().toUpperCase();
-  if (code === 'OUR') return 'DEBT';
-  if (code === 'BEN') return 'CRED';
-  if (code === 'SHA') return 'SHAR';
-  return code || 'SHAR';
-}
-
 function evaluateRule(ruleText, srcValue) {
-  const { fnName, args } = parseRule(ruleText);
-  const resolvedArgs = args.map((arg) => {
-    const token = String(arg || '').trim();
-    if (token === 'src') return srcValue;
-    return stripQuotes(token);
-  });
-
-  switch (fnName) {
-    case 'move':
-      return resolvedArgs[0];
-    case 'trim':
-      return String(resolvedArgs[0] ?? '').trim();
-    case 'upper':
-      return String(resolvedArgs[0] ?? '').toUpperCase();
-    case 'lower':
-      return String(resolvedArgs[0] ?? '').toLowerCase();
-    case 'yyMMddToIso':
-      return yyMMddToIso(resolvedArgs[0]);
-    case 'mtAmountToDecimal':
-      return mtAmountToDecimal(resolvedArgs[0]);
-    case 'mtPartyName':
-      return mtPartyName(resolvedArgs[0]);
-    case 'mtChargeBearerToIso':
-      return mtChargeBearerToIso(resolvedArgs[0]);
-    default:
-      throw new Error(`Unsupported conversion function: ${fnName}`);
-  }
+  const sourceCode = String(ruleText || '').trim();
+  if (!sourceCode) return srcValue;
+  
+  const result = runPL0(sourceCode, { src: srcValue });
+  return result.output != null ? result.output : '';
 }
 
 function xmlEscape(value) {

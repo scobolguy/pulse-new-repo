@@ -215,7 +215,7 @@
         "kind": "leaf",
         "sourceValueType": "unknown",
         "targetValueType": "unknown",
-        "conversionRule": "trim(src)"
+        "conversionRule": "output := trim(src);"
       },
       {
         "sourcePath": "finEnvelope.block4.fields.21",
@@ -223,7 +223,7 @@
         "kind": "leaf",
         "sourceValueType": "unknown",
         "targetValueType": "unknown",
-        "conversionRule": "trim(src)"
+        "conversionRule": "output := trim(src);"
       },
       {
         "sourcePath": "finEnvelope.block4.fields.32A.components.valueDate",
@@ -231,7 +231,7 @@
         "kind": "leaf",
         "sourceValueType": "unknown",
         "targetValueType": "unknown",
-        "conversionRule": "yyMMddToIso(src)"
+        "conversionRule": "output := yymmddtoiso(src);"
       },
       {
         "sourcePath": "finEnvelope.block4.fields.32A.components.currency",
@@ -239,7 +239,7 @@
         "kind": "leaf",
         "sourceValueType": "unknown",
         "targetValueType": "unknown",
-        "conversionRule": "upper(src)"
+        "conversionRule": "output := upper(src);"
       },
       {
         "sourcePath": "finEnvelope.block4.fields.32A.components.amount",
@@ -247,7 +247,7 @@
         "kind": "leaf",
         "sourceValueType": "unknown",
         "targetValueType": "unknown",
-        "conversionRule": "mtAmountToDecimal(src)"
+        "conversionRule": "output := mtamounttodecimal(src);"
       },
       {
         "sourcePath": "finEnvelope.block4.fields.50K",
@@ -255,7 +255,7 @@
         "kind": "leaf",
         "sourceValueType": "unknown",
         "targetValueType": "unknown",
-        "conversionRule": "mtPartyName(src)"
+        "conversionRule": "output := mtpartyname(src);"
       },
       {
         "sourcePath": "finEnvelope.block4.fields.59",
@@ -263,7 +263,7 @@
         "kind": "leaf",
         "sourceValueType": "unknown",
         "targetValueType": "unknown",
-        "conversionRule": "mtPartyName(src)"
+        "conversionRule": "output := mtpartyname(src);"
       },
       {
         "sourcePath": "finEnvelope.block4.fields.70",
@@ -271,7 +271,7 @@
         "kind": "leaf",
         "sourceValueType": "unknown",
         "targetValueType": "unknown",
-        "conversionRule": "trim(src)"
+        "conversionRule": "output := trim(src);"
       },
       {
         "sourcePath": "finEnvelope.block4.fields.71A",
@@ -279,7 +279,7 @@
         "kind": "leaf",
         "sourceValueType": "unknown",
         "targetValueType": "unknown",
-        "conversionRule": "mtChargeBearerToIso(src)"
+        "conversionRule": "output := mtchargebearertoiso(src);"
       },
       {
         "sourcePath": "finEnvelope.block4.fields.72",
@@ -287,7 +287,7 @@
         "kind": "leaf",
         "sourceValueType": "unknown",
         "targetValueType": "unknown",
-        "conversionRule": "trim(src)"
+        "conversionRule": "output := trim(src);"
       }
     ],
     "updatedAt": "2026-05-12T00:45:16.428Z",

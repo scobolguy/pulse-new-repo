@@ -22,19 +22,27 @@ function buildMappingId(sourceTypeId, targetTypeId) {
 function validateConversionRule(ruleText) {
   const text = String(ruleText || '').trim();
   if (!text) return { valid: true };
-  if (text.length > 500) return { valid: false, error: 'conversionRule is too long (max 500 chars)' };
+  if (text.length > 1000) return { valid: false, error: 'conversionRule is too long (max 1000 chars)' };
 
-  if (!/^[\w\s\.,()'"\[\]\-+*/%:<>!=|&?#@]+$/.test(text)) {
+  // Allow PL/0 syntax with extended character set including:
+  // - Alphanumerics and underscore for identifiers
+  // - Operators: := + - * / || = < > <= >= <>
+  // - Delimiters: ( ) [ ] { } , ; : 
+  // - String literals: "..." '...'
+  // - Comments: // ...
+  // - PL/0 keywords: if then else while do for to begin end var call not
+  if (!/^[\w\s\.,()'"\[\]{};:\-+*/%<>=!|&?#@\\~`]+$/.test(text)) {
     return { valid: false, error: 'conversionRule contains unsupported characters' };
   }
 
   let parenDepth = 0;
   let bracketDepth = 0;
+  let braceDepth = 0;
   let quote = null;
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i];
     if (quote) {
-      if (ch === quote) quote = null;
+      if (ch === quote && text[i - 1] !== '\\') quote = null;
       continue;
     }
     if (ch === '"' || ch === "'") {
@@ -45,19 +53,27 @@ function validateConversionRule(ruleText) {
     if (ch === ')') parenDepth -= 1;
     if (ch === '[') bracketDepth += 1;
     if (ch === ']') bracketDepth -= 1;
-    if (parenDepth < 0 || bracketDepth < 0) {
-      return { valid: false, error: 'conversionRule has unbalanced brackets/parentheses' };
+    if (ch === '{') braceDepth += 1;
+    if (ch === '}') braceDepth -= 1;
+    if (parenDepth < 0 || bracketDepth < 0 || braceDepth < 0) {
+      return { valid: false, error: 'conversionRule has unbalanced delimiters' };
     }
   }
 
-  if (quote || parenDepth !== 0 || bracketDepth !== 0) {
-    return { valid: false, error: 'conversionRule has unbalanced quotes/brackets/parentheses' };
+  if (quote || parenDepth !== 0 || bracketDepth !== 0 || braceDepth !== 0) {
+    return { valid: false, error: 'conversionRule has unbalanced quotes or delimiters' };
   }
 
-  // v1: accept function-call style expressions, for example trim(src), yyMMddToIso(src)
-  if (!/^[A-Za-z_][\w]*\s*\(.*\)$/.test(text)) {
-    return { valid: false, error: 'conversionRule must be a function call expression' };
+  // PL/0 validation: basic sanity check
+  // Accept statements like "output := trim(src);" or more complex PL/0 code
+  const hasAssignment = text.includes(':=') || text.match(/[A-Za-z_]\w*\s*=\s*/);
+  const hasFunctionCall = /[A-Za-z_]\w*\s*\(/.test(text);
+  const hasKeyword = /\b(if|then|else|while|do|for|to|begin|end|var|call|not)\b/i.test(text);
+  
+  if (!hasAssignment && !hasFunctionCall && !hasKeyword) {
+    return { valid: false, error: 'conversionRule must contain an assignment, function call, or PL/0 keyword' };
   }
+
   return { valid: true };
 }
 
