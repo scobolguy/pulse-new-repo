@@ -46,6 +46,83 @@ function mappingTitle(mapping) {
   return String(mapping?.name || `${mapping?.sourceTypeId || ''} -> ${mapping?.targetTypeId || ''}` || '').trim();
 }
 
+function normalizePath(value) {
+  return String(value || '')
+    .trim()
+    .replaceAll('\\', '/')
+    .replace(/^\.\//, '')
+    .replace(/^\/+/, '')
+    .toLowerCase();
+}
+
+function resolveSchemaByPath(schemasByPath, rawPath) {
+  const direct = schemasByPath.get(rawPath);
+  if (direct) return direct;
+
+  const normalizedTarget = normalizePath(rawPath);
+  if (!normalizedTarget) return null;
+
+  for (const [candidatePath, schema] of schemasByPath.entries()) {
+    const candidate = normalizePath(candidatePath);
+    if (!candidate) continue;
+    if (candidate === normalizedTarget) return schema;
+    if (candidate.endsWith(normalizedTarget)) return schema;
+    if (normalizedTarget.endsWith(candidate)) return schema;
+  }
+  return null;
+}
+
+function formatSwiftLikePath(path) {
+  const raw = String(path || '');
+  const match = raw.match(/^finEnvelope\.block4\.fields\.([A-Za-z0-9]+)(?:\.(.+))?$/);
+  if (!match) return raw;
+  const fieldTag = match[1];
+  const suffix = match[2] ? `.${match[2]}` : '';
+  return `:${fieldTag}:${suffix}`;
+}
+
+function extractMtFieldDefs(rawSchema) {
+  const messageType = String(rawSchema?.messageType || '').toUpperCase();
+  const fields = rawSchema?.finEnvelope?.block4?.fields;
+  if (!messageType.startsWith('MT') || !fields || typeof fields !== 'object' || Array.isArray(fields)) {
+    return null;
+  }
+  const byTag = new Map();
+  for (const [tag, def] of Object.entries(fields)) {
+    if (!def || typeof def !== 'object' || Array.isArray(def)) continue;
+    byTag.set(String(tag), {
+      name: String(def.name || tag),
+      format: String(def.format || ''),
+    });
+  }
+  return byTag;
+}
+
+function formatPathForDisplay(path, mtFieldDefs) {
+  const raw = String(path || '');
+  if (!mtFieldDefs) return formatSwiftLikePath(raw);
+
+  const match = raw.match(/^finEnvelope\.block4\.fields\.([A-Za-z0-9]+)(?:\.(.+))?$/);
+  if (!match) return formatSwiftLikePath(raw);
+
+  const fieldTag = String(match[1]);
+  const rest = match[2] ? `.${match[2]}` : '';
+  return `:${fieldTag}:${rest}`;
+}
+
+function labelForPath(path, mtFieldDefs) {
+  return formatPathForDisplay(path, mtFieldDefs);
+}
+
+function isMtSchemaPath(schemaPath) {
+  return /swift-mt/i.test(String(schemaPath || ''));
+}
+
+function filterNodesForSchema(nodes, schemaPath) {
+  if (!isMtSchemaPath(schemaPath)) return nodes;
+  return nodes.filter(node => String(node.path || '').startsWith('finEnvelope.block4.fields.'));
+}
+
 export default function DataMapper() {
   const [mappings, setMappings] = useState([]);
   const [schemas, setSchemas] = useState([]);
@@ -61,6 +138,8 @@ export default function DataMapper() {
   const [sourceSchemaPath, setSourceSchemaPath] = useState('');
   const [targetSchemaPath, setTargetSchemaPath] = useState('');
   const [items, setItems] = useState([]);
+  const [sourceMtFieldDefs, setSourceMtFieldDefs] = useState(null);
+  const [targetMtFieldDefs, setTargetMtFieldDefs] = useState(null);
 
   async function loadAll() {
     try {
@@ -89,11 +168,51 @@ export default function DataMapper() {
     return map;
   }, [schemas]);
 
-  const sourceSchema = useMemo(() => schemasByPath.get(sourceSchemaPath) || null, [schemasByPath, sourceSchemaPath]);
-  const targetSchema = useMemo(() => schemasByPath.get(targetSchemaPath) || null, [schemasByPath, targetSchemaPath]);
+  const sourceSchema = useMemo(() => resolveSchemaByPath(schemasByPath, sourceSchemaPath), [schemasByPath, sourceSchemaPath]);
+  const targetSchema = useMemo(() => resolveSchemaByPath(schemasByPath, targetSchemaPath), [schemasByPath, targetSchemaPath]);
 
-  const sourceNodes = useMemo(() => flattenStructure(sourceSchema?.structure), [sourceSchema]);
-  const targetNodes = useMemo(() => flattenStructure(targetSchema?.structure), [targetSchema]);
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function loadMtDefs(schemaPath, setter) {
+      if (!schemaPath || !/swift-mt/i.test(schemaPath) || !/\.json$/i.test(schemaPath)) {
+        setter(null);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/librarian/file/${schemaPath}`);
+        if (!res.ok) {
+          setter(null);
+          return;
+        }
+        const raw = await res.json();
+        if (isCancelled) return;
+        setter(extractMtFieldDefs(raw));
+      } catch {
+        if (!isCancelled) setter(null);
+      }
+    }
+
+    const effectiveSourcePath = sourceSchema?.path || sourceSchemaPath;
+    const effectiveTargetPath = targetSchema?.path || targetSchemaPath;
+
+    loadMtDefs(effectiveSourcePath, setSourceMtFieldDefs);
+    loadMtDefs(effectiveTargetPath, setTargetMtFieldDefs);
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [sourceSchemaPath, targetSchemaPath, sourceSchema, targetSchema]);
+
+  const sourceNodes = useMemo(() => {
+    const allNodes = flattenStructure(sourceSchema?.structure);
+    return filterNodesForSchema(allNodes, sourceSchemaPath);
+  }, [sourceSchema, sourceSchemaPath]);
+
+  const targetNodes = useMemo(() => {
+    const allNodes = flattenStructure(targetSchema?.structure);
+    return filterNodesForSchema(allNodes, targetSchemaPath);
+  }, [targetSchema, targetSchemaPath]);
 
   const sourceNodeByPath = useMemo(() => {
     const map = new Map();
@@ -108,6 +227,14 @@ export default function DataMapper() {
   }, [targetNodes]);
 
   const editorReady = !!editingId && !!sourceSchema && !!targetSchema;
+
+  const linkedSourcePaths = useMemo(() => {
+    return new Set(items.map(item => String(item.sourcePath || '')).filter(Boolean));
+  }, [items]);
+
+  const linkedTargetPaths = useMemo(() => {
+    return new Set(items.map(item => String(item.targetPath || '')).filter(Boolean));
+  }, [items]);
 
   function openMapping(mapping) {
     setEditingId(String(mapping.id || ''));
@@ -222,6 +349,15 @@ export default function DataMapper() {
           </div>
         )}
 
+        {!!editingId && (
+          <div style={{ marginBottom: 10, fontSize: 12, border: '1px solid #d8e0ea', borderRadius: 6, padding: '8px 10px', background: '#f8fbff' }}>
+            <div><strong>Opened Map:</strong> {name || editingId}</div>
+            <div><strong>Source:</strong> {sourceTypeId} | {sourceSchemaPath} {sourceSchema ? '' : '(schema not resolved)'}</div>
+            <div><strong>Destination:</strong> {targetTypeId} | {targetSchemaPath} {targetSchema ? '' : '(schema not resolved)'}</div>
+            <div><strong>Links In Map:</strong> {items.length}</div>
+          </div>
+        )}
+
         {!editorReady && (
           <div style={{ border: '1px dashed #9ca3af', borderRadius: 8, padding: 22, background: '#fbfcff', color: '#4b5563' }}>
             Open a mapping to launch the drag-and-drop screen.
@@ -244,9 +380,12 @@ export default function DataMapper() {
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Source</div>
                 <div style={PANEL_STYLE}>
-                  {sourceNodes.map(node => (
+                  {sourceNodes.map((node, index) => {
+                    const isLinked = linkedSourcePaths.has(node.path);
+                    const displayPath = labelForPath(node.path, sourceMtFieldDefs);
+                    return (
                     <div
-                      key={`src:${node.path}`}
+                      key={`src:${index}:${node.path}`}
                       draggable
                       onDragStart={event => onSourceDragStart(event, node)}
                       style={{
@@ -258,25 +397,26 @@ export default function DataMapper() {
                         display: 'flex',
                         alignItems: 'center',
                         gap: 8,
+                        background: isLinked ? '#fff6e8' : '#fff',
                       }}
                       title="Drag to destination"
                     >
                       <span>{node.kind === 'branch' ? '▸' : '•'}</span>
-                      <span>{node.path}</span>
-                      <span style={{ marginLeft: 'auto', color: '#6b7280' }}>{node.valueType}</span>
+                      <span>{displayPath}</span>
                     </div>
-                  ))}
+                  );})}
                 </div>
               </div>
 
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Destination</div>
                 <div style={PANEL_STYLE}>
-                  {targetNodes.map(node => {
-                    const dragNode = sourceNodes.find(sourceNode => isCompatible(sourceNode, node));
+                  {targetNodes.map((node, index) => {
+                    const isLinked = linkedTargetPaths.has(node.path);
+                    const displayPath = labelForPath(node.path, targetMtFieldDefs);
                     return (
                       <div
-                        key={`dst:${node.path}`}
+                        key={`dst:${index}:${node.path}`}
                         onDragOver={event => event.preventDefault()}
                         onDrop={event => onTargetDrop(event, node)}
                         style={{
@@ -284,7 +424,8 @@ export default function DataMapper() {
                           padding: '4px 8px',
                           borderBottom: '1px solid #eef2f7',
                           fontSize: 12,
-                          background: dragNode ? '#fff' : '#f7f8fa',
+                          cursor: 'default',
+                          background: isLinked ? '#eaf8ef' : '#fff',
                           display: 'flex',
                           alignItems: 'center',
                           gap: 8,
@@ -292,8 +433,7 @@ export default function DataMapper() {
                         title="Drop source node here"
                       >
                         <span>{node.kind === 'branch' ? '▸' : '•'}</span>
-                        <span>{node.path}</span>
-                        <span style={{ marginLeft: 'auto', color: '#6b7280' }}>{node.valueType}</span>
+                        <span>{displayPath}</span>
                       </div>
                     );
                   })}
@@ -302,21 +442,15 @@ export default function DataMapper() {
             </div>
 
             <div style={{ marginTop: 14, border: '1px solid #dce3eb', borderRadius: 6, overflow: 'hidden' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1.6fr 0.8fr 0.8fr 0.8fr auto', gap: 8, padding: '8px 10px', background: '#f7f9fc', fontSize: 12, fontWeight: 600 }}>
-                <div>Source Path</div>
-                <div>Target Path</div>
-                <div>Kind</div>
-                <div>Source Type</div>
-                <div>Target Type</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, padding: '8px 10px', background: '#f7f9fc', fontSize: 12, fontWeight: 600 }}>
+                <div>Link (Source {'->'} Destination)</div>
                 <div>Action</div>
               </div>
               {items.map((item, index) => (
-                <div key={`item:${index}`} style={{ display: 'grid', gridTemplateColumns: '1.6fr 1.6fr 0.8fr 0.8fr 0.8fr auto', gap: 8, padding: '8px 10px', borderTop: '1px solid #edf2f7', fontSize: 12, alignItems: 'center' }}>
-                  <div>{item.sourcePath}</div>
-                  <div>{item.targetPath}</div>
-                  <div>{item.kind}</div>
-                  <div>{item.sourceValueType}</div>
-                  <div>{item.targetValueType}</div>
+                <div key={`item:${index}`} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, padding: '8px 10px', borderTop: '1px solid #edf2f7', fontSize: 12, alignItems: 'center' }}>
+                  <div style={{ fontFamily: 'Consolas, monospace' }}>
+                    {labelForPath(item.sourcePath, sourceMtFieldDefs)} {'->'} {labelForPath(item.targetPath, targetMtFieldDefs)}
+                  </div>
                   <button type="button" onClick={() => removeItem(index)}>Remove</button>
                 </div>
               ))}
