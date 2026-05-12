@@ -238,7 +238,14 @@ function getInitialExpandedPaths(indexData) {
 
 function filterNodesForSchema(nodes, schemaPath) {
   if (!isMtSchemaPath(schemaPath)) return nodes;
-  return nodes.filter(node => /^finEnvelope\.block4\.fields\.[A-Za-z0-9]+$/.test(String(node.path || '')));
+  return nodes
+    .filter(node => /^finEnvelope\.block4\.fields\.[A-Za-z0-9]+$/.test(String(node.path || '')))
+    .map(node => ({
+      ...node,
+      // Treat MT top-level tags as terminal mapping fields.
+      kind: 'leaf',
+      valueType: node.valueType || 'unknown',
+    }));
 }
 
 export default function DataMapper() {
