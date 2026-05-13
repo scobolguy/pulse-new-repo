@@ -8,7 +8,12 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "compile:dsl": "node scripts/compile-router-mapper-dsl.mjs"
+    "compile:dsl": "node scripts/compile-pascal.mjs",
+    "compile:pcode": "node scripts/compile-pascal-to-pcode.mjs",
+    "run:pcode:js": "node scripts/run-js-pmachine.mjs",
+    "compile:workflow": "node scripts/compile-workflow-dsl.mjs --in data/workflow.wfl",
+    "interpret:workflow": "node scripts/interpret-workflow.mjs --in data/workflow.wfl --workflow enqueue-pacs",
+    "check:pcode-compat": "node scripts/check-pcode-compat.mjs"
   },
   "dependencies": {
     "cors": "^2.8.6",

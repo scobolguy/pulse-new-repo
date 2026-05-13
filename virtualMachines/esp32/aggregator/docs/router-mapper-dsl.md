@@ -12,7 +12,7 @@ Top-level declarations:
 ### Router syntax
 
 ROUTER "rule-id" INPUT "queue.name" [DESCRIPTION "text"] [ENABLED TRUE|FALSE] [SERVICE "service-id"] BEGIN
-  OUTPUT "queue.name" WHEN "<pl0-when>" TRANSFORM "<pl0-transform>";
+  OUTPUT "queue.name" [TYPE "type-id" | TYPES ("type-a", "type-b", ...)] WHEN "<pl0-when>" TRANSFORM "<pl0-transform>";
   ...
 END;
 
@@ -22,16 +22,25 @@ Notes:
 - WHEN should produce output truthy/falsy.
 - TRANSFORM should assign to output (for example: output := src;).
 - map("mapping-id", payload) is supported in transform snippets by the router runtime.
+- TYPE sets a single queue type for auto-created output queues.
+- TYPES sets a set of allowed queue types for auto-created output queues.
+- Comments follow standard Pascal forms: `{ ... }` or `(* ... *)`.
 
 Block form example:
 
 OUTPUT "payments.mt103"
+  TYPE "swift-mt103"
   WHEN BEGIN
     IF startswith(upper(src), "MT103") THEN output := 1 ELSE output := 0;
   END
   TRANSFORM BEGIN
     output := src;
   END;
+
+OUTPUT "correspondent.pacs008.outbound"
+  TYPES ("pacs", "pacs-lynx")
+  WHEN "output := 1;"
+  TRANSFORM "output := src;";
 
 ### Mapper syntax
 
@@ -58,12 +67,15 @@ Input:
 - data/router-mapper.dsl
 
 Compiler:
-- scripts/compile-router-mapper-dsl.mjs
+- scripts/compile-pascal.mjs
+- scripts/compile-pascal-to-pcode.mjs
 
 Output artifacts:
 - data/router-rules.generated.json
 - data/data-mappings.generated.json
 - data/router-mapper-compiled.json (contains AST + emitted artifacts)
+- ../pcode/router-mapper.pcode (portable pcode text)
+- ../pcode/router-mapper.program.json (symbol and metadata sidecar)
 
 The compiler flow is:
 1. Tokenize DSL
@@ -74,11 +86,27 @@ The compiler flow is:
 
 ## 3) Run compiler
 
-node scripts/compile-router-mapper-dsl.mjs \
+node scripts/compile-pascal.mjs \
   --in data/router-mapper.dsl \
   --router-out data/router-rules.generated.json \
   --mapping-out data/data-mappings.generated.json \
   --artifact-out data/router-mapper-compiled.json
+
+Compile to portable pcode for PMachine runtimes:
+
+node scripts/compile-pascal-to-pcode.mjs \
+  --in data/router-mapper.dsl \
+  --out ../pcode/router-mapper.pcode \
+  --map-out ../pcode/router-mapper.program.json \
+  --manifest ../pcode/pcode-opcodes.manifest.json
+
+Run generated .pcode on the JavaScript PMachine runtime:
+
+node scripts/run-js-pmachine.mjs \
+  --pcode ../pcode/router-mapper.pcode \
+  --program-map ../pcode/router-mapper.program.json \
+  --input-queue swift.mt103.parsed \
+  --message "MT103 SAMPLE"
 
 ## 4) Example
 

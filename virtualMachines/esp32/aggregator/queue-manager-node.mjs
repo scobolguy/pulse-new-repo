@@ -79,20 +79,23 @@ app.get('/health', (req, res) => {
 });
 
 app.post('/enqueue', (req, res) => {
-  const { queueName, message, sourceService, messageId } = req.body || {};
+  const { queueName, message, sourceService, messageId, messageEnvelope } = req.body || {};
   if (!queueName) {
     return res.status(400).json({ error: 'queueName is required' });
   }
-  const acceptedMessageId = queueManager.enqueue(queueName, message, sourceService || 'remote-producer', messageId || null);
+  if (!Object.prototype.hasOwnProperty.call(req.body || {}, 'message')) {
+    return res.status(400).json({ error: 'message is required' });
+  }
+  const acceptedMessageId = queueManager.enqueue(queueName, message, sourceService || 'remote-producer', messageId || null, messageEnvelope || null);
   res.json({ status: 'enqueued', managerId, queueName, queueLength: queueManager.getQueueLength(queueName), messageId: acceptedMessageId });
 });
 
 app.post('/replicate-enqueue', (req, res) => {
-  const { queueName, message, sourceService, messageId } = req.body || {};
+  const { queueName, message, sourceService, messageId, messageEnvelope } = req.body || {};
   if (!queueName) {
     return res.status(400).json({ error: 'queueName is required' });
   }
-  queueManager.enqueueReplicated(queueName, message, sourceService || 'replication', messageId);
+  queueManager.enqueueReplicated(queueName, message, sourceService || 'replication', messageId, messageEnvelope || null);
   res.json({ status: 'replicated', managerId, queueName, queueLength: queueManager.getQueueLength(queueName) });
 });
 

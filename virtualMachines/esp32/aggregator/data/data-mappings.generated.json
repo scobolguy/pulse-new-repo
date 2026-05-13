@@ -32,8 +32,8 @@
         "conversionRule": "output := mtamounttodecimal(src);"
       }
     ],
-    "createdAt": "2026-05-12T22:01:57.211Z",
-    "updatedAt": "2026-05-12T22:01:57.211Z"
+    "createdAt": "2026-05-13T13:27:41.446Z",
+    "updatedAt": "2026-05-13T13:27:41.446Z"
   },
   {
     "id": "pacs-to-lynx-mini",
@@ -60,7 +60,7 @@
         "conversionRule": "output := upper(src);"
       }
     ],
-    "createdAt": "2026-05-12T22:01:57.211Z",
-    "updatedAt": "2026-05-12T22:01:57.211Z"
+    "createdAt": "2026-05-13T13:27:41.446Z",
+    "updatedAt": "2026-05-13T13:27:41.446Z"
   }
 ]

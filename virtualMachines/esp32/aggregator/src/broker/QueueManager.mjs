@@ -14,6 +14,9 @@ export default class QueueManager {
     this.peerNotifyCallbacks = []; // Callbacks to notify peer instances on config change
     this.persistence = persistPath ? new QueueManagerPersistence(name, persistPath) : null;
     this.seenMessageIds = new Set(); // Deduplication for replicated enqueues
+    this.snapshotEveryOps = 200;
+    this.retainOpsAfterSnapshot = 500;
+    this.opsSinceCheckpoint = 0;
     this.loadFromDisk();
   }
 
@@ -22,10 +25,18 @@ export default class QueueManager {
     if (!this.persistence) return;
     
     try {
+      const snapshot = this.persistence.loadSnapshot();
+      if (snapshot) {
+        this.queues = JSON.parse(JSON.stringify(snapshot.queues || {}));
+        this.queueConfig = JSON.parse(JSON.stringify(snapshot.queueConfig || {}));
+        this.configVersion = Number(snapshot.configVersion || 0);
+        this.operationLogVersion = Number(snapshot.operationLogVersion || 0);
+      }
+
       const configData = this.persistence.loadConfig();
       if (configData) {
         this.queueConfig = configData.queueConfig || {};
-        this.configVersion = configData.configVersion || 0;
+        this.configVersion = Math.max(this.configVersion, Number(configData.configVersion || 0));
         // Reinitialize queues to match config
         for (const queueName of Object.keys(this.queueConfig)) {
           if (!this.queues[queueName]) {
@@ -36,17 +47,121 @@ export default class QueueManager {
       
       const operations = this.persistence.loadOperations();
       for (const op of operations) {
+        if (op.version && op.version <= this.operationLogVersion) {
+          continue;
+        }
         if (op.version && op.version > this.operationLogVersion) {
           this.operationLogVersion = op.version;
         }
         this.operationLog.push(op);
+        this.applyOperationToState(op);
       }
       if (this.operationLog.length > 1000) {
-        this.operationLog.shift();
+        this.operationLog = this.operationLog.slice(-1000);
       }
+
+      this.restoreQueueMessagesFromFiles();
     } catch (e) {
       console.error(`Error loading from disk for ${this.name}:`, e.message);
     }
+  }
+
+  restoreQueueMessagesFromFiles() {
+    if (!this.persistence) return;
+
+    for (const queueName of Object.keys(this.queues)) {
+      const diskMessages = this.persistence.loadQueueMessages(queueName);
+      if (diskMessages.length > 0) {
+        this.queues[queueName].messages = diskMessages;
+        continue;
+      }
+
+      const inMemoryMessages = Array.isArray(this.queues[queueName].messages)
+        ? this.queues[queueName].messages
+        : [];
+      if (inMemoryMessages.length === 0) continue;
+
+      const migrated = [];
+      for (const msg of inMemoryMessages) {
+        const messageId = msg && msg.messageId ? msg.messageId : randomUUID();
+        try {
+          const persisted = this.persistence.persistQueueMessage(queueName, {
+            message: msg ? msg.message : null,
+            sourceService: msg ? msg.sourceService : null,
+            messageId,
+            messageEnvelope: msg ? (msg.messageEnvelope || null) : null
+          });
+          migrated.push(persisted);
+        } catch (e) {
+          console.error(`Error migrating queued message for ${this.name}/${queueName}:`, e.message);
+          migrated.push({
+            message: msg ? msg.message : null,
+            sourceService: msg ? msg.sourceService : null,
+            messageId,
+            messageEnvelope: msg ? (msg.messageEnvelope || null) : null
+          });
+        }
+      }
+      this.queues[queueName].messages = migrated;
+    }
+  }
+
+  checkpointPersistence() {
+    if (!this.persistence) return;
+
+    const queueLengths = {};
+    for (const queueName of Object.keys(this.queues)) {
+      queueLengths[queueName] = this.getQueueLength(queueName);
+    }
+
+    this.persistence.saveSnapshot({
+      queueManagerName: this.name,
+      queueConfig: this.queueConfig,
+      queueLengths,
+      configVersion: this.configVersion,
+      operationLogVersion: this.operationLogVersion,
+      timestamp: Date.now()
+    });
+
+    const retainedOperations = this.operationLog.slice(-this.retainOpsAfterSnapshot);
+    this.persistence.replaceOperations(retainedOperations);
+    this.operationLog = retainedOperations;
+    this.opsSinceCheckpoint = 0;
+  }
+
+  applyOperationToState(operation) {
+    if (!operation || typeof operation !== 'object') return;
+
+    const { type, queueName, config } = operation;
+
+    if (type === 'createQueue') {
+      if (!this.queueConfig[queueName]) {
+        this.queueConfig[queueName] = {
+          name: queueName,
+          createdAt: Date.now(),
+          frozen: false,
+          ...(config || {})
+        };
+      }
+      if (!this.queues[queueName]) this.queues[queueName] = { messages: [] };
+      return;
+    }
+
+    if (type === 'deleteQueue') {
+      delete this.queueConfig[queueName];
+      delete this.queues[queueName];
+      return;
+    }
+
+    if (type === 'updateQueueConfig') {
+      this.queueConfig[queueName] = {
+        ...(this.queueConfig[queueName] || { name: queueName, createdAt: Date.now(), frozen: false }),
+        ...(config || {})
+      };
+      if (!this.queues[queueName]) this.queues[queueName] = { messages: [] };
+      return;
+    }
+
   }
 
   // Save configuration to disk
@@ -108,6 +223,9 @@ export default class QueueManager {
     }
     delete this.queueConfig[queueName];
     delete this.queues[queueName];
+    if (this.persistence) {
+      this.persistence.removeQueueStorage(queueName);
+    }
     this.configVersion++;
     this.saveToDisk();
     
@@ -194,6 +312,11 @@ export default class QueueManager {
     if (this.operationLog.length > 1000) {
       this.operationLog.shift();
     }
+
+    this.opsSinceCheckpoint += 1;
+    if (this.persistence && this.opsSinceCheckpoint >= this.snapshotEveryOps) {
+      this.checkpointPersistence();
+    }
   }
 
   // Get operations since a specific version (for replicas to catch up)
@@ -203,7 +326,7 @@ export default class QueueManager {
 
   // Apply a replicated operation (used by replicas)
   applyReplicatedOperation(operation) {
-    const { type, queueName, message, sourceService, messageId, removedMessage } = operation;
+    const { type, queueName, message, sourceService, messageId, messageEnvelope, removedMessage } = operation;
     
     // Handle config operations first
     if (type === 'createQueue' || type === 'deleteQueue' || type === 'updateQueueConfig') {
@@ -212,9 +335,7 @@ export default class QueueManager {
     }
     
     if (type === 'enqueue') {
-      if (!this.queues[queueName]) this.queues[queueName] = { messages: [] };
-      if (!this.queues[queueName].messages) this.queues[queueName].messages = [];
-      this.queues[queueName].messages.push({ message, sourceService, messageId: messageId || randomUUID() });
+      this.enqueueReplicated(queueName, message, sourceService, messageId || null, messageEnvelope || null);
       return true;
     }
     if (type === 'dequeue') {
@@ -243,20 +364,24 @@ export default class QueueManager {
     return this.queueConfig[queueName] || {};
   }
 
-  enqueue(queueName, message, sourceService, messageId = null) {
+  enqueue(queueName, message, sourceService, messageId = null, messageEnvelope = null) {
     if (!this.queueConfig[queueName]) {
       throw new Error(`Queue ${queueName} not configured`);
     }
     if (!this.queues[queueName]) this.queues[queueName] = { messages: [] };
     if (!this.queues[queueName].messages) this.queues[queueName].messages = [];
     const resolvedMessageId = messageId || randomUUID();
-    this.queues[queueName].messages.push({ message, sourceService, messageId: resolvedMessageId });
-    this.logOperation({ type: 'enqueue', queueName, message, sourceService, messageId: resolvedMessageId });
+    let queuedItem = { message, sourceService, messageId: resolvedMessageId, messageEnvelope: messageEnvelope || null };
+    if (this.persistence) {
+      queuedItem = this.persistence.persistQueueMessage(queueName, queuedItem);
+    }
+    this.queues[queueName].messages.push(queuedItem);
+    this.logOperation({ type: 'enqueue', queueName, message, sourceService, messageId: resolvedMessageId, messageEnvelope: messageEnvelope || null });
     return resolvedMessageId;
   }
 
   // Replicated enqueue: deduplicates by messageId, does not re-log (avoids cascade)
-  enqueueReplicated(queueName, message, sourceService, messageId) {
+  enqueueReplicated(queueName, message, sourceService, messageId, messageEnvelope = null) {
     if (messageId && this.seenMessageIds.has(messageId)) return;
     if (messageId) {
       this.seenMessageIds.add(messageId);
@@ -266,7 +391,13 @@ export default class QueueManager {
     }
     if (!this.queues[queueName]) this.queues[queueName] = { messages: [] };
     if (!this.queues[queueName].messages) this.queues[queueName].messages = [];
-    this.queues[queueName].messages.push({ message, sourceService, messageId: messageId || randomUUID() });
+    const resolvedMessageId = messageId || randomUUID();
+    let queuedItem = { message, sourceService, messageId: resolvedMessageId, messageEnvelope: messageEnvelope || null };
+    if (this.persistence) {
+      queuedItem = this.persistence.persistQueueMessage(queueName, queuedItem);
+    }
+    this.queues[queueName].messages.push(queuedItem);
+    this.logOperation({ type: 'enqueue', queueName, message, sourceService, messageId: resolvedMessageId, messageEnvelope: messageEnvelope || null });
   }
 
   dequeue(queueName, consumerService) {
@@ -274,7 +405,12 @@ export default class QueueManager {
       throw new Error(`Queue ${queueName} not configured`);
     }
     if (!this.queues[queueName] || !this.queues[queueName].messages || this.queues[queueName].messages.length === 0) return null;
-    const result = this.queues[queueName].messages.shift();
+    const queue = this.queues[queueName].messages;
+    const candidate = queue[0] || null;
+    if (candidate && candidate.filePath && this.persistence) {
+      this.persistence.removeMessageFile(candidate.filePath);
+    }
+    const result = queue.shift();
     this.logOperation({ type: 'dequeue', queueName, consumerService, removedMessage: result || null });
     return result;
   }
@@ -285,7 +421,16 @@ export default class QueueManager {
     }
 
     if (!removedMessage) {
-      return this.queues[queueName].messages.shift() || null;
+      const queue = this.queues[queueName].messages;
+      const candidate = queue[0] || null;
+      if (candidate && candidate.filePath && this.persistence) {
+        this.persistence.removeMessageFile(candidate.filePath);
+      }
+      const removed = queue.shift() || null;
+      if (removed) {
+        this.logOperation({ type: 'dequeue', queueName, removedMessage: removed });
+      }
+      return removed;
     }
 
     const queue = this.queues[queueName].messages;
@@ -294,6 +439,12 @@ export default class QueueManager {
       const idx = queue.findIndex(item => item && item.messageId === removedMessageId);
       if (idx >= 0) {
         const [removed] = queue.splice(idx, 1);
+        if (removed && removed.filePath && this.persistence) {
+          this.persistence.removeMessageFile(removed.filePath);
+        }
+        if (removed) {
+          this.logOperation({ type: 'dequeue', queueName, removedMessage: removed });
+        }
         return removed || null;
       }
     }
@@ -305,10 +456,23 @@ export default class QueueManager {
     ));
     if (fallbackIdx >= 0) {
       const [removed] = queue.splice(fallbackIdx, 1);
+      if (removed && removed.filePath && this.persistence) {
+        this.persistence.removeMessageFile(removed.filePath);
+      }
+      if (removed) {
+        this.logOperation({ type: 'dequeue', queueName, removedMessage: removed });
+      }
       return removed || null;
     }
 
-    return queue.shift() || null;
+    const removed = queue.shift() || null;
+    if (removed && removed.filePath && this.persistence) {
+      this.persistence.removeMessageFile(removed.filePath);
+    }
+    if (removed) {
+      this.logOperation({ type: 'dequeue', queueName, removedMessage: removed });
+    }
+    return removed;
   }
 
   getQueueLength(queueName) {
@@ -322,11 +486,16 @@ export default class QueueManager {
 
   // Get full queue state snapshot
   getSnapshot() {
+    const queueLengths = {};
+    for (const queueName of Object.keys(this.queues)) {
+      queueLengths[queueName] = this.getQueueLength(queueName);
+    }
+
     return {
       name: this.name,
       version: this.operationLogVersion,
       configVersion: this.configVersion,
-      queues: JSON.parse(JSON.stringify(this.queues)),
+      queueLengths,
       queueConfig: JSON.parse(JSON.stringify(this.queueConfig)),
       timestamp: Date.now()
     };
@@ -337,12 +506,16 @@ export default class QueueManager {
       throw new Error('snapshot object is required');
     }
 
-    this.queues = JSON.parse(JSON.stringify(snapshot.queues || {}));
+    this.queues = {};
+    for (const queueName of Object.keys(snapshot.queueConfig || {})) {
+      this.queues[queueName] = { messages: [] };
+    }
     this.queueConfig = JSON.parse(JSON.stringify(snapshot.queueConfig || {}));
     this.configVersion = Number(snapshot.configVersion || 0);
     this.operationLogVersion = Number(snapshot.version || 0);
     this.operationLog = [];
     this.saveToDisk();
+    this.checkpointPersistence();
   }
 
   getPersistenceStatus() {

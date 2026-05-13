@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "notes": "Single source of truth for pcode opcode IDs shared by ESP32 and JavaScript PMachines.",
+  "opcodes": [
+    { "name": "OP_NOP", "hex": "0x00" },
+    { "name": "OP_LIT", "hex": "0x01" },
+    { "name": "OP_OPR", "hex": "0x02" },
+    { "name": "OP_LOD", "hex": "0x03" },
+    { "name": "OP_STO", "hex": "0x04" },
+    { "name": "OP_CAL", "hex": "0x05" },
+    { "name": "OP_INT", "hex": "0x06" },
+    { "name": "OP_JMP", "hex": "0x07" },
+    { "name": "OP_JZ", "hex": "0x08" },
+    { "name": "OP_PUSH_INT", "hex": "0x09" },
+    { "name": "OP_PUSH_STR", "hex": "0x0A" },
+    { "name": "OP_PUSH_ENUM", "hex": "0x0B" },
+    { "name": "OP_ADD", "hex": "0x0C" },
+    { "name": "OP_SUB", "hex": "0x0D" },
+    { "name": "OP_MUL", "hex": "0x0E" },
+    { "name": "OP_DIV", "hex": "0x0F" },
+    { "name": "OP_PRINT_INT", "hex": "0x10" },
+    { "name": "OP_PRINT_ENUM", "hex": "0x11" },
+    { "name": "OP_ROUTE_MATCH_QUEUE", "hex": "0x12" },
+    { "name": "OP_ROUTE_EVAL_WHEN", "hex": "0x13" },
+    { "name": "OP_ROUTE_TRANSFORM", "hex": "0x14" },
+    { "name": "OP_ROUTE_EMIT", "hex": "0x15" },
+    { "name": "OP_PARSE_FIN_TEXT", "hex": "0x16" },
+    { "name": "OP_HALT", "hex": "0xFF" }
+  ]
+}

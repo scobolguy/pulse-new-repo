@@ -1,0 +1,15 @@
+{
+  "queueConfig": {
+    "envelope.q": {
+      "name": "envelope.q",
+      "createdAt": 1778677347966,
+      "frozen": false,
+      "dataTypeId": "pacs",
+      "dataTypeIds": [
+        "pacs"
+      ]
+    }
+  },
+  "configVersion": 1,
+  "timestamp": 1778677347967
+}

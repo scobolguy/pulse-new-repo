@@ -1,0 +1,33 @@
+{
+  "queues": [
+    {
+      "symbol": "inboundSwift",
+      "queueName": "swift.inbound",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "dataTypeId": "text-string"
+    },
+    {
+      "symbol": "pacsOutbound",
+      "queueName": "pacs.outbound",
+      "dataTypeIds": [
+        "pacs",
+        "pacs-lynx"
+      ],
+      "dataTypeId": "pacs"
+    }
+  ],
+  "files": [
+    {
+      "symbol": "mtTemplate",
+      "path": "/services/templates/mt103.txt"
+    }
+  ],
+  "apis": [
+    {
+      "symbol": "aggregator",
+      "baseUrl": "http://localhost:4000"
+    }
+  ]
+}

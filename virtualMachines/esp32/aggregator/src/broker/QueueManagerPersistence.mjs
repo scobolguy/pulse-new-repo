@@ -9,6 +9,11 @@ export class QueueManagerPersistence {
     this.basePath = path.join(basePath, queueManagerName);
     this.configPath = path.join(this.basePath, 'config.json');
     this.operationsPath = path.join(this.basePath, 'operations.jsonl');
+    this.snapshotPath = path.join(this.basePath, 'state.snapshot.json');
+    this.messagesRoot = path.join(this.basePath, 'messages');
+    this.maxSeq = (1n << 64n) - 1n;
+    this.seqPadWidth = String(this.maxSeq).length;
+    this.counterCache = new Map();
     this.ensureDirectories();
   }
 
@@ -16,6 +21,209 @@ export class QueueManagerPersistence {
     if (!fs.existsSync(this.basePath)) {
       fs.mkdirSync(this.basePath, { recursive: true });
     }
+    if (!fs.existsSync(this.messagesRoot)) {
+      fs.mkdirSync(this.messagesRoot, { recursive: true });
+    }
+  }
+
+  getQueueDir(queueName) {
+    return path.join(this.messagesRoot, encodeURIComponent(String(queueName || '')));
+  }
+
+  getCounterPath(queueName) {
+    return path.join(this.getQueueDir(queueName), 'order-counter.json');
+  }
+
+  ensureQueueDir(queueName) {
+    const queueDir = this.getQueueDir(queueName);
+    if (!fs.existsSync(queueDir)) {
+      fs.mkdirSync(queueDir, { recursive: true });
+    }
+    return queueDir;
+  }
+
+  parseMessageFileName(fileName) {
+    const match = String(fileName || '').match(/^(\d+)-(\d+)-([0-9a-fA-F-]{8,})\.json$/);
+    if (!match) return null;
+    const era = Number(match[1]);
+    const seq = BigInt(match[2]);
+    const messageId = match[3];
+    return { era, seq, messageId };
+  }
+
+  formatSeq(seq) {
+    return seq.toString().padStart(this.seqPadWidth, '0');
+  }
+
+  getLatestOrderFromDisk(queueName) {
+    const queueDir = this.ensureQueueDir(queueName);
+    const files = fs.readdirSync(queueDir).filter(name => name.endsWith('.json') && name !== 'order-counter.json');
+    let latest = null;
+
+    for (const file of files) {
+      const parsed = this.parseMessageFileName(file);
+      if (!parsed) continue;
+      if (!latest) {
+        latest = parsed;
+        continue;
+      }
+      if (parsed.era > latest.era || (parsed.era === latest.era && parsed.seq > latest.seq)) {
+        latest = parsed;
+      }
+    }
+
+    return latest;
+  }
+
+  loadOrderCounter(queueName) {
+    const cacheKey = String(queueName || '');
+    if (this.counterCache.has(cacheKey)) {
+      return this.counterCache.get(cacheKey);
+    }
+
+    const counterPath = this.getCounterPath(queueName);
+    let state = null;
+
+    if (fs.existsSync(counterPath)) {
+      try {
+        const content = fs.readFileSync(counterPath, 'utf-8');
+        const parsed = JSON.parse(content);
+        state = {
+          era: Number(parsed.era || 0),
+          nextSeq: BigInt(parsed.nextSeq || '0')
+        };
+      } catch (e) {
+        console.error(`Error loading order counter for ${this.queueManagerName}/${queueName}:`, e.message);
+      }
+    }
+
+    if (!state) {
+      const latest = this.getLatestOrderFromDisk(queueName);
+      if (latest) {
+        let era = latest.era;
+        let nextSeq = latest.seq + 1n;
+        if (nextSeq > this.maxSeq) {
+          era += 1;
+          nextSeq = 0n;
+        }
+        state = { era, nextSeq };
+      } else {
+        state = { era: 0, nextSeq: 0n };
+      }
+      this.saveOrderCounter(queueName, state);
+    }
+
+    this.counterCache.set(cacheKey, state);
+    return state;
+  }
+
+  saveOrderCounter(queueName, state) {
+    const queueDir = this.ensureQueueDir(queueName);
+    const counterPath = path.join(queueDir, 'order-counter.json');
+    const tmpPath = `${counterPath}.tmp`;
+    const serializable = {
+      era: Number(state.era || 0),
+      nextSeq: BigInt(state.nextSeq || 0n).toString()
+    };
+    fs.writeFileSync(tmpPath, JSON.stringify(serializable, null, 2));
+    fs.renameSync(tmpPath, counterPath);
+    this.counterCache.set(String(queueName || ''), { era: serializable.era, nextSeq: BigInt(serializable.nextSeq) });
+  }
+
+  allocateOrder(queueName) {
+    const state = this.loadOrderCounter(queueName);
+    const current = { era: state.era, seq: state.nextSeq };
+
+    let nextEra = state.era;
+    let nextSeq = state.nextSeq + 1n;
+    if (nextSeq > this.maxSeq) {
+      nextEra += 1;
+      nextSeq = 0n;
+    }
+
+    this.saveOrderCounter(queueName, { era: nextEra, nextSeq });
+    return current;
+  }
+
+  persistQueueMessage(queueName, payload) {
+    const { era, seq } = this.allocateOrder(queueName);
+    const messageId = String(payload.messageId || '');
+    const fileName = `${String(era).padStart(6, '0')}-${this.formatSeq(seq)}-${messageId}.json`;
+    const queueDir = this.ensureQueueDir(queueName);
+    const filePath = path.join(queueDir, fileName);
+    const tmpPath = `${filePath}.tmp`;
+
+    const record = {
+      message: payload.message,
+      sourceService: payload.sourceService,
+      messageId,
+      messageEnvelope: payload.messageEnvelope || null,
+      persistedAt: Date.now()
+    };
+
+    fs.writeFileSync(tmpPath, JSON.stringify(record));
+    fs.renameSync(tmpPath, filePath);
+
+    return {
+      ...record,
+      era,
+      seq: seq.toString(),
+      fileName,
+      filePath
+    };
+  }
+
+  loadQueueMessages(queueName) {
+    const queueDir = this.ensureQueueDir(queueName);
+    const files = fs.readdirSync(queueDir).filter(name => name.endsWith('.json') && name !== 'order-counter.json');
+
+    const parsedFiles = files
+      .map(fileName => ({ fileName, parsed: this.parseMessageFileName(fileName) }))
+      .filter(entry => !!entry.parsed)
+      .sort((a, b) => {
+        if (a.parsed.era !== b.parsed.era) return a.parsed.era - b.parsed.era;
+        if (a.parsed.seq < b.parsed.seq) return -1;
+        if (a.parsed.seq > b.parsed.seq) return 1;
+        return 0;
+      });
+
+    const messages = [];
+    for (const entry of parsedFiles) {
+      const filePath = path.join(queueDir, entry.fileName);
+      try {
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const parsed = JSON.parse(content);
+        messages.push({
+          message: parsed.message,
+          sourceService: parsed.sourceService,
+          messageId: parsed.messageId || entry.parsed.messageId,
+          messageEnvelope: parsed.messageEnvelope || null,
+          era: entry.parsed.era,
+          seq: entry.parsed.seq.toString(),
+          fileName: entry.fileName,
+          filePath
+        });
+      } catch (e) {
+        console.error(`Error loading persisted message ${filePath}:`, e.message);
+      }
+    }
+
+    return messages;
+  }
+
+  removeMessageFile(filePath) {
+    if (!filePath) return;
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+  }
+
+  removeQueueStorage(queueName) {
+    const queueDir = this.getQueueDir(queueName);
+    if (fs.existsSync(queueDir)) {
+      fs.rmSync(queueDir, { recursive: true, force: true });
+    }
+    this.counterCache.delete(String(queueName || ''));
   }
 
   // Save queue manager configuration to disk
@@ -74,11 +282,44 @@ export class QueueManagerPersistence {
     return this.loadOperations().filter(op => op.version && op.version > version);
   }
 
+  saveSnapshot(snapshot) {
+    try {
+      const tempPath = `${this.snapshotPath}.tmp`;
+      fs.writeFileSync(tempPath, JSON.stringify(snapshot, null, 2));
+      fs.renameSync(tempPath, this.snapshotPath);
+    } catch (e) {
+      console.error(`Error saving snapshot for ${this.queueManagerName}:`, e.message);
+    }
+  }
+
+  loadSnapshot() {
+    if (!fs.existsSync(this.snapshotPath)) return null;
+    try {
+      const content = fs.readFileSync(this.snapshotPath, 'utf-8');
+      return JSON.parse(content);
+    } catch (e) {
+      console.error(`Error loading snapshot for ${this.queueManagerName}:`, e.message);
+      return null;
+    }
+  }
+
+  replaceOperations(operations = []) {
+    try {
+      const lines = operations.map(op => JSON.stringify(op)).join('\n');
+      fs.writeFileSync(this.operationsPath, lines ? `${lines}\n` : '');
+    } catch (e) {
+      console.error(`Error compacting operations for ${this.queueManagerName}:`, e.message);
+    }
+  }
+
   // Clear all data (for cleanup or reset)
   clearAll() {
     try {
       if (fs.existsSync(this.configPath)) fs.unlinkSync(this.configPath);
       if (fs.existsSync(this.operationsPath)) fs.unlinkSync(this.operationsPath);
+      if (fs.existsSync(this.snapshotPath)) fs.unlinkSync(this.snapshotPath);
+      if (fs.existsSync(this.messagesRoot)) fs.rmSync(this.messagesRoot, { recursive: true, force: true });
+      this.counterCache.clear();
     } catch (e) {
       console.error(`Error clearing data for ${this.queueManagerName}:`, e.message);
     }
@@ -109,6 +350,7 @@ export class QueueManagerPersistence {
       basePath: this.basePath,
       config: this.getFileAttributes(this.configPath),
       operations: this.getFileAttributes(this.operationsPath),
+      snapshot: this.getFileAttributes(this.snapshotPath),
       checkedAt: new Date().toISOString(),
     };
   }

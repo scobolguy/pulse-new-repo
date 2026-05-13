@@ -240,7 +240,6 @@ class DSLTokenizer {
       this.advance();
     }
     throw new Error(`Unterminated Pascal comment at ${line}:${col}`);
-    }
   }
 
   isLetter(ch) {

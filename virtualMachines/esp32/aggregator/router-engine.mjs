@@ -34,6 +34,14 @@ function validateRuleShape(rule) {
   for (const out of rule.outputs) {
     if (!out || typeof out !== 'object') throw new Error('output must be an object');
     if (!out.queueName || typeof out.queueName !== 'string') throw new Error('output.queueName is required');
+    if (Object.prototype.hasOwnProperty.call(out, 'dataTypeId') && typeof out.dataTypeId !== 'string') {
+      throw new Error('output.dataTypeId must be a string when provided');
+    }
+    if (Object.prototype.hasOwnProperty.call(out, 'dataTypeIds')) {
+      if (!Array.isArray(out.dataTypeIds) || out.dataTypeIds.some(v => typeof v !== 'string')) {
+        throw new Error('output.dataTypeIds must be an array of strings when provided');
+      }
+    }
   }
 }
 
@@ -253,7 +261,10 @@ export function createRouterEngine({ rulesPath, mappingsPath = './data/data-mapp
         const delivery = await publishToQueue({
           queueName: output.queueName,
           message: routedMessage,
-          sourceService: `${sourceService}:router:${rule.id}`
+          sourceService: `${sourceService}:router:${rule.id}`,
+          dataTypeIds: Array.isArray(output.dataTypeIds)
+            ? output.dataTypeIds
+            : (output.dataTypeId ? [output.dataTypeId] : undefined)
         });
 
         deliveries.push({
@@ -291,6 +302,9 @@ export function createRouterEngine({ rulesPath, mappingsPath = './data/data-mapp
         description: rule.description || '',
         outputs: rule.outputs.map(out => ({
           queueName: out.queueName,
+          ...(Array.isArray(out.dataTypeIds) && out.dataTypeIds.length > 0
+            ? { dataTypeIds: out.dataTypeIds, dataTypeId: out.dataTypeIds[0] }
+            : (out.dataTypeId ? { dataTypeId: out.dataTypeId, dataTypeIds: [out.dataTypeId] } : {})),
           whenRule: out.whenRule || 'output := 1;',
           transformRule: out.transformRule || 'output := src;'
         })),

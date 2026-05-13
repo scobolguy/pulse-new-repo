@@ -34,6 +34,14 @@ Frontend:
 npm run dev
 ```
 
+DSL compilers:
+
+```powershell
+npm run compile:dsl
+npm run compile:workflow
+npm run interpret:workflow
+```
+
 ## Lifecycle States
 
 States used by queue managers and generic service instances:

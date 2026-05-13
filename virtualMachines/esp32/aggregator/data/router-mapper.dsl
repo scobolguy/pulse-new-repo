@@ -25,9 +25,9 @@ ROUTER "swift-fanout-default" INPUT "swift.inbound" DESCRIPTION "Default fanout 
 END;
 
 MAPPER "mt103-to-pacs-mini" SOURCE "swift-mt103" TARGET "pacs" DESCRIPTION "Minimal MT103 to PACS sample" ENABLED TRUE BEGIN
-  MAP "finEnvelope.block4.fields.20" TO "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId" USING BEGIN output := trim(src); END;
-  MAP "finEnvelope.block4.fields.32A.components.currency" TO "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy" USING "output := upper(src);";
-  MAP "finEnvelope.block4.fields.32A.components.amount" TO "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text" USING "output := mtamounttodecimal(src);";
+  MAP "block4.20" TO "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId" USING BEGIN output := trim(src); END;
+  MAP "block4.32A.currency" TO "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy" USING "output := upper(src);";
+  MAP "block4.32A.amount" TO "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text" USING "output := mtamounttodecimal(src);";
 END;
 
 MAPPER "pacs-to-lynx-mini" SOURCE "pacs" TARGET "pacs-lynx" DESCRIPTION "Minimal PACS to LYNX sample" ENABLED TRUE BEGIN

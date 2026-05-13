@@ -1,0 +1,12 @@
+{
+  "queueConfig": {
+    "persist.q": {
+      "name": "persist.q",
+      "createdAt": 1778675228352,
+      "frozen": false,
+      "createdByUser": false
+    }
+  },
+  "configVersion": 1,
+  "timestamp": 1778675228352
+}

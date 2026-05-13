@@ -1,0 +1,9 @@
+# Symbol table (separate from router-mapper DSL)
+QUEUE "inboundSwift" -> "swift.inbound" TYPE "text-string";
+QUEUE "pacsOutbound" -> "pacs.outbound" TYPES ("pacs", "pacs-lynx");
+FILE "mtTemplate" -> "/services/templates/mt103.txt";
+API "aggregator" BASE "http://localhost:4000";
+
+WORKFLOW "enqueue-pacs" BEGIN
+  STEP "enqueue" CALL API "aggregator" POST "/api/queue/pacs.outbound/enqueue";
+END;

@@ -1,0 +1,2 @@
+{"version":1,"timestamp":1778675228353,"type":"createQueue","queueName":"persist.q","config":{"name":"persist.q","createdAt":1778675228352,"frozen":false,"createdByUser":false},"configVersion":1}
+{"version":2,"timestamp":1778675228356,"type":"enqueue","queueName":"persist.q","message":{"text":"hello-persist"},"sourceService":"smoke","messageId":"e1480249-12e2-4361-8b09-b358617584e9"}

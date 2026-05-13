@@ -18,8 +18,8 @@
         "transformRule": "BEGIN OUTPUT := MAP (\"pacs-to-lynx\", MAP (\"mt103-to-pacs\", src)); END"
       }
     ],
-    "createdAt": "2026-05-12T22:01:57.203Z",
-    "updatedAt": "2026-05-12T22:01:57.203Z"
+    "createdAt": "2026-05-13T13:27:41.443Z",
+    "updatedAt": "2026-05-13T13:27:41.443Z"
   },
   {
     "id": "swift-fanout-default",
@@ -45,7 +45,7 @@
         "transformRule": "output := src;"
       }
     ],
-    "createdAt": "2026-05-12T22:01:57.203Z",
-    "updatedAt": "2026-05-12T22:01:57.203Z"
+    "createdAt": "2026-05-13T13:27:41.443Z",
+    "updatedAt": "2026-05-13T13:27:41.443Z"
   }
 ]

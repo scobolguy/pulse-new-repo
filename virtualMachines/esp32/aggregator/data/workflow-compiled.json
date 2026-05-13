@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "compiledAt": "2026-05-13T13:23:04.727Z",
+  "symbols": {
+    "queues": [
+      {
+        "symbol": "inboundSwift",
+        "queueName": "swift.inbound",
+        "dataTypeIds": [
+          "text-string"
+        ],
+        "dataTypeId": "text-string"
+      },
+      {
+        "symbol": "pacsOutbound",
+        "queueName": "pacs.outbound",
+        "dataTypeIds": [
+          "pacs",
+          "pacs-lynx"
+        ],
+        "dataTypeId": "pacs"
+      }
+    ],
+    "files": [
+      {
+        "symbol": "mtTemplate",
+        "path": "/services/templates/mt103.txt"
+      }
+    ],
+    "apis": [
+      {
+        "symbol": "aggregator",
+        "baseUrl": "http://localhost:4000"
+      }
+    ]
+  },
+  "workflows": [
+    {
+      "id": "enqueue-pacs",
+      "steps": [
+        {
+          "id": "enqueue",
+          "action": "call_api",
+          "apiSymbol": "aggregator",
+          "method": "POST",
+          "route": "/api/queue/pacs.outbound/enqueue"
+        }
+      ]
+    }
+  ]
+}

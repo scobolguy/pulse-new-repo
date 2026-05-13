@@ -296,6 +296,24 @@ void setupWebServer() {
             else { docText = "Get the current status of the VM."; }
             cmd["description"] = docText;
         }
+
+        auto routerObj = services.add<JsonObject>();
+        routerObj["name"] = "GenericRouterService";
+        routerObj["description"] = "Aggregator-compatible generic router: FFS-distributed rules and mapping execution.";
+        String routerStatus = "ready";
+        if (serviceBusyMap.count("GenericRouterService") && serviceBusyMap["GenericRouterService"]) routerStatus = "busy";
+        routerObj["status"] = routerStatus;
+        auto routerCmds = routerObj["commands"].to<JsonArray>();
+        {
+            JsonObject cmd = routerCmds.add<JsonObject>();
+            cmd["name"] = "run";
+            cmd["description"] = "Run routing rules for an input queue and payload.";
+        }
+        {
+            JsonObject cmd = routerCmds.add<JsonObject>();
+            cmd["name"] = "runWithMappings";
+            cmd["description"] = "Run routing including MAP(...) transforms using distributed mapping files.";
+        }
         #endif
 
         // Sensor Service (example, static)
@@ -358,6 +376,7 @@ void setupWebServer() {
         #ifdef ENABLE_PMACHINE
         if (!firstService) json += ",";
         json += "\"pmachine\"";
+        json += ",\"GenericRouterService\"";
         firstService = false;
         #endif
         json += "]";
@@ -373,7 +392,7 @@ void setupWebServer() {
     });
     registerFFSRoutes(server, federatedFS);
 #ifdef ENABLE_PMACHINE
-    registerPMachineRoutes(server, pm);
+    registerPMachineRoutes(server, pm, &federatedFS);
 #endif
     server.onNotFound(notFound);
     server.begin();
@@ -678,6 +697,21 @@ void setup() {
 #ifdef ENABLE_PMACHINE
     pm.setFFS(&federatedFS);
 #endif
+
+    String advertisedServices = "[BOOT] Advertised services: ";
+    bool firstAdvertised = true;
+    if (ffsUp) {
+        advertisedServices += "FFS";
+        firstAdvertised = false;
+    }
+#ifdef ENABLE_PMACHINE
+    if (!firstAdvertised) advertisedServices += ", ";
+    advertisedServices += "pmachine";
+    advertisedServices += ", GenericRouterService";
+    firstAdvertised = false;
+#endif
+    if (firstAdvertised) advertisedServices += "none";
+    Serial.println(advertisedServices);
 
     // 8. Web server for node name config (Async)
     setupWebServer();

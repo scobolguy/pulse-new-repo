@@ -68,6 +68,11 @@ enum Opcode : uint8_t {
     OP_DIV = 0x0F,      // Divide
     OP_PRINT_INT = 0x10,// Print integer
     OP_PRINT_ENUM = 0x11,// Print enum
+    OP_ROUTE_MATCH_QUEUE = 0x12, // Compare runtime input queue to operand queue, push 1/0
+    OP_ROUTE_EVAL_WHEN = 0x13,   // Evaluate WHEN rule against current message, push 1/0
+    OP_ROUTE_TRANSFORM = 0x14,   // Apply TRANSFORM rule to current message
+    OP_ROUTE_EMIT = 0x15,        // Emit current message to operand output queue
+    OP_PARSE_FIN_TEXT = 0x16,    // Parse routing source message from MT FIN text into JSON
     OP_HALT = 0xFF      // HALT
 };
 
@@ -96,10 +101,42 @@ enum Opcode : uint8_t {
         if (mnemonic == "INT") return OP_INT;
         if (mnemonic == "JMP") return OP_JMP;
         if (mnemonic == "JZ") return OP_JZ;
+        if (mnemonic == "PUSH_INT") return OP_PUSH_INT;
+        if (mnemonic == "PUSH_STR") return OP_PUSH_STR;
+        if (mnemonic == "PUSH_ENUM") return OP_PUSH_ENUM;
+        if (mnemonic == "ADD") return OP_ADD;
+        if (mnemonic == "SUB") return OP_SUB;
+        if (mnemonic == "MUL") return OP_MUL;
+        if (mnemonic == "DIV") return OP_DIV;
+        if (mnemonic == "PRINT_INT") return OP_PRINT_INT;
+        if (mnemonic == "PRINT_ENUM") return OP_PRINT_ENUM;
+        if (mnemonic == "ROUTE_MATCH_QUEUE") return OP_ROUTE_MATCH_QUEUE;
+        if (mnemonic == "ROUTE_EVAL_WHEN") return OP_ROUTE_EVAL_WHEN;
+        if (mnemonic == "ROUTE_TRANSFORM") return OP_ROUTE_TRANSFORM;
+        if (mnemonic == "ROUTE_EMIT") return OP_ROUTE_EMIT;
+        if (mnemonic == "PARSE_FIN_TEXT") return OP_PARSE_FIN_TEXT;
         if (mnemonic == "HALT") return OP_HALT;
         if (mnemonic == "NOP") return OP_NOP;
         return 0xFE;
     }
+
+struct RouteDelivery {
+    std::string queueName;
+    std::string message;
+};
+
+struct MappingItem {
+    std::string sourcePath;
+    std::string targetPath;
+    std::string conversionRule;
+};
+
+struct MappingDef {
+    std::string id;
+    std::string sourceTypeId;
+    std::string targetTypeId;
+    std::vector<MappingItem> items;
+};
 
 using PCodeMap = std::map<uint16_t, uint8_t>;
 using MemoryMap = std::map<uint16_t, uint32_t>;
@@ -135,6 +172,12 @@ public:
     Status getStatus() const;
     bool loadProgram(const std::vector<uint8_t>& pcode, const std::string& backingFile, size_t maxSpace);
     void run(const std::vector<PInstruction>& instructions);
+    void setRoutingContext(const std::string& inputQueue, const std::string& message);
+    const std::vector<RouteDelivery>& getRoutingDeliveries() const;
+    void clearRoutingDeliveries();
+    void setMappings(const std::vector<MappingDef>& defs);
+    void clearMappings();
+    const MappingDef* getMappingById(const std::string& mappingId) const;
     void singleStep();
     void setBreakpoint(uint16_t pc);
     void clearBreakpoint(uint16_t pc);
@@ -151,6 +194,10 @@ private:
     bool running = false;
     uint16_t pc = 0;
     std::vector<uint16_t> breakpoints;
+    std::string currentInputQueue;
+    std::string currentMessage;
+    std::vector<RouteDelivery> routingDeliveries;
+    std::map<std::string, MappingDef> mappingDefs;
     ::EnumManager* enumManager = nullptr;
 
     // Handler table for opcode dispatch

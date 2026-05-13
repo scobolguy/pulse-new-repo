@@ -191,6 +191,95 @@ function validateMessageAgainstDataType(typeId, message) {
   return { valid: true };
 }
 
+function defaultFormatTokenForDataType(typeId) {
+  const normalizedType = String(typeId || '').trim().toLowerCase();
+  if (normalizedType === 'pacs') return 'pacs.unknown';
+  if (normalizedType === 'swift-mt103') return 'mt103';
+  if (normalizedType === 'swift-mt202') return 'mt202';
+  if (normalizedType === 'swift-mt202cov') return 'mt202cov';
+  return 'text';
+}
+
+function inferMediaTypeFromMessage(message) {
+  if (Buffer.isBuffer(message)) return 'application/octet-stream';
+  if (typeof message === 'string') return 'text/plain';
+  if (message && typeof message === 'object') return 'application/json';
+  return 'application/octet-stream';
+}
+
+function normalizeMessageEnvelope({ message, messageEnvelope, dataTypeIds }) {
+  const envelope = messageEnvelope && typeof messageEnvelope === 'object' ? { ...messageEnvelope } : {};
+  const primaryType = Array.isArray(dataTypeIds) && dataTypeIds.length > 0 ? dataTypeIds[0] : 'text-string';
+  const hasExplicitType = Boolean(
+    envelope && (
+      (typeof envelope.formatToken === 'string' && envelope.formatToken.trim())
+      || (typeof envelope.mediaType === 'string' && envelope.mediaType.trim())
+    )
+  );
+
+  // Greenfield rule: if message is untyped, treat it as raw bytes.
+  if (!envelope.formatToken) {
+    envelope.formatToken = hasExplicitType ? defaultFormatTokenForDataType(primaryType) : 'bytes';
+  }
+  if (!envelope.mediaType) {
+    envelope.mediaType = hasExplicitType ? inferMediaTypeFromMessage(message) : 'application/octet-stream';
+  }
+  if (!envelope.contentEncoding) {
+    envelope.contentEncoding = 'base64';
+  }
+
+  if (typeof envelope.payloadBase64 !== 'string') {
+    if (message == null) {
+      envelope.payloadBase64 = '';
+    } else if (Buffer.isBuffer(message)) {
+      envelope.payloadBase64 = message.toString('base64');
+    } else if (typeof message === 'string') {
+      envelope.payloadBase64 = Buffer.from(message, 'utf-8').toString('base64');
+    } else {
+      envelope.payloadBase64 = Buffer.from(JSON.stringify(message), 'utf-8').toString('base64');
+    }
+  }
+
+  envelope.message = message;
+  return envelope;
+}
+
+function validateEnvelopeFormatAgainstDataType(typeId, envelope) {
+  const normalizedType = String(typeId || '').trim().toLowerCase();
+  const token = String(envelope?.formatToken || '').trim().toLowerCase();
+  if (!normalizedType || !token) return { valid: true };
+
+  if (token === 'bytes' || token === 'binary') {
+    return { valid: true };
+  }
+
+  if (normalizedType === 'text-string') {
+    return { valid: true };
+  }
+
+  if (normalizedType === 'pacs') {
+    const ok = token.startsWith('pacs');
+    return { valid: ok, reason: ok ? null : `formatToken ${envelope.formatToken} is incompatible with data type pacs` };
+  }
+
+  if (normalizedType === 'swift-mt103') {
+    const ok = token === 'mt103' || token === 'swift.mt103';
+    return { valid: ok, reason: ok ? null : `formatToken ${envelope.formatToken} is incompatible with data type swift-mt103` };
+  }
+
+  if (normalizedType === 'swift-mt202') {
+    const ok = token === 'mt202' || token === 'swift.mt202';
+    return { valid: ok, reason: ok ? null : `formatToken ${envelope.formatToken} is incompatible with data type swift-mt202` };
+  }
+
+  if (normalizedType === 'swift-mt202cov') {
+    const ok = token === 'mt202cov' || token === 'swift.mt202cov';
+    return { valid: ok, reason: ok ? null : `formatToken ${envelope.formatToken} is incompatible with data type swift-mt202cov` };
+  }
+
+  return { valid: true };
+}
+
 function logQueueValidationError(entry) {
   const item = {
     timestamp: new Date().toISOString(),
@@ -212,19 +301,22 @@ function logQueueValidationError(entry) {
   console.warn(`[QUEUE-VALIDATION] ${item.queueName} expected=${item.expectedType} shape=${item.detectedShape}: ${item.reason}`);
 }
 
-function ensureMessageMatchesQueueType({ queueName, message, sourceService, managerId, dataTypeIds }) {
+function ensureMessageMatchesQueueType({ queueName, message, messageEnvelope, sourceService, managerId, dataTypeIds }) {
   const normalizedTypes = Array.isArray(dataTypeIds) && dataTypeIds.length > 0 ? dataTypeIds : ['text-string'];
 
   for (const typeId of normalizedTypes) {
     const check = validateMessageAgainstDataType(typeId, message);
-    if (check.valid) continue;
+    const formatCheck = validateEnvelopeFormatAgainstDataType(typeId, messageEnvelope);
+    if (check.valid && formatCheck.valid) continue;
 
     const details = {
       queueName,
       expectedType: String(typeId || ''),
-      reason: check.reason || 'Message did not match expected queue type',
+      reason: check.reason || formatCheck.reason || 'Message did not match expected queue type',
       managerId: managerId || null,
       sourceService: sourceService || null,
+      formatToken: messageEnvelope?.formatToken || null,
+      mediaType: messageEnvelope?.mediaType || null,
       detectedShape: detectMessageShape(message),
       messageSummary: summarizeMessage(message),
       message
@@ -794,7 +886,7 @@ function ensureRoute(queueName) {
   return route;
 }
 
-async function enqueueViaRoute(route, queueName, message, sourceService) {
+async function enqueueViaRoute(route, queueName, message, sourceService, messageEnvelope = null, preferredDataTypeIds = null) {
   const manager = queueManagerRegistry.get(route.managerId);
   if (!manager) throw new Error(`Route manager ${route.managerId} not found`);
 
@@ -802,7 +894,9 @@ async function enqueueViaRoute(route, queueName, message, sourceService) {
 
   if (manager.local) {
     const qm = queueManagers[manager.localIndex];
-    let dataTypeIds = inferQueueDataTypeIds(queueName);
+    let dataTypeIds = Array.isArray(preferredDataTypeIds) && preferredDataTypeIds.length > 0
+      ? preferredDataTypeIds
+      : inferQueueDataTypeIds(queueName);
     if (!qm.getConfig(queueName)?.name) {
       qm.createQueue(queueName, {
         dataTypeId: dataTypeIds[0],
@@ -815,17 +909,21 @@ async function enqueueViaRoute(route, queueName, message, sourceService) {
       dataTypeIds = Array.isArray(configured) ? configured : (configured ? [configured] : dataTypeIds);
     }
 
-    ensureMessageMatchesQueueType({ queueName, message, sourceService, managerId: manager.managerId, dataTypeIds });
+    const normalizedEnvelope = normalizeMessageEnvelope({ message, messageEnvelope, dataTypeIds });
+    ensureMessageMatchesQueueType({ queueName, message, messageEnvelope: normalizedEnvelope, sourceService, managerId: manager.managerId, dataTypeIds });
 
-    qm.enqueue(queueName, message, sourceService || 'unknown', messageId);
-    replicateEnqueueToFollowers(queueName, message, sourceService, route.managerId, messageId)
+    qm.enqueue(queueName, message, sourceService || 'unknown', messageId, normalizedEnvelope);
+    replicateEnqueueToFollowers(queueName, message, sourceService, route.managerId, messageId, normalizedEnvelope)
       .catch(e => console.warn(`[REPLICATION] Fan-out error: ${e.message}`));
     return { deliveredTo: manager.managerId, mode: 'local', messageId };
   }
 
   const url = `http://${manager.ip}:${manager.port}/enqueue`;
-  const dataTypeIds = inferQueueDataTypeIds(queueName);
-  ensureMessageMatchesQueueType({ queueName, message, sourceService, managerId: manager.managerId, dataTypeIds });
+  const dataTypeIds = Array.isArray(preferredDataTypeIds) && preferredDataTypeIds.length > 0
+    ? preferredDataTypeIds
+    : inferQueueDataTypeIds(queueName);
+  const normalizedEnvelope = normalizeMessageEnvelope({ message, messageEnvelope, dataTypeIds });
+  ensureMessageMatchesQueueType({ queueName, message, messageEnvelope: normalizedEnvelope, sourceService, managerId: manager.managerId, dataTypeIds });
   await fetch(`http://${manager.ip}:${manager.port}/apply-config-change`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -842,29 +940,29 @@ async function enqueueViaRoute(route, queueName, message, sourceService) {
   const remoteRes = await fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ queueName, message, sourceService: sourceService || 'unknown', messageId })
+    body: JSON.stringify({ queueName, message, sourceService: sourceService || 'unknown', messageId, messageEnvelope: normalizedEnvelope })
   });
   if (!remoteRes.ok) {
     throw new Error(`Remote enqueue failed at ${url} with status ${remoteRes.status}`);
   }
-  replicateEnqueueToFollowers(queueName, message, sourceService, route.managerId, messageId)
+  replicateEnqueueToFollowers(queueName, message, sourceService, route.managerId, messageId, normalizedEnvelope)
     .catch(e => console.warn(`[REPLICATION] Fan-out error: ${e.message}`));
   return { deliveredTo: manager.managerId, mode: 'remote', url, messageId };
 }
 
-async function replicateEnqueueToFollowers(queueName, message, sourceService, leaderManagerId, messageId) {
+async function replicateEnqueueToFollowers(queueName, message, sourceService, leaderManagerId, messageId, messageEnvelope = null) {
   const followers = Array.from(queueManagerRegistry.values()).filter(
     m => MANAGER_ACTIVE_STATES.has(m.status) && m.managerId !== leaderManagerId
   );
   for (const follower of followers) {
     try {
       if (follower.local) {
-        queueManagers[follower.localIndex].enqueueReplicated(queueName, message, sourceService, messageId);
+        queueManagers[follower.localIndex].enqueueReplicated(queueName, message, sourceService, messageId, messageEnvelope);
       } else {
         await fetch(`http://${follower.ip}:${follower.port}/replicate-enqueue`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ queueName, message, sourceService, messageId })
+          body: JSON.stringify({ queueName, message, sourceService, messageId, messageEnvelope })
         });
       }
     } catch (e) {
@@ -972,14 +1070,14 @@ const messageRouter = createRouterEngine({
   rulesPath: './data/router-rules.json',
   mappingsPath: './data/data-mappings.json',
   serviceId: 'aggregator-router-service',
-  publishToQueue: async ({ queueName, message, sourceService }) => {
+  publishToQueue: async ({ queueName, message, sourceService, dataTypeIds }) => {
     let route = ensureRoute(queueName);
     if (!route) {
       throw new Error(`No available queue managers for queue ${queueName}`);
     }
 
     try {
-      return await enqueueViaRoute(route, queueName, message, sourceService || 'router');
+      return await enqueueViaRoute(route, queueName, message, sourceService || 'router', null, dataTypeIds || null);
     } catch (e) {
       const manager = queueManagerRegistry.get(route.managerId);
       if (manager) {
@@ -991,7 +1089,7 @@ const messageRouter = createRouterEngine({
       if (!route) {
         throw new Error(`Publish failed and no failover route for queue ${queueName}: ${e.message}`);
       }
-      return enqueueViaRoute(route, queueName, message, sourceService || 'router');
+      return enqueueViaRoute(route, queueName, message, sourceService || 'router', null, dataTypeIds || null);
     }
   },
   dequeueFromQueue: async ({ inputQueue, consumerService }) => {
@@ -2055,11 +2153,14 @@ function registerRoutes(app) {
   });
   app.post('/api/queue/:queueName/enqueue', async (req, res) => {
     const { queueName } = req.params;
-    const { message, sourceService } = req.body;
+    const { message, sourceService, messageEnvelope } = req.body || {};
     try {
+      if (!Object.prototype.hasOwnProperty.call(req.body || {}, 'message')) {
+        return res.status(400).json({ error: 'message is required' });
+      }
       const route = ensureRoute(queueName);
       if (!route) return res.status(503).json({ error: 'No available queue managers' });
-      const delivery = await enqueueViaRoute(route, queueName, message, sourceService);
+      const delivery = await enqueueViaRoute(route, queueName, message, sourceService, messageEnvelope || null);
       res.json({ status: 'enqueued', delivery });
     } catch (e) {
       if (e && e.statusCode) {

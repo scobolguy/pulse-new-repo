@@ -15,6 +15,10 @@ Pcode files are plain text, one instruction per line. Supported instructions:
 - `DIV` — Pop two integers, push their quotient (integer division)
 - `PRINT` — Pop and print the top string from the stack
 - `PRINT_INT` — Pop and print the top integer from the stack
+- `ROUTE_MATCH_QUEUE "queue.name"` — Push 1 if runtime input queue matches, else 0
+- `ROUTE_EVAL_WHEN "<rule>"` — Evaluate WHEN rule against runtime message, push 1/0
+- `ROUTE_TRANSFORM "<rule>"` — Apply TRANSFORM rule to runtime message
+- `ROUTE_EMIT "queue.name"` — Emit current runtime message to output queue delivery list
 - `HALT` — Stop execution
 
 Example pcode file:

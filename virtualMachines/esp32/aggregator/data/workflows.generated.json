@@ -1,0 +1,14 @@
+[
+  {
+    "id": "enqueue-pacs",
+    "steps": [
+      {
+        "id": "enqueue",
+        "action": "call_api",
+        "apiSymbol": "aggregator",
+        "method": "POST",
+        "route": "/api/queue/pacs.outbound/enqueue"
+      }
+    ]
+  }
+]
