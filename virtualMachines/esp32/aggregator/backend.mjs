@@ -84,8 +84,17 @@ const remoteAgentRegistry = new Map();
 const remoteQueueManagerProcesses = new Map();
 const queueManagerScriptPath = fileURLToPath(new URL('./queue-manager-node.mjs', import.meta.url));
 const QUEUE_VALIDATION_LOG_PATH = './data/queue-validation-errors.jsonl';
+const TX_LIFECYCLE_COMPILED_PATH = './data/transaction-lifecycle-compiled.json';
 const queueValidationErrors = [];
 const MAX_QUEUE_VALIDATION_ERRORS = 500;
+const lifecycleHarness = {
+  active: null,
+  history: []
+};
+const lifecycleActionPolicy = {
+  allowDbSync: false,
+  allowDbAsync: false
+};
 
 const EXPLICIT_QUEUE_TYPE_HINTS = {
   'swift.mt103.parsed': ['swift-mt103'],
@@ -1098,6 +1107,16 @@ const messageRouter = createRouterEngine({
 });
 
 const routerWorkers = new Map();
+const lifecycleWorkers = new Map();
+const queueBridgeWorkers = new Map();
+const SWIFT_GATEWAY_WORKER_IDS = [
+  'gateway-swift-received-to-pacs',
+  'gateway-swift-pacs-to-lynx-pending'
+];
+const BOC_GATEWAY_WORKER_IDS = [
+  'gateway-boc-intake-lynx-outbound-to-pending',
+  'gateway-boc-approve-pending-to-approved'
+];
 
 function getRouterWorkersPayload() {
   return Array.from(routerWorkers.values()).map(worker => ({
@@ -1159,6 +1178,462 @@ function startRouterWorker({ inputQueue, intervalMs = 1000, batchSize = 10, cons
 
   routerWorkers.set(key, workerState);
   return workerState;
+}
+
+function getLifecycleWorkersPayload() {
+  return Array.from(lifecycleWorkers.values()).map(worker => ({
+    workerId: worker.workerId,
+    fromState: worker.fromState,
+    eventName: worker.eventName,
+    context: worker.context,
+    intervalMs: worker.intervalMs,
+    batchSize: worker.batchSize,
+    consumerService: worker.consumerService,
+    sourceService: worker.sourceService,
+    processedMessages: worker.processedMessages,
+    lastRunAt: worker.lastRunAt,
+    lastError: worker.lastError || null,
+    startedAt: worker.startedAt
+  }));
+}
+
+function stopLifecycleWorker(workerId) {
+  const key = String(workerId || '').trim();
+  const worker = lifecycleWorkers.get(key);
+  if (!worker) return false;
+  clearInterval(worker.intervalId);
+  lifecycleWorkers.delete(key);
+  return true;
+}
+
+function resolveLifecycleWorkerTransition(compiled, fromState, eventName, context = {}) {
+  const outgoing = getLifecycleOutgoingTransitions(compiled, fromState);
+  if (outgoing.length === 0) {
+    throw new Error(`State ${fromState} has no outgoing transitions`);
+  }
+
+  const candidates = eventName
+    ? outgoing.filter(t => t.event === eventName)
+    : outgoing;
+
+  const transition = candidates.find(t => evaluateLifecycleTransitionGuard(t, context));
+  if (!transition) {
+    const eventText = eventName ? ` for event ${eventName}` : '';
+    throw new Error(`No eligible transition from ${fromState}${eventText}`);
+  }
+  return transition;
+}
+
+async function runLifecycleWorkerTick(workerState) {
+  const compiled = readTransactionLifecycleCompiled();
+  if (!compiled) {
+    throw new Error('Lifecycle compiled artifact not found');
+  }
+
+  let moved = 0;
+  for (let i = 0; i < workerState.batchSize; i += 1) {
+    const deq = await dequeueLifecycleStateMessage(compiled, workerState.fromState, workerState.consumerService);
+    if (!deq.dequeued) break;
+
+    const runtimeContext = {
+      ...workerState.context,
+      message: deq.message,
+      worker: {
+        workerId: workerState.workerId,
+        fromState: workerState.fromState
+      }
+    };
+
+    try {
+      const transition = resolveLifecycleWorkerTransition(
+        compiled,
+        workerState.fromState,
+        workerState.eventName,
+        runtimeContext
+      );
+
+      await runLifecycleTransitionAction(transition.action, runtimeContext, workerState);
+      await enqueueLifecycleStateMessage(compiled, transition.to, deq.message, workerState.sourceService);
+      moved += 1;
+    } catch (e) {
+      await enqueueLifecycleStateMessage(compiled, workerState.fromState, deq.message, `${workerState.sourceService}:retry`);
+      throw e;
+    }
+  }
+
+  workerState.processedMessages += moved;
+  workerState.lastRunAt = new Date().toISOString();
+  workerState.lastError = null;
+}
+
+function startLifecycleWorker({
+  workerId,
+  fromState,
+  eventName,
+  context = {},
+  intervalMs = 1000,
+  batchSize = 10,
+  consumerService = 'lifecycle-worker',
+  sourceService = 'lifecycle-worker'
+}) {
+  const id = String(workerId || '').trim();
+  const from = String(fromState || '').trim();
+  if (!id) throw new Error('workerId is required');
+  if (!from) throw new Error('fromState is required');
+
+  stopLifecycleWorker(id);
+
+  const workerState = {
+    workerId: id,
+    fromState: from,
+    eventName: eventName || null,
+    context: context || {},
+    intervalMs: Number(intervalMs) > 0 ? Number(intervalMs) : 1000,
+    batchSize: Number(batchSize) > 0 ? Number(batchSize) : 10,
+    consumerService: String(consumerService || 'lifecycle-worker').trim(),
+    sourceService: String(sourceService || 'lifecycle-worker').trim(),
+    processedMessages: 0,
+    lastRunAt: null,
+    lastError: null,
+    startedAt: new Date().toISOString(),
+    intervalId: null
+  };
+
+  workerState.intervalId = setInterval(async () => {
+    try {
+      await runLifecycleWorkerTick(workerState);
+    } catch (e) {
+      workerState.lastError = e.message;
+      workerState.lastRunAt = new Date().toISOString();
+      console.warn(`[LIFECYCLE] Worker ${workerState.workerId} error: ${e.message}`);
+    }
+  }, workerState.intervalMs);
+
+  lifecycleWorkers.set(id, workerState);
+  return workerState;
+}
+
+function getQueueBridgeWorkersPayload() {
+  return Array.from(queueBridgeWorkers.values()).map(worker => ({
+    workerId: worker.workerId,
+    inputQueue: worker.inputQueue,
+    outputQueue: worker.outputQueue,
+    intervalMs: worker.intervalMs,
+    batchSize: worker.batchSize,
+    consumerService: worker.consumerService,
+    sourceService: worker.sourceService,
+    processedMessages: worker.processedMessages,
+    lastRunAt: worker.lastRunAt,
+    lastError: worker.lastError || null,
+    startedAt: worker.startedAt
+  }));
+}
+
+function stopQueueBridgeWorker(workerId) {
+  const key = String(workerId || '').trim();
+  const worker = queueBridgeWorkers.get(key);
+  if (!worker) return false;
+  clearInterval(worker.intervalId);
+  queueBridgeWorkers.delete(key);
+  return true;
+}
+
+async function runQueueBridgeWorkerTick(workerState) {
+  let moved = 0;
+  for (let i = 0; i < workerState.batchSize; i += 1) {
+    const message = await dequeueViaRoute(workerState.inputQueue, workerState.consumerService);
+    if (message == null) break;
+
+    const route = ensureRoute(workerState.outputQueue);
+    if (!route) {
+      throw new Error(`No available queue managers for queue ${workerState.outputQueue}`);
+    }
+    await enqueueViaRoute(route, workerState.outputQueue, message, workerState.sourceService, null, workerState.dataTypeIds);
+    moved += 1;
+  }
+
+  workerState.processedMessages += moved;
+  workerState.lastRunAt = new Date().toISOString();
+  workerState.lastError = null;
+}
+
+function startQueueBridgeWorker({
+  workerId,
+  inputQueue,
+  outputQueue,
+  intervalMs = 1000,
+  batchSize = 10,
+  consumerService = 'queue-bridge-worker',
+  sourceService = 'queue-bridge-worker',
+  dataTypeIds = null
+}) {
+  const id = String(workerId || '').trim();
+  const input = String(inputQueue || '').trim();
+  const output = String(outputQueue || '').trim();
+  if (!id) throw new Error('workerId is required');
+  if (!input) throw new Error('inputQueue is required');
+  if (!output) throw new Error('outputQueue is required');
+
+  stopQueueBridgeWorker(id);
+
+  const workerState = {
+    workerId: id,
+    inputQueue: input,
+    outputQueue: output,
+    intervalMs: Number(intervalMs) > 0 ? Number(intervalMs) : 1000,
+    batchSize: Number(batchSize) > 0 ? Number(batchSize) : 10,
+    consumerService: String(consumerService || 'queue-bridge-worker').trim(),
+    sourceService: String(sourceService || 'queue-bridge-worker').trim(),
+    dataTypeIds: Array.isArray(dataTypeIds) && dataTypeIds.length > 0 ? dataTypeIds : inferQueueDataTypeIds(output),
+    processedMessages: 0,
+    lastRunAt: null,
+    lastError: null,
+    startedAt: new Date().toISOString(),
+    intervalId: null
+  };
+
+  workerState.intervalId = setInterval(async () => {
+    try {
+      await runQueueBridgeWorkerTick(workerState);
+    } catch (e) {
+      workerState.lastError = e.message;
+      workerState.lastRunAt = new Date().toISOString();
+      console.warn(`[BRIDGE] Worker ${workerState.workerId} error: ${e.message}`);
+    }
+  }, workerState.intervalMs);
+
+  queueBridgeWorkers.set(id, workerState);
+  return workerState;
+}
+
+function stopAllQueueDrivenWorkers() {
+  for (const workerId of Array.from(lifecycleWorkers.keys())) {
+    stopLifecycleWorker(workerId);
+  }
+  for (const workerId of Array.from(queueBridgeWorkers.keys())) {
+    stopQueueBridgeWorker(workerId);
+  }
+}
+
+function startDefaultQueueDrivenLifecycleWorkers({ intervalMs = 500, batchSize = 25 } = {}) {
+  const shared = { intervalMs, batchSize };
+  const started = [];
+
+  started.push(startLifecycleWorker({
+    workerId: 'lifecycle-received-to-pacs',
+    fromState: 'received_mt103',
+    eventName: 'mapped_to_pacs',
+    consumerService: 'lifecycle-received-to-pacs',
+    sourceService: 'lifecycle-received-to-pacs',
+    ...shared
+  }));
+
+  started.push(startLifecycleWorker({
+    workerId: 'lifecycle-pacs-to-lynx-pending',
+    fromState: 'pacs_created',
+    eventName: 'submitted_to_lynx',
+    consumerService: 'lifecycle-pacs-to-lynx-pending',
+    sourceService: 'lifecycle-pacs-to-lynx-pending',
+    ...shared
+  }));
+
+  started.push(startQueueBridgeWorker({
+    workerId: 'bridge-lynx-outbound-to-pending',
+    inputQueue: 'lynx.pacs009.outbound',
+    outputQueue: 'tx.lynx.pending',
+    consumerService: 'bridge-lynx-outbound-to-pending',
+    sourceService: 'bridge-lynx-outbound-to-pending',
+    dataTypeIds: ['pacs'],
+    ...shared
+  }));
+
+  started.push(startLifecycleWorker({
+    workerId: 'lifecycle-lynx-pending-to-approved',
+    fromState: 'lynx_pending',
+    eventName: 'lynx_approved',
+    context: { status: 'approved' },
+    consumerService: 'lifecycle-lynx-pending-to-approved',
+    sourceService: 'lifecycle-lynx-pending-to-approved',
+    ...shared
+  }));
+
+  started.push(startLifecycleWorker({
+    workerId: 'lifecycle-approved-to-correspondent',
+    fromState: 'lynx_approved',
+    eventName: 'sent_to_correspondent',
+    consumerService: 'lifecycle-approved-to-correspondent',
+    sourceService: 'lifecycle-approved-to-correspondent',
+    ...shared
+  }));
+
+  return started;
+}
+
+function sanitizeQueueToken(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, '-');
+}
+
+function getSubflowBridgeWorkersPayload() {
+  return Array.from(queueBridgeWorkers.values())
+    .filter(worker => String(worker.workerId || '').startsWith('subflow-'));
+}
+
+function stopSubflowBridgeWorkers() {
+  for (const workerId of Array.from(queueBridgeWorkers.keys())) {
+    if (String(workerId).startsWith('subflow-')) {
+      stopQueueBridgeWorker(workerId);
+    }
+  }
+}
+
+function startDefaultSubflowBridgeWorkers({ intervalMs = 500, batchSize = 25 } = {}) {
+  const compiled = readTransactionLifecycleCompiled();
+  if (!compiled) {
+    throw new Error('Lifecycle compiled artifact not found');
+  }
+
+  const started = [];
+  const states = Array.isArray(compiled.states) ? compiled.states : [];
+  const transitions = Array.isArray(compiled.transitions) ? compiled.transitions : [];
+
+  for (const state of states) {
+    const subflowIdRaw = String(state?.subflow || '').trim();
+    const stateQueue = String(state?.queueName || '').trim();
+    if (!subflowIdRaw || !stateQueue) continue;
+
+    const subflowId = sanitizeQueueToken(subflowIdRaw);
+    const stateToken = sanitizeQueueToken(state.name);
+
+    const dispatchWorkerId = `subflow-${stateToken}-dispatch`;
+    started.push(startQueueBridgeWorker({
+      workerId: dispatchWorkerId,
+      inputQueue: stateQueue,
+      outputQueue: `subflow.${subflowId}.inbound`,
+      consumerService: dispatchWorkerId,
+      sourceService: dispatchWorkerId,
+      intervalMs,
+      batchSize
+    }));
+
+    const outgoing = transitions.filter(t => t.from === state.name && String(t.event || '').trim());
+    for (const t of outgoing) {
+      const toState = getLifecycleStateByName(compiled, t.to);
+      const toQueue = String(toState?.queueName || '').trim();
+      if (!toQueue) continue;
+
+      const eventToken = sanitizeQueueToken(t.event);
+      const resultWorkerId = `subflow-${stateToken}-event-${eventToken}`;
+      started.push(startQueueBridgeWorker({
+        workerId: resultWorkerId,
+        inputQueue: `subflow.${subflowId}.${eventToken}`,
+        outputQueue: toQueue,
+        consumerService: resultWorkerId,
+        sourceService: resultWorkerId,
+        intervalMs,
+        batchSize
+      }));
+    }
+  }
+
+  return started;
+}
+
+function startSwiftGateway({ intervalMs = 500, batchSize = 25 } = {}) {
+  const shared = { intervalMs, batchSize };
+
+  startLifecycleWorker({
+    workerId: 'gateway-swift-received-to-pacs',
+    fromState: 'received_mt103',
+    eventName: 'mapped_to_pacs',
+    consumerService: 'gateway-swift-received-to-pacs',
+    sourceService: 'gateway-swift-received-to-pacs',
+    ...shared
+  });
+
+  startLifecycleWorker({
+    workerId: 'gateway-swift-pacs-to-lynx-pending',
+    fromState: 'pacs_created',
+    eventName: 'submitted_to_lynx',
+    consumerService: 'gateway-swift-pacs-to-lynx-pending',
+    sourceService: 'gateway-swift-pacs-to-lynx-pending',
+    ...shared
+  });
+
+  return SWIFT_GATEWAY_WORKER_IDS
+    .map(id => lifecycleWorkers.get(id))
+    .filter(Boolean);
+}
+
+function stopSwiftGateway() {
+  for (const workerId of SWIFT_GATEWAY_WORKER_IDS) {
+    stopLifecycleWorker(workerId);
+  }
+}
+
+function startBocGateway({ intervalMs = 500, batchSize = 25, approvalMode = 'approved' } = {}) {
+  const shared = { intervalMs, batchSize };
+  const mode = String(approvalMode || 'approved').trim().toLowerCase() === 'rejected'
+    ? 'rejected'
+    : 'approved';
+  const eventName = mode === 'rejected' ? 'lynx_rejected' : 'lynx_approved';
+  const context = mode === 'rejected' ? { status: 'rejected' } : { status: 'approved' };
+
+  startQueueBridgeWorker({
+    workerId: 'gateway-boc-intake-lynx-outbound-to-pending',
+    inputQueue: 'lynx.pacs009.outbound',
+    outputQueue: 'tx.lynx.pending',
+    consumerService: 'gateway-boc-intake-lynx-outbound-to-pending',
+    sourceService: 'gateway-boc-intake-lynx-outbound-to-pending',
+    dataTypeIds: ['pacs'],
+    ...shared
+  });
+
+  startLifecycleWorker({
+    workerId: 'gateway-boc-approve-pending-to-approved',
+    fromState: 'lynx_pending',
+    eventName,
+    context,
+    consumerService: 'gateway-boc-approve-pending-to-approved',
+    sourceService: 'gateway-boc-approve-pending-to-approved',
+    ...shared
+  });
+
+  return [
+    queueBridgeWorkers.get('gateway-boc-intake-lynx-outbound-to-pending'),
+    lifecycleWorkers.get('gateway-boc-approve-pending-to-approved')
+  ].filter(Boolean);
+}
+
+function stopBocGateway() {
+  for (const workerId of BOC_GATEWAY_WORKER_IDS) {
+    stopQueueBridgeWorker(workerId);
+    stopLifecycleWorker(workerId);
+  }
+}
+
+function getGatewayStatusPayload() {
+  const swiftRunning = SWIFT_GATEWAY_WORKER_IDS
+    .some(id => lifecycleWorkers.has(id));
+  const bocRunning = BOC_GATEWAY_WORKER_IDS
+    .some(id => lifecycleWorkers.has(id) || queueBridgeWorkers.has(id));
+
+  return {
+    swift: {
+      running: swiftRunning,
+      workerIds: SWIFT_GATEWAY_WORKER_IDS,
+      workers: SWIFT_GATEWAY_WORKER_IDS.map(id => lifecycleWorkers.get(id)).filter(Boolean)
+    },
+    boc: {
+      running: bocRunning,
+      workerIds: BOC_GATEWAY_WORKER_IDS,
+      workers: BOC_GATEWAY_WORKER_IDS
+        .map(id => lifecycleWorkers.get(id) || queueBridgeWorkers.get(id))
+        .filter(Boolean)
+    }
+  };
 }
 
 // --- UDP Node Discovery ---
@@ -1293,6 +1768,385 @@ function getBrokerNodeDetails() {
 }
 function updateVirtualNodes() {
   // Dummy implementation
+}
+
+function readTransactionLifecycleCompiled() {
+  if (!fs.existsSync(TX_LIFECYCLE_COMPILED_PATH)) {
+    return null;
+  }
+
+  try {
+    const raw = fs.readFileSync(TX_LIFECYCLE_COMPILED_PATH, 'utf-8');
+    return JSON.parse(raw);
+  } catch (e) {
+    console.warn(`[TX-LIFECYCLE] Failed to read compiled file: ${e.message}`);
+    return null;
+  }
+}
+
+function getQueueLengthForLifecycleState(queueName) {
+  const q = String(queueName || '').trim();
+  if (!q) return 0;
+
+  const routed = queueRoutes.get(q);
+  if (routed) {
+    const manager = queueManagerRegistry.get(routed.managerId);
+    if (manager?.local) {
+      return queueManagers[manager.localIndex].getQueueLength(q);
+    }
+  }
+
+  // If not explicitly routed, choose the max local observed queue length.
+  // This avoids double-counting replicated queues across local managers.
+  let maxObserved = 0;
+  for (const qm of queueManagers) {
+    maxObserved = Math.max(maxObserved, qm.getQueueLength(q));
+  }
+  return maxObserved;
+}
+
+function buildTransactionLifecycleDashboardPayload(compiled) {
+  if (!compiled || !Array.isArray(compiled.states)) {
+    return null;
+  }
+
+  const states = compiled.states.map(state => {
+    const queueName = state.queueName || null;
+    const queueLength = queueName ? getQueueLengthForLifecycleState(queueName) : 0;
+    return {
+      stateName: state.name,
+      label: state.label || state.name,
+      queueName,
+      subflow: state.subflow || null,
+      layer: Number(state.layer || 0),
+      isInitial: Boolean(state.initial),
+      queueLength
+    };
+  });
+
+  const totalsByLayer = {};
+  for (const state of states) {
+    totalsByLayer[state.layer] = (totalsByLayer[state.layer] || 0) + state.queueLength;
+  }
+
+  return {
+    version: compiled.version || 1,
+    transactionId: compiled.transactionId || null,
+    description: compiled.description || '',
+    initialState: compiled.initialState || null,
+    topology: compiled.topology || { order: [], layers: [] },
+    transitions: Array.isArray(compiled.transitions) ? compiled.transitions : [],
+    harness: {
+      active: lifecycleHarness.active,
+      historyTail: lifecycleHarness.history.slice(-20)
+    },
+    states,
+    totalsByLayer,
+    totalMessagesAcrossStates: states.reduce((sum, state) => sum + state.queueLength, 0),
+    generatedAt: new Date().toISOString()
+  };
+}
+
+function getLifecycleStateByName(compiled, stateName) {
+  const states = Array.isArray(compiled?.states) ? compiled.states : [];
+  return states.find(s => s.name === stateName) || null;
+}
+
+function getLifecycleOutgoingTransitions(compiled, fromState) {
+  const transitions = Array.isArray(compiled?.transitions) ? compiled.transitions : [];
+  return transitions.filter(t => t.from === fromState);
+}
+
+function resolvePathValue(root, pathExpr) {
+  const raw = String(pathExpr || '').trim();
+  if (!raw) return undefined;
+  const normalized = raw.startsWith('$.') ? raw.slice(2) : raw;
+  const parts = normalized.split('.').filter(Boolean);
+
+  let current = root;
+  for (const part of parts) {
+    if (current == null) return undefined;
+    current = current[part];
+  }
+  return current;
+}
+
+function parseGuardLiteral(raw) {
+  const text = String(raw || '').trim();
+  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
+    return text.slice(1, -1);
+  }
+  const lowered = text.toLowerCase();
+  if (lowered === 'true') return true;
+  if (lowered === 'false') return false;
+  if (!Number.isNaN(Number(text)) && text !== '') return Number(text);
+  return text;
+}
+
+function valuesEqual(left, right) {
+  if (typeof left === 'boolean' || typeof right === 'boolean') {
+    return Boolean(left) === Boolean(right);
+  }
+  if (typeof left === 'number' || typeof right === 'number') {
+    const ln = Number(left);
+    const rn = Number(right);
+    if (!Number.isNaN(ln) && !Number.isNaN(rn)) {
+      return ln === rn;
+    }
+  }
+  return String(left ?? '').trim().toLowerCase() === String(right ?? '').trim().toLowerCase();
+}
+
+function evaluateGuardClause(clause, context = {}) {
+  const text = String(clause || '').trim();
+  if (!text) return true;
+
+  const match = text.match(/^([A-Za-z0-9_.$-]+)\s*(==|=|!=)\s*(.+)$/);
+  if (!match) {
+    const v = resolvePathValue(context, text);
+    return Boolean(v);
+  }
+
+  const [, leftPath, op, rightRaw] = match;
+  const leftValue = resolvePathValue(context, leftPath);
+  const rightValue = parseGuardLiteral(rightRaw);
+  const eq = valuesEqual(leftValue, rightValue);
+  return op === '!=' ? !eq : eq;
+}
+
+function evaluateLifecycleTransitionGuard(transition, context = {}) {
+  const when = String(transition?.when || '').trim();
+  if (!when) return true;
+
+  const groups = when.split(/\s+or\s+/i).map(group => group.trim()).filter(Boolean);
+  if (groups.length === 0) return true;
+
+  return groups.some(group => {
+    const clauses = group.split(/\s+and\s+/i).map(c => c.trim()).filter(Boolean);
+    if (clauses.length === 0) return false;
+    return clauses.every(clause => evaluateGuardClause(clause, context));
+  });
+}
+
+function interpolateActionTemplate(raw, context = {}) {
+  const input = String(raw || '');
+  return input.replace(/\$\{([^}]+)\}/g, (_m, expr) => {
+    const v = resolvePathValue(context, String(expr || '').trim());
+    return v == null ? '' : String(v);
+  });
+}
+
+function parseLifecycleAction(action, context = {}) {
+  const text = interpolateActionTemplate(action, context).trim();
+  if (!text) return { kind: 'none' };
+
+  const enqueueMatch = text.match(/^enqueue\s+([^\s]+)$/i);
+  if (enqueueMatch) {
+    return { kind: 'enqueue', queueName: String(enqueueMatch[1] || '').trim() };
+  }
+
+  const httpMatch = text.match(/^http_(sync|async)\s+([A-Za-z]+)\s+("[^"]+"|'[^']+'|[^\s]+)(?:\s+timeout_ms=(\d+))?$/i);
+  if (httpMatch) {
+    const mode = String(httpMatch[1] || '').toLowerCase();
+    const method = String(httpMatch[2] || 'POST').toUpperCase();
+    let url = String(httpMatch[3] || '').trim();
+    if ((url.startsWith('"') && url.endsWith('"')) || (url.startsWith("'") && url.endsWith("'"))) {
+      url = url.slice(1, -1);
+    }
+
+    return {
+      kind: mode === 'sync' ? 'http_sync' : 'http_async',
+      method,
+      url,
+      timeoutMs: httpMatch[4] ? Number(httpMatch[4]) : 10000
+    };
+  }
+
+  const dbMatch = text.match(/^db_(sync|async)\s+(.+)$/i);
+  if (dbMatch) {
+    const mode = String(dbMatch[1] || '').toLowerCase();
+    const spec = String(dbMatch[2] || '').trim();
+    return {
+      kind: mode === 'sync' ? 'db_sync' : 'db_async',
+      spec
+    };
+  }
+
+  throw new Error(`Unsupported lifecycle action: ${text}`);
+}
+
+async function runLifecycleTransitionAction(action, runtimeContext, workerState) {
+  const parsed = parseLifecycleAction(action, runtimeContext);
+  if (parsed.kind === 'none') return;
+
+  if (parsed.kind === 'enqueue') {
+    if (!parsed.queueName) return;
+    const actionRoute = ensureRoute(parsed.queueName);
+    if (!actionRoute) {
+      throw new Error(`No available queue managers for action queue ${parsed.queueName}`);
+    }
+    await enqueueViaRoute(
+      actionRoute,
+      parsed.queueName,
+      runtimeContext.message,
+      `${workerState.sourceService}:action`,
+      null,
+      inferQueueDataTypeIds(parsed.queueName)
+    );
+    return;
+  }
+
+  if (parsed.kind === 'http_sync' || parsed.kind === 'http_async') {
+    const method = parsed.method || 'POST';
+    const bodyAllowed = !['GET', 'HEAD', 'DELETE'].includes(method);
+    const options = {
+      method,
+      headers: {
+        'content-type': 'application/json'
+      }
+    };
+    if (bodyAllowed) {
+      options.body = JSON.stringify(runtimeContext.message);
+    }
+
+    if (parsed.kind === 'http_async') {
+      fetch(parsed.url, options).catch(e => {
+        console.warn(`[LIFECYCLE] Async HTTP action failed (${parsed.url}): ${e.message}`);
+      });
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Number(parsed.timeoutMs) || 10000);
+    try {
+      const response = await fetch(parsed.url, { ...options, signal: controller.signal });
+      if (!response.ok) {
+        const errBody = await response.text();
+        throw new Error(`HTTP_SYNC ${parsed.url} failed (${response.status}): ${errBody.slice(0, 300)}`);
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  if (parsed.kind === 'db_sync' || parsed.kind === 'db_async') {
+    const isSync = parsed.kind === 'db_sync';
+    const allowed = isSync ? lifecycleActionPolicy.allowDbSync : lifecycleActionPolicy.allowDbAsync;
+    if (!allowed) {
+      throw new Error(
+        `${parsed.kind.toUpperCase()} is disabled by policy. Use HTTP_SYNC/HTTP_ASYNC to an approved data service or enable policy explicitly.`
+      );
+    }
+
+    throw new Error(
+      `${parsed.kind.toUpperCase()} is enabled by policy but no DB adapter is configured. Spec: ${parsed.spec}`
+    );
+  }
+}
+
+async function enqueueLifecycleStateMessage(compiled, stateName, message, sourceService = 'lifecycle-harness') {
+  const state = getLifecycleStateByName(compiled, stateName);
+  const queueName = String(state?.queueName || '').trim();
+  if (!queueName) {
+    return { enqueued: false, reason: 'state has no queue binding' };
+  }
+  const route = ensureRoute(queueName);
+  if (!route) {
+    throw new Error(`No available queue managers for lifecycle queue ${queueName}`);
+  }
+
+  const delivery = await enqueueViaRoute(route, queueName, message, sourceService, null, inferQueueDataTypeIds(queueName));
+  return { enqueued: true, queueName, delivery };
+}
+
+async function dequeueLifecycleStateMessage(compiled, stateName, consumerService = 'lifecycle-harness') {
+  const state = getLifecycleStateByName(compiled, stateName);
+  const queueName = String(state?.queueName || '').trim();
+  if (!queueName) {
+    return { dequeued: false, reason: 'state has no queue binding', message: null };
+  }
+
+  const message = await dequeueViaRoute(queueName, consumerService);
+  if (message == null) {
+    return { dequeued: false, queueName, message: null };
+  }
+  return { dequeued: true, queueName, message };
+}
+
+function buildDefaultMt103Message(txId) {
+  return `MT103\n:20:${txId}\n:32A:260514USD12500,\n:50K:APPLICANT CORP\n:57A:BKTRUS33\n:59:/000123456\nBENEFICIARY LTD`;
+}
+
+async function lifecycleHarnessStartTransaction(compiled, { txId, message } = {}) {
+  const transactionId = String(txId || `TX-${Date.now()}`);
+  const initialState = String(compiled?.initialState || '').trim();
+  if (!initialState) {
+    throw new Error('Compiled lifecycle has no initialState');
+  }
+
+  const payload = message || buildDefaultMt103Message(transactionId);
+  await enqueueLifecycleStateMessage(compiled, initialState, payload, 'lifecycle-harness:start');
+
+  lifecycleHarness.active = {
+    transactionId,
+    currentState: initialState,
+    message: payload,
+    startedAt: new Date().toISOString(),
+    lastEvent: null
+  };
+  lifecycleHarness.history.push({
+    at: new Date().toISOString(),
+    kind: 'start',
+    transactionId,
+    state: initialState
+  });
+
+  return lifecycleHarness.active;
+}
+
+async function lifecycleHarnessAdvance(compiled, { eventName, context = {}, replacementMessage = null } = {}) {
+  if (!lifecycleHarness.active) {
+    throw new Error('No active lifecycle test transaction. Start one first.');
+  }
+
+  const fromState = lifecycleHarness.active.currentState;
+  const outgoing = getLifecycleOutgoingTransitions(compiled, fromState);
+  if (outgoing.length === 0) {
+    throw new Error(`State ${fromState} has no outgoing transitions`);
+  }
+
+  const candidates = eventName
+    ? outgoing.filter(t => t.event === eventName)
+    : outgoing;
+
+  const transition = candidates.find(t => evaluateLifecycleTransitionGuard(t, context));
+  if (!transition) {
+    const eventText = eventName ? ` for event ${eventName}` : '';
+    throw new Error(`No eligible transition from ${fromState}${eventText}`);
+  }
+
+  await dequeueLifecycleStateMessage(compiled, fromState, 'lifecycle-harness:step');
+  if (replacementMessage != null) {
+    lifecycleHarness.active.message = replacementMessage;
+  }
+  await enqueueLifecycleStateMessage(compiled, transition.to, lifecycleHarness.active.message, 'lifecycle-harness:step');
+
+  lifecycleHarness.active.currentState = transition.to;
+  lifecycleHarness.active.lastEvent = transition.event;
+
+  lifecycleHarness.history.push({
+    at: new Date().toISOString(),
+    kind: 'transition',
+    transactionId: lifecycleHarness.active.transactionId,
+    from: transition.from,
+    to: transition.to,
+    event: transition.event
+  });
+
+  return {
+    transition,
+    active: lifecycleHarness.active
+  };
 }
 
 function registerRoutes(app) {
@@ -2057,6 +2911,291 @@ function registerRoutes(app) {
 
   app.get('/api/router/workers', (req, res) => {
     res.json({ workers: getRouterWorkersPayload() });
+  });
+
+  app.get('/api/lifecycle/dashboard', (req, res) => {
+    const compiled = readTransactionLifecycleCompiled();
+    if (!compiled) {
+      return res.status(404).json({
+        error: 'Lifecycle compiled artifact not found',
+        hint: 'Run: npm run compile:lifecycle'
+      });
+    }
+
+    const payload = buildTransactionLifecycleDashboardPayload(compiled);
+    if (!payload) {
+      return res.status(500).json({ error: 'Lifecycle artifact is invalid' });
+    }
+
+    return res.json(payload);
+  });
+
+  app.post('/api/lifecycle/test/start', async (req, res) => {
+    try {
+      const compiled = readTransactionLifecycleCompiled();
+      if (!compiled) {
+        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
+      }
+
+      const { txId, message } = req.body || {};
+      const active = await lifecycleHarnessStartTransaction(compiled, { txId, message });
+      return res.json({ status: 'started', active });
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/lifecycle/test/step', async (req, res) => {
+    try {
+      const compiled = readTransactionLifecycleCompiled();
+      if (!compiled) {
+        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
+      }
+
+      const { eventName, status, statementMatch, replacementMessage } = req.body || {};
+      const result = await lifecycleHarnessAdvance(compiled, {
+        eventName: eventName || null,
+        context: { status, statementMatch },
+        replacementMessage: replacementMessage || null
+      });
+      return res.json({ status: 'advanced', ...result });
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/lifecycle/simulators/bank-of-canada/approve', async (req, res) => {
+    try {
+      const compiled = readTransactionLifecycleCompiled();
+      if (!compiled) {
+        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
+      }
+
+      const result = await lifecycleHarnessAdvance(compiled, {
+        eventName: 'lynx_approved',
+        context: { status: 'approved' }
+      });
+      return res.json({ status: 'simulated', simulator: 'bank-of-canada-approve', ...result });
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/lifecycle/simulators/bank-of-canada/reject', async (req, res) => {
+    try {
+      const compiled = readTransactionLifecycleCompiled();
+      if (!compiled) {
+        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
+      }
+
+      const result = await lifecycleHarnessAdvance(compiled, {
+        eventName: 'lynx_rejected',
+        context: { status: 'rejected' }
+      });
+      return res.json({ status: 'simulated', simulator: 'bank-of-canada-reject', ...result });
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/lifecycle/simulators/correspondent/send-mt940', async (req, res) => {
+    try {
+      const compiled = readTransactionLifecycleCompiled();
+      if (!compiled) {
+        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
+      }
+
+      const { statementRef } = req.body || {};
+      const ref = String(statementRef || lifecycleHarness.active?.transactionId || 'UNKNOWN');
+      const mt940 = `:20:${ref}\n:25:CORR-ACCOUNT-001\n:61:260514C12500,NTRFNONREF//${ref}\n:86:Settlement confirmed`;
+
+      const result = await lifecycleHarnessAdvance(compiled, {
+        eventName: 'statement_matched',
+        context: { statementMatch: true },
+        replacementMessage: mt940
+      });
+      return res.json({ status: 'simulated', simulator: 'correspondent-mt940', mt940, ...result });
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/lifecycle/workers', (req, res) => {
+    res.json({
+      lifecycleWorkers: getLifecycleWorkersPayload(),
+      bridgeWorkers: getQueueBridgeWorkersPayload()
+    });
+  });
+
+  app.post('/api/lifecycle/workers/start', (req, res) => {
+    try {
+      const worker = startLifecycleWorker(req.body || {});
+      res.json({ status: 'started', worker });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/lifecycle/workers/:workerId/stop', (req, res) => {
+    const removed = stopLifecycleWorker(req.params.workerId);
+    if (!removed) {
+      return res.status(404).json({ error: 'Lifecycle worker not found' });
+    }
+    res.json({ status: 'stopped', workerId: req.params.workerId });
+  });
+
+  app.post('/api/lifecycle/bridge-workers/start', (req, res) => {
+    try {
+      const worker = startQueueBridgeWorker(req.body || {});
+      res.json({ status: 'started', worker });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/lifecycle/bridge-workers/:workerId/stop', (req, res) => {
+    const removed = stopQueueBridgeWorker(req.params.workerId);
+    if (!removed) {
+      return res.status(404).json({ error: 'Bridge worker not found' });
+    }
+    res.json({ status: 'stopped', workerId: req.params.workerId });
+  });
+
+  app.post('/api/lifecycle/workers/start-default', (req, res) => {
+    try {
+      const { intervalMs, batchSize } = req.body || {};
+      const workers = startDefaultQueueDrivenLifecycleWorkers({
+        intervalMs: Number(intervalMs) > 0 ? Number(intervalMs) : 500,
+        batchSize: Number(batchSize) > 0 ? Number(batchSize) : 25
+      });
+      res.json({
+        status: 'started',
+        workersStarted: workers.length,
+        lifecycleWorkers: getLifecycleWorkersPayload(),
+        bridgeWorkers: getQueueBridgeWorkersPayload()
+      });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/lifecycle/workers/stop-all', (req, res) => {
+    stopAllQueueDrivenWorkers();
+    res.json({ status: 'stopped' });
+  });
+
+  app.get('/api/lifecycle/policy', (req, res) => {
+    res.json({
+      policy: {
+        allowDbSync: Boolean(lifecycleActionPolicy.allowDbSync),
+        allowDbAsync: Boolean(lifecycleActionPolicy.allowDbAsync)
+      }
+    });
+  });
+
+  app.post('/api/lifecycle/policy', (req, res) => {
+    const { allowDbSync, allowDbAsync } = req.body || {};
+    if (typeof allowDbSync !== 'undefined') {
+      lifecycleActionPolicy.allowDbSync = Boolean(allowDbSync);
+    }
+    if (typeof allowDbAsync !== 'undefined') {
+      lifecycleActionPolicy.allowDbAsync = Boolean(allowDbAsync);
+    }
+
+    res.json({
+      status: 'updated',
+      policy: {
+        allowDbSync: Boolean(lifecycleActionPolicy.allowDbSync),
+        allowDbAsync: Boolean(lifecycleActionPolicy.allowDbAsync)
+      }
+    });
+  });
+
+  app.get('/api/lifecycle/subflows/workers', (req, res) => {
+    res.json({ workers: getSubflowBridgeWorkersPayload() });
+  });
+
+  app.post('/api/lifecycle/subflows/workers/start-default', (req, res) => {
+    try {
+      const { intervalMs, batchSize } = req.body || {};
+      const workers = startDefaultSubflowBridgeWorkers({
+        intervalMs: Number(intervalMs) > 0 ? Number(intervalMs) : 500,
+        batchSize: Number(batchSize) > 0 ? Number(batchSize) : 25
+      });
+      res.json({ status: 'started', workersStarted: workers.length, workers: getSubflowBridgeWorkersPayload() });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/lifecycle/subflows/workers/stop-all', (req, res) => {
+    stopSubflowBridgeWorkers();
+    res.json({ status: 'stopped' });
+  });
+
+  app.get('/api/gateways', (req, res) => {
+    res.json(getGatewayStatusPayload());
+  });
+
+  app.post('/api/gateways/swift/start', (req, res) => {
+    try {
+      const { intervalMs, batchSize } = req.body || {};
+      const workers = startSwiftGateway({
+        intervalMs: Number(intervalMs) > 0 ? Number(intervalMs) : 500,
+        batchSize: Number(batchSize) > 0 ? Number(batchSize) : 25
+      });
+      res.json({ status: 'started', gateway: 'swift', workersStarted: workers.length, gateways: getGatewayStatusPayload() });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/gateways/swift/stop', (req, res) => {
+    stopSwiftGateway();
+    res.json({ status: 'stopped', gateway: 'swift', gateways: getGatewayStatusPayload() });
+  });
+
+  app.post('/api/gateways/boc/start', (req, res) => {
+    try {
+      const { intervalMs, batchSize, approvalMode } = req.body || {};
+      const workers = startBocGateway({
+        intervalMs: Number(intervalMs) > 0 ? Number(intervalMs) : 500,
+        batchSize: Number(batchSize) > 0 ? Number(batchSize) : 25,
+        approvalMode: approvalMode || 'approved'
+      });
+      res.json({ status: 'started', gateway: 'boc', workersStarted: workers.length, gateways: getGatewayStatusPayload() });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/gateways/boc/stop', (req, res) => {
+    stopBocGateway();
+    res.json({ status: 'stopped', gateway: 'boc', gateways: getGatewayStatusPayload() });
+  });
+
+  app.post('/api/gateways/start', (req, res) => {
+    try {
+      const { intervalMs, batchSize, approvalMode } = req.body || {};
+      startSwiftGateway({
+        intervalMs: Number(intervalMs) > 0 ? Number(intervalMs) : 500,
+        batchSize: Number(batchSize) > 0 ? Number(batchSize) : 25
+      });
+      startBocGateway({
+        intervalMs: Number(intervalMs) > 0 ? Number(intervalMs) : 500,
+        batchSize: Number(batchSize) > 0 ? Number(batchSize) : 25,
+        approvalMode: approvalMode || 'approved'
+      });
+      res.json({ status: 'started', gateways: getGatewayStatusPayload() });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/gateways/stop', (req, res) => {
+    stopSwiftGateway();
+    stopBocGateway();
+    res.json({ status: 'stopped', gateways: getGatewayStatusPayload() });
   });
 
   app.post('/api/router/workers/start', (req, res) => {

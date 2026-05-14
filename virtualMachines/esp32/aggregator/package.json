@@ -13,7 +13,8 @@
     "run:pcode:js": "node scripts/run-js-pmachine.mjs",
     "compile:workflow": "node scripts/compile-workflow-dsl.mjs --in data/workflow.wfl",
     "interpret:workflow": "node scripts/interpret-workflow.mjs --in data/workflow.wfl --workflow enqueue-pacs",
-    "check:pcode-compat": "node scripts/check-pcode-compat.mjs"
+    "check:pcode-compat": "node scripts/check-pcode-compat.mjs",
+    "compile:lifecycle": "node scripts/compile-transaction-lifecycle-dsl.mjs --in data/transaction-lifecycle.tsl"
   },
   "dependencies": {
     "cors": "^2.8.6",

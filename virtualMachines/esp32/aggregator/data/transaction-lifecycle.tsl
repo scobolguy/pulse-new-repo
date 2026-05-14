@@ -1,0 +1,20 @@
+# Transaction Lifecycle DSL (separate from router/workflow DSLs)
+
+transaction "mt103-payment-lifecycle" begin
+  description "MT103 to PACS, LYNX approval, correspondent send, then statement reconciliation";
+
+  state "received_mt103" initial label "Received MT103" queue "swift.mt103.parsed";
+  state "pacs_created" label "PACS Created" queue "tx.pacs.created";
+  state "lynx_pending" label "Pending LYNX Approval" queue "tx.lynx.pending";
+  state "lynx_approved" label "LYNX Approved" queue "tx.lynx.approved";
+  state "sent_correspondent_unreconciled" label "Sent (Unreconciled)" queue "tx.correspondent.unreconciled";
+  state "reconciled" label "Delivered + Reconciled" queue "tx.reconciled";
+  state "rejected" label "Rejected" queue "tx.rejected";
+
+  transition "received_mt103" -> "pacs_created" on "mapped_to_pacs" action "MAP mt103-to-pacs";
+  transition "pacs_created" -> "lynx_pending" on "submitted_to_lynx" action "ENQUEUE lynx.pacs009.outbound";
+  transition "lynx_pending" -> "lynx_approved" on "lynx_approved" when "status = approved";
+  transition "lynx_pending" -> "rejected" on "lynx_rejected" when "status = rejected";
+  transition "lynx_approved" -> "sent_correspondent_unreconciled" on "sent_to_correspondent" action "ENQUEUE correspondent.pacs008.outbound";
+  transition "sent_correspondent_unreconciled" -> "reconciled" on "statement_matched" when "statement_match = true";
+end;

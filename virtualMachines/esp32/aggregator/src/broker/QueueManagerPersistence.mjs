@@ -126,6 +126,7 @@ export class QueueManagerPersistence {
       nextSeq: BigInt(state.nextSeq || 0n).toString()
     };
     fs.writeFileSync(tmpPath, JSON.stringify(serializable, null, 2));
+    try { fs.unlinkSync(counterPath); } catch { /* ok if not present */ }
     fs.renameSync(tmpPath, counterPath);
     this.counterCache.set(String(queueName || ''), { era: serializable.era, nextSeq: BigInt(serializable.nextSeq) });
   }
@@ -162,6 +163,7 @@ export class QueueManagerPersistence {
     };
 
     fs.writeFileSync(tmpPath, JSON.stringify(record));
+    try { fs.unlinkSync(filePath); } catch { /* ok if not present */ }
     fs.renameSync(tmpPath, filePath);
 
     return {
@@ -286,6 +288,7 @@ export class QueueManagerPersistence {
     try {
       const tempPath = `${this.snapshotPath}.tmp`;
       fs.writeFileSync(tempPath, JSON.stringify(snapshot, null, 2));
+      try { fs.unlinkSync(this.snapshotPath); } catch { /* ok if not present */ }
       fs.renameSync(tempPath, this.snapshotPath);
     } catch (e) {
       console.error(`Error saving snapshot for ${this.queueManagerName}:`, e.message);

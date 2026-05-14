@@ -3,11 +3,17 @@ import TopologyDashboard from './TopologyDashboard';
 import QueueManagerDashboard from './QueueManagerDashboard';
 import DataLibrarian from './DataLibrarian';
 import DataMapper from './DataMapper';
+import TransactionLifecycleDashboard from './TransactionLifecycleDashboard';
+import SwiftGatewayDashboard from './SwiftGatewayDashboard';
+import BocGatewayDashboard from './BocGatewayDashboard';
 import React, { useState } from 'react';
 
 const SCREENS = [
   { id: 'topology', label: 'Network Topology' },
   { id: 'queue', label: 'Queue Manager' },
+  { id: 'lifecycle', label: 'Transaction Lifecycle' },
+  { id: 'swift-gateway', label: 'SWIFT Gateway' },
+  { id: 'boc-gateway', label: 'BoC Gateway' },
   { id: 'librarian', label: 'Data Librarian' },
   { id: 'mapper', label: 'Data Mapper' },
 ];
@@ -37,6 +43,9 @@ function App() {
       </div>
       {screen === 'topology' && <TopologyDashboard />}
       {screen === 'queue' && <QueueManagerDashboard />}
+      {screen === 'lifecycle' && <TransactionLifecycleDashboard />}
+      {screen === 'swift-gateway' && <SwiftGatewayDashboard />}
+      {screen === 'boc-gateway' && <BocGatewayDashboard />}
       {screen === 'librarian' && <DataLibrarian />}
       {screen === 'mapper' && <DataMapper />}
     </div>
