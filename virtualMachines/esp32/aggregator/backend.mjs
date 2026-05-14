@@ -1,4 +1,5 @@
 import fs from 'fs';
+import http from 'http';
 console.log('hello');
 process.on('uncaughtException', (err) => {
   console.error('[UNCAUGHT EXCEPTION]', err);
@@ -16,7 +17,46 @@ import { fileURLToPath } from 'url';
 import { createMessageBroker, createQueueManager } from './src/broker.js';
 import { createFileServer } from './fileServer.js';
 import { createRouterEngine } from './router-engine.mjs';
+import { compileQueueDslSpec, diffQueueConfigs } from './src/queue-dsl.mjs';
 import crypto from 'crypto';
+
+// ===== SERVICE PROXY UTILITY =====
+// When services are modular, proxy requests to them
+// Set MODULAR_BACKEND=1 to use separate services; else use unified backend
+
+const MODULAR_MODE = process.env.MODULAR_BACKEND === '1';
+const BROKER_SERVICE_URL = 'http://localhost:4001';
+
+/**
+ * Proxy HTTP request to another service
+ */
+function proxyRequest(method, path, req, res, targetUrl = BROKER_SERVICE_URL) {
+  const url = new URL(targetUrl);
+  const options = {
+    hostname: url.hostname,
+    port: url.port,
+    path: path.startsWith('/') ? path : '/' + path,
+    method: method,
+    headers: { 'content-type': 'application/json', ...req.headers },
+    timeout: 5000
+  };
+
+  const proxyReq = http.request(options, (proxyRes) => {
+    res.writeHead(proxyRes.statusCode, proxyRes.headers);
+    proxyRes.pipe(res);
+  });
+
+  proxyReq.on('error', (err) => {
+    console.error(`[PROXY] Error proxying to ${targetUrl}:`, err.message);
+    res.status(503).json({ error: 'Service unavailable', details: err.message });
+  });
+
+  if (req.body && (method === 'POST' || method === 'PUT')) {
+    proxyReq.write(JSON.stringify(req.body));
+  }
+  proxyReq.end();
+}
+
 
 const HTTP_PORT = 4000;
 const UDP_PORT = 4210;
@@ -24,10 +64,36 @@ const BROKER_SERVICE = 'broker';
 const ROUTER_SERVICE = 'router';
 const FILE_SERVER_SERVICE = 'file-server';
 const QUEUE_SERVICE = 'queue-manager';
+const BROKER_PROVIDER = String(process.env.BROKER_PROVIDER || 'legacy').trim().toLowerCase();
+const BROKER_RABBITMQ_URL = String(process.env.RABBITMQ_URL || 'amqp://localhost').trim() || 'amqp://localhost';
+const BROKER_RABBITMQ_EXCHANGE = String(process.env.RABBITMQ_EXCHANGE || 'pulse-broker').trim() || 'pulse-broker';
+const BROKER_RABBITMQ_QUEUE_PREFIX = String(process.env.RABBITMQ_QUEUE_PREFIX || 'pulse').trim() || 'pulse';
+const BROKER_MSMQ_BASE_QUEUE_PATH = String(process.env.MSMQ_BASE_QUEUE_PATH || '.\\private$').trim() || '.\\private$';
+const BROKER_MSMQ_QUEUE_PREFIX = String(process.env.MSMQ_QUEUE_PREFIX || 'pulse').trim() || 'pulse';
+const BROKER_KAFKA_BROKERS = String(process.env.KAFKA_BROKERS || 'localhost:9092').trim() || 'localhost:9092';
+const BROKER_KAFKA_CLIENT_ID = String(process.env.KAFKA_CLIENT_ID || 'pulse-broker').trim() || 'pulse-broker';
+const BROKER_KAFKA_TOPIC_PREFIX = String(process.env.KAFKA_TOPIC_PREFIX || 'pulse').trim() || 'pulse';
+const BROKER_IBM_QUEUE_MANAGER = String(process.env.IBM_MQ_QUEUE_MANAGER || 'QM1').trim() || 'QM1';
+const BROKER_IBM_CHANNEL = String(process.env.IBM_MQ_CHANNEL || 'DEV.APP.SVRCONN').trim() || 'DEV.APP.SVRCONN';
+const BROKER_IBM_CONN_NAME = String(process.env.IBM_MQ_CONN_NAME || 'localhost(1414)').trim() || 'localhost(1414)';
+const BROKER_IBM_QUEUE_PREFIX = String(process.env.IBM_MQ_QUEUE_PREFIX || 'pulse').trim() || 'pulse';
+const BROKER_IBM_USERNAME = String(process.env.IBM_MQ_USER || '').trim();
+const BROKER_IBM_PASSWORD = String(process.env.IBM_MQ_PASSWORD || '');
+const BROKER_APACHE_HOST = String(process.env.APACHE_BROKER_HOST || 'localhost').trim() || 'localhost';
+const BROKER_APACHE_PORT = Number(process.env.APACHE_BROKER_PORT || 61613) || 61613;
+const BROKER_APACHE_USERNAME = String(process.env.APACHE_BROKER_USER || '').trim();
+const BROKER_APACHE_PASSWORD = String(process.env.APACHE_BROKER_PASSWORD || '');
+const BROKER_APACHE_TOPIC_PREFIX = String(process.env.APACHE_BROKER_TOPIC_PREFIX || '/topic/pulse').trim() || '/topic/pulse';
 
 const app = express();
+app.set('trust proxy', true);
 app.use(cors());
 app.use(express.json());
+app.use(auditApiRequest);
+app.use(applyRequestSecurityHeaders);
+app.use(enforceHttpsTransport);
+app.use(enforceApiPermission);
+app.use(enforceTwoPersonRule);
 
 console.log('[DEBUG] Creating global state...');
 const queueManagerInstances = new Map(); // Maps managerId to QueueManager instance
@@ -45,26 +111,247 @@ let queueManagers = [
     return qm;
   })()
 ];
-const primaryBroker = createMessageBroker();
+let brokerRuntimeConfig = {
+  provider: BROKER_PROVIDER,
+  url: BROKER_RABBITMQ_URL,
+  exchangeName: BROKER_RABBITMQ_EXCHANGE,
+  queuePrefix: BROKER_RABBITMQ_QUEUE_PREFIX,
+  msmqBaseQueuePath: BROKER_MSMQ_BASE_QUEUE_PATH,
+  msmqQueuePrefix: BROKER_MSMQ_QUEUE_PREFIX,
+  kafkaBrokers: BROKER_KAFKA_BROKERS,
+  kafkaClientId: BROKER_KAFKA_CLIENT_ID,
+  kafkaTopicPrefix: BROKER_KAFKA_TOPIC_PREFIX,
+  ibmQueueManager: BROKER_IBM_QUEUE_MANAGER,
+  ibmChannel: BROKER_IBM_CHANNEL,
+  ibmConnName: BROKER_IBM_CONN_NAME,
+  ibmQueuePrefix: BROKER_IBM_QUEUE_PREFIX,
+  ibmUsername: BROKER_IBM_USERNAME,
+  ibmPassword: BROKER_IBM_PASSWORD,
+  apacheHost: BROKER_APACHE_HOST,
+  apachePort: BROKER_APACHE_PORT,
+  apacheUsername: BROKER_APACHE_USERNAME,
+  apachePassword: BROKER_APACHE_PASSWORD,
+  apacheTopicPrefix: BROKER_APACHE_TOPIC_PREFIX
+};
+
+function createConfiguredBroker() {
+  return createMessageBroker(undefined, {
+    provider: brokerRuntimeConfig.provider,
+    url: brokerRuntimeConfig.url,
+    exchangeName: brokerRuntimeConfig.exchangeName,
+    queuePrefix: brokerRuntimeConfig.queuePrefix,
+    baseQueuePath: brokerRuntimeConfig.msmqBaseQueuePath,
+    msmqQueuePrefix: brokerRuntimeConfig.msmqQueuePrefix,
+    kafkaBrokers: brokerRuntimeConfig.kafkaBrokers,
+    kafkaClientId: brokerRuntimeConfig.kafkaClientId,
+    kafkaTopicPrefix: brokerRuntimeConfig.kafkaTopicPrefix,
+    ibmQueueManager: brokerRuntimeConfig.ibmQueueManager,
+    ibmChannel: brokerRuntimeConfig.ibmChannel,
+    ibmConnName: brokerRuntimeConfig.ibmConnName,
+    ibmQueuePrefix: brokerRuntimeConfig.ibmQueuePrefix,
+    ibmUsername: brokerRuntimeConfig.ibmUsername,
+    ibmPassword: brokerRuntimeConfig.ibmPassword,
+    apacheHost: brokerRuntimeConfig.apacheHost,
+    apachePort: brokerRuntimeConfig.apachePort,
+    apacheUsername: brokerRuntimeConfig.apacheUsername,
+    apachePassword: brokerRuntimeConfig.apachePassword,
+    apacheTopicPrefix: brokerRuntimeConfig.apacheTopicPrefix
+  });
+}
+
+function copyBrokerSubscriptions(sourceBroker, targetBroker) {
+  if (!sourceBroker || !targetBroker) return;
+  const subscriptions = sourceBroker.getSubscriptions ? sourceBroker.getSubscriptions() : {};
+  for (const [topic, subscribers] of Object.entries(subscriptions || {})) {
+    for (const subscriber of Array.isArray(subscribers) ? subscribers : []) {
+      if (!subscriber || !subscriber.serviceName) continue;
+      targetBroker.addSubscription(topic, subscriber.serviceName);
+    }
+  }
+}
+
+function rebuildBrokerInstances(nextConfig = {}) {
+  const previousPrimary = primaryBroker;
+  const previousSecondary = secondaryBroker;
+
+  brokerRuntimeConfig = {
+    ...brokerRuntimeConfig,
+    ...nextConfig,
+    provider: String(nextConfig.provider || brokerRuntimeConfig.provider || 'legacy').trim().toLowerCase(),
+    url: String(nextConfig.url || brokerRuntimeConfig.url || BROKER_RABBITMQ_URL).trim() || BROKER_RABBITMQ_URL,
+    exchangeName: String(nextConfig.exchangeName || brokerRuntimeConfig.exchangeName || BROKER_RABBITMQ_EXCHANGE).trim() || BROKER_RABBITMQ_EXCHANGE,
+    queuePrefix: String(nextConfig.queuePrefix || brokerRuntimeConfig.queuePrefix || BROKER_RABBITMQ_QUEUE_PREFIX).trim() || BROKER_RABBITMQ_QUEUE_PREFIX,
+    msmqBaseQueuePath: String(nextConfig.msmqBaseQueuePath || brokerRuntimeConfig.msmqBaseQueuePath || BROKER_MSMQ_BASE_QUEUE_PATH).trim() || BROKER_MSMQ_BASE_QUEUE_PATH,
+    msmqQueuePrefix: String(nextConfig.msmqQueuePrefix || brokerRuntimeConfig.msmqQueuePrefix || BROKER_MSMQ_QUEUE_PREFIX).trim() || BROKER_MSMQ_QUEUE_PREFIX,
+    kafkaBrokers: String(nextConfig.kafkaBrokers || brokerRuntimeConfig.kafkaBrokers || BROKER_KAFKA_BROKERS).trim() || BROKER_KAFKA_BROKERS,
+    kafkaClientId: String(nextConfig.kafkaClientId || brokerRuntimeConfig.kafkaClientId || BROKER_KAFKA_CLIENT_ID).trim() || BROKER_KAFKA_CLIENT_ID,
+    kafkaTopicPrefix: String(nextConfig.kafkaTopicPrefix || brokerRuntimeConfig.kafkaTopicPrefix || BROKER_KAFKA_TOPIC_PREFIX).trim() || BROKER_KAFKA_TOPIC_PREFIX,
+    ibmQueueManager: String(nextConfig.ibmQueueManager || brokerRuntimeConfig.ibmQueueManager || BROKER_IBM_QUEUE_MANAGER).trim() || BROKER_IBM_QUEUE_MANAGER,
+    ibmChannel: String(nextConfig.ibmChannel || brokerRuntimeConfig.ibmChannel || BROKER_IBM_CHANNEL).trim() || BROKER_IBM_CHANNEL,
+    ibmConnName: String(nextConfig.ibmConnName || brokerRuntimeConfig.ibmConnName || BROKER_IBM_CONN_NAME).trim() || BROKER_IBM_CONN_NAME,
+    ibmQueuePrefix: String(nextConfig.ibmQueuePrefix || brokerRuntimeConfig.ibmQueuePrefix || BROKER_IBM_QUEUE_PREFIX).trim() || BROKER_IBM_QUEUE_PREFIX,
+    ibmUsername: String(nextConfig.ibmUsername || brokerRuntimeConfig.ibmUsername || BROKER_IBM_USERNAME).trim(),
+    ibmPassword: String(nextConfig.ibmPassword || brokerRuntimeConfig.ibmPassword || BROKER_IBM_PASSWORD),
+    apacheHost: String(nextConfig.apacheHost || brokerRuntimeConfig.apacheHost || BROKER_APACHE_HOST).trim() || BROKER_APACHE_HOST,
+    apachePort: Number(nextConfig.apachePort || brokerRuntimeConfig.apachePort || BROKER_APACHE_PORT) || BROKER_APACHE_PORT,
+    apacheUsername: String(nextConfig.apacheUsername || brokerRuntimeConfig.apacheUsername || BROKER_APACHE_USERNAME).trim(),
+    apachePassword: String(nextConfig.apachePassword || brokerRuntimeConfig.apachePassword || BROKER_APACHE_PASSWORD),
+    apacheTopicPrefix: String(nextConfig.apacheTopicPrefix || brokerRuntimeConfig.apacheTopicPrefix || BROKER_APACHE_TOPIC_PREFIX).trim() || BROKER_APACHE_TOPIC_PREFIX
+  };
+
+  primaryBroker = createConfiguredBroker();
+  copyBrokerSubscriptions(previousPrimary, primaryBroker);
+
+  if (previousSecondary) {
+    secondaryBroker = createConfiguredBroker();
+    copyBrokerSubscriptions(previousSecondary, secondaryBroker);
+  }
+
+  return {
+    ...brokerRuntimeConfig,
+    secondaryRunning: !!previousSecondary
+  };
+}
+
+let primaryBroker = createConfiguredBroker();
 // --- MessageBroker Subscription API ---
 app.get('/api/broker/subscriptions', (req, res) => {
-  try {
-    res.json({ subscriptions: primaryBroker.getSubscriptions() });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
+  if (MODULAR_MODE) {
+    proxyRequest('GET', '/broker/subscriptions', req, res);
+  } else {
+    try {
+      res.json({ subscriptions: primaryBroker.getSubscriptions() });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  }
+});
+
+app.get('/api/broker/config', requirePermission('broker.read'), (req, res) => {
+  if (MODULAR_MODE) {
+    proxyRequest('GET', '/broker/config', req, res);
+  } else {
+    res.json({
+      broker: {
+        provider: brokerRuntimeConfig.provider,
+        supportedProviders: ['legacy', 'memory', 'rabbitmq', 'msmq', 'kafka', 'ibm', 'apache'],
+        rabbitmq: {
+          exchangeName: brokerRuntimeConfig.exchangeName,
+          queuePrefix: brokerRuntimeConfig.queuePrefix,
+          urlConfigured: brokerRuntimeConfig.provider === 'rabbitmq' ? true : Boolean(brokerRuntimeConfig.url)
+        },
+        msmq: {
+          baseQueuePath: brokerRuntimeConfig.msmqBaseQueuePath,
+          queuePrefix: brokerRuntimeConfig.msmqQueuePrefix
+        },
+        kafka: {
+          brokers: brokerRuntimeConfig.kafkaBrokers,
+          clientId: brokerRuntimeConfig.kafkaClientId,
+          topicPrefix: brokerRuntimeConfig.kafkaTopicPrefix
+        },
+        ibm: {
+          queueManager: brokerRuntimeConfig.ibmQueueManager,
+          channel: brokerRuntimeConfig.ibmChannel,
+          connName: brokerRuntimeConfig.ibmConnName,
+          queuePrefix: brokerRuntimeConfig.ibmQueuePrefix,
+          username: brokerRuntimeConfig.ibmUsername,
+          passwordConfigured: Boolean(brokerRuntimeConfig.ibmPassword)
+        },
+        apache: {
+          host: brokerRuntimeConfig.apacheHost,
+          port: brokerRuntimeConfig.apachePort,
+          topicPrefix: brokerRuntimeConfig.apacheTopicPrefix,
+          username: brokerRuntimeConfig.apacheUsername,
+          passwordConfigured: Boolean(brokerRuntimeConfig.apachePassword)
+        },
+        secondaryRunning: Boolean(secondaryBroker)
+      }
+    });
+  }
+});
+
+app.post('/api/broker/config', requirePermission('broker.configure'), (req, res) => {
+  if (MODULAR_MODE) {
+    proxyRequest('POST', '/broker/config', req, res);
+  } else {
+    try {
+      const nextProvider = String(req.body?.provider || '').trim().toLowerCase();
+      const nextUrl = String(req.body?.url || '').trim();
+      const nextExchangeName = String(req.body?.exchangeName || '').trim();
+      const nextQueuePrefix = String(req.body?.queuePrefix || '').trim();
+      const nextMsmqBaseQueuePath = String(req.body?.msmqBaseQueuePath || '').trim();
+      const nextMsmqQueuePrefix = String(req.body?.msmqQueuePrefix || '').trim();
+      const nextKafkaBrokers = String(req.body?.kafkaBrokers || '').trim();
+      const nextKafkaClientId = String(req.body?.kafkaClientId || '').trim();
+      const nextKafkaTopicPrefix = String(req.body?.kafkaTopicPrefix || '').trim();
+      const nextIbmQueueManager = String(req.body?.ibmQueueManager || '').trim();
+      const nextIbmChannel = String(req.body?.ibmChannel || '').trim();
+      const nextIbmConnName = String(req.body?.ibmConnName || '').trim();
+      const nextIbmQueuePrefix = String(req.body?.ibmQueuePrefix || '').trim();
+      const nextIbmUsername = String(req.body?.ibmUsername || '').trim();
+      const hasIbmPassword = Object.prototype.hasOwnProperty.call(req.body || {}, 'ibmPassword');
+      const nextIbmPassword = hasIbmPassword ? String(req.body?.ibmPassword || '') : '';
+      const nextApacheHost = String(req.body?.apacheHost || '').trim();
+      const nextApachePort = Number(req.body?.apachePort || 0);
+      const nextApacheUsername = String(req.body?.apacheUsername || '').trim();
+      const hasApachePassword = Object.prototype.hasOwnProperty.call(req.body || {}, 'apachePassword');
+      const nextApachePassword = hasApachePassword ? String(req.body?.apachePassword || '') : '';
+      const nextApacheTopicPrefix = String(req.body?.apacheTopicPrefix || '').trim();
+
+      const supportedProviders = new Set(['legacy', 'memory', 'rabbitmq', 'msmq', 'kafka', 'ibm', 'apache', 'apache-broker', 'apache-activemq', 'activemq', 'apache-kafka', 'ibm-message-broker', 'ibmmq', 'ibm-mq']);
+      if (!nextProvider) {
+        return res.status(400).json({ error: 'provider is required' });
+      }
+      if (!supportedProviders.has(nextProvider)) {
+        return res.status(400).json({ error: `Unsupported provider: ${nextProvider}` });
+      }
+
+      const nextConfig = { provider: nextProvider };
+      if (nextUrl) nextConfig.url = nextUrl;
+      if (nextExchangeName) nextConfig.exchangeName = nextExchangeName;
+      if (nextQueuePrefix) nextConfig.queuePrefix = nextQueuePrefix;
+      if (nextMsmqBaseQueuePath) nextConfig.msmqBaseQueuePath = nextMsmqBaseQueuePath;
+      if (nextMsmqQueuePrefix) nextConfig.msmqQueuePrefix = nextMsmqQueuePrefix;
+      if (nextKafkaBrokers) nextConfig.kafkaBrokers = nextKafkaBrokers;
+      if (nextKafkaClientId) nextConfig.kafkaClientId = nextKafkaClientId;
+      if (nextKafkaTopicPrefix) nextConfig.kafkaTopicPrefix = nextKafkaTopicPrefix;
+      if (nextIbmQueueManager) nextConfig.ibmQueueManager = nextIbmQueueManager;
+      if (nextIbmChannel) nextConfig.ibmChannel = nextIbmChannel;
+      if (nextIbmConnName) nextConfig.ibmConnName = nextIbmConnName;
+      if (nextIbmQueuePrefix) nextConfig.ibmQueuePrefix = nextIbmQueuePrefix;
+      if (nextIbmUsername) nextConfig.ibmUsername = nextIbmUsername;
+      if (hasIbmPassword) nextConfig.ibmPassword = nextIbmPassword;
+      if (nextApacheHost) nextConfig.apacheHost = nextApacheHost;
+      if (nextApachePort > 0) nextConfig.apachePort = nextApachePort;
+      if (nextApacheUsername) nextConfig.apacheUsername = nextApacheUsername;
+      if (hasApachePassword) nextConfig.apachePassword = nextApachePassword;
+      if (nextApacheTopicPrefix) nextConfig.apacheTopicPrefix = nextApacheTopicPrefix;
+
+      const runtime = rebuildBrokerInstances(nextConfig);
+      res.json({
+        status: 'updated',
+        broker: runtime
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
   }
 });
 
 app.post('/api/broker/subscriptions', (req, res) => {
-  try {
-    const { topic, serviceName } = req.body || {};
-    if (!topic || !serviceName) {
-      return res.status(400).json({ error: 'topic and serviceName are required' });
+  if (MODULAR_MODE) {
+    proxyRequest('POST', '/broker/subscriptions', req, res);
+  } else {
+    try {
+      const { topic, serviceName } = req.body || {};
+      if (!topic || !serviceName) {
+        return res.status(400).json({ error: 'topic and serviceName are required' });
+      }
+      primaryBroker.addSubscription(topic, serviceName);
+      res.json({ status: 'added', topic, serviceName });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
     }
-    primaryBroker.addSubscription(topic, serviceName);
-    res.json({ status: 'added', topic, serviceName });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
   }
 });
 let secondaryBroker = null;
@@ -85,6 +372,18 @@ const remoteQueueManagerProcesses = new Map();
 const queueManagerScriptPath = fileURLToPath(new URL('./queue-manager-node.mjs', import.meta.url));
 const QUEUE_VALIDATION_LOG_PATH = './data/queue-validation-errors.jsonl';
 const TX_LIFECYCLE_COMPILED_PATH = './data/transaction-lifecycle-compiled.json';
+const USER_MANAGEMENT_PATH = './data/user-management.json';
+const PROCESS_GOVERNANCE_PATH = './data/process-governance.json';
+const AUDIT_LOG_PATH = './data/audit-api.jsonl';
+const REQUIRE_HTTPS = String(process.env.REQUIRE_HTTPS || '').trim().toLowerCase() === 'true';
+const APPROVAL_TTL_MS = Number(process.env.APPROVAL_TTL_MS || 15 * 60 * 1000);
+const AUTO_APPROVE_USER_IDS = new Set(
+  String(process.env.AUTO_APPROVE_USER_IDS || 'system-admin')
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean)
+);
+const ALLOW_IMPLICIT_ADMIN = String(process.env.ALLOW_IMPLICIT_ADMIN || 'false').trim().toLowerCase() === 'true';
 const queueValidationErrors = [];
 const MAX_QUEUE_VALIDATION_ERRORS = 500;
 const lifecycleHarness = {
@@ -95,6 +394,850 @@ const lifecycleActionPolicy = {
   allowDbSync: false,
   allowDbAsync: false
 };
+const DEFAULT_ACTOR_USER_ID = 'system-admin';
+const pendingApprovalRequests = new Map();
+let auditChainHead = 'GENESIS';
+const LIFECYCLE_HEARTBEAT_INACTIVITY_MS = Number(process.env.LIFECYCLE_HEARTBEAT_INACTIVITY_MS || 30 * 1000);
+const LIFECYCLE_HEARTBEAT_CHECK_INTERVAL_MS = Number(process.env.LIFECYCLE_HEARTBEAT_CHECK_INTERVAL_MS || 5 * 1000);
+const lifecycleHeartbeat = {
+  enabled: true,
+  inactivityMs: Number.isFinite(LIFECYCLE_HEARTBEAT_INACTIVITY_MS) && LIFECYCLE_HEARTBEAT_INACTIVITY_MS > 0
+    ? LIFECYCLE_HEARTBEAT_INACTIVITY_MS
+    : 30 * 1000,
+  checkIntervalMs: Number.isFinite(LIFECYCLE_HEARTBEAT_CHECK_INTERVAL_MS) && LIFECYCLE_HEARTBEAT_CHECK_INTERVAL_MS > 0
+    ? LIFECYCLE_HEARTBEAT_CHECK_INTERVAL_MS
+    : 5 * 1000,
+  lastActivityMs: Date.now(),
+  lastHeartbeatMs: 0,
+  lastHeartbeatTxId: null,
+  lastError: null,
+  autoRuns: 0,
+  manualRuns: 0,
+  timerId: null,
+  running: false
+};
+
+function createDefaultUserManagement() {
+  return {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    profiles: [
+      {
+        profileId: 'admin',
+        label: 'Administrator',
+        description: 'Full access to all operations',
+        permissions: ['*']
+      },
+      {
+        profileId: 'operator',
+        label: 'Operations',
+        description: 'Can run lifecycle and gateway operations',
+        permissions: [
+          'topology.read',
+          'registry.read',
+          'registry.manage',
+          'broker.read',
+          'broker.operate',
+          'broker.configure',
+          'router.read',
+          'router.manage',
+          'queue.view',
+          'queue.operate',
+          'gateway.manage',
+          'gateway.read',
+          'lifecycle.read',
+          'lifecycle.manage',
+          'lifecycle.workers.manage',
+          'lifecycle.workers.read',
+          'lifecycle.policy.read',
+          'data.read',
+          'governance.read'
+        ]
+      },
+      {
+        profileId: 'configurator',
+        label: 'Configuration Admin',
+        description: 'Can alter queue and policy configuration',
+        permissions: [
+          'topology.read',
+          'registry.read',
+          'queue.view',
+          'queue.configure',
+          'broker.read',
+          'broker.configure',
+          'router.read',
+          'router.manage',
+          'lifecycle.read',
+          'lifecycle.policy.read',
+          'lifecycle.policy.manage',
+          'users.read',
+          'users.manage',
+          'data.read',
+          'data.manage',
+          'governance.read',
+          'governance.manage'
+        ]
+      },
+      {
+        profileId: 'viewer',
+        label: 'Read-only Viewer',
+        description: 'Read-only access',
+        permissions: [
+          'topology.read',
+          'registry.read',
+          'broker.read',
+          'router.read',
+          'queue.view',
+          'gateway.read',
+          'lifecycle.read',
+          'lifecycle.workers.read',
+          'lifecycle.policy.read',
+          'users.read',
+          'data.read',
+          'governance.read'
+        ]
+      }
+    ],
+    users: [
+      {
+        userId: DEFAULT_ACTOR_USER_ID,
+        displayName: 'System Admin',
+        enabled: true,
+        profileIds: ['admin']
+      }
+    ]
+  };
+}
+
+function sanitizePermissions(items) {
+  const result = [];
+  for (const value of Array.isArray(items) ? items : []) {
+    const permission = String(value || '').trim();
+    if (!permission) continue;
+    if (!result.includes(permission)) result.push(permission);
+  }
+  return result;
+}
+
+function sanitizeProfileIds(items) {
+  const result = [];
+  for (const value of Array.isArray(items) ? items : []) {
+    const profileId = String(value || '').trim();
+    if (!profileId) continue;
+    if (!result.includes(profileId)) result.push(profileId);
+  }
+  return result;
+}
+
+function normalizeUserManagement(raw) {
+  const fallback = createDefaultUserManagement();
+  const profiles = Array.isArray(raw?.profiles) ? raw.profiles : fallback.profiles;
+  const users = Array.isArray(raw?.users) ? raw.users : fallback.users;
+
+  const normalizedProfiles = profiles
+    .map(profile => ({
+      profileId: String(profile?.profileId || '').trim(),
+      label: String(profile?.label || profile?.profileId || '').trim(),
+      description: String(profile?.description || '').trim(),
+      permissions: sanitizePermissions(profile?.permissions)
+    }))
+    .filter(profile => profile.profileId);
+
+  const normalizedUsers = users
+    .map(user => ({
+      userId: String(user?.userId || '').trim(),
+      displayName: String(user?.displayName || user?.userId || '').trim(),
+      enabled: user?.enabled !== false,
+      profileIds: sanitizeProfileIds(user?.profileIds)
+    }))
+    .filter(user => user.userId);
+
+  if (!normalizedProfiles.some(profile => profile.profileId === 'admin')) {
+    normalizedProfiles.push(fallback.profiles[0]);
+  }
+  if (!normalizedUsers.some(user => user.userId === DEFAULT_ACTOR_USER_ID)) {
+    normalizedUsers.push(fallback.users[0]);
+  }
+
+  return {
+    version: Number(raw?.version || 1),
+    updatedAt: raw?.updatedAt || new Date().toISOString(),
+    profiles: normalizedProfiles,
+    users: normalizedUsers
+  };
+}
+
+function loadUserManagement() {
+  try {
+    if (!fs.existsSync(USER_MANAGEMENT_PATH)) {
+      const defaultStore = createDefaultUserManagement();
+      fs.writeFileSync(USER_MANAGEMENT_PATH, `${JSON.stringify(defaultStore, null, 2)}\n`, 'utf-8');
+      return normalizeUserManagement(defaultStore);
+    }
+
+    const rawText = fs.readFileSync(USER_MANAGEMENT_PATH, 'utf-8');
+    const parsed = rawText.trim() ? JSON.parse(rawText) : createDefaultUserManagement();
+    return normalizeUserManagement(parsed);
+  } catch (e) {
+    console.warn(`[AUTHZ] Failed loading user management file: ${e.message}`);
+    return normalizeUserManagement(createDefaultUserManagement());
+  }
+}
+
+let userManagementStore = loadUserManagement();
+
+function saveUserManagement() {
+  userManagementStore.updatedAt = new Date().toISOString();
+  fs.writeFileSync(USER_MANAGEMENT_PATH, `${JSON.stringify(userManagementStore, null, 2)}\n`, 'utf-8');
+}
+
+function createDefaultProcessGovernance() {
+  return {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    processes: [
+      {
+        processId: 'queue-control',
+        label: 'Queue Control Operations',
+        requiresTwoPersonRule: true,
+      },
+      {
+        processId: 'broker-control',
+        label: 'Broker Operations',
+        requiresTwoPersonRule: true,
+      },
+      {
+        processId: 'payment-authorization',
+        label: 'Payment Authorization Flow',
+        requiresTwoPersonRule: true,
+      },
+      {
+        processId: 'gateway-control',
+        label: 'Gateway Operations',
+        requiresTwoPersonRule: false,
+      },
+      {
+        processId: 'routing-control',
+        label: 'Routing Rules Management',
+        requiresTwoPersonRule: false,
+      },
+      {
+        processId: 'identity-control',
+        label: 'Identity and Profile Management',
+        requiresTwoPersonRule: true,
+      }
+    ]
+  };
+}
+
+function normalizeProcessGovernance(raw) {
+  const fallback = createDefaultProcessGovernance();
+  const processes = Array.isArray(raw?.processes) ? raw.processes : fallback.processes;
+  const normalizedProcesses = processes
+    .map(item => ({
+      processId: String(item?.processId || '').trim(),
+      label: String(item?.label || item?.processId || '').trim(),
+      requiresTwoPersonRule: item?.requiresTwoPersonRule === true
+    }))
+    .filter(item => item.processId);
+
+  for (const required of fallback.processes) {
+    if (!normalizedProcesses.some(item => item.processId === required.processId)) {
+      normalizedProcesses.push(required);
+    }
+  }
+
+  return {
+    version: Number(raw?.version || 1),
+    updatedAt: raw?.updatedAt || new Date().toISOString(),
+    processes: normalizedProcesses
+  };
+}
+
+function loadProcessGovernance() {
+  try {
+    if (!fs.existsSync(PROCESS_GOVERNANCE_PATH)) {
+      const defaultStore = createDefaultProcessGovernance();
+      fs.writeFileSync(PROCESS_GOVERNANCE_PATH, `${JSON.stringify(defaultStore, null, 2)}\n`, 'utf-8');
+      return normalizeProcessGovernance(defaultStore);
+    }
+
+    const rawText = fs.readFileSync(PROCESS_GOVERNANCE_PATH, 'utf-8');
+    const parsed = rawText.trim() ? JSON.parse(rawText) : createDefaultProcessGovernance();
+    return normalizeProcessGovernance(parsed);
+  } catch (e) {
+    console.warn(`[GOVERNANCE] Failed loading process governance file: ${e.message}`);
+    return normalizeProcessGovernance(createDefaultProcessGovernance());
+  }
+}
+
+let processGovernanceStore = loadProcessGovernance();
+
+function saveProcessGovernance() {
+  processGovernanceStore.updatedAt = new Date().toISOString();
+  fs.writeFileSync(PROCESS_GOVERNANCE_PATH, `${JSON.stringify(processGovernanceStore, null, 2)}\n`, 'utf-8');
+}
+
+function getProcessPolicyById(processId) {
+  const key = String(processId || '').trim();
+  if (!key) return null;
+  return processGovernanceStore.processes.find(item => item.processId === key) || null;
+}
+
+function applyRequestSecurityHeaders(req, res, next) {
+  res.setHeader('x-content-type-options', 'nosniff');
+  res.setHeader('x-frame-options', 'DENY');
+  res.setHeader('referrer-policy', 'no-referrer');
+  res.setHeader('permissions-policy', 'geolocation=(), microphone=(), camera=()');
+  if (REQUIRE_HTTPS) {
+    res.setHeader('strict-transport-security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+}
+
+function enforceHttpsTransport(req, res, next) {
+  if (!REQUIRE_HTTPS) return next();
+
+  const forwardedProto = String(req.get('x-forwarded-proto') || '').toLowerCase();
+  const isSecure = req.secure === true || forwardedProto === 'https';
+  if (isSecure) return next();
+
+  return res.status(426).json({
+    error: 'HTTPS is required',
+    code: 'HTTPS_REQUIRED'
+  });
+}
+
+function stableStringify(value) {
+  if (value == null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(',')}]`;
+  }
+  const keys = Object.keys(value).sort();
+  return `{${keys.map(key => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+}
+
+function hashText(value) {
+  return crypto.createHash('sha256').update(String(value || ''), 'utf-8').digest('hex');
+}
+
+function redactSensitiveValue(value, depth = 0) {
+  if (depth > 4) return '[max-depth]';
+  if (value == null) return value;
+  if (Array.isArray(value)) return value.map(item => redactSensitiveValue(item, depth + 1));
+  if (typeof value !== 'object') return value;
+
+  const result = {};
+  const sensitiveKeyPattern = /(password|token|secret|authorization|api[-_]?key|private[-_]?key)/i;
+  for (const [key, itemValue] of Object.entries(value)) {
+    if (sensitiveKeyPattern.test(key)) {
+      result[key] = '[redacted]';
+      continue;
+    }
+    result[key] = redactSensitiveValue(itemValue, depth + 1);
+  }
+  return result;
+}
+
+function sanitizeQueryForAudit(query) {
+  if (!query || typeof query !== 'object') return {};
+  const copy = { ...query };
+  if (Object.prototype.hasOwnProperty.call(copy, 'userId')) {
+    copy.userId = '[redacted]';
+  }
+  return redactSensitiveValue(copy);
+}
+
+function loadAuditChainHead() {
+  try {
+    if (!fs.existsSync(AUDIT_LOG_PATH)) return 'GENESIS';
+    const rawText = fs.readFileSync(AUDIT_LOG_PATH, 'utf-8');
+    const lines = rawText.split(/\r?\n/).filter(Boolean);
+    if (lines.length === 0) return 'GENESIS';
+    const lastEvent = JSON.parse(lines[lines.length - 1]);
+    return String(lastEvent.chainHash || 'GENESIS');
+  } catch {
+    return 'GENESIS';
+  }
+}
+
+auditChainHead = loadAuditChainHead();
+
+function appendAuditEvent(event) {
+  const timestamp = new Date().toISOString();
+  const entry = {
+    ...event,
+    timestamp,
+    previousChainHash: auditChainHead
+  };
+  const chainHash = hashText(`${auditChainHead}:${stableStringify(entry)}`);
+  entry.chainHash = chainHash;
+  fs.appendFileSync(AUDIT_LOG_PATH, `${JSON.stringify(entry)}\n`, 'utf-8');
+  auditChainHead = chainHash;
+}
+
+function auditApiRequest(req, res, next) {
+  const startedAt = Date.now();
+  const requestId = crypto.randomUUID();
+  req.requestId = requestId;
+
+  res.on('finish', () => {
+    const actor = req.actor || resolveActor(req);
+    appendAuditEvent({
+      eventType: 'api-request',
+      requestId,
+      method: req.method,
+      path: req.path,
+      statusCode: res.statusCode,
+      durationMs: Date.now() - startedAt,
+      actorUserId: actor.userId,
+      actorKnown: Boolean(actor.user),
+      ip: req.ip,
+      processId: req.governedProcessId || null,
+      approvalId: req.approvalContext?.approvalId || null,
+      approvedByUserId: req.approvalContext?.approvedByUserId || null,
+      query: sanitizeQueryForAudit(req.query),
+      body: redactSensitiveValue(req.body)
+    });
+  });
+
+  next();
+}
+
+function resolveGovernedProcessId(req) {
+  const path = String(req.path || '').trim();
+  const explicit = String(req.body?.processId || req.query?.processId || '').trim();
+  if (explicit && getProcessPolicyById(explicit)) {
+    return explicit;
+  }
+
+  if (path.startsWith('/api/registry/queue-managers')
+    || path.startsWith('/api/local-queue-managers')
+    || path.startsWith('/api/remote-queue-managers')
+    || path.startsWith('/api/queues')
+    || path.startsWith('/api/queue/')) {
+    return 'queue-control';
+  }
+
+  if (path.startsWith('/api/broker')) {
+    return 'broker-control';
+  }
+
+  if (path.startsWith('/api/lifecycle')) {
+    return 'payment-authorization';
+  }
+
+  if (path.startsWith('/api/gateways')) {
+    return 'gateway-control';
+  }
+
+  if (path.startsWith('/api/router')) {
+    return 'routing-control';
+  }
+
+  if (path.startsWith('/api/users')) {
+    return 'identity-control';
+  }
+
+  return null;
+}
+
+function createGovernedActionFingerprint(req, processId) {
+  const payload = {
+    processId,
+    method: String(req.method || '').toUpperCase(),
+    path: String(req.path || ''),
+    params: req.params || {},
+    query: sanitizeQueryForAudit(req.query),
+    body: redactSensitiveValue(req.body)
+  };
+  return hashText(stableStringify(payload));
+}
+
+function enforceTwoPersonRule(req, res, next) {
+  const method = String(req.method || 'GET').toUpperCase();
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') {
+    return next();
+  }
+
+  if (!String(req.path || '').startsWith('/api/')) {
+    return next();
+  }
+
+  if (String(req.path || '').startsWith('/api/authz/me')) {
+    return next();
+  }
+
+  const processId = resolveGovernedProcessId(req);
+  req.governedProcessId = processId;
+  if (!processId) {
+    return next();
+  }
+
+  const policy = getProcessPolicyById(processId);
+  if (!policy || policy.requiresTwoPersonRule !== true) {
+    return next();
+  }
+
+  const actor = req.actor || resolveActor(req);
+  req.actor = actor;
+  if (!actor.user || actor.user.enabled === false) {
+    return res.status(401).json({
+      error: 'Known enabled user is required for two-person-controlled actions',
+      processId
+    });
+  }
+
+  if (AUTO_APPROVE_USER_IDS.has(String(actor.userId || '').trim())) {
+    req.approvalContext = {
+      approvalId: `auto-${Date.now()}`,
+      processId,
+      requestedByUserId: actor.userId,
+      approvedByUserId: actor.userId,
+      selfApproved: true,
+      autoApproved: true
+    };
+    appendAuditEvent({
+      eventType: 'approval-auto-approved',
+      requestId: req.requestId || null,
+      processId,
+      userId: actor.userId,
+      method: String(req.method).toUpperCase(),
+      path: req.path,
+      note: 'Two-person rule bypassed via AUTO_APPROVE_USER_IDS'
+    });
+    return next();
+  }
+
+  // Self-approve bypass: user must have explicit broker.self-approve permission
+  const selfApprove = req.body?.selfApprove === true || req.get('x-self-approve') === 'true';
+  if (selfApprove) {
+    const selfApproveAllowed = actor.permissions?.includes('*') ||
+      actor.permissions?.includes('broker.self-approve');
+    if (!selfApproveAllowed) {
+      return res.status(403).json({
+        error: 'Self-approval requires broker.self-approve permission',
+        processId
+      });
+    }
+    req.approvalContext = {
+      approvalId: `self-${Date.now()}`,
+      processId,
+      requestedByUserId: actor.userId,
+      approvedByUserId: actor.userId,
+      selfApproved: true
+    };
+    appendAuditEvent({
+      eventType: 'approval-self-approved',
+      requestId: req.requestId || null,
+      processId,
+      userId: actor.userId,
+      method: String(req.method).toUpperCase(),
+      path: req.path,
+      note: 'Two-person rule bypassed via self-approve'
+    });
+    return next();
+  }
+
+  const fingerprint = createGovernedActionFingerprint(req, processId);
+  const approvalId = String(req.get('x-approval-id') || req.body?.approvalId || req.query?.approvalId || '').trim();
+  if (!approvalId) {
+    const generatedApprovalId = `apr-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    const expiresAt = Date.now() + APPROVAL_TTL_MS;
+    pendingApprovalRequests.set(generatedApprovalId, {
+      approvalId: generatedApprovalId,
+      processId,
+      fingerprint,
+      requestedByUserId: actor.userId,
+      requestedAt: new Date().toISOString(),
+      expiresAt,
+      method,
+      path: req.path,
+      body: redactSensitiveValue(req.body)
+    });
+
+    appendAuditEvent({
+      eventType: 'approval-requested',
+      requestId: req.requestId || null,
+      approvalId: generatedApprovalId,
+      processId,
+      requestedByUserId: actor.userId,
+      expiresAt: new Date(expiresAt).toISOString(),
+      method,
+      path: req.path
+    });
+
+    return res.status(202).json({
+      status: 'approval-required',
+      processId,
+      approvalId: generatedApprovalId,
+      requestedByUserId: actor.userId,
+      expiresAt: new Date(expiresAt).toISOString(),
+      message: 'Second authorized user must replay the same request with x-approval-id.'
+    });
+  }
+
+  const approval = pendingApprovalRequests.get(approvalId);
+  if (!approval) {
+    return res.status(409).json({
+      error: 'Approval request not found',
+      processId,
+      approvalId
+    });
+  }
+
+  if (Date.now() > Number(approval.expiresAt || 0)) {
+    pendingApprovalRequests.delete(approvalId);
+    return res.status(410).json({
+      error: 'Approval request expired',
+      processId,
+      approvalId
+    });
+  }
+
+  if (approval.processId !== processId || approval.fingerprint !== fingerprint) {
+    return res.status(409).json({
+      error: 'Approval request does not match this action payload',
+      processId,
+      approvalId
+    });
+  }
+
+  if (approval.requestedByUserId === actor.userId) {
+    return res.status(403).json({
+      error: 'Second approver must be a different user',
+      processId,
+      approvalId,
+      requestedByUserId: approval.requestedByUserId
+    });
+  }
+
+  req.approvalContext = {
+    approvalId,
+    processId,
+    requestedByUserId: approval.requestedByUserId,
+    approvedByUserId: actor.userId
+  };
+
+  res.on('finish', () => {
+    if (res.statusCode < 400) {
+      pendingApprovalRequests.delete(approvalId);
+      appendAuditEvent({
+        eventType: 'approval-executed',
+        requestId: req.requestId || null,
+        approvalId,
+        processId,
+        requestedByUserId: approval.requestedByUserId,
+        approvedByUserId: actor.userId,
+        statusCode: res.statusCode,
+        method,
+        path: req.path
+      });
+    }
+  });
+
+  return next();
+}
+
+function getProfilesById() {
+  return new Map(userManagementStore.profiles.map(profile => [profile.profileId, profile]));
+}
+
+function getUserById(userId) {
+  const key = String(userId || '').trim();
+  if (!key) return null;
+  return userManagementStore.users.find(user => user.userId === key) || null;
+}
+
+function getEffectivePermissionsForUser(userId) {
+  const user = getUserById(userId);
+  if (!user || user.enabled === false) {
+    return [];
+  }
+
+  const profilesById = getProfilesById();
+  const permissions = [];
+  for (const profileId of user.profileIds || []) {
+    const profile = profilesById.get(profileId);
+    if (!profile) continue;
+    for (const permission of profile.permissions || []) {
+      if (!permissions.includes(permission)) permissions.push(permission);
+    }
+  }
+  return permissions;
+}
+
+function hasPermission(userPermissions, requiredPermission) {
+  if (!requiredPermission) return true;
+  if (!Array.isArray(userPermissions)) return false;
+  if (userPermissions.includes('*')) return true;
+  if (userPermissions.includes(requiredPermission)) return true;
+
+  const parts = String(requiredPermission).split('.');
+  if (parts.length > 1) {
+    const wildcard = `${parts[0]}.*`;
+    if (userPermissions.includes(wildcard)) return true;
+  }
+  return false;
+}
+
+function resolveActor(req) {
+  const headerUserId = String(req.get('x-user-id') || '').trim();
+  const queryUserId = String(req.query?.userId || '').trim();
+  const fallbackUserId = ALLOW_IMPLICIT_ADMIN ? DEFAULT_ACTOR_USER_ID : '';
+  const actorUserId = headerUserId || queryUserId || fallbackUserId;
+  const actor = getUserById(actorUserId);
+  const permissions = getEffectivePermissionsForUser(actorUserId);
+
+  return {
+    userId: actorUserId,
+    user: actor,
+    permissions
+  };
+}
+
+function requirePermission(permission) {
+  return (req, res, next) => {
+    const actor = resolveActor(req);
+    req.actor = actor;
+
+    if (!actor.user) {
+      return res.status(401).json({
+        error: 'Unknown user',
+        requiredPermission: permission,
+        actorUserId: actor.userId
+      });
+    }
+
+    if (actor.user.enabled === false) {
+      return res.status(403).json({
+        error: 'User is disabled',
+        requiredPermission: permission,
+        actorUserId: actor.userId
+      });
+    }
+
+    if (!hasPermission(actor.permissions, permission)) {
+      return res.status(403).json({
+        error: 'Permission denied',
+        requiredPermission: permission,
+        actorUserId: actor.userId,
+        actorPermissions: actor.permissions
+      });
+    }
+
+    return next();
+  };
+}
+
+function resolvePermissionForApiRequest(req) {
+  const method = String(req.method || 'GET').toUpperCase();
+  const path = String(req.path || '').trim();
+
+  if (path === '/api/authz/me') return null;
+
+  if (path.startsWith('/api/users')) {
+    return method === 'GET' ? 'users.read' : 'users.manage';
+  }
+
+  if (path.startsWith('/api/governance')) {
+    return method === 'GET' ? 'governance.read' : 'governance.manage';
+  }
+
+  if (path.startsWith('/api/lifecycle/policy')) {
+    return method === 'GET' ? 'lifecycle.policy.read' : 'lifecycle.policy.manage';
+  }
+
+  if (path.startsWith('/api/lifecycle/workers') || path.startsWith('/api/lifecycle/bridge-workers') || path.startsWith('/api/lifecycle/subflows/workers')) {
+    return method === 'GET' ? 'lifecycle.workers.read' : 'lifecycle.workers.manage';
+  }
+
+  if (path.startsWith('/api/lifecycle')) {
+    return method === 'GET' ? 'lifecycle.read' : 'lifecycle.manage';
+  }
+
+  if (path.startsWith('/api/gateways')) {
+    return method === 'GET' ? 'gateway.read' : 'gateway.manage';
+  }
+
+  if (path === '/api/queue/validation-errors') {
+    return 'queue.view';
+  }
+
+  if (path.match(/^\/api\/queue\/[^/]+\/(length|status)$/)) {
+    return 'queue.view';
+  }
+
+  if (path.match(/^\/api\/queue\/[^/]+\/config$/)) {
+    return method === 'GET' ? 'queue.view' : 'queue.configure';
+  }
+
+  if (path.match(/^\/api\/queue\/[^/]+\/(freeze|thaw|enqueue|dequeue)$/)) {
+    return 'queue.operate';
+  }
+
+  if (path === '/api/registry/queue-managers' || path === '/api/registry/queues') {
+    return 'queue.view';
+  }
+
+  if (path.match(/^\/api\/registry\/queue-managers\/[^/]+\/(quiesce|maintenance|return-service)$/)) {
+    return 'queue.operate';
+  }
+
+  if (path.startsWith('/api/local-queue-managers') || path.startsWith('/api/remote-queue-managers')) {
+    return method === 'GET' ? 'queue.view' : 'queue.configure';
+  }
+
+  if (path.match(/^\/api\/queues\/[^/]+\/config$/)) {
+    return method === 'GET' ? 'queue.view' : 'queue.configure';
+  }
+
+  if (path.match(/^\/api\/queues\/[^/]+\/(create|delete|update|apply-config-change)$/)) {
+    return 'queue.configure';
+  }
+
+  if (path === '/api/broker/publish') {
+    return 'queue.operate';
+  }
+
+  if (path.startsWith('/api/broker/subscriptions')) {
+    return method === 'GET' ? 'broker.read' : 'broker.configure';
+  }
+
+  if (path === '/api/broker/config') {
+    return method === 'GET' ? 'broker.read' : 'broker.configure';
+  }
+
+  if (path.startsWith('/api/broker')) {
+    return method === 'GET' ? 'broker.read' : 'broker.operate';
+  }
+
+  if (path.startsWith('/api/router')) {
+    return method === 'GET' ? 'router.read' : 'router.manage';
+  }
+
+  if (path.startsWith('/api/librarian') || path.startsWith('/api/mapper')) {
+    return method === 'GET' ? 'data.read' : 'data.manage';
+  }
+
+  if (path.startsWith('/api/registry') || path.startsWith('/api/local-queue-managers') || path.startsWith('/api/remote-queue-managers') || path.startsWith('/api/remote-agents') || path.startsWith('/api/replication') || path.startsWith('/api/nodes') || path.startsWith('/api/proxy') || path.startsWith('/api/services') || path.startsWith('/api/service-proxy') || path.startsWith('/api/discover-primary')) {
+    return method === 'GET' ? 'registry.read' : 'registry.manage';
+  }
+
+  return method === 'GET' ? 'topology.read' : 'registry.manage';
+}
+
+function enforceApiPermission(req, res, next) {
+  const requiredPermission = resolvePermissionForApiRequest(req);
+  if (!requiredPermission) {
+    req.actor = resolveActor(req);
+    return next();
+  }
+
+  return requirePermission(requiredPermission)(req, res, next);
+}
 
 const EXPLICIT_QUEUE_TYPE_HINTS = {
   'swift.mt103.parsed': ['swift-mt103'],
@@ -1188,6 +2331,7 @@ function getLifecycleWorkersPayload() {
     context: worker.context,
     intervalMs: worker.intervalMs,
     batchSize: worker.batchSize,
+    processingDelayMs: worker.processingDelayMs,
     consumerService: worker.consumerService,
     sourceService: worker.sourceService,
     processedMessages: worker.processedMessages,
@@ -1195,6 +2339,26 @@ function getLifecycleWorkersPayload() {
     lastError: worker.lastError || null,
     startedAt: worker.startedAt
   }));
+}
+
+function getLifecycleWorkerPayloadById(workerId) {
+  const worker = lifecycleWorkers.get(String(workerId || '').trim());
+  if (!worker) return null;
+  return {
+    workerId: worker.workerId,
+    fromState: worker.fromState,
+    eventName: worker.eventName,
+    context: worker.context,
+    intervalMs: worker.intervalMs,
+    batchSize: worker.batchSize,
+    processingDelayMs: worker.processingDelayMs,
+    consumerService: worker.consumerService,
+    sourceService: worker.sourceService,
+    processedMessages: worker.processedMessages,
+    lastRunAt: worker.lastRunAt,
+    lastError: worker.lastError || null,
+    startedAt: worker.startedAt
+  };
 }
 
 function stopLifecycleWorker(workerId) {
@@ -1224,6 +2388,12 @@ function resolveLifecycleWorkerTransition(compiled, fromState, eventName, contex
   return transition;
 }
 
+async function delayMs(ms) {
+  const duration = Number(ms || 0);
+  if (duration <= 0) return;
+  await new Promise(resolve => setTimeout(resolve, duration));
+}
+
 async function runLifecycleWorkerTick(workerState) {
   const compiled = readTransactionLifecycleCompiled();
   if (!compiled) {
@@ -1232,6 +2402,9 @@ async function runLifecycleWorkerTick(workerState) {
 
   let moved = 0;
   for (let i = 0; i < workerState.batchSize; i += 1) {
+    if (workerState.processingDelayMs > 0) {
+      await delayMs(workerState.processingDelayMs);
+    }
     const deq = await dequeueLifecycleStateMessage(compiled, workerState.fromState, workerState.consumerService);
     if (!deq.dequeued) break;
 
@@ -1264,6 +2437,9 @@ async function runLifecycleWorkerTick(workerState) {
   workerState.processedMessages += moved;
   workerState.lastRunAt = new Date().toISOString();
   workerState.lastError = null;
+  if (moved > 0) {
+    touchLifecycleActivity();
+  }
 }
 
 function startLifecycleWorker({
@@ -1273,6 +2449,7 @@ function startLifecycleWorker({
   context = {},
   intervalMs = 1000,
   batchSize = 10,
+  processingDelayMs = 0,
   consumerService = 'lifecycle-worker',
   sourceService = 'lifecycle-worker'
 }) {
@@ -1290,6 +2467,7 @@ function startLifecycleWorker({
     context: context || {},
     intervalMs: Number(intervalMs) > 0 ? Number(intervalMs) : 1000,
     batchSize: Number(batchSize) > 0 ? Number(batchSize) : 10,
+    processingDelayMs: Number(processingDelayMs) > 0 ? Number(processingDelayMs) : 0,
     consumerService: String(consumerService || 'lifecycle-worker').trim(),
     sourceService: String(sourceService || 'lifecycle-worker').trim(),
     processedMessages: 0,
@@ -1320,6 +2498,7 @@ function getQueueBridgeWorkersPayload() {
     outputQueue: worker.outputQueue,
     intervalMs: worker.intervalMs,
     batchSize: worker.batchSize,
+    processingDelayMs: worker.processingDelayMs,
     consumerService: worker.consumerService,
     sourceService: worker.sourceService,
     processedMessages: worker.processedMessages,
@@ -1327,6 +2506,25 @@ function getQueueBridgeWorkersPayload() {
     lastError: worker.lastError || null,
     startedAt: worker.startedAt
   }));
+}
+
+function getQueueBridgeWorkerPayloadById(workerId) {
+  const worker = queueBridgeWorkers.get(String(workerId || '').trim());
+  if (!worker) return null;
+  return {
+    workerId: worker.workerId,
+    inputQueue: worker.inputQueue,
+    outputQueue: worker.outputQueue,
+    intervalMs: worker.intervalMs,
+    batchSize: worker.batchSize,
+    processingDelayMs: worker.processingDelayMs,
+    consumerService: worker.consumerService,
+    sourceService: worker.sourceService,
+    processedMessages: worker.processedMessages,
+    lastRunAt: worker.lastRunAt,
+    lastError: worker.lastError || null,
+    startedAt: worker.startedAt
+  };
 }
 
 function stopQueueBridgeWorker(workerId) {
@@ -1341,6 +2539,9 @@ function stopQueueBridgeWorker(workerId) {
 async function runQueueBridgeWorkerTick(workerState) {
   let moved = 0;
   for (let i = 0; i < workerState.batchSize; i += 1) {
+    if (workerState.processingDelayMs > 0) {
+      await delayMs(workerState.processingDelayMs);
+    }
     const message = await dequeueViaRoute(workerState.inputQueue, workerState.consumerService);
     if (message == null) break;
 
@@ -1355,6 +2556,9 @@ async function runQueueBridgeWorkerTick(workerState) {
   workerState.processedMessages += moved;
   workerState.lastRunAt = new Date().toISOString();
   workerState.lastError = null;
+  if (moved > 0) {
+    touchLifecycleActivity();
+  }
 }
 
 function startQueueBridgeWorker({
@@ -1363,6 +2567,7 @@ function startQueueBridgeWorker({
   outputQueue,
   intervalMs = 1000,
   batchSize = 10,
+  processingDelayMs = 0,
   consumerService = 'queue-bridge-worker',
   sourceService = 'queue-bridge-worker',
   dataTypeIds = null
@@ -1382,6 +2587,7 @@ function startQueueBridgeWorker({
     outputQueue: output,
     intervalMs: Number(intervalMs) > 0 ? Number(intervalMs) : 1000,
     batchSize: Number(batchSize) > 0 ? Number(batchSize) : 10,
+    processingDelayMs: Number(processingDelayMs) > 0 ? Number(processingDelayMs) : 0,
     consumerService: String(consumerService || 'queue-bridge-worker').trim(),
     sourceService: String(sourceService || 'queue-bridge-worker').trim(),
     dataTypeIds: Array.isArray(dataTypeIds) && dataTypeIds.length > 0 ? dataTypeIds : inferQueueDataTypeIds(output),
@@ -1423,6 +2629,7 @@ function startDefaultQueueDrivenLifecycleWorkers({ intervalMs = 500, batchSize =
     workerId: 'lifecycle-received-to-pacs',
     fromState: 'received_mt103',
     eventName: 'mapped_to_pacs',
+    processingDelayMs: 120,
     consumerService: 'lifecycle-received-to-pacs',
     sourceService: 'lifecycle-received-to-pacs',
     ...shared
@@ -1432,6 +2639,7 @@ function startDefaultQueueDrivenLifecycleWorkers({ intervalMs = 500, batchSize =
     workerId: 'lifecycle-pacs-to-lynx-pending',
     fromState: 'pacs_created',
     eventName: 'submitted_to_lynx',
+    processingDelayMs: 220,
     consumerService: 'lifecycle-pacs-to-lynx-pending',
     sourceService: 'lifecycle-pacs-to-lynx-pending',
     ...shared
@@ -1441,6 +2649,7 @@ function startDefaultQueueDrivenLifecycleWorkers({ intervalMs = 500, batchSize =
     workerId: 'bridge-lynx-outbound-to-pending',
     inputQueue: 'lynx.pacs009.outbound',
     outputQueue: 'tx.lynx.pending',
+    processingDelayMs: 320,
     consumerService: 'bridge-lynx-outbound-to-pending',
     sourceService: 'bridge-lynx-outbound-to-pending',
     dataTypeIds: ['pacs'],
@@ -1452,6 +2661,7 @@ function startDefaultQueueDrivenLifecycleWorkers({ intervalMs = 500, batchSize =
     fromState: 'lynx_pending',
     eventName: 'lynx_approved',
     context: { status: 'approved' },
+    processingDelayMs: 420,
     consumerService: 'lifecycle-lynx-pending-to-approved',
     sourceService: 'lifecycle-lynx-pending-to-approved',
     ...shared
@@ -1461,6 +2671,7 @@ function startDefaultQueueDrivenLifecycleWorkers({ intervalMs = 500, batchSize =
     workerId: 'lifecycle-approved-to-correspondent',
     fromState: 'lynx_approved',
     eventName: 'sent_to_correspondent',
+    processingDelayMs: 520,
     consumerService: 'lifecycle-approved-to-correspondent',
     sourceService: 'lifecycle-approved-to-correspondent',
     ...shared
@@ -1624,13 +2835,13 @@ function getGatewayStatusPayload() {
     swift: {
       running: swiftRunning,
       workerIds: SWIFT_GATEWAY_WORKER_IDS,
-      workers: SWIFT_GATEWAY_WORKER_IDS.map(id => lifecycleWorkers.get(id)).filter(Boolean)
+      workers: SWIFT_GATEWAY_WORKER_IDS.map(id => getLifecycleWorkerPayloadById(id)).filter(Boolean)
     },
     boc: {
       running: bocRunning,
       workerIds: BOC_GATEWAY_WORKER_IDS,
       workers: BOC_GATEWAY_WORKER_IDS
-        .map(id => lifecycleWorkers.get(id) || queueBridgeWorkers.get(id))
+        .map(id => getLifecycleWorkerPayloadById(id) || getQueueBridgeWorkerPayloadById(id))
         .filter(Boolean)
     }
   };
@@ -1840,6 +3051,7 @@ function buildTransactionLifecycleDashboardPayload(compiled) {
       active: lifecycleHarness.active,
       historyTail: lifecycleHarness.history.slice(-20)
     },
+    heartbeat: getLifecycleHeartbeatPayload(),
     states,
     totalsByLayer,
     totalMessagesAcrossStates: states.reduce((sum, state) => sum + state.queueLength, 0),
@@ -2077,6 +3289,90 @@ function buildDefaultMt103Message(txId) {
   return `MT103\n:20:${txId}\n:32A:260514USD12500,\n:50K:APPLICANT CORP\n:57A:BKTRUS33\n:59:/000123456\nBENEFICIARY LTD`;
 }
 
+function touchLifecycleActivity() {
+  lifecycleHeartbeat.lastActivityMs = Date.now();
+}
+
+function getLifecycleHeartbeatPayload() {
+  return {
+    enabled: lifecycleHeartbeat.enabled,
+    inactivityMs: lifecycleHeartbeat.inactivityMs,
+    checkIntervalMs: lifecycleHeartbeat.checkIntervalMs,
+    lastActivityAt: lifecycleHeartbeat.lastActivityMs ? new Date(lifecycleHeartbeat.lastActivityMs).toISOString() : null,
+    lastHeartbeatAt: lifecycleHeartbeat.lastHeartbeatMs ? new Date(lifecycleHeartbeat.lastHeartbeatMs).toISOString() : null,
+    lastHeartbeatTxId: lifecycleHeartbeat.lastHeartbeatTxId,
+    autoRuns: lifecycleHeartbeat.autoRuns,
+    manualRuns: lifecycleHeartbeat.manualRuns,
+    lastError: lifecycleHeartbeat.lastError
+  };
+}
+
+async function enqueueLifecycleHeartbeat(compiled, { reason = 'manual', sourceService = 'lifecycle-heartbeat:manual' } = {}) {
+  const initialState = String(compiled?.initialState || '').trim();
+  if (!initialState) {
+    throw new Error('Compiled lifecycle has no initialState');
+  }
+
+  const txId = `HB-${Date.now()}`;
+  const payload = buildDefaultMt103Message(txId);
+  await enqueueLifecycleStateMessage(compiled, initialState, payload, sourceService);
+  touchLifecycleActivity();
+
+  lifecycleHarness.history.push({
+    at: new Date().toISOString(),
+    kind: 'heartbeat',
+    reason,
+    transactionId: txId,
+    state: initialState
+  });
+
+  lifecycleHeartbeat.lastHeartbeatMs = Date.now();
+  lifecycleHeartbeat.lastHeartbeatTxId = txId;
+  lifecycleHeartbeat.lastError = null;
+  return { txId, state: initialState };
+}
+
+async function maybeRunLifecycleHeartbeat() {
+  if (!lifecycleHeartbeat.enabled || lifecycleHeartbeat.running) {
+    return;
+  }
+  lifecycleHeartbeat.running = true;
+  try {
+    const now = Date.now();
+    if (now - lifecycleHeartbeat.lastActivityMs < lifecycleHeartbeat.inactivityMs) {
+      return;
+    }
+    if (lifecycleHeartbeat.lastHeartbeatMs > 0 && now - lifecycleHeartbeat.lastHeartbeatMs < lifecycleHeartbeat.inactivityMs) {
+      return;
+    }
+
+    const compiled = readTransactionLifecycleCompiled();
+    if (!compiled) {
+      return;
+    }
+    const heartbeat = await enqueueLifecycleHeartbeat(compiled, {
+      reason: 'auto-idle-timeout',
+      sourceService: 'lifecycle-heartbeat:auto'
+    });
+    lifecycleHeartbeat.autoRuns += 1;
+    console.log(`[LIFECYCLE] Auto heartbeat queued: ${heartbeat.txId}`);
+  } catch (e) {
+    lifecycleHeartbeat.lastError = e.message;
+    console.warn(`[LIFECYCLE] Heartbeat monitor error: ${e.message}`);
+  } finally {
+    lifecycleHeartbeat.running = false;
+  }
+}
+
+function startLifecycleHeartbeatMonitor() {
+  if (lifecycleHeartbeat.timerId) {
+    return;
+  }
+  lifecycleHeartbeat.timerId = setInterval(() => {
+    void maybeRunLifecycleHeartbeat();
+  }, lifecycleHeartbeat.checkIntervalMs);
+}
+
 async function lifecycleHarnessStartTransaction(compiled, { txId, message } = {}) {
   const transactionId = String(txId || `TX-${Date.now()}`);
   const initialState = String(compiled?.initialState || '').trim();
@@ -2100,6 +3396,7 @@ async function lifecycleHarnessStartTransaction(compiled, { txId, message } = {}
     transactionId,
     state: initialState
   });
+  touchLifecycleActivity();
 
   return lifecycleHarness.active;
 }
@@ -2142,6 +3439,7 @@ async function lifecycleHarnessAdvance(compiled, { eventName, context = {}, repl
     to: transition.to,
     event: transition.event
   });
+  touchLifecycleActivity();
 
   return {
     transition,
@@ -2159,11 +3457,231 @@ function registerRoutes(app) {
       return { status: 'already running' };
     }
     if (!secondaryBroker) {
-      secondaryBroker = createMessageBroker();
+      secondaryBroker = createConfiguredBroker();
     }
     setBrokerInstanceState('secondary', { active: true, quiesced: false });
     return { status: 'secondary broker started' };
   }
+
+  app.get('/api/authz/me', (req, res) => {
+    const actor = resolveActor(req);
+    const profileMap = getProfilesById();
+    const profiles = (actor.user?.profileIds || [])
+      .map(profileId => profileMap.get(profileId))
+      .filter(Boolean);
+
+    res.json({
+      actor: {
+        userId: actor.userId,
+        displayName: actor.user?.displayName || null,
+        enabled: actor.user?.enabled === true,
+        profileIds: actor.user?.profileIds || []
+      },
+      profiles,
+      permissions: actor.permissions
+    });
+  });
+
+  app.get('/api/users/profiles', requirePermission('users.read'), (req, res) => {
+    res.json({ profiles: userManagementStore.profiles });
+  });
+
+  app.post('/api/users/profiles', requirePermission('users.manage'), (req, res) => {
+    const { profileId, label, description, permissions } = req.body || {};
+    const id = String(profileId || '').trim();
+    if (!id) {
+      return res.status(400).json({ error: 'profileId is required' });
+    }
+    if (userManagementStore.profiles.some(profile => profile.profileId === id)) {
+      return res.status(409).json({ error: 'Profile already exists' });
+    }
+
+    const profile = {
+      profileId: id,
+      label: String(label || id).trim(),
+      description: String(description || '').trim(),
+      permissions: sanitizePermissions(permissions)
+    };
+
+    userManagementStore.profiles.push(profile);
+    saveUserManagement();
+    res.json({ status: 'created', profile });
+  });
+
+  app.patch('/api/users/profiles/:profileId', requirePermission('users.manage'), (req, res) => {
+    const profileId = String(req.params.profileId || '').trim();
+    const profile = userManagementStore.profiles.find(item => item.profileId === profileId);
+    if (!profile) {
+      return res.status(404).json({ error: 'Profile not found' });
+    }
+
+    const updates = req.body || {};
+    if (Object.prototype.hasOwnProperty.call(updates, 'label')) {
+      profile.label = String(updates.label || profile.profileId).trim();
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'description')) {
+      profile.description = String(updates.description || '').trim();
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'permissions')) {
+      profile.permissions = sanitizePermissions(updates.permissions);
+    }
+
+    saveUserManagement();
+    res.json({ status: 'updated', profile });
+  });
+
+  app.delete('/api/users/profiles/:profileId', requirePermission('users.manage'), (req, res) => {
+    const profileId = String(req.params.profileId || '').trim();
+    if (profileId === 'admin') {
+      return res.status(400).json({ error: 'Cannot delete admin profile' });
+    }
+
+    const beforeCount = userManagementStore.profiles.length;
+    userManagementStore.profiles = userManagementStore.profiles.filter(profile => profile.profileId !== profileId);
+    if (userManagementStore.profiles.length === beforeCount) {
+      return res.status(404).json({ error: 'Profile not found' });
+    }
+
+    for (const user of userManagementStore.users) {
+      user.profileIds = sanitizeProfileIds((user.profileIds || []).filter(id => id !== profileId));
+    }
+
+    saveUserManagement();
+    res.json({ status: 'deleted', profileId });
+  });
+
+  app.get('/api/users', requirePermission('users.read'), (req, res) => {
+    res.json({ users: userManagementStore.users });
+  });
+
+  app.post('/api/users', requirePermission('users.manage'), (req, res) => {
+    const { userId, displayName, enabled, profileIds } = req.body || {};
+    const id = String(userId || '').trim();
+    if (!id) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+    if (userManagementStore.users.some(user => user.userId === id)) {
+      return res.status(409).json({ error: 'User already exists' });
+    }
+
+    const knownProfiles = new Set(userManagementStore.profiles.map(profile => profile.profileId));
+    const normalizedProfileIds = sanitizeProfileIds(profileIds).filter(profileId => knownProfiles.has(profileId));
+
+    const user = {
+      userId: id,
+      displayName: String(displayName || id).trim(),
+      enabled: enabled !== false,
+      profileIds: normalizedProfileIds
+    };
+
+    userManagementStore.users.push(user);
+    saveUserManagement();
+    res.json({ status: 'created', user });
+  });
+
+  app.patch('/api/users/:userId', requirePermission('users.manage'), (req, res) => {
+    const userId = String(req.params.userId || '').trim();
+    const user = userManagementStore.users.find(item => item.userId === userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const updates = req.body || {};
+    if (Object.prototype.hasOwnProperty.call(updates, 'displayName')) {
+      user.displayName = String(updates.displayName || user.userId).trim();
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'enabled')) {
+      user.enabled = updates.enabled === true;
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'profileIds')) {
+      const knownProfiles = new Set(userManagementStore.profiles.map(profile => profile.profileId));
+      user.profileIds = sanitizeProfileIds(updates.profileIds).filter(profileId => knownProfiles.has(profileId));
+    }
+
+    saveUserManagement();
+    res.json({ status: 'updated', user });
+  });
+
+  app.delete('/api/users/:userId', requirePermission('users.manage'), (req, res) => {
+    const userId = String(req.params.userId || '').trim();
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+    if (userId === DEFAULT_ACTOR_USER_ID) {
+      return res.status(400).json({ error: 'Cannot delete system admin user' });
+    }
+
+    const beforeCount = userManagementStore.users.length;
+    userManagementStore.users = userManagementStore.users.filter(user => user.userId !== userId);
+    if (userManagementStore.users.length === beforeCount) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    saveUserManagement();
+    res.json({ status: 'deleted', userId });
+  });
+
+  app.get('/api/governance/processes', requirePermission('governance.read'), (req, res) => {
+    res.json({
+      processes: processGovernanceStore.processes,
+      updatedAt: processGovernanceStore.updatedAt,
+      version: processGovernanceStore.version
+    });
+  });
+
+  app.patch('/api/governance/processes/:processId', requirePermission('governance.manage'), (req, res) => {
+    const processId = String(req.params.processId || '').trim();
+    const process = getProcessPolicyById(processId);
+    if (!process) {
+      return res.status(404).json({ error: 'Process policy not found' });
+    }
+
+    const updates = req.body || {};
+    if (Object.prototype.hasOwnProperty.call(updates, 'label')) {
+      process.label = String(updates.label || process.processId).trim();
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'requiresTwoPersonRule')) {
+      process.requiresTwoPersonRule = updates.requiresTwoPersonRule === true;
+    }
+
+    saveProcessGovernance();
+    res.json({ status: 'updated', process });
+  });
+
+  app.get('/api/governance/approvals', requirePermission('governance.read'), (req, res) => {
+    const now = Date.now();
+    const approvals = Array.from(pendingApprovalRequests.values())
+      .filter(item => Number(item.expiresAt || 0) > now)
+      .map(item => ({
+        approvalId: item.approvalId,
+        processId: item.processId,
+        requestedByUserId: item.requestedByUserId,
+        requestedAt: item.requestedAt,
+        expiresAt: new Date(Number(item.expiresAt)).toISOString(),
+        method: item.method,
+        path: item.path,
+        body: item.body
+      }))
+      .sort((a, b) => a.expiresAt.localeCompare(b.expiresAt));
+
+    res.json({ approvals, count: approvals.length });
+  });
+
+  app.delete('/api/governance/approvals/:approvalId', requirePermission('governance.manage'), (req, res) => {
+    const approvalId = String(req.params.approvalId || '').trim();
+    if (!pendingApprovalRequests.has(approvalId)) {
+      return res.status(404).json({ error: 'Approval request not found' });
+    }
+
+    pendingApprovalRequests.delete(approvalId);
+    appendAuditEvent({
+      eventType: 'approval-cancelled',
+      requestId: req.requestId || null,
+      approvalId,
+      cancelledByUserId: req.actor?.userId || null
+    });
+    res.json({ status: 'cancelled', approvalId });
+  });
 
   app.post('/api/registry/heartbeat', (req, res) => {
     try {
@@ -2930,6 +4448,29 @@ function registerRoutes(app) {
     return res.json(payload);
   });
 
+  app.get('/api/lifecycle/heartbeat', requirePermission('lifecycle.read'), (req, res) => {
+    res.json({ heartbeat: getLifecycleHeartbeatPayload() });
+  });
+
+  app.post('/api/lifecycle/heartbeat/trigger', requirePermission('lifecycle.manage'), async (req, res) => {
+    try {
+      const compiled = readTransactionLifecycleCompiled();
+      if (!compiled) {
+        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
+      }
+
+      const { reason } = req.body || {};
+      const heartbeat = await enqueueLifecycleHeartbeat(compiled, {
+        reason: reason || 'manual-trigger',
+        sourceService: 'lifecycle-heartbeat:manual'
+      });
+      lifecycleHeartbeat.manualRuns += 1;
+      return res.json({ status: 'queued', heartbeat, monitor: getLifecycleHeartbeatPayload() });
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
+  });
+
   app.post('/api/lifecycle/test/start', async (req, res) => {
     try {
       const compiled = readTransactionLifecycleCompiled();
@@ -3020,14 +4561,14 @@ function registerRoutes(app) {
     }
   });
 
-  app.get('/api/lifecycle/workers', (req, res) => {
+  app.get('/api/lifecycle/workers', requirePermission('lifecycle.workers.read'), (req, res) => {
     res.json({
       lifecycleWorkers: getLifecycleWorkersPayload(),
       bridgeWorkers: getQueueBridgeWorkersPayload()
     });
   });
 
-  app.post('/api/lifecycle/workers/start', (req, res) => {
+  app.post('/api/lifecycle/workers/start', requirePermission('lifecycle.workers.manage'), (req, res) => {
     try {
       const worker = startLifecycleWorker(req.body || {});
       res.json({ status: 'started', worker });
@@ -3036,7 +4577,7 @@ function registerRoutes(app) {
     }
   });
 
-  app.post('/api/lifecycle/workers/:workerId/stop', (req, res) => {
+  app.post('/api/lifecycle/workers/:workerId/stop', requirePermission('lifecycle.workers.manage'), (req, res) => {
     const removed = stopLifecycleWorker(req.params.workerId);
     if (!removed) {
       return res.status(404).json({ error: 'Lifecycle worker not found' });
@@ -3044,7 +4585,7 @@ function registerRoutes(app) {
     res.json({ status: 'stopped', workerId: req.params.workerId });
   });
 
-  app.post('/api/lifecycle/bridge-workers/start', (req, res) => {
+  app.post('/api/lifecycle/bridge-workers/start', requirePermission('lifecycle.workers.manage'), (req, res) => {
     try {
       const worker = startQueueBridgeWorker(req.body || {});
       res.json({ status: 'started', worker });
@@ -3053,7 +4594,7 @@ function registerRoutes(app) {
     }
   });
 
-  app.post('/api/lifecycle/bridge-workers/:workerId/stop', (req, res) => {
+  app.post('/api/lifecycle/bridge-workers/:workerId/stop', requirePermission('lifecycle.workers.manage'), (req, res) => {
     const removed = stopQueueBridgeWorker(req.params.workerId);
     if (!removed) {
       return res.status(404).json({ error: 'Bridge worker not found' });
@@ -3061,7 +4602,7 @@ function registerRoutes(app) {
     res.json({ status: 'stopped', workerId: req.params.workerId });
   });
 
-  app.post('/api/lifecycle/workers/start-default', (req, res) => {
+  app.post('/api/lifecycle/workers/start-default', requirePermission('lifecycle.workers.manage'), (req, res) => {
     try {
       const { intervalMs, batchSize } = req.body || {};
       const workers = startDefaultQueueDrivenLifecycleWorkers({
@@ -3079,12 +4620,12 @@ function registerRoutes(app) {
     }
   });
 
-  app.post('/api/lifecycle/workers/stop-all', (req, res) => {
+  app.post('/api/lifecycle/workers/stop-all', requirePermission('lifecycle.workers.manage'), (req, res) => {
     stopAllQueueDrivenWorkers();
     res.json({ status: 'stopped' });
   });
 
-  app.get('/api/lifecycle/policy', (req, res) => {
+  app.get('/api/lifecycle/policy', requirePermission('lifecycle.policy.read'), (req, res) => {
     res.json({
       policy: {
         allowDbSync: Boolean(lifecycleActionPolicy.allowDbSync),
@@ -3093,7 +4634,7 @@ function registerRoutes(app) {
     });
   });
 
-  app.post('/api/lifecycle/policy', (req, res) => {
+  app.post('/api/lifecycle/policy', requirePermission('lifecycle.policy.manage'), (req, res) => {
     const { allowDbSync, allowDbAsync } = req.body || {};
     if (typeof allowDbSync !== 'undefined') {
       lifecycleActionPolicy.allowDbSync = Boolean(allowDbSync);
@@ -3111,11 +4652,11 @@ function registerRoutes(app) {
     });
   });
 
-  app.get('/api/lifecycle/subflows/workers', (req, res) => {
+  app.get('/api/lifecycle/subflows/workers', requirePermission('lifecycle.workers.read'), (req, res) => {
     res.json({ workers: getSubflowBridgeWorkersPayload() });
   });
 
-  app.post('/api/lifecycle/subflows/workers/start-default', (req, res) => {
+  app.post('/api/lifecycle/subflows/workers/start-default', requirePermission('lifecycle.workers.manage'), (req, res) => {
     try {
       const { intervalMs, batchSize } = req.body || {};
       const workers = startDefaultSubflowBridgeWorkers({
@@ -3128,16 +4669,16 @@ function registerRoutes(app) {
     }
   });
 
-  app.post('/api/lifecycle/subflows/workers/stop-all', (req, res) => {
+  app.post('/api/lifecycle/subflows/workers/stop-all', requirePermission('lifecycle.workers.manage'), (req, res) => {
     stopSubflowBridgeWorkers();
     res.json({ status: 'stopped' });
   });
 
-  app.get('/api/gateways', (req, res) => {
+  app.get('/api/gateways', requirePermission('gateway.read'), (req, res) => {
     res.json(getGatewayStatusPayload());
   });
 
-  app.post('/api/gateways/swift/start', (req, res) => {
+  app.post('/api/gateways/swift/start', requirePermission('gateway.manage'), (req, res) => {
     try {
       const { intervalMs, batchSize } = req.body || {};
       const workers = startSwiftGateway({
@@ -3150,12 +4691,12 @@ function registerRoutes(app) {
     }
   });
 
-  app.post('/api/gateways/swift/stop', (req, res) => {
+  app.post('/api/gateways/swift/stop', requirePermission('gateway.manage'), (req, res) => {
     stopSwiftGateway();
     res.json({ status: 'stopped', gateway: 'swift', gateways: getGatewayStatusPayload() });
   });
 
-  app.post('/api/gateways/boc/start', (req, res) => {
+  app.post('/api/gateways/boc/start', requirePermission('gateway.manage'), (req, res) => {
     try {
       const { intervalMs, batchSize, approvalMode } = req.body || {};
       const workers = startBocGateway({
@@ -3169,12 +4710,12 @@ function registerRoutes(app) {
     }
   });
 
-  app.post('/api/gateways/boc/stop', (req, res) => {
+  app.post('/api/gateways/boc/stop', requirePermission('gateway.manage'), (req, res) => {
     stopBocGateway();
     res.json({ status: 'stopped', gateway: 'boc', gateways: getGatewayStatusPayload() });
   });
 
-  app.post('/api/gateways/start', (req, res) => {
+  app.post('/api/gateways/start', requirePermission('gateway.manage'), (req, res) => {
     try {
       const { intervalMs, batchSize, approvalMode } = req.body || {};
       startSwiftGateway({
@@ -3192,7 +4733,7 @@ function registerRoutes(app) {
     }
   });
 
-  app.post('/api/gateways/stop', (req, res) => {
+  app.post('/api/gateways/stop', requirePermission('gateway.manage'), (req, res) => {
     stopSwiftGateway();
     stopBocGateway();
     res.json({ status: 'stopped', gateways: getGatewayStatusPayload() });
@@ -3814,6 +5355,101 @@ function registerRoutes(app) {
       res.status(500).json({ error: e.message });
     }
   });
+
+  // Compile DSL + compute queue config diff without mutating queue managers
+  app.post('/api/queue-dsl/dry-run', requirePermission('queue.view'), async (req, res) => {
+    try {
+      const spec = req.body?.spec;
+      const compiled = compileQueueDslSpec(spec);
+      if (!compiled.valid) {
+        return res.status(400).json({ valid: false, errors: compiled.errors });
+      }
+
+      const managerResults = [];
+      for (const manager of compiled.managers) {
+        const snapshot = await getQueueConfigSnapshot(manager.managerId);
+        const existingQueues = snapshot?.config?.queues || {};
+        const diff = diffQueueConfigs(existingQueues, manager.queueMap || {});
+        managerResults.push({
+          managerId: manager.managerId,
+          provider: manager.provider,
+          creates: diff.creates,
+          updates: diff.updates,
+          unchanged: diff.unchanged,
+          artifacts: (manager.queues || []).map(item => item.artifacts)
+        });
+      }
+
+      res.json({
+        valid: true,
+        metadata: compiled.metadata,
+        managers: managerResults,
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Apply canonical DSL by auto-creating and updating queues on target managers
+  app.post('/api/queue-dsl/apply', requirePermission('queue.configure'), async (req, res) => {
+    try {
+      const spec = req.body?.spec;
+      const dryRun = req.body?.dryRun === true;
+      const compiled = compileQueueDslSpec(spec);
+      if (!compiled.valid) {
+        return res.status(400).json({ valid: false, errors: compiled.errors });
+      }
+
+      const managerResults = [];
+      for (const manager of compiled.managers) {
+        const snapshot = await getQueueConfigSnapshot(manager.managerId);
+        const existingQueues = snapshot?.config?.queues || {};
+        const diff = diffQueueConfigs(existingQueues, manager.queueMap || {});
+
+        const applied = { created: [], updated: [], skipped: [] };
+        if (!dryRun) {
+          for (const createItem of diff.creates) {
+            await applyQueueConfigOperation(manager.managerId, {
+              type: 'createQueue',
+              queueName: createItem.queueName,
+              config: createItem.desiredConfig,
+            });
+            applied.created.push(createItem.queueName);
+          }
+
+          for (const updateItem of diff.updates) {
+            await applyQueueConfigOperation(manager.managerId, {
+              type: 'updateQueueConfig',
+              queueName: updateItem.queueName,
+              updates: updateItem.desiredConfig,
+            });
+            applied.updated.push(updateItem.queueName);
+          }
+        } else {
+          applied.created = diff.creates.map(item => item.queueName);
+          applied.updated = diff.updates.map(item => item.queueName);
+        }
+
+        applied.skipped = diff.unchanged;
+        managerResults.push({
+          managerId: manager.managerId,
+          provider: manager.provider,
+          dryRun,
+          applied,
+          artifacts: (manager.queues || []).map(item => item.artifacts),
+        });
+      }
+
+      res.json({
+        valid: true,
+        metadata: compiled.metadata,
+        dryRun,
+        managers: managerResults,
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
   
   // Apply a configuration change from a peer instance
   app.post('/api/queues/:managerId/apply-config-change', (req, res) => {
@@ -3835,6 +5471,215 @@ function registerRoutes(app) {
       });
     } catch (e) {
       res.status(400).json({ error: e.message });
+    }
+  });
+
+  // Export all queues + in-flight messages for a queue manager
+  app.get('/api/queues/:managerId/export', requirePermission('queue.view'), (req, res) => {
+    try {
+      const { managerId } = req.params;
+      const qm = queueManagerInstances.get(managerId);
+      if (!qm) return res.status(404).json({ error: `Queue manager ${managerId} not found` });
+
+      const queues = {};
+      for (const [queueName, queueConfig] of Object.entries(qm.queueConfig || {})) {
+        const messages = (qm.queues[queueName]?.messages || []).map(msg => ({
+          messageId: msg.messageId || null,
+          sourceService: msg.sourceService || null,
+          message: msg.message,
+          messageEnvelope: msg.messageEnvelope || null
+        }));
+        queues[queueName] = { config: queueConfig, messages };
+      }
+
+      const exportData = {
+        exportVersion: 1,
+        exportedAt: new Date().toISOString(),
+        managerId,
+        queues
+      };
+
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="qm-export-${managerId}-${Date.now()}.json"`);
+      res.json(exportData);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Import queues + messages into a queue manager from a previously exported file
+  app.post('/api/queues/:managerId/import', requirePermission('queue.configure'), (req, res) => {
+    try {
+      const { managerId } = req.params;
+      const qm = queueManagerInstances.get(managerId);
+      if (!qm) return res.status(404).json({ error: `Queue manager ${managerId} not found` });
+
+      const { queues, overwrite = false } = req.body || {};
+      if (!queues || typeof queues !== 'object') {
+        return res.status(400).json({ error: 'queues object is required' });
+      }
+
+      const results = { created: [], skipped: [], messagesImported: 0 };
+
+      for (const [queueName, entry] of Object.entries(queues)) {
+        const config = entry?.config || {};
+        const messages = Array.isArray(entry?.messages) ? entry.messages : [];
+
+        if (!qm.queueConfig[queueName]) {
+          qm.createQueue(queueName, { ...config, name: queueName });
+          results.created.push(queueName);
+        } else if (overwrite) {
+          qm.updateQueueConfig(queueName, config);
+          results.created.push(queueName);
+        } else {
+          results.skipped.push(queueName);
+        }
+
+        for (const msg of messages) {
+          try {
+            qm.enqueueReplicated(
+              queueName,
+              msg.message,
+              msg.sourceService || null,
+              msg.messageId || null,
+              msg.messageEnvelope || null
+            );
+            results.messagesImported++;
+          } catch {
+            // skip individual bad messages
+          }
+        }
+      }
+
+      res.json({ status: 'imported', managerId, ...results });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Export a single queue's config + messages
+  app.get('/api/queues/:managerId/:queueName/export', requirePermission('queue.view'), (req, res) => {
+    try {
+      const { managerId, queueName } = req.params;
+      const qm = queueManagerInstances.get(managerId);
+      if (!qm) return res.status(404).json({ error: `Queue manager ${managerId} not found` });
+      if (!qm.queueConfig[queueName]) return res.status(404).json({ error: `Queue ${queueName} not found` });
+
+      const config = qm.queueConfig[queueName];
+      const messages = (qm.queues[queueName]?.messages || []).map(msg => ({
+        messageId: msg.messageId || null,
+        sourceService: msg.sourceService || null,
+        message: msg.message,
+        messageEnvelope: msg.messageEnvelope || null
+      }));
+
+      const exportData = {
+        exportVersion: 1,
+        exportedAt: new Date().toISOString(),
+        managerId,
+        queueName,
+        config,
+        messages
+      };
+
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="queue-export-${queueName}-${Date.now()}.json"`);
+      res.json(exportData);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Import messages into a single queue
+  app.post('/api/queues/:managerId/:queueName/import', requirePermission('queue.configure'), (req, res) => {
+    try {
+      const { managerId, queueName } = req.params;
+      const qm = queueManagerInstances.get(managerId);
+      if (!qm) return res.status(404).json({ error: `Queue manager ${managerId} not found` });
+      if (!qm.queueConfig[queueName]) return res.status(404).json({ error: `Queue ${queueName} not found` });
+
+      const { messages = [], updateConfig = false, config = {} } = req.body || {};
+      if (!Array.isArray(messages)) {
+        return res.status(400).json({ error: 'messages must be an array' });
+      }
+
+      const results = { messagesImported: 0, errors: [] };
+
+      if (updateConfig && Object.keys(config).length > 0) {
+        qm.updateQueueConfig(queueName, config);
+      }
+
+      for (const msg of messages) {
+        try {
+          qm.enqueueReplicated(
+            queueName,
+            msg.message,
+            msg.sourceService || null,
+            msg.messageId || null,
+            msg.messageEnvelope || null
+          );
+          results.messagesImported++;
+        } catch (e) {
+          results.errors.push({ messageId: msg.messageId, error: e.message });
+        }
+      }
+
+      res.json({ status: 'imported', managerId, queueName, ...results });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Export a single message
+  app.get('/api/queues/:managerId/:queueName/messages/:messageId/export', requirePermission('queue.view'), (req, res) => {
+    try {
+      const { managerId, queueName, messageId } = req.params;
+      const qm = queueManagerInstances.get(managerId);
+      if (!qm) return res.status(404).json({ error: `Queue manager ${managerId} not found` });
+      if (!qm.queues[queueName]) return res.status(404).json({ error: `Queue ${queueName} not found` });
+
+      const messages = qm.queues[queueName].messages || [];
+      const msg = messages.find(m => (m.messageId || '').toString() === messageId);
+      if (!msg) return res.status(404).json({ error: `Message ${messageId} not found` });
+
+      const exportData = {
+        exportVersion: 1,
+        exportedAt: new Date().toISOString(),
+        managerId,
+        queueName,
+        messageId,
+        message: {
+          messageId: msg.messageId || null,
+          sourceService: msg.sourceService || null,
+          message: msg.message,
+          messageEnvelope: msg.messageEnvelope || null
+        }
+      };
+
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="message-export-${queueName}-${messageId}-${Date.now()}.json"`);
+      res.json(exportData);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Delete a single message from a queue
+  app.delete('/api/queues/:managerId/:queueName/messages/:messageId', requirePermission('queue.configure'), (req, res) => {
+    try {
+      const { managerId, queueName, messageId } = req.params;
+      const qm = queueManagerInstances.get(managerId);
+      if (!qm) return res.status(404).json({ error: `Queue manager ${managerId} not found` });
+      if (!qm.queues[queueName]) return res.status(404).json({ error: `Queue ${queueName} not found` });
+
+      const messages = qm.queues[queueName].messages || [];
+      const idx = messages.findIndex(m => (m.messageId || '').toString() === messageId);
+      if (idx === -1) return res.status(404).json({ error: `Message ${messageId} not found` });
+
+      messages.splice(idx, 1);
+      res.json({ status: 'deleted', managerId, queueName, messageId });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
     }
   });
 
@@ -3926,6 +5771,7 @@ function registerRoutes(app) {
   registerLocalServiceHeartbeats();
   setInterval(registerLocalServiceHeartbeats, 10000);
   setInterval(updateVirtualNodes, 3000);
+  startLifecycleHeartbeatMonitor();
   console.log('[DEBUG] All routes registered');
   app.get('/api/nodes', (req, res) => {
     // Backend server as a virtual node
