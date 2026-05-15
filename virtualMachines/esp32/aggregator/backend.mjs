@@ -12,7 +12,7 @@ import dgram from 'dgram';
 import express from 'express';
 import cors from 'cors';
 import os from 'os';
-import { spawn } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { createMessageBroker, createQueueManager } from './src/broker.js';
 import { createFileServer } from './fileServer.js';
@@ -84,6 +84,10 @@ const BROKER_APACHE_PORT = Number(process.env.APACHE_BROKER_PORT || 61613) || 61
 const BROKER_APACHE_USERNAME = String(process.env.APACHE_BROKER_USER || '').trim();
 const BROKER_APACHE_PASSWORD = String(process.env.APACHE_BROKER_PASSWORD || '');
 const BROKER_APACHE_TOPIC_PREFIX = String(process.env.APACHE_BROKER_TOPIC_PREFIX || '/topic/pulse').trim() || '/topic/pulse';
+const PULSE_QUEUE_PERSISTENCE = String(process.env.PULSE_QUEUE_PERSISTENCE || '0').trim() === '1';
+const PULSE_QUEUE_DATA_ROOT = PULSE_QUEUE_PERSISTENCE
+  ? String(process.env.PULSE_QUEUE_DATA_ROOT || 'C:\\pulse-new-repo-data\\queue-data').trim() || 'C:\\pulse-new-repo-data\\queue-data'
+  : null;
 
 const app = express();
 app.set('trust proxy', true);
@@ -100,13 +104,13 @@ const queueManagerInstances = new Map(); // Maps managerId to QueueManager insta
 let queueManagers = [
   (() => { 
     console.log('[DEBUG] Creating primary QueueManager');
-    const qm = createQueueManager('qm-primary', './data');
+    const qm = createQueueManager('qm-primary', PULSE_QUEUE_DATA_ROOT);
     queueManagerInstances.set('qm-primary', qm);
     return qm;
   })(),
   (() => { 
     console.log('[DEBUG] Creating secondary QueueManager'); 
-    const qm = createQueueManager('qm-secondary', './data');
+    const qm = createQueueManager('qm-secondary', PULSE_QUEUE_DATA_ROOT);
     queueManagerInstances.set('qm-secondary', qm);
     return qm;
   })()
@@ -371,6 +375,7 @@ const remoteAgentRegistry = new Map();
 const remoteQueueManagerProcesses = new Map();
 const queueManagerScriptPath = fileURLToPath(new URL('./queue-manager-node.mjs', import.meta.url));
 const QUEUE_VALIDATION_LOG_PATH = './data/queue-validation-errors.jsonl';
+const DLQ_EVENT_LOG_PATH = './data/dlq-events.jsonl';
 const TX_LIFECYCLE_COMPILED_PATH = './data/transaction-lifecycle-compiled.json';
 const USER_MANAGEMENT_PATH = './data/user-management.json';
 const PROCESS_GOVERNANCE_PATH = './data/process-governance.json';
@@ -386,13 +391,38 @@ const AUTO_APPROVE_USER_IDS = new Set(
 const ALLOW_IMPLICIT_ADMIN = String(process.env.ALLOW_IMPLICIT_ADMIN || 'false').trim().toLowerCase() === 'true';
 const queueValidationErrors = [];
 const MAX_QUEUE_VALIDATION_ERRORS = 500;
+const dlqEvents = [];
+const MAX_DLQ_EVENTS = 2000;
 const lifecycleHarness = {
   active: null,
   history: []
 };
+const lifecycleStateCumulativeCounts = new Map();
 const lifecycleActionPolicy = {
   allowDbSync: false,
   allowDbAsync: false
+};
+const lifecycleTesterStats = {
+  happy: {
+    runs: 0,
+    completed: 0,
+    failed: 0,
+    totalTransitions: 0,
+    lastRunAt: null,
+    lastStatus: null,
+    lastTransactionId: null,
+    lastError: null
+  },
+  sad: {
+    runs: 0,
+    completed: 0,
+    failed: 0,
+    totalTransitions: 0,
+    lastRunAt: null,
+    lastStatus: null,
+    lastTransactionId: null,
+    lastError: null
+  }
 };
 const DEFAULT_ACTOR_USER_ID = 'system-admin';
 const pendingApprovalRequests = new Map();
@@ -1450,7 +1480,71 @@ function logQueueValidationError(entry) {
     console.warn(`[QUEUE-VALIDATION] Failed to persist validation error log: ${e.message}`);
   }
 
+  logDlqEvent({
+    workerId: 'ingress-validation',
+    sourceQueue: item.queueName || '',
+    targetQueue: item.queueName || '',
+    messageShape: item.detectedShape || detectMessageShape(item.message),
+    errorReason: item.reason || 'Queue type validation failed',
+    messageSummary: item.messageSummary || summarizeMessage(item.message),
+    managerId: item.managerId || null,
+    sourceService: item.sourceService || null,
+    expectedType: item.expectedType || null,
+    channel: 'ingress-reject'
+  });
+
   console.warn(`[QUEUE-VALIDATION] ${item.queueName} expected=${item.expectedType} shape=${item.detectedShape}: ${item.reason}`);
+}
+
+function logDlqEvent(entry) {
+  const item = {
+    timestamp: new Date().toISOString(),
+    ...entry
+  };
+
+  dlqEvents.push(item);
+  if (dlqEvents.length > MAX_DLQ_EVENTS) {
+    dlqEvents.splice(0, dlqEvents.length - MAX_DLQ_EVENTS);
+  }
+
+  try {
+    fs.mkdirSync('./data', { recursive: true });
+    fs.appendFileSync(DLQ_EVENT_LOG_PATH, `${JSON.stringify(item)}\n`, 'utf-8');
+  } catch (e) {
+    console.warn(`[DLQ] Failed to persist DLQ log: ${e.message}`);
+  }
+
+  console.warn(`[DLQ] worker=${item.workerId} source=${item.sourceQueue} target=${item.targetQueue} shape=${item.messageShape} reason=${item.errorReason}`);
+}
+
+function summarizeDlqEvents(items) {
+  const byWorker = {};
+  const bySourceQueue = {};
+  const byTargetQueue = {};
+  const byShape = {};
+  const byReason = {};
+
+  for (const item of items || []) {
+    const worker = String(item?.workerId || 'unknown');
+    const sourceQueue = String(item?.sourceQueue || 'unknown');
+    const targetQueue = String(item?.targetQueue || 'unknown');
+    const shape = String(item?.messageShape || 'unknown');
+    const reason = String(item?.errorReason || 'unknown');
+
+    byWorker[worker] = Number(byWorker[worker] || 0) + 1;
+    bySourceQueue[sourceQueue] = Number(bySourceQueue[sourceQueue] || 0) + 1;
+    byTargetQueue[targetQueue] = Number(byTargetQueue[targetQueue] || 0) + 1;
+    byShape[shape] = Number(byShape[shape] || 0) + 1;
+    byReason[reason] = Number(byReason[reason] || 0) + 1;
+  }
+
+  return {
+    byWorker,
+    bySourceQueue,
+    byTargetQueue,
+    byShape,
+    byReason
+  };
 }
 
 function ensureMessageMatchesQueueType({ queueName, message, messageEnvelope, sourceService, managerId, dataTypeIds }) {
@@ -1750,6 +1844,7 @@ function launchLocalQueueManager({ managerId, nodeId, port, advertiseIp, aggrega
   const child = spawn(process.execPath, args, {
     cwd: process.cwd(),
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, PULSE_QUEUE_PERSISTENCE: PULSE_QUEUE_PERSISTENCE ? '1' : '0', PULSE_QUEUE_DATA_ROOT: PULSE_QUEUE_DATA_ROOT || '' },
   });
 
   const entry = {
@@ -2123,6 +2218,21 @@ async function replicateEnqueueToFollowers(queueName, message, sourceService, le
   }
 }
 
+function unwrapQueueItemMessage(item) {
+  if (!item || typeof item !== 'object') return item;
+  if (!Object.prototype.hasOwnProperty.call(item, 'message')) return item;
+
+  const hasQueueMetadata = (
+    Object.prototype.hasOwnProperty.call(item, 'messageId')
+    || Object.prototype.hasOwnProperty.call(item, 'messageEnvelope')
+    || Object.prototype.hasOwnProperty.call(item, 'sourceService')
+    || Object.prototype.hasOwnProperty.call(item, 'filePath')
+  );
+
+  if (!hasQueueMetadata) return item;
+  return item.message;
+}
+
 async function dequeueViaRoute(queueName, consumerService) {
   let route = ensureRoute(queueName);
   if (!route) return null;
@@ -2134,12 +2244,12 @@ async function dequeueViaRoute(queueName, consumerService) {
   }
 
   if (manager.local) {
-    const message = queueManagers[manager.localIndex].dequeue(queueName, consumerService || 'unknown');
-    if (message !== null) {
-      replicateDequeueToFollowers(queueName, message, route.managerId)
+    const item = queueManagers[manager.localIndex].dequeue(queueName, consumerService || 'unknown');
+    if (item !== null) {
+      replicateDequeueToFollowers(queueName, item, route.managerId)
         .catch(e => console.warn(`[REPLICATION] Dequeue fan-out error: ${e.message}`));
     }
-    return message;
+    return unwrapQueueItemMessage(item);
   }
 
   try {
@@ -2152,12 +2262,12 @@ async function dequeueViaRoute(queueName, consumerService) {
     if (remoteRes.status === 404) return null;
     if (!remoteRes.ok) throw new Error(`Remote dequeue failed: ${remoteRes.status}`);
     const data = await remoteRes.json();
-    const message = data.message || null;
-    if (message !== null) {
-      replicateDequeueToFollowers(queueName, message, route.managerId)
+    const item = data.message || null;
+    if (item !== null) {
+      replicateDequeueToFollowers(queueName, item, route.managerId)
         .catch(e => console.warn(`[REPLICATION] Dequeue fan-out error: ${e.message}`));
     }
-    return message;
+    return unwrapQueueItemMessage(item);
   } catch (e) {
     // Leader failed → auto-promote next available manager
     console.warn(`[FAILOVER] Leader ${route.managerId} failed for queue ${queueName}: ${e.message}`);
@@ -2254,12 +2364,20 @@ const lifecycleWorkers = new Map();
 const queueBridgeWorkers = new Map();
 const SWIFT_GATEWAY_WORKER_IDS = [
   'gateway-swift-received-to-pacs',
-  'gateway-swift-pacs-to-lynx-pending'
+  'gateway-swift-pacs-to-lynx-pending',
+  'gateway-swift-approved-to-correspondent'
 ];
 const BOC_GATEWAY_WORKER_IDS = [
-  'gateway-boc-intake-lynx-outbound-to-pending',
-  'gateway-boc-approve-pending-to-approved'
+  'gateway-boc-submit-pending-to-lynx-outbound',
+  'gateway-boc-auto-approve-pending-to-approved'
 ];
+const gatewayQuiesceState = {
+  swift: false,
+  boc: false
+};
+const gatewayModeState = {
+  boc: 'live'
+};
 
 function getRouterWorkersPayload() {
   return Array.from(routerWorkers.values()).map(worker => ({
@@ -2417,8 +2535,10 @@ async function runLifecycleWorkerTick(workerState) {
       }
     };
 
+    let transition = null;
+
     try {
-      const transition = resolveLifecycleWorkerTransition(
+      transition = resolveLifecycleWorkerTransition(
         compiled,
         workerState.fromState,
         workerState.eventName,
@@ -2426,9 +2546,20 @@ async function runLifecycleWorkerTick(workerState) {
       );
 
       await runLifecycleTransitionAction(transition.action, runtimeContext, workerState);
-      await enqueueLifecycleStateMessage(compiled, transition.to, deq.message, workerState.sourceService);
+      await enqueueLifecycleStateMessage(compiled, transition.to, runtimeContext.message, workerState.sourceService);
       moved += 1;
     } catch (e) {
+      if (isQueueValidationRejectionError(e)) {
+        await enqueueValidationDeadLetter({
+          workerId: workerState.workerId,
+          sourceQueue: deq.queueName,
+          targetQueue: String(getLifecycleStateByName(compiled, transition?.to)?.queueName || transition?.to || workerState.fromState || ''),
+          message: deq.message,
+          error: e
+        });
+        console.warn(`[LIFECYCLE] Worker ${workerState.workerId} moved invalid message to dead-letter queue: ${e.message}`);
+        continue;
+      }
       await enqueueLifecycleStateMessage(compiled, workerState.fromState, deq.message, `${workerState.sourceService}:retry`);
       throw e;
     }
@@ -2536,6 +2667,42 @@ function stopQueueBridgeWorker(workerId) {
   return true;
 }
 
+function isQueueValidationRejectionError(error) {
+  const msg = String(error?.message || error || '').toLowerCase();
+  return msg.includes('rejected message for type') || msg.includes('queue-validation');
+}
+
+async function enqueueValidationDeadLetter({ workerId, sourceQueue, targetQueue, message, error }) {
+  const deadLetterQueue = 'ops.validation.deadletter';
+  const route = ensureRoute(deadLetterQueue);
+  if (!route) {
+    console.warn(`[DLQ] No route available for ${deadLetterQueue}; dropping invalid message from ${workerId}`);
+    return false;
+  }
+
+  const payload = {
+    at: new Date().toISOString(),
+    workerId: String(workerId || 'unknown'),
+    sourceQueue: String(sourceQueue || ''),
+    targetQueue: String(targetQueue || ''),
+    error: String(error?.message || error || 'validation rejection'),
+    messageShape: detectMessageShape(message),
+    message
+  };
+
+  logDlqEvent({
+    workerId: payload.workerId,
+    sourceQueue: payload.sourceQueue,
+    targetQueue: payload.targetQueue,
+    messageShape: payload.messageShape,
+    errorReason: payload.error,
+    messageSummary: summarizeMessage(message)
+  });
+
+  await enqueueViaRoute(route, deadLetterQueue, payload, 'lifecycle-dlq', null, ['text-string']);
+  return true;
+}
+
 async function runQueueBridgeWorkerTick(workerState) {
   let moved = 0;
   for (let i = 0; i < workerState.batchSize; i += 1) {
@@ -2549,8 +2716,23 @@ async function runQueueBridgeWorkerTick(workerState) {
     if (!route) {
       throw new Error(`No available queue managers for queue ${workerState.outputQueue}`);
     }
-    await enqueueViaRoute(route, workerState.outputQueue, message, workerState.sourceService, null, workerState.dataTypeIds);
-    moved += 1;
+    try {
+      await enqueueViaRoute(route, workerState.outputQueue, message, workerState.sourceService, null, workerState.dataTypeIds);
+      moved += 1;
+    } catch (e) {
+      if (isQueueValidationRejectionError(e)) {
+        await enqueueValidationDeadLetter({
+          workerId: workerState.workerId,
+          sourceQueue: workerState.inputQueue,
+          targetQueue: workerState.outputQueue,
+          message,
+          error: e
+        });
+        console.warn(`[BRIDGE] Worker ${workerState.workerId} moved invalid message to dead-letter queue: ${e.message}`);
+        continue;
+      }
+      throw e;
+    }
   }
 
   workerState.processedMessages += moved;
@@ -2773,6 +2955,15 @@ function startSwiftGateway({ intervalMs = 500, batchSize = 25 } = {}) {
     ...shared
   });
 
+  startLifecycleWorker({
+    workerId: 'gateway-swift-approved-to-correspondent',
+    fromState: 'lynx_approved',
+    eventName: 'sent_to_correspondent',
+    consumerService: 'gateway-swift-approved-to-correspondent',
+    sourceService: 'gateway-swift-approved-to-correspondent',
+    ...shared
+  });
+
   return SWIFT_GATEWAY_WORKER_IDS
     .map(id => lifecycleWorkers.get(id))
     .filter(Boolean);
@@ -2786,36 +2977,38 @@ function stopSwiftGateway() {
 
 function startBocGateway({ intervalMs = 500, batchSize = 25, approvalMode = 'approved' } = {}) {
   const shared = { intervalMs, batchSize };
-  const mode = String(approvalMode || 'approved').trim().toLowerCase() === 'rejected'
-    ? 'rejected'
-    : 'approved';
-  const eventName = mode === 'rejected' ? 'lynx_rejected' : 'lynx_approved';
-  const context = mode === 'rejected' ? { status: 'rejected' } : { status: 'approved' };
+  const requestedMode = String(approvalMode || '').trim().toLowerCase();
+  const mode = requestedMode === 'approved' || requestedMode === 'test' ? 'test' : 'live';
+  gatewayModeState.boc = mode;
 
-  startQueueBridgeWorker({
-    workerId: 'gateway-boc-intake-lynx-outbound-to-pending',
-    inputQueue: 'lynx.pacs009.outbound',
-    outputQueue: 'tx.lynx.pending',
-    consumerService: 'gateway-boc-intake-lynx-outbound-to-pending',
-    sourceService: 'gateway-boc-intake-lynx-outbound-to-pending',
-    dataTypeIds: ['pacs'],
-    ...shared
-  });
+  stopQueueBridgeWorker('gateway-boc-submit-pending-to-lynx-outbound');
+  stopLifecycleWorker('gateway-boc-auto-approve-pending-to-approved');
 
-  startLifecycleWorker({
-    workerId: 'gateway-boc-approve-pending-to-approved',
-    fromState: 'lynx_pending',
-    eventName,
-    context,
-    consumerService: 'gateway-boc-approve-pending-to-approved',
-    sourceService: 'gateway-boc-approve-pending-to-approved',
-    ...shared
-  });
+  if (mode === 'test') {
+    startLifecycleWorker({
+      workerId: 'gateway-boc-auto-approve-pending-to-approved',
+      fromState: 'lynx_pending',
+      eventName: 'lynx_approved',
+      context: { status: 'approved' },
+      consumerService: 'gateway-boc-auto-approve-pending-to-approved',
+      sourceService: 'gateway-boc-auto-approve-pending-to-approved',
+      ...shared
+    });
+  } else {
+    startQueueBridgeWorker({
+      workerId: 'gateway-boc-submit-pending-to-lynx-outbound',
+      inputQueue: 'tx.lynx.pending',
+      outputQueue: 'lynx.pacs009.outbound',
+      consumerService: 'gateway-boc-submit-pending-to-lynx-outbound',
+      sourceService: 'gateway-boc-submit-pending-to-lynx-outbound',
+      dataTypeIds: ['pacs'],
+      ...shared
+    });
+  }
 
-  return [
-    queueBridgeWorkers.get('gateway-boc-intake-lynx-outbound-to-pending'),
-    lifecycleWorkers.get('gateway-boc-approve-pending-to-approved')
-  ].filter(Boolean);
+  return BOC_GATEWAY_WORKER_IDS
+    .map(id => queueBridgeWorkers.get(id) || lifecycleWorkers.get(id))
+    .filter(Boolean);
 }
 
 function stopBocGateway() {
@@ -2826,6 +3019,12 @@ function stopBocGateway() {
 }
 
 function getGatewayStatusPayload() {
+  const compiled = readTransactionLifecycleCompiled();
+  const swiftWorkers = SWIFT_GATEWAY_WORKER_IDS.map(id => getLifecycleWorkerPayloadById(id)).filter(Boolean);
+  const bocWorkers = BOC_GATEWAY_WORKER_IDS
+    .map(id => getLifecycleWorkerPayloadById(id) || getQueueBridgeWorkerPayloadById(id))
+    .filter(Boolean);
+
   const swiftRunning = SWIFT_GATEWAY_WORKER_IDS
     .some(id => lifecycleWorkers.has(id));
   const bocRunning = BOC_GATEWAY_WORKER_IDS
@@ -2834,15 +3033,19 @@ function getGatewayStatusPayload() {
   return {
     swift: {
       running: swiftRunning,
+      quiesced: Boolean(gatewayQuiesceState.swift),
+      mode: 'live',
       workerIds: SWIFT_GATEWAY_WORKER_IDS,
-      workers: SWIFT_GATEWAY_WORKER_IDS.map(id => getLifecycleWorkerPayloadById(id)).filter(Boolean)
+      workers: swiftWorkers,
+      queueMetrics: getGatewayQueueMetrics(swiftWorkers, compiled)
     },
     boc: {
       running: bocRunning,
+      quiesced: Boolean(gatewayQuiesceState.boc),
+      mode: gatewayModeState.boc,
       workerIds: BOC_GATEWAY_WORKER_IDS,
-      workers: BOC_GATEWAY_WORKER_IDS
-        .map(id => getLifecycleWorkerPayloadById(id) || getQueueBridgeWorkerPayloadById(id))
-        .filter(Boolean)
+      workers: bocWorkers,
+      queueMetrics: getGatewayQueueMetrics(bocWorkers, compiled)
     }
   };
 }
@@ -3016,6 +3219,74 @@ function getQueueLengthForLifecycleState(queueName) {
   return maxObserved;
 }
 
+function incrementLifecycleStateCumulativeCount(stateName, amount = 1) {
+  const key = String(stateName || '').trim();
+  if (!key) return;
+  const next = Number(lifecycleStateCumulativeCounts.get(key) || 0) + Number(amount || 0);
+  lifecycleStateCumulativeCounts.set(key, next < 0 ? 0 : next);
+}
+
+function getLifecycleStateCumulativeCount(stateName) {
+  const key = String(stateName || '').trim();
+  if (!key) return 0;
+  return Number(lifecycleStateCumulativeCounts.get(key) || 0);
+}
+
+function getGatewayQueueMetrics(workers, compiled) {
+  const queueNames = new Set();
+  let cumulativeProcessedCount = 0;
+
+  for (const worker of workers || []) {
+    cumulativeProcessedCount += Number(worker?.processedMessages || 0);
+
+    const fromState = String(worker?.fromState || '').trim();
+    if (fromState) {
+      const state = getLifecycleStateByName(compiled, fromState);
+      const queueName = String(state?.queueName || '').trim();
+      if (queueName) queueNames.add(queueName);
+    }
+
+    const inputQueue = String(worker?.inputQueue || '').trim();
+    if (inputQueue) {
+      queueNames.add(inputQueue);
+    }
+  }
+
+  const queues = Array.from(queueNames).map(queueName => ({
+    queueName,
+    currentCount: getQueueLengthForLifecycleState(queueName)
+  }));
+  const currentQueueCount = queues.reduce((sum, q) => sum + Number(q.currentCount || 0), 0);
+
+  return {
+    currentQueueCount,
+    cumulativeProcessedCount,
+    queues
+  };
+}
+
+function getLifecycleQueueTransformErrorSummary(queueName, { limit = 500 } = {}) {
+  const key = String(queueName || '').trim();
+  if (!key) {
+    return {
+      count: 0,
+      latestReason: null,
+      latestAt: null
+    };
+  }
+
+  const items = dlqEvents
+    .slice(-Math.max(1, Number(limit) || 500))
+    .filter(item => String(item?.sourceQueue || '').trim() === key || String(item?.targetQueue || '').trim() === key);
+
+  const latest = items.length > 0 ? items[items.length - 1] : null;
+  return {
+    count: items.length,
+    latestReason: latest?.errorReason || null,
+    latestAt: latest?.timestamp || null
+  };
+}
+
 function buildTransactionLifecycleDashboardPayload(compiled) {
   if (!compiled || !Array.isArray(compiled.states)) {
     return null;
@@ -3031,7 +3302,9 @@ function buildTransactionLifecycleDashboardPayload(compiled) {
       subflow: state.subflow || null,
       layer: Number(state.layer || 0),
       isInitial: Boolean(state.initial),
-      queueLength
+      queueLength,
+      cumulativeCount: getLifecycleStateCumulativeCount(state.name),
+      transformErrors: getLifecycleQueueTransformErrorSummary(queueName)
     };
   });
 
@@ -3052,11 +3325,36 @@ function buildTransactionLifecycleDashboardPayload(compiled) {
       historyTail: lifecycleHarness.history.slice(-20)
     },
     heartbeat: getLifecycleHeartbeatPayload(),
+    testers: getLifecycleTesterStatsPayload(),
     states,
     totalsByLayer,
     totalMessagesAcrossStates: states.reduce((sum, state) => sum + state.queueLength, 0),
     generatedAt: new Date().toISOString()
   };
+}
+
+function getLifecycleTesterStatsPayload() {
+  return {
+    happy: { ...lifecycleTesterStats.happy },
+    sad: { ...lifecycleTesterStats.sad }
+  };
+}
+
+function recordLifecycleTesterRun(testerType, { status = 'completed', transitionCount = 0, transactionId = null, error = null } = {}) {
+  const key = testerType === 'sad' ? 'sad' : 'happy';
+  const stats = lifecycleTesterStats[key];
+  stats.runs += 1;
+  stats.lastRunAt = new Date().toISOString();
+  stats.lastStatus = status;
+  stats.lastTransactionId = transactionId || null;
+  stats.lastError = error || null;
+
+  if (status === 'completed') {
+    stats.completed += 1;
+    stats.totalTransitions += Number(transitionCount || 0);
+  } else {
+    stats.failed += 1;
+  }
 }
 
 function getLifecycleStateByName(compiled, stateName) {
@@ -3152,6 +3450,11 @@ function parseLifecycleAction(action, context = {}) {
   const text = interpolateActionTemplate(action, context).trim();
   if (!text) return { kind: 'none' };
 
+  const mapMatch = text.match(/^map\s+([^\s]+)$/i);
+  if (mapMatch) {
+    return { kind: 'map', mappingId: String(mapMatch[1] || '').trim().toLowerCase() };
+  }
+
   const enqueueMatch = text.match(/^enqueue\s+([^\s]+)$/i);
   if (enqueueMatch) {
     return { kind: 'enqueue', queueName: String(enqueueMatch[1] || '').trim() };
@@ -3187,9 +3490,152 @@ function parseLifecycleAction(action, context = {}) {
   throw new Error(`Unsupported lifecycle action: ${text}`);
 }
 
+function toPacsFromMt103(message, fallbackTxId = null) {
+  const text = typeof message === 'string' ? message : String(message || '');
+  const txIdMatch = text.match(/:20:([^\s\r\n]+)/i);
+  const amountMatch = text.match(/:32A:(\d{6})([A-Z]{3})([0-9.,]+)/i);
+  const txId = String((txIdMatch && txIdMatch[1]) || fallbackTxId || `TX-${Date.now()}`).trim();
+  const ccy = (amountMatch && amountMatch[2]) ? String(amountMatch[2]).trim() : 'USD';
+  const rawAmount = (amountMatch && amountMatch[3]) ? String(amountMatch[3]).trim() : '0';
+  const normalizedAmount = rawAmount.replace(',', '.');
+
+  return {
+    Document: {
+      FIToFICstmrCdtTrf: {
+        GrpHdr: {
+          MsgId: txId,
+          CreDtTm: new Date().toISOString()
+        },
+        CdtTrfTxInf: [
+          {
+            PmtId: {
+              InstrId: txId,
+              EndToEndId: txId,
+              TxId: txId
+            },
+            IntrBkSttlmAmt: {
+              '@Ccy': ccy,
+              '#text': normalizedAmount
+            }
+          }
+        ]
+      }
+    }
+  };
+}
+
+const systemPerformanceCache = {
+  sampledAt: 0,
+  value: null
+};
+
+function getWindowsPerformanceSnapshot() {
+  if (process.platform !== 'win32') {
+    return null;
+  }
+
+  try {
+    const script = `
+      $process = Get-Process -Id $PID | Select-Object Id,ProcessName,CPU,WorkingSet64,Handles,StartTime
+      $os = Get-CimInstance Win32_OperatingSystem | Select-Object CSName,Caption,Version,FreePhysicalMemory,TotalVisibleMemorySize,LastBootUpTime
+      $disks = Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | Select-Object DeviceID,Size,FreeSpace,VolumeName
+      [ordered]@{
+        process = $process
+        os = $os
+        disks = $disks
+      } | ConvertTo-Json -Depth 4 -Compress
+    `;
+
+    const raw = execFileSync('powershell.exe', ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+      encoding: 'utf8',
+      timeout: 2500,
+      windowsHide: true
+    });
+
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
+function getSystemPerformanceSnapshot() {
+  const now = Date.now();
+  if (systemPerformanceCache.value && now - systemPerformanceCache.sampledAt < 5000) {
+    return systemPerformanceCache.value;
+  }
+
+  const cpuSamples = os.cpus();
+  const cpuModel = cpuSamples[0] ? cpuSamples[0].model : null;
+  const cpuSpeedMHz = cpuSamples[0] ? cpuSamples[0].speed : null;
+  const totalMemory = os.totalmem();
+  const freeMemory = os.freemem();
+  const memoryUsed = Math.max(totalMemory - freeMemory, 0);
+  const queueManagersSummary = Array.from(queueManagerInstances.entries()).map(([managerId, qm]) => ({
+    managerId,
+    queueCount: Object.keys(qm.queueConfig || {}).length,
+    totalQueuedMessages: Object.keys(qm.queueConfig || {}).reduce((sum, queueName) => sum + qm.getQueueLength(queueName), 0),
+    configVersion: Number(qm.configVersion || 0)
+  }));
+
+  const value = {
+    sampledAt: new Date(now).toISOString(),
+    platform: process.platform,
+    arch: process.arch,
+    node: {
+      version: process.version,
+      pid: process.pid,
+      uptimeSeconds: Number(process.uptime().toFixed(3)),
+      cpuUsage: process.cpuUsage(),
+      memoryUsage: process.memoryUsage()
+    },
+    os: {
+      hostname: os.hostname(),
+      type: os.type(),
+      release: os.release(),
+      uptimeSeconds: Number(os.uptime().toFixed(3)),
+      loadAverage: typeof os.loadavg === 'function' ? os.loadavg() : [],
+      totalMemory,
+      freeMemory,
+      memoryUsed,
+      memoryUsedPercent: totalMemory > 0 ? Number(((memoryUsed / totalMemory) * 100).toFixed(2)) : 0,
+      cpuCount: cpuSamples.length,
+      cpuModel,
+      cpuSpeedMHz
+    },
+    queueManagers: queueManagersSummary,
+    windows: getWindowsPerformanceSnapshot()
+  };
+
+  systemPerformanceCache.sampledAt = now;
+  systemPerformanceCache.value = value;
+  return value;
+}
+
+function applyLifecycleMapping(mappingId, message, runtimeContext = {}) {
+  const id = String(mappingId || '').trim().toLowerCase();
+  if (!id) return message;
+
+  if (id === 'mt103-to-pacs') {
+    if (message && typeof message === 'object' && message.Document && typeof message.Document === 'object') {
+      return message;
+    }
+    const txId = runtimeContext?.worker?.workerId
+      ? `${runtimeContext.worker.workerId}-${Date.now()}`
+      : null;
+    return toPacsFromMt103(message, txId);
+  }
+
+  throw new Error(`Unsupported lifecycle mapping: ${id}`);
+}
+
 async function runLifecycleTransitionAction(action, runtimeContext, workerState) {
   const parsed = parseLifecycleAction(action, runtimeContext);
   if (parsed.kind === 'none') return;
+
+  if (parsed.kind === 'map') {
+    runtimeContext.message = applyLifecycleMapping(parsed.mappingId, runtimeContext.message, runtimeContext);
+    return;
+  }
 
   if (parsed.kind === 'enqueue') {
     if (!parsed.queueName) return;
@@ -3268,6 +3714,7 @@ async function enqueueLifecycleStateMessage(compiled, stateName, message, source
   }
 
   const delivery = await enqueueViaRoute(route, queueName, message, sourceService, null, inferQueueDataTypeIds(queueName));
+  incrementLifecycleStateCumulativeCount(stateName, 1);
   return { enqueued: true, queueName, delivery };
 }
 
@@ -3287,6 +3734,33 @@ async function dequeueLifecycleStateMessage(compiled, stateName, consumerService
 
 function buildDefaultMt103Message(txId) {
   return `MT103\n:20:${txId}\n:32A:260514USD12500,\n:50K:APPLICANT CORP\n:57A:BKTRUS33\n:59:/000123456\nBENEFICIARY LTD`;
+}
+
+function buildDefaultPacsMessage(txId) {
+  const id = String(txId || `PACS-${Date.now()}`);
+  return {
+    Document: {
+      FIToFICstmrCdtTrf: {
+        GrpHdr: {
+          MsgId: id,
+          CreDtTm: new Date().toISOString()
+        },
+        CdtTrfTxInf: [
+          {
+            PmtId: {
+              InstrId: id,
+              EndToEndId: id,
+              TxId: id
+            },
+            IntrBkSttlmAmt: {
+              '@Ccy': 'USD',
+              '#text': '12500.00'
+            }
+          }
+        ]
+      }
+    }
+  };
 }
 
 function touchLifecycleActivity() {
@@ -3444,6 +3918,186 @@ async function lifecycleHarnessAdvance(compiled, { eventName, context = {}, repl
   return {
     transition,
     active: lifecycleHarness.active
+  };
+}
+
+function isLikelyRejectTransition(transition) {
+  const to = String(transition?.to || '').toLowerCase();
+  const event = String(transition?.event || '').toLowerCase();
+  const when = String(transition?.when || '').toLowerCase();
+  return to.includes('reject') || event.includes('reject') || when.includes('rejected');
+}
+
+function deriveLifecycleHappyPath(compiled, { startState = null } = {}) {
+  const initialState = String(startState || compiled?.initialState || '').trim();
+  if (!initialState) {
+    throw new Error('Compiled lifecycle has no initialState');
+  }
+
+  const happyContext = {
+    status: 'approved',
+    statement_match: true,
+    statementMatch: true
+  };
+
+  const path = [];
+  const seen = new Set();
+  let current = initialState;
+  let guard = 0;
+  const maxSteps = Math.max(10, (Array.isArray(compiled?.states) ? compiled.states.length : 0) + 5);
+
+  while (guard < maxSteps) {
+    guard += 1;
+    const key = `${current}#${guard}`;
+    if (seen.has(key)) break;
+    seen.add(key);
+
+    const outgoing = getLifecycleOutgoingTransitions(compiled, current);
+    if (!outgoing.length) break;
+
+    const nonReject = outgoing.filter(t => !isLikelyRejectTransition(t));
+    const preferred = nonReject.find(t => evaluateLifecycleTransitionGuard(t, happyContext));
+    const fallbackPreferred = nonReject.find(t => evaluateLifecycleTransitionGuard(t, {}));
+    const picked = preferred || fallbackPreferred || nonReject[0] || outgoing[0];
+    if (!picked) break;
+
+    path.push({
+      from: picked.from,
+      to: picked.to,
+      event: picked.event,
+      when: picked.when || null,
+      action: picked.action || null
+    });
+    current = picked.to;
+  }
+
+  return {
+    initialState,
+    terminalState: current,
+    transitionCount: path.length,
+    context: happyContext,
+    transitions: path
+  };
+}
+
+function deriveLifecycleSadPath(compiled, { startState = null } = {}) {
+  const initialState = String(startState || compiled?.initialState || '').trim();
+  if (!initialState) {
+    throw new Error('Compiled lifecycle has no initialState');
+  }
+
+  const sadContext = {
+    status: 'rejected',
+    statement_match: false,
+    statementMatch: false
+  };
+
+  const path = [];
+  let current = initialState;
+  let guard = 0;
+  const maxSteps = Math.max(10, (Array.isArray(compiled?.states) ? compiled.states.length : 0) + 5);
+
+  while (guard < maxSteps) {
+    guard += 1;
+    const outgoing = getLifecycleOutgoingTransitions(compiled, current);
+    if (!outgoing.length) break;
+
+    const rejectCandidates = outgoing.filter(t => isLikelyRejectTransition(t));
+    const preferredReject = rejectCandidates.find(t => evaluateLifecycleTransitionGuard(t, sadContext));
+    const fallbackReject = rejectCandidates.find(t => evaluateLifecycleTransitionGuard(t, {}));
+    const fallbackAny = outgoing.find(t => evaluateLifecycleTransitionGuard(t, sadContext))
+      || outgoing.find(t => evaluateLifecycleTransitionGuard(t, {}));
+    const picked = preferredReject || fallbackReject || fallbackAny || outgoing[0];
+    if (!picked) break;
+
+    path.push({
+      from: picked.from,
+      to: picked.to,
+      event: picked.event,
+      when: picked.when || null,
+      action: picked.action || null
+    });
+    current = picked.to;
+
+    if (isLikelyRejectTransition(picked)) {
+      break;
+    }
+  }
+
+  return {
+    initialState,
+    terminalState: current,
+    transitionCount: path.length,
+    context: sadContext,
+    transitions: path
+  };
+}
+
+async function runLifecycleHappyPath(compiled, { txId = null, message = null } = {}) {
+  const derived = deriveLifecycleHappyPath(compiled);
+  const transactionId = String(txId || `HAPPY-${Date.now()}`);
+  const active = await lifecycleHarnessStartTransaction(compiled, {
+    txId: transactionId,
+    message: message || buildDefaultMt103Message(transactionId)
+  });
+
+  const steps = [];
+  for (const transition of derived.transitions) {
+    const result = await lifecycleHarnessAdvance(compiled, {
+      eventName: transition.event,
+      context: derived.context
+    });
+    steps.push({
+      event: transition.event,
+      from: transition.from,
+      to: transition.to,
+      currentState: result?.active?.currentState || transition.to
+    });
+  }
+
+  return {
+    transactionId: active.transactionId,
+    initialState: derived.initialState,
+    terminalState: lifecycleHarness.active?.currentState || derived.terminalState,
+    transitionCount: steps.length,
+    steps,
+    context: derived.context
+  };
+}
+
+async function runLifecycleSadPath(compiled, { txId = null, message = null } = {}) {
+  const derived = deriveLifecycleSadPath(compiled);
+  const transactionId = String(txId || `SAD-${Date.now()}`);
+  const active = await lifecycleHarnessStartTransaction(compiled, {
+    txId: transactionId,
+    message: message || buildDefaultMt103Message(transactionId)
+  });
+
+  const steps = [];
+  for (const transition of derived.transitions) {
+    const replacementMessage = transition.to === 'rejected'
+      ? buildDefaultPacsMessage(transactionId)
+      : null;
+    const result = await lifecycleHarnessAdvance(compiled, {
+      eventName: transition.event,
+      context: derived.context,
+      replacementMessage
+    });
+    steps.push({
+      event: transition.event,
+      from: transition.from,
+      to: transition.to,
+      currentState: result?.active?.currentState || transition.to
+    });
+  }
+
+  return {
+    transactionId: active.transactionId,
+    initialState: derived.initialState,
+    terminalState: lifecycleHarness.active?.currentState || derived.terminalState,
+    transitionCount: steps.length,
+    steps,
+    context: derived.context
   };
 }
 
@@ -4448,6 +5102,80 @@ function registerRoutes(app) {
     return res.json(payload);
   });
 
+  app.get('/api/lifecycle/happy-path', requirePermission('lifecycle.read'), (req, res) => {
+    try {
+      const compiled = readTransactionLifecycleCompiled();
+      if (!compiled) {
+        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
+      }
+      const happyPath = deriveLifecycleHappyPath(compiled);
+      return res.json({ status: 'ok', happyPath });
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/lifecycle/sad-path', requirePermission('lifecycle.read'), (req, res) => {
+    try {
+      const compiled = readTransactionLifecycleCompiled();
+      if (!compiled) {
+        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
+      }
+      const sadPath = deriveLifecycleSadPath(compiled);
+      return res.json({ status: 'ok', sadPath });
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/lifecycle/happy-path/run', requirePermission('lifecycle.manage'), async (req, res) => {
+    try {
+      const compiled = readTransactionLifecycleCompiled();
+      if (!compiled) {
+        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
+      }
+
+      const { txId, message } = req.body || {};
+      const result = await runLifecycleHappyPath(compiled, { txId, message });
+      recordLifecycleTesterRun('happy', {
+        status: 'completed',
+        transitionCount: result.transitionCount,
+        transactionId: result.transactionId
+      });
+      return res.json({ status: 'completed', result });
+    } catch (e) {
+      recordLifecycleTesterRun('happy', {
+        status: 'failed',
+        error: e.message
+      });
+      return res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/lifecycle/sad-path/run', requirePermission('lifecycle.manage'), async (req, res) => {
+    try {
+      const compiled = readTransactionLifecycleCompiled();
+      if (!compiled) {
+        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
+      }
+
+      const { txId, message } = req.body || {};
+      const result = await runLifecycleSadPath(compiled, { txId, message });
+      recordLifecycleTesterRun('sad', {
+        status: 'completed',
+        transitionCount: result.transitionCount,
+        transactionId: result.transactionId
+      });
+      return res.json({ status: 'completed', result });
+    } catch (e) {
+      recordLifecycleTesterRun('sad', {
+        status: 'failed',
+        error: e.message
+      });
+      return res.status(400).json({ error: e.message });
+    }
+  });
+
   app.get('/api/lifecycle/heartbeat', requirePermission('lifecycle.read'), (req, res) => {
     res.json({ heartbeat: getLifecycleHeartbeatPayload() });
   });
@@ -4685,6 +5413,7 @@ function registerRoutes(app) {
         intervalMs: Number(intervalMs) > 0 ? Number(intervalMs) : 500,
         batchSize: Number(batchSize) > 0 ? Number(batchSize) : 25
       });
+      gatewayQuiesceState.swift = false;
       res.json({ status: 'started', gateway: 'swift', workersStarted: workers.length, gateways: getGatewayStatusPayload() });
     } catch (e) {
       res.status(400).json({ error: e.message });
@@ -4693,18 +5422,27 @@ function registerRoutes(app) {
 
   app.post('/api/gateways/swift/stop', requirePermission('gateway.manage'), (req, res) => {
     stopSwiftGateway();
+    gatewayQuiesceState.swift = false;
     res.json({ status: 'stopped', gateway: 'swift', gateways: getGatewayStatusPayload() });
+  });
+
+  app.post('/api/gateways/swift/quiesce', requirePermission('gateway.manage'), (req, res) => {
+    stopSwiftGateway();
+    gatewayQuiesceState.swift = true;
+    res.json({ status: 'quiesced', gateway: 'swift', gateways: getGatewayStatusPayload() });
   });
 
   app.post('/api/gateways/boc/start', requirePermission('gateway.manage'), (req, res) => {
     try {
-      const { intervalMs, batchSize, approvalMode } = req.body || {};
+      const { intervalMs, batchSize, mode, approvalMode } = req.body || {};
+      const resolvedMode = String(mode || approvalMode || 'live').trim().toLowerCase();
       const workers = startBocGateway({
         intervalMs: Number(intervalMs) > 0 ? Number(intervalMs) : 500,
         batchSize: Number(batchSize) > 0 ? Number(batchSize) : 25,
-        approvalMode: approvalMode || 'approved'
+        approvalMode: resolvedMode
       });
-      res.json({ status: 'started', gateway: 'boc', workersStarted: workers.length, gateways: getGatewayStatusPayload() });
+      gatewayQuiesceState.boc = false;
+      res.json({ status: 'started', gateway: 'boc', mode: gatewayModeState.boc, workersStarted: workers.length, gateways: getGatewayStatusPayload() });
     } catch (e) {
       res.status(400).json({ error: e.message });
     }
@@ -4712,12 +5450,20 @@ function registerRoutes(app) {
 
   app.post('/api/gateways/boc/stop', requirePermission('gateway.manage'), (req, res) => {
     stopBocGateway();
+    gatewayQuiesceState.boc = false;
     res.json({ status: 'stopped', gateway: 'boc', gateways: getGatewayStatusPayload() });
+  });
+
+  app.post('/api/gateways/boc/quiesce', requirePermission('gateway.manage'), (req, res) => {
+    stopBocGateway();
+    gatewayQuiesceState.boc = true;
+    res.json({ status: 'quiesced', gateway: 'boc', gateways: getGatewayStatusPayload() });
   });
 
   app.post('/api/gateways/start', requirePermission('gateway.manage'), (req, res) => {
     try {
-      const { intervalMs, batchSize, approvalMode } = req.body || {};
+      const { intervalMs, batchSize, mode, approvalMode } = req.body || {};
+      const resolvedMode = String(mode || approvalMode || 'live').trim().toLowerCase();
       startSwiftGateway({
         intervalMs: Number(intervalMs) > 0 ? Number(intervalMs) : 500,
         batchSize: Number(batchSize) > 0 ? Number(batchSize) : 25
@@ -4725,8 +5471,10 @@ function registerRoutes(app) {
       startBocGateway({
         intervalMs: Number(intervalMs) > 0 ? Number(intervalMs) : 500,
         batchSize: Number(batchSize) > 0 ? Number(batchSize) : 25,
-        approvalMode: approvalMode || 'approved'
+        approvalMode: resolvedMode
       });
+      gatewayQuiesceState.swift = false;
+      gatewayQuiesceState.boc = false;
       res.json({ status: 'started', gateways: getGatewayStatusPayload() });
     } catch (e) {
       res.status(400).json({ error: e.message });
@@ -4736,6 +5484,8 @@ function registerRoutes(app) {
   app.post('/api/gateways/stop', requirePermission('gateway.manage'), (req, res) => {
     stopSwiftGateway();
     stopBocGateway();
+    gatewayQuiesceState.swift = false;
+    gatewayQuiesceState.boc = false;
     res.json({ status: 'stopped', gateways: getGatewayStatusPayload() });
   });
 
@@ -4856,6 +5606,54 @@ function registerRoutes(app) {
     const items = queueValidationErrors.slice(-limit).reverse();
     res.json({ count: items.length, totalBuffered: queueValidationErrors.length, items });
   });
+
+  app.get('/api/queue/dlq/events', requirePermission('queue.view'), (req, res) => {
+    const limitRaw = Number(req.query.limit || 100);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 5000) : 100;
+    const items = dlqEvents.slice(-limit).reverse();
+    res.json({ count: items.length, totalBuffered: dlqEvents.length, items });
+  });
+
+  app.get('/api/queue/dlq/analysis', requirePermission('queue.view'), (req, res) => {
+    const limitRaw = Number(req.query.limit || 500);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 5000) : 500;
+    const windowItems = dlqEvents.slice(-limit);
+    const summary = summarizeDlqEvents(windowItems);
+    const queueLength = queueManagers[0].getQueueLength('ops.validation.deadletter') + queueManagers[1].getQueueLength('ops.validation.deadletter');
+
+    const top = (obj, max = 5) => Object.entries(obj || {})
+      .sort((a, b) => Number(b[1]) - Number(a[1]))
+      .slice(0, max)
+      .map(([name, count]) => ({ name, count }));
+
+    const likelyFindings = [];
+    for (const item of top(summary.byReason, 3)) {
+      if (item.name.toLowerCase().includes('swift-mt103')) {
+        likelyFindings.push('MT103 queue is receiving non-MT103 payloads (often object instead of FIN string/envelope).');
+      }
+      if (item.name.toLowerCase().includes('iso 20022 pacs')) {
+        likelyFindings.push('PACS queues are receiving payloads without top-level Document object.');
+      }
+    }
+
+    res.json({
+      status: 'ok',
+      deadLetterQueue: 'ops.validation.deadletter',
+      queueLength,
+      analyzedWindow: windowItems.length,
+      bufferedEvents: dlqEvents.length,
+      summary,
+      top: {
+        reasons: top(summary.byReason, 10),
+        workers: top(summary.byWorker, 10),
+        sourceQueues: top(summary.bySourceQueue, 10),
+        targetQueues: top(summary.byTargetQueue, 10),
+        messageShapes: top(summary.byShape, 10)
+      },
+      likelyFindings
+    });
+  });
+
   app.post('/api/queue/:queueName/dequeue', async (req, res) => {
     const { queueName } = req.params;
     const { consumerService } = req.body;
@@ -5765,6 +6563,12 @@ function registerRoutes(app) {
   app.get('/status', (req, res) => {
     res.json(getBrokerNodeDetails());
   });
+  app.get('/api/system/performance', (req, res) => {
+    res.json({
+      status: 'ok',
+      performance: getSystemPerformanceSnapshot()
+    });
+  });
   app.get('/services/describe', (req, res) => {
     res.json({ services: [BROKER_SERVICE, ROUTER_SERVICE, QUEUE_SERVICE, FILE_SERVER_SERVICE] });
   });
@@ -5846,6 +6650,35 @@ try {
   registerRoutes(app);
   app.listen(HTTP_PORT, '0.0.0.0', () => {
     console.log(`Aggregator backend running on http://0.0.0.0:${HTTP_PORT} (LAN accessible)`);
+
+    // Auto-start all workers and gateways on every backend startup
+    try {
+      const lifecycleWorkerResults = startDefaultQueueDrivenLifecycleWorkers({ intervalMs: 500, batchSize: 25 });
+      console.log(`[AUTOSTART] Lifecycle workers started: ${lifecycleWorkerResults.length}`);
+    } catch (e) {
+      console.warn(`[AUTOSTART] Lifecycle workers failed: ${e.message}`);
+    }
+
+    try {
+      const subflowWorkerResults = startDefaultSubflowBridgeWorkers({ intervalMs: 500, batchSize: 25 });
+      console.log(`[AUTOSTART] Subflow workers started: ${subflowWorkerResults.length}`);
+    } catch (e) {
+      console.warn(`[AUTOSTART] Subflow workers failed: ${e.message}`);
+    }
+
+    try {
+      startSwiftGateway({ intervalMs: 500, batchSize: 25 });
+      console.log(`[AUTOSTART] SWIFT gateway started`);
+    } catch (e) {
+      console.warn(`[AUTOSTART] SWIFT gateway failed: ${e.message}`);
+    }
+
+    try {
+      startBocGateway({ intervalMs: 500, batchSize: 25, mode: gatewayModeState.boc });
+      console.log(`[AUTOSTART] BoC gateway started (mode=${gatewayModeState.boc})`);
+    } catch (e) {
+      console.warn(`[AUTOSTART] BoC gateway failed: ${e.message}`);
+    }
   });
 
   // --- Start Data Librarian as a child process ---
