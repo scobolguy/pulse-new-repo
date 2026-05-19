@@ -1,6 +1,19 @@
-import React, { useEffect, useState, useRef, memo } from 'react';
-import BrokerStatusCard from './BrokerStatusCard';
-import TopologyServerDiagram from './TopologyServerDiagram';
+import React, { useEffect, useState, memo } from 'react';
+
+function getPresenceClientIdentity() {
+  const key = 'pulse.presenceClientId';
+  let clientId = localStorage.getItem(key);
+  if (!clientId) {
+    clientId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `client-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+    localStorage.setItem(key, clientId);
+  }
+  const ua = typeof navigator !== 'undefined' ? String(navigator.userAgent || '').toLowerCase() : '';
+  const isMac = ua.includes('macintosh') || ua.includes('mac os x');
+  const nodeName = isMac ? 'MacBook Client' : 'Web Client';
+  return { clientId, nodeName };
+}
 // Memoized NodeCard to prevent unnecessary re-renders
 const NodeCard = memo(function NodeCard({ node }) {
   // Force re-render every second for live color updates
@@ -37,8 +50,8 @@ const NodeCard = memo(function NodeCard({ node }) {
       {/* Computer icon (SVG) */}
       <svg width="40" height="32" viewBox="0 0 40 32" style={{ marginBottom: 4 }}><rect x="2" y="6" width="36" height="18" rx="3" fill="#90a4ae" stroke="#263238" strokeWidth="1.5"/><rect x="8" y="10" width="24" height="10" rx="1.5" fill="#fff" stroke="#607d8b" strokeWidth="1"/><rect x="14" y="26" width="12" height="3" rx="1.5" fill="#607d8b"/></svg>
       {/* Node name */}
-      <div style={{ fontWeight: 600, fontSize: 13, color: '#1a237e', marginBottom: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'center', width: '100%' }} title={node.details?.nodeName || node.ip}>
-        {node.details?.nodeName ? node.details.nodeName : <span style={{ color: '#888' }}>{node.ip}</span>}
+      <div style={{ fontWeight: 600, fontSize: 13, color: '#1a237e', marginBottom: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'center', width: '100%' }} title={node.details?.nodeName || node.nodeName || node.ip}>
+        {(node.details?.nodeName || node.nodeName) ? (node.details?.nodeName || node.nodeName) : <span style={{ color: '#888' }}>{node.ip}</span>}
       </div>
       {/* Context menu */}
       {menu && (
@@ -59,30 +72,12 @@ const NodeCard = memo(function NodeCard({ node }) {
   );
 });
 
-const SERVICE_PATHS = ['/status'];
-
-function useDebugLogs() {
-  const [debugLogs, setDebugLogs] = useState([]);
-  const chatRef = useRef(null);
-  const addDebugLog = (msg) => {
-    setDebugLogs(logs => [...logs, { msg, ts: new Date().toLocaleTimeString() }]);
-  };
-  useEffect(() => {
-    if (chatRef.current) {
-      chatRef.current.scrollTop = chatRef.current.scrollHeight;
-    }
-  }, [debugLogs]);
-  return { debugLogs, addDebugLog, chatRef };
-}
-
-
-
-export default function TopologyDashboard() {
+export default function TopologyDashboard({ permissions = [] }) {
 
   const [topology, setTopology] = useState([]);
   const [loading, setLoading] = useState(false);
-  const { debugLogs, addDebugLog, chatRef } = useDebugLogs();
-  const [showLog, setShowLog] = useState(false);
+  const [availability, setAvailability] = useState({ status: 'unknown', available: false, draining: false });
+  const [availabilityBusy, setAvailabilityBusy] = useState(false);
   // Use current hostname for backend URL by default
   let defaultBackendUrl = 'http://localhost:4000';
   if (typeof window !== 'undefined' && window.location) {
@@ -92,17 +87,56 @@ export default function TopologyDashboard() {
     }
   }
   const [backendUrl, setBackendUrl] = useState(defaultBackendUrl);
+  const [presenceIdentity] = useState(() => getPresenceClientIdentity());
+
+  const activePhysicalNodes = topology.filter(node => {
+    const now = Date.now();
+    const isActive = now - node.lastSeen <= 10 * 60 * 1000;
+    const isLoopback = node.ip === '127.0.0.1' || node.ip === '::1' || node.nodeName === 'Aggregator Backend';
+    const isAvailable = node.availability?.available !== false;
+    return isActive && !isLoopback && isAvailable;
+  });
+
+  async function fetchAvailability(url = backendUrl) {
+    try {
+      const statusUrl = `${url}/api/presence/client/status?clientId=${encodeURIComponent(presenceIdentity.clientId)}`;
+      const res = await fetch(statusUrl);
+      const payload = await res.json();
+      if (!res.ok) {
+        return;
+      }
+      setAvailability(payload || { status: 'unknown', available: false, draining: false });
+    } catch {
+      setAvailability({ status: 'unknown', available: false, draining: false });
+    }
+  }
+
+  async function setAvailable(nextAvailable) {
+    setAvailabilityBusy(true);
+    try {
+      const endpoint = nextAvailable ? '/api/presence/client/available' : '/api/presence/client/unavailable';
+      await fetch(backendUrl + endpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          clientId: presenceIdentity.clientId,
+          nodeName: presenceIdentity.nodeName
+        })
+      });
+      await fetchAvailability(backendUrl);
+      await fetchTopology(backendUrl);
+    } finally {
+      setAvailabilityBusy(false);
+    }
+  }
 
   async function fetchTopology(url = backendUrl) {
     setLoading(true);
     try {
       const res = await fetch(url + '/api/nodes');
       const nodes = await res.json();
-      addDebugLog(`[GET ${url}/api/nodes]: ${JSON.stringify(nodes)}`);
-      addDebugLog(`[Topology results]: ${JSON.stringify(nodes)}`);
       setTopology(nodes);
-    } catch (e) {
-      addDebugLog(`[Error fetching topology]: ${e}`);
+    } catch {
       setTopology([]);
     }
     setLoading(false);
@@ -110,10 +144,28 @@ export default function TopologyDashboard() {
 
   useEffect(() => {
     fetchTopology(backendUrl);
+    fetchAvailability(backendUrl);
     const interval = setInterval(() => fetchTopology(backendUrl), 30000);
-    return () => clearInterval(interval);
+    const availabilityInterval = setInterval(async () => {
+      if (availability.available) {
+        try {
+          await fetch(`${backendUrl}/api/presence/client/heartbeat`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ clientId: presenceIdentity.clientId })
+          });
+        } catch {
+          // Ignore heartbeat errors; status refresh below will reflect current state.
+        }
+      }
+      await fetchAvailability(backendUrl);
+    }, 5000);
+    return () => {
+      clearInterval(interval);
+      clearInterval(availabilityInterval);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [backendUrl]);
+  }, [backendUrl, availability.available, presenceIdentity.clientId]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', padding: 12, fontFamily: 'Segoe UI, Tahoma, Geneva, Verdana, sans-serif', fontSize: 13, background: '#f3f3f3' }}>
@@ -121,45 +173,34 @@ export default function TopologyDashboard() {
         <label>Backend URL: </label>
         <input value={backendUrl} onChange={e => setBackendUrl(e.target.value)} size={40} style={{ fontSize: 13, padding: '2px 6px', borderRadius: 4, border: '1px solid #bbb', marginRight: 8 }} />
         <button onClick={() => fetchTopology(backendUrl)} style={{ fontSize: 13, padding: '2px 10px', borderRadius: 4, border: '1px solid #bbb' }}>Refresh</button>
+        <button
+          onClick={() => setAvailable(!availability.available)}
+          disabled={availabilityBusy || availability.draining}
+          style={{ fontSize: 13, padding: '2px 10px', borderRadius: 4, border: '1px solid #bbb', marginLeft: 8 }}
+        >
+          {availability.draining ? 'Draining...' : (availability.available ? "I'm unavailable" : "I'm available")}
+        </button>
+        <span style={{ marginLeft: 8, fontSize: 12, color: availability.available ? '#1b5e20' : '#6d4c41' }}>
+          Status: {availability.status || (availability.available ? 'available' : 'unavailable')}
+        </span>
+        {typeof availability.workload?.inFlight === 'number' && (
+          <span style={{ marginLeft: 8, fontSize: 12, color: '#455a64' }}>
+            In-flight: {availability.workload.inFlight}
+          </span>
+        )}
       </div>
       <div style={{ display: 'flex', flexDirection: 'row' }}>
         <div style={{ flex: 2, marginRight: 16 }}>
-          <h2 style={{ fontSize: 18, fontWeight: 600, margin: '8px 0 16px 0', color: '#2d2d2d' }}>Network Topology Dashboard</h2>
+          <h2 style={{ fontSize: 18, fontWeight: 600, margin: '8px 0 16px 0', color: '#2d2d2d' }}>Active Physical Devices</h2>
           {loading && <p style={{ fontSize: 12 }}>Loading...</p>}
-          {topology.length === 0 && !loading && <p style={{ fontSize: 12 }}>No nodes found.</p>}
+          {activePhysicalNodes.length === 0 && !loading && <p style={{ fontSize: 12 }}>No active physical devices found.</p>}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
-            {topology.filter(node => {
-              // Hide nodes inactive for more than 10 minutes
-              const now = Date.now();
-              return now - node.lastSeen <= 10 * 60 * 1000;
-            }).map((node) => (
+            {activePhysicalNodes.map((node) => (
               <NodeCard key={node.mac || node.ip} node={node} />
             ))}
           </div>
         </div>
-        {/* Collapsible Debug Log Panel */}
-        <div style={{ width: 340, minWidth: 220, maxWidth: 400, marginLeft: 8, background: '#fff', border: '1px solid #d4d4d4', borderRadius: 6, boxShadow: '0 2px 8px #eee', display: 'flex', flexDirection: 'column', height: 'fit-content' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#f5f5f5', borderBottom: '1px solid #e0e0e0', padding: '6px 10px', borderTopLeftRadius: 6, borderTopRightRadius: 6 }}>
-            <span style={{ fontWeight: 600, fontSize: 14, color: '#333' }}>Debug Log</span>
-            <button onClick={() => setShowLog(l => !l)} style={{ fontSize: 13, background: 'none', border: 'none', cursor: 'pointer', color: '#1976d2', padding: 0 }}>
-              {showLog ? 'Minimize' : 'Show'}
-            </button>
-          </div>
-          {showLog && (
-            <div ref={chatRef} style={{ padding: 10, height: 320, overflowY: 'auto', fontFamily: 'monospace', fontSize: 12, background: '#fafafa', borderBottomLeftRadius: 6, borderBottomRightRadius: 6 }}>
-              {debugLogs.length === 0 ? <div style={{ color: '#888' }}>No logs yet.</div> :
-                debugLogs.map((log, i) => (
-                  <div key={i} style={{ marginBottom: 2 }}>
-                    <span style={{ color: '#888', marginRight: 6 }}>{log.ts}</span>
-                    <span>{log.msg}</span>
-                  </div>
-                ))}
-            </div>
-          )}
-        </div>
       </div>
-      {/* Server Topology Diagram (dynamic) */}
-      <TopologyServerDiagram topology={topology} />
     </div>
   );
 }

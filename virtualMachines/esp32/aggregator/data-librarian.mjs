@@ -1,6 +1,7 @@
 import express from 'express';
 import fs from 'fs/promises';
 import path from 'path';
+import { readEnvNumber } from './src/env-config.mjs';
 
 const app = express();
 app.use(express.json());
@@ -665,7 +666,7 @@ app.post('/api/librarian/schema-lifecycle', async (req, res) => {
   }
 });
 
-const PORT = process.env.LIBRARIAN_PORT || 4100;
+const PORT = readEnvNumber('LIBRARIAN_PORT', 4100);
 app.listen(PORT, () => {
   console.log(`[Librarian] Service running on http://localhost:${PORT}`);
 });

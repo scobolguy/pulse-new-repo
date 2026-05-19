@@ -7,7 +7,9 @@ function parseArgs(argv) {
   const args = {
     in: './data/workflow.wfl',
     workflow: null,
-    dryRun: false
+    dryRun: false,
+    context: '{}',
+    contextFile: null
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -15,6 +17,8 @@ function parseArgs(argv) {
     if (token === '--in') args.in = argv[i + 1];
     if (token === '--workflow') args.workflow = argv[i + 1];
     if (token === '--dry-run') args.dryRun = true;
+    if (token === '--context') args.context = argv[i + 1];
+    if (token === '--context-file') args.contextFile = argv[i + 1];
   }
 
   return args;
@@ -28,61 +32,176 @@ function buildApiMap(symbols) {
   return out;
 }
 
-async function executeWorkflow(compiled, workflowId, dryRun = false) {
+function buildQueueMap(symbols) {
+  const out = new Map();
+  for (const queue of symbols.queues || []) {
+    out.set(queue.symbol, queue);
+  }
+  return out;
+}
+
+function parseContext(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return {};
+  try {
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('context must be a JSON object');
+    }
+    return parsed;
+  } catch (e) {
+    throw new Error(`Invalid --context JSON: ${e.message}`);
+  }
+}
+
+function getByPath(source, dottedPath) {
+  const pathText = String(dottedPath || '').trim();
+  if (!pathText) return undefined;
+  const parts = pathText.split('.').map(part => part.trim()).filter(Boolean);
+  let cursor = source;
+  for (const part of parts) {
+    if (cursor == null || typeof cursor !== 'object' || !(part in cursor)) {
+      return undefined;
+    }
+    cursor = cursor[part];
+  }
+  return cursor;
+}
+
+function evaluateCondition(condition, context, state) {
+  const fieldPath = String(condition?.field || '').trim();
+  const operator = String(condition?.operator || '').trim().toLowerCase();
+  const expected = String(condition?.value ?? '');
+
+  const fromState = getByPath(state, fieldPath);
+  const fromContext = getByPath(context, fieldPath);
+  const actual = fromState !== undefined ? fromState : fromContext;
+
+  if (operator === 'equals') {
+    return String(actual ?? '') === expected;
+  }
+
+  if (operator === 'contains') {
+    if (Array.isArray(actual)) {
+      return actual.map(item => String(item)).includes(expected);
+    }
+    return String(actual ?? '').includes(expected);
+  }
+
+  throw new Error(`Unsupported condition operator: ${operator}`);
+}
+
+async function executeSteps(steps, runtime, output) {
+  for (const step of steps || []) {
+    if (step.action === 'call_api') {
+      const api = runtime.apiMap.get(step.apiSymbol);
+      if (!api || !api.baseUrl) {
+        throw new Error(`Unknown API symbol: ${step.apiSymbol}`);
+      }
+
+      const url = `${String(api.baseUrl).replace(/\/+$/, '')}${step.route}`;
+      if (runtime.dryRun) {
+        output.push({
+          stepId: step.id,
+          mode: 'dry-run',
+          action: step.action,
+          method: step.method,
+          url
+        });
+        continue;
+      }
+
+      const response = await fetch(url, {
+        method: step.method,
+        headers: { 'content-type': 'application/json' }
+      });
+
+      const responseText = await response.text();
+      output.push({
+        stepId: step.id,
+        mode: 'executed',
+        action: step.action,
+        method: step.method,
+        url,
+        status: response.status,
+        ok: response.ok,
+        response: responseText
+      });
+
+      if (!response.ok) {
+        throw new Error(`Workflow step ${step.id} failed with status ${response.status}`);
+      }
+      continue;
+    }
+
+    if (step.action === 'route_queue') {
+      const queueInfo = runtime.queueMap.get(step.queueRef) || null;
+      const queueName = queueInfo?.queueName || step.queueRef;
+      runtime.state.lastQueue = queueName;
+      output.push({
+        stepId: step.id,
+        mode: runtime.dryRun ? 'dry-run' : 'executed',
+        action: step.action,
+        queueRef: step.queueRef,
+        queueName
+      });
+      continue;
+    }
+
+    if (step.action === 'set_state') {
+      runtime.state[step.key] = step.value;
+      output.push({
+        stepId: step.id,
+        mode: runtime.dryRun ? 'dry-run' : 'executed',
+        action: step.action,
+        key: step.key,
+        value: step.value
+      });
+      continue;
+    }
+
+    if (step.action === 'if') {
+      const matched = evaluateCondition(step.condition, runtime.context, runtime.state);
+      output.push({
+        stepId: step.id,
+        mode: runtime.dryRun ? 'dry-run' : 'executed',
+        action: step.action,
+        condition: step.condition,
+        branchTaken: matched ? 'then' : 'else'
+      });
+      await executeSteps(matched ? step.then : step.else, runtime, output);
+      continue;
+    }
+
+    throw new Error(`Unsupported step action: ${step.action}`);
+  }
+}
+
+async function executeWorkflow(compiled, workflowId, dryRun = false, context = {}) {
   const workflow = (compiled.workflows || []).find(w => w.id === workflowId);
   if (!workflow) {
     throw new Error(`Workflow not found: ${workflowId}`);
   }
 
-  const apiMap = buildApiMap(compiled.symbols || {});
+  const symbols = compiled.symbols || {};
+  const apiMap = buildApiMap(symbols);
+  const queueMap = buildQueueMap(symbols);
+  const state = {};
   const results = [];
 
-  for (const step of workflow.steps || []) {
-    if (step.action !== 'call_api') {
-      throw new Error(`Unsupported step action: ${step.action}`);
-    }
-
-    const api = apiMap.get(step.apiSymbol);
-    if (!api || !api.baseUrl) {
-      throw new Error(`Unknown API symbol: ${step.apiSymbol}`);
-    }
-
-    const url = `${String(api.baseUrl).replace(/\/+$/, '')}${step.route}`;
-    if (dryRun) {
-      results.push({
-        stepId: step.id,
-        mode: 'dry-run',
-        method: step.method,
-        url
-      });
-      continue;
-    }
-
-    const response = await fetch(url, {
-      method: step.method,
-      headers: { 'content-type': 'application/json' }
-    });
-
-    const responseText = await response.text();
-    results.push({
-      stepId: step.id,
-      mode: 'executed',
-      method: step.method,
-      url,
-      status: response.status,
-      ok: response.ok,
-      response: responseText
-    });
-
-    if (!response.ok) {
-      throw new Error(`Workflow step ${step.id} failed with status ${response.status}`);
-    }
-  }
+  await executeSteps(workflow.steps || [], {
+    dryRun,
+    apiMap,
+    queueMap,
+    state,
+    context
+  }, results);
 
   return {
     workflowId,
     stepCount: (workflow.steps || []).length,
-    results
+    results,
+    state
   };
 }
 
@@ -97,7 +216,13 @@ async function main() {
     throw new Error('No workflows declared in source');
   }
 
-  const summary = await executeWorkflow(compiled, workflowId, args.dryRun);
+  let contextText = args.context;
+  if (args.contextFile) {
+    const contextPath = path.resolve(args.contextFile);
+    contextText = await fs.readFile(contextPath, 'utf-8');
+  }
+  const context = parseContext(contextText);
+  const summary = await executeWorkflow(compiled, workflowId, args.dryRun, context);
   console.log(JSON.stringify(summary, null, 2));
 }
 

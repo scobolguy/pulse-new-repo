@@ -1,0 +1,93 @@
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+SC:wght@500;700&family=DM+Sans:wght@500;600&display=swap');
+
+.window-style-french-pointalist.app-shell {
+  background:
+    radial-gradient(circle at 8% 12%, rgba(244, 182, 120, 0.16), rgba(244, 182, 120, 0) 26%),
+    radial-gradient(circle at 24% 38%, rgba(108, 174, 197, 0.14), rgba(108, 174, 197, 0) 24%),
+    radial-gradient(circle at 62% 22%, rgba(194, 123, 171, 0.12), rgba(194, 123, 171, 0) 26%),
+    radial-gradient(circle at 84% 74%, rgba(126, 170, 118, 0.14), rgba(126, 170, 118, 0) 24%),
+    radial-gradient(circle at 30% 82%, rgba(241, 208, 123, 0.12), rgba(241, 208, 123, 0) 22%),
+    radial-gradient(circle at 76% 52%, rgba(99, 145, 182, 0.12), rgba(99, 145, 182, 0) 25%),
+    repeating-radial-gradient(
+      circle at center,
+      rgba(255, 255, 255, 0.02) 0,
+      rgba(255, 255, 255, 0.02) 1px,
+      rgba(0, 0, 0, 0.05) 1px,
+      rgba(0, 0, 0, 0.05) 3px
+    ),
+    linear-gradient(155deg, #1b2435 0%, #141c2b 48%, #0f1522 100%);
+  color: #eef2fb;
+  font-family: 'DM Sans', 'Segoe UI', sans-serif;
+}
+
+.window-style-french-pointalist .brand,
+.window-style-french-pointalist .section-title,
+.window-style-french-pointalist .rhs-section h3,
+.window-style-french-pointalist .status-card h2,
+.window-style-french-pointalist .title-block h1,
+.window-style-french-pointalist .gothic-title {
+  font-family: 'Cormorant SC', Georgia, serif;
+  letter-spacing: 0.08em;
+  color: #f4e8cc;
+}
+
+.window-style-french-pointalist .top-strip,
+.window-style-french-pointalist .workspace-pane,
+.window-style-french-pointalist .rhs-section,
+.window-style-french-pointalist .lhs-sidebar,
+.window-style-french-pointalist .status-card,
+.window-style-french-pointalist .gothic-screen,
+.window-style-french-pointalist .gothic-panel,
+.window-style-french-pointalist .gateway-portrait-card {
+  border-radius: 16px;
+  border: 1px solid rgba(196, 207, 228, 0.3);
+  background:
+    radial-gradient(circle at 14% 18%, rgba(240, 180, 124, 0.1), rgba(240, 180, 124, 0) 28%),
+    radial-gradient(circle at 88% 72%, rgba(122, 166, 204, 0.1), rgba(122, 166, 204, 0) 26%),
+    linear-gradient(170deg, rgba(39, 52, 74, 0.94), rgba(27, 37, 56, 0.95));
+  box-shadow: 0 16px 28px rgba(0, 0, 0, 0.34);
+}
+
+.window-style-french-pointalist .top-strip::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 10% 30%, rgba(255, 222, 158, 0.16), rgba(255, 222, 158, 0) 20%),
+    radial-gradient(circle at 32% 64%, rgba(131, 189, 218, 0.14), rgba(131, 189, 218, 0) 22%),
+    radial-gradient(circle at 58% 38%, rgba(212, 141, 186, 0.14), rgba(212, 141, 186, 0) 22%),
+    radial-gradient(circle at 86% 54%, rgba(155, 201, 139, 0.14), rgba(155, 201, 139, 0) 22%);
+}
+
+.window-style-french-pointalist .area-nav-item {
+  border-color: rgba(217, 191, 146, 0.34);
+  background: linear-gradient(170deg, rgba(61, 81, 112, 0.58), rgba(43, 58, 82, 0.62));
+}
+
+.window-style-french-pointalist .area-nav-item.is-active,
+.window-style-french-pointalist .admin-subtask-item.is-active,
+.window-style-french-pointalist .gothic-button,
+.window-style-french-pointalist .rhs-chip,
+.window-style-french-pointalist .sidebar-toggle,
+.window-style-french-pointalist .task-context-action.is-active,
+.window-style-french-pointalist .task-context-action:hover {
+  border-color: rgba(244, 204, 132, 0.72);
+  background: linear-gradient(175deg, rgba(202, 137, 78, 0.9), rgba(145, 93, 50, 0.9));
+  color: #fff6e7;
+}
+
+.window-style-french-pointalist .area-empty {
+  border: 1px dashed rgba(230, 197, 134, 0.64);
+  background: rgba(31, 41, 60, 0.72);
+}
+
+.window-style-french-pointalist .gothic-status-pill.running {
+  background: rgba(63, 121, 90, 0.46);
+  border-color: rgba(135, 219, 177, 0.56);
+}
+
+.window-style-french-pointalist .gothic-status-pill.stopped {
+  background: rgba(126, 66, 70, 0.46);
+  border-color: rgba(238, 146, 154, 0.56);
+}

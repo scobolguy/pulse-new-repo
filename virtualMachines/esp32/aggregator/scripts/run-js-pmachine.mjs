@@ -85,12 +85,62 @@ function startsWithUpper(text, prefix) {
   return toUpperCopy(text).startsWith(toUpperCopy(prefix));
 }
 
-function evaluateWhenRule(whenRule, message) {
-  const rule = toUpperCopy(trimCopy(whenRule));
+function getByPath(source, dottedPath) {
+  const parts = String(dottedPath || '').split('.').map(p => p.trim()).filter(Boolean);
+  let cursor = source;
+  for (const part of parts) {
+    if (cursor == null || typeof cursor !== 'object' || !(part in cursor)) {
+      return undefined;
+    }
+    cursor = cursor[part];
+  }
+  return cursor;
+}
+
+function evaluateWhenRule(whenRule, message, state = {}) {
+  const normalizedRule = trimCopy(whenRule);
+  const rule = toUpperCopy(normalizedRule);
   if (!rule) return true;
 
   if (rule.includes('OUTPUT := 1')) return true;
   if (rule.includes('OUTPUT := 0') && !rule.includes('THEN OUTPUT := 1')) return false;
+
+  const fieldMatch = normalizedRule.match(/^FIELD_(EQUALS|CONTAINS)\s*\((.*)\)\s*$/i);
+  if (fieldMatch) {
+    const op = String(fieldMatch[1] || '').toUpperCase();
+    const argsText = String(fieldMatch[2] || '');
+    const comma = findTopLevelComma(argsText);
+    if (comma >= 0) {
+      const field = unquote(argsText.slice(0, comma));
+      const expected = unquote(argsText.slice(comma + 1));
+
+      let actual;
+      if (String(field).startsWith('state.')) {
+        actual = getByPath(state, field.slice(6));
+      } else {
+        let doc = null;
+        try {
+          doc = JSON.parse(String(message || '{}'));
+        } catch {
+          doc = null;
+        }
+        actual = doc ? getByPath(doc, field) : undefined;
+        if (actual === undefined && String(field).startsWith('message.')) {
+          actual = doc ? getByPath(doc, field.slice(8)) : undefined;
+        }
+      }
+
+      if (op === 'EQUALS') {
+        return String(actual ?? '') === String(expected ?? '');
+      }
+      if (op === 'CONTAINS') {
+        if (Array.isArray(actual)) {
+          return actual.map(v => String(v)).includes(String(expected ?? ''));
+        }
+        return String(actual ?? '').toUpperCase().includes(String(expected ?? '').toUpperCase());
+      }
+    }
+  }
 
   const fn = 'STARTSWITH(UPPER(SRC),';
   const idx = rule.indexOf(fn);
@@ -361,7 +411,7 @@ function parsePcode(text) {
     if (mnemonic === 'JMP' || mnemonic === 'JZ') {
       instr.operand = trimCopy(rest);
       unresolved.push({ idx: instructions.length, label: instr.operand });
-    } else if (mnemonic === 'ROUTE_MATCH_QUEUE' || mnemonic === 'ROUTE_EVAL_WHEN' || mnemonic === 'ROUTE_TRANSFORM' || mnemonic === 'ROUTE_EMIT' || mnemonic === 'PUSH_STR') {
+    } else if (mnemonic === 'ROUTE_MATCH_QUEUE' || mnemonic === 'ROUTE_EVAL_WHEN' || mnemonic === 'ROUTE_TRANSFORM' || mnemonic === 'ROUTE_EMIT' || mnemonic === 'ROUTE_SET_STATE' || mnemonic === 'PUSH_STR') {
       instr.operand = parseQuotedOperand(rest);
     } else if (mnemonic === 'PUSH_INT') {
       instr.operand = Number.parseInt(trimCopy(rest), 10);
@@ -383,10 +433,11 @@ function executeProgram({ instructions, opcodeMap, mappingsById, inputQueue, sou
   let pc = 0;
   let currentMessage = sourceMessage;
   const deliveries = [];
+  const state = {};
 
   const requiredMnemonics = [
     'NOP', 'JMP', 'JZ', 'HALT',
-    'ROUTE_MATCH_QUEUE', 'ROUTE_EVAL_WHEN', 'ROUTE_TRANSFORM', 'ROUTE_EMIT',
+    'ROUTE_MATCH_QUEUE', 'ROUTE_EVAL_WHEN', 'ROUTE_TRANSFORM', 'ROUTE_EMIT', 'ROUTE_SET_STATE',
     'PARSE_FIN_TEXT'
   ];
 
@@ -430,7 +481,7 @@ function executeProgram({ instructions, opcodeMap, mappingsById, inputQueue, sou
       continue;
     }
     if (op === 'ROUTE_EVAL_WHEN') {
-      stack.push(evaluateWhenRule(String(instr.operand || ''), currentMessage) ? 1 : 0);
+      stack.push(evaluateWhenRule(String(instr.operand || ''), currentMessage, state) ? 1 : 0);
       pc += 1;
       continue;
     }
@@ -444,6 +495,17 @@ function executeProgram({ instructions, opcodeMap, mappingsById, inputQueue, sou
       pc += 1;
       continue;
     }
+    if (op === 'ROUTE_SET_STATE') {
+      const payload = String(instr.operand || '');
+      const eq = payload.indexOf('=');
+      if (eq >= 0) {
+        const key = trimCopy(payload.slice(0, eq));
+        const value = trimCopy(payload.slice(eq + 1));
+        if (key) state[key] = value;
+      }
+      pc += 1;
+      continue;
+    }
     if (op === 'PARSE_FIN_TEXT') {
       currentMessage = JSON.stringify(parseMT103FinText(currentMessage));
       pc += 1;
@@ -453,7 +515,7 @@ function executeProgram({ instructions, opcodeMap, mappingsById, inputQueue, sou
     pc += 1;
   }
 
-  return { deliveries };
+  return { deliveries, state };
 }
 
 async function readMessage(args) {
@@ -489,7 +551,8 @@ async function runSingleMessage(args) {
     inputQueue: args.inputQueue,
     sourceMessage,
     publishedCount: result.deliveries.length,
-    deliveries: result.deliveries
+    deliveries: result.deliveries,
+    state: result.state
   };
 
   console.log(JSON.stringify(out, null, 2));

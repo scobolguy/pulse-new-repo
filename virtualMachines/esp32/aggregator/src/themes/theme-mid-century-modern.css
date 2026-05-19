@@ -1,0 +1,69 @@
+@import url('https://fonts.googleapis.com/css2?family=Archivo+Narrow:wght@500;700&family=Chivo:wght@500;700&display=swap');
+
+.window-style-mid-century-modern.app-shell {
+  background:
+    radial-gradient(circle at 14% 18%, rgba(231, 147, 87, 0.2), rgba(231, 147, 87, 0) 28%),
+    radial-gradient(circle at 84% 20%, rgba(80, 154, 176, 0.18), rgba(80, 154, 176, 0) 30%),
+    radial-gradient(circle at 74% 78%, rgba(216, 181, 96, 0.16), rgba(216, 181, 96, 0) 30%),
+    linear-gradient(155deg, #243443 0%, #1a2734 55%, #13202b 100%);
+  color: #f4f0e8;
+  font-family: 'Archivo Narrow', 'Segoe UI', sans-serif;
+}
+
+.window-style-mid-century-modern .brand,
+.window-style-mid-century-modern .section-title,
+.window-style-mid-century-modern .rhs-section h3,
+.window-style-mid-century-modern .status-card h2,
+.window-style-mid-century-modern .title-block h1,
+.window-style-mid-century-modern .gothic-title {
+  font-family: 'Chivo', 'Arial Narrow', sans-serif;
+  letter-spacing: 0.06em;
+  color: #f7d39a;
+}
+
+.window-style-mid-century-modern .lhs-sidebar,
+.window-style-mid-century-modern .rhs-sidebar,
+.window-style-mid-century-modern .top-strip,
+.window-style-mid-century-modern .workspace-pane,
+.window-style-mid-century-modern .rhs-section,
+.window-style-mid-century-modern .status-card,
+.window-style-mid-century-modern .gothic-screen,
+.window-style-mid-century-modern .gothic-panel,
+.window-style-mid-century-modern .gateway-portrait-card {
+  border-radius: 10px;
+  border: 1px solid rgba(224, 194, 147, 0.34);
+  background: linear-gradient(180deg, rgba(55, 71, 89, 0.95), rgba(37, 51, 66, 0.95));
+  box-shadow: 0 12px 22px rgba(0, 0, 0, 0.32);
+}
+
+.window-style-mid-century-modern .area-nav-item {
+  border-color: rgba(225, 183, 118, 0.4);
+  background: linear-gradient(165deg, rgba(80, 109, 136, 0.58), rgba(62, 84, 108, 0.62));
+}
+
+.window-style-mid-century-modern .area-nav-item.is-active,
+.window-style-mid-century-modern .admin-subtask-item.is-active,
+.window-style-mid-century-modern .gothic-button,
+.window-style-mid-century-modern .rhs-chip,
+.window-style-mid-century-modern .sidebar-toggle,
+.window-style-mid-century-modern .task-context-action.is-active,
+.window-style-mid-century-modern .task-context-action:hover {
+  border-color: rgba(241, 193, 121, 0.74);
+  background: linear-gradient(180deg, rgba(205, 126, 71, 0.9), rgba(148, 93, 53, 0.92));
+  color: #fff4df;
+}
+
+.window-style-mid-century-modern .area-empty {
+  border: 1px dashed rgba(230, 192, 129, 0.62);
+  background: rgba(33, 47, 62, 0.74);
+}
+
+.window-style-mid-century-modern .gothic-status-pill.running {
+  background: rgba(77, 137, 103, 0.46);
+  border-color: rgba(152, 220, 186, 0.54);
+}
+
+.window-style-mid-century-modern .gothic-status-pill.stopped {
+  background: rgba(126, 73, 74, 0.46);
+  border-color: rgba(231, 153, 152, 0.54);
+}

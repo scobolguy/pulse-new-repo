@@ -1,0 +1,27 @@
+.window-style-whimsical {
+  background:
+    radial-gradient(circle at 12% 10%, rgba(139, 206, 202, 0.12), rgba(139, 206, 202, 0) 30%),
+    radial-gradient(circle at 88% 88%, rgba(155, 140, 255, 0.11), rgba(155, 140, 255, 0) 34%),
+    linear-gradient(155deg, #101726 0%, #0d1117 50%, #101a2a 100%);
+}
+
+.window-style-whimsical .top-strip,
+.window-style-whimsical .workspace-pane,
+.window-style-whimsical .rhs-section,
+.window-style-whimsical .lhs-sidebar {
+  border-radius: 16px;
+}
+
+.window-style-whimsical .top-strip,
+.window-style-whimsical .workspace-pane,
+.window-style-whimsical .rhs-section {
+  border-color: color-mix(in srgb, var(--control-line-strong) 45%, #c5b5ff);
+  box-shadow: 0 10px 24px rgba(8, 16, 32, 0.34);
+}
+
+.window-style-whimsical .rhs-chip,
+.window-style-whimsical .sidebar-toggle,
+.window-style-whimsical .task-context-action:hover,
+.window-style-whimsical .task-context-action.is-active {
+  background: linear-gradient(180deg, #243a5e, #1b2d48);
+}

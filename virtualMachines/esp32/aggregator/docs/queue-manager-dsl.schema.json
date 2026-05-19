@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pulse.local/schemas/queue-manager-dsl.schema.json",
+  "title": "Pulse Queue Manager DSL",
+  "type": "object",
+  "required": ["version", "managers"],
+  "properties": {
+    "version": { "const": 1 },
+    "defaultProvider": {
+      "type": "string",
+      "enum": ["legacy", "memory", "msmq", "rabbitmq", "kafka", "ibm", "apache"]
+    },
+    "managers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["managerId", "queues"],
+        "properties": {
+          "managerId": { "type": "string", "minLength": 1 },
+          "provider": {
+            "type": "string",
+            "enum": ["legacy", "memory", "msmq", "rabbitmq", "kafka", "ibm", "apache"]
+          },
+          "queues": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["queueName"],
+              "properties": {
+                "queueName": { "type": "string", "minLength": 1 },
+                "dataTypeId": { "type": "string" },
+                "dataTypeIds": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "minItems": 1
+                },
+                "createdByUser": { "type": "boolean" },
+                "retentionMs": { "type": "number", "minimum": 0 },
+                "deadLetterQueue": { "type": "string" },
+                "maxLength": { "type": "number", "minimum": 1 },
+                "frozen": { "type": "boolean" },
+                "baseQueuePath": { "type": "string" },
+                "msmqQueuePrefix": { "type": "string" },
+                "exchangeName": { "type": "string" },
+                "topicPrefix": { "type": "string" }
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

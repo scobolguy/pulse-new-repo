@@ -3,6 +3,7 @@ import os from 'os';
 import fetch from 'node-fetch';
 import path from 'path';
 import QueueManager from './src/broker/QueueManager.mjs';
+import { readEnvBoolean, readEnvString } from './src/env-config.mjs';
 
 function getArg(name, fallback) {
   const prefix = `--${name}=`;
@@ -31,9 +32,9 @@ const nodeId = getArg('node-id', os.hostname());
 const managerId = getArg('manager-id', `${nodeId}-qm-${port}`);
 const managerName = getArg('name', managerId);
 const heartbeatMs = Number(getArg('heartbeat-ms', '5000'));
-const queuePersistenceEnabled = String(process.env.PULSE_QUEUE_PERSISTENCE || '0').trim() === '1';
+const queuePersistenceEnabled = readEnvBoolean('PULSE_QUEUE_PERSISTENCE', ['1'], false);
 const persistPath = queuePersistenceEnabled
-  ? String(process.env.PULSE_QUEUE_DATA_ROOT || 'C:\\pulse-new-repo-data\\queue-data').trim() || 'C:\\pulse-new-repo-data\\queue-data'
+  ? readEnvString('PULSE_QUEUE_DATA_ROOT', 'C:\\pulse-new-repo-data\\queue-data')
   : null;
 
 const app = express();

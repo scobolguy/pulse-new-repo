@@ -140,6 +140,7 @@ export default class QueueManager {
           name: queueName,
           createdAt: Date.now(),
           frozen: false,
+          queueClass: 'permanent',
           ...(config || {})
         };
       }
@@ -155,7 +156,7 @@ export default class QueueManager {
 
     if (type === 'updateQueueConfig') {
       this.queueConfig[queueName] = {
-        ...(this.queueConfig[queueName] || { name: queueName, createdAt: Date.now(), frozen: false }),
+        ...(this.queueConfig[queueName] || { name: queueName, createdAt: Date.now(), frozen: false, queueClass: 'permanent' }),
         ...(config || {})
       };
       if (!this.queues[queueName]) this.queues[queueName] = { messages: [] };
@@ -199,6 +200,7 @@ export default class QueueManager {
       name: queueName, 
       createdAt: Date.now(), 
       frozen: false,
+      queueClass: 'permanent',
       ...queueConfig 
     };
     this.queues[queueName] = { messages: [] };

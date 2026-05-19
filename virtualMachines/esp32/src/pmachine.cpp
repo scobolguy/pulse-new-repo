@@ -165,6 +165,8 @@ namespace {
         return srcValue;
     }
 
+    std::map<std::string, std::string> gFlowState;
+
     // MT103 FIN text detection and parsing
 
     bool isMT103FinText(const std::string& text) {
@@ -336,6 +338,52 @@ namespace {
 
         if (whenUpper.find("OUTPUT := 1") != std::string::npos) return true;
         if (whenUpper.find("OUTPUT := 0") != std::string::npos) return false;
+
+        const auto evaluateFieldRule = [&](const char* prefix, bool contains) -> int {
+            const std::string upperPrefix(prefix);
+            if (whenUpper.rfind(upperPrefix, 0) != 0) return -1;
+            const size_t open = whenRule.find('(');
+            const size_t close = whenRule.rfind(')');
+            if (open == std::string::npos || close == std::string::npos || close <= open) return 0;
+
+            const std::string args = whenRule.substr(open + 1, close - open - 1);
+            const int comma = findTopLevelComma(args);
+            if (comma < 0) return 0;
+
+            std::string field = unquote(args.substr(0, static_cast<size_t>(comma)));
+            std::string expected = unquote(args.substr(static_cast<size_t>(comma) + 1));
+            field = trimCopy(field);
+            expected = trimCopy(expected);
+            if (field.empty()) return 0;
+
+            std::string actual;
+            const std::string statePrefix = "state.";
+            if (field.rfind(statePrefix, 0) == 0) {
+                const std::string stateKey = field.substr(statePrefix.size());
+                auto it = gFlowState.find(stateKey);
+                if (it != gFlowState.end()) actual = it->second;
+            } else {
+                JsonDocument parsed;
+                DeserializationError err = deserializeJson(parsed, message.c_str());
+                if (!err) {
+                    actual = getJsonPathValueAsString(parsed.as<JsonVariantConst>(), field);
+                    if (actual.empty() && field.rfind("message.", 0) == 0) {
+                        actual = getJsonPathValueAsString(parsed.as<JsonVariantConst>(), field.substr(8));
+                    }
+                }
+            }
+
+            if (contains) {
+                return toUpperCopy(actual).find(toUpperCopy(expected)) != std::string::npos ? 1 : 0;
+            }
+            return actual == expected ? 1 : 0;
+        };
+
+        int fieldEquals = evaluateFieldRule("FIELD_EQUALS(", false);
+        if (fieldEquals >= 0) return fieldEquals == 1;
+
+        int fieldContains = evaluateFieldRule("FIELD_CONTAINS(", true);
+        if (fieldContains >= 0) return fieldContains == 1;
 
         if (whenUpper.find("MT103") != std::string::npos) {
             return msgUpper.rfind("MT103", 0) == 0;
@@ -579,7 +627,8 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
             instr.strOperand = enumValue;
             instr.type = pmachine::OperandType::INT;
         } else if (opcode == pmachine::OP_ROUTE_MATCH_QUEUE || opcode == pmachine::OP_ROUTE_EVAL_WHEN ||
-                   opcode == pmachine::OP_ROUTE_TRANSFORM || opcode == pmachine::OP_ROUTE_EMIT) {
+                   opcode == pmachine::OP_ROUTE_TRANSFORM || opcode == pmachine::OP_ROUTE_EMIT ||
+                   opcode == pmachine::OP_ROUTE_SET_STATE) {
             std::string rest2;
             std::getline(lss, rest2);
             size_t q1 = rest2.find('"');
@@ -622,6 +671,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
     int sp = 0;
     int bp = 0;
     int pc = 0;
+    gFlowState.clear();
     PMTRACE(Serial.println("[DEBUG] Executing pinstructions:"));
     while (pc < (int)instructions.size()) {
         const auto& instr = instructions[pc];
@@ -707,6 +757,19 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             d.queueName = instr.strOperand;
             d.message = currentMessage;
             routingDeliveries.push_back(d);
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_ROUTE_SET_STATE) {
+            const std::string payload = instr.strOperand;
+            const size_t eq = payload.find('=');
+            if (eq != std::string::npos) {
+                std::string key = trimCopy(payload.substr(0, eq));
+                std::string value = trimCopy(payload.substr(eq + 1));
+                if (!key.empty()) {
+                    gFlowState[key] = value;
+                }
+            }
             ++pc;
             continue;
         }

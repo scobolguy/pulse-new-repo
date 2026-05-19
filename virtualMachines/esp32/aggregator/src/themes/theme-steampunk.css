@@ -1,0 +1,199 @@
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700;800&family=Special+Elite&display=swap');
+
+.window-style-steampunk.app-shell {
+  --control-line: #6e5238;
+  --control-line-strong: #a67c52;
+  background:
+    radial-gradient(circle at 84% 14%, rgba(255, 207, 128, 0.2), rgba(255, 207, 128, 0) 30%),
+    radial-gradient(circle at 16% 88%, rgba(180, 126, 74, 0.2), rgba(180, 126, 74, 0) 35%),
+    linear-gradient(165deg, #241a14 0%, #2d2018 48%, #1e1510 100%);
+  color: #efe0cf;
+  font-family: 'Special Elite', 'Georgia', serif;
+}
+
+.window-style-steampunk .lhs-sidebar,
+.window-style-steampunk .rhs-sidebar,
+.window-style-steampunk .top-strip,
+.window-style-steampunk .workspace-pane,
+.window-style-steampunk .rhs-section {
+  border-radius: 14px;
+}
+
+.window-style-steampunk .lhs-sidebar,
+.window-style-steampunk .rhs-sidebar {
+  background:
+    linear-gradient(180deg, rgba(53, 37, 27, 0.95), rgba(39, 28, 21, 0.95));
+  border-color: rgba(172, 125, 78, 0.5);
+  box-shadow: inset 0 1px 0 rgba(255, 226, 191, 0.08), 0 12px 24px rgba(0, 0, 0, 0.4);
+}
+
+.window-style-steampunk .brand {
+  color: #d6b086;
+  border-bottom-color: rgba(176, 130, 84, 0.5);
+  font-family: 'Cinzel', serif;
+  letter-spacing: 0.06em;
+  font-size: 14px;
+}
+
+.window-style-steampunk .section-title,
+.window-style-steampunk .rhs-section h3,
+.window-style-steampunk .status-card h2 {
+  color: #c49b71;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-family: 'Cinzel', serif;
+}
+
+.window-style-steampunk .area-nav-item {
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: #d8b792;
+  background: rgba(90, 64, 43, 0.35);
+}
+
+.window-style-steampunk .area-nav-item:hover {
+  background: rgba(116, 82, 53, 0.5);
+  border-color: rgba(184, 136, 89, 0.45);
+}
+
+.window-style-steampunk .area-nav-item.is-active {
+  background: linear-gradient(145deg, rgba(154, 108, 62, 0.72), rgba(114, 78, 47, 0.72));
+  border-color: rgba(220, 173, 117, 0.62);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.25);
+  color: #fff0dc;
+}
+
+.window-style-steampunk .admin-subtasks {
+  border-left-color: rgba(164, 121, 77, 0.45);
+}
+
+.window-style-steampunk .admin-subtask-item {
+  color: #d5b590;
+}
+
+.window-style-steampunk .admin-subtask-item:hover {
+  background: rgba(118, 84, 55, 0.48);
+  border-color: rgba(176, 129, 82, 0.48);
+}
+
+.window-style-steampunk .admin-subtask-item.is-active {
+  background: rgba(164, 117, 70, 0.62);
+  border-color: rgba(219, 171, 114, 0.64);
+  color: #fff0da;
+}
+
+.window-style-steampunk .top-strip {
+  background: linear-gradient(180deg, rgba(58, 41, 30, 0.96), rgba(45, 33, 25, 0.95));
+  border: 1px solid rgba(176, 130, 84, 0.62);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.42);
+}
+
+.window-style-steampunk .title-block h1,
+.window-style-steampunk .gothic-title {
+  color: #f1d6b6;
+  font-family: 'Cinzel', serif;
+  letter-spacing: 0.04em;
+  text-shadow: 0 0 12px rgba(255, 186, 104, 0.18);
+}
+
+.window-style-steampunk .title-block p,
+.window-style-steampunk .rhs-meta-row,
+.window-style-steampunk .rhs-list,
+.window-style-steampunk .gothic-hint,
+.window-style-steampunk .gothic-queue-name,
+.window-style-steampunk .gothic-queue-secondary,
+.window-style-steampunk .actor-profiles {
+  color: #d7b792;
+}
+
+.window-style-steampunk .actor-controls label {
+  color: #d5b28b;
+}
+
+.window-style-steampunk .actor-controls input,
+.window-style-steampunk .actor-controls select,
+.window-style-steampunk .gothic-input,
+.window-style-steampunk .gothic-select {
+  background: rgba(34, 24, 18, 0.95);
+  border: 1px solid rgba(166, 121, 76, 0.62);
+  color: #f3dec3;
+  border-radius: 8px;
+}
+
+.window-style-steampunk .workspace-pane,
+.window-style-steampunk .gothic-screen,
+.window-style-steampunk .gothic-panel,
+.window-style-steampunk .rhs-section,
+.window-style-steampunk .status-card,
+.window-style-steampunk .gothic-queue-card,
+.window-style-steampunk .gateway-portrait-card {
+  background: linear-gradient(180deg, rgba(52, 37, 27, 0.96), rgba(39, 28, 21, 0.95));
+  border: 1px solid rgba(170, 124, 77, 0.55);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.42);
+}
+
+.window-style-steampunk .workspace-pane,
+.window-style-steampunk .gothic-screen,
+.window-style-steampunk .gothic-panel,
+.window-style-steampunk .status-card,
+.window-style-steampunk .gothic-queue-card,
+.window-style-steampunk .gateway-portrait-card {
+  border-radius: 14px;
+}
+
+.window-style-steampunk .rhs-meta-row strong,
+.window-style-steampunk .gothic-queue-value,
+.window-style-steampunk .status-card p {
+  color: #ffe7cc;
+}
+
+.window-style-steampunk .gothic-status-pill.running {
+  background: rgba(54, 95, 62, 0.55);
+  border-color: rgba(124, 185, 137, 0.58);
+  color: #d9ffe1;
+}
+
+.window-style-steampunk .gothic-status-pill.stopped {
+  background: rgba(113, 46, 45, 0.56);
+  border-color: rgba(201, 110, 109, 0.58);
+  color: #ffd0cf;
+}
+
+.window-style-steampunk .gothic-button,
+.window-style-steampunk .sidebar-toggle,
+.window-style-steampunk .rhs-chip,
+.window-style-steampunk .task-context-action:hover,
+.window-style-steampunk .task-context-action.is-active {
+  border: 1px solid rgba(168, 122, 76, 0.62);
+  background: linear-gradient(180deg, rgba(123, 84, 50, 0.9), rgba(91, 63, 39, 0.9));
+  color: #ffe6c6;
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.28);
+}
+
+.window-style-steampunk .gothic-button:hover,
+.window-style-steampunk .sidebar-toggle:hover {
+  background: linear-gradient(180deg, rgba(155, 107, 64, 0.92), rgba(114, 79, 48, 0.92));
+}
+
+.window-style-steampunk .pane-divider {
+  background: linear-gradient(180deg, rgba(48, 35, 26, 0.98), rgba(37, 27, 20, 0.98));
+  border-left: 1px solid rgba(149, 108, 67, 0.42);
+  border-right: 1px solid rgba(149, 108, 67, 0.35);
+}
+
+.window-style-steampunk .pane-divider::after {
+  background: rgba(194, 145, 91, 0.72);
+  box-shadow: 0 0 10px rgba(194, 145, 91, 0.32);
+}
+
+.window-style-steampunk .pane-divider:hover,
+.window-style-steampunk .pane-divider.is-active,
+.window-style-steampunk .pane-divider:focus-visible {
+  background: linear-gradient(180deg, rgba(63, 45, 33, 0.98), rgba(50, 36, 27, 0.98));
+}
+
+.window-style-steampunk .area-empty {
+  border: 1px dashed rgba(168, 122, 76, 0.6);
+  background: rgba(45, 32, 24, 0.72);
+  color: #dabd99;
+}

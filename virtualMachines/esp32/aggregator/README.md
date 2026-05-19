@@ -34,6 +34,77 @@ Frontend:
 npm run dev
 ```
 
+Quick distributed setup files:
+- Shared broker env template: [.env.shared-broker.example](.env.shared-broker.example)
+- MacBook processing env template: [.env.macbook-processing.example](.env.macbook-processing.example)
+- End-to-end MacBook node guide: [docs/macbook-processing-node.md](docs/macbook-processing-node.md)
+- MacBook worker-only env template: [.env.macbook-worker-only.example](.env.macbook-worker-only.example)
+- MacBook worker-only guide: [docs/macbook-worker-only.md](docs/macbook-worker-only.md)
+
+## HAProxy Failover (Low-Fuss)
+
+This project now supports a low-fuss failover setup with HAProxy and no backend code rewrites.
+
+### 1) Configure HAProxy backends
+
+Edit [deploy/haproxy/haproxy.cfg](deploy/haproxy/haproxy.cfg) and set your real backend host IPs:
+
+```text
+server backend_a 192.168.2.101:4000 check
+server backend_b 192.168.2.102:4000 check
+```
+
+Health check uses `GET /status` on each backend.
+
+### 2) Run HAProxy (Docker)
+
+From the `aggregator` folder:
+
+```powershell
+$cfg = (Resolve-Path .\deploy\haproxy\haproxy.cfg).Path
+docker run --rm --name pulse-haproxy -p 4100:4100 -v "${cfg}:/usr/local/etc/haproxy/haproxy.cfg:ro" haproxy:2.9
+```
+
+### 3) Point frontend dev proxy to HAProxy
+
+Copy `.env.failover.example` to `.env.local` and use:
+
+```text
+VITE_API_PROXY_TARGET=http://localhost:4100
+```
+
+Then restart `npm run dev`.
+
+Result:
+- Frontend calls HAProxy on port `4100`
+- HAProxy routes to healthy backend(s)
+- If one backend fails, traffic fails over to the other
+
+### 4) Remove HAProxy as a single point of failure
+
+Run a second HAProxy instance on another machine with the same backend list.
+
+Example:
+- Gateway A: `http://192.168.2.101:4100`
+- Gateway B: `http://192.168.2.102:4100`
+
+Then set browser-side gateway failover in `.env.local`:
+
+```text
+VITE_API_BASES=http://192.168.2.101:4100,http://192.168.2.102:4100
+```
+
+Behavior:
+- For `/api`, `/status`, and `/services`, the browser tries one gateway first.
+- On network error or 5xx response, it retries the next gateway.
+- This gives failover even if one HAProxy host is down.
+
+For local testing on one machine, keep using:
+
+```text
+VITE_API_PROXY_TARGET=http://localhost:4100
+```
+
 DSL compilers:
 
 ```powershell

@@ -1,20 +1,88 @@
 import React, { useEffect, useState } from 'react';
 
-export default function BrokerStatusCard() {
+function hasPermission(permissions, requiredPermission) {
+  if (!requiredPermission) return true;
+  if (!Array.isArray(permissions)) return false;
+  if (permissions.includes('*')) return true;
+  if (permissions.includes(requiredPermission)) return true;
+
+  const parts = String(requiredPermission).split('.');
+  if (parts.length > 1) {
+    const wildcard = `${parts[0]}.*`;
+    if (permissions.includes(wildcard)) return true;
+  }
+  return false;
+}
+
+export default function BrokerStatusCard({ permissions = [] }) {
   const [state, setState] = useState('');
   const [classStatus, setClassStatus] = useState('unknown');
   const [brokers, setBrokers] = useState({});
   const [newInstanceId, setNewInstanceId] = useState('');
+  const [brokerConfig, setBrokerConfig] = useState({ provider: 'legacy', rabbitmq: {} });
+  const [configDraft, setConfigDraft] = useState({
+    provider: 'legacy',
+    url: '',
+    exchangeName: '',
+    queuePrefix: '',
+    msmqBaseQueuePath: '',
+    msmqQueuePrefix: '',
+    kafkaBrokers: '',
+    kafkaClientId: '',
+    kafkaTopicPrefix: '',
+    ibmQueueManager: '',
+    ibmChannel: '',
+    ibmConnName: '',
+    ibmQueuePrefix: '',
+    ibmUsername: '',
+    ibmPassword: '',
+    apacheHost: '',
+    apachePort: '',
+    apacheTopicPrefix: '',
+    apacheUsername: '',
+    apachePassword: ''
+  });
   const [loading, setLoading] = useState(false);
+  const [configLoading, setConfigLoading] = useState(false);
   const [error, setError] = useState('');
+
+  const canConfigure = hasPermission(permissions, 'broker.configure');
 
   async function fetchState() {
     try {
-      const res = await fetch('/api/broker/state');
-      const data = await res.json();
+      const [stateRes, configRes] = await Promise.all([
+        fetch('/api/broker/state'),
+        fetch('/api/broker/config')
+      ]);
+      const data = await stateRes.json();
+      const configData = await configRes.json().catch(() => ({}));
       setState(data.state);
       setClassStatus(data.classStatus || 'unknown');
       setBrokers(data.brokers || {});
+      const broker = configData.broker || {};
+      setBrokerConfig(broker);
+      setConfigDraft(current => ({
+        provider: broker.provider || current.provider || 'legacy',
+        url: broker.rabbitmq?.url || current.url || '',
+        exchangeName: broker.rabbitmq?.exchangeName || current.exchangeName || '',
+        queuePrefix: broker.rabbitmq?.queuePrefix || current.queuePrefix || '',
+        msmqBaseQueuePath: broker.msmq?.baseQueuePath || current.msmqBaseQueuePath || '',
+        msmqQueuePrefix: broker.msmq?.queuePrefix || current.msmqQueuePrefix || '',
+        kafkaBrokers: broker.kafka?.brokers || current.kafkaBrokers || '',
+        kafkaClientId: broker.kafka?.clientId || current.kafkaClientId || '',
+        kafkaTopicPrefix: broker.kafka?.topicPrefix || current.kafkaTopicPrefix || '',
+        ibmQueueManager: broker.ibm?.queueManager || current.ibmQueueManager || '',
+        ibmChannel: broker.ibm?.channel || current.ibmChannel || '',
+        ibmConnName: broker.ibm?.connName || current.ibmConnName || '',
+        ibmQueuePrefix: broker.ibm?.queuePrefix || current.ibmQueuePrefix || '',
+        ibmUsername: broker.ibm?.username || current.ibmUsername || '',
+        ibmPassword: '',
+        apacheHost: broker.apache?.host || current.apacheHost || '',
+        apachePort: String(broker.apache?.port || current.apachePort || ''),
+        apacheTopicPrefix: broker.apache?.topicPrefix || current.apacheTopicPrefix || '',
+        apacheUsername: broker.apache?.username || current.apacheUsername || '',
+        apachePassword: ''
+      }));
       setError('');
     } catch (e) {
       setError('Error fetching broker state');
@@ -41,6 +109,53 @@ export default function BrokerStatusCard() {
       setError(e.message || 'Action failed');
     }
     setLoading(false);
+  }
+
+  async function saveBrokerConfig() {
+    if (!canConfigure) {
+      setError('Permission denied: broker.configure is required.');
+      return;
+    }
+
+    setConfigLoading(true);
+    setError('');
+    try {
+      const payload = {
+        provider: configDraft.provider,
+        url: configDraft.url,
+        exchangeName: configDraft.exchangeName,
+        queuePrefix: configDraft.queuePrefix,
+        msmqBaseQueuePath: configDraft.msmqBaseQueuePath,
+        msmqQueuePrefix: configDraft.msmqQueuePrefix,
+        kafkaBrokers: configDraft.kafkaBrokers,
+        kafkaClientId: configDraft.kafkaClientId,
+        kafkaTopicPrefix: configDraft.kafkaTopicPrefix,
+        ibmQueueManager: configDraft.ibmQueueManager,
+        ibmChannel: configDraft.ibmChannel,
+        ibmConnName: configDraft.ibmConnName,
+        ibmQueuePrefix: configDraft.ibmQueuePrefix,
+        ibmUsername: configDraft.ibmUsername,
+        ibmPassword: configDraft.ibmPassword,
+        apacheHost: configDraft.apacheHost,
+        apachePort: Number(configDraft.apachePort || 0),
+        apacheTopicPrefix: configDraft.apacheTopicPrefix,
+        apacheUsername: configDraft.apacheUsername,
+        apachePassword: configDraft.apachePassword
+      };
+      const res = await fetch('/api/broker/config', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || 'Config update failed');
+      }
+      await fetchState();
+    } catch (e) {
+      setError(e.message || 'Config update failed');
+    }
+    setConfigLoading(false);
   }
 
   function renderInstanceStatus(instanceId, instance) {
@@ -77,6 +192,167 @@ export default function BrokerStatusCard() {
       <div style={{ fontSize: 12, color: '#333', marginBottom: 4, textAlign: 'center' }}>( {state || 'unknown'} )</div>
       <div style={{ fontSize: 12, color: classStatus === 'down' ? '#a32020' : '#1d6b2a', fontWeight: 600 }}>Class: {classStatus}</div>
       {error && <div style={{ color: 'red', fontSize: 11 }}>{error}</div>}
+      <div style={{ width: '100%', border: '1px solid #b8d4f3', background: '#f7fbff', borderRadius: 4, padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#0f4c81' }}>Broker Provider</div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <select
+            value={configDraft.provider}
+            onChange={e => setConfigDraft(draft => ({ ...draft, provider: e.target.value }))}
+            disabled={configLoading || !canConfigure}
+            style={{ fontSize: 11, flex: '1 1 120px' }}
+          >
+            <option value="legacy">legacy</option>
+            <option value="memory">memory</option>
+            <option value="rabbitmq">rabbitmq</option>
+            <option value="msmq">msmq</option>
+            <option value="kafka">kafka</option>
+            <option value="ibm">ibm</option>
+            <option value="apache">apache</option>
+          </select>
+          <button disabled={configLoading || !canConfigure} style={{ fontSize: 11 }} onClick={saveBrokerConfig}>
+            {configLoading ? 'Saving...' : 'Apply'}
+          </button>
+        </div>
+        <input
+          value={configDraft.url}
+          onChange={e => setConfigDraft(draft => ({ ...draft, url: e.target.value }))}
+          placeholder="RabbitMQ URL"
+          disabled={configLoading || !canConfigure || configDraft.provider !== 'rabbitmq'}
+          style={{ fontSize: 11 }}
+        />
+        <input
+          value={configDraft.exchangeName}
+          onChange={e => setConfigDraft(draft => ({ ...draft, exchangeName: e.target.value }))}
+          placeholder="Exchange name"
+          disabled={configLoading || !canConfigure || configDraft.provider !== 'rabbitmq'}
+          style={{ fontSize: 11 }}
+        />
+        <input
+          value={configDraft.queuePrefix}
+          onChange={e => setConfigDraft(draft => ({ ...draft, queuePrefix: e.target.value }))}
+          placeholder="Queue prefix"
+          disabled={configLoading || !canConfigure || configDraft.provider !== 'rabbitmq'}
+          style={{ fontSize: 11 }}
+        />
+        <input
+          value={configDraft.msmqBaseQueuePath}
+          onChange={e => setConfigDraft(draft => ({ ...draft, msmqBaseQueuePath: e.target.value }))}
+          placeholder="MSMQ base queue path"
+          disabled={configLoading || !canConfigure || configDraft.provider !== 'msmq'}
+          style={{ fontSize: 11 }}
+        />
+        <input
+          value={configDraft.msmqQueuePrefix}
+          onChange={e => setConfigDraft(draft => ({ ...draft, msmqQueuePrefix: e.target.value }))}
+          placeholder="MSMQ queue prefix"
+          disabled={configLoading || !canConfigure || configDraft.provider !== 'msmq'}
+          style={{ fontSize: 11 }}
+        />
+        <input
+          value={configDraft.kafkaBrokers}
+          onChange={e => setConfigDraft(draft => ({ ...draft, kafkaBrokers: e.target.value }))}
+          placeholder="Kafka brokers (comma-separated)"
+          disabled={configLoading || !canConfigure || configDraft.provider !== 'kafka'}
+          style={{ fontSize: 11 }}
+        />
+        <input
+          value={configDraft.kafkaClientId}
+          onChange={e => setConfigDraft(draft => ({ ...draft, kafkaClientId: e.target.value }))}
+          placeholder="Kafka client id"
+          disabled={configLoading || !canConfigure || configDraft.provider !== 'kafka'}
+          style={{ fontSize: 11 }}
+        />
+        <input
+          value={configDraft.kafkaTopicPrefix}
+          onChange={e => setConfigDraft(draft => ({ ...draft, kafkaTopicPrefix: e.target.value }))}
+          placeholder="Kafka topic prefix"
+          disabled={configLoading || !canConfigure || configDraft.provider !== 'kafka'}
+          style={{ fontSize: 11 }}
+        />
+        <input
+          value={configDraft.ibmQueueManager}
+          onChange={e => setConfigDraft(draft => ({ ...draft, ibmQueueManager: e.target.value }))}
+          placeholder="IBM queue manager"
+          disabled={configLoading || !canConfigure || configDraft.provider !== 'ibm'}
+          style={{ fontSize: 11 }}
+        />
+        <input
+          value={configDraft.ibmChannel}
+          onChange={e => setConfigDraft(draft => ({ ...draft, ibmChannel: e.target.value }))}
+          placeholder="IBM channel"
+          disabled={configLoading || !canConfigure || configDraft.provider !== 'ibm'}
+          style={{ fontSize: 11 }}
+        />
+        <input
+          value={configDraft.ibmConnName}
+          onChange={e => setConfigDraft(draft => ({ ...draft, ibmConnName: e.target.value }))}
+          placeholder="IBM connection name"
+          disabled={configLoading || !canConfigure || configDraft.provider !== 'ibm'}
+          style={{ fontSize: 11 }}
+        />
+        <input
+          value={configDraft.ibmQueuePrefix}
+          onChange={e => setConfigDraft(draft => ({ ...draft, ibmQueuePrefix: e.target.value }))}
+          placeholder="IBM queue prefix"
+          disabled={configLoading || !canConfigure || configDraft.provider !== 'ibm'}
+          style={{ fontSize: 11 }}
+        />
+        <input
+          value={configDraft.ibmUsername}
+          onChange={e => setConfigDraft(draft => ({ ...draft, ibmUsername: e.target.value }))}
+          placeholder="IBM username"
+          disabled={configLoading || !canConfigure || configDraft.provider !== 'ibm'}
+          style={{ fontSize: 11 }}
+        />
+        <input
+          value={configDraft.ibmPassword}
+          onChange={e => setConfigDraft(draft => ({ ...draft, ibmPassword: e.target.value }))}
+          placeholder="IBM password"
+          type="password"
+          disabled={configLoading || !canConfigure || configDraft.provider !== 'ibm'}
+          style={{ fontSize: 11 }}
+        />
+        <input
+          value={configDraft.apacheHost}
+          onChange={e => setConfigDraft(draft => ({ ...draft, apacheHost: e.target.value }))}
+          placeholder="Apache broker host"
+          disabled={configLoading || !canConfigure || configDraft.provider !== 'apache'}
+          style={{ fontSize: 11 }}
+        />
+        <input
+          value={configDraft.apachePort}
+          onChange={e => setConfigDraft(draft => ({ ...draft, apachePort: e.target.value }))}
+          placeholder="Apache broker port"
+          disabled={configLoading || !canConfigure || configDraft.provider !== 'apache'}
+          style={{ fontSize: 11 }}
+        />
+        <input
+          value={configDraft.apacheTopicPrefix}
+          onChange={e => setConfigDraft(draft => ({ ...draft, apacheTopicPrefix: e.target.value }))}
+          placeholder="Apache topic prefix"
+          disabled={configLoading || !canConfigure || configDraft.provider !== 'apache'}
+          style={{ fontSize: 11 }}
+        />
+        <input
+          value={configDraft.apacheUsername}
+          onChange={e => setConfigDraft(draft => ({ ...draft, apacheUsername: e.target.value }))}
+          placeholder="Apache username"
+          disabled={configLoading || !canConfigure || configDraft.provider !== 'apache'}
+          style={{ fontSize: 11 }}
+        />
+        <input
+          value={configDraft.apachePassword}
+          onChange={e => setConfigDraft(draft => ({ ...draft, apachePassword: e.target.value }))}
+          placeholder="Apache password"
+          type="password"
+          disabled={configLoading || !canConfigure || configDraft.provider !== 'apache'}
+          style={{ fontSize: 11 }}
+        />
+        <div style={{ fontSize: 11, color: '#4a4a4a' }}>
+          Active: {brokerConfig.provider || 'unknown'} {brokerConfig.secondaryRunning ? '(secondary running)' : ''}
+        </div>
+        {!canConfigure && <div style={{ fontSize: 11, color: '#a32020' }}>Read-only: broker.configure required to change provider.</div>}
+      </div>
       <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
         <button disabled={loading} style={{ fontSize: 11 }} onClick={() => sendAction('/api/broker/class/up')}>Class Up</button>
         <button disabled={loading} style={{ fontSize: 11 }} onClick={() => sendAction('/api/broker/class/down')}>Class Down</button>

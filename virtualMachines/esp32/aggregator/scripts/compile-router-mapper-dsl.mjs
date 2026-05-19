@@ -1,4 +1,5 @@
 import fs from 'fs/promises';
+import { readFileSync as fsReadSync } from 'fs';
 import path from 'path';
 import { pathToFileURL } from 'url';
 import { Tokenizer as PL0Tokenizer, Parser as PL0Parser } from './pl0-interpreter.mjs';
@@ -240,7 +241,6 @@ class DSLTokenizer {
       this.advance();
     }
     throw new Error(`Unterminated Pascal comment at ${line}:${col}`);
-    }
   }
 
   isLetter(ch) {
@@ -560,6 +560,155 @@ function validatePL0Snippet(snippet, location) {
   }
 }
 
+function extractMapIdsFromSnippet(snippet) {
+  const text = String(snippet || '');
+  const ids = [];
+  const re = /\bmap\s*\(\s*(["'])([^"']+)\1\s*,/gi;
+  let match = re.exec(text);
+  while (match) {
+    ids.push(String(match[2] || '').trim());
+    match = re.exec(text);
+  }
+  return ids.filter(Boolean);
+}
+
+function loadDataTypeIds(dataTypesPath) {
+  if (!dataTypesPath) return new Set();
+  try {
+    const raw = JSON.parse(requireFsRead(dataTypesPath));
+    const arr = Array.isArray(raw) ? raw : [];
+    return new Set(
+      arr
+        .map(item => String(item?.id || '').trim())
+        .filter(Boolean)
+    );
+  } catch (error) {
+    throw new Error(`Failed to load data types from ${dataTypesPath}: ${error.message}`);
+  }
+}
+
+function loadWorkerPriorityQueues(workerConfigPath) {
+  if (!workerConfigPath) return [];
+  try {
+    const raw = JSON.parse(requireFsRead(workerConfigPath));
+    const queues = raw?.workers?.router?.priorityQueues;
+    if (!Array.isArray(queues)) return [];
+    return queues
+      .map(q => String(q || '').trim())
+      .filter(Boolean);
+  } catch (error) {
+    throw new Error(`Failed to load worker config from ${workerConfigPath}: ${error.message}`);
+  }
+}
+
+function loadMappingIds(mappingRegistryPath) {
+  if (!mappingRegistryPath) return new Set();
+  try {
+    const raw = JSON.parse(requireFsRead(mappingRegistryPath));
+    const arr = Array.isArray(raw) ? raw : [];
+    return new Set(
+      arr
+        .map(item => String(item?.id || '').trim())
+        .filter(Boolean)
+    );
+  } catch (error) {
+    throw new Error(`Failed to load mapping registry from ${mappingRegistryPath}: ${error.message}`);
+  }
+}
+
+function requireFsRead(filePath) {
+  try {
+    return fsReadSync(filePath, 'utf-8');
+  } catch (error) {
+    throw new Error(`Unable to read file ${filePath}: ${error.message}`);
+  }
+}
+
+function assertNoDuplicateIds(ast) {
+  const routerIds = new Set();
+  for (const router of ast.routers || []) {
+    const id = String(router?.id || '').trim();
+    if (!id) continue;
+    if (routerIds.has(id)) {
+      throw new Error(`Duplicate ROUTER id: ${id}`);
+    }
+    routerIds.add(id);
+  }
+
+  const mapperIds = new Set();
+  for (const mapper of ast.mappers || []) {
+    const id = String(mapper?.id || '').trim();
+    if (!id) continue;
+    if (mapperIds.has(id)) {
+      throw new Error(`Duplicate MAPPER id: ${id}`);
+    }
+    mapperIds.add(id);
+  }
+}
+
+function assertMapReferencesExist(ast, knownMapIds = new Set()) {
+  const mapperIds = new Set([
+    ...Array.from(knownMapIds || []),
+    ...(ast.mappers || []).map(m => String(m?.id || '').trim()).filter(Boolean)
+  ]);
+  for (const router of ast.routers || []) {
+    for (const out of router.outputs || []) {
+      const referenced = extractMapIdsFromSnippet(out.transformRule);
+      for (const refId of referenced) {
+        if (!mapperIds.has(refId)) {
+          throw new Error(`ROUTER ${router.id} OUTPUT ${out.queueName} TRANSFORM references unknown MAPPER id: ${refId}`);
+        }
+      }
+    }
+  }
+}
+
+function assertDataTypesExist(ast, knownTypeIds) {
+  if (!knownTypeIds || knownTypeIds.size === 0) return;
+
+  for (const mapper of ast.mappers || []) {
+    const sourceTypeId = String(mapper?.sourceTypeId || '').trim();
+    const targetTypeId = String(mapper?.targetTypeId || '').trim();
+    if (sourceTypeId && !knownTypeIds.has(sourceTypeId)) {
+      throw new Error(`MAPPER ${mapper.id} references unknown SOURCE type: ${sourceTypeId}`);
+    }
+    if (targetTypeId && !knownTypeIds.has(targetTypeId)) {
+      throw new Error(`MAPPER ${mapper.id} references unknown TARGET type: ${targetTypeId}`);
+    }
+  }
+
+  for (const router of ast.routers || []) {
+    for (const out of router.outputs || []) {
+      const declared = Array.isArray(out?.dataTypeIds) && out.dataTypeIds.length > 0
+        ? out.dataTypeIds
+        : (out?.dataTypeId ? [out.dataTypeId] : []);
+      for (const typeId of declared) {
+        const id = String(typeId || '').trim();
+        if (id && !knownTypeIds.has(id)) {
+          throw new Error(`ROUTER ${router.id} OUTPUT ${out.queueName} references unknown TYPE: ${id}`);
+        }
+      }
+    }
+  }
+}
+
+function assertWorkerQueueCoverage(routerRules, workerPriorityQueues) {
+  const queues = Array.isArray(workerPriorityQueues) ? workerPriorityQueues : [];
+  if (queues.length === 0) return;
+
+  const covered = new Set(
+    (routerRules || [])
+      .filter(rule => rule && rule.enabled !== false)
+      .map(rule => String(rule.inputQueue || '').trim())
+      .filter(Boolean)
+  );
+
+  const missing = queues.filter(q => !covered.has(q));
+  if (missing.length > 0) {
+    throw new Error(`Worker priority queue(s) missing enabled ROUTER INPUT rules: ${missing.join(', ')}`);
+  }
+}
+
 function toRouterRules(ast) {
   const now = new Date().toISOString();
   return ast.routers.map(router => {
@@ -622,7 +771,10 @@ function parseArgs(argv) {
     in: './data/router-mapper.dsl',
     routerOut: './data/router-rules.generated.json',
     mappingOut: './data/data-mappings.generated.json',
-    artifactOut: './data/router-mapper-compiled.json'
+    artifactOut: './data/router-mapper-compiled.json',
+    dataTypes: './data/data-types.json',
+    workerConfig: './data/worker-config.json',
+    mappingRegistry: './data/data-mappings.json'
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -631,17 +783,30 @@ function parseArgs(argv) {
     if (token === '--router-out') args.routerOut = argv[i + 1];
     if (token === '--mapping-out') args.mappingOut = argv[i + 1];
     if (token === '--artifact-out') args.artifactOut = argv[i + 1];
+    if (token === '--data-types') args.dataTypes = argv[i + 1];
+    if (token === '--worker-config') args.workerConfig = argv[i + 1];
+    if (token === '--mapping-registry') args.mappingRegistry = argv[i + 1];
   }
 
   return args;
 }
 
-export function compileRouterMapperDSL(sourceText) {
+export function compileRouterMapperDSL(sourceText, options = {}) {
   const tokenizer = new DSLTokenizer(sourceText);
   const parser = new DSLParser(tokenizer.tokens);
   const ast = parser.parseProgram();
+
+  assertNoDuplicateIds(ast);
+  assertMapReferencesExist(ast, options.knownMapIds || new Set());
+
+  const knownTypeIds = options.knownTypeIds || new Set();
+  assertDataTypesExist(ast, knownTypeIds);
+
   const routerRules = toRouterRules(ast);
   const dataMappings = toDataMappings(ast);
+
+  const workerPriorityQueues = Array.isArray(options.workerPriorityQueues) ? options.workerPriorityQueues : [];
+  assertWorkerQueueCoverage(routerRules, workerPriorityQueues);
 
   return {
     version: 1,
@@ -658,7 +823,18 @@ async function main() {
   const inputPath = path.resolve(args.in);
   const sourceText = await fs.readFile(inputPath, 'utf-8');
 
-  const compiled = compileRouterMapperDSL(sourceText);
+  const dataTypesPath = args.dataTypes ? path.resolve(args.dataTypes) : null;
+  const workerConfigPath = args.workerConfig ? path.resolve(args.workerConfig) : null;
+  const mappingRegistryPath = args.mappingRegistry ? path.resolve(args.mappingRegistry) : null;
+  const knownTypeIds = loadDataTypeIds(dataTypesPath);
+  const workerPriorityQueues = loadWorkerPriorityQueues(workerConfigPath);
+  const knownMapIds = loadMappingIds(mappingRegistryPath);
+
+  const compiled = compileRouterMapperDSL(sourceText, {
+    knownTypeIds,
+    knownMapIds,
+    workerPriorityQueues
+  });
 
   const routerOutPath = path.resolve(args.routerOut);
   const mappingOutPath = path.resolve(args.mappingOut);

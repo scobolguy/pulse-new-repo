@@ -1,0 +1,334 @@
+@import url('https://fonts.googleapis.com/css2?family=Marcellus&family=Source+Sans+3:wght@500;600&display=swap');
+
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+).app-shell {
+  --g7-radial-a: rgba(230, 160, 86, 0.18);
+  --g7-radial-b: rgba(119, 166, 146, 0.16);
+  --g7-radial-c: rgba(84, 121, 171, 0.14);
+  --g7-radial-d: rgba(171, 113, 77, 0.15);
+  --g7-bg-start: #26344a;
+  --g7-bg-mid: #1f2a3d;
+  --g7-bg-end: #182232;
+  --g7-title: #f0dfbd;
+  --g7-panel-border: rgba(197, 180, 145, 0.33);
+  --g7-panel-start: rgba(49, 66, 91, 0.95);
+  --g7-panel-end: rgba(34, 47, 67, 0.95);
+  --g7-chip-border: rgba(232, 185, 107, 0.72);
+  --g7-chip-start: rgba(184, 120, 66, 0.9);
+  --g7-chip-end: rgba(133, 88, 49, 0.9);
+  --g7-running-bg: rgba(64, 118, 87, 0.48);
+  --g7-running-border: rgba(136, 212, 171, 0.56);
+  --g7-stopped-bg: rgba(122, 63, 70, 0.48);
+  --g7-stopped-border: rgba(231, 144, 154, 0.56);
+}
+
+.window-style-group-of-seven-spring.app-shell {
+  --g7-radial-a: rgba(203, 162, 98, 0.18);
+  --g7-radial-b: rgba(137, 188, 153, 0.18);
+  --g7-radial-c: rgba(118, 158, 205, 0.16);
+  --g7-radial-d: rgba(169, 139, 96, 0.14);
+  --g7-bg-start: #2b3d52;
+  --g7-bg-mid: #243446;
+  --g7-bg-end: #1c2a39;
+}
+
+.window-style-group-of-seven-summer.app-shell {
+  --g7-radial-a: rgba(235, 186, 110, 0.2);
+  --g7-radial-b: rgba(106, 176, 169, 0.18);
+  --g7-radial-c: rgba(95, 147, 201, 0.16);
+  --g7-radial-d: rgba(167, 123, 82, 0.16);
+  --g7-bg-start: #29405a;
+  --g7-bg-mid: #21354c;
+  --g7-bg-end: #1a2a3d;
+}
+
+.window-style-group-of-seven-autumn.app-shell {
+  --g7-radial-a: rgba(224, 137, 73, 0.2);
+  --g7-radial-b: rgba(139, 155, 99, 0.17);
+  --g7-radial-c: rgba(104, 128, 173, 0.15);
+  --g7-radial-d: rgba(180, 103, 66, 0.18);
+  --g7-bg-start: #2d3548;
+  --g7-bg-mid: #252d3e;
+  --g7-bg-end: #1c2331;
+  --g7-chip-start: rgba(186, 105, 58, 0.9);
+  --g7-chip-end: rgba(129, 77, 45, 0.9);
+}
+
+.window-style-group-of-seven-winter.app-shell {
+  --g7-radial-a: rgba(168, 189, 215, 0.16);
+  --g7-radial-b: rgba(133, 166, 196, 0.16);
+  --g7-radial-c: rgba(158, 182, 220, 0.14);
+  --g7-radial-d: rgba(132, 144, 173, 0.14);
+  --g7-bg-start: #2c3749;
+  --g7-bg-mid: #243043;
+  --g7-bg-end: #1b2534;
+  --g7-title: #e7edf6;
+  --g7-chip-border: rgba(175, 196, 223, 0.72);
+  --g7-chip-start: rgba(97, 124, 160, 0.9);
+  --g7-chip-end: rgba(72, 95, 126, 0.9);
+  --g7-running-bg: rgba(77, 123, 113, 0.46);
+  --g7-running-border: rgba(149, 210, 200, 0.56);
+  --g7-stopped-bg: rgba(113, 94, 118, 0.46);
+  --g7-stopped-border: rgba(196, 171, 204, 0.56);
+}
+
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+).app-shell {
+  background:
+    radial-gradient(circle at 12% 14%, var(--g7-radial-a), rgba(230, 160, 86, 0) 30%),
+    radial-gradient(circle at 86% 18%, var(--g7-radial-b), rgba(119, 166, 146, 0) 32%),
+    radial-gradient(circle at 22% 82%, var(--g7-radial-c), rgba(84, 121, 171, 0) 34%),
+    radial-gradient(circle at 78% 76%, var(--g7-radial-d), rgba(171, 113, 77, 0) 30%),
+    repeating-linear-gradient(
+      12deg,
+      rgba(255, 255, 255, 0.02) 0,
+      rgba(255, 255, 255, 0.02) 14px,
+      rgba(0, 0, 0, 0.06) 14px,
+      rgba(0, 0, 0, 0.06) 28px
+    ),
+    linear-gradient(160deg, var(--g7-bg-start) 0%, var(--g7-bg-mid) 54%, var(--g7-bg-end) 100%);
+  color: #f2efe8;
+  font-family: 'Source Sans 3', 'Segoe UI', sans-serif;
+}
+
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .brand,
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .section-title,
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .rhs-section h3,
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .status-card h2,
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .title-block h1,
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .gothic-title {
+  font-family: 'Marcellus', Georgia, serif;
+  letter-spacing: 0.05em;
+  color: var(--g7-title);
+}
+
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .lhs-sidebar,
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .rhs-sidebar,
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .top-strip,
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .workspace-pane,
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .rhs-section,
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .status-card,
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .gothic-screen,
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .gothic-panel,
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .gateway-portrait-card {
+  border-radius: 14px;
+  border: 1px solid var(--g7-panel-border);
+  background:
+    linear-gradient(180deg, var(--g7-panel-start), var(--g7-panel-end));
+  box-shadow: 0 14px 26px rgba(0, 0, 0, 0.34);
+}
+
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .top-strip::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 16% 22%, color-mix(in srgb, var(--g7-radial-a) 78%, white), rgba(232, 175, 102, 0) 22%),
+    radial-gradient(circle at 48% 66%, color-mix(in srgb, var(--g7-radial-b) 74%, white), rgba(132, 175, 152, 0) 24%),
+    radial-gradient(circle at 82% 38%, color-mix(in srgb, var(--g7-radial-c) 72%, white), rgba(97, 143, 196, 0) 22%);
+}
+
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .area-nav-item {
+  border-color: rgba(206, 177, 126, 0.36);
+  background: linear-gradient(160deg, rgba(75, 99, 130, 0.56), rgba(57, 75, 103, 0.62));
+}
+
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .area-nav-item.is-active,
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .admin-subtask-item.is-active,
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .gothic-button,
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .rhs-chip,
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .sidebar-toggle,
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .task-context-action.is-active,
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .task-context-action:hover {
+  border-color: var(--g7-chip-border);
+  background: linear-gradient(180deg, var(--g7-chip-start), var(--g7-chip-end));
+  color: #fff4df;
+}
+
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .area-empty {
+  border: 1px dashed rgba(229, 190, 124, 0.64);
+  background: rgba(29, 40, 57, 0.74);
+}
+
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .gothic-status-pill.running {
+  background: var(--g7-running-bg);
+  border-color: var(--g7-running-border);
+}
+
+:is(
+  .window-style-group-of-seven,
+  .window-style-group-of-seven-spring,
+  .window-style-group-of-seven-summer,
+  .window-style-group-of-seven-autumn,
+  .window-style-group-of-seven-winter
+) .gothic-status-pill.stopped {
+  background: var(--g7-stopped-bg);
+  border-color: var(--g7-stopped-border);
+}

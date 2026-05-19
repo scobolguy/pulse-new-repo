@@ -1,0 +1,219 @@
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;800&family=Rajdhani:wght@500;700&display=swap');
+
+.window-style-eclipse.app-shell {
+  --control-line: #2d4768;
+  --control-line-strong: #4e77a9;
+  background:
+    radial-gradient(circle at 78% 10%, rgba(110, 202, 255, 0.17), rgba(110, 202, 255, 0) 30%),
+    radial-gradient(circle at 18% 85%, rgba(94, 126, 255, 0.16), rgba(94, 126, 255, 0) 34%),
+    linear-gradient(165deg, #080c14 0%, #0a1322 48%, #101b30 100%);
+  color: #d8e8ff;
+  font-family: 'Rajdhani', 'Segoe UI', sans-serif;
+}
+
+.window-style-eclipse .lhs-sidebar,
+.window-style-eclipse .rhs-sidebar,
+.window-style-eclipse .top-strip,
+.window-style-eclipse .workspace-pane,
+.window-style-eclipse .rhs-section {
+  border-radius: 14px;
+}
+
+.window-style-eclipse .lhs-sidebar,
+.window-style-eclipse .rhs-sidebar {
+  background: linear-gradient(180deg, #0d1626, #0b1321);
+  border-color: rgba(88, 130, 184, 0.42);
+  box-shadow: inset 0 1px 0 rgba(157, 201, 255, 0.08), 0 12px 22px rgba(3, 10, 22, 0.44);
+}
+
+.window-style-eclipse .brand {
+  color: #8fc4ff;
+  font-family: 'Orbitron', sans-serif;
+  letter-spacing: 0.06em;
+  font-size: 14px;
+  border-bottom-color: rgba(84, 130, 191, 0.45);
+}
+
+.window-style-eclipse .section-title {
+  color: #6d9ed3;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.window-style-eclipse .area-nav-item {
+  color: #a9c8ea;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: rgba(20, 35, 56, 0.45);
+}
+
+.window-style-eclipse .area-nav-item:hover {
+  background: rgba(26, 48, 76, 0.68);
+  border-color: rgba(92, 143, 206, 0.45);
+  color: #c7e2ff;
+}
+
+.window-style-eclipse .area-nav-item.is-active {
+  background: linear-gradient(145deg, rgba(43, 77, 121, 0.78), rgba(31, 60, 96, 0.66));
+  border-color: rgba(121, 176, 244, 0.58);
+  box-shadow: 0 8px 18px rgba(26, 71, 126, 0.32);
+  color: #e5f3ff;
+}
+
+.window-style-eclipse .admin-subtasks {
+  border-left-color: rgba(84, 127, 182, 0.42);
+}
+
+.window-style-eclipse .admin-subtask-item {
+  color: #a6c8ea;
+  border-radius: 8px;
+}
+
+.window-style-eclipse .admin-subtask-item:hover {
+  background: rgba(36, 63, 96, 0.72);
+  border-color: rgba(96, 148, 209, 0.4);
+}
+
+.window-style-eclipse .admin-subtask-item.is-active {
+  background: rgba(58, 96, 142, 0.72);
+  border-color: rgba(138, 193, 255, 0.5);
+  color: #ecf6ff;
+}
+
+.window-style-eclipse .main-pane {
+  padding: 20px;
+  gap: 16px;
+}
+
+.window-style-eclipse .top-strip {
+  background: linear-gradient(180deg, rgba(17, 30, 48, 0.94), rgba(15, 27, 44, 0.92));
+  border: 1px solid rgba(104, 151, 216, 0.58);
+  box-shadow: 0 14px 28px rgba(4, 10, 24, 0.5);
+}
+
+.window-style-eclipse .title-block h1 {
+  color: #dff0ff;
+  font-family: 'Orbitron', sans-serif;
+  letter-spacing: 0.04em;
+  font-size: 24px;
+}
+
+.window-style-eclipse .title-block p {
+  color: #9dc2e8;
+}
+
+.window-style-eclipse .actor-controls label {
+  color: #9ec2e6;
+}
+
+.window-style-eclipse .actor-controls input,
+.window-style-eclipse .actor-controls select,
+.window-style-eclipse .gothic-input,
+.window-style-eclipse .gothic-select {
+  background: rgba(10, 20, 34, 0.92);
+  border: 1px solid rgba(89, 137, 198, 0.58);
+  color: #dbeeff;
+  border-radius: 8px;
+}
+
+.window-style-eclipse .actor-profiles,
+.window-style-eclipse .gothic-hint,
+.window-style-eclipse .gothic-label,
+.window-style-eclipse .gothic-queue-name,
+.window-style-eclipse .gothic-queue-secondary,
+.window-style-eclipse .rhs-meta-row,
+.window-style-eclipse .rhs-list {
+  color: #9bbfe3;
+}
+
+.window-style-eclipse .workspace-pane,
+.window-style-eclipse .gothic-screen,
+.window-style-eclipse .gothic-panel,
+.window-style-eclipse .rhs-section,
+.window-style-eclipse .status-card,
+.window-style-eclipse .gothic-queue-card,
+.window-style-eclipse .gateway-portrait-card {
+  background: linear-gradient(180deg, rgba(16, 29, 46, 0.96), rgba(12, 23, 39, 0.95));
+  border: 1px solid rgba(102, 150, 212, 0.52);
+  box-shadow: 0 12px 26px rgba(4, 10, 23, 0.52);
+}
+
+.window-style-eclipse .workspace-pane,
+.window-style-eclipse .gothic-screen,
+.window-style-eclipse .gothic-panel,
+.window-style-eclipse .status-card,
+.window-style-eclipse .gothic-queue-card,
+.window-style-eclipse .gateway-portrait-card {
+  border-radius: 14px;
+}
+
+.window-style-eclipse .gothic-title {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 25px;
+  letter-spacing: 0.05em;
+  color: #d8edff;
+  text-shadow: 0 0 18px rgba(121, 182, 255, 0.34);
+}
+
+.window-style-eclipse .rhs-section h3,
+.window-style-eclipse .status-card h2 {
+  color: #9ac9ff;
+}
+
+.window-style-eclipse .rhs-meta-row strong,
+.window-style-eclipse .gothic-queue-value,
+.window-style-eclipse .status-card p {
+  color: #e8f4ff;
+}
+
+.window-style-eclipse .gothic-status-pill.running {
+  color: #bbf7d0;
+  background: rgba(15, 91, 58, 0.5);
+  border-color: rgba(85, 183, 137, 0.58);
+}
+
+.window-style-eclipse .gothic-status-pill.stopped {
+  color: #ffc1d2;
+  background: rgba(111, 35, 62, 0.54);
+  border-color: rgba(209, 104, 143, 0.62);
+}
+
+.window-style-eclipse .gothic-button,
+.window-style-eclipse .sidebar-toggle,
+.window-style-eclipse .rhs-chip,
+.window-style-eclipse .task-context-action:hover,
+.window-style-eclipse .task-context-action.is-active {
+  border: 1px solid rgba(100, 152, 218, 0.54);
+  background: linear-gradient(180deg, rgba(29, 48, 75, 0.95), rgba(19, 34, 54, 0.95));
+  color: #d9ecff;
+  box-shadow: 0 6px 12px rgba(8, 20, 39, 0.35);
+}
+
+.window-style-eclipse .gothic-button:hover,
+.window-style-eclipse .sidebar-toggle:hover {
+  background: linear-gradient(180deg, rgba(45, 75, 117, 0.95), rgba(28, 50, 79, 0.95));
+}
+
+.window-style-eclipse .pane-divider {
+  background: linear-gradient(180deg, rgba(13, 24, 40, 0.98), rgba(11, 20, 33, 0.98));
+  border-left: 1px solid rgba(92, 140, 203, 0.4);
+  border-right: 1px solid rgba(92, 140, 203, 0.32);
+}
+
+.window-style-eclipse .pane-divider::after {
+  background: rgba(112, 166, 236, 0.75);
+  box-shadow: 0 0 10px rgba(112, 166, 236, 0.3);
+}
+
+.window-style-eclipse .pane-divider:hover,
+.window-style-eclipse .pane-divider.is-active,
+.window-style-eclipse .pane-divider:focus-visible {
+  background: linear-gradient(180deg, rgba(20, 35, 56, 0.98), rgba(16, 29, 48, 0.98));
+}
+
+.window-style-eclipse .area-empty {
+  border: 1px dashed rgba(104, 154, 219, 0.58);
+  background: rgba(12, 24, 40, 0.72);
+  color: #a7c8ea;
+}

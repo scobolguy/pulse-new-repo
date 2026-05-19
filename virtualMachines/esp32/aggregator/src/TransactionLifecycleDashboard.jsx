@@ -1,25 +1,67 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { getJsonAsActor, postJsonAsActor } from './http-client.js';
 
 function formatCount(value) {
   return Number(value || 0).toLocaleString();
 }
 
+function sanitizeToken(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-');
+}
+
+function parseContextFromTransitionWhen(whenExpression) {
+  const text = String(whenExpression || '').trim().toLowerCase();
+  if (text.includes('status = approved')) return { status: 'approved' };
+  if (text.includes('status = rejected')) return { status: 'rejected' };
+  if (text.includes('statement_match = true')) return { statementMatch: true };
+  return {};
+}
+
 export default function TransactionLifecycleDashboard() {
   const [data, setData] = useState(null);
+  const [workers, setWorkers] = useState({ lifecycleWorkers: [], bridgeWorkers: [] });
+  const [gateways, setGateways] = useState({
+    swift: { running: false, mode: 'live', queueMetrics: { currentQueueCount: 0, cumulativeProcessedCount: 0 } },
+    boc: { running: false, mode: 'live', queueMetrics: { currentQueueCount: 0, cumulativeProcessedCount: 0 } }
+  });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [actionResult, setActionResult] = useState('');
   const [contextMenu, setContextMenu] = useState(null);
+  const [maintenanceByState, setMaintenanceByState] = useState({});
+  const [gatewaySeenRunning, setGatewaySeenRunning] = useState({ swift: false, boc: false });
 
   async function refresh() {
     try {
-      const res = await fetch('/api/lifecycle/dashboard');
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Dashboard API failed (${res.status}): ${text.slice(0, 200)}`);
-      }
-      const payload = await res.json();
-      setData(payload);
+      const [dashboardPayload, workersPayloadRaw, gatewaysPayloadRaw] = await Promise.all([
+        getJsonAsActor('/api/lifecycle/dashboard', 'Dashboard API failed'),
+        getJsonAsActor('/api/lifecycle/workers', 'Workers API failed'),
+        getJsonAsActor('/api/gateways', 'Gateway API failed')
+      ]);
+      const workersPayload = workersPayloadRaw || { lifecycleWorkers: [], bridgeWorkers: [] };
+      const gatewaysPayload = gatewaysPayloadRaw || {
+        swift: { running: false, mode: 'live', queueMetrics: { currentQueueCount: 0, cumulativeProcessedCount: 0 } },
+        boc: { running: false, mode: 'live', queueMetrics: { currentQueueCount: 0, cumulativeProcessedCount: 0 } }
+      };
+
+      setData(dashboardPayload);
+      setWorkers({
+        lifecycleWorkers: Array.isArray(workersPayload.lifecycleWorkers) ? workersPayload.lifecycleWorkers : [],
+        bridgeWorkers: Array.isArray(workersPayload.bridgeWorkers) ? workersPayload.bridgeWorkers : []
+      });
+      setGateways(
+        gatewaysPayload || {
+          swift: { running: false, mode: 'live', queueMetrics: { currentQueueCount: 0, cumulativeProcessedCount: 0 } },
+          boc: { running: false, mode: 'live', queueMetrics: { currentQueueCount: 0, cumulativeProcessedCount: 0 } }
+        }
+      );
+      setGatewaySeenRunning(prev => ({
+        swift: Boolean(prev.swift || gatewaysPayload?.swift?.running),
+        boc: Boolean(prev.boc || gatewaysPayload?.boc?.running)
+      }));
       setError('');
     } catch (e) {
       setError(String(e.message || e));
@@ -30,7 +72,7 @@ export default function TransactionLifecycleDashboard() {
 
   useEffect(() => {
     refresh();
-    const timer = setInterval(refresh, 3000);
+    const timer = setInterval(refresh, 30000);
     return () => clearInterval(timer);
   }, []);
 
@@ -43,27 +85,17 @@ export default function TransactionLifecycleDashboard() {
   }, []);
 
   async function callLifecycleApi(url, body = {}) {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    const text = await res.text();
-    let payload = null;
-    try {
-      payload = text ? JSON.parse(text) : null;
-    } catch {
-      payload = { raw: text };
-    }
-    if (!res.ok) {
-      throw new Error(payload?.error || `Request failed (${res.status})`);
-    }
-    return payload;
+    return postJsonAsActor(url, body, 'Request failed');
   }
 
   async function runAction(action) {
     try {
-      if (action === 'start') {
+      if (action === 'run-async') {
+        const gateways = await callLifecycleApi('/api/runtime/classes/gateway/actions/start', { intervalMs: 300, batchSize: 50, mode: 'test' });
+        const workers = await callLifecycleApi('/api/lifecycle/workers/start-default', { intervalMs: 300, batchSize: 50 });
+        const subflows = await callLifecycleApi('/api/lifecycle/subflows/workers/start-default', { intervalMs: 300, batchSize: 50 });
+        setActionResult(`Async flows running: gateways=${gateways?.status || 'started'}, workers=${workers?.workersStarted || 0}, subflows=${subflows?.workersStarted || 0}`);
+      } else if (action === 'start') {
         const txId = `TX-${Date.now()}`;
         const payload = await callLifecycleApi('/api/lifecycle/test/start', { txId });
         setActionResult(`Started test transaction ${payload?.active?.transactionId || txId}`);
@@ -95,6 +127,161 @@ export default function TransactionLifecycleDashboard() {
     }
   }
 
+  async function runAsyncFlows() {
+    try {
+      const gatewaysStart = await callLifecycleApi('/api/runtime/classes/gateway/actions/start', { intervalMs: 300, batchSize: 50, mode: 'test' });
+      const workersStart = await callLifecycleApi('/api/lifecycle/workers/start-default', { intervalMs: 300, batchSize: 50 });
+      const subflowsStart = await callLifecycleApi('/api/lifecycle/subflows/workers/start-default', { intervalMs: 300, batchSize: 50 });
+      setActionResult(`Async flows running: gateways=${gatewaysStart?.status || 'started'}, workers=${workersStart?.workersStarted || 0}, subflows=${subflowsStart?.workersStarted || 0}`);
+      await refresh();
+    } catch (e) {
+      setActionResult(`Run failed: ${e.message || e}`);
+    }
+  }
+
+  async function stepUp(stateName) {
+    const transitions = (data?.transitions || []).filter(t => t.from === stateName);
+    if (transitions.length === 0) {
+      setActionResult(`No runnable transitions found for ${stateName}.`);
+      return;
+    }
+
+    let started = 0;
+    let alreadyRunning = 0;
+    let failed = 0;
+
+    for (const transition of transitions) {
+      const workerId = `manual-${sanitizeToken(stateName)}-${sanitizeToken(transition.event)}`;
+      const context = parseContextFromTransitionWhen(transition.when);
+      try {
+        await callLifecycleApi('/api/lifecycle/workers/start', {
+          workerId,
+          fromState: stateName,
+          eventName: transition.event,
+          context,
+          intervalMs: 300,
+          batchSize: 25,
+          consumerService: workerId,
+          sourceService: workerId
+        });
+        started += 1;
+      } catch (e) {
+        if (String(e.message || '').toLowerCase().includes('already running')) {
+          alreadyRunning += 1;
+        } else {
+          failed += 1;
+        }
+      }
+    }
+
+    setMaintenanceByState(prev => ({ ...prev, [stateName]: false }));
+    setActionResult(`Step up ${stateName}: started=${started}, alreadyRunning=${alreadyRunning}, failed=${failed}`);
+    await refresh();
+  }
+
+  async function stepDown(stateName) {
+    const matchingWorkers = (workers.lifecycleWorkers || []).filter(w => w.fromState === stateName);
+    if (matchingWorkers.length === 0) {
+      setActionResult(`No running workers found for ${stateName}.`);
+      return;
+    }
+
+    let stopped = 0;
+    let failed = 0;
+    for (const worker of matchingWorkers) {
+      try {
+        await callLifecycleApi(`/api/lifecycle/workers/${encodeURIComponent(worker.workerId)}/stop`, {});
+        stopped += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+
+    setActionResult(`Step down ${stateName}: stopped=${stopped}, failed=${failed}`);
+    await refresh();
+  }
+
+  async function toggleMaintenance(stateName) {
+    const next = !maintenanceByState[stateName];
+    if (next) {
+      await stepDown(stateName);
+    }
+    setMaintenanceByState(prev => ({ ...prev, [stateName]: next }));
+    setActionResult(next ? `Step ${stateName} set to maintenance mode.` : `Step ${stateName} maintenance mode cleared.`);
+  }
+
+  async function gatewayLogin(name) {
+    try {
+      const payload = await callLifecycleApi('/api/runtime/classes/gateway/actions/start', {
+        [name]: { intervalMs: 300, batchSize: 50, mode: 'live' }
+      });
+      setActionResult(`${name.toUpperCase()} gateway login (live): ${payload?.status || 'started'}`);
+      await refresh();
+    } catch (e) {
+      setActionResult(`${name.toUpperCase()} gateway login failed: ${e.message || e}`);
+    }
+  }
+
+  async function gatewayTestMode(name) {
+    try {
+      if (name !== 'boc') {
+        setActionResult(`${name.toUpperCase()} gateway does not support test mode.`);
+        return;
+      }
+      const payload = await callLifecycleApi('/api/runtime/classes/gateway/actions/start', {
+        [name]: { intervalMs: 300, batchSize: 50, mode: 'test' }
+      });
+      setActionResult(`${name.toUpperCase()} gateway login (test): ${payload?.status || 'started'}`);
+      await refresh();
+    } catch (e) {
+      setActionResult(`${name.toUpperCase()} gateway test login failed: ${e.message || e}`);
+    }
+  }
+
+  async function gatewayLogout(name) {
+    try {
+      const payload = await callLifecycleApi('/api/runtime/classes/gateway/actions/stop', {
+        [name]: {}
+      });
+      setActionResult(`${name.toUpperCase()} gateway logout: ${payload?.status || 'stopped'}`);
+      await refresh();
+    } catch (e) {
+      setActionResult(`${name.toUpperCase()} gateway logout failed: ${e.message || e}`);
+    }
+  }
+
+  async function gatewayQuiesce(name) {
+    try {
+      const payload = await callLifecycleApi('/api/runtime/classes/gateway/actions/quiesce', {
+        [name]: {}
+      });
+      setActionResult(`${name.toUpperCase()} gateway quiesce: ${payload?.status || 'quiesced'}`);
+      await refresh();
+    } catch (e) {
+      setActionResult(`${name.toUpperCase()} gateway quiesce failed: ${e.message || e}`);
+    }
+  }
+
+  async function runHappyTester() {
+    try {
+      const payload = await callLifecycleApi('/api/lifecycle/happy-path/run', {});
+      setActionResult(`Happy tester completed: tx=${payload?.result?.transactionId || 'unknown'} terminal=${payload?.result?.terminalState || 'unknown'}`);
+      await refresh();
+    } catch (e) {
+      setActionResult(`Happy tester failed: ${e.message || e}`);
+    }
+  }
+
+  async function runSadTester() {
+    try {
+      const payload = await callLifecycleApi('/api/lifecycle/sad-path/run', {});
+      setActionResult(`Sad tester completed: tx=${payload?.result?.transactionId || 'unknown'} terminal=${payload?.result?.terminalState || 'unknown'}`);
+      await refresh();
+    } catch (e) {
+      setActionResult(`Sad tester failed: ${e.message || e}`);
+    }
+  }
+
   const stateByName = useMemo(() => {
     const map = new Map();
     for (const state of data?.states || []) {
@@ -112,6 +299,65 @@ export default function TransactionLifecycleDashboard() {
     return map;
   }, [data]);
 
+  const workersByFromState = useMemo(() => {
+    const map = new Map();
+    for (const worker of workers.lifecycleWorkers || []) {
+      const key = String(worker.fromState || '');
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(worker);
+    }
+    return map;
+  }, [workers]);
+
+  function getStepStatus(stateName) {
+    if (maintenanceByState[stateName]) {
+      return { label: 'maintenance', color: '#facc15', textColor: '#1f2937' };
+    }
+
+    const outgoing = (data?.transitions || []).filter(t => t.from === stateName);
+    if (outgoing.length === 0) {
+      return { label: 'uncertain', color: '#facc15', textColor: '#1f2937' };
+    }
+
+    const activeWorkers = workersByFromState.get(stateName) || [];
+    if (activeWorkers.length === 0) {
+      return { label: 'down', color: '#ef4444', textColor: '#ffffff' };
+    }
+
+    const requiredEvents = new Set(outgoing.map(t => String(t.event || '')));
+    const activeEvents = new Set(activeWorkers.map(w => String(w.eventName || '')));
+    let covered = 0;
+    for (const eventName of requiredEvents) {
+      if (activeEvents.has(eventName)) covered += 1;
+    }
+
+    if (covered === requiredEvents.size) {
+      return { label: 'ready', color: '#22c55e', textColor: '#052e16' };
+    }
+    return { label: 'uncertain', color: '#facc15', textColor: '#1f2937' };
+  }
+
+  function getGatewayStatus(name) {
+    const quiesced = Boolean(gateways?.[name]?.quiesced);
+    if (quiesced) {
+      return { label: 'quiesced', color: '#facc15', textColor: '#1f2937' };
+    }
+
+    const activeTransactionsCount = Array.isArray(data?.activeTransactions) ? data.activeTransactions.length : 0;
+    if (activeTransactionsCount === 0) {
+      return { label: 'clear', color: '#e2e8f0', textColor: '#475569' };
+    }
+
+    const running = Boolean(gateways?.[name]?.running);
+    if (running) {
+      return { label: 'up', color: '#22c55e', textColor: '#052e16' };
+    }
+    if (!gatewaySeenRunning[name]) {
+      return { label: 'not logged in', color: '#facc15', textColor: '#1f2937' };
+    }
+    return { label: 'down', color: '#ef4444', textColor: '#ffffff' };
+  }
+
   if (loading) {
     return <div style={{ padding: 12 }}>Loading transaction lifecycle dashboard...</div>;
   }
@@ -125,166 +371,5 @@ export default function TransactionLifecycleDashboard() {
     );
   }
 
-  const layers = Array.isArray(data?.topology?.layers) ? data.topology.layers : [];
-
-  return (
-    <div
-      style={{ display: 'flex', flexDirection: 'column', gap: 14, position: 'relative' }}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        setContextMenu({ x: e.clientX, y: e.clientY });
-      }}
-    >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>{data?.transactionId || 'transaction-lifecycle'}</div>
-          <div style={{ color: '#334155', marginTop: 4 }}>{data?.description || ''}</div>
-          <div style={{ color: '#64748b', marginTop: 6, fontSize: 12 }}>
-            Right-click anywhere on this screen for test controls.
-          </div>
-        </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: 12, color: '#64748b' }}>Total messages across lifecycle states</div>
-          <div style={{ fontSize: 28, fontWeight: 700 }}>{formatCount(data?.totalMessagesAcrossStates || 0)}</div>
-        </div>
-      </div>
-
-      <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: 10, background: '#fff', display: 'flex', justifyContent: 'space-between', gap: 16 }}>
-        <div>
-          <div style={{ fontWeight: 700, marginBottom: 4 }}>Active Test Transaction</div>
-          <div style={{ fontSize: 12, color: '#334155' }}>ID: {data?.harness?.active?.transactionId || '(none)'}</div>
-          <div style={{ fontSize: 12, color: '#334155' }}>Current state: {stateByName.get(data?.harness?.active?.currentState)?.label || data?.harness?.active?.currentState || '(none)'}</div>
-          <div style={{ fontSize: 12, color: '#334155' }}>Last event: {data?.harness?.active?.lastEvent || '(none)'}</div>
-        </div>
-        <div style={{ flex: 1, textAlign: 'right', fontSize: 12, color: '#475569' }}>
-          {actionResult || 'Use right-click actions to start, step, or simulate external actors.'}
-        </div>
-      </div>
-
-      <div style={{ overflowX: 'auto', border: '1px solid #dbe3ef', borderRadius: 10, background: '#f8fbff' }}>
-        <div style={{ display: 'flex', gap: 12, padding: 12, minWidth: 980, alignItems: 'stretch' }}>
-          {layers.map((layer, index) => {
-            const layerStates = (layer.stateNames || []).map(name => stateByName.get(name)).filter(Boolean);
-            const layerTotal = Number(data?.totalsByLayer?.[layer.index] || 0);
-            return (
-              <div key={`layer-${index}`} style={{ flex: '0 0 300px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div style={{ background: '#0f172a', color: '#f8fafc', borderRadius: 8, padding: '8px 10px' }}>
-                  <div style={{ fontWeight: 700 }}>Step {layer.index + 1}</div>
-                  <div style={{ fontSize: 12, opacity: 0.9 }}>Messages in step: {formatCount(layerTotal)}</div>
-                </div>
-
-                {layerStates.map(state => (
-                  <div key={state.stateName} style={{ border: '1px solid #c6d4ea', background: '#fff', borderRadius: 8, padding: 10 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                      <div style={{ fontWeight: 700 }}>{state.label}</div>
-                      {state.isInitial ? <div style={{ fontSize: 11, color: '#1d4ed8', fontWeight: 700 }}>INITIAL</div> : null}
-                    </div>
-                    <div style={{ marginTop: 8, fontSize: 12, color: '#475569' }}>
-                      Queue: {state.queueName || '(none)'}
-                    </div>
-                    <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between' }}>
-                      <div style={{ fontSize: 12, color: '#334155' }}>Messages waiting</div>
-                      <div style={{ fontWeight: 700, fontSize: 18 }}>{formatCount(state.queueLength)}</div>
-                    </div>
-
-                    <div style={{ marginTop: 8, fontSize: 11, color: '#64748b' }}>
-                      Next events:
-                    </div>
-                    <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                      {(data?.transitions || [])
-                        .filter(t => t.from === state.stateName)
-                        .map(t => (
-                          <span key={`${t.from}-${t.to}-${t.event}`} style={{ background: '#eef2ff', border: '1px solid #c7d2fe', borderRadius: 999, padding: '2px 8px', fontSize: 11 }}>
-                            {t.event}{' -> '}{stateByName.get(t.to)?.label || t.to}
-                          </span>
-                        ))}
-                    </div>
-                  </div>
-                ))}
-
-                {index < layers.length - 1 ? (
-                  <div style={{ textAlign: 'center', color: '#475569', fontSize: 12 }}>
-                    {'->'}
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: 10, background: '#fff' }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Transition Matrix</div>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-            <thead>
-              <tr>
-                <th style={{ textAlign: 'left', borderBottom: '1px solid #e2e8f0', padding: '6px 4px' }}>From</th>
-                <th style={{ textAlign: 'left', borderBottom: '1px solid #e2e8f0', padding: '6px 4px' }}>To</th>
-                <th style={{ textAlign: 'left', borderBottom: '1px solid #e2e8f0', padding: '6px 4px' }}>Event</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(data?.transitions || []).map(t => (
-                <tr key={`${t.from}-${t.to}-${t.event}`}>
-                  <td style={{ borderBottom: '1px solid #f1f5f9', padding: '6px 4px' }}>{stateByName.get(t.from)?.label || t.from}</td>
-                  <td style={{ borderBottom: '1px solid #f1f5f9', padding: '6px 4px' }}>{stateByName.get(t.to)?.label || t.to}</td>
-                  <td style={{ borderBottom: '1px solid #f1f5f9', padding: '6px 4px' }}>{transitionLookup.get(`${t.from}__${t.to}`) || t.event}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {contextMenu ? (
-        <div
-          style={{
-            position: 'fixed',
-            top: contextMenu.y,
-            left: contextMenu.x,
-            zIndex: 9999,
-            background: '#ffffff',
-            border: '1px solid #cbd5e1',
-            borderRadius: 8,
-            boxShadow: '0 10px 30px rgba(15, 23, 42, 0.2)',
-            minWidth: 260,
-            overflow: 'hidden'
-          }}
-        >
-          {[
-            { id: 'start', label: 'Start Test Transaction' },
-            { id: 'step-default', label: 'Single Step (auto)' },
-            { id: 'step-map', label: 'Step: mapped_to_pacs' },
-            { id: 'step-submit', label: 'Step: submitted_to_lynx' },
-            { id: 'step-send-correspondent', label: 'Step: sent_to_correspondent' },
-            { id: 'sim-boc-approve', label: 'Simulator: Bank of Canada Approve' },
-            { id: 'sim-boc-reject', label: 'Simulator: Bank of Canada Reject' },
-            { id: 'sim-mt940', label: 'Simulator: Correspondent Send MT940' }
-          ].map(item => (
-            <button
-              key={item.id}
-              onClick={() => {
-                setContextMenu(null);
-                runAction(item.id);
-              }}
-              style={{
-                display: 'block',
-                width: '100%',
-                textAlign: 'left',
-                background: '#fff',
-                border: 'none',
-                borderBottom: '1px solid #e2e8f0',
-                padding: '9px 12px',
-                cursor: 'pointer',
-                fontSize: 12
-              }}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
+  return null;
 }

@@ -12,16 +12,23 @@
     "compile:pcode": "node scripts/compile-pascal-to-pcode.mjs",
     "run:pcode:js": "node scripts/run-js-pmachine.mjs",
     "compile:workflow": "node scripts/compile-workflow-dsl.mjs --in data/workflow.wfl",
+    "compile:workflow:pcode": "node scripts/compile-workflow-to-pcode.mjs --in data/workflow.wfl --workflow pain2-routing --out ../pcode/workflow-router.pcode --out-map ../pcode/workflow-router.program.json",
     "interpret:workflow": "node scripts/interpret-workflow.mjs --in data/workflow.wfl --workflow enqueue-pacs",
     "check:pcode-compat": "node scripts/check-pcode-compat.mjs",
     "compile:lifecycle": "node scripts/compile-transaction-lifecycle-dsl.mjs --in data/transaction-lifecycle.tsl"
   },
   "dependencies": {
+    "amqplib": "^0.10.4",
     "cors": "^2.8.6",
     "express": "^5.2.1",
+    "ibmmq": "^2.1.8",
+    "kafkajs": "^2.2.4",
+    "msnodesqlv8": "^5.2.0",
+    "mssql": "^11.0.1",
     "node-fetch": "^3.3.2",
     "react": "^19.2.5",
-    "react-dom": "^19.2.5"
+    "react-dom": "^19.2.5",
+    "stompit": "^1.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

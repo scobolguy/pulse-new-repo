@@ -1,0 +1,361 @@
+@import url('https://fonts.googleapis.com/css2?family=Rye&family=Rajdhani:wght@500;700&display=swap');
+
+.window-style-rube-goldberg.app-shell {
+  --rg-ink: #1f2733;
+  --rg-brass: #c38f2d;
+  --rg-copper: #d9743a;
+  --rg-sky: #9ed7e8;
+  --rg-cream: #efe4cc;
+  --rg-rust: #8f4f2e;
+  background:
+    radial-gradient(circle at 78% 12%, rgba(246, 198, 95, 0.24), rgba(246, 198, 95, 0) 29%),
+    radial-gradient(circle at 18% 88%, rgba(123, 178, 197, 0.2), rgba(123, 178, 197, 0) 33%),
+    repeating-linear-gradient(
+      -32deg,
+      rgba(255, 255, 255, 0.02) 0,
+      rgba(255, 255, 255, 0.02) 12px,
+      rgba(0, 0, 0, 0.06) 12px,
+      rgba(0, 0, 0, 0.06) 24px
+    ),
+    linear-gradient(160deg, #253143 0%, #1e2734 55%, #161d28 100%);
+  color: var(--rg-cream);
+  font-family: 'Rajdhani', 'Segoe UI', sans-serif;
+  animation: rgBackgroundDrift 24s linear infinite;
+  background-size: auto, auto, auto, 100% 100%;
+}
+
+.window-style-rube-goldberg .lhs-sidebar,
+.window-style-rube-goldberg .rhs-sidebar,
+.window-style-rube-goldberg .top-strip,
+.window-style-rube-goldberg .workspace-pane,
+.window-style-rube-goldberg .rhs-section {
+  border-radius: 14px;
+}
+
+.window-style-rube-goldberg .lhs-sidebar,
+.window-style-rube-goldberg .rhs-sidebar {
+  background:
+    linear-gradient(180deg, rgba(32, 41, 56, 0.97), rgba(25, 33, 46, 0.97));
+  border: 1px solid rgba(155, 196, 214, 0.34);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 16px 24px rgba(0, 0, 0, 0.38);
+}
+
+.window-style-rube-goldberg .brand {
+  color: #f7cf6b;
+  border-bottom-color: rgba(217, 153, 57, 0.44);
+  font-family: 'Rye', serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.window-style-rube-goldberg .section-title,
+.window-style-rube-goldberg .rhs-section h3,
+.window-style-rube-goldberg .status-card h2,
+.window-style-rube-goldberg .title-block h1,
+.window-style-rube-goldberg .gothic-title {
+  font-family: 'Rye', serif;
+  letter-spacing: 0.03em;
+  color: #f8d178;
+}
+
+.window-style-rube-goldberg .title-block h1,
+.window-style-rube-goldberg .gothic-title {
+  text-shadow: 0 0 10px rgba(250, 193, 74, 0.2);
+  animation: rgTitleIdle 3.4s ease-in-out infinite;
+}
+
+.window-style-rube-goldberg .title-block p,
+.window-style-rube-goldberg .rhs-meta-row,
+.window-style-rube-goldberg .rhs-list,
+.window-style-rube-goldberg .gothic-hint,
+.window-style-rube-goldberg .gothic-queue-name,
+.window-style-rube-goldberg .gothic-queue-secondary,
+.window-style-rube-goldberg .actor-profiles {
+  color: #d5deec;
+}
+
+.window-style-rube-goldberg .area-nav-item {
+  border: 1px solid rgba(168, 131, 70, 0.22);
+  background:
+    linear-gradient(140deg, rgba(77, 98, 125, 0.28), rgba(50, 63, 81, 0.28));
+  color: #e7edf8;
+}
+
+.window-style-rube-goldberg .area-nav-item:hover {
+  border-color: rgba(208, 159, 66, 0.52);
+  background:
+    linear-gradient(140deg, rgba(88, 111, 142, 0.42), rgba(58, 72, 93, 0.42));
+}
+
+.window-style-rube-goldberg .area-nav-item.is-active {
+  border-color: rgba(241, 186, 79, 0.74);
+  background:
+    linear-gradient(140deg, rgba(204, 120, 62, 0.58), rgba(138, 78, 42, 0.58));
+  box-shadow: 0 10px 16px rgba(0, 0, 0, 0.24), inset 0 0 0 1px rgba(255, 223, 148, 0.2);
+  color: #fff7ea;
+  animation: rgLeverTick 2.6s ease-in-out infinite;
+}
+
+.window-style-rube-goldberg .admin-subtasks {
+  border-left-color: rgba(207, 160, 72, 0.42);
+}
+
+.window-style-rube-goldberg .admin-subtask-item {
+  color: #dce8f9;
+}
+
+.window-style-rube-goldberg .admin-subtask-item:hover {
+  border-color: rgba(200, 153, 72, 0.47);
+  background: rgba(84, 107, 138, 0.4);
+}
+
+.window-style-rube-goldberg .admin-subtask-item.is-active {
+  border-color: rgba(238, 183, 80, 0.63);
+  background: rgba(170, 99, 54, 0.58);
+  color: #fff7e8;
+}
+
+.window-style-rube-goldberg .top-strip {
+  background:
+    linear-gradient(180deg, rgba(42, 55, 74, 0.98), rgba(32, 41, 56, 0.97));
+  border: 1px solid rgba(163, 205, 223, 0.34);
+  box-shadow: 0 16px 28px rgba(0, 0, 0, 0.35);
+  position: relative;
+  overflow: hidden;
+}
+
+.window-style-rube-goldberg .top-strip::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, 0), rgba(247, 207, 107, 0.16), rgba(0, 0, 0, 0));
+  transform: translateX(-100%);
+  animation: rgScanline 6.8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.window-style-rube-goldberg .workspace-pane,
+.window-style-rube-goldberg .gothic-screen,
+.window-style-rube-goldberg .gothic-panel,
+.window-style-rube-goldberg .rhs-section,
+.window-style-rube-goldberg .status-card,
+.window-style-rube-goldberg .gothic-queue-card,
+.window-style-rube-goldberg .gateway-portrait-card {
+  background:
+    linear-gradient(180deg, rgba(44, 58, 79, 0.96), rgba(30, 39, 55, 0.95));
+  border: 1px solid rgba(151, 193, 212, 0.33);
+  box-shadow: 0 12px 22px rgba(0, 0, 0, 0.34);
+  border-radius: 14px;
+  animation: rgPanelBreath 4.8s ease-in-out infinite;
+}
+
+.window-style-rube-goldberg .rhs-meta-row strong,
+.window-style-rube-goldberg .gothic-queue-value,
+.window-style-rube-goldberg .status-card p {
+  color: #f8ebd3;
+}
+
+.window-style-rube-goldberg .gothic-status-pill.running {
+  background: rgba(56, 111, 78, 0.48);
+  border-color: rgba(124, 208, 157, 0.56);
+  color: #d7ffea;
+}
+
+.window-style-rube-goldberg .gothic-status-pill.stopped {
+  background: rgba(122, 58, 42, 0.48);
+  border-color: rgba(232, 133, 92, 0.54);
+  color: #ffd8ca;
+}
+
+.window-style-rube-goldberg .actor-controls label {
+  color: #d2e0f5;
+}
+
+.window-style-rube-goldberg .actor-controls input,
+.window-style-rube-goldberg .actor-controls select,
+.window-style-rube-goldberg .gothic-input,
+.window-style-rube-goldberg .gothic-select {
+  border: 1px solid rgba(186, 150, 81, 0.52);
+  background: rgba(21, 28, 39, 0.93);
+  color: #eff4fb;
+  border-radius: 8px;
+}
+
+.window-style-rube-goldberg .gothic-button,
+.window-style-rube-goldberg .sidebar-toggle,
+.window-style-rube-goldberg .rhs-chip,
+.window-style-rube-goldberg .task-context-action:hover,
+.window-style-rube-goldberg .task-context-action.is-active {
+  border: 1px solid rgba(219, 171, 76, 0.63);
+  background:
+    linear-gradient(180deg, rgba(205, 120, 62, 0.86), rgba(161, 90, 47, 0.86));
+  color: #fff8e8;
+  box-shadow: 0 8px 14px rgba(0, 0, 0, 0.25);
+}
+
+.window-style-rube-goldberg .gothic-button:hover,
+.window-style-rube-goldberg .sidebar-toggle:hover {
+  background:
+    linear-gradient(180deg, rgba(224, 138, 76, 0.9), rgba(178, 101, 54, 0.9));
+}
+
+.window-style-rube-goldberg .pane-divider {
+  background:
+    linear-gradient(180deg, rgba(32, 42, 58, 0.98), rgba(26, 34, 47, 0.98));
+  border-left: 1px solid rgba(145, 187, 205, 0.33);
+  border-right: 1px solid rgba(145, 187, 205, 0.28);
+}
+
+.window-style-rube-goldberg .pane-divider::after {
+  background: rgba(245, 188, 78, 0.78);
+  box-shadow: 0 0 10px rgba(245, 188, 78, 0.36);
+}
+
+.window-style-rube-goldberg .pane-divider:hover,
+.window-style-rube-goldberg .pane-divider.is-active,
+.window-style-rube-goldberg .pane-divider:focus-visible {
+  background:
+    linear-gradient(180deg, rgba(42, 55, 75, 0.98), rgba(34, 45, 61, 0.98));
+}
+
+.window-style-rube-goldberg .area-empty {
+  border: 1px dashed rgba(232, 180, 81, 0.62);
+  background: rgba(31, 41, 56, 0.75);
+  color: #dfe9f7;
+  position: relative;
+  overflow: hidden;
+}
+
+.window-style-rube-goldberg .area-empty::before {
+  content: 'WAITING FOR TRIGGER';
+  position: absolute;
+  top: 10px;
+  right: 14px;
+  color: rgba(247, 207, 107, 0.92);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  animation: rgWaitingPulse 2.2s ease-in-out infinite;
+}
+
+.window-style-rube-goldberg .area-empty::after {
+  content: '';
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 10px;
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(247, 207, 107, 0.16), rgba(247, 207, 107, 0.86), rgba(247, 207, 107, 0.16));
+  transform-origin: left center;
+  animation: rgConveyorWait 1.7s ease-in-out infinite;
+}
+
+@keyframes rgBackgroundDrift {
+  0% {
+    background-position: 0 0, 0 0, 0 0, 0 0;
+  }
+  100% {
+    background-position: 0 0, 0 0, 160px -72px, 0 0;
+  }
+}
+
+@keyframes rgPanelBreath {
+  0%,
+  100% {
+    box-shadow: 0 12px 22px rgba(0, 0, 0, 0.34);
+    border-color: rgba(151, 193, 212, 0.33);
+  }
+  50% {
+    box-shadow: 0 14px 26px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(238, 183, 80, 0.2);
+    border-color: rgba(214, 165, 74, 0.43);
+  }
+}
+
+@keyframes rgTitleIdle {
+  0%,
+  100% {
+    transform: translateY(0);
+    text-shadow: 0 0 10px rgba(250, 193, 74, 0.2);
+  }
+  50% {
+    transform: translateY(-1px);
+    text-shadow: 0 0 14px rgba(250, 193, 74, 0.34);
+  }
+}
+
+@keyframes rgScanline {
+  0%,
+  100% {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  50% {
+    transform: translateX(100%);
+    opacity: 0.85;
+  }
+  60% {
+    opacity: 0;
+  }
+}
+
+@keyframes rgLeverTick {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  35% {
+    transform: translateY(-1px);
+  }
+  40% {
+    transform: translateY(0);
+  }
+}
+
+@keyframes rgWaitingPulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes rgConveyorWait {
+  0% {
+    transform: scaleX(0.18);
+    opacity: 0.36;
+  }
+  50% {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scaleX(0.18);
+    opacity: 0.36;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .window-style-rube-goldberg.app-shell,
+  .window-style-rube-goldberg .title-block h1,
+  .window-style-rube-goldberg .gothic-title,
+  .window-style-rube-goldberg .workspace-pane,
+  .window-style-rube-goldberg .gothic-screen,
+  .window-style-rube-goldberg .gothic-panel,
+  .window-style-rube-goldberg .rhs-section,
+  .window-style-rube-goldberg .status-card,
+  .window-style-rube-goldberg .gothic-queue-card,
+  .window-style-rube-goldberg .gateway-portrait-card,
+  .window-style-rube-goldberg .area-nav-item.is-active,
+  .window-style-rube-goldberg .top-strip::after,
+  .window-style-rube-goldberg .area-empty::before,
+  .window-style-rube-goldberg .area-empty::after {
+    animation: none !important;
+  }
+}

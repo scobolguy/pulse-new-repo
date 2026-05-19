@@ -1,0 +1,11 @@
+{
+  "requested": 2000,
+  "successful": 2000,
+  "failed": 0,
+  "totalTimeSec": 11.94,
+  "throughput": 167.55,
+  "avgLatencyMs": 84,
+  "p95LatencyMs": 135,
+  "p99LatencyMs": 207,
+  "generatedAt": "2026-05-17T15:38:25.873Z"
+}

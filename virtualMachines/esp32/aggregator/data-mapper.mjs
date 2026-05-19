@@ -1,6 +1,7 @@
 import express from 'express';
 import fs from 'fs/promises';
 import path from 'path';
+import { readEnvNumber } from './src/env-config.mjs';
 
 const app = express();
 app.use(express.json());
@@ -212,7 +213,7 @@ app.delete('/api/mapper/mappings/:id', async (req, res) => {
   }
 });
 
-const PORT = process.env.MAPPER_PORT || 4200;
+const PORT = readEnvNumber('MAPPER_PORT', 4200);
 app.listen(PORT, () => {
   console.log(`[Mapper] Service running on http://localhost:${PORT}`);
 });

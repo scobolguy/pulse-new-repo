@@ -59,6 +59,133 @@ function parseTypesList(raw) {
     .filter(Boolean);
 }
 
+function parseStepCallApi(stepLine) {
+  const stepMatch = stepLine.match(/^STEP\s+("[^"]+"|'[^']+')\s+CALL\s+API\s+("[^"]+"|'[^']+')\s+(GET|POST|PUT|PATCH|DELETE)\s+("[^"]+"|'[^']+')\s*;$/i);
+  if (!stepMatch) return null;
+  return {
+    id: parseQuoted(stepMatch[1]),
+    action: 'call_api',
+    apiSymbol: parseQuoted(stepMatch[2]),
+    method: stepMatch[3].toUpperCase(),
+    route: parseQuoted(stepMatch[4])
+  };
+}
+
+function parseStepRouteQueue(stepLine) {
+  const stepMatch = stepLine.match(/^STEP\s+("[^"]+"|'[^']+')\s+ROUTE\s+QUEUE\s+("[^"]+"|'[^']+')\s*;$/i);
+  if (!stepMatch) return null;
+  return {
+    id: parseQuoted(stepMatch[1]),
+    action: 'route_queue',
+    queueRef: parseQuoted(stepMatch[2])
+  };
+}
+
+function parseStepSetState(stepLine) {
+  const stepMatch = stepLine.match(/^STEP\s+("[^"]+"|'[^']+')\s+SET\s+STATE\s+("[^"]+"|'[^']+')\s*=\s*("[^"]+"|'[^']+')\s*;$/i);
+  if (!stepMatch) return null;
+  return {
+    id: parseQuoted(stepMatch[1]),
+    action: 'set_state',
+    key: parseQuoted(stepMatch[2]),
+    value: parseQuoted(stepMatch[3])
+  };
+}
+
+function parseIfHeader(stepLine, ifCounter) {
+  const ifMatch = stepLine.match(/^IF\s+FIELD\s+("[^"]+"|'[^']+')\s+(EQUALS|CONTAINS)\s+("[^"]+"|'[^']+')\s+THEN$/i);
+  if (!ifMatch) return null;
+  return {
+    id: `if-${ifCounter}`,
+    action: 'if',
+    condition: {
+      field: parseQuoted(ifMatch[1]),
+      operator: String(ifMatch[2] || '').toLowerCase(),
+      value: parseQuoted(ifMatch[3])
+    },
+    then: [],
+    else: []
+  };
+}
+
+function isLine(value, expected) {
+  return new RegExp(`^${expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(String(value || ''));
+}
+
+function parseBranch(lines, startIndex, ifCounterRef) {
+  const first = lines[startIndex] || '';
+  if (isLine(first, 'BEGIN')) {
+    const block = parseWorkflowStatements(lines, startIndex + 1, ifCounterRef, ['END;']);
+    if (!isLine(block.stop, 'END;')) {
+      throw new Error('BEGIN block is missing END;');
+    }
+    return { steps: block.steps, nextIndex: block.index + 1 };
+  }
+
+  const single = parseStatementAt(lines, startIndex, ifCounterRef);
+  return { steps: [single.step], nextIndex: single.nextIndex };
+}
+
+function parseStatementAt(lines, index, ifCounterRef) {
+  const stepLine = lines[index];
+  if (!stepLine) {
+    throw new Error('Unexpected end of workflow while parsing statement');
+  }
+
+  const callApi = parseStepCallApi(stepLine);
+  if (callApi) {
+    return { step: callApi, nextIndex: index + 1 };
+  }
+
+  const routeQueue = parseStepRouteQueue(stepLine);
+  if (routeQueue) {
+    return { step: routeQueue, nextIndex: index + 1 };
+  }
+
+  const setState = parseStepSetState(stepLine);
+  if (setState) {
+    return { step: setState, nextIndex: index + 1 };
+  }
+
+  const ifHeader = parseIfHeader(stepLine, ifCounterRef.value);
+  if (ifHeader) {
+    ifCounterRef.value += 1;
+    const thenBranch = parseBranch(lines, index + 1, ifCounterRef);
+    ifHeader.then = thenBranch.steps;
+
+    let cursor = thenBranch.nextIndex;
+    if (isLine(lines[cursor], 'ELSE;')) {
+      const elseBranch = parseBranch(lines, cursor + 1, ifCounterRef);
+      ifHeader.else = elseBranch.steps;
+      cursor = elseBranch.nextIndex;
+    }
+
+    if (!isLine(lines[cursor], 'ENDIF;')) {
+      throw new Error(`IF block ${ifHeader.id} is missing ENDIF;`);
+    }
+    return { step: ifHeader, nextIndex: cursor + 1 };
+  }
+
+  throw new Error(`Invalid workflow step: ${stepLine}`);
+}
+
+function parseWorkflowStatements(lines, startIndex, ifCounterRef, stops = ['END;']) {
+  const steps = [];
+  let i = startIndex;
+
+  while (i < lines.length) {
+    const stepLine = lines[i];
+    if (stops.some(stop => isLine(stepLine, stop))) {
+      return { steps, index: i, stop: stepLine };
+    }
+    const parsed = parseStatementAt(lines, i, ifCounterRef);
+    steps.push(parsed.step);
+    i = parsed.nextIndex;
+  }
+
+  return { steps, index: i, stop: null };
+}
+
 export function parseWorkflowDSL(sourceText) {
   const src = stripComments(sourceText);
   const lines = src
@@ -72,6 +199,7 @@ export function parseWorkflowDSL(sourceText) {
     apis: []
   };
   const workflows = [];
+  const ifCounterRef = { value: 1 };
 
   let i = 0;
   while (i < lines.length) {
@@ -128,34 +256,18 @@ export function parseWorkflowDSL(sourceText) {
     const workflowMatch = line.match(/^WORKFLOW\s+("[^"]+"|'[^']+')\s+BEGIN$/i);
     if (workflowMatch) {
       const workflowName = parseQuoted(workflowMatch[1]);
-      const steps = [];
       i += 1;
 
-      while (i < lines.length && !/^END;$/i.test(lines[i])) {
-        const stepLine = lines[i];
-        const stepMatch = stepLine.match(/^STEP\s+("[^"]+"|'[^']+')\s+CALL\s+API\s+("[^"]+"|'[^']+')\s+(GET|POST|PUT|PATCH|DELETE)\s+("[^"]+"|'[^']+')\s*;$/i);
-        if (!stepMatch) {
-          throw new Error(`Invalid workflow step: ${stepLine}`);
-        }
-        steps.push({
-          id: parseQuoted(stepMatch[1]),
-          action: 'call_api',
-          apiSymbol: parseQuoted(stepMatch[2]),
-          method: stepMatch[3].toUpperCase(),
-          route: parseQuoted(stepMatch[4])
-        });
-        i += 1;
-      }
-
-      if (i >= lines.length || !/^END;$/i.test(lines[i])) {
+      const parsedWorkflow = parseWorkflowStatements(lines, i, ifCounterRef, ['END;']);
+      if (parsedWorkflow.index >= lines.length || !/^END;$/i.test(parsedWorkflow.stop || '')) {
         throw new Error(`Workflow ${workflowName} is missing END;`);
       }
 
       workflows.push({
         id: workflowName,
-        steps
+        steps: parsedWorkflow.steps
       });
-      i += 1;
+      i = parsedWorkflow.index + 1;
       continue;
     }
 
@@ -170,7 +282,7 @@ export function compileWorkflowDSL(sourceText) {
   const compiledAt = new Date().toISOString();
 
   return {
-    version: 1,
+    version: 2,
     compiledAt,
     symbols: parsed.symbols,
     workflows: parsed.workflows

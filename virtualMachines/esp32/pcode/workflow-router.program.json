@@ -1,0 +1,23 @@
+{
+  "workflowId": "enqueue-pacs",
+  "generatedAt": "2026-05-16T00:44:41.247Z",
+  "instructionCount": 2,
+  "pcodeText": "# Auto-generated pcode from workflow DSL\n# WORKFLOW enqueue-pacs\nNOP\nHALT\n",
+  "programMap": [
+    {
+      "address": 0,
+      "text": "NOP"
+    },
+    {
+      "address": 1,
+      "text": "HALT"
+    }
+  ],
+  "notes": [
+    {
+      "type": "call_api_ignored",
+      "stepId": "enqueue",
+      "route": "/api/queue/pacs.outbound/enqueue"
+    }
+  ]
+}

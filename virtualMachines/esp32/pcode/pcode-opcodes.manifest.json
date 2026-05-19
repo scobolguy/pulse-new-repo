@@ -25,6 +25,7 @@
     { "name": "OP_ROUTE_TRANSFORM", "hex": "0x14" },
     { "name": "OP_ROUTE_EMIT", "hex": "0x15" },
     { "name": "OP_PARSE_FIN_TEXT", "hex": "0x16" },
+    { "name": "OP_ROUTE_SET_STATE", "hex": "0x17" },
     { "name": "OP_HALT", "hex": "0xFF" }
   ]
 }

@@ -73,6 +73,7 @@ enum Opcode : uint8_t {
     OP_ROUTE_TRANSFORM = 0x14,   // Apply TRANSFORM rule to current message
     OP_ROUTE_EMIT = 0x15,        // Emit current message to operand output queue
     OP_PARSE_FIN_TEXT = 0x16,    // Parse routing source message from MT FIN text into JSON
+    OP_ROUTE_SET_STATE = 0x17,   // Set runtime state from operand "key=value"
     OP_HALT = 0xFF      // HALT
 };
 
@@ -115,6 +116,7 @@ enum Opcode : uint8_t {
         if (mnemonic == "ROUTE_TRANSFORM") return OP_ROUTE_TRANSFORM;
         if (mnemonic == "ROUTE_EMIT") return OP_ROUTE_EMIT;
         if (mnemonic == "PARSE_FIN_TEXT") return OP_PARSE_FIN_TEXT;
+        if (mnemonic == "ROUTE_SET_STATE") return OP_ROUTE_SET_STATE;
         if (mnemonic == "HALT") return OP_HALT;
         if (mnemonic == "NOP") return OP_NOP;
         return 0xFE;
