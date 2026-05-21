@@ -1,5 +1,6 @@
 import fs from 'fs';
 import http from 'http';
+import v8 from 'v8';
 process.on('uncaughtException', (err) => {
   console.error('[UNCAUGHT EXCEPTION]', err);
 });
@@ -12,6 +13,7 @@ import express from 'express';
 import cors from 'cors';
 import os from 'os';
 import path from 'path';
+import { performance, monitorEventLoopDelay } from 'perf_hooks';
 import { execFileSync, spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { createMessageBroker, createQueueManager } from './src/broker.js';
@@ -44,10 +46,12 @@ import {
 import { registerLifecycleInquiryRoutes } from './src/backend/roles/lifecycleInquiryRoutes.mjs';
 import { registerLifecycleWorkerGatewayRoutes } from './src/backend/roles/lifecycleWorkerGatewayRoutes.mjs';
 import { registerQueueBrokerOpsRoutes } from './src/backend/roles/queueBrokerOpsRoutes.mjs';
+import { registerComplianceRoutes } from './src/backend/roles/complianceRoutes.mjs';
 import { createRequestPolicyApi } from './src/backend/security/requestPolicy.mjs';
 import { ROUTE_ROLE_MANIFEST } from './src/backend/routes.manifest.mjs';
 import { registerRoutesFromManifest } from './src/backend/routeManifestLoader.mjs';
 import { enumerateApiCatalog } from './src/backend/apiCatalog.mjs';
+import { createSanctionsComplianceService } from './src/compliance/sanctionsService.mjs';
 import crypto from 'crypto';
 
 // ===== SERVICE PROXY UTILITY =====
@@ -150,6 +154,7 @@ const BROKER_APACHE_USERNAME = readEnvString('APACHE_BROKER_USER', '');
 const BROKER_APACHE_PASSWORD = readEnvSecret('APACHE_BROKER_PASSWORD', '');
 const BROKER_APACHE_TOPIC_PREFIX = readEnvString('APACHE_BROKER_TOPIC_PREFIX', '/topic/pulse');
 const DEFAULT_QUEUE_DATA_ROOT = fileURLToPath(new URL('./data', import.meta.url));
+const UI_CARD_OVERRIDES_FILE = path.resolve(DEFAULT_QUEUE_DATA_ROOT, 'ui-card-overrides.json');
 const rawQueuePersistenceFlag = String(process.env.PULSE_QUEUE_PERSISTENCE || '').trim().toLowerCase();
 const PULSE_QUEUE_PERSISTENCE = true;
 const PULSE_QUEUE_DATA_ROOT = PULSE_QUEUE_PERSISTENCE
@@ -157,6 +162,124 @@ const PULSE_QUEUE_DATA_ROOT = PULSE_QUEUE_PERSISTENCE
   : null;
 if (rawQueuePersistenceFlag === '0' || rawQueuePersistenceFlag === 'false' || rawQueuePersistenceFlag === 'no') {
   throw new Error('[CONFIG] PULSE_QUEUE_PERSISTENCE=false is not allowed: queue persistence is mandatory.');
+}
+
+function normalizeCardOverrides(payload) {
+  const source = payload && typeof payload === 'object' ? payload : {};
+  const hiddenMap = source.hiddenMap && typeof source.hiddenMap === 'object' ? source.hiddenMap : {};
+  const renameMap = source.renameMap && typeof source.renameMap === 'object' ? source.renameMap : {};
+  const runtimeMap = source.runtimeMap && typeof source.runtimeMap === 'object' ? source.runtimeMap : {};
+  return {
+    hiddenMap: Object.fromEntries(Object.entries(hiddenMap).map(([k, v]) => [String(k), Boolean(v)])),
+    renameMap: Object.fromEntries(Object.entries(renameMap).map(([k, v]) => [String(k), String(v || '')])),
+    runtimeMap: Object.fromEntries(Object.entries(runtimeMap).map(([k, v]) => [String(k), String(v || '')]))
+  };
+}
+
+function loadCardOverridesFromDisk() {
+  try {
+    if (!fs.existsSync(UI_CARD_OVERRIDES_FILE)) {
+      return { hiddenMap: {}, renameMap: {}, runtimeMap: {} };
+    }
+    const raw = fs.readFileSync(UI_CARD_OVERRIDES_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    return normalizeCardOverrides(parsed);
+  } catch (e) {
+    console.warn('[UI-OVERRIDES] Failed to load card overrides:', e.message);
+    return { hiddenMap: {}, renameMap: {}, runtimeMap: {} };
+  }
+}
+
+function saveCardOverridesToDisk(payload) {
+  const normalized = normalizeCardOverrides(payload);
+  try {
+    fs.mkdirSync(path.dirname(UI_CARD_OVERRIDES_FILE), { recursive: true });
+    fs.writeFileSync(UI_CARD_OVERRIDES_FILE, JSON.stringify(normalized, null, 2), 'utf8');
+    return normalized;
+  } catch (e) {
+    throw new Error(`Unable to persist card overrides: ${e.message}`);
+  }
+}
+
+let uiCardOverrides = loadCardOverridesFromDisk();
+
+const nodeRuntimeStartedAt = Date.now();
+const eventLoopDelayHistogram = monitorEventLoopDelay({ resolution: 20 });
+eventLoopDelayHistogram.enable();
+let lastCpuUsageSample = process.cpuUsage();
+let lastCpuSampleHrtimeNs = process.hrtime.bigint();
+
+function bytesToMb(value) {
+  return Number.isFinite(value) ? Number((value / (1024 * 1024)).toFixed(2)) : 0;
+}
+
+function toMsFromNs(value) {
+  return Number.isFinite(value) ? Number((value / 1e6).toFixed(3)) : 0;
+}
+
+function getNodeRuntimeDiagnosticsSnapshot() {
+  const mem = process.memoryUsage();
+  const heap = v8.getHeapStatistics();
+  const elu = performance.eventLoopUtilization();
+  const handles = typeof process._getActiveHandles === 'function' ? process._getActiveHandles().length : null;
+  const requests = typeof process._getActiveRequests === 'function' ? process._getActiveRequests().length : null;
+  const nowHrtimeNs = process.hrtime.bigint();
+  const cpuDiff = process.cpuUsage(lastCpuUsageSample);
+  const elapsedSampleMs = Number(nowHrtimeNs - lastCpuSampleHrtimeNs) / 1e6;
+  lastCpuUsageSample = process.cpuUsage();
+  lastCpuSampleHrtimeNs = nowHrtimeNs;
+  const cpuTotalMs = (cpuDiff.user + cpuDiff.system) / 1000;
+  const cpuPercentSingleCore = elapsedSampleMs > 0 ? Number(((cpuTotalMs / elapsedSampleMs) * 100).toFixed(2)) : 0;
+  const cpuCount = Math.max(1, os.cpus().length || 1);
+  const cpuPercentAllCores = Number((cpuPercentSingleCore / cpuCount).toFixed(2));
+
+  return {
+    timestamp: Date.now(),
+    uptimeSeconds: Math.round(process.uptime()),
+    process: {
+      pid: process.pid,
+      platform: process.platform,
+      nodeVersion: process.version,
+      rssMb: bytesToMb(mem.rss),
+      heapUsedMb: bytesToMb(mem.heapUsed),
+      heapTotalMb: bytesToMb(mem.heapTotal),
+      externalMb: bytesToMb(mem.external),
+      arrayBuffersMb: bytesToMb(mem.arrayBuffers),
+      heapUsedPercent: mem.heapTotal > 0 ? Number(((mem.heapUsed / mem.heapTotal) * 100).toFixed(2)) : 0,
+      activeHandles: handles,
+      activeRequests: requests
+    },
+    v8: {
+      heapLimitMb: bytesToMb(heap.heap_size_limit),
+      mallocedMb: bytesToMb(heap.malloced_memory),
+      peakMallocedMb: bytesToMb(heap.peak_malloced_memory),
+      nativeContexts: Number(heap.number_of_native_contexts || 0),
+      detachedContexts: Number(heap.number_of_detached_contexts || 0)
+    },
+    eventLoop: {
+      utilization: Number((elu.utilization || 0).toFixed(4)),
+      activeMs: Number((elu.active || 0).toFixed(3)),
+      idleMs: Number((elu.idle || 0).toFixed(3)),
+      delayMeanMs: toMsFromNs(eventLoopDelayHistogram.mean),
+      delayStddevMs: toMsFromNs(eventLoopDelayHistogram.stddev),
+      delayP95Ms: toMsFromNs(eventLoopDelayHistogram.percentile(95)),
+      delayP99Ms: toMsFromNs(eventLoopDelayHistogram.percentile(99)),
+      delayMaxMs: toMsFromNs(eventLoopDelayHistogram.max)
+    },
+    cpu: {
+      sampleWindowMs: Number(elapsedSampleMs.toFixed(3)),
+      usagePercentSingleCore: cpuPercentSingleCore,
+      usagePercentAllCores: cpuPercentAllCores,
+      cpuCount,
+      loadAvg1m: Number((os.loadavg()[0] || 0).toFixed(3)),
+      loadAvg5m: Number((os.loadavg()[1] || 0).toFixed(3)),
+      loadAvg15m: Number((os.loadavg()[2] || 0).toFixed(3))
+    },
+    sinceStart: {
+      startedAt: nodeRuntimeStartedAt,
+      elapsedSeconds: Math.round((Date.now() - nodeRuntimeStartedAt) / 1000)
+    }
+  };
 }
 
 const app = express();
@@ -448,6 +571,7 @@ const DLQ_EVENT_LOG_PATH = './data/dlq-events.jsonl';
 const TX_LIFECYCLE_COMPILED_PATH = './data/transaction-lifecycle-compiled.json';
 let _txLifecycleCompiledCache = null;
 let _txLifecycleCompiledMtimeMs = 0;
+const SANCTIONS_CACHE_PATH = './data/compliance/sanctions-cache.json';
 const USER_MANAGEMENT_PATH = './data/user-management.json';
 const USER_GROUPS_PATH = './data/user-groups.json';
 const MONITOR_CLASSES_PATH = './data/monitor-classes.json';
@@ -921,6 +1045,10 @@ let auditChainHead = 'GENESIS';
 const LIFECYCLE_HEARTBEAT_INACTIVITY_MS = readEnvNumber('LIFECYCLE_HEARTBEAT_INACTIVITY_MS', 30 * 1000);
 const LIFECYCLE_HEARTBEAT_CHECK_INTERVAL_MS = readEnvNumber('LIFECYCLE_HEARTBEAT_CHECK_INTERVAL_MS', 5 * 1000);
 const LIFECYCLE_HEARTBEAT_ENABLED = readEnvBoolean('LIFECYCLE_HEARTBEAT_ENABLED', ['1', 'true', 'yes'], true);
+const ROUTER_WORKER_MAX_BACKOFF_MULTIPLIER = Math.max(1.5, readEnvNumber('ROUTER_WORKER_MAX_BACKOFF_MULTIPLIER', 3.5));
+const LIFECYCLE_WORKER_MAX_BACKOFF_MULTIPLIER = Math.max(1.5, readEnvNumber('LIFECYCLE_WORKER_MAX_BACKOFF_MULTIPLIER', 4.5));
+const BRIDGE_WORKER_MAX_BACKOFF_MULTIPLIER = Math.max(1.5, readEnvNumber('BRIDGE_WORKER_MAX_BACKOFF_MULTIPLIER', 4));
+const WORKER_STARTUP_STAGGER_CAP_MS = Math.max(20, readEnvNumber('WORKER_STARTUP_STAGGER_CAP_MS', 180));
 const lifecycleHeartbeat = {
   enabled: LIFECYCLE_HEARTBEAT_ENABLED,
   inactivityMs: Number.isFinite(LIFECYCLE_HEARTBEAT_INACTIVITY_MS) && LIFECYCLE_HEARTBEAT_INACTIVITY_MS > 0
@@ -940,6 +1068,10 @@ const lifecycleHeartbeat = {
 };
 const STEP3_INGRESS_QUEUE = 'swift.mt103.inbound';
 const STEP3_TARGET_QUEUE = 'tx.lynx.pending';
+const sanctionsComplianceService = createSanctionsComplianceService({
+  cachePath: SANCTIONS_CACHE_PATH,
+  logger: console
+});
 const step3LatencyTracker = {
   pendingByTxId: new Map(),
   samples: [],
@@ -947,6 +1079,13 @@ const step3LatencyTracker = {
   maxSamples: 2000,
   lastUpdatedAt: null,
   lastSample: null
+};
+
+const queueEnqueueLatencyTracker = {
+  byQueue: new Map(),
+  maxQueues: 200,
+  maxSamplesPerQueue: 500,
+  lastUpdatedAt: null
 };
 
 function readNestedValueByPath(obj, path) {
@@ -1072,6 +1211,116 @@ function percentileFromSorted(sortedValues, ratio) {
   const clamped = Math.min(Math.max(Number(ratio), 0), 1);
   const index = Math.max(0, Math.min(sortedValues.length - 1, Math.ceil(clamped * sortedValues.length) - 1));
   return sortedValues[index];
+}
+
+function trimQueueLatencyQueuesIfNeeded() {
+  while (queueEnqueueLatencyTracker.byQueue.size > queueEnqueueLatencyTracker.maxQueues) {
+    const oldestQueue = queueEnqueueLatencyTracker.byQueue.keys().next().value;
+    if (!oldestQueue) break;
+    queueEnqueueLatencyTracker.byQueue.delete(oldestQueue);
+  }
+}
+
+function getOrCreateQueueLatencyEntry(queueName) {
+  const key = String(queueName || 'unknown');
+  let entry = queueEnqueueLatencyTracker.byQueue.get(key);
+  if (!entry) {
+    entry = {
+      samples: [],
+      total: 0,
+      failed: 0,
+      lastSample: null,
+      lastUpdatedAt: null
+    };
+    queueEnqueueLatencyTracker.byQueue.set(key, entry);
+    trimQueueLatencyQueuesIfNeeded();
+  }
+  return { key, entry };
+}
+
+function trackQueueEnqueueLatency(queueName, latencyMs, { managerId = null, mode = null, ok = true, error = null } = {}) {
+  const numericLatencyMs = Number(latencyMs);
+  if (!Number.isFinite(numericLatencyMs) || numericLatencyMs < 0) return;
+
+  const nowIso = new Date().toISOString();
+  const sample = {
+    latencyMs: Number(numericLatencyMs.toFixed(3)),
+    ok: Boolean(ok),
+    managerId: managerId ? String(managerId) : null,
+    mode: mode ? String(mode) : null,
+    error: error ? String(error).slice(0, 200) : null,
+    measuredAt: nowIso
+  };
+
+  const { entry } = getOrCreateQueueLatencyEntry(queueName);
+  entry.total += 1;
+  if (!sample.ok) {
+    entry.failed += 1;
+  }
+  entry.samples.push(sample);
+  while (entry.samples.length > queueEnqueueLatencyTracker.maxSamplesPerQueue) {
+    entry.samples.shift();
+  }
+  entry.lastSample = sample;
+  entry.lastUpdatedAt = nowIso;
+  queueEnqueueLatencyTracker.lastUpdatedAt = nowIso;
+}
+
+function summarizeQueueEnqueueLatencyEntry(queueName, entry, recentLimit = 5) {
+  const samples = Array.isArray(entry?.samples) ? entry.samples : [];
+  const latencies = samples
+    .map((sample) => Number(sample?.latencyMs))
+    .filter((value) => Number.isFinite(value) && value >= 0)
+    .sort((a, b) => a - b);
+
+  const count = latencies.length;
+  const sum = latencies.reduce((acc, value) => acc + value, 0);
+  const avgMs = count > 0 ? Number((sum / count).toFixed(3)) : null;
+  const total = Number(entry?.total) || 0;
+  const failed = Number(entry?.failed) || 0;
+
+  return {
+    queueName,
+    totalSamples: total,
+    failureCount: failed,
+    failureRatePct: total > 0 ? Number(((failed / total) * 100).toFixed(2)) : 0,
+    sampleCountWindow: count,
+    avgMs,
+    minMs: count > 0 ? latencies[0] : null,
+    p50Ms: percentileFromSorted(latencies, 0.5),
+    p95Ms: percentileFromSorted(latencies, 0.95),
+    p99Ms: percentileFromSorted(latencies, 0.99),
+    maxMs: count > 0 ? latencies[count - 1] : null,
+    lastUpdatedAt: entry?.lastUpdatedAt || null,
+    lastSample: entry?.lastSample || null,
+    recentSamples: samples.slice(-Math.max(1, Number(recentLimit) || 5))
+  };
+}
+
+function getQueueEnqueueLatencySummary({ queueName = null, recentLimit = 5 } = {}) {
+  if (queueName) {
+    const key = String(queueName);
+    const entry = queueEnqueueLatencyTracker.byQueue.get(key);
+    return {
+      enabled: true,
+      trackedQueues: queueEnqueueLatencyTracker.byQueue.size,
+      lastUpdatedAt: queueEnqueueLatencyTracker.lastUpdatedAt,
+      queues: entry ? [summarizeQueueEnqueueLatencyEntry(key, entry, recentLimit)] : []
+    };
+  }
+
+  const queues = [];
+  for (const [name, entry] of queueEnqueueLatencyTracker.byQueue.entries()) {
+    queues.push(summarizeQueueEnqueueLatencyEntry(name, entry, recentLimit));
+  }
+  queues.sort((a, b) => (b.p95Ms || 0) - (a.p95Ms || 0));
+
+  return {
+    enabled: true,
+    trackedQueues: queueEnqueueLatencyTracker.byQueue.size,
+    lastUpdatedAt: queueEnqueueLatencyTracker.lastUpdatedAt,
+    queues
+  };
 }
 
 function getStep3LatencySummary({ recentLimit = 10 } = {}) {
@@ -2996,78 +3245,99 @@ function ensureRoute(queueName) {
 }
 
 async function enqueueViaRoute(route, queueName, message, sourceService, messageEnvelope = null, preferredDataTypeIds = null) {
+  const startedAt = performance.now();
+  let enqueueMode = null;
+  let succeeded = false;
+  let enqueueError = null;
   const manager = queueManagerRegistry.get(route.managerId);
   if (!manager) throw new Error(`Route manager ${route.managerId} not found`);
 
   const messageId = crypto.randomUUID();
 
-  if (manager.local) {
-    const qm = queueManagers[manager.localIndex];
-    let dataTypeIds = Array.isArray(preferredDataTypeIds) && preferredDataTypeIds.length > 0
-      ? preferredDataTypeIds
-      : inferQueueDataTypeIds(queueName);
-    if (!qm.getConfig(queueName)?.name) {
-      qm.createQueue(queueName, {
-        dataTypeId: dataTypeIds[0],
-        dataTypeIds,
-        queueClass: 'permanent',
-        createdByUser: false
-      });
-    } else {
-      const cfg = qm.getConfig(queueName) || {};
-      const configured = cfg.dataTypeIds || cfg.dataTypeId;
-      dataTypeIds = Array.isArray(configured) ? configured : (configured ? [configured] : dataTypeIds);
+  try {
+    if (manager.local) {
+      enqueueMode = 'local';
+      const qm = queueManagers[manager.localIndex];
+      let dataTypeIds = Array.isArray(preferredDataTypeIds) && preferredDataTypeIds.length > 0
+        ? preferredDataTypeIds
+        : inferQueueDataTypeIds(queueName);
+      if (!qm.getConfig(queueName)?.name) {
+        qm.createQueue(queueName, {
+          dataTypeId: dataTypeIds[0],
+          dataTypeIds,
+          queueClass: 'permanent',
+          createdByUser: false
+        });
+      } else {
+        const cfg = qm.getConfig(queueName) || {};
+        const configured = cfg.dataTypeIds || cfg.dataTypeId;
+        dataTypeIds = Array.isArray(configured) ? configured : (configured ? [configured] : dataTypeIds);
+      }
+
+      const normalizedEnvelope = normalizeMessageEnvelope({ message, messageEnvelope, dataTypeIds });
+      ensureMessageMatchesQueueType({ queueName, message, messageEnvelope: normalizedEnvelope, sourceService, managerId: manager.managerId, dataTypeIds });
+
+      // Record enqueue for metrics
+      metricsCollector.recordEnqueue(messageId, queueName);
+
+      qm.enqueue(queueName, message, sourceService || 'unknown', messageId, normalizedEnvelope);
+      trackStep3IngressEnqueue(queueName, message);
+      trackStep3Arrival(queueName, message);
+      incrementLifecycleCumulativeByQueue(queueName, 1);
+      replicateEnqueueToFollowers(queueName, message, sourceService, route.managerId, messageId, normalizedEnvelope)
+        .catch(e => console.warn(`[REPLICATION] Fan-out error: ${e.message}`));
+      succeeded = true;
+      return { deliveredTo: manager.managerId, mode: 'local', messageId };
     }
 
+    enqueueMode = 'remote';
+    const url = `http://${manager.ip}:${manager.port}/enqueue`;
+    const dataTypeIds = Array.isArray(preferredDataTypeIds) && preferredDataTypeIds.length > 0
+      ? preferredDataTypeIds
+      : inferQueueDataTypeIds(queueName);
     const normalizedEnvelope = normalizeMessageEnvelope({ message, messageEnvelope, dataTypeIds });
     ensureMessageMatchesQueueType({ queueName, message, messageEnvelope: normalizedEnvelope, sourceService, managerId: manager.managerId, dataTypeIds });
-
-    // Record enqueue for metrics
-    metricsCollector.recordEnqueue(messageId, queueName);
-
-    qm.enqueue(queueName, message, sourceService || 'unknown', messageId, normalizedEnvelope);
+    await fetch(`http://${manager.ip}:${manager.port}/apply-config-change`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        type: 'createQueue',
+        queueName,
+        config: {
+          dataTypeId: dataTypeIds[0],
+          dataTypeIds,
+          queueClass: 'permanent',
+          createdByUser: false
+        }
+      })
+    }).catch(() => null);
+    const remoteRes = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ queueName, message, sourceService: sourceService || 'unknown', messageId, messageEnvelope: normalizedEnvelope })
+    });
+    if (!remoteRes.ok) {
+      throw new Error(`Remote enqueue failed at ${url} with status ${remoteRes.status}`);
+    }
     trackStep3IngressEnqueue(queueName, message);
     trackStep3Arrival(queueName, message);
     incrementLifecycleCumulativeByQueue(queueName, 1);
     replicateEnqueueToFollowers(queueName, message, sourceService, route.managerId, messageId, normalizedEnvelope)
       .catch(e => console.warn(`[REPLICATION] Fan-out error: ${e.message}`));
-    return { deliveredTo: manager.managerId, mode: 'local', messageId };
+    succeeded = true;
+    return { deliveredTo: manager.managerId, mode: 'remote', url, messageId };
+  } catch (error) {
+    enqueueError = error;
+    throw error;
+  } finally {
+    const latencyMs = Math.max(0, performance.now() - startedAt);
+    trackQueueEnqueueLatency(queueName, latencyMs, {
+      managerId: manager.managerId,
+      mode: enqueueMode,
+      ok: succeeded,
+      error: enqueueError?.message || null
+    });
   }
-
-  const url = `http://${manager.ip}:${manager.port}/enqueue`;
-  const dataTypeIds = Array.isArray(preferredDataTypeIds) && preferredDataTypeIds.length > 0
-    ? preferredDataTypeIds
-    : inferQueueDataTypeIds(queueName);
-  const normalizedEnvelope = normalizeMessageEnvelope({ message, messageEnvelope, dataTypeIds });
-  ensureMessageMatchesQueueType({ queueName, message, messageEnvelope: normalizedEnvelope, sourceService, managerId: manager.managerId, dataTypeIds });
-  await fetch(`http://${manager.ip}:${manager.port}/apply-config-change`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      type: 'createQueue',
-      queueName,
-      config: {
-        dataTypeId: dataTypeIds[0],
-        dataTypeIds,
-        queueClass: 'permanent',
-        createdByUser: false
-      }
-    })
-  }).catch(() => null);
-  const remoteRes = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ queueName, message, sourceService: sourceService || 'unknown', messageId, messageEnvelope: normalizedEnvelope })
-  });
-  if (!remoteRes.ok) {
-    throw new Error(`Remote enqueue failed at ${url} with status ${remoteRes.status}`);
-  }
-  trackStep3IngressEnqueue(queueName, message);
-  trackStep3Arrival(queueName, message);
-  incrementLifecycleCumulativeByQueue(queueName, 1);
-  replicateEnqueueToFollowers(queueName, message, sourceService, route.managerId, messageId, normalizedEnvelope)
-    .catch(e => console.warn(`[REPLICATION] Fan-out error: ${e.message}`));
-  return { deliveredTo: manager.managerId, mode: 'remote', url, messageId };
 }
 
 async function replicateEnqueueToFollowers(queueName, message, sourceService, leaderManagerId, messageId, messageEnvelope = null) {
@@ -3808,7 +4078,11 @@ function stopRouterWorker(inputQueue) {
   const key = String(inputQueue || '');
   const worker = routerWorkers.get(key);
   if (!worker) return false;
-  clearInterval(worker.intervalId);
+  if (typeof worker.stopScheduler === 'function') {
+    worker.stopScheduler();
+  } else {
+    clearInterval(worker.intervalId);
+  }
   routerWorkers.delete(key);
   return true;
 }
@@ -3831,44 +4105,54 @@ function startRouterWorker({ inputQueue, intervalMs = 200, batchSize = 100, cons
     lastError: null,
     lastNotConfiguredLogAt: 0,
     startedAt: new Date().toISOString(),
-    intervalId: null
+    intervalId: null,
+    stopScheduler: null
   };
 
-  workerState.intervalId = setInterval(async () => {
-    if (!canRunQueueWorkers()) {
-      workerState.lastRunAt = new Date().toISOString();
-      workerState.lastError = machineAvailability.draining
-        ? 'Node draining; not accepting new work'
-        : 'Node unavailable; worker paused';
-      return;
-    }
-    beginMachineWorkUnit();
-    try {
-      const result = await messageRouter.processFromQueue(workerState.inputQueue, {
-        maxMessages: workerState.batchSize,
-        consumerService: workerState.consumerService
-      });
-      workerState.processedMessages += Number(result.processed || 0);
-      workerState.lastRunAt = new Date().toISOString();
-      workerState.lastError = null;
-    } catch (e) {
-      workerState.lastError = e.message;
-      workerState.lastRunAt = new Date().toISOString();
-      const isQueueNotConfigured = /not configured/i.test(String(e.message || ''));
-      if (isQueueNotConfigured) {
-        const now = Date.now();
-        // Keep visibility, but avoid flooding logs while waiting for queue creation.
-        if (now - workerState.lastNotConfiguredLogAt >= 30000) {
-          workerState.lastNotConfiguredLogAt = now;
-          console.warn(`[ROUTER] Worker ${workerState.inputQueue} waiting for queue configuration: ${e.message}`);
-        }
-      } else {
-        console.warn(`[ROUTER] Worker ${workerState.inputQueue} error: ${e.message}`);
+  const startupDelayMs = computeWorkerStartupDelayMs(workerState.intervalMs, `router:${workerState.inputQueue}`);
+  workerState.stopScheduler = createAdaptiveWorkerScheduler({
+    intervalMs: workerState.intervalMs,
+    initialDelayMs: startupDelayMs,
+    maxBackoffMultiplier: ROUTER_WORKER_MAX_BACKOFF_MULTIPLIER,
+    onTickError: () => 2,
+    runTick: async () => {
+      if (!canRunQueueWorkers()) {
+        workerState.lastRunAt = new Date().toISOString();
+        workerState.lastError = machineAvailability.draining
+          ? 'Node draining; not accepting new work'
+          : 'Node unavailable; worker paused';
+        return 0;
       }
-    } finally {
-      endMachineWorkUnit();
+      beginMachineWorkUnit();
+      try {
+        const result = await messageRouter.processFromQueue(workerState.inputQueue, {
+          maxMessages: workerState.batchSize,
+          consumerService: workerState.consumerService
+        });
+        const processed = Number(result.processed || 0);
+        workerState.processedMessages += processed;
+        workerState.lastRunAt = new Date().toISOString();
+        workerState.lastError = null;
+        return processed;
+      } catch (e) {
+        workerState.lastError = e.message;
+        workerState.lastRunAt = new Date().toISOString();
+        const isQueueNotConfigured = /not configured/i.test(String(e.message || ''));
+        if (isQueueNotConfigured) {
+          const now = Date.now();
+          if (now - workerState.lastNotConfiguredLogAt >= 30000) {
+            workerState.lastNotConfiguredLogAt = now;
+            console.warn(`[ROUTER] Worker ${workerState.inputQueue} waiting for queue configuration: ${e.message}`);
+          }
+        } else {
+          console.warn(`[ROUTER] Worker ${workerState.inputQueue} error: ${e.message}`);
+        }
+        throw e;
+      } finally {
+        endMachineWorkUnit();
+      }
     }
-  }, workerState.intervalMs);
+  });
 
   routerWorkers.set(key, workerState);
   return workerState;
@@ -3916,7 +4200,11 @@ function stopLifecycleWorker(workerId) {
   const key = String(workerId || '').trim();
   const worker = lifecycleWorkers.get(key);
   if (!worker) return false;
-  clearInterval(worker.intervalId);
+  if (typeof worker.stopScheduler === 'function') {
+    worker.stopScheduler();
+  } else {
+    clearInterval(worker.intervalId);
+  }
   lifecycleWorkers.delete(key);
   return true;
 }
@@ -3943,6 +4231,65 @@ async function delayMs(ms) {
   const duration = Number(ms || 0);
   if (duration <= 0) return;
   await new Promise(resolve => setTimeout(resolve, duration));
+}
+
+function computeWorkerStartupDelayMs(intervalMs, seedText = '') {
+  const base = Number(intervalMs) > 0 ? Number(intervalMs) : 200;
+  const spread = Math.max(20, Math.min(WORKER_STARTUP_STAGGER_CAP_MS, Math.floor(base * 0.8)));
+  let hash = 0;
+  const text = String(seedText || 'worker');
+  for (let i = 0; i < text.length; i += 1) {
+    hash = ((hash << 5) - hash) + text.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash) % spread;
+}
+
+function createAdaptiveWorkerScheduler({ intervalMs, initialDelayMs = 0, maxBackoffMultiplier = 4, onTickError = null, runTick }) {
+  const baseInterval = Math.max(25, Number(intervalMs) || 200);
+  const maxMultiplier = Math.max(1, Number(maxBackoffMultiplier) || 4);
+  let timerId = null;
+  let stopped = false;
+  let idleStreak = 0;
+
+  const scheduleNext = (delayMsValue) => {
+    if (stopped) return;
+    const delay = Math.max(10, Number(delayMsValue) || baseInterval);
+    timerId = setTimeout(tick, delay);
+  };
+
+  const computeNextDelay = (processedCount) => {
+    const processed = Number(processedCount) || 0;
+    if (processed > 0) {
+      idleStreak = 0;
+      return baseInterval;
+    }
+    idleStreak = Math.min(idleStreak + 1, 6);
+    const multiplier = Math.min(maxMultiplier, 1 + (idleStreak * 0.5));
+    return Math.round(baseInterval * multiplier);
+  };
+
+  const tick = async () => {
+    if (stopped) return;
+    try {
+      const processed = await runTick();
+      scheduleNext(computeNextDelay(processed));
+    } catch (error) {
+      const multiplier = typeof onTickError === 'function' ? Number(onTickError(error)) : 2;
+      const normalizedMultiplier = Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 2;
+      scheduleNext(Math.round(baseInterval * normalizedMultiplier));
+    }
+  };
+
+  scheduleNext(initialDelayMs > 0 ? initialDelayMs : baseInterval);
+
+  return () => {
+    stopped = true;
+    if (timerId) {
+      clearTimeout(timerId);
+      timerId = null;
+    }
+  };
 }
 
 async function runLifecycleWorkerTick(workerState) {
@@ -4023,6 +4370,7 @@ async function runLifecycleWorkerTick(workerState) {
     if (moved > 0) {
       touchLifecycleActivity();
     }
+    return moved;
   } finally {
     endMachineWorkUnit();
   }
@@ -4061,33 +4409,42 @@ function startLifecycleWorker({
     lastError: null,
     lastNotConfiguredLogAt: 0,
     startedAt: new Date().toISOString(),
-    intervalId: null
+    intervalId: null,
+    stopScheduler: null
   };
 
-  workerState.intervalId = setInterval(async () => {
-    if (!canRunQueueWorkers()) {
-      workerState.lastRunAt = new Date().toISOString();
-      workerState.lastError = machineAvailability.draining
-        ? 'Node draining; not accepting new work'
-        : 'Node unavailable; worker paused';
-      return;
-    }
-    try {
-      await runLifecycleWorkerTick(workerState);
-    } catch (e) {
-      workerState.lastError = e.message;
-      workerState.lastRunAt = new Date().toISOString();
-      if (isQueueNotConfiguredError(e)) {
-        const now = Date.now();
-        if (now - workerState.lastNotConfiguredLogAt >= 30000) {
-          workerState.lastNotConfiguredLogAt = now;
-          console.warn(`[LIFECYCLE] Worker ${workerState.workerId} waiting for queue configuration: ${e.message}`);
+  const startupDelayMs = computeWorkerStartupDelayMs(workerState.intervalMs, `lifecycle:${workerState.workerId}`);
+  workerState.stopScheduler = createAdaptiveWorkerScheduler({
+    intervalMs: workerState.intervalMs,
+    initialDelayMs: startupDelayMs,
+    maxBackoffMultiplier: LIFECYCLE_WORKER_MAX_BACKOFF_MULTIPLIER,
+    onTickError: () => 2,
+    runTick: async () => {
+      if (!canRunQueueWorkers()) {
+        workerState.lastRunAt = new Date().toISOString();
+        workerState.lastError = machineAvailability.draining
+          ? 'Node draining; not accepting new work'
+          : 'Node unavailable; worker paused';
+        return 0;
+      }
+      try {
+        return await runLifecycleWorkerTick(workerState);
+      } catch (e) {
+        workerState.lastError = e.message;
+        workerState.lastRunAt = new Date().toISOString();
+        if (isQueueNotConfiguredError(e)) {
+          const now = Date.now();
+          if (now - workerState.lastNotConfiguredLogAt >= 30000) {
+            workerState.lastNotConfiguredLogAt = now;
+            console.warn(`[LIFECYCLE] Worker ${workerState.workerId} waiting for queue configuration: ${e.message}`);
+          }
+        } else {
+          console.warn(`[LIFECYCLE] Worker ${workerState.workerId} error: ${e.message}`);
         }
-      } else {
-        console.warn(`[LIFECYCLE] Worker ${workerState.workerId} error: ${e.message}`);
+        throw e;
       }
     }
-  }, workerState.intervalMs);
+  });
 
   lifecycleWorkers.set(id, workerState);
   return workerState;
@@ -4133,7 +4490,11 @@ function stopQueueBridgeWorker(workerId) {
   const key = String(workerId || '').trim();
   const worker = queueBridgeWorkers.get(key);
   if (!worker) return false;
-  clearInterval(worker.intervalId);
+  if (typeof worker.stopScheduler === 'function') {
+    worker.stopScheduler();
+  } else {
+    clearInterval(worker.intervalId);
+  }
   queueBridgeWorkers.delete(key);
   return true;
 }
@@ -4235,6 +4596,7 @@ async function runQueueBridgeWorkerTick(workerState) {
     if (moved > 0) {
       touchLifecycleActivity();
     }
+    return moved;
   } finally {
     endMachineWorkUnit();
   }
@@ -4275,33 +4637,42 @@ function startQueueBridgeWorker({
     lastError: null,
     lastNotConfiguredLogAt: 0,
     startedAt: new Date().toISOString(),
-    intervalId: null
+    intervalId: null,
+    stopScheduler: null
   };
 
-  workerState.intervalId = setInterval(async () => {
-    if (!canRunQueueWorkers()) {
-      workerState.lastRunAt = new Date().toISOString();
-      workerState.lastError = machineAvailability.draining
-        ? 'Node draining; not accepting new work'
-        : 'Node unavailable; worker paused';
-      return;
-    }
-    try {
-      await runQueueBridgeWorkerTick(workerState);
-    } catch (e) {
-      workerState.lastError = e.message;
-      workerState.lastRunAt = new Date().toISOString();
-      if (isQueueNotConfiguredError(e)) {
-        const now = Date.now();
-        if (now - workerState.lastNotConfiguredLogAt >= 30000) {
-          workerState.lastNotConfiguredLogAt = now;
-          console.warn(`[BRIDGE] Worker ${workerState.workerId} waiting for queue configuration: ${e.message}`);
+  const startupDelayMs = computeWorkerStartupDelayMs(workerState.intervalMs, `bridge:${workerState.workerId}`);
+  workerState.stopScheduler = createAdaptiveWorkerScheduler({
+    intervalMs: workerState.intervalMs,
+    initialDelayMs: startupDelayMs,
+    maxBackoffMultiplier: BRIDGE_WORKER_MAX_BACKOFF_MULTIPLIER,
+    onTickError: () => 2,
+    runTick: async () => {
+      if (!canRunQueueWorkers()) {
+        workerState.lastRunAt = new Date().toISOString();
+        workerState.lastError = machineAvailability.draining
+          ? 'Node draining; not accepting new work'
+          : 'Node unavailable; worker paused';
+        return 0;
+      }
+      try {
+        return await runQueueBridgeWorkerTick(workerState);
+      } catch (e) {
+        workerState.lastError = e.message;
+        workerState.lastRunAt = new Date().toISOString();
+        if (isQueueNotConfiguredError(e)) {
+          const now = Date.now();
+          if (now - workerState.lastNotConfiguredLogAt >= 30000) {
+            workerState.lastNotConfiguredLogAt = now;
+            console.warn(`[BRIDGE] Worker ${workerState.workerId} waiting for queue configuration: ${e.message}`);
+          }
+        } else {
+          console.warn(`[BRIDGE] Worker ${workerState.workerId} error: ${e.message}`);
         }
-      } else {
-        console.warn(`[BRIDGE] Worker ${workerState.workerId} error: ${e.message}`);
+        throw e;
       }
     }
-  }, workerState.intervalMs);
+  });
 
   queueBridgeWorkers.set(id, workerState);
   return workerState;
@@ -5817,6 +6188,48 @@ async function getFsmEntityStateFromSql(entityId, { historyLimit = 50 } = {}) {
   };
 }
 
+async function getFsmTransactionSummaryFromSql({ windowMinutes = 60 } = {}) {
+  const pool = await getTransactionStateMssqlPool();
+  const minutes = Math.max(1, Math.min(7 * 24 * 60, Number(windowMinutes) || 60));
+
+  const rs = await pool.request()
+    .input('window_minutes', txMssql.Int, minutes)
+    .query(`
+DECLARE @since DATETIME2 = DATEADD(minute, -@window_minutes, SYSUTCDATETIME());
+SELECT
+  @since AS since_utc,
+  (SELECT COUNT(DISTINCT entity_id)
+   FROM ${FSM_MSSQL_HISTORY_TABLE_SQL}
+   WHERE updated_at >= @since) AS processed_count,
+  (SELECT COUNT(*)
+   FROM ${FSM_MSSQL_CURRENT_TABLE_SQL}
+   WHERE updated_at >= @since
+     AND (
+       LOWER(state_id) IN ('reconciled', 'settled')
+       OR LOWER(ISNULL(queue_name, '')) = 'tx.reconciled'
+       OR is_terminal = 1
+     )) AS settled_count,
+  (SELECT COUNT(*)
+   FROM ${FSM_MSSQL_CURRENT_TABLE_SQL}
+   WHERE updated_at >= @since
+     AND LOWER(state_id) = 'reconciled') AS reconciled_count,
+  (SELECT COUNT(*)
+   FROM ${FSM_MSSQL_CURRENT_TABLE_SQL}
+   WHERE updated_at >= @since
+     AND is_terminal = 1) AS terminal_count
+`);
+
+  const row = rs.recordset?.[0] || {};
+  return {
+    windowMinutes: minutes,
+    sinceUtc: row.since_utc || null,
+    processedCount: Number(row.processed_count) || 0,
+    settledCount: Number(row.settled_count) || 0,
+    reconciledCount: Number(row.reconciled_count) || 0,
+    terminalCount: Number(row.terminal_count) || 0
+  };
+}
+
 function extractEntityIdFromInquiry(queryText) {
   const text = String(queryText || '').trim();
   if (!text) return null;
@@ -7223,6 +7636,28 @@ function registerRoutes(app) {
     res.json({ services });
   });
 
+  app.get('/api/ui/card-overrides', requirePermission('lifecycle.read'), (req, res) => {
+    res.json({
+      hiddenMap: uiCardOverrides.hiddenMap || {},
+      renameMap: uiCardOverrides.renameMap || {},
+      runtimeMap: uiCardOverrides.runtimeMap || {}
+    });
+  });
+
+  app.put('/api/ui/card-overrides', requirePermission('lifecycle.manage'), (req, res) => {
+    try {
+      uiCardOverrides = saveCardOverridesToDisk(req.body || {});
+      res.json({
+        status: 'ok',
+        hiddenMap: uiCardOverrides.hiddenMap,
+        renameMap: uiCardOverrides.renameMap,
+        runtimeMap: uiCardOverrides.runtimeMap || {}
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   function parseRuntimeInstanceId(rawInstanceId) {
     const text = String(rawInstanceId || '').trim();
     const [rawClassId, ...rest] = text.split(':');
@@ -7619,13 +8054,15 @@ function registerRoutes(app) {
     registrars: {
       registerLifecycleInquiryRoutes,
       registerLifecycleWorkerGatewayRoutes,
-      registerQueueBrokerOpsRoutes
+      registerQueueBrokerOpsRoutes,
+      registerComplianceRoutes
     },
     dependencyFactories: {
       lifecycleInquiry: () => ({
         requirePermission,
         readTransactionLifecycleCompiled,
         getFsmEntityStateFromSql,
+        getFsmTransactionSummaryFromSql,
         getLifecycleTransitionOptions,
         formatErrorDetails,
         extractEntityIdFromInquiry,
@@ -7684,6 +8121,12 @@ function registerRoutes(app) {
         dlqEvents,
         summarizeDlqEvents,
         dequeueViaRoute
+      }),
+      compliance: () => ({
+        requirePermission,
+        resolveActor,
+        formatErrorDetails,
+        sanctionsComplianceService
       })
     }
   });
@@ -8162,12 +8605,31 @@ function registerRoutes(app) {
     const metrics = metricsCollector.getCurrentMetrics();
     const latencyPolicy = evaluateLatencyPolicies(metrics, workerConfig);
     const step3Latency = getStep3LatencySummary({ recentLimit: 20 });
+    const queueEnqueueLatency = getQueueEnqueueLatencySummary({ recentLimit: 3 });
     res.json({
       status: 'ok',
       timestamp: Date.now(),
       metrics: metrics,
       latencyPolicy,
-      step3Latency
+      step3Latency,
+      queueEnqueueLatency
+    });
+  });
+
+  app.get('/api/metrics/queue-enqueue-latency', (req, res) => {
+    const recentLimit = Number(req.query.recent || 5);
+    const queueName = req.query.queue ? String(req.query.queue) : null;
+    res.json({
+      status: 'ok',
+      timestamp: Date.now(),
+      enqueueLatency: getQueueEnqueueLatencySummary({ queueName, recentLimit })
+    });
+  });
+
+  app.get('/api/metrics/runtime', requirePermission('lifecycle.read'), (req, res) => {
+    res.json({
+      status: 'ok',
+      diagnostics: getNodeRuntimeDiagnosticsSnapshot()
     });
   });
 

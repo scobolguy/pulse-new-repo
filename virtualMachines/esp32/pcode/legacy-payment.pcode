@@ -1,0 +1,40 @@
+// Legacy Payment Workflow in Transaction Language (pcode)
+
+workflow LegacyPayment {
+    input: message
+    when message.type in ["MT103", "MT202", "MT202COV"] {
+        step CBDS_Conversion
+    }
+}
+
+step CBDS_Conversion {
+    switch message.type {
+        case "MT103":
+            map MT103_to_PACS008(message) -> pacs.008
+            output pacs.008
+        case "MT202":
+        case "MT202COV":
+            map MT202_to_PACS009(message) -> pacs.009
+            output pacs.009
+    }
+}
+
+map MT103_to_PACS008(mt103) {
+    // Map fields from MT103 to pacs.008 according to CBDS rules
+    pacs.008.InstructedAmount = mt103.Amount
+    pacs.008.Debtor = mt103.OrderingCustomer
+    pacs.008.Creditor = mt103.BeneficiaryCustomer
+    pacs.008.EndToEndId = mt103.TransactionReference
+    // ...additional field mappings per CBDS...
+    return pacs.008
+}
+
+map MT202_to_PACS009(mt202) {
+    // Map fields from MT202/202COV to pacs.009 according to CBDS rules
+    pacs.009.InstructedAmount = mt202.Amount
+    pacs.009.DebtorAgent = mt202.OrderingInstitution
+    pacs.009.CreditorAgent = mt202.BeneficiaryInstitution
+    pacs.009.TxId = mt202.TransactionReference
+    // ...additional field mappings per CBDS...
+    return pacs.009
+}

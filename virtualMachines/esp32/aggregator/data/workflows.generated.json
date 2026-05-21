@@ -10,5 +10,45 @@
         "route": "/api/queue/pacs.outbound/enqueue"
       }
     ]
+  },
+  {
+    "id": "pain2-routing",
+    "steps": [
+      {
+        "id": "if-1",
+        "action": "if",
+        "condition": {
+          "field": "message.status",
+          "operator": "equals",
+          "value": "reject"
+        },
+        "then": [
+          {
+            "id": "route-reject",
+            "action": "route_queue",
+            "queueRef": "pain2RejectQueue"
+          },
+          {
+            "id": "set-reject-state",
+            "action": "set_state",
+            "key": "transactionState",
+            "value": "rejected"
+          }
+        ],
+        "else": [
+          {
+            "id": "route-accept",
+            "action": "route_queue",
+            "queueRef": "pain2AcceptedQueue"
+          },
+          {
+            "id": "set-accept-state",
+            "action": "set_state",
+            "key": "transactionState",
+            "value": "accepted"
+          }
+        ]
+      }
+    ]
   }
 ]

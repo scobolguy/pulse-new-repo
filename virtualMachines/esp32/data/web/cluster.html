@@ -3,26 +3,74 @@
 <head>
     <title>Cluster/Gateway Config</title>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-        body { font-family: Arial, sans-serif; margin: 2em; }
-        label, input, select { font-size: 1.2em; }
-        input[type=text] { width: 200px; }
-        button { font-size: 1.1em; }
+        * { box-sizing: border-box; }
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 1rem;
+            background: #f5f7fb;
+            color: #1a2538;
+        }
+        .card {
+            max-width: 560px;
+            margin: 0 auto;
+            background: #ffffff;
+            border: 1px solid #dbe3ef;
+            border-radius: 10px;
+            padding: 1rem;
+        }
+        h2 { margin-top: 0; font-size: 1.25rem; }
+        .field { margin-bottom: 0.9rem; }
+        label { display: block; margin-bottom: 0.35rem; font-size: 1rem; font-weight: 600; }
+        input[type=text], select {
+            width: 100%;
+            font-size: 1rem;
+            padding: 0.65rem;
+            border-radius: 8px;
+            border: 1px solid #b9c7dc;
+            background: #ffffff;
+        }
+        button {
+            width: 100%;
+            font-size: 1rem;
+            font-weight: 600;
+            padding: 0.7rem;
+            border-radius: 8px;
+            border: 1px solid #2f6fd3;
+            background: #2f6fd3;
+            color: #ffffff;
+            cursor: pointer;
+        }
+        button:hover { background: #255db1; }
+        #configResult { margin-top: 0.9rem; font-size: 0.95rem; }
+        @media (max-width: 600px) {
+            body { padding: 0.75rem; }
+            .card { padding: 0.85rem; }
+            h2 { font-size: 1.1rem; }
+        }
     </style>
 </head>
 <body>
-    <h2>Cluster & Gateway Configuration</h2>
-    <form id="clusterForm">
-        <label for="clusterId">Cluster ID:</label>
-        <input type="text" id="clusterId" name="clusterId" required><br><br>
-        <label for="isGateway">Gateway Node:</label>
-        <select id="isGateway" name="isGateway">
-            <option value="false">No</option>
-            <option value="true">Yes</option>
-        </select><br><br>
-        <button type="submit">Save Config</button>
-    </form>
-    <div id="configResult"></div>
+    <div class="card">
+        <h2>Cluster & Gateway Configuration</h2>
+        <form id="clusterForm">
+            <div class="field">
+                <label for="clusterId">Cluster ID:</label>
+                <input type="text" id="clusterId" name="clusterId" required>
+            </div>
+            <div class="field">
+                <label for="isGateway">Gateway Node:</label>
+                <select id="isGateway" name="isGateway">
+                    <option value="false">No</option>
+                    <option value="true">Yes</option>
+                </select>
+            </div>
+            <button type="submit">Save Config</button>
+        </form>
+        <div id="configResult"></div>
+    </div>
     <script>
     async function loadConfig() {
         const res = await fetch('/config/get');

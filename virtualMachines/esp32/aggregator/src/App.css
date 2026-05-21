@@ -1,3 +1,222 @@
+/* --- Rube Goldberg Mermaid Diagram Animations --- */
+
+/* GPU optimization hints */
+.card-open-mermaid-diagram .fan-shape {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  will-change: transform;
+  animation: rg-fan-spin 1.5s linear infinite;
+}
+
+.card-open-mermaid-diagram .fan-blade {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  will-change: transform;
+  animation: rg-fan-spin 1.5s linear infinite;
+}
+
+@keyframes rg-fan-spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.card-open-mermaid-diagram .mouse-wheel {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  will-change: transform;
+  animation: rg-wheel-spin 2.0s linear infinite;
+}
+
+@keyframes rg-wheel-spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.card-open-mermaid-diagram .domino-rect {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  will-change: transform;
+  animation: rg-domino-fall 1.6s cubic-bezier(0.7,0.2,0.3,1) infinite;
+}
+
+@keyframes rg-domino-fall {
+  0%, 100% { transform: rotate(0deg); }
+  20% { transform: rotate(-18deg); }
+  40% { transform: rotate(-90deg); }
+  60% { transform: rotate(-90deg); }
+  80% { transform: rotate(0deg); }
+}
+
+.card-open-mermaid-diagram .queue-belt {
+  will-change: transform;
+  animation: rg-belt-move 1.2s linear infinite;
+}
+
+@keyframes rg-belt-move {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(12px); }
+}
+
+.card-open-mermaid-diagram .subflow-box {
+  will-change: opacity;
+  animation: rg-subflow-pulse 0.5s ease-in-out infinite;
+}
+
+@keyframes rg-subflow-pulse {
+  0%, 100% { opacity: 0.9; }
+  50% { opacity: 1; }
+}
+
+.card-open-mermaid-diagram .subflow-lamp {
+  fill: #ff4444;
+  will-change: fill, filter;
+  animation: rg-lamp-blink 1s ease-in-out infinite;
+  filter: drop-shadow(0 0 3px #ff4444);
+}
+
+@keyframes rg-lamp-blink {
+  0%, 100% { fill: #ff4444; }
+  50% { fill: #ffaa00; }
+}
+
+.card-open-mermaid-diagram .subflow-whistle {
+  will-change: opacity;
+  animation: rg-whistle-steam 0.8s ease-in-out infinite;
+}
+
+.card-open-mermaid-diagram .subflow-whistle line {
+  stroke-dasharray: 5 3;
+  animation: rg-smoke-puff 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+  opacity: 0.8;
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  will-change: transform, opacity;
+}
+
+@keyframes rg-whistle-steam {
+  0% { opacity: 0; }
+  5% { opacity: 1; }
+  85% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@keyframes rg-smoke-puff {
+  0% {
+    transform: translateY(0) scale(0.3);
+    opacity: 1;
+  }
+  20% {
+    transform: translateY(-8px) scale(1.2);
+    opacity: 1;
+  }
+  50% {
+    transform: translateY(-16px) scale(1.4);
+    opacity: 0.8;
+  }
+  100% {
+    transform: translateY(-28px) scale(0.8);
+    opacity: 0;
+  }
+}
+
+/* --- Reject Bin and Foreman Animations --- */
+.card-open-mermaid-diagram .reject-bin {
+  will-change: filter, opacity;
+  animation: rg-bin-glow 1s ease-in-out infinite;
+}
+
+@keyframes rg-bin-glow {
+  0%, 100% { opacity: 0.85; filter: drop-shadow(0 0 2px #ff6b6b); }
+  50% { opacity: 1; filter: drop-shadow(0 0 6px #ff6b6b); }
+}
+
+.card-open-mermaid-diagram .falling-item {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  will-change: transform, opacity;
+  animation: rg-item-fall 1.2s ease-in cubic-bezier(0.25, 0.46, 0.45, 0.94) infinite;
+}
+
+.card-open-mermaid-diagram .falling-item:nth-of-type(1) {
+  animation-delay: 0s;
+}
+.card-open-mermaid-diagram .falling-item:nth-of-type(2) {
+  animation-delay: 0.3s;
+}
+.card-open-mermaid-diagram .falling-item:nth-of-type(3) {
+  animation-delay: 0.6s;
+}
+.card-open-mermaid-diagram .falling-item:nth-of-type(4) {
+  animation-delay: 0.9s;
+}
+
+@keyframes rg-item-fall {
+  0% {
+    transform: translateY(0) rotate(0deg) scale(1);
+    opacity: 1;
+  }
+  70% {
+    transform: translateY(20px) rotate(180deg) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(24px) rotate(360deg) scale(0.8);
+    opacity: 0.4;
+  }
+}
+
+.card-open-mermaid-diagram .foreman-walk {
+  will-change: transform;
+  animation: rg-foreman-walk 2s ease-in-out infinite;
+}
+
+@keyframes rg-foreman-walk {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(8px);
+  }
+}
+
+.card-open-mermaid-diagram .foreman-bell {
+  animation: rg-bell-ring 0.6s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  will-change: transform, filter;
+  filter: drop-shadow(0 0 2px #FFD700);
+}
+
+@keyframes rg-bell-ring {
+  0%, 100% {
+    transform: rotate(-8deg);
+  }
+  25% {
+    transform: rotate(12deg);
+  }
+  50% {
+    transform: rotate(-12deg);
+  }
+  75% {
+    transform: rotate(8deg);
+  }
+}
+
+.card-open-mermaid-diagram .foreman-arm {
+  transform-box: fill-box;
+  transform-origin: 0 -5;
+  will-change: transform;
+  animation: rg-arm-point 1.5s ease-in-out infinite;
+}
+
+@keyframes rg-arm-point {
+  0%, 20%, 80%, 100% {
+    transform: rotate(0deg);
+  }
+  40%, 60% {
+    transform: rotate(-35deg);
+  }
+}
 .app-shell {
   --control-line: #2f5f9f;
   --control-line-strong: #3b7dd8;
@@ -96,7 +315,6 @@
 .app-shell.ask-box-active .lhs-sidebar,
 .app-shell.ask-box-active .main-pane,
 .app-shell.ask-box-active .pane-divider {
-  pointer-events: none;
   opacity: 0.74;
 }
 
@@ -488,6 +706,202 @@
   align-content: start;
   box-sizing: border-box;
   position: relative;
+  cursor: context-menu;
+}
+
+.card-context-menu {
+  position: fixed;
+  z-index: 1400;
+  min-width: 104px;
+  background: #0f1724;
+  border: 1px solid rgba(110, 145, 188, 0.55);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.4);
+}
+
+.card-context-menu button {
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #d7e6fa;
+  font-size: 11px;
+  padding: 6px 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.card-context-menu button:hover {
+  background: #1f3150;
+  border-color: rgba(110, 145, 188, 0.55);
+}
+
+.card-open-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  background: rgba(3, 9, 16, 0.66);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.card-open-dialog {
+  width: min(860px, 96vw);
+  max-height: min(82vh, 900px);
+  overflow: auto;
+  background: #0f1826;
+  border: 1px solid rgba(111, 146, 190, 0.48);
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+}
+
+.card-open-dialog header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.card-open-dialog h3 {
+  margin: 0;
+  font-size: 15px;
+  color: #ebf4ff;
+}
+
+.card-open-close {
+  border: 1px solid rgba(111, 146, 190, 0.48);
+  background: #142033;
+  color: #dce9fb;
+  border-radius: 8px;
+  font-size: 12px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.card-open-subtitle {
+  margin: 0 0 8px;
+  color: #98aecb;
+  font-size: 12px;
+}
+
+.card-open-mermaid {
+  margin: 0;
+  border-radius: 10px;
+  border: 1px solid rgba(101, 136, 178, 0.45);
+  background: #0a111b;
+  color: #d8e5f8;
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-x: auto;
+}
+
+.card-open-mermaid-diagram {
+  border-radius: 10px;
+  border: 1px solid rgba(101, 136, 178, 0.45);
+  background: #0a111b;
+  padding: 10px;
+  overflow: auto;
+}
+
+.card-open-mermaid-diagram svg {
+  display: block;
+  margin: 0 auto;
+  max-width: 100%;
+  height: auto;
+}
+
+.card-open-details {
+  display: grid;
+  gap: 8px;
+}
+
+.card-open-details > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid rgba(97, 133, 176, 0.35);
+  border-radius: 8px;
+  background: #111d2d;
+  padding: 8px 10px;
+}
+
+.card-open-details span {
+  color: #97afcb;
+  font-size: 12px;
+}
+
+.card-open-details strong {
+  color: #edf5ff;
+  font-size: 12px;
+}
+
+.card-open-transition-list {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.card-open-transition-chip {
+  border: 1px solid rgba(101, 136, 178, 0.45);
+  background: #101b2a;
+  color: #cfe0f7;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.card-open-transition-chip:hover {
+  background: #1a2a43;
+}
+
+.card-open-transition-chip.is-active {
+  background: #244067;
+  border-color: rgba(128, 169, 218, 0.8);
+  color: #eff7ff;
+}
+
+.card-open-transition-panel {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(101, 136, 178, 0.45);
+  border-radius: 10px;
+  background: #0f1a28;
+  padding: 10px;
+}
+
+.card-open-transition-panel h4 {
+  margin: 0;
+  font-size: 13px;
+  color: #eaf3ff;
+}
+
+.card-open-transition-panel > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid rgba(97, 133, 176, 0.35);
+  border-radius: 8px;
+  background: #111d2d;
+  padding: 8px 10px;
+}
+
+.card-open-transition-panel span {
+  color: #97afcb;
+  font-size: 12px;
+}
+
+.card-open-transition-panel strong {
+  color: #edf5ff;
+  font-size: 12px;
 }
 
 .login-mini-card strong {

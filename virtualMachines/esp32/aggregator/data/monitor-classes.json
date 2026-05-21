@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "updatedAt": "2026-05-17T00:02:57.797Z",
+  "classes": [
+    {
+      "classId": "transaction-flows",
+      "label": "Transaction Flows",
+      "description": "Monitor transaction flow health and throughput.",
+      "enabled": true,
+      "sortOrder": 10,
+      "createdAt": "2026-05-17T00:02:57.797Z",
+      "updatedAt": "2026-05-17T00:02:57.797Z",
+      "deletedAt": null,
+      "deletedBy": null
+    },
+    {
+      "classId": "gateways",
+      "label": "Gateways",
+      "description": "Monitor gateway status and connectivity.",
+      "enabled": true,
+      "sortOrder": 20,
+      "createdAt": "2026-05-17T00:02:57.797Z",
+      "updatedAt": "2026-05-17T00:02:57.797Z",
+      "deletedAt": null,
+      "deletedBy": null
+    },
+    {
+      "classId": "servers",
+      "label": "Servers",
+      "description": "Monitor server and queue manager runtime.",
+      "enabled": true,
+      "sortOrder": 30,
+      "createdAt": "2026-05-17T00:02:57.797Z",
+      "updatedAt": "2026-05-17T00:02:57.797Z",
+      "deletedAt": null,
+      "deletedBy": null
+    }
+  ]
+}

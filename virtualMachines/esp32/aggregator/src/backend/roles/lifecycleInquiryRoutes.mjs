@@ -3,6 +3,7 @@ export function registerLifecycleInquiryRoutes(app, deps) {
     requirePermission,
     readTransactionLifecycleCompiled,
     getFsmEntityStateFromSql,
+    getFsmTransactionSummaryFromSql,
     getLifecycleTransitionOptions,
     formatErrorDetails,
     extractEntityIdFromInquiry,
@@ -14,6 +15,43 @@ export function registerLifecycleInquiryRoutes(app, deps) {
     DEFAULT_ACTOR_USER_ID,
     updateNlpUserProfileFromFeedback
   } = deps;
+
+  function extractTimeWindowMinutes(queryText) {
+    const text = String(queryText || '').toLowerCase();
+    if (!text) return 60;
+
+    const minuteMatch = text.match(/\b(?:last|past)\s+(\d{1,4})\s+minutes?\b/);
+    if (minuteMatch) return Math.max(1, Number(minuteMatch[1]) || 60);
+
+    const hourMatch = text.match(/\b(?:last|past)\s+(\d{1,3})\s+hours?\b/);
+    if (hourMatch) return Math.max(1, (Number(hourMatch[1]) || 1) * 60);
+
+    if (/\btoday\b/.test(text)) return 24 * 60;
+    return 60;
+  }
+
+  function extractVolumeMetric(queryText) {
+    const text = String(queryText || '').toLowerCase();
+    if (/\b(settled|reconciled)\b/.test(text)) return 'settled';
+    return 'processed';
+  }
+
+  function isTransactionVolumeInquiry(queryText) {
+    const text = String(queryText || '').toLowerCase();
+    if (!text) return false;
+    const asksForCount = /\b(how many|count|number of|volume)\b/.test(text);
+    const mentionsEntities = /\b(transactions?|payments?|messages?)\b/.test(text);
+    const mentionsWindow = /\b(last|past)\s+\d+\s+(minutes?|hours?)\b/.test(text) || /\btoday\b/.test(text);
+    const mentionsMetric = /\b(processed|handled|ingested|settled|reconciled|completed)\b/.test(text);
+    return asksForCount && mentionsEntities && (mentionsWindow || mentionsMetric);
+  }
+
+  function buildVolumeReply(metric, summary) {
+    if (metric === 'settled') {
+      return `PULSE shows ${summary.settledCount} settled transaction(s) in the last ${summary.windowMinutes} minute(s). Reconciled: ${summary.reconciledCount}. Terminal: ${summary.terminalCount}.`;
+    }
+    return `PULSE processed ${summary.processedCount} distinct transaction(s) in the last ${summary.windowMinutes} minute(s). Settled currently in that same window: ${summary.settledCount}.`;
+  }
 
   app.get('/api/fsm/entities/:entityId', requirePermission('lifecycle.read'), async (req, res) => {
     try {
@@ -233,6 +271,22 @@ export function registerLifecycleInquiryRoutes(app, deps) {
     }
   });
 
+  app.get('/api/fsm/summary', requirePermission('lifecycle.read'), async (req, res) => {
+    try {
+      const metric = extractVolumeMetric(req.query.metric || req.query.q || 'processed');
+      const windowMinutes = extractTimeWindowMinutes(req.query.q || req.query.window || `${req.query.minutes || 60} minutes`);
+      const summary = await getFsmTransactionSummaryFromSql({ windowMinutes });
+      return res.json({
+        ok: true,
+        metric,
+        summary,
+        reply: buildVolumeReply(metric, summary)
+      });
+    } catch (e) {
+      return res.status(500).json({ error: formatErrorDetails(e) });
+    }
+  });
+
   app.post('/api/fsm/chat', requirePermission('lifecycle.read'), async (req, res) => {
     try {
       const userMessage = String(req.body?.message || req.body?.query || req.body?.q || '').trim();
@@ -241,6 +295,41 @@ export function registerLifecycleInquiryRoutes(app, deps) {
       }
       const actor = req.actor || resolveActor(req);
       const languageCode = req.body?.language || null;
+
+      if (isTransactionVolumeInquiry(userMessage)) {
+        const metric = extractVolumeMetric(userMessage);
+        const windowMinutes = extractTimeWindowMinutes(userMessage);
+        const summary = await getFsmTransactionSummaryFromSql({ windowMinutes });
+        const reply = buildVolumeReply(metric, summary);
+
+        await logNlpInteractionToSql({
+          actorUserId: actor?.userId || DEFAULT_ACTOR_USER_ID,
+          languageCode,
+          userMessage,
+          normalizedIntent: 'transaction-volume',
+          intentConfidence: 0.93,
+          responseKind: 'fsm-chat-reply',
+          clarificationRequested: false,
+          wasSuccessful: true,
+          metadata: {
+            metric,
+            windowMinutes: summary.windowMinutes,
+            processedCount: summary.processedCount,
+            settledCount: summary.settledCount,
+            reconciledCount: summary.reconciledCount,
+            terminalCount: summary.terminalCount
+          }
+        });
+
+        return res.json({
+          kind: 'fsm-chat-reply',
+          ok: true,
+          intent: 'transaction-volume',
+          metric,
+          reply,
+          summary
+        });
+      }
 
       if (isSettlementSummaryInquiry(userMessage)) {
         const refs = extractEntityRefsFromInquiry(userMessage);

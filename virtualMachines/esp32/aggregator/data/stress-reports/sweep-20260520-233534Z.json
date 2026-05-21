@@ -1,0 +1,469 @@
+{
+  "runId": "sweep-20260520-233534Z",
+  "capturedAt": "2026-05-20T23:40:51.546Z",
+  "backendUrl": "http://localhost:4000",
+  "flowCount": 3,
+  "sweepScale": 1,
+  "phases": [
+    {
+      "phase": "light",
+      "config": {
+        "backendUrl": "http://localhost:4000",
+        "flowCount": 3,
+        "messagesPerFlow": 150,
+        "flowConcurrency": 4,
+        "flowStaggerMs": 30,
+        "interBatchDelayMs": 5,
+        "selectedFlowIds": [
+          "stress-ingress-mt103",
+          "stress-pacs-json",
+          "stress-mt202"
+        ]
+      },
+      "statsByFlow": [
+        {
+          "flow": "stress-ingress-mt103",
+          "queue": "swift.mt103.inbound",
+          "attempted": 150,
+          "ok": 150,
+          "failed": 0,
+          "minLatencyMs": 35,
+          "maxLatencyMs": 5531,
+          "totalLatencyMs": 121207,
+          "statusCounts": {
+            "200": 150
+          },
+          "sampleErrors": [],
+          "avgLatencyMs": 808.05
+        },
+        {
+          "flow": "stress-pacs-json",
+          "queue": "pacs.inbound",
+          "attempted": 150,
+          "ok": 150,
+          "failed": 0,
+          "minLatencyMs": 31,
+          "maxLatencyMs": 5547,
+          "totalLatencyMs": 123624,
+          "statusCounts": {
+            "200": 150
+          },
+          "sampleErrors": [],
+          "avgLatencyMs": 824.16
+        },
+        {
+          "flow": "stress-mt202",
+          "queue": "mt202.inbound",
+          "attempted": 150,
+          "ok": 150,
+          "failed": 0,
+          "minLatencyMs": 86,
+          "maxLatencyMs": 5516,
+          "totalLatencyMs": 123578,
+          "statusCounts": {
+            "200": 150
+          },
+          "sampleErrors": [],
+          "avgLatencyMs": 823.85
+        }
+      ],
+      "summary": {
+        "attempted": 450,
+        "ok": 450,
+        "failed": 0,
+        "elapsedMs": 32662,
+        "throughputMsgsPerSec": 13.78
+      },
+      "runtimeDiagnostics": {
+        "timestamp": 1779320167198,
+        "uptimeSeconds": 530,
+        "process": {
+          "pid": 25060,
+          "platform": "win32",
+          "nodeVersion": "v22.20.0",
+          "rssMb": 171.08,
+          "heapUsedMb": 83.51,
+          "heapTotalMb": 118.06,
+          "externalMb": 3.87,
+          "arrayBuffersMb": 0.19,
+          "heapUsedPercent": 70.73,
+          "activeHandles": 17,
+          "activeRequests": 0
+        },
+        "v8": {
+          "heapLimitMb": 4144,
+          "mallocedMb": 0.52,
+          "peakMallocedMb": 4.68,
+          "nativeContexts": 2,
+          "detachedContexts": 0
+        },
+        "eventLoop": {
+          "utilization": 0.2166,
+          "activeMs": 113487.039,
+          "idleMs": 410532.988,
+          "delayMeanMs": 36.158,
+          "delayStddevMs": 106.69,
+          "delayP95Ms": 33.718,
+          "delayP99Ms": 56.754,
+          "delayMaxMs": 4609.54
+        },
+        "sinceStart": {
+          "startedAt": 1779319638083,
+          "elapsedSeconds": 529
+        }
+      },
+      "capturedAt": "2026-05-20T23:36:07.203Z"
+    },
+    {
+      "phase": "medium",
+      "config": {
+        "backendUrl": "http://localhost:4000",
+        "flowCount": 3,
+        "messagesPerFlow": 400,
+        "flowConcurrency": 8,
+        "flowStaggerMs": 30,
+        "interBatchDelayMs": 5,
+        "selectedFlowIds": [
+          "stress-ingress-mt103",
+          "stress-pacs-json",
+          "stress-mt202"
+        ]
+      },
+      "statsByFlow": [
+        {
+          "flow": "stress-ingress-mt103",
+          "queue": "swift.mt103.inbound",
+          "attempted": 400,
+          "ok": 384,
+          "failed": 16,
+          "minLatencyMs": 242,
+          "maxLatencyMs": 15232,
+          "totalLatencyMs": 968988,
+          "statusCounts": {
+            "200": 384,
+            "NETWORK_ERROR": 16
+          },
+          "sampleErrors": [
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/swift.mt103.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/swift.mt103.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/swift.mt103.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/swift.mt103.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/swift.mt103.inbound/enqueue failed, reason: read ECONNRESET"
+            }
+          ],
+          "avgLatencyMs": 2422.47
+        },
+        {
+          "flow": "stress-pacs-json",
+          "queue": "pacs.inbound",
+          "attempted": 400,
+          "ok": 384,
+          "failed": 16,
+          "minLatencyMs": 383,
+          "maxLatencyMs": 15070,
+          "totalLatencyMs": 970492,
+          "statusCounts": {
+            "200": 384,
+            "NETWORK_ERROR": 16
+          },
+          "sampleErrors": [
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/pacs.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/pacs.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/pacs.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/pacs.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/pacs.inbound/enqueue failed, reason: read ECONNRESET"
+            }
+          ],
+          "avgLatencyMs": 2426.23
+        },
+        {
+          "flow": "stress-mt202",
+          "queue": "mt202.inbound",
+          "attempted": 400,
+          "ok": 384,
+          "failed": 16,
+          "minLatencyMs": 533,
+          "maxLatencyMs": 14877,
+          "totalLatencyMs": 971977,
+          "statusCounts": {
+            "200": 384,
+            "NETWORK_ERROR": 16
+          },
+          "sampleErrors": [
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/mt202.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/mt202.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/mt202.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/mt202.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/mt202.inbound/enqueue failed, reason: read ECONNRESET"
+            }
+          ],
+          "avgLatencyMs": 2429.94
+        }
+      ],
+      "summary": {
+        "attempted": 1200,
+        "ok": 1152,
+        "failed": 48,
+        "elapsedMs": 125724,
+        "throughputMsgsPerSec": 9.54
+      },
+      "runtimeDiagnostics": {
+        "timestamp": 1779320294860,
+        "uptimeSeconds": 657,
+        "process": {
+          "pid": 25060,
+          "platform": "win32",
+          "nodeVersion": "v22.20.0",
+          "rssMb": 185.26,
+          "heapUsedMb": 106.24,
+          "heapTotalMb": 132.53,
+          "externalMb": 3.83,
+          "arrayBuffersMb": 0.21,
+          "heapUsedPercent": 80.16,
+          "activeHandles": 30,
+          "activeRequests": 0
+        },
+        "v8": {
+          "heapLimitMb": 4144,
+          "mallocedMb": 0.52,
+          "peakMallocedMb": 4.68,
+          "nativeContexts": 2,
+          "detachedContexts": 0
+        },
+        "eventLoop": {
+          "utilization": 0.37,
+          "activeMs": 241141.447,
+          "idleMs": 410540.528,
+          "delayMeanMs": 44.75,
+          "delayStddevMs": 256.319,
+          "delayP95Ms": 33.915,
+          "delayP99Ms": 226.886,
+          "delayMaxMs": 14839.448
+        },
+        "sinceStart": {
+          "startedAt": 1779319638083,
+          "elapsedSeconds": 657
+        }
+      },
+      "capturedAt": "2026-05-20T23:38:14.865Z"
+    },
+    {
+      "phase": "heavy",
+      "config": {
+        "backendUrl": "http://localhost:4000",
+        "flowCount": 3,
+        "messagesPerFlow": 900,
+        "flowConcurrency": 14,
+        "flowStaggerMs": 30,
+        "interBatchDelayMs": 5,
+        "selectedFlowIds": [
+          "stress-ingress-mt103",
+          "stress-pacs-json",
+          "stress-mt202"
+        ]
+      },
+      "statsByFlow": [
+        {
+          "flow": "stress-ingress-mt103",
+          "queue": "swift.mt103.inbound",
+          "attempted": 900,
+          "ok": 883,
+          "failed": 17,
+          "minLatencyMs": 835,
+          "maxLatencyMs": 12962,
+          "totalLatencyMs": 1959884,
+          "statusCounts": {
+            "200": 883,
+            "NETWORK_ERROR": 17
+          },
+          "sampleErrors": [
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/swift.mt103.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/swift.mt103.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/swift.mt103.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/swift.mt103.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/swift.mt103.inbound/enqueue failed, reason: read ECONNRESET"
+            }
+          ],
+          "avgLatencyMs": 2177.65
+        },
+        {
+          "flow": "stress-pacs-json",
+          "queue": "pacs.inbound",
+          "attempted": 900,
+          "ok": 886,
+          "failed": 14,
+          "minLatencyMs": 813,
+          "maxLatencyMs": 12767,
+          "totalLatencyMs": 1955389,
+          "statusCounts": {
+            "200": 886,
+            "NETWORK_ERROR": 14
+          },
+          "sampleErrors": [
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/pacs.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/pacs.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/pacs.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/pacs.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/pacs.inbound/enqueue failed, reason: read ECONNRESET"
+            }
+          ],
+          "avgLatencyMs": 2172.65
+        },
+        {
+          "flow": "stress-mt202",
+          "queue": "mt202.inbound",
+          "attempted": 900,
+          "ok": 896,
+          "failed": 4,
+          "minLatencyMs": 400,
+          "maxLatencyMs": 12518,
+          "totalLatencyMs": 1947483,
+          "statusCounts": {
+            "200": 896,
+            "NETWORK_ERROR": 4
+          },
+          "sampleErrors": [
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/mt202.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/mt202.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/mt202.inbound/enqueue failed, reason: read ECONNRESET"
+            },
+            {
+              "status": "NETWORK_ERROR",
+              "error": "request to http://localhost:4000/api/queue/mt202.inbound/enqueue failed, reason: read ECONNRESET"
+            }
+          ],
+          "avgLatencyMs": 2163.87
+        }
+      ],
+      "summary": {
+        "attempted": 2700,
+        "ok": 2665,
+        "failed": 35,
+        "elapsedMs": 155470,
+        "throughputMsgsPerSec": 17.37
+      },
+      "runtimeDiagnostics": {
+        "timestamp": 1779320451533,
+        "uptimeSeconds": 814,
+        "process": {
+          "pid": 25060,
+          "platform": "win32",
+          "nodeVersion": "v22.20.0",
+          "rssMb": 197.86,
+          "heapUsedMb": 108.75,
+          "heapTotalMb": 144.65,
+          "externalMb": 3.78,
+          "arrayBuffersMb": 0.15,
+          "heapUsedPercent": 75.18,
+          "activeHandles": 8,
+          "activeRequests": 1
+        },
+        "v8": {
+          "heapLimitMb": 4144,
+          "mallocedMb": 0.52,
+          "peakMallocedMb": 5.09,
+          "nativeContexts": 2,
+          "detachedContexts": 0
+        },
+        "eventLoop": {
+          "utilization": 0.4921,
+          "activeMs": 397767.707,
+          "idleMs": 410587.958,
+          "delayMeanMs": 55.304,
+          "delayStddevMs": 327.21,
+          "delayP95Ms": 34.177,
+          "delayP99Ms": 793.772,
+          "delayMaxMs": 14839.448
+        },
+        "sinceStart": {
+          "startedAt": 1779319638083,
+          "elapsedSeconds": 813
+        }
+      },
+      "capturedAt": "2026-05-20T23:40:51.542Z"
+    }
+  ],
+  "hotspotSignals": [
+    "Highest heap pressure in medium: 80.16% heap used (106.24MB).",
+    "Highest event-loop delay in heavy: p99=793.772ms, p95=34.177ms.",
+    "Peak throughput in heavy: 17.37 msg/s; compare this against heavier phases for saturation signs."
+  ]
+}

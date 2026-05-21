@@ -16,6 +16,22 @@
         "pacs-lynx"
       ],
       "dataTypeId": "pacs"
+    },
+    {
+      "symbol": "pain2RejectQueue",
+      "queueName": "pain2.reject",
+      "dataTypeIds": [
+        "pain2"
+      ],
+      "dataTypeId": "pain2"
+    },
+    {
+      "symbol": "pain2AcceptedQueue",
+      "queueName": "pain2.accepted",
+      "dataTypeIds": [
+        "pain2"
+      ],
+      "dataTypeId": "pain2"
     }
   ],
   "files": [

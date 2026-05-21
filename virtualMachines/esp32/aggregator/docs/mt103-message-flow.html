@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MT103 Message Flow</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --ink: #122230;
+      --muted: #445b6e;
+      --line: #95a8b8;
+      --card: #ffffff;
+      --accent: #0b6fa4;
+      --accent2: #0f9d7a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: radial-gradient(circle at 10% 0%, #e7f0ff 0%, var(--bg) 45%, #eef7f4 100%);
+      color: var(--ink);
+      padding: 28px;
+    }
+    .sheet {
+      max-width: 980px;
+      margin: 0 auto;
+      background: var(--card);
+      border: 1px solid #d6e0e8;
+      border-radius: 14px;
+      box-shadow: 0 10px 26px rgba(10, 40, 60, 0.08);
+      padding: 28px;
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 30px;
+      letter-spacing: 0.3px;
+    }
+    .sub {
+      margin: 0 0 18px;
+      color: var(--muted);
+      font-size: 15px;
+    }
+    .flow {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+      margin: 18px 0 26px;
+    }
+    .step {
+      border: 1px solid #d3dee7;
+      border-left: 5px solid var(--accent);
+      border-radius: 10px;
+      padding: 12px 14px;
+      background: #fbfdff;
+    }
+    .step h2 {
+      margin: 0 0 6px;
+      font-size: 16px;
+    }
+    .step p {
+      margin: 0;
+      color: #274050;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    .arrow {
+      text-align: center;
+      font-weight: 700;
+      color: var(--line);
+      letter-spacing: 2px;
+    }
+    .fanout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 8px;
+    }
+    .branch {
+      border: 1px solid #cce4dd;
+      border-left: 5px solid var(--accent2);
+      border-radius: 10px;
+      padding: 12px;
+      background: #f4fcf9;
+    }
+    code {
+      font-family: Consolas, Menlo, Monaco, monospace;
+      font-size: 0.92em;
+      color: #0e3248;
+      background: #edf4f8;
+      padding: 1px 6px;
+      border-radius: 5px;
+    }
+    .inline-path {
+      color: #33566a;
+      font-size: 12.5px;
+      margin-top: 3px;
+    }
+    @media print {
+      body { background: #fff; padding: 0; }
+      .sheet { box-shadow: none; border: none; border-radius: 0; max-width: none; }
+      .step, .branch { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <main class="sheet">
+    <h1>MT103 Message Flow</h1>
+    <p class="sub">Aggregator pipeline from ingress to downstream fanout queues.</p>
+
+    <section class="flow">
+      <article class="step">
+        <h2>1) Ingress API</h2>
+        <p>Producer posts MT103 payload to <code>/api/queue/swift.mt103.inbound/enqueue</code>.</p>
+        <p class="inline-path">Source: aggregator/src/backend/roles/queueBrokerOpsRoutes.mjs</p>
+      </article>
+
+      <div class="arrow">DOWNSTREAM</div>
+
+      <article class="step">
+        <h2>2) Queue Enqueue + Route Delivery</h2>
+        <p>Backend resolves leader route and enqueues via <code>enqueueViaRoute</code>; queue data type validation is enforced.</p>
+        <p class="inline-path">Source: aggregator/backend.mjs</p>
+      </article>
+
+      <div class="arrow">ROUTER WORKER DEQUEUE</div>
+
+      <article class="step">
+        <h2>3) Router Engine Processing</h2>
+        <p>Router worker polls queues with <code>processFromQueue</code>, then applies DSL rules and mapping transforms.</p>
+        <p class="inline-path">Source: aggregator/router-engine.mjs</p>
+      </article>
+
+      <div class="arrow">MT103 RULE</div>
+
+      <article class="step">
+        <h2>4) MT103 Inbound to Parsed</h2>
+        <p>Rule <code>mt103-inbound-to-parsed</code>: <code>swift.mt103.inbound</code> -> <code>swift.mt103.parsed</code>.</p>
+        <p class="inline-path">Source: aggregator/data/router-mapper.dsl</p>
+      </article>
+
+      <div class="arrow">FANOUT</div>
+
+      <article class="step">
+        <h2>5) Parsed MT103 Fanout</h2>
+        <p>Rule <code>mt103-correspondent-and-lynx-fanout</code> routes one parsed MT103 into two outputs:</p>
+        <div class="fanout">
+          <div class="branch">
+            <strong>Branch A</strong><br />
+            <code>correspondent.pacs008.outbound</code><br />
+            Transform: <code>map("mt103-to-pacs", src)</code>
+          </div>
+          <div class="branch">
+            <strong>Branch B</strong><br />
+            <code>lynx.pacs009.outbound</code><br />
+            Transform: <code>map("pacs-to-lynx", map("mt103-to-pacs", src))</code>
+          </div>
+        </div>
+        <p class="inline-path">Source: aggregator/data/router-mapper.dsl</p>
+      </article>
+
+      <div class="arrow">FINAL</div>
+
+      <article class="step">
+        <h2>6) Downstream Queue Consumption</h2>
+        <p>Consumers/gateways pick up messages from correspondent and LYNX outbound queues for further processing.</p>
+      </article>
+    </section>
+
+    <p class="sub">Compact path: <code>swift.mt103.inbound</code> -> <code>swift.mt103.parsed</code> -> {<code>correspondent.pacs008.outbound</code>, <code>lynx.pacs009.outbound</code>}</p>
+  </main>
+</body>
+</html>

@@ -3,3 +3,13 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+
+# Runtime data artifacts (keep source code clean)
+data/*.jsonl
+data/worker-metrics.json
+data/worker-metrics.jsonl
+data/process-governance.json
+data/user-management.json
+
+# Generated local web snapshots
+data/web/*.html

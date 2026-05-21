@@ -302,13 +302,180 @@ function Sparkline({ values, label, tone = 'neutral' }) {
   );
 }
 
+
+const TRANSACTION_FLOW_MERMAID_SOURCE = `flowchart LR
+  %% Rube Goldberg whimsical detours and gadgets with animation classes
+  %% SVG pattern for conveyor belt
+  classDef fan-shape fill:#e6e6e6,stroke:#b7a36a,stroke-width:2px;
+  classDef domino-rect fill:#f6e3b4,stroke:#b7a36a,stroke-width:2px;
+  classDef queue-belt fill:#f7e7b6,stroke:#b7a36a,stroke-width:4px;
+
+  %% Nodes
+  A([<tspan>Start: received_mt103</tspan><tspan x='0' dy='1.2em'> <rect class='queue-belt' width='60' height='10'/><br/>swift.mt103.parsed</tspan>])
+  subgraph GADGETS [Rube Goldberg Gadgets]
+    P1([Pulley])
+    L1([Lever])
+    B1([Bell])
+    M1([Mouse])
+    D1([<rect class='domino-rect' width='30' height='12'/>Domino Chain])
+    F1([<g class='fan-shape'><circle cx='15' cy='15' r='12' fill='#f7e7b6'/><path d='M15,15 L27,15 A12,12 0 0,1 15,27 Z' fill='#b7a36a'/><path d='M15,15 L15,3 A12,12 0 0,1 27,15 Z' fill='#b7a36a'/></g>Fan])
+    S1([Spring])
+  end
+
+  %% Flow with animated gadgets and belts
+  A --> P1 --> L1 -->|MAP mt103-to-pacs| B([<tspan>pacs_created</tspan><tspan x='0' dy='1.2em'><rect class='queue-belt' width='60' height='10'/><br/>tx.pacs.created</tspan>])
+  B --> B1 -->|Sanctions Scan| C{Sanctions}
+  C -- Pass --> SUBFLOW_LIQ([<tspan>Liquidity Mgmt</tspan><tspan x='0' dy='1.2em'>🏭 Subflow</tspan>])
+  C -- Hit --> SUBFLOW_SAN([<tspan>Sanctions Scan</tspan><tspan x='0' dy='1.2em'>🏭 Subflow</tspan>])
+  SUBFLOW_LIQ -- Accepted --> D([<tspan>liquidity</tspan><tspan x='0' dy='1.2em'><rect class='queue-belt' width='60' height='10'/><br/>tx.lynx.pending</tspan>])
+  SUBFLOW_LIQ -- Rejected --> RB_LIQ([🗑️ Liquidity Reject Bin])
+  SUBFLOW_SAN -- Accepted --> D1([<tspan>sanctions_passed</tspan><tspan x='0' dy='1.2em'><rect class='queue-belt' width='60' height='10'/><br/>tx.sanctions.passed</tspan>])
+  SUBFLOW_SAN -- Rejected --> RB_SAN([🗑️ Sanctions Reject Bin])
+  RB_LIQ -.-> FM[👨 Foreman]
+  RB_SAN -.-> FM
+  X --> RB[🗑️ Reject Bin]
+  D --> D1 -->|BoC/LYNX Decision| E{LYNX}
+  E -- Approved --> F1 --> F([<tspan>lynx_approved</tspan><tspan x='0' dy='1.2em'><rect class='queue-belt' width='60' height='10'/><br/>tx.lynx.approved</tspan>])
+  E -- Rejected --> X
+  RB -.-> FM[👨 Foreman]
+  F -->|ENQUEUE correspondent.pacs008.outbound| G([<tspan>sent_corresp_unreconciled</tspan><tspan x='0' dy='1.2em'><rect class='queue-belt' width='60' height='10'/><br/>tx.correspondent.unreconciled</tspan>])
+  G -->|statement_matched| H{Matched?}
+  H -- True --> I([<tspan>reconciled</tspan><tspan x='0' dy='1.2em'><rect class='queue-belt' width='60' height='10'/><br/>tx.reconciled</tspan>])
+  H -- False --> G
+
+  %% Whimsical loops and zig-zags
+  L1 -.-> S1
+  B1 -.-> F1
+  M1 -.-> P1
+  D1 -.-> B1
+  S1 -.-> D1
+`;
+
+const INCOMING_PAYMENT_FLOW_MERMAID = `flowchart LR
+  IP_IN([<tspan>Incoming Payment</tspan><tspan x='0' dy='1.2em'>pacs.008 or pain.001</tspan>])
+  SUBFLOW_SAN([<tspan>Sanctions Scan</tspan><tspan x='0' dy='1.2em'>Subflow</tspan>])
+  SUBFLOW_LIQ([<tspan>Liquidity Mgmt</tspan><tspan x='0' dy='1.2em'>Subflow</tspan>])
+  SWIFT([SWIFT Gateway])
+
+  IP_IN --> SUBFLOW_SAN
+  SUBFLOW_SAN -- Accepted --> SUBFLOW_LIQ
+  SUBFLOW_SAN -- Rejected --> RB_SAN([Sanctions Reject Bin])
+  SUBFLOW_LIQ -- Accepted --> SWIFT
+  SUBFLOW_LIQ -- Rejected --> RB_LIQ([Liquidity Reject Bin])
+  RB_SAN -.-> FM[Foreman]
+  RB_LIQ -.-> FM
+
+  subgraph floor [ ]
+    RB_SAN
+    RB_LIQ
+    FM
+  end
+`;
+
+const LEGACY_PAYMENT_FLOW_MERMAID = `flowchart LR
+  LEG_IN([<tspan>Legacy Payment</tspan><tspan x='0' dy='1.2em'>MT103 / MT202 / MT202COV</tspan>])
+  CBDS([CBDS Ruleset])
+  PACS008([pacs.008])
+  PACS009([pacs.009])
+  IP_IN([<tspan>Incoming Payment</tspan><tspan x='0' dy='1.2em'>pacs.008 or pain.001</tspan>])
+
+  LEG_IN --> CBDS
+  CBDS -- "MT103 to pacs.008" --> PACS008
+  CBDS -- "MT202/202COV to pacs.009" --> PACS009
+  PACS008 --> IP_IN
+  PACS009 --> IP_IN
+`;
+
+const CORE_OUTGOING_FLOW_MERMAID = `flowchart LR
+  CORE_TX([<tspan>Core Outgoing Tx</tspan><tspan x='0' dy='1.2em'>core.tx.outgoing</tspan>])
+  SUBFLOW_SAN([<tspan>Sanctions Subflow</tspan><tspan x='0' dy='1.2em'>Subflow</tspan>])
+  SUBFLOW_LIQ([<tspan>Liquidity Subflow</tspan><tspan x='0' dy='1.2em'>Subflow</tspan>])
+  SWIFT([SWIFT Gateway])
+  RB_SAN([Sanctions.reject])
+  RB_LIQ([Liquidity.reject])
+  FM[Foreman]
+
+  CORE_TX --> SUBFLOW_SAN
+  SUBFLOW_SAN -- Pass --> SUBFLOW_LIQ
+  SUBFLOW_SAN -- Fail --> RB_SAN
+  SUBFLOW_LIQ -- Pass --> SWIFT
+  SUBFLOW_LIQ -- Fail --> RB_LIQ
+  RB_SAN -.-> FM
+  RB_LIQ -.-> FM
+
+  subgraph floor [ ]
+    RB_SAN
+    RB_LIQ
+    FM
+  end
+`;
+
+
+
+const FLOW_DEFINITIONS = [
+    {
+      id: 'core-outgoing',
+      name: 'Core Outgoing Flow',
+      mermaidSource: CORE_OUTGOING_FLOW_MERMAID,
+      transitionMetrics: [
+        { id: 'sanctions_subflow', label: 'Sanctions Subflow', queueName: 'core.tx.outgoing', waiting: 0, cumulative: 0 },
+        { id: 'sanctions_reject', label: 'Sanctions.reject', queueName: 'Sanctions.reject', waiting: 0, cumulative: 0 },
+        { id: 'liquidity_subflow', label: 'Liquidity Subflow', queueName: 'Liquidity.subflow', waiting: 0, cumulative: 0 },
+        { id: 'liquidity_reject', label: 'Liquidity.reject', queueName: 'Liquidity.reject', waiting: 0, cumulative: 0 },
+        { id: 'swift_gateway', label: 'SWIFT Gateway', queueName: 'SWIFT.gateway', waiting: 0, cumulative: 0 }
+      ]
+    },
+  {
+    id: 'legacy-payment',
+    name: 'Legacy Payment',
+    mermaidSource: LEGACY_PAYMENT_FLOW_MERMAID,
+    transitionMetrics: [
+      { id: 'cbds_mapping', label: 'cbds_mapping', queueName: 'swift.mt103.inbound', waiting: 0, cumulative: 0 },
+      { id: 'to_pacs', label: 'to_pacs', queueName: 'tx.pacs.created', waiting: 0, cumulative: 0 },
+      { id: 'to_core_payment', label: 'to_core_payment', queueName: 'tx.pacs.created', waiting: 0, cumulative: 0 }
+    ]
+  },
+  {
+    id: 'incoming-payment',
+    name: 'Incoming Payment',
+    mermaidSource: INCOMING_PAYMENT_FLOW_MERMAID,
+    transitionMetrics: [
+      { id: 'sanctions_scanning', label: 'sanctions_scanning', queueName: 'tx.pacs.created', waiting: 0, cumulative: 0 },
+      { id: 'liquidity_management', label: 'liquidity_management', queueName: 'tx.lynx.pending', waiting: 0, cumulative: 0 },
+      { id: 'to_swift_gateway', label: 'to_swift_gateway', queueName: 'tx.correspondent.unreconciled', waiting: 0, cumulative: 0 }
+    ]
+  },
+  {
+    id: 'core-payment',
+    name: 'Core Payment Flow',
+    mermaidSource: TRANSACTION_FLOW_MERMAID_SOURCE,
+    transitionMetrics: [
+      { id: 'mapped_to_pacs', label: 'mapped_to_pacs', queueName: 'tx.pacs.created', waiting: 0, cumulative: 0 },
+      { id: 'sanctions_scanning', label: 'sanctions_scanning', queueName: 'tx.pacs.created', waiting: 0, cumulative: 0 },
+      { id: 'liquidity_management', label: 'liquidity_management', queueName: 'tx.lynx.pending', waiting: 0, cumulative: 0 },
+      { id: 'lynx_decision', label: 'lynx_decision', queueName: 'tx.lynx.pending', waiting: 0, cumulative: 0 },
+      { id: 'sent_to_correspondent', label: 'sent_to_correspondent', queueName: 'tx.correspondent.unreconciled', waiting: 0, cumulative: 0 },
+      { id: 'statement_matched', label: 'statement_matched', queueName: 'tx.reconciled', waiting: 0, cumulative: 0 }
+    ]
+  }
+];
+
+function resolveFlowDefinition(flow) {
+  const id = String(flow?.id || '').toLowerCase();
+  const name = String(flow?.name || '').toLowerCase();
+  const byId = FLOW_DEFINITIONS.find((definition) => id === definition.id || id.includes(definition.id));
+  if (byId) return byId;
+  const byName = FLOW_DEFINITIONS.find((definition) => name === definition.name.toLowerCase() || name.includes(definition.name.toLowerCase()));
+  return byName || FLOW_DEFINITIONS[2];
+}
+
 function App() {
   const [actorUserId, setActorUserId] = useState(localStorage.getItem('pulse.actorUserId') || 'system-admin');
   const [loginUserId, setLoginUserId] = useState(localStorage.getItem('pulse.actorUserId') || 'system-admin');
   const [language, setLanguage] = useState(localStorage.getItem('pulse.language') || 'en-US');
   const [windowStyle, setWindowStyle] = useState(() => {
-    const stored = localStorage.getItem('pulse.windowStyle') || 'group-of-seven-auto';
-    return WINDOW_THEMES.includes(stored) ? stored : 'group-of-seven-auto';
+    const stored = localStorage.getItem('pulse.windowStyle') || 'rube-goldberg';
+    return WINDOW_THEMES.includes(stored) ? stored : 'rube-goldberg';
   });
   const [pathname, setPathname] = useState(() => window.location.pathname || '/');
   const [authz, setAuthz] = useState({ actor: null, profiles: [], permissions: [] });
@@ -343,12 +510,540 @@ function App() {
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const [askBoxActive, setAskBoxActive] = useState(true);
   const [collapsedSections, setCollapsedSections] = useState({ flows: false, services: false, servers: false });
+  const [cardContextMenu, setCardContextMenu] = useState({ open: false, x: 0, y: 0, kind: null, item: null });
+  const [cardHiddenMap, setCardHiddenMap] = useState({});
+  const [cardRenameMap, setCardRenameMap] = useState({});
+  const [cardRuntimeMap, setCardRuntimeMap] = useState({});
+  const [cardPreview, setCardPreview] = useState({ open: false, kind: null, title: '', item: null });
+  const [flowDiagramSvg, setFlowDiagramSvg] = useState('');
+  const [flowDiagramError, setFlowDiagramError] = useState('');
+  const [selectedFlowTransitionId, setSelectedFlowTransitionId] = useState(null);
   const flowSnapshotRef = React.useRef({});
+  const deepLinkHandledRef = React.useRef(false);
   const resolvedWindowStyle = useMemo(() => resolveThemeId(windowStyle), [windowStyle]);
 
   function toggleSection(sectionId) {
     setCollapsedSections((current) => ({ ...current, [sectionId]: !current[sectionId] }));
   }
+
+  function openCardContextMenu(event, kind, item) {
+    event.preventDefault();
+    event.stopPropagation();
+    const menuWidth = 220;
+    const menuHeight = 300;
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+    const x = Math.max(8, Math.min(event.clientX, Math.max(8, viewportWidth - menuWidth - 8)));
+    const y = Math.max(8, Math.min(event.clientY, Math.max(8, viewportHeight - menuHeight - 8)));
+    setCardContextMenu({
+      open: true,
+      x,
+      y,
+      kind,
+      item: item || null,
+    });
+  }
+
+  function closeCardContextMenu() {
+    setCardContextMenu({ open: false, x: 0, y: 0, kind: null, item: null });
+  }
+
+  function getCardKey(kind, item) {
+    return `${String(kind || '').toLowerCase()}:${String(item?.id || item?.name || '').toLowerCase()}`;
+  }
+
+  function getCardDisplayName(kind, item, fallback) {
+    const key = getCardKey(kind, item);
+    return String(cardRenameMap[key] || fallback || item?.name || item?.id || 'Item');
+  }
+
+  async function persistCardOverrides(nextHiddenMap, nextRenameMap, nextRuntimeMap) {
+    try {
+      await fetch('/api/ui/card-overrides', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': actorUserId
+        },
+        body: JSON.stringify({
+          hiddenMap: nextHiddenMap,
+          renameMap: nextRenameMap,
+          runtimeMap: nextRuntimeMap
+        })
+      });
+    } catch {
+      // Keep the UI responsive if persistence temporarily fails.
+    }
+  }
+
+  function findCardByDeepLink(kind, id) {
+    const normalizedKind = String(kind || '').toLowerCase();
+    const normalizedId = String(id || '').toLowerCase();
+    if (!normalizedKind || !normalizedId) return null;
+
+    if (normalizedKind === 'flow') {
+      const runtimeFlow = overview.flows.find((item) => String(item?.id || item?.name || '').toLowerCase() === normalizedId);
+      if (runtimeFlow) return runtimeFlow;
+
+      const definition = FLOW_DEFINITIONS.find((item) => {
+        const idMatch = String(item?.id || '').toLowerCase() === normalizedId;
+        const nameMatch = String(item?.name || '').toLowerCase() === normalizedId;
+        return idMatch || nameMatch;
+      });
+      if (!definition) return null;
+
+      return {
+        id: definition.id,
+        name: definition.name,
+        runtimeStatus: 'idle',
+        throughputStatus: 'no-data',
+        policyStatus: 'no-data',
+        transactionCount: 0,
+        transitionMetrics: Array.isArray(definition.transitionMetrics) ? definition.transitionMetrics : []
+      };
+    }
+    if (normalizedKind === 'service') {
+      return overview.services.find((item) => String(item?.id || item?.name || '').toLowerCase() === normalizedId) || null;
+    }
+    if (normalizedKind === 'server') {
+      return overview.servers.find((item) => String(item?.id || item?.name || '').toLowerCase() === normalizedId) || null;
+    }
+    return null;
+  }
+
+  function applyLocalRuntimeAction(kind, item, action) {
+    const normalizedAction = String(action || '').toLowerCase();
+    const key = getCardKey(kind, item);
+    const nextRuntimeMap = {
+      ...cardRuntimeMap,
+      [key]: normalizedAction === 'start up' ? 'start' : normalizedAction
+    };
+    setCardRuntimeMap(nextRuntimeMap);
+    void persistCardOverrides(cardHiddenMap, cardRenameMap, nextRuntimeMap);
+
+    setOverview((current) => {
+      if (kind === 'flow') {
+        const flows = current.flows.map((flow) => {
+          if (String(flow.id) !== String(item.id)) return flow;
+          const runtimeStatus = (normalizedAction === 'start' || normalizedAction === 'start up')
+            ? 'running'
+            : normalizedAction === 'quiesce'
+              ? 'idle'
+              : 'idle';
+          return {
+            ...flow,
+            runtimeStatus,
+            throughputStatus: runtimeStatus === 'running' ? (flow.throughputStatus === 'no-data' ? 'warning' : flow.throughputStatus) : 'idle'
+          };
+        });
+        return { ...current, flows };
+      }
+
+      if (kind === 'service') {
+        const services = current.services.map((service) => {
+          if (String(service.id) !== String(item.id)) return service;
+          const status = (normalizedAction === 'start' || normalizedAction === 'start up')
+            ? 'online'
+            : normalizedAction === 'quiesce'
+              ? 'paused'
+              : 'offline';
+          return {
+            ...service,
+            status,
+            state: status
+          };
+        });
+        return { ...current, services };
+      }
+
+      return current;
+    });
+  }
+
+  async function executeRuntimeAction(kind, item, action) {
+    const normalizedAction = String(action || '').toLowerCase();
+    if (kind === 'flow' || kind === 'service') {
+      applyLocalRuntimeAction(kind, item, normalizedAction);
+      return;
+    }
+
+    if (kind !== 'server') {
+      throw new Error('Unsupported card kind for runtime actions.');
+    }
+
+    const family = String(item?.family || '').toLowerCase();
+    const name = String(item?.name || '').toLowerCase();
+    const headers = {
+      'Content-Type': 'application/json',
+      'x-user-id': actorUserId
+    };
+
+    if (family === 'gateway') {
+      const gatewayAction = normalizedAction === 'start up' ? 'start' : normalizedAction;
+      if (!['start', 'stop', 'quiesce'].includes(gatewayAction)) {
+        throw new Error('Unsupported gateway action.');
+      }
+      const res = await fetch(`/api/runtime/classes/gateway/actions/${gatewayAction}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ targets: [name] })
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload.error || `Gateway action failed (${res.status}).`);
+      }
+      return;
+    }
+
+    if (family === 'broker') {
+      const brokerAction = normalizedAction === 'start' || normalizedAction === 'start up'
+        ? 'up'
+        : normalizedAction === 'stop'
+          ? 'down'
+          : normalizedAction;
+      if (!['up', 'down', 'quiesce'].includes(brokerAction)) {
+        throw new Error('Unsupported broker action.');
+      }
+      const res = await fetch(`/api/runtime/classes/broker/actions/${brokerAction}`, {
+        method: 'POST',
+        headers
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload.error || `Broker action failed (${res.status}).`);
+      }
+      return;
+    }
+
+    if (family === 'database' || family === 'queue manager') {
+      const databaseAction = normalizedAction === 'start' || normalizedAction === 'start up'
+        ? 'up'
+        : normalizedAction === 'stop'
+          ? 'maintenance'
+          : normalizedAction;
+      if (!['up', 'quiesce', 'maintenance'].includes(databaseAction)) {
+        throw new Error('Unsupported database action.');
+      }
+      const res = await fetch(`/api/runtime/classes/database/actions/${databaseAction}`, {
+        method: 'POST',
+        headers
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload.error || `Database action failed (${res.status}).`);
+      }
+      return;
+    }
+
+    throw new Error('No runtime action mapping for this server type yet.');
+  }
+
+  async function handleCardContextAction(action) {
+    const kind = cardContextMenu.kind;
+    const item = cardContextMenu.item;
+    if (!kind || !item) {
+      closeCardContextMenu();
+      return;
+    }
+
+    if (action === 'open') {
+      openCardPreview(kind, item);
+      return;
+    }
+
+    if (action === 'open-new-window') {
+      const openId = String(item?.id || item?.name || '').toLowerCase();
+      const url = new URL(window.location.href);
+      url.searchParams.set('open', 'card');
+      url.searchParams.set('kind', String(kind || '').toLowerCase());
+      url.searchParams.set('id', openId);
+      const child = window.open(url.toString(), '_blank');
+      if (!child) {
+        window.alert('Unable to open a new window. Please allow pop-ups for this site.');
+      }
+      closeCardContextMenu();
+      return;
+    }
+
+    if (action === 'delete') {
+      const key = getCardKey(kind, item);
+      const nextHiddenMap = { ...cardHiddenMap, [key]: true };
+      setCardHiddenMap(nextHiddenMap);
+      void persistCardOverrides(nextHiddenMap, cardRenameMap, cardRuntimeMap);
+      closeCardContextMenu();
+      return;
+    }
+
+    if (action === 'rename') {
+      const currentName = getCardDisplayName(kind, item, item?.name || item?.id || 'Item');
+      const nextName = window.prompt('Rename card', currentName);
+      if (typeof nextName === 'string' && nextName.trim()) {
+        const key = getCardKey(kind, item);
+        const nextRenameMap = { ...cardRenameMap, [key]: nextName.trim() };
+        setCardRenameMap(nextRenameMap);
+        void persistCardOverrides(cardHiddenMap, nextRenameMap, cardRuntimeMap);
+      }
+      closeCardContextMenu();
+      return;
+    }
+
+    try {
+      await executeRuntimeAction(kind, item, action);
+      closeCardContextMenu();
+    } catch (error) {
+      window.alert(error?.message || 'Action failed.');
+      closeCardContextMenu();
+    }
+  }
+
+  function openCardPreview(kind, item) {
+    const title = kind === 'flow'
+      ? `Flow: ${item?.name || item?.id || 'Flow'}`
+      : `${kind === 'service' ? 'Service' : 'Server'}: ${item?.name || item?.id || 'Item'}`;
+    setCardPreview({ open: true, kind, title, item: item || null });
+    if (kind === 'flow') {
+      const firstTransition = Array.isArray(item?.transitionMetrics) ? item.transitionMetrics[0] : null;
+      setSelectedFlowTransitionId(firstTransition?.id || null);
+    } else {
+      setSelectedFlowTransitionId(null);
+    }
+    closeCardContextMenu();
+  }
+
+  function closeCardPreview() {
+    setCardPreview({ open: false, kind: null, title: '', item: null });
+    setFlowDiagramSvg('');
+    setFlowDiagramError('');
+    setSelectedFlowTransitionId(null);
+  }
+
+  const activeFlowMermaidSource = useMemo(() => {
+    if (!(cardPreview.open && cardPreview.kind === 'flow')) return '';
+    const definition = resolveFlowDefinition(cardPreview.item);
+    return definition?.mermaidSource || TRANSACTION_FLOW_MERMAID_SOURCE;
+  }, [cardPreview.open, cardPreview.kind, cardPreview.item]);
+
+  useEffect(() => {
+    if (!(cardPreview.open && cardPreview.kind === 'flow')) return undefined;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const { default: mermaid } = await import('mermaid');
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: 'loose',
+          theme: 'dark'
+        });
+        const renderId = `flow-diagram-${Date.now()}`;
+        let { svg } = await mermaid.render(renderId, activeFlowMermaidSource || TRANSACTION_FLOW_MERMAID_SOURCE);
+
+        // Post-process SVG to add animation classes
+        try {
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(svg, 'image/svg+xml');
+          
+          // Animate the fan node (label contains 'FAN')
+          const fanNode = Array.from(doc.querySelectorAll('g.node')).find(g => g.textContent && g.textContent.match(/FAN/i));
+          if (fanNode) {
+            // Add fan-shape class to the main shape (ellipse or polygon)
+            const fanShape = fanNode.querySelector('ellipse, circle, polygon, path');
+            if (fanShape) fanShape.classList.add('fan-shape');
+            // If there are any paths (for blades), add fan-blade class to all
+            const blades = fanNode.querySelectorAll('path');
+            blades.forEach(blade => blade.classList.add('fan-blade'));
+          }
+          
+          // Animate the mouse wheel node (label contains 'Mouse')
+          const mouseNode = Array.from(doc.querySelectorAll('g.node')).find(g => g.textContent && g.textContent.match(/Mouse/i));
+          if (mouseNode) {
+            const wheelShape = mouseNode.querySelector('ellipse, circle');
+            if (wheelShape) wheelShape.classList.add('mouse-wheel');
+            // Also animate any rect inside (could be the wheel or cage)
+            const rects = mouseNode.querySelectorAll('rect');
+            rects.forEach(rect => rect.classList.add('mouse-wheel'));
+          }
+          
+          // Animate the domino node (label contains 'Domino')
+          const dominoNode = Array.from(doc.querySelectorAll('g.node')).find(g => g.textContent && g.textContent.match(/Domino/i));
+          if (dominoNode) {
+            const dominoRect = dominoNode.querySelector('rect');
+            if (dominoRect) dominoRect.classList.add('domino-rect');
+          }
+          
+          // Animate queue belts: add class to all nodes with 'queue' in their label
+          Array.from(doc.querySelectorAll('g.node')).forEach(g => {
+            if (g.textContent && g.textContent.match(/queue|pending|created|reconciled|rejected|unreconciled/i)) {
+              const beltRect = g.querySelector('rect');
+              if (beltRect) beltRect.classList.add('queue-belt');
+            }
+          });
+          
+          // Animate reject bin: add falling animation
+          const rejectBinNode = Array.from(doc.querySelectorAll('g.node')).find(g => g.textContent && g.textContent.match(/🗑️|reject\s*bin/i));
+          if (rejectBinNode) {
+            const binShape = rejectBinNode.querySelector('ellipse, circle, polygon');
+            if (binShape) {
+              binShape.classList.add('reject-bin');
+              // Add falling items animation
+              for (let i = 0; i < 4; i++) {
+                const item = doc.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                item.setAttribute('cx', String(8 + Math.random() * 8));
+                item.setAttribute('cy', String(-5 - i * 3));
+                item.setAttribute('r', '2');
+                item.setAttribute('fill', '#ff6b6b');
+                item.setAttribute('opacity', '0.8');
+                item.classList.add('falling-item');
+                item.style.setProperty('--delay', String(i * 0.3));
+                rejectBinNode.appendChild(item);
+              }
+            }
+          }
+          
+          // Animate foreman: add walking, bell-ringing, pointing animations
+          const foremanNode = Array.from(doc.querySelectorAll('g.node')).find(g => g.textContent && g.textContent.match(/👨|foreman/i));
+          if (foremanNode) {
+            foremanNode.classList.add('foreman-node');
+            const foremanShape = foremanNode.querySelector('ellipse, circle, polygon');
+            if (foremanShape) {
+              foremanShape.classList.add('foreman-walk');
+              // Add bell to foreman
+              const bell = doc.createElementNS('http://www.w3.org/2000/svg', 'circle');
+              bell.setAttribute('cx', '-8');
+              bell.setAttribute('cy', '-12');
+              bell.setAttribute('r', '4');
+              bell.setAttribute('fill', '#FFD700');
+              bell.classList.add('foreman-bell');
+              foremanNode.appendChild(bell);
+              // Add pointing arm (line)
+              const arm = doc.createElementNS('http://www.w3.org/2000/svg', 'line');
+              arm.setAttribute('x1', '0');
+              arm.setAttribute('y1', '-5');
+              arm.setAttribute('x2', '15');
+              arm.setAttribute('y2', '-8');
+              arm.setAttribute('stroke', '#8B4513');
+              arm.setAttribute('stroke-width', '2');
+              arm.classList.add('foreman-arm');
+              foremanNode.appendChild(arm);
+            }
+          }
+          
+          // Animate subflow black box nodes (for future subflow nodes if added)
+          Array.from(doc.querySelectorAll('g.node')).forEach(g => {
+            if (g.textContent && (g.textContent.match(/engine|subflow|🏭/i) || g.querySelector('rect[fill="#1a1a1a"]'))) {
+              const rect = g.querySelector('rect');
+              if (rect) {
+                rect.classList.add('subflow-box');
+                // Add status lamp circle
+                const lamp = doc.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                lamp.setAttribute('cx', '8');
+                lamp.setAttribute('cy', '8');
+                lamp.setAttribute('r', '4');
+                lamp.classList.add('subflow-lamp');
+                g.appendChild(lamp);
+              }
+              // Add whistle lines (vertical lines at top)
+              const whistles = doc.createElementNS('http://www.w3.org/2000/svg', 'g');
+              whistles.classList.add('subflow-whistle');
+              for (let i = 0; i < 2; i++) {
+                const line = doc.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', String(20 + i * 30));
+                line.setAttribute('y1', '-2');
+                line.setAttribute('x2', String(20 + i * 30));
+                line.setAttribute('y2', '-15');
+                line.setAttribute('stroke', '#ffeb3b');
+                line.setAttribute('stroke-width', '1.5');
+                whistles.appendChild(line);
+              }
+              g.appendChild(whistles);
+            }
+          });
+          
+          svg = new XMLSerializer().serializeToString(doc.documentElement);
+        } catch (e) {
+          // If SVG parsing fails, fallback to unmodified SVG
+        }
+        if (!cancelled) {
+          setFlowDiagramSvg(svg);
+          setFlowDiagramError('');
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setFlowDiagramSvg('');
+          setFlowDiagramError(error?.message || 'Unable to render flow diagram.');
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [cardPreview.open, cardPreview.kind, activeFlowMermaidSource]);
+
+  useEffect(() => {
+    if (!cardContextMenu.open) return undefined;
+
+    function handleDismiss(event) {
+      if (event instanceof MouseEvent && event.button !== 0) return;
+      const target = event.target;
+      if (target instanceof Element && target.closest('.card-context-menu')) {
+        return;
+      }
+      closeCardContextMenu();
+    }
+
+    function handleKeydown(event) {
+      if (event.key === 'Escape') {
+        closeCardContextMenu();
+      }
+    }
+
+    window.addEventListener('mousedown', handleDismiss);
+    window.addEventListener('keydown', handleKeydown);
+    return () => {
+      window.removeEventListener('mousedown', handleDismiss);
+      window.removeEventListener('keydown', handleKeydown);
+    };
+  }, [cardContextMenu.open]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch('/api/ui/card-overrides', {
+          headers: { 'x-user-id': actorUserId }
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (cancelled || !response.ok) return;
+        setCardHiddenMap(payload?.hiddenMap && typeof payload.hiddenMap === 'object' ? payload.hiddenMap : {});
+        setCardRenameMap(payload?.renameMap && typeof payload.renameMap === 'object' ? payload.renameMap : {});
+        setCardRuntimeMap(payload?.runtimeMap && typeof payload.runtimeMap === 'object' ? payload.runtimeMap : {});
+      } catch {
+        if (cancelled) return;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [actorUserId]);
+
+  useEffect(() => {
+    if (deepLinkHandledRef.current) return;
+
+    const params = new URLSearchParams(window.location.search || '');
+    if (params.get('open') !== 'card') return;
+
+    const kind = String(params.get('kind') || '').toLowerCase();
+    const id = String(params.get('id') || '').toLowerCase();
+    if (!kind || !id) return;
+
+    const item = findCardByDeepLink(kind, id);
+    if (!item) return;
+
+    deepLinkHandledRef.current = true;
+    openCardPreview(kind, item);
+  }, [overview.flows, overview.services, overview.servers]);
 
   function clampRhsWidth(nextWidth) {
     return Math.max(RHS_MIN_WIDTH, Math.min(RHS_MAX_WIDTH, Math.round(nextWidth)));
@@ -672,6 +1367,21 @@ function App() {
           const targetThroughputTps = Number.isFinite(Number(target?.targetThroughputTps)) ? Number(target.targetThroughputTps) : null;
           const throughputStatus = getThroughputHealth(actualThroughputTps, targetThroughputTps, runtimeStatus);
 
+          const queueMetric = (queueName) => ({
+            queueName,
+            waiting: Number(q?.[queueName]?.current || 0),
+            cumulative: Number(stateCountsByQueue[queueName] || 0)
+          });
+
+          const transitionMetrics = [
+            { id: 'mapped_to_pacs', label: 'mapped_to_pacs', ...queueMetric('tx.pacs.created') },
+            { id: 'sanctions_scanning', label: 'sanctions_scanning', ...queueMetric('tx.pacs.created') },
+            { id: 'liqudity_management', label: 'liqudity_management', ...queueMetric('tx.lynx.pending') },
+            { id: 'lynx_decision', label: 'lynx_decision', ...queueMetric('tx.lynx.pending') },
+            { id: 'sent_to_correspondent', label: 'sent_to_correspondent', ...queueMetric('tx.correspondent.unreconciled') },
+            { id: 'statement_matched', label: 'statement_matched', ...queueMetric('tx.reconciled') }
+          ];
+
           flowSnapshotRef.current[flowId] = {
             at: now,
             count: currentCount,
@@ -695,8 +1405,33 @@ function App() {
             latencyHistory,
             throughputHistory,
             transactionCount: cumulativeCount,
+            transitionMetrics,
           };
         });
+
+        // Ensure user-created/core flows remain visible even when backend targets are missing.
+        const existingFlowIds = new Set(flowRows.map((flow) => String(flow.id).toLowerCase()));
+        for (const definition of FLOW_DEFINITIONS) {
+          if (existingFlowIds.has(definition.id)) continue;
+          flowRows.push({
+            id: definition.id,
+            name: definition.name,
+            targetMs: null,
+            actualMs: null,
+            actualThroughputTps: 0,
+            targetThroughputTps: null,
+            runtimeStatus: 'idle',
+            policyStatus: 'no-data',
+            throughputStatus: 'no-data',
+            budgetUsedPercent: null,
+            queues: [],
+            queuedNow: 0,
+            latencyHistory: [],
+            throughputHistory: [],
+            transactionCount: 0,
+            transitionMetrics: definition.transitionMetrics,
+          });
+        }
 
         setOverview({
           workers: {
@@ -740,9 +1475,42 @@ function App() {
   const activeArea = visibleAreas.find((item) => item.id === area) || null;
   const gatewayOnlineCount = Number(Boolean(overview.gateways.swift)) + Number(Boolean(overview.gateways.boc)) + Number(Boolean(overview.gateways.fed));
   const gatewayTotal = 3;
-  const serverRunningCount = overview.servers.filter((item) => item.status === 'online').length;
-  const activeFlowCount = overview.flows.filter((item) => item.runtimeStatus === 'running').length;
-  const serviceRunningCount = overview.services.filter((item) => item.status === 'online').length;
+  const visibleFlows = overview.flows
+    .filter((item) => !cardHiddenMap[getCardKey('flow', item)])
+    .map((flow) => {
+      const action = String(cardRuntimeMap[getCardKey('flow', flow)] || '').toLowerCase();
+      if (!action) return flow;
+      const runtimeStatus = (action === 'start' || action === 'start up')
+        ? 'running'
+        : action === 'quiesce'
+          ? 'idle'
+          : 'idle';
+      return {
+        ...flow,
+        runtimeStatus,
+        throughputStatus: runtimeStatus === 'running' ? (flow.throughputStatus === 'no-data' ? 'warning' : flow.throughputStatus) : 'idle'
+      };
+    });
+  const visibleServices = overview.services
+    .filter((item) => !cardHiddenMap[getCardKey('service', item)])
+    .map((service) => {
+      const action = String(cardRuntimeMap[getCardKey('service', service)] || '').toLowerCase();
+      if (!action) return service;
+      const status = (action === 'start' || action === 'start up')
+        ? 'online'
+        : action === 'quiesce'
+          ? 'paused'
+          : 'offline';
+      return {
+        ...service,
+        status,
+        state: status
+      };
+    });
+  const visibleServers = overview.servers.filter((item) => !cardHiddenMap[getCardKey('server', item)]);
+  const serverRunningCount = visibleServers.filter((item) => item.status === 'online').length;
+  const activeFlowCount = visibleFlows.filter((item) => item.runtimeStatus === 'running').length;
+  const serviceRunningCount = visibleServices.filter((item) => item.status === 'online').length;
   const languageKey = getLanguageKey(language);
   const copy = LANGUAGE_COPY[languageKey] || LANGUAGE_COPY.en;
 
@@ -1033,7 +1801,9 @@ function App() {
       <main className="main-pane">
         {area !== 'user-admin' && (
           <>
-            <section className={`login-mini-dashboard theme-${resolvedWindowStyle} lang-${languageKey}`}>
+            <section
+              className={`login-mini-dashboard theme-${resolvedWindowStyle} lang-${languageKey}`}
+            >
               <div className="login-mini-dashboard-head">
                 <h2>{copy.title}</h2>
                 <p>{copy.subtitle}</p>
@@ -1043,16 +1813,22 @@ function App() {
                 <section className="login-mini-section">
                   <header>
                     <h3>{copy.flows}</h3>
-                    <span className="login-mini-toggle">{activeFlowCount}/{overview.flows.length}</span>
+                    <span className="login-mini-toggle">{activeFlowCount}/{visibleFlows.length}</span>
                   </header>
                   <div className={`login-mini-grid${collapsedSections.flows ? ' is-collapsed' : ''}`}>
-                    {overview.flows.length === 0 ? <div className="login-mini-empty">{copy.noItems}</div> : overview.flows.map((flow) => {
+                    {visibleFlows.length === 0 ? <div className="login-mini-empty">{copy.noItems}</div> : visibleFlows.map((flow) => {
                       const runningWell = flow.runtimeStatus === 'running' && !['breach', 'critical'].includes(flow.throughputStatus) && !['critical'].includes(flow.policyStatus);
                       const currentState = flow.runtimeStatus === 'idle' ? copy.stateIdle : getFlowStatusLabel(flow.throughputStatus);
                       return (
-                        <article key={flow.id} className={`login-mini-card is-${flow.throughputStatus}`} style={getFlowBeltAnimationStyle(flow)}>
+                        <article
+                          key={flow.id}
+                          className={`login-mini-card is-${flow.throughputStatus}`}
+                          style={getFlowBeltAnimationStyle(flow)}
+                          onContextMenu={(event) => openCardContextMenu(event, 'flow', flow)}
+                          title="Right click for actions"
+                        >
                           <div className="login-mini-badge">{flow.transactionCount}</div>
-                          <strong>{flow.name}</strong>
+                          <strong>{getCardDisplayName('flow', flow, flow.name)}</strong>
                           <div className="login-mini-row"><span>{copy.runningWell}</span><b>{runningWell ? copy.yes : copy.no}</b></div>
                           <div className="login-mini-row"><span>{copy.currentState}</span><b>{currentState}</b></div>
                         </article>
@@ -1064,15 +1840,20 @@ function App() {
                 <section className="login-mini-section">
                   <header>
                     <h3>{copy.services}</h3>
-                    <span className="login-mini-toggle">{serviceRunningCount}/{overview.services.length}</span>
+                    <span className="login-mini-toggle">{serviceRunningCount}/{visibleServices.length}</span>
                   </header>
                   <div className={`login-mini-grid${collapsedSections.services ? ' is-collapsed' : ''}`}>
-                    {overview.services.length === 0 ? <div className="login-mini-empty">{copy.noItems}</div> : overview.services.map((service) => {
+                    {visibleServices.length === 0 ? <div className="login-mini-empty">{copy.noItems}</div> : visibleServices.map((service) => {
                       const runningWell = service.status === 'online';
                       const currentState = service.status === 'online' ? copy.stateRunning : service.status === 'paused' ? copy.statePaused : copy.stateOffline;
                       return (
-                        <article key={service.id} className={`login-mini-card is-${service.status}`}>
-                          <strong>{service.name}</strong>
+                        <article
+                          key={service.id}
+                          className={`login-mini-card is-${service.status}`}
+                          onContextMenu={(event) => openCardContextMenu(event, 'service', service)}
+                          title="Right click for actions"
+                        >
+                          <strong>{getCardDisplayName('service', service, service.name)}</strong>
                           <div className="login-mini-row"><span>{copy.runningWell}</span><b>{runningWell ? copy.yes : copy.no}</b></div>
                           <div className="login-mini-row"><span>{copy.currentState}</span><b>{currentState}</b></div>
                         </article>
@@ -1084,15 +1865,20 @@ function App() {
                 <section className="login-mini-section">
                   <header>
                     <h3>{copy.servers}</h3>
-                    <span className="login-mini-toggle">{serverRunningCount}/{overview.servers.length}</span>
+                    <span className="login-mini-toggle">{serverRunningCount}/{visibleServers.length}</span>
                   </header>
                   <div className={`login-mini-grid${collapsedSections.servers ? ' is-collapsed' : ''}`}>
-                    {overview.servers.length === 0 ? <div className="login-mini-empty">{copy.noItems}</div> : overview.servers.map((server) => {
+                    {visibleServers.length === 0 ? <div className="login-mini-empty">{copy.noItems}</div> : visibleServers.map((server) => {
                       const runningWell = server.status === 'online';
                       const currentState = server.status === 'online' ? copy.stateRunning : server.status === 'paused' ? copy.statePaused : copy.stateOffline;
                       return (
-                        <article key={server.id} className={`login-mini-card is-${server.status}`}>
-                          <strong>{server.name}</strong>
+                        <article
+                          key={server.id}
+                          className={`login-mini-card is-${server.status}`}
+                          onContextMenu={(event) => openCardContextMenu(event, 'server', server)}
+                          title="Right click for actions"
+                        >
+                          <strong>{getCardDisplayName('server', server, server.name)}</strong>
                           <div className="login-mini-row"><span>{copy.runningWell}</span><b>{runningWell ? copy.yes : copy.no}</b></div>
                           <div className="login-mini-row"><span>{copy.currentState}</span><b>{currentState}</b></div>
                         </article>
@@ -1149,6 +1935,79 @@ function App() {
           />
         </div>
       </aside>
+
+      {cardContextMenu.open && (
+        <div
+          className="card-context-menu"
+          style={{ left: cardContextMenu.x, top: cardContextMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button type="button" onClick={() => handleCardContextAction('open')}>Open</button>
+          <button type="button" onClick={() => handleCardContextAction('open-new-window')}>Open in New Window</button>
+          <button type="button" onClick={() => handleCardContextAction('delete')}>Delete</button>
+          <button type="button" onClick={() => handleCardContextAction('rename')}>Rename</button>
+          <button type="button" onClick={() => handleCardContextAction('start')}>Start</button>
+          <button type="button" onClick={() => handleCardContextAction('stop')}>Stop</button>
+          <button type="button" onClick={() => handleCardContextAction('quiesce')}>Quiesce</button>
+          <button type="button" onClick={() => handleCardContextAction('start up')}>Start Up</button>
+        </div>
+      )}
+
+      {cardPreview.open && (
+        <div className="card-open-overlay" onClick={closeCardPreview}>
+          <div className="card-open-dialog" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <h3>{cardPreview.title}</h3>
+              <button type="button" className="card-open-close" onClick={closeCardPreview}>Close</button>
+            </header>
+            {cardPreview.kind === 'flow' ? (
+              <>
+                <p className="card-open-subtitle">Click a transition to view live queue metrics.</p>
+                {flowDiagramSvg ? (
+                  <div
+                    className="card-open-mermaid-diagram"
+                    dangerouslySetInnerHTML={{ __html: flowDiagramSvg }}
+                  />
+                ) : (
+                  <pre className="card-open-mermaid">{flowDiagramError || activeFlowMermaidSource || TRANSACTION_FLOW_MERMAID_SOURCE}</pre>
+                )}
+                <div className="card-open-transition-list">
+                  {(cardPreview.item?.transitionMetrics || []).map((transition) => (
+                    <button
+                      key={transition.id}
+                      type="button"
+                      className={`card-open-transition-chip${selectedFlowTransitionId === transition.id ? ' is-active' : ''}`}
+                      onClick={() => setSelectedFlowTransitionId(transition.id)}
+                    >
+                      {transition.label}
+                    </button>
+                  ))}
+                </div>
+                {(() => {
+                  const selected = (cardPreview.item?.transitionMetrics || []).find((transition) => transition.id === selectedFlowTransitionId)
+                    || (cardPreview.item?.transitionMetrics || [])[0]
+                    || null;
+                  if (!selected) return null;
+                  return (
+                    <div className="card-open-transition-panel">
+                      <h4>{selected.label}</h4>
+                      <div><span>Queue</span><strong>{selected.queueName}</strong></div>
+                      <div><span>Messages Waiting</span><strong>{selected.waiting}</strong></div>
+                      <div><span>Cumulative Count</span><strong>{selected.cumulative}</strong></div>
+                    </div>
+                  );
+                })()}
+              </>
+            ) : (
+              <div className="card-open-details">
+                <div><span>Name</span><strong>{cardPreview.item?.name || 'N/A'}</strong></div>
+                <div><span>Status</span><strong>{cardPreview.item?.statusText || cardPreview.item?.status || 'unknown'}</strong></div>
+                <div><span>Kind</span><strong>{cardPreview.kind}</strong></div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

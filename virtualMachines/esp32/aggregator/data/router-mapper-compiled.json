@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "compiledAt": "2026-05-13T13:27:41.446Z",
+  "compiledAt": "2026-05-16T12:58:24.091Z",
   "serviceId": "aggregator-router-service",
   "ast": {
     "type": "Program",
@@ -65,6 +65,78 @@
             "transformRule": "output := src;"
           }
         ]
+      },
+      {
+        "type": "RouterDecl",
+        "id": "mt103-inbound-to-parsed",
+        "inputQueue": "swift.mt103.inbound",
+        "description": "Forward MT103 ingress into parsed queue",
+        "enabled": true,
+        "serviceId": null,
+        "outputs": [
+          {
+            "type": "OutputDecl",
+            "queueName": "swift.mt103.parsed",
+            "dataTypeId": null,
+            "dataTypeIds": null,
+            "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
+            "transformRule": "BEGIN OUTPUT := src; END"
+          }
+        ]
+      },
+      {
+        "type": "RouterDecl",
+        "id": "ops-validation-deadletter-audit",
+        "inputQueue": "ops.validation.deadletter",
+        "description": "Mirror deadletter events into audit stream",
+        "enabled": true,
+        "serviceId": null,
+        "outputs": [
+          {
+            "type": "OutputDecl",
+            "queueName": "audit.all",
+            "dataTypeId": null,
+            "dataTypeIds": null,
+            "whenRule": "output := 1;",
+            "transformRule": "output := src;"
+          }
+        ]
+      },
+      {
+        "type": "RouterDecl",
+        "id": "pacs-inbound-to-outbound",
+        "inputQueue": "pacs.inbound",
+        "description": "Forward PACS ingress to outbound queue",
+        "enabled": true,
+        "serviceId": null,
+        "outputs": [
+          {
+            "type": "OutputDecl",
+            "queueName": "pacs.outbound",
+            "dataTypeId": null,
+            "dataTypeIds": null,
+            "whenRule": "output := 1;",
+            "transformRule": "output := src;"
+          }
+        ]
+      },
+      {
+        "type": "RouterDecl",
+        "id": "mt202-inbound-routing",
+        "inputQueue": "mt202.inbound",
+        "description": "Route MT202 ingress into payment queue",
+        "enabled": true,
+        "serviceId": null,
+        "outputs": [
+          {
+            "type": "OutputDecl",
+            "queueName": "payments.mt202",
+            "dataTypeId": null,
+            "dataTypeIds": null,
+            "whenRule": "IF startswith(upper(src), \"MT202\") THEN output := 1 ELSE output := 0;",
+            "transformRule": "BEGIN OUTPUT := src; END"
+          }
+        ]
       }
     ],
     "mappers": [
@@ -78,19 +150,19 @@
         "maps": [
           {
             "type": "MapDecl",
-            "sourcePath": "finEnvelope.block4.fields.20",
+            "sourcePath": "block4.20",
             "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
             "conversionRule": "BEGIN OUTPUT := trim (src); END"
           },
           {
             "type": "MapDecl",
-            "sourcePath": "finEnvelope.block4.fields.32A.components.currency",
+            "sourcePath": "block4.32A.currency",
             "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
             "conversionRule": "output := upper(src);"
           },
           {
             "type": "MapDecl",
-            "sourcePath": "finEnvelope.block4.fields.32A.components.amount",
+            "sourcePath": "block4.32A.amount",
             "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
             "conversionRule": "output := mtamounttodecimal(src);"
           }
@@ -140,8 +212,8 @@
           "transformRule": "BEGIN OUTPUT := MAP (\"pacs-to-lynx\", MAP (\"mt103-to-pacs\", src)); END"
         }
       ],
-      "createdAt": "2026-05-13T13:27:41.443Z",
-      "updatedAt": "2026-05-13T13:27:41.443Z"
+      "createdAt": "2026-05-16T12:58:24.088Z",
+      "updatedAt": "2026-05-16T12:58:24.088Z"
     },
     {
       "id": "swift-fanout-default",
@@ -167,8 +239,76 @@
           "transformRule": "output := src;"
         }
       ],
-      "createdAt": "2026-05-13T13:27:41.443Z",
-      "updatedAt": "2026-05-13T13:27:41.443Z"
+      "createdAt": "2026-05-16T12:58:24.088Z",
+      "updatedAt": "2026-05-16T12:58:24.088Z"
+    },
+    {
+      "id": "mt103-inbound-to-parsed",
+      "name": "mt103-inbound-to-parsed",
+      "serviceId": "aggregator-router-service",
+      "enabled": true,
+      "inputQueue": "swift.mt103.inbound",
+      "description": "Forward MT103 ingress into parsed queue",
+      "outputs": [
+        {
+          "queueName": "swift.mt103.parsed",
+          "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
+          "transformRule": "BEGIN OUTPUT := src; END"
+        }
+      ],
+      "createdAt": "2026-05-16T12:58:24.088Z",
+      "updatedAt": "2026-05-16T12:58:24.088Z"
+    },
+    {
+      "id": "ops-validation-deadletter-audit",
+      "name": "ops-validation-deadletter-audit",
+      "serviceId": "aggregator-router-service",
+      "enabled": true,
+      "inputQueue": "ops.validation.deadletter",
+      "description": "Mirror deadletter events into audit stream",
+      "outputs": [
+        {
+          "queueName": "audit.all",
+          "whenRule": "output := 1;",
+          "transformRule": "output := src;"
+        }
+      ],
+      "createdAt": "2026-05-16T12:58:24.088Z",
+      "updatedAt": "2026-05-16T12:58:24.088Z"
+    },
+    {
+      "id": "pacs-inbound-to-outbound",
+      "name": "pacs-inbound-to-outbound",
+      "serviceId": "aggregator-router-service",
+      "enabled": true,
+      "inputQueue": "pacs.inbound",
+      "description": "Forward PACS ingress to outbound queue",
+      "outputs": [
+        {
+          "queueName": "pacs.outbound",
+          "whenRule": "output := 1;",
+          "transformRule": "output := src;"
+        }
+      ],
+      "createdAt": "2026-05-16T12:58:24.088Z",
+      "updatedAt": "2026-05-16T12:58:24.088Z"
+    },
+    {
+      "id": "mt202-inbound-routing",
+      "name": "mt202-inbound-routing",
+      "serviceId": "aggregator-router-service",
+      "enabled": true,
+      "inputQueue": "mt202.inbound",
+      "description": "Route MT202 ingress into payment queue",
+      "outputs": [
+        {
+          "queueName": "payments.mt202",
+          "whenRule": "IF startswith(upper(src), \"MT202\") THEN output := 1 ELSE output := 0;",
+          "transformRule": "BEGIN OUTPUT := src; END"
+        }
+      ],
+      "createdAt": "2026-05-16T12:58:24.088Z",
+      "updatedAt": "2026-05-16T12:58:24.088Z"
     }
   ],
   "dataMappings": [
@@ -181,7 +321,7 @@
       "description": "Minimal MT103 to PACS sample",
       "items": [
         {
-          "sourcePath": "finEnvelope.block4.fields.20",
+          "sourcePath": "block4.20",
           "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
           "kind": "leaf",
           "sourceValueType": "unknown",
@@ -189,7 +329,7 @@
           "conversionRule": "BEGIN OUTPUT := trim (src); END"
         },
         {
-          "sourcePath": "finEnvelope.block4.fields.32A.components.currency",
+          "sourcePath": "block4.32A.currency",
           "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
           "kind": "leaf",
           "sourceValueType": "unknown",
@@ -197,7 +337,7 @@
           "conversionRule": "output := upper(src);"
         },
         {
-          "sourcePath": "finEnvelope.block4.fields.32A.components.amount",
+          "sourcePath": "block4.32A.amount",
           "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
           "kind": "leaf",
           "sourceValueType": "unknown",
@@ -205,8 +345,8 @@
           "conversionRule": "output := mtamounttodecimal(src);"
         }
       ],
-      "createdAt": "2026-05-13T13:27:41.446Z",
-      "updatedAt": "2026-05-13T13:27:41.446Z"
+      "createdAt": "2026-05-16T12:58:24.091Z",
+      "updatedAt": "2026-05-16T12:58:24.091Z"
     },
     {
       "id": "pacs-to-lynx-mini",
@@ -233,8 +373,8 @@
           "conversionRule": "output := upper(src);"
         }
       ],
-      "createdAt": "2026-05-13T13:27:41.446Z",
-      "updatedAt": "2026-05-13T13:27:41.446Z"
+      "createdAt": "2026-05-16T12:58:24.091Z",
+      "updatedAt": "2026-05-16T12:58:24.091Z"
     }
   ]
 }

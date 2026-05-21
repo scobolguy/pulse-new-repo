@@ -22,3 +22,29 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Runtime/generated data artifacts
+data/*.jsonl
+data/*.generated.json
+data/*-compiled.json
+data/queue-validation-errors.jsonl
+data/transaction-lifecycle-dashboard.json
+data/transaction-lifecycle-compiled.json
+data/user-groups.json
+data/user-management.json
+data/process-governance.json
+data/worker-config.json
+data/worker-metrics.jsonl
+data/workflow-context-accepted.json
+data/workflow-context-reject.json
+data/queue-manager.dsl.sample.json
+data/run-reports/
+data/qm-primary/messages/
+data/qm-secondary/messages/
+data/qm-primary/state.snapshot.json
+data/qm-secondary/state.snapshot.json
+data/qm-primary/operations.jsonl
+data/qm-secondary/operations.jsonl
+
+# Built UI assets
+public/assets/

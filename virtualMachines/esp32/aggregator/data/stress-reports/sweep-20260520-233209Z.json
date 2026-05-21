@@ -1,0 +1,341 @@
+{
+  "runId": "sweep-20260520-233209Z",
+  "capturedAt": "2026-05-20T23:32:34.634Z",
+  "backendUrl": "http://localhost:4000",
+  "flowCount": 3,
+  "sweepScale": 0.1,
+  "phases": [
+    {
+      "phase": "light",
+      "config": {
+        "backendUrl": "http://localhost:4000",
+        "flowCount": 3,
+        "messagesPerFlow": 15,
+        "flowConcurrency": 4,
+        "flowStaggerMs": 30,
+        "interBatchDelayMs": 5,
+        "selectedFlowIds": [
+          "stress-ingress-mt103",
+          "stress-pacs-json",
+          "stress-mt202"
+        ]
+      },
+      "statsByFlow": [
+        {
+          "flow": "stress-ingress-mt103",
+          "queue": "swift.mt103.inbound",
+          "attempted": 15,
+          "ok": 15,
+          "failed": 0,
+          "minLatencyMs": 35,
+          "maxLatencyMs": 332,
+          "totalLatencyMs": 2635,
+          "statusCounts": {
+            "200": 15
+          },
+          "sampleErrors": [],
+          "avgLatencyMs": 175.67
+        },
+        {
+          "flow": "stress-pacs-json",
+          "queue": "pacs.inbound",
+          "attempted": 15,
+          "ok": 15,
+          "failed": 0,
+          "minLatencyMs": 33,
+          "maxLatencyMs": 380,
+          "totalLatencyMs": 3829,
+          "statusCounts": {
+            "200": 15
+          },
+          "sampleErrors": [],
+          "avgLatencyMs": 255.27
+        },
+        {
+          "flow": "stress-mt202",
+          "queue": "mt202.inbound",
+          "attempted": 15,
+          "ok": 15,
+          "failed": 0,
+          "minLatencyMs": 99,
+          "maxLatencyMs": 348,
+          "totalLatencyMs": 3913,
+          "statusCounts": {
+            "200": 15
+          },
+          "sampleErrors": [],
+          "avgLatencyMs": 260.87
+        }
+      ],
+      "summary": {
+        "attempted": 45,
+        "ok": 45,
+        "failed": 0,
+        "elapsedMs": 1264,
+        "throughputMsgsPerSec": 35.6
+      },
+      "runtimeDiagnostics": {
+        "timestamp": 1779319931037,
+        "uptimeSeconds": 293,
+        "process": {
+          "pid": 25060,
+          "platform": "win32",
+          "nodeVersion": "v22.20.0",
+          "rssMb": 149.67,
+          "heapUsedMb": 76.43,
+          "heapTotalMb": 91.34,
+          "externalMb": 3.76,
+          "arrayBuffersMb": 0.12,
+          "heapUsedPercent": 83.68,
+          "activeHandles": 17,
+          "activeRequests": 0
+        },
+        "v8": {
+          "heapLimitMb": 4144,
+          "mallocedMb": 0.52,
+          "peakMallocedMb": 4.68,
+          "nativeContexts": 2,
+          "detachedContexts": 0
+        },
+        "eventLoop": {
+          "utilization": 0.0956,
+          "activeMs": 27522.39,
+          "idleMs": 260336.252,
+          "delayMeanMs": 31.408,
+          "delayStddevMs": 36.808,
+          "delayP95Ms": 33.587,
+          "delayP99Ms": 43.811,
+          "delayMaxMs": 2191.524
+        },
+        "sinceStart": {
+          "startedAt": 1779319638083,
+          "elapsedSeconds": 293
+        }
+      },
+      "capturedAt": "2026-05-20T23:32:11.041Z"
+    },
+    {
+      "phase": "medium",
+      "config": {
+        "backendUrl": "http://localhost:4000",
+        "flowCount": 3,
+        "messagesPerFlow": 40,
+        "flowConcurrency": 8,
+        "flowStaggerMs": 30,
+        "interBatchDelayMs": 5,
+        "selectedFlowIds": [
+          "stress-ingress-mt103",
+          "stress-pacs-json",
+          "stress-mt202"
+        ]
+      },
+      "statsByFlow": [
+        {
+          "flow": "stress-ingress-mt103",
+          "queue": "swift.mt103.inbound",
+          "attempted": 40,
+          "ok": 40,
+          "failed": 0,
+          "minLatencyMs": 17,
+          "maxLatencyMs": 1042,
+          "totalLatencyMs": 25226,
+          "statusCounts": {
+            "200": 40
+          },
+          "sampleErrors": [],
+          "avgLatencyMs": 630.65
+        },
+        {
+          "flow": "stress-pacs-json",
+          "queue": "pacs.inbound",
+          "attempted": 40,
+          "ok": 40,
+          "failed": 0,
+          "minLatencyMs": 111,
+          "maxLatencyMs": 1029,
+          "totalLatencyMs": 28371,
+          "statusCounts": {
+            "200": 40
+          },
+          "sampleErrors": [],
+          "avgLatencyMs": 709.27
+        },
+        {
+          "flow": "stress-mt202",
+          "queue": "mt202.inbound",
+          "attempted": 40,
+          "ok": 40,
+          "failed": 0,
+          "minLatencyMs": 441,
+          "maxLatencyMs": 1035,
+          "totalLatencyMs": 31021,
+          "statusCounts": {
+            "200": 40
+          },
+          "sampleErrors": [],
+          "avgLatencyMs": 775.52
+        }
+      ],
+      "summary": {
+        "attempted": 120,
+        "ok": 120,
+        "failed": 0,
+        "elapsedMs": 4273,
+        "throughputMsgsPerSec": 28.08
+      },
+      "runtimeDiagnostics": {
+        "timestamp": 1779319936664,
+        "uptimeSeconds": 299,
+        "process": {
+          "pid": 25060,
+          "platform": "win32",
+          "nodeVersion": "v22.20.0",
+          "rssMb": 154.37,
+          "heapUsedMb": 88.66,
+          "heapTotalMb": 102.58,
+          "externalMb": 3.8,
+          "arrayBuffersMb": 0.17,
+          "heapUsedPercent": 86.44,
+          "activeHandles": 29,
+          "activeRequests": 0
+        },
+        "v8": {
+          "heapLimitMb": 4144,
+          "mallocedMb": 0.63,
+          "peakMallocedMb": 4.68,
+          "nativeContexts": 2,
+          "detachedContexts": 0
+        },
+        "eventLoop": {
+          "utilization": 0.1126,
+          "activeMs": 33049.578,
+          "idleMs": 260436.666,
+          "delayMeanMs": 31.91,
+          "delayStddevMs": 41.248,
+          "delayP95Ms": 33.686,
+          "delayP99Ms": 45.416,
+          "delayMaxMs": 2191.524
+        },
+        "sinceStart": {
+          "startedAt": 1779319638083,
+          "elapsedSeconds": 299
+        }
+      },
+      "capturedAt": "2026-05-20T23:32:16.667Z"
+    },
+    {
+      "phase": "heavy",
+      "config": {
+        "backendUrl": "http://localhost:4000",
+        "flowCount": 3,
+        "messagesPerFlow": 90,
+        "flowConcurrency": 14,
+        "flowStaggerMs": 30,
+        "interBatchDelayMs": 5,
+        "selectedFlowIds": [
+          "stress-ingress-mt103",
+          "stress-pacs-json",
+          "stress-mt202"
+        ]
+      },
+      "statsByFlow": [
+        {
+          "flow": "stress-ingress-mt103",
+          "queue": "swift.mt103.inbound",
+          "attempted": 90,
+          "ok": 90,
+          "failed": 0,
+          "minLatencyMs": 739,
+          "maxLatencyMs": 2089,
+          "totalLatencyMs": 154320,
+          "statusCounts": {
+            "200": 90
+          },
+          "sampleErrors": [],
+          "avgLatencyMs": 1714.67
+        },
+        {
+          "flow": "stress-pacs-json",
+          "queue": "pacs.inbound",
+          "attempted": 90,
+          "ok": 90,
+          "failed": 0,
+          "minLatencyMs": 1020,
+          "maxLatencyMs": 2181,
+          "totalLatencyMs": 155073,
+          "statusCounts": {
+            "200": 90
+          },
+          "sampleErrors": [],
+          "avgLatencyMs": 1723.03
+        },
+        {
+          "flow": "stress-mt202",
+          "queue": "mt202.inbound",
+          "attempted": 90,
+          "ok": 90,
+          "failed": 0,
+          "minLatencyMs": 1252,
+          "maxLatencyMs": 2182,
+          "totalLatencyMs": 158761,
+          "statusCounts": {
+            "200": 90
+          },
+          "sampleErrors": [],
+          "avgLatencyMs": 1764.01
+        }
+      ],
+      "summary": {
+        "attempted": 270,
+        "ok": 270,
+        "failed": 0,
+        "elapsedMs": 13109,
+        "throughputMsgsPerSec": 20.6
+      },
+      "runtimeDiagnostics": {
+        "timestamp": 1779319954622,
+        "uptimeSeconds": 317,
+        "process": {
+          "pid": 25060,
+          "platform": "win32",
+          "nodeVersion": "v22.20.0",
+          "rssMb": 168.01,
+          "heapUsedMb": 83.68,
+          "heapTotalMb": 115.34,
+          "externalMb": 3.8,
+          "arrayBuffersMb": 0.18,
+          "heapUsedPercent": 72.55,
+          "activeHandles": 48,
+          "activeRequests": 0
+        },
+        "v8": {
+          "heapLimitMb": 4144,
+          "mallocedMb": 0.52,
+          "peakMallocedMb": 4.68,
+          "nativeContexts": 2,
+          "detachedContexts": 0
+        },
+        "eventLoop": {
+          "utilization": 0.1638,
+          "activeMs": 50999.994,
+          "idleMs": 260443.709,
+          "delayMeanMs": 33.635,
+          "delayStddevMs": 72.57,
+          "delayP95Ms": 33.718,
+          "delayP99Ms": 50.266,
+          "delayMaxMs": 3198.157
+        },
+        "sinceStart": {
+          "startedAt": 1779319638083,
+          "elapsedSeconds": 317
+        }
+      },
+      "capturedAt": "2026-05-20T23:32:34.632Z"
+    }
+  ],
+  "hotspotSignals": [
+    "Highest heap pressure in medium: 86.44% heap used (88.66MB).",
+    "Highest event-loop delay in heavy: p99=50.266ms, p95=33.718ms.",
+    "Peak throughput in light: 35.6 msg/s; compare this against heavier phases for saturation signs."
+  ]
+}

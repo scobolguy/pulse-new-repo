@@ -1,9 +1,25 @@
 # Symbol table (separate from router-mapper DSL)
 QUEUE "inboundSwift" -> "swift.inbound" TYPE "text-string";
 QUEUE "pacsOutbound" -> "pacs.outbound" TYPES ("pacs", "pacs-lynx");
+QUEUE "pain2RejectQueue" -> "pain2.reject" TYPE "pain2";
+QUEUE "pain2AcceptedQueue" -> "pain2.accepted" TYPE "pain2";
 FILE "mtTemplate" -> "/services/templates/mt103.txt";
 API "aggregator" BASE "http://localhost:4000";
 
 WORKFLOW "enqueue-pacs" BEGIN
   STEP "enqueue" CALL API "aggregator" POST "/api/queue/pacs.outbound/enqueue";
+END;
+
+WORKFLOW "pain2-routing" BEGIN
+  IF FIELD "message.status" EQUALS "reject" THEN
+    BEGIN
+      STEP "route-reject" ROUTE QUEUE "pain2RejectQueue";
+      STEP "set-reject-state" SET STATE "transactionState" = "rejected";
+    END;
+  ELSE;
+    BEGIN
+      STEP "route-accept" ROUTE QUEUE "pain2AcceptedQueue";
+      STEP "set-accept-state" SET STATE "transactionState" = "accepted";
+    END;
+  ENDIF;
 END;

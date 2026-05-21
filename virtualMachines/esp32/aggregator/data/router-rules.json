@@ -69,5 +69,67 @@
     ],
     "createdAt": "2026-05-12T16:59:08.468Z",
     "updatedAt": "2026-05-12T16:59:08.468Z"
+  },
+  {
+    "id": "mt103-inbound-to-parsed",
+    "name": "MT103 inbound to parsed",
+    "serviceId": "aggregator-router-service",
+    "enabled": true,
+    "inputQueue": "swift.mt103.inbound",
+    "description": "Forward validated MT103 ingress messages into lifecycle parsed queue",
+    "outputs": [
+      {
+        "queueName": "swift.mt103.parsed",
+        "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
+        "transformRule": "output := src;"
+      }
+    ],
+    "updatedAt": "2026-05-16T12:49:02.740Z",
+    "createdAt": "2026-05-16T12:49:02.740Z"
+  },
+  {
+    "id": "ops-validation-deadletter-audit",
+    "name": "Deadletter to audit",
+    "serviceId": "aggregator-router-service",
+    "enabled": true,
+    "inputQueue": "ops.validation.deadletter",
+    "description": "Mirror deadletter events into audit stream",
+    "outputs": [
+      {
+        "queueName": "audit.all",
+        "whenRule": "output := 1;",
+        "transformRule": "output := src;"
+      }
+    ]
+  },
+  {
+    "id": "pacs-inbound-to-outbound",
+    "name": "PACS inbound to outbound",
+    "serviceId": "aggregator-router-service",
+    "enabled": true,
+    "inputQueue": "pacs.inbound",
+    "description": "Forward PACS ingress to outbound queue",
+    "outputs": [
+      {
+        "queueName": "pacs.outbound",
+        "whenRule": "output := 1;",
+        "transformRule": "output := src;"
+      }
+    ]
+  },
+  {
+    "id": "mt202-inbound-routing",
+    "name": "MT202 inbound routing",
+    "serviceId": "aggregator-router-service",
+    "enabled": true,
+    "inputQueue": "mt202.inbound",
+    "description": "Route MT202 ingress into payment queue",
+    "outputs": [
+      {
+        "queueName": "payments.mt202",
+        "whenRule": "IF startswith(upper(src), \"MT202\") THEN output := 1 ELSE output := 0;",
+        "transformRule": "output := src;"
+      }
+    ]
   }
 ]

@@ -8,7 +8,7 @@
     "description": "Minimal MT103 to PACS sample",
     "items": [
       {
-        "sourcePath": "finEnvelope.block4.fields.20",
+        "sourcePath": "block4.20",
         "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
         "kind": "leaf",
         "sourceValueType": "unknown",
@@ -16,7 +16,7 @@
         "conversionRule": "BEGIN OUTPUT := trim (src); END"
       },
       {
-        "sourcePath": "finEnvelope.block4.fields.32A.components.currency",
+        "sourcePath": "block4.32A.currency",
         "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
         "kind": "leaf",
         "sourceValueType": "unknown",
@@ -24,7 +24,7 @@
         "conversionRule": "output := upper(src);"
       },
       {
-        "sourcePath": "finEnvelope.block4.fields.32A.components.amount",
+        "sourcePath": "block4.32A.amount",
         "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
         "kind": "leaf",
         "sourceValueType": "unknown",
@@ -32,8 +32,8 @@
         "conversionRule": "output := mtamounttodecimal(src);"
       }
     ],
-    "createdAt": "2026-05-13T13:27:41.446Z",
-    "updatedAt": "2026-05-13T13:27:41.446Z"
+    "createdAt": "2026-05-16T12:58:24.091Z",
+    "updatedAt": "2026-05-16T12:58:24.091Z"
   },
   {
     "id": "pacs-to-lynx-mini",
@@ -60,7 +60,7 @@
         "conversionRule": "output := upper(src);"
       }
     ],
-    "createdAt": "2026-05-13T13:27:41.446Z",
-    "updatedAt": "2026-05-13T13:27:41.446Z"
+    "createdAt": "2026-05-16T12:58:24.091Z",
+    "updatedAt": "2026-05-16T12:58:24.091Z"
   }
 ]

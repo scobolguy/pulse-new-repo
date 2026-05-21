@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "compiledAt": "2026-05-13T13:23:04.727Z",
+  "version": 2,
+  "compiledAt": "2026-05-16T00:37:06.112Z",
   "symbols": {
     "queues": [
       {
@@ -19,6 +19,22 @@
           "pacs-lynx"
         ],
         "dataTypeId": "pacs"
+      },
+      {
+        "symbol": "pain2RejectQueue",
+        "queueName": "pain2.reject",
+        "dataTypeIds": [
+          "pain2"
+        ],
+        "dataTypeId": "pain2"
+      },
+      {
+        "symbol": "pain2AcceptedQueue",
+        "queueName": "pain2.accepted",
+        "dataTypeIds": [
+          "pain2"
+        ],
+        "dataTypeId": "pain2"
       }
     ],
     "files": [
@@ -44,6 +60,46 @@
           "apiSymbol": "aggregator",
           "method": "POST",
           "route": "/api/queue/pacs.outbound/enqueue"
+        }
+      ]
+    },
+    {
+      "id": "pain2-routing",
+      "steps": [
+        {
+          "id": "if-1",
+          "action": "if",
+          "condition": {
+            "field": "message.status",
+            "operator": "equals",
+            "value": "reject"
+          },
+          "then": [
+            {
+              "id": "route-reject",
+              "action": "route_queue",
+              "queueRef": "pain2RejectQueue"
+            },
+            {
+              "id": "set-reject-state",
+              "action": "set_state",
+              "key": "transactionState",
+              "value": "rejected"
+            }
+          ],
+          "else": [
+            {
+              "id": "route-accept",
+              "action": "route_queue",
+              "queueRef": "pain2AcceptedQueue"
+            },
+            {
+              "id": "set-accept-state",
+              "action": "set_state",
+              "key": "transactionState",
+              "value": "accepted"
+            }
+          ]
         }
       ]
     }

@@ -26,6 +26,11 @@
         "builtin":  false
     },
     {
+        "id":  "pacs-lynx",
+        "label":  "PACS LYNX Variant",
+        "builtin":  false
+    },
+    {
         "id":  "pain",
         "label":  "ISO 20022 - Payments Initiation (pain)",
         "builtin":  false
