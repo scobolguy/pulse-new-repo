@@ -34,6 +34,148 @@ Frontend:
 npm run dev
 ```
 
+## ESP32 Deploy (Map + Firmware)
+
+### Profile Builds (Cool Names Kept)
+
+The firmware now supports role-targeted profiles:
+- `esp32_bonecrusher`: larger message handling focus, lower task concurrency.
+- `esp32_drone`: high-throughput microtask focus, smaller message limit.
+
+Build either profile directly:
+
+```powershell
+C:\Users\scobo\.platformio\penv\Scripts\platformio.exe run --environment esp32_bonecrusher
+C:\Users\scobo\.platformio\penv\Scripts\platformio.exe run --environment esp32_drone
+```
+
+Each node reports profile capabilities in `/status` and `/services/describe`:
+- `deviceRole`
+- `maxMessageBytes`
+- `maxConcurrentTasks`
+- `preferredTaskType`
+- `firmwareTrack`
+
+### 1) Deploy updated map artifact to ESP32
+
+If you changed mapping artifacts (for example `data/router-mapper.program.json`), upload the LittleFS image:
+
+```powershell
+C:\Users\scobo\.platformio\penv\Scripts\platformio.exe run --target uploadfs --environment esp32dev
+```
+
+Then clear edge ingress caches on the board so new map entries are used immediately:
+
+```powershell
+node aggregator/scripts/clear-edge-ingress-cache.mjs
+```
+
+### 2) Deploy firmware over serial (kills COM5 holders first)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/deploy-esp32.ps1 -Mode serial -Port COM5 -Version 1.1.0
+```
+
+To also push filesystem first in the same command:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/deploy-esp32.ps1 -Mode serial -Port COM5 -UploadFs -Version 1.1.0
+```
+
+### 3) Deploy firmware over OTA
+
+OTA is enabled in firmware and PlatformIO via `esp32dev_ota`.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/deploy-esp32.ps1 -Mode ota -Version 1.1.0
+```
+
+Roll out one version to many nodes in a single command:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/rollout-esp32-ota.ps1 -Version 1.1.0 -Nodes 192.168.2.115,192.168.2.116,192.168.2.117
+```
+
+Notes:
+- OTA environment uses `upload_protocol = espota`.
+- Current OTA target IP is configured in `platformio.ini` under `[env:esp32dev_ota]`.
+- OTA deploy updates firmware; filesystem artifacts are handled separately.
+- Node firmware version is published by `/status` and `/services/describe` as `firmwareVersion`.
+
+### Role-Aware Edge Routing (Backend)
+
+`/api/router/ingest` and `/api/edge/ingest` now accept an optional `edgeRole` value:
+- `bonecrusher`
+- `drone`
+
+If `edgeRole` is not provided, backend auto-selects role by message size.
+
+Environment variables for pool routing:
+- `EDGE_ESP32_BONECRUSHER_NODES=192.168.2.115:80,192.168.2.116:80`
+- `EDGE_ESP32_DRONE_NODES=192.168.2.117:80,192.168.2.118:80`
+- `EDGE_ESP32_NODES=...` (generic fallback pool)
+- `EDGE_ESP32_LARGE_MESSAGE_THRESHOLD_BYTES=8192`
+
+Forced evolution mode (optional):
+- `EDGE_ESP32_FORCED_EVOLUTION_RATE=0.05`
+
+When forced evolution is enabled, a small percentage of requests intentionally routes to the opposite role to test adaptive behavior.
+
+### Edge Ingress Queue Tuning (ESP32)
+
+Read current async ingress config:
+
+```http
+GET /pmachine/edge_ingress_config
+```
+
+Persist updated config (applies after reboot):
+
+```http
+POST /pmachine/edge_ingress_config
+Content-Type: application/x-www-form-urlencoded
+
+workerCount=2&queueLength=48&resultLimit=64&workerStackBytes=12288&workerPriority=1&preferredCore=1
+```
+
+Persist and reboot immediately:
+
+```http
+POST /pmachine/edge_ingress_config
+Content-Type: application/x-www-form-urlencoded
+
+queueLength=48&reboot=1
+```
+
+Notes:
+- Queue capacity changes require reboot to take effect.
+- Current runtime queue depth/capacity are returned in the config response.
+
+### Bonecrusher Central Queue Worker (ESP32)
+
+Bonecrusher firmware can now pull from the central queue manager using lease-safe claims.
+
+Worker status:
+
+```http
+GET /bonecrusher/worker/status
+```
+
+Worker config update:
+
+```http
+POST /bonecrusher/worker/config
+Content-Type: application/x-www-form-urlencoded
+
+enabled=1&queueManagerUrl=http://192.168.2.11:4100&queueName=swift.mt103.inbound&leaseMs=30000&heartbeatMs=4000&pollIntervalMs=250&processTimeoutMs=60000&retryDelayMs=1000&maxAttempts=5
+```
+
+Worker behavior:
+- Claims work from queue manager `/claim`.
+- Extends lease via `/claim/heartbeat` while processing.
+- On success calls `/claim/complete`.
+- On failure calls `/claim/fail` with retry metadata.
+
 Quick distributed setup files:
 - Shared broker env template: [.env.shared-broker.example](.env.shared-broker.example)
 - MacBook processing env template: [.env.macbook-processing.example](.env.macbook-processing.example)
@@ -157,7 +299,20 @@ POST /enqueue
 POST /dequeue
 GET  /queues
 GET  /queues/:queueName/status
+POST /claim
+POST /claim/heartbeat
+POST /claim/complete
+POST /claim/fail
+POST /claim/reap-expired
+GET  /claim/metrics
 ```
+
+Lease-based worker pattern (recommended for Bonecrusher pools):
+- `POST /claim` with `queueName`, `workerId`, optional `leaseMs`.
+- Worker processes message and periodically calls `POST /claim/heartbeat`.
+- On success call `POST /claim/complete`.
+- On failure call `POST /claim/fail` with retry/backoff fields (`delayMs`, `maxAttempts`) or `deadLetter=true`.
+- Expired leases are re-queued automatically by the queue manager reaper.
 
 Local launcher control endpoints:
 

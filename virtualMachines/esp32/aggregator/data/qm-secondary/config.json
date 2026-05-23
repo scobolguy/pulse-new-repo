@@ -142,8 +142,52 @@
         "pacs"
       ],
       "createdByUser": false
+    },
+    "payments.mt103": {
+      "name": "payments.mt103",
+      "createdAt": 1779434549853,
+      "frozen": false,
+      "queueClass": "permanent",
+      "dataTypeId": "swift-mt103",
+      "dataTypeIds": [
+        "swift-mt103"
+      ],
+      "createdByUser": false
+    },
+    "test.mt202.inbound": {
+      "name": "test.mt202.inbound",
+      "createdAt": 1779436260725,
+      "frozen": false,
+      "queueClass": "permanent",
+      "dataTypeId": "swift-mt202",
+      "dataTypeIds": [
+        "swift-mt202"
+      ],
+      "createdByUser": false
+    },
+    "bench.20260522075450.mt202.inbound": {
+      "name": "bench.20260522075450.mt202.inbound",
+      "createdAt": 1779436501350,
+      "frozen": false,
+      "queueClass": "permanent",
+      "dataTypeId": "swift-mt202",
+      "dataTypeIds": [
+        "swift-mt202"
+      ],
+      "createdByUser": false
+    },
+    "audit.all": {
+      "name": "audit.all",
+      "createdAt": 1779568349266,
+      "frozen": false,
+      "queueClass": "permanent",
+      "dataTypeId": "text-string",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "createdByUser": false
     }
   },
-  "configVersion": 13,
-  "timestamp": 1779323317126
+  "configVersion": 17,
+  "timestamp": 1779568349267
 }

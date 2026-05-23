@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 
-export default function QueueManagerDashboard() {
+export default function QueueManagerDashboard({ actorPermissions = [] }) {
   const DEFAULT_QUEUE_CONFIG = {
     maxSize: 1000,
     priority: 'normal',
@@ -256,16 +256,10 @@ export default function QueueManagerDashboard() {
   }
 
   useEffect(() => {
-    async function refreshAuthz() {
-      try {
-        const res = await fetch('/api/authz/me');
-        const payload = await res.json();
-        if (!res.ok) return;
-        setPermissions(Array.isArray(payload.permissions) ? payload.permissions : []);
-      } catch {
-        setPermissions([]);
-      }
-    }
+    setPermissions(Array.isArray(actorPermissions) ? actorPermissions : []);
+  }, [actorPermissions]);
+
+  useEffect(() => {
 
     async function refreshBrokerConfig() {
       try {
@@ -303,7 +297,6 @@ export default function QueueManagerDashboard() {
       }
     }
 
-    refreshAuthz();
     refresh();
     refreshSubscriptions();
     refreshBrokerConfig();

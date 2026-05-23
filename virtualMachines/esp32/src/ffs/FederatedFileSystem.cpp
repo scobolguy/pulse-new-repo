@@ -1,14 +1,134 @@
 // FederatedFileSystem.cpp
 #include "FederatedFileSystem.h"
+#include <ArduinoJson.h>
 #if defined(ESP32)
 #include <SD.h>
 #include <LittleFS.h>
 #elif defined(ESP8266)
 #include <LittleFS.h>
 #endif
+
+namespace {
+
+String trimPath(const String& in) {
+    String out = in;
+    out.trim();
+    return out;
+}
+
+bool isUnderMount(const String& path, const String& mountPoint) {
+    if (!path.startsWith(mountPoint)) return false;
+    if (path.length() == mountPoint.length()) return true;
+    if (mountPoint == "/") return true;
+    return path[mountPoint.length()] == '/';
+}
+
+String joinMountPath(const String& mountPoint, const String& targetPath, const String& logicalName) {
+    String suffix = logicalName.substring(mountPoint.length());
+    if (suffix.startsWith("/")) suffix.remove(0, 1);
+
+    String base = targetPath;
+    if (!base.startsWith("/")) base = "/" + base;
+    if (base.endsWith("/")) base.remove(base.length() - 1);
+    if (suffix.length() == 0) return base;
+    if (suffix.startsWith("/")) return base + suffix;
+    return base + "/" + suffix;
+}
+
+} // namespace
+
+String FederatedFileSystem::makeAbsolutePath(const String &logicalName) const {
+    String path = trimPath(logicalName);
+    if (path.length() == 0) return "/";
+    if (!path.startsWith("/")) path = "/" + path;
+    return path;
+}
+
+FederatedFileSystem::ResolvedPath FederatedFileSystem::resolvePath(const String &logicalName) const {
+    ResolvedPath resolved;
+    resolved.logicalPath = makeAbsolutePath(logicalName);
+
+    const FFSMountEntry* best = nullptr;
+    for (const auto& mount : _mounts) {
+        String mountPoint = makeAbsolutePath(mount.mountPoint);
+        if (!isUnderMount(resolved.logicalPath, mountPoint)) continue;
+        if (!best || mountPoint.length() > makeAbsolutePath(best->mountPoint).length()) {
+            best = &mount;
+        }
+    }
+
+    if (!best) {
+        resolved.resolvedPath = resolved.logicalPath;
+        return resolved;
+    }
+
+    resolved.mounted = true;
+    resolved.remote = best->type == FFSMountType::Peer;
+    resolved.readOnly = best->readOnly;
+    resolved.peerId = best->peerId;
+    resolved.mountPoint = makeAbsolutePath(best->mountPoint);
+    resolved.resolvedPath = joinMountPath(resolved.mountPoint, best->targetPath, resolved.logicalPath);
+    return resolved;
+}
+
+FFSStatus FederatedFileSystem::readLocalFile(const String &path, std::vector<uint8_t> &outData) const {
+    File f;
+#if defined(ESP32)
+    if (path.startsWith("/sd/")) {
+        f = SD.open(path.substring(3), FILE_READ);
+    } else if (path.startsWith("sd/")) {
+        f = SD.open(path.substring(3), FILE_READ);
+    } else {
+        f = LittleFS.open(path, FILE_READ);
+    }
+#else
+    f = LittleFS.open(path, "r");
+#endif
+    if (!f) return FFSStatus::ERR_NOT_FOUND;
+    outData.clear();
+    while (f.available()) outData.push_back(static_cast<uint8_t>(f.read()));
+    f.close();
+    return FFSStatus::OK;
+}
+
+FFSStatus FederatedFileSystem::writeLocalFile(const String &path, const uint8_t *data, size_t len) {
+    File f;
+#if defined(ESP32)
+    if (path.startsWith("/sd/")) {
+        f = SD.open(path.substring(3), FILE_WRITE);
+    } else if (path.startsWith("sd/")) {
+        f = SD.open(path.substring(3), FILE_WRITE);
+    } else {
+        f = LittleFS.open(path, FILE_WRITE);
+    }
+#else
+    f = LittleFS.open(path, "w");
+#endif
+    if (!f) return FFSStatus::ERR_IO;
+    size_t written = f.write(data, len);
+    f.close();
+    return written == len ? FFSStatus::OK : FFSStatus::ERR_FULL;
+}
+
+bool FederatedFileSystem::removeLocalFile(const String &path) const {
+#if defined(ESP32)
+    if (path.startsWith("/sd/")) return SD.remove(path.substring(3));
+    if (path.startsWith("sd/")) return SD.remove(path.substring(3));
+    return LittleFS.remove(path);
+#else
+    return LittleFS.remove(path);
+#endif
+}
+
+void FederatedFileSystem::ensureMountParentDirectory() const {
+    if (!LittleFS.exists("/ffs")) {
+        LittleFS.mkdir("/ffs");
+    }
+}
 // --- File handle/line I/O ---
 int FederatedFileSystem::openFile(const String &logicalName, const String &mode) {
-    String path = logicalName;
+    ResolvedPath resolved = resolvePath(logicalName);
+    String path = resolved.resolvedPath;
     File f;
 #if defined(ESP32)
     if (path.startsWith("sd/")) {
@@ -84,79 +204,93 @@ bool FederatedFileSystem::begin(FFSBackend backend, fs::FS &fs, const String &ba
         if (!SD.begin()) return false;
     }
 #endif
+    reloadMountPoints();
     return true;
 }
 
 FFSStatus FederatedFileSystem::write(const String &logicalName, const uint8_t *data, size_t len) {
-    String path = logicalName;
-    File f;
-    // Federation: path starts with '\'
-    if (path.startsWith("\\")) {
-        // Federation stub: not implemented
+    ResolvedPath resolved = resolvePath(logicalName);
+    if (resolved.remote) {
         return FFSStatus::ERR_UNSUPPORTED;
     }
-#if defined(ESP32)
-    // SD card: path starts with "sd/"
-    if (path.startsWith("sd/")) {
-        String sdPath = path.substring(3); // remove 'sd/'
-        f = SD.open(sdPath, FILE_WRITE);
-    } else {
-        f = LittleFS.open(path, FILE_WRITE);
+    if (resolved.readOnly) {
+        return FFSStatus::ERR_UNSUPPORTED;
     }
-#else
-    // Only LittleFS for ESP8266
-    f = LittleFS.open(path, "w");
-#endif
-    if (!f) return FFSStatus::ERR_IO;
-    size_t written = f.write(data, len);
-    f.close();
-    return (written == len) ? FFSStatus::OK : FFSStatus::ERR_FULL;
+    return writeLocalFile(resolved.resolvedPath, data, len);
 }
 
 FFSStatus FederatedFileSystem::read(const String &logicalName, std::vector<uint8_t> &outData) {
-    String path = logicalName;
-    File f;
-    if (path.startsWith("\\")) {
-        return FFSStatus::ERR_UNSUPPORTED;
+    ResolvedPath resolved = resolvePath(logicalName);
+    if (!resolved.remote) {
+        return readLocalFile(resolved.resolvedPath, outData);
     }
-#if defined(ESP32)
-    if (path.startsWith("sd/")) {
-        String sdPath = path.substring(3);
-        f = SD.open(sdPath, FILE_READ);
-    } else {
-        f = LittleFS.open(path, FILE_READ);
-    }
-#else
-    f = LittleFS.open(path, "r");
-#endif
-    if (!f) return FFSStatus::ERR_NOT_FOUND;
+
     outData.clear();
-    while (f.available()) {
-        outData.push_back(f.read());
+    String peer = resolved.peerId;
+    String filePath = resolved.resolvedPath;
+    size_t chunkIdx = 0;
+    size_t fileSize = 0;
+
+#if defined(ESP32)
+    while (true) {
+        String chunkUrl = String("http://") + peer + "/ffs/chunk?file=" + filePath + "&chunk=" + String(chunkIdx) + "&size=" + String(FFS_CHUNK_SIZE);
+        HTTPClient http;
+        http.begin(chunkUrl);
+        int httpCode = http.GET();
+        if (httpCode != 200) {
+            http.end();
+            return chunkIdx == 0 ? FFSStatus::ERR_NOT_FOUND : FFSStatus::OK;
+        }
+        const int bodySize = http.getSize();
+        if (bodySize <= 0) {
+            http.end();
+            return FFSStatus::ERR_IO;
+        }
+        std::vector<uint8_t> chunkData(static_cast<size_t>(bodySize));
+        WiFiClient* stream = http.getStreamPtr();
+        size_t readBytes = 0;
+        while (readBytes < chunkData.size()) {
+            int n = stream->read(&chunkData[readBytes], chunkData.size() - readBytes);
+            if (n <= 0) break;
+            readBytes += static_cast<size_t>(n);
+        }
+        if (readBytes != chunkData.size()) {
+            http.end();
+            return FFSStatus::ERR_IO;
+        }
+        outData.insert(outData.end(), chunkData.begin(), chunkData.end());
+        String fileSizeHeader = http.header("X-File-Size");
+        if (fileSizeHeader.length() > 0) fileSize = fileSizeHeader.toInt();
+        http.end();
+        ++chunkIdx;
+        if (fileSize > 0 && outData.size() >= fileSize) break;
+        if (bodySize < static_cast<int>(FFS_CHUNK_SIZE)) break;
     }
-    f.close();
     return FFSStatus::OK;
+#else
+    return FFSStatus::ERR_UNSUPPORTED;
+#endif
 }
 
 FFSStatus FederatedFileSystem::remove(const String &logicalName) {
-    String path = logicalName;
-    bool exists = false;
-    bool removed = false;
-    if (path.startsWith("\\")) {
+    ResolvedPath resolved = resolvePath(logicalName);
+    if (resolved.remote || resolved.readOnly) {
         return FFSStatus::ERR_UNSUPPORTED;
     }
+    bool exists = false;
+    bool removed = false;
 #if defined(ESP32)
-    if (path.startsWith("sd/")) {
-        String sdPath = path.substring(3);
+    if (resolved.resolvedPath.startsWith("sd/")) {
+        String sdPath = resolved.resolvedPath.substring(3);
         exists = SD.exists(sdPath);
         if (exists) removed = SD.remove(sdPath);
     } else {
-        exists = LittleFS.exists(path);
-        if (exists) removed = LittleFS.remove(path);
+        exists = LittleFS.exists(resolved.resolvedPath);
+        if (exists) removed = LittleFS.remove(resolved.resolvedPath);
     }
 #else
-    exists = LittleFS.exists(path);
-    if (exists) removed = LittleFS.remove(path);
+    exists = LittleFS.exists(resolved.resolvedPath);
+    if (exists) removed = LittleFS.remove(resolved.resolvedPath);
 #endif
     if (!exists) return FFSStatus::ERR_NOT_FOUND;
     return removed ? FFSStatus::OK : FFSStatus::ERR_IO;
@@ -195,6 +329,10 @@ FFSStatus FederatedFileSystem::listFiles(std::vector<String> &outNames) {
             file = lfsRoot.openNextFile();
         }
         lfsRoot.close();
+    }
+
+    for (const auto& mount : _mounts) {
+        outNames.push_back(makeAbsolutePath(mount.mountPoint) + "/");
     }
     return FFSStatus::OK;
 }
@@ -244,115 +382,78 @@ FFSStatus FederatedFileSystem::sync() {
 }
 
 FFSStatus FederatedFileSystem::pushFileToPeer(const String &logicalName, const String &peerId) {
-    // TODO: Implement file push to remote peer (via broker)
+    std::vector<uint8_t> data;
+    FFSStatus st = read(logicalName, data);
+    if (st != FFSStatus::OK) return st;
+
+#if defined(ESP32)
+    String url = String("http://") + peerId + "/ffs/upload?file=" + logicalName;
+    HTTPClient http;
+    http.begin(url);
+    http.addHeader("Content-Type", "application/octet-stream");
+    int code = http.POST(data.data(), data.size());
+    http.end();
+    return code >= 200 && code < 300 ? FFSStatus::OK : FFSStatus::ERR_IO;
+#else
     return FFSStatus::ERR_UNSUPPORTED;
+#endif
 }
 
 FFSStatus FederatedFileSystem::fetchFileFromPeer(const String &logicalName, const String &peerId) {
-    // peerId is expected to be the peer's IP or hostname
-    String url = "http://" + peerId + "/ffs/chunk?file=" + logicalName + "&chunk=";
-    size_t totalSize = 0;
-    // Determine file path and open in append mode
+    String chunkUrlBase = String("http://") + peerId + "/ffs/chunk?file=" + logicalName + "&chunk=";
     String path = logicalName;
-    File f;
-#if defined(ESP32)
-    if (path.startsWith("sd/")) {
-        String sdPath = path.substring(3);
-        f = SD.open(sdPath, FILE_APPEND);
-    } else {
-        f = LittleFS.open(path, FILE_APPEND);
-    }
-#else
-    f = LittleFS.open(path, "a");
-#endif
-    if (!f) {
-        // Try to create the file if it doesn't exist
-#if defined(ESP32)
-        if (path.startsWith("sd/")) {
-            String sdPath = path.substring(3);
-            f = SD.open(sdPath, FILE_WRITE);
-        } else {
-            f = LittleFS.open(path, FILE_WRITE);
-        }
-#else
-        f = LittleFS.open(path, "w");
-#endif
-        if (!f) return FFSStatus::ERR_IO;
-    }
-    // Get current file size to determine resume point
-    size_t currentSize = f.size();
-    size_t chunkIdx = currentSize / FFS_CHUNK_SIZE;
-    if (currentSize % FFS_CHUNK_SIZE != 0) {
-        // File is not chunk-aligned, treat as error or truncate
-        f.close();
-        // Optionally, truncate or remove the file here
-        return FFSStatus::ERR_IO;
-    }
-    f.close();
+    size_t chunkIdx = 0;
+
     while (true) {
-        String chunkUrl = url + String(chunkIdx);
-        chunkUrl += "&size=" + String(FFS_CHUNK_SIZE);
+        String chunkUrl = chunkUrlBase + String(chunkIdx) + "&size=" + String(FFS_CHUNK_SIZE);
 #if defined(ESP32)
         HTTPClient http;
         http.begin(chunkUrl);
         int httpCode = http.GET();
         if (httpCode != 200) {
             http.end();
-            if (chunkIdx == 0) return FFSStatus::ERR_NOT_FOUND;
+            return chunkIdx == 0 ? FFSStatus::ERR_NOT_FOUND : FFSStatus::OK;
+        }
+
+        size_t chunkSize = http.getSize();
+        if (chunkSize == 0) {
+            http.end();
             break;
         }
-        WiFiClient *stream = http.getStreamPtr();
-        size_t chunkSize = http.getSize();
+
         std::vector<uint8_t> chunkData(chunkSize);
-        size_t read = 0;
-        while (read < chunkSize) {
-            int n = stream->read(&chunkData[read], chunkSize - read);
+        WiFiClient *stream = http.getStreamPtr();
+        size_t readBytes = 0;
+        while (readBytes < chunkSize) {
+            int n = stream->read(&chunkData[readBytes], chunkSize - readBytes);
             if (n <= 0) break;
-            read += n;
+            readBytes += static_cast<size_t>(n);
         }
-        String crcHeader = http.header("X-Chunk-CRC32");
-        uint32_t crcExpected = strtoul(crcHeader.c_str(), nullptr, 16);
-        uint32_t crc = 0xFFFFFFFF;
-        for (size_t i = 0; i < chunkData.size(); ++i) {
-            uint8_t b = chunkData[i];
-            crc ^= b;
-            for (int k = 0; k < 8; ++k)
-                crc = (crc >> 1) ^ (0xEDB88320 & (-(crc & 1)));
-        }
-        crc ^= 0xFFFFFFFF;
-        if (crc != crcExpected) {
+        if (readBytes != chunkSize) {
             http.end();
             return FFSStatus::ERR_IO;
         }
-        // Append chunk to file
-        if (chunkSize > 0) {
-#if defined(ESP32)
-            if (path.startsWith("sd/")) {
-                String sdPath = path.substring(3);
-                f = SD.open(sdPath, FILE_APPEND);
-            } else {
-                f = LittleFS.open(path, FILE_APPEND);
-            }
-#else
-            f = LittleFS.open(path, "a");
-#endif
-            if (!f) {
-                http.end();
-                return FFSStatus::ERR_IO;
-            }
-            f.write(chunkData.data(), chunkSize);
-            f.close();
+
+        File f;
+        if (path.startsWith("sd/")) {
+            String sdPath = path.substring(3);
+            f = SD.open(sdPath, FILE_APPEND);
+        } else {
+            f = LittleFS.open(path, FILE_APPEND);
         }
+        if (!f) {
+            http.end();
+            return FFSStatus::ERR_IO;
+        }
+        f.write(chunkData.data(), chunkSize);
+        f.close();
+
         String fileSizeHeader = http.header("X-File-Size");
-        if (fileSizeHeader.length() > 0) {
-            totalSize = fileSizeHeader.toInt();
-            if (((chunkIdx + 1) * FFS_CHUNK_SIZE) >= totalSize || chunkSize == 0) {
-                http.end();
-                break;
-            }
-        }
+        size_t totalSize = fileSizeHeader.length() > 0 ? static_cast<size_t>(fileSizeHeader.toInt()) : 0;
         http.end();
         ++chunkIdx;
+        if (totalSize > 0 && (chunkIdx * FFS_CHUNK_SIZE) >= totalSize) break;
+        if (chunkSize < FFS_CHUNK_SIZE) break;
 #elif defined(ESP8266)
         HTTPClient http;
         WiFiClient client;
@@ -360,79 +461,138 @@ FFSStatus FederatedFileSystem::fetchFileFromPeer(const String &logicalName, cons
         int httpCode = http.GET();
         if (httpCode != 200) {
             http.end();
-            if (chunkIdx == 0) return FFSStatus::ERR_NOT_FOUND;
+            return chunkIdx == 0 ? FFSStatus::ERR_NOT_FOUND : FFSStatus::OK;
+        }
+
+        size_t chunkSize = http.getSize();
+        if (chunkSize == 0) {
+            http.end();
             break;
         }
-        WiFiClient *stream = http.getStreamPtr();
-        size_t chunkSize = http.getSize();
+
         std::vector<uint8_t> chunkData(chunkSize);
-        size_t read = 0;
-        while (read < chunkSize) {
-            int n = stream->read(&chunkData[read], chunkSize - read);
+        WiFiClient *stream = http.getStreamPtr();
+        size_t readBytes = 0;
+        while (readBytes < chunkSize) {
+            int n = stream->read(&chunkData[readBytes], chunkSize - readBytes);
             if (n <= 0) break;
-            read += n;
+            readBytes += static_cast<size_t>(n);
         }
-        String crcHeader = http.header("X-Chunk-CRC32");
-        uint32_t crcExpected = strtoul(crcHeader.c_str(), nullptr, 16);
-        uint32_t crc = 0xFFFFFFFF;
-        for (size_t i = 0; i < chunkData.size(); ++i) {
-            uint8_t b = chunkData[i];
-            crc ^= b;
-            for (int k = 0; k < 8; ++k)
-                crc = (crc >> 1) ^ (0xEDB88320 & (-(crc & 1)));
-        }
-        crc ^= 0xFFFFFFFF;
-        if (crc != crcExpected) {
+        if (readBytes != chunkSize) {
             http.end();
             return FFSStatus::ERR_IO;
         }
-        if (chunkSize > 0) {
-#if defined(ESP32)
-            if (path.startsWith("sd/")) {
-                String sdPath = path.substring(3);
-                f = SD.open(sdPath, FILE_APPEND);
-            } else {
-                f = LittleFS.open(path, FILE_APPEND);
-            }
-#else
-            f = LittleFS.open(path, "a");
-#endif
-            if (!f) {
-                http.end();
-                return FFSStatus::ERR_IO;
-            }
-            f.write(chunkData.data(), chunkSize);
-            f.close();
+
+        File f = LittleFS.open(path, "a");
+        if (!f) {
+            http.end();
+            return FFSStatus::ERR_IO;
         }
+        f.write(chunkData.data(), chunkSize);
+        f.close();
+
         String fileSizeHeader = http.header("X-File-Size");
-        if (fileSizeHeader.length() > 0) {
-            totalSize = fileSizeHeader.toInt();
-            if (((chunkIdx + 1) * FFS_CHUNK_SIZE) >= totalSize || chunkSize == 0) {
-                http.end();
-                break;
-            }
-        }
+        size_t totalSize = fileSizeHeader.length() > 0 ? static_cast<size_t>(fileSizeHeader.toInt()) : 0;
         http.end();
         ++chunkIdx;
+        if (totalSize > 0 && (chunkIdx * FFS_CHUNK_SIZE) >= totalSize) break;
+        if (chunkSize < FFS_CHUNK_SIZE) break;
 #else
         return FFSStatus::ERR_UNSUPPORTED;
 #endif
     }
-    // Success if file exists and is nonzero size
-#if defined(ESP32)
-    if (path.startsWith("sd/")) {
-        String sdPath = path.substring(3);
-        f = SD.open(sdPath, FILE_READ);
-    } else {
-        f = LittleFS.open(path, FILE_READ);
-    }
-#else
-    f = LittleFS.open(path, "r");
-#endif
-    if (!f || f.size() == 0) {
-        if (f) f.close();
-        return FFSStatus::ERR_NOT_FOUND;
-    }
-    f.close();
+
     return FFSStatus::OK;
 }
+
+    FFSStatus FederatedFileSystem::addMountPoint(const String &mountPoint, const String &targetPath, FFSMountType type, const String &peerId, bool readOnly) {
+        String mount = makeAbsolutePath(mountPoint);
+        if (mount == "/") return FFSStatus::ERR_INVALID_ARG;
+        if (targetPath.length() == 0 && type == FFSMountType::LocalAlias) return FFSStatus::ERR_INVALID_ARG;
+
+        for (auto& entry : _mounts) {
+            if (makeAbsolutePath(entry.mountPoint) == mount) {
+                entry.mountPoint = mount;
+                entry.targetPath = targetPath;
+                entry.peerId = peerId;
+                entry.type = type;
+                entry.readOnly = readOnly;
+                return saveMountPoints();
+            }
+        }
+
+        _mounts.push_back({mount, targetPath, peerId, type, readOnly});
+        return saveMountPoints();
+    }
+
+    FFSStatus FederatedFileSystem::removeMountPoint(const String &mountPoint) {
+        String mount = makeAbsolutePath(mountPoint);
+        for (auto it = _mounts.begin(); it != _mounts.end(); ++it) {
+            if (makeAbsolutePath(it->mountPoint) == mount) {
+                _mounts.erase(it);
+                return saveMountPoints();
+            }
+        }
+        return FFSStatus::ERR_NOT_FOUND;
+    }
+
+    std::vector<FFSMountEntry> FederatedFileSystem::listMountPoints() const {
+        return _mounts;
+    }
+
+    FFSStatus FederatedFileSystem::reloadMountPoints() {
+        ensureMountParentDirectory();
+        if (!LittleFS.exists(MOUNT_TABLE_PATH)) {
+            _mounts.clear();
+            return FFSStatus::OK;
+        }
+
+        File f = LittleFS.open(MOUNT_TABLE_PATH, "r");
+        if (!f) return FFSStatus::ERR_IO;
+        String raw = f.readString();
+        f.close();
+
+        JsonDocument doc;
+        auto err = deserializeJson(doc, raw);
+        if (err) return FFSStatus::ERR_INDEX;
+
+        _mounts.clear();
+        JsonArrayConst mounts = doc["mounts"].as<JsonArrayConst>();
+        if (!mounts.isNull()) {
+            for (JsonVariantConst v : mounts) {
+                FFSMountEntry entry;
+                entry.mountPoint = String(v["mountPoint"] | "");
+                entry.targetPath = String(v["targetPath"] | "");
+                entry.peerId = String(v["peerId"] | "");
+                String type = String(v["type"] | "local");
+                entry.type = (type == "peer") ? FFSMountType::Peer : FFSMountType::LocalAlias;
+                entry.readOnly = bool(v["readOnly"] | true);
+                if (entry.mountPoint.length() > 0) {
+                    _mounts.push_back(entry);
+                }
+            }
+        }
+        return FFSStatus::OK;
+    }
+
+    FFSStatus FederatedFileSystem::saveMountPoints() const {
+        ensureMountParentDirectory();
+        JsonDocument doc;
+        JsonArray arr = doc["mounts"].to<JsonArray>();
+        for (const auto& entry : _mounts) {
+            JsonObject obj = arr.add<JsonObject>();
+            obj["mountPoint"] = makeAbsolutePath(entry.mountPoint);
+            obj["targetPath"] = String(entry.targetPath);
+            obj["peerId"] = String(entry.peerId);
+            obj["type"] = entry.type == FFSMountType::Peer ? "peer" : "local";
+            obj["readOnly"] = entry.readOnly;
+        }
+
+        String out;
+        serializeJsonPretty(doc, out);
+        File f = LittleFS.open(MOUNT_TABLE_PATH, "w");
+        if (!f) return FFSStatus::ERR_IO;
+        size_t written = f.print(out);
+        f.close();
+        return written == out.length() ? FFSStatus::OK : FFSStatus::ERR_FULL;
+    }

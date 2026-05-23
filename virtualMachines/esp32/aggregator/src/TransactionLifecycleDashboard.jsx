@@ -71,9 +71,59 @@ export default function TransactionLifecycleDashboard() {
   }
 
   useEffect(() => {
-    refresh();
-    const timer = setInterval(refresh, 30000);
-    return () => clearInterval(timer);
+    let cancelled = false;
+    let inFlight = false;
+    let failureCount = 0;
+    let timerId = null;
+    const baseIntervalMs = 60000;
+    const maxIntervalMs = 300000;
+
+    const scheduleNext = (delayMs) => {
+      if (timerId) clearTimeout(timerId);
+      timerId = setTimeout(runRefresh, delayMs);
+    };
+
+    const runRefresh = async (forceNow = false) => {
+      if (cancelled) return;
+      if (!forceNow && document.hidden) {
+        scheduleNext(baseIntervalMs);
+        return;
+      }
+      if (inFlight) {
+        scheduleNext(baseIntervalMs);
+        return;
+      }
+
+      inFlight = true;
+      try {
+        await refresh();
+        failureCount = 0;
+      } catch {
+        failureCount = Math.min(failureCount + 1, 3);
+      } finally {
+        inFlight = false;
+        if (!cancelled) {
+          const nextDelay = failureCount === 0
+            ? baseIntervalMs
+            : Math.min(baseIntervalMs * (2 ** failureCount), maxIntervalMs);
+          scheduleNext(nextDelay);
+        }
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        runRefresh(true);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    runRefresh(true);
+    return () => {
+      cancelled = true;
+      if (timerId) clearTimeout(timerId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, []);
 
   useEffect(() => {

@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "generatedAt": "2026-05-13T17:30:07.847Z",
+  "serviceId": "aggregator-router-service",
+  "entryLabel": "ENTRY",
+  "finishLabel": "FINISH",
+  "instructionSubset": [
+    "JMP",
+    "JZ",
+    "NOP",
+    "ROUTE_MATCH_QUEUE",
+    "ROUTE_EVAL_WHEN",
+    "ROUTE_TRANSFORM",
+    "ROUTE_EMIT",
+    "PARSE_FIN_TEXT",
+    "HALT"
+  ],
+  "entries": [
+    {
+      "kind": "router",
+      "id": "mt103-correspondent-and-lynx-fanout",
+      "label": "ROUTER_0_MT103_CORRESPONDENT_AND_LYNX_FANOUT",
+      "inputQueue": "swift.mt103.parsed",
+      "outputs": [
+        {
+          "queueName": "correspondent.pacs008.outbound",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "BEGIN OUTPUT := 1; END",
+          "transformRule": "BEGIN OUTPUT := MAP (\"mt103-to-pacs\", src); END"
+        },
+        {
+          "queueName": "lynx.pacs009.outbound",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "BEGIN OUTPUT := 1; END",
+          "transformRule": "BEGIN OUTPUT := MAP (\"pacs-to-lynx\", MAP (\"mt103-to-pacs\", src)); END"
+        }
+      ]
+    },
+    {
+      "kind": "router",
+      "id": "swift-fanout-default",
+      "label": "ROUTER_1_SWIFT_FANOUT_DEFAULT",
+      "inputQueue": "swift.inbound",
+      "outputs": [
+        {
+          "queueName": "audit.all",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "output := 1;",
+          "transformRule": "output := src;"
+        },
+        {
+          "queueName": "payments.mt103",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
+          "transformRule": "output := src;"
+        },
+        {
+          "queueName": "payments.mt202",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "IF startswith(upper(src), \"MT202\") THEN output := 1 ELSE output := 0;",
+          "transformRule": "output := src;"
+        }
+      ]
+    },
+    {
+      "kind": "mapper",
+      "id": "mt103-to-pacs-mini",
+      "label": "MAPPER_0_MT103_TO_PACS_MINI",
+      "sourceTypeId": "swift-mt103",
+      "targetTypeId": "pacs",
+      "itemCount": 3,
+      "items": [
+        {
+          "sourcePath": "block4.20",
+          "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+          "conversionRule": "BEGIN OUTPUT := trim (src); END"
+        },
+        {
+          "sourcePath": "block4.32A.currency",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+          "conversionRule": "output := upper(src);"
+        },
+        {
+          "sourcePath": "block4.32A.amount",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+          "conversionRule": "output := mtamounttodecimal(src);"
+        }
+      ]
+    },
+    {
+      "kind": "mapper",
+      "id": "pacs-to-lynx-mini",
+      "label": "MAPPER_1_PACS_TO_LYNX_MINI",
+      "sourceTypeId": "pacs",
+      "targetTypeId": "pacs-lynx",
+      "itemCount": 2,
+      "items": [
+        {
+          "sourcePath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+          "targetPath": "LynxEnvelope.Header.MessageId",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+          "targetPath": "LynxEnvelope.Payment.Currency",
+          "conversionRule": "output := upper(src);"
+        }
+      ]
+    }
+  ]
+}

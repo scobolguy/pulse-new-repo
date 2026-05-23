@@ -17,7 +17,268 @@ export default class QueueManager {
     this.snapshotEveryOps = 200;
     this.retainOpsAfterSnapshot = 500;
     this.opsSinceCheckpoint = 0;
+    this.inflightClaims = {}; // { queueName: { token: claim } }
+    this.deadLetters = {}; // { queueName: [deadLetterItem] }
     this.loadFromDisk();
+  }
+
+  ensureQueueReady(queueName) {
+    if (!this.queueConfig[queueName]) {
+      throw new Error(`Queue ${queueName} not configured`);
+    }
+    if (!this.queues[queueName]) this.queues[queueName] = { messages: [] };
+    if (!Array.isArray(this.queues[queueName].messages)) this.queues[queueName].messages = [];
+  }
+
+  ensureClaimBucket(queueName) {
+    if (!this.inflightClaims[queueName]) this.inflightClaims[queueName] = {};
+    return this.inflightClaims[queueName];
+  }
+
+  ensureDeadLetterBucket(queueName) {
+    if (!this.deadLetters[queueName]) this.deadLetters[queueName] = [];
+    return this.deadLetters[queueName];
+  }
+
+  findNextAvailableMessageIndex(queueName, nowMs = Date.now()) {
+    this.ensureQueueReady(queueName);
+    const queue = this.queues[queueName].messages;
+    for (let i = 0; i < queue.length; i += 1) {
+      const item = queue[i];
+      const availableAt = Number(item?.availableAt || 0);
+      if (!Number.isFinite(availableAt) || availableAt <= nowMs) return i;
+    }
+    return -1;
+  }
+
+  popNextAvailableMessage(queueName, nowMs = Date.now()) {
+    const idx = this.findNextAvailableMessageIndex(queueName, nowMs);
+    if (idx < 0) return null;
+    return this.queues[queueName].messages.splice(idx, 1)[0] || null;
+  }
+
+  claim(queueName, workerId, leaseMs = 30000) {
+    this.ensureQueueReady(queueName);
+    this.reapExpiredClaims(queueName);
+
+    const message = this.popNextAvailableMessage(queueName, Date.now());
+    if (!message) return null;
+
+    const safeLeaseMs = Math.max(1000, Number(leaseMs || 30000));
+    const claimToken = randomUUID();
+    const now = Date.now();
+    const attempts = Number(message?.attemptCount || 0) + 1;
+
+    const claim = {
+      queueName,
+      workerId: String(workerId || 'anonymous-worker'),
+      claimToken,
+      leaseMs: safeLeaseMs,
+      claimedAt: now,
+      leaseExpiresAt: now + safeLeaseMs,
+      attempts,
+      message: {
+        ...message,
+        attemptCount: attempts,
+      }
+    };
+
+    this.ensureClaimBucket(queueName)[claimToken] = claim;
+
+    this.logOperation({
+      type: 'claim',
+      queueName,
+      workerId: claim.workerId,
+      claimToken,
+      messageId: message?.messageId || null,
+      attempts,
+      leaseMs: safeLeaseMs
+    });
+
+    return {
+      queueName,
+      workerId: claim.workerId,
+      claimToken,
+      leaseExpiresAt: claim.leaseExpiresAt,
+      attempts,
+      message: claim.message
+    };
+  }
+
+  heartbeatClaim(queueName, claimToken, workerId, extendMs = 30000) {
+    this.ensureQueueReady(queueName);
+    const claims = this.ensureClaimBucket(queueName);
+    const claim = claims[claimToken];
+    if (!claim) return null;
+    if (workerId && claim.workerId !== String(workerId)) return 'forbidden';
+
+    const safeExtendMs = Math.max(1000, Number(extendMs || claim.leaseMs || 30000));
+    claim.leaseMs = safeExtendMs;
+    claim.leaseExpiresAt = Date.now() + safeExtendMs;
+
+    this.logOperation({
+      type: 'claim-heartbeat',
+      queueName,
+      workerId: claim.workerId,
+      claimToken,
+      leaseMs: safeExtendMs
+    });
+
+    return {
+      queueName,
+      claimToken,
+      workerId: claim.workerId,
+      leaseExpiresAt: claim.leaseExpiresAt
+    };
+  }
+
+  completeClaim(queueName, claimToken, workerId, completionMeta = null) {
+    this.ensureQueueReady(queueName);
+    const claims = this.ensureClaimBucket(queueName);
+    const claim = claims[claimToken];
+    if (!claim) return null;
+    if (workerId && claim.workerId !== String(workerId)) return 'forbidden';
+
+    if (claim?.message?.filePath && this.persistence) {
+      this.persistence.removeMessageFile(claim.message.filePath);
+    }
+
+    delete claims[claimToken];
+    this.logOperation({
+      type: 'claim-complete',
+      queueName,
+      workerId: claim.workerId,
+      claimToken,
+      messageId: claim?.message?.messageId || null,
+      completionMeta: completionMeta || null
+    });
+
+    return {
+      queueName,
+      claimToken,
+      workerId: claim.workerId,
+      messageId: claim?.message?.messageId || null,
+      attempts: claim.attempts
+    };
+  }
+
+  failClaim(queueName, claimToken, workerId, options = {}) {
+    this.ensureQueueReady(queueName);
+    const claims = this.ensureClaimBucket(queueName);
+    const claim = claims[claimToken];
+    if (!claim) return null;
+    if (workerId && claim.workerId !== String(workerId)) return 'forbidden';
+
+    const reason = String(options.reason || 'worker-failed').slice(0, 400);
+    const delayMs = Math.max(0, Number(options.delayMs || 0));
+    const maxAttempts = Math.max(1, Number(options.maxAttempts || 5));
+    const moveToDeadLetter = Boolean(options.deadLetter || claim.attempts >= maxAttempts);
+
+    delete claims[claimToken];
+
+    if (moveToDeadLetter) {
+      const deadItem = {
+        queueName,
+        failedAt: Date.now(),
+        reason,
+        attempts: claim.attempts,
+        workerId: claim.workerId,
+        claimToken,
+        message: claim.message
+      };
+      this.ensureDeadLetterBucket(queueName).push(deadItem);
+      if (claim?.message?.filePath && this.persistence) {
+        this.persistence.removeMessageFile(claim.message.filePath);
+      }
+      this.logOperation({
+        type: 'claim-dead-letter',
+        queueName,
+        workerId: claim.workerId,
+        claimToken,
+        messageId: claim?.message?.messageId || null,
+        attempts: claim.attempts,
+        reason
+      });
+      return { status: 'dead-letter', attempts: claim.attempts, queueName, reason };
+    }
+
+    const retryMessage = {
+      ...claim.message,
+      attemptCount: claim.attempts,
+      availableAt: Date.now() + delayMs,
+      lastError: reason,
+      lastWorkerId: claim.workerId
+    };
+    this.queues[queueName].messages.push(retryMessage);
+
+    this.logOperation({
+      type: 'claim-requeue',
+      queueName,
+      workerId: claim.workerId,
+      claimToken,
+      messageId: retryMessage?.messageId || null,
+      attempts: claim.attempts,
+      reason,
+      delayMs
+    });
+
+    return {
+      status: 'requeued',
+      queueName,
+      attempts: claim.attempts,
+      availableAt: retryMessage.availableAt,
+      reason
+    };
+  }
+
+  reapExpiredClaims(queueName = null, nowMs = Date.now()) {
+    const targets = queueName ? [queueName] : Object.keys(this.inflightClaims || {});
+    let requeued = 0;
+
+    for (const qn of targets) {
+      const claims = this.inflightClaims[qn] || {};
+      for (const [token, claim] of Object.entries(claims)) {
+        if (Number(claim.leaseExpiresAt || 0) > nowMs) continue;
+
+        delete claims[token];
+        this.ensureQueueReady(qn);
+        this.queues[qn].messages.push({
+          ...(claim.message || {}),
+          attemptCount: Number(claim.attempts || claim?.message?.attemptCount || 1),
+          availableAt: nowMs,
+          leaseExpired: true,
+          lastWorkerId: claim.workerId,
+        });
+        requeued += 1;
+
+        this.logOperation({
+          type: 'claim-expired-requeue',
+          queueName: qn,
+          workerId: claim.workerId,
+          claimToken: token,
+          messageId: claim?.message?.messageId || null,
+          attempts: claim.attempts || null
+        });
+      }
+    }
+
+    return requeued;
+  }
+
+  getClaimMetrics(queueName = null) {
+    const targets = queueName ? [queueName] : Object.keys(this.queues || {});
+    const byQueue = {};
+
+    for (const qn of targets) {
+      const claims = Object.values(this.inflightClaims[qn] || {});
+      byQueue[qn] = {
+        queued: this.getQueueLength(qn),
+        inflight: claims.length,
+        deadLetter: (this.deadLetters[qn] || []).length
+      };
+    }
+
+    return byQueue;
   }
 
   // Load configuration and operations from disk
@@ -160,6 +421,15 @@ export default class QueueManager {
         ...(config || {})
       };
       if (!this.queues[queueName]) this.queues[queueName] = { messages: [] };
+      return;
+    }
+
+    if (type === 'truncateQueue') {
+      if (this.persistence) {
+        this.persistence.removeQueueStorage(queueName);
+      }
+      if (!this.queues[queueName]) this.queues[queueName] = { messages: [] };
+      this.queues[queueName].messages = [];
       return;
     }
 
@@ -343,6 +613,9 @@ export default class QueueManager {
     if (type === 'dequeue') {
       return this.dequeueReplicated(queueName, removedMessage || null);
     }
+    if (type === 'truncateQueue') {
+      return this.truncateQueueReplicated(queueName);
+    }
     return null;
   }
 
@@ -403,16 +676,13 @@ export default class QueueManager {
   }
 
   dequeue(queueName, consumerService) {
-    if (!this.queueConfig[queueName]) {
-      throw new Error(`Queue ${queueName} not configured`);
-    }
-    if (!this.queues[queueName] || !this.queues[queueName].messages || this.queues[queueName].messages.length === 0) return null;
-    const queue = this.queues[queueName].messages;
-    const candidate = queue[0] || null;
+    this.ensureQueueReady(queueName);
+    const result = this.popNextAvailableMessage(queueName, Date.now());
+    if (result === null) return null;
+    const candidate = result;
     if (candidate && candidate.filePath && this.persistence) {
       this.persistence.removeMessageFile(candidate.filePath);
     }
-    const result = queue.shift();
     this.logOperation({ type: 'dequeue', queueName, consumerService, removedMessage: result || null });
     return result;
   }
@@ -477,6 +747,34 @@ export default class QueueManager {
     return removed;
   }
 
+  truncateQueue(queueName) {
+    const existed = Boolean(this.queueConfig[queueName] || this.queues[queueName]);
+    if (!existed) return 0;
+
+    const removedCount = this.getQueueLength(queueName);
+    if (this.persistence) {
+      this.persistence.removeQueueStorage(queueName);
+    }
+    if (!this.queues[queueName]) this.queues[queueName] = { messages: [] };
+    this.queues[queueName].messages = [];
+    this.logOperation({ type: 'truncateQueue', queueName, removedCount });
+    return removedCount;
+  }
+
+  truncateQueueReplicated(queueName) {
+    const existed = Boolean(this.queueConfig[queueName] || this.queues[queueName]);
+    if (!existed) return 0;
+
+    const removedCount = this.getQueueLength(queueName);
+    if (this.persistence) {
+      this.persistence.removeQueueStorage(queueName);
+    }
+    if (!this.queues[queueName]) this.queues[queueName] = { messages: [] };
+    this.queues[queueName].messages = [];
+    this.logOperation({ type: 'truncateQueue', queueName, removedCount });
+    return removedCount;
+  }
+
   getQueueLength(queueName) {
     return (this.queues[queueName] && this.queues[queueName].messages) ? this.queues[queueName].messages.length : 0;
   }
@@ -498,6 +796,7 @@ export default class QueueManager {
       version: this.operationLogVersion,
       configVersion: this.configVersion,
       queueLengths,
+      claimMetrics: this.getClaimMetrics(),
       queueConfig: JSON.parse(JSON.stringify(this.queueConfig)),
       timestamp: Date.now()
     };

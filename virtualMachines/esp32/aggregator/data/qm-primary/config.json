@@ -153,8 +153,74 @@
         "swift-mt202"
       ],
       "createdByUser": false
+    },
+    "audit.all": {
+      "name": "audit.all",
+      "createdAt": 1779434549832,
+      "frozen": false,
+      "queueClass": "permanent",
+      "dataTypeId": "text-string",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "createdByUser": false
+    },
+    "test.mt103.inbound": {
+      "name": "test.mt103.inbound",
+      "createdAt": 1779436237545,
+      "frozen": false,
+      "queueClass": "permanent",
+      "dataTypeId": "swift-mt103",
+      "dataTypeIds": [
+        "swift-mt103"
+      ],
+      "createdByUser": false
+    },
+    "test.mt202cov.inbound": {
+      "name": "test.mt202cov.inbound",
+      "createdAt": 1779436281174,
+      "frozen": false,
+      "queueClass": "permanent",
+      "dataTypeId": "swift-mt202cov",
+      "dataTypeIds": [
+        "swift-mt202cov"
+      ],
+      "createdByUser": false
+    },
+    "bench.20260522075450.mt103.inbound": {
+      "name": "bench.20260522075450.mt103.inbound",
+      "createdAt": 1779436491221,
+      "frozen": false,
+      "queueClass": "permanent",
+      "dataTypeId": "swift-mt103",
+      "dataTypeIds": [
+        "swift-mt103"
+      ],
+      "createdByUser": false
+    },
+    "bench.20260522075450.mt202cov.inbound": {
+      "name": "bench.20260522075450.mt202cov.inbound",
+      "createdAt": 1779436511054,
+      "frozen": false,
+      "queueClass": "permanent",
+      "dataTypeId": "swift-mt202cov",
+      "dataTypeIds": [
+        "swift-mt202cov"
+      ],
+      "createdByUser": false
+    },
+    "payments.mt103": {
+      "name": "payments.mt103",
+      "createdAt": 1779568349284,
+      "frozen": false,
+      "queueClass": "permanent",
+      "dataTypeId": "swift-mt103",
+      "dataTypeIds": [
+        "swift-mt103"
+      ],
+      "createdByUser": false
     }
   },
-  "configVersion": 14,
-  "timestamp": 1779320326062
+  "configVersion": 20,
+  "timestamp": 1779568349284
 }

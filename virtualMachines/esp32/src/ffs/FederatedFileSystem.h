@@ -46,6 +46,19 @@ struct FFSChunkInfo {
     size_t length;
 };
 
+enum class FFSMountType {
+    LocalAlias,
+    Peer
+};
+
+struct FFSMountEntry {
+    String mountPoint;
+    String targetPath;
+    String peerId;
+    FFSMountType type;
+    bool readOnly;
+};
+
 // File handle table for open files (simple integer handle)
 #include <map>
 
@@ -89,14 +102,41 @@ public:
     FFSStatus pushFileToPeer(const String &logicalName, const String &peerId);
     FFSStatus fetchFileFromPeer(const String &logicalName, const String &peerId);
 
+    // Mounts
+    FFSStatus addMountPoint(const String &mountPoint, const String &targetPath, FFSMountType type, const String &peerId = "", bool readOnly = true);
+    FFSStatus removeMountPoint(const String &mountPoint);
+    std::vector<FFSMountEntry> listMountPoints() const;
+    FFSStatus reloadMountPoints();
+    FFSStatus saveMountPoints() const;
+
 private:
+    static constexpr const char* MOUNT_TABLE_PATH = "/ffs/.mounts.json";
+
+    struct ResolvedPath {
+        bool mounted = false;
+        bool remote = false;
+        bool readOnly = true;
+        String logicalPath;
+        String resolvedPath;
+        String peerId;
+        String mountPoint;
+    };
+
     FFSBackend _backend;
     fs::FS *_fs;
     String _basePath;
     bool _inTransaction;
     int _nextHandle = 1;
     std::map<int, FFSOpenFile> _openFiles;
+    std::vector<FFSMountEntry> _mounts;
     // TODO: chunk index, journal, transaction log, federation state, etc.
+
+    String makeAbsolutePath(const String &logicalName) const;
+    ResolvedPath resolvePath(const String &logicalName) const;
+    FFSStatus readLocalFile(const String &path, std::vector<uint8_t> &outData) const;
+    FFSStatus writeLocalFile(const String &path, const uint8_t *data, size_t len);
+    bool removeLocalFile(const String &path) const;
+    void ensureMountParentDirectory() const;
 };
 
 #endif // FEDERATED_FILE_SYSTEM_H

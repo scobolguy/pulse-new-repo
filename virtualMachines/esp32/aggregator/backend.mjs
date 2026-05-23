@@ -160,6 +160,13 @@ const PULSE_QUEUE_PERSISTENCE = true;
 const PULSE_QUEUE_DATA_ROOT = PULSE_QUEUE_PERSISTENCE
   ? path.resolve(readEnvString('PULSE_QUEUE_DATA_ROOT', DEFAULT_QUEUE_DATA_ROOT))
   : null;
+const TX_STATE_LOG_SHIPPING_PATH = path.resolve(PULSE_QUEUE_DATA_ROOT, 'transaction-state-log-shipping.jsonl');
+const TX_STATE_LOG_SHIPPING_BATCH_SIZE = Math.max(1, readEnvNumber('TX_STATE_LOG_SHIPPING_BATCH_SIZE', 200));
+const TX_STATE_LOG_SHIPPING_INTERVAL_MS = Math.max(0, readEnvNumber('TX_STATE_LOG_SHIPPING_INTERVAL_MS', 15000));
+const rawRequireRealtimeDb = String(process.env.TX_STATE_REQUIRE_REALTIME_DB || 'true').trim().toLowerCase();
+const TX_STATE_REQUIRE_REALTIME_DB = !(rawRequireRealtimeDb === '0' || rawRequireRealtimeDb === 'false' || rawRequireRealtimeDb === 'no');
+const rawEmergencyLogShipping = String(process.env.TX_STATE_EMERGENCY_LOG_SHIPPING || 'false').trim().toLowerCase();
+const TX_STATE_EMERGENCY_LOG_SHIPPING = (rawEmergencyLogShipping === '1' || rawEmergencyLogShipping === 'true' || rawEmergencyLogShipping === 'yes');
 if (rawQueuePersistenceFlag === '0' || rawQueuePersistenceFlag === 'false' || rawQueuePersistenceFlag === 'no') {
   throw new Error('[CONFIG] PULSE_QUEUE_PERSISTENCE=false is not allowed: queue persistence is mandatory.');
 }
@@ -556,6 +563,7 @@ const brokerInstances = new Map();
 brokerInstances.set('primary', { instanceId: 'primary', active: true, quiesced: false });
 brokerInstances.set('secondary', { instanceId: 'secondary', active: false, quiesced: false });
 const discoveredNodes = new Map();
+const nodeEnrichmentLastAttempt = new Map();
 const queueManagerRegistry = new Map();
 const queueRoutes = new Map();
 const MANAGER_ACTIVE_STATES = new Set(['up', 'degraded']);
@@ -652,18 +660,21 @@ const dlqEvents = [];
 const MAX_DLQ_EVENTS = 2000;
 const MACHINE_ANNOUNCE_INTERVAL_MS = 5000;
 const MACHINE_DRAIN_DEFAULT_TIMEOUT_MS = 60 * 1000;
+const SUPERVISOR_HEARTBEAT_TTL_MS = Math.max(1000, readEnvNumber('SUPERVISOR_HEARTBEAT_TTL_MS', 15000));
 const machineAvailability = {
   nodeId: os.hostname() || 'unknown-node',
   available: false,
   draining: false,
   advertisedAt: null,
   announceReason: null,
-  announceTimerId: null
+  announceTimerId: null,
+  udpBroadcastBlocked: false
 };
 const machineWorkloadState = {
   inFlight: 0,
   updatedAt: null
 };
+const supervisorHeartbeatRegistry = new Map();
 
 function beginMachineWorkUnit() {
   machineWorkloadState.inFlight += 1;
@@ -678,6 +689,69 @@ function endMachineWorkUnit() {
 function canRunQueueWorkers() {
   return machineAvailability.available && !machineAvailability.draining;
 }
+
+function normalizeSupervisorHeartbeatPayload(payload = {}, fallbackIp = '') {
+  const receivedAtMs = Date.now();
+  const nodeName = String(payload.nodeName || payload.nodeId || payload.hostname || '').trim();
+  const nodeId = String(payload.nodeId || nodeName || payload.ip || fallbackIp || 'unknown-supervisor').trim();
+  const ip = String(payload.ip || fallbackIp || '').trim();
+  const deviceRole = String(payload.deviceRole || '').trim();
+  const supervisor = payload.supervisor && typeof payload.supervisor === 'object'
+    ? payload.supervisor
+    : {};
+  const rawOverallHealthy = Object.prototype.hasOwnProperty.call(payload, 'overallHealthy')
+    ? payload.overallHealthy
+    : supervisor.overallHealthy;
+  const overallHealthy = rawOverallHealthy === true;
+
+  return {
+    nodeId,
+    nodeName,
+    ip,
+    deviceRole,
+    overallHealthy,
+    supervisor,
+    receivedAt: new Date(receivedAtMs).toISOString(),
+    receivedAtMs
+  };
+}
+
+function isSupervisorHeartbeatFresh(entry) {
+  if (!entry || !Number.isFinite(entry.receivedAtMs)) return false;
+  return (Date.now() - Number(entry.receivedAtMs)) <= SUPERVISOR_HEARTBEAT_TTL_MS;
+}
+
+function getSupervisorHeartbeatSnapshot() {
+  const now = Date.now();
+  const supervisors = Array.from(supervisorHeartbeatRegistry.values())
+    .map((entry) => ({
+      ...entry,
+      stale: (now - Number(entry.receivedAtMs || 0)) > SUPERVISOR_HEARTBEAT_TTL_MS
+    }))
+    .sort((a, b) => String(a.nodeId || '').localeCompare(String(b.nodeId || '')));
+
+  const healthyFreshCount = supervisors.filter((entry) => !entry.stale && entry.overallHealthy).length;
+  const lastHeartbeatAt = supervisors.reduce((latest, entry) => {
+    if (!latest) return entry.receivedAt || null;
+    return (String(entry.receivedAt || '') > String(latest)) ? entry.receivedAt : latest;
+  }, null);
+
+  return {
+    ttlMs: SUPERVISOR_HEARTBEAT_TTL_MS,
+    supervisorCount: supervisors.length,
+    healthyFreshCount,
+    anyHealthyFresh: healthyFreshCount > 0,
+    lastHeartbeatAt,
+    supervisors
+  };
+}
+
+function getSupervisorHeartbeatEntry(nodeId) {
+  const key = String(nodeId || '').trim();
+  if (!key) return null;
+  return supervisorHeartbeatRegistry.get(key) || null;
+}
+
 const lifecycleHarness = {
   active: null,
   history: []
@@ -685,6 +759,234 @@ const lifecycleHarness = {
 let txMssql = null;
 let txMssqlPoolPromise = null;
 let txStateDbWarned = false;
+let txStateShippingActive = false;
+const txStatePersistenceStats = {
+  realtimeWrites: 0,
+  queuedForShipping: 0,
+  shippedWrites: 0,
+  shippingFailures: 0,
+  lastRealtimeWriteAt: null,
+  lastQueuedAt: null,
+  lastShippedAt: null,
+  lastShipAttemptAt: null,
+  lastShipFailureAt: null,
+  lastShipError: null
+};
+
+function ensureDataRootExists() {
+  fs.mkdirSync(PULSE_QUEUE_DATA_ROOT, { recursive: true });
+}
+
+function getTxStateQueuedCount() {
+  try {
+    if (!fs.existsSync(TX_STATE_LOG_SHIPPING_PATH)) return 0;
+    const raw = fs.readFileSync(TX_STATE_LOG_SHIPPING_PATH, 'utf-8');
+    if (!raw) return 0;
+    return raw
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(Boolean).length;
+  } catch {
+    return 0;
+  }
+}
+
+function getTxStatePersistenceSummary() {
+  return {
+    realtime: {
+      writes: txStatePersistenceStats.realtimeWrites,
+      lastWriteAt: txStatePersistenceStats.lastRealtimeWriteAt
+    },
+    logShipping: {
+      queued: getTxStateQueuedCount(),
+      queuedWrites: txStatePersistenceStats.queuedForShipping,
+      shippedWrites: txStatePersistenceStats.shippedWrites,
+      failures: txStatePersistenceStats.shippingFailures,
+      active: txStateShippingActive,
+      batchSize: TX_STATE_LOG_SHIPPING_BATCH_SIZE,
+      intervalMs: TX_STATE_LOG_SHIPPING_INTERVAL_MS,
+      path: TX_STATE_LOG_SHIPPING_PATH,
+      lastQueuedAt: txStatePersistenceStats.lastQueuedAt,
+      lastShippedAt: txStatePersistenceStats.lastShippedAt,
+      lastShipAttemptAt: txStatePersistenceStats.lastShipAttemptAt,
+      lastShipFailureAt: txStatePersistenceStats.lastShipFailureAt,
+      lastShipError: txStatePersistenceStats.lastShipError
+    }
+  };
+}
+
+function queueTransactionStateForLogShipping(entry, reason) {
+  ensureDataRootExists();
+  const record = {
+    queuedAt: new Date().toISOString(),
+    reason: reason || 'db-unavailable',
+    entry
+  };
+  fs.appendFileSync(TX_STATE_LOG_SHIPPING_PATH, `${JSON.stringify(record)}\n`, 'utf-8');
+  txStatePersistenceStats.queuedForShipping += 1;
+  txStatePersistenceStats.lastQueuedAt = record.queuedAt;
+}
+
+function buildTxStateDbWriteEntry(compiled, {
+  message,
+  fromState = null,
+  toState,
+  eventName = null,
+  queueName = null
+} = {}) {
+  if (!toState) return null;
+  const entityId = extractSwiftReferenceFromMessage(message);
+  if (!entityId) return null;
+
+  const nowIso = new Date().toISOString();
+  const machineId = String(compiled?.transactionId || 'fsm-machine').trim() || 'fsm-machine';
+  const toStateInfo = getLifecycleStateByName(compiled, toState);
+  const resolvedQueueName = String(queueName || toStateInfo?.queueName || '').trim() || null;
+  const toStateLabel = String(toStateInfo?.label || toState || '').trim() || null;
+  const isTerminal = getLifecycleOutgoingTransitions(compiled, String(toState || '').trim()).length === 0;
+
+  return {
+    entityId,
+    machineId,
+    fromState: String(fromState || '').trim() || null,
+    toState: String(toState || '').trim(),
+    toStateLabel,
+    queueName: resolvedQueueName,
+    eventName: String(eventName || '').trim() || null,
+    isTerminal,
+    payloadType: inferMessageType(message),
+    updatedAt: nowIso
+  };
+}
+
+async function writeTransactionStateToDb(entry) {
+  const pool = await getTransactionStateMssqlPool();
+  const now = new Date(String(entry.updatedAt || new Date().toISOString()));
+
+  await pool.request()
+    .input('entity_id', txMssql.NVarChar(128), entry.entityId)
+    .input('machine_id', txMssql.NVarChar(128), entry.machineId)
+    .input('state_id', txMssql.NVarChar(128), entry.toState)
+    .input('state_label', txMssql.NVarChar(256), entry.toStateLabel)
+    .input('queue_name', txMssql.NVarChar(256), entry.queueName)
+    .input('last_event_id', txMssql.NVarChar(128), entry.eventName)
+    .input('is_terminal', txMssql.Bit, entry.isTerminal ? 1 : 0)
+    .input('payload_type', txMssql.NVarChar(64), entry.payloadType)
+    .input('updated_at', txMssql.DateTime2, now)
+    .query(`
+MERGE ${FSM_MSSQL_CURRENT_TABLE_SQL} WITH (HOLDLOCK) AS t
+USING (SELECT @entity_id AS entity_id) AS s
+ON t.entity_id = s.entity_id
+WHEN MATCHED THEN
+  UPDATE SET
+    machine_id = @machine_id,
+    state_id = @state_id,
+    state_label = @state_label,
+    queue_name = @queue_name,
+    last_event_id = @last_event_id,
+    is_terminal = @is_terminal,
+    payload_type = @payload_type,
+    updated_at = @updated_at
+WHEN NOT MATCHED THEN
+  INSERT (entity_id, machine_id, state_id, state_label, queue_name, last_event_id, is_terminal, payload_type, updated_at)
+  VALUES (@entity_id, @machine_id, @state_id, @state_label, @queue_name, @last_event_id, @is_terminal, @payload_type, @updated_at);
+`);
+
+  await pool.request()
+    .input('entity_id', txMssql.NVarChar(128), entry.entityId)
+    .input('machine_id', txMssql.NVarChar(128), entry.machineId)
+    .input('from_state', txMssql.NVarChar(128), entry.fromState)
+    .input('to_state', txMssql.NVarChar(128), entry.toState)
+    .input('to_state_label', txMssql.NVarChar(256), entry.toStateLabel)
+    .input('queue_name', txMssql.NVarChar(256), entry.queueName)
+    .input('event_name', txMssql.NVarChar(128), entry.eventName)
+    .input('is_terminal', txMssql.Bit, entry.isTerminal ? 1 : 0)
+    .input('updated_at', txMssql.DateTime2, now)
+    .query(`
+INSERT INTO ${FSM_MSSQL_HISTORY_TABLE_SQL}
+  (entity_id, machine_id, from_state, to_state, to_state_label, queue_name, event_name, is_terminal, updated_at)
+VALUES
+  (@entity_id, @machine_id, @from_state, @to_state, @to_state_label, @queue_name, @event_name, @is_terminal, @updated_at);
+`);
+}
+
+async function shipQueuedTransactionStateLogs({ maxEntries = TX_STATE_LOG_SHIPPING_BATCH_SIZE } = {}) {
+  if (txStateShippingActive) {
+    return { shipped: 0, remaining: getTxStateQueuedCount(), skipped: true, reason: 'already-running' };
+  }
+
+  txStateShippingActive = true;
+  txStatePersistenceStats.lastShipAttemptAt = new Date().toISOString();
+  let shipped = 0;
+
+  try {
+    if (!fs.existsSync(TX_STATE_LOG_SHIPPING_PATH)) {
+      return { shipped: 0, remaining: 0 };
+    }
+
+    const raw = fs.readFileSync(TX_STATE_LOG_SHIPPING_PATH, 'utf-8');
+    const lines = raw
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(Boolean);
+    if (!lines.length) {
+      return { shipped: 0, remaining: 0 };
+    }
+
+    const parsed = [];
+    for (const line of lines) {
+      try {
+        parsed.push(JSON.parse(line));
+      } catch (e) {
+        console.warn(`[TX-STATE] Dropping malformed log-shipping line: ${e.message}`);
+      }
+    }
+
+    const keep = [];
+    for (let i = 0; i < parsed.length; i += 1) {
+      const item = parsed[i];
+      const entry = item?.entry;
+      if (!entry) continue;
+
+      if (shipped >= maxEntries) {
+        keep.push(item);
+        continue;
+      }
+
+      try {
+        await writeTransactionStateToDb(entry);
+        shipped += 1;
+      } catch (e) {
+        keep.push(item, ...parsed.slice(i + 1));
+        txStatePersistenceStats.shippingFailures += 1;
+        txStatePersistenceStats.lastShipFailureAt = new Date().toISOString();
+        txStatePersistenceStats.lastShipError = formatErrorDetails(e);
+        break;
+      }
+    }
+
+    ensureDataRootExists();
+    if (keep.length > 0) {
+      fs.writeFileSync(
+        TX_STATE_LOG_SHIPPING_PATH,
+        `${keep.map(item => JSON.stringify(item)).join('\n')}\n`,
+        'utf-8'
+      );
+    } else {
+      fs.writeFileSync(TX_STATE_LOG_SHIPPING_PATH, '', 'utf-8');
+    }
+
+    if (shipped > 0) {
+      txStatePersistenceStats.shippedWrites += shipped;
+      txStatePersistenceStats.lastShippedAt = new Date().toISOString();
+      txStatePersistenceStats.lastShipError = null;
+    }
+
+    return { shipped, remaining: keep.length };
+  } finally {
+    txStateShippingActive = false;
+  }
+}
 
 function toSqlIdentifier(name) {
   const parts = String(name || '').trim().split('.').filter(Boolean);
@@ -1049,6 +1351,162 @@ const ROUTER_WORKER_MAX_BACKOFF_MULTIPLIER = Math.max(1.5, readEnvNumber('ROUTER
 const LIFECYCLE_WORKER_MAX_BACKOFF_MULTIPLIER = Math.max(1.5, readEnvNumber('LIFECYCLE_WORKER_MAX_BACKOFF_MULTIPLIER', 4.5));
 const BRIDGE_WORKER_MAX_BACKOFF_MULTIPLIER = Math.max(1.5, readEnvNumber('BRIDGE_WORKER_MAX_BACKOFF_MULTIPLIER', 4));
 const WORKER_STARTUP_STAGGER_CAP_MS = Math.max(20, readEnvNumber('WORKER_STARTUP_STAGGER_CAP_MS', 180));
+const EDGE_ESP32_ENABLED = readEnvBoolean('EDGE_ESP32_ENABLED', ['1', 'true', 'yes'], false);
+const EDGE_ESP32_AUTO_INGEST = readEnvBoolean('EDGE_ESP32_AUTO_INGEST', ['1', 'true', 'yes'], true);
+const EDGE_ESP32_HOST = readEnvString('EDGE_ESP32_HOST', '127.0.0.1').trim() || '127.0.0.1';
+const EDGE_ESP32_PORT = Math.max(1, readEnvNumber('EDGE_ESP32_PORT', 80));
+const EDGE_ESP32_TIMEOUT_MS = Math.max(100, readEnvNumber('EDGE_ESP32_TIMEOUT_MS', 1200));
+const EDGE_ESP32_PATH = readEnvString('EDGE_ESP32_PATH', '/pmachine/edge_ingress_stage').trim() || '/pmachine/edge_ingress_stage';
+const EDGE_ESP32_ROUTER_FILE = readEnvString('EDGE_ESP32_ROUTER_FILE', '/router-mapper.pcode').trim() || '/router-mapper.pcode';
+const EDGE_ESP32_PROGRAM_MAP = readEnvString('EDGE_ESP32_PROGRAM_MAP', '/router-mapper.program.json').trim() || '/router-mapper.program.json';
+const EDGE_ESP32_LARGE_MESSAGE_THRESHOLD_BYTES = Math.max(1024, readEnvNumber('EDGE_ESP32_LARGE_MESSAGE_THRESHOLD_BYTES', 8192));
+const EDGE_ESP32_FORCED_EVOLUTION_RATE = Math.min(1, Math.max(0, readEnvNumber('EDGE_ESP32_FORCED_EVOLUTION_RATE', 0)));
+
+function parseEdgeNodeList(rawList = '') {
+  return String(rawList || '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      let host = entry;
+      let port = EDGE_ESP32_PORT;
+      if (entry.startsWith('http://') || entry.startsWith('https://')) {
+        try {
+          const parsed = new URL(entry);
+          host = parsed.hostname;
+          port = Number(parsed.port) > 0 ? Number(parsed.port) : EDGE_ESP32_PORT;
+        } catch {
+          host = EDGE_ESP32_HOST;
+          port = EDGE_ESP32_PORT;
+        }
+      } else if (entry.includes(':')) {
+        const [hostPart, portPart] = entry.split(':');
+        host = String(hostPart || '').trim() || EDGE_ESP32_HOST;
+        const parsedPort = Number(String(portPart || '').trim());
+        port = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : EDGE_ESP32_PORT;
+      }
+      return {
+        host,
+        port,
+        label: `${host}:${port}`
+      };
+    });
+}
+
+const EDGE_ESP32_DEFAULT_NODE = {
+  host: EDGE_ESP32_HOST,
+  port: EDGE_ESP32_PORT,
+  label: `${EDGE_ESP32_HOST}:${EDGE_ESP32_PORT}`
+};
+const EDGE_ESP32_GENERAL_NODES = parseEdgeNodeList(readEnvString('EDGE_ESP32_NODES', ''));
+const EDGE_ESP32_BONECRUSHER_NODES = parseEdgeNodeList(readEnvString('EDGE_ESP32_BONECRUSHER_NODES', ''));
+const EDGE_ESP32_DRONE_NODES = parseEdgeNodeList(readEnvString('EDGE_ESP32_DRONE_NODES', ''));
+const EDGE_ESP32_FALLBACK_NODES = EDGE_ESP32_GENERAL_NODES.length > 0 ? EDGE_ESP32_GENERAL_NODES : [EDGE_ESP32_DEFAULT_NODE];
+const ESP32_DISCOVERY_PROBE_ENABLED = readEnvBoolean('ESP32_DISCOVERY_PROBE_ENABLED', ['1', 'true', 'yes'], true);
+const ESP32_DISCOVERY_PROBE_INTERVAL_MS = Math.max(5000, readEnvNumber('ESP32_DISCOVERY_PROBE_INTERVAL_MS', 15000));
+const ESP32_DISCOVERY_PROBE_TIMEOUT_MS = Math.max(300, readEnvNumber('ESP32_DISCOVERY_PROBE_TIMEOUT_MS', 1500));
+const ESP32_DISCOVERY_SEED_NODES = parseEdgeNodeList(readEnvString('ESP32_DISCOVERY_SEED_NODES', ''));
+const edgeNodeRoundRobinByRole = new Map();
+
+function isLoopbackHost(host = '') {
+  const normalized = String(host || '').trim().toLowerCase();
+  return normalized === '' || normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '0.0.0.0';
+}
+
+function readPlatformIoUploadSeeds() {
+  const backendDir = path.dirname(fileURLToPath(import.meta.url));
+  const platformIoPath = path.join(backendDir, '..', 'platformio.ini');
+  const seeds = [];
+  try {
+    if (!fs.existsSync(platformIoPath)) return seeds;
+    const raw = fs.readFileSync(platformIoPath, 'utf-8');
+    const lines = String(raw || '').split(/\r?\n/);
+    for (const line of lines) {
+      const match = line.match(/^\s*upload_port\s*=\s*([^\s#;]+)\s*$/i);
+      if (!match) continue;
+      const host = String(match[1] || '').trim();
+      if (!host || isLoopbackHost(host)) continue;
+      seeds.push({ host, port: 80, label: `${host}:80` });
+    }
+  } catch {
+    // Ignore platformio.ini parse errors; UDP discovery remains primary.
+  }
+  return seeds;
+}
+
+const ESP32_DISCOVERY_PROBE_NODES = (() => {
+  const merged = [
+    ...EDGE_ESP32_GENERAL_NODES,
+    ...EDGE_ESP32_BONECRUSHER_NODES,
+    ...EDGE_ESP32_DRONE_NODES,
+    ...ESP32_DISCOVERY_SEED_NODES,
+    ...readPlatformIoUploadSeeds()
+  ];
+  const dedup = new Map();
+  for (const node of merged) {
+    const host = String(node?.host || '').trim();
+    const port = Number(node?.port) > 0 ? Number(node.port) : 80;
+    if (!host || isLoopbackHost(host)) continue;
+    dedup.set(`${host}:${port}`, { host, port, label: `${host}:${port}` });
+  }
+  return Array.from(dedup.values());
+})();
+
+function estimateMessageSizeBytes(message) {
+  if (message == null) return 0;
+  if (typeof message === 'string') return Buffer.byteLength(message, 'utf8');
+  try {
+    return Buffer.byteLength(JSON.stringify(message), 'utf8');
+  } catch {
+    return Buffer.byteLength(String(message), 'utf8');
+  }
+}
+
+function normalizeEdgeRole(role) {
+  const normalized = String(role || '').trim().toLowerCase();
+  if (normalized === 'bonecrusher' || normalized === 'drone') return normalized;
+  return null;
+}
+
+function chooseEdgeRole({ preferredRole = null, message = null } = {}) {
+  const normalizedPreferredRole = normalizeEdgeRole(preferredRole);
+  if (normalizedPreferredRole) return normalizedPreferredRole;
+  const estimatedBytes = estimateMessageSizeBytes(message);
+  if (estimatedBytes >= EDGE_ESP32_LARGE_MESSAGE_THRESHOLD_BYTES) {
+    return 'bonecrusher';
+  }
+  return 'drone';
+}
+
+function chooseEdgeNode({ requestedRole = null, message = null } = {}) {
+  let role = chooseEdgeRole({ preferredRole: requestedRole, message });
+  let strategy = requestedRole ? 'explicit-role' : 'auto-role';
+
+  const canEvolve = EDGE_ESP32_BONECRUSHER_NODES.length > 0 && EDGE_ESP32_DRONE_NODES.length > 0;
+  if (canEvolve && EDGE_ESP32_FORCED_EVOLUTION_RATE > 0 && Math.random() < EDGE_ESP32_FORCED_EVOLUTION_RATE) {
+    role = role === 'bonecrusher' ? 'drone' : 'bonecrusher';
+    strategy = 'forced-evolution';
+  }
+
+  let pool = role === 'bonecrusher' ? EDGE_ESP32_BONECRUSHER_NODES : EDGE_ESP32_DRONE_NODES;
+  if (!pool.length) {
+    pool = EDGE_ESP32_FALLBACK_NODES;
+    if (strategy === 'auto-role') strategy = 'fallback-pool';
+  }
+
+  const rrKey = `${role}:${strategy}`;
+  const currentIndex = edgeNodeRoundRobinByRole.get(rrKey) || 0;
+  const selected = pool[currentIndex % pool.length] || EDGE_ESP32_DEFAULT_NODE;
+  edgeNodeRoundRobinByRole.set(rrKey, (currentIndex + 1) % Math.max(pool.length, 1));
+
+  return {
+    requestedRole: chooseEdgeRole({ preferredRole: requestedRole, message }),
+    selectedRole: role,
+    strategy,
+    estimatedMessageBytes: estimateMessageSizeBytes(message),
+    node: selected
+  };
+}
 const lifecycleHeartbeat = {
   enabled: LIFECYCLE_HEARTBEAT_ENABLED,
   inactivityMs: Number.isFinite(LIFECYCLE_HEARTBEAT_INACTIVITY_MS) && LIFECYCLE_HEARTBEAT_INACTIVITY_MS > 0
@@ -1086,6 +1544,27 @@ const queueEnqueueLatencyTracker = {
   maxQueues: 200,
   maxSamplesPerQueue: 500,
   lastUpdatedAt: null
+};
+
+const edgeOffloadTracker = {
+  enabled: EDGE_ESP32_ENABLED,
+  configuredNode: 'dynamic',
+  configuredPools: {
+    bonecrusher: EDGE_ESP32_BONECRUSHER_NODES.map((n) => n.label),
+    drone: EDGE_ESP32_DRONE_NODES.map((n) => n.label),
+    fallback: EDGE_ESP32_FALLBACK_NODES.map((n) => n.label)
+  },
+  attempted: 0,
+  succeeded: 0,
+  fallback: 0,
+  failedNoFallback: 0,
+  recentLatenciesMs: [],
+  maxRecentLatencies: 300,
+  lastAttemptAt: null,
+  lastSuccessAt: null,
+  lastFallbackAt: null,
+  lastError: null,
+  lastResult: null
 };
 
 function readNestedValueByPath(obj, path) {
@@ -1320,6 +1799,256 @@ function getQueueEnqueueLatencySummary({ queueName = null, recentLimit = 5 } = {
     trackedQueues: queueEnqueueLatencyTracker.byQueue.size,
     lastUpdatedAt: queueEnqueueLatencyTracker.lastUpdatedAt,
     queues
+  };
+}
+
+function parseBooleanLike(value, defaultValue = false) {
+  if (value == null) return defaultValue;
+  const normalized = String(value).trim().toLowerCase();
+  if (!normalized) return defaultValue;
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return defaultValue;
+}
+
+function buildEdgeEnvelopeMeta({ edgeProcessed, edgeFallback, edgeNode, edgeLatencyMs, edgeMessageType = null, edgePublishedCount = null } = {}) {
+  return {
+    edgeProcessed: Boolean(edgeProcessed),
+    edgeFallback: Boolean(edgeFallback),
+    edgeNode: edgeNode || edgeOffloadTracker.configuredNode,
+    edgeLatencyMs: Number.isFinite(edgeLatencyMs) ? Number(edgeLatencyMs.toFixed(2)) : null,
+    edgeMessageType: edgeMessageType || null,
+    edgePublishedCount: Number.isFinite(edgePublishedCount) ? edgePublishedCount : null,
+    edgeTimestamp: new Date().toISOString()
+  };
+}
+
+function recordEdgeOffloadAttemptResult({ ok, fallbackUsed, latencyMs, error = null, result = null } = {}) {
+  edgeOffloadTracker.attempted += 1;
+  edgeOffloadTracker.lastAttemptAt = new Date().toISOString();
+
+  if (ok) {
+    edgeOffloadTracker.succeeded += 1;
+    edgeOffloadTracker.lastSuccessAt = edgeOffloadTracker.lastAttemptAt;
+  } else if (fallbackUsed) {
+    edgeOffloadTracker.fallback += 1;
+    edgeOffloadTracker.lastFallbackAt = edgeOffloadTracker.lastAttemptAt;
+  } else {
+    edgeOffloadTracker.failedNoFallback += 1;
+  }
+
+  if (Number.isFinite(latencyMs) && latencyMs >= 0) {
+    edgeOffloadTracker.recentLatenciesMs.push(Number(latencyMs.toFixed(3)));
+    while (edgeOffloadTracker.recentLatenciesMs.length > edgeOffloadTracker.maxRecentLatencies) {
+      edgeOffloadTracker.recentLatenciesMs.shift();
+    }
+  }
+
+  edgeOffloadTracker.lastError = error ? String(error?.message || error) : null;
+  edgeOffloadTracker.lastResult = result || null;
+}
+
+function getEdgeOffloadMetricsSummary() {
+  const samples = edgeOffloadTracker.recentLatenciesMs
+    .filter(v => Number.isFinite(v) && v >= 0)
+    .sort((a, b) => a - b);
+  const count = samples.length;
+  const total = samples.reduce((acc, value) => acc + value, 0);
+  return {
+    enabled: edgeOffloadTracker.enabled,
+    configuredNode: edgeOffloadTracker.configuredNode,
+    configuredPools: edgeOffloadTracker.configuredPools,
+    forcedEvolutionRate: EDGE_ESP32_FORCED_EVOLUTION_RATE,
+    largeMessageThresholdBytes: EDGE_ESP32_LARGE_MESSAGE_THRESHOLD_BYTES,
+    attempted: edgeOffloadTracker.attempted,
+    succeeded: edgeOffloadTracker.succeeded,
+    fallback: edgeOffloadTracker.fallback,
+    failedNoFallback: edgeOffloadTracker.failedNoFallback,
+    successRatePct: edgeOffloadTracker.attempted > 0
+      ? Number((((edgeOffloadTracker.succeeded + edgeOffloadTracker.fallback) / edgeOffloadTracker.attempted) * 100).toFixed(2))
+      : 0,
+    avgLatencyMs: count > 0 ? Number((total / count).toFixed(3)) : null,
+    p95LatencyMs: percentileFromSorted(samples, 0.95),
+    p99LatencyMs: percentileFromSorted(samples, 0.99),
+    lastAttemptAt: edgeOffloadTracker.lastAttemptAt,
+    lastSuccessAt: edgeOffloadTracker.lastSuccessAt,
+    lastFallbackAt: edgeOffloadTracker.lastFallbackAt,
+    lastError: edgeOffloadTracker.lastError,
+    lastResult: edgeOffloadTracker.lastResult
+  };
+}
+
+async function invokeEsp32EdgeIngressStage({ inputQueue, message, runRouter = true, convertMtToXml = false, preferredEdgeRole = null } = {}) {
+  const startMs = performance.now();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), EDGE_ESP32_TIMEOUT_MS);
+  const selection = chooseEdgeNode({ requestedRole: preferredEdgeRole, message });
+  try {
+    const payload = {
+      inputQueue,
+      message,
+      runRouter: runRouter ? '1' : '0',
+      convertMtToXml: convertMtToXml ? '1' : '0',
+      file: EDGE_ESP32_ROUTER_FILE,
+      programMap: EDGE_ESP32_PROGRAM_MAP
+    };
+    const endpoint = `http://${selection.node.host}:${selection.node.port}${EDGE_ESP32_PATH}`;
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      throw new Error(`edge endpoint status=${response.status}`);
+    }
+    const result = await response.json();
+    const latencyMs = Math.max(0, performance.now() - startMs);
+    recordEdgeOffloadAttemptResult({
+      ok: true,
+      fallbackUsed: false,
+      latencyMs,
+      result: {
+        mode: 'edge',
+        messageType: result?.messageType || null,
+        publishedCount: Number(result?.publishedCount || 0),
+        selectedRole: selection.selectedRole,
+        strategy: selection.strategy
+      }
+    });
+    return {
+      ok: true,
+      edgeNode: selection.node.label,
+      edgeRole: selection.selectedRole,
+      edgeRoleRequested: selection.requestedRole,
+      edgeStrategy: selection.strategy,
+      estimatedMessageBytes: selection.estimatedMessageBytes,
+      latencyMs,
+      result
+    };
+  } catch (error) {
+    const latencyMs = Math.max(0, performance.now() - startMs);
+    recordEdgeOffloadAttemptResult({
+      ok: false,
+      fallbackUsed: false,
+      latencyMs,
+      error,
+      result: { mode: 'fallback-ready' }
+    });
+    return {
+      ok: false,
+      edgeNode: selection.node.label,
+      edgeRole: selection.selectedRole,
+      edgeRoleRequested: selection.requestedRole,
+      edgeStrategy: selection.strategy,
+      estimatedMessageBytes: selection.estimatedMessageBytes,
+      latencyMs,
+      error
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function ingestWithEdgeFallback({ inputQueue, message, sourceService = 'webapi', forceEdge = false, convertMtToXml = false, preferredEdgeRole = null } = {}) {
+  async function enqueueToSingleQueue(singleMessage, envelope, sourceSuffix = 'single-queue') {
+    const queueName = String(inputQueue || '').trim();
+    if (!queueName) {
+      throw new Error('inputQueue is required for single-queue ingest');
+    }
+    const route = ensureRoute(queueName);
+    if (!route) {
+      throw new Error(`No available queue managers for queue ${queueName}`);
+    }
+    const delivery = await enqueueViaRoute(
+      route,
+      queueName,
+      singleMessage,
+      `${sourceService}:${sourceSuffix}`,
+      envelope,
+      inferQueueDataTypeIds(queueName)
+    );
+    return {
+      inputQueue: queueName,
+      sourceService,
+      matchedRuleCount: 1,
+      publishedCount: 1,
+      deliveries: [{ queueName, delivery }]
+    };
+  }
+
+  const shouldUseEdge = Boolean(EDGE_ESP32_ENABLED && (EDGE_ESP32_AUTO_INGEST || forceEdge));
+  if (!shouldUseEdge) {
+    const fallbackEnvelope = buildEdgeEnvelopeMeta({
+      edgeProcessed: false,
+      edgeFallback: false,
+      edgeNode: EDGE_ESP32_DEFAULT_NODE.label,
+      edgeLatencyMs: 0
+    });
+    const result = await enqueueToSingleQueue(message, fallbackEnvelope, 'single-queue-local');
+    return { mode: 'local', edge: { attempted: false, ...fallbackEnvelope }, result };
+  }
+
+  const edgeAttempt = await invokeEsp32EdgeIngressStage({
+    inputQueue,
+    message,
+    runRouter: true,
+    convertMtToXml,
+    preferredEdgeRole
+  });
+  if (edgeAttempt.ok) {
+    const edgeResult = edgeAttempt.result || {};
+    const deliveries = Array.isArray(edgeResult.deliveries) ? edgeResult.deliveries : [];
+    const edgeEnvelope = buildEdgeEnvelopeMeta({
+      edgeProcessed: true,
+      edgeFallback: false,
+      edgeNode: edgeAttempt.edgeNode,
+      edgeLatencyMs: edgeAttempt.latencyMs,
+      edgeMessageType: edgeResult?.messageType || null,
+      edgePublishedCount: Number(edgeResult?.publishedCount || deliveries.length || 0)
+    });
+    const singleQueueMessage = edgeResult?.normalizedMessage || message;
+    const localResult = await enqueueToSingleQueue(singleQueueMessage, edgeEnvelope, 'single-queue-edge');
+    return {
+      mode: 'edge+single-queue',
+      edge: {
+        ...edgeEnvelope,
+        edgeRole: edgeAttempt.edgeRole,
+        edgeRoleRequested: edgeAttempt.edgeRoleRequested,
+        edgeStrategy: edgeAttempt.edgeStrategy,
+        estimatedMessageBytes: edgeAttempt.estimatedMessageBytes
+      },
+      result: localResult
+    };
+  }
+
+  const fallbackEnvelope = buildEdgeEnvelopeMeta({
+    edgeProcessed: false,
+    edgeFallback: true,
+    edgeNode: edgeAttempt.edgeNode,
+    edgeLatencyMs: edgeAttempt.latencyMs
+  });
+  const fallbackResult = await enqueueToSingleQueue(message, fallbackEnvelope, 'single-queue-fallback');
+  recordEdgeOffloadAttemptResult({
+    ok: false,
+    fallbackUsed: true,
+    latencyMs: edgeAttempt.latencyMs,
+    result: {
+      mode: 'fallback-local-router',
+      edgeError: edgeAttempt.error?.message || null
+    }
+  });
+  return {
+    mode: 'local-fallback',
+    edge: {
+      ...fallbackEnvelope,
+      edgeRole: edgeAttempt.edgeRole,
+      edgeRoleRequested: edgeAttempt.edgeRoleRequested,
+      edgeStrategy: edgeAttempt.edgeStrategy,
+      estimatedMessageBytes: edgeAttempt.estimatedMessageBytes,
+      edgeError: edgeAttempt.error?.message || String(edgeAttempt.error || '')
+    },
+    result: fallbackResult
   };
 }
 
@@ -2300,6 +3029,25 @@ function resolveActor(req) {
   const actorUserId = headerUserId || queryUserId || fallbackUserId;
   const headerGroupIds = parseHeaderGroupIds(req);
   const access = resolveEffectiveAccessForUser(actorUserId, { headerGroupIds });
+
+  // Keep local admin access stable even when group/profile providers are degraded.
+  if (String(actorUserId || '').toLowerCase() === String(DEFAULT_ACTOR_USER_ID || '').toLowerCase()) {
+    const adminUser = access.user || {
+      userId: DEFAULT_ACTOR_USER_ID,
+      displayName: 'System Administrator',
+      enabled: true,
+      profileIds: ['admin'],
+      groupIds: []
+    };
+
+    return {
+      userId: DEFAULT_ACTOR_USER_ID,
+      user: adminUser,
+      permissions: ['*'],
+      profileIds: Array.isArray(access.profileIds) && access.profileIds.length > 0 ? access.profileIds : ['admin'],
+      groupIds: access.groupIds || []
+    };
+  }
 
   return {
     userId: actorUserId,
@@ -3479,14 +4227,14 @@ const messageRouter = createRouterEngine({
   rulesPath: './data/router-rules.json',
   mappingsPath: './data/data-mappings.json',
   serviceId: 'aggregator-router-service',
-  publishToQueue: async ({ queueName, message, sourceService, dataTypeIds }) => {
+  publishToQueue: async ({ queueName, message, sourceService, messageEnvelope = null, dataTypeIds }) => {
     let route = ensureRoute(queueName);
     if (!route) {
       throw new Error(`No available queue managers for queue ${queueName}`);
     }
 
     try {
-      return await enqueueViaRoute(route, queueName, message, sourceService || 'router', null, dataTypeIds || null);
+      return await enqueueViaRoute(route, queueName, message, sourceService || 'router', messageEnvelope, dataTypeIds || null);
     } catch (e) {
       const manager = queueManagerRegistry.get(route.managerId);
       if (manager) {
@@ -3498,7 +4246,7 @@ const messageRouter = createRouterEngine({
       if (!route) {
         throw new Error(`Publish failed and no failover route for queue ${queueName}: ${e.message}`);
       }
-      return enqueueViaRoute(route, queueName, message, sourceService || 'router', null, dataTypeIds || null);
+      return enqueueViaRoute(route, queueName, message, sourceService || 'router', messageEnvelope, dataTypeIds || null);
     }
   },
   dequeueFromQueue: async ({ inputQueue, consumerService }) => {
@@ -5063,6 +5811,9 @@ function buildMachineAvailabilityAnnouncement() {
 }
 
 function sendMachineAvailabilityAnnouncement(reason = 'manual') {
+  if (machineAvailability.udpBroadcastBlocked) {
+    return;
+  }
   const payload = buildMachineAvailabilityAnnouncement();
   payload.reason = reason;
   machineAvailability.advertisedAt = new Date().toISOString();
@@ -5070,7 +5821,13 @@ function sendMachineAvailabilityAnnouncement(reason = 'manual') {
   const message = Buffer.from(JSON.stringify(payload), 'utf-8');
   udpServer.send(message, 0, message.length, UDP_PORT, '255.255.255.255', (error) => {
     if (error) {
-      console.warn(`[UDP] Failed to send availability announcement: ${error.message}`);
+      if (error.code === 'EACCES') {
+        machineAvailability.udpBroadcastBlocked = true;
+        stopMachineAvailabilityAnnouncer();
+        console.warn(`[UDP] Broadcast announcements disabled: ${error.message}`);
+      } else {
+        console.warn(`[UDP] Failed to send availability announcement: ${error.message}`);
+      }
       return;
     }
     console.log(`[UDP] Availability announced: ${payload.status} (${reason})`);
@@ -5254,7 +6011,7 @@ udpServer.on('message', (msg, rinfo) => {
     };
   }
   discoveredNodes.set(ip, node);
-  if (parsed) enrichNodeDetails(ip);
+  scheduleNodeEnrichment(ip);
 });
 udpServer.bind(UDP_PORT, () => {
   try {
@@ -5264,6 +6021,64 @@ udpServer.bind(UDP_PORT, () => {
   }
   console.log(`[UDP] Listening for node broadcasts on port ${UDP_PORT}`);
 });
+
+async function probeEsp32Node(node, visited = new Set()) {
+  const host = String(node?.host || '').trim();
+  const port = Number(node?.port) > 0 ? Number(node.port) : 80;
+  if (!host || visited.has(host)) return;
+  visited.add(host);
+
+  const statusUrl = `http://${host}:${port}/status`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ESP32_DISCOVERY_PROBE_TIMEOUT_MS);
+  try {
+    const statusRes = await fetch(statusUrl, { signal: controller.signal });
+    if (!statusRes.ok) return;
+    const statusPayload = await statusRes.json();
+    if (String(statusPayload?.hardware || '').toUpperCase() !== 'ESP32') return;
+
+    const ip = host;
+    const now = Date.now();
+    const previous = discoveredNodes.get(ip) || {};
+    discoveredNodes.set(ip, {
+      ...previous,
+      ip,
+      nodeName: statusPayload?.nodeName || previous.nodeName || ip,
+      lastSeen: now,
+      raw: previous.raw || 'active-probe',
+      details: {
+        ...(previous.details || {}),
+        ...statusPayload
+      }
+    });
+
+    const peers = Array.isArray(statusPayload?.discoveredNodes) ? statusPayload.discoveredNodes : [];
+    for (const peer of peers) {
+      const peerIp = String(peer?.ip || '').trim();
+      if (!peerIp || isLoopbackHost(peerIp)) continue;
+      await probeEsp32Node({ host: peerIp, port: 80 }, visited);
+    }
+  } catch {
+    // Ignore transient probe failures.
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function runEsp32DiscoveryProbe() {
+  if (!ESP32_DISCOVERY_PROBE_ENABLED) return;
+  const visited = new Set();
+  for (const node of ESP32_DISCOVERY_PROBE_NODES) {
+    await probeEsp32Node(node, visited);
+  }
+}
+
+if (ESP32_DISCOVERY_PROBE_ENABLED && ESP32_DISCOVERY_PROBE_NODES.length > 0) {
+  runEsp32DiscoveryProbe().catch(() => {});
+  setInterval(() => {
+    runEsp32DiscoveryProbe().catch(() => {});
+  }, ESP32_DISCOVERY_PROBE_INTERVAL_MS);
+}
 
 // --- Node Cleanup ---
 setInterval(() => {
@@ -5307,6 +6122,16 @@ setInterval(() => {
 
 // --- Service Topology Enrichment ---
 import fetch from 'node-fetch';
+function scheduleNodeEnrichment(ip) {
+  const key = String(ip || '').trim();
+  if (!key) return;
+  const now = Date.now();
+  const last = nodeEnrichmentLastAttempt.get(key) || 0;
+  if (now - last < 5000) return;
+  nodeEnrichmentLastAttempt.set(key, now);
+  enrichNodeDetails(key).catch(() => {});
+}
+
 async function enrichNodeDetails(ip) {
   try {
     const servicesRes = await fetch(`http://${ip}:80/services/describe`);
@@ -5710,6 +6535,128 @@ function toPacsFromMt103(message, fallbackTxId = null) {
   };
 }
 
+function toPacsFromMt202(message, fallbackTxId = null) {
+  const text = typeof message === 'string' ? message : String(message || '');
+  const txIdMatch = text.match(/:20:([^\s\r\n]+)/i);
+  const relatedMatch = text.match(/:21:([^\s\r\n]+)/i);
+  const amountMatch = text.match(/:32A:(\d{6})([A-Z]{3})([0-9.,]+)/i);
+  const txId = String((txIdMatch && txIdMatch[1]) || fallbackTxId || `TX-${Date.now()}`).trim();
+  const relatedRef = String((relatedMatch && relatedMatch[1]) || txId).trim();
+  const ccy = (amountMatch && amountMatch[2]) ? String(amountMatch[2]).trim() : 'USD';
+  const rawAmount = (amountMatch && amountMatch[3]) ? String(amountMatch[3]).trim() : '0';
+  const normalizedAmount = rawAmount.replace(',', '.');
+
+  return {
+    Document: {
+      FIToFICstmrCdtTrf: {
+        GrpHdr: {
+          MsgId: txId,
+          CreDtTm: new Date().toISOString()
+        },
+        CdtTrfTxInf: [
+          {
+            PmtId: {
+              InstrId: txId,
+              EndToEndId: relatedRef,
+              TxId: txId
+            },
+            IntrBkSttlmAmt: {
+              '@Ccy': ccy,
+              '#text': normalizedAmount
+            }
+          }
+        ]
+      }
+    }
+  };
+}
+
+function xmlEscape(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function objectToXml(name, value, indent = '') {
+  if (value == null) {
+    return `${indent}<${name}></${name}>`;
+  }
+
+  if (typeof value !== 'object') {
+    return `${indent}<${name}>${xmlEscape(value)}</${name}>`;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => objectToXml(name, item, indent)).join('\n');
+  }
+
+  const attrs = [];
+  const childEntries = [];
+  let textValue = null;
+
+  for (const [k, v] of Object.entries(value)) {
+    if (k.startsWith('@')) {
+      attrs.push(`${k.slice(1)}="${xmlEscape(v)}"`);
+    } else if (k === '#text') {
+      textValue = v;
+    } else {
+      childEntries.push([k, v]);
+    }
+  }
+
+  const attrText = attrs.length ? ` ${attrs.join(' ')}` : '';
+  if (childEntries.length === 0) {
+    return `${indent}<${name}${attrText}>${xmlEscape(textValue)}</${name}>`;
+  }
+
+  const childXml = childEntries
+    .map(([childName, childVal]) => objectToXml(childName, childVal, `${indent}  `))
+    .join('\n');
+  const textSegment = textValue == null ? '' : xmlEscape(textValue);
+  if (textSegment) {
+    return `${indent}<${name}${attrText}>${textSegment}\n${childXml}\n${indent}</${name}>`;
+  }
+  return `${indent}<${name}${attrText}>\n${childXml}\n${indent}</${name}>`;
+}
+
+function messageObjectToXml(messageObject) {
+  if (!messageObject || typeof messageObject !== 'object') {
+    return `<?xml version="1.0" encoding="UTF-8"?>\n<Document/>`;
+  }
+  const xmlBody = Object.entries(messageObject)
+    .map(([rootName, rootValue]) => objectToXml(rootName, rootValue, ''))
+    .join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?>\n${xmlBody}`;
+}
+
+function maybeConvertMtMessageToXml({ inputQueue, message, convertToXml = false }) {
+  if (!convertToXml) {
+    return { message, converted: false, format: 'original' };
+  }
+
+  const text = typeof message === 'string' ? message : String(message || '');
+  const queue = String(inputQueue || '').toLowerCase();
+  const header = text.trim().slice(0, 20).toUpperCase();
+  const looksMt103 = header.startsWith('MT103') || text.toUpperCase().includes(':23B:');
+  const looksMt202 = header.startsWith('MT202') || queue.includes('mt202');
+
+  if (!looksMt103 && !looksMt202) {
+    return { message, converted: false, format: 'original' };
+  }
+
+  const pacsObject = looksMt103
+    ? toPacsFromMt103(text)
+    : toPacsFromMt202(text);
+  return {
+    message: messageObjectToXml(pacsObject),
+    converted: true,
+    format: looksMt103 ? 'mt103->pacs-xml' : 'mt202->pacs-xml'
+  };
+}
+
 const systemPerformanceCache = {
   sampledAt: 0,
   value: null
@@ -6085,70 +7032,29 @@ async function recordTransactionStateTransition(compiled, {
   eventName = null,
   queueName = null
 } = {}) {
-  if (!toState) return;
-
-  const entityId = extractSwiftReferenceFromMessage(message);
-  if (!entityId) return;
+  const writeEntry = buildTxStateDbWriteEntry(compiled, {
+    message,
+    fromState,
+    toState,
+    eventName,
+    queueName
+  });
+  if (!writeEntry) return;
 
   try {
-    const pool = await getTransactionStateMssqlPool();
-    const now = new Date();
-    const machineId = String(compiled?.transactionId || 'fsm-machine').trim() || 'fsm-machine';
-    const toStateInfo = getLifecycleStateByName(compiled, toState);
-    const resolvedQueueName = String(queueName || toStateInfo?.queueName || '').trim() || null;
-    const toStateLabel = String(toStateInfo?.label || toState || '').trim() || null;
-    const isTerminal = getLifecycleOutgoingTransitions(compiled, String(toState || '').trim()).length === 0;
-
-    await pool.request()
-      .input('entity_id', txMssql.NVarChar(128), entityId)
-      .input('machine_id', txMssql.NVarChar(128), machineId)
-      .input('state_id', txMssql.NVarChar(128), String(toState || '').trim())
-      .input('state_label', txMssql.NVarChar(256), toStateLabel)
-      .input('queue_name', txMssql.NVarChar(256), resolvedQueueName)
-      .input('last_event_id', txMssql.NVarChar(128), String(eventName || '').trim() || null)
-      .input('is_terminal', txMssql.Bit, isTerminal ? 1 : 0)
-      .input('payload_type', txMssql.NVarChar(64), inferMessageType(message))
-      .input('updated_at', txMssql.DateTime2, now)
-      .query(`
-    MERGE ${FSM_MSSQL_CURRENT_TABLE_SQL} WITH (HOLDLOCK) AS t
-USING (SELECT @entity_id AS entity_id) AS s
-ON t.entity_id = s.entity_id
-WHEN MATCHED THEN
-  UPDATE SET
-    machine_id = @machine_id,
-    state_id = @state_id,
-    state_label = @state_label,
-    queue_name = @queue_name,
-    last_event_id = @last_event_id,
-    is_terminal = @is_terminal,
-    payload_type = @payload_type,
-    updated_at = @updated_at
-WHEN NOT MATCHED THEN
-  INSERT (entity_id, machine_id, state_id, state_label, queue_name, last_event_id, is_terminal, payload_type, updated_at)
-  VALUES (@entity_id, @machine_id, @state_id, @state_label, @queue_name, @last_event_id, @is_terminal, @payload_type, @updated_at);
-`);
-
-    await pool.request()
-      .input('entity_id', txMssql.NVarChar(128), entityId)
-      .input('machine_id', txMssql.NVarChar(128), machineId)
-      .input('from_state', txMssql.NVarChar(128), String(fromState || '').trim() || null)
-      .input('to_state', txMssql.NVarChar(128), String(toState || '').trim())
-      .input('to_state_label', txMssql.NVarChar(256), toStateLabel)
-      .input('queue_name', txMssql.NVarChar(256), resolvedQueueName)
-      .input('event_name', txMssql.NVarChar(128), String(eventName || '').trim() || null)
-      .input('is_terminal', txMssql.Bit, isTerminal ? 1 : 0)
-      .input('updated_at', txMssql.DateTime2, now)
-      .query(`
-INSERT INTO ${FSM_MSSQL_HISTORY_TABLE_SQL}
-  (entity_id, machine_id, from_state, to_state, to_state_label, queue_name, event_name, is_terminal, updated_at)
-VALUES
-  (@entity_id, @machine_id, @from_state, @to_state, @to_state_label, @queue_name, @event_name, @is_terminal, @updated_at);
-`);
+    await writeTransactionStateToDb(writeEntry);
+    txStatePersistenceStats.realtimeWrites += 1;
+    txStatePersistenceStats.lastRealtimeWriteAt = new Date().toISOString();
   } catch (e) {
     if (!txStateDbWarned) {
       txStateDbWarned = true;
       console.warn(`[TX-STATE] MSSQL transaction-state persistence unavailable: ${formatErrorDetails(e)}`);
     }
+    if (TX_STATE_EMERGENCY_LOG_SHIPPING) {
+      queueTransactionStateForLogShipping(writeEntry, formatErrorDetails(e));
+      return;
+    }
+    throw new Error(`[TX-STATE] Realtime DB write required and fallback disabled: ${formatErrorDetails(e)}`);
   }
 }
 
@@ -6732,6 +7638,38 @@ function registerRoutes(app) {
     });
   });
 
+  app.get('/api/events/mermaid', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    if (typeof res.flushHeaders === 'function') {
+      res.flushHeaders();
+    }
+
+    let phase = 0;
+    const send = () => {
+      phase = (phase + 1) % 1024;
+      res.write(`event: mermaid\n`);
+      res.write(`data: ${JSON.stringify({ phase, at: Date.now() })}\n\n`);
+    };
+
+    send();
+    const timer = setInterval(send, 1000);
+
+    const close = () => {
+      clearInterval(timer);
+      try {
+        res.end();
+      } catch {
+        // ignore close errors on disconnected clients
+      }
+    };
+
+    req.on('close', close);
+    req.on('aborted', close);
+  });
+
   app.get('/api/authz/context', requirePermission('lifecycle.read'), (req, res) => {
     const actor = req.actor || resolveActor(req);
     const context = buildUserRoleContext(actor.userId);
@@ -7243,6 +8181,51 @@ function registerRoutes(app) {
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
+  });
+
+  app.post('/api/supervisor/heartbeat', (req, res) => {
+    try {
+      const fallbackIp = String(req.ip || req.socket?.remoteAddress || '').replace('::ffff:', '').trim();
+      const heartbeat = normalizeSupervisorHeartbeatPayload(req.body || {}, fallbackIp);
+      supervisorHeartbeatRegistry.set(heartbeat.nodeId, heartbeat);
+
+      res.json({
+        status: 'ok',
+        nodeId: heartbeat.nodeId,
+        overallHealthy: heartbeat.overallHealthy,
+        stale: !isSupervisorHeartbeatFresh(heartbeat),
+        receivedAt: heartbeat.receivedAt
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/supervisor/status', (req, res) => {
+    res.json(getSupervisorHeartbeatSnapshot());
+  });
+
+  app.get('/api/supervisor/green', (req, res) => {
+    const requiredNodeId = String(req.query?.nodeId || '').trim();
+    const snapshot = getSupervisorHeartbeatSnapshot();
+
+    if (requiredNodeId) {
+      const entry = getSupervisorHeartbeatEntry(requiredNodeId);
+      const fresh = isSupervisorHeartbeatFresh(entry);
+      const healthy = Boolean(entry?.overallHealthy) && fresh;
+      return res.status(healthy ? 200 : 503).json({
+        healthy,
+        requiredNodeId,
+        entry: entry ? { ...entry, stale: !fresh } : null,
+        ttlMs: SUPERVISOR_HEARTBEAT_TTL_MS
+      });
+    }
+
+    const healthy = snapshot.anyHealthyFresh;
+    return res.status(healthy ? 200 : 503).json({
+      healthy,
+      snapshot
+    });
   });
 
   app.get('/api/registry/queue-managers', (req, res) => {
@@ -8154,14 +9137,49 @@ function registerRoutes(app) {
 
   app.post('/api/router/ingest', async (req, res) => {
     try {
-      const { inputQueue, message, sourceService } = req.body || {};
+      const { inputQueue, message, sourceService, useEdge, edgeRole } = req.body || {};
       if (!inputQueue) {
         return res.status(400).json({ error: 'inputQueue is required' });
       }
-      const result = await messageRouter.ingest({ inputQueue, message, sourceService: sourceService || 'webapi' });
-      res.json({ status: 'routed', mode: 'api', result });
+      const shouldForceEdge = parseBooleanLike(useEdge, false);
+      const routed = await ingestWithEdgeFallback({
+        inputQueue,
+        message,
+        sourceService: sourceService || 'webapi',
+        forceEdge: shouldForceEdge,
+        preferredEdgeRole: edgeRole
+      });
+      res.json({ status: 'routed', mode: routed.mode, edge: routed.edge, result: routed.result });
     } catch (e) {
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/edge/ingest', async (req, res) => {
+    try {
+      const { inputQueue, message, sourceService, useEdge, convertMtToXml, edgeRole } = req.body || {};
+      if (!inputQueue) return res.status(400).json({ error: 'inputQueue is required' });
+      const convertRequested = parseBooleanLike(convertMtToXml, false);
+      const routed = await ingestWithEdgeFallback({
+        inputQueue,
+        message,
+        sourceService: sourceService || 'edge-api',
+        forceEdge: parseBooleanLike(useEdge, true),
+        convertMtToXml: convertRequested,
+        preferredEdgeRole: edgeRole
+      });
+      return res.json({
+        status: 'ok',
+        mode: routed.mode,
+        edge: routed.edge,
+        conversion: {
+          requested: convertRequested,
+          location: 'esp32-edge'
+        },
+        result: routed.result
+      });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
     }
   });
 
@@ -8460,6 +9478,27 @@ function registerRoutes(app) {
     }
   });
 
+  app.get('/api/lifecycle/tx-state-persistence', requirePermission('lifecycle.read'), (req, res) => {
+    res.json({
+      status: 'ok',
+      persistence: getTxStatePersistenceSummary()
+    });
+  });
+
+  app.post('/api/lifecycle/tx-state-log-shipping/run', requirePermission('lifecycle.manage'), async (req, res) => {
+    try {
+      const maxEntries = Math.max(1, Number(req.body?.maxEntries || TX_STATE_LOG_SHIPPING_BATCH_SIZE));
+      const result = await shipQueuedTransactionStateLogs({ maxEntries });
+      res.json({
+        status: 'ok',
+        run: result,
+        persistence: getTxStatePersistenceSummary()
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
 
 
   // Worker Configuration Management API
@@ -8606,13 +9645,25 @@ function registerRoutes(app) {
     const latencyPolicy = evaluateLatencyPolicies(metrics, workerConfig);
     const step3Latency = getStep3LatencySummary({ recentLimit: 20 });
     const queueEnqueueLatency = getQueueEnqueueLatencySummary({ recentLimit: 3 });
+    const edgeOffload = getEdgeOffloadMetricsSummary();
+    const txStatePersistence = getTxStatePersistenceSummary();
     res.json({
       status: 'ok',
       timestamp: Date.now(),
       metrics: metrics,
       latencyPolicy,
       step3Latency,
-      queueEnqueueLatency
+      queueEnqueueLatency,
+      edgeOffload,
+      txStatePersistence
+    });
+  });
+
+  app.get('/api/metrics/edge-offload', (req, res) => {
+    res.json({
+      status: 'ok',
+      timestamp: Date.now(),
+      edgeOffload: getEdgeOffloadMetricsSummary()
     });
   });
 
@@ -9964,7 +11015,7 @@ try {
   // Start metrics collection
   metricsCollector.start();
 
-  // Warm up FSM SQL persistence (non-fatal if unavailable)
+  // Warm up FSM SQL persistence. In production mode, DB is mandatory.
   const fsmSqlSource = process.env.FSM_MSSQL_CONNECTION_STRING
     ? 'FSM_MSSQL_CONNECTION_STRING'
     : process.env.GROUP_MSSQL_CONNECTION_STRING
@@ -9972,9 +11023,30 @@ try {
       : 'derived-default';
   const resolvedSqlTarget = SQL_INSTANCE_NAME ? `${SQL_SERVER_HOST}\\${SQL_INSTANCE_NAME}` : SQL_SERVER_HOST;
   console.log(`[FSM-SQL] Mode=${SQL_INSTANCE_MODE || 'sqlexpress'} source=${fsmSqlSource} target=${resolvedSqlTarget} database=${SQL_DATABASE}`);
-  getTransactionStateMssqlPool()
-    .then(() => console.log(`[FSM-SQL] Connected. Current table=${FSM_MSSQL_CURRENT_TABLE} history table=${FSM_MSSQL_HISTORY_TABLE}`))
-    .catch((e) => console.warn(`[FSM-SQL] Disabled: ${formatErrorDetails(e)}`));
+  if (TX_STATE_REQUIRE_REALTIME_DB) {
+    await getTransactionStateMssqlPool();
+    console.log(`[FSM-SQL] Connected (required). Current table=${FSM_MSSQL_CURRENT_TABLE} history table=${FSM_MSSQL_HISTORY_TABLE}`);
+  } else {
+    getTransactionStateMssqlPool()
+      .then(() => console.log(`[FSM-SQL] Connected. Current table=${FSM_MSSQL_CURRENT_TABLE} history table=${FSM_MSSQL_HISTORY_TABLE}`))
+      .catch((e) => console.warn(`[FSM-SQL] Disabled: ${formatErrorDetails(e)}`));
+  }
+
+  if (TX_STATE_EMERGENCY_LOG_SHIPPING && TX_STATE_LOG_SHIPPING_INTERVAL_MS > 0) {
+    const shipTimer = setInterval(() => {
+      shipQueuedTransactionStateLogs({ maxEntries: TX_STATE_LOG_SHIPPING_BATCH_SIZE })
+        .catch((e) => {
+          txStatePersistenceStats.shippingFailures += 1;
+          txStatePersistenceStats.lastShipFailureAt = new Date().toISOString();
+          txStatePersistenceStats.lastShipError = formatErrorDetails(e);
+          console.warn(`[TX-STATE] Log shipping cycle failed: ${formatErrorDetails(e)}`);
+        });
+    }, TX_STATE_LOG_SHIPPING_INTERVAL_MS);
+    if (typeof shipTimer.unref === 'function') shipTimer.unref();
+    console.warn(`[TX-STATE] Emergency log shipping is ENABLED (interval=${TX_STATE_LOG_SHIPPING_INTERVAL_MS}ms).`);
+  } else {
+    console.log('[TX-STATE] Emergency log shipping is disabled. Realtime DB writes are expected.');
+  }
   
   app.listen(HTTP_PORT, '0.0.0.0', () => {
     console.log(`Aggregator backend running on http://0.0.0.0:${HTTP_PORT} (LAN accessible)`);

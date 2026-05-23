@@ -493,16 +493,18 @@ namespace {
         ++pc;
     }
     void handle_JMP(PMachine&, const PInstruction& instr, int* /*stack*/, int& /*sp*/, int& /*bp*/, int& pc) {
-        pc = instr.address;
+        const int target = (instr.intOperand >= 0) ? instr.intOperand : instr.address;
+        pc = target;
     }
     void handle_JZ(PMachine&, const PInstruction& instr, int* stack, int& sp, int& /*bp*/, int& pc) {
-        if (stack[--sp] == 0) pc = instr.address; else ++pc;
+        const int target = (instr.intOperand >= 0) ? instr.intOperand : instr.address;
+        if (stack[--sp] == 0) pc = target; else ++pc;
     }
     void handle_HALT(PMachine&, const PInstruction&, int*, int&, int&, int&) {
         // No-op: run() will exit after handler returns
     }
-    void handle_NOP(PMachine&, const PInstruction&, int*, int&, int&, int&) {
-        // No operation
+    void handle_NOP(PMachine&, const PInstruction&, int*, int&, int&, int& pc) {
+        ++pc;
     }
 }
 
@@ -665,15 +667,24 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
 }
 
 void PMachine::run(const std::vector<PInstruction>& instructions) {
+    static const size_t MAX_RUN_STEPS = 20000;
     static const int STACK_SIZE = 1024;
     int stack[STACK_SIZE] = {0};
     std::vector<std::string> strStack;
     int sp = 0;
     int bp = 0;
     int pc = 0;
+    size_t steps = 0;
     gFlowState.clear();
+    lastRunStepLimitHit = false;
+    lastRunStepCount = 0;
     PMTRACE(Serial.println("[DEBUG] Executing pinstructions:"));
     while (pc < (int)instructions.size()) {
+        ++steps;
+        if (steps > MAX_RUN_STEPS) {
+            lastRunStepLimitHit = true;
+            break;
+        }
         const auto& instr = instructions[pc];
         PMTRACE({
             Serial.print("[STEP] ");
@@ -795,6 +806,15 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             ++pc;
         }
     }
+    lastRunStepCount = steps;
     PMTRACE(Serial.println("[DEBUG] Execution finished."));
+}
+
+bool PMachine::didLastRunHitStepLimit() const {
+    return lastRunStepLimitHit;
+}
+
+size_t PMachine::getLastRunStepCount() const {
+    return lastRunStepCount;
 }
 }

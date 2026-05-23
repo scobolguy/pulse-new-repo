@@ -68,6 +68,11 @@ function getByPath(source, dottedPath) {
   return cursor;
 }
 
+function sleep(ms) {
+  const duration = Math.max(0, Number(ms) || 0);
+  return new Promise(resolve => setTimeout(resolve, duration));
+}
+
 function evaluateCondition(condition, context, state) {
   const fieldPath = String(condition?.field || '').trim();
   const operator = String(condition?.operator || '').trim().toLowerCase();
@@ -113,7 +118,10 @@ async function executeSteps(steps, runtime, output) {
 
       const response = await fetch(url, {
         method: step.method,
-        headers: { 'content-type': 'application/json' }
+        headers: {
+          'content-type': 'application/json',
+          'x-user-id': runtime.actorUserId
+        }
       });
 
       const responseText = await response.text();
@@ -130,6 +138,85 @@ async function executeSteps(steps, runtime, output) {
 
       if (!response.ok) {
         throw new Error(`Workflow step ${step.id} failed with status ${response.status}`);
+      }
+      continue;
+    }
+
+    if (step.action === 'wait') {
+      if (!runtime.dryRun) {
+        await sleep(step.durationMs);
+      }
+      output.push({
+        stepId: step.id,
+        mode: runtime.dryRun ? 'dry-run' : 'executed',
+        action: step.action,
+        durationMs: step.durationMs
+      });
+      continue;
+    }
+
+    if (step.action === 'check_api') {
+      const api = runtime.apiMap.get(step.apiSymbol);
+      if (!api || !api.baseUrl) {
+        throw new Error(`Unknown API symbol: ${step.apiSymbol}`);
+      }
+
+      const url = `${String(api.baseUrl).replace(/\/+$/, '')}${step.route}`;
+      if (runtime.dryRun) {
+        output.push({
+          stepId: step.id,
+          mode: 'dry-run',
+          action: step.action,
+          method: step.method,
+          url,
+          expectedStatus: step.expectedStatus,
+          retries: step.retries,
+          everyMs: step.everyMs
+        });
+        continue;
+      }
+
+      let lastStatus = null;
+      let lastError = null;
+      let passed = false;
+
+      for (let attempt = 1; attempt <= step.retries; attempt += 1) {
+        try {
+          const response = await fetch(url, {
+            method: step.method,
+            headers: {
+              'content-type': 'application/json',
+              'x-user-id': runtime.actorUserId
+            }
+          });
+
+          lastStatus = response.status;
+          lastError = null;
+          if (response.status === step.expectedStatus) {
+            passed = true;
+            output.push({
+              stepId: step.id,
+              mode: 'executed',
+              action: step.action,
+              method: step.method,
+              url,
+              expectedStatus: step.expectedStatus,
+              status: response.status,
+              attemptsUsed: attempt
+            });
+            break;
+          }
+        } catch (e) {
+          lastError = e?.message || String(e);
+        }
+
+        if (attempt < step.retries) {
+          await sleep(step.everyMs);
+        }
+      }
+
+      if (!passed) {
+        throw new Error(`Workflow step ${step.id} health check failed (expected ${step.expectedStatus}, lastStatus=${lastStatus ?? 'network-error'}, lastError=${lastError || 'n/a'})`);
       }
       continue;
     }
@@ -194,7 +281,8 @@ async function executeWorkflow(compiled, workflowId, dryRun = false, context = {
     apiMap,
     queueMap,
     state,
-    context
+    context,
+    actorUserId: String(context?.actorUserId || 'system-admin').trim() || 'system-admin'
   }, results);
 
   return {

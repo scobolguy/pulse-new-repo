@@ -354,6 +354,31 @@ export function registerQueueBrokerOpsRoutes(app, deps) {
     }
   });
 
+  app.post('/api/queue/:queueName/truncate', (req, res) => {
+    const { queueName } = req.params;
+    try {
+      const activeManagers = getActiveQueueManagers();
+      const perManager = [];
+      let removedTotal = 0;
+
+      for (const qm of activeManagers) {
+        const removed = Number(qm.truncateQueue(queueName) || 0);
+        removedTotal += removed;
+        perManager.push({ removed });
+      }
+
+      res.json({
+        status: 'truncated',
+        queueName,
+        removedTotal,
+        activeManagers: activeManagers.length,
+        perManager
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get('/api/queue/:queueName/length', (req, res) => {
     const { queueName } = req.params;
     res.json({

@@ -3,7 +3,99 @@
 #include <ArduinoJson.h>
 #include <FS.h>
 #include <LittleFS.h>
+#include "profile_config.h"
+#include <map>
+#include <deque>
 #include <vector>
+#if defined(ESP32)
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/queue.h>
+#include <freertos/semphr.h>
+#endif
+
+namespace {
+
+struct EdgeIngressConfig {
+    size_t workerCount = 2;
+    size_t queueLength = 64;
+    size_t resultLimit = 64;
+    size_t workerStackBytes = 12288;
+    uint32_t workerPriority = 1;
+    uint8_t preferredCore = 255;
+};
+
+EdgeIngressConfig gEdgeIngressConfig;
+bool gEdgeIngressConfigLoaded = false;
+
+size_t clampSizeT(size_t value, size_t minValue, size_t maxValue) {
+    if (value < minValue) return minValue;
+    if (value > maxValue) return maxValue;
+    return value;
+}
+
+EdgeIngressConfig loadEdgeIngressConfig() {
+    EdgeIngressConfig config;
+    File f = LittleFS.open("/ffs/.EdgeIngressConfig.json", "r");
+    if (!f) {
+        return config;
+    }
+
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, f);
+    f.close();
+    if (err) {
+        Serial.print("[edge_ingress_async] config parse failed: ");
+        Serial.println(err.c_str());
+        return config;
+    }
+
+    config.workerCount = clampSizeT(doc["workerCount"] | config.workerCount, 1, PROFILE_MAX_CONCURRENT_TASKS);
+    config.queueLength = clampSizeT(doc["queueLength"] | config.queueLength, 1, 256);
+    config.resultLimit = clampSizeT(doc["resultLimit"] | config.resultLimit, 1, 256);
+    config.workerStackBytes = clampSizeT(doc["workerStackBytes"] | config.workerStackBytes, 8192, 16384);
+    config.workerPriority = clampSizeT(doc["workerPriority"] | config.workerPriority, 1, 5);
+    int preferredCore = doc["preferredCore"] | -1;
+    config.preferredCore = (preferredCore >= 0 && preferredCore <= 1) ? static_cast<uint8_t>(preferredCore) : 255;
+    return config;
+}
+
+bool saveEdgeIngressConfig(const EdgeIngressConfig& config) {
+    JsonDocument doc;
+    doc["workerCount"] = static_cast<unsigned long>(config.workerCount);
+    doc["queueLength"] = static_cast<unsigned long>(config.queueLength);
+    doc["resultLimit"] = static_cast<unsigned long>(config.resultLimit);
+    doc["workerStackBytes"] = static_cast<unsigned long>(config.workerStackBytes);
+    doc["workerPriority"] = static_cast<unsigned long>(config.workerPriority);
+    doc["preferredCore"] = (config.preferredCore <= 1) ? static_cast<int>(config.preferredCore) : -1;
+
+    File f = LittleFS.open("/ffs/.EdgeIngressConfig.json", "w");
+    if (!f) return false;
+    size_t written = serializeJson(doc, f);
+    f.close();
+    return written > 0;
+}
+
+size_t resolveIngressMessageLimit() {
+    const size_t profileLimit = PROFILE_MAX_MESSAGE_BYTES;
+    return profileLimit > 0 ? profileLimit : 16384;
+}
+
+void loadEdgeIngressConfigOnce() {
+    if (gEdgeIngressConfigLoaded) return;
+    gEdgeIngressConfig = loadEdgeIngressConfig();
+    gEdgeIngressConfigLoaded = true;
+    Serial.print("[edge_ingress_async] config workerCount=");
+    Serial.print((unsigned long)gEdgeIngressConfig.workerCount);
+    Serial.print(" queueLength=");
+    Serial.print((unsigned long)gEdgeIngressConfig.queueLength);
+    Serial.print(" resultLimit=");
+    Serial.print((unsigned long)gEdgeIngressConfig.resultLimit);
+    Serial.print(" stackBytes=");
+    Serial.println((unsigned long)gEdgeIngressConfig.workerStackBytes);
+}
+
+} // namespace
 
 namespace {
 
@@ -177,6 +269,112 @@ bool evaluateWhenRule(const String& whenRule, const String& srcMessage) {
     }
 
     return false;
+}
+
+String normalizeIngressMessage(const String& message) {
+    String normalized = message;
+    normalized.replace("\r\n", "\n");
+    normalized.replace("\r", "\n");
+    normalized.trim();
+    return normalized;
+}
+
+String detectIngressMessageType(const String& normalizedMessage) {
+    String upper = toUpperCopy(normalizedMessage);
+    if (upper.startsWith("MT103") || upper.indexOf("\n:20:") >= 0 || upper.indexOf(":23B:") >= 0) {
+        return "MT103";
+    }
+    if (upper.startsWith("MT202") || upper.indexOf(":21:") >= 0) {
+        return "MT202";
+    }
+    if (upper.indexOf("<DOCUMENT") >= 0 && upper.indexOf("PACS") >= 0) {
+        if (upper.indexOf("PACS.008") >= 0 || upper.indexOf("PACS008") >= 0) return "PACS008";
+        if (upper.indexOf("PACS.009") >= 0 || upper.indexOf("PACS009") >= 0) return "PACS009";
+        return "PACS";
+    }
+    if (normalizedMessage.startsWith("{") || normalizedMessage.startsWith("[")) {
+        return "JSON";
+    }
+    return "UNKNOWN";
+}
+
+String inferIngressQueueFromType(const String& detectedType, const String& providedInputQueue) {
+    String provided = trimCopy(providedInputQueue);
+    if (provided.length() > 0) return provided;
+
+    String type = toUpperCopy(trimCopy(detectedType));
+    if (type == "MT103") return "swift.mt103.inbound";
+    if (type == "MT202") return "mt202.inbound";
+    if (type == "PACS" || type == "PACS008" || type == "PACS009") return "pacs.inbound";
+    if (type == "JSON") return "json.inbound";
+    return "edge.unknown.inbound";
+}
+
+String xmlEscapeText(const String& value) {
+    String out = value;
+    out.replace("&", "&amp;");
+    out.replace("<", "&lt;");
+    out.replace(">", "&gt;");
+    out.replace("\"", "&quot;");
+    out.replace("'", "&apos;");
+    return out;
+}
+
+String extractMtFieldLine(const String& message, const String& fieldTag) {
+    int idx = message.indexOf(fieldTag);
+    if (idx < 0) return "";
+    int start = idx + fieldTag.length();
+    int end = message.indexOf('\n', start);
+    if (end < 0) end = message.length();
+    String value = message.substring(start, end);
+    value.trim();
+    return value;
+}
+
+String buildPacsXmlFromMt(const String& normalizedMessage, const String& messageType) {
+    String txId = extractMtFieldLine(normalizedMessage, ":20:");
+    if (txId.length() == 0) {
+        txId = String("TX-") + String((unsigned long)millis());
+    }
+
+    String relRef = extractMtFieldLine(normalizedMessage, ":21:");
+    if (relRef.length() == 0) relRef = txId;
+
+    String amountField = extractMtFieldLine(normalizedMessage, ":32A:");
+    String ccy = "USD";
+    String amount = "0";
+    if (amountField.length() >= 9) {
+        ccy = amountField.substring(6, 9);
+        amount = amountField.substring(9);
+        ccy.trim();
+        amount.trim();
+    }
+    amount.replace(',', '.');
+
+    const bool isMt202 = (toUpperCopy(messageType) == "MT202");
+    const String pacsNs = isMt202
+        ? "urn:iso:std:iso:20022:tech:xsd:pacs.009.001.10"
+        : "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.10";
+
+    String xml;
+    xml.reserve(900);
+    xml += "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
+    xml += "<Document xmlns=\"" + pacsNs + "\">\n";
+    xml += "  <FIToFICstmrCdtTrf>\n";
+    xml += "    <GrpHdr>\n";
+    xml += "      <MsgId>" + xmlEscapeText(txId) + "</MsgId>\n";
+    xml += "    </GrpHdr>\n";
+    xml += "    <CdtTrfTxInf>\n";
+    xml += "      <PmtId>\n";
+    xml += "        <InstrId>" + xmlEscapeText(txId) + "</InstrId>\n";
+    xml += "        <EndToEndId>" + xmlEscapeText(isMt202 ? relRef : txId) + "</EndToEndId>\n";
+    xml += "        <TxId>" + xmlEscapeText(txId) + "</TxId>\n";
+    xml += "      </PmtId>\n";
+    xml += "      <IntrBkSttlmAmt Ccy=\"" + xmlEscapeText(ccy) + "\">" + xmlEscapeText(amount) + "</IntrBkSttlmAmt>\n";
+    xml += "    </CdtTrfTxInf>\n";
+    xml += "  </FIToFICstmrCdtTrf>\n";
+    xml += "</Document>";
+    return xml;
 }
 
 bool deserializeDocFromPath(const String& path, FederatedFileSystem* ffs, JsonDocument& doc) {
@@ -403,6 +601,363 @@ bool loadProgramMapMappings(const String& programMapPath, FederatedFileSystem* f
 
     return true;
 }
+
+struct EdgeIngressExecutionResult {
+    int statusCode = 200;
+    String contentType = "application/json";
+    String body;
+};
+
+struct EdgeIngressExecutionCache {
+    String file;
+    String programMap;
+    size_t maxBytes = 0;
+    bool ready = false;
+    std::vector<pmachine::PInstruction> instructions;
+    std::vector<pmachine::MappingDef> mappingDefs;
+};
+
+EdgeIngressExecutionResult executeEdgeIngressStage(
+    pmachine::PMachine& machine,
+    FederatedFileSystem* ffs,
+    const String& file,
+    const String& programMap,
+    const String& inputQueue,
+    const String& message,
+    size_t maxBytes,
+    bool runRouter,
+    bool convertMtToXml,
+    SemaphoreHandle_t machineMutex,
+    EdgeIngressExecutionCache* executionCache = nullptr,
+    bool messageAlreadyNormalized = false
+) {
+    EdgeIngressExecutionResult result;
+
+    String normalized = messageAlreadyNormalized ? message : normalizeIngressMessage(message);
+    String messageType = detectIngressMessageType(normalized);
+    bool conversionApplied = false;
+    String conversionFormat = "original";
+    if (convertMtToXml && (messageType == "MT103" || messageType == "MT202")) {
+        String originalType = messageType;
+        normalized = buildPacsXmlFromMt(normalized, originalType);
+        messageType = detectIngressMessageType(normalized);
+        conversionApplied = true;
+        conversionFormat = (originalType == "MT202") ? "mt202->pacs-xml" : "mt103->pacs-xml";
+    }
+    String effectiveInputQueue = inferIngressQueueFromType(messageType, inputQueue);
+
+    Serial.print("[edge_ingress_stage] begin inputQueue=");
+    Serial.print(effectiveInputQueue);
+    Serial.print(" type=");
+    Serial.print(messageType);
+    Serial.print(" msgLen=");
+    Serial.println(normalized.length());
+
+    JsonDocument out;
+    out["stage"] = "edge_ingress_stage_v1";
+    out["messageType"] = messageType;
+    out["inputQueue"] = effectiveInputQueue;
+    out["normalizedMessage"] = normalized;
+    out["conversionApplied"] = conversionApplied;
+    out["conversionFormat"] = conversionFormat;
+    out["runRouter"] = runRouter;
+    out["publishedCount"] = 0;
+    JsonArray deliveries = out["deliveries"].to<JsonArray>();
+
+    if (!runRouter) {
+        serializeJson(out, result.body);
+        return result;
+    }
+
+    const std::vector<pmachine::PInstruction>* instructions = nullptr;
+    const std::vector<pmachine::MappingDef>* mappingDefs = nullptr;
+    std::vector<pmachine::PInstruction> loadedInstructions;
+    std::vector<pmachine::MappingDef> loadedMappings;
+    bool programCacheHit = false;
+
+    if (executionCache != nullptr
+        && executionCache->ready
+        && executionCache->file == file
+        && executionCache->programMap == programMap
+        && executionCache->maxBytes == maxBytes) {
+        instructions = &executionCache->instructions;
+        mappingDefs = &executionCache->mappingDefs;
+        programCacheHit = true;
+    } else {
+        File f = LittleFS.open(file, "r");
+        if (!f) {
+            result.statusCode = 404;
+            result.contentType = "text/plain";
+            result.body = "Router pcode file not found or read error";
+            return result;
+        }
+        String text = f.readString();
+        f.close();
+        if ((size_t)text.length() > maxBytes) {
+            result.statusCode = 413;
+            result.contentType = "text/plain";
+            result.body = "Router pcode file too large";
+            return result;
+        }
+
+        loadedInstructions = pmachine::loadTextPCode(std::string(text.c_str()));
+        String mappingError;
+        if (!loadProgramMapMappings(programMap, ffs, loadedMappings, mappingError)) {
+            result.statusCode = 404;
+            result.contentType = "text/plain";
+            result.body = mappingError;
+            return result;
+        }
+
+        if (executionCache != nullptr) {
+            executionCache->file = file;
+            executionCache->programMap = programMap;
+            executionCache->maxBytes = maxBytes;
+            executionCache->instructions = loadedInstructions;
+            executionCache->mappingDefs = loadedMappings;
+            executionCache->ready = true;
+            instructions = &executionCache->instructions;
+            mappingDefs = &executionCache->mappingDefs;
+        } else {
+            instructions = &loadedInstructions;
+            mappingDefs = &loadedMappings;
+        }
+    }
+
+    if (machineMutex != nullptr) {
+        if (xSemaphoreTake(machineMutex, pdMS_TO_TICKS(15000)) != pdTRUE) {
+            result.statusCode = 503;
+            result.contentType = "text/plain";
+            result.body = "PMachine busy";
+            return result;
+        }
+    }
+
+    machine.setMappings(*mappingDefs);
+    machine.clearRoutingDeliveries();
+    machine.setRoutingContext(std::string(effectiveInputQueue.c_str()), std::string(normalized.c_str()));
+    machine.run(*instructions);
+
+    const bool stepLimitHit = machine.didLastRunHitStepLimit();
+    const size_t stepCount = machine.getLastRunStepCount();
+    out["stepLimitHit"] = stepLimitHit;
+    out["stepCount"] = stepCount;
+    out["programCacheHit"] = programCacheHit;
+
+    Serial.print("[edge_ingress_stage] run done stepLimitHit=");
+    Serial.print(stepLimitHit ? "true" : "false");
+    Serial.print(" stepCount=");
+    Serial.println((unsigned long)stepCount);
+
+    const std::vector<pmachine::RouteDelivery>& routed = machine.getRoutingDeliveries();
+    for (const auto& d : routed) {
+        JsonObject item = deliveries.add<JsonObject>();
+        item["queueName"] = d.queueName.c_str();
+        item["message"] = d.message.c_str();
+    }
+    out["publishedCount"] = routed.size();
+
+    if (machineMutex != nullptr) {
+        xSemaphoreGive(machineMutex);
+    }
+
+    serializeJson(out, result.body);
+    if (stepLimitHit) {
+        result.statusCode = 504;
+    }
+    return result;
+}
+
+#if defined(ESP32)
+struct EdgeIngressAsyncTask {
+    String jobId;
+    String file;
+    String programMap;
+    String inputQueue;
+    String message;
+    size_t maxBytes;
+    bool runRouter;
+    bool convertMtToXml;
+};
+
+struct EdgeIngressAsyncResult {
+    String state;
+    int statusCode;
+    String contentType;
+    String body;
+    unsigned long updatedAtMs;
+};
+
+struct EdgeIngressWorkerContext {
+    pmachine::PMachine machine;
+    FederatedFileSystem* ffs;
+    EdgeIngressExecutionCache executionCache;
+};
+
+QueueHandle_t gEdgeIngressAsyncQueue = nullptr;
+SemaphoreHandle_t gEdgeIngressAsyncResultsMutex = nullptr;
+std::vector<TaskHandle_t> gEdgeIngressWorkerTasks;
+std::vector<EdgeIngressWorkerContext> gEdgeIngressWorkerContexts;
+std::map<String, EdgeIngressAsyncResult> gEdgeIngressAsyncResults;
+std::deque<String> gEdgeIngressAsyncResultOrder;
+uint32_t gEdgeIngressJobCounter = 0;
+
+size_t clearEdgeIngressExecutionCaches() {
+    size_t cleared = 0;
+    for (auto& ctx : gEdgeIngressWorkerContexts) {
+        if (ctx.executionCache.ready) {
+            cleared += 1;
+        }
+        ctx.executionCache.ready = false;
+        ctx.executionCache.file = "";
+        ctx.executionCache.programMap = "";
+        ctx.executionCache.maxBytes = 0;
+        ctx.executionCache.instructions.clear();
+        ctx.executionCache.mappingDefs.clear();
+    }
+    return cleared;
+}
+
+void trimEdgeIngressAsyncResultsLocked() {
+    while (gEdgeIngressAsyncResultOrder.size() > gEdgeIngressConfig.resultLimit) {
+        const String oldest = gEdgeIngressAsyncResultOrder.front();
+        gEdgeIngressAsyncResultOrder.pop_front();
+        gEdgeIngressAsyncResults.erase(oldest);
+    }
+}
+
+void upsertEdgeIngressAsyncResult(const String& jobId, const EdgeIngressAsyncResult& value) {
+    if (gEdgeIngressAsyncResultsMutex == nullptr) return;
+    if (xSemaphoreTake(gEdgeIngressAsyncResultsMutex, pdMS_TO_TICKS(2000)) != pdTRUE) return;
+
+    if (gEdgeIngressAsyncResults.find(jobId) == gEdgeIngressAsyncResults.end()) {
+        gEdgeIngressAsyncResultOrder.push_back(jobId);
+    }
+    gEdgeIngressAsyncResults[jobId] = value;
+    trimEdgeIngressAsyncResultsLocked();
+
+    xSemaphoreGive(gEdgeIngressAsyncResultsMutex);
+}
+
+bool readEdgeIngressAsyncResult(const String& jobId, EdgeIngressAsyncResult& outResult) {
+    if (gEdgeIngressAsyncResultsMutex == nullptr) return false;
+    if (xSemaphoreTake(gEdgeIngressAsyncResultsMutex, pdMS_TO_TICKS(2000)) != pdTRUE) return false;
+
+    auto it = gEdgeIngressAsyncResults.find(jobId);
+    if (it == gEdgeIngressAsyncResults.end()) {
+        xSemaphoreGive(gEdgeIngressAsyncResultsMutex);
+        return false;
+    }
+
+    outResult = it->second;
+    xSemaphoreGive(gEdgeIngressAsyncResultsMutex);
+    return true;
+}
+
+String makeEdgeIngressJobId() {
+    gEdgeIngressJobCounter += 1;
+    return String("edge-") + String((unsigned long)millis()) + String("-") + String((unsigned long)gEdgeIngressJobCounter);
+}
+
+void edgeIngressAsyncWorker(void* rawContext) {
+    EdgeIngressWorkerContext* context = static_cast<EdgeIngressWorkerContext*>(rawContext);
+
+    for (;;) {
+        EdgeIngressAsyncTask* task = nullptr;
+        if (xQueueReceive(gEdgeIngressAsyncQueue, &task, portMAX_DELAY) != pdTRUE || task == nullptr) {
+            continue;
+        }
+
+        EdgeIngressAsyncResult running;
+        running.state = "running";
+        running.statusCode = 102;
+        running.contentType = "application/json";
+        running.body = "";
+        running.updatedAtMs = millis();
+        upsertEdgeIngressAsyncResult(task->jobId, running);
+
+        EdgeIngressExecutionResult exec = executeEdgeIngressStage(
+            context->machine,
+            context->ffs,
+            task->file,
+            task->programMap,
+            task->inputQueue,
+            task->message,
+            task->maxBytes,
+            task->runRouter,
+            task->convertMtToXml,
+            nullptr,
+            &context->executionCache,
+            true
+        );
+
+        EdgeIngressAsyncResult done;
+        done.state = "completed";
+        done.statusCode = exec.statusCode;
+        done.contentType = exec.contentType;
+        done.body = exec.body;
+        done.updatedAtMs = millis();
+        upsertEdgeIngressAsyncResult(task->jobId, done);
+
+        delete task;
+    }
+}
+
+void ensureEdgeIngressAsyncWorkerStarted(pmachine::PMachine& machine, FederatedFileSystem* ffs) {
+    if (gEdgeIngressAsyncQueue != nullptr) return;
+
+    loadEdgeIngressConfigOnce();
+
+    gEdgeIngressAsyncQueue = xQueueCreate(gEdgeIngressConfig.queueLength, sizeof(EdgeIngressAsyncTask*));
+    gEdgeIngressAsyncResultsMutex = xSemaphoreCreateMutex();
+
+    if (gEdgeIngressAsyncQueue == nullptr || gEdgeIngressAsyncResultsMutex == nullptr) {
+        Serial.println("[edge_ingress_async] initialization failed");
+        return;
+    }
+
+    gEdgeIngressWorkerTasks.clear();
+    gEdgeIngressWorkerContexts.clear();
+    gEdgeIngressWorkerTasks.resize(gEdgeIngressConfig.workerCount, nullptr);
+    gEdgeIngressWorkerContexts.resize(gEdgeIngressConfig.workerCount);
+
+    for (size_t i = 0; i < gEdgeIngressConfig.workerCount; ++i) {
+        gEdgeIngressWorkerContexts[i].ffs = ffs;
+        gEdgeIngressWorkerContexts[i].machine.setFFS(ffs);
+
+        BaseType_t created = xTaskCreatePinnedToCore(
+            edgeIngressAsyncWorker,
+            "edgeIngressAsync",
+            gEdgeIngressConfig.workerStackBytes,
+            &gEdgeIngressWorkerContexts[i],
+            gEdgeIngressConfig.workerPriority,
+            &gEdgeIngressWorkerTasks[i],
+            (gEdgeIngressConfig.preferredCore <= 1)
+              ? static_cast<BaseType_t>(gEdgeIngressConfig.preferredCore)
+              : static_cast<BaseType_t>(i % 2)
+        );
+
+        if (created != pdPASS) {
+            created = xTaskCreate(
+                edgeIngressAsyncWorker,
+                "edgeIngressAsync",
+                gEdgeIngressConfig.workerStackBytes,
+                &gEdgeIngressWorkerContexts[i],
+                gEdgeIngressConfig.workerPriority,
+                &gEdgeIngressWorkerTasks[i]
+            );
+        }
+
+        if (created == pdPASS) {
+            Serial.print("[edge_ingress_async] worker started index=");
+            Serial.println((unsigned long)i);
+        } else {
+            Serial.print("[edge_ingress_async] worker creation failed index=");
+            Serial.println((unsigned long)i);
+        }
+    }
+}
+#endif
 
 }
 
@@ -683,6 +1238,255 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         serializeJson(out, response);
         request->send(200, "application/json", response);
     });
+
+    // Edge ingress stage: sanitize + classify + optional router pcode execution in one call
+    server.on("/pmachine/edge_ingress_stage", HTTP_ANY, [&machine, ffs](AsyncWebServerRequest *request){
+        String file = "/router-mapper.pcode";
+        String programMap = "/router-mapper.program.json";
+        String inputQueue;
+        String message;
+        String maxParam = "32768";
+        String runRouterParam = "1";
+        String asyncParam = "1";
+        String convertMtToXmlParam = "0";
+
+        if (!getRequestParam(request, "message", message)) {
+            request->send(400, "text/plain", "Missing message param");
+            return;
+        }
+
+        getRequestParam(request, "inputQueue", inputQueue);
+        getRequestParam(request, "file", file);
+        getRequestParam(request, "programMap", programMap);
+        getRequestParam(request, "max", maxParam);
+        getRequestParam(request, "runRouter", runRouterParam);
+        getRequestParam(request, "async", asyncParam);
+        getRequestParam(request, "convertMtToXml", convertMtToXmlParam);
+
+        const size_t messageLimit = resolveIngressMessageLimit();
+        if (message.length() > messageLimit) {
+            JsonDocument out;
+            out["error"] = "message too large";
+            out["maxMessageBytes"] = static_cast<uint32_t>(messageLimit);
+            out["actualMessageBytes"] = static_cast<uint32_t>(message.length());
+            out["deviceRole"] = DEVICE_ROLE;
+            String response;
+            serializeJson(out, response);
+            request->send(413, "application/json", response);
+            return;
+        }
+
+        String normalized = normalizeIngressMessage(message);
+        String messageType = detectIngressMessageType(normalized);
+        String effectiveInputQueue = inferIngressQueueFromType(messageType, inputQueue);
+
+        String runRouterUpper = toUpperCopy(trimCopy(runRouterParam));
+        bool runRouter = !(runRouterUpper == "0" || runRouterUpper == "FALSE" || runRouterUpper == "NO");
+        String asyncUpper = toUpperCopy(trimCopy(asyncParam));
+        bool useAsync = !(asyncUpper == "0" || asyncUpper == "FALSE" || asyncUpper == "NO");
+        String convertUpper = toUpperCopy(trimCopy(convertMtToXmlParam));
+        bool convertMtToXml = (convertUpper == "1" || convertUpper == "TRUE" || convertUpper == "YES" || convertUpper == "ON");
+
+    #if defined(ESP32)
+        ensureEdgeIngressAsyncWorkerStarted(machine, ffs);
+        if (useAsync && gEdgeIngressAsyncQueue != nullptr) {
+            EdgeIngressAsyncTask* task = new EdgeIngressAsyncTask();
+            task->jobId = makeEdgeIngressJobId();
+            task->file = file;
+            task->programMap = programMap;
+            task->inputQueue = effectiveInputQueue;
+            task->message = normalized;
+            task->maxBytes = maxParam.toInt();
+            task->runRouter = runRouter;
+            task->convertMtToXml = convertMtToXml;
+
+            BaseType_t ok = xQueueSend(gEdgeIngressAsyncQueue, &task, 0);
+            if (ok == pdTRUE) {
+            JsonDocument out;
+            out["stage"] = "edge_ingress_stage_v1";
+            out["mode"] = "async";
+            out["jobId"] = task->jobId;
+            out["messageType"] = messageType;
+            out["inputQueue"] = effectiveInputQueue;
+            out["runRouter"] = runRouter;
+            out["conversionRequested"] = convertMtToXml;
+            out["statusUrl"] = String("/pmachine/edge_ingress_status?jobId=") + task->jobId;
+            String response;
+            serializeJson(out, response);
+            request->send(202, "application/json", response);
+            return;
+            }
+            delete task;
+            request->send(503, "text/plain", "Edge ingress queue is full");
+            return;
+        }
+    #endif
+
+        EdgeIngressExecutionResult exec = executeEdgeIngressStage(
+            machine,
+            ffs,
+            file,
+            programMap,
+            effectiveInputQueue,
+            normalized,
+            maxParam.toInt(),
+            runRouter,
+            convertMtToXml,
+            nullptr,
+            nullptr,
+            true
+        );
+        request->send(exec.statusCode, exec.contentType, exec.body);
+    });
+
+#if defined(ESP32)
+    server.on("/pmachine/edge_ingress_status", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (!request->hasParam("jobId")) {
+            request->send(400, "text/plain", "Missing jobId param");
+            return;
+        }
+
+        String jobId = request->getParam("jobId")->value();
+        EdgeIngressAsyncResult result;
+        if (!readEdgeIngressAsyncResult(jobId, result)) {
+            request->send(404, "text/plain", "Unknown jobId");
+            return;
+        }
+
+        JsonDocument out;
+        out["jobId"] = jobId;
+        out["state"] = result.state;
+        out["statusCode"] = result.statusCode;
+        out["contentType"] = result.contentType;
+        out["body"] = result.body;
+        out["updatedAtMs"] = result.updatedAtMs;
+        String response;
+        serializeJson(out, response);
+        request->send(result.statusCode, result.contentType, response);
+    });
+
+    server.on("/pmachine/edge_ingress_config", HTTP_GET, [](AsyncWebServerRequest *request){
+#if defined(ESP32)
+        loadEdgeIngressConfigOnce();
+        JsonDocument out;
+        out["workerCount"] = gEdgeIngressConfig.workerCount;
+        out["queueLength"] = gEdgeIngressConfig.queueLength;
+        out["resultLimit"] = gEdgeIngressConfig.resultLimit;
+        out["workerStackBytes"] = gEdgeIngressConfig.workerStackBytes;
+        out["workerPriority"] = gEdgeIngressConfig.workerPriority;
+        out["preferredCore"] = (gEdgeIngressConfig.preferredCore <= 1) ? gEdgeIngressConfig.preferredCore : -1;
+        out["loaded"] = gEdgeIngressConfigLoaded;
+        out["queueDepth"] = (gEdgeIngressAsyncQueue != nullptr) ? uxQueueMessagesWaiting(gEdgeIngressAsyncQueue) : 0;
+        out["queueCapacity"] = gEdgeIngressConfig.queueLength;
+        String response;
+        serializeJson(out, response);
+        request->send(200, "application/json", response);
+#else
+        request->send(200, "application/json", "{}");
+#endif
+    });
+
+    server.on("/pmachine/edge_ingress_config", HTTP_POST, [](AsyncWebServerRequest *request){
+#if defined(ESP32)
+        loadEdgeIngressConfigOnce();
+        EdgeIngressConfig next = gEdgeIngressConfig;
+
+        String value;
+        bool anyProvided = false;
+
+        if (getRequestParam(request, "workerCount", value)) {
+            next.workerCount = clampSizeT(static_cast<size_t>(value.toInt()), 1, PROFILE_MAX_CONCURRENT_TASKS);
+            anyProvided = true;
+        }
+        if (getRequestParam(request, "queueLength", value)) {
+            next.queueLength = clampSizeT(static_cast<size_t>(value.toInt()), 1, 256);
+            anyProvided = true;
+        }
+        if (getRequestParam(request, "resultLimit", value)) {
+            next.resultLimit = clampSizeT(static_cast<size_t>(value.toInt()), 1, 256);
+            anyProvided = true;
+        }
+        if (getRequestParam(request, "workerStackBytes", value)) {
+            next.workerStackBytes = clampSizeT(static_cast<size_t>(value.toInt()), 8192, 16384);
+            anyProvided = true;
+        }
+        if (getRequestParam(request, "workerPriority", value)) {
+            next.workerPriority = static_cast<uint32_t>(clampSizeT(static_cast<size_t>(value.toInt()), 1, 5));
+            anyProvided = true;
+        }
+        if (getRequestParam(request, "preferredCore", value)) {
+            int preferredCore = value.toInt();
+            next.preferredCore = (preferredCore >= 0 && preferredCore <= 1)
+              ? static_cast<uint8_t>(preferredCore)
+              : 255;
+            anyProvided = true;
+        }
+
+        if (!anyProvided) {
+            request->send(400, "application/json", "{\"error\":\"No config params provided\"}");
+            return;
+        }
+
+        if (!saveEdgeIngressConfig(next)) {
+            request->send(500, "application/json", "{\"error\":\"Failed to persist config\"}");
+            return;
+        }
+
+        gEdgeIngressConfig = next;
+        gEdgeIngressConfigLoaded = true;
+
+        String rebootParam = "0";
+        getRequestParam(request, "reboot", rebootParam);
+        String rebootUpper = toUpperCopy(trimCopy(rebootParam));
+        bool rebootNow = (rebootUpper == "1" || rebootUpper == "TRUE" || rebootUpper == "YES" || rebootUpper == "ON");
+
+        JsonDocument out;
+        out["status"] = "saved";
+        out["appliesOnNextBoot"] = true;
+        out["rebootRequested"] = rebootNow;
+        out["workerCount"] = next.workerCount;
+        out["queueLength"] = next.queueLength;
+        out["resultLimit"] = next.resultLimit;
+        out["workerStackBytes"] = next.workerStackBytes;
+        out["workerPriority"] = next.workerPriority;
+        out["preferredCore"] = (next.preferredCore <= 1) ? next.preferredCore : -1;
+        out["currentQueueDepth"] = (gEdgeIngressAsyncQueue != nullptr) ? uxQueueMessagesWaiting(gEdgeIngressAsyncQueue) : 0;
+                out["currentQueueCapacity"] = (gEdgeIngressAsyncQueue != nullptr)
+                    ? (uxQueueMessagesWaiting(gEdgeIngressAsyncQueue) + uxQueueSpacesAvailable(gEdgeIngressAsyncQueue))
+                    : 0;
+        out["message"] = rebootNow
+          ? "Config saved. Rebooting to apply queue capacity changes."
+          : "Config saved. Reboot required to apply queue capacity changes.";
+
+        String response;
+        serializeJson(out, response);
+        request->send(200, "application/json", response);
+
+        if (rebootNow) {
+            delay(250);
+            ESP.restart();
+        }
+#else
+        request->send(200, "application/json", "{\"status\":\"unsupported\"}");
+#endif
+    });
+
+        server.on("/pmachine/edge_ingress_cache/clear", HTTP_POST, [](AsyncWebServerRequest *request){
+    #if defined(ESP32)
+        size_t cleared = clearEdgeIngressExecutionCaches();
+        JsonDocument out;
+        out["status"] = "ok";
+        out["clearedCaches"] = (unsigned long)cleared;
+        out["workerCount"] = (unsigned long)gEdgeIngressWorkerContexts.size();
+        out["message"] = "Edge ingress execution caches cleared";
+        String response;
+        serializeJson(out, response);
+        request->send(200, "application/json", response);
+    #else
+        request->send(200, "application/json", "{\"status\":\"ok\",\"clearedCaches\":0}");
+    #endif
+        });
+#endif
 
     // PMachine aggregator-router execution (rules-driven fanout)
     server.on("/pmachine/router/run", HTTP_ANY, [ffs](AsyncWebServerRequest *request){

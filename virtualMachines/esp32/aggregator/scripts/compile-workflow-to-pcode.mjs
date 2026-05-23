@@ -86,6 +86,26 @@ function emitStatements(steps, lines, labels, branchCounterRef) {
       continue;
     }
 
+    if (step.action === 'wait') {
+      labels.push({ type: 'wait_ignored', stepId: step.id, durationMs: step.durationMs });
+      lines.push('NOP');
+      continue;
+    }
+
+    if (step.action === 'check_api') {
+      labels.push({
+        type: 'check_api_ignored',
+        stepId: step.id,
+        method: step.method,
+        route: step.route,
+        expectedStatus: step.expectedStatus,
+        retries: step.retries,
+        everyMs: step.everyMs
+      });
+      lines.push('NOP');
+      continue;
+    }
+
     throw new Error(`Unsupported workflow step for pcode emit: ${step.action}`);
   }
 }

@@ -217,7 +217,7 @@ export function createRouterEngine({ rulesPath, mappingsPath = './data/data-mapp
     return result.output;
   }
 
-  async function processMessage({ inputQueue, message, sourceService = 'router' }) {
+  async function processMessage({ inputQueue, message, sourceService = 'router', messageEnvelope = null }) {
     await ensureLoaded();
     await ensureMappingsLoaded();
 
@@ -262,6 +262,7 @@ export function createRouterEngine({ rulesPath, mappingsPath = './data/data-mapp
           queueName: output.queueName,
           message: routedMessage,
           sourceService: `${sourceService}:router:${rule.id}`,
+          messageEnvelope,
           dataTypeIds: Array.isArray(output.dataTypeIds)
             ? output.dataTypeIds
             : (output.dataTypeId ? [output.dataTypeId] : undefined)
@@ -333,9 +334,9 @@ export function createRouterEngine({ rulesPath, mappingsPath = './data/data-mapp
     },
 
     async ingest(payload) {
-      const { inputQueue, message, sourceService } = payload || {};
+      const { inputQueue, message, sourceService, messageEnvelope = null } = payload || {};
       if (!inputQueue) throw new Error('inputQueue is required');
-      return processMessage({ inputQueue, message, sourceService: sourceService || 'api' });
+      return processMessage({ inputQueue, message, sourceService: sourceService || 'api', messageEnvelope });
     },
 
     async processFromQueue(inputQueue, { consumerService = 'router', maxMessages = 1 } = {}) {
@@ -349,7 +350,12 @@ export function createRouterEngine({ rulesPath, mappingsPath = './data/data-mapp
 
         const message = Object.prototype.hasOwnProperty.call(queued, 'message') ? queued.message : queued;
         const sourceService = queued?.sourceService || consumerService;
-        const routeResult = await processMessage({ inputQueue, message, sourceService });
+        const routeResult = await processMessage({
+          inputQueue,
+          message,
+          sourceService,
+          messageEnvelope: queued?.messageEnvelope || null
+        });
         results.push({ dequeued: queued, routed: routeResult });
       }
 

@@ -42,6 +42,36 @@ export class QueueManagerPersistence {
     return queueDir;
   }
 
+  writeJsonAtomic(filePath, payload) {
+    const targetDir = path.dirname(filePath);
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+
+    const fileName = path.basename(filePath);
+    const tmpPath = path.join(targetDir, `${fileName}.${process.pid}.${Date.now()}.tmp`);
+    const serialized = typeof payload === 'string' ? payload : JSON.stringify(payload);
+
+    const writeAndRename = () => {
+      fs.writeFileSync(tmpPath, serialized);
+      try { fs.unlinkSync(filePath); } catch { /* ok if not present */ }
+      fs.renameSync(tmpPath, filePath);
+    };
+
+    try {
+      writeAndRename();
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        if (!fs.existsSync(targetDir)) {
+          fs.mkdirSync(targetDir, { recursive: true });
+        }
+        writeAndRename();
+        return;
+      }
+      throw error;
+    }
+  }
+
   parseMessageFileName(fileName) {
     const match = String(fileName || '').match(/^(\d+)-(\d+)-([0-9a-fA-F-]{8,})\.json$/);
     if (!match) return null;
@@ -120,14 +150,11 @@ export class QueueManagerPersistence {
   saveOrderCounter(queueName, state) {
     const queueDir = this.ensureQueueDir(queueName);
     const counterPath = path.join(queueDir, 'order-counter.json');
-    const tmpPath = `${counterPath}.tmp`;
     const serializable = {
       era: Number(state.era || 0),
       nextSeq: BigInt(state.nextSeq || 0n).toString()
     };
-    fs.writeFileSync(tmpPath, JSON.stringify(serializable, null, 2));
-    try { fs.unlinkSync(counterPath); } catch { /* ok if not present */ }
-    fs.renameSync(tmpPath, counterPath);
+    this.writeJsonAtomic(counterPath, JSON.stringify(serializable, null, 2));
     this.counterCache.set(String(queueName || ''), { era: serializable.era, nextSeq: BigInt(serializable.nextSeq) });
   }
 
@@ -152,7 +179,6 @@ export class QueueManagerPersistence {
     const fileName = `${String(era).padStart(6, '0')}-${this.formatSeq(seq)}-${messageId}.json`;
     const queueDir = this.ensureQueueDir(queueName);
     const filePath = path.join(queueDir, fileName);
-    const tmpPath = `${filePath}.tmp`;
 
     const record = {
       message: payload.message,
@@ -162,9 +188,7 @@ export class QueueManagerPersistence {
       persistedAt: Date.now()
     };
 
-    fs.writeFileSync(tmpPath, JSON.stringify(record));
-    try { fs.unlinkSync(filePath); } catch { /* ok if not present */ }
-    fs.renameSync(tmpPath, filePath);
+    this.writeJsonAtomic(filePath, JSON.stringify(record));
 
     return {
       ...record,
@@ -216,7 +240,13 @@ export class QueueManagerPersistence {
   removeMessageFile(filePath) {
     if (!filePath) return;
     if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+      try {
+        fs.unlinkSync(filePath);
+      } catch (error) {
+        if (error && error.code !== 'ENOENT') {
+          throw error;
+        }
+      }
     }
   }
 

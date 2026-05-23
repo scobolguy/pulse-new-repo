@@ -32,6 +32,8 @@ const nodeId = getArg('node-id', os.hostname());
 const managerId = getArg('manager-id', `${nodeId}-qm-${port}`);
 const managerName = getArg('name', managerId);
 const heartbeatMs = Number(getArg('heartbeat-ms', '5000'));
+const claimLeaseMsDefault = Number(getArg('claim-lease-ms', '30000'));
+const claimReapMs = Number(getArg('claim-reap-ms', '1000'));
 const queuePersistenceEnabled = readEnvBoolean('PULSE_QUEUE_PERSISTENCE', ['1'], false);
 const persistPath = queuePersistenceEnabled
   ? readEnvString('PULSE_QUEUE_DATA_ROOT', 'C:\\pulse-new-repo-data\\queue-data')
@@ -124,6 +126,107 @@ app.post('/dequeue', (req, res) => {
   res.json({ status: 'dequeued', managerId, queueName, message });
 });
 
+app.post('/claim', (req, res) => {
+  const { queueName, workerId, leaseMs } = req.body || {};
+  if (!queueName) {
+    return res.status(400).json({ error: 'queueName is required' });
+  }
+  if (!workerId) {
+    return res.status(400).json({ error: 'workerId is required' });
+  }
+
+  try {
+    const claim = queueManager.claim(queueName, workerId, Number(leaseMs || claimLeaseMsDefault));
+    if (!claim) {
+      return res.status(404).json({ error: 'Queue empty', managerId, queueName });
+    }
+    res.json({ status: 'claimed', managerId, queueName, claim });
+  } catch (e) {
+    res.status(400).json({ error: e.message, managerId, queueName });
+  }
+});
+
+app.post('/claim/heartbeat', (req, res) => {
+  const { queueName, workerId, claimToken, extendMs } = req.body || {};
+  if (!queueName || !workerId || !claimToken) {
+    return res.status(400).json({ error: 'queueName, workerId, claimToken are required' });
+  }
+
+  try {
+    const heartbeat = queueManager.heartbeatClaim(queueName, claimToken, workerId, Number(extendMs || claimLeaseMsDefault));
+    if (heartbeat === null) {
+      return res.status(404).json({ error: 'Unknown claimToken', managerId, queueName, claimToken });
+    }
+    if (heartbeat === 'forbidden') {
+      return res.status(409).json({ error: 'Claim owner mismatch', managerId, queueName, claimToken });
+    }
+    res.json({ status: 'lease-extended', managerId, queueName, claim: heartbeat });
+  } catch (e) {
+    res.status(400).json({ error: e.message, managerId, queueName, claimToken });
+  }
+});
+
+app.post('/claim/complete', (req, res) => {
+  const { queueName, workerId, claimToken, completionMeta } = req.body || {};
+  if (!queueName || !workerId || !claimToken) {
+    return res.status(400).json({ error: 'queueName, workerId, claimToken are required' });
+  }
+
+  try {
+    const completed = queueManager.completeClaim(queueName, claimToken, workerId, completionMeta || null);
+    if (completed === null) {
+      return res.status(404).json({ error: 'Unknown claimToken', managerId, queueName, claimToken });
+    }
+    if (completed === 'forbidden') {
+      return res.status(409).json({ error: 'Claim owner mismatch', managerId, queueName, claimToken });
+    }
+    res.json({ status: 'completed', managerId, queueName, result: completed });
+  } catch (e) {
+    res.status(400).json({ error: e.message, managerId, queueName, claimToken });
+  }
+});
+
+app.post('/claim/fail', (req, res) => {
+  const { queueName, workerId, claimToken, reason, delayMs, maxAttempts, deadLetter } = req.body || {};
+  if (!queueName || !workerId || !claimToken) {
+    return res.status(400).json({ error: 'queueName, workerId, claimToken are required' });
+  }
+
+  try {
+    const failed = queueManager.failClaim(queueName, claimToken, workerId, {
+      reason,
+      delayMs,
+      maxAttempts,
+      deadLetter
+    });
+    if (failed === null) {
+      return res.status(404).json({ error: 'Unknown claimToken', managerId, queueName, claimToken });
+    }
+    if (failed === 'forbidden') {
+      return res.status(409).json({ error: 'Claim owner mismatch', managerId, queueName, claimToken });
+    }
+    res.json({ status: failed.status, managerId, queueName, result: failed });
+  } catch (e) {
+    res.status(400).json({ error: e.message, managerId, queueName, claimToken });
+  }
+});
+
+app.post('/claim/reap-expired', (req, res) => {
+  const { queueName } = req.body || {};
+  try {
+    const requeued = queueManager.reapExpiredClaims(queueName || null);
+    res.json({ status: 'ok', managerId, queueName: queueName || null, requeued });
+  } catch (e) {
+    res.status(400).json({ error: e.message, managerId, queueName: queueName || null });
+  }
+});
+
+app.get('/claim/metrics', (req, res) => {
+  const queueName = String(req.query.queueName || '').trim();
+  const metrics = queueManager.getClaimMetrics(queueName || null);
+  res.json({ managerId, metrics });
+});
+
 app.get('/queues', (req, res) => {
   const queues = getQueueNames().map(queueName => ({
     queueName,
@@ -190,4 +293,14 @@ app.listen(port, host, () => {
   setInterval(() => {
     sendHeartbeat().catch(err => console.error('[QM] heartbeat failed:', err.message));
   }, heartbeatMs);
+  setInterval(() => {
+    try {
+      const requeued = queueManager.reapExpiredClaims();
+      if (requeued > 0) {
+        console.log(`[QM] lease-expiry requeued=${requeued}`);
+      }
+    } catch (err) {
+      console.error('[QM] reap expired claims failed:', err.message);
+    }
+  }, Math.max(250, claimReapMs));
 });

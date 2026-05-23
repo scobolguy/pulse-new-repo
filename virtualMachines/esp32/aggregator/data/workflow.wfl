@@ -23,3 +23,24 @@ WORKFLOW "pain2-routing" BEGIN
     END;
   ENDIF;
 END;
+
+WORKFLOW "gradual-startup" BEGIN
+  STEP "check-backend-status-initial" CHECK API "aggregator" GET "/status" EXPECT 200 RETRIES 20 EVERY 1000;
+  STEP "stabilize-before-runtime-actions" WAIT 1500;
+
+  STEP "bring-database-up" CALL API "aggregator" POST "/api/runtime/classes/database/actions/up";
+  STEP "wait-after-database" WAIT 2000;
+  STEP "check-database-registry" CHECK API "aggregator" GET "/api/registry/databases" EXPECT 200 RETRIES 15 EVERY 1000;
+
+  STEP "bring-broker-up" CALL API "aggregator" POST "/api/runtime/classes/broker/actions/up";
+  STEP "wait-after-broker" WAIT 2000;
+  STEP "check-broker-state" CHECK API "aggregator" GET "/api/broker/state" EXPECT 200 RETRIES 15 EVERY 1000;
+
+  STEP "bring-gateways-up" CALL API "aggregator" POST "/api/runtime/classes/gateway/actions/start";
+  STEP "wait-after-gateway" WAIT 2500;
+  STEP "check-gateways" CHECK API "aggregator" GET "/api/gateways" EXPECT 200 RETRIES 20 EVERY 1000;
+
+  STEP "check-services-registry" CHECK API "aggregator" GET "/api/registry/services" EXPECT 200 RETRIES 20 EVERY 1000;
+  STEP "check-lifecycle-dashboard" CHECK API "aggregator" GET "/api/lifecycle/dashboard" EXPECT 200 RETRIES 20 EVERY 1000;
+  STEP "check-runtime-metrics" CHECK API "aggregator" GET "/api/metrics/current" EXPECT 200 RETRIES 20 EVERY 1000;
+END;

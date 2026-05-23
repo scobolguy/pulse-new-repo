@@ -11,6 +11,7 @@ import ProfileManagementDashboard from './ProfileManagementDashboard';
 import UserInProfileDashboard from './UserInProfileDashboard';
 import FlowTargetsDashboard from './FlowTargetsDashboard';
 import ChatPage from './ChatPage';
+import compiledWorkflowArtifacts from '../data/workflows.generated.json';
 import React, { useEffect, useMemo, useState } from 'react';
 
 const RHS_MIN_WIDTH = 220;
@@ -112,6 +113,7 @@ const LANGUAGE_COPY = {
     yes: 'Yes',
     no: 'No',
     noItems: 'No items available.',
+    tasks: 'Tasks',
     stateRunning: 'Running',
     statePaused: 'Paused',
     stateOffline: 'Offline',
@@ -123,6 +125,7 @@ const LANGUAGE_COPY = {
     flows: 'Flux',
     services: 'Services',
     servers: 'Serveurs',
+    tasks: 'Taches',
     runningWell: 'Fonctionne bien',
     currentState: 'Etat actuel',
     yes: 'Oui',
@@ -139,6 +142,7 @@ const LANGUAGE_COPY = {
     flows: 'Flujos',
     services: 'Servicios',
     servers: 'Servidores',
+    tasks: 'Tareas',
     runningWell: 'Funciona bien',
     currentState: 'Estado actual',
     yes: 'Si',
@@ -155,6 +159,7 @@ const LANGUAGE_COPY = {
     flows: 'Flows',
     services: 'Dienste',
     servers: 'Server',
+    tasks: 'Aufgaben',
     runningWell: 'Laeuft gut',
     currentState: 'Aktueller Status',
     yes: 'Ja',
@@ -304,110 +309,114 @@ function Sparkline({ values, label, tone = 'neutral' }) {
 
 
 const TRANSACTION_FLOW_MERMAID_SOURCE = `flowchart LR
-  %% Rube Goldberg whimsical detours and gadgets with animation classes
-  %% SVG pattern for conveyor belt
-  classDef fan-shape fill:#e6e6e6,stroke:#b7a36a,stroke-width:2px;
-  classDef domino-rect fill:#f6e3b4,stroke:#b7a36a,stroke-width:2px;
-  classDef queue-belt fill:#f7e7b6,stroke:#b7a36a,stroke-width:4px;
+  classDef queue fill:#f7e7b6,stroke:#b7a36a,stroke-width:2px;
+  classDef gadget fill:#efe6d1,stroke:#8a7a58,stroke-width:1.5px;
+  classDef reject fill:#ffd9d9,stroke:#b35a5a,stroke-width:1.5px;
+  classDef worker fill:#d8e7ff,stroke:#4f6b9a,stroke-width:1.5px;
 
-  %% Nodes
-  A([<tspan>Start: received_mt103</tspan><tspan x='0' dy='1.2em'> <rect class='queue-belt' width='60' height='10'/><br/>swift.mt103.parsed</tspan>])
-  subgraph GADGETS [Rube Goldberg Gadgets]
-    P1([Pulley])
-    L1([Lever])
-    B1([Bell])
-    M1([Mouse])
-    D1([<rect class='domino-rect' width='30' height='12'/>Domino Chain])
-    F1([<g class='fan-shape'><circle cx='15' cy='15' r='12' fill='#f7e7b6'/><path d='M15,15 L27,15 A12,12 0 0,1 15,27 Z' fill='#b7a36a'/><path d='M15,15 L15,3 A12,12 0 0,1 27,15 Z' fill='#b7a36a'/></g>Fan])
-    S1([Spring])
+  start["Start: received_mt103<br/>swift.mt103.parsed"]:::queue
+
+  subgraph gadgets [Rube Goldberg Gadgets]
+    pulley[Pulley]:::gadget
+    lever[Lever]:::gadget
+    bell[Bell]:::gadget
+    mouse[Mouse Wheel]:::gadget
+    domino[Domino Chain]:::gadget
+    fan[Fan]:::gadget
+    spring[Spring]:::gadget
   end
 
-  %% Flow with animated gadgets and belts
-  A --> P1 --> L1 -->|MAP mt103-to-pacs| B([<tspan>pacs_created</tspan><tspan x='0' dy='1.2em'><rect class='queue-belt' width='60' height='10'/><br/>tx.pacs.created</tspan>])
-  B --> B1 -->|Sanctions Scan| C{Sanctions}
-  C -- Pass --> SUBFLOW_LIQ([<tspan>Liquidity Mgmt</tspan><tspan x='0' dy='1.2em'>🏭 Subflow</tspan>])
-  C -- Hit --> SUBFLOW_SAN([<tspan>Sanctions Scan</tspan><tspan x='0' dy='1.2em'>🏭 Subflow</tspan>])
-  SUBFLOW_LIQ -- Accepted --> D([<tspan>liquidity</tspan><tspan x='0' dy='1.2em'><rect class='queue-belt' width='60' height='10'/><br/>tx.lynx.pending</tspan>])
-  SUBFLOW_LIQ -- Rejected --> RB_LIQ([🗑️ Liquidity Reject Bin])
-  SUBFLOW_SAN -- Accepted --> D1([<tspan>sanctions_passed</tspan><tspan x='0' dy='1.2em'><rect class='queue-belt' width='60' height='10'/><br/>tx.sanctions.passed</tspan>])
-  SUBFLOW_SAN -- Rejected --> RB_SAN([🗑️ Sanctions Reject Bin])
-  RB_LIQ -.-> FM[👨 Foreman]
-  RB_SAN -.-> FM
-  X --> RB[🗑️ Reject Bin]
-  D --> D1 -->|BoC/LYNX Decision| E{LYNX}
-  E -- Approved --> F1 --> F([<tspan>lynx_approved</tspan><tspan x='0' dy='1.2em'><rect class='queue-belt' width='60' height='10'/><br/>tx.lynx.approved</tspan>])
-  E -- Rejected --> X
-  RB -.-> FM[👨 Foreman]
-  F -->|ENQUEUE correspondent.pacs008.outbound| G([<tspan>sent_corresp_unreconciled</tspan><tspan x='0' dy='1.2em'><rect class='queue-belt' width='60' height='10'/><br/>tx.correspondent.unreconciled</tspan>])
-  G -->|statement_matched| H{Matched?}
-  H -- True --> I([<tspan>reconciled</tspan><tspan x='0' dy='1.2em'><rect class='queue-belt' width='60' height='10'/><br/>tx.reconciled</tspan>])
-  H -- False --> G
+  created["pacs_created<br/>tx.pacs.created"]:::queue
+  sanctionsGate{Sanctions}
+  liquiditySub["Liquidity Mgmt<br/>Subflow"]:::worker
+  sanctionsSub["Sanctions Scan<br/>Subflow"]:::worker
+  lynxPending["liquidity<br/>tx.lynx.pending"]:::queue
+  sanctionsPassed["sanctions_passed<br/>tx.sanctions.passed"]:::queue
+  lynxGate{LYNX}
+  lynxApproved["lynx_approved<br/>tx.lynx.approved"]:::queue
+  corrUnreconciled["sent_corresp_unreconciled<br/>tx.correspondent.unreconciled"]:::queue
+  matchedGate{Matched?}
+  reconciled["reconciled<br/>tx.reconciled"]:::queue
+  reject[Reject Bin]:::reject
+  liqReject[Liquidity Reject Bin]:::reject
+  sanReject[Sanctions Reject Bin]:::reject
+  foreman[Foreman]
 
-  %% Whimsical loops and zig-zags
-  L1 -.-> S1
-  B1 -.-> F1
-  M1 -.-> P1
-  D1 -.-> B1
-  S1 -.-> D1
+  start --> pulley --> lever -->|MAP mt103-to-pacs| created
+  created --> bell -->|Sanctions Scan| sanctionsGate
+  sanctionsGate -- Pass --> liquiditySub
+  sanctionsGate -- Hit --> sanctionsSub
+  liquiditySub -- Accepted --> lynxPending
+  liquiditySub -- Rejected --> liqReject
+  sanctionsSub -- Accepted --> sanctionsPassed
+  sanctionsSub -- Rejected --> sanReject
+  lynxPending --> sanctionsPassed -->|BoC/LYNX Decision| lynxGate
+  lynxGate -- Approved --> fan --> lynxApproved
+  lynxGate -- Rejected --> reject
+  lynxApproved -->|ENQUEUE correspondent.pacs008.outbound| corrUnreconciled
+  corrUnreconciled -->|statement_matched| matchedGate
+  matchedGate -- True --> reconciled
+  matchedGate -- False --> corrUnreconciled
+
+  liqReject -.-> foreman
+  sanReject -.-> foreman
+  reject -.-> foreman
+
+  lever -.-> spring
+  bell -.-> fan
+  mouse -.-> pulley
+  domino -.-> bell
+  spring -.-> domino
 `;
 
 const INCOMING_PAYMENT_FLOW_MERMAID = `flowchart LR
-  IP_IN([<tspan>Incoming Payment</tspan><tspan x='0' dy='1.2em'>pacs.008 or pain.001</tspan>])
-  SUBFLOW_SAN([<tspan>Sanctions Scan</tspan><tspan x='0' dy='1.2em'>Subflow</tspan>])
-  SUBFLOW_LIQ([<tspan>Liquidity Mgmt</tspan><tspan x='0' dy='1.2em'>Subflow</tspan>])
-  SWIFT([SWIFT Gateway])
+  inPay["Incoming Payment<br/>pacs.008 or pain.001"]
+  sanSub["Sanctions Scan<br/>Subflow"]
+  liqSub["Liquidity Mgmt<br/>Subflow"]
+  swift[SWIFT Gateway]
+  sanReject[Sanctions Reject Bin]
+  liqReject[Liquidity Reject Bin]
+  foreman[Foreman]
 
-  IP_IN --> SUBFLOW_SAN
-  SUBFLOW_SAN -- Accepted --> SUBFLOW_LIQ
-  SUBFLOW_SAN -- Rejected --> RB_SAN([Sanctions Reject Bin])
-  SUBFLOW_LIQ -- Accepted --> SWIFT
-  SUBFLOW_LIQ -- Rejected --> RB_LIQ([Liquidity Reject Bin])
-  RB_SAN -.-> FM[Foreman]
-  RB_LIQ -.-> FM
-
-  subgraph floor [ ]
-    RB_SAN
-    RB_LIQ
-    FM
-  end
+  inPay --> sanSub
+  sanSub -- Accepted --> liqSub
+  sanSub -- Rejected --> sanReject
+  liqSub -- Accepted --> swift
+  liqSub -- Rejected --> liqReject
+  sanReject -.-> foreman
+  liqReject -.-> foreman
 `;
 
 const LEGACY_PAYMENT_FLOW_MERMAID = `flowchart LR
-  LEG_IN([<tspan>Legacy Payment</tspan><tspan x='0' dy='1.2em'>MT103 / MT202 / MT202COV</tspan>])
-  CBDS([CBDS Ruleset])
-  PACS008([pacs.008])
-  PACS009([pacs.009])
-  IP_IN([<tspan>Incoming Payment</tspan><tspan x='0' dy='1.2em'>pacs.008 or pain.001</tspan>])
+  legacyIn["Legacy Payment<br/>MT103 / MT202 / MT202COV"]
+  cbds[CBDS Ruleset]
+  pacs008[pacs.008]
+  pacs009[pacs.009]
+  inPay["Incoming Payment<br/>pacs.008 or pain.001"]
 
-  LEG_IN --> CBDS
-  CBDS -- "MT103 to pacs.008" --> PACS008
-  CBDS -- "MT202/202COV to pacs.009" --> PACS009
-  PACS008 --> IP_IN
-  PACS009 --> IP_IN
+  legacyIn --> cbds
+  cbds -- "MT103 to pacs.008" --> pacs008
+  cbds -- "MT202/202COV to pacs.009" --> pacs009
+  pacs008 --> inPay
+  pacs009 --> inPay
 `;
 
 const CORE_OUTGOING_FLOW_MERMAID = `flowchart LR
-  CORE_TX([<tspan>Core Outgoing Tx</tspan><tspan x='0' dy='1.2em'>core.tx.outgoing</tspan>])
-  SUBFLOW_SAN([<tspan>Sanctions Subflow</tspan><tspan x='0' dy='1.2em'>Subflow</tspan>])
-  SUBFLOW_LIQ([<tspan>Liquidity Subflow</tspan><tspan x='0' dy='1.2em'>Subflow</tspan>])
-  SWIFT([SWIFT Gateway])
-  RB_SAN([Sanctions.reject])
-  RB_LIQ([Liquidity.reject])
-  FM[Foreman]
+  coreTx["Core Outgoing Tx<br/>core.tx.outgoing"]
+  sanSub["Sanctions Subflow<br/>Subflow"]
+  liqSub["Liquidity Subflow<br/>Subflow"]
+  swift[SWIFT Gateway]
+  sanReject[Sanctions.reject]
+  liqReject[Liquidity.reject]
+  foreman[Foreman]
 
-  CORE_TX --> SUBFLOW_SAN
-  SUBFLOW_SAN -- Pass --> SUBFLOW_LIQ
-  SUBFLOW_SAN -- Fail --> RB_SAN
-  SUBFLOW_LIQ -- Pass --> SWIFT
-  SUBFLOW_LIQ -- Fail --> RB_LIQ
-  RB_SAN -.-> FM
-  RB_LIQ -.-> FM
-
-  subgraph floor [ ]
-    RB_SAN
-    RB_LIQ
-    FM
-  end
+  coreTx --> sanSub
+  sanSub -- Pass --> liqSub
+  sanSub -- Fail --> sanReject
+  liqSub -- Pass --> swift
+  liqSub -- Fail --> liqReject
+  sanReject -.-> foreman
+  liqReject -.-> foreman
 `;
 
 
@@ -460,6 +469,199 @@ const FLOW_DEFINITIONS = [
   }
 ];
 
+  const WORKFLOW_CARD_METADATA = {
+    'enqueue-pacs': {
+      name: 'Enqueue PACS',
+      description: 'Submit a PACS message to the outbound queue.'
+    },
+    'pain2-routing': {
+      name: 'Pain2 Routing',
+      description: 'Route pain.001 payloads by status.'
+    },
+    'gradual-startup': {
+      name: 'Gradual Startup',
+      description: 'Stage backend startup with health gates.'
+    }
+  };
+
+  const COMPILED_WORKFLOW_ITEMS = Array.isArray(compiledWorkflowArtifacts)
+    ? compiledWorkflowArtifacts
+    : Array.isArray(compiledWorkflowArtifacts?.workflows)
+      ? compiledWorkflowArtifacts.workflows
+      : [];
+
+  function toWorkflowDisplayName(workflowId) {
+    const normalized = String(workflowId || '').replace(/[-_]+/g, ' ').trim();
+    if (!normalized) return 'Workflow';
+    return normalized.replace(/\b\w/g, (char) => char.toUpperCase());
+  }
+
+  function escapeMermaidText(value) {
+    return String(value || '')
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"')
+      .replace(/\r?\n+/g, '\\n');
+  }
+
+  function formatWorkflowCondition(condition) {
+    const field = String(condition?.field || '').trim();
+    const operator = String(condition?.operator || 'equals').trim();
+    const value = String(condition?.value || '').trim();
+    if (!field && !value) return 'Decision';
+    return `${field} ${operator} ${value}`.trim();
+  }
+
+  function describeWorkflowStep(step) {
+    if (!step || typeof step !== 'object') return 'STEP';
+    if (step.action === 'call_api') {
+      return `CALL API\n${String(step.method || 'GET').toUpperCase()} ${String(step.route || '')}`.trim();
+    }
+    if (step.action === 'check_api') {
+      return `CHECK API\n${String(step.method || 'GET').toUpperCase()} ${String(step.route || '')}\nEXPECT ${String(step.expectedStatus || '')}`.trim();
+    }
+    if (step.action === 'wait') {
+      return `WAIT\n${String(step.durationMs || 0)} ms`;
+    }
+    if (step.action === 'route_queue') {
+      return `ROUTE QUEUE\n${String(step.queueRef || '')}`.trim();
+    }
+    if (step.action === 'set_state') {
+      return `SET STATE\n${String(step.key || '')} = ${String(step.value || '')}`.trim();
+    }
+    if (step.action === 'if') {
+      return `IF\n${formatWorkflowCondition(step.condition)}`.trim();
+    }
+    return String(step.id || step.action || 'STEP').toUpperCase();
+  }
+
+  function countWorkflowSteps(steps = []) {
+    let count = 0;
+    for (const step of steps || []) {
+      count += 1;
+      if (step?.action === 'if') {
+        count += countWorkflowSteps(step.then || []);
+        count += countWorkflowSteps(step.else || []);
+      }
+    }
+    return count;
+  }
+
+  function buildWorkflowMermaid(workflow) {
+    const steps = Array.isArray(workflow?.steps) ? workflow.steps : [];
+    const lines = ['flowchart LR'];
+    let nodeIndex = 0;
+    const emitted = new Set();
+
+    const nextId = (prefix) => `${prefix}${nodeIndex += 1}`;
+
+    const addNode = (id, shape, label) => {
+      const escapedLabel = escapeMermaidText(label);
+      if (shape === 'round') {
+        lines.push(`  ${id}((\"${escapedLabel}\"))`);
+        return;
+      }
+      if (shape === 'diamond') {
+        lines.push(`  ${id}{\"${escapedLabel}\"}`);
+        return;
+      }
+      lines.push(`  ${id}[\"${escapedLabel}\"]`);
+    };
+
+    const addEdge = (from, to, label = '') => {
+      if (!from || !to) return;
+      const key = `${from}|${label}|${to}`;
+      if (emitted.has(key)) return;
+      emitted.add(key);
+      if (label) {
+        lines.push(`  ${from} -->|${escapeMermaidText(label)}| ${to}`);
+        return;
+      }
+      lines.push(`  ${from} --> ${to}`);
+    };
+
+    const renderSteps = (stepList, entryId) => {
+      let cursor = entryId;
+      for (const step of stepList || []) {
+        if (step?.action === 'if') {
+          const decisionId = nextId('if');
+          const joinId = nextId('join');
+          addNode(decisionId, 'diamond', describeWorkflowStep(step));
+          addNode(joinId, 'round', 'Merge');
+          addEdge(cursor, decisionId);
+
+          const thenTail = renderSteps(step.then || [], decisionId);
+          const elseTail = renderSteps(step.else || [], decisionId);
+
+          if (thenTail && thenTail !== decisionId) {
+            addEdge(thenTail, joinId, 'yes');
+          } else {
+            addEdge(decisionId, joinId, 'yes');
+          }
+
+          if (elseTail && elseTail !== decisionId) {
+            addEdge(elseTail, joinId, 'no');
+          } else {
+            addEdge(decisionId, joinId, 'no');
+          }
+
+          cursor = joinId;
+          continue;
+        }
+
+        const nodeId = nextId('step');
+        addNode(nodeId, 'rect', describeWorkflowStep(step));
+        addEdge(cursor, nodeId);
+        cursor = nodeId;
+      }
+      return cursor;
+    };
+
+    const startId = 'start';
+    const endId = 'end';
+    addNode(startId, 'round', 'Start');
+    addNode(endId, 'round', 'End');
+
+    const tail = renderSteps(steps, startId);
+    if (tail && tail !== startId) {
+      addEdge(tail, endId);
+    } else if (!steps.length) {
+      addEdge(startId, endId);
+    }
+
+    return lines.join('\n');
+  }
+
+  function buildWorkflowCards(workflows = []) {
+    const workflowById = new Map();
+    for (const workflow of workflows || []) {
+      const workflowId = String(workflow?.id || '').toLowerCase();
+      if (!workflowId) continue;
+      workflowById.set(workflowId, workflow);
+    }
+
+    const orderedIds = [
+      'enqueue-pacs',
+      'pain2-routing',
+      'gradual-startup',
+      ...Array.from(workflowById.keys()).filter((workflowId) => !['enqueue-pacs', 'pain2-routing', 'gradual-startup'].includes(workflowId))
+    ];
+
+    return orderedIds.map((workflowId) => {
+      const workflow = workflowById.get(workflowId) || { id: workflowId, steps: [] };
+      const metadata = WORKFLOW_CARD_METADATA[workflowId] || {};
+      const name = metadata.name || toWorkflowDisplayName(workflowId);
+      return {
+        id: String(workflow.id || workflowId),
+        name,
+        description: metadata.description || `Workflow diagram for ${name}.`,
+        stepCount: countWorkflowSteps(workflow.steps || []),
+        mermaidSource: buildWorkflowMermaid(workflow)
+      };
+    });
+  }
+
+  const DEFAULT_WORKFLOW_CARDS = buildWorkflowCards(COMPILED_WORKFLOW_ITEMS);
+
 function resolveFlowDefinition(flow) {
   const id = String(flow?.id || '').toLowerCase();
   const name = String(flow?.name || '').toLowerCase();
@@ -490,6 +692,7 @@ function App() {
   const [userAdminTask, setUserAdminTask] = useState('user');
   const [userAdminAction, setUserAdminAction] = useState('update');
   const [taskContextMenu, setTaskContextMenu] = useState({ open: false, x: 0, y: 0, taskId: null });
+  const [workflowCards, setWorkflowCards] = useState(DEFAULT_WORKFLOW_CARDS);
   const [overview, setOverview] = useState({
     workers: { lifecycle: 0, bridge: 0 },
     gateways: { swift: false, boc: false, fed: false },
@@ -517,6 +720,8 @@ function App() {
   const [cardPreview, setCardPreview] = useState({ open: false, kind: null, title: '', item: null });
   const [flowDiagramSvg, setFlowDiagramSvg] = useState('');
   const [flowDiagramError, setFlowDiagramError] = useState('');
+  const [mermaidSsePhase, setMermaidSsePhase] = useState(0);
+  const [mermaidSseConnected, setMermaidSseConnected] = useState(false);
   const [selectedFlowTransitionId, setSelectedFlowTransitionId] = useState(null);
   const flowSnapshotRef = React.useRef({});
   const deepLinkHandledRef = React.useRef(false);
@@ -526,11 +731,66 @@ function App() {
     setCollapsedSections((current) => ({ ...current, [sectionId]: !current[sectionId] }));
   }
 
+  async function copyTextToClipboard(text) {
+    const value = String(text || '');
+    if (!value) return;
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+    const textarea = document.createElement('textarea');
+    textarea.value = value;
+    textarea.setAttribute('readonly', 'true');
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+  }
+
+  function getCardContextActions(kind) {
+    const normalizedKind = String(kind || '').toLowerCase();
+    if (normalizedKind === 'workflow') {
+      return [
+        { action: 'open', label: 'Open' },
+        { action: 'open-new-window', label: 'Open in New Window' },
+        { action: 'copy-mermaid', label: 'Copy Mermaid' },
+        { action: 'copy-id', label: 'Copy ID' },
+        { action: 'rename', label: 'Rename' },
+        { action: 'delete', label: 'Hide' }
+      ];
+    }
+
+    const actions = [
+      { action: 'open', label: 'Open' },
+      { action: 'open-new-window', label: 'Open in New Window' },
+      { action: 'copy-id', label: 'Copy ID' },
+      { action: 'rename', label: 'Rename' },
+      { action: 'delete', label: 'Hide' }
+    ];
+
+    if (normalizedKind === 'flow') {
+      actions.splice(2, 0, { action: 'copy-mermaid', label: 'Copy Mermaid' });
+      actions.push({ action: 'start', label: 'Start' });
+      actions.push({ action: 'stop', label: 'Stop' });
+      actions.push({ action: 'quiesce', label: 'Quiesce' });
+      actions.push({ action: 'start up', label: 'Start Up' });
+    } else if (normalizedKind === 'service' || normalizedKind === 'server') {
+      actions.push({ action: 'start', label: 'Start' });
+      actions.push({ action: 'stop', label: 'Stop' });
+      actions.push({ action: 'quiesce', label: 'Quiesce' });
+      actions.push({ action: 'start up', label: 'Start Up' });
+    }
+
+    return actions;
+  }
+
   function openCardContextMenu(event, kind, item) {
     event.preventDefault();
     event.stopPropagation();
-    const menuWidth = 220;
-    const menuHeight = 300;
+    const menuWidth = 240;
+    const menuHeight = 34 + (getCardContextActions(kind).length * 34);
     const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
     const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
     const x = Math.max(8, Math.min(event.clientX, Math.max(8, viewportWidth - menuWidth - 8)));
@@ -608,6 +868,9 @@ function App() {
     if (normalizedKind === 'server') {
       return overview.servers.find((item) => String(item?.id || item?.name || '').toLowerCase() === normalizedId) || null;
     }
+    if (normalizedKind === 'workflow') {
+      return workflowCards.find((item) => String(item?.id || item?.name || '').toLowerCase() === normalizedId) || null;
+    }
     return null;
   }
 
@@ -665,6 +928,10 @@ function App() {
     if (kind === 'flow' || kind === 'service') {
       applyLocalRuntimeAction(kind, item, normalizedAction);
       return;
+    }
+
+    if (kind === 'workflow') {
+      throw new Error('Workflow cards are read-only. Use Open or Copy Mermaid.');
     }
 
     if (kind !== 'server') {
@@ -751,15 +1018,30 @@ function App() {
       return;
     }
 
+    if (action === 'copy-id') {
+      await copyTextToClipboard(String(item?.id || item?.name || ''));
+      closeCardContextMenu();
+      return;
+    }
+
+    if (action === 'copy-mermaid') {
+      await copyTextToClipboard(String(item?.mermaidSource || activeFlowMermaidSource || ''));
+      closeCardContextMenu();
+      return;
+    }
+
     if (action === 'open-new-window') {
       const openId = String(item?.id || item?.name || '').toLowerCase();
-      const url = new URL(window.location.href);
+      const basePath = import.meta.env.BASE_URL || '/';
+      const url = new URL(basePath, window.location.origin);
       url.searchParams.set('open', 'card');
       url.searchParams.set('kind', String(kind || '').toLowerCase());
       url.searchParams.set('id', openId);
-      const child = window.open(url.toString(), '_blank');
+      const child = window.open(url.toString(), '_blank', 'noopener,noreferrer');
       if (!child) {
         window.alert('Unable to open a new window. Please allow pop-ups for this site.');
+      } else {
+        child.focus();
       }
       closeCardContextMenu();
       return;
@@ -799,7 +1081,9 @@ function App() {
   function openCardPreview(kind, item) {
     const title = kind === 'flow'
       ? `Flow: ${item?.name || item?.id || 'Flow'}`
-      : `${kind === 'service' ? 'Service' : 'Server'}: ${item?.name || item?.id || 'Item'}`;
+      : kind === 'workflow'
+        ? `Workflow: ${item?.name || item?.id || 'Workflow'}`
+        : `${kind === 'service' ? 'Service' : 'Server'}: ${item?.name || item?.id || 'Item'}`;
     setCardPreview({ open: true, kind, title, item: item || null });
     if (kind === 'flow') {
       const firstTransition = Array.isArray(item?.transitionMetrics) ? item.transitionMetrics[0] : null;
@@ -818,13 +1102,16 @@ function App() {
   }
 
   const activeFlowMermaidSource = useMemo(() => {
-    if (!(cardPreview.open && cardPreview.kind === 'flow')) return '';
+    if (!(cardPreview.open && (cardPreview.kind === 'flow' || cardPreview.kind === 'workflow'))) return '';
+    if (cardPreview.kind === 'workflow') {
+      return cardPreview.item?.mermaidSource || '';
+    }
     const definition = resolveFlowDefinition(cardPreview.item);
     return definition?.mermaidSource || TRANSACTION_FLOW_MERMAID_SOURCE;
   }, [cardPreview.open, cardPreview.kind, cardPreview.item]);
 
   useEffect(() => {
-    if (!(cardPreview.open && cardPreview.kind === 'flow')) return undefined;
+    if (!(cardPreview.open && (cardPreview.kind === 'flow' || cardPreview.kind === 'workflow'))) return undefined;
 
     let cancelled = false;
     (async () => {
@@ -835,13 +1122,40 @@ function App() {
           securityLevel: 'loose',
           theme: 'dark'
         });
-        const renderId = `flow-diagram-${Date.now()}`;
-        let { svg } = await mermaid.render(renderId, activeFlowMermaidSource || TRANSACTION_FLOW_MERMAID_SOURCE);
+        const primarySource = activeFlowMermaidSource || TRANSACTION_FLOW_MERMAID_SOURCE;
+        const randomSuffix = Math.random().toString(36).slice(2, 10);
+        const renderId = `flow-diagram-${Date.now()}-${randomSuffix}`;
+        let { svg } = await mermaid.render(renderId, primarySource);
 
         // Post-process SVG to add animation classes
         try {
           const parser = new DOMParser();
           const doc = parser.parseFromString(svg, 'image/svg+xml');
+
+          if (cardPreview.kind === 'workflow') {
+            Array.from(doc.querySelectorAll('g.node')).forEach((node, index) => {
+              const text = String(node.textContent || '');
+              node.classList.add('workflow-node');
+              node.style.setProperty('--workflow-delay', `${index * 0.14}s`);
+
+              if (/start/i.test(text)) node.classList.add('workflow-start');
+              if (/end/i.test(text)) node.classList.add('workflow-end');
+              if (/if\b|decision|merge/i.test(text)) node.classList.add('workflow-decision');
+              if (/call api/i.test(text)) node.classList.add('workflow-call');
+              if (/check api/i.test(text)) node.classList.add('workflow-check');
+              if (/wait/i.test(text)) node.classList.add('workflow-wait');
+              if (/route queue/i.test(text)) node.classList.add('workflow-route');
+              if (/set state/i.test(text)) node.classList.add('workflow-state');
+            });
+
+            Array.from(doc.querySelectorAll('path')).forEach((pathNode, index) => {
+              const className = String(pathNode.getAttribute('class') || '');
+              if (/flowchart-link|edge/i.test(className) || pathNode.getAttribute('marker-end')) {
+                pathNode.classList.add('workflow-edge');
+                pathNode.style.setProperty('--workflow-edge-delay', `${index * 0.12}s`);
+              }
+            });
+          }
           
           // Animate the fan node (label contains 'FAN')
           const fanNode = Array.from(doc.querySelectorAll('g.node')).find(g => g.textContent && g.textContent.match(/FAN/i));
@@ -958,6 +1272,16 @@ function App() {
               g.appendChild(whistles);
             }
           });
+
+          if (cardPreview.kind === 'workflow') {
+            const workflowNodes = Array.from(doc.querySelectorAll('g.node.workflow-node'));
+            workflowNodes.forEach((node) => {
+              const body = node.querySelector('rect, polygon, ellipse, circle, path');
+              if (body) {
+                body.classList.add('workflow-body');
+              }
+            });
+          }
           
           svg = new XMLSerializer().serializeToString(doc.documentElement);
         } catch (e) {
@@ -1026,7 +1350,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [actorUserId]);
+  }, [actorUserId, pathname]);
 
   useEffect(() => {
     if (deepLinkHandledRef.current) return;
@@ -1094,7 +1418,9 @@ function App() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch('/api/authz/me');
+        const res = await fetch('/api/authz/me', {
+          headers: { 'x-user-id': actorUserId }
+        });
         const payload = await res.json().catch(() => ({}));
         if (cancelled) return;
         if (!res.ok) {
@@ -1185,9 +1511,16 @@ function App() {
     };
   }, [isResizingSidebar]);
 
+  const effectivePermissions = useMemo(() => {
+    const permissions = Array.isArray(authz.permissions) ? authz.permissions : [];
+    if (permissions.length > 0) return permissions;
+    if (String(actorUserId || '').toLowerCase() === 'system-admin') return ['*'];
+    return permissions;
+  }, [authz.permissions, actorUserId]);
+
   const visibleAreas = useMemo(
-    () => AREAS.filter(item => hasPermission(authz.permissions, item.permission)),
-    [authz.permissions]
+    () => AREAS.filter(item => hasPermission(effectivePermissions, item.permission)),
+    [effectivePermissions]
   );
 
   useEffect(() => {
@@ -1196,6 +1529,42 @@ function App() {
       setArea(visibleAreas[0].id);
     }
   }, [area, visibleAreas]);
+
+  useEffect(() => {
+    if (!(cardPreview.open && (cardPreview.kind === 'flow' || cardPreview.kind === 'workflow'))) {
+      setMermaidSseConnected(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const source = new EventSource('/api/events/mermaid');
+
+    const handleMessage = (event) => {
+      if (cancelled) return;
+      try {
+        const payload = JSON.parse(String(event?.data || '{}'));
+        const phase = Number(payload?.phase || 0);
+        setMermaidSsePhase(Number.isFinite(phase) ? phase : 0);
+      } catch {
+        setMermaidSsePhase((current) => (current + 1) % 1024);
+      }
+    };
+
+    source.onopen = () => {
+      if (!cancelled) setMermaidSseConnected(true);
+    };
+    source.onmessage = handleMessage;
+    source.addEventListener('mermaid', handleMessage);
+    source.onerror = () => {
+      if (!cancelled) setMermaidSseConnected(false);
+    };
+
+    return () => {
+      cancelled = true;
+      setMermaidSseConnected(false);
+      source.close();
+    };
+  }, [cardPreview.open, cardPreview.kind]);
 
   useEffect(() => {
     if (pathname === '/chat') return;
@@ -1238,7 +1607,37 @@ function App() {
   useEffect(() => {
     if (pathname === '/chat') return;
     let cancelled = false;
-    const loadOverview = async () => {
+    let inFlight = false;
+    let failureCount = 0;
+    let timerId = null;
+    let activeController = null;
+    const baseIntervalMs = 60000;
+    const maxIntervalMs = 300000;
+
+    const scheduleNext = (delayMs) => {
+      if (timerId) clearTimeout(timerId);
+      timerId = setTimeout(() => {
+        runOverviewRefresh(false);
+      }, delayMs);
+    };
+
+    const getHeaders = () => ({
+      'x-user-id': actorUserId
+    });
+
+    const runOverviewRefresh = async (forceNow) => {
+      if (cancelled) return;
+      if (!forceNow && document.hidden) {
+        scheduleNext(baseIntervalMs);
+        return;
+      }
+      if (inFlight) {
+        scheduleNext(baseIntervalMs);
+        return;
+      }
+
+      inFlight = true;
+      activeController = new AbortController();
       try {
         const readPayload = async (result) => {
           if (result.status !== 'fulfilled') return null;
@@ -1247,14 +1646,14 @@ function App() {
         };
 
         const [wRes, gRes, mRes, dRes, dbRes, qmRes, bRes, sRes] = await Promise.allSettled([
-          fetch('/api/lifecycle/workers', { headers: { 'x-user-id': actorUserId } }),
-          fetch('/api/gateways', { headers: { 'x-user-id': actorUserId } }),
-          fetch('/api/metrics/current', { headers: { 'x-user-id': actorUserId } }),
-          fetch('/api/lifecycle/dashboard', { headers: { 'x-user-id': actorUserId } }),
-          fetch('/api/registry/databases', { headers: { 'x-user-id': actorUserId } }),
-          fetch('/api/registry/queue-managers', { headers: { 'x-user-id': actorUserId } }),
-          fetch('/api/broker/state', { headers: { 'x-user-id': actorUserId } }),
-          fetch('/api/registry/services', { headers: { 'x-user-id': actorUserId } }),
+          fetch('/api/lifecycle/workers', { headers: getHeaders(), signal: activeController.signal }),
+          fetch('/api/gateways', { headers: getHeaders(), signal: activeController.signal }),
+          fetch('/api/metrics/current', { headers: getHeaders(), signal: activeController.signal }),
+          fetch('/api/lifecycle/dashboard', { headers: getHeaders(), signal: activeController.signal }),
+          fetch('/api/registry/databases', { headers: getHeaders(), signal: activeController.signal }),
+          fetch('/api/registry/queue-managers', { headers: getHeaders(), signal: activeController.signal }),
+          fetch('/api/broker/state', { headers: getHeaders(), signal: activeController.signal }),
+          fetch('/api/registry/services', { headers: getHeaders(), signal: activeController.signal }),
         ]);
         const [workers, gateways, metrics, dashboard, databases, queueManagers, brokers, servicesPayload] = await Promise.all([
           readPayload(wRes),
@@ -1459,16 +1858,37 @@ function App() {
             memoryUsagePercent: Number(metrics?.metrics?.systemResources?.memory?.usagePercent ?? null),
           }
         });
-      } catch {
+        failureCount = 0;
+      } catch (error) {
         if (cancelled) return;
+        if (error?.name !== 'AbortError') {
+          failureCount = Math.min(failureCount + 1, 3);
+        }
+      } finally {
+        inFlight = false;
+        activeController = null;
+        if (!cancelled) {
+          const nextDelay = failureCount === 0
+            ? baseIntervalMs
+            : Math.min(baseIntervalMs * (2 ** failureCount), maxIntervalMs);
+          scheduleNext(nextDelay);
+        }
       }
     };
 
-    loadOverview();
-    const timer = setInterval(loadOverview, 4000);
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        runOverviewRefresh(true);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    runOverviewRefresh(true);
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      if (timerId) clearTimeout(timerId);
+      if (activeController) activeController.abort();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [actorUserId, pathname, askBoxActive]);
 
@@ -1579,7 +1999,7 @@ function App() {
         return (
           <div className="stacked-panels">
             <FlowTargetsDashboard />
-            <QueueManagerDashboard />
+            <QueueManagerDashboard actorPermissions={effectivePermissions} />
           </div>
         );
       }
@@ -1598,12 +2018,12 @@ function App() {
     }
     if (area === 'user-admin') {
       if (userAdminTask === 'user') {
-        return <UserManagementDashboard />;
+        return <UserManagementDashboard actorPermissions={effectivePermissions} />;
       }
       if (userAdminTask === 'profile') {
-        return <ProfileManagementDashboard />;
+        return <ProfileManagementDashboard actorPermissions={effectivePermissions} />;
       }
-      return <UserInProfileDashboard />;
+      return <UserInProfileDashboard actorPermissions={effectivePermissions} />;
     }
 
     return (
@@ -1886,6 +2306,32 @@ function App() {
                     })}
                   </div>
                 </section>
+
+                <section className="login-mini-section">
+                  <header>
+                    <h3>{copy.tasks}</h3>
+                    <span className="login-mini-toggle">{workflowCards.length}</span>
+                  </header>
+                  <div className="login-mini-grid">
+                    {workflowCards.length === 0 ? <div className="login-mini-empty">{copy.noItems}</div> : workflowCards.map((workflow) => {
+                      const stepLabel = `${workflow.stepCount || 0} steps`;
+                      return (
+                        <article
+                          key={workflow.id}
+                          className="login-mini-card is-workflow"
+                          onClick={() => openCardPreview('workflow', workflow)}
+                          onContextMenu={(event) => openCardContextMenu(event, 'workflow', workflow)}
+                          title="Open workflow diagram"
+                        >
+                          <div className="login-mini-badge">{workflow.stepCount || 0}</div>
+                          <strong>{getCardDisplayName('workflow', workflow, workflow.name)}</strong>
+                          <div className="login-mini-row"><span>Type</span><b>Workflow</b></div>
+                          <div className="login-mini-row"><span>Steps</span><b>{stepLabel}</b></div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </section>
               </div>
             </section>
           </>
@@ -1960,43 +2406,59 @@ function App() {
               <h3>{cardPreview.title}</h3>
               <button type="button" className="card-open-close" onClick={closeCardPreview}>Close</button>
             </header>
-            {cardPreview.kind === 'flow' ? (
+            {cardPreview.kind === 'flow' || cardPreview.kind === 'workflow' ? (
               <>
-                <p className="card-open-subtitle">Click a transition to view live queue metrics.</p>
+                <p className="card-open-subtitle">
+                  {cardPreview.kind === 'workflow'
+                    ? 'Animated workflow diagram generated from the WFL source.'
+                    : 'Click a transition to view live queue metrics.'}
+                </p>
                 {flowDiagramSvg ? (
                   <div
-                    className="card-open-mermaid-diagram"
+                    className={`card-open-mermaid-diagram${mermaidSseConnected ? ' is-sse-live' : ''}`}
+                    style={{ '--mermaid-sse-phase': mermaidSsePhase }}
                     dangerouslySetInnerHTML={{ __html: flowDiagramSvg }}
                   />
                 ) : (
                   <pre className="card-open-mermaid">{flowDiagramError || activeFlowMermaidSource || TRANSACTION_FLOW_MERMAID_SOURCE}</pre>
                 )}
-                <div className="card-open-transition-list">
-                  {(cardPreview.item?.transitionMetrics || []).map((transition) => (
-                    <button
-                      key={transition.id}
-                      type="button"
-                      className={`card-open-transition-chip${selectedFlowTransitionId === transition.id ? ' is-active' : ''}`}
-                      onClick={() => setSelectedFlowTransitionId(transition.id)}
-                    >
-                      {transition.label}
-                    </button>
-                  ))}
-                </div>
-                {(() => {
-                  const selected = (cardPreview.item?.transitionMetrics || []).find((transition) => transition.id === selectedFlowTransitionId)
-                    || (cardPreview.item?.transitionMetrics || [])[0]
-                    || null;
-                  if (!selected) return null;
-                  return (
-                    <div className="card-open-transition-panel">
-                      <h4>{selected.label}</h4>
-                      <div><span>Queue</span><strong>{selected.queueName}</strong></div>
-                      <div><span>Messages Waiting</span><strong>{selected.waiting}</strong></div>
-                      <div><span>Cumulative Count</span><strong>{selected.cumulative}</strong></div>
+                {cardPreview.kind === 'flow' ? (
+                  <>
+                    <div className="card-open-transition-list">
+                      {(cardPreview.item?.transitionMetrics || []).map((transition) => (
+                        <button
+                          key={transition.id}
+                          type="button"
+                          className={`card-open-transition-chip${selectedFlowTransitionId === transition.id ? ' is-active' : ''}`}
+                          onClick={() => setSelectedFlowTransitionId(transition.id)}
+                        >
+                          {transition.label}
+                        </button>
+                      ))}
                     </div>
-                  );
-                })()}
+                    {(() => {
+                      const selected = (cardPreview.item?.transitionMetrics || []).find((transition) => transition.id === selectedFlowTransitionId)
+                        || (cardPreview.item?.transitionMetrics || [])[0]
+                        || null;
+                      if (!selected) return null;
+                      return (
+                        <div className="card-open-transition-panel">
+                          <h4>{selected.label}</h4>
+                          <div><span>Queue</span><strong>{selected.queueName}</strong></div>
+                          <div><span>Messages Waiting</span><strong>{selected.waiting}</strong></div>
+                          <div><span>Cumulative Count</span><strong>{selected.cumulative}</strong></div>
+                        </div>
+                      );
+                    })()}
+                  </>
+                ) : (
+                  <div className="card-open-details">
+                    <div><span>Name</span><strong>{cardPreview.item?.name || 'N/A'}</strong></div>
+                    <div><span>Steps</span><strong>{cardPreview.item?.stepCount ?? 0}</strong></div>
+                    <div><span>Description</span><strong>{cardPreview.item?.description || 'Workflow diagram'}</strong></div>
+                    <div><span>Kind</span><strong>{cardPreview.kind}</strong></div>
+                  </div>
+                )}
               </>
             ) : (
               <div className="card-open-details">

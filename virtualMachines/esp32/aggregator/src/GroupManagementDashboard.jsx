@@ -11,7 +11,7 @@ function parsePrivileges(value) {
   );
 }
 
-export default function GroupManagementDashboard() {
+export default function GroupManagementDashboard({ actorPermissions = [] }) {
   const [groups, setGroups] = useState([]);
   const [selectedGroupId, setSelectedGroupId] = useState('');
   const [label, setLabel] = useState('');
@@ -27,15 +27,12 @@ export default function GroupManagementDashboard() {
     [groups, selectedGroupId]
   );
 
-  async function loadAuthz() {
-    const res = await fetch('/api/authz/me');
-    if (!res.ok) throw new Error(`Authz failed (${res.status})`);
-    const payload = await res.json();
-    const permissions = Array.isArray(payload.permissions) ? payload.permissions : [];
+  useEffect(() => {
+    const permissions = Array.isArray(actorPermissions) ? actorPermissions : [];
     const has = (permission) => permissions.includes('*') || permissions.includes(permission) || permissions.includes('users.*');
     setCanRead(has('users.read'));
     setCanManage(has('users.manage'));
-  }
+  }, [actorPermissions]);
 
   async function loadGroups() {
     const query = includeDeleted ? '?includeDeleted=1' : '';
@@ -52,7 +49,6 @@ export default function GroupManagementDashboard() {
 
   async function refreshAll() {
     try {
-      await loadAuthz();
       await loadGroups();
       setStatus('');
     } catch (e) {

@@ -217,6 +217,114 @@
     transform: rotate(-35deg);
   }
 }
+
+.card-open-mermaid-diagram .workflow-node {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  will-change: transform, filter, opacity;
+  animation: workflow-node-pulse 2.2s ease-in-out infinite;
+  animation-delay: var(--workflow-delay, 0s);
+}
+
+.card-open-mermaid-diagram .workflow-node.workflow-start,
+.card-open-mermaid-diagram .workflow-node.workflow-end {
+  animation: workflow-endcap-pulse 1.8s ease-in-out infinite;
+}
+
+.card-open-mermaid-diagram .workflow-node.workflow-decision {
+  animation: workflow-decision-pulse 1.6s ease-in-out infinite;
+}
+
+.card-open-mermaid-diagram .workflow-node.workflow-wait .workflow-body {
+  animation: workflow-wait-glow 1.4s ease-in-out infinite;
+}
+
+.card-open-mermaid-diagram .workflow-node.workflow-call .workflow-body,
+.card-open-mermaid-diagram .workflow-node.workflow-check .workflow-body,
+.card-open-mermaid-diagram .workflow-node.workflow-route .workflow-body,
+.card-open-mermaid-diagram .workflow-node.workflow-state .workflow-body {
+  animation: workflow-action-pulse 1.7s ease-in-out infinite;
+}
+
+.card-open-mermaid-diagram .workflow-body {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  will-change: transform, filter, opacity;
+}
+
+.card-open-mermaid-diagram .workflow-edge {
+  stroke-dasharray: 9 6;
+  will-change: stroke-dashoffset, opacity;
+  animation: workflow-edge-flow 1.35s linear infinite;
+  animation-delay: var(--workflow-edge-delay, 0s);
+}
+
+@keyframes workflow-node-pulse {
+  0%, 100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 0 rgba(96, 182, 255, 0));
+    opacity: 0.94;
+  }
+  50% {
+    transform: scale(1.035);
+    filter: drop-shadow(0 0 6px rgba(96, 182, 255, 0.28));
+    opacity: 1;
+  }
+}
+
+@keyframes workflow-endcap-pulse {
+  0%, 100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 0 rgba(121, 236, 190, 0));
+  }
+  50% {
+    transform: scale(1.045);
+    filter: drop-shadow(0 0 6px rgba(121, 236, 190, 0.32));
+  }
+}
+
+@keyframes workflow-decision-pulse {
+  0%, 100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 0 rgba(255, 184, 84, 0));
+  }
+  50% {
+    transform: scale(1.04);
+    filter: drop-shadow(0 0 6px rgba(255, 184, 84, 0.33));
+  }
+}
+
+@keyframes workflow-wait-glow {
+  0%, 100% {
+    filter: drop-shadow(0 0 0 rgba(139, 213, 202, 0));
+  }
+  50% {
+    filter: drop-shadow(0 0 7px rgba(139, 213, 202, 0.36));
+  }
+}
+
+@keyframes workflow-action-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.95;
+  }
+  50% {
+    transform: scale(1.03);
+    opacity: 1;
+  }
+}
+
+@keyframes workflow-edge-flow {
+  0% {
+    stroke-dashoffset: 0;
+    opacity: 0.65;
+  }
+  100% {
+    stroke-dashoffset: -30;
+    opacity: 1;
+  }
+}
+
 .app-shell {
   --control-line: #2f5f9f;
   --control-line-strong: #3b7dd8;
@@ -641,7 +749,7 @@
 
 .login-mini-sections {
   display: grid;
-  grid-template-columns: repeat(3, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 12px;
 }
 
@@ -707,6 +815,11 @@
   box-sizing: border-box;
   position: relative;
   cursor: context-menu;
+}
+
+.login-mini-card.is-workflow {
+  cursor: pointer;
+  background: color-mix(in srgb, #132032 84%, #29426c);
 }
 
 .card-context-menu {
@@ -802,11 +915,20 @@
 }
 
 .card-open-mermaid-diagram {
+  --mermaid-sse-phase: 0;
   border-radius: 10px;
   border: 1px solid rgba(101, 136, 178, 0.45);
   background: #0a111b;
   padding: 10px;
   overflow: auto;
+}
+
+.card-open-mermaid-diagram.is-sse-live .workflow-node {
+  animation-delay: calc(var(--mermaid-sse-phase, 0) * -120ms);
+}
+
+.card-open-mermaid-diagram.is-sse-live .workflow-edge {
+  animation-delay: calc(var(--mermaid-sse-phase, 0) * -90ms);
 }
 
 .card-open-mermaid-diagram svg {

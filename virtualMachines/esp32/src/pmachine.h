@@ -184,6 +184,8 @@ public:
     void setBreakpoint(uint16_t pc);
     void clearBreakpoint(uint16_t pc);
     void clearAllBreakpoints();
+    bool didLastRunHitStepLimit() const;
+    size_t getLastRunStepCount() const;
 private:
     ::FederatedFileSystem *ffs = nullptr;
     PCodeMap pcodeMap;
@@ -201,6 +203,8 @@ private:
     std::vector<RouteDelivery> routingDeliveries;
     std::map<std::string, MappingDef> mappingDefs;
     ::EnumManager* enumManager = nullptr;
+    bool lastRunStepLimitHit = false;
+    size_t lastRunStepCount = 0;
 
     // Handler table for opcode dispatch
     using HandlerFunc = void (*)(PMachine&, const PInstruction&, int*, int&, int&, int&);

@@ -2,10 +2,65 @@
 #include "FederatedFileSystemRoutes.h"
 #include <vector>
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #if defined(ESP32)
 #include <SD.h>
 #endif
 #include <LittleFS.h>
+
+namespace {
+
+bool parseBoolLike(String value, bool defaultValue = false) {
+    value.trim();
+    value.toLowerCase();
+    if (value == "1" || value == "true" || value == "yes" || value == "on") return true;
+    if (value == "0" || value == "false" || value == "no" || value == "off") return false;
+    return defaultValue;
+}
+
+String mountTypeToString(FFSMountType type) {
+    return type == FFSMountType::Peer ? "peer" : "local";
+}
+
+FFSMountType mountTypeFromString(String value) {
+    value.trim();
+    value.toLowerCase();
+    return value == "peer" ? FFSMountType::Peer : FFSMountType::LocalAlias;
+}
+
+String normalizeMountPoint(String mountPoint) {
+    mountPoint.trim();
+    if (!mountPoint.startsWith("/")) mountPoint = "/" + mountPoint;
+    while (mountPoint.endsWith("/") && mountPoint.length() > 1) {
+        mountPoint.remove(mountPoint.length() - 1);
+    }
+    return mountPoint;
+}
+
+String getParamValue(AsyncWebServerRequest* request, const char* name) {
+    if (request->hasParam(name, true)) return request->getParam(name, true)->value();
+    if (request->hasParam(name)) return request->getParam(name)->value();
+    return String();
+}
+
+bool readLittleFsFile(const String& path, String& out) {
+    if (!LittleFS.exists(path)) return false;
+    File f = LittleFS.open(path, "r");
+    if (!f) return false;
+    out = f.readString();
+    f.close();
+    return true;
+}
+
+void appendFlowBundle(JsonArray bundles, const String& bundleName) {
+    JsonObject obj = bundles.add<JsonObject>();
+    obj["name"] = bundleName;
+    obj["path"] = String("/flows/") + bundleName;
+    obj["manifestPath"] = String("/flows/") + bundleName + "/manifest.json";
+    obj["hasManifest"] = LittleFS.exists(obj["manifestPath"].as<String>());
+}
+
+} // namespace
 
 void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS) {
 
@@ -262,4 +317,138 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
         json += "]";
         request->send(200, "application/json", json);
     });
+
+        server.on("/ffs/flows", HTTP_GET, [](AsyncWebServerRequest *request){
+            JsonDocument doc;
+            JsonArray bundles = doc["flows"].to<JsonArray>();
+            if (LittleFS.exists("/flows")) {
+                File root = LittleFS.open("/flows");
+                if (root && root.isDirectory()) {
+                    File entry = root.openNextFile();
+                    while (entry) {
+                        if (entry.isDirectory()) {
+                            String name = String(entry.name());
+                            if (name.startsWith("/flows/")) {
+                                name = name.substring(7);
+                            }
+                            if (name.length() > 0) {
+                                appendFlowBundle(bundles, name);
+                            }
+                        }
+                        entry = root.openNextFile();
+                    }
+                    root.close();
+                }
+            }
+            String response;
+            serializeJson(doc, response);
+            request->send(200, "application/json", response);
+        });
+
+        server.on("/ffs/flows/manifest", HTTP_GET, [](AsyncWebServerRequest *request){
+            String bundle = getParamValue(request, "bundle");
+            if (bundle.length() == 0) {
+                request->send(400, "text/plain", "Missing bundle param");
+                return;
+            }
+            bundle.trim();
+            if (bundle.startsWith("/")) bundle.remove(0, 1);
+            String manifestPath = String("/flows/") + bundle + "/manifest.json";
+            String manifest;
+            if (!readLittleFsFile(manifestPath, manifest)) {
+                request->send(404, "text/plain", "Manifest not found");
+                return;
+            }
+            request->send(200, "application/json", manifest);
+        });
+
+        server.on("/ffs/flows/file", HTTP_GET, [](AsyncWebServerRequest *request){
+            String bundle = getParamValue(request, "bundle");
+            String fileName = getParamValue(request, "file");
+            if (bundle.length() == 0 || fileName.length() == 0) {
+                request->send(400, "text/plain", "Missing bundle or file param");
+                return;
+            }
+            bundle.trim();
+            fileName.trim();
+            if (bundle.startsWith("/")) bundle.remove(0, 1);
+            if (fileName.startsWith("/")) fileName.remove(0, 1);
+            String path = String("/flows/") + bundle + "/" + fileName;
+            std::vector<uint8_t> data;
+            if (LittleFS.exists(path)) {
+                File f = LittleFS.open(path, "r");
+                if (f) {
+                    while (f.available()) data.push_back(static_cast<uint8_t>(f.read()));
+                    f.close();
+                }
+            }
+            if (data.empty()) {
+                request->send(404, "text/plain", "Flow file not found");
+                return;
+            }
+            request->send(200, "application/octet-stream", data.data(), data.size());
+        });
+
+        server.on("/ffs/mounts", HTTP_GET, [&federatedFS](AsyncWebServerRequest *request){
+            JsonDocument doc;
+            JsonArray mounts = doc["mounts"].to<JsonArray>();
+            for (const auto& entry : federatedFS.listMountPoints()) {
+                JsonObject obj = mounts.add<JsonObject>();
+                obj["mountPoint"] = entry.mountPoint;
+                obj["targetPath"] = entry.targetPath;
+                obj["peerId"] = entry.peerId;
+                obj["type"] = mountTypeToString(entry.type);
+                obj["readOnly"] = entry.readOnly;
+            }
+            String response;
+            serializeJson(doc, response);
+            request->send(200, "application/json", response);
+        });
+
+        auto mountHandler = [&federatedFS](AsyncWebServerRequest *request){
+            String mountPoint = normalizeMountPoint(getParamValue(request, "mount"));
+            String targetPath = getParamValue(request, "target");
+            String peerId = getParamValue(request, "peer");
+            String type = getParamValue(request, "type");
+            String readOnlyValue = getParamValue(request, "readOnly");
+
+            if (mountPoint.length() == 0) {
+                request->send(400, "text/plain", "Missing mount param");
+                return;
+            }
+
+            if (type.length() == 0) type = peerId.length() > 0 ? "peer" : "local";
+            FFSMountType mountType = mountTypeFromString(type);
+            bool readOnly = parseBoolLike(readOnlyValue, mountType == FFSMountType::Peer);
+
+            if (mountType == FFSMountType::Peer) {
+                if (peerId.length() == 0) {
+                    request->send(400, "text/plain", "Missing peer param for peer mount");
+                    return;
+                }
+                if (targetPath.length() == 0) targetPath = mountPoint;
+            } else {
+                if (targetPath.length() == 0) {
+                    request->send(400, "text/plain", "Missing target param for local mount");
+                    return;
+                }
+            }
+
+            FFSStatus st = federatedFS.addMountPoint(mountPoint, targetPath, mountType, peerId, readOnly);
+            request->send(st == FFSStatus::OK ? 200 : 500, "application/json", st == FFSStatus::OK ? "{\"status\":\"ok\"}" : "{\"status\":\"error\"}");
+        };
+        server.on("/ffs/mount", HTTP_POST, mountHandler);
+        server.on("/ffs/mount", HTTP_GET, mountHandler);
+
+        auto unmountHandler = [&federatedFS](AsyncWebServerRequest *request){
+            String mountPoint = normalizeMountPoint(getParamValue(request, "mount"));
+            if (mountPoint.length() == 0) {
+                request->send(400, "text/plain", "Missing mount param");
+                return;
+            }
+            FFSStatus st = federatedFS.removeMountPoint(mountPoint);
+            request->send(st == FFSStatus::OK ? 200 : 404, "application/json", st == FFSStatus::OK ? "{\"status\":\"ok\"}" : "{\"status\":\"not_found\"}");
+        };
+        server.on("/ffs/unmount", HTTP_POST, unmountHandler);
+        server.on("/ffs/unmount", HTTP_DELETE, unmountHandler);
 }

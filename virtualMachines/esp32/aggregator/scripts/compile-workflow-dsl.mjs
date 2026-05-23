@@ -92,6 +92,31 @@ function parseStepSetState(stepLine) {
   };
 }
 
+function parseStepWait(stepLine) {
+  const stepMatch = stepLine.match(/^STEP\s+("[^"]+"|'[^']+')\s+WAIT\s+(\d+)\s*;$/i);
+  if (!stepMatch) return null;
+  return {
+    id: parseQuoted(stepMatch[1]),
+    action: 'wait',
+    durationMs: Number(stepMatch[2])
+  };
+}
+
+function parseStepCheckApi(stepLine) {
+  const stepMatch = stepLine.match(/^STEP\s+("[^"]+"|'[^']+')\s+CHECK\s+API\s+("[^"]+"|'[^']+')\s+(GET|POST|PUT|PATCH|DELETE)\s+("[^"]+"|'[^']+')\s+EXPECT\s+(\d+)\s+RETRIES\s+(\d+)\s+EVERY\s+(\d+)\s*;$/i);
+  if (!stepMatch) return null;
+  return {
+    id: parseQuoted(stepMatch[1]),
+    action: 'check_api',
+    apiSymbol: parseQuoted(stepMatch[2]),
+    method: String(stepMatch[3] || 'GET').toUpperCase(),
+    route: parseQuoted(stepMatch[4]),
+    expectedStatus: Number(stepMatch[5]),
+    retries: Math.max(1, Number(stepMatch[6])),
+    everyMs: Math.max(1, Number(stepMatch[7]))
+  };
+}
+
 function parseIfHeader(stepLine, ifCounter) {
   const ifMatch = stepLine.match(/^IF\s+FIELD\s+("[^"]+"|'[^']+')\s+(EQUALS|CONTAINS)\s+("[^"]+"|'[^']+')\s+THEN$/i);
   if (!ifMatch) return null;
@@ -145,6 +170,16 @@ function parseStatementAt(lines, index, ifCounterRef) {
   const setState = parseStepSetState(stepLine);
   if (setState) {
     return { step: setState, nextIndex: index + 1 };
+  }
+
+  const waitStep = parseStepWait(stepLine);
+  if (waitStep) {
+    return { step: waitStep, nextIndex: index + 1 };
+  }
+
+  const checkApi = parseStepCheckApi(stepLine);
+  if (checkApi) {
+    return { step: checkApi, nextIndex: index + 1 };
   }
 
   const ifHeader = parseIfHeader(stepLine, ifCounterRef.value);

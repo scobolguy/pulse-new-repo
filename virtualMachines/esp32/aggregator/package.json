@@ -5,6 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:backend": "node backend.mjs",
+    "supervisor:heartbeat:host": "node scripts/supervisor-heartbeat-host.mjs",
+    "supervisor:heartbeat:host:once": "node scripts/supervisor-heartbeat-host.mjs --once",
+    "dev:frontend:wait-backend": "node scripts/dev-frontend-when-backend.mjs",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
@@ -18,7 +22,8 @@
     "compile:lifecycle": "node scripts/compile-transaction-lifecycle-dsl.mjs --in data/transaction-lifecycle.tsl",
     "load:stress-flows": "node stress-flows-load-test.mjs",
     "load:stress-sweep": "node scripts/stress-runtime-sweep.mjs",
-    "load:stress-compare": "node scripts/compare-stress-reports.mjs"
+    "load:stress-compare": "node scripts/compare-stress-reports.mjs",
+    "test:smoke:ui": "node scripts/smoke-ui.mjs"
   },
   "dependencies": {
     "amqplib": "^0.10.4",
@@ -44,6 +49,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.5.0",
+    "playwright": "^1.60.0",
     "vite": "^8.0.10"
   }
 }

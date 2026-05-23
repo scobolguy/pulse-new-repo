@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
-export default function ProfileManagementDashboard() {
+export default function ProfileManagementDashboard({ actorPermissions = [] }) {
   const [profiles, setProfiles] = useState([]);
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const [permissionsText, setPermissionsText] = useState('');
@@ -26,15 +26,12 @@ export default function ProfileManagementDashboard() {
     );
   }
 
-  async function loadAuthz() {
-    const res = await fetch('/api/authz/me');
-    if (!res.ok) throw new Error(`Authz failed (${res.status})`);
-    const payload = await res.json();
-    const permissions = Array.isArray(payload.permissions) ? payload.permissions : [];
+  useEffect(() => {
+    const permissions = Array.isArray(actorPermissions) ? actorPermissions : [];
     const has = (permission) => permissions.includes('*') || permissions.includes(permission) || permissions.includes('users.*');
     setCanRead(has('users.read'));
     setCanManage(has('users.manage'));
-  }
+  }, [actorPermissions]);
 
   async function loadProfiles() {
     const res = await fetch('/api/users/profiles');
@@ -49,7 +46,6 @@ export default function ProfileManagementDashboard() {
 
   async function refreshAll() {
     try {
-      await loadAuthz();
       await loadProfiles();
       setStatus('');
     } catch (e) {
