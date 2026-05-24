@@ -10,6 +10,11 @@ const viteCacheDir = process.env.VITE_CACHE_DIR || path.join(runtimeDataRoot, 'v
 export default defineConfig({
   plugins: [react()],
   cacheDir: viteCacheDir,
+  optimizeDeps: {
+    noDiscovery: true,
+    include: [],
+    exclude: ['mermaid'],
+  },
   server: {
     host: '0.0.0.0',
     port: 5173,

@@ -186,8 +186,19 @@
         "text-string"
       ],
       "createdByUser": false
+    },
+    "swift.inbound": {
+      "name": "swift.inbound",
+      "createdAt": 1779575134197,
+      "frozen": false,
+      "queueClass": "permanent",
+      "dataTypeId": "text-string",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "createdByUser": false
     }
   },
-  "configVersion": 17,
-  "timestamp": 1779568349267
+  "configVersion": 18,
+  "timestamp": 1779575134198
 }
