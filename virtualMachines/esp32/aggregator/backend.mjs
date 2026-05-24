@@ -160,6 +160,10 @@ const PULSE_QUEUE_PERSISTENCE = true;
 const PULSE_QUEUE_DATA_ROOT = PULSE_QUEUE_PERSISTENCE
   ? path.resolve(readEnvString('PULSE_QUEUE_DATA_ROOT', DEFAULT_QUEUE_DATA_ROOT))
   : null;
+const RUNTIME_DATA_ROOT = path.resolve(readEnvString('PULSE_RUNTIME_DATA_ROOT', PULSE_QUEUE_DATA_ROOT || DEFAULT_QUEUE_DATA_ROOT));
+const WORKER_CONFIG_PATH = path.join(RUNTIME_DATA_ROOT, 'worker-config.json');
+const ROUTER_RULES_PATH = path.join(RUNTIME_DATA_ROOT, 'router-rules.json');
+const DATA_MAPPINGS_PATH = path.join(RUNTIME_DATA_ROOT, 'data-mappings.json');
 const TX_STATE_LOG_SHIPPING_PATH = path.resolve(PULSE_QUEUE_DATA_ROOT, 'transaction-state-log-shipping.jsonl');
 const TX_STATE_LOG_SHIPPING_BATCH_SIZE = Math.max(1, readEnvNumber('TX_STATE_LOG_SHIPPING_BATCH_SIZE', 200));
 const TX_STATE_LOG_SHIPPING_INTERVAL_MS = Math.max(0, readEnvNumber('TX_STATE_LOG_SHIPPING_INTERVAL_MS', 15000));
@@ -170,6 +174,49 @@ const TX_STATE_EMERGENCY_LOG_SHIPPING = (rawEmergencyLogShipping === '1' || rawE
 if (rawQueuePersistenceFlag === '0' || rawQueuePersistenceFlag === 'false' || rawQueuePersistenceFlag === 'no') {
   throw new Error('[CONFIG] PULSE_QUEUE_PERSISTENCE=false is not allowed: queue persistence is mandatory.');
 }
+
+function seedRuntimeFileIfMissing(targetPath, repoRelativeSource) {
+  try {
+    if (fs.existsSync(targetPath)) return;
+    const sourcePath = fileURLToPath(new URL(repoRelativeSource, import.meta.url));
+    if (!fs.existsSync(sourcePath)) return;
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.copyFileSync(sourcePath, targetPath);
+  } catch (e) {
+    console.warn(`[CONFIG] Failed to seed runtime file ${targetPath}: ${e.message}`);
+  }
+}
+
+function ensureLifecycleCompiledArtifact() {
+  const compiledPath = path.join(RUNTIME_DATA_ROOT, 'transaction-lifecycle-compiled.json');
+  if (fs.existsSync(compiledPath)) return;
+
+  const runtimeDslPath = path.join(RUNTIME_DATA_ROOT, 'transaction-lifecycle.tsl');
+  seedRuntimeFileIfMissing(runtimeDslPath, './data/transaction-lifecycle.tsl');
+  if (!fs.existsSync(runtimeDslPath)) return;
+
+  try {
+    const compileScript = fileURLToPath(new URL('./scripts/compile-transaction-lifecycle-dsl.mjs', import.meta.url));
+    execFileSync(process.execPath, [compileScript, '--in', runtimeDslPath], {
+      stdio: 'pipe',
+      cwd: fileURLToPath(new URL('.', import.meta.url))
+    });
+  } catch (e) {
+    const detail = e?.stderr ? String(e.stderr) : e.message;
+    console.warn(`[CONFIG] Failed to generate lifecycle compiled artifact: ${detail}`);
+  }
+}
+
+fs.mkdirSync(RUNTIME_DATA_ROOT, { recursive: true });
+seedRuntimeFileIfMissing(WORKER_CONFIG_PATH, './data/worker-config.json');
+seedRuntimeFileIfMissing(ROUTER_RULES_PATH, './data/router-rules.json');
+seedRuntimeFileIfMissing(DATA_MAPPINGS_PATH, './data/data-mappings.json');
+seedRuntimeFileIfMissing(path.join(RUNTIME_DATA_ROOT, 'user-management.json'), './data/user-management.json');
+seedRuntimeFileIfMissing(path.join(RUNTIME_DATA_ROOT, 'user-groups.json'), './data/user-groups.json');
+seedRuntimeFileIfMissing(path.join(RUNTIME_DATA_ROOT, 'monitor-classes.json'), './data/monitor-classes.json');
+seedRuntimeFileIfMissing(path.join(RUNTIME_DATA_ROOT, 'process-governance.json'), './data/process-governance.json');
+seedRuntimeFileIfMissing(path.join(RUNTIME_DATA_ROOT, 'compliance', 'sanctions-cache.json'), './data/compliance/sanctions-cache.json');
+ensureLifecycleCompiledArtifact();
 
 function normalizeCardOverrides(payload) {
   const source = payload && typeof payload === 'object' ? payload : {};
@@ -574,17 +621,17 @@ const pendingManagerSync = new Map();
 const remoteAgentRegistry = new Map();
 const remoteQueueManagerProcesses = new Map();
 const queueManagerScriptPath = fileURLToPath(new URL('./queue-manager-node.mjs', import.meta.url));
-const QUEUE_VALIDATION_LOG_PATH = './data/queue-validation-errors.jsonl';
-const DLQ_EVENT_LOG_PATH = './data/dlq-events.jsonl';
-const TX_LIFECYCLE_COMPILED_PATH = './data/transaction-lifecycle-compiled.json';
+const QUEUE_VALIDATION_LOG_PATH = path.join(RUNTIME_DATA_ROOT, 'queue-validation-errors.jsonl');
+const DLQ_EVENT_LOG_PATH = path.join(RUNTIME_DATA_ROOT, 'dlq-events.jsonl');
+const TX_LIFECYCLE_COMPILED_PATH = path.join(RUNTIME_DATA_ROOT, 'transaction-lifecycle-compiled.json');
 let _txLifecycleCompiledCache = null;
 let _txLifecycleCompiledMtimeMs = 0;
-const SANCTIONS_CACHE_PATH = './data/compliance/sanctions-cache.json';
-const USER_MANAGEMENT_PATH = './data/user-management.json';
-const USER_GROUPS_PATH = './data/user-groups.json';
-const MONITOR_CLASSES_PATH = './data/monitor-classes.json';
-const PROCESS_GOVERNANCE_PATH = './data/process-governance.json';
-const AUDIT_LOG_PATH = './data/audit-api.jsonl';
+const SANCTIONS_CACHE_PATH = path.join(RUNTIME_DATA_ROOT, 'compliance', 'sanctions-cache.json');
+const USER_MANAGEMENT_PATH = path.join(RUNTIME_DATA_ROOT, 'user-management.json');
+const USER_GROUPS_PATH = path.join(RUNTIME_DATA_ROOT, 'user-groups.json');
+const MONITOR_CLASSES_PATH = path.join(RUNTIME_DATA_ROOT, 'monitor-classes.json');
+const PROCESS_GOVERNANCE_PATH = path.join(RUNTIME_DATA_ROOT, 'process-governance.json');
+const AUDIT_LOG_PATH = path.join(RUNTIME_DATA_ROOT, 'audit-api.jsonl');
 const SQL_INSTANCE_MODE = readEnvString('SQL_INSTANCE_MODE', 'sqlexpress').trim().toLowerCase();
 const DEFAULT_GROUP_PROVIDER = SQL_INSTANCE_MODE === 'sqlexpress' || SQL_INSTANCE_MODE === 'default' ? 'mssql' : 'file';
 const GROUP_PROVIDER = readEnvString('GROUP_PROVIDER', DEFAULT_GROUP_PROVIDER).trim().toLowerCase();
@@ -4224,8 +4271,8 @@ async function replicateDequeueToFollowers(queueName, removedMessage, leaderMana
 }
 
 const messageRouter = createRouterEngine({
-  rulesPath: './data/router-rules.json',
-  mappingsPath: './data/data-mappings.json',
+  rulesPath: ROUTER_RULES_PATH,
+  mappingsPath: DATA_MAPPINGS_PATH,
   serviceId: 'aggregator-router-service',
   publishToQueue: async ({ queueName, message, sourceService, messageEnvelope = null, dataTypeIds }) => {
     let route = ensureRoute(queueName);
@@ -4258,8 +4305,8 @@ const messageRouter = createRouterEngine({
 console.log('[DEBUG] Initializing metrics collector...');
 const metricsCollector = new MetricsCollector({
   collectionIntervalMs: 10000,  // 10 seconds
-  metricsFilePath: './data/worker-metrics.jsonl',
-  performanceFilePath: './data/worker-performance.jsonl',
+  metricsFilePath: path.join(RUNTIME_DATA_ROOT, 'worker-metrics.jsonl'),
+  performanceFilePath: path.join(RUNTIME_DATA_ROOT, 'worker-performance.jsonl'),
   maxFileSizeMB: 100,
   retentionDays: 7
 });
@@ -4303,7 +4350,7 @@ const queueBridgeWorkers = new Map();
 // Load worker configuration from file
 let workerConfig = {};
 function loadWorkerConfig() {
-  workerConfig = loadWorkerConfigFromFile('./data/worker-config.json');
+  workerConfig = loadWorkerConfigFromFile(WORKER_CONFIG_PATH);
   return workerConfig;
 }
 
@@ -4323,7 +4370,7 @@ function validateRouterRuleCoverageForWorkerQueues() {
     .map(q => String(q || '').trim())
     .filter(Boolean);
 
-  const rulesPath = './data/router-rules.json';
+  const rulesPath = ROUTER_RULES_PATH;
   let rules = [];
   try {
     const raw = fs.readFileSync(rulesPath, 'utf-8');
@@ -9463,7 +9510,7 @@ function registerRoutes(app) {
       workerConfig = applyLatencyPolicyTargetsUpdate(workerConfig, payload, req.actor?.userId || 'unknown');
 
       try {
-        persistWorkerConfig(workerConfig, './data/worker-config.json');
+        persistWorkerConfig(workerConfig, WORKER_CONFIG_PATH);
       } catch (e) {
         console.warn(`[CONFIG] Failed to persist flow targets: ${e.message}`);
       }
@@ -9550,7 +9597,7 @@ function registerRoutes(app) {
       );
       
       try {
-        persistWorkerConfig(workerConfig, './data/worker-config.json');
+        persistWorkerConfig(workerConfig, WORKER_CONFIG_PATH);
         console.log(`[CONFIG] Worker configuration updated: interval=${intervalMs} batch=${batchSize} workers=${numWorkersPerQueue}`);
       } catch (e) {
         console.warn(`[CONFIG] Failed to persist config: ${e.message}`);
@@ -10981,6 +11028,12 @@ function registerRoutes(app) {
 
 try {
   debugLog('[DEBUG] Starting backend server...');
+  console.log('[STARTUP] Binding HTTP listener...');
+  app.listen(HTTP_PORT, '0.0.0.0', () => {
+    console.log(`Aggregator backend running on http://0.0.0.0:${HTTP_PORT} (LAN accessible)`);
+  });
+
+  console.log('[STARTUP] Registering queue manager sync callbacks...');
   
   // Set up peer sync callbacks for each queue manager
   // This enables distributed config synchronization
@@ -10996,23 +11049,28 @@ try {
     });
   }
   
+  console.log('[STARTUP] Registering API routes...');
   registerRoutes(app);
   
   // Load worker configuration on startup
+  console.log('[STARTUP] Loading worker configuration...');
   loadWorkerConfig();
 
   // Fail fast when worker queues are not covered by enabled router input rules.
+  console.log('[STARTUP] Validating router coverage...');
   const routerCoverage = validateRouterRuleCoverageForWorkerQueues();
   if (routerCoverage.ok) {
     console.log(`[PRECHECK] Router input rule coverage OK (strict=${routerCoverage.strictMode})`);
   }
 
+  console.log('[STARTUP] Ensuring priority queue bindings...');
   const ensuredPriorityQueues = ensurePriorityInputQueuesConfigured();
   if (ensuredPriorityQueues.length > 0) {
     console.log(`[PRECHECK] Ensured ${ensuredPriorityQueues.length} priority queue binding(s) across local queue managers.`);
   }
   
   // Start metrics collection
+  console.log('[STARTUP] Starting metrics collection...');
   metricsCollector.start();
 
   // Warm up FSM SQL persistence. In production mode, DB is mandatory.
@@ -11047,59 +11105,55 @@ try {
   } else {
     console.log('[TX-STATE] Emergency log shipping is disabled. Realtime DB writes are expected.');
   }
-  
-  app.listen(HTTP_PORT, '0.0.0.0', () => {
-    console.log(`Aggregator backend running on http://0.0.0.0:${HTTP_PORT} (LAN accessible)`);
 
-    // Auto-start all workers and gateways on every backend startup using config defaults
-    try {
-      const routerWorkerResults = startDefaultRouterWorkers();
-      console.log(`[AUTOSTART] Router workers started: ${routerWorkerResults.length} (6 instances per queue × 4 priority queues)`);
-      routerWorkerResults.slice(0, 3).forEach(w => {
-        console.log(`  - ${w.workerId}: interval=${w.intervalMs}ms, batch=${w.batchSize}`);
-      });
-      if (routerWorkerResults.length > 3) {
-        console.log(`  - ... and ${routerWorkerResults.length - 3} more`);
-      }
-    } catch (e) {
-      console.warn(`[AUTOSTART] Router workers failed: ${e.message}`);
+  // Auto-start all workers and gateways on every backend startup using config defaults
+  try {
+    const routerWorkerResults = startDefaultRouterWorkers();
+    console.log(`[AUTOSTART] Router workers started: ${routerWorkerResults.length} (6 instances per queue × 4 priority queues)`);
+    routerWorkerResults.slice(0, 3).forEach(w => {
+      console.log(`  - ${w.workerId}: interval=${w.intervalMs}ms, batch=${w.batchSize}`);
+    });
+    if (routerWorkerResults.length > 3) {
+      console.log(`  - ... and ${routerWorkerResults.length - 3} more`);
     }
+  } catch (e) {
+    console.warn(`[AUTOSTART] Router workers failed: ${e.message}`);
+  }
 
-    try {
-      const lifecycleWorkerResults = startDefaultQueueDrivenLifecycleWorkers({ intervalMs: 250, batchSize: 50 });
-      console.log(`[AUTOSTART] Lifecycle workers started: ${lifecycleWorkerResults.length}`);
-    } catch (e) {
-      console.warn(`[AUTOSTART] Lifecycle workers failed: ${e.message}`);
-    }
+  try {
+    const lifecycleWorkerResults = startDefaultQueueDrivenLifecycleWorkers({ intervalMs: 250, batchSize: 50 });
+    console.log(`[AUTOSTART] Lifecycle workers started: ${lifecycleWorkerResults.length}`);
+  } catch (e) {
+    console.warn(`[AUTOSTART] Lifecycle workers failed: ${e.message}`);
+  }
 
-    try {
-      const subflowWorkerResults = startDefaultSubflowBridgeWorkers({ intervalMs: 500, batchSize: 25 });
-      console.log(`[AUTOSTART] Subflow workers started: ${subflowWorkerResults.length}`);
-    } catch (e) {
-      console.warn(`[AUTOSTART] Subflow workers failed: ${e.message}`);
-    }
+  try {
+    const subflowWorkerResults = startDefaultSubflowBridgeWorkers({ intervalMs: 500, batchSize: 25 });
+    console.log(`[AUTOSTART] Subflow workers started: ${subflowWorkerResults.length}`);
+  } catch (e) {
+    console.warn(`[AUTOSTART] Subflow workers failed: ${e.message}`);
+  }
 
-    try {
-      startSwiftGateway({ intervalMs: 500, batchSize: 25 });
-      console.log(`[AUTOSTART] SWIFT gateway started`);
-    } catch (e) {
-      console.warn(`[AUTOSTART] SWIFT gateway failed: ${e.message}`);
-    }
+  try {
+    startSwiftGateway({ intervalMs: 500, batchSize: 25 });
+    console.log('[AUTOSTART] SWIFT gateway started');
+  } catch (e) {
+    console.warn(`[AUTOSTART] SWIFT gateway failed: ${e.message}`);
+  }
 
-    try {
-      startBocGateway({ intervalMs: 500, batchSize: 25, mode: gatewayModeState.boc });
-      console.log(`[AUTOSTART] BoC gateway started (mode=${gatewayModeState.boc})`);
-    } catch (e) {
-      console.warn(`[AUTOSTART] BoC gateway failed: ${e.message}`);
-    }
+  try {
+    startBocGateway({ intervalMs: 500, batchSize: 25, mode: gatewayModeState.boc });
+    console.log(`[AUTOSTART] BoC gateway started (mode=${gatewayModeState.boc})`);
+  } catch (e) {
+    console.warn(`[AUTOSTART] BoC gateway failed: ${e.message}`);
+  }
 
-    try {
-      startFedGateway({ intervalMs: 500, batchSize: 25 });
-      console.log(`[AUTOSTART] Fed gateway started (mode=${gatewayModeState.fed})`);
-    } catch (e) {
-      console.warn(`[AUTOSTART] Fed gateway failed: ${e.message}`);
-    }
-  });
+  try {
+    startFedGateway({ intervalMs: 500, batchSize: 25 });
+    console.log(`[AUTOSTART] Fed gateway started (mode=${gatewayModeState.fed})`);
+  } catch (e) {
+    console.warn(`[AUTOSTART] Fed gateway failed: ${e.message}`);
+  }
 
   // --- Start Data Librarian as a child process ---
   const librarianPath = fileURLToPath(new URL('./data-librarian.mjs', import.meta.url));

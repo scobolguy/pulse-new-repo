@@ -3,6 +3,19 @@
 import fs from 'fs';
 import path from 'path';
 
+function sleepSync(ms) {
+  const waitMs = Math.max(0, Number(ms) || 0);
+  if (waitMs <= 0) return;
+  const sab = new SharedArrayBuffer(4);
+  const int32 = new Int32Array(sab);
+  Atomics.wait(int32, 0, 0, waitMs);
+}
+
+function isRetryableFsError(error) {
+  const code = String(error?.code || '').toUpperCase();
+  return code === 'EPERM' || code === 'EACCES' || code === 'EBUSY' || code === 'ENOTEMPTY';
+}
+
 export class QueueManagerPersistence {
   constructor(queueManagerName = 'default', basePath = './data') {
     this.queueManagerName = queueManagerName;
@@ -49,27 +62,44 @@ export class QueueManagerPersistence {
     }
 
     const fileName = path.basename(filePath);
-    const tmpPath = path.join(targetDir, `${fileName}.${process.pid}.${Date.now()}.tmp`);
     const serialized = typeof payload === 'string' ? payload : JSON.stringify(payload);
 
-    const writeAndRename = () => {
-      fs.writeFileSync(tmpPath, serialized);
-      try { fs.unlinkSync(filePath); } catch { /* ok if not present */ }
-      fs.renameSync(tmpPath, filePath);
-    };
+    const maxAttempts = 8;
+    let lastError = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const tmpPath = path.join(targetDir, `${fileName}.${process.pid}.${Date.now()}.${attempt}.tmp`);
+      try {
+        fs.writeFileSync(tmpPath, serialized);
+        try {
+          fs.renameSync(tmpPath, filePath);
+        } catch (renameError) {
+          if (!isRetryableFsError(renameError) && renameError?.code !== 'EEXIST') {
+            throw renameError;
+          }
+          // Some sync providers lock the destination briefly; copy over it as a fallback.
+          fs.copyFileSync(tmpPath, filePath);
+          fs.unlinkSync(tmpPath);
+        }
+        return;
+      } catch (error) {
+        lastError = error;
+        try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch { /* ignore cleanup errors */ }
 
-    try {
-      writeAndRename();
-    } catch (error) {
-      if (error && error.code === 'ENOENT') {
-        if (!fs.existsSync(targetDir)) {
+        if (error?.code === 'ENOENT' && !fs.existsSync(targetDir)) {
           fs.mkdirSync(targetDir, { recursive: true });
         }
-        writeAndRename();
-        return;
+
+        if (!isRetryableFsError(error) && error?.code !== 'ENOENT' && error?.code !== 'EEXIST') {
+          throw error;
+        }
+
+        if (attempt < maxAttempts) {
+          sleepSync(25 * attempt);
+        }
       }
-      throw error;
     }
+
+    throw lastError || new Error(`Failed to atomically write ${filePath}`);
   }
 
   parseMessageFileName(fileName) {
@@ -316,10 +346,7 @@ export class QueueManagerPersistence {
 
   saveSnapshot(snapshot) {
     try {
-      const tempPath = `${this.snapshotPath}.tmp`;
-      fs.writeFileSync(tempPath, JSON.stringify(snapshot, null, 2));
-      try { fs.unlinkSync(this.snapshotPath); } catch { /* ok if not present */ }
-      fs.renameSync(tempPath, this.snapshotPath);
+      this.writeJsonAtomic(this.snapshotPath, JSON.stringify(snapshot, null, 2));
     } catch (e) {
       console.error(`Error saving snapshot for ${this.queueManagerName}:`, e.message);
     }
