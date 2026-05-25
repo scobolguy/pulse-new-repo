@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "queueManagerUrl": "http://192.168.2.11:4100",
+  "queueName": "esp32.shared.inbound",
+  "leaseMs": 30000,
+  "pollIntervalMs": 250,
+  "heartbeatMs": 4000,
+  "processTimeoutMs": 60000,
+  "retryDelayMs": 1000,
+  "maxAttempts": 5
+}

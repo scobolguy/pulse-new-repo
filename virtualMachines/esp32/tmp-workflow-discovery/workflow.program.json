@@ -1,0 +1,33 @@
+{
+  "workflowId": "discovery-test",
+  "generatedAt": "2026-05-25T16:44:56.323Z",
+  "instructionCount": 3,
+  "pcodeText": "# Auto-generated pcode from workflow DSL\n# WORKFLOW discovery-test\nDISCOVERY_REFRESH \"discovery\"\nSCHEDULE_SELECT \"pick|role=esp32,service=bonecrusher\"\nHALT\n",
+  "programMap": [
+    {
+      "address": 0,
+      "text": "DISCOVERY_REFRESH \"discovery\""
+    },
+    {
+      "address": 1,
+      "text": "SCHEDULE_SELECT \"pick|role=esp32,service=bonecrusher\""
+    },
+    {
+      "address": 2,
+      "text": "HALT"
+    }
+  ],
+  "notes": [
+    {
+      "type": "discovery_refresh",
+      "stepId": "refresh",
+      "statePrefix": "discovery"
+    },
+    {
+      "type": "schedule_select",
+      "stepId": "select",
+      "statePrefix": "pick",
+      "matchSpec": "role=esp32,service=bonecrusher"
+    }
+  ]
+}

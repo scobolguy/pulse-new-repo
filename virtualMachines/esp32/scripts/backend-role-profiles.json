@@ -1,0 +1,12 @@
+{
+  "primary": {
+    "queueManagerPort": 4100,
+    "queueManagerId": "qm-primary-local",
+    "queueManagerName": "qm-primary-local"
+  },
+  "backup": {
+    "queueManagerPort": 4101,
+    "queueManagerId": "qm-backup-local",
+    "queueManagerName": "qm-backup-local"
+  }
+}

@@ -1,0 +1,36 @@
+# Pulse ESP32 Quick Runbook
+
+## Startup
+
+- Full stack: `./start-servers.bat`
+- Cluster mode: `./start-cluster.bat`
+- Backend only: `./start-backend.bat`
+- Frontend only: `./start-frontend.bat`
+
+## Shutdown
+
+- Full stack: `./stop-servers.bat`
+- Cluster mode: `./stop-cluster.bat`
+- Backend only: `./stop-backend.bat`
+
+## Health Check
+
+- PowerShell: `./scripts/health-check-stack.ps1`
+
+Checks:
+- Backend orchestrator: `http://127.0.0.1:4000/status`
+- Broker: `http://127.0.0.1:4001/health`
+- Queue manager (primary): `http://127.0.0.1:4100/health`
+- Frontend: `http://127.0.0.1:5173/`
+
+## Safe Restart Pattern
+
+1. Run `./stop-servers.bat`
+2. Run `./scripts/stop-stack.ps1`
+3. Run `./start-servers.bat`
+4. Run `./scripts/health-check-stack.ps1`
+
+## Notes
+
+- If frontend binds to 5174, free listeners on 5173 and restart frontend.
+- If queue manager is running as backup, check `http://127.0.0.1:4101/health`.

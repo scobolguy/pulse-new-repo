@@ -1,0 +1,4 @@
+WORKFLOW "discovery-test" BEGIN
+STEP "refresh" DISCOVERY REFRESH "discovery";
+STEP "select" SCHEDULE SELECT "pick" MATCH "role=esp32,service=bonecrusher";
+END;

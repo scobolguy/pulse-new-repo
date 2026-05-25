@@ -1,0 +1,5 @@
+# Auto-generated pcode from workflow DSL
+# WORKFLOW discovery-test
+DISCOVERY_REFRESH "discovery"
+SCHEDULE_SELECT "pick|role=esp32,service=bonecrusher"
+HALT

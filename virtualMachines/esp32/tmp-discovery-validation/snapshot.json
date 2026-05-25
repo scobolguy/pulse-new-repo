@@ -1,0 +1,4 @@
+[
+  {"id":"esp32-115","ip":"192.168.2.115","port":80,"role":"esp32","service":"bonecrusher"},
+  {"id":"broker","ip":"192.168.2.11","port":4001,"role":"broker","service":"broker"}
+]
