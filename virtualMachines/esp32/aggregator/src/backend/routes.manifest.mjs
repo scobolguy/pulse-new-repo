@@ -1,5 +1,6 @@
 export const ROUTE_ROLE_MANIFEST = [
   { id: 'lifecycle-inquiry', registrar: 'registerLifecycleInquiryRoutes', dependencyKey: 'lifecycleInquiry', enabled: true },
+  { id: 'lifecycle-nlp', registrar: 'registerLifecycleNlpRoutes', dependencyKey: 'lifecycleNlp', enabled: true },
   { id: 'lifecycle-worker-gateway', registrar: 'registerLifecycleWorkerGatewayRoutes', dependencyKey: 'lifecycleWorkerGateway', enabled: true },
   { id: 'queue-broker-ops', registrar: 'registerQueueBrokerOpsRoutes', dependencyKey: 'queueBrokerOps', enabled: true },
   { id: 'compliance', registrar: 'registerComplianceRoutes', dependencyKey: 'compliance', enabled: true },
@@ -11,5 +12,7 @@ export const ROUTE_ROLE_MANIFEST = [
   { id: 'availability-presence', registrar: 'registerAvailabilityPresenceRoutes', dependencyKey: 'availabilityPresence', enabled: true },
   { id: 'topology-runtime', registrar: 'registerTopologyRuntimeRoutes', dependencyKey: 'topologyRuntime', enabled: true },
   { id: 'librarian-proxy', registrar: 'registerLibrarianProxyRoutes', dependencyKey: 'librarianProxy', enabled: true },
-  { id: 'mapper-proxy', registrar: 'registerMapperProxyRoutes', dependencyKey: 'mapperProxy', enabled: true }
+  { id: 'mapper-proxy', registrar: 'registerMapperProxyRoutes', dependencyKey: 'mapperProxy', enabled: true },
+  { id: 'runtime-registry', registrar: 'registerRuntimeRegistryRoutes', dependencyKey: 'runtimeRegistry', enabled: true },
+  { id: 'router-lifecycle-control', registrar: 'registerRouterLifecycleControlRoutes', dependencyKey: 'routerLifecycleControl', enabled: true }
 ];

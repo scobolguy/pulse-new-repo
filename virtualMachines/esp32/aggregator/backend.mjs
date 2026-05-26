@@ -44,6 +44,7 @@ import {
   applyLatencyPolicyTargetsUpdate
 } from './src/latency-policy.mjs';
 import { registerLifecycleInquiryRoutes } from './src/backend/roles/lifecycleInquiryRoutes.mjs';
+import { registerLifecycleNlpRoutes } from './src/backend/roles/lifecycleNlpRoutes.mjs';
 import { registerLifecycleWorkerGatewayRoutes } from './src/backend/roles/lifecycleWorkerGatewayRoutes.mjs';
 import { registerQueueBrokerOpsRoutes } from './src/backend/roles/queueBrokerOpsRoutes.mjs';
 import { registerComplianceRoutes } from './src/backend/roles/complianceRoutes.mjs';
@@ -56,10 +57,19 @@ import { registerAvailabilityPresenceRoutes } from './src/backend/roles/availabi
 import { registerTopologyRuntimeRoutes } from './src/backend/roles/topologyRuntimeRoutes.mjs';
 import { registerLibrarianProxyRoutes } from './src/backend/roles/librarianProxyRoutes.mjs';
 import { registerMapperProxyRoutes } from './src/backend/roles/mapperProxyRoutes.mjs';
+import { registerRuntimeRegistryRoutes } from './src/backend/roles/runtimeRegistryRoutes.mjs';
+import { registerRouterLifecycleControlRoutes } from './src/backend/roles/routerLifecycleControlRoutes.mjs';
 import { createRequestPolicyApi } from './src/backend/security/requestPolicy.mjs';
 import { ROUTE_ROLE_MANIFEST } from './src/backend/routes.manifest.mjs';
 import { registerRoutesFromManifest } from './src/backend/routeManifestLoader.mjs';
 import { enumerateApiCatalog } from './src/backend/apiCatalog.mjs';
+import {
+  listServiceProviders,
+  getServiceProvider,
+  getServiceProviderAction,
+  getServiceProviderCategories
+} from './src/backend/providers/serviceProviderRegistry.mjs';
+import { compileQueueDslSpec, diffQueueConfigs } from './src/backend/queueDslCompiler.mjs';
 import { createSanctionsComplianceService } from './src/compliance/sanctionsService.mjs';
 import crypto from 'crypto';
 
@@ -8666,351 +8676,6 @@ function registerRoutes(app) {
     res.json({ status: 'stopping', managerId: req.params.managerId });
   });
 
-  app.get('/api/registry/services', (req, res) => {
-    const services = {};
-    for (const instance of serviceInstanceRegistry.values()) {
-      if (!services[instance.serviceName]) services[instance.serviceName] = [];
-      services[instance.serviceName].push(instance);
-    }
-    res.json({ services });
-  });
-
-  app.get('/api/ui/card-overrides', requirePermission('lifecycle.read'), (req, res) => {
-    res.json({
-      hiddenMap: uiCardOverrides.hiddenMap || {},
-      renameMap: uiCardOverrides.renameMap || {},
-      runtimeMap: uiCardOverrides.runtimeMap || {}
-    });
-  });
-
-  app.put('/api/ui/card-overrides', requirePermission('lifecycle.manage'), (req, res) => {
-    try {
-      uiCardOverrides = saveCardOverridesToDisk(req.body || {});
-      res.json({
-        status: 'ok',
-        hiddenMap: uiCardOverrides.hiddenMap,
-        renameMap: uiCardOverrides.renameMap,
-        runtimeMap: uiCardOverrides.runtimeMap || {}
-      });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  function parseRuntimeInstanceId(rawInstanceId) {
-    const text = String(rawInstanceId || '').trim();
-    const [rawClassId, ...rest] = text.split(':');
-    const classId = String(rawClassId || '').trim().toLowerCase();
-    const instanceKey = rest.join(':').trim();
-    return { classId, instanceKey };
-  }
-
-  function requireRuntimePermission(req, permission) {
-    const permissions = Array.isArray(req?.authz?.permissions) ? req.authz.permissions : [];
-    return hasPermission(permissions, permission);
-  }
-
-  app.post('/api/runtime/classes/database/actions/:action', requirePermission('queue.operate'), (req, res) => {
-    const action = String(req.params.action || '').toLowerCase();
-    const statusMap = {
-      quiesce: 'quiesced',
-      maintenance: 'maintenance',
-      'return-service': 'up',
-      up: 'up'
-    };
-
-    const nextStatus = statusMap[action];
-    if (!nextStatus) {
-      return res.status(400).json({ error: 'Unsupported action. Use quiesce, maintenance, return-service, or up.' });
-    }
-
-    const changed = [];
-    for (const manager of queueManagerRegistry.values()) {
-      const updated = setQueueManagerStatus(manager.managerId, nextStatus);
-      if (updated) changed.push(updated.managerId);
-    }
-
-    res.json({ status: 'ok', classId: 'database', action, affectedInstanceIds: changed });
-  });
-
-  app.post('/api/runtime/classes/broker/actions/:action', requirePermission('broker.operate'), (req, res) => {
-    const action = String(req.params.action || '').toLowerCase();
-    if (!['up', 'down', 'quiesce', 'unquiesce'].includes(action)) {
-      return res.status(400).json({ error: 'Unsupported action. Use up, down, quiesce, or unquiesce.' });
-    }
-
-    try {
-      if (action === 'up') {
-        globalThis.brokerClassDown = false;
-        setBrokerInstanceState('primary', { active: true, quiesced: false });
-      }
-
-      if (action === 'down') {
-        globalThis.brokerClassDown = true;
-        for (const instanceId of brokerInstances.keys()) {
-          setBrokerInstanceState(instanceId, { active: false, quiesced: false });
-        }
-      }
-
-      if (action === 'quiesce' || action === 'unquiesce') {
-        if (globalThis.brokerClassDown) {
-          return res.status(409).json({ error: 'Broker class is down. Use action=up first.' });
-        }
-        const shouldQuiesce = action === 'quiesce';
-        for (const [instanceId, instance] of brokerInstances.entries()) {
-          if (instance.active) {
-            setBrokerInstanceState(instanceId, { quiesced: shouldQuiesce });
-          }
-        }
-      }
-
-      res.json({
-        status: 'ok',
-        classId: 'broker',
-        action,
-        classState: getBrokerStateLabel(),
-        brokers: getBrokerInstancesPayload()
-      });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/runtime/classes/gateway/actions/:action', requirePermission('gateway.manage'), async (req, res) => {
-    const action = String(req.params.action || '').toLowerCase();
-    if (!['start', 'stop', 'quiesce'].includes(action)) {
-      return res.status(400).json({ error: 'Unsupported action. Use start, stop, or quiesce.' });
-    }
-
-    try {
-      const requestedConfig = req.body && typeof req.body === 'object' ? req.body : {};
-      const requestedTargets = Array.isArray(requestedConfig.targets)
-        ? requestedConfig.targets.map((v) => String(v || '').trim().toLowerCase()).filter((v) => GATEWAY_IDS.includes(v))
-        : [];
-      const keyedTargets = GATEWAY_IDS.filter((gatewayId) => requestedConfig[gatewayId] && typeof requestedConfig[gatewayId] === 'object');
-      const targetGatewayIds = requestedTargets.length > 0
-        ? requestedTargets
-        : (keyedTargets.length > 0 ? keyedTargets : GATEWAY_IDS);
-
-      const operationResults = [];
-      for (const gatewayId of targetGatewayIds) {
-        const gatewayConfig = requestedConfig[gatewayId] && typeof requestedConfig[gatewayId] === 'object'
-          ? requestedConfig[gatewayId]
-          : requestedConfig;
-        const result = await executeGatewayAction(gatewayId, action, gatewayConfig);
-        operationResults.push({ gatewayId, ...result });
-      }
-
-      res.json({ status: 'ok', classId: 'gateway', action, operations: operationResults, gateways: getGatewayStatusPayload() });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.get('/api/runtime/instances/:instanceId/config', requirePermission('registry.read'), (req, res) => {
-    const { classId, instanceKey } = parseRuntimeInstanceId(req.params.instanceId);
-
-    if (classId === 'database') {
-      const manager = queueManagerRegistry.get(instanceKey);
-      if (!manager) {
-        return res.status(404).json({ error: 'Database server instance not found' });
-      }
-
-      const provider = String(manager?.persistence?.provider || manager?.provider || 'queue-manager');
-      const config = manager?.persistence?.config && typeof manager.persistence.config === 'object'
-        ? manager.persistence.config
-        : {};
-
-      return res.json({
-        instanceId: `database:${manager.managerId}`,
-        classId: 'database',
-        provider,
-        configurable: true,
-        config: {
-          managerId: manager.managerId,
-          nodeId: manager.nodeId,
-          ip: manager.ip,
-          port: manager.port,
-          status: manager.status,
-          ...config
-        }
-      });
-    }
-
-    if (classId === 'broker') {
-      if (instanceKey === 'class' || instanceKey === 'network') {
-        return res.json({
-          instanceId: 'broker:class',
-          classId: 'broker',
-          provider: brokerRuntimeConfig.provider,
-          configurable: true,
-          config: {
-            provider: brokerRuntimeConfig.provider,
-            url: brokerRuntimeConfig.url,
-            exchangeName: brokerRuntimeConfig.exchangeName,
-            queuePrefix: brokerRuntimeConfig.queuePrefix,
-            msmqBaseQueuePath: brokerRuntimeConfig.msmqBaseQueuePath,
-            msmqQueuePrefix: brokerRuntimeConfig.msmqQueuePrefix,
-            kafkaBrokers: brokerRuntimeConfig.kafkaBrokers,
-            kafkaClientId: brokerRuntimeConfig.kafkaClientId,
-            kafkaTopicPrefix: brokerRuntimeConfig.kafkaTopicPrefix,
-            ibmQueueManager: brokerRuntimeConfig.ibmQueueManager,
-            ibmChannel: brokerRuntimeConfig.ibmChannel,
-            ibmConnName: brokerRuntimeConfig.ibmConnName,
-            ibmQueuePrefix: brokerRuntimeConfig.ibmQueuePrefix,
-            ibmUsername: brokerRuntimeConfig.ibmUsername,
-            ibmPassword: brokerRuntimeConfig.ibmPassword,
-            apacheHost: brokerRuntimeConfig.apacheHost,
-            apachePort: brokerRuntimeConfig.apachePort,
-            apacheUsername: brokerRuntimeConfig.apacheUsername,
-            apachePassword: brokerRuntimeConfig.apachePassword,
-            apacheTopicPrefix: brokerRuntimeConfig.apacheTopicPrefix
-          }
-        });
-      }
-
-      const instance = brokerInstances.get(instanceKey);
-      if (!instance) {
-        return res.status(404).json({ error: 'Broker instance not found' });
-      }
-
-      return res.json({
-        instanceId: `broker:${instanceKey}`,
-        classId: 'broker',
-        provider: brokerRuntimeConfig.provider,
-        configurable: true,
-        config: {
-          instanceId: instanceKey,
-          active: Boolean(instance.active),
-          quiesced: Boolean(instance.quiesced),
-          provider: brokerRuntimeConfig.provider
-        }
-      });
-    }
-
-    if (classId === 'gateway') {
-      const gateways = getGatewayStatusPayload();
-      const gateway = gateways[instanceKey];
-      if (!gateway) {
-        return res.status(404).json({ error: 'Gateway instance not found' });
-      }
-
-      const runtime = gatewayRuntimeConfig[instanceKey] || createDefaultGatewayRuntimeConfig();
-
-      return res.json({
-        instanceId: `gateway:${instanceKey}`,
-        classId: 'gateway',
-        provider: 'gateway-adapter',
-        configurable: true,
-        config: {
-          gatewayId: instanceKey,
-          running: Boolean(gateway.running),
-          quiesced: Boolean(gateway.quiesced),
-          mode: String(gateway.mode || 'live'),
-          workerIds: Array.isArray(gateway.workerIds) ? gateway.workerIds : [],
-          controlPlane: runtime.controlPlane,
-          remoteApi: {
-            enabled: Boolean(runtime.remoteApi?.enabled),
-            baseUrl: String(runtime.remoteApi?.baseUrl || ''),
-            timeoutMs: Number(runtime.remoteApi?.timeoutMs || 5000),
-            fallbackToLocal: Boolean(runtime.remoteApi?.fallbackToLocal),
-            authType: String(runtime.remoteApi?.authType || 'none'),
-            authHeader: String(runtime.remoteApi?.authHeader || 'Authorization'),
-            token: String(runtime.remoteApi?.token || ''),
-            apiKeyHeader: String(runtime.remoteApi?.apiKeyHeader || 'x-api-key'),
-            apiKey: String(runtime.remoteApi?.apiKey || ''),
-            actionPaths: {
-              start: String(runtime.remoteApi?.actionPaths?.start || '/api/control/start'),
-              stop: String(runtime.remoteApi?.actionPaths?.stop || '/api/control/stop'),
-              quiesce: String(runtime.remoteApi?.actionPaths?.quiesce || '/api/control/quiesce')
-            }
-          }
-        }
-      });
-    }
-
-    return res.status(400).json({ error: 'Unknown runtime instance class' });
-  });
-
-  app.put('/api/runtime/instances/:instanceId/config', requirePermission('registry.manage'), (req, res) => {
-    const { classId, instanceKey } = parseRuntimeInstanceId(req.params.instanceId);
-    const payload = req.body || {};
-
-    if (classId === 'database') {
-      const manager = queueManagerRegistry.get(instanceKey);
-      if (!manager) {
-        return res.status(404).json({ error: 'Database server instance not found' });
-      }
-      const provider = String(payload?.provider || manager?.persistence?.provider || manager?.provider || 'queue-manager').trim() || 'queue-manager';
-      const nextConfig = payload?.config && typeof payload.config === 'object' ? payload.config : {};
-      manager.persistence = {
-        provider,
-        config: nextConfig
-      };
-      manager.updatedAt = new Date().toISOString();
-      queueManagerRegistry.set(manager.managerId, manager);
-      return res.json({ status: 'updated', instanceId: `database:${manager.managerId}`, provider, config: nextConfig });
-    }
-
-    if (classId === 'broker') {
-      if (instanceKey === 'class' || instanceKey === 'network') {
-        if (!requireRuntimePermission(req, 'broker.configure')) {
-          return res.status(403).json({ error: 'Permission denied: broker.configure is required.' });
-        }
-
-        const nextConfig = payload?.config && typeof payload.config === 'object' ? payload.config : {};
-        try {
-          const runtime = rebuildBrokerInstances(nextConfig);
-          return res.json({ status: 'updated', instanceId: 'broker:class', broker: runtime });
-        } catch (e) {
-          return res.status(400).json({ error: e.message });
-        }
-      }
-
-      if (!requireRuntimePermission(req, 'broker.operate')) {
-        return res.status(403).json({ error: 'Permission denied: broker.operate is required.' });
-      }
-
-      const instance = brokerInstances.get(instanceKey);
-      if (!instance) {
-        return res.status(404).json({ error: 'Broker instance not found' });
-      }
-
-      const nextConfig = payload?.config && typeof payload.config === 'object' ? payload.config : {};
-      const active = Object.prototype.hasOwnProperty.call(nextConfig, 'active') ? Boolean(nextConfig.active) : Boolean(instance.active);
-      const quiesced = Object.prototype.hasOwnProperty.call(nextConfig, 'quiesced') ? Boolean(nextConfig.quiesced) : Boolean(instance.quiesced);
-      setBrokerInstanceState(instanceKey, { active, quiesced });
-      return res.json({ status: 'updated', instanceId: `broker:${instanceKey}`, config: { active, quiesced } });
-    }
-
-    if (classId === 'gateway') {
-      if (!requireRuntimePermission(req, 'gateway.manage')) {
-        return res.status(403).json({ error: 'Permission denied: gateway.manage is required.' });
-      }
-
-      if (!GATEWAY_IDS.includes(instanceKey)) {
-        return res.status(404).json({ error: 'Gateway instance not found' });
-      }
-
-      const nextConfig = payload?.config && typeof payload.config === 'object' ? payload.config : {};
-      if (Object.prototype.hasOwnProperty.call(nextConfig, 'mode')) {
-        gatewayModeState[instanceKey] = String(nextConfig.mode || gatewayModeState[instanceKey] || 'live').trim().toLowerCase() || 'live';
-      }
-      if (Object.prototype.hasOwnProperty.call(nextConfig, 'quiesced')) {
-        gatewayQuiesceState[instanceKey] = Boolean(nextConfig.quiesced);
-      }
-      if (Object.prototype.hasOwnProperty.call(nextConfig, 'controlPlane') || Object.prototype.hasOwnProperty.call(nextConfig, 'remoteApi')) {
-        gatewayRuntimeConfig[instanceKey] = normalizeGatewayRuntimeConfig({
-          controlPlane: nextConfig.controlPlane,
-          remoteApi: nextConfig.remoteApi
-        }, gatewayRuntimeConfig[instanceKey]);
-      }
-      return res.json({ status: 'updated', instanceId: `gateway:${instanceKey}`, config: nextConfig, gateway: getGatewayStatusPayload()[instanceKey] });
-    }
-
-    return res.status(400).json({ error: 'Unknown runtime instance class' });
-  });
-
   app.post('/api/registry/nodes/:nodeId/quiesce', (req, res) => {
     const changed = setNodeLifecycleState(req.params.nodeId, 'quiesced');
     if (!changed) return res.status(404).json({ error: 'Node not found' });
@@ -9092,6 +8757,7 @@ function registerRoutes(app) {
     manifest: ROUTE_ROLE_MANIFEST,
     registrars: {
       registerLifecycleInquiryRoutes,
+      registerLifecycleNlpRoutes,
       registerLifecycleWorkerGatewayRoutes,
       registerQueueBrokerOpsRoutes,
       registerComplianceRoutes,
@@ -9103,7 +8769,9 @@ function registerRoutes(app) {
       registerAvailabilityPresenceRoutes,
       registerTopologyRuntimeRoutes,
       registerLibrarianProxyRoutes,
-      registerMapperProxyRoutes
+      registerMapperProxyRoutes,
+      registerRuntimeRegistryRoutes,
+      registerRouterLifecycleControlRoutes
     },
     dependencyFactories: {
       lifecycleInquiry: () => ({
@@ -9119,6 +8787,22 @@ function registerRoutes(app) {
         extractEntityRefsFromInquiry,
         buildFsmClarificationOptions,
         logNlpInteractionToSql,
+        DEFAULT_ACTOR_USER_ID,
+        updateNlpUserProfileFromFeedback
+      }),
+      lifecycleNlp: () => ({
+        requirePermission,
+        getFsmTransactionSummaryFromSql,
+        getFsmEntityStateFromSql,
+        formatErrorDetails,
+        extractEntityIdFromInquiry,
+        resolveActor,
+        isSettlementSummaryInquiry,
+        extractEntityRefsFromInquiry,
+        buildFsmClarificationOptions,
+        logNlpInteractionToSql,
+        readTransactionLifecycleCompiled,
+        getLifecycleTransitionOptions,
         DEFAULT_ACTOR_USER_ID,
         updateNlpUserProfileFromFeedback
       }),
@@ -9191,7 +8875,11 @@ function registerRoutes(app) {
         requirePermission,
         enumerateApiCatalog,
         resolvePermissionForApiRequest,
-        routeRoleManifest: ROUTE_ROLE_MANIFEST
+        routeRoleManifest: ROUTE_ROLE_MANIFEST,
+        listServiceProviders,
+        getServiceProvider,
+        getServiceProviderAction,
+        getServiceProviderCategories
       }),
       replication: () => ({
         queueManagerRegistry,
@@ -9235,533 +8923,78 @@ function registerRoutes(app) {
       }),
       mapperProxy: () => ({
         resolveMapperOrigin
+      }),
+      runtimeRegistry: () => ({
+        requirePermission,
+        serviceInstanceRegistry,
+        getUiCardOverrides: () => uiCardOverrides,
+        setUiCardOverrides: (payload) => {
+          uiCardOverrides = saveCardOverridesToDisk(payload || {});
+          return uiCardOverrides;
+        },
+        hasPermission,
+        queueManagerRegistry,
+        setQueueManagerStatus,
+        setNodeLifecycleState,
+        getNodeDrainStatus,
+        queueRoutes,
+        queueManagers,
+        setBrokerInstanceState,
+        brokerInstances,
+        getBrokerStateLabel,
+        getBrokerInstancesPayload,
+        globalState: globalThis,
+        GATEWAY_IDS,
+        executeGatewayAction,
+        getGatewayStatusPayload,
+        brokerRuntimeConfig,
+        gatewayRuntimeConfig,
+        createDefaultGatewayRuntimeConfig,
+        rebuildBrokerInstances,
+        gatewayModeState,
+        gatewayQuiesceState,
+        normalizeGatewayRuntimeConfig
+      }),
+      routerLifecycleControl: () => ({
+        messageRouter,
+        parseBooleanLike,
+        ingestWithEdgeFallback,
+        getRouterWorkersPayload,
+        readTransactionLifecycleCompiled,
+        buildTransactionLifecycleDashboardPayload,
+        requirePermission,
+        enableLifecyclePathTesters: ENABLE_LIFECYCLE_PATH_TESTERS,
+        deriveLifecycleHappyPath,
+        deriveLifecycleSadPath,
+        runLifecycleHappyPath,
+        runLifecycleSadPath,
+        recordLifecycleTesterRun,
+        getLifecycleHeartbeatPayload,
+        enqueueLifecycleHeartbeat,
+        lifecycleHeartbeat,
+        lifecycleHarnessStartTransaction,
+        lifecycleHarnessAdvance,
+        lifecycleActionPolicy,
+        getLatencyPolicyThresholds,
+        workerConfigRef: {
+          get current() { return workerConfig; },
+          set current(next) { workerConfig = next; }
+        },
+        validateLatencyPolicyTargetsUpdate,
+        applyLatencyPolicyTargetsUpdate,
+        persistWorkerConfig,
+        workerConfigPath: WORKER_CONFIG_PATH,
+        getTxStatePersistenceSummary,
+        shipQueuedTransactionStateLogs,
+        txStateLogShippingBatchSize: TX_STATE_LOG_SHIPPING_BATCH_SIZE,
+        getWorkerDefaults,
+        validateWorkerConfigUpdate,
+        applyWorkerConfigUpdate,
+        evaluateLatencyPolicies,
+        metricsCollector,
+        routerWorkers
       })
     }
-  });
-
-  app.post('/api/router/rules', async (req, res) => {
-    try {
-      const rule = await messageRouter.upsertRule(req.body || {});
-      res.json({ status: 'upserted', rule });
-    } catch (e) {
-      res.status(400).json({ error: e.message });
-    }
-  });
-
-  app.delete('/api/router/rules/:ruleId', async (req, res) => {
-    try {
-      const removed = await messageRouter.deleteRule(req.params.ruleId);
-      if (!removed) {
-        return res.status(404).json({ error: 'Rule not found' });
-      }
-      res.json({ status: 'deleted', ruleId: req.params.ruleId });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/router/ingest', async (req, res) => {
-    try {
-      const { inputQueue, message, sourceService, useEdge, edgeRole } = req.body || {};
-      if (!inputQueue) {
-        return res.status(400).json({ error: 'inputQueue is required' });
-      }
-      const shouldForceEdge = parseBooleanLike(useEdge, false);
-      const routed = await ingestWithEdgeFallback({
-        inputQueue,
-        message,
-        sourceService: sourceService || 'webapi',
-        forceEdge: shouldForceEdge,
-        preferredEdgeRole: edgeRole
-      });
-      res.json({ status: 'routed', mode: routed.mode, edge: routed.edge, result: routed.result });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/edge/ingest', async (req, res) => {
-    try {
-      const { inputQueue, message, sourceService, useEdge, convertMtToXml, edgeRole } = req.body || {};
-      if (!inputQueue) return res.status(400).json({ error: 'inputQueue is required' });
-      const convertRequested = parseBooleanLike(convertMtToXml, false);
-      const routed = await ingestWithEdgeFallback({
-        inputQueue,
-        message,
-        sourceService: sourceService || 'edge-api',
-        forceEdge: parseBooleanLike(useEdge, true),
-        convertMtToXml: convertRequested,
-        preferredEdgeRole: edgeRole
-      });
-      return res.json({
-        status: 'ok',
-        mode: routed.mode,
-        edge: routed.edge,
-        conversion: {
-          requested: convertRequested,
-          location: 'esp32-edge'
-        },
-        result: routed.result
-      });
-    } catch (e) {
-      return res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/router/process/:inputQueue', async (req, res) => {
-    try {
-      const { inputQueue } = req.params;
-      const { maxMessages, consumerService } = req.body || {};
-      const result = await messageRouter.processFromQueue(inputQueue, {
-        maxMessages: maxMessages || 1,
-        consumerService: consumerService || 'router-worker'
-      });
-      res.json({ status: 'processed', mode: 'queue', result });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.get('/api/router/workers', (req, res) => {
-    res.json({ workers: getRouterWorkersPayload() });
-  });
-
-  app.get('/api/lifecycle/dashboard', (req, res) => {
-    const compiled = readTransactionLifecycleCompiled();
-    if (!compiled) {
-      return res.status(404).json({
-        error: 'Lifecycle compiled artifact not found',
-        hint: 'Run: npm run compile:lifecycle'
-      });
-    }
-
-    const payload = buildTransactionLifecycleDashboardPayload(compiled);
-    if (!payload) {
-      return res.status(500).json({ error: 'Lifecycle artifact is invalid' });
-    }
-
-    return res.json(payload);
-  });
-
-  app.get('/api/lifecycle/happy-path', requirePermission('lifecycle.read'), (req, res) => {
-    if (!ENABLE_LIFECYCLE_PATH_TESTERS) {
-      return res.status(503).json({ error: 'Lifecycle path testers are disabled' });
-    }
-    try {
-      const compiled = readTransactionLifecycleCompiled();
-      if (!compiled) {
-        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
-      }
-      const happyPath = deriveLifecycleHappyPath(compiled);
-      return res.json({ status: 'ok', happyPath });
-    } catch (e) {
-      return res.status(400).json({ error: e.message });
-    }
-  });
-
-  app.get('/api/lifecycle/sad-path', requirePermission('lifecycle.read'), (req, res) => {
-    if (!ENABLE_LIFECYCLE_PATH_TESTERS) {
-      return res.status(503).json({ error: 'Lifecycle path testers are disabled' });
-    }
-    try {
-      const compiled = readTransactionLifecycleCompiled();
-      if (!compiled) {
-        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
-      }
-      const sadPath = deriveLifecycleSadPath(compiled);
-      return res.json({ status: 'ok', sadPath });
-    } catch (e) {
-      return res.status(400).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/lifecycle/happy-path/run', requirePermission('lifecycle.manage'), async (req, res) => {
-    if (!ENABLE_LIFECYCLE_PATH_TESTERS) {
-      return res.status(503).json({ error: 'Lifecycle path testers are disabled' });
-    }
-    try {
-      const compiled = readTransactionLifecycleCompiled();
-      if (!compiled) {
-        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
-      }
-
-      const { txId, message } = req.body || {};
-      const result = await runLifecycleHappyPath(compiled, { txId, message });
-      recordLifecycleTesterRun('happy', {
-        status: 'completed',
-        transitionCount: result.transitionCount,
-        transactionId: result.transactionId
-      });
-      return res.json({ status: 'completed', result });
-    } catch (e) {
-      recordLifecycleTesterRun('happy', {
-        status: 'failed',
-        error: e.message
-      });
-      return res.status(400).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/lifecycle/sad-path/run', requirePermission('lifecycle.manage'), async (req, res) => {
-    if (!ENABLE_LIFECYCLE_PATH_TESTERS) {
-      return res.status(503).json({ error: 'Lifecycle path testers are disabled' });
-    }
-    try {
-      const compiled = readTransactionLifecycleCompiled();
-      if (!compiled) {
-        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
-      }
-
-      const { txId, message } = req.body || {};
-      const result = await runLifecycleSadPath(compiled, { txId, message });
-      recordLifecycleTesterRun('sad', {
-        status: 'completed',
-        transitionCount: result.transitionCount,
-        transactionId: result.transactionId
-      });
-      return res.json({ status: 'completed', result });
-    } catch (e) {
-      recordLifecycleTesterRun('sad', {
-        status: 'failed',
-        error: e.message
-      });
-      return res.status(400).json({ error: e.message });
-    }
-  });
-
-  app.get('/api/lifecycle/heartbeat', requirePermission('lifecycle.read'), (req, res) => {
-    res.json({ heartbeat: getLifecycleHeartbeatPayload() });
-  });
-
-  app.post('/api/lifecycle/heartbeat/trigger', requirePermission('lifecycle.manage'), async (req, res) => {
-    try {
-      const compiled = readTransactionLifecycleCompiled();
-      if (!compiled) {
-        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
-      }
-
-      const { reason } = req.body || {};
-      const heartbeat = await enqueueLifecycleHeartbeat(compiled, {
-        reason: reason || 'manual-trigger',
-        sourceService: 'lifecycle-heartbeat:manual'
-      });
-      lifecycleHeartbeat.manualRuns += 1;
-      return res.json({ status: 'queued', heartbeat, monitor: getLifecycleHeartbeatPayload() });
-    } catch (e) {
-      return res.status(400).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/lifecycle/test/start', async (req, res) => {
-    try {
-      const compiled = readTransactionLifecycleCompiled();
-      if (!compiled) {
-        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
-      }
-
-      const { txId, message } = req.body || {};
-      const active = await lifecycleHarnessStartTransaction(compiled, { txId, message });
-      return res.json({ status: 'started', active });
-    } catch (e) {
-      return res.status(400).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/lifecycle/test/step', async (req, res) => {
-    try {
-      const compiled = readTransactionLifecycleCompiled();
-      if (!compiled) {
-        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
-      }
-
-      const { eventName, status, statementMatch, replacementMessage } = req.body || {};
-      const result = await lifecycleHarnessAdvance(compiled, {
-        eventName: eventName || null,
-        context: { status, statementMatch },
-        replacementMessage: replacementMessage || null
-      });
-      return res.json({ status: 'advanced', ...result });
-    } catch (e) {
-      return res.status(400).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/lifecycle/simulators/bank-of-canada/approve', async (req, res) => {
-    try {
-      const compiled = readTransactionLifecycleCompiled();
-      if (!compiled) {
-        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
-      }
-
-      const result = await lifecycleHarnessAdvance(compiled, {
-        eventName: 'lynx_approved',
-        context: { status: 'approved' }
-      });
-      return res.json({ status: 'simulated', simulator: 'bank-of-canada-approve', ...result });
-    } catch (e) {
-      return res.status(400).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/lifecycle/simulators/bank-of-canada/reject', async (req, res) => {
-    try {
-      const compiled = readTransactionLifecycleCompiled();
-      if (!compiled) {
-        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
-      }
-
-      const result = await lifecycleHarnessAdvance(compiled, {
-        eventName: 'lynx_rejected',
-        context: { status: 'rejected' }
-      });
-      return res.json({ status: 'simulated', simulator: 'bank-of-canada-reject', ...result });
-    } catch (e) {
-      return res.status(400).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/lifecycle/simulators/correspondent/send-mt940', async (req, res) => {
-    try {
-      const compiled = readTransactionLifecycleCompiled();
-      if (!compiled) {
-        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
-      }
-
-      const { statementRef } = req.body || {};
-      const ref = String(statementRef || lifecycleHarness.active?.transactionId || 'UNKNOWN');
-      const mt940 = `:20:${ref}\n:25:CORR-ACCOUNT-001\n:61:260514C12500,NTRFNONREF//${ref}\n:86:Settlement confirmed`;
-
-      const result = await lifecycleHarnessAdvance(compiled, {
-        eventName: 'statement_matched',
-        context: { statementMatch: true },
-        replacementMessage: mt940
-      });
-      return res.json({ status: 'simulated', simulator: 'correspondent-mt940', mt940, ...result });
-    } catch (e) {
-      return res.status(400).json({ error: e.message });
-    }
-  });
-
-  app.get('/api/lifecycle/policy', requirePermission('lifecycle.policy.read'), (req, res) => {
-    res.json({
-      policy: {
-        allowDbSync: Boolean(lifecycleActionPolicy.allowDbSync),
-        allowDbAsync: Boolean(lifecycleActionPolicy.allowDbAsync)
-      }
-    });
-  });
-
-  app.post('/api/lifecycle/policy', requirePermission('lifecycle.policy.manage'), (req, res) => {
-    const { allowDbSync, allowDbAsync } = req.body || {};
-    if (typeof allowDbSync !== 'undefined') {
-      lifecycleActionPolicy.allowDbSync = Boolean(allowDbSync);
-    }
-    if (typeof allowDbAsync !== 'undefined') {
-      lifecycleActionPolicy.allowDbAsync = Boolean(allowDbAsync);
-    }
-
-    res.json({
-      status: 'updated',
-      policy: {
-        allowDbSync: Boolean(lifecycleActionPolicy.allowDbSync),
-        allowDbAsync: Boolean(lifecycleActionPolicy.allowDbAsync)
-      }
-    });
-  });
-
-  app.get('/api/lifecycle/policy/flow-targets', requirePermission('lifecycle.policy.read'), (req, res) => {
-    res.json({
-      status: 'ok',
-      configSource: 'worker-config.json',
-      flowTargets: getLatencyPolicyThresholds(workerConfig)
-    });
-  });
-
-  app.post('/api/lifecycle/policy/flow-targets', requirePermission('lifecycle.policy.manage'), (req, res) => {
-    try {
-      const payload = req.body || {};
-      const errors = validateLatencyPolicyTargetsUpdate(payload);
-      if (errors.length > 0) {
-        return res.status(400).json({ error: 'Validation failed', details: errors });
-      }
-
-      workerConfig = applyLatencyPolicyTargetsUpdate(workerConfig, payload, req.actor?.userId || 'unknown');
-
-      try {
-        persistWorkerConfig(workerConfig, WORKER_CONFIG_PATH);
-      } catch (e) {
-        console.warn(`[CONFIG] Failed to persist flow targets: ${e.message}`);
-      }
-
-      res.json({
-        status: 'updated',
-        message: 'Flow targets saved to worker-config.json.',
-        flowTargets: getLatencyPolicyThresholds(workerConfig)
-      });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.get('/api/lifecycle/tx-state-persistence', requirePermission('lifecycle.read'), (req, res) => {
-    res.json({
-      status: 'ok',
-      persistence: getTxStatePersistenceSummary()
-    });
-  });
-
-  app.post('/api/lifecycle/tx-state-log-shipping/run', requirePermission('lifecycle.manage'), async (req, res) => {
-    try {
-      const maxEntries = Math.max(1, Number(req.body?.maxEntries || TX_STATE_LOG_SHIPPING_BATCH_SIZE));
-      const result = await shipQueuedTransactionStateLogs({ maxEntries });
-      res.json({
-        status: 'ok',
-        run: result,
-        persistence: getTxStatePersistenceSummary()
-      });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-
-
-  // Worker Configuration Management API
-  app.get('/api/workers/config', (req, res) => {
-    const defaults = getWorkerDefaults();
-    res.json({
-      status: 'ok',
-      configSource: 'worker-config.json',
-      current: {
-        intervalMs: defaults.intervalMs,
-        batchSize: defaults.batchSize,
-        numWorkersPerQueue: defaults.numWorkers,
-        priorityQueues: defaults.priorityQueues
-      },
-      latencyPolicies: getLatencyPolicyThresholds(workerConfig),
-      raw: workerConfig.workers?.router || {},
-      limits: workerConfig.workers?.router?.limits || {},
-      recommendations: {
-        note: 'Adjust these values based on queue depth and system resources',
-        factors: [
-          'High queue depth: increase batchSize or numWorkers',
-          'CPU >80%: decrease batchSize or increase intervalMs',
-          'Memory pressure: decrease numWorkers or batchSize',
-          'Compute nodes joined: can safely increase numWorkers',
-          'Compute nodes removed: reduce numWorkers gracefully'
-        ]
-      }
-    });
-  });
-
-  app.post('/api/workers/config', requirePermission('workers.configure'), (req, res) => {
-    try {
-      const { intervalMs, batchSize, numWorkersPerQueue } = req.body || {};
-
-      const errors = validateWorkerConfigUpdate(workerConfig, {
-        intervalMs,
-        batchSize,
-        numWorkersPerQueue
-      });
-      
-      if (errors.length > 0) {
-        return res.status(400).json({ error: 'Validation failed', details: errors });
-      }
-
-      workerConfig = applyWorkerConfigUpdate(
-        workerConfig,
-        { intervalMs, batchSize, numWorkersPerQueue },
-        req.actor?.userId || 'unknown'
-      );
-      
-      try {
-        persistWorkerConfig(workerConfig, WORKER_CONFIG_PATH);
-        console.log(`[CONFIG] Worker configuration updated: interval=${intervalMs} batch=${batchSize} workers=${numWorkersPerQueue}`);
-      } catch (e) {
-        console.warn(`[CONFIG] Failed to persist config: ${e.message}`);
-      }
-      
-      res.json({
-        status: 'updated',
-        message: 'Worker configuration updated. Restart backend or redeploy workers to apply changes.',
-        updated: {
-          intervalMs,
-          batchSize,
-          numWorkersPerQueue
-        }
-      });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.get('/api/workers/recommendations', (req, res) => {
-    const defaults = getWorkerDefaults();
-    const recommendations = [];
-    const latencyPolicySummary = evaluateLatencyPolicies(metricsCollector.getCurrentMetrics(), workerConfig);
-    
-    // Analyze current state
-    const totalWorkers = routerWorkers.size;
-    const allQueueDepths = {};
-    
-    for (const [queueName, worker] of routerWorkers) {
-      allQueueDepths[queueName] = allQueueDepths[queueName] || 0;
-    }
-    
-    // Generate recommendations
-    if (totalWorkers < 10) {
-      recommendations.push({
-        type: 'info',
-        message: 'Current system has few workers - consider scaling up if experiencing queue backlog'
-      });
-    }
-    
-    if (defaults.batchSize < 50) {
-      recommendations.push({
-        type: 'warning',
-        message: 'Batch size is low - consider increasing to 50-100 for better throughput'
-      });
-    }
-    
-    if (defaults.intervalMs > 500) {
-      recommendations.push({
-        type: 'warning',
-        message: 'Processing interval is high - consider reducing to 200-300ms for better responsiveness'
-      });
-    }
-
-    for (const [targetId, result] of Object.entries(latencyPolicySummary.evaluations || {})) {
-      if (result.status === 'critical') {
-        recommendations.push({
-          type: 'critical',
-          message: `${targetId} p95 ${result.p95Ms}ms exceeds target ${result.targetP95Ms}ms - scale up workers or reduce interval`
-        });
-      } else if (result.status === 'warning') {
-        recommendations.push({
-          type: 'warning',
-          message: `${targetId} p95 ${result.p95Ms}ms is approaching target ${result.targetP95Ms}ms`
-        });
-      } else if (result.status === 'no-data') {
-        recommendations.push({
-          type: 'info',
-          message: `${targetId} has no latency samples yet - ensure recordCompletion is emitted for tracked queues`
-        });
-      }
-    }
-    
-    res.json({
-      status: 'ok',
-      currentConfig: {
-        totalWorkers: totalWorkers,
-        intervalMs: defaults.intervalMs,
-        batchSize: defaults.batchSize,
-        workersPerQueue: defaults.numWorkers
-      },
-      latencyPolicies: latencyPolicySummary,
-      recommendations: recommendations.length > 0 ? recommendations : [
-        { type: 'ok', message: 'Current configuration looks good' }
-      ]
-    });
   });
 
   debugLog('[DEBUG] Registering routes...');

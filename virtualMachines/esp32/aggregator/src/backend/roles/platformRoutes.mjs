@@ -3,7 +3,11 @@ export function registerPlatformRoutes(app, deps) {
     requirePermission,
     enumerateApiCatalog,
     resolvePermissionForApiRequest,
-    routeRoleManifest
+    routeRoleManifest,
+    listServiceProviders,
+    getServiceProvider,
+    getServiceProviderAction,
+    getServiceProviderCategories
   } = deps;
 
   app.get('/api/platform/apis', requirePermission('topology.read'), (req, res) => {
@@ -44,5 +48,44 @@ export function registerPlatformRoutes(app, deps) {
       count: routeRoleManifest.length,
       manifest: routeRoleManifest
     });
+  });
+
+  app.get('/api/platform/providers', requirePermission('registry.read'), (req, res) => {
+    const search = String(req.query.search || '').trim();
+    const category = String(req.query.category || '').trim();
+    const actionId = String(req.query.actionId || '').trim();
+    const providers = listServiceProviders({ search, category, actionId });
+
+    res.json({
+      status: 'ok',
+      count: providers.length,
+      categories: getServiceProviderCategories(),
+      providers
+    });
+  });
+
+  app.get('/api/platform/providers/:providerId', requirePermission('registry.read'), (req, res) => {
+    const provider = getServiceProvider(req.params.providerId);
+    if (!provider) {
+      return res.status(404).json({
+        status: 'error',
+        error: 'unknown_provider',
+        providerId: req.params.providerId
+      });
+    }
+    return res.json({ status: 'ok', provider });
+  });
+
+  app.get('/api/platform/providers/:providerId/actions/:actionId', requirePermission('registry.read'), (req, res) => {
+    const action = getServiceProviderAction(req.params.providerId, req.params.actionId);
+    if (!action) {
+      return res.status(404).json({
+        status: 'error',
+        error: 'unknown_action',
+        providerId: req.params.providerId,
+        actionId: req.params.actionId
+      });
+    }
+    return res.json({ status: 'ok', action });
   });
 }
