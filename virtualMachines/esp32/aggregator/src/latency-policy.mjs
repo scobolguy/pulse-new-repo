@@ -1,4 +1,36 @@
 const DEFAULT_FLOW_DEFINITIONS = {
+  'core-outgoing': {
+    description: 'Core outgoing payment processing',
+    p95Ms: 1500,
+    warningRatio: 0.8,
+    queues: ['core.tx.outgoing', 'SWIFT.gateway'],
+    throughputQueue: 'SWIFT.gateway',
+    targetThroughputTps: 20
+  },
+  'legacy-payment': {
+    description: 'Legacy payment transformation to PACS',
+    p95Ms: 1800,
+    warningRatio: 0.8,
+    queues: ['swift.mt103.inbound', 'tx.pacs.created'],
+    throughputQueue: 'tx.pacs.created',
+    targetThroughputTps: 25
+  },
+  'incoming-payment': {
+    description: 'Incoming payment sanctions/liquidity pipeline',
+    p95Ms: 2200,
+    warningRatio: 0.8,
+    queues: ['tx.pacs.created', 'tx.lynx.pending', 'tx.correspondent.unreconciled'],
+    throughputQueue: 'tx.correspondent.unreconciled',
+    targetThroughputTps: 20
+  },
+  'core-payment': {
+    description: 'Ingress to reconciliation completion',
+    p95Ms: 2500,
+    warningRatio: 0.8,
+    queues: ['tx.pacs.created', 'tx.lynx.pending', 'tx.correspondent.unreconciled', 'tx.reconciled'],
+    throughputQueue: 'tx.reconciled',
+    targetThroughputTps: 30
+  },
   bocInterface: {
     description: 'Ingress to BoC interface',
     p95Ms: 500,
@@ -52,6 +84,18 @@ export function getLatencyPolicyThresholds(workerConfig = {}) {
 export function validateLatencyPolicyTargetsUpdate(payload = {}) {
   const errors = [];
   const targets = payload?.targets && typeof payload.targets === 'object' ? payload.targets : {};
+  const removeTargets = Array.isArray(payload?.removeTargets) ? payload.removeTargets : [];
+
+  if (payload?.removeTargets !== undefined && !Array.isArray(payload.removeTargets)) {
+    errors.push('removeTargets must be an array when provided.');
+  }
+
+  for (const flowId of removeTargets) {
+    if (!String(flowId || '').trim()) {
+      errors.push('removeTargets entries must be non-empty flow IDs.');
+      break;
+    }
+  }
 
   for (const [targetId, target] of Object.entries(targets)) {
     const flowId = String(targetId || '').trim();
@@ -100,7 +144,22 @@ export function applyLatencyPolicyTargetsUpdate(workerConfig = {}, payload = {},
   if (!workerConfig.monitoring) workerConfig.monitoring = {};
   if (!workerConfig.monitoring.latencyPolicies) workerConfig.monitoring.latencyPolicies = {};
 
+  const existingTargets = workerConfig.monitoring.latencyPolicies.targets && typeof workerConfig.monitoring.latencyPolicies.targets === 'object'
+    ? workerConfig.monitoring.latencyPolicies.targets
+    : {};
+  const removeTargets = new Set(
+    Array.isArray(payload?.removeTargets)
+      ? payload.removeTargets.map((targetId) => String(targetId || '').trim()).filter(Boolean)
+      : []
+  );
+
   const nextTargets = {};
+  for (const [targetId, target] of Object.entries(existingTargets)) {
+    if (!removeTargets.has(String(targetId || '').trim())) {
+      nextTargets[String(targetId).trim()] = normalizeFlowTarget(targetId, target, {});
+    }
+  }
+
   const rawTargets = payload?.targets && typeof payload.targets === 'object' ? payload.targets : {};
 
   for (const [targetId, target] of Object.entries(rawTargets)) {

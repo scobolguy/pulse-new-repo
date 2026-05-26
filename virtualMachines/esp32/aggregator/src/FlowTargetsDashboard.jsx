@@ -15,6 +15,7 @@ function createEmptyFlow(flowId = '') {
 export default function FlowTargetsDashboard() {
   const [enabled, setEnabled] = useState(true);
   const [flows, setFlows] = useState([]);
+  const [removedFlowIds, setRemovedFlowIds] = useState([]);
   const [status, setStatus] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -41,6 +42,7 @@ export default function FlowTargetsDashboard() {
       }));
       setEnabled(flowTargets.enabled === true);
       setFlows(nextFlows);
+      setRemovedFlowIds([]);
       setStatus('');
     } catch (e) {
       setStatus(String(e.message || e));
@@ -64,7 +66,14 @@ export default function FlowTargetsDashboard() {
   }
 
   function removeFlow(index) {
-    setFlows((current) => current.filter((_, flowIndex) => flowIndex !== index));
+    setFlows((current) => {
+      const target = current[index];
+      const flowId = String(target?.flowId || '').trim();
+      if (flowId) {
+        setRemovedFlowIds((existing) => (existing.includes(flowId) ? existing : [...existing, flowId]));
+      }
+      return current.filter((_, flowIndex) => flowIndex !== index);
+    });
   }
 
   async function save() {
@@ -91,7 +100,7 @@ export default function FlowTargetsDashboard() {
           'content-type': 'application/json',
           'x-user-id': actorUserId
         },
-        body: JSON.stringify({ enabled, targets })
+        body: JSON.stringify({ enabled, targets, removeTargets: removedFlowIds })
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {

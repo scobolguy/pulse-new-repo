@@ -9686,76 +9686,18 @@ function registerRoutes(app) {
     });
   });
 
-  // Metrics API Endpoints
-  app.get('/api/metrics/current', (req, res) => {
-    const metrics = metricsCollector.getCurrentMetrics();
-    const latencyPolicy = evaluateLatencyPolicies(metrics, workerConfig);
-    const step3Latency = getStep3LatencySummary({ recentLimit: 20 });
-    const queueEnqueueLatency = getQueueEnqueueLatencySummary({ recentLimit: 3 });
-    const edgeOffload = getEdgeOffloadMetricsSummary();
-    const txStatePersistence = getTxStatePersistenceSummary();
-    res.json({
-      status: 'ok',
-      timestamp: Date.now(),
-      metrics: metrics,
-      latencyPolicy,
-      step3Latency,
-      queueEnqueueLatency,
-      edgeOffload,
-      txStatePersistence
-    });
-  });
+  function markDeprecatedEndpoint(res, successorPath) {
+    res.setHeader('Deprecation', 'true');
+    res.setHeader('Sunset', 'Wed, 30 Sep 2026 00:00:00 GMT');
+    if (successorPath) {
+      res.setHeader('Link', `<${successorPath}>; rel="successor-version"`);
+    }
+  }
 
-  app.get('/api/metrics/edge-offload', (req, res) => {
-    res.json({
-      status: 'ok',
-      timestamp: Date.now(),
-      edgeOffload: getEdgeOffloadMetricsSummary()
-    });
-  });
-
-  app.get('/api/metrics/queue-enqueue-latency', (req, res) => {
-    const recentLimit = Number(req.query.recent || 5);
-    const queueName = req.query.queue ? String(req.query.queue) : null;
-    res.json({
-      status: 'ok',
-      timestamp: Date.now(),
-      enqueueLatency: getQueueEnqueueLatencySummary({ queueName, recentLimit })
-    });
-  });
-
-  app.get('/api/metrics/runtime', requirePermission('lifecycle.read'), (req, res) => {
-    res.json({
-      status: 'ok',
-      diagnostics: getNodeRuntimeDiagnosticsSnapshot()
-    });
-  });
-
-  app.get('/api/metrics/step3-latency', (req, res) => {
-    const recentLimit = Number(req.query.recent || 20);
-    res.json({
-      status: 'ok',
-      timestamp: Date.now(),
-      step3Latency: getStep3LatencySummary({ recentLimit })
-    });
-  });
-
-  app.get('/api/metrics/history', (req, res) => {
-    const limit = parseInt(req.query.limit || '100');
-    const history = metricsCollector.getMetricsHistory(limit);
-    res.json({
-      status: 'ok',
-      samples: history.length,
-      history: history
-    });
-  });
-
-  app.get('/api/queues/status', (req, res) => {
-    const metrics = metricsCollector.getCurrentMetrics();
+  function buildQueueStatusesFromMetrics(metrics) {
     const queueStatuses = [];
-    
-    for (const [queueName, depthData] of Object.entries(metrics.queueDepths)) {
-      const latencyData = metrics.processingLatencies[queueName] || {};
+    for (const [queueName, depthData] of Object.entries(metrics?.queueDepths || {})) {
+      const latencyData = metrics?.processingLatencies?.[queueName] || {};
       queueStatuses.push({
         queue: queueName,
         depth: depthData.current,
@@ -9772,30 +9714,20 @@ function registerRoutes(app) {
         }
       });
     }
-    
-    res.json({
-      status: 'ok',
-      timestamp: Date.now(),
-      queues: queueStatuses
-    });
-  });
+    return queueStatuses;
+  }
 
-  app.get('/api/system/health', (req, res) => {
-    const metrics = metricsCollector.getCurrentMetrics();
-    const resources = metrics.systemResources;
-    
+  function buildSystemHealthFromMetrics(metrics) {
+    const resources = metrics?.systemResources;
     if (!resources) {
-      return res.json({
-        status: 'ok',
-        health: 'initializing'
-      });
+      return { status: 'ok', health: 'initializing' };
     }
-    
+
     const cpuOk = resources.cpu.usagePercent < 80;
     const memOk = resources.memory.usagePercent < 80;
     const overallHealth = cpuOk && memOk ? 'healthy' : 'degraded';
-    
-    res.json({
+
+    return {
       status: 'ok',
       timestamp: Date.now(),
       health: {
@@ -9814,6 +9746,105 @@ function registerRoutes(app) {
         },
         uptime: resources.uptime
       }
+    };
+  }
+
+  function buildCurrentMetricsPayload() {
+    const metrics = metricsCollector.getCurrentMetrics();
+    const latencyPolicy = evaluateLatencyPolicies(metrics, workerConfig);
+    const step3Latency = getStep3LatencySummary({ recentLimit: 20 });
+    const queueEnqueueLatency = getQueueEnqueueLatencySummary({ recentLimit: 3 });
+    const edgeOffload = getEdgeOffloadMetricsSummary();
+    const txStatePersistence = getTxStatePersistenceSummary();
+    return {
+      status: 'ok',
+      timestamp: Date.now(),
+      metrics: metrics,
+      latencyPolicy,
+      step3Latency,
+      queueEnqueueLatency,
+      edgeOffload,
+      txStatePersistence
+    };
+  }
+
+  // Metrics API Endpoints
+  app.get('/api/metrics/current', (req, res) => {
+    res.json(buildCurrentMetricsPayload());
+  });
+
+  app.get('/api/metrics/edge-offload', (req, res) => {
+    markDeprecatedEndpoint(res, '/api/metrics/current');
+    const payload = buildCurrentMetricsPayload();
+    res.json({
+      status: 'ok',
+      timestamp: payload.timestamp,
+      edgeOffload: payload.edgeOffload,
+      derivedFrom: '/api/metrics/current'
+    });
+  });
+
+  app.get('/api/metrics/queue-enqueue-latency', (req, res) => {
+    markDeprecatedEndpoint(res, '/api/metrics/current');
+    const payload = buildCurrentMetricsPayload();
+    const recentLimit = Number(req.query.recent || 5);
+    const queueName = req.query.queue ? String(req.query.queue) : null;
+    const enqueueLatency = getQueueEnqueueLatencySummary({ queueName, recentLimit });
+    res.json({
+      status: 'ok',
+      timestamp: payload.timestamp,
+      enqueueLatency,
+      derivedFrom: '/api/metrics/current'
+    });
+  });
+
+  app.get('/api/metrics/runtime', requirePermission('lifecycle.read'), (req, res) => {
+    res.json({
+      status: 'ok',
+      diagnostics: getNodeRuntimeDiagnosticsSnapshot()
+    });
+  });
+
+  app.get('/api/metrics/step3-latency', (req, res) => {
+    markDeprecatedEndpoint(res, '/api/metrics/current');
+    const payload = buildCurrentMetricsPayload();
+    const recentLimit = Number(req.query.recent || 20);
+    res.json({
+      status: 'ok',
+      timestamp: payload.timestamp,
+      step3Latency: getStep3LatencySummary({ recentLimit }),
+      derivedFrom: '/api/metrics/current'
+    });
+  });
+
+  app.get('/api/metrics/history', (req, res) => {
+    const limit = parseInt(req.query.limit || '100');
+    const history = metricsCollector.getMetricsHistory(limit);
+    res.json({
+      status: 'ok',
+      samples: history.length,
+      history: history
+    });
+  });
+
+  app.get('/api/queues/status', (req, res) => {
+    markDeprecatedEndpoint(res, '/api/metrics/current');
+    const payload = buildCurrentMetricsPayload();
+    res.json({
+      status: 'ok',
+      timestamp: payload.timestamp,
+      queues: buildQueueStatusesFromMetrics(payload.metrics),
+      derivedFrom: '/api/metrics/current'
+    });
+  });
+
+  app.get('/api/system/health', (req, res) => {
+    markDeprecatedEndpoint(res, '/api/metrics/current');
+    const payload = buildCurrentMetricsPayload();
+    const healthPayload = buildSystemHealthFromMetrics(payload.metrics);
+    res.json({
+      ...healthPayload,
+      derivedFrom: '/api/metrics/current'
     });
   });
 
@@ -9871,8 +9902,9 @@ function registerRoutes(app) {
       }
     });
 
-    // Quiesce endpoint (simulate taking out of round robin)
+    // Legacy compatibility aliases. Prefer /api/broker/instances/:instanceId/:action
     app.post('/api/broker/quiesce', (req, res) => {
+      markDeprecatedEndpoint(res, '/api/broker/instances/secondary/quiesce');
       const secondary = getOrCreateBrokerInstance('secondary');
       if (!secondary.active) {
         return res.status(409).json({ error: 'Secondary broker is down' });
@@ -9881,8 +9913,8 @@ function registerRoutes(app) {
       res.json({ status: 'quiesced', state: getBrokerStateLabel() });
     });
 
-    // Stop endpoint (simulate stopping secondary broker)
     app.post('/api/broker/stop', (req, res) => {
+      markDeprecatedEndpoint(res, '/api/broker/instances/secondary/down');
       setBrokerInstanceState('secondary', { active: false, quiesced: false });
       res.json({ status: 'stopped', state: getBrokerStateLabel() });
     });
@@ -10975,10 +11007,11 @@ function registerRoutes(app) {
   debugLog('[DEBUG] All routes registered');
   app.get('/api/nodes', (req, res) => {
     // Backend server as a virtual node
+    const now = Date.now();
     const backendNode = {
       ip: '127.0.0.1',
       nodeName: 'Aggregator Backend',
-      lastSeen: Date.now(),
+      lastSeen: now,
       details: {
         nodeName: 'Aggregator Backend',
         hardware: 'Server',
@@ -10992,8 +11025,74 @@ function registerRoutes(app) {
         version: '1.0.0'
       }
     };
+    const magicClusterNodes = [
+      {
+        kind: 'machineAvailability',
+        serviceName: 'js-pmachine',
+        nodeId: 'magic-js-pmachine-01',
+        nodeName: 'magic-js-pmachine-01',
+        ip: '127.0.10.101',
+        port: 4101,
+        status: 'available',
+        available: true,
+        draining: false,
+        lastSeen: now,
+        ts: now,
+        details: {
+          nodeName: 'magic-js-pmachine-01',
+          hardware: 'PMachine JavaScript VM',
+          runtime: 'js-pmachine',
+          clusterName: 'Magic Cluster',
+          services: ['PMachine Runtime', 'JavaScript VM']
+        }
+      },
+      {
+        kind: 'machineAvailability',
+        serviceName: 'js-pmachine',
+        nodeId: 'magic-js-pmachine-02',
+        nodeName: 'magic-js-pmachine-02',
+        ip: '127.0.10.102',
+        port: 4102,
+        status: 'available',
+        available: true,
+        draining: false,
+        lastSeen: now,
+        ts: now,
+        details: {
+          nodeName: 'magic-js-pmachine-02',
+          hardware: 'PMachine JavaScript VM',
+          runtime: 'js-pmachine',
+          clusterName: 'Magic Cluster',
+          services: ['PMachine Runtime', 'JavaScript VM']
+        }
+      },
+      {
+        kind: 'machineAvailability',
+        serviceName: 'js-pmachine',
+        nodeId: 'magic-js-pmachine-03',
+        nodeName: 'magic-js-pmachine-03',
+        ip: '127.0.10.103',
+        port: 4103,
+        status: 'available',
+        available: true,
+        draining: false,
+        lastSeen: now,
+        ts: now,
+        details: {
+          nodeName: 'magic-js-pmachine-03',
+          hardware: 'PMachine JavaScript VM',
+          runtime: 'js-pmachine',
+          clusterName: 'Magic Cluster',
+          services: ['PMachine Runtime', 'JavaScript VM']
+        }
+      }
+    ];
     // Return backend node + discovered nodes, sorted by lastSeen desc
-    const nodes = [backendNode, ...Array.from(discoveredNodes.values())].sort((a, b) => b.lastSeen - a.lastSeen);
+    const nodes = [
+      backendNode,
+      ...magicClusterNodes,
+      ...Array.from(discoveredNodes.values())
+    ].sort((a, b) => b.lastSeen - a.lastSeen);
     res.json(nodes);
   });
   app.get('/api/proxy/:ip', async (req, res) => {
