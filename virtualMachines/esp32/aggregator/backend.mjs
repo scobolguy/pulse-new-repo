@@ -47,6 +47,8 @@ import { registerLifecycleInquiryRoutes } from './src/backend/roles/lifecycleInq
 import { registerLifecycleWorkerGatewayRoutes } from './src/backend/roles/lifecycleWorkerGatewayRoutes.mjs';
 import { registerQueueBrokerOpsRoutes } from './src/backend/roles/queueBrokerOpsRoutes.mjs';
 import { registerComplianceRoutes } from './src/backend/roles/complianceRoutes.mjs';
+import { registerObservabilityRoutes } from './src/backend/roles/observabilityRoutes.mjs';
+import { registerPlatformRoutes } from './src/backend/roles/platformRoutes.mjs';
 import { createRequestPolicyApi } from './src/backend/security/requestPolicy.mjs';
 import { ROUTE_ROLE_MANIFEST } from './src/backend/routes.manifest.mjs';
 import { registerRoutesFromManifest } from './src/backend/routeManifestLoader.mjs';
@@ -9085,7 +9087,9 @@ function registerRoutes(app) {
       registerLifecycleInquiryRoutes,
       registerLifecycleWorkerGatewayRoutes,
       registerQueueBrokerOpsRoutes,
-      registerComplianceRoutes
+      registerComplianceRoutes,
+      registerObservabilityRoutes,
+      registerPlatformRoutes
     },
     dependencyFactories: {
       lifecycleInquiry: () => ({
@@ -9157,6 +9161,23 @@ function registerRoutes(app) {
         resolveActor,
         formatErrorDetails,
         sanctionsComplianceService
+      }),
+      observability: () => ({
+        requirePermission,
+        metricsCollector,
+        evaluateLatencyPolicies,
+        getWorkerConfig: () => workerConfig,
+        getStep3LatencySummary,
+        getQueueEnqueueLatencySummary,
+        getEdgeOffloadMetricsSummary,
+        getTxStatePersistenceSummary,
+        getNodeRuntimeDiagnosticsSnapshot
+      }),
+      platform: () => ({
+        requirePermission,
+        enumerateApiCatalog,
+        resolvePermissionForApiRequest,
+        routeRoleManifest: ROUTE_ROLE_MANIFEST
       })
     }
   });
@@ -9683,87 +9704,6 @@ function registerRoutes(app) {
       recommendations: recommendations.length > 0 ? recommendations : [
         { type: 'ok', message: 'Current configuration looks good' }
       ]
-    });
-  });
-
-  function buildCurrentMetricsPayload() {
-    const metrics = metricsCollector.getCurrentMetrics();
-    const latencyPolicy = evaluateLatencyPolicies(metrics, workerConfig);
-    const step3Latency = getStep3LatencySummary({ recentLimit: 20 });
-    const queueEnqueueLatency = getQueueEnqueueLatencySummary({ recentLimit: 3 });
-    const edgeOffload = getEdgeOffloadMetricsSummary();
-    const txStatePersistence = getTxStatePersistenceSummary();
-    return {
-      status: 'ok',
-      timestamp: Date.now(),
-      metrics: metrics,
-      latencyPolicy,
-      step3Latency,
-      queueEnqueueLatency,
-      edgeOffload,
-      txStatePersistence
-    };
-  }
-
-  // Metrics API Endpoints
-  app.get('/api/metrics/current', (req, res) => {
-    res.json(buildCurrentMetricsPayload());
-  });
-
-  app.get('/api/metrics/runtime', requirePermission('lifecycle.read'), (req, res) => {
-    res.json({
-      status: 'ok',
-      diagnostics: getNodeRuntimeDiagnosticsSnapshot()
-    });
-  });
-
-  app.get('/api/metrics/history', (req, res) => {
-    const limit = parseInt(req.query.limit || '100');
-    const history = metricsCollector.getMetricsHistory(limit);
-    res.json({
-      status: 'ok',
-      samples: history.length,
-      history: history
-    });
-  });
-
-  app.get('/api/platform/apis', requirePermission('topology.read'), (req, res) => {
-    const methodFilter = String(req.query.method || '').trim().toUpperCase();
-    const domainFilter = String(req.query.domain || '').trim().toLowerCase();
-    const searchFilter = String(req.query.search || '').trim().toLowerCase();
-
-    const catalog = enumerateApiCatalog(app, candidate => resolvePermissionForApiRequest(candidate));
-    const filtered = catalog.filter(item => {
-      if (methodFilter && item.method !== methodFilter) return false;
-      if (domainFilter && item.domain !== domainFilter) return false;
-      if (searchFilter) {
-        const haystack = `${item.method} ${item.path} ${item.description} ${item.domain}`.toLowerCase();
-        if (!haystack.includes(searchFilter)) return false;
-      }
-      return true;
-    });
-
-    const domains = new Map();
-    for (const item of filtered) {
-      const current = domains.get(item.domain) || 0;
-      domains.set(item.domain, current + 1);
-    }
-
-    res.json({
-      status: 'ok',
-      total: filtered.length,
-      domains: Array.from(domains.entries())
-        .map(([domain, count]) => ({ domain, count }))
-        .sort((a, b) => b.count - a.count || a.domain.localeCompare(b.domain)),
-      routes: filtered
-    });
-  });
-
-  app.get('/api/platform/routes/manifest', requirePermission('registry.read'), (req, res) => {
-    res.json({
-      status: 'ok',
-      count: ROUTE_ROLE_MANIFEST.length,
-      manifest: ROUTE_ROLE_MANIFEST
     });
   });
 
