@@ -52,6 +52,7 @@ import { registerPlatformRoutes } from './src/backend/roles/platformRoutes.mjs';
 import { registerReplicationRoutes } from './src/backend/roles/replicationRoutes.mjs';
 import { registerQueueConfigRoutes } from './src/backend/roles/queueConfigRoutes.mjs';
 import { registerQueueTransferRoutes } from './src/backend/roles/queueTransferRoutes.mjs';
+import { registerAvailabilityPresenceRoutes } from './src/backend/roles/availabilityPresenceRoutes.mjs';
 import { createRequestPolicyApi } from './src/backend/security/requestPolicy.mjs';
 import { ROUTE_ROLE_MANIFEST } from './src/backend/routes.manifest.mjs';
 import { registerRoutesFromManifest } from './src/backend/routeManifestLoader.mjs';
@@ -9095,7 +9096,8 @@ function registerRoutes(app) {
       registerPlatformRoutes,
       registerReplicationRoutes,
       registerQueueConfigRoutes,
-      registerQueueTransferRoutes
+      registerQueueTransferRoutes,
+      registerAvailabilityPresenceRoutes
     },
     dependencyFactories: {
       lifecycleInquiry: () => ({
@@ -9203,6 +9205,17 @@ function registerRoutes(app) {
       queueTransfer: () => ({
         requirePermission,
         queueManagerInstances
+      }),
+      availabilityPresence: () => ({
+        machineWorkloadState,
+        getMachineAvailabilityPayload,
+        setMachineAvailable,
+        drainMachineAndSetUnavailable,
+        machineDrainDefaultTimeoutMs: MACHINE_DRAIN_DEFAULT_TIMEOUT_MS,
+        getBrowserPresence,
+        normalizePresenceIp,
+        upsertBrowserPresenceNode,
+        setBrowserPresenceUnavailable
       })
     }
   });
@@ -9852,81 +9865,6 @@ function registerRoutes(app) {
     res.json({ services: [BROKER_SERVICE, ROUTER_SERVICE, QUEUE_SERVICE, FILE_SERVER_SERVICE] });
   });
 
-  app.get('/api/availability/status', (req, res) => {
-    res.json({
-      ...getMachineAvailabilityPayload(),
-      workload: {
-        inFlight: machineWorkloadState.inFlight,
-        updatedAt: machineWorkloadState.updatedAt
-      }
-    });
-  });
-
-  app.post('/api/availability/available', (req, res) => {
-    const next = setMachineAvailable();
-    res.json({ status: 'ok', availability: next });
-  });
-
-  app.post('/api/availability/unavailable', async (req, res) => {
-    const requestedTimeoutMs = Number(req.body?.timeoutMs || req.body?.drainMs || MACHINE_DRAIN_DEFAULT_TIMEOUT_MS);
-    const result = await drainMachineAndSetUnavailable({ timeoutMs: requestedTimeoutMs });
-    res.json({ status: 'ok', ...result });
-  });
-
-  app.get('/api/presence/client/status', (req, res) => {
-    const clientId = String(req.query?.clientId || '').trim();
-    if (!clientId) {
-      return res.status(400).json({ error: 'clientId is required' });
-    }
-    const presence = getBrowserPresence(clientId);
-    return res.json({
-      clientId,
-      available: Boolean(presence?.availability?.available),
-      status: presence?.availability?.status || 'unavailable',
-      node: presence,
-      lastSeen: presence?.lastSeen || null
-    });
-  });
-
-  app.post('/api/presence/client/available', (req, res) => {
-    const clientId = String(req.body?.clientId || '').trim();
-    if (!clientId) {
-      return res.status(400).json({ error: 'clientId is required' });
-    }
-    const nodeName = String(req.body?.nodeName || req.body?.hostname || 'Web Client').trim();
-    const ip = normalizePresenceIp(req.ip || req.socket?.remoteAddress);
-    const userAgent = String(req.get('user-agent') || '').trim();
-    const node = upsertBrowserPresenceNode({ clientId, nodeName, ip, userAgent, available: true });
-    return res.json({ status: 'ok', clientId, available: true, node });
-  });
-
-  app.post('/api/presence/client/heartbeat', (req, res) => {
-    const clientId = String(req.body?.clientId || '').trim();
-    if (!clientId) {
-      return res.status(400).json({ error: 'clientId is required' });
-    }
-    const existing = getBrowserPresence(clientId);
-    if (!existing) {
-      return res.status(404).json({ error: 'presence not found', clientId });
-    }
-    const node = upsertBrowserPresenceNode({
-      clientId,
-      nodeName: existing.nodeName,
-      ip: normalizePresenceIp(req.ip || req.socket?.remoteAddress),
-      userAgent: String(req.get('user-agent') || existing.userAgent || '').trim(),
-      available: true
-    });
-    return res.json({ status: 'ok', clientId, available: true, node });
-  });
-
-  app.post('/api/presence/client/unavailable', (req, res) => {
-    const clientId = String(req.body?.clientId || '').trim();
-    if (!clientId) {
-      return res.status(400).json({ error: 'clientId is required' });
-    }
-    const node = setBrowserPresenceUnavailable(clientId);
-    return res.json({ status: 'ok', clientId, available: false, node });
-  });
   registerLocalServiceHeartbeats();
   setInterval(registerLocalServiceHeartbeats, 10000);
   setInterval(updateVirtualNodes, 3000);
