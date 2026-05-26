@@ -5,5 +5,6 @@ export const ROUTE_ROLE_MANIFEST = [
   { id: 'compliance', registrar: 'registerComplianceRoutes', dependencyKey: 'compliance', enabled: true },
   { id: 'observability', registrar: 'registerObservabilityRoutes', dependencyKey: 'observability', enabled: true },
   { id: 'platform', registrar: 'registerPlatformRoutes', dependencyKey: 'platform', enabled: true },
-  { id: 'replication', registrar: 'registerReplicationRoutes', dependencyKey: 'replication', enabled: true }
+  { id: 'replication', registrar: 'registerReplicationRoutes', dependencyKey: 'replication', enabled: true },
+  { id: 'queue-config', registrar: 'registerQueueConfigRoutes', dependencyKey: 'queueConfig', enabled: true }
 ];
