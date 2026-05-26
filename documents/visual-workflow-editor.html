@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Visual Workflow Editor</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@latest/dist/mermaid.min.js"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: #f5f5f5;
+      display: flex;
+      height: 100vh;
+    }
+
+    /* Left Sidebar - Node Palette */
+    .sidebar {
+      width: 280px;
+      background: #2c3e50;
+      color: #ecf0f1;
+      overflow-y: auto;
+      padding: 20px;
+      border-right: 1px solid #34495e;
+    }
+
+    .sidebar h3 {
+      font-size: 14px;
+      text-transform: uppercase;
+      color: #95a5a6;
+      margin-top: 20px;
+      margin-bottom: 12px;
+      letter-spacing: 0.5px;
+    }
+
+    .sidebar h3:first-child {
+      margin-top: 0;
+    }
+
+    .node-palette {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .node-type {
+      padding: 12px;
+      background: #34495e;
+      border: 1px solid #455a64;
+      border-radius: 4px;
+      cursor: grab;
+      font-size: 13px;
+      transition: all 0.2s;
+      user-select: none;
+    }
+
+    .node-type:hover {
+      background: #3d5a7f;
+      border-color: #3498db;
+      box-shadow: 0 2px 8px rgba(52, 152, 219, 0.2);
+    }
+
+    .node-type:active {
+      cursor: grabbing;
+    }
+
+    .node-type.category-action {
+      border-left: 3px solid #27ae60;
+    }
+
+    .node-type.category-decision {
+      border-left: 3px solid #f39c12;
+    }
+
+    .node-type.category-terminal {
+      border-left: 3px solid #e74c3c;
+    }
+
+    .node-type.category-integration {
+      border-left: 3px solid #9b59b6;
+    }
+
+    /* Main Content Area */
+    .main-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Top Toolbar */
+    .toolbar {
+      background: #34495e;
+      border-bottom: 1px solid #2c3e50;
+      padding: 12px 20px;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      color: #ecf0f1;
+    }
+
+    .toolbar button {
+      padding: 8px 16px;
+      background: #3498db;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+      transition: background 0.2s;
+    }
+
+    .toolbar button:hover {
+      background: #2980b9;
+    }
+
+    .toolbar button:active {
+      transform: scale(0.98);
+    }
+
+    .toolbar button.danger {
+      background: #e74c3c;
+    }
+
+    .toolbar button.danger:hover {
+      background: #c0392b;
+    }
+
+    .toolbar input {
+      padding: 6px 12px;
+      border: 1px solid #455a64;
+      border-radius: 4px;
+      background: #2c3e50;
+      color: #ecf0f1;
+      font-size: 13px;
+    }
+
+    .toolbar-spacer {
+      flex: 1;
+    }
+
+    /* Canvas Area */
+    .editor-container {
+      flex: 1;
+      display: flex;
+      gap: 20px;
+      padding: 20px;
+      overflow: hidden;
+    }
+
+    .canvas-section {
+      flex: 1;
+      background: white;
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .canvas-section h4 {
+      padding: 12px;
+      background: #ecf0f1;
+      border-bottom: 1px solid #bdc3c7;
+      font-size: 13px;
+      color: #2c3e50;
+      margin: 0;
+    }
+
+    #canvas {
+      flex: 1;
+      background: #fafafa;
+      cursor: crosshair;
+      border: none;
+    }
+
+    .mermaid-preview {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      background: #f9f9f9;
+      border: 1px solid #ecf0f1;
+      border-radius: 4px;
+      position: relative;
+    }
+
+    .mermaid {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100%;
+    }
+
+    /* Node Styling on Canvas */
+    .canvas-node {
+      position: absolute;
+      min-width: 120px;
+      background: white;
+      border: 2px solid #3498db;
+      border-radius: 4px;
+      padding: 8px;
+      text-align: center;
+      cursor: move;
+      user-select: none;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+      transition: all 0.2s;
+    }
+
+    .canvas-node:hover {
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      border-color: #2980b9;
+    }
+
+    .canvas-node.selected {
+      border-color: #e74c3c;
+      background: #fff5f5;
+    }
+
+    .canvas-node.action {
+      border-color: #27ae60;
+    }
+
+    .canvas-node.decision {
+      border-color: #f39c12;
+      clip-path: polygon(50% 0%, 100% 38%, 82% 100%, 18% 100%, 0% 38%);
+    }
+
+    .canvas-node.terminal {
+      border-color: #e74c3c;
+      border-radius: 50%;
+    }
+
+    .canvas-node-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #2c3e50;
+    }
+
+    /* Properties Panel */
+    .properties-panel {
+      width: 280px;
+      background: white;
+      border-left: 1px solid #ecf0f1;
+      padding: 20px;
+      overflow-y: auto;
+      box-shadow: 0 -2px 8px rgba(0,0,0,0.05);
+    }
+
+    .properties-panel h4 {
+      font-size: 13px;
+      color: #2c3e50;
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .property-group {
+      margin-bottom: 16px;
+    }
+
+    .property-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #34495e;
+      margin-bottom: 4px;
+      display: block;
+    }
+
+    .property-input,
+    .property-select {
+      width: 100%;
+      padding: 6px;
+      border: 1px solid #bdc3c7;
+      border-radius: 3px;
+      font-size: 12px;
+      background: #f9f9f9;
+    }
+
+    .property-input:focus,
+    .property-select:focus {
+      outline: none;
+      border-color: #3498db;
+      background: white;
+      box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.1);
+    }
+
+    /* Export Section */
+    .export-section {
+      margin-top: 20px;
+      padding-top: 20px;
+      border-top: 1px solid #ecf0f1;
+    }
+
+    .export-textarea {
+      width: 100%;
+      height: 150px;
+      padding: 8px;
+      border: 1px solid #bdc3c7;
+      border-radius: 3px;
+      font-family: 'Monaco', 'Courier New', monospace;
+      font-size: 11px;
+      resize: none;
+      background: #f9f9f9;
+    }
+
+    .copy-button {
+      margin-top: 8px;
+      padding: 6px 12px;
+      background: #27ae60;
+      color: white;
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .copy-button:hover {
+      background: #229954;
+    }
+
+    /* Responsive */
+    @media (max-width: 1400px) {
+      .editor-container {
+        flex-direction: column;
+      }
+
+      .canvas-section,
+      .properties-panel {
+        width: 100% !important;
+      }
+
+      .properties-panel {
+        border-left: none;
+        border-top: 1px solid #ecf0f1;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- Left Sidebar -->
+  <div class="sidebar">
+    <h3>🚀 Workflow Nodes</h3>
+    <div class="node-palette" id="nodePalette"></div>
+
+    <h3>📊 Task Charts</h3>
+    <div class="node-palette" id="taskPalette"></div>
+
+    <h3>📨 Message Flow</h3>
+    <div class="node-palette" id="messagePalette"></div>
+  </div>
+
+  <!-- Main Content -->
+  <div class="main-content">
+    <!-- Toolbar -->
+    <div class="toolbar">
+      <input
+        type="text"
+        id="workflowName"
+        placeholder="Workflow name..."
+        style="flex: 1; max-width: 300px;"
+      >
+      <button onclick="app.validateGraph()">✓ Validate</button>
+      <button onclick="app.exportDSL()">📝 Export DSL</button>
+      <button onclick="app.exportPcode()">⚙️ Export Pcode</button>
+      <button onclick="app.clearCanvas()" class="danger">🗑️ Clear</button>
+      <button onclick="app.downloadJSON()">💾 Save</button>
+      <button onclick="document.getElementById('loadFile').click()">📂 Load</button>
+      <input type="file" id="loadFile" accept=".json" style="display:none;" onchange="app.loadJSON(event)">
+    </div>
+
+    <!-- Editor Container -->
+    <div class="editor-container">
+      <!-- Left: Canvas -->
+      <div class="canvas-section">
+        <h4>Visual Editor - Drag nodes to position, right-click to delete</h4>
+        <canvas id="canvas"></canvas>
+      </div>
+
+      <!-- Right: Mermaid Preview + Properties -->
+      <div style="display: flex; flex-direction: column; flex: 1; gap: 20px;">
+        <div class="canvas-section">
+          <h4>📈 Mermaid Preview</h4>
+          <div class="mermaid-preview" id="mermaidPreview"></div>
+        </div>
+
+        <!-- Properties Panel -->
+        <div class="properties-panel">
+          <h4>Properties</h4>
+          <div id="propertiesContent">
+            <p style="color: #95a5a6; font-size: 12px;">Select a node to edit properties</p>
+          </div>
+          <div class="export-section">
+            <h4>Mermaid Code</h4>
+            <textarea class="export-textarea" id="mermaidCode" readonly></textarea>
+            <button class="copy-button" onclick="app.copyToClipboard('mermaidCode')">
+              📋 Copy Mermaid
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Global App State
+    const app = {
+      canvas: null,
+      ctx: null,
+      graphService: null,
+      selectedNode: null,
+      draggedNode: null,
+      dragOffset: { x: 0, y: 0 },
+      zoom: 1,
+      pan: { x: 0, y: 0 },
+      nodeTypes: {},
+
+      init() {
+        this.setupCanvas();
+        this.loadNodeTypes();
+        this.renderNodePalettes();
+        this.setupEventListeners();
+        this.initGraphService();
+        this.render();
+      },
+
+      setupCanvas() {
+        this.canvas = document.getElementById('canvas');
+        this.ctx = this.canvas.getContext('2d');
+        this.canvas.width = this.canvas.offsetWidth;
+        this.canvas.height = this.canvas.offsetHeight;
+        window.addEventListener('resize', () => {
+          this.canvas.width = this.canvas.offsetWidth;
+          this.canvas.height = this.canvas.offsetHeight;
+          this.render();
+        });
+      },
+
+      loadNodeTypes() {
+        // Define node types (would come from server in production)
+        this.nodeTypes = {
+          // Workflow nodes
+          start: { label: 'Start', category: 'terminal', icon: '⭕' },
+          end: { label: 'End', category: 'terminal', icon: '⭕' },
+          action: { label: 'Action', category: 'action', icon: '⚡' },
+          decision: { label: 'Decision', category: 'decision', icon: '◇' },
+          'queue-router': { label: 'Queue Router', category: 'integration', icon: '📨' },
+          'async-task': { label: 'Async Task', category: 'action', icon: '⏱️' },
+          
+          // Task chart nodes
+          'task-node': { label: 'Task', category: 'action', icon: '📋' },
+          'parallel-task': { label: 'Parallel', category: 'action', icon: '⚡⚡' },
+          'wait-node': { label: 'Wait', category: 'action', icon: '⏳' },
+          
+          // Message flow nodes
+          'message-source': { label: 'Source', category: 'terminal', icon: '📤' },
+          'message-sink': { label: 'Sink', category: 'terminal', icon: '📥' },
+          'message-filter': { label: 'Filter', category: 'action', icon: '🔍' },
+          'message-transform': { label: 'Transform', category: 'action', icon: '🔄' },
+        };
+      },
+
+      renderNodePalettes() {
+        const categories = {
+          workflow: ['start', 'end', 'action', 'decision', 'queue-router', 'async-task'],
+          task: ['task-node', 'parallel-task', 'wait-node'],
+          message: ['message-source', 'message-sink', 'message-filter', 'message-transform'],
+        };
+
+        for (const [nodeId, def] of Object.entries(this.nodeTypes)) {
+          const category = this.getNodeCategory(nodeId);
+          const elem = document.createElement('div');
+          elem.className = `node-type category-${def.category}`;
+          elem.textContent = `${def.icon} ${def.label}`;
+          elem.draggable = true;
+          elem.dataset.nodeType = nodeId;
+          elem.addEventListener('dragstart', (e) => {
+            e.dataTransfer.effectAllowed = 'copy';
+            e.dataTransfer.setData('nodeType', nodeId);
+          });
+
+          if (category === 'workflow') {
+            document.getElementById('nodePalette').appendChild(elem);
+          } else if (category === 'task') {
+            document.getElementById('taskPalette').appendChild(elem);
+          } else if (category === 'message') {
+            document.getElementById('messagePalette').appendChild(elem);
+          }
+        }
+      },
+
+      getNodeCategory(nodeId) {
+        if (['task-node', 'parallel-task', 'wait-node'].includes(nodeId)) return 'task';
+        if (['message-source', 'message-sink', 'message-filter', 'message-transform'].includes(nodeId)) return 'message';
+        return 'workflow';
+      },
+
+      initGraphService() {
+        // Initialize graph service (would be created via API call)
+        this.graphService = {
+          id: 'workflow_' + Date.now(),
+          name: 'Untitled Workflow',
+          type: 'workflow',
+          nodes: [],
+          edges: [],
+          
+          addNode(type, label) {
+            const node = {
+              id: 'node_' + Date.now() + '_' + Math.random(),
+              type,
+              label,
+              properties: {},
+              x: Math.random() * 600 + 50,
+              y: Math.random() * 400 + 50,
+            };
+            this.nodes.push(node);
+            return node;
+          },
+          
+          addEdge(sourceId, targetId, label) {
+            const edge = {
+              id: 'edge_' + Date.now() + '_' + Math.random(),
+              sourceId,
+              targetId,
+              label,
+            };
+            this.edges.push(edge);
+            return edge;
+          },
+
+          removeNode(nodeId) {
+            this.nodes = this.nodes.filter(n => n.id !== nodeId);
+            this.edges = this.edges.filter(e => e.sourceId !== nodeId && e.targetId !== nodeId);
+          },
+        };
+      },
+
+      setupEventListeners() {
+        this.canvas.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'copy';
+        });
+
+        this.canvas.addEventListener('drop', (e) => {
+          e.preventDefault();
+          const nodeType = e.dataTransfer.getData('nodeType');
+          if (nodeType) {
+            const rect = this.canvas.getBoundingClientRect();
+            const x = (e.clientX - rect.left - this.pan.x) / this.zoom;
+            const y = (e.clientY - rect.top - this.pan.y) / this.zoom;
+            const label = this.nodeTypes[nodeType].label;
+            const node = this.graphService.addNode(nodeType, label);
+            node.x = x;
+            node.y = y;
+            this.render();
+          }
+        });
+
+        this.canvas.addEventListener('mousedown', (e) => {
+          const pos = this.getMousePos(e);
+          const node = this.getNodeAtPos(pos);
+          if (node) {
+            this.selectedNode = node;
+            this.draggedNode = node;
+            this.dragOffset = {
+              x: pos.x - node.x,
+              y: pos.y - node.y,
+            };
+            this.updateProperties();
+            this.render();
+          }
+        });
+
+        this.canvas.addEventListener('mousemove', (e) => {
+          if (this.draggedNode) {
+            const pos = this.getMousePos(e);
+            this.draggedNode.x = pos.x - this.dragOffset.x;
+            this.draggedNode.y = pos.y - this.dragOffset.y;
+            this.render();
+          }
+        });
+
+        this.canvas.addEventListener('mouseup', () => {
+          this.draggedNode = null;
+        });
+
+        this.canvas.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          const pos = this.getMousePos(e);
+          const node = this.getNodeAtPos(pos);
+          if (node) {
+            this.graphService.removeNode(node.id);
+            if (this.selectedNode === node) this.selectedNode = null;
+            this.render();
+          }
+        });
+
+        document.getElementById('workflowName').addEventListener('change', (e) => {
+          this.graphService.name = e.target.value;
+        });
+      },
+
+      getMousePos(e) {
+        const rect = this.canvas.getBoundingClientRect();
+        return {
+          x: (e.clientX - rect.left - this.pan.x) / this.zoom,
+          y: (e.clientY - rect.top - this.pan.y) / this.zoom,
+        };
+      },
+
+      getNodeAtPos(pos) {
+        for (const node of this.graphService.nodes) {
+          const w = 120;
+          const h = 60;
+          if (pos.x >= node.x && pos.x <= node.x + w &&
+              pos.y >= node.y && pos.y <= node.y + h) {
+            return node;
+          }
+        }
+        return null;
+      },
+
+      updateProperties() {
+        const content = document.getElementById('propertiesContent');
+        if (!this.selectedNode) {
+          content.innerHTML = '<p style="color: #95a5a6; font-size: 12px;">Select a node to edit properties</p>';
+          return;
+        }
+
+        const node = this.selectedNode;
+        const typeDef = this.nodeTypes[node.type];
+        let html = `<div class="property-group"><label class="property-label">Type</label><input type="text" value="${typeDef.label}" readonly class="property-input"></div>`;
+        html += `<div class="property-group"><label class="property-label">Label</label><input type="text" value="${node.label}" class="property-input" onchange="app.selectedNode.label = this.value; app.render();"></div>`;
+
+        // Add type-specific properties
+        if (node.type === 'action') {
+          html += `<div class="property-group"><label class="property-label">Operation</label><input type="text" class="property-input" placeholder="Operation name"></div>`;
+          html += `<div class="property-group"><label class="property-label">Timeout (ms)</label><input type="number" value="5000" class="property-input"></div>`;
+        } else if (node.type === 'decision') {
+          html += `<div class="property-group"><label class="property-label">Condition</label><input type="text" class="property-input" placeholder="Expression"></div>`;
+        }
+
+        content.innerHTML = html;
+      },
+
+      render() {
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+        // Draw edges
+        for (const edge of this.graphService.edges) {
+          const sourceNode = this.graphService.nodes.find(n => n.id === edge.sourceId);
+          const targetNode = this.graphService.nodes.find(n => n.id === edge.targetId);
+          if (sourceNode && targetNode) {
+            this.drawEdge(sourceNode, targetNode, edge.label);
+          }
+        }
+
+        // Draw nodes
+        for (const node of this.graphService.nodes) {
+          this.drawNode(node);
+        }
+
+        this.updateMermaidPreview();
+      },
+
+      drawNode(node) {
+        const x = this.pan.x + node.x * this.zoom;
+        const y = this.pan.y + node.y * this.zoom;
+        const w = 120;
+        const h = 60;
+
+        // Determine color based on type
+        let color = '#3498db';
+        if (node.type.includes('action')) color = '#27ae60';
+        else if (node.type === 'decision') color = '#f39c12';
+        else if (node.type.includes('terminal') || node.type === 'start' || node.type === 'end') color = '#e74c3c';
+
+        this.ctx.fillStyle = node === this.selectedNode ? '#fff5f5' : '#ffffff';
+        this.ctx.strokeStyle = node === this.selectedNode ? '#e74c3c' : color;
+        this.ctx.lineWidth = 2;
+
+        if (node.type === 'decision') {
+          // Diamond for decision
+          this.ctx.beginPath();
+          this.ctx.moveTo(x + w/2, y);
+          this.ctx.lineTo(x + w, y + h/2);
+          this.ctx.lineTo(x + w/2, y + h);
+          this.ctx.lineTo(x, y + h/2);
+          this.ctx.closePath();
+        } else if (node.type === 'start' || node.type === 'end') {
+          // Circle for terminal
+          this.ctx.beginPath();
+          this.ctx.arc(x + w/2, y + h/2, w/2, 0, Math.PI * 2);
+        } else {
+          // Rectangle for action
+          this.ctx.fillRect(x, y, w, h);
+          this.ctx.strokeRect(x, y, w, h);
+        }
+
+        this.ctx.fill();
+        this.ctx.stroke();
+
+        // Draw label
+        this.ctx.fillStyle = '#2c3e50';
+        this.ctx.font = 'bold 12px Arial';
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText(node.label, x + w/2, y + h/2);
+      },
+
+      drawEdge(source, target, label) {
+        const sx = this.pan.x + source.x * this.zoom + 60;
+        const sy = this.pan.y + source.y * this.zoom + 30;
+        const tx = this.pan.x + target.x * this.zoom + 60;
+        const ty = this.pan.y + target.y * this.zoom + 30;
+
+        this.ctx.strokeStyle = '#34495e';
+        this.ctx.lineWidth = 2;
+        this.ctx.setLineDash([]);
+        
+        // Arrow line
+        this.ctx.beginPath();
+        this.ctx.moveTo(sx, sy);
+        this.ctx.lineTo(tx, ty);
+        this.ctx.stroke();
+
+        // Arrow head
+        const angle = Math.atan2(ty - sy, tx - sx);
+        const arrowLen = 15;
+        this.ctx.beginPath();
+        this.ctx.moveTo(tx, ty);
+        this.ctx.lineTo(tx - arrowLen * Math.cos(angle - Math.PI / 6), ty - arrowLen * Math.sin(angle - Math.PI / 6));
+        this.ctx.lineTo(tx - arrowLen * Math.cos(angle + Math.PI / 6), ty - arrowLen * Math.sin(angle + Math.PI / 6));
+        this.ctx.closePath();
+        this.ctx.fillStyle = '#34495e';
+        this.ctx.fill();
+
+        // Label
+        if (label) {
+          const mx = (sx + tx) / 2;
+          const my = (sy + ty) / 2;
+          this.ctx.fillStyle = '#2c3e50';
+          this.ctx.font = '11px Arial';
+          this.ctx.textAlign = 'center';
+          this.ctx.fillText(label, mx, my - 10);
+        }
+      },
+
+      updateMermaidPreview() {
+        const mermaidCode = this.generateMermaid();
+        document.getElementById('mermaidCode').value = mermaidCode;
+        
+        const preview = document.getElementById('mermaidPreview');
+        preview.innerHTML = `<div class="mermaid">${mermaidCode}</div>`;
+        mermaid.contentLoaded();
+      },
+
+      generateMermaid() {
+        let code = 'graph TD\n';
+        for (const node of this.graphService.nodes) {
+          const def = this.nodeTypes[node.type];
+          code += `  ${node.id}["${def.icon} ${node.label}"]\n`;
+        }
+        for (const edge of this.graphService.edges) {
+          const label = edge.label ? ` |${edge.label}|` : '';
+          code += `  ${edge.sourceId} --> ${edge.targetId}\n`;
+        }
+        return code;
+      },
+
+      validateGraph() {
+        alert('Graph validation: ' + this.graphService.nodes.length + ' nodes, ' + this.graphService.edges.length + ' edges');
+      },
+
+      exportDSL() {
+        const dsl = 'program ' + this.graphService.name + ';\nbegin\n  { DSL export not yet implemented }\nend.';
+        alert('DSL Export:\n\n' + dsl);
+      },
+
+      exportPcode() {
+        const pcode = '# Pcode from: ' + this.graphService.name + '\nNOP\nHALT';
+        alert('Pcode Export:\n\n' + pcode);
+      },
+
+      clearCanvas() {
+        if (confirm('Clear all nodes and edges?')) {
+          this.graphService.nodes = [];
+          this.graphService.edges = [];
+          this.selectedNode = null;
+          this.render();
+        }
+      },
+
+      downloadJSON() {
+        const json = JSON.stringify(this.graphService, null, 2);
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = this.graphService.name + '.json';
+        a.click();
+      },
+
+      loadJSON(event) {
+        const file = event.target.files[0];
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            this.graphService = JSON.parse(e.target.result);
+            document.getElementById('workflowName').value = this.graphService.name;
+            this.render();
+          } catch (err) {
+            alert('Error loading file: ' + err.message);
+          }
+        };
+        reader.readAsText(file);
+      },
+
+      copyToClipboard(elementId) {
+        const elem = document.getElementById(elementId);
+        elem.select();
+        document.execCommand('copy');
+        alert('Copied to clipboard!');
+      },
+    };
+
+    // Initialize app
+    document.addEventListener('DOMContentLoaded', () => {
+      app.init();
+    });
+  </script>
+</body>
+</html>
