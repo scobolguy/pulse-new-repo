@@ -94,6 +94,7 @@ const OPERATIONS_TASKS = [
 ];
 
 const USER_ADMIN_ACTIONS = ['add', 'delete', 'update'];
+const LOGIN_SECTION_VISIBLE_LIMIT = 6;
 const LANGUAGE_OPTIONS = [
   { value: 'en-US', label: 'English' },
   { value: 'fr-CA', label: 'French' },
@@ -114,6 +115,12 @@ const LANGUAGE_COPY = {
     no: 'No',
     noItems: 'No items available.',
     tasks: 'Tasks',
+    showAll: 'Show all',
+    showLess: 'Show less',
+    topology: 'Topology',
+    pmachineTopology: 'PMachine topology',
+    openTopology: 'Open PMachine topology',
+    pmachineCountLabel: 'PMachine nodes',
     stateRunning: 'Running',
     statePaused: 'Paused',
     stateOffline: 'Offline',
@@ -131,6 +138,12 @@ const LANGUAGE_COPY = {
     yes: 'Oui',
     no: 'Non',
     noItems: 'Aucun element disponible.',
+    showAll: 'Afficher tout',
+    showLess: 'Afficher moins',
+    topology: 'Topologie',
+    pmachineTopology: 'Topologie PMachine',
+    openTopology: 'Ouvrir la topologie PMachine',
+    pmachineCountLabel: 'Noeuds PMachine',
     stateRunning: 'En marche',
     statePaused: 'En pause',
     stateOffline: 'Hors ligne',
@@ -148,6 +161,12 @@ const LANGUAGE_COPY = {
     yes: 'Si',
     no: 'No',
     noItems: 'No hay elementos disponibles.',
+    showAll: 'Mostrar todo',
+    showLess: 'Mostrar menos',
+    topology: 'Topologia',
+    pmachineTopology: 'Topologia PMachine',
+    openTopology: 'Abrir topologia PMachine',
+    pmachineCountLabel: 'Nodos PMachine',
     stateRunning: 'En ejecucion',
     statePaused: 'En pausa',
     stateOffline: 'Sin conexion',
@@ -165,6 +184,12 @@ const LANGUAGE_COPY = {
     yes: 'Ja',
     no: 'Nein',
     noItems: 'Keine Elemente verfuegbar.',
+    showAll: 'Alle anzeigen',
+    showLess: 'Weniger anzeigen',
+    topology: 'Topologie',
+    pmachineTopology: 'PMachine-Topologie',
+    openTopology: 'PMachine-Topologie oeffnen',
+    pmachineCountLabel: 'PMachine-Knoten',
     stateRunning: 'Aktiv',
     statePaused: 'Pausiert',
     stateOffline: 'Offline',
@@ -247,6 +272,17 @@ function getLanguageKey(language) {
   if (normalized.startsWith('es')) return 'es';
   if (normalized.startsWith('de')) return 'de';
   return 'en';
+}
+
+function countPmachineNodes(nodes = []) {
+  if (!Array.isArray(nodes)) return 0;
+  return nodes.filter((node) => {
+    const details = node?.details || {};
+    const hardware = String(details.hardware || '').toLowerCase();
+    const serviceName = String(node?.serviceName || '').toLowerCase();
+    const services = Array.isArray(details.services) ? details.services.map((service) => String(service).toLowerCase()) : [];
+    return hardware.includes('pmachine') || serviceName.includes('pmachine') || services.some((service) => service.includes('pmachine'));
+  }).length;
 }
 
 function getThroughputHealth(actualTps, targetTps, runtimeStatus) {
@@ -703,6 +739,7 @@ function App() {
     flows: [],
     system: { cpuUsagePercent: null, memoryUsagePercent: null }
   });
+  const [pmachineNodeCount, setPmachineNodeCount] = useState(0);
   const [rhsWidth, setRhsWidth] = useState(() => {
     const saved = Number(localStorage.getItem('pulse.rhsWidth'));
     if (Number.isFinite(saved)) {
@@ -713,6 +750,7 @@ function App() {
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const [askBoxActive, setAskBoxActive] = useState(true);
   const [collapsedSections, setCollapsedSections] = useState({ flows: false, services: false, servers: false });
+  const [expandedSections, setExpandedSections] = useState({ flows: false, services: false, servers: false });
   const [cardContextMenu, setCardContextMenu] = useState({ open: false, x: 0, y: 0, kind: null, item: null });
   const [cardHiddenMap, setCardHiddenMap] = useState({});
   const [cardRenameMap, setCardRenameMap] = useState({});
@@ -729,6 +767,10 @@ function App() {
 
   function toggleSection(sectionId) {
     setCollapsedSections((current) => ({ ...current, [sectionId]: !current[sectionId] }));
+  }
+
+  function toggleSectionExpansion(sectionId) {
+    setExpandedSections((current) => ({ ...current, [sectionId]: !current[sectionId] }));
   }
 
   async function copyTextToClipboard(text) {
@@ -1451,6 +1493,29 @@ function App() {
   }, [language]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    async function refreshPmachineNodeCount() {
+      try {
+        const res = await fetch('/api/nodes');
+        const nodes = await res.json().catch(() => []);
+        if (cancelled) return;
+        setPmachineNodeCount(countPmachineNodes(nodes));
+      } catch {
+        if (!cancelled) setPmachineNodeCount(0);
+      }
+    }
+
+    refreshPmachineNodeCount();
+    const interval = setInterval(refreshPmachineNodeCount, 30000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
     localStorage.setItem('pulse.windowStyle', windowStyle);
   }, [windowStyle]);
 
@@ -2155,6 +2220,12 @@ function App() {
                               {task.label}
                             </button>
                           ))}
+                          <button
+                            className={`admin-subtask-item ${area === 'develop' ? 'is-active' : ''}`}
+                            onClick={() => setArea('develop')}
+                          >
+                            Network Topology
+                          </button>
                           <div className="admin-subtasks" aria-label="Overview Lists">
                             <button
                               className={`admin-subtask-item ${collapsedSections.flows ? '' : 'is-active'}`}
@@ -2232,11 +2303,43 @@ function App() {
               <div className="login-mini-sections">
                 <section className="login-mini-section">
                   <header>
+                    <h3>{copy.pmachineTopology}</h3>
+                    <span className="login-mini-toggle">{pmachineNodeCount} {copy.pmachineCountLabel}</span>
+                  </header>
+                  <div className="login-mini-grid">
+                    <article
+                      className="login-mini-card is-workflow"
+                      onClick={() => setArea('develop')}
+                      title={copy.openTopology}
+                    >
+                      <div className="login-mini-badge">N</div>
+                      <strong>{copy.openTopology}</strong>
+                      <div className="login-mini-row"><span>Type</span><b>Network</b></div>
+                      <div className="login-mini-row"><span>Area</span><b>Develop</b></div>
+                    </article>
+                  </div>
+                </section>
+
+                <section className="login-mini-section">
+                  <header>
                     <h3>{copy.flows}</h3>
-                    <span className="login-mini-toggle">{activeFlowCount}/{visibleFlows.length}</span>
+                    <div className="login-mini-header-actions">
+                      <span className="login-mini-toggle">{activeFlowCount}/{visibleFlows.length}</span>
+                      {!collapsedSections.flows && visibleFlows.length > LOGIN_SECTION_VISIBLE_LIMIT && (
+                        <button
+                          type="button"
+                          className="login-mini-toggle"
+                          onClick={() => toggleSectionExpansion('flows')}
+                        >
+                          {expandedSections.flows
+                            ? copy.showLess
+                            : `${copy.showAll} (${visibleFlows.length - LOGIN_SECTION_VISIBLE_LIMIT})`}
+                        </button>
+                      )}
+                    </div>
                   </header>
                   <div className={`login-mini-grid${collapsedSections.flows ? ' is-collapsed' : ''}`}>
-                    {visibleFlows.length === 0 ? <div className="login-mini-empty">{copy.noItems}</div> : visibleFlows.map((flow) => {
+                    {(expandedSections.flows ? visibleFlows : visibleFlows.slice(0, LOGIN_SECTION_VISIBLE_LIMIT)).length === 0 ? <div className="login-mini-empty">{copy.noItems}</div> : (expandedSections.flows ? visibleFlows : visibleFlows.slice(0, LOGIN_SECTION_VISIBLE_LIMIT)).map((flow) => {
                       const runningWell = flow.runtimeStatus === 'running' && !['breach', 'critical'].includes(flow.throughputStatus) && !['critical'].includes(flow.policyStatus);
                       const currentState = flow.runtimeStatus === 'idle' ? copy.stateIdle : getFlowStatusLabel(flow.throughputStatus);
                       return (
@@ -2260,10 +2363,23 @@ function App() {
                 <section className="login-mini-section">
                   <header>
                     <h3>{copy.services}</h3>
-                    <span className="login-mini-toggle">{serviceRunningCount}/{visibleServices.length}</span>
+                    <div className="login-mini-header-actions">
+                      <span className="login-mini-toggle">{serviceRunningCount}/{visibleServices.length}</span>
+                      {!collapsedSections.services && visibleServices.length > LOGIN_SECTION_VISIBLE_LIMIT && (
+                        <button
+                          type="button"
+                          className="login-mini-toggle"
+                          onClick={() => toggleSectionExpansion('services')}
+                        >
+                          {expandedSections.services
+                            ? copy.showLess
+                            : `${copy.showAll} (${visibleServices.length - LOGIN_SECTION_VISIBLE_LIMIT})`}
+                        </button>
+                      )}
+                    </div>
                   </header>
                   <div className={`login-mini-grid${collapsedSections.services ? ' is-collapsed' : ''}`}>
-                    {visibleServices.length === 0 ? <div className="login-mini-empty">{copy.noItems}</div> : visibleServices.map((service) => {
+                    {(expandedSections.services ? visibleServices : visibleServices.slice(0, LOGIN_SECTION_VISIBLE_LIMIT)).length === 0 ? <div className="login-mini-empty">{copy.noItems}</div> : (expandedSections.services ? visibleServices : visibleServices.slice(0, LOGIN_SECTION_VISIBLE_LIMIT)).map((service) => {
                       const runningWell = service.status === 'online';
                       const currentState = service.status === 'online' ? copy.stateRunning : service.status === 'paused' ? copy.statePaused : copy.stateOffline;
                       return (
@@ -2285,10 +2401,23 @@ function App() {
                 <section className="login-mini-section">
                   <header>
                     <h3>{copy.servers}</h3>
-                    <span className="login-mini-toggle">{serverRunningCount}/{visibleServers.length}</span>
+                    <div className="login-mini-header-actions">
+                      <span className="login-mini-toggle">{serverRunningCount}/{visibleServers.length}</span>
+                      {!collapsedSections.servers && visibleServers.length > LOGIN_SECTION_VISIBLE_LIMIT && (
+                        <button
+                          type="button"
+                          className="login-mini-toggle"
+                          onClick={() => toggleSectionExpansion('servers')}
+                        >
+                          {expandedSections.servers
+                            ? copy.showLess
+                            : `${copy.showAll} (${visibleServers.length - LOGIN_SECTION_VISIBLE_LIMIT})`}
+                        </button>
+                      )}
+                    </div>
                   </header>
                   <div className={`login-mini-grid${collapsedSections.servers ? ' is-collapsed' : ''}`}>
-                    {visibleServers.length === 0 ? <div className="login-mini-empty">{copy.noItems}</div> : visibleServers.map((server) => {
+                    {(expandedSections.servers ? visibleServers : visibleServers.slice(0, LOGIN_SECTION_VISIBLE_LIMIT)).length === 0 ? <div className="login-mini-empty">{copy.noItems}</div> : (expandedSections.servers ? visibleServers : visibleServers.slice(0, LOGIN_SECTION_VISIBLE_LIMIT)).map((server) => {
                       const runningWell = server.status === 'online';
                       const currentState = server.status === 'online' ? copy.stateRunning : server.status === 'paused' ? copy.statePaused : copy.stateOffline;
                       return (

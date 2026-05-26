@@ -777,6 +777,12 @@
   color: #9db1ce;
 }
 
+.login-mini-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .login-mini-toggle {
   border: 1px solid var(--control-line);
   border-radius: 999px;

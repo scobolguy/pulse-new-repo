@@ -1,4 +1,4 @@
-import React, { useEffect, useState, memo } from 'react';
+import React, { useEffect, useMemo, useState, memo } from 'react';
 
 function getPresenceClientIdentity() {
   const key = 'pulse.presenceClientId';
@@ -14,8 +14,110 @@ function getPresenceClientIdentity() {
   const nodeName = isMac ? 'MacBook Client' : 'Web Client';
   return { clientId, nodeName };
 }
+
+function isPmachineNode(node) {
+  const details = node?.details || {};
+  const hardware = String(details.hardware || '').toLowerCase();
+  const serviceName = String(node?.serviceName || '').toLowerCase();
+  const services = Array.isArray(details.services) ? details.services.map((service) => String(service).toLowerCase()) : [];
+  return hardware.includes('pmachine') || serviceName.includes('pmachine') || services.some((service) => service.includes('pmachine'));
+}
+
+function getClusterLabel(node) {
+  const details = node?.details || {};
+  return String(details.clusterName || details.clusterId || node?.clusterName || node?.clusterId || 'Unclustered');
+}
+
+function escapeMermaidLabel(value) {
+  return String(value || '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;');
+}
+
+function makeMermaidId(value) {
+  return String(value || 'node')
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/^([0-9])/, 'n_$1')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
+}
+
+function buildTopologyEntries(clusterGroups) {
+  return Object.entries(clusterGroups).map(([clusterLabel, nodes], clusterIndex) => {
+    const clusterId = makeMermaidId(`cluster_${clusterIndex}_${clusterLabel}`);
+    const clusterNodeId = `${clusterId}_parent`;
+    const clusterAnchorId = `cluster-${clusterId}`;
+
+    const nodeEntries = nodes.map((node, nodeIndex) => {
+      const nodeLabel = node.details?.nodeName || node.nodeName || node.ip || `pmachine-${nodeIndex + 1}`;
+      const nodeId = makeMermaidId(`${clusterId}_${nodeLabel}_${node.mac || node.ip || nodeIndex}`);
+      const nodeAnchorId = `pmachine-${nodeId}`;
+      const peers = Array.isArray(node.details?.discoveredNodes) ? node.details.discoveredNodes : [];
+      const peerEntries = peers.map((peer, peerIndex) => {
+        const peerLabel = peer.mac || peer.ip || `peer-${peerIndex + 1}`;
+        const peerId = makeMermaidId(`${nodeId}_${peerLabel}_${peerIndex}`);
+        return {
+          peer,
+          peerLabel,
+          peerId,
+          peerAnchorId: `peer-${peerId}`
+        };
+      });
+
+      return {
+        node,
+        nodeLabel,
+        nodeId,
+        nodeAnchorId,
+        peerEntries
+      };
+    });
+
+    return {
+      clusterLabel,
+      clusterId,
+      clusterNodeId,
+      clusterAnchorId,
+      nodeEntries
+    };
+  });
+}
+
+function buildTopologyMermaid(topologyEntries) {
+  const lines = [
+    'flowchart TB',
+    '  classDef root fill:#223655,stroke:#5e7fb3,color:#ffffff,stroke-width:1px;',
+    '  classDef cluster fill:#dbe7f7,stroke:#8fa9c5,color:#223655,stroke-width:1px;',
+    '  classDef machine fill:#e8f5e9,stroke:#7fbf7f,color:#1a237e,stroke-width:1px;',
+    '  classDef peer fill:#fff3cd,stroke:#e0c36a,color:#6b5300,stroke-width:1px;',
+    '  topology_root["PMachine topology"]:::root'
+  ];
+
+  topologyEntries.forEach((cluster) => {
+    lines.push(`  ${cluster.clusterNodeId}["${escapeMermaidLabel(`${cluster.clusterLabel} (${cluster.nodeEntries.length})`)}"]:::cluster`);
+    lines.push(`  topology_root --> ${cluster.clusterNodeId}`);
+    lines.push(`  click ${cluster.clusterNodeId} href "#${cluster.clusterAnchorId}" "View cluster details"`);
+
+    cluster.nodeEntries.forEach((nodeEntry) => {
+      lines.push(`  ${nodeEntry.nodeId}["${escapeMermaidLabel(nodeEntry.nodeLabel)}"]:::machine`);
+      lines.push(`  ${cluster.clusterNodeId} --> ${nodeEntry.nodeId}`);
+      lines.push(`  click ${nodeEntry.nodeId} href "#${nodeEntry.nodeAnchorId}" "View PMachine details"`);
+
+      nodeEntry.peerEntries.forEach((peerEntry) => {
+        lines.push(`  ${peerEntry.peerId}["${escapeMermaidLabel(peerEntry.peerLabel)}"]:::peer`);
+        lines.push(`  ${nodeEntry.nodeId} --> ${peerEntry.peerId}`);
+        lines.push(`  click ${peerEntry.peerId} href "#${peerEntry.peerAnchorId}" "View peer details"`);
+      });
+    });
+  });
+
+  return lines.join('\n');
+}
 // Memoized NodeCard to prevent unnecessary re-renders
-const NodeCard = memo(function NodeCard({ node }) {
+const NodeCard = memo(function NodeCard({ node, anchorId, title }) {
   // Force re-render every second for live color updates
   const [, setTick] = React.useState(0);
   React.useEffect(() => {
@@ -46,7 +148,7 @@ const NodeCard = memo(function NodeCard({ node }) {
   }, [menu]);
 
   return (
-    <div style={{ border: '1px solid #d4d4d4', background: bg, borderRadius: 4, padding: 8, minWidth: 90, maxWidth: 120, marginBottom: 8, boxShadow: '0 1px 2px #eee', display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative' }} onContextMenu={handleContextMenu}>
+    <div id={anchorId} title={title} style={{ border: '1px solid #d4d4d4', background: bg, borderRadius: 4, padding: 8, minWidth: 90, maxWidth: 120, marginBottom: 8, boxShadow: '0 1px 2px #eee', display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative' }} onContextMenu={handleContextMenu}>
       {/* Computer icon (SVG) */}
       <svg width="40" height="32" viewBox="0 0 40 32" style={{ marginBottom: 4 }}><rect x="2" y="6" width="36" height="18" rx="3" fill="#90a4ae" stroke="#263238" strokeWidth="1.5"/><rect x="8" y="10" width="24" height="10" rx="1.5" fill="#fff" stroke="#607d8b" strokeWidth="1"/><rect x="14" y="26" width="12" height="3" rx="1.5" fill="#607d8b"/></svg>
       {/* Node name */}
@@ -96,6 +198,69 @@ export default function TopologyDashboard({ permissions = [] }) {
     const isAvailable = node.availability?.available !== false;
     return isActive && !isLoopback && isAvailable;
   });
+
+  const pmachineNodes = activePhysicalNodes.filter(isPmachineNode);
+
+  const clusterGroups = pmachineNodes.reduce((groups, node) => {
+    const clusterLabel = getClusterLabel(node);
+    if (!groups[clusterLabel]) {
+      groups[clusterLabel] = [];
+    }
+    groups[clusterLabel].push(node);
+    return groups;
+  }, {});
+
+  const topologyEntries = useMemo(() => buildTopologyEntries(clusterGroups), [clusterGroups]);
+
+  const discoveredNodes = topologyEntries.flatMap((cluster) =>
+    cluster.nodeEntries.flatMap((nodeEntry) =>
+      nodeEntry.peerEntries.map((peerEntry) => ({
+        key: `${peerEntry.peerId}-${nodeEntry.nodeId}`,
+        source: nodeEntry.node,
+        peer: peerEntry.peer,
+        peerAnchorId: peerEntry.peerAnchorId
+      }))
+    )
+  );
+
+  const topologyMermaidSource = useMemo(() => buildTopologyMermaid(topologyEntries), [topologyEntries]);
+  const [topologyMermaidSvg, setTopologyMermaidSvg] = useState('');
+  const [topologyMermaidError, setTopologyMermaidError] = useState('');
+
+  useEffect(() => {
+    if (!topologyMermaidSource) {
+      setTopologyMermaidSvg('');
+      setTopologyMermaidError('');
+      return undefined;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const { default: mermaid } = await import('mermaid');
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: 'loose',
+          theme: 'base'
+        });
+        const renderId = `topology-diagram-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        const { svg } = await mermaid.render(renderId, topologyMermaidSource);
+        if (!cancelled) {
+          setTopologyMermaidSvg(svg);
+          setTopologyMermaidError('');
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setTopologyMermaidSvg('');
+          setTopologyMermaidError(error?.message || 'Unable to render topology diagram.');
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [topologyMermaidSource]);
 
   async function fetchAvailability(url = backendUrl) {
     try {
@@ -191,7 +356,83 @@ export default function TopologyDashboard({ permissions = [] }) {
       </div>
       <div style={{ display: 'flex', flexDirection: 'row' }}>
         <div style={{ flex: 2, marginRight: 16 }}>
-          <h2 style={{ fontSize: 18, fontWeight: 600, margin: '8px 0 16px 0', color: '#2d2d2d' }}>Active Physical Devices</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '8px 0 16px 0' }}>
+            <h2 style={{ fontSize: 18, fontWeight: 600, margin: 0, color: '#2d2d2d' }}>PMachine Cluster Topology</h2>
+            <span style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              minWidth: 28,
+              padding: '2px 8px',
+              borderRadius: 999,
+              background: '#dbe7f7',
+              color: '#223655',
+              border: '1px solid #b8c9df',
+              fontSize: 12,
+              fontWeight: 700
+            }}>
+              {pmachineNodes.length}
+            </span>
+          </div>
+          <div style={{ marginBottom: 16 }}>
+            {topologyMermaidError ? (
+              <div style={{ fontSize: 12, color: '#8b3f3f', marginBottom: 10 }}>{topologyMermaidError}</div>
+            ) : topologyMermaidSvg ? (
+              <div
+                style={{
+                  border: '1px solid #d7dce3',
+                  background: '#ffffff',
+                  borderRadius: 10,
+                  padding: 10,
+                  overflow: 'auto',
+                  marginBottom: 12
+                }}
+                dangerouslySetInnerHTML={{ __html: topologyMermaidSvg }}
+              />
+            ) : (
+              <p style={{ fontSize: 12 }}>Loading topology diagram...</p>
+            )}
+          </div>
+          {pmachineNodes.length === 0 && !loading && <p style={{ fontSize: 12 }}>No PMachine nodes are currently visible.</p>}
+          {pmachineNodes.length > 0 && topologyEntries.map((cluster) => (
+            <div key={cluster.clusterId} id={cluster.clusterAnchorId} style={{ marginBottom: 16 }}>
+              <h3 style={{ fontSize: 14, margin: '0 0 10px 0', color: '#3a4a5e' }}>{cluster.clusterLabel} ({cluster.nodeEntries.length})</h3>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                {cluster.nodeEntries.map((nodeEntry) => (
+                  <NodeCard
+                    key={nodeEntry.node.mac || nodeEntry.node.ip || nodeEntry.node.nodeName}
+                    node={nodeEntry.node}
+                    anchorId={nodeEntry.nodeAnchorId}
+                    title={nodeEntry.node.details?.nodeName || nodeEntry.node.nodeName || nodeEntry.node.ip}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+          {discoveredNodes.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <h3 style={{ fontSize: 14, margin: '0 0 10px 0', color: '#3a4a5e' }}>Discovered Peers</h3>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
+                {discoveredNodes.map(({ key, source, peer, peerAnchorId }) => (
+                  <div
+                    key={key}
+                    id={peerAnchorId}
+                    style={{
+                      border: '1px solid #d7dce3',
+                      background: '#fff',
+                      borderRadius: 8,
+                      padding: 10,
+                      boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, color: '#1a237e', marginBottom: 4 }}>{source.nodeName || source.ip}</div>
+                    <div style={{ fontSize: 12, color: '#54616f' }}>Peer MAC: {peer.mac || 'n/a'}</div>
+                    <div style={{ fontSize: 12, color: '#54616f' }}>Peer IP: {peer.ip || 'n/a'}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {loading && <p style={{ fontSize: 12 }}>Loading...</p>}
           {activePhysicalNodes.length === 0 && !loading && <p style={{ fontSize: 12 }}>No active physical devices found.</p>}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
