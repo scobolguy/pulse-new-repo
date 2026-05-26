@@ -9,5 +9,7 @@ export const ROUTE_ROLE_MANIFEST = [
   { id: 'queue-config', registrar: 'registerQueueConfigRoutes', dependencyKey: 'queueConfig', enabled: true },
   { id: 'queue-transfer', registrar: 'registerQueueTransferRoutes', dependencyKey: 'queueTransfer', enabled: true },
   { id: 'availability-presence', registrar: 'registerAvailabilityPresenceRoutes', dependencyKey: 'availabilityPresence', enabled: true },
-  { id: 'topology-runtime', registrar: 'registerTopologyRuntimeRoutes', dependencyKey: 'topologyRuntime', enabled: true }
+  { id: 'topology-runtime', registrar: 'registerTopologyRuntimeRoutes', dependencyKey: 'topologyRuntime', enabled: true },
+  { id: 'librarian-proxy', registrar: 'registerLibrarianProxyRoutes', dependencyKey: 'librarianProxy', enabled: true },
+  { id: 'mapper-proxy', registrar: 'registerMapperProxyRoutes', dependencyKey: 'mapperProxy', enabled: true }
 ];

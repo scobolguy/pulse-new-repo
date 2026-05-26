@@ -54,6 +54,8 @@ import { registerQueueConfigRoutes } from './src/backend/roles/queueConfigRoutes
 import { registerQueueTransferRoutes } from './src/backend/roles/queueTransferRoutes.mjs';
 import { registerAvailabilityPresenceRoutes } from './src/backend/roles/availabilityPresenceRoutes.mjs';
 import { registerTopologyRuntimeRoutes } from './src/backend/roles/topologyRuntimeRoutes.mjs';
+import { registerLibrarianProxyRoutes } from './src/backend/roles/librarianProxyRoutes.mjs';
+import { registerMapperProxyRoutes } from './src/backend/roles/mapperProxyRoutes.mjs';
 import { createRequestPolicyApi } from './src/backend/security/requestPolicy.mjs';
 import { ROUTE_ROLE_MANIFEST } from './src/backend/routes.manifest.mjs';
 import { registerRoutesFromManifest } from './src/backend/routeManifestLoader.mjs';
@@ -9099,7 +9101,9 @@ function registerRoutes(app) {
       registerQueueConfigRoutes,
       registerQueueTransferRoutes,
       registerAvailabilityPresenceRoutes,
-      registerTopologyRuntimeRoutes
+      registerTopologyRuntimeRoutes,
+      registerLibrarianProxyRoutes,
+      registerMapperProxyRoutes
     },
     dependencyFactories: {
       lifecycleInquiry: () => ({
@@ -9224,6 +9228,13 @@ function registerRoutes(app) {
         getBrokerNodeDetails,
         getSystemPerformanceSnapshot,
         services: [BROKER_SERVICE, ROUTER_SERVICE, QUEUE_SERVICE, FILE_SERVER_SERVICE]
+      }),
+      librarianProxy: () => ({
+        express,
+        resolveLibrarianOrigin
+      }),
+      mapperProxy: () => ({
+        resolveMapperOrigin
       })
     }
   });
@@ -9779,73 +9790,6 @@ function registerRoutes(app) {
   debugLog('[DEBUG] File server routes registered');
   app.use('/api/fileserver', fileServer.router);
 
-  // --- Proxy to data-librarian service ---
-  const LIBRARIAN_ORIGIN = resolveLibrarianOrigin();
-  const MAPPER_ORIGIN = resolveMapperOrigin();
-
-  // Binary upload route — must be registered before the generic JSON proxy below
-  app.post('/api/librarian/upload/:dest', express.raw({ type: '*/*', limit: '50mb' }), async (req, res) => {
-    const url = `${LIBRARIAN_ORIGIN}/api/librarian/upload/${req.params.dest}`;
-    try {
-      const upstream = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'content-type': req.get('content-type') || 'application/octet-stream',
-          'x-filename': req.get('x-filename') || 'upload',
-        },
-        body: req.body,
-      });
-      res.status(upstream.status).json(await upstream.json());
-    } catch (e) {
-      res.status(502).json({ error: 'Librarian service unavailable', details: e.message });
-    }
-  });
-
-  app.use('/api/librarian', async (req, res) => {
-    const url = `${LIBRARIAN_ORIGIN}/api/librarian${req.path}${req.search || (req.url.includes('?') ? '?' + req.url.split('?')[1] : '')}`;
-    try {
-      const method = req.method;
-      const hasBody = !['GET', 'HEAD'].includes(method);
-      const upstream = await fetch(url, {
-        method,
-        headers: { 'content-type': 'application/json' },
-        body: hasBody ? JSON.stringify(req.body) : undefined,
-      });
-      const contentType = upstream.headers.get('content-type') || '';
-      res.status(upstream.status);
-      if (contentType.includes('application/json')) {
-        res.json(await upstream.json());
-      } else {
-        res.send(await upstream.text());
-      }
-    } catch (e) {
-      res.status(502).json({ error: 'Librarian service unavailable', details: e.message });
-    }
-  });
-
-  // --- Proxy to data-mapper service ---
-  app.use('/api/mapper', async (req, res) => {
-    const query = req.search || (req.url.includes('?') ? '?' + req.url.split('?')[1] : '');
-    const url = `${MAPPER_ORIGIN}/api/mapper${req.path}${query}`;
-    try {
-      const method = req.method;
-      const hasBody = !['GET', 'HEAD'].includes(method);
-      const upstream = await fetch(url, {
-        method,
-        headers: { 'content-type': 'application/json' },
-        body: hasBody ? JSON.stringify(req.body) : undefined,
-      });
-      const contentType = upstream.headers.get('content-type') || '';
-      res.status(upstream.status);
-      if (contentType.includes('application/json')) {
-        res.json(await upstream.json());
-      } else {
-        res.send(await upstream.text());
-      }
-    } catch (e) {
-      res.status(502).json({ error: 'Mapper service unavailable', details: e.message });
-    }
-  });
   registerLocalServiceHeartbeats();
   setInterval(registerLocalServiceHeartbeats, 10000);
   setInterval(updateVirtualNodes, 3000);
