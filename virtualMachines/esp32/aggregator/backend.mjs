@@ -44,7 +44,6 @@ import {
   applyLatencyPolicyTargetsUpdate
 } from './src/latency-policy.mjs';
 import { registerLifecycleInquiryRoutes } from './src/backend/roles/lifecycleInquiryRoutes.mjs';
-import { registerLifecycleNlpRoutes } from './src/backend/roles/lifecycleNlpRoutes.mjs';
 import { registerLifecycleWorkerGatewayRoutes } from './src/backend/roles/lifecycleWorkerGatewayRoutes.mjs';
 import { registerQueueBrokerOpsRoutes } from './src/backend/roles/queueBrokerOpsRoutes.mjs';
 import { registerComplianceRoutes } from './src/backend/roles/complianceRoutes.mjs';
@@ -8757,7 +8756,6 @@ function registerRoutes(app) {
     manifest: ROUTE_ROLE_MANIFEST,
     registrars: {
       registerLifecycleInquiryRoutes,
-      registerLifecycleNlpRoutes,
       registerLifecycleWorkerGatewayRoutes,
       registerQueueBrokerOpsRoutes,
       registerComplianceRoutes,

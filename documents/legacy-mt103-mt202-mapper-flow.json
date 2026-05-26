@@ -1,0 +1,148 @@
+{
+  "id": "workflow_mt103_mt202_mapper",
+  "name": "Legacy MT103/MT202 Mapper Flow",
+  "type": "message-flow",
+  "nodes": [
+    {
+      "id": "node_source",
+      "type": "message-source",
+      "label": "SWIFT Legacy Inbound",
+      "properties": {
+        "queue": "swift.legacy.inbound"
+      },
+      "x": 80,
+      "y": 240
+    },
+    {
+      "id": "node_parse",
+      "type": "message-filter",
+      "label": "Parse FIN Envelope",
+      "properties": {
+        "operation": "parse_swift_fin"
+      },
+      "x": 250,
+      "y": 240
+    },
+    {
+      "id": "node_decision",
+      "type": "decision",
+      "label": "MT103 or MT202?",
+      "properties": {
+        "condition": "msg_type == 'MT103' or msg_type == 'MT202'"
+      },
+      "x": 430,
+      "y": 220
+    },
+    {
+      "id": "node_map103",
+      "type": "message-transform",
+      "label": "Mapper MT103 -> Canonical Payment",
+      "properties": {
+        "mapper": "legacy_mt103_mapper_v2",
+        "sourceType": "MT103",
+        "targetType": "CanonicalPayment"
+      },
+      "x": 640,
+      "y": 130
+    },
+    {
+      "id": "node_map202",
+      "type": "message-transform",
+      "label": "Mapper MT202 -> Canonical Settlement",
+      "properties": {
+        "mapper": "legacy_mt202_mapper_v2",
+        "sourceType": "MT202",
+        "targetType": "CanonicalSettlement"
+      },
+      "x": 640,
+      "y": 290
+    },
+    {
+      "id": "node_validate",
+      "type": "action",
+      "label": "Validate Canonical Payload",
+      "properties": {
+        "operation": "validate_canonical_schema",
+        "timeout": 2000
+      },
+      "x": 900,
+      "y": 210
+    },
+    {
+      "id": "node_sink",
+      "type": "message-sink",
+      "label": "Canonical Outbound Queue",
+      "properties": {
+        "queue": "payments.canonical.outbound"
+      },
+      "x": 1140,
+      "y": 160
+    },
+    {
+      "id": "node_dlq",
+      "type": "message-sink",
+      "label": "Dead Letter Queue",
+      "properties": {
+        "queue": "payments.deadletter"
+      },
+      "x": 1140,
+      "y": 320
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge_1",
+      "sourceId": "node_source",
+      "targetId": "node_parse",
+      "label": "ingest"
+    },
+    {
+      "id": "edge_2",
+      "sourceId": "node_parse",
+      "targetId": "node_decision",
+      "label": "parsed"
+    },
+    {
+      "id": "edge_3",
+      "sourceId": "node_decision",
+      "targetId": "node_map103",
+      "label": "MT103"
+    },
+    {
+      "id": "edge_4",
+      "sourceId": "node_decision",
+      "targetId": "node_map202",
+      "label": "MT202"
+    },
+    {
+      "id": "edge_5",
+      "sourceId": "node_decision",
+      "targetId": "node_dlq",
+      "label": "OTHER"
+    },
+    {
+      "id": "edge_6",
+      "sourceId": "node_map103",
+      "targetId": "node_validate",
+      "label": "mapped"
+    },
+    {
+      "id": "edge_7",
+      "sourceId": "node_map202",
+      "targetId": "node_validate",
+      "label": "mapped"
+    },
+    {
+      "id": "edge_8",
+      "sourceId": "node_validate",
+      "targetId": "node_sink",
+      "label": "valid"
+    },
+    {
+      "id": "edge_9",
+      "sourceId": "node_validate",
+      "targetId": "node_dlq",
+      "label": "invalid"
+    }
+  ]
+}

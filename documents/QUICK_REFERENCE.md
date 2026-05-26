@@ -9,6 +9,7 @@
 | **Pcode Generator** | `PcodeGenerator.ts` | Convert graphs → bytecode |
 | **Visual UI** | `visual-workflow-editor.html` | Interactive drag-drop editor |
 | **API Server** | `graph-service-api.ts` | REST endpoints for CRUD & export |
+| **Templates** | `visual-workflow-editor.html` + `graph-service-api.ts` | Standard flows, export/import, shared registry |
 | **Examples** | `USAGE_EXAMPLES.ts` | 6 complete usage scenarios |
 | **Docs** | `VISUAL_EDITOR_README.md` | Full documentation |
 
@@ -21,6 +22,7 @@
 3. Connect with edges
 4. Edit properties on right
 5. Click **Export** buttons
+6. Open the **Templates** tab to load standard flows, save your own, or import/export template files
 
 ### Option B: Programmatic (TypeScript)
 
@@ -211,6 +213,16 @@ GET    /api/node-types/:category        By category
 GET    /api/health                      Health check
 GET    /api/info                        Service info
 ```
+
+### Templates
+```
+GET    /api/templates                   List shared templates
+POST   /api/templates                   Create/update shared template
+GET    /api/templates/:id               Get shared template
+DELETE /api/templates/:id               Delete shared template
+```
+
+Template records include `version`, `source`, `icon`, `description`, and a full graph payload.
 
 ## 💾 Data Structure
 

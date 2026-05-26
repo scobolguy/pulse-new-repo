@@ -6,6 +6,22 @@
   <title>Visual Workflow Editor</title>
   <script src="https://cdn.jsdelivr.net/npm/mermaid@latest/dist/mermaid.min.js"></script>
   <style>
+    :root {
+      --vscode-bg: #1e1e1e;
+      --vscode-side: #252526;
+      --vscode-panel: #2d2d30;
+      --vscode-border: #3c3c3c;
+      --vscode-text: #cccccc;
+      --vscode-muted: #9da0a6;
+      --vscode-accent: #0e639c;
+      --vscode-accent-hover: #1177bb;
+      --vscode-danger: #a1260d;
+      --vscode-danger-hover: #be1100;
+      --vscode-input: #3c3c3c;
+      --vscode-input-border: #555;
+      --vscode-canvas: #1b1b1c;
+    }
+
     * {
       margin: 0;
       padding: 0;
@@ -13,56 +29,175 @@
     }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-      background: #f5f5f5;
+      font-family: 'Segoe UI', 'Segoe WPC', Tahoma, Geneva, Verdana, sans-serif;
+      background: var(--vscode-bg);
+      color: var(--vscode-text);
       display: flex;
       height: 100vh;
     }
 
     /* Left Sidebar - Node Palette */
     .sidebar {
-      width: 280px;
-      background: #2c3e50;
-      color: #ecf0f1;
+      width: 220px;
+      background: var(--vscode-side);
+      color: var(--vscode-text);
       overflow-y: auto;
-      padding: 20px;
-      border-right: 1px solid #34495e;
+      padding: 10px;
+      border-right: 1px solid var(--vscode-border);
     }
 
     .sidebar h3 {
-      font-size: 14px;
+      font-size: 11px;
       text-transform: uppercase;
-      color: #95a5a6;
-      margin-top: 20px;
-      margin-bottom: 12px;
-      letter-spacing: 0.5px;
+      color: var(--vscode-muted);
+      margin-top: 10px;
+      margin-bottom: 6px;
+      letter-spacing: 0.8px;
+      font-weight: 600;
     }
 
     .sidebar h3:first-child {
       margin-top: 0;
     }
 
+    .toolbox-tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 8px;
+    }
+
+    .toolbox-tab {
+      flex: 1;
+      padding: 6px 8px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.7px;
+      background: #2f2f33;
+      color: var(--vscode-muted);
+      border: 1px solid var(--vscode-border);
+      border-radius: 2px;
+      cursor: pointer;
+    }
+
+    .toolbox-tab.active {
+      color: #ffffff;
+      background: var(--vscode-accent);
+      border-color: var(--vscode-accent);
+    }
+
+    .toolbox-panel {
+      display: none;
+    }
+
+    .toolbox-panel.active {
+      display: block;
+    }
+
+    .accordion-section {
+      margin-bottom: 6px;
+      border: 1px solid var(--vscode-border);
+      border-radius: 2px;
+      overflow: hidden;
+      background: #2a2a2d;
+    }
+
+    .accordion-header {
+      width: 100%;
+      padding: 6px 8px;
+      background: #323235;
+      color: var(--vscode-text);
+      border: 0;
+      border-bottom: 1px solid var(--vscode-border);
+      text-align: left;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .accordion-header .chevron {
+      color: var(--vscode-muted);
+      transition: transform 0.15s ease;
+    }
+
+    .accordion-section.open .accordion-header .chevron {
+      transform: rotate(90deg);
+    }
+
+    .accordion-body {
+      display: none;
+      padding: 6px;
+    }
+
+    .accordion-section.open .accordion-body {
+      display: block;
+    }
+
+    .accordion-body .node-palette,
+    .accordion-body .template-palette {
+      margin-bottom: 0;
+    }
+
+    .section-count {
+      color: var(--vscode-muted);
+      font-size: 10px;
+      margin-left: 8px;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+
     .node-palette {
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 4px;
     }
 
     .node-type {
-      padding: 12px;
-      background: #34495e;
-      border: 1px solid #455a64;
-      border-radius: 4px;
+      padding: 6px 8px;
+      background: #2f2f33;
+      border: 1px solid var(--vscode-border);
+      border-radius: 2px;
       cursor: grab;
-      font-size: 13px;
+      font-size: 12px;
+      line-height: 1.25;
       transition: all 0.2s;
       user-select: none;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .node-type-content {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .node-icon {
+      width: 18px;
+      height: 18px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 2px;
+      background: #1f1f22;
+      flex-shrink: 0;
+    }
+
+    .node-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .node-type:hover {
-      background: #3d5a7f;
-      border-color: #3498db;
-      box-shadow: 0 2px 8px rgba(52, 152, 219, 0.2);
+      background: #3a3d41;
+      border-color: var(--vscode-accent);
     }
 
     .node-type:active {
@@ -85,37 +220,95 @@
       border-left: 3px solid #9b59b6;
     }
 
+    .template-palette {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+
+    .template-item {
+      background: #2f2f33;
+      border: 1px solid var(--vscode-border);
+      border-radius: 2px;
+      padding: 7px;
+      cursor: pointer;
+    }
+
+    .template-item:hover {
+      border-color: var(--vscode-accent);
+      background: #3a3d41;
+    }
+
+    .template-item.selected {
+      border-color: var(--vscode-accent);
+      background: #243746;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04);
+    }
+
+    .template-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--vscode-text);
+      margin-bottom: 3px;
+    }
+
+    .template-meta {
+      font-size: 11px;
+      color: var(--vscode-muted);
+    }
+
+    .template-action {
+      width: 100%;
+      margin-top: 8px;
+      padding: 6px 8px;
+      font-size: 11px;
+      border: 1px solid var(--vscode-border);
+      background: #2f2f33;
+      color: var(--vscode-text);
+      border-radius: 2px;
+      cursor: pointer;
+    }
+
+    .template-action:hover {
+      background: #3a3d41;
+      border-color: var(--vscode-accent);
+    }
+
     /* Main Content Area */
     .main-content {
       flex: 1;
       display: flex;
       flex-direction: column;
+      min-width: 0;
     }
 
     /* Top Toolbar */
     .toolbar {
-      background: #34495e;
-      border-bottom: 1px solid #2c3e50;
-      padding: 12px 20px;
+      background: var(--vscode-panel);
+      border-bottom: 1px solid var(--vscode-border);
+      padding: 8px 12px;
       display: flex;
-      gap: 12px;
+      gap: 8px;
       align-items: center;
-      color: #ecf0f1;
+      color: var(--vscode-text);
     }
 
     .toolbar button {
-      padding: 8px 16px;
-      background: #3498db;
-      color: white;
-      border: none;
-      border-radius: 4px;
+      padding: 6px 10px;
+      background: var(--vscode-accent);
+      color: #ffffff;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 2px;
       cursor: pointer;
-      font-size: 13px;
+      font-size: 12px;
       transition: background 0.2s;
     }
 
     .toolbar button:hover {
-      background: #2980b9;
+      background: var(--vscode-accent-hover);
     }
 
     .toolbar button:active {
@@ -123,20 +316,20 @@
     }
 
     .toolbar button.danger {
-      background: #e74c3c;
+      background: var(--vscode-danger);
     }
 
     .toolbar button.danger:hover {
-      background: #c0392b;
+      background: var(--vscode-danger-hover);
     }
 
     .toolbar input {
-      padding: 6px 12px;
-      border: 1px solid #455a64;
-      border-radius: 4px;
-      background: #2c3e50;
-      color: #ecf0f1;
-      font-size: 13px;
+      padding: 5px 8px;
+      border: 1px solid var(--vscode-input-border);
+      border-radius: 2px;
+      background: var(--vscode-input);
+      color: var(--vscode-text);
+      font-size: 12px;
     }
 
     .toolbar-spacer {
@@ -147,33 +340,35 @@
     .editor-container {
       flex: 1;
       display: flex;
-      gap: 20px;
-      padding: 20px;
+      gap: 10px;
+      padding: 10px;
       overflow: hidden;
+      background: var(--vscode-bg);
     }
 
     .canvas-section {
       flex: 1;
-      background: white;
-      border-radius: 6px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      background: var(--vscode-panel);
+      border: 1px solid var(--vscode-border);
+      border-radius: 2px;
       display: flex;
       flex-direction: column;
       overflow: hidden;
     }
 
     .canvas-section h4 {
-      padding: 12px;
-      background: #ecf0f1;
-      border-bottom: 1px solid #bdc3c7;
-      font-size: 13px;
-      color: #2c3e50;
+      padding: 8px 10px;
+      background: #333337;
+      border-bottom: 1px solid var(--vscode-border);
+      font-size: 12px;
+      color: var(--vscode-muted);
       margin: 0;
+      font-weight: 500;
     }
 
     #canvas {
       flex: 1;
-      background: #fafafa;
+      background: var(--vscode-canvas);
       cursor: crosshair;
       border: none;
     }
@@ -181,10 +376,10 @@
     .mermaid-preview {
       flex: 1;
       overflow-y: auto;
-      padding: 12px;
-      background: #f9f9f9;
-      border: 1px solid #ecf0f1;
-      border-radius: 4px;
+      padding: 10px;
+      background: #1f1f22;
+      border: 1px solid var(--vscode-border);
+      border-radius: 2px;
       position: relative;
     }
 
@@ -242,84 +437,84 @@
 
     /* Properties Panel */
     .properties-panel {
-      width: 280px;
-      background: white;
-      border-left: 1px solid #ecf0f1;
-      padding: 20px;
+      width: 260px;
+      background: var(--vscode-panel);
+      border: 1px solid var(--vscode-border);
+      padding: 12px;
       overflow-y: auto;
-      box-shadow: 0 -2px 8px rgba(0,0,0,0.05);
     }
 
     .properties-panel h4 {
-      font-size: 13px;
-      color: #2c3e50;
-      margin-bottom: 12px;
+      font-size: 12px;
+      color: var(--vscode-muted);
+      margin-bottom: 8px;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      letter-spacing: 0.6px;
     }
 
     .property-group {
-      margin-bottom: 16px;
+      margin-bottom: 10px;
     }
 
     .property-label {
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 600;
-      color: #34495e;
-      margin-bottom: 4px;
+      color: var(--vscode-muted);
+      margin-bottom: 3px;
       display: block;
     }
 
     .property-input,
     .property-select {
       width: 100%;
-      padding: 6px;
-      border: 1px solid #bdc3c7;
-      border-radius: 3px;
+      padding: 5px 6px;
+      border: 1px solid var(--vscode-input-border);
+      border-radius: 2px;
       font-size: 12px;
-      background: #f9f9f9;
+      background: var(--vscode-input);
+      color: var(--vscode-text);
     }
 
     .property-input:focus,
     .property-select:focus {
       outline: none;
-      border-color: #3498db;
-      background: white;
-      box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.1);
+      border-color: var(--vscode-accent);
+      background: #2a2d31;
     }
 
     /* Export Section */
     .export-section {
-      margin-top: 20px;
-      padding-top: 20px;
-      border-top: 1px solid #ecf0f1;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--vscode-border);
     }
 
     .export-textarea {
       width: 100%;
       height: 150px;
       padding: 8px;
-      border: 1px solid #bdc3c7;
-      border-radius: 3px;
-      font-family: 'Monaco', 'Courier New', monospace;
+      border: 1px solid var(--vscode-input-border);
+      border-radius: 2px;
+      font-family: 'Cascadia Code', Consolas, 'Courier New', monospace;
       font-size: 11px;
       resize: none;
-      background: #f9f9f9;
+      background: #1f1f22;
+      color: var(--vscode-text);
     }
 
     .copy-button {
       margin-top: 8px;
       padding: 6px 12px;
-      background: #27ae60;
+      background: var(--vscode-accent);
       color: white;
-      border: none;
-      border-radius: 3px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 2px;
       cursor: pointer;
       font-size: 12px;
     }
 
     .copy-button:hover {
-      background: #229954;
+      background: var(--vscode-accent-hover);
     }
 
     /* Responsive */
@@ -335,7 +530,7 @@
 
       .properties-panel {
         border-left: none;
-        border-top: 1px solid #ecf0f1;
+        border-top: 1px solid var(--vscode-border);
       }
     }
   </style>
@@ -343,14 +538,70 @@
 <body>
   <!-- Left Sidebar -->
   <div class="sidebar">
-    <h3>🚀 Workflow Nodes</h3>
-    <div class="node-palette" id="nodePalette"></div>
+    <div class="toolbox-tabs">
+      <button class="toolbox-tab active" data-tab="nodes">Nodes</button>
+      <button class="toolbox-tab" data-tab="templates">Templates</button>
+    </div>
 
-    <h3>📊 Task Charts</h3>
-    <div class="node-palette" id="taskPalette"></div>
+    <div class="toolbox-panel active" data-panel="nodes">
+      <div class="accordion-section open">
+        <button class="accordion-header" type="button">Workflow Nodes <span class="section-count" id="workflowCount"></span><span class="chevron">›</span></button>
+        <div class="accordion-body">
+          <div class="node-palette" id="nodePalette"></div>
+        </div>
+      </div>
 
-    <h3>📨 Message Flow</h3>
-    <div class="node-palette" id="messagePalette"></div>
+      <div class="accordion-section">
+        <button class="accordion-header" type="button">Task Charts <span class="section-count" id="taskCount"></span><span class="chevron">›</span></button>
+        <div class="accordion-body">
+          <div class="node-palette" id="taskPalette"></div>
+        </div>
+      </div>
+
+      <div class="accordion-section open">
+        <button class="accordion-header" type="button">Message Flow <span class="section-count" id="messageCount"></span><span class="chevron">›</span></button>
+        <div class="accordion-body">
+          <div class="node-palette" id="messagePalette"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="toolbox-panel" data-panel="templates">
+      <div class="accordion-section open">
+        <button class="accordion-header" type="button">Standard Flows <span class="section-count" id="standardTemplateCount"></span><span class="chevron">›</span></button>
+        <div class="accordion-body">
+          <div class="template-palette" id="templatePalette"></div>
+        </div>
+      </div>
+
+      <div class="accordion-section open">
+        <button class="accordion-header" type="button">Maps <span class="section-count" id="mapTemplateCount"></span><span class="chevron">›</span></button>
+        <div class="accordion-body">
+          <div class="template-palette" id="mapTemplatePalette"></div>
+        </div>
+      </div>
+
+      <button class="template-action" onclick="app.saveCurrentAsTemplate()">+ Save Current As Template</button>
+      <button class="template-action" onclick="app.exportSelectedTemplate()">Export Selected Template</button>
+      <button class="template-action" onclick="document.getElementById('templateFileInput').click()">Import Template File</button>
+      <button class="template-action" onclick="app.syncSharedTemplates()">Sync Shared Templates</button>
+      <button class="template-action" onclick="app.publishCurrentToShared()">Publish Current to Shared</button>
+      <input type="file" id="templateFileInput" accept=".json" style="display:none;" onchange="app.importTemplateFile(event)">
+
+      <div class="accordion-section open">
+        <button class="accordion-header" type="button">Shared Registry <span class="section-count" id="sharedTemplateCount"></span><span class="chevron">›</span></button>
+        <div class="accordion-body">
+          <div class="template-palette" id="sharedTemplatePalette"></div>
+        </div>
+      </div>
+
+      <div class="accordion-section open">
+        <button class="accordion-header" type="button">My Templates <span class="section-count" id="customTemplateCount"></span><span class="chevron">›</span></button>
+        <div class="accordion-body">
+          <div class="template-palette" id="customTemplatePalette"></div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Main Content -->
@@ -413,19 +664,53 @@
       graphService: null,
       selectedNode: null,
       pendingEdgeSource: null,
+      pendingPaletteNodeType: null,
+      toolboxDragState: null,
       draggedNode: null,
       dragOffset: { x: 0, y: 0 },
       zoom: 1,
       pan: { x: 0, y: 0 },
       nodeTypes: {},
+      templates: [],
+      sharedTemplates: [],
+      customTemplates: [],
+      selectedTemplateId: null,
 
       init() {
         this.setupCanvas();
         this.loadNodeTypes();
+        this.loadTemplates();
+        this.loadCustomTemplates();
+        this.setupToolboxTabs();
         this.renderNodePalettes();
+        this.renderTemplatePalettes();
         this.setupEventListeners();
         this.initGraphService();
         this.render();
+      },
+
+      setupToolboxTabs() {
+        const tabs = document.querySelectorAll('.toolbox-tab');
+        const panels = document.querySelectorAll('.toolbox-panel');
+        tabs.forEach((tab) => {
+          tab.addEventListener('click', () => {
+            tabs.forEach((t) => t.classList.remove('active'));
+            panels.forEach((p) => p.classList.remove('active'));
+
+            tab.classList.add('active');
+            const tabName = tab.dataset.tab;
+            const panel = document.querySelector(`.toolbox-panel[data-panel="${tabName}"]`);
+            if (panel) panel.classList.add('active');
+          });
+        });
+
+        document.querySelectorAll('.accordion-section .accordion-header').forEach((header) => {
+          header.addEventListener('click', () => {
+            const section = header.closest('.accordion-section');
+            if (!section) return;
+            section.classList.toggle('open');
+          });
+        });
       },
 
       setupCanvas() {
@@ -464,6 +749,80 @@
         };
       },
 
+      loadTemplates() {
+        this.templates = [
+          {
+            id: 'tpl_standard_wfl',
+            version: '1.0.0',
+            source: 'standard',
+            name: 'Standard WFL',
+            icon: 'S',
+            description: 'Start -> Action -> Decision -> End',
+            graph: {
+              name: 'Standard WFL',
+              type: 'workflow',
+              nodes: [
+                { id: 'start_1', type: 'start', label: 'Start', properties: {}, x: 80, y: 180 },
+                { id: 'action_1', type: 'action', label: 'Process', properties: { operation: 'process_item' }, x: 280, y: 180 },
+                { id: 'decision_1', type: 'decision', label: 'Approved?', properties: { condition: 'is_approved' }, x: 500, y: 165 },
+                { id: 'end_1', type: 'end', label: 'End', properties: {}, x: 740, y: 180 },
+              ],
+              edges: [
+                { id: 'e1', sourceId: 'start_1', targetId: 'action_1', label: 'next' },
+                { id: 'e2', sourceId: 'action_1', targetId: 'decision_1', label: 'check' },
+                { id: 'e3', sourceId: 'decision_1', targetId: 'end_1', label: 'yes' },
+              ],
+            },
+          },
+          {
+            id: 'tpl_mt_legacy_mapper',
+            version: '1.0.0',
+            source: 'standard',
+            name: 'Legacy MT103/202 Mapper',
+            icon: 'M',
+            description: 'Route MT103/MT202 and map to canonical outputs',
+            graph: {
+              name: 'Legacy MT103/MT202 Mapper Flow',
+              type: 'message-flow',
+              nodes: [
+                { id: 'node_source', type: 'message-source', label: 'SWIFT Legacy Inbound', properties: { queue: 'swift.legacy.inbound' }, x: 80, y: 240 },
+                { id: 'node_parse', type: 'message-filter', label: 'Parse FIN Envelope', properties: { operation: 'parse_swift_fin' }, x: 250, y: 240 },
+                { id: 'node_decision', type: 'decision', label: 'MT103 or MT202?', properties: { condition: "msg_type == 'MT103' or msg_type == 'MT202'" }, x: 430, y: 220 },
+                { id: 'node_map103', type: 'message-transform', label: 'Mapper MT103 -> Canonical Payment', properties: { mapper: 'legacy_mt103_mapper_v2' }, x: 640, y: 130 },
+                { id: 'node_map202', type: 'message-transform', label: 'Mapper MT202 -> Canonical Settlement', properties: { mapper: 'legacy_mt202_mapper_v2' }, x: 640, y: 290 },
+                { id: 'node_validate', type: 'action', label: 'Validate Canonical Payload', properties: { operation: 'validate_canonical_schema', timeout: 2000 }, x: 900, y: 210 },
+                { id: 'node_sink', type: 'message-sink', label: 'Canonical Outbound Queue', properties: { queue: 'payments.canonical.outbound' }, x: 1140, y: 160 },
+                { id: 'node_dlq', type: 'message-sink', label: 'Dead Letter Queue', properties: { queue: 'payments.deadletter' }, x: 1140, y: 320 },
+              ],
+              edges: [
+                { id: 'edge_1', sourceId: 'node_source', targetId: 'node_parse', label: 'ingest' },
+                { id: 'edge_2', sourceId: 'node_parse', targetId: 'node_decision', label: 'parsed' },
+                { id: 'edge_3', sourceId: 'node_decision', targetId: 'node_map103', label: 'MT103' },
+                { id: 'edge_4', sourceId: 'node_decision', targetId: 'node_map202', label: 'MT202' },
+                { id: 'edge_5', sourceId: 'node_decision', targetId: 'node_dlq', label: 'OTHER' },
+                { id: 'edge_6', sourceId: 'node_map103', targetId: 'node_validate', label: 'mapped' },
+                { id: 'edge_7', sourceId: 'node_map202', targetId: 'node_validate', label: 'mapped' },
+                { id: 'edge_8', sourceId: 'node_validate', targetId: 'node_sink', label: 'valid' },
+                { id: 'edge_9', sourceId: 'node_validate', targetId: 'node_dlq', label: 'invalid' },
+              ],
+            },
+          },
+        ];
+      },
+
+      loadCustomTemplates() {
+        try {
+          const raw = localStorage.getItem('pulse_custom_templates');
+          this.customTemplates = raw ? JSON.parse(raw) : [];
+        } catch (_err) {
+          this.customTemplates = [];
+        }
+      },
+
+      saveCustomTemplates() {
+        localStorage.setItem('pulse_custom_templates', JSON.stringify(this.customTemplates));
+      },
+
       renderNodePalettes() {
         const categories = {
           workflow: ['start', 'end', 'action', 'decision', 'queue-router', 'async-task'],
@@ -475,12 +834,21 @@
           const category = this.getNodeCategory(nodeId);
           const elem = document.createElement('div');
           elem.className = `node-type category-${def.category}`;
-          elem.textContent = `${def.icon} ${def.label}`;
+          elem.innerHTML = `<div class="node-type-content"><span class="node-icon">${def.icon}</span><span class="node-label">${def.label}</span></div>`;
           elem.draggable = true;
           elem.dataset.nodeType = nodeId;
           elem.addEventListener('dragstart', (e) => {
             e.dataTransfer.effectAllowed = 'copy';
             e.dataTransfer.setData('nodeType', nodeId);
+          });
+          // Custom drag fallback for environments where native HTML5 DnD is unreliable.
+          elem.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return;
+            this.startToolboxDrag(nodeId, e.clientX, e.clientY);
+          });
+          // Click-to-arm fallback: click a node type, then click canvas to place.
+          elem.addEventListener('click', () => {
+            this.pendingPaletteNodeType = nodeId;
           });
 
           if (category === 'workflow') {
@@ -491,6 +859,254 @@
             document.getElementById('messagePalette').appendChild(elem);
           }
         }
+
+        const counts = {
+          workflowCount: 6,
+          taskCount: 3,
+          messageCount: 4,
+        };
+        for (const [id, count] of Object.entries(counts)) {
+          const elem = document.getElementById(id);
+          if (elem) elem.textContent = `(${count})`;
+        }
+      },
+
+      renderTemplatePalettes() {
+        const stdContainer = document.getElementById('templatePalette');
+        const mapContainer = document.getElementById('mapTemplatePalette');
+        const sharedContainer = document.getElementById('sharedTemplatePalette');
+        const customContainer = document.getElementById('customTemplatePalette');
+        stdContainer.innerHTML = '';
+        mapContainer.innerHTML = '';
+        sharedContainer.innerHTML = '';
+        customContainer.innerHTML = '';
+
+        const renderTemplateCard = (template, container, isCustom) => {
+          const item = document.createElement('div');
+          item.className = 'template-item';
+          if (template.id === this.selectedTemplateId) item.classList.add('selected');
+          item.innerHTML = `
+            <div class="template-title"><span class="node-icon">${template.icon || 'T'}</span><span>${template.name}</span></div>
+            <div class="template-meta">v${template.version || '1.0.0'} · ${template.description || 'Reusable flow template'}</div>
+          `;
+          item.addEventListener('click', () => this.selectAndApplyTemplate(template));
+
+          if (isCustom) {
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'template-action';
+            removeBtn.textContent = 'Remove Template';
+            removeBtn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              this.removeCustomTemplate(template.id);
+            });
+            item.appendChild(removeBtn);
+          }
+
+          container.appendChild(item);
+        };
+
+        const mapTemplates = this.templates.filter((tpl) => /map|mapper/i.test(`${tpl.name} ${tpl.description}`));
+        this.templates.forEach((tpl) => renderTemplateCard(tpl, stdContainer, false));
+        mapTemplates.forEach((tpl) => renderTemplateCard(tpl, mapContainer, false));
+        this.sharedTemplates.forEach((tpl) => renderTemplateCard(tpl, sharedContainer, false));
+        this.customTemplates.forEach((tpl) => renderTemplateCard(tpl, customContainer, true));
+
+        const setCount = (id, value) => {
+          const el = document.getElementById(id);
+          if (el) el.textContent = `(${value})`;
+        };
+
+        setCount('standardTemplateCount', this.templates.length);
+        setCount('mapTemplateCount', mapTemplates.length);
+        setCount('sharedTemplateCount', this.sharedTemplates.length);
+        setCount('customTemplateCount', this.customTemplates.length);
+
+        if (this.sharedTemplates.length === 0) {
+          sharedContainer.innerHTML = '<div class="template-meta">No shared templates synced yet.</div>';
+        }
+        if (this.customTemplates.length === 0) {
+          customContainer.innerHTML = '<div class="template-meta">No custom templates yet.</div>';
+        }
+      },
+
+      normalizeTemplate(template) {
+        return {
+          id: template.id || 'tpl_' + Date.now(),
+          name: template.name || 'Untitled Template',
+          version: template.version || '1.0.0',
+          source: template.source || 'custom',
+          icon: template.icon || 'T',
+          description: template.description || 'Reusable flow template',
+          graph: template.graph || template,
+        };
+      },
+
+      selectAndApplyTemplate(template) {
+        const normalized = this.normalizeTemplate(template);
+        this.selectedTemplateId = normalized.id;
+        this.applyTemplate(normalized);
+      },
+
+      applyTemplate(template) {
+        if (this.graphService.nodes.length > 0 || this.graphService.edges.length > 0) {
+          const replace = confirm(`Load template "${template.name}" and replace current flow?`);
+          if (!replace) return;
+        }
+
+        this.loadGraphData(template.graph);
+      },
+
+      exportSelectedTemplate() {
+        const template = this.findSelectedTemplate();
+        if (!template) {
+          alert('Select a template first.');
+          return;
+        }
+
+        const payload = JSON.stringify(template, null, 2);
+        const blob = new Blob([payload], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${template.name.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}_template.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+      },
+
+      importTemplateFile(event) {
+        const file = event.target.files && event.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const data = JSON.parse(e.target.result);
+            const templates = Array.isArray(data) ? data : [data];
+            templates.forEach((raw) => {
+              const template = this.normalizeTemplate(raw);
+              if (template.graph && template.graph.nodes && template.graph.edges) {
+                this.customTemplates.push(template);
+              }
+            });
+            this.saveCustomTemplates();
+            this.renderTemplatePalettes();
+            alert('Template file imported.');
+          } catch (err) {
+            alert('Error importing template file: ' + err.message);
+          }
+        };
+        reader.readAsText(file);
+        event.target.value = '';
+      },
+
+      findSelectedTemplate() {
+        return (
+          this.templates.find((t) => t.id === this.selectedTemplateId) ||
+          this.sharedTemplates.find((t) => t.id === this.selectedTemplateId) ||
+          this.customTemplates.find((t) => t.id === this.selectedTemplateId)
+        );
+      },
+
+      saveCurrentAsTemplate() {
+        if (this.graphService.nodes.length === 0) {
+          alert('Create a flow first, then save it as template.');
+          return;
+        }
+
+        const name = prompt('Template name:', this.graphService.name || 'My Template');
+        if (!name) return;
+
+        const version = prompt('Template version:', '1.0.0') || '1.0.0';
+
+        const template = {
+          id: 'custom_' + Date.now(),
+          name: name.trim(),
+          version: version.trim(),
+          source: 'custom',
+          icon: 'C',
+          description: `${this.graphService.nodes.length} nodes, ${this.graphService.edges.length} edges`,
+          graph: {
+            name: this.graphService.name,
+            type: this.graphService.type,
+            nodes: JSON.parse(JSON.stringify(this.graphService.nodes)),
+            edges: JSON.parse(JSON.stringify(this.graphService.edges)),
+          },
+        };
+
+        this.customTemplates.push(template);
+        this.saveCustomTemplates();
+        this.renderTemplatePalettes();
+        this.selectedTemplateId = template.id;
+        alert(`Template "${template.name}" saved.`);
+      },
+
+      async syncSharedTemplates() {
+        try {
+          const response = await fetch('http://localhost:3000/api/templates');
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          this.sharedTemplates = await response.json();
+          this.renderTemplatePalettes();
+        } catch (err) {
+          alert('Unable to sync shared templates. Start the API server and try again.\n\n' + err.message);
+        }
+      },
+
+      async publishCurrentToShared() {
+        if (this.graphService.nodes.length === 0) {
+          alert('Create a flow first, then publish it.');
+          return;
+        }
+
+        const name = prompt('Shared template name:', this.graphService.name || 'Shared Template');
+        if (!name) return;
+
+        const version = prompt('Shared template version:', '1.0.0') || '1.0.0';
+        const template = this.normalizeTemplate({
+          name: name.trim(),
+          version: version.trim(),
+          source: 'shared',
+          icon: 'G',
+          description: `${this.graphService.nodes.length} nodes, ${this.graphService.edges.length} edges`,
+          graph: {
+            name: this.graphService.name,
+            type: this.graphService.type,
+            nodes: JSON.parse(JSON.stringify(this.graphService.nodes)),
+            edges: JSON.parse(JSON.stringify(this.graphService.edges)),
+          },
+        });
+
+        try {
+          const response = await fetch('http://localhost:3000/api/templates', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(template),
+          });
+
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          await this.syncSharedTemplates();
+          alert(`Published "${template.name}" to shared registry.`);
+        } catch (err) {
+          alert('Unable to publish shared template. Start the API server and try again.\n\n' + err.message);
+        }
+      },
+
+      removeCustomTemplate(templateId) {
+        this.customTemplates = this.customTemplates.filter((t) => t.id !== templateId);
+        this.saveCustomTemplates();
+        this.renderTemplatePalettes();
+      },
+
+      loadGraphData(graphData) {
+        this.graphService.id = graphData.id || 'workflow_' + Date.now();
+        this.graphService.name = graphData.name || 'Untitled Workflow';
+        this.graphService.type = graphData.type || 'workflow';
+        this.graphService.nodes = JSON.parse(JSON.stringify(graphData.nodes || []));
+        this.graphService.edges = JSON.parse(JSON.stringify(graphData.edges || []));
+        this.pendingEdgeSource = null;
+        this.selectedNode = null;
+        this.selectedTemplateId = null;
+        document.getElementById('workflowName').value = this.graphService.name;
+        this.render();
       },
 
       getNodeCategory(nodeId) {
@@ -540,6 +1156,16 @@
       },
 
       setupEventListeners() {
+        document.addEventListener('mousemove', (e) => {
+          if (!this.toolboxDragState) return;
+          this.updateToolboxDragGhost(e.clientX, e.clientY);
+        });
+
+        document.addEventListener('mouseup', (e) => {
+          if (!this.toolboxDragState) return;
+          this.finishToolboxDrag(e.clientX, e.clientY);
+        });
+
         this.canvas.addEventListener('dragover', (e) => {
           e.preventDefault();
           e.dataTransfer.dropEffect = 'copy';
@@ -552,16 +1178,17 @@
             const rect = this.canvas.getBoundingClientRect();
             const x = (e.clientX - rect.left - this.pan.x) / this.zoom;
             const y = (e.clientY - rect.top - this.pan.y) / this.zoom;
-            const label = this.nodeTypes[nodeType].label;
-            const node = this.graphService.addNode(nodeType, label);
-            node.x = x;
-            node.y = y;
-            this.render();
+            this.addNodeFromPalette(nodeType, x, y);
           }
         });
 
         this.canvas.addEventListener('mousedown', (e) => {
           const pos = this.getMousePos(e);
+          if (this.pendingPaletteNodeType) {
+            this.addNodeFromPalette(this.pendingPaletteNodeType, pos.x, pos.y);
+            this.pendingPaletteNodeType = null;
+            return;
+          }
           const node = this.getNodeAtPos(pos);
           if (node) {
             // Shift+click two nodes to create a directed edge.
@@ -630,6 +1257,63 @@
           x: (e.clientX - rect.left - this.pan.x) / this.zoom,
           y: (e.clientY - rect.top - this.pan.y) / this.zoom,
         };
+      },
+
+      addNodeFromPalette(nodeType, x, y) {
+        const label = this.nodeTypes[nodeType].label;
+        const node = this.graphService.addNode(nodeType, label);
+        node.x = x;
+        node.y = y;
+        this.render();
+      },
+
+      startToolboxDrag(nodeType, clientX, clientY) {
+        const def = this.nodeTypes[nodeType];
+        if (!def) return;
+
+        const ghost = document.createElement('div');
+        ghost.textContent = `${def.icon} ${def.label}`;
+        ghost.style.position = 'fixed';
+        ghost.style.pointerEvents = 'none';
+        ghost.style.padding = '8px 10px';
+        ghost.style.background = '#2c3e50';
+        ghost.style.color = '#ecf0f1';
+        ghost.style.border = '1px solid #455a64';
+        ghost.style.borderRadius = '4px';
+        ghost.style.fontSize = '12px';
+        ghost.style.zIndex = '9999';
+        ghost.style.opacity = '0.9';
+        document.body.appendChild(ghost);
+
+        this.toolboxDragState = { nodeType, ghost };
+        this.updateToolboxDragGhost(clientX, clientY);
+      },
+
+      updateToolboxDragGhost(clientX, clientY) {
+        if (!this.toolboxDragState) return;
+        this.toolboxDragState.ghost.style.left = `${clientX + 12}px`;
+        this.toolboxDragState.ghost.style.top = `${clientY + 12}px`;
+      },
+
+      finishToolboxDrag(clientX, clientY) {
+        if (!this.toolboxDragState) return;
+
+        const { nodeType, ghost } = this.toolboxDragState;
+        const rect = this.canvas.getBoundingClientRect();
+        const isOverCanvas =
+          clientX >= rect.left &&
+          clientX <= rect.right &&
+          clientY >= rect.top &&
+          clientY <= rect.bottom;
+
+        if (isOverCanvas) {
+          const x = (clientX - rect.left - this.pan.x) / this.zoom;
+          const y = (clientY - rect.top - this.pan.y) / this.zoom;
+          this.addNodeFromPalette(nodeType, x, y);
+        }
+
+        ghost.remove();
+        this.toolboxDragState = null;
       },
 
       getNodeAtPos(pos) {
@@ -977,10 +1661,7 @@
         const reader = new FileReader();
         reader.onload = (e) => {
           try {
-            this.graphService = JSON.parse(e.target.result);
-            this.pendingEdgeSource = null;
-            document.getElementById('workflowName').value = this.graphService.name;
-            this.render();
+            this.loadGraphData(JSON.parse(e.target.result));
           } catch (err) {
             alert('Error loading file: ' + err.message);
           }

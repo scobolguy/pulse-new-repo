@@ -9,6 +9,7 @@ const viteCacheDir = process.env.VITE_CACHE_DIR || path.join(runtimeDataRoot, 'v
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  publicDir: path.resolve(__dirname, '../../../documents'),
   cacheDir: viteCacheDir,
   optimizeDeps: {
     noDiscovery: true,

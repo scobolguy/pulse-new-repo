@@ -337,6 +337,79 @@ function example6_Validation() {
 }
 
 // ============================================================================
+// Example 7: Legacy MT103/MT202 Mapper Flow (WFL)
+// ============================================================================
+
+function example7_LegacySwiftMapperFlow() {
+  console.log('\n\n=== Example 7: Legacy MT103/MT202 Mapper Flow ===\n');
+
+  const registry = createDefaultWorkflowRegistry();
+  const service = new GraphService('flow_mt103_mt202', 'Legacy MT103/MT202 Mapper', 'message-flow', registry);
+
+  // Source and parsing
+  const source = service.createNode('swift_in', 'message-source', 'SWIFT Legacy Inbound', {
+    queue: 'swift.legacy.inbound',
+  });
+  const parse = service.createNode('parse_swift', 'message-filter', 'Parse FIN Envelope', {
+    operation: 'parse_swift_fin',
+  });
+
+  // Split path by message type
+  const routeByType = service.createNode('route_type', 'decision', 'MT103 or MT202?', {
+    condition: "msg_type == 'MT103' or msg_type == 'MT202'",
+  });
+
+  const map103 = service.createNode('map_103', 'message-transform', 'Mapper: MT103 -> Canonical Payment', {
+    mapper: 'legacy_mt103_mapper_v2',
+    sourceType: 'MT103',
+    targetType: 'CanonicalPayment',
+  });
+  const map202 = service.createNode('map_202', 'message-transform', 'Mapper: MT202 -> Canonical Settlement', {
+    mapper: 'legacy_mt202_mapper_v2',
+    sourceType: 'MT202',
+    targetType: 'CanonicalSettlement',
+  });
+
+  const validateCanonical = service.createNode('validate_canonical', 'action', 'Validate Canonical Payload', {
+    operation: 'validate_canonical_schema',
+    timeout: 2000,
+  });
+  const sink = service.createNode('canonical_out', 'message-sink', 'Canonical Outbound Queue', {
+    queue: 'payments.canonical.outbound',
+  });
+  const deadLetter = service.createNode('dead_letter', 'message-sink', 'Dead Letter Queue', {
+    queue: 'payments.deadletter',
+  });
+
+  // Flow edges
+  service.createEdge(source.id, parse.id);
+  service.createEdge(parse.id, routeByType.id);
+  service.createEdge(routeByType.id, map103.id, 'MT103', "msg_type == 'MT103'");
+  service.createEdge(routeByType.id, map202.id, 'MT202', "msg_type == 'MT202'");
+  service.createEdge(routeByType.id, deadLetter.id, 'OTHER', "msg_type != 'MT103' and msg_type != 'MT202'");
+  service.createEdge(map103.id, validateCanonical.id);
+  service.createEdge(map202.id, validateCanonical.id);
+  service.createEdge(validateCanonical.id, sink.id, 'valid', 'schema_ok');
+  service.createEdge(validateCanonical.id, deadLetter.id, 'invalid', 'not schema_ok');
+
+  // Validate and export
+  const validation = service.validate();
+  console.log(`Validation: ${validation.valid ? 'PASS' : 'FAIL'}`);
+  if (!validation.valid) {
+    validation.errors.forEach((e) => console.log(`  ❌ ${e}`));
+  }
+
+  console.log('\n--- Mermaid Diagram ---');
+  console.log(service.toMermaid());
+
+  console.log('\n--- Pulse0 DSL ---');
+  console.log(generateDSL(service));
+
+  console.log('\n--- Pcode Bytecode ---');
+  console.log(generatePcode(service));
+}
+
+// ============================================================================
 // Main — Run Examples
 // ============================================================================
 
@@ -347,6 +420,7 @@ export async function runAllExamples() {
   // example4_APIUsage(); // Requires running API server
   example5_CustomNodeTypes();
   example6_Validation();
+  example7_LegacySwiftMapperFlow();
 
   console.log('\n\n✅ All examples completed!\n');
 }

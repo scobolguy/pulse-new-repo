@@ -17,11 +17,84 @@ import { generatePcode } from './PcodeGenerator';
 
 const app = express();
 app.use(express.json());
+app.use((req: Request, res: Response, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
 app.use(express.static('public'));
 
 // Store for active graph services (in-memory; use DB in production)
 const graphs: Map<string, GraphService> = new Map();
 const nodeRegistry = createDefaultWorkflowRegistry();
+const templates: Map<string, any> = new Map();
+
+// ============================================================================
+// Template Registry Endpoints
+// ============================================================================
+
+/**
+ * GET /api/templates
+ * List shared templates
+ */
+app.get('/api/templates', (req: Request, res: Response) => {
+  res.json(Array.from(templates.values()));
+});
+
+/**
+ * POST /api/templates
+ * Create or update a shared template
+ */
+app.post('/api/templates', (req: Request, res: Response) => {
+  const { id, name, version, source, icon, description, graph } = req.body;
+  if (!name || !graph || !graph.nodes || !graph.edges) {
+    return res.status(400).json({ error: 'name and graph required' });
+  }
+
+  const templateId = id || `template_${uuidv4()}`;
+  const template = {
+    id: templateId,
+    name,
+    version: version || '1.0.0',
+    source: source || 'shared',
+    icon: icon || 'T',
+    description: description || '',
+    graph,
+    updatedAt: new Date().toISOString(),
+  };
+
+  templates.set(templateId, template);
+  res.status(201).json(template);
+});
+
+/**
+ * GET /api/templates/:id
+ * Get a shared template by id
+ */
+app.get('/api/templates/:id', (req: Request, res: Response) => {
+  const template = templates.get(req.params.id);
+  if (!template) {
+    return res.status(404).json({ error: 'Template not found' });
+  }
+
+  res.json(template);
+});
+
+/**
+ * DELETE /api/templates/:id
+ * Delete a shared template
+ */
+app.delete('/api/templates/:id', (req: Request, res: Response) => {
+  if (templates.delete(req.params.id)) {
+    res.json({ success: true });
+  } else {
+    res.status(404).json({ error: 'Template not found' });
+  }
+});
 
 // ============================================================================
 // Graph API Endpoints
@@ -397,6 +470,7 @@ app.get('/api/info', (req: Request, res: Response) => {
     version: '1.0.0',
     capabilities: ['workflow', 'task-chart', 'message-flow', 'state-machine'],
     exports: ['mermaid', 'dsl', 'pcode', 'json'],
+    registries: ['templates'],
   });
 });
 
