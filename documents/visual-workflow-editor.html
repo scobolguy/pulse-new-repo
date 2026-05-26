@@ -376,7 +376,7 @@
     <div class="editor-container">
       <!-- Left: Canvas -->
       <div class="canvas-section">
-        <h4>Visual Editor - Drag nodes to position, right-click to delete</h4>
+        <h4>Visual Editor - Drag nodes, Shift+click two nodes to connect, right-click to delete</h4>
         <canvas id="canvas"></canvas>
       </div>
 
@@ -412,6 +412,7 @@
       ctx: null,
       graphService: null,
       selectedNode: null,
+      pendingEdgeSource: null,
       draggedNode: null,
       dragOffset: { x: 0, y: 0 },
       zoom: 1,
@@ -563,6 +564,26 @@
           const pos = this.getMousePos(e);
           const node = this.getNodeAtPos(pos);
           if (node) {
+            // Shift+click two nodes to create a directed edge.
+            if (e.shiftKey) {
+              if (!this.pendingEdgeSource) {
+                this.pendingEdgeSource = node;
+                this.selectedNode = node;
+                this.updateProperties();
+                this.render();
+                return;
+              }
+
+              if (this.pendingEdgeSource.id !== node.id) {
+                const edgeLabel = prompt('Edge label (optional):', '') || '';
+                this.graphService.addEdge(this.pendingEdgeSource.id, node.id, edgeLabel.trim());
+              }
+
+              this.pendingEdgeSource = null;
+              this.render();
+              return;
+            }
+
             this.selectedNode = node;
             this.draggedNode = node;
             this.dragOffset = {
@@ -703,6 +724,14 @@
         this.ctx.fill();
         this.ctx.stroke();
 
+        if (node === this.pendingEdgeSource) {
+          this.ctx.strokeStyle = '#8e44ad';
+          this.ctx.setLineDash([6, 4]);
+          this.ctx.lineWidth = 3;
+          this.ctx.strokeRect(x - 4, y - 4, w + 8, h + 8);
+          this.ctx.setLineDash([]);
+        }
+
         // Draw label
         this.ctx.fillStyle = '#2c3e50';
         this.ctx.font = 'bold 12px Arial';
@@ -766,22 +795,160 @@
         }
         for (const edge of this.graphService.edges) {
           const label = edge.label ? ` |${edge.label}|` : '';
-          code += `  ${edge.sourceId} --> ${edge.targetId}\n`;
+          code += `  ${edge.sourceId} -->${label} ${edge.targetId}\n`;
         }
         return code;
       },
 
+      sanitizeIdentifier(name) {
+        const cleaned = (name || 'workflow').replace(/[^a-zA-Z0-9_]/g, '_').replace(/^_+/, '');
+        if (!cleaned) return 'workflow';
+        if (/^[0-9]/.test(cleaned)) return '_' + cleaned;
+        return cleaned;
+      },
+
+      generateDSLText() {
+        const programName = this.sanitizeIdentifier(this.graphService.name || 'workflow');
+        const nodes = this.graphService.nodes;
+        const edges = this.graphService.edges;
+
+        const lines = [];
+        lines.push(`program ${programName};`);
+        lines.push('');
+        lines.push('{ Auto-generated from visual graph }');
+        lines.push('begin');
+
+        if (nodes.length === 0) {
+          lines.push('  { Empty graph }');
+          lines.push('end.');
+          return lines.join('\n');
+        }
+
+        for (const node of nodes) {
+          const safeLabel = String(node.label || '').replace(/'/g, "''");
+          switch (node.type) {
+            case 'start':
+              lines.push(`  { START ${node.id}: ${safeLabel} }`);
+              break;
+            case 'end':
+              lines.push(`  { END ${node.id}: ${safeLabel} }`);
+              lines.push('  exit;');
+              break;
+            case 'decision': {
+              const condition = this.sanitizeIdentifier((node.properties && node.properties.condition) || `${safeLabel}_condition`);
+              lines.push(`  if ${condition} then`);
+              lines.push(`    { branch from ${node.id} }`);
+              break;
+            }
+            case 'message-source':
+              lines.push(`  receive('${safeLabel}');`);
+              break;
+            case 'message-sink':
+              lines.push(`  emit('${safeLabel}');`);
+              break;
+            default:
+              lines.push(`  execute('${safeLabel}');`);
+              break;
+          }
+        }
+
+        if (edges.length > 0) {
+          lines.push('');
+          lines.push('  { Flow edges }');
+          for (const edge of edges) {
+            const edgeSuffix = edge.label ? ` [${edge.label}]` : '';
+            lines.push(`  { ${edge.sourceId} -> ${edge.targetId}${edgeSuffix} }`);
+          }
+        }
+
+        lines.push('end.');
+        return lines.join('\n');
+      },
+
+      generatePcodeText() {
+        const nodes = this.graphService.nodes;
+        const edges = this.graphService.edges;
+        const lines = [];
+
+        lines.push(`# Pcode from: ${this.graphService.name || 'workflow'}`);
+
+        if (nodes.length === 0) {
+          lines.push('0 NOP');
+          lines.push('1 HALT');
+          return lines.join('\n');
+        }
+
+        let address = 0;
+        for (const node of nodes) {
+          const safeLabel = String(node.label || '').replace(/"/g, '\\"');
+          if (node.type === 'start') {
+            lines.push(`${address++} NOP ; ${node.id}`);
+          } else if (node.type === 'end') {
+            lines.push(`${address++} HALT ; ${node.id}`);
+          } else if (node.type === 'decision') {
+            const cond = this.sanitizeIdentifier((node.properties && node.properties.condition) || `${node.label}_condition`);
+            lines.push(`${address++} SYS EVAL_CONDITION \"${cond}\" ; ${node.id}`);
+          } else if (node.type === 'message-source') {
+            lines.push(`${address++} SYS RECEIVE \"${safeLabel}\" ; ${node.id}`);
+          } else if (node.type === 'message-sink') {
+            lines.push(`${address++} SYS EMIT \"${safeLabel}\" ; ${node.id}`);
+          } else {
+            lines.push(`${address++} SYS EXECUTE \"${safeLabel}\" ; ${node.id}`);
+          }
+        }
+
+        if (!nodes.some(n => n.type === 'end')) {
+          lines.push(`${address++} HALT`);
+        }
+
+        if (edges.length > 0) {
+          lines.push('');
+          lines.push('; Edge map');
+          for (const edge of edges) {
+            const edgeSuffix = edge.label ? ` [${edge.label}]` : '';
+            lines.push(`; ${edge.sourceId} -> ${edge.targetId}${edgeSuffix}`);
+          }
+        }
+
+        return lines.join('\n');
+      },
+
       validateGraph() {
-        alert('Graph validation: ' + this.graphService.nodes.length + ' nodes, ' + this.graphService.edges.length + ' edges');
+        const nodes = this.graphService.nodes;
+        const edges = this.graphService.edges;
+        const errors = [];
+
+        if (nodes.length === 0) {
+          errors.push('Graph has no nodes.');
+        }
+
+        const hasStart = nodes.some(n => n.type === 'start');
+        const hasEnd = nodes.some(n => n.type === 'end');
+        if (!hasStart) errors.push('No start node found.');
+        if (!hasEnd) errors.push('No end node found.');
+
+        const nodeIds = new Set(nodes.map(n => n.id));
+        for (const edge of edges) {
+          if (!nodeIds.has(edge.sourceId) || !nodeIds.has(edge.targetId)) {
+            errors.push(`Invalid edge ${edge.id}: missing source or target node.`);
+          }
+        }
+
+        if (errors.length > 0) {
+          alert('Validation failed:\n\n- ' + errors.join('\n- '));
+          return;
+        }
+
+        alert(`Validation passed: ${nodes.length} nodes, ${edges.length} edges`);
       },
 
       exportDSL() {
-        const dsl = 'program ' + this.graphService.name + ';\nbegin\n  { DSL export not yet implemented }\nend.';
+        const dsl = this.generateDSLText();
         alert('DSL Export:\n\n' + dsl);
       },
 
       exportPcode() {
-        const pcode = '# Pcode from: ' + this.graphService.name + '\nNOP\nHALT';
+        const pcode = this.generatePcodeText();
         alert('Pcode Export:\n\n' + pcode);
       },
 
@@ -790,6 +957,7 @@
           this.graphService.nodes = [];
           this.graphService.edges = [];
           this.selectedNode = null;
+          this.pendingEdgeSource = null;
           this.render();
         }
       },
@@ -810,6 +978,7 @@
         reader.onload = (e) => {
           try {
             this.graphService = JSON.parse(e.target.result);
+            this.pendingEdgeSource = null;
             document.getElementById('workflowName').value = this.graphService.name;
             this.render();
           } catch (err) {
@@ -826,6 +995,8 @@
         alert('Copied to clipboard!');
       },
     };
+
+    window.app = app;
 
     // Initialize app
     document.addEventListener('DOMContentLoaded', () => {
