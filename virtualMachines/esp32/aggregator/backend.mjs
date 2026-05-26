@@ -49,6 +49,7 @@ import { registerQueueBrokerOpsRoutes } from './src/backend/roles/queueBrokerOps
 import { registerComplianceRoutes } from './src/backend/roles/complianceRoutes.mjs';
 import { registerObservabilityRoutes } from './src/backend/roles/observabilityRoutes.mjs';
 import { registerPlatformRoutes } from './src/backend/roles/platformRoutes.mjs';
+import { registerReplicationRoutes } from './src/backend/roles/replicationRoutes.mjs';
 import { createRequestPolicyApi } from './src/backend/security/requestPolicy.mjs';
 import { ROUTE_ROLE_MANIFEST } from './src/backend/routes.manifest.mjs';
 import { registerRoutesFromManifest } from './src/backend/routeManifestLoader.mjs';
@@ -9089,7 +9090,8 @@ function registerRoutes(app) {
       registerQueueBrokerOpsRoutes,
       registerComplianceRoutes,
       registerObservabilityRoutes,
-      registerPlatformRoutes
+      registerPlatformRoutes,
+      registerReplicationRoutes
     },
     dependencyFactories: {
       lifecycleInquiry: () => ({
@@ -9178,6 +9180,10 @@ function registerRoutes(app) {
         enumerateApiCatalog,
         resolvePermissionForApiRequest,
         routeRoleManifest: ROUTE_ROLE_MANIFEST
+      }),
+      replication: () => ({
+        queueManagerRegistry,
+        queueManagers
       })
     }
   });
@@ -9722,199 +9728,6 @@ function registerRoutes(app) {
     });
 
   debugLog('[DEBUG] Registering routes...');
-
-  // --- REPLICATION ENDPOINTS ---
-  // Create a replica instance for a queue manager
-  app.post('/api/replication/create-replica', (req, res) => {
-    try {
-      const { primaryManagerId, replicaManagerId, replicaNodeId, replicaIp, replicaPort } = req.body || {};
-      
-      if (!primaryManagerId || !replicaManagerId) {
-        return res.status(400).json({ error: 'primaryManagerId and replicaManagerId are required' });
-      }
-
-      const primary = queueManagerRegistry.get(primaryManagerId);
-      if (!primary) {
-        return res.status(404).json({ error: `Primary manager ${primaryManagerId} not found` });
-      }
-
-      // Create replica entry in registry
-      const replica = {
-        managerId: replicaManagerId,
-        name: `${primary.name}-replica`,
-        nodeId: replicaNodeId || primary.nodeId,
-        ip: replicaIp || primary.ip,
-        port: replicaPort || primary.port,
-        status: 'up',
-        local: false,
-        lastHeartbeat: Date.now(),
-        queues: [],
-        replicaOf: primaryManagerId,  // Point to primary
-        replicas: [],
-        operationVersion: 0,
-        primarySyncVersion: 0  // Track which operations we've synced from primary
-      };
-
-      queueManagerRegistry.set(replicaManagerId, replica);
-
-      // Add to primary's replica list
-      if (!primary.replicas) primary.replicas = [];
-      primary.replicas.push(replicaManagerId);
-      queueManagerRegistry.set(primaryManagerId, primary);
-
-      res.json({ 
-        status: 'replica-created', 
-        primary: { managerId: primaryManagerId, replicas: primary.replicas },
-        replica: { managerId: replicaManagerId, replicaOf: primaryManagerId }
-      });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  // Get operations since a version (for replica sync)
-  app.get('/api/replication/operations/:managerId', (req, res) => {
-    try {
-      const { managerId } = req.params;
-      const sinceVersion = Number(req.query.since || 0);
-
-      const manager = queueManagerRegistry.get(managerId);
-      if (!manager) {
-        return res.status(404).json({ error: `Manager ${managerId} not found` });
-      }
-
-      // Get operations from this manager
-      if (manager.local) {
-        const qm = queueManagers[manager.localIndex];
-        const ops = qm.getOperationsSince(sinceVersion);
-        return res.json({
-          managerId,
-          currentVersion: qm.getCurrentVersion(),
-          operations: ops,
-          operationCount: ops.length
-        });
-      }
-
-      res.json({
-        managerId,
-        currentVersion: manager.operationVersion,
-        operations: [],
-        operationCount: 0,
-        note: 'Remote manager operations not directly accessible - use replica sync endpoint'
-      });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  // Get full queue state snapshot
-  app.get('/api/replication/snapshot/:managerId', (req, res) => {
-    try {
-      const { managerId } = req.params;
-      const manager = queueManagerRegistry.get(managerId);
-      if (!manager) {
-        return res.status(404).json({ error: `Manager ${managerId} not found` });
-      }
-
-      if (manager.local) {
-        const qm = queueManagers[manager.localIndex];
-        const snapshot = qm.getSnapshot();
-        return res.json({ managerId, snapshot });
-      }
-
-      res.json({
-        managerId,
-        snapshot: null,
-        note: 'Remote manager snapshot not directly accessible'
-      });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  // Apply replicated operations (called by replicas to sync from primary)
-  app.post('/api/replication/apply-operations/:targetManagerId', (req, res) => {
-    try {
-      const { targetManagerId } = req.params;
-      const { operations } = req.body || {};
-
-      if (!Array.isArray(operations)) {
-        return res.status(400).json({ error: 'operations array is required' });
-      }
-
-      const manager = queueManagerRegistry.get(targetManagerId);
-      if (!manager) {
-        return res.status(404).json({ error: `Target manager ${targetManagerId} not found` });
-      }
-
-      if (!manager.local) {
-        return res.status(400).json({ error: 'Can only apply operations to local managers' });
-      }
-
-      const qm = queueManagers[manager.localIndex];
-      let applied = 0;
-
-      for (const op of operations) {
-        try {
-          qm.applyReplicatedOperation(op);
-          applied++;
-          manager.primarySyncVersion = op.version;
-        } catch (e) {
-          console.error(`Failed to apply operation:`, op, e);
-        }
-      }
-
-      queueManagerRegistry.set(targetManagerId, manager);
-
-      res.json({
-        status: 'operations-applied',
-        targetManagerId,
-        applied,
-        total: operations.length,
-        newVersion: manager.primarySyncVersion
-      });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  // Get replica sync status
-  app.get('/api/replication/status/:managerId', (req, res) => {
-    try {
-      const { managerId } = req.params;
-      const manager = queueManagerRegistry.get(managerId);
-      if (!manager) {
-        return res.status(404).json({ error: `Manager ${managerId} not found` });
-      }
-
-      const status = {
-        managerId,
-        isReplica: !!manager.replicaOf,
-        replicaOf: manager.replicaOf,
-        replicas: manager.replicas || [],
-        operationVersion: manager.operationVersion || 0,
-        primarySyncVersion: manager.primarySyncVersion || 0,
-        syncLag: (manager.operationVersion || 0) - (manager.primarySyncVersion || 0)
-      };
-
-      // If this is the primary, get info about all replicas
-      if (!manager.replicaOf && manager.replicas && manager.replicas.length > 0) {
-        status.replicaStatuses = manager.replicas.map(replicaId => {
-          const replica = queueManagerRegistry.get(replicaId);
-          return {
-            replicaId,
-            status: replica?.status || 'unknown',
-            syncLag: (manager.operationVersion || 0) - (replica?.primarySyncVersion || 0),
-            lastHeartbeat: replica?.lastHeartbeat
-          };
-        });
-      }
-
-      res.json(status);
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
 
   // Queue configuration synchronization endpoints for distributed config management
 
