@@ -280,8 +280,19 @@ function countPmachineNodes(nodes = []) {
     const details = node?.details || {};
     const hardware = String(details.hardware || '').toLowerCase();
     const serviceName = String(node?.serviceName || '').toLowerCase();
+    const runtime = String(details.runtime || node?.runtime || '').toLowerCase();
+    const deviceRole = String(details.deviceRole || node?.deviceRole || '').toLowerCase();
     const services = Array.isArray(details.services) ? details.services.map((service) => String(service).toLowerCase()) : [];
-    return hardware.includes('pmachine') || serviceName.includes('pmachine') || services.some((service) => service.includes('pmachine'));
+    return (
+      hardware.includes('pmachine') ||
+      hardware.includes('esp32') ||
+      serviceName.includes('pmachine') ||
+      serviceName.includes('esp32-node') ||
+      runtime.includes('pmachine') ||
+      runtime.includes('javascript') ||
+      deviceRole.length > 0 ||
+      services.some((service) => service.includes('pmachine'))
+    );
   }).length;
 }
 
@@ -1807,13 +1818,24 @@ function App() {
           }
         }
 
+        const flowDefinitionById = FLOW_DEFINITIONS.reduce((acc, definition) => {
+          acc[definition.id] = definition;
+          return acc;
+        }, {});
+
         const flowRows = Object.entries(latencyTargets).map(([flowId, target]) => {
           const evaluation = latencyEvaluations[flowId] || {};
+          const definition = flowDefinitionById[flowId] || null;
+          const definitionQueues = Array.isArray(definition?.transitionMetrics)
+            ? definition.transitionMetrics
+              .map((metric) => String(metric?.queueName || '').trim())
+              .filter(Boolean)
+            : [];
           const sourceQueues = Array.isArray(target?.queues)
             ? target.queues
             : Array.isArray(evaluation?.sourceQueues)
               ? evaluation.sourceQueues
-              : [];
+              : definitionQueues;
           const throughputQueue = String(target?.throughputQueue || sourceQueues[sourceQueues.length - 1] || sourceQueues[0] || '').trim();
           const queuedNow = sourceQueues.reduce((sum, queueName) => sum + Number(q?.[queueName]?.current || 0), 0);
           const currentCount = Number(stateCountsByQueue[throughputQueue] || 0);
@@ -1877,6 +1899,13 @@ function App() {
         const existingFlowIds = new Set(flowRows.map((flow) => String(flow.id).toLowerCase()));
         for (const definition of FLOW_DEFINITIONS) {
           if (existingFlowIds.has(definition.id)) continue;
+          const definitionQueues = Array.isArray(definition.transitionMetrics)
+            ? [...new Set(definition.transitionMetrics
+              .map((metric) => String(metric?.queueName || '').trim())
+              .filter(Boolean))]
+            : [];
+          const queuedNow = definitionQueues.reduce((sum, queueName) => sum + Number(q?.[queueName]?.current || 0), 0);
+          const transactionCount = definitionQueues.reduce((sum, queueName) => sum + Number(stateCountsByQueue[queueName] || 0), 0);
           flowRows.push({
             id: definition.id,
             name: definition.name,
@@ -1888,12 +1917,18 @@ function App() {
             policyStatus: 'no-data',
             throughputStatus: 'no-data',
             budgetUsedPercent: null,
-            queues: [],
-            queuedNow: 0,
+            queues: definitionQueues,
+            queuedNow,
             latencyHistory: [],
             throughputHistory: [],
-            transactionCount: 0,
-            transitionMetrics: definition.transitionMetrics,
+            transactionCount,
+            transitionMetrics: Array.isArray(definition.transitionMetrics)
+              ? definition.transitionMetrics.map((metric) => ({
+                ...metric,
+                waiting: Number(q?.[metric.queueName]?.current || 0),
+                cumulative: Number(stateCountsByQueue[metric.queueName] || 0)
+              }))
+              : [],
           });
         }
 
@@ -2312,7 +2347,7 @@ function App() {
                       onClick={() => setArea('develop')}
                       title={copy.openTopology}
                     >
-                      <div className="login-mini-badge">N</div>
+                      <div className="login-mini-badge">{pmachineNodeCount}</div>
                       <strong>{copy.openTopology}</strong>
                       <div className="login-mini-row"><span>Type</span><b>Network</b></div>
                       <div className="login-mini-row"><span>Area</span><b>Develop</b></div>

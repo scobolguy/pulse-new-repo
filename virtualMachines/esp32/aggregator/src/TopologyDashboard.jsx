@@ -19,21 +19,24 @@ function isPmachineNode(node) {
   const details = node?.details || {};
   const hardware = String(details.hardware || '').toLowerCase();
   const serviceName = String(node?.serviceName || '').toLowerCase();
+  const runtime = String(details.runtime || node?.runtime || '').toLowerCase();
+  const deviceRole = String(details.deviceRole || node?.deviceRole || '').toLowerCase();
   const services = Array.isArray(details.services) ? details.services.map((service) => String(service).toLowerCase()) : [];
-  return hardware.includes('pmachine') || serviceName.includes('pmachine') || services.some((service) => service.includes('pmachine'));
+  return (
+    hardware.includes('pmachine') ||
+    hardware.includes('esp32') ||
+    serviceName.includes('pmachine') ||
+    serviceName.includes('esp32-node') ||
+    runtime.includes('pmachine') ||
+    runtime.includes('javascript') ||
+    deviceRole.length > 0 ||
+    services.some((service) => service.includes('pmachine'))
+  );
 }
 
 function getClusterLabel(node) {
   const details = node?.details || {};
-  return String(details.clusterName || details.clusterId || node?.clusterName || node?.clusterId || 'Unclustered');
-}
-
-function escapeMermaidLabel(value) {
-  return String(value || '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;');
+  return String(details.clusterName || details.clusterId || node?.clusterName || node?.clusterId || 'Magic Cluster');
 }
 
 function makeMermaidId(value) {
@@ -43,78 +46,6 @@ function makeMermaidId(value) {
     .replace(/^([0-9])/, 'n_$1')
     .replace(/_+/g, '_')
     .replace(/^_|_$/g, '');
-}
-
-function buildTopologyEntries(clusterGroups) {
-  return Object.entries(clusterGroups).map(([clusterLabel, nodes], clusterIndex) => {
-    const clusterId = makeMermaidId(`cluster_${clusterIndex}_${clusterLabel}`);
-    const clusterNodeId = `${clusterId}_parent`;
-    const clusterAnchorId = `cluster-${clusterId}`;
-
-    const nodeEntries = nodes.map((node, nodeIndex) => {
-      const nodeLabel = node.details?.nodeName || node.nodeName || node.ip || `pmachine-${nodeIndex + 1}`;
-      const nodeId = makeMermaidId(`${clusterId}_${nodeLabel}_${node.mac || node.ip || nodeIndex}`);
-      const nodeAnchorId = `pmachine-${nodeId}`;
-      const peers = Array.isArray(node.details?.discoveredNodes) ? node.details.discoveredNodes : [];
-      const peerEntries = peers.map((peer, peerIndex) => {
-        const peerLabel = peer.mac || peer.ip || `peer-${peerIndex + 1}`;
-        const peerId = makeMermaidId(`${nodeId}_${peerLabel}_${peerIndex}`);
-        return {
-          peer,
-          peerLabel,
-          peerId,
-          peerAnchorId: `peer-${peerId}`
-        };
-      });
-
-      return {
-        node,
-        nodeLabel,
-        nodeId,
-        nodeAnchorId,
-        peerEntries
-      };
-    });
-
-    return {
-      clusterLabel,
-      clusterId,
-      clusterNodeId,
-      clusterAnchorId,
-      nodeEntries
-    };
-  });
-}
-
-function buildTopologyMermaid(topologyEntries) {
-  const lines = [
-    'flowchart TB',
-    '  classDef root fill:#223655,stroke:#5e7fb3,color:#ffffff,stroke-width:1px;',
-    '  classDef cluster fill:#dbe7f7,stroke:#8fa9c5,color:#223655,stroke-width:1px;',
-    '  classDef machine fill:#e8f5e9,stroke:#7fbf7f,color:#1a237e,stroke-width:1px;',
-    '  classDef peer fill:#fff3cd,stroke:#e0c36a,color:#6b5300,stroke-width:1px;',
-    '  topology_root["PMachine topology"]:::root'
-  ];
-
-  topologyEntries.forEach((cluster) => {
-    lines.push(`  ${cluster.clusterNodeId}["${escapeMermaidLabel(`${cluster.clusterLabel} (${cluster.nodeEntries.length})`)}"]:::cluster`);
-    lines.push(`  topology_root --> ${cluster.clusterNodeId}`);
-    lines.push(`  click ${cluster.clusterNodeId} href "#${cluster.clusterAnchorId}" "View cluster details"`);
-
-    cluster.nodeEntries.forEach((nodeEntry) => {
-      lines.push(`  ${nodeEntry.nodeId}["${escapeMermaidLabel(nodeEntry.nodeLabel)}"]:::machine`);
-      lines.push(`  ${cluster.clusterNodeId} --> ${nodeEntry.nodeId}`);
-      lines.push(`  click ${nodeEntry.nodeId} href "#${nodeEntry.nodeAnchorId}" "View PMachine details"`);
-
-      nodeEntry.peerEntries.forEach((peerEntry) => {
-        lines.push(`  ${peerEntry.peerId}["${escapeMermaidLabel(peerEntry.peerLabel)}"]:::peer`);
-        lines.push(`  ${nodeEntry.nodeId} --> ${peerEntry.peerId}`);
-        lines.push(`  click ${peerEntry.peerId} href "#${peerEntry.peerAnchorId}" "View peer details"`);
-      });
-    });
-  });
-
-  return lines.join('\n');
 }
 // Memoized NodeCard to prevent unnecessary re-renders
 const NodeCard = memo(function NodeCard({ node, anchorId, title }) {
@@ -210,57 +141,19 @@ export default function TopologyDashboard({ permissions = [] }) {
     return groups;
   }, {});
 
-  const topologyEntries = useMemo(() => buildTopologyEntries(clusterGroups), [clusterGroups]);
-
-  const discoveredNodes = topologyEntries.flatMap((cluster) =>
-    cluster.nodeEntries.flatMap((nodeEntry) =>
-      nodeEntry.peerEntries.map((peerEntry) => ({
-        key: `${peerEntry.peerId}-${nodeEntry.nodeId}`,
-        source: nodeEntry.node,
-        peer: peerEntry.peer,
-        peerAnchorId: peerEntry.peerAnchorId
-      }))
-    )
-  );
-
-  const topologyMermaidSource = useMemo(() => buildTopologyMermaid(topologyEntries), [topologyEntries]);
-  const [topologyMermaidSvg, setTopologyMermaidSvg] = useState('');
-  const [topologyMermaidError, setTopologyMermaidError] = useState('');
-
-  useEffect(() => {
-    if (!topologyMermaidSource) {
-      setTopologyMermaidSvg('');
-      setTopologyMermaidError('');
-      return undefined;
-    }
-
-    let cancelled = false;
-    (async () => {
-      try {
-        const { default: mermaid } = await import('mermaid');
-        mermaid.initialize({
-          startOnLoad: false,
-          securityLevel: 'loose',
-          theme: 'base'
-        });
-        const renderId = `topology-diagram-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-        const { svg } = await mermaid.render(renderId, topologyMermaidSource);
-        if (!cancelled) {
-          setTopologyMermaidSvg(svg);
-          setTopologyMermaidError('');
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setTopologyMermaidSvg('');
-          setTopologyMermaidError(error?.message || 'Unable to render topology diagram.');
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [topologyMermaidSource]);
+  const discoveredNodes = pmachineNodes.flatMap((node) => {
+    const list = Array.isArray(node.details?.discoveredNodes) ? node.details.discoveredNodes : [];
+    const nodeKey = makeMermaidId(node.details?.nodeName || node.nodeName || node.ip || node.mac || 'node');
+    return list.map((peer, index) => {
+      const peerKey = makeMermaidId(`${peer.mac || peer.ip || 'peer'}_${index}`);
+      return {
+        key: `${nodeKey}_${peerKey}`,
+        source: node,
+        peer,
+        peerAnchorId: `peer-${nodeKey}_${peerKey}`
+      };
+    });
+  });
 
   async function fetchAvailability(url = backendUrl) {
     try {
@@ -356,59 +249,29 @@ export default function TopologyDashboard({ permissions = [] }) {
       </div>
       <div style={{ display: 'flex', flexDirection: 'row' }}>
         <div style={{ flex: 2, marginRight: 16 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '8px 0 16px 0' }}>
-            <h2 style={{ fontSize: 18, fontWeight: 600, margin: 0, color: '#2d2d2d' }}>PMachine Cluster Topology</h2>
-            <span style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              minWidth: 28,
-              padding: '2px 8px',
-              borderRadius: 999,
-              background: '#dbe7f7',
-              color: '#223655',
-              border: '1px solid #b8c9df',
-              fontSize: 12,
-              fontWeight: 700
-            }}>
-              {pmachineNodes.length}
-            </span>
-          </div>
-          <div style={{ marginBottom: 16 }}>
-            {topologyMermaidError ? (
-              <div style={{ fontSize: 12, color: '#8b3f3f', marginBottom: 10 }}>{topologyMermaidError}</div>
-            ) : topologyMermaidSvg ? (
-              <div
-                style={{
-                  border: '1px solid #d7dce3',
-                  background: '#ffffff',
-                  borderRadius: 10,
-                  padding: 10,
-                  overflow: 'auto',
-                  marginBottom: 12
-                }}
-                dangerouslySetInnerHTML={{ __html: topologyMermaidSvg }}
-              />
-            ) : (
-              <p style={{ fontSize: 12 }}>Loading topology diagram...</p>
-            )}
-          </div>
           {pmachineNodes.length === 0 && !loading && <p style={{ fontSize: 12 }}>No PMachine nodes are currently visible.</p>}
-          {pmachineNodes.length > 0 && topologyEntries.map((cluster) => (
-            <div key={cluster.clusterId} id={cluster.clusterAnchorId} style={{ marginBottom: 16 }}>
-              <h3 style={{ fontSize: 14, margin: '0 0 10px 0', color: '#3a4a5e' }}>{cluster.clusterLabel} ({cluster.nodeEntries.length})</h3>
+          {pmachineNodes.length > 0 && Object.entries(clusterGroups).map(([clusterLabel, nodes], clusterIndex) => {
+            const clusterId = makeMermaidId(`cluster_${clusterIndex}_${clusterLabel}`);
+            return (
+            <div key={clusterId} id={`cluster-${clusterId}`} style={{ marginBottom: 16 }}>
+              <h3 style={{ fontSize: 14, margin: '0 0 10px 0', color: '#3a4a5e' }}>{clusterLabel} ({nodes.length})</h3>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
-                {cluster.nodeEntries.map((nodeEntry) => (
+                {nodes.map((node, nodeIndex) => {
+                  const nodeLabel = node.details?.nodeName || node.nodeName || node.ip || `pmachine-${nodeIndex + 1}`;
+                  const nodeId = makeMermaidId(`${clusterId}_${nodeLabel}_${node.mac || node.ip || nodeIndex}`);
+                  return (
                   <NodeCard
-                    key={nodeEntry.node.mac || nodeEntry.node.ip || nodeEntry.node.nodeName}
-                    node={nodeEntry.node}
-                    anchorId={nodeEntry.nodeAnchorId}
-                    title={nodeEntry.node.details?.nodeName || nodeEntry.node.nodeName || nodeEntry.node.ip}
+                    key={node.mac || node.ip || node.nodeName}
+                    node={node}
+                    anchorId={`pmachine-${nodeId}`}
+                    title={node.details?.nodeName || node.nodeName || node.ip}
                   />
-                ))}
+                  );
+                })}
               </div>
             </div>
-          ))}
+            );
+          })}
           {discoveredNodes.length > 0 && (
             <div style={{ marginBottom: 16 }}>
               <h3 style={{ fontSize: 14, margin: '0 0 10px 0', color: '#3a4a5e' }}>Discovered Peers</h3>
