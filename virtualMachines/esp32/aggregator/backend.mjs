@@ -9686,69 +9686,6 @@ function registerRoutes(app) {
     });
   });
 
-  function markDeprecatedEndpoint(res, successorPath) {
-    res.setHeader('Deprecation', 'true');
-    res.setHeader('Sunset', 'Wed, 30 Sep 2026 00:00:00 GMT');
-    if (successorPath) {
-      res.setHeader('Link', `<${successorPath}>; rel="successor-version"`);
-    }
-  }
-
-  function buildQueueStatusesFromMetrics(metrics) {
-    const queueStatuses = [];
-    for (const [queueName, depthData] of Object.entries(metrics?.queueDepths || {})) {
-      const latencyData = metrics?.processingLatencies?.[queueName] || {};
-      queueStatuses.push({
-        queue: queueName,
-        depth: depthData.current,
-        maxDepth: depthData.max,
-        avgDepth: depthData.avg,
-        processingLatency: {
-          avg: latencyData.avg || 0,
-          p95: latencyData.p95 || 0,
-          p99: latencyData.p99 || 0
-        },
-        health: {
-          isHealthy: depthData.current < 1000,
-          alert: depthData.current > 2000 ? 'CRITICAL' : depthData.current > 500 ? 'WARNING' : 'OK'
-        }
-      });
-    }
-    return queueStatuses;
-  }
-
-  function buildSystemHealthFromMetrics(metrics) {
-    const resources = metrics?.systemResources;
-    if (!resources) {
-      return { status: 'ok', health: 'initializing' };
-    }
-
-    const cpuOk = resources.cpu.usagePercent < 80;
-    const memOk = resources.memory.usagePercent < 80;
-    const overallHealth = cpuOk && memOk ? 'healthy' : 'degraded';
-
-    return {
-      status: 'ok',
-      timestamp: Date.now(),
-      health: {
-        overall: overallHealth,
-        cpu: {
-          usagePercent: resources.cpu.usagePercent,
-          ok: cpuOk,
-          threshold: 80
-        },
-        memory: {
-          usagePercent: resources.memory.usagePercent,
-          used: resources.memory.used,
-          total: resources.memory.total,
-          ok: memOk,
-          threshold: 80
-        },
-        uptime: resources.uptime
-      }
-    };
-  }
-
   function buildCurrentMetricsPayload() {
     const metrics = metricsCollector.getCurrentMetrics();
     const latencyPolicy = evaluateLatencyPolicies(metrics, workerConfig);
@@ -9773,47 +9710,10 @@ function registerRoutes(app) {
     res.json(buildCurrentMetricsPayload());
   });
 
-  app.get('/api/metrics/edge-offload', (req, res) => {
-    markDeprecatedEndpoint(res, '/api/metrics/current');
-    const payload = buildCurrentMetricsPayload();
-    res.json({
-      status: 'ok',
-      timestamp: payload.timestamp,
-      edgeOffload: payload.edgeOffload,
-      derivedFrom: '/api/metrics/current'
-    });
-  });
-
-  app.get('/api/metrics/queue-enqueue-latency', (req, res) => {
-    markDeprecatedEndpoint(res, '/api/metrics/current');
-    const payload = buildCurrentMetricsPayload();
-    const recentLimit = Number(req.query.recent || 5);
-    const queueName = req.query.queue ? String(req.query.queue) : null;
-    const enqueueLatency = getQueueEnqueueLatencySummary({ queueName, recentLimit });
-    res.json({
-      status: 'ok',
-      timestamp: payload.timestamp,
-      enqueueLatency,
-      derivedFrom: '/api/metrics/current'
-    });
-  });
-
   app.get('/api/metrics/runtime', requirePermission('lifecycle.read'), (req, res) => {
     res.json({
       status: 'ok',
       diagnostics: getNodeRuntimeDiagnosticsSnapshot()
-    });
-  });
-
-  app.get('/api/metrics/step3-latency', (req, res) => {
-    markDeprecatedEndpoint(res, '/api/metrics/current');
-    const payload = buildCurrentMetricsPayload();
-    const recentLimit = Number(req.query.recent || 20);
-    res.json({
-      status: 'ok',
-      timestamp: payload.timestamp,
-      step3Latency: getStep3LatencySummary({ recentLimit }),
-      derivedFrom: '/api/metrics/current'
     });
   });
 
@@ -9824,27 +9724,6 @@ function registerRoutes(app) {
       status: 'ok',
       samples: history.length,
       history: history
-    });
-  });
-
-  app.get('/api/queues/status', (req, res) => {
-    markDeprecatedEndpoint(res, '/api/metrics/current');
-    const payload = buildCurrentMetricsPayload();
-    res.json({
-      status: 'ok',
-      timestamp: payload.timestamp,
-      queues: buildQueueStatusesFromMetrics(payload.metrics),
-      derivedFrom: '/api/metrics/current'
-    });
-  });
-
-  app.get('/api/system/health', (req, res) => {
-    markDeprecatedEndpoint(res, '/api/metrics/current');
-    const payload = buildCurrentMetricsPayload();
-    const healthPayload = buildSystemHealthFromMetrics(payload.metrics);
-    res.json({
-      ...healthPayload,
-      derivedFrom: '/api/metrics/current'
     });
   });
 
@@ -9902,22 +9781,6 @@ function registerRoutes(app) {
       }
     });
 
-    // Legacy compatibility aliases. Prefer /api/broker/instances/:instanceId/:action
-    app.post('/api/broker/quiesce', (req, res) => {
-      markDeprecatedEndpoint(res, '/api/broker/instances/secondary/quiesce');
-      const secondary = getOrCreateBrokerInstance('secondary');
-      if (!secondary.active) {
-        return res.status(409).json({ error: 'Secondary broker is down' });
-      }
-      setBrokerInstanceState('secondary', { quiesced: true });
-      res.json({ status: 'quiesced', state: getBrokerStateLabel() });
-    });
-
-    app.post('/api/broker/stop', (req, res) => {
-      markDeprecatedEndpoint(res, '/api/broker/instances/secondary/down');
-      setBrokerInstanceState('secondary', { active: false, quiesced: false });
-      res.json({ status: 'stopped', state: getBrokerStateLabel() });
-    });
   debugLog('[DEBUG] Registering routes...');
 
   // --- REPLICATION ENDPOINTS ---
