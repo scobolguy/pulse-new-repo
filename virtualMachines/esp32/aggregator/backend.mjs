@@ -53,6 +53,7 @@ import { registerReplicationRoutes } from './src/backend/roles/replicationRoutes
 import { registerQueueConfigRoutes } from './src/backend/roles/queueConfigRoutes.mjs';
 import { registerQueueTransferRoutes } from './src/backend/roles/queueTransferRoutes.mjs';
 import { registerAvailabilityPresenceRoutes } from './src/backend/roles/availabilityPresenceRoutes.mjs';
+import { registerTopologyRuntimeRoutes } from './src/backend/roles/topologyRuntimeRoutes.mjs';
 import { createRequestPolicyApi } from './src/backend/security/requestPolicy.mjs';
 import { ROUTE_ROLE_MANIFEST } from './src/backend/routes.manifest.mjs';
 import { registerRoutesFromManifest } from './src/backend/routeManifestLoader.mjs';
@@ -9097,7 +9098,8 @@ function registerRoutes(app) {
       registerReplicationRoutes,
       registerQueueConfigRoutes,
       registerQueueTransferRoutes,
-      registerAvailabilityPresenceRoutes
+      registerAvailabilityPresenceRoutes,
+      registerTopologyRuntimeRoutes
     },
     dependencyFactories: {
       lifecycleInquiry: () => ({
@@ -9216,6 +9218,12 @@ function registerRoutes(app) {
         normalizePresenceIp,
         upsertBrowserPresenceNode,
         setBrowserPresenceUnavailable
+      }),
+      topologyRuntime: () => ({
+        discoveredNodes,
+        getBrokerNodeDetails,
+        getSystemPerformanceSnapshot,
+        services: [BROKER_SERVICE, ROUTER_SERVICE, QUEUE_SERVICE, FILE_SERVER_SERVICE]
       })
     }
   });
@@ -9745,20 +9753,6 @@ function registerRoutes(app) {
     });
   });
 
-    // UDP discovery for primary broker
-    app.get('/api/discover-primary', async (req, res) => {
-      // Find the most recently seen broker node (not self)
-      const now = Date.now();
-      const nodes = Array.from(discoveredNodes.values())
-        .filter(n => n.details?.services?.some(s => s.name?.toLowerCase().includes('broker')) && now - n.lastSeen < 10 * 60 * 1000)
-        .sort((a, b) => b.lastSeen - a.lastSeen);
-      if (nodes.length > 0) {
-        res.json({ url: `http://${nodes[0].ip}:4000`, ip: nodes[0].ip, node: nodes[0] });
-      } else {
-        res.status(404).json({ error: 'No primary broker found' });
-      }
-    });
-
   debugLog('[DEBUG] Registering routes...');
 
   // Queue configuration synchronization endpoints for distributed config management
@@ -9852,136 +9846,12 @@ function registerRoutes(app) {
       res.status(502).json({ error: 'Mapper service unavailable', details: e.message });
     }
   });
-  app.get('/status', (req, res) => {
-    res.json(getBrokerNodeDetails());
-  });
-  app.get('/api/system/performance', (req, res) => {
-    res.json({
-      status: 'ok',
-      performance: getSystemPerformanceSnapshot()
-    });
-  });
-  app.get('/services/describe', (req, res) => {
-    res.json({ services: [BROKER_SERVICE, ROUTER_SERVICE, QUEUE_SERVICE, FILE_SERVER_SERVICE] });
-  });
-
   registerLocalServiceHeartbeats();
   setInterval(registerLocalServiceHeartbeats, 10000);
   setInterval(updateVirtualNodes, 3000);
   startLifecycleHeartbeatMonitor();
   setMachineAvailable();
   debugLog('[DEBUG] All routes registered');
-  app.get('/api/nodes', (req, res) => {
-    // Backend server as a virtual node
-    const now = Date.now();
-    const backendNode = {
-      ip: '127.0.0.1',
-      nodeName: 'Aggregator Backend',
-      lastSeen: now,
-      details: {
-        nodeName: 'Aggregator Backend',
-        hardware: 'Server',
-        services: [
-          { name: 'Message Broker', status: 'online', api: '/api/broker' },
-          { name: 'Router Service', status: 'online', api: '/api/router' },
-          { name: 'Queue Manager', status: 'online', api: '/api/queue' },
-          { name: 'File Server', status: 'online', api: '/api/fileserver' }
-        ],
-        status: 'ok',
-        version: '1.0.0'
-      }
-    };
-    const magicClusterNodes = [
-      {
-        kind: 'machineAvailability',
-        serviceName: 'js-pmachine',
-        nodeId: 'magic-js-pmachine-01',
-        nodeName: 'magic-js-pmachine-01',
-        ip: '127.0.10.101',
-        port: 4101,
-        status: 'available',
-        available: true,
-        draining: false,
-        lastSeen: now,
-        ts: now,
-        details: {
-          nodeName: 'magic-js-pmachine-01',
-          hardware: 'PMachine JavaScript VM',
-          runtime: 'js-pmachine',
-          clusterName: 'Magic Cluster',
-          services: ['PMachine Runtime', 'JavaScript VM']
-        }
-      },
-      {
-        kind: 'machineAvailability',
-        serviceName: 'js-pmachine',
-        nodeId: 'magic-js-pmachine-02',
-        nodeName: 'magic-js-pmachine-02',
-        ip: '127.0.10.102',
-        port: 4102,
-        status: 'available',
-        available: true,
-        draining: false,
-        lastSeen: now,
-        ts: now,
-        details: {
-          nodeName: 'magic-js-pmachine-02',
-          hardware: 'PMachine JavaScript VM',
-          runtime: 'js-pmachine',
-          clusterName: 'Magic Cluster',
-          services: ['PMachine Runtime', 'JavaScript VM']
-        }
-      },
-      {
-        kind: 'machineAvailability',
-        serviceName: 'js-pmachine',
-        nodeId: 'magic-js-pmachine-03',
-        nodeName: 'magic-js-pmachine-03',
-        ip: '127.0.10.103',
-        port: 4103,
-        status: 'available',
-        available: true,
-        draining: false,
-        lastSeen: now,
-        ts: now,
-        details: {
-          nodeName: 'magic-js-pmachine-03',
-          hardware: 'PMachine JavaScript VM',
-          runtime: 'js-pmachine',
-          clusterName: 'Magic Cluster',
-          services: ['PMachine Runtime', 'JavaScript VM']
-        }
-      }
-    ];
-    // Return backend node + discovered nodes, sorted by lastSeen desc
-    const nodes = [
-      backendNode,
-      ...magicClusterNodes,
-      ...Array.from(discoveredNodes.values())
-    ].sort((a, b) => b.lastSeen - a.lastSeen);
-    res.json(nodes);
-  });
-  app.get('/api/proxy/:ip', async (req, res) => {
-    const { ip } = req.params;
-    const path = req.query.path || '/';
-    try {
-      const url = `http://${ip}:80${path}`;
-      const deviceRes = await fetch(url);
-      const contentType = deviceRes.headers.get('content-type') || '';
-      res.status(deviceRes.status);
-      if (contentType.includes('application/json')) {
-        const data = await deviceRes.json();
-        res.json(data);
-      } else {
-        const text = await deviceRes.text();
-        console.log(`[Proxy Debug] ${url} returned non-JSON content-type (${contentType}):\n${text.substring(0, 500)}`);
-        res.type(contentType).send(text);
-      }
-    } catch (e) {
-      res.status(502).json({ error: 'Proxy fetch failed', details: e.toString() });
-    }
-  });
-
   // Catch-all error handler for uncaught errors in Express (MUST BE LAST)
   app.use((err, req, res, next) => {
     const errorMsg = '[EXPRESS ERROR] ' + (err && err.stack ? err.stack : err.toString());

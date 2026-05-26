@@ -8,5 +8,6 @@ export const ROUTE_ROLE_MANIFEST = [
   { id: 'replication', registrar: 'registerReplicationRoutes', dependencyKey: 'replication', enabled: true },
   { id: 'queue-config', registrar: 'registerQueueConfigRoutes', dependencyKey: 'queueConfig', enabled: true },
   { id: 'queue-transfer', registrar: 'registerQueueTransferRoutes', dependencyKey: 'queueTransfer', enabled: true },
-  { id: 'availability-presence', registrar: 'registerAvailabilityPresenceRoutes', dependencyKey: 'availabilityPresence', enabled: true }
+  { id: 'availability-presence', registrar: 'registerAvailabilityPresenceRoutes', dependencyKey: 'availabilityPresence', enabled: true },
+  { id: 'topology-runtime', registrar: 'registerTopologyRuntimeRoutes', dependencyKey: 'topologyRuntime', enabled: true }
 ];
