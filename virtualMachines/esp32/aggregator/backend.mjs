@@ -47,6 +47,7 @@ import { registerLifecycleInquiryRoutes } from './src/backend/roles/lifecycleInq
 import { registerLifecycleWorkerGatewayRoutes } from './src/backend/roles/lifecycleWorkerGatewayRoutes.mjs';
 import { registerQueueBrokerOpsRoutes } from './src/backend/roles/queueBrokerOpsRoutes.mjs';
 import { registerComplianceRoutes } from './src/backend/roles/complianceRoutes.mjs';
+import { registerGovernanceRolePolicyRoutes } from './src/backend/roles/governanceRolePolicyRoutes.mjs';
 import { registerObservabilityRoutes } from './src/backend/roles/observabilityRoutes.mjs';
 import { registerPlatformRoutes } from './src/backend/roles/platformRoutes.mjs';
 import { registerReplicationRoutes } from './src/backend/roles/replicationRoutes.mjs';
@@ -1407,6 +1408,69 @@ const lifecycleTesterStats = {
   }
 };
 const DEFAULT_ACTOR_USER_ID = 'system-admin';
+const TOXIC_ROLE_COMBINATIONS = Object.freeze([
+  {
+    id: 'four-eyes-creator-authorizer',
+    roles: ['txn-creator', 'txn-authorizer'],
+    reason: 'A single actor cannot create and authorize the same transaction.'
+  }
+]);
+
+function getToxicRoleCombinationPolicy() {
+  return {
+    version: 1,
+    source: process.env.IAM_POLICY_SOURCE || 'local',
+    combinations: TOXIC_ROLE_COMBINATIONS
+  };
+}
+
+function detectToxicRoleViolations(profileIds = []) {
+  const assigned = new Set((profileIds || []).map(value => String(value || '').trim()).filter(Boolean));
+  const violations = [];
+  for (const combo of TOXIC_ROLE_COMBINATIONS) {
+    const roles = Array.isArray(combo.roles) ? combo.roles : [];
+    if (roles.length < 2) continue;
+    if (roles.every(role => assigned.has(role))) {
+      violations.push({
+        id: combo.id,
+        roles,
+        reason: combo.reason,
+        principle: 'four-eyes'
+      });
+    }
+  }
+  return violations;
+}
+
+function getIamIntegrationPaths() {
+  return {
+    iamSource: process.env.IAM_SOURCE || 'local',
+    targetAuthoritativeSource: process.env.IAM_TARGET_SOURCE || 'sailpoint',
+    auditMode: 'strict',
+    migrationStages: [
+      { id: 'stage-1', name: 'Mirror identities', status: 'planned', description: 'Ingest SailPoint identities and compare to local user directory.' },
+      { id: 'stage-2', name: 'Mirror entitlements', status: 'planned', description: 'Ingest role/entitlement assignments and evaluate drift.' },
+      { id: 'stage-3', name: 'Read-authoritative', status: 'planned', description: 'Use SailPoint as read authority while retaining local emergency writes.' },
+      { id: 'stage-4', name: 'Write-authoritative', status: 'planned', description: 'Block local IAM writes except break-glass operations with dual approval.' }
+    ],
+    integrationPaths: [
+      {
+        id: 'scim-pull',
+        system: 'SailPoint',
+        direction: 'pull',
+        transport: 'scim',
+        purpose: 'Identity and role synchronization'
+      },
+      {
+        id: 'event-push',
+        system: 'SailPoint',
+        direction: 'push',
+        transport: 'webhook',
+        purpose: 'Near-real-time entitlement change notifications'
+      }
+    ]
+  };
+}
 const pendingApprovalRequests = new Map();
 let auditChainHead = 'GENESIS';
 const LIFECYCLE_HEARTBEAT_INACTIVITY_MS = readEnvNumber('LIFECYCLE_HEARTBEAT_INACTIVITY_MS', 30 * 1000);
@@ -2932,7 +2996,7 @@ function parseHeaderGroupIds(req) {
 function resolveEffectiveAccessForUser(userId, { headerGroupIds = [] } = {}) {
   const user = getUserById(userId);
   if (!user || user.enabled === false) {
-    return { user: null, profileIds: [], groupIds: [], permissions: [] };
+    return { user: null, profileIds: [], groupIds: [], permissions: [], toxicRoleViolations: [], iamSource: process.env.IAM_SOURCE || 'local' };
   }
 
   const profilesById = getProfilesById();
@@ -2962,6 +3026,7 @@ function resolveEffectiveAccessForUser(userId, { headerGroupIds = [] } = {}) {
   }
 
   const effectiveProfileIds = sanitizeProfileIds([...(user.profileIds || []), ...Array.from(derivedProfileIds)]);
+  const toxicRoleViolations = detectToxicRoleViolations(effectiveProfileIds);
   const permissions = [];
   for (const profileId of effectiveProfileIds) {
     const profile = profilesById.get(profileId);
@@ -2974,11 +3039,15 @@ function resolveEffectiveAccessForUser(userId, { headerGroupIds = [] } = {}) {
     if (!permissions.includes(permission)) permissions.push(permission);
   }
 
+  const effectivePermissions = toxicRoleViolations.length > 0 ? [] : permissions;
+
   return {
     user,
     profileIds: effectiveProfileIds,
     groupIds: effectiveGroupIds,
-    permissions
+    permissions: effectivePermissions,
+    toxicRoleViolations,
+    iamSource: process.env.IAM_SOURCE || 'local'
   };
 }
 
@@ -3119,7 +3188,9 @@ function resolveActor(req) {
     user: access.user,
     permissions: access.permissions,
     profileIds: access.profileIds,
-    groupIds: access.groupIds
+    groupIds: access.groupIds,
+    toxicRoleViolations: access.toxicRoleViolations,
+    iamSource: access.iamSource
   };
 }
 
@@ -3127,6 +3198,40 @@ function requirePermission(permission) {
   return (req, res, next) => {
     const actor = resolveActor(req);
     req.actor = actor;
+    const processId = resolveGovernedProcessId(req);
+    const roleSignals = {
+      hasTxnCreatorRole: Array.isArray(actor.profileIds) && actor.profileIds.includes('txn-creator'),
+      hasTxnAuthorizerRole: Array.isArray(actor.profileIds) && actor.profileIds.includes('txn-authorizer')
+    };
+
+    const shouldAuditToxicDecision =
+      String(req.path || '').startsWith('/api/') &&
+      (processId === 'payment-authorization' || roleSignals.hasTxnCreatorRole || roleSignals.hasTxnAuthorizerRole);
+
+    if (Array.isArray(actor.toxicRoleViolations) && actor.toxicRoleViolations.length > 0) {
+      if (shouldAuditToxicDecision) {
+        appendAuditEvent({
+          eventType: 'toxic-role-decision',
+          decision: 'denied',
+          requestId: req.requestId || null,
+          method: String(req.method || 'GET').toUpperCase(),
+          path: req.path,
+          processId,
+          actorUserId: actor.userId,
+          iamSource: actor.iamSource || process.env.IAM_SOURCE || 'local',
+          requiredPermission: permission,
+          toxicRoleViolations: actor.toxicRoleViolations
+        });
+      }
+
+      return res.status(403).json({
+        error: 'Toxic role combination detected',
+        code: 'TOXIC_ROLE_COMBINATION',
+        actorUserId: actor.userId,
+        toxicRoleViolations: actor.toxicRoleViolations,
+        requiredPermission: permission
+      });
+    }
 
     if (!actor.user) {
       return res.status(401).json({
@@ -3150,6 +3255,21 @@ function requirePermission(permission) {
         requiredPermission: permission,
         actorUserId: actor.userId,
         actorPermissions: actor.permissions
+      });
+    }
+
+    if (shouldAuditToxicDecision) {
+      appendAuditEvent({
+        eventType: 'toxic-role-decision',
+        decision: 'approved',
+        requestId: req.requestId || null,
+        method: String(req.method || 'GET').toUpperCase(),
+        path: req.path,
+        processId,
+        actorUserId: actor.userId,
+        iamSource: actor.iamSource || process.env.IAM_SOURCE || 'local',
+        requiredPermission: permission,
+        roleSignals
       });
     }
 
@@ -8759,6 +8879,7 @@ function registerRoutes(app) {
       registerLifecycleWorkerGatewayRoutes,
       registerQueueBrokerOpsRoutes,
       registerComplianceRoutes,
+      registerGovernanceRolePolicyRoutes,
       registerObservabilityRoutes,
       registerPlatformRoutes,
       registerReplicationRoutes,
@@ -8857,6 +8978,13 @@ function registerRoutes(app) {
         resolveActor,
         formatErrorDetails,
         sanctionsComplianceService
+      }),
+      governanceRolePolicy: () => ({
+        requirePermission,
+        getToxicRoleCombinationPolicy,
+        getIamIntegrationPaths,
+        getUserById,
+        resolveEffectiveAccessForUser
       }),
       observability: () => ({
         requirePermission,

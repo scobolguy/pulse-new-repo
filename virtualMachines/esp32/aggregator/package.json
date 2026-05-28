@@ -18,6 +18,8 @@
     "compile:workflow": "node scripts/compile-workflow-dsl.mjs --in data/workflow.wfl",
     "compile:workflow:pcode": "node scripts/compile-workflow-to-pcode.mjs --in data/workflow.wfl --workflow pain2-routing --out ../pcode/workflow-router.pcode --out-map ../pcode/workflow-router.program.json",
     "interpret:workflow": "node scripts/interpret-workflow.mjs --in data/workflow.wfl --workflow enqueue-pacs",
+    "db:provision:ticketing": "node scripts/provision-ticketing-db.mjs",
+    "db:seed:ticketing": "node scripts/seed-ticketing-db-from-json.mjs --json ./data/issue-test-system.json",
     "check:pcode-compat": "node scripts/check-pcode-compat.mjs",
     "compile:lifecycle": "node scripts/compile-transaction-lifecycle-dsl.mjs --in data/transaction-lifecycle.tsl",
     "load:stress-flows": "node stress-flows-load-test.mjs",

@@ -1,0 +1,346 @@
+{
+  "version": 2,
+  "updatedAt": "2026-05-28T15:02:44.066Z",
+  "sequences": {
+    "issue": 2,
+    "testCase": 8,
+    "testPlan": 6,
+    "project": 2,
+    "release": 1,
+    "deploymentArtifact": 1,
+    "projectPlan": 1,
+    "milestone": 1,
+    "task": 1,
+    "synchpoint": 1,
+    "deliverable": 1,
+    "resource": 1
+  },
+  "issues": [
+    {
+      "id": "ISSUE-000001",
+      "title": "MT103 rejection on routing",
+      "description": "Routing rejects valid MT103 samples on edge path",
+      "priority": "high",
+      "status": "open",
+      "assigneeUserId": "qa-lead",
+      "reporterType": "tester",
+      "createdBy": "qa-lead",
+      "createdAt": "2026-05-28T13:13:21.685Z",
+      "updatedAt": "2026-05-28T13:13:21.691Z",
+      "linkedTestCaseIds": [
+        "TC-000001"
+      ]
+    },
+    {
+      "id": "ISSUE-000002",
+      "title": "MT103 rejection on routing",
+      "description": "Routing rejects valid MT103 samples on edge path",
+      "priority": "high",
+      "status": "open",
+      "assigneeUserId": "qa-lead",
+      "reporterType": "tester",
+      "createdBy": "qa-lead",
+      "createdAt": "2026-05-28T14:57:48.951Z",
+      "updatedAt": "2026-05-28T14:57:48.959Z",
+      "linkedTestCaseIds": [
+        "TC-000005"
+      ]
+    }
+  ],
+  "testCases": [
+    {
+      "id": "TC-000001",
+      "name": "MT103 edge route accepts valid message",
+      "testType": "regression",
+      "description": "Assert valid MT103 follows accepted route and state becomes accepted",
+      "status": "draft",
+      "createdBy": "qa-lead",
+      "createdAt": "2026-05-28T13:13:21.688Z",
+      "updatedAt": "2026-05-28T13:13:21.691Z",
+      "linkedIssueIds": [
+        "ISSUE-000001"
+      ]
+    },
+    {
+      "id": "TC-000002",
+      "name": "Queue manager import-export parity",
+      "testType": "integration",
+      "description": "Export from primary then import into secondary preserves envelope and payload",
+      "status": "draft",
+      "createdBy": "qa-lead",
+      "createdAt": "2026-05-28T13:13:44.351Z",
+      "updatedAt": "2026-05-28T13:13:44.351Z",
+      "linkedIssueIds": []
+    },
+    {
+      "id": "TC-000003",
+      "name": "Lifecycle dashboard happy path",
+      "testType": "acceptance",
+      "description": "Operator can run happy path and observe completion state",
+      "status": "draft",
+      "createdBy": "qa-lead",
+      "createdAt": "2026-05-28T13:14:01.544Z",
+      "updatedAt": "2026-05-28T13:14:01.544Z",
+      "linkedIssueIds": []
+    },
+    {
+      "id": "TC-000004",
+      "name": "Topology dashboard PMachine visibility",
+      "testType": "regression",
+      "description": "PMachine nodes remain visible after backend restart",
+      "status": "draft",
+      "createdBy": "qa-lead",
+      "createdAt": "2026-05-28T13:14:26.757Z",
+      "updatedAt": "2026-05-28T13:14:26.757Z",
+      "linkedIssueIds": []
+    },
+    {
+      "id": "TC-000005",
+      "name": "MT103 edge route accepts valid message",
+      "testType": "regression",
+      "description": "Assert valid MT103 follows accepted route and state becomes accepted",
+      "status": "draft",
+      "createdBy": "qa-lead",
+      "createdAt": "2026-05-28T14:57:48.955Z",
+      "updatedAt": "2026-05-28T14:57:48.959Z",
+      "linkedIssueIds": [
+        "ISSUE-000002"
+      ]
+    },
+    {
+      "id": "TC-000006",
+      "name": "Queue manager import-export parity",
+      "testType": "integration",
+      "description": "Export from primary then import into secondary preserves envelope and payload",
+      "status": "draft",
+      "createdBy": "qa-lead",
+      "createdAt": "2026-05-28T15:02:43.560Z",
+      "updatedAt": "2026-05-28T15:02:43.560Z",
+      "linkedIssueIds": []
+    },
+    {
+      "id": "TC-000007",
+      "name": "Lifecycle dashboard happy path",
+      "testType": "acceptance",
+      "description": "Operator can run happy path and observe completion state",
+      "status": "draft",
+      "createdBy": "qa-lead",
+      "createdAt": "2026-05-28T15:02:43.812Z",
+      "updatedAt": "2026-05-28T15:02:43.812Z",
+      "linkedIssueIds": []
+    },
+    {
+      "id": "TC-000008",
+      "name": "Topology dashboard PMachine visibility",
+      "testType": "regression",
+      "description": "PMachine nodes remain visible after backend restart",
+      "status": "draft",
+      "createdBy": "qa-lead",
+      "createdAt": "2026-05-28T15:02:44.056Z",
+      "updatedAt": "2026-05-28T15:02:44.056Z",
+      "linkedIssueIds": []
+    }
+  ],
+  "testPlans": [
+    {
+      "id": "TP-000001",
+      "name": "Integration smoke baseline",
+      "planType": "integration",
+      "description": "Core integration checks for queue, router, broker handoff",
+      "status": "draft",
+      "createdBy": "qa-lead",
+      "createdAt": "2026-05-28T13:13:44.354Z",
+      "updatedAt": "2026-05-28T13:13:44.356Z",
+      "testCaseIds": [
+        "TC-000002"
+      ]
+    },
+    {
+      "id": "TP-000002",
+      "name": "Acceptance release gate",
+      "planType": "acceptance",
+      "description": "Release readiness acceptance checks",
+      "status": "draft",
+      "createdBy": "qa-lead",
+      "createdAt": "2026-05-28T13:14:01.546Z",
+      "updatedAt": "2026-05-28T13:14:01.547Z",
+      "testCaseIds": [
+        "TC-000003"
+      ]
+    },
+    {
+      "id": "TP-000003",
+      "name": "Regression nightly",
+      "planType": "regression",
+      "description": "Nightly regression coverage for core dashboards and flows",
+      "status": "draft",
+      "createdBy": "qa-lead",
+      "createdAt": "2026-05-28T13:14:26.759Z",
+      "updatedAt": "2026-05-28T13:14:26.761Z",
+      "testCaseIds": [
+        "TC-000004"
+      ]
+    },
+    {
+      "id": "TP-000004",
+      "name": "Integration smoke baseline",
+      "planType": "integration",
+      "description": "Core integration checks for queue, router, broker handoff",
+      "status": "draft",
+      "createdBy": "qa-lead",
+      "createdAt": "2026-05-28T15:02:43.565Z",
+      "updatedAt": "2026-05-28T15:02:43.577Z",
+      "testCaseIds": [
+        "TC-000006"
+      ]
+    },
+    {
+      "id": "TP-000005",
+      "name": "Acceptance release gate",
+      "planType": "acceptance",
+      "description": "Release readiness acceptance checks",
+      "status": "draft",
+      "createdBy": "qa-lead",
+      "createdAt": "2026-05-28T15:02:43.817Z",
+      "updatedAt": "2026-05-28T15:02:43.822Z",
+      "testCaseIds": [
+        "TC-000007"
+      ]
+    },
+    {
+      "id": "TP-000006",
+      "name": "Regression nightly",
+      "planType": "regression",
+      "description": "Nightly regression coverage for core dashboards and flows",
+      "status": "draft",
+      "createdBy": "qa-lead",
+      "createdAt": "2026-05-28T15:02:44.063Z",
+      "updatedAt": "2026-05-28T15:02:44.066Z",
+      "testCaseIds": [
+        "TC-000008"
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "id": "PRJ-000001",
+      "name": "Unified Payments Refresh",
+      "description": "Program to modernize routing, mapping, and deployment operations",
+      "createdBy": "project-manager",
+      "createdAt": "2026-05-28T14:02:28.334Z",
+      "updatedAt": "2026-05-28T14:02:28.334Z"
+    },
+    {
+      "id": "PRJ-000002",
+      "name": "Swift-to-ISO Migration",
+      "description": "Plan migration from MT flows to ISO-native flows",
+      "createdBy": "project-manager",
+      "createdAt": "2026-05-28T14:02:28.506Z",
+      "updatedAt": "2026-05-28T14:02:28.506Z"
+    }
+  ],
+  "releases": [
+    {
+      "id": "REL-000001",
+      "projectId": "PRJ-000001",
+      "name": "2026.09",
+      "description": "September release bundle for payment platform enhancements",
+      "createdBy": "project-manager",
+      "createdAt": "2026-05-28T14:02:28.338Z",
+      "updatedAt": "2026-05-28T14:02:28.338Z"
+    }
+  ],
+  "deploymentArtifacts": [
+    {
+      "id": "DEP-000001",
+      "releaseId": "REL-000001",
+      "name": "aggregator-router-image",
+      "artifactType": "container-image",
+      "location": "registry.internal/pulse/aggregator-router:2026.09.0",
+      "createdBy": "project-manager",
+      "createdAt": "2026-05-28T14:02:28.340Z",
+      "updatedAt": "2026-05-28T14:02:28.340Z"
+    }
+  ],
+  "projectPlans": [
+    {
+      "id": "PLN-000001",
+      "projectId": "PRJ-000002",
+      "name": "Migration Execution Plan",
+      "description": "End-to-end project plan with milestones, tasks, synchpoints, deliverables, and resources",
+      "status": "draft",
+      "createdBy": "project-manager",
+      "createdAt": "2026-05-28T14:02:28.509Z",
+      "updatedAt": "2026-05-28T14:02:28.532Z",
+      "milestoneIds": [
+        "MLS-000001"
+      ],
+      "taskIds": [
+        "TSK-000001"
+      ],
+      "synchpointIds": [
+        "SYN-000001"
+      ],
+      "deliverableIds": [
+        "DLV-000001"
+      ],
+      "resourceIds": [
+        "RES-000001"
+      ]
+    }
+  ],
+  "milestones": [
+    {
+      "id": "MLS-000001",
+      "name": "Design Freeze",
+      "description": "Lock architecture and interface contracts",
+      "dueDate": "2026-07-15",
+      "createdBy": "project-manager",
+      "createdAt": "2026-05-28T14:02:28.510Z",
+      "updatedAt": "2026-05-28T14:02:28.511Z"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "TSK-000001",
+      "name": "Build routing rules",
+      "description": "Implement routing rule editor and policies",
+      "assigneeUserId": "project-manager",
+      "status": "open",
+      "createdBy": "project-manager",
+      "createdAt": "2026-05-28T14:02:28.515Z",
+      "updatedAt": "2026-05-28T14:02:28.515Z"
+    }
+  ],
+  "synchpoints": [
+    {
+      "id": "SYN-000001",
+      "name": "Weekly Steering",
+      "description": "Cross-team decision and risk synchronization",
+      "createdBy": "project-manager",
+      "createdAt": "2026-05-28T14:02:28.518Z",
+      "updatedAt": "2026-05-28T14:02:28.518Z"
+    }
+  ],
+  "deliverables": [
+    {
+      "id": "DLV-000001",
+      "name": "Operational Runbook",
+      "description": "Deployment and rollback runbook approved by operations",
+      "createdBy": "project-manager",
+      "createdAt": "2026-05-28T14:02:28.520Z",
+      "updatedAt": "2026-05-28T14:02:28.520Z"
+    }
+  ],
+  "resources": [
+    {
+      "id": "RES-000001",
+      "name": "QA Automation Team",
+      "resourceType": "team",
+      "description": "Automation engineers covering acceptance and regression",
+      "createdBy": "project-manager",
+      "createdAt": "2026-05-28T14:02:28.522Z",
+      "updatedAt": "2026-05-28T14:02:28.522Z"
+    }
+  ]
+}

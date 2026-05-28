@@ -11,7 +11,12 @@ import ProfileManagementDashboard from './ProfileManagementDashboard';
 import UserInProfileDashboard from './UserInProfileDashboard';
 import FlowTargetsDashboard from './FlowTargetsDashboard';
 import ChatPage from './ChatPage';
+import ArtifactWorkbench from './ArtifactWorkbench';
 import compiledWorkflowArtifacts from '../data/workflows.generated.json';
+import workflowSourceArtifact from '../data/workflow.wfl?raw';
+import dataMappingsArtifact from '../data/data-mappings.json';
+import routingRulesArtifact from '../data/router-rules.json';
+import { buildPublicArtifacts } from './artifactWorkbench';
 import React, { useEffect, useMemo, useState } from 'react';
 
 const RHS_MIN_WIDTH = 220;
@@ -767,6 +772,7 @@ function App() {
   const [cardRenameMap, setCardRenameMap] = useState({});
   const [cardRuntimeMap, setCardRuntimeMap] = useState({});
   const [cardPreview, setCardPreview] = useState({ open: false, kind: null, title: '', item: null });
+  const [messageLayouts, setMessageLayouts] = useState([]);
   const [flowDiagramSvg, setFlowDiagramSvg] = useState('');
   const [flowDiagramError, setFlowDiagramError] = useState('');
   const [mermaidSsePhase, setMermaidSsePhase] = useState(0);
@@ -1671,6 +1677,36 @@ function App() {
   }, [monitorClassId, pathname]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const [schemasRes, typesRes] = await Promise.all([
+          fetch('/api/librarian/schemas'),
+          fetch('/api/librarian/data-types')
+        ]);
+
+        const schemas = await schemasRes.json().catch(() => ({}));
+        const dataTypes = await typesRes.json().catch(() => ({}));
+        if (cancelled) return;
+
+        const fromSchemas = Array.isArray(schemas?.schemas) ? schemas.schemas : [];
+        const fromTypes = Array.isArray(dataTypes?.types) ? dataTypes.types : [];
+        const merged = [...fromSchemas, ...fromTypes];
+        setMessageLayouts(merged);
+      } catch {
+        if (!cancelled) {
+          setMessageLayouts([]);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     const closeMenu = () => setTaskContextMenu(prev => ({ ...prev, open: false }));
     window.addEventListener('click', closeMenu);
     window.addEventListener('scroll', closeMenu, true);
@@ -2033,6 +2069,16 @@ function App() {
   const serviceRunningCount = visibleServices.filter((item) => item.status === 'online').length;
   const languageKey = getLanguageKey(language);
   const copy = LANGUAGE_COPY[languageKey] || LANGUAGE_COPY.en;
+  const publicArtifacts = useMemo(
+    () => buildPublicArtifacts({
+      workflowSource: workflowSourceArtifact,
+      workflowCards,
+      dataMappings: Array.isArray(dataMappingsArtifact) ? dataMappingsArtifact : [],
+      flowDefinitions: FLOW_DEFINITIONS,
+      routingRules: Array.isArray(routingRulesArtifact) ? routingRulesArtifact : []
+    }),
+    [workflowCards]
+  );
 
   const activeUserAdminTask = USER_ADMIN_TASKS.find(task => task.id === userAdminTask) || USER_ADMIN_TASKS[0];
   const activeOperationsTask = OPERATIONS_TASKS.find(task => task.id === operationsTask) || OPERATIONS_TASKS[0];
@@ -2570,6 +2616,7 @@ function App() {
               <h3>{cardPreview.title}</h3>
               <button type="button" className="card-open-close" onClick={closeCardPreview}>Close</button>
             </header>
+            <ArtifactWorkbench artifacts={publicArtifacts} cardPreview={cardPreview} messageLayouts={messageLayouts} />
             {cardPreview.kind === 'flow' || cardPreview.kind === 'workflow' ? (
               <>
                 <p className="card-open-subtitle">

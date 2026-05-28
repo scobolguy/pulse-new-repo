@@ -166,5 +166,232 @@
         "everyMs": 1000
       }
     ]
+  },
+  {
+    "id": "qa-ticket-lifecycle",
+    "steps": [
+      {
+        "id": "create-issue",
+        "action": "issue_create",
+        "title": "MT103 rejection on routing",
+        "description": "Routing rejects valid MT103 samples on edge path",
+        "priority": "high",
+        "assigneeUserId": "qa-lead",
+        "reporterType": "tester",
+        "outputStateKey": "issueId"
+      },
+      {
+        "id": "create-regression-case",
+        "action": "testcase_create",
+        "name": "MT103 edge route accepts valid message",
+        "testType": "regression",
+        "description": "Assert valid MT103 follows accepted route and state becomes accepted",
+        "outputStateKey": "testCaseId"
+      },
+      {
+        "id": "link-issue-to-test",
+        "action": "issue_link_testcase",
+        "issueStateKey": "issueId",
+        "testCaseStateKey": "testCaseId"
+      }
+    ]
+  },
+  {
+    "id": "qa-integration-plan",
+    "steps": [
+      {
+        "id": "create-integration-case",
+        "action": "testcase_create",
+        "name": "Queue manager import-export parity",
+        "testType": "integration",
+        "description": "Export from primary then import into secondary preserves envelope and payload",
+        "outputStateKey": "integrationCaseId"
+      },
+      {
+        "id": "create-plan",
+        "action": "testplan_create",
+        "name": "Integration smoke baseline",
+        "planType": "integration",
+        "description": "Core integration checks for queue, router, broker handoff",
+        "outputStateKey": "integrationPlanId"
+      },
+      {
+        "id": "add-case-to-plan",
+        "action": "testplan_add_testcase",
+        "testCaseStateKey": "integrationCaseId",
+        "planStateKey": "integrationPlanId"
+      }
+    ]
+  },
+  {
+    "id": "qa-acceptance-plan",
+    "steps": [
+      {
+        "id": "create-acceptance-case",
+        "action": "testcase_create",
+        "name": "Lifecycle dashboard happy path",
+        "testType": "acceptance",
+        "description": "Operator can run happy path and observe completion state",
+        "outputStateKey": "acceptanceCaseId"
+      },
+      {
+        "id": "create-plan",
+        "action": "testplan_create",
+        "name": "Acceptance release gate",
+        "planType": "acceptance",
+        "description": "Release readiness acceptance checks",
+        "outputStateKey": "acceptancePlanId"
+      },
+      {
+        "id": "add-case-to-plan",
+        "action": "testplan_add_testcase",
+        "testCaseStateKey": "acceptanceCaseId",
+        "planStateKey": "acceptancePlanId"
+      }
+    ]
+  },
+  {
+    "id": "qa-regression-plan",
+    "steps": [
+      {
+        "id": "create-regression-case",
+        "action": "testcase_create",
+        "name": "Topology dashboard PMachine visibility",
+        "testType": "regression",
+        "description": "PMachine nodes remain visible after backend restart",
+        "outputStateKey": "regressionCaseId"
+      },
+      {
+        "id": "create-plan",
+        "action": "testplan_create",
+        "name": "Regression nightly",
+        "planType": "regression",
+        "description": "Nightly regression coverage for core dashboards and flows",
+        "outputStateKey": "regressionPlanId"
+      },
+      {
+        "id": "add-case-to-plan",
+        "action": "testplan_add_testcase",
+        "testCaseStateKey": "regressionCaseId",
+        "planStateKey": "regressionPlanId"
+      }
+    ]
+  },
+  {
+    "id": "pm-release-project-deployment",
+    "steps": [
+      {
+        "id": "create-project",
+        "action": "project_create",
+        "name": "Unified Payments Refresh",
+        "description": "Program to modernize routing, mapping, and deployment operations",
+        "outputStateKey": "projectId"
+      },
+      {
+        "id": "create-release",
+        "action": "release_create",
+        "name": "2026.09",
+        "description": "September release bundle for payment platform enhancements",
+        "projectStateKey": "projectId",
+        "outputStateKey": "releaseId"
+      },
+      {
+        "id": "create-deployment-artifact",
+        "action": "deployment_artifact_create",
+        "name": "aggregator-router-image",
+        "artifactType": "container-image",
+        "location": "registry.internal/pulse/aggregator-router:2026.09.0",
+        "releaseStateKey": "releaseId",
+        "outputStateKey": "deploymentArtifactId"
+      }
+    ]
+  },
+  {
+    "id": "pm-project-plan-authoring",
+    "steps": [
+      {
+        "id": "create-project",
+        "action": "project_create",
+        "name": "Swift-to-ISO Migration",
+        "description": "Plan migration from MT flows to ISO-native flows",
+        "outputStateKey": "projectId"
+      },
+      {
+        "id": "create-project-plan",
+        "action": "projectplan_create",
+        "name": "Migration Execution Plan",
+        "description": "End-to-end project plan with milestones, tasks, synchpoints, deliverables, and resources",
+        "projectStateKey": "projectId",
+        "outputStateKey": "projectPlanId"
+      },
+      {
+        "id": "create-milestone",
+        "action": "milestone_create",
+        "name": "Design Freeze",
+        "description": "Lock architecture and interface contracts",
+        "dueDate": "2026-07-15",
+        "outputStateKey": "milestoneId"
+      },
+      {
+        "id": "create-task",
+        "action": "task_create",
+        "name": "Build routing rules",
+        "description": "Implement routing rule editor and policies",
+        "assigneeUserId": "project-manager",
+        "outputStateKey": "taskId"
+      },
+      {
+        "id": "create-synchpoint",
+        "action": "synchpoint_create",
+        "name": "Weekly Steering",
+        "description": "Cross-team decision and risk synchronization",
+        "outputStateKey": "synchpointId"
+      },
+      {
+        "id": "create-deliverable",
+        "action": "deliverable_create",
+        "name": "Operational Runbook",
+        "description": "Deployment and rollback runbook approved by operations",
+        "outputStateKey": "deliverableId"
+      },
+      {
+        "id": "create-resource",
+        "action": "resource_create",
+        "name": "QA Automation Team",
+        "resourceType": "team",
+        "description": "Automation engineers covering acceptance and regression",
+        "outputStateKey": "resourceId"
+      },
+      {
+        "id": "add-milestone",
+        "action": "projectplan_add_milestone",
+        "itemStateKey": "milestoneId",
+        "planStateKey": "projectPlanId"
+      },
+      {
+        "id": "add-task",
+        "action": "projectplan_add_task",
+        "itemStateKey": "taskId",
+        "planStateKey": "projectPlanId"
+      },
+      {
+        "id": "add-synchpoint",
+        "action": "projectplan_add_synchpoint",
+        "itemStateKey": "synchpointId",
+        "planStateKey": "projectPlanId"
+      },
+      {
+        "id": "add-deliverable",
+        "action": "projectplan_add_deliverable",
+        "itemStateKey": "deliverableId",
+        "planStateKey": "projectPlanId"
+      },
+      {
+        "id": "add-resource",
+        "action": "projectplan_add_resource",
+        "itemStateKey": "resourceId",
+        "planStateKey": "projectPlanId"
+      }
+    ]
   }
 ]

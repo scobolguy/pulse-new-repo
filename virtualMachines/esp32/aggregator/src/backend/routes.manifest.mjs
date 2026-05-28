@@ -4,6 +4,7 @@ export const ROUTE_ROLE_MANIFEST = [
   { id: 'lifecycle-worker-gateway', registrar: 'registerLifecycleWorkerGatewayRoutes', dependencyKey: 'lifecycleWorkerGateway', enabled: true },
   { id: 'queue-broker-ops', registrar: 'registerQueueBrokerOpsRoutes', dependencyKey: 'queueBrokerOps', enabled: true },
   { id: 'compliance', registrar: 'registerComplianceRoutes', dependencyKey: 'compliance', enabled: true },
+  { id: 'governance-role-policy', registrar: 'registerGovernanceRolePolicyRoutes', dependencyKey: 'governanceRolePolicy', enabled: true },
   { id: 'observability', registrar: 'registerObservabilityRoutes', dependencyKey: 'observability', enabled: true },
   { id: 'platform', registrar: 'registerPlatformRoutes', dependencyKey: 'platform', enabled: true },
   { id: 'replication', registrar: 'registerReplicationRoutes', dependencyKey: 'replication', enabled: true },

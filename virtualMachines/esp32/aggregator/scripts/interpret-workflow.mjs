@@ -73,6 +73,117 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, duration));
 }
 
+function normalizeIssueTestStore(payload) {
+  const source = payload && typeof payload === 'object' ? payload : {};
+  const issues = Array.isArray(source.issues) ? source.issues : [];
+  const testCases = Array.isArray(source.testCases) ? source.testCases : [];
+  const testPlans = Array.isArray(source.testPlans) ? source.testPlans : [];
+  const projects = Array.isArray(source.projects) ? source.projects : [];
+  const releases = Array.isArray(source.releases) ? source.releases : [];
+  const deploymentArtifacts = Array.isArray(source.deploymentArtifacts) ? source.deploymentArtifacts : [];
+  const projectPlans = Array.isArray(source.projectPlans) ? source.projectPlans : [];
+  const milestones = Array.isArray(source.milestones) ? source.milestones : [];
+  const tasks = Array.isArray(source.tasks) ? source.tasks : [];
+  const synchpoints = Array.isArray(source.synchpoints) ? source.synchpoints : [];
+  const deliverables = Array.isArray(source.deliverables) ? source.deliverables : [];
+  const resources = Array.isArray(source.resources) ? source.resources : [];
+  const sequences = source.sequences && typeof source.sequences === 'object' ? source.sequences : {};
+  return {
+    version: 2,
+    updatedAt: source.updatedAt || new Date().toISOString(),
+    sequences: {
+      issue: Number(sequences.issue) || 0,
+      testCase: Number(sequences.testCase) || 0,
+      testPlan: Number(sequences.testPlan) || 0,
+      project: Number(sequences.project) || 0,
+      release: Number(sequences.release) || 0,
+      deploymentArtifact: Number(sequences.deploymentArtifact) || 0,
+      projectPlan: Number(sequences.projectPlan) || 0,
+      milestone: Number(sequences.milestone) || 0,
+      task: Number(sequences.task) || 0,
+      synchpoint: Number(sequences.synchpoint) || 0,
+      deliverable: Number(sequences.deliverable) || 0,
+      resource: Number(sequences.resource) || 0
+    },
+    issues,
+    testCases,
+    testPlans,
+    projects,
+    releases,
+    deploymentArtifacts,
+    projectPlans,
+    milestones,
+    tasks,
+    synchpoints,
+    deliverables,
+    resources
+  };
+}
+
+function formatSequenceId(prefix, value) {
+  return `${prefix}-${String(value).padStart(6, '0')}`;
+}
+
+async function loadIssueTestStore(storePath) {
+  try {
+    const raw = await fs.readFile(storePath, 'utf-8');
+    const parsed = JSON.parse(raw);
+    return normalizeIssueTestStore(parsed);
+  } catch {
+    return normalizeIssueTestStore(null);
+  }
+}
+
+async function saveIssueTestStore(storePath, store) {
+  const normalized = normalizeIssueTestStore(store);
+  normalized.updatedAt = new Date().toISOString();
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.writeFile(storePath, `${JSON.stringify(normalized, null, 2)}\n`, 'utf-8');
+}
+
+function stateValueOrThrow(runtime, key, label) {
+  const k = String(key || '').trim();
+  const value = runtime.state[k];
+  if (!value) {
+    throw new Error(`Workflow step expected state key '${k}' for ${label}, but it was empty`);
+  }
+  return String(value);
+}
+
+function appendUnique(list, value) {
+  const values = Array.isArray(list) ? list : [];
+  if (!values.includes(value)) values.push(value);
+  return values;
+}
+
+function findByIdOrThrow(items, id, label) {
+  const found = (Array.isArray(items) ? items : []).find(item => item.id === id);
+  if (!found) {
+    throw new Error(`${label} not found: ${id}`);
+  }
+  return found;
+}
+
+async function savePlanItemLink(runtime, step, output, itemId, itemFieldName) {
+  const planId = stateValueOrThrow(runtime, step.planStateKey, 'project plan update');
+
+  if (!runtime.dryRun) {
+    const plan = findByIdOrThrow(runtime.store.projectPlans, planId, 'Project plan');
+    plan[itemFieldName] = appendUnique(plan[itemFieldName], itemId);
+    plan.updatedAt = new Date().toISOString();
+    await saveIssueTestStore(runtime.issueTestStorePath, runtime.store);
+  }
+
+  output.push({
+    stepId: step.id,
+    mode: runtime.dryRun ? 'dry-run' : 'executed',
+    action: step.action,
+    planId,
+    itemId,
+    itemFieldName
+  });
+}
+
 function evaluateCondition(condition, context, state) {
   const fieldPath = String(condition?.field || '').trim();
   const operator = String(condition?.operator || '').trim().toLowerCase();
@@ -260,6 +371,516 @@ async function executeSteps(steps, runtime, output) {
       continue;
     }
 
+    if (step.action === 'issue_create') {
+      const record = {
+        id: runtime.dryRun ? 'ISSUE-DRYRUN' : null,
+        title: step.title,
+        description: step.description,
+        priority: String(step.priority || 'medium').toLowerCase(),
+        status: 'open',
+        assigneeUserId: step.assigneeUserId || null,
+        reporterType: step.reporterType || 'tester',
+        createdBy: runtime.actorUserId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        linkedTestCaseIds: []
+      };
+
+      if (!runtime.dryRun) {
+        runtime.store.sequences.issue += 1;
+        record.id = formatSequenceId('ISSUE', runtime.store.sequences.issue);
+        runtime.store.issues.push(record);
+        await saveIssueTestStore(runtime.issueTestStorePath, runtime.store);
+      }
+
+      if (step.outputStateKey) {
+        runtime.state[step.outputStateKey] = record.id;
+      }
+
+      output.push({
+        stepId: step.id,
+        mode: runtime.dryRun ? 'dry-run' : 'executed',
+        action: step.action,
+        issueId: record.id,
+        outputStateKey: step.outputStateKey || null
+      });
+      continue;
+    }
+
+    if (step.action === 'testcase_create') {
+      const record = {
+        id: runtime.dryRun ? 'TC-DRYRUN' : null,
+        name: step.name,
+        testType: String(step.testType || 'integration').toLowerCase(),
+        description: step.description,
+        status: 'draft',
+        createdBy: runtime.actorUserId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        linkedIssueIds: []
+      };
+
+      if (!runtime.dryRun) {
+        runtime.store.sequences.testCase += 1;
+        record.id = formatSequenceId('TC', runtime.store.sequences.testCase);
+        runtime.store.testCases.push(record);
+        await saveIssueTestStore(runtime.issueTestStorePath, runtime.store);
+      }
+
+      if (step.outputStateKey) {
+        runtime.state[step.outputStateKey] = record.id;
+      }
+
+      output.push({
+        stepId: step.id,
+        mode: runtime.dryRun ? 'dry-run' : 'executed',
+        action: step.action,
+        testCaseId: record.id,
+        testType: record.testType,
+        outputStateKey: step.outputStateKey || null
+      });
+      continue;
+    }
+
+    if (step.action === 'testplan_create') {
+      const planType = String(step.planType || '').trim().toLowerCase();
+      if (!['integration', 'acceptance', 'regression'].includes(planType)) {
+        throw new Error(`Unsupported test plan type '${step.planType}'. Expected integration, acceptance, or regression`);
+      }
+
+      const record = {
+        id: runtime.dryRun ? 'TP-DRYRUN' : null,
+        name: step.name,
+        planType,
+        description: step.description,
+        status: 'draft',
+        createdBy: runtime.actorUserId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        testCaseIds: []
+      };
+
+      if (!runtime.dryRun) {
+        runtime.store.sequences.testPlan += 1;
+        record.id = formatSequenceId('TP', runtime.store.sequences.testPlan);
+        runtime.store.testPlans.push(record);
+        await saveIssueTestStore(runtime.issueTestStorePath, runtime.store);
+      }
+
+      if (step.outputStateKey) {
+        runtime.state[step.outputStateKey] = record.id;
+      }
+
+      output.push({
+        stepId: step.id,
+        mode: runtime.dryRun ? 'dry-run' : 'executed',
+        action: step.action,
+        testPlanId: record.id,
+        planType,
+        outputStateKey: step.outputStateKey || null
+      });
+      continue;
+    }
+
+    if (step.action === 'issue_link_testcase') {
+      const issueId = stateValueOrThrow(runtime, step.issueStateKey, 'issue link');
+      const testCaseId = stateValueOrThrow(runtime, step.testCaseStateKey, 'issue link');
+
+      if (!runtime.dryRun) {
+        const issue = runtime.store.issues.find(item => item.id === issueId);
+        const testCase = runtime.store.testCases.find(item => item.id === testCaseId);
+        if (!issue) throw new Error(`Issue not found for link: ${issueId}`);
+        if (!testCase) throw new Error(`Test case not found for link: ${testCaseId}`);
+
+        issue.linkedTestCaseIds = appendUnique(issue.linkedTestCaseIds, testCaseId);
+        issue.updatedAt = new Date().toISOString();
+        testCase.linkedIssueIds = appendUnique(testCase.linkedIssueIds, issueId);
+        testCase.updatedAt = new Date().toISOString();
+        await saveIssueTestStore(runtime.issueTestStorePath, runtime.store);
+      }
+
+      output.push({
+        stepId: step.id,
+        mode: runtime.dryRun ? 'dry-run' : 'executed',
+        action: step.action,
+        issueId,
+        testCaseId
+      });
+      continue;
+    }
+
+    if (step.action === 'testplan_add_testcase') {
+      const testCaseId = stateValueOrThrow(runtime, step.testCaseStateKey, 'test plan update');
+      const planId = stateValueOrThrow(runtime, step.planStateKey, 'test plan update');
+
+      if (!runtime.dryRun) {
+        const plan = runtime.store.testPlans.find(item => item.id === planId);
+        const testCase = runtime.store.testCases.find(item => item.id === testCaseId);
+        if (!plan) throw new Error(`Test plan not found: ${planId}`);
+        if (!testCase) throw new Error(`Test case not found: ${testCaseId}`);
+
+        plan.testCaseIds = appendUnique(plan.testCaseIds, testCaseId);
+        plan.updatedAt = new Date().toISOString();
+        await saveIssueTestStore(runtime.issueTestStorePath, runtime.store);
+      }
+
+      output.push({
+        stepId: step.id,
+        mode: runtime.dryRun ? 'dry-run' : 'executed',
+        action: step.action,
+        planId,
+        testCaseId
+      });
+      continue;
+    }
+
+    if (step.action === 'project_create') {
+      const record = {
+        id: runtime.dryRun ? 'PRJ-DRYRUN' : null,
+        name: step.name,
+        description: step.description,
+        createdBy: runtime.actorUserId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      if (!runtime.dryRun) {
+        runtime.store.sequences.project += 1;
+        record.id = formatSequenceId('PRJ', runtime.store.sequences.project);
+        runtime.store.projects.push(record);
+        await saveIssueTestStore(runtime.issueTestStorePath, runtime.store);
+      }
+
+      if (step.outputStateKey) {
+        runtime.state[step.outputStateKey] = record.id;
+      }
+
+      output.push({
+        stepId: step.id,
+        mode: runtime.dryRun ? 'dry-run' : 'executed',
+        action: step.action,
+        projectId: record.id,
+        outputStateKey: step.outputStateKey || null
+      });
+      continue;
+    }
+
+    if (step.action === 'release_create') {
+      const projectId = stateValueOrThrow(runtime, step.projectStateKey, 'release create');
+      const record = {
+        id: runtime.dryRun ? 'REL-DRYRUN' : null,
+        projectId,
+        name: step.name,
+        description: step.description,
+        createdBy: runtime.actorUserId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      if (!runtime.dryRun) {
+        findByIdOrThrow(runtime.store.projects, projectId, 'Project');
+        runtime.store.sequences.release += 1;
+        record.id = formatSequenceId('REL', runtime.store.sequences.release);
+        runtime.store.releases.push(record);
+        await saveIssueTestStore(runtime.issueTestStorePath, runtime.store);
+      }
+
+      if (step.outputStateKey) {
+        runtime.state[step.outputStateKey] = record.id;
+      }
+
+      output.push({
+        stepId: step.id,
+        mode: runtime.dryRun ? 'dry-run' : 'executed',
+        action: step.action,
+        releaseId: record.id,
+        projectId,
+        outputStateKey: step.outputStateKey || null
+      });
+      continue;
+    }
+
+    if (step.action === 'deployment_artifact_create') {
+      const releaseId = stateValueOrThrow(runtime, step.releaseStateKey, 'deployment artifact create');
+      const record = {
+        id: runtime.dryRun ? 'DEP-DRYRUN' : null,
+        releaseId,
+        name: step.name,
+        artifactType: step.artifactType,
+        location: step.location,
+        createdBy: runtime.actorUserId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      if (!runtime.dryRun) {
+        findByIdOrThrow(runtime.store.releases, releaseId, 'Release');
+        runtime.store.sequences.deploymentArtifact += 1;
+        record.id = formatSequenceId('DEP', runtime.store.sequences.deploymentArtifact);
+        runtime.store.deploymentArtifacts.push(record);
+        await saveIssueTestStore(runtime.issueTestStorePath, runtime.store);
+      }
+
+      if (step.outputStateKey) {
+        runtime.state[step.outputStateKey] = record.id;
+      }
+
+      output.push({
+        stepId: step.id,
+        mode: runtime.dryRun ? 'dry-run' : 'executed',
+        action: step.action,
+        deploymentArtifactId: record.id,
+        releaseId,
+        outputStateKey: step.outputStateKey || null
+      });
+      continue;
+    }
+
+    if (step.action === 'projectplan_create') {
+      const projectId = stateValueOrThrow(runtime, step.projectStateKey, 'project plan create');
+      const record = {
+        id: runtime.dryRun ? 'PLN-DRYRUN' : null,
+        projectId,
+        name: step.name,
+        description: step.description,
+        status: 'draft',
+        createdBy: runtime.actorUserId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        milestoneIds: [],
+        taskIds: [],
+        synchpointIds: [],
+        deliverableIds: [],
+        resourceIds: []
+      };
+
+      if (!runtime.dryRun) {
+        findByIdOrThrow(runtime.store.projects, projectId, 'Project');
+        runtime.store.sequences.projectPlan += 1;
+        record.id = formatSequenceId('PLN', runtime.store.sequences.projectPlan);
+        runtime.store.projectPlans.push(record);
+        await saveIssueTestStore(runtime.issueTestStorePath, runtime.store);
+      }
+
+      if (step.outputStateKey) {
+        runtime.state[step.outputStateKey] = record.id;
+      }
+
+      output.push({
+        stepId: step.id,
+        mode: runtime.dryRun ? 'dry-run' : 'executed',
+        action: step.action,
+        projectPlanId: record.id,
+        projectId,
+        outputStateKey: step.outputStateKey || null
+      });
+      continue;
+    }
+
+    if (step.action === 'milestone_create') {
+      const record = {
+        id: runtime.dryRun ? 'MLS-DRYRUN' : null,
+        name: step.name,
+        description: step.description,
+        dueDate: step.dueDate,
+        createdBy: runtime.actorUserId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      if (!runtime.dryRun) {
+        runtime.store.sequences.milestone += 1;
+        record.id = formatSequenceId('MLS', runtime.store.sequences.milestone);
+        runtime.store.milestones.push(record);
+        await saveIssueTestStore(runtime.issueTestStorePath, runtime.store);
+      }
+
+      if (step.outputStateKey) {
+        runtime.state[step.outputStateKey] = record.id;
+      }
+
+      output.push({
+        stepId: step.id,
+        mode: runtime.dryRun ? 'dry-run' : 'executed',
+        action: step.action,
+        milestoneId: record.id,
+        outputStateKey: step.outputStateKey || null
+      });
+      continue;
+    }
+
+    if (step.action === 'task_create') {
+      const record = {
+        id: runtime.dryRun ? 'TSK-DRYRUN' : null,
+        name: step.name,
+        description: step.description,
+        assigneeUserId: step.assigneeUserId || null,
+        status: 'open',
+        createdBy: runtime.actorUserId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      if (!runtime.dryRun) {
+        runtime.store.sequences.task += 1;
+        record.id = formatSequenceId('TSK', runtime.store.sequences.task);
+        runtime.store.tasks.push(record);
+        await saveIssueTestStore(runtime.issueTestStorePath, runtime.store);
+      }
+
+      if (step.outputStateKey) {
+        runtime.state[step.outputStateKey] = record.id;
+      }
+
+      output.push({
+        stepId: step.id,
+        mode: runtime.dryRun ? 'dry-run' : 'executed',
+        action: step.action,
+        taskId: record.id,
+        outputStateKey: step.outputStateKey || null
+      });
+      continue;
+    }
+
+    if (step.action === 'synchpoint_create') {
+      const record = {
+        id: runtime.dryRun ? 'SYN-DRYRUN' : null,
+        name: step.name,
+        description: step.description,
+        createdBy: runtime.actorUserId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      if (!runtime.dryRun) {
+        runtime.store.sequences.synchpoint += 1;
+        record.id = formatSequenceId('SYN', runtime.store.sequences.synchpoint);
+        runtime.store.synchpoints.push(record);
+        await saveIssueTestStore(runtime.issueTestStorePath, runtime.store);
+      }
+
+      if (step.outputStateKey) {
+        runtime.state[step.outputStateKey] = record.id;
+      }
+
+      output.push({
+        stepId: step.id,
+        mode: runtime.dryRun ? 'dry-run' : 'executed',
+        action: step.action,
+        synchpointId: record.id,
+        outputStateKey: step.outputStateKey || null
+      });
+      continue;
+    }
+
+    if (step.action === 'deliverable_create') {
+      const record = {
+        id: runtime.dryRun ? 'DLV-DRYRUN' : null,
+        name: step.name,
+        description: step.description,
+        createdBy: runtime.actorUserId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      if (!runtime.dryRun) {
+        runtime.store.sequences.deliverable += 1;
+        record.id = formatSequenceId('DLV', runtime.store.sequences.deliverable);
+        runtime.store.deliverables.push(record);
+        await saveIssueTestStore(runtime.issueTestStorePath, runtime.store);
+      }
+
+      if (step.outputStateKey) {
+        runtime.state[step.outputStateKey] = record.id;
+      }
+
+      output.push({
+        stepId: step.id,
+        mode: runtime.dryRun ? 'dry-run' : 'executed',
+        action: step.action,
+        deliverableId: record.id,
+        outputStateKey: step.outputStateKey || null
+      });
+      continue;
+    }
+
+    if (step.action === 'resource_create') {
+      const record = {
+        id: runtime.dryRun ? 'RES-DRYRUN' : null,
+        name: step.name,
+        resourceType: step.resourceType,
+        description: step.description,
+        createdBy: runtime.actorUserId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      if (!runtime.dryRun) {
+        runtime.store.sequences.resource += 1;
+        record.id = formatSequenceId('RES', runtime.store.sequences.resource);
+        runtime.store.resources.push(record);
+        await saveIssueTestStore(runtime.issueTestStorePath, runtime.store);
+      }
+
+      if (step.outputStateKey) {
+        runtime.state[step.outputStateKey] = record.id;
+      }
+
+      output.push({
+        stepId: step.id,
+        mode: runtime.dryRun ? 'dry-run' : 'executed',
+        action: step.action,
+        resourceId: record.id,
+        outputStateKey: step.outputStateKey || null
+      });
+      continue;
+    }
+
+    if (step.action === 'projectplan_add_milestone') {
+      const milestoneId = stateValueOrThrow(runtime, step.itemStateKey, 'project plan milestone link');
+      if (!runtime.dryRun) {
+        findByIdOrThrow(runtime.store.milestones, milestoneId, 'Milestone');
+      }
+      await savePlanItemLink(runtime, step, output, milestoneId, 'milestoneIds');
+      continue;
+    }
+
+    if (step.action === 'projectplan_add_task') {
+      const taskId = stateValueOrThrow(runtime, step.itemStateKey, 'project plan task link');
+      if (!runtime.dryRun) {
+        findByIdOrThrow(runtime.store.tasks, taskId, 'Task');
+      }
+      await savePlanItemLink(runtime, step, output, taskId, 'taskIds');
+      continue;
+    }
+
+    if (step.action === 'projectplan_add_synchpoint') {
+      const synchpointId = stateValueOrThrow(runtime, step.itemStateKey, 'project plan synchpoint link');
+      if (!runtime.dryRun) {
+        findByIdOrThrow(runtime.store.synchpoints, synchpointId, 'Synchpoint');
+      }
+      await savePlanItemLink(runtime, step, output, synchpointId, 'synchpointIds');
+      continue;
+    }
+
+    if (step.action === 'projectplan_add_deliverable') {
+      const deliverableId = stateValueOrThrow(runtime, step.itemStateKey, 'project plan deliverable link');
+      if (!runtime.dryRun) {
+        findByIdOrThrow(runtime.store.deliverables, deliverableId, 'Deliverable');
+      }
+      await savePlanItemLink(runtime, step, output, deliverableId, 'deliverableIds');
+      continue;
+    }
+
+    if (step.action === 'projectplan_add_resource') {
+      const resourceId = stateValueOrThrow(runtime, step.itemStateKey, 'project plan resource link');
+      if (!runtime.dryRun) {
+        findByIdOrThrow(runtime.store.resources, resourceId, 'Resource');
+      }
+      await savePlanItemLink(runtime, step, output, resourceId, 'resourceIds');
+      continue;
+    }
+
     throw new Error(`Unsupported step action: ${step.action}`);
   }
 }
@@ -275,6 +896,8 @@ async function executeWorkflow(compiled, workflowId, dryRun = false, context = {
   const queueMap = buildQueueMap(symbols);
   const state = {};
   const results = [];
+  const issueTestStorePath = path.resolve(String(context?.issueTestStorePath || './data/issue-test-system.json'));
+  const store = await loadIssueTestStore(issueTestStorePath);
 
   await executeSteps(workflow.steps || [], {
     dryRun,
@@ -282,14 +905,17 @@ async function executeWorkflow(compiled, workflowId, dryRun = false, context = {
     queueMap,
     state,
     context,
-    actorUserId: String(context?.actorUserId || 'system-admin').trim() || 'system-admin'
+    actorUserId: String(context?.actorUserId || 'system-admin').trim() || 'system-admin',
+    issueTestStorePath,
+    store
   }, results);
 
   return {
     workflowId,
     stepCount: (workflow.steps || []).length,
     results,
-    state
+    state,
+    issueTestStorePath
   };
 }
 

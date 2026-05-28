@@ -44,3 +44,50 @@ WORKFLOW "gradual-startup" BEGIN
   STEP "check-lifecycle-dashboard" CHECK API "aggregator" GET "/api/lifecycle/dashboard" EXPECT 200 RETRIES 20 EVERY 1000;
   STEP "check-runtime-metrics" CHECK API "aggregator" GET "/api/metrics/current" EXPECT 200 RETRIES 20 EVERY 1000;
 END;
+
+WORKFLOW "qa-ticket-lifecycle" BEGIN
+  STEP "create-issue" ISSUE CREATE TITLE "MT103 rejection on routing" DESCRIPTION "Routing rejects valid MT103 samples on edge path" PRIORITY "high" ASSIGN USER "qa-lead" REPORTER TYPE "tester" INTO STATE "issueId";
+  STEP "create-regression-case" TESTCASE CREATE NAME "MT103 edge route accepts valid message" TEST TYPE "regression" DESCRIPTION "Assert valid MT103 follows accepted route and state becomes accepted" INTO STATE "testCaseId";
+  STEP "link-issue-to-test" ISSUE LINK ISSUE STATE "issueId" TO TESTCASE STATE "testCaseId";
+END;
+
+WORKFLOW "qa-integration-plan" BEGIN
+  STEP "create-integration-case" TESTCASE CREATE NAME "Queue manager import-export parity" TEST TYPE "integration" DESCRIPTION "Export from primary then import into secondary preserves envelope and payload" INTO STATE "integrationCaseId";
+  STEP "create-plan" TESTPLAN CREATE NAME "Integration smoke baseline" PLAN TYPE "integration" DESCRIPTION "Core integration checks for queue, router, broker handoff" INTO STATE "integrationPlanId";
+  STEP "add-case-to-plan" TESTPLAN ADD TESTCASE STATE "integrationCaseId" TO PLAN STATE "integrationPlanId";
+END;
+
+WORKFLOW "qa-acceptance-plan" BEGIN
+  STEP "create-acceptance-case" TESTCASE CREATE NAME "Lifecycle dashboard happy path" TEST TYPE "acceptance" DESCRIPTION "Operator can run happy path and observe completion state" INTO STATE "acceptanceCaseId";
+  STEP "create-plan" TESTPLAN CREATE NAME "Acceptance release gate" PLAN TYPE "acceptance" DESCRIPTION "Release readiness acceptance checks" INTO STATE "acceptancePlanId";
+  STEP "add-case-to-plan" TESTPLAN ADD TESTCASE STATE "acceptanceCaseId" TO PLAN STATE "acceptancePlanId";
+END;
+
+WORKFLOW "qa-regression-plan" BEGIN
+  STEP "create-regression-case" TESTCASE CREATE NAME "Topology dashboard PMachine visibility" TEST TYPE "regression" DESCRIPTION "PMachine nodes remain visible after backend restart" INTO STATE "regressionCaseId";
+  STEP "create-plan" TESTPLAN CREATE NAME "Regression nightly" PLAN TYPE "regression" DESCRIPTION "Nightly regression coverage for core dashboards and flows" INTO STATE "regressionPlanId";
+  STEP "add-case-to-plan" TESTPLAN ADD TESTCASE STATE "regressionCaseId" TO PLAN STATE "regressionPlanId";
+END;
+
+WORKFLOW "pm-release-project-deployment" BEGIN
+  STEP "create-project" PROJECT CREATE NAME "Unified Payments Refresh" DESCRIPTION "Program to modernize routing, mapping, and deployment operations" INTO STATE "projectId";
+  STEP "create-release" RELEASE CREATE NAME "2026.09" DESCRIPTION "September release bundle for payment platform enhancements" FOR PROJECT STATE "projectId" INTO STATE "releaseId";
+  STEP "create-deployment-artifact" DEPLOYMENT ARTIFACT CREATE NAME "aggregator-router-image" ARTIFACT TYPE "container-image" LOCATION "registry.internal/pulse/aggregator-router:2026.09.0" FOR RELEASE STATE "releaseId" INTO STATE "deploymentArtifactId";
+END;
+
+WORKFLOW "pm-project-plan-authoring" BEGIN
+  STEP "create-project" PROJECT CREATE NAME "Swift-to-ISO Migration" DESCRIPTION "Plan migration from MT flows to ISO-native flows" INTO STATE "projectId";
+  STEP "create-project-plan" PROJECTPLAN CREATE NAME "Migration Execution Plan" DESCRIPTION "End-to-end project plan with milestones, tasks, synchpoints, deliverables, and resources" FOR PROJECT STATE "projectId" INTO STATE "projectPlanId";
+
+  STEP "create-milestone" MILESTONE CREATE NAME "Design Freeze" DESCRIPTION "Lock architecture and interface contracts" DUE DATE "2026-07-15" INTO STATE "milestoneId";
+  STEP "create-task" TASK CREATE NAME "Build routing rules" DESCRIPTION "Implement routing rule editor and policies" ASSIGN USER "project-manager" INTO STATE "taskId";
+  STEP "create-synchpoint" SYNCHPOINT CREATE NAME "Weekly Steering" DESCRIPTION "Cross-team decision and risk synchronization" INTO STATE "synchpointId";
+  STEP "create-deliverable" DELIVERABLE CREATE NAME "Operational Runbook" DESCRIPTION "Deployment and rollback runbook approved by operations" INTO STATE "deliverableId";
+  STEP "create-resource" RESOURCE CREATE NAME "QA Automation Team" RESOURCE TYPE "team" DESCRIPTION "Automation engineers covering acceptance and regression" INTO STATE "resourceId";
+
+  STEP "add-milestone" PROJECTPLAN ADD MILESTONE STATE "milestoneId" TO PLAN STATE "projectPlanId";
+  STEP "add-task" PROJECTPLAN ADD TASK STATE "taskId" TO PLAN STATE "projectPlanId";
+  STEP "add-synchpoint" PROJECTPLAN ADD SYNCHPOINT STATE "synchpointId" TO PLAN STATE "projectPlanId";
+  STEP "add-deliverable" PROJECTPLAN ADD DELIVERABLE STATE "deliverableId" TO PLAN STATE "projectPlanId";
+  STEP "add-resource" PROJECTPLAN ADD RESOURCE STATE "resourceId" TO PLAN STATE "projectPlanId";
+END;

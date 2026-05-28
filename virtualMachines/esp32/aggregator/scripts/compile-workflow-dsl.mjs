@@ -117,6 +117,195 @@ function parseStepCheckApi(stepLine) {
   };
 }
 
+function parseStepIssueCreate(stepLine) {
+  const stepMatch = stepLine.match(/^STEP\s+("[^"]+"|'[^']+')\s+ISSUE\s+CREATE\s+TITLE\s+("[^"]+"|'[^']+')\s+DESCRIPTION\s+("[^"]+"|'[^']+')\s+PRIORITY\s+("[^"]+"|'[^']+')(\s+ASSIGN\s+USER\s+("[^"]+"|'[^']+'))?(\s+REPORTER\s+TYPE\s+("[^"]+"|'[^']+'))?(\s+INTO\s+STATE\s+("[^"]+"|'[^']+'))?\s*;$/i);
+  if (!stepMatch) return null;
+  return {
+    id: parseQuoted(stepMatch[1]),
+    action: 'issue_create',
+    title: parseQuoted(stepMatch[2]),
+    description: parseQuoted(stepMatch[3]),
+    priority: parseQuoted(stepMatch[4]),
+    assigneeUserId: stepMatch[6] ? parseQuoted(stepMatch[6]) : null,
+    reporterType: stepMatch[8] ? parseQuoted(stepMatch[8]) : null,
+    outputStateKey: stepMatch[10] ? parseQuoted(stepMatch[10]) : null
+  };
+}
+
+function parseStepTestCaseCreate(stepLine) {
+  const stepMatch = stepLine.match(/^STEP\s+("[^"]+"|'[^']+')\s+TESTCASE\s+CREATE\s+NAME\s+("[^"]+"|'[^']+')\s+TEST\s+TYPE\s+("[^"]+"|'[^']+')\s+DESCRIPTION\s+("[^"]+"|'[^']+')(\s+INTO\s+STATE\s+("[^"]+"|'[^']+'))?\s*;$/i);
+  if (!stepMatch) return null;
+  return {
+    id: parseQuoted(stepMatch[1]),
+    action: 'testcase_create',
+    name: parseQuoted(stepMatch[2]),
+    testType: parseQuoted(stepMatch[3]),
+    description: parseQuoted(stepMatch[4]),
+    outputStateKey: stepMatch[6] ? parseQuoted(stepMatch[6]) : null
+  };
+}
+
+function parseStepTestPlanCreate(stepLine) {
+  const stepMatch = stepLine.match(/^STEP\s+("[^"]+"|'[^']+')\s+TESTPLAN\s+CREATE\s+NAME\s+("[^"]+"|'[^']+')\s+PLAN\s+TYPE\s+("[^"]+"|'[^']+')\s+DESCRIPTION\s+("[^"]+"|'[^']+')(\s+INTO\s+STATE\s+("[^"]+"|'[^']+'))?\s*;$/i);
+  if (!stepMatch) return null;
+  return {
+    id: parseQuoted(stepMatch[1]),
+    action: 'testplan_create',
+    name: parseQuoted(stepMatch[2]),
+    planType: parseQuoted(stepMatch[3]),
+    description: parseQuoted(stepMatch[4]),
+    outputStateKey: stepMatch[6] ? parseQuoted(stepMatch[6]) : null
+  };
+}
+
+function parseStepIssueLink(stepLine) {
+  const stepMatch = stepLine.match(/^STEP\s+("[^"]+"|'[^']+')\s+ISSUE\s+LINK\s+ISSUE\s+STATE\s+("[^"]+"|'[^']+')\s+TO\s+TESTCASE\s+STATE\s+("[^"]+"|'[^']+')\s*;$/i);
+  if (!stepMatch) return null;
+  return {
+    id: parseQuoted(stepMatch[1]),
+    action: 'issue_link_testcase',
+    issueStateKey: parseQuoted(stepMatch[2]),
+    testCaseStateKey: parseQuoted(stepMatch[3])
+  };
+}
+
+function parseStepTestPlanAddCase(stepLine) {
+  const stepMatch = stepLine.match(/^STEP\s+("[^"]+"|'[^']+')\s+TESTPLAN\s+ADD\s+TESTCASE\s+STATE\s+("[^"]+"|'[^']+')\s+TO\s+PLAN\s+STATE\s+("[^"]+"|'[^']+')\s*;$/i);
+  if (!stepMatch) return null;
+  return {
+    id: parseQuoted(stepMatch[1]),
+    action: 'testplan_add_testcase',
+    testCaseStateKey: parseQuoted(stepMatch[2]),
+    planStateKey: parseQuoted(stepMatch[3])
+  };
+}
+
+function parseStepProjectCreate(stepLine) {
+  const stepMatch = stepLine.match(/^STEP\s+("[^"]+"|'[^']+')\s+PROJECT\s+CREATE\s+NAME\s+("[^"]+"|'[^']+')\s+DESCRIPTION\s+("[^"]+"|'[^']+')(\s+INTO\s+STATE\s+("[^"]+"|'[^']+'))?\s*;$/i);
+  if (!stepMatch) return null;
+  return {
+    id: parseQuoted(stepMatch[1]),
+    action: 'project_create',
+    name: parseQuoted(stepMatch[2]),
+    description: parseQuoted(stepMatch[3]),
+    outputStateKey: stepMatch[5] ? parseQuoted(stepMatch[5]) : null
+  };
+}
+
+function parseStepReleaseCreate(stepLine) {
+  const stepMatch = stepLine.match(/^STEP\s+("[^"]+"|'[^']+')\s+RELEASE\s+CREATE\s+NAME\s+("[^"]+"|'[^']+')\s+DESCRIPTION\s+("[^"]+"|'[^']+')\s+FOR\s+PROJECT\s+STATE\s+("[^"]+"|'[^']+')(\s+INTO\s+STATE\s+("[^"]+"|'[^']+'))?\s*;$/i);
+  if (!stepMatch) return null;
+  return {
+    id: parseQuoted(stepMatch[1]),
+    action: 'release_create',
+    name: parseQuoted(stepMatch[2]),
+    description: parseQuoted(stepMatch[3]),
+    projectStateKey: parseQuoted(stepMatch[4]),
+    outputStateKey: stepMatch[6] ? parseQuoted(stepMatch[6]) : null
+  };
+}
+
+function parseStepDeploymentArtifactCreate(stepLine) {
+  const stepMatch = stepLine.match(/^STEP\s+("[^"]+"|'[^']+')\s+DEPLOYMENT\s+ARTIFACT\s+CREATE\s+NAME\s+("[^"]+"|'[^']+')\s+ARTIFACT\s+TYPE\s+("[^"]+"|'[^']+')\s+LOCATION\s+("[^"]+"|'[^']+')\s+FOR\s+RELEASE\s+STATE\s+("[^"]+"|'[^']+')(\s+INTO\s+STATE\s+("[^"]+"|'[^']+'))?\s*;$/i);
+  if (!stepMatch) return null;
+  return {
+    id: parseQuoted(stepMatch[1]),
+    action: 'deployment_artifact_create',
+    name: parseQuoted(stepMatch[2]),
+    artifactType: parseQuoted(stepMatch[3]),
+    location: parseQuoted(stepMatch[4]),
+    releaseStateKey: parseQuoted(stepMatch[5]),
+    outputStateKey: stepMatch[7] ? parseQuoted(stepMatch[7]) : null
+  };
+}
+
+function parseStepProjectPlanCreate(stepLine) {
+  const stepMatch = stepLine.match(/^STEP\s+("[^"]+"|'[^']+')\s+PROJECTPLAN\s+CREATE\s+NAME\s+("[^"]+"|'[^']+')\s+DESCRIPTION\s+("[^"]+"|'[^']+')\s+FOR\s+PROJECT\s+STATE\s+("[^"]+"|'[^']+')(\s+INTO\s+STATE\s+("[^"]+"|'[^']+'))?\s*;$/i);
+  if (!stepMatch) return null;
+  return {
+    id: parseQuoted(stepMatch[1]),
+    action: 'projectplan_create',
+    name: parseQuoted(stepMatch[2]),
+    description: parseQuoted(stepMatch[3]),
+    projectStateKey: parseQuoted(stepMatch[4]),
+    outputStateKey: stepMatch[6] ? parseQuoted(stepMatch[6]) : null
+  };
+}
+
+function parseStepMilestoneCreate(stepLine) {
+  const stepMatch = stepLine.match(/^STEP\s+("[^"]+"|'[^']+')\s+MILESTONE\s+CREATE\s+NAME\s+("[^"]+"|'[^']+')\s+DESCRIPTION\s+("[^"]+"|'[^']+')\s+DUE\s+DATE\s+("[^"]+"|'[^']+')(\s+INTO\s+STATE\s+("[^"]+"|'[^']+'))?\s*;$/i);
+  if (!stepMatch) return null;
+  return {
+    id: parseQuoted(stepMatch[1]),
+    action: 'milestone_create',
+    name: parseQuoted(stepMatch[2]),
+    description: parseQuoted(stepMatch[3]),
+    dueDate: parseQuoted(stepMatch[4]),
+    outputStateKey: stepMatch[6] ? parseQuoted(stepMatch[6]) : null
+  };
+}
+
+function parseStepTaskCreate(stepLine) {
+  const stepMatch = stepLine.match(/^STEP\s+("[^"]+"|'[^']+')\s+TASK\s+CREATE\s+NAME\s+("[^"]+"|'[^']+')\s+DESCRIPTION\s+("[^"]+"|'[^']+')(\s+ASSIGN\s+USER\s+("[^"]+"|'[^']+'))?(\s+INTO\s+STATE\s+("[^"]+"|'[^']+'))?\s*;$/i);
+  if (!stepMatch) return null;
+  return {
+    id: parseQuoted(stepMatch[1]),
+    action: 'task_create',
+    name: parseQuoted(stepMatch[2]),
+    description: parseQuoted(stepMatch[3]),
+    assigneeUserId: stepMatch[5] ? parseQuoted(stepMatch[5]) : null,
+    outputStateKey: stepMatch[7] ? parseQuoted(stepMatch[7]) : null
+  };
+}
+
+function parseStepSynchpointCreate(stepLine) {
+  const stepMatch = stepLine.match(/^STEP\s+("[^"]+"|'[^']+')\s+SYNCHPOINT\s+CREATE\s+NAME\s+("[^"]+"|'[^']+')\s+DESCRIPTION\s+("[^"]+"|'[^']+')(\s+INTO\s+STATE\s+("[^"]+"|'[^']+'))?\s*;$/i);
+  if (!stepMatch) return null;
+  return {
+    id: parseQuoted(stepMatch[1]),
+    action: 'synchpoint_create',
+    name: parseQuoted(stepMatch[2]),
+    description: parseQuoted(stepMatch[3]),
+    outputStateKey: stepMatch[5] ? parseQuoted(stepMatch[5]) : null
+  };
+}
+
+function parseStepDeliverableCreate(stepLine) {
+  const stepMatch = stepLine.match(/^STEP\s+("[^"]+"|'[^']+')\s+DELIVERABLE\s+CREATE\s+NAME\s+("[^"]+"|'[^']+')\s+DESCRIPTION\s+("[^"]+"|'[^']+')(\s+INTO\s+STATE\s+("[^"]+"|'[^']+'))?\s*;$/i);
+  if (!stepMatch) return null;
+  return {
+    id: parseQuoted(stepMatch[1]),
+    action: 'deliverable_create',
+    name: parseQuoted(stepMatch[2]),
+    description: parseQuoted(stepMatch[3]),
+    outputStateKey: stepMatch[5] ? parseQuoted(stepMatch[5]) : null
+  };
+}
+
+function parseStepResourceCreate(stepLine) {
+  const stepMatch = stepLine.match(/^STEP\s+("[^"]+"|'[^']+')\s+RESOURCE\s+CREATE\s+NAME\s+("[^"]+"|'[^']+')\s+RESOURCE\s+TYPE\s+("[^"]+"|'[^']+')\s+DESCRIPTION\s+("[^"]+"|'[^']+')(\s+INTO\s+STATE\s+("[^"]+"|'[^']+'))?\s*;$/i);
+  if (!stepMatch) return null;
+  return {
+    id: parseQuoted(stepMatch[1]),
+    action: 'resource_create',
+    name: parseQuoted(stepMatch[2]),
+    resourceType: parseQuoted(stepMatch[3]),
+    description: parseQuoted(stepMatch[4]),
+    outputStateKey: stepMatch[6] ? parseQuoted(stepMatch[6]) : null
+  };
+}
+
+function parseStepProjectPlanAdd(stepLine, objectType, actionName) {
+  const stepMatch = stepLine.match(new RegExp(`^STEP\\s+("[^"]+"|'[^']+')\\s+PROJECTPLAN\\s+ADD\\s+${objectType}\\s+STATE\\s+("[^"]+"|'[^']+')\\s+TO\\s+PLAN\\s+STATE\\s+("[^"]+"|'[^']+')\\s*;$`, 'i'));
+  if (!stepMatch) return null;
+  return {
+    id: parseQuoted(stepMatch[1]),
+    action: actionName,
+    itemStateKey: parseQuoted(stepMatch[2]),
+    planStateKey: parseQuoted(stepMatch[3])
+  };
+}
+
 function parseIfHeader(stepLine, ifCounter) {
   const ifMatch = stepLine.match(/^IF\s+FIELD\s+("[^"]+"|'[^']+')\s+(EQUALS|CONTAINS)\s+("[^"]+"|'[^']+')\s+THEN$/i);
   if (!ifMatch) return null;
@@ -180,6 +369,101 @@ function parseStatementAt(lines, index, ifCounterRef) {
   const checkApi = parseStepCheckApi(stepLine);
   if (checkApi) {
     return { step: checkApi, nextIndex: index + 1 };
+  }
+
+  const issueCreate = parseStepIssueCreate(stepLine);
+  if (issueCreate) {
+    return { step: issueCreate, nextIndex: index + 1 };
+  }
+
+  const testCaseCreate = parseStepTestCaseCreate(stepLine);
+  if (testCaseCreate) {
+    return { step: testCaseCreate, nextIndex: index + 1 };
+  }
+
+  const testPlanCreate = parseStepTestPlanCreate(stepLine);
+  if (testPlanCreate) {
+    return { step: testPlanCreate, nextIndex: index + 1 };
+  }
+
+  const issueLink = parseStepIssueLink(stepLine);
+  if (issueLink) {
+    return { step: issueLink, nextIndex: index + 1 };
+  }
+
+  const testPlanAddCase = parseStepTestPlanAddCase(stepLine);
+  if (testPlanAddCase) {
+    return { step: testPlanAddCase, nextIndex: index + 1 };
+  }
+
+  const projectCreate = parseStepProjectCreate(stepLine);
+  if (projectCreate) {
+    return { step: projectCreate, nextIndex: index + 1 };
+  }
+
+  const releaseCreate = parseStepReleaseCreate(stepLine);
+  if (releaseCreate) {
+    return { step: releaseCreate, nextIndex: index + 1 };
+  }
+
+  const deploymentArtifactCreate = parseStepDeploymentArtifactCreate(stepLine);
+  if (deploymentArtifactCreate) {
+    return { step: deploymentArtifactCreate, nextIndex: index + 1 };
+  }
+
+  const projectPlanCreate = parseStepProjectPlanCreate(stepLine);
+  if (projectPlanCreate) {
+    return { step: projectPlanCreate, nextIndex: index + 1 };
+  }
+
+  const milestoneCreate = parseStepMilestoneCreate(stepLine);
+  if (milestoneCreate) {
+    return { step: milestoneCreate, nextIndex: index + 1 };
+  }
+
+  const taskCreate = parseStepTaskCreate(stepLine);
+  if (taskCreate) {
+    return { step: taskCreate, nextIndex: index + 1 };
+  }
+
+  const synchpointCreate = parseStepSynchpointCreate(stepLine);
+  if (synchpointCreate) {
+    return { step: synchpointCreate, nextIndex: index + 1 };
+  }
+
+  const deliverableCreate = parseStepDeliverableCreate(stepLine);
+  if (deliverableCreate) {
+    return { step: deliverableCreate, nextIndex: index + 1 };
+  }
+
+  const resourceCreate = parseStepResourceCreate(stepLine);
+  if (resourceCreate) {
+    return { step: resourceCreate, nextIndex: index + 1 };
+  }
+
+  const addMilestone = parseStepProjectPlanAdd(stepLine, 'MILESTONE', 'projectplan_add_milestone');
+  if (addMilestone) {
+    return { step: addMilestone, nextIndex: index + 1 };
+  }
+
+  const addTask = parseStepProjectPlanAdd(stepLine, 'TASK', 'projectplan_add_task');
+  if (addTask) {
+    return { step: addTask, nextIndex: index + 1 };
+  }
+
+  const addSynchpoint = parseStepProjectPlanAdd(stepLine, 'SYNCHPOINT', 'projectplan_add_synchpoint');
+  if (addSynchpoint) {
+    return { step: addSynchpoint, nextIndex: index + 1 };
+  }
+
+  const addDeliverable = parseStepProjectPlanAdd(stepLine, 'DELIVERABLE', 'projectplan_add_deliverable');
+  if (addDeliverable) {
+    return { step: addDeliverable, nextIndex: index + 1 };
+  }
+
+  const addResource = parseStepProjectPlanAdd(stepLine, 'RESOURCE', 'projectplan_add_resource');
+  if (addResource) {
+    return { step: addResource, nextIndex: index + 1 };
   }
 
   const ifHeader = parseIfHeader(stepLine, ifCounterRef.value);
@@ -317,7 +601,7 @@ export function compileWorkflowDSL(sourceText) {
   const compiledAt = new Date().toISOString();
 
   return {
-    version: 2,
+    version: 4,
     compiledAt,
     symbols: parsed.symbols,
     workflows: parsed.workflows
