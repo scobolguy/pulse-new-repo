@@ -1,0 +1,35 @@
+.app-shell.accessibility-high-contrast {
+  --control-line: #d7d7d7;
+  --control-line-strong: #ffffff;
+  background: #000000;
+  color: #ffffff;
+}
+
+.app-shell.accessibility-high-contrast .utility-top-bar,
+.app-shell.accessibility-high-contrast .lhs-sidebar,
+.app-shell.accessibility-high-contrast .rhs-sidebar,
+.app-shell.accessibility-high-contrast .workspace-pane,
+.app-shell.accessibility-high-contrast .login-mini-dashboard,
+.app-shell.accessibility-high-contrast .card-open-dialog {
+  background: #000000 !important;
+  color: #ffffff !important;
+  border-color: #ffffff !important;
+}
+
+.app-shell.accessibility-high-contrast button,
+.app-shell.accessibility-high-contrast input,
+.app-shell.accessibility-high-contrast select,
+.app-shell.accessibility-high-contrast textarea {
+  background: #000000 !important;
+  color: #ffffff !important;
+  border-color: #ffffff !important;
+}
+
+.app-shell.accessibility-high-contrast .data-librarian-root,
+.app-shell.accessibility-high-contrast .data-librarian-root *,
+.app-shell.accessibility-high-contrast .data-librarian-root > div,
+.app-shell.accessibility-high-contrast .data-librarian-root pre {
+  color: #ffffff !important;
+  border-color: #ffffff !important;
+  background: #000000 !important;
+}

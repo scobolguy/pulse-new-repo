@@ -11,7 +11,7 @@ import ProfileManagementDashboard from './ProfileManagementDashboard';
 import UserInProfileDashboard from './UserInProfileDashboard';
 import FlowTargetsDashboard from './FlowTargetsDashboard';
 import ChatPage from './ChatPage';
-import ArtifactWorkbench from './ArtifactWorkbench';
+import ArtifactWorkbench from './ArtifactWorkbench.jsx';
 import compiledWorkflowArtifacts from '../data/workflows.generated.json';
 import workflowSourceArtifact from '../data/workflow.wfl?raw';
 import dataMappingsArtifact from '../data/data-mappings.json';
@@ -31,12 +31,28 @@ const THEME_PACK_LOADERS = {
   'rube-goldberg': () => import('./themes/packs/rube-goldberg.css'),
   'french-pointalist': () => import('./themes/packs/french-pointalist.css'),
   'mid-century-modern': () => import('./themes/packs/mid-century-modern.css'),
-  'group-of-seven-auto': () => import('./themes/packs/group-of-seven.css'),
-  'group-of-seven-spring': () => import('./themes/packs/group-of-seven.css'),
-  'group-of-seven-summer': () => import('./themes/packs/group-of-seven.css'),
-  'group-of-seven-autumn': () => import('./themes/packs/group-of-seven.css'),
-  'group-of-seven-winter': () => import('./themes/packs/group-of-seven.css')
+  'group-of-seven-auto': () => import('./themes/packs/group-of-seven-auto.css'),
+  'group-of-seven-spring': () => import('./themes/packs/group-of-seven-spring.css'),
+  'group-of-seven-summer': () => import('./themes/packs/group-of-seven-summer.css'),
+  'group-of-seven-autumn': () => import('./themes/packs/group-of-seven-autumn.css'),
+  'group-of-seven-winter': () => import('./themes/packs/group-of-seven-winter.css')
 };
+
+const ACCESSIBILITY_PACK_LOADERS = {
+  none: () => Promise.resolve(),
+  monaco: () => import('./themes/accessibility/monaco.css'),
+  'high-contrast': () => import('./themes/accessibility/high-contrast.css')
+};
+
+const ACCESSIBILITY_PACK_BY_THEME = {
+  eclipse: 'monaco'
+};
+
+function resolveAccessibilityPack(themeId, preference = 'auto') {
+  if (preference === 'high-contrast') return 'high-contrast';
+  if (preference === 'monaco') return 'monaco';
+  return ACCESSIBILITY_PACK_BY_THEME[themeId] || 'none';
+}
 
 function getSeasonalGroupOfSevenThemeId(date = new Date()) {
   const month = date.getMonth();
@@ -55,12 +71,15 @@ function resolveThemeId(windowStyle, date = new Date()) {
 const AREAS = [
   { id: 'user-admin', label: 'User Admin', permission: 'users.read', accent: '#3aa3ff' },
   { id: 'project-manage', label: 'Project Manage', permission: 'queue.view', accent: '#59c17f' },
+  { id: 'data-librarian', label: 'Data Librarian', permission: null, accent: '#f0c36b' },
   { id: 'analyze', label: 'Analyze', permission: 'data.read', accent: '#ffb454' },
   { id: 'develop', label: 'Develop', permission: 'topology.read', accent: '#9b8cff' },
   { id: 'operations', label: 'Operations', permission: 'lifecycle.read', accent: '#f7768e' },
   { id: 'test', label: 'Test', permission: 'lifecycle.read', accent: '#8bd5ca' },
   { id: 'deploy', label: 'Deploy', permission: 'gateway.read', accent: '#7dcfff' },
 ];
+
+const CORE_AREA_IDS = new Set(['data-librarian']);
 
 const AREA_ICONS = {
   'user-admin': (
@@ -71,6 +90,9 @@ const AREA_ICONS = {
   ),
   analyze: (
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V4h2v16Zm5 0V9h2v11Zm5 0V6h2v14Zm5 0v-8h2v8Z"/></svg>
+  ),
+  'data-librarian': (
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v18h-1.5A2.5 2.5 0 0 0 16 22H6.5A2.5 2.5 0 0 1 4 19.5Zm2.5-1A1.5 1.5 0 0 0 5 5v14.5A1.5 1.5 0 0 0 6.5 21H15a3.5 3.5 0 0 1 3.5-3.5H19V3.5ZM8 7h8v1.5H8Zm0 3h8v1.5H8Zm0 3h6v1.5H8Z"/></svg>
   ),
   develop: (
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8.59 16.59 1.41 1.41L4.41 23 3 21.59Zm6.82 0L21 21.59 19.59 23 14 17.41ZM10 4l4 0v2h-4Zm-2.7 3.3 1.4-1.4 2.9 2.9-1.4 1.4Zm8.8-1.4 1.4 1.4-2.9 2.9-1.4-1.4ZM12 10a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z"/></svg>
@@ -212,6 +234,7 @@ function getThemeDisplayLabel(themeId) {
     'rube-goldberg': 'Rube Goldberg',
     'french-pointalist': 'French Pointalist',
     'mid-century-modern': 'Mid Century Modern',
+    'group-of-seven-auto': 'Group of Seven - Auto',
     'group-of-seven-spring': 'Group of Seven - Spring',
     'group-of-seven-summer': 'Group of Seven - Summer',
     'group-of-seven-autumn': 'Group of Seven - Autumn',
@@ -521,20 +544,7 @@ const FLOW_DEFINITIONS = [
   }
 ];
 
-  const WORKFLOW_CARD_METADATA = {
-    'enqueue-pacs': {
-      name: 'Enqueue PACS',
-      description: 'Submit a PACS message to the outbound queue.'
-    },
-    'pain2-routing': {
-      name: 'Pain2 Routing',
-      description: 'Route pain.001 payloads by status.'
-    },
-    'gradual-startup': {
-      name: 'Gradual Startup',
-      description: 'Stage backend startup with health gates.'
-    }
-  };
+  const WORKFLOW_CARD_METADATA = {};
 
   const COMPILED_WORKFLOW_ITEMS = Array.isArray(compiledWorkflowArtifacts)
     ? compiledWorkflowArtifacts
@@ -691,12 +701,7 @@ const FLOW_DEFINITIONS = [
       workflowById.set(workflowId, workflow);
     }
 
-    const orderedIds = [
-      'enqueue-pacs',
-      'pain2-routing',
-      'gradual-startup',
-      ...Array.from(workflowById.keys()).filter((workflowId) => !['enqueue-pacs', 'pain2-routing', 'gradual-startup'].includes(workflowId))
-    ];
+    const orderedIds = Array.from(workflowById.keys());
 
     return orderedIds.map((workflowId) => {
       const workflow = workflowById.get(workflowId) || { id: workflowId, steps: [] };
@@ -765,6 +770,11 @@ function App() {
   });
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const [askBoxActive, setAskBoxActive] = useState(true);
+  const [contrastModePreference] = useState(() => {
+    const stored = localStorage.getItem('pulse.contrastMode');
+    if (stored === 'high-contrast') return 'high-contrast';
+    return 'auto';
+  });
   const [collapsedSections, setCollapsedSections] = useState({ flows: false, services: false, servers: false });
   const [expandedSections, setExpandedSections] = useState({ flows: false, services: false, servers: false });
   const [cardContextMenu, setCardContextMenu] = useState({ open: false, x: 0, y: 0, kind: null, item: null });
@@ -780,7 +790,11 @@ function App() {
   const [selectedFlowTransitionId, setSelectedFlowTransitionId] = useState(null);
   const flowSnapshotRef = React.useRef({});
   const deepLinkHandledRef = React.useRef(false);
-  const resolvedWindowStyle = useMemo(() => resolveThemeId(windowStyle), [windowStyle]);
+  const resolvedWindowStyle = resolveThemeId(windowStyle);
+  const resolvedContrastMode = useMemo(
+    () => resolveAccessibilityPack(resolvedWindowStyle, contrastModePreference),
+    [resolvedWindowStyle, contrastModePreference]
+  );
 
   function toggleSection(sectionId) {
     setCollapsedSections((current) => ({ ...current, [sectionId]: !current[sectionId] }));
@@ -1544,6 +1558,13 @@ function App() {
   }, [resolvedWindowStyle]);
 
   useEffect(() => {
+    const loadAccessibilityPack = ACCESSIBILITY_PACK_LOADERS[resolvedContrastMode] || ACCESSIBILITY_PACK_LOADERS.none;
+    loadAccessibilityPack().catch((error) => {
+      console.error(`[A11Y-THEME] Failed to load accessibility pack for ${resolvedContrastMode}:`, error);
+    });
+  }, [resolvedContrastMode]);
+
+  useEffect(() => {
     localStorage.setItem('pulse.lhsCollapsed', lhsCollapsed ? '1' : '0');
   }, [lhsCollapsed]);
 
@@ -1601,7 +1622,7 @@ function App() {
   }, [authz.permissions, actorUserId]);
 
   const visibleAreas = useMemo(
-    () => AREAS.filter(item => hasPermission(effectivePermissions, item.permission)),
+    () => AREAS.filter((item) => CORE_AREA_IDS.has(item.id) || hasPermission(effectivePermissions, item.permission)),
     [effectivePermissions]
   );
 
@@ -2151,7 +2172,8 @@ function App() {
       }
       return renderMonitorContent(monitorClassId);
     }
-    if (area === 'analyze') return <DataLibrarian />;
+    if (area === 'analyze') return <DataMapper />;
+    if (area === 'data-librarian') return <DataLibrarian />;
     if (area === 'develop') return <TopologyDashboard permissions={authz.permissions || []} />;
     if (area === 'test') return <TransactionLifecycleDashboard />;
     if (area === 'deploy') {
@@ -2184,6 +2206,7 @@ function App() {
     return (
       <ChatPage
         onNavigateHome={() => navigateTo('/')}
+        themeClassName={`window-style-${resolvedWindowStyle} accessibility-${resolvedContrastMode}`}
         screenContext={{ area, operationsTask, monitorClassId, actorUserId, language, overview, actor: authz.actor, roles: authz.profiles, permissions: authz.permissions }}
         askBoxActive={askBoxActive}
         onSetAskBoxActive={setAskBoxActive}
@@ -2193,7 +2216,7 @@ function App() {
 
   return (
     <div
-      className={`app-shell window-style-${resolvedWindowStyle}${isResizingSidebar ? ' is-resizing' : ''}${lhsCollapsed ? ' lhs-collapsed' : ''}${rhsCollapsed ? ' rhs-collapsed' : ''}${askBoxActive ? ' ask-box-active' : ''}`}
+      className={`app-shell window-style-${resolvedWindowStyle} accessibility-${resolvedContrastMode}${isResizingSidebar ? ' is-resizing' : ''}${lhsCollapsed ? ' lhs-collapsed' : ''}${rhsCollapsed ? ' rhs-collapsed' : ''}${askBoxActive ? ' ask-box-active' : ''}`}
       style={{
         '--lhs-width': lhsCollapsed ? '56px' : 'clamp(190px, 16vw, 300px)',
         '--rhs-width': rhsCollapsed ? '56px' : `${rhsWidth}px`,
@@ -2216,6 +2239,16 @@ function App() {
           >
             {LANGUAGE_OPTIONS.map(option => (
               <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+          <select
+            value={windowStyle}
+            onChange={(event) => setWindowStyle(event.target.value)}
+            className="utility-select"
+            aria-label="Style"
+          >
+            {WINDOW_THEMES.map((themeId) => (
+              <option key={themeId} value={themeId}>{getThemeDisplayLabel(themeId)}</option>
             ))}
           </select>
           <input
@@ -2344,6 +2377,26 @@ function App() {
                           )}
                         </>
                       )}
+                    </div>
+                  )}
+                  {item.id === 'analyze' && (
+                    <div className="admin-subtasks" aria-label="Analyze Views">
+                      <button
+                        className={`admin-subtask-item ${area === 'analyze' ? 'is-active' : ''}`}
+                        onClick={() => setArea('analyze')}
+                      >
+                        Business Analysis
+                      </button>
+                    </div>
+                  )}
+                  {item.id === 'data-librarian' && (
+                    <div className="admin-subtasks" aria-label="Data Librarian Views">
+                      <button
+                        className={`admin-subtask-item ${area === 'data-librarian' ? 'is-active' : ''}`}
+                        onClick={() => setArea('data-librarian')}
+                      >
+                        Data Shape Definition
+                      </button>
                     </div>
                   )}
                 </div>
@@ -2585,6 +2638,7 @@ function App() {
         <div className="rhs-chat-wrap">
           <ChatPage
             onNavigateHome={() => {}}
+            themeClassName={`window-style-${resolvedWindowStyle} accessibility-${resolvedContrastMode}`}
             screenContext={{ area, operationsTask, monitorClassId, actorUserId, language, overview, actor: authz.actor, roles: authz.profiles, permissions: authz.permissions }}
             askBoxActive={askBoxActive}
             onSetAskBoxActive={setAskBoxActive}

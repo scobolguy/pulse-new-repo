@@ -1,8 +1,12 @@
 @echo off
-setlocal
+setlocal EnableDelayedExpansion
 
 set "ROOT=%~dp0"
 set "AGGREGATOR_DIR=%ROOT%aggregator"
+set "BACKEND_PORT=4000"
+
+call :ensure_port_free "%BACKEND_PORT%" "backend"
+if errorlevel 1 exit /b 1
 
 if "%PULSE_QUEUE_DATA_ROOT%"=="" (
   set "PULSE_QUEUE_DATA_ROOT=C:\pulse-data\esp32\aggregator-data"
@@ -51,3 +55,45 @@ cd /d "%AGGREGATOR_DIR%"
 set "PULSE_QUEUE_DATA_ROOT=%PULSE_QUEUE_DATA_ROOT%"
 set "PULSE_RUNTIME_DATA_ROOT=%PULSE_RUNTIME_DATA_ROOT%"
 node backend.mjs
+
+exit /b %ERRORLEVEL%
+
+:ensure_port_free
+set "TARGET_PORT=%~1"
+set "SERVICE_NAME=%~2"
+set "ATTEMPT=1"
+
+:ensure_port_free_loop
+set "PID_LIST="
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%TARGET_PORT% .*LISTENING"') do (
+  if not "%%~P"=="" set "PID_LIST=!PID_LIST! %%~P"
+)
+
+if "%PID_LIST%"=="" (
+  echo [INFO] Port %TARGET_PORT% is free for %SERVICE_NAME% startup.
+  exit /b 0
+)
+
+echo [WARN] Port %TARGET_PORT% is busy for %SERVICE_NAME% startup (attempt %ATTEMPT% of 3). Stopping PID(s): %PID_LIST%
+for %%P in (%PID_LIST%) do (
+  if not "%%~P"=="" taskkill /PID %%P /F >nul 2>&1
+)
+
+timeout /t 1 /nobreak >nul
+
+set /a ATTEMPT+=1
+if %ATTEMPT% LEQ 3 goto :ensure_port_free_loop
+
+set "PID_LIST="
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%TARGET_PORT% .*LISTENING"') do (
+  if not "%%~P"=="" set "PID_LIST=!PID_LIST! %%~P"
+)
+
+if "%PID_LIST%"=="" (
+  echo [INFO] Port %TARGET_PORT% is free for %SERVICE_NAME% startup.
+  exit /b 0
+)
+
+echo [ERROR] Unable to clear port %TARGET_PORT% for %SERVICE_NAME% after 3 attempts.
+echo [ERROR] Operator action required: stop PID(s) %PID_LIST% and retry startup.
+exit /b 1

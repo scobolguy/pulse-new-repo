@@ -411,7 +411,7 @@ export default function DataLibrarian() {
   }
 
   return (
-    <div style={{ maxWidth: 860 }} onClick={closeMenus}>
+    <div className="data-librarian-root" style={{ maxWidth: 860 }} onClick={closeMenus}>
 
       {/* Hidden file inputs */}
       <input ref={schemaInputRef} type="file" multiple accept=".xsd,.avro,.json,.json-schema,.proto,.sql,.xml,.csv" style={{ display: 'none' }}

@@ -6,45 +6,6 @@ QUEUE "pain2AcceptedQueue" -> "pain2.accepted" TYPE "pain2";
 FILE "mtTemplate" -> "/services/templates/mt103.txt";
 API "aggregator" BASE "http://localhost:4000";
 
-WORKFLOW "enqueue-pacs" BEGIN
-  STEP "enqueue" CALL API "aggregator" POST "/api/queue/pacs.outbound/enqueue";
-END;
-
-WORKFLOW "pain2-routing" BEGIN
-  IF FIELD "message.status" EQUALS "reject" THEN
-    BEGIN
-      STEP "route-reject" ROUTE QUEUE "pain2RejectQueue";
-      STEP "set-reject-state" SET STATE "transactionState" = "rejected";
-    END;
-  ELSE;
-    BEGIN
-      STEP "route-accept" ROUTE QUEUE "pain2AcceptedQueue";
-      STEP "set-accept-state" SET STATE "transactionState" = "accepted";
-    END;
-  ENDIF;
-END;
-
-WORKFLOW "gradual-startup" BEGIN
-  STEP "check-backend-status-initial" CHECK API "aggregator" GET "/status" EXPECT 200 RETRIES 20 EVERY 1000;
-  STEP "stabilize-before-runtime-actions" WAIT 1500;
-
-  STEP "bring-database-up" CALL API "aggregator" POST "/api/runtime/classes/database/actions/up";
-  STEP "wait-after-database" WAIT 2000;
-  STEP "check-database-registry" CHECK API "aggregator" GET "/api/registry/databases" EXPECT 200 RETRIES 15 EVERY 1000;
-
-  STEP "bring-broker-up" CALL API "aggregator" POST "/api/runtime/classes/broker/actions/up";
-  STEP "wait-after-broker" WAIT 2000;
-  STEP "check-broker-state" CHECK API "aggregator" GET "/api/broker/state" EXPECT 200 RETRIES 15 EVERY 1000;
-
-  STEP "bring-gateways-up" CALL API "aggregator" POST "/api/runtime/classes/gateway/actions/start";
-  STEP "wait-after-gateway" WAIT 2500;
-  STEP "check-gateways" CHECK API "aggregator" GET "/api/gateways" EXPECT 200 RETRIES 20 EVERY 1000;
-
-  STEP "check-services-registry" CHECK API "aggregator" GET "/api/registry/services" EXPECT 200 RETRIES 20 EVERY 1000;
-  STEP "check-lifecycle-dashboard" CHECK API "aggregator" GET "/api/lifecycle/dashboard" EXPECT 200 RETRIES 20 EVERY 1000;
-  STEP "check-runtime-metrics" CHECK API "aggregator" GET "/api/metrics/current" EXPECT 200 RETRIES 20 EVERY 1000;
-END;
-
 WORKFLOW "qa-ticket-lifecycle" BEGIN
   STEP "create-issue" ISSUE CREATE TITLE "MT103 rejection on routing" DESCRIPTION "Routing rejects valid MT103 samples on edge path" PRIORITY "high" ASSIGN USER "qa-lead" REPORTER TYPE "tester" INTO STATE "issueId";
   STEP "create-regression-case" TESTCASE CREATE NAME "MT103 edge route accepts valid message" TEST TYPE "regression" DESCRIPTION "Assert valid MT103 follows accepted route and state becomes accepted" INTO STATE "testCaseId";

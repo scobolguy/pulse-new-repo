@@ -1,0 +1,41 @@
+.app-shell.accessibility-monaco {
+  --control-line: #3c3c3c;
+  --control-line-strong: #4b4b4b;
+}
+
+.data-librarian-root {
+  color: #d4d4d4;
+}
+
+.data-librarian-root h3,
+.data-librarian-root p,
+.data-librarian-root span,
+.data-librarian-root li,
+.data-librarian-root label,
+.data-librarian-root div {
+  color: #d4d4d4;
+}
+
+.data-librarian-root > div,
+.data-librarian-root pre {
+  background: #1e1e1e !important;
+  border-color: #3c3c3c !important;
+  color: #d4d4d4 !important;
+}
+
+.data-librarian-root input,
+.data-librarian-root select,
+.data-librarian-root textarea,
+.data-librarian-root button {
+  background: #252526 !important;
+  border: 1px solid #3c3c3c !important;
+  color: #d4d4d4 !important;
+}
+
+.data-librarian-root button:hover {
+  background: #2d2d30 !important;
+}
+
+.data-librarian-root ul {
+  border-color: #3c3c3c !important;
+}

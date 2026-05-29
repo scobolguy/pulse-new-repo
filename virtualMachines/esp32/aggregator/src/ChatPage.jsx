@@ -263,7 +263,7 @@ function buildSummaryReply(intent, text, snapshot, screenContext) {
   ].join(' ');
 }
 
-export default function ChatPage({ onNavigateHome, screenContext, askBoxActive = true, onSetAskBoxActive }) {
+export default function ChatPage({ onNavigateHome, screenContext, askBoxActive = true, onSetAskBoxActive, themeClassName = '' }) {
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
   const inputRef = useRef(null);
@@ -497,7 +497,7 @@ export default function ChatPage({ onNavigateHome, screenContext, askBoxActive =
 
   if (!askBoxActive) {
     return (
-      <div className="chat-page chat-page--minimized">
+      <div className={`chat-page chat-page--minimized ${themeClassName}`.trim()}>
         <div className="chat-minimized-box">
           <strong>Ask box minimized</strong>
           <span>Press F1 to summon it, or click Reopen.</span>
@@ -508,7 +508,7 @@ export default function ChatPage({ onNavigateHome, screenContext, askBoxActive =
   }
 
   return (
-    <div className="chat-page">
+    <div className={`chat-page ${themeClassName}`.trim()}>
       <header className="chat-hero">
         <div>
           <div className="chat-kicker">Pulse Ops Chat</div>
