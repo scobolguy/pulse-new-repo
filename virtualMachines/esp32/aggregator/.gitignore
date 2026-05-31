@@ -35,6 +35,7 @@ data/user-management.json
 data/process-governance.json
 data/worker-config.json
 data/worker-metrics.jsonl
+data/worker-metrics.jsonl.*
 data/workflow-context-accepted.json
 data/workflow-context-reject.json
 data/queue-manager.dsl.sample.json

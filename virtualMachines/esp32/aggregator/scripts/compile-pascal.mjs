@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { pathToFileURL } from 'url';
-import { Tokenizer as PL0Tokenizer, Parser as PL0Parser } from './pl0-interpreter.mjs';
+import { compilePascalishWithAntlr } from './pascalish-antlr-compiler.mjs';
 
 const KEYWORDS = new Set([
   'SERVICE',
@@ -24,6 +24,9 @@ const KEYWORDS = new Set([
   'USING',
   'TRUE',
   'FALSE',
+  'VAR',
+  'FROM',
+  'LIBRARIAN',
   'IF',
   'THEN',
   'ELSE',
@@ -549,24 +552,9 @@ class DSLParser {
   }
 }
 
-function validatePL0Snippet(snippet, location) {
-  try {
-    const tokenizer = new PL0Tokenizer(snippet);
-    const parser = new PL0Parser(tokenizer.tokens);
-    parser.parse();
-  } catch (error) {
-    throw new Error(`Invalid PL/0 snippet at ${location}: ${error.message}`);
-  }
-}
-
 function toRouterRules(ast) {
   const now = new Date().toISOString();
   return ast.routers.map(router => {
-    for (const out of router.outputs) {
-      validatePL0Snippet(out.whenRule, `ROUTER ${router.id} OUTPUT ${out.queueName} WHEN`);
-      validatePL0Snippet(out.transformRule, `ROUTER ${router.id} OUTPUT ${out.queueName} TRANSFORM`);
-    }
-
     return {
       id: router.id,
       name: router.id,
@@ -591,10 +579,6 @@ function toRouterRules(ast) {
 function toDataMappings(ast) {
   const now = new Date().toISOString();
   return ast.mappers.map(mapper => {
-    for (const item of mapper.maps) {
-      validatePL0Snippet(item.conversionRule, `MAPPER ${mapper.id} MAP ${item.sourcePath} TO ${item.targetPath}`);
-    }
-
     return {
       id: mapper.id,
       name: mapper.id,
@@ -636,9 +620,8 @@ function parseArgs(argv) {
 }
 
 export function compileRouterMapperDSL(sourceText) {
-  const tokenizer = new DSLTokenizer(sourceText);
-  const parser = new DSLParser(tokenizer.tokens);
-  const ast = parser.parseProgram();
+  const compiledAntlr = compilePascalishWithAntlr(sourceText);
+  const ast = compiledAntlr.ast;
   const routerRules = toRouterRules(ast);
   const dataMappings = toDataMappings(ast);
 
@@ -647,6 +630,7 @@ export function compileRouterMapperDSL(sourceText) {
     compiledAt: new Date().toISOString(),
     serviceId: ast.serviceId || 'default-router-service',
     ast,
+    variableDeclarations: compiledAntlr.variableDeclarations || ast.variables || [],
     routerRules,
     dataMappings
   };

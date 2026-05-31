@@ -28,7 +28,11 @@ function getRotatedGatewayCandidates() {
 window.fetch = async (input, init = {}) => {
   const nextInit = { ...init }
   const headers = new Headers(nextInit.headers || {})
-  const actorUserId = localStorage.getItem('pulse.actorUserId') || 'system-admin'
+  const actorUserId = localStorage.getItem('pulse.actorUserId') || 'anonymous'
+  const authToken = localStorage.getItem('pulse.authToken') || ''
+  if (authToken) {
+    headers.set('authorization', `Bearer ${authToken}`)
+  }
   headers.set('x-user-id', actorUserId)
   nextInit.headers = headers
 

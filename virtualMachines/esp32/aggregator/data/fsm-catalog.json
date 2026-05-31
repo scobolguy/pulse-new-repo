@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "updatedAt": "2026-05-30T00:00:00.000Z",
+  "fsms": [
+    {
+      "id": "startup-fsm",
+      "name": "Startup Workflow FSM",
+      "activeVersion": "v1",
+      "versions": {
+        "v1": {
+          "description": "Boot sequence orchestration for backend/frontend startup.",
+          "scriptPath": "scripts/startup-fsm-workflow.mjs",
+          "statusPath": "data/startup-fsm-status.json",
+          "notesPath": "data/startup-fsm-notes.jsonl",
+          "subflows": [
+            "kill-backend-processes",
+            "sanitize-queue-persistence",
+            "backend-health-check",
+            "frontend-health-check"
+          ]
+        }
+      }
+    },
+    {
+      "id": "web-bootstrap-fsm",
+      "name": "Web Bootstrap FSM",
+      "activeVersion": "v1",
+      "versions": {
+        "v1": {
+          "description": "Base FSM runner to bring up and validate the web page.",
+          "scriptPath": "scripts/web-bootstrap-fsm-workflow.mjs",
+          "statusPath": "data/web-bootstrap-fsm-status.json",
+          "notesPath": "data/web-bootstrap-fsm-notes.jsonl",
+          "subflows": [
+            "frontend-health-check",
+            "frontend-launch",
+            "frontend-wait-ready"
+          ]
+        }
+      }
+    }
+  ]
+}

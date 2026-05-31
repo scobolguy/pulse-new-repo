@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "compiledAt": "2026-05-28T13:56:34.265Z",
+  "compiledAt": "2026-05-29T17:26:51.328Z",
   "symbols": {
     "queues": [
       {
@@ -35,6 +35,78 @@
           "pain2"
         ],
         "dataTypeId": "pain2"
+      },
+      {
+        "symbol": "cacheNodeARead",
+        "queueName": "cache.node-a.read",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "dataTypeId": "cache-op"
+      },
+      {
+        "symbol": "cacheNodeAWrite",
+        "queueName": "cache.node-a.write",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "dataTypeId": "cache-op"
+      },
+      {
+        "symbol": "cacheNodeBRead",
+        "queueName": "cache.node-b.read",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "dataTypeId": "cache-op"
+      },
+      {
+        "symbol": "cacheNodeBWrite",
+        "queueName": "cache.node-b.write",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "dataTypeId": "cache-op"
+      },
+      {
+        "symbol": "cacheNodeCRead",
+        "queueName": "cache.node-c.read",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "dataTypeId": "cache-op"
+      },
+      {
+        "symbol": "cacheNodeCWrite",
+        "queueName": "cache.node-c.write",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "dataTypeId": "cache-op"
+      },
+      {
+        "symbol": "cacheReplicationA",
+        "queueName": "cache.replication.node-a",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "dataTypeId": "cache-op"
+      },
+      {
+        "symbol": "cacheReplicationB",
+        "queueName": "cache.replication.node-b",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "dataTypeId": "cache-op"
+      },
+      {
+        "symbol": "cacheReplicationC",
+        "queueName": "cache.replication.node-c",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "dataTypeId": "cache-op"
       }
     ],
     "files": [
@@ -275,6 +347,177 @@
           "action": "projectplan_add_resource",
           "itemStateKey": "resourceId",
           "planStateKey": "projectPlanId"
+        }
+      ]
+    },
+    {
+      "id": "cache-distributed-router",
+      "steps": [
+        {
+          "id": "check-aggregator",
+          "action": "check_api",
+          "apiSymbol": "aggregator",
+          "method": "GET",
+          "route": "/status",
+          "expectedStatus": 200,
+          "retries": 3,
+          "everyMs": 500
+        },
+        {
+          "id": "if-530",
+          "action": "if",
+          "condition": {
+            "field": "cache.operation",
+            "operator": "equals",
+            "value": "get"
+          },
+          "then": [
+            {
+              "id": "if-537",
+              "action": "if",
+              "condition": {
+                "field": "cache.targetNode",
+                "operator": "equals",
+                "value": "node-a"
+              },
+              "then": [
+                {
+                  "id": "route-get-node-a",
+                  "action": "route_queue",
+                  "queueRef": "cacheNodeARead"
+                }
+              ],
+              "else": [
+                {
+                  "id": "if-552",
+                  "action": "if",
+                  "condition": {
+                    "field": "cache.targetNode",
+                    "operator": "equals",
+                    "value": "node-b"
+                  },
+                  "then": [
+                    {
+                      "id": "route-get-node-b",
+                      "action": "route_queue",
+                      "queueRef": "cacheNodeBRead"
+                    }
+                  ],
+                  "else": [
+                    {
+                      "id": "route-get-node-c",
+                      "action": "route_queue",
+                      "queueRef": "cacheNodeCRead"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "else": [
+            {
+              "id": "if-583",
+              "action": "if",
+              "condition": {
+                "field": "cache.operation",
+                "operator": "equals",
+                "value": "put"
+              },
+              "then": [
+                {
+                  "id": "if-590",
+                  "action": "if",
+                  "condition": {
+                    "field": "cache.targetNode",
+                    "operator": "equals",
+                    "value": "node-a"
+                  },
+                  "then": [
+                    {
+                      "id": "route-put-node-a",
+                      "action": "route_queue",
+                      "queueRef": "cacheNodeAWrite"
+                    }
+                  ],
+                  "else": [
+                    {
+                      "id": "if-605",
+                      "action": "if",
+                      "condition": {
+                        "field": "cache.targetNode",
+                        "operator": "equals",
+                        "value": "node-b"
+                      },
+                      "then": [
+                        {
+                          "id": "route-put-node-b",
+                          "action": "route_queue",
+                          "queueRef": "cacheNodeBWrite"
+                        }
+                      ],
+                      "else": [
+                        {
+                          "id": "route-put-node-c",
+                          "action": "route_queue",
+                          "queueRef": "cacheNodeCWrite"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "replicate-to-node-a",
+                  "action": "route_queue",
+                  "queueRef": "cacheReplicationA"
+                },
+                {
+                  "id": "replicate-to-node-b",
+                  "action": "route_queue",
+                  "queueRef": "cacheReplicationB"
+                },
+                {
+                  "id": "replicate-to-node-c",
+                  "action": "route_queue",
+                  "queueRef": "cacheReplicationC"
+                }
+              ],
+              "else": [
+                {
+                  "id": "if-654",
+                  "action": "if",
+                  "condition": {
+                    "field": "cache.operation",
+                    "operator": "equals",
+                    "value": "invalidate"
+                  },
+                  "then": [
+                    {
+                      "id": "invalidate-node-a",
+                      "action": "route_queue",
+                      "queueRef": "cacheNodeAWrite"
+                    },
+                    {
+                      "id": "invalidate-node-b",
+                      "action": "route_queue",
+                      "queueRef": "cacheNodeBWrite"
+                    },
+                    {
+                      "id": "invalidate-node-c",
+                      "action": "route_queue",
+                      "queueRef": "cacheNodeCWrite"
+                    }
+                  ],
+                  "else": [
+                    {
+                      "id": "fallback-cache-read",
+                      "action": "route_queue",
+                      "queueRef": "cacheNodeARead"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
         }
       ]
     }

@@ -1,10 +1,11 @@
 {
   "version": 1,
-  "compiledAt": "2026-05-16T12:58:24.091Z",
+  "compiledAt": "2026-05-29T17:26:56.826Z",
   "serviceId": "aggregator-router-service",
   "ast": {
     "type": "Program",
     "serviceId": "aggregator-router-service",
+    "variables": [],
     "routers": [
       {
         "type": "RouterDecl",
@@ -19,16 +20,16 @@
             "queueName": "correspondent.pacs008.outbound",
             "dataTypeId": null,
             "dataTypeIds": null,
-            "whenRule": "BEGIN OUTPUT := 1; END",
-            "transformRule": "BEGIN OUTPUT := MAP (\"mt103-to-pacs\", src); END"
+            "whenRule": "BEGIN output := 1; END",
+            "transformRule": "BEGIN output := map (\"mt103-to-pacs\", src); END"
           },
           {
             "type": "OutputDecl",
             "queueName": "lynx.pacs009.outbound",
             "dataTypeId": null,
             "dataTypeIds": null,
-            "whenRule": "BEGIN OUTPUT := 1; END",
-            "transformRule": "BEGIN OUTPUT := MAP (\"pacs-to-lynx\", MAP (\"mt103-to-pacs\", src)); END"
+            "whenRule": "BEGIN output := 1; END",
+            "transformRule": "BEGIN output := map (\"pacs-to-lynx\", map (\"mt103-to-pacs\", src)); END"
           }
         ]
       },
@@ -53,7 +54,7 @@
             "queueName": "payments.mt103",
             "dataTypeId": null,
             "dataTypeIds": null,
-            "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
+            "whenRule": "IF startswith(upper(src), \\\"MT103\\\") THEN output := 1 ELSE output := 0;",
             "transformRule": "output := src;"
           },
           {
@@ -61,7 +62,7 @@
             "queueName": "payments.mt202",
             "dataTypeId": null,
             "dataTypeIds": null,
-            "whenRule": "IF startswith(upper(src), \"MT202\") THEN output := 1 ELSE output := 0;",
+            "whenRule": "IF startswith(upper(src), \\\"MT202\\\") THEN output := 1 ELSE output := 0;",
             "transformRule": "output := src;"
           }
         ]
@@ -79,8 +80,8 @@
             "queueName": "swift.mt103.parsed",
             "dataTypeId": null,
             "dataTypeIds": null,
-            "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
-            "transformRule": "BEGIN OUTPUT := src; END"
+            "whenRule": "IF startswith(upper(src), \\\"MT103\\\") THEN output := 1 ELSE output := 0;",
+            "transformRule": "BEGIN output := src; END"
           }
         ]
       },
@@ -133,8 +134,8 @@
             "queueName": "payments.mt202",
             "dataTypeId": null,
             "dataTypeIds": null,
-            "whenRule": "IF startswith(upper(src), \"MT202\") THEN output := 1 ELSE output := 0;",
-            "transformRule": "BEGIN OUTPUT := src; END"
+            "whenRule": "IF startswith(upper(src), \\\"MT202\\\") THEN output := 1 ELSE output := 0;",
+            "transformRule": "BEGIN output := src; END"
           }
         ]
       }
@@ -152,7 +153,7 @@
             "type": "MapDecl",
             "sourcePath": "block4.20",
             "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
-            "conversionRule": "BEGIN OUTPUT := trim (src); END"
+            "conversionRule": "BEGIN output := trim (src); END"
           },
           {
             "type": "MapDecl",
@@ -192,6 +193,7 @@
       }
     ]
   },
+  "variableDeclarations": [],
   "routerRules": [
     {
       "id": "mt103-correspondent-and-lynx-fanout",
@@ -203,17 +205,17 @@
       "outputs": [
         {
           "queueName": "correspondent.pacs008.outbound",
-          "whenRule": "BEGIN OUTPUT := 1; END",
-          "transformRule": "BEGIN OUTPUT := MAP (\"mt103-to-pacs\", src); END"
+          "whenRule": "BEGIN output := 1; END",
+          "transformRule": "BEGIN output := map (\"mt103-to-pacs\", src); END"
         },
         {
           "queueName": "lynx.pacs009.outbound",
-          "whenRule": "BEGIN OUTPUT := 1; END",
-          "transformRule": "BEGIN OUTPUT := MAP (\"pacs-to-lynx\", MAP (\"mt103-to-pacs\", src)); END"
+          "whenRule": "BEGIN output := 1; END",
+          "transformRule": "BEGIN output := map (\"pacs-to-lynx\", map (\"mt103-to-pacs\", src)); END"
         }
       ],
-      "createdAt": "2026-05-16T12:58:24.088Z",
-      "updatedAt": "2026-05-16T12:58:24.088Z"
+      "createdAt": "2026-05-29T17:26:56.825Z",
+      "updatedAt": "2026-05-29T17:26:56.825Z"
     },
     {
       "id": "swift-fanout-default",
@@ -230,17 +232,17 @@
         },
         {
           "queueName": "payments.mt103",
-          "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
+          "whenRule": "IF startswith(upper(src), \\\"MT103\\\") THEN output := 1 ELSE output := 0;",
           "transformRule": "output := src;"
         },
         {
           "queueName": "payments.mt202",
-          "whenRule": "IF startswith(upper(src), \"MT202\") THEN output := 1 ELSE output := 0;",
+          "whenRule": "IF startswith(upper(src), \\\"MT202\\\") THEN output := 1 ELSE output := 0;",
           "transformRule": "output := src;"
         }
       ],
-      "createdAt": "2026-05-16T12:58:24.088Z",
-      "updatedAt": "2026-05-16T12:58:24.088Z"
+      "createdAt": "2026-05-29T17:26:56.825Z",
+      "updatedAt": "2026-05-29T17:26:56.825Z"
     },
     {
       "id": "mt103-inbound-to-parsed",
@@ -252,12 +254,12 @@
       "outputs": [
         {
           "queueName": "swift.mt103.parsed",
-          "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
-          "transformRule": "BEGIN OUTPUT := src; END"
+          "whenRule": "IF startswith(upper(src), \\\"MT103\\\") THEN output := 1 ELSE output := 0;",
+          "transformRule": "BEGIN output := src; END"
         }
       ],
-      "createdAt": "2026-05-16T12:58:24.088Z",
-      "updatedAt": "2026-05-16T12:58:24.088Z"
+      "createdAt": "2026-05-29T17:26:56.825Z",
+      "updatedAt": "2026-05-29T17:26:56.825Z"
     },
     {
       "id": "ops-validation-deadletter-audit",
@@ -273,8 +275,8 @@
           "transformRule": "output := src;"
         }
       ],
-      "createdAt": "2026-05-16T12:58:24.088Z",
-      "updatedAt": "2026-05-16T12:58:24.088Z"
+      "createdAt": "2026-05-29T17:26:56.825Z",
+      "updatedAt": "2026-05-29T17:26:56.825Z"
     },
     {
       "id": "pacs-inbound-to-outbound",
@@ -290,8 +292,8 @@
           "transformRule": "output := src;"
         }
       ],
-      "createdAt": "2026-05-16T12:58:24.088Z",
-      "updatedAt": "2026-05-16T12:58:24.088Z"
+      "createdAt": "2026-05-29T17:26:56.825Z",
+      "updatedAt": "2026-05-29T17:26:56.825Z"
     },
     {
       "id": "mt202-inbound-routing",
@@ -303,12 +305,12 @@
       "outputs": [
         {
           "queueName": "payments.mt202",
-          "whenRule": "IF startswith(upper(src), \"MT202\") THEN output := 1 ELSE output := 0;",
-          "transformRule": "BEGIN OUTPUT := src; END"
+          "whenRule": "IF startswith(upper(src), \\\"MT202\\\") THEN output := 1 ELSE output := 0;",
+          "transformRule": "BEGIN output := src; END"
         }
       ],
-      "createdAt": "2026-05-16T12:58:24.088Z",
-      "updatedAt": "2026-05-16T12:58:24.088Z"
+      "createdAt": "2026-05-29T17:26:56.825Z",
+      "updatedAt": "2026-05-29T17:26:56.825Z"
     }
   ],
   "dataMappings": [
@@ -326,7 +328,7 @@
           "kind": "leaf",
           "sourceValueType": "unknown",
           "targetValueType": "unknown",
-          "conversionRule": "BEGIN OUTPUT := trim (src); END"
+          "conversionRule": "BEGIN output := trim (src); END"
         },
         {
           "sourcePath": "block4.32A.currency",
@@ -345,8 +347,8 @@
           "conversionRule": "output := mtamounttodecimal(src);"
         }
       ],
-      "createdAt": "2026-05-16T12:58:24.091Z",
-      "updatedAt": "2026-05-16T12:58:24.091Z"
+      "createdAt": "2026-05-29T17:26:56.826Z",
+      "updatedAt": "2026-05-29T17:26:56.826Z"
     },
     {
       "id": "pacs-to-lynx-mini",
@@ -373,8 +375,8 @@
           "conversionRule": "output := upper(src);"
         }
       ],
-      "createdAt": "2026-05-16T12:58:24.091Z",
-      "updatedAt": "2026-05-16T12:58:24.091Z"
+      "createdAt": "2026-05-29T17:26:56.826Z",
+      "updatedAt": "2026-05-29T17:26:56.826Z"
     }
   ]
 }

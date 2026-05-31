@@ -189,6 +189,7 @@ function emitPortableProgram(compiled) {
       version: 1,
       generatedAt: new Date().toISOString(),
       serviceId: compiled.serviceId,
+      variableDeclarations: Array.isArray(compiled.variableDeclarations) ? compiled.variableDeclarations : [],
       entryLabel: 'ENTRY',
       finishLabel: 'FINISH',
       instructionSubset: ['JMP', 'JZ', 'NOP', 'ROUTE_MATCH_QUEUE', 'ROUTE_EVAL_WHEN', 'ROUTE_TRANSFORM', 'ROUTE_EMIT', 'PARSE_FIN_TEXT', 'HALT'],

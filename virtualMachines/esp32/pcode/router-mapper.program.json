@@ -1,7 +1,8 @@
 {
   "version": 1,
-  "generatedAt": "2026-05-13T17:30:07.847Z",
+  "generatedAt": "2026-05-29T17:26:50.187Z",
   "serviceId": "aggregator-router-service",
+  "variableDeclarations": [],
   "entryLabel": "ENTRY",
   "finishLabel": "FINISH",
   "instructionSubset": [
@@ -26,15 +27,15 @@
           "queueName": "correspondent.pacs008.outbound",
           "dataTypeIds": [],
           "dataTypeId": null,
-          "whenRule": "BEGIN OUTPUT := 1; END",
-          "transformRule": "BEGIN OUTPUT := MAP (\"mt103-to-pacs\", src); END"
+          "whenRule": "BEGIN output := 1; END",
+          "transformRule": "BEGIN output := map (\"mt103-to-pacs\", src); END"
         },
         {
           "queueName": "lynx.pacs009.outbound",
           "dataTypeIds": [],
           "dataTypeId": null,
-          "whenRule": "BEGIN OUTPUT := 1; END",
-          "transformRule": "BEGIN OUTPUT := MAP (\"pacs-to-lynx\", MAP (\"mt103-to-pacs\", src)); END"
+          "whenRule": "BEGIN output := 1; END",
+          "transformRule": "BEGIN output := map (\"pacs-to-lynx\", map (\"mt103-to-pacs\", src)); END"
         }
       ]
     },
@@ -55,15 +56,75 @@
           "queueName": "payments.mt103",
           "dataTypeIds": [],
           "dataTypeId": null,
-          "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
+          "whenRule": "IF startswith(upper(src), \\\"MT103\\\") THEN output := 1 ELSE output := 0;",
           "transformRule": "output := src;"
         },
         {
           "queueName": "payments.mt202",
           "dataTypeIds": [],
           "dataTypeId": null,
-          "whenRule": "IF startswith(upper(src), \"MT202\") THEN output := 1 ELSE output := 0;",
+          "whenRule": "IF startswith(upper(src), \\\"MT202\\\") THEN output := 1 ELSE output := 0;",
           "transformRule": "output := src;"
+        }
+      ]
+    },
+    {
+      "kind": "router",
+      "id": "mt103-inbound-to-parsed",
+      "label": "ROUTER_2_MT103_INBOUND_TO_PARSED",
+      "inputQueue": "swift.mt103.inbound",
+      "outputs": [
+        {
+          "queueName": "swift.mt103.parsed",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "IF startswith(upper(src), \\\"MT103\\\") THEN output := 1 ELSE output := 0;",
+          "transformRule": "BEGIN output := src; END"
+        }
+      ]
+    },
+    {
+      "kind": "router",
+      "id": "ops-validation-deadletter-audit",
+      "label": "ROUTER_3_OPS_VALIDATION_DEADLETTER_AUDIT",
+      "inputQueue": "ops.validation.deadletter",
+      "outputs": [
+        {
+          "queueName": "audit.all",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "output := 1;",
+          "transformRule": "output := src;"
+        }
+      ]
+    },
+    {
+      "kind": "router",
+      "id": "pacs-inbound-to-outbound",
+      "label": "ROUTER_4_PACS_INBOUND_TO_OUTBOUND",
+      "inputQueue": "pacs.inbound",
+      "outputs": [
+        {
+          "queueName": "pacs.outbound",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "output := 1;",
+          "transformRule": "output := src;"
+        }
+      ]
+    },
+    {
+      "kind": "router",
+      "id": "mt202-inbound-routing",
+      "label": "ROUTER_5_MT202_INBOUND_ROUTING",
+      "inputQueue": "mt202.inbound",
+      "outputs": [
+        {
+          "queueName": "payments.mt202",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "IF startswith(upper(src), \\\"MT202\\\") THEN output := 1 ELSE output := 0;",
+          "transformRule": "BEGIN output := src; END"
         }
       ]
     },
@@ -78,7 +139,7 @@
         {
           "sourcePath": "block4.20",
           "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
-          "conversionRule": "BEGIN OUTPUT := trim (src); END"
+          "conversionRule": "BEGIN output := trim (src); END"
         },
         {
           "sourcePath": "block4.32A.currency",

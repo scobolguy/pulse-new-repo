@@ -1,0 +1,86 @@
+{
+  "ok": false,
+  "state": "FAILED",
+  "workflow": [
+    "INIT",
+    "CHECK_FRONTEND",
+    "START_FRONTEND",
+    "WAIT_FRONTEND"
+  ],
+  "logs": [
+    {
+      "at": "2026-05-30T23:30:15.238Z",
+      "event": "workflow-start",
+      "data": {
+        "fsmId": "web-bootstrap-fsm",
+        "frontendUrl": "http://127.0.0.1:5999/",
+        "statusPath": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\web-bootstrap-fsm-status.json"
+      }
+    },
+    {
+      "at": "2026-05-30T23:30:15.245Z",
+      "event": "subflow-enter",
+      "data": {
+        "subflow": "web-bootstrap-init"
+      }
+    },
+    {
+      "at": "2026-05-30T23:30:15.253Z",
+      "event": "state",
+      "data": {
+        "state": "CHECK_FRONTEND",
+        "subflow": "frontend-health-check",
+        "url": "http://127.0.0.1:5999/"
+      }
+    },
+    {
+      "at": "2026-05-30T23:30:15.369Z",
+      "event": "frontend-started",
+      "data": {
+        "command": "npm run dev -- --host 0.0.0.0 --port 5173 --strictPort",
+        "pid": 2656,
+        "subflow": "frontend-launch"
+      }
+    },
+    {
+      "at": "2026-05-30T23:30:15.375Z",
+      "event": "state",
+      "data": {
+        "state": "WAIT_FRONTEND",
+        "subflow": "frontend-wait-ready",
+        "url": "http://127.0.0.1:5999/",
+        "timeoutMs": 6000
+      }
+    },
+    {
+      "at": "2026-05-30T23:30:21.465Z",
+      "event": "timeout",
+      "data": {
+        "state": "WAIT_FRONTEND",
+        "url": "http://127.0.0.1:5999/",
+        "timeoutMs": 6000,
+        "reason": "Frontend did not become healthy before timeout"
+      }
+    },
+    {
+      "at": "2026-05-30T23:30:21.475Z",
+      "event": "failed",
+      "data": {
+        "ok": false,
+        "state": "FAILED",
+        "workflow": [
+          "INIT",
+          "CHECK_FRONTEND",
+          "START_FRONTEND",
+          "WAIT_FRONTEND"
+        ],
+        "error": "Web bootstrap FSM failed to reach READY state",
+        "fsmId": "web-bootstrap-fsm"
+      }
+    }
+  ],
+  "updatedAt": "2026-05-30T23:30:21.486Z",
+  "frontendUrl": "http://127.0.0.1:5173/",
+  "fsmId": "web-bootstrap-fsm",
+  "error": "Web bootstrap FSM failed to reach READY state"
+}

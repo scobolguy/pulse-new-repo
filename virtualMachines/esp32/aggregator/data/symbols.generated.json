@@ -32,6 +32,78 @@
         "pain2"
       ],
       "dataTypeId": "pain2"
+    },
+    {
+      "symbol": "cacheNodeARead",
+      "queueName": "cache.node-a.read",
+      "dataTypeIds": [
+        "cache-op"
+      ],
+      "dataTypeId": "cache-op"
+    },
+    {
+      "symbol": "cacheNodeAWrite",
+      "queueName": "cache.node-a.write",
+      "dataTypeIds": [
+        "cache-op"
+      ],
+      "dataTypeId": "cache-op"
+    },
+    {
+      "symbol": "cacheNodeBRead",
+      "queueName": "cache.node-b.read",
+      "dataTypeIds": [
+        "cache-op"
+      ],
+      "dataTypeId": "cache-op"
+    },
+    {
+      "symbol": "cacheNodeBWrite",
+      "queueName": "cache.node-b.write",
+      "dataTypeIds": [
+        "cache-op"
+      ],
+      "dataTypeId": "cache-op"
+    },
+    {
+      "symbol": "cacheNodeCRead",
+      "queueName": "cache.node-c.read",
+      "dataTypeIds": [
+        "cache-op"
+      ],
+      "dataTypeId": "cache-op"
+    },
+    {
+      "symbol": "cacheNodeCWrite",
+      "queueName": "cache.node-c.write",
+      "dataTypeIds": [
+        "cache-op"
+      ],
+      "dataTypeId": "cache-op"
+    },
+    {
+      "symbol": "cacheReplicationA",
+      "queueName": "cache.replication.node-a",
+      "dataTypeIds": [
+        "cache-op"
+      ],
+      "dataTypeId": "cache-op"
+    },
+    {
+      "symbol": "cacheReplicationB",
+      "queueName": "cache.replication.node-b",
+      "dataTypeIds": [
+        "cache-op"
+      ],
+      "dataTypeId": "cache-op"
+    },
+    {
+      "symbol": "cacheReplicationC",
+      "queueName": "cache.replication.node-c",
+      "dataTypeIds": [
+        "cache-op"
+      ],
+      "dataTypeId": "cache-op"
     }
   ],
   "files": [

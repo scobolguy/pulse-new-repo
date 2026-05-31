@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { pathToFileURL } from 'url';
+import { compileWorkflowDSLWithAntlr } from './workflow-antlr-compiler.mjs';
 
 function parseQuoted(value) {
   const s = String(value || '').trim();
@@ -597,15 +598,7 @@ export function parseWorkflowDSL(sourceText) {
 }
 
 export function compileWorkflowDSL(sourceText) {
-  const parsed = parseWorkflowDSL(sourceText);
-  const compiledAt = new Date().toISOString();
-
-  return {
-    version: 4,
-    compiledAt,
-    symbols: parsed.symbols,
-    workflows: parsed.workflows
-  };
+  return compileWorkflowDSLWithAntlr(sourceText);
 }
 
 function parseArgs(argv) {

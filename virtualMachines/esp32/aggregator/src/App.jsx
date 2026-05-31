@@ -1,8 +1,9 @@
 import './App.css';
-import TopologyDashboard from './TopologyDashboard';
 import QueueManagerDashboard from './QueueManagerDashboard';
 import DataLibrarian from './DataLibrarian';
 import DataMapper from './DataMapper';
+import PascalishEditor from './PascalishEditor';
+import DevelopWorkspace from './DevelopWorkspace';
 import TransactionLifecycleDashboard from './TransactionLifecycleDashboard';
 import SwiftGatewayDashboard from './SwiftGatewayDashboard';
 import BocGatewayDashboard from './BocGatewayDashboard';
@@ -12,6 +13,7 @@ import UserInProfileDashboard from './UserInProfileDashboard';
 import FlowTargetsDashboard from './FlowTargetsDashboard';
 import ChatPage from './ChatPage';
 import ArtifactWorkbench from './ArtifactWorkbench.jsx';
+import StartupFsmMonitor from './StartupFsmMonitor';
 import compiledWorkflowArtifacts from '../data/workflows.generated.json';
 import workflowSourceArtifact from '../data/workflow.wfl?raw';
 import dataMappingsArtifact from '../data/data-mappings.json';
@@ -115,6 +117,7 @@ const USER_ADMIN_TASKS = [
 ];
 
 const OPERATIONS_TASKS = [
+  { id: 'fsm-runner', label: 'FSM Runner' },
   { id: 'monitor', label: 'Monitor' },
   { id: 'deploy', label: 'Deploy' },
   { id: 'manage', label: 'Manage' }
@@ -122,6 +125,8 @@ const OPERATIONS_TASKS = [
 
 const USER_ADMIN_ACTIONS = ['add', 'delete', 'update'];
 const LOGIN_SECTION_VISIBLE_LIMIT = 6;
+const FIXED_LOGIN_USER_ID = 'system-admin';
+const FIXED_LOGIN_PASSWORD = 'pulse123';
 const LANGUAGE_OPTIONS = [
   { value: 'en-US', label: 'English' },
   { value: 'fr-CA', label: 'French' },
@@ -729,8 +734,9 @@ function resolveFlowDefinition(flow) {
 }
 
 function App() {
-  const [actorUserId, setActorUserId] = useState(localStorage.getItem('pulse.actorUserId') || 'system-admin');
-  const [loginUserId, setLoginUserId] = useState(localStorage.getItem('pulse.actorUserId') || 'system-admin');
+  const [actorUserId, setActorUserId] = useState(localStorage.getItem('pulse.actorUserId') || 'anonymous');
+  const [loginUserId, setLoginUserId] = useState(FIXED_LOGIN_USER_ID);
+  const [loginPassword, setLoginPassword] = useState(FIXED_LOGIN_PASSWORD);
   const [language, setLanguage] = useState(localStorage.getItem('pulse.language') || 'en-US');
   const [windowStyle, setWindowStyle] = useState(() => {
     const stored = localStorage.getItem('pulse.windowStyle') || 'rube-goldberg';
@@ -747,6 +753,8 @@ function App() {
   const [monitorClasses, setMonitorClasses] = useState([]);
   const [monitorClassId, setMonitorClassId] = useState('transaction-flows');
   const [userAdminTask, setUserAdminTask] = useState('user');
+  const [dataLibrarianTask, setDataLibrarianTask] = useState('data-shapes');
+  const [developCreateRequest, setDevelopCreateRequest] = useState(null);
   const [userAdminAction, setUserAdminAction] = useState('update');
   const [taskContextMenu, setTaskContextMenu] = useState({ open: false, x: 0, y: 0, taskId: null });
   const [workflowCards, setWorkflowCards] = useState(DEFAULT_WORKFLOW_CARDS);
@@ -785,6 +793,8 @@ function App() {
   const [messageLayouts, setMessageLayouts] = useState([]);
   const [flowDiagramSvg, setFlowDiagramSvg] = useState('');
   const [flowDiagramError, setFlowDiagramError] = useState('');
+  const [runnableFsms, setRunnableFsms] = useState([]);
+  const [selectedFsmId, setSelectedFsmId] = useState('startup-fsm');
   const [mermaidSsePhase, setMermaidSsePhase] = useState(0);
   const [mermaidSseConnected, setMermaidSseConnected] = useState(false);
   const [selectedFlowTransitionId, setSelectedFlowTransitionId] = useState(null);
@@ -1456,16 +1466,49 @@ function App() {
     setRhsWidth((current) => clampRhsWidth(current + delta));
   }
 
-  function handleLogin() {
+  async function handleLogin() {
     const nextUserId = String(loginUserId || '').trim();
-    if (!nextUserId) return;
-    setActorUserId(nextUserId);
-    setAuthzError('');
+    const nextPassword = String(loginPassword || '');
+    if (!nextUserId || !nextPassword) {
+      setAuthzError('Enter user ID and password.');
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ userId: nextUserId, password: nextPassword })
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.error || `Login failed (${response.status})`);
+      }
+
+      if (payload?.token) {
+        localStorage.setItem('pulse.authToken', String(payload.token));
+      }
+      setActorUserId(String(payload?.actor?.userId || nextUserId));
+      setLoginPassword(FIXED_LOGIN_PASSWORD);
+      setAuthzError('');
+    } catch (e) {
+      setAuthzError(e?.message || String(e));
+    }
   }
 
-  function handleLogout() {
+  async function handleLogout() {
+    const token = localStorage.getItem('pulse.authToken') || '';
+    if (token) {
+      try {
+        await fetch('/api/auth/logout', { method: 'POST' });
+      } catch {
+        // no-op
+      }
+    }
+    localStorage.removeItem('pulse.authToken');
     setActorUserId('anonymous');
-    setLoginUserId('');
+    setLoginUserId(FIXED_LOGIN_USER_ID);
+    setLoginPassword(FIXED_LOGIN_PASSWORD);
     localStorage.setItem('pulse.actorUserId', 'anonymous');
     setAuthz({ actor: null, profiles: [], permissions: [] });
     setAuthzError('Logged out');
@@ -1484,6 +1527,34 @@ function App() {
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function refreshRunnableFsms() {
+      try {
+        const response = await fetch('/api/fsm/runnable');
+        const payload = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        const items = Array.isArray(payload?.items) ? payload.items : [];
+        setRunnableFsms(items);
+        if (!items.some((item) => String(item?.id || '') === selectedFsmId)) {
+          const fallbackId = String(items[0]?.id || 'startup-fsm');
+          setSelectedFsmId(fallbackId);
+        }
+      } catch {
+        if (cancelled) return;
+        setRunnableFsms([]);
+      }
+    }
+
+    refreshRunnableFsms();
+    const timer = setInterval(refreshRunnableFsms, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [selectedFsmId]);
 
   useEffect(() => {
     localStorage.setItem('pulse.actorUserId', actorUserId);
@@ -2088,6 +2159,7 @@ function App() {
   const serverRunningCount = visibleServers.filter((item) => item.status === 'online').length;
   const activeFlowCount = visibleFlows.filter((item) => item.runtimeStatus === 'running').length;
   const serviceRunningCount = visibleServices.filter((item) => item.status === 'online').length;
+  const availableRunnableFsms = runnableFsms.filter((item) => item?.canRun !== false);
   const languageKey = getLanguageKey(language);
   const copy = LANGUAGE_COPY[languageKey] || LANGUAGE_COPY.en;
   const publicArtifacts = useMemo(
@@ -2130,6 +2202,12 @@ function App() {
     setTaskContextMenu(prev => ({ ...prev, open: false }));
   }
 
+  function openFsmRunner(fsmId) {
+    setArea('operations');
+    setOperationsTask('fsm-runner');
+    setSelectedFsmId(String(fsmId || 'startup-fsm'));
+  }
+
   function handleAreaIconContextMenu(event, areaId) {
     event.preventDefault();
     setArea(areaId);
@@ -2151,6 +2229,9 @@ function App() {
     }
 
     if (area === 'operations') {
+      if (operationsTask === 'fsm-runner') {
+        return <StartupFsmMonitor fsmId={selectedFsmId} />;
+      }
       if (operationsTask === 'monitor') {
         return renderMonitorContent(monitorClassId);
       }
@@ -2173,8 +2254,20 @@ function App() {
       return renderMonitorContent(monitorClassId);
     }
     if (area === 'analyze') return <DataMapper />;
-    if (area === 'data-librarian') return <DataLibrarian />;
-    if (area === 'develop') return <TopologyDashboard permissions={authz.permissions || []} />;
+    if (area === 'data-librarian') {
+      if (dataLibrarianTask === 'pascalish-editor') {
+        return <PascalishEditor />;
+      }
+      return <DataLibrarian />;
+    }
+    if (area === 'develop') {
+      return (
+        <DevelopWorkspace
+          createRequest={developCreateRequest}
+          onCreateRequestHandled={() => setDevelopCreateRequest(null)}
+        />
+      );
+    }
     if (area === 'test') return <TransactionLifecycleDashboard />;
     if (area === 'deploy') {
       return (
@@ -2254,19 +2347,34 @@ function App() {
           <input
             className="utility-input"
             value={loginUserId}
-            onChange={(event) => setLoginUserId(event.target.value)}
+            readOnly
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
                 event.preventDefault();
                 handleLogin();
               }
             }}
-            placeholder="user id"
+            placeholder={FIXED_LOGIN_USER_ID}
             aria-label="User ID"
+          />
+          <input
+            className="utility-input"
+            type="password"
+            value={loginPassword}
+            readOnly
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                handleLogin();
+              }
+            }}
+            placeholder="fixed password"
+            aria-label="Password"
           />
           <button className="utility-button" type="button" onClick={handleLogin}>Login</button>
           <button className="utility-button utility-button--warn" type="button" onClick={handleLogout}>Logout</button>
         </div>
+        {authzError ? <div className="utility-chip" role="status">{authzError}</div> : null}
       </header>
 
       <aside className="lhs-sidebar">
@@ -2392,10 +2500,50 @@ function App() {
                   {item.id === 'data-librarian' && (
                     <div className="admin-subtasks" aria-label="Data Librarian Views">
                       <button
-                        className={`admin-subtask-item ${area === 'data-librarian' ? 'is-active' : ''}`}
-                        onClick={() => setArea('data-librarian')}
+                        className={`admin-subtask-item ${area === 'data-librarian' && dataLibrarianTask === 'data-shapes' ? 'is-active' : ''}`}
+                        onClick={() => {
+                          setArea('data-librarian');
+                          setDataLibrarianTask('data-shapes');
+                        }}
                       >
                         Data Shape Definition
+                      </button>
+                      <button
+                        className={`admin-subtask-item ${area === 'data-librarian' && dataLibrarianTask === 'pascalish-editor' ? 'is-active' : ''}`}
+                        onClick={() => {
+                          setArea('data-librarian');
+                          setDataLibrarianTask('pascalish-editor');
+                        }}
+                      >
+                        Pascalish Editor
+                      </button>
+                    </div>
+                  )}
+                  {item.id === 'develop' && (
+                    <div className="admin-subtasks" aria-label="Develop Files">
+                      <button
+                        className={`admin-subtask-item ${area === 'develop' ? 'is-active' : ''}`}
+                        onClick={() => setArea('develop')}
+                      >
+                        Files
+                      </button>
+                      <button
+                        className="admin-subtask-item"
+                        onClick={() => {
+                          setArea('develop');
+                          setDevelopCreateRequest({ typeId: 'pascalish', name: 'pascalish-test.pas', nonce: Date.now() });
+                        }}
+                      >
+                        New Pascalish Program
+                      </button>
+                      <button
+                        className="admin-subtask-item"
+                        onClick={() => {
+                          setArea('develop');
+                          setDevelopCreateRequest({ typeId: 'workflow', name: 'workflow-test.wfl', nonce: Date.now() });
+                        }}
+                      >
+                        New WFL Program
                       </button>
                     </div>
                   )}
@@ -2437,159 +2585,25 @@ function App() {
               <div className="login-mini-sections">
                 <section className="login-mini-section">
                   <header>
-                    <h3>{copy.pmachineTopology}</h3>
-                    <span className="login-mini-toggle">{pmachineNodeCount} {copy.pmachineCountLabel}</span>
+                    <h3>Runnable FSMs</h3>
+                    <span className="login-mini-toggle">{availableRunnableFsms.length}</span>
                   </header>
                   <div className="login-mini-grid">
-                    <article
-                      className="login-mini-card is-workflow"
-                      onClick={() => setArea('develop')}
-                      title={copy.openTopology}
-                    >
-                      <div className="login-mini-badge">{pmachineNodeCount}</div>
-                      <strong>{copy.openTopology}</strong>
-                      <div className="login-mini-row"><span>Type</span><b>Network</b></div>
-                      <div className="login-mini-row"><span>Area</span><b>Develop</b></div>
-                    </article>
-                  </div>
-                </section>
-
-                <section className="login-mini-section">
-                  <header>
-                    <h3>{copy.flows}</h3>
-                    <div className="login-mini-header-actions">
-                      <span className="login-mini-toggle">{activeFlowCount}/{visibleFlows.length}</span>
-                      {!collapsedSections.flows && visibleFlows.length > LOGIN_SECTION_VISIBLE_LIMIT && (
-                        <button
-                          type="button"
-                          className="login-mini-toggle"
-                          onClick={() => toggleSectionExpansion('flows')}
-                        >
-                          {expandedSections.flows
-                            ? copy.showLess
-                            : `${copy.showAll} (${visibleFlows.length - LOGIN_SECTION_VISIBLE_LIMIT})`}
-                        </button>
-                      )}
-                    </div>
-                  </header>
-                  <div className={`login-mini-grid${collapsedSections.flows ? ' is-collapsed' : ''}`}>
-                    {(expandedSections.flows ? visibleFlows : visibleFlows.slice(0, LOGIN_SECTION_VISIBLE_LIMIT)).length === 0 ? <div className="login-mini-empty">{copy.noItems}</div> : (expandedSections.flows ? visibleFlows : visibleFlows.slice(0, LOGIN_SECTION_VISIBLE_LIMIT)).map((flow) => {
-                      const runningWell = flow.runtimeStatus === 'running' && !['breach', 'critical'].includes(flow.throughputStatus) && !['critical'].includes(flow.policyStatus);
-                      const currentState = flow.runtimeStatus === 'idle' ? copy.stateIdle : getFlowStatusLabel(flow.throughputStatus);
+                    {availableRunnableFsms.length === 0 ? (
+                      <div className="login-mini-empty">No runnable FSMs are currently available.</div>
+                    ) : availableRunnableFsms.map((fsm) => {
+                      const currentState = String(fsm?.state || 'idle');
                       return (
                         <article
-                          key={flow.id}
-                          className={`login-mini-card is-${flow.throughputStatus}`}
-                          style={getFlowBeltAnimationStyle(flow)}
-                          onContextMenu={(event) => openCardContextMenu(event, 'flow', flow)}
-                          title="Right click for actions"
-                        >
-                          <div className="login-mini-badge">{flow.transactionCount}</div>
-                          <strong>{getCardDisplayName('flow', flow, flow.name)}</strong>
-                          <div className="login-mini-row"><span>{copy.runningWell}</span><b>{runningWell ? copy.yes : copy.no}</b></div>
-                          <div className="login-mini-row"><span>{copy.currentState}</span><b>{currentState}</b></div>
-                        </article>
-                      );
-                    })}
-                  </div>
-                </section>
-
-                <section className="login-mini-section">
-                  <header>
-                    <h3>{copy.services}</h3>
-                    <div className="login-mini-header-actions">
-                      <span className="login-mini-toggle">{serviceRunningCount}/{visibleServices.length}</span>
-                      {!collapsedSections.services && visibleServices.length > LOGIN_SECTION_VISIBLE_LIMIT && (
-                        <button
-                          type="button"
-                          className="login-mini-toggle"
-                          onClick={() => toggleSectionExpansion('services')}
-                        >
-                          {expandedSections.services
-                            ? copy.showLess
-                            : `${copy.showAll} (${visibleServices.length - LOGIN_SECTION_VISIBLE_LIMIT})`}
-                        </button>
-                      )}
-                    </div>
-                  </header>
-                  <div className={`login-mini-grid${collapsedSections.services ? ' is-collapsed' : ''}`}>
-                    {(expandedSections.services ? visibleServices : visibleServices.slice(0, LOGIN_SECTION_VISIBLE_LIMIT)).length === 0 ? <div className="login-mini-empty">{copy.noItems}</div> : (expandedSections.services ? visibleServices : visibleServices.slice(0, LOGIN_SECTION_VISIBLE_LIMIT)).map((service) => {
-                      const runningWell = service.status === 'online';
-                      const currentState = service.status === 'online' ? copy.stateRunning : service.status === 'paused' ? copy.statePaused : copy.stateOffline;
-                      return (
-                        <article
-                          key={service.id}
-                          className={`login-mini-card is-${service.status}`}
-                          onContextMenu={(event) => openCardContextMenu(event, 'service', service)}
-                          title="Right click for actions"
-                        >
-                          <strong>{getCardDisplayName('service', service, service.name)}</strong>
-                          <div className="login-mini-row"><span>{copy.runningWell}</span><b>{runningWell ? copy.yes : copy.no}</b></div>
-                          <div className="login-mini-row"><span>{copy.currentState}</span><b>{currentState}</b></div>
-                        </article>
-                      );
-                    })}
-                  </div>
-                </section>
-
-                <section className="login-mini-section">
-                  <header>
-                    <h3>{copy.servers}</h3>
-                    <div className="login-mini-header-actions">
-                      <span className="login-mini-toggle">{serverRunningCount}/{visibleServers.length}</span>
-                      {!collapsedSections.servers && visibleServers.length > LOGIN_SECTION_VISIBLE_LIMIT && (
-                        <button
-                          type="button"
-                          className="login-mini-toggle"
-                          onClick={() => toggleSectionExpansion('servers')}
-                        >
-                          {expandedSections.servers
-                            ? copy.showLess
-                            : `${copy.showAll} (${visibleServers.length - LOGIN_SECTION_VISIBLE_LIMIT})`}
-                        </button>
-                      )}
-                    </div>
-                  </header>
-                  <div className={`login-mini-grid${collapsedSections.servers ? ' is-collapsed' : ''}`}>
-                    {(expandedSections.servers ? visibleServers : visibleServers.slice(0, LOGIN_SECTION_VISIBLE_LIMIT)).length === 0 ? <div className="login-mini-empty">{copy.noItems}</div> : (expandedSections.servers ? visibleServers : visibleServers.slice(0, LOGIN_SECTION_VISIBLE_LIMIT)).map((server) => {
-                      const runningWell = server.status === 'online';
-                      const currentState = server.status === 'online' ? copy.stateRunning : server.status === 'paused' ? copy.statePaused : copy.stateOffline;
-                      return (
-                        <article
-                          key={server.id}
-                          className={`login-mini-card is-${server.status}`}
-                          onContextMenu={(event) => openCardContextMenu(event, 'server', server)}
-                          title="Right click for actions"
-                        >
-                          <strong>{getCardDisplayName('server', server, server.name)}</strong>
-                          <div className="login-mini-row"><span>{copy.runningWell}</span><b>{runningWell ? copy.yes : copy.no}</b></div>
-                          <div className="login-mini-row"><span>{copy.currentState}</span><b>{currentState}</b></div>
-                        </article>
-                      );
-                    })}
-                  </div>
-                </section>
-
-                <section className="login-mini-section">
-                  <header>
-                    <h3>{copy.tasks}</h3>
-                    <span className="login-mini-toggle">{workflowCards.length}</span>
-                  </header>
-                  <div className="login-mini-grid">
-                    {workflowCards.length === 0 ? <div className="login-mini-empty">{copy.noItems}</div> : workflowCards.map((workflow) => {
-                      const stepLabel = `${workflow.stepCount || 0} steps`;
-                      return (
-                        <article
-                          key={workflow.id}
+                          key={String(fsm.id)}
                           className="login-mini-card is-workflow"
-                          onClick={() => openCardPreview('workflow', workflow)}
-                          onContextMenu={(event) => openCardContextMenu(event, 'workflow', workflow)}
-                          title="Open workflow diagram"
+                          onClick={() => openFsmRunner(fsm.id)}
+                          title="Open FSM runner"
                         >
-                          <div className="login-mini-badge">{workflow.stepCount || 0}</div>
-                          <strong>{getCardDisplayName('workflow', workflow, workflow.name)}</strong>
-                          <div className="login-mini-row"><span>Type</span><b>Workflow</b></div>
-                          <div className="login-mini-row"><span>Steps</span><b>{stepLabel}</b></div>
+                          <div className="login-mini-badge">FSM</div>
+                          <strong>{String(fsm.name || fsm.id || 'FSM')}</strong>
+                          <div className="login-mini-row"><span>State</span><b>{currentState}</b></div>
+                          <div className="login-mini-row"><span>Action</span><b>Run</b></div>
                         </article>
                       );
                     })}

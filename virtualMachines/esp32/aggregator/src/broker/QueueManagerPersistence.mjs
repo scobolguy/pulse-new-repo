@@ -24,6 +24,7 @@ export class QueueManagerPersistence {
     this.operationsPath = path.join(this.basePath, 'operations.jsonl');
     this.snapshotPath = path.join(this.basePath, 'state.snapshot.json');
     this.messagesRoot = path.join(this.basePath, 'messages');
+    this.quarantineRoot = path.join(this.basePath, 'quarantine');
     this.maxSeq = (1n << 64n) - 1n;
     this.seqPadWidth = String(this.maxSeq).length;
     this.counterCache = new Map();
@@ -36,6 +37,30 @@ export class QueueManagerPersistence {
     }
     if (!fs.existsSync(this.messagesRoot)) {
       fs.mkdirSync(this.messagesRoot, { recursive: true });
+    }
+    if (!fs.existsSync(this.quarantineRoot)) {
+      fs.mkdirSync(this.quarantineRoot, { recursive: true });
+    }
+  }
+
+  quarantineCorruptFile(filePath, reason = 'invalid-json') {
+    try {
+      if (!filePath || !fs.existsSync(filePath)) return null;
+      const quarantineDir = path.join(this.quarantineRoot, reason);
+      if (!fs.existsSync(quarantineDir)) {
+        fs.mkdirSync(quarantineDir, { recursive: true });
+      }
+
+      const baseName = path.basename(filePath);
+      const targetPath = path.join(
+        quarantineDir,
+        `${Date.now()}-${process.pid}-${baseName}`
+      );
+      fs.renameSync(filePath, targetPath);
+      return targetPath;
+    } catch (error) {
+      console.error(`[QueueManagerPersistence] Failed to quarantine ${filePath}:`, error?.message || String(error));
+      return null;
     }
   }
 
@@ -154,6 +179,10 @@ export class QueueManagerPersistence {
         };
       } catch (e) {
         console.error(`Error loading order counter for ${this.queueManagerName}/${queueName}:`, e.message);
+        const quarantinedPath = this.quarantineCorruptFile(counterPath, 'order-counter-invalid-json');
+        if (quarantinedPath) {
+          console.warn(`[QueueManagerPersistence] Quarantined corrupt order counter to ${quarantinedPath}`);
+        }
       }
     }
 
@@ -261,6 +290,10 @@ export class QueueManagerPersistence {
         });
       } catch (e) {
         console.error(`Error loading persisted message ${filePath}:`, e.message);
+        const quarantinedPath = this.quarantineCorruptFile(filePath, 'message-invalid-json');
+        if (quarantinedPath) {
+          console.warn(`[QueueManagerPersistence] Quarantined corrupt message file to ${quarantinedPath}`);
+        }
       }
     }
 

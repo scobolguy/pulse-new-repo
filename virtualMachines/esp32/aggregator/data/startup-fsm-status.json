@@ -1,0 +1,352 @@
+{
+  "ok": false,
+  "state": "FAILED",
+  "workflow": [
+    "INIT",
+    "KILL_BACKEND_PROCESSES",
+    "SANITIZE_QUEUE_PERSISTENCE",
+    "CHECK_BACKEND",
+    "START_BACKEND",
+    "WAIT_BACKEND",
+    "START_BACKEND",
+    "WAIT_BACKEND",
+    "CHECK_FRONTEND",
+    "START_FRONTEND",
+    "WAIT_FRONTEND",
+    "START_FRONTEND",
+    "WAIT_FRONTEND",
+    "START_FRONTEND",
+    "WAIT_FRONTEND"
+  ],
+  "logs": [
+    {
+      "at": "2026-05-31T00:10:59.476Z",
+      "event": "workflow-start",
+      "data": {
+        "backendUrl": "http://127.0.0.1:4000/api/develop/files",
+        "frontendUrl": "http://127.0.0.1:5173/",
+        "statusPath": "c:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\startup-fsm-status.json"
+      }
+    },
+    {
+      "at": "2026-05-31T00:10:59.484Z",
+      "event": "state",
+      "data": {
+        "state": "INIT"
+      }
+    },
+    {
+      "at": "2026-05-31T00:10:59.489Z",
+      "event": "state",
+      "data": {
+        "state": "KILL_BACKEND_PROCESSES",
+        "subflow": "Kill all back end processes",
+        "backendPort": 4000
+      }
+    },
+    {
+      "at": "2026-05-31T00:10:59.519Z",
+      "event": "subflow-complete",
+      "data": {
+        "subflow": "Kill all back end processes",
+        "port": 4000,
+        "pids": [],
+        "results": [],
+        "killedCount": 0
+      }
+    },
+    {
+      "at": "2026-05-31T00:10:59.524Z",
+      "event": "state",
+      "data": {
+        "state": "SANITIZE_QUEUE_PERSISTENCE",
+        "subflow": "Sanitize queue persistence files"
+      }
+    },
+    {
+      "at": "2026-05-31T00:10:59.811Z",
+      "event": "subflow-complete",
+      "data": {
+        "subflow": "Sanitize queue persistence files",
+        "queueManagers": 14,
+        "quarantinedMessageFiles": 0,
+        "quarantinedCounterFiles": 0,
+        "sanitizedOperationLogs": 0,
+        "skippedOperationLogs": 0,
+        "droppedOperationLines": 0,
+        "scannedMessageFiles": 500,
+        "capped": true,
+        "details": [
+          {
+            "queueManager": "qm-envelope-smoke",
+            "quarantinedMessageFiles": 0,
+            "quarantinedCounterFiles": 0,
+            "sanitizedOperationLogs": 0,
+            "droppedOperationLines": 0
+          },
+          {
+            "queueManager": "qm-file-order-smoke",
+            "quarantinedMessageFiles": 0,
+            "quarantinedCounterFiles": 0,
+            "sanitizedOperationLogs": 0,
+            "droppedOperationLines": 0
+          },
+          {
+            "queueManager": "qm-local-2",
+            "quarantinedMessageFiles": 0,
+            "quarantinedCounterFiles": 0,
+            "sanitizedOperationLogs": 0,
+            "droppedOperationLines": 0
+          },
+          {
+            "queueManager": "qm-local-4101",
+            "quarantinedMessageFiles": 0,
+            "quarantinedCounterFiles": 0,
+            "sanitizedOperationLogs": 0,
+            "droppedOperationLines": 0
+          },
+          {
+            "queueManager": "qm-local-4101xxxxxx",
+            "quarantinedMessageFiles": 0,
+            "quarantinedCounterFiles": 0,
+            "sanitizedOperationLogs": 0,
+            "droppedOperationLines": 0
+          },
+          {
+            "queueManager": "qm-persist-smoke",
+            "quarantinedMessageFiles": 0,
+            "quarantinedCounterFiles": 0,
+            "sanitizedOperationLogs": 0,
+            "droppedOperationLines": 0
+          },
+          {
+            "queueManager": "qm-primary",
+            "quarantinedMessageFiles": 0,
+            "quarantinedCounterFiles": 0,
+            "sanitizedOperationLogs": 0,
+            "droppedOperationLines": 0
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-05-31T00:10:59.814Z",
+      "event": "state",
+      "data": {
+        "state": "CHECK_BACKEND",
+        "url": "http://127.0.0.1:4000/api/develop/files"
+      }
+    },
+    {
+      "at": "2026-05-31T00:10:59.875Z",
+      "event": "backend-started",
+      "data": {
+        "command": "npm run dev:backend",
+        "pid": 15404,
+        "attempt": 1
+      }
+    },
+    {
+      "at": "2026-05-31T00:10:59.879Z",
+      "event": "state",
+      "data": {
+        "state": "WAIT_BACKEND",
+        "url": "http://127.0.0.1:4000/api/develop/files",
+        "timeoutMs": 36000,
+        "attempt": 1
+      }
+    },
+    {
+      "at": "2026-05-31T00:11:36.143Z",
+      "event": "timeout",
+      "data": {
+        "state": "WAIT_BACKEND",
+        "url": "http://127.0.0.1:4000/api/develop/files",
+        "timeoutMs": 36000,
+        "attempt": 1,
+        "error": "Not responding in reasonable amount of time"
+      }
+    },
+    {
+      "at": "2026-05-31T00:11:36.148Z",
+      "event": "retry-scheduled",
+      "data": {
+        "state": "WAIT_BACKEND",
+        "nextState": "START_BACKEND",
+        "reason": "backend wait timeout",
+        "currentAttempt": 1,
+        "maxRetries": 2,
+        "retryBackoffMs": 2000
+      }
+    },
+    {
+      "at": "2026-05-31T00:11:38.168Z",
+      "event": "backend-started",
+      "data": {
+        "command": "npm run dev:backend",
+        "pid": 24396,
+        "attempt": 2
+      }
+    },
+    {
+      "at": "2026-05-31T00:11:38.172Z",
+      "event": "state",
+      "data": {
+        "state": "WAIT_BACKEND",
+        "url": "http://127.0.0.1:4000/api/develop/files",
+        "timeoutMs": 38000,
+        "attempt": 2
+      }
+    },
+    {
+      "at": "2026-05-31T00:11:38.235Z",
+      "event": "state",
+      "data": {
+        "state": "CHECK_FRONTEND",
+        "url": "http://127.0.0.1:5173/"
+      }
+    },
+    {
+      "at": "2026-05-31T00:11:38.253Z",
+      "event": "frontend-started",
+      "data": {
+        "command": "npm run dev -- --host 0.0.0.0 --port 5173 --strictPort",
+        "pid": 25252,
+        "attempt": 1
+      }
+    },
+    {
+      "at": "2026-05-31T00:11:38.257Z",
+      "event": "state",
+      "data": {
+        "state": "WAIT_FRONTEND",
+        "url": "http://127.0.0.1:5173/",
+        "timeoutMs": 30000,
+        "attempt": 1
+      }
+    },
+    {
+      "at": "2026-05-31T00:12:08.853Z",
+      "event": "timeout",
+      "data": {
+        "state": "WAIT_FRONTEND",
+        "url": "http://127.0.0.1:5173/",
+        "timeoutMs": 30000,
+        "attempt": 1,
+        "error": "Not responding in reasonable amount of time"
+      }
+    },
+    {
+      "at": "2026-05-31T00:12:08.855Z",
+      "event": "retry-scheduled",
+      "data": {
+        "state": "WAIT_FRONTEND",
+        "nextState": "START_FRONTEND",
+        "reason": "frontend wait timeout",
+        "currentAttempt": 1,
+        "maxRetries": 2,
+        "retryBackoffMs": 1500
+      }
+    },
+    {
+      "at": "2026-05-31T00:12:10.364Z",
+      "event": "frontend-started",
+      "data": {
+        "command": "npm run dev -- --host 0.0.0.0 --port 5173 --strictPort",
+        "pid": 24968,
+        "attempt": 2
+      }
+    },
+    {
+      "at": "2026-05-31T00:12:10.369Z",
+      "event": "state",
+      "data": {
+        "state": "WAIT_FRONTEND",
+        "url": "http://127.0.0.1:5173/",
+        "timeoutMs": 30000,
+        "attempt": 2
+      }
+    },
+    {
+      "at": "2026-05-31T00:12:42.952Z",
+      "event": "timeout",
+      "data": {
+        "state": "WAIT_FRONTEND",
+        "url": "http://127.0.0.1:5173/",
+        "timeoutMs": 30000,
+        "attempt": 2,
+        "error": "Not responding in reasonable amount of time"
+      }
+    },
+    {
+      "at": "2026-05-31T00:12:42.954Z",
+      "event": "retry-scheduled",
+      "data": {
+        "state": "WAIT_FRONTEND",
+        "nextState": "START_FRONTEND",
+        "reason": "frontend wait timeout",
+        "currentAttempt": 2,
+        "maxRetries": 2,
+        "retryBackoffMs": 1500
+      }
+    },
+    {
+      "at": "2026-05-31T00:12:44.471Z",
+      "event": "frontend-started",
+      "data": {
+        "command": "npm run dev -- --host 0.0.0.0 --port 5173 --strictPort",
+        "pid": 2532,
+        "attempt": 3
+      }
+    },
+    {
+      "at": "2026-05-31T00:12:44.477Z",
+      "event": "state",
+      "data": {
+        "state": "WAIT_FRONTEND",
+        "url": "http://127.0.0.1:5173/",
+        "timeoutMs": 30000,
+        "attempt": 3
+      }
+    },
+    {
+      "at": "2026-05-31T00:13:17.036Z",
+      "event": "timeout",
+      "data": {
+        "state": "WAIT_FRONTEND",
+        "url": "http://127.0.0.1:5173/",
+        "timeoutMs": 30000,
+        "attempt": 3,
+        "error": "Not responding in reasonable amount of time"
+      }
+    },
+    {
+      "at": "2026-05-31T00:13:17.040Z",
+      "event": "failed",
+      "data": {
+        "ok": false,
+        "state": "FAILED",
+        "workflow": [
+          "INIT",
+          "KILL_BACKEND_PROCESSES",
+          "SANITIZE_QUEUE_PERSISTENCE",
+          "CHECK_BACKEND",
+          "START_BACKEND",
+          "WAIT_BACKEND",
+          "START_BACKEND",
+          "WAIT_BACKEND",
+          "CHECK_FRONTEND",
+          "START_FRONTEND",
+          "WAIT_FRONTEND",
+          "START_FRONTEND",
+          "WAIT_FRONTEND",
+          "START_FRONTEND",
+          "WAIT_FRONTEND"
+        ],
+        "error": "Startup workflow failed to reach READY state."
+      }
+    }
+  ],
+  "updatedAt": "2026-05-31T00:13:17.043Z",
+  "error": "Startup workflow failed to reach READY state."
+}

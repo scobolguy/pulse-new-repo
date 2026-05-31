@@ -2,10 +2,10 @@ import fs from 'fs';
 import http from 'http';
 import v8 from 'v8';
 process.on('uncaughtException', (err) => {
-  console.error('[UNCAUGHT EXCEPTION]', err);
+  console.error('[UNCAUGHT EXCEPTION]', err?.stack || err);
 });
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('[UNHANDLED REJECTION]', reason);
+  console.error('[UNHANDLED REJECTION]', reason?.stack || reason);
 });
 // Run with: node backend.mjs
 import dgram from 'dgram';
@@ -59,6 +59,8 @@ import { registerLibrarianProxyRoutes } from './src/backend/roles/librarianProxy
 import { registerMapperProxyRoutes } from './src/backend/roles/mapperProxyRoutes.mjs';
 import { registerRuntimeRegistryRoutes } from './src/backend/roles/runtimeRegistryRoutes.mjs';
 import { registerRouterLifecycleControlRoutes } from './src/backend/roles/routerLifecycleControlRoutes.mjs';
+import { registerDevelopDocumentRoutes } from './src/backend/developDocumentRoutes.mjs';
+import { registerStartupFsmRoutes } from './src/backend/startupFsmRoutes.mjs';
 import { createRequestPolicyApi } from './src/backend/security/requestPolicy.mjs';
 import { ROUTE_ROLE_MANIFEST } from './src/backend/routes.manifest.mjs';
 import { registerRoutesFromManifest } from './src/backend/routeManifestLoader.mjs';
@@ -234,6 +236,7 @@ seedRuntimeFileIfMissing(path.join(RUNTIME_DATA_ROOT, 'user-management.json'), '
 seedRuntimeFileIfMissing(path.join(RUNTIME_DATA_ROOT, 'user-groups.json'), './data/user-groups.json');
 seedRuntimeFileIfMissing(path.join(RUNTIME_DATA_ROOT, 'monitor-classes.json'), './data/monitor-classes.json');
 seedRuntimeFileIfMissing(path.join(RUNTIME_DATA_ROOT, 'process-governance.json'), './data/process-governance.json');
+seedRuntimeFileIfMissing(path.join(RUNTIME_DATA_ROOT, 'fsm-catalog.json'), './data/fsm-catalog.json');
 seedRuntimeFileIfMissing(path.join(RUNTIME_DATA_ROOT, 'compliance', 'sanctions-cache.json'), './data/compliance/sanctions-cache.json');
 ensureLifecycleCompiledArtifact();
 
@@ -364,6 +367,9 @@ app.use(applyRequestSecurityHeaders);
 app.use(enforceHttpsTransport);
 app.use(enforceApiPermission);
 app.use(enforceTwoPersonRule);
+
+await registerDevelopDocumentRoutes(app);
+registerStartupFsmRoutes(app);
 
 debugLog('[DEBUG] Creating global state...');
 const queueManagerInstances = new Map(); // Maps managerId to QueueManager instance
@@ -720,6 +726,10 @@ const AUTO_APPROVE_USER_IDS = new Set(
     .filter(Boolean)
 );
 const ALLOW_IMPLICIT_ADMIN = readEnvBoolean('ALLOW_IMPLICIT_ADMIN', ['true'], true);
+const AUTH_SESSION_TTL_MS = Math.max(5 * 60 * 1000, readEnvNumber('AUTH_SESSION_TTL_MS', 12 * 60 * 60 * 1000));
+const AUTH_DEFAULT_ADMIN_PASSWORD = readEnvSecret('AUTH_DEFAULT_ADMIN_PASSWORD', 'admin');
+const AUTH_FIXED_USER_ID = normalizeUserIdentifier(readEnvString('AUTH_FIXED_USER_ID', 'system-admin').trim() || 'system-admin');
+const AUTH_FIXED_PASSWORD = String(readEnvSecret('AUTH_FIXED_PASSWORD', 'pulse123') || 'pulse123');
 const queueValidationErrors = [];
 const MAX_QUEUE_VALIDATION_ERRORS = 500;
 const dlqEvents = [];
@@ -2410,6 +2420,66 @@ async function resolveDirectoryProfile(email) {
   };
 }
 
+function sanitizeAuthRecord(authRecord) {
+  if (!authRecord || typeof authRecord !== 'object') return null;
+  const algorithm = String(authRecord.algorithm || 'scrypt').trim().toLowerCase();
+  const salt = String(authRecord.salt || '').trim();
+  const hash = String(authRecord.hash || '').trim();
+  if (!salt || !hash) return null;
+  return {
+    algorithm: algorithm || 'scrypt',
+    salt,
+    hash,
+    createdAt: String(authRecord.createdAt || '').trim() || new Date().toISOString(),
+    updatedAt: String(authRecord.updatedAt || '').trim() || new Date().toISOString()
+  };
+}
+
+function createPasswordRecord(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(String(password || ''), salt, 64).toString('hex');
+  return {
+    algorithm: 'scrypt',
+    salt,
+    hash,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function verifyPasswordRecord(password, authRecord) {
+  if (!authRecord || authRecord.algorithm !== 'scrypt') return false;
+  const salt = String(authRecord.salt || '').trim();
+  const expectedHashHex = String(authRecord.hash || '').trim();
+  if (!salt || !expectedHashHex) return false;
+  try {
+    const derived = crypto.scryptSync(String(password || ''), salt, 64);
+    const expected = Buffer.from(expectedHashHex, 'hex');
+    if (derived.length !== expected.length) return false;
+    return crypto.timingSafeEqual(derived, expected);
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeUserForApi(user) {
+  if (!user || typeof user !== 'object') return null;
+  return {
+    userId: user.userId,
+    email: user.email || null,
+    displayName: user.displayName || user.userId,
+    enabled: user.enabled !== false,
+    profileIds: sanitizeProfileIds(user.profileIds),
+    groupIds: sanitizeGroupIds(user.groupIds),
+    employer: user.employer || USER_ORGANIZATION_NAME,
+    department: user.department || 'Operations',
+    jobTitle: user.jobTitle || 'System Administrator',
+    officeLocation: user.officeLocation || 'HQ',
+    country: user.country || null,
+    managerEmail: user.managerEmail || null
+  };
+}
+
 function normalizeUserManagement(raw) {
   const fallback = createDefaultUserManagement();
   const profiles = Array.isArray(raw?.profiles) ? raw.profiles : fallback.profiles;
@@ -2441,7 +2511,8 @@ function normalizeUserManagement(raw) {
       country: String(user?.country || user?.countryCode || '').trim() || null,
       managerEmail: isValidEmailIdentifier(user?.managerEmail)
         ? normalizeUserIdentifier(user?.managerEmail)
-        : null
+        : null,
+      auth: sanitizeAuthRecord(user?.auth)
     }))
     .filter(user => user.userId);
 
@@ -2478,6 +2549,72 @@ function loadUserManagement() {
 }
 
 let userManagementStore = loadUserManagement();
+const authSessionStore = new Map();
+
+function createAuthSession(userId) {
+  const token = crypto.randomBytes(32).toString('hex');
+  const now = Date.now();
+  authSessionStore.set(token, {
+    token,
+    userId: String(userId || '').trim(),
+    createdAt: now,
+    expiresAt: now + AUTH_SESSION_TTL_MS
+  });
+  return token;
+}
+
+function getSessionFromToken(token) {
+  const key = String(token || '').trim();
+  if (!key) return null;
+  const session = authSessionStore.get(key);
+  if (!session) return null;
+  if (Date.now() > Number(session.expiresAt || 0)) {
+    authSessionStore.delete(key);
+    return null;
+  }
+  return session;
+}
+
+function clearSessionFromToken(token) {
+  const key = String(token || '').trim();
+  if (!key) return false;
+  return authSessionStore.delete(key);
+}
+
+function getBearerTokenFromRequest(req) {
+  const raw = String(req.get('authorization') || '').trim();
+  if (!raw) return '';
+  const match = raw.match(/^Bearer\s+(.+)$/i);
+  return match ? String(match[1] || '').trim() : '';
+}
+
+function getSessionUserIdFromRequest(req) {
+  const token = getBearerTokenFromRequest(req);
+  const session = getSessionFromToken(token);
+  if (!session) return '';
+  return String(session.userId || '').trim();
+}
+
+function cleanupExpiredAuthSessions() {
+  const now = Date.now();
+  for (const [token, session] of authSessionStore.entries()) {
+    if (now > Number(session.expiresAt || 0)) {
+      authSessionStore.delete(token);
+    }
+  }
+}
+
+setInterval(cleanupExpiredAuthSessions, 60 * 1000);
+
+function ensureBootstrapCredentials() {
+  const adminUser = userManagementStore.users.find((user) => user.userId === DEFAULT_ACTOR_USER_ID);
+  if (!adminUser) return;
+  if (adminUser.auth && adminUser.auth.hash) return;
+  adminUser.auth = createPasswordRecord(AUTH_DEFAULT_ADMIN_PASSWORD);
+  saveUserManagement();
+}
+
+ensureBootstrapCredentials();
 
 let groupProvider;
 try {
@@ -3157,10 +3294,11 @@ function hasPermission(userPermissions, requiredPermission) {
 }
 
 function resolveActor(req) {
+  const tokenUserId = getSessionUserIdFromRequest(req);
   const headerUserId = String(req.get('x-user-id') || '').trim();
   const queryUserId = String(req.query?.userId || '').trim();
   const fallbackUserId = ALLOW_IMPLICIT_ADMIN ? DEFAULT_ACTOR_USER_ID : '';
-  const actorUserId = headerUserId || queryUserId || fallbackUserId;
+  const actorUserId = tokenUserId || headerUserId || queryUserId || fallbackUserId;
   const headerGroupIds = parseHeaderGroupIds(req);
   const access = resolveEffectiveAccessForUser(actorUserId, { headerGroupIds });
 
@@ -7797,6 +7935,74 @@ function registerRoutes(app) {
     return { status: 'secondary broker started' };
   }
 
+  app.post('/api/auth/login', (req, res) => {
+    const body = req.body || {};
+    const requestedId = normalizeUserIdentifier(body.userId || body.email);
+    const password = String(body.password || '');
+    if (!password) {
+      return res.status(400).json({ error: 'userId and password are required' });
+    }
+
+    const normalizedRequestedId = requestedId || AUTH_FIXED_USER_ID;
+    if (normalizedRequestedId !== AUTH_FIXED_USER_ID || password !== AUTH_FIXED_PASSWORD) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    const token = createAuthSession(AUTH_FIXED_USER_ID);
+    const session = getSessionFromToken(token);
+    const actor = resolveActor({
+      ...req,
+      get: (headerName) => {
+        const normalized = String(headerName || '').toLowerCase();
+        if (normalized === 'authorization') return `Bearer ${token}`;
+        if (typeof req.get === 'function') return req.get(headerName);
+        return '';
+      },
+      query: {}
+    });
+
+    return res.json({
+      ok: true,
+      token,
+      expiresAt: new Date(Number(session?.expiresAt || Date.now() + AUTH_SESSION_TTL_MS)).toISOString(),
+      actor: {
+        userId: actor.userId || AUTH_FIXED_USER_ID,
+        displayName: actor.user?.displayName || AUTH_FIXED_USER_ID,
+        enabled: actor.user?.enabled !== false,
+        profileIds: actor.profileIds || ['admin'],
+        groupIds: actor.groupIds || []
+      },
+      permissions: actor.permissions || []
+    });
+  });
+
+  app.post('/api/auth/logout', (req, res) => {
+    const token = getBearerTokenFromRequest(req);
+    if (token) clearSessionFromToken(token);
+    res.json({ ok: true, status: 'logged-out' });
+  });
+
+  app.get('/api/auth/session', (req, res) => {
+    const token = getBearerTokenFromRequest(req);
+    const session = getSessionFromToken(token);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Session not found' });
+    }
+    const actor = resolveActor(req);
+    return res.json({
+      ok: true,
+      actor: {
+        userId: actor.userId,
+        displayName: actor.user?.displayName || actor.userId,
+        enabled: actor.user?.enabled === true,
+        profileIds: actor.profileIds || [],
+        groupIds: actor.groupIds || []
+      },
+      permissions: actor.permissions || [],
+      expiresAt: new Date(Number(session.expiresAt || Date.now() + AUTH_SESSION_TTL_MS)).toISOString()
+    });
+  });
+
   app.get('/api/authz/me', (req, res) => {
     const actor = resolveActor(req);
     const profileMap = getProfilesById();
@@ -8059,7 +8265,7 @@ function registerRoutes(app) {
   });
 
   app.get('/api/users', requirePermission('users.read'), (req, res) => {
-    res.json({ users: userManagementStore.users });
+    res.json({ users: userManagementStore.users.map((user) => sanitizeUserForApi(user)).filter(Boolean) });
   });
 
   app.get('/api/operations/monitor/classes', requirePermission('lifecycle.read'), async (req, res) => {
@@ -8137,7 +8343,7 @@ function registerRoutes(app) {
   });
 
   app.post('/api/users', requirePermission('users.manage'), async (req, res) => {
-    const { userId, email, displayName, enabled, profileIds, groupIds } = req.body || {};
+    const { userId, email, displayName, enabled, profileIds, groupIds, password } = req.body || {};
     const id = normalizeUserIdentifier(email || userId);
     if (!id) {
       return res.status(400).json({ error: 'email is required' });
@@ -8165,12 +8371,13 @@ function registerRoutes(app) {
       country: null,
       managerEmail: directoryProfile.managerEmail,
       profileIds: normalizedProfileIds,
-      groupIds: sanitizeGroupIds(groupIds)
+      groupIds: sanitizeGroupIds(groupIds),
+      auth: String(password || '').trim() ? createPasswordRecord(String(password)) : null
     };
 
     userManagementStore.users.push(user);
     saveUserManagement();
-    res.json({ status: 'created', user });
+    res.json({ status: 'created', user: sanitizeUserForApi(user) });
   });
 
   app.patch('/api/users/:userId', requirePermission('users.manage'), async (req, res) => {
@@ -8247,9 +8454,13 @@ function registerRoutes(app) {
     if (Object.prototype.hasOwnProperty.call(updates, 'groupIds')) {
       user.groupIds = sanitizeGroupIds(updates.groupIds);
     }
+    if (Object.prototype.hasOwnProperty.call(updates, 'password')) {
+      const nextPassword = String(updates.password || '');
+      user.auth = nextPassword.trim() ? createPasswordRecord(nextPassword) : null;
+    }
 
     saveUserManagement();
-    res.json({ status: 'updated', user });
+    res.json({ status: 'updated', user: sanitizeUserForApi(user) });
   });
 
   app.delete('/api/users/:userId', requirePermission('users.manage'), (req, res) => {

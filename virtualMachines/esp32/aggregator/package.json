@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:backend": "node backend.mjs",
+    "dev:backend": "node --env-file=.env.local backend.mjs",
+    "dev:backend:raw": "node backend.mjs",
+    "startup:fsm:workflow": "node scripts/startup-fsm-workflow.mjs",
     "supervisor:heartbeat:host": "node scripts/supervisor-heartbeat-host.mjs",
     "supervisor:heartbeat:host:once": "node scripts/supervisor-heartbeat-host.mjs --once",
     "dev:frontend:wait-backend": "node scripts/dev-frontend-when-backend.mjs",
@@ -14,6 +16,8 @@
     "preview": "vite preview",
     "compile:dsl": "node scripts/compile-pascal.mjs",
     "compile:pcode": "node scripts/compile-pascal-to-pcode.mjs",
+    "antlr:generate": "node scripts/generate-antlr-parsers.mjs",
+    "lsp:pascalish": "node tools/pascalish-lsp/server.mjs",
     "run:pcode:js": "node scripts/run-js-pmachine.mjs",
     "compile:workflow": "node scripts/compile-workflow-dsl.mjs --in data/workflow.wfl",
     "compile:workflow:pcode": "node scripts/compile-workflow-to-pcode.mjs --in data/workflow.wfl --workflow pain2-routing --out ../pcode/workflow-router.pcode --out-map ../pcode/workflow-router.program.json",
@@ -25,10 +29,12 @@
     "load:stress-flows": "node stress-flows-load-test.mjs",
     "load:stress-sweep": "node scripts/stress-runtime-sweep.mjs",
     "load:stress-compare": "node scripts/compare-stress-reports.mjs",
-    "test:smoke:ui": "node scripts/smoke-ui.mjs"
+    "test:smoke:ui": "node scripts/smoke-ui.mjs",
+    "test:smoke:pascalish-editor": "node scripts/smoke-pascalish-editor-playwright.mjs http://localhost:5173/"
   },
   "dependencies": {
     "amqplib": "^0.10.4",
+    "antlr4": "^4.13.2",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "fast-xml-parser": "^5.8.0",
@@ -40,7 +46,9 @@
     "node-fetch": "^3.3.2",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
-    "stompit": "^1.0.0"
+    "stompit": "^1.0.0",
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.12"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

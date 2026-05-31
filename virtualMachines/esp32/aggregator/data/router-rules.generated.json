@@ -9,17 +9,17 @@
     "outputs": [
       {
         "queueName": "correspondent.pacs008.outbound",
-        "whenRule": "BEGIN OUTPUT := 1; END",
-        "transformRule": "BEGIN OUTPUT := MAP (\"mt103-to-pacs\", src); END"
+        "whenRule": "BEGIN output := 1; END",
+        "transformRule": "BEGIN output := map (\"mt103-to-pacs\", src); END"
       },
       {
         "queueName": "lynx.pacs009.outbound",
-        "whenRule": "BEGIN OUTPUT := 1; END",
-        "transformRule": "BEGIN OUTPUT := MAP (\"pacs-to-lynx\", MAP (\"mt103-to-pacs\", src)); END"
+        "whenRule": "BEGIN output := 1; END",
+        "transformRule": "BEGIN output := map (\"pacs-to-lynx\", map (\"mt103-to-pacs\", src)); END"
       }
     ],
-    "createdAt": "2026-05-16T12:58:24.088Z",
-    "updatedAt": "2026-05-16T12:58:24.088Z"
+    "createdAt": "2026-05-29T17:26:56.825Z",
+    "updatedAt": "2026-05-29T17:26:56.825Z"
   },
   {
     "id": "swift-fanout-default",
@@ -36,17 +36,17 @@
       },
       {
         "queueName": "payments.mt103",
-        "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
+        "whenRule": "IF startswith(upper(src), \\\"MT103\\\") THEN output := 1 ELSE output := 0;",
         "transformRule": "output := src;"
       },
       {
         "queueName": "payments.mt202",
-        "whenRule": "IF startswith(upper(src), \"MT202\") THEN output := 1 ELSE output := 0;",
+        "whenRule": "IF startswith(upper(src), \\\"MT202\\\") THEN output := 1 ELSE output := 0;",
         "transformRule": "output := src;"
       }
     ],
-    "createdAt": "2026-05-16T12:58:24.088Z",
-    "updatedAt": "2026-05-16T12:58:24.088Z"
+    "createdAt": "2026-05-29T17:26:56.825Z",
+    "updatedAt": "2026-05-29T17:26:56.825Z"
   },
   {
     "id": "mt103-inbound-to-parsed",
@@ -58,12 +58,12 @@
     "outputs": [
       {
         "queueName": "swift.mt103.parsed",
-        "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
-        "transformRule": "BEGIN OUTPUT := src; END"
+        "whenRule": "IF startswith(upper(src), \\\"MT103\\\") THEN output := 1 ELSE output := 0;",
+        "transformRule": "BEGIN output := src; END"
       }
     ],
-    "createdAt": "2026-05-16T12:58:24.088Z",
-    "updatedAt": "2026-05-16T12:58:24.088Z"
+    "createdAt": "2026-05-29T17:26:56.825Z",
+    "updatedAt": "2026-05-29T17:26:56.825Z"
   },
   {
     "id": "ops-validation-deadletter-audit",
@@ -79,8 +79,8 @@
         "transformRule": "output := src;"
       }
     ],
-    "createdAt": "2026-05-16T12:58:24.088Z",
-    "updatedAt": "2026-05-16T12:58:24.088Z"
+    "createdAt": "2026-05-29T17:26:56.825Z",
+    "updatedAt": "2026-05-29T17:26:56.825Z"
   },
   {
     "id": "pacs-inbound-to-outbound",
@@ -96,8 +96,8 @@
         "transformRule": "output := src;"
       }
     ],
-    "createdAt": "2026-05-16T12:58:24.088Z",
-    "updatedAt": "2026-05-16T12:58:24.088Z"
+    "createdAt": "2026-05-29T17:26:56.825Z",
+    "updatedAt": "2026-05-29T17:26:56.825Z"
   },
   {
     "id": "mt202-inbound-routing",
@@ -109,11 +109,11 @@
     "outputs": [
       {
         "queueName": "payments.mt202",
-        "whenRule": "IF startswith(upper(src), \"MT202\") THEN output := 1 ELSE output := 0;",
-        "transformRule": "BEGIN OUTPUT := src; END"
+        "whenRule": "IF startswith(upper(src), \\\"MT202\\\") THEN output := 1 ELSE output := 0;",
+        "transformRule": "BEGIN output := src; END"
       }
     ],
-    "createdAt": "2026-05-16T12:58:24.088Z",
-    "updatedAt": "2026-05-16T12:58:24.088Z"
+    "createdAt": "2026-05-29T17:26:56.825Z",
+    "updatedAt": "2026-05-29T17:26:56.825Z"
   }
 ]
