@@ -13,7 +13,7 @@ export default defineConfig({
   cacheDir: viteCacheDir,
   optimizeDeps: {
     noDiscovery: true,
-    include: ['react', 'react-dom', 'react-dom/client'],
+    include: ['react', 'react-dom', 'react-dom/client', 'dayjs'],
     exclude: ['mermaid'],
   },
   server: {

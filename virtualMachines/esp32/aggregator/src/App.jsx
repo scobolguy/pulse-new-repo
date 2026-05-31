@@ -2318,12 +2318,10 @@ function App() {
     >
       <header className="utility-top-bar">
         <div className="utility-status">
-          <span className="utility-chip"><strong>User:</strong> {authz.actor?.userId || actorUserId || 'guest'}</span>
           <span className="utility-chip"><strong>Language:</strong> {LANGUAGE_OPTIONS.find(item => item.value === language)?.label || language}</span>
           <span className="utility-chip"><strong>Style:</strong> {getThemeDisplayLabel(resolvedWindowStyle)}</span>
         </div>
         <div className="utility-actions">
-          <button className="utility-button" type="button" onClick={() => navigateTo('/chat')}>Chat</button>
           <select
             value={language}
             onChange={(event) => setLanguage(event.target.value)}
@@ -2347,7 +2345,7 @@ function App() {
           <input
             className="utility-input"
             value={loginUserId}
-            readOnly
+            onChange={(event) => setLoginUserId(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
                 event.preventDefault();
@@ -2361,7 +2359,7 @@ function App() {
             className="utility-input"
             type="password"
             value={loginPassword}
-            readOnly
+            onChange={(event) => setLoginPassword(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
                 event.preventDefault();

@@ -82,6 +82,29 @@ import crypto from 'crypto';
 const MODULAR_MODE = readEnvBoolean('MODULAR_BACKEND', ['1'], false);
 const BROKER_SERVICE_URL = 'http://localhost:4001';
 const DEBUG_BACKEND = readEnvBoolean('DEBUG_BACKEND', ['true'], false);
+const SHOW_UDP_LOGS = readEnvBoolean('SHOW_UDP_LOGS', ['1', 'true', 'yes'], false);
+
+if (!SHOW_UDP_LOGS) {
+  const originalLog = console.log.bind(console);
+  const originalInfo = console.info.bind(console);
+  const originalDebug = console.debug.bind(console);
+  const isUdpLog = (args) => typeof args?.[0] === 'string' && args[0].startsWith('[UDP]');
+
+  console.log = (...args) => {
+    if (isUdpLog(args)) return;
+    originalLog(...args);
+  };
+
+  console.info = (...args) => {
+    if (isUdpLog(args)) return;
+    originalInfo(...args);
+  };
+
+  console.debug = (...args) => {
+    if (isUdpLog(args)) return;
+    originalDebug(...args);
+  };
+}
 
 function debugLog(...args) {
   if (DEBUG_BACKEND) {

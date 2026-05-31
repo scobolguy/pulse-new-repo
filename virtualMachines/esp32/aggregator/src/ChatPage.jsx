@@ -365,23 +365,21 @@ export default function ChatPage({ onNavigateHome, screenContext, askBoxActive =
 
   useEffect(() => {
     if (!askBoxActive) return;
-    const focusInput = () => {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    };
-    focusInput();
+    // Only auto-focus once when the ask box is activated; do not trap focus globally.
+    const activeEl = document.activeElement;
+    const interactingOutsideChat =
+      activeEl instanceof HTMLElement
+      && (
+        activeEl.closest('.utility-controls')
+        || activeEl.closest('.lhs-sidebar')
+        || activeEl.closest('.workspace-pane')
+      );
 
-    const handleFocusIn = (event) => {
-      if (!askBoxActive) return;
-      const activeEl = event.target;
-      const inComposer = activeEl instanceof HTMLElement && activeEl.closest('.chat-composer--minimal');
-      if (!inComposer) {
-        setTimeout(focusInput, 0);
-      }
-    };
+    if (interactingOutsideChat) return;
 
-    window.addEventListener('focusin', handleFocusIn);
-    return () => window.removeEventListener('focusin', handleFocusIn);
+    inputRef.current?.focus();
+    inputRef.current?.select();
+    return undefined;
   }, [askBoxActive]);
 
   async function submitClarificationFeedback({ selectedOptionId, originalMessage, rewrittenMessage, alternatives }) {

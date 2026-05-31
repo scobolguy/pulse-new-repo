@@ -5,16 +5,12 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 const BACKEND_URL = process.env.STARTUP_BACKEND_URL || 'http://127.0.0.1:4000/api/develop/files';
-const FRONTEND_URL = process.env.STARTUP_FRONTEND_URL || 'http://127.0.0.1:5173/';
 const BACKEND_CMD = process.env.STARTUP_BACKEND_CMD || 'npm run dev:backend';
-const FRONTEND_CMD = process.env.STARTUP_FRONTEND_CMD || 'npm run dev -- --host 0.0.0.0 --port 5173 --strictPort';
 const POLL_MS = Number(process.env.STARTUP_POLL_MS || 1500);
 const STEP_TIMEOUT_MS = Number(process.env.STARTUP_STEP_TIMEOUT_MS || 30000);
 const STARTUP_BACKEND_WAIT_RETRY_COUNT = Math.max(0, Number(process.env.STARTUP_BACKEND_WAIT_RETRY_COUNT || 2));
 const STARTUP_BACKEND_WAIT_RETRY_BACKOFF_MS = Math.max(500, Number(process.env.STARTUP_BACKEND_WAIT_RETRY_BACKOFF_MS || 2000));
 const STARTUP_BACKEND_WAIT_MAX_TIMEOUT_MS = Math.max(STEP_TIMEOUT_MS, Number(process.env.STARTUP_BACKEND_WAIT_MAX_TIMEOUT_MS || 150000));
-const STARTUP_FRONTEND_WAIT_RETRY_COUNT = Math.max(0, Number(process.env.STARTUP_FRONTEND_WAIT_RETRY_COUNT || 2));
-const STARTUP_FRONTEND_WAIT_RETRY_BACKOFF_MS = Math.max(500, Number(process.env.STARTUP_FRONTEND_WAIT_RETRY_BACKOFF_MS || 1500));
 const REQUEST_TIMEOUT_MS = Number(process.env.STARTUP_REQUEST_TIMEOUT_MS || 5000);
 const SANITIZE_MAX_MESSAGE_FILES_PER_QUEUE = Math.max(50, Number(process.env.STARTUP_SANITIZE_MAX_MESSAGE_FILES_PER_QUEUE || 500));
 const SANITIZE_MAX_TOTAL_MESSAGE_FILES = Math.max(200, Number(process.env.STARTUP_SANITIZE_MAX_TOTAL_MESSAGE_FILES || 5000));
@@ -32,9 +28,6 @@ const STATES = {
   CHECK_BACKEND: 'CHECK_BACKEND',
   START_BACKEND: 'START_BACKEND',
   WAIT_BACKEND: 'WAIT_BACKEND',
-  CHECK_FRONTEND: 'CHECK_FRONTEND',
-  START_FRONTEND: 'START_FRONTEND',
-  WAIT_FRONTEND: 'WAIT_FRONTEND',
   READY: 'READY',
   FAILED: 'FAILED'
 };
@@ -418,12 +411,11 @@ async function run() {
   const workflow = [];
   let state = STATES.INIT;
   let backendStartAttempt = 0;
-  let frontendStartAttempt = 0;
   let sanitizeSummary = null;
 
   try {
     await writeStatus({ ok: false, state: STATES.INIT, workflow: [], logs: [], error: null });
-    await appendLog('workflow-start', { backendUrl: BACKEND_URL, frontendUrl: FRONTEND_URL, statusPath: STATUS_PATH });
+    await appendLog('workflow-start', { backendUrl: BACKEND_URL, statusPath: STATUS_PATH });
 
     while (state !== STATES.READY && state !== STATES.FAILED) {
       workflow.push(state);
@@ -466,11 +458,17 @@ async function run() {
       if (state === STATES.CHECK_BACKEND) {
         logState('state', { state, url: BACKEND_URL });
         await appendLog('state', { state, url: BACKEND_URL });
-        state = (await isHealthy(BACKEND_URL)) ? STATES.CHECK_FRONTEND : STATES.START_BACKEND;
+        state = (await isHealthy(BACKEND_URL)) ? STATES.READY : STATES.START_BACKEND;
         continue;
       }
 
       if (state === STATES.START_BACKEND) {
+        const occupiedBy = findPidsUsingPort(BACKEND_PORT).filter((pid) => pid !== process.pid);
+        if (occupiedBy.length) {
+          await appendLog('port-occupied', { state, port: BACKEND_PORT, occupiedBy, command: BACKEND_CMD });
+          await appendFailureNote({ type: 'port-occupied', state, port: BACKEND_PORT, occupiedBy, command: BACKEND_CMD });
+          throw new Error(`Port ${BACKEND_PORT} is already occupied before backend launch`);
+        }
         backendStartAttempt += 1;
         const pid = spawnDetached(BACKEND_CMD, process.cwd());
         logState('backend-started', { command: BACKEND_CMD, pid, attempt: backendStartAttempt });
@@ -516,62 +514,6 @@ async function run() {
             attempts: backendStartAttempt
           });
         }
-        state = ok ? STATES.CHECK_FRONTEND : STATES.FAILED;
-        continue;
-      }
-
-      if (state === STATES.CHECK_FRONTEND) {
-        logState('state', { state, url: FRONTEND_URL });
-        await appendLog('state', { state, url: FRONTEND_URL });
-        state = (await isHealthy(FRONTEND_URL)) ? STATES.READY : STATES.START_FRONTEND;
-        continue;
-      }
-
-      if (state === STATES.START_FRONTEND) {
-        frontendStartAttempt += 1;
-        const pid = spawnDetached(FRONTEND_CMD, process.cwd());
-        logState('frontend-started', { command: FRONTEND_CMD, pid, attempt: frontendStartAttempt });
-        await appendLog('frontend-started', { command: FRONTEND_CMD, pid, attempt: frontendStartAttempt });
-        state = STATES.WAIT_FRONTEND;
-        continue;
-      }
-
-      if (state === STATES.WAIT_FRONTEND) {
-        logState('state', { state, url: FRONTEND_URL, timeoutMs: STEP_TIMEOUT_MS, attempt: frontendStartAttempt });
-        await appendLog('state', { state, url: FRONTEND_URL, timeoutMs: STEP_TIMEOUT_MS, attempt: frontendStartAttempt });
-        const ok = await waitUntilHealthy(FRONTEND_URL, STEP_TIMEOUT_MS, POLL_MS);
-        if (!ok) {
-          await appendLog('timeout', {
-            state,
-            url: FRONTEND_URL,
-            timeoutMs: STEP_TIMEOUT_MS,
-            attempt: frontendStartAttempt,
-            error: 'Not responding in reasonable amount of time'
-          });
-
-          if (frontendStartAttempt <= STARTUP_FRONTEND_WAIT_RETRY_COUNT) {
-            await appendLog('retry-scheduled', {
-              state,
-              nextState: STATES.START_FRONTEND,
-              reason: 'frontend wait timeout',
-              currentAttempt: frontendStartAttempt,
-              maxRetries: STARTUP_FRONTEND_WAIT_RETRY_COUNT,
-              retryBackoffMs: STARTUP_FRONTEND_WAIT_RETRY_BACKOFF_MS
-            });
-            await sleep(STARTUP_FRONTEND_WAIT_RETRY_BACKOFF_MS);
-            state = STATES.START_FRONTEND;
-            continue;
-          }
-
-          await appendFailureNote({
-            type: 'timeout',
-            state,
-            subflow: 'frontend-wait-ready',
-            url: FRONTEND_URL,
-            timeoutMs: STEP_TIMEOUT_MS,
-            attempts: frontendStartAttempt
-          });
-        }
         state = ok ? STATES.READY : STATES.FAILED;
         continue;
       }
@@ -583,8 +525,7 @@ async function run() {
         ok: true,
         state,
         workflow,
-        backendUrl: BACKEND_URL,
-        frontendUrl: FRONTEND_URL
+        backendUrl: BACKEND_URL
       };
       logState('complete', result);
       await appendLog('complete', result);

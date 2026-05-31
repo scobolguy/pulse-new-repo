@@ -1,0 +1,158 @@
+{
+  "ok": false,
+  "state": "FAILED",
+  "workflow": [
+    "INIT",
+    "KILL_VITE_PROCESSES",
+    "CHECK_BACKEND",
+    "START_BACKEND",
+    "WAIT_BACKEND",
+    "START_BACKEND",
+    "WAIT_BACKEND",
+    "START_BACKEND",
+    "WAIT_BACKEND"
+  ],
+  "logs": [
+    {
+      "at": "2026-05-31T15:44:37.049Z",
+      "event": "workflow-start",
+      "data": {
+        "fsmId": "frontend-startup-fsm",
+        "backendUrl": "http://127.0.0.1:4000/api/develop/files",
+        "frontendUrl": "http://127.0.0.1:5173/",
+        "statusPath": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\frontend-startup-fsm-status.json"
+      }
+    },
+    {
+      "at": "2026-05-31T15:44:37.062Z",
+      "event": "state",
+      "data": {
+        "state": "INIT"
+      }
+    },
+    {
+      "at": "2026-05-31T15:44:42.108Z",
+      "event": "subflow-complete",
+      "data": {
+        "state": "KILL_VITE_PROCESSES",
+        "subflow": "kill-all-vite-processes",
+        "pids": [],
+        "results": [],
+        "killedCount": 0
+      }
+    },
+    {
+      "at": "2026-05-31T15:44:42.243Z",
+      "event": "state",
+      "data": {
+        "state": "CHECK_BACKEND",
+        "backendUrl": "http://127.0.0.1:4000/api/develop/files",
+        "backendOk": false
+      }
+    },
+    {
+      "at": "2026-05-31T15:44:42.336Z",
+      "event": "backend-started",
+      "data": {
+        "command": "npm run dev:backend",
+        "pid": 14168,
+        "attempt": 1
+      }
+    },
+    {
+      "at": "2026-05-31T15:45:28.457Z",
+      "event": "backend-timeout",
+      "data": {
+        "backendUrl": "http://127.0.0.1:4000/api/develop/files",
+        "timeoutMs": 45000,
+        "attempt": 1
+      }
+    },
+    {
+      "at": "2026-05-31T15:45:28.468Z",
+      "event": "retry-scheduled",
+      "data": {
+        "state": "WAIT_BACKEND",
+        "nextState": "START_BACKEND",
+        "reason": "backend wait timeout",
+        "currentAttempt": 1,
+        "maxRetries": 2,
+        "retryBackoffMs": 2500
+      }
+    },
+    {
+      "at": "2026-05-31T15:45:31.058Z",
+      "event": "backend-started",
+      "data": {
+        "command": "npm run dev:backend",
+        "pid": 13464,
+        "attempt": 2
+      }
+    },
+    {
+      "at": "2026-05-31T15:46:17.149Z",
+      "event": "backend-timeout",
+      "data": {
+        "backendUrl": "http://127.0.0.1:4000/api/develop/files",
+        "timeoutMs": 45000,
+        "attempt": 2
+      }
+    },
+    {
+      "at": "2026-05-31T15:46:17.154Z",
+      "event": "retry-scheduled",
+      "data": {
+        "state": "WAIT_BACKEND",
+        "nextState": "START_BACKEND",
+        "reason": "backend wait timeout",
+        "currentAttempt": 2,
+        "maxRetries": 2,
+        "retryBackoffMs": 2500
+      }
+    },
+    {
+      "at": "2026-05-31T15:46:19.789Z",
+      "event": "backend-started",
+      "data": {
+        "command": "npm run dev:backend",
+        "pid": 24568,
+        "attempt": 3
+      }
+    },
+    {
+      "at": "2026-05-31T15:47:05.878Z",
+      "event": "backend-timeout",
+      "data": {
+        "backendUrl": "http://127.0.0.1:4000/api/develop/files",
+        "timeoutMs": 45000,
+        "attempt": 3
+      }
+    },
+    {
+      "at": "2026-05-31T15:47:05.904Z",
+      "event": "failed",
+      "data": {
+        "ok": false,
+        "state": "FAILED",
+        "workflow": [
+          "INIT",
+          "KILL_VITE_PROCESSES",
+          "CHECK_BACKEND",
+          "START_BACKEND",
+          "WAIT_BACKEND",
+          "START_BACKEND",
+          "WAIT_BACKEND",
+          "START_BACKEND",
+          "WAIT_BACKEND"
+        ],
+        "error": "Frontend startup FSM failed to reach READY state",
+        "fsmId": "frontend-startup-fsm"
+      }
+    }
+  ],
+  "updatedAt": "2026-05-31T15:47:05.919Z",
+  "error": "Frontend startup FSM failed to reach READY state",
+  "backendUrl": "http://127.0.0.1:4000/api/develop/files",
+  "frontendUrl": "http://127.0.0.1:5173/",
+  "fsmId": "frontend-startup-fsm"
+}

@@ -1,0 +1,2 @@
+c:\Users\scobo\OneDrive\Desktop\PulseSystemCtl-build\PulseSystemCtl.pdb
+c:\Users\scobo\OneDrive\Desktop\PulseSystemCtl-build\PulseSystemCtl.exe
