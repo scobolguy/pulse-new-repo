@@ -3,6 +3,9 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 
+var logPath = Environment.GetEnvironmentVariable("PULSE_CTL_LOG_PATH")
+    ?? Path.Combine(AppContext.BaseDirectory, "PulseSystemCtl.log");
+
 var root = Environment.GetEnvironmentVariable("PULSE_CTL_REPO_ROOT") ?? ResolveRepoRoot();
 var mode = args.Length > 0 ? args[0].Trim().ToLowerInvariant() : "cycle";
 
@@ -12,8 +15,8 @@ var options = new LauncherOptions(
     FrontendUrl: Environment.GetEnvironmentVariable("PULSE_CTL_FRONTEND_URL") ?? "http://127.0.0.1:5173/",
     BackendPort: ReadIntEnv("PULSE_CTL_BACKEND_PORT", 4000),
     FrontendPort: ReadIntEnv("PULSE_CTL_FRONTEND_PORT", 5173),
-    BackendFsmCommand: Environment.GetEnvironmentVariable("PULSE_CTL_BACKEND_FSM_CMD") ?? "npm run startup:fsm:backend",
-    FrontendFsmCommand: Environment.GetEnvironmentVariable("PULSE_CTL_FRONTEND_FSM_CMD") ?? "npm run startup:fsm:frontend",
+    BackendFsmCommand: Environment.GetEnvironmentVariable("PULSE_CTL_BACKEND_FSM_CMD") ?? "node scripts/startup-fsm-workflow.mjs",
+    FrontendFsmCommand: Environment.GetEnvironmentVariable("PULSE_CTL_FRONTEND_FSM_CMD") ?? "node scripts/frontend-startup-fsm-workflow.mjs",
     FrontendRawCommand: Environment.GetEnvironmentVariable("PULSE_CTL_FRONTEND_RAW_CMD") ?? "npm run dev:raw -- --host 0.0.0.0 --port 5173 --strictPort --force",
     StatusPathBackend: Path.Combine(root, "data", "startup-fsm-status.json"),
     StatusPathFrontend: Path.Combine(root, "data", "frontend-startup-fsm-status.json")
@@ -21,6 +24,7 @@ var options = new LauncherOptions(
 
 try
 {
+    Log(logPath, $"Mode={mode} RepoRoot={root}");
     var result = mode switch
     {
         "stop" => await StopAsync(options),
@@ -35,8 +39,31 @@ try
 }
 catch (Exception ex)
 {
+    Log(logPath, "Unhandled exception", ex.ToString());
     WriteResult(new ControlResult(false, "FAILED", ex.Message, null, null, null));
     Environment.ExitCode = 1;
+}
+
+static void Log(string logPath, string message, string? details = null)
+{
+    try
+    {
+        var sb = new StringBuilder();
+        sb.Append(DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss.fff zzz"));
+        sb.Append(" ");
+        sb.Append(message);
+        if (!string.IsNullOrWhiteSpace(details))
+        {
+            sb.AppendLine();
+            sb.Append(details);
+        }
+        sb.AppendLine();
+        File.AppendAllText(logPath, sb.ToString());
+    }
+    catch
+    {
+        // Logging must never break control flow.
+    }
 }
 
 static async Task<ControlResult> StopAsync(LauncherOptions options)
@@ -263,9 +290,18 @@ static async Task<CommandResult> RunCommandAsync(string command, string workingD
     var fileName = tokens[0];
     var arguments = string.Join(' ', tokens.Skip(1));
 
-    if (fileName.Equals("npm", StringComparison.OrdinalIgnoreCase))
+    if (OperatingSystem.IsWindows() && fileName.Equals("npm", StringComparison.OrdinalIgnoreCase))
     {
-        fileName = OperatingSystem.IsWindows() ? "npm.cmd" : "npm";
+        var nodePath = Environment.GetEnvironmentVariable("PULSE_CTL_NODE_PATH")
+            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "nodejs", "node.exe");
+        var npmCliPath = Environment.GetEnvironmentVariable("PULSE_CTL_NPM_CLI_PATH")
+            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "nodejs", "node_modules", "npm", "bin", "npm-cli.js");
+
+        if (File.Exists(nodePath) && File.Exists(npmCliPath))
+        {
+            fileName = nodePath;
+            arguments = $"\"{npmCliPath}\" {arguments}";
+        }
     }
 
     var psi = new ProcessStartInfo
@@ -282,12 +318,21 @@ static async Task<CommandResult> RunCommandAsync(string command, string workingD
     var output = new StringBuilder();
     var error = new StringBuilder();
 
+    var logPath = Environment.GetEnvironmentVariable("PULSE_CTL_LOG_PATH")
+        ?? Path.Combine(AppContext.BaseDirectory, "PulseSystemCtl.log");
+    Log(logPath, $"RunCommand start: {fileName} {arguments}");
+
     using var proc = Process.Start(psi) ?? throw new InvalidOperationException($"Failed to start command: {command}");
     proc.OutputDataReceived += (_, e) => { if (e.Data is not null) output.AppendLine(e.Data); };
     proc.ErrorDataReceived += (_, e) => { if (e.Data is not null) error.AppendLine(e.Data); };
     proc.BeginOutputReadLine();
     proc.BeginErrorReadLine();
     await proc.WaitForExitAsync();
+
+    Log(
+        logPath,
+        $"RunCommand exit={proc.ExitCode}: {fileName} {arguments}",
+        $"stdout:\n{output}\nstderr:\n{error}");
 
     return new CommandResult(proc.ExitCode, output.ToString(), error.ToString());
 }
