@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 const BACKEND_URL = process.env.STARTUP_BACKEND_URL || 'http://127.0.0.1:4000/api/develop/files';
-const BACKEND_CMD = process.env.STARTUP_BACKEND_CMD || 'npm run dev:backend';
+const BACKEND_CMD = process.env.STARTUP_BACKEND_CMD || 'node --env-file=.env.local backend.mjs';
 const POLL_MS = Number(process.env.STARTUP_POLL_MS || 1500);
 const STEP_TIMEOUT_MS = Number(process.env.STARTUP_STEP_TIMEOUT_MS || 30000);
 const STARTUP_BACKEND_WAIT_RETRY_COUNT = Math.max(0, Number(process.env.STARTUP_BACKEND_WAIT_RETRY_COUNT || 2));

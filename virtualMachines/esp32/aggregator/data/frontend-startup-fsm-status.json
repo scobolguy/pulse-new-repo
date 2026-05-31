@@ -5,16 +5,13 @@
     "INIT",
     "KILL_VITE_PROCESSES",
     "CHECK_BACKEND",
-    "START_BACKEND",
-    "WAIT_BACKEND",
-    "START_BACKEND",
-    "WAIT_BACKEND",
-    "START_BACKEND",
-    "WAIT_BACKEND"
+    "START_FRONTEND",
+    "WAIT_FRONTEND",
+    "START_FRONTEND"
   ],
   "logs": [
     {
-      "at": "2026-05-31T15:44:37.049Z",
+      "at": "2026-05-31T21:07:19.379Z",
       "event": "workflow-start",
       "data": {
         "fsmId": "frontend-startup-fsm",
@@ -24,14 +21,14 @@
       }
     },
     {
-      "at": "2026-05-31T15:44:37.062Z",
+      "at": "2026-05-31T21:07:19.384Z",
       "event": "state",
       "data": {
         "state": "INIT"
       }
     },
     {
-      "at": "2026-05-31T15:44:42.108Z",
+      "at": "2026-05-31T21:07:21.150Z",
       "event": "subflow-complete",
       "data": {
         "state": "KILL_VITE_PROCESSES",
@@ -42,94 +39,58 @@
       }
     },
     {
-      "at": "2026-05-31T15:44:42.243Z",
+      "at": "2026-05-31T21:07:21.214Z",
       "event": "state",
       "data": {
         "state": "CHECK_BACKEND",
         "backendUrl": "http://127.0.0.1:4000/api/develop/files",
-        "backendOk": false
+        "backendOk": true
       }
     },
     {
-      "at": "2026-05-31T15:44:42.336Z",
-      "event": "backend-started",
+      "at": "2026-05-31T21:07:21.260Z",
+      "event": "frontend-started",
       "data": {
-        "command": "npm run dev:backend",
-        "pid": 14168,
+        "command": "node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173 --strictPort --force",
+        "pid": 2428,
         "attempt": 1
       }
     },
     {
-      "at": "2026-05-31T15:45:28.457Z",
-      "event": "backend-timeout",
+      "at": "2026-05-31T21:07:54.758Z",
+      "event": "frontend-timeout",
       "data": {
-        "backendUrl": "http://127.0.0.1:4000/api/develop/files",
-        "timeoutMs": 45000,
+        "frontendUrl": "http://127.0.0.1:5173/",
+        "timeoutMs": 30000,
         "attempt": 1
       }
     },
     {
-      "at": "2026-05-31T15:45:28.468Z",
+      "at": "2026-05-31T21:07:54.762Z",
       "event": "retry-scheduled",
       "data": {
-        "state": "WAIT_BACKEND",
-        "nextState": "START_BACKEND",
-        "reason": "backend wait timeout",
+        "state": "WAIT_FRONTEND",
+        "nextState": "START_FRONTEND",
+        "reason": "frontend wait timeout",
         "currentAttempt": 1,
         "maxRetries": 2,
         "retryBackoffMs": 2500
       }
     },
     {
-      "at": "2026-05-31T15:45:31.058Z",
-      "event": "backend-started",
+      "at": "2026-05-31T21:07:57.345Z",
+      "event": "port-occupied",
       "data": {
-        "command": "npm run dev:backend",
-        "pid": 13464,
-        "attempt": 2
+        "state": "START_FRONTEND",
+        "port": 5173,
+        "occupiedBy": [
+          2164
+        ],
+        "command": "node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173 --strictPort --force"
       }
     },
     {
-      "at": "2026-05-31T15:46:17.149Z",
-      "event": "backend-timeout",
-      "data": {
-        "backendUrl": "http://127.0.0.1:4000/api/develop/files",
-        "timeoutMs": 45000,
-        "attempt": 2
-      }
-    },
-    {
-      "at": "2026-05-31T15:46:17.154Z",
-      "event": "retry-scheduled",
-      "data": {
-        "state": "WAIT_BACKEND",
-        "nextState": "START_BACKEND",
-        "reason": "backend wait timeout",
-        "currentAttempt": 2,
-        "maxRetries": 2,
-        "retryBackoffMs": 2500
-      }
-    },
-    {
-      "at": "2026-05-31T15:46:19.789Z",
-      "event": "backend-started",
-      "data": {
-        "command": "npm run dev:backend",
-        "pid": 24568,
-        "attempt": 3
-      }
-    },
-    {
-      "at": "2026-05-31T15:47:05.878Z",
-      "event": "backend-timeout",
-      "data": {
-        "backendUrl": "http://127.0.0.1:4000/api/develop/files",
-        "timeoutMs": 45000,
-        "attempt": 3
-      }
-    },
-    {
-      "at": "2026-05-31T15:47:05.904Z",
+      "at": "2026-05-31T21:07:57.351Z",
       "event": "failed",
       "data": {
         "ok": false,
@@ -138,20 +99,17 @@
           "INIT",
           "KILL_VITE_PROCESSES",
           "CHECK_BACKEND",
-          "START_BACKEND",
-          "WAIT_BACKEND",
-          "START_BACKEND",
-          "WAIT_BACKEND",
-          "START_BACKEND",
-          "WAIT_BACKEND"
+          "START_FRONTEND",
+          "WAIT_FRONTEND",
+          "START_FRONTEND"
         ],
-        "error": "Frontend startup FSM failed to reach READY state",
+        "error": "Port 5173 is already occupied before frontend launch",
         "fsmId": "frontend-startup-fsm"
       }
     }
   ],
-  "updatedAt": "2026-05-31T15:47:05.919Z",
-  "error": "Frontend startup FSM failed to reach READY state",
+  "updatedAt": "2026-05-31T21:07:57.359Z",
+  "error": "Port 5173 is already occupied before frontend launch",
   "backendUrl": "http://127.0.0.1:4000/api/develop/files",
   "frontendUrl": "http://127.0.0.1:5173/",
   "fsmId": "frontend-startup-fsm"

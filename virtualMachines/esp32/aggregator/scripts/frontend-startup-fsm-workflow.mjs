@@ -5,7 +5,7 @@ import { spawn, execFileSync } from 'node:child_process';
 
 const BACKEND_URL = process.env.FRONTEND_FSM_BACKEND_URL || 'http://127.0.0.1:4000/api/develop/files';
 const FRONTEND_URL = process.env.FRONTEND_FSM_FRONTEND_URL || 'http://127.0.0.1:5173/';
-const FRONTEND_CMD = process.env.FRONTEND_FSM_FRONTEND_CMD || 'npm run dev:raw -- --host 0.0.0.0 --port 5173 --strictPort --force';
+const FRONTEND_CMD = process.env.FRONTEND_FSM_FRONTEND_CMD || 'node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173 --strictPort --force';
 const FRONTEND_PORT = Number(process.env.FRONTEND_FSM_FRONTEND_PORT || new URL(FRONTEND_URL).port || 5173);
 const POLL_MS = Number(process.env.FRONTEND_FSM_POLL_MS || 1200);
 const FRONTEND_WAIT_TIMEOUT_MS = Number(process.env.FRONTEND_FSM_FRONTEND_WAIT_TIMEOUT_MS || 30000);

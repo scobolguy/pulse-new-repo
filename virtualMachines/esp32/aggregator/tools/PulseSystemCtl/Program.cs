@@ -17,7 +17,7 @@ var options = new LauncherOptions(
     FrontendPort: ReadIntEnv("PULSE_CTL_FRONTEND_PORT", 5173),
     BackendFsmCommand: Environment.GetEnvironmentVariable("PULSE_CTL_BACKEND_FSM_CMD") ?? "node scripts/startup-fsm-workflow.mjs",
     FrontendFsmCommand: Environment.GetEnvironmentVariable("PULSE_CTL_FRONTEND_FSM_CMD") ?? "node scripts/frontend-startup-fsm-workflow.mjs",
-    FrontendRawCommand: Environment.GetEnvironmentVariable("PULSE_CTL_FRONTEND_RAW_CMD") ?? "npm run dev:raw -- --host 0.0.0.0 --port 5173 --strictPort --force",
+    FrontendRawCommand: Environment.GetEnvironmentVariable("PULSE_CTL_FRONTEND_RAW_CMD") ?? "node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173 --strictPort --force",
     StatusPathBackend: Path.Combine(root, "data", "startup-fsm-status.json"),
     StatusPathFrontend: Path.Combine(root, "data", "frontend-startup-fsm-status.json")
 );
