@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { actorHeaders, getJsonAsActor, postJsonAsActor, putJson } from './http-client.js';
 
 const TEST_TPS = 30;
@@ -60,8 +60,8 @@ export default function ServerMonitorBoard() {
   const [feedModeLabel, setFeedModeLabel] = useState('SSE connecting; polling fallback every 250ms');
   const [controlStatus, setControlStatus] = useState('');
   const testCancelledRef = useRef(false);
-  const [trafficPulseTick, setTrafficPulseTick] = useState(0);
-  const lastTrafficAtRef = useRef(0);
+  const [lastTrafficAt, setLastTrafficAt] = useState(0);
+  const [nowTs, setNowTs] = useState(() => Date.now());
   const lastGatewayProcessedRef = useRef(null);
 
   function applyGatewayProcessedDelta(gatewayPayload) {
@@ -76,12 +76,11 @@ export default function ServerMonitorBoard() {
 
     if (processedTotal > lastGatewayProcessedRef.current) {
       lastGatewayProcessedRef.current = processedTotal;
-      lastTrafficAtRef.current = Date.now();
-      setTrafficPulseTick(Date.now());
+      setLastTrafficAt(Date.now());
     }
   }
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     try {
       const [databaseResult, managerResult, queueResult, brokerResult, gatewayResult] = await Promise.allSettled([
         getJsonAsActor('/api/registry/databases', 'Database registry API failed'),
@@ -128,9 +127,6 @@ export default function ServerMonitorBoard() {
       if (gatewayResult.status === 'fulfilled') {
         const gatewayPayload = gatewayResult.value || {};
         applyGatewayProcessedDelta(gatewayPayload);
-        if (Date.now() - lastTrafficAtRef.current < ACTIVITY_DECAY_MS) {
-          setTrafficPulseTick(Date.now());
-        }
       } else {
         errors.push(String(gatewayResult.reason?.message || gatewayResult.reason || 'Gateway API failed'));
       }
@@ -139,11 +135,20 @@ export default function ServerMonitorBoard() {
     } catch (e) {
       setError(String(e.message || e));
     }
-  }
+  }, []);
 
   useEffect(() => {
-    refresh();
+    setTimeout(() => {
+      void refresh();
+    }, 0);
     const timer = setInterval(refresh, 250);
+    return () => clearInterval(timer);
+  }, [refresh]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNowTs(Date.now());
+    }, 1000);
     return () => clearInterval(timer);
   }, []);
 
@@ -281,7 +286,7 @@ export default function ServerMonitorBoard() {
         const status = normalizeStatus(manager?.status);
         const queueCount = queueCountByManager[managerId] || 0;
         const drawerCount = Math.max(3, Math.min(6, queueCount || 3));
-        const hasRecentTraffic = Date.now() - lastTrafficAtRef.current < ACTIVITY_DECAY_MS;
+        const hasRecentTraffic = nowTs - lastTrafficAt < ACTIVITY_DECAY_MS;
         let accessTier = queueCount >= 20 ? 'heavy' : queueCount >= 8 ? 'medium' : queueCount >= 1 ? 'light' : 'idle';
         if (accessTier === 'idle' && hasRecentTraffic) {
           accessTier = 'light';
@@ -297,7 +302,7 @@ export default function ServerMonitorBoard() {
         };
       })
       .sort((a, b) => a.managerId.localeCompare(b.managerId)),
-    [managers, queueCountByManager, trafficPulseTick]
+    [managers, queueCountByManager, lastTrafficAt, nowTs]
   );
 
   const databaseCards = useMemo(

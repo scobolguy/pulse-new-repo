@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { getJson, postJson, putJson } from './http-client.js';
 
 const BOC_QUEUES = [
@@ -22,12 +22,12 @@ export default function BocGatewayDashboard() {
   const [batchSize, setBatchSize] = useState(25);
   const [approvalMode, setApprovalMode] = useState('approved');
 
-  async function fetchGateway() {
+  const fetchGateway = useCallback(async () => {
     const data = await getJson('/api/gateways', 'Gateway API failed');
     setGateway(data?.boc || null);
-  }
+  }, []);
 
-  async function fetchQueues() {
+  const fetchQueues = useCallback(async () => {
     const next = {};
     for (const queueName of BOC_QUEUES) {
       const res = await fetch(`/api/queue/${encodeURIComponent(queueName)}/length`);
@@ -38,22 +38,30 @@ export default function BocGatewayDashboard() {
       }
     }
     setQueues(next);
-  }
+  }, []);
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     try {
       await Promise.all([fetchGateway(), fetchQueues()]);
       setError('');
     } catch (e) {
       setError(String(e.message || e));
     }
-  }
+  }, [fetchGateway, fetchQueues]);
 
   useEffect(() => {
-    refresh();
-    const timer = setInterval(refresh, 3000);
-    return () => clearInterval(timer);
-  }, []);
+    const scheduleRefresh = () => {
+      setTimeout(() => {
+        refresh();
+      }, 0);
+    };
+    const initTimer = setTimeout(scheduleRefresh, 0);
+    const timer = setInterval(scheduleRefresh, 3000);
+    return () => {
+      clearTimeout(initTimer);
+      clearInterval(timer);
+    };
+  }, [refresh]);
 
   async function startGateway() {
     try {

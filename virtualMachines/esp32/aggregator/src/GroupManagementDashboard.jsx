@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 function parsePrivileges(value) {
   return Array.from(
@@ -19,22 +19,42 @@ export default function GroupManagementDashboard({ actorPermissions = [] }) {
   const [privilegesText, setPrivilegesText] = useState('');
   const [includeDeleted, setIncludeDeleted] = useState(false);
   const [status, setStatus] = useState('');
-  const [canRead, setCanRead] = useState(false);
-  const [canManage, setCanManage] = useState(false);
+  const permissions = useMemo(
+    () => (Array.isArray(actorPermissions) ? actorPermissions : []),
+    [actorPermissions]
+  );
+  const hasPermission = useCallback(
+    (permission) => permissions.includes('*') || permissions.includes(permission) || permissions.includes('users.*'),
+    [permissions]
+  );
+  const canRead = hasPermission('users.read');
+  const canManage = hasPermission('users.manage');
 
   const selectedGroup = useMemo(
     () => groups.find(group => group.groupId === selectedGroupId) || null,
     [groups, selectedGroupId]
   );
 
-  useEffect(() => {
-    const permissions = Array.isArray(actorPermissions) ? actorPermissions : [];
-    const has = (permission) => permissions.includes('*') || permissions.includes(permission) || permissions.includes('users.*');
-    setCanRead(has('users.read'));
-    setCanManage(has('users.manage'));
-  }, [actorPermissions]);
+  const hydrateEditorFromGroup = useCallback((group) => {
+    if (!group) {
+      setLabel('');
+      setDescription('');
+      setPrivilegesText('');
+      return;
+    }
+    setLabel(group.label || group.groupId || '');
+    setDescription(group.description || '');
+    setPrivilegesText((group.privileges || []).join('\n'));
+  }, []);
 
-  async function loadGroups() {
+  const selectGroup = useCallback((groupId, availableGroups = groups) => {
+    const nextId = String(groupId || '').trim();
+    setSelectedGroupId(nextId);
+    const group = availableGroups.find((item) => item.groupId === nextId) || null;
+    hydrateEditorFromGroup(group);
+  }, [groups, hydrateEditorFromGroup]);
+
+  const loadGroups = useCallback(async (preferredGroupId = null) => {
     const query = includeDeleted ? '?includeDeleted=1' : '';
     const res = await fetch(`/api/users/groups${query}`);
     if (!res.ok) throw new Error(`Load groups failed (${res.status})`);
@@ -42,30 +62,34 @@ export default function GroupManagementDashboard({ actorPermissions = [] }) {
     const items = Array.isArray(payload.groups) ? payload.groups : [];
     setGroups(items);
 
-    if (!items.some(group => group.groupId === selectedGroupId)) {
-      setSelectedGroupId(items[0]?.groupId || '');
+    const preferredId = String(preferredGroupId || selectedGroupId || '').trim();
+    const existing = preferredId ? items.find((group) => group.groupId === preferredId) : null;
+    if (existing) {
+      selectGroup(existing.groupId, items);
+      return;
     }
-  }
+    if (items.length > 0) {
+      selectGroup(items[0].groupId, items);
+      return;
+    }
+    selectGroup('', items);
+  }, [includeDeleted, selectedGroupId, selectGroup]);
 
-  async function refreshAll() {
+  const refreshAll = useCallback(async () => {
     try {
       await loadGroups();
       setStatus('');
     } catch (e) {
       setStatus(e.message || String(e));
     }
-  }
+  }, [loadGroups]);
 
   useEffect(() => {
-    refreshAll();
-  }, [includeDeleted]);
-
-  useEffect(() => {
-    if (!selectedGroup) return;
-    setLabel(selectedGroup.label || selectedGroup.groupId);
-    setDescription(selectedGroup.description || '');
-    setPrivilegesText((selectedGroup.privileges || []).join('\n'));
-  }, [selectedGroup]);
+    const timer = setTimeout(() => {
+      refreshAll();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [refreshAll, includeDeleted]);
 
   async function handleCreateGroup() {
     try {
@@ -83,8 +107,7 @@ export default function GroupManagementDashboard({ actorPermissions = [] }) {
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || `Create failed (${res.status})`);
-      await loadGroups();
-      setSelectedGroupId(groupId);
+      await loadGroups(groupId);
       setStatus(`Created group ${groupId}.`);
     } catch (e) {
       setStatus(e.message || String(e));
@@ -105,7 +128,7 @@ export default function GroupManagementDashboard({ actorPermissions = [] }) {
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || `Save failed (${res.status})`);
-      await loadGroups();
+      await loadGroups(selectedGroupId);
       setStatus(`Saved group ${selectedGroupId}.`);
     } catch (e) {
       setStatus(e.message || String(e));
@@ -166,7 +189,7 @@ export default function GroupManagementDashboard({ actorPermissions = [] }) {
                     cursor: 'pointer',
                     opacity: group.deletedAt ? 0.65 : 1
                   }}
-                  onClick={() => setSelectedGroupId(group.groupId)}
+                  onClick={() => selectGroup(group.groupId)}
                 >
                   {group.groupId}{group.deletedAt ? ' (soft-deleted)' : ''}
                 </button>

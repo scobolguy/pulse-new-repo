@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 export default function UserInProfileDashboard({ actorPermissions = [] }) {
   const [users, setUsers] = useState([]);
@@ -6,22 +6,27 @@ export default function UserInProfileDashboard({ actorPermissions = [] }) {
   const [selectedUserId, setSelectedUserId] = useState('');
   const [selectedProfileIds, setSelectedProfileIds] = useState([]);
   const [status, setStatus] = useState('');
-  const [canRead, setCanRead] = useState(false);
-  const [canManage, setCanManage] = useState(false);
+  const permissions = useMemo(
+    () => (Array.isArray(actorPermissions) ? actorPermissions : []),
+    [actorPermissions]
+  );
+
+  const canRead = useMemo(
+    () => permissions.includes('*') || permissions.includes('users.read') || permissions.includes('users.*'),
+    [permissions]
+  );
+
+  const canManage = useMemo(
+    () => permissions.includes('*') || permissions.includes('users.manage') || permissions.includes('users.*'),
+    [permissions]
+  );
 
   const selectedUser = useMemo(
     () => users.find(user => user.userId === selectedUserId) || null,
     [users, selectedUserId]
   );
 
-  useEffect(() => {
-    const permissions = Array.isArray(actorPermissions) ? actorPermissions : [];
-    const has = (permission) => permissions.includes('*') || permissions.includes(permission) || permissions.includes('users.*');
-    setCanRead(has('users.read'));
-    setCanManage(has('users.manage'));
-  }, [actorPermissions]);
-
-  async function loadData() {
+  const loadData = useCallback(async () => {
     const [usersRes, profilesRes] = await Promise.all([
       fetch('/api/users'),
       fetch('/api/users/profiles')
@@ -41,24 +46,28 @@ export default function UserInProfileDashboard({ actorPermissions = [] }) {
     if (!nextUsers.some(user => user.userId === selectedUserId)) {
       setSelectedUserId(nextUsers[0]?.userId || '');
     }
-  }
+  }, [selectedUserId]);
 
-  async function refreshAll() {
+  const refreshAll = useCallback(async () => {
     try {
       await loadData();
       setStatus('');
     } catch (e) {
       setStatus(e.message || String(e));
     }
-  }
+  }, [loadData]);
 
   useEffect(() => {
-    refreshAll();
-  }, []);
+    setTimeout(() => {
+      void refreshAll();
+    }, 0);
+  }, [refreshAll]);
 
   useEffect(() => {
     if (!selectedUser) return;
-    setSelectedProfileIds(Array.isArray(selectedUser.profileIds) ? selectedUser.profileIds : []);
+    setTimeout(() => {
+      setSelectedProfileIds(Array.isArray(selectedUser.profileIds) ? selectedUser.profileIds : []);
+    }, 0);
   }, [selectedUser]);
 
   function toggleProfile(profileId) {

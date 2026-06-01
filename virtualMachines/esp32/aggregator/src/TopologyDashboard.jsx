@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, memo } from 'react';
+import { useEffect, useState, memo } from 'react';
 
 function getPresenceClientIdentity() {
   const key = 'pulse.presenceClientId';
@@ -50,20 +50,19 @@ function makeMermaidId(value) {
 // Memoized NodeCard to prevent unnecessary re-renders
 const NodeCard = memo(function NodeCard({ node, anchorId, title }) {
   // Force re-render every second for live color updates
-  const [, setTick] = React.useState(0);
-  React.useEffect(() => {
-    const t = setInterval(() => setTick(tick => tick + 1), 1000);
+  const [nowTs, setNowTs] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNowTs(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
 
-  const now = Date.now();
-  const inactiveMs = now - node.lastSeen;
+  const inactiveMs = nowTs - node.lastSeen;
   let bg = '#e8f5e9'; // green
   if (inactiveMs > 5 * 60 * 1000) bg = '#ffebee'; // red
   else if (inactiveMs > 2 * 60 * 1000) bg = '#fffde7'; // yellow
 
   // Context menu state
-  const [menu, setMenu] = React.useState(null);
+  const [menu, setMenu] = useState(null);
 
   // Handle right-click
   const handleContextMenu = (e) => {
@@ -71,7 +70,7 @@ const NodeCard = memo(function NodeCard({ node, anchorId, title }) {
     setMenu({ x: e.clientX, y: e.clientY });
   };
   // Close menu on click elsewhere
-  React.useEffect(() => {
+  useEffect(() => {
     if (!menu) return;
     const close = () => setMenu(null);
     window.addEventListener('click', close);
@@ -105,7 +104,7 @@ const NodeCard = memo(function NodeCard({ node, anchorId, title }) {
   );
 });
 
-export default function TopologyDashboard({ permissions = [] }) {
+export default function TopologyDashboard() {
 
   const [topology, setTopology] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -121,10 +120,10 @@ export default function TopologyDashboard({ permissions = [] }) {
   }
   const [backendUrl, setBackendUrl] = useState(defaultBackendUrl);
   const [presenceIdentity] = useState(() => getPresenceClientIdentity());
+  const [nowTs, setNowTs] = useState(() => Date.now());
 
   const activePhysicalNodes = topology.filter(node => {
-    const now = Date.now();
-    const isActive = now - node.lastSeen <= 10 * 60 * 1000;
+    const isActive = nowTs - node.lastSeen <= 10 * 60 * 1000;
     const isLoopback = node.ip === '127.0.0.1' || node.ip === '::1' || node.nodeName === 'Aggregator Backend';
     const isAvailable = node.availability?.available !== false;
     return isActive && !isLoopback && isAvailable;
@@ -201,8 +200,10 @@ export default function TopologyDashboard({ permissions = [] }) {
   }
 
   useEffect(() => {
-    fetchTopology(backendUrl);
-    fetchAvailability(backendUrl);
+    setTimeout(() => {
+      void fetchTopology(backendUrl);
+      void fetchAvailability(backendUrl);
+    }, 0);
     const interval = setInterval(() => fetchTopology(backendUrl), 30000);
     const availabilityInterval = setInterval(async () => {
       if (availability.available) {
@@ -224,6 +225,13 @@ export default function TopologyDashboard({ permissions = [] }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backendUrl, availability.available, presenceIdentity.clientId]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNowTs(Date.now());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', padding: 12, fontFamily: 'Segoe UI, Tahoma, Geneva, Verdana, sans-serif', fontSize: 13, background: '#f3f3f3' }}>

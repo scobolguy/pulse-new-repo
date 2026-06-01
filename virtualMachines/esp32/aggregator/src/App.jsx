@@ -127,7 +127,6 @@ const OPERATIONS_TASKS = [
 ];
 
 const USER_ADMIN_ACTIONS = ['add', 'delete', 'update'];
-const LOGIN_SECTION_VISIBLE_LIMIT = 6;
 const FIXED_LOGIN_USER_ID = 'system-admin';
 const FIXED_LOGIN_PASSWORD = 'pulse123';
 const LANGUAGE_OPTIONS = [
@@ -272,36 +271,11 @@ function getMonitorClassLabel(itemClass) {
   return itemClass.label || itemClass.classId;
 }
 
-function formatLatencyMs(value) {
-  return Number.isFinite(value) ? `${Math.round(value)} ms` : 'No data';
-}
-
-function formatThroughputTps(value) {
-  return Number.isFinite(value) ? `${value.toFixed(1)} tx/s` : 'No data';
-}
-
 function normalizeRuntimeStatus(value) {
   const status = String(value || '').toLowerCase();
   if (['up', 'online', 'running', 'active', 'ok'].includes(status)) return 'online';
   if (['quiesced', 'draining', 'maintenance', 'paused', 'idle'].includes(status)) return 'paused';
   return 'offline';
-}
-
-function getRuntimeStatusLabel(status) {
-  if (status === 'online') return 'Running';
-  if (status === 'paused') return 'Paused';
-  return 'Offline';
-}
-
-function getFlowStatusLabel(status) {
-  const normalized = String(status || '').toLowerCase();
-  if (normalized === 'ok') return 'On target';
-  if (normalized === 'critical') return 'Breach';
-  if (normalized === 'warning') return 'Warning';
-  if (normalized === 'breach') return 'Breach';
-  if (normalized === 'running') return 'Running';
-  if (normalized === 'idle') return 'Idle';
-  return 'No data';
 }
 
 function getLanguageKey(language) {
@@ -312,28 +286,6 @@ function getLanguageKey(language) {
   return 'en';
 }
 
-function countPmachineNodes(nodes = []) {
-  if (!Array.isArray(nodes)) return 0;
-  return nodes.filter((node) => {
-    const details = node?.details || {};
-    const hardware = String(details.hardware || '').toLowerCase();
-    const serviceName = String(node?.serviceName || '').toLowerCase();
-    const runtime = String(details.runtime || node?.runtime || '').toLowerCase();
-    const deviceRole = String(details.deviceRole || node?.deviceRole || '').toLowerCase();
-    const services = Array.isArray(details.services) ? details.services.map((service) => String(service).toLowerCase()) : [];
-    return (
-      hardware.includes('pmachine') ||
-      hardware.includes('esp32') ||
-      serviceName.includes('pmachine') ||
-      serviceName.includes('esp32-node') ||
-      runtime.includes('pmachine') ||
-      runtime.includes('javascript') ||
-      deviceRole.length > 0 ||
-      services.some((service) => service.includes('pmachine'))
-    );
-  }).length;
-}
-
 function getThroughputHealth(actualTps, targetTps, runtimeStatus) {
   if (runtimeStatus !== 'running') return 'idle';
   if (!Number.isFinite(targetTps) || targetTps <= 0) return 'no-data';
@@ -342,56 +294,6 @@ function getThroughputHealth(actualTps, targetTps, runtimeStatus) {
   if (actualTps < targetTps * 1.1) return 'warning';
   return 'ok';
 }
-
-function getFlowBeltAnimationStyle(flow) {
-  const throughputTps = Number(flow?.actualThroughputTps);
-  const isRunning = flow?.runtimeStatus === 'running' && Number.isFinite(throughputTps) && throughputTps > 0;
-  if (!isRunning) {
-    return {
-      '--rg-belt-duration': '2.6s',
-      '--rg-belt-play-state': 'paused'
-    };
-  }
-
-  const minDurationMs = 520;
-  const maxDurationMs = 2300;
-  const saturationTps = 180;
-  const normalized = Math.max(0, Math.min(throughputTps / saturationTps, 1));
-  const durationMs = Math.round(maxDurationMs - ((maxDurationMs - minDurationMs) * normalized));
-
-  return {
-    '--rg-belt-duration': `${durationMs}ms`,
-    '--rg-belt-play-state': 'running'
-  };
-}
-
-function buildSparklinePoints(values, width = 160, height = 42) {
-  const points = Array.isArray(values) ? values.map((value) => Number(value || 0)) : [];
-  if (points.length === 0) {
-    return `0,${height / 2} ${width},${height / 2}`;
-  }
-  const max = Math.max(...points, 1);
-  const min = Math.min(...points, 0);
-  const range = Math.max(max - min, 1);
-  return points.map((value, index) => {
-    const x = points.length === 1 ? width / 2 : (index / (points.length - 1)) * width;
-    const y = height - (((value - min) / range) * (height - 6)) - 3;
-    return `${x},${y}`;
-  }).join(' ');
-}
-
-function Sparkline({ values, label, tone = 'neutral' }) {
-  const points = buildSparklinePoints(values);
-  return (
-    <div className={`home-sparkline home-sparkline--${tone}`}>
-      <span>{label}</span>
-      <svg viewBox="0 0 160 42" preserveAspectRatio="none" aria-hidden="true">
-        <polyline points={points} />
-      </svg>
-    </div>
-  );
-}
-
 
 const TRANSACTION_FLOW_MERMAID_SOURCE = `flowchart LR
   classDef queue fill:#f7e7b6,stroke:#b7a36a,stroke-width:2px;
@@ -629,14 +531,14 @@ const FLOW_DEFINITIONS = [
     const addNode = (id, shape, label) => {
       const escapedLabel = escapeMermaidText(label);
       if (shape === 'round') {
-        lines.push(`  ${id}((\"${escapedLabel}\"))`);
+        lines.push(`  ${id}(("${escapedLabel}"))`);
         return;
       }
       if (shape === 'diamond') {
-        lines.push(`  ${id}{\"${escapedLabel}\"}`);
+        lines.push(`  ${id}{"${escapedLabel}"}`);
         return;
       }
-      lines.push(`  ${id}[\"${escapedLabel}\"]`);
+      lines.push(`  ${id}["${escapedLabel}"]`);
     };
 
     const addEdge = (from, to, label = '') => {
@@ -885,7 +787,7 @@ function App() {
   const [developCreateRequest, setDevelopCreateRequest] = useState(null);
   const [userAdminAction, setUserAdminAction] = useState('update');
   const [taskContextMenu, setTaskContextMenu] = useState({ open: false, x: 0, y: 0, taskId: null });
-  const [workflowCards, setWorkflowCards] = useState(DEFAULT_WORKFLOW_CARDS);
+  const [workflowCards] = useState(DEFAULT_WORKFLOW_CARDS);
   const [overview, setOverview] = useState({
     workers: { lifecycle: 0, bridge: 0 },
     gateways: { swift: false, boc: false, fed: false },
@@ -896,7 +798,6 @@ function App() {
     flows: [],
     system: { cpuUsagePercent: null, memoryUsagePercent: null }
   });
-  const [pmachineNodeCount, setPmachineNodeCount] = useState(0);
   const [rhsWidth, setRhsWidth] = useState(() => {
     const saved = Number(localStorage.getItem('pulse.rhsWidth'));
     if (Number.isFinite(saved)) {
@@ -912,7 +813,6 @@ function App() {
     return 'auto';
   });
   const [collapsedSections, setCollapsedSections] = useState({ flows: false, services: false, servers: false });
-  const [expandedSections, setExpandedSections] = useState({ flows: false, services: false, servers: false });
   const [cardContextMenu, setCardContextMenu] = useState({ open: false, x: 0, y: 0, kind: null, item: null });
   const [cardHiddenMap, setCardHiddenMap] = useState({});
   const [cardRenameMap, setCardRenameMap] = useState({});
@@ -937,10 +837,6 @@ function App() {
 
   function toggleSection(sectionId) {
     setCollapsedSections((current) => ({ ...current, [sectionId]: !current[sectionId] }));
-  }
-
-  function toggleSectionExpansion(sectionId) {
-    setExpandedSections((current) => ({ ...current, [sectionId]: !current[sectionId] }));
   }
 
   async function copyTextToClipboard(text) {
@@ -1057,43 +953,7 @@ function App() {
     }
   }
 
-  function findCardByDeepLink(kind, id) {
-    const normalizedKind = String(kind || '').toLowerCase();
-    const normalizedId = String(id || '').toLowerCase();
-    if (!normalizedKind || !normalizedId) return null;
 
-    if (normalizedKind === 'flow') {
-      const runtimeFlow = overview.flows.find((item) => String(item?.id || item?.name || '').toLowerCase() === normalizedId);
-      if (runtimeFlow) return runtimeFlow;
-
-      const definition = FLOW_DEFINITIONS.find((item) => {
-        const idMatch = String(item?.id || '').toLowerCase() === normalizedId;
-        const nameMatch = String(item?.name || '').toLowerCase() === normalizedId;
-        return idMatch || nameMatch;
-      });
-      if (!definition) return null;
-
-      return {
-        id: definition.id,
-        name: definition.name,
-        runtimeStatus: 'idle',
-        throughputStatus: 'no-data',
-        policyStatus: 'no-data',
-        transactionCount: 0,
-        transitionMetrics: Array.isArray(definition.transitionMetrics) ? definition.transitionMetrics : []
-      };
-    }
-    if (normalizedKind === 'service') {
-      return overview.services.find((item) => String(item?.id || item?.name || '').toLowerCase() === normalizedId) || null;
-    }
-    if (normalizedKind === 'server') {
-      return overview.servers.find((item) => String(item?.id || item?.name || '').toLowerCase() === normalizedId) || null;
-    }
-    if (normalizedKind === 'workflow') {
-      return workflowCards.find((item) => String(item?.id || item?.name || '').toLowerCase() === normalizedId) || null;
-    }
-    return null;
-  }
 
   function applyLocalRuntimeAction(kind, item, action) {
     const normalizedAction = String(action || '').toLowerCase();
@@ -1351,7 +1211,7 @@ function App() {
     setCardPreview((current) => ({ ...current, fullscreen: !current.fullscreen }));
   }
 
-  const activeCardMermaidSource = useMemo(() => {
+  const activeCardMermaidSource = (() => {
     if (!(cardPreview.open && (cardPreview.kind === 'flow' || cardPreview.kind === 'workflow' || cardPreview.kind === 'fsm'))) return '';
     if (cardPreview.kind === 'fsm') {
       return buildFsmMermaidSource(cardPreview.item, fsmPreviewStatus, getFsmPalette(resolvedWindowStyle));
@@ -1361,11 +1221,13 @@ function App() {
     }
     const definition = resolveFlowDefinition(cardPreview.item);
     return definition?.mermaidSource || TRANSACTION_FLOW_MERMAID_SOURCE;
-  }, [cardPreview.open, cardPreview.kind, cardPreview.item, fsmPreviewStatus, resolvedWindowStyle]);
+  })();
 
   useEffect(() => {
     if (!(cardPreview.open && cardPreview.kind === 'fsm')) {
-      setFsmPreviewStatus(null);
+      setTimeout(() => {
+        setFsmPreviewStatus(null);
+      }, 0);
       return undefined;
     }
 
@@ -1391,7 +1253,9 @@ function App() {
     };
 
     if (!liveMode) {
-      setMermaidSseConnected(false);
+      setTimeout(() => {
+        setMermaidSseConnected(false);
+      }, 0);
       void loadSingleStatus();
       return () => {
         cancelled = true;
@@ -1656,7 +1520,7 @@ function App() {
           }
           
           svg = new XMLSerializer().serializeToString(doc.documentElement);
-        } catch (e) {
+        } catch {
           // If SVG parsing fails, fallback to unmodified SVG
         }
         if (!cancelled) {
@@ -1734,12 +1598,55 @@ function App() {
     const id = String(params.get('id') || '').toLowerCase();
     if (!kind || !id) return;
 
-    const item = findCardByDeepLink(kind, id);
+    // Inline minimal deep-link lookup to avoid depending on non-stable callbacks
+    let item = null;
+    const normalizedId = id;
+    if (kind === 'flow') {
+      item = overview.flows.find((itm) => String(itm?.id || itm?.name || '').toLowerCase() === normalizedId);
+      if (!item) {
+        const definition = FLOW_DEFINITIONS.find((d) => String(d.id || '').toLowerCase() === normalizedId || String(d.name || '').toLowerCase() === normalizedId);
+        if (definition) {
+          item = {
+            id: definition.id,
+            name: definition.name,
+            runtimeStatus: 'idle',
+            throughputStatus: 'no-data',
+            policyStatus: 'no-data',
+            transactionCount: 0,
+            transitionMetrics: Array.isArray(definition.transitionMetrics) ? definition.transitionMetrics : []
+          };
+        }
+      }
+    } else if (kind === 'service') {
+      item = overview.services.find((itm) => String(itm?.id || itm?.name || '').toLowerCase() === normalizedId) || null;
+    } else if (kind === 'server') {
+      item = overview.servers.find((itm) => String(itm?.id || itm?.name || '').toLowerCase() === normalizedId) || null;
+    } else if (kind === 'workflow') {
+      item = workflowCards.find((itm) => String(itm?.id || itm?.name || '').toLowerCase() === normalizedId) || null;
+    }
+
     if (!item) return;
 
     deepLinkHandledRef.current = true;
-    openCardPreview(kind, item);
-  }, [overview.flows, overview.services, overview.servers]);
+    // Inline openCardPreview to avoid depending on non-stable callback
+    const title = kind === 'flow'
+      ? `Flow: ${item?.name || item?.id || 'Flow'}`
+      : kind === 'workflow'
+        ? `Workflow: ${item?.name || item?.id || 'Workflow'}`
+        : kind === 'fsm'
+          ? `FSM: ${item?.name || item?.id || 'FSM'}`
+          : `${kind === 'service' ? 'Service' : 'Server'}: ${item?.name || item?.id || 'Item'}`;
+    // Schedule state updates to avoid synchronous setState inside effect body
+    setTimeout(() => {
+      setCardPreview({ open: true, kind, title, item: item || null, mode: null, fullscreen: false });
+      if (kind === 'flow') {
+        const firstTransition = Array.isArray(item?.transitionMetrics) ? item.transitionMetrics[0] : null;
+        setSelectedFlowTransitionId(firstTransition?.id || null);
+      } else {
+        setSelectedFlowTransitionId(null);
+      }
+    }, 0);
+  }, [overview.flows, overview.services, overview.servers, workflowCards]);
 
   function clampRhsWidth(nextWidth) {
     return Math.max(RHS_MIN_WIDTH, Math.min(RHS_MAX_WIDTH, Math.round(nextWidth)));
@@ -1884,29 +1791,6 @@ function App() {
   }, [language]);
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function refreshPmachineNodeCount() {
-      try {
-        const res = await fetch('/api/nodes');
-        const nodes = await res.json().catch(() => []);
-        if (cancelled) return;
-        setPmachineNodeCount(countPmachineNodes(nodes));
-      } catch {
-        if (!cancelled) setPmachineNodeCount(0);
-      }
-    }
-
-    refreshPmachineNodeCount();
-    const interval = setInterval(refreshPmachineNodeCount, 30000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, []);
-
-  useEffect(() => {
     localStorage.setItem('pulse.windowStyle', windowStyle);
   }, [windowStyle]);
 
@@ -1989,13 +1873,17 @@ function App() {
   useEffect(() => {
     if (visibleAreas.length === 0) return;
     if (!visibleAreas.some(item => item.id === area)) {
-      setArea(visibleAreas[0].id);
+      setTimeout(() => {
+        setArea(visibleAreas[0].id);
+      }, 0);
     }
   }, [area, visibleAreas]);
 
   useEffect(() => {
     if (!(cardPreview.open && (cardPreview.kind === 'flow' || cardPreview.kind === 'workflow'))) {
-      setMermaidSseConnected(false);
+      setTimeout(() => {
+        setMermaidSseConnected(false);
+      }, 0);
       return undefined;
     }
 
@@ -2055,7 +1943,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [monitorClassId, pathname]);
+  }, [askBoxActive, monitorClassId, pathname]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2410,44 +2298,6 @@ function App() {
   }, [actorUserId, pathname, askBoxActive]);
 
   const activeArea = visibleAreas.find((item) => item.id === area) || null;
-  const gatewayOnlineCount = Number(Boolean(overview.gateways.swift)) + Number(Boolean(overview.gateways.boc)) + Number(Boolean(overview.gateways.fed));
-  const gatewayTotal = 3;
-  const visibleFlows = overview.flows
-    .filter((item) => !cardHiddenMap[getCardKey('flow', item)])
-    .map((flow) => {
-      const action = String(cardRuntimeMap[getCardKey('flow', flow)] || '').toLowerCase();
-      if (!action) return flow;
-      const runtimeStatus = (action === 'start' || action === 'start up')
-        ? 'running'
-        : action === 'quiesce'
-          ? 'idle'
-          : 'idle';
-      return {
-        ...flow,
-        runtimeStatus,
-        throughputStatus: runtimeStatus === 'running' ? (flow.throughputStatus === 'no-data' ? 'warning' : flow.throughputStatus) : 'idle'
-      };
-    });
-  const visibleServices = overview.services
-    .filter((item) => !cardHiddenMap[getCardKey('service', item)])
-    .map((service) => {
-      const action = String(cardRuntimeMap[getCardKey('service', service)] || '').toLowerCase();
-      if (!action) return service;
-      const status = (action === 'start' || action === 'start up')
-        ? 'online'
-        : action === 'quiesce'
-          ? 'paused'
-          : 'offline';
-      return {
-        ...service,
-        status,
-        state: status
-      };
-    });
-  const visibleServers = overview.servers.filter((item) => !cardHiddenMap[getCardKey('server', item)]);
-  const serverRunningCount = visibleServers.filter((item) => item.status === 'online').length;
-  const activeFlowCount = visibleFlows.filter((item) => item.runtimeStatus === 'running').length;
-  const serviceRunningCount = visibleServices.filter((item) => item.status === 'online').length;
   const availableRunnableFsms = runnableFsms.filter((item) => item?.canRun !== false);
   const languageKey = getLanguageKey(language);
   const copy = LANGUAGE_COPY[languageKey] || LANGUAGE_COPY.en;
@@ -2462,11 +2312,7 @@ function App() {
     [workflowCards]
   );
 
-  const activeUserAdminTask = USER_ADMIN_TASKS.find(task => task.id === userAdminTask) || USER_ADMIN_TASKS[0];
-  const activeOperationsTask = OPERATIONS_TASKS.find(task => task.id === operationsTask) || OPERATIONS_TASKS[0];
-  const activeMonitorClass = monitorClasses.find(item => item.classId === monitorClassId) || null;
-
-  function renderMonitorContent(classId) {
+  function renderMonitorContent() {
     return <TransactionLifecycleDashboard />;
   }
 

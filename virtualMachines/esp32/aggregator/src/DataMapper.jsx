@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 const SECTION_STYLE = {
   border: '1px solid #ccc',
@@ -21,7 +21,7 @@ function validateConversionRule(ruleText) {
   const text = String(ruleText || '').trim();
   if (!text) return { valid: true };
   if (text.length > 1000) return { valid: false, error: 'too long (max 1000 chars)' };
-  if (!/^[\w\s\.,()'"\[\]{};:\-+*/%<>=!|&?#@\\~`]+$/.test(text)) {
+  if (!/^[\w\s.,()'"{};:\-+*/%<>=!|&?#@\\~`]+$/.test(text)) {
     return { valid: false, error: 'unsupported characters' };
   }
 
@@ -387,7 +387,7 @@ export default function DataMapper() {
   const [expandedSourcePaths, setExpandedSourcePaths] = useState(new Set());
   const [expandedTargetPaths, setExpandedTargetPaths] = useState(new Set());
 
-  async function loadAll() {
+  const loadAll = useCallback(async () => {
     try {
       const [schemasRes, mappingsRes] = await Promise.all([
         fetch('/api/librarian/schemas'),
@@ -400,11 +400,13 @@ export default function DataMapper() {
     } catch (e) {
       setStatus(`Load failed: ${e.message}`);
     }
-  }
+  }, []);
 
   useEffect(() => {
-    loadAll();
-  }, []);
+    setTimeout(() => {
+      void loadAll();
+    }, 0);
+  }, [loadAll]);
 
   const schemasByPath = useMemo(() => {
     const map = new Map();
@@ -482,31 +484,27 @@ export default function DataMapper() {
 
   useEffect(() => {
     if (!sourceIsXsd) {
-      setExpandedSourcePaths(new Set());
+      setTimeout(() => {
+        setExpandedSourcePaths(new Set());
+      }, 0);
       return;
     }
-    setExpandedSourcePaths(getInitialExpandedPaths(sourceIndex));
+    setTimeout(() => {
+      setExpandedSourcePaths(getInitialExpandedPaths(sourceIndex));
+    }, 0);
   }, [sourceIsXsd, sourceIndex, sourceSchemaPath]);
 
   useEffect(() => {
     if (!targetIsXsd) {
-      setExpandedTargetPaths(new Set());
+      setTimeout(() => {
+        setExpandedTargetPaths(new Set());
+      }, 0);
       return;
     }
-    setExpandedTargetPaths(getInitialExpandedPaths(targetIndex));
+    setTimeout(() => {
+      setExpandedTargetPaths(getInitialExpandedPaths(targetIndex));
+    }, 0);
   }, [targetIsXsd, targetIndex, targetSchemaPath]);
-
-  const sourceNodeByPath = useMemo(() => {
-    const map = new Map();
-    for (const node of sourceNodes) map.set(node.path, node);
-    return map;
-  }, [sourceNodes]);
-
-  const targetNodeByPath = useMemo(() => {
-    const map = new Map();
-    for (const node of targetNodes) map.set(node.path, node);
-    return map;
-  }, [targetNodes]);
 
   const editorReady = !!editingId && !!sourceSchema && !!targetSchema;
 

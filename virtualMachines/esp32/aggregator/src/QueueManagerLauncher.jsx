@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 export default function QueueManagerLauncher() {
   const defaultHost = typeof window !== 'undefined' ? window.location.hostname || 'localhost' : 'localhost';
@@ -24,7 +24,7 @@ export default function QueueManagerLauncher() {
     return res.json();
   }
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     try {
       const res = await fetch('/api/local-queue-managers');
       const data = await readJson(res, 'Launcher status');
@@ -32,13 +32,18 @@ export default function QueueManagerLauncher() {
     } catch (e) {
       setStatusMsg(e.message || String(e));
     }
-  }
+  }, []);
 
   useEffect(() => {
-    refresh();
+    const initTimer = setTimeout(() => {
+      refresh();
+    }, 0);
     const t = setInterval(refresh, 3000);
-    return () => clearInterval(t);
-  }, []);
+    return () => {
+      clearTimeout(initTimer);
+      clearInterval(t);
+    };
+  }, [refresh]);
 
   async function handleStart() {
     setLoading(true);

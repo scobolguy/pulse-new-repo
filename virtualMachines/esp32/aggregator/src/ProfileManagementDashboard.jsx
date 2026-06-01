@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 export default function ProfileManagementDashboard({ actorPermissions = [] }) {
   const [profiles, setProfiles] = useState([]);
@@ -7,8 +7,16 @@ export default function ProfileManagementDashboard({ actorPermissions = [] }) {
   const [label, setLabel] = useState('');
   const [description, setDescription] = useState('');
   const [status, setStatus] = useState('');
-  const [canRead, setCanRead] = useState(false);
-  const [canManage, setCanManage] = useState(false);
+  const permissions = useMemo(
+    () => (Array.isArray(actorPermissions) ? actorPermissions : []),
+    [actorPermissions]
+  );
+  const hasPermission = useCallback(
+    (permission) => permissions.includes('*') || permissions.includes(permission) || permissions.includes('users.*'),
+    [permissions]
+  );
+  const canRead = hasPermission('users.read');
+  const canManage = hasPermission('users.manage');
 
   const selectedProfile = useMemo(
     () => profiles.find(profile => profile.profileId === selectedProfileId) || null,
@@ -26,43 +34,59 @@ export default function ProfileManagementDashboard({ actorPermissions = [] }) {
     );
   }
 
-  useEffect(() => {
-    const permissions = Array.isArray(actorPermissions) ? actorPermissions : [];
-    const has = (permission) => permissions.includes('*') || permissions.includes(permission) || permissions.includes('users.*');
-    setCanRead(has('users.read'));
-    setCanManage(has('users.manage'));
-  }, [actorPermissions]);
+  const hydrateEditorFromProfile = useCallback((profile) => {
+    if (!profile) {
+      setLabel('');
+      setDescription('');
+      setPermissionsText('');
+      return;
+    }
+    setLabel(profile.label || profile.profileId || '');
+    setDescription(profile.description || '');
+    setPermissionsText((profile.permissions || []).join('\n'));
+  }, []);
 
-  async function loadProfiles() {
+  const selectProfile = useCallback((profileId, availableProfiles = profiles) => {
+    const nextId = String(profileId || '').trim();
+    setSelectedProfileId(nextId);
+    const profile = availableProfiles.find((item) => item.profileId === nextId) || null;
+    hydrateEditorFromProfile(profile);
+  }, [hydrateEditorFromProfile, profiles]);
+
+  const loadProfiles = useCallback(async (preferredProfileId = null) => {
     const res = await fetch('/api/users/profiles');
     if (!res.ok) throw new Error(`Load profiles failed (${res.status})`);
     const payload = await res.json();
     const items = Array.isArray(payload.profiles) ? payload.profiles : [];
     setProfiles(items);
-    if (!selectedProfileId && items.length > 0) {
-      setSelectedProfileId(items[0].profileId);
+    const preferredId = String(preferredProfileId || selectedProfileId || '').trim();
+    const existing = preferredId ? items.find((item) => item.profileId === preferredId) : null;
+    if (existing) {
+      selectProfile(existing.profileId, items);
+      return;
     }
-  }
+    if (items.length > 0) {
+      selectProfile(items[0].profileId, items);
+      return;
+    }
+    selectProfile('', items);
+  }, [selectedProfileId, selectProfile]);
 
-  async function refreshAll() {
+  const refreshAll = useCallback(async () => {
     try {
       await loadProfiles();
       setStatus('');
     } catch (e) {
       setStatus(e.message || String(e));
     }
-  }
+  }, [loadProfiles]);
 
   useEffect(() => {
-    refreshAll();
-  }, []);
-
-  useEffect(() => {
-    if (!selectedProfile) return;
-    setLabel(selectedProfile.label || selectedProfile.profileId);
-    setDescription(selectedProfile.description || '');
-    setPermissionsText((selectedProfile.permissions || []).join('\n'));
-  }, [selectedProfile]);
+    const timer = setTimeout(() => {
+      refreshAll();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [refreshAll]);
 
   async function handleCreateProfile() {
     try {
@@ -80,8 +104,7 @@ export default function ProfileManagementDashboard({ actorPermissions = [] }) {
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || `Create failed (${res.status})`);
-      await loadProfiles();
-      setSelectedProfileId(profileId);
+      await loadProfiles(profileId);
       setStatus(`Created profile ${profileId}.`);
     } catch (e) {
       setStatus(e.message || String(e));
@@ -102,7 +125,7 @@ export default function ProfileManagementDashboard({ actorPermissions = [] }) {
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || `Save failed (${res.status})`);
-      await loadProfiles();
+      await loadProfiles(selectedProfileId);
       setStatus(`Saved profile ${selectedProfileId}.`);
     } catch (e) {
       setStatus(e.message || String(e));
@@ -116,7 +139,6 @@ export default function ProfileManagementDashboard({ actorPermissions = [] }) {
       const res = await fetch(`/api/users/profiles/${encodeURIComponent(selectedProfileId)}`, { method: 'DELETE' });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || `Delete failed (${res.status})`);
-      setSelectedProfileId('');
       await loadProfiles();
       setStatus(`Deleted profile ${selectedProfileId}.`);
     } catch (e) {
@@ -147,7 +169,7 @@ export default function ProfileManagementDashboard({ actorPermissions = [] }) {
                     background: selectedProfileId === profile.profileId ? '#eef1f5' : '#f8f9fb',
                     cursor: 'pointer'
                   }}
-                  onClick={() => setSelectedProfileId(profile.profileId)}
+                  onClick={() => selectProfile(profile.profileId)}
                 >
                   {profile.profileId}
                 </button>

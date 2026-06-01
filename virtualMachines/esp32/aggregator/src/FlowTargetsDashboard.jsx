@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 function createEmptyFlow(flowId = '') {
   return {
@@ -19,7 +19,7 @@ export default function FlowTargetsDashboard() {
   const [status, setStatus] = useState('');
   const [loading, setLoading] = useState(false);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const actorUserId = localStorage.getItem('pulse.actorUserId') || 'system-admin';
@@ -49,11 +49,14 @@ export default function FlowTargetsDashboard() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
-    load();
-  }, []);
+    const timer = setTimeout(() => {
+      load();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [load]);
 
   function updateFlow(index, key, value) {
     setFlows((current) => current.map((flow, flowIndex) => (

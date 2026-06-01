@@ -8,26 +8,29 @@
     "CHECK_BACKEND",
     "START_BACKEND",
     "WAIT_BACKEND",
-    "START_BACKEND"
+    "START_BACKEND",
+    "WAIT_BACKEND",
+    "START_BACKEND",
+    "WAIT_BACKEND"
   ],
   "logs": [
     {
-      "at": "2026-05-31T22:08:10.484Z",
+      "at": "2026-06-01T16:56:49.854Z",
       "event": "workflow-start",
       "data": {
         "backendUrl": "http://127.0.0.1:4000/api/develop/files",
-        "statusPath": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\startup-fsm-status.json"
+        "statusPath": "c:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\startup-fsm-status.json"
       }
     },
     {
-      "at": "2026-05-31T22:08:10.498Z",
+      "at": "2026-06-01T16:56:49.860Z",
       "event": "state",
       "data": {
         "state": "INIT"
       }
     },
     {
-      "at": "2026-05-31T22:08:10.504Z",
+      "at": "2026-06-01T16:56:49.866Z",
       "event": "state",
       "data": {
         "state": "KILL_BACKEND_PROCESSES",
@@ -36,7 +39,7 @@
       }
     },
     {
-      "at": "2026-05-31T22:08:10.566Z",
+      "at": "2026-06-01T16:56:49.897Z",
       "event": "subflow-complete",
       "data": {
         "subflow": "Kill all back end processes",
@@ -47,7 +50,7 @@
       }
     },
     {
-      "at": "2026-05-31T22:08:10.576Z",
+      "at": "2026-06-01T16:56:49.901Z",
       "event": "state",
       "data": {
         "state": "SANITIZE_QUEUE_PERSISTENCE",
@@ -55,7 +58,7 @@
       }
     },
     {
-      "at": "2026-05-31T22:08:10.845Z",
+      "at": "2026-06-01T16:56:50.871Z",
       "event": "subflow-complete",
       "data": {
         "subflow": "Sanitize queue persistence files",
@@ -121,7 +124,7 @@
       }
     },
     {
-      "at": "2026-05-31T22:08:10.847Z",
+      "at": "2026-06-01T16:56:50.874Z",
       "event": "state",
       "data": {
         "state": "CHECK_BACKEND",
@@ -129,16 +132,16 @@
       }
     },
     {
-      "at": "2026-05-31T22:08:10.913Z",
+      "at": "2026-06-01T16:56:50.975Z",
       "event": "backend-started",
       "data": {
         "command": "node --env-file=.env.local backend.mjs",
-        "pid": 17892,
+        "pid": 44836,
         "attempt": 1
       }
     },
     {
-      "at": "2026-05-31T22:08:10.916Z",
+      "at": "2026-06-01T16:56:50.980Z",
       "event": "state",
       "data": {
         "state": "WAIT_BACKEND",
@@ -148,7 +151,7 @@
       }
     },
     {
-      "at": "2026-05-31T22:08:47.189Z",
+      "at": "2026-06-01T16:57:27.222Z",
       "event": "timeout",
       "data": {
         "state": "WAIT_BACKEND",
@@ -159,7 +162,7 @@
       }
     },
     {
-      "at": "2026-05-31T22:08:47.193Z",
+      "at": "2026-06-01T16:57:27.226Z",
       "event": "retry-scheduled",
       "data": {
         "state": "WAIT_BACKEND",
@@ -171,19 +174,79 @@
       }
     },
     {
-      "at": "2026-05-31T22:08:49.257Z",
-      "event": "port-occupied",
+      "at": "2026-06-01T16:57:29.269Z",
+      "event": "backend-started",
       "data": {
-        "state": "START_BACKEND",
-        "port": 4000,
-        "occupiedBy": [
-          208
-        ],
-        "command": "node --env-file=.env.local backend.mjs"
+        "command": "node --env-file=.env.local backend.mjs",
+        "pid": 24552,
+        "attempt": 2
       }
     },
     {
-      "at": "2026-05-31T22:08:49.265Z",
+      "at": "2026-06-01T16:57:29.273Z",
+      "event": "state",
+      "data": {
+        "state": "WAIT_BACKEND",
+        "url": "http://127.0.0.1:4000/api/develop/files",
+        "timeoutMs": 38000,
+        "attempt": 2
+      }
+    },
+    {
+      "at": "2026-06-01T16:58:08.505Z",
+      "event": "timeout",
+      "data": {
+        "state": "WAIT_BACKEND",
+        "url": "http://127.0.0.1:4000/api/develop/files",
+        "timeoutMs": 38000,
+        "attempt": 2,
+        "error": "Not responding in reasonable amount of time"
+      }
+    },
+    {
+      "at": "2026-06-01T16:58:08.507Z",
+      "event": "retry-scheduled",
+      "data": {
+        "state": "WAIT_BACKEND",
+        "nextState": "START_BACKEND",
+        "reason": "backend wait timeout",
+        "currentAttempt": 2,
+        "maxRetries": 2,
+        "retryBackoffMs": 2000
+      }
+    },
+    {
+      "at": "2026-06-01T16:58:10.560Z",
+      "event": "backend-started",
+      "data": {
+        "command": "node --env-file=.env.local backend.mjs",
+        "pid": 10632,
+        "attempt": 3
+      }
+    },
+    {
+      "at": "2026-06-01T16:58:10.565Z",
+      "event": "state",
+      "data": {
+        "state": "WAIT_BACKEND",
+        "url": "http://127.0.0.1:4000/api/develop/files",
+        "timeoutMs": 40000,
+        "attempt": 3
+      }
+    },
+    {
+      "at": "2026-06-01T16:58:51.392Z",
+      "event": "timeout",
+      "data": {
+        "state": "WAIT_BACKEND",
+        "url": "http://127.0.0.1:4000/api/develop/files",
+        "timeoutMs": 40000,
+        "attempt": 3,
+        "error": "Not responding in reasonable amount of time"
+      }
+    },
+    {
+      "at": "2026-06-01T16:58:51.404Z",
       "event": "failed",
       "data": {
         "ok": false,
@@ -195,12 +258,15 @@
           "CHECK_BACKEND",
           "START_BACKEND",
           "WAIT_BACKEND",
-          "START_BACKEND"
+          "START_BACKEND",
+          "WAIT_BACKEND",
+          "START_BACKEND",
+          "WAIT_BACKEND"
         ],
-        "error": "Port 4000 is already occupied before backend launch"
+        "error": "Startup workflow failed to reach READY state."
       }
     }
   ],
-  "updatedAt": "2026-05-31T22:08:49.272Z",
-  "error": "Port 4000 is already occupied before backend launch"
+  "updatedAt": "2026-06-01T16:58:51.416Z",
+  "error": "Startup workflow failed to reach READY state."
 }

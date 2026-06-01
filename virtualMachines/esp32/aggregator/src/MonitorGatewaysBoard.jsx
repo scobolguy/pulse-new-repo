@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { actorHeaders, getJsonAsActor, postJsonAsActor, putJson } from './http-client.js';
 
 function toSvgDataUrl(svg) {
@@ -122,7 +122,7 @@ function getGatewayDisplayLabel(gatewayId, label) {
 }
 
 
-function GatewayLogo({ sources, alt, fallbackIcon, tone, brand, size = 20 }) {
+function GatewayLogo({ sources, alt, fallbackIcon, brand, size = 20 }) {
   const [sourceIndex, setSourceIndex] = useState(0);
   const hasLogo = Array.isArray(sources) && sourceIndex < sources.length;
 
@@ -232,7 +232,7 @@ export default function MonitorGatewaysBoard() {
 
   const rows = useMemo(() => toGatewayRows(gatewayPayload, activeTransactionsCount), [gatewayPayload, activeTransactionsCount]);
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     try {
       const [payload, dashboard] = await Promise.all([
         getJsonAsActor('/api/gateways', 'Gateway API failed'),
@@ -246,7 +246,7 @@ export default function MonitorGatewaysBoard() {
       setGatewayPayload({});
       setActiveTransactionsCount(0);
     }
-  }
+  }, []);
 
   async function runGatewayClassAction(action) {
     try {
@@ -291,7 +291,7 @@ export default function MonitorGatewaysBoard() {
     }
   }
 
-  function triggerRavenFlyby() {
+  const triggerRavenFlyby = useCallback(() => {
     const direction = Math.random() > 0.5 ? 'ltr' : 'rtl';
     const top = 5 + Math.random() * 78;
     const duration = 7000 + Math.floor(Math.random() * 3000);
@@ -300,20 +300,28 @@ export default function MonitorGatewaysBoard() {
     setTimeout(() => {
       setRavenFlight((current) => (current && current.key === key ? null : current));
     }, duration + 300);
-  }
+  }, []);
 
   useEffect(() => {
-    refresh();
-    const timer = setInterval(refresh, 3000);
+    const scheduleRefresh = () => {
+      setTimeout(() => {
+        refresh();
+      }, 0);
+    };
+    const initTimer = setTimeout(() => {
+      scheduleRefresh();
+    }, 0);
+    const timer = setInterval(scheduleRefresh, 3000);
     const ravenTimer = setInterval(() => {
       triggerRavenFlyby();
-      refresh();
+      scheduleRefresh();
     }, 60000);
     return () => {
+      clearTimeout(initTimer);
       clearInterval(timer);
       clearInterval(ravenTimer);
     };
-  }, []);
+  }, [refresh, triggerRavenFlyby]);
 
   return (
     <div className="gothic-screen" style={{ display: 'grid', gap: 12, position: 'relative', overflow: 'hidden' }}>
@@ -382,7 +390,6 @@ export default function MonitorGatewaysBoard() {
                         sources={logoSources}
                         alt={row.label}
                         fallbackIcon={fallbackIcon}
-                        tone={tone}
                         brand={brand}
                         size={36}
                       />

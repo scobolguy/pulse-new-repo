@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import { getInitialArtifactId, registerArtifactLanguages } from './artifactWorkbench';
 
@@ -27,7 +27,7 @@ const RULE_SNIPPETS = [
     body: `{
   "expressionType": "string",
   "language": "pascalish",
-  "expression": "output := concat(src, \"-\", branchCode);"
+  "expression": "output := concat(src, '-', branchCode);"
 }`
   },
   {
@@ -99,12 +99,18 @@ export default function ArtifactWorkbench({ artifacts = [], cardPreview, message
   }, [layoutPaths, layoutSearch]);
 
   useEffect(() => {
-    setActiveArtifactId(getInitialArtifactId(cardPreview));
+    const timer = setTimeout(() => {
+      setActiveArtifactId(getInitialArtifactId(cardPreview));
+    }, 0);
+    return () => clearTimeout(timer);
   }, [cardPreview]);
 
   useEffect(() => {
     if (!activeArtifactId && artifacts[0]) {
-      setActiveArtifactId(artifacts[0].id);
+      const timer = setTimeout(() => {
+        setActiveArtifactId(artifacts[0].id);
+      }, 0);
+      return () => clearTimeout(timer);
     }
   }, [activeArtifactId, artifacts]);
 
@@ -228,7 +234,7 @@ export default function ArtifactWorkbench({ artifacts = [], cardPreview, message
                 <ul>
                   {filteredLayoutPaths.map((entry) => (
                     <li key={entry.id}>
-                      <button type="button" onClick={() => insertAtCursor(`\"${entry.path}\"`)}>
+                      <button type="button" onClick={() => insertAtCursor(`"${entry.path}"`)}>
                         <strong>{entry.path}</strong>
                         <em>{entry.typeId}</em>
                       </button>

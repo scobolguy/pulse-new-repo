@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import Editor from '@monaco-editor/react';
 import {
   createNewDocumentFileName,
@@ -8,7 +8,7 @@ import {
   normalizeDocumentFileName,
   WORKFLOW_KEYWORDS
 } from './documentRegistry';
-import { initializePascalishLanguage } from './PascalishEditor';
+import { initializePascalishLanguage } from './pascalishLanguage';
 import StartupFsmMonitor from './StartupFsmMonitor';
 
 const LOCAL_STORAGE_KEY = 'pulse-develop-workspace-documents';
@@ -153,6 +153,7 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
   const [error, setError] = useState('');
   const [storageMode, setStorageMode] = useState('remote');
   const [showStartupMonitor, setShowStartupMonitor] = useState(true);
+  const handledCreateRequestKeyRef = useRef('');
 
   const selectedFile = useMemo(() => {
     return files.find((item) => item.name === selectedFileName) || null;
@@ -178,20 +179,29 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
     setSelectedFileName((currentSelected) => {
       if (currentSelected !== fileName) return currentSelected;
       const remaining = openFileNames.filter((item) => item !== fileName);
+      if (remaining.length === 0) {
+        setContent('');
+        setRenameValue('');
+      }
       return remaining[0] || files.find((item) => item.name !== fileName)?.name || '';
     });
   }
 
-  function syncOpenSelection(nextFiles, preferredFileName = '') {
-    if (preferredFileName && nextFiles.some((item) => item.name === preferredFileName)) {
+  // Stabilize syncOpenSelection so other callbacks can depend on it safely
+  const stableSyncOpenSelection = useCallback((nextFiles, preferredFileName = '') => {
+    if (preferredFileName && Array.isArray(nextFiles) && nextFiles.some((item) => item.name === preferredFileName)) {
       setSelectedFileName(preferredFileName);
       setOpenFileNames((current) => (current.includes(preferredFileName) ? current : [...current, preferredFileName]));
       return;
     }
 
-    if (nextFiles.length === 0) {
+    if (!Array.isArray(nextFiles) || nextFiles.length === 0) {
       setSelectedFileName('');
       setOpenFileNames([]);
+      setContent('');
+      setRenameValue('');
+      setDirty(false);
+      setError('');
       return;
     }
 
@@ -205,7 +215,28 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
       if (nextFiles.some((item) => item.name === currentSelected)) return currentSelected;
       return nextFiles[0].name;
     });
-  }
+  }, []);
+
+  const syncOpenSelectionRef = stableSyncOpenSelection;
+
+  const refreshFiles = useCallback(async (preferredFileName = '') => {
+    if (storageMode === 'local') {
+      const nextFiles = loadLocalDocuments();
+      setFiles(nextFiles);
+      syncOpenSelectionRef(nextFiles, preferredFileName);
+      return;
+    }
+
+    const response = await fetch('/api/develop/files');
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.error || `Failed to load files (${response.status}).`);
+    }
+
+    const nextFiles = Array.isArray(payload.files) ? payload.files : [];
+    setFiles(nextFiles);
+    syncOpenSelectionRef(nextFiles, preferredFileName);
+  }, [storageMode, syncOpenSelectionRef]);
 
   useEffect(() => {
     let cancelled = false;
@@ -226,7 +257,7 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
         setFiles(nextFiles);
         setStorageMode('remote');
         setStatus(`Loaded ${nextFiles.length} document(s).`);
-        syncOpenSelection(nextFiles, selectedFileName);
+        syncOpenSelectionRef(nextFiles, selectedFileName);
       } catch (fetchError) {
         if (!cancelled) {
           const localDocuments = loadLocalDocuments();
@@ -234,7 +265,7 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
           setStorageMode('local');
           setStatus('Backend unavailable, using local workspace mode.');
           setError(fetchError.message);
-          syncOpenSelection(localDocuments, selectedFileName);
+          syncOpenSelectionRef(localDocuments, selectedFileName);
         }
       }
     }
@@ -243,22 +274,23 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
     return () => {
       cancelled = true;
     };
-  }, [selectedFileName]);
+  }, [selectedFileName, syncOpenSelectionRef]);
 
   useEffect(() => {
     if (!selectedFileName) {
-      setContent('');
-      setRenameValue('');
       return;
     }
 
     if (storageMode === 'local') {
       const localDocument = files.find((item) => item.name === selectedFileName);
       if (localDocument) {
-        setContent(String(localDocument.content ?? ''));
-        setRenameValue(selectedFileName);
-        setDirty(false);
-        setError('');
+        const timer = setTimeout(() => {
+          setContent(String(localDocument.content ?? ''));
+          setRenameValue(selectedFileName);
+          setDirty(false);
+          setError('');
+        }, 0);
+        return () => clearTimeout(timer);
       }
       return;
     }
@@ -291,10 +323,13 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
     return () => {
       cancelled = true;
     };
-  }, [selectedFileName]);
+  }, [files, selectedFileName, storageMode]);
 
   useEffect(() => {
     if (!createRequest?.typeId) return;
+    const createRequestKey = `${createRequest.typeId}|${createRequest.name || ''}|${createRequest.nonce || ''}`;
+    if (handledCreateRequestKeyRef.current === createRequestKey) return;
+    handledCreateRequestKeyRef.current = createRequestKey;
 
     let cancelled = false;
 
@@ -389,26 +424,9 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
     return () => {
       cancelled = true;
     };
-  }, [createRequest]);
+  }, [createRequest, files, onCreateRequestHandled, refreshFiles, storageMode]);
 
-  async function refreshFiles(preferredFileName = '') {
-    if (storageMode === 'local') {
-      const nextFiles = loadLocalDocuments();
-      setFiles(nextFiles);
-      syncOpenSelection(nextFiles, preferredFileName);
-      return;
-    }
-
-    const response = await fetch('/api/develop/files');
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(payload.error || `Failed to load files (${response.status}).`);
-    }
-
-    const nextFiles = Array.isArray(payload.files) ? payload.files : [];
-    setFiles(nextFiles);
-    syncOpenSelection(nextFiles, preferredFileName);
-  }
+  
 
   async function saveDocument() {
     if (!selectedFileName) return;

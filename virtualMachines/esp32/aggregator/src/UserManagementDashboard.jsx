@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 export default function UserManagementDashboard({ actorPermissions = [] }) {
   const [users, setUsers] = useState([]);
@@ -13,22 +13,27 @@ export default function UserManagementDashboard({ actorPermissions = [] }) {
   const [managerEmail, setManagerEmail] = useState('');
   const [selectedProfileIds, setSelectedProfileIds] = useState([]);
   const [status, setStatus] = useState('');
-  const [canRead, setCanRead] = useState(false);
-  const [canManage, setCanManage] = useState(false);
+  const permissions = useMemo(
+    () => (Array.isArray(actorPermissions) ? actorPermissions : []),
+    [actorPermissions]
+  );
+
+  const canRead = useMemo(
+    () => permissions.includes('*') || permissions.includes('users.read') || permissions.includes('users.*'),
+    [permissions]
+  );
+
+  const canManage = useMemo(
+    () => permissions.includes('*') || permissions.includes('users.manage') || permissions.includes('users.*'),
+    [permissions]
+  );
 
   const selectedUser = useMemo(
     () => users.find(user => user.userId === selectedUserId) || null,
     [users, selectedUserId]
   );
 
-  useEffect(() => {
-    const permissions = Array.isArray(actorPermissions) ? actorPermissions : [];
-    const has = (permission) => permissions.includes('*') || permissions.includes(permission) || permissions.includes('users.*');
-    setCanRead(has('users.read'));
-    setCanManage(has('users.manage'));
-  }, [actorPermissions]);
-
-  async function loadData() {
+  const loadData = useCallback(async () => {
     const [usersRes, profilesRes] = await Promise.all([
       fetch('/api/users'),
       fetch('/api/users/profiles')
@@ -46,31 +51,35 @@ export default function UserManagementDashboard({ actorPermissions = [] }) {
     if (!selectedUserId && nextUsers.length > 0) {
       setSelectedUserId(nextUsers[0].userId);
     }
-  }
+  }, [selectedUserId]);
 
-  async function refreshAll() {
+  const refreshAll = useCallback(async () => {
     try {
       await loadData();
       setStatus('');
     } catch (e) {
       setStatus(e.message || String(e));
     }
-  }
+  }, [loadData]);
 
   useEffect(() => {
-    refreshAll();
-  }, []);
+    setTimeout(() => {
+      void refreshAll();
+    }, 0);
+  }, [refreshAll]);
 
   useEffect(() => {
     if (!selectedUser) return;
-    setEmail((selectedUser.email || selectedUser.userId || '').toLowerCase());
-    setDisplayName(selectedUser.displayName || selectedUser.userId);
-    setEnabled(selectedUser.enabled !== false);
-    setDepartment(selectedUser.department || 'Operations');
-    setJobTitle(selectedUser.jobTitle || 'Operations Analyst');
-    setOfficeLocation(selectedUser.officeLocation || 'HQ');
-    setManagerEmail(selectedUser.managerEmail || '');
-    setSelectedProfileIds(Array.isArray(selectedUser.profileIds) ? selectedUser.profileIds : []);
+    setTimeout(() => {
+      setEmail((selectedUser.email || selectedUser.userId || '').toLowerCase());
+      setDisplayName(selectedUser.displayName || selectedUser.userId);
+      setEnabled(selectedUser.enabled !== false);
+      setDepartment(selectedUser.department || 'Operations');
+      setJobTitle(selectedUser.jobTitle || 'Operations Analyst');
+      setOfficeLocation(selectedUser.officeLocation || 'HQ');
+      setManagerEmail(selectedUser.managerEmail || '');
+      setSelectedProfileIds(Array.isArray(selectedUser.profileIds) ? selectedUser.profileIds : []);
+    }, 0);
   }, [selectedUser]);
 
   function toggleProfile(profileId) {

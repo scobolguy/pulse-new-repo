@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 
 export default function QueueManagerDashboard({ actorPermissions = [] }) {
@@ -20,7 +20,6 @@ export default function QueueManagerDashboard({ actorPermissions = [] }) {
   const [queues, setQueues] = useState([]);
   const [configuredQueuesByManager, setConfiguredQueuesByManager] = useState({});
   const [queueLengthsByManager, setQueueLengthsByManager] = useState({});
-  const [routes, setRoutes] = useState([]);
   const [dataTypes, setDataTypes] = useState([]);
 
   const prevManagersRef = useRef(null);
@@ -28,8 +27,6 @@ export default function QueueManagerDashboard({ actorPermissions = [] }) {
   const prevConfiguredRef = useRef(null);
   const prevLengthsRef = useRef(null);
   const isInitialLoadRef = useRef(true);
-  const [publishQueue, setPublishQueue] = useState('default');
-  const [publishPayload, setPublishPayload] = useState('hello');
   const [publishResult, setPublishResult] = useState('');
   const [loading, setLoading] = useState(false);
   const [contextMenu, setContextMenu] = useState(null);
@@ -37,11 +34,7 @@ export default function QueueManagerDashboard({ actorPermissions = [] }) {
   const [expandedGroups, setExpandedGroups] = useState({});
   const [expandedInstances, setExpandedInstances] = useState({});
   const [expandedMaintenanceFolders, setExpandedMaintenanceFolders] = useState({});
-  const [subscriptions, setSubscriptions] = useState({});
-  const [newSubTopic, setNewSubTopic] = useState('');
-  const [newSubService, setNewSubService] = useState('');
-  const [subResult, setSubResult] = useState('');
-  const [permissions, setPermissions] = useState([]);
+  const permissions = useMemo(() => (Array.isArray(actorPermissions) ? actorPermissions : []), [actorPermissions]);
   const [brokerProvider, setBrokerProvider] = useState('legacy');
   const [showBrokerConfig, setShowBrokerConfig] = useState(false);
   const brokerProviderInitializedRef = useRef(false);
@@ -62,7 +55,7 @@ export default function QueueManagerDashboard({ actorPermissions = [] }) {
   const queueImportFileRef = useRef(null);
   const [queueImportTarget, setQueueImportTarget] = useState(null);
   const messageImportFileRef = useRef(null);
-  const [messageImportTarget, setMessageImportTarget] = useState(null);
+  const [messageImportTarget] = useState(null);
 
   function toggleQueueExpanded(managerId, queueName) {
     const key = `${managerId}:${queueName}`;
@@ -119,46 +112,7 @@ export default function QueueManagerDashboard({ actorPermissions = [] }) {
   const canQueueView = hasPermission('queue.view');
   const canQueueOperate = hasPermission('queue.operate');
   const canQueueConfigure = hasPermission('queue.configure');
-  const canBrokerRead = hasPermission('broker.read');
   const canBrokerConfigure = hasPermission('broker.configure');
-
-  async function refreshSubscriptions() {
-    if (!canBrokerRead) return;
-    try {
-      const res = await fetch('/api/broker/subscriptions');
-      if (!res.ok) throw new Error('Failed to load subscriptions');
-      const data = await res.json();
-      setSubscriptions(data.subscriptions || {});
-    } catch (e) {
-      setSubResult(`Failed to load subscriptions: ${e.message || e}`);
-    }
-  }
-
-  async function handleAddSubscription() {
-    if (!canBrokerConfigure) {
-      setSubResult('Permission denied: broker.configure is required.');
-      return;
-    }
-    if (!newSubTopic.trim() || !newSubService.trim()) {
-      setSubResult('Topic and service name are required');
-      return;
-    }
-
-    try {
-      const res = await fetch('/api/broker/subscriptions', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ topic: newSubTopic.trim(), serviceName: newSubService.trim() })
-      });
-      if (!res.ok) throw new Error('Failed to add subscription');
-      setSubResult('Subscription added');
-      setNewSubTopic('');
-      setNewSubService('');
-      await refreshSubscriptions();
-    } catch (e) {
-      setSubResult(`Add failed: ${e.message || e}`);
-    }
-  }
 
   async function readJsonResponse(res, label) {
     const contentType = res.headers.get('content-type') || '';
@@ -180,7 +134,7 @@ export default function QueueManagerDashboard({ actorPermissions = [] }) {
     return { background: '#ffe6e6', color: '#7a1f1f' };
   }
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     if (!canQueueView) return;
     if (isInitialLoadRef.current) setLoading(true);
     try {
@@ -192,15 +146,13 @@ export default function QueueManagerDashboard({ actorPermissions = [] }) {
         })
         .catch(() => []);
 
-      const [mgrRes, queueRes, routeRes] = await Promise.all([
+      const [mgrRes, queueRes] = await Promise.all([
         fetch('/api/registry/queue-managers'),
-        fetch('/api/registry/queues'),
-        fetch('/api/broker/routes')
+        fetch('/api/registry/queues')
       ]);
-      const [mgrData, queueData, routeData] = await Promise.all([
+      const [mgrData, queueData] = await Promise.all([
         readJsonResponse(mgrRes, 'Queue manager registry'),
-        readJsonResponse(queueRes, 'Queue assignment registry'),
-        readJsonResponse(routeRes, 'Broker routes'),
+        readJsonResponse(queueRes, 'Queue assignment registry')
       ]);
       const managerList = Array.isArray(mgrData.queueManagers) ? mgrData.queueManagers : [];
       const managersSerialized = JSON.stringify(managerList);
@@ -216,7 +168,6 @@ export default function QueueManagerDashboard({ actorPermissions = [] }) {
         setQueues(queueList);
       }
 
-      setRoutes(Array.isArray(routeData.routes) ? routeData.routes : []);
       setDataTypes(await typesPromise);
 
       // Load configured queues per manager so newly created queues show immediately
@@ -253,11 +204,7 @@ export default function QueueManagerDashboard({ actorPermissions = [] }) {
       isInitialLoadRef.current = false;
       setLoading(false);
     }
-  }
-
-  useEffect(() => {
-    setPermissions(Array.isArray(actorPermissions) ? actorPermissions : []);
-  }, [actorPermissions]);
+  }, [canQueueView]);
 
   useEffect(() => {
 
@@ -297,10 +244,12 @@ export default function QueueManagerDashboard({ actorPermissions = [] }) {
       }
     }
 
-    refresh();
-    refreshSubscriptions();
-    refreshBrokerConfig();
-  }, [canQueueView, canBrokerRead]);
+    const timer = setTimeout(() => {
+      refresh();
+      refreshBrokerConfig();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [canQueueView, refresh]);
 
   useEffect(() => {
     function closeContextMenu() {
@@ -408,27 +357,30 @@ export default function QueueManagerDashboard({ actorPermissions = [] }) {
   }, [managers]);
 
   useEffect(() => {
-    setExpandedGroups(prev => {
-      const next = { ...prev };
-      for (const group of managerGroups) {
-        if (next[group.groupId] === undefined) {
-          next[group.groupId] = true;
-        }
-      }
-      return next;
-    });
-
-    setExpandedInstances(prev => {
-      const next = { ...prev };
-      for (const group of managerGroups) {
-        for (const instance of group.instances) {
-          if (next[instance.managerId] === undefined) {
-            next[instance.managerId] = true;
+    const timer = setTimeout(() => {
+      setExpandedGroups(prev => {
+        const next = { ...prev };
+        for (const group of managerGroups) {
+          if (next[group.groupId] === undefined) {
+            next[group.groupId] = true;
           }
         }
-      }
-      return next;
-    });
+        return next;
+      });
+
+      setExpandedInstances(prev => {
+        const next = { ...prev };
+        for (const group of managerGroups) {
+          for (const instance of group.instances) {
+            if (next[instance.managerId] === undefined) {
+              next[instance.managerId] = true;
+            }
+          }
+        }
+        return next;
+      });
+    }, 0);
+    return () => clearTimeout(timer);
   }, [managerGroups]);
 
 
@@ -494,31 +446,6 @@ export default function QueueManagerDashboard({ actorPermissions = [] }) {
       || queueName.startsWith('_')
       || queueName.startsWith('sys.')
       || queueName.startsWith('internal.');
-  }
-
-  async function handlePublish() {
-    if (!canQueueOperate) {
-      setPublishResult('Permission denied: queue.operate is required.');
-      return;
-    }
-    setPublishResult('Publishing...');
-    try {
-      const payload = {
-        queueName: publishQueue,
-        message: publishPayload,
-        sourceService: 'dashboard'
-      };
-      const res = await fetch('/api/broker/publish', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const data = await readJsonResponse(res, 'Publish');
-      setPublishResult(`${res.status}: ${JSON.stringify(data)}`);
-      refresh();
-    } catch (e) {
-      setPublishResult(`Publish failed: ${e.message || e}`);
-    }
   }
 
   async function handleManagerAction(managerId, action) {
@@ -1058,6 +985,9 @@ export default function QueueManagerDashboard({ actorPermissions = [] }) {
         <span style={{ fontSize: 12, color: '#42566b' }}>Mode: {!canQueueView ? 'no access' : (canQueueConfigure ? 'configure' : (canQueueOperate ? 'operate' : 'view-only'))}</span>
         <span style={{ fontSize: 12, color: '#777' }}>Right-click a queue manager for queue actions, an instance for lifecycle actions, or an individual queue for modify/delete/copy actions.</span>
       </div>
+      {publishResult ? (
+        <div style={{ marginBottom: 10, fontSize: 12, color: '#354657', whiteSpace: 'pre-wrap' }}>{publishResult}</div>
+      ) : null}
 
       {showBrokerConfig && (
         <div style={{ border: '1px solid #b8d4f3', borderRadius: 6, padding: 14, background: '#f0f7ff', marginBottom: 14, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 480 }}>

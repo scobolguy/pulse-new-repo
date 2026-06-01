@@ -1,5 +1,3 @@
-import React from 'react';
-
 // Dynamically renders a server topology diagram based on the topology prop
 export default function TopologyServerDiagram({ topology }) {
   // Count instances by service type

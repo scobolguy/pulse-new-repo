@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 function hasPermission(permissions, requiredPermission) {
   if (!requiredPermission) return true;
@@ -84,15 +84,23 @@ export default function BrokerStatusCard({ permissions = [] }) {
         apachePassword: ''
       }));
       setError('');
-    } catch (e) {
+    } catch {
       setError('Error fetching broker state');
     }
   }
 
   useEffect(() => {
-    fetchState();
-    const interval = setInterval(fetchState, 3000);
-    return () => clearInterval(interval);
+    const scheduleFetchState = () => {
+      setTimeout(() => {
+        fetchState();
+      }, 0);
+    };
+    const initTimer = setTimeout(scheduleFetchState, 0);
+    const interval = setInterval(scheduleFetchState, 3000);
+    return () => {
+      clearTimeout(initTimer);
+      clearInterval(interval);
+    };
   }, []);
 
   async function sendAction(path) {

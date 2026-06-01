@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import mermaid from 'mermaid';
 import { getThemeMermaidVariables } from './themeTokens';
 
@@ -176,11 +176,15 @@ export default function StartupFsmMonitor({ fsmId = 'startup-fsm', themeStyle = 
     const current = fsms.find((item) => String(item?.id || '') === String(fsmId || 'startup-fsm'));
     const activeVersion = String(current?.activeVersion || status?.version || '').trim();
     if (activeVersion && activeVersion !== versionChoice) {
-      setVersionChoice(activeVersion);
+      setTimeout(() => {
+        setVersionChoice(activeVersion);
+      }, 0);
     }
     const subflows = Array.isArray(status?.subflows) ? status.subflows : [];
-    setSubflowsDraft(subflows.join('\n'));
-  }, [catalog, fsmId, status?.version]);
+    setTimeout(() => {
+      setSubflowsDraft(subflows.join('\n'));
+    }, 0);
+  }, [catalog, fsmId, status?.subflows, status?.version, versionChoice]);
 
   useEffect(() => {
     async function renderDiagram() {
@@ -313,10 +317,10 @@ export default function StartupFsmMonitor({ fsmId = 'startup-fsm', themeStyle = 
     }
   }
 
-  const currentFsm = useMemo(() => {
+  const currentFsm = (() => {
     const fsms = Array.isArray(catalog?.fsms) ? catalog.fsms : [];
     return fsms.find((item) => String(item?.id || '') === String(fsmId || 'startup-fsm')) || null;
-  }, [catalog, fsmId]);
+  })();
 
   const availableVersions = useMemo(() => {
     const versions = currentFsm?.versions && typeof currentFsm.versions === 'object' ? currentFsm.versions : {};

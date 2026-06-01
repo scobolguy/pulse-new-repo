@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { getJson, postJson, putJson } from './http-client.js';
 
 const SWIFT_QUEUES = [
@@ -20,12 +20,12 @@ export default function SwiftGatewayDashboard() {
   const [intervalMs, setIntervalMs] = useState(500);
   const [batchSize, setBatchSize] = useState(25);
 
-  async function fetchGateway() {
+  const fetchGateway = useCallback(async () => {
     const data = await getJson('/api/gateways', 'Gateway API failed');
     setGateway(data?.swift || null);
-  }
+  }, []);
 
-  async function fetchQueues() {
+  const fetchQueues = useCallback(async () => {
     const next = {};
     for (const queueName of SWIFT_QUEUES) {
       const res = await fetch(`/api/queue/${encodeURIComponent(queueName)}/length`);
@@ -36,22 +36,24 @@ export default function SwiftGatewayDashboard() {
       }
     }
     setQueues(next);
-  }
+  }, []);
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     try {
       await Promise.all([fetchGateway(), fetchQueues()]);
       setError('');
     } catch (e) {
       setError(String(e.message || e));
     }
-  }
+  }, [fetchGateway, fetchQueues]);
 
   useEffect(() => {
-    refresh();
+    setTimeout(() => {
+      void refresh();
+    }, 0);
     const timer = setInterval(refresh, 3000);
     return () => clearInterval(timer);
-  }, []);
+  }, [refresh]);
 
   async function startGateway() {
     try {

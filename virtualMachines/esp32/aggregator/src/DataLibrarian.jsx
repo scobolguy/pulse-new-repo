@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const SECTION_STYLE = {
   border: '1px solid #ccc',
@@ -16,6 +16,7 @@ export default function DataLibrarian() {
   const [treeExpanded, setTreeExpanded] = useState({ types: true, untyped: true });
   const [itemExpanded, setItemExpanded] = useState({});
   const [lifecycleDrafts, setLifecycleDrafts] = useState({});
+  const [nowTs, setNowTs] = useState(() => Date.now());
 
   function toLocalDateTimeInput(value) {
     if (!value) return '';
@@ -25,7 +26,7 @@ export default function DataLibrarian() {
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
   }
 
-  async function loadAll() {
+  const loadAll = useCallback(async () => {
     try {
       const [typesRes, schemasRes] = await Promise.all([
         fetch('/api/librarian/data-types'),
@@ -56,15 +57,22 @@ export default function DataLibrarian() {
     } catch (e) {
       setMsg(`Load failed: ${e.message}`);
     }
-  }
+  }, []);
 
   useEffect(() => {
-    loadAll();
+    const initTimer = setTimeout(() => {
+      loadAll();
+      setNowTs(Date.now());
+    }, 0);
     const interval = setInterval(() => {
       loadAll();
+      setNowTs(Date.now());
     }, 5000);
-    return () => clearInterval(interval);
-  }, []);
+    return () => {
+      clearTimeout(initTimer);
+      clearInterval(interval);
+    };
+  }, [loadAll]);
 
   const [menuOpen, setMenuOpen] = useState(null);
   const [submenuOpen, setSubmenuOpen] = useState(null);
@@ -223,7 +231,7 @@ export default function DataLibrarian() {
   function getLifecycleBadge(item) {
     const lifecycle = item.lifecycle || {};
     const status = lifecycle.status || 'active';
-    const now = Date.now();
+    const now = nowTs;
     const threeMonthsMs = 90 * 24 * 60 * 60 * 1000;
     const rejectAfterMs = lifecycle.rejectAfter ? Date.parse(lifecycle.rejectAfter) : NaN;
     const isExpiringSoon = Number.isFinite(rejectAfterMs) && rejectAfterMs > now && (rejectAfterMs - now) <= threeMonthsMs;

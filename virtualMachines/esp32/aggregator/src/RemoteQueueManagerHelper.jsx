@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 
 function safeJson(res) {
   const contentType = res.headers.get('content-type') || '';
