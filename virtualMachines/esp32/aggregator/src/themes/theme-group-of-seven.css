@@ -28,53 +28,87 @@
 }
 
 .window-style-group-of-seven-spring.app-shell {
-  --g7-radial-a: rgba(203, 162, 98, 0.18);
-  --g7-radial-b: rgba(137, 188, 153, 0.18);
-  --g7-radial-c: rgba(118, 158, 205, 0.16);
-  --g7-radial-d: rgba(169, 139, 96, 0.14);
-  --g7-bg-start: #2b3d52;
-  --g7-bg-mid: #243446;
-  --g7-bg-end: #1c2a39;
+  --g7-radial-a: rgba(240, 208, 192, 0.22);
+  --g7-radial-b: rgba(192, 160, 192, 0.2);
+  --g7-radial-c: rgba(96, 192, 224, 0.18);
+  --g7-radial-d: rgba(176, 192, 208, 0.18);
+  --g7-bg-start: #4f5672;
+  --g7-bg-mid: #3f4560;
+  --g7-bg-end: #2f344b;
+  --g7-title: #f8eef5;
+  --g7-panel-border: rgba(208, 192, 208, 0.34);
+  --g7-panel-start: rgba(87, 95, 122, 0.96);
+  --g7-panel-end: rgba(61, 68, 94, 0.96);
+  --g7-chip-border: rgba(224, 208, 208, 0.78);
+  --g7-chip-start: rgba(192, 160, 192, 0.92);
+  --g7-chip-end: rgba(128, 112, 152, 0.92);
+  --g7-running-bg: rgba(96, 176, 208, 0.5);
+  --g7-running-border: rgba(176, 224, 240, 0.58);
+  --g7-stopped-bg: rgba(160, 128, 160, 0.48);
+  --g7-stopped-border: rgba(240, 208, 208, 0.56);
 }
 
 .window-style-group-of-seven-summer.app-shell {
-  --g7-radial-a: rgba(235, 186, 110, 0.2);
-  --g7-radial-b: rgba(106, 176, 169, 0.18);
-  --g7-radial-c: rgba(95, 147, 201, 0.16);
-  --g7-radial-d: rgba(167, 123, 82, 0.16);
-  --g7-bg-start: #29405a;
-  --g7-bg-mid: #21354c;
-  --g7-bg-end: #1a2a3d;
+  --g7-radial-a: rgba(112, 176, 208, 0.22);
+  --g7-radial-b: rgba(126, 202, 222, 0.2);
+  --g7-radial-c: rgba(228, 236, 241, 0.2);
+  --g7-radial-d: rgba(53, 100, 132, 0.18);
+  --g7-bg-start: #203952;
+  --g7-bg-mid: #1a3147;
+  --g7-bg-end: #152437;
+  --g7-title: #eef7ff;
+  --g7-panel-border: rgba(140, 182, 209, 0.34);
+  --g7-panel-start: rgba(34, 53, 75, 0.96);
+  --g7-panel-end: rgba(24, 38, 56, 0.96);
+  --g7-chip-border: rgba(121, 179, 205, 0.78);
+  --g7-chip-start: rgba(77, 143, 189, 0.92);
+  --g7-chip-end: rgba(52, 92, 124, 0.92);
+  --g7-running-bg: rgba(72, 125, 146, 0.5);
+  --g7-running-border: rgba(140, 204, 222, 0.56);
+  --g7-stopped-bg: rgba(72, 91, 116, 0.48);
+  --g7-stopped-border: rgba(175, 196, 214, 0.52);
 }
 
 .window-style-group-of-seven-autumn.app-shell {
-  --g7-radial-a: rgba(224, 137, 73, 0.2);
-  --g7-radial-b: rgba(139, 155, 99, 0.17);
-  --g7-radial-c: rgba(104, 128, 173, 0.15);
-  --g7-radial-d: rgba(180, 103, 66, 0.18);
-  --g7-bg-start: #2d3548;
-  --g7-bg-mid: #252d3e;
-  --g7-bg-end: #1c2331;
-  --g7-chip-start: rgba(186, 105, 58, 0.9);
-  --g7-chip-end: rgba(129, 77, 45, 0.9);
+  --g7-radial-a: rgba(208, 80, 48, 0.22);
+  --g7-radial-b: rgba(208, 128, 48, 0.18);
+  --g7-radial-c: rgba(96, 64, 48, 0.16);
+  --g7-radial-d: rgba(166, 76, 60, 0.18);
+  --g7-bg-start: #302020;
+  --g7-bg-mid: #26201d;
+  --g7-bg-end: #1a1210;
+  --g7-title: #f2dfca;
+  --g7-panel-border: rgba(208, 144, 48, 0.3);
+  --g7-panel-start: rgba(64, 48, 48, 0.96);
+  --g7-panel-end: rgba(34, 28, 28, 0.96);
+  --g7-chip-border: rgba(208, 128, 48, 0.75);
+  --g7-chip-start: rgba(208, 80, 48, 0.9);
+  --g7-chip-end: rgba(96, 64, 48, 0.9);
+  --g7-running-bg: rgba(138, 84, 56, 0.48);
+  --g7-running-border: rgba(208, 144, 48, 0.56);
+  --g7-stopped-bg: rgba(166, 76, 60, 0.48);
+  --g7-stopped-border: rgba(242, 164, 155, 0.56);
 }
 
 .window-style-group-of-seven-winter.app-shell {
-  --g7-radial-a: rgba(168, 189, 215, 0.16);
-  --g7-radial-b: rgba(133, 166, 196, 0.16);
-  --g7-radial-c: rgba(158, 182, 220, 0.14);
-  --g7-radial-d: rgba(132, 144, 173, 0.14);
-  --g7-bg-start: #2c3749;
-  --g7-bg-mid: #243043;
-  --g7-bg-end: #1b2534;
-  --g7-title: #e7edf6;
-  --g7-chip-border: rgba(175, 196, 223, 0.72);
-  --g7-chip-start: rgba(97, 124, 160, 0.9);
-  --g7-chip-end: rgba(72, 95, 126, 0.9);
-  --g7-running-bg: rgba(77, 123, 113, 0.46);
-  --g7-running-border: rgba(149, 210, 200, 0.56);
-  --g7-stopped-bg: rgba(113, 94, 118, 0.46);
-  --g7-stopped-border: rgba(196, 171, 204, 0.56);
+  --g7-radial-a: rgba(96, 144, 144, 0.22);
+  --g7-radial-b: rgba(128, 192, 224, 0.2);
+  --g7-radial-c: rgba(208, 208, 208, 0.2);
+  --g7-radial-d: rgba(80, 112, 128, 0.18);
+  --g7-bg-start: #1f3444;
+  --g7-bg-mid: #1b2f40;
+  --g7-bg-end: #152638;
+  --g7-title: #eef7ff;
+  --g7-panel-border: rgba(112, 160, 176, 0.34);
+  --g7-panel-start: rgba(30, 49, 68, 0.96);
+  --g7-panel-end: rgba(22, 37, 54, 0.96);
+  --g7-chip-border: rgba(112, 160, 176, 0.78);
+  --g7-chip-start: rgba(96, 144, 144, 0.92);
+  --g7-chip-end: rgba(64, 96, 112, 0.92);
+  --g7-running-bg: rgba(80, 128, 144, 0.5);
+  --g7-running-border: rgba(160, 208, 224, 0.56);
+  --g7-stopped-bg: rgba(80, 96, 112, 0.48);
+  --g7-stopped-border: rgba(192, 208, 224, 0.52);
 }
 
 :is(

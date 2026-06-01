@@ -14,6 +14,7 @@ import FlowTargetsDashboard from './FlowTargetsDashboard';
 import ChatPage from './ChatPage';
 import ArtifactWorkbench from './ArtifactWorkbench.jsx';
 import StartupFsmMonitor from './StartupFsmMonitor';
+import { getThemeFsmPalette, getThemeMermaidVariables } from './themeTokens';
 import compiledWorkflowArtifacts from '../data/workflows.generated.json';
 import workflowSourceArtifact from '../data/workflow.wfl?raw';
 import dataMappingsArtifact from '../data/data-mappings.json';
@@ -23,7 +24,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 
 const RHS_MIN_WIDTH = 220;
 const RHS_MAX_WIDTH = 620;
-const WINDOW_THEMES = ['standard', 'whimsical', 'eclipse', 'anime', 'steampunk', 'rube-goldberg', 'french-pointalist', 'mid-century-modern', 'group-of-seven-auto', 'group-of-seven-spring', 'group-of-seven-summer', 'group-of-seven-autumn', 'group-of-seven-winter'];
+const WINDOW_THEMES = ['standard', 'whimsical', 'eclipse', 'anime', 'steampunk', 'rube-goldberg', 'french-pointalist', 'mid-century-modern', 'art-deco', 'moderne', 'group-of-seven-auto', 'group-of-seven-spring', 'group-of-seven-summer', 'group-of-seven-autumn', 'group-of-seven-winter'];
 const THEME_PACK_LOADERS = {
   standard: () => import('./themes/packs/standard.css'),
   whimsical: () => import('./themes/packs/whimsical.css'),
@@ -33,6 +34,8 @@ const THEME_PACK_LOADERS = {
   'rube-goldberg': () => import('./themes/packs/rube-goldberg.css'),
   'french-pointalist': () => import('./themes/packs/french-pointalist.css'),
   'mid-century-modern': () => import('./themes/packs/mid-century-modern.css'),
+  'art-deco': () => import('./themes/packs/art-deco.css'),
+  moderne: () => import('./themes/packs/moderne.css'),
   'group-of-seven-auto': () => import('./themes/packs/group-of-seven-auto.css'),
   'group-of-seven-spring': () => import('./themes/packs/group-of-seven-spring.css'),
   'group-of-seven-summer': () => import('./themes/packs/group-of-seven-summer.css'),
@@ -239,6 +242,8 @@ function getThemeDisplayLabel(themeId) {
     'rube-goldberg': 'Rube Goldberg',
     'french-pointalist': 'French Pointalist',
     'mid-century-modern': 'Mid Century Modern',
+    'art-deco': 'Art Deco',
+    moderne: 'Streamline Moderne',
     'group-of-seven-auto': 'Group of Seven - Auto',
     'group-of-seven-spring': 'Group of Seven - Spring',
     'group-of-seven-summer': 'Group of Seven - Summer',
@@ -733,6 +738,129 @@ function resolveFlowDefinition(flow) {
   return byName || FLOW_DEFINITIONS[2];
 }
 
+function normalizeFsmStateToken(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  return raw.toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+function formatFsmStateLabel(value) {
+  const token = normalizeFsmStateToken(value);
+  if (!token) return 'State';
+  return token
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0) + part.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function truncateFsmStateLabel(label, maxChars = 16) {
+  const value = String(label || '').trim();
+  if (!value) return value;
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`;
+}
+
+function getFsmPalette(windowStyle) {
+  return getThemeFsmPalette(windowStyle);
+}
+
+function buildFsmFullLabelLookup(fsmItem, statusPayload) {
+  const lookup = new Map();
+  const register = (value) => {
+    const token = normalizeFsmStateToken(value);
+    if (!token) return;
+    lookup.set(token, formatFsmStateLabel(value));
+  };
+
+  const workflow = Array.isArray(statusPayload?.workflow) ? statusPayload.workflow : [];
+  for (const step of workflow) register(step);
+  register(statusPayload?.state || fsmItem?.state || 'IDLE');
+
+  if (!lookup.size) {
+    register('IDLE');
+    register('READY');
+    register('FAILED');
+  }
+
+  return lookup;
+}
+
+function getMermaidThemeVariables(windowStyle) {
+  return getThemeMermaidVariables(windowStyle);
+}
+
+function buildFsmMermaidSource(fsmItem, statusPayload, palette) {
+  const workflow = Array.isArray(statusPayload?.workflow) ? statusPayload.workflow : [];
+  const labelsById = new Map();
+  const orderedIds = [];
+  const sequenceIds = [];
+  const colors = palette || getFsmPalette('standard');
+
+  const register = (value) => {
+    const label = String(value || '').trim();
+    const id = normalizeFsmStateToken(label);
+    if (!id) return;
+    sequenceIds.push(id);
+    if (!labelsById.has(id)) {
+      const fullLabel = formatFsmStateLabel(label || id);
+      labelsById.set(id, truncateFsmStateLabel(fullLabel));
+      orderedIds.push(id);
+    }
+  };
+
+  for (const step of workflow) register(step);
+  register(statusPayload?.state || fsmItem?.state || 'IDLE');
+
+  if (orderedIds.length === 0) {
+    register('IDLE');
+    register('READY');
+    register('FAILED');
+  }
+
+  const activeId = normalizeFsmStateToken(statusPayload?.state || fsmItem?.state || sequenceIds[sequenceIds.length - 1] || orderedIds[orderedIds.length - 1] || 'IDLE');
+  if (activeId && sequenceIds[sequenceIds.length - 1] !== activeId) {
+    sequenceIds.push(activeId);
+  }
+
+  const doneIds = new Set(sequenceIds.slice(0, Math.max(0, sequenceIds.length - 1)));
+  const pathIds = sequenceIds.length > 0 ? sequenceIds : orderedIds;
+
+  const lines = [
+    'stateDiagram-v2',
+    '  direction LR',
+    `  [*] --> ${pathIds[0]}`,
+    `  classDef active fill:${colors.activeFill},stroke:${colors.activeStroke},color:${colors.activeText},stroke-width:${colors.strokeWidth};`,
+    `  classDef done fill:${colors.doneFill},stroke:${colors.doneStroke},color:${colors.doneText},stroke-width:${colors.strokeWidth};`,
+    `  classDef failed fill:${colors.failedFill},stroke:${colors.failedStroke},color:${colors.failedText},stroke-width:${colors.strokeWidth};`
+  ];
+
+  for (let index = 0; index < orderedIds.length; index += 1) {
+    const id = orderedIds[index];
+    const label = labelsById.get(id) || formatFsmStateLabel(id);
+    lines.push(`  state "${escapeMermaidText(label)}" as ${id}`);
+  }
+
+  for (let index = 0; index < pathIds.length - 1; index += 1) {
+    lines.push(`  ${pathIds[index]} --> ${pathIds[index + 1]}`);
+  }
+
+  const doneList = Array.from(doneIds).filter((id) => id !== activeId && orderedIds.includes(id));
+  if (doneList.length > 0) {
+    lines.push(`  class ${doneList.join(',')} done;`);
+  }
+
+  if (activeId && orderedIds.includes(activeId)) {
+    lines.push(`  class ${activeId} active;`);
+  }
+
+  if (activeId === 'FAILED' && orderedIds.includes('FAILED')) {
+    lines.push('  class FAILED failed;');
+  }
+
+  return lines.join('\n');
+}
+
 function App() {
   const [actorUserId, setActorUserId] = useState(localStorage.getItem('pulse.actorUserId') || 'anonymous');
   const [loginUserId, setLoginUserId] = useState(FIXED_LOGIN_USER_ID);
@@ -789,10 +917,11 @@ function App() {
   const [cardHiddenMap, setCardHiddenMap] = useState({});
   const [cardRenameMap, setCardRenameMap] = useState({});
   const [cardRuntimeMap, setCardRuntimeMap] = useState({});
-  const [cardPreview, setCardPreview] = useState({ open: false, kind: null, title: '', item: null });
+  const [cardPreview, setCardPreview] = useState({ open: false, kind: null, title: '', item: null, mode: null, fullscreen: false });
   const [messageLayouts, setMessageLayouts] = useState([]);
   const [flowDiagramSvg, setFlowDiagramSvg] = useState('');
   const [flowDiagramError, setFlowDiagramError] = useState('');
+  const [fsmPreviewStatus, setFsmPreviewStatus] = useState(null);
   const [runnableFsms, setRunnableFsms] = useState([]);
   const [selectedFsmId, setSelectedFsmId] = useState('startup-fsm');
   const [mermaidSsePhase, setMermaidSsePhase] = useState(0);
@@ -834,6 +963,15 @@ function App() {
 
   function getCardContextActions(kind) {
     const normalizedKind = String(kind || '').toLowerCase();
+    if (normalizedKind === 'fsm') {
+      return [
+        { action: 'open', label: 'Open FSM Runner' },
+        { action: 'open-fsm-mermaid', label: 'Show Mermaid Diagram' },
+        { action: 'open-fsm-mermaid-live', label: 'Open Mermaid (Live Animate)' },
+        { action: 'copy-id', label: 'Copy ID' }
+      ];
+    }
+
     if (normalizedKind === 'workflow') {
       return [
         { action: 'open', label: 'Open' },
@@ -1097,7 +1235,22 @@ function App() {
     }
 
     if (action === 'open') {
+      if (kind === 'fsm') {
+        openFsmRunner(item?.id);
+        closeCardContextMenu();
+        return;
+      }
       openCardPreview(kind, item);
+      return;
+    }
+
+    if (action === 'open-fsm-mermaid') {
+      openCardPreview('fsm', item, { mode: 'static', fullscreen: true });
+      return;
+    }
+
+    if (action === 'open-fsm-mermaid-live') {
+      openCardPreview('fsm', item, { mode: 'live', fullscreen: true });
       return;
     }
 
@@ -1108,7 +1261,7 @@ function App() {
     }
 
     if (action === 'copy-mermaid') {
-      await copyTextToClipboard(String(item?.mermaidSource || activeFlowMermaidSource || ''));
+      await copyTextToClipboard(String(item?.mermaidSource || activeCardMermaidSource || ''));
       closeCardContextMenu();
       return;
     }
@@ -1161,13 +1314,22 @@ function App() {
     }
   }
 
-  function openCardPreview(kind, item) {
+  function openCardPreview(kind, item, options = {}) {
     const title = kind === 'flow'
       ? `Flow: ${item?.name || item?.id || 'Flow'}`
       : kind === 'workflow'
         ? `Workflow: ${item?.name || item?.id || 'Workflow'}`
+        : kind === 'fsm'
+          ? `FSM: ${item?.name || item?.id || 'FSM'}`
         : `${kind === 'service' ? 'Service' : 'Server'}: ${item?.name || item?.id || 'Item'}`;
-    setCardPreview({ open: true, kind, title, item: item || null });
+    setCardPreview({
+      open: true,
+      kind,
+      title,
+      item: item || null,
+      mode: String(options?.mode || '') || null,
+      fullscreen: Boolean(options?.fullscreen)
+    });
     if (kind === 'flow') {
       const firstTransition = Array.isArray(item?.transitionMetrics) ? item.transitionMetrics[0] : null;
       setSelectedFlowTransitionId(firstTransition?.id || null);
@@ -1178,23 +1340,107 @@ function App() {
   }
 
   function closeCardPreview() {
-    setCardPreview({ open: false, kind: null, title: '', item: null });
+    setCardPreview({ open: false, kind: null, title: '', item: null, mode: null, fullscreen: false });
     setFlowDiagramSvg('');
     setFlowDiagramError('');
+    setFsmPreviewStatus(null);
     setSelectedFlowTransitionId(null);
   }
 
-  const activeFlowMermaidSource = useMemo(() => {
-    if (!(cardPreview.open && (cardPreview.kind === 'flow' || cardPreview.kind === 'workflow'))) return '';
+  function toggleCardPreviewFullscreen() {
+    setCardPreview((current) => ({ ...current, fullscreen: !current.fullscreen }));
+  }
+
+  const activeCardMermaidSource = useMemo(() => {
+    if (!(cardPreview.open && (cardPreview.kind === 'flow' || cardPreview.kind === 'workflow' || cardPreview.kind === 'fsm'))) return '';
+    if (cardPreview.kind === 'fsm') {
+      return buildFsmMermaidSource(cardPreview.item, fsmPreviewStatus, getFsmPalette(resolvedWindowStyle));
+    }
     if (cardPreview.kind === 'workflow') {
       return cardPreview.item?.mermaidSource || '';
     }
     const definition = resolveFlowDefinition(cardPreview.item);
     return definition?.mermaidSource || TRANSACTION_FLOW_MERMAID_SOURCE;
-  }, [cardPreview.open, cardPreview.kind, cardPreview.item]);
+  }, [cardPreview.open, cardPreview.kind, cardPreview.item, fsmPreviewStatus, resolvedWindowStyle]);
 
   useEffect(() => {
-    if (!(cardPreview.open && (cardPreview.kind === 'flow' || cardPreview.kind === 'workflow'))) return undefined;
+    if (!(cardPreview.open && cardPreview.kind === 'fsm')) {
+      setFsmPreviewStatus(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const fsmId = String(cardPreview?.item?.id || '').trim() || 'startup-fsm';
+    const liveMode = cardPreview.mode === 'live';
+
+    const loadSingleStatus = async () => {
+      try {
+        const response = await fetch(`/api/fsm/status?fsmId=${encodeURIComponent(fsmId)}`);
+        const payload = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        if (response.ok) {
+          setFsmPreviewStatus(payload && typeof payload === 'object' ? payload : null);
+          return;
+        }
+      } catch {
+        if (cancelled) return;
+      }
+      if (!cancelled) {
+        setFsmPreviewStatus((current) => current || { state: cardPreview?.item?.state || 'IDLE', workflow: [] });
+      }
+    };
+
+    if (!liveMode) {
+      setMermaidSseConnected(false);
+      void loadSingleStatus();
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    let streamClosed = false;
+    const source = new EventSource(`/api/fsm/events?fsmId=${encodeURIComponent(fsmId)}`);
+
+    const handleFsmPayload = (event) => {
+      if (cancelled) return;
+      try {
+        const payload = JSON.parse(String(event?.data || '{}'));
+        setFsmPreviewStatus(payload && typeof payload === 'object' ? payload : null);
+      } catch {
+        // Keep previous status when malformed payload arrives.
+      }
+      setMermaidSsePhase((current) => (current + 1) % 1024);
+    };
+
+    source.onopen = () => {
+      if (!cancelled) {
+        setMermaidSseConnected(true);
+      }
+    };
+    source.onmessage = handleFsmPayload;
+    source.addEventListener('fsm', handleFsmPayload);
+    source.onerror = () => {
+      if (!cancelled) {
+        setMermaidSseConnected(false);
+      }
+      if (!streamClosed) {
+        source.close();
+        streamClosed = true;
+      }
+    };
+
+    return () => {
+      cancelled = true;
+      if (!streamClosed) {
+        source.close();
+        streamClosed = true;
+      }
+      setMermaidSseConnected(false);
+    };
+  }, [cardPreview.open, cardPreview.kind, cardPreview.item, cardPreview.mode]);
+
+  useEffect(() => {
+    if (!(cardPreview.open && (cardPreview.kind === 'flow' || cardPreview.kind === 'workflow' || cardPreview.kind === 'fsm'))) return undefined;
 
     let cancelled = false;
     (async () => {
@@ -1203,9 +1449,11 @@ function App() {
         mermaid.initialize({
           startOnLoad: false,
           securityLevel: 'loose',
-          theme: 'dark'
+          theme: 'base',
+          themeVariables: getMermaidThemeVariables(resolvedWindowStyle),
+          themeCSS: '.nodeLabel, .edgeLabel, .label { letter-spacing: 0.02em; text-shadow: 0 0 1px rgba(17, 10, 5, 0.55); } .statediagram-state text, .stateGroup text { font-size: 11px !important; }'
         });
-        const primarySource = activeFlowMermaidSource || TRANSACTION_FLOW_MERMAID_SOURCE;
+        const primarySource = activeCardMermaidSource || TRANSACTION_FLOW_MERMAID_SOURCE;
         const randomSuffix = Math.random().toString(36).slice(2, 10);
         const renderId = `flow-diagram-${Date.now()}-${randomSuffix}`;
         let { svg } = await mermaid.render(renderId, primarySource);
@@ -1236,6 +1484,47 @@ function App() {
               if (/flowchart-link|edge/i.test(className) || pathNode.getAttribute('marker-end')) {
                 pathNode.classList.add('workflow-edge');
                 pathNode.style.setProperty('--workflow-edge-delay', `${index * 0.12}s`);
+              }
+            });
+          }
+
+          if (cardPreview.kind === 'fsm') {
+            const activeToken = normalizeFsmStateToken(fsmPreviewStatus?.state || cardPreview?.item?.state || '');
+            const doneTokens = new Set(
+              (Array.isArray(fsmPreviewStatus?.workflow) ? fsmPreviewStatus.workflow : [])
+                .map((step) => normalizeFsmStateToken(step))
+                .filter(Boolean)
+            );
+            const fullLabelLookup = buildFsmFullLabelLookup(cardPreview?.item, fsmPreviewStatus);
+
+            Array.from(doc.querySelectorAll('g.node')).forEach((node, index) => {
+              node.classList.add('fsm-node');
+              node.style.setProperty('--fsm-node-delay', `${index * 0.08}s`);
+              const token = normalizeFsmStateToken(node.textContent || '');
+              const fullLabel = fullLabelLookup.get(token);
+              if (fullLabel) {
+                const existingTitle = node.querySelector('title');
+                if (!existingTitle) {
+                  const title = doc.createElementNS('http://www.w3.org/2000/svg', 'title');
+                  title.textContent = fullLabel;
+                  node.insertBefore(title, node.firstChild || null);
+                } else {
+                  existingTitle.textContent = fullLabel;
+                }
+              }
+              if (token && doneTokens.has(token)) {
+                node.classList.add('fsm-done-node');
+              }
+              if (token && token === activeToken) {
+                node.classList.add('fsm-active-node');
+              }
+            });
+
+            Array.from(doc.querySelectorAll('path')).forEach((pathNode, index) => {
+              const className = String(pathNode.getAttribute('class') || '');
+              if (/flowchart-link|edge|transition/i.test(className) || pathNode.getAttribute('marker-end')) {
+                pathNode.classList.add('fsm-edge');
+                pathNode.style.setProperty('--fsm-edge-delay', `${index * 0.09}s`);
               }
             });
           }
@@ -1385,7 +1674,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [cardPreview.open, cardPreview.kind, activeFlowMermaidSource]);
+  }, [cardPreview.open, cardPreview.kind, cardPreview.item, cardPreview.mode, activeCardMermaidSource, fsmPreviewStatus, resolvedWindowStyle]);
 
   useEffect(() => {
     if (!cardContextMenu.open) return undefined;
@@ -2230,7 +2519,7 @@ function App() {
 
     if (area === 'operations') {
       if (operationsTask === 'fsm-runner') {
-        return <StartupFsmMonitor fsmId={selectedFsmId} />;
+        return <StartupFsmMonitor fsmId={selectedFsmId} themeStyle={resolvedWindowStyle} />;
       }
       if (operationsTask === 'monitor') {
         return renderMonitorContent(monitorClassId);
@@ -2265,6 +2554,7 @@ function App() {
         <DevelopWorkspace
           createRequest={developCreateRequest}
           onCreateRequestHandled={() => setDevelopCreateRequest(null)}
+          themeStyle={resolvedWindowStyle}
         />
       );
     }
@@ -2596,6 +2886,7 @@ function App() {
                           key={String(fsm.id)}
                           className="login-mini-card is-workflow"
                           onClick={() => openFsmRunner(fsm.id)}
+                          onContextMenu={(event) => openCardContextMenu(event, 'fsm', fsm)}
                           title="Open FSM runner"
                         >
                           <div className="login-mini-badge">FSM</div>
@@ -2664,41 +2955,61 @@ function App() {
           style={{ left: cardContextMenu.x, top: cardContextMenu.y }}
           onClick={(event) => event.stopPropagation()}
         >
-          <button type="button" onClick={() => handleCardContextAction('open')}>Open</button>
-          <button type="button" onClick={() => handleCardContextAction('open-new-window')}>Open in New Window</button>
-          <button type="button" onClick={() => handleCardContextAction('delete')}>Delete</button>
-          <button type="button" onClick={() => handleCardContextAction('rename')}>Rename</button>
-          <button type="button" onClick={() => handleCardContextAction('start')}>Start</button>
-          <button type="button" onClick={() => handleCardContextAction('stop')}>Stop</button>
-          <button type="button" onClick={() => handleCardContextAction('quiesce')}>Quiesce</button>
-          <button type="button" onClick={() => handleCardContextAction('start up')}>Start Up</button>
+          {getCardContextActions(cardContextMenu.kind).map((entry) => (
+            <button key={entry.action} type="button" onClick={() => handleCardContextAction(entry.action)}>{entry.label}</button>
+          ))}
         </div>
       )}
 
       {cardPreview.open && (
         <div className="card-open-overlay" onClick={closeCardPreview}>
-          <div className="card-open-dialog" onClick={(event) => event.stopPropagation()}>
+          <div
+            className={`card-open-dialog${cardPreview.fullscreen ? ' is-fullscreen' : ''}${cardPreview.kind === 'fsm' && cardPreview.fullscreen ? ' is-fsm-themed' : ''}`}
+            onClick={(event) => event.stopPropagation()}
+          >
             <header>
               <h3>{cardPreview.title}</h3>
-              <button type="button" className="card-open-close" onClick={closeCardPreview}>Close</button>
+              <div className="card-open-actions">
+                {cardPreview.kind === 'fsm' ? (
+                  <button type="button" className="card-open-close" onClick={toggleCardPreviewFullscreen}>
+                    {cardPreview.fullscreen ? 'Windowed' : 'Full Screen'}
+                  </button>
+                ) : null}
+                <button type="button" className="card-open-close" onClick={closeCardPreview}>Close</button>
+              </div>
             </header>
-            <ArtifactWorkbench artifacts={publicArtifacts} cardPreview={cardPreview} messageLayouts={messageLayouts} />
-            {cardPreview.kind === 'flow' || cardPreview.kind === 'workflow' ? (
+            {!(cardPreview.kind === 'fsm' && cardPreview.fullscreen) ? (
+              <ArtifactWorkbench artifacts={publicArtifacts} cardPreview={cardPreview} messageLayouts={messageLayouts} />
+            ) : null}
+            {cardPreview.kind === 'flow' || cardPreview.kind === 'workflow' || cardPreview.kind === 'fsm' ? (
               <>
                 <p className="card-open-subtitle">
                   {cardPreview.kind === 'workflow'
                     ? 'Animated workflow diagram generated from the WFL source.'
+                    : cardPreview.kind === 'fsm'
+                      ? (cardPreview.mode === 'live'
+                        ? (cardPreview.fullscreen
+                          ? 'Dedicated full-screen live FSM Mermaid view with steampunk styling.'
+                          : 'Live FSM Mermaid view. Active state pulses as status updates arrive.')
+                        : 'FSM Mermaid snapshot. Use the context menu option for live animation while running.')
                     : 'Click a transition to view live queue metrics.'}
                 </p>
                 {flowDiagramSvg ? (
                   <div
-                    className={`card-open-mermaid-diagram${mermaidSseConnected ? ' is-sse-live' : ''}`}
+                    className={`card-open-mermaid-diagram${(mermaidSseConnected || (cardPreview.kind === 'fsm' && cardPreview.mode === 'live')) ? ' is-sse-live' : ''}${cardPreview.kind === 'fsm' ? ' is-fsm-diagram' : ''}${cardPreview.kind === 'fsm' && cardPreview.fullscreen ? ' is-fsm-fullscreen' : ''}`}
                     style={{ '--mermaid-sse-phase': mermaidSsePhase }}
                     dangerouslySetInnerHTML={{ __html: flowDiagramSvg }}
                   />
                 ) : (
-                  <pre className="card-open-mermaid">{flowDiagramError || activeFlowMermaidSource || TRANSACTION_FLOW_MERMAID_SOURCE}</pre>
+                  <pre className="card-open-mermaid">{flowDiagramError || activeCardMermaidSource || TRANSACTION_FLOW_MERMAID_SOURCE}</pre>
                 )}
+                {cardPreview.kind === 'fsm' ? (
+                  <div className="card-open-details" style={{ marginTop: 10 }}>
+                    <div><span>State</span><strong>{String(fsmPreviewStatus?.state || cardPreview?.item?.state || 'IDLE')}</strong></div>
+                    <div><span>Version</span><strong>{String(fsmPreviewStatus?.version || cardPreview?.item?.activeVersion || 'n/a')}</strong></div>
+                    <div><span>Subflows</span><strong>{Array.isArray(fsmPreviewStatus?.subflows) ? fsmPreviewStatus.subflows.length : (Array.isArray(cardPreview?.item?.subflows) ? cardPreview.item.subflows.length : 0)}</strong></div>
+                  </div>
+                ) : null}
                 {cardPreview.kind === 'flow' ? (
                   <>
                     <div className="card-open-transition-list">

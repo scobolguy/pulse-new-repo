@@ -141,7 +141,7 @@ function saveLocalDocuments(documents) {
   localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(documents));
 }
 
-export default function DevelopWorkspace({ createRequest, onCreateRequestHandled }) {
+export default function DevelopWorkspace({ createRequest, onCreateRequestHandled, themeStyle = 'standard' }) {
   const [files, setFiles] = useState([]);
   const [selectedFileName, setSelectedFileName] = useState('');
   const [openFileNames, setOpenFileNames] = useState([]);
@@ -664,7 +664,7 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
           </div>
         )}
 
-        {showStartupMonitor && <StartupFsmMonitor />}
+        {showStartupMonitor && <StartupFsmMonitor themeStyle={themeStyle} />}
 
         <div style={{ display: 'flex', alignItems: 'stretch', gap: 8, overflowX: 'auto', minHeight: 42, padding: '6px 6px 0', borderBottom: '1px solid rgba(148, 163, 184, 0.16)' }}>
           {openFiles.map((file) => {

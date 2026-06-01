@@ -137,9 +137,7 @@ function createDefaultStatus() {
   };
 }
 
-async function readStatus(fsmId) {
-  const catalog = await loadCatalog();
-  const definition = getFsmDefinition(catalog, fsmId);
+async function readStatusForDefinition(definition) {
   if (!definition) return createDefaultStatus();
   try {
     const raw = await fs.readFile(definition.statusPath, 'utf8');
@@ -149,6 +147,12 @@ async function readStatus(fsmId) {
   } catch {
     return createDefaultStatus();
   }
+}
+
+async function readStatus(fsmId) {
+  const catalog = await loadCatalog();
+  const definition = getFsmDefinition(catalog, fsmId);
+  return readStatusForDefinition(definition);
 }
 
 async function readNotes(fsmId, limit = 80) {
@@ -344,8 +348,82 @@ export function registerStartupFsmRoutes(app) {
     if (!definition) {
       return res.status(404).json({ ok: false, error: `Unknown FSM: ${fsmId}` });
     }
-    const payload = await readStatus(definition.id);
+    const payload = await readStatusForDefinition(definition);
     return res.json({ ...payload, fsmId: definition.id, version: definition.activeVersion, subflows: definition.subflows });
+  });
+
+  app.get('/api/fsm/events', async (req, res) => {
+    const fsmId = String(req.query?.fsmId || 'startup-fsm').trim() || 'startup-fsm';
+    const catalog = await loadCatalog();
+    const definition = getFsmDefinition(catalog, fsmId);
+    if (!definition) {
+      return res.status(404).json({ ok: false, error: `Unknown FSM: ${fsmId}` });
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    if (typeof res.flushHeaders === 'function') {
+      res.flushHeaders();
+    }
+
+    let lastFingerprint = '';
+    let closed = false;
+
+    const toPayload = async () => {
+      const status = await readStatusForDefinition(definition);
+      return {
+        ...status,
+        fsmId: definition.id,
+        version: definition.activeVersion,
+        subflows: definition.subflows
+      };
+    };
+
+    const toFingerprint = (payload) => JSON.stringify({
+      state: payload?.state || '',
+      workflow: Array.isArray(payload?.workflow) ? payload.workflow : [],
+      ok: Boolean(payload?.ok),
+      error: String(payload?.error || ''),
+      updatedAt: String(payload?.updatedAt || ''),
+      version: String(payload?.version || '')
+    });
+
+    const pushIfChanged = async (force = false) => {
+      const payload = await toPayload();
+      const nextFingerprint = toFingerprint(payload);
+      if (!force && nextFingerprint === lastFingerprint) {
+        return;
+      }
+      lastFingerprint = nextFingerprint;
+      res.write(`event: fsm\n`);
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    };
+
+    await pushIfChanged(true);
+
+    const pollHandle = setInterval(() => {
+      if (closed) return;
+      void pushIfChanged(false);
+    }, 700);
+
+    const heartbeatHandle = setInterval(() => {
+      if (closed) return;
+      res.write('event: ping\n');
+      res.write('data: {}\n\n');
+    }, 15000);
+
+    const closeStream = () => {
+      if (closed) return;
+      closed = true;
+      clearInterval(pollHandle);
+      clearInterval(heartbeatHandle);
+      res.end();
+    };
+
+    req.on('close', closeStream);
+    req.on('error', closeStream);
   });
 
   app.get('/api/fsm/notes', async (req, res) => {

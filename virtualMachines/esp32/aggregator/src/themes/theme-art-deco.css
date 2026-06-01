@@ -1,0 +1,59 @@
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Jost:wght@500;600;700&display=swap');
+
+.window-style-art-deco.app-shell {
+  background:
+    linear-gradient(135deg, rgba(201, 162, 39, 0.1), rgba(201, 162, 39, 0) 44%),
+    radial-gradient(circle at 84% 14%, rgba(201, 162, 39, 0.18), rgba(201, 162, 39, 0) 36%),
+    linear-gradient(165deg, #151515 0%, #1f2d3a 62%, #101010 100%);
+  color: #f3dfac;
+  font-family: 'Jost', 'Segoe UI', sans-serif;
+}
+
+.window-style-art-deco .brand,
+.window-style-art-deco .section-title,
+.window-style-art-deco .rhs-section h3,
+.window-style-art-deco .status-card h2,
+.window-style-art-deco .title-block h1,
+.window-style-art-deco .gothic-title {
+  font-family: 'Cinzel', 'Times New Roman', serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #f3d27a;
+}
+
+.window-style-art-deco .lhs-sidebar,
+.window-style-art-deco .rhs-sidebar,
+.window-style-art-deco .top-strip,
+.window-style-art-deco .workspace-pane,
+.window-style-art-deco .rhs-section,
+.window-style-art-deco .status-card,
+.window-style-art-deco .gothic-screen,
+.window-style-art-deco .gothic-panel,
+.window-style-art-deco .gateway-portrait-card {
+  border-radius: 6px;
+  border: 1px solid rgba(201, 162, 39, 0.5);
+  background: linear-gradient(180deg, rgba(31, 45, 58, 0.95), rgba(17, 17, 17, 0.95));
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.42);
+}
+
+.window-style-art-deco .area-nav-item {
+  border-color: rgba(201, 162, 39, 0.52);
+  background: linear-gradient(165deg, rgba(35, 46, 58, 0.74), rgba(22, 28, 35, 0.8));
+}
+
+.window-style-art-deco .area-nav-item.is-active,
+.window-style-art-deco .admin-subtask-item.is-active,
+.window-style-art-deco .gothic-button,
+.window-style-art-deco .rhs-chip,
+.window-style-art-deco .sidebar-toggle,
+.window-style-art-deco .task-context-action.is-active,
+.window-style-art-deco .task-context-action:hover {
+  border-color: rgba(243, 210, 122, 0.9);
+  background: linear-gradient(180deg, rgba(122, 30, 44, 0.96), rgba(85, 20, 31, 0.96));
+  color: #f7e9c8;
+}
+
+.window-style-art-deco .area-empty {
+  border: 1px dashed rgba(201, 162, 39, 0.6);
+  background: rgba(21, 21, 21, 0.72);
+}

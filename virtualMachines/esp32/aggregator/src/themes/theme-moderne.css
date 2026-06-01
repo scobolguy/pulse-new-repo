@@ -1,0 +1,58 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@500;700&family=Questrial&display=swap');
+
+.window-style-moderne.app-shell {
+  background:
+    radial-gradient(circle at 12% 22%, rgba(94, 124, 141, 0.22), rgba(94, 124, 141, 0) 30%),
+    radial-gradient(circle at 88% 18%, rgba(208, 140, 96, 0.16), rgba(208, 140, 96, 0) 30%),
+    linear-gradient(160deg, #243746 0%, #1f313f 52%, #172633 100%);
+  color: #e8f0f4;
+  font-family: 'Questrial', 'Segoe UI', sans-serif;
+}
+
+.window-style-moderne .brand,
+.window-style-moderne .section-title,
+.window-style-moderne .rhs-section h3,
+.window-style-moderne .status-card h2,
+.window-style-moderne .title-block h1,
+.window-style-moderne .gothic-title {
+  font-family: 'DM Sans', 'Avenir Next', 'Segoe UI', sans-serif;
+  letter-spacing: 0.05em;
+  color: #d8e9f2;
+}
+
+.window-style-moderne .lhs-sidebar,
+.window-style-moderne .rhs-sidebar,
+.window-style-moderne .top-strip,
+.window-style-moderne .workspace-pane,
+.window-style-moderne .rhs-section,
+.window-style-moderne .status-card,
+.window-style-moderne .gothic-screen,
+.window-style-moderne .gothic-panel,
+.window-style-moderne .gateway-portrait-card {
+  border-radius: 16px;
+  border: 1px solid rgba(173, 197, 210, 0.38);
+  background: linear-gradient(180deg, rgba(46, 79, 96, 0.94), rgba(32, 52, 65, 0.95));
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.34);
+}
+
+.window-style-moderne .area-nav-item {
+  border-color: rgba(173, 197, 210, 0.42);
+  background: linear-gradient(170deg, rgba(65, 102, 123, 0.62), rgba(49, 78, 95, 0.68));
+}
+
+.window-style-moderne .area-nav-item.is-active,
+.window-style-moderne .admin-subtask-item.is-active,
+.window-style-moderne .gothic-button,
+.window-style-moderne .rhs-chip,
+.window-style-moderne .sidebar-toggle,
+.window-style-moderne .task-context-action.is-active,
+.window-style-moderne .task-context-action:hover {
+  border-color: rgba(224, 240, 250, 0.82);
+  background: linear-gradient(180deg, rgba(94, 124, 141, 0.96), rgba(47, 79, 96, 0.96));
+  color: #eff8fc;
+}
+
+.window-style-moderne .area-empty {
+  border: 1px dashed rgba(196, 216, 227, 0.66);
+  background: rgba(30, 49, 62, 0.72);
+}

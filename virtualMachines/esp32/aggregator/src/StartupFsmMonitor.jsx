@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import mermaid from 'mermaid';
+import { getThemeMermaidVariables } from './themeTokens';
 
 const POLL_MS = 1200;
 
@@ -17,9 +18,14 @@ const STATE_ORDER = [
   'FAILED'
 ];
 
-function buildMermaidDefinition(status) {
+function getMermaidThemeVariables(themeStyle) {
+  return getThemeMermaidVariables(themeStyle);
+}
+
+function buildMermaidDefinition(status, themeStyle) {
   const state = String(status?.state || 'IDLE');
   const completed = Array.isArray(status?.workflow) ? status.workflow : [];
+  const palette = getMermaidThemeVariables(themeStyle);
 
   const lines = [
     'stateDiagram-v2',
@@ -39,9 +45,9 @@ function buildMermaidDefinition(status) {
     '  WAIT_FRONTEND --> START_FRONTEND',
     '  WAIT_FRONTEND --> READY',
     '  WAIT_FRONTEND --> FAILED',
-    '  classDef active fill:#0ea5e9,stroke:#38bdf8,color:#001019,stroke-width:2px;',
-    '  classDef done fill:#14532d,stroke:#22c55e,color:#dcfce7,stroke-width:2px;',
-    '  classDef failed fill:#7f1d1d,stroke:#ef4444,color:#fee2e2,stroke-width:2px;'
+    `  classDef active fill:${palette.primaryColor},stroke:${palette.primaryBorderColor},color:${palette.primaryTextColor},stroke-width:${palette.strokeWidth};`,
+    `  classDef done fill:${palette.secondaryColor},stroke:${palette.lineColor},color:${palette.textColor},stroke-width:${palette.strokeWidth};`,
+    `  classDef failed fill:${palette.tertiaryColor},stroke:${palette.primaryBorderColor},color:${palette.textColor},stroke-width:${palette.strokeWidth};`
   ];
 
   const done = completed.filter((item) => STATE_ORDER.includes(item));
@@ -60,7 +66,7 @@ function buildMermaidDefinition(status) {
   return lines.join('\n');
 }
 
-export default function StartupFsmMonitor({ fsmId = 'startup-fsm' }) {
+export default function StartupFsmMonitor({ fsmId = 'startup-fsm', themeStyle = 'standard' }) {
   const [status, setStatus] = useState({ state: 'IDLE', logs: [], workflow: [] });
   const [notes, setNotes] = useState([]);
   const [catalog, setCatalog] = useState(null);
@@ -119,8 +125,17 @@ export default function StartupFsmMonitor({ fsmId = 'startup-fsm' }) {
   }, [status]);
 
   useEffect(() => {
-    mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
-  }, []);
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: 'loose',
+      theme: 'base',
+      themeVariables: getMermaidThemeVariables(themeStyle),
+      themeCSS: '.nodeLabel, .edgeLabel, .label { letter-spacing: 0.02em; text-shadow: 0 0 1px rgba(17, 10, 5, 0.55); }',
+      state: {
+        useMaxWidth: true
+      }
+    });
+  }, [themeStyle]);
 
   useEffect(() => {
     let cancelled = false;
@@ -171,7 +186,7 @@ export default function StartupFsmMonitor({ fsmId = 'startup-fsm' }) {
     async function renderDiagram() {
       if (!diagramRef.current) return;
       const id = `startup-fsm-${Date.now()}-${renderCounterRef.current++}`;
-      const definition = buildMermaidDefinition(status);
+      const definition = buildMermaidDefinition(status, themeStyle);
       try {
         const { svg } = await mermaid.render(id, definition);
         if (diagramRef.current) {
@@ -185,7 +200,7 @@ export default function StartupFsmMonitor({ fsmId = 'startup-fsm' }) {
     }
 
     renderDiagram();
-  }, [status]);
+  }, [status, themeStyle]);
 
   async function startWorkflow() {
     setBusy(true);
@@ -353,7 +368,18 @@ export default function StartupFsmMonitor({ fsmId = 'startup-fsm' }) {
           </div>
         </div>
         {error && <div style={{ color: '#fecaca', marginBottom: 8 }}>{error}</div>}
-        <div ref={diagramRef} style={{ width: '100%', minHeight: 240, overflow: 'auto' }} />
+        <div
+          ref={diagramRef}
+          style={{
+            width: '100%',
+            minHeight: 240,
+            overflow: 'auto',
+            borderRadius: 10,
+            border: '1px solid rgba(208,164,85,0.42)',
+            background: 'radial-gradient(circle at 20% 20%, rgba(208,164,85,0.22), rgba(24,19,15,0.96) 60%)',
+            boxShadow: 'inset 0 0 18px rgba(0,0,0,0.35), 0 0 0 1px rgba(102,78,43,0.45)'
+          }}
+        />
       </section>
 
       <section style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 12, padding: 10, background: 'rgba(2, 6, 23, 0.55)', display: 'flex', flexDirection: 'column', minHeight: 320 }}>

@@ -1,0 +1,381 @@
+:root,
+.window-style-standard.app-shell {
+  --theme-fsm-active-fill: #4f7dbd;
+  --theme-fsm-active-stroke: #a8c6f0;
+  --theme-fsm-active-text: #f4f8ff;
+  --theme-fsm-done-fill: #385e8f;
+  --theme-fsm-done-stroke: #7da5dd;
+  --theme-fsm-done-text: #eff6ff;
+  --theme-fsm-failed-fill: #8d4d4d;
+  --theme-fsm-failed-stroke: #d98d8d;
+  --theme-fsm-failed-text: #fff0f0;
+  --theme-fsm-background: #101b2b;
+  --theme-fsm-border: #47678f;
+  --theme-fsm-text: #dbe9ff;
+  --theme-fsm-font-family: 'Georgia, Times New Roman, serif';
+  --theme-fsm-line-color: #7aa2d6;
+  --theme-fsm-secondary-color: #162130;
+  --theme-fsm-tertiary-color: #0d1420;
+  --theme-fsm-main-bkg: #18253a;
+  --theme-fsm-second-bkg: #132033;
+  --theme-fsm-tertiary-bkg: #0d1420;
+  --theme-fsm-node-border: #7aa2d6;
+  --theme-fsm-stroke-width: 1.6px;
+  --theme-g7-radial-a: rgba(230, 160, 86, 0.18);
+  --theme-g7-radial-b: rgba(119, 166, 146, 0.16);
+  --theme-g7-radial-c: rgba(84, 121, 171, 0.14);
+  --theme-g7-radial-d: rgba(171, 113, 77, 0.15);
+  --theme-g7-bg-start: #26344a;
+  --theme-g7-bg-mid: #1f2a3d;
+  --theme-g7-bg-end: #182232;
+  --theme-g7-title: #f0dfbd;
+  --theme-g7-panel-border: rgba(197, 180, 145, 0.33);
+  --theme-g7-panel-start: rgba(49, 66, 91, 0.95);
+  --theme-g7-panel-end: rgba(34, 47, 67, 0.95);
+  --theme-g7-chip-border: rgba(232, 185, 107, 0.72);
+  --theme-g7-chip-start: rgba(184, 120, 66, 0.9);
+  --theme-g7-chip-end: rgba(133, 88, 49, 0.9);
+  --theme-g7-running-bg: rgba(64, 118, 87, 0.48);
+  --theme-g7-running-border: rgba(136, 212, 171, 0.56);
+  --theme-g7-stopped-bg: rgba(122, 63, 70, 0.48);
+  --theme-g7-stopped-border: rgba(231, 144, 154, 0.56);
+}
+
+.window-style-whimsical.app-shell {
+  --theme-fsm-active-fill: #9f6cff;
+  --theme-fsm-active-stroke: #dbc0ff;
+  --theme-fsm-active-text: #fffaff;
+  --theme-fsm-done-fill: #6d8dd9;
+  --theme-fsm-done-stroke: #afc2ff;
+  --theme-fsm-done-text: #f7f8ff;
+  --theme-fsm-failed-fill: #d66d9f;
+  --theme-fsm-failed-stroke: #ffb0cf;
+  --theme-fsm-failed-text: #fff0f7;
+  --theme-fsm-background: #17122a;
+  --theme-fsm-border: #7c67b6;
+  --theme-fsm-text: #f2eaff;
+  --theme-fsm-line-color: #caa9ff;
+  --theme-fsm-secondary-color: #5d4a87;
+  --theme-fsm-tertiary-color: #241737;
+  --theme-fsm-main-bkg: #2a1f48;
+  --theme-fsm-second-bkg: #33285a;
+  --theme-fsm-tertiary-bkg: #211635;
+  --theme-fsm-node-border: #dbc0ff;
+}
+
+.window-style-eclipse.app-shell {
+  --theme-fsm-active-fill: #f3c96a;
+  --theme-fsm-active-stroke: #ffe2a4;
+  --theme-fsm-active-text: #241700;
+  --theme-fsm-done-fill: #6f7c99;
+  --theme-fsm-done-stroke: #a9b4cc;
+  --theme-fsm-done-text: #eff3ff;
+  --theme-fsm-failed-fill: #b4555f;
+  --theme-fsm-failed-stroke: #f0a1a8;
+  --theme-fsm-failed-text: #fff2f4;
+  --theme-fsm-background: #0d1118;
+  --theme-fsm-border: #6f7c99;
+  --theme-fsm-text: #edf3ff;
+  --theme-fsm-line-color: #c9a65b;
+  --theme-fsm-secondary-color: #313b50;
+  --theme-fsm-tertiary-color: #141922;
+  --theme-fsm-main-bkg: #18202e;
+  --theme-fsm-second-bkg: #1c2533;
+  --theme-fsm-tertiary-bkg: #111722;
+  --theme-fsm-node-border: #7f8ea9;
+}
+
+.window-style-anime.app-shell {
+  --theme-fsm-active-fill: #ff79c6;
+  --theme-fsm-active-stroke: #ffd0ea;
+  --theme-fsm-active-text: #28101f;
+  --theme-fsm-done-fill: #6ee7ff;
+  --theme-fsm-done-stroke: #b8f2ff;
+  --theme-fsm-done-text: #06212a;
+  --theme-fsm-failed-fill: #ff6b6b;
+  --theme-fsm-failed-stroke: #ffc0c0;
+  --theme-fsm-failed-text: #2d0909;
+  --theme-fsm-background: #1a1024;
+  --theme-fsm-border: #ff9ed4;
+  --theme-fsm-text: #fff0fa;
+  --theme-fsm-line-color: #ff9ed4;
+  --theme-fsm-secondary-color: #7c4d87;
+  --theme-fsm-tertiary-color: #281335;
+  --theme-fsm-main-bkg: #301a3f;
+  --theme-fsm-second-bkg: #3a214d;
+  --theme-fsm-tertiary-bkg: #24102f;
+  --theme-fsm-node-border: #ff9ed4;
+}
+
+.window-style-steampunk.app-shell,
+.window-style-rube-goldberg.app-shell {
+  --theme-fsm-active-fill: #8d6a2c;
+  --theme-fsm-active-stroke: #f6d08e;
+  --theme-fsm-active-text: #20170a;
+  --theme-fsm-done-fill: #6f7c42;
+  --theme-fsm-done-stroke: #d2e38f;
+  --theme-fsm-done-text: #fbfbe9;
+  --theme-fsm-failed-fill: #7f2e23;
+  --theme-fsm-failed-stroke: #ef8b73;
+  --theme-fsm-failed-text: #ffe6de;
+  --theme-fsm-background: #18130f;
+  --theme-fsm-border: #a07f3d;
+  --theme-fsm-text: #f5e6c8;
+  --theme-fsm-line-color: #b0823f;
+  --theme-fsm-secondary-color: #ccb785;
+  --theme-fsm-tertiary-color: #2a2320;
+  --theme-fsm-main-bkg: #ccb785;
+  --theme-fsm-second-bkg: #9f8148;
+  --theme-fsm-tertiary-bkg: #3c3025;
+  --theme-fsm-node-border: #d0a455;
+}
+
+.window-style-french-pointalist.app-shell {
+  --theme-fsm-active-fill: #8fb6ff;
+  --theme-fsm-active-stroke: #d6e4ff;
+  --theme-fsm-active-text: #10223f;
+  --theme-fsm-done-fill: #c39ef5;
+  --theme-fsm-done-stroke: #ead9ff;
+  --theme-fsm-done-text: #25133d;
+  --theme-fsm-failed-fill: #f1a3ad;
+  --theme-fsm-failed-stroke: #ffe0e5;
+  --theme-fsm-failed-text: #351014;
+  --theme-fsm-background: #101723;
+  --theme-fsm-border: #7e99c5;
+  --theme-fsm-text: #eaf1ff;
+  --theme-fsm-line-color: #7e99c5;
+  --theme-fsm-secondary-color: #294066;
+  --theme-fsm-tertiary-color: #152236;
+  --theme-fsm-main-bkg: #1b2740;
+  --theme-fsm-second-bkg: #162035;
+  --theme-fsm-tertiary-bkg: #111824;
+  --theme-fsm-node-border: #7e99c5;
+}
+
+.window-style-mid-century-modern.app-shell {
+  --theme-fsm-active-fill: #f4a261;
+  --theme-fsm-active-stroke: #ffd4a3;
+  --theme-fsm-active-text: #2b1a09;
+  --theme-fsm-done-fill: #2a9d8f;
+  --theme-fsm-done-stroke: #8fe0d7;
+  --theme-fsm-done-text: #071c1a;
+  --theme-fsm-failed-fill: #e76f51;
+  --theme-fsm-failed-stroke: #ffc1ae;
+  --theme-fsm-failed-text: #30110c;
+  --theme-fsm-background: #152027;
+  --theme-fsm-border: #77b8ad;
+  --theme-fsm-text: #f4fbfa;
+  --theme-fsm-line-color: #77b8ad;
+  --theme-fsm-secondary-color: #2a9d8f;
+  --theme-fsm-tertiary-color: #152027;
+  --theme-fsm-main-bkg: #21313a;
+  --theme-fsm-second-bkg: #1a2730;
+  --theme-fsm-tertiary-bkg: #122026;
+  --theme-fsm-node-border: #77b8ad;
+}
+
+.window-style-art-deco.app-shell {
+  --theme-fsm-active-fill: #111111;
+  --theme-fsm-active-stroke: #c9a227;
+  --theme-fsm-active-text: #f3d27a;
+  --theme-fsm-done-fill: #1f2d3a;
+  --theme-fsm-done-stroke: #c9a227;
+  --theme-fsm-done-text: #f3d27a;
+  --theme-fsm-failed-fill: #7a1e2c;
+  --theme-fsm-failed-stroke: #d89f3f;
+  --theme-fsm-failed-text: #f6f1e7;
+  --theme-fsm-background: #151515;
+  --theme-fsm-border: #c9a227;
+  --theme-fsm-text: #f3d27a;
+  --theme-fsm-font-family: 'Cinzel, Futura, Trebuchet MS, sans-serif';
+  --theme-fsm-line-color: #c9a227;
+  --theme-fsm-secondary-color: #1f2d3a;
+  --theme-fsm-tertiary-color: #7a1e2c;
+  --theme-fsm-main-bkg: #121212;
+  --theme-fsm-second-bkg: #1d2530;
+  --theme-fsm-tertiary-bkg: #2a151c;
+  --theme-fsm-node-border: #c9a227;
+}
+
+.window-style-moderne.app-shell {
+  --theme-fsm-active-fill: #5e7c8d;
+  --theme-fsm-active-stroke: #adc5d2;
+  --theme-fsm-active-text: #eef4f7;
+  --theme-fsm-done-fill: #c9d6de;
+  --theme-fsm-done-stroke: #89a7b8;
+  --theme-fsm-done-text: #1c2a34;
+  --theme-fsm-failed-fill: #d08c60;
+  --theme-fsm-failed-stroke: #e8b28f;
+  --theme-fsm-failed-text: #2b1d16;
+  --theme-fsm-background: #172633;
+  --theme-fsm-border: #7fa1b3;
+  --theme-fsm-text: #eaf2f6;
+  --theme-fsm-font-family: 'Avenir Next, Avenir, Gill Sans, Futura, sans-serif';
+  --theme-fsm-line-color: #5e7c8d;
+  --theme-fsm-secondary-color: #2f4f60;
+  --theme-fsm-tertiary-color: #d08c60;
+  --theme-fsm-main-bkg: #243746;
+  --theme-fsm-second-bkg: #1f313f;
+  --theme-fsm-tertiary-bkg: #1a2a35;
+  --theme-fsm-node-border: #adc5d2;
+}
+
+.window-style-group-of-seven-spring.app-shell {
+  --theme-fsm-active-fill: #60c0e0;
+  --theme-fsm-active-stroke: #f0d0c0;
+  --theme-fsm-active-text: #1a2230;
+  --theme-fsm-done-fill: #c0a0c0;
+  --theme-fsm-done-stroke: #e0d0d0;
+  --theme-fsm-done-text: #241a2f;
+  --theme-fsm-failed-fill: #a080a0;
+  --theme-fsm-failed-stroke: #f0d0d0;
+  --theme-fsm-failed-text: #f9f6fb;
+  --theme-fsm-background: #2b2f45;
+  --theme-fsm-border: #b0a0b0;
+  --theme-fsm-text: #f4eef5;
+  --theme-fsm-line-color: #b0a0b0;
+  --theme-fsm-secondary-color: #a0b0d0;
+  --theme-fsm-tertiary-color: #2a2940;
+  --theme-fsm-main-bkg: #4f5672;
+  --theme-fsm-second-bkg: #3f4560;
+  --theme-fsm-tertiary-bkg: #2f344b;
+  --theme-fsm-node-border: #b0a0b0;
+  --theme-g7-radial-a: rgba(240, 208, 192, 0.22);
+  --theme-g7-radial-b: rgba(192, 160, 192, 0.2);
+  --theme-g7-radial-c: rgba(96, 192, 224, 0.18);
+  --theme-g7-radial-d: rgba(176, 192, 208, 0.18);
+  --theme-g7-bg-start: #4f5672;
+  --theme-g7-bg-mid: #3f4560;
+  --theme-g7-bg-end: #2f344b;
+  --theme-g7-title: #f8eef5;
+  --theme-g7-panel-border: rgba(208, 192, 208, 0.34);
+  --theme-g7-panel-start: rgba(87, 95, 122, 0.96);
+  --theme-g7-panel-end: rgba(61, 68, 94, 0.96);
+  --theme-g7-chip-border: rgba(224, 208, 208, 0.78);
+  --theme-g7-chip-start: rgba(192, 160, 192, 0.92);
+  --theme-g7-chip-end: rgba(128, 112, 152, 0.92);
+  --theme-g7-running-bg: rgba(96, 176, 208, 0.5);
+  --theme-g7-running-border: rgba(176, 224, 240, 0.58);
+  --theme-g7-stopped-bg: rgba(160, 128, 160, 0.48);
+  --theme-g7-stopped-border: rgba(240, 208, 208, 0.56);
+}
+
+.window-style-group-of-seven-summer.app-shell {
+  --theme-fsm-active-fill: #4d8fbd;
+  --theme-fsm-active-stroke: #d3ecf4;
+  --theme-fsm-active-text: #0f2231;
+  --theme-fsm-done-fill: #78b8d6;
+  --theme-fsm-done-stroke: #c9ebf7;
+  --theme-fsm-done-text: #102534;
+  --theme-fsm-failed-fill: #8c6e63;
+  --theme-fsm-failed-stroke: #d7dce0;
+  --theme-fsm-failed-text: #f8fbfd;
+  --theme-fsm-background: #1c2d42;
+  --theme-fsm-border: #6fa7c4;
+  --theme-fsm-text: #eef7ff;
+  --theme-fsm-line-color: #6fa7c4;
+  --theme-fsm-secondary-color: #6fb7d3;
+  --theme-fsm-tertiary-color: #18344d;
+  --theme-fsm-main-bkg: #295070;
+  --theme-fsm-second-bkg: #21425e;
+  --theme-fsm-tertiary-bkg: #16293c;
+  --theme-fsm-node-border: #6fa7c4;
+  --theme-g7-radial-a: rgba(112, 176, 208, 0.22);
+  --theme-g7-radial-b: rgba(126, 202, 222, 0.2);
+  --theme-g7-radial-c: rgba(228, 236, 241, 0.2);
+  --theme-g7-radial-d: rgba(53, 100, 132, 0.18);
+  --theme-g7-bg-start: #203952;
+  --theme-g7-bg-mid: #1a3147;
+  --theme-g7-bg-end: #152437;
+  --theme-g7-title: #eef7ff;
+  --theme-g7-panel-border: rgba(140, 182, 209, 0.34);
+  --theme-g7-panel-start: rgba(34, 53, 75, 0.96);
+  --theme-g7-panel-end: rgba(24, 38, 56, 0.96);
+  --theme-g7-chip-border: rgba(121, 179, 205, 0.78);
+  --theme-g7-chip-start: rgba(77, 143, 189, 0.92);
+  --theme-g7-chip-end: rgba(52, 92, 124, 0.92);
+  --theme-g7-running-bg: rgba(72, 125, 146, 0.5);
+  --theme-g7-running-border: rgba(140, 204, 222, 0.56);
+  --theme-g7-stopped-bg: rgba(72, 91, 116, 0.48);
+  --theme-g7-stopped-border: rgba(175, 196, 214, 0.52);
+}
+
+.window-style-group-of-seven-autumn.app-shell {
+  --theme-fsm-active-fill: #d05030;
+  --theme-fsm-active-stroke: #d08030;
+  --theme-fsm-active-text: #24110a;
+  --theme-fsm-done-fill: #8a5438;
+  --theme-fsm-done-stroke: #d08030;
+  --theme-fsm-done-text: #fbf1e9;
+  --theme-fsm-failed-fill: #a64c3c;
+  --theme-fsm-failed-stroke: #f2a49b;
+  --theme-fsm-failed-text: #fff2ef;
+  --theme-fsm-background: #1a1210;
+  --theme-fsm-border: #d08030;
+  --theme-fsm-text: #f5e8dd;
+  --theme-fsm-line-color: #d08030;
+  --theme-fsm-secondary-color: #8a5438;
+  --theme-fsm-tertiary-color: #302020;
+  --theme-fsm-main-bkg: #d05030;
+  --theme-fsm-second-bkg: #604030;
+  --theme-fsm-tertiary-bkg: #302020;
+  --theme-fsm-node-border: #d08030;
+  --theme-g7-radial-a: rgba(208, 80, 48, 0.22);
+  --theme-g7-radial-b: rgba(208, 128, 48, 0.18);
+  --theme-g7-radial-c: rgba(96, 64, 48, 0.16);
+  --theme-g7-radial-d: rgba(166, 76, 60, 0.18);
+  --theme-g7-bg-start: #302020;
+  --theme-g7-bg-mid: #26201d;
+  --theme-g7-bg-end: #1a1210;
+  --theme-g7-title: #f2dfca;
+  --theme-g7-panel-border: rgba(208, 144, 48, 0.3);
+  --theme-g7-panel-start: rgba(64, 48, 48, 0.96);
+  --theme-g7-panel-end: rgba(34, 28, 28, 0.96);
+  --theme-g7-chip-border: rgba(208, 128, 48, 0.75);
+  --theme-g7-chip-start: rgba(208, 80, 48, 0.9);
+  --theme-g7-chip-end: rgba(96, 64, 48, 0.9);
+  --theme-g7-running-bg: rgba(138, 84, 56, 0.48);
+  --theme-g7-running-border: rgba(208, 144, 48, 0.56);
+  --theme-g7-stopped-bg: rgba(166, 76, 60, 0.48);
+  --theme-g7-stopped-border: rgba(242, 164, 155, 0.56);
+}
+
+.window-style-group-of-seven-winter.app-shell {
+  --theme-fsm-active-fill: #609090;
+  --theme-fsm-active-stroke: #d0c0c0;
+  --theme-fsm-active-text: #1a2830;
+  --theme-fsm-done-fill: #8090a0;
+  --theme-fsm-done-stroke: #d0d0d0;
+  --theme-fsm-done-text: #102030;
+  --theme-fsm-failed-fill: #708090;
+  --theme-fsm-failed-stroke: #c0c8d0;
+  --theme-fsm-failed-text: #f8fbfd;
+  --theme-fsm-background: #1e3140;
+  --theme-fsm-border: #609090;
+  --theme-fsm-text: #eef7ff;
+  --theme-fsm-line-color: #609090;
+  --theme-fsm-secondary-color: #80a0a0;
+  --theme-fsm-tertiary-color: #183041;
+  --theme-fsm-main-bkg: #4d6c7c;
+  --theme-fsm-second-bkg: #2f4f60;
+  --theme-fsm-tertiary-bkg: #20384a;
+  --theme-fsm-node-border: #609090;
+  --theme-g7-radial-a: rgba(96, 144, 144, 0.22);
+  --theme-g7-radial-b: rgba(128, 192, 224, 0.2);
+  --theme-g7-radial-c: rgba(208, 208, 208, 0.2);
+  --theme-g7-radial-d: rgba(80, 112, 128, 0.18);
+  --theme-g7-bg-start: #1f3444;
+  --theme-g7-bg-mid: #1b2f40;
+  --theme-g7-bg-end: #152638;
+  --theme-g7-title: #eef7ff;
+  --theme-g7-panel-border: rgba(112, 160, 176, 0.34);
+  --theme-g7-panel-start: rgba(30, 49, 68, 0.96);
+  --theme-g7-panel-end: rgba(22, 37, 54, 0.96);
+  --theme-g7-chip-border: rgba(112, 160, 176, 0.78);
+  --theme-g7-chip-start: rgba(96, 144, 144, 0.92);
+  --theme-g7-chip-end: rgba(64, 96, 112, 0.92);
+  --theme-g7-running-bg: rgba(80, 128, 144, 0.5);
+  --theme-g7-running-border: rgba(160, 208, 224, 0.56);
+  --theme-g7-stopped-bg: rgba(80, 96, 112, 0.48);
+  --theme-g7-stopped-border: rgba(192, 208, 224, 0.52);
+}
