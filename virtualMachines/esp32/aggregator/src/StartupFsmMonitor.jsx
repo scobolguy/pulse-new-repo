@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import mermaid from 'mermaid';
 import { getThemeMermaidVariables } from './themeTokens';
 
 const POLL_MS = 1200;
@@ -77,6 +76,7 @@ export default function StartupFsmMonitor({ fsmId = 'startup-fsm', themeStyle = 
   const [error, setError] = useState('');
   const diagramRef = useRef(null);
   const renderCounterRef = useRef(0);
+  const mermaidRef = useRef(null);
 
   const logEntries = useMemo(() => {
     const logs = Array.isArray(status?.logs) ? status.logs : [];
@@ -125,16 +125,27 @@ export default function StartupFsmMonitor({ fsmId = 'startup-fsm', themeStyle = 
   }, [status]);
 
   useEffect(() => {
-    mermaid.initialize({
-      startOnLoad: false,
-      securityLevel: 'loose',
-      theme: 'base',
-      themeVariables: getMermaidThemeVariables(themeStyle),
-      themeCSS: '.nodeLabel, .edgeLabel, .label { letter-spacing: 0.02em; text-shadow: 0 0 1px rgba(17, 10, 5, 0.55); }',
-      state: {
-        useMaxWidth: true
+    let cancelled = false;
+    (async () => {
+      try {
+        const { default: mermaid } = await import('mermaid');
+        if (cancelled) return;
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: 'loose',
+          theme: 'base',
+          themeVariables: getMermaidThemeVariables(themeStyle),
+          themeCSS: '.nodeLabel, .edgeLabel, .label { letter-spacing: 0.02em; text-shadow: 0 0 1px rgba(17, 10, 5, 0.55); }',
+          state: {
+            useMaxWidth: true
+          }
+        });
+        mermaidRef.current = mermaid;
+      } catch {
+        // ignore import/init failures; renderDiagram will show fallback
       }
-    });
+    })();
+    return () => { cancelled = true; };
   }, [themeStyle]);
 
   useEffect(() => {
@@ -192,7 +203,19 @@ export default function StartupFsmMonitor({ fsmId = 'startup-fsm', themeStyle = 
       const id = `startup-fsm-${Date.now()}-${renderCounterRef.current++}`;
       const definition = buildMermaidDefinition(status, themeStyle);
       try {
-        const { svg } = await mermaid.render(id, definition);
+        let m = mermaidRef.current;
+        if (!m) {
+          const mod = await import('mermaid');
+          m = mod.default || mod;
+          m.initialize({
+            startOnLoad: false,
+            securityLevel: 'loose',
+            theme: 'base',
+            themeVariables: getMermaidThemeVariables(themeStyle)
+          });
+          mermaidRef.current = m;
+        }
+        const { svg } = await m.render(id, definition);
         if (diagramRef.current) {
           diagramRef.current.innerHTML = svg;
         }

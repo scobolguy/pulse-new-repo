@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import Editor from '@monaco-editor/react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+const MonacoEditor = React.lazy(() => import('@monaco-editor/react'));
 import {
   createNewDocumentFileName,
   DOCUMENT_TYPES,
@@ -721,33 +721,35 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
         </div>
 
         <div style={{ flex: 1, minHeight: 0, border: '1px solid rgba(148, 163, 184, 0.22)', borderRadius: 14, overflow: 'hidden' }}>
-          <Editor
-            height="100%"
-            language={editorDescriptor.monacoLanguage}
-            theme={editorDescriptor.id === 'workflow' ? 'workflowWorkbench' : 'pascalishWorkbench'}
-            value={content}
-            beforeMount={(monaco) => {
-              initializePascalishLanguage(monaco, { current: [] });
-              initializeWorkflowLanguage(monaco);
-            }}
-            onChange={(value) => {
-              setContent(value || '');
-              setDirty(true);
-            }}
-            options={{
-              minimap: { enabled: false },
-              fontSize: 14,
-              lineHeight: 22,
-              wordWrap: 'on',
-              smoothScrolling: true,
-              suggestOnTriggerCharacters: true,
-              quickSuggestions: true,
-              formatOnType: false,
-              automaticLayout: true,
-              padding: { top: 14, bottom: 14 },
-              scrollBeyondLastLine: false
-            }}
-          />
+          <React.Suspense fallback={<div style={{ padding: 20 }}>Loading editor…</div>}>
+            <MonacoEditor
+              height="100%"
+              language={editorDescriptor.monacoLanguage}
+              theme={editorDescriptor.id === 'workflow' ? 'workflowWorkbench' : 'pascalishWorkbench'}
+              value={content}
+              beforeMount={(monaco) => {
+                initializePascalishLanguage(monaco, { current: [] });
+                initializeWorkflowLanguage(monaco);
+              }}
+              onChange={(value) => {
+                setContent(value || '');
+                setDirty(true);
+              }}
+              options={{
+                minimap: { enabled: false },
+                fontSize: 14,
+                lineHeight: 22,
+                wordWrap: 'on',
+                smoothScrolling: true,
+                suggestOnTriggerCharacters: true,
+                quickSuggestions: true,
+                formatOnType: false,
+                automaticLayout: true,
+                padding: { top: 14, bottom: 14 },
+                scrollBeyondLastLine: false
+              }}
+            />
+          </React.Suspense>
         </div>
       </section>
     </div>

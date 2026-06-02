@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import Editor from '@monaco-editor/react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+const MonacoEditor = React.lazy(() => import('@monaco-editor/react'));
 import { initializePascalishLanguage } from './pascalishLanguage';
 
 const DEFAULT_PROGRAM = [
@@ -75,24 +75,26 @@ export default function PascalishEditor() {
       </div>
 
       <div style={{ flex: 1, minHeight: 540, border: '1px solid rgba(148, 163, 184, 0.35)', borderRadius: 8, overflow: 'hidden' }}>
-        <Editor
-          height="100%"
-          language="pascalish"
-          theme="pascalishWorkbench"
-          value={source}
-          onChange={(value) => setSource(value || '')}
-          beforeMount={(monaco) => initializePascalishLanguage(monaco, typeNamesRef)}
-          options={{
-            minimap: { enabled: false },
-            fontSize: 14,
-            lineHeight: 22,
-            wordWrap: 'on',
-            smoothScrolling: true,
-            suggestOnTriggerCharacters: true,
-            quickSuggestions: true,
-            formatOnType: false,
-          }}
-        />
+        <React.Suspense fallback={<div style={{ padding: 20 }}>Loading editor…</div>}>
+          <MonacoEditor
+            height="100%"
+            language="pascalish"
+            theme="pascalishWorkbench"
+            value={source}
+            onChange={(value) => setSource(value || '')}
+            beforeMount={(monaco) => initializePascalishLanguage(monaco, typeNamesRef)}
+            options={{
+              minimap: { enabled: false },
+              fontSize: 14,
+              lineHeight: 22,
+              wordWrap: 'on',
+              smoothScrolling: true,
+              suggestOnTriggerCharacters: true,
+              quickSuggestions: true,
+              formatOnType: false,
+            }}
+          />
+        </React.Suspense>
       </div>
 
       <div style={{ fontSize: 12, opacity: 0.75 }}>

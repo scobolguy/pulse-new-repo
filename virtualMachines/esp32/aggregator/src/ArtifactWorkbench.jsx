@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import Editor from '@monaco-editor/react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+const MonacoEditor = React.lazy(() => import('@monaco-editor/react'));
 import { getInitialArtifactId, registerArtifactLanguages } from './artifactWorkbench';
 
 const RULE_SNIPPETS = [
@@ -168,24 +168,26 @@ export default function ArtifactWorkbench({ artifacts = [], cardPreview, message
 
       <div className="artifact-workbench-body">
         <div className="artifact-workbench-editor">
-          <Editor
-            height="520px"
-            language={activeArtifact.language || 'plaintext'}
-            path={activeArtifact.name || activeArtifact.id}
-            value={activeValue}
-            onChange={onChangeValue}
-            options={{
-              readOnly: Boolean(activeArtifact.readOnly),
-              minimap: { enabled: false },
-              lineNumbers: 'on',
-              scrollBeyondLastLine: false,
-              wordWrap: 'on',
-              glyphMargin: false,
-              folding: true,
-              stickyScroll: { enabled: true }
-            }}
-            onMount={onMount}
-          />
+          <React.Suspense fallback={<div style={{ padding: 20 }}>Loading editor…</div>}>
+            <MonacoEditor
+              height="520px"
+              language={activeArtifact.language || 'plaintext'}
+              path={activeArtifact.name || activeArtifact.id}
+              value={activeValue}
+              onChange={onChangeValue}
+              options={{
+                readOnly: Boolean(activeArtifact.readOnly),
+                minimap: { enabled: false },
+                lineNumbers: 'on',
+                scrollBeyondLastLine: false,
+                wordWrap: 'on',
+                glyphMargin: false,
+                folding: true,
+                stickyScroll: { enabled: true }
+              }}
+              onMount={onMount}
+            />
+          </React.Suspense>
 
           {showRuleTools ? (
             <div className="artifact-workbench-snippets">
