@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { DataMapperMapsPanel } from './DataMapperMapsPanel.jsx';
 
 const SECTION_STYLE = {
   border: '1px solid #ccc',
@@ -696,6 +697,8 @@ export default function DataMapper() {
 
   return (
     <div style={{ maxWidth: 1300 }}>
+      <DataMapperMapsPanel />
+
       <div style={{ ...SECTION_STYLE, position: 'relative' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
           <div style={{ position: 'relative' }}>

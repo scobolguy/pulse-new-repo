@@ -61,6 +61,7 @@ import { registerRuntimeRegistryRoutes } from './src/backend/roles/runtimeRegist
 import { registerRouterLifecycleControlRoutes } from './src/backend/roles/routerLifecycleControlRoutes.mjs';
 import { registerDevelopDocumentRoutes } from './src/backend/developDocumentRoutes.mjs';
 import { registerStartupFsmRoutes } from './src/backend/startupFsmRoutes.mjs';
+import { registerMapperRoutes } from './src/backend/mapperRoutes.mjs';
 import { createRequestPolicyApi } from './src/backend/security/requestPolicy.mjs';
 import { ROUTE_ROLE_MANIFEST } from './src/backend/routes.manifest.mjs';
 import { registerRoutesFromManifest } from './src/backend/routeManifestLoader.mjs';
@@ -9422,6 +9423,7 @@ try {
   }
   
   console.log('[STARTUP] Registering API routes...');
+  registerMapperRoutes(app);
   registerRoutes(app);
   
   // Load worker configuration on startup
