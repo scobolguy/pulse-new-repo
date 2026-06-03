@@ -17,6 +17,7 @@ export default function DataLibrarian() {
   const [itemExpanded, setItemExpanded] = useState({});
   const [lifecycleDrafts, setLifecycleDrafts] = useState({});
   const [nowTs, setNowTs] = useState(() => Date.now());
+  const [contextMenu, setContextMenu] = useState(null);
 
   function toLocalDateTimeInput(value) {
     if (!value) return '';
@@ -89,6 +90,19 @@ export default function DataLibrarian() {
   function closeMenus() {
     setMenuOpen(null);
     setSubmenuOpen(null);
+    setContextMenu(null);
+  }
+
+  function openContextMenu(event, kind, item) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeMenus();
+    setContextMenu({
+      kind,
+      item,
+      x: event.clientX,
+      y: event.clientY,
+    });
   }
 
   async function uploadFiles(files, dest) {
@@ -188,6 +202,116 @@ export default function DataLibrarian() {
       await loadAll();
     } catch (e) {
       setMsg(`Create type from schema failed: ${e.message}`);
+    }
+  }
+
+  async function renameDataType(type) {
+    closeMenus();
+    const currentId = String(type?.id || '').trim();
+    if (!currentId) return;
+    const nextIdInput = window.prompt('Rename type ID:', currentId);
+    if (nextIdInput === null) return;
+    const nextId = nextIdInput.trim().toLowerCase();
+    if (!nextId) {
+      setMsg('Rename type cancelled: type ID is required.');
+      return;
+    }
+    const nextLabelInput = window.prompt('Display label:', String(type?.label || nextId));
+    if (nextLabelInput === null) return;
+    const nextLabel = nextLabelInput.trim();
+
+    try {
+      const res = await fetch(`/api/librarian/data-types/${encodeURIComponent(currentId)}/rename`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ newId: nextId, label: nextLabel }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMsg(`Rename type failed: ${data.error || 'unknown error'}`);
+        return;
+      }
+      setMsg(`Type renamed to ${data.type.id}`);
+      await loadAll();
+    } catch (e) {
+      setMsg(`Rename type failed: ${e.message}`);
+    }
+  }
+
+  async function deleteDataType(type) {
+    closeMenus();
+    const currentId = String(type?.id || '').trim();
+    if (!currentId) return;
+    if (!window.confirm(`Delete data type "${currentId}"?`)) return;
+
+    try {
+      const res = await fetch(`/api/librarian/data-types/${encodeURIComponent(currentId)}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMsg(`Delete type failed: ${data.error || 'unknown error'}`);
+        return;
+      }
+      setMsg(`Type deleted: ${currentId}`);
+      await loadAll();
+    } catch (e) {
+      setMsg(`Delete type failed: ${e.message}`);
+    }
+  }
+
+  async function renameSchema(schema) {
+    closeMenus();
+    const currentPath = String(schema?.path || '').trim();
+    if (!currentPath) return;
+    const currentName = String(schema?.name || '').trim();
+    const nextNameInput = window.prompt('Rename schema file name:', currentName || currentPath);
+    if (nextNameInput === null) return;
+    const nextName = nextNameInput.trim();
+    if (!nextName) {
+      setMsg('Rename schema cancelled: file name is required.');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/librarian/schemas/rename', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: currentPath, newName: nextName }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMsg(`Rename schema failed: ${data.error || 'unknown error'}`);
+        return;
+      }
+      setMsg(`Schema renamed to ${data.path}`);
+      await loadAll();
+    } catch (e) {
+      setMsg(`Rename schema failed: ${e.message}`);
+    }
+  }
+
+  async function deleteSchema(schema) {
+    closeMenus();
+    const currentPath = String(schema?.path || '').trim();
+    if (!currentPath) return;
+    if (!window.confirm(`Delete schema "${currentPath}"?`)) return;
+
+    try {
+      const res = await fetch('/api/librarian/schemas', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: currentPath }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMsg(`Delete schema failed: ${data.error || 'unknown error'}`);
+        return;
+      }
+      setMsg(`Schema deleted: ${currentPath}`);
+      await loadAll();
+    } catch (e) {
+      setMsg(`Delete schema failed: ${e.message}`);
     }
   }
 
@@ -546,6 +670,7 @@ export default function DataLibrarian() {
                     <li key={item.id} style={{ marginBottom: 4, paddingLeft: 6 + (item.depth * 16) }}>
                       <div
                         onClick={() => setItemExpanded(prev => ({ ...prev, [`type:${item.id}`]: !prev[`type:${item.id}`] }))}
+                        onContextMenu={e => openContextMenu(e, 'type', item)}
                         style={{
                           display: 'flex',
                           alignItems: 'center',
@@ -575,6 +700,7 @@ export default function DataLibrarian() {
                               <li key={format.path} style={{ marginBottom: 4 }}>
                                 <div
                                   onClick={() => setItemExpanded(prev => ({ ...prev, [format.path]: !prev[format.path] }))}
+                                  onContextMenu={e => openContextMenu(e, 'schema', format)}
                                   style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '2px 4px', borderRadius: 4, cursor: 'pointer', userSelect: 'none' }}
                                 >
                                   <span style={{ width: 12, color: '#5a6b7b' }}>{itemExpanded[format.path] ? '▾' : '▸'}</span>
@@ -674,7 +800,10 @@ export default function DataLibrarian() {
                 <ul style={{ listStyle: 'none', paddingLeft: 20, borderLeft: '1px solid #dfe6eb', marginLeft: 10, marginTop: 2 }}>
                   {untypedSchemas.map(schema => (
                     <li key={`untyped:${schema.path}`} style={{ marginBottom: 4, paddingLeft: 6 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '2px 4px', borderRadius: 4 }}>
+                      <div
+                        onContextMenu={e => openContextMenu(e, 'schema', schema)}
+                        style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '2px 4px', borderRadius: 4, cursor: 'context-menu' }}
+                      >
                         <span style={{ width: 12, color: '#5a6b7b' }}>•</span>
                         <span>{schema.type === 'copybook' ? '📘' : '📄'}</span>
                         <span style={{ fontWeight: 600, fontSize: 12 }}>{schema.name}</span>
@@ -693,6 +822,78 @@ export default function DataLibrarian() {
               )}
             </li>
           </ul>
+
+      {contextMenu && (
+        <>
+          <div
+            style={{ position: 'fixed', inset: 0, zIndex: 190 }}
+            onClick={() => setContextMenu(null)}
+          />
+          <div
+            style={{
+              position: 'fixed',
+              left: contextMenu.x,
+              top: contextMenu.y,
+              zIndex: 200,
+              minWidth: 200,
+              background: '#111827',
+              color: '#e5e7eb',
+              border: '1px solid #374151',
+              borderRadius: 8,
+              boxShadow: '0 20px 40px rgba(0,0,0,0.28)',
+              overflow: 'hidden',
+              fontFamily: 'Consolas, monospace',
+            }}
+          >
+            <div style={{ padding: '8px 12px', borderBottom: '1px solid #374151', fontSize: 11, color: '#9ca3af' }}>
+              {contextMenu.kind === 'type' ? `Type: ${contextMenu.item?.id || ''}` : `Schema: ${contextMenu.item?.name || contextMenu.item?.path || ''}`}
+            </div>
+            {contextMenu.kind === 'type' && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => renameDataType(contextMenu.item)}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer' }}
+                >
+                  Rename Type
+                </button>
+                <button
+                  type="button"
+                  onClick={() => deleteDataType(contextMenu.item)}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', background: 'transparent', border: 'none', color: '#fca5a5', cursor: 'pointer' }}
+                >
+                  Delete Type
+                </button>
+              </>
+            )}
+            {contextMenu.kind === 'schema' && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => createTypeFromSchema(contextMenu.item)}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer' }}
+                >
+                  Create Type From Schema
+                </button>
+                <button
+                  type="button"
+                  onClick={() => renameSchema(contextMenu.item)}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer' }}
+                >
+                  Rename Schema File
+                </button>
+                <button
+                  type="button"
+                  onClick={() => deleteSchema(contextMenu.item)}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', background: 'transparent', border: 'none', color: '#fca5a5', cursor: 'pointer' }}
+                >
+                  Delete Schema File
+                </button>
+              </>
+            )}
+          </div>
+        </>
+      )}
       </div>
     </div>
   );

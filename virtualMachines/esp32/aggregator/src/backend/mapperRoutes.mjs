@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import XLSX from 'xlsx';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const defaultRuntimeRoot = path.join(repoRoot, 'data');
@@ -28,6 +29,26 @@ async function ensureMapsDirectory() {
   await fs.mkdir(mapsRoot, { recursive: true });
 }
 
+async function seedLegacyMapIfMissing(fileName) {
+  const targetPath = path.join(mapsRoot, fileName);
+  const exists = await fs.stat(targetPath).then(() => true).catch(() => false);
+  if (exists) return;
+
+  const sourcePath = path.join(repoRoot, fileName);
+  const sourceExists = await fs.stat(sourcePath).then(() => true).catch(() => false);
+  if (!sourceExists) return;
+
+  await fs.copyFile(sourcePath, targetPath);
+}
+
+async function seedLegacyMaps() {
+  await ensureMapsDirectory();
+  await Promise.all([
+    seedLegacyMapIfMissing('mt103-to-pacs.map'),
+    seedLegacyMapIfMissing('mt202-to-pacs.map')
+  ]);
+}
+
 function createDefaultMap(id, name) {
   return {
     id,
@@ -45,7 +66,7 @@ export function registerMapperRoutes(app) {
   // List all maps
   app.get('/api/mapper/maps', async (req, res) => {
     try {
-      await ensureMapsDirectory();
+      await seedLegacyMaps();
       const entries = await fs.readdir(mapsRoot).catch(() => []);
       const maps = [];
       for (const entry of entries) {
@@ -78,7 +99,7 @@ export function registerMapperRoutes(app) {
   // Get specific map
   app.get('/api/mapper/maps/:id', async (req, res) => {
     try {
-      await ensureMapsDirectory();
+      await seedLegacyMaps();
       const { id } = req.params;
       const fileName = `${id}.map`;
       const filePath = resolveMapFile(fileName);
@@ -96,7 +117,7 @@ export function registerMapperRoutes(app) {
   // Create new map
   app.post('/api/mapper/maps', async (req, res) => {
     try {
-      await ensureMapsDirectory();
+      await seedLegacyMaps();
       const { id, name, description } = req.body;
       if (!id || !name) {
         return res.status(400).json({ error: 'id and name are required' });
@@ -121,7 +142,7 @@ export function registerMapperRoutes(app) {
   // Update map
   app.put('/api/mapper/maps/:id', async (req, res) => {
     try {
-      await ensureMapsDirectory();
+      await seedLegacyMaps();
       const { id } = req.params;
       const { name, description, rules, submaps } = req.body;
       const fileName = `${id}.map`;
@@ -146,7 +167,7 @@ export function registerMapperRoutes(app) {
   // Delete map
   app.delete('/api/mapper/maps/:id', async (req, res) => {
     try {
-      await ensureMapsDirectory();
+      await seedLegacyMaps();
       const { id } = req.params;
       const fileName = `${id}.map`;
       const filePath = resolveMapFile(fileName);
@@ -163,7 +184,7 @@ export function registerMapperRoutes(app) {
   // Rename map (creates new file, deletes old)
   app.post('/api/mapper/maps/:id/rename', async (req, res) => {
     try {
-      await ensureMapsDirectory();
+      await seedLegacyMaps();
       const { id } = req.params;
       const { newId } = req.body;
       if (!newId) {
@@ -191,7 +212,7 @@ export function registerMapperRoutes(app) {
   // Import CSV → map rules
   app.post('/api/mapper/maps/:id/import-csv', async (req, res) => {
     try {
-      await ensureMapsDirectory();
+      await seedLegacyMaps();
       const { id } = req.params;
       const { csvContent } = req.body;
       if (!csvContent) {
@@ -260,7 +281,7 @@ export function registerMapperRoutes(app) {
   // Export map to Excel (returns CSV for now, can enhance to .xlsx)
   app.get('/api/mapper/maps/:id/export-csv', async (req, res) => {
     try {
-      await ensureMapsDirectory();
+      await seedLegacyMaps();
       const { id } = req.params;
       const fileName = `${id}.map`;
       const filePath = resolveMapFile(fileName);
@@ -281,6 +302,68 @@ export function registerMapperRoutes(app) {
       res.set('content-type', 'text/csv');
       res.set('content-disposition', `attachment; filename="${id}.csv"`);
       res.send(csv);
+    } catch (e) {
+      if (e.code === 'ENOENT') {
+        return res.status(404).json({ error: 'Map not found' });
+      }
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/mapper/maps/:id/export-excel', async (req, res) => {
+    try {
+      await seedLegacyMaps();
+      const { id } = req.params;
+      const fileName = `${id}.map`;
+      const filePath = resolveMapFile(fileName);
+      const content = await fs.readFile(filePath, 'utf-8');
+      const map = JSON.parse(content);
+
+      const metadataRows = [
+        ['Field', 'Value'],
+        ['id', map.id || id],
+        ['name', map.name || ''],
+        ['description', map.description || ''],
+        ['version', map.version || ''],
+        ['createdAt', map.createdAt || ''],
+        ['updatedAt', map.updatedAt || '']
+      ];
+
+      const rulesRows = [
+        ['ID', 'FROM', 'TO', 'DESCRIPTION', 'CONVERSION']
+      ];
+      for (const rule of Array.isArray(map.rules) ? map.rules : []) {
+        rulesRows.push([
+          String(rule.id || ''),
+          String(rule.from || ''),
+          String(rule.to || ''),
+          String(rule.description || ''),
+          String(rule.conversion || '')
+        ]);
+      }
+
+      const submapRows = [
+        ['ID', 'Name', 'Description']
+      ];
+      for (const submap of Array.isArray(map.submaps) ? map.submaps : []) {
+        submapRows.push([
+          String(submap.id || ''),
+          String(submap.name || ''),
+          String(submap.description || '')
+        ]);
+      }
+
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(metadataRows), 'Map');
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rulesRows), 'Rules');
+      if (submapRows.length > 1) {
+        XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(submapRows), 'Submaps');
+      }
+
+      const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+      res.set('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.set('content-disposition', `attachment; filename="${id}.xlsx"`);
+      res.send(buffer);
     } catch (e) {
       if (e.code === 'ENOENT') {
         return res.status(404).json({ error: 'Map not found' });

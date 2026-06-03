@@ -1,13 +1,15 @@
 import express from 'express';
 import fs from 'fs/promises';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { readEnvNumber } from './src/env-config.mjs';
 
 const app = express();
 app.use(express.json());
 
-// Config: where to look for data files and schemas
-const DATA_ROOT = path.resolve('./data');
+// Config: where to look for data files and schemas (independent of process cwd)
+const repoRoot = path.dirname(fileURLToPath(import.meta.url));
+const DATA_ROOT = path.resolve(repoRoot, 'data');
 const SCHEMA_ROOT = path.join(DATA_ROOT, 'schemas');
 const SCHEMA_LIFECYCLE_PATH = path.join(DATA_ROOT, 'schema-lifecycle.json');
 
@@ -587,6 +589,124 @@ app.post('/api/librarian/data-types', async (req, res) => {
     await saveDataTypes(types);
     res.json({ status: 'created', type: newType });
   } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/librarian/data-types/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim().toLowerCase();
+    if (!id) return res.status(400).json({ error: 'id is required' });
+    if (id === 'text-string') return res.status(409).json({ error: 'text-string is a built-in type' });
+
+    const types = await loadDataTypes();
+    const nextTypes = types.filter(type => String(type.id || '').toLowerCase() !== id);
+    if (nextTypes.length === types.length) {
+      return res.status(404).json({ error: 'Type not found' });
+    }
+
+    await saveDataTypes(nextTypes);
+    res.json({ status: 'deleted', id });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/librarian/data-types/:id/rename', async (req, res) => {
+  try {
+    const currentId = String(req.params.id || '').trim().toLowerCase();
+    const nextId = String(req.body?.newId || '').trim().toLowerCase();
+    const nextLabel = String(req.body?.label || '').trim();
+    if (!currentId) return res.status(400).json({ error: 'id is required' });
+    if (!nextId) return res.status(400).json({ error: 'newId is required' });
+    if (currentId === 'text-string') return res.status(409).json({ error: 'text-string is a built-in type' });
+    if (nextId === 'text-string') return res.status(409).json({ error: 'text-string is a built-in type' });
+
+    const types = await loadDataTypes();
+    const typeIndex = types.findIndex(type => String(type.id || '').toLowerCase() === currentId);
+    if (typeIndex < 0) {
+      return res.status(404).json({ error: 'Type not found' });
+    }
+    if (types.some(type => String(type.id || '').toLowerCase() === nextId && String(type.id || '').toLowerCase() !== currentId)) {
+      return res.status(409).json({ error: 'Type already exists' });
+    }
+
+    const currentType = types[typeIndex];
+    const updatedType = {
+      ...currentType,
+      id: nextId,
+      label: nextLabel || currentType.label || nextId,
+    };
+    types[typeIndex] = updatedType;
+    await saveDataTypes(types);
+    res.json({ status: 'renamed', type: updatedType });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/librarian/schemas', async (req, res) => {
+  try {
+    const relPath = String(req.body?.path || '').trim().replace(/\\/g, '/');
+    if (!relPath) return res.status(400).json({ error: 'path is required' });
+
+    const absPath = path.resolve(SCHEMA_ROOT, relPath);
+    if (!absPath.startsWith(path.resolve(SCHEMA_ROOT))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    await fs.unlink(absPath);
+    const lifecycleByPath = await loadSchemaLifecycleByPath();
+    if (Object.prototype.hasOwnProperty.call(lifecycleByPath, relPath)) {
+      delete lifecycleByPath[relPath];
+      await saveSchemaLifecycleByPath(lifecycleByPath);
+    }
+
+    res.json({ status: 'deleted', path: relPath });
+  } catch (e) {
+    if (e.code === 'ENOENT') {
+      return res.status(404).json({ error: 'Schema not found' });
+    }
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/librarian/schemas/rename', async (req, res) => {
+  try {
+    const currentPath = String(req.body?.path || '').trim().replace(/\\/g, '/');
+    const newName = String(req.body?.newName || '').trim();
+    if (!currentPath) return res.status(400).json({ error: 'path is required' });
+    if (!newName) return res.status(400).json({ error: 'newName is required' });
+
+    const currentAbsPath = path.resolve(SCHEMA_ROOT, currentPath);
+    if (!currentAbsPath.startsWith(path.resolve(SCHEMA_ROOT))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const currentDir = path.dirname(currentAbsPath);
+    const currentExt = path.extname(currentAbsPath) || '.xsd';
+    const nextFileName = newName.endsWith(currentExt) ? newName : `${newName}${currentExt}`;
+    const nextAbsPath = path.resolve(currentDir, nextFileName);
+    if (!nextAbsPath.startsWith(path.resolve(SCHEMA_ROOT))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    await fs.mkdir(path.dirname(nextAbsPath), { recursive: true });
+    await fs.rename(currentAbsPath, nextAbsPath);
+
+    const lifecycleByPath = await loadSchemaLifecycleByPath();
+    const nextRelPath = path.relative(SCHEMA_ROOT, nextAbsPath).replace(/\\/g, '/');
+    if (Object.prototype.hasOwnProperty.call(lifecycleByPath, currentPath)) {
+      lifecycleByPath[nextRelPath] = lifecycleByPath[currentPath];
+      delete lifecycleByPath[currentPath];
+      await saveSchemaLifecycleByPath(lifecycleByPath);
+    }
+
+    res.json({ status: 'renamed', path: nextRelPath });
+  } catch (e) {
+    if (e.code === 'ENOENT') {
+      return res.status(404).json({ error: 'Schema not found' });
+    }
     res.status(500).json({ error: e.message });
   }
 });

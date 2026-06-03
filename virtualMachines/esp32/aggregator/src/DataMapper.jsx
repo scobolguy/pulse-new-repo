@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { DataMapperMapsPanel } from './DataMapperMapsPanel.jsx';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+
+const LazyDataMapperEditor = lazy(() => import('./DataMapperEditor.jsx')); 
 
 const SECTION_STYLE = {
   border: '1px solid #ccc',
@@ -7,15 +8,6 @@ const SECTION_STYLE = {
   padding: 16,
   background: '#fff',
   marginBottom: 16,
-};
-
-const PANEL_STYLE = {
-  border: '1px solid #d6dbe1',
-  borderRadius: 6,
-  minHeight: 400,
-  maxHeight: 560,
-  overflow: 'auto',
-  background: '#fafbfd',
 };
 
 function validateConversionRule(ruleText) {
@@ -284,12 +276,6 @@ function getXsdDisplayName(node) {
   return String(node?.valueType || 'field');
 }
 
-function isXsdWrapperNode(node) {
-  const name = String(node?.name || '').toLowerCase();
-  const valueType = String(node?.valueType || '').toLowerCase();
-  return name === 'sequence' || name === 'choice' || name === 'all' || valueType === 'sequence' || valueType === 'choice' || valueType === 'all' || valueType === 'complextype';
-}
-
 function buildNodeIndex(nodes) {
   const nodeByPath = new Map();
   const nodeByPathLower = new Map();
@@ -310,50 +296,44 @@ function buildNodeIndex(nodes) {
   return { nodeByPath, nodeByPathLower, childrenByParent };
 }
 
-function collectMeaningfulXsdChildren(parentPath, indexData) {
-  const children = indexData.childrenByParent.get(parentPath) || [];
-  const result = [];
-  for (const child of children) {
-    if (isXsdWrapperNode(child)) {
-      result.push(...collectMeaningfulXsdChildren(child.path, indexData));
-    } else {
-      result.push(child);
-    }
-  }
-  return result;
-}
-
-function resolveTypeNode(typeName, indexData) {
-  const raw = String(typeName || '').trim();
-  if (!raw) return null;
-  const direct = indexData.nodeByPath.get(raw);
-  if (direct) return direct;
-  const noPrefix = raw.includes(':') ? raw.split(':').pop() : raw;
-  const byNoPrefix = indexData.nodeByPath.get(noPrefix);
-  if (byNoPrefix) return byNoPrefix;
-  return indexData.nodeByPathLower.get(raw.toLowerCase()) || indexData.nodeByPathLower.get(noPrefix.toLowerCase()) || null;
-}
-
-function getXsdNodeChildren(node, indexData) {
-  const directChildren = collectMeaningfulXsdChildren(node.path, indexData);
-  if (directChildren.length > 0) return directChildren;
-
-  const typeNode = resolveTypeNode(node.valueType, indexData);
-  if (!typeNode) return [];
-
-  const typeChildren = collectMeaningfulXsdChildren(typeNode.path, indexData);
-  return typeChildren.map((child) => ({
-    ...child,
-    name: String(child.name || ''),
-    path: `${node.path}.${String(child.name || '')}`,
-  }));
-}
-
 function getInitialExpandedPaths(indexData) {
   const roots = indexData.childrenByParent.get('') || [];
   const hasDocument = roots.some(node => node.path === 'Document');
   if (hasDocument) return new Set(['Document']);
   return new Set(roots.map(node => node.path));
+}
+
+function getAncestorPaths(rawPath) {
+  const path = String(rawPath || '').trim();
+  if (!path) return [];
+  const parts = path.split('.').filter(Boolean);
+  const ancestors = [];
+  for (let i = 1; i < parts.length; i += 1) {
+    ancestors.push(parts.slice(0, i).join('.'));
+  }
+  return ancestors;
+}
+
+function getMappedExpansionPaths(items, pickPath) {
+  const expanded = new Set();
+  for (const item of items) {
+    const path = pickPath(item);
+    for (const ancestor of getAncestorPaths(path)) {
+      expanded.add(ancestor);
+    }
+  }
+  return expanded;
+}
+
+function getOneLevelChildPaths(indexData, parentPaths) {
+  const childPaths = new Set();
+  for (const parentPath of parentPaths) {
+    const children = indexData.childrenByParent.get(parentPath) || [];
+    for (const child of children) {
+      childPaths.add(child.path);
+    }
+  }
+  return childPaths;
 }
 
 function filterNodesForSchema(nodes, schemaPath) {
@@ -369,8 +349,8 @@ function filterNodesForSchema(nodes, schemaPath) {
 }
 
 export default function DataMapper() {
-  const [mappings, setMappings] = useState([]);
   const [schemas, setSchemas] = useState([]);
+  const [availableMaps, setAvailableMaps] = useState([]);
   const [status, setStatus] = useState('');
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -387,27 +367,34 @@ export default function DataMapper() {
   const [targetMtFieldDefs, setTargetMtFieldDefs] = useState(null);
   const [expandedSourcePaths, setExpandedSourcePaths] = useState(new Set());
   const [expandedTargetPaths, setExpandedTargetPaths] = useState(new Set());
+  const [isPersistedMap, setIsPersistedMap] = useState(false);
 
-  const loadAll = useCallback(async () => {
+  const loadSchemas = useCallback(async () => {
     try {
-      const [schemasRes, mappingsRes] = await Promise.all([
-        fetch('/api/librarian/schemas'),
-        fetch('/api/mapper/mappings'),
-      ]);
+      const schemasRes = await fetch('/api/librarian/schemas');
       const nextSchemas = schemasRes.ok ? ((await schemasRes.json()).schemas || []) : [];
-      const nextMappings = mappingsRes.ok ? ((await mappingsRes.json()).mappings || []) : [];
       setSchemas(Array.isArray(nextSchemas) ? nextSchemas : []);
-      setMappings(Array.isArray(nextMappings) ? nextMappings : []);
     } catch (e) {
       setStatus(`Load failed: ${e.message}`);
     }
   }, []);
 
+  const loadAvailableMaps = useCallback(async () => {
+    const res = await fetch('/api/mapper/maps');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to load maps');
+    }
+    const nextMaps = Array.isArray(data.maps) ? data.maps : [];
+    setAvailableMaps(nextMaps);
+    return nextMaps;
+  }, []);
+
   useEffect(() => {
     setTimeout(() => {
-      void loadAll();
+      void loadSchemas();
     }, 0);
-  }, [loadAll]);
+  }, [loadSchemas]);
 
   const schemasByPath = useMemo(() => {
     const map = new Map();
@@ -415,6 +402,25 @@ export default function DataMapper() {
       map.set(String(schema.path || ''), schema);
     }
     return map;
+  }, [schemas]);
+
+  const schemaChoices = useMemo(() => {
+    return schemas
+      .map((schema) => {
+        const path = String(schema.path || '');
+        const typeId = String(schema.typeId || schema.area || schema.name || '').toLowerCase();
+        const name = String(schema.name || path || typeId || 'schema');
+        const label = `${typeId || 'type'} | ${name} | ${path}`;
+        return {
+          path,
+          typeId,
+          name,
+          label,
+          mtime: schema.mtime,
+        };
+      })
+      .filter(choice => !!choice.path)
+      .sort((a, b) => String(b.mtime || '').localeCompare(String(a.mtime || '')));
   }, [schemas]);
 
   const sourceSchema = useMemo(() => resolveSchemaByPath(schemasByPath, sourceSchemaPath), [schemasByPath, sourceSchemaPath]);
@@ -503,19 +509,17 @@ export default function DataMapper() {
       return;
     }
     setTimeout(() => {
-      setExpandedTargetPaths(getInitialExpandedPaths(targetIndex));
+      const initial = getInitialExpandedPaths(targetIndex);
+      if (!editingId || items.length === 0) {
+        setExpandedTargetPaths(initial);
+        return;
+      }
+
+      const mapped = getMappedExpansionPaths(items, (item) => item?.targetPath);
+      const oneLevel = getOneLevelChildPaths(targetIndex, initial);
+      setExpandedTargetPaths(new Set([...initial, ...oneLevel, ...mapped]));
     }, 0);
-  }, [targetIsXsd, targetIndex, targetSchemaPath]);
-
-  const editorReady = !!editingId && !!sourceSchema && !!targetSchema;
-
-  const linkedSourcePaths = useMemo(() => {
-    return new Set(items.map(item => String(item.sourcePath || '')).filter(Boolean));
-  }, [items]);
-
-  const linkedTargetPaths = useMemo(() => {
-    return new Set(items.map(item => String(item.targetPath || '')).filter(Boolean));
-  }, [items]);
+  }, [targetIsXsd, targetIndex, targetSchemaPath, editingId, items]);
 
   const conversionRuleErrors = useMemo(() => {
     return items.map((item) => {
@@ -536,79 +540,7 @@ export default function DataMapper() {
     });
   }
 
-  function renderXsdTreeNode(node, pane, depth = 0) {
-    const isSourcePane = pane === 'source';
-    const indexData = isSourcePane ? sourceIndex : targetIndex;
-    const linkedPaths = isSourcePane ? linkedSourcePaths : linkedTargetPaths;
-    const expandedPaths = isSourcePane ? expandedSourcePaths : expandedTargetPaths;
-
-    const isLinked = linkedPaths.has(node.path);
-    const children = getXsdNodeChildren(node, indexData);
-    const hasChildren = children.length > 0;
-    const isExpanded = expandedPaths.has(node.path);
-    const typeText = String(node.valueType || 'unknown');
-    const isRequired = node.required === true;
-    const isEnum = node.isEnum === true;
-
-    const row = (
-      <div
-        key={`${pane}:${node.path}`}
-        draggable={isSourcePane}
-        onDragStart={isSourcePane ? (event => onSourceDragStart(event, node)) : undefined}
-        onDragOver={!isSourcePane ? (event => event.preventDefault()) : undefined}
-        onDrop={!isSourcePane ? (event => onTargetDrop(event, node)) : undefined}
-        style={{
-          marginLeft: depth * 14,
-          padding: '4px 8px',
-          borderBottom: '1px solid #eef2f7',
-          fontSize: 12,
-          cursor: isSourcePane ? 'grab' : 'default',
-          background: isSourcePane ? (isLinked ? '#fff6e8' : '#fff') : (isLinked ? '#eaf8ef' : '#fff'),
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-        }}
-        title={isSourcePane ? 'Drag to destination' : 'Drop source node here'}
-      >
-        <button
-          type="button"
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            if (hasChildren) toggleExpandPath(node.path, pane);
-          }}
-          style={{
-            border: 'none',
-            background: 'transparent',
-            padding: 0,
-            cursor: hasChildren ? 'pointer' : 'default',
-            width: 14,
-            textAlign: 'center',
-            color: '#475569',
-          }}
-          disabled={!hasChildren}
-          aria-label={hasChildren ? (isExpanded ? 'Collapse node' : 'Expand node') : 'Leaf node'}
-        >
-          {hasChildren ? (isExpanded ? '▾' : '▸') : '•'}
-        </button>
-        <span style={{ color: isRequired ? '#b91c1c' : '#111827', fontWeight: isRequired ? 600 : 400 }}>
-          {getXsdDisplayName(node)}
-        </span>
-        <span style={{ color: isRequired ? '#dc2626' : '#64748b' }}>({typeText})</span>
-        {isEnum && (
-          <span style={{ color: '#0f766e', fontSize: 11, border: '1px solid #99f6e4', borderRadius: 999, padding: '0 6px', lineHeight: '16px' }}>
-            enum
-          </span>
-        )}
-      </div>
-    );
-
-    if (!hasChildren || !isExpanded) return [row];
-    const descendants = children.flatMap(child => renderXsdTreeNode(child, pane, depth + 1));
-    return [row, ...descendants];
-  }
-
-  function openMapping(mapping) {
+  const openMapping = useCallback((mapping) => {
     setEditingId(String(mapping.id || ''));
     setName(String(mapping.name || ''));
     setSourceTypeId(String(mapping.sourceTypeId || '').toLowerCase());
@@ -616,8 +548,114 @@ export default function DataMapper() {
     setSourceSchemaPath(String(mapping.sourceSchemaPath || ''));
     setTargetSchemaPath(String(mapping.targetSchemaPath || ''));
     setItems(Array.isArray(mapping.items) ? mapping.items : []);
+    setIsPersistedMap(mapping.persisted !== false);
     setStatus(`Opened mapping: ${mappingTitle(mapping)}`);
-  }
+  }, []);
+
+  const createNewMap = useCallback(() => {
+    const proposedName = prompt('New map name:', name || 'Untitled Map');
+    if (!proposedName) return;
+
+    const nextId = proposedName
+      .trim()
+      .toLowerCase()
+      .replaceAll(/[^a-z0-9_-]/g, '_')
+      .slice(0, 50);
+
+    const fallbackSourceSchema = sourceSchemaPath || 'schemas/swift-mt103.json';
+    const fallbackTargetSchema = targetSchemaPath || 'schemas/pacs.008.001.14.xsd';
+    const fallbackSourceType = sourceTypeId || 'swift-mt103';
+    const fallbackTargetType = targetTypeId || 'pacs';
+
+    openMapping({
+      id: nextId,
+      name: proposedName.trim(),
+      sourceTypeId: fallbackSourceType,
+      targetTypeId: fallbackTargetType,
+      sourceSchemaPath: fallbackSourceSchema,
+      targetSchemaPath: fallbackTargetSchema,
+      items: [],
+      persisted: false,
+    });
+  }, [name, openMapping, sourceSchemaPath, sourceTypeId, targetSchemaPath, targetTypeId]);
+
+  const openMapFile = useCallback(async (mapId) => {
+    const res = await fetch(`/api/mapper/maps/${encodeURIComponent(mapId)}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to open map');
+    }
+
+    const map = data?.map || {};
+    const rawRules = Array.isArray(map.rules) ? map.rules : [];
+    const mappedItems = rawRules
+      .map((rule) => {
+        const sourcePath = String(rule.sourcePath || rule.from || '').trim();
+        const targetPath = String(rule.targetPath || rule.to || '').trim();
+        if (!sourcePath || !targetPath) return null;
+        return {
+          sourcePath,
+          targetPath,
+          kind: String(rule.kind || 'leaf').toLowerCase() === 'branch' ? 'branch' : 'leaf',
+          sourceValueType: String(rule.sourceValueType || 'unknown').toLowerCase() || 'unknown',
+          targetValueType: String(rule.targetValueType || 'unknown').toLowerCase() || 'unknown',
+          conversionRule: String(rule.conversionRule || rule.conversion || '').trim(),
+        };
+      })
+      .filter(Boolean);
+
+    const mappedTargetAncestors = getMappedExpansionPaths(mappedItems, (item) => item?.targetPath);
+    const initial = getInitialExpandedPaths(targetIndex);
+    const oneLevel = getOneLevelChildPaths(targetIndex, initial);
+    setExpandedTargetPaths((prev) => new Set([...prev, ...initial, ...oneLevel, ...mappedTargetAncestors]));
+
+    openMapping({
+      id: String(map.id || mapId || ''),
+      name: String(map.name || mapId || ''),
+      sourceTypeId: String(map.sourceTypeId || 'swift-mt103').toLowerCase(),
+      targetTypeId: String(map.targetTypeId || 'pacs').toLowerCase(),
+      sourceSchemaPath: String(map.sourceSchemaPath || 'schemas/swift-mt103.json'),
+      targetSchemaPath: String(map.targetSchemaPath || 'schemas/pacs.008.001.14.xsd'),
+      items: mappedItems,
+      persisted: true,
+    });
+  }, [openMapping, targetIndex]);
+
+  const openMapDialog = useCallback(async () => {
+    try {
+      await loadAvailableMaps();
+      setOpenDialog(true);
+      setMenuOpen(false);
+    } catch (e) {
+      setStatus(`Open failed: ${e.message}`);
+    }
+  }, [loadAvailableMaps]);
+
+  const updateSchemaSelection = useCallback((pane, nextSchemaPath) => {
+    const selectedSchemaPath = String(nextSchemaPath || '').trim();
+    if (!selectedSchemaPath) return;
+
+    const matchedSchema = resolveSchemaByPath(schemasByPath, selectedSchemaPath);
+    const resolvedTypeId = String(matchedSchema?.typeId || matchedSchema?.area || matchedSchema?.name || '').toLowerCase();
+
+    if (pane === 'source') {
+      if (selectedSchemaPath === sourceSchemaPath) return;
+      setSourceSchemaPath(selectedSchemaPath);
+      if (resolvedTypeId) setSourceTypeId(resolvedTypeId);
+    } else {
+      if (selectedSchemaPath === targetSchemaPath) return;
+      setTargetSchemaPath(selectedSchemaPath);
+      if (resolvedTypeId) setTargetTypeId(resolvedTypeId);
+    }
+
+    if (items.length > 0) {
+      setItems([]);
+      setStatus('Schema changed. Existing links were cleared because field structures may differ.');
+    } else {
+      setStatus('Schema updated.');
+    }
+    setIsPersistedMap(false);
+  }, [items.length, schemasByPath, sourceSchemaPath, targetSchemaPath]);
 
   function onSourceDragStart(event, sourceNode) {
     event.dataTransfer.setData('application/json', JSON.stringify(sourceNode));
@@ -668,17 +706,34 @@ export default function DataMapper() {
         setStatus('Save failed: one or more conversion rules are invalid');
         return;
       }
+      if (!editingId) {
+        setStatus('Save failed: create or open a map first');
+        return;
+      }
+
       const payload = {
         id: editingId,
         name: String(name || '').trim() || `${sourceTypeId} -> ${targetTypeId}`,
+        description: '',
         sourceTypeId,
         targetTypeId,
         sourceSchemaPath,
         targetSchemaPath,
-        items,
+        rules: items.map((item) => ({
+          sourcePath: item.sourcePath,
+          targetPath: item.targetPath,
+          kind: item.kind,
+          sourceValueType: item.sourceValueType,
+          targetValueType: item.targetValueType,
+          conversionRule: item.conversionRule,
+        })),
+        submaps: [],
       };
-      const res = await fetch('/api/mapper/mappings', {
-        method: 'POST',
+
+      const endpoint = isPersistedMap ? `/api/mapper/maps/${encodeURIComponent(editingId)}` : '/api/mapper/maps';
+      const method = isPersistedMap ? 'PUT' : 'POST';
+      const res = await fetch(endpoint, {
+        method,
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
       });
@@ -687,224 +742,77 @@ export default function DataMapper() {
         setStatus(`Save failed: ${data.error || 'unknown error'}`);
         return;
       }
-      setStatus(`Saved mapping: ${mappingTitle(data.mapping)}`);
-      await loadAll();
-      openMapping(data.mapping);
+
+      const savedMap = data.map || payload;
+      setIsPersistedMap(true);
+      setStatus(`Saved map: ${savedMap.name || editingId}`);
+      openMapping({
+        id: String(savedMap.id || editingId),
+        name: String(savedMap.name || name || editingId),
+        sourceTypeId: String(savedMap.sourceTypeId || sourceTypeId).toLowerCase(),
+        targetTypeId: String(savedMap.targetTypeId || targetTypeId).toLowerCase(),
+        sourceSchemaPath: String(savedMap.sourceSchemaPath || sourceSchemaPath),
+        targetSchemaPath: String(savedMap.targetSchemaPath || targetSchemaPath),
+        items,
+        persisted: true,
+      });
     } catch (e) {
       setStatus(`Save failed: ${e.message}`);
     }
   }
 
   return (
-    <div style={{ maxWidth: 1300 }}>
-      <DataMapperMapsPanel />
-
-      <div style={{ ...SECTION_STYLE, position: 'relative' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-          <div style={{ position: 'relative' }}>
-            <button type="button" onClick={() => setMenuOpen(prev => !prev)}>File ▾</button>
-            {menuOpen && (
-              <div style={{ position: 'absolute', top: 34, left: 0, zIndex: 5, background: '#fff', border: '1px solid #cbd5e1', borderRadius: 4, minWidth: 130, boxShadow: '0 3px 10px rgba(0,0,0,0.08)' }}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOpenDialog(true);
-                    setMenuOpen(false);
-                  }}
-                  style={{ width: '100%', textAlign: 'left', border: 'none', background: 'transparent', padding: '8px 10px', cursor: 'pointer' }}
-                >
-                  Open...
-                </button>
-              </div>
-            )}
-          </div>
-
-          <h3 style={{ margin: 0 }}>Data Mapper Drag and Drop</h3>
-        </div>
-
-        <p style={{ marginTop: 0, fontSize: 12, color: '#5a6470' }}>
-          Use File &gt; Open, then drag source nodes from the left panel and drop them on destination nodes in the right panel.
-        </p>
-
-        {status && (
-          <div style={{ marginBottom: 10, fontSize: 12, background: '#f5f5f5', borderRadius: 4, padding: '6px 10px' }}>
-            {status}
-          </div>
-        )}
-
-        {!!editingId && (
-          <div style={{ marginBottom: 10, fontSize: 12, border: '1px solid #d8e0ea', borderRadius: 6, padding: '8px 10px', background: '#f8fbff' }}>
-            <div><strong>Opened Map:</strong> {name || editingId}</div>
-            <div><strong>Source:</strong> {sourceTypeId} | {sourceSchemaPath} {sourceSchema ? '' : '(schema not resolved)'}</div>
-            <div><strong>Destination:</strong> {targetTypeId} | {targetSchemaPath} {targetSchema ? '' : '(schema not resolved)'}</div>
-            <div><strong>Links In Map:</strong> {items.length}</div>
-          </div>
-        )}
-
-        {!editorReady && (
-          <div style={{ border: '1px dashed #9ca3af', borderRadius: 8, padding: 22, background: '#fbfcff', color: '#4b5563' }}>
-            Open a mapping to launch the drag-and-drop screen.
-          </div>
-        )}
-
-        {editorReady && (
-          <>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
-              <div style={{ fontSize: 12, color: '#334155' }}>
-                <strong>{name || editingId}</strong> | {sourceTypeId}{' -> '}{targetTypeId}
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button type="button" onClick={() => setItems([])}>Clear Links</button>
-                <button type="button" onClick={saveMapping} disabled={items.length === 0 || hasConversionRuleErrors}>Save</button>
-              </div>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Source</div>
-                <div style={PANEL_STYLE}>
-                  {sourceIsXsd
-                    ? sourceRoots.flatMap(node => renderXsdTreeNode(node, 'source', 0))
-                    : sourceNodes.map((node, index) => {
-                      const isLinked = linkedSourcePaths.has(node.path);
-                      const isRequired = node.required === true || isMtRequiredPath(node.path, sourceMtFieldDefs);
-                      const displayPath = labelForPath(node.path, sourceMtFieldDefs);
-                      return (
-                        <div
-                          key={`src:${index}:${node.path}`}
-                          draggable
-                          onDragStart={event => onSourceDragStart(event, node)}
-                          style={{
-                            marginLeft: node.depth * 14,
-                            padding: '4px 8px',
-                            cursor: 'grab',
-                            borderBottom: '1px solid #eef2f7',
-                            fontSize: 12,
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 8,
-                            background: isLinked ? '#fff6e8' : '#fff',
-                          }}
-                          title="Drag to destination"
-                        >
-                          <span>{node.kind === 'branch' ? '▸' : '•'}</span>
-                          <span style={{ color: isRequired ? '#b91c1c' : '#111827', fontWeight: isRequired ? 600 : 400 }}>{displayPath}</span>
-                        </div>
-                      );
-                    })}
-                </div>
-              </div>
-
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Destination</div>
-                <div style={PANEL_STYLE}>
-                  {targetIsXsd
-                    ? targetRoots.flatMap(node => renderXsdTreeNode(node, 'target', 0))
-                    : targetNodes.map((node, index) => {
-                      const isLinked = linkedTargetPaths.has(node.path);
-                      const isRequired = node.required === true || isMtRequiredPath(node.path, targetMtFieldDefs);
-                      const displayPath = labelForPath(node.path, targetMtFieldDefs);
-                      return (
-                        <div
-                          key={`dst:${index}:${node.path}`}
-                          onDragOver={event => event.preventDefault()}
-                          onDrop={event => onTargetDrop(event, node)}
-                          style={{
-                            marginLeft: node.depth * 14,
-                            padding: '4px 8px',
-                            borderBottom: '1px solid #eef2f7',
-                            fontSize: 12,
-                            cursor: 'default',
-                            background: isLinked ? '#eaf8ef' : '#fff',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 8,
-                          }}
-                          title="Drop source node here"
-                        >
-                          <span>{node.kind === 'branch' ? '▸' : '•'}</span>
-                          <span style={{ color: isRequired ? '#b91c1c' : '#111827', fontWeight: isRequired ? 600 : 400 }}>{displayPath}</span>
-                        </div>
-                      );
-                    })}
-                </div>
-              </div>
-            </div>
-
-            <div style={{ marginTop: 14, border: '1px solid #dce3eb', borderRadius: 6, overflow: 'hidden' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8, padding: '8px 10px', background: '#f7f9fc', fontSize: 12, fontWeight: 600 }}>
-                <div>Link (Source {'->'} Destination)</div>
-                <div>Conversion Rule</div>
-                <div>Action</div>
-              </div>
-              {items.map((item, index) => (
-                <div key={`item:${index}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8, padding: '8px 10px', borderTop: '1px solid #edf2f7', fontSize: 12, alignItems: 'center' }}>
-                  <div style={{ fontFamily: 'Consolas, monospace' }}>
-                    {labelForPath(item.sourcePath, sourceMtFieldDefs)} {'->'} {labelForPath(item.targetPath, targetMtFieldDefs)}
-                  </div>
-                  <div>
-                    <input
-                      type="text"
-                      value={String(item.conversionRule || '')}
-                      onChange={(event) => updateItemConversionRule(index, event.target.value)}
-                      placeholder="move(src)"
-                      style={{
-                        width: '100%',
-                        fontSize: 12,
-                        padding: '4px 6px',
-                        border: conversionRuleErrors[index] ? '1px solid #ef4444' : '1px solid #cbd5e1',
-                        borderRadius: 4,
-                        fontFamily: 'Consolas, monospace',
-                      }}
-                    />
-                    {conversionRuleErrors[index] && (
-                      <div style={{ marginTop: 4, fontSize: 11, color: '#b91c1c' }}>Rule error: {conversionRuleErrors[index]}</div>
-                    )}
-                  </div>
-                  <button type="button" onClick={() => removeItem(index)}>Remove</button>
-                </div>
-              ))}
-              {items.length === 0 && (
-                <div style={{ padding: 10, fontSize: 12, color: '#6b7280' }}>No links yet. Drag from source and drop on destination.</div>
-              )}
-            </div>
-          </>
-        )}
-      </div>
-
-      {openDialog && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 20 }}>
-          <div style={{ width: 'min(760px, 92vw)', maxHeight: '80vh', overflow: 'auto', background: '#fff', borderRadius: 8, border: '1px solid #d4dbe3', padding: 14 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <strong>Open Mapping</strong>
-              <button type="button" onClick={() => setOpenDialog(false)}>Close</button>
-            </div>
-
-            {mappings.length === 0 && <div style={{ fontSize: 12, color: '#6b7280' }}>No saved mappings found.</div>}
-            {mappings.length > 0 && mappings
-              .slice()
-              .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
-              .map(mapping => (
-                <div key={mapping.id} style={{ border: '1px solid #e3e8ef', borderRadius: 6, marginBottom: 8, padding: 10, display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center' }}>
-                  <div>
-                    <div style={{ fontWeight: 600, fontSize: 13 }}>{mappingTitle(mapping)}</div>
-                    <div style={{ fontSize: 12, color: '#667085' }}>{mapping.sourceTypeId}{' -> '}{mapping.targetTypeId}</div>
-                    <div style={{ fontSize: 11, color: '#788292' }}>{mapping.sourceSchemaPath}{' -> '}{mapping.targetSchemaPath}</div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      openMapping(mapping);
-                      setOpenDialog(false);
-                    }}
-                  >
-                    Open
-                  </button>
-                </div>
-              ))}
-          </div>
-        </div>
-      )}
+    <div style={{ maxWidth: 1300, color: '#111827', background: '#ffffff' }}>
+      <Suspense fallback={<div style={{ ...SECTION_STYLE, padding: 22 }}>Loading drag-and-drop mapper…</div>}>
+        <LazyDataMapperEditor
+          availableMaps={availableMaps}
+          menuOpen={menuOpen}
+          setMenuOpen={setMenuOpen}
+          openDialog={openDialog}
+          setOpenDialog={setOpenDialog}
+          createNewMap={createNewMap}
+          openMapDialog={openMapDialog}
+          openMapFile={openMapFile}
+          editingId={editingId}
+          name={name}
+          sourceTypeId={sourceTypeId}
+          targetTypeId={targetTypeId}
+          sourceSchemaPath={sourceSchemaPath}
+          targetSchemaPath={targetSchemaPath}
+          schemaChoices={schemaChoices}
+          sourceSchema={sourceSchema}
+          targetSchema={targetSchema}
+          onSourceSchemaChange={(nextPath) => updateSchemaSelection('source', nextPath)}
+          onTargetSchemaChange={(nextPath) => updateSchemaSelection('target', nextPath)}
+          status={status}
+          setItems={setItems}
+          sourceMtFieldDefs={sourceMtFieldDefs}
+          targetMtFieldDefs={targetMtFieldDefs}
+          sourceIsXsd={sourceIsXsd}
+          targetIsXsd={targetIsXsd}
+          sourceNodes={sourceNodes}
+          targetNodes={targetNodes}
+          sourceRoots={sourceRoots}
+          targetRoots={targetRoots}
+          sourceIndex={sourceIndex}
+          targetIndex={targetIndex}
+          conversionRuleErrors={conversionRuleErrors}
+          hasConversionRuleErrors={hasConversionRuleErrors}
+          expandedSourcePaths={expandedSourcePaths}
+          expandedTargetPaths={expandedTargetPaths}
+          onSourceDragStart={onSourceDragStart}
+          onTargetDrop={onTargetDrop}
+          labelForPath={labelForPath}
+          isMtRequiredPath={isMtRequiredPath}
+          getXsdDisplayName={getXsdDisplayName}
+          updateItemConversionRule={updateItemConversionRule}
+          removeItem={removeItem}
+          saveMapping={saveMapping}
+          mappingTitle={mappingTitle}
+          items={items}
+          toggleExpandPath={toggleExpandPath}
+        />
+      </Suspense>
     </div>
   );
 }

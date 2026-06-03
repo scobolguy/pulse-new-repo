@@ -2,7 +2,7 @@
   "queueConfig": {
     "swift.mt103.inbound": {
       "name": "swift.mt103.inbound",
-      "createdAt": 1779224798351,
+      "createdAt": 1780493426574,
       "frozen": false,
       "queueClass": "permanent",
       "dataTypeId": "swift-mt103",
@@ -13,7 +13,7 @@
     },
     "ops.validation.deadletter": {
       "name": "ops.validation.deadletter",
-      "createdAt": 1779224798353,
+      "createdAt": 1780493426581,
       "frozen": false,
       "queueClass": "permanent",
       "dataTypeId": "text-string",
@@ -24,7 +24,7 @@
     },
     "pacs.inbound": {
       "name": "pacs.inbound",
-      "createdAt": 1779224798356,
+      "createdAt": 1780493426586,
       "frozen": false,
       "queueClass": "permanent",
       "dataTypeId": "pacs",
@@ -35,192 +35,16 @@
     },
     "mt202.inbound": {
       "name": "mt202.inbound",
-      "createdAt": 1779224798360,
+      "createdAt": 1780493426590,
       "frozen": false,
       "queueClass": "permanent",
       "dataTypeId": "swift-mt202",
       "dataTypeIds": [
         "swift-mt202"
-      ],
-      "createdByUser": false
-    },
-    "tx.pacs.created": {
-      "name": "tx.pacs.created",
-      "createdAt": 1779224828495,
-      "frozen": false,
-      "queueClass": "permanent",
-      "dataTypeId": "pacs",
-      "dataTypeIds": [
-        "pacs"
-      ],
-      "createdByUser": false
-    },
-    "lynx.pacs009.outbound": {
-      "name": "lynx.pacs009.outbound",
-      "createdAt": 1779224828514,
-      "frozen": false,
-      "queueClass": "permanent",
-      "dataTypeId": "pacs",
-      "dataTypeIds": [
-        "pacs"
-      ],
-      "createdByUser": false
-    },
-    "tx.lynx.pending": {
-      "name": "tx.lynx.pending",
-      "createdAt": 1779224828530,
-      "frozen": false,
-      "queueClass": "permanent",
-      "dataTypeId": "text-string",
-      "dataTypeIds": [
-        "text-string"
-      ],
-      "createdByUser": false
-    },
-    "correspondent.pacs008.outbound": {
-      "name": "correspondent.pacs008.outbound",
-      "createdAt": 1779224828775,
-      "frozen": false,
-      "queueClass": "permanent",
-      "dataTypeId": "pacs",
-      "dataTypeIds": [
-        "pacs"
-      ],
-      "createdByUser": false
-    },
-    "tx.lynx.approved": {
-      "name": "tx.lynx.approved",
-      "createdAt": 1779224863616,
-      "frozen": false,
-      "queueClass": "permanent",
-      "dataTypeId": "text-string",
-      "dataTypeIds": [
-        "text-string"
-      ],
-      "createdByUser": false
-    },
-    "tx.correspondent.unreconciled": {
-      "name": "tx.correspondent.unreconciled",
-      "createdAt": 1779224863921,
-      "frozen": false,
-      "queueClass": "permanent",
-      "dataTypeId": "text-string",
-      "dataTypeIds": [
-        "text-string"
-      ],
-      "createdByUser": false
-    },
-    "tx.reconciled": {
-      "name": "tx.reconciled",
-      "createdAt": 1779226546310,
-      "frozen": false,
-      "queueClass": "permanent",
-      "dataTypeId": "text-string",
-      "dataTypeIds": [
-        "text-string"
-      ],
-      "createdByUser": false
-    },
-    "pacs.outbound": {
-      "name": "pacs.outbound",
-      "createdAt": 1779235996868,
-      "frozen": false,
-      "queueClass": "permanent",
-      "dataTypeId": "pacs",
-      "dataTypeIds": [
-        "pacs"
-      ],
-      "createdByUser": false
-    },
-    "swift.mt103.parsed": {
-      "name": "swift.mt103.parsed",
-      "createdAt": 1779320325867,
-      "frozen": false,
-      "queueClass": "permanent",
-      "dataTypeId": "swift-mt103",
-      "dataTypeIds": [
-        "swift-mt103"
-      ],
-      "createdByUser": false
-    },
-    "payments.mt202": {
-      "name": "payments.mt202",
-      "createdAt": 1779320326062,
-      "frozen": false,
-      "queueClass": "permanent",
-      "dataTypeId": "swift-mt202",
-      "dataTypeIds": [
-        "swift-mt202"
-      ],
-      "createdByUser": false
-    },
-    "audit.all": {
-      "name": "audit.all",
-      "createdAt": 1779434549832,
-      "frozen": false,
-      "queueClass": "permanent",
-      "dataTypeId": "text-string",
-      "dataTypeIds": [
-        "text-string"
-      ],
-      "createdByUser": false
-    },
-    "test.mt103.inbound": {
-      "name": "test.mt103.inbound",
-      "createdAt": 1779436237545,
-      "frozen": false,
-      "queueClass": "permanent",
-      "dataTypeId": "swift-mt103",
-      "dataTypeIds": [
-        "swift-mt103"
-      ],
-      "createdByUser": false
-    },
-    "test.mt202cov.inbound": {
-      "name": "test.mt202cov.inbound",
-      "createdAt": 1779436281174,
-      "frozen": false,
-      "queueClass": "permanent",
-      "dataTypeId": "swift-mt202cov",
-      "dataTypeIds": [
-        "swift-mt202cov"
-      ],
-      "createdByUser": false
-    },
-    "bench.20260522075450.mt103.inbound": {
-      "name": "bench.20260522075450.mt103.inbound",
-      "createdAt": 1779436491221,
-      "frozen": false,
-      "queueClass": "permanent",
-      "dataTypeId": "swift-mt103",
-      "dataTypeIds": [
-        "swift-mt103"
-      ],
-      "createdByUser": false
-    },
-    "bench.20260522075450.mt202cov.inbound": {
-      "name": "bench.20260522075450.mt202cov.inbound",
-      "createdAt": 1779436511054,
-      "frozen": false,
-      "queueClass": "permanent",
-      "dataTypeId": "swift-mt202cov",
-      "dataTypeIds": [
-        "swift-mt202cov"
-      ],
-      "createdByUser": false
-    },
-    "payments.mt103": {
-      "name": "payments.mt103",
-      "createdAt": 1779568349284,
-      "frozen": false,
-      "queueClass": "permanent",
-      "dataTypeId": "swift-mt103",
-      "dataTypeIds": [
-        "swift-mt103"
       ],
       "createdByUser": false
     }
   },
-  "configVersion": 20,
-  "timestamp": 1779568349284
+  "configVersion": 4,
+  "timestamp": 1780493426590
 }

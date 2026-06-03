@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
-export function DataMapperMapsPanel() {
+export function DataMapperMapsPanel({ onOpenMap }) {
   const [maps, setMaps] = useState([]);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
@@ -101,21 +101,34 @@ export function DataMapperMapsPanel() {
 
   const exportMap = useCallback(async (mapId) => {
     try {
-      const res = await fetch(`/api/mapper/maps/${mapId}/export-csv`);
+      const res = await fetch(`/api/mapper/maps/${mapId}/export-excel`);
       if (!res.ok) throw new Error('Failed to export map');
 
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `${mapId}.csv`;
+      link.download = `${mapId}.xlsx`;
       link.click();
       URL.revokeObjectURL(url);
-      setStatus(`✓ Exported map to ${mapId}.csv`);
+      setStatus(`✓ Exported map to ${mapId}.xlsx`);
     } catch (e) {
       setStatus(`Error: ${e.message}`);
     }
   }, []);
+
+  const openMap = useCallback(async (mapId) => {
+    if (!onOpenMap) return;
+    setLoading(true);
+    try {
+      await onOpenMap(mapId);
+      setStatus(`\u2713 Opened map`);
+    } catch (e) {
+      setStatus(`Error: ${e.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [onOpenMap]);
 
   const handleImportCsv = useCallback(async () => {
     if (!csvContent.trim()) {
@@ -233,6 +246,21 @@ export function DataMapperMapsPanel() {
             <div style={{ display: 'flex', gap: 6 }}>
               <button
                 type="button"
+                onClick={() => openMap(map.id)}
+                disabled={loading || !onOpenMap}
+                style={{
+                  padding: '4px 8px',
+                  fontSize: 11,
+                  background: '#ecfeff',
+                  border: '1px solid #bae6fd',
+                  borderRadius: 3,
+                  cursor: loading || !onOpenMap ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Open
+              </button>
+              <button
+                type="button"
                 onClick={() => {
                   setImportingMapId(map.id);
                   setShowImportDialog(true);
@@ -262,7 +290,7 @@ export function DataMapperMapsPanel() {
                   cursor: loading ? 'not-allowed' : 'pointer',
                 }}
               >
-                Export
+                Export Excel
               </button>
             </div>
           </div>
@@ -295,6 +323,31 @@ export function DataMapperMapsPanel() {
           >
             <button
               type="button"
+                onClick={() => {
+                  openMap(selectedMapId);
+                  setContextMenu(null);
+                }}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  padding: '8px 12px',
+                  textAlign: 'left',
+                  border: 'none',
+                  background: 'transparent',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                }}
+                onMouseEnter={e => {
+                  e.target.style.background = '#e0f2fe';
+                }}
+                onMouseLeave={e => {
+                  e.target.style.background = 'transparent';
+                }}
+              >
+                Open
+              </button>
+              <button
+                type="button"
               onClick={() => {
                 renameMap(selectedMapId);
                 setContextMenu(null);

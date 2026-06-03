@@ -2706,7 +2706,7 @@ function App() {
       </aside>
 
       <main className="main-pane">
-        {area !== 'user-admin' && (
+        {area === 'operations' && (
           <>
             <section
               className={`login-mini-dashboard theme-${resolvedWindowStyle} lang-${languageKey}`}

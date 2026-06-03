@@ -2,9 +2,11 @@ import express from 'express';
 import fs from 'fs/promises';
 import path from 'path';
 import { readEnvNumber } from './src/env-config.mjs';
+import { registerMapperRoutes } from './src/backend/mapperRoutes.mjs';
 
 const app = express();
 app.use(express.json());
+registerMapperRoutes(app);
 
 const DATA_ROOT = path.resolve('./data');
 const MAPPINGS_PATH = path.join(DATA_ROOT, 'data-mappings.json');
