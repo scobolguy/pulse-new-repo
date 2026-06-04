@@ -744,16 +744,52 @@ const ALLOW_TEMP_QUEUES_IN_PRODUCTION = readEnvBoolean('ALLOW_TEMP_QUEUES_IN_PRO
 const REQUIRE_HTTPS = readEnvBoolean('REQUIRE_HTTPS', ['true'], false);
 const APPROVAL_TTL_MS = readEnvNumber('APPROVAL_TTL_MS', 15 * 60 * 1000);
 const AUTO_APPROVE_USER_IDS = new Set(
-  readEnvString('AUTO_APPROVE_USER_IDS', 'system-admin')
+  readEnvString('AUTO_APPROVE_USER_IDS', 'SystemAdmin')
     .split(',')
-    .map(value => value.trim())
+    .map(value => normalizeUserIdentifier(value))
     .filter(Boolean)
 );
-const ALLOW_IMPLICIT_ADMIN = readEnvBoolean('ALLOW_IMPLICIT_ADMIN', ['true'], true);
+const ALLOW_IMPLICIT_ADMIN = readEnvBoolean('ALLOW_IMPLICIT_ADMIN', ['true'], false);
 const AUTH_SESSION_TTL_MS = Math.max(5 * 60 * 1000, readEnvNumber('AUTH_SESSION_TTL_MS', 12 * 60 * 60 * 1000));
-const AUTH_DEFAULT_ADMIN_PASSWORD = readEnvSecret('AUTH_DEFAULT_ADMIN_PASSWORD', 'admin');
-const AUTH_FIXED_USER_ID = normalizeUserIdentifier(readEnvString('AUTH_FIXED_USER_ID', 'system-admin').trim() || 'system-admin');
-const AUTH_FIXED_PASSWORD = String(readEnvSecret('AUTH_FIXED_PASSWORD', 'pulse123') || 'pulse123');
+const AUTH_BOOTSTRAP_VERSION = Math.max(1, readEnvNumber('AUTH_BOOTSTRAP_VERSION', 2));
+const AUTH_SYSTEM_ADMIN_USER_ID = normalizeUserIdentifier(readEnvString('AUTH_SYSTEM_ADMIN_USER_ID', 'SystemAdmin').trim() || 'SystemAdmin');
+const AUTH_SYSTEM_ADMIN_PASSWORD = String(readEnvSecret('AUTH_SYSTEM_ADMIN_PASSWORD', 'SystemAdmin1!') || 'SystemAdmin1!');
+const AUTH_USER_ADMIN_LHS_USER_ID = normalizeUserIdentifier(readEnvString('AUTH_USER_ADMIN_LHS_USER_ID', 'UserAdminLHS').trim() || 'UserAdminLHS');
+const AUTH_USER_ADMIN_LHS_PASSWORD = String(readEnvSecret('AUTH_USER_ADMIN_LHS_PASSWORD', 'UserAdminLHS1!') || 'UserAdminLHS1!');
+const AUTH_USER_ADMIN_RHS_USER_ID = normalizeUserIdentifier(readEnvString('AUTH_USER_ADMIN_RHS_USER_ID', 'UserAdminRHS').trim() || 'UserAdminRHS');
+const AUTH_USER_ADMIN_RHS_PASSWORD = String(readEnvSecret('AUTH_USER_ADMIN_RHS_PASSWORD', 'UserAdminRHS1!') || 'UserAdminRHS1!');
+const ROLE_PULSE_SYSTEM_ADMIN = 'ROLE-PULSE-SYSTEM-ADMIN';
+const ROLE_PULSE_USER_ADMIN = 'ROLE-PULSE-USER-ADMIN';
+const SYSTEM_ADMIN_PERMISSIONS = Object.freeze([
+  'topology.read',
+  'registry.read',
+  'registry.manage',
+  'broker.read',
+  'broker.operate',
+  'broker.configure',
+  'router.read',
+  'router.manage',
+  'queue.view',
+  'queue.operate',
+  'queue.configure',
+  'gateway.manage',
+  'gateway.read',
+  'lifecycle.read',
+  'lifecycle.manage',
+  'lifecycle.workers.manage',
+  'lifecycle.workers.read',
+  'lifecycle.policy.read',
+  'lifecycle.policy.manage',
+  'data.read',
+  'data.manage',
+  'governance.read',
+  'governance.manage',
+  'workers.configure'
+]);
+const USER_ADMIN_PERMISSIONS = Object.freeze([
+  'users.read',
+  'users.manage'
+]);
 const queueValidationErrors = [];
 const MAX_QUEUE_VALIDATION_ERRORS = 500;
 const dlqEvents = [];
@@ -1441,7 +1477,7 @@ const lifecycleTesterStats = {
     lastError: null
   }
 };
-const DEFAULT_ACTOR_USER_ID = 'system-admin';
+const DEFAULT_ACTOR_USER_ID = AUTH_SYSTEM_ADMIN_USER_ID;
 const TOXIC_ROLE_COMBINATIONS = Object.freeze([
   {
     id: 'four-eyes-creator-authorizer',
@@ -2245,92 +2281,68 @@ function getStep3LatencySummary({ recentLimit = 10 } = {}) {
 
 function createDefaultUserManagement() {
   return {
+    bootstrapVersion: AUTH_BOOTSTRAP_VERSION,
     version: 1,
     updatedAt: new Date().toISOString(),
     profiles: [
       {
-        profileId: 'admin',
-        label: 'Administrator',
-        description: 'Full access to all operations',
-        permissions: ['*']
+        profileId: ROLE_PULSE_SYSTEM_ADMIN,
+        label: 'ROLE-PULSE-SYSTEM-ADMIN',
+        description: 'System-wide access to all screens except user administration.',
+        permissions: [...SYSTEM_ADMIN_PERMISSIONS]
       },
       {
-        profileId: 'operator',
-        label: 'Operations',
-        description: 'Can run lifecycle and gateway operations',
-        permissions: [
-          'topology.read',
-          'registry.read',
-          'registry.manage',
-          'broker.read',
-          'broker.operate',
-          'broker.configure',
-          'router.read',
-          'router.manage',
-          'queue.view',
-          'queue.operate',
-          'gateway.manage',
-          'gateway.read',
-          'lifecycle.read',
-          'lifecycle.manage',
-          'lifecycle.workers.manage',
-          'lifecycle.workers.read',
-          'lifecycle.policy.read',
-          'data.read',
-          'governance.read'
-        ]
-      },
-      {
-        profileId: 'configurator',
-        label: 'Configuration Admin',
-        description: 'Can alter queue and policy configuration',
-        permissions: [
-          'topology.read',
-          'registry.read',
-          'queue.view',
-          'queue.configure',
-          'broker.read',
-          'broker.configure',
-          'router.read',
-          'router.manage',
-          'lifecycle.read',
-          'lifecycle.policy.read',
-          'lifecycle.policy.manage',
-          'users.read',
-          'users.manage',
-          'data.read',
-          'data.manage',
-          'governance.read',
-          'governance.manage'
-        ]
-      },
-      {
-        profileId: 'viewer',
-        label: 'Read-only Viewer',
-        description: 'Read-only access',
-        permissions: [
-          'topology.read',
-          'registry.read',
-          'broker.read',
-          'router.read',
-          'queue.view',
-          'gateway.read',
-          'lifecycle.read',
-          'lifecycle.workers.read',
-          'lifecycle.policy.read',
-          'users.read',
-          'data.read',
-          'governance.read'
-        ]
+        profileId: ROLE_PULSE_USER_ADMIN,
+        label: 'ROLE-PULSE-USER-ADMIN',
+        description: 'User administration only. Create-user actions require approval by a second user admin.',
+        permissions: [...USER_ADMIN_PERMISSIONS]
       }
     ],
     users: [
       {
-        userId: DEFAULT_ACTOR_USER_ID,
-        displayName: 'System Admin',
+        userId: AUTH_SYSTEM_ADMIN_USER_ID,
+        email: null,
+        displayName: 'SystemAdmin',
         enabled: true,
-        profileIds: ['admin'],
-        groupIds: ['administrators']
+        profileIds: [ROLE_PULSE_SYSTEM_ADMIN],
+        groupIds: [],
+        employer: USER_ORGANIZATION_NAME,
+        department: 'Operations',
+        jobTitle: 'System Administrator',
+        officeLocation: 'HQ',
+        country: null,
+        managerEmail: null,
+        auth: createPasswordRecord(AUTH_SYSTEM_ADMIN_PASSWORD)
+      },
+      {
+        userId: AUTH_USER_ADMIN_LHS_USER_ID,
+        email: null,
+        displayName: 'UserAdminLHS',
+        enabled: true,
+        profileIds: [ROLE_PULSE_USER_ADMIN],
+        groupIds: [],
+        employer: USER_ORGANIZATION_NAME,
+        department: 'Identity Administration',
+        jobTitle: 'User Administrator',
+        officeLocation: 'HQ',
+        country: null,
+        managerEmail: null,
+        auth: createPasswordRecord(AUTH_USER_ADMIN_LHS_PASSWORD)
+      },
+      {
+        userId: AUTH_USER_ADMIN_RHS_USER_ID,
+        email: null,
+        displayName: 'UserAdminRHS',
+        enabled: true,
+        profileIds: [ROLE_PULSE_USER_ADMIN],
+        groupIds: [],
+        employer: USER_ORGANIZATION_NAME,
+        department: 'Identity Administration',
+        jobTitle: 'User Administrator',
+        officeLocation: 'HQ',
+        country: null,
+        managerEmail: null,
+        auth: createPasswordRecord(AUTH_USER_ADMIN_RHS_PASSWORD)
       }
     ]
   };
@@ -2367,7 +2379,10 @@ function sanitizeGroupIds(items) {
 }
 
 function normalizeUserIdentifier(value) {
-  return String(value || '').trim().toLowerCase();
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return '';
+  if (normalized.includes('@')) return normalized;
+  return normalized.replace(/[^a-z0-9]/g, '');
 }
 
 function isValidEmailIdentifier(value) {
@@ -2378,7 +2393,12 @@ function isValidEmailIdentifier(value) {
 
 function isAcceptedUserIdentifier(value) {
   const input = normalizeUserIdentifier(value);
-  return input === DEFAULT_ACTOR_USER_ID || isValidEmailIdentifier(input);
+  if (!input) return false;
+  return input === DEFAULT_ACTOR_USER_ID
+    || input === AUTH_USER_ADMIN_LHS_USER_ID
+    || input === AUTH_USER_ADMIN_RHS_USER_ID
+    || isValidEmailIdentifier(input)
+    || /^[a-z0-9][a-z0-9._-]{2,127}$/.test(input);
 }
 
 function toTitleCaseFromEmail(email) {
@@ -2540,14 +2560,8 @@ function normalizeUserManagement(raw) {
     }))
     .filter(user => user.userId);
 
-  if (!normalizedProfiles.some(profile => profile.profileId === 'admin')) {
-    normalizedProfiles.push(fallback.profiles[0]);
-  }
-  if (!normalizedUsers.some(user => user.userId === DEFAULT_ACTOR_USER_ID)) {
-    normalizedUsers.push(fallback.users[0]);
-  }
-
   return {
+    bootstrapVersion: Number(raw?.bootstrapVersion || 0),
     version: Number(raw?.version || 1),
     updatedAt: raw?.updatedAt || new Date().toISOString(),
     profiles: normalizedProfiles,
@@ -2573,6 +2587,52 @@ function loadUserManagement() {
 }
 
 let userManagementStore = loadUserManagement();
+
+function ensureBootstrapUserManagement() {
+  if (Number(userManagementStore.bootstrapVersion || 0) >= AUTH_BOOTSTRAP_VERSION) {
+    return;
+  }
+
+  const bootstrapStore = createDefaultUserManagement();
+
+  for (const bootstrapProfile of bootstrapStore.profiles) {
+    const existingProfile = userManagementStore.profiles.find((profile) => profile.profileId === bootstrapProfile.profileId);
+    if (!existingProfile) {
+      userManagementStore.profiles.push({ ...bootstrapProfile });
+      continue;
+    }
+
+    existingProfile.label = bootstrapProfile.label;
+    existingProfile.description = bootstrapProfile.description;
+    existingProfile.permissions = [...bootstrapProfile.permissions];
+  }
+
+  for (const bootstrapUser of bootstrapStore.users) {
+    const existingUser = userManagementStore.users.find((user) => user.userId === bootstrapUser.userId);
+    if (!existingUser) {
+      userManagementStore.users.push({ ...bootstrapUser });
+      continue;
+    }
+
+    existingUser.email = bootstrapUser.email || null;
+    existingUser.displayName = bootstrapUser.displayName;
+    existingUser.enabled = true;
+    existingUser.profileIds = [...bootstrapUser.profileIds];
+    existingUser.groupIds = [...bootstrapUser.groupIds];
+    existingUser.employer = bootstrapUser.employer;
+    existingUser.department = bootstrapUser.department;
+    existingUser.jobTitle = bootstrapUser.jobTitle;
+    existingUser.officeLocation = bootstrapUser.officeLocation;
+    existingUser.country = bootstrapUser.country;
+    existingUser.managerEmail = bootstrapUser.managerEmail;
+    existingUser.auth = bootstrapUser.auth;
+  }
+
+  userManagementStore.bootstrapVersion = AUTH_BOOTSTRAP_VERSION;
+  saveUserManagement();
+}
+
+ensureBootstrapUserManagement();
 const authSessionStore = new Map();
 
 function createAuthSession(userId) {
@@ -2629,16 +2689,6 @@ function cleanupExpiredAuthSessions() {
 }
 
 setInterval(cleanupExpiredAuthSessions, 60 * 1000);
-
-function ensureBootstrapCredentials() {
-  const adminUser = userManagementStore.users.find((user) => user.userId === DEFAULT_ACTOR_USER_ID);
-  if (!adminUser) return;
-  if (adminUser.auth && adminUser.auth.hash) return;
-  adminUser.auth = createPasswordRecord(AUTH_DEFAULT_ADMIN_PASSWORD);
-  saveUserManagement();
-}
-
-ensureBootstrapCredentials();
 
 let groupProvider;
 try {
@@ -2934,7 +2984,7 @@ function resolveGovernedProcessId(req) {
     return 'routing-control';
   }
 
-  if (path.startsWith('/api/users')) {
+  if (path === '/api/users' && String(req.method || 'GET').toUpperCase() === 'POST') {
     return 'identity-control';
   }
 
@@ -2992,7 +3042,7 @@ function enforceTwoPersonRule(req, res, next) {
     });
   }
 
-  if (AUTO_APPROVE_USER_IDS.has(String(actor.userId || '').trim())) {
+  if (AUTO_APPROVE_USER_IDS.has(normalizeUserIdentifier(actor.userId))) {
     req.approvalContext = {
       approvalId: `auto-${Date.now()}`,
       processId,
@@ -3213,7 +3263,7 @@ function resolveEffectiveAccessForUser(userId, { headerGroupIds = [] } = {}) {
 }
 
 function getUserById(userId) {
-  const key = String(userId || '').trim();
+  const key = normalizeUserIdentifier(userId);
   if (!key) return null;
   return userManagementStore.users.find(user => user.userId === key) || null;
 }
@@ -3330,17 +3380,17 @@ function resolveActor(req) {
   if (String(actorUserId || '').toLowerCase() === String(DEFAULT_ACTOR_USER_ID || '').toLowerCase()) {
     const adminUser = access.user || {
       userId: DEFAULT_ACTOR_USER_ID,
-      displayName: 'System Administrator',
+      displayName: 'SystemAdmin',
       enabled: true,
-      profileIds: ['admin'],
+      profileIds: [ROLE_PULSE_SYSTEM_ADMIN],
       groupIds: []
     };
 
     return {
       userId: DEFAULT_ACTOR_USER_ID,
       user: adminUser,
-      permissions: ['*'],
-      profileIds: Array.isArray(access.profileIds) && access.profileIds.length > 0 ? access.profileIds : ['admin'],
+      permissions: Array.isArray(access.permissions) && access.permissions.length > 0 ? access.permissions : [...SYSTEM_ADMIN_PERMISSIONS],
+      profileIds: Array.isArray(access.profileIds) && access.profileIds.length > 0 ? access.profileIds : [ROLE_PULSE_SYSTEM_ADMIN],
       groupIds: access.groupIds || []
     };
   }
@@ -3444,6 +3494,14 @@ function resolvePermissionForApiRequest(req) {
 }
 
 function enforceApiPermission(req, res, next) {
+  const requestPath = String(req.path || '').trim();
+  if (requestPath === '/api/auth/login'
+    || requestPath === '/api/auth/logout'
+    || requestPath === '/api/auth/session'
+    || requestPath === '/api/authz/me') {
+    return next();
+  }
+
   return requestPolicyApi.enforceApiPermission(req, res, next, {
     resolveActor,
     requirePermission
@@ -7963,16 +8021,16 @@ function registerRoutes(app) {
     const body = req.body || {};
     const requestedId = normalizeUserIdentifier(body.userId || body.email);
     const password = String(body.password || '');
-    if (!password) {
+    if (!requestedId || !password) {
       return res.status(400).json({ error: 'userId and password are required' });
     }
 
-    const normalizedRequestedId = requestedId || AUTH_FIXED_USER_ID;
-    if (normalizedRequestedId !== AUTH_FIXED_USER_ID || password !== AUTH_FIXED_PASSWORD) {
+    const user = getUserById(requestedId);
+    if (!user || user.enabled === false || !verifyPasswordRecord(password, user.auth)) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    const token = createAuthSession(AUTH_FIXED_USER_ID);
+    const token = createAuthSession(user.userId);
     const session = getSessionFromToken(token);
     const actor = resolveActor({
       ...req,
@@ -7990,10 +8048,10 @@ function registerRoutes(app) {
       token,
       expiresAt: new Date(Number(session?.expiresAt || Date.now() + AUTH_SESSION_TTL_MS)).toISOString(),
       actor: {
-        userId: actor.userId || AUTH_FIXED_USER_ID,
-        displayName: actor.user?.displayName || AUTH_FIXED_USER_ID,
+        userId: actor.userId || user.userId,
+        displayName: actor.user?.displayName || user.displayName || user.userId,
         enabled: actor.user?.enabled !== false,
-        profileIds: actor.profileIds || ['admin'],
+        profileIds: actor.profileIds || user.profileIds || [],
         groupIds: actor.groupIds || []
       },
       permissions: actor.permissions || []
@@ -8370,10 +8428,10 @@ function registerRoutes(app) {
     const { userId, email, displayName, enabled, profileIds, groupIds, password } = req.body || {};
     const id = normalizeUserIdentifier(email || userId);
     if (!id) {
-      return res.status(400).json({ error: 'email is required' });
+      return res.status(400).json({ error: 'userId or email is required' });
     }
     if (!isAcceptedUserIdentifier(id)) {
-      return res.status(400).json({ error: 'User identifier must be a valid email address' });
+      return res.status(400).json({ error: 'User identifier must be a valid email address or supported user ID' });
     }
     if (userManagementStore.users.some(user => user.userId === id)) {
       return res.status(409).json({ error: 'User already exists' });
@@ -8385,7 +8443,7 @@ function registerRoutes(app) {
 
     const user = {
       userId: id,
-      email: isValidEmailIdentifier(id) ? id : null,
+      email: isValidEmailIdentifier(email || userId) ? normalizeUserIdentifier(email || userId) : null,
       displayName: String(displayName || directoryProfile.displayName || id).trim(),
       enabled: enabled !== false,
       employer: USER_ORGANIZATION_NAME,

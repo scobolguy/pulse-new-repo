@@ -127,8 +127,8 @@ const OPERATIONS_TASKS = [
 ];
 
 const USER_ADMIN_ACTIONS = ['add', 'delete', 'update'];
-const FIXED_LOGIN_USER_ID = 'system-admin';
-const FIXED_LOGIN_PASSWORD = 'pulse123';
+const FIXED_LOGIN_USER_ID = 'SystemAdmin';
+const FIXED_LOGIN_PASSWORD = '';
 const LANGUAGE_OPTIONS = [
   { value: 'en-US', label: 'English' },
   { value: 'fr-CA', label: 'French' },
@@ -1685,7 +1685,7 @@ function App() {
         localStorage.setItem('pulse.authToken', String(payload.token));
       }
       setActorUserId(String(payload?.actor?.userId || nextUserId));
-      setLoginPassword(FIXED_LOGIN_PASSWORD);
+      setLoginPassword('');
       setAuthzError('');
     } catch (e) {
       setAuthzError(e?.message || String(e));
@@ -1704,7 +1704,7 @@ function App() {
     localStorage.removeItem('pulse.authToken');
     setActorUserId('anonymous');
     setLoginUserId(FIXED_LOGIN_USER_ID);
-    setLoginPassword(FIXED_LOGIN_PASSWORD);
+    setLoginPassword('');
     localStorage.setItem('pulse.actorUserId', 'anonymous');
     setAuthz({ actor: null, profiles: [], permissions: [] });
     setAuthzError('Logged out');
@@ -1860,8 +1860,6 @@ function App() {
 
   const effectivePermissions = useMemo(() => {
     const permissions = Array.isArray(authz.permissions) ? authz.permissions : [];
-    if (permissions.length > 0) return permissions;
-    if (String(actorUserId || '').toLowerCase() === 'system-admin') return ['*'];
     return permissions;
   }, [authz.permissions, actorUserId]);
 
@@ -2502,7 +2500,7 @@ function App() {
                 handleLogin();
               }
             }}
-            placeholder="fixed password"
+            placeholder="enter password"
             aria-label="Password"
           />
           <button className="utility-button" type="button" onClick={handleLogin}>Login</button>
