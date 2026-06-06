@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
-const BACKEND_URL = process.env.STARTUP_BACKEND_URL || 'http://127.0.0.1:4000/api/develop/files';
+const BACKEND_URL = process.env.STARTUP_BACKEND_URL || 'http://127.0.0.1:4000/api/authz/me?userId=system-admin';
 const BACKEND_CMD = process.env.STARTUP_BACKEND_CMD || 'node --env-file=.env.local backend.mjs';
 const POLL_MS = Number(process.env.STARTUP_POLL_MS || 1500);
 const STEP_TIMEOUT_MS = Number(process.env.STARTUP_STEP_TIMEOUT_MS || 30000);
@@ -52,6 +52,7 @@ async function writeStatus(patch) {
   await ensureStatusFileDir();
   const base = {
     ok: false,
+    service: 'backend',
     state: 'IDLE',
     workflow: [],
     logs: [],
@@ -84,6 +85,7 @@ async function appendLog(event, data = null) {
 
   const base = {
     ok: false,
+    service: 'backend',
     state: 'IDLE',
     workflow: [],
     logs: [],
@@ -414,7 +416,7 @@ async function run() {
   let sanitizeSummary = null;
 
   try {
-    await writeStatus({ ok: false, state: STATES.INIT, workflow: [], logs: [], error: null });
+    await writeStatus({ ok: false, service: 'backend', state: STATES.INIT, workflow: [], logs: [], error: null });
     await appendLog('workflow-start', { backendUrl: BACKEND_URL, statusPath: STATUS_PATH });
 
     while (state !== STATES.READY && state !== STATES.FAILED) {
@@ -523,6 +525,7 @@ async function run() {
       workflow.push(STATES.READY);
       const result = {
         ok: true,
+        service: 'backend',
         state,
         workflow,
         backendUrl: BACKEND_URL
@@ -537,6 +540,7 @@ async function run() {
   } catch (error) {
     const result = {
       ok: false,
+      service: 'backend',
       state: STATES.FAILED,
       workflow,
       error: error?.message || String(error)

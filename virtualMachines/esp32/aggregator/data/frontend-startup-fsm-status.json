@@ -1,34 +1,33 @@
 {
-  "ok": false,
-  "state": "FAILED",
+  "ok": true,
+  "state": "READY",
   "workflow": [
     "INIT",
     "KILL_VITE_PROCESSES",
     "CHECK_BACKEND",
     "START_FRONTEND",
-    "WAIT_FRONTEND",
-    "START_FRONTEND"
+    "READY"
   ],
   "logs": [
     {
-      "at": "2026-05-31T21:07:19.379Z",
+      "at": "2026-06-06T19:02:57.537Z",
       "event": "workflow-start",
       "data": {
         "fsmId": "frontend-startup-fsm",
-        "backendUrl": "http://127.0.0.1:4000/api/develop/files",
+        "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
         "frontendUrl": "http://127.0.0.1:5173/",
         "statusPath": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\frontend-startup-fsm-status.json"
       }
     },
     {
-      "at": "2026-05-31T21:07:19.384Z",
+      "at": "2026-06-06T19:02:57.542Z",
       "event": "state",
       "data": {
         "state": "INIT"
       }
     },
     {
-      "at": "2026-05-31T21:07:21.150Z",
+      "at": "2026-06-06T19:02:58.384Z",
       "event": "subflow-complete",
       "data": {
         "state": "KILL_VITE_PROCESSES",
@@ -39,78 +38,72 @@
       }
     },
     {
-      "at": "2026-05-31T21:07:21.214Z",
+      "at": "2026-06-06T19:02:58.465Z",
       "event": "state",
       "data": {
         "state": "CHECK_BACKEND",
-        "backendUrl": "http://127.0.0.1:4000/api/develop/files",
+        "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
         "backendOk": true
       }
     },
     {
-      "at": "2026-05-31T21:07:21.260Z",
-      "event": "frontend-started",
-      "data": {
-        "command": "node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173 --strictPort --force",
-        "pid": 2428,
-        "attempt": 1
-      }
-    },
-    {
-      "at": "2026-05-31T21:07:54.758Z",
-      "event": "frontend-timeout",
-      "data": {
-        "frontendUrl": "http://127.0.0.1:5173/",
-        "timeoutMs": 30000,
-        "attempt": 1
-      }
-    },
-    {
-      "at": "2026-05-31T21:07:54.762Z",
-      "event": "retry-scheduled",
-      "data": {
-        "state": "WAIT_FRONTEND",
-        "nextState": "START_FRONTEND",
-        "reason": "frontend wait timeout",
-        "currentAttempt": 1,
-        "maxRetries": 2,
-        "retryBackoffMs": 2500
-      }
-    },
-    {
-      "at": "2026-05-31T21:07:57.345Z",
+      "at": "2026-06-06T19:02:58.509Z",
       "event": "port-occupied",
       "data": {
         "state": "START_FRONTEND",
         "port": 5173,
         "occupiedBy": [
-          2164
+          38676,
+          20304
         ],
-        "command": "node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173 --strictPort --force"
+        "command": "node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173 --strictPort --force",
+        "alreadyReady": true
       }
     },
     {
-      "at": "2026-05-31T21:07:57.351Z",
-      "event": "failed",
+      "at": "2026-06-06T19:02:58.512Z",
+      "event": "frontend-already-running",
       "data": {
-        "ok": false,
-        "state": "FAILED",
+        "state": "START_FRONTEND",
+        "frontendUrl": "http://127.0.0.1:5173/",
+        "occupiedBy": [
+          38676,
+          20304
+        ]
+      }
+    },
+    {
+      "at": "2026-06-06T19:02:58.515Z",
+      "event": "complete",
+      "data": {
+        "ok": true,
+        "service": "frontend",
+        "state": "READY",
         "workflow": [
           "INIT",
           "KILL_VITE_PROCESSES",
           "CHECK_BACKEND",
           "START_FRONTEND",
-          "WAIT_FRONTEND",
-          "START_FRONTEND"
+          "READY"
         ],
-        "error": "Port 5173 is already occupied before frontend launch",
+        "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
+        "frontendUrl": "http://127.0.0.1:5173/",
         "fsmId": "frontend-startup-fsm"
       }
     }
   ],
-  "updatedAt": "2026-05-31T21:07:57.359Z",
-  "error": "Port 5173 is already occupied before frontend launch",
-  "backendUrl": "http://127.0.0.1:4000/api/develop/files",
+  "updatedAt": "2026-06-06T19:02:58.519Z",
+  "error": null,
+  "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
   "frontendUrl": "http://127.0.0.1:5173/",
-  "fsmId": "frontend-startup-fsm"
+  "fsmId": "frontend-startup-fsm",
+  "service": "frontend",
+  "dependencies": {
+    "backend": {
+      "required": true,
+      "url": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
+      "ok": true,
+      "checkedAt": "2026-06-06T19:02:58.462Z"
+    }
+  }
 }

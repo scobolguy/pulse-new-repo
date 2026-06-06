@@ -4,6 +4,7 @@ import DataLibrarian from './DataLibrarian';
 import DataMapper from './DataMapper';
 import PascalishEditor from './PascalishEditor';
 import DevelopWorkspace from './DevelopWorkspace';
+import ProjectPlannerVisualTool from './ProjectPlannerVisualTool';
 import TransactionLifecycleDashboard from './TransactionLifecycleDashboard';
 import SwiftGatewayDashboard from './SwiftGatewayDashboard';
 import BocGatewayDashboard from './BocGatewayDashboard';
@@ -124,6 +125,10 @@ const OPERATIONS_TASKS = [
   { id: 'monitor', label: 'Monitor' },
   { id: 'deploy', label: 'Deploy' },
   { id: 'manage', label: 'Manage' }
+];
+
+const PROJECT_MANAGE_TASKS = [
+  { id: 'planner', label: 'Project Planner' }
 ];
 
 const USER_ADMIN_ACTIONS = ['add', 'delete', 'update'];
@@ -782,6 +787,7 @@ function App() {
   const [operationsNavExpanded, setOperationsNavExpanded] = useState(true);
   const [monitorClasses, setMonitorClasses] = useState([]);
   const [monitorClassId, setMonitorClassId] = useState('transaction-flows');
+  const [projectManageTask, setProjectManageTask] = useState('planner');
   const [userAdminTask, setUserAdminTask] = useState('user');
   const [dataLibrarianTask, setDataLibrarianTask] = useState('data-shapes');
   const [developCreateRequest, setDevelopCreateRequest] = useState(null);
@@ -2419,6 +2425,11 @@ function App() {
         />
       );
     }
+    if (area === 'project-manage') {
+      if (projectManageTask === 'planner') {
+        return <ProjectPlannerVisualTool />;
+      }
+    }
     if (area === 'test') return <TransactionLifecycleDashboard />;
     if (area === 'deploy') {
       return (
@@ -2438,12 +2449,7 @@ function App() {
       return <UserInProfileDashboard actorPermissions={effectivePermissions} />;
     }
 
-    return (
-      <div className="area-empty">
-        <h3>Project Manage</h3>
-        <p>This area shell is ready. We can define cards, workflows, and role views next.</p>
-      </div>
-    );
+    return <ProjectPlannerVisualTool />;
   };
 
   if (pathname === '/chat') {
@@ -2644,6 +2650,22 @@ function App() {
                       >
                         Business Analysis
                       </button>
+                    </div>
+                  )}
+                  {item.id === 'project-manage' && (
+                    <div className="admin-subtasks" aria-label="Project Manage Tools">
+                      {PROJECT_MANAGE_TASKS.map((task) => (
+                        <button
+                          key={task.id}
+                          className={`admin-subtask-item ${area === 'project-manage' && projectManageTask === task.id ? 'is-active' : ''}`}
+                          onClick={() => {
+                            setArea('project-manage');
+                            setProjectManageTask(task.id);
+                          }}
+                        >
+                          {task.label}
+                        </button>
+                      ))}
                     </div>
                   )}
                   {item.id === 'data-librarian' && (

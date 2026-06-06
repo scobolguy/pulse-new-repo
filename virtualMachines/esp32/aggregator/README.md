@@ -34,6 +34,18 @@ Frontend:
 npm run dev
 ```
 
+## Startup (Backend First)
+
+Canonical ordered startup command:
+
+```powershell
+npm run startup:fsm:ordered
+```
+
+This command enforces backend first, frontend second, and exits non-zero unless both FSM status files report READY.
+
+Detailed procedure and troubleshooting are documented in [startup.md](startup.md).
+
 ## ESP32 Deploy (Map + Firmware)
 
 ### Profile Builds (Cool Names Kept)

@@ -9,6 +9,7 @@ import {
   WORKFLOW_KEYWORDS
 } from './documentRegistry';
 import { initializePascalishLanguage } from './pascalishLanguage';
+import DevelopVisualEditor from './DevelopVisualEditor';
 
 const LOCAL_STORAGE_KEY = 'pulse-develop-workspace-documents';
 const EDITOR_LINE_HEIGHT = 22;
@@ -315,6 +316,7 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const [runMenuOpen, setRunMenuOpen] = useState(false);
   const [showOpenPicker, setShowOpenPicker] = useState(false);
+  const [editorViewMode, setEditorViewMode] = useState('text');
   const showExplorer = false;
   const handledCreateRequestKeyRef = useRef('');
   const typeNamesRef = useRef([]);
@@ -426,6 +428,13 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
   const editorDescriptor = useMemo(() => {
     return getEditorDescriptor(selectedFileName);
   }, [selectedFileName]);
+  const supportsVisualEditor = ['pascalish', 'cobolish', 'workflow'].includes(editorDescriptor.id);
+
+  useEffect(() => {
+    if (!supportsVisualEditor && editorViewMode !== 'text') {
+      setEditorViewMode('text');
+    }
+  }, [editorViewMode, supportsVisualEditor]);
 
   function openDocument(fileName) {
     setSelectedFileName(fileName);
@@ -1062,6 +1071,30 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
         <div style={{ fontSize: 12, opacity: 0.8 }}>
           Develop Mode | {editorDescriptor.label} editor
         </div>
+        {supportsVisualEditor && (
+          <div style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6 }}>
+            <button
+              type="button"
+              onClick={() => setEditorViewMode('text')}
+              style={{
+                border: editorViewMode === 'text' ? '1px solid rgba(56, 189, 248, 0.8)' : undefined,
+                background: editorViewMode === 'text' ? 'rgba(14, 165, 233, 0.18)' : undefined
+              }}
+            >
+              Text
+            </button>
+            <button
+              type="button"
+              onClick={() => setEditorViewMode('visual')}
+              style={{
+                border: editorViewMode === 'visual' ? '1px solid rgba(56, 189, 248, 0.8)' : undefined,
+                background: editorViewMode === 'visual' ? 'rgba(14, 165, 233, 0.18)' : undefined
+              }}
+            >
+              Visual
+            </button>
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: showExplorer ? '300px minmax(0, 1fr)' : 'minmax(0, 1fr)', gap: 12, height: '100%' }}>
@@ -1177,40 +1210,55 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
         </div>
 
         <div style={{ flex: 1, minHeight: MIN_EDITOR_HEIGHT, border: '1px solid rgba(148, 163, 184, 0.22)', borderRadius: 14, overflow: 'hidden' }}>
-          <React.Suspense fallback={<div style={{ padding: 20 }}>Loading editor…</div>}>
-            <MonacoEditor
-              height="100%"
-              language={editorDescriptor.monacoLanguage}
-              theme={editorDescriptor.id === 'workflow' ? 'workflowWorkbench' : 'pascalishWorkbench'}
-              value={content}
-              beforeMount={(monaco) => {
-                initializePascalishLanguage(monaco, typeNamesRef, typeFieldMapRef);
-                initializeWorkflowLanguage(monaco, typeFieldMapRef);
-              }}
-              onChange={(value) => {
-                setContent(value || '');
-                setDirty(true);
-              }}
-              options={{
-                minimap: { enabled: false },
-                fontSize: 14,
-                lineHeight: EDITOR_LINE_HEIGHT,
-                wordWrap: 'off',
-                smoothScrolling: true,
-                suggestOnTriggerCharacters: true,
-                quickSuggestions: true,
-                formatOnType: false,
-                automaticLayout: true,
-                padding: { top: 14, bottom: 14 },
-                scrollBeyondLastLine: false,
-                scrollbar: {
-                  vertical: 'visible',
-                  horizontal: 'visible',
-                  alwaysConsumeMouseWheel: false
-                }
-              }}
-            />
-          </React.Suspense>
+          {supportsVisualEditor && editorViewMode === 'visual' ? (
+            <div style={{ height: '100%', minHeight: MIN_EDITOR_HEIGHT, padding: 10 }}>
+              <DevelopVisualEditor
+                fileName={selectedFileName}
+                languageId={editorDescriptor.id}
+                sourceText={content}
+                onApplyText={(nextSource) => {
+                  setContent(String(nextSource || ''));
+                  setDirty(true);
+                  setStatus(`Updated ${selectedFileName || 'program'} from visual editor.`);
+                }}
+              />
+            </div>
+          ) : (
+            <React.Suspense fallback={<div style={{ padding: 20 }}>Loading editor…</div>}>
+              <MonacoEditor
+                height="100%"
+                language={editorDescriptor.monacoLanguage}
+                theme={editorDescriptor.id === 'workflow' ? 'workflowWorkbench' : 'pascalishWorkbench'}
+                value={content}
+                beforeMount={(monaco) => {
+                  initializePascalishLanguage(monaco, typeNamesRef, typeFieldMapRef);
+                  initializeWorkflowLanguage(monaco, typeFieldMapRef);
+                }}
+                onChange={(value) => {
+                  setContent(value || '');
+                  setDirty(true);
+                }}
+                options={{
+                  minimap: { enabled: false },
+                  fontSize: 14,
+                  lineHeight: EDITOR_LINE_HEIGHT,
+                  wordWrap: 'off',
+                  smoothScrolling: true,
+                  suggestOnTriggerCharacters: true,
+                  quickSuggestions: true,
+                  formatOnType: false,
+                  automaticLayout: true,
+                  padding: { top: 14, bottom: 14 },
+                  scrollBeyondLastLine: false,
+                  scrollbar: {
+                    vertical: 'visible',
+                    horizontal: 'visible',
+                    alwaysConsumeMouseWheel: false
+                  }
+                }}
+              />
+            </React.Suspense>
+          )}
         </div>
       </section>
       </div>

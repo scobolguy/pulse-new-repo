@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 
-const BACKEND_URL = process.env.FRONTEND_FSM_BACKEND_URL || 'http://127.0.0.1:4000/api/develop/files';
+const BACKEND_URL = process.env.FRONTEND_FSM_BACKEND_URL || 'http://127.0.0.1:4000/api/authz/me?userId=system-admin';
 const FRONTEND_URL = process.env.FRONTEND_FSM_FRONTEND_URL || 'http://127.0.0.1:5173/';
 const FRONTEND_CMD = process.env.FRONTEND_FSM_FRONTEND_CMD || 'node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173 --strictPort --force';
 const FRONTEND_PORT = Number(process.env.FRONTEND_FSM_FRONTEND_PORT || new URL(FRONTEND_URL).port || 5173);
@@ -45,7 +45,16 @@ async function readStatus() {
 
   return {
     ok: false,
+    service: 'frontend',
     state: 'IDLE',
+    dependencies: {
+      backend: {
+        required: true,
+        url: BACKEND_URL,
+        ok: false,
+        checkedAt: null
+      }
+    },
     workflow: [],
     logs: [],
     updatedAt: nowIso()
@@ -207,7 +216,22 @@ async function run() {
   let frontendStartAttempt = 0;
 
   try {
-    await writeStatus({ ok: false, state: STATES.INIT, workflow: [], logs: [], error: null });
+    await writeStatus({
+      ok: false,
+      service: 'frontend',
+      state: STATES.INIT,
+      dependencies: {
+        backend: {
+          required: true,
+          url: BACKEND_URL,
+          ok: false,
+          checkedAt: null
+        }
+      },
+      workflow: [],
+      logs: [],
+      error: null
+    });
     await appendLog('workflow-start', {
       fsmId: FSM_ID,
       backendUrl: BACKEND_URL,
@@ -234,6 +258,16 @@ async function run() {
 
       if (state === STATES.CHECK_BACKEND) {
         const backendOk = await isHealthy(BACKEND_URL);
+        await writeStatus({
+          dependencies: {
+            backend: {
+              required: true,
+              url: BACKEND_URL,
+              ok: backendOk,
+              checkedAt: nowIso()
+            }
+          }
+        });
         await appendLog('state', { state, backendUrl: BACKEND_URL, backendOk });
         if (!backendOk) {
           await appendFailureNote({
@@ -251,7 +285,13 @@ async function run() {
       if (state === STATES.START_FRONTEND) {
         const occupiedBy = findPidsUsingPort(FRONTEND_PORT);
         if (occupiedBy.length) {
-          await appendLog('port-occupied', { state, port: FRONTEND_PORT, occupiedBy, command: FRONTEND_CMD });
+          const alreadyReady = await isHealthy(FRONTEND_URL);
+          await appendLog('port-occupied', { state, port: FRONTEND_PORT, occupiedBy, command: FRONTEND_CMD, alreadyReady });
+          if (alreadyReady) {
+            await appendLog('frontend-already-running', { state, frontendUrl: FRONTEND_URL, occupiedBy });
+            state = STATES.READY;
+            continue;
+          }
           await appendFailureNote({ type: 'port-occupied', state, port: FRONTEND_PORT, occupiedBy, command: FRONTEND_CMD });
           throw new Error(`Port ${FRONTEND_PORT} is already occupied before frontend launch`);
         }
@@ -302,6 +342,7 @@ async function run() {
       workflow.push(STATES.READY);
       const result = {
         ok: true,
+        service: 'frontend',
         state,
         workflow,
         backendUrl: BACKEND_URL,
@@ -317,6 +358,7 @@ async function run() {
   } catch (error) {
     const result = {
       ok: false,
+      service: 'frontend',
       state: STATES.FAILED,
       workflow,
       error: error?.message || String(error),

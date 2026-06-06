@@ -12,6 +12,7 @@
     "startup:fsm:workflow": "node scripts/startup-fsm-workflow.mjs",
     "startup:fsm:frontend": "node scripts/frontend-startup-fsm-workflow.mjs",
     "startup:fsm:all": "node scripts/startup-fsm-workflow.mjs && node scripts/frontend-startup-fsm-workflow.mjs",
+    "startup:fsm:ordered": "node scripts/startup-ordered-ready.mjs",
     "supervisor:heartbeat:host": "node scripts/supervisor-heartbeat-host.mjs",
     "supervisor:heartbeat:host:once": "node scripts/supervisor-heartbeat-host.mjs --once",
     "dev:frontend:wait-backend": "node scripts/dev-frontend-when-backend.mjs",

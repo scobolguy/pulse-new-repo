@@ -1,36 +1,146 @@
 {
-  "ok": false,
-  "state": "KILL_BACKEND_PROCESSES",
+  "ok": true,
+  "service": "backend",
+  "state": "READY",
   "workflow": [
     "INIT",
-    "KILL_BACKEND_PROCESSES"
+    "KILL_BACKEND_PROCESSES",
+    "SANITIZE_QUEUE_PERSISTENCE",
+    "CHECK_BACKEND",
+    "START_BACKEND",
+    "WAIT_BACKEND",
+    "READY"
   ],
   "logs": [
     {
-      "at": "2026-06-06T12:38:23.844Z",
+      "at": "2026-06-06T19:02:50.221Z",
       "event": "workflow-start",
       "data": {
-        "backendUrl": "http://127.0.0.1:4000/api/develop/files",
+        "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
         "statusPath": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\startup-fsm-status.json"
       }
     },
     {
-      "at": "2026-06-06T12:38:23.850Z",
+      "at": "2026-06-06T19:02:50.229Z",
       "event": "state",
       "data": {
         "state": "INIT"
       }
     },
     {
-      "at": "2026-06-06T12:38:23.853Z",
+      "at": "2026-06-06T19:02:50.234Z",
       "event": "state",
       "data": {
         "state": "KILL_BACKEND_PROCESSES",
         "subflow": "Kill all back end processes",
         "backendPort": 4000
       }
+    },
+    {
+      "at": "2026-06-06T19:02:50.541Z",
+      "event": "subflow-complete",
+      "data": {
+        "subflow": "Kill all back end processes",
+        "port": 4000,
+        "pids": [
+          44308
+        ],
+        "results": [
+          {
+            "pid": 44308,
+            "killed": true
+          }
+        ],
+        "killedCount": 1
+      }
+    },
+    {
+      "at": "2026-06-06T19:02:50.548Z",
+      "event": "state",
+      "data": {
+        "state": "SANITIZE_QUEUE_PERSISTENCE",
+        "subflow": "Sanitize queue persistence files"
+      }
+    },
+    {
+      "at": "2026-06-06T19:02:50.561Z",
+      "event": "subflow-complete",
+      "data": {
+        "subflow": "Sanitize queue persistence files",
+        "queueManagers": 2,
+        "quarantinedMessageFiles": 0,
+        "quarantinedCounterFiles": 0,
+        "sanitizedOperationLogs": 0,
+        "skippedOperationLogs": 0,
+        "droppedOperationLines": 0,
+        "scannedMessageFiles": 0,
+        "capped": false,
+        "details": [
+          {
+            "queueManager": "qm-primary",
+            "quarantinedMessageFiles": 0,
+            "quarantinedCounterFiles": 0,
+            "sanitizedOperationLogs": 0,
+            "droppedOperationLines": 0
+          },
+          {
+            "queueManager": "qm-secondary",
+            "quarantinedMessageFiles": 0,
+            "quarantinedCounterFiles": 0,
+            "sanitizedOperationLogs": 0,
+            "droppedOperationLines": 0
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-06-06T19:02:50.572Z",
+      "event": "state",
+      "data": {
+        "state": "CHECK_BACKEND",
+        "url": "http://127.0.0.1:4000/api/authz/me?userId=system-admin"
+      }
+    },
+    {
+      "at": "2026-06-06T19:02:50.757Z",
+      "event": "backend-started",
+      "data": {
+        "command": "node --env-file=.env.local backend.mjs",
+        "pid": 39368,
+        "attempt": 1
+      }
+    },
+    {
+      "at": "2026-06-06T19:02:50.764Z",
+      "event": "state",
+      "data": {
+        "state": "WAIT_BACKEND",
+        "url": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
+        "timeoutMs": 30000,
+        "attempt": 1
+      }
+    },
+    {
+      "at": "2026-06-06T19:02:56.833Z",
+      "event": "complete",
+      "data": {
+        "ok": true,
+        "service": "backend",
+        "state": "READY",
+        "workflow": [
+          "INIT",
+          "KILL_BACKEND_PROCESSES",
+          "SANITIZE_QUEUE_PERSISTENCE",
+          "CHECK_BACKEND",
+          "START_BACKEND",
+          "WAIT_BACKEND",
+          "READY"
+        ],
+        "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin"
+      }
     }
   ],
-  "updatedAt": "2026-06-06T12:38:23.853Z",
-  "error": null
+  "updatedAt": "2026-06-06T19:02:56.836Z",
+  "error": null,
+  "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin"
 }

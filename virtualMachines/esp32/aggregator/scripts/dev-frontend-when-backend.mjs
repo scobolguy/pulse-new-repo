@@ -31,7 +31,7 @@ async function waitForBackend() {
 async function main() {
   await waitForBackend();
 
-  const child = spawn('npm', ['run', 'dev'], {
+  const child = spawn('npm', ['run', 'startup:fsm:frontend'], {
     stdio: 'inherit',
     shell: true,
     env: process.env
