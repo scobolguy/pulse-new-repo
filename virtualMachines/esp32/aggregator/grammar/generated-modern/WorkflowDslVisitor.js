@@ -48,6 +48,30 @@ export default class WorkflowDslVisitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by WorkflowDslParser#cobeginStmt.
+	visitCobeginStmt(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#cobeginMode.
+	visitCobeginMode(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#subflowDecl.
+	visitSubflowDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#tryStmt.
+	visitTryStmt(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by WorkflowDslParser#stepStmt.
 	visitStepStmt(ctx) {
 	  return this.visitChildren(ctx);

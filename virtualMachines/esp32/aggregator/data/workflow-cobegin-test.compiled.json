@@ -1,0 +1,94 @@
+{
+  "version": 4,
+  "compiledAt": "2026-06-04T15:04:51.379Z",
+  "symbols": {
+    "queues": [
+      {
+        "symbol": "out",
+        "queueName": "out.queue",
+        "dataTypeIds": [
+          "text"
+        ],
+        "dataTypeId": "text"
+      }
+    ],
+    "files": [],
+    "apis": []
+  },
+  "workflows": [
+    {
+      "id": "cobegin-test",
+      "steps": [
+        {
+          "id": "try-10",
+          "action": "try",
+          "body": [
+            {
+              "id": "cobegin-12",
+              "action": "cobegin",
+              "mode": "sync",
+              "timeoutMs": null,
+              "backoutOnError": true,
+              "subflows": [
+                {
+                  "id": "a",
+                  "steps": [
+                    {
+                      "id": "set-a",
+                      "action": "set_state",
+                      "key": "a",
+                      "value": "1"
+                    }
+                  ]
+                },
+                {
+                  "id": "b",
+                  "steps": [
+                    {
+                      "id": "set-b",
+                      "action": "set_state",
+                      "key": "b",
+                      "value": "2"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "set-error",
+              "action": "set_state",
+              "key": "err",
+              "value": "1"
+            }
+          ],
+          "onError": []
+        },
+        {
+          "id": "cobegin-60",
+          "action": "cobegin",
+          "mode": "async",
+          "timeoutMs": 50,
+          "backoutOnError": true,
+          "subflows": [
+            {
+              "id": "slow",
+              "steps": [
+                {
+                  "id": "wait",
+                  "action": "wait",
+                  "durationMs": 100
+                },
+                {
+                  "id": "set-c",
+                  "action": "set_state",
+                  "key": "c",
+                  "value": "3"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -140,6 +140,63 @@ struct MappingDef {
     std::vector<MappingItem> items;
 };
 
+enum class RuntimeUnitKind : uint8_t {
+    Program = 0,
+    Service = 1,
+    Daemon = 2
+};
+
+enum class ResidentDomain : uint8_t {
+    StringPool = 0,
+    GlobalEnumeratedTypes = 1,
+    GlobalTypes = 2,
+    MapperArtifacts = 3,
+    ProgramImage = 4
+};
+
+struct RuntimeUnitDescriptor {
+    RuntimeUnitKind kind = RuntimeUnitKind::Service;
+    std::string id;
+    uint32_t refreshMs = 0;
+    uint32_t loadedAtMs = 0;
+    uint32_t lastRefreshAtMs = 0;
+    bool resident = false;
+};
+
+struct ResidentAssetRecord {
+    ResidentDomain domain = ResidentDomain::ProgramImage;
+    std::string id;
+    size_t bytes = 0;
+    uint16_t pinCount = 0;
+    uint32_t loadedAtMs = 0;
+    uint32_t lastUsedAtMs = 0;
+    bool resident = false;
+};
+
+struct PagingConfig {
+    size_t pageSizeBytes = 1024;
+    size_t maxFrames = 24;
+};
+
+struct PagingStats {
+    uint32_t pageFaults = 0;
+    uint32_t evictions = 0;
+    uint32_t ffsReads = 0;
+    uint32_t cacheHits = 0;
+};
+
+struct PageTableEntry {
+    bool present = false;
+    uint16_t frameIndex = 0;
+};
+
+struct PageFrame {
+    bool used = false;
+    bool pinned = false;
+    uint16_t vpage = 0;
+    uint32_t lastAccessTick = 0;
+};
+
 using PCodeMap = std::map<uint16_t, uint8_t>;
 using MemoryMap = std::map<uint16_t, uint32_t>;
 
@@ -151,6 +208,10 @@ struct Status {
     bool running = false;
     uint16_t pc = 0;
     std::vector<uint16_t> breakpoints;
+    RuntimeUnitDescriptor runtimeUnit;
+    PagingConfig pagingConfig;
+    PagingStats pagingStats;
+    std::vector<ResidentAssetRecord> residentAssets;
 };
 
 } // namespace pmachine
@@ -173,6 +234,19 @@ public:
     std::map<std::string, int> getEnumTypes() const;
     Status getStatus() const;
     bool loadProgram(const std::vector<uint8_t>& pcode, const std::string& backingFile, size_t maxSpace);
+    bool loadUnit(const std::string& kind, const std::string& id, uint32_t refreshMs = 0);
+    bool unloadUnit();
+    void setMemoryConfig(size_t pageSizeBytes, size_t maxFrames);
+    PagingConfig getPagingConfig() const;
+    PagingStats getPagingStats() const;
+    void setRuntimeUnit(const std::string& kind, const std::string& id, uint32_t refreshMs = 0);
+    const RuntimeUnitDescriptor& getRuntimeUnit() const;
+    bool loadResidentDomain(const std::string& domain, const std::string& id, size_t bytes = 0, bool pin = false);
+    bool unloadResidentDomain(const std::string& domain, const std::string& id);
+    std::vector<ResidentAssetRecord> getResidentAssets() const;
+    void touchResidentAsset(const std::string& domain, const std::string& id);
+    void tickDaemonRefresh(uint32_t nowMs = 0);
+    bool readPCodeByte(uint32_t virtualAddress, uint8_t& outByte);
     void run(const std::vector<PInstruction>& instructions);
     void setRoutingContext(const std::string& inputQueue, const std::string& message);
     const std::vector<RouteDelivery>& getRoutingDeliveries() const;
@@ -205,11 +279,21 @@ private:
     ::EnumManager* enumManager = nullptr;
     bool lastRunStepLimitHit = false;
     size_t lastRunStepCount = 0;
+    PagingConfig pagingConfig;
+    PagingStats pagingStats;
+    RuntimeUnitDescriptor runtimeUnit;
+    std::vector<ResidentAssetRecord> residentAssets;
+    std::vector<uint8_t> programImage;
+    std::vector<PageTableEntry> pageTable;
+    std::vector<PageFrame> frames;
+    uint32_t lruTick = 0;
 
     // Handler table for opcode dispatch
     using HandlerFunc = void (*)(PMachine&, const PInstruction&, int*, int&, int&, int&);
     HandlerFunc handler_table[256] = {nullptr};
     void init_handler_table();
+    int ensurePageResident(uint16_t vpage);
+    int findLruVictimFrame() const;
 public:
     // Register a native extension handler for an opcode
     void register_extension(uint8_t opcode, HandlerFunc func);

@@ -1,0 +1,14 @@
+{
+  "queues": [
+    {
+      "symbol": "out",
+      "queueName": "out.queue",
+      "dataTypeIds": [
+        "text"
+      ],
+      "dataTypeId": "text"
+    }
+  ],
+  "files": [],
+  "apis": []
+}

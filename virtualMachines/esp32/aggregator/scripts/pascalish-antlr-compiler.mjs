@@ -32,50 +32,19 @@ function unquote(value) {
   return raw;
 }
 
-function buildStringList(ctx) {
-  if (!ctx) return [];
-  const values = ctx.stringValue ? ctx.stringValue() : [];
-  return values.map(item => unquote(text(item)));
-}
-
 function toBoolean(ctx) {
   const t = text(ctx);
   return t.toUpperCase() === 'TRUE';
 }
 
-function extractVarDeclarations(sourceText) {
-  const declarations = [];
-  const keptLines = [];
-  const lines = String(sourceText || '').split(/\r?\n/);
-  const varLinePattern = /^\s*VAR\s+([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[A-Za-z_][A-Za-z0-9_-]*)\s*(?:FROM\s+(LIBRARIAN|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[A-Za-z_][A-Za-z0-9_-]*))?\s*;\s*$/i;
+function parseDaemonRefreshToMs(rawValue, rawUnit = '') {
+  const n = Number.parseInt(String(rawValue || '').trim(), 10);
+  if (!Number.isFinite(n) || n <= 0) return 1000;
 
-  for (const line of lines) {
-    const match = line.match(varLinePattern);
-    if (!match) {
-      keptLines.push(line);
-      continue;
-    }
-
-    const id = String(match[1] || '').trim();
-    const dataTypeId = unquote(String(match[2] || '').trim());
-    const sourceRaw = String(match[3] || '').trim();
-    const isLibrarian = sourceRaw.toUpperCase() === 'LIBRARIAN';
-    const sourceId = sourceRaw ? (isLibrarian ? 'librarian' : unquote(sourceRaw)) : null;
-
-    declarations.push({
-      type: 'VarDecl',
-      id,
-      dataTypeId,
-      source: sourceId ? { sourceId, fromLibrarian: isLibrarian } : null,
-      sourceId,
-      fromLibrarian: isLibrarian
-    });
-  }
-
-  return {
-    declarations,
-    strippedSourceText: keptLines.join('\n')
-  };
+  const unit = String(rawUnit || '').trim().toLowerCase();
+  if (unit === 'm') return n * 60 * 1000;
+  if (unit === 's') return n * 1000;
+  return n;
 }
 
 class PascalishAstBuilder extends PascalishRouterMapperVisitor {
@@ -105,57 +74,169 @@ class PascalishAstBuilder extends PascalishRouterMapperVisitor {
     const ast = {
       type: 'Program',
       serviceId: null,
+      runtimeUnit: null,
+      roles: [],
       variables: [],
       routers: [],
-      mappers: []
+      mappers: [],
+      codeLibraries: [],
+      uses: [],
+      interop: [],
+      statements: []
     };
 
     for (const statement of ctx.statement ? ctx.statement() : []) {
       const value = this.visit(statement);
       if (!value) continue;
-      if (value.type === 'ServiceDecl') {
-        ast.serviceId = value.serviceId;
+
+      if (value.type === 'RuntimeDecl') {
+        ast.runtimeUnit = value.runtimeUnit;
+        ast.serviceId = value.runtimeUnit.id;
+      } else if (value.type === 'RoleDecl') {
+        ast.roles.push(value);
       } else if (value.type === 'VarDecl') {
         ast.variables.push(value);
+      } else if (value.type === 'LibraryDecl') {
+        ast.codeLibraries.push(value);
+      } else if (value.type === 'UseDecl') {
+        ast.uses.push(value);
+      } else if (value.type === 'InteropDecl') {
+        ast.interop.push(value);
       } else if (value.type === 'RouterDecl') {
         ast.routers.push(value);
       } else if (value.type === 'MapperDecl') {
         ast.mappers.push(value);
+      } else if (value.type === 'BlockStmt') {
+        ast.statements.push(value);
       }
     }
+
+    if (!ast.runtimeUnit) {
+      ast.runtimeUnit = {
+        kind: 'service',
+        id: ast.serviceId || 'default-router-service',
+        refreshMs: null
+      };
+      ast.serviceId = ast.runtimeUnit.id;
+    }
+
+    const hasCodeLibrarianRole = ast.roles.some(role => role.role === 'code_librarian');
+    if (!hasCodeLibrarianRole && (ast.codeLibraries.length > 0 || ast.uses.length > 0)) {
+      ast.roles.push({
+        type: 'RoleDecl',
+        role: 'code_librarian',
+        capabilities: ['manage_common_code', 'publish_library_units', 'version_library_units'],
+        inferred: true
+      });
+    }
+
+    ast.programId = ast.runtimeUnit.kind === 'program' ? ast.runtimeUnit.id : null;
+    ast.daemonId = ast.runtimeUnit.kind === 'daemon' ? ast.runtimeUnit.id : null;
+    ast.daemonRefreshMs = ast.runtimeUnit.kind === 'daemon' ? ast.runtimeUnit.refreshMs : null;
 
     return ast;
   }
 
   visitStatement(ctx) {
-    const serviceDecl = ctx.serviceDecl();
-    if (serviceDecl) return this.visit(serviceDecl);
+    const runtimeDecl = typeof ctx.runtimeDecl === 'function' ? ctx.runtimeDecl() : null;
+    if (runtimeDecl) return this.visit(runtimeDecl);
+
+    const roleDecl = typeof ctx.roleDecl === 'function' ? ctx.roleDecl() : null;
+    if (roleDecl) return this.visit(roleDecl);
 
     const varDecl = typeof ctx.varDecl === 'function' ? ctx.varDecl() : null;
     if (varDecl) return this.visit(varDecl);
 
-    const routerDecl = ctx.routerDecl();
+    const libraryDecl = typeof ctx.libraryDecl === 'function' ? ctx.libraryDecl() : null;
+    if (libraryDecl) return this.visit(libraryDecl);
+
+    const useDecl = typeof ctx.useDecl === 'function' ? ctx.useDecl() : null;
+    if (useDecl) return this.visit(useDecl);
+
+    const interopDecl = typeof ctx.interopDecl === 'function' ? ctx.interopDecl() : null;
+    if (interopDecl) return this.visit(interopDecl);
+
+    const routerDecl = typeof ctx.routerDecl === 'function' ? ctx.routerDecl() : null;
     if (routerDecl) return this.visit(routerDecl);
 
-    const mapperDecl = ctx.mapperDecl();
+    const mapperDecl = typeof ctx.mapperDecl === 'function' ? ctx.mapperDecl() : null;
     if (mapperDecl) return this.visit(mapperDecl);
+
+    const blockStmt = typeof ctx.blockStmt === 'function' ? ctx.blockStmt() : null;
+    if (blockStmt) return this.visit(blockStmt);
 
     return null;
   }
 
-  visitServiceDecl(ctx) {
+  visitRoleDecl(ctx) {
+    const role = text(ctx.roleName()).toLowerCase();
     return {
-      type: 'ServiceDecl',
-      serviceId: unquote(text(ctx.stringValue()))
+      type: 'RoleDecl',
+      role,
+      capabilities: role === 'code_librarian'
+        ? ['manage_common_code', 'publish_library_units', 'version_library_units']
+        : []
+    };
+  }
+
+  visitRuntimeDecl(ctx) {
+    if (ctx.serviceDecl()) {
+      const serviceId = unquote(text(ctx.serviceDecl().stringOrIdent()));
+      return { type: 'RuntimeDecl', runtimeUnit: { kind: 'service', id: serviceId, refreshMs: null } };
+    }
+
+    if (ctx.programDecl()) {
+      const programId = unquote(text(ctx.programDecl().stringOrIdent()));
+      return { type: 'RuntimeDecl', runtimeUnit: { kind: 'program', id: programId, refreshMs: null } };
+    }
+
+    if (ctx.daemonDecl()) {
+      const daemonCtx = ctx.daemonDecl();
+      const daemonId = unquote(text(daemonCtx.stringOrIdent()));
+      let refreshMs = 1000;
+
+      if (daemonCtx.daemonRefresh()) {
+        const refresh = daemonCtx.daemonRefresh();
+        const rawCount = text(refresh.NUMBER());
+        const unitCtx = refresh.daemonRefreshUnit ? refresh.daemonRefreshUnit() : null;
+        const rawUnit = unitCtx ? text(unitCtx) : '';
+        refreshMs = parseDaemonRefreshToMs(rawCount, rawUnit);
+      }
+
+      return { type: 'RuntimeDecl', runtimeUnit: { kind: 'daemon', id: daemonId, refreshMs } };
+    }
+
+    return null;
+  }
+
+  visitBlockStmt(ctx) {
+    const start = ctx.start.tokenIndex;
+    const stop = ctx.stop.tokenIndex;
+    const rawTokens = this.tokens.tokens.slice(start, stop + 1).map(t => t.text);
+    const normalized = rawTokens
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .replace(/\s+([,;\)])/g, '$1')
+      .replace(/([\(])\s+/g, '$1')
+      .trim()
+      .replace(/[.;]\s*$/g, '')
+      .trim();
+
+    return {
+      type: 'BlockStmt',
+      code: normalized
     };
   }
 
   visitVarDecl(ctx) {
     const source = (typeof ctx.varSource === 'function' && ctx.varSource()) ? this.visit(ctx.varSource()) : null;
+    const dataType = this.visit(ctx.typeRef());
+
     return {
       type: 'VarDecl',
       id: text(ctx.IDENT()),
-      dataTypeId: unquote(text(ctx.stringOrIdent())),
+      dataType,
+      dataTypeId: dataType.id,
       source: source || null,
       sourceId: source?.sourceId || null,
       fromLibrarian: Boolean(source?.fromLibrarian)
@@ -174,6 +255,59 @@ class PascalishAstBuilder extends PascalishRouterMapperVisitor {
       sourceId: unquote(text(ctx.stringOrIdent())),
       fromLibrarian: false
     };
+  }
+
+  visitLibraryDecl(ctx) {
+    const source = this.visit(ctx.librarySource());
+    return {
+      type: 'LibraryDecl',
+      id: unquote(text(ctx.stringOrIdent())),
+      source
+    };
+  }
+
+  visitLibrarySource(ctx) {
+    if (ctx.LIBRARIAN()) {
+      return { kind: 'librarian', value: 'librarian' };
+    }
+    return { kind: 'ref', value: unquote(text(ctx.stringOrIdent())) };
+  }
+
+  visitUseDecl(ctx) {
+    return {
+      type: 'UseDecl',
+      libraryId: unquote(text(ctx.stringOrIdent())),
+      alias: ctx.IDENT() ? text(ctx.IDENT()) : null
+    };
+  }
+
+  visitInteropDecl(ctx) {
+    return {
+      type: 'InteropDecl',
+      target: text(ctx.interopKind()).toLowerCase(),
+      id: unquote(text(ctx.stringOrIdent())),
+      alias: ctx.IDENT() ? text(ctx.IDENT()) : null
+    };
+  }
+
+  visitTypeRef(ctx) {
+    const id = unquote(text(ctx.stringOrIdent()));
+    const genericArgs = ctx.genericTypeArgs() ? this.visit(ctx.genericTypeArgs()) : [];
+    return {
+      type: 'TypeRef',
+      id,
+      genericArgs
+    };
+  }
+
+  visitGenericTypeArgs(ctx) {
+    const args = ctx.typeRef ? ctx.typeRef() : [];
+    return args.map(typeCtx => this.visit(typeCtx));
+  }
+
+  visitTypeRefList(ctx) {
+    const refs = ctx.typeRef ? ctx.typeRef() : [];
+    return refs.map(typeCtx => this.visit(typeCtx));
   }
 
   visitRouterDecl(ctx) {
@@ -213,9 +347,11 @@ class PascalishAstBuilder extends PascalishRouterMapperVisitor {
     const meta = ctx.outputTypeMeta() ? this.visit(ctx.outputTypeMeta()) : null;
     return {
       type: 'OutputDecl',
-      queueName: unquote(text(ctx.stringValue(0))),
-      dataTypeId: meta?.dataTypeId || null,
-      dataTypeIds: meta?.dataTypeIds || null,
+      queueName: unquote(text(ctx.stringValue())),
+      dataType: meta?.dataType || null,
+      dataTypes: meta?.dataTypes || null,
+      dataTypeId: meta?.dataType?.id || null,
+      dataTypeIds: meta?.dataTypes ? meta.dataTypes.map(item => item.id) : (meta?.dataType ? [meta.dataType.id] : null),
       whenRule: this.buildPl0Snippet(ctx.pl0Snippet(0)),
       transformRule: this.buildPl0Snippet(ctx.pl0Snippet(1))
     };
@@ -223,11 +359,12 @@ class PascalishAstBuilder extends PascalishRouterMapperVisitor {
 
   visitOutputTypeMeta(ctx) {
     if (ctx.TYPE()) {
-      const id = unquote(text(ctx.stringValue()));
-      return { dataTypeId: id, dataTypeIds: [id] };
+      const typeRef = this.visit(ctx.typeRef());
+      return { dataType: typeRef, dataTypes: [typeRef] };
     }
-    const ids = buildStringList(ctx.stringList());
-    return { dataTypeId: ids[0] || null, dataTypeIds: ids };
+
+    const refs = this.visit(ctx.typeRefList());
+    return { dataType: refs[0] || null, dataTypes: refs };
   }
 
   visitMapperDecl(ctx) {
@@ -244,11 +381,16 @@ class PascalishAstBuilder extends PascalishRouterMapperVisitor {
       maps.push(this.visit(mapCtx));
     }
 
+    const sourceType = this.visit(ctx.typeRef(0));
+    const targetType = this.visit(ctx.typeRef(1));
+
     return {
       type: 'MapperDecl',
       id: unquote(text(ctx.stringOrIdent())),
-      sourceTypeId: unquote(text(ctx.stringValue(0))),
-      targetTypeId: unquote(text(ctx.stringValue(1))),
+      sourceType,
+      targetType,
+      sourceTypeId: sourceType.id,
+      targetTypeId: targetType.id,
       description: header.description,
       enabled: header.enabled,
       maps
@@ -272,8 +414,7 @@ class PascalishAstBuilder extends PascalishRouterMapperVisitor {
 }
 
 export function parsePascalishWithAntlr(sourceText) {
-  const extracted = extractVarDeclarations(sourceText);
-  const input = new antlr4.InputStream(extracted.strippedSourceText);
+  const input = new antlr4.InputStream(String(sourceText || ''));
   const lexer = new PascalishRouterMapperLexer(input);
   const lexerErrors = new CollectingErrorListener();
   lexer.removeErrorListeners();
@@ -293,10 +434,7 @@ export function parsePascalishWithAntlr(sourceText) {
   }
 
   const builder = new PascalishAstBuilder(tokens);
-  const ast = builder.visit(tree);
-  const parserVars = Array.isArray(ast.variables) ? ast.variables : [];
-  ast.variables = [...extracted.declarations, ...parserVars];
-  return ast;
+  return builder.visit(tree);
 }
 
 export function compilePascalishWithAntlr(sourceText) {
@@ -306,8 +444,17 @@ export function compilePascalishWithAntlr(sourceText) {
   return {
     version: 1,
     compiledAt,
-    serviceId: ast.serviceId || 'default-router-service',
+    serviceId: ast.serviceId || ast.runtimeUnit?.id || 'default-router-service',
+    runtimeUnit: ast.runtimeUnit || {
+      kind: 'service',
+      id: ast.serviceId || 'default-router-service',
+      refreshMs: null
+    },
     ast,
+    roles: ast.roles || [],
+    codeLibraries: ast.codeLibraries || [],
+    uses: ast.uses || [],
+    interoperability: ast.interop || [],
     variableDeclarations: ast.variables || [],
     routerRules: ast.routers,
     dataMappings: ast.mappers
@@ -318,7 +465,14 @@ async function main() {
   const inputPath = path.resolve('./data/router-mapper.dsl');
   const sourceText = await fs.readFile(inputPath, 'utf-8');
   const compiled = compilePascalishWithAntlr(sourceText);
-  console.log(JSON.stringify({ routers: compiled.routerRules.length, mappers: compiled.dataMappings.length }, null, 2));
+  console.log(JSON.stringify({
+    routers: compiled.routerRules.length,
+    mappers: compiled.dataMappings.length,
+    roles: compiled.roles.length,
+    libraries: compiled.codeLibraries.length,
+    interop: compiled.interoperability.length,
+    runtimeUnit: compiled.runtimeUnit?.kind || 'service'
+  }, null, 2));
 }
 
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, '/'))) {

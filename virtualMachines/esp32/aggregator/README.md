@@ -267,6 +267,12 @@ States used by queue managers and generic service instances:
 
 ## API Reference
 
+For consolidated API docs and language guides, see:
+- `../../../documents/API_REFERENCE.md`
+- `../../../documents/PASCALISH_USER_GUIDE.md`
+- `../../../documents/COBOLISH_USER_GUIDE.md`
+- `../../../documents/WFL_USER_GUIDE.md`
+
 ### Queue Manager Registry
 
 Get queue managers:

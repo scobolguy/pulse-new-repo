@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "generatedAt": "2026-06-06T12:50:39.502Z",
+  "serviceId": "interop-router",
+  "runtimeUnit": {
+    "kind": "daemon",
+    "id": "interop-router",
+    "refreshMs": 2000
+  },
+  "variableDeclarations": [
+    {
+      "type": "VarDecl",
+      "id": "inbound",
+      "dataType": {
+        "type": "TypeRef",
+        "id": "envelope",
+        "genericArgs": [
+          {
+            "type": "TypeRef",
+            "id": "swift-mt103",
+            "genericArgs": []
+          }
+        ]
+      },
+      "dataTypeId": "envelope",
+      "source": {
+        "sourceId": "librarian",
+        "fromLibrarian": true
+      },
+      "sourceId": "librarian",
+      "fromLibrarian": true
+    }
+  ],
+  "entryLabel": "ENTRY",
+  "finishLabel": "FINISH",
+  "instructionSubset": [
+    "JMP",
+    "JZ",
+    "NOP",
+    "ROUTE_MATCH_QUEUE",
+    "ROUTE_EVAL_WHEN",
+    "ROUTE_TRANSFORM",
+    "ROUTE_EMIT",
+    "PARSE_FIN_TEXT",
+    "HALT"
+  ],
+  "entries": [
+    {
+      "kind": "router",
+      "id": "mt103-route",
+      "label": "ROUTER_0_MT103_ROUTE",
+      "inputQueue": "swift.mt103.inbound",
+      "outputs": [
+        {
+          "queueName": "swift.mt103.parsed",
+          "dataTypeIds": [
+            "envelope"
+          ],
+          "dataTypeId": "envelope",
+          "whenRule": "output := 1;",
+          "transformRule": "output := src;"
+        }
+      ]
+    },
+    {
+      "kind": "mapper",
+      "id": "mt103-map",
+      "label": "MAPPER_0_MT103_MAP",
+      "sourceTypeId": "envelope",
+      "targetTypeId": "envelope",
+      "itemCount": 1,
+      "items": [
+        {
+          "sourcePath": "src.sender",
+          "targetPath": "dst.sender",
+          "conversionRule": "output := src;"
+        }
+      ]
+    }
+  ]
+}

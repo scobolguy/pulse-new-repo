@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "updatedAt": "2026-06-04T15:05:41.649Z",
+  "jobs": [
+    {
+      "id": "cobegin-60-timeout-1780585541648",
+      "triggerAt": "2026-06-04T15:05:41.698Z",
+      "createdAt": "2026-06-04T15:05:41.648Z",
+      "workflowId": "cobegin-test",
+      "stepId": "cobegin-60",
+      "reason": "async-timeout",
+      "details": {
+        "mode": "async",
+        "timeoutMs": 50,
+        "subflowIds": [
+          "slow"
+        ],
+        "backoutOnError": true,
+        "context": {
+          "workflowTimeoutQueuePath": "./data/workflow-cobegin-timeouts.test.json"
+        }
+      }
+    }
+  ]
+}

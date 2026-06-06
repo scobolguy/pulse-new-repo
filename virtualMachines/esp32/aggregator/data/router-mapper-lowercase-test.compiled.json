@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "compiledAt": "2026-06-04T15:19:14.752Z",
+  "serviceId": "svc",
+  "ast": {
+    "type": "Program",
+    "serviceId": "svc",
+    "variables": [],
+    "routers": [
+      {
+        "type": "RouterDecl",
+        "id": "r1",
+        "inputQueue": "q.in",
+        "description": "demo",
+        "enabled": true,
+        "serviceId": null,
+        "outputs": [
+          {
+            "type": "OutputDecl",
+            "queueName": "q.out",
+            "dataTypeId": null,
+            "dataTypeIds": null,
+            "whenRule": "output := 1;",
+            "transformRule": "output := src;"
+          }
+        ]
+      }
+    ],
+    "mappers": []
+  },
+  "variableDeclarations": [],
+  "routerRules": [
+    {
+      "id": "r1",
+      "name": "r1",
+      "serviceId": "svc",
+      "enabled": true,
+      "inputQueue": "q.in",
+      "description": "demo",
+      "outputs": [
+        {
+          "queueName": "q.out",
+          "whenRule": "output := 1;",
+          "transformRule": "output := src;"
+        }
+      ],
+      "createdAt": "2026-06-04T15:19:14.752Z",
+      "updatedAt": "2026-06-04T15:19:14.752Z"
+    }
+  ],
+  "dataMappings": []
+}

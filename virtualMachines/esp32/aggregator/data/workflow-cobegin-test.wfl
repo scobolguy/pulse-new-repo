@@ -1,0 +1,25 @@
+QUEUE "out" -> "out.queue" TYPE "text";
+
+WORKFLOW "cobegin-test" BEGIN
+  TRY BEGIN
+    COBEGIN SYNC ON ERROR BACKOUT BEGIN
+      SUBFLOW "a" BEGIN
+        STEP "set-a" SET STATE "a" = "1";
+      END;
+      SUBFLOW "b" BEGIN
+        STEP "set-b" SET STATE "b" = "2";
+      END;
+    COEND;
+  END
+  CATCH BEGIN
+    STEP "set-error" SET STATE "err" = "1";
+  END
+  ENDTRY;
+
+  COBEGIN ASYNC WAIT 50 ON ERROR BACKOUT BEGIN
+    SUBFLOW "slow" BEGIN
+      STEP "wait" WAIT 100;
+      STEP "set-c" SET STATE "c" = "3";
+    END;
+  COEND;
+END;

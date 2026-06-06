@@ -249,6 +249,74 @@ String applyConversionRule(const String& conversionRule, const String& srcValue)
     return srcValue;
 }
 
+struct ProgramMapMetadata {
+    String runtimeKind = "service";
+    String runtimeId = "aggregator-router-service";
+    uint32_t runtimeRefreshMs = 0;
+    bool hasCodeLibrarianRole = false;
+    bool hasLibraryBindings = false;
+    JsonDocument raw;
+};
+
+bool jsonArrayContainsCodeLibrarian(JsonVariantConst rolesVariant) {
+    if (!rolesVariant.is<JsonArrayConst>()) return false;
+    JsonArrayConst roles = rolesVariant.as<JsonArrayConst>();
+    for (JsonVariantConst item : roles) {
+        if (item.is<const char*>()) {
+            String roleName = toUpperCopy(trimCopy(String(item.as<const char*>())));
+            if (roleName == "CODE_LIBRARIAN") return true;
+            continue;
+        }
+        if (item.is<JsonObjectConst>()) {
+            JsonObjectConst roleObj = item.as<JsonObjectConst>();
+            String roleName = toUpperCopy(trimCopy(String(roleObj["role"] | "")));
+            if (roleName == "CODE_LIBRARIAN") return true;
+        }
+    }
+    return false;
+}
+
+bool jsonArrayHasAnyEntries(JsonVariantConst variant) {
+    if (!variant.is<JsonArrayConst>()) return false;
+    JsonArrayConst arr = variant.as<JsonArrayConst>();
+    return !arr.isNull() && arr.size() > 0;
+}
+
+void parseProgramMapMetadata(const JsonDocument& doc, ProgramMapMetadata& metadata) {
+    metadata.runtimeKind = "service";
+    metadata.runtimeId = "aggregator-router-service";
+    metadata.runtimeRefreshMs = 0;
+    metadata.hasCodeLibrarianRole = false;
+    metadata.hasLibraryBindings = false;
+
+    JsonVariantConst runtime = doc["runtimeUnit"];
+    if (runtime.is<JsonObjectConst>()) {
+        metadata.runtimeKind = trimCopy(String(runtime["kind"] | metadata.runtimeKind));
+        metadata.runtimeId = trimCopy(String(runtime["id"] | metadata.runtimeId));
+        metadata.runtimeRefreshMs = static_cast<uint32_t>(runtime["refreshMs"] | 0);
+    }
+
+    if (metadata.runtimeId.length() == 0) {
+        metadata.runtimeId = trimCopy(String(doc["serviceId"] | "aggregator-router-service"));
+        if (metadata.runtimeId.length() == 0) metadata.runtimeId = "aggregator-router-service";
+    }
+
+    metadata.hasCodeLibrarianRole = jsonArrayContainsCodeLibrarian(doc["roles"]);
+    metadata.hasLibraryBindings = jsonArrayHasAnyEntries(doc["codeLibraries"]) || jsonArrayHasAnyEntries(doc["uses"]);
+
+    metadata.raw.clear();
+    JsonObject raw = metadata.raw.to<JsonObject>();
+    raw["runtimeKind"] = metadata.runtimeKind;
+    raw["runtimeId"] = metadata.runtimeId;
+    raw["runtimeRefreshMs"] = metadata.runtimeRefreshMs;
+    raw["hasCodeLibrarianRole"] = metadata.hasCodeLibrarianRole;
+    raw["hasLibraryBindings"] = metadata.hasLibraryBindings;
+    if (doc["roles"].is<JsonArrayConst>()) raw["roles"] = doc["roles"];
+    if (doc["codeLibraries"].is<JsonArrayConst>()) raw["codeLibraries"] = doc["codeLibraries"];
+    if (doc["uses"].is<JsonArrayConst>()) raw["uses"] = doc["uses"];
+    if (doc["interoperability"].is<JsonArrayConst>()) raw["interoperability"] = doc["interoperability"];
+}
+
 bool evaluateWhenRule(const String& whenRule, const String& srcMessage) {
     String rule = toUpperCopy(trimCopy(whenRule));
     if (rule.length() == 0) return true;
@@ -558,11 +626,19 @@ bool loadRouterRulesArray(const String& rulesFilePath, FederatedFileSystem* ffs,
     return false;
 }
 
-bool loadProgramMapMappings(const String& programMapPath, FederatedFileSystem* ffs, std::vector<pmachine::MappingDef>& mappingsOut, String& errorOut) {
+bool loadProgramMapMappings(const String& programMapPath, FederatedFileSystem* ffs, std::vector<pmachine::MappingDef>& mappingsOut, String& errorOut, ProgramMapMetadata* metadataOut = nullptr) {
     JsonDocument doc;
     if (!deserializeDocFromPath(programMapPath, ffs, doc)) {
         errorOut = "Unable to load program map file";
         return false;
+    }
+
+    if (metadataOut != nullptr) {
+        parseProgramMapMetadata(doc, *metadataOut);
+        if (metadataOut->hasLibraryBindings && !metadataOut->hasCodeLibrarianRole) {
+            errorOut = "Program map policy violation: code libraries require CODE_LIBRARIAN role";
+            return false;
+        }
     }
 
     JsonArrayConst entries;
@@ -615,6 +691,7 @@ struct EdgeIngressExecutionCache {
     bool ready = false;
     std::vector<pmachine::PInstruction> instructions;
     std::vector<pmachine::MappingDef> mappingDefs;
+    ProgramMapMetadata metadata;
 };
 
 EdgeIngressExecutionResult executeEdgeIngressStage(
@@ -683,6 +760,11 @@ EdgeIngressExecutionResult executeEdgeIngressStage(
         instructions = &executionCache->instructions;
         mappingDefs = &executionCache->mappingDefs;
         programCacheHit = true;
+        machine.setRuntimeUnit(
+            std::string(executionCache->metadata.runtimeKind.c_str()),
+            std::string(executionCache->metadata.runtimeId.c_str()),
+            executionCache->metadata.runtimeRefreshMs
+        );
     } else {
         File f = LittleFS.open(file, "r");
         if (!f) {
@@ -702,12 +784,19 @@ EdgeIngressExecutionResult executeEdgeIngressStage(
 
         loadedInstructions = pmachine::loadTextPCode(std::string(text.c_str()));
         String mappingError;
-        if (!loadProgramMapMappings(programMap, ffs, loadedMappings, mappingError)) {
+        ProgramMapMetadata metadata;
+        if (!loadProgramMapMappings(programMap, ffs, loadedMappings, mappingError, &metadata)) {
             result.statusCode = 404;
             result.contentType = "text/plain";
             result.body = mappingError;
             return result;
         }
+
+        machine.setRuntimeUnit(
+            std::string(metadata.runtimeKind.c_str()),
+            std::string(metadata.runtimeId.c_str()),
+            metadata.runtimeRefreshMs
+        );
 
         if (executionCache != nullptr) {
             executionCache->file = file;
@@ -715,6 +804,7 @@ EdgeIngressExecutionResult executeEdgeIngressStage(
             executionCache->maxBytes = maxBytes;
             executionCache->instructions = loadedInstructions;
             executionCache->mappingDefs = loadedMappings;
+            executionCache->metadata = metadata;
             executionCache->ready = true;
             instructions = &executionCache->instructions;
             mappingDefs = &executionCache->mappingDefs;
@@ -743,6 +833,22 @@ EdgeIngressExecutionResult executeEdgeIngressStage(
     out["stepLimitHit"] = stepLimitHit;
     out["stepCount"] = stepCount;
     out["programCacheHit"] = programCacheHit;
+    const pmachine::RuntimeUnitDescriptor& currentRuntimeUnit = machine.getRuntimeUnit();
+    JsonObject runtime = out["runtimeUnit"].to<JsonObject>();
+    runtime["kind"] =
+        currentRuntimeUnit.kind == pmachine::RuntimeUnitKind::Program
+            ? "program"
+            : (currentRuntimeUnit.kind == pmachine::RuntimeUnitKind::Daemon ? "daemon" : "service");
+    runtime["id"] = currentRuntimeUnit.id.c_str();
+    runtime["refreshMs"] = currentRuntimeUnit.refreshMs;
+    if (executionCache != nullptr && executionCache->ready) {
+        JsonObject metadata = out["metadata"].to<JsonObject>();
+        metadata["hasCodeLibrarianRole"] = executionCache->metadata.hasCodeLibrarianRole;
+        metadata["hasLibraryBindings"] = executionCache->metadata.hasLibraryBindings;
+        if (executionCache->metadata.raw["interoperability"].is<JsonArrayConst>()) {
+            metadata["interoperability"] = executionCache->metadata.raw["interoperability"];
+        }
+    }
 
     Serial.print("[edge_ingress_stage] run done stepLimitHit=");
     Serial.print(stepLimitHit ? "true" : "false");
@@ -814,6 +920,7 @@ size_t clearEdgeIngressExecutionCaches() {
         ctx.executionCache.maxBytes = 0;
         ctx.executionCache.instructions.clear();
         ctx.executionCache.mappingDefs.clear();
+        ctx.executionCache.metadata = ProgramMapMetadata{};
     }
     return cleared;
 }
@@ -1032,6 +1139,44 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         json += "],";
         json += "\"running\":" + String(s.running ? "true" : "false") + ",";
         json += "\"pc\":" + String(s.pc) + ",";
+        json += "\"runtimeUnit\":{";
+        json += "\"kind\":\"" + String(
+            s.runtimeUnit.kind == pmachine::RuntimeUnitKind::Program
+                ? "program"
+                : (s.runtimeUnit.kind == pmachine::RuntimeUnitKind::Daemon ? "daemon" : "service")
+        ) + "\",";
+        json += "\"id\":\"" + String(s.runtimeUnit.id.c_str()) + "\",";
+        json += "\"refreshMs\":" + String(s.runtimeUnit.refreshMs) + ",";
+        json += "\"loadedAtMs\":" + String(s.runtimeUnit.loadedAtMs) + ",";
+        json += "\"lastRefreshAtMs\":" + String(s.runtimeUnit.lastRefreshAtMs) + ",";
+        json += "\"resident\":" + String(s.runtimeUnit.resident ? "true" : "false");
+        json += "},";
+        json += "\"paging\":{";
+        json += "\"pageSizeBytes\":" + String((unsigned long)s.pagingConfig.pageSizeBytes) + ",";
+        json += "\"maxFrames\":" + String((unsigned long)s.pagingConfig.maxFrames) + ",";
+        json += "\"pageFaults\":" + String(s.pagingStats.pageFaults) + ",";
+        json += "\"evictions\":" + String(s.pagingStats.evictions) + ",";
+        json += "\"ffsReads\":" + String(s.pagingStats.ffsReads) + ",";
+        json += "\"cacheHits\":" + String(s.pagingStats.cacheHits);
+        json += "},";
+        json += "\"residentAssets\":[";
+        for (size_t i = 0; i < s.residentAssets.size(); ++i) {
+            if (i > 0) json += ",";
+            const auto& asset = s.residentAssets[i];
+            String domainName = "program-image";
+            if (asset.domain == pmachine::ResidentDomain::StringPool) domainName = "string-pool";
+            else if (asset.domain == pmachine::ResidentDomain::GlobalEnumeratedTypes) domainName = "global-enumerated-types";
+            else if (asset.domain == pmachine::ResidentDomain::GlobalTypes) domainName = "global-types";
+            else if (asset.domain == pmachine::ResidentDomain::MapperArtifacts) domainName = "mapper-artifacts";
+            json += "{";
+            json += "\"domain\":\"" + domainName + "\",";
+            json += "\"id\":\"" + String(asset.id.c_str()) + "\",";
+            json += "\"bytes\":" + String((unsigned long)asset.bytes) + ",";
+            json += "\"pinCount\":" + String(asset.pinCount) + ",";
+            json += "\"resident\":" + String(asset.resident ? "true" : "false");
+            json += "}";
+        }
+        json += "],";
         json += "\"breakpoints\":[";
         for (size_t i = 0; i < s.breakpoints.size(); ++i) {
             if (i > 0) json += ",";
@@ -1057,6 +1202,69 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         }
         bool ok = machine.loadProgram(pcode, file.c_str(), max);
         request->send(ok ? 200 : 500, "text/plain", ok ? "Loaded" : "Load failed");
+    });
+
+    // Explicit runtime unit load lifecycle (program/service/daemon)
+    server.on("/pmachine/unit/load", HTTP_POST, [&machine](AsyncWebServerRequest *request){
+        if (!request->hasParam("kind", true) || !request->hasParam("id", true)) {
+            request->send(400, "text/plain", "Missing kind or id param");
+            return;
+        }
+        String kind = request->getParam("kind", true)->value();
+        String id = request->getParam("id", true)->value();
+        uint32_t refreshMs = 0;
+        if (request->hasParam("refreshMs", true)) {
+            refreshMs = static_cast<uint32_t>(request->getParam("refreshMs", true)->value().toInt());
+        }
+        bool ok = machine.loadUnit(std::string(kind.c_str()), std::string(id.c_str()), refreshMs);
+        request->send(ok ? 200 : 500, "text/plain", ok ? "Unit loaded" : "Unit load failed");
+    });
+
+    server.on("/pmachine/unit/unload", HTTP_POST, [&machine](AsyncWebServerRequest *request){
+        bool ok = machine.unloadUnit();
+        request->send(ok ? 200 : 500, "text/plain", ok ? "Unit unloaded" : "Unit unload failed");
+    });
+
+    server.on("/pmachine/domain/load", HTTP_POST, [&machine](AsyncWebServerRequest *request){
+        if (!request->hasParam("domain", true) || !request->hasParam("id", true)) {
+            request->send(400, "text/plain", "Missing domain or id param");
+            return;
+        }
+        String domain = request->getParam("domain", true)->value();
+        String id = request->getParam("id", true)->value();
+        size_t bytes = 0;
+        bool pin = false;
+        if (request->hasParam("bytes", true)) {
+            bytes = static_cast<size_t>(request->getParam("bytes", true)->value().toInt());
+        }
+        if (request->hasParam("pin", true)) {
+            String pinText = toUpperCopy(trimCopy(request->getParam("pin", true)->value()));
+            pin = (pinText == "1" || pinText == "TRUE" || pinText == "YES" || pinText == "ON");
+        }
+        bool ok = machine.loadResidentDomain(std::string(domain.c_str()), std::string(id.c_str()), bytes, pin);
+        request->send(ok ? 200 : 500, "text/plain", ok ? "Domain loaded" : "Domain load failed");
+    });
+
+    server.on("/pmachine/domain/unload", HTTP_POST, [&machine](AsyncWebServerRequest *request){
+        if (!request->hasParam("domain", true) || !request->hasParam("id", true)) {
+            request->send(400, "text/plain", "Missing domain or id param");
+            return;
+        }
+        String domain = request->getParam("domain", true)->value();
+        String id = request->getParam("id", true)->value();
+        bool ok = machine.unloadResidentDomain(std::string(domain.c_str()), std::string(id.c_str()));
+        request->send(ok ? 200 : 404, "text/plain", ok ? "Domain unloaded" : "Domain asset not found");
+    });
+
+    server.on("/pmachine/memory/config", HTTP_POST, [&machine](AsyncWebServerRequest *request){
+        if (!request->hasParam("pageSizeBytes", true) || !request->hasParam("maxFrames", true)) {
+            request->send(400, "text/plain", "Missing pageSizeBytes or maxFrames param");
+            return;
+        }
+        size_t pageSize = static_cast<size_t>(request->getParam("pageSizeBytes", true)->value().toInt());
+        size_t maxFrames = static_cast<size_t>(request->getParam("maxFrames", true)->value().toInt());
+        machine.setMemoryConfig(pageSize, maxFrames);
+        request->send(200, "text/plain", "Memory config updated");
     });
 
     // PMachine run
@@ -1213,10 +1421,16 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         std::vector<pmachine::PInstruction> instructions = pmachine::loadTextPCode(std::string(text.c_str()));
         std::vector<pmachine::MappingDef> mappingDefs;
         String mappingError;
-        if (!loadProgramMapMappings(programMap, ffs, mappingDefs, mappingError)) {
+        ProgramMapMetadata metadata;
+        if (!loadProgramMapMappings(programMap, ffs, mappingDefs, mappingError, &metadata)) {
             request->send(404, "text/plain", mappingError);
             return;
         }
+        machine.setRuntimeUnit(
+            std::string(metadata.runtimeKind.c_str()),
+            std::string(metadata.runtimeId.c_str()),
+            metadata.runtimeRefreshMs
+        );
         machine.setMappings(mappingDefs);
         machine.clearRoutingDeliveries();
         machine.setRoutingContext(std::string(inputQueue.c_str()), std::string(message.c_str()));
@@ -1225,6 +1439,16 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         JsonDocument out;
         out["inputQueue"] = inputQueue;
         out["sourceMessage"] = message;
+        JsonObject runtime = out["runtimeUnit"].to<JsonObject>();
+        runtime["kind"] = metadata.runtimeKind;
+        runtime["id"] = metadata.runtimeId;
+        runtime["refreshMs"] = metadata.runtimeRefreshMs;
+        JsonObject policy = out["policy"].to<JsonObject>();
+        policy["hasCodeLibrarianRole"] = metadata.hasCodeLibrarianRole;
+        policy["hasLibraryBindings"] = metadata.hasLibraryBindings;
+        if (metadata.raw["interoperability"].is<JsonArrayConst>()) {
+            policy["interoperability"] = metadata.raw["interoperability"];
+        }
         JsonArray deliveries = out["deliveries"].to<JsonArray>();
         const std::vector<pmachine::RouteDelivery>& routed = machine.getRoutingDeliveries();
         for (const auto& d : routed) {

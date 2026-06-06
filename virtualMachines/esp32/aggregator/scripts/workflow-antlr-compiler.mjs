@@ -400,7 +400,60 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
   visitWorkflowStmt(ctx) {
     if (ctx.stepStmt()) return this.visit(ctx.stepStmt());
     if (ctx.ifStmt()) return this.visit(ctx.ifStmt());
+    if (ctx.cobeginStmt()) return this.visit(ctx.cobeginStmt());
+    if (ctx.tryStmt()) return this.visit(ctx.tryStmt());
     return null;
+  }
+
+  visitCobeginStmt(ctx) {
+    const modeCtx = ctx.cobeginMode();
+    const mode = modeCtx && modeCtx.SYNC() ? 'sync' : 'async';
+    const timeoutMs = mode === 'async' && modeCtx && modeCtx.NUMBER()
+      ? Math.max(1, Number(modeCtx.NUMBER().getText()))
+      : null;
+    const backoutOnError = Boolean(ctx.BACKOUT && ctx.BACKOUT());
+    const subflows = (ctx.subflowDecl() || []).map(subflowCtx => this.visit(subflowCtx));
+
+    return {
+      id: `cobegin-${ctx.start.tokenIndex}`,
+      action: 'cobegin',
+      mode,
+      timeoutMs,
+      backoutOnError,
+      subflows
+    };
+  }
+
+  visitSubflowDecl(ctx) {
+    const id = parseQuoted(ctx.quotedString().getText());
+    const steps = [];
+    for (const stmt of ctx.workflowStmt() || []) {
+      steps.push(this.visit(stmt));
+    }
+    return { id, steps };
+  }
+
+  visitTryStmt(ctx) {
+    const catchNode = typeof ctx.CATCH === 'function' ? ctx.CATCH() : null;
+    const hasCatch = Boolean(catchNode);
+    const statements = ctx.workflowStmt ? ctx.workflowStmt() : [];
+
+    let split = statements.length;
+    if (hasCatch) {
+      const catchToken = catchNode.symbol;
+      split = statements.findIndex(stmt => stmt.start && stmt.start.tokenIndex > catchToken.tokenIndex);
+      if (split < 0) split = statements.length;
+    }
+
+    const body = statements.slice(0, split).map(stmt => this.visit(stmt));
+    const onError = hasCatch ? statements.slice(split).map(stmt => this.visit(stmt)) : [];
+
+    return {
+      id: `try-${ctx.start.tokenIndex}`,
+      action: 'try',
+      body,
+      onError
+    };
   }
 
   visitStepStmt(ctx) {

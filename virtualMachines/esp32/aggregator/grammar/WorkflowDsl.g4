@@ -1,5 +1,7 @@
 grammar WorkflowDsl;
 
+options { caseInsensitive = true; }
+
 program
   : item* EOF
   ;
@@ -30,6 +32,25 @@ workflowDecl
 workflowStmt
   : stepStmt
   | ifStmt
+  | cobeginStmt
+  | tryStmt
+  ;
+
+cobeginStmt
+  : COBEGIN cobeginMode (ON ERROR BACKOUT)? BEGIN subflowDecl+ COEND SEMICOLON
+  ;
+
+cobeginMode
+  : SYNC
+  | ASYNC WAIT NUMBER
+  ;
+
+subflowDecl
+  : SUBFLOW quotedString BEGIN workflowStmt* END SEMICOLON
+  ;
+
+tryStmt
+  : TRY BEGIN workflowStmt* END (CATCH BEGIN workflowStmt* END)? ENDTRY SEMICOLON
   ;
 
 stepStmt
@@ -89,6 +110,17 @@ stepToken
   | SYNCHPOINT
   | DELIVERABLE
   | RESOURCE
+  | COBEGIN
+  | COEND
+  | SUBFLOW
+  | SYNC
+  | ASYNC
+  | ON
+  | ERROR
+  | BACKOUT
+  | TRY
+  | CATCH
+  | ENDTRY
   ;
 
 ifStmt
@@ -156,6 +188,17 @@ TASK: 'TASK';
 SYNCHPOINT: 'SYNCHPOINT';
 DELIVERABLE: 'DELIVERABLE';
 RESOURCE: 'RESOURCE';
+COBEGIN: 'COBEGIN';
+COEND: 'COEND';
+SUBFLOW: 'SUBFLOW';
+SYNC: 'SYNC';
+ASYNC: 'ASYNC';
+ON: 'ON';
+ERROR: 'ERROR';
+BACKOUT: 'BACKOUT';
+TRY: 'TRY';
+CATCH: 'CATCH';
+ENDTRY: 'ENDTRY';
 IF: 'IF';
 FIELD: 'FIELD';
 EQUALS: 'EQUALS';

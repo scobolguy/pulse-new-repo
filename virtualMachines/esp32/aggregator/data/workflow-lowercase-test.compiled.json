@@ -1,0 +1,31 @@
+{
+  "version": 4,
+  "compiledAt": "2026-06-04T15:19:14.521Z",
+  "symbols": {
+    "queues": [
+      {
+        "symbol": "in",
+        "queueName": "q.in",
+        "dataTypeIds": [
+          "text-string"
+        ],
+        "dataTypeId": "text-string"
+      }
+    ],
+    "files": [],
+    "apis": []
+  },
+  "workflows": [
+    {
+      "id": "lowercase",
+      "steps": [
+        {
+          "id": "s1",
+          "action": "set_state",
+          "key": "alpha",
+          "value": "1"
+        }
+      ]
+    }
+  ]
+}

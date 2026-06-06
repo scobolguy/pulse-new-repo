@@ -26,7 +26,30 @@
    - Extension points
    - **Perfect for**: Building on top / extending
 
-4. **[USAGE_EXAMPLES.ts](USAGE_EXAMPLES.ts)**
+4. **[API_REFERENCE.md](API_REFERENCE.md)**
+   - Unified API documentation across graph service + aggregator develop workspace + platform domains
+   - Route inventory guidance and maintenance commands
+   - Drag-and-drop FSM/workflow tool location
+   - **Perfect for**: API consumers and integration work
+
+### Language Guides
+5. **[PASCALISH_USER_GUIDE.md](PASCALISH_USER_GUIDE.md)**
+   - Pascalish authoring workflow
+   - Compile endpoint usage
+   - Interop patterns and troubleshooting
+
+6. **[COBOLISH_USER_GUIDE.md](COBOLISH_USER_GUIDE.md)**
+   - COBOLISH structure and examples
+   - Compile summary interpretation
+   - CALL/EVALUATE and interop tips
+
+7. **[WFL_USER_GUIDE.md](WFL_USER_GUIDE.md)**
+   - WFL workflow authoring guide
+   - Symbol/step patterns
+   - Runtime usage notes and troubleshooting
+
+### Examples
+8. **[USAGE_EXAMPLES.ts](USAGE_EXAMPLES.ts)**
    - 6 complete, runnable examples:
      1. Payment Routing Workflow
      2. Task Chart for Parallel Processing
@@ -37,7 +60,7 @@
    - **Perfect for**: Learning by example
 
 ### Source Code
-5. **[GraphService.ts](GraphService.ts)**
+9. **[GraphService.ts](GraphService.ts)**
    - Core graph model (600 lines)
    - Node types registry
    - Properties & actions system
@@ -45,14 +68,14 @@
    - Mermaid export
    - Full TypeScript types
 
-6. **[DSLGenerator.ts](DSLGenerator.ts)**
+10. **[DSLGenerator.ts](DSLGenerator.ts)**
    - Convert graphs to Pulse0 Pascal DSL (400 lines)
    - Variable declaration generation
    - Procedure declaration generation
    - Control flow handling
    - Comments & formatting
 
-7. **[PcodeGenerator.ts](PcodeGenerator.ts)**
+11. **[PcodeGenerator.ts](PcodeGenerator.ts)**
    - Compile graphs to bytecode (450 lines)
    - Label assignment for jumps
    - Instruction emission
@@ -60,7 +83,7 @@
    - Queue routing operations
    - Full pcode instruction set
 
-8. **[visual-workflow-editor.html](visual-workflow-editor.html)**
+12. **[visual-workflow-editor.html](visual-workflow-editor.html)**
    - Interactive drag-drop UI (700 lines)
    - Canvas rendering
    - Mermaid live preview
@@ -68,7 +91,7 @@
    - Import/export functionality
    - Responsive design
 
-9. **[graph-service-api.ts](graph-service-api.ts)**
+13. **[graph-service-api.ts](graph-service-api.ts)**
    - Express REST API server (450 lines)
    - Full CRUD endpoints
    - Code generation endpoints

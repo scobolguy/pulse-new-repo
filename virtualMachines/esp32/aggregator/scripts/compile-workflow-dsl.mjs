@@ -323,6 +323,56 @@ function parseIfHeader(stepLine, ifCounter) {
   };
 }
 
+function parseCobeginHeader(stepLine, counterRef) {
+  const syncMatch = stepLine.match(/^COBEGIN\s+SYNC(\s+ON\s+ERROR\s+BACKOUT)?\s+BEGIN$/i);
+  if (syncMatch) {
+    counterRef.value += 1;
+    return {
+      id: `cobegin-${counterRef.value}`,
+      action: 'cobegin',
+      mode: 'sync',
+      timeoutMs: null,
+      backoutOnError: Boolean(syncMatch[1]),
+      subflows: []
+    };
+  }
+
+  const asyncMatch = stepLine.match(/^COBEGIN\s+ASYNC\s+WAIT\s+(\d+)(\s+ON\s+ERROR\s+BACKOUT)?\s+BEGIN$/i);
+  if (asyncMatch) {
+    counterRef.value += 1;
+    return {
+      id: `cobegin-${counterRef.value}`,
+      action: 'cobegin',
+      mode: 'async',
+      timeoutMs: Math.max(1, Number(asyncMatch[1])),
+      backoutOnError: Boolean(asyncMatch[2]),
+      subflows: []
+    };
+  }
+
+  return null;
+}
+
+function parseSubflowHeader(stepLine) {
+  const match = stepLine.match(/^SUBFLOW\s+("[^"]+"|'[^']+')\s+BEGIN$/i);
+  if (!match) return null;
+  return {
+    id: parseQuoted(match[1]),
+    steps: []
+  };
+}
+
+function parseTryHeader(stepLine, counterRef) {
+  if (!isLine(stepLine, 'TRY BEGIN')) return null;
+  counterRef.value += 1;
+  return {
+    id: `try-${counterRef.value}`,
+    action: 'try',
+    body: [],
+    onError: []
+  };
+}
+
 function isLine(value, expected) {
   return new RegExp(`^${expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(String(value || ''));
 }
@@ -484,6 +534,54 @@ function parseStatementAt(lines, index, ifCounterRef) {
       throw new Error(`IF block ${ifHeader.id} is missing ENDIF;`);
     }
     return { step: ifHeader, nextIndex: cursor + 1 };
+  }
+
+  const cobegin = parseCobeginHeader(stepLine, ifCounterRef);
+  if (cobegin) {
+    let cursor = index + 1;
+    while (cursor < lines.length && !isLine(lines[cursor], 'COEND;')) {
+      const subflow = parseSubflowHeader(lines[cursor]);
+      if (!subflow) {
+        throw new Error(`COBEGIN block ${cobegin.id} expects SUBFLOW ... BEGIN, got: ${lines[cursor]}`);
+      }
+
+      const parsedSubflow = parseWorkflowStatements(lines, cursor + 1, ifCounterRef, ['END;']);
+      if (!isLine(parsedSubflow.stop, 'END;')) {
+        throw new Error(`SUBFLOW ${subflow.id} is missing END;`);
+      }
+
+      subflow.steps = parsedSubflow.steps;
+      cobegin.subflows.push(subflow);
+      cursor = parsedSubflow.index + 1;
+    }
+
+    if (!isLine(lines[cursor], 'COEND;')) {
+      throw new Error(`COBEGIN block ${cobegin.id} is missing COEND;`);
+    }
+    if (cobegin.subflows.length === 0) {
+      throw new Error(`COBEGIN block ${cobegin.id} must contain at least one SUBFLOW`);
+    }
+    return { step: cobegin, nextIndex: cursor + 1 };
+  }
+
+  const tryHeader = parseTryHeader(stepLine, ifCounterRef);
+  if (tryHeader) {
+    const bodyParsed = parseWorkflowStatements(lines, index + 1, ifCounterRef, ['CATCH BEGIN', 'ENDTRY;']);
+    tryHeader.body = bodyParsed.steps;
+
+    if (isLine(bodyParsed.stop, 'CATCH BEGIN')) {
+      const catchParsed = parseWorkflowStatements(lines, bodyParsed.index + 1, ifCounterRef, ['ENDTRY;']);
+      tryHeader.onError = catchParsed.steps;
+      if (!isLine(catchParsed.stop, 'ENDTRY;')) {
+        throw new Error(`TRY block ${tryHeader.id} is missing ENDTRY;`);
+      }
+      return { step: tryHeader, nextIndex: catchParsed.index + 1 };
+    }
+
+    if (!isLine(bodyParsed.stop, 'ENDTRY;')) {
+      throw new Error(`TRY block ${tryHeader.id} is missing ENDTRY;`);
+    }
+    return { step: tryHeader, nextIndex: bodyParsed.index + 1 };
   }
 
   throw new Error(`Invalid workflow step: ${stepLine}`);

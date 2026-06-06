@@ -1,18 +1,44 @@
 grammar PascalishRouterMapper;
 
+options { caseInsensitive = true; }
+
 program
   : statement* EOF
   ;
 
 statement
-  : serviceDecl
+  : runtimeDecl
+  | roleDecl
   | varDecl
+  | libraryDecl
+  | useDecl
+  | interopDecl
   | routerDecl
   | mapperDecl
+  | blockStmt
+  ;
+
+roleDecl
+  : ROLE roleName SEMICOLON
+  ;
+
+roleName
+  : CODE_LIBRARIAN
+  | IDENT
+  ;
+
+runtimeDecl
+  : serviceDecl
+  | programDecl
+  | daemonDecl
+  ;
+
+blockStmt
+  : BEGIN pl0Element* END (SEMICOLON | DOT)?
   ;
 
 varDecl
-  : VAR IDENT COLON stringOrIdent varSource? SEMICOLON
+  : VAR IDENT COLON typeRef varSource? SEMICOLON
   ;
 
 varSource
@@ -21,7 +47,49 @@ varSource
   ;
 
 serviceDecl
-  : SERVICE stringValue SEMICOLON
+  : SERVICE stringOrIdent SEMICOLON
+  ;
+
+programDecl
+  : PROGRAM stringOrIdent SEMICOLON
+  ;
+
+daemonDecl
+  : DAEMON stringOrIdent daemonRefresh? SEMICOLON
+  ;
+
+daemonRefresh
+  : REFRESH NUMBER daemonRefreshUnit?
+  ;
+
+daemonRefreshUnit
+  : MS
+  | S
+  | M
+  ;
+
+libraryDecl
+  : LIBRARY stringOrIdent FROM librarySource SEMICOLON
+  ;
+
+librarySource
+  : LIBRARIAN
+  | stringOrIdent
+  ;
+
+useDecl
+  : USE stringOrIdent (AS IDENT)? SEMICOLON
+  ;
+
+interopDecl
+  : INTEROP interopKind stringOrIdent (AS IDENT)? SEMICOLON
+  ;
+
+interopKind
+  : WFL
+  | WORKFLOW
+  | COBOLISH
+  | PASCALISH
   ;
 
 routerDecl
@@ -39,12 +107,12 @@ outputDecl
   ;
 
 outputTypeMeta
-  : TYPE stringValue
-  | TYPES stringList
+  : TYPE typeRef
+  | TYPES typeRefList
   ;
 
 mapperDecl
-  : MAPPER stringOrIdent SOURCE stringValue TARGET stringValue mapperHeaderProp* BEGIN mapDecl* END SEMICOLON
+  : MAPPER stringOrIdent SOURCE typeRef TARGET typeRef mapperHeaderProp* BEGIN mapDecl* END SEMICOLON
   ;
 
 mapperHeaderProp
@@ -59,6 +127,19 @@ mapDecl
 stringList
   : stringValue
   | LPAREN stringValue (COMMA stringValue)* RPAREN
+  ;
+
+typeRefList
+  : typeRef
+  | LPAREN typeRef (COMMA typeRef)* RPAREN
+  ;
+
+typeRef
+  : stringOrIdent genericTypeArgs?
+  ;
+
+genericTypeArgs
+  : LT typeRef (COMMA typeRef)* GT
   ;
 
 stringOrIdent
@@ -110,6 +191,18 @@ pl0Element
   | FOR
   | CALL
   | NOT
+  | COBEGIN
+  | COEND
+  | SUBFLOW
+  | SYNC
+  | ASYNC
+  | WAIT
+  | ON
+  | ERROR
+  | BACKOUT
+  | TRY
+  | CATCH
+  | ENDTRY
   | TRUE
   | FALSE
   | NUMBER
@@ -118,6 +211,22 @@ pl0Element
   ;
 
 SERVICE: 'SERVICE';
+PROGRAM: 'PROGRAM';
+DAEMON: 'DAEMON';
+REFRESH: 'REFRESH';
+MS: 'MS';
+S: 'S';
+M: 'M';
+LIBRARY: 'LIBRARY';
+USE: 'USE';
+AS: 'AS';
+INTEROP: 'INTEROP';
+ROLE: 'ROLE';
+CODE_LIBRARIAN: 'CODE_LIBRARIAN';
+WFL: 'WFL';
+WORKFLOW: 'WORKFLOW';
+COBOLISH: 'COBOLISH';
+PASCALISH: 'PASCALISH';
 ROUTER: 'ROUTER';
 MAPPER: 'MAPPER';
 INPUT: 'INPUT';
@@ -145,6 +254,18 @@ DO: 'DO';
 FOR: 'FOR';
 CALL: 'CALL';
 NOT: 'NOT';
+COBEGIN: 'COBEGIN';
+COEND: 'COEND';
+SUBFLOW: 'SUBFLOW';
+SYNC: 'SYNC';
+ASYNC: 'ASYNC';
+WAIT: 'WAIT';
+ON: 'ON';
+ERROR: 'ERROR';
+BACKOUT: 'BACKOUT';
+TRY: 'TRY';
+CATCH: 'CATCH';
+ENDTRY: 'ENDTRY';
 VAR: 'VAR';
 FROM: 'FROM';
 LIBRARIAN: 'LIBRARIAN';
@@ -160,6 +281,7 @@ LT: '<';
 GT: '>';
 COMMA: ',';
 SEMICOLON: ';';
+DOT: '.';
 ASSIGN: ':=';
 COLON: ':';
 CONCAT: '||';
@@ -167,7 +289,7 @@ LE: '<=';
 GE: '>=';
 NEQ: '<>';
 
-IDENT: [a-zA-Z_][a-zA-Z0-9_-]*;
+IDENT: [a-z_][a-z0-9_-]*;
 NUMBER: [0-9]+;
 STRING: '"' (~["\\\r\n] | '\\' .)* '"' | '\'' (~['\\\r\n] | '\\' .)* '\'';
 

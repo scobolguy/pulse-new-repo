@@ -1,0 +1,14 @@
+{
+  "queues": [
+    {
+      "symbol": "in",
+      "queueName": "q.in",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "dataTypeId": "text-string"
+    }
+  ],
+  "files": [],
+  "apis": []
+}

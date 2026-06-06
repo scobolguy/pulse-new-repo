@@ -2341,6 +2341,22 @@ function App() {
     setSelectedFsmId(String(fsmId || 'startup-fsm'));
   }
 
+  function openDevelopDebugger(payload = {}) {
+    openFsmRunner(String(payload?.fsmId || 'startup-fsm'));
+  }
+
+  useEffect(() => {
+    function handleOpenDebuggerEvent(event) {
+      const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+      openDevelopDebugger(detail);
+    }
+
+    window.addEventListener('pulse:open-debugger', handleOpenDebuggerEvent);
+    return () => {
+      window.removeEventListener('pulse:open-debugger', handleOpenDebuggerEvent);
+    };
+  }, []);
+
   function handleAreaIconContextMenu(event, areaId) {
     event.preventDefault();
     setArea(areaId);
@@ -2398,6 +2414,7 @@ function App() {
         <DevelopWorkspace
           createRequest={developCreateRequest}
           onCreateRequestHandled={() => setDevelopCreateRequest(null)}
+          onOpenDebugger={openDevelopDebugger}
           themeStyle={resolvedWindowStyle}
         />
       );

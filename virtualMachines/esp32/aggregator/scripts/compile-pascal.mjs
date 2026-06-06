@@ -34,7 +34,19 @@ const KEYWORDS = new Set([
   'DO',
   'FOR',
   'CALL',
-  'NOT'
+  'NOT',
+  'COBEGIN',
+  'COEND',
+  'SUBFLOW',
+  'SYNC',
+  'ASYNC',
+  'WAIT',
+  'ON',
+  'ERROR',
+  'BACKOUT',
+  'TRY',
+  'CATCH',
+  'ENDTRY'
 ]);
 
 class DSLTokenizer {
@@ -554,6 +566,16 @@ class DSLParser {
 
 function toRouterRules(ast) {
   const now = new Date().toISOString();
+
+  const stringifyTypeRef = (typeRef) => {
+    if (!typeRef || typeof typeRef !== 'object') return '';
+    const id = String(typeRef.id || '').trim();
+    const genericArgs = Array.isArray(typeRef.genericArgs) ? typeRef.genericArgs : [];
+    if (genericArgs.length === 0) return id;
+    const renderedArgs = genericArgs.map(arg => stringifyTypeRef(arg)).filter(Boolean);
+    return renderedArgs.length > 0 ? `${id}<${renderedArgs.join(',')}>` : id;
+  };
+
   return ast.routers.map(router => {
     return {
       id: router.id,
@@ -567,6 +589,10 @@ function toRouterRules(ast) {
         ...(out.dataTypeIds && out.dataTypeIds.length > 0
           ? { dataTypeIds: out.dataTypeIds, dataTypeId: out.dataTypeIds[0] }
           : (out.dataTypeId ? { dataTypeId: out.dataTypeId, dataTypeIds: [out.dataTypeId] } : {})),
+        ...(out.dataType ? { dataTypeRef: out.dataType, dataTypeSignature: stringifyTypeRef(out.dataType) } : {}),
+        ...(out.dataTypes && out.dataTypes.length > 0
+          ? { dataTypeRefs: out.dataTypes, dataTypeSignatures: out.dataTypes.map(item => stringifyTypeRef(item)) }
+          : {}),
         whenRule: out.whenRule,
         transformRule: out.transformRule
       })),
@@ -578,12 +604,26 @@ function toRouterRules(ast) {
 
 function toDataMappings(ast) {
   const now = new Date().toISOString();
+
+  const stringifyTypeRef = (typeRef) => {
+    if (!typeRef || typeof typeRef !== 'object') return '';
+    const id = String(typeRef.id || '').trim();
+    const genericArgs = Array.isArray(typeRef.genericArgs) ? typeRef.genericArgs : [];
+    if (genericArgs.length === 0) return id;
+    const renderedArgs = genericArgs.map(arg => stringifyTypeRef(arg)).filter(Boolean);
+    return renderedArgs.length > 0 ? `${id}<${renderedArgs.join(',')}>` : id;
+  };
+
   return ast.mappers.map(mapper => {
     return {
       id: mapper.id,
       name: mapper.id,
       sourceTypeId: mapper.sourceTypeId,
       targetTypeId: mapper.targetTypeId,
+      sourceTypeRef: mapper.sourceType || null,
+      targetTypeRef: mapper.targetType || null,
+      sourceTypeSignature: stringifyTypeRef(mapper.sourceType),
+      targetTypeSignature: stringifyTypeRef(mapper.targetType),
       enabled: mapper.enabled,
       description: mapper.description,
       items: mapper.maps.map(item => ({
@@ -624,12 +664,22 @@ export function compileRouterMapperDSL(sourceText) {
   const ast = compiledAntlr.ast;
   const routerRules = toRouterRules(ast);
   const dataMappings = toDataMappings(ast);
+  const runtimeUnit = compiledAntlr.runtimeUnit || ast.runtimeUnit || {
+    kind: 'service',
+    id: ast.serviceId || 'default-router-service',
+    refreshMs: null
+  };
 
   return {
     version: 1,
     compiledAt: new Date().toISOString(),
     serviceId: ast.serviceId || 'default-router-service',
+    runtimeUnit,
     ast,
+    roles: compiledAntlr.roles || ast.roles || [],
+    codeLibraries: compiledAntlr.codeLibraries || ast.codeLibraries || [],
+    uses: compiledAntlr.uses || ast.uses || [],
+    interoperability: compiledAntlr.interoperability || ast.interop || [],
     variableDeclarations: compiledAntlr.variableDeclarations || ast.variables || [],
     routerRules,
     dataMappings

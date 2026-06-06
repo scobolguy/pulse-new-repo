@@ -30,6 +30,15 @@ function parseArgs(argv) {
   return args;
 }
 
+function normalizeRuntimeUnit(runtimeUnit, fallbackServiceId = 'default-router-service') {
+  const kindRaw = String(runtimeUnit?.kind || '').trim().toLowerCase();
+  const kind = (kindRaw === 'program' || kindRaw === 'daemon' || kindRaw === 'service') ? kindRaw : 'service';
+  const id = String(runtimeUnit?.id || fallbackServiceId || 'default-router-service').trim() || 'default-router-service';
+  const refreshMsRaw = Number(runtimeUnit?.refreshMs || 0);
+  const refreshMs = kind === 'daemon' ? (refreshMsRaw > 0 ? Math.floor(refreshMsRaw) : 1000) : null;
+  return { kind, id, refreshMs };
+}
+
 function trimCopy(s) {
   return String(s || '').trim();
 }
@@ -536,6 +545,8 @@ async function runSingleMessage(args) {
   const opcodeMap = await loadOpcodeMap();
   const mappingsById = parseProgramMapMappings(programMap);
   const instructions = parsePcode(pcodeText);
+  const runtimeUnit = normalizeRuntimeUnit(programMap?.runtimeUnit, programMap?.serviceId);
+  const loadedAt = new Date().toISOString();
   const result = executeProgram({
     instructions,
     opcodeMap,
@@ -546,6 +557,13 @@ async function runSingleMessage(args) {
 
   const out = {
     runtime: 'js-pmachine',
+    lifecycle: {
+      unitKind: runtimeUnit.kind,
+      unitId: runtimeUnit.id,
+      daemonRefreshMs: runtimeUnit.refreshMs,
+      loadedAt,
+      unloadedAt: new Date().toISOString()
+    },
     pcodePath: path.relative(process.cwd(), pcodePath),
     programMapPath: path.relative(process.cwd(), programMapPath),
     inputQueue: args.inputQueue,
@@ -569,6 +587,7 @@ async function pollAndRoute(args) {
   const opcodeMap = await loadOpcodeMap();
   const mappingsById = parseProgramMapMappings(programMap);
   const instructions = parsePcode(pcodeText);
+  const runtimeUnit = normalizeRuntimeUnit(programMap?.runtimeUnit, programMap?.serviceId);
   
   // Initialize queue manager
   const qm = new QueueManager('pcode-router', queuePath);
@@ -580,10 +599,20 @@ async function pollAndRoute(args) {
   
   console.log(`[POLLER] Starting on input queue: ${args.inputQueue}, interval: ${args.pollInterval}ms`);
   console.log(`[POLLER] Queue path: ${queuePath}`);
+  console.log(`[LIFECYCLE] Loaded ${runtimeUnit.kind} '${runtimeUnit.id}'`);
+  if (runtimeUnit.kind === 'daemon') {
+    console.log(`[LIFECYCLE] Daemon refresh cycle: ${runtimeUnit.refreshMs}ms`);
+  }
   
   let messageCount = 0;
+  let lastRefreshAt = Date.now();
   
   while (true) {
+    if (runtimeUnit.kind === 'daemon' && (Date.now() - lastRefreshAt) >= runtimeUnit.refreshMs) {
+      lastRefreshAt = Date.now();
+      console.log(`[DAEMON] Refresh cycle tick at ${new Date(lastRefreshAt).toISOString()}`);
+    }
+
     const msg = qm.dequeue(args.inputQueue, 'pcode-router');
     
     if (!msg) {

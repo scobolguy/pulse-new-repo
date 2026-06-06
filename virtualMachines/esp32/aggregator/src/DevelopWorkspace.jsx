@@ -9,15 +9,103 @@ import {
   WORKFLOW_KEYWORDS
 } from './documentRegistry';
 import { initializePascalishLanguage } from './pascalishLanguage';
-import StartupFsmMonitor from './StartupFsmMonitor';
 
 const LOCAL_STORAGE_KEY = 'pulse-develop-workspace-documents';
+const EDITOR_LINE_HEIGHT = 22;
+const MIN_VISIBLE_EDITOR_LINES = 24;
+const MIN_EDITOR_HEIGHT = (EDITOR_LINE_HEIGHT * MIN_VISIBLE_EDITOR_LINES) + 28;
 const workflowState = {
   initialized: false,
-  completionDisposable: null
+  completionDisposable: null,
+  validationDisposable: null,
+  modelDisposables: new Map()
 };
 
-function initializeWorkflowLanguage(monaco) {
+function buildWorkflowMarkers(monaco, model, typeFieldMapRef) {
+  const content = model.getValue();
+  const lines = content.split(/\r?\n/);
+  const markers = [];
+
+  const knownTypeFields = Array.from(new Set(
+    Object.values(typeFieldMapRef.current || {})
+      .flatMap((paths) => Array.isArray(paths) ? paths : [])
+      .map((pathValue) => String(pathValue || '').trim())
+      .filter(Boolean)
+  ));
+
+  const stateFields = Array.from(new Set(
+    Array.from(content.matchAll(/\bSTEP\s+("[^"]+"|'[^']+')\s+SET\s+STATE\s+("[^"]+"|'[^']+')/gi))
+      .map((match) => String(match?.[2] || '').replace(/^['"]|['"]$/g, ''))
+      .filter(Boolean)
+  ));
+
+  const knownFields = new Set([...knownTypeFields, ...stateFields]);
+  if (knownFields.size === 0) return markers;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = String(lines[index] || '');
+    const ifFieldMatch = line.match(/\bIF\s+FIELD\s+("[^"]+"|'[^']+')/i);
+    if (!ifFieldMatch) continue;
+
+    const rawField = String(ifFieldMatch[1] || '');
+    const fieldPath = rawField.replace(/^['"]|['"]$/g, '');
+    if (!fieldPath || knownFields.has(fieldPath)) continue;
+
+    const start = line.indexOf(rawField);
+    const startColumn = start >= 0 ? start + 1 : 1;
+    markers.push({
+      severity: monaco.MarkerSeverity.Warning,
+      message: `Unknown FIELD path '${fieldPath}'.`,
+      startLineNumber: index + 1,
+      endLineNumber: index + 1,
+      startColumn,
+      endColumn: startColumn + rawField.length
+    });
+  }
+
+  return markers;
+}
+
+function attachWorkflowValidation(monaco, model, typeFieldMapRef) {
+  if (!model || model.getLanguageId() !== 'workflow-dsl') return;
+  const key = model.uri.toString();
+
+  const existing = workflowState.modelDisposables.get(key);
+  if (existing) {
+    existing.dispose();
+    workflowState.modelDisposables.delete(key);
+  }
+
+  const runValidation = () => {
+    const markers = buildWorkflowMarkers(monaco, model, typeFieldMapRef);
+    monaco.editor.setModelMarkers(model, 'workflow-dsl-validation', markers);
+  };
+
+  runValidation();
+
+  const contentDisposable = model.onDidChangeContent(runValidation);
+  const languageDisposable = model.onDidChangeLanguage(() => {
+    if (model.getLanguageId() !== 'workflow-dsl') {
+      monaco.editor.setModelMarkers(model, 'workflow-dsl-validation', []);
+      const active = workflowState.modelDisposables.get(key);
+      if (active) {
+        active.dispose();
+        workflowState.modelDisposables.delete(key);
+      }
+      return;
+    }
+    runValidation();
+  });
+
+  workflowState.modelDisposables.set(key, {
+    dispose() {
+      contentDisposable.dispose();
+      languageDisposable.dispose();
+    }
+  });
+}
+
+function initializeWorkflowLanguage(monaco, typeFieldMapRef = { current: {} }) {
   if (!workflowState.initialized) {
     monaco.languages.register({ id: 'workflow-dsl' });
 
@@ -82,6 +170,38 @@ function initializeWorkflowLanguage(monaco) {
         range
       }));
 
+      const content = model.getValue();
+      const activeLine = String(model.getLineContent(position.lineNumber) || '');
+      const beforeCursor = activeLine.slice(0, Math.max(0, position.column - 1));
+
+      const stateFields = Array.from(new Set(
+        Array.from(content.matchAll(/\bSTEP\s+("[^"]+"|'[^']+')\s+SET\s+STATE\s+("[^"]+"|'[^']+')/gi))
+          .map((match) => String(match?.[2] || '').replace(/^['"]|['"]$/g, ''))
+          .filter(Boolean)
+      ));
+
+      const knownTypeFields = Array.from(new Set(
+        Object.values(typeFieldMapRef.current || {})
+          .flatMap((paths) => Array.isArray(paths) ? paths : [])
+          .map((pathValue) => String(pathValue || '').trim())
+          .filter(Boolean)
+      ));
+
+      let fieldCandidates = [];
+      if (/\bIF\s+FIELD\s+"[^"]*$/i.test(beforeCursor) || /\bIF\s+FIELD\s+'[^']*$/i.test(beforeCursor)) {
+        fieldCandidates = knownTypeFields;
+      } else if (/\bSET\s+STATE\s+"[^"]*$/i.test(beforeCursor) || /\bSET\s+STATE\s+'[^']*$/i.test(beforeCursor)) {
+        fieldCandidates = Array.from(new Set([...stateFields, ...knownTypeFields]));
+      }
+
+      const fieldItems = fieldCandidates.map((fieldPath) => ({
+        label: fieldPath,
+        kind: monaco.languages.CompletionItemKind.Field,
+        insertText: fieldPath,
+        detail: 'Known field path',
+        range
+      }));
+
       const snippetItems = [
         {
           label: 'workflow-skeleton',
@@ -95,14 +215,54 @@ function initializeWorkflowLanguage(monaco) {
           ].join('\n'),
           detail: 'Workflow skeleton',
           range
+        },
+        {
+          label: 'cobegin-sync',
+          kind: monaco.languages.CompletionItemKind.Snippet,
+          insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          insertText: [
+            'COBEGIN SYNC ON ERROR BACKOUT BEGIN',
+            '  SUBFLOW "${1:subflow-a}" BEGIN',
+            '    ${2:STEP "id" SET STATE "state.key" = "value";}',
+            '  END;',
+            'COEND;'
+          ].join('\n'),
+          detail: 'Synchronous COBEGIN block',
+          range
+        },
+        {
+          label: 'cobegin-async',
+          kind: monaco.languages.CompletionItemKind.Snippet,
+          insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          insertText: [
+            'COBEGIN ASYNC WAIT ${1:5000} ON ERROR BACKOUT BEGIN',
+            '  SUBFLOW "${2:subflow-a}" BEGIN',
+            '    ${3:STEP "id" WAIT 1000;}',
+            '  END;',
+            'COEND;'
+          ].join('\n'),
+          detail: 'Asynchronous COBEGIN block with timeout',
+          range
         }
       ];
 
       return {
-        suggestions: [...snippetItems, ...keywordItems]
+        suggestions: [...fieldItems, ...snippetItems, ...keywordItems]
       };
     }
   });
+
+  if (workflowState.validationDisposable) {
+    workflowState.validationDisposable.dispose();
+  }
+
+  workflowState.validationDisposable = monaco.editor.onDidCreateModel((model) => {
+    attachWorkflowValidation(monaco, model, typeFieldMapRef);
+  });
+
+  for (const model of monaco.editor.getModels()) {
+    attachWorkflowValidation(monaco, model, typeFieldMapRef);
+  }
 }
 
 function getEditorDescriptor(fileName) {
@@ -141,7 +301,7 @@ function saveLocalDocuments(documents) {
   localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(documents));
 }
 
-export default function DevelopWorkspace({ createRequest, onCreateRequestHandled, themeStyle = 'standard' }) {
+export default function DevelopWorkspace({ createRequest, onCreateRequestHandled, onOpenDebugger }) {
   const [files, setFiles] = useState([]);
   const [selectedFileName, setSelectedFileName] = useState('');
   const [openFileNames, setOpenFileNames] = useState([]);
@@ -152,12 +312,110 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [storageMode, setStorageMode] = useState('remote');
-  const [showStartupMonitor, setShowStartupMonitor] = useState(true);
+  const [fileMenuOpen, setFileMenuOpen] = useState(false);
+  const [runMenuOpen, setRunMenuOpen] = useState(false);
+  const [showOpenPicker, setShowOpenPicker] = useState(false);
+  const showExplorer = false;
   const handledCreateRequestKeyRef = useRef('');
+  const typeNamesRef = useRef([]);
+  const typeFieldMapRef = useRef({});
+  const menuPanelStyle = {
+    position: 'absolute',
+    top: 34,
+    left: 0,
+    zIndex: 20,
+    minWidth: 220,
+    border: '1px solid rgba(148, 163, 184, 0.45)',
+    borderRadius: 10,
+    background: '#0b1220',
+    padding: 8,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+    boxShadow: '0 12px 28px rgba(2, 6, 23, 0.55)'
+  };
+  const menuItemStyle = {
+    textAlign: 'left',
+    border: '1px solid rgba(148, 163, 184, 0.35)',
+    borderRadius: 8,
+    background: '#1e293b',
+    color: '#f8fafc',
+    padding: '8px 10px',
+    fontSize: 13,
+    fontWeight: 600,
+    lineHeight: 1.3
+  };
 
-  const selectedFile = useMemo(() => {
-    return files.find((item) => item.name === selectedFileName) || null;
-  }, [files, selectedFileName]);
+  useEffect(() => {
+    let cancelled = false;
+
+    function collectPathsFromSchemaNode(node, prefix = '', out = []) {
+      if (!node || typeof node !== 'object') return out;
+      const rawName = String(node.name || '').trim();
+      const normalizedName = rawName && rawName !== 'root' ? rawName : '';
+      const nextPrefix = normalizedName
+        ? (prefix ? `${prefix}.${normalizedName}` : normalizedName)
+        : prefix;
+      if (nextPrefix) out.push(nextPrefix);
+      for (const child of Array.isArray(node.children) ? node.children : []) {
+        collectPathsFromSchemaNode(child, nextPrefix, out);
+      }
+      return out;
+    }
+
+    function buildTypeFieldMap(schemas) {
+      const map = {};
+      for (const schema of Array.isArray(schemas) ? schemas : []) {
+        const typeId = String(schema?.typeId || '').trim().toLowerCase();
+        if (!typeId) continue;
+        if (!map[typeId]) map[typeId] = new Set();
+        const paths = collectPathsFromSchemaNode(schema?.structure, '');
+        for (const fieldPath of paths) {
+          if (fieldPath) map[typeId].add(fieldPath);
+        }
+      }
+
+      const output = {};
+      for (const [typeId, values] of Object.entries(map)) {
+        output[typeId] = Array.from(values).sort((a, b) => a.localeCompare(b));
+      }
+      return output;
+    }
+
+    async function loadTypeAwareness() {
+      try {
+        const [typesResponse, schemasResponse] = await Promise.all([
+          fetch('/api/librarian/data-types'),
+          fetch('/api/librarian/schemas')
+        ]);
+        const typePayload = await typesResponse.json().catch(() => ({}));
+        const schemaPayload = await schemasResponse.json().catch(() => ({}));
+        if (cancelled) return;
+
+        const names = Array.isArray(typePayload.types)
+          ? typePayload.types
+            .map((item) => String(item?.id || item?.name || item?.typeName || '').trim())
+            .filter(Boolean)
+          : [];
+        typeNamesRef.current = names;
+
+        const schemas = schemasResponse.ok && Array.isArray(schemaPayload.schemas) ? schemaPayload.schemas : [];
+        typeFieldMapRef.current = buildTypeFieldMap(schemas);
+      } catch {
+        if (!cancelled) {
+          typeNamesRef.current = [];
+          typeFieldMapRef.current = {};
+        }
+      }
+    }
+
+    loadTypeAwareness();
+    const timer = setInterval(loadTypeAwareness, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
 
   const openFiles = useMemo(() => {
     return openFileNames
@@ -581,11 +839,233 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
     }
   }
 
-  const fileTypeLabel = selectedFile ? selectedFile.documentTypeLabel : 'Document';
+  function handleFileOpen(fileName) {
+    if (!fileName) return;
+    openDocument(fileName);
+    setFileMenuOpen(false);
+    setShowOpenPicker(false);
+  }
+
+  async function runDocumentAction(mode) {
+    if (!selectedFileName || !editorDescriptor?.id) return;
+
+    const supportedCompileTypes = new Set(['pascalish', 'cobolish']);
+    if (!supportedCompileTypes.has(editorDescriptor.id)) return;
+
+    setRunMenuOpen(false);
+    setBusy(true);
+    try {
+      const response = await fetch('/api/develop/compile', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          fileName: selectedFileName,
+          content,
+          mode
+        })
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.error || `${editorDescriptor.label || 'Document'} action failed (${response.status}).`);
+      }
+
+      const compile = payload.compile || {};
+      const baseMessage = editorDescriptor.id === 'cobolish'
+        ? `Compiled ${selectedFileName}: ${compile.programId || 'COBOLISH program'} with ${Number(compile.sections || 0)} division(s), ${Number(compile.paragraphs || 0)} paragraph(s), ${Number(compile.dataItems || 0)} data item(s).${Number(compile.syntaxErrors || 0) > 0 ? ` ${Number(compile.syntaxErrors)} syntax warning(s).` : ''}`
+        : `Compiled ${selectedFileName}: ${Number(compile.routers || 0)} router(s), ${Number(compile.mappings || 0)} mapping(s).`;
+      if (mode === 'compile-run' && editorDescriptor.id === 'pascalish') {
+        setStatus(`${baseMessage} Runtime artifacts updated.`);
+      } else if (mode === 'compile-debug' && editorDescriptor.id === 'pascalish') {
+        setStatus(`${baseMessage} Opening debugger...`);
+        onOpenDebugger?.({
+          sourceFileName: selectedFileName,
+          fsmId: payload?.debug?.fsmId || 'startup-fsm',
+          mode
+        });
+      } else {
+        setStatus(editorDescriptor.id === 'cobolish' && (mode === 'compile-run' || mode === 'compile-debug')
+          ? `${baseMessage} Artifact refreshed.`
+          : baseMessage);
+      }
+      setError('');
+    } catch (actionError) {
+      setError(actionError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    function handleRunShortcut(event) {
+      if (!['pascalish', 'cobolish'].includes(editorDescriptor.id) || busy) return;
+      if (event.key !== 'F7') return;
+
+      const activeTag = String(document?.activeElement?.tagName || '').toLowerCase();
+      const editingTextInput = activeTag === 'input' || activeTag === 'textarea';
+      if (editingTextInput) return;
+
+      event.preventDefault();
+      if (event.shiftKey) {
+        runDocumentAction('compile-debug');
+        return;
+      }
+      if (event.ctrlKey || event.metaKey) {
+        runDocumentAction('compile-run');
+        return;
+      }
+      runDocumentAction('compile');
+    }
+
+    window.addEventListener('keydown', handleRunShortcut);
+    return () => {
+      window.removeEventListener('keydown', handleRunShortcut);
+    };
+  }, [editorDescriptor.id, busy, selectedFileName, content]);
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '300px minmax(0, 1fr)', gap: 12, height: '100%' }}>
-      <aside style={{ display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, border: '1px solid rgba(148, 163, 184, 0.16)', borderRadius: 14, padding: 12, background: 'linear-gradient(180deg, rgba(15, 23, 42, 0.82), rgba(15, 23, 42, 0.58))' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, height: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, border: '1px solid rgba(148, 163, 184, 0.2)', borderRadius: 12, padding: '8px 10px', background: 'rgba(15, 23, 42, 0.62)', position: 'relative' }}>
+        <div style={{ position: 'relative' }}>
+          <button type="button" onClick={() => setFileMenuOpen((current) => !current)}>
+            File
+          </button>
+          {fileMenuOpen && (
+            <div style={menuPanelStyle}>
+              <button
+                type="button"
+                onClick={() => {
+                  createNewDocument('pascalish').catch((errorValue) => setError(errorValue.message));
+                  setFileMenuOpen(false);
+                }}
+                disabled={busy}
+                style={menuItemStyle}
+              >
+                New Pascalish Program
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  createNewDocument('workflow').catch((errorValue) => setError(errorValue.message));
+                  setFileMenuOpen(false);
+                }}
+                disabled={busy}
+                style={menuItemStyle}
+              >
+                New WFL Program
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  createNewDocument('cobolish').catch((errorValue) => setError(errorValue.message));
+                  setFileMenuOpen(false);
+                }}
+                disabled={busy}
+                style={menuItemStyle}
+              >
+                New COBOLISH Program
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowOpenPicker(true);
+                  setFileMenuOpen(false);
+                }}
+                style={menuItemStyle}
+              >
+                Open...
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  saveDocument();
+                  setFileMenuOpen(false);
+                }}
+                disabled={!selectedFileName || !dirty || busy}
+                style={menuItemStyle}
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const proposed = prompt('Rename file:', selectedFileName);
+                  if (proposed) {
+                    setRenameValue(proposed);
+                    renameDocument().catch((renameError) => setError(renameError.message));
+                  }
+                  setFileMenuOpen(false);
+                }}
+                disabled={!selectedFileName || busy}
+                style={menuItemStyle}
+              >
+                Rename...
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  deleteDocument().catch((deleteError) => setError(deleteError.message));
+                  setFileMenuOpen(false);
+                }}
+                disabled={!selectedFileName || busy}
+                style={menuItemStyle}
+              >
+                Delete
+              </button>
+            </div>
+          )}
+        </div>
+        {['pascalish', 'cobolish'].includes(editorDescriptor.id) && (
+          <div style={{ position: 'relative' }}>
+            <button type="button" onClick={() => setRunMenuOpen((current) => !current)}>
+              Run
+            </button>
+            {runMenuOpen && (
+              <div style={menuPanelStyle}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    runDocumentAction('compile');
+                  }}
+                  disabled={!selectedFileName || busy}
+                  style={menuItemStyle}
+                >
+                  Compile
+                </button>
+                {editorDescriptor.id === 'pascalish' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        runDocumentAction('compile-run');
+                      }}
+                      disabled={!selectedFileName || busy}
+                      style={menuItemStyle}
+                    >
+                      Compile and Run
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        runDocumentAction('compile-debug');
+                      }}
+                      disabled={!selectedFileName || busy}
+                      style={menuItemStyle}
+                    >
+                      Compile and Debug
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        <div style={{ fontSize: 12, opacity: 0.8 }}>
+          Develop Mode | {editorDescriptor.label} editor
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: showExplorer ? '300px minmax(0, 1fr)' : 'minmax(0, 1fr)', gap: 12, height: '100%' }}>
+      {showExplorer && <aside style={{ display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, border: '1px solid rgba(148, 163, 184, 0.16)', borderRadius: 14, padding: 12, background: 'linear-gradient(180deg, rgba(15, 23, 42, 0.82), rgba(15, 23, 42, 0.58))' }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
           <div>
             <div style={{ fontSize: 11, letterSpacing: 0.12, textTransform: 'uppercase', opacity: 0.68 }}>Explorer</div>
@@ -650,39 +1130,15 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
             );
           })}
         </div>
-      </aside>
+      </aside>}
 
-      <section style={{ display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
-          <div>
-            <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.12, opacity: 0.62 }}>Develop / {fileTypeLabel}</div>
-            <h2 style={{ margin: '2px 0 0' }}>{selectedFileName || 'No file selected'}</h2>
-          </div>
-
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            <button onClick={() => setShowStartupMonitor((current) => !current)}>
-              {showStartupMonitor ? 'Hide Startup FSM' : 'Show Startup FSM'}
-            </button>
-            <button onClick={saveDocument} disabled={!selectedFileName || !dirty || busy}>Save</button>
-            <input
-              value={renameValue}
-              onChange={(event) => setRenameValue(event.target.value)}
-              placeholder="Rename file"
-              style={{ minWidth: 220 }}
-              disabled={!selectedFileName || busy}
-            />
-            <button onClick={() => renameDocument().catch((renameError) => setError(renameError.message))} disabled={!selectedFileName || busy}>Rename</button>
-            <button onClick={() => deleteDocument().catch((deleteError) => setError(deleteError.message))} disabled={!selectedFileName || busy}>Delete</button>
-          </div>
-        </div>
+      <section style={{ display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0 }}>
 
         {error && (
           <div style={{ padding: '10px 12px', borderRadius: 12, background: 'rgba(239, 68, 68, 0.12)', color: '#fecaca' }}>
             {error}
           </div>
         )}
-
-        {showStartupMonitor && <StartupFsmMonitor themeStyle={themeStyle} />}
 
         <div style={{ display: 'flex', alignItems: 'stretch', gap: 8, overflowX: 'auto', minHeight: 42, padding: '6px 6px 0', borderBottom: '1px solid rgba(148, 163, 184, 0.16)' }}>
           {openFiles.map((file) => {
@@ -720,7 +1176,7 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
           })}
         </div>
 
-        <div style={{ flex: 1, minHeight: 0, border: '1px solid rgba(148, 163, 184, 0.22)', borderRadius: 14, overflow: 'hidden' }}>
+        <div style={{ flex: 1, minHeight: MIN_EDITOR_HEIGHT, border: '1px solid rgba(148, 163, 184, 0.22)', borderRadius: 14, overflow: 'hidden' }}>
           <React.Suspense fallback={<div style={{ padding: 20 }}>Loading editor…</div>}>
             <MonacoEditor
               height="100%"
@@ -728,8 +1184,8 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
               theme={editorDescriptor.id === 'workflow' ? 'workflowWorkbench' : 'pascalishWorkbench'}
               value={content}
               beforeMount={(monaco) => {
-                initializePascalishLanguage(monaco, { current: [] });
-                initializeWorkflowLanguage(monaco);
+                initializePascalishLanguage(monaco, typeNamesRef, typeFieldMapRef);
+                initializeWorkflowLanguage(monaco, typeFieldMapRef);
               }}
               onChange={(value) => {
                 setContent(value || '');
@@ -738,20 +1194,49 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
               options={{
                 minimap: { enabled: false },
                 fontSize: 14,
-                lineHeight: 22,
-                wordWrap: 'on',
+                lineHeight: EDITOR_LINE_HEIGHT,
+                wordWrap: 'off',
                 smoothScrolling: true,
                 suggestOnTriggerCharacters: true,
                 quickSuggestions: true,
                 formatOnType: false,
                 automaticLayout: true,
                 padding: { top: 14, bottom: 14 },
-                scrollBeyondLastLine: false
+                scrollBeyondLastLine: false,
+                scrollbar: {
+                  vertical: 'visible',
+                  horizontal: 'visible',
+                  alwaysConsumeMouseWheel: false
+                }
               }}
             />
           </React.Suspense>
         </div>
       </section>
+      </div>
+
+      {showOpenPicker && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 25, background: 'rgba(2, 6, 23, 0.62)', display: 'grid', placeItems: 'center' }}>
+          <div style={{ width: 'min(720px, 92vw)', maxHeight: '78vh', overflow: 'auto', border: '1px solid rgba(148, 163, 184, 0.25)', borderRadius: 12, background: '#0f172a', padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+              <h3 style={{ margin: 0 }}>Open Program</h3>
+              <button type="button" onClick={() => setShowOpenPicker(false)}>Close</button>
+            </div>
+            {files.length === 0 && <div style={{ opacity: 0.78 }}>No programs found.</div>}
+            {files.map((file) => (
+              <button
+                key={`open-picker:${file.name}`}
+                type="button"
+                onClick={() => handleFileOpen(file.name)}
+                style={{ textAlign: 'left', borderRadius: 8, border: '1px solid rgba(148, 163, 184, 0.24)', background: 'rgba(15, 23, 42, 0.84)', padding: '10px 12px' }}
+              >
+                <div style={{ fontWeight: 600 }}>{file.name}</div>
+                <div style={{ fontSize: 12, opacity: 0.72 }}>{file.documentTypeLabel}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

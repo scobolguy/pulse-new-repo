@@ -6,84 +6,51 @@ DeviceConfiguration deviceConfig;
 #include <Arduino.h>
 #include <FS.h>
 #include <LittleFS.h>
+#include <HTTPClient.h>
+#include <SD.h>
+#include <WiFi.h>
+#include <ArduinoOTA.h>
+#include <ESPAsyncWebServer.h>
 
 #include <ArduinoJson.h>
 #include "ConfigSchema.h"
+#include "NodeConfig.h"
+#include "NodeDiscovery.h"
+#include "ffs/FederatedFileSystem.h"
+#include "ffs/FederatedFileSystemRoutes.h"
+#include "profile_config.h"
 #include "provision_routes.h"
 #include "cluster_routes.h"
+#include "udp_announcement.h"
+#include "udp_runtime.h"
+#include "main_globals.h"
 
 #ifdef ENABLE_PMACHINE
 #include "pmachine.h"
 #include "pmachine_routes.h"
 #endif
 
-#if defined(ENABLE_PMACHINE)
-static pmachine::PMachine pm;
-#endif
-#include "ffs/FederatedFileSystem.h"
-#include "ffs/FederatedFileSystemRoutes.h"
-#if defined(ESP32)
-#include <SD.h>
-#endif
-
-
-#include "config_types.h"
-
+String nodeName = "ESP32-VM";
+WifiConfig wifiConfig;
+ClusterConfig clusterConfig;
+FederatedFileSystem federatedFS;
+bool ffsUp = false;
+AsyncWebServer server(80);
+DevicePin* devicePin = nullptr;
+int devicePinNumber = 2;
 std::map<String, bool> serviceBusyMap;
 
-// FieldDescriptor arrays (definitions)
-const FieldDescriptor ClusterConfig::schema[2] = {
-    FIELD_DESC(ClusterConfig, clusterId, FieldType::StringType),
-    FIELD_DESC(ClusterConfig, isGateway, FieldType::BoolType)
-};
-const FieldDescriptor WifiConfig::schema[2] = {
-    FIELD_DESC(WifiConfig, ssid, FieldType::StringType),
-    FIELD_DESC(WifiConfig, password, FieldType::StringType)
-};
-
-#if defined(ESP32)
-#include <WiFi.h>
-#include <HTTPClient.h>
-#include <WiFiUdp.h>
-#include <ArduinoOTA.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
-#elif defined(ESP8266)
-#include <ESP8266WiFi.h>
-#include <ESP8266HTTPClient.h>
-#include <WiFiUdp.h>
-#include <ArduinoOTA.h>
-#endif
-//bool ffsUp = false;
-
-#include <ESPAsyncWebServer.h>
-#include "NodeDiscovery.h"
-
-#include "NodeConfig.h"
-#include "profile_config.h"
-
-bool ffsUp = false;
-// Global config, PMachine, and FederatedFileSystem instances
-ClusterConfig clusterConfig;
-WifiConfig wifiConfig;
-// EnumManager and PMachine
 #ifdef ENABLE_PMACHINE
-static EnumManager enumManager;
-#endif
-std::vector<uint8_t> pcode;
-FederatedFileSystem federatedFS;
-#include "NodeDiscovery.h"
-
-AsyncWebServer server(80);
-String nodeName = "esp32vm";
-bool otaEnabled = false;
-
-#ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "1.0.0"
+pmachine::PMachine pm;
 #endif
 
-const char* firmwareVersion = FIRMWARE_VERSION;
+const char* firmwareVersion = "2026.06.06";
 const char* deviceRole = DEVICE_ROLE;
+bool otaEnabled = true;
+
+constexpr unsigned long NODE_BEACON_ACKED_INTERVAL_MS = 60000;
+constexpr unsigned long NODE_BEACON_UNACKED_INTERVAL_MS = 10000;
+
 const char* preferredTaskType = PROFILE_PREFERRED_TASK_TYPE;
 const char* firmwareTrack = FIRMWARE_TRACK;
 const size_t maxMessageBytes = PROFILE_MAX_MESSAGE_BYTES;
@@ -191,6 +158,32 @@ void configureSupervisorTargets() {
     supervisorBackendProbe.url = SUPERVISOR_BACKEND_URL;
     supervisorFrontendProbe.name = "frontend";
     supervisorFrontendProbe.url = SUPERVISOR_FRONTEND_URL;
+}
+
+String computeNodeCapabilityHash() {
+    String hash;
+    hash.reserve(160);
+    hash += firmwareVersion;
+    hash += '|';
+    hash += deviceRole;
+    hash += '|';
+    hash += preferredTaskType;
+    hash += '|';
+    hash += firmwareTrack;
+    hash += '|';
+    hash += otaEnabled ? '1' : '0';
+    hash += '|';
+    hash += isSupervisorRole() ? '1' : '0';
+    hash += '|';
+    hash += ffsUp ? '1' : '0';
+#ifdef ENABLE_PMACHINE
+    hash += "|pmachine:1";
+#else
+    hash += "|pmachine:0";
+#endif
+    hash += '|';
+    hash += nodeName;
+    return hash;
 }
 
 void updateProbeResult(SupervisorProbeState& probe, bool healthy, int statusCode, const String& errorText) {
@@ -889,8 +882,17 @@ void setupWebServer() {
             File dir = LittleFS.open("/devices");
             File entry = dir.openNextFile();
             while (entry) {
+                if (entry.isDirectory()) {
+                    entry = dir.openNextFile();
+                    continue;
+                }
                 String devName = String(entry.name());
                 if (devName.startsWith("/devices/")) devName = devName.substring(9);
+                if (!devName.endsWith(".json")) {
+                    entry.close();
+                    entry = dir.openNextFile();
+                    continue;
+                }
                 if (devName.endsWith(".json")) devName = devName.substring(0, devName.length() - 5);
                 // Read device JSON
                 String devJsonStr = entry.readString();
@@ -1169,6 +1171,11 @@ void setupWebServer() {
         json += String("\"otaEnabled\":") + (otaEnabled ? "true" : "false") + ",";
         json += "\"maxMessageBytes\":" + String((unsigned long)maxMessageBytes) + ",";
         json += "\"maxConcurrentTasks\":" + String((unsigned long)maxConcurrentTasks) + ",";
+        json += "\"beacon\":{";
+        json += String("\"acknowledged\":") + (udpRuntimeIsBeaconAcknowledged() ? "true" : "false") + ",";
+        json += "\"lastSentAt\":" + String((unsigned long)udpRuntimeGetBeaconLastSentAt()) + ",";
+        json += "\"lastAckAt\":" + String((unsigned long)udpRuntimeGetBeaconLastAckAt()) + ",";
+        json += "\"capabilityHash\":\"" + computeNodeCapabilityHash() + "\"}" + ",";
         if (isSupervisorRole()) {
             json += String("\"supervisorEnabled\":") + (supervisorEnabled ? "true" : "false") + ",";
             json += String("\"supervisorOverallHealthy\":") + (supervisorOverallHealthy() ? "true" : "false") + ",";
@@ -1368,127 +1375,7 @@ void setupWebServer() {
 #define ANNOUNCE_INTERVAL 10000 // ms
 #define WIFI_RECONNECT_INTERVAL 5000 // ms
 
-WiFiUDP udp;
 unsigned long lastAnnounce = 0;
-unsigned long lastWifiReconnectAttempt = 0;
-bool udpReady = false;
-String wifiSsid;
-String wifiPassword;
-
-bool ensureUdpReady() {
-    if (udpReady) return true;
-    udpReady = udp.begin(ANNOUNCE_PORT);
-    if (udpReady) {
-        Serial.print("[UDP] Listening on port ");
-        Serial.println(ANNOUNCE_PORT);
-    } else {
-        Serial.println("[UDP] Failed to bind announce port");
-    }
-    return udpReady;
-}
-
-void maintainConnectivity() {
-    const wl_status_t status = WiFi.status();
-    if (status == WL_CONNECTED) {
-        if (!udpReady) {
-            Serial.println("[WIFI] Connected, restoring UDP listener");
-            ensureUdpReady();
-        }
-        return;
-    }
-
-    // Force UDP rebind after WiFi returns.
-    udpReady = false;
-
-    const unsigned long now = millis();
-    if (now - lastWifiReconnectAttempt < WIFI_RECONNECT_INTERVAL) {
-        return;
-    }
-
-    lastWifiReconnectAttempt = now;
-    Serial.print("[WIFI] Disconnected (status=");
-    Serial.print((int)status);
-    Serial.println(") attempting reconnect...");
-    WiFi.disconnect();
-    WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
-}
-
-// Helper to process incoming UDP packets (non-blocking)
-void processIncomingUDP() {
-    int packetSize = udp.parsePacket();
-    if (packetSize > 0) {
-        char incoming[256];
-        int len = udp.read(incoming, sizeof(incoming) - 1);
-        if (len > 0) {
-            incoming[len] = '\0';
-            Serial.print("Received UDP announcement: ");
-            Serial.println(incoming);
-
-            String msg = String(incoming);
-            String parsedId;
-            String parsedIp;
-            String parsedNodeId;
-
-            // Legacy format: "ESP32-VM online: <MAC> IP: <IP>"
-            int macStart = msg.indexOf(": ");
-            int ipStart = msg.indexOf("IP: ");
-            if (macStart != -1 && ipStart != -1) {
-                parsedId = msg.substring(macStart + 2, ipStart - 1);
-                parsedIp = msg.substring(ipStart + 4);
-                parsedId.trim();
-                parsedIp.trim();
-            }
-
-            // JSON format: {"kind":"machineAvailability", "ip":"...", "nodeId":"..."}
-            if (parsedIp.length() == 0 && msg.startsWith("{")) {
-                JsonDocument doc;
-                DeserializationError err = deserializeJson(doc, msg);
-                if (!err) {
-                    const char* ip = doc["ip"] | nullptr;
-                    const char* mac = doc["mac"] | nullptr;
-                    const char* nodeId = doc["nodeId"] | doc["nodeName"] | nullptr;
-
-                    if (ip != nullptr) {
-                        parsedIp = String(ip);
-                    }
-                    if (nodeId != nullptr) {
-                        parsedNodeId = String(nodeId);
-                    }
-                    if (mac != nullptr) {
-                        parsedId = String(mac);
-                    } else if (parsedNodeId.length() > 0) {
-                        parsedId = String("node:") + parsedNodeId;
-                    }
-                    parsedIp.trim();
-                    parsedId.trim();
-                    parsedNodeId.trim();
-                }
-            }
-
-            if (parsedId.length() > 0 && parsedIp.length() > 0) {
-                String myMac = WiFi.macAddress();
-                myMac.trim();
-                String myIp = WiFi.localIP().toString();
-                myIp.trim();
-
-                if (parsedId.equalsIgnoreCase(myMac)
-                    || parsedIp.equals(myIp)
-                    || (parsedNodeId.length() > 0 && parsedNodeId.equalsIgnoreCase(nodeName))) {
-                    Serial.println("Announcement from self, not adding.");
-                } else {
-                    DiscoveredNode node;
-                    node.mac = parsedId;
-                    node.ip = parsedIp;
-                    node.lastSeen = millis();
-                    discoveredNodeTable[parsedId] = node;
-                    Serial.println("Node added to discoveredNodeTable.");
-                }
-            } else {
-                Serial.println("Failed to parse announcement: expected legacy MAC/IP text or JSON with ip + (mac|nodeId).");
-            }
-        }
-    }
-}
 
 #if 0 // UDP announcement and discovery disabled
 #define ANNOUNCE_PORT 4210
@@ -1517,58 +1404,64 @@ void announcePresence() {
 #endif
 
 void announcePresence() {
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("[ANNOUNCE] Skipped: WiFi not connected");
-        return;
-    }
-
-    if (!ensureUdpReady()) {
+    if (!udpRuntimeEnsureReady(ANNOUNCE_PORT)) {
         Serial.println("[ANNOUNCE] Skipped: UDP not ready");
         return;
     }
 
-    const String localIp = WiFi.localIP().toString();
-    const String mac = WiFi.macAddress();
+    const String capabilityHash = computeNodeCapabilityHash();
+    UdpAnnouncementState state = udpRuntimeGetAnnouncementState();
 
-    String legacyMsg = String("ESP32-VM online: ") + mac + " IP: " + localIp;
-    int legacyBegin = udp.beginPacket("255.255.255.255", ANNOUNCE_PORT);
-    size_t legacyWritten = udp.write((const uint8_t*)legacyMsg.c_str(), legacyMsg.length());
-    int legacyEnd = udp.endPacket();
+    if (sendNodeBeaconAnnouncement(udpRuntimeSocket(), ANNOUNCE_PORT, nodeName.c_str(), deviceRole, capabilityHash, state)) {
+        udpRuntimeApplyAnnouncementState(state);
+    }
+}
 
-    JsonDocument announceDoc;
-    announceDoc["kind"] = "machineAvailability";
-    announceDoc["serviceName"] = "esp32-node";
-    announceDoc["nodeId"] = nodeName;
-    announceDoc["nodeName"] = nodeName;
-    announceDoc["ip"] = localIp;
-    announceDoc["mac"] = mac;
-    announceDoc["status"] = "available";
-    announceDoc["available"] = true;
-    announceDoc["draining"] = false;
-    announceDoc["port"] = 80;
-    announceDoc["deviceRole"] = deviceRole;
-    announceDoc["ts"] = millis();
+void writeDefaultDocIfMissing(const char* path, const char* content) {
+    if (LittleFS.exists(path)) {
+        return;
+    }
+    File file = LittleFS.open(path, "w");
+    if (!file) {
+        Serial.print("[DOCS] Failed to create ");
+        Serial.println(path);
+        return;
+    }
+    file.print(content);
+    file.close();
+}
 
-    String jsonMsg;
-    serializeJson(announceDoc, jsonMsg);
-    int jsonBegin = udp.beginPacket("255.255.255.255", ANNOUNCE_PORT);
-    size_t jsonWritten = udp.write((const uint8_t*)jsonMsg.c_str(), jsonMsg.length());
-    int jsonEnd = udp.endPacket();
+void ensureDocsTreeAndDefaults() {
+    if (!LittleFS.exists("/services/docs")) {
+        LittleFS.mkdir("/services/docs");
+    }
+    if (!LittleFS.exists("/devices/docs")) {
+        LittleFS.mkdir("/devices/docs");
+    }
 
-    Serial.print("[ANNOUNCE] legacy begin=");
-    Serial.print(legacyBegin);
-    Serial.print(" write=");
-    Serial.print((unsigned int)legacyWritten);
-    Serial.print(" end=");
-    Serial.print(legacyEnd);
-    Serial.print(" | json begin=");
-    Serial.print(jsonBegin);
-    Serial.print(" write=");
-    Serial.print((unsigned int)jsonWritten);
-    Serial.print(" end=");
-    Serial.print(jsonEnd);
-    Serial.print(" ip=");
-    Serial.println(localIp);
+    writeDefaultDocIfMissing("/devices/docs/LEDPIN.txt", "Device: LEDPIN");
+    writeDefaultDocIfMissing("/devices/docs/LEDPIN_set_output.txt", "Action: set_output");
+    writeDefaultDocIfMissing("/devices/docs/LEDPIN_raise.txt", "Action: raise");
+    writeDefaultDocIfMissing("/devices/docs/LEDPIN_lower.txt", "Action: lower");
+
+    writeDefaultDocIfMissing("/services/docs/ffs.txt", "Federated File System: provides distributed file storage and access.");
+    writeDefaultDocIfMissing("/services/docs/ffs_listFiles.txt", "List all files in the file system.");
+    writeDefaultDocIfMissing("/services/docs/ffs_write.txt", "Write data to a file.");
+    writeDefaultDocIfMissing("/services/docs/ffs_read.txt", "Read data from a file.");
+    writeDefaultDocIfMissing("/services/docs/ffs_remove.txt", "Remove a file from the file system.");
+    writeDefaultDocIfMissing("/services/docs/ffs_sync.txt", "Synchronize file system to storage.");
+
+    writeDefaultDocIfMissing("/services/docs/pmachine.txt", "PL/0-style virtual machine for executing pcode programs.");
+    writeDefaultDocIfMissing("/services/docs/pmachine_loadProgram.txt", "Load a pcode program into the VM.");
+    writeDefaultDocIfMissing("/services/docs/pmachine_run.txt", "Run the loaded program.");
+    writeDefaultDocIfMissing("/services/docs/pmachine_singleStep.txt", "Execute a single instruction.");
+    writeDefaultDocIfMissing("/services/docs/pmachine_setBreakpoint.txt", "Set a breakpoint at a given address.");
+    writeDefaultDocIfMissing("/services/docs/pmachine_clearBreakpoint.txt", "Clear a breakpoint at a given address.");
+    writeDefaultDocIfMissing("/services/docs/pmachine_getStatus.txt", "Get the current status of the VM.");
+
+    writeDefaultDocIfMissing("/services/docs/sensor.txt", "Provides access to connected sensors (e.g., DHT22, BME280).");
+    writeDefaultDocIfMissing("/services/docs/sensor_readSensor.txt", "Read values from a sensor.");
+    writeDefaultDocIfMissing("/services/docs/sensor_resultToJson.txt", "Convert sensor result to JSON.");
 }
 
 void setup() {
@@ -1604,9 +1497,10 @@ void setup() {
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
     WiFi.persistent(false);
-    wifiSsid = wifiConfig.ssid.length() ? wifiConfig.ssid : "Home";
-    wifiPassword = wifiConfig.password.length() ? wifiConfig.password : "Brady123";
+    String wifiSsid = wifiConfig.ssid.length() ? wifiConfig.ssid : "Home";
+    String wifiPassword = wifiConfig.password.length() ? wifiConfig.password : "Brady123";
     WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
+    udpRuntimeConfigureWifiCredentials(wifiSsid, wifiPassword);
     int retries = 0;
     while (WiFi.status() != WL_CONNECTED && retries < 30) {
         delay(500);
@@ -1642,6 +1536,7 @@ void setup() {
     if (!foundDevices) LittleFS.mkdir("/devices");
     if (!foundServices) LittleFS.mkdir("/services");
     if (!foundFlows) LittleFS.mkdir("/flows");
+    ensureDocsTreeAndDefaults();
 
     // 4. LEDPIN device creation after WiFi connection and directory creation
     Serial.println("[DEBUG] Checking WiFi status for LEDPIN device creation...");
@@ -1718,7 +1613,8 @@ void setup() {
         Serial.print("[SUPERVISOR] heartbeat target: ");
         Serial.println(supervisorHeartbeatUrl);
     }
-    ensureUdpReady();
+    udpRuntimeEnsureReady(ANNOUNCE_PORT);
+    udpRuntimeResetBeaconState();
     announcePresence();
 
     // 7. Initialize FederatedFileSystem with SD if available, else LittleFS
@@ -1774,14 +1670,21 @@ void setup() {
 }
 
 void loop() {
-    maintainConnectivity();
+    udpRuntimeMaintainConnectivity(ANNOUNCE_PORT, WIFI_RECONNECT_INTERVAL);
 
     if (otaEnabled) {
         ArduinoOTA.handle();
     }
 
     // Non-blocking UDP receive for node discovery
-    processIncomingUDP();
+    UdpRuntimeContext udpContext;
+    udpContext.nodeName = nodeName.c_str();
+    udpContext.deviceRole = deviceRole;
+    udpContext.firmwareVersion = firmwareVersion;
+    udpContext.firmwareTrack = firmwareTrack;
+    udpContext.discoveredNodeTable = &discoveredNodeTable;
+    udpContext.computeNodeCapabilityHash = computeNodeCapabilityHash;
+    udpRuntimeProcessIncoming(udpContext, ANNOUNCE_PORT);
         /* UDP announcement disabled */
         // processIncomingUDP();
 
@@ -1797,14 +1700,12 @@ void loop() {
         }
     }
 
-    if (millis() - lastAnnounce > ANNOUNCE_INTERVAL) {
+    const unsigned long beaconInterval = udpRuntimeGetBeaconIntervalMs(
+        NODE_BEACON_ACKED_INTERVAL_MS,
+        NODE_BEACON_UNACKED_INTERVAL_MS);
+    if (millis() - lastAnnounce > beaconInterval) {
         announcePresence();
         lastAnnounce = millis();
-        /* UDP announcement disabled */
-        // if (millis() - lastAnnounce > ANNOUNCE_INTERVAL) {
-        //     announcePresence();
-        //     lastAnnounce = millis();
-        // }
     }
 
     runSupervisorHealthChecks();

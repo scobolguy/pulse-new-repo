@@ -665,6 +665,7 @@ const queueRoutes = new Map();
 const MANAGER_ACTIVE_STATES = new Set(['up', 'degraded']);
 const MANAGER_SYNC_STATES = new Set(['syncing', 'sync-failed']);
 const serviceInstanceRegistry = new Map();
+const ffsDeploymentRegistry = new Map();
 const localQueueManagerProcesses = new Map();
 const pendingManagerSync = new Map();
 const remoteAgentRegistry = new Map();
@@ -751,13 +752,13 @@ const AUTO_APPROVE_USER_IDS = new Set(
 );
 const ALLOW_IMPLICIT_ADMIN = readEnvBoolean('ALLOW_IMPLICIT_ADMIN', ['true'], false);
 const AUTH_SESSION_TTL_MS = Math.max(5 * 60 * 1000, readEnvNumber('AUTH_SESSION_TTL_MS', 12 * 60 * 60 * 1000));
-const AUTH_BOOTSTRAP_VERSION = Math.max(1, readEnvNumber('AUTH_BOOTSTRAP_VERSION', 2));
+const AUTH_BOOTSTRAP_VERSION = Math.max(1, readEnvNumber('AUTH_BOOTSTRAP_VERSION', 3));
 const AUTH_SYSTEM_ADMIN_USER_ID = normalizeUserIdentifier(readEnvString('AUTH_SYSTEM_ADMIN_USER_ID', 'SystemAdmin').trim() || 'SystemAdmin');
-const AUTH_SYSTEM_ADMIN_PASSWORD = String(readEnvSecret('AUTH_SYSTEM_ADMIN_PASSWORD', 'SystemAdmin1!') || 'SystemAdmin1!');
+const AUTH_SYSTEM_ADMIN_PASSWORD = String(readEnvSecret('AUTH_SYSTEM_ADMIN_PASSWORD', '@Pulse123') || '@Pulse123');
 const AUTH_USER_ADMIN_LHS_USER_ID = normalizeUserIdentifier(readEnvString('AUTH_USER_ADMIN_LHS_USER_ID', 'UserAdminLHS').trim() || 'UserAdminLHS');
-const AUTH_USER_ADMIN_LHS_PASSWORD = String(readEnvSecret('AUTH_USER_ADMIN_LHS_PASSWORD', 'UserAdminLHS1!') || 'UserAdminLHS1!');
+const AUTH_USER_ADMIN_LHS_PASSWORD = String(readEnvSecret('AUTH_USER_ADMIN_LHS_PASSWORD', '@Pulse123') || '@Pulse123');
 const AUTH_USER_ADMIN_RHS_USER_ID = normalizeUserIdentifier(readEnvString('AUTH_USER_ADMIN_RHS_USER_ID', 'UserAdminRHS').trim() || 'UserAdminRHS');
-const AUTH_USER_ADMIN_RHS_PASSWORD = String(readEnvSecret('AUTH_USER_ADMIN_RHS_PASSWORD', 'UserAdminRHS1!') || 'UserAdminRHS1!');
+const AUTH_USER_ADMIN_RHS_PASSWORD = String(readEnvSecret('AUTH_USER_ADMIN_RHS_PASSWORD', '@Pulse123') || '@Pulse123');
 const ROLE_PULSE_SYSTEM_ADMIN = 'ROLE-PULSE-SYSTEM-ADMIN';
 const ROLE_PULSE_USER_ADMIN = 'ROLE-PULSE-USER-ADMIN';
 const SYSTEM_ADMIN_PERMISSIONS = Object.freeze([
@@ -794,7 +795,8 @@ const queueValidationErrors = [];
 const MAX_QUEUE_VALIDATION_ERRORS = 500;
 const dlqEvents = [];
 const MAX_DLQ_EVENTS = 2000;
-const MACHINE_ANNOUNCE_INTERVAL_MS = 5000;
+const MACHINE_BEACON_UNACKED_INTERVAL_MS = 30000;
+const MACHINE_BEACON_ACKED_INTERVAL_MS = 5 * 60 * 1000;
 const MACHINE_DRAIN_DEFAULT_TIMEOUT_MS = 60 * 1000;
 const SUPERVISOR_HEARTBEAT_TTL_MS = Math.max(1000, readEnvNumber('SUPERVISOR_HEARTBEAT_TTL_MS', 15000));
 const machineAvailability = {
@@ -804,6 +806,10 @@ const machineAvailability = {
   advertisedAt: null,
   announceReason: null,
   announceTimerId: null,
+  beaconAcknowledged: false,
+  beaconAckAt: null,
+  capabilityHash: null,
+  lastBeaconAt: null,
   udpBroadcastBlocked: false
 };
 const machineWorkloadState = {
@@ -824,6 +830,24 @@ function endMachineWorkUnit() {
 
 function canRunQueueWorkers() {
   return machineAvailability.available && !machineAvailability.draining;
+}
+
+function getMachineAvailabilityCapabilityHash() {
+  return [
+    machineAvailability.nodeId,
+    machineAvailability.available ? '1' : '0',
+    machineAvailability.draining ? '1' : '0',
+    machineAvailability.udpBroadcastBlocked ? '1' : '0',
+    String(discoveredNodes.size),
+    String(queueManagerRegistry.size),
+    String(serviceInstanceRegistry.size)
+  ].join('|');
+}
+
+function getMachineAvailabilityBeaconIntervalMs() {
+  return machineAvailability.beaconAcknowledged
+    ? MACHINE_BEACON_ACKED_INTERVAL_MS
+    : MACHINE_BEACON_UNACKED_INTERVAL_MS;
 }
 
 function normalizeSupervisorHeartbeatPayload(payload = {}, fallbackIp = '') {
@@ -1546,6 +1570,8 @@ let auditChainHead = 'GENESIS';
 const LIFECYCLE_HEARTBEAT_INACTIVITY_MS = readEnvNumber('LIFECYCLE_HEARTBEAT_INACTIVITY_MS', 30 * 1000);
 const LIFECYCLE_HEARTBEAT_CHECK_INTERVAL_MS = readEnvNumber('LIFECYCLE_HEARTBEAT_CHECK_INTERVAL_MS', 5 * 1000);
 const LIFECYCLE_HEARTBEAT_ENABLED = readEnvBoolean('LIFECYCLE_HEARTBEAT_ENABLED', ['1', 'true', 'yes'], true);
+const BACKEND_WORKER_AUTOSTART = readEnvBoolean('BACKEND_WORKER_AUTOSTART', ['1', 'true', 'yes'], false);
+const BACKEND_AUX_SERVICES_AUTOSTART = readEnvBoolean('BACKEND_AUX_SERVICES_AUTOSTART', ['1', 'true', 'yes'], false);
 const ROUTER_WORKER_MAX_BACKOFF_MULTIPLIER = Math.max(1.5, readEnvNumber('ROUTER_WORKER_MAX_BACKOFF_MULTIPLIER', 3.5));
 const LIFECYCLE_WORKER_MAX_BACKOFF_MULTIPLIER = Math.max(1.5, readEnvNumber('LIFECYCLE_WORKER_MAX_BACKOFF_MULTIPLIER', 4.5));
 const BRIDGE_WORKER_MAX_BACKOFF_MULTIPLIER = Math.max(1.5, readEnvNumber('BRIDGE_WORKER_MAX_BACKOFF_MULTIPLIER', 4));
@@ -5113,9 +5139,9 @@ async function executeGatewayAction(gatewayId, action, options = {}) {
   return executeGatewayLocalAction(gatewayId, action, options);
 }
 const workerRuntimeControl = {
-  autoRestartEnabled: true,
+  autoRestartEnabled: BACKEND_WORKER_AUTOSTART,
   hardResetAt: null,
-  hardResetReason: null
+  hardResetReason: BACKEND_WORKER_AUTOSTART ? null : 'autostart-disabled'
 };
 const queueTriggeredAutostartState = {
   lastTriggeredAt: null,
@@ -6201,18 +6227,58 @@ function getLocalAdvertiseIp() {
 }
 
 function buildMachineAvailabilityAnnouncement() {
+  const capabilityHash = getMachineAvailabilityCapabilityHash();
+  const capabilitiesChanged = machineAvailability.capabilityHash !== capabilityHash;
   return {
-    kind: 'machineAvailability',
-    serviceName: 'machine-availability',
+    kind: 'nodeBeacon',
     nodeId: machineAvailability.nodeId,
     nodeName: machineAvailability.nodeId,
-    ip: getLocalAdvertiseIp(),
+    capabilityHash,
+    capabilitiesChanged,
+    needsDetails: capabilitiesChanged || !machineAvailability.beaconAcknowledged,
+    ackRequired: true,
     port: HTTP_PORT,
     available: machineAvailability.available,
     draining: machineAvailability.draining,
     status: machineAvailability.available ? 'available' : (machineAvailability.draining ? 'draining' : 'unavailable'),
     ts: Date.now()
   };
+}
+
+function sendUdpJsonMessage(targetHost, targetPort, payload, label = 'UDP') {
+  if (!targetHost || !targetPort) return;
+  const message = Buffer.from(JSON.stringify(payload), 'utf-8');
+  udpServer.send(message, 0, message.length, targetPort, targetHost, (error) => {
+    if (error) {
+      console.warn(`[${label}] Failed to send UDP message to ${targetHost}:${targetPort}: ${error.message}`);
+    }
+  });
+}
+
+function sendNodeBeaconAck(targetHost, targetPort, beaconPayload = {}) {
+  sendUdpJsonMessage(targetHost, targetPort, {
+    kind: 'nodeBeaconAck',
+    nodeId: machineAvailability.nodeId,
+    capabilityHash: machineAvailability.capabilityHash,
+    requestDetails: Boolean(beaconPayload?.capabilitiesChanged || beaconPayload?.needsDetails),
+    ackedAt: Date.now()
+  }, 'UDP-ACK');
+}
+
+function requestNodeDetails(targetHost, targetPort, beaconPayload = {}) {
+  sendUdpJsonMessage(targetHost, targetPort, {
+    kind: 'nodeDetailsRequest',
+    nodeId: machineAvailability.nodeId,
+    capabilityHash: machineAvailability.capabilityHash,
+    requestedFields: ['status', 'services', 'topology'],
+    reason: beaconPayload?.capabilitiesChanged ? 'capabilities-changed' : 'initial-discovery',
+    requestedAt: Date.now()
+  }, 'UDP-DETAILS');
+}
+
+function markBeaconAcknowledged() {
+  machineAvailability.beaconAcknowledged = true;
+  machineAvailability.beaconAckAt = new Date().toISOString();
 }
 
 function sendMachineAvailabilityAnnouncement(reason = 'manual') {
@@ -6223,6 +6289,8 @@ function sendMachineAvailabilityAnnouncement(reason = 'manual') {
   payload.reason = reason;
   machineAvailability.advertisedAt = new Date().toISOString();
   machineAvailability.announceReason = reason;
+  machineAvailability.capabilityHash = payload.capabilityHash;
+  machineAvailability.lastBeaconAt = machineAvailability.advertisedAt;
   const message = Buffer.from(JSON.stringify(payload), 'utf-8');
   udpServer.send(message, 0, message.length, UDP_PORT, '255.255.255.255', (error) => {
     if (error) {
@@ -6235,13 +6303,13 @@ function sendMachineAvailabilityAnnouncement(reason = 'manual') {
       }
       return;
     }
-    console.log(`[UDP] Availability announced: ${payload.status} (${reason})`);
+    console.log(`[UDP] Beacon announced: ${payload.status} (${reason})`);
   });
 }
 
 function stopMachineAvailabilityAnnouncer() {
   if (!machineAvailability.announceTimerId) return;
-  clearInterval(machineAvailability.announceTimerId);
+  clearTimeout(machineAvailability.announceTimerId);
   machineAvailability.announceTimerId = null;
 }
 
@@ -6252,6 +6320,9 @@ function getMachineAvailabilityPayload() {
     draining: machineAvailability.draining,
     advertisedAt: machineAvailability.advertisedAt,
     announceReason: machineAvailability.announceReason,
+    beaconAcknowledged: machineAvailability.beaconAcknowledged,
+    beaconAckAt: machineAvailability.beaconAckAt,
+    capabilityHash: machineAvailability.capabilityHash,
     status: machineAvailability.available ? 'available' : (machineAvailability.draining ? 'draining' : 'unavailable')
   };
 }
@@ -6312,16 +6383,20 @@ function getBrowserPresence(clientId) {
 
 function startMachineAvailabilityAnnouncer() {
   stopMachineAvailabilityAnnouncer();
-  machineAvailability.announceTimerId = setInterval(() => {
-    if (machineAvailability.available) {
-      sendMachineAvailabilityAnnouncement('heartbeat');
+  machineAvailability.announceTimerId = setTimeout(() => {
+    machineAvailability.announceTimerId = null;
+    if (!machineAvailability.available) {
+      return;
     }
-  }, MACHINE_ANNOUNCE_INTERVAL_MS);
+    sendMachineAvailabilityAnnouncement('heartbeat');
+    startMachineAvailabilityAnnouncer();
+  }, getMachineAvailabilityBeaconIntervalMs());
 }
 
 function setMachineAvailable() {
   machineAvailability.available = true;
   machineAvailability.draining = false;
+  machineAvailability.beaconAcknowledged = false;
   sendMachineAvailabilityAnnouncement('available');
   startMachineAvailabilityAnnouncer();
   return getMachineAvailabilityPayload();
@@ -6330,6 +6405,7 @@ function setMachineAvailable() {
 function setMachineUnavailable() {
   machineAvailability.available = false;
   machineAvailability.draining = false;
+  machineAvailability.beaconAcknowledged = false;
   stopMachineAvailabilityAnnouncer();
   sendMachineAvailabilityAnnouncement('unavailable');
   return getMachineAvailabilityPayload();
@@ -6338,6 +6414,7 @@ function setMachineUnavailable() {
 async function drainMachineAndSetUnavailable({ timeoutMs = MACHINE_DRAIN_DEFAULT_TIMEOUT_MS } = {}) {
   machineAvailability.available = false;
   machineAvailability.draining = true;
+  machineAvailability.beaconAcknowledged = false;
   sendMachineAvailabilityAnnouncement('draining');
 
   const startedAt = Date.now();
@@ -6363,9 +6440,85 @@ udpServer.on('message', (msg, rinfo) => {
   const ip = rinfo.address;
   const now = Date.now();
   let node = discoveredNodes.get(ip) || {};
-  let parsed = false;
   try {
-    const data = JSON.parse(msg.toString());
+    const raw = msg.toString();
+    const data = JSON.parse(raw);
+
+    if (data && data.kind === 'nodeBeaconAck' && String(data.nodeId || '').trim() === machineAvailability.nodeId) {
+      markBeaconAcknowledged();
+      machineAvailability.announceReason = 'acknowledged';
+      console.log(`[UDP] Beacon acknowledged by ${rinfo.address}:${rinfo.port}`);
+      return;
+    }
+
+    if (data && (data.kind === 'nodeDetailsRequest')) {
+      sendUdpJsonMessage(rinfo.address, rinfo.port, {
+        kind: 'nodeDetails',
+        nodeId: machineAvailability.nodeId,
+        ip: getLocalAdvertiseIp(),
+        httpPort: HTTP_PORT,
+        statusUrl: `http://${getLocalAdvertiseIp()}:${HTTP_PORT}/status`,
+        servicesUrl: `http://${getLocalAdvertiseIp()}:${HTTP_PORT}/services/describe`,
+        capabilityHash: machineAvailability.capabilityHash || getMachineAvailabilityCapabilityHash(),
+        beaconAcknowledged: machineAvailability.beaconAcknowledged,
+        requestedAt: data.requestedAt || null
+      }, 'UDP-DETAILS');
+      return;
+    }
+
+    if (data && data.kind === 'nodeDetails') {
+      discoveredNodes.set(ip, {
+        ...node,
+        ip,
+        nodeName: data.nodeName || data.nodeId || node.nodeName || ip,
+        lastSeen: now,
+        raw,
+        details: {
+          ...(node.details || {}),
+          ...data
+        }
+      });
+      return;
+    }
+
+    if (data && (data.kind === 'nodeBeacon' || data.kind === 'machineAvailability')) {
+      const beaconKind = data.kind;
+      const capabilityHash = String(data.capabilityHash || '').trim();
+      const capabilitiesChanged = Boolean(data.capabilitiesChanged) || (capabilityHash && node?.details?.capabilityHash !== capabilityHash);
+      node = {
+        ...node,
+        ...data,
+        ip,
+        lastSeen: now,
+        raw,
+        availability: {
+          available: Boolean(data.available),
+          draining: Boolean(data.draining),
+          status: data.status || (data.available ? 'available' : 'unavailable')
+        },
+        beacon: {
+          kind: beaconKind,
+          ackRequired: Boolean(data.ackRequired),
+          needsDetails: Boolean(data.needsDetails),
+          capabilitiesChanged,
+          capabilityHash,
+          seenAt: now
+        },
+        details: {
+          ...(node.details || {}),
+          capabilityHash,
+          needsDetails: Boolean(data.needsDetails)
+        }
+      };
+      discoveredNodes.set(ip, node);
+      sendNodeBeaconAck(rinfo.address, rinfo.port, data);
+      if (data.needsDetails || capabilitiesChanged) {
+        requestNodeDetails(rinfo.address, rinfo.port, data);
+      }
+      scheduleNodeEnrichment(ip);
+      return;
+    }
+
     if (data && (data.kind === 'queueManagerHeartbeat' || data.service === 'queue-manager')) {
       upsertRemoteQueueManager({
         managerId: data.managerId || `${ip}:${data.port || HTTP_PORT}:${data.name || 'qm'}`,
@@ -6402,9 +6555,8 @@ udpServer.on('message', (msg, rinfo) => {
       ip,
       lastSeen: now,
       availability,
-      raw: msg.toString()
+      raw
     };
-    parsed = true;
   } catch (e) {
     // Not JSON, treat as plain text
     node = {
@@ -9334,7 +9486,11 @@ function registerRoutes(app) {
         discoveredNodes,
         getBrokerNodeDetails,
         getSystemPerformanceSnapshot,
-        services: [BROKER_SERVICE, ROUTER_SERVICE, QUEUE_SERVICE, FILE_SERVER_SERVICE]
+        services: [BROKER_SERVICE, ROUTER_SERVICE, QUEUE_SERVICE, FILE_SERVER_SERVICE],
+        serviceInstanceRegistry,
+        upsertServiceInstance,
+        resolveServiceInstance,
+        ffsDeploymentRegistry
       }),
       librarianProxy: () => ({
         express,
@@ -9438,7 +9594,17 @@ function registerRoutes(app) {
     debugLog('[DEBUG] Registered replication-test endpoint');
   }
   
-  const fileServer = createFileServer();
+  const federatedFfsRoot = path.join(RUNTIME_DATA_ROOT, 'federated-ffs');
+  const fileServer = createFileServer({
+    ffsConfig: {
+      root: federatedFfsRoot
+    },
+    federatedConfig: {
+      packageRoot: path.join(federatedFfsRoot, 'packages'),
+      deploymentIndexPath: path.join(federatedFfsRoot, 'service-deployments.json'),
+      deploymentRegistry: ffsDeploymentRegistry
+    }
+  });
   debugLog('[DEBUG] File server routes registered');
   app.use('/api/fileserver', fileServer.router);
 
@@ -9538,95 +9704,102 @@ try {
     console.log('[TX-STATE] Emergency log shipping is disabled. Realtime DB writes are expected.');
   }
 
-  // Auto-start all workers and gateways on every backend startup using config defaults
-  try {
-    const routerWorkerResults = startDefaultRouterWorkers();
-    console.log(`[AUTOSTART] Router workers started: ${routerWorkerResults.length} (6 instances per queue × 4 priority queues)`);
-    routerWorkerResults.slice(0, 3).forEach(w => {
-      console.log(`  - ${w.workerId}: interval=${w.intervalMs}ms, batch=${w.batchSize}`);
+  // Auto-start workers/gateways only when explicitly enabled.
+  if (BACKEND_WORKER_AUTOSTART) {
+    try {
+      const routerWorkerResults = startDefaultRouterWorkers();
+      console.log(`[AUTOSTART] Router workers started: ${routerWorkerResults.length} (6 instances per queue × 4 priority queues)`);
+      routerWorkerResults.slice(0, 3).forEach(w => {
+        console.log(`  - ${w.workerId}: interval=${w.intervalMs}ms, batch=${w.batchSize}`);
+      });
+      if (routerWorkerResults.length > 3) {
+        console.log(`  - ... and ${routerWorkerResults.length - 3} more`);
+      }
+    } catch (e) {
+      console.warn(`[AUTOSTART] Router workers failed: ${e.message}`);
+    }
+
+    try {
+      const lifecycleWorkerResults = startDefaultQueueDrivenLifecycleWorkers({ intervalMs: 250, batchSize: 50 });
+      console.log(`[AUTOSTART] Lifecycle workers started: ${lifecycleWorkerResults.length}`);
+    } catch (e) {
+      console.warn(`[AUTOSTART] Lifecycle workers failed: ${e.message}`);
+    }
+
+    try {
+      const subflowWorkerResults = startDefaultSubflowBridgeWorkers({ intervalMs: 500, batchSize: 25 });
+      console.log(`[AUTOSTART] Subflow workers started: ${subflowWorkerResults.length}`);
+    } catch (e) {
+      console.warn(`[AUTOSTART] Subflow workers failed: ${e.message}`);
+    }
+
+    try {
+      startSwiftGateway({ intervalMs: 500, batchSize: 25 });
+      console.log('[AUTOSTART] SWIFT gateway started');
+    } catch (e) {
+      console.warn(`[AUTOSTART] SWIFT gateway failed: ${e.message}`);
+    }
+
+    try {
+      startBocGateway({ intervalMs: 500, batchSize: 25, mode: gatewayModeState.boc });
+      console.log(`[AUTOSTART] BoC gateway started (mode=${gatewayModeState.boc})`);
+    } catch (e) {
+      console.warn(`[AUTOSTART] BoC gateway failed: ${e.message}`);
+    }
+
+    try {
+      startFedGateway({ intervalMs: 500, batchSize: 25 });
+      console.log(`[AUTOSTART] Fed gateway started (mode=${gatewayModeState.fed})`);
+    } catch (e) {
+      console.warn(`[AUTOSTART] Fed gateway failed: ${e.message}`);
+    }
+  } else {
+    console.log('[AUTOSTART] Worker and gateway autostart is disabled (BACKEND_WORKER_AUTOSTART=false).');
+  }
+
+  // Start Data Librarian/Mapper child processes only when explicitly enabled.
+  if (BACKEND_AUX_SERVICES_AUTOSTART) {
+    const librarianPath = fileURLToPath(new URL('./data-librarian.mjs', import.meta.url));
+    const librarian = spawn(process.execPath, [librarianPath], {
+      stdio: 'inherit',
+      env: { ...process.env },
     });
-    if (routerWorkerResults.length > 3) {
-      console.log(`  - ... and ${routerWorkerResults.length - 3} more`);
-    }
-  } catch (e) {
-    console.warn(`[AUTOSTART] Router workers failed: ${e.message}`);
+    librarian.on('error', err => console.error('[Librarian] Failed to start:', err.message));
+    librarian.on('exit', (code, signal) => {
+      if (code !== 0 && signal !== 'SIGTERM') {
+        console.warn(`[Librarian] Exited with code=${code} signal=${signal}`);
+      }
+    });
+
+    const mapperPath = fileURLToPath(new URL('./data-mapper.mjs', import.meta.url));
+    const mapper = spawn(process.execPath, [mapperPath], {
+      stdio: 'inherit',
+      env: { ...process.env },
+    });
+    mapper.on('error', err => console.error('[Mapper] Failed to start:', err.message));
+    mapper.on('exit', (code, signal) => {
+      if (code !== 0 && signal !== 'SIGTERM') {
+        console.warn(`[Mapper] Exited with code=${code} signal=${signal}`);
+      }
+    });
+
+    process.on('exit', () => {
+      librarian.kill();
+      mapper.kill();
+    });
+    process.on('SIGINT', () => {
+      librarian.kill();
+      mapper.kill();
+      process.exit();
+    });
+    process.on('SIGTERM', () => {
+      librarian.kill();
+      mapper.kill();
+      process.exit();
+    });
+  } else {
+    console.log('[AUTOSTART] Auxiliary child services are disabled (BACKEND_AUX_SERVICES_AUTOSTART=false).');
   }
-
-  try {
-    const lifecycleWorkerResults = startDefaultQueueDrivenLifecycleWorkers({ intervalMs: 250, batchSize: 50 });
-    console.log(`[AUTOSTART] Lifecycle workers started: ${lifecycleWorkerResults.length}`);
-  } catch (e) {
-    console.warn(`[AUTOSTART] Lifecycle workers failed: ${e.message}`);
-  }
-
-  try {
-    const subflowWorkerResults = startDefaultSubflowBridgeWorkers({ intervalMs: 500, batchSize: 25 });
-    console.log(`[AUTOSTART] Subflow workers started: ${subflowWorkerResults.length}`);
-  } catch (e) {
-    console.warn(`[AUTOSTART] Subflow workers failed: ${e.message}`);
-  }
-
-  try {
-    startSwiftGateway({ intervalMs: 500, batchSize: 25 });
-    console.log('[AUTOSTART] SWIFT gateway started');
-  } catch (e) {
-    console.warn(`[AUTOSTART] SWIFT gateway failed: ${e.message}`);
-  }
-
-  try {
-    startBocGateway({ intervalMs: 500, batchSize: 25, mode: gatewayModeState.boc });
-    console.log(`[AUTOSTART] BoC gateway started (mode=${gatewayModeState.boc})`);
-  } catch (e) {
-    console.warn(`[AUTOSTART] BoC gateway failed: ${e.message}`);
-  }
-
-  try {
-    startFedGateway({ intervalMs: 500, batchSize: 25 });
-    console.log(`[AUTOSTART] Fed gateway started (mode=${gatewayModeState.fed})`);
-  } catch (e) {
-    console.warn(`[AUTOSTART] Fed gateway failed: ${e.message}`);
-  }
-
-  // --- Start Data Librarian as a child process ---
-  const librarianPath = fileURLToPath(new URL('./data-librarian.mjs', import.meta.url));
-  const librarian = spawn(process.execPath, [librarianPath], {
-    stdio: 'inherit',
-    env: { ...process.env },
-  });
-  librarian.on('error', err => console.error('[Librarian] Failed to start:', err.message));
-  librarian.on('exit', (code, signal) => {
-    if (code !== 0 && signal !== 'SIGTERM') {
-      console.warn(`[Librarian] Exited with code=${code} signal=${signal}`);
-    }
-  });
-
-  // --- Start Data Mapper as a child process ---
-  const mapperPath = fileURLToPath(new URL('./data-mapper.mjs', import.meta.url));
-  const mapper = spawn(process.execPath, [mapperPath], {
-    stdio: 'inherit',
-    env: { ...process.env },
-  });
-  mapper.on('error', err => console.error('[Mapper] Failed to start:', err.message));
-  mapper.on('exit', (code, signal) => {
-    if (code !== 0 && signal !== 'SIGTERM') {
-      console.warn(`[Mapper] Exited with code=${code} signal=${signal}`);
-    }
-  });
-
-  process.on('exit', () => {
-    librarian.kill();
-    mapper.kill();
-  });
-  process.on('SIGINT', () => {
-    librarian.kill();
-    mapper.kill();
-    process.exit();
-  });
-  process.on('SIGTERM', () => {
-    librarian.kill();
-    mapper.kill();
-    process.exit();
-  });
 
 } catch (err) {
   console.error('[ERROR] Backend failed to start:', err);

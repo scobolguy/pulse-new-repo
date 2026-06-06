@@ -189,6 +189,11 @@ function emitPortableProgram(compiled) {
       version: 1,
       generatedAt: new Date().toISOString(),
       serviceId: compiled.serviceId,
+      runtimeUnit: compiled.runtimeUnit || {
+        kind: 'service',
+        id: compiled.serviceId || 'default-router-service',
+        refreshMs: null
+      },
       variableDeclarations: Array.isArray(compiled.variableDeclarations) ? compiled.variableDeclarations : [],
       entryLabel: 'ENTRY',
       finishLabel: 'FINISH',

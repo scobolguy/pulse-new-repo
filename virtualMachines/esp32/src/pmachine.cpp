@@ -539,9 +539,13 @@ void PMachine::setMappings(const std::vector<MappingDef>& defs) {
     for (const auto& def : defs) {
         if (def.id.empty()) continue;
         mappingDefs[def.id] = def;
+        loadResidentDomain("mapper-artifacts", def.id, def.items.size() * sizeof(MappingItem), false);
     }
 }
 void PMachine::clearMappings() {
+    for (const auto& it : mappingDefs) {
+        unloadResidentDomain("mapper-artifacts", it.first);
+    }
     mappingDefs.clear();
 }
 const MappingDef* PMachine::getMappingById(const std::string& mappingId) const {
@@ -553,12 +557,288 @@ int PMachine::openFile(const String&, const String&) { return -1; }
 bool PMachine::closeFile(int) { return false; }
 bool PMachine::readLine(int, String&) { return false; }
 bool PMachine::writeLine(int, const String&) { return false; }
-const PCodeMap& PMachine::getPCodeMap() const { static PCodeMap m; return m; }
-const MemoryMap& PMachine::getMemoryMap() const { static MemoryMap m; return m; }
-const std::vector<std::string> PMachine::getStringPool() const { static std::vector<std::string> v; return v; }
-std::map<std::string, int> PMachine::getEnumTypes() const { return {}; }
-Status PMachine::getStatus() const { return Status{}; }
-bool PMachine::loadProgram(const std::vector<uint8_t>&, const std::string&, size_t) { return false; }
+const PCodeMap& PMachine::getPCodeMap() const { return pcodeMap; }
+const MemoryMap& PMachine::getMemoryMap() const { return memoryMap; }
+const std::vector<std::string> PMachine::getStringPool() const {
+    std::vector<std::string> out;
+    for (const auto& a : residentAssets) {
+        if (a.domain == ResidentDomain::StringPool && a.resident) out.push_back(a.id);
+    }
+    return out;
+}
+std::map<std::string, int> PMachine::getEnumTypes() const { return enumTypes; }
+
+static RuntimeUnitKind parseRuntimeUnitKind(const std::string& kindText) {
+    const std::string k = toUpperCopy(trimCopy(kindText));
+    if (k == "PROGRAM") return RuntimeUnitKind::Program;
+    if (k == "DAEMON") return RuntimeUnitKind::Daemon;
+    return RuntimeUnitKind::Service;
+}
+
+static ResidentDomain parseResidentDomain(const std::string& domainText) {
+    const std::string d = toUpperCopy(trimCopy(domainText));
+    if (d == "STRINGPOOL" || d == "STRING_POOL") return ResidentDomain::StringPool;
+    if (d == "GLOBALENUMERATEDTYPES" || d == "GLOBAL_ENUMERATED_TYPES") return ResidentDomain::GlobalEnumeratedTypes;
+    if (d == "GLOBALTYPES" || d == "GLOBAL_TYPES") return ResidentDomain::GlobalTypes;
+    if (d == "MAPPERARTIFACTS" || d == "MAPPER_ARTIFACTS") return ResidentDomain::MapperArtifacts;
+    return ResidentDomain::ProgramImage;
+}
+
+Status PMachine::getStatus() const {
+    Status s;
+    s.numPages = numPages;
+    s.backingFile = backingFile;
+    s.maxSpace = maxSpace;
+    s.dynamicLibs = dynamicLibs;
+    s.running = running;
+    s.pc = pc;
+    s.breakpoints = breakpoints;
+    s.runtimeUnit = runtimeUnit;
+    s.pagingConfig = pagingConfig;
+    s.pagingStats = pagingStats;
+    s.residentAssets = residentAssets;
+    return s;
+}
+
+void PMachine::setMemoryConfig(size_t pageSizeBytes, size_t maxFrames) {
+    if (pageSizeBytes > 0) pagingConfig.pageSizeBytes = pageSizeBytes;
+    if (maxFrames > 0) pagingConfig.maxFrames = maxFrames;
+}
+
+PagingConfig PMachine::getPagingConfig() const {
+    return pagingConfig;
+}
+
+PagingStats PMachine::getPagingStats() const {
+    return pagingStats;
+}
+
+void PMachine::setRuntimeUnit(const std::string& kind, const std::string& id, uint32_t refreshMs) {
+    runtimeUnit.kind = parseRuntimeUnitKind(kind);
+    runtimeUnit.id = trimCopy(id);
+    runtimeUnit.refreshMs = (runtimeUnit.kind == RuntimeUnitKind::Daemon)
+        ? (refreshMs > 0 ? refreshMs : 1000)
+        : 0;
+}
+
+const RuntimeUnitDescriptor& PMachine::getRuntimeUnit() const {
+    return runtimeUnit;
+}
+
+bool PMachine::loadResidentDomain(const std::string& domain, const std::string& id, size_t bytes, bool pin) {
+    const ResidentDomain parsedDomain = parseResidentDomain(domain);
+    const std::string trimmedId = trimCopy(id);
+    if (trimmedId.empty()) return false;
+
+    const uint32_t nowMs = millis();
+    for (auto& asset : residentAssets) {
+        if (asset.domain == parsedDomain && asset.id == trimmedId) {
+            asset.resident = true;
+            asset.bytes = bytes > 0 ? bytes : asset.bytes;
+            asset.lastUsedAtMs = nowMs;
+            if (pin) asset.pinCount = static_cast<uint16_t>(asset.pinCount + 1);
+            return true;
+        }
+    }
+
+    ResidentAssetRecord rec;
+    rec.domain = parsedDomain;
+    rec.id = trimmedId;
+    rec.bytes = bytes;
+    rec.pinCount = pin ? 1 : 0;
+    rec.loadedAtMs = nowMs;
+    rec.lastUsedAtMs = nowMs;
+    rec.resident = true;
+    residentAssets.push_back(rec);
+
+    if (parsedDomain == ResidentDomain::GlobalEnumeratedTypes) {
+        enumTypes[trimmedId] = static_cast<int>(enumTypes.size());
+    }
+
+    return true;
+}
+
+bool PMachine::unloadResidentDomain(const std::string& domain, const std::string& id) {
+    const ResidentDomain parsedDomain = parseResidentDomain(domain);
+    const std::string trimmedId = trimCopy(id);
+    for (auto& asset : residentAssets) {
+        if (asset.domain != parsedDomain || asset.id != trimmedId) continue;
+        if (asset.pinCount > 0) {
+            asset.pinCount = static_cast<uint16_t>(asset.pinCount - 1);
+        }
+        if (asset.pinCount == 0) {
+            asset.resident = false;
+        }
+        if (parsedDomain == ResidentDomain::GlobalEnumeratedTypes && !asset.resident) {
+            enumTypes.erase(trimmedId);
+        }
+        return true;
+    }
+    return false;
+}
+
+std::vector<ResidentAssetRecord> PMachine::getResidentAssets() const {
+    std::vector<ResidentAssetRecord> out;
+    for (const auto& asset : residentAssets) {
+        if (asset.resident) out.push_back(asset);
+    }
+    return out;
+}
+
+void PMachine::touchResidentAsset(const std::string& domain, const std::string& id) {
+    const ResidentDomain parsedDomain = parseResidentDomain(domain);
+    const std::string trimmedId = trimCopy(id);
+    const uint32_t nowMs = millis();
+    for (auto& asset : residentAssets) {
+        if (asset.domain == parsedDomain && asset.id == trimmedId && asset.resident) {
+            asset.lastUsedAtMs = nowMs;
+            return;
+        }
+    }
+}
+
+bool PMachine::loadUnit(const std::string& kind, const std::string& id, uint32_t refreshMs) {
+    setRuntimeUnit(kind, id, refreshMs);
+    runtimeUnit.loadedAtMs = millis();
+    runtimeUnit.lastRefreshAtMs = runtimeUnit.loadedAtMs;
+    runtimeUnit.resident = true;
+    return loadResidentDomain("program-image", runtimeUnit.id, maxSpace, false);
+}
+
+bool PMachine::unloadUnit() {
+    if (!runtimeUnit.resident) return true;
+    unloadResidentDomain("program-image", runtimeUnit.id);
+    runtimeUnit.resident = false;
+    pcodeMap.clear();
+    memoryMap.clear();
+    programImage.clear();
+    pageTable.clear();
+    frames.clear();
+    backingFile.clear();
+    numPages = 0;
+    return true;
+}
+
+void PMachine::tickDaemonRefresh(uint32_t nowMs) {
+    if (runtimeUnit.kind != RuntimeUnitKind::Daemon || !runtimeUnit.resident || runtimeUnit.refreshMs == 0) return;
+    if (nowMs == 0) nowMs = millis();
+    if ((nowMs - runtimeUnit.lastRefreshAtMs) >= runtimeUnit.refreshMs) {
+        runtimeUnit.lastRefreshAtMs = nowMs;
+    }
+}
+
+bool PMachine::loadProgram(const std::vector<uint8_t>& pcode, const std::string& file, size_t maxBytes) {
+    pcodeMap.clear();
+    memoryMap.clear();
+    programImage = pcode;
+    pageTable.clear();
+    frames.clear();
+    lruTick = 0;
+
+    backingFile = file;
+    maxSpace = maxBytes;
+
+    if (pagingConfig.pageSizeBytes == 0) pagingConfig.pageSizeBytes = 1024;
+    if (pagingConfig.maxFrames == 0) pagingConfig.maxFrames = 24;
+
+    const size_t pageSize = pagingConfig.pageSizeBytes;
+    numPages = static_cast<int>((pcode.size() + pageSize - 1) / pageSize);
+    pageTable.resize(static_cast<size_t>(numPages));
+
+    for (size_t i = 0; i < pcode.size(); ++i) {
+        pcodeMap[static_cast<uint16_t>(i)] = pcode[i];
+    }
+
+    const size_t residentPages = std::min(static_cast<size_t>(numPages), pagingConfig.maxFrames);
+    frames.resize(residentPages);
+    for (size_t vp = 0; vp < static_cast<size_t>(numPages); ++vp) {
+        if (vp < residentPages) {
+            memoryMap[static_cast<uint16_t>(vp)] = static_cast<uint32_t>(vp);
+            pageTable[vp].present = true;
+            pageTable[vp].frameIndex = static_cast<uint16_t>(vp);
+            frames[vp].used = true;
+            frames[vp].pinned = false;
+            frames[vp].vpage = static_cast<uint16_t>(vp);
+            frames[vp].lastAccessTick = ++lruTick;
+        } else {
+            memoryMap[static_cast<uint16_t>(vp)] = 0xFFFFFFFFu;
+            pageTable[vp].present = false;
+            pageTable[vp].frameIndex = 0;
+        }
+    }
+
+    pagingStats.pageFaults = 0;
+    pagingStats.evictions = 0;
+    pagingStats.ffsReads = 0;
+    pagingStats.cacheHits = residentPages;
+
+    loadResidentDomain("program-image", backingFile, pcode.size(), false);
+    return true;
+}
+
+int PMachine::findLruVictimFrame() const {
+    int victim = -1;
+    uint32_t oldestTick = 0;
+    for (size_t i = 0; i < frames.size(); ++i) {
+        const auto& frame = frames[i];
+        if (!frame.used || frame.pinned) continue;
+        if (victim < 0 || frame.lastAccessTick < oldestTick) {
+            victim = static_cast<int>(i);
+            oldestTick = frame.lastAccessTick;
+        }
+    }
+    return victim;
+}
+
+int PMachine::ensurePageResident(uint16_t vpage) {
+    if (vpage >= pageTable.size()) return -1;
+    if (pageTable[vpage].present) {
+        const uint16_t frameIdx = pageTable[vpage].frameIndex;
+        if (frameIdx < frames.size()) {
+            frames[frameIdx].lastAccessTick = ++lruTick;
+            pagingStats.cacheHits += 1;
+            return static_cast<int>(frameIdx);
+        }
+        pageTable[vpage].present = false;
+    }
+
+    pagingStats.pageFaults += 1;
+    pagingStats.ffsReads += 1;
+
+    int frameIdx = -1;
+    if (frames.size() < pagingConfig.maxFrames) {
+        frameIdx = static_cast<int>(frames.size());
+        frames.push_back(PageFrame{});
+    } else {
+        frameIdx = findLruVictimFrame();
+        if (frameIdx < 0) return -1;
+        const uint16_t evictedVpage = frames[frameIdx].vpage;
+        if (evictedVpage < pageTable.size()) {
+            pageTable[evictedVpage].present = false;
+            pageTable[evictedVpage].frameIndex = 0;
+            memoryMap[evictedVpage] = 0xFFFFFFFFu;
+        }
+        pagingStats.evictions += 1;
+    }
+
+    pageTable[vpage].present = true;
+    pageTable[vpage].frameIndex = static_cast<uint16_t>(frameIdx);
+    memoryMap[vpage] = static_cast<uint32_t>(frameIdx);
+    frames[frameIdx].used = true;
+    frames[frameIdx].vpage = vpage;
+    frames[frameIdx].lastAccessTick = ++lruTick;
+    return frameIdx;
+}
+
+bool PMachine::readPCodeByte(uint32_t virtualAddress, uint8_t& outByte) {
+    if (virtualAddress >= programImage.size()) return false;
+    if (pagingConfig.pageSizeBytes == 0) return false;
+    const uint16_t vpage = static_cast<uint16_t>(virtualAddress / pagingConfig.pageSizeBytes);
+    if (ensurePageResident(vpage) < 0) return false;
+    outByte = programImage[virtualAddress];
+    return true;
+}
+
 void PMachine::singleStep() {}
 void PMachine::setBreakpoint(uint16_t) {}
 void PMachine::clearBreakpoint(uint16_t) {}
@@ -678,8 +958,10 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
     gFlowState.clear();
     lastRunStepLimitHit = false;
     lastRunStepCount = 0;
+    running = true;
     PMTRACE(Serial.println("[DEBUG] Executing pinstructions:"));
     while (pc < (int)instructions.size()) {
+        tickDaemonRefresh();
         ++steps;
         if (steps > MAX_RUN_STEPS) {
             lastRunStepLimitHit = true;
@@ -799,7 +1081,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             handler(*this, instr, stack, sp, bp, pc);
             if (instr.opcode == OP_HALT) {
                 PMTRACE(Serial.println("[HALT]"));
-                return;
+                break;
             }
         } else {
             // Unknown opcode: skip
@@ -807,6 +1089,10 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
         }
     }
     lastRunStepCount = steps;
+    running = false;
+    if (runtimeUnit.kind == RuntimeUnitKind::Program) {
+        unloadUnit();
+    }
     PMTRACE(Serial.println("[DEBUG] Execution finished."));
 }
 

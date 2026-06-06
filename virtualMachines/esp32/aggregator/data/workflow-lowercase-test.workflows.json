@@ -1,0 +1,13 @@
+[
+  {
+    "id": "lowercase",
+    "steps": [
+      {
+        "id": "s1",
+        "action": "set_state",
+        "key": "alpha",
+        "value": "1"
+      }
+    ]
+  }
+]

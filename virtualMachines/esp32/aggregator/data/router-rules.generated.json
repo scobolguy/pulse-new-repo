@@ -1,119 +1,51 @@
 [
   {
-    "id": "mt103-correspondent-and-lynx-fanout",
-    "name": "mt103-correspondent-and-lynx-fanout",
-    "serviceId": "aggregator-router-service",
-    "enabled": true,
-    "inputQueue": "swift.mt103.parsed",
-    "description": "One MT103 to correspondent and LYNX flows",
-    "outputs": [
-      {
-        "queueName": "correspondent.pacs008.outbound",
-        "whenRule": "BEGIN output := 1; END",
-        "transformRule": "BEGIN output := map (\"mt103-to-pacs\", src); END"
-      },
-      {
-        "queueName": "lynx.pacs009.outbound",
-        "whenRule": "BEGIN output := 1; END",
-        "transformRule": "BEGIN output := map (\"pacs-to-lynx\", map (\"mt103-to-pacs\", src)); END"
-      }
-    ],
-    "createdAt": "2026-05-29T17:26:56.825Z",
-    "updatedAt": "2026-05-29T17:26:56.825Z"
-  },
-  {
-    "id": "swift-fanout-default",
-    "name": "swift-fanout-default",
-    "serviceId": "aggregator-router-service",
-    "enabled": true,
-    "inputQueue": "swift.inbound",
-    "description": "Default fanout by MT type",
-    "outputs": [
-      {
-        "queueName": "audit.all",
-        "whenRule": "output := 1;",
-        "transformRule": "output := src;"
-      },
-      {
-        "queueName": "payments.mt103",
-        "whenRule": "IF startswith(upper(src), \\\"MT103\\\") THEN output := 1 ELSE output := 0;",
-        "transformRule": "output := src;"
-      },
-      {
-        "queueName": "payments.mt202",
-        "whenRule": "IF startswith(upper(src), \\\"MT202\\\") THEN output := 1 ELSE output := 0;",
-        "transformRule": "output := src;"
-      }
-    ],
-    "createdAt": "2026-05-29T17:26:56.825Z",
-    "updatedAt": "2026-05-29T17:26:56.825Z"
-  },
-  {
-    "id": "mt103-inbound-to-parsed",
-    "name": "mt103-inbound-to-parsed",
-    "serviceId": "aggregator-router-service",
+    "id": "mt103-route",
+    "name": "mt103-route",
+    "serviceId": "interop-router",
     "enabled": true,
     "inputQueue": "swift.mt103.inbound",
-    "description": "Forward MT103 ingress into parsed queue",
+    "description": "Route MT103",
     "outputs": [
       {
         "queueName": "swift.mt103.parsed",
-        "whenRule": "IF startswith(upper(src), \\\"MT103\\\") THEN output := 1 ELSE output := 0;",
-        "transformRule": "BEGIN output := src; END"
-      }
-    ],
-    "createdAt": "2026-05-29T17:26:56.825Z",
-    "updatedAt": "2026-05-29T17:26:56.825Z"
-  },
-  {
-    "id": "ops-validation-deadletter-audit",
-    "name": "ops-validation-deadletter-audit",
-    "serviceId": "aggregator-router-service",
-    "enabled": true,
-    "inputQueue": "ops.validation.deadletter",
-    "description": "Mirror deadletter events into audit stream",
-    "outputs": [
-      {
-        "queueName": "audit.all",
+        "dataTypeIds": [
+          "envelope"
+        ],
+        "dataTypeId": "envelope",
+        "dataTypeRef": {
+          "type": "TypeRef",
+          "id": "envelope",
+          "genericArgs": [
+            {
+              "type": "TypeRef",
+              "id": "swift-mt103",
+              "genericArgs": []
+            }
+          ]
+        },
+        "dataTypeSignature": "envelope<swift-mt103>",
+        "dataTypeRefs": [
+          {
+            "type": "TypeRef",
+            "id": "envelope",
+            "genericArgs": [
+              {
+                "type": "TypeRef",
+                "id": "swift-mt103",
+                "genericArgs": []
+              }
+            ]
+          }
+        ],
+        "dataTypeSignatures": [
+          "envelope<swift-mt103>"
+        ],
         "whenRule": "output := 1;",
         "transformRule": "output := src;"
       }
     ],
-    "createdAt": "2026-05-29T17:26:56.825Z",
-    "updatedAt": "2026-05-29T17:26:56.825Z"
-  },
-  {
-    "id": "pacs-inbound-to-outbound",
-    "name": "pacs-inbound-to-outbound",
-    "serviceId": "aggregator-router-service",
-    "enabled": true,
-    "inputQueue": "pacs.inbound",
-    "description": "Forward PACS ingress to outbound queue",
-    "outputs": [
-      {
-        "queueName": "pacs.outbound",
-        "whenRule": "output := 1;",
-        "transformRule": "output := src;"
-      }
-    ],
-    "createdAt": "2026-05-29T17:26:56.825Z",
-    "updatedAt": "2026-05-29T17:26:56.825Z"
-  },
-  {
-    "id": "mt202-inbound-routing",
-    "name": "mt202-inbound-routing",
-    "serviceId": "aggregator-router-service",
-    "enabled": true,
-    "inputQueue": "mt202.inbound",
-    "description": "Route MT202 ingress into payment queue",
-    "outputs": [
-      {
-        "queueName": "payments.mt202",
-        "whenRule": "IF startswith(upper(src), \\\"MT202\\\") THEN output := 1 ELSE output := 0;",
-        "transformRule": "BEGIN output := src; END"
-      }
-    ],
-    "createdAt": "2026-05-29T17:26:56.825Z",
-    "updatedAt": "2026-05-29T17:26:56.825Z"
+    "createdAt": "2026-06-06T12:51:00.816Z",
+    "updatedAt": "2026-06-06T12:51:00.816Z"
   }
 ]

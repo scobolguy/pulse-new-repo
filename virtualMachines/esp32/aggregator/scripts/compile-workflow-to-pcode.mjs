@@ -51,6 +51,45 @@ function toWhenRule(condition) {
 
 function emitStatements(steps, lines, labels, branchCounterRef) {
   for (const step of steps || []) {
+    if (step.action === 'try') {
+      const tryId = branchCounterRef.value++;
+      const catchLabel = `TRY_${tryId}_CATCH`;
+      const endLabel = `TRY_${tryId}_END`;
+
+      lines.push('NOP');
+      emitStatements(step.body || [], lines, labels, branchCounterRef);
+      lines.push(`JMP ${endLabel}`);
+      lines.push(`${catchLabel}:`);
+      emitStatements(step.onError || [], lines, labels, branchCounterRef);
+      lines.push(`${endLabel}:`);
+
+      labels.push({
+        type: 'try_block',
+        stepId: step.id,
+        bodyCount: Array.isArray(step.body) ? step.body.length : 0,
+        onErrorCount: Array.isArray(step.onError) ? step.onError.length : 0
+      });
+      continue;
+    }
+
+    if (step.action === 'cobegin') {
+      labels.push({
+        type: 'cobegin',
+        stepId: step.id,
+        mode: step.mode,
+        timeoutMs: step.timeoutMs || null,
+        backoutOnError: Boolean(step.backoutOnError),
+        subflowCount: Array.isArray(step.subflows) ? step.subflows.length : 0
+      });
+
+      lines.push('NOP');
+      for (const subflow of step.subflows || []) {
+        labels.push({ type: 'cobegin_subflow', stepId: step.id, subflowId: subflow.id });
+        emitStatements(subflow.steps || [], lines, labels, branchCounterRef);
+      }
+      continue;
+    }
+
     if (step.action === 'route_queue') {
       labels.push({ type: 'route_queue', stepId: step.id, queueRef: step.queueRef });
       lines.push(`ROUTE_EMIT ${q(step.queueRef)}`);

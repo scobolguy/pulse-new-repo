@@ -1,0 +1,19 @@
+[
+  {
+    "id": "r1",
+    "name": "r1",
+    "serviceId": "svc",
+    "enabled": true,
+    "inputQueue": "q.in",
+    "description": "demo",
+    "outputs": [
+      {
+        "queueName": "q.out",
+        "whenRule": "output := 1;",
+        "transformRule": "output := src;"
+      }
+    ],
+    "createdAt": "2026-06-04T15:19:14.752Z",
+    "updatedAt": "2026-06-04T15:19:14.752Z"
+  }
+]

@@ -50,6 +50,7 @@ async function main() {
   await fs.mkdir(outputDir, { recursive: true });
   await generateForGrammar('PascalishRouterMapper.g4');
   await generateForGrammar('WorkflowDsl.g4');
+  await generateForGrammar('Cobolish85.g4');
   console.log('[ANTLR] Generated modern JS parsers into grammar/generated-modern');
 }
 

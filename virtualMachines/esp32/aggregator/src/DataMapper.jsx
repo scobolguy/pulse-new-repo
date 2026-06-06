@@ -368,6 +368,10 @@ export default function DataMapper() {
   const [expandedSourcePaths, setExpandedSourcePaths] = useState(new Set());
   const [expandedTargetPaths, setExpandedTargetPaths] = useState(new Set());
   const [isPersistedMap, setIsPersistedMap] = useState(false);
+  const [testCases, setTestCases] = useState([]);
+  const [selectedTestCaseId, setSelectedTestCaseId] = useState('');
+  const [runPayloadText, setRunPayloadText] = useState('');
+  const [runResult, setRunResult] = useState(null);
 
   const loadSchemas = useCallback(async () => {
     try {
@@ -395,6 +399,30 @@ export default function DataMapper() {
       void loadSchemas();
     }, 0);
   }, [loadSchemas]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadTestCases() {
+      try {
+        const res = await fetch('/api/mapper/test-cases');
+        const data = res.ok ? await res.json() : { testCases: [] };
+        if (cancelled) return;
+        const list = Array.isArray(data.testCases) ? data.testCases : [];
+        setTestCases(list);
+        if (list.length > 0 && !selectedTestCaseId) {
+          setSelectedTestCaseId(String(list[0].id || ''));
+        }
+      } catch {
+        if (!cancelled) setTestCases([]);
+      }
+    }
+    setTimeout(() => {
+      void loadTestCases();
+    }, 0);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const schemasByPath = useMemo(() => {
     const map = new Map();
@@ -719,6 +747,10 @@ export default function DataMapper() {
         targetTypeId,
         sourceSchemaPath,
         targetSchemaPath,
+        sourceSchemaMtime: sourceSchema?.mtime ? String(sourceSchema.mtime) : '',
+        targetSchemaMtime: targetSchema?.mtime ? String(targetSchema.mtime) : '',
+        sourceStructure: sourceSchema?.structure || null,
+        targetStructure: targetSchema?.structure || null,
         rules: items.map((item) => ({
           sourcePath: item.sourcePath,
           targetPath: item.targetPath,
@@ -758,6 +790,93 @@ export default function DataMapper() {
       });
     } catch (e) {
       setStatus(`Save failed: ${e.message}`);
+    }
+  }
+
+  async function runMapping() {
+    try {
+      if (!editingId) {
+        setStatus('Run failed: open or create a map first');
+        return;
+      }
+
+      let payload = null;
+      const payloadText = String(runPayloadText || '').trim();
+      if (payloadText) {
+        try {
+          payload = JSON.parse(payloadText);
+        } catch {
+          setStatus('Run failed: payload must be valid JSON');
+          return;
+        }
+      }
+
+      const body = payload
+        ? { payload }
+        : { testCaseId: selectedTestCaseId || '' };
+
+      const res = await fetch(`/api/mapper/maps/${encodeURIComponent(editingId)}/run`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setRunResult(null);
+        setStatus(`Run failed: ${data.error || 'unknown error'}`);
+        return;
+      }
+
+      setRunResult(data);
+      setStatus(`Run succeeded for map ${editingId}`);
+    } catch (e) {
+      setStatus(`Run failed: ${e.message}`);
+    }
+  }
+
+  async function applyShapeAwareMap(sourcePath, targetPath) {
+    try {
+      if (!editingId) {
+        setStatus('Shape map failed: open or create a map first');
+        return;
+      }
+      if (!sourcePath || !targetPath) {
+        setStatus('Shape map failed: source and target branch paths are required');
+        return;
+      }
+
+      const res = await fetch(`/api/mapper/maps/${encodeURIComponent(editingId)}/auto-shape-map`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sourcePath, targetPath }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setStatus(`Shape map failed: ${data.error || 'unknown error'}`);
+        return;
+      }
+
+      const map = data.map || {};
+      const mappedItems = (Array.isArray(map.rules) ? map.rules : [])
+        .map((rule) => {
+          const sourcePathValue = String(rule.sourcePath || rule.from || '').trim();
+          const targetPathValue = String(rule.targetPath || rule.to || '').trim();
+          if (!sourcePathValue || !targetPathValue) return null;
+          return {
+            sourcePath: sourcePathValue,
+            targetPath: targetPathValue,
+            kind: String(rule.kind || 'leaf').toLowerCase() === 'branch' ? 'branch' : 'leaf',
+            sourceValueType: String(rule.sourceValueType || 'unknown').toLowerCase() || 'unknown',
+            targetValueType: String(rule.targetValueType || 'unknown').toLowerCase() || 'unknown',
+            conversionRule: String(rule.conversionRule || rule.conversion || '').trim(),
+          };
+        })
+        .filter(Boolean);
+
+      setItems(mappedItems);
+      setStatus(`Shape-aware map added ${Number(data.added || 0)} links`);
+    } catch (e) {
+      setStatus(`Shape map failed: ${e.message}`);
     }
   }
 
@@ -808,6 +927,14 @@ export default function DataMapper() {
           updateItemConversionRule={updateItemConversionRule}
           removeItem={removeItem}
           saveMapping={saveMapping}
+          runMapping={runMapping}
+          testCases={testCases}
+          selectedTestCaseId={selectedTestCaseId}
+          setSelectedTestCaseId={setSelectedTestCaseId}
+          runPayloadText={runPayloadText}
+          setRunPayloadText={setRunPayloadText}
+          runResult={runResult}
+          applyShapeAwareMap={applyShapeAwareMap}
           mappingTitle={mappingTitle}
           items={items}
           toggleExpandPath={toggleExpandPath}

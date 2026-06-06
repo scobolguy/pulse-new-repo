@@ -73,6 +73,48 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, duration));
 }
 
+function toErrorMessage(error) {
+  if (!error) return 'unknown error';
+  return error?.message ? String(error.message) : String(error);
+}
+
+function normalizeTimeoutQueue(payload) {
+  const source = payload && typeof payload === 'object' ? payload : {};
+  const jobs = Array.isArray(source.jobs) ? source.jobs : [];
+  jobs.sort((a, b) => {
+    const left = Date.parse(String(a?.triggerAt || '')) || 0;
+    const right = Date.parse(String(b?.triggerAt || '')) || 0;
+    return left - right;
+  });
+  return {
+    version: 1,
+    updatedAt: source.updatedAt || new Date().toISOString(),
+    jobs
+  };
+}
+
+async function loadTimeoutQueue(queuePath) {
+  try {
+    const raw = await fs.readFile(queuePath, 'utf-8');
+    return normalizeTimeoutQueue(JSON.parse(raw));
+  } catch {
+    return normalizeTimeoutQueue(null);
+  }
+}
+
+async function saveTimeoutQueue(queuePath, queue) {
+  const normalized = normalizeTimeoutQueue(queue);
+  normalized.updatedAt = new Date().toISOString();
+  await fs.mkdir(path.dirname(queuePath), { recursive: true });
+  await fs.writeFile(queuePath, `${JSON.stringify(normalized, null, 2)}\n`, 'utf-8');
+}
+
+async function enqueueTimeoutJob(runtime, job) {
+  const queue = await loadTimeoutQueue(runtime.workflowTimeoutQueuePath);
+  queue.jobs.push(job);
+  await saveTimeoutQueue(runtime.workflowTimeoutQueuePath, queue);
+}
+
 function normalizeIssueTestStore(payload) {
   const source = payload && typeof payload === 'object' ? payload : {};
   const issues = Array.isArray(source.issues) ? source.issues : [];
@@ -209,6 +251,184 @@ function evaluateCondition(condition, context, state) {
 
 async function executeSteps(steps, runtime, output) {
   for (const step of steps || []) {
+    if (step.action === 'try') {
+      try {
+        await executeSteps(step.body || [], runtime, output);
+      } catch (error) {
+        if (Array.isArray(step.onError) && step.onError.length > 0) {
+          output.push({
+            stepId: step.id,
+            mode: runtime.dryRun ? 'dry-run' : 'executed',
+            action: step.action,
+            branchTaken: 'onError',
+            error: toErrorMessage(error)
+          });
+          await executeSteps(step.onError, runtime, output);
+          continue;
+        }
+        throw error;
+      }
+
+      output.push({
+        stepId: step.id,
+        mode: runtime.dryRun ? 'dry-run' : 'executed',
+        action: step.action,
+        branchTaken: 'body'
+      });
+      continue;
+    }
+
+    if (step.action === 'cobegin') {
+      const subflows = Array.isArray(step.subflows) ? step.subflows : [];
+      if (subflows.length === 0) {
+        throw new Error(`COBEGIN ${step.id} must contain at least one subflow`);
+      }
+
+      const executeSubflow = async (subflow) => {
+        const subflowOutput = [];
+        const subflowRuntime = {
+          ...runtime,
+          state: { ...runtime.state },
+          context: { ...runtime.context, subflowId: subflow.id }
+        };
+        await executeSteps(subflow.steps || [], subflowRuntime, subflowOutput);
+        return {
+          subflowId: subflow.id,
+          state: subflowRuntime.state,
+          output: subflowOutput
+        };
+      };
+
+      const subflowPromises = subflows.map(subflow =>
+        executeSubflow(subflow)
+          .then(value => ({ ok: true, value }))
+          .catch(error => ({ ok: false, subflowId: subflow.id, error }))
+      );
+
+      if (step.mode === 'sync') {
+        const settled = await Promise.all(subflowPromises);
+        const failed = settled.find(item => !item.ok);
+        if (failed) {
+          const errorMessage = toErrorMessage(failed.error);
+          if (step.backoutOnError && !runtime.dryRun) {
+            await enqueueTimeoutJob(runtime, {
+              id: `${step.id}-backout-${Date.now()}`,
+              triggerAt: new Date().toISOString(),
+              createdAt: new Date().toISOString(),
+              workflowId: runtime.workflowId,
+              stepId: step.id,
+              reason: 'subflow-error',
+              details: {
+                mode: step.mode,
+                failedSubflowId: failed.subflowId,
+                error: errorMessage,
+                context: runtime.context
+              }
+            });
+          }
+          throw new Error(`COBEGIN ${step.id} failed in subflow ${failed.subflowId}: ${errorMessage}`);
+        }
+
+        for (const item of settled) {
+          const value = item.value;
+          Object.assign(runtime.state, value.state || {});
+          output.push(...(value.output || []));
+        }
+
+        output.push({
+          stepId: step.id,
+          mode: runtime.dryRun ? 'dry-run' : 'executed',
+          action: step.action,
+          cobeginMode: step.mode,
+          subflowCount: subflows.length,
+          completed: true
+        });
+        continue;
+      }
+
+      const timeoutMs = Math.max(1, Number(step.timeoutMs) || 0);
+      if (!timeoutMs) {
+        throw new Error(`COBEGIN ${step.id} ASYNC requires a positive WAIT timeout`);
+      }
+
+      const settledPromise = Promise.all(subflowPromises);
+      const timeoutGate = sleep(timeoutMs).then(() => ({ timedOut: true }));
+      const raceResult = await Promise.race([
+        settledPromise.then(items => ({ timedOut: false, items })),
+        timeoutGate
+      ]);
+
+      if (raceResult.timedOut) {
+        if (!runtime.dryRun) {
+          await enqueueTimeoutJob(runtime, {
+            id: `${step.id}-timeout-${Date.now()}`,
+            triggerAt: new Date(Date.now() + timeoutMs).toISOString(),
+            createdAt: new Date().toISOString(),
+            workflowId: runtime.workflowId,
+            stepId: step.id,
+            reason: 'async-timeout',
+            details: {
+              mode: step.mode,
+              timeoutMs,
+              subflowIds: subflows.map(s => s.id),
+              backoutOnError: Boolean(step.backoutOnError),
+              context: runtime.context
+            }
+          });
+        }
+
+        output.push({
+          stepId: step.id,
+          mode: runtime.dryRun ? 'dry-run' : 'executed',
+          action: step.action,
+          cobeginMode: step.mode,
+          timeoutMs,
+          timedOut: true,
+          queuedTimeoutCheck: true
+        });
+        continue;
+      }
+
+      const failed = (raceResult.items || []).find(item => !item.ok);
+      if (failed) {
+        const errorMessage = toErrorMessage(failed.error);
+        if (step.backoutOnError && !runtime.dryRun) {
+          await enqueueTimeoutJob(runtime, {
+            id: `${step.id}-backout-${Date.now()}`,
+            triggerAt: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+            workflowId: runtime.workflowId,
+            stepId: step.id,
+            reason: 'subflow-error',
+            details: {
+              mode: step.mode,
+              failedSubflowId: failed.subflowId,
+              error: errorMessage,
+              context: runtime.context
+            }
+          });
+        }
+        throw new Error(`COBEGIN ${step.id} failed in subflow ${failed.subflowId}: ${errorMessage}`);
+      }
+
+      for (const item of raceResult.items || []) {
+        const value = item.value;
+        Object.assign(runtime.state, value.state || {});
+        output.push(...(value.output || []));
+      }
+
+      output.push({
+        stepId: step.id,
+        mode: runtime.dryRun ? 'dry-run' : 'executed',
+        action: step.action,
+        cobeginMode: step.mode,
+        timeoutMs,
+        timedOut: false,
+        subflowCount: subflows.length
+      });
+      continue;
+    }
+
     if (step.action === 'call_api') {
       const api = runtime.apiMap.get(step.apiSymbol);
       if (!api || !api.baseUrl) {
@@ -905,8 +1125,10 @@ async function executeWorkflow(compiled, workflowId, dryRun = false, context = {
     queueMap,
     state,
     context,
+    workflowId,
     actorUserId: String(context?.actorUserId || 'system-admin').trim() || 'system-admin',
     issueTestStorePath,
+    workflowTimeoutQueuePath: path.resolve(String(context?.workflowTimeoutQueuePath || './data/workflow-cobegin-timeouts.json')),
     store
   }, results);
 

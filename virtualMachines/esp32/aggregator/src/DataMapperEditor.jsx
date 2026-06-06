@@ -65,6 +65,14 @@ export default function DataMapperEditor({
   updateItemConversionRule,
   removeItem,
   saveMapping,
+  runMapping,
+  testCases,
+  selectedTestCaseId,
+  setSelectedTestCaseId,
+  runPayloadText,
+  setRunPayloadText,
+  runResult,
+  applyShapeAwareMap,
   mappingTitle,
   items,
   toggleExpandPath,
@@ -103,6 +111,37 @@ export default function DataMapperEditor({
     () => buildMappedVisiblePathSet(targetNodes, linkedTargetPaths),
     [targetNodes, linkedTargetPaths],
   );
+
+  const conversionRuleSuggestions = useMemo(() => {
+    const sourcePaths = Array.isArray(sourceNodes)
+      ? sourceNodes
+        .map((node) => String(node?.path || '').trim())
+        .filter(Boolean)
+      : [];
+    const targetPaths = Array.isArray(targetNodes)
+      ? targetNodes
+        .map((node) => String(node?.path || '').trim())
+        .filter(Boolean)
+      : [];
+
+    const suggestions = new Set([
+      'src',
+      'output',
+      'trim(src)',
+      'upcase(src)',
+      'downcase(src)',
+      'output := src;'
+    ]);
+
+    for (const path of sourcePaths) {
+      suggestions.add(`src.${path}`);
+    }
+    for (const path of targetPaths) {
+      suggestions.add(`output.${path}`);
+    }
+
+    return Array.from(suggestions).sort((a, b) => a.localeCompare(b));
+  }, [sourceNodes, targetNodes]);
 
   const sourceMatchPaths = useMemo(
     () => buildMatchedPathList(sourceNodes, sourceSearchQuery, labelForPath, sourceMtFieldDefs, getXsdDisplayName),
@@ -330,9 +369,63 @@ export default function DataMapperEditor({
               <strong>{name || editingId}</strong> | {sourceTypeId}{' -> '}{targetTypeId}
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  const sourcePath = prompt('Source branch path for shape-aware mapping:', '');
+                  if (!sourcePath) return;
+                  const targetPath = prompt('Target branch path for shape-aware mapping:', '');
+                  if (!targetPath) return;
+                  void applyShapeAwareMap(String(sourcePath).trim(), String(targetPath).trim());
+                }}
+                style={{ color: MAPPER_TEXT_COLOR, background: MAPPER_SURFACE }}
+              >
+                Shape Auto-Map
+              </button>
               <button type="button" onClick={() => setItems([])} style={{ color: MAPPER_TEXT_COLOR, background: MAPPER_SURFACE }}>Clear Links</button>
               <button type="button" onClick={saveMapping} disabled={hasConversionRuleErrors} style={{ color: MAPPER_TEXT_COLOR, background: MAPPER_SURFACE }}>Save</button>
             </div>
+          </div>
+
+          <div style={{ marginBottom: 12, border: '1px solid #d8e0ea', borderRadius: 6, padding: 10, background: '#f8fbff' }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: MAPPER_TEXT_COLOR, marginBottom: 8 }}>Run Mapper</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr auto', gap: 8, alignItems: 'start' }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: MAPPER_TEXT_COLOR }}>
+                <span>Test Case</span>
+                <select
+                  value={selectedTestCaseId}
+                  onChange={(event) => setSelectedTestCaseId(event.target.value)}
+                  style={{ fontSize: 12, padding: '6px 8px', border: '1px solid #cbd5e1', borderRadius: 4, color: MAPPER_TEXT_COLOR, background: MAPPER_SURFACE }}
+                >
+                  <option value="">Select test case</option>
+                  {(Array.isArray(testCases) ? testCases : []).map((testCase) => (
+                    <option key={`mapper-test:${testCase.id}`} value={String(testCase.id || '')}>
+                      {String(testCase.id || '')} | {String(testCase.name || '')}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: MAPPER_TEXT_COLOR }}>
+                <span>Payload Override (optional JSON object)</span>
+                <textarea
+                  value={runPayloadText}
+                  onChange={(event) => setRunPayloadText(event.target.value)}
+                  placeholder='{"Document": { "sample": "value" }}'
+                  style={{ width: '100%', minHeight: 70, fontSize: 12, padding: '6px 8px', border: '1px solid #cbd5e1', borderRadius: 4, fontFamily: 'Consolas, monospace', background: '#fff', color: MAPPER_TEXT_COLOR }}
+                />
+              </label>
+              <div style={{ display: 'flex', alignItems: 'end' }}>
+                <button type="button" onClick={runMapping} style={{ color: MAPPER_TEXT_COLOR, background: MAPPER_SURFACE }}>Run</button>
+              </div>
+            </div>
+            {runResult && (
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontSize: 11, color: MAPPER_MUTED_TEXT, marginBottom: 4 }}>Output Preview</div>
+                <pre style={{ margin: 0, fontSize: 11, background: '#fff', border: '1px solid #d8e0ea', borderRadius: 4, padding: 8, maxHeight: 220, overflow: 'auto', color: MAPPER_TEXT_COLOR }}>
+                  {JSON.stringify(runResult, null, 2)}
+                </pre>
+              </div>
+            )}
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -522,6 +615,11 @@ export default function DataMapperEditor({
           </div>
 
           <div style={{ marginTop: 14, border: '1px solid #dce3eb', borderRadius: 6, overflow: 'hidden', background: '#fff' }}>
+            <datalist id="mapper-conversion-rule-suggestions">
+              {conversionRuleSuggestions.map((optionValue) => (
+                <option key={`rule-suggest:${optionValue}`} value={optionValue} />
+              ))}
+            </datalist>
             <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
               <thead>
                 <tr style={{ background: '#f7f9fc' }}>
@@ -546,6 +644,7 @@ export default function DataMapperEditor({
                         value={String(item.conversionRule || '')}
                         onChange={(event) => updateItemConversionRule(index, event.target.value)}
                         placeholder="move(src)"
+                        list="mapper-conversion-rule-suggestions"
                         style={{
                           width: '100%',
                           fontSize: 12,

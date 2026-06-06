@@ -1,0 +1,4 @@
+queue "in" -> "q.in" type "text-string";
+workflow "lowercase" begin
+  step "s1" set state "alpha" = "1";
+end;

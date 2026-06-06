@@ -2,6 +2,8 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createNewDocumentFileName, DOCUMENT_TYPES, getDocumentTypeByFileName, getDocumentTypeById, normalizeDocumentFileName } from '../documentRegistry.js';
+import { compileRouterMapperDSL } from '../../scripts/compile-pascal.mjs';
+import { compileCobolishWithAntlr } from '../../scripts/cobolish-antlr-compiler.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const defaultRuntimeRoot = path.join(repoRoot, 'data');
@@ -191,6 +193,89 @@ export async function registerDevelopDocumentRoutes(app) {
       applyJson(res, 200, { ok: true });
     } catch (error) {
       applyJson(res, 400, { error: error.message });
+    }
+  });
+
+  app.post('/api/develop/compile', async (req, res) => {
+    try {
+      const mode = String(req.body?.mode || 'compile').trim().toLowerCase();
+      const fileName = String(req.body?.fileName || '').trim();
+      const fileType = getDocumentTypeByFileName(fileName);
+      const languageId = fileType?.id || 'pascalish';
+      const supportedLanguages = new Set(['pascalish', 'cobolish']);
+      if (!supportedLanguages.has(languageId)) {
+        return applyJson(res, 400, { error: `Compile is not supported for ${languageId}.` });
+      }
+
+      let sourceText = String(req.body?.content ?? '');
+      if (!sourceText && fileName) {
+        sourceText = await readDocumentFile(fileName);
+      }
+      if (!sourceText.trim()) {
+        return applyJson(res, 400, { error: `No ${languageId === 'cobolish' ? 'COBOLISH' : 'Pascalish'} source content provided.` });
+      }
+
+      const compiled = languageId === 'cobolish'
+        ? compileCobolishWithAntlr(sourceText, { fileName })
+        : compileRouterMapperDSL(sourceText);
+
+      const compileSummary = languageId === 'cobolish'
+        ? {
+            language: 'cobolish',
+            programId: compiled.programId,
+            sections: Array.isArray(compiled.sections) ? compiled.sections.length : 0,
+            paragraphs: Array.isArray(compiled.paragraphs) ? compiled.paragraphs.length : 0,
+            dataItems: Array.isArray(compiled.dataItems) ? compiled.dataItems.length : 0,
+            interop: Array.isArray(compiled.interop) ? compiled.interop.length : 0,
+            syntaxErrors: Number(compiled.syntaxErrorCount || 0),
+            valid: Boolean(compiled.valid),
+            compiledAt: compiled.compiledAt || new Date().toISOString()
+          }
+        : {
+            language: 'pascalish',
+            serviceId: compiled.serviceId,
+            routers: Array.isArray(compiled.routerRules) ? compiled.routerRules.length : 0,
+            mappings: Array.isArray(compiled.dataMappings) ? compiled.dataMappings.length : 0,
+            variables: Array.isArray(compiled.variableDeclarations) ? compiled.variableDeclarations.length : 0,
+            compiledAt: compiled.compiledAt || new Date().toISOString()
+          };
+
+      let deployed = false;
+      if (mode === 'compile-run' || mode === 'compile-debug') {
+        const artifactOutPath = languageId === 'cobolish'
+          ? path.join(runtimeRoot, 'cobolish-compiled.json')
+          : path.join(runtimeRoot, 'router-mapper-compiled.json');
+
+        await fs.mkdir(path.dirname(artifactOutPath), { recursive: true });
+        if (languageId === 'cobolish') {
+          await fs.writeFile(artifactOutPath, `${JSON.stringify(compiled, null, 2)}\n`, 'utf-8');
+        } else {
+          const routerOutPath = path.join(runtimeRoot, 'router-rules.json');
+          const mappingsOutPath = path.join(runtimeRoot, 'data-mappings.json');
+          await fs.writeFile(routerOutPath, `${JSON.stringify(compiled.routerRules || [], null, 2)}\n`, 'utf-8');
+          await fs.writeFile(mappingsOutPath, `${JSON.stringify(compiled.dataMappings || [], null, 2)}\n`, 'utf-8');
+          await fs.writeFile(artifactOutPath, `${JSON.stringify(compiled, null, 2)}\n`, 'utf-8');
+        }
+        deployed = true;
+      }
+
+      return applyJson(res, 200, {
+        status: 'ok',
+        mode,
+        fileName,
+        language: languageId,
+        deployed,
+        compile: compileSummary,
+        debug: mode === 'compile-debug'
+          && languageId === 'pascalish'
+          ? {
+              debuggerTarget: 'fsm-runner',
+              fsmId: 'startup-fsm'
+            }
+          : null
+      });
+    } catch (error) {
+      return applyJson(res, 400, { error: error.message });
     }
   });
 }

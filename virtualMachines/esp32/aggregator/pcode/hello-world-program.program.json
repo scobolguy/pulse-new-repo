@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "generatedAt": "2026-06-05T23:30:50.936Z",
+  "serviceId": "hello-world-program",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "hello-world-program",
+    "refreshMs": null
+  },
+  "variableDeclarations": [],
+  "entryLabel": "ENTRY",
+  "finishLabel": "FINISH",
+  "instructionSubset": [
+    "JMP",
+    "JZ",
+    "NOP",
+    "ROUTE_MATCH_QUEUE",
+    "ROUTE_EVAL_WHEN",
+    "ROUTE_TRANSFORM",
+    "ROUTE_EMIT",
+    "PARSE_FIN_TEXT",
+    "HALT"
+  ],
+  "entries": [
+    {
+      "kind": "router",
+      "id": "hello-route",
+      "label": "ROUTER_0_HELLO_ROUTE",
+      "inputQueue": "hello.in",
+      "outputs": [
+        {
+          "queueName": "hello.out",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "output := 1;",
+          "transformRule": "output := 'Hello, world';"
+        }
+      ]
+    }
+  ]
+}
