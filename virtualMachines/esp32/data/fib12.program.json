@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "generatedAt": "2026-06-07T01:01:57.250Z",
+  "serviceId": "RecursiveFibonacci",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "RecursiveFibonacci",
+    "refreshMs": null
+  },
+  "executionModel": "standard-pascal",
+  "sourceLanguage": "pascal",
+  "globals": [],
+  "procedures": {
+    "PROC_PRINTFIBRANGE": {
+      "name": "PrintFibRange",
+      "params": [
+        "i",
+        "max",
+        "a",
+        "b"
+      ],
+      "locals": []
+    }
+  },
+  "entryLabel": "MAIN"
+}

@@ -58,6 +58,7 @@ FederatedFileSystem::ResolvedPath FederatedFileSystem::resolvePath(const String 
     }
 
     if (!best) {
+        resolved.readOnly = false;
         resolved.resolvedPath = resolved.logicalPath;
         return resolved;
     }

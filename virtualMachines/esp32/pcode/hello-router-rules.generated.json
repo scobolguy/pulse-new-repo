@@ -1,0 +1,19 @@
+[
+  {
+    "id": "hello-route",
+    "name": "hello-route",
+    "serviceId": "hello",
+    "enabled": true,
+    "inputQueue": "hello.in",
+    "description": "Simple hello service",
+    "outputs": [
+      {
+        "queueName": "hello.out",
+        "whenRule": "output := 1;",
+        "transformRule": "output := 'hello, world';"
+      }
+    ],
+    "createdAt": "2026-06-08T16:22:26.386Z",
+    "updatedAt": "2026-06-08T16:22:26.386Z"
+  }
+]

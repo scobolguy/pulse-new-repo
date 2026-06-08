@@ -1,3 +1,52 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { allocateJob } from '../allocator/economicAllocator.mjs';
+
+const NODE_RENAME_OVERRIDES_PATH = path.resolve(process.cwd(), 'data', 'node-rename-overrides.json');
+const ALLOCATOR_DECISIONS_PATH = path.resolve(process.cwd(), 'data', 'allocator-decisions.jsonl');
+
+function normalizeNodeRenameMap(raw) {
+  if (!raw || typeof raw !== 'object') return {};
+  return Object.fromEntries(
+    Object.entries(raw)
+      .map(([key, value]) => [String(key || '').trim().toLowerCase(), String(value || '').trim()])
+      .filter(([key, value]) => Boolean(key) && Boolean(value))
+  );
+}
+
+async function loadNodeRenameMap() {
+  try {
+    const raw = await fs.readFile(NODE_RENAME_OVERRIDES_PATH, 'utf8');
+    return normalizeNodeRenameMap(JSON.parse(raw));
+  } catch {
+    return {};
+  }
+}
+
+async function saveNodeRenameMap(map) {
+  const normalized = normalizeNodeRenameMap(map);
+  await fs.mkdir(path.dirname(NODE_RENAME_OVERRIDES_PATH), { recursive: true });
+  await fs.writeFile(NODE_RENAME_OVERRIDES_PATH, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
+}
+
+async function appendAllocatorDecisionLog(entry) {
+  const line = `${JSON.stringify(entry)}\n`;
+  await fs.mkdir(path.dirname(ALLOCATOR_DECISIONS_PATH), { recursive: true });
+  await fs.appendFile(ALLOCATOR_DECISIONS_PATH, line, 'utf8');
+}
+
+function normalizeSlaClass(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function resolvePolicyIdFromSlaClass(value) {
+  const key = normalizeSlaClass(value);
+  if (key === 'latency-critical' || key === 'latency_critical' || key === 'interactive') return 'latency-first';
+  if (key === 'reliability-critical' || key === 'reliability_critical' || key === 'critical') return 'reliability-first';
+  if (key === 'batch' || key === 'background') return 'cost-min';
+  return 'balanced';
+}
+
 export function registerTopologyRuntimeRoutes(app, deps) {
   const {
     discoveredNodes,
@@ -9,6 +58,45 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     resolveServiceInstance,
     ffsDeploymentRegistry,
   } = deps;
+  let nodeRenameMap = {};
+  let nodeRenameMapLoaded = false;
+
+  async function ensureNodeRenameMapLoaded() {
+    if (nodeRenameMapLoaded) return;
+    nodeRenameMap = await loadNodeRenameMap();
+    nodeRenameMapLoaded = true;
+  }
+
+  function resolveNodeRename(node) {
+    const candidateKeys = [
+      node?.nodeId,
+      node?.id,
+      node?.ip,
+      node?.nodeName,
+      node?.details?.nodeName
+    ]
+      .map((value) => normalizeNodeId(value))
+      .filter(Boolean);
+
+    for (const key of candidateKeys) {
+      const renamed = nodeRenameMap[key];
+      if (renamed) return renamed;
+    }
+    return null;
+  }
+
+  function applyNodeRename(node) {
+    const renamed = resolveNodeRename(node);
+    if (!renamed) return node;
+    return {
+      ...node,
+      nodeName: renamed,
+      details: {
+        ...(node?.details || {}),
+        nodeName: renamed
+      }
+    };
+  }
 
   function normalizeServiceName(value) {
     return String(value || '').trim().toLowerCase();
@@ -88,6 +176,35 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     return wildcard;
   }
 
+  function toAllocatorCandidate(instance) {
+    return {
+      id: String(instance.instanceId || `${instance.serviceName}:${instance.nodeId || instance.ip || 'unknown'}`),
+      nodeId: instance.nodeId || null,
+      clusterId: instance.metadata?.clusterId || null,
+      failureDomain: instance.metadata?.failureDomain || instance.nodeId || instance.ip || 'default',
+      service: instance.serviceName || null,
+      capabilities: Array.isArray(instance.metadata?.capabilities) ? instance.metadata.capabilities : [],
+      executionMs: Number(instance.metadata?.p95LatencyMs || 50),
+      queueDelayMs: Number(instance.metadata?.queueDelayMs || 0),
+      dataMoveCost: Number(instance.metadata?.dataMoveCost || 0),
+      failureRisk: Number(instance.metadata?.failureRisk || 0.01),
+      congestionPrice: Number(instance.metadata?.congestionPrice || 0),
+      specializationBenefit: Number(instance.metadata?.specializationBenefit || 0),
+      diversityPenalty: Number(instance.metadata?.diversityPenalty || 0),
+      successRate15m: Number(instance.metadata?.successRate15m || 0.99),
+      estimatedFreeSlots: Number(instance.metadata?.estimatedFreeSlots || 1),
+      status: instance.status
+    };
+  }
+
+  function listActiveServiceInstances(serviceName) {
+    const normalizedName = normalizeServiceName(serviceName);
+    return Array.from(serviceInstanceRegistry.values()).filter((instance) => {
+      if (normalizeServiceName(instance.serviceName) !== normalizedName) return false;
+      return ['up', 'degraded'].includes(String(instance.status || '').toLowerCase());
+    });
+  }
+
   async function proxyServiceInvocation(instance, reqBody) {
     const body = reqBody && typeof reqBody === 'object' ? reqBody : {};
     const method = String(body.method || 'POST').trim().toUpperCase();
@@ -156,7 +273,8 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     res.json({ services });
   });
 
-  app.get('/api/nodes', (req, res) => {
+  app.get('/api/nodes', async (req, res) => {
+    await ensureNodeRenameMapLoaded();
     const now = Date.now();
     const backendNode = {
       ip: '127.0.0.1',
@@ -241,8 +359,65 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       backendNode,
       ...magicClusterNodes,
       ...Array.from(discoveredNodes.values())
-    ].sort((a, b) => b.lastSeen - a.lastSeen);
+    ]
+      .map((node) => applyNodeRename(node))
+      .sort((a, b) => b.lastSeen - a.lastSeen);
     res.json(nodes);
+  });
+
+  app.post('/api/nodes/:nodeId/rename', async (req, res) => {
+    try {
+      await ensureNodeRenameMapLoaded();
+
+      const requestedNodeId = String(req.params.nodeId || req.body?.nodeId || '').trim();
+      const requestedIp = String(req.body?.ip || '').trim();
+      const nextName = String(req.body?.nodeName || '').trim();
+
+      if (!requestedNodeId && !requestedIp) {
+        return res.status(400).json({ error: 'nodeId or ip is required' });
+      }
+      if (!nextName) {
+        return res.status(400).json({ error: 'nodeName is required' });
+      }
+
+      const normalizedNodeId = normalizeNodeId(requestedNodeId);
+      const normalizedIp = normalizeNodeId(requestedIp);
+
+      if (normalizedNodeId) nodeRenameMap[normalizedNodeId] = nextName;
+      if (normalizedIp) nodeRenameMap[normalizedIp] = nextName;
+
+      for (const [key, existing] of discoveredNodes.entries()) {
+        const matches = [
+          normalizeNodeId(existing?.nodeId),
+          normalizeNodeId(existing?.id),
+          normalizeNodeId(existing?.ip),
+          normalizeNodeId(key)
+        ].filter(Boolean);
+        if (
+          (normalizedNodeId && matches.includes(normalizedNodeId))
+          || (normalizedIp && matches.includes(normalizedIp))
+        ) {
+          discoveredNodes.set(key, {
+            ...existing,
+            nodeName: nextName,
+            details: {
+              ...(existing?.details || {}),
+              nodeName: nextName
+            }
+          });
+        }
+      }
+
+      await saveNodeRenameMap(nodeRenameMap);
+
+      return res.json({
+        status: 'ok',
+        nodeId: requestedNodeId || requestedIp,
+        nodeName: nextName
+      });
+    } catch (error) {
+      return res.status(500).json({ error: error?.message || 'failed to rename node' });
+    }
   });
 
   app.post('/api/pmachine/announce', (req, res) => {
@@ -345,16 +520,129 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       const body = req.body && typeof req.body === 'object' ? req.body : {};
       const preferredNodeId = String(body.nodeId || '').trim();
       const proxy = body.proxy === true;
+      const allocatorMode = String(body.allocatorMode || 'shadow').trim().toLowerCase();
+      const slaClass = String(body.slaClass || '').trim();
+      const policyId = String(body.policyId || resolvePolicyIdFromSlaClass(slaClass)).trim();
+      const requiredCapability = String(body.requiredCapability || '').trim();
+      const requiredFailureDomain = String(body.requiredFailureDomain || '').trim();
+      const requireDistinctFailureDomain = body?.placementPolicy?.requireDistinctFailureDomain === true;
+      const forbiddenFailureDomains = new Set(
+        (Array.isArray(body.forbiddenFailureDomains) ? body.forbiddenFailureDomains : [])
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)
+      );
+
+      const activeInstances = listActiveServiceInstances(serviceName);
+      const constrainedInstances = activeInstances.filter((instance) => {
+        const domain = String(instance.metadata?.failureDomain || instance.nodeId || instance.ip || 'default');
+        if (requiredFailureDomain && domain !== requiredFailureDomain) return false;
+        if (forbiddenFailureDomains.size === 0) return true;
+        return !forbiddenFailureDomains.has(domain);
+      });
+
+      const allocatorJob = {
+        requiredService: serviceName,
+        requiredCapability: requiredCapability || null,
+        sla: {
+          minSuccessProb: body?.sla?.minSuccessProb
+        },
+        placementPolicy: {
+          minReplicas: Number(body?.placementPolicy?.minReplicas || 1)
+        }
+      };
+
+      const allocatorResult = allocateJob(
+        allocatorJob,
+        constrainedInstances.map(toAllocatorCandidate),
+        {
+          policyId,
+          weights: body.weights || null
+        }
+      );
+
+      const allocatorTop = allocatorResult?.decision?.[0] || null;
+      const acceptedCandidates = allocatorResult.scored.candidates.filter((entry) => entry.accepted);
+      const acceptedDomains = new Set(acceptedCandidates.map((entry) => String(entry.failureDomain || 'default')));
+      const requiredReplicas = Math.max(1, Number(body?.placementPolicy?.minReplicas || 1));
+      const distinctDomainConstraintMet = !requireDistinctFailureDomain || acceptedDomains.size >= requiredReplicas;
+
+      if (allocatorMode === 'enforce' && !distinctDomainConstraintMet) {
+        return res.status(409).json({
+          error: 'Distinct failure-domain constraint cannot be satisfied',
+          requiredReplicas,
+          availableDistinctDomains: acceptedDomains.size
+        });
+      }
+
+      const allocatorSelectedInstance = allocatorTop
+        ? constrainedInstances.find((instance) => String(instance.instanceId || `${instance.serviceName}:${instance.nodeId || instance.ip || 'unknown'}`) === allocatorTop.id)
+        : null;
 
       let selected = preferredNodeId
         ? chooseServiceInstanceByNode(serviceName, preferredNodeId)
         : null;
+
       if (!selected) {
-        selected = resolveServiceInstance(serviceName);
+        if (allocatorMode === 'enforce' && allocatorSelectedInstance) {
+          selected = allocatorSelectedInstance;
+        } else {
+          selected = resolveServiceInstance(serviceName);
+        }
       }
       if (!selected) {
         return res.status(404).json({ error: `No active instance for service ${serviceName}` });
       }
+
+      const fallbackReason = preferredNodeId
+        ? 'preferred-node-id'
+        : (allocatorMode === 'enforce'
+            ? 'allocator-no-decision-fallback-resolver'
+            : 'resolver-default');
+
+      const effectiveMode = allocatorMode === 'enforce' ? 'enforce' : 'shadow';
+
+      void appendAllocatorDecisionLog({
+        ts: new Date().toISOString(),
+        route: '/api/pmachine/route/:serviceName',
+        serviceName,
+        mode: effectiveMode,
+        policyId,
+        slaClass: slaClass || null,
+        requiredCapability: requiredCapability || null,
+        preferredNodeId: preferredNodeId || null,
+        selected: {
+          instanceId: selected.instanceId,
+          nodeId: selected.nodeId,
+          ip: selected.ip,
+          source: preferredNodeId
+            ? 'preferred-node'
+            : (effectiveMode === 'enforce' && allocatorSelectedInstance ? 'allocator' : 'resolver')
+        },
+        fallbackReason,
+        allocator: {
+          acceptedCandidates: allocatorResult.scored.candidates.filter((entry) => entry.accepted).length,
+          acceptedDistinctFailureDomains: acceptedDomains.size,
+          requiredReplicas,
+          requireDistinctFailureDomain,
+          topDecision: allocatorTop
+            ? {
+                id: allocatorTop.id,
+                score: allocatorTop.score,
+                failureDomain: allocatorTop.failureDomain,
+                successProb: allocatorTop.successProb
+              }
+            : null,
+          topScored: allocatorResult.scored.candidates.slice(0, 5).map((entry) => ({
+            id: entry.id,
+            accepted: entry.accepted,
+            score: entry.score,
+            failureDomain: entry.failureDomain,
+            reasons: entry.reasons
+          }))
+        }
+      }).catch(() => {
+        // Non-blocking decision log persistence.
+      });
 
       const deployment = getDeploymentForService(serviceName, selected.nodeId);
       const responsePayload = {
@@ -368,7 +656,26 @@ export function registerTopologyRuntimeRoutes(app, deps) {
           metadata: selected.metadata || {},
           lastHeartbeat: selected.lastHeartbeat
         },
-        deployment: deployment || null
+        deployment: deployment || null,
+        allocator: {
+          mode: effectiveMode,
+          policyId,
+          slaClass: slaClass || null,
+          recommended: allocatorTop
+            ? {
+                id: allocatorTop.id,
+                score: allocatorTop.score,
+                failureDomain: allocatorTop.failureDomain,
+                successProb: allocatorTop.successProb
+              }
+            : null,
+          acceptedCandidates: allocatorResult.scored.candidates.filter((entry) => entry.accepted).length,
+          evaluatedCandidates: allocatorResult.scored.candidates.length,
+          acceptedDistinctFailureDomains: acceptedDomains.size,
+          requiredReplicas,
+          requireDistinctFailureDomain,
+          distinctDomainConstraintMet
+        }
       };
 
       if (!proxy) {

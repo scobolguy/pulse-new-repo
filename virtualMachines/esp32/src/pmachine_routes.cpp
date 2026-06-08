@@ -258,6 +258,109 @@ struct ProgramMapMetadata {
     JsonDocument raw;
 };
 
+struct PMachineExecutionPolicy {
+    bool hasPagingConfig = false;
+    size_t pageSizeBytes = 0;
+    size_t maxFrames = 0;
+
+    bool hasRuntimeOverride = false;
+    String runtimeKind;
+    String runtimeId;
+    uint32_t runtimeRefreshMs = 0;
+
+    bool hasResidentLoad = false;
+    String residentDomain;
+    String residentId;
+    size_t residentBytes = 0;
+    bool residentPin = false;
+};
+
+bool parseBooleanText(const String& raw, bool defaultValue = false) {
+    String text = toUpperCopy(trimCopy(raw));
+    if (text.length() == 0) return defaultValue;
+    if (text == "1" || text == "TRUE" || text == "YES" || text == "ON") return true;
+    if (text == "0" || text == "FALSE" || text == "NO" || text == "OFF") return false;
+    return defaultValue;
+}
+
+void parseExecutionPolicy(AsyncWebServerRequest* request, PMachineExecutionPolicy& policy) {
+    String value;
+
+    String pageSizeText;
+    String maxFramesText;
+    bool hasPageSize = getRequestParam(request, "pageSizeBytes", pageSizeText);
+    bool hasMaxFrames = getRequestParam(request, "maxFrames", maxFramesText);
+    if (hasPageSize || hasMaxFrames) {
+        policy.hasPagingConfig = true;
+        policy.pageSizeBytes = hasPageSize ? static_cast<size_t>(pageSizeText.toInt()) : 1024;
+        policy.maxFrames = hasMaxFrames ? static_cast<size_t>(maxFramesText.toInt()) : 24;
+        if (policy.pageSizeBytes == 0) policy.pageSizeBytes = 1024;
+        if (policy.maxFrames == 0) policy.maxFrames = 24;
+    }
+
+    String runtimeKind;
+    String runtimeId;
+    bool hasRuntimeKind = getRequestParam(request, "runtimeKind", runtimeKind);
+    bool hasRuntimeId = getRequestParam(request, "runtimeId", runtimeId);
+    if (hasRuntimeKind || hasRuntimeId) {
+        policy.hasRuntimeOverride = true;
+        policy.runtimeKind = hasRuntimeKind ? trimCopy(runtimeKind) : "service";
+        policy.runtimeId = hasRuntimeId ? trimCopy(runtimeId) : "runtime-unit";
+        if (policy.runtimeKind.length() == 0) policy.runtimeKind = "service";
+        if (policy.runtimeId.length() == 0) policy.runtimeId = "runtime-unit";
+        if (getRequestParam(request, "runtimeRefreshMs", value)) {
+            policy.runtimeRefreshMs = static_cast<uint32_t>(value.toInt());
+        }
+    }
+
+    String residentDomain;
+    String residentId;
+    bool hasResidentDomain = getRequestParam(request, "residentDomain", residentDomain);
+    bool hasResidentId = getRequestParam(request, "residentId", residentId);
+    if (hasResidentDomain && hasResidentId) {
+        policy.hasResidentLoad = true;
+        policy.residentDomain = trimCopy(residentDomain);
+        policy.residentId = trimCopy(residentId);
+        if (getRequestParam(request, "residentBytes", value)) {
+            policy.residentBytes = static_cast<size_t>(value.toInt());
+        }
+        if (getRequestParam(request, "residentPin", value)) {
+            policy.residentPin = parseBooleanText(value, false);
+        }
+    }
+}
+
+void applyRuntimeAndResidencyPolicy(
+    pmachine::PMachine& machine,
+    const PMachineExecutionPolicy* policy,
+    const ProgramMapMetadata* metadata
+) {
+    String runtimeKind = metadata != nullptr ? metadata->runtimeKind : "service";
+    String runtimeId = metadata != nullptr ? metadata->runtimeId : "runtime-unit";
+    uint32_t refreshMs = metadata != nullptr ? metadata->runtimeRefreshMs : 0;
+
+    if (policy != nullptr && policy->hasRuntimeOverride) {
+        runtimeKind = policy->runtimeKind;
+        runtimeId = policy->runtimeId;
+        refreshMs = policy->runtimeRefreshMs;
+    }
+
+    machine.setRuntimeUnit(
+        std::string(runtimeKind.c_str()),
+        std::string(runtimeId.c_str()),
+        refreshMs
+    );
+
+    if (policy != nullptr && policy->hasResidentLoad) {
+        machine.loadResidentDomain(
+            std::string(policy->residentDomain.c_str()),
+            std::string(policy->residentId.c_str()),
+            policy->residentBytes,
+            policy->residentPin
+        );
+    }
+}
+
 bool jsonArrayContainsCodeLibrarian(JsonVariantConst rolesVariant) {
     if (!rolesVariant.is<JsonArrayConst>()) return false;
     JsonArrayConst roles = rolesVariant.as<JsonArrayConst>();
@@ -462,6 +565,26 @@ bool deserializeDocFromPath(const String& path, FederatedFileSystem* ffs, JsonDo
     return !err;
 }
 
+bool readTextFromPath(const String& path, FederatedFileSystem* ffs, String& outText) {
+    if (ffs != nullptr) {
+        std::vector<uint8_t> bytes;
+        if (ffs->read(path, bytes) == FFSStatus::OK && !bytes.empty()) {
+            outText.reserve(bytes.size());
+            outText = "";
+            for (uint8_t b : bytes) {
+                outText += static_cast<char>(b);
+            }
+            return true;
+        }
+    }
+
+    File f = LittleFS.open(path, "r");
+    if (!f) return false;
+    outText = f.readString();
+    f.close();
+    return true;
+}
+
 bool loadMappingsArray(const String& mappingsFilePath, FederatedFileSystem* ffs, JsonDocument& doc, JsonArrayConst& mappingsOut) {
     if (!deserializeDocFromPath(mappingsFilePath, ffs, doc)) {
         return false;
@@ -626,7 +749,14 @@ bool loadRouterRulesArray(const String& rulesFilePath, FederatedFileSystem* ffs,
     return false;
 }
 
-bool loadProgramMapMappings(const String& programMapPath, FederatedFileSystem* ffs, std::vector<pmachine::MappingDef>& mappingsOut, String& errorOut, ProgramMapMetadata* metadataOut = nullptr) {
+bool loadProgramMapMappings(
+    const String& programMapPath,
+    FederatedFileSystem* ffs,
+    std::vector<pmachine::MappingDef>& mappingsOut,
+    std::map<std::string, std::vector<std::string>>* procedureSignaturesOut,
+    String& errorOut,
+    ProgramMapMetadata* metadataOut = nullptr
+) {
     JsonDocument doc;
     if (!deserializeDocFromPath(programMapPath, ffs, doc)) {
         errorOut = "Unable to load program map file";
@@ -641,17 +771,37 @@ bool loadProgramMapMappings(const String& programMapPath, FederatedFileSystem* f
         }
     }
 
+    if (procedureSignaturesOut != nullptr) {
+        procedureSignaturesOut->clear();
+        if (doc.is<JsonObject>() && doc["procedures"].is<JsonObjectConst>()) {
+            JsonObjectConst procedures = doc["procedures"].as<JsonObjectConst>();
+            for (JsonPairConst pair : procedures) {
+                const char* label = pair.key().c_str();
+                if (label == nullptr || label[0] == '\0') continue;
+                std::vector<std::string> params;
+                JsonObjectConst procedure = pair.value().as<JsonObjectConst>();
+                JsonArrayConst paramArr = procedure["params"].as<JsonArrayConst>();
+                for (JsonVariantConst p : paramArr) {
+                    if (p.is<const char*>()) {
+                        params.push_back(std::string(p.as<const char*>()));
+                    }
+                }
+                (*procedureSignaturesOut)[std::string(label)] = params;
+            }
+        }
+    }
+
+    mappingsOut.clear();
     JsonArrayConst entries;
     if (doc.is<JsonArray>()) {
         entries = doc.as<JsonArrayConst>();
     } else if (doc.is<JsonObject>() && doc["entries"].is<JsonArray>()) {
         entries = doc["entries"].as<JsonArrayConst>();
     } else {
-        errorOut = "Program map has no entries array";
-        return false;
+        // Standard Pascal program maps may not have router/mapping entries.
+        return true;
     }
 
-    mappingsOut.clear();
     for (JsonObjectConst entry : entries) {
         String kind = entry["kind"] | "";
         if (kind != "mapper") continue;
@@ -691,6 +841,7 @@ struct EdgeIngressExecutionCache {
     bool ready = false;
     std::vector<pmachine::PInstruction> instructions;
     std::vector<pmachine::MappingDef> mappingDefs;
+    std::map<std::string, std::vector<std::string>> procedureSignatures;
     ProgramMapMetadata metadata;
 };
 
@@ -704,6 +855,7 @@ EdgeIngressExecutionResult executeEdgeIngressStage(
     size_t maxBytes,
     bool runRouter,
     bool convertMtToXml,
+    const PMachineExecutionPolicy* policy,
     SemaphoreHandle_t machineMutex,
     EdgeIngressExecutionCache* executionCache = nullptr,
     bool messageAlreadyNormalized = false
@@ -741,6 +893,10 @@ EdgeIngressExecutionResult executeEdgeIngressStage(
     out["publishedCount"] = 0;
     JsonArray deliveries = out["deliveries"].to<JsonArray>();
 
+    if (policy != nullptr && policy->hasPagingConfig) {
+        machine.setMemoryConfig(policy->pageSizeBytes, policy->maxFrames);
+    }
+
     if (!runRouter) {
         serializeJson(out, result.body);
         return result;
@@ -748,8 +904,10 @@ EdgeIngressExecutionResult executeEdgeIngressStage(
 
     const std::vector<pmachine::PInstruction>* instructions = nullptr;
     const std::vector<pmachine::MappingDef>* mappingDefs = nullptr;
+    const std::map<std::string, std::vector<std::string>>* procedureSignatures = nullptr;
     std::vector<pmachine::PInstruction> loadedInstructions;
     std::vector<pmachine::MappingDef> loadedMappings;
+    std::map<std::string, std::vector<std::string>> loadedProcedureSignatures;
     bool programCacheHit = false;
 
     if (executionCache != nullptr
@@ -759,12 +917,9 @@ EdgeIngressExecutionResult executeEdgeIngressStage(
         && executionCache->maxBytes == maxBytes) {
         instructions = &executionCache->instructions;
         mappingDefs = &executionCache->mappingDefs;
+        procedureSignatures = &executionCache->procedureSignatures;
         programCacheHit = true;
-        machine.setRuntimeUnit(
-            std::string(executionCache->metadata.runtimeKind.c_str()),
-            std::string(executionCache->metadata.runtimeId.c_str()),
-            executionCache->metadata.runtimeRefreshMs
-        );
+        applyRuntimeAndResidencyPolicy(machine, policy, &executionCache->metadata);
     } else {
         File f = LittleFS.open(file, "r");
         if (!f) {
@@ -785,18 +940,14 @@ EdgeIngressExecutionResult executeEdgeIngressStage(
         loadedInstructions = pmachine::loadTextPCode(std::string(text.c_str()));
         String mappingError;
         ProgramMapMetadata metadata;
-        if (!loadProgramMapMappings(programMap, ffs, loadedMappings, mappingError, &metadata)) {
+        if (!loadProgramMapMappings(programMap, ffs, loadedMappings, &loadedProcedureSignatures, mappingError, &metadata)) {
             result.statusCode = 404;
             result.contentType = "text/plain";
             result.body = mappingError;
             return result;
         }
 
-        machine.setRuntimeUnit(
-            std::string(metadata.runtimeKind.c_str()),
-            std::string(metadata.runtimeId.c_str()),
-            metadata.runtimeRefreshMs
-        );
+        applyRuntimeAndResidencyPolicy(machine, policy, &metadata);
 
         if (executionCache != nullptr) {
             executionCache->file = file;
@@ -804,13 +955,16 @@ EdgeIngressExecutionResult executeEdgeIngressStage(
             executionCache->maxBytes = maxBytes;
             executionCache->instructions = loadedInstructions;
             executionCache->mappingDefs = loadedMappings;
+            executionCache->procedureSignatures = loadedProcedureSignatures;
             executionCache->metadata = metadata;
             executionCache->ready = true;
             instructions = &executionCache->instructions;
             mappingDefs = &executionCache->mappingDefs;
+            procedureSignatures = &executionCache->procedureSignatures;
         } else {
             instructions = &loadedInstructions;
             mappingDefs = &loadedMappings;
+            procedureSignatures = &loadedProcedureSignatures;
         }
     }
 
@@ -824,6 +978,11 @@ EdgeIngressExecutionResult executeEdgeIngressStage(
     }
 
     machine.setMappings(*mappingDefs);
+    if (procedureSignatures != nullptr) {
+        machine.setProcedureSignatures(*procedureSignatures);
+    } else {
+        machine.clearProcedureSignatures();
+    }
     machine.clearRoutingDeliveries();
     machine.setRoutingContext(std::string(effectiveInputQueue.c_str()), std::string(normalized.c_str()));
     machine.run(*instructions);
@@ -862,6 +1021,10 @@ EdgeIngressExecutionResult executeEdgeIngressStage(
         item["message"] = d.message.c_str();
     }
     out["publishedCount"] = routed.size();
+    JsonArray stdoutLines = out["stdout"].to<JsonArray>();
+    for (const auto& line : machine.getLastRunTextOutput()) {
+        stdoutLines.add(line.c_str());
+    }
 
     if (machineMutex != nullptr) {
         xSemaphoreGive(machineMutex);
@@ -884,6 +1047,7 @@ struct EdgeIngressAsyncTask {
     size_t maxBytes;
     bool runRouter;
     bool convertMtToXml;
+    PMachineExecutionPolicy policy;
 };
 
 struct EdgeIngressAsyncResult {
@@ -993,6 +1157,7 @@ void edgeIngressAsyncWorker(void* rawContext) {
             task->maxBytes,
             task->runRouter,
             task->convertMtToXml,
+            &task->policy,
             nullptr,
             &context->executionCache,
             true
@@ -1194,6 +1359,11 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         }
         String file = request->getParam("file")->value();
         size_t max = request->getParam("max")->value().toInt();
+        PMachineExecutionPolicy policy;
+        parseExecutionPolicy(request, policy);
+        if (policy.hasPagingConfig) {
+            machine.setMemoryConfig(policy.pageSizeBytes, policy.maxFrames);
+        }
         // Read binary from body
         std::vector<uint8_t> pcode;
         if (request->hasParam("pcode", true)) {
@@ -1201,6 +1371,9 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
             pcode.assign(bin.begin(), bin.end());
         }
         bool ok = machine.loadProgram(pcode, file.c_str(), max);
+        if (ok) {
+            applyRuntimeAndResidencyPolicy(machine, &policy, nullptr);
+        }
         request->send(ok ? 200 : 500, "text/plain", ok ? "Loaded" : "Load failed");
     });
 
@@ -1357,6 +1530,11 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         }
         String file = request->getParam("file")->value();
         size_t max = request->getParam("max")->value().toInt();
+        PMachineExecutionPolicy policy;
+        parseExecutionPolicy(request, policy);
+        if (policy.hasPagingConfig) {
+            machine.setMemoryConfig(policy.pageSizeBytes, policy.maxFrames);
+        }
         Serial.print("[TRACE] file param: "); Serial.println(file);
         Serial.print("[TRACE] max param: "); Serial.println(max);
         File f = LittleFS.open(file, "r");
@@ -1375,6 +1553,7 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         }
 
         std::vector<pmachine::PInstruction> instructions = pmachine::loadTextPCode(std::string(text.c_str()));
+        applyRuntimeAndResidencyPolicy(machine, &policy, nullptr);
         machine.clearRoutingDeliveries();
         machine.setRoutingContext("", "");
         machine.run(instructions);
@@ -1389,6 +1568,8 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         String inputQueue;
         String message;
         String maxParam = "32768";
+        PMachineExecutionPolicy policy;
+        parseExecutionPolicy(request, policy);
 
         if (!getRequestParam(request, "file", file)) {
             request->send(400, "text/plain", "Missing file param");
@@ -1406,13 +1587,15 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         getRequestParam(request, "max", maxParam);
         size_t max = maxParam.toInt();
 
-        File f = LittleFS.open(file, "r");
-        if (!f) {
+        if (policy.hasPagingConfig) {
+            machine.setMemoryConfig(policy.pageSizeBytes, policy.maxFrames);
+        }
+
+        String text;
+        if (!readTextFromPath(file, ffs, text)) {
             request->send(404, "text/plain", "File not found or read error");
             return;
         }
-        String text = f.readString();
-        f.close();
         if ((size_t)text.length() > max) {
             request->send(413, "text/plain", "File too large");
             return;
@@ -1420,18 +1603,16 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
 
         std::vector<pmachine::PInstruction> instructions = pmachine::loadTextPCode(std::string(text.c_str()));
         std::vector<pmachine::MappingDef> mappingDefs;
+        std::map<std::string, std::vector<std::string>> procedureSignatures;
         String mappingError;
         ProgramMapMetadata metadata;
-        if (!loadProgramMapMappings(programMap, ffs, mappingDefs, mappingError, &metadata)) {
+        if (!loadProgramMapMappings(programMap, ffs, mappingDefs, &procedureSignatures, mappingError, &metadata)) {
             request->send(404, "text/plain", mappingError);
             return;
         }
-        machine.setRuntimeUnit(
-            std::string(metadata.runtimeKind.c_str()),
-            std::string(metadata.runtimeId.c_str()),
-            metadata.runtimeRefreshMs
-        );
+        applyRuntimeAndResidencyPolicy(machine, &policy, &metadata);
         machine.setMappings(mappingDefs);
+        machine.setProcedureSignatures(procedureSignatures);
         machine.clearRoutingDeliveries();
         machine.setRoutingContext(std::string(inputQueue.c_str()), std::string(message.c_str()));
         machine.run(instructions);
@@ -1443,11 +1624,11 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         runtime["kind"] = metadata.runtimeKind;
         runtime["id"] = metadata.runtimeId;
         runtime["refreshMs"] = metadata.runtimeRefreshMs;
-        JsonObject policy = out["policy"].to<JsonObject>();
-        policy["hasCodeLibrarianRole"] = metadata.hasCodeLibrarianRole;
-        policy["hasLibraryBindings"] = metadata.hasLibraryBindings;
+        JsonObject policyJson = out["policy"].to<JsonObject>();
+        policyJson["hasCodeLibrarianRole"] = metadata.hasCodeLibrarianRole;
+        policyJson["hasLibraryBindings"] = metadata.hasLibraryBindings;
         if (metadata.raw["interoperability"].is<JsonArrayConst>()) {
-            policy["interoperability"] = metadata.raw["interoperability"];
+            policyJson["interoperability"] = metadata.raw["interoperability"];
         }
         JsonArray deliveries = out["deliveries"].to<JsonArray>();
         const std::vector<pmachine::RouteDelivery>& routed = machine.getRoutingDeliveries();
@@ -1457,6 +1638,10 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
             item["message"] = d.message.c_str();
         }
         out["publishedCount"] = routed.size();
+        JsonArray stdoutLines = out["stdout"].to<JsonArray>();
+        for (const auto& line : machine.getLastRunTextOutput()) {
+            stdoutLines.add(line.c_str());
+        }
 
         String response;
         serializeJson(out, response);
@@ -1473,6 +1658,8 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         String runRouterParam = "1";
         String asyncParam = "1";
         String convertMtToXmlParam = "0";
+        PMachineExecutionPolicy policy;
+        parseExecutionPolicy(request, policy);
 
         if (!getRequestParam(request, "message", message)) {
             request->send(400, "text/plain", "Missing message param");
@@ -1523,6 +1710,7 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
             task->maxBytes = maxParam.toInt();
             task->runRouter = runRouter;
             task->convertMtToXml = convertMtToXml;
+            task->policy = policy;
 
             BaseType_t ok = xQueueSend(gEdgeIngressAsyncQueue, &task, 0);
             if (ok == pdTRUE) {
@@ -1556,6 +1744,7 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
             maxParam.toInt(),
             runRouter,
             convertMtToXml,
+            &policy,
             nullptr,
             nullptr,
             true

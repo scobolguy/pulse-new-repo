@@ -548,6 +548,12 @@ void PMachine::clearMappings() {
     }
     mappingDefs.clear();
 }
+void PMachine::setProcedureSignatures(const std::map<std::string, std::vector<std::string>>& signatures) {
+    procedureParamsByLabel = signatures;
+}
+void PMachine::clearProcedureSignatures() {
+    procedureParamsByLabel.clear();
+}
 const MappingDef* PMachine::getMappingById(const std::string& mappingId) const {
     auto it = mappingDefs.find(mappingId);
     if (it == mappingDefs.end()) return nullptr;
@@ -909,7 +915,7 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
             instr.strOperand = enumValue;
             instr.type = pmachine::OperandType::INT;
         } else if (opcode == pmachine::OP_ROUTE_MATCH_QUEUE || opcode == pmachine::OP_ROUTE_EVAL_WHEN ||
-                   opcode == pmachine::OP_ROUTE_TRANSFORM || opcode == pmachine::OP_ROUTE_EMIT ||
+               opcode == pmachine::OP_ROUTE_TRANSFORM || opcode == pmachine::OP_ROUTE_EMIT ||
                    opcode == pmachine::OP_ROUTE_SET_STATE) {
             std::string rest2;
             std::getline(lss, rest2);
@@ -924,7 +930,25 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
             lss >> targetLabel;
             instr.label = targetLabel;
             unresolvedJumps.push_back({instructions.size(), targetLabel});
+        } else if (opcode == pmachine::OP_LOAD_NAME || opcode == pmachine::OP_STORE_NAME) {
+            std::string name;
+            lss >> name;
+            instr.strOperand = name;
+            instr.type = pmachine::OperandType::STRING;
+        } else if (opcode == pmachine::OP_CALL_LABEL) {
+            std::string targetLabel;
+            int argc = 0;
+            lss >> targetLabel >> argc;
+            instr.label = targetLabel;
+            instr.value = argc;
+            instr.type = pmachine::OperandType::INT;
+            unresolvedJumps.push_back({instructions.size(), targetLabel});
         } else if (opcode == pmachine::OP_ADD || opcode == pmachine::OP_SUB || opcode == pmachine::OP_MUL || opcode == pmachine::OP_DIV) {
+            instr.type = pmachine::OperandType::NONE;
+        } else if (opcode == pmachine::OP_EQ || opcode == pmachine::OP_NEQ || opcode == pmachine::OP_LT ||
+               opcode == pmachine::OP_LE || opcode == pmachine::OP_GT || opcode == pmachine::OP_GE ||
+               opcode == pmachine::OP_PRINT || opcode == pmachine::OP_PRINT_NL || opcode == pmachine::OP_RET ||
+               opcode == pmachine::OP_ROUTE_SET_MESSAGE) {
             instr.type = pmachine::OperandType::NONE;
         } else if (opcode == pmachine::OP_PRINT_INT || opcode == pmachine::OP_PRINT_ENUM) {
             instr.type = pmachine::OperandType::NONE;
@@ -951,6 +975,36 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
     static const int STACK_SIZE = 1024;
     int stack[STACK_SIZE] = {0};
     std::vector<std::string> strStack;
+    std::vector<std::map<std::string, int>> nameFrames;
+    nameFrames.emplace_back();
+    struct NameCallFrame {
+        int returnPc = 0;
+        size_t envDepth = 1;
+    };
+    std::vector<NameCallFrame> nameCallStack;
+    std::string currentOutputLine;
+    std::vector<std::string> outputLines;
+
+    auto resolveName = [&](const std::string& key) -> int {
+        for (auto it = nameFrames.rbegin(); it != nameFrames.rend(); ++it) {
+            auto found = it->find(key);
+            if (found != it->end()) return found->second;
+        }
+        return 0;
+    };
+
+    auto assignName = [&](const std::string& key, int value) {
+        for (auto it = nameFrames.rbegin(); it != nameFrames.rend(); ++it) {
+            auto found = it->find(key);
+            if (found != it->end()) {
+                found->second = value;
+                return;
+            }
+        }
+        if (nameFrames.empty()) nameFrames.emplace_back();
+        nameFrames.back()[key] = value;
+    };
+
     int sp = 0;
     int bp = 0;
     int pc = 0;
@@ -958,6 +1012,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
     gFlowState.clear();
     lastRunStepLimitHit = false;
     lastRunStepCount = 0;
+    lastRunTextOutput.clear();
     running = true;
     PMTRACE(Serial.println("[DEBUG] Executing pinstructions:"));
     while (pc < (int)instructions.size()) {
@@ -1013,9 +1068,101 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             ++pc;
             continue;
         }
+        if (instr.opcode == OP_EQ || instr.opcode == OP_NEQ || instr.opcode == OP_LT || instr.opcode == OP_LE || instr.opcode == OP_GT || instr.opcode == OP_GE) {
+            if (sp >= 2) {
+                int rhs = stack[--sp];
+                int lhs = stack[sp - 1];
+                int truth = 0;
+                if (instr.opcode == OP_EQ) truth = (lhs == rhs) ? 1 : 0;
+                if (instr.opcode == OP_NEQ) truth = (lhs != rhs) ? 1 : 0;
+                if (instr.opcode == OP_LT) truth = (lhs < rhs) ? 1 : 0;
+                if (instr.opcode == OP_LE) truth = (lhs <= rhs) ? 1 : 0;
+                if (instr.opcode == OP_GT) truth = (lhs > rhs) ? 1 : 0;
+                if (instr.opcode == OP_GE) truth = (lhs >= rhs) ? 1 : 0;
+                stack[sp - 1] = truth;
+            }
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_LOAD_NAME) {
+            if (sp < STACK_SIZE) {
+                stack[sp++] = resolveName(instr.strOperand);
+            }
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_STORE_NAME) {
+            if (sp > 0) {
+                int value = stack[--sp];
+                assignName(instr.strOperand, value);
+            }
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_CALL_LABEL) {
+            const int argc = instr.value;
+            std::vector<int> args;
+            args.reserve(static_cast<size_t>(argc > 0 ? argc : 0));
+            for (int i = 0; i < argc && sp > 0; ++i) {
+                args.push_back(stack[--sp]);
+            }
+            std::reverse(args.begin(), args.end());
+
+            std::map<std::string, int> frameVars;
+            auto sigIt = procedureParamsByLabel.find(instr.label);
+            if (sigIt != procedureParamsByLabel.end()) {
+                const std::vector<std::string>& names = sigIt->second;
+                for (size_t i = 0; i < names.size(); ++i) {
+                    const int value = (i < args.size()) ? args[i] : 0;
+                    frameVars[names[i]] = value;
+                }
+            } else {
+                for (size_t i = 0; i < args.size(); ++i) {
+                    frameVars[std::string("p") + std::to_string(i)] = args[i];
+                }
+            }
+
+            NameCallFrame frame;
+            frame.returnPc = pc + 1;
+            frame.envDepth = nameFrames.size();
+            nameCallStack.push_back(frame);
+            nameFrames.push_back(frameVars);
+            pc = instr.intOperand;
+            continue;
+        }
+        if (instr.opcode == OP_RET) {
+            if (nameCallStack.empty()) {
+                break;
+            }
+            NameCallFrame frame = nameCallStack.back();
+            nameCallStack.pop_back();
+            while (nameFrames.size() > frame.envDepth) {
+                nameFrames.pop_back();
+            }
+            pc = frame.returnPc;
+            continue;
+        }
+        if (instr.opcode == OP_PRINT) {
+            if (!strStack.empty()) {
+                currentOutputLine += strStack.back();
+                strStack.pop_back();
+            } else if (sp > 0) {
+                int v = stack[--sp];
+                currentOutputLine += std::to_string(v);
+            }
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_PRINT_NL) {
+            outputLines.push_back(currentOutputLine);
+            currentOutputLine.clear();
+            ++pc;
+            continue;
+        }
         if (instr.opcode == OP_PRINT_INT) {
             if (sp > 0) {
                 int v = stack[--sp];
+                currentOutputLine += std::to_string(v);
                 PMTRACE({ Serial.print("[PRINT_INT] "); Serial.println(v); });
             }
             ++pc;
@@ -1066,6 +1213,19 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             ++pc;
             continue;
         }
+        if (instr.opcode == OP_ROUTE_SET_MESSAGE) {
+            if (!strStack.empty()) {
+                currentMessage = strStack.back();
+                strStack.pop_back();
+            } else if (sp > 0) {
+                int v = stack[--sp];
+                currentMessage = std::to_string(v);
+            } else {
+                currentMessage.clear();
+            }
+            ++pc;
+            continue;
+        }
         if (instr.opcode == OP_PARSE_FIN_TEXT) {
             JsonDocument parsed;
             parseMT103FinText(currentMessage, parsed);
@@ -1088,6 +1248,10 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             ++pc;
         }
     }
+    if (!currentOutputLine.empty()) {
+        outputLines.push_back(currentOutputLine);
+    }
+    lastRunTextOutput = outputLines;
     lastRunStepCount = steps;
     running = false;
     if (runtimeUnit.kind == RuntimeUnitKind::Program) {
@@ -1102,5 +1266,9 @@ bool PMachine::didLastRunHitStepLimit() const {
 
 size_t PMachine::getLastRunStepCount() const {
     return lastRunStepCount;
+}
+
+const std::vector<std::string>& PMachine::getLastRunTextOutput() const {
+    return lastRunTextOutput;
 }
 }

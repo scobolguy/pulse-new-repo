@@ -74,6 +74,19 @@ enum Opcode : uint8_t {
     OP_ROUTE_EMIT = 0x15,        // Emit current message to operand output queue
     OP_PARSE_FIN_TEXT = 0x16,    // Parse routing source message from MT FIN text into JSON
     OP_ROUTE_SET_STATE = 0x17,   // Set runtime state from operand "key=value"
+    OP_ROUTE_SET_MESSAGE = 0x24, // Pop stack value and set current routing message
+    OP_LOAD_NAME = 0x18,         // Load named variable from runtime frame stack
+    OP_STORE_NAME = 0x19,        // Store named variable to runtime frame stack
+    OP_CALL_LABEL = 0x1A,        // Call label with stack-based args
+    OP_RET = 0x1B,               // Return from call frame
+    OP_EQ = 0x1C,                // Compare equality
+    OP_NEQ = 0x1D,               // Compare inequality
+    OP_LT = 0x1E,                // Compare less-than
+    OP_LE = 0x1F,                // Compare less-or-equal
+    OP_GT = 0x20,                // Compare greater-than
+    OP_GE = 0x21,                // Compare greater-or-equal
+    OP_PRINT = 0x22,             // Print string/int token to current output line
+    OP_PRINT_NL = 0x23,          // End current output line
     OP_HALT = 0xFF      // HALT
 };
 
@@ -117,6 +130,19 @@ enum Opcode : uint8_t {
         if (mnemonic == "ROUTE_EMIT") return OP_ROUTE_EMIT;
         if (mnemonic == "PARSE_FIN_TEXT") return OP_PARSE_FIN_TEXT;
         if (mnemonic == "ROUTE_SET_STATE") return OP_ROUTE_SET_STATE;
+        if (mnemonic == "ROUTE_SET_MESSAGE") return OP_ROUTE_SET_MESSAGE;
+        if (mnemonic == "LOAD") return OP_LOAD_NAME;
+        if (mnemonic == "STORE") return OP_STORE_NAME;
+        if (mnemonic == "CALL") return OP_CALL_LABEL;
+        if (mnemonic == "RET") return OP_RET;
+        if (mnemonic == "EQ") return OP_EQ;
+        if (mnemonic == "NEQ") return OP_NEQ;
+        if (mnemonic == "LT") return OP_LT;
+        if (mnemonic == "LE") return OP_LE;
+        if (mnemonic == "GT") return OP_GT;
+        if (mnemonic == "GE") return OP_GE;
+        if (mnemonic == "PRINT") return OP_PRINT;
+        if (mnemonic == "PRINT_NL") return OP_PRINT_NL;
         if (mnemonic == "HALT") return OP_HALT;
         if (mnemonic == "NOP") return OP_NOP;
         return 0xFE;
@@ -253,6 +279,8 @@ public:
     void clearRoutingDeliveries();
     void setMappings(const std::vector<MappingDef>& defs);
     void clearMappings();
+    void setProcedureSignatures(const std::map<std::string, std::vector<std::string>>& signatures);
+    void clearProcedureSignatures();
     const MappingDef* getMappingById(const std::string& mappingId) const;
     void singleStep();
     void setBreakpoint(uint16_t pc);
@@ -260,6 +288,7 @@ public:
     void clearAllBreakpoints();
     bool didLastRunHitStepLimit() const;
     size_t getLastRunStepCount() const;
+    const std::vector<std::string>& getLastRunTextOutput() const;
 private:
     ::FederatedFileSystem *ffs = nullptr;
     PCodeMap pcodeMap;
@@ -276,9 +305,11 @@ private:
     std::string currentMessage;
     std::vector<RouteDelivery> routingDeliveries;
     std::map<std::string, MappingDef> mappingDefs;
+    std::map<std::string, std::vector<std::string>> procedureParamsByLabel;
     ::EnumManager* enumManager = nullptr;
     bool lastRunStepLimitHit = false;
     size_t lastRunStepCount = 0;
+    std::vector<std::string> lastRunTextOutput;
     PagingConfig pagingConfig;
     PagingStats pagingStats;
     RuntimeUnitDescriptor runtimeUnit;

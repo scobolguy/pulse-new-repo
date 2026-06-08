@@ -48,7 +48,7 @@ function makeMermaidId(value) {
     .replace(/^_|_$/g, '');
 }
 // Memoized NodeCard to prevent unnecessary re-renders
-const NodeCard = memo(function NodeCard({ node, anchorId, title }) {
+const NodeCard = memo(function NodeCard({ node, anchorId, title, onRename }) {
   // Force re-render every second for live color updates
   const [nowTs, setNowTs] = useState(() => Date.now());
   useEffect(() => {
@@ -77,6 +77,32 @@ const NodeCard = memo(function NodeCard({ node, anchorId, title }) {
     return () => window.removeEventListener('click', close);
   }, [menu]);
 
+  const handleRename = async () => {
+    const currentName = String(node.details?.nodeName || node.nodeName || node.ip || '').trim();
+    const nextName = window.prompt('Rename node', currentName);
+    if (typeof nextName !== 'string') {
+      setMenu(null);
+      return;
+    }
+    const trimmed = nextName.trim();
+    if (!trimmed) {
+      setMenu(null);
+      return;
+    }
+    if (trimmed === currentName) {
+      setMenu(null);
+      return;
+    }
+    try {
+      if (typeof onRename === 'function') {
+        await onRename(node, trimmed);
+      }
+    } catch (error) {
+      window.alert(error?.message || 'Rename failed.');
+    }
+    setMenu(null);
+  };
+
   return (
     <div id={anchorId} title={title} style={{ border: '1px solid #d4d4d4', background: bg, borderRadius: 4, padding: 8, minWidth: 90, maxWidth: 120, marginBottom: 8, boxShadow: '0 1px 2px #eee', display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative' }} onContextMenu={handleContextMenu}>
       {/* Computer icon (SVG) */}
@@ -92,6 +118,7 @@ const NodeCard = memo(function NodeCard({ node, anchorId, title }) {
           <li style={{ padding: '6px 12px', cursor: 'pointer' }}>Stop</li>
           <li style={{ padding: '6px 12px', cursor: 'pointer' }}>Quiesce</li>
           <li style={{ padding: '6px 12px', cursor: 'pointer' }}>Reboot</li>
+          <li onClick={handleRename} style={{ padding: '6px 12px', cursor: 'pointer' }}>Rename</li>
         </ul>
       )}
     </div>
@@ -199,6 +226,24 @@ export default function TopologyDashboard() {
     setLoading(false);
   }
 
+  async function renameNode(node, nextName) {
+    const nodeId = String(node?.nodeId || node?.id || node?.ip || node?.nodeName || '').trim();
+    if (!nodeId) {
+      throw new Error('Node id not available for rename.');
+    }
+
+    const res = await fetch(`${backendUrl}/api/nodes/${encodeURIComponent(nodeId)}/rename`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ nodeName: nextName, ip: node?.ip || '' })
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(payload?.error || `Rename failed (${res.status})`);
+    }
+    await fetchTopology(backendUrl);
+  }
+
   useEffect(() => {
     setTimeout(() => {
       void fetchTopology(backendUrl);
@@ -273,6 +318,7 @@ export default function TopologyDashboard() {
                     node={node}
                     anchorId={`pmachine-${nodeId}`}
                     title={node.details?.nodeName || node.nodeName || node.ip}
+                    onRename={renameNode}
                   />
                   );
                 })}
@@ -308,7 +354,7 @@ export default function TopologyDashboard() {
           {activePhysicalNodes.length === 0 && !loading && <p style={{ fontSize: 12 }}>No active physical devices found.</p>}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
             {activePhysicalNodes.map((node) => (
-              <NodeCard key={node.mac || node.ip} node={node} />
+              <NodeCard key={node.mac || node.ip} node={node} onRename={renameNode} />
             ))}
           </div>
         </div>

@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "generatedAt": "2026-06-07T01:01:57.111Z",
+  "serviceId": "RecursiveFactorial",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "RecursiveFactorial",
+    "refreshMs": null
+  },
+  "executionModel": "standard-pascal",
+  "sourceLanguage": "pascal",
+  "globals": [],
+  "procedures": {
+    "PROC_PRINTFACTRANGE": {
+      "name": "PrintFactRange",
+      "params": [
+        "i",
+        "max",
+        "acc"
+      ],
+      "locals": []
+    }
+  },
+  "entryLabel": "MAIN"
+}

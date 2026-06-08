@@ -47,7 +47,7 @@ function Stop-ComPortHolders {
 
 Push-Location $repoRoot
 try {
-    $buildFlags = "build_flags=-std=gnu++17 -DENABLE_PMACHINE -DFIRMWARE_VERSION=\`\"$Version\`\""
+    $buildFlags = "build_flags=-std=gnu++17 -DENABLE_PMACHINE -DFIRMWARE_VERSION=`"$Version`""
 
     if ($Mode -eq 'serial') {
         Stop-ComPortHolders -ComPort $Port

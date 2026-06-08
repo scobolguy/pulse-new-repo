@@ -1,0 +1,18 @@
+# Auto-generated portable pcode from Pascalish router/mapping DSL
+# Executable routing opcodes for ESP32/JS PMachine parity
+ENTRY:
+JMP ROUTER_0_HELLO_ROUTE
+ROUTER_0_HELLO_ROUTE:
+ROUTE_MATCH_QUEUE "hello.in"
+JZ FINISH
+ROUTE_EVAL_WHEN "output := 1;"
+JZ ROUTER_0_HELLO_ROUTE_OUTPUT_SKIP_0
+ROUTE_TRANSFORM "output := 'hello, world';"
+ROUTE_EMIT "hello.out"
+ROUTER_0_HELLO_ROUTE_OUTPUT_SKIP_0:
+NOP
+JMP FINISH
+MAPPERS_ENTRY:
+JMP FINISH
+FINISH:
+HALT

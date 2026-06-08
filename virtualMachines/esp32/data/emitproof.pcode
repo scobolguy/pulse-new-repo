@@ -1,0 +1,17 @@
+# Auto-generated from ANTLR StandardPascal grammar
+JMP MAIN
+MAIN:
+PUSH_INT 0
+STORE n
+PUSH_INT 42
+STORE n
+LOAD n
+ROUTE_SET_MESSAGE
+ROUTE_EMIT "metrics_out"
+PUSH_INT 7
+ROUTE_SET_MESSAGE
+ROUTE_EMIT "events_out"
+PUSH_STR "done"
+PRINT
+PRINT_NL
+HALT

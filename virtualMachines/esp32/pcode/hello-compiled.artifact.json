@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "compiledAt": "2026-06-08T16:22:26.386Z",
+  "serviceId": "hello",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "hello",
+    "refreshMs": null
+  },
+  "ast": {
+    "type": "Program",
+    "serviceId": "hello",
+    "runtimeUnit": {
+      "kind": "program",
+      "id": "hello",
+      "refreshMs": null
+    },
+    "roles": [],
+    "variables": [],
+    "routers": [
+      {
+        "type": "RouterDecl",
+        "id": "hello-route",
+        "inputQueue": "hello.in",
+        "description": "Simple hello service",
+        "enabled": true,
+        "serviceId": null,
+        "outputs": [
+          {
+            "type": "OutputDecl",
+            "queueName": "hello.out",
+            "dataType": null,
+            "dataTypes": null,
+            "dataTypeId": null,
+            "dataTypeIds": null,
+            "whenRule": "output := 1;",
+            "transformRule": "output := 'hello, world';"
+          }
+        ]
+      }
+    ],
+    "mappers": [],
+    "codeLibraries": [],
+    "uses": [],
+    "interop": [],
+    "statements": [],
+    "programId": "hello",
+    "daemonId": null,
+    "daemonRefreshMs": null
+  },
+  "roles": [],
+  "codeLibraries": [],
+  "uses": [],
+  "interoperability": [],
+  "variableDeclarations": [],
+  "routerRules": [
+    {
+      "id": "hello-route",
+      "name": "hello-route",
+      "serviceId": "hello",
+      "enabled": true,
+      "inputQueue": "hello.in",
+      "description": "Simple hello service",
+      "outputs": [
+        {
+          "queueName": "hello.out",
+          "whenRule": "output := 1;",
+          "transformRule": "output := 'hello, world';"
+        }
+      ],
+      "createdAt": "2026-06-08T16:22:26.386Z",
+      "updatedAt": "2026-06-08T16:22:26.386Z"
+    }
+  ],
+  "dataMappings": []
+}

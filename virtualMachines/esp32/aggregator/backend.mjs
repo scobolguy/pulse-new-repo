@@ -55,6 +55,7 @@ import { registerQueueConfigRoutes } from './src/backend/roles/queueConfigRoutes
 import { registerQueueTransferRoutes } from './src/backend/roles/queueTransferRoutes.mjs';
 import { registerAvailabilityPresenceRoutes } from './src/backend/roles/availabilityPresenceRoutes.mjs';
 import { registerTopologyRuntimeRoutes } from './src/backend/roles/topologyRuntimeRoutes.mjs';
+import { registerAllocatorRoutes } from './src/backend/roles/allocatorRoutes.mjs';
 import { registerLibrarianProxyRoutes } from './src/backend/roles/librarianProxyRoutes.mjs';
 import { registerMapperProxyRoutes } from './src/backend/roles/mapperProxyRoutes.mjs';
 import { registerRuntimeRegistryRoutes } from './src/backend/roles/runtimeRegistryRoutes.mjs';
@@ -9332,6 +9333,7 @@ function registerRoutes(app) {
       registerQueueTransferRoutes,
       registerAvailabilityPresenceRoutes,
       registerTopologyRuntimeRoutes,
+      registerAllocatorRoutes,
       registerLibrarianProxyRoutes,
       registerMapperProxyRoutes,
       registerRuntimeRegistryRoutes,
@@ -9491,6 +9493,9 @@ function registerRoutes(app) {
         upsertServiceInstance,
         resolveServiceInstance,
         ffsDeploymentRegistry
+      }),
+      allocator: () => ({
+        serviceInstanceRegistry
       }),
       librarianProxy: () => ({
         express,

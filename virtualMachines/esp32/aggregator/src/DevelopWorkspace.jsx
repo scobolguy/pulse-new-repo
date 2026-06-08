@@ -10,6 +10,7 @@ import {
 } from './documentRegistry';
 import { initializePascalishLanguage } from './pascalishLanguage';
 import DevelopVisualEditor from './DevelopVisualEditor';
+import { getJsonAsActor } from './http-client';
 
 const LOCAL_STORAGE_KEY = 'pulse-develop-workspace-documents';
 const EDITOR_LINE_HEIGHT = 22;
@@ -302,6 +303,12 @@ function saveLocalDocuments(documents) {
   localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(documents));
 }
 
+function formatPercent(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return '0.0%';
+  return `${(numeric * 100).toFixed(1)}%`;
+}
+
 export default function DevelopWorkspace({ createRequest, onCreateRequestHandled, onOpenDebugger }) {
   const [files, setFiles] = useState([]);
   const [selectedFileName, setSelectedFileName] = useState('');
@@ -317,6 +324,11 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
   const [runMenuOpen, setRunMenuOpen] = useState(false);
   const [showOpenPicker, setShowOpenPicker] = useState(false);
   const [editorViewMode, setEditorViewMode] = useState('text');
+  const [allocatorSummary, setAllocatorSummary] = useState(null);
+  const [allocatorWindowSize, setAllocatorWindowSize] = useState(0);
+  const [allocatorLoading, setAllocatorLoading] = useState(false);
+  const [allocatorError, setAllocatorError] = useState('');
+  const [allocatorRefreshedAt, setAllocatorRefreshedAt] = useState('');
   const showExplorer = false;
   const handledCreateRequestKeyRef = useRef('');
   const typeNamesRef = useRef([]);
@@ -931,6 +943,39 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
     };
   }, [editorDescriptor.id, busy, selectedFileName, content]);
 
+  const refreshAllocatorSummary = useCallback(async () => {
+    setAllocatorLoading(true);
+    setAllocatorError('');
+    try {
+      const payload = await getJsonAsActor('/api/allocator/summary?limit=200', 'Failed to load allocator summary');
+      setAllocatorSummary(payload?.summary || null);
+      setAllocatorWindowSize(Number(payload?.windowSize || 0));
+      setAllocatorRefreshedAt(new Date().toISOString());
+    } catch (errorValue) {
+      setAllocatorError(errorValue?.message || 'Failed to load allocator summary');
+    } finally {
+      setAllocatorLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshAllocatorSummary();
+    const timer = window.setInterval(() => {
+      refreshAllocatorSummary();
+    }, 15000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [refreshAllocatorSummary]);
+
+  const topPolicyEntry = useMemo(() => {
+    const policyMap = allocatorSummary?.byPolicy || {};
+    const entries = Object.entries(policyMap);
+    if (entries.length === 0) return null;
+    entries.sort((a, b) => Number(b[1]) - Number(a[1]));
+    return { policyId: entries[0][0], count: Number(entries[0][1] || 0) };
+  }, [allocatorSummary]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, height: '100%' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, border: '1px solid rgba(148, 163, 184, 0.2)', borderRadius: 12, padding: '8px 10px', background: 'rgba(15, 23, 42, 0.62)', position: 'relative' }}>
@@ -1093,6 +1138,42 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
             >
               Visual
             </button>
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, border: '1px solid rgba(56, 189, 248, 0.3)', borderRadius: 12, padding: '10px 12px', background: 'linear-gradient(135deg, rgba(2, 132, 199, 0.22), rgba(15, 23, 42, 0.72))' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <div style={{ fontSize: 11, letterSpacing: 0.1, textTransform: 'uppercase', opacity: 0.78 }}>Allocator</div>
+          <div style={{ fontSize: 13, fontWeight: 700 }}>{allocatorLoading ? 'Refreshing...' : 'Decision Summary'}</div>
+          <div style={{ fontSize: 11, opacity: 0.75 }}>
+            {allocatorRefreshedAt ? `Updated ${new Date(allocatorRefreshedAt).toLocaleTimeString()}` : 'Awaiting first sample'}
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, opacity: 0.75 }}>Window</div>
+          <div style={{ fontSize: 18, fontWeight: 700 }}>{allocatorWindowSize}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, opacity: 0.75 }}>Fallback Rate</div>
+          <div style={{ fontSize: 18, fontWeight: 700 }}>{formatPercent(allocatorSummary?.fallbackRate || 0)}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, opacity: 0.75 }}>Domain Compliance</div>
+          <div style={{ fontSize: 18, fontWeight: 700 }}>{formatPercent(allocatorSummary?.distinctConstraintComplianceRate || 1)}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, opacity: 0.75 }}>Top Policy</div>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>{topPolicyEntry ? `${topPolicyEntry.policyId} (${topPolicyEntry.count})` : 'none'}</div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+          <button type="button" onClick={() => refreshAllocatorSummary()} disabled={allocatorLoading}>
+            {allocatorLoading ? 'Refreshing' : 'Refresh'}
+          </button>
+        </div>
+        {allocatorError && (
+          <div style={{ gridColumn: '1 / -1', fontSize: 12, color: '#fecaca' }}>
+            {allocatorError}
           </div>
         )}
       </div>

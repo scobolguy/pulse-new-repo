@@ -5,11 +5,19 @@
 
 struct ClusterEntry {
     String clusterId;
-    int udpPort;
+    uint16_t siblingPort = 4100;
+    uint16_t parentPort = 4000;
+    String parentHost;
 };
 
 struct NodeConfig {
     String nodeName;
+    String wifiSsid;
+    String wifiPassword;
+    String activeClusterId = "default";
+    uint16_t siblingPort = 4100;
+    uint16_t parentPort = 4000;
+    String parentHost;
     std::vector<ClusterEntry> clusters;
 };
 

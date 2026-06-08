@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "generatedAt": "2026-06-08T15:18:41.539Z",
+  "serviceId": "allocator-shadow-smoke",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "allocator-shadow-smoke",
+    "refreshMs": null
+  },
+  "variableDeclarations": [],
+  "entryLabel": "ENTRY",
+  "finishLabel": "FINISH",
+  "instructionSubset": [
+    "JMP",
+    "JZ",
+    "NOP",
+    "ROUTE_MATCH_QUEUE",
+    "ROUTE_EVAL_WHEN",
+    "ROUTE_TRANSFORM",
+    "ROUTE_EMIT",
+    "PARSE_FIN_TEXT",
+    "HALT"
+  ],
+  "entries": [
+    {
+      "kind": "router",
+      "id": "allocator-shadow-smoke-route",
+      "label": "ROUTER_0_ALLOCATOR_SHADOW_SMOKE_ROUTE",
+      "inputQueue": "allocator.shadow.test.in",
+      "outputs": [
+        {
+          "queueName": "allocator.shadow.test.out",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "output := 1;",
+          "transformRule": "output := '{\\\"smoke\\\":\\\"allocator-shadow\\\",\\\"source\\\":\\\"pascalish\\\"}';"
+        }
+      ]
+    }
+  ]
+}

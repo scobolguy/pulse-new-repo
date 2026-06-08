@@ -1,3 +1,6 @@
-SERVICE "new-pascalish-service";
+program "new-pascalish-program";
+role code_librarian;
+library "core-shared" from librarian;
+interop wfl "new-workflow" as wf;
 
-VAR myLegacyMessage : LegacyMT103 FROM Librarian;
+var myLegacyMessage : swift-mt103 from librarian;

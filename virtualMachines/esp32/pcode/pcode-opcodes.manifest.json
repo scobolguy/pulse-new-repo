@@ -26,6 +26,18 @@
     { "name": "OP_ROUTE_EMIT", "hex": "0x15" },
     { "name": "OP_PARSE_FIN_TEXT", "hex": "0x16" },
     { "name": "OP_ROUTE_SET_STATE", "hex": "0x17" },
+    { "name": "OP_LOAD_NAME", "hex": "0x18" },
+    { "name": "OP_STORE_NAME", "hex": "0x19" },
+    { "name": "OP_CALL_LABEL", "hex": "0x1A" },
+    { "name": "OP_RET", "hex": "0x1B" },
+    { "name": "OP_EQ", "hex": "0x1C" },
+    { "name": "OP_NEQ", "hex": "0x1D" },
+    { "name": "OP_LT", "hex": "0x1E" },
+    { "name": "OP_LE", "hex": "0x1F" },
+    { "name": "OP_GT", "hex": "0x20" },
+    { "name": "OP_GE", "hex": "0x21" },
+    { "name": "OP_PRINT", "hex": "0x22" },
+    { "name": "OP_PRINT_NL", "hex": "0x23" },
     { "name": "OP_HALT", "hex": "0xFF" }
   ]
 }

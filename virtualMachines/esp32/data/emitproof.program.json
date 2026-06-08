@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "generatedAt": "2026-06-08T11:51:40.946Z",
+  "serviceId": "PascalishEmitProof",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "PascalishEmitProof",
+    "refreshMs": null
+  },
+  "executionModel": "standard-pascal",
+  "sourceLanguage": "pascal",
+  "globals": [
+    "n"
+  ],
+  "procedures": {},
+  "entryLabel": "MAIN"
+}

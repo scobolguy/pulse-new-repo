@@ -1,4 +1,4 @@
-import fs from 'fs/promises';
+﻿import fs from 'fs/promises';
 import path from 'path';
 import { pathToFileURL } from 'url';
 import { loadOpcodeMap } from './pmachine-js-opcodes.mjs';
@@ -286,6 +286,8 @@ function parseProgramMapMappings(programMap) {
     })) : [];
     mappingsById.set(id, { id, items });
   }
+  mappingsById.__globals = Array.isArray(programMap?.globals) ? programMap.globals : [];
+  mappingsById.__proceduresByLabel = programMap?.procedures || {};
   return mappingsById;
 }
 
@@ -392,6 +394,18 @@ function parseQuotedOperand(text) {
   return out;
 }
 
+function parseBareOperand(text) {
+  return trimCopy(text || '').split(/\s+/)[0] || '';
+}
+
+function parseCallOperand(text) {
+  const parts = trimCopy(text || '').split(/\s+/).filter(Boolean);
+  return {
+    label: parts[0] || '',
+    argc: Number.parseInt(parts[1] || '0', 10) || 0
+  };
+}
+
 function parsePcode(text) {
   const instructions = [];
   const labels = new Map();
@@ -424,6 +438,11 @@ function parsePcode(text) {
       instr.operand = parseQuotedOperand(rest);
     } else if (mnemonic === 'PUSH_INT') {
       instr.operand = Number.parseInt(trimCopy(rest), 10);
+    } else if (mnemonic === 'LOAD' || mnemonic === 'STORE') {
+      instr.operand = parseBareOperand(rest);
+    } else if (mnemonic === 'CALL') {
+      instr.operand = parseCallOperand(rest);
+      unresolved.push({ idx: instructions.length, label: instr.operand.label });
     }
 
     instructions.push(instr);
@@ -437,12 +456,44 @@ function parsePcode(text) {
   return instructions;
 }
 
+function resolveVar(frame, name) {
+  let cursor = frame;
+  while (cursor) {
+    if (Object.prototype.hasOwnProperty.call(cursor.vars, name)) return cursor.vars[name];
+    cursor = cursor.parent;
+  }
+  return 0;
+}
+
+function assignVar(frame, name, value) {
+  let cursor = frame;
+  while (cursor) {
+    if (Object.prototype.hasOwnProperty.call(cursor.vars, name)) {
+      cursor.vars[name] = value;
+      return;
+    }
+    cursor = cursor.parent;
+  }
+  frame.vars[name] = value;
+}
+
 function executeProgram({ instructions, opcodeMap, mappingsById, inputQueue, sourceMessage }) {
   const stack = [];
   let pc = 0;
   let currentMessage = sourceMessage;
   const deliveries = [];
   const state = {};
+  const stdout = [];
+  let currentLine = '';
+
+  const programGlobals = Array.isArray(mappingsById?.__globals) ? mappingsById.__globals : [];
+  const proceduresByLabel = mappingsById?.__proceduresByLabel || {};
+  const globalFrame = {
+    vars: Object.fromEntries(programGlobals.map(name => [name, 0])),
+    parent: null
+  };
+  let currentFrame = globalFrame;
+  const callStack = [];
 
   const requiredMnemonics = [
     'NOP', 'JMP', 'JZ', 'HALT',
@@ -450,10 +501,17 @@ function executeProgram({ instructions, opcodeMap, mappingsById, inputQueue, sou
     'PARSE_FIN_TEXT'
   ];
 
-  for (const name of requiredMnemonics) {
-    const manifestName = `OP_${name}`;
-    if (!opcodeMap.has(manifestName)) {
-      throw new Error(`Opcode missing from manifest for JS runtime: ${manifestName}`);
+  const hasRouterOps = instructions.some(i => {
+    const m = String(i.mnemonic || '');
+    return m.startsWith('ROUTE_') || m === 'PARSE_FIN_TEXT';
+  });
+
+  if (hasRouterOps) {
+    for (const name of requiredMnemonics) {
+      const manifestName = `OP_${name}`;
+      if (!opcodeMap.has(manifestName)) {
+        throw new Error(`Opcode missing from manifest for JS runtime: ${manifestName}`);
+      }
     }
   }
 
@@ -481,6 +539,90 @@ function executeProgram({ instructions, opcodeMap, mappingsById, inputQueue, sou
     }
     if (op === 'PUSH_INT') {
       stack.push(Number(instr.operand || 0));
+      pc += 1;
+      continue;
+    }
+    if (op === 'PUSH_STR') {
+      stack.push(String(instr.operand || ''));
+      pc += 1;
+      continue;
+    }
+    if (op === 'LOAD') {
+      stack.push(Number(resolveVar(currentFrame, String(instr.operand || '')) || 0));
+      pc += 1;
+      continue;
+    }
+    if (op === 'STORE') {
+      assignVar(currentFrame, String(instr.operand || ''), Number(stack.pop() || 0));
+      pc += 1;
+      continue;
+    }
+    if (op === 'ADD' || op === 'SUB' || op === 'MUL' || op === 'DIV') {
+      const b = Number(stack.pop() || 0);
+      const a = Number(stack.pop() || 0);
+      if (op === 'ADD') stack.push(a + b);
+      if (op === 'SUB') stack.push(a - b);
+      if (op === 'MUL') stack.push(a * b);
+      if (op === 'DIV') stack.push(Math.trunc(a / (b || 1)));
+      pc += 1;
+      continue;
+    }
+    if (op === 'EQ' || op === 'NEQ' || op === 'LT' || op === 'LE' || op === 'GT' || op === 'GE') {
+      const b = Number(stack.pop() || 0);
+      const a = Number(stack.pop() || 0);
+      let truth = 0;
+      if (op === 'EQ') truth = a === b ? 1 : 0;
+      if (op === 'NEQ') truth = a !== b ? 1 : 0;
+      if (op === 'LT') truth = a < b ? 1 : 0;
+      if (op === 'LE') truth = a <= b ? 1 : 0;
+      if (op === 'GT') truth = a > b ? 1 : 0;
+      if (op === 'GE') truth = a >= b ? 1 : 0;
+      stack.push(truth);
+      pc += 1;
+      continue;
+    }
+    if (op === 'CALL') {
+      const call = instr.operand || { label: '', argc: 0 };
+      const proc = proceduresByLabel[call.label] || { params: [], locals: [] };
+      const args = [];
+      for (let i = 0; i < Number(call.argc || 0); i += 1) {
+        args.push(Number(stack.pop() || 0));
+      }
+      args.reverse();
+
+      const vars = {};
+      for (let i = 0; i < (proc.params || []).length; i += 1) {
+        vars[String(proc.params[i])] = Number(args[i] || 0);
+      }
+      for (const localName of (proc.locals || [])) {
+        if (!Object.prototype.hasOwnProperty.call(vars, localName)) vars[String(localName)] = 0;
+      }
+
+      callStack.push({ returnPc: pc + 1, frame: currentFrame });
+      currentFrame = { vars, parent: currentFrame };
+      pc = instr.targetIndex >= 0 ? instr.targetIndex : instructions.length;
+      continue;
+    }
+    if (op === 'RET') {
+      const frame = callStack.pop();
+      if (!frame) break;
+      currentFrame = frame.frame;
+      pc = frame.returnPc;
+      continue;
+    }
+    if (op === 'PRINT') {
+      currentLine += String(stack.pop() ?? '');
+      pc += 1;
+      continue;
+    }
+    if (op === 'PRINT_INT') {
+      currentLine += String(Number(stack.pop() || 0));
+      pc += 1;
+      continue;
+    }
+    if (op === 'PRINT_NL') {
+      stdout.push(currentLine);
+      currentLine = '';
       pc += 1;
       continue;
     }
@@ -524,7 +666,8 @@ function executeProgram({ instructions, opcodeMap, mappingsById, inputQueue, sou
     pc += 1;
   }
 
-  return { deliveries, state };
+  if (currentLine.length > 0) stdout.push(currentLine);
+  return { deliveries, state, stdout, globals: globalFrame.vars };
 }
 
 async function readMessage(args) {
@@ -570,7 +713,9 @@ async function runSingleMessage(args) {
     sourceMessage,
     publishedCount: result.deliveries.length,
     deliveries: result.deliveries,
-    state: result.state
+    state: result.state,
+    stdout: result.stdout || [],
+    globals: result.globals || {}
   };
 
   console.log(JSON.stringify(out, null, 2));
