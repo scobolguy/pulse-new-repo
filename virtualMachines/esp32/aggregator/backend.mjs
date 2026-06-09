@@ -9492,7 +9492,8 @@ function registerRoutes(app) {
         serviceInstanceRegistry,
         upsertServiceInstance,
         resolveServiceInstance,
-        ffsDeploymentRegistry
+        ffsDeploymentRegistry,
+        setNodeLifecycleState
       }),
       allocator: () => ({
         serviceInstanceRegistry
@@ -9572,7 +9573,8 @@ function registerRoutes(app) {
         applyWorkerConfigUpdate,
         evaluateLatencyPolicies,
         metricsCollector,
-        routerWorkers
+        routerWorkers,
+        serviceInstanceRegistry
       })
     }
   });
