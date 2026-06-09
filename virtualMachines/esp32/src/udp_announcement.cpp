@@ -1,6 +1,10 @@
 #include "udp_announcement.h"
 
+#if defined(ARDUINO_ARCH_ESP8266)
+#include <ESP8266WiFi.h>
+#else
 #include <WiFi.h>
+#endif
 #include <ArduinoJson.h>
 
 bool sendNodeBeaconAnnouncement(
@@ -9,9 +13,10 @@ bool sendNodeBeaconAnnouncement(
     const char* nodeName,
     const char* deviceRole,
     const String& capabilityHash,
-    UdpAnnouncementState& state) {
+    UdpAnnouncementState& state,
+    uint16_t parentPort,
+    uint16_t siblingPort) {
     if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("[ANNOUNCE] Skipped: WiFi not connected");
         return false;
     }
 
@@ -31,29 +36,19 @@ bool sendNodeBeaconAnnouncement(
     announceDoc["status"] = "here";
     announceDoc["deviceRole"] = deviceRole;
     announceDoc["httpPort"] = 80;
+    announceDoc["udpParentPort"] = parentPort;
+    announceDoc["udpSiblingPort"] = siblingPort;
+    announceDoc["flowDirection"] = "bottom-up";
     announceDoc["ts"] = millis();
 
     String jsonMsg;
     serializeJson(announceDoc, jsonMsg);
-    int jsonBegin = udp.beginPacket("255.255.255.255", announcePort);
-    size_t jsonWritten = udp.write((const uint8_t*)jsonMsg.c_str(), jsonMsg.length());
-    int jsonEnd = udp.endPacket();
+    udp.beginPacket("255.255.255.255", announcePort);
+    udp.write((const uint8_t*)jsonMsg.c_str(), jsonMsg.length());
+    udp.endPacket();
 
     state.nodeBeaconLastSentAt = millis();
     state.nodeBeaconLastCapabilityHash = capabilityHash;
-
-    Serial.print("[BEACON] begin=");
-    Serial.print(jsonBegin);
-    Serial.print(" write=");
-    Serial.print((unsigned int)jsonWritten);
-    Serial.print(" end=");
-    Serial.print(jsonEnd);
-    Serial.print(" acked=");
-    Serial.print(state.nodeBeaconAcknowledged ? "true" : "false");
-    Serial.print(" featureChanged=");
-    Serial.print(capabilityChanged ? "true" : "false");
-    Serial.print(" ip=");
-    Serial.println(localIp);
 
     return true;
 }

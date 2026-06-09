@@ -15,4 +15,6 @@ bool sendNodeBeaconAnnouncement(
     const char* nodeName,
     const char* deviceRole,
     const String& capabilityHash,
-    UdpAnnouncementState& state);
+    UdpAnnouncementState& state,
+    uint16_t parentPort,
+    uint16_t siblingPort);

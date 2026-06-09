@@ -8,6 +8,8 @@ struct ClusterEntry {
     uint16_t siblingPort = 4100;
     uint16_t parentPort = 4000;
     String parentHost;
+    String parentNodeId;
+    bool isClusterGateway = false;
 };
 
 struct NodeConfig {
@@ -18,6 +20,8 @@ struct NodeConfig {
     uint16_t siblingPort = 4100;
     uint16_t parentPort = 4000;
     String parentHost;
+    String parentNodeId;
+    bool isClusterGateway = false;
     std::vector<ClusterEntry> clusters;
 };
 

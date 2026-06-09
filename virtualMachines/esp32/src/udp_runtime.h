@@ -18,10 +18,12 @@ struct UdpRuntimeContext {
 };
 
 void udpRuntimeConfigureWifiCredentials(const String& ssid, const String& password);
-bool udpRuntimeEnsureReady(uint16_t announcePort);
-void udpRuntimeMaintainConnectivity(uint16_t announcePort, unsigned long wifiReconnectIntervalMs);
-void udpRuntimeProcessIncoming(const UdpRuntimeContext& context, uint16_t announcePort);
+bool udpRuntimeEnsureReady(uint16_t parentPort, uint16_t siblingPort);
+void udpRuntimeMaintainConnectivity(uint16_t parentPort, uint16_t siblingPort, unsigned long wifiReconnectIntervalMs);
+void udpRuntimeProcessIncoming(const UdpRuntimeContext& context, uint16_t parentPort, uint16_t siblingPort);
 WiFiUDP& udpRuntimeSocket();
+uint16_t udpRuntimeGetBoundParentPort();
+uint16_t udpRuntimeGetBoundSiblingPort();
 
 void udpRuntimeResetBeaconState();
 unsigned long udpRuntimeGetBeaconIntervalMs(unsigned long ackedIntervalMs, unsigned long unackedIntervalMs);

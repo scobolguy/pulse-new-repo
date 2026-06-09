@@ -491,6 +491,39 @@ String xmlEscapeText(const String& value) {
     return out;
 }
 
+String requestMethodName(const AsyncWebServerRequest* request) {
+    if (request == nullptr) return "";
+    WebRequestMethodComposite method = request->method();
+    if (method == HTTP_GET) return "GET";
+    if (method == HTTP_POST) return "POST";
+    if (method == HTTP_PUT) return "PUT";
+    if (method == HTTP_PATCH) return "PATCH";
+    if (method == HTTP_DELETE) return "DELETE";
+    if (method == HTTP_OPTIONS) return "OPTIONS";
+    if (method == HTTP_HEAD) return "HEAD";
+    return String((unsigned int)method);
+}
+
+bool ruleAllowsMethod(JsonObjectConst rule, const String& requestMethodUpper) {
+    if (!rule["methods"].is<JsonArrayConst>()) {
+        return true;
+    }
+
+    JsonArrayConst methods = rule["methods"].as<JsonArrayConst>();
+    if (methods.isNull() || methods.size() == 0) {
+        return true;
+    }
+
+    for (JsonVariantConst entry : methods) {
+        String allowed = toUpperCopy(trimCopy(String(entry.as<const char*>() ? entry.as<const char*>() : "")));
+        if (allowed.length() == 0) continue;
+        if (allowed == "*" || allowed == "ANY") return true;
+        if (allowed == requestMethodUpper) return true;
+    }
+
+    return false;
+}
+
 String extractMtFieldLine(const String& message, const String& fieldTag) {
     int idx = message.indexOf(fieldTag);
     if (idx < 0) return "";
@@ -845,6 +878,12 @@ struct EdgeIngressExecutionCache {
     ProgramMapMetadata metadata;
 };
 
+#if !defined(ESP32)
+using PMachineMutexHandle = void*;
+#else
+using PMachineMutexHandle = SemaphoreHandle_t;
+#endif
+
 EdgeIngressExecutionResult executeEdgeIngressStage(
     pmachine::PMachine& machine,
     FederatedFileSystem* ffs,
@@ -856,7 +895,7 @@ EdgeIngressExecutionResult executeEdgeIngressStage(
     bool runRouter,
     bool convertMtToXml,
     const PMachineExecutionPolicy* policy,
-    SemaphoreHandle_t machineMutex,
+    PMachineMutexHandle machineMutex,
     EdgeIngressExecutionCache* executionCache = nullptr,
     bool messageAlreadyNormalized = false
 ) {
@@ -968,6 +1007,7 @@ EdgeIngressExecutionResult executeEdgeIngressStage(
         }
     }
 
+#if defined(ESP32)
     if (machineMutex != nullptr) {
         if (xSemaphoreTake(machineMutex, pdMS_TO_TICKS(15000)) != pdTRUE) {
             result.statusCode = 503;
@@ -976,6 +1016,7 @@ EdgeIngressExecutionResult executeEdgeIngressStage(
             return result;
         }
     }
+#endif
 
     machine.setMappings(*mappingDefs);
     if (procedureSignatures != nullptr) {
@@ -1026,9 +1067,11 @@ EdgeIngressExecutionResult executeEdgeIngressStage(
         stdoutLines.add(line.c_str());
     }
 
+#if defined(ESP32)
     if (machineMutex != nullptr) {
         xSemaphoreGive(machineMutex);
     }
+#endif
 
     serializeJson(out, result.body);
     if (stepLimitHit) {
@@ -1920,6 +1963,7 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         getRequestParam(request, "serviceId", serviceId);
         getRequestParam(request, "rules", rulesPath);
         getRequestParam(request, "mappings", mappingsPath);
+        String requestMethodUpper = toUpperCopy(trimCopy(requestMethodName(request)));
 
         JsonDocument rulesDoc;
         JsonArrayConst rules;
@@ -1958,6 +2002,7 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
 
             const char* ruleService = rule["serviceId"] | "";
             if (String(ruleService).length() > 0 && String(ruleService) != serviceId) continue;
+            if (!ruleAllowsMethod(rule, requestMethodUpper)) continue;
 
             matchedRuleCount += 1;
 

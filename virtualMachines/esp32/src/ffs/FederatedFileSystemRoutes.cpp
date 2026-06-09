@@ -68,7 +68,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
             server.on("/ffs/devices", HTTP_GET, [](AsyncWebServerRequest *request){
                 String json = "[";
                 if (LittleFS.exists("/devices")) {
-                    File dir = LittleFS.open("/devices");
+                    File dir = LittleFS.open("/devices", "r");
                     bool first = true;
                     File entry = dir.openNextFile();
                     while (entry) {
@@ -87,7 +87,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
             server.on("/ffs/services", HTTP_GET, [](AsyncWebServerRequest *request){
                 String json = "[";
                 if (LittleFS.exists("/services")) {
-                    File dir = LittleFS.open("/services");
+                    File dir = LittleFS.open("/services", "r");
                     bool first = true;
                     File entry = dir.openNextFile();
                     while (entry) {
@@ -295,7 +295,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
         if (LittleFS.exists("/devices")) {
             if (!files.empty()) json += ",";
             json += "{\"type\":\"directory\",\"name\":\"devices\",\"children\":[";
-            File dir = LittleFS.open("/devices");
+            File dir = LittleFS.open("/devices", "r");
             bool first = true;
             File entry = dir.openNextFile();
             while (entry) {
@@ -322,7 +322,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
             JsonDocument doc;
             JsonArray bundles = doc["flows"].to<JsonArray>();
             if (LittleFS.exists("/flows")) {
-                File root = LittleFS.open("/flows");
+                File root = LittleFS.open("/flows", "r");
                 if (root && root.isDirectory()) {
                     File entry = root.openNextFile();
                     while (entry) {

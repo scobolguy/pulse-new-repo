@@ -1,11 +1,19 @@
 #include "udp_runtime.h"
 
 #include <ArduinoJson.h>
+#if defined(ARDUINO_ARCH_ESP8266)
+#include <ESP8266WiFi.h>
+#else
 #include <WiFi.h>
+#endif
 
 namespace {
-WiFiUDP udpSocket;
-bool udpReady = false;
+WiFiUDP udpParentSocket;
+WiFiUDP udpSiblingSocket;
+bool udpParentReady = false;
+bool udpSiblingReady = false;
+uint16_t udpBoundParentPort = 0;
+uint16_t udpBoundSiblingPort = 0;
 unsigned long lastWifiReconnectAttempt = 0;
 String wifiSsid;
 String wifiPassword;
@@ -13,8 +21,70 @@ bool nodeBeaconAcknowledged = false;
 unsigned long nodeBeaconLastSentAt = 0;
 unsigned long nodeBeaconLastAckAt = 0;
 String nodeBeaconLastCapabilityHash;
+constexpr size_t kMaxDiscoveredNodes = 32;
 
-void sendNodeDetailsResponse(const UdpRuntimeContext& context, IPAddress ip, uint16_t port, const String& capabilityHash, bool capabilityChanged) {
+bool bindUdpSocket(WiFiUDP& socket, bool& ready, uint16_t& boundPort, uint16_t nextPort, const char* label) {
+    if (nextPort == 0) {
+        return false;
+    }
+
+    if (ready && boundPort == nextPort) {
+        return true;
+    }
+
+    if (ready && boundPort != nextPort) {
+        socket.stop();
+        ready = false;
+        boundPort = 0;
+    }
+
+    ready = socket.begin(nextPort);
+    if (!ready) {
+        Serial.print("[UDP] Failed to bind ");
+        Serial.print(label);
+        Serial.print(" port ");
+        Serial.println(nextPort);
+        return false;
+    }
+
+    boundPort = nextPort;
+    return true;
+}
+
+void upsertDiscoveredNode(std::map<String, DiscoveredNode>* table, const String& id, const String& ip) {
+    if (table == nullptr || id.length() == 0 || ip.length() == 0) {
+        return;
+    }
+
+    const unsigned long now = millis();
+    auto existing = table->find(id);
+    if (existing != table->end()) {
+        existing->second.mac = id;
+        existing->second.ip = ip;
+        existing->second.lastSeen = now;
+        return;
+    }
+
+    if (table->size() >= kMaxDiscoveredNodes) {
+        auto oldest = table->begin();
+        for (auto it = table->begin(); it != table->end(); ++it) {
+            if (it->second.lastSeen < oldest->second.lastSeen) {
+                oldest = it;
+            }
+        }
+        if (oldest != table->end()) {
+            table->erase(oldest);
+        }
+    }
+
+    DiscoveredNode node;
+    node.mac = id;
+    node.ip = ip;
+    node.lastSeen = now;
+    (*table)[id] = node;
+}
+
+void sendNodeDetailsResponse(WiFiUDP& socket, const UdpRuntimeContext& context, IPAddress ip, uint16_t port, const String& capabilityHash, bool capabilityChanged) {
     if (ip == IPAddress(0, 0, 0, 0) || port == 0) {
         return;
     }
@@ -39,75 +109,26 @@ void sendNodeDetailsResponse(const UdpRuntimeContext& context, IPAddress ip, uin
 
     String json;
     serializeJson(doc, json);
-    udpSocket.beginPacket(ip, port);
-    udpSocket.write((const uint8_t*)json.c_str(), json.length());
-    udpSocket.endPacket();
-}
-}
-
-void udpRuntimeConfigureWifiCredentials(const String& ssid, const String& password) {
-    wifiSsid = ssid;
-    wifiPassword = password;
+    socket.beginPacket(ip, port);
+    socket.write((const uint8_t*)json.c_str(), json.length());
+    socket.endPacket();
 }
 
-bool udpRuntimeEnsureReady(uint16_t announcePort) {
-    if (udpReady) {
-        return true;
-    }
-    udpReady = udpSocket.begin(announcePort);
-    if (udpReady) {
-        Serial.print("[UDP] Listening on port ");
-        Serial.println(announcePort);
-    } else {
-        Serial.println("[UDP] Failed to bind announce port");
-    }
-    return udpReady;
-}
-
-void udpRuntimeMaintainConnectivity(uint16_t announcePort, unsigned long wifiReconnectIntervalMs) {
-    const wl_status_t status = WiFi.status();
-    if (status == WL_CONNECTED) {
-        if (!udpReady) {
-            Serial.println("[WIFI] Connected, restoring UDP listener");
-            udpRuntimeEnsureReady(announcePort);
-        }
-        return;
-    }
-
-    udpReady = false;
-
-    const unsigned long now = millis();
-    if (now - lastWifiReconnectAttempt < wifiReconnectIntervalMs) {
-        return;
-    }
-
-    lastWifiReconnectAttempt = now;
-    Serial.print("[WIFI] Disconnected (status=");
-    Serial.print((int)status);
-    Serial.println(") attempting reconnect...");
-    WiFi.disconnect();
-    WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
-}
-
-void udpRuntimeProcessIncoming(const UdpRuntimeContext& context, uint16_t announcePort) {
-    (void)announcePort;
-    int packetSize = udpSocket.parsePacket();
+void processIncomingOnSocket(WiFiUDP& socket, const UdpRuntimeContext& context) {
+    int packetSize = socket.parsePacket();
     if (packetSize <= 0) {
         return;
     }
 
     String msg;
     msg.reserve(packetSize + 1);
-    while (udpSocket.available()) {
-        msg += static_cast<char>(udpSocket.read());
+    while (socket.available()) {
+        msg += static_cast<char>(socket.read());
     }
 
     if (msg.length() == 0) {
         return;
     }
-
-    Serial.print("Received UDP announcement: ");
-    Serial.println(msg);
 
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, msg);
@@ -118,7 +139,6 @@ void udpRuntimeProcessIncoming(const UdpRuntimeContext& context, uint16_t announ
             nodeBeaconAcknowledged = true;
             nodeBeaconLastAckAt = millis();
             nodeBeaconLastSentAt = millis();
-            Serial.println("[UDP] Beacon acknowledged by aggregator");
             return;
         }
 
@@ -126,7 +146,7 @@ void udpRuntimeProcessIncoming(const UdpRuntimeContext& context, uint16_t announ
             String requesterHash = doc["capabilityHash"].as<String>();
             const bool capabilityChanged = requesterHash.length() > 0
                 && !requesterHash.equalsIgnoreCase(nodeBeaconLastCapabilityHash);
-            sendNodeDetailsResponse(context, udpSocket.remoteIP(), udpSocket.remotePort(), context.computeNodeCapabilityHash(), capabilityChanged);
+            sendNodeDetailsResponse(socket, context, socket.remoteIP(), socket.remotePort(), context.computeNodeCapabilityHash(), capabilityChanged);
             return;
         }
 
@@ -135,7 +155,7 @@ void udpRuntimeProcessIncoming(const UdpRuntimeContext& context, uint16_t announ
             if (senderNodeId.length() == 0) {
                 senderNodeId = doc["nodeName"].as<String>();
             }
-            const String senderIp = doc["ip"].as<String>().length() > 0 ? doc["ip"].as<String>() : udpSocket.remoteIP().toString();
+            const String senderIp = doc["ip"].as<String>().length() > 0 ? doc["ip"].as<String>() : socket.remoteIP().toString();
             const bool senderFeatureChanged = doc["capabilitiesChanged"].as<bool>() || doc["featureChanged"].as<bool>() || doc["needsDetails"].as<bool>();
 
             if (senderNodeId.length() > 0 && senderNodeId.equalsIgnoreCase(context.nodeName)) {
@@ -143,12 +163,7 @@ void udpRuntimeProcessIncoming(const UdpRuntimeContext& context, uint16_t announ
             }
 
             if (context.discoveredNodeTable && senderNodeId.length() > 0 && senderIp.length() > 0) {
-                DiscoveredNode node;
-                node.mac = senderNodeId;
-                node.ip = senderIp;
-                node.lastSeen = millis();
-                (*context.discoveredNodeTable)[senderNodeId] = node;
-                Serial.println("Node added to discoveredNodeTable.");
+                upsertDiscoveredNode(context.discoveredNodeTable, senderNodeId, senderIp);
             }
 
             JsonDocument ackDoc;
@@ -160,9 +175,9 @@ void udpRuntimeProcessIncoming(const UdpRuntimeContext& context, uint16_t announ
             ackDoc["ts"] = millis();
             String ackJson;
             serializeJson(ackDoc, ackJson);
-            udpSocket.beginPacket(udpSocket.remoteIP(), udpSocket.remotePort());
-            udpSocket.write((const uint8_t*)ackJson.c_str(), ackJson.length());
-            udpSocket.endPacket();
+            socket.beginPacket(socket.remoteIP(), socket.remotePort());
+            socket.write((const uint8_t*)ackJson.c_str(), ackJson.length());
+            socket.endPacket();
 
             JsonDocument detailReqDoc;
             detailReqDoc["kind"] = "nodeDetailsRequest";
@@ -172,11 +187,11 @@ void udpRuntimeProcessIncoming(const UdpRuntimeContext& context, uint16_t announ
             detailReqDoc["ts"] = millis();
             String detailReqJson;
             serializeJson(detailReqDoc, detailReqJson);
-            udpSocket.beginPacket(udpSocket.remoteIP(), udpSocket.remotePort());
-            udpSocket.write((const uint8_t*)detailReqJson.c_str(), detailReqJson.length());
-            udpSocket.endPacket();
+            socket.beginPacket(socket.remoteIP(), socket.remotePort());
+            socket.write((const uint8_t*)detailReqJson.c_str(), detailReqJson.length());
+            socket.endPacket();
 
-            sendNodeDetailsResponse(context, udpSocket.remoteIP(), udpSocket.remotePort(), context.computeNodeCapabilityHash(), senderFeatureChanged);
+            sendNodeDetailsResponse(socket, context, socket.remoteIP(), socket.remotePort(), context.computeNodeCapabilityHash(), senderFeatureChanged);
             return;
         }
     }
@@ -230,22 +245,77 @@ void udpRuntimeProcessIncoming(const UdpRuntimeContext& context, uint16_t announ
         if (parsedId.equalsIgnoreCase(myMac)
             || parsedIp.equals(myIp)
             || (parsedNodeId.length() > 0 && parsedNodeId.equalsIgnoreCase(context.nodeName))) {
-            Serial.println("Announcement from self, not adding.");
-        } else {
-            DiscoveredNode node;
-            node.mac = parsedId;
-            node.ip = parsedIp;
-            node.lastSeen = millis();
-            (*context.discoveredNodeTable)[parsedId] = node;
-            Serial.println("Node added to discoveredNodeTable.");
+            return;
         }
+
+        upsertDiscoveredNode(context.discoveredNodeTable, parsedId, parsedIp);
+    }
+}
+}
+
+void udpRuntimeConfigureWifiCredentials(const String& ssid, const String& password) {
+    wifiSsid = ssid;
+    wifiPassword = password;
+}
+
+bool udpRuntimeEnsureReady(uint16_t parentPort, uint16_t siblingPort) {
+    const bool parentOk = bindUdpSocket(udpParentSocket, udpParentReady, udpBoundParentPort, parentPort, "parent");
+    bool siblingOk = true;
+
+    if (siblingPort > 0 && siblingPort != parentPort) {
+        siblingOk = bindUdpSocket(udpSiblingSocket, udpSiblingReady, udpBoundSiblingPort, siblingPort, "sibling");
     } else {
-        Serial.println("Failed to parse announcement: expected legacy MAC/IP text or JSON with ip + (mac|nodeId).");
+        if (udpSiblingReady) {
+            udpSiblingSocket.stop();
+            udpSiblingReady = false;
+            udpBoundSiblingPort = 0;
+        }
+    }
+
+    return parentOk && siblingOk;
+}
+
+void udpRuntimeMaintainConnectivity(uint16_t parentPort, uint16_t siblingPort, unsigned long wifiReconnectIntervalMs) {
+    const wl_status_t status = WiFi.status();
+    if (status == WL_CONNECTED) {
+        if (!udpParentReady || (siblingPort > 0 && siblingPort != parentPort && !udpSiblingReady)) {
+            udpRuntimeEnsureReady(parentPort, siblingPort);
+        }
+        return;
+    }
+
+    udpParentReady = false;
+    udpSiblingReady = false;
+
+    const unsigned long now = millis();
+    if (now - lastWifiReconnectAttempt < wifiReconnectIntervalMs) {
+        return;
+    }
+
+    lastWifiReconnectAttempt = now;
+    WiFi.disconnect();
+    WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
+}
+
+void udpRuntimeProcessIncoming(const UdpRuntimeContext& context, uint16_t parentPort, uint16_t siblingPort) {
+    (void)parentPort;
+    (void)siblingPort;
+    processIncomingOnSocket(udpParentSocket, context);
+    if (udpSiblingReady && udpBoundSiblingPort != udpBoundParentPort) {
+        processIncomingOnSocket(udpSiblingSocket, context);
     }
 }
 
 WiFiUDP& udpRuntimeSocket() {
-    return udpSocket;
+    return udpParentSocket;
+}
+
+uint16_t udpRuntimeGetBoundParentPort() {
+    return udpBoundParentPort;
+}
+
+uint16_t udpRuntimeGetBoundSiblingPort() {
+    return udpBoundSiblingPort;
 }
 
 void udpRuntimeResetBeaconState() {

@@ -17,6 +17,8 @@ bool loadNodeConfig(NodeConfig& config) {
     config.siblingPort = static_cast<uint16_t>(doc["siblingPort"] | 4100);
     config.parentPort = static_cast<uint16_t>(doc["parentPort"] | 4000);
     config.parentHost = doc["parentHost"] | "";
+    config.parentNodeId = doc["parentNodeId"] | "";
+    config.isClusterGateway = doc["isClusterGateway"] | false;
     config.clusters.clear();
     if (doc["clusters"].is<JsonArray>()) {
         for (JsonObject c : doc["clusters"].as<JsonArray>()) {
@@ -27,6 +29,8 @@ bool loadNodeConfig(NodeConfig& config) {
             );
             entry.parentPort = static_cast<uint16_t>(c["parentPort"] | config.parentPort);
             entry.parentHost = c["parentHost"] | config.parentHost;
+            entry.parentNodeId = c["parentNodeId"] | config.parentNodeId;
+            entry.isClusterGateway = c["isClusterGateway"] | config.isClusterGateway;
             config.clusters.push_back(entry);
         }
     }
@@ -39,6 +43,10 @@ bool loadNodeConfig(NodeConfig& config) {
             if (entry.parentHost.length() > 0) {
                 config.parentHost = entry.parentHost;
             }
+            if (entry.parentNodeId.length() > 0) {
+                config.parentNodeId = entry.parentNodeId;
+            }
+            config.isClusterGateway = entry.isClusterGateway;
             break;
         }
     }
@@ -55,6 +63,8 @@ bool saveNodeConfig(const NodeConfig& config) {
     doc["siblingPort"] = config.siblingPort;
     doc["parentPort"] = config.parentPort;
     doc["parentHost"] = config.parentHost;
+    doc["parentNodeId"] = config.parentNodeId;
+    doc["isClusterGateway"] = config.isClusterGateway;
     JsonArray arr = doc["clusters"].to<JsonArray>();
     for (const auto& entry : config.clusters) {
         JsonObject c = arr.add<JsonObject>();
@@ -62,6 +72,8 @@ bool saveNodeConfig(const NodeConfig& config) {
         c["siblingPort"] = entry.siblingPort;
         c["parentPort"] = entry.parentPort;
         c["parentHost"] = entry.parentHost;
+        c["parentNodeId"] = entry.parentNodeId;
+        c["isClusterGateway"] = entry.isClusterGateway;
         // Backward-compatible alias for older readers.
         c["udpPort"] = entry.siblingPort;
     }

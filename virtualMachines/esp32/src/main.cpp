@@ -6,9 +6,14 @@ DeviceConfiguration deviceConfig;
 #include <Arduino.h>
 #include <FS.h>
 #include <LittleFS.h>
-#include <HTTPClient.h>
 #include <SD.h>
+#if defined(ARDUINO_ARCH_ESP8266)
+#include <ESP8266HTTPClient.h>
+#include <ESP8266WiFi.h>
+#else
+#include <HTTPClient.h>
 #include <WiFi.h>
+#endif
 #include <ArduinoOTA.h>
 #include <ESPAsyncWebServer.h>
 
@@ -31,6 +36,7 @@ DeviceConfiguration deviceConfig;
 #endif
 
 String nodeName = "ESP32-VM";
+NodeConfig nodeConfig;
 WifiConfig wifiConfig;
 ClusterConfig clusterConfig;
 FederatedFileSystem federatedFS;
@@ -38,6 +44,8 @@ bool ffsUp = false;
 AsyncWebServer server(80);
 DevicePin* devicePin = nullptr;
 int devicePinNumber = 2;
+int relayPinNumber = 5;
+bool relayStateOn = false;
 std::map<String, bool> serviceBusyMap;
 
 #ifdef ENABLE_PMACHINE
@@ -83,6 +91,11 @@ const char* supervisorConfigPath = "/supervisor-config.json";
 
 bool supervisorOverallHealthy();
 void appendSupervisorStatus(JsonObject obj);
+void announcePresence();
+
+// Declared later in this translation unit; forward declare for early route lambdas.
+extern uint16_t runtimeUdpParentPort;
+extern uint16_t runtimeUdpSiblingPort;
 
 bool parseBoolValue(const String& value) {
     return value == "1" || value.equalsIgnoreCase("true") || value.equalsIgnoreCase("yes") || value.equalsIgnoreCase("on");
@@ -207,7 +220,12 @@ void probeHttpTarget(SupervisorProbeState& probe) {
     }
 
     HTTPClient http;
+#if defined(ARDUINO_ARCH_ESP8266)
+    WiFiClient probeClient;
+    if (!http.begin(probeClient, probe.url)) {
+#else
     if (!http.begin(probe.url)) {
+#endif
         updateProbeResult(probe, false, -1, "http begin failed");
         return;
     }
@@ -272,7 +290,7 @@ void probeTcpTarget(SupervisorProbeState& probe) {
 
     WiFiClient client;
     client.setTimeout(2500);
-    const bool ok = client.connect(host.c_str(), port, 2500);
+    const bool ok = client.connect(host.c_str(), port);
     if (ok) {
         updateProbeResult(probe, true, 200, "");
         client.stop();
@@ -312,7 +330,12 @@ void postSupervisorHeartbeat() {
     serializeJson(doc, body);
 
     HTTPClient http;
+#if defined(ARDUINO_ARCH_ESP8266)
+    WiFiClient supervisorClient;
+    if (!http.begin(supervisorClient, supervisorHeartbeatUrl)) {
+#else
     if (!http.begin(supervisorHeartbeatUrl)) {
+#endif
         supervisorLastHeartbeatStatusCode = -1;
         supervisorHeartbeatFailCount++;
         supervisorLastHeartbeatError = "heartbeat begin failed";
@@ -524,7 +547,12 @@ void loadBonecrusherWorkerConfig() {
 
 int httpPostJson(const String& url, const String& body, String& responseBody, uint16_t timeoutMs = 4000) {
     HTTPClient http;
+#if defined(ARDUINO_ARCH_ESP8266)
+    WiFiClient postJsonClient;
+    if (!http.begin(postJsonClient, url)) return -1;
+#else
     if (!http.begin(url)) return -1;
+#endif
     http.addHeader("Content-Type", "application/json");
     http.setTimeout(timeoutMs);
     const int code = http.POST(body);
@@ -535,7 +563,12 @@ int httpPostJson(const String& url, const String& body, String& responseBody, ui
 
 int httpPostForm(const String& url, const String& body, String& responseBody, uint16_t timeoutMs = 6000) {
     HTTPClient http;
+#if defined(ARDUINO_ARCH_ESP8266)
+    WiFiClient postFormClient;
+    if (!http.begin(postFormClient, url)) return -1;
+#else
     if (!http.begin(url)) return -1;
+#endif
     http.addHeader("Content-Type", "application/x-www-form-urlencoded");
     http.setTimeout(timeoutMs);
     const int code = http.POST(body);
@@ -546,7 +579,12 @@ int httpPostForm(const String& url, const String& body, String& responseBody, ui
 
 int httpGet(const String& url, String& responseBody, uint16_t timeoutMs = 4000) {
     HTTPClient http;
+#if defined(ARDUINO_ARCH_ESP8266)
+    WiFiClient getClient;
+    if (!http.begin(getClient, url)) return -1;
+#else
     if (!http.begin(url)) return -1;
+#endif
     http.setTimeout(timeoutMs);
     const int code = http.GET();
     responseBody = (code > 0) ? http.getString() : "";
@@ -842,6 +880,143 @@ void setupWebServer() {
                 serviceBusyMap[service] = busy;
                 request->send(200, "text/plain", String(service) + " set to " + (busy ? "busy" : "free"));
             });
+
+    // Board source-of-truth node naming endpoint.
+    server.on("/node/name", HTTP_POST, [](AsyncWebServerRequest *request){
+        String nextName;
+        if (request->hasParam("nodeName", true)) {
+            nextName = request->getParam("nodeName", true)->value();
+        } else if (request->hasParam("nodeName")) {
+            nextName = request->getParam("nodeName")->value();
+        }
+
+        nextName.trim();
+        if (nextName.length() == 0) {
+            request->send(400, "application/json", "{\"error\":\"nodeName is required\"}");
+            return;
+        }
+
+        nodeName = nextName;
+        File f = LittleFS.open(NODE_NAME_PATH, "w");
+        if (!f) {
+            request->send(500, "application/json", "{\"error\":\"failed to persist nodeName file\"}");
+            return;
+        }
+        f.print(nodeName);
+        f.close();
+
+        if (!loadNodeConfig(nodeConfig)) {
+            nodeConfig = NodeConfig();
+        }
+        nodeConfig.nodeName = nodeName;
+        saveNodeConfig(nodeConfig);
+
+#if defined(ESP32)
+        WiFi.setHostname(nodeName.c_str());
+#elif defined(ESP8266)
+        WiFi.hostname(nodeName.c_str());
+#endif
+
+        bonecrusherConfig.workerId = nodeName;
+        udpRuntimeResetBeaconState();
+        announcePresence();
+
+        JsonDocument doc;
+        doc["status"] = "ok";
+        doc["nodeName"] = nodeName;
+        doc["persisted"] = true;
+        String json;
+        serializeJson(doc, json);
+        request->send(200, "application/json", json);
+    });
+
+    // Board source-of-truth topology endpoint.
+    server.on("/node/topology", HTTP_POST, [](AsyncWebServerRequest *request){
+        if (!loadNodeConfig(nodeConfig)) {
+            nodeConfig = NodeConfig();
+        }
+
+        if (request->hasParam("activeClusterId", true)) {
+            nodeConfig.activeClusterId = request->getParam("activeClusterId", true)->value();
+        }
+        if (request->hasParam("parentHost", true)) {
+            nodeConfig.parentHost = request->getParam("parentHost", true)->value();
+        }
+        if (request->hasParam("parentNodeId", true)) {
+            nodeConfig.parentNodeId = request->getParam("parentNodeId", true)->value();
+        }
+        if (request->hasParam("isClusterGateway", true)) {
+            nodeConfig.isClusterGateway = parseBoolValue(request->getParam("isClusterGateway", true)->value());
+        }
+        if (request->hasParam("parentPort", true)) {
+            const int v = request->getParam("parentPort", true)->value().toInt();
+            if (v >= 1024 && v <= 65535) nodeConfig.parentPort = static_cast<uint16_t>(v);
+        }
+        if (request->hasParam("siblingPort", true)) {
+            const int v = request->getParam("siblingPort", true)->value().toInt();
+            if (v >= 1024 && v <= 65535) nodeConfig.siblingPort = static_cast<uint16_t>(v);
+        }
+
+        saveNodeConfig(nodeConfig);
+
+        runtimeUdpParentPort = nodeConfig.parentPort;
+        runtimeUdpSiblingPort = nodeConfig.siblingPort;
+        udpRuntimeEnsureReady(runtimeUdpParentPort, runtimeUdpSiblingPort);
+        udpRuntimeResetBeaconState();
+        announcePresence();
+
+        JsonDocument doc;
+        doc["status"] = "ok";
+        auto cluster = doc["cluster"].to<JsonObject>();
+        cluster["activeClusterId"] = nodeConfig.activeClusterId;
+        cluster["parentHost"] = nodeConfig.parentHost;
+        cluster["parentNodeId"] = nodeConfig.parentNodeId;
+        cluster["isClusterGateway"] = nodeConfig.isClusterGateway;
+        cluster["parentPort"] = nodeConfig.parentPort;
+        cluster["siblingPort"] = nodeConfig.siblingPort;
+        String json;
+        serializeJson(doc, json);
+        request->send(200, "application/json", json);
+    });
+
+    // Relay device actions: toggle, turnOn, turnOff.
+    server.on("/devices/relay/action", HTTP_POST, [](AsyncWebServerRequest *request){
+        String action;
+        if (request->hasParam("action", true)) {
+            action = request->getParam("action", true)->value();
+        } else if (request->hasParam("action")) {
+            action = request->getParam("action")->value();
+        }
+        action.trim();
+        if (action.length() == 0) {
+            request->send(400, "application/json", "{\"error\":\"action is required\"}");
+            return;
+        }
+
+        pinMode(relayPinNumber, OUTPUT);
+        if (action.equalsIgnoreCase("toggle")) {
+            relayStateOn = !relayStateOn;
+        } else if (action.equalsIgnoreCase("turnOn")) {
+            relayStateOn = true;
+        } else if (action.equalsIgnoreCase("turnOff")) {
+            relayStateOn = false;
+        } else {
+            request->send(400, "application/json", "{\"error\":\"unsupported relay action\"}");
+            return;
+        }
+
+        digitalWrite(relayPinNumber, relayStateOn ? HIGH : LOW);
+
+        JsonDocument doc;
+        doc["status"] = "ok";
+        doc["device"] = "RELAY";
+        doc["action"] = action;
+        doc["pin"] = relayPinNumber;
+        doc["state"] = relayStateOn ? "on" : "off";
+        String json;
+        serializeJson(doc, json);
+        request->send(200, "application/json", json);
+    });
     // Self-describing services endpoint
     server.on("/services/describe", HTTP_GET, [](AsyncWebServerRequest *request){
         JsonDocument doc;
@@ -860,6 +1035,13 @@ void setupWebServer() {
         doc["otaEnabled"] = otaEnabled;
         doc["maxMessageBytes"] = static_cast<uint32_t>(maxMessageBytes);
         doc["maxConcurrentTasks"] = static_cast<uint32_t>(maxConcurrentTasks);
+        auto cluster = doc["cluster"].to<JsonObject>();
+        cluster["activeClusterId"] = nodeConfig.activeClusterId;
+        cluster["parentHost"] = nodeConfig.parentHost;
+        cluster["parentNodeId"] = nodeConfig.parentNodeId;
+        cluster["isClusterGateway"] = nodeConfig.isClusterGateway;
+        cluster["parentPort"] = nodeConfig.parentPort;
+        cluster["siblingPort"] = nodeConfig.siblingPort;
         auto services = doc["services"].to<JsonArray>();
 
         if (isSupervisorRole()) {
@@ -879,7 +1061,7 @@ void setupWebServer() {
         // Devices section: enumerate devices and their documentation/visibility
         JsonArray devices = doc["devices"].to<JsonArray>();
         if (LittleFS.exists("/devices")) {
-            File dir = LittleFS.open("/devices");
+            File dir = LittleFS.open("/devices", "r");
             File entry = dir.openNextFile();
             while (entry) {
                 if (entry.isDirectory()) {
@@ -1159,7 +1341,7 @@ void setupWebServer() {
     server.on("/status", HTTP_GET, [](AsyncWebServerRequest *request){
         String json = "{";
         #if defined(ESP32)
-        json += "\"hardware\":\"ESP32\",";
+            File dir = LittleFS.open("/devices", "r");
         #elif defined(ESP8266)
         json += "\"hardware\":\"ESP8266\",";
         #endif
@@ -1171,6 +1353,14 @@ void setupWebServer() {
         json += String("\"otaEnabled\":") + (otaEnabled ? "true" : "false") + ",";
         json += "\"maxMessageBytes\":" + String((unsigned long)maxMessageBytes) + ",";
         json += "\"maxConcurrentTasks\":" + String((unsigned long)maxConcurrentTasks) + ",";
+        json += "\"cluster\":{";
+        json += "\"activeClusterId\":\"" + String(nodeConfig.activeClusterId) + "\",";
+        json += "\"parentHost\":\"" + String(nodeConfig.parentHost) + "\",";
+        json += "\"parentNodeId\":\"" + String(nodeConfig.parentNodeId) + "\",";
+        json += String("\"isClusterGateway\":") + (nodeConfig.isClusterGateway ? "true" : "false") + ",";
+        json += "\"parentPort\":" + String((unsigned long)nodeConfig.parentPort) + ",";
+        json += "\"siblingPort\":" + String((unsigned long)nodeConfig.siblingPort);
+        json += "},";
         json += "\"beacon\":{";
         json += String("\"acknowledged\":") + (udpRuntimeIsBeaconAcknowledged() ? "true" : "false") + ",";
         json += "\"lastSentAt\":" + String((unsigned long)udpRuntimeGetBeaconLastSentAt()) + ",";
@@ -1371,9 +1561,16 @@ void setupWebServer() {
 }
 
 
-#define ANNOUNCE_PORT 4210
 #define ANNOUNCE_INTERVAL 10000 // ms
 #define WIFI_RECONNECT_INTERVAL 5000 // ms
+
+constexpr uint16_t DEFAULT_UDP_PARENT_PORT = 4210;
+constexpr uint16_t DEFAULT_UDP_SIBLING_PORT = 4211;
+constexpr unsigned long TOPOLOGY_SYNC_INTERVAL_MS = 60000;
+
+uint16_t runtimeUdpParentPort = DEFAULT_UDP_PARENT_PORT;
+uint16_t runtimeUdpSiblingPort = DEFAULT_UDP_SIBLING_PORT;
+unsigned long lastTopologySyncMs = 0;
 
 unsigned long lastAnnounce = 0;
 
@@ -1404,17 +1601,113 @@ void announcePresence() {
 #endif
 
 void announcePresence() {
-    if (!udpRuntimeEnsureReady(ANNOUNCE_PORT)) {
-        Serial.println("[ANNOUNCE] Skipped: UDP not ready");
+    if (!udpRuntimeEnsureReady(runtimeUdpParentPort, runtimeUdpSiblingPort)) {
         return;
     }
 
     const String capabilityHash = computeNodeCapabilityHash();
     UdpAnnouncementState state = udpRuntimeGetAnnouncementState();
 
-    if (sendNodeBeaconAnnouncement(udpRuntimeSocket(), ANNOUNCE_PORT, nodeName.c_str(), deviceRole, capabilityHash, state)) {
+    if (sendNodeBeaconAnnouncement(
+        udpRuntimeSocket(),
+        runtimeUdpParentPort,
+        nodeName.c_str(),
+        deviceRole,
+        capabilityHash,
+        state,
+        runtimeUdpParentPort,
+        runtimeUdpSiblingPort)) {
         udpRuntimeApplyAnnouncementState(state);
     }
+}
+
+String getOriginFromUrl(const String& url) {
+    const int scheme = url.indexOf("://");
+    if (scheme < 0) return "";
+
+    const int authorityStart = scheme + 3;
+    if (authorityStart >= static_cast<int>(url.length())) return "";
+
+    const int pathStart = url.indexOf('/', authorityStart);
+    if (pathStart < 0) return url;
+    return url.substring(0, pathStart);
+}
+
+bool isValidTopologyPortPair(uint16_t parentPort, uint16_t siblingPort) {
+    if (parentPort < 4200) return false;
+    if ((parentPort % 2) != 0) return false;
+    if ((siblingPort % 2) != 1) return false;
+    if (siblingPort != static_cast<uint16_t>(parentPort + 1)) return false;
+    return true;
+}
+
+bool syncTopologyUdpPortsFromAggregator() {
+    if (WiFi.status() != WL_CONNECTED) return false;
+
+    const String backendOrigin = getOriginFromUrl(supervisorBackendProbe.url);
+    if (backendOrigin.length() == 0) return false;
+
+    const String localIp = WiFi.localIP().toString();
+    const String topologyUrl = trimTrailingSlash(backendOrigin) + "/api/nodes";
+
+    HTTPClient http;
+#if defined(ARDUINO_ARCH_ESP8266)
+    WiFiClient topologyClient;
+    if (!http.begin(topologyClient, topologyUrl)) {
+#else
+    if (!http.begin(topologyUrl)) {
+#endif
+        return false;
+    }
+
+    http.setTimeout(3000);
+    const int code = http.GET();
+    if (code < 200 || code >= 300) {
+        http.end();
+        return false;
+    }
+
+    const String body = http.getString();
+    http.end();
+
+    JsonDocument doc;
+    if (deserializeJson(doc, body)) {
+        return false;
+    }
+
+    if (!doc.is<JsonArray>()) {
+        return false;
+    }
+
+    for (JsonObject node : doc.as<JsonArray>()) {
+        const String nodeId = String(node["nodeId"] | "");
+        const String nodeDisplayName = String(node["nodeName"] | "");
+        const String nodeDetailsName = String(node["details"]["nodeName"] | "");
+        const String nodeIp = String(node["ip"] | "");
+
+        const bool isSelf =
+            (nodeId.length() > 0 && nodeId.equalsIgnoreCase(nodeName)) ||
+            (nodeDisplayName.length() > 0 && nodeDisplayName.equalsIgnoreCase(nodeName)) ||
+            (nodeDetailsName.length() > 0 && nodeDetailsName.equalsIgnoreCase(nodeName)) ||
+            (nodeIp.length() > 0 && nodeIp.equals(localIp));
+
+        if (!isSelf) continue;
+
+        const uint16_t parentPort = static_cast<uint16_t>(node["topology"]["udp"]["parentPort"] | 0);
+        const uint16_t siblingPort = static_cast<uint16_t>(node["topology"]["udp"]["siblingPort"] | 0);
+        if (!isValidTopologyPortPair(parentPort, siblingPort)) {
+            return false;
+        }
+
+        if (runtimeUdpParentPort != parentPort || runtimeUdpSiblingPort != siblingPort) {
+            runtimeUdpParentPort = parentPort;
+            runtimeUdpSiblingPort = siblingPort;
+            udpRuntimeEnsureReady(runtimeUdpParentPort, runtimeUdpSiblingPort);
+        }
+        return true;
+    }
+
+    return false;
 }
 
 void writeDefaultDocIfMissing(const char* path, const char* content) {
@@ -1443,6 +1736,11 @@ void ensureDocsTreeAndDefaults() {
     writeDefaultDocIfMissing("/devices/docs/LEDPIN_set_output.txt", "Action: set_output");
     writeDefaultDocIfMissing("/devices/docs/LEDPIN_raise.txt", "Action: raise");
     writeDefaultDocIfMissing("/devices/docs/LEDPIN_lower.txt", "Action: lower");
+    writeDefaultDocIfMissing("/devices/docs/RELAY.txt", "Device: RELAY (pin-controlled relay)");
+    writeDefaultDocIfMissing("/devices/docs/RELAY_toggle.txt", "Action: toggle");
+    writeDefaultDocIfMissing("/devices/docs/RELAY_turnOn.txt", "Action: turnOn");
+    writeDefaultDocIfMissing("/devices/docs/RELAY_turnOff.txt", "Action: turnOff");
+    writeDefaultDocIfMissing("/devices/docs/RELAY_fsm.txt", "FSM: off --turnOn--> on, on --turnOff--> off, off|on --toggle--> toggled state");
 
     writeDefaultDocIfMissing("/services/docs/ffs.txt", "Federated File System: provides distributed file storage and access.");
     writeDefaultDocIfMissing("/services/docs/ffs_listFiles.txt", "List all files in the file system.");
@@ -1516,7 +1814,7 @@ void setup() {
     }
 
     // 3. Ensure /devices, /services, and /flows directories exist at root at boot
-    File root = LittleFS.open("/");
+    File root = LittleFS.open("/", "r");
     bool foundDevices = false, foundServices = false, foundFlows = false;
     Serial.println("Looking for services and devices");
     if (root && root.isDirectory()) {
@@ -1564,6 +1862,53 @@ void setup() {
             pinMode(2, OUTPUT);
             digitalWrite(2, LOW);
             Serial.println("[LEDPIN] Pin 2 set as OUTPUT and LOW (LED off)");
+
+            File relayFile = LittleFS.open("/devices/RELAY.json", "w");
+            if (relayFile) {
+                JsonDocument relayDoc;
+                relayDoc["type"] = "device";
+                relayDoc["name"] = "RELAY";
+                relayDoc["pin"] = relayPinNumber;
+                relayDoc["visibility"] = "private";
+                auto relayActions = relayDoc["actions"].to<JsonArray>();
+                relayActions.add("toggle");
+                relayActions.add("turnOn");
+                relayActions.add("turnOff");
+                auto relayFsm = relayDoc["fsm"].to<JsonObject>();
+                relayFsm["initialState"] = "off";
+                auto relayStates = relayFsm["states"].to<JsonArray>();
+                relayStates.add("off");
+                relayStates.add("on");
+                auto relayTransitions = relayFsm["transitions"].to<JsonArray>();
+                JsonObject t1 = relayTransitions.add<JsonObject>();
+                t1["from"] = "off";
+                t1["action"] = "turnOn";
+                t1["to"] = "on";
+                JsonObject t2 = relayTransitions.add<JsonObject>();
+                t2["from"] = "on";
+                t2["action"] = "turnOff";
+                t2["to"] = "off";
+                JsonObject t3 = relayTransitions.add<JsonObject>();
+                t3["from"] = "off";
+                t3["action"] = "toggle";
+                t3["to"] = "on";
+                JsonObject t4 = relayTransitions.add<JsonObject>();
+                t4["from"] = "on";
+                t4["action"] = "toggle";
+                t4["to"] = "off";
+                String relayJson;
+                serializeJson(relayDoc, relayJson);
+                relayFile.print(relayJson);
+                relayFile.close();
+                Serial.println("[RELAY] /devices/RELAY.json created.");
+            } else {
+                Serial.println("[RELAY] Failed to create /devices/RELAY.json!");
+            }
+
+            pinMode(relayPinNumber, OUTPUT);
+            relayStateOn = false;
+            digitalWrite(relayPinNumber, LOW);
+            Serial.printf("[RELAY] Pin %d set as OUTPUT and LOW (relay off)\n", relayPinNumber);
         } else {
             Serial.println("[LEDPIN] /devices directory does NOT exist!");
         }
@@ -1572,7 +1917,6 @@ void setup() {
     }
 
     // 5. Load node config from /ffs/.NodeConfig.json if present
-    NodeConfig nodeConfig;
     if (loadNodeConfig(nodeConfig) && nodeConfig.nodeName.length()) {
         nodeName = nodeConfig.nodeName;
     } else {
@@ -1613,7 +1957,8 @@ void setup() {
         Serial.print("[SUPERVISOR] heartbeat target: ");
         Serial.println(supervisorHeartbeatUrl);
     }
-    udpRuntimeEnsureReady(ANNOUNCE_PORT);
+    syncTopologyUdpPortsFromAggregator();
+    udpRuntimeEnsureReady(runtimeUdpParentPort, runtimeUdpSiblingPort);
     udpRuntimeResetBeaconState();
     announcePresence();
 
@@ -1670,7 +2015,7 @@ void setup() {
 }
 
 void loop() {
-    udpRuntimeMaintainConnectivity(ANNOUNCE_PORT, WIFI_RECONNECT_INTERVAL);
+    udpRuntimeMaintainConnectivity(runtimeUdpParentPort, runtimeUdpSiblingPort, WIFI_RECONNECT_INTERVAL);
 
     if (otaEnabled) {
         ArduinoOTA.handle();
@@ -1684,7 +2029,7 @@ void loop() {
     udpContext.firmwareTrack = firmwareTrack;
     udpContext.discoveredNodeTable = &discoveredNodeTable;
     udpContext.computeNodeCapabilityHash = computeNodeCapabilityHash;
-    udpRuntimeProcessIncoming(udpContext, ANNOUNCE_PORT);
+    udpRuntimeProcessIncoming(udpContext, runtimeUdpParentPort, runtimeUdpSiblingPort);
         /* UDP announcement disabled */
         // processIncomingUDP();
 
@@ -1706,6 +2051,11 @@ void loop() {
     if (millis() - lastAnnounce > beaconInterval) {
         announcePresence();
         lastAnnounce = millis();
+    }
+
+    if (millis() - lastTopologySyncMs > TOPOLOGY_SYNC_INTERVAL_MS) {
+        syncTopologyUdpPortsFromAggregator();
+        lastTopologySyncMs = millis();
     }
 
     runSupervisorHealthChecks();
