@@ -113,15 +113,25 @@ async function loadJsonOrDefault(filePath, defaultValue) {
   }
 }
 
-export function createRouterEngine({ rulesPath, mappingsPath = './data/data-mappings.json', serviceId = 'default-router-service', publishToQueue, dequeueFromQueue }) {
+export function createRouterEngine({
+  rulesPath,
+  mappingsPath = './data/data-mappings.json',
+  compiledArtifactPath = './data/router-mapper-compiled.json',
+  serviceId = 'default-router-service',
+  publishToQueue,
+  dequeueFromQueue,
+  invokeSubflow = null
+}) {
   if (!rulesPath) throw new Error('rulesPath is required');
   if (typeof publishToQueue !== 'function') throw new Error('publishToQueue function is required');
   if (typeof dequeueFromQueue !== 'function') throw new Error('dequeueFromQueue function is required');
 
   const absoluteRulesPath = path.resolve(rulesPath);
   const absoluteMappingsPath = path.resolve(mappingsPath);
+  const absoluteCompiledArtifactPath = path.resolve(compiledArtifactPath);
   let rules = [];
   let mappings = [];
+  let compiledArtifact = null;
 
   async function saveRules() {
     await fs.mkdir(path.dirname(absoluteRulesPath), { recursive: true });
@@ -138,6 +148,153 @@ export function createRouterEngine({ rulesPath, mappingsPath = './data/data-mapp
     if (mappings.length > 0) return;
     const loaded = await loadJsonOrDefault(absoluteMappingsPath, []);
     mappings = Array.isArray(loaded) ? loaded : [];
+  }
+
+  async function ensureCompiledArtifactLoaded() {
+    if (compiledArtifact) return;
+    const loaded = await loadJsonOrDefault(absoluteCompiledArtifactPath, null);
+    compiledArtifact = loaded && typeof loaded === 'object' ? loaded : null;
+  }
+
+  function getProgramOrchestration(programId) {
+    const normalized = String(programId || '').trim();
+    if (!normalized || !compiledArtifact || typeof compiledArtifact !== 'object') return null;
+
+    const runtimeUnit = compiledArtifact.runtimeUnit || null;
+    if (!runtimeUnit || String(runtimeUnit.kind || '').toLowerCase() !== 'program') return null;
+    if (String(runtimeUnit.id || '').trim() !== normalized) return null;
+
+    const statements = Array.isArray(compiledArtifact?.ast?.statements) ? compiledArtifact.ast.statements : [];
+    for (const stmt of statements) {
+      const orchestration = stmt?.orchestration;
+      if (!orchestration || typeof orchestration !== 'object') continue;
+      if (Array.isArray(orchestration.asyncSubflows) && orchestration.asyncSubflows.length > 0 && orchestration.waitAll) {
+        return orchestration;
+      }
+    }
+    return null;
+  }
+
+  async function runSubflowTask(task, parentContext) {
+    if (typeof invokeSubflow !== 'function') {
+      throw new Error('invokeSubflow callback is not configured');
+    }
+
+    const timeoutMs = Math.max(1, Number(task?.timeoutMs || 0) || 5000);
+    const startedAt = Date.now();
+    const invocation = await invokeSubflow({
+      subflowId: String(task?.subflowId || '').trim(),
+      nodeId: String(task?.nodeId || '').trim(),
+      payload: parentContext?.payload,
+      timeoutMs,
+      parentRequestContext: parentContext?.requestContext || null
+    });
+
+    const rawResponse = invocation?.response;
+    let parsedResponse = rawResponse;
+    if (typeof rawResponse === 'string') {
+      try {
+        parsedResponse = JSON.parse(rawResponse);
+      } catch {
+        parsedResponse = rawResponse;
+      }
+    }
+
+    const payloadSuccess = (parsedResponse && typeof parsedResponse === 'object' && typeof parsedResponse.success === 'boolean')
+      ? parsedResponse.success
+      : null;
+
+    const transportSuccess = invocation?.success === true || invocation?.ok === true || (invocation?.success !== false && invocation?.error == null);
+    const successFlag = payloadSuccess == null ? transportSuccess : Boolean(payloadSuccess);
+    const replyJson = typeof rawResponse === 'string' ? rawResponse : JSON.stringify(rawResponse ?? null);
+
+    return {
+      handleRef: String(task?.handleRef || '').trim(),
+      success: Boolean(successFlag),
+      replyJson,
+      response: rawResponse,
+      errorCode: invocation?.errorCode || (parsedResponse && typeof parsedResponse === 'object' ? (parsedResponse.errorCode || null) : null),
+      errorMessage: invocation?.errorMessage || (parsedResponse && typeof parsedResponse === 'object' ? (parsedResponse.errorMessage || null) : null) || (invocation?.error ? String(invocation.error) : null),
+      nodeId: String(task?.nodeId || '').trim() || null,
+      subflowId: String(task?.subflowId || '').trim() || null,
+      elapsedMs: Math.max(0, Date.now() - startedAt)
+    };
+  }
+
+  async function runProgramOrchestration({ programId, payload, sourceService, requestContext }) {
+    await ensureCompiledArtifactLoaded();
+    const orchestration = getProgramOrchestration(programId);
+    if (!orchestration) return null;
+
+    const asyncSubflows = Array.isArray(orchestration.asyncSubflows) ? orchestration.asyncSubflows : [];
+    if (asyncSubflows.length === 0) {
+      throw new Error(`Program ${programId} has no async subflows`);
+    }
+
+    const settled = await Promise.all(asyncSubflows.map(async (task) => {
+      try {
+        const result = await runSubflowTask(task, { payload, requestContext, sourceService });
+        return { status: 'fulfilled', value: result };
+      } catch (error) {
+        return {
+          status: 'rejected',
+          reason: {
+            handleRef: String(task?.handleRef || '').trim(),
+            subflowId: String(task?.subflowId || '').trim() || null,
+            nodeId: String(task?.nodeId || '').trim() || null,
+            errorMessage: error?.message || String(error)
+          }
+        };
+      }
+    }));
+
+    const rejected = settled.filter(item => item.status === 'rejected');
+    const fulfilled = settled.filter(item => item.status === 'fulfilled').map(item => item.value);
+    const failedResult = fulfilled.find(item => item.success !== true);
+
+    if (rejected.length > 0 || failedResult) {
+      const waitFailReason = String(orchestration?.waitAll?.onErrorFailTransaction || '').trim();
+      const failReasons = Array.isArray(orchestration?.failTransactions)
+        ? orchestration.failTransactions.map(item => String(item?.reason || '').trim()).filter(Boolean)
+        : [];
+
+      return {
+        ok: false,
+        success: false,
+        programId,
+        error: {
+          code: 'transaction_failed',
+          reason: waitFailReason || failReasons[0] || 'orchestrated subflow failed',
+          rejected,
+          results: fulfilled
+        }
+      };
+    }
+
+    const resultByHandle = new Map(fulfilled.map(item => [item.handleRef, item]));
+    const orderedHandles = Array.isArray(orchestration?.waitAll?.handleRefs) ? orchestration.waitAll.handleRefs : [];
+    const orderedResults = orderedHandles.map(handle => resultByHandle.get(String(handle || '').trim())).filter(Boolean);
+    const returnExpr = String(orchestration?.returnSuccess?.valueExpr || '').trim();
+
+    let response = orderedResults.map(item => ({
+      handleRef: item.handleRef,
+      success: item.success,
+      replyJson: item.replyJson,
+      nodeId: item.nodeId,
+      subflowId: item.subflowId
+    }));
+
+    if (returnExpr && Object.prototype.hasOwnProperty.call(payload || {}, returnExpr)) {
+      response = payload[returnExpr];
+    }
+
+    return {
+      ok: true,
+      success: true,
+      programId,
+      response,
+      results: orderedResults
+    };
   }
 
   function evaluateWhen(whenRule, vars) {
@@ -285,6 +442,122 @@ export function createRouterEngine({ rulesPath, mappingsPath = './data/data-mapp
     };
   }
 
+  async function invokeHttpService({
+    serviceId: targetServiceId,
+    httpVerb = 'GET',
+    message = null,
+    sourceService = 'http-api',
+    inputQueue = null,
+    requestContext = null
+  } = {}) {
+    await ensureLoaded();
+    await ensureMappingsLoaded();
+
+    const normalizedServiceId = String(targetServiceId || serviceId || '').trim();
+    if (!normalizedServiceId) throw new Error('serviceId is required');
+
+    const normalizedHttpVerb = String(httpVerb || 'GET').trim().toUpperCase() || 'GET';
+    const resolvedInputQueue = String(inputQueue || `${normalizedServiceId}.in`).trim();
+
+    const matchingRules = rules.filter((r) => {
+      if (r.enabled === false) return false;
+      if (String(r.inputQueue || '').trim() !== resolvedInputQueue) return false;
+      const ruleServiceId = String(r.serviceId || '').trim();
+      if (ruleServiceId && ruleServiceId !== normalizedServiceId) return false;
+      if (Array.isArray(r.methods) && r.methods.length > 0) {
+        const methodSet = new Set(r.methods.map(v => String(v || '').trim().toUpperCase()).filter(Boolean));
+        if (!methodSet.has(normalizedHttpVerb)) return false;
+      }
+      return true;
+    });
+
+    if (matchingRules.length === 0) {
+      const orchestrationResult = await runProgramOrchestration({
+        programId: normalizedServiceId,
+        payload: message,
+        sourceService,
+        requestContext
+      });
+      if (orchestrationResult) {
+        return {
+          serviceId: normalizedServiceId,
+          inputQueue: resolvedInputQueue,
+          httpVerb: normalizedHttpVerb,
+          sourceService,
+          matchedRuleCount: 0,
+          matchedOutputCount: orchestrationResult.success ? 1 : 0,
+          response: orchestrationResult.success ? orchestrationResult.response : null,
+          responses: orchestrationResult.success ? [{ ruleId: `${normalizedServiceId}:orchestration`, outputQueue: '', message: orchestrationResult.response }] : [],
+          orchestration: orchestrationResult
+        };
+      }
+
+      return {
+        serviceId: normalizedServiceId,
+        inputQueue: resolvedInputQueue,
+        httpVerb: normalizedHttpVerb,
+        sourceService,
+        matchedRuleCount: 0,
+        matchedOutputCount: 0,
+        response: null,
+        responses: []
+      };
+    }
+
+    const messageObject = toObject(message);
+    const responseMatches = [];
+
+    for (const rule of matchingRules) {
+      for (const output of (rule.outputs || [])) {
+        const outputHttpVerb = String(output?.httpVerb || '').trim().toUpperCase();
+        if (outputHttpVerb && outputHttpVerb !== normalizedHttpVerb) continue;
+
+        const vars = {
+          src: message,
+          msg: message,
+          inputQueue: resolvedInputQueue,
+          sourceService,
+          outputQueue: output.queueName,
+          routerRuleId: rule.id,
+          routerServiceId: normalizedServiceId,
+          payload: messageObject,
+          json: messageObject,
+          httpVerb: normalizedHttpVerb,
+          requestMethod: normalizedHttpVerb,
+          requestPath: String(requestContext?.path || ''),
+          requestQuery: requestContext?.query || {},
+          requestHeaders: requestContext?.headers || {},
+          requestBody: requestContext?.body,
+          out: ''
+        };
+
+        const shouldRoute = evaluateWhen(output.whenRule, vars);
+        if (!shouldRoute) continue;
+
+        const routedMessage = evaluateTransform(output.transformRule, message, vars);
+        responseMatches.push({
+          ruleId: rule.id,
+          outputQueue: output.queueName,
+          dataTypeIds: Array.isArray(output.dataTypeIds)
+            ? output.dataTypeIds
+            : (output.dataTypeId ? [output.dataTypeId] : []),
+          message: routedMessage
+        });
+      }
+    }
+
+    return {
+      serviceId: normalizedServiceId,
+      inputQueue: resolvedInputQueue,
+      httpVerb: normalizedHttpVerb,
+      sourceService,
+      matchedRuleCount: matchingRules.length,
+      matchedOutputCount: responseMatches.length,
+      response: responseMatches.length > 0 ? responseMatches[0].message : null,
+      responses: responseMatches
+    };
+  }
+
   return {
     async listRules() {
       await ensureLoaded();
@@ -303,6 +576,9 @@ export function createRouterEngine({ rulesPath, mappingsPath = './data/data-mapp
         description: rule.description || '',
         outputs: rule.outputs.map(out => ({
           queueName: out.queueName,
+          ...(typeof out.httpVerb === 'string' && out.httpVerb.trim()
+            ? { httpVerb: out.httpVerb.trim().toUpperCase() }
+            : {}),
           ...(Array.isArray(out.dataTypeIds) && out.dataTypeIds.length > 0
             ? { dataTypeIds: out.dataTypeIds, dataTypeId: out.dataTypeIds[0] }
             : (out.dataTypeId ? { dataTypeId: out.dataTypeId, dataTypeIds: [out.dataTypeId] } : {})),
@@ -337,6 +613,10 @@ export function createRouterEngine({ rulesPath, mappingsPath = './data/data-mapp
       const { inputQueue, message, sourceService, messageEnvelope = null } = payload || {};
       if (!inputQueue) throw new Error('inputQueue is required');
       return processMessage({ inputQueue, message, sourceService: sourceService || 'api', messageEnvelope });
+    },
+
+    async invokeHttpService(payload) {
+      return invokeHttpService(payload || {});
     },
 
     async processFromQueue(inputQueue, { consumerService = 'router', maxMessages = 1 } = {}) {

@@ -7,7 +7,8 @@ program
   ;
 
 statement
-  : runtimeDecl
+  : serviceDecl
+  | runtimeDecl
   | roleDecl
   | varDecl
   | libraryDecl
@@ -28,8 +29,7 @@ roleName
   ;
 
 runtimeDecl
-  : serviceDecl
-  | programDecl
+  : programDecl
   | daemonDecl
   ;
 
@@ -47,7 +47,40 @@ varSource
   ;
 
 serviceDecl
-  : SERVICE stringOrIdent SEMICOLON
+  : SERVICE stringOrIdent SEMICOLON serviceBody (DOT | SEMICOLON)?
+  ;
+
+serviceBody
+  : BEGIN serviceStmt* END
+  ;
+
+serviceStmt
+  : serviceCaseStmt
+  | serviceReturnStmt SEMICOLON
+  ;
+
+serviceCaseStmt
+  : CASE serviceExpr OF serviceCaseArm+ (ELSE serviceReturnStmt SEMICOLON)? END SEMICOLON?
+  ;
+
+serviceCaseArm
+  : serviceExpr COLON serviceReturnStmt SEMICOLON
+  ;
+
+serviceReturnStmt
+  : RETURN serviceExpr
+  ;
+
+serviceExpr
+  : qualifiedIdent
+  | stringValue
+  | NUMBER
+  | TRUE
+  | FALSE
+  ;
+
+qualifiedIdent
+  : IDENT (DOT IDENT)*
   ;
 
 programDecl
@@ -100,6 +133,12 @@ routerHeaderProp
   : DESCRIPTION stringValue
   | ENABLED booleanValue
   | SERVICE stringValue
+  | METHODS verbList
+  ;
+
+verbList
+  : stringOrIdent
+  | LPAREN stringOrIdent (COMMA stringOrIdent)* RPAREN
   ;
 
 outputDecl
@@ -181,6 +220,7 @@ pl0Element
   | NEQ
   | COMMA
   | SEMICOLON
+  | DOT
   | ASSIGN
   | CONCAT
   | IF
@@ -190,6 +230,7 @@ pl0Element
   | DO
   | FOR
   | CALL
+  | RETURN
   | NOT
   | COBEGIN
   | COEND
@@ -197,8 +238,18 @@ pl0Element
   | SYNC
   | ASYNC
   | WAIT
+  | ALL
+  | WITH
+  | TIMEOUT
+  | INTO
+  | MS
+  | S
+  | M
   | ON
   | ERROR
+  | FAIL
+  | TRANSACTION
+  | SUCCESS
   | BACKOUT
   | TRY
   | CATCH
@@ -211,6 +262,10 @@ pl0Element
   ;
 
 SERVICE: 'SERVICE';
+CASE: 'CASE';
+OF: 'OF';
+RETURN: 'RETURN';
+METHODS: 'METHODS';
 PROGRAM: 'PROGRAM';
 DAEMON: 'DAEMON';
 REFRESH: 'REFRESH';
@@ -260,8 +315,15 @@ SUBFLOW: 'SUBFLOW';
 SYNC: 'SYNC';
 ASYNC: 'ASYNC';
 WAIT: 'WAIT';
+ALL: 'ALL';
+WITH: 'WITH';
+TIMEOUT: 'TIMEOUT';
+INTO: 'INTO';
 ON: 'ON';
 ERROR: 'ERROR';
+FAIL: 'FAIL';
+TRANSACTION: 'TRANSACTION';
+SUCCESS: 'SUCCESS';
 BACKOUT: 'BACKOUT';
 TRY: 'TRY';
 CATCH: 'CATCH';

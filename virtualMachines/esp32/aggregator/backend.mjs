@@ -4655,9 +4655,11 @@ async function replicateDequeueToFollowers(queueName, removedMessage, leaderMana
   }
 }
 
-const messageRouter = createRouterEngine({
+let messageRouter;
+messageRouter = createRouterEngine({
   rulesPath: ROUTER_RULES_PATH,
   mappingsPath: DATA_MAPPINGS_PATH,
+  compiledArtifactPath: path.join(RUNTIME_DATA_ROOT, 'router-mapper-compiled.json'),
   serviceId: 'aggregator-router-service',
   publishToQueue: async ({ queueName, message, sourceService, messageEnvelope = null, dataTypeIds }) => {
     let route = ensureRoute(queueName);
@@ -4683,6 +4685,56 @@ const messageRouter = createRouterEngine({
   },
   dequeueFromQueue: async ({ inputQueue, consumerService }) => {
     return dequeueViaRoute(inputQueue, consumerService || 'router');
+  },
+  invokeSubflow: async ({ subflowId, nodeId, payload, timeoutMs, parentRequestContext }) => {
+    const normalizedSubflowId = String(subflowId || '').trim();
+    if (!normalizedSubflowId) {
+      return {
+        success: false,
+        errorCode: 'invalid_subflow_id',
+        errorMessage: 'subflowId is required',
+        response: null
+      };
+    }
+
+    const params = new URLSearchParams();
+    if (nodeId) params.set('nodeId', String(nodeId));
+    if (timeoutMs) params.set('timeoutMs', String(timeoutMs));
+    params.set('inputQueue', `${normalizedSubflowId}.in`);
+    const qs = params.toString();
+    const url = `http://127.0.0.1:${HTTP_PORT}/api/services/${encodeURIComponent(normalizedSubflowId)}${qs ? `?${qs}` : ''}`;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-user-id': String(parentRequestContext?.headers?.['x-user-id'] || parentRequestContext?.headers?.['X-User-Id'] || 'system-admin')
+      },
+      body: JSON.stringify(payload ?? null)
+    });
+
+    let body;
+    const contentType = String(res.headers.get('content-type') || '').toLowerCase();
+    if (contentType.includes('application/json')) {
+      body = await res.json().catch(() => null);
+    } else {
+      body = await res.text().catch(() => '');
+    }
+
+    if (!res.ok) {
+      return {
+        success: false,
+        errorCode: `http_${res.status}`,
+        errorMessage: typeof body === 'object' ? (body?.error || `Subflow ${normalizedSubflowId} failed`) : String(body || `Subflow ${normalizedSubflowId} failed`),
+        response: body
+      };
+    }
+
+    return {
+      success: true,
+      response: typeof body === 'object' && body ? (Object.prototype.hasOwnProperty.call(body, 'response') ? body.response : body) : body,
+      timeoutMs: timeoutMs || null
+    };
   }
 });
 
@@ -9624,7 +9676,13 @@ function registerRoutes(app) {
   // Catch-all error handler for uncaught errors in Express (MUST BE LAST)
   app.use((err, req, res, next) => {
     const errorMsg = '[EXPRESS ERROR] ' + (err && err.stack ? err.stack : err.toString());
-    logToFile(errorMsg);
+    if (typeof logToFile === 'function') {
+      try {
+        logToFile(errorMsg);
+      } catch {
+        // Ignore logger failures in fallback environments.
+      }
+    }
     console.error(errorMsg);
     if (!res.headersSent) res.status(500).json({ error: 'Internal server error', details: errorMsg });
   });

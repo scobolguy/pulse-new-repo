@@ -47,6 +47,90 @@ function parseDaemonRefreshToMs(rawValue, rawUnit = '') {
   return n;
 }
 
+function normalizeHttpVerb(raw) {
+  return String(raw || '').trim().toUpperCase();
+}
+
+function normalizeHttpVerbSelector(raw) {
+  const normalized = String(raw || '').trim().toLowerCase();
+  if (!normalized) return null;
+
+  const withOptionalPrefix = normalized.match(/^(?:httpverb\.)?([a-z][a-z0-9_-]*)$/i);
+  if (!withOptionalPrefix) return null;
+
+  const value = String(withOptionalPrefix[1] || '').trim();
+  return value ? value.toUpperCase() : null;
+}
+
+function asSingleQuoted(value) {
+  const source = String(value == null ? '' : value);
+  return `'${source.replace(/'/g, "''")}'`;
+}
+
+function parseDurationToMs(valueText, unitText) {
+  const n = Number.parseInt(String(valueText || '').trim(), 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const unit = String(unitText || '').trim().toLowerCase();
+  if (unit === 'm') return n * 60 * 1000;
+  if (unit === 's') return n * 1000;
+  return n;
+}
+
+function parseIdentifierList(raw) {
+  const textValue = String(raw || '').trim();
+  if (!textValue) return [];
+  return textValue
+    .split(',')
+    .map(item => String(item || '').trim())
+    .filter(Boolean);
+}
+
+function parseOrchestrationHints(code) {
+  const source = String(code || '');
+  const asyncSubflows = [];
+
+  const asyncPattern = /async\s+subflow\s+("[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*')\s+on\s+("[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*')\s+with\s+([a-z_][a-z0-9_-]*)\s+timeout\s+(\d+)\s*(ms|s|m)?\s+into\s+([a-z_][a-z0-9_-]*)\s*;/gi;
+
+  let asyncMatch;
+  while ((asyncMatch = asyncPattern.exec(source)) !== null) {
+    const timeoutMs = parseDurationToMs(asyncMatch[4], asyncMatch[5] || 'ms');
+    asyncSubflows.push({
+      subflowId: unquote(asyncMatch[1]),
+      nodeId: unquote(asyncMatch[2]),
+      payloadRef: String(asyncMatch[3] || '').trim(),
+      timeoutMs,
+      handleRef: String(asyncMatch[6] || '').trim()
+    });
+  }
+
+  const waitAllPattern = /wait\s+all\s*\(([^\)]*)\)\s+into\s*\(([^\)]*)\)\s+timeout\s+(\d+)\s*(ms|s|m)?\s+on\s+error\s+fail\s+transaction\s+("[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*')\s*;/i;
+  const waitAllMatch = waitAllPattern.exec(source);
+
+  const failTxnPattern = /fail\s+transaction\s+("[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*')\s*;/gi;
+  const failTransactions = [];
+  let failMatch;
+  while ((failMatch = failTxnPattern.exec(source)) !== null) {
+    failTransactions.push({ reason: unquote(failMatch[1]) });
+  }
+
+  const returnSuccessPattern = /return\s+success\s+([^;]+);/i;
+  const returnSuccessMatch = returnSuccessPattern.exec(source);
+
+  return {
+    asyncSubflows,
+    waitAll: waitAllMatch ? {
+      handleRefs: parseIdentifierList(waitAllMatch[1]),
+      resultRefs: parseIdentifierList(waitAllMatch[2]),
+      timeoutMs: parseDurationToMs(waitAllMatch[3], waitAllMatch[4] || 'ms'),
+      onErrorFailTransaction: unquote(waitAllMatch[5])
+    } : null,
+    failTransactions,
+    returnSuccess: returnSuccessMatch ? {
+      valueExpr: String(returnSuccessMatch[1] || '').trim()
+    } : null
+  };
+}
+
 class PascalishAstBuilder extends PascalishRouterMapperVisitor {
   constructor(tokens) {
     super();
@@ -75,6 +159,7 @@ class PascalishAstBuilder extends PascalishRouterMapperVisitor {
       type: 'Program',
       serviceId: null,
       runtimeUnit: null,
+      services: [],
       roles: [],
       variables: [],
       routers: [],
@@ -89,9 +174,22 @@ class PascalishAstBuilder extends PascalishRouterMapperVisitor {
       const value = this.visit(statement);
       if (!value) continue;
 
-      if (value.type === 'RuntimeDecl') {
+      if (value.type === 'ServiceDecl') {
+        if (!ast.serviceId) {
+          ast.serviceId = value.id;
+        }
+        if (!ast.runtimeUnit || String(ast.runtimeUnit.kind || '').toLowerCase() === 'service') {
+          ast.runtimeUnit = value.runtimeUnit;
+        }
+        ast.services.push(value);
+        if (value.syntheticRouter) {
+          ast.routers.push(value.syntheticRouter);
+        }
+      } else if (value.type === 'RuntimeDecl') {
         ast.runtimeUnit = value.runtimeUnit;
-        ast.serviceId = value.runtimeUnit.id;
+        if (value.runtimeUnit.kind !== 'service') {
+          ast.serviceId = value.runtimeUnit.id;
+        }
       } else if (value.type === 'RoleDecl') {
         ast.roles.push(value);
       } else if (value.type === 'VarDecl') {
@@ -138,6 +236,9 @@ class PascalishAstBuilder extends PascalishRouterMapperVisitor {
   }
 
   visitStatement(ctx) {
+    const serviceDecl = typeof ctx.serviceDecl === 'function' ? ctx.serviceDecl() : null;
+    if (serviceDecl) return this.visit(serviceDecl);
+
     const runtimeDecl = typeof ctx.runtimeDecl === 'function' ? ctx.runtimeDecl() : null;
     if (runtimeDecl) return this.visit(runtimeDecl);
 
@@ -168,6 +269,155 @@ class PascalishAstBuilder extends PascalishRouterMapperVisitor {
     return null;
   }
 
+  visitServiceDecl(ctx) {
+    const id = unquote(text(ctx.stringOrIdent()));
+    const body = this.visit(ctx.serviceBody());
+    const handlers = Array.isArray(body?.handlers) ? body.handlers : [];
+    const methods = [];
+    const outputs = [];
+
+    for (const handler of handlers) {
+      const method = normalizeHttpVerbSelector(handler?.selectorRaw);
+      const returnExprRaw = String(handler?.returnExprRaw || '').trim() || "''";
+      if (method && !methods.includes(method)) methods.push(method);
+
+      outputs.push({
+        type: 'OutputDecl',
+        queueName: `${id}.out`,
+        httpVerb: method || null,
+        whenRule: method
+          ? `IF upper(httpVerb) = ${asSingleQuoted(method)} THEN output := 1 ELSE output := 0;`
+          : 'output := 1;',
+        transformRule: `output := ${returnExprRaw};`
+      });
+    }
+
+    // Ensure the service remains executable even with an empty body.
+    if (outputs.length === 0) {
+      outputs.push({
+        type: 'OutputDecl',
+        queueName: `${id}.out`,
+        httpVerb: null,
+        whenRule: 'output := 1;',
+        transformRule: "output := '';"
+      });
+    }
+
+    return {
+      type: 'ServiceDecl',
+      id,
+      runtimeUnit: { kind: 'service', id, refreshMs: null },
+      handlers,
+      syntheticRouter: {
+        type: 'RouterDecl',
+        id: `${id}-http`,
+        inputQueue: `${id}.in`,
+        description: `HTTP service ${id}`,
+        enabled: true,
+        serviceId: id,
+        methods: methods.length > 0 ? methods : null,
+        outputs
+      }
+    };
+  }
+
+  visitServiceBody(ctx) {
+    const handlers = [];
+    for (const stmt of ctx.serviceStmt ? ctx.serviceStmt() : []) {
+      const value = this.visit(stmt);
+      if (!value) continue;
+
+      if (value.type === 'ServiceCaseStmt') {
+        handlers.push(...(value.handlers || []));
+      } else if (value.type === 'ServiceReturnStmt') {
+        handlers.push({
+          selectorRaw: '',
+          returnExprRaw: value.returnExprRaw
+        });
+      }
+    }
+
+    return {
+      type: 'ServiceBody',
+      handlers
+    };
+  }
+
+  visitServiceStmt(ctx) {
+    if (ctx.serviceCaseStmt && ctx.serviceCaseStmt()) {
+      return this.visit(ctx.serviceCaseStmt());
+    }
+    if (ctx.serviceReturnStmt && ctx.serviceReturnStmt()) {
+      return this.visit(ctx.serviceReturnStmt());
+    }
+    return null;
+  }
+
+  visitServiceCaseStmt(ctx) {
+    const handlers = [];
+    for (const arm of ctx.serviceCaseArm ? ctx.serviceCaseArm() : []) {
+      const value = this.visit(arm);
+      if (!value) continue;
+      handlers.push(value);
+    }
+
+    if (ctx.ELSE && ctx.ELSE()) {
+      const elseReturn = this.visit(ctx.serviceReturnStmt());
+      handlers.push({
+        selectorRaw: '',
+        returnExprRaw: elseReturn?.returnExprRaw || "''"
+      });
+    }
+
+    return {
+      type: 'ServiceCaseStmt',
+      handlers
+    };
+  }
+
+  visitServiceCaseArm(ctx) {
+    const selector = this.visit(ctx.serviceExpr());
+    const returnStmt = this.visit(ctx.serviceReturnStmt());
+    return {
+      selectorRaw: String(selector?.raw || '').trim(),
+      returnExprRaw: String(returnStmt?.returnExprRaw || '').trim() || "''"
+    };
+  }
+
+  visitServiceReturnStmt(ctx) {
+    const expr = this.visit(ctx.serviceExpr());
+    return {
+      type: 'ServiceReturnStmt',
+      returnExprRaw: String(expr?.raw || '').trim() || "''"
+    };
+  }
+
+  visitServiceExpr(ctx) {
+    if (ctx.qualifiedIdent && ctx.qualifiedIdent()) {
+      return this.visit(ctx.qualifiedIdent());
+    }
+    if (ctx.stringValue && ctx.stringValue()) {
+      return { kind: 'string', raw: text(ctx.stringValue()) };
+    }
+    if (ctx.NUMBER && ctx.NUMBER()) {
+      return { kind: 'number', raw: text(ctx.NUMBER()) };
+    }
+    if (ctx.TRUE && ctx.TRUE()) {
+      return { kind: 'boolean', raw: 'TRUE' };
+    }
+    if (ctx.FALSE && ctx.FALSE()) {
+      return { kind: 'boolean', raw: 'FALSE' };
+    }
+    return { kind: 'unknown', raw: text(ctx) };
+  }
+
+  visitQualifiedIdent(ctx) {
+    return {
+      kind: 'qualifiedIdent',
+      raw: text(ctx)
+    };
+  }
+
   visitRoleDecl(ctx) {
     const role = text(ctx.roleName()).toLowerCase();
     return {
@@ -180,11 +430,6 @@ class PascalishAstBuilder extends PascalishRouterMapperVisitor {
   }
 
   visitRuntimeDecl(ctx) {
-    if (ctx.serviceDecl()) {
-      const serviceId = unquote(text(ctx.serviceDecl().stringOrIdent()));
-      return { type: 'RuntimeDecl', runtimeUnit: { kind: 'service', id: serviceId, refreshMs: null } };
-    }
-
     if (ctx.programDecl()) {
       const programId = unquote(text(ctx.programDecl().stringOrIdent()));
       return { type: 'RuntimeDecl', runtimeUnit: { kind: 'program', id: programId, refreshMs: null } };
@@ -224,7 +469,8 @@ class PascalishAstBuilder extends PascalishRouterMapperVisitor {
 
     return {
       type: 'BlockStmt',
-      code: normalized
+      code: normalized,
+      orchestration: parseOrchestrationHints(normalized)
     };
   }
 
@@ -316,13 +562,14 @@ class PascalishAstBuilder extends PascalishRouterMapperVisitor {
       outputs.push(this.visit(outputCtx));
     }
 
-    const header = { description: '', enabled: true, serviceId: null };
+    const header = { description: '', enabled: true, serviceId: null, methods: null };
     for (const prop of ctx.routerHeaderProp ? ctx.routerHeaderProp() : []) {
       const value = this.visit(prop);
       if (!value) continue;
       if (value.kind === 'description') header.description = value.value;
       if (value.kind === 'enabled') header.enabled = value.value;
       if (value.kind === 'serviceId') header.serviceId = value.value;
+      if (value.kind === 'methods') header.methods = value.value;
     }
 
     return {
@@ -332,6 +579,7 @@ class PascalishAstBuilder extends PascalishRouterMapperVisitor {
       description: header.description,
       enabled: header.enabled,
       serviceId: header.serviceId,
+      methods: header.methods,
       outputs
     };
   }
@@ -340,7 +588,19 @@ class PascalishAstBuilder extends PascalishRouterMapperVisitor {
     if (ctx.DESCRIPTION()) return { kind: 'description', value: unquote(text(ctx.stringValue())) };
     if (ctx.ENABLED()) return { kind: 'enabled', value: toBoolean(ctx.booleanValue()) };
     if (ctx.SERVICE()) return { kind: 'serviceId', value: unquote(text(ctx.stringValue())) };
+    if (ctx.METHODS()) return { kind: 'methods', value: this.visit(ctx.verbList()) };
     return null;
+  }
+
+  visitVerbList(ctx) {
+    const nodes = ctx.stringOrIdent ? ctx.stringOrIdent() : [];
+    const values = [];
+    for (const node of nodes) {
+      const value = normalizeHttpVerb(unquote(text(node)));
+      if (!value) continue;
+      if (!values.includes(value)) values.push(value);
+    }
+    return values;
   }
 
   visitOutputDecl(ctx) {

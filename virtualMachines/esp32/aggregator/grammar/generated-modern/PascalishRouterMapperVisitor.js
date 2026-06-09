@@ -60,6 +60,48 @@ export default class PascalishRouterMapperVisitor extends antlr4.tree.ParseTreeV
 	}
 
 
+	// Visit a parse tree produced by PascalishRouterMapperParser#serviceBody.
+	visitServiceBody(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishRouterMapperParser#serviceStmt.
+	visitServiceStmt(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishRouterMapperParser#serviceCaseStmt.
+	visitServiceCaseStmt(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishRouterMapperParser#serviceCaseArm.
+	visitServiceCaseArm(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishRouterMapperParser#serviceReturnStmt.
+	visitServiceReturnStmt(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishRouterMapperParser#serviceExpr.
+	visitServiceExpr(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishRouterMapperParser#qualifiedIdent.
+	visitQualifiedIdent(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by PascalishRouterMapperParser#programDecl.
 	visitProgramDecl(ctx) {
 	  return this.visitChildren(ctx);
@@ -122,6 +164,12 @@ export default class PascalishRouterMapperVisitor extends antlr4.tree.ParseTreeV
 
 	// Visit a parse tree produced by PascalishRouterMapperParser#routerHeaderProp.
 	visitRouterHeaderProp(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishRouterMapperParser#verbList.
+	visitVerbList(ctx) {
 	  return this.visitChildren(ctx);
 	}
 
