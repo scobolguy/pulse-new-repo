@@ -1,0 +1,51 @@
+program TestDynamicLibrary;
+
+library "crypto-utils" from librarian;
+library "json-parser" from librarian;
+library "math-extended" from librarian;
+
+var
+  data: string;
+  hash: string;
+  jsonData: string;
+  parsedValue: string;
+  x, y: real;
+  result: real;
+
+begin
+  // Test crypto library
+  data := "Hello, World!";
+  hash := crypto_utils.sha256(data);
+  print("SHA256 hash: ");
+  print(hash);
+  print_nl();
+  
+  // Test JSON parser library
+  jsonData := "{\"name\":\"John\",\"age\":30}";
+  parsedValue := json_parser.getValue(jsonData, "name");
+  print("Parsed name: ");
+  print(parsedValue);
+  print_nl();
+  
+  // Test extended math library
+  x := 3.14159;
+  y := 2.71828;
+  result := math_extended.power(x, y);
+  print("Power result: ");
+  print(result);
+  print_nl();
+  
+  // Test trigonometric functions
+  result := math_extended.sin(x);
+  print("Sin result: ");
+  print(result);
+  print_nl();
+  
+  result := math_extended.cos(x);
+  print("Cos result: ");
+  print(result);
+  print_nl();
+  
+  print("Dynamic library tests completed");
+  print_nl();
+end.

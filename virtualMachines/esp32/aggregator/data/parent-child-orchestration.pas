@@ -7,7 +7,7 @@ end;
 
 service "limits_check";
 begin
-  return '{"success":false,"replyJson":"{\"stage\":\"limits_check\",\"node\":\"childNode\",\"reason\":\"limit exceeded\"}"}';
+  return '{"success":true,"replyJson":"{\"stage\":\"limits_check\",\"node\":\"childNode\"}"}';
 end;
 
 begin

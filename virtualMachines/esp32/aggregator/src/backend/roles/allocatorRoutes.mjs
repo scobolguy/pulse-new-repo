@@ -129,6 +129,8 @@ export function registerAllocatorRoutes(app, deps) {
       status: 'ok',
       replicaCount: result.replicaCount,
       decision: result.decision,
+      constraints: result.constraints,
+      hedge: result.hedge,
       scored: result.scored
     });
   });

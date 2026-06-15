@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32-CAM Viewer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            background: #1a1a1a;
+            color: #fff;
+            padding: 20px;
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { margin-bottom: 20px; font-size: 24px; }
+        .video-container {
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 20px;
+            position: relative;
+        }
+        #stream {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        .status {
+            background: #2a2a2a;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .status-item {
+            background: #333;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .status-label { color: #888; font-size: 12px; }
+        .status-value { font-size: 18px; font-weight: bold; margin-top: 5px; }
+        .controls {
+            background: #2a2a2a;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 10px;
+        }
+        button {
+            background: #0066cc;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        button:hover { background: #0052a3; }
+        button:active { background: #003d7a; }
+        button.secondary { background: #555; }
+        button.secondary:hover { background: #666; }
+        button.danger { background: #cc0000; }
+        button.danger:hover { background: #a30000; }
+        .settings {
+            background: #2a2a2a;
+            padding: 15px;
+            border-radius: 8px;
+        }
+        .setting-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .setting-row label { min-width: 120px; }
+        input[type="range"] {
+            flex: 1;
+            height: 6px;
+            border-radius: 3px;
+            background: #555;
+            outline: none;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #0066cc;
+            cursor: pointer;
+        }
+        .value-display {
+            min-width: 40px;
+            text-align: right;
+            font-weight: bold;
+        }
+        .message {
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+            display: none;
+        }
+        .message.success { background: #004d00; display: block; }
+        .message.error { background: #4d0000; display: block; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📸 ESP32-CAM Live Viewer</h1>
+        
+        <div class="video-container">
+            <img id="stream" src="/api/camera/stream" alt="Camera Stream"
+                 onerror="this.onerror=null; this.src='/api/camera/capture?t='+Date.now(); setTimeout(()=>this.src='/api/camera/capture?t='+Date.now(), 1000);">
+        </div>
+        
+        <div class="status">
+            <h2>Camera Status</h2>
+            <div class="status-grid">
+                <div class="status-item">
+                    <div class="status-label">Status</div>
+                    <div class="status-value" id="status-init">Loading...</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-label">Streaming</div>
+                    <div class="status-value" id="status-streaming">-</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-label">Frame Count</div>
+                    <div class="status-value" id="status-frames">-</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-label">Last Frame Size</div>
+                    <div class="status-value" id="status-size">-</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <h2>Controls</h2>
+            <div class="button-group">
+                <button onclick="captureSnapshot()">📷 Take Snapshot</button>
+                <button onclick="toggleMotionDetection()" id="motion-btn" class="secondary">🎯 Enable Motion Detection</button>
+                <button onclick="refreshStatus()" class="secondary">🔄 Refresh Status</button>
+            </div>
+            <div id="message" class="message"></div>
+        </div>
+        
+        <div class="settings">
+            <h2>Image Adjustments</h2>
+            <div class="setting-row">
+                <label>Brightness:</label>
+                <input type="range" id="brightness" min="-2" max="2" value="0" step="1">
+                <span class="value-display" id="brightness-val">0</span>
+            </div>
+            <div class="setting-row">
+                <label>Contrast:</label>
+                <input type="range" id="contrast" min="-2" max="2" value="0" step="1">
+                <span class="value-display" id="contrast-val">0</span>
+            </div>
+            <div class="setting-row">
+                <label>Saturation:</label>
+                <input type="range" id="saturation" min="-2" max="2" value="0" step="1">
+                <span class="value-display" id="saturation-val">0</span>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let motionEnabled = false;
+        
+        async function refreshStatus() {
+            try {
+                const response = await fetch('/api/camera/status');
+                const data = await response.json();
+                
+                document.getElementById('status-init').textContent = data.initialized ? '✅ Ready' : '❌ Not Ready';
+                document.getElementById('status-streaming').textContent = data.streaming ? '🎥 Active' : '⏸️ Stopped';
+                document.getElementById('status-frames').textContent = data.frameCount;
+                document.getElementById('status-size').textContent = (data.lastFrameSize / 1024).toFixed(1) + ' KB';
+                
+                motionEnabled = data.motionDetection;
+                updateMotionButton();
+            } catch (error) {
+                showMessage('Failed to get status: ' + error.message, 'error');
+            }
+        }
+        
+        async function captureSnapshot() {
+            try {
+                const response = await fetch('/api/camera/snapshot', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    showMessage('✅ Snapshot saved: ' + data.path, 'success');
+                } else {
+                    showMessage('❌ Failed to capture snapshot', 'error');
+                }
+            } catch (error) {
+                showMessage('❌ Error: ' + error.message, 'error');
+            }
+        }
+        
+        async function toggleMotionDetection() {
+            try {
+                const endpoint = motionEnabled ? '/api/camera/motion/disable' : '/api/camera/motion/enable';
+                const response = await fetch(endpoint, { method: 'POST' });
+                const data = await response.json();
+                
+                motionEnabled = data.enabled;
+                updateMotionButton();
+                showMessage(motionEnabled ? '✅ Motion detection enabled' : '⏸️ Motion detection disabled', 'success');
+            } catch (error) {
+                showMessage('❌ Error: ' + error.message, 'error');
+            }
+        }
+        
+        function updateMotionButton() {
+            const btn = document.getElementById('motion-btn');
+            btn.textContent = motionEnabled ? '⏸️ Disable Motion Detection' : '🎯 Enable Motion Detection';
+            btn.className = motionEnabled ? 'danger' : 'secondary';
+        }
+        
+        async function adjustSetting(setting, value) {
+            try {
+                const response = await fetch(`/api/camera/adjust/${setting}?level=${value}`, { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    showMessage(`✅ ${setting} set to ${value}`, 'success');
+                }
+            } catch (error) {
+                showMessage('❌ Error: ' + error.message, 'error');
+            }
+        }
+        
+        function showMessage(text, type) {
+            const msg = document.getElementById('message');
+            msg.textContent = text;
+            msg.className = 'message ' + type;
+            setTimeout(() => {
+                msg.className = 'message';
+            }, 3000);
+        }
+        
+        // Setup sliders
+        ['brightness', 'contrast', 'saturation'].forEach(setting => {
+            const slider = document.getElementById(setting);
+            const display = document.getElementById(setting + '-val');
+            
+            slider.addEventListener('input', (e) => {
+                display.textContent = e.target.value;
+            });
+            
+            slider.addEventListener('change', (e) => {
+                adjustSetting(setting, e.target.value);
+            });
+        });
+        
+        // Auto-refresh status every 2 seconds
+        setInterval(refreshStatus, 2000);
+        refreshStatus();
+    </script>
+</body>
+</html>

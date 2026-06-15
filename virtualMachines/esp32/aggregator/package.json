@@ -39,7 +39,9 @@
     "test:allocator": "node scripts/test-economic-allocator.mjs",
     "test:allocator:e2e:pascalish": "node scripts/test-allocator-e2e-pascalish.mjs",
     "test:smoke:ui": "node scripts/smoke-ui.mjs",
-    "test:smoke:pascalish-editor": "node scripts/smoke-pascalish-editor-playwright.mjs http://localhost:5173/"
+    "test:smoke:pascalish-editor": "node scripts/smoke-pascalish-editor-playwright.mjs http://localhost:5173/",
+    "test:developer:esp-run": "node scripts/test-developer-esp-run.mjs http://localhost:5173/",
+    "test:developer:esp-run:headless": "node scripts/test-developer-esp-run.mjs http://localhost:5173/ --headless"
   },
   "dependencies": {
     "amqplib": "^0.10.4",

@@ -583,6 +583,7 @@ function toRouterRules(ast) {
       serviceId: router.serviceId || ast.serviceId || 'default-router-service',
       enabled: router.enabled,
       inputQueue: router.inputQueue,
+      ...(Array.isArray(router.methods) && router.methods.length > 0 ? { methods: router.methods } : {}),
       description: router.description,
       outputs: router.outputs.map(out => ({
         queueName: out.queueName,

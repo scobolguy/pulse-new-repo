@@ -1,135 +1,36 @@
 [
   {
-    "id": "swift-fanout-default",
-    "name": "SWIFT inbound fan-out",
-    "serviceId": "aggregator-router-service",
+    "id": "risk_check-http",
+    "name": "risk_check-http",
+    "serviceId": "risk_check",
     "enabled": true,
-    "inputQueue": "swift.inbound",
-    "description": "Route inbound SWIFT messages to audit and conditional payment queues",
+    "inputQueue": "risk_check.in",
+    "description": "HTTP service risk_check",
     "outputs": [
       {
-        "queueName": "audit.all",
+        "queueName": "risk_check.out",
         "whenRule": "output := 1;",
-        "transformRule": "output := src;"
-      },
-      {
-        "queueName": "payments.mt103",
-        "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
-        "transformRule": "output := src;"
-      },
-      {
-        "queueName": "payments.mt202",
-        "whenRule": "IF startswith(upper(src), \"MT202\") THEN output := 1 ELSE output := 0;",
-        "transformRule": "output := src;"
+        "transformRule": "output := '{\"success\":true,\"replyJson\":\"{\\\"stage\\\":\\\"risk_check\\\",\\\"node\\\":\\\"childNode\\\"}\"}';"
       }
     ],
-    "createdAt": "2026-05-12T00:45:16.433Z",
-    "updatedAt": "2026-05-12T01:44:22.966Z"
+    "createdAt": "2026-06-09T21:30:46.570Z",
+    "updatedAt": "2026-06-09T21:30:46.570Z"
   },
   {
-    "id": "mt202cov-map-to-pacs",
-    "name": "MT202COV parsed JSON to PACS fan-out",
-    "serviceId": "aggregator-router-service",
+    "id": "limits_check-http",
+    "name": "limits_check-http",
+    "serviceId": "limits_check",
     "enabled": true,
-    "inputQueue": "swift.mt202cov.parsed",
-    "description": "Use mapping file transform from DSL then publish to PACS queue and audit",
+    "inputQueue": "limits_check.in",
+    "description": "HTTP service limits_check",
     "outputs": [
       {
-        "queueName": "audit.all",
+        "queueName": "limits_check.out",
         "whenRule": "output := 1;",
-        "transformRule": "output := src;"
-      },
-      {
-        "queueName": "pacs.outbound",
-        "whenRule": "output := 1;",
-        "transformRule": "output := map(\"mt202cov-to-pacs\", src);"
+        "transformRule": "output := '{\"success\":true,\"replyJson\":\"{\\\"stage\\\":\\\"limits_check\\\",\\\"node\\\":\\\"childNode\\\"}\"}';"
       }
     ],
-    "createdAt": "2026-05-12T16:59:08.468Z",
-    "updatedAt": "2026-05-12T16:59:08.468Z"
-  },
-  {
-    "id": "mt103-correspondent-and-lynx-fanout",
-    "name": "MT103 to correspondent PACS and LYNX PACS",
-    "serviceId": "aggregator-router-service",
-    "enabled": true,
-    "inputQueue": "swift.mt103.parsed",
-    "description": "One MT103 in, publish PACS.008 to correspondent flow and PACS.009 to LYNX flow",
-    "outputs": [
-      {
-        "queueName": "correspondent.pacs008.outbound",
-        "whenRule": "output := 1;",
-        "transformRule": "output := map(\"mt103-to-pacs\", src);"
-      },
-      {
-        "queueName": "lynx.pacs009.outbound",
-        "whenRule": "output := 1;",
-        "transformRule": "output := map(\"pacs-to-lynx\", map(\"mt103-to-pacs\", src));"
-      }
-    ],
-    "createdAt": "2026-05-12T16:59:08.468Z",
-    "updatedAt": "2026-05-12T16:59:08.468Z"
-  },
-  {
-    "id": "mt103-inbound-to-parsed",
-    "name": "MT103 inbound to parsed",
-    "serviceId": "aggregator-router-service",
-    "enabled": true,
-    "inputQueue": "swift.mt103.inbound",
-    "description": "Forward validated MT103 ingress messages into lifecycle parsed queue",
-    "outputs": [
-      {
-        "queueName": "swift.mt103.parsed",
-        "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
-        "transformRule": "output := src;"
-      }
-    ],
-    "updatedAt": "2026-05-16T12:49:02.740Z",
-    "createdAt": "2026-05-16T12:49:02.740Z"
-  },
-  {
-    "id": "ops-validation-deadletter-audit",
-    "name": "Deadletter to audit",
-    "serviceId": "aggregator-router-service",
-    "enabled": true,
-    "inputQueue": "ops.validation.deadletter",
-    "description": "Mirror deadletter events into audit stream",
-    "outputs": [
-      {
-        "queueName": "audit.all",
-        "whenRule": "output := 1;",
-        "transformRule": "output := src;"
-      }
-    ]
-  },
-  {
-    "id": "pacs-inbound-to-outbound",
-    "name": "PACS inbound to outbound",
-    "serviceId": "aggregator-router-service",
-    "enabled": true,
-    "inputQueue": "pacs.inbound",
-    "description": "Forward PACS ingress to outbound queue",
-    "outputs": [
-      {
-        "queueName": "pacs.outbound",
-        "whenRule": "output := 1;",
-        "transformRule": "output := src;"
-      }
-    ]
-  },
-  {
-    "id": "mt202-inbound-routing",
-    "name": "MT202 inbound routing",
-    "serviceId": "aggregator-router-service",
-    "enabled": true,
-    "inputQueue": "mt202.inbound",
-    "description": "Route MT202 ingress into payment queue",
-    "outputs": [
-      {
-        "queueName": "payments.mt202",
-        "whenRule": "IF startswith(upper(src), \"MT202\") THEN output := 1 ELSE output := 0;",
-        "transformRule": "output := src;"
-      }
-    ]
+    "createdAt": "2026-06-09T21:30:46.570Z",
+    "updatedAt": "2026-06-09T21:30:46.570Z"
   }
 ]

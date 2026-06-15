@@ -1,0 +1,19 @@
+[
+  {
+    "id": "lifemeaning-route",
+    "name": "lifemeaning-route",
+    "serviceId": "LifeMeaning",
+    "enabled": true,
+    "inputQueue": "lifemeaning.in",
+    "description": "Returns the meaning of life",
+    "outputs": [
+      {
+        "queueName": "lifemeaning.out",
+        "whenRule": "output := 1;",
+        "transformRule": "output := '42';"
+      }
+    ],
+    "createdAt": "2026-06-08T21:21:50.727Z",
+    "updatedAt": "2026-06-08T21:21:50.727Z"
+  }
+]

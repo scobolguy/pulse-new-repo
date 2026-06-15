@@ -61,5 +61,21 @@ assert.equal(scored.candidates[0].accepted, true);
 const allocation = allocateJob(job, candidates, { policyId: 'balanced' });
 assert.equal(allocation.decision.length, 2);
 assert.notEqual(allocation.decision[0].failureDomain, allocation.decision[1].failureDomain);
+assert.equal(allocation.constraints.successConstraintMet, true);
+assert.equal(allocation.constraints.distinctDomainConstraintMet, true);
+
+const latencySyncAllocation = allocateJob(
+  {
+    requiredService: 'pmachine',
+    requiredCapability: 'mt103.parse',
+    sla: { targetSuccessProb: 0.9999, targetP95Ms: 20 },
+    placementPolicy: { minReplicas: 1, maxReplicas: 2, opsPenaltyPerReplica: 4, requireDistinctFailureDomain: true }
+  },
+  candidates,
+  { policyId: 'http-sync-balanced' }
+);
+assert.equal(latencySyncAllocation.decision.length >= 1, true);
+assert.equal(latencySyncAllocation.constraints.targetSuccessProb > 0.99, true);
+assert.equal(typeof latencySyncAllocation.hedge.recommended, 'boolean');
 
 console.log('allocator tests passed');

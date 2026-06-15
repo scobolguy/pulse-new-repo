@@ -35,6 +35,11 @@ DeviceConfiguration deviceConfig;
 #include "pmachine_routes.h"
 #endif
 
+#ifdef ENABLE_CAMERA
+#include "CameraService.h"
+#include "camera_routes.h"
+#endif
+
 String nodeName = "ESP32-VM";
 NodeConfig nodeConfig;
 WifiConfig wifiConfig;
@@ -44,7 +49,12 @@ bool ffsUp = false;
 AsyncWebServer server(80);
 DevicePin* devicePin = nullptr;
 int devicePinNumber = 2;
+#ifdef ENABLE_CAMERA
+// GPIO 5 is used by camera (Y2 data line), move relay to GPIO 12
+int relayPinNumber = 12;
+#else
 int relayPinNumber = 5;
+#endif
 bool relayStateOn = false;
 std::map<String, bool> serviceBusyMap;
 
@@ -1557,6 +1567,12 @@ void setupWebServer() {
     registerPMachineRoutes(server, pm, &federatedFS);
 #endif
     server.onNotFound(notFound);
+    
+#ifdef ENABLE_CAMERA
+    setupCameraRoutes(server);
+    Serial.println("[CAMERA] Camera routes registered");
+#endif
+    
     server.begin();
 }
 
@@ -1992,6 +2008,20 @@ void setup() {
     pm.setFFS(&federatedFS);
 #endif
 
+#ifdef ENABLE_CAMERA
+    Serial.println("[BOOT] Initializing camera service...");
+    CameraConfig cameraConfig = CameraService::getDefaultConfig();
+    cameraConfig.resolution = RES_SVGA;
+    cameraConfig.quality = QUALITY_MEDIUM;
+    
+    if (cameraService.begin(cameraConfig)) {
+        Serial.println("[CAMERA] Camera initialized successfully");
+        cameraService.setFFS(&federatedFS);
+    } else {
+        Serial.println("[CAMERA] Camera initialization failed");
+    }
+#endif
+
     String advertisedServices = "[BOOT] Advertised services: ";
     bool firstAdvertised = true;
     if (ffsUp) {
@@ -2002,6 +2032,11 @@ void setup() {
     if (!firstAdvertised) advertisedServices += ", ";
     advertisedServices += "pmachine";
     advertisedServices += ", GenericRouterService";
+    firstAdvertised = false;
+#endif
+#ifdef ENABLE_CAMERA
+    if (!firstAdvertised) advertisedServices += ", ";
+    advertisedServices += "camera";
     firstAdvertised = false;
 #endif
     if (firstAdvertised) advertisedServices += "none";

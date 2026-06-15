@@ -43,8 +43,30 @@
         "swift-mt202"
       ],
       "createdByUser": false
+    },
+    "hello.in": {
+      "name": "hello.in",
+      "createdAt": 1781010937108,
+      "frozen": false,
+      "queueClass": "permanent",
+      "dataTypeId": "text-string",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "createdByUser": false
+    },
+    "swift.mt103.parsed": {
+      "name": "swift.mt103.parsed",
+      "createdAt": 1781038540264,
+      "frozen": false,
+      "queueClass": "permanent",
+      "dataTypeId": "swift-mt103",
+      "dataTypeIds": [
+        "swift-mt103"
+      ],
+      "createdByUser": false
     }
   },
-  "configVersion": 4,
-  "timestamp": 1780493426590
+  "configVersion": 6,
+  "timestamp": 1781038540264
 }

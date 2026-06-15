@@ -13,7 +13,10 @@ function parseArgs(argv) {
     messageFile: null,
     poll: false,
     pollInterval: 100,
-    queuePath: '../data'
+    queuePath: '../data',
+    backendUrl: 'http://localhost:4000',
+    actorUserId: 'system-admin',
+    serviceId: ''
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -26,6 +29,9 @@ function parseArgs(argv) {
     if (token === '--poll') args.poll = true;
     if (token === '--poll-interval') args.pollInterval = Number.parseInt(argv[i + 1], 10);
     if (token === '--queue-path') args.queuePath = argv[i + 1];
+    if (token === '--backend-url') args.backendUrl = argv[i + 1];
+    if (token === '--actor-user-id') args.actorUserId = argv[i + 1];
+    if (token === '--service-id') args.serviceId = argv[i + 1];
   }
   return args;
 }
@@ -434,7 +440,18 @@ function parsePcode(text) {
     if (mnemonic === 'JMP' || mnemonic === 'JZ') {
       instr.operand = trimCopy(rest);
       unresolved.push({ idx: instructions.length, label: instr.operand });
-    } else if (mnemonic === 'ROUTE_MATCH_QUEUE' || mnemonic === 'ROUTE_EVAL_WHEN' || mnemonic === 'ROUTE_TRANSFORM' || mnemonic === 'ROUTE_EMIT' || mnemonic === 'ROUTE_SET_STATE' || mnemonic === 'PUSH_STR') {
+    } else if (
+      mnemonic === 'ROUTE_MATCH_QUEUE'
+      || mnemonic === 'ROUTE_EVAL_WHEN'
+      || mnemonic === 'ROUTE_TRANSFORM'
+      || mnemonic === 'ROUTE_EMIT'
+      || mnemonic === 'ROUTE_SET_STATE'
+      || mnemonic === 'ORCH_SPAWN'
+      || mnemonic === 'ORCH_WAIT_ALL'
+      || mnemonic === 'ORCH_FAIL_TXN'
+      || mnemonic === 'ORCH_RETURN_SUCCESS'
+      || mnemonic === 'PUSH_STR'
+    ) {
       instr.operand = parseQuotedOperand(rest);
     } else if (mnemonic === 'PUSH_INT') {
       instr.operand = Number.parseInt(trimCopy(rest), 10);
@@ -477,7 +494,7 @@ function assignVar(frame, name, value) {
   frame.vars[name] = value;
 }
 
-function executeProgram({ instructions, opcodeMap, mappingsById, inputQueue, sourceMessage }) {
+async function executeProgram({ instructions, opcodeMap, mappingsById, inputQueue, sourceMessage, runtimeContext = {} }) {
   const stack = [];
   let pc = 0;
   let currentMessage = sourceMessage;
@@ -494,6 +511,8 @@ function executeProgram({ instructions, opcodeMap, mappingsById, inputQueue, sou
   };
   let currentFrame = globalFrame;
   const callStack = [];
+  const pendingOrchTasks = [];
+  let orchestrationSummary = null;
 
   const requiredMnemonics = [
     'NOP', 'JMP', 'JZ', 'HALT',
@@ -663,11 +682,117 @@ function executeProgram({ instructions, opcodeMap, mappingsById, inputQueue, sou
       continue;
     }
 
+    if (op === 'ORCH_SPAWN') {
+      let task = null;
+      try {
+        task = JSON.parse(String(instr.operand || '{}'));
+      } catch {
+        task = null;
+      }
+      if (task && task.subflowId) pendingOrchTasks.push(task);
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'ORCH_WAIT_ALL') {
+      let waitCfg = {};
+      try {
+        waitCfg = JSON.parse(String(instr.operand || '{}'));
+      } catch {
+        waitCfg = {};
+      }
+
+      const invokeSubflow = typeof runtimeContext.invokeSubflow === 'function'
+        ? runtimeContext.invokeSubflow
+        : async () => ({ success: false, errorMessage: 'invokeSubflow not configured' });
+
+      const settled = await Promise.all(pendingOrchTasks.map(async (task) => {
+        try {
+          const result = await invokeSubflow({
+            subflowId: String(task.subflowId || '').trim(),
+            nodeId: String(task.nodeId || '').trim(),
+            payload: sourceMessage,
+            timeoutMs: Number(task.timeoutMs || 0) || Number(waitCfg.timeoutMs || 0) || 5000
+          });
+
+          let payloadSuccess = null;
+          if (result && typeof result.response === 'string') {
+            try {
+              const parsed = JSON.parse(result.response);
+              if (typeof parsed?.success === 'boolean') payloadSuccess = parsed.success;
+            } catch {}
+          } else if (result && typeof result.response === 'object' && typeof result.response?.success === 'boolean') {
+            payloadSuccess = result.response.success;
+          }
+
+          const success = payloadSuccess == null ? Boolean(result?.success !== false) : Boolean(payloadSuccess);
+          return {
+            handleRef: String(task.handleRef || '').trim(),
+            subflowId: String(task.subflowId || '').trim(),
+            nodeId: String(task.nodeId || '').trim(),
+            success,
+            response: result?.response ?? null,
+            errorMessage: result?.errorMessage || null,
+            errorCode: result?.errorCode || null
+          };
+        } catch (error) {
+          return {
+            handleRef: String(task.handleRef || '').trim(),
+            subflowId: String(task.subflowId || '').trim(),
+            nodeId: String(task.nodeId || '').trim(),
+            success: false,
+            response: null,
+            errorMessage: error?.message || String(error),
+            errorCode: 'invoke_exception'
+          };
+        }
+      }));
+
+      const failed = settled.find(item => item.success !== true);
+      orchestrationSummary = {
+        success: !failed,
+        reason: String(waitCfg.reason || '').trim(),
+        results: settled
+      };
+      state.__orchestration = orchestrationSummary;
+      state.__orch_failed = failed ? 1 : 0;
+      stack.push(failed ? 0 : 1);
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'ORCH_FAIL_TXN') {
+      if (Number(state.__orch_failed || 0) !== 0) {
+        state.__orch_error = String(instr.operand || orchestrationSummary?.reason || 'orchestration failed');
+        break;
+      }
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'ORCH_RETURN_SUCCESS') {
+      const ref = String(instr.operand || '').trim();
+      let parsedSource = null;
+      try {
+        parsedSource = JSON.parse(String(sourceMessage || '{}'));
+      } catch {
+        parsedSource = null;
+      }
+      state.__orchestration = state.__orchestration || orchestrationSummary || { success: true, results: [] };
+      if (parsedSource && ref && Object.prototype.hasOwnProperty.call(parsedSource, ref)) {
+        state.__response = parsedSource[ref];
+      } else {
+        state.__response = state.__orchestration?.results || null;
+      }
+      pc += 1;
+      continue;
+    }
+
     pc += 1;
   }
 
   if (currentLine.length > 0) stdout.push(currentLine);
-  return { deliveries, state, stdout, globals: globalFrame.vars };
+  return { deliveries, state, stdout, globals: globalFrame.vars, orchestration: state.__orchestration || null, response: state.__response ?? null, error: state.__orch_error || null };
 }
 
 async function readMessage(args) {
@@ -690,12 +815,46 @@ async function runSingleMessage(args) {
   const instructions = parsePcode(pcodeText);
   const runtimeUnit = normalizeRuntimeUnit(programMap?.runtimeUnit, programMap?.serviceId);
   const loadedAt = new Date().toISOString();
-  const result = executeProgram({
+  const invokeSubflow = async ({ subflowId, nodeId, payload, timeoutMs }) => {
+    const base = String(args.backendUrl || 'http://localhost:4000').replace(/\/$/, '');
+    const q = new URLSearchParams();
+    q.set('inputQueue', `${subflowId}.in`);
+    if (nodeId) q.set('nodeId', String(nodeId));
+    if (timeoutMs) q.set('timeoutMs', String(timeoutMs));
+    const url = `${base}/api/services/${encodeURIComponent(subflowId)}?${q.toString()}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-user-id': String(args.actorUserId || 'system-admin')
+      },
+      body: String(payload || '')
+    });
+    const text = await res.text();
+    let parsed = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = text;
+    }
+    return {
+      success: res.ok,
+      response: parsed,
+      errorCode: res.ok ? null : `http_${res.status}`,
+      errorMessage: res.ok ? null : (typeof parsed === 'object' ? (parsed?.error || '') : String(parsed || ''))
+    };
+  };
+
+  const result = await executeProgram({
     instructions,
     opcodeMap,
     mappingsById,
     inputQueue: args.inputQueue,
-    sourceMessage
+    sourceMessage,
+    runtimeContext: {
+      invokeSubflow,
+      serviceId: args.serviceId || ''
+    }
   });
 
   const out = {
@@ -715,7 +874,10 @@ async function runSingleMessage(args) {
     deliveries: result.deliveries,
     state: result.state,
     stdout: result.stdout || [],
-    globals: result.globals || {}
+    globals: result.globals || {},
+    orchestration: result.orchestration || null,
+    response: result.response ?? null,
+    error: result.error || null
   };
 
   console.log(JSON.stringify(out, null, 2));
@@ -772,7 +934,7 @@ async function pollAndRoute(args) {
     console.log(`[POLLER] Message #${messageCount}: processing from ${args.inputQueue}`);
     
     try {
-      const result = executeProgram({
+      const result = await executeProgram({
         instructions,
         opcodeMap,
         mappingsById,

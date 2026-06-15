@@ -75,7 +75,7 @@ SensorResult readSensor(SensorType type, int pin, String unit) {
 }
 
 void resultToJson(const SensorResult& result, String& json) {
-    DynamicJsonDocument doc(256);
+    JsonDocument doc;
     doc["valid"] = result.valid;
     if (result.valid) {
         doc["temperature"] = result.temperature;

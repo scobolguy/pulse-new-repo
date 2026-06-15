@@ -1,0 +1,13 @@
+{
+  "esp32-lab": {
+    "clusterId": "esp32-lab",
+    "label": "ESP32 Lab Cluster",
+    "nodes": [
+      "parentnode",
+      "childnode"
+    ],
+    "state": "quiesced",
+    "createdAt": "2026-06-09T14:45:04.443Z",
+    "updatedAt": "2026-06-09T14:54:02.603Z"
+  }
+}

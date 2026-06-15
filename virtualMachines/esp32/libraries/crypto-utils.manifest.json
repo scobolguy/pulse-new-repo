@@ -1,0 +1,58 @@
+{
+  "name": "crypto-utils",
+  "version": "1.0.0",
+  "author": "ESP VM Team",
+  "description": "Cryptographic utility functions for ESP Virtual P-Machine",
+  "exports": [
+    {
+      "name": "sha256",
+      "signature": "(string) -> string",
+      "entryPoint": 0,
+      "paramCount": 1,
+      "returnsValue": true
+    },
+    {
+      "name": "md5",
+      "signature": "(string) -> string",
+      "entryPoint": 50,
+      "paramCount": 1,
+      "returnsValue": true
+    },
+    {
+      "name": "aes_encrypt",
+      "signature": "(string, string) -> string",
+      "entryPoint": 100,
+      "paramCount": 2,
+      "returnsValue": true
+    },
+    {
+      "name": "aes_decrypt",
+      "signature": "(string, string) -> string",
+      "entryPoint": 150,
+      "paramCount": 2,
+      "returnsValue": true
+    },
+    {
+      "name": "base64_encode",
+      "signature": "(string) -> string",
+      "entryPoint": 200,
+      "paramCount": 1,
+      "returnsValue": true
+    },
+    {
+      "name": "base64_decode",
+      "signature": "(string) -> string",
+      "entryPoint": 250,
+      "paramCount": 1,
+      "returnsValue": true
+    }
+  ],
+  "dependencies": [],
+  "pcodeSegments": [
+    {
+      "offset": 0,
+      "length": 300,
+      "checksum": "abc123def456"
+    }
+  ]
+}

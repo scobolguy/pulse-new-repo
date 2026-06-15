@@ -1,0 +1,61 @@
+program TestConcurrency;
+
+var
+  counter: integer;
+  mutex: semaphore;
+  result1, result2, result3: integer;
+
+procedure task1();
+begin
+  wait(mutex);
+  counter := counter + 1;
+  result1 := counter;
+  signal(mutex);
+end;
+
+procedure task2();
+begin
+  wait(mutex);
+  counter := counter + 10;
+  result2 := counter;
+  signal(mutex);
+end;
+
+procedure task3();
+begin
+  wait(mutex);
+  counter := counter + 100;
+  result3 := counter;
+  signal(mutex);
+end;
+
+begin
+  counter := 0;
+  
+  // Initialize semaphore
+  seminit(mutex, 1);
+  
+  // Execute tasks concurrently
+  cobegin
+    task1();
+    task2();
+    task3();
+  coend;
+  
+  // All tasks complete, print results
+  print("Task 1 result: ");
+  print(result1);
+  print_nl();
+  
+  print("Task 2 result: ");
+  print(result2);
+  print_nl();
+  
+  print("Task 3 result: ");
+  print(result3);
+  print_nl();
+  
+  print("Final counter: ");
+  print(counter);
+  print_nl();
+end.

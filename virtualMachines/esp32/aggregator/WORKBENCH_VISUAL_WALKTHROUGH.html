@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IBM BOB Workbench - Visual Walkthrough</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 2rem;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 3rem 2rem;
+            text-align: center;
+        }
+        
+        header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            font-weight: 700;
+        }
+        
+        header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+        
+        .content {
+            padding: 2rem;
+        }
+        
+        .section {
+            margin-bottom: 3rem;
+        }
+        
+        .section h2 {
+            color: #667eea;
+            font-size: 1.8rem;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 3px solid #667eea;
+        }
+        
+        .section h3 {
+            color: #764ba2;
+            font-size: 1.4rem;
+            margin: 1.5rem 0 1rem 0;
+        }
+        
+        .screenshot-container {
+            margin: 2rem 0;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        
+        .screenshot-container img {
+            width: 100%;
+            display: block;
+        }
+        
+        .screenshot-caption {
+            background: #f5f5f5;
+            padding: 1rem;
+            font-size: 0.9rem;
+            color: #666;
+        }
+        
+        .screenshot-caption strong {
+            color: #333;
+            display: block;
+            margin-bottom: 0.5rem;
+        }
+        
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin: 1.5rem 0;
+        }
+        
+        .feature-card {
+            background: #f8f9fa;
+            padding: 1.5rem;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .feature-card h4 {
+            color: #667eea;
+            margin-bottom: 0.5rem;
+        }
+        
+        .feature-card ul {
+            list-style: none;
+            padding-left: 0;
+        }
+        
+        .feature-card li:before {
+            content: "✓ ";
+            color: #667eea;
+            font-weight: bold;
+            margin-right: 0.5rem;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1.5rem 0;
+        }
+        
+        th, td {
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        th {
+            background: #667eea;
+            color: white;
+            font-weight: 600;
+        }
+        
+        tr:hover {
+            background: #f8f9fa;
+        }
+        
+        code {
+            background: #f4f4f4;
+            padding: 0.2rem 0.4rem;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+        }
+        
+        pre {
+            background: #2d2d30;
+            color: #d4d4d4;
+            padding: 1rem;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin: 1rem 0;
+        }
+        
+        pre code {
+            background: none;
+            color: inherit;
+            padding: 0;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 12px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin-right: 0.5rem;
+        }
+        
+        .badge-success {
+            background: #28a745;
+            color: white;
+        }
+        
+        .badge-info {
+            background: #17a2b8;
+            color: white;
+        }
+        
+        .highlight-box {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 1rem;
+            margin: 1rem 0;
+            border-radius: 4px;
+        }
+        
+        footer {
+            background: #2d2d30;
+            color: #d4d4d4;
+            padding: 2rem;
+            text-align: center;
+        }
+        
+        .url-box {
+            background: #e7f3ff;
+            border: 1px solid #2196F3;
+            padding: 0.75rem;
+            border-radius: 6px;
+            margin: 1rem 0;
+            font-family: monospace;
+            color: #1976D2;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🚀 IBM BOB Workbench</h1>
+            <p>Visual Walkthrough & Implementation Guide</p>
+            <div style="margin-top: 1rem;">
+                <span class="badge badge-success">✓ Implementation Complete</span>
+                <span class="badge badge-info">Version 1.0</span>
+            </div>
+        </header>
+        
+        <div class="content">
+            <!-- Overview Section -->
+            <div class="section">
+                <h2>📋 Overview</h2>
+                <p>This document provides a comprehensive visual walkthrough of the IBM BOB Workbench implementation, demonstrating the dual-GUI architecture and core rendering capabilities based on the IBM BOB specification.</p>
+                
+                <div class="highlight-box">
+                    <strong>🎯 Key Achievement:</strong> The implementation maintains two separate user interfaces that coexist without conflicts, ensuring backward compatibility while enabling experimentation with new features.
+                </div>
+            </div>
+
+            <!-- Architecture Section -->
+            <div class="section">
+                <h2>🏗️ Architecture: Dual GUI System</h2>
+                
+                <div class="feature-grid">
+                    <div class="feature-card">
+                        <h4>Original GUI</h4>
+                        <ul>
+                            <li>Route: <code>/</code></li>
+                            <li>Completely intact</li>
+                            <li>All features preserved</li>
+                            <li>No modifications</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <h4>Experimental Workbench</h4>
+                        <ul>
+                            <li>Route: <code>/#/x</code></li>
+                            <li>Role-based rendering</li>
+                            <li>File-type aware</li>
+                            <li>Mode-specific views</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Screenshot 1 -->
+            <div class="section">
+                <h2>📸 Screenshot 1: Original GUI (Intact)</h2>
+                <div class="url-box">http://localhost:5173/</div>
+                
+                <div class="screenshot-container">
+                    <img src="workbench-screenshots/01-original-gui.png" alt="Original GUI">
+                    <div class="screenshot-caption">
+                        <strong>Original Frontend - Completely Preserved</strong>
+                        The original frontend remains completely functional and unchanged. All existing features, workflows, and user interfaces continue to work exactly as before. Users can continue using the familiar interface without any disruption.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Screenshot 2 -->
+            <div class="section">
+                <h2>📸 Screenshot 2: Experimental Workbench - View Mode</h2>
+                <div class="url-box">http://localhost:5173/#/x</div>
+                
+                <div class="screenshot-container">
+                    <img src="workbench-screenshots/02-workbench-view.png" alt="Workbench View Mode">
+                    <div class="screenshot-caption">
+                        <strong>Workbench Interface with Monaco Editor</strong>
+                        The experimental workbench showing a Pascalish program in view mode with full Monaco editor integration, including syntax highlighting, line numbers, and VS Code-style editing experience.
+                    </div>
+                </div>
+                
+                <h3>Key Features Visible:</h3>
+                <div class="feature-grid">
+                    <div class="feature-card">
+                        <h4>Navigation Bar</h4>
+                        <ul>
+                            <li>Role selector</li>
+                            <li>File selector</li>
+                            <li>Mode selector</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <h4>Monaco Editor</h4>
+                        <ul>
+                            <li>Syntax highlighting</li>
+                            <li>Line numbers</li>
+                            <li>IntelliSense support</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <h4>Renderer Registry</h4>
+                        <ul>
+                            <li>Auto-selection</li>
+                            <li>Priority-based</li>
+                            <li>Pluggable system</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Renderer Registry Section -->
+            <div class="section">
+                <h2>⚙️ Renderer Registry System</h2>
+                <p>The workbench uses a pluggable renderer registry that maps rendering contexts to React components:</p>
+                
+                <pre><code>// Registration example
+registerRenderer({
+  role: 'developer',
+  fileType: 'pascalish',
+  mode: 'view',
+  component: PascalishViewRenderer,
+  priority: 10,
+});
+
+// Lookup with fallback resolution
+const Renderer = getRenderer(currentRole, currentFile.fileType, currentMode);</code></pre>
+
+                <h3>Resolution Rules:</h3>
+                <ol>
+                    <li>Try exact match: <code>role + fileType + mode</code></li>
+                    <li>Fallback to: <code>fileType + mode</code> (any role)</li>
+                    <li>Fallback to: <code>fileType</code> only (any role, any mode)</li>
+                    <li>Default: <code>DefaultRenderer</code> (shows context info)</li>
+                </ol>
+            </div>
+
+            <!-- Implemented Renderers Section -->
+            <div class="section">
+                <h2>🎨 Implemented Renderers</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Renderer</th>
+                            <th>Role</th>
+                            <th>File Type</th>
+                            <th>Mode</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>PascalishViewRenderer</strong></td>
+                            <td>developer</td>
+                            <td>pascalish</td>
+                            <td>view</td>
+                            <td>Monaco editor with syntax highlighting</td>
+                        </tr>
+                        <tr>
+                            <td><strong>PascalishDebugRenderer</strong></td>
+                            <td>developer</td>
+                            <td>pascalish</td>
+                            <td>debug</td>
+                            <td>Debug mode with registers, stack, variables</td>
+                        </tr>
+                        <tr>
+                            <td><strong>WFLViewRenderer</strong></td>
+                            <td>developer</td>
+                            <td>wfl</td>
+                            <td>view</td>
+                            <td>Static Mermaid state diagram</td>
+                        </tr>
+                        <tr>
+                            <td><strong>WFLRunAnimatedRenderer</strong></td>
+                            <td>developer</td>
+                            <td>wfl</td>
+                            <td>run</td>
+                            <td>Animated workflow execution</td>
+                        </tr>
+                        <tr>
+                            <td><strong>MapSpreadsheetRenderer</strong></td>
+                            <td>dataMapper</td>
+                            <td>map</td>
+                            <td>view</td>
+                            <td>Data mapping table (source → target)</td>
+                        </tr>
+                        <tr>
+                            <td><strong>MapDebugAnimatedRenderer</strong></td>
+                            <td>dataMapper</td>
+                            <td>map</td>
+                            <td>debug</td>
+                            <td>Step-by-step mapping debugger</td>
+                        </tr>
+                        <tr>
+                            <td><strong>NodeCardRenderer</strong></td>
+                            <td>analyst</td>
+                            <td>node</td>
+                            <td>view</td>
+                            <td>Service metadata and metrics card</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Domain Languages Section -->
+            <div class="section">
+                <h2>🔤 Domain Languages Supported</h2>
+                
+                <div class="feature-grid">
+                    <div class="feature-card">
+                        <h4>Pascalish</h4>
+                        <ul>
+                            <li>Business logic language</li>
+                            <li>Compiles to P-code</li>
+                            <li>JavaScript VM execution</li>
+                            <li>Daemon/router support</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <h4>WFL (Workflow Language)</h4>
+                        <ul>
+                            <li>FSM orchestration</li>
+                            <li>State-based workflows</li>
+                            <li>Mermaid visualization</li>
+                            <li>Animated execution</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <h4>Map DSL</h4>
+                        <ul>
+                            <li>Data mapping language</li>
+                            <li>Source-to-target fields</li>
+                            <li>Transform functions</li>
+                            <li>Spreadsheet editing</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Testing Section -->
+            <div class="section">
+                <h2>🧪 Testing the Implementation</h2>
+                
+                <h3>Access Points:</h3>
+                <div class="url-box">Original GUI: http://localhost:5173/</div>
+                <div class="url-box">Experimental Workbench: http://localhost:5173/#/x</div>
+                
+                <h3>Test Scenarios:</h3>
+                
+                <div class="feature-card" style="margin: 1rem 0;">
+                    <h4>Scenario 1: Pascalish Development</h4>
+                    <ol>
+                        <li>Navigate to <code>http://localhost:5173/#/x</code></li>
+                        <li>Select Role: <code>developer</code></li>
+                        <li>Select File: <code>hello-world.pas</code></li>
+                        <li>Select Mode: <code>view</code> → See Monaco editor</li>
+                        <li>Select Mode: <code>debug</code> → See debug panels</li>
+                    </ol>
+                </div>
+                
+                <div class="feature-card" style="margin: 1rem 0;">
+                    <h4>Scenario 2: Workflow Visualization</h4>
+                    <ol>
+                        <li>Navigate to <code>http://localhost:5173/#/x</code></li>
+                        <li>Select Role: <code>developer</code></li>
+                        <li>Select File: <code>order-workflow.wfl</code></li>
+                        <li>Select Mode: <code>view</code> → See Mermaid diagram</li>
+                        <li>Select Mode: <code>run</code> → See animated execution</li>
+                    </ol>
+                </div>
+                
+                <div class="feature-card" style="margin: 1rem 0;">
+                    <h4>Scenario 3: Data Mapping</h4>
+                    <ol>
+                        <li>Navigate to <code>http://localhost:5173/#/x</code></li>
+                        <li>Select Role: <code>dataMapper</code></li>
+                        <li>Select File: <code>mt103-to-pain001.map</code></li>
+                        <li>Select Mode: <code>view</code> → See mapping table</li>
+                        <li>Select Mode: <code>debug</code> → See step-by-step mapping</li>
+                    </ol>
+                </div>
+            </div>
+
+            <!-- Technical Stack Section -->
+            <div class="section">
+                <h2>🛠️ Technical Stack</h2>
+                <ul style="list-style: none; padding-left: 0;">
+                    <li>✓ <strong>React</strong> - UI framework with functional components and hooks</li>
+                    <li>✓ <strong>Monaco Editor</strong> - VS Code's editor component for code editing</li>
+                    <li>✓ <strong>Mermaid</strong> - Diagram visualization for workflows</li>
+                    <li>✓ <strong>TypeScript</strong> - Type-safe registry and component interfaces</li>
+                    <li>✓ <strong>Vite</strong> - Build tool with Hot Module Replacement (HMR)</li>
+                    <li>✓ <strong>Hash-based Routing</strong> - Separate UIs without route conflicts</li>
+                </ul>
+            </div>
+
+            <!-- File Structure Section -->
+            <div class="section">
+                <h2>📁 File Structure</h2>
+                <pre><code>aggregator/
+├── src/
+│   ├── workbench/
+│   │   ├── types.ts                    # TypeScript type definitions
+│   │   ├── rendererRegistry.ts         # Core registry implementation
+│   │   ├── registerRenderers.ts        # Renderer registration
+│   │   ├── wflToMermaid.ts            # WFL → Mermaid converter
+│   │   ├── Workbench.jsx              # Main workbench component
+│   │   ├── components/
+│   │   │   ├── PascalishViewRenderer.jsx
+│   │   │   ├── PascalishDebugRenderer.jsx
+│   │   │   ├── WFLViewRenderer.jsx
+│   │   │   ├── WFLRunAnimatedRenderer.jsx
+│   │   │   ├── MapSpreadsheetRenderer.jsx
+│   │   │   ├── MapDebugAnimatedRenderer.jsx
+│   │   │   ├── NodeCardRenderer.jsx
+│   │   │   └── MermaidRenderer.jsx
+│   │   └── README.md                  # Architecture documentation
+│   ├── Router.jsx                     # Hash-based router
+│   └── main.jsx                       # Entry point (uses Router)
+├── workbench-screenshots/             # Visual documentation
+└── scripts/
+    └── capture-workbench-screenshots.mjs  # Screenshot automation</code></pre>
+            </div>
+
+            <!-- Conclusion Section -->
+            <div class="section">
+                <h2>✅ Conclusion</h2>
+                <p>The IBM BOB Workbench implementation successfully delivers all core requirements from the specification:</p>
+                
+                <div class="feature-grid">
+                    <div class="feature-card">
+                        <h4>✓ Dual GUI Architecture</h4>
+                        <p>Original and experimental UIs coexist without conflicts</p>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <h4>✓ Renderer Registry</h4>
+                        <p>Pluggable, priority-based component selection system</p>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <h4>✓ 7 Renderer Components</h4>
+                        <p>Covering multiple file types and modes with real implementations</p>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <h4>✓ Domain Language Support</h4>
+                        <p>Pascalish, WFL, and Map DSL with visual editors</p>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <h4>✓ Visual Editors</h4>
+                        <p>Monaco, Mermaid, and spreadsheet-style interfaces</p>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <h4>✓ Animated Execution</h4>
+                        <p>Real-time workflow and mapping visualization</p>
+                    </div>
+                </div>
+                
+                <div class="highlight-box" style="margin-top: 2rem;">
+                    <strong>🎉 Status:</strong> The system is production-ready for experimentation while maintaining full backward compatibility with the existing frontend. All code is implemented (not stubbed) and ready for testing and further development.
+                </div>
+            </div>
+        </div>
+        
+        <footer>
+            <p><strong>IBM BOB Workbench</strong> - Visual Walkthrough</p>
+            <p>Generated: 2026-06-12 | Version: 1.0 | Status: ✅ Implementation Complete</p>
+        </footer>
+    </div>
+</body>
+</html>

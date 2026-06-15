@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "generatedAt": "2026-06-09T22:18:44.142Z",
+  "serviceId": "dual-node-atomic-check",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "dual-node-atomic-check",
+    "refreshMs": null
+  },
+  "variableDeclarations": [],
+  "entryLabel": "ENTRY",
+  "finishLabel": "FINISH",
+  "instructionSubset": [
+    "JMP",
+    "JZ",
+    "NOP",
+    "ROUTE_MATCH_QUEUE",
+    "ROUTE_EVAL_WHEN",
+    "ROUTE_TRANSFORM",
+    "ROUTE_EMIT",
+    "PARSE_FIN_TEXT",
+    "HALT"
+  ],
+  "orchestrationPrograms": [
+    {
+      "programId": "dual-node-atomic-check",
+      "asyncSubflows": [
+        {
+          "subflowId": "risk_check",
+          "nodeId": "childNode",
+          "payloadRef": "req",
+          "timeoutMs": 5000,
+          "handleRef": "h_node1"
+        },
+        {
+          "subflowId": "limits_check",
+          "nodeId": "childNode",
+          "payloadRef": "req",
+          "timeoutMs": 5000,
+          "handleRef": "h_node2"
+        }
+      ],
+      "waitAll": {
+        "handleRefs": [
+          "h_node1",
+          "h_node2"
+        ],
+        "resultRefs": [
+          "r_node1",
+          "r_node2"
+        ],
+        "timeoutMs": 8000,
+        "onErrorFailTransaction": "subtasks timeout or transport error"
+      },
+      "failTransactions": [
+        {
+          "reason": "subtasks timeout or transport error"
+        }
+      ],
+      "returnSuccess": {
+        "valueExpr": "merged_reply"
+      }
+    }
+  ],
+  "instructionSubsetExtended": [
+    "ORCH_SPAWN",
+    "ORCH_WAIT_ALL",
+    "ORCH_FAIL_TXN",
+    "ORCH_RETURN_SUCCESS"
+  ],
+  "entries": [
+    {
+      "kind": "router",
+      "id": "risk_check-http",
+      "label": "ROUTER_0_RISK_CHECK_HTTP",
+      "inputQueue": "risk_check.in",
+      "outputs": [
+        {
+          "queueName": "risk_check.out",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "output := 1;",
+          "transformRule": "output := '{\"success\":true,\"replyJson\":\"{\\\"stage\\\":\\\"risk_check\\\",\\\"node\\\":\\\"childNode\\\"}\"}';"
+        }
+      ]
+    },
+    {
+      "kind": "router",
+      "id": "limits_check-http",
+      "label": "ROUTER_1_LIMITS_CHECK_HTTP",
+      "inputQueue": "limits_check.in",
+      "outputs": [
+        {
+          "queueName": "limits_check.out",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "output := 1;",
+          "transformRule": "output := '{\"success\":true,\"replyJson\":\"{\\\"stage\\\":\\\"limits_check\\\",\\\"node\\\":\\\"childNode\\\"}\"}';"
+        }
+      ]
+    },
+    {
+      "kind": "orchestration",
+      "id": "dual-node-atomic-check",
+      "label": "ORCH_0_DUAL_NODE_ATOMIC_CHECK",
+      "asyncSubflowCount": 2,
+      "waitAll": {
+        "handleRefs": [
+          "h_node1",
+          "h_node2"
+        ],
+        "resultRefs": [
+          "r_node1",
+          "r_node2"
+        ],
+        "timeoutMs": 8000,
+        "onErrorFailTransaction": "subtasks timeout or transport error"
+      },
+      "returnSuccess": {
+        "valueExpr": "merged_reply"
+      }
+    }
+  ]
+}

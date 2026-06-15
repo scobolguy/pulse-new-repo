@@ -87,6 +87,11 @@ enum Opcode : uint8_t {
     OP_GE = 0x21,                // Compare greater-or-equal
     OP_PRINT = 0x22,             // Print string/int token to current output line
     OP_PRINT_NL = 0x23,          // End current output line
+    OP_ORCH_SPAWN = 0x25,        // Queue orchestration subflow spawn metadata
+    OP_ORCH_WAIT_ALL = 0x26,     // Await orchestration subflow completion (native transport hook)
+    OP_ORCH_FAIL_TXN = 0x27,     // Fail current transaction when orchestration result is failure
+    OP_ORCH_RETURN_SUCCESS = 0x28,// Return orchestration success payload
+    OP_CALL_EXT = 0x29,          // Call external symbol through lazy thunk resolver
     OP_HALT = 0xFF      // HALT
 };
 
@@ -131,6 +136,11 @@ enum Opcode : uint8_t {
         if (mnemonic == "PARSE_FIN_TEXT") return OP_PARSE_FIN_TEXT;
         if (mnemonic == "ROUTE_SET_STATE") return OP_ROUTE_SET_STATE;
         if (mnemonic == "ROUTE_SET_MESSAGE") return OP_ROUTE_SET_MESSAGE;
+        if (mnemonic == "ORCH_SPAWN") return OP_ORCH_SPAWN;
+        if (mnemonic == "ORCH_WAIT_ALL") return OP_ORCH_WAIT_ALL;
+        if (mnemonic == "ORCH_FAIL_TXN") return OP_ORCH_FAIL_TXN;
+        if (mnemonic == "ORCH_RETURN_SUCCESS") return OP_ORCH_RETURN_SUCCESS;
+        if (mnemonic == "CALL_EXT") return OP_CALL_EXT;
         if (mnemonic == "LOAD") return OP_LOAD_NAME;
         if (mnemonic == "STORE") return OP_STORE_NAME;
         if (mnemonic == "CALL") return OP_CALL_LABEL;
@@ -165,6 +175,37 @@ struct MappingDef {
     std::string targetTypeId;
     std::vector<MappingItem> items;
 };
+
+struct OrchestrationSpawnRequest {
+    std::string subflowId;
+    std::string nodeId;
+    std::string payloadRef;
+    uint32_t timeoutMs = 0;
+    std::string handleRef;
+};
+
+struct OrchestrationTaskResult {
+    std::string handleRef;
+    std::string subflowId;
+    std::string nodeId;
+    bool success = false;
+    std::string responseJson;
+    std::string errorCode;
+    std::string errorMessage;
+};
+
+using OrchestrationWaitHook = bool (*)(
+    const std::vector<OrchestrationSpawnRequest>& requests,
+    uint32_t timeoutMs,
+    std::vector<OrchestrationTaskResult>& outResults,
+    std::string& outError,
+    void* context);
+
+using ThunkResolveHook = bool (*)(
+    const std::string& symbol,
+    int& outTargetPc,
+    std::string& outError,
+    void* context);
 
 enum class RuntimeUnitKind : uint8_t {
     Program = 0,
@@ -238,6 +279,8 @@ struct Status {
     PagingConfig pagingConfig;
     PagingStats pagingStats;
     std::vector<ResidentAssetRecord> residentAssets;
+    MemoryMap memoryMap;
+    std::map<std::string, int> thunkBindings;
 };
 
 } // namespace pmachine
@@ -289,6 +332,13 @@ public:
     bool didLastRunHitStepLimit() const;
     size_t getLastRunStepCount() const;
     const std::vector<std::string>& getLastRunTextOutput() const;
+    void setOrchestrationWaitHook(OrchestrationWaitHook hook, void* context = nullptr);
+    void setThunkResolverHook(ThunkResolveHook hook, void* context = nullptr);
+    void setThunkBinding(const std::string& symbol, int targetPc);
+    bool clearThunkBinding(const std::string& symbol);
+    void clearAllThunkBindings();
+    std::map<std::string, int> getThunkBindings() const;
+    std::string getImageMemoryMapJson() const;
 private:
     ::FederatedFileSystem *ffs = nullptr;
     PCodeMap pcodeMap;
@@ -318,6 +368,11 @@ private:
     std::vector<PageTableEntry> pageTable;
     std::vector<PageFrame> frames;
     uint32_t lruTick = 0;
+    OrchestrationWaitHook orchestrationWaitHook = nullptr;
+    void* orchestrationHookContext = nullptr;
+    ThunkResolveHook thunkResolveHook = nullptr;
+    void* thunkResolverContext = nullptr;
+    std::map<std::string, int> thunkBindings;
 
     // Handler table for opcode dispatch
     using HandlerFunc = void (*)(PMachine&, const PInstruction&, int*, int&, int&, int&);

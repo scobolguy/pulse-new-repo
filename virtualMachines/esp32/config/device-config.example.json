@@ -1,0 +1,131 @@
+{
+  "version": "1.0.0",
+  "device": {
+    "id": "esp32-backend-01",
+    "name": "Backend Processing Node 1",
+    "role": "backend",
+    "location": "Server Room A"
+  },
+  "hardware": {
+    "platform": "ESP32",
+    "cpuFrequency": 240,
+    "flashSize": 4194304,
+    "ramSize": 520192
+  },
+  "sensors": [
+    {
+      "id": "temp_sensor_1",
+      "type": "temperature",
+      "pin": 34,
+      "sampleRate": 1000,
+      "enabled": true,
+      "calibration": {
+        "offset": -2.5,
+        "scale": 1.02
+      }
+    },
+    {
+      "id": "humidity_sensor_1",
+      "type": "humidity",
+      "pin": 35,
+      "sampleRate": 2000,
+      "enabled": true
+    }
+  ],
+  "actuators": [
+    {
+      "id": "status_led",
+      "type": "led",
+      "pin": 2,
+      "enabled": true,
+      "initialState": false
+    },
+    {
+      "id": "cooling_fan",
+      "type": "relay",
+      "pin": 25,
+      "enabled": true,
+      "initialState": false
+    }
+  ],
+  "network": {
+    "wifi": {
+      "ssid": "ESP-VM-Network",
+      "password": "encrypted_password_here",
+      "mode": "STA",
+      "hostname": "esp32-backend-01"
+    },
+    "mqtt": {
+      "enabled": false,
+      "broker": "mqtt.example.com",
+      "port": 1883,
+      "clientId": "esp32-backend-01"
+    },
+    "http": {
+      "enabled": true,
+      "port": 80
+    }
+  },
+  "broker": {
+    "enabled": true,
+    "discoveryPort": 5000,
+    "messagePort": 5001,
+    "queues": [
+      {
+        "name": "incoming",
+        "maxSize": 100,
+        "persistent": false
+      },
+      {
+        "name": "processing",
+        "maxSize": 50,
+        "persistent": true
+      },
+      {
+        "name": "outgoing",
+        "maxSize": 100,
+        "persistent": false
+      }
+    ]
+  },
+  "storage": {
+    "sdCard": {
+      "enabled": true,
+      "csPin": 5,
+      "chunkSize": 512
+    },
+    "spiffs": {
+      "enabled": true,
+      "size": 1048576
+    }
+  },
+  "scheduler": {
+    "algorithm": "round-robin-priority",
+    "quantum": 100,
+    "maxContexts": 16,
+    "priorityLevels": 4
+  },
+  "libraries": [
+    {
+      "name": "crypto-utils",
+      "autoload": true,
+      "path": "/libraries/crypto-utils.manifest.json"
+    },
+    {
+      "name": "json-parser",
+      "autoload": true,
+      "path": "/libraries/json-parser.manifest.json"
+    },
+    {
+      "name": "math-extended",
+      "autoload": false,
+      "path": "/libraries/math-extended.manifest.json"
+    }
+  ],
+  "logging": {
+    "level": "INFO",
+    "serial": true,
+    "file": true,
+    "maxFileSize": 1048576
+  }
+}

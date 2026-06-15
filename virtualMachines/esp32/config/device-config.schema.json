@@ -1,0 +1,370 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://espvm.org/schemas/device-config.json",
+  "title": "ESP Virtual P-Machine Device Configuration",
+  "description": "Schema for registry-driven device configuration",
+  "type": "object",
+  "required": ["device", "version"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Configuration schema version (semantic versioning)"
+    },
+    "device": {
+      "type": "object",
+      "required": ["id", "role"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "Unique device identifier"
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable device name"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["frontend", "backend", "edge", "gateway"],
+          "description": "Device role in the system"
+        },
+        "location": {
+          "type": "string",
+          "description": "Physical location of device"
+        }
+      }
+    },
+    "hardware": {
+      "type": "object",
+      "properties": {
+        "platform": {
+          "type": "string",
+          "enum": ["ESP32", "ESP8266", "ESP32-S2", "ESP32-S3", "ESP32-C3"],
+          "description": "Hardware platform"
+        },
+        "cpuFrequency": {
+          "type": "integer",
+          "minimum": 80,
+          "maximum": 240,
+          "description": "CPU frequency in MHz"
+        },
+        "flashSize": {
+          "type": "integer",
+          "description": "Flash size in bytes"
+        },
+        "ramSize": {
+          "type": "integer",
+          "description": "RAM size in bytes"
+        }
+      }
+    },
+    "sensors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Sensor identifier"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["temperature", "humidity", "pressure", "light", "motion", "distance", "analog", "digital"],
+            "description": "Sensor type"
+          },
+          "pin": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 39,
+            "description": "GPIO pin number"
+          },
+          "sampleRate": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Sample rate in milliseconds"
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether sensor is enabled"
+          },
+          "calibration": {
+            "type": "object",
+            "properties": {
+              "offset": {
+                "type": "number",
+                "description": "Calibration offset"
+              },
+              "scale": {
+                "type": "number",
+                "description": "Calibration scale factor"
+              }
+            }
+          }
+        }
+      }
+    },
+    "actuators": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Actuator identifier"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["relay", "servo", "motor", "led", "buzzer", "pwm"],
+            "description": "Actuator type"
+          },
+          "pin": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 39,
+            "description": "GPIO pin number"
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether actuator is enabled"
+          },
+          "initialState": {
+            "type": ["boolean", "integer"],
+            "description": "Initial state on startup"
+          }
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "properties": {
+        "wifi": {
+          "type": "object",
+          "properties": {
+            "ssid": {
+              "type": "string",
+              "description": "WiFi SSID"
+            },
+            "password": {
+              "type": "string",
+              "description": "WiFi password (encrypted)"
+            },
+            "mode": {
+              "type": "string",
+              "enum": ["STA", "AP", "STA+AP"],
+              "default": "STA",
+              "description": "WiFi mode"
+            },
+            "hostname": {
+              "type": "string",
+              "description": "Device hostname"
+            }
+          }
+        },
+        "mqtt": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "broker": {
+              "type": "string",
+              "description": "MQTT broker address"
+            },
+            "port": {
+              "type": "integer",
+              "default": 1883
+            },
+            "clientId": {
+              "type": "string"
+            },
+            "username": {
+              "type": "string"
+            },
+            "password": {
+              "type": "string"
+            }
+          }
+        },
+        "http": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "port": {
+              "type": "integer",
+              "default": 80,
+              "minimum": 1,
+              "maximum": 65535
+            }
+          }
+        }
+      }
+    },
+    "broker": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable broker client"
+        },
+        "discoveryPort": {
+          "type": "integer",
+          "default": 5000,
+          "description": "UDP discovery port"
+        },
+        "messagePort": {
+          "type": "integer",
+          "default": 5001,
+          "description": "HTTP message port"
+        },
+        "queues": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Queue name"
+              },
+              "maxSize": {
+                "type": "integer",
+                "default": 100,
+                "description": "Maximum queue size"
+              },
+              "persistent": {
+                "type": "boolean",
+                "default": false,
+                "description": "Persist queue to storage"
+              }
+            }
+          }
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "properties": {
+        "sdCard": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "csPin": {
+              "type": "integer",
+              "description": "SD card CS pin"
+            },
+            "chunkSize": {
+              "type": "integer",
+              "default": 512,
+              "description": "Chunk size for chunkstore"
+            }
+          }
+        },
+        "littlefs": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "size": {
+              "type": "integer",
+              "description": "LittleFS partition size"
+            }
+          }
+        }
+      }
+    },
+    "scheduler": {
+      "type": "object",
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "enum": ["round-robin", "priority", "round-robin-priority"],
+          "default": "round-robin",
+          "description": "Scheduling algorithm"
+        },
+        "quantum": {
+          "type": "integer",
+          "default": 100,
+          "minimum": 1,
+          "description": "Time quantum in instructions"
+        },
+        "maxContexts": {
+          "type": "integer",
+          "default": 16,
+          "minimum": 1,
+          "maximum": 256,
+          "description": "Maximum number of contexts"
+        },
+        "priorityLevels": {
+          "type": "integer",
+          "default": 4,
+          "minimum": 1,
+          "maximum": 256,
+          "description": "Number of priority levels"
+        }
+      }
+    },
+    "libraries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Library name"
+          },
+          "autoload": {
+            "type": "boolean",
+            "default": false,
+            "description": "Load library on startup"
+          },
+          "path": {
+            "type": "string",
+            "description": "Path to library manifest"
+          }
+        }
+      }
+    },
+    "logging": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["DEBUG", "INFO", "WARN", "ERROR", "NONE"],
+          "default": "INFO",
+          "description": "Logging level"
+        },
+        "serial": {
+          "type": "boolean",
+          "default": true,
+          "description": "Log to serial"
+        },
+        "file": {
+          "type": "boolean",
+          "default": false,
+          "description": "Log to file"
+        },
+        "maxFileSize": {
+          "type": "integer",
+          "default": 1048576,
+          "description": "Maximum log file size in bytes"
+        }
+      }
+    }
+  }
+}

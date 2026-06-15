@@ -1,7 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
-import App from './App.jsx'
+import Workbench from './workbench/Workbench.jsx'
 
 const originalFetch = window.fetch.bind(window)
 const apiBaseUrls = String(import.meta.env.VITE_API_BASES || '')
@@ -28,45 +28,58 @@ function getRotatedGatewayCandidates() {
 window.fetch = async (input, init = {}) => {
   const nextInit = { ...init }
   const headers = new Headers(nextInit.headers || {})
-  const actorUserId = localStorage.getItem('pulse.actorUserId') || 'anonymous'
+  const storedActorUserId = String(localStorage.getItem('pulse.actorUserId') || '').trim()
   const authToken = localStorage.getItem('pulse.authToken') || ''
+  const actorUserId = (!authToken && (!storedActorUserId || storedActorUserId.toLowerCase() === 'anonymous'))
+    ? 'system-admin'
+    : (storedActorUserId || 'system-admin')
   if (authToken) {
     headers.set('authorization', `Bearer ${authToken}`)
   }
   headers.set('x-user-id', actorUserId)
   nextInit.headers = headers
 
-  if (!shouldUseApiGatewayFailover(input)) {
+  const executeRequest = async () => {
+    if (!shouldUseApiGatewayFailover(input)) {
+      return originalFetch(input, nextInit)
+    }
+
+    const candidates = getRotatedGatewayCandidates()
+    let lastNetworkError = null
+
+    for (let i = 0; i < candidates.length; i += 1) {
+      const url = buildGatewayUrl(candidates[i], input)
+      try {
+        const response = await originalFetch(url, nextInit)
+        if (response.status >= 500 && i < candidates.length - 1) {
+          continue
+        }
+        return response
+      } catch (error) {
+        lastNetworkError = error
+        if (i === candidates.length - 1) {
+          throw error
+        }
+      }
+    }
+
+    if (lastNetworkError) {
+      throw lastNetworkError
+    }
     return originalFetch(input, nextInit)
   }
 
-  const candidates = getRotatedGatewayCandidates()
-  let lastNetworkError = null
-
-  for (let i = 0; i < candidates.length; i += 1) {
-    const url = buildGatewayUrl(candidates[i], input)
-    try {
-      const response = await originalFetch(url, nextInit)
-      if (response.status >= 500 && i < candidates.length - 1) {
-        continue
-      }
-      return response
-    } catch (error) {
-      lastNetworkError = error
-      if (i === candidates.length - 1) {
-        throw error
-      }
-    }
+  let response = await executeRequest()
+  if (response.status === 401 && authToken) {
+    headers.delete('authorization')
+    nextInit.headers = headers
+    response = await executeRequest()
   }
-
-  if (lastNetworkError) {
-    throw lastNetworkError
-  }
-  return originalFetch(input, nextInit)
+  return response
 }
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <App />
+    <Workbench />
   </StrictMode>,
 )

@@ -1,4 +1,8 @@
-service "hello-world";
-router "hello-route" input "hello.in" description "hello world route" enabled true begin
-  output "hello.out" when "output := 1;" transform "output := 'Hello, world';";
-end;
+program HelloWorld;
+begin
+  writeln('Hello, World!');
+  writeln('Welcome to IBM BOB Workbench');
+  writeln('Pascalish running on JavaScript P-machine');
+end.
+
+{* Made with Bob *}

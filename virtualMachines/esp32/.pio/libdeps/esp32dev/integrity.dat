@@ -1,7 +1,7 @@
-ESP Async WebServer
-me-no-dev/AsyncTCP
 adafruit/Adafruit BMP280 Library
-adafruit/Adafruit Unified Sensor
+me-no-dev/AsyncTCP
+ESP Async WebServer
 bblanchon/ArduinoJson
-adafruit/Adafruit BME280 Library
 adafruit/DHT sensor library
+adafruit/Adafruit BME280 Library
+adafruit/Adafruit Unified Sensor

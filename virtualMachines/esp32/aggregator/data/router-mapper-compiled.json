@@ -1,382 +1,220 @@
 {
   "version": 1,
-  "compiledAt": "2026-05-29T17:26:56.826Z",
-  "serviceId": "aggregator-router-service",
+  "compiledAt": "2026-06-09T21:30:46.570Z",
+  "serviceId": "dual-node-atomic-check",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "dual-node-atomic-check",
+    "refreshMs": null
+  },
   "ast": {
     "type": "Program",
-    "serviceId": "aggregator-router-service",
+    "serviceId": "dual-node-atomic-check",
+    "runtimeUnit": {
+      "kind": "program",
+      "id": "dual-node-atomic-check",
+      "refreshMs": null
+    },
+    "services": [
+      {
+        "type": "ServiceDecl",
+        "id": "risk_check",
+        "runtimeUnit": {
+          "kind": "service",
+          "id": "risk_check",
+          "refreshMs": null
+        },
+        "handlers": [
+          {
+            "selectorRaw": "",
+            "returnExprRaw": "'{\"success\":true,\"replyJson\":\"{\\\"stage\\\":\\\"risk_check\\\",\\\"node\\\":\\\"childNode\\\"}\"}'"
+          }
+        ],
+        "syntheticRouter": {
+          "type": "RouterDecl",
+          "id": "risk_check-http",
+          "inputQueue": "risk_check.in",
+          "description": "HTTP service risk_check",
+          "enabled": true,
+          "serviceId": "risk_check",
+          "methods": null,
+          "outputs": [
+            {
+              "type": "OutputDecl",
+              "queueName": "risk_check.out",
+              "httpVerb": null,
+              "whenRule": "output := 1;",
+              "transformRule": "output := '{\"success\":true,\"replyJson\":\"{\\\"stage\\\":\\\"risk_check\\\",\\\"node\\\":\\\"childNode\\\"}\"}';"
+            }
+          ]
+        }
+      },
+      {
+        "type": "ServiceDecl",
+        "id": "limits_check",
+        "runtimeUnit": {
+          "kind": "service",
+          "id": "limits_check",
+          "refreshMs": null
+        },
+        "handlers": [
+          {
+            "selectorRaw": "",
+            "returnExprRaw": "'{\"success\":true,\"replyJson\":\"{\\\"stage\\\":\\\"limits_check\\\",\\\"node\\\":\\\"childNode\\\"}\"}'"
+          }
+        ],
+        "syntheticRouter": {
+          "type": "RouterDecl",
+          "id": "limits_check-http",
+          "inputQueue": "limits_check.in",
+          "description": "HTTP service limits_check",
+          "enabled": true,
+          "serviceId": "limits_check",
+          "methods": null,
+          "outputs": [
+            {
+              "type": "OutputDecl",
+              "queueName": "limits_check.out",
+              "httpVerb": null,
+              "whenRule": "output := 1;",
+              "transformRule": "output := '{\"success\":true,\"replyJson\":\"{\\\"stage\\\":\\\"limits_check\\\",\\\"node\\\":\\\"childNode\\\"}\"}';"
+            }
+          ]
+        }
+      }
+    ],
+    "roles": [],
     "variables": [],
     "routers": [
       {
         "type": "RouterDecl",
-        "id": "mt103-correspondent-and-lynx-fanout",
-        "inputQueue": "swift.mt103.parsed",
-        "description": "One MT103 to correspondent and LYNX flows",
+        "id": "risk_check-http",
+        "inputQueue": "risk_check.in",
+        "description": "HTTP service risk_check",
         "enabled": true,
-        "serviceId": null,
+        "serviceId": "risk_check",
+        "methods": null,
         "outputs": [
           {
             "type": "OutputDecl",
-            "queueName": "correspondent.pacs008.outbound",
-            "dataTypeId": null,
-            "dataTypeIds": null,
-            "whenRule": "BEGIN output := 1; END",
-            "transformRule": "BEGIN output := map (\"mt103-to-pacs\", src); END"
-          },
-          {
-            "type": "OutputDecl",
-            "queueName": "lynx.pacs009.outbound",
-            "dataTypeId": null,
-            "dataTypeIds": null,
-            "whenRule": "BEGIN output := 1; END",
-            "transformRule": "BEGIN output := map (\"pacs-to-lynx\", map (\"mt103-to-pacs\", src)); END"
-          }
-        ]
-      },
-      {
-        "type": "RouterDecl",
-        "id": "swift-fanout-default",
-        "inputQueue": "swift.inbound",
-        "description": "Default fanout by MT type",
-        "enabled": true,
-        "serviceId": null,
-        "outputs": [
-          {
-            "type": "OutputDecl",
-            "queueName": "audit.all",
-            "dataTypeId": null,
-            "dataTypeIds": null,
+            "queueName": "risk_check.out",
+            "httpVerb": null,
             "whenRule": "output := 1;",
-            "transformRule": "output := src;"
-          },
-          {
-            "type": "OutputDecl",
-            "queueName": "payments.mt103",
-            "dataTypeId": null,
-            "dataTypeIds": null,
-            "whenRule": "IF startswith(upper(src), \\\"MT103\\\") THEN output := 1 ELSE output := 0;",
-            "transformRule": "output := src;"
-          },
-          {
-            "type": "OutputDecl",
-            "queueName": "payments.mt202",
-            "dataTypeId": null,
-            "dataTypeIds": null,
-            "whenRule": "IF startswith(upper(src), \\\"MT202\\\") THEN output := 1 ELSE output := 0;",
-            "transformRule": "output := src;"
+            "transformRule": "output := '{\"success\":true,\"replyJson\":\"{\\\"stage\\\":\\\"risk_check\\\",\\\"node\\\":\\\"childNode\\\"}\"}';"
           }
         ]
       },
       {
         "type": "RouterDecl",
-        "id": "mt103-inbound-to-parsed",
-        "inputQueue": "swift.mt103.inbound",
-        "description": "Forward MT103 ingress into parsed queue",
+        "id": "limits_check-http",
+        "inputQueue": "limits_check.in",
+        "description": "HTTP service limits_check",
         "enabled": true,
-        "serviceId": null,
+        "serviceId": "limits_check",
+        "methods": null,
         "outputs": [
           {
             "type": "OutputDecl",
-            "queueName": "swift.mt103.parsed",
-            "dataTypeId": null,
-            "dataTypeIds": null,
-            "whenRule": "IF startswith(upper(src), \\\"MT103\\\") THEN output := 1 ELSE output := 0;",
-            "transformRule": "BEGIN output := src; END"
-          }
-        ]
-      },
-      {
-        "type": "RouterDecl",
-        "id": "ops-validation-deadletter-audit",
-        "inputQueue": "ops.validation.deadletter",
-        "description": "Mirror deadletter events into audit stream",
-        "enabled": true,
-        "serviceId": null,
-        "outputs": [
-          {
-            "type": "OutputDecl",
-            "queueName": "audit.all",
-            "dataTypeId": null,
-            "dataTypeIds": null,
+            "queueName": "limits_check.out",
+            "httpVerb": null,
             "whenRule": "output := 1;",
-            "transformRule": "output := src;"
-          }
-        ]
-      },
-      {
-        "type": "RouterDecl",
-        "id": "pacs-inbound-to-outbound",
-        "inputQueue": "pacs.inbound",
-        "description": "Forward PACS ingress to outbound queue",
-        "enabled": true,
-        "serviceId": null,
-        "outputs": [
-          {
-            "type": "OutputDecl",
-            "queueName": "pacs.outbound",
-            "dataTypeId": null,
-            "dataTypeIds": null,
-            "whenRule": "output := 1;",
-            "transformRule": "output := src;"
-          }
-        ]
-      },
-      {
-        "type": "RouterDecl",
-        "id": "mt202-inbound-routing",
-        "inputQueue": "mt202.inbound",
-        "description": "Route MT202 ingress into payment queue",
-        "enabled": true,
-        "serviceId": null,
-        "outputs": [
-          {
-            "type": "OutputDecl",
-            "queueName": "payments.mt202",
-            "dataTypeId": null,
-            "dataTypeIds": null,
-            "whenRule": "IF startswith(upper(src), \\\"MT202\\\") THEN output := 1 ELSE output := 0;",
-            "transformRule": "BEGIN output := src; END"
+            "transformRule": "output := '{\"success\":true,\"replyJson\":\"{\\\"stage\\\":\\\"limits_check\\\",\\\"node\\\":\\\"childNode\\\"}\"}';"
           }
         ]
       }
     ],
-    "mappers": [
+    "mappers": [],
+    "codeLibraries": [],
+    "uses": [],
+    "interop": [],
+    "statements": [
       {
-        "type": "MapperDecl",
-        "id": "mt103-to-pacs-mini",
-        "sourceTypeId": "swift-mt103",
-        "targetTypeId": "pacs",
-        "description": "Minimal MT103 to PACS sample",
-        "enabled": true,
-        "maps": [
-          {
-            "type": "MapDecl",
-            "sourcePath": "block4.20",
-            "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
-            "conversionRule": "BEGIN output := trim (src); END"
+        "type": "BlockStmt",
+        "code": "begin cobegin async subflow \"risk_check\" on \"childNode\" with req timeout 5 s into h_node1; async subflow \"limits_check\" on \"childNode\" with req timeout 5 s into h_node2; coend; wait all (h_node1, h_node2) into (r_node1, r_node2) timeout 8 s on error fail transaction \"subtasks timeout or transport error\"; return success merged_reply; end",
+        "orchestration": {
+          "asyncSubflows": [
+            {
+              "subflowId": "risk_check",
+              "nodeId": "childNode",
+              "payloadRef": "req",
+              "timeoutMs": 5000,
+              "handleRef": "h_node1"
+            },
+            {
+              "subflowId": "limits_check",
+              "nodeId": "childNode",
+              "payloadRef": "req",
+              "timeoutMs": 5000,
+              "handleRef": "h_node2"
+            }
+          ],
+          "waitAll": {
+            "handleRefs": [
+              "h_node1",
+              "h_node2"
+            ],
+            "resultRefs": [
+              "r_node1",
+              "r_node2"
+            ],
+            "timeoutMs": 8000,
+            "onErrorFailTransaction": "subtasks timeout or transport error"
           },
-          {
-            "type": "MapDecl",
-            "sourcePath": "block4.32A.currency",
-            "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
-            "conversionRule": "output := upper(src);"
-          },
-          {
-            "type": "MapDecl",
-            "sourcePath": "block4.32A.amount",
-            "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
-            "conversionRule": "output := mtamounttodecimal(src);"
+          "failTransactions": [
+            {
+              "reason": "subtasks timeout or transport error"
+            }
+          ],
+          "returnSuccess": {
+            "valueExpr": "merged_reply"
           }
-        ]
-      },
-      {
-        "type": "MapperDecl",
-        "id": "pacs-to-lynx-mini",
-        "sourceTypeId": "pacs",
-        "targetTypeId": "pacs-lynx",
-        "description": "Minimal PACS to LYNX sample",
-        "enabled": true,
-        "maps": [
-          {
-            "type": "MapDecl",
-            "sourcePath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
-            "targetPath": "LynxEnvelope.Header.MessageId",
-            "conversionRule": "output := trim(src);"
-          },
-          {
-            "type": "MapDecl",
-            "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
-            "targetPath": "LynxEnvelope.Payment.Currency",
-            "conversionRule": "output := upper(src);"
-          }
-        ]
+        }
       }
-    ]
+    ],
+    "programId": "dual-node-atomic-check",
+    "daemonId": null,
+    "daemonRefreshMs": null
   },
+  "roles": [],
+  "codeLibraries": [],
+  "uses": [],
+  "interoperability": [],
   "variableDeclarations": [],
   "routerRules": [
     {
-      "id": "mt103-correspondent-and-lynx-fanout",
-      "name": "mt103-correspondent-and-lynx-fanout",
-      "serviceId": "aggregator-router-service",
+      "id": "risk_check-http",
+      "name": "risk_check-http",
+      "serviceId": "risk_check",
       "enabled": true,
-      "inputQueue": "swift.mt103.parsed",
-      "description": "One MT103 to correspondent and LYNX flows",
+      "inputQueue": "risk_check.in",
+      "description": "HTTP service risk_check",
       "outputs": [
         {
-          "queueName": "correspondent.pacs008.outbound",
-          "whenRule": "BEGIN output := 1; END",
-          "transformRule": "BEGIN output := map (\"mt103-to-pacs\", src); END"
-        },
-        {
-          "queueName": "lynx.pacs009.outbound",
-          "whenRule": "BEGIN output := 1; END",
-          "transformRule": "BEGIN output := map (\"pacs-to-lynx\", map (\"mt103-to-pacs\", src)); END"
-        }
-      ],
-      "createdAt": "2026-05-29T17:26:56.825Z",
-      "updatedAt": "2026-05-29T17:26:56.825Z"
-    },
-    {
-      "id": "swift-fanout-default",
-      "name": "swift-fanout-default",
-      "serviceId": "aggregator-router-service",
-      "enabled": true,
-      "inputQueue": "swift.inbound",
-      "description": "Default fanout by MT type",
-      "outputs": [
-        {
-          "queueName": "audit.all",
+          "queueName": "risk_check.out",
           "whenRule": "output := 1;",
-          "transformRule": "output := src;"
-        },
-        {
-          "queueName": "payments.mt103",
-          "whenRule": "IF startswith(upper(src), \\\"MT103\\\") THEN output := 1 ELSE output := 0;",
-          "transformRule": "output := src;"
-        },
-        {
-          "queueName": "payments.mt202",
-          "whenRule": "IF startswith(upper(src), \\\"MT202\\\") THEN output := 1 ELSE output := 0;",
-          "transformRule": "output := src;"
+          "transformRule": "output := '{\"success\":true,\"replyJson\":\"{\\\"stage\\\":\\\"risk_check\\\",\\\"node\\\":\\\"childNode\\\"}\"}';"
         }
       ],
-      "createdAt": "2026-05-29T17:26:56.825Z",
-      "updatedAt": "2026-05-29T17:26:56.825Z"
+      "createdAt": "2026-06-09T21:30:46.570Z",
+      "updatedAt": "2026-06-09T21:30:46.570Z"
     },
     {
-      "id": "mt103-inbound-to-parsed",
-      "name": "mt103-inbound-to-parsed",
-      "serviceId": "aggregator-router-service",
+      "id": "limits_check-http",
+      "name": "limits_check-http",
+      "serviceId": "limits_check",
       "enabled": true,
-      "inputQueue": "swift.mt103.inbound",
-      "description": "Forward MT103 ingress into parsed queue",
+      "inputQueue": "limits_check.in",
+      "description": "HTTP service limits_check",
       "outputs": [
         {
-          "queueName": "swift.mt103.parsed",
-          "whenRule": "IF startswith(upper(src), \\\"MT103\\\") THEN output := 1 ELSE output := 0;",
-          "transformRule": "BEGIN output := src; END"
-        }
-      ],
-      "createdAt": "2026-05-29T17:26:56.825Z",
-      "updatedAt": "2026-05-29T17:26:56.825Z"
-    },
-    {
-      "id": "ops-validation-deadletter-audit",
-      "name": "ops-validation-deadletter-audit",
-      "serviceId": "aggregator-router-service",
-      "enabled": true,
-      "inputQueue": "ops.validation.deadletter",
-      "description": "Mirror deadletter events into audit stream",
-      "outputs": [
-        {
-          "queueName": "audit.all",
+          "queueName": "limits_check.out",
           "whenRule": "output := 1;",
-          "transformRule": "output := src;"
+          "transformRule": "output := '{\"success\":true,\"replyJson\":\"{\\\"stage\\\":\\\"limits_check\\\",\\\"node\\\":\\\"childNode\\\"}\"}';"
         }
       ],
-      "createdAt": "2026-05-29T17:26:56.825Z",
-      "updatedAt": "2026-05-29T17:26:56.825Z"
-    },
-    {
-      "id": "pacs-inbound-to-outbound",
-      "name": "pacs-inbound-to-outbound",
-      "serviceId": "aggregator-router-service",
-      "enabled": true,
-      "inputQueue": "pacs.inbound",
-      "description": "Forward PACS ingress to outbound queue",
-      "outputs": [
-        {
-          "queueName": "pacs.outbound",
-          "whenRule": "output := 1;",
-          "transformRule": "output := src;"
-        }
-      ],
-      "createdAt": "2026-05-29T17:26:56.825Z",
-      "updatedAt": "2026-05-29T17:26:56.825Z"
-    },
-    {
-      "id": "mt202-inbound-routing",
-      "name": "mt202-inbound-routing",
-      "serviceId": "aggregator-router-service",
-      "enabled": true,
-      "inputQueue": "mt202.inbound",
-      "description": "Route MT202 ingress into payment queue",
-      "outputs": [
-        {
-          "queueName": "payments.mt202",
-          "whenRule": "IF startswith(upper(src), \\\"MT202\\\") THEN output := 1 ELSE output := 0;",
-          "transformRule": "BEGIN output := src; END"
-        }
-      ],
-      "createdAt": "2026-05-29T17:26:56.825Z",
-      "updatedAt": "2026-05-29T17:26:56.825Z"
+      "createdAt": "2026-06-09T21:30:46.570Z",
+      "updatedAt": "2026-06-09T21:30:46.570Z"
     }
   ],
-  "dataMappings": [
-    {
-      "id": "mt103-to-pacs-mini",
-      "name": "mt103-to-pacs-mini",
-      "sourceTypeId": "swift-mt103",
-      "targetTypeId": "pacs",
-      "enabled": true,
-      "description": "Minimal MT103 to PACS sample",
-      "items": [
-        {
-          "sourcePath": "block4.20",
-          "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
-          "kind": "leaf",
-          "sourceValueType": "unknown",
-          "targetValueType": "unknown",
-          "conversionRule": "BEGIN output := trim (src); END"
-        },
-        {
-          "sourcePath": "block4.32A.currency",
-          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
-          "kind": "leaf",
-          "sourceValueType": "unknown",
-          "targetValueType": "unknown",
-          "conversionRule": "output := upper(src);"
-        },
-        {
-          "sourcePath": "block4.32A.amount",
-          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
-          "kind": "leaf",
-          "sourceValueType": "unknown",
-          "targetValueType": "unknown",
-          "conversionRule": "output := mtamounttodecimal(src);"
-        }
-      ],
-      "createdAt": "2026-05-29T17:26:56.826Z",
-      "updatedAt": "2026-05-29T17:26:56.826Z"
-    },
-    {
-      "id": "pacs-to-lynx-mini",
-      "name": "pacs-to-lynx-mini",
-      "sourceTypeId": "pacs",
-      "targetTypeId": "pacs-lynx",
-      "enabled": true,
-      "description": "Minimal PACS to LYNX sample",
-      "items": [
-        {
-          "sourcePath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
-          "targetPath": "LynxEnvelope.Header.MessageId",
-          "kind": "leaf",
-          "sourceValueType": "unknown",
-          "targetValueType": "unknown",
-          "conversionRule": "output := trim(src);"
-        },
-        {
-          "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
-          "targetPath": "LynxEnvelope.Payment.Currency",
-          "kind": "leaf",
-          "sourceValueType": "unknown",
-          "targetValueType": "unknown",
-          "conversionRule": "output := upper(src);"
-        }
-      ],
-      "createdAt": "2026-05-29T17:26:56.826Z",
-      "updatedAt": "2026-05-29T17:26:56.826Z"
-    }
-  ]
+  "dataMappings": []
 }

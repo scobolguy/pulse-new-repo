@@ -1390,8 +1390,61 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
             if (i > 0) json += ",";
             json += String(s.breakpoints[i]);
         }
-        json += "]}";
+        json += "],";
+        json += "\"memoryMap\":[";
+        {
+            size_t idx = 0;
+            for (const auto& entry : s.memoryMap) {
+                if (idx++ > 0) json += ",";
+                json += "{\"vpage\":" + String(entry.first) + ",\"frame\":" + String((unsigned long)entry.second) + "}";
+            }
+        }
+        json += "],";
+        json += "\"thunks\":{";
+        {
+            size_t idx = 0;
+            for (const auto& entry : s.thunkBindings) {
+                if (idx++ > 0) json += ",";
+                json += "\"" + String(entry.first.c_str()) + "\":" + String(entry.second);
+            }
+        }
+        json += "}}";
         request->send(200, "application/json", json);
+    });
+
+    server.on("/pmachine/image-map", HTTP_GET, [&machine](AsyncWebServerRequest *request){
+        request->send(200, "application/json", String(machine.getImageMemoryMapJson().c_str()));
+    });
+
+    server.on("/pmachine/thunks", HTTP_GET, [&machine](AsyncWebServerRequest *request){
+        const auto bindings = machine.getThunkBindings();
+        String json = "{";
+        json += "\"count\":" + String((unsigned long)bindings.size()) + ",";
+        json += "\"bindings\":{";
+        size_t idx = 0;
+        for (const auto& entry : bindings) {
+            if (idx++ > 0) json += ",";
+            json += "\"" + String(entry.first.c_str()) + "\":" + String(entry.second);
+        }
+        json += "}}";
+        request->send(200, "application/json", json);
+    });
+
+    server.on("/pmachine/thunks/clear", HTTP_POST, [&machine](AsyncWebServerRequest *request){
+        machine.clearAllThunkBindings();
+        request->send(200, "application/json", "{\"ok\":true,\"message\":\"all thunk bindings cleared\"}");
+    });
+
+    server.on("/pmachine/thunks/clearOne", HTTP_POST, [&machine](AsyncWebServerRequest *request){
+        String symbol;
+        if (!getRequestParam(request, "symbol", symbol)) {
+            request->send(400, "application/json", "{\"ok\":false,\"error\":\"missing symbol\"}");
+            return;
+        }
+        const bool cleared = machine.clearThunkBinding(std::string(trimCopy(symbol).c_str()));
+        request->send(cleared ? 200 : 404, "application/json", cleared
+            ? "{\"ok\":true,\"message\":\"thunk binding cleared\"}"
+            : "{\"ok\":false,\"error\":\"symbol not found\"}");
     });
 
     // PMachine program load (POST, expects raw binary in body, plus ?file= and ?max=)

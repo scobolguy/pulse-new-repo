@@ -1,0 +1,36 @@
+# Auto-generated portable pcode from Pascalish router/mapping DSL
+# Executable routing opcodes for ESP32/JS PMachine parity
+ENTRY:
+JMP ROUTER_0_RISK_CHECK_HTTP
+ROUTER_0_RISK_CHECK_HTTP:
+ROUTE_MATCH_QUEUE "risk_check.in"
+JZ ROUTER_1_LIMITS_CHECK_HTTP
+ROUTE_EVAL_WHEN "output := 1;"
+JZ ROUTER_0_RISK_CHECK_HTTP_OUTPUT_SKIP_0
+ROUTE_TRANSFORM "output := '{\"success\":true,\"replyJson\":\"{\\"stage\\":\\"risk_check\\",\\"node\\":\\"childNode\\"}\"}';"
+ROUTE_EMIT "risk_check.out"
+ROUTER_0_RISK_CHECK_HTTP_OUTPUT_SKIP_0:
+NOP
+JMP ROUTER_1_LIMITS_CHECK_HTTP
+ROUTER_1_LIMITS_CHECK_HTTP:
+ROUTE_MATCH_QUEUE "limits_check.in"
+JZ ORCH_ENTRY
+ROUTE_EVAL_WHEN "output := 1;"
+JZ ROUTER_1_LIMITS_CHECK_HTTP_OUTPUT_SKIP_0
+ROUTE_TRANSFORM "output := '{\"success\":true,\"replyJson\":\"{\\"stage\\":\\"limits_check\\",\\"node\\":\\"childNode\\"}\"}';"
+ROUTE_EMIT "limits_check.out"
+ROUTER_1_LIMITS_CHECK_HTTP_OUTPUT_SKIP_0:
+NOP
+JMP ORCH_ENTRY
+MAPPERS_ENTRY:
+JMP ORCH_ENTRY
+ORCH_ENTRY:
+ORCH_0_DUAL_NODE_ATOMIC_CHECK:
+ORCH_SPAWN "{\"subflowId\":\"risk_check\",\"nodeId\":\"childNode\",\"payloadRef\":\"req\",\"timeoutMs\":5000,\"handleRef\":\"h_node1\"}"
+ORCH_SPAWN "{\"subflowId\":\"limits_check\",\"nodeId\":\"childNode\",\"payloadRef\":\"req\",\"timeoutMs\":5000,\"handleRef\":\"h_node2\"}"
+ORCH_WAIT_ALL "{\"handleRefs\":[\"h_node1\",\"h_node2\"],\"timeoutMs\":8000,\"reason\":\"subtasks timeout or transport error\"}"
+ORCH_FAIL_TXN "subtasks timeout or transport error"
+ORCH_RETURN_SUCCESS "merged_reply"
+JMP FINISH
+FINISH:
+HALT

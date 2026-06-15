@@ -55,6 +55,7 @@ function sanitizeLabel(text) {
 function emitPortableProgram(compiled) {
   const lines = [];
   const entries = [];
+  const orchestrationPrograms = [];
 
   lines.push('# Auto-generated portable pcode from Pascalish router/mapping DSL');
   lines.push('# Executable routing opcodes for ESP32/JS PMachine parity');
@@ -62,6 +63,27 @@ function emitPortableProgram(compiled) {
 
   const routerRules = compiled.routerRules || [];
   const mappings = compiled.dataMappings || [];
+  const blockStatements = Array.isArray(compiled?.ast?.statements) ? compiled.ast.statements : [];
+
+  for (const stmt of blockStatements) {
+    const orch = stmt?.orchestration;
+    if (!orch || typeof orch !== 'object') continue;
+    if (!Array.isArray(orch.asyncSubflows) || orch.asyncSubflows.length === 0) continue;
+
+    orchestrationPrograms.push({
+      programId: String(compiled?.runtimeUnit?.id || compiled?.serviceId || 'program').trim(),
+      asyncSubflows: orch.asyncSubflows.map(item => ({
+        subflowId: String(item?.subflowId || '').trim(),
+        nodeId: String(item?.nodeId || '').trim(),
+        payloadRef: String(item?.payloadRef || '').trim(),
+        timeoutMs: Number(item?.timeoutMs || 0) || 0,
+        handleRef: String(item?.handleRef || '').trim()
+      })),
+      waitAll: orch.waitAll || null,
+      failTransactions: Array.isArray(orch.failTransactions) ? orch.failTransactions : [],
+      returnSuccess: orch.returnSuccess || null
+    });
+  }
 
   // Build lookup: mapperId (and -mini alias) → sourceTypeId
   const mapperSourceType = new Map();
@@ -96,6 +118,8 @@ function emitPortableProgram(compiled) {
 
   if (routerRules.length > 0) {
     lines.push(`JMP ROUTER_0_${sanitizeLabel(routerRules[0].id)}`);
+  } else if (orchestrationPrograms.length > 0) {
+    lines.push('JMP ORCH_ENTRY');
   } else {
     lines.push('JMP FINISH');
   }
@@ -107,7 +131,7 @@ function emitPortableProgram(compiled) {
 
     lines.push(`${label}:`);
     lines.push(`ROUTE_MATCH_QUEUE "${String(r.inputQueue || '').replace(/"/g, '\\"')}"`);
-    lines.push(`JZ ${next ? `ROUTER_${i + 1}_${sanitizeLabel(next.id)}` : 'FINISH'}`);
+    lines.push(`JZ ${next ? `ROUTER_${i + 1}_${sanitizeLabel(next.id)}` : (orchestrationPrograms.length > 0 ? 'ORCH_ENTRY' : 'FINISH')}`);
     if (routerNeedsFinParse(r)) {
       lines.push('PARSE_FIN_TEXT');
     }
@@ -130,6 +154,8 @@ function emitPortableProgram(compiled) {
 
     if (next) {
       lines.push(`JMP ROUTER_${i + 1}_${sanitizeLabel(next.id)}`);
+    } else if (orchestrationPrograms.length > 0) {
+      lines.push('JMP ORCH_ENTRY');
     } else {
       lines.push('JMP FINISH');
     }
@@ -150,7 +176,7 @@ function emitPortableProgram(compiled) {
   }
 
   lines.push('MAPPERS_ENTRY:');
-  lines.push('JMP FINISH');
+  lines.push(`JMP ${orchestrationPrograms.length > 0 ? 'ORCH_ENTRY' : 'FINISH'}`);
 
   for (let i = 0; i < mappings.length; i += 1) {
     const m = mappings[i];
@@ -180,6 +206,49 @@ function emitPortableProgram(compiled) {
     });
   }
 
+  if (orchestrationPrograms.length > 0) {
+    lines.push('ORCH_ENTRY:');
+    for (let i = 0; i < orchestrationPrograms.length; i += 1) {
+      const orch = orchestrationPrograms[i];
+      const orchLabel = `ORCH_${i}_${sanitizeLabel(orch.programId)}`;
+      lines.push(`${orchLabel}:`);
+
+      for (const sf of orch.asyncSubflows) {
+        const payload = {
+          subflowId: sf.subflowId,
+          nodeId: sf.nodeId,
+          payloadRef: sf.payloadRef,
+          timeoutMs: sf.timeoutMs,
+          handleRef: sf.handleRef
+        };
+        lines.push(`ORCH_SPAWN "${JSON.stringify(payload).replace(/"/g, '\\"')}"`);
+      }
+
+      const waitPayload = {
+        handleRefs: Array.isArray(orch?.waitAll?.handleRefs) ? orch.waitAll.handleRefs : [],
+        timeoutMs: Number(orch?.waitAll?.timeoutMs || 0) || 0,
+        reason: String(orch?.waitAll?.onErrorFailTransaction || '').trim()
+      };
+      lines.push(`ORCH_WAIT_ALL "${JSON.stringify(waitPayload).replace(/"/g, '\\"')}"`);
+
+      const failReason = String((orch.failTransactions[0]?.reason) || waitPayload.reason || 'orchestration failed').trim();
+      lines.push(`ORCH_FAIL_TXN "${failReason.replace(/"/g, '\\"')}"`);
+
+      const returnExpr = String(orch?.returnSuccess?.valueExpr || '').trim();
+      lines.push(`ORCH_RETURN_SUCCESS "${returnExpr.replace(/"/g, '\\"')}"`);
+      lines.push('JMP FINISH');
+
+      entries.push({
+        kind: 'orchestration',
+        id: orch.programId,
+        label: orchLabel,
+        asyncSubflowCount: orch.asyncSubflows.length,
+        waitAll: orch.waitAll || null,
+        returnSuccess: orch.returnSuccess || null
+      });
+    }
+  }
+
   lines.push('FINISH:');
   lines.push('HALT');
 
@@ -198,6 +267,8 @@ function emitPortableProgram(compiled) {
       entryLabel: 'ENTRY',
       finishLabel: 'FINISH',
       instructionSubset: ['JMP', 'JZ', 'NOP', 'ROUTE_MATCH_QUEUE', 'ROUTE_EVAL_WHEN', 'ROUTE_TRANSFORM', 'ROUTE_EMIT', 'PARSE_FIN_TEXT', 'HALT'],
+      orchestrationPrograms,
+      instructionSubsetExtended: ['ORCH_SPAWN', 'ORCH_WAIT_ALL', 'ORCH_FAIL_TXN', 'ORCH_RETURN_SUCCESS'],
       entries
     }
   };

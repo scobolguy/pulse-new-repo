@@ -9,7 +9,13 @@ const DEFAULT_POLICY_PROFILES = {
       specializationBenefit: 0.2,
       diversityPenalty: 0.1
     },
-    minSuccessProb: 0.97
+    minSuccessProb: 0.97,
+    opsPenaltyPerReplica: 8,
+    hedge: {
+      enabled: true,
+      delayFactor: 0.7,
+      budgetRatio: 0.05
+    }
   },
   'reliability-first': {
     weights: {
@@ -21,7 +27,13 @@ const DEFAULT_POLICY_PROFILES = {
       specializationBenefit: 0.15,
       diversityPenalty: 0.25
     },
-    minSuccessProb: 0.995
+    minSuccessProb: 0.995,
+    opsPenaltyPerReplica: 3,
+    hedge: {
+      enabled: true,
+      delayFactor: 0.5,
+      budgetRatio: 0.1
+    }
   },
   balanced: {
     weights: {
@@ -33,7 +45,13 @@ const DEFAULT_POLICY_PROFILES = {
       specializationBenefit: 0.2,
       diversityPenalty: 0.15
     },
-    minSuccessProb: 0.985
+    minSuccessProb: 0.985,
+    opsPenaltyPerReplica: 5,
+    hedge: {
+      enabled: true,
+      delayFactor: 0.65,
+      budgetRatio: 0.06
+    }
   },
   'cost-min': {
     weights: {
@@ -45,7 +63,31 @@ const DEFAULT_POLICY_PROFILES = {
       specializationBenefit: 0.2,
       diversityPenalty: 0.1
     },
-    minSuccessProb: 0.96
+    minSuccessProb: 0.96,
+    opsPenaltyPerReplica: 12,
+    hedge: {
+      enabled: false,
+      delayFactor: 0.75,
+      budgetRatio: 0.02
+    }
+  },
+  'http-sync-balanced': {
+    weights: {
+      executionMs: 0.4,
+      queueDelayMs: 0.3,
+      dataMoveCost: 0.08,
+      failureRisk: 0.22,
+      congestionPrice: 0.2,
+      specializationBenefit: 0.2,
+      diversityPenalty: 0.18
+    },
+    minSuccessProb: 0.99,
+    opsPenaltyPerReplica: 6,
+    hedge: {
+      enabled: true,
+      delayFactor: 0.8,
+      budgetRatio: 0.05
+    }
   }
 };
 
@@ -78,8 +120,27 @@ function resolvePolicy(policyId = 'balanced', overrideWeights = null) {
   return {
     id: key,
     minSuccessProb: profile.minSuccessProb,
+    opsPenaltyPerReplica: Math.max(0, toNumber(profile.opsPenaltyPerReplica, 5)),
+    hedge: {
+      enabled: profile.hedge?.enabled !== false,
+      delayFactor: Math.max(0, Math.min(1.5, toNumber(profile.hedge?.delayFactor, 0.65))),
+      budgetRatio: Math.max(0, Math.min(1, toNumber(profile.hedge?.budgetRatio, 0.05)))
+    },
     weights: normalizeWeights(overrideWeights || profile.weights)
   };
+}
+
+function clampProbability(value, fallback) {
+  const raw = toNumber(value, fallback);
+  return Math.max(0, Math.min(0.999999, raw));
+}
+
+function combinedSuccessProbability(entries) {
+  const misses = (Array.isArray(entries) ? entries : []).reduce((acc, entry) => {
+    const p = clampProbability(entry?.successProb, 0);
+    return acc * (1 - p);
+  }, 1);
+  return 1 - misses;
 }
 
 function supportsCapability(candidate, requiredCapability) {
@@ -200,33 +261,102 @@ export function scoreCandidates(job, candidates, options = {}) {
 export function allocateJob(job, candidates, options = {}) {
   const scored = scoreCandidates(job, candidates, options);
   const accepted = scored.candidates.filter((entry) => entry.accepted);
-  const replicaCount = Math.max(1, toNumber(job?.placementPolicy?.minReplicas, 1));
+  const placement = job?.placementPolicy || {};
+  const minReplicas = Math.max(1, toNumber(placement.minReplicas, 1));
+  const maxReplicas = Math.max(minReplicas, toNumber(placement.maxReplicas, minReplicas));
+  const targetSuccessProb = clampProbability(
+    job?.sla?.targetSuccessProb,
+    clampProbability(job?.sla?.minSuccessProb, scored.policy.minSuccessProb)
+  );
+  const opsPenaltyPerReplica = Math.max(0, toNumber(placement.opsPenaltyPerReplica, scored.policy.opsPenaltyPerReplica));
+  const requireDistinctFailureDomain = placement.requireDistinctFailureDomain === true;
+  const targetP95Ms = Math.max(1, toNumber(job?.sla?.targetP95Ms, 0));
 
   const picks = [];
   const usedDomains = new Set();
-  for (const entry of accepted) {
-    const domain = entry.failureDomain || 'default';
-    if (usedDomains.has(domain) && picks.length < replicaCount) {
-      continue;
+
+  const available = [...accepted];
+  while (picks.length < maxReplicas && available.length > 0) {
+    const canUseDistinctDomain = available.some((entry) => !usedDomains.has(entry.failureDomain || 'default'));
+    const candidatePool = (requireDistinctFailureDomain && canUseDistinctDomain)
+      ? available.filter((entry) => !usedDomains.has(entry.failureDomain || 'default'))
+      : available;
+
+    let bestIndex = -1;
+    let bestAdjustedScore = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < available.length; i += 1) {
+      const entry = available[i];
+      if (!candidatePool.includes(entry)) continue;
+      const adjustedScore = entry.score + (picks.length > 0 ? opsPenaltyPerReplica : 0);
+      if (adjustedScore < bestAdjustedScore) {
+        bestAdjustedScore = adjustedScore;
+        bestIndex = i;
+      }
     }
-    picks.push(entry);
+
+    if (bestIndex < 0) break;
+
+    const next = available.splice(bestIndex, 1)[0];
+    const domain = next.failureDomain || 'default';
+    picks.push(next);
     usedDomains.add(domain);
-    if (picks.length >= replicaCount) break;
+
+    const currentCombinedSuccess = combinedSuccessProbability(picks);
+    if (picks.length >= minReplicas && currentCombinedSuccess >= targetSuccessProb) {
+      break;
+    }
   }
 
-  // If domain spread could not satisfy desired replicas, fill from remaining accepted.
-  if (picks.length < replicaCount) {
+  // Backfill to honor minimum replicas even when constraints are hard to satisfy.
+  if (picks.length < minReplicas) {
     for (const entry of accepted) {
       if (picks.some((pick) => pick.id === entry.id)) continue;
       picks.push(entry);
-      if (picks.length >= replicaCount) break;
+      if (picks.length >= minReplicas) break;
     }
   }
 
+  const combinedSuccessProb = combinedSuccessProbability(picks);
+  const distinctDomainCount = new Set(picks.map((entry) => entry.failureDomain || 'default')).size;
+  const distinctDomainConstraintMet = !requireDistinctFailureDomain || distinctDomainCount >= Math.min(picks.length, minReplicas);
+
+  const primary = picks[0] || null;
+  const predictedPrimaryMs = primary
+    ? toNumber(primary.terms?.executionMs, 0) + toNumber(primary.terms?.queueDelayMs, 0)
+    : 0;
+  const hedgeDelayMs = targetP95Ms > 0
+    ? Math.max(1, Math.round(targetP95Ms * scored.policy.hedge.delayFactor))
+    : Math.max(1, Math.round(predictedPrimaryMs * scored.policy.hedge.delayFactor));
+  const hedgeRecommended = Boolean(
+    scored.policy.hedge.enabled
+    && picks.length > 1
+    && targetP95Ms > 0
+    && predictedPrimaryMs > targetP95Ms
+  );
+
   return {
     decision: picks,
-    replicaCount,
-    scored
+    replicaCount: picks.length,
+    scored,
+    constraints: {
+      minReplicas,
+      maxReplicas,
+      targetSuccessProb,
+      combinedSuccessProb,
+      successConstraintMet: combinedSuccessProb >= targetSuccessProb,
+      requireDistinctFailureDomain,
+      distinctDomainCount,
+      distinctDomainConstraintMet,
+      opsPenaltyPerReplica
+    },
+    hedge: {
+      enabled: scored.policy.hedge.enabled,
+      recommended: hedgeRecommended,
+      budgetRatio: scored.policy.hedge.budgetRatio,
+      delayMs: hedgeDelayMs,
+      predictedPrimaryMs,
+      targetP95Ms: targetP95Ms > 0 ? targetP95Ms : null
+    }
   };
 }
 

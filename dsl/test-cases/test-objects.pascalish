@@ -1,0 +1,31 @@
+program TestObjects;
+
+type
+  Animal = object
+    name: string;
+    age: integer;
+    method speak(): string;
+    method getAge(): integer;
+  end;
+
+  Dog = object(Animal)
+    breed: string;
+    method speak(): string;  // Override
+    method bark(): string;
+  end;
+
+var
+  myDog: Dog;
+  result: string;
+
+begin
+  myDog.name := "Buddy";
+  myDog.age := 5;
+  myDog.breed := "Golden Retriever";
+  
+  result := myDog.speak();
+  print(result);
+  
+  result := myDog.bark();
+  print(result);
+end.

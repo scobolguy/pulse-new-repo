@@ -1,0 +1,34 @@
+program TestGateway;
+
+var
+  amount: real;
+  currency: string;
+  message: string;
+  priority: integer;
+  paymentResult: string;
+  notificationResult: string;
+
+begin
+  // Test payment gateway
+  amount := 150.75;
+  currency := "USD";
+  
+  gateway PaymentGateway.processPayment(amount, currency);
+  print("Payment processed");
+  print_nl();
+  
+  // Test notification gateway
+  message := "Payment completed successfully";
+  priority := 1;
+  
+  gateway NotificationGateway.sendAlert(message, priority);
+  print("Notification sent");
+  print_nl();
+  
+  // Test multiple gateway calls
+  gateway PaymentGateway.validateAccount("ACC123456");
+  gateway PaymentGateway.getBalance("ACC123456");
+  
+  print("Gateway tests completed");
+  print_nl();
+end.

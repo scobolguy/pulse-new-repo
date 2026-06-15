@@ -1,0 +1,51 @@
+{
+  "name": "json-parser",
+  "version": "1.2.0",
+  "author": "ESP VM Team",
+  "description": "JSON parsing and manipulation library",
+  "exports": [
+    {
+      "name": "parse",
+      "signature": "(string) -> object",
+      "entryPoint": 0,
+      "paramCount": 1,
+      "returnsValue": true
+    },
+    {
+      "name": "stringify",
+      "signature": "(object) -> string",
+      "entryPoint": 80,
+      "paramCount": 1,
+      "returnsValue": true
+    },
+    {
+      "name": "getValue",
+      "signature": "(string, string) -> string",
+      "entryPoint": 160,
+      "paramCount": 2,
+      "returnsValue": true
+    },
+    {
+      "name": "setValue",
+      "signature": "(string, string, string) -> string",
+      "entryPoint": 240,
+      "paramCount": 3,
+      "returnsValue": true
+    },
+    {
+      "name": "validate",
+      "signature": "(string) -> boolean",
+      "entryPoint": 320,
+      "paramCount": 1,
+      "returnsValue": true
+    }
+  ],
+  "dependencies": [],
+  "pcodeSegments": [
+    {
+      "offset": 0,
+      "length": 400,
+      "checksum": "json789abc012"
+    }
+  ]
+}

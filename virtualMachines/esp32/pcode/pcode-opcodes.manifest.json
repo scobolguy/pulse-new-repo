@@ -38,6 +38,12 @@
     { "name": "OP_GE", "hex": "0x21" },
     { "name": "OP_PRINT", "hex": "0x22" },
     { "name": "OP_PRINT_NL", "hex": "0x23" },
+    { "name": "OP_ROUTE_SET_MESSAGE", "hex": "0x24" },
+    { "name": "OP_ORCH_SPAWN", "hex": "0x25" },
+    { "name": "OP_ORCH_WAIT_ALL", "hex": "0x26" },
+    { "name": "OP_ORCH_FAIL_TXN", "hex": "0x27" },
+    { "name": "OP_ORCH_RETURN_SUCCESS", "hex": "0x28" },
+    { "name": "OP_CALL_EXT", "hex": "0x29" },
     { "name": "OP_HALT", "hex": "0xFF" }
   ]
 }

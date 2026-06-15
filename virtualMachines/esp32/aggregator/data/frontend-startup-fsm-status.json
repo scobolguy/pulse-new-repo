@@ -6,11 +6,12 @@
     "KILL_VITE_PROCESSES",
     "CHECK_BACKEND",
     "START_FRONTEND",
+    "WAIT_FRONTEND",
     "READY"
   ],
   "logs": [
     {
-      "at": "2026-06-06T19:02:57.537Z",
+      "at": "2026-06-09T18:09:24.492Z",
       "event": "workflow-start",
       "data": {
         "fsmId": "frontend-startup-fsm",
@@ -20,14 +21,14 @@
       }
     },
     {
-      "at": "2026-06-06T19:02:57.542Z",
+      "at": "2026-06-09T18:09:24.501Z",
       "event": "state",
       "data": {
         "state": "INIT"
       }
     },
     {
-      "at": "2026-06-06T19:02:58.384Z",
+      "at": "2026-06-09T18:09:25.277Z",
       "event": "subflow-complete",
       "data": {
         "state": "KILL_VITE_PROCESSES",
@@ -38,7 +39,7 @@
       }
     },
     {
-      "at": "2026-06-06T19:02:58.465Z",
+      "at": "2026-06-09T18:09:25.354Z",
       "event": "state",
       "data": {
         "state": "CHECK_BACKEND",
@@ -47,33 +48,25 @@
       }
     },
     {
-      "at": "2026-06-06T19:02:58.509Z",
-      "event": "port-occupied",
+      "at": "2026-06-09T18:09:25.389Z",
+      "event": "frontend-started",
       "data": {
-        "state": "START_FRONTEND",
-        "port": 5173,
-        "occupiedBy": [
-          38676,
-          20304
-        ],
         "command": "node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173 --strictPort --force",
-        "alreadyReady": true
+        "pid": 26728,
+        "attempt": 1
       }
     },
     {
-      "at": "2026-06-06T19:02:58.512Z",
-      "event": "frontend-already-running",
+      "at": "2026-06-09T18:09:27.986Z",
+      "event": "frontend-ready",
       "data": {
-        "state": "START_FRONTEND",
         "frontendUrl": "http://127.0.0.1:5173/",
-        "occupiedBy": [
-          38676,
-          20304
-        ]
+        "timeoutMs": 30000,
+        "attempt": 1
       }
     },
     {
-      "at": "2026-06-06T19:02:58.515Z",
+      "at": "2026-06-09T18:09:27.991Z",
       "event": "complete",
       "data": {
         "ok": true,
@@ -84,6 +77,7 @@
           "KILL_VITE_PROCESSES",
           "CHECK_BACKEND",
           "START_FRONTEND",
+          "WAIT_FRONTEND",
           "READY"
         ],
         "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
@@ -92,7 +86,7 @@
       }
     }
   ],
-  "updatedAt": "2026-06-06T19:02:58.519Z",
+  "updatedAt": "2026-06-09T18:09:27.996Z",
   "error": null,
   "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
   "frontendUrl": "http://127.0.0.1:5173/",
@@ -103,7 +97,7 @@
       "required": true,
       "url": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
       "ok": true,
-      "checkedAt": "2026-06-06T19:02:58.462Z"
+      "checkedAt": "2026-06-09T18:09:25.352Z"
     }
   }
 }

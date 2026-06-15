@@ -1,0 +1,72 @@
+{
+  "name": "math-extended",
+  "version": "2.0.0",
+  "author": "ESP VM Team",
+  "description": "Extended mathematical functions including trigonometry and advanced operations",
+  "exports": [
+    {
+      "name": "sin",
+      "signature": "(real) -> real",
+      "entryPoint": 0,
+      "paramCount": 1,
+      "returnsValue": true
+    },
+    {
+      "name": "cos",
+      "signature": "(real) -> real",
+      "entryPoint": 30,
+      "paramCount": 1,
+      "returnsValue": true
+    },
+    {
+      "name": "tan",
+      "signature": "(real) -> real",
+      "entryPoint": 60,
+      "paramCount": 1,
+      "returnsValue": true
+    },
+    {
+      "name": "sqrt",
+      "signature": "(real) -> real",
+      "entryPoint": 90,
+      "paramCount": 1,
+      "returnsValue": true
+    },
+    {
+      "name": "power",
+      "signature": "(real, real) -> real",
+      "entryPoint": 120,
+      "paramCount": 2,
+      "returnsValue": true
+    },
+    {
+      "name": "log",
+      "signature": "(real) -> real",
+      "entryPoint": 150,
+      "paramCount": 1,
+      "returnsValue": true
+    },
+    {
+      "name": "exp",
+      "signature": "(real) -> real",
+      "entryPoint": 180,
+      "paramCount": 1,
+      "returnsValue": true
+    },
+    {
+      "name": "abs",
+      "signature": "(real) -> real",
+      "entryPoint": 210,
+      "paramCount": 1,
+      "returnsValue": true
+    }
+  ],
+  "dependencies": [],
+  "pcodeSegments": [
+    {
+      "offset": 0,
+      "length": 250,
+      "checksum": "math456xyz789"
+    }
+  ]
+}

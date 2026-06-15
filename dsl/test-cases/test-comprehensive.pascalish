@@ -1,0 +1,111 @@
+program TestComprehensive;
+
+// Test all new features together
+
+library "crypto-utils" from librarian;
+
+type
+  Transaction = object
+    id: string;
+    amount: real;
+    status: string;
+    method processTransaction(): boolean;
+    method validate(): boolean;
+  end;
+
+var
+  tx: Transaction;
+  mutex: semaphore;
+  result: boolean;
+  hash: string;
+  counter: integer;
+
+procedure validateAndProcess();
+begin
+  wait(mutex);
+  
+  // Validate transaction
+  result := tx.validate();
+  
+  if result then
+  begin
+    // Process via gateway
+    gateway PaymentGateway.processPayment(tx.amount, "USD");
+    
+    // Generate hash using library
+    hash := crypto_utils.sha256(tx.id);
+    
+    // Update status
+    tx.status := "COMPLETED";
+    
+    print("Transaction processed: ");
+    print(tx.id);
+    print_nl();
+  end
+  else
+  begin
+    tx.status := "FAILED";
+    print("Transaction validation failed");
+    print_nl();
+  end;
+  
+  signal(mutex);
+end;
+
+procedure logTransaction();
+begin
+  wait(mutex);
+  
+  print("Logging transaction: ");
+  print(tx.id);
+  print(" - Status: ");
+  print(tx.status);
+  print_nl();
+  
+  signal(mutex);
+end;
+
+procedure updateCounter();
+var
+  i: integer;
+begin
+  for i := 1 to 10 do
+  begin
+    wait(mutex);
+    counter := counter + 1;
+    signal(mutex);
+  end;
+end;
+
+begin
+  // Initialize
+  counter := 0;
+  seminit(mutex, 1);
+  
+  // Setup transaction
+  tx.id := "TXN-12345";
+  tx.amount := 250.50;
+  tx.status := "PENDING";
+  
+  print("Starting comprehensive test...");
+  print_nl();
+  
+  // Execute concurrent operations
+  cobegin
+    validateAndProcess();
+    logTransaction();
+    updateCounter();
+  coend;
+  
+  // Print final results
+  print("Final counter value: ");
+  print(counter);
+  print_nl();
+  
+  print("Transaction hash: ");
+  print(hash);
+  print_nl();
+  
+  print("Test completed successfully");
+  print_nl();
+end.

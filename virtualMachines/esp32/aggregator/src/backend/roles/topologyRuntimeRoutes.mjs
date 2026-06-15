@@ -155,6 +155,60 @@ function dedupeServiceAdvertisements(services) {
   return out;
 }
 
+function normalizeDeviceNodeKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizeDeviceAdvertisement(device, fallbackNodeKey = '') {
+  if (device == null) return null;
+  if (typeof device === 'string') {
+    const name = String(device || '').trim();
+    const sourceNodeKey = normalizeDeviceNodeKey(fallbackNodeKey);
+    return name ? { name, ...(sourceNodeKey ? { sourceNodeKey } : {}) } : null;
+  }
+  if (typeof device === 'object') {
+    const name = String(device.name || device.deviceName || device.id || '').trim();
+    if (!name) return null;
+    const sourceNodeKey = normalizeDeviceNodeKey(
+      device.sourceNodeKey
+      || device.nodeKey
+      || device.nodeId
+      || device.nodeName
+      || device.ip
+      || fallbackNodeKey
+    );
+    return {
+      ...device,
+      name,
+      ...(sourceNodeKey ? { sourceNodeKey } : {})
+    };
+  }
+  return null;
+}
+
+function getDeviceAdvertisementKey(device) {
+  const normalized = normalizeDeviceAdvertisement(device);
+  if (!normalized) return null;
+  const nameKey = String(normalized.name || normalized.deviceName || normalized.id || '').trim().toLowerCase();
+  const nodeKey = normalizeDeviceNodeKey(normalized.sourceNodeKey || normalized.nodeKey || normalized.nodeId || normalized.nodeName || normalized.ip);
+  if (!nameKey) return null;
+  return `${nodeKey || 'global'}::${nameKey}`;
+}
+
+function dedupeDeviceAdvertisements(devices, fallbackNodeKey = '') {
+  const out = [];
+  const seen = new Set();
+  for (const device of Array.isArray(devices) ? devices : []) {
+    const normalized = normalizeDeviceAdvertisement(device, fallbackNodeKey);
+    if (!normalized) continue;
+    const key = getDeviceAdvertisementKey(normalized);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(normalized);
+  }
+  return out;
+}
+
 export function registerTopologyRuntimeRoutes(app, deps) {
   const {
     discoveredNodes,
@@ -388,6 +442,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     }
 
     const memoServices = new Map();
+    const memoDevices = new Map();
     const collectAdvertisedServices = (nodeKey, visiting = new Set()) => {
       if (!nodeKey) return [];
       if (memoServices.has(nodeKey)) return memoServices.get(nodeKey);
@@ -411,16 +466,43 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       return deduped;
     };
 
+    const collectAdvertisedDevices = (nodeKey, visiting = new Set()) => {
+      if (!nodeKey) return [];
+      if (memoDevices.has(nodeKey)) return memoDevices.get(nodeKey);
+      if (visiting.has(nodeKey)) return [];
+
+      const node = byNodeKey.get(nodeKey);
+      if (!node) return [];
+
+      visiting.add(nodeKey);
+      const ownDevices = dedupeDeviceAdvertisements(node?.details?.devices || [], nodeKey);
+      let combined = [...ownDevices];
+
+      const childNodeIds = Array.isArray(node?.topology?.childNodeIds) ? node.topology.childNodeIds : [];
+      for (const childKey of childNodeIds) {
+        combined = combined.concat(collectAdvertisedDevices(String(childKey || '').trim(), visiting));
+      }
+
+      visiting.delete(nodeKey);
+      const deduped = dedupeDeviceAdvertisements(combined);
+      memoDevices.set(nodeKey, deduped);
+      return deduped;
+    };
+
     return withChildren.map((node) => {
       const nodeKey = String(node?.topology?.nodeKey || '').trim();
       const localServices = dedupeServiceAdvertisements(node?.details?.services || []);
       const advertisedServices = collectAdvertisedServices(nodeKey);
+      const localDevices = dedupeDeviceAdvertisements(node?.details?.devices || [], nodeKey);
+      const advertisedDevices = collectAdvertisedDevices(nodeKey);
       return {
         ...node,
         details: {
           ...(node?.details || {}),
           localServices,
-          services: advertisedServices
+          services: advertisedServices,
+          localDevices,
+          devices: advertisedDevices
         }
       };
     });

@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "compiledAt": "2026-06-08T21:21:50.727Z",
+  "serviceId": "LifeMeaning",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "LifeMeaning",
+    "refreshMs": null
+  },
+  "ast": {
+    "type": "Program",
+    "serviceId": "LifeMeaning",
+    "runtimeUnit": {
+      "kind": "program",
+      "id": "LifeMeaning",
+      "refreshMs": null
+    },
+    "roles": [],
+    "variables": [],
+    "routers": [
+      {
+        "type": "RouterDecl",
+        "id": "lifemeaning-route",
+        "inputQueue": "lifemeaning.in",
+        "description": "Returns the meaning of life",
+        "enabled": true,
+        "serviceId": null,
+        "methods": null,
+        "outputs": [
+          {
+            "type": "OutputDecl",
+            "queueName": "lifemeaning.out",
+            "dataType": null,
+            "dataTypes": null,
+            "dataTypeId": null,
+            "dataTypeIds": null,
+            "whenRule": "output := 1;",
+            "transformRule": "output := '42';"
+          }
+        ]
+      }
+    ],
+    "mappers": [],
+    "codeLibraries": [],
+    "uses": [],
+    "interop": [],
+    "statements": [],
+    "programId": "LifeMeaning",
+    "daemonId": null,
+    "daemonRefreshMs": null
+  },
+  "roles": [],
+  "codeLibraries": [],
+  "uses": [],
+  "interoperability": [],
+  "variableDeclarations": [],
+  "routerRules": [
+    {
+      "id": "lifemeaning-route",
+      "name": "lifemeaning-route",
+      "serviceId": "LifeMeaning",
+      "enabled": true,
+      "inputQueue": "lifemeaning.in",
+      "description": "Returns the meaning of life",
+      "outputs": [
+        {
+          "queueName": "lifemeaning.out",
+          "whenRule": "output := 1;",
+          "transformRule": "output := '42';"
+        }
+      ],
+      "createdAt": "2026-06-08T21:21:50.727Z",
+      "updatedAt": "2026-06-08T21:21:50.727Z"
+    }
+  ],
+  "dataMappings": []
+}

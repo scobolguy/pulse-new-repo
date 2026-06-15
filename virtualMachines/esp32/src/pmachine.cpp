@@ -395,6 +395,42 @@ namespace {
         return true;
     }
 
+    bool parseOrchestrationSpawnOperand(const std::string& operand, pmachine::OrchestrationSpawnRequest& outReq, std::string& outError) {
+        JsonDocument doc;
+        DeserializationError err = deserializeJson(doc, operand.c_str());
+        if (err) {
+            outError = std::string("invalid ORCH_SPAWN payload: ") + err.c_str();
+            return false;
+        }
+
+        JsonObject obj = doc.as<JsonObject>();
+        outReq.subflowId = std::string(obj["subflowId"] | "");
+        outReq.nodeId = std::string(obj["nodeId"] | "");
+        outReq.payloadRef = std::string(obj["payloadRef"] | "");
+        outReq.timeoutMs = static_cast<uint32_t>(obj["timeoutMs"] | 0);
+        outReq.handleRef = std::string(obj["handleRef"] | "");
+
+        if (outReq.subflowId.empty()) {
+            outError = "ORCH_SPAWN missing subflowId";
+            return false;
+        }
+        return true;
+    }
+
+    bool parseOrchestrationWaitOperand(const std::string& operand, uint32_t& outTimeoutMs, std::string& outReason, std::string& outError) {
+        JsonDocument doc;
+        DeserializationError err = deserializeJson(doc, operand.c_str());
+        if (err) {
+            outError = std::string("invalid ORCH_WAIT_ALL payload: ") + err.c_str();
+            return false;
+        }
+
+        JsonObject obj = doc.as<JsonObject>();
+        outTimeoutMs = static_cast<uint32_t>(obj["timeoutMs"] | 0);
+        outReason = std::string(obj["reason"] | "");
+        return true;
+    }
+
     std::string applyTransformRuleText(const PMachine& vm, const std::string& transformRule, const std::string& message) {
         const std::string rule = trimCopy(transformRule);
         if (rule.empty()) return message;
@@ -554,6 +590,83 @@ void PMachine::setProcedureSignatures(const std::map<std::string, std::vector<st
 void PMachine::clearProcedureSignatures() {
     procedureParamsByLabel.clear();
 }
+void PMachine::setOrchestrationWaitHook(OrchestrationWaitHook hook, void* context) {
+    orchestrationWaitHook = hook;
+    orchestrationHookContext = context;
+}
+void PMachine::setThunkResolverHook(ThunkResolveHook hook, void* context) {
+    thunkResolveHook = hook;
+    thunkResolverContext = context;
+}
+void PMachine::setThunkBinding(const std::string& symbol, int targetPc) {
+    const std::string key = trimCopy(symbol);
+    if (key.empty()) return;
+    thunkBindings[key] = targetPc;
+}
+bool PMachine::clearThunkBinding(const std::string& symbol) {
+    const std::string key = trimCopy(symbol);
+    if (key.empty()) return false;
+    auto it = thunkBindings.find(key);
+    if (it == thunkBindings.end()) return false;
+    thunkBindings.erase(it);
+    return true;
+}
+void PMachine::clearAllThunkBindings() {
+    thunkBindings.clear();
+}
+std::map<std::string, int> PMachine::getThunkBindings() const {
+    return thunkBindings;
+}
+std::string PMachine::getImageMemoryMapJson() const {
+    JsonDocument doc;
+    doc["backingFile"] = backingFile;
+    doc["runtimeUnitId"] = runtimeUnit.id;
+    doc["runtimeUnitResident"] = runtimeUnit.resident;
+    doc["numPages"] = numPages;
+    doc["pageSizeBytes"] = static_cast<uint32_t>(pagingConfig.pageSizeBytes);
+    doc["maxFrames"] = static_cast<uint32_t>(pagingConfig.maxFrames);
+    doc["programImageBytes"] = static_cast<uint32_t>(programImage.size());
+
+    JsonObject pagingStatsObj = doc["pagingStats"].to<JsonObject>();
+    pagingStatsObj["pageFaults"] = pagingStats.pageFaults;
+    pagingStatsObj["evictions"] = pagingStats.evictions;
+    pagingStatsObj["ffsReads"] = pagingStats.ffsReads;
+    pagingStatsObj["cacheHits"] = pagingStats.cacheHits;
+
+    JsonArray mapArray = doc["memoryMap"].to<JsonArray>();
+    for (const auto& entry : memoryMap) {
+        JsonObject item = mapArray.add<JsonObject>();
+        item["vpage"] = entry.first;
+        item["frame"] = entry.second;
+    }
+
+    JsonArray pageTableArray = doc["pageTable"].to<JsonArray>();
+    for (size_t i = 0; i < pageTable.size(); ++i) {
+        JsonObject item = pageTableArray.add<JsonObject>();
+        item["vpage"] = static_cast<uint32_t>(i);
+        item["present"] = pageTable[i].present;
+        item["frameIndex"] = pageTable[i].frameIndex;
+    }
+
+    JsonArray framesArray = doc["frames"].to<JsonArray>();
+    for (size_t i = 0; i < frames.size(); ++i) {
+        JsonObject item = framesArray.add<JsonObject>();
+        item["frameIndex"] = static_cast<uint32_t>(i);
+        item["used"] = frames[i].used;
+        item["pinned"] = frames[i].pinned;
+        item["vpage"] = frames[i].vpage;
+        item["lastAccessTick"] = frames[i].lastAccessTick;
+    }
+
+    JsonObject thunkObj = doc["thunks"].to<JsonObject>();
+    for (const auto& it : thunkBindings) {
+        thunkObj[it.first.c_str()] = it.second;
+    }
+
+    std::string out;
+    serializeJson(doc, out);
+    return out;
+}
 const MappingDef* PMachine::getMappingById(const std::string& mappingId) const {
     auto it = mappingDefs.find(mappingId);
     if (it == mappingDefs.end()) return nullptr;
@@ -603,6 +716,8 @@ Status PMachine::getStatus() const {
     s.pagingConfig = pagingConfig;
     s.pagingStats = pagingStats;
     s.residentAssets = residentAssets;
+    s.memoryMap = memoryMap;
+    s.thunkBindings = thunkBindings;
     return s;
 }
 
@@ -916,7 +1031,9 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
             instr.type = pmachine::OperandType::INT;
         } else if (opcode == pmachine::OP_ROUTE_MATCH_QUEUE || opcode == pmachine::OP_ROUTE_EVAL_WHEN ||
                opcode == pmachine::OP_ROUTE_TRANSFORM || opcode == pmachine::OP_ROUTE_EMIT ||
-                   opcode == pmachine::OP_ROUTE_SET_STATE) {
+                   opcode == pmachine::OP_ROUTE_SET_STATE || opcode == pmachine::OP_ORCH_SPAWN ||
+                   opcode == pmachine::OP_ORCH_WAIT_ALL || opcode == pmachine::OP_ORCH_FAIL_TXN ||
+                   opcode == pmachine::OP_ORCH_RETURN_SUCCESS) {
             std::string rest2;
             std::getline(lss, rest2);
             size_t q1 = rest2.find('"');
@@ -943,6 +1060,22 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
             instr.value = argc;
             instr.type = pmachine::OperandType::INT;
             unresolvedJumps.push_back({instructions.size(), targetLabel});
+        } else if (opcode == pmachine::OP_CALL_EXT) {
+            std::string rest2;
+            std::getline(lss, rest2);
+            size_t q1 = rest2.find('"');
+            size_t q2 = rest2.find('"', q1 + 1);
+            if (q1 != std::string::npos && q2 != std::string::npos && q2 > q1) {
+                instr.strOperand = rest2.substr(q1 + 1, q2 - q1 - 1);
+                std::string tail = trimCopy(rest2.substr(q2 + 1));
+                if (!tail.empty()) {
+                    std::istringstream tailStream(tail);
+                    int argc = 0;
+                    tailStream >> argc;
+                    instr.value = argc;
+                }
+                instr.type = pmachine::OperandType::STRING;
+            }
         } else if (opcode == pmachine::OP_ADD || opcode == pmachine::OP_SUB || opcode == pmachine::OP_MUL || opcode == pmachine::OP_DIV) {
             instr.type = pmachine::OperandType::NONE;
         } else if (opcode == pmachine::OP_EQ || opcode == pmachine::OP_NEQ || opcode == pmachine::OP_LT ||
@@ -984,6 +1117,13 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
     std::vector<NameCallFrame> nameCallStack;
     std::string currentOutputLine;
     std::vector<std::string> outputLines;
+    std::vector<OrchestrationSpawnRequest> pendingOrchTasks;
+    bool lastOrchWaitSuccess = false;
+    
+    // Declare variables before lambdas that use them
+    int sp = 0;
+    int bp = 0;
+    int pc = 0;
 
     auto resolveName = [&](const std::string& key) -> int {
         for (auto it = nameFrames.rbegin(); it != nameFrames.rend(); ++it) {
@@ -1005,9 +1145,41 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
         nameFrames.back()[key] = value;
     };
 
-    int sp = 0;
-    int bp = 0;
-    int pc = 0;
+    auto invokeCallFrame = [&](int targetPc, const std::string& lookupLabel, int argc) -> bool {
+        if (targetPc < 0 || targetPc >= static_cast<int>(instructions.size())) {
+            return false;
+        }
+
+        std::vector<int> args;
+        args.reserve(static_cast<size_t>(argc > 0 ? argc : 0));
+        for (int i = 0; i < argc && sp > 0; ++i) {
+            args.push_back(stack[--sp]);
+        }
+        std::reverse(args.begin(), args.end());
+
+        std::map<std::string, int> frameVars;
+        auto sigIt = procedureParamsByLabel.find(lookupLabel);
+        if (sigIt != procedureParamsByLabel.end()) {
+            const std::vector<std::string>& names = sigIt->second;
+            for (size_t i = 0; i < names.size(); ++i) {
+                const int value = (i < args.size()) ? args[i] : 0;
+                frameVars[names[i]] = value;
+            }
+        } else {
+            for (size_t i = 0; i < args.size(); ++i) {
+                frameVars[std::string("p") + std::to_string(i)] = args[i];
+            }
+        }
+
+        NameCallFrame frame;
+        frame.returnPc = pc + 1;
+        frame.envDepth = nameFrames.size();
+        nameCallStack.push_back(frame);
+        nameFrames.push_back(frameVars);
+        pc = targetPc;
+        return true;
+    };
+
     size_t steps = 0;
     gFlowState.clear();
     lastRunStepLimitHit = false;
@@ -1100,34 +1272,45 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             continue;
         }
         if (instr.opcode == OP_CALL_LABEL) {
-            const int argc = instr.value;
-            std::vector<int> args;
-            args.reserve(static_cast<size_t>(argc > 0 ? argc : 0));
-            for (int i = 0; i < argc && sp > 0; ++i) {
-                args.push_back(stack[--sp]);
+            if (!invokeCallFrame(instr.intOperand, instr.label, instr.value)) {
+                gFlowState["__thunk_error"] = "invalid local call target";
+                break;
             }
-            std::reverse(args.begin(), args.end());
+            continue;
+        }
+        if (instr.opcode == OP_CALL_EXT) {
+            const std::string symbol = trimCopy(instr.strOperand);
+            if (symbol.empty()) {
+                gFlowState["__thunk_error"] = "empty external symbol";
+                break;
+            }
 
-            std::map<std::string, int> frameVars;
-            auto sigIt = procedureParamsByLabel.find(instr.label);
-            if (sigIt != procedureParamsByLabel.end()) {
-                const std::vector<std::string>& names = sigIt->second;
-                for (size_t i = 0; i < names.size(); ++i) {
-                    const int value = (i < args.size()) ? args[i] : 0;
-                    frameVars[names[i]] = value;
-                }
+            int targetPc = -1;
+            auto cached = thunkBindings.find(symbol);
+            if (cached != thunkBindings.end()) {
+                targetPc = cached->second;
             } else {
-                for (size_t i = 0; i < args.size(); ++i) {
-                    frameVars[std::string("p") + std::to_string(i)] = args[i];
+                std::string resolveError;
+                bool resolved = false;
+                if (thunkResolveHook != nullptr) {
+                    resolved = thunkResolveHook(symbol, targetPc, resolveError, thunkResolverContext);
+                } else {
+                    resolveError = "thunk resolver not configured";
                 }
+
+                if (!resolved || targetPc < 0 || targetPc >= static_cast<int>(instructions.size())) {
+                    gFlowState["__thunk_error"] = resolveError.empty()
+                        ? std::string("failed to resolve external symbol: ") + symbol
+                        : resolveError;
+                    break;
+                }
+                thunkBindings[symbol] = targetPc;
             }
 
-            NameCallFrame frame;
-            frame.returnPc = pc + 1;
-            frame.envDepth = nameFrames.size();
-            nameCallStack.push_back(frame);
-            nameFrames.push_back(frameVars);
-            pc = instr.intOperand;
+            if (!invokeCallFrame(targetPc, symbol, instr.value)) {
+                gFlowState["__thunk_error"] = std::string("invalid resolved thunk target for symbol: ") + symbol;
+                break;
+            }
             continue;
         }
         if (instr.opcode == OP_RET) {
@@ -1232,6 +1415,88 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             std::string asJson;
             serializeJson(parsed, asJson);
             currentMessage = asJson;
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_ORCH_SPAWN) {
+            OrchestrationSpawnRequest req;
+            std::string parseError;
+            if (parseOrchestrationSpawnOperand(instr.strOperand, req, parseError)) {
+                pendingOrchTasks.push_back(req);
+            } else {
+                gFlowState["__orch_error"] = parseError;
+                lastOrchWaitSuccess = false;
+            }
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_ORCH_WAIT_ALL) {
+            uint32_t waitTimeoutMs = 0;
+            std::string waitReason;
+            std::string waitParseError;
+            if (!parseOrchestrationWaitOperand(instr.strOperand, waitTimeoutMs, waitReason, waitParseError)) {
+                lastOrchWaitSuccess = false;
+                stack[sp++] = 0;
+                gFlowState["__orch_error"] = waitParseError;
+                ++pc;
+                continue;
+            }
+
+            std::vector<OrchestrationTaskResult> waitResults;
+            std::string waitError;
+            bool waitTransportOk = false;
+            if (orchestrationWaitHook != nullptr) {
+                waitTransportOk = orchestrationWaitHook(
+                    pendingOrchTasks,
+                    waitTimeoutMs,
+                    waitResults,
+                    waitError,
+                    orchestrationHookContext
+                );
+            } else {
+                waitError = "native orchestration transport not configured";
+            }
+
+            bool allSubflowsSucceeded = waitTransportOk;
+            if (waitTransportOk) {
+                for (const auto& result : waitResults) {
+                    if (!result.success) {
+                        allSubflowsSucceeded = false;
+                        break;
+                    }
+                }
+            }
+
+            lastOrchWaitSuccess = waitTransportOk && allSubflowsSucceeded;
+            stack[sp++] = lastOrchWaitSuccess ? 1 : 0;
+            gFlowState["__orch_wait_reason"] = waitReason;
+            gFlowState["__orch_task_count"] = std::to_string(static_cast<int>(pendingOrchTasks.size()));
+            gFlowState["__orch_result_count"] = std::to_string(static_cast<int>(waitResults.size()));
+
+            if (!waitTransportOk) {
+                gFlowState["__orch_error"] = waitError.empty() ? std::string("native orchestration wait failed") : waitError;
+            } else if (!allSubflowsSucceeded) {
+                gFlowState["__orch_error"] = "one or more orchestration subflows failed";
+            } else {
+                gFlowState.erase("__orch_error");
+            }
+
+            pendingOrchTasks.clear();
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_ORCH_FAIL_TXN) {
+            if (!lastOrchWaitSuccess) {
+                gFlowState["__orch_error"] = instr.strOperand.empty()
+                    ? std::string("orchestration failed")
+                    : instr.strOperand;
+                break;
+            }
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_ORCH_RETURN_SUCCESS) {
+            // Placeholder until native orchestration transport + payload merge is implemented.
             ++pc;
             continue;
         }
