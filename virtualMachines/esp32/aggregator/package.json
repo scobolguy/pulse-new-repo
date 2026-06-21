@@ -46,6 +46,7 @@
   "dependencies": {
     "amqplib": "^0.10.4",
     "antlr4": "^4.13.2",
+    "axios": "^1.18.0",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "fast-xml-parser": "^5.8.0",
