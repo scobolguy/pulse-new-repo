@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pascal Code Editor - ESP32 Power Apps Integration</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: #1e1e1e;
+      color: #d4d4d4;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .header {
+      background: #2d2d30;
+      padding: 12px 20px;
+      border-bottom: 1px solid #3e3e42;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .header h1 {
+      font-size: 18px;
+      font-weight: 500;
+      color: #cccccc;
+    }
+    
+    .header-actions {
+      display: flex;
+      gap: 10px;
+    }
+    
+    .btn {
+      padding: 6px 16px;
+      border: none;
+      border-radius: 4px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-weight: 500;
+    }
+    
+    .btn-primary {
+      background: #0e639c;
+      color: white;
+    }
+    
+    .btn-primary:hover {
+      background: #1177bb;
+    }
+    
+    .btn-secondary {
+      background: #3e3e42;
+      color: #cccccc;
+    }
+    
+    .btn-secondary:hover {
+      background: #505050;
+    }
+    
+    .btn-success {
+      background: #0e7d0e;
+      color: white;
+    }
+    
+    .btn-success:hover {
+      background: #0f9d0f;
+    }
+    
+    .container {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+    
+    .sidebar {
+      width: 250px;
+      background: #252526;
+      border-right: 1px solid #3e3e42;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+    }
+    
+    .sidebar-section {
+      padding: 12px;
+      border-bottom: 1px solid #3e3e42;
+    }
+    
+    .sidebar-section h3 {
+      font-size: 11px;
+      text-transform: uppercase;
+      color: #858585;
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+    
+    .example-item {
+      padding: 8px;
+      margin: 2px 0;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+      transition: background 0.2s;
+    }
+    
+    .example-item:hover {
+      background: #2a2d2e;
+    }
+    
+    .example-item.active {
+      background: #094771;
+    }
+    
+    .symbol-item {
+      padding: 6px 8px;
+      margin: 2px 0;
+      border-radius: 3px;
+      font-size: 12px;
+      font-family: 'Consolas', 'Monaco', monospace;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    
+    .symbol-icon {
+      width: 16px;
+      height: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: bold;
+      border-radius: 2px;
+    }
+    
+    .symbol-icon.program { background: #4ec9b0; color: #000; }
+    .symbol-icon.variable { background: #9cdcfe; color: #000; }
+    .symbol-icon.procedure { background: #dcdcaa; color: #000; }
+    .symbol-icon.function { background: #dcdcaa; color: #000; }
+    
+    .editor-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    #editor {
+      flex: 1;
+    }
+    
+    .output-panel {
+      height: 200px;
+      background: #1e1e1e;
+      border-top: 1px solid #3e3e42;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .output-tabs {
+      display: flex;
+      background: #2d2d30;
+      border-bottom: 1px solid #3e3e42;
+    }
+    
+    .output-tab {
+      padding: 8px 16px;
+      font-size: 13px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s;
+    }
+    
+    .output-tab:hover {
+      background: #3e3e42;
+    }
+    
+    .output-tab.active {
+      border-bottom-color: #0e639c;
+      color: #ffffff;
+    }
+    
+    .output-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    
+    .output-content pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    
+    .error-message {
+      color: #f48771;
+      padding: 8px;
+      background: #3f1f1f;
+      border-left: 3px solid #f48771;
+      margin: 4px 0;
+      border-radius: 3px;
+    }
+    
+    .success-message {
+      color: #89d185;
+      padding: 8px;
+      background: #1f3f1f;
+      border-left: 3px solid #89d185;
+      margin: 4px 0;
+      border-radius: 3px;
+    }
+    
+    .status-bar {
+      background: #007acc;
+      color: white;
+      padding: 4px 12px;
+      font-size: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .loading {
+      opacity: 0.6;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🔧 Pascal Code Editor</h1>
+    <div class="header-actions">
+      <button class="btn btn-secondary" onclick="validateCode()">Validate</button>
+      <button class="btn btn-primary" onclick="compileCode()">Compile</button>
+      <button class="btn btn-success" onclick="saveToNode()">Save to Node</button>
+    </div>
+  </div>
+  
+  <div class="container">
+    <div class="sidebar">
+      <div class="sidebar-section">
+        <h3>Examples</h3>
+        <div id="examples-list"></div>
+      </div>
+      <div class="sidebar-section">
+        <h3>Symbols</h3>
+        <div id="symbols-list"></div>
+      </div>
+    </div>
+    
+    <div class="editor-container">
+      <div id="editor"></div>
+      
+      <div class="output-panel">
+        <div class="output-tabs">
+          <div class="output-tab active" data-tab="output" onclick="switchTab('output')">Output</div>
+          <div class="output-tab" data-tab="pcode" onclick="switchTab('pcode')">P-Code</div>
+          <div class="output-tab" data-tab="errors" onclick="switchTab('errors')">Errors</div>
+        </div>
+        <div class="output-content" id="output-content">
+          <pre>Ready. Load an example or start typing...</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <div class="status-bar">
+    <span id="status-text">Ready</span>
+    <span id="status-info">Pascal | UTF-8</span>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
+  <script>
+    let editor;
+    let currentTab = 'output';
+    let lastCompileResult = null;
+    
+    // Initialize Monaco Editor
+    require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' }});
+    
+    require(['vs/editor/editor.main'], function() {
+      // Register Pascal language
+      monaco.languages.register({ id: 'pascal' });
+      
+      // Set Pascal syntax highlighting
+      monaco.languages.setMonarchTokensProvider('pascal', {
+        keywords: [
+          'program', 'begin', 'end', 'var', 'const', 'type',
+          'procedure', 'function', 'if', 'then', 'else',
+          'while', 'do', 'for', 'to', 'downto', 'repeat', 'until',
+          'case', 'of', 'array', 'record', 'integer', 'boolean', 'real',
+          'true', 'false', 'and', 'or', 'not', 'div', 'mod',
+          'spawn', 'send', 'receive', 'writeln', 'readln'
+        ],
+        
+        tokenizer: {
+          root: [
+            [/[a-zA-Z_]\w*/, {
+              cases: {
+                '@keywords': 'keyword',
+                '@default': 'identifier'
+              }
+            }],
+            [/[0-9]+/, 'number'],
+            [/'[^']*'/, 'string'],
+            [/\{[^}]*\}/, 'comment'],
+            [/\(\*[\s\S]*?\*\)/, 'comment'],
+            [/\/\/.*$/, 'comment'],
+          ]
+        }
+      });
+      
+      // Configure autocomplete
+      monaco.languages.registerCompletionItemProvider('pascal', {
+        provideCompletionItems: async function(model, position) {
+          const source = model.getValue();
+          
+          try {
+            const response = await fetch('/api/pascal/complete', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                source,
+                position: { line: position.lineNumber, column: position.column }
+              })
+            });
+            
+            const result = await response.json();
+            
+            if (result.status === 'ok' && result.completions) {
+              return {
+                suggestions: result.completions.map(c => ({
+                  label: c.label,
+                  kind: getMonacoKind(c.kind),
+                  detail: c.detail,
+                  insertText: c.insertText
+                }))
+              };
+            }
+          } catch (err) {
+            console.error('Autocomplete error:', err);
+          }
+          
+          return { suggestions: [] };
+        }
+      });
+      
+      // Create editor
+      editor = monaco.editor.create(document.getElementById('editor'), {
+        value: '// Load an example or start typing...\n',
+        language: 'pascal',
+        theme: 'vs-dark',
+        automaticLayout: true,
+        fontSize: 14,
+        minimap: { enabled: true },
+        scrollBeyondLastLine: false,
+        wordWrap: 'on'
+      });
+      
+      // Auto-extract symbols on change
+      let symbolTimeout;
+      editor.onDidChangeModelContent(() => {
+        clearTimeout(symbolTimeout);
+        symbolTimeout = setTimeout(extractSymbols, 1000);
+      });
+      
+      // Load examples
+      loadExamples();
+    });
+    
+    function getMonacoKind(kind) {
+      const kinds = {
+        'keyword': monaco.languages.CompletionItemKind.Keyword,
+        'variable': monaco.languages.CompletionItemKind.Variable,
+        'function': monaco.languages.CompletionItemKind.Function,
+        'procedure': monaco.languages.CompletionItemKind.Function,
+        'program': monaco.languages.CompletionItemKind.Module
+      };
+      return kinds[kind] || monaco.languages.CompletionItemKind.Text;
+    }
+    
+    async function loadExamples() {
+      try {
+        const response = await fetch('/api/pascal/examples');
+        const result = await response.json();
+        
+        if (result.status === 'ok' && result.examples) {
+          const list = document.getElementById('examples-list');
+          list.innerHTML = result.examples.map((ex, i) => `
+            <div class="example-item" onclick="loadExample(${i})" title="${ex.description}">
+              ${ex.name}
+            </div>
+          `).join('');
+          
+          window.examples = result.examples;
+        }
+      } catch (err) {
+        console.error('Failed to load examples:', err);
+      }
+    }
+    
+    function loadExample(index) {
+      if (!window.examples || !window.examples[index]) return;
+      
+      const example = window.examples[index];
+      editor.setValue(example.source);
+      
+      document.querySelectorAll('.example-item').forEach((el, i) => {
+        el.classList.toggle('active', i === index);
+      });
+      
+      setStatus(`Loaded: ${example.name}`);
+      extractSymbols();
+    }
+    
+    async function extractSymbols() {
+      const source = editor.getValue();
+      if (!source.trim()) return;
+      
+      try {
+        const response = await fetch('/api/pascal/symbols', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source })
+        });
+        
+        const result = await response.json();
+        
+        if (result.status === 'ok' && result.symbols) {
+          displaySymbols(result.symbols);
+        }
+      } catch (err) {
+        console.error('Symbol extraction error:', err);
+      }
+    }
+    
+    function displaySymbols(symbols) {
+      const list = document.getElementById('symbols-list');
+      
+      if (!symbols || symbols.length === 0) {
+        list.innerHTML = '<div style="padding: 8px; color: #858585; font-size: 12px;">No symbols found</div>';
+        return;
+      }
+      
+      list.innerHTML = symbols.map(sym => `
+        <div class="symbol-item" title="Line ${sym.line}: ${sym.detail || sym.type}">
+          <span class="symbol-icon ${sym.type}">${getSymbolIcon(sym.type)}</span>
+          <span>${sym.name}</span>
+        </div>
+      `).join('');
+    }
+    
+    function getSymbolIcon(type) {
+      const icons = {
+        'program': 'P',
+        'variable': 'V',
+        'procedure': 'P',
+        'function': 'F'
+      };
+      return icons[type] || '?';
+    }
+    
+    async function validateCode() {
+      const source = editor.getValue();
+      setStatus('Validating...', true);
+      
+      try {
+        const response = await fetch('/api/pascal/validate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source })
+        });
+        
+        const result = await response.json();
+        
+        if (result.valid) {
+          showOutput('success', 'Validation successful! No syntax errors found.');
+          setStatus('Validation passed');
+        } else {
+          showOutput('errors', result.errors);
+          setStatus('Validation failed');
+        }
+      } catch (err) {
+        showOutput('error', `Validation error: ${err.message}`);
+        setStatus('Validation error');
+      }
+    }
+    
+    async function compileCode() {
+      const source = editor.getValue();
+      setStatus('Compiling...', true);
+      
+      try {
+        const response = await fetch('/api/pascal/compile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source })
+        });
+        
+        const result = await response.json();
+        lastCompileResult = result;
+        
+        if (result.status === 'ok') {
+          showOutput('success', 'Compilation successful!');
+          setStatus('Compilation successful');
+          
+          // Show p-code in separate tab
+          if (result.pcode) {
+            document.getElementById('output-content').dataset.pcode = result.pcode;
+          }
+        } else {
+          showOutput('errors', result.errors || [{ message: result.error }]);
+          setStatus('Compilation failed');
+        }
+      } catch (err) {
+        showOutput('error', `Compilation error: ${err.message}`);
+        setStatus('Compilation error');
+      }
+    }
+    
+    async function saveToNode() {
+      if (!lastCompileResult || lastCompileResult.status !== 'ok') {
+        alert('Please compile the code successfully first.');
+        return;
+      }
+      
+      const nodeId = prompt('Enter ESP32 Node ID:');
+      if (!nodeId) return;
+      
+      setStatus('Saving to node...', true);
+      
+      try {
+        // This would call the ESP32 node service to deploy the compiled code
+        const response = await fetch(`/api/nodes/${nodeId}/services/pascal-runtime`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pcode: lastCompileResult.pcode,
+            symbols: lastCompileResult.symbols
+          })
+        });
+        
+        if (response.ok) {
+          showOutput('success', `Code deployed to node ${nodeId} successfully!`);
+          setStatus('Deployed to node');
+        } else {
+          const error = await response.json();
+          showOutput('error', `Deployment failed: ${error.error || 'Unknown error'}`);
+          setStatus('Deployment failed');
+        }
+      } catch (err) {
+        showOutput('error', `Deployment error: ${err.message}`);
+        setStatus('Deployment error');
+      }
+    }
+    
+    function showOutput(type, content) {
+      const outputDiv = document.getElementById('output-content');
+      
+      if (type === 'success') {
+        outputDiv.innerHTML = `<div class="success-message">${content}</div>`;
+      } else if (type === 'error') {
+        outputDiv.innerHTML = `<div class="error-message">${content}</div>`;
+      } else if (type === 'errors') {
+        if (Array.isArray(content) && content.length > 0) {
+          outputDiv.innerHTML = content.map(err => `
+            <div class="error-message">
+              Line ${err.line || '?'}, Column ${err.column || '?'}: ${err.message}
+            </div>
+          `).join('');
+        } else {
+          outputDiv.innerHTML = '<div class="error-message">Unknown error</div>';
+        }
+      } else {
+        outputDiv.innerHTML = `<pre>${content}</pre>`;
+      }
+      
+      switchTab('output');
+    }
+    
+    function switchTab(tab) {
+      currentTab = tab;
+      
+      document.querySelectorAll('.output-tab').forEach(el => {
+        el.classList.toggle('active', el.dataset.tab === tab);
+      });
+      
+      const outputDiv = document.getElementById('output-content');
+      
+      if (tab === 'pcode' && lastCompileResult && lastCompileResult.pcode) {
+        outputDiv.innerHTML = `<pre>${lastCompileResult.pcode}</pre>`;
+      } else if (tab === 'errors' && lastCompileResult && lastCompileResult.errors) {
+        showOutput('errors', lastCompileResult.errors);
+      } else if (tab === 'output') {
+        // Keep current output
+      }
+    }
+    
+    function setStatus(text, loading = false) {
+      document.getElementById('status-text').textContent = text;
+      document.body.classList.toggle('loading', loading);
+      
+      if (!loading) {
+        setTimeout(() => {
+          document.getElementById('status-text').textContent = 'Ready';
+        }, 3000);
+      }
+    }
+  </script>
+</body>
+</html>

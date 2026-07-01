@@ -1,0 +1,66 @@
+{
+  "display": "ExampleDisplay",
+  "version": "1.0",
+  "layout": {
+    "type": "column",
+    "cards": [
+      {
+        "id": "statusCard",
+        "title": "System Status",
+        "subtitle": "ESP32 CYD Board",
+        "content": [
+          {
+            "id": "tempText",
+            "type": "text",
+            "label": "Temperature: --",
+            "bind": "device.temp"
+          },
+          {
+            "id": "wifiText",
+            "type": "text",
+            "label": "WiFi: Connected",
+            "bind": "system.wifi.status"
+          },
+          {
+            "id": "uptimeText",
+            "type": "text",
+            "label": "Uptime: 0s",
+            "bind": "system.uptime"
+          }
+        ]
+      },
+      {
+        "id": "controlCard",
+        "title": "Controls",
+        "content": [
+          {
+            "id": "ledSwitch",
+            "type": "switch",
+            "label": "LED",
+            "bind": "device.led.state"
+          },
+          {
+            "id": "relaySwitch",
+            "type": "switch",
+            "label": "Relay",
+            "bind": "device.relay.state"
+          }
+        ],
+        "actions": [
+          {
+            "id": "refreshBtn",
+            "type": "button",
+            "label": "Refresh",
+            "action": "system.refresh"
+          },
+          {
+            "id": "resetBtn",
+            "type": "button",
+            "label": "Reset",
+            "action": "system.reset"
+          }
+        ]
+      }
+    ]
+  }
+}

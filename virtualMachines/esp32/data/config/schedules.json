@@ -1,0 +1,10 @@
+{
+  "events": [],
+  "settings": {
+    "enabled": true,
+    "checkInterval": 1000,
+    "maxEvents": 100,
+    "persistEvents": true,
+    "timezone": "America/New_York"
+  }
+}

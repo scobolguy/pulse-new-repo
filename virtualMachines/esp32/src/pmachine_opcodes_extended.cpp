@@ -1,3 +1,4 @@
+#include <Arduino.h>
 #include "pmachine_opcodes_extended.h"
 #include "pmachine_dynamic_library.h"
 #include "sd_chunkstore.h"

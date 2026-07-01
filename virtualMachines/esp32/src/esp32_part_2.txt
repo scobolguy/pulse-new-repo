@@ -1,0 +1,4709 @@
+        });
+#endif
+
+    // PMachine aggregator-router execution (rules-driven fanout)
+    server.on("/pmachine/router/run", HTTP_ANY, [ffs](AsyncWebServerRequest *request){
+        String inputQueue;
+        String message;
+        String serviceId = "aggregator-router-service";
+        String rulesPath = "/router-rules.generated.json";
+        String mappingsPath = "/data-mappings.generated.json";
+
+        if (!getRequestParam(request, "inputQueue", inputQueue)) {
+            request->send(400, "text/plain", "Missing inputQueue param");
+            return;
+        }
+        if (!getRequestParam(request, "message", message)) {
+            request->send(400, "text/plain", "Missing message param");
+            return;
+        }
+        getRequestParam(request, "serviceId", serviceId);
+        getRequestParam(request, "rules", rulesPath);
+        getRequestParam(request, "mappings", mappingsPath);
+        String requestMethodUpper = toUpperCopy(trimCopy(requestMethodName(request)));
+
+        JsonDocument rulesDoc;
+        JsonArrayConst rules;
+        if (!loadRouterRulesArray(rulesPath, ffs, rulesDoc, rules)) {
+            request->send(404, "text/plain", "Unable to load router rules file");
+            return;
+        }
+
+        JsonDocument mappingsDoc;
+        JsonArrayConst mappings;
+        if (!loadMappingsArray(mappingsPath, ffs, mappingsDoc, mappings)) {
+            if (!(rulesDoc.is<JsonObject>() && rulesDoc["dataMappings"].is<JsonArray>())) {
+                request->send(404, "text/plain", "Unable to load mappings file");
+                return;
+            }
+            mappings = rulesDoc["dataMappings"].as<JsonArrayConst>();
+        }
+
+        JsonDocument outDoc;
+        outDoc["inputQueue"] = inputQueue;
+        outDoc["serviceId"] = serviceId;
+        outDoc["rulesFile"] = rulesPath;
+        outDoc["mappingsFile"] = mappingsPath;
+        outDoc["sourceMessage"] = message;
+
+        int matchedRuleCount = 0;
+        int publishedCount = 0;
+        JsonArray deliveries = outDoc["deliveries"].to<JsonArray>();
+
+        for (JsonObjectConst rule : rules) {
+            bool enabled = !rule["enabled"].is<bool>() || rule["enabled"].as<bool>();
+            if (!enabled) continue;
+
+            const char* inQueue = rule["inputQueue"] | "";
+            if (String(inQueue) != inputQueue) continue;
+
+            const char* ruleService = rule["serviceId"] | "";
+            if (String(ruleService).length() > 0 && String(ruleService) != serviceId) continue;
+            if (!ruleAllowsMethod(rule, requestMethodUpper)) continue;
+
+            matchedRuleCount += 1;
+
+            JsonArrayConst outputs = rule["outputs"].as<JsonArrayConst>();
+            for (JsonObjectConst output : outputs) {
+                String whenRule = output["whenRule"] | "";
+                if (!evaluateWhenRule(whenRule, message)) continue;
+
+                bool transformApplied = false;
+                String transformRule = output["transformRule"] | "";
+                String transformError;
+                String routed = applyTransformRule(transformRule, message, mappings, transformApplied, transformError);
+
+                JsonObject d = deliveries.add<JsonObject>();
+                d["ruleId"] = rule["id"] | "";
+                d["outputQueue"] = output["queueName"] | "";
+                d["message"] = routed;
+                d["transformApplied"] = transformApplied;
+                if (transformError.length() > 0) {
+                    d["transformError"] = transformError;
+                }
+                publishedCount += 1;
+            }
+        }
+
+        outDoc["matchedRuleCount"] = matchedRuleCount;
+        outDoc["publishedCount"] = publishedCount;
+
+        String response;
+        serializeJson(outDoc, response);
+        request->send(200, "application/json", response);
+    });
+}
+#include "pmachine_scheduler.h"
+#include <algorithm>
+#include <sstream>
+
+namespace pmachine {
+
+PMachineScheduler::PMachineScheduler()
+    : currentContextId_(0xFFFF), nextContextId_(1), nextSemaphoreId_(1),
+      running_(false), currentTimeMs_(0) {
+    // Initialize with default configuration
+    config_ = SchedulerConfig();
+}
+
+PMachineScheduler::~PMachineScheduler() {
+    // Cleanup
+    contexts_.clear();
+    semaphores_.clear();
+    while (!readyQueue_.empty()) {
+        readyQueue_.pop();
+    }
+}
+
+void PMachineScheduler::setConfig(const SchedulerConfig& config) {
+    config_ = config;
+}
+
+uint16_t PMachineScheduler::createContext(uint16_t startPC, uint8_t priority, const std::string& name) {
+    if (contexts_.size() >= config_.maxContexts) {
+        return 0xFFFF; // Max contexts reached
+    }
+    
+    uint16_t contextId = nextContextId_++;
+    ExecutionContext ctx;
+    ctx.contextId = contextId;
+    ctx.pc = startPC;
+    ctx.sp = 0;
+    ctx.bp = 0;
+    ctx.priority = priority;
+    ctx.state = ContextState::READY;
+    ctx.blockedUntilMs = 0;
+    ctx.blockedOnSemaphore = 0xFFFF;
+    ctx.quantumRemaining = config_.quantum;
+    ctx.totalInstructions = 0;
+    ctx.name = name.empty() ? ("ctx_" + std::to_string(contextId)) : name;
+    
+    contexts_[contextId] = ctx;
+    addToReadyQueue(contextId);
+    
+    return contextId;
+}
+
+bool PMachineScheduler::destroyContext(uint16_t contextId) {
+    auto it = contexts_.find(contextId);
+    if (it == contexts_.end()) {
+        return false;
+    }
+    
+    // Mark as terminated
+    it->second.state = ContextState::TERMINATED;
+    
+    // If it's the current context, schedule next
+    if (currentContextId_ == contextId) {
+        currentContextId_ = 0xFFFF;
+        schedule();
+    }
+    
+    // Remove from contexts (will be cleaned up)
+    contexts_.erase(it);
+    
+    return true;
+}
+
+ExecutionContext* PMachineScheduler::getContext(uint16_t contextId) {
+    auto it = contexts_.find(contextId);
+    if (it == contexts_.end()) {
+        return nullptr;
+    }
+    return &(it->second);
+}
+
+const ExecutionContext* PMachineScheduler::getContext(uint16_t contextId) const {
+    auto it = contexts_.find(contextId);
+    if (it == contexts_.end()) {
+        return nullptr;
+    }
+    return &(it->second);
+}
+
+ExecutionContext* PMachineScheduler::getCurrentContext() {
+    if (currentContextId_ == 0xFFFF) {
+        return nullptr;
+    }
+    return getContext(currentContextId_);
+}
+
+std::vector<uint16_t> PMachineScheduler::getAllContextIds() const {
+    std::vector<uint16_t> ids;
+    ids.reserve(contexts_.size());
+    for (const auto& pair : contexts_) {
+        ids.push_back(pair.first);
+    }
+    return ids;
+}
+
+uint16_t PMachineScheduler::createSemaphore(int initialValue, const std::string& name) {
+    uint16_t semId = nextSemaphoreId_++;
+    Semaphore sem(semId, initialValue, name.empty() ? ("sem_" + std::to_string(semId)) : name);
+    semaphores_[semId] = sem;
+    return semId;
+}
+
+bool PMachineScheduler::destroySemaphore(uint16_t semaphoreId) {
+    auto it = semaphores_.find(semaphoreId);
+    if (it == semaphores_.end()) {
+        return false;
+    }
+    
+    // Unblock all waiting contexts
+    while (!it->second.waitQueue.empty()) {
+        uint16_t contextId = it->second.waitQueue.front();
+        it->second.waitQueue.pop();
+        unblockContext(contextId);
+    }
+    
+    semaphores_.erase(it);
+    return true;
+}
+
+bool PMachineScheduler::semaphoreWait(uint16_t semaphoreId, uint16_t contextId) {
+    auto semIt = semaphores_.find(semaphoreId);
+    if (semIt == semaphores_.end()) {
+        return false;
+    }
+    
+    auto ctxIt = contexts_.find(contextId);
+    if (ctxIt == contexts_.end()) {
+        return false;
+    }
+    
+    Semaphore& sem = semIt->second;
+    ExecutionContext& ctx = ctxIt->second;
+    
+    stats_.semaphoreWaits++;
+    
+    if (sem.value > 0) {
+        // Semaphore available, decrement and continue
+        sem.value--;
+        return true;
+    } else {
+        // Block context
+        sem.waitQueue.push(contextId);
+        blockContext(contextId, semaphoreId);
+        return false; // Context blocked
+    }
+}
+
+bool PMachineScheduler::semaphoreSignal(uint16_t semaphoreId) {
+    auto semIt = semaphores_.find(semaphoreId);
+    if (semIt == semaphores_.end()) {
+        return false;
+    }
+    
+    Semaphore& sem = semIt->second;
+    stats_.semaphoreSignals++;
+    
+    if (sem.waitQueue.empty()) {
+        // No waiting contexts, increment value
+        sem.value++;
+    } else {
+        // Wake up first waiting context
+        uint16_t contextId = sem.waitQueue.front();
+        sem.waitQueue.pop();
+        unblockContext(contextId);
+    }
+    
+    return true;
+}
+
+Semaphore* PMachineScheduler::getSemaphore(uint16_t semaphoreId) {
+    auto it = semaphores_.find(semaphoreId);
+    if (it == semaphores_.end()) {
+        return nullptr;
+    }
+    return &(it->second);
+}
+
+bool PMachineScheduler::schedule() {
+    // Select next context to run
+    uint16_t nextId = selectNextContext();
+    
+    if (nextId == 0xFFFF) {
+        // No ready contexts
+        running_ = false;
+        currentContextId_ = 0xFFFF;
+        return false;
+    }
+    
+    if (nextId != currentContextId_) {
+        contextSwitch(nextId);
+    }
+    
+    running_ = true;
+    return true;
+}
+
+void PMachineScheduler::yield() {
+    ExecutionContext* ctx = getCurrentContext();
+    if (ctx) {
+        ctx->state = ContextState::READY;
+        addToReadyQueue(ctx->contextId);
+        stats_.yields++;
+    }
+    
+    schedule();
+}
+
+void PMachineScheduler::blockContext(uint16_t contextId, uint16_t semaphoreId, uint32_t timeoutMs) {
+    auto it = contexts_.find(contextId);
+    if (it == contexts_.end()) {
+        return;
+    }
+    
+    ExecutionContext& ctx = it->second;
+    ctx.state = ContextState::BLOCKED;
+    ctx.blockedOnSemaphore = semaphoreId;
+    ctx.blockedUntilMs = (timeoutMs > 0) ? (currentTimeMs_ + timeoutMs) : 0;
+    
+    // If blocking current context, schedule next
+    if (currentContextId_ == contextId) {
+        currentContextId_ = 0xFFFF;
+        schedule();
+    }
+}
+
+void PMachineScheduler::unblockContext(uint16_t contextId) {
+    auto it = contexts_.find(contextId);
+    if (it == contexts_.end()) {
+        return;
+    }
+    
+    ExecutionContext& ctx = it->second;
+    if (ctx.state == ContextState::BLOCKED) {
+        ctx.state = ContextState::READY;
+        ctx.blockedOnSemaphore = 0xFFFF;
+        ctx.blockedUntilMs = 0;
+        addToReadyQueue(contextId);
+    }
+}
+
+void PMachineScheduler::executeQuantum(const std::vector<PInstruction>& instructions) {
+    ExecutionContext* ctx = getCurrentContext();
+    if (!ctx || ctx->state != ContextState::RUNNING) {
+        return;
+    }
+    
+    uint32_t instructionsExecuted = 0;
+    
+    while (instructionsExecuted < config_.quantum && ctx->state == ContextState::RUNNING) {
+        // Check if PC is valid
+        if (ctx->pc >= instructions.size()) {
+            // End of program
+            ctx->state = ContextState::TERMINATED;
+            break;
+        }
+        
+        // Execute instruction (this would be handled by PMachine::run)
+        // For now, just increment PC and counters
+        ctx->pc++;
+        ctx->totalInstructions++;
+        stats_.totalInstructions++;
+        instructionsExecuted++;
+        ctx->quantumRemaining--;
+        
+        // Check for quantum expiration
+        if (config_.preemptionEnabled && ctx->quantumRemaining == 0) {
+            ctx->quantumRemaining = config_.quantum;
+            stats_.preemptions++;
+            yield();
+            break;
+        }
+    }
+}
+
+void PMachineScheduler::tick(uint32_t currentTimeMs) {
+    currentTimeMs_ = currentTimeMs;
+    checkTimedWaits(currentTimeMs);
+}
+
+void PMachineScheduler::addToReadyQueue(uint16_t contextId) {
+    auto it = contexts_.find(contextId);
+    if (it != contexts_.end() && it->second.state == ContextState::READY) {
+        readyQueue_.push(contextId);
+    }
+}
+
+uint16_t PMachineScheduler::selectNextContext() {
+    switch (config_.algorithm) {
+        case SchedulerConfig::Algorithm::ROUND_ROBIN:
+            return selectRoundRobin();
+        case SchedulerConfig::Algorithm::PRIORITY:
+            return selectPriority();
+        case SchedulerConfig::Algorithm::ROUND_ROBIN_PRIORITY:
+            return selectRoundRobinPriority();
+        default:
+            return selectRoundRobin();
+    }
+}
+
+void PMachineScheduler::contextSwitch(uint16_t newContextId) {
+    // Save current context state
+    if (currentContextId_ != 0xFFFF) {
+        ExecutionContext* oldCtx = getContext(currentContextId_);
+        if (oldCtx && oldCtx->state == ContextState::RUNNING) {
+            oldCtx->state = ContextState::READY;
+            addToReadyQueue(currentContextId_);
+        }
+    }
+    
+    // Load new context
+    ExecutionContext* newCtx = getContext(newContextId);
+    if (newCtx) {
+        newCtx->state = ContextState::RUNNING;
+        newCtx->quantumRemaining = config_.quantum;
+        currentContextId_ = newContextId;
+        stats_.contextSwitches++;
+    }
+}
+
+void PMachineScheduler::checkTimedWaits(uint32_t currentTimeMs) {
+    for (auto& pair : contexts_) {
+        ExecutionContext& ctx = pair.second;
+        if (ctx.state == ContextState::BLOCKED && 
+            ctx.blockedUntilMs > 0 && 
+            currentTimeMs >= ctx.blockedUntilMs) {
+            // Timeout expired, unblock context
+            unblockContext(ctx.contextId);
+        }
+    }
+}
+
+uint16_t PMachineScheduler::selectRoundRobin() {
+    // Simple round-robin: take from ready queue
+    while (!readyQueue_.empty()) {
+        uint16_t contextId = readyQueue_.front();
+        readyQueue_.pop();
+        
+        auto it = contexts_.find(contextId);
+        if (it != contexts_.end() && it->second.state == ContextState::READY) {
+            return contextId;
+        }
+    }
+    
+    return 0xFFFF; // No ready contexts
+}
+
+uint16_t PMachineScheduler::selectPriority() {
+    // Priority-based: select highest priority ready context
+    uint16_t bestId = 0xFFFF;
+    uint8_t bestPriority = 0;
+    
+    for (const auto& pair : contexts_) {
+        if (pair.second.state == ContextState::READY && 
+            pair.second.priority > bestPriority) {
+            bestId = pair.first;
+            bestPriority = pair.second.priority;
+        }
+    }
+    
+    return bestId;
+}
+
+uint16_t PMachineScheduler::selectRoundRobinPriority() {
+    // Round-robin within priority levels
+    // Group contexts by priority and round-robin within each level
+    std::map<uint8_t, std::vector<uint16_t>> priorityGroups;
+    
+    for (const auto& pair : contexts_) {
+        if (pair.second.state == ContextState::READY) {
+            priorityGroups[pair.second.priority].push_back(pair.first);
+        }
+    }
+    
+    if (priorityGroups.empty()) {
+        return 0xFFFF;
+    }
+    
+    // Select highest priority group
+    auto highestPriorityGroup = priorityGroups.rbegin();
+    
+    // Round-robin within that group
+    if (!highestPriorityGroup->second.empty()) {
+        // Simple approach: return first in group
+        // (In production, would maintain per-priority queues)
+        return highestPriorityGroup->second[0];
+    }
+    
+    return 0xFFFF;
+}
+
+std::string PMachineScheduler::getContextStateString(uint16_t contextId) const {
+    const ExecutionContext* ctx = getContext(contextId);
+    if (!ctx) {
+        return "INVALID";
+    }
+    
+    switch (ctx->state) {
+        case ContextState::READY: return "READY";
+        case ContextState::RUNNING: return "RUNNING";
+        case ContextState::BLOCKED: return "BLOCKED";
+        case ContextState::TERMINATED: return "TERMINATED";
+        default: return "UNKNOWN";
+    }
+}
+
+std::string PMachineScheduler::getSchedulerStatus() const {
+    std::ostringstream oss;
+    oss << "Scheduler Status:\n";
+    oss << "  Running: " << (running_ ? "YES" : "NO") << "\n";
+    oss << "  Current Context: " << currentContextId_ << "\n";
+    oss << "  Total Contexts: " << contexts_.size() << "\n";
+    oss << "  Ready Queue Size: " << readyQueue_.size() << "\n";
+    oss << "  Semaphores: " << semaphores_.size() << "\n";
+    oss << "\nStatistics:\n";
+    oss << "  Context Switches: " << stats_.contextSwitches << "\n";
+    oss << "  Total Instructions: " << stats_.totalInstructions << "\n";
+    oss << "  Semaphore Waits: " << stats_.semaphoreWaits << "\n";
+    oss << "  Semaphore Signals: " << stats_.semaphoreSignals << "\n";
+    oss << "  Preemptions: " << stats_.preemptions << "\n";
+    oss << "  Yields: " << stats_.yields << "\n";
+    oss << "\nContexts:\n";
+    
+    for (const auto& pair : contexts_) {
+        const ExecutionContext& ctx = pair.second;
+        oss << "  [" << ctx.contextId << "] " << ctx.name 
+            << " - State: " << getContextStateString(ctx.contextId)
+            << ", PC: " << ctx.pc
+            << ", Priority: " << (int)ctx.priority
+            << ", Instructions: " << ctx.totalInstructions << "\n";
+    }
+    
+    return oss.str();
+}
+
+} // namespace pmachine
+
+// Made with Bob
+#include "pmachine_scheduler.h"
+#include <iostream>
+#include <cassert>
+
+using namespace pmachine;
+
+/**
+ * Test Suite for PMachine Scheduler
+ */
+
+void testBasicContextCreation() {
+    std::cout << "Test: Basic Context Creation\n";
+    
+    PMachineScheduler scheduler;
+    
+    // Create contexts
+    uint16_t ctx1 = scheduler.createContext(0, 128, "context1");
+    uint16_t ctx2 = scheduler.createContext(100, 128, "context2");
+    uint16_t ctx3 = scheduler.createContext(200, 128, "context3");
+    
+    assert(ctx1 != 0xFFFF);
+    assert(ctx2 != 0xFFFF);
+    assert(ctx3 != 0xFFFF);
+    assert(scheduler.getContextCount() == 3);
+    
+    // Verify contexts
+    ExecutionContext* c1 = scheduler.getContext(ctx1);
+    assert(c1 != nullptr);
+    assert(c1->pc == 0);
+    assert(c1->name == "context1");
+    assert(c1->state == ContextState::READY);
+    
+    std::cout << "  ✓ Context creation successful\n";
+}
+
+void testScheduling() {
+    std::cout << "Test: Basic Scheduling\n";
+    
+    PMachineScheduler scheduler;
+    SchedulerConfig config;
+    config.algorithm = SchedulerConfig::Algorithm::ROUND_ROBIN;
+    config.quantum = 10;
+    scheduler.setConfig(config);
+    
+    uint16_t ctx1 = scheduler.createContext(0, 128, "task1");
+    uint16_t ctx2 = scheduler.createContext(0, 128, "task2");
+    
+    // Schedule first context
+    bool scheduled = scheduler.schedule();
+    assert(scheduled);
+    
+    uint16_t currentId = scheduler.getCurrentContextId();
+    assert(currentId == ctx1 || currentId == ctx2);
+    
+    ExecutionContext* current = scheduler.getCurrentContext();
+    assert(current != nullptr);
+    assert(current->state == ContextState::RUNNING);
+    
+    std::cout << "  ✓ Scheduling successful\n";
+}
+
+void testSemaphores() {
+    std::cout << "Test: Semaphore Operations\n";
+    
+    PMachineScheduler scheduler;
+    
+    uint16_t ctx1 = scheduler.createContext(0, 128, "producer");
+    uint16_t ctx2 = scheduler.createContext(0, 128, "consumer");
+    
+    // Create semaphore with initial value 1 (mutex)
+    uint16_t mutex = scheduler.createSemaphore(1, "mutex");
+    assert(mutex != 0xFFFF);
+    
+    Semaphore* sem = scheduler.getSemaphore(mutex);
+    assert(sem != nullptr);
+    assert(sem->value == 1);
+    
+    // First wait should succeed
+    bool waited = scheduler.semaphoreWait(mutex, ctx1);
+    assert(waited == true);
+    assert(sem->value == 0);
+    
+    // Second wait should block
+    waited = scheduler.semaphoreWait(mutex, ctx2);
+    assert(waited == false);
+    
+    ExecutionContext* c2 = scheduler.getContext(ctx2);
+    assert(c2->state == ContextState::BLOCKED);
+    assert(c2->blockedOnSemaphore == mutex);
+    
+    // Signal should unblock ctx2
+    bool signaled = scheduler.semaphoreSignal(mutex);
+    assert(signaled == true);
+    assert(c2->state == ContextState::READY);
+    
+    std::cout << "  ✓ Semaphore operations successful\n";
+}
+
+void testPriorityScheduling() {
+    std::cout << "Test: Priority Scheduling\n";
+    
+    PMachineScheduler scheduler;
+    SchedulerConfig config;
+    config.algorithm = SchedulerConfig::Algorithm::PRIORITY;
+    scheduler.setConfig(config);
+    
+    uint16_t lowPrio = scheduler.createContext(0, 50, "low");
+    uint16_t medPrio = scheduler.createContext(0, 128, "medium");
+    uint16_t highPrio = scheduler.createContext(0, 200, "high");
+    
+    // Schedule should select highest priority
+    scheduler.schedule();
+    uint16_t currentId = scheduler.getCurrentContextId();
+    
+    ExecutionContext* current = scheduler.getCurrentContext();
+    assert(current != nullptr);
+    assert(current->priority == 200);
+    assert(current->contextId == highPrio);
+    
+    std::cout << "  ✓ Priority scheduling successful\n";
+}
+
+void testContextDestruction() {
+    std::cout << "Test: Context Destruction\n";
+    
+    PMachineScheduler scheduler;
+    
+    uint16_t ctx1 = scheduler.createContext(0, 128, "temp");
+    assert(scheduler.getContextCount() == 1);
+    
+    bool destroyed = scheduler.destroyContext(ctx1);
+    assert(destroyed == true);
+    assert(scheduler.getContextCount() == 0);
+    
+    ExecutionContext* ctx = scheduler.getContext(ctx1);
+    assert(ctx == nullptr);
+    
+    std::cout << "  ✓ Context destruction successful\n";
+}
+
+void testYield() {
+    std::cout << "Test: Voluntary Yield\n";
+    
+    PMachineScheduler scheduler;
+    
+    uint16_t ctx1 = scheduler.createContext(0, 128, "yielder");
+    uint16_t ctx2 = scheduler.createContext(0, 128, "waiter");
+    
+    scheduler.schedule();
+    uint16_t firstId = scheduler.getCurrentContextId();
+    
+    // Yield should switch to other context
+    scheduler.yield();
+    uint16_t secondId = scheduler.getCurrentContextId();
+    
+    assert(firstId != secondId);
+    
+    SchedulerStats stats = scheduler.getStats();
+    assert(stats.yields == 1);
+    assert(stats.contextSwitches >= 1);
+    
+    std::cout << "  ✓ Yield successful\n";
+}
+
+void testTimedWait() {
+    std::cout << "Test: Timed Wait\n";
+    
+    PMachineScheduler scheduler;
+    
+    uint16_t ctx1 = scheduler.createContext(0, 128, "sleeper");
+    
+    // Block with timeout
+    scheduler.blockContext(ctx1, 0xFFFF, 1000); // 1 second timeout
+    
+    ExecutionContext* ctx = scheduler.getContext(ctx1);
+    assert(ctx->state == ContextState::BLOCKED);
+    assert(ctx->blockedUntilMs == 1000);
+    
+    // Simulate time passing
+    scheduler.tick(500); // 500ms - still blocked
+    assert(ctx->state == ContextState::BLOCKED);
+    
+    scheduler.tick(1001); // 1001ms - should unblock
+    assert(ctx->state == ContextState::READY);
+    
+    std::cout << "  ✓ Timed wait successful\n";
+}
+
+void testSchedulerStatus() {
+    std::cout << "Test: Scheduler Status\n";
+    
+    PMachineScheduler scheduler;
+    
+    scheduler.createContext(0, 128, "task1");
+    scheduler.createContext(100, 200, "task2");
+    scheduler.createSemaphore(1, "mutex");
+    
+    scheduler.schedule();
+    
+    std::string status = scheduler.getSchedulerStatus();
+    assert(!status.empty());
+    assert(status.find("Scheduler Status") != std::string::npos);
+    assert(status.find("task1") != std::string::npos);
+    assert(status.find("task2") != std::string::npos);
+    
+    std::cout << "  ✓ Status reporting successful\n";
+    std::cout << "\nScheduler Status:\n" << status << "\n";
+}
+
+void testMaxContexts() {
+    std::cout << "Test: Max Contexts Limit\n";
+    
+    PMachineScheduler scheduler;
+    SchedulerConfig config;
+    config.maxContexts = 4;
+    scheduler.setConfig(config);
+    
+    uint16_t ctx1 = scheduler.createContext(0);
+    uint16_t ctx2 = scheduler.createContext(0);
+    uint16_t ctx3 = scheduler.createContext(0);
+    uint16_t ctx4 = scheduler.createContext(0);
+    uint16_t ctx5 = scheduler.createContext(0); // Should fail
+    
+    assert(ctx1 != 0xFFFF);
+    assert(ctx2 != 0xFFFF);
+    assert(ctx3 != 0xFFFF);
+    assert(ctx4 != 0xFFFF);
+    assert(ctx5 == 0xFFFF); // Max reached
+    
+    std::cout << "  ✓ Max contexts limit enforced\n";
+}
+
+void testStatistics() {
+    std::cout << "Test: Statistics Tracking\n";
+    
+    PMachineScheduler scheduler;
+    
+    uint16_t ctx1 = scheduler.createContext(0);
+    uint16_t sem1 = scheduler.createSemaphore(1);
+    
+    scheduler.schedule();
+    scheduler.semaphoreWait(sem1, ctx1);
+    scheduler.semaphoreSignal(sem1);
+    scheduler.yield();
+    
+    SchedulerStats stats = scheduler.getStats();
+    assert(stats.contextSwitches > 0);
+    assert(stats.semaphoreWaits == 1);
+    assert(stats.semaphoreSignals == 1);
+    assert(stats.yields == 1);
+    
+    // Reset stats
+    scheduler.resetStats();
+    stats = scheduler.getStats();
+    assert(stats.contextSwitches == 0);
+    assert(stats.semaphoreWaits == 0);
+    
+    std::cout << "  ✓ Statistics tracking successful\n";
+}
+
+int main() {
+    std::cout << "=== PMachine Scheduler Test Suite ===\n\n";
+    
+    try {
+        testBasicContextCreation();
+        testScheduling();
+        testSemaphores();
+        testPriorityScheduling();
+        testContextDestruction();
+        testYield();
+        testTimedWait();
+        testSchedulerStatus();
+        testMaxContexts();
+        testStatistics();
+        
+        std::cout << "\n=== All Tests Passed ✓ ===\n";
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "\n✗ Test failed with exception: " << e.what() << "\n";
+        return 1;
+    } catch (...) {
+        std::cerr << "\n✗ Test failed with unknown exception\n";
+        return 1;
+    }
+}
+
+// Made with Bob
+#ifdef ENABLE_PRINTER_SCANNER
+
+#include "PrinterService.h"
+#include <LittleFS.h>
+
+// Global instance
+PrinterService* globalPrinterService = nullptr;
+
+// PCL Commands
+#define PCL_RESET "\x1B" "E"
+#define PCL_STATUS "\x1B" "*s1M"
+#define ESCP_RESET "\x1B" "@"
+
+// Scanner Commands (TWAIN/SANE over network)
+#define SCANNER_STATUS_CMD "STATUS\r\n"
+#define SCANNER_SCAN_CMD "SCAN\r\n"
+#define SCANNER_CANCEL_CMD "CANCEL\r\n"
+
+PrinterService::PrinterService() 
+    : statusCallback(nullptr), lastDiscovery(0), lastStatusCheck(0) {
+}
+
+PrinterService::~PrinterService() {
+    devices.clear();
+    activeJobs.clear();
+}
+
+bool PrinterService::begin() {
+    Serial.println("PrinterService: Initializing...");
+    
+    // Initialize UPnP discovery
+    if (!upnpDiscovery.begin()) {
+        Serial.println("PrinterService: Warning - UPnP discovery failed to initialize");
+    }
+    
+    // Set up UPnP device discovered callback
+    upnpDiscovery.setDeviceDiscoveredCallback([](const UPnPDevice& upnpDevice) {
+        if (globalPrinterService) {
+            globalPrinterService->onUPnPDeviceDiscovered(upnpDevice);
+        }
+    });
+    
+    // Load configuration if available
+    if (LittleFS.exists("/config/printers.json")) {
+        loadConfig("/config/printers.json");
+    }
+    
+    // Start initial discovery after 5 seconds (give WiFi time to stabilize)
+    lastDiscovery = millis() - 295000; // Will trigger in 5 seconds
+    lastStatusCheck = millis();
+    
+    Serial.println("PrinterService: Initialized successfully");
+    Serial.println("PrinterService: Auto-discovery will start in 5 seconds...");
+    return true;
+}
+
+void PrinterService::loop() {
+    unsigned long now = millis();
+    
+    // Auto-discovery every 5 minutes (300000 ms)
+    if (now - lastDiscovery > 300000) {
+        Serial.println("PrinterService: Starting automatic device discovery...");
+        
+        // Discover UPnP devices (TVs, printers, etc.)
+        discoverUPnPDevices();
+        
+        // Also scan local network for printers on port 9100
+        // Get network prefix from WiFi
+        IPAddress ip = WiFi.localIP();
+        String networkPrefix = String(ip[0]) + "." + String(ip[1]) + "." + String(ip[2]);
+        discoverDevices(networkPrefix);
+        
+        lastDiscovery = now;
+        Serial.printf("PrinterService: Discovery complete. Total devices: %d\n", getDeviceCount());
+    }
+    
+    // Periodic status check every 30 seconds
+    if (now - lastStatusCheck > 30000) {
+        updateAllDeviceStatus();
+        lastStatusCheck = now;
+    }
+}
+
+// ============================================================================
+// Device Management
+// ============================================================================
+
+bool PrinterService::addDevice(const String& id, const String& name, 
+                                const String& ipAddress, int port, const String& type) {
+    PrinterDevice device;
+    device.id = id;
+    device.name = name;
+    device.ipAddress = ipAddress;
+    device.port = port;
+    device.type = type;
+    device.online = false;
+    device.lastSeen = 0;
+    device.status = "unknown";
+    
+    devices[id] = device;
+    
+    Serial.printf("PrinterService: Added %s device %s (%s) at %s:%d\n", 
+                  type.c_str(), id.c_str(), name.c_str(), ipAddress.c_str(), port);
+    
+    // Check if device is online
+    checkDeviceOnline(id);
+    
+    return true;
+}
+
+bool PrinterService::removeDevice(const String& id) {
+    auto it = devices.find(id);
+    if (it != devices.end()) {
+        Serial.printf("PrinterService: Removed device %s\n", id.c_str());
+        devices.erase(it);
+        return true;
+    }
+    return false;
+}
+
+PrinterDevice* PrinterService::getDevice(const String& id) {
+    auto it = devices.find(id);
+    if (it != devices.end()) {
+        return &(it->second);
+    }
+    return nullptr;
+}
+
+std::vector<PrinterDevice> PrinterService::getAllDevices() {
+    std::vector<PrinterDevice> result;
+    for (auto& pair : devices) {
+        result.push_back(pair.second);
+    }
+    return result;
+}
+
+// ============================================================================
+// Discovery
+// ============================================================================
+
+bool PrinterService::discoverDevices(const String& networkPrefix) {
+    Serial.printf("PrinterService: Starting discovery on %s.x\n", networkPrefix.c_str());
+    
+    int discovered = 0;
+    
+    // Scan common printer/scanner IP range (1-254)
+    for (int i = 1; i <= 254; i++) {
+        String ip = networkPrefix + "." + String(i);
+        
+        // Check for printer on port 9100
+        if (probePort(ip, 9100)) {
+            String deviceId = generateDeviceId(ip, "printer");
+            
+            // Check if device already exists
+            if (devices.find(deviceId) == devices.end()) {
+                addDevice(deviceId, "Printer-" + String(i), ip, 9100, "printer");
+                discovered++;
+            }
+        }
+        
+        // Check for scanner on port 9100 (some scanners use same port)
+        // or port 8610 (SANE network scanning)
+        if (probePort(ip, 8610)) {
+            String deviceId = generateDeviceId(ip, "scanner");
+            
+            if (devices.find(deviceId) == devices.end()) {
+                addDevice(deviceId, "Scanner-" + String(i), ip, 8610, "scanner");
+                discovered++;
+            }
+        }
+        
+        // Yield to prevent watchdog timeout
+        if (i % 10 == 0) {
+            yield();
+        }
+    }
+    
+    Serial.printf("PrinterService: Discovery complete. Found %d devices\n", discovered);
+    return discovered > 0;
+}
+
+bool PrinterService::discoverUPnPDevices() {
+    Serial.println("PrinterService: Starting UPnP discovery...");
+    
+    // Discover printers and scanners via UPnP
+    upnpDiscovery.discoverPrinters();
+    upnpDiscovery.discoverScanners();
+    
+    // Also do a general discovery for all UPnP devices
+    upnpDiscovery.startDiscovery("ssdp:all");
+    
+    // Process responses for 5 seconds
+    upnpDiscovery.processResponses(5000);
+    
+    // Get discovered devices
+    upnpDevices = upnpDiscovery.getDevices();
+    
+    Serial.printf("PrinterService: UPnP discovery complete. Found %d devices\n", upnpDevices.size());
+    
+    return upnpDevices.size() > 0;
+}
+
+std::vector<UPnPDevice> PrinterService::getUPnPDevices() const {
+    return upnpDevices;
+}
+
+void PrinterService::onUPnPDeviceDiscovered(const UPnPDevice& upnpDevice) {
+    Serial.printf("PrinterService: UPnP device discovered - %s\n", upnpDevice.friendlyName.c_str());
+    
+    // Automatically add printer/scanner devices
+    if (upnpDevice.isPrinter || upnpDevice.isScanner) {
+        String deviceId = "upnp-" + upnpDevice.usn;
+        deviceId.replace(":", "-");
+        deviceId.replace(" ", "-");
+        
+        // Check if already exists
+        if (devices.find(deviceId) == devices.end()) {
+            String type = upnpDevice.isPrinter ? "printer" : "scanner";
+            if (upnpDevice.isPrinter && upnpDevice.isScanner) {
+                type = "multifunction";
+            }
+            
+            // Determine port (default to 9100 for printers, 8610 for scanners)
+            int port = upnpDevice.port;
+            if (port == 0 || port == 80) {
+                port = upnpDevice.isPrinter ? 9100 : 8610;
+            }
+            
+            String name = upnpDevice.friendlyName;
+            if (name.isEmpty()) {
+                name = upnpDevice.modelName;
+            }
+            if (name.isEmpty()) {
+                name = type + "-" + upnpDevice.ipAddress;
+            }
+            
+            addDevice(deviceId, name, upnpDevice.ipAddress, port, type);
+            
+            // Store model information
+            PrinterDevice* device = getDevice(deviceId);
+            if (device) {
+                device->model = upnpDevice.manufacturer + " " + upnpDevice.modelName;
+            }
+        }
+    }
+}
+
+bool PrinterService::scanNetwork(const String& startIP, const String& endIP) {
+    // Parse IP addresses and scan range
+    // Simplified implementation - scan specific range
+    Serial.printf("PrinterService: Scanning from %s to %s\n", startIP.c_str(), endIP.c_str());
+    
+    // Extract network prefix from startIP
+    int lastDot = startIP.lastIndexOf('.');
+    String networkPrefix = startIP.substring(0, lastDot);
+    
+    return discoverDevices(networkPrefix);
+}
+
+bool PrinterService::probePort(const String& ipAddress, int port) {
+    WiFiClient client;
+    
+    // Try to connect with short timeout
+    client.setTimeout(1000);
+    
+    if (client.connect(ipAddress.c_str(), port)) {
+        client.stop();
+        return true;
+    }
+    
+    return false;
+}
+
+String PrinterService::generateDeviceId(const String& ipAddress, const String& type) {
+    // Generate ID from IP address and type
+    String id = type + "-";
+    id += ipAddress;
+    id.replace(".", "-");
+    return id;
+}
+
+// ============================================================================
+// Device Operations
+// ============================================================================
+
+bool PrinterService::sendRawData(const String& deviceId, const uint8_t* data, size_t length) {
+    PrinterDevice* device = getDevice(deviceId);
+    if (!device) {
+        Serial.printf("PrinterService: Device %s not found\n", deviceId.c_str());
+        return false;
+    }
+    
+    WiFiClient client;
+    if (!connectToDevice(device->ipAddress, device->port, client)) {
+        device->online = false;
+        device->status = "offline";
+        notifyStatusChange(deviceId, "offline");
+        return false;
+    }
+    
+    bool success = sendCommand(client, data, length);
+    
+    client.stop();
+    
+    if (success) {
+        device->online = true;
+        device->lastSeen = millis();
+        
+        if (device->type == "printer") {
+            device->status = "printing";
+        } else if (device->type == "scanner") {
+            device->status = "scanning";
+        }
+        
+        notifyStatusChange(deviceId, device->status);
+    }
+    
+    return success;
+}
+
+bool PrinterService::sendTextDocument(const String& deviceId, const String& text) {
+    // Convert text to raw bytes and send
+    return sendRawData(deviceId, (const uint8_t*)text.c_str(), text.length());
+}
+
+bool PrinterService::sendPCLCommand(const String& deviceId, const String& pclCommand) {
+    return sendRawData(deviceId, (const uint8_t*)pclCommand.c_str(), pclCommand.length());
+}
+
+bool PrinterService::cancelJob(const String& deviceId) {
+    PrinterDevice* device = getDevice(deviceId);
+    if (!device) return false;
+    
+    bool success = false;
+    
+    if (device->type == "printer") {
+        // Send PCL reset command to cancel current job
+        String resetCmd = getPCLReset();
+        success = sendPCLCommand(deviceId, resetCmd);
+    } else if (device->type == "scanner") {
+        // Send scanner cancel command
+        success = sendRawData(deviceId, (const uint8_t*)SCANNER_CANCEL_CMD, strlen(SCANNER_CANCEL_CMD));
+    }
+    
+    if (success) {
+        device->status = "idle";
+        notifyStatusChange(deviceId, "idle");
+    }
+    
+    return success;
+}
+
+bool PrinterService::getStatus(const String& deviceId, String& status) {
+    PrinterDevice* device = getDevice(deviceId);
+    if (!device) return false;
+    
+    status = device->status;
+    return true;
+}
+
+bool PrinterService::startScan(const String& deviceId, const JsonDocument& scanParams) {
+    PrinterDevice* device = getDevice(deviceId);
+    if (!device || device->type != "scanner") {
+        Serial.println("PrinterService: Device is not a scanner");
+        return false;
+    }
+    
+    // Build scan command with parameters
+    String scanCmd = "SCAN";
+    
+    if (scanParams.containsKey("resolution")) {
+        scanCmd += " RESOLUTION=" + String(scanParams["resolution"].as<int>());
+    }
+    
+    if (scanParams.containsKey("format")) {
+        scanCmd += " FORMAT=" + scanParams["format"].as<String>();
+    }
+    
+    if (scanParams.containsKey("color")) {
+        scanCmd += " COLOR=" + scanParams["color"].as<String>();
+    }
+    
+    scanCmd += "\r\n";
+    
+    bool success = sendRawData(deviceId, (const uint8_t*)scanCmd.c_str(), scanCmd.length());
+    
+    if (success) {
+        device->status = "scanning";
+        notifyStatusChange(deviceId, "scanning");
+    }
+    
+    return success;
+}
+
+// ============================================================================
+// Status Monitoring
+// ============================================================================
+
+bool PrinterService::checkDeviceOnline(const String& deviceId) {
+    PrinterDevice* device = getDevice(deviceId);
+    if (!device) return false;
+    
+    bool online = probePort(device->ipAddress, device->port);
+    
+    if (online != device->online) {
+        device->online = online;
+        device->status = online ? "idle" : "offline";
+        notifyStatusChange(deviceId, device->status);
+    }
+    
+    if (online) {
+        device->lastSeen = millis();
+    }
+    
+    return online;
+}
+
+void PrinterService::updateAllDeviceStatus() {
+    for (auto& pair : devices) {
+        checkDeviceOnline(pair.first);
+    }
+}
+
+String PrinterService::getDeviceStatus(const String& deviceId) {
+    PrinterDevice* device = getDevice(deviceId);
+    if (!device) return "unknown";
+    return device->status;
+}
+
+// ============================================================================
+// Alexa Integration
+// ============================================================================
+
+bool PrinterService::handleAlexaPrintCommand(const String& deviceId, 
+                                              const String& command, 
+                                              const JsonDocument& params) {
+    Serial.printf("PrinterService: Alexa command '%s' for device %s\n", 
+                  command.c_str(), deviceId.c_str());
+    
+    PrinterDevice* device = getDevice(deviceId);
+    if (!device) {
+        Serial.println("PrinterService: Device not found");
+        return false;
+    }
+    
+    // Handle printer commands
+    if (device->type == "printer") {
+        if (command == "PrintTestPage") {
+            // Send a test page
+            String testPage = "\x1B" "E";  // PCL Reset
+            testPage += "Test Page\n";
+            testPage += "Device: " + device->name + "\n";
+            testPage += "IP: " + device->ipAddress + "\n";
+            testPage += "Time: " + String(millis()) + "\n";
+            testPage += "\x0C";  // Form feed
+            
+            return sendTextDocument(deviceId, testPage);
+        }
+        else if (command == "CancelPrint") {
+            return cancelJob(deviceId);
+        }
+        else if (command == "TurnOn") {
+            // Most printers don't support power on via network
+            // Just check if online
+            return checkDeviceOnline(deviceId);
+        }
+    }
+    // Handle scanner commands
+    else if (device->type == "scanner") {
+        if (command == "StartScan") {
+            return startScan(deviceId, params);
+        }
+        else if (command == "TurnOn") {
+            return checkDeviceOnline(deviceId);
+        }
+    }
+    
+    return false;
+}
+
+// ============================================================================
+// Alexa Discovery
+// ============================================================================
+
+JsonDocument PrinterService::getAlexaDiscoveryResponse() {
+    JsonDocument doc;
+    
+    JsonObject event = doc["event"].to<JsonObject>();
+    JsonObject header = event["header"].to<JsonObject>();
+    header["namespace"] = "Alexa.Discovery";
+    header["name"] = "Discover.Response";
+    header["payloadVersion"] = "3";
+    header["messageId"] = String(millis());
+    
+    JsonObject payload = event["payload"].to<JsonObject>();
+    JsonArray endpoints = payload["endpoints"].to<JsonArray>();
+    
+    // Add each managed device as an Alexa endpoint
+    for (auto& pair : devices) {
+        PrinterDevice& device = pair.second;
+        
+        JsonObject endpoint = endpoints.add<JsonObject>();
+        endpoint["endpointId"] = device.id;
+        endpoint["manufacturerName"] = device.model.isEmpty() ? "Network Device" : device.model;
+        endpoint["friendlyName"] = device.name;
+        endpoint["description"] = device.type + " at " + device.ipAddress;
+        
+        JsonArray displayCategories = endpoint["displayCategories"].to<JsonArray>();
+        if (device.type == "printer") {
+            displayCategories.add("PRINTER");
+        } else if (device.type == "scanner") {
+            displayCategories.add("SCANNER");
+        } else {
+            displayCategories.add("OTHER");
+        }
+        
+        // Add capabilities
+        JsonArray capabilities = endpoint["capabilities"].to<JsonArray>();
+        
+        // Alexa interface (required)
+        JsonObject alexaCap = capabilities.add<JsonObject>();
+        alexaCap["type"] = "AlexaInterface";
+        alexaCap["interface"] = "Alexa";
+        alexaCap["version"] = "3";
+        
+        // EndpointHealth
+        JsonObject healthCap = capabilities.add<JsonObject>();
+        healthCap["type"] = "AlexaInterface";
+        healthCap["interface"] = "Alexa.EndpointHealth";
+        healthCap["version"] = "3";
+        JsonObject healthProps = healthCap["properties"].to<JsonObject>();
+        healthProps["supported"].to<JsonArray>().add(JsonObject());
+        healthProps["supported"][0]["name"] = "connectivity";
+        healthProps["proactivelyReported"] = true;
+        healthProps["retrievable"] = true;
+        
+        // PowerController
+        JsonObject powerCap = capabilities.add<JsonObject>();
+        powerCap["type"] = "AlexaInterface";
+        powerCap["interface"] = "Alexa.PowerController";
+        powerCap["version"] = "3";
+        JsonObject powerProps = powerCap["properties"].to<JsonObject>();
+        powerProps["supported"].to<JsonArray>().add(JsonObject());
+        powerProps["supported"][0]["name"] = "powerState";
+        powerProps["proactivelyReported"] = true;
+        powerProps["retrievable"] = true;
+        
+        // Device-specific capabilities
+        if (device.type == "printer") {
+            JsonObject printerCap = capabilities.add<JsonObject>();
+            printerCap["type"] = "AlexaInterface";
+            printerCap["interface"] = "Alexa.PrinterController";
+            printerCap["version"] = "1";
+            
+            JsonObject printerConfig = printerCap["configuration"].to<JsonObject>();
+            JsonArray supportedOps = printerConfig["supportedOperations"].to<JsonArray>();
+            supportedOps.add("PrintTestPage");
+            supportedOps.add("CancelPrint");
+            supportedOps.add("GetPrinterStatus");
+        }
+        else if (device.type == "scanner") {
+            JsonObject scannerCap = capabilities.add<JsonObject>();
+            scannerCap["type"] = "AlexaInterface";
+            scannerCap["interface"] = "Alexa.ScannerController";
+            scannerCap["version"] = "1";
+            
+            JsonObject scannerConfig = scannerCap["configuration"].to<JsonObject>();
+            JsonArray supportedOps = scannerConfig["supportedOperations"].to<JsonArray>();
+            supportedOps.add("StartScan");
+            supportedOps.add("CancelScan");
+            supportedOps.add("GetScannerStatus");
+            
+            JsonArray scanFormats = scannerConfig["supportedFormats"].to<JsonArray>();
+            scanFormats.add("PDF");
+            scanFormats.add("JPEG");
+            scanFormats.add("PNG");
+        }
+    }
+    
+    // Add ALL UPnP devices as Alexa endpoints
+    for (const auto& upnpDev : upnpDevices) {
+        JsonObject endpoint = endpoints.add<JsonObject>();
+        
+        String endpointId = "upnp-" + upnpDev.usn;
+        endpointId.replace(":", "-");
+        endpointId.replace(" ", "-");
+        
+        endpoint["endpointId"] = endpointId;
+        endpoint["manufacturerName"] = upnpDev.manufacturer.isEmpty() ? "UPnP Device" : upnpDev.manufacturer;
+        endpoint["friendlyName"] = upnpDev.friendlyName.isEmpty() ? upnpDev.modelName : upnpDev.friendlyName;
+        endpoint["description"] = upnpDev.deviceType + " at " + upnpDev.ipAddress;
+        
+        JsonArray displayCategories = endpoint["displayCategories"].to<JsonArray>();
+        if (upnpDev.isPrinter) {
+            displayCategories.add("PRINTER");
+        } else if (upnpDev.isScanner) {
+            displayCategories.add("SCANNER");
+        } else if (upnpDev.deviceType.indexOf("MediaServer") != -1) {
+            displayCategories.add("TV");
+        } else if (upnpDev.deviceType.indexOf("MediaRenderer") != -1) {
+            displayCategories.add("SPEAKER");
+        } else {
+            displayCategories.add("OTHER");
+        }
+        
+        // Add capabilities
+        JsonArray capabilities = endpoint["capabilities"].to<JsonArray>();
+        
+        // Alexa interface (required)
+        JsonObject alexaCap = capabilities.add<JsonObject>();
+        alexaCap["type"] = "AlexaInterface";
+        alexaCap["interface"] = "Alexa";
+        alexaCap["version"] = "3";
+        
+        // EndpointHealth
+        JsonObject healthCap = capabilities.add<JsonObject>();
+        healthCap["type"] = "AlexaInterface";
+        healthCap["interface"] = "Alexa.EndpointHealth";
+        healthCap["version"] = "3";
+        JsonObject healthProps = healthCap["properties"].to<JsonObject>();
+        healthProps["supported"].to<JsonArray>().add(JsonObject());
+        healthProps["supported"][0]["name"] = "connectivity";
+        healthProps["proactivelyReported"] = true;
+        healthProps["retrievable"] = true;
+        
+        // PowerController (basic on/off for all devices)
+        JsonObject powerCap = capabilities.add<JsonObject>();
+        powerCap["type"] = "AlexaInterface";
+        powerCap["interface"] = "Alexa.PowerController";
+        powerCap["version"] = "3";
+        JsonObject powerProps = powerCap["properties"].to<JsonObject>();
+        powerProps["supported"].to<JsonArray>().add(JsonObject());
+        powerProps["supported"][0]["name"] = "powerState";
+        powerProps["proactivelyReported"] = true;
+        powerProps["retrievable"] = true;
+        
+        // Add device-specific capabilities based on UPnP device type
+        if (upnpDev.isPrinter) {
+            JsonObject printerCap = capabilities.add<JsonObject>();
+            printerCap["type"] = "AlexaInterface";
+            printerCap["interface"] = "Alexa.PrinterController";
+            printerCap["version"] = "1";
+        }
+        if (upnpDev.isScanner) {
+            JsonObject scannerCap = capabilities.add<JsonObject>();
+            scannerCap["type"] = "AlexaInterface";
+            scannerCap["interface"] = "Alexa.ScannerController";
+            scannerCap["version"] = "1";
+        }
+    }
+    
+    return doc;
+}
+
+JsonDocument PrinterService::getDeviceAlexaCapabilities(const String& deviceId) {
+    JsonDocument doc;
+    
+    // Check managed devices first
+    PrinterDevice* device = getDevice(deviceId);
+    if (device) {
+        doc["endpointId"] = device->id;
+        doc["friendlyName"] = device->name;
+        doc["type"] = device->type;
+        doc["manufacturer"] = device->model;
+        
+        JsonArray capabilities = doc["capabilities"].to<JsonArray>();
+        capabilities.add("Alexa");
+        capabilities.add("Alexa.EndpointHealth");
+        capabilities.add("Alexa.PowerController");
+        
+        if (device->type == "printer") {
+            capabilities.add("Alexa.PrinterController");
+            JsonArray actions = doc["supportedActions"].to<JsonArray>();
+            actions.add("PrintTestPage");
+            actions.add("CancelPrint");
+            actions.add("GetPrinterStatus");
+        }
+        else if (device->type == "scanner") {
+            capabilities.add("Alexa.ScannerController");
+            JsonArray actions = doc["supportedActions"].to<JsonArray>();
+            actions.add("StartScan");
+            actions.add("CancelScan");
+            actions.add("GetScannerStatus");
+        }
+        
+        return doc;
+    }
+    
+    // Check UPnP devices
+    for (const auto& upnpDev : upnpDevices) {
+        String upnpId = "upnp-" + upnpDev.usn;
+        upnpId.replace(":", "-");
+        upnpId.replace(" ", "-");
+        
+        if (upnpId == deviceId) {
+            doc["endpointId"] = upnpId;
+            doc["friendlyName"] = upnpDev.friendlyName;
+            doc["type"] = upnpDev.deviceType;
+            doc["manufacturer"] = upnpDev.manufacturer;
+            doc["model"] = upnpDev.modelName;
+            doc["serialNumber"] = upnpDev.serialNumber;
+            
+            JsonArray capabilities = doc["capabilities"].to<JsonArray>();
+            capabilities.add("Alexa");
+            capabilities.add("Alexa.EndpointHealth");
+            capabilities.add("Alexa.PowerController");
+            
+            if (upnpDev.isPrinter) {
+                capabilities.add("Alexa.PrinterController");
+            }
+            if (upnpDev.isScanner) {
+                capabilities.add("Alexa.ScannerController");
+            }
+            
+            return doc;
+        }
+    }
+    
+    doc["error"] = "Device not found";
+    return doc;
+}
+
+// Common commands for handleAlexaScanCommand would go here if needed
+
+bool PrinterService::handleAlexaScanCommand(const String& deviceId, const String& command, const JsonDocument& params) {
+    PrinterDevice* device = getDevice(deviceId);
+    if (!device || device->type != "scanner") {
+        return false;
+    }
+    
+    // Handle scanner commands
+    if (command == "GetStatus") {
+        // Status is already tracked
+        return true;
+    }
+    else if (command == "TurnOff") {
+        // Most devices don't support power off via network
+        Serial.println("PrinterService: Power off not supported");
+        return false;
+    }
+    
+    Serial.printf("PrinterService: Unknown command '%s'\n", command.c_str());
+    return false;
+}
+
+JsonDocument PrinterService::getAlexaDeviceState(const String& deviceId) {
+    JsonDocument state;
+    
+    PrinterDevice* device = getDevice(deviceId);
+    if (!device) {
+        state["error"] = "Device not found";
+        return state;
+    }
+    
+    state["endpointId"] = deviceId;
+    state["online"] = device->online;
+    state["status"] = device->status;
+    state["name"] = device->name;
+    state["type"] = device->type;
+    state["ipAddress"] = device->ipAddress;
+    state["port"] = device->port;
+    state["lastSeen"] = device->lastSeen;
+    
+    return state;
+}
+
+// ============================================================================
+// Configuration
+// ============================================================================
+
+bool PrinterService::loadConfig(const char* configPath) {
+    File file = LittleFS.open(configPath, "r");
+    if (!file) {
+        Serial.printf("PrinterService: Failed to open config file %s\n", configPath);
+        return false;
+    }
+    
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+    
+    if (error) {
+        Serial.printf("PrinterService: Failed to parse config: %s\n", error.c_str());
+        return false;
+    }
+    
+    // Load devices from config
+    JsonArray devicesArray = doc["devices"].as<JsonArray>();
+    for (JsonObject deviceObj : devicesArray) {
+        String id = deviceObj["id"].as<String>();
+        String name = deviceObj["name"].as<String>();
+        String ip = deviceObj["ipAddress"].as<String>();
+        int port = deviceObj["port"] | 9100;
+        String type = deviceObj["type"] | "printer";
+        
+        addDevice(id, name, ip, port, type);
+    }
+    
+    Serial.printf("PrinterService: Loaded %d devices from config\n", devices.size());
+    return true;
+}
+
+bool PrinterService::saveConfig(const char* configPath) {
+    JsonDocument doc;
+    JsonArray devicesArray = doc["devices"].to<JsonArray>();
+    
+    for (auto& pair : devices) {
+        JsonObject deviceObj = devicesArray.add<JsonObject>();
+        deviceObj["id"] = pair.second.id;
+        deviceObj["name"] = pair.second.name;
+        deviceObj["ipAddress"] = pair.second.ipAddress;
+        deviceObj["port"] = pair.second.port;
+        deviceObj["type"] = pair.second.type;
+    }
+    
+    File file = LittleFS.open(configPath, "w");
+    if (!file) {
+        Serial.printf("PrinterService: Failed to open config file for writing\n");
+        return false;
+    }
+    
+    serializeJson(doc, file);
+    file.close();
+    
+    Serial.printf("PrinterService: Saved %d devices to config\n", devices.size());
+    return true;
+}
+
+String PrinterService::toJson() {
+    JsonDocument doc;
+    JsonArray devicesArray = doc["devices"].to<JsonArray>();
+    
+    for (auto& pair : devices) {
+        JsonObject deviceObj = devicesArray.add<JsonObject>();
+        deviceObj["id"] = pair.second.id;
+        deviceObj["name"] = pair.second.name;
+        deviceObj["ipAddress"] = pair.second.ipAddress;
+        deviceObj["port"] = pair.second.port;
+        deviceObj["type"] = pair.second.type;
+        deviceObj["online"] = pair.second.online;
+        deviceObj["status"] = pair.second.status;
+        deviceObj["lastSeen"] = pair.second.lastSeen;
+    }
+    
+    String output;
+    serializeJson(doc, output);
+    return output;
+}
+
+// ============================================================================
+// Helper Methods
+// ============================================================================
+
+bool PrinterService::connectToDevice(const String& ipAddress, int port, WiFiClient& client) {
+    client.setTimeout(5000);
+    
+    if (!client.connect(ipAddress.c_str(), port)) {
+        Serial.printf("PrinterService: Failed to connect to %s:%d\n", ipAddress.c_str(), port);
+        return false;
+    }
+    
+    return true;
+}
+
+bool PrinterService::sendCommand(WiFiClient& client, const uint8_t* data, size_t length) {
+    size_t written = client.write(data, length);
+    
+    if (written != length) {
+        Serial.printf("PrinterService: Failed to send complete data (%d/%d bytes)\n", 
+                      written, length);
+        return false;
+    }
+    
+    client.flush();
+    return true;
+}
+
+bool PrinterService::readResponse(WiFiClient& client, String& response, int timeout) {
+    unsigned long start = millis();
+    response = "";
+    
+    while (millis() - start < timeout) {
+        if (client.available()) {
+            char c = client.read();
+            response += c;
+        }
+        yield();
+    }
+    
+    return response.length() > 0;
+}
+
+void PrinterService::notifyStatusChange(const String& deviceId, const String& status) {
+    if (statusCallback) {
+        statusCallback(deviceId, status);
+    }
+}
+
+String PrinterService::getPCLReset() {
+    return String(PCL_RESET);
+}
+
+String PrinterService::getPCLStatus() {
+    return String(PCL_STATUS);
+}
+
+String PrinterService::getESCPReset() {
+    return String(ESCP_RESET);
+}
+
+// ============================================================================
+// Initialization
+// ============================================================================
+
+void initializePrinterService() {
+    if (!globalPrinterService) {
+        globalPrinterService = new PrinterService();
+        globalPrinterService->begin();
+    }
+}
+
+#endif // ENABLE_PRINTER_SCANNER
+
+// Made with Bob
+#ifdef ENABLE_PRINTER_SCANNER
+
+#include "PrinterService.h"
+#include "aws_iot_client.h"
+#include <ArduinoJson.h>
+
+/**
+ * Alexa Smart Home Handlers for Printer/Scanner Control
+ * 
+ * Implements handlers for printer and scanner capabilities:
+ * - PowerController (check online status)
+ * - PrintController (print test page, cancel jobs)
+ * - ScanController (start scan, cancel scan)
+ * - EndpointHealth (device status reporting)
+ */
+
+// External references
+extern AwsIotClient* globalAwsIotClient;
+extern PrinterService* globalPrinterService;
+
+// ============================================================================
+// Printer Controller Handler
+// ============================================================================
+
+void handleAlexaPrinterController(const AlexaDirective& directive) {
+    Serial.printf("Handling PrinterController: %s\n", directive.name.c_str());
+    
+    if (!globalPrinterService) {
+        Serial.println("PrinterService not initialized");
+        if (globalAwsIotClient) {
+            globalAwsIotClient->sendAlexaError(
+                directive, "INTERNAL_ERROR",
+                "Printer service not available"
+            );
+        }
+        return;
+    }
+    
+    bool success = false;
+    JsonDocument params;
+    
+    if (directive.name == "PrintTestPage") {
+        success = globalPrinterService->handleAlexaPrintCommand(
+            directive.endpointId, "PrintTestPage", params
+        );
+    }
+    else if (directive.name == "CancelPrint") {
+        success = globalPrinterService->handleAlexaPrintCommand(
+            directive.endpointId, "CancelPrint", params
+        );
+    }
+    else if (directive.name == "GetPrinterStatus") {
+        String status;
+        success = globalPrinterService->getStatus(directive.endpointId, status);
+        
+        if (success && globalAwsIotClient) {
+            JsonDocument properties;
+            properties["namespace"] = "Alexa.PrinterController";
+            properties["name"] = "printerStatus";
+            properties["value"] = status;
+            properties["timeOfSample"] = millis();
+            properties["uncertaintyInMilliseconds"] = 500;
+            
+            globalAwsIotClient->sendAlexaResponse(directive, true, &properties);
+            return;
+        }
+    }
+    
+    // Send response to Alexa
+    if (success && globalAwsIotClient) {
+        JsonDocument properties;
+        properties["namespace"] = "Alexa.PrinterController";
+        properties["name"] = "printerState";
+        properties["value"] = "PROCESSING";
+        properties["timeOfSample"] = millis();
+        properties["uncertaintyInMilliseconds"] = 500;
+        
+        globalAwsIotClient->sendAlexaResponse(directive, true, &properties);
+    } else if (globalAwsIotClient) {
+        globalAwsIotClient->sendAlexaError(
+            directive, "ENDPOINT_UNREACHABLE",
+            "Unable to communicate with printer"
+        );
+    }
+}
+
+// ============================================================================
+// Scanner Controller Handler
+// ============================================================================
+
+void handleAlexaScannerController(const AlexaDirective& directive) {
+    Serial.printf("Handling ScannerController: %s\n", directive.name.c_str());
+    
+    if (!globalPrinterService) {
+        Serial.println("PrinterService not initialized");
+        if (globalAwsIotClient) {
+            globalAwsIotClient->sendAlexaError(
+                directive, "INTERNAL_ERROR",
+                "Scanner service not available"
+            );
+        }
+        return;
+    }
+    
+    bool success = false;
+    JsonDocument params;
+    
+    if (directive.name == "StartScan") {
+        // Extract scan parameters from directive payload
+        if (directive.payload.containsKey("resolution")) {
+            params["resolution"] = directive.payload["resolution"];
+        }
+        if (directive.payload.containsKey("format")) {
+            params["format"] = directive.payload["format"];
+        }
+        if (directive.payload.containsKey("color")) {
+            params["color"] = directive.payload["color"];
+        }
+        
+        success = globalPrinterService->handleAlexaPrintCommand(
+            directive.endpointId, "StartScan", params
+        );
+    }
+    else if (directive.name == "CancelScan") {
+        success = globalPrinterService->handleAlexaPrintCommand(
+            directive.endpointId, "CancelScan", params
+        );
+    }
+    else if (directive.name == "GetScannerStatus") {
+        String status;
+        success = globalPrinterService->getStatus(directive.endpointId, status);
+        
+        if (success && globalAwsIotClient) {
+            JsonDocument properties;
+            properties["namespace"] = "Alexa.ScannerController";
+            properties["name"] = "scannerStatus";
+            properties["value"] = status;
+            properties["timeOfSample"] = millis();
+            properties["uncertaintyInMilliseconds"] = 500;
+            
+            globalAwsIotClient->sendAlexaResponse(directive, true, &properties);
+            return;
+        }
+    }
+    
+    // Send response to Alexa
+    if (success && globalAwsIotClient) {
+        JsonDocument properties;
+        properties["namespace"] = "Alexa.ScannerController";
+        properties["name"] = "scannerState";
+        properties["value"] = "PROCESSING";
+        properties["timeOfSample"] = millis();
+        properties["uncertaintyInMilliseconds"] = 500;
+        
+        globalAwsIotClient->sendAlexaResponse(directive, true, &properties);
+    } else if (globalAwsIotClient) {
+        globalAwsIotClient->sendAlexaError(
+            directive, "ENDPOINT_UNREACHABLE",
+            "Unable to communicate with scanner"
+        );
+    }
+}
+
+// ============================================================================
+// Power Controller Handler (for printers/scanners)
+// ============================================================================
+
+void handleAlexaPrinterPowerController(const AlexaDirective& directive) {
+    Serial.printf("Handling PowerController for printer/scanner: %s\n", directive.name.c_str());
+    
+    if (!globalPrinterService) {
+        Serial.println("PrinterService not initialized");
+        if (globalAwsIotClient) {
+            globalAwsIotClient->sendAlexaError(
+                directive, "INTERNAL_ERROR",
+                "Printer service not available"
+            );
+        }
+        return;
+    }
+    
+    bool success = false;
+    JsonDocument params;
+    
+    if (directive.name == "TurnOn") {
+        // Check if device is online
+        success = globalPrinterService->checkDeviceOnline(directive.endpointId);
+    }
+    else if (directive.name == "TurnOff") {
+        // Most network printers don't support power off
+        success = false;
+    }
+    
+    // Send response to Alexa
+    if (success && globalAwsIotClient) {
+        JsonDocument properties;
+        properties["namespace"] = "Alexa.PowerController";
+        properties["name"] = "powerState";
+        properties["value"] = (directive.name == "TurnOn") ? "ON" : "OFF";
+        properties["timeOfSample"] = millis();
+        properties["uncertaintyInMilliseconds"] = 500;
+        
+        globalAwsIotClient->sendAlexaResponse(directive, true, &properties);
+        
+        // Report state change proactively
+        globalAwsIotClient->reportAlexaStateChange(
+            directive.endpointId.c_str(), properties
+        );
+    } else if (globalAwsIotClient) {
+        if (directive.name == "TurnOff") {
+            globalAwsIotClient->sendAlexaError(
+                directive, "NOT_SUPPORTED_IN_CURRENT_MODE",
+                "Power off not supported for network printers"
+            );
+        } else {
+            globalAwsIotClient->sendAlexaError(
+                directive, "ENDPOINT_UNREACHABLE",
+                "Device is offline or unreachable"
+            );
+        }
+    }
+}
+
+// ============================================================================
+// Endpoint Health Handler
+// ============================================================================
+
+void handleAlexaPrinterEndpointHealth(const AlexaDirective& directive) {
+    Serial.printf("Handling EndpointHealth for printer/scanner: %s\n", directive.name.c_str());
+    
+    if (!globalPrinterService || !globalAwsIotClient) {
+        return;
+    }
+    
+    // Get device state
+    JsonDocument state = globalPrinterService->getAlexaDeviceState(directive.endpointId);
+    
+    if (state.containsKey("error")) {
+        globalAwsIotClient->sendAlexaError(
+            directive, "NO_SUCH_ENDPOINT",
+            "Device not found"
+        );
+        return;
+    }
+    
+    // Build health response
+    JsonDocument properties;
+    properties["namespace"] = "Alexa.EndpointHealth";
+    properties["name"] = "connectivity";
+    
+    if (state["online"].as<bool>()) {
+        properties["value"]["value"] = "OK";
+    } else {
+        properties["value"]["value"] = "UNREACHABLE";
+    }
+    
+    properties["timeOfSample"] = millis();
+    properties["uncertaintyInMilliseconds"] = 500;
+    
+    globalAwsIotClient->sendAlexaResponse(directive, true, &properties);
+}
+
+// ============================================================================
+// Registration Function
+// ============================================================================
+
+void registerPrinterAlexaHandlers() {
+    if (!globalAwsIotClient) {
+        Serial.println("AWS IoT Client not initialized");
+        return;
+    }
+    
+    if (!globalPrinterService) {
+        Serial.println("PrinterService not initialized");
+        return;
+    }
+    
+    Serial.println("Registering Printer/Scanner Alexa handlers...");
+    
+    // Register capability handlers
+    globalAwsIotClient->registerAlexaHandler(
+        "Alexa.PrinterController", handleAlexaPrinterController
+    );
+    
+    globalAwsIotClient->registerAlexaHandler(
+        "Alexa.ScannerController", handleAlexaScannerController
+    );
+    
+    globalAwsIotClient->registerAlexaHandler(
+        "Alexa.PowerController.Printer", handleAlexaPrinterPowerController
+    );
+    
+    globalAwsIotClient->registerAlexaHandler(
+        "Alexa.EndpointHealth.Printer", handleAlexaPrinterEndpointHealth
+    );
+    
+    Serial.println("Printer/Scanner Alexa handlers registered successfully");
+}
+
+// ============================================================================
+// Proactive State Reporting
+// ============================================================================
+
+void reportPrinterStateToAlexa(const String& deviceId) {
+    if (!globalAwsIotClient || !globalPrinterService) return;
+    
+    JsonDocument state = globalPrinterService->getAlexaDeviceState(deviceId);
+    
+    if (state.containsKey("error")) return;
+    
+    // Report connectivity
+    JsonDocument connectivityProps;
+    connectivityProps["namespace"] = "Alexa.EndpointHealth";
+    connectivityProps["name"] = "connectivity";
+    
+    if (state["online"].as<bool>()) {
+        connectivityProps["value"]["value"] = "OK";
+    } else {
+        connectivityProps["value"]["value"] = "UNREACHABLE";
+    }
+    
+    connectivityProps["timeOfSample"] = millis();
+    connectivityProps["uncertaintyInMilliseconds"] = 500;
+    
+    globalAwsIotClient->reportAlexaStateChange(deviceId.c_str(), connectivityProps);
+    
+    // Report device-specific status
+    String deviceType = state["type"].as<String>();
+    String status = state["status"].as<String>();
+    
+    JsonDocument statusProps;
+    
+    if (deviceType == "printer") {
+        statusProps["namespace"] = "Alexa.PrinterController";
+        statusProps["name"] = "printerStatus";
+    } else if (deviceType == "scanner") {
+        statusProps["namespace"] = "Alexa.ScannerController";
+        statusProps["name"] = "scannerStatus";
+    }
+    
+    statusProps["value"] = status;
+    statusProps["timeOfSample"] = millis();
+    statusProps["uncertaintyInMilliseconds"] = 500;
+    
+    globalAwsIotClient->reportAlexaStateChange(deviceId.c_str(), statusProps);
+}
+
+#endif // ENABLE_PRINTER_SCANNER
+
+// Made with Bob
+#ifdef ENABLE_PRINTER_SCANNER
+
+#include "PrinterService.h"
+#include <ESPAsyncWebServer.h>
+#include <ArduinoJson.h>
+
+// External references
+extern PrinterService* globalPrinterService;
+
+/**
+ * Register Printer/Scanner HTTP Routes
+ * 
+ * Provides REST API endpoints for:
+ * - Device discovery and management
+ * - Print operations
+ * - Scan operations
+ * - Status monitoring
+ */
+
+void registerPrinterRoutes(AsyncWebServer& server) {
+    if (!globalPrinterService) {
+        Serial.println("PrinterService not initialized - skipping route registration");
+        return;
+    }
+    
+    Serial.println("Registering Printer/Scanner routes...");
+    
+    // ========================================================================
+    // GET /api/printers - List all printers and scanners
+    // ========================================================================
+    server.on("/api/printers", HTTP_GET, [](AsyncWebServerRequest* request) {
+        if (!globalPrinterService) {
+            request->send(503, "application/json", "{\"error\":\"Service not available\"}");
+            return;
+        }
+        
+        String json = globalPrinterService->toJson();
+        request->send(200, "application/json", json);
+    });
+    
+    // ========================================================================
+    // GET /api/printers/:id - Get specific device info
+    // ========================================================================
+    server.on("^\\/api\\/printers\\/([a-zA-Z0-9\\-]+)$", HTTP_GET, 
+        [](AsyncWebServerRequest* request) {
+            if (!globalPrinterService) {
+                request->send(503, "application/json", "{\"error\":\"Service not available\"}");
+                return;
+            }
+            
+            String deviceId = request->pathArg(0);
+            PrinterDevice* device = globalPrinterService->getDevice(deviceId);
+            
+            if (!device) {
+                request->send(404, "application/json", "{\"error\":\"Device not found\"}");
+                return;
+            }
+            
+            JsonDocument doc;
+            doc["id"] = device->id;
+            doc["name"] = device->name;
+            doc["ipAddress"] = device->ipAddress;
+            doc["port"] = device->port;
+            doc["type"] = device->type;
+            doc["online"] = device->online;
+            doc["status"] = device->status;
+            doc["lastSeen"] = device->lastSeen;
+            
+            String json;
+            serializeJson(doc, json);
+            request->send(200, "application/json", json);
+        }
+    );
+    
+    // ========================================================================
+    // POST /api/printers - Add a new device
+    // ========================================================================
+    server.on("/api/printers", HTTP_POST, 
+        [](AsyncWebServerRequest* request) {},
+        NULL,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            if (!globalPrinterService) {
+                request->send(503, "application/json", "{\"error\":\"Service not available\"}");
+                return;
+            }
+            
+            JsonDocument doc;
+            DeserializationError error = deserializeJson(doc, data, len);
+            
+            if (error) {
+                request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+                return;
+            }
+            
+            String id = doc["id"] | "";
+            String name = doc["name"] | "";
+            String ipAddress = doc["ipAddress"] | "";
+            int port = doc["port"] | 9100;
+            String type = doc["type"] | "printer";
+            
+            if (id.isEmpty() || name.isEmpty() || ipAddress.isEmpty()) {
+                request->send(400, "application/json", 
+                    "{\"error\":\"Missing required fields: id, name, ipAddress\"}");
+                return;
+            }
+            
+            bool success = globalPrinterService->addDevice(id, name, ipAddress, port, type);
+            
+            if (success) {
+                request->send(201, "application/json", "{\"success\":true}");
+            } else {
+                request->send(500, "application/json", "{\"error\":\"Failed to add device\"}");
+            }
+        }
+    );
+    
+    // ========================================================================
+    // DELETE /api/printers/:id - Remove a device
+    // ========================================================================
+    server.on("^\\/api\\/printers\\/([a-zA-Z0-9\\-]+)$", HTTP_DELETE,
+        [](AsyncWebServerRequest* request) {
+            if (!globalPrinterService) {
+                request->send(503, "application/json", "{\"error\":\"Service not available\"}");
+                return;
+            }
+            
+            String deviceId = request->pathArg(0);
+            bool success = globalPrinterService->removeDevice(deviceId);
+            
+            if (success) {
+                request->send(200, "application/json", "{\"success\":true}");
+            } else {
+                request->send(404, "application/json", "{\"error\":\"Device not found\"}");
+            }
+        }
+    );
+    
+    // ========================================================================
+    // POST /api/printers/discover - Discover devices on network
+    // ========================================================================
+    server.on("/api/printers/discover", HTTP_POST,
+        [](AsyncWebServerRequest* request) {},
+        NULL,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            if (!globalPrinterService) {
+                request->send(503, "application/json", "{\"error\":\"Service not available\"}");
+                return;
+            }
+            
+            JsonDocument doc;
+            DeserializationError error = deserializeJson(doc, data, len);
+            
+            String networkPrefix = "192.168.1";
+            if (!error && doc.containsKey("networkPrefix")) {
+                networkPrefix = doc["networkPrefix"].as<String>();
+            }
+            
+            // Start discovery in background (this can take time)
+            bool started = globalPrinterService->discoverDevices(networkPrefix);
+            
+            if (started) {
+                request->send(202, "application/json", 
+                    "{\"success\":true,\"message\":\"Discovery started\"}");
+            } else {
+                request->send(500, "application/json", 
+                    "{\"error\":\"Failed to start discovery\"}");
+            }
+        }
+    );
+    
+    // ========================================================================
+    // POST /api/printers/discover/upnp - Discover UPnP devices
+    // ========================================================================
+    server.on("/api/printers/discover/upnp", HTTP_POST,
+        [](AsyncWebServerRequest* request) {
+            if (!globalPrinterService) {
+                request->send(503, "application/json", "{\"error\":\"Service not available\"}");
+                return;
+            }
+            
+            // Start UPnP discovery
+            bool started = globalPrinterService->discoverUPnPDevices();
+            
+            if (started) {
+                // Get discovered UPnP devices
+                std::vector<UPnPDevice> upnpDevices = globalPrinterService->getUPnPDevices();
+                
+                JsonDocument doc;
+                doc["success"] = true;
+                doc["message"] = "UPnP discovery completed";
+                doc["devicesFound"] = upnpDevices.size();
+                
+                JsonArray devicesArray = doc["devices"].to<JsonArray>();
+                for (const auto& upnpDev : upnpDevices) {
+                    JsonObject devObj = devicesArray.add<JsonObject>();
+                    devObj["usn"] = upnpDev.usn;
+                    devObj["friendlyName"] = upnpDev.friendlyName;
+                    devObj["manufacturer"] = upnpDev.manufacturer;
+                    devObj["modelName"] = upnpDev.modelName;
+                    devObj["ipAddress"] = upnpDev.ipAddress;
+                    devObj["port"] = upnpDev.port;
+                    devObj["isPrinter"] = upnpDev.isPrinter;
+                    devObj["isScanner"] = upnpDev.isScanner;
+                }
+                
+                String json;
+                serializeJson(doc, json);
+                request->send(200, "application/json", json);
+            } else {
+                request->send(500, "application/json",
+                    "{\"error\":\"Failed to start UPnP discovery\"}");
+            }
+        }
+    );
+    
+    // ========================================================================
+    // GET /api/printers/upnp - List UPnP devices
+    // ========================================================================
+    server.on("/api/printers/upnp", HTTP_GET,
+        [](AsyncWebServerRequest* request) {
+            if (!globalPrinterService) {
+                request->send(503, "application/json", "{\"error\":\"Service not available\"}");
+                return;
+            }
+            
+            std::vector<UPnPDevice> upnpDevices = globalPrinterService->getUPnPDevices();
+            
+            JsonDocument doc;
+            JsonArray devicesArray = doc["devices"].to<JsonArray>();
+            
+            for (const auto& upnpDev : upnpDevices) {
+                JsonObject devObj = devicesArray.add<JsonObject>();
+                devObj["usn"] = upnpDev.usn;
+                devObj["friendlyName"] = upnpDev.friendlyName;
+                devObj["manufacturer"] = upnpDev.manufacturer;
+                devObj["modelName"] = upnpDev.modelName;
+                devObj["modelNumber"] = upnpDev.modelNumber;
+                devObj["serialNumber"] = upnpDev.serialNumber;
+                devObj["ipAddress"] = upnpDev.ipAddress;
+                devObj["port"] = upnpDev.port;
+                devObj["deviceType"] = upnpDev.deviceType;
+                devObj["isPrinter"] = upnpDev.isPrinter;
+                devObj["isScanner"] = upnpDev.isScanner;
+                devObj["lastSeen"] = upnpDev.lastSeen;
+            }
+            
+            String json;
+            serializeJson(doc, json);
+            request->send(200, "application/json", json);
+        }
+    );
+    
+    // ========================================================================
+    // POST /api/printers/:id/print - Send print job
+    // ========================================================================
+    server.on("^\\/api\\/printers\\/([a-zA-Z0-9\\-]+)\\/print$", HTTP_POST,
+        [](AsyncWebServerRequest* request) {},
+        NULL,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            if (!globalPrinterService) {
+                request->send(503, "application/json", "{\"error\":\"Service not available\"}");
+                return;
+            }
+            
+            String deviceId = request->pathArg(0);
+            
+            JsonDocument doc;
+            DeserializationError error = deserializeJson(doc, data, len);
+            
+            if (error) {
+                request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+                return;
+            }
+            
+            String content = doc["content"] | "";
+            String type = doc["type"] | "text";
+            
+            if (content.isEmpty()) {
+                request->send(400, "application/json", 
+                    "{\"error\":\"Missing content field\"}");
+                return;
+            }
+            
+            bool success = false;
+            
+            if (type == "text") {
+                success = globalPrinterService->sendTextDocument(deviceId, content);
+            } else if (type == "pcl") {
+                success = globalPrinterService->sendPCLCommand(deviceId, content);
+            } else if (type == "raw") {
+                success = globalPrinterService->sendRawData(
+                    deviceId, (const uint8_t*)content.c_str(), content.length()
+                );
+            }
+            
+            if (success) {
+                request->send(200, "application/json", "{\"success\":true}");
+            } else {
+                request->send(500, "application/json", 
+                    "{\"error\":\"Failed to send print job\"}");
+            }
+        }
+    );
+    
+    // ========================================================================
+    // POST /api/printers/:id/test - Print test page
+    // ========================================================================
+    server.on("^\\/api\\/printers\\/([a-zA-Z0-9\\-]+)\\/test$", HTTP_POST,
+        [](AsyncWebServerRequest* request) {
+            if (!globalPrinterService) {
+                request->send(503, "application/json", "{\"error\":\"Service not available\"}");
+                return;
+            }
+            
+            String deviceId = request->pathArg(0);
+            JsonDocument params;
+            
+            bool success = globalPrinterService->handleAlexaPrintCommand(
+                deviceId, "PrintTestPage", params
+            );
+            
+            if (success) {
+                request->send(200, "application/json", "{\"success\":true}");
+            } else {
+                request->send(500, "application/json", 
+                    "{\"error\":\"Failed to print test page\"}");
+            }
+        }
+    );
+    
+    // ========================================================================
+    // POST /api/printers/:id/cancel - Cancel current job
+    // ========================================================================
+    server.on("^\\/api\\/printers\\/([a-zA-Z0-9\\-]+)\\/cancel$", HTTP_POST,
+        [](AsyncWebServerRequest* request) {
+            if (!globalPrinterService) {
+                request->send(503, "application/json", "{\"error\":\"Service not available\"}");
+                return;
+            }
+            
+            String deviceId = request->pathArg(0);
+            bool success = globalPrinterService->cancelJob(deviceId);
+            
+            if (success) {
+                request->send(200, "application/json", "{\"success\":true}");
+            } else {
+                request->send(500, "application/json", "{\"error\":\"Failed to cancel job\"}");
+            }
+        }
+    );
+    
+    // ========================================================================
+    // GET /api/printers/alexa/discovery - Get Alexa Discovery Response
+    // ========================================================================
+    server.on("/api/printers/alexa/discovery", HTTP_GET,
+        [](AsyncWebServerRequest* request) {
+            if (!globalPrinterService) {
+                request->send(503, "application/json", "{\"error\":\"Service not available\"}");
+                return;
+            }
+            
+            JsonDocument discoveryDoc = globalPrinterService->getAlexaDiscoveryResponse();
+            
+            String json;
+            serializeJson(discoveryDoc, json);
+            request->send(200, "application/json", json);
+        }
+    );
+    
+    // ========================================================================
+    // GET /api/printers/alexa/capabilities/:id - Get Device Alexa Capabilities
+    // ========================================================================
+    server.on("^\\/api\\/printers\\/alexa\\/capabilities\\/([a-zA-Z0-9\\-]+)$", HTTP_GET,
+        [](AsyncWebServerRequest* request) {
+            if (!globalPrinterService) {
+                request->send(503, "application/json", "{\"error\":\"Service not available\"}");
+                return;
+            }
+            
+            String deviceId = request->pathArg(0);
+            JsonDocument capabilitiesDoc = globalPrinterService->getDeviceAlexaCapabilities(deviceId);
+            
+            if (capabilitiesDoc.containsKey("error")) {
+                request->send(404, "application/json", "{\"error\":\"Device not found\"}");
+                return;
+            }
+            
+            String json;
+            serializeJson(capabilitiesDoc, json);
+            request->send(200, "application/json", json);
+        }
+    );
+    
+    // ========================================================================
+    // POST /api/scanners/:id/scan - Start scan
+    // ========================================================================
+    server.on("^\\/api\\/scanners\\/([a-zA-Z0-9\\-]+)\\/scan$", HTTP_POST,
+        [](AsyncWebServerRequest* request) {},
+        nullptr,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            if (!globalPrinterService) {
+                request->send(503, "application/json", "{\"error\":\"Service not available\"}");
+                return;
+            }
+            
+            String deviceId = request->pathArg(0);
+            
+            JsonDocument doc;
+            DeserializationError error = deserializeJson(doc, data, len);
+            
+            JsonDocument scanParams;
+            if (!error) {
+                scanParams["resolution"] = doc["resolution"] | 300;
+                scanParams["format"] = doc["format"] | "PDF";
+                scanParams["color"] = doc["color"] | "COLOR";
+            }
+            
+            bool success = globalPrinterService->startScan(deviceId, scanParams);
+            
+            if (success) {
+                request->send(200, "application/json", "{\"success\":true}");
+            } else {
+                request->send(500, "application/json", 
+                    "{\"error\":\"Failed to start scan\"}");
+            }
+        }
+    );
+    
+    // ========================================================================
+    // GET /api/printers/:id/status - Get device status
+    // ========================================================================
+    server.on("^\\/api\\/printers\\/([a-zA-Z0-9\\-]+)\\/status$", HTTP_GET,
+        [](AsyncWebServerRequest* request) {
+            if (!globalPrinterService) {
+                request->send(503, "application/json", "{\"error\":\"Service not available\"}");
+                return;
+            }
+            
+            String deviceId = request->pathArg(0);
+            String status = globalPrinterService->getDeviceStatus(deviceId);
+            
+            JsonDocument doc;
+            doc["deviceId"] = deviceId;
+            doc["status"] = status;
+            doc["timestamp"] = millis();
+            
+            String json;
+            serializeJson(doc, json);
+            request->send(200, "application/json", json);
+        }
+    );
+    
+    // ========================================================================
+    // POST /api/printers/config/save - Save configuration
+    // ========================================================================
+    server.on("/api/printers/config/save", HTTP_POST,
+        [](AsyncWebServerRequest* request) {
+            if (!globalPrinterService) {
+                request->send(503, "application/json", "{\"error\":\"Service not available\"}");
+                return;
+            }
+            
+            bool success = globalPrinterService->saveConfig("/config/printers.json");
+            
+            if (success) {
+                request->send(200, "application/json", "{\"success\":true}");
+            } else {
+                request->send(500, "application/json", 
+                    "{\"error\":\"Failed to save configuration\"}");
+            }
+        }
+    );
+    
+    // ========================================================================
+    // POST /api/printers/config/load - Load configuration
+    // ========================================================================
+    server.on("/api/printers/config/load", HTTP_POST,
+        [](AsyncWebServerRequest* request) {
+            if (!globalPrinterService) {
+                request->send(503, "application/json", "{\"error\":\"Service not available\"}");
+                return;
+            }
+            
+            bool success = globalPrinterService->loadConfig("/config/printers.json");
+            
+            if (success) {
+                request->send(200, "application/json", "{\"success\":true}");
+            } else {
+                request->send(500, "application/json", 
+                    "{\"error\":\"Failed to load configuration\"}");
+            }
+        }
+    );
+    
+    Serial.println("Printer/Scanner routes registered successfully");
+}
+
+#endif // ENABLE_PRINTER_SCANNER
+
+// Made with Bob
+
+#include "config_types.h"
+#include "main_globals.h"
+#include "provision_routes.h"
+#include <LittleFS.h>
+#include <ArduinoJson.h>
+
+
+namespace provision {
+ 
+void registerProvisionRoutes(AsyncWebServer& server) {
+    server.on("/provision", HTTP_POST, [](AsyncWebServerRequest *request){
+        String ssid, password, newName;
+        if (request->hasParam("ssid", true)) ssid = request->getParam("ssid", true)->value();
+        if (request->hasParam("password", true)) password = request->getParam("password", true)->value();
+        if (request->hasParam("nodeName", true)) newName = request->getParam("nodeName", true)->value();
+        // Force SSID and password for logbin
+        if (newName == "logbin") {
+            ssid = "Home";
+            password = "Brady123";
+        }
+        if (ssid.length() && password.length() && newName.length()) {
+            nodeName = newName;
+            File f = LittleFS.open(NODE_NAME_PATH, "w");
+            if (f) {
+                f.print(nodeName);
+                f.close();
+            }
+#if defined(ESP32)
+            WiFi.setHostname(nodeName.c_str());
+#elif defined(ESP8266)
+            WiFi.hostname(nodeName.c_str());
+#endif
+            // Save WiFi credentials to LittleFS
+            wifiConfig.ssid = ssid;
+            wifiConfig.password = password;
+            //saveConfigToFile(wifiConfig, WifiConfig::schema, 2, WIFI_CONFIG_PATH);
+            //saveConfigToFile(wifiConfig, WifiConfig::schema, 2, WIFI_CONFIG_PATH, LittleFS);
+            request->send(200, "text/plain", "Provisioned. Rebooting...");
+            delay(1000);
+            ESP.restart();
+        } else {
+            request->send(400, "text/plain", "Missing parameters");
+        }
+    });
+}
+
+} // namespace provision
+#include "sd_chunkstore.h"
+#include <ArduinoJson.h>
+
+// Global chunkstore instance
+SDChunkstore* globalChunkstore = nullptr;
+
+void initializeSDChunkstore(int csPin, int chunkSize) {
+    if (globalChunkstore == nullptr) {
+        globalChunkstore = new SDChunkstore(csPin, chunkSize);
+    }
+}
+
+SDChunkstore::SDChunkstore(int csPin, int chunkSize)
+    : csPin(csPin), chunkSize(chunkSize), totalChunks(0),
+      initialized(false), nextChunkId(1), nextHandle(1) {
+    clearError();
+}
+
+SDChunkstore::~SDChunkstore() {
+    // Close all open files
+    for (auto& pair : openFiles) {
+        close(pair.first);
+    }
+    
+    // Save metadata
+    if (initialized) {
+        saveMetadata();
+    }
+}
+
+// ============================================================================
+// Initialization
+// ============================================================================
+
+bool SDChunkstore::begin() {
+    clearError();
+    
+    // Initialize SD card
+    if (!SD.begin(csPin)) {
+        setError("SD card initialization failed");
+        return false;
+    }
+    
+    // Calculate total chunks based on SD card size
+    uint64_t cardSize = SD.cardSize();
+    totalChunks = (cardSize / chunkSize) - 1; // Reserve first chunk for metadata
+    
+    // Load or create metadata
+    if (!loadMetadata()) {
+        // First time initialization
+        format();
+    }
+    
+    initialized = true;
+    return true;
+}
+
+bool SDChunkstore::format() {
+    clearError();
+    
+    // Clear all metadata
+    chunkMetadata.clear();
+    fileDirectory.clear();
+    nextChunkId = 1;
+    
+    // Initialize chunk metadata
+    for (int i = 1; i <= totalChunks; i++) {
+        ChunkMetadata meta;
+        meta.chunkId = i;
+        meta.writeCount = 0;
+        meta.allocated = false;
+        meta.fileId = 0;
+        chunkMetadata[i] = meta;
+    }
+    
+    // Save metadata
+    return saveMetadata();
+}
+
+bool SDChunkstore::loadMetadata() {
+    // Open metadata file
+    File file = SD.open("/chunkstore.meta", FILE_READ);
+    if (!file) {
+        return false;
+    }
+    
+    // Read JSON
+    StaticJsonDocument<8192> doc;
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+    
+    if (error) {
+        setError("Metadata parse error");
+        return false;
+    }
+    
+    // Load chunk metadata
+    JsonArray chunks = doc["chunks"];
+    for (JsonObject chunk : chunks) {
+        ChunkMetadata meta;
+        meta.chunkId = chunk["id"];
+        meta.writeCount = chunk["writes"];
+        meta.allocated = chunk["allocated"];
+        meta.fileId = chunk["fileId"];
+        chunkMetadata[meta.chunkId] = meta;
+    }
+    
+    // Load file directory
+    JsonObject files = doc["files"];
+    for (JsonPair kv : files) {
+        fileDirectory[kv.key().c_str()] = kv.value();
+    }
+    
+    nextChunkId = doc["nextChunkId"] | 1;
+    
+    return true;
+}
+
+bool SDChunkstore::saveMetadata() {
+    // Create JSON document
+    StaticJsonDocument<8192> doc;
+    
+    // Save chunk metadata (only allocated chunks to save space)
+    JsonArray chunks = doc.createNestedArray("chunks");
+    for (const auto& pair : chunkMetadata) {
+        if (pair.second.allocated) {
+            JsonObject chunk = chunks.createNestedObject();
+            chunk["id"] = pair.second.chunkId;
+            chunk["writes"] = pair.second.writeCount;
+            chunk["allocated"] = pair.second.allocated;
+            chunk["fileId"] = pair.second.fileId;
+        }
+    }
+    
+    // Save file directory
+    JsonObject files = doc.createNestedObject("files");
+    for (const auto& pair : fileDirectory) {
+        files[pair.first] = pair.second;
+    }
+    
+    doc["nextChunkId"] = nextChunkId;
+    
+    // Write to file
+    File file = SD.open("/chunkstore.meta", FILE_WRITE);
+    if (!file) {
+        setError("Failed to open metadata file");
+        return false;
+    }
+    
+    serializeJson(doc, file);
+    file.close();
+    
+    return true;
+}
+
+// ============================================================================
+// File Operations
+// ============================================================================
+
+int SDChunkstore::open(const char* path, int mode) {
+    clearError();
+    
+    if (!initialized) {
+        setError("Not initialized");
+        return -1;
+    }
+    
+    FileHandle handle;
+    handle.path = path;
+    handle.mode = mode;
+    handle.position = 0;
+    handle.valid = true;
+    
+    // Check if file exists
+    auto it = fileDirectory.find(path);
+    
+    if (mode == 0) { // Read mode
+        if (it == fileDirectory.end()) {
+            setError("File not found");
+            return -1;
+        }
+        handle.firstChunkId = it->second;
+        handle.currentChunkId = it->second;
+        
+        // Calculate file size
+        uint32_t chunkId = handle.firstChunkId;
+        handle.fileSize = 0;
+        while (chunkId != 0) {
+            ChunkHeader header;
+            if (!readChunkHeader(chunkId, header)) {
+                setError("Failed to read chunk header");
+                return -1;
+            }
+            handle.fileSize += header.dataLength;
+            chunkId = header.nextChunkId;
+        }
+        
+    } else if (mode == 1) { // Write mode
+        // Allocate first chunk
+        handle.firstChunkId = allocateChunk();
+        if (handle.firstChunkId == 0) {
+            setError("Failed to allocate chunk");
+            return -1;
+        }
+        handle.currentChunkId = handle.firstChunkId;
+        handle.fileSize = 0;
+        
+        // Add to directory
+        fileDirectory[path] = handle.firstChunkId;
+        
+    } else if (mode == 2) { // Append mode
+        if (it == fileDirectory.end()) {
+            // File doesn't exist, create it
+            return open(path, 1);
+        }
+        
+        handle.firstChunkId = it->second;
+        
+        // Find last chunk and calculate file size
+        uint32_t chunkId = handle.firstChunkId;
+        handle.fileSize = 0;
+        while (chunkId != 0) {
+            ChunkHeader header;
+            if (!readChunkHeader(chunkId, header)) {
+                setError("Failed to read chunk header");
+                return -1;
+            }
+            handle.fileSize += header.dataLength;
+            handle.currentChunkId = chunkId;
+            if (header.nextChunkId == 0) break;
+            chunkId = header.nextChunkId;
+        }
+        handle.position = handle.fileSize;
+    }
+    
+    // Store handle
+    int handleId = nextHandle++;
+    openFiles[handleId] = handle;
+    
+    return handleId;
+}
+
+int SDChunkstore::read(int handle, uint8_t* buffer, int size) {
+    clearError();
+    
+    if (!isValidHandle(handle)) {
+        setError("Invalid handle");
+        return -1;
+    }
+    
+    FileHandle* fh = getFileHandle(handle);
+    if (fh->mode != 0) {
+        setError("File not open for reading");
+        return -1;
+    }
+    
+    int bytesRead = 0;
+    uint8_t chunkBuffer[chunkSize];
+    
+    while (bytesRead < size && fh->currentChunkId != 0) {
+        // Read chunk header
+        ChunkHeader header;
+        if (!readChunkHeader(fh->currentChunkId, header)) {
+            return bytesRead;
+        }
+        
+        // Read chunk data
+        if (!readChunk(fh->currentChunkId, chunkBuffer)) {
+            return bytesRead;
+        }
+        
+        // Calculate offset within chunk
+        uint32_t chunkOffset = fh->position % (chunkSize - sizeof(ChunkHeader));
+        uint32_t bytesInChunk = header.dataLength - chunkOffset;
+        uint32_t bytesToCopy = min((uint32_t)(size - bytesRead), bytesInChunk);
+        
+        // Copy data
+        memcpy(buffer + bytesRead, chunkBuffer + sizeof(ChunkHeader) + chunkOffset, bytesToCopy);
+        
+        bytesRead += bytesToCopy;
+        fh->position += bytesToCopy;
+        
+        // Move to next chunk if needed
+        if (chunkOffset + bytesToCopy >= header.dataLength) {
+            fh->currentChunkId = header.nextChunkId;
+        }
+    }
+    
+    return bytesRead;
+}
+
+int SDChunkstore::write(int handle, const uint8_t* data, int size) {
+    clearError();
+    
+    if (!isValidHandle(handle)) {
+        setError("Invalid handle");
+        return -1;
+    }
+    
+    FileHandle* fh = getFileHandle(handle);
+    if (fh->mode == 0) {
+        setError("File not open for writing");
+        return -1;
+    }
+    
+    int bytesWritten = 0;
+    uint8_t chunkBuffer[chunkSize];
+    
+    while (bytesWritten < size) {
+        // Calculate how much we can write to current chunk
+        uint32_t chunkOffset = fh->position % (chunkSize - sizeof(ChunkHeader));
+        uint32_t spaceInChunk = (chunkSize - sizeof(ChunkHeader)) - chunkOffset;
+        uint32_t bytesToWrite = min((uint32_t)(size - bytesWritten), spaceInChunk);
+        
+        // Read existing chunk data
+        ChunkHeader header;
+        if (!readChunkHeader(fh->currentChunkId, header)) {
+            return bytesWritten;
+        }
+        
+        if (!readChunk(fh->currentChunkId, chunkBuffer)) {
+            return bytesWritten;
+        }
+        
+        // Update chunk data
+        memcpy(chunkBuffer + sizeof(ChunkHeader) + chunkOffset, data + bytesWritten, bytesToWrite);
+        
+        // Update header
+        header.dataLength = max(header.dataLength, (uint16_t)(chunkOffset + bytesToWrite));
+        header.checksum = calculateCRC16(chunkBuffer + sizeof(ChunkHeader), header.dataLength);
+        
+        // Write chunk
+        if (!writeChunkHeader(fh->currentChunkId, header)) {
+            return bytesWritten;
+        }
+        
+        if (!writeChunk(fh->currentChunkId, chunkBuffer)) {
+            return bytesWritten;
+        }
+        
+        bytesWritten += bytesToWrite;
+        fh->position += bytesToWrite;
+        fh->fileSize = max(fh->fileSize, fh->position);
+        
+        // Allocate next chunk if needed
+        if (chunkOffset + bytesToWrite >= (chunkSize - sizeof(ChunkHeader)) && bytesWritten < size) {
+            if (header.nextChunkId == 0) {
+                uint32_t newChunkId = allocateChunk();
+                if (newChunkId == 0) {
+                    return bytesWritten;
+                }
+                header.nextChunkId = newChunkId;
+                writeChunkHeader(fh->currentChunkId, header);
+            }
+            fh->currentChunkId = header.nextChunkId;
+        }
+    }
+    
+    return bytesWritten;
+}
+
+bool SDChunkstore::seek(int handle, uint32_t position) {
+    clearError();
+    
+    if (!isValidHandle(handle)) {
+        setError("Invalid handle");
+        return false;
+    }
+    
+    FileHandle* fh = getFileHandle(handle);
+    
+    if (position > fh->fileSize) {
+        setError("Seek beyond end of file");
+        return false;
+    }
+    
+    // Find the chunk containing the position
+    uint32_t chunkId = fh->firstChunkId;
+    uint32_t currentPos = 0;
+    
+    while (chunkId != 0) {
+        ChunkHeader header;
+        if (!readChunkHeader(chunkId, header)) {
+            return false;
+        }
+        
+        if (currentPos + header.dataLength > position) {
+            fh->currentChunkId = chunkId;
+            fh->position = position;
+            return true;
+        }
+        
+        currentPos += header.dataLength;
+        chunkId = header.nextChunkId;
+    }
+    
+    return false;
+}
+
+int SDChunkstore::tell(int handle) {
+    if (!isValidHandle(handle)) {
+        return -1;
+    }
+    return getFileHandle(handle)->position;
+}
+
+bool SDChunkstore::close(int handle) {
+    clearError();
+    
+    if (!isValidHandle(handle)) {
+        setError("Invalid handle");
+        return false;
+    }
+    
+    openFiles.erase(handle);
+    saveMetadata();
+    
+    return true;
+}
+
+bool SDChunkstore::deleteFile(const char* path) {
+    clearError();
+    
+    auto it = fileDirectory.find(path);
+    if (it == fileDirectory.end()) {
+        setError("File not found");
+        return false;
+    }
+    
+    // Free all chunks in chain
+    uint32_t chunkId = it->second;
+    while (chunkId != 0) {
+        ChunkHeader header;
+        if (!readChunkHeader(chunkId, header)) {
+            return false;
+        }
+        uint32_t nextId = header.nextChunkId;
+        freeChunk(chunkId);
+        chunkId = nextId;
+    }
+    
+    // Remove from directory
+    fileDirectory.erase(it);
+    saveMetadata();
+    
+    return true;
+}
+
+bool SDChunkstore::exists(const char* path) {
+    return fileDirectory.find(path) != fileDirectory.end();
+}
+
+int SDChunkstore::getFileSize(const char* path) {
+    auto it = fileDirectory.find(path);
+    if (it == fileDirectory.end()) {
+        return -1;
+    }
+    
+    // Calculate file size
+    uint32_t chunkId = it->second;
+    int size = 0;
+    
+    while (chunkId != 0) {
+        ChunkHeader header;
+        if (!readChunkHeader(chunkId, header)) {
+            return -1;
+        }
+        size += header.dataLength;
+        chunkId = header.nextChunkId;
+    }
+    
+    return size;
+}
+
+std::vector<std::string> SDChunkstore::listFiles() {
+    std::vector<std::string> files;
+    for (const auto& pair : fileDirectory) {
+        files.push_back(pair.first);
+    }
+    return files;
+}
+
+// ============================================================================
+// Chunk Management
+// ============================================================================
+
+uint32_t SDChunkstore::allocateChunk() {
+    // Find chunk with lowest write count (wear leveling)
+    uint32_t bestChunkId = 0;
+    uint32_t lowestWrites = UINT32_MAX;
+    
+    for (const auto& pair : chunkMetadata) {
+        if (!pair.second.allocated && pair.second.writeCount < lowestWrites) {
+            bestChunkId = pair.first;
+            lowestWrites = pair.second.writeCount;
+        }
+    }
+    
+    if (bestChunkId == 0) {
+        setError("No free chunks");
+        return 0;
+    }
+    
+    // Mark as allocated
+    chunkMetadata[bestChunkId].allocated = true;
+    
+    // Initialize chunk header
+    ChunkHeader header;
+    header.chunkId = bestChunkId;
+    header.nextChunkId = 0;
+    header.dataLength = 0;
+    header.checksum = 0;
+    writeChunkHeader(bestChunkId, header);
+    
+    return bestChunkId;
+}
+
+bool SDChunkstore::freeChunk(uint32_t chunkId) {
+    auto it = chunkMetadata.find(chunkId);
+    if (it == chunkMetadata.end()) {
+        return false;
+    }
+    
+    it->second.allocated = false;
+    it->second.fileId = 0;
+    
+    return true;
+}
+
+bool SDChunkstore::readChunk(uint32_t chunkId, uint8_t* buffer) {
+    uint32_t offset = getChunkOffset(chunkId);
+    
+    File file = SD.open("/chunkstore.dat", FILE_READ);
+    if (!file) {
+        setError("Failed to open chunkstore file");
+        return false;
+    }
+    
+    file.seek(offset);
+    int bytesRead = file.read(buffer, chunkSize);
+    file.close();
+    
+    return (bytesRead == chunkSize);
+}
+
+bool SDChunkstore::writeChunk(uint32_t chunkId, const uint8_t* data) {
+    uint32_t offset = getChunkOffset(chunkId);
+    
+    File file = SD.open("/chunkstore.dat", FILE_WRITE);
+    if (!file) {
+        setError("Failed to open chunkstore file");
+        return false;
+    }
+    
+    file.seek(offset);
+    int bytesWritten = file.write(data, chunkSize);
+    file.close();
+    
+    // Update write count
+    chunkMetadata[chunkId].writeCount++;
+    
+    return (bytesWritten == chunkSize);
+}
+
+bool SDChunkstore::readChunkHeader(uint32_t chunkId, ChunkHeader& header) {
+    uint8_t buffer[sizeof(ChunkHeader)];
+    uint32_t offset = getChunkOffset(chunkId);
+    
+    File file = SD.open("/chunkstore.dat", FILE_READ);
+    if (!file) {
+        return false;
+    }
+    
+    file.seek(offset);
+    int bytesRead = file.read(buffer, sizeof(ChunkHeader));
+    file.close();
+    
+    if (bytesRead != sizeof(ChunkHeader)) {
+        return false;
+    }
+    
+    memcpy(&header, buffer, sizeof(ChunkHeader));
+    return true;
+}
+
+bool SDChunkstore::writeChunkHeader(uint32_t chunkId, const ChunkHeader& header) {
+    uint8_t buffer[sizeof(ChunkHeader)];
+    memcpy(buffer, &header, sizeof(ChunkHeader));
+    
+    uint32_t offset = getChunkOffset(chunkId);
+    
+    File file = SD.open("/chunkstore.dat", FILE_WRITE);
+    if (!file) {
+        return false;
+    }
+    
+    file.seek(offset);
+    int bytesWritten = file.write(buffer, sizeof(ChunkHeader));
+    file.close();
+    
+    return (bytesWritten == sizeof(ChunkHeader));
+}
+
+// ============================================================================
+// Wear Leveling
+// ============================================================================
+
+uint32_t SDChunkstore::getWriteCount(uint32_t chunkId) {
+    auto it = chunkMetadata.find(chunkId);
+    if (it == chunkMetadata.end()) {
+        return 0;
+    }
+    return it->second.writeCount;
+}
+
+void SDChunkstore::balanceWear() {
+    // Find chunks with high write counts
+    uint32_t avgWrites = getAverageWriteCount();
+    
+    for (auto& pair : chunkMetadata) {
+        if (pair.second.allocated && pair.second.writeCount > avgWrites * 2) {
+            // Find a less-worn chunk
+            uint32_t newChunkId = getLeastWornChunk();
+            if (newChunkId != 0 && newChunkId != pair.first) {
+                // Copy data to new chunk
+                uint8_t buffer[chunkSize];
+                if (readChunk(pair.first, buffer)) {
+                    writeChunk(newChunkId, buffer);
+                    
+                    // Update references
+                    // (This is simplified - real implementation would update all references)
+                    freeChunk(pair.first);
+                    chunkMetadata[newChunkId].allocated = true;
+                }
+            }
+        }
+    }
+}
+
+uint32_t SDChunkstore::getLeastWornChunk() {
+    uint32_t bestChunkId = 0;
+    uint32_t lowestWrites = UINT32_MAX;
+    
+    for (const auto& pair : chunkMetadata) {
+        if (!pair.second.allocated && pair.second.writeCount < lowestWrites) {
+            bestChunkId = pair.first;
+            lowestWrites = pair.second.writeCount;
+        }
+    }
+    
+    return bestChunkId;
+}
+
+uint32_t SDChunkstore::getAverageWriteCount() {
+    if (chunkMetadata.empty()) return 0;
+    
+    uint64_t total = 0;
+    for (const auto& pair : chunkMetadata) {
+        total += pair.second.writeCount;
+    }
+    
+    return total / chunkMetadata.size();
+}
+
+// ============================================================================
+// Garbage Collection
+// ============================================================================
+
+void SDChunkstore::collectGarbage() {
+    // Free chunks that are not referenced by any file
+    for (auto& pair : chunkMetadata) {
+        if (pair.second.allocated && pair.second.fileId == 0) {
+            freeChunk(pair.first);
+        }
+    }
+    
+    saveMetadata();
+}
+
+void SDChunkstore::compact() {
+    // Defragment storage by moving data to lower chunk IDs
+    // This is a simplified implementation
+    collectGarbage();
+}
+
+// ============================================================================
+// Status and Diagnostics
+// ============================================================================
+
+int SDChunkstore::getFreeChunks() const {
+    int count = 0;
+    for (const auto& pair : chunkMetadata) {
+        if (!pair.second.allocated) {
+            count++;
+        }
+    }
+    return count;
+}
+
+int SDChunkstore::getAllocatedChunks() const {
+    int count = 0;
+    for (const auto& pair : chunkMetadata) {
+        if (pair.second.allocated) {
+            count++;
+        }
+    }
+    return count;
+}
+
+int SDChunkstore::getUtilization() const {
+    if (totalChunks == 0) return 0;
+    return (getAllocatedChunks() * 100) / totalChunks;
+}
+
+bool SDChunkstore::runDiagnostics() {
+    clearError();
+    
+    // Check all allocated chunks have valid headers
+    for (const auto& pair : chunkMetadata) {
+        if (pair.second.allocated) {
+            if (!verifyChecksum(pair.first)) {
+                setError("Checksum verification failed");
+                return false;
+            }
+        }
+    }
+    
+    return true;
+}
+
+// ============================================================================
+// Helper Methods
+// ============================================================================
+
+void SDChunkstore::setError(const char* error) {
+    lastError = error;
+}
+
+void SDChunkstore::clearError() {
+    lastError = "";
+}
+
+uint16_t SDChunkstore::calculateCRC16(const uint8_t* data, int length) {
+    uint16_t crc = 0xFFFF;
+    
+    for (int i = 0; i < length; i++) {
+        crc ^= data[i];
+        for (int j = 0; j < 8; j++) {
+            if (crc & 1) {
+                crc = (crc >> 1) ^ 0xA001;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    
+    return crc;
+}
+
+bool SDChunkstore::verifyChecksum(uint32_t chunkId) {
+    uint8_t buffer[chunkSize];
+    if (!readChunk(chunkId, buffer)) {
+        return false;
+    }
+    
+    ChunkHeader header;
+    memcpy(&header, buffer, sizeof(ChunkHeader));
+    
+    uint16_t calculatedCRC = calculateCRC16(buffer + sizeof(ChunkHeader), header.dataLength);
+    return (calculatedCRC == header.checksum);
+}
+
+uint32_t SDChunkstore::getChunkOffset(uint32_t chunkId) {
+    return chunkId * chunkSize;
+}
+
+bool SDChunkstore::isValidHandle(int handle) {
+    return openFiles.find(handle) != openFiles.end();
+}
+
+FileHandle* SDChunkstore::getFileHandle(int handle) {
+    auto it = openFiles.find(handle);
+    if (it == openFiles.end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+// Made with Bob
+#include "SensorService.h"
+#include <Wire.h>
+#ifdef ARDUINO_ARCH_ESP32
+#include <Adafruit_Sensor.h>
+#include <DHT.h>
+#include <DHT_U.h>
+#include <Adafruit_BME280.h>
+#include <Adafruit_BMP280.h>
+#else
+#include <DHT.h>
+#include <Adafruit_BME280.h>
+#include <Adafruit_BMP280.h>
+#endif
+
+namespace SensorService {
+
+SensorResult readSensor(SensorType type, int pin, String unit) {
+    SensorResult result;
+    result.unit = unit;
+    if (type == SensorType::DHT11 || type == SensorType::DHT21 || type == SensorType::DHT22) {
+        uint8_t dhtType = DHT22;
+        if (type == SensorType::DHT11) dhtType = DHT11;
+        if (type == SensorType::DHT21) dhtType = DHT21;
+        DHT dht(pin, dhtType);
+        dht.begin();
+        delay(100); // Let sensor stabilize
+        float temp = dht.readTemperature(unit == "F");
+        float hum = dht.readHumidity();
+        if (isnan(temp) || isnan(hum)) {
+            result.error = "Failed to read from DHT sensor";
+            return result;
+        }
+        result.temperature = temp;
+        result.humidity = hum;
+        result.valid = true;
+        return result;
+    }
+    if (type == SensorType::BME280 || type == SensorType::BMP280) {
+        // I2C address can be 0x76 or 0x77
+        Adafruit_BME280 bme;
+        Adafruit_BMP280 bmp;
+        bool status = false;
+        if (type == SensorType::BME280) {
+            status = bme.begin(0x76) || bme.begin(0x77);
+            if (!status) {
+                result.error = "BME280 not found";
+                return result;
+            }
+            float temp = bme.readTemperature();
+            float hum = bme.readHumidity();
+            float pres = bme.readPressure() / 100.0F;
+            if (unit == "F") temp = temp * 9.0 / 5.0 + 32.0;
+            result.temperature = temp;
+            result.humidity = hum;
+            result.pressure = pres;
+            result.valid = true;
+            return result;
+        } else {
+            status = bmp.begin(0x76) || bmp.begin(0x77);
+            if (!status) {
+                result.error = "BMP280 not found";
+                return result;
+            }
+            float temp = bmp.readTemperature();
+            float pres = bmp.readPressure() / 100.0F;
+            if (unit == "F") temp = temp * 9.0 / 5.0 + 32.0;
+            result.temperature = temp;
+            result.pressure = pres;
+            result.valid = true;
+            return result;
+        }
+    }
+    result.error = "Unknown sensor type";
+    return result;
+}
+
+void resultToJson(const SensorResult& result, String& json) {
+    JsonDocument doc;
+    doc["valid"] = result.valid;
+    if (result.valid) {
+        doc["temperature"] = result.temperature;
+        doc["unit"] = result.unit;
+        if (!isnan(result.humidity)) doc["humidity"] = result.humidity;
+        if (!isnan(result.pressure)) doc["pressure"] = result.pressure;
+    } else {
+        doc["error"] = result.error;
+    }
+    serializeJson(doc, json);
+}
+
+} // namespace SensorService
+#include "StringPool.h"
+#include <string>
+
+namespace stringpool {
+uint16_t StringPool::add(const std::string&) { return 0; }
+const std::string& StringPool::get(uint16_t) const { static std::string s; return s; }
+}
+#include "udp_announcement.h"
+
+#if defined(ARDUINO_ARCH_ESP8266)
+#include <ESP8266WiFi.h>
+#else
+#include <WiFi.h>
+#endif
+#include <ArduinoJson.h>
+
+bool sendNodeBeaconAnnouncement(
+    WiFiUDP& udp,
+    uint16_t announcePort,
+    const char* nodeName,
+    const char* deviceRole,
+    const String& capabilityHash,
+    UdpAnnouncementState& state,
+    uint16_t parentPort,
+    uint16_t siblingPort) {
+    if (WiFi.status() != WL_CONNECTED) {
+        return false;
+    }
+
+    const String localIp = WiFi.localIP().toString();
+    const bool capabilityChanged = state.nodeBeaconLastCapabilityHash.length() > 0
+        && !capabilityHash.equals(state.nodeBeaconLastCapabilityHash);
+
+    JsonDocument announceDoc;
+    announceDoc["kind"] = "nodeBeacon";
+    announceDoc["nodeId"] = nodeName;
+    announceDoc["nodeName"] = nodeName;
+    announceDoc["capabilityHash"] = capabilityHash;
+    announceDoc["capabilitiesChanged"] = capabilityChanged;
+    announceDoc["needsDetails"] = !state.nodeBeaconAcknowledged || capabilityChanged;
+    announceDoc["beaconState"] = state.nodeBeaconAcknowledged ? "steady" : "rapid";
+    announceDoc["ip"] = localIp;
+    announceDoc["status"] = "here";
+    announceDoc["deviceRole"] = deviceRole;
+    announceDoc["httpPort"] = 80;
+    announceDoc["udpParentPort"] = parentPort;
+    announceDoc["udpSiblingPort"] = siblingPort;
+    announceDoc["flowDirection"] = "bottom-up";
+    announceDoc["ts"] = millis();
+
+    String jsonMsg;
+    serializeJson(announceDoc, jsonMsg);
+    udp.beginPacket("255.255.255.255", announcePort);
+    udp.write((const uint8_t*)jsonMsg.c_str(), jsonMsg.length());
+    udp.endPacket();
+
+    state.nodeBeaconLastSentAt = millis();
+    state.nodeBeaconLastCapabilityHash = capabilityHash;
+
+    return true;
+}
+#include "udp_runtime.h"
+
+#include <ArduinoJson.h>
+#if defined(ARDUINO_ARCH_ESP8266)
+#include <ESP8266WiFi.h>
+#else
+#include <WiFi.h>
+#endif
+
+namespace {
+WiFiUDP udpParentSocket;
+WiFiUDP udpSiblingSocket;
+bool udpParentReady = false;
+bool udpSiblingReady = false;
+uint16_t udpBoundParentPort = 0;
+uint16_t udpBoundSiblingPort = 0;
+unsigned long lastWifiReconnectAttempt = 0;
+String wifiSsid;
+String wifiPassword;
+bool nodeBeaconAcknowledged = false;
+unsigned long nodeBeaconLastSentAt = 0;
+unsigned long nodeBeaconLastAckAt = 0;
+String nodeBeaconLastCapabilityHash;
+constexpr size_t kMaxDiscoveredNodes = 32;
+
+bool bindUdpSocket(WiFiUDP& socket, bool& ready, uint16_t& boundPort, uint16_t nextPort, const char* label) {
+    if (nextPort == 0) {
+        return false;
+    }
+
+    if (ready && boundPort == nextPort) {
+        return true;
+    }
+
+    if (ready && boundPort != nextPort) {
+        socket.stop();
+        ready = false;
+        boundPort = 0;
+    }
+
+    ready = socket.begin(nextPort);
+    if (!ready) {
+        Serial.print("[UDP] Failed to bind ");
+        Serial.print(label);
+        Serial.print(" port ");
+        Serial.println(nextPort);
+        return false;
+    }
+
+    boundPort = nextPort;
+    return true;
+}
+
+void upsertDiscoveredNode(std::map<String, DiscoveredNode>* table, const String& id, const String& ip) {
+    if (table == nullptr || id.length() == 0 || ip.length() == 0) {
+        return;
+    }
+
+    const unsigned long now = millis();
+    auto existing = table->find(id);
+    if (existing != table->end()) {
+        existing->second.mac = id;
+        existing->second.ip = ip;
+        existing->second.lastSeen = now;
+        return;
+    }
+
+    if (table->size() >= kMaxDiscoveredNodes) {
+        auto oldest = table->begin();
+        for (auto it = table->begin(); it != table->end(); ++it) {
+            if (it->second.lastSeen < oldest->second.lastSeen) {
+                oldest = it;
+            }
+        }
+        if (oldest != table->end()) {
+            table->erase(oldest);
+        }
+    }
+
+    DiscoveredNode node;
+    node.mac = id;
+    node.ip = ip;
+    node.lastSeen = now;
+    (*table)[id] = node;
+}
+
+void sendNodeDetailsResponse(WiFiUDP& socket, const UdpRuntimeContext& context, IPAddress ip, uint16_t port, const String& capabilityHash, bool capabilityChanged) {
+    if (ip == IPAddress(0, 0, 0, 0) || port == 0) {
+        return;
+    }
+
+    if (!context.nodeName || !context.deviceRole || !context.firmwareVersion || !context.firmwareTrack) {
+        return;
+    }
+    JsonDocument doc;
+    doc["kind"] = "nodeDetails";
+    doc["nodeId"] = context.nodeName;
+    doc["nodeName"] = context.nodeName;
+    doc["ip"] = WiFi.localIP().toString();
+    doc["httpPort"] = 80;
+    doc["statusUrl"] = String("http://") + WiFi.localIP().toString() + ":80/status";
+    doc["servicesUrl"] = String("http://") + WiFi.localIP().toString() + ":80/services/describe";
+    doc["capabilityHash"] = capabilityHash;
+    doc["capabilitiesChanged"] = capabilityChanged;
+    doc["acknowledged"] = nodeBeaconAcknowledged;
+    doc["nodeRole"] = context.deviceRole;
+    doc["firmwareVersion"] = context.firmwareVersion;
+    doc["firmwareTrack"] = context.firmwareTrack;
+
+    String json;
+    serializeJson(doc, json);
+    socket.beginPacket(ip, port);
+    socket.write((const uint8_t*)json.c_str(), json.length());
+    socket.endPacket();
+}
+
+void processIncomingOnSocket(WiFiUDP& socket, const UdpRuntimeContext& context) {
+    int packetSize = socket.parsePacket();
+    if (packetSize <= 0) {
+        return;
+    }
+
+    String msg;
+    msg.reserve(packetSize + 1);
+    while (socket.available()) {
+        msg += static_cast<char>(socket.read());
+    }
+
+    if (msg.length() == 0) {
+        return;
+    }
+
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, msg);
+    if (!err && context.nodeName && context.computeNodeCapabilityHash) {
+        const String kind = doc["kind"].as<String>();
+
+        if (kind.equalsIgnoreCase("nodeBeaconAck")) {
+            nodeBeaconAcknowledged = true;
+            nodeBeaconLastAckAt = millis();
+            nodeBeaconLastSentAt = millis();
+            return;
+        }
+
+        if (kind.equalsIgnoreCase("nodeDetailsRequest")) {
+            String requesterHash = doc["capabilityHash"].as<String>();
+            const bool capabilityChanged = requesterHash.length() > 0
+                && !requesterHash.equalsIgnoreCase(nodeBeaconLastCapabilityHash);
+            sendNodeDetailsResponse(socket, context, socket.remoteIP(), socket.remotePort(), context.computeNodeCapabilityHash(), capabilityChanged);
+            return;
+        }
+
+        if (kind.equalsIgnoreCase("nodeBeacon") || kind.equalsIgnoreCase("machineAvailability")) {
+            String senderNodeId = doc["nodeId"].as<String>();
+            if (senderNodeId.length() == 0) {
+                senderNodeId = doc["nodeName"].as<String>();
+            }
+            const String senderIp = doc["ip"].as<String>().length() > 0 ? doc["ip"].as<String>() : socket.remoteIP().toString();
+            const bool senderFeatureChanged = doc["capabilitiesChanged"].as<bool>() || doc["featureChanged"].as<bool>() || doc["needsDetails"].as<bool>();
+
+            if (senderNodeId.length() > 0 && senderNodeId.equalsIgnoreCase(context.nodeName)) {
+                return;
+            }
+
+            if (context.discoveredNodeTable && senderNodeId.length() > 0 && senderIp.length() > 0) {
+                upsertDiscoveredNode(context.discoveredNodeTable, senderNodeId, senderIp);
+            }
+
+            JsonDocument ackDoc;
+            ackDoc["kind"] = "nodeBeaconAck";
+            ackDoc["nodeId"] = context.nodeName;
+            ackDoc["nodeName"] = context.nodeName;
+            ackDoc["capabilityHash"] = context.computeNodeCapabilityHash();
+            ackDoc["requestDetails"] = true;
+            ackDoc["ts"] = millis();
+            String ackJson;
+            serializeJson(ackDoc, ackJson);
+            socket.beginPacket(socket.remoteIP(), socket.remotePort());
+            socket.write((const uint8_t*)ackJson.c_str(), ackJson.length());
+            socket.endPacket();
+
+            JsonDocument detailReqDoc;
+            detailReqDoc["kind"] = "nodeDetailsRequest";
+            detailReqDoc["nodeId"] = context.nodeName;
+            detailReqDoc["capabilityHash"] = context.computeNodeCapabilityHash();
+            detailReqDoc["requestReason"] = senderFeatureChanged ? "feature-changed" : "discovery";
+            detailReqDoc["ts"] = millis();
+            String detailReqJson;
+            serializeJson(detailReqDoc, detailReqJson);
+            socket.beginPacket(socket.remoteIP(), socket.remotePort());
+            socket.write((const uint8_t*)detailReqJson.c_str(), detailReqJson.length());
+            socket.endPacket();
+
+            sendNodeDetailsResponse(socket, context, socket.remoteIP(), socket.remotePort(), context.computeNodeCapabilityHash(), senderFeatureChanged);
+            return;
+        }
+    }
+
+    String parsedId;
+    String parsedIp;
+    String parsedNodeId;
+
+    int macStart = msg.indexOf(": ");
+    int ipStart = msg.indexOf("IP: ");
+    if (macStart != -1 && ipStart != -1) {
+        parsedId = msg.substring(macStart + 2, ipStart - 1);
+        parsedIp = msg.substring(ipStart + 4);
+        parsedId.trim();
+        parsedIp.trim();
+    }
+
+    if (parsedIp.length() == 0 && msg.startsWith("{")) {
+        DeserializationError jsonErr = deserializeJson(doc, msg);
+        if (!jsonErr) {
+            String ipValue = doc["ip"].as<String>();
+            String macValue = doc["mac"].as<String>();
+            String nodeIdValue = doc["nodeId"].as<String>();
+            if (nodeIdValue.length() == 0) {
+                nodeIdValue = doc["nodeName"].as<String>();
+            }
+
+            if (ipValue.length() > 0) {
+                parsedIp = ipValue;
+            }
+            if (nodeIdValue.length() > 0) {
+                parsedNodeId = nodeIdValue;
+            }
+            if (macValue.length() > 0) {
+                parsedId = macValue;
+            } else if (parsedNodeId.length() > 0) {
+                parsedId = String("node:") + parsedNodeId;
+            }
+            parsedIp.trim();
+            parsedId.trim();
+            parsedNodeId.trim();
+        }
+    }
+
+    if (parsedId.length() > 0 && parsedIp.length() > 0 && context.nodeName && context.discoveredNodeTable) {
+        String myMac = WiFi.macAddress();
+        myMac.trim();
+        String myIp = WiFi.localIP().toString();
+        myIp.trim();
+
+        if (parsedId.equalsIgnoreCase(myMac)
+            || parsedIp.equals(myIp)
+            || (parsedNodeId.length() > 0 && parsedNodeId.equalsIgnoreCase(context.nodeName))) {
+            return;
+        }
+
+        upsertDiscoveredNode(context.discoveredNodeTable, parsedId, parsedIp);
+    }
+}
+}
+
+void udpRuntimeConfigureWifiCredentials(const String& ssid, const String& password) {
+    wifiSsid = ssid;
+    wifiPassword = password;
+}
+
+bool udpRuntimeEnsureReady(uint16_t parentPort, uint16_t siblingPort) {
+    const bool parentOk = bindUdpSocket(udpParentSocket, udpParentReady, udpBoundParentPort, parentPort, "parent");
+    bool siblingOk = true;
+
+    if (siblingPort > 0 && siblingPort != parentPort) {
+        siblingOk = bindUdpSocket(udpSiblingSocket, udpSiblingReady, udpBoundSiblingPort, siblingPort, "sibling");
+    } else {
+        if (udpSiblingReady) {
+            udpSiblingSocket.stop();
+            udpSiblingReady = false;
+            udpBoundSiblingPort = 0;
+        }
+    }
+
+    return parentOk && siblingOk;
+}
+
+void udpRuntimeMaintainConnectivity(uint16_t parentPort, uint16_t siblingPort, unsigned long wifiReconnectIntervalMs) {
+    const wl_status_t status = WiFi.status();
+    if (status == WL_CONNECTED) {
+        if (!udpParentReady || (siblingPort > 0 && siblingPort != parentPort && !udpSiblingReady)) {
+            udpRuntimeEnsureReady(parentPort, siblingPort);
+        }
+        return;
+    }
+
+    udpParentReady = false;
+    udpSiblingReady = false;
+
+    const unsigned long now = millis();
+    if (now - lastWifiReconnectAttempt < wifiReconnectIntervalMs) {
+        return;
+    }
+
+    lastWifiReconnectAttempt = now;
+    WiFi.disconnect();
+    WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
+}
+
+void udpRuntimeProcessIncoming(const UdpRuntimeContext& context, uint16_t parentPort, uint16_t siblingPort) {
+    (void)parentPort;
+    (void)siblingPort;
+    processIncomingOnSocket(udpParentSocket, context);
+    if (udpSiblingReady && udpBoundSiblingPort != udpBoundParentPort) {
+        processIncomingOnSocket(udpSiblingSocket, context);
+    }
+}
+
+WiFiUDP& udpRuntimeSocket() {
+    return udpParentSocket;
+}
+
+uint16_t udpRuntimeGetBoundParentPort() {
+    return udpBoundParentPort;
+}
+
+uint16_t udpRuntimeGetBoundSiblingPort() {
+    return udpBoundSiblingPort;
+}
+
+void udpRuntimeResetBeaconState() {
+    nodeBeaconAcknowledged = false;
+    nodeBeaconLastSentAt = 0;
+    nodeBeaconLastAckAt = 0;
+}
+
+unsigned long udpRuntimeGetBeaconIntervalMs(unsigned long ackedIntervalMs, unsigned long unackedIntervalMs) {
+    return nodeBeaconAcknowledged ? ackedIntervalMs : unackedIntervalMs;
+}
+
+bool udpRuntimeIsBeaconAcknowledged() {
+    return nodeBeaconAcknowledged;
+}
+
+unsigned long udpRuntimeGetBeaconLastSentAt() {
+    return nodeBeaconLastSentAt;
+}
+
+unsigned long udpRuntimeGetBeaconLastAckAt() {
+    return nodeBeaconLastAckAt;
+}
+
+const String& udpRuntimeGetBeaconCapabilityHash() {
+    return nodeBeaconLastCapabilityHash;
+}
+
+UdpAnnouncementState udpRuntimeGetAnnouncementState() {
+    UdpAnnouncementState state;
+    state.nodeBeaconAcknowledged = nodeBeaconAcknowledged;
+    state.nodeBeaconLastSentAt = nodeBeaconLastSentAt;
+    state.nodeBeaconLastCapabilityHash = nodeBeaconLastCapabilityHash;
+    return state;
+}
+
+void udpRuntimeApplyAnnouncementState(const UdpAnnouncementState& state) {
+    nodeBeaconAcknowledged = state.nodeBeaconAcknowledged;
+    nodeBeaconLastSentAt = state.nodeBeaconLastSentAt;
+    nodeBeaconLastCapabilityHash = state.nodeBeaconLastCapabilityHash;
+}
+#ifdef ENABLE_PRINTER_SCANNER
+
+#include "upnp_discovery.h"
+#include <WiFi.h>
+#include <HTTPClient.h>
+
+// SSDP Multicast address
+const char* UPnPDiscovery::SSDP_MULTICAST_ADDR = "239.255.255.250";
+
+UPnPDiscovery::UPnPDiscovery() 
+    : deviceDiscoveredCallback(nullptr), lastDiscovery(0) {
+}
+
+UPnPDiscovery::~UPnPDiscovery() {
+    end();
+}
+
+bool UPnPDiscovery::begin() {
+    Serial.println("UPnPDiscovery: Initializing...");
+    
+    if (!udp.begin(SSDP_PORT)) {
+        Serial.println("UPnPDiscovery: Failed to start UDP");
+        return false;
+    }
+    
+    Serial.println("UPnPDiscovery: Initialized successfully");
+    return true;
+}
+
+void UPnPDiscovery::end() {
+    udp.stop();
+    devices.clear();
+}
+
+// ============================================================================
+// Discovery Methods
+// ============================================================================
+
+bool UPnPDiscovery::startDiscovery(const char* searchTarget) {
+    Serial.printf("UPnPDiscovery: Starting discovery for %s\n", searchTarget);
+    
+    sendMSearch(searchTarget);
+    lastDiscovery = millis();
+    
+    return true;
+}
+
+bool UPnPDiscovery::discoverPrinters() {
+    Serial.println("UPnPDiscovery: Discovering printers...");
+    
+    // Search for printer devices
+    sendMSearch(UPNP_PRINTER_BASIC);
+    delay(100);
+    sendMSearch(UPNP_PRINTER_ENHANCED);
+    delay(100);
+    sendMSearch(UPNP_MULTIFUNCTION);
+    
+    return true;
+}
+
+bool UPnPDiscovery::discoverScanners() {
+    Serial.println("UPnPDiscovery: Discovering scanners...");
+    
+    // Search for scanner devices
+    sendMSearch(UPNP_SCANNER_BASIC);
+    delay(100);
+    sendMSearch(UPNP_SCANNER_ENHANCED);
+    delay(100);
+    sendMSearch(UPNP_MULTIFUNCTION);
+    
+    return true;
+}
+
+void UPnPDiscovery::processResponses(unsigned long timeout) {
+    unsigned long start = millis();
+    int responseCount = 0;
+    
+    while (millis() - start < timeout) {
+        int packetSize = udp.parsePacket();
+        
+        if (packetSize > 0) {
+            char buffer[1024];
+            int len = udp.read(buffer, sizeof(buffer) - 1);
+            buffer[len] = '\0';
+            
+            String response = String(buffer);
+            UPnPDevice device;
+            
+            if (parseResponse(response, device)) {
+                // Check if device already exists
+                auto it = devices.find(device.usn);
+                if (it == devices.end()) {
+                    // New device discovered
+                    device.lastSeen = millis();
+                    devices[device.usn] = device;
+                    
+                    Serial.printf("UPnPDiscovery: New device found - %s\n", device.usn.c_str());
+                    
+                    // Fetch detailed device description
+                    if (fetchDeviceDescription(devices[device.usn])) {
+                        Serial.printf("UPnPDiscovery: Device details: %s (%s)\n", 
+                                      devices[device.usn].friendlyName.c_str(),
+                                      devices[device.usn].modelName.c_str());
+                    }
+                    
+                    notifyDeviceDiscovered(devices[device.usn]);
+                    responseCount++;
+                } else {
+                    // Update last seen time
+                    it->second.lastSeen = millis();
+                }
+            }
+        }
+        
+        yield();
+    }
+    
+    Serial.printf("UPnPDiscovery: Processed %d responses\n", responseCount);
+}
+
+// ============================================================================
+// Device Access
+// ============================================================================
+
+std::vector<UPnPDevice> UPnPDiscovery::getDevices() const {
+    std::vector<UPnPDevice> result;
+    for (const auto& pair : devices) {
+        result.push_back(pair.second);
+    }
+    return result;
+}
+
+std::vector<UPnPDevice> UPnPDiscovery::getPrinters() const {
+    std::vector<UPnPDevice> result;
+    for (const auto& pair : devices) {
+        if (pair.second.isPrinter) {
+            result.push_back(pair.second);
+        }
+    }
+    return result;
+}
+
+std::vector<UPnPDevice> UPnPDiscovery::getScanners() const {
+    std::vector<UPnPDevice> result;
+    for (const auto& pair : devices) {
+        if (pair.second.isScanner) {
+            result.push_back(pair.second);
+        }
+    }
+    return result;
+}
+
+UPnPDevice* UPnPDiscovery::getDevice(const String& usn) {
+    auto it = devices.find(usn);
+    if (it != devices.end()) {
+        return &(it->second);
+    }
+    return nullptr;
+}
+
+// ============================================================================
+// Device Description Fetching
+// ============================================================================
+
+bool UPnPDiscovery::fetchDeviceDescription(UPnPDevice& device) {
+    if (device.location.isEmpty()) {
+        return false;
+    }
+    
+    Serial.printf("UPnPDiscovery: Fetching description from %s\n", device.location.c_str());
+    
+    String xml = httpGet(device.location);
+    if (xml.isEmpty()) {
+        Serial.println("UPnPDiscovery: Failed to fetch device description");
+        return false;
+    }
+    
+    return parseDeviceDescription(xml, device);
+}
+
+// ============================================================================
+// Helper Methods
+// ============================================================================
+
+void UPnPDiscovery::sendMSearch(const char* searchTarget) {
+    String message = "M-SEARCH * HTTP/1.1\r\n";
+    message += "HOST: 239.255.255.250:1900\r\n";
+    message += "MAN: \"ssdp:discover\"\r\n";
+    message += "MX: 3\r\n";
+    message += "ST: ";
+    message += searchTarget;
+    message += "\r\n\r\n";
+    
+    IPAddress multicast;
+    multicast.fromString(SSDP_MULTICAST_ADDR);
+    
+    udp.beginPacket(multicast, SSDP_PORT);
+    udp.write((const uint8_t*)message.c_str(), message.length());
+    udp.endPacket();
+}
+
+bool UPnPDiscovery::parseResponse(const String& response, UPnPDevice& device) {
+    // Parse SSDP response headers
+    int locationIdx = response.indexOf("LOCATION:");
+    if (locationIdx == -1) {
+        locationIdx = response.indexOf("Location:");
+    }
+    if (locationIdx != -1) {
+        int endIdx = response.indexOf("\r\n", locationIdx);
+        device.location = response.substring(locationIdx + 9, endIdx);
+        device.location.trim();
+        
+        // Extract IP and port from location
+        extractIPAndPort(device.location, device.ipAddress, device.port);
+    }
+    
+    int usnIdx = response.indexOf("USN:");
+    if (usnIdx == -1) {
+        usnIdx = response.indexOf("usn:");
+    }
+    if (usnIdx != -1) {
+        int endIdx = response.indexOf("\r\n", usnIdx);
+        device.usn = response.substring(usnIdx + 4, endIdx);
+        device.usn.trim();
+    }
+    
+    int serverIdx = response.indexOf("SERVER:");
+    if (serverIdx == -1) {
+        serverIdx = response.indexOf("Server:");
+    }
+    if (serverIdx != -1) {
+        int endIdx = response.indexOf("\r\n", serverIdx);
+        device.server = response.substring(serverIdx + 7, endIdx);
+        device.server.trim();
+    }
+    
+    int stIdx = response.indexOf("ST:");
+    if (stIdx == -1) {
+        stIdx = response.indexOf("st:");
+    }
+    if (stIdx != -1) {
+        int endIdx = response.indexOf("\r\n", stIdx);
+        device.deviceType = response.substring(stIdx + 3, endIdx);
+        device.deviceType.trim();
+        
+        // Determine if printer or scanner
+        device.isPrinter = isDeviceType(device.deviceType, "Printer") || 
+                          isDeviceType(device.deviceType, "MultiFunction");
+        device.isScanner = isDeviceType(device.deviceType, "Scanner") || 
+                          isDeviceType(device.deviceType, "MultiFunction");
+    }
+    
+    return !device.usn.isEmpty() && !device.location.isEmpty();
+}
+
+bool UPnPDiscovery::parseDeviceDescription(const String& xml, UPnPDevice& device) {
+    // Simple XML parsing for device description
+    // Extract friendlyName
+    int nameStart = xml.indexOf("<friendlyName>");
+    if (nameStart != -1) {
+        nameStart += 14;
+        int nameEnd = xml.indexOf("</friendlyName>", nameStart);
+        device.friendlyName = xml.substring(nameStart, nameEnd);
+    }
+    
+    // Extract manufacturer
+    int mfgStart = xml.indexOf("<manufacturer>");
+    if (mfgStart != -1) {
+        mfgStart += 14;
+        int mfgEnd = xml.indexOf("</manufacturer>", mfgStart);
+        device.manufacturer = xml.substring(mfgStart, mfgEnd);
+    }
+    
+    // Extract modelName
+    int modelStart = xml.indexOf("<modelName>");
+    if (modelStart != -1) {
+        modelStart += 11;
+        int modelEnd = xml.indexOf("</modelName>", modelStart);
+        device.modelName = xml.substring(modelStart, modelEnd);
+    }
+    
+    // Extract modelNumber
+    int numStart = xml.indexOf("<modelNumber>");
+    if (numStart != -1) {
+        numStart += 13;
+        int numEnd = xml.indexOf("</modelNumber>", numStart);
+        device.modelNumber = xml.substring(numStart, numEnd);
+    }
+    
+    // Extract serialNumber
+    int serialStart = xml.indexOf("<serialNumber>");
+    if (serialStart != -1) {
+        serialStart += 14;
+        int serialEnd = xml.indexOf("</serialNumber>", serialStart);
+        device.serialNumber = xml.substring(serialStart, serialEnd);
+    }
+    
+    // Extract deviceType if not already set
+    if (device.deviceType.isEmpty()) {
+        int typeStart = xml.indexOf("<deviceType>");
+        if (typeStart != -1) {
+            typeStart += 12;
+            int typeEnd = xml.indexOf("</deviceType>", typeStart);
+            device.deviceType = xml.substring(typeStart, typeEnd);
+            
+            device.isPrinter = isDeviceType(device.deviceType, "Printer") || 
+                              isDeviceType(device.deviceType, "MultiFunction");
+            device.isScanner = isDeviceType(device.deviceType, "Scanner") || 
+                              isDeviceType(device.deviceType, "MultiFunction");
+        }
+    }
+    
+    return !device.friendlyName.isEmpty();
+}
+
+String UPnPDiscovery::httpGet(const String& url) {
+    HTTPClient http;
+    http.begin(url);
+    http.setTimeout(5000);
+    
+    int httpCode = http.GET();
+    String payload = "";
+    
+    if (httpCode == HTTP_CODE_OK) {
+        payload = http.getString();
+    } else {
+        Serial.printf("UPnPDiscovery: HTTP GET failed, code: %d\n", httpCode);
+    }
+    
+    http.end();
+    return payload;
+}
+
+void UPnPDiscovery::extractIPAndPort(const String& location, String& ip, int& port) {
+    // Extract IP and port from URL like http://192.168.1.100:8080/description.xml
+    int protocolEnd = location.indexOf("://");
+    if (protocolEnd == -1) return;
+    
+    int hostStart = protocolEnd + 3;
+    int portStart = location.indexOf(":", hostStart);
+    int pathStart = location.indexOf("/", hostStart);
+    
+    if (portStart != -1 && portStart < pathStart) {
+        ip = location.substring(hostStart, portStart);
+        String portStr = location.substring(portStart + 1, pathStart);
+        port = portStr.toInt();
+    } else {
+        if (pathStart != -1) {
+            ip = location.substring(hostStart, pathStart);
+        } else {
+            ip = location.substring(hostStart);
+        }
+        port = 80; // Default HTTP port
+    }
+}
+
+bool UPnPDiscovery::isDeviceType(const String& deviceType, const char* type) {
+    return deviceType.indexOf(type) != -1;
+}
+
+void UPnPDiscovery::notifyDeviceDiscovered(const UPnPDevice& device) {
+    if (deviceDiscoveredCallback) {
+        deviceDiscoveredCallback(device);
+    }
+}
+
+#endif // ENABLE_PRINTER_SCANNER
+
+// Made with Bob
+#include "aws_iot_client.h"
+#include "broker_client.h"
+#include "device_mediator.h"
+#include "pmachine.h"
+#include <ArduinoJson.h>
+#include <HTTPClient.h>
+
+/**
+ * WFL (Workflow) Action Handlers for ESP32
+ * 
+ * Implements handlers for workflow actions triggered via AWS IoT:
+ * - Trigger workflows based on sensor events
+ * - Execute workflow steps
+ * - Query workflow status
+ * - Handle workflow results
+ */
+
+// External references
+extern AwsIotClient* globalAwsIotClient;
+extern BrokerClient* globalBrokerClient;
+extern DeviceMediator* globalDeviceMediator;
+
+#ifdef ENABLE_PMACHINE
+extern pmachine::PMachine pm;
+#endif
+
+// ============================================================================
+// Workflow Trigger Handler
+// ============================================================================
+
+void handleWflTrigger(const WflActionRequest& request) {
+    Serial.printf("Handling WFL Trigger: %s\n", request.workflowId.c_str());
+    
+    bool success = false;
+    JsonDocument result;
+    
+    // Extract parameters
+    String workflowId = request.workflowId;
+    
+    // Route to appropriate handler based on workflow ID
+    if (workflowId == "motion-detected-workflow") {
+        // Handle motion detection workflow
+        String location = request.parameters["location"].as<String>();
+        
+        Serial.printf("Motion detected at: %s\n", location.c_str());
+        
+        // Turn on relay
+        if (globalDeviceMediator) {
+            success = globalDeviceMediator->setActuator("RELAY", 1);
+        }
+        
+        // Send notification via broker
+        if (globalBrokerClient && success) {
+            JsonDocument notification;
+            notification["type"] = "motion-alert";
+            notification["location"] = location;
+            notification["timestamp"] = millis();
+            
+            String payload;
+            serializeJson(notification, payload);
+            
+            globalBrokerClient->broadcastMessage("alerts", payload.c_str());
+        }
+        
+        result["action"] = "relay-activated";
+        result["location"] = location;
+    }
+    else if (workflowId == "temperature-alert-workflow") {
+        // Handle temperature alert workflow
+        float temperature = request.parameters["temperature"];
+        
+        Serial.printf("Temperature alert: %.2f°C\n", temperature);
+        
+        // Send HTTP webhook
+        HTTPClient http;
+        String webhookUrl = request.parameters["webhookUrl"].as<String>();
+        
+        if (!webhookUrl.isEmpty()) {
+            http.begin(webhookUrl);
+            http.addHeader("Content-Type", "application/json");
+            
+            JsonDocument webhook;
+            webhook["event"] = "temperature-alert";
+            webhook["temperature"] = temperature;
+            webhook["deviceId"] = request.sourceDevice;
+            webhook["timestamp"] = millis();
+            
+            String webhookPayload;
+            serializeJson(webhook, webhookPayload);
+            
+            int httpCode = http.POST(webhookPayload);
+            success = (httpCode == 200 || httpCode == 201);
+            
+            http.end();
+        }
+        
+        result["webhookSent"] = success;
+        result["temperature"] = temperature;
+    }
+    else if (workflowId == "alexa-relay-control") {
+        // Handle Alexa-triggered relay control
+        String action = request.parameters["action"].as<String>();
+        
+        Serial.printf("Alexa relay control: %s\n", action.c_str());
+        
+        if (globalDeviceMediator) {
+            if (action == "TurnOn") {
+                success = globalDeviceMediator->setActuator("RELAY", 1);
+            } else if (action == "TurnOff") {
+                success = globalDeviceMediator->setActuator("RELAY", 0);
+            }
+        }
+        
+        result["action"] = action;
+        result["relayState"] = success ? (action == "TurnOn" ? "on" : "off") : "error";
+    }
+    else if (workflowId.startsWith("scene-")) {
+        // Handle scene activation
+        String sceneId = workflowId.substring(6); // Remove "scene-" prefix
+        
+        Serial.printf("Activating scene: %s\n", sceneId.c_str());
+        
+        // Execute scene actions via broker
+        if (globalBrokerClient) {
+            JsonDocument scenePayload;
+            scenePayload["sceneId"] = sceneId;
+            scenePayload["action"] = "activate";
+            scenePayload["timestamp"] = millis();
+            
+            String payload;
+            serializeJson(scenePayload, payload);
+            
+            success = globalBrokerClient->sendMessage(
+                "scene-controller",
+                "scene-activation",
+                payload.c_str()
+            );
+        }
+        
+        result["sceneId"] = sceneId;
+        result["activated"] = success;
+    }
+    else {
+        // Unknown workflow - try to execute as pcode workflow
+        #ifdef ENABLE_PMACHINE
+        pmachine::Status pmStatus = pm.getStatus();
+        if (pmStatus.running) {
+            // PMachine doesn't have loadProgram(path) or execute() methods
+            // This is a placeholder for future implementation
+            Serial.printf("PMachine workflow execution not yet implemented for: %s\n", workflowId.c_str());
+            success = false;
+            result["workflowId"] = workflowId;
+            result["executed"] = success;
+        } else {
+            result["error"] = "PMachine not running";
+        }
+        #else
+        result["error"] = "PMachine not enabled";
+        #endif
+    }
+    
+    // Send result back to AWS IoT
+    if (globalAwsIotClient) {
+        globalAwsIotClient->sendWflResult(request, success, result);
+    }
+}
+
+// ============================================================================
+// Workflow Execute Handler
+// ============================================================================
+
+void handleWflExecute(const WflActionRequest& request) {
+    Serial.printf("Handling WFL Execute: %s\n", request.workflowId.c_str());
+    
+    bool success = false;
+    JsonDocument result;
+    
+    // Execute workflow step
+    String stepId = request.parameters["stepId"].as<String>();
+    String stepType = request.parameters["stepType"].as<String>();
+    
+    if (stepType == "device-control") {
+        String deviceId = request.parameters["deviceId"].as<String>();
+        String action = request.parameters["action"].as<String>();
+        
+        if (globalBrokerClient) {
+            JsonDocument payload;
+            payload["action"] = action;
+            payload["stepId"] = stepId;
+            payload["timestamp"] = millis();
+            
+            String payloadStr;
+            serializeJson(payload, payloadStr);
+            
+            success = globalBrokerClient->sendMessage(
+                deviceId.c_str(),
+                "device-control",
+                payloadStr.c_str()
+            );
+        }
+        
+        result["deviceId"] = deviceId;
+        result["action"] = action;
+    }
+    else if (stepType == "sensor-read") {
+        String sensorId = request.parameters["sensorId"].as<String>();
+        
+        if (globalDeviceMediator) {
+            float value;
+            success = globalDeviceMediator->readSensor(sensorId.c_str(), value);
+            
+            if (success) {
+                result["sensorId"] = sensorId;
+                result["value"] = value;
+            }
+        }
+    }
+    else if (stepType == "delay") {
+        int delayMs = request.parameters["delayMs"];
+        delay(delayMs);
+        success = true;
+        result["delayMs"] = delayMs;
+    }
+    else if (stepType == "http-request") {
+        String url = request.parameters["url"].as<String>();
+        String method = request.parameters["method"].as<String>();
+        
+        HTTPClient http;
+        http.begin(url);
+        
+        int httpCode = -1;
+        if (method == "GET") {
+            httpCode = http.GET();
+        } else if (method == "POST") {
+            String body = request.parameters["body"].as<String>();
+            http.addHeader("Content-Type", "application/json");
+            httpCode = http.POST(body);
+        }
+        
+        success = (httpCode >= 200 && httpCode < 300);
+        result["httpCode"] = httpCode;
+        
+        if (success) {
+            result["response"] = http.getString();
+        }
+        
+        http.end();
+    }
+    
+    result["stepId"] = stepId;
+    result["stepType"] = stepType;
+    
+    // Send result
+    if (globalAwsIotClient) {
+        globalAwsIotClient->sendWflResult(request, success, result);
+    }
+}
+
+// ============================================================================
+// Workflow Query Handler
+// ============================================================================
+
+void handleWflQuery(const WflActionRequest& request) {
+    Serial.printf("Handling WFL Query: %s\n", request.workflowId.c_str());
+    
+    JsonDocument result;
+    bool success = true;
+    
+    // Query workflow status
+    String workflowId = request.workflowId;
+    
+    // Check if workflow is running in pmachine
+    #ifdef ENABLE_PMACHINE
+    pmachine::Status pmStatus = pm.getStatus();
+    if (pmStatus.running) {
+        result["workflowId"] = workflowId;
+        result["status"] = "running";
+        result["programCounter"] = pmStatus.pc;
+        result["numPages"] = pmStatus.numPages;
+    } else {
+        result["status"] = "not-running";
+    }
+    #else
+    result["status"] = "pmachine-disabled";
+    #endif
+    
+    // Query device states
+    if (globalDeviceMediator) {
+        result["devices"].to<JsonObject>();
+        JsonObject devices = result["devices"];
+        
+        // Get relay state
+        float relayState;
+        if (globalDeviceMediator->readSensor("RELAY", relayState)) {
+            devices["relay"] = (relayState > 0) ? "on" : "off";
+        }
+        
+        // Get sensor values
+        float temperature;
+        if (globalDeviceMediator->readSensor("TEMPERATURE", temperature)) {
+            devices["temperature"] = temperature;
+        }
+    }
+    
+    // Query broker queue depths
+    if (globalBrokerClient) {
+        result["queues"].to<JsonObject>();
+        JsonObject queues = result["queues"];
+        
+        auto queueNames = globalBrokerClient->listQueues();
+        for (const auto& queueName : queueNames) {
+            int depth = globalBrokerClient->getQueueSize(queueName.c_str());
+            queues[queueName] = depth;
+        }
+    }
+    
+    result["timestamp"] = millis();
+    
+    // Send result
+    if (globalAwsIotClient) {
+        globalAwsIotClient->sendWflResult(request, success, result);
+    }
+}
+
+// ============================================================================
+// Sensor Event to WFL Trigger
+// ============================================================================
+
+void triggerWflFromSensorEvent(const char* sensorId, float value, const char* condition) {
+    if (!globalAwsIotClient) return;
+    
+    Serial.printf("Sensor event: %s = %.2f (%s)\n", sensorId, value, condition);
+    
+    // Determine which workflow to trigger based on sensor and condition
+    String workflowId;
+    
+    if (strcmp(sensorId, "motion_sensor_1") == 0 && value > 0) {
+        workflowId = "motion-detected-workflow";
+    }
+    else if (strcmp(sensorId, "temp_sensor_1") == 0 && value > 30.0) {
+        workflowId = "temperature-alert-workflow";
+    }
+    
+    if (!workflowId.isEmpty()) {
+        JsonDocument params;
+        params["sensorId"] = sensorId;
+        params["value"] = value;
+        params["condition"] = condition;
+        params["timestamp"] = millis();
+        
+        globalAwsIotClient->triggerWflWorkflow(workflowId.c_str(), params);
+    }
+}
+
+// ============================================================================
+// Registration Function
+// ============================================================================
+
+void registerWflHandlers() {
+    if (!globalAwsIotClient) {
+        Serial.println("AWS IoT Client not initialized");
+        return;
+    }
+    
+    Serial.println("Registering WFL handlers...");
+    
+    // Register action type handlers
+    globalAwsIotClient->registerWflHandler("trigger", handleWflTrigger);
+    globalAwsIotClient->registerWflHandler("execute", handleWflExecute);
+    globalAwsIotClient->registerWflHandler("query", handleWflQuery);
+    
+    Serial.println("WFL handlers registered successfully");
+}
+
+// ============================================================================
+// Workflow Integration with Broker
+// ============================================================================
+
+void integrateWflWithBroker() {
+    if (!globalBrokerClient) return;
+    
+    // Create workflow-related queues
+    globalBrokerClient->createQueue("wfl-triggers", 50, true);
+    globalBrokerClient->createQueue("wfl-results", 50, true);
+    globalBrokerClient->createQueue("wfl-events", 100, false);
+    
+    Serial.println("WFL broker integration complete");
+}
+
+// Made with Bob

@@ -1,0 +1,169 @@
+{
+  "version": "1.0.0",
+  "aws": {
+    "iot": {
+      "endpoint": "xxxxxxxxxxxxx.iot.us-east-1.amazonaws.com",
+      "region": "us-east-1",
+      "thingName": "esp32-device-01",
+      "clientId": "esp32-device-01",
+      "port": 8883,
+      "certificates": {
+        "rootCa": "/certs/AmazonRootCA1.pem",
+        "deviceCert": "/certs/device-certificate.pem.crt",
+        "privateKey": "/certs/private.pem.key"
+      }
+    },
+    "alexa": {
+      "enabled": true,
+      "skillId": "amzn1.ask.skill.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+      "endpoints": [
+        {
+          "endpointId": "esp32-relay-01",
+          "friendlyName": "Smart Relay",
+          "description": "ESP32 controlled relay switch",
+          "manufacturerName": "Custom IoT",
+          "displayCategories": ["SWITCH"],
+          "capabilities": [
+            {
+              "type": "AlexaInterface",
+              "interface": "Alexa.PowerController",
+              "version": "3",
+              "properties": {
+                "supported": [
+                  {
+                    "name": "powerState"
+                  }
+                ],
+                "proactivelyReported": true,
+                "retrievable": true
+              }
+            },
+            {
+              "type": "AlexaInterface",
+              "interface": "Alexa.EndpointHealth",
+              "version": "3",
+              "properties": {
+                "supported": [
+                  {
+                    "name": "connectivity"
+                  }
+                ],
+                "proactivelyReported": true,
+                "retrievable": true
+              }
+            }
+          ]
+        },
+        {
+          "endpointId": "esp32-sensor-01",
+          "friendlyName": "Temperature Sensor",
+          "description": "ESP32 temperature and humidity sensor",
+          "manufacturerName": "Custom IoT",
+          "displayCategories": ["TEMPERATURE_SENSOR"],
+          "capabilities": [
+            {
+              "type": "AlexaInterface",
+              "interface": "Alexa.TemperatureSensor",
+              "version": "3",
+              "properties": {
+                "supported": [
+                  {
+                    "name": "temperature"
+                  }
+                ],
+                "proactivelyReported": true,
+                "retrievable": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "wfl": {
+      "enabled": true,
+      "brokerUrl": "http://localhost:5000",
+      "workflows": [
+        {
+          "id": "motion-detected-workflow",
+          "name": "Motion Detection Handler",
+          "description": "Triggered when motion is detected",
+          "trigger": {
+            "type": "sensor",
+            "sensorId": "motion_sensor_1",
+            "condition": "value == true"
+          },
+          "actions": [
+            {
+              "type": "alexa-notification",
+              "message": "Motion detected in {{location}}"
+            },
+            {
+              "type": "device-control",
+              "deviceId": "esp32-relay-01",
+              "action": "turnOn"
+            }
+          ]
+        },
+        {
+          "id": "temperature-alert-workflow",
+          "name": "Temperature Alert",
+          "description": "Alert when temperature exceeds threshold",
+          "trigger": {
+            "type": "sensor",
+            "sensorId": "temp_sensor_1",
+            "condition": "value > 30"
+          },
+          "actions": [
+            {
+              "type": "alexa-notification",
+              "message": "Temperature is {{temperature}}°C"
+            },
+            {
+              "type": "http-webhook",
+              "url": "https://example.com/api/alerts",
+              "method": "POST"
+            }
+          ]
+        },
+        {
+          "id": "alexa-relay-control",
+          "name": "Alexa Relay Control",
+          "description": "Control relay via Alexa voice commands",
+          "trigger": {
+            "type": "alexa",
+            "namespace": "Alexa.PowerController"
+          },
+          "actions": [
+            {
+              "type": "device-control",
+              "deviceId": "esp32-relay-01",
+              "action": "{{alexa.directive.name}}"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "security": {
+    "tlsVersion": "1.2",
+    "cipherSuites": [
+      "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+      "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+    ],
+    "certificateValidation": true,
+    "hostnameVerification": true
+  },
+  "logging": {
+    "level": "INFO",
+    "awsIotEvents": true,
+    "alexaDirectives": true,
+    "wflActions": true
+  },
+  "reconnection": {
+    "enabled": true,
+    "maxAttempts": 10,
+    "initialDelayMs": 1000,
+    "maxDelayMs": 60000,
+    "backoffMultiplier": 2.0
+  }
+}

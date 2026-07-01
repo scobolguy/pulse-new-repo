@@ -1,12 +1,13 @@
 /**
  * ESP Virtual P-Machine: Dynamic Library System Implementation
- * 
+ *
  * Implementation of dynamic library loading, thunk resolution, and
  * library registry management.
  */
 
-#include "pmachine_dynamic_library.h"
+#include "serial_compat.h"
 #include <ArduinoJson.h>
+#include "pmachine_dynamic_library.h"
 #include <algorithm>
 #include <sstream>
 
@@ -98,7 +99,7 @@ LibraryRegistry::~LibraryRegistry() {
 bool LibraryRegistry::loadLibrary(const LibraryManifest& manifest, uint16_t basePC) {
     // Check if already loaded
     if (isLibraryLoaded(manifest.name)) {
-        Serial.printf("Library %s already loaded\n", manifest.name.c_str());
+        SERIAL_PRINTF("Library %s already loaded\n", manifest.name.c_str());
         return true;
     }
     
@@ -119,8 +120,8 @@ bool LibraryRegistry::loadLibrary(const LibraryManifest& manifest, uint16_t base
     // Add to registry
     libraries[manifest.name] = library;
     
-    Serial.printf("Loaded library: %s v%s (%d exports)\n", 
-                  manifest.name.c_str(), 
+    SERIAL_PRINTF("Loaded library: %s v%s (%d exports)\n",
+                  manifest.name.c_str(),
                   manifest.version.c_str(),
                   manifest.exports.size());
     
@@ -138,7 +139,7 @@ bool LibraryRegistry::unloadLibrary(const std::string& name) {
     
     // Only unload if no more references
     if (it->second.refCount == 0) {
-        Serial.printf("Unloading library: %s\n", name.c_str());
+        SERIAL_PRINTF("Unloading library: %s\n", name.c_str());
         libraries.erase(it);
     }
     
@@ -193,11 +194,11 @@ DynamicLibraryLoader::DynamicLibraryLoader(LibraryRegistry& registry,
     : registry(registry), thunkTable(thunkTable), librarySearchPath("/libraries/") {
 }
 
-bool DynamicLibraryLoader::loadLibraryFromFile(const std::string& libraryPath, 
+bool DynamicLibraryLoader::loadLibraryFromFile(const std::string& libraryPath,
                                                uint16_t basePC) {
     // TODO: Implement file loading from SD card
     // For now, return error
-    Serial.printf("ERROR: File loading not yet implemented: %s\n", libraryPath.c_str());
+    SERIAL_PRINTF("ERROR: File loading not yet implemented: %s\n", libraryPath.c_str());
     return false;
 }
 
@@ -207,26 +208,26 @@ bool DynamicLibraryLoader::loadLibraryFromJSON(const std::string& jsonManifest,
     
     // Parse manifest
     if (!parseManifest(jsonManifest, manifest)) {
-        Serial.println("ERROR: Failed to parse library manifest");
+        SERIAL_PRINTLN("ERROR: Failed to parse library manifest");
         return false;
     }
     
     // Load dependencies first
     uint16_t depBasePC = basePC;
     if (!loadDependencies(manifest.dependencies, depBasePC)) {
-        Serial.println("ERROR: Failed to load dependencies");
+        SERIAL_PRINTLN("ERROR: Failed to load dependencies");
         return false;
     }
     
     // Load library
     if (!registry.loadLibrary(manifest, basePC)) {
-        Serial.println("ERROR: Failed to load library into registry");
+        SERIAL_PRINTLN("ERROR: Failed to load library into registry");
         return false;
     }
     
     // Register exports in thunk table
     if (!registerExports(manifest.name, manifest.exports, basePC)) {
-        Serial.println("ERROR: Failed to register exports");
+        SERIAL_PRINTLN("ERROR: Failed to register exports");
         return false;
     }
     
@@ -240,7 +241,7 @@ bool DynamicLibraryLoader::parseManifest(const std::string& json,
     DeserializationError error = deserializeJson(doc, json);
     
     if (error) {
-        Serial.printf("JSON parse error: %s\n", error.c_str());
+        SERIAL_PRINTF("JSON parse error: %s\n", error.c_str());
         return false;
     }
     
@@ -322,7 +323,7 @@ bool DynamicLibraryLoader::loadDependencies(const std::vector<std::string>& depe
         // Try to load dependency
         std::string depPath = librarySearchPath + depName + ".json";
         if (!loadLibraryFromFile(depPath, basePC)) {
-            Serial.printf("ERROR: Failed to load dependency: %s\n", depName.c_str());
+            SERIAL_PRINTF("ERROR: Failed to load dependency: %s\n", depName.c_str());
             return false;
         }
         
@@ -351,9 +352,9 @@ bool DynamicLibraryLoader::registerExports(const std::string& libraryName,
         uint16_t absolutePC = basePC + exp.entryPoint;
         thunkTable.resolveThunk(thunkId, absolutePC);
         
-        Serial.printf("  Registered: %s.%s -> PC %d\n", 
-                      libraryName.c_str(), 
-                      exp.name.c_str(), 
+        SERIAL_PRINTF("  Registered: %s.%s -> PC %d\n",
+                      libraryName.c_str(),
+                      exp.name.c_str(),
                       absolutePC);
     }
     

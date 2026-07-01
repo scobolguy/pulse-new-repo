@@ -1,0 +1,12 @@
+{
+  "devices": [],
+  "settings": {
+    "autoDiscovery": true,
+    "scanInterval": 60000,
+    "scanDuration": 10,
+    "statusCheckInterval": 30000,
+    "excludeWatches": true,
+    "autoStart": true,
+    "staleDeviceTimeout": 300000
+  }
+}

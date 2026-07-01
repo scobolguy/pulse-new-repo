@@ -80,6 +80,14 @@ import { compileQueueDslSpec, diffQueueConfigs } from './src/backend/queueDslCom
 import { createSanctionsComplianceService } from './src/compliance/sanctionsService.mjs';
 import crypto from 'crypto';
 
+// ===== ESP32 NODE REGISTRY =====
+import { createNodeRegistry } from './src/esp32/nodeRegistry.mjs';
+import { createNodeRegistryRoutes } from './src/esp32/nodeRegistryRoutes.mjs';
+
+// ===== PASCAL COMPILER SERVICE =====
+import { createPascalCompiler } from './src/pascal/compilerService.mjs';
+import pascalCompilerRoutes from './src/pascal/compilerRoutes.mjs';
+
 // ===== SERVICE PROXY UTILITY =====
 // When services are modular, proxy requests to them
 // Set MODULAR_BACKEND=1 to use separate services; else use unified backend
@@ -10133,6 +10141,53 @@ try {
   console.log('[STARTUP] Registering API routes...');
   registerMapperRoutes(app);
   registerRoutes(app);
+  
+  // Initialize ESP32 Node Registry
+  console.log('[STARTUP] Initializing ESP32 Node Registry...');
+  const esp32NodeRegistry = createNodeRegistry({
+    persistPath: path.join(RUNTIME_DATA_ROOT, 'esp32-nodes.json'),
+    autoSave: true,
+    nodeTimeout: 600000 // 10 minutes
+  });
+  await esp32NodeRegistry.initialize();
+  console.log(`[ESP32] Node Registry initialized with ${esp32NodeRegistry.getAllNodes().length} nodes`);
+  
+  // Register ESP32 Node Registry routes
+  const esp32Routes = createNodeRegistryRoutes(esp32NodeRegistry);
+  app.use('/api', esp32Routes);
+  console.log('[ESP32] Node Registry API routes registered at /api/nodes, /api/register');
+  
+  // Start periodic cleanup of stale nodes (every 5 minutes)
+  setInterval(async () => {
+    const staleNodes = await esp32NodeRegistry.cleanupStaleNodes();
+    if (staleNodes.length > 0) {
+      console.log(`[ESP32] Cleaned up ${staleNodes.length} stale nodes`);
+    }
+  }, 300000);
+  
+  // Initialize Pascal Compiler Service
+  console.log('[STARTUP] Initializing Pascal Compiler Service...');
+  const pascalCompiler = createPascalCompiler({
+    grammarPath: path.join(__dirname, '../dsl/languages/PulseSys'),
+    timeout: 30000
+  });
+  app.use('/api/pascal', pascalCompilerRoutes);
+  console.log('[PASCAL] Compiler API routes registered at /api/pascal/*');
+  
+  // Serve Pascal Editor HTML page
+  app.get('/editor', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'pascal-editor.html'));
+  });
+  
+  // Serve static files from public directory
+  app.use('/public', express.static(path.join(__dirname, 'public')));
+  console.log('[PASCAL] Editor available at /editor');
+  
+  // Serve OpenAPI specification for Power Apps
+  app.get('/api/openapi.json', (req, res) => {
+    res.sendFile(path.join(__dirname, 'openapi-powerapp-connector.json'));
+  });
+  console.log('[POWERAPP] OpenAPI specification available at /api/openapi.json');
   
   // Load worker configuration on startup
   console.log('[STARTUP] Loading worker configuration...');

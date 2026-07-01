@@ -1,0 +1,748 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "ESP32 Smart Home Integration API",
+    "description": "REST API for managing ESP32 nodes, compiling Pascal code, and invoking services on smart home devices. Designed for Microsoft Power Apps integration.",
+    "version": "1.0.0",
+    "contact": {
+      "name": "ESP32 Integration Team",
+      "email": "support@example.com"
+    }
+  },
+  "host": "localhost:3000",
+  "basePath": "/api",
+  "schemes": ["http", "https"],
+  "consumes": ["application/json"],
+  "produces": ["application/json"],
+  "securityDefinitions": {
+    "api_key": {
+      "type": "apiKey",
+      "name": "X-API-Key",
+      "in": "header",
+      "description": "API key for authentication"
+    }
+  },
+  "paths": {
+    "/nodes": {
+      "get": {
+        "summary": "List all ESP32 nodes",
+        "description": "Retrieve a list of all registered ESP32 nodes in the network",
+        "operationId": "listNodes",
+        "tags": ["Node Registry"],
+        "parameters": [
+          {
+            "name": "type",
+            "in": "query",
+            "description": "Filter by node type (e.g., sensor, actuator, camera)",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "capability",
+            "in": "query",
+            "description": "Filter by capability (e.g., temperature, motion, relay)",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of nodes",
+            "schema": {
+              "$ref": "#/definitions/NodeListResponse"
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/nodes/{nodeId}": {
+      "get": {
+        "summary": "Get node details",
+        "description": "Retrieve detailed information about a specific ESP32 node",
+        "operationId": "getNode",
+        "tags": ["Node Registry"],
+        "parameters": [
+          {
+            "name": "nodeId",
+            "in": "path",
+            "description": "Unique identifier of the ESP32 node",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Node details",
+            "schema": {
+              "$ref": "#/definitions/NodeResponse"
+            }
+          },
+          "404": {
+            "description": "Node not found",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/register": {
+      "post": {
+        "summary": "Register ESP32 node",
+        "description": "Register a new ESP32 node or update an existing node's information",
+        "operationId": "registerNode",
+        "tags": ["Node Registry"],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "description": "Node registration data",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/NodeRegistration"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Node registered successfully",
+            "schema": {
+              "$ref": "#/definitions/NodeResponse"
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/nodes/{nodeId}/services": {
+      "get": {
+        "summary": "List node services",
+        "description": "Get all available services (capabilities) for a specific ESP32 node",
+        "operationId": "listNodeServices",
+        "tags": ["Service Discovery"],
+        "parameters": [
+          {
+            "name": "nodeId",
+            "in": "path",
+            "description": "Unique identifier of the ESP32 node",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of services",
+            "schema": {
+              "$ref": "#/definitions/ServiceListResponse"
+            }
+          },
+          "404": {
+            "description": "Node not found",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/nodes/{nodeId}/services/{serviceId}": {
+      "post": {
+        "summary": "Invoke node service",
+        "description": "Execute a service on an ESP32 node (e.g., turn on relay, read sensor, capture image)",
+        "operationId": "invokeNodeService",
+        "tags": ["Service Invocation"],
+        "parameters": [
+          {
+            "name": "nodeId",
+            "in": "path",
+            "description": "Unique identifier of the ESP32 node",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "serviceId",
+            "in": "path",
+            "description": "Service identifier (e.g., temperature, relay, camera)",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "description": "Service invocation parameters",
+            "required": false,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "type": "string",
+                  "description": "Action to perform (e.g., on, off, read, capture)"
+                },
+                "parameters": {
+                  "type": "object",
+                  "description": "Additional parameters for the service"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Service invoked successfully",
+            "schema": {
+              "$ref": "#/definitions/ServiceInvocationResponse"
+            }
+          },
+          "404": {
+            "description": "Node or service not found",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "503": {
+            "description": "Node unavailable",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/pascal/compile": {
+      "post": {
+        "summary": "Compile Pascal code",
+        "description": "Compile Pascal source code to p-code for deployment to ESP32 nodes",
+        "operationId": "compilePascal",
+        "tags": ["Pascal Compiler"],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "description": "Pascal source code",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/CompileRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Compilation successful",
+            "schema": {
+              "$ref": "#/definitions/CompileResponse"
+            }
+          },
+          "400": {
+            "description": "Compilation error",
+            "schema": {
+              "$ref": "#/definitions/CompileErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/pascal/validate": {
+      "post": {
+        "summary": "Validate Pascal syntax",
+        "description": "Validate Pascal source code syntax without compilation",
+        "operationId": "validatePascal",
+        "tags": ["Pascal Compiler"],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "description": "Pascal source code",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": ["source"],
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "description": "Pascal source code to validate"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validation result",
+            "schema": {
+              "$ref": "#/definitions/ValidationResponse"
+            }
+          }
+        }
+      }
+    },
+    "/pascal/symbols": {
+      "post": {
+        "summary": "Extract symbols",
+        "description": "Extract symbol table from Pascal source code",
+        "operationId": "extractSymbols",
+        "tags": ["Pascal Compiler"],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "description": "Pascal source code",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": ["source"],
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "description": "Pascal source code"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Symbol table",
+            "schema": {
+              "$ref": "#/definitions/SymbolsResponse"
+            }
+          }
+        }
+      }
+    },
+    "/pascal/examples": {
+      "get": {
+        "summary": "Get Pascal examples",
+        "description": "Retrieve example Pascal programs for learning and testing",
+        "operationId": "getPascalExamples",
+        "tags": ["Pascal Compiler"],
+        "responses": {
+          "200": {
+            "description": "List of examples",
+            "schema": {
+              "$ref": "#/definitions/ExamplesResponse"
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "NodeListResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "example": "ok"
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Node"
+          }
+        },
+        "count": {
+          "type": "integer",
+          "description": "Total number of nodes"
+        }
+      }
+    },
+    "NodeResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "example": "ok"
+        },
+        "node": {
+          "$ref": "#/definitions/Node"
+        }
+      }
+    },
+    "Node": {
+      "type": "object",
+      "properties": {
+        "nodeId": {
+          "type": "string",
+          "description": "Unique node identifier",
+          "example": "esp32-living-room-01"
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable node name",
+          "example": "Living Room Sensor"
+        },
+        "type": {
+          "type": "string",
+          "description": "Node type",
+          "example": "sensor"
+        },
+        "ip": {
+          "type": "string",
+          "description": "IP address",
+          "example": "192.168.1.100"
+        },
+        "port": {
+          "type": "integer",
+          "description": "HTTP port",
+          "example": 80
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Capability"
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Additional node metadata"
+        },
+        "lastSeen": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last communication timestamp"
+        },
+        "registeredAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Registration timestamp"
+        }
+      }
+    },
+    "Capability": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Capability identifier",
+          "example": "temperature"
+        },
+        "name": {
+          "type": "string",
+          "description": "Capability name",
+          "example": "Temperature Sensor"
+        },
+        "type": {
+          "type": "string",
+          "description": "Capability type",
+          "example": "sensor"
+        },
+        "path": {
+          "type": "string",
+          "description": "HTTP endpoint path",
+          "example": "/api/temperature"
+        },
+        "methods": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Supported HTTP methods",
+          "example": ["GET", "POST"]
+        }
+      }
+    },
+    "NodeRegistration": {
+      "type": "object",
+      "required": ["nodeId", "name", "type", "ip"],
+      "properties": {
+        "nodeId": {
+          "type": "string",
+          "description": "Unique node identifier"
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable node name"
+        },
+        "type": {
+          "type": "string",
+          "description": "Node type (sensor, actuator, camera, etc.)"
+        },
+        "ip": {
+          "type": "string",
+          "description": "IP address"
+        },
+        "port": {
+          "type": "integer",
+          "description": "HTTP port",
+          "default": 80
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Capability"
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Additional metadata"
+        }
+      }
+    },
+    "ServiceListResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "example": "ok"
+        },
+        "nodeId": {
+          "type": "string"
+        },
+        "services": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Capability"
+          }
+        }
+      }
+    },
+    "ServiceInvocationResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "example": "ok"
+        },
+        "nodeId": {
+          "type": "string"
+        },
+        "serviceId": {
+          "type": "string"
+        },
+        "result": {
+          "type": "object",
+          "description": "Service-specific result data"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "CompileRequest": {
+      "type": "object",
+      "required": ["source"],
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "Pascal source code"
+        },
+        "options": {
+          "type": "object",
+          "properties": {
+            "optimize": {
+              "type": "boolean",
+              "description": "Enable optimization",
+              "default": true
+            },
+            "target": {
+              "type": "string",
+              "description": "Target platform",
+              "default": "esp32"
+            }
+          }
+        }
+      }
+    },
+    "CompileResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "example": "ok"
+        },
+        "pcode": {
+          "type": "string",
+          "description": "Generated p-code"
+        },
+        "symbols": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Symbol"
+          }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CompileError"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CompileError"
+          }
+        }
+      }
+    },
+    "CompileErrorResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "example": "error"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CompileError"
+          }
+        }
+      }
+    },
+    "CompileError": {
+      "type": "object",
+      "properties": {
+        "line": {
+          "type": "integer",
+          "description": "Line number"
+        },
+        "column": {
+          "type": "integer",
+          "description": "Column number"
+        },
+        "message": {
+          "type": "string",
+          "description": "Error message"
+        }
+      }
+    },
+    "ValidationResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "example": "ok"
+        },
+        "valid": {
+          "type": "boolean",
+          "description": "Whether the code is valid"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CompileError"
+          }
+        }
+      }
+    },
+    "SymbolsResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "example": "ok"
+        },
+        "symbols": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Symbol"
+          }
+        }
+      }
+    },
+    "Symbol": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Symbol name"
+        },
+        "type": {
+          "type": "string",
+          "description": "Symbol type (program, variable, procedure, function)"
+        },
+        "kind": {
+          "type": "string",
+          "description": "Symbol kind for IDE"
+        },
+        "dataType": {
+          "type": "string",
+          "description": "Data type (for variables)"
+        },
+        "line": {
+          "type": "integer",
+          "description": "Line number"
+        },
+        "detail": {
+          "type": "string",
+          "description": "Additional details"
+        }
+      }
+    },
+    "ExamplesResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "example": "ok"
+        },
+        "examples": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Example"
+          }
+        }
+      }
+    },
+    "Example": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Example name"
+        },
+        "description": {
+          "type": "string",
+          "description": "Example description"
+        },
+        "source": {
+          "type": "string",
+          "description": "Pascal source code"
+        }
+      }
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "example": "error"
+        },
+        "error": {
+          "type": "string",
+          "description": "Error message"
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Node Registry",
+      "description": "Manage ESP32 node registration and discovery"
+    },
+    {
+      "name": "Service Discovery",
+      "description": "Discover available services on ESP32 nodes"
+    },
+    {
+      "name": "Service Invocation",
+      "description": "Invoke services on ESP32 nodes"
+    },
+    {
+      "name": "Pascal Compiler",
+      "description": "Compile and validate Pascal code for ESP32 deployment"
+    }
+  ]
+}

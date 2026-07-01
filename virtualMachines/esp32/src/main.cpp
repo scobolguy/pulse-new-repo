@@ -1,9 +1,9 @@
+#include <Arduino.h>
 #include "SensorService.h"
 #include "DevicePin.h"
 #include <map>
 std::map<int, DevicePin*> devicePins;
 DeviceConfiguration deviceConfig;
-#include <Arduino.h>
 #include <FS.h>
 #include <LittleFS.h>
 #include <SD.h>
@@ -38,6 +38,31 @@ DeviceConfiguration deviceConfig;
 #ifdef ENABLE_CAMERA
 #include "CameraService.h"
 #include "camera_routes.h"
+#endif
+
+#ifdef ENABLE_DISPLAY
+#include "DisplayService.h"
+#ifndef DISPLAY_NO_LVGL
+#include "DDLRenderer.h"
+#endif
+#endif
+
+#ifdef ENABLE_AWS_IOT
+#include "aws_iot_routes.h"
+#endif
+
+#ifdef ENABLE_PRINTER_SCANNER
+#include "PrinterService.h"
+#include "printer_routes.h"
+#endif
+
+#ifdef ENABLE_BLUETOOTH_DEVICES
+#include "BluetoothService.h"
+#include "bluetooth_routes.h"
+#endif
+
+#ifdef ENABLE_EVENT_SCHEDULER
+#include "EventScheduler.h"
 #endif
 
 String nodeName = "ESP32-VM";
@@ -1572,6 +1597,16 @@ void setupWebServer() {
     setupCameraRoutes(server);
     Serial.println("[CAMERA] Camera routes registered");
 #endif
+
+#ifdef ENABLE_AWS_IOT
+    registerAwsIotRoutes(server);
+    Serial.println("[AWS_IOT] AWS IoT routes registered");
+#endif
+
+#ifdef ENABLE_PRINTER_SCANNER
+    registerPrinterRoutes(server);
+    Serial.println("[PRINTER] Printer/Scanner routes registered");
+#endif
     
     server.begin();
 }
@@ -1780,7 +1815,7 @@ void ensureDocsTreeAndDefaults() {
 
 void setup() {
 
-    Serial.begin(9600);     
+    Serial.begin(115200);
     delay(100);
     Serial.println("[BOOT] setup() starting...");
 
@@ -2022,6 +2057,140 @@ void setup() {
     }
 #endif
 
+#ifdef ENABLE_AWS_IOT
+    Serial.println("[BOOT] Initializing AWS IoT Gateway...");
+    if (initializeAwsIotGateway()) {
+        Serial.println("[AWS_IOT] AWS IoT Gateway initialized successfully");
+    } else {
+        Serial.println("[AWS_IOT] AWS IoT Gateway initialization failed");
+    }
+#endif
+
+#ifdef ENABLE_DISPLAY
+    Serial.println("[BOOT] Initializing display service...");
+    if (displayService.begin()) {
+        Serial.println("[DISPLAY] Display initialized successfully");
+        
+#ifndef DISPLAY_NO_LVGL
+        // Initialize DDL Renderer
+        Serial.println("[BOOT] Initializing DDL renderer...");
+        if (ddlRenderer.begin(displayService.getLVGLDisplay())) {
+            Serial.println("[DDL] DDL renderer initialized successfully");
+            
+            // Set up action callback
+            ddlRenderer.setActionCallback([&](const String& action) {
+                Serial.printf("[DDL] Action triggered: %s\n", action.c_str());
+                // TODO: Handle actions (e.g., device.relay.toggle, system.refresh)
+            });
+            
+            // Set up registry callback
+            ddlRenderer.setRegistryCallback([&](const String& key, JsonVariant value) {
+                Serial.printf("[DDL] Registry update from UI: %s = %s\n", key.c_str(), value.as<String>().c_str());
+                // TODO: Update registry/pmachine state
+            });
+            
+            // Load and render DDL
+            if (LittleFS.exists("/display/example.ddl.json")) {
+                Serial.println("[DDL] Loading example DDL...");
+                if (ddlRenderer.loadDDL("/display/example.ddl.json")) {
+                    ddlRenderer.render();
+                    Serial.println("[DDL] DDL rendered successfully");
+                } else {
+                    Serial.println("[DDL] Failed to load DDL file");
+                }
+            } else {
+                Serial.println("[DDL] No DDL file found, using embedded touch test DDL");
+                
+                // Embedded touch test DDL - compact single card design
+                String touchTestDDL = R"({
+                    "display": "TouchTest",
+                    "version": "1.0",
+                    "layout": {
+                        "type": "column",
+                        "cards": [
+                            {
+                                "id": "touchCard",
+                                "title": "Touch Test - IP: )" + WiFi.localIP().toString() + R"(",
+                                "actions": [
+                                    {
+                                        "id": "btn1",
+                                        "type": "button",
+                                        "label": "Button 1",
+                                        "action": "test.button1"
+                                    },
+                                    {
+                                        "id": "btn2",
+                                        "type": "button",
+                                        "label": "Button 2",
+                                        "action": "test.button2"
+                                    },
+                                    {
+                                        "id": "btn3",
+                                        "type": "button",
+                                        "label": "Button 3",
+                                        "action": "test.button3"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                })";
+                
+                if (ddlRenderer.parseDDL(touchTestDDL)) {
+                    ddlRenderer.render();
+                    Serial.println("[DDL] Embedded touch test DDL rendered successfully");
+                } else {
+                    Serial.println("[DDL] Failed to parse embedded DDL");
+                }
+            }
+        } else {
+            Serial.println("[DDL] DDL renderer initialization failed");
+        }
+#endif // DISPLAY_NO_LVGL
+    } else {
+        Serial.println("[DISPLAY] Display initialization failed");
+    }
+#endif
+
+#ifdef ENABLE_PRINTER_SCANNER
+    Serial.println("[BOOT] Initializing Printer/Scanner service...");
+    initializePrinterService();
+    if (globalPrinterService) {
+        Serial.println("[PRINTER] Printer/Scanner service initialized successfully");
+        
+        #ifdef ENABLE_AWS_IOT
+        // Register Alexa handlers for printer/scanner control
+        registerPrinterAlexaHandlers();
+        #endif
+    } else {
+        Serial.println("[PRINTER] Printer/Scanner service initialization failed");
+    }
+#endif
+
+#ifdef ENABLE_BLUETOOTH_DEVICES
+    Serial.println("[BOOT] Initializing Bluetooth service...");
+    globalBluetoothService = new BluetoothService();
+    if (globalBluetoothService && globalBluetoothService->begin()) {
+        Serial.println("[BLUETOOTH] Bluetooth service initialized successfully");
+    } else {
+        Serial.println("[BLUETOOTH] Bluetooth service initialization failed");
+        delete globalBluetoothService;
+        globalBluetoothService = nullptr;
+    }
+#endif
+
+#ifdef ENABLE_EVENT_SCHEDULER
+    Serial.println("[BOOT] Initializing Event Scheduler service...");
+    globalEventScheduler = new EventScheduler();
+    if (globalEventScheduler && globalEventScheduler->begin()) {
+        Serial.println("[SCHEDULER] Event Scheduler service initialized successfully");
+    } else {
+        Serial.println("[SCHEDULER] Event Scheduler service initialization failed");
+        delete globalEventScheduler;
+        globalEventScheduler = nullptr;
+    }
+#endif
+
     String advertisedServices = "[BOOT] Advertised services: ";
     bool firstAdvertised = true;
     if (ffsUp) {
@@ -2037,6 +2206,21 @@ void setup() {
 #ifdef ENABLE_CAMERA
     if (!firstAdvertised) advertisedServices += ", ";
     advertisedServices += "camera";
+    firstAdvertised = false;
+#endif
+#ifdef ENABLE_PRINTER_SCANNER
+    if (!firstAdvertised) advertisedServices += ", ";
+    advertisedServices += "printer-scanner";
+    firstAdvertised = false;
+#endif
+#ifdef ENABLE_BLUETOOTH_DEVICES
+    if (!firstAdvertised) advertisedServices += ", ";
+    advertisedServices += "BluetoothService";
+    firstAdvertised = false;
+#endif
+#ifdef ENABLE_EVENT_SCHEDULER
+    if (!firstAdvertised) advertisedServices += ", ";
+    advertisedServices += "EventScheduler";
     firstAdvertised = false;
 #endif
     if (firstAdvertised) advertisedServices += "none";
@@ -2055,6 +2239,25 @@ void loop() {
     if (otaEnabled) {
         ArduinoOTA.handle();
     }
+
+#ifdef ENABLE_AWS_IOT
+    // Update AWS IoT Gateway (process MQTT messages)
+    updateAwsIotGateway();
+#endif
+
+#ifdef ENABLE_BLUETOOTH_DEVICES
+    // Update Bluetooth service (handle scanning and device discovery)
+    if (globalBluetoothService) {
+        globalBluetoothService->loop();
+    }
+#endif
+
+#ifdef ENABLE_EVENT_SCHEDULER
+    // Update Event Scheduler (check and execute scheduled events)
+    if (globalEventScheduler) {
+        globalEventScheduler->loop();
+    }
+#endif
 
     // Non-blocking UDP receive for node discovery
     UdpRuntimeContext udpContext;
@@ -2094,6 +2297,18 @@ void loop() {
     }
 
     runSupervisorHealthChecks();
+    
+#ifdef ENABLE_DISPLAY
+    // Update LVGL (handles rendering and touch)
+    displayService.update();
+#endif
+
+#ifdef ENABLE_PRINTER_SCANNER
+    // Update printer/scanner service
+    if (globalPrinterService) {
+        globalPrinterService->loop();
+    }
+#endif
     // No need for server.handleClient() with AsyncWebServer
     // Add VM logic here
 }

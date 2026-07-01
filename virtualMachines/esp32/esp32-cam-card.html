@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32-CAM Card</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .camera-card {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+            max-width: 640px;
+            width: 100%;
+            animation: slideIn 0.5s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .card-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .card-title {
+            font-size: 24px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #4ade80;
+            box-shadow: 0 0 10px #4ade80;
+            animation: pulse 2s infinite;
+        }
+
+        .status-indicator.offline {
+            background: #ef4444;
+            box-shadow: 0 0 10px #ef4444;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .video-container {
+            position: relative;
+            background: #000;
+            aspect-ratio: 4/3;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+
+        #cameraStream {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+
+        .placeholder {
+            color: #666;
+            font-size: 18px;
+            text-align: center;
+            padding: 40px;
+        }
+
+        .controls {
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .input-group label {
+            font-weight: 500;
+            color: #374151;
+            min-width: 100px;
+        }
+
+        .input-group input {
+            flex: 1;
+            padding: 10px 15px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .input-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .button-group {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 10px;
+        }
+
+        button {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-success {
+            background: #10b981;
+            color: white;
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+
+        .btn-secondary {
+            background: #6b7280;
+            color: white;
+        }
+
+        .info-bar {
+            padding: 15px 20px;
+            background: #f9fafb;
+            border-top: 1px solid #e5e7eb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 12px;
+            color: #6b7280;
+        }
+
+        .fps-display {
+            font-weight: 600;
+            color: #667eea;
+        }
+
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 16px;
+        }
+
+        .spinner {
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-top: 3px solid white;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="camera-card">
+        <div class="card-header">
+            <div class="card-title">
+                📹 ESP32-CAM Stream
+                <div class="status-indicator" id="statusIndicator"></div>
+            </div>
+            <div class="fps-display" id="fpsDisplay">0 FPS</div>
+        </div>
+
+        <div class="video-container">
+            <img id="cameraStream" style="display: none;" alt="Camera Stream">
+            <div class="placeholder" id="placeholder">
+                <div class="spinner"></div>
+                Enter ESP32 node address and start streaming
+            </div>
+        </div>
+
+        <div class="controls">
+            <div class="input-group">
+                <label for="espNode">ESP32 Node:</label>
+                <input 
+                    type="text" 
+                    id="espNode" 
+                    placeholder="192.168.1.100 or esp32cam.local"
+                    value="192.168.1.100"
+                >
+            </div>
+
+            <div class="button-group">
+                <button class="btn-success" onclick="startStream()">
+                    ▶️ Start Stream (1 FPS)
+                </button>
+                <button class="btn-danger" onclick="stopStream()">
+                    ⏹️ Stop Stream
+                </button>
+                <button class="btn-primary" onclick="takePicture()">
+                    📸 Take Picture
+                </button>
+                <button class="btn-secondary" onclick="downloadImage()">
+                    💾 Download Image
+                </button>
+            </div>
+        </div>
+
+        <div class="info-bar">
+            <span id="statusText">Ready</span>
+            <span id="imageInfo">No image loaded</span>
+        </div>
+    </div>
+
+    <script>
+        let streamInterval = null;
+        let espNodeAddress = '';
+        let frameCount = 0;
+        let lastFrameTime = Date.now();
+        let currentImageUrl = '';
+
+        function getEspNode() {
+            const node = document.getElementById('espNode').value.trim();
+            if (!node) {
+                updateStatus('Please enter ESP32 node address', 'error');
+                return null;
+            }
+            // Add http:// if not present
+            return node.startsWith('http') ? node : `http://${node}`;
+        }
+
+        function updateStatus(message, type = 'info') {
+            const statusText = document.getElementById('statusText');
+            const statusIndicator = document.getElementById('statusIndicator');
+            
+            statusText.textContent = message;
+            
+            if (type === 'error') {
+                statusIndicator.classList.add('offline');
+            } else {
+                statusIndicator.classList.remove('offline');
+            }
+        }
+
+        function updateFPS() {
+            const now = Date.now();
+            const elapsed = (now - lastFrameTime) / 1000;
+            const fps = elapsed > 0 ? (1 / elapsed).toFixed(1) : 0;
+            document.getElementById('fpsDisplay').textContent = `${fps} FPS`;
+            lastFrameTime = now;
+        }
+
+        function startStream() {
+            espNodeAddress = getEspNode();
+            if (!espNodeAddress) return;
+
+            stopStream(); // Stop any existing stream
+
+            updateStatus('Starting stream...', 'info');
+            
+            // Start streaming at 1 FPS (1000ms interval)
+            streamInterval = setInterval(() => {
+                loadImage(`${espNodeAddress}/api/camera/capture`);
+            }, 1000);
+
+            // Load first frame immediately
+            loadImage(`${espNodeAddress}/api/camera/capture`);
+        }
+
+        function stopStream() {
+            if (streamInterval) {
+                clearInterval(streamInterval);
+                streamInterval = null;
+                updateStatus('Stream stopped', 'info');
+                document.getElementById('fpsDisplay').textContent = '0 FPS';
+            }
+        }
+
+        function takePicture() {
+            espNodeAddress = getEspNode();
+            if (!espNodeAddress) return;
+
+            updateStatus('Capturing picture...', 'info');
+            loadImage(`${espNodeAddress}/api/camera/capture`);
+        }
+
+        function loadImage(url) {
+            const img = document.getElementById('cameraStream');
+            const placeholder = document.getElementById('placeholder');
+            
+            // Add timestamp to prevent caching
+            const imageUrl = `${url}?t=${Date.now()}`;
+            
+            // Create a new image to test loading
+            const testImg = new Image();
+            
+            testImg.onload = function() {
+                currentImageUrl = imageUrl;
+                img.src = imageUrl;
+                img.style.display = 'block';
+                placeholder.style.display = 'none';
+                
+                frameCount++;
+                updateFPS();
+                updateStatus(`Frame ${frameCount} loaded`, 'success');
+                
+                // Update image info
+                const imageInfo = document.getElementById('imageInfo');
+                imageInfo.textContent = `${this.width}×${this.height}`;
+            };
+            
+            testImg.onerror = function() {
+                updateStatus('Failed to load image from ESP32-CAM', 'error');
+                if (streamInterval) {
+                    stopStream();
+                }
+            };
+            
+            testImg.src = imageUrl;
+        }
+
+        function downloadImage() {
+            if (!currentImageUrl) {
+                updateStatus('No image to download', 'error');
+                return;
+            }
+
+            const link = document.createElement('a');
+            link.href = currentImageUrl;
+            link.download = `esp32cam_${Date.now()}.jpg`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            updateStatus('Image downloaded', 'success');
+        }
+
+        // Stop stream when page is closed
+        window.addEventListener('beforeunload', stopStream);
+
+        // Initialize
+        updateStatus('Ready to stream', 'info');
+    </script>
+</body>
+</html>

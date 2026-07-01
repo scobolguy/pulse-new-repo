@@ -1,0 +1,36 @@
+{
+  "devices": [
+    {
+      "id": "printer-192-168-1-100",
+      "name": "Office HP LaserJet",
+      "ipAddress": "192.168.1.100",
+      "port": 9100,
+      "type": "printer",
+      "model": "HP LaserJet Pro M404dn"
+    },
+    {
+      "id": "printer-192-168-1-101",
+      "name": "Color Printer",
+      "ipAddress": "192.168.1.101",
+      "port": 9100,
+      "type": "printer",
+      "model": "Canon imageCLASS"
+    },
+    {
+      "id": "scanner-192-168-1-102",
+      "name": "Document Scanner",
+      "ipAddress": "192.168.1.102",
+      "port": 8610,
+      "type": "scanner",
+      "model": "Epson WorkForce"
+    },
+    {
+      "id": "printer-192-168-1-103",
+      "name": "Multifunction Printer",
+      "ipAddress": "192.168.1.103",
+      "port": 9100,
+      "type": "printer",
+      "model": "Brother MFC-L2750DW"
+    }
+  ]
+}
