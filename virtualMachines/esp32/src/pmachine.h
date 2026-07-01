@@ -332,6 +332,7 @@ public:
     bool didLastRunHitStepLimit() const;
     size_t getLastRunStepCount() const;
     const std::vector<std::string>& getLastRunTextOutput() const;
+    std::map<std::string, std::string> getFlowStateSnapshot() const;
     void setOrchestrationWaitHook(OrchestrationWaitHook hook, void* context = nullptr);
     void setThunkResolverHook(ThunkResolveHook hook, void* context = nullptr);
     void setThunkBinding(const std::string& symbol, int targetPc);

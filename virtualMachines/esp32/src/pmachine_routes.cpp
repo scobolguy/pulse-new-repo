@@ -259,6 +259,14 @@ struct ProgramMapMetadata {
     JsonDocument raw;
 };
 
+bool loadProgramMapMappingsFromDoc(
+    const JsonDocument& doc,
+    std::vector<pmachine::MappingDef>& mappingsOut,
+    std::map<std::string, std::vector<std::string>>* procedureSignaturesOut,
+    String& errorOut,
+    ProgramMapMetadata* metadataOut = nullptr
+);
+
 struct PMachineExecutionPolicy {
     bool hasPagingConfig = false;
     size_t pageSizeBytes = 0;
@@ -282,6 +290,225 @@ bool parseBooleanText(const String& raw, bool defaultValue = false) {
     if (text == "1" || text == "TRUE" || text == "YES" || text == "ON") return true;
     if (text == "0" || text == "FALSE" || text == "NO" || text == "OFF") return false;
     return defaultValue;
+}
+
+bool parseJsonText(const String& text, JsonDocument& doc) {
+    doc.clear();
+    if (text.length() == 0) return false;
+    DeserializationError err = deserializeJson(doc, text);
+    return !err;
+}
+
+void addRunOutputsToJson(
+    JsonDocument& out,
+    pmachine::PMachine& machine,
+    const String& source,
+    const String& inputQueue,
+    const String& message
+) {
+    out["ok"] = true;
+    out["source"] = source;
+    out["inputQueue"] = inputQueue;
+    out["message"] = message;
+    out["stepLimitHit"] = machine.didLastRunHitStepLimit();
+    out["stepCount"] = static_cast<uint32_t>(machine.getLastRunStepCount());
+
+    JsonArray stdoutLines = out["stdout"].to<JsonArray>();
+    for (const auto& line : machine.getLastRunTextOutput()) {
+        stdoutLines.add(line.c_str());
+    }
+
+    const std::map<std::string, std::string> flowState = machine.getFlowStateSnapshot();
+    if (!flowState.empty()) {
+        JsonObject flow = out["flowState"].to<JsonObject>();
+        for (const auto& kv : flowState) {
+            flow[kv.first.c_str()] = kv.second.c_str();
+        }
+    }
+    auto thunkIt = flowState.find("__thunk_error");
+    if (thunkIt != flowState.end()) {
+        out["runtimeError"] = thunkIt->second.c_str();
+    } else {
+        auto orchIt = flowState.find("__orch_error");
+        if (orchIt != flowState.end()) {
+            out["runtimeError"] = orchIt->second.c_str();
+        }
+    }
+
+    const auto& routed = machine.getRoutingDeliveries();
+    JsonArray deliveries = out["deliveries"].to<JsonArray>();
+    for (const auto& d : routed) {
+        JsonObject item = deliveries.add<JsonObject>();
+        item["queueName"] = d.queueName.c_str();
+        item["message"] = d.message.c_str();
+    }
+    out["publishedCount"] = static_cast<uint32_t>(routed.size());
+}
+
+bool extractPCodeFromPayload(
+    const String& payload,
+    String& pcode,
+    String& inputQueue,
+    String& message,
+    String& programMap,
+    bool& runRouter
+) {
+    JsonDocument payloadDoc;
+    if (!parseJsonText(payload, payloadDoc) || !payloadDoc.is<JsonObject>()) {
+        pcode = payload;
+        return pcode.length() > 0;
+    }
+
+    JsonObjectConst root = payloadDoc.as<JsonObjectConst>();
+
+    const char* pcodeKeys[] = {"pcode", "program", "code", "script"};
+    for (const char* key : pcodeKeys) {
+        if (root[key].is<const char*>()) {
+            String value = String(root[key].as<const char*>());
+            if (value.length() > 0) {
+                pcode = value;
+                break;
+            }
+        }
+    }
+
+    if (root["inputQueue"].is<const char*>()) {
+        inputQueue = String(root["inputQueue"].as<const char*>());
+    }
+    if (root["message"].is<const char*>()) {
+        message = String(root["message"].as<const char*>());
+    }
+    if (root["programMap"].is<const char*>()) {
+        programMap = String(root["programMap"].as<const char*>());
+    }
+    if (root["runRouter"].is<bool>()) {
+        runRouter = root["runRouter"].as<bool>();
+    }
+
+    if (pcode.length() == 0 && root["payload"].is<const char*>()) {
+        pcode = String(root["payload"].as<const char*>());
+    }
+
+    return pcode.length() > 0;
+}
+
+void appendU16LE(std::vector<uint8_t>& out, uint16_t v) {
+    out.push_back(static_cast<uint8_t>(v & 0xFF));
+    out.push_back(static_cast<uint8_t>((v >> 8) & 0xFF));
+}
+
+void appendI16LE(std::vector<uint8_t>& out, int v) {
+    appendU16LE(out, static_cast<uint16_t>(v & 0xFFFF));
+}
+
+void appendI32LE(std::vector<uint8_t>& out, int32_t v) {
+    out.push_back(static_cast<uint8_t>(v & 0xFF));
+    out.push_back(static_cast<uint8_t>((v >> 8) & 0xFF));
+    out.push_back(static_cast<uint8_t>((v >> 16) & 0xFF));
+    out.push_back(static_cast<uint8_t>((v >> 24) & 0xFF));
+}
+
+void appendShortString(std::vector<uint8_t>& out, const std::string& s) {
+    const size_t maxLen = 65535;
+    const uint16_t len = static_cast<uint16_t>(s.size() > maxLen ? maxLen : s.size());
+    appendU16LE(out, len);
+    for (uint16_t i = 0; i < len; ++i) {
+        out.push_back(static_cast<uint8_t>(s[i]));
+    }
+}
+
+std::vector<uint8_t> assembleInstructionsToBinary(const std::vector<pmachine::PInstruction>& instructions) {
+    std::vector<uint8_t> out;
+    out.reserve(instructions.size() * 16);
+
+    // Header: PBIN v1
+    out.push_back('P');
+    out.push_back('B');
+    out.push_back('I');
+    out.push_back('N');
+    out.push_back(1);
+    appendU16LE(out, static_cast<uint16_t>(instructions.size() > 65535 ? 65535 : instructions.size()));
+
+    for (const auto& ins : instructions) {
+        out.push_back(ins.opcode);
+        out.push_back(static_cast<uint8_t>(ins.type));
+        appendI16LE(out, ins.level);
+        appendI16LE(out, ins.address);
+        appendI32LE(out, static_cast<int32_t>(ins.value));
+        appendI32LE(out, static_cast<int32_t>(ins.intOperand));
+        appendShortString(out, ins.strOperand);
+        appendShortString(out, ins.enumType);
+        appendShortString(out, ins.label);
+    }
+
+    return out;
+}
+
+size_t applyLibraryReferencesFromMetadata(pmachine::PMachine& machine, const ProgramMapMetadata& metadata) {
+    size_t bound = 0;
+    if (!metadata.raw["codeLibraries"].is<JsonArrayConst>()) {
+        return 0;
+    }
+
+    JsonArrayConst libs = metadata.raw["codeLibraries"].as<JsonArrayConst>();
+    for (JsonVariantConst libVar : libs) {
+        if (!libVar.is<JsonObjectConst>()) continue;
+        JsonObjectConst lib = libVar.as<JsonObjectConst>();
+
+        String libName = String(lib["name"] | lib["id"] | lib["library"] | "");
+        JsonVariantConst exportsVar = lib["exports"];
+        if (!exportsVar.is<JsonArrayConst>()) exportsVar = lib["symbols"];
+        if (!exportsVar.is<JsonArrayConst>()) exportsVar = lib["functions"];
+        if (!exportsVar.is<JsonArrayConst>()) continue;
+
+        JsonArrayConst exports = exportsVar.as<JsonArrayConst>();
+        for (JsonVariantConst exportVar : exports) {
+            String symbol;
+            int targetPc = -1;
+
+            if (exportVar.is<const char*>()) {
+                symbol = String(exportVar.as<const char*>());
+            } else if (exportVar.is<JsonObjectConst>()) {
+                JsonObjectConst exportObj = exportVar.as<JsonObjectConst>();
+                symbol = String(exportObj["symbol"] | exportObj["name"] | exportObj["id"] | exportObj["function"] | "");
+                targetPc = static_cast<int>(exportObj["targetPc"] | exportObj["pc"] | exportObj["address"] | -1);
+            }
+
+            symbol = trimCopy(symbol);
+            if (symbol.length() == 0 || targetPc < 0) continue;
+
+            machine.setThunkBinding(std::string(symbol.c_str()), targetPc);
+            bound += 1;
+
+            if (libName.length() > 0 && symbol.indexOf('.') < 0) {
+                String qualified = libName + "." + symbol;
+                machine.setThunkBinding(std::string(qualified.c_str()), targetPc);
+                bound += 1;
+            }
+        }
+    }
+
+    return bound;
+}
+
+size_t applyThunkBindingsFromPayload(pmachine::PMachine& machine, const String& payload) {
+    JsonDocument payloadDoc;
+    if (!parseJsonText(payload, payloadDoc) || !payloadDoc.is<JsonObject>()) return 0;
+    JsonObjectConst root = payloadDoc.as<JsonObjectConst>();
+    size_t count = 0;
+
+    if (root["thunks"].is<JsonObjectConst>()) {
+        JsonObjectConst thunks = root["thunks"].as<JsonObjectConst>();
+        for (JsonPairConst p : thunks) {
+            String symbol = String(p.key().c_str());
+            int targetPc = p.value().as<int>();
+            if (symbol.length() == 0 || targetPc < 0) continue;
+            machine.setThunkBinding(std::string(symbol.c_str()), targetPc);
+            count += 1;
+        }
+    }
+
+    return count;
 }
 
 void parseExecutionPolicy(AsyncWebServerRequest* request, PMachineExecutionPolicy& policy) {
@@ -796,7 +1023,16 @@ bool loadProgramMapMappings(
         errorOut = "Unable to load program map file";
         return false;
     }
+    return loadProgramMapMappingsFromDoc(doc, mappingsOut, procedureSignaturesOut, errorOut, metadataOut);
+}
 
+bool loadProgramMapMappingsFromDoc(
+    const JsonDocument& doc,
+    std::vector<pmachine::MappingDef>& mappingsOut,
+    std::map<std::string, std::vector<std::string>>* procedureSignaturesOut,
+    String& errorOut,
+    ProgramMapMetadata* metadataOut
+) {
     if (metadataOut != nullptr) {
         parseProgramMapMetadata(doc, *metadataOut);
         if (metadataOut->hasLibraryBindings && !metadataOut->hasCodeLibrarianRole) {
@@ -832,7 +1068,6 @@ bool loadProgramMapMappings(
     } else if (doc.is<JsonObject>() && doc["entries"].is<JsonArray>()) {
         entries = doc["entries"].as<JsonArrayConst>();
     } else {
-        // Standard Pascal program maps may not have router/mapping entries.
         return true;
     }
 
@@ -860,6 +1095,13 @@ bool loadProgramMapMappings(
     }
 
     return true;
+}
+
+String deriveProgramMapPathFromPcode(const String& pcodePath) {
+    if (!pcodePath.endsWith(".pcode")) {
+        return "";
+    }
+    return pcodePath.substring(0, pcodePath.length() - 6) + ".program.json";
 }
 
 struct EdgeIngressExecutionResult {
@@ -1066,6 +1308,23 @@ EdgeIngressExecutionResult executeEdgeIngressStage(
     JsonArray stdoutLines = out["stdout"].to<JsonArray>();
     for (const auto& line : machine.getLastRunTextOutput()) {
         stdoutLines.add(line.c_str());
+    }
+
+    const std::map<std::string, std::string> flowState = machine.getFlowStateSnapshot();
+    if (!flowState.empty()) {
+        JsonObject flow = out["flowState"].to<JsonObject>();
+        for (const auto& kv : flowState) {
+            flow[kv.first.c_str()] = kv.second.c_str();
+        }
+    }
+    auto thunkIt = flowState.find("__thunk_error");
+    if (thunkIt != flowState.end()) {
+        out["runtimeError"] = thunkIt->second.c_str();
+    } else {
+        auto orchIt = flowState.find("__orch_error");
+        if (orchIt != flowState.end()) {
+            out["runtimeError"] = orchIt->second.c_str();
+        }
     }
 
 #if defined(ESP32)
@@ -1657,6 +1916,342 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
 
         request->send(200, "text/plain", "Loaded and run");
     });
+
+    // Execute pcode from a file path and return run outputs.
+    server.on("/pmachine/execute_file", HTTP_POST, [&machine, ffs](AsyncWebServerRequest *request){
+        String file;
+        String maxParam = "32768";
+        String inputQueue;
+        String message;
+        String runRouterParam = "0";
+        String programMap;
+        PMachineExecutionPolicy policy;
+        parseExecutionPolicy(request, policy);
+
+        if (!getRequestParam(request, "file", file)) {
+            request->send(400, "text/plain", "Missing file param");
+            return;
+        }
+
+        getRequestParam(request, "max", maxParam);
+        getRequestParam(request, "inputQueue", inputQueue);
+        getRequestParam(request, "message", message);
+        getRequestParam(request, "runRouter", runRouterParam);
+        getRequestParam(request, "programMap", programMap);
+        if (programMap.length() == 0) {
+            programMap = deriveProgramMapPathFromPcode(file);
+        }
+
+        if (policy.hasPagingConfig) {
+            machine.setMemoryConfig(policy.pageSizeBytes, policy.maxFrames);
+        }
+
+        String text;
+        if (!readTextFromPath(file, ffs, text)) {
+            request->send(404, "text/plain", "File not found or read error");
+            return;
+        }
+
+        const size_t max = static_cast<size_t>(maxParam.toInt());
+        if (max > 0 && static_cast<size_t>(text.length()) > max) {
+            request->send(413, "text/plain", "File too large");
+            return;
+        }
+
+        std::vector<pmachine::PInstruction> instructions = pmachine::loadTextPCode(std::string(text.c_str()));
+        std::vector<uint8_t> binary = assembleInstructionsToBinary(instructions);
+        const bool runRouter = parseBooleanText(runRouterParam, false);
+        size_t thunkBindingsApplied = 0;
+
+        std::vector<pmachine::MappingDef> mappingDefs;
+        std::map<std::string, std::vector<std::string>> procedureSignatures;
+        ProgramMapMetadata metadata;
+        bool hasProgramMap = false;
+        if (programMap.length() > 0) {
+            String mappingError;
+            if (!loadProgramMapMappings(programMap, ffs, mappingDefs, &procedureSignatures, mappingError, &metadata)) {
+                request->send(404, "text/plain", mappingError);
+                return;
+            }
+            hasProgramMap = true;
+        }
+
+        if (runRouter) {
+            applyRuntimeAndResidencyPolicy(machine, &policy, hasProgramMap ? &metadata : nullptr);
+            machine.setMappings(mappingDefs);
+            machine.setProcedureSignatures(procedureSignatures);
+            if (hasProgramMap) {
+                thunkBindingsApplied += applyLibraryReferencesFromMetadata(machine, metadata);
+            }
+        } else {
+            applyRuntimeAndResidencyPolicy(machine, &policy, hasProgramMap ? &metadata : nullptr);
+            machine.clearMappings();
+            if (hasProgramMap) {
+                machine.setProcedureSignatures(procedureSignatures);
+                thunkBindingsApplied += applyLibraryReferencesFromMetadata(machine, metadata);
+            } else {
+                machine.clearProcedureSignatures();
+            }
+        }
+
+        machine.loadProgram(binary, std::string(file.c_str()), max > 0 ? max : binary.size());
+
+        machine.clearRoutingDeliveries();
+        machine.setRoutingContext(std::string(inputQueue.c_str()), std::string(message.c_str()));
+        machine.run(instructions);
+
+        JsonDocument out;
+        addRunOutputsToJson(out, machine, "file", inputQueue, message);
+        out["file"] = file;
+        out["programMap"] = programMap;
+        out["runRouter"] = runRouter;
+        out["instructionCount"] = static_cast<uint32_t>(instructions.size());
+        out["binaryBytes"] = static_cast<uint32_t>(binary.size());
+        out["thunkBindingsApplied"] = static_cast<uint32_t>(thunkBindingsApplied);
+
+        String response;
+        serializeJson(out, response);
+        request->send(200, "application/json", response);
+    });
+
+    // Execute pcode from an arbitrary payload message (JSON or plain text).
+    server.on("/pmachine/execute_message", HTTP_POST, [&machine, ffs](AsyncWebServerRequest *request){
+        String payload;
+        String pcode;
+        String inputQueue;
+        String message;
+        String runRouterParam = "0";
+        String programMap;
+        String maxParam = "32768";
+        PMachineExecutionPolicy policy;
+        parseExecutionPolicy(request, policy);
+
+        getRequestParam(request, "payload", payload);
+        getRequestParam(request, "pcode", pcode);
+        getRequestParam(request, "inputQueue", inputQueue);
+        getRequestParam(request, "message", message);
+        getRequestParam(request, "runRouter", runRouterParam);
+        getRequestParam(request, "programMap", programMap);
+        getRequestParam(request, "max", maxParam);
+
+        bool runRouter = parseBooleanText(runRouterParam, false);
+
+        if (pcode.length() == 0) {
+            if (!extractPCodeFromPayload(payload, pcode, inputQueue, message, programMap, runRouter)) {
+                request->send(400, "text/plain", "Missing pcode (provide pcode param or payload containing pcode/program/code/script)");
+                return;
+            }
+        }
+
+        const size_t max = static_cast<size_t>(maxParam.toInt());
+        if (max > 0 && static_cast<size_t>(pcode.length()) > max) {
+            request->send(413, "text/plain", "Pcode payload too large");
+            return;
+        }
+
+        if (policy.hasPagingConfig) {
+            machine.setMemoryConfig(policy.pageSizeBytes, policy.maxFrames);
+        }
+
+        std::vector<pmachine::PInstruction> instructions = pmachine::loadTextPCode(std::string(pcode.c_str()));
+        std::vector<uint8_t> binary = assembleInstructionsToBinary(instructions);
+        size_t thunkBindingsApplied = applyThunkBindingsFromPayload(machine, payload);
+
+        std::vector<pmachine::MappingDef> mappingDefs;
+        std::map<std::string, std::vector<std::string>> procedureSignatures;
+        ProgramMapMetadata metadata;
+        bool hasProgramMap = false;
+        if (programMap.length() > 0) {
+            String mappingError;
+            if (!loadProgramMapMappings(programMap, ffs, mappingDefs, &procedureSignatures, mappingError, &metadata)) {
+                request->send(404, "text/plain", mappingError);
+                return;
+            }
+            hasProgramMap = true;
+        }
+
+        if (runRouter) {
+            applyRuntimeAndResidencyPolicy(machine, &policy, hasProgramMap ? &metadata : nullptr);
+            machine.setMappings(mappingDefs);
+            machine.setProcedureSignatures(procedureSignatures);
+            if (hasProgramMap) {
+                thunkBindingsApplied += applyLibraryReferencesFromMetadata(machine, metadata);
+            }
+        } else {
+            applyRuntimeAndResidencyPolicy(machine, &policy, hasProgramMap ? &metadata : nullptr);
+            machine.clearMappings();
+            if (hasProgramMap) {
+                machine.setProcedureSignatures(procedureSignatures);
+                thunkBindingsApplied += applyLibraryReferencesFromMetadata(machine, metadata);
+            } else {
+                machine.clearProcedureSignatures();
+            }
+        }
+
+        machine.loadProgram(binary, "payload://inline", max > 0 ? max : binary.size());
+
+        machine.clearRoutingDeliveries();
+        machine.setRoutingContext(std::string(inputQueue.c_str()), std::string(message.c_str()));
+        machine.run(instructions);
+
+        JsonDocument out;
+        addRunOutputsToJson(out, machine, "message", inputQueue, message);
+        out["programMap"] = programMap;
+        out["runRouter"] = runRouter;
+        out["instructionCount"] = static_cast<uint32_t>(instructions.size());
+        out["binaryBytes"] = static_cast<uint32_t>(binary.size());
+        out["thunkBindingsApplied"] = static_cast<uint32_t>(thunkBindingsApplied);
+
+        String response;
+        serializeJson(out, response);
+        request->send(200, "application/json", response);
+    });
+
+    // Execute pcode from a JSON request body with optional inline program map text/object.
+    server.on("/pmachine/execute_json", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL,
+        [&machine, ffs](AsyncWebServerRequest *request, uint8_t* data, size_t len, size_t index, size_t total) {
+            String* bodyBuffer = reinterpret_cast<String*>(request->_tempObject);
+            if (index == 0) {
+                bodyBuffer = new String();
+                bodyBuffer->reserve(total);
+                request->_tempObject = bodyBuffer;
+            }
+            if (bodyBuffer == nullptr) {
+                request->send(500, "application/json", "{\"error\":\"Failed to allocate request buffer\"}");
+                return;
+            }
+
+            bodyBuffer->concat(reinterpret_cast<const char*>(data), len);
+            if ((index + len) < total) {
+                return;
+            }
+
+            JsonDocument bodyDoc;
+            DeserializationError error = deserializeJson(bodyDoc, *bodyBuffer);
+            delete bodyBuffer;
+            request->_tempObject = nullptr;
+            if (error || !bodyDoc.is<JsonObject>()) {
+                request->send(400, "application/json", "{\"error\":\"Invalid JSON body\"}");
+                return;
+            }
+
+            String pcode = bodyDoc["pcode"].as<String>();
+            if (pcode.length() == 0) {
+                request->send(400, "application/json", "{\"error\":\"pcode is required\"}");
+                return;
+            }
+
+            String inputQueue = bodyDoc["inputQueue"].as<String>();
+            String message = bodyDoc["message"].as<String>();
+            String maxParam = bodyDoc["max"].is<unsigned long>() ? String(bodyDoc["max"].as<unsigned long>()) : String("32768");
+            bool runRouter = bodyDoc["runRouter"].is<bool>() ? bodyDoc["runRouter"].as<bool>() : false;
+            String programMapPath = bodyDoc["programMapPath"].as<String>();
+            String programMapText = bodyDoc["programMapText"].as<String>();
+            PMachineExecutionPolicy policy;
+            parseExecutionPolicy(request, policy);
+
+            const size_t max = static_cast<size_t>(maxParam.toInt());
+            if (max > 0 && static_cast<size_t>(pcode.length()) > max) {
+                request->send(413, "application/json", "{\"error\":\"Pcode payload too large\"}");
+                return;
+            }
+
+            if (policy.hasPagingConfig) {
+                machine.setMemoryConfig(policy.pageSizeBytes, policy.maxFrames);
+            }
+
+            std::vector<pmachine::PInstruction> instructions = pmachine::loadTextPCode(std::string(pcode.c_str()));
+            std::vector<uint8_t> binary = assembleInstructionsToBinary(instructions);
+
+            size_t thunkBindingsApplied = 0;
+            if (bodyDoc["thunks"].is<JsonObjectConst>()) {
+                JsonObjectConst thunks = bodyDoc["thunks"].as<JsonObjectConst>();
+                for (JsonPairConst pair : thunks) {
+                    const char* symbol = pair.key().c_str();
+                    int targetPc = pair.value().as<int>();
+                    if (symbol != nullptr && symbol[0] != '\0' && targetPc >= 0) {
+                        machine.setThunkBinding(std::string(symbol), targetPc);
+                        thunkBindingsApplied += 1;
+                    }
+                }
+            }
+
+            std::vector<pmachine::MappingDef> mappingDefs;
+            std::map<std::string, std::vector<std::string>> procedureSignatures;
+            ProgramMapMetadata metadata;
+            bool hasProgramMap = false;
+
+            if (bodyDoc["programMap"].is<JsonObject>() || bodyDoc["programMap"].is<JsonArray>()) {
+                String mappingError;
+                JsonDocument inlineMap;
+                inlineMap.set(bodyDoc["programMap"]);
+                if (!loadProgramMapMappingsFromDoc(inlineMap, mappingDefs, &procedureSignatures, mappingError, &metadata)) {
+                    String response = String("{\"error\":\"") + mappingError + "\"}";
+                    request->send(400, "application/json", response);
+                    return;
+                }
+                hasProgramMap = true;
+            } else if (programMapText.length() > 0) {
+                String mappingError;
+                JsonDocument inlineMap;
+                DeserializationError mapErr = deserializeJson(inlineMap, programMapText);
+                if (mapErr) {
+                    request->send(400, "application/json", "{\"error\":\"Invalid programMapText JSON\"}");
+                    return;
+                }
+                if (!loadProgramMapMappingsFromDoc(inlineMap, mappingDefs, &procedureSignatures, mappingError, &metadata)) {
+                    String response = String("{\"error\":\"") + mappingError + "\"}";
+                    request->send(400, "application/json", response);
+                    return;
+                }
+                hasProgramMap = true;
+            } else if (programMapPath.length() > 0) {
+                String mappingError;
+                if (!loadProgramMapMappings(programMapPath, ffs, mappingDefs, &procedureSignatures, mappingError, &metadata)) {
+                    String response = String("{\"error\":\"") + mappingError + "\"}";
+                    request->send(404, "application/json", response);
+                    return;
+                }
+                hasProgramMap = true;
+            }
+
+            if (runRouter) {
+                applyRuntimeAndResidencyPolicy(machine, &policy, hasProgramMap ? &metadata : nullptr);
+                machine.setMappings(mappingDefs);
+                machine.setProcedureSignatures(procedureSignatures);
+                if (hasProgramMap) {
+                    thunkBindingsApplied += applyLibraryReferencesFromMetadata(machine, metadata);
+                }
+            } else {
+                applyRuntimeAndResidencyPolicy(machine, &policy, hasProgramMap ? &metadata : nullptr);
+                machine.clearMappings();
+                if (hasProgramMap) {
+                    machine.setProcedureSignatures(procedureSignatures);
+                    thunkBindingsApplied += applyLibraryReferencesFromMetadata(machine, metadata);
+                } else {
+                    machine.clearProcedureSignatures();
+                }
+            }
+
+            machine.loadProgram(binary, "payload://json", max > 0 ? max : binary.size());
+            machine.clearRoutingDeliveries();
+            machine.setRoutingContext(std::string(inputQueue.c_str()), std::string(message.c_str()));
+            machine.run(instructions);
+
+            JsonDocument out;
+            addRunOutputsToJson(out, machine, "json", inputQueue, message);
+            out["runRouter"] = runRouter;
+            out["instructionCount"] = static_cast<uint32_t>(instructions.size());
+            out["binaryBytes"] = static_cast<uint32_t>(binary.size());
+            out["thunkBindingsApplied"] = static_cast<uint32_t>(thunkBindingsApplied);
+            out["hasInlineProgramMap"] = hasProgramMap;
+            out["programMapPath"] = programMapPath;
+
+            String response;
+            serializeJson(out, response);
+            request->send(200, "application/json", response);
+        }
+    );
 
     // Run generated router .pcode with runtime queue/message context
     server.on("/pmachine/pcode_router_run", HTTP_ANY, [&machine, ffs](AsyncWebServerRequest *request){

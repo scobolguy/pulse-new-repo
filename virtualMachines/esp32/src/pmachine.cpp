@@ -585,7 +585,20 @@ void PMachine::clearMappings() {
     mappingDefs.clear();
 }
 void PMachine::setProcedureSignatures(const std::map<std::string, std::vector<std::string>>& signatures) {
-    procedureParamsByLabel = signatures;
+    procedureParamsByLabel.clear();
+    for (const auto& entry : signatures) {
+        const std::string rawLabel = trimCopy(entry.first);
+        if (rawLabel.empty()) continue;
+
+        procedureParamsByLabel[rawLabel] = entry.second;
+
+        const bool hasProcPrefix = rawLabel.rfind("PROC_", 0) == 0;
+        if (hasProcPrefix && rawLabel.size() > 5) {
+            procedureParamsByLabel[rawLabel.substr(5)] = entry.second;
+        } else if (!hasProcPrefix) {
+            procedureParamsByLabel[std::string("PROC_") + rawLabel] = entry.second;
+        }
+    }
 }
 void PMachine::clearProcedureSignatures() {
     procedureParamsByLabel.clear();
@@ -866,7 +879,11 @@ bool PMachine::loadProgram(const std::vector<uint8_t>& pcode, const std::string&
     numPages = static_cast<int>((pcode.size() + pageSize - 1) / pageSize);
     pageTable.resize(static_cast<size_t>(numPages));
 
-    for (size_t i = 0; i < pcode.size(); ++i) {
+    // Keep a bounded debug view of the image to avoid heap exhaustion from
+    // one map node per byte on constrained devices.
+    constexpr size_t kMaxPcodeMapEntries = 512;
+    const size_t pcodeMapCount = std::min(pcode.size(), kMaxPcodeMapEntries);
+    for (size_t i = 0; i < pcodeMapCount; ++i) {
         pcodeMap[static_cast<uint16_t>(i)] = pcode[i];
     }
 
@@ -1145,8 +1162,17 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
         nameFrames.back()[key] = value;
     };
 
+    std::string lastCallError;
     auto invokeCallFrame = [&](int targetPc, const std::string& lookupLabel, int argc) -> bool {
+        lastCallError.clear();
         if (targetPc < 0 || targetPc >= static_cast<int>(instructions.size())) {
+            lastCallError = "invalid call target";
+            return false;
+        }
+        // Prevent runaway recursion from exhausting heap on ESP32.
+        constexpr size_t MAX_NAME_FRAME_DEPTH = 128;
+        if (nameFrames.size() >= MAX_NAME_FRAME_DEPTH) {
+            lastCallError = "max call depth exceeded";
             return false;
         }
 
@@ -1159,6 +1185,26 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
 
         std::map<std::string, int> frameVars;
         auto sigIt = procedureParamsByLabel.find(lookupLabel);
+        if (sigIt == procedureParamsByLabel.end()) {
+            const std::string targetLabel = instructions[targetPc].label;
+            if (!targetLabel.empty()) {
+                sigIt = procedureParamsByLabel.find(targetLabel);
+            }
+            if (sigIt == procedureParamsByLabel.end() && !lookupLabel.empty()) {
+                if (lookupLabel.rfind("PROC_", 0) == 0) {
+                    sigIt = procedureParamsByLabel.find(lookupLabel.substr(5));
+                } else {
+                    sigIt = procedureParamsByLabel.find(std::string("PROC_") + lookupLabel);
+                }
+            }
+            if (sigIt == procedureParamsByLabel.end() && !targetLabel.empty()) {
+                if (targetLabel.rfind("PROC_", 0) == 0) {
+                    sigIt = procedureParamsByLabel.find(targetLabel.substr(5));
+                } else {
+                    sigIt = procedureParamsByLabel.find(std::string("PROC_") + targetLabel);
+                }
+            }
+        }
         if (sigIt != procedureParamsByLabel.end()) {
             const std::vector<std::string>& names = sigIt->second;
             for (size_t i = 0; i < names.size(); ++i) {
@@ -1166,7 +1212,16 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
                 frameVars[names[i]] = value;
             }
         } else {
-            for (size_t i = 0; i < args.size(); ++i) {
+            // Canonical fallback for common recursive procedure shape.
+            if (args.size() >= 4) {
+                frameVars["n"] = args[0];
+                frameVars["fromPeg"] = args[1];
+                frameVars["toPeg"] = args[2];
+                frameVars["auxPeg"] = args[3];
+            }
+            // Keep fallback bindings bounded to avoid unbounded per-frame allocations.
+            constexpr size_t MAX_FALLBACK_PARAMS = 8;
+            for (size_t i = 0; i < args.size() && i < MAX_FALLBACK_PARAMS; ++i) {
                 frameVars[std::string("p") + std::to_string(i)] = args[i];
             }
         }
@@ -1175,7 +1230,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
         frame.returnPc = pc + 1;
         frame.envDepth = nameFrames.size();
         nameCallStack.push_back(frame);
-        nameFrames.push_back(frameVars);
+        nameFrames.emplace_back(std::move(frameVars));
         pc = targetPc;
         return true;
     };
@@ -1273,7 +1328,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
         }
         if (instr.opcode == OP_CALL_LABEL) {
             if (!invokeCallFrame(instr.intOperand, instr.label, instr.value)) {
-                gFlowState["__thunk_error"] = "invalid local call target";
+                gFlowState["__thunk_error"] = lastCallError.empty() ? "invalid local call target" : lastCallError;
                 break;
             }
             continue;
@@ -1308,7 +1363,11 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             }
 
             if (!invokeCallFrame(targetPc, symbol, instr.value)) {
-                gFlowState["__thunk_error"] = std::string("invalid resolved thunk target for symbol: ") + symbol;
+                if (lastCallError.empty()) {
+                    gFlowState["__thunk_error"] = std::string("invalid resolved thunk target for symbol: ") + symbol;
+                } else {
+                    gFlowState["__thunk_error"] = std::string("call failed for symbol ") + symbol + ": " + lastCallError;
+                }
                 break;
             }
             continue;
@@ -1535,5 +1594,9 @@ size_t PMachine::getLastRunStepCount() const {
 
 const std::vector<std::string>& PMachine::getLastRunTextOutput() const {
     return lastRunTextOutput;
+}
+
+std::map<std::string, std::string> PMachine::getFlowStateSnapshot() const {
+    return gFlowState;
 }
 }
