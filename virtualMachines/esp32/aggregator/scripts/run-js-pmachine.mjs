@@ -265,11 +265,39 @@ function normalizeMtAmount(raw) {
   return trimCopy(raw).replaceAll(' ', '').replaceAll(',', '.');
 }
 
+function yyMmDdToIso(raw) {
+  const src = trimCopy(raw);
+  const m = src.match(/^(\d{2})(\d{2})(\d{2})$/);
+  if (!m) return src;
+  const yy = Number.parseInt(m[1], 10);
+  const yyyy = yy >= 70 ? 1900 + yy : 2000 + yy;
+  return `${yyyy}-${m[2]}-${m[3]}`;
+}
+
+function extractMtPartyName(raw) {
+  const lines = String(raw || '')
+    .split(/\r?\n/)
+    .map((line) => trimCopy(line))
+    .filter(Boolean);
+  const nonAccount = lines.filter((line) => !line.startsWith('/'));
+  return nonAccount[0] || lines[0] || '';
+}
+
+function mapMtChargeBearerToIso(raw) {
+  const code = toUpperCopy(trimCopy(raw));
+  if (code === 'OUR') return 'DEBT';
+  if (code === 'BEN') return 'CRED';
+  return code;
+}
+
 function applyConversionRule(conversionRule, srcValue) {
   const rule = toUpperCopy(trimCopy(conversionRule));
   if (!rule) return srcValue;
   if (rule.includes('UPPER(SRC)')) return toUpperCopy(srcValue);
   if (rule.includes('TRIM(SRC)')) return trimCopy(srcValue);
+  if (rule.includes('YYMMDDTOISO(SRC)')) return yyMmDdToIso(srcValue);
+  if (rule.includes('MTPARTYNAME(SRC)')) return extractMtPartyName(srcValue);
+  if (rule.includes('MTCHARGEBEARERTOISO(SRC)')) return mapMtChargeBearerToIso(srcValue);
   if (rule.includes('MTAMOUNTTODECIMAL(SRC)')) return normalizeMtAmount(srcValue);
   if (rule.includes('OUTPUT := SRC')) return srcValue;
   return srcValue;

@@ -1,0 +1,8 @@
+# Manual pcode proof for CBDS MT103->PACS
+ENTRY:
+ROUTE_MATCH_QUEUE "swift.mt103.parsed"
+JZ FINISH
+ROUTE_TRANSFORM "output := map('cbds-mt103-to-pacs008', src);"
+ROUTE_EMIT "cbds.pacs.outbound"
+FINISH:
+HALT

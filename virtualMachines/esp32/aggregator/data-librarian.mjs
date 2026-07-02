@@ -442,6 +442,112 @@ function computeLifecycleStatus(lifecycle) {
   return 'active';
 }
 
+const LIBRARIAN_LLM_ACTIONS = [
+  {
+    id: 'listSchemas',
+    method: 'GET',
+    path: '/api/librarian/schemas',
+    description: 'Return schema catalog with inferred structure trees and lifecycle status.',
+    requestSchema: null,
+    responseShape: { schemas: [{ typeId: 'string', path: 'string', structure: 'tree', lifecycle: 'object' }] }
+  },
+  {
+    id: 'listDataTypes',
+    method: 'GET',
+    path: '/api/librarian/data-types',
+    description: 'List managed data type IDs used by mapper contracts.',
+    requestSchema: null,
+    responseShape: { types: [{ id: 'string', label: 'string', builtin: 'boolean' }] }
+  },
+  {
+    id: 'createDataType',
+    method: 'POST',
+    path: '/api/librarian/data-types',
+    description: 'Create normalized custom data type entry.',
+    requestSchema: { id: 'string', label: 'string' },
+    responseShape: { status: 'created', type: 'object' }
+  },
+  {
+    id: 'uploadSchema',
+    method: 'POST',
+    path: '/api/librarian/upload/schemas',
+    description: 'Upload raw schema asset. Requires x-filename header and binary body.',
+    requestSchema: {
+      headers: { 'x-filename': 'string', 'content-type': 'mime-type' },
+      body: 'binary'
+    },
+    responseShape: { status: 'ok', filename: 'string', dest: 'schemas', size: 'number' }
+  },
+  {
+    id: 'setSchemaLifecycle',
+    method: 'POST',
+    path: '/api/librarian/schema-lifecycle',
+    description: 'Configure active/reject dates for schema selection policy.',
+    requestSchema: {
+      path: 'string',
+      activeFrom: 'iso-date?',
+      rejectAfter: 'iso-date?',
+      keepForDisplay: 'boolean?'
+    },
+    responseShape: { status: 'updated', lifecycle: 'object' }
+  },
+  {
+    id: 'searchFiles',
+    method: 'GET',
+    path: '/api/librarian/search?q=<query>&ext=<ext>',
+    description: 'Search cataloged files by name and extension.',
+    requestSchema: { query: { q: 'string?', ext: 'string?' } },
+    responseShape: { files: 'array' }
+  }
+];
+
+function librarianActionById(actionId) {
+  return LIBRARIAN_LLM_ACTIONS.find((action) => action.id === String(actionId || '').trim()) || null;
+}
+
+app.get('/api/librarian/llm/base', (req, res) => {
+  res.json({
+    service: 'data-librarian',
+    version: '1.0',
+    purpose: 'Schema and contract intelligence for map generation and validation.',
+    outputsForMapper: [
+      'sourceTypeId and targetTypeId',
+      'sourceSchemaPath and targetSchemaPath',
+      'sourceStructure and targetStructure snapshots',
+      'schema lifecycle status for safe selection'
+    ],
+    recommendedFlow: [
+      'Call /api/librarian/schemas and select active schemas',
+      'Extract typeId/path/structure for source and target contracts',
+      'Call mapper /api/mapper/llm/pcode-map-template',
+      'Create map via /api/mapper/maps and validate via /api/mapper/maps/:id/run'
+    ],
+    endpoints: {
+      capabilities: '/api/librarian/llm/base',
+      actions: '/api/librarian/llm/actions',
+      actionSchema: '/api/librarian/llm/actions/:id',
+      schemaCatalog: '/api/librarian/schemas',
+      dataTypes: '/api/librarian/data-types'
+    }
+  });
+});
+
+app.get('/api/librarian/llm/actions', (req, res) => {
+  res.json({
+    service: 'data-librarian',
+    actionCount: LIBRARIAN_LLM_ACTIONS.length,
+    actions: LIBRARIAN_LLM_ACTIONS,
+  });
+});
+
+app.get('/api/librarian/llm/actions/:id', (req, res) => {
+  const action = librarianActionById(req.params.id);
+  if (!action) {
+    return res.status(404).json({ error: `Unknown librarian action: ${req.params.id}` });
+  }
+  res.json({ service: 'data-librarian', action });
+});
+
 // List all files
 app.get('/api/librarian/files', async (req, res) => {
   try {

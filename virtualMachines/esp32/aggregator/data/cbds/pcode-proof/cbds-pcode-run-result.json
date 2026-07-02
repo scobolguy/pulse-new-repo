@@ -1,0 +1,27 @@
+{
+  "runtime": "js-pmachine",
+  "lifecycle": {
+    "unitKind": "service",
+    "unitId": "cbds-pcode-proof",
+    "daemonRefreshMs": null,
+    "loadedAt": "2026-07-02T12:34:40.685Z",
+    "unloadedAt": "2026-07-02T12:34:40.689Z"
+  },
+  "pcodePath": "..\\pcode\\cbds-router-mapper.pcode",
+  "programMapPath": "..\\pcode\\cbds-router-mapper.program.json",
+  "inputQueue": "swift.mt103.parsed",
+  "sourceMessage": "{\n  \"block4\": {\n    \"20\": \"CBDSREF123456\",\n    \"21\": \"CBDS-E2E-0001\",\n    \"59\": \"/000987654321\\nBETA SUPPLIES INC\",\n    \"70\": \"INV-2026-07-02\",\n    \"72\": \"/INS/CBDS ROUTING\",\n    \"23B\": \"CRED\",\n    \"32A\": {\n      \"date\": \"260702\",\n      \"currency\": \"CAD\",\n      \"amount\": \"12500,45\"\n    },\n    \"33B\": {\n      \"currency\": \"CAD\",\n      \"amount\": \"12500,45\"\n    },\n    \"50K\": \"/123456789\\nALPHA IMPORTS LTD\",\n    \"52A\": \"ROYCCAT2\",\n    \"53A\": \"BOFACATT\",\n    \"56A\": \"CITIUS33\",\n    \"57A\": \"TDOMCATTTOR\",\n    \"71A\": \"SHA\",\n    \"71B\": \"15,00\"\n  },\n  \"meta\": {\n    \"createdAt\": \"2026-07-02T12:34:40.577Z\"\n  }\n}\n",
+  "publishedCount": 1,
+  "deliveries": [
+    {
+      "queueName": "cbds.pacs.outbound",
+      "message": "{\"Document\":{\"FIToFICstmrCdtTrf\":{\"GrpHdr\":{\"MsgId\":\"CBDSREF123456\",\"CreDtTm\":\"2026-07-02T12:34:40.577Z\"},\"CdtTrfTxInf\":{\"PmtId\":{\"InstrId\":\"CBDSREF123456\",\"EndToEndId\":\"CBDS-E2E-0001\"},\"PmtTpInf\":{\"LclInstrm\":{\"Prtry\":\"CRED\"}},\"IntrBkSttlmDt\":\"2026-07-02\",\"IntrBkSttlmAmt\":{\"@Ccy\":\"CAD\",\"#text\":\"12500.45\"},\"InstdAmt\":{\"@Ccy\":\"CAD\",\"#text\":\"12500.45\"},\"Dbtr\":{\"Nm\":\"ALPHA IMPORTS LTD\"},\"DbtrAgt\":{\"FinInstnId\":{\"BICFI\":\"ROYCCAT2\"}},\"IntrmyAgt1\":{\"FinInstnId\":{\"BICFI\":\"BOFACATT\"}},\"IntrmyAgt2\":{\"FinInstnId\":{\"BICFI\":\"CITIUS33\"}},\"CdtrAgt\":{\"FinInstnId\":{\"BICFI\":\"TDOMCATTTOR\"}},\"Cdtr\":{\"Nm\":\"BETA SUPPLIES INC\"},\"RmtInf\":{\"Ustrd\":\"INV-2026-07-02\"},\"ChrgBr\":\"SHA\",\"ChrgsInf\":{\"Amt\":{\"#text\":\"15.00\"}},\"InstrForNxtAgt\":{\"InstrInf\":\"/INS/CBDS ROUTING\"}}}}}"
+    }
+  ],
+  "state": {},
+  "stdout": [],
+  "globals": {},
+  "orchestration": null,
+  "response": null,
+  "error": null
+}

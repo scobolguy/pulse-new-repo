@@ -392,7 +392,7 @@ export function registerRouterLifecycleControlRoutes(app, deps) {
 
   app.post('/api/router/ingest', async (req, res) => {
     try {
-      const { inputQueue, message, sourceService, useEdge, edgeRole } = req.body || {};
+      const { inputQueue, message, sourceService, useEdge, edgeRole, mapKey, sourceType, destinationType } = req.body || {};
       if (!inputQueue) {
         return res.status(400).json({ error: 'inputQueue is required' });
       }
@@ -402,7 +402,10 @@ export function registerRouterLifecycleControlRoutes(app, deps) {
         message,
         sourceService: sourceService || 'webapi',
         forceEdge: shouldForceEdge,
-        preferredEdgeRole: edgeRole
+        preferredEdgeRole: edgeRole,
+        mapKey,
+        sourceType,
+        destinationType
       });
       res.json({ status: 'routed', mode: routed.mode, edge: routed.edge, result: routed.result });
     } catch (e) {
@@ -412,7 +415,7 @@ export function registerRouterLifecycleControlRoutes(app, deps) {
 
   app.post('/api/edge/ingest', async (req, res) => {
     try {
-      const { inputQueue, message, sourceService, useEdge, convertMtToXml, edgeRole } = req.body || {};
+      const { inputQueue, message, sourceService, useEdge, convertMtToXml, edgeRole, mapKey, sourceType, destinationType } = req.body || {};
       if (!inputQueue) return res.status(400).json({ error: 'inputQueue is required' });
       const convertRequested = parseBooleanLike(convertMtToXml, false);
       const routed = await ingestWithEdgeFallback({
@@ -421,7 +424,10 @@ export function registerRouterLifecycleControlRoutes(app, deps) {
         sourceService: sourceService || 'edge-api',
         forceEdge: parseBooleanLike(useEdge, true),
         convertMtToXml: convertRequested,
-        preferredEdgeRole: edgeRole
+        preferredEdgeRole: edgeRole,
+        mapKey,
+        sourceType,
+        destinationType
       });
       return res.json({
         status: 'ok',

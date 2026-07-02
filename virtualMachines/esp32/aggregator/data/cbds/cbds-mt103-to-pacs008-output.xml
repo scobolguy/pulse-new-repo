@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document>
+  <FIToFICstmrCdtTrf>
+    <GrpHdr>
+      <MsgId>CBDSREF123456</MsgId>
+      <CreDtTm>2026-07-02T12:24:55.219Z</CreDtTm>
+    </GrpHdr>
+    <CdtTrfTxInf>
+      <PmtId>
+        <InstrId>CBDSREF123456</InstrId>
+        <EndToEndId>CBDS-E2E-0001</EndToEndId>
+      </PmtId>
+      <PmtTpInf>
+        <LclInstrm>
+          <Prtry>CRED</Prtry>
+        </LclInstrm>
+      </PmtTpInf>
+      <IntrBkSttlmDt>2026-07-02</IntrBkSttlmDt>
+      <IntrBkSttlmAmt Ccy="CAD">12500.45</IntrBkSttlmAmt>
+      <InstdAmt Ccy="CAD">12500.45</InstdAmt>
+      <Dbtr>
+        <Nm>ALPHA IMPORTS LTD</Nm>
+      </Dbtr>
+      <DbtrAgt>
+        <FinInstnId>
+          <BICFI>ROYCCAT2</BICFI>
+        </FinInstnId>
+      </DbtrAgt>
+      <IntrmyAgt1>
+        <FinInstnId>
+          <BICFI>BOFACATT</BICFI>
+        </FinInstnId>
+      </IntrmyAgt1>
+      <IntrmyAgt2>
+        <FinInstnId>
+          <BICFI>CITIUS33</BICFI>
+        </FinInstnId>
+      </IntrmyAgt2>
+      <CdtrAgt>
+        <FinInstnId>
+          <BICFI>TDOMCATTTOR</BICFI>
+        </FinInstnId>
+      </CdtrAgt>
+      <Cdtr>
+        <Nm>BETA SUPPLIES INC</Nm>
+      </Cdtr>
+      <RmtInf>
+        <Ustrd>INV-2026-07-02</Ustrd>
+      </RmtInf>
+      <ChrgBr>SHA</ChrgBr>
+      <ChrgsInf>
+        <Amt>15.00</Amt>
+      </ChrgsInf>
+      <InstrForNxtAgt>
+        <InstrInf>/INS/CBDS ROUTING</InstrInf>
+      </InstrForNxtAgt>
+    </CdtTrfTxInf>
+  </FIToFICstmrCdtTrf>
+</Document>

@@ -1,0 +1,68 @@
+{
+  "Document": {
+    "FIToFICstmrCdtTrf": {
+      "GrpHdr": {
+        "MsgId": "CBDSREF123456",
+        "CreDtTm": "2026-07-02T12:34:40.577Z"
+      },
+      "CdtTrfTxInf": {
+        "PmtId": {
+          "InstrId": "CBDSREF123456",
+          "EndToEndId": "CBDS-E2E-0001"
+        },
+        "PmtTpInf": {
+          "LclInstrm": {
+            "Prtry": "CRED"
+          }
+        },
+        "IntrBkSttlmDt": "2026-07-02",
+        "IntrBkSttlmAmt": {
+          "@Ccy": "CAD",
+          "#text": "12500.45"
+        },
+        "InstdAmt": {
+          "@Ccy": "CAD",
+          "#text": "12500.45"
+        },
+        "Dbtr": {
+          "Nm": "ALPHA IMPORTS LTD"
+        },
+        "DbtrAgt": {
+          "FinInstnId": {
+            "BICFI": "ROYCCAT2"
+          }
+        },
+        "IntrmyAgt1": {
+          "FinInstnId": {
+            "BICFI": "BOFACATT"
+          }
+        },
+        "IntrmyAgt2": {
+          "FinInstnId": {
+            "BICFI": "CITIUS33"
+          }
+        },
+        "CdtrAgt": {
+          "FinInstnId": {
+            "BICFI": "TDOMCATTTOR"
+          }
+        },
+        "Cdtr": {
+          "Nm": "BETA SUPPLIES INC"
+        },
+        "RmtInf": {
+          "Ustrd": "INV-2026-07-02"
+        },
+        "ChrgBr": "SHA",
+        "ChrgsInf": {
+          "Amt": {
+            "#text": "15.00"
+          }
+        },
+        "InstrForNxtAgt": {
+          "InstrInf": "/INS/CBDS ROUTING"
+        }
+      }
+    }
+  }
+}

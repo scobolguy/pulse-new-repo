@@ -8,6 +8,7 @@
 #include <map>
 #include <deque>
 #include <vector>
+#include <utility>
 #if defined(ESP32)
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -1121,6 +1122,260 @@ struct EdgeIngressExecutionCache {
     ProgramMapMetadata metadata;
 };
 
+struct MapServiceRegistration {
+    String key;
+    String sourceType;
+    String destinationType;
+    String file;
+    String programMap;
+    size_t maxBytes = 32768;
+    bool enabled = true;
+    bool preloadPending = false;
+    String preloadState = "idle";
+    String preloadError;
+    unsigned long registeredAtMs = 0;
+    unsigned long loadedAtMs = 0;
+    unsigned long lastUsedAtMs = 0;
+    uint32_t useCount = 0;
+    EdgeIngressExecutionCache executionCache;
+};
+
+constexpr unsigned long kMapServiceIdleEvictMs = 10UL * 60UL * 1000UL;
+
+std::map<std::string, MapServiceRegistration> gMapServiceRegistry;
+
+#if defined(ESP32)
+SemaphoreHandle_t gMapServiceRegistryMutex = nullptr;
+
+struct MapServicePreloadTask {
+    String key;
+};
+
+QueueHandle_t gMapServicePreloadQueue = nullptr;
+TaskHandle_t gMapServicePreloadWorkerTask = nullptr;
+#endif
+
+String normalizeMapMessageType(const String& rawType) {
+    String value = trimCopy(rawType);
+    value.toUpperCase();
+    return value;
+}
+
+String makeMapServiceKey(const String& sourceType, const String& destinationType) {
+    return normalizeMapMessageType(sourceType) + "->" + normalizeMapMessageType(destinationType);
+}
+
+void clearExecutionCache(EdgeIngressExecutionCache& cache) {
+    cache.file = "";
+    cache.programMap = "";
+    cache.maxBytes = 0;
+    cache.ready = false;
+    cache.instructions.clear();
+    cache.mappingDefs.clear();
+    cache.procedureSignatures.clear();
+    cache.metadata = ProgramMapMetadata{};
+}
+
+#if defined(ESP32)
+bool mapServiceRegistryLock(uint32_t timeoutMs = 2000) {
+    if (gMapServiceRegistryMutex == nullptr) {
+        gMapServiceRegistryMutex = xSemaphoreCreateMutex();
+    }
+    if (gMapServiceRegistryMutex == nullptr) return false;
+    return xSemaphoreTake(gMapServiceRegistryMutex, pdMS_TO_TICKS(timeoutMs)) == pdTRUE;
+}
+
+void mapServiceRegistryUnlock() {
+    if (gMapServiceRegistryMutex != nullptr) {
+        xSemaphoreGive(gMapServiceRegistryMutex);
+    }
+}
+#else
+bool mapServiceRegistryLock(uint32_t timeoutMs = 2000) {
+    (void)timeoutMs;
+    return true;
+}
+
+void mapServiceRegistryUnlock() {
+}
+#endif
+
+bool loadExecutionCacheFromPaths(
+    const String& file,
+    const String& programMap,
+    size_t maxBytes,
+    FederatedFileSystem* ffs,
+    EdgeIngressExecutionCache& cacheOut,
+    String& errorOut
+) {
+    String text;
+    if (!readTextFromPath(file, ffs, text)) {
+        errorOut = "Router pcode file not found or read error";
+        return false;
+    }
+    if (maxBytes > 0 && static_cast<size_t>(text.length()) > maxBytes) {
+        errorOut = "Router pcode file too large";
+        return false;
+    }
+
+    std::vector<pmachine::PInstruction> instructions = pmachine::loadTextPCode(std::string(text.c_str()));
+    std::vector<pmachine::MappingDef> mappingDefs;
+    std::map<std::string, std::vector<std::string>> procedureSignatures;
+    ProgramMapMetadata metadata;
+    if (!loadProgramMapMappings(programMap, ffs, mappingDefs, &procedureSignatures, errorOut, &metadata)) {
+        return false;
+    }
+
+    cacheOut.file = file;
+    cacheOut.programMap = programMap;
+    cacheOut.maxBytes = maxBytes;
+    cacheOut.instructions = std::move(instructions);
+    cacheOut.mappingDefs = std::move(mappingDefs);
+    cacheOut.procedureSignatures = std::move(procedureSignatures);
+    cacheOut.metadata = std::move(metadata);
+    cacheOut.ready = true;
+    return true;
+}
+
+void evictIdleMapServiceEntries() {
+    if (!mapServiceRegistryLock()) return;
+
+    const unsigned long nowMs = millis();
+    for (auto& kv : gMapServiceRegistry) {
+        MapServiceRegistration& reg = kv.second;
+        if (!reg.executionCache.ready) continue;
+        if (reg.preloadPending) continue;
+
+        const unsigned long baseMs = (reg.lastUsedAtMs > 0) ? reg.lastUsedAtMs : reg.loadedAtMs;
+        if (baseMs == 0) continue;
+        if (nowMs - baseMs < kMapServiceIdleEvictMs) continue;
+
+        clearExecutionCache(reg.executionCache);
+        reg.loadedAtMs = 0;
+        reg.preloadState = "evicted";
+        reg.preloadError = "";
+    }
+
+    mapServiceRegistryUnlock();
+}
+
+bool preloadMapServiceEntryNow(MapServiceRegistration& reg, FederatedFileSystem* ffs, String& errorOut) {
+    EdgeIngressExecutionCache cache;
+    if (!loadExecutionCacheFromPaths(reg.file, reg.programMap, reg.maxBytes, ffs, cache, errorOut)) {
+        reg.preloadState = "error";
+        reg.preloadError = errorOut;
+        reg.preloadPending = false;
+        return false;
+    }
+    reg.executionCache = std::move(cache);
+    reg.loadedAtMs = millis();
+    reg.preloadPending = false;
+    reg.preloadState = "loaded";
+    reg.preloadError = "";
+    return true;
+}
+
+#if defined(ESP32)
+void mapServicePreloadWorker(void* rawFfs) {
+    FederatedFileSystem* ffs = static_cast<FederatedFileSystem*>(rawFfs);
+    for (;;) {
+        MapServicePreloadTask* task = nullptr;
+        if (xQueueReceive(gMapServicePreloadQueue, &task, portMAX_DELAY) != pdTRUE || task == nullptr) {
+            continue;
+        }
+
+        String key = task->key;
+        delete task;
+
+        if (!mapServiceRegistryLock()) {
+            continue;
+        }
+        auto it = gMapServiceRegistry.find(std::string(key.c_str()));
+        if (it == gMapServiceRegistry.end()) {
+            mapServiceRegistryUnlock();
+            continue;
+        }
+
+        MapServiceRegistration snapshot = it->second;
+        mapServiceRegistryUnlock();
+
+        String loadError;
+        EdgeIngressExecutionCache cache;
+        bool ok = loadExecutionCacheFromPaths(snapshot.file, snapshot.programMap, snapshot.maxBytes, ffs, cache, loadError);
+
+        if (!mapServiceRegistryLock()) {
+            continue;
+        }
+        auto updateIt = gMapServiceRegistry.find(std::string(key.c_str()));
+        if (updateIt != gMapServiceRegistry.end()) {
+            MapServiceRegistration& reg = updateIt->second;
+            reg.preloadPending = false;
+            if (ok) {
+                reg.executionCache = std::move(cache);
+                reg.loadedAtMs = millis();
+                reg.preloadState = "loaded";
+                reg.preloadError = "";
+            } else {
+                reg.preloadState = "error";
+                reg.preloadError = loadError;
+            }
+        }
+        mapServiceRegistryUnlock();
+    }
+}
+
+void ensureMapServicePreloadWorkerStarted(FederatedFileSystem* ffs) {
+    if (gMapServicePreloadQueue != nullptr && gMapServicePreloadWorkerTask != nullptr) return;
+
+    if (gMapServicePreloadQueue == nullptr) {
+        gMapServicePreloadQueue = xQueueCreate(16, sizeof(MapServicePreloadTask*));
+    }
+    if (gMapServicePreloadQueue == nullptr) {
+        Serial.println("[map_service] failed to create preload queue");
+        return;
+    }
+
+    if (gMapServicePreloadWorkerTask != nullptr) return;
+
+    BaseType_t created = xTaskCreatePinnedToCore(
+        mapServicePreloadWorker,
+        "mapServicePreload",
+        8192,
+        ffs,
+        1,
+        &gMapServicePreloadWorkerTask,
+        1
+    );
+    if (created != pdPASS) {
+        created = xTaskCreate(
+            mapServicePreloadWorker,
+            "mapServicePreload",
+            8192,
+            ffs,
+            1,
+            &gMapServicePreloadWorkerTask
+        );
+    }
+
+    if (created != pdPASS) {
+        gMapServicePreloadWorkerTask = nullptr;
+        Serial.println("[map_service] failed to create preload worker");
+    }
+}
+
+bool enqueueMapServicePreload(const String& key) {
+    if (gMapServicePreloadQueue == nullptr) return false;
+    MapServicePreloadTask* task = new MapServicePreloadTask();
+    task->key = key;
+    BaseType_t ok = xQueueSend(gMapServicePreloadQueue, &task, 0);
+    if (ok != pdTRUE) {
+        delete task;
+        return false;
+    }
+    return true;
+}
+#endif
+
 #if !defined(ESP32)
 using PMachineMutexHandle = void*;
 #else
@@ -1143,6 +1398,7 @@ EdgeIngressExecutionResult executeEdgeIngressStage(
     bool messageAlreadyNormalized = false
 ) {
     EdgeIngressExecutionResult result;
+    evictIdleMapServiceEntries();
 
     String normalized = messageAlreadyNormalized ? message : normalizeIngressMessage(message);
     String messageType = detectIngressMessageType(normalized);
@@ -1203,50 +1459,33 @@ EdgeIngressExecutionResult executeEdgeIngressStage(
         programCacheHit = true;
         applyRuntimeAndResidencyPolicy(machine, policy, &executionCache->metadata);
     } else {
-        File f = LittleFS.open(file, "r");
-        if (!f) {
-            result.statusCode = 404;
-            result.contentType = "text/plain";
-            result.body = "Router pcode file not found or read error";
-            return result;
-        }
-        String text = f.readString();
-        f.close();
-        if ((size_t)text.length() > maxBytes) {
-            result.statusCode = 413;
-            result.contentType = "text/plain";
-            result.body = "Router pcode file too large";
-            return result;
-        }
-
-        loadedInstructions = pmachine::loadTextPCode(std::string(text.c_str()));
-        String mappingError;
-        ProgramMapMetadata metadata;
-        if (!loadProgramMapMappings(programMap, ffs, loadedMappings, &loadedProcedureSignatures, mappingError, &metadata)) {
-            result.statusCode = 404;
-            result.contentType = "text/plain";
-            result.body = mappingError;
-            return result;
-        }
-
-        applyRuntimeAndResidencyPolicy(machine, policy, &metadata);
-
+        String loadError;
         if (executionCache != nullptr) {
-            executionCache->file = file;
-            executionCache->programMap = programMap;
-            executionCache->maxBytes = maxBytes;
-            executionCache->instructions = loadedInstructions;
-            executionCache->mappingDefs = loadedMappings;
-            executionCache->procedureSignatures = loadedProcedureSignatures;
-            executionCache->metadata = metadata;
-            executionCache->ready = true;
+            if (!loadExecutionCacheFromPaths(file, programMap, maxBytes, ffs, *executionCache, loadError)) {
+                result.statusCode = 404;
+                result.contentType = "text/plain";
+                result.body = loadError;
+                return result;
+            }
             instructions = &executionCache->instructions;
             mappingDefs = &executionCache->mappingDefs;
             procedureSignatures = &executionCache->procedureSignatures;
+            applyRuntimeAndResidencyPolicy(machine, policy, &executionCache->metadata);
         } else {
+            EdgeIngressExecutionCache transient;
+            if (!loadExecutionCacheFromPaths(file, programMap, maxBytes, ffs, transient, loadError)) {
+                result.statusCode = 404;
+                result.contentType = "text/plain";
+                result.body = loadError;
+                return result;
+            }
+            loadedInstructions = std::move(transient.instructions);
+            loadedMappings = std::move(transient.mappingDefs);
+            loadedProcedureSignatures = std::move(transient.procedureSignatures);
             instructions = &loadedInstructions;
             mappingDefs = &loadedMappings;
             procedureSignatures = &loadedProcedureSignatures;
+            applyRuntimeAndResidencyPolicy(machine, policy, &transient.metadata);
         }
     }
 
@@ -1537,6 +1776,638 @@ void ensureEdgeIngressAsyncWorkerStarted(pmachine::PMachine& machine, FederatedF
 }
 
 void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine, FederatedFileSystem* ffs) {
+    // Generic map-driven conversion service.
+    server.on("/api/convert", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL,
+        [&machine, ffs](AsyncWebServerRequest *request, uint8_t* data, size_t len, size_t index, size_t total) {
+            String* bodyBuffer = reinterpret_cast<String*>(request->_tempObject);
+            if (index == 0) {
+                bodyBuffer = new String();
+                bodyBuffer->reserve(total);
+                request->_tempObject = bodyBuffer;
+            }
+            if (bodyBuffer == nullptr) {
+                request->send(500, "application/json", "{\"ok\":false,\"error\":\"failed to allocate request buffer\"}");
+                return;
+            }
+
+            bodyBuffer->concat(reinterpret_cast<const char*>(data), len);
+            if ((index + len) < total) return;
+
+            JsonDocument bodyDoc;
+            DeserializationError parseErr = deserializeJson(bodyDoc, *bodyBuffer);
+            delete bodyBuffer;
+            request->_tempObject = nullptr;
+
+            if (parseErr || !bodyDoc.is<JsonObject>()) {
+                request->send(400, "application/json", "{\"ok\":false,\"error\":\"invalid JSON body\"}");
+                return;
+            }
+
+            evictIdleMapServiceEntries();
+
+            String sourceType = bodyDoc["sourceType"].as<String>();
+            if (sourceType.length() == 0) sourceType = bodyDoc["fromType"].as<String>();
+            String destinationType = bodyDoc["destinationType"].as<String>();
+            if (destinationType.length() == 0) destinationType = bodyDoc["toType"].as<String>();
+            String message = bodyDoc["message"].as<String>();
+            if (message.length() == 0) message = bodyDoc["payload"].as<String>();
+            if (message.length() == 0) message = bodyDoc["mt103"].as<String>();
+            String inputQueue = bodyDoc["inputQueue"].as<String>();
+            const size_t maxBytes = static_cast<size_t>(bodyDoc["maxBytes"] | 32768UL);
+            const bool requireDelivery = bodyDoc["requireDelivery"].is<bool>()
+                ? bodyDoc["requireDelivery"].as<bool>()
+                : true;
+
+            if (sourceType.length() == 0 || destinationType.length() == 0) {
+                request->send(400, "application/json", "{\"ok\":false,\"error\":\"sourceType and destinationType are required\"}");
+                return;
+            }
+            if (message.length() == 0) {
+                request->send(400, "application/json", "{\"ok\":false,\"error\":\"message (or payload) is required\"}");
+                return;
+            }
+
+            const String key = makeMapServiceKey(sourceType, destinationType);
+            MapServiceRegistration snapshot;
+            bool found = false;
+
+            if (!mapServiceRegistryLock()) {
+                request->send(503, "application/json", "{\"ok\":false,\"error\":\"map registry busy\"}");
+                return;
+            }
+            auto it = gMapServiceRegistry.find(std::string(key.c_str()));
+            if (it != gMapServiceRegistry.end() && it->second.enabled) {
+                snapshot = it->second;
+                found = true;
+            }
+            mapServiceRegistryUnlock();
+
+            if (!found) {
+                request->send(404, "application/json", "{\"ok\":false,\"error\":\"no registered map for sourceType->destinationType\"}");
+                return;
+            }
+
+            String effectiveInputQueue = inputQueue;
+            if (effectiveInputQueue.length() == 0) {
+                effectiveInputQueue = inferIngressQueueFromType(sourceType, "");
+            }
+
+            PMachineExecutionPolicy policy;
+            parseExecutionPolicy(request, policy);
+
+            // Lazy load if cache is currently evicted/unloaded.
+            if (!snapshot.executionCache.ready) {
+                String preloadError;
+                if (!mapServiceRegistryLock()) {
+                    request->send(503, "application/json", "{\"ok\":false,\"error\":\"map registry busy\"}");
+                    return;
+                }
+                auto regIt = gMapServiceRegistry.find(std::string(key.c_str()));
+                if (regIt != gMapServiceRegistry.end()) {
+                    preloadMapServiceEntryNow(regIt->second, ffs, preloadError);
+                    snapshot = regIt->second;
+                }
+                mapServiceRegistryUnlock();
+                if (!snapshot.executionCache.ready) {
+                    JsonDocument out;
+                    out["ok"] = false;
+                    out["error"] = preloadError.length() > 0 ? preloadError : "failed to lazy-load map";
+                    out["mapKey"] = key;
+                    String response;
+                    serializeJson(out, response);
+                    request->send(500, "application/json", response);
+                    return;
+                }
+            }
+
+            EdgeIngressExecutionResult exec = executeEdgeIngressStage(
+                machine,
+                ffs,
+                snapshot.file,
+                snapshot.programMap,
+                effectiveInputQueue,
+                message,
+                maxBytes,
+                true,
+                false,
+                &policy,
+                nullptr,
+                &snapshot.executionCache,
+                false
+            );
+
+            if (!mapServiceRegistryLock()) {
+                request->send(503, "application/json", "{\"ok\":false,\"error\":\"map registry busy\"}");
+                return;
+            }
+            auto useIt = gMapServiceRegistry.find(std::string(key.c_str()));
+            if (useIt != gMapServiceRegistry.end()) {
+                useIt->second.executionCache = snapshot.executionCache;
+                useIt->second.lastUsedAtMs = millis();
+                if (useIt->second.loadedAtMs == 0 && useIt->second.executionCache.ready) {
+                    useIt->second.loadedAtMs = useIt->second.lastUsedAtMs;
+                }
+                useIt->second.useCount += 1;
+                useIt->second.preloadState = useIt->second.executionCache.ready ? "loaded" : "idle";
+                useIt->second.preloadError = "";
+            }
+            mapServiceRegistryUnlock();
+
+            if (exec.statusCode != 200) {
+                request->send(exec.statusCode, exec.contentType, exec.body);
+                return;
+            }
+
+            JsonDocument execDoc;
+            if (deserializeJson(execDoc, exec.body)) {
+                request->send(500, "application/json", "{\"ok\":false,\"error\":\"failed to parse execution result\"}");
+                return;
+            }
+
+            String mappedMessage;
+            JsonArrayConst deliveries = execDoc["deliveries"].as<JsonArrayConst>();
+            if (!deliveries.isNull() && deliveries.size() > 0) {
+                JsonObjectConst first = deliveries[0].as<JsonObjectConst>();
+                if (!first.isNull()) {
+                    if (first["message"].is<const char*>()) {
+                        mappedMessage = String(first["message"].as<const char*>());
+                    } else {
+                        serializeJson(first["message"], mappedMessage);
+                    }
+                }
+            }
+
+            JsonDocument out;
+            out["ok"] = mappedMessage.length() > 0;
+            out["sourceType"] = normalizeMapMessageType(sourceType);
+            out["destinationType"] = normalizeMapMessageType(destinationType);
+            out["mapKey"] = key;
+            out["pcodeFile"] = snapshot.file;
+            out["programMap"] = snapshot.programMap;
+            out["inputQueue"] = String(execDoc["inputQueue"] | effectiveInputQueue);
+            out["publishedCount"] = static_cast<uint32_t>(execDoc["publishedCount"] | 0U);
+            out["stepCount"] = static_cast<uint32_t>(execDoc["stepCount"] | 0U);
+            out["stepLimitHit"] = static_cast<bool>(execDoc["stepLimitHit"] | false);
+            if (execDoc["runtimeError"].is<const char*>()) {
+                out["runtimeError"] = String(execDoc["runtimeError"].as<const char*>());
+            }
+            if (execDoc["deliveries"].is<JsonArrayConst>()) {
+                out["deliveries"] = execDoc["deliveries"];
+            }
+            out["mappedMessage"] = mappedMessage;
+
+            if (requireDelivery && mappedMessage.length() == 0) {
+                out["ok"] = false;
+                out["error"] = "No mapped delivery produced by program";
+                String response;
+                serializeJson(out, response);
+                request->send(422, "application/json", response);
+                return;
+            }
+
+            String response;
+            serializeJson(out, response);
+            request->send(200, "application/json", response);
+        }
+    );
+
+    // Register or update source->destination map capability.
+    server.on("/pmachine/map_service/register", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL,
+        [ffs](AsyncWebServerRequest *request, uint8_t* data, size_t len, size_t index, size_t total) {
+            String* bodyBuffer = reinterpret_cast<String*>(request->_tempObject);
+            if (index == 0) {
+                bodyBuffer = new String();
+                bodyBuffer->reserve(total);
+                request->_tempObject = bodyBuffer;
+            }
+            if (bodyBuffer == nullptr) {
+                request->send(500, "application/json", "{\"ok\":false,\"error\":\"failed to allocate request buffer\"}");
+                return;
+            }
+            bodyBuffer->concat(reinterpret_cast<const char*>(data), len);
+            if ((index + len) < total) return;
+
+            JsonDocument bodyDoc;
+            DeserializationError parseErr = deserializeJson(bodyDoc, *bodyBuffer);
+            delete bodyBuffer;
+            request->_tempObject = nullptr;
+            if (parseErr || !bodyDoc.is<JsonObject>()) {
+                request->send(400, "application/json", "{\"ok\":false,\"error\":\"invalid JSON body\"}");
+                return;
+            }
+
+            String sourceType = bodyDoc["sourceType"].as<String>();
+            if (sourceType.length() == 0) sourceType = bodyDoc["fromType"].as<String>();
+            String destinationType = bodyDoc["destinationType"].as<String>();
+            if (destinationType.length() == 0) destinationType = bodyDoc["toType"].as<String>();
+            String file = bodyDoc["file"].as<String>();
+            if (file.length() == 0) file = bodyDoc["pcodeFile"].as<String>();
+            String programMap = bodyDoc["programMap"].as<String>();
+            if (programMap.length() == 0) programMap = deriveProgramMapPathFromPcode(file);
+            if (programMap.length() == 0) programMap = "/router-mapper.program.json";
+            size_t maxBytes = static_cast<size_t>(bodyDoc["maxBytes"] | 32768UL);
+            bool enabled = !bodyDoc["enabled"].is<bool>() || bodyDoc["enabled"].as<bool>();
+            bool preload = bodyDoc["preload"].is<bool>() ? bodyDoc["preload"].as<bool>() : false;
+
+            if (sourceType.length() == 0 || destinationType.length() == 0 || file.length() == 0) {
+                request->send(400, "application/json", "{\"ok\":false,\"error\":\"sourceType, destinationType, and file are required\"}");
+                return;
+            }
+
+            const String key = makeMapServiceKey(sourceType, destinationType);
+            const unsigned long nowMs = millis();
+
+            if (!mapServiceRegistryLock()) {
+                request->send(503, "application/json", "{\"ok\":false,\"error\":\"map registry busy\"}");
+                return;
+            }
+
+            MapServiceRegistration& reg = gMapServiceRegistry[std::string(key.c_str())];
+            reg.key = key;
+            reg.sourceType = normalizeMapMessageType(sourceType);
+            reg.destinationType = normalizeMapMessageType(destinationType);
+            reg.file = file;
+            reg.programMap = programMap;
+            reg.maxBytes = maxBytes;
+            reg.enabled = enabled;
+            reg.registeredAtMs = (reg.registeredAtMs == 0) ? nowMs : reg.registeredAtMs;
+            reg.preloadState = "idle";
+            reg.preloadError = "";
+            if (reg.executionCache.ready
+                && (reg.executionCache.file != reg.file || reg.executionCache.programMap != reg.programMap || reg.executionCache.maxBytes != reg.maxBytes)) {
+                clearExecutionCache(reg.executionCache);
+                reg.loadedAtMs = 0;
+            }
+
+#if defined(ESP32)
+            ensureMapServicePreloadWorkerStarted(ffs);
+            if (preload && enabled) {
+                reg.preloadPending = true;
+                reg.preloadState = "queued";
+                if (!enqueueMapServicePreload(key)) {
+                    reg.preloadPending = false;
+                    reg.preloadState = "error";
+                    reg.preloadError = "preload queue full";
+                }
+            } else {
+                reg.preloadPending = false;
+            }
+#else
+            reg.preloadPending = false;
+#endif
+            mapServiceRegistryUnlock();
+
+            JsonDocument out;
+            out["ok"] = true;
+            out["mapKey"] = key;
+            out["sourceType"] = normalizeMapMessageType(sourceType);
+            out["destinationType"] = normalizeMapMessageType(destinationType);
+            out["file"] = file;
+            out["programMap"] = programMap;
+            out["maxBytes"] = static_cast<unsigned long>(maxBytes);
+            out["enabled"] = enabled;
+            out["preloadRequested"] = preload;
+            String response;
+            serializeJson(out, response);
+            request->send(200, "application/json", response);
+        }
+    );
+
+    server.on("/pmachine/map_service/list", HTTP_GET, [](AsyncWebServerRequest *request){
+        evictIdleMapServiceEntries();
+        if (!mapServiceRegistryLock()) {
+            request->send(503, "application/json", "{\"ok\":false,\"error\":\"map registry busy\"}");
+            return;
+        }
+
+        JsonDocument out;
+        out["ok"] = true;
+        out["idleEvictMs"] = static_cast<unsigned long>(kMapServiceIdleEvictMs);
+        JsonArray items = out["items"].to<JsonArray>();
+        const unsigned long nowMs = millis();
+        for (const auto& kv : gMapServiceRegistry) {
+            const MapServiceRegistration& reg = kv.second;
+            JsonObject item = items.add<JsonObject>();
+            item["mapKey"] = reg.key;
+            item["sourceType"] = reg.sourceType;
+            item["destinationType"] = reg.destinationType;
+            item["file"] = reg.file;
+            item["programMap"] = reg.programMap;
+            item["maxBytes"] = static_cast<unsigned long>(reg.maxBytes);
+            item["enabled"] = reg.enabled;
+            item["loaded"] = reg.executionCache.ready;
+            item["preloadPending"] = reg.preloadPending;
+            item["preloadState"] = reg.preloadState;
+            item["preloadError"] = reg.preloadError;
+            item["registeredAtMs"] = reg.registeredAtMs;
+            item["loadedAtMs"] = reg.loadedAtMs;
+            item["lastUsedAtMs"] = reg.lastUsedAtMs;
+            item["useCount"] = reg.useCount;
+            unsigned long baseMs = reg.lastUsedAtMs > 0 ? reg.lastUsedAtMs : reg.loadedAtMs;
+            unsigned long idleForMs = (baseMs > 0 && nowMs >= baseMs) ? (nowMs - baseMs) : 0;
+            item["idleForMs"] = idleForMs;
+            item["evictsInMs"] = (reg.executionCache.ready && idleForMs < kMapServiceIdleEvictMs)
+                ? static_cast<unsigned long>(kMapServiceIdleEvictMs - idleForMs)
+                : 0UL;
+        }
+
+        mapServiceRegistryUnlock();
+        String response;
+        serializeJson(out, response);
+        request->send(200, "application/json", response);
+    });
+
+    server.on("/pmachine/map_service/unregister", HTTP_POST, [&machine](AsyncWebServerRequest *request){
+        String key;
+        String sourceType;
+        String destinationType;
+        getRequestParam(request, "mapKey", key);
+        getRequestParam(request, "sourceType", sourceType);
+        getRequestParam(request, "destinationType", destinationType);
+        if (key.length() == 0 && sourceType.length() > 0 && destinationType.length() > 0) {
+            key = makeMapServiceKey(sourceType, destinationType);
+        }
+        if (key.length() == 0) {
+            request->send(400, "application/json", "{\"ok\":false,\"error\":\"mapKey or sourceType+destinationType required\"}");
+            return;
+        }
+
+        if (!mapServiceRegistryLock()) {
+            request->send(503, "application/json", "{\"ok\":false,\"error\":\"map registry busy\"}");
+            return;
+        }
+        size_t removed = gMapServiceRegistry.erase(std::string(key.c_str()));
+        mapServiceRegistryUnlock();
+
+        if (removed > 0) {
+            machine.clearMappings();
+        }
+
+        request->send(removed > 0 ? 200 : 404, "application/json",
+            removed > 0
+                ? "{\"ok\":true,\"message\":\"map unregistered\"}"
+                : "{\"ok\":false,\"error\":\"map not found\"}");
+    });
+
+    server.on("/pmachine/map_service/evict", HTTP_POST, [](AsyncWebServerRequest *request){
+        String key;
+        String sourceType;
+        String destinationType;
+        getRequestParam(request, "mapKey", key);
+        getRequestParam(request, "sourceType", sourceType);
+        getRequestParam(request, "destinationType", destinationType);
+        if (key.length() == 0 && sourceType.length() > 0 && destinationType.length() > 0) {
+            key = makeMapServiceKey(sourceType, destinationType);
+        }
+
+        if (!mapServiceRegistryLock()) {
+            request->send(503, "application/json", "{\"ok\":false,\"error\":\"map registry busy\"}");
+            return;
+        }
+
+        size_t evicted = 0;
+        if (key.length() > 0) {
+            auto it = gMapServiceRegistry.find(std::string(key.c_str()));
+            if (it != gMapServiceRegistry.end()) {
+                clearExecutionCache(it->second.executionCache);
+                it->second.loadedAtMs = 0;
+                it->second.preloadPending = false;
+                it->second.preloadState = "evicted";
+                it->second.preloadError = "";
+                evicted = 1;
+            }
+        } else {
+            for (auto& kv : gMapServiceRegistry) {
+                clearExecutionCache(kv.second.executionCache);
+                kv.second.loadedAtMs = 0;
+                kv.second.preloadPending = false;
+                kv.second.preloadState = "evicted";
+                kv.second.preloadError = "";
+                evicted += 1;
+            }
+        }
+
+        mapServiceRegistryUnlock();
+
+        JsonDocument out;
+        out["ok"] = true;
+        out["evictedCount"] = static_cast<unsigned long>(evicted);
+        String response;
+        serializeJson(out, response);
+        request->send(200, "application/json", response);
+    });
+
+    server.on("/pmachine/map_service/load", HTTP_POST, [ffs](AsyncWebServerRequest *request){
+        String key;
+        String sourceType;
+        String destinationType;
+        getRequestParam(request, "mapKey", key);
+        getRequestParam(request, "sourceType", sourceType);
+        getRequestParam(request, "destinationType", destinationType);
+        if (key.length() == 0 && sourceType.length() > 0 && destinationType.length() > 0) {
+            key = makeMapServiceKey(sourceType, destinationType);
+        }
+        if (key.length() == 0) {
+            request->send(400, "application/json", "{\"ok\":false,\"error\":\"mapKey or sourceType+destinationType required\"}");
+            return;
+        }
+
+        if (!mapServiceRegistryLock()) {
+            request->send(503, "application/json", "{\"ok\":false,\"error\":\"map registry busy\"}");
+            return;
+        }
+        auto it = gMapServiceRegistry.find(std::string(key.c_str()));
+        if (it == gMapServiceRegistry.end()) {
+            mapServiceRegistryUnlock();
+            request->send(404, "application/json", "{\"ok\":false,\"error\":\"map not found\"}");
+            return;
+        }
+
+        String preloadError;
+        bool ok = preloadMapServiceEntryNow(it->second, ffs, preloadError);
+        mapServiceRegistryUnlock();
+
+        JsonDocument out;
+        out["ok"] = ok;
+        out["mapKey"] = key;
+        if (!ok) out["error"] = preloadError;
+        String response;
+        serializeJson(out, response);
+        request->send(ok ? 200 : 500, "application/json", response);
+    });
+
+    server.on("/pmachine/map_service/unload", HTTP_POST, [](AsyncWebServerRequest *request){
+        String key;
+        String sourceType;
+        String destinationType;
+        getRequestParam(request, "mapKey", key);
+        getRequestParam(request, "sourceType", sourceType);
+        getRequestParam(request, "destinationType", destinationType);
+        if (key.length() == 0 && sourceType.length() > 0 && destinationType.length() > 0) {
+            key = makeMapServiceKey(sourceType, destinationType);
+        }
+        if (key.length() == 0) {
+            request->send(400, "application/json", "{\"ok\":false,\"error\":\"mapKey or sourceType+destinationType required\"}");
+            return;
+        }
+
+        if (!mapServiceRegistryLock()) {
+            request->send(503, "application/json", "{\"ok\":false,\"error\":\"map registry busy\"}");
+            return;
+        }
+        auto it = gMapServiceRegistry.find(std::string(key.c_str()));
+        if (it == gMapServiceRegistry.end()) {
+            mapServiceRegistryUnlock();
+            request->send(404, "application/json", "{\"ok\":false,\"error\":\"map not found\"}");
+            return;
+        }
+
+        clearExecutionCache(it->second.executionCache);
+        it->second.loadedAtMs = 0;
+        it->second.preloadPending = false;
+        it->second.preloadState = "evicted";
+        it->second.preloadError = "";
+        mapServiceRegistryUnlock();
+
+        request->send(200, "application/json", "{\"ok\":true,\"message\":\"map unloaded\"}");
+    });
+
+    // MT103 -> PACS conversion service endpoint backed by pMachine program execution.
+    server.on("/api/convert/mt103-to-pacs", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL,
+        [&machine, ffs](AsyncWebServerRequest *request, uint8_t* data, size_t len, size_t index, size_t total) {
+            String* bodyBuffer = reinterpret_cast<String*>(request->_tempObject);
+            if (index == 0) {
+                bodyBuffer = new String();
+                bodyBuffer->reserve(total);
+                request->_tempObject = bodyBuffer;
+            }
+            if (bodyBuffer == nullptr) {
+                request->send(500, "application/json", "{\"ok\":false,\"error\":\"failed to allocate request buffer\"}");
+                return;
+            }
+
+            bodyBuffer->concat(reinterpret_cast<const char*>(data), len);
+            if ((index + len) < total) {
+                return;
+            }
+
+            JsonDocument bodyDoc;
+            DeserializationError parseErr = deserializeJson(bodyDoc, *bodyBuffer);
+            delete bodyBuffer;
+            request->_tempObject = nullptr;
+
+            if (parseErr || !bodyDoc.is<JsonObject>()) {
+                request->send(400, "application/json", "{\"ok\":false,\"error\":\"invalid JSON body\"}");
+                return;
+            }
+
+            String mt103 = bodyDoc["mt103"].as<String>();
+            if (mt103.length() == 0) {
+                mt103 = bodyDoc["message"].as<String>();
+            }
+            if (mt103.length() == 0) {
+                request->send(400, "application/json", "{\"ok\":false,\"error\":\"mt103 (or message) is required\"}");
+                return;
+            }
+
+            String pcodeFile = bodyDoc["pcodeFile"].as<String>();
+            if (pcodeFile.length() == 0) pcodeFile = "/router-mapper.pcode";
+
+            String programMap = bodyDoc["programMap"].as<String>();
+            if (programMap.length() == 0) {
+                programMap = deriveProgramMapPathFromPcode(pcodeFile);
+                if (programMap.length() == 0) {
+                    programMap = "/router-mapper.program.json";
+                }
+            }
+
+            String inputQueue = bodyDoc["inputQueue"].as<String>();
+            if (inputQueue.length() == 0) inputQueue = "swift.mt103.inbound";
+
+            const size_t maxBytes = static_cast<size_t>(bodyDoc["maxBytes"] | 32768UL);
+            const bool requireDelivery = bodyDoc["requireDelivery"].is<bool>()
+                ? bodyDoc["requireDelivery"].as<bool>()
+                : true;
+
+            PMachineExecutionPolicy policy;
+            parseExecutionPolicy(request, policy);
+
+            EdgeIngressExecutionResult exec = executeEdgeIngressStage(
+                machine,
+                ffs,
+                pcodeFile,
+                programMap,
+                inputQueue,
+                mt103,
+                maxBytes,
+                true,
+                false,
+                &policy,
+                nullptr,
+                nullptr,
+                false
+            );
+
+            if (exec.statusCode != 200) {
+                request->send(exec.statusCode, exec.contentType, exec.body);
+                return;
+            }
+
+            JsonDocument execDoc;
+            if (deserializeJson(execDoc, exec.body)) {
+                request->send(500, "application/json", "{\"ok\":false,\"error\":\"failed to parse execution result\"}");
+                return;
+            }
+
+            String pacsMessage;
+            JsonArrayConst deliveries = execDoc["deliveries"].as<JsonArrayConst>();
+            if (!deliveries.isNull() && deliveries.size() > 0) {
+                JsonObjectConst first = deliveries[0].as<JsonObjectConst>();
+                if (!first.isNull()) {
+                    if (first["message"].is<const char*>()) {
+                        pacsMessage = String(first["message"].as<const char*>());
+                    } else {
+                        serializeJson(first["message"], pacsMessage);
+                    }
+                }
+            }
+
+            JsonDocument out;
+            out["ok"] = pacsMessage.length() > 0;
+            out["inputQueue"] = String(execDoc["inputQueue"] | inputQueue);
+            out["messageType"] = String(execDoc["messageType"] | "MT103");
+            out["pcodeFile"] = pcodeFile;
+            out["programMap"] = programMap;
+            out["publishedCount"] = static_cast<uint32_t>(execDoc["publishedCount"] | 0U);
+            out["stepCount"] = static_cast<uint32_t>(execDoc["stepCount"] | 0U);
+            out["stepLimitHit"] = static_cast<bool>(execDoc["stepLimitHit"] | false);
+            if (execDoc["runtimeError"].is<const char*>()) {
+                out["runtimeError"] = String(execDoc["runtimeError"].as<const char*>());
+            }
+            if (execDoc["deliveries"].is<JsonArrayConst>()) {
+                out["deliveries"] = execDoc["deliveries"];
+            }
+
+            const String trimmed = trimCopy(pacsMessage);
+            const bool isXml = trimmed.startsWith("<?xml") || trimmed.startsWith("<");
+            out["pacsFormat"] = isXml ? "xml" : "json-or-text";
+            out["pacsMessage"] = pacsMessage;
+
+            if (requireDelivery && pacsMessage.length() == 0) {
+                out["ok"] = false;
+                out["error"] = "No PACS delivery produced by program";
+                String response;
+                serializeJson(out, response);
+                request->send(422, "application/json", response);
+                return;
+            }
+
+            String response;
+            serializeJson(out, response);
+            request->send(200, "application/json", response);
+        }
+    );
+
     // PMachine file open
     server.on("/pmachine/file/open", HTTP_POST, [&machine](AsyncWebServerRequest *request){
         if (!request->hasParam("file", true) || !request->hasParam("mode", true)) {

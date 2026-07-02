@@ -158,8 +158,205 @@ async function saveMappings(mappings) {
   await fs.writeFile(MAPPINGS_PATH, JSON.stringify(mappings, null, 2));
 }
 
+const MAPPER_LLM_ACTIONS = [
+  {
+    id: 'listMaps',
+    method: 'GET',
+    path: '/api/mapper/maps',
+    description: 'List available .map artifacts with summary metadata.',
+    requestSchema: null,
+    responseShape: { maps: [{ id: 'string', name: 'string', ruleCount: 'number', updatedAt: 'iso-date' }] }
+  },
+  {
+    id: 'getMap',
+    method: 'GET',
+    path: '/api/mapper/maps/:id',
+    description: 'Read full map artifact including rules and schema snapshots.',
+    requestSchema: { params: { id: 'string' } },
+    responseShape: { map: 'object' }
+  },
+  {
+    id: 'createMap',
+    method: 'POST',
+    path: '/api/mapper/maps',
+    description: 'Create map artifact for source/target contracts discovered in librarian.',
+    requestSchema: {
+      id: 'string',
+      name: 'string',
+      description: 'string?',
+      sourceTypeId: 'string?',
+      targetTypeId: 'string?',
+      sourceSchemaPath: 'string?',
+      targetSchemaPath: 'string?',
+      sourceSchemaMtime: 'iso-date?',
+      targetSchemaMtime: 'iso-date?',
+      sourceStructure: 'object?',
+      targetStructure: 'object?',
+      rules: 'array?'
+    },
+    responseShape: { map: 'object' }
+  },
+  {
+    id: 'updateMap',
+    method: 'PUT',
+    path: '/api/mapper/maps/:id',
+    description: 'Update map metadata/rules and refresh shape signatures.',
+    requestSchema: {
+      params: { id: 'string' },
+      body: {
+        name: 'string?',
+        description: 'string?',
+        rules: 'array?',
+        submaps: 'array?',
+        sourceStructure: 'object?',
+        targetStructure: 'object?'
+      }
+    },
+    responseShape: { map: 'object' }
+  },
+  {
+    id: 'autoShapeMap',
+    method: 'POST',
+    path: '/api/mapper/maps/:id/auto-shape-map',
+    description: 'Auto-generate leaf-to-leaf rules for structurally equivalent branches.',
+    requestSchema: {
+      params: { id: 'string' },
+      body: { sourcePath: 'string', targetPath: 'string' }
+    },
+    responseShape: { added: 'number', map: 'object' }
+  },
+  {
+    id: 'runMap',
+    method: 'POST',
+    path: '/api/mapper/maps/:id/run',
+    description: 'Execute map using PL/0 conversion routines and return output + diagnostics.',
+    requestSchema: {
+      params: { id: 'string' },
+      body: {
+        payload: 'object?',
+        testCaseId: 'string?'
+      }
+    },
+    responseShape: { mapId: 'string', input: 'object', output: 'object', diagnostics: 'array' }
+  },
+  {
+    id: 'legacyCreateOrUpdateMapping',
+    method: 'POST',
+    path: '/api/mapper/mappings',
+    description: 'Legacy mapping registry endpoint with strict item-level validation.',
+    requestSchema: {
+      id: 'string?',
+      name: 'string?',
+      sourceTypeId: 'string',
+      targetTypeId: 'string',
+      sourceSchemaPath: 'string',
+      targetSchemaPath: 'string',
+      enabled: 'boolean?',
+      items: [
+        {
+          sourcePath: 'string',
+          targetPath: 'string',
+          kind: 'leaf|branch',
+          sourceValueType: 'string?',
+          targetValueType: 'string?',
+          conversionRule: 'pl0-string?'
+        }
+      ]
+    },
+    responseShape: { status: 'created|updated', mapping: 'object' }
+  }
+];
+
+function mapperActionById(actionId) {
+  return MAPPER_LLM_ACTIONS.find((action) => action.id === String(actionId || '').trim()) || null;
+}
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'data-mapper' });
+});
+
+app.get('/api/mapper/llm/base', (req, res) => {
+  res.json({
+    service: 'data-mapper',
+    version: '1.0',
+    purpose: 'Generate, maintain, and run pcode/PL0-capable data maps.',
+    primaryOutput: '.map artifact with rules and optional conversionRule blocks',
+    pcodeConvention: {
+      runtime: 'runPL0(rule.conversionRule, { src, output })',
+      requiredOutputVariable: 'output',
+      simpleRule: 'output := src;',
+      typeTransformExample: "output := trim(src);"
+    },
+    recommendedFlow: [
+      'Discover source and target schemas via /api/librarian/llm/base and /api/librarian/schemas',
+      'Create map via POST /api/mapper/maps with schema snapshots',
+      'Generate branch-compatible rules via POST /api/mapper/maps/:id/auto-shape-map',
+      'Add or refine conversionRule for non-standard moves',
+      'Validate behavior via POST /api/mapper/maps/:id/run'
+    ],
+    endpoints: {
+      capabilities: '/api/mapper/llm/base',
+      actions: '/api/mapper/llm/actions',
+      actionSchema: '/api/mapper/llm/actions/:id',
+      mapTemplate: '/api/mapper/llm/pcode-map-template'
+    }
+  });
+});
+
+app.get('/api/mapper/llm/actions', (req, res) => {
+  res.json({
+    service: 'data-mapper',
+    actionCount: MAPPER_LLM_ACTIONS.length,
+    actions: MAPPER_LLM_ACTIONS,
+  });
+});
+
+app.get('/api/mapper/llm/actions/:id', (req, res) => {
+  const action = mapperActionById(req.params.id);
+  if (!action) {
+    return res.status(404).json({ error: `Unknown mapper action: ${req.params.id}` });
+  }
+  res.json({ service: 'data-mapper', action });
+});
+
+app.get('/api/mapper/llm/pcode-map-template', (req, res) => {
+  const sourceTypeId = sanitizeId(req.query.sourceTypeId || 'source-type');
+  const targetTypeId = sanitizeId(req.query.targetTypeId || 'target-type');
+  const mapId = sanitizeId(req.query.mapId || `${sourceTypeId}-to-${targetTypeId}`);
+  const mapName = String(req.query.name || `${sourceTypeId} to ${targetTypeId}`).trim();
+
+  res.json({
+    instructions: [
+      'Fill source/target schema metadata from librarian /schemas response.',
+      'Use kind=leaf for value moves and attach conversionRule for non-standard transforms.',
+      'Leave conversionRule empty for standard moves where source and target types match.',
+      'Use POST /api/mapper/maps then POST /api/mapper/maps/:id/run to validate.',
+    ],
+    mapTemplate: {
+      id: mapId,
+      name: mapName,
+      description: 'Generated by LLM base API template',
+      version: '1.0',
+      sourceTypeId,
+      targetTypeId,
+      sourceSchemaPath: 'schemas/source-schema.xsd',
+      targetSchemaPath: 'schemas/target-schema.xsd',
+      sourceSchemaMtime: new Date().toISOString(),
+      targetSchemaMtime: new Date().toISOString(),
+      rules: [
+        {
+          id: 'rule_1',
+          sourcePath: 'payload.sender.name',
+          targetPath: 'Document.GrpHdr.InitgPty.Nm',
+          kind: 'leaf',
+          sourceValueType: 'string',
+          targetValueType: 'string',
+          conversionRule: 'output := trim(src);'
+        }
+      ],
+      submaps: []
+    }
+  });
 });
 
 app.get('/api/mapper/mappings', async (req, res) => {

@@ -1,0 +1,29 @@
+{
+  "block4": {
+    "20": "CBDSREF123456",
+    "21": "CBDS-E2E-0001",
+    "59": "/000987654321\nBETA SUPPLIES INC",
+    "70": "INV-2026-07-02",
+    "72": "/INS/CBDS ROUTING",
+    "23B": "CRED",
+    "32A": {
+      "date": "260702",
+      "currency": "CAD",
+      "amount": "12500,45"
+    },
+    "33B": {
+      "currency": "CAD",
+      "amount": "12500,45"
+    },
+    "50K": "/123456789\nALPHA IMPORTS LTD",
+    "52A": "ROYCCAT2",
+    "53A": "BOFACATT",
+    "56A": "CITIUS33",
+    "57A": "TDOMCATTTOR",
+    "71A": "SHA",
+    "71B": "15,00"
+  },
+  "meta": {
+    "createdAt": "2026-07-02T12:34:40.577Z"
+  }
+}

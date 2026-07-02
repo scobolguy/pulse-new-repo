@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "serviceId": "cbds-pcode-proof",
+  "runtimeUnit": {
+    "kind": "service",
+    "id": "cbds-pcode-proof",
+    "refreshMs": null
+  },
+  "entries": [
+    {
+      "kind": "mapper",
+      "id": "cbds-mt103-to-pacs008",
+      "sourceTypeId": "swift-mt103",
+      "targetTypeId": "pacs",
+      "items": [
+        {
+          "sourcePath": "block4.20",
+          "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "block4.20",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.InstrId",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "block4.21",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "block4.23B",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtTpInf.LclInstrm.Prtry",
+          "conversionRule": "output := upper(trim(src));"
+        },
+        {
+          "sourcePath": "block4.32A.date",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt",
+          "conversionRule": "output := yymmddtoiso(src);"
+        },
+        {
+          "sourcePath": "block4.32A.currency",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+          "conversionRule": "output := upper(trim(src));"
+        },
+        {
+          "sourcePath": "block4.32A.amount",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+          "conversionRule": "output := mtamounttodecimal(src);"
+        },
+        {
+          "sourcePath": "block4.33B.currency",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstdAmt.@Ccy",
+          "conversionRule": "output := upper(trim(src));"
+        },
+        {
+          "sourcePath": "block4.33B.amount",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstdAmt.#text",
+          "conversionRule": "output := mtamounttodecimal(src);"
+        },
+        {
+          "sourcePath": "block4.50K",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm",
+          "conversionRule": "output := mtpartyname(src);"
+        },
+        {
+          "sourcePath": "block4.52A",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI",
+          "conversionRule": "output := upper(trim(src));"
+        },
+        {
+          "sourcePath": "block4.53A",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrmyAgt1.FinInstnId.BICFI",
+          "conversionRule": "output := upper(trim(src));"
+        },
+        {
+          "sourcePath": "block4.56A",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrmyAgt2.FinInstnId.BICFI",
+          "conversionRule": "output := upper(trim(src));"
+        },
+        {
+          "sourcePath": "block4.57A",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI",
+          "conversionRule": "output := upper(trim(src));"
+        },
+        {
+          "sourcePath": "block4.59",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm",
+          "conversionRule": "output := mtpartyname(src);"
+        },
+        {
+          "sourcePath": "block4.70",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.RmtInf.Ustrd",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "block4.71A",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgBr",
+          "conversionRule": "output := mtchargebearertoiso(src);"
+        },
+        {
+          "sourcePath": "block4.71B",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgsInf.Amt.#text",
+          "conversionRule": "output := mtamounttodecimal(src);"
+        },
+        {
+          "sourcePath": "block4.72",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstrForNxtAgt.InstrInf",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "meta.createdAt",
+          "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.CreDtTm",
+          "conversionRule": "output := trim(src);"
+        }
+      ]
+    }
+  ]
+}

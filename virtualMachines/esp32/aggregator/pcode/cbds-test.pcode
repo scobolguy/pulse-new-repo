@@ -1,0 +1,11 @@
+# Auto-generated portable pcode from Pascalish router/mapping DSL
+# Executable routing opcodes for ESP32/JS PMachine parity
+ENTRY:
+JMP FINISH
+MAPPERS_ENTRY:
+JMP FINISH
+MAPPER_0_CBDS_MT103_TO_PACS008:
+NOP
+JMP FINISH
+FINISH:
+HALT

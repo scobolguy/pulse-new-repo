@@ -265,6 +265,7 @@ function ensureLifecycleCompiledArtifact() {
 }
 
 fs.mkdirSync(RUNTIME_DATA_ROOT, { recursive: true });
+loadMapPlacementRegistry();
 seedRuntimeFileIfMissing(WORKER_CONFIG_PATH, './data/worker-config.json');
 seedRuntimeFileIfMissing(ROUTER_RULES_PATH, './data/router-rules.json');
 seedRuntimeFileIfMissing(DATA_MAPPINGS_PATH, './data/data-mappings.json');
@@ -1598,10 +1599,15 @@ const EDGE_ESP32_HOST = readEnvString('EDGE_ESP32_HOST', '127.0.0.1').trim() || 
 const EDGE_ESP32_PORT = Math.max(1, readEnvNumber('EDGE_ESP32_PORT', 80));
 const EDGE_ESP32_TIMEOUT_MS = Math.max(100, readEnvNumber('EDGE_ESP32_TIMEOUT_MS', 1200));
 const EDGE_ESP32_PATH = readEnvString('EDGE_ESP32_PATH', '/pmachine/edge_ingress_stage').trim() || '/pmachine/edge_ingress_stage';
+const EDGE_ESP32_CONVERT_PATH = readEnvString('EDGE_ESP32_CONVERT_PATH', '/api/convert').trim() || '/api/convert';
+const EDGE_ESP32_MAP_REGISTER_PATH = readEnvString('EDGE_ESP32_MAP_REGISTER_PATH', '/pmachine/map_service/register').trim() || '/pmachine/map_service/register';
 const EDGE_ESP32_ROUTER_FILE = readEnvString('EDGE_ESP32_ROUTER_FILE', '/router-mapper.pcode').trim() || '/router-mapper.pcode';
 const EDGE_ESP32_PROGRAM_MAP = readEnvString('EDGE_ESP32_PROGRAM_MAP', '/router-mapper.program.json').trim() || '/router-mapper.program.json';
 const EDGE_ESP32_LARGE_MESSAGE_THRESHOLD_BYTES = Math.max(1024, readEnvNumber('EDGE_ESP32_LARGE_MESSAGE_THRESHOLD_BYTES', 8192));
 const EDGE_ESP32_FORCED_EVOLUTION_RATE = Math.min(1, Math.max(0, readEnvNumber('EDGE_ESP32_FORCED_EVOLUTION_RATE', 0)));
+const MAP_PLACEMENT_REGISTRY_PATH = path.join(RUNTIME_DATA_ROOT, 'map-placement-registry.json');
+const MAP_PLACEMENT_ASSIGNMENT_TTL_MS = Math.max(10 * 1000, readEnvNumber('MAP_PLACEMENT_ASSIGNMENT_TTL_MS', 60 * 1000));
+const MAP_PLACEMENT_REGISTRATION_TTL_MS = Math.max(30 * 1000, readEnvNumber('MAP_PLACEMENT_REGISTRATION_TTL_MS', 10 * 60 * 1000));
 
 function parseEdgeNodeList(rawList = '') {
   return String(rawList || '')
@@ -1648,6 +1654,295 @@ const ESP32_DISCOVERY_PROBE_INTERVAL_MS = Math.max(5000, readEnvNumber('ESP32_DI
 const ESP32_DISCOVERY_PROBE_TIMEOUT_MS = Math.max(300, readEnvNumber('ESP32_DISCOVERY_PROBE_TIMEOUT_MS', 1500));
 const ESP32_DISCOVERY_SEED_NODES = parseEdgeNodeList(readEnvString('ESP32_DISCOVERY_SEED_NODES', ''));
 const edgeNodeRoundRobinByRole = new Map();
+const mapPlacementState = {
+  version: 1,
+  updatedAt: null,
+  maps: new Map(),
+  assignmentByPlacement: new Map(),
+  inflightByPlacement: new Map(),
+  registrationByPlacement: new Map(),
+  lastDecision: null
+};
+
+function normalizeMapKey(value) {
+  const text = String(value || '').trim().toUpperCase();
+  return text;
+}
+
+function toFiniteNumber(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function buildMapKeyFromParts({ mapKey = null, sourceType = null, destinationType = null } = {}) {
+  const direct = normalizeMapKey(mapKey);
+  if (direct) return direct;
+  const src = normalizeMapKey(sourceType);
+  const dst = normalizeMapKey(destinationType);
+  if (src && dst) return `${src}->${dst}`;
+  return '';
+}
+
+function normalizePlacementRecord(mapKey, placement = {}) {
+  const tierRaw = String(placement.tier || placement.runtimeTier || 'esp32').trim().toLowerCase();
+  const tier = tierRaw === 'jsvm' || tierRaw === 'javascript' || tierRaw === 'node' ? 'jsvm' : 'esp32';
+  const host = String(placement.host || '').trim();
+  const port = Math.max(1, toFiniteNumber(placement.port, EDGE_ESP32_PORT));
+  const id = String(placement.id || placement.nodeId || placement.label || '').trim() || (host ? `${host}:${port}` : `${tier}:${mapKey}`);
+  const maxConcurrent = Math.max(1, toFiniteNumber(placement.maxConcurrent, tier === 'esp32' ? 1 : 8));
+  const maxMessageBytes = Math.max(0, toFiniteNumber(placement.maxMessageBytes, tier === 'esp32' ? EDGE_ESP32_LARGE_MESSAGE_THRESHOLD_BYTES * 8 : 0));
+  const weight = Math.max(1, toFiniteNumber(placement.weight, 1));
+  return {
+    id,
+    tier,
+    host: host || null,
+    port,
+    label: String(placement.label || '').trim() || (host ? `${host}:${port}` : id),
+    role: normalizeEdgeRole(placement.role) || null,
+    path: String(placement.path || EDGE_ESP32_PATH).trim() || EDGE_ESP32_PATH,
+    convertPath: String(placement.convertPath || EDGE_ESP32_CONVERT_PATH).trim() || EDGE_ESP32_CONVERT_PATH,
+    registerPath: String(placement.registerPath || EDGE_ESP32_MAP_REGISTER_PATH).trim() || EDGE_ESP32_MAP_REGISTER_PATH,
+    file: String(placement.file || EDGE_ESP32_ROUTER_FILE).trim() || EDGE_ESP32_ROUTER_FILE,
+    programMap: String(placement.programMap || EDGE_ESP32_PROGRAM_MAP).trim() || EDGE_ESP32_PROGRAM_MAP,
+    maxConcurrent,
+    maxMessageBytes,
+    weight,
+    healthy: placement.healthy !== false,
+    warm: placement.warm === true,
+    enabled: placement.enabled !== false,
+    metadata: placement.metadata && typeof placement.metadata === 'object' ? placement.metadata : {}
+  };
+}
+
+function normalizeMapPlacementEntry(raw = {}, fallbackMapKey = '') {
+  const sourceType = normalizeMapKey(raw.sourceType || raw.fromType || '');
+  const destinationType = normalizeMapKey(raw.destinationType || raw.toType || '');
+  const mapKey = buildMapKeyFromParts({
+    mapKey: raw.mapKey || fallbackMapKey,
+    sourceType,
+    destinationType
+  });
+  const placements = Array.isArray(raw.placements)
+    ? raw.placements.map((item) => normalizePlacementRecord(mapKey, item)).filter((item) => item.enabled)
+    : [];
+  return {
+    mapKey,
+    sourceType,
+    destinationType,
+    strategy: String(raw.strategy || 'balanced').trim().toLowerCase() || 'balanced',
+    updatedAt: String(raw.updatedAt || new Date().toISOString()),
+    placements
+  };
+}
+
+function mapPlacementEntryToJson(entry) {
+  return {
+    mapKey: entry.mapKey,
+    sourceType: entry.sourceType,
+    destinationType: entry.destinationType,
+    strategy: entry.strategy,
+    updatedAt: entry.updatedAt,
+    placements: entry.placements
+  };
+}
+
+function persistMapPlacementRegistry() {
+  try {
+    const payload = {
+      version: mapPlacementState.version,
+      updatedAt: new Date().toISOString(),
+      maps: Array.from(mapPlacementState.maps.values()).map(mapPlacementEntryToJson)
+    };
+    fs.writeFileSync(MAP_PLACEMENT_REGISTRY_PATH, `${JSON.stringify(payload, null, 2)}\n`, 'utf-8');
+    mapPlacementState.updatedAt = payload.updatedAt;
+  } catch (e) {
+    console.warn(`[MAP-PLACEMENT] Failed to persist registry: ${e.message}`);
+  }
+}
+
+function loadMapPlacementRegistry() {
+  try {
+    if (!fs.existsSync(MAP_PLACEMENT_REGISTRY_PATH)) {
+      mapPlacementState.maps.clear();
+      persistMapPlacementRegistry();
+      return;
+    }
+    const raw = fs.readFileSync(MAP_PLACEMENT_REGISTRY_PATH, 'utf-8');
+    const parsed = raw.trim() ? JSON.parse(raw) : {};
+    mapPlacementState.maps.clear();
+    const records = Array.isArray(parsed.maps) ? parsed.maps : [];
+    for (const item of records) {
+      const normalized = normalizeMapPlacementEntry(item);
+      if (!normalized.mapKey) continue;
+      mapPlacementState.maps.set(normalized.mapKey, normalized);
+    }
+    mapPlacementState.updatedAt = String(parsed.updatedAt || new Date().toISOString());
+  } catch (e) {
+    console.warn(`[MAP-PLACEMENT] Failed to load registry: ${e.message}`);
+    mapPlacementState.maps.clear();
+  }
+}
+
+function pruneMapPlacementRuntimeState(nowMs = Date.now()) {
+  const assignmentCutoff = nowMs - MAP_PLACEMENT_ASSIGNMENT_TTL_MS;
+  const registrationCutoff = nowMs - MAP_PLACEMENT_REGISTRATION_TTL_MS;
+  for (const [key, value] of mapPlacementState.assignmentByPlacement.entries()) {
+    if (toFiniteNumber(value, 0) < assignmentCutoff) {
+      mapPlacementState.assignmentByPlacement.delete(key);
+    }
+  }
+  for (const [key, value] of mapPlacementState.registrationByPlacement.entries()) {
+    if (toFiniteNumber(value, 0) < registrationCutoff) {
+      mapPlacementState.registrationByPlacement.delete(key);
+    }
+  }
+}
+
+function getPlacementInflight(placementId) {
+  return Math.max(0, toFiniteNumber(mapPlacementState.inflightByPlacement.get(placementId), 0));
+}
+
+function markPlacementInflight(placementId, delta) {
+  if (!placementId) return;
+  const next = Math.max(0, getPlacementInflight(placementId) + Number(delta || 0));
+  if (next <= 0) {
+    mapPlacementState.inflightByPlacement.delete(placementId);
+    return;
+  }
+  mapPlacementState.inflightByPlacement.set(placementId, next);
+}
+
+function recordMapPlacementDecision(mapKey, placement, reason = 'unknown', score = null, candidates = []) {
+  mapPlacementState.assignmentByPlacement.set(placement.id, Date.now());
+  mapPlacementState.lastDecision = {
+    at: new Date().toISOString(),
+    mapKey,
+    placementId: placement.id,
+    tier: placement.tier,
+    reason,
+    score: Number.isFinite(score) ? Number(score.toFixed(4)) : null,
+    candidates: candidates.slice(0, 8).map((candidate) => ({
+      id: candidate.id,
+      tier: candidate.tier,
+      score: Number.isFinite(candidate.__score) ? Number(candidate.__score.toFixed(4)) : null,
+      healthy: candidate.healthy,
+      warm: candidate.warm,
+      inflight: getPlacementInflight(candidate.id),
+      maxConcurrent: candidate.maxConcurrent
+    }))
+  };
+}
+
+function chooseMapPlacement({ mapKey = '', sourceType = null, destinationType = null, message = null, requestedRole = null } = {}) {
+  const normalizedKey = buildMapKeyFromParts({ mapKey, sourceType, destinationType });
+  if (!normalizedKey) {
+    return { ok: false, reason: 'missing-map-key', mapKey: '' };
+  }
+
+  const entry = mapPlacementState.maps.get(normalizedKey);
+  if (!entry || !Array.isArray(entry.placements) || entry.placements.length === 0) {
+    return { ok: false, reason: 'no-placement', mapKey: normalizedKey };
+  }
+
+  const nowMs = Date.now();
+  pruneMapPlacementRuntimeState(nowMs);
+  const estimatedMessageBytes = estimateMessageSizeBytes(message);
+  const role = normalizeEdgeRole(requestedRole);
+
+  const candidates = entry.placements
+    .filter((placement) => placement.enabled !== false)
+    .filter((placement) => placement.healthy !== false)
+    .filter((placement) => (role ? placement.role === role : true))
+    .filter((placement) => {
+      if (!placement.maxMessageBytes || placement.maxMessageBytes <= 0) return true;
+      return estimatedMessageBytes <= placement.maxMessageBytes;
+    })
+    .map((placement) => {
+      const inflight = getPlacementInflight(placement.id);
+      const saturation = inflight / Math.max(1, placement.maxConcurrent || 1);
+      const recentlyAssignedAt = toFiniteNumber(mapPlacementState.assignmentByPlacement.get(placement.id), 0);
+      const recentlyAssignedPenalty = recentlyAssignedAt > 0
+        ? Math.max(0, 1 - ((nowMs - recentlyAssignedAt) / MAP_PLACEMENT_ASSIGNMENT_TTL_MS))
+        : 0;
+      const warmBonus = placement.warm ? -0.15 : 0.1;
+      const tierPenalty = placement.tier === 'esp32' ? 0 : 0.7;
+      const weightFactor = 1 / Math.max(1, toFiniteNumber(placement.weight, 1));
+      const score = tierPenalty + saturation + (recentlyAssignedPenalty * 0.35) + warmBonus + weightFactor;
+      return {
+        ...placement,
+        __score: score,
+        __inflight: inflight
+      };
+    })
+    .sort((a, b) => a.__score - b.__score);
+
+  if (candidates.length === 0) {
+    return { ok: false, reason: 'no-healthy-candidate', mapKey: normalizedKey, estimatedMessageBytes };
+  }
+
+  const selected = candidates[0];
+  recordMapPlacementDecision(normalizedKey, selected, 'balanced-score', selected.__score, candidates);
+  return {
+    ok: true,
+    reason: 'balanced-score',
+    mapKey: normalizedKey,
+    estimatedMessageBytes,
+    selected,
+    candidates
+  };
+}
+
+async function tryRegisterMapOnEdgeNode({ placement, mapKey, sourceType = null, destinationType = null } = {}) {
+  if (!placement || placement.tier !== 'esp32' || !placement.host) return;
+  const cacheKey = `${placement.id}::${mapKey}`;
+  const nowMs = Date.now();
+  const recent = toFiniteNumber(mapPlacementState.registrationByPlacement.get(cacheKey), 0);
+  if (recent > 0 && (nowMs - recent) < MAP_PLACEMENT_REGISTRATION_TTL_MS) return;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), EDGE_ESP32_TIMEOUT_MS);
+  try {
+    const endpoint = `http://${placement.host}:${placement.port}${placement.registerPath || EDGE_ESP32_MAP_REGISTER_PATH}`;
+    await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sourceType: sourceType || placement.sourceType || mapKey.split('->')[0] || '',
+        destinationType: destinationType || placement.destinationType || mapKey.split('->')[1] || '',
+        file: placement.file || EDGE_ESP32_ROUTER_FILE,
+        programMap: placement.programMap || EDGE_ESP32_PROGRAM_MAP,
+        preload: false,
+        enabled: true
+      }),
+      signal: controller.signal
+    });
+    mapPlacementState.registrationByPlacement.set(cacheKey, nowMs);
+    placement.warm = true;
+  } catch {
+    // Best effort registration; selection falls back if invocation fails.
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function getMapPlacementSummary() {
+  pruneMapPlacementRuntimeState(Date.now());
+  const maps = Array.from(mapPlacementState.maps.values()).map((entry) => ({
+    ...mapPlacementEntryToJson(entry),
+    placements: entry.placements.map((placement) => ({
+      ...placement,
+      inflight: getPlacementInflight(placement.id),
+      recentlyAssignedAtMs: toFiniteNumber(mapPlacementState.assignmentByPlacement.get(placement.id), 0)
+    }))
+  }));
+  return {
+    version: mapPlacementState.version,
+    updatedAt: mapPlacementState.updatedAt,
+    mapCount: maps.length,
+    maps,
+    lastDecision: mapPlacementState.lastDecision
+  };
+}
 
 function isLoopbackHost(host = '') {
   const normalized = String(host || '').trim().toLowerCase();
@@ -2119,25 +2414,88 @@ function getEdgeOffloadMetricsSummary() {
   };
 }
 
-async function invokeEsp32EdgeIngressStage({ inputQueue, message, runRouter = true, convertMtToXml = false, preferredEdgeRole = null } = {}) {
+async function invokeEsp32EdgeIngressStage({
+  inputQueue,
+  message,
+  runRouter = true,
+  convertMtToXml = false,
+  preferredEdgeRole = null,
+  mapKey = null,
+  sourceType = null,
+  destinationType = null
+} = {}) {
   const startMs = performance.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), EDGE_ESP32_TIMEOUT_MS);
-  const selection = chooseEdgeNode({ requestedRole: preferredEdgeRole, message });
+  const mapSelection = chooseMapPlacement({
+    mapKey,
+    sourceType,
+    destinationType,
+    message,
+    requestedRole: preferredEdgeRole
+  });
+  const selection = mapSelection.ok
+    ? {
+        requestedRole: preferredEdgeRole,
+        selectedRole: mapSelection.selected.role || preferredEdgeRole || null,
+        strategy: `map-placement:${mapSelection.reason}`,
+        estimatedMessageBytes: mapSelection.estimatedMessageBytes,
+        node: {
+          host: mapSelection.selected.host,
+          port: mapSelection.selected.port,
+          label: mapSelection.selected.label
+        },
+        placement: mapSelection.selected,
+        mapSelection
+      }
+    : {
+        ...chooseEdgeNode({ requestedRole: preferredEdgeRole, message }),
+        placement: null,
+        mapSelection
+      };
   try {
+    if (selection.placement?.tier === 'esp32') {
+      await tryRegisterMapOnEdgeNode({
+        placement: selection.placement,
+        mapKey: selection.mapSelection?.mapKey || mapKey || '',
+        sourceType,
+        destinationType
+      });
+    }
+
+    const placementConvertPath = selection.placement?.convertPath || EDGE_ESP32_CONVERT_PATH;
+    const placementStagePath = selection.placement?.path || EDGE_ESP32_PATH;
+    const shouldUseGenericConvert = Boolean(selection.placement && sourceType && destinationType);
     const payload = {
       inputQueue,
       message,
       runRouter: runRouter ? '1' : '0',
       convertMtToXml: convertMtToXml ? '1' : '0',
-      file: EDGE_ESP32_ROUTER_FILE,
-      programMap: EDGE_ESP32_PROGRAM_MAP
+      file: selection.placement?.file || EDGE_ESP32_ROUTER_FILE,
+      programMap: selection.placement?.programMap || EDGE_ESP32_PROGRAM_MAP
     };
-    const endpoint = `http://${selection.node.host}:${selection.node.port}${EDGE_ESP32_PATH}`;
+    const endpoint = shouldUseGenericConvert
+      ? `http://${selection.node.host}:${selection.node.port}${placementConvertPath}`
+      : `http://${selection.node.host}:${selection.node.port}${placementStagePath}`;
+
+    const requestPayload = shouldUseGenericConvert
+      ? {
+          sourceType,
+          destinationType,
+          message,
+          inputQueue,
+          requireDelivery: true,
+          maxBytes: selection.placement?.maxMessageBytes || EDGE_ESP32_LARGE_MESSAGE_THRESHOLD_BYTES * 8
+        }
+      : payload;
+
+    if (selection.placement?.id) {
+      markPlacementInflight(selection.placement.id, +1);
+    }
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(requestPayload),
       signal: controller.signal
     });
     if (!response.ok) {
@@ -2154,7 +2512,9 @@ async function invokeEsp32EdgeIngressStage({ inputQueue, message, runRouter = tr
         messageType: result?.messageType || null,
         publishedCount: Number(result?.publishedCount || 0),
         selectedRole: selection.selectedRole,
-        strategy: selection.strategy
+        strategy: selection.strategy,
+        mapKey: selection.mapSelection?.mapKey || null,
+        placementId: selection.placement?.id || null
       }
     });
     return {
@@ -2164,6 +2524,8 @@ async function invokeEsp32EdgeIngressStage({ inputQueue, message, runRouter = tr
       edgeRoleRequested: selection.requestedRole,
       edgeStrategy: selection.strategy,
       estimatedMessageBytes: selection.estimatedMessageBytes,
+      mapSelection: selection.mapSelection,
+      placementId: selection.placement?.id || null,
       latencyMs,
       result
     };
@@ -2183,15 +2545,30 @@ async function invokeEsp32EdgeIngressStage({ inputQueue, message, runRouter = tr
       edgeRoleRequested: selection.requestedRole,
       edgeStrategy: selection.strategy,
       estimatedMessageBytes: selection.estimatedMessageBytes,
+      mapSelection: selection.mapSelection,
+      placementId: selection.placement?.id || null,
       latencyMs,
       error
     };
   } finally {
+    if (selection.placement?.id) {
+      markPlacementInflight(selection.placement.id, -1);
+    }
     clearTimeout(timeout);
   }
 }
 
-async function ingestWithEdgeFallback({ inputQueue, message, sourceService = 'webapi', forceEdge = false, convertMtToXml = false, preferredEdgeRole = null } = {}) {
+async function ingestWithEdgeFallback({
+  inputQueue,
+  message,
+  sourceService = 'webapi',
+  forceEdge = false,
+  convertMtToXml = false,
+  preferredEdgeRole = null,
+  mapKey = null,
+  sourceType = null,
+  destinationType = null
+} = {}) {
   async function enqueueToSingleQueue(singleMessage, envelope, sourceSuffix = 'single-queue') {
     const queueName = String(inputQueue || '').trim();
     if (!queueName) {
@@ -2235,7 +2612,10 @@ async function ingestWithEdgeFallback({ inputQueue, message, sourceService = 'we
     message,
     runRouter: true,
     convertMtToXml,
-    preferredEdgeRole
+    preferredEdgeRole,
+    mapKey,
+    sourceType,
+    destinationType
   });
   if (edgeAttempt.ok) {
     const edgeResult = edgeAttempt.result || {};
@@ -2257,7 +2637,9 @@ async function ingestWithEdgeFallback({ inputQueue, message, sourceService = 'we
         edgeRole: edgeAttempt.edgeRole,
         edgeRoleRequested: edgeAttempt.edgeRoleRequested,
         edgeStrategy: edgeAttempt.edgeStrategy,
-        estimatedMessageBytes: edgeAttempt.estimatedMessageBytes
+        estimatedMessageBytes: edgeAttempt.estimatedMessageBytes,
+        mapSelection: edgeAttempt.mapSelection || null,
+        placementId: edgeAttempt.placementId || null
       },
       result: localResult
     };
@@ -2287,6 +2669,8 @@ async function ingestWithEdgeFallback({ inputQueue, message, sourceService = 'we
       edgeRoleRequested: edgeAttempt.edgeRoleRequested,
       edgeStrategy: edgeAttempt.edgeStrategy,
       estimatedMessageBytes: edgeAttempt.estimatedMessageBytes,
+      mapSelection: edgeAttempt.mapSelection || null,
+      placementId: edgeAttempt.placementId || null,
       edgeError: edgeAttempt.error?.message || String(edgeAttempt.error || '')
     },
     result: fallbackResult
@@ -8236,6 +8620,97 @@ function registerRoutes(app) {
     setBrokerInstanceState('secondary', { active: true, quiesced: false });
     return { status: 'secondary broker started' };
   }
+
+  app.get('/api/map-placement', (req, res) => {
+    res.json({ status: 'ok', ...getMapPlacementSummary() });
+  });
+
+  app.post('/api/map-placement/register', express.json({ limit: '256kb' }), (req, res) => {
+    try {
+      const payload = req.body && typeof req.body === 'object' ? req.body : {};
+      const entries = Array.isArray(payload.entries) ? payload.entries : [payload];
+      const upserted = [];
+
+      for (const item of entries) {
+        const normalized = normalizeMapPlacementEntry(item, item?.mapKey || '');
+        if (!normalized.mapKey) continue;
+        mapPlacementState.maps.set(normalized.mapKey, normalized);
+        upserted.push(normalized.mapKey);
+      }
+
+      persistMapPlacementRegistry();
+      res.json({
+        status: 'ok',
+        upsertedCount: upserted.length,
+        upserted,
+        registryUpdatedAt: mapPlacementState.updatedAt
+      });
+    } catch (e) {
+      res.status(400).json({ status: 'error', error: e.message });
+    }
+  });
+
+  app.post('/api/map-placement/unregister', express.json({ limit: '128kb' }), (req, res) => {
+    const payload = req.body && typeof req.body === 'object' ? req.body : {};
+    const mapKey = buildMapKeyFromParts({
+      mapKey: payload.mapKey,
+      sourceType: payload.sourceType,
+      destinationType: payload.destinationType
+    });
+    if (!mapKey) {
+      return res.status(400).json({ status: 'error', error: 'mapKey or sourceType+destinationType required' });
+    }
+    const removed = mapPlacementState.maps.delete(mapKey);
+    if (removed) {
+      persistMapPlacementRegistry();
+    }
+    return res.status(removed ? 200 : 404).json({ status: removed ? 'ok' : 'not_found', mapKey });
+  });
+
+  app.post('/api/map-placement/choose', express.json({ limit: '128kb' }), (req, res) => {
+    const payload = req.body && typeof req.body === 'object' ? req.body : {};
+    const decision = chooseMapPlacement({
+      mapKey: payload.mapKey,
+      sourceType: payload.sourceType,
+      destinationType: payload.destinationType,
+      message: payload.message,
+      requestedRole: payload.edgeRole
+    });
+    if (!decision.ok) {
+      return res.status(404).json({ status: 'no_candidate', decision });
+    }
+    return res.json({
+      status: 'ok',
+      mapKey: decision.mapKey,
+      selected: {
+        id: decision.selected.id,
+        tier: decision.selected.tier,
+        label: decision.selected.label,
+        host: decision.selected.host,
+        port: decision.selected.port,
+        role: decision.selected.role,
+        score: Number.isFinite(decision.selected.__score) ? Number(decision.selected.__score.toFixed(4)) : null
+      },
+      candidateCount: decision.candidates.length
+    });
+  });
+
+  app.get('/api/map-placement/metrics', (req, res) => {
+    const nowMs = Date.now();
+    pruneMapPlacementRuntimeState(nowMs);
+    const inflight = Array.from(mapPlacementState.inflightByPlacement.entries()).map(([id, count]) => ({
+      id,
+      inflight: count,
+      lastAssignedAtMs: toFiniteNumber(mapPlacementState.assignmentByPlacement.get(id), 0)
+    }));
+    res.json({
+      status: 'ok',
+      registryUpdatedAt: mapPlacementState.updatedAt,
+      trackedInflight: inflight.length,
+      inflight,
+      lastDecision: mapPlacementState.lastDecision
+    });
+  });
 
   app.post('/api/auth/login', (req, res) => {
     const body = req.body || {};

@@ -1,7 +1,8 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { pathToFileURL } from 'url';
-import { compileRouterMapperDSL } from './compile-pascal.mjs';
+import { compileRouterMapperDSL as compileRouterMapperDSLAntlr } from './compile-pascal.mjs';
+import { compileRouterMapperDSL as compileRouterMapperDSLLegacy } from './compile-router-mapper-dsl.mjs';
 
 function parseArgs(argv) {
   const args = {
@@ -285,7 +286,14 @@ async function main() {
   assertRequiredOpcodes(manifest);
 
   const sourceText = await fs.readFile(inputPath, 'utf-8');
-  const compiled = compileRouterMapperDSL(sourceText);
+  let compiled;
+  try {
+    compiled = compileRouterMapperDSLAntlr(sourceText);
+  } catch (error) {
+    // Compatibility fallback for legacy router/mapper DSL files that ANTLR rejects.
+    compiled = compileRouterMapperDSLLegacy(sourceText);
+    console.warn(`[PCODE-COMPILER] ANTLR compile failed; used legacy DSL compiler fallback: ${error?.message || String(error)}`);
+  }
   const emitted = emitPortableProgram(compiled);
 
   await fs.mkdir(path.dirname(outPath), { recursive: true });
