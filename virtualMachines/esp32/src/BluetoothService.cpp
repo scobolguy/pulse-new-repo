@@ -326,6 +326,17 @@ BLEDeviceType BluetoothService::detectDeviceType(NimBLEAdvertisedDevice* device)
     if (isWatchDevice(device)) {
         return BLEDeviceType::WATCH;
     }
+
+    if (device->haveManufacturerData()) {
+        std::string mfgData = device->getManufacturerData();
+        if (mfgData.length() >= 2 && (uint8_t)mfgData[0] == 0x4C && (uint8_t)mfgData[1] == 0x00) {
+            return BLEDeviceType::WATCH;
+        }
+    }
+
+    if (hasService(device, "0000180f-0000-1000-8000-00805f9b34fb")) {
+        return BLEDeviceType::WATCH;
+    }
     
     // Check for specific device types
     if (isLightbulb(device)) {
@@ -685,11 +696,17 @@ String BluetoothService::toJson() {
         deviceObj["address"] = pair.second.address;
         deviceObj["name"] = pair.second.name;
         deviceObj["type"] = deviceTypeToString(pair.second.type);
+        deviceObj["manufacturer"] = pair.second.manufacturer;
+        deviceObj["manufacturerData"] = pair.second.manufacturerData;
         deviceObj["rssi"] = pair.second.rssi;
         deviceObj["controllable"] = pair.second.controllable;
         deviceObj["connected"] = pair.second.connected;
         deviceObj["powerState"] = pair.second.powerState;
         deviceObj["brightness"] = pair.second.brightness;
+        JsonArray services = deviceObj["serviceUUIDs"].to<JsonArray>();
+        for (const auto& serviceUUID : pair.second.serviceUUIDs) {
+            services.add(serviceUUID);
+        }
     }
     
     String output;

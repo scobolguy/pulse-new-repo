@@ -1,0 +1,27 @@
+{
+  "pcode": "# Auto-generated from ANTLR StandardPascal grammar\nJMP MAIN\nPROC_HANOI:\nLOAD n\nPUSH_INT 1\nEQ\nJZ ELSE_1\nPUSH_STR \"Move disk \"\nPRINT\nLOAD n\nPRINT_INT\nPUSH_STR \" from \"\nPRINT\nLOAD fromPeg\nPRINT_INT\nPUSH_STR \" to \"\nPRINT\nLOAD toPeg\nPRINT_INT\nPRINT_NL\nJMP ENDIF_2\nELSE_1:\nLOAD n\nPUSH_INT 1\nSUB\nLOAD fromPeg\nLOAD auxPeg\nLOAD toPeg\nCALL PROC_HANOI 4\nPUSH_STR \"Move disk \"\nPRINT\nLOAD n\nPRINT_INT\nPUSH_STR \" from \"\nPRINT\nLOAD fromPeg\nPRINT_INT\nPUSH_STR \" to \"\nPRINT\nLOAD toPeg\nPRINT_INT\nPRINT_NL\nLOAD n\nPUSH_INT 1\nSUB\nLOAD auxPeg\nLOAD toPeg\nLOAD fromPeg\nCALL PROC_HANOI 4\nENDIF_2:\nRET\nMAIN:\nPUSH_INT 3\nSTORE diskCount\nPUSH_STR \"Towers of Hanoi for \"\nPRINT\nLOAD diskCount\nPRINT_INT\nPUSH_STR \" disks:\"\nPRINT\nPRINT_NL\nLOAD diskCount\nPUSH_INT 1\nPUSH_INT 3\nPUSH_INT 2\nCALL PROC_HANOI 4\nHALT\n",
+  "programMap": {
+    "version": 1,
+    "generatedAt": "2026-06-06T23:16:36.377Z",
+    "serviceId": "TowersOfHanoi",
+    "runtimeUnit": {
+      "kind": "program",
+      "id": "TowersOfHanoi",
+      "refreshMs": null
+    },
+    "executionModel": "standard-pascal",
+    "sourceLanguage": "pascal",
+    "globals": ["diskCount"],
+    "procedures": {
+      "PROC_HANOI": {
+        "name": "Hanoi",
+        "params": ["n", "fromPeg", "toPeg", "auxPeg"],
+        "locals": []
+      }
+    },
+    "entryLabel": "MAIN"
+  },
+  "message": "RUN",
+  "inputQueue": "demo.hanoi.in",
+  "runRouter": false
+}

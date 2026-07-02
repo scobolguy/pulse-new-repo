@@ -1,4 +1,4 @@
-const base = 'http://192.168.2.115';
+const base = process.env.BONECRUSHER_BASE_URL || 'http://192.168.2.115';
 
 async function getStatus(label) {
   const res = await fetch(`${base}/bonecrusher/worker/status`);

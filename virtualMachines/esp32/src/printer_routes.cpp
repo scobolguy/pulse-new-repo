@@ -249,6 +249,85 @@ void registerPrinterRoutes(AsyncWebServer& server) {
             request->send(200, "application/json", json);
         }
     );
+
+    // ========================================================================
+    // POST /api/upnp/discover - Alias for UPnP discovery
+    // ========================================================================
+    server.on("/api/upnp/discover", HTTP_POST,
+        [](AsyncWebServerRequest* request) {
+            if (!globalPrinterService) {
+                request->send(503, "application/json", "{\"error\":\"Service not available\"}");
+                return;
+            }
+
+            bool started = globalPrinterService->discoverUPnPDevices();
+
+            if (started) {
+                std::vector<UPnPDevice> upnpDevices = globalPrinterService->getUPnPDevices();
+
+                JsonDocument doc;
+                doc["success"] = true;
+                doc["message"] = "UPnP discovery completed";
+                doc["devicesFound"] = upnpDevices.size();
+
+                JsonArray devicesArray = doc["devices"].to<JsonArray>();
+                for (const auto& upnpDev : upnpDevices) {
+                    JsonObject devObj = devicesArray.add<JsonObject>();
+                    devObj["usn"] = upnpDev.usn;
+                    devObj["friendlyName"] = upnpDev.friendlyName;
+                    devObj["manufacturer"] = upnpDev.manufacturer;
+                    devObj["modelName"] = upnpDev.modelName;
+                    devObj["ipAddress"] = upnpDev.ipAddress;
+                    devObj["port"] = upnpDev.port;
+                    devObj["isPrinter"] = upnpDev.isPrinter;
+                    devObj["isScanner"] = upnpDev.isScanner;
+                }
+
+                String json;
+                serializeJson(doc, json);
+                request->send(200, "application/json", json);
+            } else {
+                request->send(500, "application/json", "{\"error\":\"Failed to start UPnP discovery\"}");
+            }
+        }
+    );
+
+    // ========================================================================
+    // GET /api/upnp/devices - Alias for listing discovered UPnP devices
+    // ========================================================================
+    server.on("/api/upnp/devices", HTTP_GET,
+        [](AsyncWebServerRequest* request) {
+            if (!globalPrinterService) {
+                request->send(503, "application/json", "{\"error\":\"Service not available\"}");
+                return;
+            }
+
+            std::vector<UPnPDevice> upnpDevices = globalPrinterService->getUPnPDevices();
+
+            JsonDocument doc;
+            JsonArray devicesArray = doc["devices"].to<JsonArray>();
+
+            for (const auto& upnpDev : upnpDevices) {
+                JsonObject devObj = devicesArray.add<JsonObject>();
+                devObj["usn"] = upnpDev.usn;
+                devObj["friendlyName"] = upnpDev.friendlyName;
+                devObj["manufacturer"] = upnpDev.manufacturer;
+                devObj["modelName"] = upnpDev.modelName;
+                devObj["modelNumber"] = upnpDev.modelNumber;
+                devObj["serialNumber"] = upnpDev.serialNumber;
+                devObj["ipAddress"] = upnpDev.ipAddress;
+                devObj["port"] = upnpDev.port;
+                devObj["deviceType"] = upnpDev.deviceType;
+                devObj["isPrinter"] = upnpDev.isPrinter;
+                devObj["isScanner"] = upnpDev.isScanner;
+                devObj["lastSeen"] = upnpDev.lastSeen;
+            }
+
+            String json;
+            serializeJson(doc, json);
+            request->send(200, "application/json", json);
+        }
+    );
     
     // ========================================================================
     // POST /api/printers/:id/print - Send print job

@@ -8,7 +8,18 @@ const ALLOCATOR_DECISIONS_PATH = path.resolve(process.cwd(), 'data', 'allocator-
 const CLUSTER_REGISTRY_PATH = path.resolve(process.cwd(), 'data', 'cluster-registry.json');
 const FREE_POOL_CLUSTER_ID = 'free-pool';
 const FREE_POOL_CLUSTER_LABEL = 'Free Pool';
+const FREE_POOL_JS_CLUSTER_ID = 'free-pool-js';
+const FREE_POOL_JS_CLUSTER_LABEL = 'Free JS Pool';
+const FREE_POOL_ESP_CLUSTER_ID = 'free-pool-esp';
+const FREE_POOL_ESP_CLUSTER_LABEL = 'Free ESP Pool';
 const UDP_PORT_PAIR_START = 4200;
+
+function isManagedFreePoolClusterId(clusterId) {
+  const normalized = String(clusterId || '').trim().toLowerCase();
+  return normalized === FREE_POOL_CLUSTER_ID
+    || normalized === FREE_POOL_JS_CLUSTER_ID
+    || normalized === FREE_POOL_ESP_CLUSTER_ID;
+}
 
 function normalizeNodeRenameMap(raw) {
   if (!raw || typeof raw !== 'object') return {};
@@ -79,10 +90,21 @@ function normalizeClusterRegistry(raw) {
     const nodes = Array.isArray(value?.nodes)
       ? value.nodes.map((v) => String(v || '').trim().toLowerCase()).filter(Boolean)
       : [];
+    const nodeOrigins = value?.nodeOrigins && typeof value.nodeOrigins === 'object'
+      ? Object.fromEntries(
+          Object.entries(value.nodeOrigins)
+            .map(([nodeId, sourcePoolId]) => [
+              String(nodeId || '').trim().toLowerCase(),
+              String(sourcePoolId || '').trim().toLowerCase()
+            ])
+            .filter(([nodeId, sourcePoolId]) => Boolean(nodeId) && Boolean(sourcePoolId))
+        )
+      : {};
     out[clusterId] = {
       clusterId,
       label: String(value?.label || clusterId).trim(),
       nodes: Array.from(new Set(nodes)),
+      nodeOrigins,
       state: String(value?.state || 'up').trim().toLowerCase(),
       createdAt: String(value?.createdAt || new Date().toISOString()),
       updatedAt: String(value?.updatedAt || new Date().toISOString())
@@ -246,11 +268,33 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     clusterRegistryLoaded = true;
   }
 
-  function buildEffectiveClusterRegistry(nodes) {
+  function buildEffectiveClusterRegistry(nodes, registryOverride = null) {
     const normalizedNodes = Array.isArray(nodes) ? nodes : [];
-    const explicit = normalizeClusterRegistry(clusterRegistry);
+    const explicit = normalizeClusterRegistry(registryOverride || clusterRegistry);
     const persistedFreePool = explicit[FREE_POOL_CLUSTER_ID] || null;
+    const persistedJsFreePool = explicit[FREE_POOL_JS_CLUSTER_ID] || null;
+    const persistedEspFreePool = explicit[FREE_POOL_ESP_CLUSTER_ID] || null;
     delete explicit[FREE_POOL_CLUSTER_ID];
+    delete explicit[FREE_POOL_JS_CLUSTER_ID];
+    delete explicit[FREE_POOL_ESP_CLUSTER_ID];
+
+    function inferDefaultFreePoolForNode(node) {
+      const hardware = String(node?.details?.hardware || '').trim().toLowerCase();
+      const runtime = String(node?.details?.runtime || '').trim().toLowerCase();
+      const nodeId = String(node?.nodeId || node?.nodeName || '').trim().toLowerCase();
+      const ip = String(node?.ip || '').trim();
+
+      const isJsRuntime = runtime.includes('js') || runtime.includes('javascript') || nodeId.includes('js-pmachine');
+      if (isJsRuntime) return FREE_POOL_JS_CLUSTER_ID;
+
+      const isEspHardware = hardware.includes('esp32')
+        || hardware.includes('esp8266')
+        || runtime.includes('pmachine')
+        || (ip && !ip.startsWith('127.') && hardware !== 'server');
+      if (isEspHardware) return FREE_POOL_ESP_CLUSTER_ID;
+
+      return null;
+    }
 
     const assigned = new Set();
     for (const cluster of Object.values(explicit)) {
@@ -261,24 +305,65 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     }
 
     const unassigned = [];
+    const unassignedJs = [];
+    const unassignedEsp = [];
     for (const node of normalizedNodes) {
       const normalized = normalizeNodeId(node.nodeId || node.nodeName || node.ip);
       if (!normalized || assigned.has(normalized)) continue;
+      const sourceFreePoolId = inferDefaultFreePoolForNode(node);
+      if (!sourceFreePoolId) continue;
       unassigned.push(normalized);
+      if (sourceFreePoolId === FREE_POOL_JS_CLUSTER_ID) unassignedJs.push(normalized);
+      if (sourceFreePoolId === FREE_POOL_ESP_CLUSTER_ID) unassignedEsp.push(normalized);
     }
 
     const now = new Date().toISOString();
     return {
       ...explicit,
+      [FREE_POOL_JS_CLUSTER_ID]: {
+        clusterId: FREE_POOL_JS_CLUSTER_ID,
+        label: String(persistedJsFreePool?.label || FREE_POOL_JS_CLUSTER_LABEL).trim() || FREE_POOL_JS_CLUSTER_LABEL,
+        nodes: Array.from(new Set(unassignedJs)),
+        nodeOrigins: {},
+        state: String(persistedJsFreePool?.state || 'up').trim().toLowerCase() || 'up',
+        createdAt: String(persistedJsFreePool?.createdAt || now),
+        updatedAt: now
+      },
+      [FREE_POOL_ESP_CLUSTER_ID]: {
+        clusterId: FREE_POOL_ESP_CLUSTER_ID,
+        label: String(persistedEspFreePool?.label || FREE_POOL_ESP_CLUSTER_LABEL).trim() || FREE_POOL_ESP_CLUSTER_LABEL,
+        nodes: Array.from(new Set(unassignedEsp)),
+        nodeOrigins: {},
+        state: String(persistedEspFreePool?.state || 'up').trim().toLowerCase() || 'up',
+        createdAt: String(persistedEspFreePool?.createdAt || now),
+        updatedAt: now
+      },
       [FREE_POOL_CLUSTER_ID]: {
         clusterId: FREE_POOL_CLUSTER_ID,
         label: String(persistedFreePool?.label || FREE_POOL_CLUSTER_LABEL).trim() || FREE_POOL_CLUSTER_LABEL,
         nodes: Array.from(new Set(unassigned)),
+        nodeOrigins: {},
         state: String(persistedFreePool?.state || 'up').trim().toLowerCase() || 'up',
         createdAt: String(persistedFreePool?.createdAt || now),
         updatedAt: now
       }
     };
+  }
+
+  function buildClusterUdpPortMap(effectiveRegistry) {
+    const entries = Object.values(effectiveRegistry || {})
+      .map((cluster) => String(cluster?.clusterId || '').trim().toLowerCase())
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b));
+
+    const out = new Map();
+    for (let i = 0; i < entries.length; i += 1) {
+      const clusterId = entries[i];
+      const parentPort = UDP_PORT_PAIR_START + (i * 2);
+      const siblingPort = parentPort + 1;
+      out.set(clusterId, { parentPort, siblingPort });
+    }
+    return out;
   }
 
   function resolveNodeRename(node) {
@@ -341,7 +426,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     return { parentNodeId: '', isClusterGateway: false };
   }
 
-  function attachTopologyMetadata(nodes) {
+  function attachTopologyMetadata(nodes, effectiveRegistry = {}) {
     const normalizedNodes = Array.isArray(nodes) ? nodes : [];
     const keyToNode = new Map();
 
@@ -351,17 +436,17 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       }
     }
 
-    const portOrder = [...normalizedNodes]
-      .map((node) => ({
-        node,
-        key: getNodeIdentityCandidates(node)[0] || 'unknown'
-      }))
-      .sort((a, b) => a.key.localeCompare(b.key));
-
-    const portIndexByKey = new Map();
-    for (let i = 0; i < portOrder.length; i += 1) {
-      portIndexByKey.set(portOrder[i].key, i);
+    const clusterNodeMap = new Map();
+    for (const [clusterId, cluster] of Object.entries(effectiveRegistry || {})) {
+      const normalizedClusterId = String(clusterId || '').trim().toLowerCase();
+      const members = Array.isArray(cluster?.nodes) ? cluster.nodes : [];
+      for (const nodeId of members) {
+        const normalizedNodeId = normalizeNodeId(nodeId);
+        if (!normalizedNodeId) continue;
+        clusterNodeMap.set(normalizedNodeId, normalizedClusterId);
+      }
     }
+    const clusterUdpPortMap = buildClusterUdpPortMap(effectiveRegistry);
 
     const withTopology = normalizedNodes.map((node) => {
       const nodeKey = getNodeIdentityCandidates(node)[0] || normalizeNodeId(node?.ip) || 'unknown';
@@ -377,7 +462,6 @@ export function registerTopologyRuntimeRoutes(app, deps) {
         : '';
       const parentIp = parentNode ? String(parentNode.ip || '').trim() : '';
 
-      const idx = Number(portIndexByKey.get(nodeKey) ?? 0);
       const boardParentPort = Number(boardCluster.parentPort || boardCluster?.udp?.parentPort || 0);
       const boardSiblingPort = Number(boardCluster.siblingPort || boardCluster?.udp?.siblingPort || 0);
       const boardPortsValid = Number.isFinite(boardParentPort)
@@ -386,13 +470,11 @@ export function registerTopologyRuntimeRoutes(app, deps) {
         && boardSiblingPort === boardParentPort + 1;
       const boardGateway = boardCluster.isClusterGateway === true;
 
-      const isFlatSibling = !normalizedParent && !boardGateway && override.isClusterGateway !== true;
-      // In flat topology, all siblings share the same default parent/sibling UDP ports.
-      // Distinct port pairs are only assigned once a node participates in explicit clustering.
-      const computedParentPort = isFlatSibling ? UDP_PORT_PAIR_START : UDP_PORT_PAIR_START + ((idx + 1) * 2);
-      const parentPort = boardPortsValid ? boardParentPort : computedParentPort;
-      const siblingPort = boardPortsValid ? boardSiblingPort : (parentPort + 1);
-      const activeClusterId = String(boardCluster.activeClusterId || 'default').trim() || 'default';
+      const assignedClusterId = clusterNodeMap.get(nodeKey) || null;
+      const activeClusterId = String(assignedClusterId || boardCluster.activeClusterId || 'default').trim().toLowerCase() || 'default';
+      const clusterPorts = clusterUdpPortMap.get(activeClusterId) || null;
+      const parentPort = clusterPorts?.parentPort || (boardPortsValid ? boardParentPort : UDP_PORT_PAIR_START);
+      const siblingPort = clusterPorts?.siblingPort || (boardPortsValid ? boardSiblingPort : (parentPort + 1));
 
       return {
         ...node,
@@ -511,6 +593,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
   async function buildCurrentNodesWithTopology() {
     await ensureNodeRenameMapLoaded();
     await ensureNodeTopologyMapLoaded();
+    await ensureClusterRegistryLoaded();
     const now = Date.now();
     const backendNode = {
       ip: '127.0.0.1',
@@ -595,7 +678,125 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     const nodes = [backendNode, ...magicClusterNodes, ...Array.from(discoveredNodes.values())]
       .map((node) => applyNodeRename(node))
       .sort((a, b) => b.lastSeen - a.lastSeen);
-    return attachTopologyMetadata(nodes);
+    const effectiveRegistry = buildEffectiveClusterRegistry(nodes);
+    return attachTopologyMetadata(nodes, effectiveRegistry);
+  }
+
+  function resolveBoardIpForNodeId(normalizedNodeId, nodes = []) {
+    const liveNode = (Array.isArray(nodes) ? nodes : []).find(
+      (entry) => normalizeNodeId(entry.nodeId || entry.nodeName || entry.ip) === normalizedNodeId
+    ) || null;
+    const liveIp = String(liveNode?.ip || '').trim();
+    if (liveIp) return liveIp;
+
+    for (const existing of discoveredNodes.values()) {
+      const candidateId = normalizeNodeId(existing?.nodeId || existing?.id || existing?.ip);
+      if (candidateId && candidateId === normalizedNodeId) {
+        const ip = String(existing?.ip || '').trim();
+        if (ip) return ip;
+      }
+    }
+    return '';
+  }
+
+  function isLikelyEspBoard(nodeId, nodes = []) {
+    const liveNode = (Array.isArray(nodes) ? nodes : []).find(
+      (entry) => normalizeNodeId(entry.nodeId || entry.nodeName || entry.ip) === nodeId
+    ) || null;
+    const hardware = String(liveNode?.details?.hardware || '').trim().toLowerCase();
+    return hardware.includes('esp32') || hardware.includes('esp8266');
+  }
+
+  async function applyNodeTopologyAssignment(nodeId, topology = {}, nodes = []) {
+    await ensureNodeTopologyMapLoaded();
+
+    const normalizedNodeId = normalizeNodeId(nodeId);
+    if (!normalizedNodeId) {
+      return { nodeId, status: 'skipped', reason: 'invalid-node-id' };
+    }
+
+    const boardIp = resolveBoardIpForNodeId(normalizedNodeId, nodes);
+    const shouldPushToBoard = Boolean(boardIp)
+      && !String(boardIp).startsWith('127.')
+      && isLikelyEspBoard(normalizedNodeId, nodes);
+
+    if (shouldPushToBoard) {
+      await persistNodeTopologyOnBoard(boardIp, topology);
+      delete nodeTopologyMap[normalizedNodeId];
+      await saveNodeTopologyMap(nodeTopologyMap);
+      return { nodeId: normalizedNodeId, status: 'applied', source: 'board', ip: boardIp };
+    }
+
+    nodeTopologyMap[normalizedNodeId] = {
+      parentNodeId: normalizeNodeId(topology.parentNodeId) || '',
+      isClusterGateway: topology.isClusterGateway === true
+    };
+    await saveNodeTopologyMap(nodeTopologyMap);
+    return { nodeId: normalizedNodeId, status: 'applied', source: 'server' };
+  }
+
+  async function renameNodeByIdentity(requestedNodeId, requestedIp, nextName) {
+    await ensureNodeRenameMapLoaded();
+
+    const normalizedNodeId = normalizeNodeId(requestedNodeId);
+    const normalizedIp = normalizeNodeId(requestedIp);
+    let boardIp = String(requestedIp || '').trim();
+
+    if (!boardIp && normalizedNodeId) {
+      for (const existing of discoveredNodes.values()) {
+        const matches = [
+          normalizeNodeId(existing?.nodeId),
+          normalizeNodeId(existing?.id),
+          normalizeNodeId(existing?.ip)
+        ].filter(Boolean);
+        if (matches.includes(normalizedNodeId)) {
+          boardIp = String(existing?.ip || '').trim();
+          break;
+        }
+      }
+    }
+
+    if (!boardIp) {
+      const err = new Error('target board ip not found for rename');
+      err.httpStatus = 404;
+      throw err;
+    }
+
+    await persistNodeNameOnBoard(boardIp, nextName);
+
+    if (normalizedNodeId) delete nodeRenameMap[normalizedNodeId];
+    if (normalizedIp) delete nodeRenameMap[normalizedIp];
+
+    for (const [key, existing] of discoveredNodes.entries()) {
+      const matches = [
+        normalizeNodeId(existing?.nodeId),
+        normalizeNodeId(existing?.id),
+        normalizeNodeId(existing?.ip),
+        normalizeNodeId(key)
+      ].filter(Boolean);
+      if (
+        (normalizedNodeId && matches.includes(normalizedNodeId))
+        || (normalizedIp && matches.includes(normalizedIp))
+      ) {
+        discoveredNodes.set(key, {
+          ...existing,
+          nodeName: nextName,
+          details: {
+            ...(existing?.details || {}),
+            nodeName: nextName
+          }
+        });
+      }
+    }
+
+    await saveNodeRenameMap(nodeRenameMap);
+
+    return {
+      status: 'ok',
+      nodeId: requestedNodeId || requestedIp,
+      nodeName: nextName,
+      sourceOfTruth: 'board'
+    };
   }
 
   function nodeMatchesAddressToken(node, token) {
@@ -948,7 +1149,23 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     await ensureClusterRegistryLoaded();
     const nodes = await buildCurrentNodesWithTopology();
     const effectiveRegistry = buildEffectiveClusterRegistry(nodes);
-    return res.json({ clusters: Object.values(effectiveRegistry) });
+    const udpByClusterId = buildClusterUdpPortMap(effectiveRegistry);
+    const clusters = Object.values(effectiveRegistry).map((cluster) => {
+      const clusterId = String(cluster?.clusterId || '').trim().toLowerCase();
+      const udp = udpByClusterId.get(clusterId) || null;
+      return {
+        ...cluster,
+        udp: udp
+          ? {
+              parentPort: udp.parentPort,
+              siblingPort: udp.siblingPort,
+              listenPorts: [udp.parentPort, udp.siblingPort],
+              upstreamPort: udp.parentPort
+            }
+          : null
+      };
+    });
+    return res.json({ clusters });
   });
 
   app.post('/api/clusters', async (req, res) => {
@@ -966,9 +1183,15 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     if (clusterId === FREE_POOL_CLUSTER_ID) {
       return res.status(400).json({ error: `${FREE_POOL_CLUSTER_ID} is managed automatically` });
     }
+    if (isManagedFreePoolClusterId(clusterId)) {
+      return res.status(400).json({ error: `${clusterId} is managed automatically` });
+    }
 
     const nodes = await buildCurrentNodesWithTopology();
+    const effectiveRegistry = buildEffectiveClusterRegistry(nodes);
+    const freePoolEntries = Object.values(effectiveRegistry).filter((cluster) => isManagedFreePoolClusterId(cluster?.clusterId));
     const resolvedNodeIds = [];
+    const nodeOrigins = {};
     for (const token of requestedNodes) {
       const node = resolveNodeByAddressPath(String(token || ''), nodes)
         || nodes.find((entry) => nodeMatchesAddressToken(entry, String(token || '')))
@@ -976,22 +1199,133 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       if (!node) {
         return res.status(404).json({ error: `node not found: ${token}` });
       }
-      resolvedNodeIds.push(normalizeNodeId(node.nodeId || node.nodeName || node.ip));
+      const normalizedNodeId = normalizeNodeId(node.nodeId || node.nodeName || node.ip);
+      if (!normalizedNodeId) {
+        return res.status(400).json({ error: `node id resolution failed for: ${token}` });
+      }
+      const sourcePool = freePoolEntries.find((pool) => (pool.nodes || []).includes(normalizedNodeId)) || null;
+      if (!sourcePool) {
+        return res.status(409).json({ error: `node is not currently available in a free pool: ${token}` });
+      }
+      resolvedNodeIds.push(normalizedNodeId);
+      if (sourcePool.clusterId !== FREE_POOL_CLUSTER_ID) {
+        nodeOrigins[normalizedNodeId] = sourcePool.clusterId;
+      }
     }
+
+    const previousCluster = clusterRegistry?.[clusterId] || null;
+    const previousNodes = new Set(Array.isArray(previousCluster?.nodes) ? previousCluster.nodes : []);
+    const nextNodes = new Set(Array.from(new Set(resolvedNodeIds)));
+    const returnedNodes = Array.from(previousNodes).filter((nodeId) => !nextNodes.has(nodeId));
+    const returnedToPools = returnedNodes.map((nodeId) => ({
+      nodeId,
+      poolId: String(previousCluster?.nodeOrigins?.[nodeId] || FREE_POOL_CLUSTER_ID)
+    }));
 
     const now = new Date().toISOString();
     clusterRegistry[clusterId] = {
       clusterId,
       label,
       nodes: Array.from(new Set(resolvedNodeIds)),
+      nodeOrigins,
       state: 'up',
       createdAt: clusterRegistry?.[clusterId]?.createdAt || now,
       updatedAt: now
     };
     delete clusterRegistry[FREE_POOL_CLUSTER_ID];
+    delete clusterRegistry[FREE_POOL_JS_CLUSTER_ID];
+    delete clusterRegistry[FREE_POOL_ESP_CLUSTER_ID];
     await saveClusterRegistry(clusterRegistry);
 
-    return res.json({ status: 'ok', cluster: clusterRegistry[clusterId] });
+    const nodesAfter = await buildCurrentNodesWithTopology();
+    const effectiveAfter = buildEffectiveClusterRegistry(nodesAfter);
+    const udpByClusterId = buildClusterUdpPortMap(effectiveAfter);
+    const clusterUdp = udpByClusterId.get(clusterId) || null;
+
+    const topologyApplied = [];
+    for (const nodeId of clusterRegistry[clusterId].nodes || []) {
+      const result = await applyNodeTopologyAssignment(nodeId, {
+        activeClusterId: clusterId,
+        parentHost: '',
+        parentNodeId: '',
+        isClusterGateway: false,
+        parentPort: clusterUdp?.parentPort,
+        siblingPort: clusterUdp?.siblingPort
+      }, nodesAfter);
+      topologyApplied.push(result);
+    }
+
+    for (const returned of returnedToPools) {
+      const poolId = normalizeNodeId(returned.poolId || FREE_POOL_CLUSTER_ID) || FREE_POOL_CLUSTER_ID;
+      const poolUdp = udpByClusterId.get(poolId) || udpByClusterId.get(FREE_POOL_CLUSTER_ID) || null;
+      const result = await applyNodeTopologyAssignment(returned.nodeId, {
+        activeClusterId: poolId,
+        parentHost: '',
+        parentNodeId: '',
+        isClusterGateway: false,
+        parentPort: poolUdp?.parentPort,
+        siblingPort: poolUdp?.siblingPort
+      }, nodesAfter);
+      topologyApplied.push(result);
+    }
+
+    return res.json({
+      status: 'ok',
+      cluster: clusterRegistry[clusterId],
+      allocatedFromPools: Object.entries(nodeOrigins).map(([nodeId, poolId]) => ({ nodeId, poolId })),
+      returnedToPools,
+      topologyApplied
+    });
+  });
+
+  app.delete('/api/clusters/:clusterId', async (req, res) => {
+    await ensureClusterRegistryLoaded();
+    const clusterId = normalizeNodeId(req.params.clusterId);
+    if (!clusterId) return res.status(400).json({ error: 'clusterId is required' });
+    if (isManagedFreePoolClusterId(clusterId)) {
+      return res.status(400).json({ error: `${clusterId} is managed automatically` });
+    }
+
+    const existing = clusterRegistry[clusterId];
+    if (!existing) {
+      return res.status(404).json({ error: 'cluster not found' });
+    }
+
+    const releasedNodes = Array.isArray(existing.nodes) ? existing.nodes : [];
+    const returnedToPools = releasedNodes.map((nodeId) => ({
+      nodeId,
+      poolId: String(existing?.nodeOrigins?.[nodeId] || FREE_POOL_CLUSTER_ID)
+    }));
+
+    delete clusterRegistry[clusterId];
+    await saveClusterRegistry(clusterRegistry);
+
+    const nodesAfter = await buildCurrentNodesWithTopology();
+    const effectiveAfter = buildEffectiveClusterRegistry(nodesAfter);
+    const udpByClusterId = buildClusterUdpPortMap(effectiveAfter);
+    const topologyApplied = [];
+
+    for (const returned of returnedToPools) {
+      const poolId = normalizeNodeId(returned.poolId || FREE_POOL_CLUSTER_ID) || FREE_POOL_CLUSTER_ID;
+      const poolUdp = udpByClusterId.get(poolId) || udpByClusterId.get(FREE_POOL_CLUSTER_ID) || null;
+      const result = await applyNodeTopologyAssignment(returned.nodeId, {
+        activeClusterId: poolId,
+        parentHost: '',
+        parentNodeId: '',
+        isClusterGateway: false,
+        parentPort: poolUdp?.parentPort,
+        siblingPort: poolUdp?.siblingPort
+      }, nodesAfter);
+      topologyApplied.push(result);
+    }
+
+    return res.json({
+      status: 'ok',
+      deletedClusterId: clusterId,
+      releasedNodeCount: releasedNodes.length,
+      returnedToPools,
+      topologyApplied
+    });
   });
 
   app.post('/api/clusters/:clusterId/quiesce', async (req, res) => {
@@ -1109,8 +1443,6 @@ export function registerTopologyRuntimeRoutes(app, deps) {
 
   app.post('/api/nodes/:nodeId/rename', async (req, res) => {
     try {
-      await ensureNodeRenameMapLoaded();
-
       const requestedNodeId = String(req.params.nodeId || req.body?.nodeId || '').trim();
       const requestedIp = String(req.body?.ip || '').trim();
       const nextName = String(req.body?.nodeName || '').trim();
@@ -1121,67 +1453,30 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       if (!nextName) {
         return res.status(400).json({ error: 'nodeName is required' });
       }
-
-      const normalizedNodeId = normalizeNodeId(requestedNodeId);
-      const normalizedIp = normalizeNodeId(requestedIp);
-
-      let boardIp = requestedIp;
-      if (!boardIp) {
-        for (const existing of discoveredNodes.values()) {
-          const matches = [
-            normalizeNodeId(existing?.nodeId),
-            normalizeNodeId(existing?.id),
-            normalizeNodeId(existing?.ip)
-          ].filter(Boolean);
-          if (normalizedNodeId && matches.includes(normalizedNodeId)) {
-            boardIp = String(existing?.ip || '').trim();
-            break;
-          }
-        }
-      }
-
-      if (!boardIp) {
-        return res.status(404).json({ error: 'target board ip not found for rename' });
-      }
-
-      await persistNodeNameOnBoard(boardIp, nextName);
-
-      // Board name is the source of truth. Remove stale local override entries for this node.
-      if (normalizedNodeId) delete nodeRenameMap[normalizedNodeId];
-      if (normalizedIp) delete nodeRenameMap[normalizedIp];
-
-      for (const [key, existing] of discoveredNodes.entries()) {
-        const matches = [
-          normalizeNodeId(existing?.nodeId),
-          normalizeNodeId(existing?.id),
-          normalizeNodeId(existing?.ip),
-          normalizeNodeId(key)
-        ].filter(Boolean);
-        if (
-          (normalizedNodeId && matches.includes(normalizedNodeId))
-          || (normalizedIp && matches.includes(normalizedIp))
-        ) {
-          discoveredNodes.set(key, {
-            ...existing,
-            nodeName: nextName,
-            details: {
-              ...(existing?.details || {}),
-              nodeName: nextName
-            }
-          });
-        }
-      }
-
-      await saveNodeRenameMap(nodeRenameMap);
-
-      return res.json({
-        status: 'ok',
-        nodeId: requestedNodeId || requestedIp,
-        nodeName: nextName,
-        sourceOfTruth: 'board'
-      });
+      return res.json(await renameNodeByIdentity(requestedNodeId, requestedIp, nextName));
     } catch (error) {
-      return res.status(500).json({ error: error?.message || 'failed to rename node' });
+      const status = Number(error?.httpStatus || 500);
+      return res.status(status).json({ error: error?.message || 'failed to rename node' });
+    }
+  });
+
+  app.post('/api/nodes/:nodeId/name', async (req, res) => {
+    try {
+      const requestedNodeId = String(req.params.nodeId || req.body?.nodeId || '').trim();
+      const requestedIp = String(req.body?.ip || '').trim();
+      const nextName = String(req.body?.nodeName || req.body?.name || '').trim();
+
+      if (!requestedNodeId && !requestedIp) {
+        return res.status(400).json({ error: 'nodeId or ip is required' });
+      }
+      if (!nextName) {
+        return res.status(400).json({ error: 'nodeName is required' });
+      }
+
+      return res.json(await renameNodeByIdentity(requestedNodeId, requestedIp, nextName));
+    } catch (error) {
+      const status = Number(error?.httpStatus || 500);
+      return res.status(status).json({ error: error?.message || 'failed to set node name' });
     }
   });
 

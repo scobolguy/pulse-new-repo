@@ -19,6 +19,7 @@
 enum ProvisioningMethod {
     PROV_NONE,
     PROV_CAPTIVE_PORTAL,
+    PROV_WIFI_SCANNER,
     PROV_BLE,
     PROV_WPS,
     PROV_STORED
@@ -89,6 +90,14 @@ public:
      * @return true if credentials received
      */
     bool startBLEProvisioning(uint32_t timeout = 300);
+
+    /**
+     * Start WiFi scanner mode
+     * Performs a WiFi network scan and keeps results available via portal scan route
+     * @param timeout Timeout in seconds (reserved for future use)
+     * @return true if scan completed
+     */
+    bool startWiFiScanner(uint32_t timeout = 30);
     
     /**
      * Start WPS provisioning
@@ -179,6 +188,9 @@ private:
 
 // Global instance
 extern WiFiProvisioning* globalWiFiProvisioning;
+
+// Register WiFi provisioning API routes on an existing server
+void registerWiFiProvisioningRoutes(AsyncWebServer& server);
 
 // Initialization helper
 void initializeWiFiProvisioning(const char* deviceName = "ESP32-Device");

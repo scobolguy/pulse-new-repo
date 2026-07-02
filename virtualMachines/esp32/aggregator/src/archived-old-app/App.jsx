@@ -20,6 +20,7 @@ import ChatPage from './ChatPage';
 import ArtifactWorkbench from './ArtifactWorkbench.jsx';
 import StartupFsmMonitor from './StartupFsmMonitor';
 import TopologyDashboard from './TopologyDashboard';
+import NetworkDevicesPage from '../NetworkDevicesPage';
 import { getThemeFsmPalette, getThemeMermaidVariables } from './themeTokens';
 import compiledWorkflowArtifacts from '../data/workflows.generated.json';
 import workflowSourceArtifact from '../data/workflow.wfl?raw';
@@ -85,6 +86,7 @@ const AREAS = [
   { id: 'data-librarian', label: 'Data Librarian', permission: null, accent: '#f0c36b' },
   { id: 'analyze', label: 'Analyze', permission: 'data.read', accent: '#ffb454' },
   { id: 'develop', label: 'Develop', permission: 'topology.read', accent: '#9b8cff' },
+  { id: 'network', label: 'Network', permission: 'topology.read', accent: '#ff8a5b' },
   { id: 'operations', label: 'Operations', permission: 'lifecycle.read', accent: '#f7768e' },
   { id: 'test', label: 'Test', permission: 'lifecycle.read', accent: '#8bd5ca' },
   { id: 'deploy', label: 'Deploy', permission: 'gateway.read', accent: '#7dcfff' },
@@ -107,6 +109,9 @@ const AREA_ICONS = {
   ),
   develop: (
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8.59 16.59 1.41 1.41L4.41 23 3 21.59Zm6.82 0L21 21.59 19.59 23 14 17.41ZM10 4l4 0v2h-4Zm-2.7 3.3 1.4-1.4 2.9 2.9-1.4 1.4Zm8.8-1.4 1.4 1.4-2.9 2.9-1.4-1.4ZM12 10a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z"/></svg>
+  ),
+  network: (
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 1 3 3 2.99 2.99 0 0 1-1.5 2.59V11h4a2 2 0 0 1 2 2v3a3 3 0 1 1-2 0v-3h-4v3a3 3 0 1 1-2 0v-3H7v3a3 3 0 1 1-2 0v-3a2 2 0 0 1 2-2h4V8.59A2.99 2.99 0 0 1 9 6a3 3 0 1 1 3 3 3 3 0 0 1 0-6Z"/></svg>
   ),
   operations: (
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 2h2v4h-2Zm0 16h2v4h-2ZM2 11h4v2H2Zm16 0h4v2h-4ZM5.64 4.22l1.41-1.41 2.83 2.83-1.41 1.41Zm10.89 10.89 1.41-1.41 2.83 2.83-1.41 1.41ZM4.22 18.36l2.83-2.83 1.41 1.41-2.83 2.83Zm10.89-10.89 2.83-2.83 1.41 1.41-2.83 2.83Z"/></svg>
@@ -138,6 +143,10 @@ const OPERATIONS_TASKS = [
 
 const PROJECT_MANAGE_TASKS = [
   { id: 'planner', label: 'Project Planner' }
+];
+
+const NETWORK_TASKS = [
+  { id: 'explorer', label: 'Explorer' }
 ];
 
 const USER_ADMIN_ACTIONS = ['add', 'delete', 'update'];
@@ -801,6 +810,7 @@ function App() {
   const [monitorClasses, setMonitorClasses] = useState([]);
   const [monitorClassId, setMonitorClassId] = useState('transaction-flows');
   const [projectManageTask, setProjectManageTask] = useState('planner');
+  const [networkTask, setNetworkTask] = useState('explorer');
   const [userAdminTask, setUserAdminTask] = useState('user');
   const [dataLibrarianTask, setDataLibrarianTask] = useState('data-shapes');
   const [developCreateRequest, setDevelopCreateRequest] = useState(null);
@@ -2465,6 +2475,9 @@ function App() {
         />
       );
     }
+    if (area === 'network') {
+      return <NetworkDevicesPage />;
+    }
     if (area === 'project-manage') {
       if (projectManageTask === 'planner') {
         return <ProjectPlannerVisualTool />;
@@ -2756,6 +2769,22 @@ function App() {
                       >
                         New WFL Program
                       </button>
+                    </div>
+                  )}
+                  {item.id === 'network' && (
+                    <div className="admin-subtasks" aria-label="Network Tools">
+                      {NETWORK_TASKS.map((task) => (
+                        <button
+                          key={task.id}
+                          className={`admin-subtask-item ${area === 'network' && networkTask === task.id ? 'is-active' : ''}`}
+                          onClick={() => {
+                            setArea('network');
+                            setNetworkTask(task.id);
+                          }}
+                        >
+                          {task.label}
+                        </button>
+                      ))}
                     </div>
                   )}
                 </div>

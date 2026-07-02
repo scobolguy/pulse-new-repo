@@ -1,7 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
-import Workbench from './workbench/Workbench.jsx'
+import NetworkDevicesPage from './NetworkDevicesPage.jsx'
 
 const originalFetch = window.fetch.bind(window)
 const apiBaseUrls = String(import.meta.env.VITE_API_BASES || '')
@@ -80,6 +80,6 @@ window.fetch = async (input, init = {}) => {
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <Workbench />
+    <NetworkDevicesPage />
   </StrictMode>,
 )

@@ -1,4 +1,11 @@
 {
+  "scripts": {
+    "phase1:bonecrusher:compile": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/phase1-bonecrusher.ps1 -Action compile",
+    "phase1:bonecrusher:upload": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/phase1-bonecrusher.ps1 -Action upload",
+    "phase1:bonecrusher:persist": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/phase1-bonecrusher.ps1 -Action persist-proof",
+    "phase1:bonecrusher:health": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/phase1-bonecrusher.ps1 -Action health",
+    "phase1:bonecrusher:full": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/phase1-bonecrusher.ps1 -Action full"
+  },
   "dependencies": {
     "antlr4": "^4.13.2"
   }

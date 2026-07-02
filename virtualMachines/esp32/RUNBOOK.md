@@ -23,6 +23,22 @@ Checks:
 - Queue manager (primary): `http://127.0.0.1:4100/health`
 - Frontend: `http://127.0.0.1:5173/`
 
+## Bonecrusher Phase 1 (COM5)
+
+- Compile only: `npm run phase1:bonecrusher:compile`
+- Upload only: `npm run phase1:bonecrusher:upload`
+- Persist proof only: `npm run phase1:bonecrusher:persist`
+- Health checks only: `npm run phase1:bonecrusher:health`
+- Full gate (compile + upload + persist + health): `npm run phase1:bonecrusher:full`
+
+Optional parameters (PowerShell direct):
+- Custom COM port: `-ComPort COM6`
+- Custom Bonecrusher host: `-BonecrusherHost http://192.168.2.119`
+- Skip health/persist in full run: `-SkipHealth` / `-SkipPersistProof`
+
+Example:
+- `powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/phase1-bonecrusher.ps1 -Action full -ComPort COM5 -BonecrusherHost http://192.168.2.115`
+
 ## Safe Restart Pattern
 
 1. Run `./stop-servers.bat`

@@ -25,6 +25,7 @@ DeviceConfiguration deviceConfig;
 #include "ffs/FederatedFileSystemRoutes.h"
 #include "profile_config.h"
 #include "provision_routes.h"
+#include "wifi_provisioning.h"
 #include "cluster_routes.h"
 #include "udp_announcement.h"
 #include "udp_runtime.h"
@@ -59,6 +60,10 @@ DeviceConfiguration deviceConfig;
 #ifdef ENABLE_BLUETOOTH_DEVICES
 #include "BluetoothService.h"
 #include "bluetooth_routes.h"
+#endif
+
+#if defined(ENABLE_BLUETOOTH_AUDIO_TTS) && defined(ENABLE_BLUETOOTH_DEVICES)
+#include "BluetoothAudioTtsService.h"
 #endif
 
 #ifdef ENABLE_EVENT_SCHEDULER
@@ -835,10 +840,11 @@ void bonecrusherWorkerTask(void* param) {
 void startBonecrusherWorkerTaskIfNeeded() {
     if (!isBonecrusherRole()) return;
     if (bonecrusherWorkerTaskHandle != nullptr) return;
+    constexpr uint32_t bonecrusherWorkerStackBytes = 12288;
     BaseType_t ok = xTaskCreatePinnedToCore(
         bonecrusherWorkerTask,
         "bonecrusherWorker",
-        8192,
+        bonecrusherWorkerStackBytes,
         nullptr,
         1,
         &bonecrusherWorkerTaskHandle,
@@ -848,7 +854,7 @@ void startBonecrusherWorkerTaskIfNeeded() {
         ok = xTaskCreate(
             bonecrusherWorkerTask,
             "bonecrusherWorker",
-            8192,
+            bonecrusherWorkerStackBytes,
             nullptr,
             1,
             &bonecrusherWorkerTaskHandle
@@ -1330,6 +1336,66 @@ void setupWebServer() {
         }
         #endif
 
+        #ifdef ENABLE_BLUETOOTH_DEVICES
+        auto btObj = services.add<JsonObject>();
+        btObj["name"] = "BluetoothService";
+        btObj["description"] = "Bluetooth LE discovery and generic device control service.";
+        String btStatus = (globalBluetoothService != nullptr) ? "ready" : "down";
+        if (serviceBusyMap.count("BluetoothService") && serviceBusyMap["BluetoothService"]) btStatus = "busy";
+        btObj["status"] = btStatus;
+        auto btCmds = btObj["commands"].to<JsonArray>();
+        {
+            JsonObject cmd = btCmds.add<JsonObject>();
+            cmd["name"] = "discoverDevices";
+            cmd["description"] = "POST /api/bluetooth/scan then GET /api/bluetooth/devices.";
+        }
+        {
+            JsonObject cmd = btCmds.add<JsonObject>();
+            cmd["name"] = "connectDevice";
+            cmd["description"] = "POST /api/bluetooth/connect with target address.";
+        }
+
+        #if defined(ENABLE_BLUETOOTH_AUDIO_TTS)
+        auto btAudioObj = services.add<JsonObject>();
+        btAudioObj["name"] = "BluetoothAudioTtsService";
+        btAudioObj["description"] = "Find speakers/headsets, connect target, queue MP3 playback, and invoke TTS.";
+        String btAudioStatus = (globalBluetoothAudioTtsService != nullptr) ? "ready" : "down";
+        if (serviceBusyMap.count("BluetoothAudioTtsService") && serviceBusyMap["BluetoothAudioTtsService"]) btAudioStatus = "busy";
+        btAudioObj["status"] = btAudioStatus;
+        auto btAudioCmds = btAudioObj["commands"].to<JsonArray>();
+        {
+            JsonObject cmd = btAudioCmds.add<JsonObject>();
+            cmd["name"] = "discover";
+            cmd["description"] = "POST /api/bluetooth-audio/discover";
+        }
+        {
+            JsonObject cmd = btAudioCmds.add<JsonObject>();
+            cmd["name"] = "listTargets";
+            cmd["description"] = "GET /api/bluetooth-audio/targets";
+        }
+        {
+            JsonObject cmd = btAudioCmds.add<JsonObject>();
+            cmd["name"] = "connect";
+            cmd["description"] = "POST /api/bluetooth-audio/connect";
+        }
+        {
+            JsonObject cmd = btAudioCmds.add<JsonObject>();
+            cmd["name"] = "playMp3";
+            cmd["description"] = "POST /api/bluetooth-audio/play-mp3";
+        }
+        {
+            JsonObject cmd = btAudioCmds.add<JsonObject>();
+            cmd["name"] = "tts";
+            cmd["description"] = "POST /api/bluetooth-audio/tts";
+        }
+        {
+            JsonObject cmd = btAudioCmds.add<JsonObject>();
+            cmd["name"] = "ui";
+            cmd["description"] = "GET /BTConnect serves the bluetooth connect web UI.";
+        }
+        #endif
+        #endif
+
         // Sensor Service (example, static)
         auto sensor = services.add<JsonObject>();
         sensor["name"] = "SensorService";
@@ -1418,8 +1484,25 @@ void setupWebServer() {
         }
         #ifdef ENABLE_PMACHINE
         if (!firstService) json += ",";
+        #ifndef DISABLE_PMACHINE_ROUTES
         json += "\"pmachine\"";
         json += ",\"GenericRouterService\"";
+        firstService = false;
+        #endif
+        #endif
+        #ifdef ENABLE_BLUETOOTH_DEVICES
+        if (!firstService) json += ",";
+        json += "\"BluetoothService\"";
+        firstService = false;
+        #if defined(ENABLE_BLUETOOTH_AUDIO_TTS)
+            if (!firstService) json += ",";
+            json += "\"BluetoothAudioTtsService\"";
+            firstService = false;
+        #endif
+        #endif
+        #ifdef ENABLE_EVENT_SCHEDULER
+        if (!firstService) json += ",";
+        json += "\"EventSchedulerService\"";
         firstService = false;
         #endif
         json += "]";
@@ -1442,6 +1525,14 @@ void setupWebServer() {
         String json;
         serializeJson(doc, json);
         request->send(200, "application/json", json);
+    });
+
+    server.on("/BTConnect", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (!LittleFS.exists("/web/BTConnect.html")) {
+            request->send(404, "text/plain", "BTConnect page not found in LittleFS at /web/BTConnect.html");
+            return;
+        }
+        request->send(LittleFS, "/web/BTConnect.html", "text/html");
     });
 
     server.on("/supervisor/config", HTTP_POST, [](AsyncWebServerRequest *request){
@@ -1589,7 +1680,9 @@ void setupWebServer() {
 
     registerFFSRoutes(server, federatedFS);
 #ifdef ENABLE_PMACHINE
+#ifndef DISABLE_PMACHINE_ROUTES
     registerPMachineRoutes(server, pm, &federatedFS);
+#endif
 #endif
     server.onNotFound(notFound);
     
@@ -1607,6 +1700,24 @@ void setupWebServer() {
     registerPrinterRoutes(server);
     Serial.println("[PRINTER] Printer/Scanner routes registered");
 #endif
+
+#ifdef ENABLE_BLUETOOTH_DEVICES
+    registerBluetoothRoutes(server);
+    Serial.println("[BLUETOOTH] Bluetooth routes registered");
+#if defined(ENABLE_BLUETOOTH_AUDIO_TTS)
+    if (globalBluetoothAudioTtsService) {
+        registerBluetoothAudioTtsRoutes(server, *globalBluetoothAudioTtsService);
+        Serial.println("[BLUETOOTH-AUDIO] Bluetooth Audio/TTS routes registered");
+    }
+#endif
+#ifdef ENABLE_EVENT_SCHEDULER
+    registerSchedulerRoutes(server);
+    Serial.println("[SCHEDULER] Scheduler routes registered");
+#endif
+#endif
+
+    registerWiFiProvisioningRoutes(server);
+    Serial.println("[WIFI-PROV] WiFi provisioning routes registered");
     
     server.begin();
 }
@@ -1733,7 +1844,8 @@ bool syncTopologyUdpPortsFromAggregator() {
     for (JsonObject node : doc.as<JsonArray>()) {
         const String nodeId = String(node["nodeId"] | "");
         const String nodeDisplayName = String(node["nodeName"] | "");
-        const String nodeDetailsName = String(node["details"]["nodeName"] | "");
+        const JsonVariantConst details = node["details"];
+        const String nodeDetailsName = details.is<JsonObjectConst>() ? String(details["nodeName"] | "") : String();
         const String nodeIp = String(node["ip"] | "");
 
         const bool isSelf =
@@ -2008,7 +2120,6 @@ void setup() {
         Serial.print("[SUPERVISOR] heartbeat target: ");
         Serial.println(supervisorHeartbeatUrl);
     }
-    syncTopologyUdpPortsFromAggregator();
     udpRuntimeEnsureReady(runtimeUdpParentPort, runtimeUdpSiblingPort);
     udpRuntimeResetBeaconState();
     announcePresence();
@@ -2177,6 +2288,20 @@ void setup() {
         delete globalBluetoothService;
         globalBluetoothService = nullptr;
     }
+
+#if defined(ENABLE_BLUETOOTH_AUDIO_TTS)
+    if (globalBluetoothService) {
+        Serial.println("[BOOT] Initializing Bluetooth Audio/TTS service...");
+        globalBluetoothAudioTtsService = new BluetoothAudioTtsService();
+        if (globalBluetoothAudioTtsService && globalBluetoothAudioTtsService->begin()) {
+            Serial.println("[BLUETOOTH-AUDIO] Bluetooth Audio/TTS service initialized successfully");
+        } else {
+            Serial.println("[BLUETOOTH-AUDIO] Bluetooth Audio/TTS service initialization failed");
+            delete globalBluetoothAudioTtsService;
+            globalBluetoothAudioTtsService = nullptr;
+        }
+    }
+#endif
 #endif
 
 #ifdef ENABLE_EVENT_SCHEDULER
@@ -2184,6 +2309,18 @@ void setup() {
     globalEventScheduler = new EventScheduler();
     if (globalEventScheduler && globalEventScheduler->begin()) {
         Serial.println("[SCHEDULER] Event Scheduler service initialized successfully");
+#ifdef ENABLE_BLUETOOTH_DEVICES
+        globalEventScheduler->setEventExecutor([](const ScheduledEvent& event) -> bool {
+            if (!globalBluetoothService) {
+                return false;
+            }
+            if (!event.deviceType.equalsIgnoreCase("bluetooth") && !event.deviceType.equalsIgnoreCase("ble")) {
+                return false;
+            }
+            return globalBluetoothService->controlDevice(event.deviceId, event.action, event.params);
+        });
+        Serial.println("[SCHEDULER] Bluetooth executor bridge enabled");
+#endif
     } else {
         Serial.println("[SCHEDULER] Event Scheduler service initialization failed");
         delete globalEventScheduler;
@@ -2198,10 +2335,12 @@ void setup() {
         firstAdvertised = false;
     }
 #ifdef ENABLE_PMACHINE
+#ifndef DISABLE_PMACHINE_ROUTES
     if (!firstAdvertised) advertisedServices += ", ";
     advertisedServices += "pmachine";
     advertisedServices += ", GenericRouterService";
     firstAdvertised = false;
+#endif
 #endif
 #ifdef ENABLE_CAMERA
     if (!firstAdvertised) advertisedServices += ", ";
@@ -2217,6 +2356,11 @@ void setup() {
     if (!firstAdvertised) advertisedServices += ", ";
     advertisedServices += "BluetoothService";
     firstAdvertised = false;
+#if defined(ENABLE_BLUETOOTH_AUDIO_TTS)
+    if (!firstAdvertised) advertisedServices += ", ";
+    advertisedServices += "BluetoothAudioTtsService";
+    firstAdvertised = false;
+#endif
 #endif
 #ifdef ENABLE_EVENT_SCHEDULER
     if (!firstAdvertised) advertisedServices += ", ";
@@ -2250,6 +2394,11 @@ void loop() {
     if (globalBluetoothService) {
         globalBluetoothService->loop();
     }
+#if defined(ENABLE_BLUETOOTH_AUDIO_TTS)
+    if (globalBluetoothAudioTtsService) {
+        globalBluetoothAudioTtsService->loop();
+    }
+#endif
 #endif
 
 #ifdef ENABLE_EVENT_SCHEDULER
@@ -2287,12 +2436,16 @@ void loop() {
         NODE_BEACON_ACKED_INTERVAL_MS,
         NODE_BEACON_UNACKED_INTERVAL_MS);
     if (millis() - lastAnnounce > beaconInterval) {
-        announcePresence();
+        if (!isBonecrusherRole()) {
+            announcePresence();
+        }
         lastAnnounce = millis();
     }
 
     if (millis() - lastTopologySyncMs > TOPOLOGY_SYNC_INTERVAL_MS) {
-        syncTopologyUdpPortsFromAggregator();
+        if (!isBonecrusherRole()) {
+            syncTopologyUdpPortsFromAggregator();
+        }
         lastTopologySyncMs = millis();
     }
 

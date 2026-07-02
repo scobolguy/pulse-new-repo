@@ -1,7 +1,7 @@
 // Simple router component to handle / and /x routes
 import React, { useState, useEffect } from 'react';
 import App from './App';
-import Workbench from './workbench/Workbench';
+import Workbench from '../workbench/Workbench';
 
 /**
  * Simple hash-based router
