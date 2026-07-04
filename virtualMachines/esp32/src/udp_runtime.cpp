@@ -135,6 +135,15 @@ void processIncomingOnSocket(WiFiUDP& socket, const UdpRuntimeContext& context) 
     if (!err && context.nodeName && context.computeNodeCapabilityHash) {
         const String kind = doc["kind"].as<String>();
 
+        if (kind.equalsIgnoreCase("doorbellAlert")
+            || kind.equalsIgnoreCase("cameraAlert")
+            || kind.equalsIgnoreCase("personAlert")) {
+            if (context.onAlertMessage) {
+                context.onAlertMessage(msg, socket.remoteIP(), socket.remotePort());
+            }
+            return;
+        }
+
         if (kind.equalsIgnoreCase("nodeBeaconAck")) {
             nodeBeaconAcknowledged = true;
             nodeBeaconLastAckAt = millis();

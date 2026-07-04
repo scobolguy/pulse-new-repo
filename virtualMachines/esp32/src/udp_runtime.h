@@ -15,6 +15,7 @@ struct UdpRuntimeContext {
 
     std::map<String, DiscoveredNode>* discoveredNodeTable = nullptr;
     String (*computeNodeCapabilityHash)() = nullptr;
+    void (*onAlertMessage)(const String& payload, IPAddress sourceIp, uint16_t sourcePort) = nullptr;
 };
 
 void udpRuntimeConfigureWifiCredentials(const String& ssid, const String& password);

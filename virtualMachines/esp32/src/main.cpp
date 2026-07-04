@@ -24,6 +24,7 @@ DeviceConfiguration deviceConfig;
 #include "ffs/FederatedFileSystem.h"
 #include "ffs/FederatedFileSystemRoutes.h"
 #include "profile_config.h"
+#include "broker_client.h"
 #include "provision_routes.h"
 #include "wifi_provisioning.h"
 #include "cluster_routes.h"
@@ -87,6 +88,31 @@ int relayPinNumber = 5;
 #endif
 bool relayStateOn = false;
 std::map<String, bool> serviceBusyMap;
+
+#ifndef DOORBELL_BUTTON_PIN
+#define DOORBELL_BUTTON_PIN 13
+#endif
+
+#ifndef DOORBELL_BUTTON_ACTIVE_LEVEL
+#define DOORBELL_BUTTON_ACTIVE_LEVEL LOW
+#endif
+
+#ifndef DOORBELL_BUTTON_DEBOUNCE_MS
+#define DOORBELL_BUTTON_DEBOUNCE_MS 250
+#endif
+
+#if defined(ENABLE_DOORBELL_CAMERA)
+bool doorbellButtonLastReading = false;
+bool doorbellButtonStablePressed = false;
+unsigned long doorbellButtonLastChangeMs = 0;
+unsigned long doorbellLastMotionCheckMs = 0;
+#endif
+
+#if defined(ENABLE_DOORBELL_DISPLAY)
+String doorbellLastAlertType;
+String doorbellLastSnapshotUrl;
+unsigned long doorbellLastAlertMs = 0;
+#endif
 
 #ifdef ENABLE_PMACHINE
 pmachine::PMachine pm;
@@ -238,6 +264,173 @@ String computeNodeCapabilityHash() {
     hash += nodeName;
     return hash;
 }
+
+#if defined(ENABLE_DOORBELL_CAMERA)
+void emitDoorbellAlert(const char* eventType, const MotionEvent* motionEvent = nullptr) {
+    JsonDocument doc;
+    doc["kind"] = "doorbellAlert";
+    doc["eventType"] = eventType;
+    doc["nodeName"] = nodeName;
+    doc["deviceRole"] = deviceRole;
+    doc["cameraIp"] = WiFi.localIP().toString();
+    doc["snapshotUrl"] = String("http://") + WiFi.localIP().toString() + "/api/camera/capture";
+    doc["timestamp"] = millis();
+    if (motionEvent) {
+        doc["changedBlocks"] = motionEvent->changedBlocks;
+        doc["changePercentage"] = motionEvent->changePercentage;
+        if (motionEvent->snapshotPath.length() > 0) {
+            doc["snapshotPath"] = motionEvent->snapshotPath;
+        }
+    }
+
+    String payload;
+    serializeJson(doc, payload);
+
+    if (globalBrokerClient) {
+        globalBrokerClient->broadcastMessage("alerts", payload.c_str());
+    }
+
+    const uint16_t alertPort = udpRuntimeGetBoundParentPort();
+    if (alertPort > 0) {
+        WiFiUDP& udp = udpRuntimeSocket();
+        udp.beginPacket(IPAddress(255, 255, 255, 255), alertPort);
+        udp.write((const uint8_t*)payload.c_str(), payload.length());
+        udp.endPacket();
+    }
+
+    Serial.printf("[DOORBELL] Alert emitted: %s\n", eventType);
+}
+
+void onDoorbellMotionDetected(const MotionEvent& event) {
+    emitDoorbellAlert("person", &event);
+}
+
+void pollDoorbellButton() {
+    const bool readingPressed = digitalRead(DOORBELL_BUTTON_PIN) == DOORBELL_BUTTON_ACTIVE_LEVEL;
+    const unsigned long now = millis();
+
+    if (readingPressed != doorbellButtonLastReading) {
+        doorbellButtonLastReading = readingPressed;
+        doorbellButtonLastChangeMs = now;
+    }
+
+    if ((now - doorbellButtonLastChangeMs) < DOORBELL_BUTTON_DEBOUNCE_MS) {
+        return;
+    }
+
+    if (readingPressed != doorbellButtonStablePressed) {
+        doorbellButtonStablePressed = readingPressed;
+        if (doorbellButtonStablePressed) {
+            emitDoorbellAlert("doorbell");
+        }
+    }
+}
+#endif
+
+#if defined(ENABLE_DOORBELL_DISPLAY)
+bool fetchUrlToBuffer(const String& url, uint8_t** buffer, size_t* length) {
+    if (!buffer || !length) {
+        return false;
+    }
+
+    *buffer = nullptr;
+    *length = 0;
+
+    HTTPClient http;
+#if defined(ARDUINO_ARCH_ESP8266)
+    WiFiClient client;
+    if (!http.begin(client, url)) {
+#else
+    if (!http.begin(url)) {
+#endif
+        return false;
+    }
+
+    http.setTimeout(5000);
+    const int code = http.GET();
+    if (code != HTTP_CODE_OK) {
+        http.end();
+        return false;
+    }
+
+    const int totalLength = http.getSize();
+    if (totalLength <= 0) {
+        http.end();
+        return false;
+    }
+
+    uint8_t* data = static_cast<uint8_t*>(malloc(static_cast<size_t>(totalLength)));
+    if (!data) {
+        http.end();
+        return false;
+    }
+
+    WiFiClient* stream = http.getStreamPtr();
+    size_t offset = 0;
+    while (http.connected() && offset < static_cast<size_t>(totalLength)) {
+        const size_t available = stream->available();
+        if (available == 0) {
+            delay(1);
+            continue;
+        }
+
+        const size_t toRead = min(available, static_cast<size_t>(totalLength) - offset);
+        const size_t readCount = stream->readBytes(reinterpret_cast<char*>(data + offset), toRead);
+        offset += readCount;
+    }
+
+    http.end();
+
+    if (offset != static_cast<size_t>(totalLength)) {
+        free(data);
+        return false;
+    }
+
+    *buffer = data;
+    *length = offset;
+    return true;
+}
+
+void handleDoorbellAlertPacket(const String& payload, IPAddress sourceIp, uint16_t sourcePort) {
+    JsonDocument doc;
+    if (deserializeJson(doc, payload)) {
+        Serial.println("[DOORBELL] Ignoring malformed alert payload");
+        return;
+    }
+
+    const String eventType = String(doc["eventType"] | doc["kind"] | "person");
+    const String snapshotUrl = String(doc["snapshotUrl"] | "");
+
+    doorbellLastAlertType = eventType;
+    doorbellLastSnapshotUrl = snapshotUrl;
+    doorbellLastAlertMs = millis();
+
+    Serial.printf("[DOORBELL] Alert received from %s:%u type=%s\n", sourceIp.toString().c_str(), sourcePort, eventType.c_str());
+
+    if (!displayService.isInitialized()) {
+        return;
+    }
+
+    if (snapshotUrl.length() == 0) {
+        displayService.showInfo("Doorbell alert received");
+        return;
+    }
+
+    uint8_t* jpegBuffer = nullptr;
+    size_t jpegLength = 0;
+    if (!fetchUrlToBuffer(snapshotUrl, &jpegBuffer, &jpegLength)) {
+        displayService.showError("Failed to fetch camera JPEG");
+        return;
+    }
+
+    const bool shown = displayService.showJpeg(jpegBuffer, jpegLength, 0, 0);
+    free(jpegBuffer);
+
+    if (!shown) {
+        displayService.showError("Failed to render camera JPEG");
+    }
+}
+#endif
 
 void updateProbeResult(SupervisorProbeState& probe, bool healthy, int statusCode, const String& errorText) {
     probe.healthy = healthy;
@@ -1440,7 +1633,38 @@ void setupWebServer() {
 
     // GET /sensor/read?pin=4&type=DHT22&unit=C
     server.on("/status", HTTP_GET, [](AsyncWebServerRequest *request){
-        String json = "{";
+        const uint32_t freeHeap = ESP.getFreeHeap();
+        if (freeHeap < 70000) {
+            char fallback[256];
+            snprintf(
+                fallback,
+                sizeof(fallback),
+                "{\"status\":\"degraded\",\"error\":\"low_heap\",\"freeHeap\":%lu,\"nodeName\":\"%s\",\"ip\":\"%s\"}",
+                static_cast<unsigned long>(freeHeap),
+                nodeName.c_str(),
+                WiFi.localIP().toString().c_str());
+            request->send(200, "application/json", fallback);
+            return;
+        }
+
+        const size_t maxDiscoveredNodesInStatus = 64;
+        const size_t estimatedNodeBytes = 80;
+        String json;
+        const size_t reserveBytes = 2200 + (std::min(discoveredNodeTable.size(), maxDiscoveredNodesInStatus) * estimatedNodeBytes);
+        if (!json.reserve(reserveBytes)) {
+            char fallback[256];
+            snprintf(
+                fallback,
+                sizeof(fallback),
+                "{\"status\":\"degraded\",\"error\":\"reserve_failed\",\"freeHeap\":%lu,\"nodeName\":\"%s\",\"ip\":\"%s\"}",
+                static_cast<unsigned long>(ESP.getFreeHeap()),
+                nodeName.c_str(),
+                WiFi.localIP().toString().c_str());
+            request->send(200, "application/json", fallback);
+            return;
+        }
+
+        json = "{";
         #if defined(ESP32)
             File dir = LittleFS.open("/devices", "r");
         #elif defined(ESP8266)
@@ -1508,12 +1732,21 @@ void setupWebServer() {
         json += "]";
         json += ",\"discoveredNodes\":[";
         bool first = true;
+        size_t emittedNodes = 0;
         for (const auto& pair : discoveredNodeTable) {
+            if (emittedNodes >= maxDiscoveredNodesInStatus) {
+                break;
+            }
             if (!first) json += ",";
             json += "{\"mac\":\"" + pair.second.mac + "\",\"ip\":\"" + pair.second.ip + "\"}";
             first = false;
+            emittedNodes++;
         }
-        json += "]}";
+        json += "]";
+        json += ",\"discoveredNodeCount\":" + String((unsigned long)discoveredNodeTable.size());
+        json += ",\"discoveredNodesTruncated\":";
+        json += (discoveredNodeTable.size() > emittedNodes) ? "true" : "false";
+        json += "}";
         request->send(200, "application/json", json);
     });
 
@@ -1527,13 +1760,93 @@ void setupWebServer() {
         request->send(200, "application/json", json);
     });
 
-    server.on("/BTConnect", HTTP_GET, [](AsyncWebServerRequest *request){
-        if (!LittleFS.exists("/web/BTConnect.html")) {
-            request->send(404, "text/plain", "BTConnect page not found in LittleFS at /web/BTConnect.html");
-            return;
+        auto serveBtConnectPage = [](AsyncWebServerRequest *request) {
+            #ifndef FORCE_INLINE_BTCONNECT
+                if (LittleFS.exists("/web/BTConnect.html")) {
+                        request->send(LittleFS, "/web/BTConnect.html", "text/html");
+                        return;
+                }
+            #endif
+
+                static const char* kInlineBtConnectPage = R"HTML(
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>BTConnect</title>
+    <style>
+        body { font-family: Segoe UI, Arial, sans-serif; margin: 16px; background: #0f172a; color: #e2e8f0; }
+        h1 { margin: 0 0 12px 0; }
+        .row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+        button { padding: 10px 12px; border-radius: 8px; border: 1px solid #334155; background: #1e293b; color: #e2e8f0; cursor: pointer; }
+        input, select { padding: 8px; border-radius: 6px; border: 1px solid #334155; background: #0b1220; color: #e2e8f0; }
+        pre { background: #020617; border: 1px solid #334155; border-radius: 8px; padding: 12px; min-height: 240px; overflow: auto; }
+        .hint { color: #93c5fd; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <h1>BTConnect</h1>
+    <div class="hint">Fallback page served from firmware. For static file mode, upload LittleFS data to include /web/BTConnect.html.</div>
+
+    <div class="row">
+        <button id="discover">Discover (Audio)</button>
+        <button id="targets">List Audio Targets</button>
+        <button id="status">Audio Status</button>
+    </div>
+
+    <div class="row">
+        <input id="address" placeholder="AA:BB:CC:DD:EE:FF" size="22" />
+        <select id="transport">
+            <option value="classic">classic</option>
+            <option value="ble">ble</option>
+        </select>
+        <button id="connect">Connect</button>
+        <button id="disconnect">Disconnect</button>
+    </div>
+
+    <pre id="out">Ready\n</pre>
+
+    <script>
+        const out = document.getElementById('out');
+        function log(obj) {
+            out.textContent = JSON.stringify(obj, null, 2) + "\n" + out.textContent;
         }
-        request->send(LittleFS, "/web/BTConnect.html", "text/html");
-    });
+        async function post(path, body) {
+            const data = new URLSearchParams(body || {});
+            const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: data });
+            const text = await res.text();
+            let parsed = text;
+            try { parsed = JSON.parse(text); } catch {}
+            return { ok: res.ok, status: res.status, body: parsed };
+        }
+        async function get(path) {
+            const res = await fetch(path);
+            const text = await res.text();
+            let parsed = text;
+            try { parsed = JSON.parse(text); } catch {}
+            return { ok: res.ok, status: res.status, body: parsed };
+        }
+
+        document.getElementById('discover').onclick = async () => log(await post('/api/bluetooth-audio/discover', { duration: 10 }));
+        document.getElementById('targets').onclick = async () => log(await get('/api/bluetooth-audio/targets'));
+        document.getElementById('status').onclick = async () => log(await get('/api/bluetooth-audio/status'));
+        document.getElementById('connect').onclick = async () => {
+            const address = document.getElementById('address').value.trim();
+            const transport = document.getElementById('transport').value;
+            log(await post('/api/bluetooth-audio/connect', { address, transport }));
+        };
+        document.getElementById('disconnect').onclick = async () => log(await post('/api/bluetooth-audio/disconnect', {}));
+    </script>
+</body>
+</html>
+)HTML";
+
+                request->send(200, "text/html", kInlineBtConnectPage);
+        };
+
+    server.on("/BTConnect", HTTP_GET, serveBtConnectPage);
+    server.on("/BRConnect", HTTP_GET, serveBtConnectPage);
 
     server.on("/supervisor/config", HTTP_POST, [](AsyncWebServerRequest *request){
         if (!isSupervisorRole()) {
@@ -1583,6 +1896,7 @@ void setupWebServer() {
         request->send(200, "application/json", json);
     });
 
+    #ifndef DISABLE_BONECRUSHER
     server.on("/bonecrusher/worker/status", HTTP_GET, [](AsyncWebServerRequest *request){
         JsonDocument doc;
         doc["role"] = deviceRole;
@@ -1677,8 +1991,11 @@ void setupWebServer() {
         serializeJson(doc, json);
         request->send(200, "application/json", json);
     });
+    #endif
 
+    #ifndef DISABLE_FFS_ROUTES
     registerFFSRoutes(server, federatedFS);
+    #endif
 #ifdef ENABLE_PMACHINE
 #ifndef DISABLE_PMACHINE_ROUTES
     registerPMachineRoutes(server, pm, &federatedFS);
@@ -1702,8 +2019,10 @@ void setupWebServer() {
 #endif
 
 #ifdef ENABLE_BLUETOOTH_DEVICES
+#if !defined(DISABLE_BLE_AUDIO_TTS)
     registerBluetoothRoutes(server);
     Serial.println("[BLUETOOTH] Bluetooth routes registered");
+#endif
 #if defined(ENABLE_BLUETOOTH_AUDIO_TTS)
     if (globalBluetoothAudioTtsService) {
         registerBluetoothAudioTtsRoutes(server, *globalBluetoothAudioTtsService);
@@ -1716,8 +2035,12 @@ void setupWebServer() {
 #endif
 #endif
 
+    #ifndef DISABLE_WIFI_PROVISIONING
     registerWiFiProvisioningRoutes(server);
     Serial.println("[WIFI-PROV] WiFi provisioning routes registered");
+    #else
+    Serial.println("[WIFI-PROV] Disabled by build flag");
+    #endif
     
     server.begin();
 }
@@ -2098,15 +2421,22 @@ void setup() {
         nodeName += macSuffix;
     }
 
+    #ifndef DISABLE_BONECRUSHER
     initializeBonecrusherWorkerDefaults();
     loadBonecrusherWorkerConfig();
     if (bonecrusherConfig.workerId.length() == 0) {
         bonecrusherConfig.workerId = nodeName;
     }
+    #endif
 
     // 6. Set hostname, start UDP, and announce presence (must be after WiFi is up and nodeName is set)
     WiFi.setHostname(nodeName.c_str());
+    #ifndef DISABLE_OTA
     setupOtaService();
+    #else
+    otaEnabled = false;
+    Serial.println("[OTA] Disabled by build flag");
+    #endif
     configureSupervisorTargets();
     loadSupervisorConfig();
     if (isSupervisorRole()) {
@@ -2157,12 +2487,36 @@ void setup() {
 #ifdef ENABLE_CAMERA
     Serial.println("[BOOT] Initializing camera service...");
     CameraConfig cameraConfig = CameraService::getDefaultConfig();
+#if defined(ENABLE_DOORBELL_CAMERA)
+    cameraConfig.resolution = RES_QVGA;
+    cameraConfig.quality = QUALITY_MEDIUM;
+#else
     cameraConfig.resolution = RES_SVGA;
     cameraConfig.quality = QUALITY_MEDIUM;
+#endif
     
     if (cameraService.begin(cameraConfig)) {
         Serial.println("[CAMERA] Camera initialized successfully");
         cameraService.setFFS(&federatedFS);
+#if defined(ENABLE_DOORBELL_CAMERA)
+        pinMode(DOORBELL_BUTTON_PIN, INPUT_PULLUP);
+        doorbellButtonLastReading = digitalRead(DOORBELL_BUTTON_PIN) == DOORBELL_BUTTON_ACTIVE_LEVEL;
+        doorbellButtonStablePressed = doorbellButtonLastReading;
+        doorbellButtonLastChangeMs = millis();
+
+        MotionDetectionConfig motionConfig;
+        motionConfig.enabled = true;
+        motionConfig.threshold = 20;
+        motionConfig.minBlocks = 10;
+        motionConfig.blockSize = 16;
+        motionConfig.cooldownMs = 1500;
+        if (cameraService.enableMotionDetection(motionConfig)) {
+            cameraService.setMotionCallback(onDoorbellMotionDetected);
+            Serial.println("[DOORBELL] Motion detection enabled");
+        } else {
+            Serial.println("[DOORBELL] Motion detection failed to start");
+        }
+#endif
     } else {
         Serial.println("[CAMERA] Camera initialization failed");
     }
@@ -2279,6 +2633,7 @@ void setup() {
 #endif
 
 #ifdef ENABLE_BLUETOOTH_DEVICES
+#if !defined(DISABLE_BLE_AUDIO_TTS)
     Serial.println("[BOOT] Initializing Bluetooth service...");
     globalBluetoothService = new BluetoothService();
     if (globalBluetoothService && globalBluetoothService->begin()) {
@@ -2288,18 +2643,31 @@ void setup() {
         delete globalBluetoothService;
         globalBluetoothService = nullptr;
     }
+#endif
 
 #if defined(ENABLE_BLUETOOTH_AUDIO_TTS)
+#if !defined(DISABLE_BLE_AUDIO_TTS)
     if (globalBluetoothService) {
-        Serial.println("[BOOT] Initializing Bluetooth Audio/TTS service...");
-        globalBluetoothAudioTtsService = new BluetoothAudioTtsService();
-        if (globalBluetoothAudioTtsService && globalBluetoothAudioTtsService->begin()) {
-            Serial.println("[BLUETOOTH-AUDIO] Bluetooth Audio/TTS service initialized successfully");
-        } else {
-            Serial.println("[BLUETOOTH-AUDIO] Bluetooth Audio/TTS service initialization failed");
-            delete globalBluetoothAudioTtsService;
-            globalBluetoothAudioTtsService = nullptr;
-        }
+        globalBluetoothService->setScanInterval(120000);
+        globalBluetoothService->setScanDuration(5);
+        globalBluetoothService->setAutoDiscovery(true);
+        Serial.printf("[BLUETOOTH] Audio profile BLE scan config: auto=ON interval=%dms duration=%ds freeHeap=%lu\n",
+                      globalBluetoothService->getScanInterval(),
+                      globalBluetoothService->getScanDuration(),
+                      static_cast<unsigned long>(ESP.getFreeHeap()));
+    }
+#else
+    Serial.println("[BLUETOOTH] BLE device service disabled for classic-only audio profile");
+#endif
+
+    Serial.println("[BOOT] Initializing Bluetooth Audio/TTS service...");
+    globalBluetoothAudioTtsService = new BluetoothAudioTtsService();
+    if (globalBluetoothAudioTtsService && globalBluetoothAudioTtsService->begin()) {
+        Serial.println("[BLUETOOTH-AUDIO] Bluetooth Audio/TTS service initialized successfully");
+    } else {
+        Serial.println("[BLUETOOTH-AUDIO] Bluetooth Audio/TTS service initialization failed");
+        delete globalBluetoothAudioTtsService;
+        globalBluetoothAudioTtsService = nullptr;
     }
 #endif
 #endif
@@ -2353,9 +2721,11 @@ void setup() {
     firstAdvertised = false;
 #endif
 #ifdef ENABLE_BLUETOOTH_DEVICES
+#if !defined(DISABLE_BLE_AUDIO_TTS)
     if (!firstAdvertised) advertisedServices += ", ";
     advertisedServices += "BluetoothService";
     firstAdvertised = false;
+#endif
 #if defined(ENABLE_BLUETOOTH_AUDIO_TTS)
     if (!firstAdvertised) advertisedServices += ", ";
     advertisedServices += "BluetoothAudioTtsService";
@@ -2372,7 +2742,7 @@ void setup() {
 
     // 8. Web server for node name config (Async)
     setupWebServer();
-#if defined(ESP32)
+#if defined(ESP32) && !defined(DISABLE_BONECRUSHER)
     startBonecrusherWorkerTaskIfNeeded();
 #endif
 }
@@ -2380,9 +2750,11 @@ void setup() {
 void loop() {
     udpRuntimeMaintainConnectivity(runtimeUdpParentPort, runtimeUdpSiblingPort, WIFI_RECONNECT_INTERVAL);
 
+    #ifndef DISABLE_OTA
     if (otaEnabled) {
         ArduinoOTA.handle();
     }
+    #endif
 
 #ifdef ENABLE_AWS_IOT
     // Update AWS IoT Gateway (process MQTT messages)
@@ -2391,9 +2763,11 @@ void loop() {
 
 #ifdef ENABLE_BLUETOOTH_DEVICES
     // Update Bluetooth service (handle scanning and device discovery)
+#if !defined(DISABLE_BLE_AUDIO_TTS)
     if (globalBluetoothService) {
         globalBluetoothService->loop();
     }
+#endif
 #if defined(ENABLE_BLUETOOTH_AUDIO_TTS)
     if (globalBluetoothAudioTtsService) {
         globalBluetoothAudioTtsService->loop();
@@ -2416,9 +2790,24 @@ void loop() {
     udpContext.firmwareTrack = firmwareTrack;
     udpContext.discoveredNodeTable = &discoveredNodeTable;
     udpContext.computeNodeCapabilityHash = computeNodeCapabilityHash;
+#if defined(ENABLE_DOORBELL_DISPLAY)
+    udpContext.onAlertMessage = handleDoorbellAlertPacket;
+#endif
     udpRuntimeProcessIncoming(udpContext, runtimeUdpParentPort, runtimeUdpSiblingPort);
         /* UDP announcement disabled */
         // processIncomingUDP();
+
+#if defined(ENABLE_DOORBELL_CAMERA)
+    pollDoorbellButton();
+    if (millis() - doorbellLastMotionCheckMs > 500) {
+        MotionEvent motionEvent;
+        if (cameraService.checkMotion(motionEvent)) {
+            Serial.printf("[DOORBELL] Person alert: %d blocks changed (%.1f%%)\n",
+                          motionEvent.changedBlocks, motionEvent.changePercentage);
+        }
+        doorbellLastMotionCheckMs = millis();
+    }
+#endif
 
     // Remove nodes not seen in last 10 minutes (600000 ms)
     unsigned long now = millis();

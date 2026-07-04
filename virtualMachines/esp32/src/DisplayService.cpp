@@ -4,9 +4,24 @@
 #include "serial_compat.h"
 #include "DisplayService.h"
 #include <stdarg.h>
+#include <TJpg_Decoder.h>
 
 // Global instance
 DisplayService displayService;
+
+namespace {
+DisplayService* gJpegDisplayService = nullptr;
+
+bool jpegDrawCallback(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
+    if (!gJpegDisplayService) {
+        return false;
+    }
+
+    TFT_eSPI* tft = gJpegDisplayService->getTFT();
+    tft->pushImage(x, y, w, h, bitmap);
+    return true;
+}
+}
 
 // TFT_eSPI pin configuration is in User_Setup.h or platformio.ini
 
@@ -120,6 +135,9 @@ bool DisplayService::begin() {
     delay(3000);
     
     Serial.println("[Display] ===== DISPLAY INIT COMPLETE =====");
+    gJpegDisplayService = this;
+    TJpgDec.setCallback(jpegDrawCallback);
+    TJpgDec.setSwapBytes(true);
     
 #ifndef DISPLAY_NO_LVGL
     // Initialize LVGL
@@ -413,6 +431,13 @@ void DisplayService::drawBitmap(int16_t x, int16_t y, const uint8_t* bitmap, int
 void DisplayService::drawRGBBitmap(int16_t x, int16_t y, const uint16_t* bitmap, int16_t w, int16_t h) {
     if (!initialized) return;
     tft.pushImage(x, y, w, h, bitmap);
+}
+
+bool DisplayService::showJpeg(const uint8_t* data, size_t length, int16_t x, int16_t y) {
+    if (!initialized || !data || length == 0) return false;
+
+    clear(COLOR_BLACK);
+    return TJpgDec.drawJpg(x, y, data, length);
 }
 
 bool DisplayService::touchAvailable() {
