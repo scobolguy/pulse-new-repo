@@ -106,6 +106,11 @@ bool BluetoothService::begin() {
 
 void BluetoothService::loop() {
     unsigned long now = millis();
+
+    // Keep internal scan state aligned with NimBLE scanner lifecycle.
+    if (scanning && pBLEScan && !pBLEScan->isScanning()) {
+        scanning = false;
+    }
     
     // Debug: Print loop status every 30 seconds
     static unsigned long lastDebug = 0;
@@ -117,9 +122,29 @@ void BluetoothService::loop() {
     
     // Auto-discovery scan
     if (autoDiscovery && !scanning && (now - lastScan > scanInterval)) {
-        Serial.printf("[BT-DEBUG] Triggering auto-scan (interval elapsed: %lu ms)\n", now - lastScan);
-        startScan(scanDuration);
-        lastScan = now;
+        const uint32_t freeHeap = ESP.getFreeHeap();
+        static unsigned long lastHeapWarn = 0;
+        #if defined(FORCE_INLINE_BTCONNECT) || defined(DISABLE_FFS_ROUTES) || defined(DISABLE_WIFI_PROVISIONING)
+        const uint32_t minHeapForScan = 28000;
+        #else
+        const uint32_t minHeapForScan = 90000;
+        #endif
+
+        if (freeHeap < minHeapForScan) {
+            if (now - lastHeapWarn > 15000) {
+                Serial.printf("[BT-DEBUG] Skipping auto-scan, low heap: %lu bytes (need >= %lu)\n",
+                              static_cast<unsigned long>(freeHeap),
+                              static_cast<unsigned long>(minHeapForScan));
+                lastHeapWarn = now;
+            }
+        } else {
+            Serial.printf("[BT-DEBUG] Triggering auto-scan (interval elapsed: %lu ms, heap: %lu)\n",
+                          now - lastScan,
+                          static_cast<unsigned long>(freeHeap));
+            if (startScan(scanDuration)) {
+                lastScan = now;
+            }
+        }
     }
     
     // Periodic status check and cleanup
@@ -210,6 +235,11 @@ std::vector<BluetoothDevice> BluetoothService::getDevicesByType(BLEDeviceType ty
 bool BluetoothService::startScan(int duration) {
     if (scanning) {
         Serial.println("BluetoothService: Scan already in progress");
+        return false;
+    }
+
+    if (!pBLEScan) {
+        Serial.println("BluetoothService: BLE scanner unavailable");
         return false;
     }
     
@@ -718,6 +748,7 @@ String BluetoothService::toJson() {
 // Alexa Integration
 // ============================================================================
 
+#ifndef DISABLE_ALEXA_INTERFACE
 bool BluetoothService::handleAlexaCommand(const String& address, const String& command,
                                           const JsonDocument& params) {
     return controlDevice(address, command, params);
@@ -776,6 +807,7 @@ JsonDocument BluetoothService::getDeviceAlexaCapabilities(const String& address)
     
     return doc;
 }
+    #endif
 
 // ============================================================================
 // Helper Methods

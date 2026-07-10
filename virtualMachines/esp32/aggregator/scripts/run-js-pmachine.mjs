@@ -318,7 +318,12 @@ function parseProgramMapMappings(programMap) {
       targetPath: String(it?.targetPath || ''),
       conversionRule: String(it?.conversionRule || '')
     })) : [];
-    mappingsById.set(id, { id, items });
+    mappingsById.set(id, {
+      id,
+      sourceTypeId: String(entry.sourceTypeId || ''),
+      targetTypeId: String(entry.targetTypeId || ''),
+      items
+    });
   }
   mappingsById.__globals = Array.isArray(programMap?.globals) ? programMap.globals : [];
   mappingsById.__proceduresByLabel = programMap?.procedures || {};
@@ -343,6 +348,18 @@ function runMappingById(mappingId, sourcePayload, mappingsById) {
     sourceDoc = JSON.parse(sourcePayload);
   } catch {
     sourceDoc = { src: sourcePayload };
+  }
+
+  // For FIN payloads, auto-parse MT103 text when mapper expects swift-mt103 fields.
+  const sourceTypeId = String(mapping.sourceTypeId || '').toLowerCase();
+  if (sourceTypeId === 'swift-mt103' && typeof sourcePayload === 'string') {
+    const normalizedPayload = sourcePayload
+      .replaceAll('\\r\\n', '\n')
+      .replaceAll('\\n', '\n');
+    const hasBlock4 = sourceDoc && typeof sourceDoc === 'object' && sourceDoc.block4 && typeof sourceDoc.block4 === 'object';
+    if (!hasBlock4 && isMT103FinText(normalizedPayload)) {
+      sourceDoc = parseMT103FinText(normalizedPayload);
+    }
   }
 
   const out = {};
@@ -440,6 +457,108 @@ function parseCallOperand(text) {
   };
 }
 
+function splitTopLevelCsv(text) {
+  const src = String(text || '');
+  const out = [];
+  let quote = null;
+  let depth = 0;
+  let token = '';
+
+  for (let i = 0; i < src.length; i += 1) {
+    const ch = src[i];
+    if (quote) {
+      if (ch === '\\' && i + 1 < src.length) {
+        token += ch + src[i + 1];
+        i += 1;
+        continue;
+      }
+      token += ch;
+      if (ch === quote) quote = null;
+      continue;
+    }
+
+    if (ch === '"' || ch === '\'') {
+      quote = ch;
+      token += ch;
+      continue;
+    }
+    if (ch === '(') {
+      depth += 1;
+      token += ch;
+      continue;
+    }
+    if (ch === ')') {
+      depth = Math.max(0, depth - 1);
+      token += ch;
+      continue;
+    }
+    if (ch === ',' && depth === 0) {
+      out.push(trimCopy(token));
+      token = '';
+      continue;
+    }
+    token += ch;
+  }
+
+  if (token.length > 0) out.push(trimCopy(token));
+  return out.filter(Boolean);
+}
+
+function parseGenericOperand(text) {
+  const raw = trimCopy(text || '');
+  return {
+    raw,
+    args: splitTopLevelCsv(raw)
+  };
+}
+
+function tokenValue(token, stack, frame) {
+  const t = trimCopy(token || '');
+  if (!t) return undefined;
+
+  if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith('\'') && t.endsWith('\''))) {
+    return unquote(t);
+  }
+
+  if (/^-?\d+$/.test(t)) return Number.parseInt(t, 10);
+
+  if (t === '$TOP') {
+    return stack.length > 0 ? stack[stack.length - 1] : 0;
+  }
+
+  if (/^[A-Za-z_][A-Za-z0-9_.]*$/.test(t)) {
+    return resolveVar(frame, t);
+  }
+
+  return t;
+}
+
+function assignTarget(frame, target, value, stack) {
+  const t = trimCopy(target || '');
+  if (!t) {
+    stack.push(value);
+    return;
+  }
+  if (t === '$PUSH') {
+    stack.push(value);
+    return;
+  }
+  assignVar(frame, t, value);
+}
+
+function ensureQueueEntry(store, key, defaults) {
+  if (!store.has(key)) {
+    store.set(key, { ...defaults, items: [] });
+  }
+  return store.get(key);
+}
+
+function queueKey(raw, fallbackPrefix) {
+  const t = trimCopy(String(raw || ''));
+  if (!t) return `${fallbackPrefix}:default`;
+  return `${fallbackPrefix}:${t}`;
+}
+
 function parsePcode(text) {
   const instructions = [];
   const labels = new Map();
@@ -481,6 +600,40 @@ function parsePcode(text) {
       || mnemonic === 'PUSH_STR'
     ) {
       instr.operand = parseQuotedOperand(rest);
+    } else if (
+      mnemonic === 'FORK'
+      || mnemonic === 'JOIN_ALL'
+      || mnemonic === 'JOIN'
+      || mnemonic === 'SYNC'
+      || mnemonic === 'FORK_SUBFLOW'
+      || mnemonic === 'BQ_NEW_STATIC'
+      || mnemonic === 'BQ_NEW_DYNAMIC'
+      || mnemonic === 'BQ_ENQ'
+      || mnemonic === 'BQ_DEQ'
+      || mnemonic === 'BQ_PEEK'
+      || mnemonic === 'STK_NEW_STATIC'
+      || mnemonic === 'STK_NEW_DYNAMIC'
+      || mnemonic === 'STK_PUSH'
+      || mnemonic === 'STK_POP'
+      || mnemonic === 'STK_PEEK'
+      || mnemonic === 'PQ_NEW_STATIC'
+      || mnemonic === 'PQ_NEW_DYNAMIC'
+      || mnemonic === 'PQ_ENQ'
+      || mnemonic === 'PQ_DEQ'
+      || mnemonic === 'PQ_PEEK'
+      || mnemonic === 'FILE_OPEN'
+      || mnemonic === 'FILE_READ'
+      || mnemonic === 'FILE_WRITE'
+      || mnemonic === 'FILE_CLOSE'
+      || mnemonic === 'OP_MAP'
+      || mnemonic === 'DL_LOAD_SCHEMA'
+      || mnemonic === 'DL_LOAD_MAP'
+      || mnemonic === 'SRV_CALL'
+      || mnemonic === 'ROUTE_SERVICE'
+      || mnemonic === 'ROUTE_QUEUE'
+      || mnemonic === 'ROUTE_FILE'
+    ) {
+      instr.operand = parseGenericOperand(rest);
     } else if (mnemonic === 'PUSH_INT') {
       instr.operand = Number.parseInt(trimCopy(rest), 10);
     } else if (mnemonic === 'LOAD' || mnemonic === 'STORE') {
@@ -540,6 +693,17 @@ async function executeProgram({ instructions, opcodeMap, mappingsById, inputQueu
   let currentFrame = globalFrame;
   const callStack = [];
   const pendingOrchTasks = [];
+  const taskTable = new Map();
+  const queues = new Map();
+  const stacks = new Map();
+  const pqueues = new Map();
+  const fileHandles = new Map();
+  const schemaHandles = new Map();
+  const mapHandles = new Map();
+  let nextTaskId = 1;
+  let nextFileHandle = 1;
+  let nextSchemaHandle = 1;
+  let nextMapHandle = 1;
   let orchestrationSummary = null;
 
   const requiredMnemonics = [
@@ -710,6 +874,277 @@ async function executeProgram({ instructions, opcodeMap, mappingsById, inputQueu
       continue;
     }
 
+    if (op === 'FORK') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const label = trimCopy(args[0] || instr.operand?.raw || 'task');
+      const taskId = nextTaskId;
+      nextTaskId += 1;
+      taskTable.set(taskId, { id: taskId, label, status: 'done' });
+      stack.push(taskId);
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'JOIN_ALL') {
+      const allDone = [...taskTable.values()].every(t => t.status === 'done');
+      stack.push(allDone ? 1 : 0);
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'JOIN' || op === 'SYNC') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const rawTaskRef = args.length > 0 ? tokenValue(args[0], stack, currentFrame) : stack.pop();
+      const taskId = Number(rawTaskRef || 0);
+
+      let task = null;
+      if (!Number.isNaN(taskId) && taskTable.has(taskId)) {
+        task = taskTable.get(taskId);
+      } else if (typeof rawTaskRef === 'string') {
+        task = [...taskTable.values()].find(t => t.label === rawTaskRef || t.subflow === rawTaskRef) || null;
+      }
+
+      stack.push(task && task.status === 'done' ? 1 : 0);
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'FORK_SUBFLOW') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const subflow = unquote(args[0] || '');
+      const taskId = nextTaskId;
+      nextTaskId += 1;
+      taskTable.set(taskId, { id: taskId, subflow, status: 'done' });
+      stack.push(taskId);
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'BQ_NEW_STATIC' || op === 'BQ_NEW_DYNAMIC') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const key = queueKey(args[0], 'queue');
+      const capacity = op === 'BQ_NEW_STATIC' ? Number(args[1] || 0) || 0 : 0;
+      ensureQueueEntry(queues, key, { type: 'queue', capacity, dynamic: op === 'BQ_NEW_DYNAMIC' });
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'BQ_ENQ') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const key = queueKey(args[0], 'queue');
+      const q = ensureQueueEntry(queues, key, { type: 'queue', capacity: 0, dynamic: true });
+      const value = args.length >= 2 ? tokenValue(args[1], stack, currentFrame) : stack.pop();
+      if (q.capacity > 0 && q.items.length >= q.capacity) {
+        state.__queue_overflow = key;
+      } else {
+        q.items.push(value);
+      }
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'BQ_DEQ' || op === 'BQ_PEEK') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const key = queueKey(args[0], 'queue');
+      const q = ensureQueueEntry(queues, key, { type: 'queue', capacity: 0, dynamic: true });
+      const value = q.items.length > 0 ? (op === 'BQ_DEQ' ? q.items.shift() : q.items[0]) : null;
+      if (value === null || value === undefined) state.__queue_underflow = key;
+      assignTarget(currentFrame, args[1], value ?? 0, stack);
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'STK_NEW_STATIC' || op === 'STK_NEW_DYNAMIC') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const key = queueKey(args[0], 'stack');
+      const capacity = op === 'STK_NEW_STATIC' ? Number(args[1] || 0) || 0 : 0;
+      ensureQueueEntry(stacks, key, { type: 'stack', capacity, dynamic: op === 'STK_NEW_DYNAMIC' });
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'STK_PUSH') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const key = queueKey(args[0], 'stack');
+      const st = ensureQueueEntry(stacks, key, { type: 'stack', capacity: 0, dynamic: true });
+      const value = args.length >= 2 ? tokenValue(args[1], stack, currentFrame) : stack.pop();
+      if (st.capacity > 0 && st.items.length >= st.capacity) {
+        state.__stack_overflow = key;
+      } else {
+        st.items.push(value);
+      }
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'STK_POP' || op === 'STK_PEEK') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const key = queueKey(args[0], 'stack');
+      const st = ensureQueueEntry(stacks, key, { type: 'stack', capacity: 0, dynamic: true });
+      const value = st.items.length > 0 ? (op === 'STK_POP' ? st.items.pop() : st.items[st.items.length - 1]) : null;
+      if (value === null || value === undefined) state.__stack_underflow = key;
+      assignTarget(currentFrame, args[1], value ?? 0, stack);
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'PQ_NEW_STATIC' || op === 'PQ_NEW_DYNAMIC') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const key = queueKey(args[0], 'pqueue');
+      const capacity = op === 'PQ_NEW_STATIC' ? Number(args[1] || 0) || 0 : 0;
+      ensureQueueEntry(pqueues, key, { type: 'pqueue', capacity, dynamic: op === 'PQ_NEW_DYNAMIC' });
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'PQ_ENQ') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const key = queueKey(args[0], 'pqueue');
+      const pq = ensureQueueEntry(pqueues, key, { type: 'pqueue', capacity: 0, dynamic: true });
+      const value = args.length >= 2 ? tokenValue(args[1], stack, currentFrame) : stack.pop();
+      let priority = 0;
+      if (typeof value === 'number') priority = value;
+      else if (value && typeof value === 'object' && Number.isFinite(Number(value.priority))) priority = Number(value.priority);
+      pq.items.push({ value, priority });
+      pq.items.sort((a, b) => b.priority - a.priority);
+      if (pq.capacity > 0 && pq.items.length > pq.capacity) {
+        pq.items.length = pq.capacity;
+        state.__pqueue_overflow = key;
+      }
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'PQ_DEQ' || op === 'PQ_PEEK') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const key = queueKey(args[0], 'pqueue');
+      const pq = ensureQueueEntry(pqueues, key, { type: 'pqueue', capacity: 0, dynamic: true });
+      const entry = pq.items.length > 0 ? (op === 'PQ_DEQ' ? pq.items.shift() : pq.items[0]) : null;
+      if (!entry) state.__pqueue_underflow = key;
+      assignTarget(currentFrame, args[1], entry ? entry.value : 0, stack);
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'FILE_OPEN') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const fileId = unquote(args[0] || `file-${nextFileHandle}`);
+      const mode = unquote(args[1] || 'read');
+      const handle = nextFileHandle;
+      nextFileHandle += 1;
+      fileHandles.set(handle, { fileId, mode, cursor: 0, rows: [] });
+      stack.push(handle);
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'FILE_READ') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const handle = Number(tokenValue(args[0], stack, currentFrame) || 0);
+      const target = args[1] || '$PUSH';
+      const file = fileHandles.get(handle);
+      const value = file && file.cursor < file.rows.length ? file.rows[file.cursor++] : '';
+      assignTarget(currentFrame, target, value, stack);
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'FILE_WRITE') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const handle = Number(tokenValue(args[0], stack, currentFrame) || 0);
+      const source = args[1];
+      const file = fileHandles.get(handle);
+      if (file) {
+        const value = source ? tokenValue(source, stack, currentFrame) : stack.pop();
+        file.rows.push(value);
+      }
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'FILE_CLOSE') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const handle = Number(tokenValue(args[0], stack, currentFrame) || 0);
+      fileHandles.delete(handle);
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'OP_MAP') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const inputExpr = args[0] || 'SRC';
+      const mapName = unquote(args[1] || '');
+      const target = args[2] || '$PUSH';
+      const payload = toUpperCopy(inputExpr) === 'SRC'
+        ? currentMessage
+        : String(tokenValue(inputExpr, stack, currentFrame) ?? '');
+      const mapped = runMappingById(mapName, payload, mappingsById);
+      currentMessage = mapped;
+      assignTarget(currentFrame, target, mapped, stack);
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'DL_LOAD_SCHEMA') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const name = unquote(args[0] || 'default-schema');
+      const handle = nextSchemaHandle;
+      nextSchemaHandle += 1;
+      schemaHandles.set(handle, { name });
+      stack.push(handle);
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'DL_LOAD_MAP') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const name = unquote(args[0] || 'default-map');
+      const handle = nextMapHandle;
+      nextMapHandle += 1;
+      mapHandles.set(handle, { name });
+      stack.push(handle);
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'SRV_CALL') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const serviceId = unquote(args[0] || '');
+      const endpoint = unquote(args[1] || '');
+      const inputExpr = args[2] || 'SRC';
+      const payload = toUpperCopy(inputExpr) === 'SRC'
+        ? currentMessage
+        : String(tokenValue(inputExpr, stack, currentFrame) ?? '');
+
+      const invokeService = typeof runtimeContext.invokeService === 'function'
+        ? runtimeContext.invokeService
+        : async () => ({ success: true, response: payload, errorMessage: null });
+
+      const callResult = await invokeService({ serviceId, endpoint, payload });
+      const responseValue = callResult?.response ?? payload;
+      currentMessage = typeof responseValue === 'string' ? responseValue : JSON.stringify(responseValue);
+      state.__last_service_call = {
+        serviceId,
+        endpoint,
+        success: Boolean(callResult?.success !== false),
+        error: callResult?.errorMessage || null
+      };
+      stack.push(Boolean(callResult?.success !== false) ? 1 : 0);
+      pc += 1;
+      continue;
+    }
+
+    if (op === 'ROUTE_SERVICE' || op === 'ROUTE_QUEUE' || op === 'ROUTE_FILE') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const id = unquote(args[0] || instr.operand?.raw || '');
+      state.__placement = {
+        kind: op === 'ROUTE_SERVICE' ? 'service' : (op === 'ROUTE_QUEUE' ? 'queue' : 'file'),
+        id
+      };
+      pc += 1;
+      continue;
+    }
+
     if (op === 'ORCH_SPAWN') {
       let task = null;
       try {
@@ -872,6 +1307,56 @@ async function runSingleMessage(args) {
       errorMessage: res.ok ? null : (typeof parsed === 'object' ? (parsed?.error || '') : String(parsed || ''))
     };
   };
+  const invokeService = async ({ serviceId, endpoint, payload }) => {
+    const endpointText = String(endpoint || '').trim();
+    if (endpointText.startsWith('mock://')) {
+      return {
+        success: true,
+        response: payload,
+        errorCode: null,
+        errorMessage: null
+      };
+    }
+
+    const base = String(args.backendUrl || 'http://localhost:4000').replace(/\/$/, '');
+    const url = endpointText.startsWith('http://') || endpointText.startsWith('https://')
+      ? endpointText
+      : (endpointText.startsWith('/') ? `${base}${endpointText}` : `${base}/${endpointText}`);
+
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-user-id': String(args.actorUserId || 'system-admin'),
+          'x-service-id': String(serviceId || '')
+        },
+        body: String(payload || '')
+      });
+
+      const text = await res.text();
+      let parsed = null;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        parsed = text;
+      }
+
+      return {
+        success: res.ok,
+        response: parsed,
+        errorCode: res.ok ? null : `http_${res.status}`,
+        errorMessage: res.ok ? null : (typeof parsed === 'object' ? (parsed?.error || '') : String(parsed || ''))
+      };
+    } catch (error) {
+      return {
+        success: false,
+        response: null,
+        errorCode: 'network_error',
+        errorMessage: error?.message || String(error)
+      };
+    }
+  };
 
   const result = await executeProgram({
     instructions,
@@ -881,6 +1366,7 @@ async function runSingleMessage(args) {
     sourceMessage,
     runtimeContext: {
       invokeSubflow,
+      invokeService,
       serviceId: args.serviceId || ''
     }
   });

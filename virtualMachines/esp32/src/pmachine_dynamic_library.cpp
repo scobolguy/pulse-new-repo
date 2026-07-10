@@ -5,11 +5,13 @@
  * library registry management.
  */
 
+#include <Arduino.h>
 #include "serial_compat.h"
 #include <ArduinoJson.h>
 #include "pmachine_dynamic_library.h"
 #include <algorithm>
 #include <sstream>
+#include <ctime>
 
 // ============================================================================
 // THUNK TABLE IMPLEMENTATION
@@ -108,7 +110,11 @@ bool LibraryRegistry::loadLibrary(const LibraryManifest& manifest, uint16_t base
     library.manifest = manifest;
     library.basePC = basePC;
     library.initialized = false;
+#if defined(PLATFORM_RPIB)
+    library.loadTime = static_cast<uint32_t>(std::time(nullptr));
+#else
     library.loadTime = millis();
+#endif
     library.refCount = 1;
     
     // Build export map
@@ -120,10 +126,10 @@ bool LibraryRegistry::loadLibrary(const LibraryManifest& manifest, uint16_t base
     // Add to registry
     libraries[manifest.name] = library;
     
-    SERIAL_PRINTF("Loaded library: %s v%s (%d exports)\n",
+    SERIAL_PRINTF("Loaded library: %s v%s (%u exports)\n",
                   manifest.name.c_str(),
                   manifest.version.c_str(),
-                  manifest.exports.size());
+                  static_cast<unsigned>(manifest.exports.size()));
     
     return true;
 }
@@ -237,7 +243,7 @@ bool DynamicLibraryLoader::loadLibraryFromJSON(const std::string& jsonManifest,
 bool DynamicLibraryLoader::parseManifest(const std::string& json, 
                                         LibraryManifest& manifest) {
     // Use ArduinoJson for parsing
-    StaticJsonDocument<4096> doc;
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, json);
     
     if (error) {
@@ -249,16 +255,16 @@ bool DynamicLibraryLoader::parseManifest(const std::string& json,
     manifest.name = doc["name"].as<std::string>();
     manifest.version = doc["version"].as<std::string>();
     
-    if (doc.containsKey("author")) {
+    if (doc["author"].is<const char*>()) {
         manifest.author = doc["author"].as<std::string>();
     }
     
-    if (doc.containsKey("description")) {
+    if (doc["description"].is<const char*>()) {
         manifest.description = doc["description"].as<std::string>();
     }
     
     // Parse dependencies
-    if (doc.containsKey("dependencies")) {
+    if (doc["dependencies"].is<JsonArray>()) {
         JsonArray deps = doc["dependencies"];
         for (JsonVariant dep : deps) {
             manifest.dependencies.push_back(dep.as<std::string>());
@@ -266,7 +272,7 @@ bool DynamicLibraryLoader::parseManifest(const std::string& json,
     }
     
     // Parse exports
-    if (doc.containsKey("exports")) {
+    if (doc["exports"].is<JsonArray>()) {
         JsonArray exports = doc["exports"];
         for (JsonVariant expVar : exports) {
             JsonObject expObj = expVar.as<JsonObject>();
@@ -292,7 +298,7 @@ bool DynamicLibraryLoader::parseManifest(const std::string& json,
     }
     
     // Parse P-code segments
-    if (doc.containsKey("pcodeSegments")) {
+    if (doc["pcodeSegments"].is<JsonArray>()) {
         JsonArray segments = doc["pcodeSegments"];
         for (JsonVariant segVar : segments) {
             JsonObject segObj = segVar.as<JsonObject>();

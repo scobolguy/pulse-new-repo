@@ -14,7 +14,7 @@ import cors from 'cors';
 import os from 'os';
 import path from 'path';
 import { performance, monitorEventLoopDelay } from 'perf_hooks';
-import { execFileSync, spawn } from 'child_process';
+import { execFile, execFileSync, spawn } from 'child_process';
 // ES module equivalent of __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -93,9 +93,148 @@ import pascalCompilerRoutes from './src/pascal/compilerRoutes.mjs';
 // Set MODULAR_BACKEND=1 to use separate services; else use unified backend
 
 const MODULAR_MODE = readEnvBoolean('MODULAR_BACKEND', ['1'], false);
-const BROKER_SERVICE_URL = 'http://localhost:4001';
+const BROKER_SERVICE_URL = readEnvString('BROKER_SERVICE_URL', 'http://localhost:4001').trim().replace(/\/$/, '');
 const DEBUG_BACKEND = readEnvBoolean('DEBUG_BACKEND', ['true'], false);
 const SHOW_UDP_LOGS = readEnvBoolean('SHOW_UDP_LOGS', ['1', 'true', 'yes'], false);
+const LOCAL_TTS_SCRIPT_PATH = path.join(__dirname, 'scripts', 'local-tts.ps1');
+const LOCAL_TTS_OUTPUT_DIR = path.join(__dirname, 'data', 'local-tts');
+const PIPER_BIN_PATH = readEnvString('PIPER_BIN_PATH', path.join(__dirname, 'tools', 'piper', 'piper', 'piper.exe')).trim();
+const PIPER_MODEL_PATH = readEnvString('PIPER_MODEL_PATH', path.join(__dirname, 'tools', 'piper', 'models', 'en_US-lessac-medium', 'en_US-lessac-medium.onnx')).trim();
+
+function runLocalTtsScript(args, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', LOCAL_TTS_SCRIPT_PATH, ...args],
+      { timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 },
+      (error, stdout, stderr) => {
+        if (error) {
+          const details = String(stderr || stdout || error.message || '').trim();
+          return reject(new Error(details || 'Local TTS script failed'));
+        }
+        return resolve(String(stdout || '').trim());
+      }
+    );
+  });
+}
+
+function resolveEsp32BluetoothAudioOrigin() {
+  const explicit = readEnvString('ESP32_BT_AUDIO_ORIGIN', '').trim();
+  if (explicit) {
+    return explicit.replace(/\/$/, '');
+  }
+  const host = readEnvString('EDGE_ESP32_HOST', '127.0.0.1').trim() || '127.0.0.1';
+  const port = Math.max(1, readEnvNumber('EDGE_ESP32_PORT', 80));
+  return `http://${host}:${port}`;
+}
+
+async function forwardEsp32BluetoothTts({ text, voice = 'default', timeoutMs = 15000, origin = '' }) {
+  const base = String(origin || '').trim().replace(/\/$/, '') || resolveEsp32BluetoothAudioOrigin();
+  const params = new URLSearchParams();
+  params.set('text', String(text || ''));
+  params.set('voice', String(voice || 'default'));
+  const endpoint = `${base}/api/bluetooth-audio/tts?${params.toString()}`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      signal: controller.signal
+    });
+    const bodyText = await response.text();
+    let payload = null;
+    try {
+      payload = bodyText ? JSON.parse(bodyText) : null;
+    } catch {
+      payload = { raw: bodyText };
+    }
+    if (!response.ok) {
+      throw new Error(`ESP32 Bluetooth TTS failed (${response.status}): ${bodyText}`);
+    }
+    return {
+      ok: true,
+      endpoint,
+      payload
+    };
+  } catch (err) {
+    throw new Error(err?.message || String(err));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function clampInteger(value, min, max, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
+
+function runPiperSynthesis({ text, outputFile, timeoutMs = 30000 }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(PIPER_BIN_PATH, ['--model', PIPER_MODEL_PATH, '--output_file', outputFile], {
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    let stderr = '';
+    let stdout = '';
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        // ignore kill errors
+      }
+    }, timeoutMs);
+
+    child.stdout.on('data', (chunk) => {
+      stdout += String(chunk || '');
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += String(chunk || '');
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      reject(new Error(err?.message || 'Failed to start Piper process'));
+    });
+
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (timedOut) {
+        return reject(new Error('Piper synthesis timed out'));
+      }
+      if (code !== 0) {
+        const detail = String(stderr || stdout || `Piper exited with code ${code}`).trim();
+        return reject(new Error(detail));
+      }
+      return resolve({ stdout: stdout.trim(), stderr: stderr.trim() });
+    });
+
+    child.stdin.write(String(text || ''));
+    child.stdin.end();
+  });
+}
+
+function playWavOnHost(filePath, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    const command = `$p=New-Object System.Media.SoundPlayer '${String(filePath || '').replace(/'/g, "''")}';$p.PlaySync();$p.Dispose()`;
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command],
+      { timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 },
+      (error, stdout, stderr) => {
+        if (error) {
+          const details = String(stderr || stdout || error.message || '').trim();
+          return reject(new Error(details || 'Failed to play wav file'));
+        }
+        return resolve();
+      }
+    );
+  });
+}
 
 if (!SHOW_UDP_LOGS) {
   const originalLog = console.log.bind(console);
@@ -184,7 +323,7 @@ function proxyRequest(method, path, req, res, targetUrl = BROKER_SERVICE_URL) {
 }
 
 
-const HTTP_PORT = 4000;
+const HTTP_PORT = readEnvNumber('HTTP_PORT', readEnvNumber('PORT', 4000));
 const UDP_PORT = 4210;
 const BROKER_SERVICE = 'broker';
 const ROUTER_SERVICE = 'router';
@@ -265,7 +404,6 @@ function ensureLifecycleCompiledArtifact() {
 }
 
 fs.mkdirSync(RUNTIME_DATA_ROOT, { recursive: true });
-loadMapPlacementRegistry();
 seedRuntimeFileIfMissing(WORKER_CONFIG_PATH, './data/worker-config.json');
 seedRuntimeFileIfMissing(ROUTER_RULES_PATH, './data/router-rules.json');
 seedRuntimeFileIfMissing(DATA_MAPPINGS_PATH, './data/data-mappings.json');
@@ -1663,6 +1801,8 @@ const mapPlacementState = {
   registrationByPlacement: new Map(),
   lastDecision: null
 };
+
+loadMapPlacementRegistry();
 
 function normalizeMapKey(value) {
   const text = String(value || '').trim().toUpperCase();
@@ -8710,6 +8850,201 @@ function registerRoutes(app) {
       inflight,
       lastDecision: mapPlacementState.lastDecision
     });
+  });
+
+  app.get('/api/local-tts/health', (_req, res) => {
+    if (process.platform !== 'win32') {
+      return res.status(501).json({ ok: false, error: 'Local TTS is only supported on Windows hosts' });
+    }
+    if (!fs.existsSync(LOCAL_TTS_SCRIPT_PATH)) {
+      return res.status(500).json({ ok: false, error: 'Local TTS script missing', script: LOCAL_TTS_SCRIPT_PATH });
+    }
+    return res.json({ ok: true, platform: process.platform, script: LOCAL_TTS_SCRIPT_PATH });
+  });
+
+  app.get('/api/local-tts/voices', async (_req, res) => {
+    if (process.platform !== 'win32') {
+      return res.status(501).json({ ok: false, error: 'Local TTS is only supported on Windows hosts' });
+    }
+    try {
+      const raw = await runLocalTtsScript(['-Mode', 'voices'], 15000);
+      const payload = raw ? JSON.parse(raw) : { ok: true, voices: [] };
+      return res.json(payload);
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: 'Failed to list local TTS voices',
+        details: err?.message || String(err)
+      });
+    }
+  });
+
+  app.post('/api/local-tts/speak', express.json({ limit: '128kb' }), async (req, res) => {
+    if (process.platform !== 'win32') {
+      return res.status(501).json({ ok: false, error: 'Local TTS is only supported on Windows hosts' });
+    }
+
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const text = String(body.text || '').trim();
+    if (!text) {
+      return res.status(400).json({ ok: false, error: 'text is required' });
+    }
+
+    const voice = String(body.voice || '').trim();
+    const rate = clampInteger(body.rate, -10, 10, 0);
+    const volume = clampInteger(body.volume, 0, 100, 100);
+    const saveToFile = body.saveToFile === true;
+    const playOnHost = body.playOnHost !== false;
+    const requestedFileName = String(body.fileName || '').trim();
+
+    const scriptArgs = ['-Mode', 'speak', '-Text', text, '-Rate', String(rate), '-Volume', String(volume)];
+    if (voice) scriptArgs.push('-Voice', voice);
+
+    let outputFilePath = '';
+    if (saveToFile) {
+      fs.mkdirSync(LOCAL_TTS_OUTPUT_DIR, { recursive: true });
+      const baseName = requestedFileName && requestedFileName.endsWith('.wav')
+        ? requestedFileName
+        : `tts-${Date.now()}.wav`;
+      outputFilePath = path.join(LOCAL_TTS_OUTPUT_DIR, baseName);
+      scriptArgs.push('-OutputPath', outputFilePath);
+    }
+    if (!playOnHost) {
+      scriptArgs.push('-NoPlay');
+    }
+
+    try {
+      const raw = await runLocalTtsScript(scriptArgs, 45000);
+      const payload = raw ? JSON.parse(raw) : { ok: true };
+      return res.json({
+        ok: true,
+        text,
+        voice: voice || payload.voice || null,
+        rate,
+        volume,
+        playOnHost,
+        saveToFile,
+        outputFile: outputFilePath || payload.outputFile || null,
+        engine: 'windows-sapi'
+      });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: 'Local TTS playback failed',
+        details: err?.message || String(err)
+      });
+    }
+  });
+
+  const handleSpeechSpeak = async (req, res, modeOverride = null) => {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const text = String(body.text || req.query?.text || '').trim();
+    if (!text) {
+      return res.status(400).json({ ok: false, error: 'text is required' });
+    }
+
+    const voice = String(body.voice || req.query?.voice || 'default').trim() || 'default';
+    const mode = String(modeOverride || body.mode || req.query?.mode || 'local').trim().toLowerCase();
+    const esp32Origin = String(body.esp32Origin || req.query?.esp32Origin || '').trim();
+    const rate = clampInteger(body.rate, -10, 10, 0);
+    const volume = clampInteger(body.volume, 0, 100, 100);
+    const playOnHost = body.playOnHost !== false;
+
+    if (mode === 'piper') {
+      if (!fs.existsSync(PIPER_BIN_PATH)) {
+        return res.status(500).json({
+          ok: false,
+          mode: 'piper',
+          error: 'Piper binary not found',
+          path: PIPER_BIN_PATH
+        });
+      }
+      if (!fs.existsSync(PIPER_MODEL_PATH)) {
+        return res.status(500).json({
+          ok: false,
+          mode: 'piper',
+          error: 'Piper model not found',
+          path: PIPER_MODEL_PATH
+        });
+      }
+
+      try {
+        fs.mkdirSync(LOCAL_TTS_OUTPUT_DIR, { recursive: true });
+        const outFile = path.join(LOCAL_TTS_OUTPUT_DIR, `piper-${Date.now()}.wav`);
+        await runPiperSynthesis({ text, outputFile: outFile, timeoutMs: 45000 });
+        if (playOnHost) {
+          await playWavOnHost(outFile, 60000);
+        }
+        return res.json({
+          ok: true,
+          mode: 'piper',
+          text,
+          playOnHost,
+          outputFile: outFile,
+          engine: 'piper'
+        });
+      } catch (err) {
+        return res.status(500).json({
+          ok: false,
+          mode: 'piper',
+          error: 'Piper speech failed',
+          details: err?.message || String(err)
+        });
+      }
+    }
+
+    if (mode === 'esp32') {
+      try {
+        const forwarded = await forwardEsp32BluetoothTts({ text, voice, origin: esp32Origin });
+        return res.json({
+          ok: true,
+          mode: 'esp32',
+          text,
+          voice,
+          esp32: forwarded
+        });
+      } catch (err) {
+        return res.status(502).json({
+          ok: false,
+          mode: 'esp32',
+          error: 'ESP32 Bluetooth route failed',
+          details: err?.message || String(err)
+        });
+      }
+    }
+
+    const scriptArgs = ['-Mode', 'speak', '-Text', text, '-Rate', String(rate), '-Volume', String(volume)];
+    if (voice) scriptArgs.push('-Voice', voice);
+    if (!playOnHost) scriptArgs.push('-NoPlay');
+
+    try {
+      const raw = await runLocalTtsScript(scriptArgs, 45000);
+      const payload = raw ? JSON.parse(raw) : { ok: true };
+      return res.json({
+        ok: true,
+        mode: 'local',
+        text,
+        voice: payload.voice || voice,
+        rate,
+        volume,
+        playOnHost,
+        engine: 'windows-sapi'
+      });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        mode: 'local',
+        error: 'Local speech failed',
+        details: err?.message || String(err)
+      });
+    }
+  };
+
+  app.post('/api/speech/speak', express.json({ limit: '128kb' }), async (req, res) => handleSpeechSpeak(req, res));
+
+  app.post('/api/bluetooth-audio/tts', express.json({ limit: '128kb' }), async (req, res) => {
+    const forcedMode = String(req.body?.mode || req.query?.mode || 'local').trim().toLowerCase();
+    return handleSpeechSpeak(req, res, forcedMode);
   });
 
   app.post('/api/auth/login', (req, res) => {

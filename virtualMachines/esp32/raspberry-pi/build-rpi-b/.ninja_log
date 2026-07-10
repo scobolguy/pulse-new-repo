@@ -1,0 +1,16 @@
+# ninja log v7
+52	2167	8048916930037840	CMakeFiles/pulse_pi_node.dir/src/core/EventRouter.cpp.o	84b3fb114547fc19
+88	3511	8048913768358680	CMakeFiles/pulse_pi_node.dir/src/services/bluetooth/BluetoothGateway.cpp.o	5dbcb9b3b65b1c56
+79	2923	8048916930295357	CMakeFiles/pulse_pi_node.dir/src/services/doorbell/DoorbellAlertService.cpp.o	9958c4cfa7489ee5
+108	3409	8048913768554185	CMakeFiles/pulse_pi_node.dir/src/services/tts/PiperService.cpp.o	1f252a64c1146778
+46	3517	8048916929924066	CMakeFiles/pulse_pi_node.dir/src/core/Config.cpp.o	4b493966b919ceec
+61	3505	8048916930120608	CMakeFiles/pulse_pi_node.dir/src/platform/pi/PiRuntime.cpp.o	f4e224297b369afd
+37	2971	8048916929873475	CMakeFiles/pulse_pi_node.dir/src/main.cpp.o	b302ed6da11f84d7
+3533	3836	8048916964828516	pulse_pi_node	ab129f4a9337cdb
+69	3533	8048916930195597	CMakeFiles/pulse_pi_node.dir/src/services/discovery/NetworkAnnouncer.cpp.o	e7615e88b39ee578
+31	242	8048917335265322	build.ninja	51c9c8485adf766d
+31	242	8048917335265322	C:/dev/pulse-new-repo/virtualMachines/esp32/raspberry-pi/build-rpi-b/cmake_install.cmake	51c9c8485adf766d
+42	2093	8048917336294545	CMakeFiles/pulse_pi_node.dir/src/services/discovery/NetworkAnnouncer.cpp.o	e7615e88b39ee578
+2094	2419	8048917356821472	pulse_pi_node	ab129f4a9337cdb
+41	2103	8048917562922528	CMakeFiles/pulse_pi_node.dir/src/services/discovery/NetworkAnnouncer.cpp.o	e7615e88b39ee578
+2105	2395	8048917583593343	pulse_pi_node	ab129f4a9337cdb

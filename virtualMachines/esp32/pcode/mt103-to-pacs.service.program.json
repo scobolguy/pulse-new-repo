@@ -1,0 +1,127 @@
+{
+  "version": 1,
+  "generatedAt": "2026-07-10T16:54:07.834Z",
+  "serviceId": "mt103-to-pacs-service",
+  "runtimeUnit": {
+    "kind": "service",
+    "id": "mt103-to-pacs-service",
+    "refreshMs": null
+  },
+  "variableDeclarations": [],
+  "entryLabel": "ENTRY",
+  "finishLabel": "FINISH",
+  "instructionSubset": [
+    "JMP",
+    "JZ",
+    "NOP",
+    "ROUTE_MATCH_QUEUE",
+    "ROUTE_EVAL_WHEN",
+    "ROUTE_TRANSFORM",
+    "ROUTE_EMIT",
+    "PARSE_FIN_TEXT",
+    "HALT"
+  ],
+  "orchestrationPrograms": [],
+  "instructionSubsetExtended": [
+    "ORCH_SPAWN",
+    "ORCH_WAIT_ALL",
+    "ORCH_FAIL_TXN",
+    "ORCH_RETURN_SUCCESS"
+  ],
+  "entries": [
+    {
+      "kind": "router",
+      "id": "mt103-to-pacs-service-http",
+      "label": "ROUTER_0_MT103_TO_PACS_SERVICE_HTTP",
+      "inputQueue": "mt103-to-pacs-service.in",
+      "outputs": [
+        {
+          "queueName": "mt103-to-pacs-service.out",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "IF upper(httpVerb) = 'POST' THEN output := 1 ELSE output := 0;",
+          "transformRule": "output := src;"
+        },
+        {
+          "queueName": "mt103-to-pacs-service.out",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;",
+          "transformRule": "output := \"mt103-to-pacs-service\";"
+        }
+      ]
+    },
+    {
+      "kind": "router",
+      "id": "mt103-to-pacs-router",
+      "label": "ROUTER_1_MT103_TO_PACS_ROUTER",
+      "inputQueue": "swift.mt103.parsed",
+      "outputs": [
+        {
+          "queueName": "tx.pacs.created",
+          "dataTypeIds": [
+            "pacs"
+          ],
+          "dataTypeId": "pacs",
+          "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
+          "transformRule": "output := map(\"mt103-to-pacs\", src);"
+        }
+      ]
+    },
+    {
+      "kind": "mapper",
+      "id": "mt103-to-pacs",
+      "label": "MAPPER_0_MT103_TO_PACS",
+      "sourceTypeId": "swift-mt103",
+      "targetTypeId": "pacs",
+      "itemCount": 9,
+      "items": [
+        {
+          "sourcePath": "block4.20",
+          "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "block4.20",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "block4.32A.date",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt",
+          "conversionRule": "output := yymmddtoiso(src);"
+        },
+        {
+          "sourcePath": "block4.32A.currency",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+          "conversionRule": "output := upper(src);"
+        },
+        {
+          "sourcePath": "block4.32A.amount",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+          "conversionRule": "output := mtamounttodecimal(src);"
+        },
+        {
+          "sourcePath": "block4.50K",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm",
+          "conversionRule": "output := mtpartyname(src);"
+        },
+        {
+          "sourcePath": "block4.59",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm",
+          "conversionRule": "output := mtpartyname(src);"
+        },
+        {
+          "sourcePath": "block4.70",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.RmtInf.Ustrd",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "block4.71A",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgBr",
+          "conversionRule": "output := mtchargebearertoiso(src);"
+        }
+      ]
+    }
+  ]
+}

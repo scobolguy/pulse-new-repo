@@ -1,7 +1,8 @@
-import { StrictMode } from 'react'
+import { StrictMode, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import NetworkDevicesPage from './NetworkDevicesPage.jsx'
+import TopologyPage from './TopologyPage.jsx'
 
 const originalFetch = window.fetch.bind(window)
 const apiBaseUrls = String(import.meta.env.VITE_API_BASES || '')
@@ -78,8 +79,34 @@ window.fetch = async (input, init = {}) => {
   return response
 }
 
+function AppShell() {
+  const [page, setPage] = useState('topology')
+
+  return (
+    <>
+      <nav className="app-nav">
+        <button
+          type="button"
+          className={`app-nav-button ${page === 'topology' ? 'active' : ''}`}
+          onClick={() => setPage('topology')}
+        >
+          Topology
+        </button>
+        <button
+          type="button"
+          className={`app-nav-button ${page === 'devices' ? 'active' : ''}`}
+          onClick={() => setPage('devices')}
+        >
+          Devices
+        </button>
+      </nav>
+      {page === 'topology' ? <TopologyPage /> : <NetworkDevicesPage />}
+    </>
+  )
+}
+
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <NetworkDevicesPage />
+    <AppShell />
   </StrictMode>,
 )

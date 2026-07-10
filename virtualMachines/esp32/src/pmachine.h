@@ -6,7 +6,11 @@
 #include <vector>
 #include <string>
 #include <cstdint>
+#if defined(PLATFORM_RPIB)
+#include <ffs/FederatedFileSystem.h>
+#else
 #include "ffs/FederatedFileSystem.h"
+#endif
 #include "StringPool.h"
 
 

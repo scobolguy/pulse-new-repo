@@ -1,0 +1,106 @@
+[
+  {
+    "id": "mt103-to-pacs",
+    "name": "mt103-to-pacs",
+    "sourceTypeId": "swift-mt103",
+    "targetTypeId": "pacs",
+    "sourceTypeRef": {
+      "type": "TypeRef",
+      "id": "swift-mt103",
+      "genericArgs": []
+    },
+    "targetTypeRef": {
+      "type": "TypeRef",
+      "id": "pacs",
+      "genericArgs": []
+    },
+    "sourceTypeSignature": "swift-mt103",
+    "targetTypeSignature": "pacs",
+    "enabled": true,
+    "description": "MT103 to PACS.008 mapping",
+    "items": [
+      {
+        "sourcePath": "block4.20",
+        "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := trim(src);"
+      },
+      {
+        "sourcePath": "block4.21",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := trim(src);"
+      },
+      {
+        "sourcePath": "block4.32A.date",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := yymmddtoiso(src);"
+      },
+      {
+        "sourcePath": "block4.32A.currency",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := upper(src);"
+      },
+      {
+        "sourcePath": "block4.32A.amount",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := mtamounttodecimal(src);"
+      },
+      {
+        "sourcePath": "block4.50K",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := mtpartyname(src);"
+      },
+      {
+        "sourcePath": "block4.59",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := mtpartyname(src);"
+      },
+      {
+        "sourcePath": "block4.70",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.RmtInf.Ustrd",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := trim(src);"
+      },
+      {
+        "sourcePath": "block4.71A",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgBr",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := mtchargebearertoiso(src);"
+      },
+      {
+        "sourcePath": "block4.72",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstrForNxtAgt.InstrInf",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := trim(src);"
+      }
+    ],
+    "createdAt": "2026-07-10T16:54:56.840Z",
+    "updatedAt": "2026-07-10T16:54:56.840Z"
+  }
+]

@@ -53,6 +53,18 @@ function sanitizeLabel(text) {
     .toUpperCase();
 }
 
+function normalizeDslRuleText(text) {
+  return String(text || '')
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, '\\');
+}
+
+function encodePcodeStringLiteral(text) {
+  return String(text || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"');
+}
+
 function emitPortableProgram(compiled) {
   const lines = [];
   const entries = [];
@@ -141,9 +153,11 @@ function emitPortableProgram(compiled) {
     for (let j = 0; j < outputs.length; j += 1) {
       const o = outputs[j];
       const skipLabel = `${label}_OUTPUT_SKIP_${j}`;
-      const whenText = String(o.whenRule || '').replace(/"/g, '\\"');
-      const transformText = String(o.transformRule || '').replace(/"/g, '\\"');
-      const queueText = String(o.queueName || '').replace(/"/g, '\\"');
+      const whenRule = normalizeDslRuleText(o.whenRule);
+      const transformRule = normalizeDslRuleText(o.transformRule);
+      const whenText = encodePcodeStringLiteral(whenRule);
+      const transformText = encodePcodeStringLiteral(transformRule);
+      const queueText = encodePcodeStringLiteral(o.queueName);
 
       lines.push(`ROUTE_EVAL_WHEN "${whenText}"`);
       lines.push(`JZ ${skipLabel}`);
@@ -170,8 +184,8 @@ function emitPortableProgram(compiled) {
         queueName: o.queueName,
         dataTypeIds: o.dataTypeIds || [],
         dataTypeId: o.dataTypeId || null,
-        whenRule: o.whenRule,
-        transformRule: o.transformRule
+        whenRule: normalizeDslRuleText(o.whenRule),
+        transformRule: normalizeDslRuleText(o.transformRule)
       }))
     });
   }
@@ -294,7 +308,9 @@ async function main() {
     compiled = compileRouterMapperDSLLegacy(sourceText);
     console.warn(`[PCODE-COMPILER] ANTLR compile failed; used legacy DSL compiler fallback: ${error?.message || String(error)}`);
   }
-  const emitted = emitPortableProgram(compiled);
+  const emitted = (compiled && compiled.pcodeText && compiled.programMap)
+    ? { pcodeText: compiled.pcodeText, symbolMap: compiled.programMap }
+    : emitPortableProgram(compiled);
 
   await fs.mkdir(path.dirname(outPath), { recursive: true });
   await fs.mkdir(path.dirname(mapOutPath), { recursive: true });

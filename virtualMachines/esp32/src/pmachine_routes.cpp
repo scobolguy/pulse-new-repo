@@ -113,6 +113,13 @@ String toUpperCopy(const String& in) {
     return s;
 }
 
+String normalizeDslEscapes(const String& in) {
+    String s = in;
+    s.replace("\\\"", "\"");
+    s.replace("\\'", "'");
+    return s;
+}
+
 bool getRequestParam(AsyncWebServerRequest* request, const char* name, String& outValue) {
     if (request->hasParam(name, true)) {
         outValue = request->getParam(name, true)->value();
@@ -162,7 +169,7 @@ int findTopLevelComma(const String& text) {
 }
 
 String unquote(const String& text) {
-    String s = trimCopy(text);
+    String s = normalizeDslEscapes(trimCopy(text));
     if (s.length() < 2) return s;
     char q = s[0];
     if ((q == '"' || q == '\'') && s[s.length() - 1] == q) {
@@ -225,7 +232,8 @@ void setJsonPathValue(JsonDocument& doc, const String& dotPath, const String& va
         }
 
         if (!current[key].is<JsonObject>()) {
-            current[key] = JsonObject();
+            current.remove(key);
+            current.createNestedObject(key);
         }
         current = current[key].as<JsonObject>();
         start = dot + 1;
@@ -239,6 +247,98 @@ String normalizeMtAmount(const String& raw) {
     return s;
 }
 
+String normalizeChargeBearer(const String& raw) {
+    String s = toUpperCopy(trimCopy(raw));
+    if (s == "OUR" || s == "SHA" || s == "BEN") return s;
+    return trimCopy(raw);
+}
+
+String yymmddToIsoDate(const String& raw) {
+    String s = trimCopy(raw);
+    if (s.length() != 6) return s;
+    String yy = s.substring(0, 2);
+    String mm = s.substring(2, 4);
+    String dd = s.substring(4, 6);
+    int year = 2000 + yy.toInt();
+    if (mm.toInt() < 1 || mm.toInt() > 12 || dd.toInt() < 1 || dd.toInt() > 31) {
+        return s;
+    }
+    char out[11];
+    snprintf(out, sizeof(out), "%04d-%02d-%02d", year, mm.toInt(), dd.toInt());
+    return String(out);
+}
+
+String mtPartyName(const String& raw) {
+    String s = trimCopy(raw);
+    int nl = s.indexOf('\n');
+    if (nl < 0) return s;
+    String first = trimCopy(s.substring(0, nl));
+    if (first.startsWith("/")) {
+        return trimCopy(s.substring(nl + 1));
+    }
+    return s;
+}
+
+void parseMt103FinText(const String& text, JsonDocument& outDoc) {
+    outDoc.clear();
+    JsonObject root = outDoc.to<JsonObject>();
+    JsonObject block4 = root.createNestedObject("block4");
+
+    String currentTag;
+    String currentValue;
+    auto commitTag = [&](const String& tag, const String& value) {
+        if (tag.length() == 0) return;
+        if (tag == "32A") {
+            JsonObject field32A = block4.createNestedObject("32A");
+            String v = trimCopy(value);
+            if (v.length() >= 9) {
+                field32A["date"] = v.substring(0, 6);
+                field32A["currency"] = v.substring(6, 9);
+                field32A["amount"] = v.substring(9);
+            } else {
+                field32A["raw"] = v;
+            }
+            return;
+        }
+        if (tag == "33B") {
+            JsonObject field33B = block4.createNestedObject("33B");
+            String v = trimCopy(value);
+            if (v.length() >= 3) {
+                field33B["currency"] = v.substring(0, 3);
+                field33B["amount"] = v.substring(3);
+            } else {
+                field33B["raw"] = v;
+            }
+            return;
+        }
+        block4[tag] = trimCopy(value);
+    };
+
+    int start = 0;
+    while (start <= (int)text.length()) {
+        int nl = text.indexOf('\n', start);
+        String line = (nl >= 0) ? text.substring(start, nl) : text.substring(start);
+        line.replace("\r", "");
+
+        if (line.startsWith(":")) {
+            int secondColon = line.indexOf(':', 1);
+            if (secondColon > 1) {
+                commitTag(currentTag, currentValue);
+                currentTag = line.substring(1, secondColon);
+                currentValue = line.substring(secondColon + 1);
+            } else if (currentTag.length() > 0) {
+                currentValue += "\n" + line;
+            }
+        } else if (currentTag.length() > 0) {
+            currentValue += "\n" + line;
+        }
+
+        if (nl < 0) break;
+        start = nl + 1;
+    }
+    commitTag(currentTag, currentValue);
+}
+
 String applyConversionRule(const String& conversionRule, const String& srcValue) {
     String rule = toUpperCopy(trimCopy(conversionRule));
     if (rule.length() == 0) return srcValue;
@@ -246,6 +346,9 @@ String applyConversionRule(const String& conversionRule, const String& srcValue)
     if (rule.indexOf("UPPER(SRC)") >= 0) return toUpperCopy(srcValue);
     if (rule.indexOf("TRIM(SRC)") >= 0) return trimCopy(srcValue);
     if (rule.indexOf("MTAMOUNTTODECIMAL(SRC)") >= 0) return normalizeMtAmount(srcValue);
+    if (rule.indexOf("YYMMDDTOISO(SRC)") >= 0) return yymmddToIsoDate(srcValue);
+    if (rule.indexOf("MTPARTYNAME(SRC)") >= 0) return mtPartyName(srcValue);
+    if (rule.indexOf("MTCHARGEBEARERTOISO(SRC)") >= 0) return normalizeChargeBearer(srcValue);
     if (rule.indexOf("OUTPUT := SRC") >= 0) return srcValue;
 
     return srcValue;
@@ -650,7 +753,8 @@ void parseProgramMapMetadata(const JsonDocument& doc, ProgramMapMetadata& metada
 }
 
 bool evaluateWhenRule(const String& whenRule, const String& srcMessage) {
-    String rule = toUpperCopy(trimCopy(whenRule));
+    String normalizedWhen = normalizeDslEscapes(whenRule);
+    String rule = toUpperCopy(trimCopy(normalizedWhen));
     if (rule.length() == 0) return true;
 
     if (rule.indexOf("OUTPUT := 1") >= 0) return true;
@@ -660,10 +764,10 @@ bool evaluateWhenRule(const String& whenRule, const String& srcMessage) {
     const String fn = "STARTSWITH(UPPER(SRC),";
     int idx = rule.indexOf(fn);
     if (idx >= 0) {
-        int firstQuote = whenRule.indexOf('"');
-        int secondQuote = whenRule.indexOf('"', firstQuote + 1);
+        int firstQuote = normalizedWhen.indexOf('"');
+        int secondQuote = normalizedWhen.indexOf('"', firstQuote + 1);
         if (firstQuote >= 0 && secondQuote > firstQuote) {
-            String prefix = whenRule.substring(firstQuote + 1, secondQuote);
+            String prefix = normalizedWhen.substring(firstQuote + 1, secondQuote);
             return startsWithUpper(srcMessage, prefix);
         }
     }
@@ -883,9 +987,14 @@ bool runMappingById(const String& mappingId, const String& sourcePayload, JsonAr
     JsonDocument sourceDoc;
     DeserializationError srcErr = deserializeJson(sourceDoc, sourcePayload);
     if (srcErr) {
-        sourceDoc.clear();
-        JsonObject srcObj = sourceDoc.to<JsonObject>();
-        srcObj["src"] = sourcePayload;
+        String raw = trimCopy(sourcePayload);
+        if (startsWithUpper(raw, "MT103") || raw.indexOf(":20:") >= 0) {
+            parseMt103FinText(raw, sourceDoc);
+        } else {
+            sourceDoc.clear();
+            JsonObject srcObj = sourceDoc.to<JsonObject>();
+            srcObj["src"] = sourcePayload;
+        }
     }
 
     JsonDocument targetDoc;
@@ -964,7 +1073,7 @@ bool evaluateTransformExpr(const String& exprText, const String& srcMessage, Jso
 }
 
 String applyTransformRule(const String& transformRule, const String& srcMessage, JsonArrayConst mappings, bool& transformApplied, String& transformError) {
-    String rule = trimCopy(transformRule);
+    String rule = trimCopy(normalizeDslEscapes(transformRule));
     transformApplied = false;
     transformError = "";
 
@@ -3264,6 +3373,23 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
     #if defined(ESP32)
         ensureEdgeIngressAsyncWorkerStarted(machine, ffs);
         if (useAsync && gEdgeIngressAsyncQueue != nullptr) {
+            const UBaseType_t queueDepth = uxQueueMessagesWaiting(gEdgeIngressAsyncQueue);
+            const UBaseType_t queueSpace = uxQueueSpacesAvailable(gEdgeIngressAsyncQueue);
+            const UBaseType_t queueCapacity = queueDepth + queueSpace;
+            if (queueSpace == 0) {
+                JsonDocument out;
+                out["error"] = "edge ingress queue overflow";
+                out["mode"] = "async";
+                out["status"] = 429;
+                out["queueDepth"] = static_cast<unsigned long>(queueDepth);
+                out["queueCapacity"] = static_cast<unsigned long>(queueCapacity);
+                out["retryAfterMs"] = 250;
+                String response;
+                serializeJson(out, response);
+                request->send(429, "application/json", response);
+                return;
+            }
+
             EdgeIngressAsyncTask* task = new EdgeIngressAsyncTask();
             task->jobId = makeEdgeIngressJobId();
             task->file = file;
@@ -3292,7 +3418,16 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
             return;
             }
             delete task;
-            request->send(503, "text/plain", "Edge ingress queue is full");
+            JsonDocument out;
+            out["error"] = "edge ingress queue overflow";
+            out["mode"] = "async";
+            out["status"] = 429;
+            out["queueDepth"] = static_cast<unsigned long>(uxQueueMessagesWaiting(gEdgeIngressAsyncQueue));
+            out["queueCapacity"] = static_cast<unsigned long>(uxQueueMessagesWaiting(gEdgeIngressAsyncQueue) + uxQueueSpacesAvailable(gEdgeIngressAsyncQueue));
+            out["retryAfterMs"] = 250;
+            String response;
+            serializeJson(out, response);
+            request->send(429, "application/json", response);
             return;
         }
     #endif

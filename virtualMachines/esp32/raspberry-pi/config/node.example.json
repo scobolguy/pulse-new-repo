@@ -1,0 +1,49 @@
+{
+  "nodeId": "raspberry-pi-node-01",
+  "role": "pi-gateway",
+  "backendUrl": "http://192.168.2.11:4000",
+  "queueManagerUrl": "http://192.168.2.11:4100",
+  "alertQueue": "alerts",
+  "piper": {
+    "enabled": true,
+    "binaryPath": "/usr/local/bin/piper",
+    "modelPath": "/opt/pulse/voices/en_US-lessac-medium.onnx",
+    "outputDevice": "default",
+    "speakTimeoutSec": 15
+  },
+  "bluetooth": {
+    "enabled": true,
+    "adapter": "hci0",
+    "scanIntervalMs": 15000,
+    "bleEnabled": true,
+    "classicEnabled": true,
+    "hidEnabled": true,
+    "autoConnectMacsCsv": "AA:BB:CC:DD:EE:FF,11:22:33:44:55:66",
+    "hidCommand": "echo '[hid-hook] event={event}'"
+  },
+  "doorbell": {
+    "enabled": true,
+    "jpegFetchTimeoutMs": 5000
+  },
+  "discovery": {
+    "enabled": true,
+    "port": 4101,
+    "intervalMs": 5000
+  },
+  "http": {
+    "enabled": true,
+    "port": 80
+  },
+  "ffs": {
+    "enabled": true,
+    "pollIntervalMs": 15000,
+    "cachePath": "runtime/ffs-cache"
+  },
+  "queue": {
+    "pollIntervalMs": 1000
+  },
+  "pmachine": {
+    "pcodeFile": "/router-mapper.pcode",
+    "programMap": "/router-mapper.program.json"
+  }
+}

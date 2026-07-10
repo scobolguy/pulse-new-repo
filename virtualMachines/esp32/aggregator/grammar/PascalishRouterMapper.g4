@@ -47,7 +47,31 @@ varSource
   ;
 
 serviceDecl
-  : SERVICE stringOrIdent SEMICOLON serviceBody (DOT | SEMICOLON)?
+  : SERVICE stringOrIdent placement? SEMICOLON (serviceBody | serviceEndpoint* END) (DOT | SEMICOLON)?
+  ;
+
+placement
+  : ON (LOCAL | PARENT | CHILD | SIBLING | ALTERNATE)
+  ;
+
+serviceEndpoint
+  : httpVerb stringValue endpointAccepts? endpointReturns? SEMICOLON blockStmt
+  ;
+
+httpVerb
+  : GET
+  | POST
+  | PUT
+  | DELETE
+  | PATCH
+  ;
+
+endpointAccepts
+  : ACCEPTS typeRef
+  ;
+
+endpointReturns
+  : RETURNS typeRef
   ;
 
 serviceBody
@@ -80,7 +104,16 @@ serviceExpr
   ;
 
 qualifiedIdent
-  : IDENT (DOT IDENT)*
+  : IDENT (DOT qualifiedPart)*
+  ;
+
+qualifiedPart
+  : IDENT
+  | GET
+  | POST
+  | PUT
+  | DELETE
+  | PATCH
   ;
 
 programDecl
@@ -256,6 +289,7 @@ pl0Element
   | ENDTRY
   | TRUE
   | FALSE
+  | MAP
   | NUMBER
   | STRING
   | IDENT
@@ -320,6 +354,18 @@ WITH: 'WITH';
 TIMEOUT: 'TIMEOUT';
 INTO: 'INTO';
 ON: 'ON';
+LOCAL: 'LOCAL';
+PARENT: 'PARENT';
+CHILD: 'CHILD';
+SIBLING: 'SIBLING';
+ALTERNATE: 'ALTERNATE';
+GET: 'GET';
+POST: 'POST';
+PUT: 'PUT';
+DELETE: 'DELETE';
+PATCH: 'PATCH';
+ACCEPTS: 'ACCEPTS';
+RETURNS: 'RETURNS';
 ERROR: 'ERROR';
 FAIL: 'FAIL';
 TRANSACTION: 'TRANSACTION';

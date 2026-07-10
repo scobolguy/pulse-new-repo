@@ -1,0 +1,85 @@
+name: pulse-daemons
+
+services:
+  pulse-broker:
+    build:
+      context: ../..
+      dockerfile: deploy/cluster/Dockerfile.daemon
+    image: pulse/aggregator-daemon:latest
+    container_name: pulse-broker
+    command: ["node", "broker-service.mjs"]
+    environment:
+      BROKER_PORT: "4001"
+      BROKER_PROVIDER: "legacy"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "4001:4001"
+    restart: unless-stopped
+
+  pulse-backend:
+    build:
+      context: ../..
+      dockerfile: deploy/cluster/Dockerfile.daemon
+    image: pulse/aggregator-daemon:latest
+    container_name: pulse-backend
+    command: ["node", "backend.mjs"]
+    environment:
+      HTTP_PORT: "4000"
+      MODULAR_BACKEND: "1"
+      BROKER_SERVICE_URL: "http://pulse-broker:4001"
+      PULSE_RUNTIME_DATA_ROOT: "/var/pulse/data"
+      PULSE_QUEUE_DATA_ROOT: "/var/pulse/data"
+      PULSE_BACKEND_ROLE: "primary"
+    depends_on:
+      pulse-broker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 15
+    ports:
+      - "4000:4000"
+    volumes:
+      - pulse_data:/var/pulse/data
+    restart: unless-stopped
+
+  pulse-queue-manager:
+    build:
+      context: ../..
+      dockerfile: deploy/cluster/Dockerfile.daemon
+    image: pulse/aggregator-daemon:latest
+    container_name: pulse-queue-manager
+    command:
+      - node
+      - queue-manager-node.mjs
+      - --aggregator=http://pulse-backend:4000
+      - --port=4100
+      - --host=0.0.0.0
+      - --advertise-ip=pulse-queue-manager
+      - --manager-id=qm-cluster-4100
+      - --node-id=cluster-node-1
+    environment:
+      PULSE_QUEUE_PERSISTENCE: "1"
+      PULSE_QUEUE_DATA_ROOT: "/var/pulse/queue"
+    depends_on:
+      pulse-backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4100/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "4100:4100"
+    volumes:
+      - pulse_queue:/var/pulse/queue
+    restart: unless-stopped
+
+volumes:
+  pulse_data:
+  pulse_queue:

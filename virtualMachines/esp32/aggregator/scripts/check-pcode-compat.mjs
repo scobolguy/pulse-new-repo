@@ -10,6 +10,15 @@ function parseHexToNumber(hexText) {
   return Number.parseInt(s, 16);
 }
 
+function isCppTargetedOpcode(op) {
+  const targets = Array.isArray(op?.targets)
+    ? op.targets.map(t => String(t).toLowerCase())
+    : null;
+
+  if (!targets || targets.length === 0) return true;
+  return targets.includes('cpp') || targets.includes('esp32') || targets.includes('shared');
+}
+
 function parseCppOpcodeEnum(headerText) {
   const enumMatch = headerText.match(/enum\s+Opcode\s*:\s*uint8_t\s*\{([\s\S]*?)\};/m);
   if (!enumMatch) {
@@ -53,10 +62,12 @@ function diffOpcodes(manifestOps, headerOps) {
 async function main() {
   const manifestRaw = await fs.readFile(manifestPath, 'utf-8');
   const manifestJson = JSON.parse(manifestRaw);
-  const manifestOps = (manifestJson.opcodes || []).map(op => ({
+  const manifestOps = (manifestJson.opcodes || [])
+    .filter(isCppTargetedOpcode)
+    .map(op => ({
     name: op.name,
     value: parseHexToNumber(op.hex)
-  }));
+    }));
 
   const headerRaw = await fs.readFile(pmachineHeaderPath, 'utf-8');
   const headerOps = parseCppOpcodeEnum(headerRaw);

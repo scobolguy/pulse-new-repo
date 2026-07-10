@@ -543,13 +543,18 @@ FFSStatus FederatedFileSystem::fetchFileFromPeer(const String &logicalName, cons
 
     FFSStatus FederatedFileSystem::reloadMountPoints() {
         ensureMountParentDirectory();
-        if (!LittleFS.exists(MOUNT_TABLE_PATH)) {
+        // Use append+read so the file is created on first boot without noisy
+        // missing-file logs from the VFS layer.
+        File f = LittleFS.open(MOUNT_TABLE_PATH, "a+");
+        if (!f) return FFSStatus::ERR_IO;
+
+        if (f.size() == 0) {
+            f.close();
             _mounts.clear();
-            return FFSStatus::OK;
+            return saveMountPoints();
         }
 
-        File f = LittleFS.open(MOUNT_TABLE_PATH, "r");
-        if (!f) return FFSStatus::ERR_IO;
+        f.seek(0, SeekSet);
         String raw = f.readString();
         f.close();
 

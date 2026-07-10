@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { pathToFileURL } from 'url';
 import { compilePascalishWithAntlr } from './pascalish-antlr-compiler.mjs';
+import { compilePascalishProgramWithAntlr } from './compile-pascalish-program-antlr-to-pcode.mjs';
 
 const KEYWORDS = new Set([
   'SERVICE',
@@ -661,6 +662,30 @@ function parseArgs(argv) {
 }
 
 export function compileRouterMapperDSL(sourceText) {
+  const normalized = String(sourceText || '');
+  if (looksLikePascalishProgram(normalized)) {
+    const compiledProgram = compilePascalishProgramWithAntlr(normalized);
+    return {
+      version: 1,
+      compiledAt: new Date().toISOString(),
+      serviceId: compiledProgram.programMap?.serviceId || 'default-program',
+      runtimeUnit: compiledProgram.programMap?.runtimeUnit || { kind: 'program', id: 'default-program', refreshMs: null },
+      ast: compiledProgram.ast || null,
+      roles: [],
+      codeLibraries: [],
+      uses: [],
+      interoperability: [],
+      variableDeclarations: compiledProgram.programMap?.variableDeclarations || [],
+      routerRules: [],
+      dataMappings: [],
+      pcodeText: compiledProgram.pcodeText,
+      programMap: compiledProgram.programMap,
+      ir: compiledProgram.ir,
+      typeDeclarations: compiledProgram.programMap?.typeDeclarations || [],
+      classDeclarations: compiledProgram.programMap?.classDeclarations || []
+    };
+  }
+
   const compiledAntlr = compilePascalishWithAntlr(sourceText);
   const ast = compiledAntlr.ast;
   const routerRules = toRouterRules(ast);
@@ -685,6 +710,16 @@ export function compileRouterMapperDSL(sourceText) {
     routerRules,
     dataMappings
   };
+}
+
+function looksLikePascalishProgram(sourceText) {
+  const source = String(sourceText || '');
+  if (/\bclass\b/i.test(source)) return true;
+  if (/\bprogram\b/i.test(source) && !/\b(router|mapper|service)\b/i.test(source)) return true;
+  if (/\btype\s+[a-z_][a-z0-9_]*\s*</i.test(source) || /\btype\s+[a-z_][a-z0-9_]*\s*=\s*record\b/i.test(source)) {
+    return true;
+  }
+  return false;
 }
 
 async function main() {

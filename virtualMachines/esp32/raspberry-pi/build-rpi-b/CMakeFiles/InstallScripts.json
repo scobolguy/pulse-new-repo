@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"C:/dev/pulse-new-repo/virtualMachines/esp32/raspberry-pi/build-rpi-b/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

@@ -5,7 +5,12 @@
 
 import { runPL0 } from './pl0-interpreter.mjs';
 
+let totalTests = 0;
+let passedTests = 0;
+let failedTests = 0;
+
 function test(name, code, input, expected) {
+  totalTests += 1;
   console.log(`\n✓ Test: ${name}`);
   console.log(`  Code: ${code}`);
   console.log(`  Input: ${JSON.stringify(input)}`);
@@ -15,9 +20,13 @@ function test(name, code, input, expected) {
     console.log(`  Output: ${JSON.stringify(output)}`);
     if (expected !== undefined && output !== expected) {
       console.warn(`  ⚠️  Expected: ${JSON.stringify(expected)}`);
+      failedTests += 1;
+      return;
     }
+    passedTests += 1;
   } catch (e) {
     console.error(`  ❌ Error: ${e.message}`);
+    failedTests += 1;
   }
 }
 
@@ -268,3 +277,9 @@ test('Empty string handling',
 console.log(`\n${'='.repeat(60)}`);
 console.log('Test Suite Complete');
 console.log(`${'='.repeat(60)}\n`);
+console.log(`Passed: ${passedTests}/${totalTests}`);
+console.log(`Failed: ${failedTests}/${totalTests}`);
+
+if (failedTests > 0) {
+  process.exitCode = 1;
+}

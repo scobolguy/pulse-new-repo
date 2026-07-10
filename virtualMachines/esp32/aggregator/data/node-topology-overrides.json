@@ -1,1 +1,6 @@
-{}
+{
+  "192.168.2.59": {
+    "parentNodeId": "cluster1",
+    "isClusterGateway": false
+  }
+}

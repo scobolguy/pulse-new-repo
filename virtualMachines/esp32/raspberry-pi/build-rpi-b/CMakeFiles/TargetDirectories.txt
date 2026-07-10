@@ -1,0 +1,3 @@
+C:/dev/pulse-new-repo/virtualMachines/esp32/raspberry-pi/build-rpi-b/CMakeFiles/pulse_pi_node.dir
+C:/dev/pulse-new-repo/virtualMachines/esp32/raspberry-pi/build-rpi-b/CMakeFiles/edit_cache.dir
+C:/dev/pulse-new-repo/virtualMachines/esp32/raspberry-pi/build-rpi-b/CMakeFiles/rebuild_cache.dir

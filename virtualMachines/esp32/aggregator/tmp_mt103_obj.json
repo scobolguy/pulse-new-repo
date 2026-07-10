@@ -1,0 +1,14 @@
+﻿{
+    "block4":  {
+                   "20":  "REF-123",
+                   "71A":  "OUR",
+                   "59":  "/99988877\nBENEFICIARY LTD",
+                   "70":  "Invoice 445",
+                   "32A":  {
+                               "date":  "260705",
+                               "currency":  "USD",
+                               "amount":  "12500,"
+                           },
+                   "50K":  "/12345678\nACME CORP"
+               }
+}

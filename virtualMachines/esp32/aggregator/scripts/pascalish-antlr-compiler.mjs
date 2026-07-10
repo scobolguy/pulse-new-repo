@@ -131,6 +131,23 @@ function parseOrchestrationHints(code) {
   };
 }
 
+function extractReturnExprFromEndpointBlock(blockCode) {
+  const source = String(blockCode || '');
+  if (!source) return "''";
+
+  // Prefer RETURN inside a TRANSACTION body when present.
+  const txnMatch = /transaction\s+[^\n;]+\s+begin([\s\S]*?)success[\s\S]*?backout[\s\S]*?end\s*;/i.exec(source);
+  if (txnMatch) {
+    const txnBody = String(txnMatch[1] || '');
+    const txnReturn = /return\s+([^;]+);/i.exec(txnBody);
+    if (txnReturn) return String(txnReturn[1] || '').trim() || "''";
+  }
+
+  const directReturn = /return\s+([^;]+);/i.exec(source);
+  if (directReturn) return String(directReturn[1] || '').trim() || "''";
+  return "''";
+}
+
 class PascalishAstBuilder extends PascalishRouterMapperVisitor {
   constructor(tokens) {
     super();
@@ -271,8 +288,25 @@ class PascalishAstBuilder extends PascalishRouterMapperVisitor {
 
   visitServiceDecl(ctx) {
     const id = unquote(text(ctx.stringOrIdent()));
-    const body = this.visit(ctx.serviceBody());
-    const handlers = Array.isArray(body?.handlers) ? body.handlers : [];
+    let handlers = [];
+    const serviceBodyCtx = typeof ctx.serviceBody === 'function' ? ctx.serviceBody() : null;
+    if (serviceBodyCtx) {
+      const body = this.visit(serviceBodyCtx);
+      handlers = Array.isArray(body?.handlers) ? body.handlers : [];
+    } else {
+      for (const endpointCtx of (ctx.serviceEndpoint ? ctx.serviceEndpoint() : [])) {
+        const endpoint = this.visit(endpointCtx);
+        if (!endpoint) continue;
+        handlers.push({
+          selectorRaw: endpoint.method || '',
+          returnExprRaw: endpoint.returnExprRaw || "''",
+          endpointPath: endpoint.path || '',
+          acceptsType: endpoint.acceptsType || null,
+          returnsType: endpoint.returnsType || null
+        });
+      }
+    }
+
     const methods = [];
     const outputs = [];
 
@@ -318,6 +352,29 @@ class PascalishAstBuilder extends PascalishRouterMapperVisitor {
         methods: methods.length > 0 ? methods : null,
         outputs
       }
+    };
+  }
+
+  visitServiceEndpoint(ctx) {
+    const method = normalizeHttpVerb(text(ctx.httpVerb()));
+    const path = unquote(text(ctx.stringValue()));
+    const acceptsType = ctx.endpointAccepts && ctx.endpointAccepts()
+      ? text(ctx.endpointAccepts().typeRef())
+      : null;
+    const returnsType = ctx.endpointReturns && ctx.endpointReturns()
+      ? text(ctx.endpointReturns().typeRef())
+      : null;
+
+    const block = this.visit(ctx.blockStmt());
+    const rawBlock = String(block?.code || '');
+
+    return {
+      type: 'ServiceEndpoint',
+      method,
+      path,
+      acceptsType,
+      returnsType,
+      returnExprRaw: extractReturnExprFromEndpointBlock(rawBlock)
     };
   }
 

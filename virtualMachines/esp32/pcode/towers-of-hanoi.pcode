@@ -50,6 +50,8 @@ CALL PROC_HANOI 4
 ENDIF_2:
 RET
 MAIN:
+PUSH_INT 0
+STORE diskCount
 PUSH_INT 3
 STORE diskCount
 PUSH_STR "Towers of Hanoi for "

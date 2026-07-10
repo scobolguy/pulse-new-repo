@@ -1,0 +1,13 @@
+# Auto-generated from ANTLR StandardPascal grammar
+JMP MAIN
+MAIN:
+PUSH_STR "Hello, World!"
+PRINT
+PRINT_NL
+PUSH_STR "Welcome to IBM BOB Workbench"
+PRINT
+PRINT_NL
+PUSH_STR "Pascalish running on JavaScript P-machine"
+PRINT
+PRINT_NL
+HALT

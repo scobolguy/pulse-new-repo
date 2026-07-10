@@ -508,17 +508,88 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     const withChildren = withTopology.map((node) => {
       const key = String(node?.topology?.nodeKey || '').trim();
       const children = childrenByParent.get(key) || [];
+      const hasChildren = children.length > 0;
       return {
         ...node,
         topology: {
           ...node.topology,
-          childNodeIds: children
+          childNodeIds: children,
+          // A node is considered a cluster controller whenever it has children.
+          clusterController: hasChildren,
+          isClusterGateway: Boolean(node?.topology?.isClusterGateway) || hasChildren
+        }
+      };
+    });
+
+    const byNodeKeyForClusterInheritance = new Map();
+    for (const node of withChildren) {
+      const nodeKey = String(node?.topology?.nodeKey || '').trim();
+      if (nodeKey) byNodeKeyForClusterInheritance.set(nodeKey, node);
+    }
+
+    const memoClusterByNode = new Map();
+    const resolveEffectiveClusterForNode = (nodeKey, visiting = new Set()) => {
+      if (!nodeKey) return 'default';
+      if (memoClusterByNode.has(nodeKey)) return memoClusterByNode.get(nodeKey);
+
+      const node = byNodeKeyForClusterInheritance.get(nodeKey);
+      if (!node) return 'default';
+
+      const explicitAssignedCluster = String(clusterNodeMap.get(nodeKey) || '').trim().toLowerCase();
+      const boardDeclaredCluster = String(node?.details?.cluster?.activeClusterId || '').trim().toLowerCase();
+      const currentCluster = String(node?.topology?.activeClusterId || 'default').trim().toLowerCase() || 'default';
+
+      // Explicit cluster definitions stay on the node; inherited defaults come from the parent.
+      if (explicitAssignedCluster) {
+        memoClusterByNode.set(nodeKey, explicitAssignedCluster);
+        return explicitAssignedCluster;
+      }
+      if (boardDeclaredCluster && boardDeclaredCluster !== 'default') {
+        memoClusterByNode.set(nodeKey, boardDeclaredCluster);
+        return boardDeclaredCluster;
+      }
+
+      const parentKey = normalizeNodeId(node?.topology?.parentNodeId);
+      if (parentKey && !visiting.has(nodeKey)) {
+        visiting.add(nodeKey);
+        const inherited = resolveEffectiveClusterForNode(parentKey, visiting);
+        visiting.delete(nodeKey);
+        const normalizedInherited = String(inherited || '').trim().toLowerCase();
+        if (normalizedInherited) {
+          memoClusterByNode.set(nodeKey, normalizedInherited);
+          return normalizedInherited;
+        }
+      }
+
+      memoClusterByNode.set(nodeKey, currentCluster);
+      return currentCluster;
+    };
+
+    const withInheritedClusters = withChildren.map((node) => {
+      const nodeKey = String(node?.topology?.nodeKey || '').trim();
+      const activeClusterId = resolveEffectiveClusterForNode(nodeKey);
+      const clusterPorts = clusterUdpPortMap.get(activeClusterId) || null;
+      const currentParentPort = Number(node?.topology?.udp?.parentPort || 0);
+      const nextParentPort = clusterPorts?.parentPort || (currentParentPort >= 1024 ? currentParentPort : UDP_PORT_PAIR_START);
+      const nextSiblingPort = clusterPorts?.siblingPort || (nextParentPort + 1);
+
+      return {
+        ...node,
+        topology: {
+          ...node.topology,
+          activeClusterId,
+          udp: {
+            parentPort: nextParentPort,
+            siblingPort: nextSiblingPort,
+            listenPorts: [nextParentPort, nextSiblingPort],
+            upstreamPort: nextParentPort
+          }
         }
       };
     });
 
     const byNodeKey = new Map();
-    for (const node of withChildren) {
+    for (const node of withInheritedClusters) {
       const nodeKey = String(node?.topology?.nodeKey || '').trim();
       if (nodeKey) byNodeKey.set(nodeKey, node);
     }
@@ -571,7 +642,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       return deduped;
     };
 
-    return withChildren.map((node) => {
+    return withInheritedClusters.map((node) => {
       const nodeKey = String(node?.topology?.nodeKey || '').trim();
       const localServices = dedupeServiceAdvertisements(node?.details?.services || []);
       const advertisedServices = collectAdvertisedServices(nodeKey);
@@ -762,10 +833,26 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       throw err;
     }
 
-    await persistNodeNameOnBoard(boardIp, nextName);
+    let boardRenameApplied = false;
+    try {
+      await persistNodeNameOnBoard(boardIp, nextName);
+      boardRenameApplied = true;
+    } catch (error) {
+      // Legacy nodes may not implement /node/name; fall back to server-side rename override.
+      const message = String(error?.message || '').toLowerCase();
+      const canFallback = message.includes('not found') || message.includes('404');
+      if (!canFallback) throw error;
+    }
 
     if (normalizedNodeId) delete nodeRenameMap[normalizedNodeId];
     if (normalizedIp) delete nodeRenameMap[normalizedIp];
+
+    if (!boardRenameApplied) {
+      if (normalizedNodeId) nodeRenameMap[normalizedNodeId] = nextName;
+      if (normalizedIp) nodeRenameMap[normalizedIp] = nextName;
+      const normalizedBoardIp = normalizeNodeId(boardIp);
+      if (normalizedBoardIp) nodeRenameMap[normalizedBoardIp] = nextName;
+    }
 
     for (const [key, existing] of discoveredNodes.entries()) {
       const matches = [
@@ -795,7 +882,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       status: 'ok',
       nodeId: requestedNodeId || requestedIp,
       nodeName: nextName,
-      sourceOfTruth: 'board'
+      sourceOfTruth: boardRenameApplied ? 'board' : 'server'
     };
   }
 
@@ -884,6 +971,45 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       });
     }
 
+    // Keep deployed services discoverable even when no dedicated runtime instance advertises them.
+    for (const deployment of ffsDeploymentRegistry.values()) {
+      const serviceName = String(deployment?.serviceName || '').trim();
+      if (!serviceName) continue;
+      const key = normalizeServiceName(serviceName);
+      if (!byService.has(key)) {
+        byService.set(key, {
+          serviceName,
+          instances: []
+        });
+      }
+
+      const normalizedTarget = normalizeNodeId(deployment?.targetNodeId || '');
+      const pmachineInstance = Array.from(serviceInstanceRegistry.values()).find((instance) => {
+        if (normalizeServiceName(instance.serviceName) !== 'pmachine') return false;
+        if (!normalizedTarget) return false;
+        return normalizeNodeId(instance.nodeId || instance.ip) === normalizedTarget;
+      }) || null;
+
+      byService.get(key).instances.push({
+        instanceId: `deploy:${key}:${normalizedTarget || '*'}`,
+        serviceName,
+        nodeId: deployment?.targetNodeId || null,
+        ip: pmachineInstance?.ip || null,
+        port: pmachineInstance?.port || null,
+        status: 'resident',
+        metadata: {
+          deployment: true,
+          packageName: deployment?.packageName || null,
+          packageVersion: deployment?.packageVersion || null,
+          targetNodeId: deployment?.targetNodeId || null,
+          updatedAt: deployment?.updatedAt || null,
+          ...(deployment?.metadata || {})
+        },
+        lastHeartbeat: pmachineInstance?.lastHeartbeat || null,
+        staleMs: pmachineInstance?.lastHeartbeat ? Math.max(0, now - Number(pmachineInstance.lastHeartbeat || 0)) : null
+      });
+    }
+
     const servicesOut = Array.from(byService.values());
     servicesOut.sort((a, b) => a.serviceName.localeCompare(b.serviceName));
     for (const svc of servicesOut) {
@@ -935,6 +1061,110 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       if (normalizeServiceName(instance.serviceName) !== normalizedName) return false;
       return ['up', 'degraded'].includes(String(instance.status || '').toLowerCase());
     });
+  }
+
+  function chooseCandidateByNode(candidates, nodeId) {
+    const normalizedNodeId = normalizeNodeId(nodeId);
+    if (!normalizedNodeId) return null;
+    return (Array.isArray(candidates) ? candidates : []).find((candidate) => {
+      return normalizeNodeId(candidate?.nodeId || candidate?.ip) === normalizedNodeId;
+    }) || null;
+  }
+
+  function listDeploymentBackedServiceCandidates(serviceName, nodes = []) {
+    const normalizedService = normalizeServiceName(serviceName);
+    if (!normalizedService) return [];
+
+    const entries = Array.from(ffsDeploymentRegistry.values())
+      .filter((entry) => normalizeServiceName(entry?.serviceName) === normalizedService);
+    if (entries.length === 0) return [];
+
+    const nodeList = Array.isArray(nodes) ? nodes : [];
+    const nodeByKey = new Map();
+    for (const node of nodeList) {
+      for (const key of getNodeIdentityCandidates(node)) {
+        if (!nodeByKey.has(key)) nodeByKey.set(key, node);
+      }
+    }
+
+    const pmachineInstances = listActiveServiceInstances('pmachine');
+    const out = [];
+
+    for (const pmachine of pmachineInstances) {
+      const pmachineKey = normalizeNodeId(pmachine?.nodeId || pmachine?.ip);
+      if (!pmachineKey) continue;
+
+      const node = nodeByKey.get(pmachineKey) || null;
+      const nodeKeys = node ? getNodeIdentityCandidates(node) : [pmachineKey];
+      const deployment = entries.find((entry) => {
+        const target = normalizeNodeId(entry?.targetNodeId || '');
+        if (!target) return true;
+        return nodeKeys.includes(target) || target === pmachineKey;
+      }) || null;
+      if (!deployment) continue;
+
+      out.push({
+        instanceId: `resident:${normalizedService}:${pmachine.instanceId || pmachineKey}`,
+        serviceName,
+        nodeId: pmachine.nodeId || node?.nodeId || node?.nodeName || pmachine.ip,
+        ip: pmachine.ip,
+        port: pmachine.port,
+        status: 'up',
+        lastHeartbeat: pmachine.lastHeartbeat,
+        metadata: {
+          ...(pmachine.metadata || {}),
+          route: '/pmachine/router/run',
+          deployment: true,
+          deploymentServiceName: deployment.serviceName,
+          deploymentPackageName: deployment.packageName,
+          deploymentPackageVersion: deployment.packageVersion,
+          ...(deployment.metadata || {})
+        }
+      });
+    }
+
+    return out;
+  }
+
+  async function invokeDeploymentOnPmachine(instance, deployment, reqBody) {
+    const body = reqBody && typeof reqBody === 'object' ? reqBody : {};
+    const deploymentMeta = deployment?.metadata && typeof deployment.metadata === 'object'
+      ? deployment.metadata
+      : {};
+
+    const inputQueue = String(body.inputQueue || deploymentMeta.inputQueue || 'default.in').trim();
+    const message = String(body.message || '').trim();
+    const rules = String(body.rules || deploymentMeta.rules || '').trim();
+    const mappings = String(body.mappings || deploymentMeta.mappings || '').trim();
+
+    const params = new URLSearchParams();
+    params.set('serviceId', String(body.serviceId || deployment?.serviceName || instance?.serviceName || 'pmachine-service'));
+    params.set('inputQueue', inputQueue);
+    params.set('message', message);
+    if (rules) params.set('rules', rules);
+    if (mappings) params.set('mappings', mappings);
+
+    const timeoutMs = Number(body.timeoutMs || 8000);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), Math.max(100, timeoutMs));
+    try {
+      const response = await fetch(`http://${instance.ip}:${instance.port}/pmachine/router/run?${params.toString()}`, {
+        method: 'GET',
+        signal: controller.signal
+      });
+      const contentType = response.headers.get('content-type') || '';
+      const payload = contentType.includes('application/json')
+        ? await response.json().catch(() => null)
+        : await response.text().catch(() => '');
+      return {
+        ok: response.ok,
+        status: response.status,
+        contentType,
+        payload
+      };
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   async function proxyServiceInvocation(instance, reqBody) {
@@ -1073,6 +1303,198 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     }
   }
 
+  async function restartNodeOnBoard(ip, options = {}, timeoutMs = 2500) {
+    const normalizedIp = String(ip || '').trim();
+    if (!normalizedIp) {
+      throw new Error('board ip is required');
+    }
+
+    const body = new URLSearchParams();
+    if (options.reason != null) body.set('reason', String(options.reason));
+    if (options.delayMs != null) body.set('delayMs', String(options.delayMs));
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), Math.max(250, timeoutMs));
+    try {
+      const response = await fetch(`http://${normalizedIp}/node/restart`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded'
+        },
+        body: body.toString(),
+        signal: controller.signal
+      });
+
+      const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+      const payload = contentType.includes('application/json')
+        ? await response.json().catch(() => null)
+        : await response.text().catch(() => '');
+
+      if (!response.ok) {
+        const detail = payload && typeof payload === 'object'
+          ? (payload.error || payload.message || JSON.stringify(payload))
+          : String(payload || `HTTP ${response.status}`);
+        throw new Error(`board restart failed: ${detail}`);
+      }
+
+      return payload;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async function uploadFileToBoard(ip, remotePath, content, timeoutMs = 5000) {
+    const normalizedIp = String(ip || '').trim();
+    const normalizedPath = String(remotePath || '').trim();
+    if (!normalizedIp) throw new Error('board ip is required');
+    if (!normalizedPath) throw new Error('remote path is required');
+
+    const body = new URLSearchParams({
+      file: normalizedPath,
+      body: String(content || '')
+    });
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), Math.max(250, timeoutMs));
+    try {
+      const response = await fetch(`http://${normalizedIp}/ffs/upload`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded'
+        },
+        body: body.toString(),
+        signal: controller.signal
+      });
+
+      const payload = await response.text().catch(() => '');
+      if (!response.ok) {
+        throw new Error(`board upload failed for ${normalizedPath}: ${payload || `HTTP ${response.status}`}`);
+      }
+      return {
+        ok: true,
+        status: response.status,
+        path: normalizedPath,
+        response: payload
+      };
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async function executeProgramOnBoard(ip, program = {}, timeoutMs = 8000) {
+    const normalizedIp = String(ip || '').trim();
+    const file = String(program.file || '').trim();
+    const programMap = String(program.programMap || '').trim();
+    const inputQueue = String(program.inputQueue || 'default.in').trim();
+    const message = String(program.message || '').trim();
+    if (!normalizedIp) throw new Error('board ip is required');
+    if (!file || !programMap) {
+      throw new Error('program file and programMap are required');
+    }
+
+    const params = new URLSearchParams({
+      file,
+      programMap,
+      inputQueue,
+      message
+    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), Math.max(250, timeoutMs));
+    try {
+      const response = await fetch(`http://${normalizedIp}/pmachine/pcode_router_run?${params.toString()}`, {
+        method: 'GET',
+        signal: controller.signal
+      });
+
+      const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+      const payload = contentType.includes('application/json')
+        ? await response.json().catch(() => null)
+        : await response.text().catch(() => '');
+
+      if (!response.ok) {
+        const detail = payload && typeof payload === 'object'
+          ? (payload.error || payload.message || JSON.stringify(payload))
+          : String(payload || `HTTP ${response.status}`);
+        throw new Error(`board program execution failed: ${detail}`);
+      }
+
+      return {
+        ok: true,
+        status: response.status,
+        payload
+      };
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  function attachHierarchyPaths(nodes) {
+    const list = Array.isArray(nodes) ? nodes : [];
+    const byKey = new Map();
+    for (const node of list) {
+      const key = String(node?.topology?.nodeKey || '').trim();
+      if (key) byKey.set(key, node);
+    }
+
+    const cache = new Map();
+    const computePath = (node, visiting = new Set()) => {
+      const key = String(node?.topology?.nodeKey || '').trim();
+      if (!key) return '';
+      if (cache.has(key)) return cache.get(key);
+      if (visiting.has(key)) return key;
+      visiting.add(key);
+
+      const parentKey = String(node?.topology?.parentNodeId || '').trim().toLowerCase();
+      const selfToken = normalizeNodeId(node?.nodeName || node?.nodeId || node?.ip || key) || key;
+      let pathValue = selfToken;
+      if (parentKey) {
+        const parent = byKey.get(parentKey) || null;
+        if (parent) {
+          const parentPath = computePath(parent, visiting);
+          pathValue = parentPath ? `${parentPath}.${selfToken}` : selfToken;
+        }
+      }
+
+      visiting.delete(key);
+      cache.set(key, pathValue);
+      return pathValue;
+    };
+
+    return list.map((node) => ({
+      ...node,
+      topology: {
+        ...(node?.topology || {}),
+        hierarchyPath: computePath(node)
+      }
+    }));
+  }
+
+  function resolveManagedNode(requestedNodeId, requestedIp, nodes = []) {
+    const normalizedNodeId = normalizeNodeId(requestedNodeId);
+    const normalizedIp = normalizeNodeId(requestedIp);
+    const list = Array.isArray(nodes) ? nodes : [];
+    const node = list.find((existing) => {
+      const matches = [
+        normalizeNodeId(existing?.nodeId),
+        normalizeNodeId(existing?.id),
+        normalizeNodeId(existing?.ip),
+        normalizeNodeId(existing?.nodeName),
+        normalizeNodeId(existing?.details?.nodeName)
+      ].filter(Boolean);
+      return (normalizedNodeId && matches.includes(normalizedNodeId))
+        || (normalizedIp && matches.includes(normalizedIp));
+    }) || null;
+
+    const boardIp = String(requestedIp || node?.ip || '').trim();
+    return {
+      node,
+      boardIp,
+      targetKey: normalizedNodeId || normalizedIp || normalizeNodeId(node?.nodeId || node?.ip),
+      normalizedNodeId,
+      normalizedIp
+    };
+  }
+
   app.get('/api/discover-primary', async (req, res) => {
     const now = Date.now();
     const nodes = Array.from(discoveredNodes.values())
@@ -1101,7 +1523,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
   });
 
   app.get('/api/nodes', async (req, res) => {
-    res.json(await buildCurrentNodesWithTopology());
+    res.json(attachHierarchyPaths(await buildCurrentNodesWithTopology()));
   });
 
   app.get('/api/address/resolve/:address', async (req, res) => {
@@ -1516,25 +1938,34 @@ export function registerTopologyRuntimeRoutes(app, deps) {
         }
       }
 
+      let boardTopologyApplied = false;
       if (boardIp) {
-        await persistNodeTopologyOnBoard(boardIp, {
-          activeClusterId: req.body?.activeClusterId || 'default',
-          parentHost: req.body?.parentHost || '',
-          parentNodeId: nextParent || '',
-          isClusterGateway: nextGateway,
-          parentPort: req.body?.parentPort,
-          siblingPort: req.body?.siblingPort
-        });
+        try {
+          await persistNodeTopologyOnBoard(boardIp, {
+            activeClusterId: req.body?.activeClusterId || 'default',
+            parentHost: req.body?.parentHost || '',
+            parentNodeId: nextParent || '',
+            isClusterGateway: nextGateway,
+            parentPort: req.body?.parentPort,
+            siblingPort: req.body?.siblingPort
+          });
+          boardTopologyApplied = true;
+        } catch (error) {
+          const message = String(error?.message || '').toLowerCase();
+          const canFallback = message.includes('not found') || message.includes('404');
+          if (!canFallback) throw error;
+        }
+      }
 
+      if (boardTopologyApplied) {
         delete nodeTopologyMap[targetKey];
-        await saveNodeTopologyMap(nodeTopologyMap);
       } else {
         nodeTopologyMap[targetKey] = {
           parentNodeId: nextParent || '',
           isClusterGateway: nextGateway
         };
-        await saveNodeTopologyMap(nodeTopologyMap);
       }
+      await saveNodeTopologyMap(nodeTopologyMap);
 
       return res.json({
         status: 'ok',
@@ -1543,10 +1974,101 @@ export function registerTopologyRuntimeRoutes(app, deps) {
           parentNodeId: nextParent || '',
           isClusterGateway: nextGateway
         },
-        sourceOfTruth: boardIp ? 'board' : 'server'
+        sourceOfTruth: boardTopologyApplied ? 'board' : 'server'
       });
     } catch (error) {
       return res.status(500).json({ error: error?.message || 'failed to update node topology' });
+    }
+  });
+
+  app.post('/api/nodes/:nodeId/parent', async (req, res) => {
+    try {
+      const requestedNodeId = String(req.params.nodeId || req.body?.nodeId || '').trim();
+      const requestedIp = String(req.body?.ip || '').trim();
+      const nodes = await buildCurrentNodesWithTopology();
+      const resolved = resolveManagedNode(requestedNodeId, requestedIp, nodes);
+
+      if (!resolved.targetKey) {
+        return res.status(400).json({ error: 'nodeId or ip is required' });
+      }
+
+      let nextParent = normalizeNodeId(req.body?.parentNodeId);
+      if (!nextParent && req.body?.parentAddress) {
+        const parentNode = resolveNodeByAddressPath(String(req.body.parentAddress || '').trim(), nodes);
+        nextParent = normalizeNodeId(parentNode?.nodeId || parentNode?.nodeName || parentNode?.ip);
+      }
+      if (nextParent && nextParent === resolved.targetKey) {
+        return res.status(400).json({ error: 'node cannot be its own parent' });
+      }
+
+      const nextGateway = req.body?.isClusterGateway === true;
+      const nextClusterId = String(req.body?.activeClusterId || resolved.node?.topology?.activeClusterId || 'default').trim().toLowerCase() || 'default';
+      let boardTopologyApplied = false;
+      if (resolved.boardIp) {
+        try {
+          await persistNodeTopologyOnBoard(resolved.boardIp, {
+            activeClusterId: nextClusterId,
+            parentHost: String(req.body?.parentHost || '').trim(),
+            parentNodeId: nextParent || '',
+            isClusterGateway: nextGateway,
+            parentPort: req.body?.parentPort,
+            siblingPort: req.body?.siblingPort
+          });
+          boardTopologyApplied = true;
+        } catch (error) {
+          const message = String(error?.message || '').toLowerCase();
+          const canFallback = message.includes('not found') || message.includes('404');
+          if (!canFallback) throw error;
+        }
+      }
+
+      if (boardTopologyApplied) {
+        delete nodeTopologyMap[resolved.targetKey];
+      } else {
+        nodeTopologyMap[resolved.targetKey] = {
+          parentNodeId: nextParent || '',
+          isClusterGateway: nextGateway
+        };
+      }
+      await saveNodeTopologyMap(nodeTopologyMap);
+
+      return res.json({
+        status: 'ok',
+        nodeId: requestedNodeId || requestedIp,
+        topology: {
+          activeClusterId: nextClusterId,
+          parentNodeId: nextParent || '',
+          isClusterGateway: nextGateway
+        },
+        sourceOfTruth: boardTopologyApplied ? 'board' : 'server'
+      });
+    } catch (error) {
+      return res.status(500).json({ error: error?.message || 'failed to move node under parent' });
+    }
+  });
+
+  app.post('/api/nodes/:nodeId/restart', async (req, res) => {
+    try {
+      const requestedNodeId = String(req.params.nodeId || req.body?.nodeId || '').trim();
+      const requestedIp = String(req.body?.ip || '').trim();
+      const nodes = await buildCurrentNodesWithTopology();
+      const resolved = resolveManagedNode(requestedNodeId, requestedIp, nodes);
+      if (!resolved.boardIp) {
+        return res.status(404).json({ error: 'target board ip not found for restart' });
+      }
+
+      const restart = await restartNodeOnBoard(resolved.boardIp, {
+        reason: req.body?.reason || 'api-request',
+        delayMs: req.body?.delayMs
+      });
+      return res.json({
+        status: 'ok',
+        nodeId: requestedNodeId || requestedIp,
+        ip: resolved.boardIp,
+        restart
+      });
+    } catch (error) {
+      return res.status(500).json({ error: error?.message || 'failed to restart node' });
     }
   });
 
@@ -1662,13 +2184,29 @@ export function registerTopologyRuntimeRoutes(app, deps) {
           .filter(Boolean)
       );
 
+      const currentNodes = await buildCurrentNodesWithTopology();
       const activeInstances = listActiveServiceInstances(serviceName);
+      const deploymentCandidates = listDeploymentBackedServiceCandidates(serviceName, currentNodes);
+      const candidateInstances = activeInstances.length > 0 ? activeInstances : deploymentCandidates;
+
+      if (candidateInstances.length === 0) {
+        return res.status(404).json({ error: `No active or resident deployment candidate for service ${serviceName}` });
+      }
+
       const constrainedInstances = activeInstances.filter((instance) => {
         const domain = String(instance.metadata?.failureDomain || instance.nodeId || instance.ip || 'default');
         if (requiredFailureDomain && domain !== requiredFailureDomain) return false;
         if (forbiddenFailureDomains.size === 0) return true;
         return !forbiddenFailureDomains.has(domain);
       });
+      const constrainedCandidates = constrainedInstances.length > 0
+        ? constrainedInstances
+        : candidateInstances.filter((instance) => {
+            const domain = String(instance.metadata?.failureDomain || instance.nodeId || instance.ip || 'default');
+            if (requiredFailureDomain && domain !== requiredFailureDomain) return false;
+            if (forbiddenFailureDomains.size === 0) return true;
+            return !forbiddenFailureDomains.has(domain);
+          });
 
       const allocatorJob = {
         requiredService: serviceName,
@@ -1683,7 +2221,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
 
       const allocatorResult = allocateJob(
         allocatorJob,
-        constrainedInstances.map(toAllocatorCandidate),
+        constrainedCandidates.map(toAllocatorCandidate),
         {
           policyId,
           weights: body.weights || null
@@ -1705,18 +2243,18 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       }
 
       const allocatorSelectedInstance = allocatorTop
-        ? constrainedInstances.find((instance) => String(instance.instanceId || `${instance.serviceName}:${instance.nodeId || instance.ip || 'unknown'}`) === allocatorTop.id)
+        ? constrainedCandidates.find((instance) => String(instance.instanceId || `${instance.serviceName}:${instance.nodeId || instance.ip || 'unknown'}`) === allocatorTop.id)
         : null;
 
       let selected = preferredNodeId
-        ? chooseServiceInstanceByNode(serviceName, preferredNodeId)
+        ? (chooseServiceInstanceByNode(serviceName, preferredNodeId) || chooseCandidateByNode(candidateInstances, preferredNodeId))
         : null;
 
       if (!selected) {
         if (allocatorMode === 'enforce' && allocatorSelectedInstance) {
           selected = allocatorSelectedInstance;
         } else {
-          selected = resolveServiceInstance(serviceName);
+          selected = resolveServiceInstance(serviceName) || constrainedCandidates[0] || candidateInstances[0] || null;
         }
       }
       if (!selected) {
@@ -1774,7 +2312,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
         // Non-blocking decision log persistence.
       });
 
-      const deployment = getDeploymentForService(serviceName, selected.nodeId);
+      const deployment = getDeploymentForService(serviceName, selected.nodeId || selected.ip);
       const responsePayload = {
         status: 'ok',
         selected: {
@@ -1812,7 +2350,12 @@ export function registerTopologyRuntimeRoutes(app, deps) {
         return res.json(responsePayload);
       }
 
-      const invocation = await proxyServiceInvocation(selected, body);
+      const invocation = (deployment && normalizeServiceName(selected?.serviceName) === 'pmachine')
+        ? await invokeDeploymentOnPmachine(selected, deployment, {
+            ...body,
+            serviceId: serviceName
+          })
+        : await proxyServiceInvocation(selected, body);
       return res.status(invocation.ok ? 200 : 502).json({
         ...responsePayload,
         invocation
@@ -1851,6 +2394,158 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     };
     ffsDeploymentRegistry.set(key, next);
     res.json({ status: 'ok', deployment: next });
+  });
+
+  app.post('/api/nodes/:nodeId/deploy', async (req, res) => {
+    try {
+      const requestedNodeId = String(req.params.nodeId || req.body?.nodeId || '').trim();
+      const requestedIp = String(req.body?.ip || '').trim();
+      const nodes = await buildCurrentNodesWithTopology();
+      const resolved = resolveManagedNode(requestedNodeId, requestedIp, nodes);
+      const body = req.body && typeof req.body === 'object' ? req.body : {};
+
+      if (!resolved.node && !resolved.boardIp) {
+        return res.status(404).json({ error: 'node not found' });
+      }
+
+      const uploads = [];
+      const requestedFiles = Array.isArray(body.files) ? body.files : [];
+      if (requestedFiles.length > 0) {
+        if (!resolved.boardIp) {
+          return res.status(400).json({ error: 'target node is not addressable for file deployment' });
+        }
+        for (const file of requestedFiles) {
+          const remotePath = String(file?.path || '').trim();
+          if (!remotePath) {
+            return res.status(400).json({ error: 'each file requires a path' });
+          }
+          uploads.push(await uploadFileToBoard(resolved.boardIp, remotePath, String(file?.content || '')));
+        }
+      }
+
+      const deploymentRecords = [];
+      const serviceName = String(body.serviceName || '').trim();
+      const packageName = String(body.packageName || '').trim();
+      if (serviceName && packageName) {
+        const key = `${normalizeServiceName(serviceName)}::${normalizeNodeId(requestedNodeId || resolved.node?.nodeId || resolved.boardIp || '*')}`;
+        const next = {
+          key,
+          serviceName,
+          packageName,
+          packageVersion: String(body.packageVersion || 'latest').trim(),
+          targetNodeId: String(requestedNodeId || resolved.node?.nodeId || resolved.node?.nodeName || resolved.boardIp || '').trim(),
+          updatedAt: new Date().toISOString(),
+          metadata: body.metadata && typeof body.metadata === 'object' ? body.metadata : {}
+        };
+        ffsDeploymentRegistry.set(key, next);
+        deploymentRecords.push(next);
+      }
+
+      let execution = null;
+      if (body.program && typeof body.program === 'object') {
+        if (!resolved.boardIp) {
+          return res.status(400).json({ error: 'target node is not addressable for program execution' });
+        }
+        execution = await executeProgramOnBoard(resolved.boardIp, body.program);
+      }
+
+      return res.json({
+        status: 'ok',
+        target: {
+          nodeId: requestedNodeId || resolved.node?.nodeId || null,
+          nodeName: resolved.node?.nodeName || resolved.node?.details?.nodeName || null,
+          ip: resolved.boardIp || null
+        },
+        uploads,
+        deployments: deploymentRecords,
+        execution
+      });
+    } catch (error) {
+      return res.status(500).json({ error: error?.message || 'failed to deploy to node' });
+    }
+  });
+
+  app.post('/api/clusters/:clusterId/deploy', async (req, res) => {
+    try {
+      await ensureClusterRegistryLoaded();
+      const clusterId = normalizeNodeId(req.params.clusterId);
+      const nodes = attachHierarchyPaths(await buildCurrentNodesWithTopology());
+      const effectiveRegistry = buildEffectiveClusterRegistry(nodes);
+      const cluster = effectiveRegistry[clusterId];
+      if (!cluster) {
+        return res.status(404).json({ error: 'cluster not found' });
+      }
+
+      const results = [];
+      for (const clusterNodeId of cluster.nodes || []) {
+        const node = nodes.find((entry) => normalizeNodeId(entry.nodeId || entry.nodeName || entry.ip) === clusterNodeId) || null;
+        if (!node) {
+          results.push({ nodeId: clusterNodeId, ok: false, error: 'node not currently available' });
+          continue;
+        }
+
+        try {
+          const uploads = [];
+          const requestedFiles = Array.isArray(req.body?.files) ? req.body.files : [];
+          for (const file of requestedFiles) {
+            uploads.push(await uploadFileToBoard(node.ip, String(file?.path || ''), String(file?.content || '')));
+          }
+
+          const deployments = [];
+          const serviceName = String(req.body?.serviceName || '').trim();
+          const packageName = String(req.body?.packageName || '').trim();
+          if (serviceName && packageName) {
+            const key = `${normalizeServiceName(serviceName)}::${normalizeNodeId(node.nodeId || node.ip)}`;
+            const next = {
+              key,
+              serviceName,
+              packageName,
+              packageVersion: String(req.body?.packageVersion || 'latest').trim(),
+              targetNodeId: String(node.nodeId || node.nodeName || node.ip || '').trim(),
+              updatedAt: new Date().toISOString(),
+              metadata: req.body?.metadata && typeof req.body.metadata === 'object'
+                ? { ...req.body.metadata, clusterId }
+                : { clusterId }
+            };
+            ffsDeploymentRegistry.set(key, next);
+            deployments.push(next);
+          }
+
+          let execution = null;
+          if (req.body?.program && typeof req.body.program === 'object') {
+            execution = await executeProgramOnBoard(node.ip, req.body.program);
+          }
+
+          results.push({
+            nodeId: node.nodeId,
+            nodeName: node.nodeName,
+            ip: node.ip,
+            ok: true,
+            uploads,
+            deployments,
+            execution
+          });
+        } catch (error) {
+          results.push({
+            nodeId: node.nodeId,
+            nodeName: node.nodeName,
+            ip: node.ip,
+            ok: false,
+            error: error?.message || String(error)
+          });
+        }
+      }
+
+      return res.json({
+        status: 'ok',
+        clusterId,
+        attempted: results.length,
+        succeeded: results.filter((entry) => entry.ok).length,
+        results
+      });
+    } catch (error) {
+      return res.status(500).json({ error: error?.message || 'failed to deploy to cluster' });
+    }
   });
 
   app.get('/api/proxy/:ip', async (req, res) => {

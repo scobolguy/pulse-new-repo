@@ -1,8 +1,14 @@
 #include <Arduino.h>
+#include "serial_compat.h"
 #include "pmachine_opcodes_extended.h"
 #include "pmachine_dynamic_library.h"
+#if defined(PLATFORM_RPIB)
+#include <sd_chunkstore_host_stub.h>
+#else
 #include "sd_chunkstore.h"
+#endif
 #include <cmath>
+#include <cstring>
 #include <map>
 #include <string>
 
@@ -205,7 +211,7 @@ void handle_DL_LOAD(PMachine& vm, PMachineScheduler& scheduler,
     
     // Check if already loaded
     if (globalLibraryRegistry->isLibraryLoaded(libraryName)) {
-        Serial.printf("Library %s already loaded\n", libraryName.c_str());
+        SERIAL_PRINTF("Library %s already loaded\n", libraryName.c_str());
         stack.push_back(1); // Success
         pc++;
         return;
@@ -224,7 +230,7 @@ void handle_DL_LOAD(PMachine& vm, PMachineScheduler& scheduler,
     // Real loading happens via loadLibraryFromJSON called externally
     stack.push_back(1);
     
-    Serial.printf("OP_DL_LOAD: %s at PC %d\n", libraryName.c_str(), basePC);
+    SERIAL_PRINTF("OP_DL_LOAD: %s at PC %u\n", libraryName.c_str(), static_cast<unsigned>(basePC));
     
     pc++;
 }
@@ -240,7 +246,7 @@ void handle_DL_CALL(PMachine& vm, PMachineScheduler& scheduler,
     // Look up thunk
     Thunk* thunk = globalThunkTable->getThunk(thunkId);
     if (!thunk) {
-        Serial.printf("ERROR: Thunk %d not found\n", thunkId);
+        SERIAL_PRINTF("ERROR: Thunk %u not found\n", static_cast<unsigned>(thunkId));
         stack.push_back(-1); // Error
         pc++;
         return;
@@ -255,9 +261,9 @@ void handle_DL_CALL(PMachine& vm, PMachineScheduler& scheduler,
         );
         
         if (targetPC == 0) {
-            Serial.printf("ERROR: Cannot resolve %s.%s\n",
-                         thunk->libraryName.c_str(),
-                         thunk->functionName.c_str());
+            SERIAL_PRINTF("ERROR: Cannot resolve %s.%s\n",
+                          thunk->libraryName.c_str(),
+                          thunk->functionName.c_str());
             stack.push_back(-1); // Error
             pc++;
             return;
@@ -278,11 +284,11 @@ void handle_DL_CALL(PMachine& vm, PMachineScheduler& scheduler,
     // Jump to target
     pc = thunk->targetPC;
     
-    Serial.printf("OP_DL_CALL: %s.%s -> PC %d (call #%d)\n",
+    SERIAL_PRINTF("OP_DL_CALL: %s.%s -> PC %u (call #%u)\n",
                   thunk->libraryName.c_str(),
                   thunk->functionName.c_str(),
-                  thunk->targetPC,
-                  thunk->callCount);
+                  static_cast<unsigned>(thunk->targetPC),
+                  static_cast<unsigned>(thunk->callCount));
 }
 
 void handle_DL_UNLOAD(PMachine& vm, PMachineScheduler& scheduler,
@@ -299,7 +305,7 @@ void handle_DL_UNLOAD(PMachine& vm, PMachineScheduler& scheduler,
     // Push result onto stack
     stack.push_back(success ? 1 : 0);
     
-    Serial.printf("OP_DL_UNLOAD: %s %s\n",
+    SERIAL_PRINTF("OP_DL_UNLOAD: %s %s\n",
                   libraryName.c_str(),
                   success ? "SUCCESS" : "FAILED");
     
@@ -347,9 +353,9 @@ void handle_DL_LIST(PMachine& vm, PMachineScheduler& scheduler,
     stack.push_back(libraries.size());
     
     // Print library list
-    Serial.printf("Loaded libraries (%d):\n", libraries.size());
+    SERIAL_PRINTF("Loaded libraries (%u):\n", static_cast<unsigned>(libraries.size()));
     for (const auto& lib : libraries) {
-        Serial.printf("  - %s\n", lib.c_str());
+        SERIAL_PRINTF("  - %s\n", lib.c_str());
     }
     
     pc++;
@@ -376,7 +382,7 @@ void handle_FILE_OPEN(PMachine& vm, PMachineScheduler& scheduler,
     
     // Check if chunkstore is initialized
     if (!globalChunkstore || !globalChunkstore->isInitialized()) {
-        Serial.println("ERROR: SD Chunkstore not initialized");
+        SERIAL_PRINTLN("ERROR: SD Chunkstore not initialized");
         stack.push_back(0xFFFF); // Error
         pc++;
         return;
@@ -386,7 +392,7 @@ void handle_FILE_OPEN(PMachine& vm, PMachineScheduler& scheduler,
     int chunkstoreHandle = globalChunkstore->open(filename.c_str(), mode);
     
     if (chunkstoreHandle < 0) {
-        Serial.printf("ERROR: Failed to open file %s\n", filename.c_str());
+        SERIAL_PRINTF("ERROR: Failed to open file %s\n", filename.c_str());
         stack.push_back(0xFFFF); // Error
         pc++;
         return;
@@ -396,8 +402,8 @@ void handle_FILE_OPEN(PMachine& vm, PMachineScheduler& scheduler,
     uint16_t vmHandle = nextVMFileHandle++;
     fileHandleMap[vmHandle] = chunkstoreHandle;
     
-    Serial.printf("OP_FILE_OPEN: %s (mode %d) -> handle %d\n",
-                  filename.c_str(), mode, vmHandle);
+    SERIAL_PRINTF("OP_FILE_OPEN: %s (mode %d) -> handle %u\n",
+                  filename.c_str(), mode, static_cast<unsigned>(vmHandle));
     
     stack.push_back(vmHandle);
     pc++;
@@ -418,7 +424,7 @@ void handle_FILE_READ(PMachine& vm, PMachineScheduler& scheduler,
     
     // Check if chunkstore is initialized
     if (!globalChunkstore || !globalChunkstore->isInitialized()) {
-        Serial.println("ERROR: SD Chunkstore not initialized");
+        SERIAL_PRINTLN("ERROR: SD Chunkstore not initialized");
         stack.push_back(-1); // Error
         pc++;
         return;
@@ -427,7 +433,7 @@ void handle_FILE_READ(PMachine& vm, PMachineScheduler& scheduler,
     // Look up chunkstore handle
     auto it = fileHandleMap.find(vmHandle);
     if (it == fileHandleMap.end()) {
-        Serial.printf("ERROR: Invalid file handle %d\n", vmHandle);
+        SERIAL_PRINTF("ERROR: Invalid file handle %u\n", static_cast<unsigned>(vmHandle));
         stack.push_back(-1); // Error
         pc++;
         return;
@@ -438,7 +444,7 @@ void handle_FILE_READ(PMachine& vm, PMachineScheduler& scheduler,
     // Allocate buffer
     uint8_t* buffer = new uint8_t[size];
     if (!buffer) {
-        Serial.println("ERROR: Failed to allocate buffer");
+        SERIAL_PRINTLN("ERROR: Failed to allocate buffer");
         stack.push_back(-1); // Error
         pc++;
         return;
@@ -448,7 +454,7 @@ void handle_FILE_READ(PMachine& vm, PMachineScheduler& scheduler,
     int bytesRead = globalChunkstore->read(chunkstoreHandle, buffer, size);
     
     if (bytesRead < 0) {
-        Serial.printf("ERROR: Failed to read from file handle %d\n", vmHandle);
+        SERIAL_PRINTF("ERROR: Failed to read from file handle %u\n", static_cast<unsigned>(vmHandle));
         delete[] buffer;
         stack.push_back(-1); // Error
         pc++;
@@ -460,7 +466,7 @@ void handle_FILE_READ(PMachine& vm, PMachineScheduler& scheduler,
     
     delete[] buffer;
     
-    Serial.printf("OP_FILE_READ: handle %d, %d bytes read\n", vmHandle, bytesRead);
+    SERIAL_PRINTF("OP_FILE_READ: handle %u, %d bytes read\n", static_cast<unsigned>(vmHandle), bytesRead);
     
     stack.push_back(bytesRead);
     pc++;
@@ -481,7 +487,7 @@ void handle_FILE_WRITE(PMachine& vm, PMachineScheduler& scheduler,
     
     // Check if chunkstore is initialized
     if (!globalChunkstore || !globalChunkstore->isInitialized()) {
-        Serial.println("ERROR: SD Chunkstore not initialized");
+        SERIAL_PRINTLN("ERROR: SD Chunkstore not initialized");
         stack.push_back(-1); // Error
         pc++;
         return;
@@ -490,7 +496,7 @@ void handle_FILE_WRITE(PMachine& vm, PMachineScheduler& scheduler,
     // Look up chunkstore handle
     auto it = fileHandleMap.find(vmHandle);
     if (it == fileHandleMap.end()) {
-        Serial.printf("ERROR: Invalid file handle %d\n", vmHandle);
+        SERIAL_PRINTF("ERROR: Invalid file handle %u\n", static_cast<unsigned>(vmHandle));
         stack.push_back(-1); // Error
         pc++;
         return;
@@ -501,7 +507,7 @@ void handle_FILE_WRITE(PMachine& vm, PMachineScheduler& scheduler,
     // Allocate buffer and copy from VM memory
     uint8_t* buffer = new uint8_t[size];
     if (!buffer) {
-        Serial.println("ERROR: Failed to allocate buffer");
+        SERIAL_PRINTLN("ERROR: Failed to allocate buffer");
         stack.push_back(-1); // Error
         pc++;
         return;
@@ -515,7 +521,7 @@ void handle_FILE_WRITE(PMachine& vm, PMachineScheduler& scheduler,
     int bytesWritten = globalChunkstore->write(chunkstoreHandle, buffer, size);
     
     if (bytesWritten < 0) {
-        Serial.printf("ERROR: Failed to write to file handle %d\n", vmHandle);
+        SERIAL_PRINTF("ERROR: Failed to write to file handle %u\n", static_cast<unsigned>(vmHandle));
         delete[] buffer;
         stack.push_back(-1); // Error
         pc++;
@@ -524,7 +530,7 @@ void handle_FILE_WRITE(PMachine& vm, PMachineScheduler& scheduler,
     
     delete[] buffer;
     
-    Serial.printf("OP_FILE_WRITE: handle %d, %d bytes written\n", vmHandle, bytesWritten);
+    SERIAL_PRINTF("OP_FILE_WRITE: handle %u, %d bytes written\n", static_cast<unsigned>(vmHandle), bytesWritten);
     
     stack.push_back(bytesWritten);
     pc++;
@@ -543,7 +549,7 @@ void handle_FILE_CLOSE(PMachine& vm, PMachineScheduler& scheduler,
     
     // Check if chunkstore is initialized
     if (!globalChunkstore || !globalChunkstore->isInitialized()) {
-        Serial.println("ERROR: SD Chunkstore not initialized");
+        SERIAL_PRINTLN("ERROR: SD Chunkstore not initialized");
         stack.push_back(0); // Error
         pc++;
         return;
@@ -552,7 +558,7 @@ void handle_FILE_CLOSE(PMachine& vm, PMachineScheduler& scheduler,
     // Look up chunkstore handle
     auto it = fileHandleMap.find(vmHandle);
     if (it == fileHandleMap.end()) {
-        Serial.printf("ERROR: Invalid file handle %d\n", vmHandle);
+        SERIAL_PRINTF("ERROR: Invalid file handle %u\n", static_cast<unsigned>(vmHandle));
         stack.push_back(0); // Error
         pc++;
         return;
@@ -566,10 +572,10 @@ void handle_FILE_CLOSE(PMachine& vm, PMachineScheduler& scheduler,
     if (success) {
         // Remove from handle map
         fileHandleMap.erase(it);
-        Serial.printf("OP_FILE_CLOSE: handle %d closed\n", vmHandle);
+        SERIAL_PRINTF("OP_FILE_CLOSE: handle %u closed\n", static_cast<unsigned>(vmHandle));
         stack.push_back(1); // Success
     } else {
-        Serial.printf("ERROR: Failed to close file handle %d\n", vmHandle);
+        SERIAL_PRINTF("ERROR: Failed to close file handle %u\n", static_cast<unsigned>(vmHandle));
         stack.push_back(0); // Error
     }
     

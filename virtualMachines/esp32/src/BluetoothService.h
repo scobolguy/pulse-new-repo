@@ -134,10 +134,12 @@ public:
     String toJson();
     
     // Alexa Integration
+    #ifndef DISABLE_ALEXA_INTERFACE
     bool handleAlexaCommand(const String& address, const String& command,
                            const JsonDocument& params);
     JsonDocument getAlexaDiscoveryResponse();
     JsonDocument getDeviceAlexaCapabilities(const String& address);
+    #endif
     
     // Callbacks
     typedef void (*DeviceDiscoveredCallback)(const BluetoothDevice& device);

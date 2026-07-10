@@ -8,7 +8,13 @@
 #ifndef SERIAL_COMPAT_H
 #define SERIAL_COMPAT_H
 
-#include <Arduino.h>
+#if defined(PLATFORM_RPIB)
+  #include <cstdio>
+  #define SERIAL_PRINTF(fmt, ...) std::printf(fmt, ##__VA_ARGS__)
+  #define SERIAL_PRINTLN(msg) std::puts(msg)
+  #define SERIAL_PRINT(msg) std::printf("%s", msg)
+#else
+  #include <Arduino.h>
 
 // When USB CDC is enabled, Serial may not be available
 // Use Serial0 (hardware UART) or conditionally check Serial
@@ -28,6 +34,7 @@
   #define SERIAL_PRINTF(fmt, ...) Serial.printf(fmt, ##__VA_ARGS__)
   #define SERIAL_PRINTLN(msg) Serial.println(msg)
   #define SERIAL_PRINT(msg) Serial.print(msg)
+#endif
 #endif
 
 #endif // SERIAL_COMPAT_H

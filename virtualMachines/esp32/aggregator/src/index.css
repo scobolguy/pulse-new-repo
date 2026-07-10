@@ -109,3 +109,141 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+
+.app-nav {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.app-nav-button {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-h);
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.app-nav-button.active {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.topology-page {
+  text-align: left;
+  padding: 20px;
+}
+
+.topology-header h1 {
+  margin: 0 0 8px;
+  font-size: 32px;
+}
+
+.topology-header p {
+  margin: 0;
+}
+
+.topology-actions {
+  margin-top: 12px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.topology-actions button {
+  border: 1px solid var(--accent-border);
+  background: var(--accent-bg);
+  color: var(--text-h);
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.topology-last-refresh {
+  font-size: 14px;
+}
+
+.topology-section {
+  margin-top: 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.topology-section h2 {
+  margin: 0 0 10px;
+}
+
+.topology-tree-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.topology-node {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 0;
+}
+
+.topology-node-name {
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.topology-node-meta {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.topology-node-badge {
+  border: 1px solid var(--accent-border);
+  background: var(--accent-bg);
+  color: var(--text-h);
+  font-size: 12px;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.topology-table-wrap {
+  overflow-x: auto;
+}
+
+.topology-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.topology-table th,
+.topology-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 8px;
+  text-align: left;
+}
+
+.topology-info {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  margin-top: 12px;
+}
+
+.topology-error {
+  border: 1px solid #b91c1c;
+  background: rgba(185, 28, 28, 0.08);
+  color: #b91c1c;
+  border-radius: 8px;
+  padding: 10px;
+  margin-top: 12px;
+}

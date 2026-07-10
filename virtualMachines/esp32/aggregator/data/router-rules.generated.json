@@ -1,51 +1,65 @@
 [
   {
-    "id": "mt103-route",
-    "name": "mt103-route",
-    "serviceId": "interop-router",
+    "id": "mt103-to-pacs-service-http",
+    "name": "mt103-to-pacs-service-http",
+    "serviceId": "mt103-to-pacs-service",
     "enabled": true,
-    "inputQueue": "swift.mt103.inbound",
-    "description": "Route MT103",
+    "inputQueue": "mt103-to-pacs-service.in",
+    "methods": [
+      "POST",
+      "GET"
+    ],
+    "description": "HTTP service mt103-to-pacs-service",
     "outputs": [
       {
-        "queueName": "swift.mt103.parsed",
+        "queueName": "mt103-to-pacs-service.out",
+        "whenRule": "IF upper(httpVerb) = 'POST' THEN output := 1 ELSE output := 0;",
+        "transformRule": "output := src;"
+      },
+      {
+        "queueName": "mt103-to-pacs-service.out",
+        "whenRule": "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;",
+        "transformRule": "output := \"mt103-to-pacs-service\";"
+      }
+    ],
+    "createdAt": "2026-07-05T20:36:32.033Z",
+    "updatedAt": "2026-07-05T20:36:32.033Z"
+  },
+  {
+    "id": "mt103-to-pacs-router",
+    "name": "mt103-to-pacs-router",
+    "serviceId": "mt103-to-pacs-service",
+    "enabled": true,
+    "inputQueue": "swift.mt103.parsed",
+    "description": "Transform MT103 payload to PACS payload",
+    "outputs": [
+      {
+        "queueName": "tx.pacs.created",
         "dataTypeIds": [
-          "envelope"
+          "pacs"
         ],
-        "dataTypeId": "envelope",
+        "dataTypeId": "pacs",
         "dataTypeRef": {
           "type": "TypeRef",
-          "id": "envelope",
-          "genericArgs": [
-            {
-              "type": "TypeRef",
-              "id": "swift-mt103",
-              "genericArgs": []
-            }
-          ]
+          "id": "pacs",
+          "genericArgs": []
         },
-        "dataTypeSignature": "envelope<swift-mt103>",
+        "dataTypeSignature": "pacs",
         "dataTypeRefs": [
           {
             "type": "TypeRef",
-            "id": "envelope",
-            "genericArgs": [
-              {
-                "type": "TypeRef",
-                "id": "swift-mt103",
-                "genericArgs": []
-              }
-            ]
+            "id": "pacs",
+            "genericArgs": []
           }
         ],
         "dataTypeSignatures": [
-          "envelope<swift-mt103>"
+          "pacs"
         ],
-        "whenRule": "output := 1;",
-        "transformRule": "output := src;"
+        "whenRule": "IF startswith(upper(src), \\\"MT103\\\") THEN output := 1 ELSE output := 0;",
+        "transformRule": "output := map(\\\"mt103-to-pacs\\\", src);"
       }
     ],
-    "createdAt": "2026-06-06T12:51:00.816Z",
-    "updatedAt": "2026-06-06T12:51:00.816Z"
+    "createdAt": "2026-07-05T20:36:32.033Z",
+    "updatedAt": "2026-07-05T20:36:32.033Z"
   }
 ]

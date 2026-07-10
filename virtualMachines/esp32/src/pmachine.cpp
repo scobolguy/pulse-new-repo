@@ -30,6 +30,24 @@ namespace {
         return out;
     }
 
+    std::string normalizeDslEscapes(const std::string& in) {
+        std::string out;
+        out.reserve(in.size());
+        for (size_t i = 0; i < in.size(); ++i) {
+            const char c = in[i];
+            if (c == '\\' && i + 1 < in.size()) {
+                const char n = in[i + 1];
+                if (n == '"' || n == '\'' || n == '\\') {
+                    out.push_back(n);
+                    ++i;
+                    continue;
+                }
+            }
+            out.push_back(c);
+        }
+        return out;
+    }
+
     std::string jsonEscape(const std::string& s) {
         std::string out;
         out.reserve(s.size() + 8);
@@ -45,7 +63,7 @@ namespace {
     }
 
     std::string unquote(const std::string& text) {
-        const std::string t = trimCopy(text);
+        const std::string t = normalizeDslEscapes(trimCopy(text));
         if (t.size() < 2) return t;
         const char q = t.front();
         if ((q == '"' || q == '\'') && t.back() == q) {
@@ -333,20 +351,32 @@ namespace {
     }
 
     bool evaluateWhenRuleText(const std::string& whenRule, const std::string& message) {
-        const std::string whenUpper = toUpperCopy(whenRule);
+        const std::string normalizedWhen = normalizeDslEscapes(whenRule);
+        const std::string whenUpper = toUpperCopy(normalizedWhen);
         const std::string msgUpper = toUpperCopy(message);
 
         if (whenUpper.find("OUTPUT := 1") != std::string::npos) return true;
-        if (whenUpper.find("OUTPUT := 0") != std::string::npos) return false;
+        if (whenUpper.find("OUTPUT := 0") != std::string::npos && whenUpper.find("THEN OUTPUT := 1") == std::string::npos) return false;
+
+        const std::string fn = "STARTSWITH(UPPER(SRC),";
+        const size_t fnIdx = whenUpper.find(fn);
+        if (fnIdx != std::string::npos) {
+            const size_t firstQuote = normalizedWhen.find('"');
+            const size_t secondQuote = (firstQuote == std::string::npos) ? std::string::npos : normalizedWhen.find('"', firstQuote + 1);
+            if (firstQuote != std::string::npos && secondQuote != std::string::npos && secondQuote > firstQuote) {
+                const std::string prefix = normalizedWhen.substr(firstQuote + 1, secondQuote - firstQuote - 1);
+                return msgUpper.rfind(toUpperCopy(prefix), 0) == 0;
+            }
+        }
 
         const auto evaluateFieldRule = [&](const char* prefix, bool contains) -> int {
             const std::string upperPrefix(prefix);
             if (whenUpper.rfind(upperPrefix, 0) != 0) return -1;
-            const size_t open = whenRule.find('(');
-            const size_t close = whenRule.rfind(')');
+            const size_t open = normalizedWhen.find('(');
+            const size_t close = normalizedWhen.rfind(')');
             if (open == std::string::npos || close == std::string::npos || close <= open) return 0;
 
-            const std::string args = whenRule.substr(open + 1, close - open - 1);
+            const std::string args = normalizedWhen.substr(open + 1, close - open - 1);
             const int comma = findTopLevelComma(args);
             if (comma < 0) return 0;
 
@@ -432,7 +462,7 @@ namespace {
     }
 
     std::string applyTransformRuleText(const PMachine& vm, const std::string& transformRule, const std::string& message) {
-        const std::string rule = trimCopy(transformRule);
+        const std::string rule = trimCopy(normalizeDslEscapes(transformRule));
         if (rule.empty()) return message;
 
         const std::string upperRule = toUpperCopy(rule);

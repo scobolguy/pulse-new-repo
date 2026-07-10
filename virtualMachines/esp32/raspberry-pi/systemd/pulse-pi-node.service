@@ -1,0 +1,16 @@
+[Unit]
+Description=Pulse Raspberry Pi Node
+After=network-online.target bluetooth.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/pulse/raspberry-pi
+ExecStart=/opt/pulse/raspberry-pi/build/pulse_pi_node /opt/pulse/raspberry-pi/config/node.json
+Restart=always
+RestartSec=2
+Environment=PULSE_NODE_LOG_LEVEL=info
+
+[Install]
+WantedBy=multi-user.target

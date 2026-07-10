@@ -1213,6 +1213,36 @@ void setupWebServer() {
         request->send(200, "application/json", json);
     });
 
+    server.on("/node/restart", HTTP_POST, [](AsyncWebServerRequest *request){
+        String reason = "api-request";
+        if (request->hasParam("reason", true)) {
+            reason = request->getParam("reason", true)->value();
+        } else if (request->hasParam("reason")) {
+            reason = request->getParam("reason")->value();
+        }
+
+        int delayMs = 150;
+        if (request->hasParam("delayMs", true)) {
+            delayMs = request->getParam("delayMs", true)->value().toInt();
+        } else if (request->hasParam("delayMs")) {
+            delayMs = request->getParam("delayMs")->value().toInt();
+        }
+        if (delayMs < 0) delayMs = 0;
+        if (delayMs > 2000) delayMs = 2000;
+
+        JsonDocument doc;
+        doc["status"] = "ok";
+        doc["restartRequested"] = true;
+        doc["reason"] = reason;
+        doc["delayMs"] = delayMs;
+        String json;
+        serializeJson(doc, json);
+        request->send(200, "application/json", json);
+
+        delay(delayMs);
+        ESP.restart();
+    });
+
     // Relay device actions: toggle, turnOn, turnOff.
     server.on("/devices/relay/action", HTTP_POST, [](AsyncWebServerRequest *request){
         String action;
