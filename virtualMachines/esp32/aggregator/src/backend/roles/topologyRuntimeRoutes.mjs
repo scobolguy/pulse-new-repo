@@ -2350,7 +2350,12 @@ export function registerTopologyRuntimeRoutes(app, deps) {
         return res.json(responsePayload);
       }
 
-      const invocation = (deployment && normalizeServiceName(selected?.serviceName) === 'pmachine')
+      const isDeploymentBackedSelection = deployment && (
+        normalizeServiceName(selected?.serviceName) === 'pmachine'
+        || selected?.metadata?.deployment === true
+      );
+
+      const invocation = isDeploymentBackedSelection
         ? await invokeDeploymentOnPmachine(selected, deployment, {
             ...body,
             serviceId: serviceName
