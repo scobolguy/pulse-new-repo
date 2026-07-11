@@ -31,6 +31,8 @@ DeviceConfiguration deviceConfig;
 #include "udp_announcement.h"
 #include "udp_runtime.h"
 #include "main_globals.h"
+#include "time_authority.h"
+#include "unique_id_service.h"
 
 #ifdef ENABLE_PMACHINE
 #include "pmachine.h"
@@ -187,15 +189,20 @@ void saveSupervisorConfig() {
 }
 
 void loadSupervisorConfig() {
-    if (!LittleFS.exists(supervisorConfigPath)) {
-        return;
-    }
-
-    File f = LittleFS.open(supervisorConfigPath, "r");
+    // Open in append+read mode so first boot creates the file silently
+    // instead of emitting a VFS missing-file error.
+    File f = LittleFS.open(supervisorConfigPath, "a+");
     if (!f) {
         Serial.println("[SUPERVISOR] Failed to open config file for read");
         return;
     }
+
+    if (f.size() == 0) {
+        f.close();
+        return;
+    }
+
+    f.seek(0, SeekSet);
 
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, f);
@@ -259,6 +266,21 @@ String computeNodeCapabilityHash() {
     hash += "|pmachine:1";
 #else
     hash += "|pmachine:0";
+#endif
+#ifdef ENABLE_TIME_AUTHORITY
+    hash += "|timeAuthority:1";
+    #if TIME_AUTHORITY_COOP_ENABLED
+    hash += "|timeAuthorityCoop:1";
+    #else
+    hash += "|timeAuthorityCoop:0";
+    #endif
+#else
+    hash += "|timeAuthority:0";
+#endif
+#ifndef DISABLE_UNIQUE_ID_SERVICE
+    hash += "|uniqueId:1";
+#else
+    hash += "|uniqueId:0";
 #endif
     hash += '|';
     hash += nodeName;
@@ -1281,6 +1303,71 @@ void setupWebServer() {
         serializeJson(doc, json);
         request->send(200, "application/json", json);
     });
+
+    auto handleLedAction = [](AsyncWebServerRequest *request){
+        String action;
+        if (request->hasParam("action", true)) {
+            action = request->getParam("action", true)->value();
+        } else if (request->hasParam("action")) {
+            action = request->getParam("action")->value();
+        }
+        action.trim();
+        if (action.length() == 0) {
+            request->send(400, "application/json", "{\"error\":\"action is required\"}");
+            return;
+        }
+
+        const int ledPinNumber = 2;
+        String valueParam;
+        if (request->hasParam("value", true)) {
+            valueParam = request->getParam("value", true)->value();
+        } else if (request->hasParam("value")) {
+            valueParam = request->getParam("value")->value();
+        }
+        valueParam.trim();
+
+        Serial.printf("[LEDPIN] Received action=%s value=%s\n", action.c_str(), valueParam.c_str());
+
+        // Always configure the LED pin as output before any state change.
+        pinMode(ledPinNumber, OUTPUT);
+
+        bool nextOn = false;
+        if (action.equalsIgnoreCase("raise") || action.equalsIgnoreCase("turnOn") || action.equalsIgnoreCase("on")) {
+            nextOn = true;
+        } else if (action.equalsIgnoreCase("lower") || action.equalsIgnoreCase("turnOff") || action.equalsIgnoreCase("off")) {
+            nextOn = false;
+        } else if (action.equalsIgnoreCase("set_output")) {
+            const String lowered = valueParam;
+            if (lowered.equalsIgnoreCase("1") || lowered.equalsIgnoreCase("high") || lowered.equalsIgnoreCase("on") || lowered.equalsIgnoreCase("true")) {
+                nextOn = true;
+            } else if (lowered.equalsIgnoreCase("0") || lowered.equalsIgnoreCase("low") || lowered.equalsIgnoreCase("off") || lowered.equalsIgnoreCase("false")) {
+                nextOn = false;
+            } else {
+                request->send(400, "application/json", "{\"error\":\"set_output requires value=0|1|low|high|off|on|false|true\"}");
+                return;
+            }
+        } else {
+            request->send(400, "application/json", "{\"error\":\"unsupported LED action\"}");
+            return;
+        }
+
+        digitalWrite(ledPinNumber, nextOn ? HIGH : LOW);
+        Serial.printf("[LEDPIN] Pin %d set to %s\n", ledPinNumber, nextOn ? "HIGH" : "LOW");
+
+        JsonDocument doc;
+        doc["status"] = "ok";
+        doc["device"] = "LEDPIN";
+        doc["action"] = action;
+        doc["pin"] = ledPinNumber;
+        doc["state"] = nextOn ? "on" : "off";
+        String json;
+        serializeJson(doc, json);
+        request->send(200, "application/json", json);
+    };
+
+    server.on("/devices/ledpin/action", HTTP_POST, handleLedAction);
+    server.on("/devices/LEDPIN/action", HTTP_POST, handleLedAction);
+
     // Self-describing services endpoint
     server.on("/services/describe", HTTP_GET, [](AsyncWebServerRequest *request){
         JsonDocument doc;
@@ -1656,6 +1743,51 @@ void setupWebServer() {
             cmd["description"] = docText;
         }
 
+#ifdef ENABLE_TIME_AUTHORITY
+        auto timeAuthority = services.add<JsonObject>();
+        timeAuthority["name"] = "TimeAuthorityService";
+        timeAuthority["description"] = "Authoritative time service with NTP sync and cooperative peer checks.";
+        String timeAuthorityStatus = "ready";
+        if (serviceBusyMap.count("TimeAuthorityService") && serviceBusyMap["TimeAuthorityService"]) timeAuthorityStatus = "busy";
+        timeAuthority["status"] = timeAuthorityStatus;
+        auto timeCmds = timeAuthority["commands"].to<JsonArray>();
+        {
+            JsonObject cmd = timeCmds.add<JsonObject>();
+            cmd["name"] = "status";
+            cmd["description"] = "GET /time/authority returns current authority time snapshot.";
+        }
+        {
+            JsonObject cmd = timeCmds.add<JsonObject>();
+            cmd["name"] = "resync";
+            cmd["description"] = "POST /time/authority/sync forces immediate NTP resync.";
+        }
+#endif
+
+#ifndef DISABLE_UNIQUE_ID_SERVICE
+        auto uniqueId = services.add<JsonObject>();
+        uniqueId["name"] = "UniqueIdService";
+        uniqueId["description"] = "Hybrid unique ID service (hashed MAC + time + counter + random).";
+        String uniqueIdStatus = "ready";
+        if (serviceBusyMap.count("UniqueIdService") && serviceBusyMap["UniqueIdService"]) uniqueIdStatus = "busy";
+        uniqueId["status"] = uniqueIdStatus;
+        auto uniqueIdCmds = uniqueId["commands"].to<JsonArray>();
+        {
+            JsonObject cmd = uniqueIdCmds.add<JsonObject>();
+            cmd["name"] = "device";
+            cmd["description"] = "GET /id/device returns stable device identity metadata.";
+        }
+        {
+            JsonObject cmd = uniqueIdCmds.add<JsonObject>();
+            cmd["name"] = "next";
+            cmd["description"] = "POST or GET /id/next returns a new globally unique event ID.";
+        }
+        {
+            JsonObject cmd = uniqueIdCmds.add<JsonObject>();
+            cmd["name"] = "status";
+            cmd["description"] = "GET /id/status returns unique ID service health and counters.";
+        }
+#endif
+
         String json;
         serializeJson(doc, json);
         request->send(200, "application/json", json);
@@ -1759,6 +1891,16 @@ void setupWebServer() {
         json += "\"EventSchedulerService\"";
         firstService = false;
         #endif
+        #ifdef ENABLE_TIME_AUTHORITY
+        if (!firstService) json += ",";
+        json += "\"TimeAuthorityService\"";
+        firstService = false;
+        #endif
+    #ifndef DISABLE_UNIQUE_ID_SERVICE
+        if (!firstService) json += ",";
+        json += "\"UniqueIdService\"";
+        firstService = false;
+    #endif
         json += "]";
         json += ",\"discoveredNodes\":[";
         bool first = true;
@@ -1776,9 +1918,74 @@ void setupWebServer() {
         json += ",\"discoveredNodeCount\":" + String((unsigned long)discoveredNodeTable.size());
         json += ",\"discoveredNodesTruncated\":";
         json += (discoveredNodeTable.size() > emittedNodes) ? "true" : "false";
+#ifdef ENABLE_TIME_AUTHORITY
+        json += ",\"timeAuthority\":";
+        json += timeAuthorityBuildStatusJson();
+#endif
+#ifndef DISABLE_UNIQUE_ID_SERVICE
+    json += ",\"uniqueId\":";
+    json += uniqueIdBuildStatusJson();
+#endif
         json += "}";
         request->send(200, "application/json", json);
     });
+
+#ifdef ENABLE_TIME_AUTHORITY
+    server.on("/time/authority", HTTP_GET, [](AsyncWebServerRequest *request){
+        request->send(200, "application/json", timeAuthorityBuildStatusJson());
+    });
+
+    server.on("/time/authority/sync", HTTP_POST, [](AsyncWebServerRequest *request){
+        const bool ok = timeAuthorityForceResync("api");
+        const String body = String("{\"status\":\"") + (ok ? "ok" : "degraded") + "\",\"time\":" + timeAuthorityBuildStatusJson() + "}";
+        request->send(ok ? 200 : 503, "application/json", body);
+    });
+#endif
+
+#ifndef DISABLE_UNIQUE_ID_SERVICE
+    auto handleUniqueIdNext = [](AsyncWebServerRequest *request) {
+        String kind = "evt";
+        if (request->hasParam("kind", true)) {
+            kind = request->getParam("kind", true)->value();
+        } else if (request->hasParam("kind")) {
+            kind = request->getParam("kind")->value();
+        }
+        kind.trim();
+        if (kind.length() == 0) {
+            kind = "evt";
+        }
+
+        const String nextId = uniqueIdNext(kind);
+        JsonDocument doc;
+        doc["status"] = "ok";
+        doc["kind"] = kind;
+        doc["id"] = nextId;
+        doc["deviceId"] = uniqueIdGetDeviceId();
+        doc["counter"] = uniqueIdGetCounter();
+        String json;
+        serializeJson(doc, json);
+        request->send(200, "application/json", json);
+    };
+
+    server.on("/id/status", HTTP_GET, [](AsyncWebServerRequest *request){
+        request->send(200, "application/json", uniqueIdBuildStatusJson());
+    });
+
+    server.on("/id/device", HTTP_GET, [](AsyncWebServerRequest *request){
+        JsonDocument doc;
+        doc["status"] = "ok";
+        doc["deviceId"] = uniqueIdGetDeviceId();
+        doc["counter"] = uniqueIdGetCounter();
+        doc["nodeName"] = nodeName;
+        doc["strategy"] = "hybrid-mac-hash-time-counter-random";
+        String json;
+        serializeJson(doc, json);
+        request->send(200, "application/json", json);
+    });
+
+    server.on("/id/next", HTTP_GET, handleUniqueIdNext);
+    server.on("/id/next", HTTP_POST, handleUniqueIdNext);
+#endif
 
     server.on("/supervisor/status", HTTP_GET, [](AsyncWebServerRequest *request){
         JsonDocument doc;
@@ -2484,6 +2691,14 @@ void setup() {
     udpRuntimeResetBeaconState();
     announcePresence();
 
+#ifdef ENABLE_TIME_AUTHORITY
+    timeAuthorityBegin(nodeName);
+#endif
+
+#ifndef DISABLE_UNIQUE_ID_SERVICE
+    uniqueIdBegin(nodeName);
+#endif
+
     // 7. Initialize FederatedFileSystem with SD if available, else LittleFS
 #if defined(ESP32)
     if (sdAvailable) {
@@ -2767,6 +2982,16 @@ void setup() {
     advertisedServices += "EventScheduler";
     firstAdvertised = false;
 #endif
+#ifdef ENABLE_TIME_AUTHORITY
+    if (!firstAdvertised) advertisedServices += ", ";
+    advertisedServices += "TimeAuthorityService";
+    firstAdvertised = false;
+#endif
+#ifndef DISABLE_UNIQUE_ID_SERVICE
+    if (!firstAdvertised) advertisedServices += ", ";
+    advertisedServices += "UniqueIdService";
+    firstAdvertised = false;
+#endif
     if (firstAdvertised) advertisedServices += "none";
     Serial.println(advertisedServices);
 
@@ -2779,6 +3004,10 @@ void setup() {
 
 void loop() {
     udpRuntimeMaintainConnectivity(runtimeUdpParentPort, runtimeUdpSiblingPort, WIFI_RECONNECT_INTERVAL);
+
+#ifdef ENABLE_TIME_AUTHORITY
+    timeAuthorityLoop();
+#endif
 
     #ifndef DISABLE_OTA
     if (otaEnabled) {
