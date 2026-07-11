@@ -43,8 +43,96 @@
         "swift-mt202"
       ],
       "createdByUser": false
+    },
+    "swift.mt103.parsed": {
+      "name": "swift.mt103.parsed",
+      "createdAt": 1783719869042,
+      "frozen": false,
+      "queueClass": "permanent",
+      "dataTypeId": "swift-mt103",
+      "dataTypeIds": [
+        "swift-mt103"
+      ],
+      "createdByUser": false
+    },
+    "lynx.pacs009.outbound": {
+      "name": "lynx.pacs009.outbound",
+      "createdAt": 1783719869505,
+      "frozen": false,
+      "queueClass": "permanent",
+      "dataTypeId": "pacs",
+      "dataTypeIds": [
+        "pacs"
+      ],
+      "createdByUser": false
+    },
+    "tx.lynx.pending": {
+      "name": "tx.lynx.pending",
+      "createdAt": 1783719869527,
+      "frozen": false,
+      "queueClass": "permanent",
+      "dataTypeId": "text-string",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "createdByUser": false
+    },
+    "tx.reconciled": {
+      "name": "tx.reconciled",
+      "createdAt": 1783719869640,
+      "frozen": false,
+      "queueClass": "permanent",
+      "dataTypeId": "text-string",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "createdByUser": false
+    },
+    "correspondent.pacs008.outbound": {
+      "name": "correspondent.pacs008.outbound",
+      "createdAt": 1783720267788,
+      "frozen": false,
+      "queueClass": "permanent",
+      "dataTypeId": "pacs",
+      "dataTypeIds": [
+        "pacs"
+      ],
+      "createdByUser": false
+    },
+    "tx.pacs.created": {
+      "name": "tx.pacs.created",
+      "createdAt": 1783727333372,
+      "frozen": false,
+      "queueClass": "permanent",
+      "dataTypeId": "pacs",
+      "dataTypeIds": [
+        "pacs"
+      ],
+      "createdByUser": false
+    },
+    "tx.lynx.approved": {
+      "name": "tx.lynx.approved",
+      "createdAt": 1783728655419,
+      "frozen": false,
+      "queueClass": "permanent",
+      "dataTypeId": "text-string",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "createdByUser": false
+    },
+    "tx.correspondent.unreconciled": {
+      "name": "tx.correspondent.unreconciled",
+      "createdAt": 1783728655562,
+      "frozen": false,
+      "queueClass": "permanent",
+      "dataTypeId": "text-string",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "createdByUser": false
     }
   },
-  "configVersion": 4,
-  "timestamp": 1780493426607
+  "configVersion": 12,
+  "timestamp": 1783728655562
 }

@@ -1,0 +1,13 @@
+{
+  "primary-site": {
+    "siteId": "primary-site",
+    "siteName": "Primary Site",
+    "siteCategory": "internal",
+    "siteMode": "hot-warm",
+    "isExternalSite": false,
+    "state": "up",
+    "description": "Default primary on-prem site.",
+    "createdAt": "2026-07-11T00:00:00.000Z",
+    "updatedAt": "2026-07-11T00:00:00.000Z"
+  }
+}
