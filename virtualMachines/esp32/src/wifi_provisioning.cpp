@@ -8,6 +8,12 @@ namespace {
 
 const char* kCredsPath = "/wifi-credentials.json";
 
+#if defined(ARDUINO_ARCH_ESP8266)
+constexpr uint8_t kOpenWifiEncryption = ENC_TYPE_NONE;
+#else
+constexpr uint8_t kOpenWifiEncryption = WIFI_AUTH_OPEN;
+#endif
+
 bool tryGetParam(AsyncWebServerRequest* request, const char* key, String& value) {
     if (request->hasParam(key, true)) {
         value = request->getParam(key, true)->value();
@@ -60,7 +66,7 @@ void registerWiFiProvisioningRoutes(AsyncWebServer& server) {
                     n["ssid"] = ssid;
                     n["rssi"] = WiFi.RSSI(i);
                     n["channel"] = WiFi.channel(i);
-                    n["secure"] = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
+                    n["secure"] = (WiFi.encryptionType(i) != kOpenWifiEncryption);
                 }
             }
             WiFi.scanDelete();
@@ -91,7 +97,11 @@ WiFiProvisioning::~WiFiProvisioning() {
 
 bool WiFiProvisioning::begin(const char* name) {
     deviceName = name ? name : "ESP32-Device";
+#if defined(ARDUINO_ARCH_ESP8266)
+    if (!LittleFS.begin()) {
+#else
     if (!LittleFS.begin(true)) {
+#endif
         Serial.println("[WIFI-PROV] LittleFS mount failed");
         return false;
     }
@@ -464,7 +474,7 @@ void WiFiProvisioning::handlePortalScan(AsyncWebServerRequest* request) {
             n["ssid"] = ssid;
             n["rssi"] = WiFi.RSSI(i);
             n["channel"] = WiFi.channel(i);
-            n["secure"] = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
+            n["secure"] = (WiFi.encryptionType(i) != kOpenWifiEncryption);
         }
     }
 
