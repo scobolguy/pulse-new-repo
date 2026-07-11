@@ -6,6 +6,7 @@ const NODE_RENAME_OVERRIDES_PATH = path.resolve(process.cwd(), 'data', 'node-ren
 const NODE_TOPOLOGY_OVERRIDES_PATH = path.resolve(process.cwd(), 'data', 'node-topology-overrides.json');
 const ALLOCATOR_DECISIONS_PATH = path.resolve(process.cwd(), 'data', 'allocator-decisions.jsonl');
 const CLUSTER_REGISTRY_PATH = path.resolve(process.cwd(), 'data', 'cluster-registry.json');
+const SITE_REGISTRY_PATH = path.resolve(process.cwd(), 'data', 'site-registry.json');
 const FREE_POOL_CLUSTER_ID = 'free-pool';
 const FREE_POOL_CLUSTER_LABEL = 'Free Pool';
 const FREE_POOL_JS_CLUSTER_ID = 'free-pool-js';
@@ -13,6 +14,100 @@ const FREE_POOL_JS_CLUSTER_LABEL = 'Free JS Pool';
 const FREE_POOL_ESP_CLUSTER_ID = 'free-pool-esp';
 const FREE_POOL_ESP_CLUSTER_LABEL = 'Free ESP Pool';
 const UDP_PORT_PAIR_START = 4200;
+const SITE_MODE_DEFAULT = 'hot-warm';
+
+function normalizeSiteMode(value) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/\s+/g, '-');
+  if (normalized === 'hot-hot') return 'hot-hot';
+  if (normalized === 'hot-warm') return 'hot-warm';
+  if (normalized === 'hot-cold') return 'hot-cold';
+  return '';
+}
+
+function normalizeSiteCategory(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return '';
+  if (normalized === 'internal' || normalized === 'onprem' || normalized === 'on-prem') return 'internal';
+  if (normalized === 'vendor' || normalized === 'partner' || normalized === 'third-party') return 'vendor';
+  if (normalized === 'cloud' || normalized === 'aws' || normalized === 'azure' || normalized === 'gcp') return 'cloud';
+  return '';
+}
+
+function toSiteName(siteId) {
+  const raw = String(siteId || '').trim();
+  if (!raw) return '';
+  return raw
+    .split(/[-_\s]+/g)
+    .filter(Boolean)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(' ');
+}
+
+function normalizeSiteMetadata(raw = {}, { fallbackCategory = 'internal', fallbackMode = SITE_MODE_DEFAULT } = {}) {
+  const siteId = String(raw?.siteId || raw?.id || '').trim().toLowerCase();
+  const siteName = String(raw?.siteName || raw?.name || '').trim();
+  const siteCategory = normalizeSiteCategory(raw?.siteCategory || raw?.siteType || raw?.siteKind);
+  const siteMode = normalizeSiteMode(raw?.siteMode || raw?.siteResilience || raw?.sitePolicy);
+  const category = siteCategory || normalizeSiteCategory(fallbackCategory) || 'internal';
+  const mode = siteMode || normalizeSiteMode(fallbackMode) || SITE_MODE_DEFAULT;
+  const explicitExternal = raw?.isExternalSite;
+  const isExternalSite = typeof explicitExternal === 'boolean'
+    ? explicitExternal
+    : (category === 'vendor' || category === 'cloud');
+
+  return {
+    siteId: siteId || 'primary-site',
+    siteName: siteName || toSiteName(siteId || 'primary-site'),
+    siteCategory: category,
+    siteMode: mode,
+    isExternalSite
+  };
+}
+
+function buildDefaultSiteRegistry() {
+  const now = new Date().toISOString();
+  return {
+    'primary-site': {
+      siteId: 'primary-site',
+      siteName: 'Primary Site',
+      siteCategory: 'internal',
+      siteMode: SITE_MODE_DEFAULT,
+      isExternalSite: false,
+      state: 'up',
+      description: 'Default primary on-prem site.',
+      createdAt: now,
+      updatedAt: now
+    }
+  };
+}
+
+function normalizeSiteRegistry(raw) {
+  const out = {};
+  const entries = Array.isArray(raw)
+    ? raw.map((value) => [String(value?.siteId || value?.id || '').trim().toLowerCase(), value])
+    : Object.entries(raw || {});
+
+  for (const [key, value] of entries) {
+    const meta = normalizeSiteMetadata({ ...(value || {}), siteId: value?.siteId || value?.id || key });
+    const siteId = String(meta.siteId || '').trim().toLowerCase();
+    if (!siteId) continue;
+    const current = out[siteId] || {};
+    out[siteId] = {
+      ...meta,
+      state: String(value?.state || current.state || 'up').trim().toLowerCase() || 'up',
+      description: String(value?.description || current.description || '').trim() || null,
+      createdAt: String(value?.createdAt || current.createdAt || new Date().toISOString()),
+      updatedAt: String(value?.updatedAt || new Date().toISOString())
+    };
+  }
+
+  if (!out['primary-site']) {
+    const defaults = buildDefaultSiteRegistry();
+    out['primary-site'] = defaults['primary-site'];
+  }
+
+  return out;
+}
 
 function isManagedFreePoolClusterId(clusterId) {
   const normalized = String(clusterId || '').trim().toLowerCase();
@@ -39,7 +134,8 @@ function normalizeNodeTopologyMap(raw) {
     const parentNodeId = String(value?.parentNodeId || '').trim();
     out[normalizedKey] = {
       parentNodeId,
-      isClusterGateway: value?.isClusterGateway === true
+      isClusterGateway: value?.isClusterGateway === true,
+      ...normalizeSiteMetadata(value || {})
     };
   }
   return out;
@@ -126,6 +222,21 @@ async function saveClusterRegistry(map) {
   const normalized = normalizeClusterRegistry(map);
   await fs.mkdir(path.dirname(CLUSTER_REGISTRY_PATH), { recursive: true });
   await fs.writeFile(CLUSTER_REGISTRY_PATH, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
+}
+
+async function loadSiteRegistry() {
+  try {
+    const raw = await fs.readFile(SITE_REGISTRY_PATH, 'utf8');
+    return normalizeSiteRegistry(JSON.parse(raw));
+  } catch {
+    return buildDefaultSiteRegistry();
+  }
+}
+
+async function saveSiteRegistry(map) {
+  const normalized = normalizeSiteRegistry(map);
+  await fs.mkdir(path.dirname(SITE_REGISTRY_PATH), { recursive: true });
+  await fs.writeFile(SITE_REGISTRY_PATH, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
 }
 
 function normalizeSlaClass(value) {
@@ -249,6 +360,8 @@ export function registerTopologyRuntimeRoutes(app, deps) {
   let nodeTopologyMapLoaded = false;
   let clusterRegistry = {};
   let clusterRegistryLoaded = false;
+  let siteRegistry = {};
+  let siteRegistryLoaded = false;
 
   async function ensureNodeRenameMapLoaded() {
     if (nodeRenameMapLoaded) return;
@@ -266,6 +379,12 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     if (clusterRegistryLoaded) return;
     clusterRegistry = await loadClusterRegistry();
     clusterRegistryLoaded = true;
+  }
+
+  async function ensureSiteRegistryLoaded() {
+    if (siteRegistryLoaded) return;
+    siteRegistry = await loadSiteRegistry();
+    siteRegistryLoaded = true;
   }
 
   function buildEffectiveClusterRegistry(nodes, registryOverride = null) {
@@ -423,7 +542,38 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       const value = nodeTopologyMap[key];
       if (value) return value;
     }
-    return { parentNodeId: '', isClusterGateway: false };
+    return {
+      parentNodeId: '',
+      isClusterGateway: false,
+      ...normalizeSiteMetadata({})
+    };
+  }
+
+  function resolveNodeSite(node, override = null) {
+    const detailsSite = node?.details?.site && typeof node.details.site === 'object'
+      ? node.details.site
+      : {};
+    const base = normalizeSiteMetadata(detailsSite || {}, {
+      fallbackCategory: 'internal',
+      fallbackMode: SITE_MODE_DEFAULT
+    });
+    const overrideSiteId = String(override?.siteId || '').trim().toLowerCase();
+    const detailsSiteId = String(detailsSite?.siteId || '').trim().toLowerCase();
+    const selectedSiteId = overrideSiteId || detailsSiteId || base.siteId;
+    const registrySite = selectedSiteId ? siteRegistry?.[selectedSiteId] : null;
+    const mergedRaw = registrySite
+      ? {
+          ...registrySite,
+          siteId: selectedSiteId
+        }
+      : {
+          ...base,
+          ...(override || {})
+        };
+    return normalizeSiteMetadata(mergedRaw, {
+      fallbackCategory: base.siteCategory,
+      fallbackMode: base.siteMode
+    });
   }
 
   function attachTopologyMetadata(nodes, effectiveRegistry = {}) {
@@ -475,6 +625,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       const clusterPorts = clusterUdpPortMap.get(activeClusterId) || null;
       const parentPort = clusterPorts?.parentPort || (boardPortsValid ? boardParentPort : UDP_PORT_PAIR_START);
       const siblingPort = clusterPorts?.siblingPort || (boardPortsValid ? boardSiblingPort : (parentPort + 1));
+      const site = resolveNodeSite(node, override);
 
       return {
         ...node,
@@ -485,6 +636,12 @@ export function registerTopologyRuntimeRoutes(app, deps) {
           parentNodeName: parentName,
           parentNodeIp: parentIp,
           activeClusterId,
+          site,
+          siteId: site.siteId,
+          siteName: site.siteName,
+          siteCategory: site.siteCategory,
+          siteMode: site.siteMode,
+          isExternalSite: site.isExternalSite,
           flowDirection: 'bottom-up',
           udp: {
             parentPort,
@@ -665,6 +822,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     await ensureNodeRenameMapLoaded();
     await ensureNodeTopologyMapLoaded();
     await ensureClusterRegistryLoaded();
+    await ensureSiteRegistryLoaded();
     const now = Date.now();
     const backendNode = {
       ip: '127.0.0.1',
@@ -800,7 +958,8 @@ export function registerTopologyRuntimeRoutes(app, deps) {
 
     nodeTopologyMap[normalizedNodeId] = {
       parentNodeId: normalizeNodeId(topology.parentNodeId) || '',
-      isClusterGateway: topology.isClusterGateway === true
+      isClusterGateway: topology.isClusterGateway === true,
+      ...normalizeSiteMetadata(topology || {})
     };
     await saveNodeTopologyMap(nodeTopologyMap);
     return { nodeId: normalizedNodeId, status: 'applied', source: 'server' };
@@ -926,15 +1085,47 @@ export function registerTopologyRuntimeRoutes(app, deps) {
   }
 
   function chooseServiceInstanceByNode(serviceName, nodeId) {
+    return chooseServiceInstanceByNodeWithNodes(serviceName, nodeId, []);
+  }
+
+  function normalizeSiteState(value) {
+    return String(value || '').trim().toLowerCase();
+  }
+
+  function isSiteStateAcceptingWork(state) {
+    const normalized = normalizeSiteState(state);
+    return normalized === 'up' || normalized === 'active';
+  }
+
+  function buildNodeSiteStateMap(nodes = []) {
+    const nodeSiteState = new Map();
+    const nodeSiteId = new Map();
+    for (const node of Array.isArray(nodes) ? nodes : []) {
+      const siteId = String(node?.topology?.siteId || 'primary-site').trim().toLowerCase() || 'primary-site';
+      const siteState = normalizeSiteState(siteRegistry?.[siteId]?.state || 'up') || 'up';
+      for (const key of getNodeIdentityCandidates(node)) {
+        if (!nodeSiteState.has(key)) nodeSiteState.set(key, siteState);
+        if (!nodeSiteId.has(key)) nodeSiteId.set(key, siteId);
+      }
+    }
+    return { nodeSiteState, nodeSiteId };
+  }
+
+  function chooseServiceInstanceByNodeWithNodes(serviceName, nodeId, nodes = []) {
     const normalizedName = normalizeServiceName(serviceName);
     const normalizedNodeId = normalizeNodeId(nodeId);
     if (!normalizedName || !normalizedNodeId) return null;
+
+    const { nodeSiteState } = buildNodeSiteStateMap(nodes);
 
     let selected = null;
     for (const instance of serviceInstanceRegistry.values()) {
       if (normalizeServiceName(instance.serviceName) !== normalizedName) continue;
       if (!['up', 'degraded'].includes(String(instance.status || '').toLowerCase())) continue;
-      if (normalizeNodeId(instance.nodeId || instance.ip) !== normalizedNodeId) continue;
+      const instanceKey = normalizeNodeId(instance.nodeId || instance.ip);
+      if (instanceKey !== normalizedNodeId) continue;
+      const siteState = nodeSiteState.get(instanceKey) || 'up';
+      if (!isSiteStateAcceptingWork(siteState)) continue;
       if (!selected || Number(instance.lastHeartbeat || 0) > Number(selected.lastHeartbeat || 0)) {
         selected = instance;
       }
@@ -1055,11 +1246,15 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     };
   }
 
-  function listActiveServiceInstances(serviceName) {
+  function listActiveServiceInstances(serviceName, nodes = []) {
     const normalizedName = normalizeServiceName(serviceName);
+    const { nodeSiteState } = buildNodeSiteStateMap(nodes);
     return Array.from(serviceInstanceRegistry.values()).filter((instance) => {
       if (normalizeServiceName(instance.serviceName) !== normalizedName) return false;
-      return ['up', 'degraded'].includes(String(instance.status || '').toLowerCase());
+      if (!['up', 'degraded'].includes(String(instance.status || '').toLowerCase())) return false;
+      const instanceKey = normalizeNodeId(instance.nodeId || instance.ip);
+      const siteState = nodeSiteState.get(instanceKey) || 'up';
+      return isSiteStateAcceptingWork(siteState);
     });
   }
 
@@ -1087,7 +1282,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       }
     }
 
-    const pmachineInstances = listActiveServiceInstances('pmachine');
+    const pmachineInstances = listActiveServiceInstances('pmachine', nodeList);
     const out = [];
 
     for (const pmachine of pmachineInstances) {
@@ -1526,6 +1721,205 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     res.json(attachHierarchyPaths(await buildCurrentNodesWithTopology()));
   });
 
+  app.get('/api/sites', async (req, res) => {
+    await ensureSiteRegistryLoaded();
+    const nodes = await buildCurrentNodesWithTopology();
+    const includeNodes = req.query.includeNodes === '1' || req.query.includeNodes === 'true';
+
+    const nodeBuckets = new Map();
+    for (const node of nodes) {
+      const siteId = String(node?.topology?.siteId || 'primary-site').trim().toLowerCase() || 'primary-site';
+      if (!nodeBuckets.has(siteId)) nodeBuckets.set(siteId, []);
+      nodeBuckets.get(siteId).push({
+        nodeId: String(node?.nodeId || node?.nodeName || node?.ip || '').trim(),
+        nodeName: String(node?.nodeName || node?.nodeId || node?.ip || '').trim(),
+        ip: String(node?.ip || '').trim(),
+        clusterId: String(node?.topology?.activeClusterId || 'default').trim().toLowerCase() || 'default'
+      });
+    }
+
+    const sites = Object.values(siteRegistry)
+      .map((site) => {
+        const siteId = String(site?.siteId || '').trim().toLowerCase();
+        const members = nodeBuckets.get(siteId) || [];
+        return {
+          ...site,
+          state: normalizeSiteState(site?.state || 'up') || 'up',
+          nodeCount: members.length,
+          ...(includeNodes ? { nodes: members } : {})
+        };
+      })
+      .sort((a, b) => String(a.siteId || '').localeCompare(String(b.siteId || '')));
+
+    return res.json({ sites });
+  });
+
+  app.post('/api/sites', async (req, res) => {
+    await ensureSiteRegistryLoaded();
+
+    const requestedSiteId = String(req.body?.siteId || req.body?.id || '').trim().toLowerCase();
+    if (!requestedSiteId) {
+      return res.status(400).json({ error: 'siteId is required' });
+    }
+
+    const previous = siteRegistry[requestedSiteId] || null;
+    const normalized = normalizeSiteMetadata({ ...(req.body || {}), siteId: requestedSiteId }, {
+      fallbackCategory: previous?.siteCategory || 'internal',
+      fallbackMode: previous?.siteMode || SITE_MODE_DEFAULT
+    });
+
+    const next = {
+      ...normalized,
+      state: String(req.body?.state || previous?.state || 'up').trim().toLowerCase() || 'up',
+      description: String(req.body?.description || previous?.description || '').trim() || null,
+      createdAt: String(previous?.createdAt || new Date().toISOString()),
+      updatedAt: new Date().toISOString()
+    };
+
+    siteRegistry[requestedSiteId] = next;
+    await saveSiteRegistry(siteRegistry);
+    return res.json({ status: 'ok', site: next });
+  });
+
+  app.delete('/api/sites/:siteId', async (req, res) => {
+    await ensureSiteRegistryLoaded();
+    const siteId = String(req.params.siteId || '').trim().toLowerCase();
+    if (!siteId) return res.status(400).json({ error: 'siteId is required' });
+    if (siteId === 'primary-site') {
+      return res.status(400).json({ error: 'primary-site cannot be deleted' });
+    }
+    const existing = siteRegistry[siteId];
+    if (!existing) return res.status(404).json({ error: 'site not found' });
+
+    const nodes = await buildCurrentNodesWithTopology();
+    const assigned = nodes.filter((node) => String(node?.topology?.siteId || '').trim().toLowerCase() === siteId);
+    if (assigned.length > 0) {
+      return res.status(409).json({
+        error: 'site is currently assigned to nodes',
+        nodeCount: assigned.length
+      });
+    }
+
+    delete siteRegistry[siteId];
+    await saveSiteRegistry(siteRegistry);
+    return res.json({ status: 'ok', deletedSiteId: siteId });
+  });
+
+  app.post('/api/sites/:siteId/assign', async (req, res) => {
+    await ensureSiteRegistryLoaded();
+    await ensureNodeTopologyMapLoaded();
+
+    const siteId = String(req.params.siteId || '').trim().toLowerCase();
+    if (!siteId) return res.status(400).json({ error: 'siteId is required' });
+    if (!siteRegistry[siteId]) {
+      return res.status(404).json({ error: 'site not found' });
+    }
+
+    const requestedNodes = Array.isArray(req.body?.nodes) ? req.body.nodes : [];
+    if (requestedNodes.length === 0) {
+      return res.status(400).json({ error: 'nodes array is required' });
+    }
+
+    const nodes = await buildCurrentNodesWithTopology();
+    const assigned = [];
+    for (const token of requestedNodes) {
+      const tokenValue = String(token || '').trim();
+      const node = resolveNodeByAddressPath(tokenValue, nodes)
+        || nodes.find((entry) => nodeMatchesAddressToken(entry, tokenValue))
+        || null;
+      if (!node) {
+        return res.status(404).json({ error: `node not found: ${tokenValue}` });
+      }
+      const targetKey = normalizeNodeId(node?.nodeId || node?.nodeName || node?.ip);
+      if (!targetKey) {
+        return res.status(400).json({ error: `node id resolution failed for: ${tokenValue}` });
+      }
+      nodeTopologyMap[targetKey] = {
+        ...(nodeTopologyMap[targetKey] || {}),
+        siteId
+      };
+      assigned.push({ nodeId: targetKey, sourceToken: tokenValue });
+    }
+
+    await saveNodeTopologyMap(nodeTopologyMap);
+    return res.json({
+      status: 'ok',
+      siteId,
+      assignedCount: assigned.length,
+      assigned
+    });
+  });
+
+  app.post('/api/sites/:siteId/quiesce', async (req, res) => {
+    await ensureSiteRegistryLoaded();
+    const siteId = String(req.params.siteId || '').trim().toLowerCase();
+    if (!siteId) return res.status(400).json({ error: 'siteId is required' });
+    if (!siteRegistry[siteId]) return res.status(404).json({ error: 'site not found' });
+
+    const nodes = await buildCurrentNodesWithTopology();
+    const targetedNodes = nodes.filter((node) => String(node?.topology?.siteId || 'primary-site').trim().toLowerCase() === siteId);
+    const changed = [];
+    for (const node of targetedNodes) {
+      const targetNodeId = String(node?.nodeId || node?.nodeName || node?.ip || '').trim();
+      if (!targetNodeId) continue;
+      const ok = typeof setNodeLifecycleState === 'function'
+        ? setNodeLifecycleState(targetNodeId, 'quiesced')
+        : false;
+      if (ok) changed.push(targetNodeId);
+    }
+
+    siteRegistry[siteId] = {
+      ...siteRegistry[siteId],
+      state: 'quiesced',
+      updatedAt: new Date().toISOString()
+    };
+    await saveSiteRegistry(siteRegistry);
+
+    return res.json({
+      status: 'ok',
+      siteId,
+      state: 'quiesced',
+      targetedNodes: targetedNodes.map((node) => String(node?.nodeId || node?.nodeName || node?.ip || '').trim()).filter(Boolean),
+      affectedNodes: changed,
+      affectedCount: changed.length
+    });
+  });
+
+  app.post('/api/sites/:siteId/start', async (req, res) => {
+    await ensureSiteRegistryLoaded();
+    const siteId = String(req.params.siteId || '').trim().toLowerCase();
+    if (!siteId) return res.status(400).json({ error: 'siteId is required' });
+    if (!siteRegistry[siteId]) return res.status(404).json({ error: 'site not found' });
+
+    const nodes = await buildCurrentNodesWithTopology();
+    const targetedNodes = nodes.filter((node) => String(node?.topology?.siteId || 'primary-site').trim().toLowerCase() === siteId);
+    const changed = [];
+    for (const node of targetedNodes) {
+      const targetNodeId = String(node?.nodeId || node?.nodeName || node?.ip || '').trim();
+      if (!targetNodeId) continue;
+      const ok = typeof setNodeLifecycleState === 'function'
+        ? setNodeLifecycleState(targetNodeId, 'up')
+        : false;
+      if (ok) changed.push(targetNodeId);
+    }
+
+    siteRegistry[siteId] = {
+      ...siteRegistry[siteId],
+      state: 'up',
+      updatedAt: new Date().toISOString()
+    };
+    await saveSiteRegistry(siteRegistry);
+
+    return res.json({
+      status: 'ok',
+      siteId,
+      state: 'up',
+      targetedNodes: targetedNodes.map((node) => String(node?.nodeId || node?.nodeName || node?.ip || '').trim()).filter(Boolean),
+      affectedNodes: changed,
+      affectedCount: changed.length
+    });
+  });
+
   app.get('/api/address/resolve/:address', async (req, res) => {
     const address = String(req.params.address || '').trim();
     if (!address) {
@@ -1905,6 +2299,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
   app.post('/api/nodes/:nodeId/topology', async (req, res) => {
     try {
       await ensureNodeTopologyMapLoaded();
+      await ensureSiteRegistryLoaded();
 
       const requestedNodeId = String(req.params.nodeId || req.body?.nodeId || '').trim();
       const requestedIp = String(req.body?.ip || '').trim();
@@ -1923,6 +2318,12 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       }
 
       const nextGateway = req.body?.isClusterGateway === true;
+      const requestedSiteId = String(req.body?.siteId || '').trim().toLowerCase();
+      const resolvedCurrentSiteId = normalizeNodeId(nodeTopologyMap[targetKey]?.siteId) || 'primary-site';
+      const nextSiteId = requestedSiteId || resolvedCurrentSiteId;
+      if (nextSiteId && !siteRegistry[nextSiteId]) {
+        return res.status(400).json({ error: `unknown siteId: ${nextSiteId}` });
+      }
       let boardIp = requestedIp;
       if (!boardIp) {
         for (const existing of discoveredNodes.values()) {
@@ -1958,21 +2359,36 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       }
 
       if (boardTopologyApplied) {
-        delete nodeTopologyMap[targetKey];
+        nodeTopologyMap[targetKey] = {
+          parentNodeId: '',
+          isClusterGateway: false,
+          siteId: nextSiteId,
+          ...normalizeSiteMetadata({ ...(req.body || {}), siteId: nextSiteId })
+        };
       } else {
         nodeTopologyMap[targetKey] = {
           parentNodeId: nextParent || '',
-          isClusterGateway: nextGateway
+          isClusterGateway: nextGateway,
+          siteId: nextSiteId,
+          ...normalizeSiteMetadata({ ...(req.body || {}), siteId: nextSiteId })
         };
       }
       await saveNodeTopologyMap(nodeTopologyMap);
+
+      const site = normalizeSiteMetadata({ ...(siteRegistry[nextSiteId] || {}), ...(req.body || {}), siteId: nextSiteId });
 
       return res.json({
         status: 'ok',
         nodeId: requestedNodeId || requestedIp,
         topology: {
           parentNodeId: nextParent || '',
-          isClusterGateway: nextGateway
+          isClusterGateway: nextGateway,
+          site,
+          siteId: site.siteId,
+          siteName: site.siteName,
+          siteCategory: site.siteCategory,
+          siteMode: site.siteMode,
+          isExternalSite: site.isExternalSite
         },
         sourceOfTruth: boardTopologyApplied ? 'board' : 'server'
       });
@@ -1983,6 +2399,8 @@ export function registerTopologyRuntimeRoutes(app, deps) {
 
   app.post('/api/nodes/:nodeId/parent', async (req, res) => {
     try {
+      await ensureNodeTopologyMapLoaded();
+      await ensureSiteRegistryLoaded();
       const requestedNodeId = String(req.params.nodeId || req.body?.nodeId || '').trim();
       const requestedIp = String(req.body?.ip || '').trim();
       const nodes = await buildCurrentNodesWithTopology();
@@ -2003,6 +2421,15 @@ export function registerTopologyRuntimeRoutes(app, deps) {
 
       const nextGateway = req.body?.isClusterGateway === true;
       const nextClusterId = String(req.body?.activeClusterId || resolved.node?.topology?.activeClusterId || 'default').trim().toLowerCase() || 'default';
+      const resolvedTargetKey = resolved.targetKey;
+      const requestedSiteId = String(req.body?.siteId || '').trim().toLowerCase();
+      const currentSiteId = normalizeNodeId(nodeTopologyMap[resolvedTargetKey]?.siteId)
+        || normalizeNodeId(resolved.node?.topology?.siteId)
+        || 'primary-site';
+      const nextSiteId = requestedSiteId || currentSiteId;
+      if (nextSiteId && !siteRegistry[nextSiteId]) {
+        return res.status(400).json({ error: `unknown siteId: ${nextSiteId}` });
+      }
       let boardTopologyApplied = false;
       if (resolved.boardIp) {
         try {
@@ -2023,14 +2450,23 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       }
 
       if (boardTopologyApplied) {
-        delete nodeTopologyMap[resolved.targetKey];
+        nodeTopologyMap[resolved.targetKey] = {
+          parentNodeId: '',
+          isClusterGateway: false,
+          siteId: nextSiteId,
+          ...normalizeSiteMetadata({ ...(req.body || {}), siteId: nextSiteId })
+        };
       } else {
         nodeTopologyMap[resolved.targetKey] = {
           parentNodeId: nextParent || '',
-          isClusterGateway: nextGateway
+          isClusterGateway: nextGateway,
+          siteId: nextSiteId,
+          ...normalizeSiteMetadata({ ...(req.body || {}), siteId: nextSiteId })
         };
       }
       await saveNodeTopologyMap(nodeTopologyMap);
+
+      const site = normalizeSiteMetadata({ ...(siteRegistry[nextSiteId] || {}), ...(req.body || {}), siteId: nextSiteId });
 
       return res.json({
         status: 'ok',
@@ -2038,7 +2474,13 @@ export function registerTopologyRuntimeRoutes(app, deps) {
         topology: {
           activeClusterId: nextClusterId,
           parentNodeId: nextParent || '',
-          isClusterGateway: nextGateway
+          isClusterGateway: nextGateway,
+          site,
+          siteId: site.siteId,
+          siteName: site.siteName,
+          siteCategory: site.siteCategory,
+          siteMode: site.siteMode,
+          isExternalSite: site.isExternalSite
         },
         sourceOfTruth: boardTopologyApplied ? 'board' : 'server'
       });
@@ -2185,7 +2627,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       );
 
       const currentNodes = await buildCurrentNodesWithTopology();
-      const activeInstances = listActiveServiceInstances(serviceName);
+      const activeInstances = listActiveServiceInstances(serviceName, currentNodes);
       const deploymentCandidates = listDeploymentBackedServiceCandidates(serviceName, currentNodes);
       const candidateInstances = activeInstances.length > 0 ? activeInstances : deploymentCandidates;
 
@@ -2247,7 +2689,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
         : null;
 
       let selected = preferredNodeId
-        ? (chooseServiceInstanceByNode(serviceName, preferredNodeId) || chooseCandidateByNode(candidateInstances, preferredNodeId))
+        ? (chooseServiceInstanceByNodeWithNodes(serviceName, preferredNodeId, currentNodes) || chooseCandidateByNode(candidateInstances, preferredNodeId))
         : null;
 
       if (!selected) {

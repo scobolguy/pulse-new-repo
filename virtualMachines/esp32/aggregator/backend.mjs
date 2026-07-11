@@ -66,6 +66,20 @@ import { registerRouterLifecycleControlRoutes } from './src/backend/roles/router
 import { registerDevelopDocumentRoutes } from './src/backend/developDocumentRoutes.mjs';
 import { registerStartupFsmRoutes } from './src/backend/startupFsmRoutes.mjs';
 import { registerMapperRoutes } from './src/backend/mapperRoutes.mjs';
+import { registerUserProvisioningRoutes } from './src/backend/modules/userProvisioningRoutes.mjs';
+import { registerDeveloperGovernanceRoutes } from './src/backend/modules/developerGovernanceRoutes.mjs';
+import { registerOrchestrationRegistryRoutes } from './src/backend/modules/orchestrationRegistryRoutes.mjs';
+import { registerBrokerAdminRoutes } from './src/backend/modules/brokerAdminRoutes.mjs';
+import { registerMediaGatewayRoutes } from './src/backend/modules/mediaGatewayRoutes.mjs';
+import { registerIdentityRoutes } from './src/backend/modules/identityRoutes.mjs';
+import { createRouteManifestDependencyFactories } from './src/backend/modules/routeManifestDependencies.mjs';
+import { startBackendRuntime } from './src/backend/modules/startupBootstrap.mjs';
+import { createLifecycleHarnessPathApi } from './src/backend/modules/lifecycleHarnessPaths.mjs';
+import { createRuntimeDiagnosticsApi } from './src/backend/modules/runtimeDiagnosticsApi.mjs';
+import { createMachineAvailabilityPresenceApi } from './src/backend/modules/machineAvailabilityPresenceApi.mjs';
+import { createLifecycleQueueMetricsApi } from './src/backend/modules/lifecycleQueueMetricsApi.mjs';
+import { createDatabaseRegistrySnapshotApi } from './src/backend/modules/databaseRegistrySnapshotApi.mjs';
+import { createAuthoritativeTimeService } from './src/backend/modules/authoritativeTimeService.mjs';
 import { createRequestPolicyApi } from './src/backend/security/requestPolicy.mjs';
 import { ROUTE_ROLE_MANIFEST } from './src/backend/routes.manifest.mjs';
 import { registerRoutesFromManifest } from './src/backend/routeManifestLoader.mjs';
@@ -100,6 +114,74 @@ const LOCAL_TTS_SCRIPT_PATH = path.join(__dirname, 'scripts', 'local-tts.ps1');
 const LOCAL_TTS_OUTPUT_DIR = path.join(__dirname, 'data', 'local-tts');
 const PIPER_BIN_PATH = readEnvString('PIPER_BIN_PATH', path.join(__dirname, 'tools', 'piper', 'piper', 'piper.exe')).trim();
 const PIPER_MODEL_PATH = readEnvString('PIPER_MODEL_PATH', path.join(__dirname, 'tools', 'piper', 'models', 'en_US-lessac-medium', 'en_US-lessac-medium.onnx')).trim();
+const TIME_AUTHORITY_ID = readEnvString('TIME_AUTHORITY_ID', 'aggregator-local-clock').trim() || 'aggregator-local-clock';
+const TIME_AUTHORITY_OFFSET_MS = readEnvNumber('TIME_AUTHORITY_OFFSET_MS', 0);
+const TIME_NTP_ENABLED = readEnvBoolean('TIME_NTP_ENABLED', ['1', 'true', 'yes'], true);
+const TIME_NTP_SERVER = readEnvString('TIME_NTP_SERVER', 'pool.ntp.org').trim() || 'pool.ntp.org';
+const TIME_NTP_PORT = Math.max(1, readEnvNumber('TIME_NTP_PORT', 123));
+const TIME_NTP_TIMEOUT_MS = Math.max(200, readEnvNumber('TIME_NTP_TIMEOUT_MS', 2500));
+const TIME_NTP_SYNC_INTERVAL_MS = Math.max(1000, readEnvNumber('TIME_NTP_SYNC_INTERVAL_MS', 300000));
+const authoritativeTimeService = createAuthoritativeTimeService({
+  authorityId: TIME_AUTHORITY_ID,
+  offsetMs: TIME_AUTHORITY_OFFSET_MS,
+  source: 'aggregator-local'
+});
+const authoritativeTimeSyncState = {
+  running: false,
+  timerId: null,
+  lastAttemptAt: null,
+  lastSuccessAt: null,
+  lastError: null
+};
+
+async function syncAuthoritativeTimeWithNtp({ reason = 'scheduled' } = {}) {
+  if (authoritativeTimeSyncState.running) {
+    return { skipped: true, reason: 'sync-already-running' };
+  }
+
+  authoritativeTimeSyncState.running = true;
+  authoritativeTimeSyncState.lastAttemptAt = authoritativeTimeService.nowIso();
+  try {
+    const result = await authoritativeTimeService.syncFromNtp({
+      server: TIME_NTP_SERVER,
+      port: TIME_NTP_PORT,
+      timeoutMs: TIME_NTP_TIMEOUT_MS
+    });
+    authoritativeTimeSyncState.lastSuccessAt = authoritativeTimeService.nowIso();
+    authoritativeTimeSyncState.lastError = null;
+    return {
+      ok: true,
+      reason,
+      ...result
+    };
+  } catch (error) {
+    authoritativeTimeService.markSyncError(error, {
+      source: `ntp:${TIME_NTP_SERVER}`,
+      ntpServer: TIME_NTP_SERVER,
+      ntpPort: TIME_NTP_PORT,
+      reason
+    });
+    authoritativeTimeSyncState.lastError = String(error?.message || error || 'ntp-sync-failed');
+    return {
+      ok: false,
+      reason,
+      error: authoritativeTimeSyncState.lastError
+    };
+  } finally {
+    authoritativeTimeSyncState.running = false;
+  }
+}
+
+function startAuthoritativeTimeSyncMonitor() {
+  if (!TIME_NTP_ENABLED || authoritativeTimeSyncState.timerId) {
+    return;
+  }
+
+  void syncAuthoritativeTimeWithNtp({ reason: 'startup' });
+  authoritativeTimeSyncState.timerId = setInterval(() => {
+    void syncAuthoritativeTimeWithNtp({ reason: 'interval' });
+  }, TIME_NTP_SYNC_INTERVAL_MS);
+}
 
 function runLocalTtsScript(args, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
@@ -361,8 +443,17 @@ const WORKER_CONFIG_PATH = path.join(RUNTIME_DATA_ROOT, 'worker-config.json');
 const ROUTER_RULES_PATH = path.join(RUNTIME_DATA_ROOT, 'router-rules.json');
 const DATA_MAPPINGS_PATH = path.join(RUNTIME_DATA_ROOT, 'data-mappings.json');
 const TX_STATE_LOG_SHIPPING_PATH = path.resolve(PULSE_QUEUE_DATA_ROOT, 'transaction-state-log-shipping.jsonl');
+const TX_TRACE_JOURNAL_PATH = path.resolve(PULSE_QUEUE_DATA_ROOT, 'transaction-trace-journal.jsonl');
+const TX_SCHEDULED_DISPATCH_QUEUE_PATH = path.resolve(PULSE_QUEUE_DATA_ROOT, 'transaction-dispatch-schedule.json');
 const TX_STATE_LOG_SHIPPING_BATCH_SIZE = Math.max(1, readEnvNumber('TX_STATE_LOG_SHIPPING_BATCH_SIZE', 200));
 const TX_STATE_LOG_SHIPPING_INTERVAL_MS = Math.max(0, readEnvNumber('TX_STATE_LOG_SHIPPING_INTERVAL_MS', 15000));
+const TX_SCHEDULED_DISPATCH_POLL_MS = Math.max(100, readEnvNumber('TX_SCHEDULED_DISPATCH_POLL_MS', 1000));
+const TX_SCHEDULED_DISPATCH_MAX_PER_TICK = Math.max(1, readEnvNumber('TX_SCHEDULED_DISPATCH_MAX_PER_TICK', 50));
+const LIFECYCLE_TRANSITION_TIMEOUT_MS = Math.max(0, readEnvNumber('LIFECYCLE_TRANSITION_TIMEOUT_MS', 15000));
+const LIFECYCLE_ON_ERROR_QUEUE = readEnvString('LIFECYCLE_ON_ERROR_QUEUE', 'tx.lifecycle.onerror').trim() || 'tx.lifecycle.onerror';
+const LIFECYCLE_ON_TIMEOUT_QUEUE = readEnvString('LIFECYCLE_ON_TIMEOUT_QUEUE', 'tx.lifecycle.ontimeout').trim() || 'tx.lifecycle.ontimeout';
+const LIFECYCLE_FORCE_MAP_DELAY_MS = Math.max(0, readEnvNumber('LIFECYCLE_FORCE_MAP_DELAY_MS', 0));
+const LIFECYCLE_FORCE_MAP_FAILURE = readEnvBoolean('LIFECYCLE_FORCE_MAP_FAILURE', ['1', 'true', 'yes'], false);
 const rawRequireRealtimeDb = String(process.env.TX_STATE_REQUIRE_REALTIME_DB || 'true').trim().toLowerCase();
 const TX_STATE_REQUIRE_REALTIME_DB = !(rawRequireRealtimeDb === '0' || rawRequireRealtimeDb === 'false' || rawRequireRealtimeDb === 'no');
 const rawEmergencyLogShipping = String(process.env.TX_STATE_EMERGENCY_LOG_SHIPPING || 'false').trim().toLowerCase();
@@ -453,85 +544,6 @@ function saveCardOverridesToDisk(payload) {
 }
 
 let uiCardOverrides = loadCardOverridesFromDisk();
-
-const nodeRuntimeStartedAt = Date.now();
-const eventLoopDelayHistogram = monitorEventLoopDelay({ resolution: 20 });
-eventLoopDelayHistogram.enable();
-let lastCpuUsageSample = process.cpuUsage();
-let lastCpuSampleHrtimeNs = process.hrtime.bigint();
-
-function bytesToMb(value) {
-  return Number.isFinite(value) ? Number((value / (1024 * 1024)).toFixed(2)) : 0;
-}
-
-function toMsFromNs(value) {
-  return Number.isFinite(value) ? Number((value / 1e6).toFixed(3)) : 0;
-}
-
-function getNodeRuntimeDiagnosticsSnapshot() {
-  const mem = process.memoryUsage();
-  const heap = v8.getHeapStatistics();
-  const elu = performance.eventLoopUtilization();
-  const handles = typeof process._getActiveHandles === 'function' ? process._getActiveHandles().length : null;
-  const requests = typeof process._getActiveRequests === 'function' ? process._getActiveRequests().length : null;
-  const nowHrtimeNs = process.hrtime.bigint();
-  const cpuDiff = process.cpuUsage(lastCpuUsageSample);
-  const elapsedSampleMs = Number(nowHrtimeNs - lastCpuSampleHrtimeNs) / 1e6;
-  lastCpuUsageSample = process.cpuUsage();
-  lastCpuSampleHrtimeNs = nowHrtimeNs;
-  const cpuTotalMs = (cpuDiff.user + cpuDiff.system) / 1000;
-  const cpuPercentSingleCore = elapsedSampleMs > 0 ? Number(((cpuTotalMs / elapsedSampleMs) * 100).toFixed(2)) : 0;
-  const cpuCount = Math.max(1, os.cpus().length || 1);
-  const cpuPercentAllCores = Number((cpuPercentSingleCore / cpuCount).toFixed(2));
-
-  return {
-    timestamp: Date.now(),
-    uptimeSeconds: Math.round(process.uptime()),
-    process: {
-      pid: process.pid,
-      platform: process.platform,
-      nodeVersion: process.version,
-      rssMb: bytesToMb(mem.rss),
-      heapUsedMb: bytesToMb(mem.heapUsed),
-      heapTotalMb: bytesToMb(mem.heapTotal),
-      externalMb: bytesToMb(mem.external),
-      arrayBuffersMb: bytesToMb(mem.arrayBuffers),
-      heapUsedPercent: mem.heapTotal > 0 ? Number(((mem.heapUsed / mem.heapTotal) * 100).toFixed(2)) : 0,
-      activeHandles: handles,
-      activeRequests: requests
-    },
-    v8: {
-      heapLimitMb: bytesToMb(heap.heap_size_limit),
-      mallocedMb: bytesToMb(heap.malloced_memory),
-      peakMallocedMb: bytesToMb(heap.peak_malloced_memory),
-      nativeContexts: Number(heap.number_of_native_contexts || 0),
-      detachedContexts: Number(heap.number_of_detached_contexts || 0)
-    },
-    eventLoop: {
-      utilization: Number((elu.utilization || 0).toFixed(4)),
-      activeMs: Number((elu.active || 0).toFixed(3)),
-      idleMs: Number((elu.idle || 0).toFixed(3)),
-      delayMeanMs: toMsFromNs(eventLoopDelayHistogram.mean),
-      delayStddevMs: toMsFromNs(eventLoopDelayHistogram.stddev),
-      delayP95Ms: toMsFromNs(eventLoopDelayHistogram.percentile(95)),
-      delayP99Ms: toMsFromNs(eventLoopDelayHistogram.percentile(99)),
-      delayMaxMs: toMsFromNs(eventLoopDelayHistogram.max)
-    },
-    cpu: {
-      sampleWindowMs: Number(elapsedSampleMs.toFixed(3)),
-      usagePercentSingleCore: cpuPercentSingleCore,
-      usagePercentAllCores: cpuPercentAllCores,
-      cpuCount,
-      loadAvg1m: Number((os.loadavg()[0] || 0).toFixed(3)),
-      loadAvg5m: Number((os.loadavg()[1] || 0).toFixed(3)),
-      loadAvg15m: Number((os.loadavg()[2] || 0).toFixed(3))
-    },
-    sinceStart: {
-      startedAt: nodeRuntimeStartedAt,
-      elapsedSeconds: Math.round((Date.now() - nodeRuntimeStartedAt) / 1000)
-    }
-  };
-}
 
 const app = express();
 app.set('trust proxy', true);
@@ -665,144 +677,16 @@ function rebuildBrokerInstances(nextConfig = {}) {
 }
 
 let primaryBroker = createConfiguredBroker();
-// --- MessageBroker Subscription API ---
-app.get('/api/broker/subscriptions', (req, res) => {
-  if (MODULAR_MODE) {
-    proxyRequest('GET', '/broker/subscriptions', req, res);
-  } else {
-    try {
-      res.json({ subscriptions: primaryBroker.getSubscriptions() });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  }
-});
-
-app.get('/api/broker/config', requirePermission('broker.read'), (req, res) => {
-  if (MODULAR_MODE) {
-    proxyRequest('GET', '/broker/config', req, res);
-  } else {
-    res.json({
-      broker: {
-        provider: brokerRuntimeConfig.provider,
-        supportedProviders: BROKER_SUPPORTED_PROVIDERS,
-        rabbitmq: {
-          exchangeName: brokerRuntimeConfig.exchangeName,
-          queuePrefix: brokerRuntimeConfig.queuePrefix,
-          urlConfigured: brokerRuntimeConfig.provider === 'rabbitmq' ? true : Boolean(brokerRuntimeConfig.url)
-        },
-        msmq: {
-          baseQueuePath: brokerRuntimeConfig.msmqBaseQueuePath,
-          queuePrefix: brokerRuntimeConfig.msmqQueuePrefix
-        },
-        kafka: {
-          brokers: brokerRuntimeConfig.kafkaBrokers,
-          clientId: brokerRuntimeConfig.kafkaClientId,
-          topicPrefix: brokerRuntimeConfig.kafkaTopicPrefix
-        },
-        ibm: {
-          queueManager: brokerRuntimeConfig.ibmQueueManager,
-          channel: brokerRuntimeConfig.ibmChannel,
-          connName: brokerRuntimeConfig.ibmConnName,
-          queuePrefix: brokerRuntimeConfig.ibmQueuePrefix,
-          username: brokerRuntimeConfig.ibmUsername,
-          passwordConfigured: Boolean(brokerRuntimeConfig.ibmPassword)
-        },
-        apache: {
-          host: brokerRuntimeConfig.apacheHost,
-          port: brokerRuntimeConfig.apachePort,
-          topicPrefix: brokerRuntimeConfig.apacheTopicPrefix,
-          username: brokerRuntimeConfig.apacheUsername,
-          passwordConfigured: Boolean(brokerRuntimeConfig.apachePassword)
-        },
-        secondaryRunning: Boolean(secondaryBroker)
-      }
-    });
-  }
-});
-
-app.post('/api/broker/config', requirePermission('broker.configure'), (req, res) => {
-  if (MODULAR_MODE) {
-    proxyRequest('POST', '/broker/config', req, res);
-  } else {
-    try {
-      const nextProvider = normalizeBrokerProvider(req.body?.provider);
-      const nextUrl = String(req.body?.url || '').trim();
-      const nextExchangeName = String(req.body?.exchangeName || '').trim();
-      const nextQueuePrefix = String(req.body?.queuePrefix || '').trim();
-      const nextMsmqBaseQueuePath = String(req.body?.msmqBaseQueuePath || '').trim();
-      const nextMsmqQueuePrefix = String(req.body?.msmqQueuePrefix || '').trim();
-      const nextKafkaBrokers = String(req.body?.kafkaBrokers || '').trim();
-      const nextKafkaClientId = String(req.body?.kafkaClientId || '').trim();
-      const nextKafkaTopicPrefix = String(req.body?.kafkaTopicPrefix || '').trim();
-      const nextIbmQueueManager = String(req.body?.ibmQueueManager || '').trim();
-      const nextIbmChannel = String(req.body?.ibmChannel || '').trim();
-      const nextIbmConnName = String(req.body?.ibmConnName || '').trim();
-      const nextIbmQueuePrefix = String(req.body?.ibmQueuePrefix || '').trim();
-      const nextIbmUsername = String(req.body?.ibmUsername || '').trim();
-      const hasIbmPassword = Object.prototype.hasOwnProperty.call(req.body || {}, 'ibmPassword');
-      const nextIbmPassword = hasIbmPassword ? String(req.body?.ibmPassword || '') : '';
-      const nextApacheHost = String(req.body?.apacheHost || '').trim();
-      const nextApachePort = Number(req.body?.apachePort || 0);
-      const nextApacheUsername = String(req.body?.apacheUsername || '').trim();
-      const hasApachePassword = Object.prototype.hasOwnProperty.call(req.body || {}, 'apachePassword');
-      const nextApachePassword = hasApachePassword ? String(req.body?.apachePassword || '') : '';
-      const nextApacheTopicPrefix = String(req.body?.apacheTopicPrefix || '').trim();
-
-      if (!nextProvider) {
-        return res.status(400).json({ error: 'provider is required' });
-      }
-      if (!BROKER_SUPPORTED_PROVIDERS.includes(nextProvider)) {
-        return res.status(400).json({ error: `Unsupported provider: ${nextProvider}` });
-      }
-
-      const nextConfig = { provider: nextProvider };
-      if (nextUrl) nextConfig.url = nextUrl;
-      if (nextExchangeName) nextConfig.exchangeName = nextExchangeName;
-      if (nextQueuePrefix) nextConfig.queuePrefix = nextQueuePrefix;
-      if (nextMsmqBaseQueuePath) nextConfig.msmqBaseQueuePath = nextMsmqBaseQueuePath;
-      if (nextMsmqQueuePrefix) nextConfig.msmqQueuePrefix = nextMsmqQueuePrefix;
-      if (nextKafkaBrokers) nextConfig.kafkaBrokers = nextKafkaBrokers;
-      if (nextKafkaClientId) nextConfig.kafkaClientId = nextKafkaClientId;
-      if (nextKafkaTopicPrefix) nextConfig.kafkaTopicPrefix = nextKafkaTopicPrefix;
-      if (nextIbmQueueManager) nextConfig.ibmQueueManager = nextIbmQueueManager;
-      if (nextIbmChannel) nextConfig.ibmChannel = nextIbmChannel;
-      if (nextIbmConnName) nextConfig.ibmConnName = nextIbmConnName;
-      if (nextIbmQueuePrefix) nextConfig.ibmQueuePrefix = nextIbmQueuePrefix;
-      if (nextIbmUsername) nextConfig.ibmUsername = nextIbmUsername;
-      if (hasIbmPassword) nextConfig.ibmPassword = nextIbmPassword;
-      if (nextApacheHost) nextConfig.apacheHost = nextApacheHost;
-      if (nextApachePort > 0) nextConfig.apachePort = nextApachePort;
-      if (nextApacheUsername) nextConfig.apacheUsername = nextApacheUsername;
-      if (hasApachePassword) nextConfig.apachePassword = nextApachePassword;
-      if (nextApacheTopicPrefix) nextConfig.apacheTopicPrefix = nextApacheTopicPrefix;
-
-      const runtime = rebuildBrokerInstances(nextConfig);
-      res.json({
-        status: 'updated',
-        broker: runtime
-      });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  }
-});
-
-app.post('/api/broker/subscriptions', (req, res) => {
-  if (MODULAR_MODE) {
-    proxyRequest('POST', '/broker/subscriptions', req, res);
-  } else {
-    try {
-      const { topic, serviceName } = req.body || {};
-      if (!topic || !serviceName) {
-        return res.status(400).json({ error: 'topic and serviceName are required' });
-      }
-      primaryBroker.addSubscription(topic, serviceName);
-      res.json({ status: 'added', topic, serviceName });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  }
+registerBrokerAdminRoutes(app, {
+  MODULAR_MODE,
+  proxyRequest,
+  requirePermission,
+  BROKER_SUPPORTED_PROVIDERS,
+  normalizeBrokerProvider,
+  brokerRuntimeConfig,
+  getPrimaryBroker: () => primaryBroker,
+  hasSecondaryBroker: () => Boolean(secondaryBroker),
+  rebuildBrokerInstances
 });
 let secondaryBroker = null;
 globalThis.brokerClassDown = false;
@@ -1087,6 +971,15 @@ const txStatePersistenceStats = {
   lastShipFailureAt: null,
   lastShipError: null
 };
+const scheduledDispatchRuntime = {
+  timerId: null,
+  running: false,
+  processed: 0,
+  failures: 0,
+  lastRunAt: null,
+  lastError: null
+};
+const txAttemptStateByEntity = new Map();
 
 function ensureDataRootExists() {
   fs.mkdirSync(PULSE_QUEUE_DATA_ROOT, { recursive: true });
@@ -1133,7 +1026,7 @@ function getTxStatePersistenceSummary() {
 function queueTransactionStateForLogShipping(entry, reason) {
   ensureDataRootExists();
   const record = {
-    queuedAt: new Date().toISOString(),
+    queuedAt: authoritativeTimeService.nowIso(),
     reason: reason || 'db-unavailable',
     entry
   };
@@ -1142,23 +1035,480 @@ function queueTransactionStateForLogShipping(entry, reason) {
   txStatePersistenceStats.lastQueuedAt = record.queuedAt;
 }
 
+function appendTransactionTraceEvent(event) {
+  if (!event || typeof event !== 'object') return;
+  ensureDataRootExists();
+  fs.appendFileSync(TX_TRACE_JOURNAL_PATH, `${JSON.stringify(event)}\n`, 'utf-8');
+}
+
+function appendTransactionJournalComment(entityId, comment, {
+  eventKind = 'journal-comment',
+  relation = null,
+  queueName = null,
+  details = null,
+  machineId = 'transaction-journal'
+} = {}) {
+  const key = String(entityId || '').trim();
+  const note = String(comment || '').trim();
+  if (!key || !note) return;
+
+  appendTransactionTraceEvent({
+    occurredAt: authoritativeTimeService.nowIso(),
+    entityId: key,
+    machineId,
+    eventKind,
+    payloadType: 'json',
+    transition: {
+      fromState: null,
+      toState: null,
+      toStateLabel: null,
+      eventName: null,
+      queueName: String(queueName || '').trim() || null,
+      isTerminal: false
+    },
+    worker: {
+      workerId: null,
+      sourceService: 'transaction-journal',
+      consumerService: null,
+      workerKind: 'journal'
+    },
+    coordination: {
+      queueName: String(queueName || '').trim() || null,
+      managerId: null,
+      nodeId: null,
+      mode: null,
+      replicaOf: null,
+      syncSourceManagerId: null,
+      managerStatus: null
+    },
+    comment: note,
+    relation: relation && typeof relation === 'object' ? relation : null,
+    details: details && typeof details === 'object' ? details : null
+  });
+}
+
+function parseIsoTimestampMs(value) {
+  const ms = Date.parse(String(value || '').trim());
+  return Number.isFinite(ms) ? ms : NaN;
+}
+
+function normalizeScheduledDispatchItem(item) {
+  const raw = item && typeof item === 'object' ? item : {};
+  const dueAtIso = String(raw.dueAt || '').trim() || new Date().toISOString();
+  const dueAtMs = parseIsoTimestampMs(dueAtIso);
+  return {
+    id: String(raw.id || crypto.randomUUID()).trim(),
+    status: String(raw.status || 'pending').trim().toLowerCase(),
+    createdAt: String(raw.createdAt || new Date().toISOString()).trim(),
+    dueAt: Number.isFinite(dueAtMs) ? new Date(dueAtMs).toISOString() : new Date().toISOString(),
+    queueName: String(raw.queueName || '').trim(),
+    sourceService: String(raw.sourceService || 'scheduled-dispatch').trim(),
+    comment: String(raw.comment || '').trim() || null,
+    targetManagerId: String(raw.targetManagerId || '').trim() || null,
+    targetNodeId: String(raw.targetNodeId || '').trim() || null,
+    parentEntityId: String(raw.parentEntityId || '').trim() || null,
+    childEntityId: String(raw.childEntityId || '').trim() || null,
+    attempts: Math.max(0, Number(raw.attempts) || 0),
+    lastError: raw.lastError ? String(raw.lastError) : null,
+    dispatchedAt: raw.dispatchedAt ? String(raw.dispatchedAt) : null,
+    deliveredTo: raw.deliveredTo ? String(raw.deliveredTo) : null,
+    message: raw.message
+  };
+}
+
+function readScheduledDispatchQueue() {
+  ensureDataRootExists();
+  if (!fs.existsSync(TX_SCHEDULED_DISPATCH_QUEUE_PATH)) {
+    return [];
+  }
+
+  try {
+    const raw = fs.readFileSync(TX_SCHEDULED_DISPATCH_QUEUE_PATH, 'utf-8');
+    const parsed = JSON.parse(raw);
+    const items = Array.isArray(parsed)
+      ? parsed
+      : (Array.isArray(parsed?.items) ? parsed.items : []);
+    return items
+      .map(normalizeScheduledDispatchItem)
+      .filter((item) => item.queueName);
+  } catch (e) {
+    console.warn(`[SCHEDULED-DISPATCH] Failed to read queue file: ${e.message}`);
+    return [];
+  }
+}
+
+function writeScheduledDispatchQueue(items) {
+  ensureDataRootExists();
+  const normalized = Array.isArray(items)
+    ? items.map(normalizeScheduledDispatchItem)
+    : [];
+  normalized.sort((a, b) => parseIsoTimestampMs(a.dueAt) - parseIsoTimestampMs(b.dueAt));
+  fs.writeFileSync(
+    TX_SCHEDULED_DISPATCH_QUEUE_PATH,
+    `${JSON.stringify({ updatedAt: new Date().toISOString(), items: normalized }, null, 2)}\n`,
+    'utf-8'
+  );
+}
+
+function getScheduledDispatchQueueSummary() {
+  const items = readScheduledDispatchQueue();
+  const pending = items.filter((item) => item.status === 'pending').length;
+  const dispatched = items.filter((item) => item.status === 'dispatched').length;
+  const failed = items.filter((item) => item.lastError && item.status !== 'dispatched').length;
+  return {
+    path: TX_SCHEDULED_DISPATCH_QUEUE_PATH,
+    pollMs: TX_SCHEDULED_DISPATCH_POLL_MS,
+    maxPerTick: TX_SCHEDULED_DISPATCH_MAX_PER_TICK,
+    pending,
+    dispatched,
+    failed,
+    total: items.length,
+    runtime: {
+      running: scheduledDispatchRuntime.running,
+      processed: scheduledDispatchRuntime.processed,
+      failures: scheduledDispatchRuntime.failures,
+      lastRunAt: scheduledDispatchRuntime.lastRunAt,
+      lastError: scheduledDispatchRuntime.lastError
+    }
+  };
+}
+
+function resolveScheduledDispatchRoute(item) {
+  const queueName = String(item?.queueName || '').trim();
+  if (!queueName) {
+    throw new Error('queueName is required for scheduled dispatch');
+  }
+
+  const targetManagerId = String(item?.targetManagerId || '').trim();
+  if (targetManagerId) {
+    const manager = queueManagerRegistry.get(targetManagerId);
+    if (!manager) {
+      throw new Error(`Scheduled target manager not found: ${targetManagerId}`);
+    }
+    if (!MANAGER_ACTIVE_STATES.has(manager.status)) {
+      throw new Error(`Scheduled target manager ${targetManagerId} is not active`);
+    }
+    return { queueName, managerId: targetManagerId, assignedAt: new Date().toISOString() };
+  }
+
+  const targetNodeId = String(item?.targetNodeId || '').trim();
+  if (targetNodeId) {
+    const byNode = Array.from(queueManagerRegistry.values()).find(
+      (manager) => String(manager?.nodeId || '').trim() === targetNodeId && MANAGER_ACTIVE_STATES.has(manager.status)
+    );
+    if (!byNode) {
+      throw new Error(`Scheduled target node has no active manager: ${targetNodeId}`);
+    }
+    return { queueName, managerId: byNode.managerId, assignedAt: new Date().toISOString() };
+  }
+
+  const route = ensureRoute(queueName);
+  if (!route) {
+    throw new Error(`No available queue managers for scheduled queue ${queueName}`);
+  }
+  return route;
+}
+
+function schedulePersistentDispatch({
+  queueName,
+  message,
+  sourceService = 'scheduled-dispatch',
+  dueAt = null,
+  delayMs = 0,
+  comment = null,
+  targetManagerId = null,
+  targetNodeId = null,
+  parentEntityId = null,
+  childEntityId = null
+} = {}) {
+  const queue = String(queueName || '').trim();
+  if (!queue) {
+    throw new Error('queueName is required');
+  }
+
+  const delay = Math.max(0, Number(delayMs) || 0);
+  const dueAtIso = dueAt
+    ? new Date(parseIsoTimestampMs(dueAt)).toISOString()
+    : new Date(Date.now() + delay).toISOString();
+  if (!Number.isFinite(parseIsoTimestampMs(dueAtIso))) {
+    throw new Error('Invalid dueAt value');
+  }
+
+  const item = normalizeScheduledDispatchItem({
+    id: crypto.randomUUID(),
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+    dueAt: dueAtIso,
+    queueName: queue,
+    sourceService,
+    comment,
+    targetManagerId,
+    targetNodeId,
+    parentEntityId,
+    childEntityId,
+    message,
+    attempts: 0,
+    lastError: null
+  });
+
+  const items = readScheduledDispatchQueue();
+  items.push(item);
+  writeScheduledDispatchQueue(items);
+  return item;
+}
+
+async function processScheduledDispatchQueueTick() {
+  if (scheduledDispatchRuntime.running) {
+    return 0;
+  }
+  scheduledDispatchRuntime.running = true;
+  scheduledDispatchRuntime.lastRunAt = new Date().toISOString();
+
+  try {
+    const items = readScheduledDispatchQueue();
+    const nowMs = Date.now();
+    const dueItems = items
+      .filter((item) => item.status === 'pending' && parseIsoTimestampMs(item.dueAt) <= nowMs)
+      .sort((a, b) => parseIsoTimestampMs(a.dueAt) - parseIsoTimestampMs(b.dueAt))
+      .slice(0, TX_SCHEDULED_DISPATCH_MAX_PER_TICK);
+
+    if (dueItems.length === 0) {
+      scheduledDispatchRuntime.lastError = null;
+      return 0;
+    }
+
+    for (const dueItem of dueItems) {
+      const item = items.find((candidate) => candidate.id === dueItem.id);
+      if (!item) continue;
+      try {
+        const route = resolveScheduledDispatchRoute(item);
+        const delivery = await enqueueViaRoute(
+          route,
+          item.queueName,
+          item.message,
+          item.sourceService || 'scheduled-dispatch',
+          null,
+          inferQueueDataTypeIds(item.queueName)
+        );
+
+        item.status = 'dispatched';
+        item.dispatchedAt = new Date().toISOString();
+        item.deliveredTo = String(delivery?.deliveredTo || route.managerId || '').trim() || null;
+        item.lastError = null;
+        item.attempts = Math.max(0, Number(item.attempts) || 0) + 1;
+
+        appendCoordinationTraceFromMessage(item.message, {
+          eventKind: 'scheduled-dispatch',
+          queueName: item.queueName,
+          managerId: item.deliveredTo || route.managerId,
+          sourceService: item.sourceService || 'scheduled-dispatch',
+          mode: 'scheduled',
+          details: {
+            dispatchId: item.id,
+            comment: item.comment,
+            parentEntityId: item.parentEntityId,
+            childEntityId: item.childEntityId,
+            dueAt: item.dueAt
+          }
+        });
+
+        if (item.parentEntityId && item.comment) {
+          appendTransactionJournalComment(item.parentEntityId, item.comment, {
+            eventKind: 'scheduled-dispatch-comment',
+            queueName: item.queueName,
+            relation: item.childEntityId ? { childEntityId: item.childEntityId } : null,
+            details: {
+              dispatchId: item.id,
+              dueAt: item.dueAt,
+              deliveredTo: item.deliveredTo
+            }
+          });
+        }
+      } catch (e) {
+        item.attempts = Math.max(0, Number(item.attempts) || 0) + 1;
+        item.lastError = e.message;
+        item.dueAt = new Date(Date.now() + Math.min(30000, Math.max(1000, item.attempts * 1000))).toISOString();
+        scheduledDispatchRuntime.failures += 1;
+      }
+    }
+
+    writeScheduledDispatchQueue(items);
+    scheduledDispatchRuntime.processed += dueItems.length;
+    scheduledDispatchRuntime.lastError = null;
+    return dueItems.length;
+  } catch (e) {
+    scheduledDispatchRuntime.lastError = e.message;
+    throw e;
+  } finally {
+    scheduledDispatchRuntime.running = false;
+  }
+}
+
+function startScheduledDispatchWatcher() {
+  if (scheduledDispatchRuntime.timerId) {
+    return;
+  }
+  scheduledDispatchRuntime.timerId = setInterval(() => {
+    void processScheduledDispatchQueueTick().catch((e) => {
+      console.warn(`[SCHEDULED-DISPATCH] Worker tick failed: ${e.message}`);
+    });
+  }, TX_SCHEDULED_DISPATCH_POLL_MS);
+}
+
+function getTransactionTrace(entityId, { limit = 200 } = {}) {
+  const key = String(entityId || '').trim();
+  if (!key) return [];
+  if (!fs.existsSync(TX_TRACE_JOURNAL_PATH)) {
+    return [];
+  }
+
+  try {
+    const raw = fs.readFileSync(TX_TRACE_JOURNAL_PATH, 'utf-8');
+    const lines = raw
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(Boolean);
+
+    const events = [];
+    for (const line of lines) {
+      try {
+        const parsed = JSON.parse(line);
+        if (String(parsed?.entityId || '').trim() === key) {
+          events.push(parsed);
+        }
+      } catch {
+        // Ignore malformed trace records to preserve trace availability.
+      }
+    }
+
+    return events.slice(-Math.max(1, Math.min(1000, Number(limit) || 200)));
+  } catch (e) {
+    console.warn(`[TX-TRACE] Failed to read trace journal: ${e.message}`);
+    return [];
+  }
+}
+
+function normalizeSiteToken(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '') || 'primary-site';
+}
+
+function resolveSiteIdForNode(nodeId, ip = null) {
+  const normalizedNodeId = normalizeNodeId(nodeId);
+  const normalizedIp = normalizePresenceIp(ip);
+
+  for (const node of discoveredNodes.values()) {
+    const candidateNodeId = normalizeNodeId(node?.nodeId || node?.nodeName);
+    const candidateIp = normalizePresenceIp(node?.ip);
+    if (
+      (normalizedNodeId && candidateNodeId && normalizedNodeId === candidateNodeId)
+      || (normalizedIp && candidateIp && normalizedIp === candidateIp)
+    ) {
+      const fromNested = String(node?.details?.site?.siteId || '').trim();
+      const fromFlat = String(node?.details?.siteId || '').trim();
+      const fromTopLevel = String(node?.siteId || '').trim();
+      return normalizeSiteToken(fromNested || fromFlat || fromTopLevel || 'primary-site');
+    }
+  }
+
+  return 'primary-site';
+}
+
+function deriveTransactionAttemptIdentity({
+  entityId,
+  queueName = null,
+  traceContext = null,
+  explicitAttemptId = null,
+  explicitSiteId = null,
+  explicitDuplicatePossible = null
+} = {}) {
+  const txEntityId = String(entityId || '').trim();
+  if (!txEntityId) return null;
+
+  const resolvedQueueName = String(queueName || traceContext?.queueName || '').trim() || null;
+  const route = resolvedQueueName ? queueRoutes.get(resolvedQueueName) : null;
+  const managerId = String(traceContext?.managerId || route?.managerId || '').trim() || null;
+  const manager = managerId ? queueManagerRegistry.get(managerId) : null;
+
+  const siteFromTrace = String(traceContext?.siteId || '').trim();
+  const siteFromExplicit = String(explicitSiteId || '').trim();
+  const inferredSiteId = resolveSiteIdForNode(traceContext?.nodeId || manager?.nodeId || null, manager?.ip || null);
+  const siteId = normalizeSiteToken(siteFromExplicit || siteFromTrace || inferredSiteId || 'primary-site');
+
+  const previous = txAttemptStateByEntity.get(txEntityId) || null;
+  let attemptNumber = Number(previous?.attemptNumber || 1);
+  let previousSiteId = previous?.siteId || null;
+  let failoverDetected = false;
+
+  if (!previous) {
+    attemptNumber = 1;
+    previousSiteId = null;
+  } else if (previous.siteId && previous.siteId !== siteId) {
+    failoverDetected = true;
+    previousSiteId = previous.siteId;
+    attemptNumber = Number(previous.attemptNumber || 1) + 1;
+  }
+
+  const duplicatePossible = explicitDuplicatePossible == null
+    ? failoverDetected
+    : Boolean(explicitDuplicatePossible) || failoverDetected;
+
+  const computedAttemptId = `${siteId}:${txEntityId}:${attemptNumber}`;
+  const attemptId = String(explicitAttemptId || computedAttemptId).trim() || computedAttemptId;
+
+  txAttemptStateByEntity.set(txEntityId, {
+    siteId,
+    attemptNumber,
+    attemptId,
+    duplicatePossible,
+    failoverDetected,
+    previousSiteId,
+    managerId,
+    updatedAt: authoritativeTimeService.nowIso()
+  });
+
+  return {
+    siteId,
+    previousSiteId,
+    attemptNumber,
+    attemptId,
+    duplicatePossible,
+    failoverDetected,
+    managerId
+  };
+}
+
 function buildTxStateDbWriteEntry(compiled, {
   message,
   fromState = null,
   toState,
   eventName = null,
-  queueName = null
+  queueName = null,
+  traceContext = null
 } = {}) {
   if (!toState) return null;
   const entityId = extractSwiftReferenceFromMessage(message);
   if (!entityId) return null;
 
-  const nowIso = new Date().toISOString();
+  const nowIso = authoritativeTimeService.nowIso();
   const machineId = String(compiled?.transactionId || 'fsm-machine').trim() || 'fsm-machine';
   const toStateInfo = getLifecycleStateByName(compiled, toState);
   const resolvedQueueName = String(queueName || toStateInfo?.queueName || '').trim() || null;
   const toStateLabel = String(toStateInfo?.label || toState || '').trim() || null;
   const isTerminal = getLifecycleOutgoingTransitions(compiled, String(toState || '').trim()).length === 0;
+  const messageMeta = message && typeof message === 'object' ? message.transactionMeta : null;
+  const txIdentity = deriveTransactionAttemptIdentity({
+    entityId,
+    queueName: resolvedQueueName,
+    traceContext,
+    explicitAttemptId: messageMeta?.attemptId || null,
+    explicitSiteId: messageMeta?.siteId || null,
+    explicitDuplicatePossible: messageMeta?.duplicate_possible
+  });
 
   return {
     entityId,
@@ -1170,8 +1520,109 @@ function buildTxStateDbWriteEntry(compiled, {
     eventName: String(eventName || '').trim() || null,
     isTerminal,
     payloadType: inferMessageType(message),
-    updatedAt: nowIso
+    updatedAt: nowIso,
+    txIdentity
   };
+}
+
+function buildTransactionTraceEvent(writeEntry, traceContext = {}) {
+  if (!writeEntry?.entityId) return null;
+
+  const resolvedQueueName = String(writeEntry.queueName || traceContext.queueName || '').trim() || null;
+  const route = resolvedQueueName ? queueRoutes.get(resolvedQueueName) : null;
+  const manager = route?.managerId ? queueManagerRegistry.get(route.managerId) : null;
+
+  return {
+    occurredAt: String(writeEntry.updatedAt || authoritativeTimeService.nowIso()),
+    entityId: writeEntry.entityId,
+    machineId: writeEntry.machineId,
+    eventKind: String(traceContext.eventKind || 'fsm-transition'),
+    payloadType: writeEntry.payloadType,
+    transition: {
+      fromState: writeEntry.fromState,
+      toState: writeEntry.toState,
+      toStateLabel: writeEntry.toStateLabel,
+      eventName: writeEntry.eventName,
+      queueName: writeEntry.queueName,
+      isTerminal: Boolean(writeEntry.isTerminal)
+    },
+    worker: {
+      workerId: traceContext.workerId ? String(traceContext.workerId) : null,
+      sourceService: traceContext.sourceService ? String(traceContext.sourceService) : null,
+      consumerService: traceContext.consumerService ? String(traceContext.consumerService) : null,
+      workerKind: traceContext.workerKind ? String(traceContext.workerKind) : null
+    },
+    coordination: {
+      queueName: resolvedQueueName,
+      managerId: route?.managerId || traceContext.managerId || null,
+      nodeId: manager?.nodeId || traceContext.nodeId || null,
+      mode: manager ? (manager.local ? 'local' : 'remote') : (traceContext.mode || null),
+      replicaOf: manager?.replicaOf || null,
+      syncSourceManagerId: manager?.syncSourceManagerId || null,
+      managerStatus: manager?.status || null
+    },
+    transaction: writeEntry?.txIdentity ? {
+      transactionId: writeEntry.entityId,
+      attemptId: writeEntry.txIdentity.attemptId,
+      attemptNumber: writeEntry.txIdentity.attemptNumber,
+      siteId: writeEntry.txIdentity.siteId,
+      previousSiteId: writeEntry.txIdentity.previousSiteId,
+      failoverDetected: Boolean(writeEntry.txIdentity.failoverDetected),
+      duplicate_possible: Boolean(writeEntry.txIdentity.duplicatePossible)
+    } : null
+  };
+}
+
+function appendCoordinationTraceFromMessage(message, {
+  eventKind,
+  queueName = null,
+  managerId = null,
+  nodeId = null,
+  mode = null,
+  sourceService = null,
+  consumerService = null,
+  workerId = null,
+  workerKind = null,
+  details = null
+} = {}) {
+  const entityId = extractSwiftReferenceFromMessage(message);
+  if (!entityId) return;
+
+  const resolvedQueueName = String(queueName || '').trim() || null;
+  const resolvedManagerId = String(managerId || '').trim() || null;
+  const manager = resolvedManagerId ? queueManagerRegistry.get(resolvedManagerId) : null;
+
+  appendTransactionTraceEvent({
+    occurredAt: authoritativeTimeService.nowIso(),
+    entityId,
+    machineId: 'queue-coordination',
+    eventKind: String(eventKind || 'coordination'),
+    payloadType: inferMessageType(message),
+    transition: {
+      fromState: null,
+      toState: null,
+      toStateLabel: null,
+      eventName: null,
+      queueName: resolvedQueueName,
+      isTerminal: false
+    },
+    worker: {
+      workerId: workerId ? String(workerId) : null,
+      sourceService: sourceService ? String(sourceService) : null,
+      consumerService: consumerService ? String(consumerService) : null,
+      workerKind: workerKind ? String(workerKind) : null
+    },
+    coordination: {
+      queueName: resolvedQueueName,
+      managerId: resolvedManagerId,
+      nodeId: manager?.nodeId || nodeId || null,
+      mode: mode || (manager ? (manager.local ? 'local' : 'remote') : null),
+      replicaOf: manager?.replicaOf || null,
+      syncSourceManagerId: manager?.syncSourceManagerId || null,
+      managerStatus: manager?.status || null
+    },
+    details: details && typeof details === 'object' ? details : null
+  });
 }
 
 async function writeTransactionStateToDb(entry) {
@@ -4542,73 +4993,29 @@ function registerLocalServiceHeartbeats() {
   }
 }
 
-function setNodeLifecycleState(nodeId, state) {
-  const normalized = normalizeNodeId(nodeId);
-  if (!normalized) return false;
-  let changed = false;
-
-  for (const [managerId, manager] of queueManagerRegistry.entries()) {
-    if (normalizeNodeId(manager.nodeId || manager.ip) === normalized) {
-      manager.status = state;
-      manager.updatedAt = new Date().toISOString();
-      queueManagerRegistry.set(managerId, manager);
-      changed = true;
-    }
-  }
-
-  for (const [instanceId, instance] of serviceInstanceRegistry.entries()) {
-    if (normalizeNodeId(instance.nodeId || instance.ip) === normalized) {
-      instance.status = state;
-      instance.updatedAt = new Date().toISOString();
-      serviceInstanceRegistry.set(instanceId, instance);
-      changed = true;
-    }
-  }
-
-  return changed;
-}
-
-function getNodeQueueManagers(nodeId) {
-  const normalized = normalizeNodeId(nodeId);
-  return Array.from(queueManagerRegistry.values()).filter(m => normalizeNodeId(m.nodeId || m.ip) === normalized);
-}
-
-function getNodeDrainStatus(nodeId) {
-  const managers = getNodeQueueManagers(nodeId);
-  const managerIds = new Set(managers.map(m => m.managerId));
-  const queueAssignments = [];
-
-  let pendingMessagesKnown = 0;
-  let unknownQueueDepthCount = 0;
-
-  for (const route of queueRoutes.values()) {
-    if (!managerIds.has(route.managerId)) continue;
-    const manager = queueManagerRegistry.get(route.managerId);
-    let queueLength = null;
-    if (manager?.local) {
-      queueLength = queueManagers[manager.localIndex].getQueueLength(route.queueName);
-      pendingMessagesKnown += queueLength;
-    } else {
-      unknownQueueDepthCount += 1;
-    }
-    queueAssignments.push({
-      queueName: route.queueName,
-      managerId: route.managerId,
-      queueLength
-    });
-  }
-
-  const drainReady = pendingMessagesKnown === 0 && unknownQueueDepthCount === 0;
-  return {
-    nodeId,
-    managerCount: managers.length,
-    managers,
-    queueAssignments,
-    pendingMessagesKnown,
-    unknownQueueDepthCount,
-    drainReady
-  };
-}
+const {
+  getNodeRuntimeDiagnosticsSnapshot,
+  setNodeLifecycleState,
+  getNodeDrainStatus,
+  getBrokerNodeDetails,
+  getSystemPerformanceSnapshot
+} = createRuntimeDiagnosticsApi({
+  os,
+  v8,
+  performance,
+  monitorEventLoopDelay,
+  execFileSync,
+  processRef: process,
+  queueManagerInstances,
+  queueManagerRegistry,
+  serviceInstanceRegistry,
+  queueRoutes,
+  getQueueManagers: () => queueManagers,
+  normalizeNodeId,
+  BROKER_SERVICE,
+  SQL_INSTANCE_NAME,
+  SQL_SERVER_HOST
+});
 
 function getAvailableServiceInstances(serviceName) {
   return Array.from(serviceInstanceRegistry.values()).filter(i => i.serviceName === serviceName && MANAGER_ACTIVE_STATES.has(i.status));
@@ -4916,6 +5323,42 @@ async function syncManagerBeforeActivation(targetManagerId, sourceManagerId) {
   finalTarget.lastSyncError = null;
   queueManagerRegistry.set(targetManagerId, finalTarget);
   pendingManagerSync.delete(targetManagerId);
+
+  appendTransactionTraceEvent({
+    occurredAt: new Date().toISOString(),
+    entityId: `${targetManagerId}:${sourceManagerId}:${Number(finalSnapshot?.version || 0)}`,
+    machineId: 'queue-manager-sync',
+    eventKind: 'manager-sync-ready',
+    payloadType: 'system',
+    transition: {
+      fromState: null,
+      toState: null,
+      toStateLabel: null,
+      eventName: null,
+      queueName: null,
+      isTerminal: false
+    },
+    worker: {
+      workerId: null,
+      sourceService: sourceManagerId,
+      consumerService: targetManagerId,
+      workerKind: 'manager-sync'
+    },
+    coordination: {
+      queueName: null,
+      managerId: targetManagerId,
+      nodeId: finalTarget.nodeId || null,
+      mode: finalTarget.local ? 'local' : 'remote',
+      replicaOf: finalTarget.replicaOf || null,
+      syncSourceManagerId: sourceManagerId,
+      managerStatus: finalTarget.status || null
+    },
+    details: {
+      sourceManagerId,
+      targetManagerId,
+      syncedVersion: Number(finalSnapshot?.version || 0)
+    }
+  });
 }
 
 function setQueueManagerStatus(managerId, status) {
@@ -5000,6 +5443,14 @@ async function enqueueViaRoute(route, queueName, message, sourceService, message
       metricsCollector.recordEnqueue(messageId, queueName);
 
       qm.enqueue(queueName, message, sourceService || 'unknown', messageId, normalizedEnvelope);
+      appendCoordinationTraceFromMessage(message, {
+        eventKind: 'queue-enqueue',
+        queueName,
+        managerId: manager.managerId,
+        sourceService: sourceService || 'unknown',
+        mode: 'local',
+        details: { messageId }
+      });
       trackStep3IngressEnqueue(queueName, message);
       trackStep3Arrival(queueName, message);
       incrementLifecycleCumulativeByQueue(queueName, 1);
@@ -5038,6 +5489,14 @@ async function enqueueViaRoute(route, queueName, message, sourceService, message
     if (!remoteRes.ok) {
       throw new Error(`Remote enqueue failed at ${url} with status ${remoteRes.status}`);
     }
+    appendCoordinationTraceFromMessage(message, {
+      eventKind: 'queue-enqueue',
+      queueName,
+      managerId: manager.managerId,
+      sourceService: sourceService || 'unknown',
+      mode: 'remote',
+      details: { messageId, url }
+    });
     trackStep3IngressEnqueue(queueName, message);
     trackStep3Arrival(queueName, message);
     incrementLifecycleCumulativeByQueue(queueName, 1);
@@ -5074,6 +5533,14 @@ async function replicateEnqueueToFollowers(queueName, message, sourceService, le
           body: JSON.stringify({ queueName, message, sourceService, messageId, messageEnvelope })
         });
       }
+      appendCoordinationTraceFromMessage(message, {
+        eventKind: 'queue-replicated',
+        queueName,
+        managerId: follower.managerId,
+        sourceService: sourceService || 'unknown',
+        mode: follower.local ? 'local' : 'remote',
+        details: { leaderManagerId, messageId }
+      });
     } catch (e) {
       console.warn(`[REPLICATION] Failed to replicate to ${follower.managerId}: ${e.message}`);
     }
@@ -5108,6 +5575,14 @@ async function dequeueViaRoute(queueName, consumerService) {
   if (manager.local) {
     const item = queueManagers[manager.localIndex].dequeue(queueName, consumerService || 'unknown');
     if (item !== null) {
+      const unwrappedItem = unwrapQueueItemMessage(item);
+      appendCoordinationTraceFromMessage(unwrappedItem, {
+        eventKind: 'queue-dequeue',
+        queueName,
+        managerId: manager.managerId,
+        consumerService: consumerService || 'unknown',
+        mode: 'local'
+      });
       // Record dequeue for metrics
       if (item.metadata?.messageId) {
         metricsCollector.recordDequeue(item.metadata.messageId);
@@ -5130,6 +5605,14 @@ async function dequeueViaRoute(queueName, consumerService) {
     const data = await remoteRes.json();
     const item = data.message || null;
     if (item !== null) {
+      const unwrappedItem = unwrapQueueItemMessage(item);
+      appendCoordinationTraceFromMessage(unwrappedItem, {
+        eventKind: 'queue-dequeue',
+        queueName,
+        managerId: manager.managerId,
+        consumerService: consumerService || 'unknown',
+        mode: 'remote'
+      });
       replicateDequeueToFollowers(queueName, item, route.managerId)
         .catch(e => console.warn(`[REPLICATION] Dequeue fan-out error: ${e.message}`));
     }
@@ -5137,6 +5620,37 @@ async function dequeueViaRoute(queueName, consumerService) {
   } catch (e) {
     // Leader failed → auto-promote next available manager
     console.warn(`[FAILOVER] Leader ${route.managerId} failed for queue ${queueName}: ${e.message}`);
+    appendTransactionTraceEvent({
+      occurredAt: new Date().toISOString(),
+      entityId: `failover:${queueName}:${route.managerId}`,
+      machineId: 'queue-failover',
+      eventKind: 'queue-failover',
+      payloadType: 'system',
+      transition: {
+        fromState: null,
+        toState: null,
+        toStateLabel: null,
+        eventName: null,
+        queueName,
+        isTerminal: false
+      },
+      worker: {
+        workerId: null,
+        sourceService: route.managerId,
+        consumerService: consumerService || 'unknown',
+        workerKind: 'failover'
+      },
+      coordination: {
+        queueName,
+        managerId: route.managerId,
+        nodeId: manager.nodeId || null,
+        mode: manager.local ? 'local' : 'remote',
+        replicaOf: manager.replicaOf || null,
+        syncSourceManagerId: manager.syncSourceManagerId || null,
+        managerStatus: 'down'
+      },
+      details: { error: e.message }
+    });
     manager.status = 'down';
     queueManagerRegistry.set(route.managerId, manager);
     queueRoutes.delete(queueName);
@@ -6063,6 +6577,128 @@ function createAdaptiveWorkerScheduler({ intervalMs, initialDelayMs = 0, maxBack
   };
 }
 
+function resolveLifecycleFailureQueueName(transition, kind) {
+  const fallback = kind === 'timeout' ? LIFECYCLE_ON_TIMEOUT_QUEUE : LIFECYCLE_ON_ERROR_QUEUE;
+  const key = kind === 'timeout' ? 'onTimeoutQueue' : 'onErrorQueue';
+  const configured = String(transition?.[key] || '').trim();
+  return configured || fallback;
+}
+
+function resolveLifecycleTransitionTimeoutMs(transition, workerState) {
+  const fromTransition = Number(transition?.timeoutMs);
+  if (Number.isFinite(fromTransition) && fromTransition > 0) {
+    return Math.max(1, Math.round(fromTransition));
+  }
+
+  const fromWorker = Number(workerState?.transitionTimeoutMs);
+  if (Number.isFinite(fromWorker) && fromWorker > 0) {
+    return Math.max(1, Math.round(fromWorker));
+  }
+
+  if (Number(LIFECYCLE_TRANSITION_TIMEOUT_MS) > 0) {
+    return Math.max(1, Math.round(Number(LIFECYCLE_TRANSITION_TIMEOUT_MS)));
+  }
+
+  return 0;
+}
+
+function withTimeout(promiseOrFactory, timeoutMs, timeoutMessage = 'Operation timed out') {
+  const limit = Math.max(0, Number(timeoutMs) || 0);
+  if (limit <= 0) {
+    return typeof promiseOrFactory === 'function' ? promiseOrFactory() : promiseOrFactory;
+  }
+
+  const taskPromise = typeof promiseOrFactory === 'function' ? promiseOrFactory() : promiseOrFactory;
+  let timeoutId = null;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      const error = new Error(timeoutMessage);
+      error.code = 'LIFECYCLE_TRANSITION_TIMEOUT';
+      error.isTimeout = true;
+      error.timeoutMs = limit;
+      reject(error);
+    }, limit);
+  });
+
+  return Promise.race([taskPromise, timeoutPromise]).finally(() => {
+    if (timeoutId) clearTimeout(timeoutId);
+  });
+}
+
+async function emitLifecycleFailureEvent({
+  compiled,
+  workerState,
+  dequeueResult,
+  transition,
+  runtimeContext,
+  error,
+  kind = 'error',
+  timeoutMs = null
+} = {}) {
+  const queueName = resolveLifecycleFailureQueueName(transition, kind);
+  const route = ensureRoute(queueName);
+  if (!route) {
+    console.warn(`[LIFECYCLE] Unable to route ${kind} event: no route for ${queueName}`);
+    return { emitted: false, reason: 'no-route', queueName };
+  }
+
+  const sourceMessage = runtimeContext?.inputMessage ?? dequeueResult?.message ?? null;
+  const entityId = extractSwiftReferenceFromMessage(sourceMessage) || extractSwiftReferenceFromMessage(runtimeContext?.message) || null;
+  const payload = {
+    reference: entityId,
+    entityId,
+    eventName: kind === 'timeout' ? 'onTimeout' : 'onError',
+    eventKind: kind,
+    workerId: workerState?.workerId || null,
+    sourceService: workerState?.sourceService || null,
+    consumerService: workerState?.consumerService || null,
+    fromState: workerState?.fromState || null,
+    transitionEvent: transition?.event || null,
+    transitionToState: transition?.to || null,
+    sourceQueue: dequeueResult?.queueName || null,
+    timeoutMs: timeoutMs == null ? null : Number(timeoutMs),
+    errorCode: error?.code || null,
+    errorMessage: String(error?.message || error || 'unknown lifecycle failure'),
+    occurredAt: new Date().toISOString(),
+    message: sourceMessage,
+    runtimeContext: {
+      lifecycleOutcome: kind,
+      machineId: String(compiled?.transactionId || 'mt103-payment-lifecycle')
+    }
+  };
+
+  try {
+    await enqueueViaRoute(
+      route,
+      queueName,
+      payload,
+      `${workerState?.sourceService || 'lifecycle-worker'}:${kind}`,
+      null,
+      inferQueueDataTypeIds(queueName)
+    );
+    appendCoordinationTraceFromMessage(payload, {
+      eventKind: kind === 'timeout' ? 'lifecycle-ontimeout' : 'lifecycle-onerror',
+      queueName,
+      managerId: route.managerId,
+      sourceService: workerState?.sourceService || 'lifecycle-worker',
+      workerId: workerState?.workerId || null,
+      workerKind: 'lifecycle-worker',
+      details: {
+        sourceQueue: dequeueResult?.queueName || null,
+        transitionEvent: transition?.event || null,
+        transitionToState: transition?.to || null,
+        timeoutMs: timeoutMs == null ? null : Number(timeoutMs),
+        errorCode: error?.code || null,
+        errorMessage: String(error?.message || error || 'unknown lifecycle failure')
+      }
+    });
+    return { emitted: true, queueName, route };
+  } catch (enqueueError) {
+    console.warn(`[LIFECYCLE] Failed to emit ${kind} event to ${queueName}: ${enqueueError.message}`);
+    return { emitted: false, queueName, reason: enqueueError.message };
+  }
+}
+
 async function runLifecycleWorkerTick(workerState) {
   beginMachineWorkUnit();
   try {
@@ -6078,10 +6714,12 @@ async function runLifecycleWorkerTick(workerState) {
       }
       const deq = await dequeueLifecycleStateMessage(compiled, workerState.fromState, workerState.consumerService);
       if (!deq.dequeued) break;
+      const inboundMessage = deq.message;
 
       const runtimeContext = {
         ...workerState.context,
         message: deq.message,
+        inputMessage: deq.message,
         worker: {
           workerId: workerState.workerId,
           fromState: workerState.fromState
@@ -6103,7 +6741,12 @@ async function runLifecycleWorkerTick(workerState) {
           runtimeContext.message = buildMt940ForReference(reference);
         }
 
-        await runLifecycleTransitionAction(transition.action, runtimeContext, workerState);
+        const transitionTimeoutMs = resolveLifecycleTransitionTimeoutMs(transition, workerState);
+        await withTimeout(
+          () => runLifecycleTransitionAction(transition.action, runtimeContext, workerState),
+          transitionTimeoutMs,
+          `Lifecycle transition timed out after ${transitionTimeoutMs}ms`
+        );
         await enqueueLifecycleStateMessage(
           compiled,
           transition.to,
@@ -6111,11 +6754,51 @@ async function runLifecycleWorkerTick(workerState) {
           workerState.sourceService,
           transition.event
         );
+
+        if (String(transition?.event || '').trim() === 'mapped_to_pacs') {
+          const parentEntityId = extractSwiftReferenceFromMessage(inboundMessage);
+          const childEntityId = extractSwiftReferenceFromMessage(runtimeContext.message);
+          if (parentEntityId && childEntityId && parentEntityId !== childEntityId) {
+            appendTransactionJournalComment(parentEntityId, `Mapped MT103 ${parentEntityId} to PACS transaction ${childEntityId}.`, {
+              eventKind: 'transaction-spawn-parent',
+              relation: { childEntityId },
+              queueName: deq.queueName,
+              details: {
+                transition: transition.event,
+                fromState: workerState.fromState,
+                toState: transition.to,
+                workerId: workerState.workerId
+              }
+            });
+            appendTransactionJournalComment(childEntityId, `Spawned from MT103 parent transaction ${parentEntityId}.`, {
+              eventKind: 'transaction-spawn-child',
+              relation: { parentEntityId },
+              queueName: String(getLifecycleStateByName(compiled, transition.to)?.queueName || '').trim() || null,
+              details: {
+                transition: transition.event,
+                fromState: workerState.fromState,
+                toState: transition.to,
+                workerId: workerState.workerId
+              }
+            });
+          }
+        }
+
+        const stateMessage = String(transition?.event || '').trim() === 'mapped_to_pacs'
+          ? inboundMessage
+          : runtimeContext.message;
         await recordTransactionStateTransition(compiled, {
-          message: runtimeContext.message,
+          message: stateMessage,
           fromState: workerState.fromState,
           toState: transition.to,
-          eventName: transition.event
+          eventName: transition.event,
+          traceContext: {
+            eventKind: 'lifecycle-transition',
+            workerId: workerState.workerId,
+            sourceService: workerState.sourceService,
+            consumerService: workerState.consumerService,
+            workerKind: 'lifecycle-worker'
+          }
         });
         moved += 1;
       } catch (e) {
@@ -6130,8 +6813,23 @@ async function runLifecycleWorkerTick(workerState) {
           console.warn(`[LIFECYCLE] Worker ${workerState.workerId} moved invalid message to dead-letter queue: ${e.message}`);
           continue;
         }
-        await enqueueLifecycleStateMessage(compiled, workerState.fromState, deq.message, `${workerState.sourceService}:retry`);
-        throw e;
+
+        const failureKind = e?.isTimeout || e?.code === 'LIFECYCLE_TRANSITION_TIMEOUT' ? 'timeout' : 'error';
+        const timeoutMs = failureKind === 'timeout'
+          ? resolveLifecycleTransitionTimeoutMs(transition, workerState)
+          : null;
+        await emitLifecycleFailureEvent({
+          compiled,
+          workerState,
+          dequeueResult: deq,
+          transition,
+          runtimeContext,
+          error: e,
+          kind: failureKind,
+          timeoutMs
+        });
+        console.warn(`[LIFECYCLE] Worker ${workerState.workerId} emitted ${failureKind} event: ${e.message}`);
+        continue;
       }
     }
 
@@ -6175,6 +6873,7 @@ function startLifecycleWorker({
     processingDelayMs: Number(processingDelayMs) > 0 ? Number(processingDelayMs) : 0,
     consumerService: String(consumerService || 'lifecycle-worker').trim(),
     sourceService: String(sourceService || 'lifecycle-worker').trim(),
+    transitionTimeoutMs: Number(LIFECYCLE_TRANSITION_TIMEOUT_MS) > 0 ? Number(LIFECYCLE_TRANSITION_TIMEOUT_MS) : 0,
     processedMessages: 0,
     lastRunAt: null,
     lastError: null,
@@ -6341,7 +7040,14 @@ async function runQueueBridgeWorkerTick(workerState) {
             fromState: inputState?.name || null,
             toState: outputState.name,
             eventName: 'queue_bridge',
-            queueName: workerState.outputQueue
+            queueName: workerState.outputQueue,
+            traceContext: {
+              eventKind: 'queue-bridge',
+              workerId: workerState.workerId,
+              sourceService: workerState.sourceService,
+              consumerService: workerState.consumerService,
+              workerKind: 'queue-bridge-worker'
+            }
           });
         }
         moved += 1;
@@ -6873,159 +7579,27 @@ function markBeaconAcknowledged() {
   machineAvailability.beaconAckAt = new Date().toISOString();
 }
 
-function sendMachineAvailabilityAnnouncement(reason = 'manual') {
-  if (machineAvailability.udpBroadcastBlocked) {
-    return;
-  }
-  const payload = buildMachineAvailabilityAnnouncement();
-  payload.reason = reason;
-  machineAvailability.advertisedAt = new Date().toISOString();
-  machineAvailability.announceReason = reason;
-  machineAvailability.capabilityHash = payload.capabilityHash;
-  machineAvailability.lastBeaconAt = machineAvailability.advertisedAt;
-  const message = Buffer.from(JSON.stringify(payload), 'utf-8');
-  udpServer.send(message, 0, message.length, UDP_PORT, '255.255.255.255', (error) => {
-    if (error) {
-      if (error.code === 'EACCES') {
-        machineAvailability.udpBroadcastBlocked = true;
-        stopMachineAvailabilityAnnouncer();
-        console.warn(`[UDP] Broadcast announcements disabled: ${error.message}`);
-      } else {
-        console.warn(`[UDP] Failed to send availability announcement: ${error.message}`);
-      }
-      return;
-    }
-    console.log(`[UDP] Beacon announced: ${payload.status} (${reason})`);
-  });
-}
-
-function stopMachineAvailabilityAnnouncer() {
-  if (!machineAvailability.announceTimerId) return;
-  clearTimeout(machineAvailability.announceTimerId);
-  machineAvailability.announceTimerId = null;
-}
-
-function getMachineAvailabilityPayload() {
-  return {
-    nodeId: machineAvailability.nodeId,
-    available: machineAvailability.available,
-    draining: machineAvailability.draining,
-    advertisedAt: machineAvailability.advertisedAt,
-    announceReason: machineAvailability.announceReason,
-    beaconAcknowledged: machineAvailability.beaconAcknowledged,
-    beaconAckAt: machineAvailability.beaconAckAt,
-    capabilityHash: machineAvailability.capabilityHash,
-    status: machineAvailability.available ? 'available' : (machineAvailability.draining ? 'draining' : 'unavailable')
-  };
-}
-
-function normalizePresenceIp(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return 'unknown';
-  if (raw.startsWith('::ffff:')) return raw.substring(7);
-  return raw;
-}
-
-function upsertBrowserPresenceNode({ clientId, nodeName, ip, userAgent, available = true }) {
-  const key = `web:${String(clientId || '').trim()}`;
-  if (!key || key === 'web:') return null;
-  const now = Date.now();
-  const previous = discoveredNodes.get(key) || {};
-  const next = {
-    ...previous,
-    id: key,
-    source: 'web-client',
-    clientId: String(clientId || '').trim(),
-    nodeName: String(nodeName || previous.nodeName || 'Web Client').trim(),
-    ip: normalizePresenceIp(ip || previous.ip),
-    userAgent: String(userAgent || previous.userAgent || '').trim(),
-    availability: {
-      available: Boolean(available),
-      draining: false,
-      status: available ? 'available' : 'unavailable'
-    },
-    lastSeen: now,
-    raw: JSON.stringify({ kind: 'browserPresence', clientId, nodeName, ip, available })
-  };
-  discoveredNodes.set(key, next);
-  return next;
-}
-
-function setBrowserPresenceUnavailable(clientId) {
-  const key = `web:${String(clientId || '').trim()}`;
-  const previous = discoveredNodes.get(key);
-  if (!previous) return null;
-  const next = {
-    ...previous,
-    availability: {
-      available: false,
-      draining: false,
-      status: 'unavailable'
-    },
-    lastSeen: Date.now()
-  };
-  discoveredNodes.set(key, next);
-  return next;
-}
-
-function getBrowserPresence(clientId) {
-  const key = `web:${String(clientId || '').trim()}`;
-  return discoveredNodes.get(key) || null;
-}
-
-function startMachineAvailabilityAnnouncer() {
-  stopMachineAvailabilityAnnouncer();
-  machineAvailability.announceTimerId = setTimeout(() => {
-    machineAvailability.announceTimerId = null;
-    if (!machineAvailability.available) {
-      return;
-    }
-    sendMachineAvailabilityAnnouncement('heartbeat');
-    startMachineAvailabilityAnnouncer();
-  }, getMachineAvailabilityBeaconIntervalMs());
-}
-
-function setMachineAvailable() {
-  machineAvailability.available = true;
-  machineAvailability.draining = false;
-  machineAvailability.beaconAcknowledged = false;
-  sendMachineAvailabilityAnnouncement('available');
-  startMachineAvailabilityAnnouncer();
-  return getMachineAvailabilityPayload();
-}
-
-function setMachineUnavailable() {
-  machineAvailability.available = false;
-  machineAvailability.draining = false;
-  machineAvailability.beaconAcknowledged = false;
-  stopMachineAvailabilityAnnouncer();
-  sendMachineAvailabilityAnnouncement('unavailable');
-  return getMachineAvailabilityPayload();
-}
-
-async function drainMachineAndSetUnavailable({ timeoutMs = MACHINE_DRAIN_DEFAULT_TIMEOUT_MS } = {}) {
-  machineAvailability.available = false;
-  machineAvailability.draining = true;
-  machineAvailability.beaconAcknowledged = false;
-  sendMachineAvailabilityAnnouncement('draining');
-
-  const startedAt = Date.now();
-  const hardTimeout = Number(timeoutMs) > 0 ? Number(timeoutMs) : MACHINE_DRAIN_DEFAULT_TIMEOUT_MS;
-  while (machineWorkloadState.inFlight > 0 && (Date.now() - startedAt) < hardTimeout) {
-    await new Promise(resolve => setTimeout(resolve, 200));
-  }
-
-  const timedOut = machineWorkloadState.inFlight > 0;
-  const next = setMachineUnavailable();
-  return {
-    availability: next,
-    drain: {
-      timedOut,
-      timeoutMs: hardTimeout,
-      inFlightAtCompletion: machineWorkloadState.inFlight
-    }
-  };
-}
+const {
+  getMachineAvailabilityPayload,
+  normalizePresenceIp,
+  upsertBrowserPresenceNode,
+  setBrowserPresenceUnavailable,
+  getBrowserPresence,
+  setMachineAvailable,
+  setMachineUnavailable,
+  drainMachineAndSetUnavailable
+} = createMachineAvailabilityPresenceApi({
+  machineAvailability,
+  discoveredNodes,
+  buildMachineAvailabilityAnnouncement,
+  udpServer,
+  UDP_PORT,
+  getMachineAvailabilityBeaconIntervalMs,
+  machineWorkloadState,
+  machineDrainDefaultTimeoutMs: MACHINE_DRAIN_DEFAULT_TIMEOUT_MS,
+  setTimeoutFn: setTimeout,
+  clearTimeoutFn: clearTimeout
+});
 
 udpServer.on('message', (msg, rinfo) => {
   console.log(`[UDP] Packet from ${rinfo.address}:${rinfo.port} — ${msg.toString().slice(0, 120)}`);
@@ -7309,9 +7883,6 @@ function getNextQueueManager() {
   // Simple round-robin or always primary for demo
   return queueManagers[0];
 }
-function getBrokerNodeDetails() {
-  return { status: 'ok', service: BROKER_SERVICE };
-}
 function updateVirtualNodes() {
   // Dummy implementation
 }
@@ -7338,194 +7909,30 @@ function readTransactionLifecycleCompiled() {
   }
 }
 
-function getQueueLengthForLifecycleState(queueName) {
-  const q = String(queueName || '').trim();
-  if (!q) return 0;
-
-  const routed = queueRoutes.get(q);
-  if (routed) {
-    const manager = queueManagerRegistry.get(routed.managerId);
-    if (manager?.local) {
-      return queueManagers[manager.localIndex].getQueueLength(q);
-    }
-  }
-
-  // If not explicitly routed, choose the max local observed queue length.
-  // This avoids double-counting replicated queues across local managers.
-  let maxObserved = 0;
-  for (const qm of queueManagers) {
-    maxObserved = Math.max(maxObserved, qm.getQueueLength(q));
-  }
-  return maxObserved;
-}
-
-function incrementLifecycleStateCumulativeCount(stateName, amount = 1) {
-  const key = String(stateName || '').trim();
-  if (!key) return;
-  const next = Number(lifecycleStateCumulativeCounts.get(key) || 0) + Number(amount || 0);
-  lifecycleStateCumulativeCounts.set(key, next < 0 ? 0 : next);
-}
-
-function getLifecycleStateCumulativeCount(stateName) {
-  const key = String(stateName || '').trim();
-  if (!key) return 0;
-  return Number(lifecycleStateCumulativeCounts.get(key) || 0);
-}
-
-function incrementLifecycleCumulativeByQueue(queueName, amount = 1) {
-  const q = String(queueName || '').trim();
-  if (!q) return;
-
-  const compiled = readTransactionLifecycleCompiled();
-  const states = Array.isArray(compiled?.states) ? compiled.states : [];
-  for (const state of states) {
-    if (String(state?.queueName || '').trim() === q) {
-      incrementLifecycleStateCumulativeCount(state.name, amount);
-    }
-  }
-}
-
-function getGatewayQueueMetrics(workers, compiled) {
-  const queueNames = new Set();
-  let cumulativeProcessedCount = 0;
-
-  for (const worker of workers || []) {
-    cumulativeProcessedCount += Number(worker?.processedMessages || 0);
-
-    const fromState = String(worker?.fromState || '').trim();
-    if (fromState) {
-      const state = getLifecycleStateByName(compiled, fromState);
-      const queueName = String(state?.queueName || '').trim();
-      if (queueName) queueNames.add(queueName);
-    }
-
-    const inputQueue = String(worker?.inputQueue || '').trim();
-    if (inputQueue) {
-      queueNames.add(inputQueue);
-    }
-  }
-
-  const queues = Array.from(queueNames).map(queueName => ({
-    queueName,
-    currentCount: getQueueLengthForLifecycleState(queueName)
-  }));
-  const currentQueueCount = queues.reduce((sum, q) => sum + Number(q.currentCount || 0), 0);
-
-  return {
-    currentQueueCount,
-    cumulativeProcessedCount,
-    queues
-  };
-}
-
-function getLifecycleQueueTransformErrorSummary(queueName, { limit = 500 } = {}) {
-  const key = String(queueName || '').trim();
-  if (!key) {
-    return {
-      count: 0,
-      latestReason: null,
-      latestAt: null
-    };
-  }
-
-  const items = dlqEvents
-    .slice(-Math.max(1, Number(limit) || 500))
-    .filter(item => String(item?.sourceQueue || '').trim() === key || String(item?.targetQueue || '').trim() === key);
-
-  const latest = items.length > 0 ? items[items.length - 1] : null;
-  return {
-    count: items.length,
-    latestReason: latest?.errorReason || null,
-    latestAt: latest?.timestamp || null
-  };
-}
-
-function buildTransactionLifecycleDashboardPayload(compiled) {
-  if (!compiled || !Array.isArray(compiled.states)) {
-    return null;
-  }
-
-  const states = compiled.states.map(state => {
-    const queueName = state.queueName || null;
-    const queueLength = queueName ? getQueueLengthForLifecycleState(queueName) : 0;
-    return {
-      stateName: state.name,
-      label: state.label || state.name,
-      queueName,
-      subflow: state.subflow || null,
-      layer: Number(state.layer || 0),
-      isInitial: Boolean(state.initial),
-      queueLength,
-      cumulativeCount: getLifecycleStateCumulativeCount(state.name),
-      transformErrors: getLifecycleQueueTransformErrorSummary(queueName)
-    };
-  });
-
-  const totalsByLayer = {};
-  for (const state of states) {
-    totalsByLayer[state.layer] = (totalsByLayer[state.layer] || 0) + state.queueLength;
-  }
-
-  return {
-    version: compiled.version || 1,
-    transactionId: compiled.transactionId || null,
-    description: compiled.description || '',
-    initialState: compiled.initialState || null,
-    topology: compiled.topology || { order: [], layers: [] },
-    transitions: Array.isArray(compiled.transitions) ? compiled.transitions : [],
-    harness: {
-      active: lifecycleHarness.active,
-      historyTail: lifecycleHarness.history.slice(-20)
-    },
-    heartbeat: getLifecycleHeartbeatPayload(),
-    testers: getLifecycleTesterStatsPayload(),
-    states,
-    totalsByLayer,
-    totalMessagesAcrossStates: states.reduce((sum, state) => sum + state.queueLength, 0),
-    generatedAt: new Date().toISOString()
-  };
-}
-
-function getLifecycleTesterStatsPayload() {
-  return {
-    happy: { ...lifecycleTesterStats.happy },
-    sad: { ...lifecycleTesterStats.sad }
-  };
-}
-
-function recordLifecycleTesterRun(testerType, { status = 'completed', transitionCount = 0, transactionId = null, error = null } = {}) {
-  const key = testerType === 'sad' ? 'sad' : 'happy';
-  const stats = lifecycleTesterStats[key];
-  stats.runs += 1;
-  stats.lastRunAt = new Date().toISOString();
-  stats.lastStatus = status;
-  stats.lastTransactionId = transactionId || null;
-  stats.lastError = error || null;
-
-  if (status === 'completed') {
-    stats.completed += 1;
-    stats.totalTransitions += Number(transitionCount || 0);
-  } else {
-    stats.failed += 1;
-  }
-}
-
-function getLifecycleStateByName(compiled, stateName) {
-  const states = Array.isArray(compiled?.states) ? compiled.states : [];
-  return states.find(s => s.name === stateName) || null;
-}
-
-function getLifecycleStateByQueueName(compiled, queueName) {
-  const states = Array.isArray(compiled?.states) ? compiled.states : [];
-  const target = String(queueName || '').trim().toLowerCase();
-  if (!target) return null;
-  return states.find(s => String(s?.queueName || '').trim().toLowerCase() === target) || null;
-}
-
-function getLifecycleOutgoingTransitions(compiled, fromState) {
-  const transitions = Array.isArray(compiled?.transitions) ? compiled.transitions : [];
-  return transitions.filter(t => t.from === fromState);
-}
+const {
+  getQueueLengthForLifecycleState,
+  incrementLifecycleStateCumulativeCount,
+  getLifecycleStateCumulativeCount,
+  incrementLifecycleCumulativeByQueue,
+  getGatewayQueueMetrics,
+  getLifecycleQueueTransformErrorSummary,
+  buildTransactionLifecycleDashboardPayload,
+  getLifecycleTesterStatsPayload,
+  recordLifecycleTesterRun,
+  getLifecycleStateByName,
+  getLifecycleStateByQueueName,
+  getLifecycleOutgoingTransitions
+} = createLifecycleQueueMetricsApi({
+  queueRoutes,
+  queueManagerRegistry,
+  queueManagers,
+  lifecycleStateCumulativeCounts,
+  readTransactionLifecycleCompiled,
+  dlqEvents,
+  lifecycleHarness,
+  getLifecycleHeartbeatPayload,
+  lifecycleTesterStats
+});
 
 function resolvePathValue(root, pathExpr) {
   const raw = String(pathExpr || '').trim();
@@ -7615,9 +8022,24 @@ function parseLifecycleAction(action, context = {}) {
     return { kind: 'map', mappingId: String(mapMatch[1] || '').trim().toLowerCase() };
   }
 
-  const enqueueMatch = text.match(/^enqueue\s+([^\s]+)$/i);
+  const enqueueMatch = text.match(/^enqueue\s+([^\s]+)(?:\s+after_ms=(\d+)|\s+after=(\d+)(ms|s|m))?$/i);
   if (enqueueMatch) {
-    return { kind: 'enqueue', queueName: String(enqueueMatch[1] || '').trim() };
+    let delayMs = 0;
+    if (enqueueMatch[2]) {
+      delayMs = Math.max(0, Number(enqueueMatch[2]) || 0);
+    } else if (enqueueMatch[3]) {
+      const amount = Math.max(0, Number(enqueueMatch[3]) || 0);
+      const unit = String(enqueueMatch[4] || 'ms').toLowerCase();
+      if (unit === 's') delayMs = amount * 1000;
+      else if (unit === 'm') delayMs = amount * 60000;
+      else delayMs = amount;
+    }
+
+    return {
+      kind: 'enqueue',
+      queueName: String(enqueueMatch[1] || '').trim(),
+      delayMs
+    };
   }
 
   const httpMatch = text.match(/^http_(sync|async)\s+([A-Za-z]+)\s+("[^"]+"|'[^']+'|[^\s]+)(?:\s+timeout_ms=(\d+))?$/i);
@@ -7650,11 +8072,11 @@ function parseLifecycleAction(action, context = {}) {
   throw new Error(`Unsupported lifecycle action: ${text}`);
 }
 
-function toPacsFromMt103(message, fallbackTxId = null) {
+function toPacsFromMt103(message, fallbackTxId = null, forcedTxId = null) {
   const text = typeof message === 'string' ? message : String(message || '');
   const txIdMatch = text.match(/:20:([^\s\r\n]+)/i);
   const amountMatch = text.match(/:32A:(\d{6})([A-Z]{3})([0-9.,]+)/i);
-  const txId = String((txIdMatch && txIdMatch[1]) || fallbackTxId || `TX-${Date.now()}`).trim();
+  const txId = String(forcedTxId || (txIdMatch && txIdMatch[1]) || fallbackTxId || `TX-${Date.now()}`).trim();
   const ccy = (amountMatch && amountMatch[2]) ? String(amountMatch[2]).trim() : 'USD';
   const rawAmount = (amountMatch && amountMatch[3]) ? String(amountMatch[3]).trim() : '0';
   const normalizedAmount = rawAmount.replace(',', '.');
@@ -7684,12 +8106,12 @@ function toPacsFromMt103(message, fallbackTxId = null) {
   };
 }
 
-function toPacsFromMt202(message, fallbackTxId = null) {
+function toPacsFromMt202(message, fallbackTxId = null, forcedTxId = null) {
   const text = typeof message === 'string' ? message : String(message || '');
   const txIdMatch = text.match(/:20:([^\s\r\n]+)/i);
   const relatedMatch = text.match(/:21:([^\s\r\n]+)/i);
   const amountMatch = text.match(/:32A:(\d{6})([A-Z]{3})([0-9.,]+)/i);
-  const txId = String((txIdMatch && txIdMatch[1]) || fallbackTxId || `TX-${Date.now()}`).trim();
+  const txId = String(forcedTxId || (txIdMatch && txIdMatch[1]) || fallbackTxId || `TX-${Date.now()}`).trim();
   const relatedRef = String((relatedMatch && relatedMatch[1]) || txId).trim();
   const ccy = (amountMatch && amountMatch[2]) ? String(amountMatch[2]).trim() : 'USD';
   const rawAmount = (amountMatch && amountMatch[3]) ? String(amountMatch[3]).trim() : '0';
@@ -7806,171 +8228,14 @@ function maybeConvertMtMessageToXml({ inputQueue, message, convertToXml = false 
   };
 }
 
-const systemPerformanceCache = {
-  sampledAt: 0,
-  value: null
-};
-
-function getWindowsPerformanceSnapshot() {
-  if (process.platform !== 'win32') {
-    return null;
-  }
-
-  try {
-    const script = `
-      $process = Get-Process -Id $PID | Select-Object Id,ProcessName,CPU,WorkingSet64,Handles,StartTime
-      $os = Get-CimInstance Win32_OperatingSystem | Select-Object CSName,Caption,Version,FreePhysicalMemory,TotalVisibleMemorySize,LastBootUpTime
-      $disks = Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | Select-Object DeviceID,Size,FreeSpace,VolumeName
-      [ordered]@{
-        process = $process
-        os = $os
-        disks = $disks
-      } | ConvertTo-Json -Depth 4 -Compress
-    `;
-
-    const raw = execFileSync('powershell.exe', ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
-      encoding: 'utf8',
-      timeout: 2500,
-      windowsHide: true
-    });
-
-    return raw ? JSON.parse(raw) : null;
-  } catch (e) {
-    return { error: e.message };
-  }
-}
-
-function getDatabaseRegistrySnapshot() {
-  if (process.platform !== 'win32') {
-    return [];
-  }
-
-  const serviceName = SQL_INSTANCE_NAME ? `MSSQL$${SQL_INSTANCE_NAME}` : 'MSSQLSERVER';
-  const serviceDisplayName = SQL_INSTANCE_NAME ? `SQL Server (${SQL_INSTANCE_NAME})` : 'SQL Server (MSSQLSERVER)';
-  const serverId = SQL_INSTANCE_NAME ? `db-mssql-${String(SQL_INSTANCE_NAME).toLowerCase()}` : 'db-mssql-default';
-  const dbName = SQL_INSTANCE_NAME ? `SQL Server ${SQL_INSTANCE_NAME}` : 'SQL Server Default Instance';
-  try {
-    const script = [
-      `      $svc = Get-CimInstance Win32_Service -Filter \"Name='${serviceName.replace('$', '`$')}'\" | Select-Object Name,DisplayName,State,StartMode,Status`,
-      '      if ($null -eq $svc) {',
-      '        [ordered]@{',
-      '          installed = $false',
-      `          name = '${serviceName}'`,
-      `          displayName = '${serviceDisplayName}'`,
-      "          state = 'NotInstalled'",
-      "          startMode = 'Disabled'",
-      "          status = 'Unknown'",
-      '        } | ConvertTo-Json -Compress',
-      '      } else {',
-      '        [ordered]@{',
-      '          installed = $true',
-      '          name = [string]$svc.Name',
-      '          displayName = [string]$svc.DisplayName',
-      '          state = [string]$svc.State',
-      '          startMode = [string]$svc.StartMode',
-      '          status = [string]$svc.Status',
-      '        } | ConvertTo-Json -Compress',
-      '      }'
-    ].join('\n');
-
-    const raw = execFileSync('powershell.exe', ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
-      encoding: 'utf8',
-      timeout: 2500,
-      windowsHide: true
-    });
-    const service = raw ? JSON.parse(raw) : null;
-    const serviceState = String(service?.state || '').toLowerCase();
-    const status = !service?.installed
-      ? 'not-installed'
-      : serviceState === 'running'
-        ? 'up'
-        : serviceState === 'stopped'
-          ? 'down'
-          : 'degraded';
-
-    return [{
-      serverId,
-      name: dbName,
-      engine: 'mssql',
-      instanceName: SQL_INSTANCE_NAME || 'MSSQLSERVER',
-      serviceName,
-      status,
-      installed: Boolean(service?.installed),
-      host: SQL_SERVER_HOST,
-      port: 1433,
-      serviceState: String(service?.state || 'Unknown'),
-      startMode: String(service?.startMode || 'Unknown')
-    }];
-  } catch (e) {
-    return [{
-      serverId,
-      name: dbName,
-      engine: 'mssql',
-      instanceName: SQL_INSTANCE_NAME || 'MSSQLSERVER',
-      serviceName,
-      status: 'unknown',
-      installed: false,
-      host: SQL_SERVER_HOST,
-      port: 1433,
-      serviceState: 'Unknown',
-      startMode: 'Unknown',
-      error: String(e.message || e)
-    }];
-  }
-}
-
-function getSystemPerformanceSnapshot() {
-  const now = Date.now();
-  if (systemPerformanceCache.value && now - systemPerformanceCache.sampledAt < 5000) {
-    return systemPerformanceCache.value;
-  }
-
-  const cpuSamples = os.cpus();
-  const cpuModel = cpuSamples[0] ? cpuSamples[0].model : null;
-  const cpuSpeedMHz = cpuSamples[0] ? cpuSamples[0].speed : null;
-  const totalMemory = os.totalmem();
-  const freeMemory = os.freemem();
-  const memoryUsed = Math.max(totalMemory - freeMemory, 0);
-  const queueManagersSummary = Array.from(queueManagerInstances.entries()).map(([managerId, qm]) => ({
-    managerId,
-    queueCount: Object.keys(qm.queueConfig || {}).length,
-    totalQueuedMessages: Object.keys(qm.queueConfig || {}).reduce((sum, queueName) => sum + qm.getQueueLength(queueName), 0),
-    configVersion: Number(qm.configVersion || 0)
-  }));
-
-  const value = {
-    sampledAt: new Date(now).toISOString(),
-    platform: process.platform,
-    arch: process.arch,
-    node: {
-      version: process.version,
-      pid: process.pid,
-      uptimeSeconds: Number(process.uptime().toFixed(3)),
-      cpuUsage: process.cpuUsage(),
-      memoryUsage: process.memoryUsage()
-    },
-    os: {
-      hostname: os.hostname(),
-      type: os.type(),
-      release: os.release(),
-      uptimeSeconds: Number(os.uptime().toFixed(3)),
-      loadAverage: typeof os.loadavg === 'function' ? os.loadavg() : [],
-      totalMemory,
-      freeMemory,
-      memoryUsed,
-      memoryUsedPercent: totalMemory > 0 ? Number(((memoryUsed / totalMemory) * 100).toFixed(2)) : 0,
-      cpuCount: cpuSamples.length,
-      cpuModel,
-      cpuSpeedMHz
-    },
-    queueManagers: queueManagersSummary,
-    windows: getWindowsPerformanceSnapshot()
-  };
-
-  systemPerformanceCache.sampledAt = now;
-  systemPerformanceCache.value = value;
-  return value;
-}
+const {
+  getDatabaseRegistrySnapshot
+} = createDatabaseRegistrySnapshotApi({
+  processRef: process,
+  SQL_INSTANCE_NAME,
+  SQL_SERVER_HOST,
+  execFileSync
+});
 
 function applyLifecycleMapping(mappingId, message, runtimeContext = {}) {
   const id = String(mappingId || '').trim().toLowerCase();
@@ -7980,10 +8245,22 @@ function applyLifecycleMapping(mappingId, message, runtimeContext = {}) {
     if (message && typeof message === 'object' && message.Document && typeof message.Document === 'object') {
       return message;
     }
-    const txId = runtimeContext?.worker?.workerId
-      ? `${runtimeContext.worker.workerId}-${Date.now()}`
-      : null;
-    return toPacsFromMt103(message, txId);
+    const parentEntityId = extractSwiftReferenceFromMessage(message);
+    const generatedChildId = runtimeContext?.worker?.workerId
+      ? `${runtimeContext.worker.workerId}-${Date.now()}-PACS`
+      : `PACS-${Date.now()}`;
+    const childEntityId = parentEntityId ? `${parentEntityId}-PACS` : generatedChildId;
+    const mapped = toPacsFromMt103(message, childEntityId, childEntityId);
+    if (mapped && typeof mapped === 'object') {
+      mapped.journalRelation = {
+        parentEntityId: parentEntityId || null,
+        childEntityId,
+        comment: parentEntityId
+          ? `Mapped MT103 ${parentEntityId} into PACS ${childEntityId}`
+          : `Mapped MT103 into PACS ${childEntityId}`
+      };
+    }
+    return mapped;
   }
 
   throw new Error(`Unsupported lifecycle mapping: ${id}`);
@@ -7994,12 +8271,44 @@ async function runLifecycleTransitionAction(action, runtimeContext, workerState)
   if (parsed.kind === 'none') return;
 
   if (parsed.kind === 'map') {
+    if (LIFECYCLE_FORCE_MAP_DELAY_MS > 0) {
+      await delayMs(LIFECYCLE_FORCE_MAP_DELAY_MS);
+    }
+    if (LIFECYCLE_FORCE_MAP_FAILURE) {
+      const forcedError = new Error('Forced map failure (LIFECYCLE_FORCE_MAP_FAILURE=true)');
+      forcedError.code = 'LIFECYCLE_FORCE_MAP_FAILURE';
+      throw forcedError;
+    }
     runtimeContext.message = applyLifecycleMapping(parsed.mappingId, runtimeContext.message, runtimeContext);
     return;
   }
 
   if (parsed.kind === 'enqueue') {
     if (!parsed.queueName) return;
+    if (Number(parsed.delayMs) > 0) {
+      const parentEntityId = extractSwiftReferenceFromMessage(runtimeContext?.inputMessage || runtimeContext.message);
+      const childEntityId = extractSwiftReferenceFromMessage(runtimeContext.message);
+      const scheduled = schedulePersistentDispatch({
+        queueName: parsed.queueName,
+        message: runtimeContext.message,
+        sourceService: `${workerState.sourceService}:action`,
+        delayMs: Number(parsed.delayMs),
+        comment: `Scheduled lifecycle enqueue after ${Number(parsed.delayMs)}ms for queue ${parsed.queueName}`,
+        parentEntityId,
+        childEntityId
+      });
+      appendTransactionJournalComment(parentEntityId, `Scheduled child dispatch to ${parsed.queueName} after ${Number(parsed.delayMs)}ms.`, {
+        eventKind: 'scheduled-dispatch-queued',
+        queueName: parsed.queueName,
+        relation: childEntityId ? { childEntityId } : null,
+        details: {
+          dispatchId: scheduled.id,
+          dueAt: scheduled.dueAt,
+          delayMs: Number(parsed.delayMs)
+        }
+      });
+      return;
+    }
     const actionRoute = ensureRoute(parsed.queueName);
     if (!actionRoute) {
       throw new Error(`No available queue managers for action queue ${parsed.queueName}`);
@@ -8179,16 +8488,20 @@ async function recordTransactionStateTransition(compiled, {
   fromState = null,
   toState,
   eventName = null,
-  queueName = null
+  queueName = null,
+  traceContext = null
 } = {}) {
   const writeEntry = buildTxStateDbWriteEntry(compiled, {
     message,
     fromState,
     toState,
     eventName,
-    queueName
+    queueName,
+    traceContext
   });
   if (!writeEntry) return;
+
+  appendTransactionTraceEvent(buildTransactionTraceEvent(writeEntry, traceContext || {}));
 
   try {
     await writeTransactionStateToDb(writeEntry);
@@ -8467,283 +8780,25 @@ function startLifecycleHeartbeatMonitor() {
   }, lifecycleHeartbeat.checkIntervalMs);
 }
 
-async function lifecycleHarnessStartTransaction(compiled, { txId, message } = {}) {
-  const transactionId = String(txId || `TX-${Date.now()}`);
-  const initialState = String(compiled?.initialState || '').trim();
-  if (!initialState) {
-    throw new Error('Compiled lifecycle has no initialState');
-  }
-
-  const payload = message || buildDefaultMt103Message(transactionId);
-  await enqueueLifecycleStateMessage(compiled, initialState, payload, 'lifecycle-harness:start');
-  await recordTransactionStateTransition(compiled, {
-    message: payload,
-    fromState: null,
-    toState: initialState,
-    eventName: 'start'
-  });
-
-  lifecycleHarness.active = {
-    transactionId,
-    currentState: initialState,
-    message: payload,
-    startedAt: new Date().toISOString(),
-    lastEvent: null
-  };
-  lifecycleHarness.history.push({
-    at: new Date().toISOString(),
-    kind: 'start',
-    transactionId,
-    state: initialState
-  });
-  touchLifecycleActivity();
-
-  return lifecycleHarness.active;
-}
-
-async function lifecycleHarnessAdvance(compiled, { eventName, context = {}, replacementMessage = null } = {}) {
-  if (!lifecycleHarness.active) {
-    throw new Error('No active lifecycle test transaction. Start one first.');
-  }
-
-  const fromState = lifecycleHarness.active.currentState;
-  const outgoing = getLifecycleOutgoingTransitions(compiled, fromState);
-  if (outgoing.length === 0) {
-    throw new Error(`State ${fromState} has no outgoing transitions`);
-  }
-
-  const candidates = eventName
-    ? outgoing.filter(t => t.event === eventName)
-    : outgoing;
-
-  const transition = candidates.find(t => evaluateLifecycleTransitionGuard(t, context));
-  if (!transition) {
-    const eventText = eventName ? ` for event ${eventName}` : '';
-    throw new Error(`No eligible transition from ${fromState}${eventText}`);
-  }
-
-  await dequeueLifecycleStateMessage(compiled, fromState, 'lifecycle-harness:step');
-  if (replacementMessage != null) {
-    lifecycleHarness.active.message = replacementMessage;
-  }
-
-  if (transition.action) {
-    const runtimeContext = {
-      ...context,
-      message: lifecycleHarness.active.message,
-      worker: { workerId: 'lifecycle-harness' }
-    };
-    const harnessWorkerState = { sourceService: 'lifecycle-harness' };
-    await runLifecycleTransitionAction(transition.action, runtimeContext, harnessWorkerState);
-    lifecycleHarness.active.message = runtimeContext.message;
-  }
-
-  await enqueueLifecycleStateMessage(compiled, transition.to, lifecycleHarness.active.message, 'lifecycle-harness:step', transition.event);
-  await recordTransactionStateTransition(compiled, {
-    message: lifecycleHarness.active.message,
-    fromState,
-    toState: transition.to,
-    eventName: transition.event
-  });
-
-  lifecycleHarness.active.currentState = transition.to;
-  lifecycleHarness.active.lastEvent = transition.event;
-
-  lifecycleHarness.history.push({
-    at: new Date().toISOString(),
-    kind: 'transition',
-    transactionId: lifecycleHarness.active.transactionId,
-    from: transition.from,
-    to: transition.to,
-    event: transition.event
-  });
-  touchLifecycleActivity();
-
-  return {
-    transition,
-    active: lifecycleHarness.active
-  };
-}
-
-function isLikelyRejectTransition(transition) {
-  const to = String(transition?.to || '').toLowerCase();
-  const event = String(transition?.event || '').toLowerCase();
-  const when = String(transition?.when || '').toLowerCase();
-  return to.includes('reject') || event.includes('reject') || when.includes('rejected');
-}
-
-function deriveLifecycleHappyPath(compiled, { startState = null } = {}) {
-  const initialState = String(startState || compiled?.initialState || '').trim();
-  if (!initialState) {
-    throw new Error('Compiled lifecycle has no initialState');
-  }
-
-  const happyContext = {
-    status: 'approved',
-    statement_match: true,
-    statementMatch: true
-  };
-
-  const path = [];
-  const seen = new Set();
-  let current = initialState;
-  let guard = 0;
-  const maxSteps = Math.max(10, (Array.isArray(compiled?.states) ? compiled.states.length : 0) + 5);
-
-  while (guard < maxSteps) {
-    guard += 1;
-    const key = `${current}#${guard}`;
-    if (seen.has(key)) break;
-    seen.add(key);
-
-    const outgoing = getLifecycleOutgoingTransitions(compiled, current);
-    if (!outgoing.length) break;
-
-    const nonReject = outgoing.filter(t => !isLikelyRejectTransition(t));
-    const preferred = nonReject.find(t => evaluateLifecycleTransitionGuard(t, happyContext));
-    const fallbackPreferred = nonReject.find(t => evaluateLifecycleTransitionGuard(t, {}));
-    const picked = preferred || fallbackPreferred || nonReject[0] || outgoing[0];
-    if (!picked) break;
-
-    path.push({
-      from: picked.from,
-      to: picked.to,
-      event: picked.event,
-      when: picked.when || null,
-      action: picked.action || null
-    });
-    current = picked.to;
-  }
-
-  return {
-    initialState,
-    terminalState: current,
-    transitionCount: path.length,
-    context: happyContext,
-    transitions: path
-  };
-}
-
-function deriveLifecycleSadPath(compiled, { startState = null } = {}) {
-  const initialState = String(startState || compiled?.initialState || '').trim();
-  if (!initialState) {
-    throw new Error('Compiled lifecycle has no initialState');
-  }
-
-  const sadContext = {
-    status: 'rejected',
-    statement_match: false,
-    statementMatch: false
-  };
-
-  const path = [];
-  let current = initialState;
-  let guard = 0;
-  const maxSteps = Math.max(10, (Array.isArray(compiled?.states) ? compiled.states.length : 0) + 5);
-
-  while (guard < maxSteps) {
-    guard += 1;
-    const outgoing = getLifecycleOutgoingTransitions(compiled, current);
-    if (!outgoing.length) break;
-
-    const rejectCandidates = outgoing.filter(t => isLikelyRejectTransition(t));
-    const preferredReject = rejectCandidates.find(t => evaluateLifecycleTransitionGuard(t, sadContext));
-    const fallbackReject = rejectCandidates.find(t => evaluateLifecycleTransitionGuard(t, {}));
-    const fallbackAny = outgoing.find(t => evaluateLifecycleTransitionGuard(t, sadContext))
-      || outgoing.find(t => evaluateLifecycleTransitionGuard(t, {}));
-    const picked = preferredReject || fallbackReject || fallbackAny || outgoing[0];
-    if (!picked) break;
-
-    path.push({
-      from: picked.from,
-      to: picked.to,
-      event: picked.event,
-      when: picked.when || null,
-      action: picked.action || null
-    });
-    current = picked.to;
-
-    if (isLikelyRejectTransition(picked)) {
-      break;
-    }
-  }
-
-  return {
-    initialState,
-    terminalState: current,
-    transitionCount: path.length,
-    context: sadContext,
-    transitions: path
-  };
-}
-
-async function runLifecycleHappyPath(compiled, { txId = null, message = null } = {}) {
-  const derived = deriveLifecycleHappyPath(compiled);
-  const transactionId = String(txId || `HAPPY-${Date.now()}`);
-  const active = await lifecycleHarnessStartTransaction(compiled, {
-    txId: transactionId,
-    message: message || buildDefaultMt103Message(transactionId)
-  });
-
-  const steps = [];
-  for (const transition of derived.transitions) {
-    const result = await lifecycleHarnessAdvance(compiled, {
-      eventName: transition.event,
-      context: derived.context
-    });
-    steps.push({
-      event: transition.event,
-      from: transition.from,
-      to: transition.to,
-      currentState: result?.active?.currentState || transition.to
-    });
-  }
-
-  return {
-    transactionId: active.transactionId,
-    initialState: derived.initialState,
-    terminalState: lifecycleHarness.active?.currentState || derived.terminalState,
-    transitionCount: steps.length,
-    steps,
-    context: derived.context
-  };
-}
-
-async function runLifecycleSadPath(compiled, { txId = null, message = null } = {}) {
-  const derived = deriveLifecycleSadPath(compiled);
-  const transactionId = String(txId || `SAD-${Date.now()}`);
-  const active = await lifecycleHarnessStartTransaction(compiled, {
-    txId: transactionId,
-    message: message || buildDefaultMt103Message(transactionId)
-  });
-
-  const steps = [];
-  for (const transition of derived.transitions) {
-    const replacementMessage = transition.to === 'rejected'
-      ? buildDefaultPacsMessage(transactionId)
-      : null;
-    const result = await lifecycleHarnessAdvance(compiled, {
-      eventName: transition.event,
-      context: derived.context,
-      replacementMessage
-    });
-    steps.push({
-      event: transition.event,
-      from: transition.from,
-      to: transition.to,
-      currentState: result?.active?.currentState || transition.to
-    });
-  }
-
-  return {
-    transactionId: active.transactionId,
-    initialState: derived.initialState,
-    terminalState: lifecycleHarness.active?.currentState || derived.terminalState,
-    transitionCount: steps.length,
-    steps,
-    context: derived.context
-  };
-}
+const {
+  lifecycleHarnessStartTransaction,
+  lifecycleHarnessAdvance,
+  deriveLifecycleHappyPath,
+  deriveLifecycleSadPath,
+  runLifecycleHappyPath,
+  runLifecycleSadPath
+} = createLifecycleHarnessPathApi({
+  lifecycleHarness,
+  touchLifecycleActivity,
+  getLifecycleOutgoingTransitions,
+  evaluateLifecycleTransitionGuard,
+  buildDefaultMt103Message,
+  buildDefaultPacsMessage,
+  dequeueLifecycleStateMessage,
+  enqueueLifecycleStateMessage,
+  runLifecycleTransitionAction,
+  recordTransactionStateTransition
+});
 
 function registerRoutes(app) {
   function startSecondaryBroker() {
@@ -8761,1849 +8816,176 @@ function registerRoutes(app) {
     return { status: 'secondary broker started' };
   }
 
-  app.get('/api/map-placement', (req, res) => {
-    res.json({ status: 'ok', ...getMapPlacementSummary() });
-  });
-
-  app.post('/api/map-placement/register', express.json({ limit: '256kb' }), (req, res) => {
-    try {
-      const payload = req.body && typeof req.body === 'object' ? req.body : {};
-      const entries = Array.isArray(payload.entries) ? payload.entries : [payload];
-      const upserted = [];
-
-      for (const item of entries) {
-        const normalized = normalizeMapPlacementEntry(item, item?.mapKey || '');
-        if (!normalized.mapKey) continue;
-        mapPlacementState.maps.set(normalized.mapKey, normalized);
-        upserted.push(normalized.mapKey);
-      }
-
-      persistMapPlacementRegistry();
-      res.json({
-        status: 'ok',
-        upsertedCount: upserted.length,
-        upserted,
-        registryUpdatedAt: mapPlacementState.updatedAt
-      });
-    } catch (e) {
-      res.status(400).json({ status: 'error', error: e.message });
-    }
-  });
-
-  app.post('/api/map-placement/unregister', express.json({ limit: '128kb' }), (req, res) => {
-    const payload = req.body && typeof req.body === 'object' ? req.body : {};
-    const mapKey = buildMapKeyFromParts({
-      mapKey: payload.mapKey,
-      sourceType: payload.sourceType,
-      destinationType: payload.destinationType
-    });
-    if (!mapKey) {
-      return res.status(400).json({ status: 'error', error: 'mapKey or sourceType+destinationType required' });
-    }
-    const removed = mapPlacementState.maps.delete(mapKey);
-    if (removed) {
-      persistMapPlacementRegistry();
-    }
-    return res.status(removed ? 200 : 404).json({ status: removed ? 'ok' : 'not_found', mapKey });
-  });
-
-  app.post('/api/map-placement/choose', express.json({ limit: '128kb' }), (req, res) => {
-    const payload = req.body && typeof req.body === 'object' ? req.body : {};
-    const decision = chooseMapPlacement({
-      mapKey: payload.mapKey,
-      sourceType: payload.sourceType,
-      destinationType: payload.destinationType,
-      message: payload.message,
-      requestedRole: payload.edgeRole
-    });
-    if (!decision.ok) {
-      return res.status(404).json({ status: 'no_candidate', decision });
-    }
-    return res.json({
-      status: 'ok',
-      mapKey: decision.mapKey,
-      selected: {
-        id: decision.selected.id,
-        tier: decision.selected.tier,
-        label: decision.selected.label,
-        host: decision.selected.host,
-        port: decision.selected.port,
-        role: decision.selected.role,
-        score: Number.isFinite(decision.selected.__score) ? Number(decision.selected.__score.toFixed(4)) : null
-      },
-      candidateCount: decision.candidates.length
-    });
-  });
-
-  app.get('/api/map-placement/metrics', (req, res) => {
-    const nowMs = Date.now();
-    pruneMapPlacementRuntimeState(nowMs);
-    const inflight = Array.from(mapPlacementState.inflightByPlacement.entries()).map(([id, count]) => ({
-      id,
-      inflight: count,
-      lastAssignedAtMs: toFiniteNumber(mapPlacementState.assignmentByPlacement.get(id), 0)
-    }));
+  app.get('/api/time/authority', (req, res) => {
     res.json({
       status: 'ok',
-      registryUpdatedAt: mapPlacementState.updatedAt,
-      trackedInflight: inflight.length,
-      inflight,
-      lastDecision: mapPlacementState.lastDecision
+      time: authoritativeTimeService.getSnapshot(),
+      sync: {
+        enabled: TIME_NTP_ENABLED,
+        server: TIME_NTP_SERVER,
+        port: TIME_NTP_PORT,
+        intervalMs: TIME_NTP_SYNC_INTERVAL_MS,
+        timeoutMs: TIME_NTP_TIMEOUT_MS,
+        running: authoritativeTimeSyncState.running,
+        lastAttemptAt: authoritativeTimeSyncState.lastAttemptAt,
+        lastSuccessAt: authoritativeTimeSyncState.lastSuccessAt,
+        lastError: authoritativeTimeSyncState.lastError
+      }
     });
   });
 
-  app.get('/api/local-tts/health', (_req, res) => {
-    if (process.platform !== 'win32') {
-      return res.status(501).json({ ok: false, error: 'Local TTS is only supported on Windows hosts' });
-    }
-    if (!fs.existsSync(LOCAL_TTS_SCRIPT_PATH)) {
-      return res.status(500).json({ ok: false, error: 'Local TTS script missing', script: LOCAL_TTS_SCRIPT_PATH });
-    }
-    return res.json({ ok: true, platform: process.platform, script: LOCAL_TTS_SCRIPT_PATH });
-  });
-
-  app.get('/api/local-tts/voices', async (_req, res) => {
-    if (process.platform !== 'win32') {
-      return res.status(501).json({ ok: false, error: 'Local TTS is only supported on Windows hosts' });
-    }
-    try {
-      const raw = await runLocalTtsScript(['-Mode', 'voices'], 15000);
-      const payload = raw ? JSON.parse(raw) : { ok: true, voices: [] };
-      return res.json(payload);
-    } catch (err) {
-      return res.status(500).json({
-        ok: false,
-        error: 'Failed to list local TTS voices',
-        details: err?.message || String(err)
+  app.post('/api/time/authority/sync', async (req, res) => {
+    const result = await syncAuthoritativeTimeWithNtp({ reason: 'manual-api' });
+    if (!result.ok && !result.skipped) {
+      return res.status(502).json({
+        status: 'error',
+        error: result.error,
+        time: authoritativeTimeService.getSnapshot()
       });
     }
-  });
-
-  app.post('/api/local-tts/speak', express.json({ limit: '128kb' }), async (req, res) => {
-    if (process.platform !== 'win32') {
-      return res.status(501).json({ ok: false, error: 'Local TTS is only supported on Windows hosts' });
-    }
-
-    const body = req.body && typeof req.body === 'object' ? req.body : {};
-    const text = String(body.text || '').trim();
-    if (!text) {
-      return res.status(400).json({ ok: false, error: 'text is required' });
-    }
-
-    const voice = String(body.voice || '').trim();
-    const rate = clampInteger(body.rate, -10, 10, 0);
-    const volume = clampInteger(body.volume, 0, 100, 100);
-    const saveToFile = body.saveToFile === true;
-    const playOnHost = body.playOnHost !== false;
-    const requestedFileName = String(body.fileName || '').trim();
-
-    const scriptArgs = ['-Mode', 'speak', '-Text', text, '-Rate', String(rate), '-Volume', String(volume)];
-    if (voice) scriptArgs.push('-Voice', voice);
-
-    let outputFilePath = '';
-    if (saveToFile) {
-      fs.mkdirSync(LOCAL_TTS_OUTPUT_DIR, { recursive: true });
-      const baseName = requestedFileName && requestedFileName.endsWith('.wav')
-        ? requestedFileName
-        : `tts-${Date.now()}.wav`;
-      outputFilePath = path.join(LOCAL_TTS_OUTPUT_DIR, baseName);
-      scriptArgs.push('-OutputPath', outputFilePath);
-    }
-    if (!playOnHost) {
-      scriptArgs.push('-NoPlay');
-    }
-
-    try {
-      const raw = await runLocalTtsScript(scriptArgs, 45000);
-      const payload = raw ? JSON.parse(raw) : { ok: true };
-      return res.json({
-        ok: true,
-        text,
-        voice: voice || payload.voice || null,
-        rate,
-        volume,
-        playOnHost,
-        saveToFile,
-        outputFile: outputFilePath || payload.outputFile || null,
-        engine: 'windows-sapi'
-      });
-    } catch (err) {
-      return res.status(500).json({
-        ok: false,
-        error: 'Local TTS playback failed',
-        details: err?.message || String(err)
-      });
-    }
-  });
-
-  const handleSpeechSpeak = async (req, res, modeOverride = null) => {
-    const body = req.body && typeof req.body === 'object' ? req.body : {};
-    const text = String(body.text || req.query?.text || '').trim();
-    if (!text) {
-      return res.status(400).json({ ok: false, error: 'text is required' });
-    }
-
-    const voice = String(body.voice || req.query?.voice || 'default').trim() || 'default';
-    const mode = String(modeOverride || body.mode || req.query?.mode || 'local').trim().toLowerCase();
-    const esp32Origin = String(body.esp32Origin || req.query?.esp32Origin || '').trim();
-    const rate = clampInteger(body.rate, -10, 10, 0);
-    const volume = clampInteger(body.volume, 0, 100, 100);
-    const playOnHost = body.playOnHost !== false;
-
-    if (mode === 'piper') {
-      if (!fs.existsSync(PIPER_BIN_PATH)) {
-        return res.status(500).json({
-          ok: false,
-          mode: 'piper',
-          error: 'Piper binary not found',
-          path: PIPER_BIN_PATH
-        });
-      }
-      if (!fs.existsSync(PIPER_MODEL_PATH)) {
-        return res.status(500).json({
-          ok: false,
-          mode: 'piper',
-          error: 'Piper model not found',
-          path: PIPER_MODEL_PATH
-        });
-      }
-
-      try {
-        fs.mkdirSync(LOCAL_TTS_OUTPUT_DIR, { recursive: true });
-        const outFile = path.join(LOCAL_TTS_OUTPUT_DIR, `piper-${Date.now()}.wav`);
-        await runPiperSynthesis({ text, outputFile: outFile, timeoutMs: 45000 });
-        if (playOnHost) {
-          await playWavOnHost(outFile, 60000);
-        }
-        return res.json({
-          ok: true,
-          mode: 'piper',
-          text,
-          playOnHost,
-          outputFile: outFile,
-          engine: 'piper'
-        });
-      } catch (err) {
-        return res.status(500).json({
-          ok: false,
-          mode: 'piper',
-          error: 'Piper speech failed',
-          details: err?.message || String(err)
-        });
-      }
-    }
-
-    if (mode === 'esp32') {
-      try {
-        const forwarded = await forwardEsp32BluetoothTts({ text, voice, origin: esp32Origin });
-        return res.json({
-          ok: true,
-          mode: 'esp32',
-          text,
-          voice,
-          esp32: forwarded
-        });
-      } catch (err) {
-        return res.status(502).json({
-          ok: false,
-          mode: 'esp32',
-          error: 'ESP32 Bluetooth route failed',
-          details: err?.message || String(err)
-        });
-      }
-    }
-
-    const scriptArgs = ['-Mode', 'speak', '-Text', text, '-Rate', String(rate), '-Volume', String(volume)];
-    if (voice) scriptArgs.push('-Voice', voice);
-    if (!playOnHost) scriptArgs.push('-NoPlay');
-
-    try {
-      const raw = await runLocalTtsScript(scriptArgs, 45000);
-      const payload = raw ? JSON.parse(raw) : { ok: true };
-      return res.json({
-        ok: true,
-        mode: 'local',
-        text,
-        voice: payload.voice || voice,
-        rate,
-        volume,
-        playOnHost,
-        engine: 'windows-sapi'
-      });
-    } catch (err) {
-      return res.status(500).json({
-        ok: false,
-        mode: 'local',
-        error: 'Local speech failed',
-        details: err?.message || String(err)
-      });
-    }
-  };
-
-  app.post('/api/speech/speak', express.json({ limit: '128kb' }), async (req, res) => handleSpeechSpeak(req, res));
-
-  app.post('/api/bluetooth-audio/tts', express.json({ limit: '128kb' }), async (req, res) => {
-    const forcedMode = String(req.body?.mode || req.query?.mode || 'local').trim().toLowerCase();
-    return handleSpeechSpeak(req, res, forcedMode);
-  });
-
-  app.post('/api/auth/login', (req, res) => {
-    const body = req.body || {};
-    const requestedId = normalizeUserIdentifier(body.userId || body.email);
-    const password = String(body.password || '');
-    if (!requestedId || !password) {
-      return res.status(400).json({ error: 'userId and password are required' });
-    }
-
-    const user = getUserById(requestedId);
-    if (!user || user.enabled === false || !verifyPasswordRecord(password, user.auth)) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
-    const token = createAuthSession(user.userId);
-    const session = getSessionFromToken(token);
-    const actor = resolveActor({
-      ...req,
-      get: (headerName) => {
-        const normalized = String(headerName || '').toLowerCase();
-        if (normalized === 'authorization') return `Bearer ${token}`;
-        if (typeof req.get === 'function') return req.get(headerName);
-        return '';
-      },
-      query: {}
-    });
 
     return res.json({
-      ok: true,
-      token,
-      expiresAt: new Date(Number(session?.expiresAt || Date.now() + AUTH_SESSION_TTL_MS)).toISOString(),
-      actor: {
-        userId: actor.userId || user.userId,
-        displayName: actor.user?.displayName || user.displayName || user.userId,
-        enabled: actor.user?.enabled !== false,
-        profileIds: actor.profileIds || user.profileIds || [],
-        groupIds: actor.groupIds || []
-      },
-      permissions: actor.permissions || []
+      status: result.skipped ? 'skipped' : 'ok',
+      result,
+      time: authoritativeTimeService.getSnapshot()
     });
   });
 
-  app.post('/api/auth/logout', (req, res) => {
-    const token = getBearerTokenFromRequest(req);
-    if (token) clearSessionFromToken(token);
-    res.json({ ok: true, status: 'logged-out' });
-  });
-
-  app.get('/api/auth/session', (req, res) => {
-    const token = getBearerTokenFromRequest(req);
-    const session = getSessionFromToken(token);
-    if (!session) {
-      return res.status(401).json({ ok: false, error: 'Session not found' });
-    }
-    const actor = resolveActor(req);
-    return res.json({
-      ok: true,
-      actor: {
-        userId: actor.userId,
-        displayName: actor.user?.displayName || actor.userId,
-        enabled: actor.user?.enabled === true,
-        profileIds: actor.profileIds || [],
-        groupIds: actor.groupIds || []
-      },
-      permissions: actor.permissions || [],
-      expiresAt: new Date(Number(session.expiresAt || Date.now() + AUTH_SESSION_TTL_MS)).toISOString()
-    });
-  });
-
-  app.get('/api/authz/me', (req, res) => {
-    const actor = resolveActor(req);
-    const profileMap = getProfilesById();
-    const profiles = (actor.profileIds || [])
-      .map(profileId => profileMap.get(profileId))
-      .filter(Boolean);
-
+  app.get('/api/journal/dispatch-queue', requirePermission('lifecycle.read'), (_req, res) => {
+    const items = readScheduledDispatchQueue();
     res.json({
-      actor: {
-        userId: actor.userId,
-        displayName: actor.user?.displayName || null,
-        enabled: actor.user?.enabled === true,
-        profileIds: actor.profileIds || [],
-        groupIds: actor.groupIds || [],
-        employer: actor.user?.employer || USER_ORGANIZATION_NAME,
-        department: actor.user?.department || null,
-        jobTitle: actor.user?.jobTitle || null,
-        officeLocation: actor.user?.officeLocation || null,
-        country: actor.user?.country || null,
-        managerEmail: actor.user?.managerEmail || null
-      },
-      profiles,
-      permissions: actor.permissions
+      status: 'ok',
+      summary: getScheduledDispatchQueueSummary(),
+      items
     });
   });
 
-  app.get('/api/events/mermaid', (req, res) => {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache, no-transform');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-    if (typeof res.flushHeaders === 'function') {
-      res.flushHeaders();
-    }
-
-    let phase = 0;
-    const send = () => {
-      phase = (phase + 1) % 1024;
-      res.write(`event: mermaid\n`);
-      res.write(`data: ${JSON.stringify({ phase, at: Date.now() })}\n\n`);
-    };
-
-    send();
-    const timer = setInterval(send, 1000);
-
-    const close = () => {
-      clearInterval(timer);
-      try {
-        res.end();
-      } catch {
-        // ignore close errors on disconnected clients
-      }
-    };
-
-    req.on('close', close);
-    req.on('aborted', close);
-  });
-
-  app.get('/api/authz/context', requirePermission('lifecycle.read'), (req, res) => {
-    const actor = req.actor || resolveActor(req);
-    const context = buildUserRoleContext(actor.userId);
-    if (!context) {
-      return res.status(404).json({ error: 'User context not found' });
-    }
-    return res.json({ context });
-  });
-
-  app.get('/api/users/:userId/context', requirePermission('users.read'), (req, res) => {
-    const userId = String(req.params.userId || '').trim();
-    const context = buildUserRoleContext(userId);
-    if (!context) {
-      return res.status(404).json({ error: 'User context not found' });
-    }
-    return res.json({ context });
-  });
-
-  app.get('/api/users/:userId/employer', requirePermission('users.read'), (req, res) => {
-    const userId = String(req.params.userId || '').trim();
-    const context = buildUserRoleContext(userId);
-    if (!context) {
-      return res.status(404).json({ error: 'User context not found' });
-    }
-    return res.json({
-      userId: context.userId,
-      employer: context.employment?.employer || USER_ORGANIZATION_NAME,
-      department: context.employment?.department || null,
-      country: context.employment?.country || null,
-      officeLocation: context.employment?.officeLocation || null
-    });
-  });
-
-  app.get('/api/users/:userId/roles', requirePermission('users.read'), (req, res) => {
-    const userId = String(req.params.userId || '').trim();
-    const context = buildUserRoleContext(userId);
-    if (!context) {
-      return res.status(404).json({ error: 'User context not found' });
-    }
-    return res.json({
-      userId: context.userId,
-      roles: context.roles,
-      permissions: context.permissions,
-      persona: context.persona
-    });
-  });
-
-  app.get('/api/users/profiles', requirePermission('users.read'), (req, res) => {
-    res.json({ profiles: userManagementStore.profiles });
-  });
-
-  app.get('/api/users/groups', requirePermission('users.read'), async (req, res) => {
+  app.post('/api/journal/dispatch-queue', requirePermission('lifecycle.manage'), (req, res) => {
     try {
-      const includeDeletedValue = String(req.query.includeDeleted || '').trim().toLowerCase();
-      const includeDeleted = includeDeletedValue === '1' || includeDeletedValue === 'true' || includeDeletedValue === 'yes';
-      const groups = await groupProvider.listGroups({ includeDeleted });
-      res.json({ groups });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/users/groups', requirePermission('users.manage'), async (req, res) => {
-    try {
-      const { groupId, label, description, privileges } = req.body || {};
-      const id = String(groupId || '').trim();
-      if (!id) {
-        return res.status(400).json({ error: 'groupId is required' });
-      }
-
-      const group = await groupProvider.createGroup({
-        groupId: id,
-        label: String(label || id).trim(),
-        description: String(description || '').trim(),
-        privileges: Array.isArray(privileges) ? privileges : []
+      const item = schedulePersistentDispatch({
+        queueName: req?.body?.queueName,
+        message: req?.body?.message,
+        sourceService: req?.body?.sourceService || 'api:scheduled-dispatch',
+        dueAt: req?.body?.dueAt || null,
+        delayMs: req?.body?.delayMs || 0,
+        comment: req?.body?.comment || null,
+        targetManagerId: req?.body?.targetManagerId || null,
+        targetNodeId: req?.body?.targetNodeId || null,
+        parentEntityId: req?.body?.parentEntityId || null,
+        childEntityId: req?.body?.childEntityId || null
       });
-      await refreshGroupPrivilegeCache();
-
-      res.json({ status: 'created', group });
-    } catch (e) {
-      const message = String(e.message || 'Unknown error');
-      if (message.toLowerCase().includes('already exists')) {
-        return res.status(409).json({ error: message });
-      }
-      res.status(500).json({ error: message });
-    }
-  });
-
-  app.patch('/api/users/groups/:groupId', requirePermission('users.manage'), async (req, res) => {
-    try {
-      const groupId = String(req.params.groupId || '').trim();
-      if (!groupId) {
-        return res.status(400).json({ error: 'groupId is required' });
-      }
-
-      const updates = req.body || {};
-      const group = await groupProvider.updateGroup(groupId, {
-        label: updates.label,
-        description: updates.description,
-        privileges: updates.privileges
-      });
-      await refreshGroupPrivilegeCache();
-
-      res.json({ status: 'updated', group });
-    } catch (e) {
-      const message = String(e.message || 'Unknown error');
-      if (message.toLowerCase().includes('not found')) {
-        return res.status(404).json({ error: message });
-      }
-      if (message.toLowerCase().includes('soft-deleted')) {
-        return res.status(409).json({ error: message });
-      }
-      res.status(500).json({ error: message });
-    }
-  });
-
-  app.delete('/api/users/groups/:groupId', requirePermission('users.manage'), async (req, res) => {
-    try {
-      const groupId = String(req.params.groupId || '').trim();
-      if (!groupId) {
-        return res.status(400).json({ error: 'groupId is required' });
-      }
-
-      const actor = resolveActor(req);
-      const group = await groupProvider.softDeleteGroup(groupId, {
-        deletedBy: actor?.userId || 'system-admin'
-      });
-      await refreshGroupPrivilegeCache();
-
-      res.json({ status: 'soft-deleted', group });
-    } catch (e) {
-      const message = String(e.message || 'Unknown error');
-      if (message.toLowerCase().includes('not found')) {
-        return res.status(404).json({ error: message });
-      }
-      res.status(500).json({ error: message });
-    }
-  });
-
-  app.post('/api/users/profiles', requirePermission('users.manage'), (req, res) => {
-    const { profileId, label, description, permissions } = req.body || {};
-    const id = String(profileId || '').trim();
-    if (!id) {
-      return res.status(400).json({ error: 'profileId is required' });
-    }
-    if (userManagementStore.profiles.some(profile => profile.profileId === id)) {
-      return res.status(409).json({ error: 'Profile already exists' });
-    }
-
-    const profile = {
-      profileId: id,
-      label: String(label || id).trim(),
-      description: String(description || '').trim(),
-      permissions: sanitizePermissions(permissions)
-    };
-
-    userManagementStore.profiles.push(profile);
-    saveUserManagement();
-    res.json({ status: 'created', profile });
-  });
-
-  app.patch('/api/users/profiles/:profileId', requirePermission('users.manage'), (req, res) => {
-    const profileId = String(req.params.profileId || '').trim();
-    const profile = userManagementStore.profiles.find(item => item.profileId === profileId);
-    if (!profile) {
-      return res.status(404).json({ error: 'Profile not found' });
-    }
-
-    const updates = req.body || {};
-    if (Object.prototype.hasOwnProperty.call(updates, 'label')) {
-      profile.label = String(updates.label || profile.profileId).trim();
-    }
-    if (Object.prototype.hasOwnProperty.call(updates, 'description')) {
-      profile.description = String(updates.description || '').trim();
-    }
-    if (Object.prototype.hasOwnProperty.call(updates, 'permissions')) {
-      profile.permissions = sanitizePermissions(updates.permissions);
-    }
-
-    saveUserManagement();
-    res.json({ status: 'updated', profile });
-  });
-
-  app.delete('/api/users/profiles/:profileId', requirePermission('users.manage'), (req, res) => {
-    const profileId = String(req.params.profileId || '').trim();
-    if (profileId === 'admin') {
-      return res.status(400).json({ error: 'Cannot delete admin profile' });
-    }
-
-    const beforeCount = userManagementStore.profiles.length;
-    userManagementStore.profiles = userManagementStore.profiles.filter(profile => profile.profileId !== profileId);
-    if (userManagementStore.profiles.length === beforeCount) {
-      return res.status(404).json({ error: 'Profile not found' });
-    }
-
-    for (const user of userManagementStore.users) {
-      user.profileIds = sanitizeProfileIds((user.profileIds || []).filter(id => id !== profileId));
-    }
-
-    saveUserManagement();
-    res.json({ status: 'deleted', profileId });
-  });
-
-  app.get('/api/users', requirePermission('users.read'), (req, res) => {
-    res.json({ users: userManagementStore.users.map((user) => sanitizeUserForApi(user)).filter(Boolean) });
-  });
-
-  app.get('/api/operations/monitor/classes', requirePermission('lifecycle.read'), async (req, res) => {
-    try {
-      const includeDisabledValue = String(req.query.includeDisabled || '').trim().toLowerCase();
-      const includeDeletedValue = String(req.query.includeDeleted || '').trim().toLowerCase();
-      const includeDisabled = includeDisabledValue === '1' || includeDisabledValue === 'true' || includeDisabledValue === 'yes';
-      const includeDeleted = includeDeletedValue === '1' || includeDeletedValue === 'true' || includeDeletedValue === 'yes';
-      const classes = await monitorClassProvider.listClasses({ includeDisabled, includeDeleted });
-      res.json({ classes });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/operations/monitor/classes', requirePermission('lifecycle.manage'), async (req, res) => {
-    try {
-      const { classId, label, description, enabled, sortOrder } = req.body || {};
-      const created = await monitorClassProvider.createClass({
-        classId,
-        label,
-        description,
-        enabled,
-        sortOrder
-      });
-      res.json({ status: 'created', class: created });
-    } catch (e) {
-      const message = String(e.message || 'Unknown error');
-      if (message.toLowerCase().includes('exists')) {
-        return res.status(409).json({ error: message });
-      }
-      res.status(500).json({ error: message });
-    }
-  });
-
-  app.patch('/api/operations/monitor/classes/:classId', requirePermission('lifecycle.manage'), async (req, res) => {
-    try {
-      const classId = String(req.params.classId || '').trim();
-      if (!classId) {
-        return res.status(400).json({ error: 'classId is required' });
-      }
-      const updates = req.body || {};
-      const updated = await monitorClassProvider.updateClass(classId, updates);
-      res.json({ status: 'updated', class: updated });
-    } catch (e) {
-      const message = String(e.message || 'Unknown error');
-      if (message.toLowerCase().includes('not found')) {
-        return res.status(404).json({ error: message });
-      }
-      if (message.toLowerCase().includes('deleted')) {
-        return res.status(409).json({ error: message });
-      }
-      res.status(500).json({ error: message });
-    }
-  });
-
-  app.delete('/api/operations/monitor/classes/:classId', requirePermission('lifecycle.manage'), async (req, res) => {
-    try {
-      const classId = String(req.params.classId || '').trim();
-      if (!classId) {
-        return res.status(400).json({ error: 'classId is required' });
-      }
-      const actor = resolveActor(req);
-      const deleted = await monitorClassProvider.softDeleteClass(classId, {
-        deletedBy: actor?.userId || 'system-admin'
-      });
-      res.json({ status: 'soft-deleted', class: deleted });
-    } catch (e) {
-      const message = String(e.message || 'Unknown error');
-      if (message.toLowerCase().includes('not found')) {
-        return res.status(404).json({ error: message });
-      }
-      res.status(500).json({ error: message });
-    }
-  });
-
-  app.post('/api/users', requirePermission('users.manage'), async (req, res) => {
-    const { userId, email, displayName, enabled, profileIds, groupIds, password } = req.body || {};
-    const id = normalizeUserIdentifier(email || userId);
-    if (!id) {
-      return res.status(400).json({ error: 'userId or email is required' });
-    }
-    if (!isAcceptedUserIdentifier(id)) {
-      return res.status(400).json({ error: 'User identifier must be a valid email address or supported user ID' });
-    }
-    if (userManagementStore.users.some(user => user.userId === id)) {
-      return res.status(409).json({ error: 'User already exists' });
-    }
-
-    const knownProfiles = new Set(userManagementStore.profiles.map(profile => profile.profileId));
-    const normalizedProfileIds = sanitizeProfileIds(profileIds).filter(profileId => knownProfiles.has(profileId));
-    const directoryProfile = await resolveDirectoryProfile(id);
-
-    const user = {
-      userId: id,
-      email: isValidEmailIdentifier(email || userId) ? normalizeUserIdentifier(email || userId) : null,
-      displayName: String(displayName || directoryProfile.displayName || id).trim(),
-      enabled: enabled !== false,
-      employer: USER_ORGANIZATION_NAME,
-      department: String(directoryProfile.department || 'Operations').trim() || 'Operations',
-      jobTitle: String(directoryProfile.jobTitle || 'Operations Analyst').trim() || 'Operations Analyst',
-      officeLocation: String(directoryProfile.officeLocation || 'HQ').trim() || 'HQ',
-      country: null,
-      managerEmail: directoryProfile.managerEmail,
-      profileIds: normalizedProfileIds,
-      groupIds: sanitizeGroupIds(groupIds),
-      auth: String(password || '').trim() ? createPasswordRecord(String(password)) : null
-    };
-
-    userManagementStore.users.push(user);
-    saveUserManagement();
-    res.json({ status: 'created', user: sanitizeUserForApi(user) });
-  });
-
-  app.patch('/api/users/:userId', requirePermission('users.manage'), async (req, res) => {
-    const userId = normalizeUserIdentifier(req.params.userId);
-    const user = userManagementStore.users.find(item => item.userId === userId);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    const updates = req.body || {};
-    if (Object.prototype.hasOwnProperty.call(updates, 'displayName')) {
-      user.displayName = String(updates.displayName || user.userId).trim();
-    }
-    if (Object.prototype.hasOwnProperty.call(updates, 'email')) {
-      const nextEmail = normalizeUserIdentifier(updates.email);
-      if (!isValidEmailIdentifier(nextEmail)) {
-        return res.status(400).json({ error: 'email must be a valid email address' });
-      }
-      if (nextEmail !== user.userId && userManagementStore.users.some(item => item.userId === nextEmail)) {
-        return res.status(409).json({ error: 'User already exists' });
-      }
-      user.email = nextEmail;
-      if (user.userId !== DEFAULT_ACTOR_USER_ID) {
-        user.userId = nextEmail;
-      }
-    } else {
-      user.email = isValidEmailIdentifier(user.userId) ? user.userId : (user.email || null);
-    }
-    if (Object.prototype.hasOwnProperty.call(updates, 'enabled')) {
-      user.enabled = updates.enabled === true;
-    }
-    if (Object.prototype.hasOwnProperty.call(updates, 'department')) {
-      user.department = String(updates.department || '').trim() || 'Operations';
-    }
-    if (Object.prototype.hasOwnProperty.call(updates, 'employer')) {
-      user.employer = String(updates.employer || USER_ORGANIZATION_NAME).trim() || USER_ORGANIZATION_NAME;
-    }
-    if (Object.prototype.hasOwnProperty.call(updates, 'jobTitle')) {
-      user.jobTitle = String(updates.jobTitle || '').trim() || 'Operations Analyst';
-    }
-    if (Object.prototype.hasOwnProperty.call(updates, 'officeLocation')) {
-      user.officeLocation = String(updates.officeLocation || '').trim() || 'HQ';
-    }
-    if (Object.prototype.hasOwnProperty.call(updates, 'managerEmail')) {
-      const managerEmail = String(updates.managerEmail || '').trim().toLowerCase();
-      user.managerEmail = managerEmail && isValidEmailIdentifier(managerEmail) ? managerEmail : null;
-    }
-    if (Object.prototype.hasOwnProperty.call(updates, 'country')) {
-      const country = String(updates.country || '').trim();
-      user.country = country || null;
-    }
-    if (updates.refreshDirectory === true) {
-      const lookupEmail = normalizeUserIdentifier(
-        updates.email || user.email || (isValidEmailIdentifier(user.userId) ? user.userId : '')
-      );
-      if (!isValidEmailIdentifier(lookupEmail)) {
-        return res.status(400).json({ error: 'Cannot refresh directory data without a valid email address' });
-      }
-      const directoryProfile = await resolveDirectoryProfile(lookupEmail);
-      user.email = lookupEmail;
-      if (user.userId !== DEFAULT_ACTOR_USER_ID) {
-        user.userId = lookupEmail;
-      }
-      user.displayName = String(directoryProfile.displayName || user.displayName || lookupEmail).trim();
-      user.department = String(directoryProfile.department || 'Operations').trim() || 'Operations';
-      user.jobTitle = String(directoryProfile.jobTitle || 'Operations Analyst').trim() || 'Operations Analyst';
-      user.officeLocation = String(directoryProfile.officeLocation || 'HQ').trim() || 'HQ';
-      user.managerEmail = directoryProfile.managerEmail || null;
-    }
-    if (Object.prototype.hasOwnProperty.call(updates, 'profileIds')) {
-      const knownProfiles = new Set(userManagementStore.profiles.map(profile => profile.profileId));
-      user.profileIds = sanitizeProfileIds(updates.profileIds).filter(profileId => knownProfiles.has(profileId));
-    }
-    if (Object.prototype.hasOwnProperty.call(updates, 'groupIds')) {
-      user.groupIds = sanitizeGroupIds(updates.groupIds);
-    }
-    if (Object.prototype.hasOwnProperty.call(updates, 'password')) {
-      const nextPassword = String(updates.password || '');
-      user.auth = nextPassword.trim() ? createPasswordRecord(nextPassword) : null;
-    }
-
-    saveUserManagement();
-    res.json({ status: 'updated', user: sanitizeUserForApi(user) });
-  });
-
-  app.delete('/api/users/:userId', requirePermission('users.manage'), (req, res) => {
-    const userId = normalizeUserIdentifier(req.params.userId);
-    if (!userId) {
-      return res.status(400).json({ error: 'userId is required' });
-    }
-    if (userId === DEFAULT_ACTOR_USER_ID) {
-      return res.status(400).json({ error: 'Cannot delete system admin user' });
-    }
-
-    const beforeCount = userManagementStore.users.length;
-    userManagementStore.users = userManagementStore.users.filter(user => user.userId !== userId);
-    if (userManagementStore.users.length === beforeCount) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    saveUserManagement();
-    res.json({ status: 'deleted', userId });
-  });
-  // ===== USER REQUEST MANAGEMENT (Provisioning Workflow) =====
-  // In-memory store for user requests (file-based persistence)
-  const USER_REQUESTS_PATH = path.join(__dirname, 'data', 'user-requests.json');
-  const USER_AUDIT_PATH = path.join(__dirname, 'data', 'user-audit.json');
-
-  let userRequestStore = { requests: [], nextId: 1 };
-  let userAuditStore = { audits: [] };
-
-  function loadUserRequests() {
-    try {
-      if (fs.existsSync(USER_REQUESTS_PATH)) {
-        const raw = fs.readFileSync(USER_REQUESTS_PATH, 'utf-8');
-        userRequestStore = JSON.parse(raw);
-      }
-    } catch (e) {
-      console.warn(`[USER-REQUESTS] Failed to load: ${e.message}`);
-    }
-  }
-
-  function saveUserRequests() {
-    try {
-      fs.writeFileSync(USER_REQUESTS_PATH, JSON.stringify(userRequestStore, null, 2), 'utf-8');
-    } catch (e) {
-      console.error(`[USER-REQUESTS] Failed to save: ${e.message}`);
-    }
-  }
-
-  function loadUserAudits() {
-    try {
-      if (fs.existsSync(USER_AUDIT_PATH)) {
-        const raw = fs.readFileSync(USER_AUDIT_PATH, 'utf-8');
-        userAuditStore = JSON.parse(raw);
-      }
-    } catch (e) {
-      console.warn(`[USER-AUDIT] Failed to load: ${e.message}`);
-    }
-  }
-
-  function saveUserAudits() {
-    try {
-      fs.writeFileSync(USER_AUDIT_PATH, JSON.stringify(userAuditStore, null, 2), 'utf-8');
-    } catch (e) {
-      console.error(`[USER-AUDIT] Failed to save: ${e.message}`);
-    }
-  }
-
-  function addAuditEntry(userId, action, actor, details = {}) {
-    const entry = {
-      userId,
-      action,
-      actor,
-      timestamp: new Date().toISOString(),
-      details
-    };
-    userAuditStore.audits.push(entry);
-    saveUserAudits();
-    return entry;
-  }
-
-  function notifyExternalSystem(requestId, status, reason = null) {
-    // Placeholder for Jira/SNOW integration
-    console.log(`[EXTERNAL-NOTIFY] Request ${requestId} status: ${status}${reason ? ` - ${reason}` : ''}`);
-    // TODO: Implement actual Jira/SNOW API calls
-  }
-
-  loadUserRequests();
-  loadUserAudits();
-
-  // GET /api/users/requests - List all user requests
-  app.get('/api/users/requests', requirePermission('users.read'), (req, res) => {
-    const status = req.query.status;
-    let requests = userRequestStore.requests;
-    
-    if (status) {
-      requests = requests.filter(r => r.status === status);
-    }
-    
-    res.json({ requests });
-  });
-
-  // POST /api/users/requests - Create new user request
-  app.post('/api/users/requests', requirePermission('users.provision'), (req, res) => {
-    const actor = resolveActor(req);
-    const { userId, email, displayName, department, jobTitle, officeLocation, profileIds } = req.body || {};
-    
-    const id = normalizeUserIdentifier(email || userId);
-    if (!id) {
-      return res.status(400).json({ error: 'userId or email is required' });
-    }
-
-    const request = {
-      id: `REQ-${userRequestStore.nextId++}`,
-      userId: id,
-      email: isValidEmailIdentifier(email || userId) ? normalizeUserIdentifier(email || userId) : null,
-      displayName: String(displayName || id).trim(),
-      department: String(department || 'Operations').trim(),
-      jobTitle: String(jobTitle || 'Operations Analyst').trim(),
-      officeLocation: String(officeLocation || 'HQ').trim(),
-      profileIds: sanitizeProfileIds(profileIds),
-      status: 'draft',
-      createdBy: actor.userId,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-
-    userRequestStore.requests.push(request);
-    saveUserRequests();
-    
-    addAuditEntry(id, 'request_created', actor.userId, { requestId: request.id });
-    
-    res.json({ status: 'created', request });
-  });
-
-  // GET /api/users/requests/:id - Get request details
-  app.get('/api/users/requests/:id', requirePermission('users.read'), (req, res) => {
-    const request = userRequestStore.requests.find(r => r.id === req.params.id);
-    if (!request) {
-      return res.status(404).json({ error: 'Request not found' });
-    }
-    res.json({ request });
-  });
-
-  // PATCH /api/users/requests/:id - Update request (draft only)
-  app.patch('/api/users/requests/:id', requirePermission('users.provision'), (req, res) => {
-    const actor = resolveActor(req);
-    const request = userRequestStore.requests.find(r => r.id === req.params.id);
-    
-    if (!request) {
-      return res.status(404).json({ error: 'Request not found' });
-    }
-    
-    if (request.status !== 'draft') {
-      return res.status(400).json({ error: 'Can only update draft requests' });
-    }
-    
-    const updates = req.body || {};
-    if (updates.displayName) request.displayName = String(updates.displayName).trim();
-    if (updates.department) request.department = String(updates.department).trim();
-    if (updates.jobTitle) request.jobTitle = String(updates.jobTitle).trim();
-    if (updates.officeLocation) request.officeLocation = String(updates.officeLocation).trim();
-    if (updates.profileIds) request.profileIds = sanitizeProfileIds(updates.profileIds);
-    
-    request.updatedAt = new Date().toISOString();
-    saveUserRequests();
-    
-    addAuditEntry(request.userId, 'request_updated', actor.userId, { requestId: request.id });
-    
-    res.json({ status: 'updated', request });
-  });
-
-  // DELETE /api/users/requests/:id - Delete request (draft only)
-  app.delete('/api/users/requests/:id', requirePermission('users.provision'), (req, res) => {
-    const actor = resolveActor(req);
-    const request = userRequestStore.requests.find(r => r.id === req.params.id);
-    
-    if (!request) {
-      return res.status(404).json({ error: 'Request not found' });
-    }
-    
-    if (request.status !== 'draft') {
-      return res.status(400).json({ error: 'Can only delete draft requests' });
-    }
-    
-    userRequestStore.requests = userRequestStore.requests.filter(r => r.id !== req.params.id);
-    saveUserRequests();
-    
-    addAuditEntry(request.userId, 'request_deleted', actor.userId, { requestId: request.id });
-    
-    res.json({ status: 'deleted', requestId: request.id });
-  });
-
-  // POST /api/users/requests/:id/submit - Submit for verification
-  app.post('/api/users/requests/:id/submit', requirePermission('users.provision'), (req, res) => {
-    const actor = resolveActor(req);
-    const request = userRequestStore.requests.find(r => r.id === req.params.id);
-    
-    if (!request) {
-      return res.status(404).json({ error: 'Request not found' });
-    }
-    
-    if (request.status !== 'draft') {
-      return res.status(400).json({ error: 'Request already submitted' });
-    }
-    
-    request.status = 'pending-verification';
-    request.submittedBy = actor.userId;
-    request.submittedAt = new Date().toISOString();
-    request.updatedAt = new Date().toISOString();
-    saveUserRequests();
-    
-    addAuditEntry(request.userId, 'request_submitted', actor.userId, { requestId: request.id });
-    notifyExternalSystem(request.id, 'submitted');
-    
-    res.json({ status: 'submitted', request });
-  });
-
-  // POST /api/users/requests/:id/approve - Approve request (verifier)
-  app.post('/api/users/requests/:id/approve', requirePermission('users.verify'), async (req, res) => {
-    const actor = resolveActor(req);
-    const request = userRequestStore.requests.find(r => r.id === req.params.id);
-    
-    if (!request) {
-      return res.status(404).json({ error: 'Request not found' });
-    }
-    
-    if (request.status !== 'pending-verification') {
-      return res.status(400).json({ error: 'Request not pending verification' });
-    }
-    
-    // Separation of duties check
-    if (request.createdBy === actor.userId || request.submittedBy === actor.userId) {
-      return res.status(403).json({ error: 'Cannot approve own request (separation of duties)' });
-    }
-    
-    // Create the actual user
-    const knownProfiles = new Set(userManagementStore.profiles.map(profile => profile.profileId));
-    const normalizedProfileIds = request.profileIds.filter(profileId => knownProfiles.has(profileId));
-    
-    const user = {
-      userId: request.userId,
-      email: request.email,
-      displayName: request.displayName,
-      enabled: true,
-      employer: USER_ORGANIZATION_NAME,
-      department: request.department,
-      jobTitle: request.jobTitle,
-      officeLocation: request.officeLocation,
-      country: null,
-      managerEmail: null,
-      profileIds: normalizedProfileIds,
-      groupIds: [],
-      auth: null
-    };
-    
-    userManagementStore.users.push(user);
-    saveUserManagement();
-    
-    request.status = 'approved';
-    request.approvedBy = actor.userId;
-    request.approvedAt = new Date().toISOString();
-    request.updatedAt = new Date().toISOString();
-    saveUserRequests();
-    
-    addAuditEntry(request.userId, 'request_approved', actor.userId, { requestId: request.id });
-    addAuditEntry(request.userId, 'user_created', actor.userId, { source: 'provisioning_workflow' });
-    notifyExternalSystem(request.id, 'approved');
-    
-    res.json({ status: 'approved', request, user: sanitizeUserForApi(user) });
-  });
-
-  // POST /api/users/requests/:id/reject - Reject request (verifier)
-  app.post('/api/users/requests/:id/reject', requirePermission('users.verify'), (req, res) => {
-    const actor = resolveActor(req);
-    const request = userRequestStore.requests.find(r => r.id === req.params.id);
-    
-    if (!request) {
-      return res.status(404).json({ error: 'Request not found' });
-    }
-    
-    if (request.status !== 'pending-verification') {
-      return res.status(400).json({ error: 'Request not pending verification' });
-    }
-    
-    const { reason } = req.body || {};
-    if (!reason) {
-      return res.status(400).json({ error: 'Rejection reason is required' });
-    }
-    
-    request.status = 'rejected';
-    request.rejectedBy = actor.userId;
-    request.rejectedAt = new Date().toISOString();
-    request.rejectionReason = String(reason).trim();
-    request.updatedAt = new Date().toISOString();
-    saveUserRequests();
-    
-    addAuditEntry(request.userId, 'request_rejected', actor.userId, { requestId: request.id, reason });
-    notifyExternalSystem(request.id, 'rejected', reason);
-    
-    res.json({ status: 'rejected', request });
-  });
-
-  // POST /api/users/requests/:id/breakout - Terminate request (verifier)
-  app.post('/api/users/requests/:id/breakout', requirePermission('users.verify'), (req, res) => {
-    const actor = resolveActor(req);
-    const request = userRequestStore.requests.find(r => r.id === req.params.id);
-    
-    if (!request) {
-      return res.status(404).json({ error: 'Request not found' });
-    }
-    
-    if (request.status !== 'pending-verification') {
-      return res.status(400).json({ error: 'Request not pending verification' });
-    }
-    
-    const { reason } = req.body || {};
-    
-    request.status = 'terminated';
-    request.terminatedBy = actor.userId;
-    request.terminatedAt = new Date().toISOString();
-    request.terminationReason = String(reason || 'Breakout executed').trim();
-    request.updatedAt = new Date().toISOString();
-    saveUserRequests();
-    
-    addAuditEntry(request.userId, 'request_terminated', actor.userId, { requestId: request.id, reason });
-    notifyExternalSystem(request.id, 'terminated', reason);
-    
-    res.json({ status: 'terminated', request });
-  });
-
-  // GET /api/users/:userId/audit - Get user audit history
-  app.get('/api/users/:userId/audit', requirePermission('users.read'), (req, res) => {
-    const userId = normalizeUserIdentifier(req.params.userId);
-    const audits = userAuditStore.audits.filter(a => a.userId === userId);
-    res.json({ userId, audits });
-  });
-
-  // ===== DEVELOPER TOOLS APIs =====
-  
-  // VM State (mock implementation - would connect to actual VM)
-  let mockVmState = {
-    pc: 0,
-    sp: 0,
-    stack: [],
-    variables: {},
-    running: false,
-    lastInstruction: null
-  };
-
-  app.get('/api/develop/vm/state', requirePermission('develop.read'), (req, res) => {
-    res.json({ state: mockVmState });
-  });
-
-  app.post('/api/develop/vm/step', requirePermission('develop.execute'), (req, res) => {
-    // Mock step execution
-    mockVmState.pc++;
-    mockVmState.lastInstruction = `INSTR_${mockVmState.pc}`;
-    res.json({ status: 'stepped', state: mockVmState });
-  });
-
-  app.post('/api/develop/vm/reset', requirePermission('develop.execute'), (req, res) => {
-    mockVmState = {
-      pc: 0,
-      sp: 0,
-      stack: [],
-      variables: {},
-      running: false,
-      lastInstruction: null
-    };
-    res.json({ status: 'reset', state: mockVmState });
-  });
-
-  app.post('/api/develop/vm/run', requirePermission('develop.execute'), (req, res) => {
-    mockVmState.running = true;
-    mockVmState.pc = 100; // Simulate completion
-    mockVmState.running = false;
-    res.json({ status: 'completed', state: mockVmState });
-  });
-
-  // Test Harness
-  let mockTestResults = {
-    timestamp: new Date().toISOString(),
-    tests: [
-      { id: 'test-1', name: 'Basic Operations', status: 'passed', duration: 45 },
-      { id: 'test-2', name: 'Stack Operations', status: 'passed', duration: 32 },
-      { id: 'test-3', name: 'Variable Assignment', status: 'passed', duration: 28 }
-    ],
-    summary: { total: 3, passed: 3, failed: 0, duration: 105 }
-  };
-
-  app.get('/api/develop/tests/results', requirePermission('develop.read'), (req, res) => {
-    res.json(mockTestResults);
-  });
-
-  app.post('/api/develop/tests/run', requirePermission('develop.execute'), (req, res) => {
-    // Mock test execution
-    mockTestResults.timestamp = new Date().toISOString();
-    res.json({ status: 'running', results: mockTestResults });
-  });
-
-  app.post('/api/develop/tests/run/:testId', requirePermission('develop.execute'), (req, res) => {
-    const testId = req.params.testId;
-    const test = mockTestResults.tests.find(t => t.id === testId);
-    if (!test) {
-      return res.status(404).json({ error: 'Test not found' });
-    }
-    res.json({ status: 'running', test });
-  });
-
-  // Development Logs
-  let developmentLogs = [
-    { timestamp: new Date().toISOString(), level: 'info', message: 'Development server started' },
-    { timestamp: new Date().toISOString(), level: 'info', message: 'VM initialized' }
-  ];
-
-  app.get('/api/develop/logs', requirePermission('develop.read'), (req, res) => {
-    const limit = parseInt(req.query.limit) || 100;
-    const level = req.query.level;
-    
-    let logs = developmentLogs;
-    if (level) {
-      logs = logs.filter(log => log.level === level);
-    }
-    
-    res.json({ logs: logs.slice(-limit) });
-  });
-
-  // API Catalog
-  app.get('/api/develop/api-catalog', requirePermission('develop.read'), (req, res) => {
-    const catalog = enumerateApiCatalog();
-    res.json({ endpoints: catalog });
-  });
-
-
-  app.get('/api/governance/processes', requirePermission('governance.read'), (req, res) => {
-    res.json({
-      processes: processGovernanceStore.processes,
-      updatedAt: processGovernanceStore.updatedAt,
-      version: processGovernanceStore.version
-    });
-  });
-
-  app.patch('/api/governance/processes/:processId', requirePermission('governance.manage'), (req, res) => {
-    const processId = String(req.params.processId || '').trim();
-    const process = getProcessPolicyById(processId);
-    if (!process) {
-      return res.status(404).json({ error: 'Process policy not found' });
-    }
-
-    const updates = req.body || {};
-    if (Object.prototype.hasOwnProperty.call(updates, 'label')) {
-      process.label = String(updates.label || process.processId).trim();
-    }
-    if (Object.prototype.hasOwnProperty.call(updates, 'requiresTwoPersonRule')) {
-      process.requiresTwoPersonRule = updates.requiresTwoPersonRule === true;
-    }
-
-    saveProcessGovernance();
-    res.json({ status: 'updated', process });
-  });
-
-  app.get('/api/governance/approvals', requirePermission('governance.read'), (req, res) => {
-    const now = Date.now();
-    const approvals = Array.from(pendingApprovalRequests.values())
-      .filter(item => Number(item.expiresAt || 0) > now)
-      .map(item => ({
-        approvalId: item.approvalId,
-        processId: item.processId,
-        requestedByUserId: item.requestedByUserId,
-        requestedAt: item.requestedAt,
-        expiresAt: new Date(Number(item.expiresAt)).toISOString(),
-        method: item.method,
-        path: item.path,
-        body: item.body
-      }))
-      .sort((a, b) => a.expiresAt.localeCompare(b.expiresAt));
-
-    res.json({ approvals, count: approvals.length });
-  });
-
-  app.delete('/api/governance/approvals/:approvalId', requirePermission('governance.manage'), (req, res) => {
-    const approvalId = String(req.params.approvalId || '').trim();
-    if (!pendingApprovalRequests.has(approvalId)) {
-      return res.status(404).json({ error: 'Approval request not found' });
-    }
-
-    pendingApprovalRequests.delete(approvalId);
-    appendAuditEvent({
-      eventType: 'approval-cancelled',
-      requestId: req.requestId || null,
-      approvalId,
-      cancelledByUserId: req.actor?.userId || null
-    });
-    res.json({ status: 'cancelled', approvalId });
-  });
-
-  app.post('/api/registry/heartbeat', (req, res) => {
-    try {
-      const { managerId, name, ip, port, status, queues, persistence } = req.body || {};
-      const effectiveIp = ip || req.ip?.replace('::ffff:', '') || '127.0.0.1';
-      upsertRemoteQueueManager({ managerId, name, nodeId: effectiveIp, ip: effectiveIp, port, status, queues });
-      if (managerId && queueManagerRegistry.has(managerId)) {
-        const current = queueManagerRegistry.get(managerId);
-        current.persistence = persistence || current.persistence || null;
-        queueManagerRegistry.set(managerId, current);
-      }
-      res.json({ status: 'ok' });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/registry/service-instances/heartbeat', (req, res) => {
-    try {
-      const { serviceName, instanceId, nodeId, ip, port, status, metadata } = req.body || {};
-      const effectiveIp = ip || req.ip?.replace('::ffff:', '') || '127.0.0.1';
-      upsertServiceInstance({
-        serviceName,
-        instanceId,
-        nodeId: nodeId || effectiveIp,
-        ip: effectiveIp,
-        port,
-        status,
-        metadata
-      });
-      res.json({ status: 'ok' });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/supervisor/heartbeat', (req, res) => {
-    try {
-      const fallbackIp = String(req.ip || req.socket?.remoteAddress || '').replace('::ffff:', '').trim();
-      const heartbeat = normalizeSupervisorHeartbeatPayload(req.body || {}, fallbackIp);
-      supervisorHeartbeatRegistry.set(heartbeat.nodeId, heartbeat);
-
-      res.json({
-        status: 'ok',
-        nodeId: heartbeat.nodeId,
-        overallHealthy: heartbeat.overallHealthy,
-        stale: !isSupervisorHeartbeatFresh(heartbeat),
-        receivedAt: heartbeat.receivedAt
-      });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.get('/api/supervisor/status', (req, res) => {
-    res.json(getSupervisorHeartbeatSnapshot());
-  });
-
-  app.get('/api/supervisor/green', (req, res) => {
-    const requiredNodeId = String(req.query?.nodeId || '').trim();
-    const snapshot = getSupervisorHeartbeatSnapshot();
-
-    if (requiredNodeId) {
-      const entry = getSupervisorHeartbeatEntry(requiredNodeId);
-      const fresh = isSupervisorHeartbeatFresh(entry);
-      const healthy = Boolean(entry?.overallHealthy) && fresh;
-      return res.status(healthy ? 200 : 503).json({
-        healthy,
-        requiredNodeId,
-        entry: entry ? { ...entry, stale: !fresh } : null,
-        ttlMs: SUPERVISOR_HEARTBEAT_TTL_MS
-      });
-    }
-
-    const healthy = snapshot.anyHealthyFresh;
-    return res.status(healthy ? 200 : 503).json({
-      healthy,
-      snapshot
-    });
-  });
-
-  app.get('/api/registry/queue-managers', (req, res) => {
-    const managers = Array.from(queueManagerRegistry.values()).sort((a, b) => a.managerId.localeCompare(b.managerId));
-    res.json({ queueManagers: managers });
-  });
-
-  app.get('/api/registry/databases', (req, res) => {
-    res.json({ databases: getDatabaseRegistrySnapshot() });
-  });
-
-  app.get('/api/replication/manager-sync-status', (req, res) => {
-    const items = Array.from(queueManagerRegistry.values())
-      .map(manager => {
-        const pending = pendingManagerSync.get(manager.managerId) || null;
-        return {
-          managerId: manager.managerId,
-          status: manager.status,
-          syncState: manager.syncState || (MANAGER_ACTIVE_STATES.has(manager.status) ? 'ready' : 'unknown'),
-          syncSourceManagerId: manager.syncSourceManagerId || null,
-          lastSyncAt: manager.lastSyncAt || null,
-          lastSyncVersion: Number(manager.lastSyncVersion || 0),
-          lastSyncError: manager.lastSyncError || null,
-          pendingSync: !!pending,
-          pendingSince: pending ? new Date(pending.startedAt).toISOString() : null,
-          pendingSourceManagerId: pending?.sourceManagerId || null,
-        };
-      })
-      .sort((a, b) => a.managerId.localeCompare(b.managerId));
-
-    res.json({ managers: items });
-  });
-
-  app.get('/api/replication/manager-sync-status/:managerId', (req, res) => {
-    const manager = queueManagerRegistry.get(req.params.managerId);
-    if (!manager) {
-      return res.status(404).json({ error: 'Queue manager not found' });
-    }
-
-    const pending = pendingManagerSync.get(manager.managerId) || null;
-    res.json({
-      managerId: manager.managerId,
-      status: manager.status,
-      syncState: manager.syncState || (MANAGER_ACTIVE_STATES.has(manager.status) ? 'ready' : 'unknown'),
-      syncSourceManagerId: manager.syncSourceManagerId || null,
-      lastSyncAt: manager.lastSyncAt || null,
-      lastSyncVersion: Number(manager.lastSyncVersion || 0),
-      lastSyncError: manager.lastSyncError || null,
-      pendingSync: !!pending,
-      pendingSince: pending ? new Date(pending.startedAt).toISOString() : null,
-      pendingSourceManagerId: pending?.sourceManagerId || null,
-    });
-  });
-
-  app.get('/api/local-queue-managers', (req, res) => {
-    res.json({ launchers: getLocalQueueManagerLaunchers() });
-  });
-
-  app.get('/api/remote-agents', (req, res) => {
-    res.json({ agents: getRemoteAgentsPayload() });
-  });
-
-  app.post('/api/remote-agents/register', (req, res) => {
-    try {
-      const { agentId, baseUrl, token, allowedManagerPrefix } = req.body || {};
-      const id = String(agentId || '').trim();
-      const secret = String(token || '').trim();
-      if (!id || !baseUrl || !secret) {
-        return res.status(400).json({ error: 'agentId, baseUrl, and token are required' });
-      }
-
-      const entry = {
-        agentId: id,
-        baseUrl: normalizeRemoteAgentUrl(baseUrl),
-        token: secret,
-        allowedManagerPrefix: String(allowedManagerPrefix || 'qm-primary').trim() || 'qm-primary',
-        createdAt: remoteAgentRegistry.get(id)?.createdAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        lastPingAt: remoteAgentRegistry.get(id)?.lastPingAt || null,
-        lastPingError: remoteAgentRegistry.get(id)?.lastPingError || null,
-        lastKnownHealth: remoteAgentRegistry.get(id)?.lastKnownHealth || null,
-      };
-
-      remoteAgentRegistry.set(id, entry);
-      res.json({ status: 'registered', agent: { ...entry, token: undefined, hasToken: true } });
+      res.status(201).json({ status: 'scheduled', item });
     } catch (e) {
       res.status(400).json({ error: e.message });
     }
   });
 
-  app.post('/api/remote-agents/:agentId/ping', async (req, res) => {
-    try {
-      const agent = getRemoteAgentOrThrow(req.params.agentId);
-      const health = await callRemoteAgent(agent, '/agent/health', 'GET');
-      agent.lastPingAt = new Date().toISOString();
-      agent.lastPingError = null;
-      agent.lastKnownHealth = health;
-      remoteAgentRegistry.set(agent.agentId, agent);
-      res.json({ status: 'ok', agentId: agent.agentId, health });
-    } catch (e) {
-      const agent = remoteAgentRegistry.get(req.params.agentId);
-      if (agent) {
-        agent.lastPingAt = new Date().toISOString();
-        agent.lastPingError = e.message;
-        remoteAgentRegistry.set(agent.agentId, agent);
-      }
-      res.status(502).json({ error: e.message });
-    }
+  registerMediaGatewayRoutes(app, {
+    parseJson: express.json,
+    pathJoin: path.join,
+    getMapPlacementSummary,
+    normalizeMapPlacementEntry,
+    mapPlacementState,
+    persistMapPlacementRegistry,
+    buildMapKeyFromParts,
+    chooseMapPlacement,
+    pruneMapPlacementRuntimeState,
+    toFiniteNumber,
+    LOCAL_TTS_SCRIPT_PATH,
+    LOCAL_TTS_OUTPUT_DIR,
+    runLocalTtsScript,
+    clampInteger,
+    PIPER_BIN_PATH,
+    PIPER_MODEL_PATH,
+    runPiperSynthesis,
+    playWavOnHost,
+    forwardEsp32BluetoothTts
   });
 
-  app.get('/api/remote-queue-managers', (req, res) => {
-    res.json({ launchers: getRemoteLaunchersPayload() });
+  registerIdentityRoutes(app, {
+    normalizeUserIdentifier,
+    getUserById,
+    verifyPasswordRecord,
+    createAuthSession,
+    getSessionFromToken,
+    resolveActor,
+    AUTH_SESSION_TTL_MS,
+    getBearerTokenFromRequest,
+    clearSessionFromToken,
+    getProfilesById,
+    USER_ORGANIZATION_NAME,
+    requirePermission,
+    buildUserRoleContext,
+    userManagementStore,
+    groupProvider,
+    refreshGroupPrivilegeCache,
+    sanitizePermissions,
+    saveUserManagement,
+    sanitizeProfileIds,
+    sanitizeUserForApi,
+    monitorClassProvider,
+    isAcceptedUserIdentifier,
+    resolveDirectoryProfile,
+    isValidEmailIdentifier,
+    sanitizeGroupIds,
+    createPasswordRecord,
+    DEFAULT_ACTOR_USER_ID
+  });
+  registerUserProvisioningRoutes(app, {
+    requirePermission,
+    resolveActor,
+    normalizeUserIdentifier,
+    isValidEmailIdentifier,
+    sanitizeProfileIds,
+    userManagementStore,
+    USER_ORGANIZATION_NAME,
+    saveUserManagement,
+    sanitizeUserForApi,
+    dataRoot: path.join(__dirname, 'data')
   });
 
-  app.post('/api/remote-queue-managers/start', async (req, res) => {
-    try {
-      const {
-        agentId,
-        managerId,
-        nodeId,
-        port,
-        advertiseIp,
-        aggregatorUrl,
-      } = req.body || {};
-
-      if (!agentId || !managerId || !port || !advertiseIp) {
-        return res.status(400).json({ error: 'agentId, managerId, port, and advertiseIp are required' });
-      }
-
-      const agent = getRemoteAgentOrThrow(agentId);
-      if (!String(managerId).startsWith(agent.allowedManagerPrefix)) {
-        return res.status(400).json({
-          error: `managerId must start with ${agent.allowedManagerPrefix} for agent ${agent.agentId}`
-        });
-      }
-
-      const sourceManager = pickSyncSourceManager(managerId);
-      if (sourceManager) {
-        pendingManagerSync.set(managerId, {
-          sourceManagerId: sourceManager.managerId,
-          startedAt: Date.now(),
-        });
-      }
-
-      upsertRemoteQueueManager({
-        managerId,
-        name: managerId,
-        nodeId: nodeId || agent.agentId,
-        ip: advertiseIp,
-        port: Number(port),
-        status: sourceManager ? 'syncing' : 'up',
-        queues: []
-      });
-
-      if (sourceManager) {
-        const pendingManager = queueManagerRegistry.get(managerId);
-        if (pendingManager) {
-          pendingManager.lastHeartbeat = 0;
-          queueManagerRegistry.set(managerId, pendingManager);
-        }
-      }
-
-      const remoteLaunch = await callRemoteAgent(agent, '/agent/qm/start', 'POST', {
-        managerId,
-        nodeId: nodeId || agent.agentId,
-        port: Number(port),
-        advertiseIp,
-        aggregatorUrl: aggregatorUrl || `http://127.0.0.1:${HTTP_PORT}`,
-      });
-
-      remoteQueueManagerProcesses.set(managerId, {
-        managerId,
-        agentId: agent.agentId,
-        nodeId: nodeId || agent.agentId,
-        port: Number(port),
-        advertiseIp,
-        aggregatorUrl: aggregatorUrl || `http://127.0.0.1:${HTTP_PORT}`,
-        status: 'running',
-        startedAt: new Date().toISOString(),
-        stoppedAt: null,
-        lastError: null,
-        remote: remoteLaunch || null,
-      });
-
-      if (!sourceManager) {
-        const manager = queueManagerRegistry.get(managerId);
-        if (manager) {
-          manager.status = 'up';
-          manager.syncState = 'ready';
-          manager.lastSyncAt = new Date().toISOString();
-          manager.lastSyncError = null;
-          queueManagerRegistry.set(managerId, manager);
-        }
-        return res.json({
-          status: 'started',
-          remote: remoteLaunch,
-          sync: { required: false }
-        });
-      }
-
-      waitForManagerRegistration(managerId)
-        .then(() => syncManagerBeforeActivation(managerId, sourceManager.managerId))
-        .catch((error) => {
-          const manager = queueManagerRegistry.get(managerId);
-          if (manager) {
-            manager.status = 'sync-failed';
-            manager.syncState = 'failed';
-            manager.lastSyncError = error.message;
-            queueManagerRegistry.set(managerId, manager);
-          }
-          const launcher = remoteQueueManagerProcesses.get(managerId);
-          if (launcher) {
-            launcher.status = 'error';
-            launcher.lastError = error.message;
-            remoteQueueManagerProcesses.set(managerId, launcher);
-          }
-          pendingManagerSync.delete(managerId);
-          console.error(`[SYNC] Failed initial remote sync for ${managerId}: ${error.message}`);
-        });
-
-      res.json({
-        status: 'started',
-        remote: remoteLaunch,
-        sync: {
-          required: true,
-          state: 'syncing',
-          sourceManagerId: sourceManager.managerId,
-        }
-      });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
+  registerDeveloperGovernanceRoutes(app, {
+    requirePermission,
+    enumerateApiCatalog,
+    processGovernanceStore,
+    getProcessPolicyById,
+    saveProcessGovernance,
+    pendingApprovalRequests,
+    appendAuditEvent
   });
 
-  app.post('/api/remote-queue-managers/:managerId/stop', async (req, res) => {
-    try {
-      const managerId = req.params.managerId;
-      const launcher = remoteQueueManagerProcesses.get(managerId);
-      if (!launcher) {
-        return res.status(404).json({ error: 'Remote queue manager launcher not found' });
-      }
-
-      const bodyAgentId = String(req.body?.agentId || '').trim();
-      const targetAgentId = bodyAgentId || launcher.agentId;
-      const agent = getRemoteAgentOrThrow(targetAgentId);
-      const remoteStop = await callRemoteAgent(agent, `/agent/qm/${encodeURIComponent(managerId)}/stop`, 'POST');
-
-      launcher.status = 'stopping';
-      launcher.stoppedAt = new Date().toISOString();
-      launcher.remote = remoteStop || launcher.remote;
-      remoteQueueManagerProcesses.set(managerId, launcher);
-
-      const manager = queueManagerRegistry.get(managerId);
-      if (manager) {
-        manager.status = 'down';
-        manager.updatedAt = new Date().toISOString();
-        queueManagerRegistry.set(managerId, manager);
-      }
-
-      pendingManagerSync.delete(managerId);
-      res.json({ status: 'stopping', managerId, remote: remoteStop || null });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.get('/api/remote-queue-managers/:managerId/status', async (req, res) => {
-    try {
-      const managerId = req.params.managerId;
-      const launcher = remoteQueueManagerProcesses.get(managerId);
-      if (!launcher) {
-        return res.status(404).json({ error: 'Remote queue manager launcher not found' });
-      }
-      const agent = getRemoteAgentOrThrow(launcher.agentId);
-      const remoteStatus = await callRemoteAgent(agent, `/agent/qm/${encodeURIComponent(managerId)}/status`, 'GET');
-      res.json({ managerId, launcher, remoteStatus });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/local-queue-managers/start', (req, res) => {
-    try {
-      const defaultIp = req.ip?.replace('::ffff:', '') || '127.0.0.1';
-      const {
-        managerId,
-        nodeId,
-        port,
-        advertiseIp,
-        aggregatorUrl,
-      } = req.body || {};
-
-      if (!managerId || !port) {
-        return res.status(400).json({ error: 'managerId and port are required' });
-      }
-
-      const sourceManager = pickSyncSourceManager(managerId);
-      if (sourceManager) {
-        pendingManagerSync.set(managerId, {
-          sourceManagerId: sourceManager.managerId,
-          startedAt: Date.now(),
-        });
-      }
-
-      upsertRemoteQueueManager({
-        managerId,
-        name: managerId,
-        nodeId: nodeId || os.hostname(),
-        ip: advertiseIp || defaultIp,
-        port: Number(port),
-        status: sourceManager ? 'syncing' : 'up',
-        queues: []
-      });
-
-      // Force waitForManagerRegistration to wait for a real heartbeat from the spawned process.
-      if (sourceManager) {
-        const pendingManager = queueManagerRegistry.get(managerId);
-        if (pendingManager) {
-          pendingManager.lastHeartbeat = 0;
-          queueManagerRegistry.set(managerId, pendingManager);
-        }
-      }
-
-      const entry = launchLocalQueueManager({
-        managerId,
-        nodeId: nodeId || os.hostname(),
-        port: Number(port),
-        advertiseIp: advertiseIp || defaultIp,
-        aggregatorUrl: aggregatorUrl || `http://127.0.0.1:${HTTP_PORT}`,
-      });
-
-      if (!sourceManager) {
-        const manager = queueManagerRegistry.get(managerId);
-        if (manager) {
-          manager.status = 'up';
-          manager.syncState = 'ready';
-          manager.lastSyncAt = new Date().toISOString();
-          manager.lastSyncError = null;
-          queueManagerRegistry.set(managerId, manager);
-        }
-        return res.json({
-          status: 'started',
-          launcher: getLocalQueueManagerLaunchers().find(x => x.managerId === entry.managerId),
-          sync: { required: false }
-        });
-      }
-
-      // Run initial sync in background. Manager remains non-routable while status is 'syncing'.
-      waitForManagerRegistration(managerId)
-        .then(() => syncManagerBeforeActivation(managerId, sourceManager.managerId))
-        .catch((error) => {
-          const manager = queueManagerRegistry.get(managerId);
-          if (manager) {
-            manager.status = 'sync-failed';
-            manager.syncState = 'failed';
-            manager.lastSyncError = error.message;
-            queueManagerRegistry.set(managerId, manager);
-          }
-          pendingManagerSync.delete(managerId);
-          console.error(`[SYNC] Failed initial sync for ${managerId}: ${error.message}`);
-        });
-
-      res.json({
-        status: 'started',
-        launcher: getLocalQueueManagerLaunchers().find(x => x.managerId === entry.managerId),
-        sync: {
-          required: true,
-          state: 'syncing',
-          sourceManagerId: sourceManager.managerId,
-        }
-      });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/local-queue-managers/:managerId/stop', (req, res) => {
-    const entry = stopLocalQueueManager(req.params.managerId);
-    if (!entry) {
-      return res.status(404).json({ error: 'Queue manager launcher not found' });
-    }
-    res.json({ status: 'stopping', managerId: req.params.managerId });
-  });
-
-  app.post('/api/registry/nodes/:nodeId/quiesce', (req, res) => {
-    const changed = setNodeLifecycleState(req.params.nodeId, 'quiesced');
-    if (!changed) return res.status(404).json({ error: 'Node not found' });
-    res.json({ status: 'ok', nodeId: req.params.nodeId, lifecycle: 'quiesced' });
-  });
-
-  app.post('/api/registry/nodes/:nodeId/drain', (req, res) => {
-    const changed = setNodeLifecycleState(req.params.nodeId, 'draining');
-    if (!changed) return res.status(404).json({ error: 'Node not found' });
-    const drain = getNodeDrainStatus(req.params.nodeId);
-    res.json({ status: 'ok', nodeId: req.params.nodeId, lifecycle: 'draining', drain });
-  });
-
-  app.get('/api/registry/nodes/:nodeId/drain-status', (req, res) => {
-    const drain = getNodeDrainStatus(req.params.nodeId);
-    if (drain.managerCount === 0) return res.status(404).json({ error: 'Node not found' });
-    res.json(drain);
-  });
-
-  app.post('/api/registry/nodes/:nodeId/maintenance', (req, res) => {
-    const force = req.query.force === 'true';
-    const drain = getNodeDrainStatus(req.params.nodeId);
-    if (drain.managerCount === 0) return res.status(404).json({ error: 'Node not found' });
-    if (!drain.drainReady && !force) {
-      return res.status(409).json({
-        error: 'Node not drained',
-        message: 'Use /drain-status and wait for pendingMessagesKnown=0, or pass ?force=true',
-        drain
-      });
-    }
-    const changed = setNodeLifecycleState(req.params.nodeId, 'maintenance');
-    if (!changed) return res.status(404).json({ error: 'Node not found' });
-    res.json({ status: 'ok', nodeId: req.params.nodeId, lifecycle: 'maintenance' });
-  });
-
-  app.post('/api/registry/nodes/:nodeId/return-service', (req, res) => {
-    const changed = setNodeLifecycleState(req.params.nodeId, 'up');
-    if (!changed) return res.status(404).json({ error: 'Node not found' });
-    res.json({ status: 'ok', nodeId: req.params.nodeId, lifecycle: 'up' });
-  });
-
-  app.post('/api/registry/queue-managers/:managerId/quiesce', (req, res) => {
-    const manager = setQueueManagerStatus(req.params.managerId, 'quiesced');
-    if (!manager) return res.status(404).json({ error: 'Queue manager not found' });
-    res.json({ status: 'ok', manager });
-  });
-
-  app.post('/api/registry/queue-managers/:managerId/maintenance', (req, res) => {
-    const manager = setQueueManagerStatus(req.params.managerId, 'maintenance');
-    if (!manager) return res.status(404).json({ error: 'Queue manager not found' });
-    res.json({ status: 'ok', manager });
-  });
-
-  app.post('/api/registry/queue-managers/:managerId/return-service', (req, res) => {
-    const manager = setQueueManagerStatus(req.params.managerId, 'up');
-    if (!manager) return res.status(404).json({ error: 'Queue manager not found' });
-    res.json({ status: 'ok', manager });
-  });
-
-  app.get('/api/registry/queues', (req, res) => {
-    const queues = Array.from(queueRoutes.values()).map(route => {
-      const manager = queueManagerRegistry.get(route.managerId);
-      let queueLength = null;
-      if (manager?.local) {
-        queueLength = queueManagers[manager.localIndex].getQueueLength(route.queueName);
-      }
-      return {
-        queueName: route.queueName,
-        managerId: route.managerId,
-        queueLength,
-        assignedAt: route.assignedAt
-      };
-    });
-    res.json({ queues });
+  registerOrchestrationRegistryRoutes(app, {
+    HTTP_PORT,
+    SUPERVISOR_HEARTBEAT_TTL_MS,
+    queueManagerRegistry,
+    pendingManagerSync,
+    remoteAgentRegistry,
+    remoteQueueManagerProcesses,
+    queueRoutes,
+    queueManagers,
+    MANAGER_ACTIVE_STATES,
+    upsertRemoteQueueManager,
+    upsertServiceInstance,
+    normalizeSupervisorHeartbeatPayload,
+    isSupervisorHeartbeatFresh,
+    getSupervisorHeartbeatSnapshot,
+    getSupervisorHeartbeatEntry,
+    getDatabaseRegistrySnapshot,
+    getLocalQueueManagerLaunchers,
+    getRemoteAgentsPayload,
+    normalizeRemoteAgentUrl,
+    getRemoteAgentOrThrow,
+    callRemoteAgent,
+    getRemoteLaunchersPayload,
+    pickSyncSourceManager,
+    waitForManagerRegistration,
+    syncManagerBeforeActivation,
+    launchLocalQueueManager,
+    stopLocalQueueManager,
+    setNodeLifecycleState,
+    getNodeDrainStatus,
+    setQueueManagerStatus,
+    supervisorHeartbeatRegistry
   });
 
   registerRoutesFromManifest({
@@ -10628,244 +9010,158 @@ function registerRoutes(app) {
       registerRuntimeRegistryRoutes,
       registerRouterLifecycleControlRoutes
     },
-    dependencyFactories: {
-      lifecycleInquiry: () => ({
-        requirePermission,
-        readTransactionLifecycleCompiled,
-        getFsmEntityStateFromSql,
-        getFsmTransactionSummaryFromSql,
-        getLifecycleTransitionOptions,
-        formatErrorDetails,
-        extractEntityIdFromInquiry,
-        resolveActor,
-        isSettlementSummaryInquiry,
-        extractEntityRefsFromInquiry,
-        buildFsmClarificationOptions,
-        logNlpInteractionToSql,
-        DEFAULT_ACTOR_USER_ID,
-        updateNlpUserProfileFromFeedback
-      }),
-      lifecycleNlp: () => ({
-        requirePermission,
-        getFsmTransactionSummaryFromSql,
-        getFsmEntityStateFromSql,
-        formatErrorDetails,
-        extractEntityIdFromInquiry,
-        resolveActor,
-        isSettlementSummaryInquiry,
-        extractEntityRefsFromInquiry,
-        buildFsmClarificationOptions,
-        logNlpInteractionToSql,
-        readTransactionLifecycleCompiled,
-        getLifecycleTransitionOptions,
-        DEFAULT_ACTOR_USER_ID,
-        updateNlpUserProfileFromFeedback
-      }),
-      lifecycleWorkerGateway: () => ({
-        requirePermission,
-        getLifecycleWorkersPayload,
-        getQueueBridgeWorkersPayload,
-        ensureWorkerStartsEnabled,
-        startLifecycleWorker,
-        getLifecycleWorkerPayloadById,
-        stopLifecycleWorker,
-        startQueueBridgeWorker,
-        getQueueBridgeWorkerPayloadById,
-        stopQueueBridgeWorker,
-        startDefaultQueueDrivenLifecycleWorkers,
-        applyHardReset,
-        workerRuntimeControl,
-        stopAllQueueDrivenWorkers,
-        getSubflowBridgeWorkersPayload,
-        startDefaultSubflowBridgeWorkers,
-        stopSubflowBridgeWorkers,
-        getGatewayStatusPayload,
-        buildGatewayStreamPayload,
-        startRouterWorker,
-        stopRouterWorker
-      }),
-      queueBrokerOps: () => ({
-        queueRoutes,
-        queueManagerRegistry,
-        queueManagers,
-        resolveServiceInstance,
-        getBrokerStateLabel,
-        getActiveBrokerInstances,
-        getBrokerInstancesPayload,
-        getAvailableQueueManagers,
-        setBrokerInstanceState,
-        brokerInstances,
-        getOrCreateBrokerInstance,
-        startSecondaryBroker,
-        ensureRoute,
-        enqueueViaRoute,
-        messageRouter,
-        globalState: globalThis,
-        getActiveQueueManagers,
-        ensureQueueTriggeredFlowForQueue,
-        queueValidationErrors,
-        requirePermission,
-        dlqEvents,
-        summarizeDlqEvents,
-        dequeueViaRoute
-      }),
-      compliance: () => ({
-        requirePermission,
-        resolveActor,
-        formatErrorDetails,
-        sanctionsComplianceService
-      }),
-      governanceRolePolicy: () => ({
-        requirePermission,
-        getToxicRoleCombinationPolicy,
-        getIamIntegrationPaths,
-        getUserById,
-        resolveEffectiveAccessForUser
-      }),
-      observability: () => ({
-        requirePermission,
-        metricsCollector,
-        evaluateLatencyPolicies,
-        getWorkerConfig: () => workerConfig,
-        getStep3LatencySummary,
-        getQueueEnqueueLatencySummary,
-        getEdgeOffloadMetricsSummary,
-        getTxStatePersistenceSummary,
-        getNodeRuntimeDiagnosticsSnapshot
-      }),
-      platform: () => ({
-        requirePermission,
-        enumerateApiCatalog,
-        resolvePermissionForApiRequest,
-        routeRoleManifest: ROUTE_ROLE_MANIFEST,
-        listServiceProviders,
-        getServiceProvider,
-        getServiceProviderAction,
-        getServiceProviderCategories
-      }),
-      replication: () => ({
-        queueManagerRegistry,
-        queueManagers
-      }),
-      queueConfig: () => ({
-        requirePermission,
-        queueManagerInstances,
-        queueManagerRegistry,
-        inferQueueDataTypeIds,
-        compileQueueDslSpec,
-        diffQueueConfigs,
-        resolveLibrarianOrigin,
-        IS_PRODUCTION_ENV,
-        ALLOW_TEMP_QUEUES_IN_PRODUCTION
-      }),
-      queueTransfer: () => ({
-        requirePermission,
-        queueManagerInstances
-      }),
-      availabilityPresence: () => ({
-        machineWorkloadState,
-        getMachineAvailabilityPayload,
-        setMachineAvailable,
-        drainMachineAndSetUnavailable,
-        machineDrainDefaultTimeoutMs: MACHINE_DRAIN_DEFAULT_TIMEOUT_MS,
-        getBrowserPresence,
-        normalizePresenceIp,
-        upsertBrowserPresenceNode,
-        setBrowserPresenceUnavailable
-      }),
-      topologyRuntime: () => ({
-        discoveredNodes,
-        getBrokerNodeDetails,
-        getSystemPerformanceSnapshot,
-        services: [BROKER_SERVICE, ROUTER_SERVICE, QUEUE_SERVICE, FILE_SERVER_SERVICE],
-        serviceInstanceRegistry,
-        upsertServiceInstance,
-        resolveServiceInstance,
-        ffsDeploymentRegistry,
-        setNodeLifecycleState
-      }),
-      allocator: () => ({
-        serviceInstanceRegistry
-      }),
-      librarianProxy: () => ({
-        express,
-        resolveLibrarianOrigin
-      }),
-      mapperProxy: () => ({
-        resolveMapperOrigin
-      }),
-      runtimeRegistry: () => ({
-        requirePermission,
-        serviceInstanceRegistry,
-        getUiCardOverrides: () => uiCardOverrides,
-        setUiCardOverrides: (payload) => {
-          uiCardOverrides = saveCardOverridesToDisk(payload || {});
-          return uiCardOverrides;
-        },
-        hasPermission,
-        queueManagerRegistry,
-        setQueueManagerStatus,
-        setNodeLifecycleState,
-        getNodeDrainStatus,
-        queueRoutes,
-        queueManagers,
-        setBrokerInstanceState,
-        brokerInstances,
-        getBrokerStateLabel,
-        getBrokerInstancesPayload,
-        globalState: globalThis,
-        GATEWAY_IDS,
-        executeGatewayAction,
-        getGatewayStatusPayload,
-        brokerRuntimeConfig,
-        gatewayRuntimeConfig,
-        createDefaultGatewayRuntimeConfig,
-        rebuildBrokerInstances,
-        gatewayModeState,
-        gatewayQuiesceState,
-        normalizeGatewayRuntimeConfig
-      }),
-      routerLifecycleControl: () => ({
-        messageRouter,
-        parseBooleanLike,
-        ingestWithEdgeFallback,
-        getRouterWorkersPayload,
-        readTransactionLifecycleCompiled,
-        buildTransactionLifecycleDashboardPayload,
-        requirePermission,
-        enableLifecyclePathTesters: ENABLE_LIFECYCLE_PATH_TESTERS,
-        deriveLifecycleHappyPath,
-        deriveLifecycleSadPath,
-        runLifecycleHappyPath,
-        runLifecycleSadPath,
-        recordLifecycleTesterRun,
-        getLifecycleHeartbeatPayload,
-        enqueueLifecycleHeartbeat,
-        lifecycleHeartbeat,
-        lifecycleHarnessStartTransaction,
-        lifecycleHarnessAdvance,
-        lifecycleActionPolicy,
-        getLatencyPolicyThresholds,
-        workerConfigRef: {
-          get current() { return workerConfig; },
-          set current(next) { workerConfig = next; }
-        },
-        validateLatencyPolicyTargetsUpdate,
-        applyLatencyPolicyTargetsUpdate,
-        persistWorkerConfig,
-        workerConfigPath: WORKER_CONFIG_PATH,
-        getTxStatePersistenceSummary,
-        shipQueuedTransactionStateLogs,
-        txStateLogShippingBatchSize: TX_STATE_LOG_SHIPPING_BATCH_SIZE,
-        getWorkerDefaults,
-        validateWorkerConfigUpdate,
-        applyWorkerConfigUpdate,
-        evaluateLatencyPolicies,
-        metricsCollector,
-        routerWorkers,
-        serviceInstanceRegistry
-      })
-    }
+    dependencyFactories: createRouteManifestDependencyFactories({
+      requirePermission,
+      readTransactionLifecycleCompiled,
+      getFsmEntityStateFromSql,
+      getTransactionTrace,
+      getFsmTransactionSummaryFromSql,
+      getLifecycleTransitionOptions,
+      formatErrorDetails,
+      extractEntityIdFromInquiry,
+      resolveActor,
+      isSettlementSummaryInquiry,
+      extractEntityRefsFromInquiry,
+      buildFsmClarificationOptions,
+      logNlpInteractionToSql,
+      DEFAULT_ACTOR_USER_ID,
+      updateNlpUserProfileFromFeedback,
+      getLifecycleWorkersPayload,
+      getQueueBridgeWorkersPayload,
+      ensureWorkerStartsEnabled,
+      startLifecycleWorker,
+      getLifecycleWorkerPayloadById,
+      stopLifecycleWorker,
+      startQueueBridgeWorker,
+      getQueueBridgeWorkerPayloadById,
+      stopQueueBridgeWorker,
+      startDefaultQueueDrivenLifecycleWorkers,
+      applyHardReset,
+      workerRuntimeControl,
+      stopAllQueueDrivenWorkers,
+      getSubflowBridgeWorkersPayload,
+      startDefaultSubflowBridgeWorkers,
+      stopSubflowBridgeWorkers,
+      getGatewayStatusPayload,
+      buildGatewayStreamPayload,
+      startRouterWorker,
+      stopRouterWorker,
+      queueRoutes,
+      queueManagerRegistry,
+      queueManagers,
+      resolveServiceInstance,
+      getBrokerStateLabel,
+      getActiveBrokerInstances,
+      getBrokerInstancesPayload,
+      getAvailableQueueManagers,
+      setBrokerInstanceState,
+      brokerInstances,
+      getOrCreateBrokerInstance,
+      startSecondaryBroker,
+      ensureRoute,
+      enqueueViaRoute,
+      messageRouter,
+      getActiveQueueManagers,
+      ensureQueueTriggeredFlowForQueue,
+      queueValidationErrors,
+      dlqEvents,
+      summarizeDlqEvents,
+      dequeueViaRoute,
+      sanctionsComplianceService,
+      getToxicRoleCombinationPolicy,
+      getIamIntegrationPaths,
+      getUserById,
+      resolveEffectiveAccessForUser,
+      metricsCollector,
+      evaluateLatencyPolicies,
+      getWorkerConfig: () => workerConfig,
+      getStep3LatencySummary,
+      getQueueEnqueueLatencySummary,
+      getEdgeOffloadMetricsSummary,
+      getTxStatePersistenceSummary,
+      getNodeRuntimeDiagnosticsSnapshot,
+      enumerateApiCatalog,
+      resolvePermissionForApiRequest,
+      routeRoleManifest: ROUTE_ROLE_MANIFEST,
+      listServiceProviders,
+      getServiceProvider,
+      getServiceProviderAction,
+      getServiceProviderCategories,
+      queueManagerInstances,
+      express,
+      inferQueueDataTypeIds,
+      compileQueueDslSpec,
+      diffQueueConfigs,
+      resolveLibrarianOrigin,
+      IS_PRODUCTION_ENV,
+      ALLOW_TEMP_QUEUES_IN_PRODUCTION,
+      machineWorkloadState,
+      getMachineAvailabilityPayload,
+      setMachineAvailable,
+      drainMachineAndSetUnavailable,
+      machineDrainDefaultTimeoutMs: MACHINE_DRAIN_DEFAULT_TIMEOUT_MS,
+      getBrowserPresence,
+      normalizePresenceIp,
+      upsertBrowserPresenceNode,
+      setBrowserPresenceUnavailable,
+      discoveredNodes,
+      getBrokerNodeDetails,
+      getSystemPerformanceSnapshot,
+      services: [BROKER_SERVICE, ROUTER_SERVICE, QUEUE_SERVICE, FILE_SERVER_SERVICE],
+      serviceInstanceRegistry,
+      upsertServiceInstance,
+      ffsDeploymentRegistry,
+      setNodeLifecycleState,
+      getUiCardOverrides: () => uiCardOverrides,
+      setUiCardOverrides: (payload) => {
+        uiCardOverrides = saveCardOverridesToDisk(payload || {});
+        return uiCardOverrides;
+      },
+      hasPermission,
+      setQueueManagerStatus,
+      getNodeDrainStatus,
+      GATEWAY_IDS,
+      executeGatewayAction,
+      brokerRuntimeConfig,
+      gatewayRuntimeConfig,
+      createDefaultGatewayRuntimeConfig,
+      rebuildBrokerInstances,
+      gatewayModeState,
+      gatewayQuiesceState,
+      normalizeGatewayRuntimeConfig,
+      parseBooleanLike,
+      ingestWithEdgeFallback,
+      getRouterWorkersPayload,
+      buildTransactionLifecycleDashboardPayload,
+      enableLifecyclePathTesters: ENABLE_LIFECYCLE_PATH_TESTERS,
+      deriveLifecycleHappyPath,
+      deriveLifecycleSadPath,
+      runLifecycleHappyPath,
+      runLifecycleSadPath,
+      recordLifecycleTesterRun,
+      getLifecycleHeartbeatPayload,
+      enqueueLifecycleHeartbeat,
+      lifecycleHeartbeat,
+      lifecycleHarnessStartTransaction,
+      lifecycleHarnessAdvance,
+      lifecycleActionPolicy,
+      getLatencyPolicyThresholds,
+      workerConfigRef: {
+        get current() { return workerConfig; },
+        set current(next) { workerConfig = next; }
+      },
+      validateLatencyPolicyTargetsUpdate,
+      applyLatencyPolicyTargetsUpdate,
+      persistWorkerConfig,
+      workerConfigPath: WORKER_CONFIG_PATH,
+      shipQueuedTransactionStateLogs,
+      txStateLogShippingBatchSize: TX_STATE_LOG_SHIPPING_BATCH_SIZE,
+      getWorkerDefaults,
+      validateWorkerConfigUpdate,
+      applyWorkerConfigUpdate,
+      routerWorkers,
+      resolveMapperOrigin
+    })
   });
 
   debugLog('[DEBUG] Registering routes...');
@@ -10907,7 +9203,9 @@ function registerRoutes(app) {
   registerLocalServiceHeartbeats();
   setInterval(registerLocalServiceHeartbeats, 10000);
   setInterval(updateVirtualNodes, 3000);
+  startAuthoritativeTimeSyncMonitor();
   startLifecycleHeartbeatMonitor();
+  startScheduledDispatchWatcher();
   setMachineAvailable();
   debugLog('[DEBUG] All routes registered');
   // Catch-all error handler for uncaught errors in Express (MUST BE LAST)
@@ -10926,230 +9224,54 @@ function registerRoutes(app) {
 }
 
 try {
-  debugLog('[DEBUG] Starting backend server...');
-  console.log('[STARTUP] Binding HTTP listener...');
-  app.listen(HTTP_PORT, '0.0.0.0', () => {
-    console.log(`Aggregator backend running on http://0.0.0.0:${HTTP_PORT} (LAN accessible)`);
+  await startBackendRuntime({
+    debugLog,
+    app,
+    HTTP_PORT,
+    queueManagerInstances,
+    registerMapperRoutes,
+    registerRoutes,
+    createNodeRegistry,
+    RUNTIME_DATA_ROOT,
+    pathJoin: path.join,
+    createNodeRegistryRoutes,
+    createPascalCompiler,
+    pascalCompilerRoutes,
+    express,
+    publicRoot: path.join(__dirname, 'public'),
+    openApiPath: path.join(__dirname, 'openapi-powerapp-connector.json'),
+    pascalGrammarPath: path.join(__dirname, '../dsl/languages/PulseSys'),
+    loadWorkerConfig,
+    validateRouterRuleCoverageForWorkerQueues,
+    ensurePriorityInputQueuesConfigured,
+    metricsCollector,
+    SQL_INSTANCE_NAME,
+    SQL_INSTANCE_MODE,
+    SQL_SERVER_HOST,
+    SQL_DATABASE,
+    TX_STATE_REQUIRE_REALTIME_DB,
+    getTransactionStateMssqlPool,
+    FSM_MSSQL_CURRENT_TABLE,
+    FSM_MSSQL_HISTORY_TABLE,
+    formatErrorDetails,
+    TX_STATE_EMERGENCY_LOG_SHIPPING,
+    TX_STATE_LOG_SHIPPING_INTERVAL_MS,
+    shipQueuedTransactionStateLogs,
+    TX_STATE_LOG_SHIPPING_BATCH_SIZE,
+    txStatePersistenceStats,
+    BACKEND_WORKER_AUTOSTART,
+    startDefaultRouterWorkers,
+    startDefaultQueueDrivenLifecycleWorkers,
+    startDefaultSubflowBridgeWorkers,
+    startSwiftGateway,
+    startBocGateway,
+    gatewayModeState,
+    startFedGateway,
+    BACKEND_AUX_SERVICES_AUTOSTART,
+    spawn,
+    librarianScriptPath: fileURLToPath(new URL('./data-librarian.mjs', import.meta.url)),
+    mapperScriptPath: fileURLToPath(new URL('./data-mapper.mjs', import.meta.url))
   });
-
-  console.log('[STARTUP] Registering queue manager sync callbacks...');
-  
-  // Set up peer sync callbacks for each queue manager
-  // This enables distributed config synchronization
-  for (const [managerId, qm] of queueManagerInstances) {
-    qm.onConfigChange(async (operation) => {
-      // When this queue manager's config changes, notify all other instances
-      // In a distributed setup, this would HTTP POST to all peer instances
-      // For now, log it so the sync mechanism can pick it up
-      console.log(`[SYNC] Config change on ${managerId}: ${operation.type} - ${operation.queueName}`);
-      
-      // In production, you'd iterate through all registered instances of this queue manager
-      // and POST to their /api/queues/:managerId/apply-config-change endpoint
-    });
-  }
-  
-  console.log('[STARTUP] Registering API routes...');
-  registerMapperRoutes(app);
-  registerRoutes(app);
-  
-  // Initialize ESP32 Node Registry
-  console.log('[STARTUP] Initializing ESP32 Node Registry...');
-  const esp32NodeRegistry = createNodeRegistry({
-    persistPath: path.join(RUNTIME_DATA_ROOT, 'esp32-nodes.json'),
-    autoSave: true,
-    nodeTimeout: 600000 // 10 minutes
-  });
-  await esp32NodeRegistry.initialize();
-  console.log(`[ESP32] Node Registry initialized with ${esp32NodeRegistry.getAllNodes().length} nodes`);
-  
-  // Register ESP32 Node Registry routes
-  const esp32Routes = createNodeRegistryRoutes(esp32NodeRegistry);
-  app.use('/api', esp32Routes);
-  console.log('[ESP32] Node Registry API routes registered at /api/nodes, /api/register');
-  
-  // Start periodic cleanup of stale nodes (every 5 minutes)
-  setInterval(async () => {
-    const staleNodes = await esp32NodeRegistry.cleanupStaleNodes();
-    if (staleNodes.length > 0) {
-      console.log(`[ESP32] Cleaned up ${staleNodes.length} stale nodes`);
-    }
-  }, 300000);
-  
-  // Initialize Pascal Compiler Service
-  console.log('[STARTUP] Initializing Pascal Compiler Service...');
-  const pascalCompiler = createPascalCompiler({
-    grammarPath: path.join(__dirname, '../dsl/languages/PulseSys'),
-    timeout: 30000
-  });
-  app.use('/api/pascal', pascalCompilerRoutes);
-  console.log('[PASCAL] Compiler API routes registered at /api/pascal/*');
-  
-  // Serve Pascal Editor HTML page
-  app.get('/editor', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'pascal-editor.html'));
-  });
-  
-  // Serve static files from public directory
-  app.use('/public', express.static(path.join(__dirname, 'public')));
-  console.log('[PASCAL] Editor available at /editor');
-  
-  // Serve OpenAPI specification for Power Apps
-  app.get('/api/openapi.json', (req, res) => {
-    res.sendFile(path.join(__dirname, 'openapi-powerapp-connector.json'));
-  });
-  console.log('[POWERAPP] OpenAPI specification available at /api/openapi.json');
-  
-  // Load worker configuration on startup
-  console.log('[STARTUP] Loading worker configuration...');
-  loadWorkerConfig();
-
-  // Fail fast when worker queues are not covered by enabled router input rules.
-  console.log('[STARTUP] Validating router coverage...');
-  const routerCoverage = validateRouterRuleCoverageForWorkerQueues();
-  if (routerCoverage.ok) {
-    console.log(`[PRECHECK] Router input rule coverage OK (strict=${routerCoverage.strictMode})`);
-  }
-
-  console.log('[STARTUP] Ensuring priority queue bindings...');
-  const ensuredPriorityQueues = ensurePriorityInputQueuesConfigured();
-  if (ensuredPriorityQueues.length > 0) {
-    console.log(`[PRECHECK] Ensured ${ensuredPriorityQueues.length} priority queue binding(s) across local queue managers.`);
-  }
-  
-  // Start metrics collection
-  console.log('[STARTUP] Starting metrics collection...');
-  metricsCollector.start();
-
-  // Warm up FSM SQL persistence. In production mode, DB is mandatory.
-  const fsmSqlSource = process.env.FSM_MSSQL_CONNECTION_STRING
-    ? 'FSM_MSSQL_CONNECTION_STRING'
-    : process.env.GROUP_MSSQL_CONNECTION_STRING
-      ? 'GROUP_MSSQL_CONNECTION_STRING'
-      : 'derived-default';
-  const resolvedSqlTarget = SQL_INSTANCE_NAME ? `${SQL_SERVER_HOST}\\${SQL_INSTANCE_NAME}` : SQL_SERVER_HOST;
-  console.log(`[FSM-SQL] Mode=${SQL_INSTANCE_MODE || 'sqlexpress'} source=${fsmSqlSource} target=${resolvedSqlTarget} database=${SQL_DATABASE}`);
-  if (TX_STATE_REQUIRE_REALTIME_DB) {
-    await getTransactionStateMssqlPool();
-    console.log(`[FSM-SQL] Connected (required). Current table=${FSM_MSSQL_CURRENT_TABLE} history table=${FSM_MSSQL_HISTORY_TABLE}`);
-  } else {
-    getTransactionStateMssqlPool()
-      .then(() => console.log(`[FSM-SQL] Connected. Current table=${FSM_MSSQL_CURRENT_TABLE} history table=${FSM_MSSQL_HISTORY_TABLE}`))
-      .catch((e) => console.warn(`[FSM-SQL] Disabled: ${formatErrorDetails(e)}`));
-  }
-
-  if (TX_STATE_EMERGENCY_LOG_SHIPPING && TX_STATE_LOG_SHIPPING_INTERVAL_MS > 0) {
-    const shipTimer = setInterval(() => {
-      shipQueuedTransactionStateLogs({ maxEntries: TX_STATE_LOG_SHIPPING_BATCH_SIZE })
-        .catch((e) => {
-          txStatePersistenceStats.shippingFailures += 1;
-          txStatePersistenceStats.lastShipFailureAt = new Date().toISOString();
-          txStatePersistenceStats.lastShipError = formatErrorDetails(e);
-          console.warn(`[TX-STATE] Log shipping cycle failed: ${formatErrorDetails(e)}`);
-        });
-    }, TX_STATE_LOG_SHIPPING_INTERVAL_MS);
-    if (typeof shipTimer.unref === 'function') shipTimer.unref();
-    console.warn(`[TX-STATE] Emergency log shipping is ENABLED (interval=${TX_STATE_LOG_SHIPPING_INTERVAL_MS}ms).`);
-  } else {
-    console.log('[TX-STATE] Emergency log shipping is disabled. Realtime DB writes are expected.');
-  }
-
-  // Auto-start workers/gateways only when explicitly enabled.
-  if (BACKEND_WORKER_AUTOSTART) {
-    try {
-      const routerWorkerResults = startDefaultRouterWorkers();
-      console.log(`[AUTOSTART] Router workers started: ${routerWorkerResults.length} (6 instances per queue × 4 priority queues)`);
-      routerWorkerResults.slice(0, 3).forEach(w => {
-        console.log(`  - ${w.workerId}: interval=${w.intervalMs}ms, batch=${w.batchSize}`);
-      });
-      if (routerWorkerResults.length > 3) {
-        console.log(`  - ... and ${routerWorkerResults.length - 3} more`);
-      }
-    } catch (e) {
-      console.warn(`[AUTOSTART] Router workers failed: ${e.message}`);
-    }
-
-    try {
-      const lifecycleWorkerResults = startDefaultQueueDrivenLifecycleWorkers({ intervalMs: 250, batchSize: 50 });
-      console.log(`[AUTOSTART] Lifecycle workers started: ${lifecycleWorkerResults.length}`);
-    } catch (e) {
-      console.warn(`[AUTOSTART] Lifecycle workers failed: ${e.message}`);
-    }
-
-    try {
-      const subflowWorkerResults = startDefaultSubflowBridgeWorkers({ intervalMs: 500, batchSize: 25 });
-      console.log(`[AUTOSTART] Subflow workers started: ${subflowWorkerResults.length}`);
-    } catch (e) {
-      console.warn(`[AUTOSTART] Subflow workers failed: ${e.message}`);
-    }
-
-    try {
-      startSwiftGateway({ intervalMs: 500, batchSize: 25 });
-      console.log('[AUTOSTART] SWIFT gateway started');
-    } catch (e) {
-      console.warn(`[AUTOSTART] SWIFT gateway failed: ${e.message}`);
-    }
-
-    try {
-      startBocGateway({ intervalMs: 500, batchSize: 25, mode: gatewayModeState.boc });
-      console.log(`[AUTOSTART] BoC gateway started (mode=${gatewayModeState.boc})`);
-    } catch (e) {
-      console.warn(`[AUTOSTART] BoC gateway failed: ${e.message}`);
-    }
-
-    try {
-      startFedGateway({ intervalMs: 500, batchSize: 25 });
-      console.log(`[AUTOSTART] Fed gateway started (mode=${gatewayModeState.fed})`);
-    } catch (e) {
-      console.warn(`[AUTOSTART] Fed gateway failed: ${e.message}`);
-    }
-  } else {
-    console.log('[AUTOSTART] Worker and gateway autostart is disabled (BACKEND_WORKER_AUTOSTART=false).');
-  }
-
-  // Start Data Librarian/Mapper child processes only when explicitly enabled.
-  if (BACKEND_AUX_SERVICES_AUTOSTART) {
-    const librarianPath = fileURLToPath(new URL('./data-librarian.mjs', import.meta.url));
-    const librarian = spawn(process.execPath, [librarianPath], {
-      stdio: 'inherit',
-      env: { ...process.env },
-    });
-    librarian.on('error', err => console.error('[Librarian] Failed to start:', err.message));
-    librarian.on('exit', (code, signal) => {
-      if (code !== 0 && signal !== 'SIGTERM') {
-        console.warn(`[Librarian] Exited with code=${code} signal=${signal}`);
-      }
-    });
-
-    const mapperPath = fileURLToPath(new URL('./data-mapper.mjs', import.meta.url));
-    const mapper = spawn(process.execPath, [mapperPath], {
-      stdio: 'inherit',
-      env: { ...process.env },
-    });
-    mapper.on('error', err => console.error('[Mapper] Failed to start:', err.message));
-    mapper.on('exit', (code, signal) => {
-      if (code !== 0 && signal !== 'SIGTERM') {
-        console.warn(`[Mapper] Exited with code=${code} signal=${signal}`);
-      }
-    });
-
-    process.on('exit', () => {
-      librarian.kill();
-      mapper.kill();
-    });
-    process.on('SIGINT', () => {
-      librarian.kill();
-      mapper.kill();
-      process.exit();
-    });
-    process.on('SIGTERM', () => {
-      librarian.kill();
-      mapper.kill();
-      process.exit();
-    });
-  } else {
-    console.log('[AUTOSTART] Auxiliary child services are disabled (BACKEND_AUX_SERVICES_AUTOSTART=false).');
-  }
-
 } catch (err) {
   console.error('[ERROR] Backend failed to start:', err);
 }

@@ -50,6 +50,9 @@ function TreeNode({ nodeKey, tree, depth = 0 }) {
   const nodeIp = String(node?.ip || 'n/a');
   const clusterId = String(node?.topology?.activeClusterId || 'default');
   const clusterController = node?.topology?.clusterController === true;
+  const siteName = String(node?.topology?.siteName || node?.topology?.siteId || 'primary-site');
+  const siteMode = String(node?.topology?.siteMode || 'hot-warm');
+  const siteCategory = String(node?.topology?.siteCategory || 'internal');
 
   return (
     <li>
@@ -57,6 +60,7 @@ function TreeNode({ nodeKey, tree, depth = 0 }) {
         <span className="topology-node-name">{nodeName}</span>
         <span className="topology-node-meta">{nodeIp}</span>
         <span className="topology-node-meta">cluster: {clusterId}</span>
+        <span className="topology-node-meta">site: {siteName} ({siteMode}, {siteCategory})</span>
         {clusterController ? <span className="topology-node-badge">clusterController</span> : null}
       </div>
       {children.length > 0 ? (
@@ -139,6 +143,9 @@ export default function TopologyPage() {
                 <th>IP</th>
                 <th>Parent</th>
                 <th>Cluster</th>
+                <th>Site</th>
+                <th>Site Mode</th>
+                <th>Site Category</th>
                 <th>Children</th>
                 <th>Cluster Controller</th>
               </tr>
@@ -153,6 +160,9 @@ export default function TopologyPage() {
                     <td>{String(node?.ip || 'n/a')}</td>
                     <td>{String(node?.topology?.parentNodeId || '-')}</td>
                     <td>{String(node?.topology?.activeClusterId || 'default')}</td>
+                    <td>{String(node?.topology?.siteName || node?.topology?.siteId || 'primary-site')}</td>
+                    <td>{String(node?.topology?.siteMode || 'hot-warm')}</td>
+                    <td>{String(node?.topology?.siteCategory || 'internal')}</td>
                     <td>{children.length}</td>
                     <td>{node?.topology?.clusterController ? 'yes' : 'no'}</td>
                   </tr>

@@ -3,6 +3,7 @@ export function registerLifecycleInquiryRoutes(app, deps) {
     requirePermission,
     readTransactionLifecycleCompiled,
     getFsmEntityStateFromSql,
+    getTransactionTrace,
     getFsmTransactionSummaryFromSql,
     getLifecycleTransitionOptions,
     formatErrorDetails,
@@ -33,6 +34,141 @@ export function registerLifecycleInquiryRoutes(app, deps) {
     return `PULSE processed ${summary.processedCount} distinct transaction(s) in the last ${summary.windowMinutes} minute(s). Settled currently in that same window: ${summary.settledCount}.`;
   }
 
+  function buildMergedTimeline(history, trace) {
+    const historyEvents = (history || []).map(item => ({
+      eventSource: 'fsm-history',
+      timestamp: item.updatedAt || null,
+      fromState: item.fromState,
+      toState: item.toState,
+      toStateLabel: item.toStateLabel,
+      eventName: item.eventName,
+      queueName: item.queueName,
+      isTerminal: Boolean(item.isTerminal)
+    }));
+
+    const traceEvents = (trace || []).map(item => ({
+      eventSource: 'trace',
+      timestamp: item.occurredAt || null,
+      eventKind: item.eventKind || null,
+      fromState: item.transition?.fromState || null,
+      toState: item.transition?.toState || null,
+      toStateLabel: item.transition?.toStateLabel || null,
+      eventName: item.transition?.eventName || null,
+      queueName: item.transition?.queueName || item.coordination?.queueName || null,
+      managerId: item.coordination?.managerId || null,
+      nodeId: item.coordination?.nodeId || null,
+      workerId: item.worker?.workerId || null,
+      sourceService: item.worker?.sourceService || null,
+      consumerService: item.worker?.consumerService || null,
+      mode: item.coordination?.mode || null
+    }));
+
+    return historyEvents
+      .concat(traceEvents)
+      .sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')));
+  }
+
+  function deriveStateFromTrace(entityId, trace) {
+    const lastTransition = [...(trace || [])]
+      .reverse()
+      .find(item => String(item?.transition?.toState || '').trim());
+    if (!lastTransition) return null;
+
+    const history = (trace || [])
+      .filter(item => String(item?.transition?.toState || '').trim())
+      .map((item, index) => ({
+        id: index + 1,
+        fromState: item.transition?.fromState || null,
+        toState: item.transition?.toState || null,
+        toStateLabel: item.transition?.toStateLabel || null,
+        eventName: item.transition?.eventName || null,
+        queueName: item.transition?.queueName || null,
+        isTerminal: Boolean(item.transition?.isTerminal),
+        updatedAt: item.occurredAt || null
+      }));
+
+    return {
+      entityId,
+      machineId: lastTransition.machineId || null,
+      currentState: {
+        stateId: lastTransition.transition?.toState || null,
+        stateLabel: lastTransition.transition?.toStateLabel || null,
+        queueName: lastTransition.transition?.queueName || null,
+        lastEventId: lastTransition.transition?.eventName || null,
+        isTerminal: Boolean(lastTransition.transition?.isTerminal),
+        payloadType: lastTransition.payloadType || null,
+        updatedAt: lastTransition.occurredAt || null
+      },
+      history
+    };
+  }
+
+  async function buildEntityTraceResponse(entityId, historyLimit, traceLimit) {
+    const compiled = readTransactionLifecycleCompiled();
+    if (!compiled) {
+      return {
+        status: 404,
+        body: { error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' }
+      };
+    }
+
+    const trace = typeof getTransactionTrace === 'function'
+      ? getTransactionTrace(entityId, { limit: traceLimit })
+      : [];
+
+    let state = null;
+    try {
+      state = await getFsmEntityStateFromSql(entityId, { historyLimit });
+    } catch {
+      state = null;
+    }
+    if (!state) {
+      state = deriveStateFromTrace(entityId, trace);
+    }
+    if (!state) {
+      return {
+        status: 404,
+        body: { error: `Entity ${entityId} not found in FSM state store or trace journal` }
+      };
+    }
+
+    const currentStateId = String(state.current?.state_id || '').trim();
+    const derivedStateId = String(state.current?.stateId || '').trim();
+    const options = getLifecycleTransitionOptions(compiled, currentStateId || derivedStateId);
+    const normalizedHistory = (state.history || []).map(item => ({
+      id: item.id,
+      fromState: item.from_state ?? item.fromState ?? null,
+      toState: item.to_state ?? item.toState ?? null,
+      toStateLabel: item.to_state_label ?? item.toStateLabel ?? null,
+      eventName: item.event_name ?? item.eventName ?? null,
+      queueName: item.queue_name ?? item.queueName ?? null,
+      isTerminal: Boolean(item.is_terminal ?? item.isTerminal),
+      updatedAt: item.updated_at ?? item.updatedAt ?? null
+    }));
+    const timeline = buildMergedTimeline(normalizedHistory, trace);
+
+    return {
+      status: 200,
+      body: {
+        entityId,
+        machineId: state.current?.machine_id ?? state.machineId ?? null,
+        currentState: {
+          stateId: state.current?.state_id ?? state.current?.stateId ?? null,
+          stateLabel: state.current?.state_label ?? state.current?.stateLabel ?? null,
+          queueName: state.current?.queue_name ?? state.current?.queueName ?? null,
+          lastEventId: state.current?.last_event_id ?? state.current?.lastEventId ?? null,
+          isTerminal: Boolean(state.current?.is_terminal ?? state.current?.isTerminal),
+          payloadType: state.current?.payload_type ?? state.current?.payloadType ?? null,
+          updatedAt: state.current?.updated_at ?? state.current?.updatedAt ?? null
+        },
+        options,
+        history: normalizedHistory,
+        trace,
+        timeline
+      }
+    };
+  }
+
   app.get('/api/fsm/entities/:entityId', requirePermission('lifecycle.read'), async (req, res) => {
     try {
       const entityId = String(req.params.entityId || '').trim();
@@ -40,44 +176,10 @@ export function registerLifecycleInquiryRoutes(app, deps) {
         return res.status(400).json({ error: 'entityId is required' });
       }
 
-      const compiled = readTransactionLifecycleCompiled();
-      if (!compiled) {
-        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
-      }
-
       const historyLimit = Number(req.query.limit || 50);
-      const state = await getFsmEntityStateFromSql(entityId, { historyLimit });
-      if (!state) {
-        return res.status(404).json({ error: `Entity ${entityId} not found in FSM state store` });
-      }
-
-      const currentStateId = String(state.current.state_id || '').trim();
-      const options = getLifecycleTransitionOptions(compiled, currentStateId);
-
-      return res.json({
-        entityId,
-        machineId: state.current.machine_id,
-        currentState: {
-          stateId: state.current.state_id,
-          stateLabel: state.current.state_label,
-          queueName: state.current.queue_name,
-          lastEventId: state.current.last_event_id,
-          isTerminal: Boolean(state.current.is_terminal),
-          payloadType: state.current.payload_type,
-          updatedAt: state.current.updated_at
-        },
-        options,
-        history: state.history.map(item => ({
-          id: item.id,
-          fromState: item.from_state,
-          toState: item.to_state,
-          toStateLabel: item.to_state_label,
-          eventName: item.event_name,
-          queueName: item.queue_name,
-          isTerminal: Boolean(item.is_terminal),
-          updatedAt: item.updated_at
-        }))
-      });
+      const traceLimit = Number(req.query.traceLimit || 200);
+      const response = await buildEntityTraceResponse(entityId, historyLimit, traceLimit);
+      return res.status(response.status).json(response.body);
     } catch (e) {
       return res.status(500).json({ error: formatErrorDetails(e) });
     }
@@ -90,43 +192,46 @@ export function registerLifecycleInquiryRoutes(app, deps) {
         return res.status(400).json({ error: 'reference is required' });
       }
 
-      const compiled = readTransactionLifecycleCompiled();
-      if (!compiled) {
-        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
+      const historyLimit = Number(req.query.limit || 50);
+      const traceLimit = Number(req.query.traceLimit || 200);
+      const response = await buildEntityTraceResponse(entityId, historyLimit, traceLimit);
+      return res.status(response.status).json(response.body);
+    } catch (e) {
+      return res.status(500).json({ error: formatErrorDetails(e) });
+    }
+  });
+
+  app.get('/api/transactions/:reference/trace', requirePermission('lifecycle.read'), async (req, res) => {
+    try {
+      const entityId = String(req.params.reference || '').trim();
+      if (!entityId) {
+        return res.status(400).json({ error: 'reference is required' });
       }
 
       const historyLimit = Number(req.query.limit || 50);
-      const state = await getFsmEntityStateFromSql(entityId, { historyLimit });
-      if (!state) {
-        return res.status(404).json({ error: `Entity ${entityId} not found in FSM state store` });
+      const traceLimit = Number(req.query.traceLimit || 200);
+      const response = await buildEntityTraceResponse(entityId, historyLimit, traceLimit);
+      return res.status(response.status).json(response.body);
+    } catch (e) {
+      return res.status(500).json({ error: formatErrorDetails(e) });
+    }
+  });
+
+  app.get('/api/transactions/:reference/timeline', requirePermission('lifecycle.read'), async (req, res) => {
+    try {
+      const entityId = String(req.params.reference || '').trim();
+      if (!entityId) {
+        return res.status(400).json({ error: 'reference is required' });
       }
 
-      const currentStateId = String(state.current.state_id || '').trim();
-      const options = getLifecycleTransitionOptions(compiled, currentStateId);
-
-      return res.json({
+      const historyLimit = Number(req.query.limit || 50);
+      const traceLimit = Number(req.query.traceLimit || 200);
+      const response = await buildEntityTraceResponse(entityId, historyLimit, traceLimit);
+      return res.status(response.status).json({
         entityId,
-        machineId: state.current.machine_id,
-        currentState: {
-          stateId: state.current.state_id,
-          stateLabel: state.current.state_label,
-          queueName: state.current.queue_name,
-          lastEventId: state.current.last_event_id,
-          isTerminal: Boolean(state.current.is_terminal),
-          payloadType: state.current.payload_type,
-          updatedAt: state.current.updated_at
-        },
-        options,
-        history: state.history.map(item => ({
-          id: item.id,
-          fromState: item.from_state,
-          toState: item.to_state,
-          toStateLabel: item.to_state_label,
-          eventName: item.event_name,
-          queueName: item.queue_name,
-          isTerminal: Boolean(item.is_terminal),
-          updatedAt: item.updated_at
-        }))
+        machineId: response.body.machineId || null,
+        currentState: response.body.currentState || null,
+        timeline: response.body.timeline || []
       });
     } catch (e) {
       return res.status(500).json({ error: formatErrorDetails(e) });
@@ -148,45 +253,10 @@ export function registerLifecycleInquiryRoutes(app, deps) {
         });
       }
 
-      const compiled = readTransactionLifecycleCompiled();
-      if (!compiled) {
-        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
-      }
-
       const historyLimit = Number(req.query.limit || 50);
-      const state = await getFsmEntityStateFromSql(entityId, { historyLimit });
-      if (!state) {
-        return res.status(404).json({ error: `Entity ${entityId} not found in FSM state store` });
-      }
-
-      const currentStateId = String(state.current.state_id || '').trim();
-      const options = getLifecycleTransitionOptions(compiled, currentStateId);
-
-      return res.json({
-        inquiry: queryText,
-        entityId,
-        machineId: state.current.machine_id,
-        currentState: {
-          stateId: state.current.state_id,
-          stateLabel: state.current.state_label,
-          queueName: state.current.queue_name,
-          lastEventId: state.current.last_event_id,
-          isTerminal: Boolean(state.current.is_terminal),
-          payloadType: state.current.payload_type,
-          updatedAt: state.current.updated_at
-        },
-        options,
-        history: state.history.map(item => ({
-          id: item.id,
-          fromState: item.from_state,
-          toState: item.to_state,
-          toStateLabel: item.to_state_label,
-          eventName: item.event_name,
-          queueName: item.queue_name,
-          isTerminal: Boolean(item.is_terminal),
-          updatedAt: item.updated_at
-        }))
-      });
+      const traceLimit = Number(req.query.traceLimit || 200);
+      const response = await buildEntityTraceResponse(entityId, historyLimit, traceLimit);
+      return res.status(response.status).json({ inquiry: queryText, ...response.body });
     } catch (e) {
       return res.status(500).json({ error: formatErrorDetails(e) });
     }
@@ -207,45 +277,10 @@ export function registerLifecycleInquiryRoutes(app, deps) {
         });
       }
 
-      const compiled = readTransactionLifecycleCompiled();
-      if (!compiled) {
-        return res.status(404).json({ error: 'Lifecycle compiled artifact not found', hint: 'Run: npm run compile:lifecycle' });
-      }
-
       const historyLimit = Number(req.body?.limit || 50);
-      const state = await getFsmEntityStateFromSql(entityId, { historyLimit });
-      if (!state) {
-        return res.status(404).json({ error: `Entity ${entityId} not found in FSM state store` });
-      }
-
-      const currentStateId = String(state.current.state_id || '').trim();
-      const options = getLifecycleTransitionOptions(compiled, currentStateId);
-
-      return res.json({
-        inquiry: queryText,
-        entityId,
-        machineId: state.current.machine_id,
-        currentState: {
-          stateId: state.current.state_id,
-          stateLabel: state.current.state_label,
-          queueName: state.current.queue_name,
-          lastEventId: state.current.last_event_id,
-          isTerminal: Boolean(state.current.is_terminal),
-          payloadType: state.current.payload_type,
-          updatedAt: state.current.updated_at
-        },
-        options,
-        history: state.history.map(item => ({
-          id: item.id,
-          fromState: item.from_state,
-          toState: item.to_state,
-          toStateLabel: item.to_state_label,
-          eventName: item.event_name,
-          queueName: item.queue_name,
-          isTerminal: Boolean(item.is_terminal),
-          updatedAt: item.updated_at
-        }))
-      });
+      const traceLimit = Number(req.body?.traceLimit || 200);
+      const response = await buildEntityTraceResponse(entityId, historyLimit, traceLimit);
+      return res.status(response.status).json({ inquiry: queryText, ...response.body });
     } catch (e) {
       return res.status(500).json({ error: formatErrorDetails(e) });
     }

@@ -60,8 +60,56 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by PascalishParser#classDecl.
+	visitClassDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#classInheritance.
+	visitClassInheritance(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#classMember.
+	visitClassMember(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#classFieldDecl.
+	visitClassFieldDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#classMethodDecl.
+	visitClassMethodDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#methodParamList.
+	visitMethodParamList(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#methodParamDecl.
+	visitMethodParamDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by PascalishParser#varDecl.
 	visitVarDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#identList.
+	visitIdentList(ctx) {
 	  return this.visitChildren(ctx);
 	}
 
@@ -114,6 +162,12 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by PascalishParser#genericTypeParams.
+	visitGenericTypeParams(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by PascalishParser#simpleType.
 	visitSimpleType(ctx) {
 	  return this.visitChildren(ctx);
@@ -122,6 +176,12 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by PascalishParser#userType.
 	visitUserType(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#genericTypeArgs.
+	visitGenericTypeArgs(ctx) {
 	  return this.visitChildren(ctx);
 	}
 
