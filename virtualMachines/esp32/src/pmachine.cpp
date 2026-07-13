@@ -48,6 +48,43 @@ namespace {
         return out;
     }
 
+    struct MemoryPressureSnapshot {
+        uint32_t freeHeapBytes = 0;
+        uint32_t stackHighWaterBytes = 0;
+        uint32_t stackHeapGapBytes = 0;
+        bool stackHeapCollisionRisk = false;
+        std::string memoryPressureLevel = "unknown";
+    };
+
+    MemoryPressureSnapshot captureMemoryPressureSnapshot(size_t stackDepth = 0, size_t stackCapacity = 0) {
+        MemoryPressureSnapshot snapshot;
+#if defined(ESP32)
+        snapshot.freeHeapBytes = static_cast<uint32_t>(ESP.getFreeHeap());
+        const uint32_t highWaterWords = static_cast<uint32_t>(uxTaskGetStackHighWaterMark(nullptr));
+        snapshot.stackHighWaterBytes = highWaterWords * static_cast<uint32_t>(sizeof(uint32_t));
+        snapshot.stackHeapGapBytes = (snapshot.freeHeapBytes > snapshot.stackHighWaterBytes)
+            ? (snapshot.freeHeapBytes - snapshot.stackHighWaterBytes)
+            : 0;
+#else
+        (void)stackDepth;
+        (void)stackCapacity;
+#endif
+        const bool stackNearLimit = stackCapacity > 0 && stackDepth + 8 >= stackCapacity;
+        const bool heapTight = snapshot.freeHeapBytes > 0 && snapshot.freeHeapBytes < 32768;
+        const bool gapCritical = snapshot.stackHeapGapBytes > 0 && snapshot.stackHeapGapBytes < 8192;
+        const bool gapWarning = snapshot.stackHeapGapBytes > 0 && snapshot.stackHeapGapBytes < 16384;
+
+        snapshot.stackHeapCollisionRisk = stackNearLimit || heapTight || gapCritical;
+        if (snapshot.stackHeapCollisionRisk) {
+            snapshot.memoryPressureLevel = "critical";
+        } else if (gapWarning) {
+            snapshot.memoryPressureLevel = "warning";
+        } else {
+            snapshot.memoryPressureLevel = "ok";
+        }
+        return snapshot;
+    }
+
     std::string jsonEscape(const std::string& s) {
         std::string out;
         out.reserve(s.size() + 8);
@@ -751,6 +788,12 @@ Status PMachine::getStatus() const {
     s.numPages = numPages;
     s.backingFile = backingFile;
     s.maxSpace = maxSpace;
+    const MemoryPressureSnapshot pressure = captureMemoryPressureSnapshot();
+    s.freeHeapBytes = pressure.freeHeapBytes;
+    s.stackHighWaterBytes = pressure.stackHighWaterBytes;
+    s.stackHeapGapBytes = pressure.stackHeapGapBytes;
+    s.stackHeapCollisionRisk = pressure.stackHeapCollisionRisk;
+    s.memoryPressureLevel = pressure.memoryPressureLevel;
     s.dynamicLibs = dynamicLibs;
     s.running = running;
     s.pc = pc;
@@ -1307,9 +1350,12 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             continue;
         }
         if (instr.opcode == OP_PUSH_INT) {
-            if (sp < STACK_SIZE) {
-                stack[sp++] = instr.intOperand;
+            if (sp >= STACK_SIZE) {
+                gFlowState["__runtime_error"] = "stack overflow";
+                gFlowState["__memory_pressure"] = captureMemoryPressureSnapshot(static_cast<size_t>(sp), STACK_SIZE).memoryPressureLevel;
+                break;
             }
+            stack[sp++] = instr.intOperand;
             ++pc;
             continue;
         }
@@ -1342,9 +1388,12 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             continue;
         }
         if (instr.opcode == OP_LOAD_NAME) {
-            if (sp < STACK_SIZE) {
-                stack[sp++] = resolveName(instr.strOperand);
+            if (sp >= STACK_SIZE) {
+                gFlowState["__runtime_error"] = "stack overflow";
+                gFlowState["__memory_pressure"] = captureMemoryPressureSnapshot(static_cast<size_t>(sp), STACK_SIZE).memoryPressureLevel;
+                break;
             }
+            stack[sp++] = resolveName(instr.strOperand);
             ++pc;
             continue;
         }

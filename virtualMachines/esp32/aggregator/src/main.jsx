@@ -3,6 +3,8 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import NetworkDevicesPage from './NetworkDevicesPage.jsx'
 import TopologyPage from './TopologyPage.jsx'
+import CatalogStudioPage from './CatalogStudioPage.jsx'
+import FlowDesignerPage from './FlowDesignerPage.jsx'
 
 const originalFetch = window.fetch.bind(window)
 const apiBaseUrls = String(import.meta.env.VITE_API_BASES || '')
@@ -80,11 +82,25 @@ window.fetch = async (input, init = {}) => {
 }
 
 function AppShell() {
-  const [page, setPage] = useState('topology')
+  const [page, setPage] = useState('catalog')
 
   return (
     <>
       <nav className="app-nav">
+        <button
+          type="button"
+          className={`app-nav-button ${page === 'catalog' ? 'active' : ''}`}
+          onClick={() => setPage('catalog')}
+        >
+          Catalog Studio
+        </button>
+        <button
+          type="button"
+          className={`app-nav-button ${page === 'flow' ? 'active' : ''}`}
+          onClick={() => setPage('flow')}
+        >
+          Flow Designer
+        </button>
         <button
           type="button"
           className={`app-nav-button ${page === 'topology' ? 'active' : ''}`}
@@ -100,7 +116,10 @@ function AppShell() {
           Devices
         </button>
       </nav>
-      {page === 'topology' ? <TopologyPage /> : <NetworkDevicesPage />}
+      {page === 'catalog' ? <CatalogStudioPage /> : null}
+      {page === 'flow' ? <FlowDesignerPage /> : null}
+      {page === 'topology' ? <TopologyPage /> : null}
+      {page === 'devices' ? <NetworkDevicesPage /> : null}
     </>
   )
 }

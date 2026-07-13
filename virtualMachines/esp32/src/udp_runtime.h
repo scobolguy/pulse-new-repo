@@ -11,6 +11,7 @@ struct UdpRuntimeContext {
     const char* nodeName = nullptr;
     const char* deviceRole = nullptr;
     const char* firmwareVersion = nullptr;
+    const char* firmwareBuildStamp = nullptr;
     const char* firmwareTrack = nullptr;
 
     std::map<String, DiscoveredNode>* discoveredNodeTable = nullptr;

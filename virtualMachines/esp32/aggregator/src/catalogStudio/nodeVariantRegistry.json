@@ -1,0 +1,95 @@
+{
+  "defaultVariantId": "esp32-generic",
+  "variants": [
+    {
+      "id": "js-pmachine-generic",
+      "label": "Generic JS PMachine",
+      "runtimeKind": "js-pmachine",
+      "detectionKeywords": ["pmachine", "nodejs", "js-"],
+      "capabilities": ["workflow.execute", "queue.consume", "queue.publish", "service.call"],
+      "wiring": {
+        "provides": [],
+        "constraints": ["no-camera", "no-display-gpio"]
+      },
+      "buildProfile": {
+        "platformioEnv": null,
+        "requiredFlags": []
+      }
+    },
+    {
+      "id": "esp32-cam",
+      "label": "ESP32 Camera Node",
+      "runtimeKind": "esp32-native",
+      "detectionKeywords": ["cam", "camera", "doorbell"],
+      "capabilities": ["workflow.execute", "sensor.input", "button.input", "camera.capture"],
+      "wiring": {
+        "provides": ["camera.module", "button.input", "sensor.input"],
+        "constraints": ["no-display"]
+      },
+      "buildProfile": {
+        "platformioEnv": "esp32cam",
+        "requiredFlags": ["-DENABLE_CAMERA", "-DBOARD_HAS_PSRAM"]
+      }
+    },
+    {
+      "id": "esp32-display",
+      "label": "ESP32 Display Node",
+      "runtimeKind": "esp32-native",
+      "detectionKeywords": ["cyd", "display", "lcd", "tft"],
+      "capabilities": ["workflow.execute", "sensor.input", "button.input", "display.render"],
+      "wiring": {
+        "provides": ["display.panel", "button.input", "sensor.input"],
+        "constraints": ["no-camera"]
+      },
+      "buildProfile": {
+        "platformioEnv": "esp32_cyd",
+        "requiredFlags": ["-DENABLE_DISPLAY"]
+      }
+    },
+    {
+      "id": "esp32-relay",
+      "label": "ESP32 Relay Controller",
+      "runtimeKind": "esp32-native",
+      "detectionKeywords": ["relay", "switch"],
+      "capabilities": ["workflow.execute", "sensor.input", "gpio.output", "relay.switch"],
+      "wiring": {
+        "provides": ["relay.channel", "sensor.input"],
+        "constraints": []
+      },
+      "buildProfile": {
+        "platformioEnv": "esp32dev",
+        "requiredFlags": ["-DENABLE_PMACHINE"]
+      }
+    },
+    {
+      "id": "upnp-discovery-node",
+      "label": "UPnP Discovery Node",
+      "runtimeKind": "service-runtime",
+      "detectionKeywords": ["upnp"],
+      "capabilities": ["service.call", "network.scan", "upnp.discover"],
+      "wiring": {
+        "provides": [],
+        "constraints": []
+      },
+      "buildProfile": {
+        "platformioEnv": null,
+        "requiredFlags": []
+      }
+    },
+    {
+      "id": "esp32-generic",
+      "label": "Generic ESP32 Node",
+      "runtimeKind": "esp32-native",
+      "detectionKeywords": ["esp32", "neptune", "child"],
+      "capabilities": ["workflow.execute", "sensor.input", "button.input"],
+      "wiring": {
+        "provides": ["sensor.input", "button.input"],
+        "constraints": []
+      },
+      "buildProfile": {
+        "platformioEnv": "esp32dev",
+        "requiredFlags": ["-DENABLE_PMACHINE"]
+      }
+    }
+  ]
+}

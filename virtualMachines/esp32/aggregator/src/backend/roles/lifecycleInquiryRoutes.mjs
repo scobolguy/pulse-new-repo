@@ -6,6 +6,7 @@ export function registerLifecycleInquiryRoutes(app, deps) {
     getTransactionTrace,
     getFsmTransactionSummaryFromSql,
     getLifecycleTransitionOptions,
+    getGatewayStatusPayload,
     formatErrorDetails,
     extractEntityIdFromInquiry
   } = deps;
@@ -66,6 +67,254 @@ export function registerLifecycleInquiryRoutes(app, deps) {
     return historyEvents
       .concat(traceEvents)
       .sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')));
+  }
+
+  function normalizedText(value) {
+    return String(value || '').trim().toLowerCase();
+  }
+
+  function firstTruthyTimestamp(values = []) {
+    for (const value of values) {
+      const text = String(value || '').trim();
+      if (text) return text;
+    }
+    return null;
+  }
+
+  function maybeIsoTimestamp(value) {
+    const text = String(value || '').trim();
+    if (!text) return null;
+    const ms = Date.parse(text);
+    if (Number.isNaN(ms)) return null;
+    return new Date(ms).toISOString();
+  }
+
+  function matchesAny(text, tokens = []) {
+    const hay = normalizedText(text);
+    if (!hay) return false;
+    return tokens.some(token => hay.includes(normalizedText(token)));
+  }
+
+  function findFirstTimestampByPredicate(trace = [], timeline = [], predicate) {
+    const fromTrace = (trace || []).find(item => predicate(item, 'trace'));
+    if (fromTrace) {
+      const ts = firstTruthyTimestamp([fromTrace.occurredAt, fromTrace.timestamp]);
+      if (ts) return ts;
+    }
+
+    const fromTimeline = (timeline || []).find(item => predicate(item, 'timeline'));
+    if (fromTimeline) {
+      const ts = firstTruthyTimestamp([fromTimeline.timestamp]);
+      if (ts) return ts;
+    }
+
+    return null;
+  }
+
+  function findLastTimestampByPredicate(trace = [], timeline = [], predicate) {
+    const reversedTrace = [...(trace || [])].reverse();
+    const fromTrace = reversedTrace.find(item => predicate(item, 'trace'));
+    if (fromTrace) {
+      const ts = firstTruthyTimestamp([fromTrace.occurredAt, fromTrace.timestamp]);
+      if (ts) return ts;
+    }
+
+    const reversedTimeline = [...(timeline || [])].reverse();
+    const fromTimeline = reversedTimeline.find(item => predicate(item, 'timeline'));
+    if (fromTimeline) {
+      const ts = firstTruthyTimestamp([fromTimeline.timestamp]);
+      if (ts) return ts;
+    }
+
+    return null;
+  }
+
+  function hasStageApproval(trace = [], timeline = [], tokens = []) {
+    return Boolean(findFirstTimestampByPredicate(trace, timeline, (item) => {
+      const eventKind = item.eventKind || item.event_name || '';
+      const eventName = item.eventName || item.event_name || item.transition?.eventName || '';
+      const toState = item.toState || item.to_state || item.transition?.toState || '';
+      const label = item.toStateLabel || item.to_state_label || item.transition?.toStateLabel || '';
+      return matchesAny(eventKind, tokens)
+        || matchesAny(eventName, tokens)
+        || matchesAny(toState, tokens)
+        || matchesAny(label, tokens);
+    }));
+  }
+
+  function hasRtgsDownSignal(trace = [], timeline = [], currentState = null) {
+    if (matchesAny(currentState?.stateId, ['deferred_rtgs_closed', 'rtgs_closed'])) {
+      return true;
+    }
+    return Boolean(findFirstTimestampByPredicate(trace, timeline, (item) => {
+      const eventKind = item.eventKind || '';
+      const eventName = item.eventName || item.transition?.eventName || '';
+      const toState = item.toState || item.transition?.toState || '';
+      const queueName = item.queueName || item.transition?.queueName || '';
+      return matchesAny(eventKind, ['rtgs_down', 'rtgs-window-closed', 'rtgs-unavailable'])
+        || matchesAny(eventName, ['rtgs_window_closed', 'rtgs_unavailable'])
+        || matchesAny(toState, ['deferred_rtgs_closed'])
+        || matchesAny(queueName, ['deferred.rtgs.closed']);
+    }));
+  }
+
+  function hasSwiftCompletion(trace = [], timeline = [], currentState = null) {
+    if (Boolean(currentState?.isTerminal) && matchesAny(currentState?.stateId, ['completed', 'reconciled'])) {
+      return true;
+    }
+    return Boolean(findLastTimestampByPredicate(trace, timeline, (item) => {
+      const eventKind = item.eventKind || '';
+      const eventName = item.eventName || item.transition?.eventName || '';
+      const toState = item.toState || item.transition?.toState || '';
+      return matchesAny(eventKind, ['swift_send_succeeded', 'transaction_completed'])
+        || matchesAny(eventName, ['swift_send_succeeded', 'transaction_completed'])
+        || matchesAny(toState, ['completed', 'reconciled']);
+    }));
+  }
+
+  function extractScheduledAt(trace = [], timeline = []) {
+    const candidates = [];
+    for (const item of trace || []) {
+      candidates.push(item?.details?.scheduledAt);
+      candidates.push(item?.details?.wakeAt);
+      candidates.push(item?.message?.schedule?.wakeAt);
+      candidates.push(item?.message?.wakeAt);
+      candidates.push(item?.coordination?.scheduledAt);
+    }
+    for (const item of timeline || []) {
+      candidates.push(item?.scheduledAt);
+      candidates.push(item?.wakeAt);
+    }
+    for (const candidate of candidates) {
+      const iso = maybeIsoTimestamp(candidate);
+      if (iso) return iso;
+    }
+    return null;
+  }
+
+  function hasTimeoutSignal(trace = [], timeline = [], currentState = null) {
+    if (matchesAny(currentState?.stateId, ['timeout', 'timed_out', 'ontimeout'])) {
+      return true;
+    }
+    return Boolean(findLastTimestampByPredicate(trace, timeline, (item) => {
+      const eventKind = item.eventKind || '';
+      const eventName = item.eventName || item.transition?.eventName || '';
+      const toState = item.toState || item.transition?.toState || '';
+      const queueName = item.queueName || item.transition?.queueName || '';
+      return matchesAny(eventKind, ['lifecycle-ontimeout', 'timeout', 'stage_timeout'])
+        || matchesAny(eventName, ['stage_timeout', 'onTimeout'])
+        || matchesAny(toState, ['timeout'])
+        || matchesAny(queueName, ['tx.lifecycle.ontimeout']);
+    }));
+  }
+
+  function extractLatestTimeoutDetails(trace = [], timeline = []) {
+    const reversedTrace = [...(trace || [])].reverse();
+    const timeoutTrace = reversedTrace.find((item) => {
+      const eventKind = item?.eventKind || '';
+      const eventName = item?.eventName || item?.transition?.eventName || '';
+      const toState = item?.transition?.toState || '';
+      return matchesAny(eventKind, ['lifecycle-ontimeout', 'timeout', 'stage_timeout'])
+        || matchesAny(eventName, ['stage_timeout', 'onTimeout'])
+        || matchesAny(toState, ['timeout']);
+    });
+
+    if (timeoutTrace) {
+      return {
+        occurredAt: firstTruthyTimestamp([timeoutTrace.occurredAt, timeoutTrace.timestamp]),
+        timeoutMs: Number(timeoutTrace?.details?.timeoutMs || timeoutTrace?.message?.timeoutMs || 0) || null,
+        sourceQueue: timeoutTrace?.details?.sourceQueue || timeoutTrace?.transition?.queueName || timeoutTrace?.coordination?.queueName || null,
+        stage: timeoutTrace?.details?.transitionToState || timeoutTrace?.transition?.toState || timeoutTrace?.transition?.fromState || null,
+        workerId: timeoutTrace?.worker?.workerId || timeoutTrace?.details?.workerId || null
+      };
+    }
+
+    const reversedTimeline = [...(timeline || [])].reverse();
+    const timeoutTimeline = reversedTimeline.find((item) => {
+      const eventKind = item?.eventKind || '';
+      const eventName = item?.eventName || '';
+      const toState = item?.toState || '';
+      return matchesAny(eventKind, ['lifecycle-ontimeout', 'timeout', 'stage_timeout'])
+        || matchesAny(eventName, ['stage_timeout', 'onTimeout'])
+        || matchesAny(toState, ['timeout']);
+    });
+
+    if (!timeoutTimeline) return null;
+    return {
+      occurredAt: firstTruthyTimestamp([timeoutTimeline.timestamp]),
+      timeoutMs: null,
+      sourceQueue: timeoutTimeline.queueName || null,
+      stage: timeoutTimeline.toState || timeoutTimeline.fromState || null,
+      workerId: timeoutTimeline.workerId || null
+    };
+  }
+
+  function resolveRequiredGatewayId(currentState = null, timeline = []) {
+    const stateId = normalizedText(currentState?.stateId);
+    if (stateId.includes('swift')) return 'swift';
+    if (stateId.includes('rtgs') || stateId.includes('lynx') || stateId.includes('boc')) return 'boc';
+    if (stateId.includes('fed')) return 'fed';
+
+    const recent = [...(timeline || [])].reverse();
+    for (const item of recent) {
+      const queueName = normalizedText(item?.queueName || '');
+      const stage = normalizedText(item?.toState || item?.fromState || '');
+      if (queueName.includes('swift') || stage.includes('swift')) return 'swift';
+      if (queueName.includes('rtgs') || queueName.includes('lynx') || stage.includes('rtgs') || stage.includes('lynx')) return 'boc';
+      if (queueName.includes('fed') || stage.includes('fed')) return 'fed';
+    }
+    return null;
+  }
+
+  function resolveGatewaySnapshot(gatewayId) {
+    if (!gatewayId || typeof getGatewayStatusPayload !== 'function') return null;
+    try {
+      const payload = getGatewayStatusPayload();
+      if (!payload || typeof payload !== 'object') return null;
+      const gateway = payload[gatewayId];
+      if (!gateway || typeof gateway !== 'object') return null;
+      return {
+        id: gatewayId,
+        running: Boolean(gateway.running),
+        quiesced: Boolean(gateway.quiesced),
+        mode: gateway.mode || null,
+        control: gateway.control || null
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function buildSupportNarrative({
+    entityId,
+    receivedAt,
+    replySentAt,
+    stageSummary,
+    gatewayDown,
+    requiredGatewayId,
+    rtgsDown,
+    scheduledAt,
+    swiftCompleted,
+    currentState
+  }) {
+    const stageText = `Fraud approved: ${stageSummary.fraudApproved ? 'yes' : 'no'}, balance OK: ${stageSummary.balanceApproved ? 'yes' : 'no'}, additional checks approved: ${stageSummary.additionalApproved ? 'yes' : 'no'}.`;
+
+    if (replySentAt || swiftCompleted) {
+      return `Payment ${entityId} was received at ${receivedAt || 'unknown time'}. ${stageText} RTGS processing reached SWIFT dispatch and the transaction is complete. Reply sent at ${replySentAt || 'unknown time'}.`;
+    }
+
+    if (gatewayDown) {
+      return `Payment ${entityId} was received at ${receivedAt || 'unknown time'}. ${stageText} Processing is currently blocked because gateway ${requiredGatewayId || 'required'} is down, so messages cannot be sent to or received from that service path.`;
+    }
+
+    if (rtgsDown) {
+      const scheduleText = scheduledAt
+        ? ` It is scheduled for requeue at ${scheduledAt}, where decision checks will run again before RTGS retry.`
+        : ' It is queued for business-window reprocessing, where decision checks will run again before RTGS retry.';
+      return `Payment ${entityId} was received at ${receivedAt || 'unknown time'}. ${stageText} It reached RTGS submission, but RTGS is unavailable for the current business window.${scheduleText}`;
+    }
+
+    return `Payment ${entityId} was received at ${receivedAt || 'unknown time'}. ${stageText} Current state is ${currentState?.stateLabel || currentState?.stateId || 'unknown'}. Reply has not been sent yet.`;
   }
 
   function deriveStateFromTrace(entityId, trace) {
@@ -296,6 +545,119 @@ export function registerLifecycleInquiryRoutes(app, deps) {
         metric,
         summary,
         reply: buildVolumeReply(metric, summary)
+      });
+    } catch (e) {
+      return res.status(500).json({ error: formatErrorDetails(e) });
+    }
+  });
+
+  app.get('/api/support/payments/:reference', requirePermission('lifecycle.read'), async (req, res) => {
+    try {
+      const entityId = String(req.params.reference || '').trim();
+      if (!entityId) {
+        return res.status(400).json({ error: 'reference is required' });
+      }
+
+      const historyLimit = Number(req.query.limit || 200);
+      const traceLimit = Number(req.query.traceLimit || 500);
+      const response = await buildEntityTraceResponse(entityId, historyLimit, traceLimit);
+      if (response.status !== 200) {
+        return res.status(response.status).json(response.body);
+      }
+
+      const trace = Array.isArray(response.body.trace) ? response.body.trace : [];
+      const timeline = Array.isArray(response.body.timeline) ? response.body.timeline : [];
+      const currentState = response.body.currentState || null;
+
+      const receivedAt = findFirstTimestampByPredicate(trace, timeline, (item) => {
+        const eventKind = item.eventKind || '';
+        const eventName = item.eventName || item.transition?.eventName || '';
+        const fromState = item.fromState || item.transition?.fromState || '';
+        const toState = item.toState || item.transition?.toState || '';
+        const queueName = item.queueName || item.transition?.queueName || '';
+        return matchesAny(eventKind, ['payment_received', 'queue-enqueue'])
+          || matchesAny(eventName, ['payment_received'])
+          || matchesAny(fromState, ['received_payment', 'received_mt103'])
+          || matchesAny(toState, ['received_payment', 'received_mt103'])
+          || matchesAny(queueName, ['payments.inbound', 'swift.mt103.inbound', 'swift.mt103.parsed']);
+      });
+
+      const replySentAt = findLastTimestampByPredicate(trace, timeline, (item) => {
+        const eventKind = item.eventKind || '';
+        const eventName = item.eventName || item.transition?.eventName || '';
+        return matchesAny(eventKind, ['reply_sent']) || matchesAny(eventName, ['reply_sent']);
+      });
+
+      const stageSummary = {
+        fraudApproved: hasStageApproval(trace, timeline, ['fraud_approved', 'decision_fraud', 'fraud approved']),
+        balanceApproved: hasStageApproval(trace, timeline, ['balance_ok', 'decision_balance', 'balance ok']),
+        additionalApproved: hasStageApproval(trace, timeline, ['additional_checks_ok', 'decision_additional', 'additional approved'])
+      };
+
+      const rtgsDown = hasRtgsDownSignal(trace, timeline, currentState);
+      const timeoutDetected = hasTimeoutSignal(trace, timeline, currentState);
+      const timeoutDetails = extractLatestTimeoutDetails(trace, timeline);
+      const swiftCompleted = hasSwiftCompletion(trace, timeline, currentState);
+      const scheduledAt = extractScheduledAt(trace, timeline);
+      const requiredGatewayId = resolveRequiredGatewayId(currentState, timeline);
+      const gateway = resolveGatewaySnapshot(requiredGatewayId);
+      const gatewayDown = Boolean(gateway && (!gateway.running || gateway.quiesced));
+
+      let blockingReason = null;
+      let nextAction = null;
+      if (!replySentAt && !swiftCompleted) {
+        if (gatewayDown) {
+          blockingReason = `Gateway ${requiredGatewayId} is down`;
+          nextAction = `Messages cannot be sent or received for this service path until gateway ${requiredGatewayId} is up.`;
+        } else if (timeoutDetected) {
+          const timeoutLabel = timeoutDetails?.timeoutMs ? ` after ${timeoutDetails.timeoutMs}ms` : '';
+          const timeoutAt = timeoutDetails?.occurredAt ? ` at ${timeoutDetails.occurredAt}` : '';
+          blockingReason = `Lifecycle processing timed out${timeoutLabel}${timeoutAt}`;
+          const queueHint = timeoutDetails?.sourceQueue ? ` Queue: ${timeoutDetails.sourceQueue}.` : '';
+          const stageHint = timeoutDetails?.stage ? ` Stage: ${timeoutDetails.stage}.` : '';
+          nextAction = `Route to timeout handling policy and retry from the last safe stage with backoff.${stageHint}${queueHint}`.trim();
+        } else if (rtgsDown) {
+          blockingReason = 'RTGS unavailable in current business window';
+          nextAction = scheduledAt
+            ? `Requeue scheduled at ${scheduledAt}; decision chain will rerun before RTGS retry.`
+            : 'Requeue pending next business window; decision chain will rerun before RTGS retry.';
+        } else {
+          blockingReason = currentState?.stateLabel || currentState?.stateId || 'Processing not completed';
+          nextAction = 'Continue processing according to lifecycle transitions.';
+        }
+      }
+
+      const narrative = buildSupportNarrative({
+        entityId,
+        receivedAt,
+        replySentAt,
+        stageSummary,
+        gatewayDown,
+        requiredGatewayId,
+        rtgsDown,
+        scheduledAt,
+        swiftCompleted,
+        currentState
+      });
+
+      return res.json({
+        paymentReference: entityId,
+        transactionId: response.body.entityId || entityId,
+        receivedAt: receivedAt || null,
+        replySentAt: replySentAt || null,
+        currentStatus: replySentAt || swiftCompleted ? 'completed' : (rtgsDown ? 'deferred' : 'in-progress'),
+        blockingReason,
+        nextAction,
+        scheduledAt,
+        timeoutDetected,
+        timeoutDetails,
+        gateway,
+        gatewayDown,
+        stageSummary,
+        currentState,
+        narrative,
+        machineId: response.body.machineId || null,
+        timeline: timeline
       });
     } catch (e) {
       return res.status(500).json({ error: formatErrorDetails(e) });

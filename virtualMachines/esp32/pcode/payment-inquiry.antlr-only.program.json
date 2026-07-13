@@ -1,0 +1,308 @@
+{
+  "version": 1,
+  "generatedAt": "2026-07-11T22:04:53.629Z",
+  "serviceId": "payment_inquiry_service",
+  "runtimeUnit": {
+    "kind": "service",
+    "id": "payment_inquiry_service",
+    "refreshMs": null
+  },
+  "variableDeclarations": [],
+  "entryLabel": "ENTRY",
+  "finishLabel": "FINISH",
+  "instructionSubset": [
+    "JMP",
+    "JZ",
+    "NOP",
+    "ROUTE_MATCH_QUEUE",
+    "ROUTE_EVAL_WHEN",
+    "ROUTE_TRANSFORM",
+    "ROUTE_EMIT",
+    "PARSE_FIN_TEXT",
+    "HALT"
+  ],
+  "orchestrationPrograms": [],
+  "instructionSubsetExtended": [
+    "ORCH_SPAWN",
+    "ORCH_WAIT_ALL",
+    "ORCH_FAIL_TXN",
+    "ORCH_RETURN_SUCCESS"
+  ],
+  "entries": [
+    {
+      "kind": "router",
+      "id": "payment_inquiry_service-http",
+      "label": "ROUTER_0_PAYMENT_INQUIRY_SERVICE_HTTP",
+      "inputQueue": "payment_inquiry_service.in",
+      "outputs": [
+        {
+          "queueName": "payment_inquiry_service.out",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;",
+          "transformRule": "output := \"payment_inquiry_service\";"
+        },
+        {
+          "queueName": "payment_inquiry_service.out",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "IF upper(httpVerb) = 'POST' THEN output := 1 ELSE output := 0;",
+          "transformRule": "output := src;"
+        }
+      ]
+    },
+    {
+      "kind": "router",
+      "id": "payment_inquiry_receive",
+      "label": "ROUTER_1_PAYMENT_INQUIRY_RECEIVE",
+      "inputQueue": "swift.mt103.inbound",
+      "outputs": [
+        {
+          "queueName": "swift.mt103.parsed",
+          "dataTypeIds": [
+            "swift-mt103"
+          ],
+          "dataTypeId": "swift-mt103",
+          "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
+          "transformRule": "output := src;"
+        },
+        {
+          "queueName": "tx.lifecycle.onerror",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "FIELD_EQUALS(message.runtime.error, \"true\")",
+          "transformRule": "output := src;"
+        },
+        {
+          "queueName": "tx.lifecycle.ontimeout",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "FIELD_EQUALS(message.runtime.timeout, \"true\")",
+          "transformRule": "output := src;"
+        }
+      ]
+    },
+    {
+      "kind": "router",
+      "id": "payment_inquiry_fraud",
+      "label": "ROUTER_2_PAYMENT_INQUIRY_FRAUD",
+      "inputQueue": "tx.decision.fraud",
+      "outputs": [
+        {
+          "queueName": "tx.decision.balance",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "FIELD_EQUALS(message.fraud.status, \"approved\")",
+          "transformRule": "output := src;"
+        },
+        {
+          "queueName": "tx.rejected",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "FIELD_EQUALS(message.fraud.status, \"rejected\")",
+          "transformRule": "output := src;"
+        },
+        {
+          "queueName": "tx.lifecycle.onerror",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "FIELD_EQUALS(message.runtime.error, \"true\")",
+          "transformRule": "output := src;"
+        },
+        {
+          "queueName": "tx.lifecycle.ontimeout",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "FIELD_EQUALS(message.runtime.timeout, \"true\")",
+          "transformRule": "output := src;"
+        }
+      ]
+    },
+    {
+      "kind": "router",
+      "id": "payment_inquiry_balance",
+      "label": "ROUTER_3_PAYMENT_INQUIRY_BALANCE",
+      "inputQueue": "tx.decision.balance",
+      "outputs": [
+        {
+          "queueName": "tx.rtgs.ready",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "FIELD_EQUALS(message.balance.status, \"ok\")",
+          "transformRule": "output := src;"
+        },
+        {
+          "queueName": "tx.rejected",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "FIELD_EQUALS(message.balance.status, \"insufficient\")",
+          "transformRule": "output := src;"
+        },
+        {
+          "queueName": "tx.lifecycle.onerror",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "FIELD_EQUALS(message.runtime.error, \"true\")",
+          "transformRule": "output := src;"
+        },
+        {
+          "queueName": "tx.lifecycle.ontimeout",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "FIELD_EQUALS(message.runtime.timeout, \"true\")",
+          "transformRule": "output := src;"
+        }
+      ]
+    },
+    {
+      "kind": "router",
+      "id": "payment_inquiry_rtgs_submit",
+      "label": "ROUTER_4_PAYMENT_INQUIRY_RTGS_SUBMIT",
+      "inputQueue": "tx.rtgs.ready",
+      "outputs": [
+        {
+          "queueName": "tx.swift.outbound.pending",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "FIELD_EQUALS(message.rtgs.windowOpen, \"true\")",
+          "transformRule": "output := src;"
+        },
+        {
+          "queueName": "tx.deferred.rtgs.closed",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "FIELD_EQUALS(message.rtgs.windowOpen, \"false\")",
+          "transformRule": "output := src;"
+        },
+        {
+          "queueName": "tx.lifecycle.onerror",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "FIELD_EQUALS(message.runtime.error, \"true\")",
+          "transformRule": "output := src;"
+        },
+        {
+          "queueName": "tx.lifecycle.ontimeout",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "FIELD_EQUALS(message.runtime.timeout, \"true\")",
+          "transformRule": "output := src;"
+        }
+      ]
+    },
+    {
+      "kind": "router",
+      "id": "payment_inquiry_swift_send",
+      "label": "ROUTER_5_PAYMENT_INQUIRY_SWIFT_SEND",
+      "inputQueue": "tx.swift.outbound.pending",
+      "outputs": [
+        {
+          "queueName": "tx.completed",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "FIELD_EQUALS(message.swift.sent, \"true\")",
+          "transformRule": "output := src;"
+        },
+        {
+          "queueName": "tx.lifecycle.onerror",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "FIELD_EQUALS(message.runtime.error, \"true\")",
+          "transformRule": "output := src;"
+        },
+        {
+          "queueName": "tx.lifecycle.ontimeout",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "FIELD_EQUALS(message.runtime.timeout, \"true\")",
+          "transformRule": "output := src;"
+        }
+      ]
+    },
+    {
+      "kind": "router",
+      "id": "payment_inquiry_query",
+      "label": "ROUTER_6_PAYMENT_INQUIRY_QUERY",
+      "inputQueue": "tx.inquiry.request",
+      "outputs": [
+        {
+          "queueName": "tx.inquiry.response",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "output := 1;",
+          "transformRule": "output := map(\"payment_inquiry_query_response\", src);"
+        }
+      ]
+    },
+    {
+      "kind": "mapper",
+      "id": "payment_inquiry_contract",
+      "label": "MAPPER_0_PAYMENT_INQUIRY_CONTRACT",
+      "sourceTypeId": "swift-mt103",
+      "targetTypeId": "payment-inquiry",
+      "itemCount": 4,
+      "items": [
+        {
+          "sourcePath": "block4.20",
+          "targetPath": "inquiry.transactionId",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "block4.32A.amount",
+          "targetPath": "inquiry.paymentAmount",
+          "conversionRule": "output := mtamounttodecimal(src);"
+        },
+        {
+          "sourcePath": "block4.32A.currency",
+          "targetPath": "inquiry.paymentCurrency",
+          "conversionRule": "output := upper(src);"
+        },
+        {
+          "sourcePath": "block4.32A.date",
+          "targetPath": "inquiry.receivedAt",
+          "conversionRule": "output := yymmddtoiso(src);"
+        }
+      ]
+    },
+    {
+      "kind": "mapper",
+      "id": "payment_inquiry_query_response",
+      "label": "MAPPER_1_PAYMENT_INQUIRY_QUERY_RESPONSE",
+      "sourceTypeId": "tx-inquiry-state",
+      "targetTypeId": "payment-inquiry-response",
+      "itemCount": 6,
+      "items": [
+        {
+          "sourcePath": "transactionId",
+          "targetPath": "inquiry.transactionId",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "receivedAt",
+          "targetPath": "inquiry.receivedAt",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "replySentAt",
+          "targetPath": "inquiry.replySentAt",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "currentState",
+          "targetPath": "inquiry.currentState",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "blockingReason",
+          "targetPath": "inquiry.blockingReason",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "nextAction",
+          "targetPath": "inquiry.nextAction",
+          "conversionRule": "output := trim(src);"
+        }
+      ]
+    }
+  ]
+}

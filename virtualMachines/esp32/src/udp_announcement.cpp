@@ -12,6 +12,7 @@ bool sendNodeBeaconAnnouncement(
     uint16_t announcePort,
     const char* nodeName,
     const char* deviceRole,
+    const char* firmwareBuildStamp,
     const String& capabilityHash,
     UdpAnnouncementState& state,
     uint16_t parentPort,
@@ -35,6 +36,7 @@ bool sendNodeBeaconAnnouncement(
     announceDoc["ip"] = localIp;
     announceDoc["status"] = "here";
     announceDoc["deviceRole"] = deviceRole;
+    announceDoc["firmwareBuildStamp"] = firmwareBuildStamp;
     announceDoc["httpPort"] = 80;
     announceDoc["udpParentPort"] = parentPort;
     announceDoc["udpSiblingPort"] = siblingPort;

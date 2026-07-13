@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "generatedAt": "2026-07-11T22:05:20.609Z",
+  "serviceId": "HelloWorld",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "HelloWorld",
+    "refreshMs": null
+  },
+  "executionModel": "standard-pascal",
+  "sourceLanguage": "pascal",
+  "globals": [],
+  "procedures": {},
+  "entryLabel": "MAIN"
+}

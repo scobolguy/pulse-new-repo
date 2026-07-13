@@ -121,6 +121,7 @@ pmachine::PMachine pm;
 #endif
 
 const char* firmwareVersion = "2026.06.06";
+const char* firmwareBuildStamp = __DATE__ " " __TIME__;
 const char* deviceRole = DEVICE_ROLE;
 bool otaEnabled = true;
 
@@ -250,6 +251,8 @@ String computeNodeCapabilityHash() {
     String hash;
     hash.reserve(160);
     hash += firmwareVersion;
+    hash += '|';
+    hash += firmwareBuildStamp;
     hash += '|';
     hash += deviceRole;
     hash += '|';
@@ -1120,6 +1123,8 @@ void setupOtaService() {
     Serial.println(WiFi.localIP());
     Serial.print("[OTA] Firmware version=");
     Serial.println(firmwareVersion);
+    Serial.print("[OTA] Firmware build=");
+    Serial.println(firmwareBuildStamp);
 }
 
 // ...existing code...
@@ -1380,6 +1385,7 @@ void setupWebServer() {
         #endif
         doc["nodeName"] = nodeName;
         doc["firmwareVersion"] = firmwareVersion;
+        doc["firmwareBuildStamp"] = firmwareBuildStamp;
         doc["deviceRole"] = deviceRole;
         doc["preferredTaskType"] = preferredTaskType;
         doc["firmwareTrack"] = firmwareTrack;
@@ -1834,6 +1840,7 @@ void setupWebServer() {
         #endif
         json += "\"nodeName\":\"" + nodeName + "\",";
         json += "\"firmwareVersion\":\"" + String(firmwareVersion) + "\",";
+        json += "\"firmwareBuildStamp\":\"" + String(firmwareBuildStamp) + "\",";
         json += "\"deviceRole\":\"" + String(deviceRole) + "\",";
         json += "\"preferredTaskType\":\"" + String(preferredTaskType) + "\",";
         json += "\"firmwareTrack\":\"" + String(firmwareTrack) + "\",";
@@ -2335,6 +2342,7 @@ void announcePresence() {
         runtimeUdpParentPort,
         nodeName.c_str(),
         deviceRole,
+        firmwareBuildStamp,
         capabilityHash,
         state,
         runtimeUdpParentPort,
@@ -3046,6 +3054,7 @@ void loop() {
     udpContext.nodeName = nodeName.c_str();
     udpContext.deviceRole = deviceRole;
     udpContext.firmwareVersion = firmwareVersion;
+    udpContext.firmwareBuildStamp = firmwareBuildStamp;
     udpContext.firmwareTrack = firmwareTrack;
     udpContext.discoveredNodeTable = &discoveredNodeTable;
     udpContext.computeNodeCapabilityHash = computeNodeCapabilityHash;

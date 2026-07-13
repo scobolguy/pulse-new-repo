@@ -903,6 +903,19 @@ img.catalog-studio-card-icon {
   grid-template-columns: 320px minmax(0, 1fr) 320px;
 }
 
+.flow-pane-resizer {
+  width: 6px;
+  cursor: col-resize;
+  background: linear-gradient(180deg, #edf3fa 0%, #e2eaf3 100%);
+  border-left: 1px solid #d2dce9;
+  border-right: 1px solid #d2dce9;
+}
+
+.flow-pane-resizer.active,
+.flow-pane-resizer:hover {
+  background: linear-gradient(180deg, #dce8f7 0%, #cfe0f4 100%);
+}
+
 .flow-pane {
   min-height: 0;
   display: flex;
@@ -930,6 +943,60 @@ img.catalog-studio-card-icon {
 .flow-palette-search-wrap {
   padding: 10px;
   border-bottom: 1px solid #dbe4ef;
+}
+
+.flow-node-stub-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid #dbe4ef;
+  background: #f5f8fc;
+}
+
+.flow-node-stub {
+  width: 100%;
+  border: 1px solid #b7c9de;
+  border-radius: 6px;
+  background: #e9f1fb;
+  color: #173a58;
+  font-size: 8pt;
+  padding: 6px 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+
+.flow-node-stub-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: #d4e5fa;
+  border: 1px solid #9ab6d7;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8pt;
+  font-weight: 700;
+  flex: 0 0 auto;
+}
+
+.flow-node-stub-icon-graphic {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 1px solid #9ab6d7;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+
+.flow-node-stub-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .flow-palette-tabs {
@@ -1165,6 +1232,13 @@ img.catalog-studio-card-icon {
   color: #4d647d;
 }
 
+.flow-target-score {
+  font-size: 8pt;
+  color: #395a7d;
+  border-left: 2px solid #c4d6ea;
+  padding-left: 6px;
+}
+
 .flow-target-tree-loading {
   font-style: italic;
   color: #5b7189;
@@ -1229,6 +1303,62 @@ img.catalog-studio-card-icon {
   font-size: 12px;
   color: #2f5375;
 }
+
+.flow-selection-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.flow-selection-tab {
+  border: 1px solid #b7c9de;
+  border-radius: 4px;
+  background: #eef4fb;
+  color: #173a58;
+  font-size: 8.5pt;
+  font-weight: 700;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.flow-selection-tab.active {
+  background: #d4e5fa;
+  border-color: #7da4cf;
+}
+
+.flow-node-config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 8.5pt;
+  color: #3c5c7f;
+}
+
+.flow-node-config-field input {
+  border: 1px solid #afc1d5;
+  border-radius: 4px;
+  background: #fff;
+  color: #1b2a3a;
+  padding: 6px 8px;
+  font: inherit;
+}
+
+.flow-node-config-field textarea {
+  min-height: 72px;
+  border: 1px solid #afc1d5;
+  border-radius: 4px;
+  background: #fff;
+  color: #1b2a3a;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.flow-position-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
 .flow-selection-capabilities input {
   border: 1px solid #afc1d5;
   border-radius: 4px;
@@ -1237,6 +1367,30 @@ img.catalog-studio-card-icon {
   padding: 8px;
   font: inherit;
   font-size: 12px;
+}
+
+.flow-selection-capabilities textarea {
+  min-height: 82px;
+  border: 1px solid #afc1d5;
+  border-radius: 4px;
+  background: #fff;
+  color: #1b2a3a;
+  padding: 8px;
+  font: inherit;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.flow-selection-capabilities button {
+  align-self: flex-start;
+  border: 1px solid #9ab2cf;
+  border-radius: 4px;
+  background: #edf4fc;
+  color: #143451;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 8.5pt;
+  cursor: pointer;
 }
 
 .flow-catalog-usage {
@@ -1261,13 +1415,15 @@ img.catalog-studio-card-icon {
   inset: 0;
   width: 100%;
   height: 100%;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .flow-edge {
   fill: none;
   stroke: #2f5a84;
   stroke-width: 2.5;
+  cursor: pointer;
+  pointer-events: stroke;
 }
 
 .flow-edge.active {
@@ -1275,9 +1431,15 @@ img.catalog-studio-card-icon {
   stroke-width: 3.5;
 }
 
+.flow-edge.selected {
+  stroke: #0b69c7;
+  stroke-width: 4;
+}
+
 .flow-edge-label {
   font-size: 11px;
   fill: #496580;
+  pointer-events: none;
 }
 
 .flow-edge-label.active {
@@ -1285,23 +1447,223 @@ img.catalog-studio-card-icon {
   font-weight: 700;
 }
 
+.flow-edge-label.selected {
+  fill: #0b69c7;
+  font-weight: 700;
+}
+
 .flow-node {
   position: absolute;
-  width: 200px;
-  border: 1px solid #d1dce9;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 8px 16px rgba(31, 57, 86, 0.08);
-  padding: 10px;
+  width: 84px;
+  min-height: 50px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
+  user-select: none;
+  touch-action: none;
 }
 
 .flow-node.selected {
-  border-color: #5f8bc4;
+  border-color: transparent;
 }
 
 .flow-node.link-source {
-  border-color: #ff9a00;
+  border-color: transparent;
+}
+
+.flow-node-name,
+.flow-node-meta,
+.flow-node-target,
+.flow-node-actions {
+  display: none;
+}
+
+.flow-node-head {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.flow-node .flow-item-icon,
+.flow-node .flow-icon-fallback {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+}
+
+.flow-node.selected .flow-item-icon,
+.flow-node.selected .flow-icon-fallback {
+  outline: 2px solid #5f8bc4;
+  outline-offset: 1px;
+}
+
+.flow-node.link-source .flow-item-icon,
+.flow-node.link-source .flow-icon-fallback {
+  outline: 2px solid #ff9a00;
+  outline-offset: 1px;
+}
+
+.flow-node-caption {
+  font-size: 10px;
+  line-height: 1.1;
+  color: #325270;
+  text-align: center;
+  max-width: 84px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-canvas-inspector {
+  position: absolute;
+  z-index: 8;
+  width: 190px;
+  border: 1px solid #c8a84b;
+  border-radius: 7px;
+  background: linear-gradient(180deg, rgba(255, 250, 214, 0.98), rgba(255, 243, 176, 0.97));
+  box-shadow: 0 10px 18px rgba(116, 83, 9, 0.18);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.flow-canvas-inspector-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: #6b4e00;
+  letter-spacing: 0.01em;
+}
+
+.flow-canvas-inspector-section {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.flow-canvas-inspector-section textarea {
+  min-height: 60px;
+  border: 1px solid #c9b25a;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.82);
+  color: #2d2100;
+  padding: 6px 7px;
+  font: inherit;
+  font-size: 11px;
+  resize: vertical;
+}
+
+.flow-canvas-inspector .flow-selection-tabs {
+  gap: 4px;
+}
+
+.flow-canvas-inspector .flow-selection-tab {
+  border-color: #c8a84b;
+  background: rgba(255, 248, 206, 0.94);
+  color: #6a4a00;
+  font-size: 8pt;
+  padding: 3px 6px;
+}
+
+.flow-canvas-inspector .flow-selection-tab.active {
+  background: rgba(255, 235, 131, 0.98);
+  border-color: #af881f;
+}
+
+.flow-canvas-inspector .flow-node-config-field {
+  gap: 3px;
+  font-size: 8pt;
+  color: #6b4e00;
+}
+
+.flow-canvas-inspector .flow-node-config-field input,
+.flow-canvas-inspector .flow-node-config-field textarea {
+  border-color: #c9b25a;
+  background: rgba(255, 255, 255, 0.84);
+}
+
+.flow-canvas-inspector .flow-canvas-inspector-actions button,
+.flow-canvas-inspector .flow-canvas-inspector-section button {
+  border: 1px solid #b99322;
+  background: linear-gradient(180deg, #fff4b0, #f4d04f);
+  color: #5f4300;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.5) inset;
+  padding: 3px 7px;
+  border-radius: 4px;
+  font-size: 8pt;
+}
+
+.flow-canvas-inspector .flow-position-grid {
+  gap: 6px;
+}
+
+.flow-node-context-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: transparent;
+}
+
+.flow-target-context-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: transparent;
+}
+
+.flow-node-context-menu {
+  position: fixed;
+  z-index: 41;
+  min-width: 180px;
+  padding: 6px;
+  border: 1px solid #b9c9da;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 14px 34px rgba(27, 42, 58, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.flow-target-context-menu {
+  position: fixed;
+  z-index: 41;
+  min-width: 220px;
+  padding: 6px;
+  border: 1px solid #b9c9da;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 14px 34px rgba(27, 42, 58, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.flow-target-context-menu button {
+  width: 100%;
+  text-align: left;
+}
+
+.flow-target-context-hint {
+  font-size: 11px;
+  color: #5b7189;
+  padding: 4px 8px 2px;
+  line-height: 1.35;
+}
+
+.flow-node-context-menu button {
+  width: 100%;
+  text-align: left;
 }
 
 .flow-node-actions {
@@ -1438,6 +1800,17 @@ img.catalog-studio-card-icon {
     border-color: #314152;
   }
 
+  .flow-node-stub-strip {
+    background: #1e2833;
+    border-color: #314152;
+  }
+
+  .flow-node-stub-strip button {
+    background: #213244;
+    border-color: #314152;
+    color: #dce6f3;
+  }
+
   .flow-palette-tab-count {
     background: #2a3b4e;
     color: #cfe0f2;
@@ -1455,6 +1828,7 @@ img.catalog-studio-card-icon {
   }
 
   .flow-target-tree-toggle::before,
+  .flow-target-score,
   .flow-target-tree-children > li {
     color: #99abc0;
   }

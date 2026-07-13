@@ -1,0 +1,8 @@
+{
+  "transactionId": "TRX-1001",
+  "receivedAt": "2026-07-11T16:00:00Z",
+  "replySentAt": "2026-07-11T16:00:05Z",
+  "currentState": "tx.completed",
+  "blockingReason": "",
+  "nextAction": "none"
+}

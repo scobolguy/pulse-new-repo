@@ -5,6 +5,7 @@ import antlr4 from 'antlr4';
 import StandardPascalLexer from '../grammar/generated-modern/StandardPascalLexer.js';
 import StandardPascalParser from '../grammar/generated-modern/StandardPascalParser.js';
 import StandardPascalVisitor from '../grammar/generated-modern/StandardPascalVisitor.js';
+import { attachPcodeSignature } from './pcode-signing.mjs';
 
 class CollectingErrorListener extends antlr4.error.ErrorListener {
   constructor() {
@@ -454,12 +455,13 @@ async function main() {
 
   const source = await fs.readFile(inPath, 'utf-8');
   const compiled = compileStandardPascalWithAntlr(source);
+  const signedProgramMap = attachPcodeSignature(compiled.programMap, compiled.pcodeText);
 
   await fs.mkdir(path.dirname(outPath), { recursive: true });
   await fs.mkdir(path.dirname(mapOutPath), { recursive: true });
 
   await fs.writeFile(outPath, compiled.pcodeText, 'utf-8');
-  await fs.writeFile(mapOutPath, `${JSON.stringify(compiled.programMap, null, 2)}\n`, 'utf-8');
+  await fs.writeFile(mapOutPath, `${JSON.stringify(signedProgramMap, null, 2)}\n`, 'utf-8');
 
   console.log(`[STD-PASCAL] Input: ${path.relative(process.cwd(), inPath)}`);
   console.log(`[STD-PASCAL] Output (.pcode): ${path.relative(process.cwd(), outPath)}`);

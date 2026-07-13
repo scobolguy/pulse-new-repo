@@ -5,6 +5,7 @@ import antlr4 from 'antlr4';
 import PascalishLexer from '../grammar/generated-modern/PascalishLexer.js';
 import PascalishParser from '../grammar/generated-modern/PascalishParser.js';
 import PascalishVisitor from '../grammar/generated-modern/PascalishVisitor.js';
+import { attachPcodeSignature } from './pcode-signing.mjs';
 
 class CollectingErrorListener extends antlr4.error.ErrorListener {
   constructor() {
@@ -269,8 +270,27 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
     if (ctx.whileStmt()) return this.visit(ctx.whileStmt());
     if (ctx.forStmt()) return this.visit(ctx.forStmt());
     if (ctx.repeatStmt()) return this.visit(ctx.repeatStmt());
+    if (ctx.enqueueStmt()) return this.visit(ctx.enqueueStmt());
+    if (ctx.dequeueStmt()) return this.visit(ctx.dequeueStmt());
     if (ctx.block()) return this.visit(ctx.block());
     return null;
+  }
+
+  visitEnqueueStmt(ctx) {
+    return {
+      type: 'Enqueue',
+      queue: ctx.IDENT().getText(),
+      expr: this.visit(ctx.expr())
+    };
+  }
+
+  visitDequeueStmt(ctx) {
+    const names = ctx.IDENT() || [];
+    return {
+      type: 'Dequeue',
+      queue: names[0] ? names[0].getText() : '',
+      target: names[1] ? names[1].getText() : ''
+    };
   }
 
   visitAssignStmt(ctx) {
@@ -529,6 +549,12 @@ class Codegen {
     return String(value || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   }
 
+  normalizeQueueName(name) {
+    const raw = String(name || '').trim();
+    if (!raw) return raw;
+    return raw.replace(/__/g, '\u0000').replace(/_/g, '.').replace(/\u0000/g, '_');
+  }
+
   emitExpr(expr) {
     if (!expr) return;
     if (expr.type === 'NumberLiteral') {
@@ -656,6 +682,27 @@ class Codegen {
       for (const entry of stmt.body || []) this.emitStatement(entry);
       this.emitExpr(stmt.untilExpr);
       this.emit(`JZ ${loopLabel}`);
+      return;
+    }
+    if (stmt.type === 'Enqueue') {
+      this.emitExpr(stmt.expr);
+      this.emit('ROUTE_SET_MESSAGE');
+      this.emit(`ROUTE_EMIT "${this.escapeString(this.normalizeQueueName(stmt.queue))}"`);
+      return;
+    }
+    if (stmt.type === 'Dequeue') {
+      const queueName = this.normalizeQueueName(stmt.queue);
+      const missLabel = this.nextLabel('DEQMISS');
+      const endLabel = this.nextLabel('DEQEND');
+      this.emit(`ROUTE_MATCH_QUEUE "${this.escapeString(queueName)}"`);
+      this.emit(`JZ ${missLabel}`);
+      this.emit('PUSH_INT 1');
+      this.emit(`STORE ${this.normalizeStorageName(stmt.target)}`);
+      this.emit(`JMP ${endLabel}`);
+      this.emit(`${missLabel}:`);
+      this.emit('PUSH_INT 0');
+      this.emit(`STORE ${this.normalizeStorageName(stmt.target)}`);
+      this.emit(`${endLabel}:`);
       return;
     }
     throw new Error(`[PASCALISH-PROGRAM] Unsupported statement node: ${stmt.type}`);
@@ -803,12 +850,13 @@ async function main() {
 
   const source = await fs.readFile(inPath, 'utf-8');
   const compiled = compilePascalishProgramWithAntlr(source);
+  const signedProgramMap = attachPcodeSignature(compiled.programMap, compiled.pcodeText);
 
   await fs.mkdir(path.dirname(outPath), { recursive: true });
   await fs.mkdir(path.dirname(mapOutPath), { recursive: true });
 
   await fs.writeFile(outPath, compiled.pcodeText, 'utf-8');
-  await fs.writeFile(mapOutPath, `${JSON.stringify(compiled.programMap, null, 2)}\n`, 'utf-8');
+  await fs.writeFile(mapOutPath, `${JSON.stringify(signedProgramMap, null, 2)}\n`, 'utf-8');
 
   console.log(`[PASCALISH-PROGRAM] Input: ${path.relative(process.cwd(), inPath)}`);
   console.log(`[PASCALISH-PROGRAM] Output (.pcode): ${path.relative(process.cwd(), outPath)}`);

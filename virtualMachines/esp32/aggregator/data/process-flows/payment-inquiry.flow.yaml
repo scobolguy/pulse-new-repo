@@ -1,0 +1,182 @@
+flowId: payment-inquiry
+version: 0.1.0
+status: draft
+owner: payments-platform
+changeApprovers:
+  - role: BA
+    name: TBD
+  - role: Dev
+    name: TBD
+  - role: QA
+    name: TBD
+  - role: Audit
+    name: TBD
+
+scope:
+  inScope:
+    - MT103 payment inquiry reconstruction
+    - decision chain (fraud, balance, additional)
+    - RTGS and SWIFT outbound behavior
+    - timeout and gateway-down handling
+  outOfScope:
+    - settlement accounting post-reconciliation
+  assumptions:
+    - journal events are append-only
+    - transactionId is unique and stable
+
+inputs:
+  transactionSources:
+    - source: swift.mt103.inbound
+      type: swift-mt103
+  requiredInboundFields:
+    - payment.reference
+    - payment.amount
+    - payment.currency
+
+steps:
+  - stepId: receive_payment
+    businessPurpose: accept inbound payment request
+    systemComponent: ingress
+    inboundQueue: swift.mt103.inbound
+    outboundQueueOnSuccess: swift.mt103.parsed
+    processingRuleSummary: validate and normalize envelope
+    tryBehavior: parse message and assign transactionId
+    onErrorBehavior: route tx.lifecycle.onerror
+    onTimeoutBehavior: route tx.lifecycle.ontimeout
+    expectedJournalEvents:
+      - payment_received
+      - queue_enqueued
+
+  - stepId: decision_fraud
+    businessPurpose: screen for fraud risk
+    systemComponent: fraud-gateway
+    inboundQueue: tx.decision.fraud
+    outboundQueueOnSuccess: tx.decision.balance
+    processingRuleSummary: approve or reject based on fraud score
+    tryBehavior: evaluate fraud model
+    onErrorBehavior: route tx.lifecycle.onerror
+    onTimeoutBehavior: route tx.lifecycle.ontimeout
+    expectedJournalEvents:
+      - stage_try_started
+      - stage_try_succeeded
+
+  - stepId: decision_balance
+    businessPurpose: ensure available balance
+    systemComponent: core-banking-gateway
+    inboundQueue: tx.decision.balance
+    outboundQueueOnSuccess: tx.rtgs.ready
+    processingRuleSummary: check available funds and reserve
+    tryBehavior: call balance API
+    onErrorBehavior: route tx.lifecycle.onerror
+    onTimeoutBehavior: route tx.lifecycle.ontimeout
+    expectedJournalEvents:
+      - stage_try_started
+      - stage_try_succeeded
+
+  - stepId: rtgs_submit
+    businessPurpose: submit payment to RTGS rail
+    systemComponent: rtgs-gateway
+    inboundQueue: tx.rtgs.ready
+    outboundQueueOnSuccess: tx.swift.outbound.pending
+    processingRuleSummary: submit when RTGS window open
+    tryBehavior: submit to RTGS
+    onErrorBehavior: route tx.lifecycle.onerror
+    onTimeoutBehavior: route tx.lifecycle.ontimeout
+    expectedJournalEvents:
+      - rtgs_availability_checked
+      - rtgs_submit_succeeded
+
+  - stepId: swift_send
+    businessPurpose: dispatch outbound SWIFT message
+    systemComponent: swift-gateway
+    inboundQueue: tx.swift.outbound.pending
+    outboundQueueOnSuccess: tx.completed
+    processingRuleSummary: send outbound SWIFT and mark complete
+    tryBehavior: send swift payload
+    onErrorBehavior: route tx.lifecycle.onerror
+    onTimeoutBehavior: route tx.lifecycle.ontimeout
+    expectedJournalEvents:
+      - swift_send_started
+      - swift_send_succeeded
+      - transaction_completed
+
+decisionGates:
+  - gateId: fraud_gate
+    decisionRule: only continue when fraud status is approved
+    ruleExpression: status == approved
+    passPath: decision_balance
+    failPath: rejected
+
+  - gateId: balance_gate
+    decisionRule: continue when balance status is ok
+    ruleExpression: status == ok
+    passPath: rtgs_submit
+    failPath: rejected
+
+externalDependencies:
+  - gatewayId: fraud-gateway
+    targetSystem: fraud-system
+    allowedOperations: [send, receive]
+    availabilityPolicy: gateway must be up
+    behaviorWhenDown: block and retry per timeout policy
+
+  - gatewayId: rtgs-gateway
+    targetSystem: rtgs
+    allowedOperations: [send, receive]
+    availabilityPolicy: gateway up and business window open
+    behaviorWhenDown: defer to tx.deferred.rtgs.closed
+
+  - gatewayId: swift-gateway
+    targetSystem: swift
+    allowedOperations: [send]
+    availabilityPolicy: gateway must be up
+    behaviorWhenDown: block and raise onError
+
+businessTimeWindows:
+  calendarId: rtgs-business-calendar
+  openSchedule: Monday-Friday 08:00-18:00 local
+  closedBehavior: defer and schedule requeue
+  deferredQueue: tx.deferred.rtgs.closed
+  retrySchedule: next Monday window start
+
+completionCriteria:
+  terminalSuccessEvent: swift_send_succeeded
+  replySentCondition: reply_sent exists
+  terminalFailureEvents:
+    - lifecycle-ontimeout
+    - lifecycle-onerror
+
+inquiryContract:
+  mandatoryFields:
+    - receivedAt
+    - replySentAt
+    - currentState
+    - blockingReason
+    - nextAction
+
+controlsAndAudit:
+  controlIds:
+    - CTRL-GW-UP-001
+    - CTRL-TIMEOUT-002
+    - CTRL-JOURNAL-003
+  retention: 7 years
+
+testScenarios:
+  - id: TC-HAPPY-001
+    name: happy path to swift completion
+  - id: TC-GW-DOWN-002
+    name: rtgs gateway down blocks progression
+  - id: TC-TIMEOUT-003
+    name: timeout routes to ontimeout queue
+  - id: TC-DEFER-004
+    name: sunday defer and monday requeue
+
+traceabilityMatrix:
+  - requirement: gateway must be up to send or receive
+    implementationRef: gateway status enforcement in support and routing
+    evidenceEvent: gateway-down block narrative
+    testCase: TC-GW-DOWN-002
+  - requirement: completion only after swift send
+    implementationRef: completion criterion
+    evidenceEvent: swift_send_succeeded
+    testCase: TC-HAPPY-001

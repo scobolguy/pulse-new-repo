@@ -1,0 +1,94 @@
+{
+  "name": "pulse-catalog-studio-vscode",
+  "displayName": "Pulse Catalog Studio",
+  "description": "VS Code webview entry point for the Pulse Catalog Studio.",
+  "version": "0.0.1",
+  "publisher": "pulse-local",
+  "private": true,
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "vfl",
+        "aliases": [
+          "Visual Flow Language",
+          "VFL"
+        ],
+        "extensions": [
+          ".vfl"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "pulseCatalogStudio.open",
+        "title": "Pulse: Open Catalog Studio"
+      },
+      {
+        "command": "pulseCatalogStudio.newVfl",
+        "title": "Pulse: New Visual Flow Document"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "pulseCatalogStudio.vflEditor",
+        "displayName": "Visual Flow Language Editor",
+        "selector": [
+          {
+            "filenamePattern": "*.vfl"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "configuration": {
+      "title": "Pulse Catalog Studio",
+      "properties": {
+        "pulse.catalogStudio.url": {
+          "type": "string",
+          "default": "http://localhost:5173/",
+          "description": "URL loaded inside the Catalog Studio webview. Point this to the running Vite or deployed frontend."
+        },
+        "pulse.catalogStudio.apiBase": {
+          "type": "string",
+          "default": "http://localhost:4000",
+          "description": "Base URL used by the VFL editor to hydrate palette and topology data from the aggregator APIs."
+        },
+        "pulse.catalogStudio.defaultVflExtension": {
+          "type": "string",
+          "default": ".vfl",
+          "description": "Default file extension used for Visual Flow Language documents."
+        },
+        "pulse.catalogStudio.defaultFolder": {
+          "type": "string",
+          "default": "aggregator/data/visual-flows",
+          "description": "Default workspace-relative folder for newly created VFL documents."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "pulseCatalogStudio",
+          "title": "Catalog Studio",
+          "icon": "media/catalog-studio.svg"
+        }
+      ]
+    },
+    "views": {
+      "pulseCatalogStudio": [
+        {
+          "id": "pulseCatalogStudio.sidebar",
+          "name": "Catalog Studio"
+        }
+      ]
+    }
+  }
+}

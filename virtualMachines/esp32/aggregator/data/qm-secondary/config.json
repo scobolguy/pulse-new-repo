@@ -131,8 +131,19 @@
         "text-string"
       ],
       "createdByUser": false
+    },
+    "payments.inbound": {
+      "name": "payments.inbound",
+      "createdAt": 1783788360376,
+      "frozen": false,
+      "queueClass": "permanent",
+      "dataTypeId": "text-string",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "createdByUser": false
     }
   },
-  "configVersion": 12,
-  "timestamp": 1783728655562
+  "configVersion": 13,
+  "timestamp": 1783788360376
 }

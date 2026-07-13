@@ -275,6 +275,11 @@ struct Status {
     int numPages;
     std::string backingFile;
     size_t maxSpace = 0;
+    uint32_t freeHeapBytes = 0;
+    uint32_t stackHighWaterBytes = 0;
+    uint32_t stackHeapGapBytes = 0;
+    bool stackHeapCollisionRisk = false;
+    std::string memoryPressureLevel = "unknown";
     std::vector<std::string> dynamicLibs;
     bool running = false;
     uint16_t pc = 0;

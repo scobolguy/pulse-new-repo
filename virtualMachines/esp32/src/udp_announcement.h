@@ -14,6 +14,7 @@ bool sendNodeBeaconAnnouncement(
     uint16_t announcePort,
     const char* nodeName,
     const char* deviceRole,
+    const char* firmwareBuildStamp,
     const String& capabilityHash,
     UdpAnnouncementState& state,
     uint16_t parentPort,

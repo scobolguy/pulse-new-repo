@@ -452,6 +452,7 @@ const TX_SCHEDULED_DISPATCH_MAX_PER_TICK = Math.max(1, readEnvNumber('TX_SCHEDUL
 const LIFECYCLE_TRANSITION_TIMEOUT_MS = Math.max(0, readEnvNumber('LIFECYCLE_TRANSITION_TIMEOUT_MS', 15000));
 const LIFECYCLE_ON_ERROR_QUEUE = readEnvString('LIFECYCLE_ON_ERROR_QUEUE', 'tx.lifecycle.onerror').trim() || 'tx.lifecycle.onerror';
 const LIFECYCLE_ON_TIMEOUT_QUEUE = readEnvString('LIFECYCLE_ON_TIMEOUT_QUEUE', 'tx.lifecycle.ontimeout').trim() || 'tx.lifecycle.ontimeout';
+const TX_LIFECYCLE_SOURCE_REPO_REL = readEnvString('TX_LIFECYCLE_SOURCE_REPO_REL', './data/transaction-lifecycle.tsl').trim() || './data/transaction-lifecycle.tsl';
 const LIFECYCLE_FORCE_MAP_DELAY_MS = Math.max(0, readEnvNumber('LIFECYCLE_FORCE_MAP_DELAY_MS', 0));
 const LIFECYCLE_FORCE_MAP_FAILURE = readEnvBoolean('LIFECYCLE_FORCE_MAP_FAILURE', ['1', 'true', 'yes'], false);
 const rawRequireRealtimeDb = String(process.env.TX_STATE_REQUIRE_REALTIME_DB || 'true').trim().toLowerCase();
@@ -479,7 +480,7 @@ function ensureLifecycleCompiledArtifact() {
   if (fs.existsSync(compiledPath)) return;
 
   const runtimeDslPath = path.join(RUNTIME_DATA_ROOT, 'transaction-lifecycle.tsl');
-  seedRuntimeFileIfMissing(runtimeDslPath, './data/transaction-lifecycle.tsl');
+  seedRuntimeFileIfMissing(runtimeDslPath, TX_LIFECYCLE_SOURCE_REPO_REL);
   if (!fs.existsSync(runtimeDslPath)) return;
 
   try {
@@ -8241,6 +8242,57 @@ function applyLifecycleMapping(mappingId, message, runtimeContext = {}) {
   const id = String(mappingId || '').trim().toLowerCase();
   if (!id) return message;
 
+  const readPath = (root, pathExpr) => {
+    const raw = String(pathExpr || '').trim();
+    if (!raw) return undefined;
+    const normalized = raw.startsWith('$.') ? raw.slice(2) : raw;
+    const parts = normalized.split('.').filter(Boolean);
+    let current = root;
+    for (const part of parts) {
+      if (current == null || typeof current !== 'object') return undefined;
+      current = current[part];
+    }
+    return current;
+  };
+
+  const writePath = (root, pathExpr, value) => {
+    const raw = String(pathExpr || '').trim();
+    if (!raw) return root;
+    const normalized = raw.startsWith('$.') ? raw.slice(2) : raw;
+    const parts = normalized.split('.').filter(Boolean);
+    if (parts.length === 0) return root;
+
+    let current = root;
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      const key = parts[i];
+      if (!current[key] || typeof current[key] !== 'object') {
+        current[key] = {};
+      }
+      current = current[key];
+    }
+    current[parts[parts.length - 1]] = value;
+    return root;
+  };
+
+  const toLowerTrim = (value) => String(value == null ? '' : value).trim().toLowerCase();
+  const toUpperTrim = (value) => String(value == null ? '' : value).trim().toUpperCase();
+  const toTrim = (value) => String(value == null ? '' : value).trim();
+
+  const applyObjectPathMappings = (inputMessage, mappingSpec = []) => {
+    const source = (inputMessage && typeof inputMessage === 'object' && !Array.isArray(inputMessage))
+      ? inputMessage
+      : { value: inputMessage };
+    const target = {};
+
+    for (const row of mappingSpec) {
+      const sourceValue = readPath(source, row.from);
+      const transformed = typeof row.transform === 'function' ? row.transform(sourceValue, source) : sourceValue;
+      writePath(target, row.to, transformed);
+    }
+
+    return target;
+  };
+
   if (id === 'mt103-to-pacs') {
     if (message && typeof message === 'object' && message.Document && typeof message.Document === 'object') {
       return message;
@@ -8261,6 +8313,35 @@ function applyLifecycleMapping(mappingId, message, runtimeContext = {}) {
       };
     }
     return mapped;
+  }
+
+  if (id === 'payment-to-transaction-inquiry') {
+    return applyObjectPathMappings(message, [
+      { from: 'payment.reference', to: 'reference', transform: toTrim },
+      { from: 'payment.reference', to: 'entityId', transform: toTrim },
+      { from: 'payment.reference', to: 'transaction.id', transform: toTrim },
+      { from: 'payment.receivedAt', to: 'transaction.receivedAt', transform: toTrim },
+      { from: 'payment.amount', to: 'payment.amount' },
+      { from: 'payment.currency', to: 'payment.currency', transform: toUpperTrim },
+      { from: 'payment.sender', to: 'payment.sender', transform: toTrim },
+      { from: 'payment.receiver', to: 'payment.receiver', transform: toTrim },
+      { from: 'gateway.rtgs', to: 'gateway.rtgs', transform: toLowerTrim },
+      { from: 'gateway.swift', to: 'gateway.swift', transform: toLowerTrim },
+      { from: 'lifecycle.stage', to: 'lifecycle.stage', transform: toLowerTrim },
+      { from: 'lifecycle.outcome', to: 'lifecycle.outcome', transform: toLowerTrim }
+    ]);
+  }
+
+  if (id === 'transaction-to-support-response') {
+    return applyObjectPathMappings(message, [
+      { from: 'reference', to: 'paymentReference', transform: toTrim },
+      { from: 'entityId', to: 'transactionId', transform: toTrim },
+      { from: 'transaction.receivedAt', to: 'receivedAt', transform: toTrim },
+      { from: 'transaction.replySentAt', to: 'replySentAt', transform: toTrim },
+      { from: 'lifecycle.currentStatus', to: 'currentStatus', transform: toLowerTrim },
+      { from: 'lifecycle.blockingReason', to: 'blockingReason', transform: toTrim },
+      { from: 'lifecycle.nextAction', to: 'nextAction', transform: toTrim }
+    ]);
   }
 
   throw new Error(`Unsupported lifecycle mapping: ${id}`);

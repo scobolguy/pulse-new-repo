@@ -89,7 +89,7 @@ void sendNodeDetailsResponse(WiFiUDP& socket, const UdpRuntimeContext& context, 
         return;
     }
 
-    if (!context.nodeName || !context.deviceRole || !context.firmwareVersion || !context.firmwareTrack) {
+    if (!context.nodeName || !context.deviceRole || !context.firmwareVersion || !context.firmwareBuildStamp || !context.firmwareTrack) {
         return;
     }
     JsonDocument doc;
@@ -105,6 +105,7 @@ void sendNodeDetailsResponse(WiFiUDP& socket, const UdpRuntimeContext& context, 
     doc["acknowledged"] = nodeBeaconAcknowledged;
     doc["nodeRole"] = context.deviceRole;
     doc["firmwareVersion"] = context.firmwareVersion;
+    doc["firmwareBuildStamp"] = context.firmwareBuildStamp;
     doc["firmwareTrack"] = context.firmwareTrack;
 
     String json;

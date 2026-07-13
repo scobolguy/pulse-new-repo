@@ -2,7 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { pathToFileURL } from 'url';
 import { compileRouterMapperDSL as compileRouterMapperDSLAntlr } from './compile-pascal.mjs';
-import { compileRouterMapperDSL as compileRouterMapperDSLLegacy } from './compile-router-mapper-dsl.mjs';
+import { attachPcodeSignature } from './pcode-signing.mjs';
 
 function parseArgs(argv) {
   const args = {
@@ -300,23 +300,17 @@ async function main() {
   assertRequiredOpcodes(manifest);
 
   const sourceText = await fs.readFile(inputPath, 'utf-8');
-  let compiled;
-  try {
-    compiled = compileRouterMapperDSLAntlr(sourceText);
-  } catch (error) {
-    // Compatibility fallback for legacy router/mapper DSL files that ANTLR rejects.
-    compiled = compileRouterMapperDSLLegacy(sourceText);
-    console.warn(`[PCODE-COMPILER] ANTLR compile failed; used legacy DSL compiler fallback: ${error?.message || String(error)}`);
-  }
+  const compiled = compileRouterMapperDSLAntlr(sourceText);
   const emitted = (compiled && compiled.pcodeText && compiled.programMap)
     ? { pcodeText: compiled.pcodeText, symbolMap: compiled.programMap }
     : emitPortableProgram(compiled);
+  const signedSymbolMap = attachPcodeSignature(emitted.symbolMap, emitted.pcodeText);
 
   await fs.mkdir(path.dirname(outPath), { recursive: true });
   await fs.mkdir(path.dirname(mapOutPath), { recursive: true });
 
   await fs.writeFile(outPath, emitted.pcodeText, 'utf-8');
-  await fs.writeFile(mapOutPath, `${JSON.stringify(emitted.symbolMap, null, 2)}\n`, 'utf-8');
+  await fs.writeFile(mapOutPath, `${JSON.stringify(signedSymbolMap, null, 2)}\n`, 'utf-8');
 
   console.log(`[PCODE-COMPILER] Input: ${path.relative(process.cwd(), inputPath)}`);
   console.log(`[PCODE-COMPILER] Manifest: ${path.relative(process.cwd(), manifestPath)}`);

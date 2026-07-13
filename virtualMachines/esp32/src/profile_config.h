@@ -43,3 +43,11 @@
 #ifndef SUPERVISOR_HEARTBEAT_URL
 #define SUPERVISOR_HEARTBEAT_URL ""
 #endif
+
+#ifndef PROFILE_PCODE_SIGNING_KEY
+#define PROFILE_PCODE_SIGNING_KEY "dev-insecure-key-change-me"
+#endif
+
+#ifndef PROFILE_PCODE_SIGNING_KEY_ID
+#define PROFILE_PCODE_SIGNING_KEY_ID "profile-default"
+#endif

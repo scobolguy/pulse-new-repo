@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "generatedAt": "2026-07-11T21:59:27.557Z",
+  "serviceId": "payment_inquiry_flow",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "payment_inquiry_flow",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-program",
+  "sourceLanguage": "pascalish",
+  "globals": [
+    "msg",
+    "inquiry_msg",
+    "inquiry_response"
+  ],
+  "variableDeclarations": [
+    {
+      "type": "VarDecl",
+      "name": "msg",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "string",
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "inquiry_msg",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "string",
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "inquiry_response",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "string",
+        "genericArgs": []
+      }
+    }
+  ],
+  "procedures": {},
+  "typeDeclarations": [],
+  "classDeclarations": [],
+  "entryLabel": "MAIN"
+}

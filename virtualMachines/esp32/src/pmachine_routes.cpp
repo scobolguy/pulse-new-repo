@@ -9,6 +9,11 @@
 #include <deque>
 #include <vector>
 #include <utility>
+#include <cstring>
+#include <cstdio>
+#if defined(ESP32)
+#include <mbedtls/md.h>
+#endif
 #if defined(ESP32)
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -111,6 +116,88 @@ String toUpperCopy(const String& in) {
     String s = in;
     s.toUpperCase();
     return s;
+}
+
+String toLowerCopy(const String& in) {
+    String s = in;
+    s.toLowerCase();
+    return s;
+}
+
+bool computeHmacSha256Hex(const String& key, const String& text, String& outHex) {
+#if defined(ESP32)
+    unsigned char digest[32] = {0};
+    const mbedtls_md_info_t* mdInfo = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+    if (mdInfo == nullptr) return false;
+    int rc = mbedtls_md_hmac(
+        mdInfo,
+        reinterpret_cast<const unsigned char*>(key.c_str()),
+        key.length(),
+        reinterpret_cast<const unsigned char*>(text.c_str()),
+        text.length(),
+        digest
+    );
+    if (rc != 0) return false;
+
+    char hexBuf[65];
+    for (size_t i = 0; i < 32; ++i) {
+        snprintf(&hexBuf[i * 2], 3, "%02x", static_cast<unsigned int>(digest[i]));
+    }
+    hexBuf[64] = '\0';
+    outHex = String(hexBuf);
+    return true;
+#else
+    (void)key;
+    (void)text;
+    outHex = "";
+    return false;
+#endif
+}
+
+bool verifySignedPcode(const String& pcodeText, const JsonDocument& programMapDoc, String& errorOut) {
+    if (!programMapDoc.is<JsonObjectConst>()) {
+        errorOut = "Program map must be a JSON object";
+        return false;
+    }
+
+    JsonObjectConst root = programMapDoc.as<JsonObjectConst>();
+    if (!root["signing"].is<JsonObjectConst>()) {
+        errorOut = "Program map missing signing block";
+        return false;
+    }
+
+    JsonObjectConst signing = root["signing"].as<JsonObjectConst>();
+    String algorithm = String(signing["algorithm"] | "");
+    String keyId = String(signing["keyId"] | "");
+    String signature = String(signing["signature"] | "");
+
+    if (toLowerCopy(trimCopy(algorithm)) != "hmac-sha256") {
+        errorOut = "Unsupported signing algorithm";
+        return false;
+    }
+
+    if (trimCopy(keyId) != String(PROFILE_PCODE_SIGNING_KEY_ID)) {
+        errorOut = "Signing key id mismatch";
+        return false;
+    }
+
+    if (trimCopy(signature).length() == 0) {
+        errorOut = "Empty pcode signature";
+        return false;
+    }
+
+    String expected;
+    if (!computeHmacSha256Hex(String(PROFILE_PCODE_SIGNING_KEY), pcodeText, expected)) {
+        errorOut = "Unable to compute signature digest on this runtime";
+        return false;
+    }
+
+    if (toLowerCopy(trimCopy(signature)) != toLowerCopy(trimCopy(expected))) {
+        errorOut = "Pcode signature verification failed";
+        return false;
+    }
+
+    return true;
 }
 
 String normalizeDslEscapes(const String& in) {
@@ -410,12 +497,20 @@ void addRunOutputsToJson(
     const String& inputQueue,
     const String& message
 ) {
+    auto status = machine.getStatus();
     out["ok"] = true;
     out["source"] = source;
     out["inputQueue"] = inputQueue;
     out["message"] = message;
     out["stepLimitHit"] = machine.didLastRunHitStepLimit();
     out["stepCount"] = static_cast<uint32_t>(machine.getLastRunStepCount());
+
+    JsonObject pressure = out["memoryPressure"].to<JsonObject>();
+    pressure["freeHeapBytes"] = status.freeHeapBytes;
+    pressure["stackHighWaterBytes"] = status.stackHighWaterBytes;
+    pressure["stackHeapGapBytes"] = status.stackHeapGapBytes;
+    pressure["riskLevel"] = status.memoryPressureLevel.c_str();
+    pressure["stackHeapCollisionRisk"] = status.stackHeapCollisionRisk;
 
     JsonArray stdoutLines = out["stdout"].to<JsonArray>();
     for (const auto& line : machine.getLastRunTextOutput()) {
@@ -1331,7 +1426,15 @@ bool loadExecutionCacheFromPaths(
     std::vector<pmachine::MappingDef> mappingDefs;
     std::map<std::string, std::vector<std::string>> procedureSignatures;
     ProgramMapMetadata metadata;
-    if (!loadProgramMapMappings(programMap, ffs, mappingDefs, &procedureSignatures, errorOut, &metadata)) {
+    JsonDocument programMapDoc;
+    if (!deserializeDocFromPath(programMap, ffs, programMapDoc)) {
+        errorOut = "Unable to load program map file";
+        return false;
+    }
+    if (!verifySignedPcode(text, programMapDoc, errorOut)) {
+        return false;
+    }
+    if (!loadProgramMapMappingsFromDoc(programMapDoc, mappingDefs, &procedureSignatures, errorOut, &metadata)) {
         return false;
     }
 
@@ -2579,6 +2682,13 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         json += "\"numPages\":" + String(s.numPages) + ",";
         json += "\"backingFile\":\"" + String(s.backingFile.c_str()) + "\",";
         json += "\"maxSpace\":" + String((unsigned long)s.maxSpace) + ",";
+        json += "\"memoryPressure\":{";
+        json += "\"freeHeapBytes\":" + String((unsigned long)s.freeHeapBytes) + ",";
+        json += "\"stackHighWaterBytes\":" + String((unsigned long)s.stackHighWaterBytes) + ",";
+        json += "\"stackHeapGapBytes\":" + String((unsigned long)s.stackHeapGapBytes) + ",";
+        json += "\"riskLevel\":\"" + String(s.memoryPressureLevel.c_str()) + "\",";
+        json += "\"stackHeapCollisionRisk\":" + String(s.stackHeapCollisionRisk ? "true" : "false");
+        json += "},";
         json += "\"dynamicLibs\":[";
         for (size_t i = 0; i < s.dynamicLibs.size(); ++i) {
             if (i > 0) json += ",";
@@ -2948,8 +3058,18 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         ProgramMapMetadata metadata;
         bool hasProgramMap = false;
         if (programMap.length() > 0) {
+            JsonDocument programMapDoc;
+            if (!deserializeDocFromPath(programMap, ffs, programMapDoc)) {
+                request->send(404, "text/plain", "Unable to load program map file");
+                return;
+            }
+            String verifyError;
+            if (!verifySignedPcode(text, programMapDoc, verifyError)) {
+                request->send(403, "text/plain", verifyError);
+                return;
+            }
             String mappingError;
-            if (!loadProgramMapMappings(programMap, ffs, mappingDefs, &procedureSignatures, mappingError, &metadata)) {
+            if (!loadProgramMapMappingsFromDoc(programMapDoc, mappingDefs, &procedureSignatures, mappingError, &metadata)) {
                 request->send(404, "text/plain", mappingError);
                 return;
             }
@@ -3042,8 +3162,18 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         ProgramMapMetadata metadata;
         bool hasProgramMap = false;
         if (programMap.length() > 0) {
+            JsonDocument programMapDoc;
+            if (!deserializeDocFromPath(programMap, ffs, programMapDoc)) {
+                request->send(404, "text/plain", "Unable to load program map file");
+                return;
+            }
+            String verifyError;
+            if (!verifySignedPcode(pcode, programMapDoc, verifyError)) {
+                request->send(403, "text/plain", verifyError);
+                return;
+            }
             String mappingError;
-            if (!loadProgramMapMappings(programMap, ffs, mappingDefs, &procedureSignatures, mappingError, &metadata)) {
+            if (!loadProgramMapMappingsFromDoc(programMapDoc, mappingDefs, &procedureSignatures, mappingError, &metadata)) {
                 request->send(404, "text/plain", mappingError);
                 return;
             }
@@ -3165,6 +3295,12 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
                 String mappingError;
                 JsonDocument inlineMap;
                 inlineMap.set(bodyDoc["programMap"]);
+                String verifyError;
+                if (!verifySignedPcode(pcode, inlineMap, verifyError)) {
+                    String response = String("{\"error\":\"") + verifyError + "\"}";
+                    request->send(403, "application/json", response);
+                    return;
+                }
                 if (!loadProgramMapMappingsFromDoc(inlineMap, mappingDefs, &procedureSignatures, mappingError, &metadata)) {
                     String response = String("{\"error\":\"") + mappingError + "\"}";
                     request->send(400, "application/json", response);
@@ -3179,6 +3315,12 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
                     request->send(400, "application/json", "{\"error\":\"Invalid programMapText JSON\"}");
                     return;
                 }
+                String verifyError;
+                if (!verifySignedPcode(pcode, inlineMap, verifyError)) {
+                    String response = String("{\"error\":\"") + verifyError + "\"}";
+                    request->send(403, "application/json", response);
+                    return;
+                }
                 if (!loadProgramMapMappingsFromDoc(inlineMap, mappingDefs, &procedureSignatures, mappingError, &metadata)) {
                     String response = String("{\"error\":\"") + mappingError + "\"}";
                     request->send(400, "application/json", response);
@@ -3186,8 +3328,19 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
                 }
                 hasProgramMap = true;
             } else if (programMapPath.length() > 0) {
+                JsonDocument programMapDoc;
+                if (!deserializeDocFromPath(programMapPath, ffs, programMapDoc)) {
+                    request->send(404, "application/json", "{\"error\":\"Unable to load program map file\"}");
+                    return;
+                }
+                String verifyError;
+                if (!verifySignedPcode(pcode, programMapDoc, verifyError)) {
+                    String response = String("{\"error\":\"") + verifyError + "\"}";
+                    request->send(403, "application/json", response);
+                    return;
+                }
                 String mappingError;
-                if (!loadProgramMapMappings(programMapPath, ffs, mappingDefs, &procedureSignatures, mappingError, &metadata)) {
+                if (!loadProgramMapMappingsFromDoc(programMapDoc, mappingDefs, &procedureSignatures, mappingError, &metadata)) {
                     String response = String("{\"error\":\"") + mappingError + "\"}";
                     request->send(404, "application/json", response);
                     return;
@@ -3276,9 +3429,19 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         std::vector<pmachine::PInstruction> instructions = pmachine::loadTextPCode(std::string(text.c_str()));
         std::vector<pmachine::MappingDef> mappingDefs;
         std::map<std::string, std::vector<std::string>> procedureSignatures;
+        JsonDocument programMapDoc;
+        if (!deserializeDocFromPath(programMap, ffs, programMapDoc)) {
+            request->send(404, "text/plain", "Unable to load program map file");
+            return;
+        }
+        String verifyError;
+        if (!verifySignedPcode(text, programMapDoc, verifyError)) {
+            request->send(403, "text/plain", verifyError);
+            return;
+        }
         String mappingError;
         ProgramMapMetadata metadata;
-        if (!loadProgramMapMappings(programMap, ffs, mappingDefs, &procedureSignatures, mappingError, &metadata)) {
+        if (!loadProgramMapMappingsFromDoc(programMapDoc, mappingDefs, &procedureSignatures, mappingError, &metadata)) {
             request->send(404, "text/plain", mappingError);
             return;
         }

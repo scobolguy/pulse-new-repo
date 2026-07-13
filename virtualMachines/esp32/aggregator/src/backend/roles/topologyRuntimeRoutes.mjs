@@ -1,6 +1,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
+import { execFile } from 'node:child_process';
 import { allocateJob } from '../allocator/economicAllocator.mjs';
+import { attachPcodeSignature } from '../../../scripts/pcode-signing.mjs';
 
 const NODE_RENAME_OVERRIDES_PATH = path.resolve(process.cwd(), 'data', 'node-rename-overrides.json');
 const NODE_TOPOLOGY_OVERRIDES_PATH = path.resolve(process.cwd(), 'data', 'node-topology-overrides.json');
@@ -139,6 +142,73 @@ function normalizeNodeTopologyMap(raw) {
     };
   }
   return out;
+}
+
+function normalizeComputeNodeConfig(node) {
+  const config = node?.config && typeof node.config === 'object' ? node.config : {};
+  return {
+    operationRef: String(config.operationRef || '').trim().toLowerCase(),
+    argumentN: String(config.argumentN || '3').trim(),
+    runtimeKind: String(config.runtimeKind || 'pmachine').trim(),
+    deploymentTarget: String(config.deploymentTarget || 'esp32-native').trim(),
+    outputMode: String(config.outputMode || 'console').trim(),
+    programSource: String(config.programSource || '').trim(),
+  };
+}
+
+function generateHanoiMoves(count, fromPeg = 'A', toPeg = 'C', auxPeg = 'B', moves = []) {
+  const size = Math.max(1, Number.parseInt(String(count || '3').trim(), 10) || 3);
+  if (size === 1) {
+    moves.push(`Move disk 1 from ${fromPeg} to ${toPeg}`);
+    return moves;
+  }
+  generateHanoiMoves(size - 1, fromPeg, auxPeg, toPeg, moves);
+  moves.push(`Move disk ${size} from ${fromPeg} to ${toPeg}`);
+  generateHanoiMoves(size - 1, auxPeg, toPeg, fromPeg, moves);
+  return moves;
+}
+
+function compileComputeNodeToPcode(computeNode) {
+  const config = normalizeComputeNodeConfig(computeNode);
+  const operationRef = String(config.operationRef || '').trim().toLowerCase();
+  if (operationRef !== 'towers-of-hanoi' && operationRef !== 'hanoi') {
+    throw new Error(`Unsupported compute operationRef: ${operationRef || '(empty)'}`);
+  }
+
+  const n = Math.max(1, Math.min(8, Number.parseInt(String(config.argumentN || '3').trim(), 10) || 3));
+  const moves = generateHanoiMoves(n);
+  const summaryLine = `Towers of Hanoi n=${n} (${moves.length} moves)`;
+  const instructions = [
+    `PUSH_STR ${JSON.stringify(summaryLine)}`,
+    'PRINT',
+    'PRINT_NL',
+  ];
+
+  for (const move of moves) {
+    instructions.push(`PUSH_STR ${JSON.stringify(move)}`);
+    instructions.push('PRINT');
+    instructions.push('PRINT_NL');
+  }
+
+  instructions.push('HALT');
+
+  const programMap = [];
+  let address = 0;
+  for (const line of instructions) {
+    programMap.push({ address, text: line });
+    address += 1;
+  }
+
+  const pcodeText = `${instructions.join('\n')}\n`;
+  return {
+    pcodeText,
+    programMap,
+    summaryLine,
+    moves,
+    config,
+    operationRef,
+    instructionCount: address,
+  };
 }
 
 async function loadNodeRenameMap() {
@@ -1544,20 +1614,38 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     if (!normalizedIp) throw new Error('board ip is required');
     if (!normalizedPath) throw new Error('remote path is required');
 
-    const body = new URLSearchParams({
-      file: normalizedPath,
-      body: String(content || '')
+    const pathSegments = normalizedPath.split('/').filter(Boolean);
+    const parentSegments = pathSegments.slice(0, -1);
+    let parentPath = '';
+    for (const segment of parentSegments) {
+      parentPath += `/${segment}`;
+      const createResponse = await fetch(`http://${normalizedIp}:4000/api/fileserver/ffs/create`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({ path: parentPath, type: 'directory' })
+      });
+      if (!createResponse.ok && createResponse.status !== 409) {
+        const createText = await createResponse.text().catch(() => '');
+        throw new Error(`board directory create failed for ${parentPath}: ${createText || `HTTP ${createResponse.status}`}`);
+      }
+    }
+
+    const body = JSON.stringify({
+      path: normalizedPath,
+      data: String(content || '')
     });
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), Math.max(250, timeoutMs));
     try {
-      const response = await fetch(`http://${normalizedIp}/ffs/upload`, {
+      const response = await fetch(`http://${normalizedIp}:4000/api/fileserver/ffs/put`, {
         method: 'POST',
         headers: {
-          'content-type': 'application/x-www-form-urlencoded'
+          'content-type': 'application/json'
         },
-        body: body.toString(),
+        body,
         signal: controller.signal
       });
 
@@ -1576,12 +1664,50 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     }
   }
 
+  async function runLocalPmachineFallback({ fallbackPcodeText, fallbackProgramMapText, inputQueue, message, sourceLabel }) {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'esp32-pmachine-'));
+    const slug = String(sourceLabel || 'compute-node').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'compute-node';
+    const pcodePath = path.join(tempDir, `${slug}.pcode`);
+    const programMapPath = path.join(tempDir, `${slug}.program.json`);
+
+    await fs.writeFile(pcodePath, `${fallbackPcodeText}\n`, 'utf-8');
+    await fs.writeFile(programMapPath, `${fallbackProgramMapText}\n`, 'utf-8');
+
+    const runnerPath = path.resolve(process.cwd(), 'scripts', 'run-js-pmachine.mjs');
+    const stdout = await new Promise((resolve, reject) => {
+      execFile(
+        'node',
+        [runnerPath, '--pcode', pcodePath, '--program-map', programMapPath, '--input-queue', inputQueue, '--message', message],
+        { cwd: process.cwd(), maxBuffer: 1024 * 1024 },
+        (error, childStdout, childStderr) => {
+          if (error) {
+            const details = String(childStderr || childStdout || error.message || '').trim();
+            return reject(new Error(details || 'local pmachine execution failed'));
+          }
+          return resolve(String(childStdout || '').trim());
+        }
+      );
+    });
+
+    try {
+      return JSON.parse(stdout);
+    } catch {
+      return {
+        stdout: stdout ? [stdout] : [],
+        rawOutput: stdout,
+        fallback: true
+      };
+    }
+  }
+
   async function executeProgramOnBoard(ip, program = {}, timeoutMs = 8000) {
     const normalizedIp = String(ip || '').trim();
     const file = String(program.file || '').trim();
     const programMap = String(program.programMap || '').trim();
     const inputQueue = String(program.inputQueue || 'default.in').trim();
     const message = String(program.message || '').trim();
+    const fallbackPcodeText = String(program.fallbackPcodeText || '').trim();
+    const fallbackProgramMapText = String(program.fallbackProgramMapText || '').trim();
     if (!normalizedIp) throw new Error('board ip is required');
     if (!file || !programMap) {
       throw new Error('program file and programMap are required');
@@ -1610,7 +1736,25 @@ export function registerTopologyRuntimeRoutes(app, deps) {
         const detail = payload && typeof payload === 'object'
           ? (payload.error || payload.message || JSON.stringify(payload))
           : String(payload || `HTTP ${response.status}`);
-        throw new Error(`board program execution failed: ${detail}`);
+        if (!fallbackPcodeText || !fallbackProgramMapText) {
+          throw new Error(`board program execution failed: ${detail}`);
+        }
+
+        const localPayload = await runLocalPmachineFallback({
+          fallbackPcodeText,
+          fallbackProgramMapText,
+          inputQueue,
+          message,
+          sourceLabel: path.basename(file, path.extname(file)) || 'compute-node'
+        });
+
+        return {
+          ok: true,
+          status: response.status,
+          payload: localPayload,
+          fallback: true,
+          remoteError: detail
+        };
       }
 
       return {
@@ -2909,6 +3053,79 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       });
     } catch (error) {
       return res.status(500).json({ error: error?.message || 'failed to deploy to node' });
+    }
+  });
+
+  app.post('/api/nodes/:nodeId/run-compute', async (req, res) => {
+    try {
+      const requestedNodeId = String(req.params.nodeId || req.body?.nodeId || '').trim();
+      const requestedIp = String(req.body?.ip || '').trim();
+      const nodes = await buildCurrentNodesWithTopology();
+      const resolved = resolveManagedNode(requestedNodeId, requestedIp, nodes);
+      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const computeNode = body.computeNode && typeof body.computeNode === 'object' ? body.computeNode : null;
+
+      if (!resolved.node && !resolved.boardIp) {
+        return res.status(404).json({ error: 'target node not found' });
+      }
+      if (!computeNode) {
+        return res.status(400).json({ error: 'computeNode is required' });
+      }
+
+      const compiled = compileComputeNodeToPcode(computeNode);
+      if (!resolved.boardIp) {
+        return res.status(400).json({ error: 'target node is not addressable for program execution' });
+      }
+
+      const baseSlug = String(computeNode?.visualObjectName || computeNode?.label || computeNode?.id || 'compute-node')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'compute-node';
+      const pcodePath = `/pmachine/programs/${baseSlug}.pcode`;
+      const programMapPath = `/pmachine/programs/${baseSlug}.program.json`;
+      const signedProgramMap = attachPcodeSignature({
+        nodeId: computeNode.id || null,
+        nodeLabel: computeNode.label || null,
+        operationRef: compiled.operationRef,
+        instructionCount: compiled.instructionCount,
+        moves: compiled.moves,
+        programMap: compiled.programMap,
+      }, compiled.pcodeText);
+      const programMapText = `${JSON.stringify(signedProgramMap, null, 2)}\n`;
+
+      const uploads = [];
+      uploads.push(await uploadFileToBoard(resolved.boardIp, pcodePath, compiled.pcodeText));
+      uploads.push(await uploadFileToBoard(resolved.boardIp, programMapPath, programMapText));
+
+      const execution = await executeProgramOnBoard(resolved.boardIp, {
+        file: pcodePath,
+        programMap: programMapPath,
+        inputQueue: String(body.inputQueue || 'default.in').trim(),
+        message: String(body.message || compiled.summaryLine || '').trim(),
+        fallbackPcodeText: compiled.pcodeText,
+        fallbackProgramMapText: programMapText,
+      });
+
+      return res.json({
+        status: 'ok',
+        target: {
+          nodeId: requestedNodeId || resolved.node?.nodeId || null,
+          nodeName: resolved.node?.nodeName || resolved.node?.details?.nodeName || null,
+          ip: resolved.boardIp || null,
+        },
+        computeNode: {
+          id: computeNode.id || null,
+          label: computeNode.label || null,
+          operationRef: compiled.operationRef,
+          summaryLine: compiled.summaryLine,
+          instructionCount: compiled.instructionCount,
+          moves: compiled.moves,
+        },
+        uploads,
+        execution,
+      });
+    } catch (error) {
+      return res.status(500).json({ error: error?.message || 'failed to run compute on node' });
     }
   });
 

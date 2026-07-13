@@ -109,9 +109,13 @@ export async function startBackendRuntime(deps = {}) {
   loadWorkerConfig();
 
   console.log('[STARTUP] Validating router coverage...');
-  const routerCoverage = validateRouterRuleCoverageForWorkerQueues();
-  if (routerCoverage.ok) {
-    console.log(`[PRECHECK] Router input rule coverage OK (strict=${routerCoverage.strictMode})`);
+  try {
+    const routerCoverage = validateRouterRuleCoverageForWorkerQueues();
+    if (routerCoverage.ok) {
+      console.log(`[PRECHECK] Router input rule coverage OK (strict=${routerCoverage.strictMode})`);
+    }
+  } catch (error) {
+    console.warn(`[PRECHECK] Router coverage warning: ${formatErrorDetails(error)}`);
   }
 
   console.log('[STARTUP] Ensuring priority queue bindings...');

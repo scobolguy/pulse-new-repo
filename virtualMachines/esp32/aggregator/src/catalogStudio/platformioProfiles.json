@@ -1,0 +1,39 @@
+{
+  "source": "platformio.ini",
+  "environments": {
+    "esp32dev": {
+      "buildFlags": [
+        "-std=gnu++17",
+        "-DENABLE_PMACHINE",
+        "-DPLATFORM_ESP"
+      ]
+    },
+    "esp32cam": {
+      "buildFlags": [
+        "-std=gnu++17",
+        "-DENABLE_PMACHINE",
+        "-DENABLE_CAMERA",
+        "-DBOARD_HAS_PSRAM",
+        "-mfix-esp32-psram-cache-issue"
+      ]
+    },
+    "esp32_cyd": {
+      "buildFlags": [
+        "-std=gnu++17",
+        "-DENABLE_PMACHINE",
+        "-DENABLE_DISPLAY",
+        "-DLV_CONF_INCLUDE_SIMPLE",
+        "-DUSER_SETUP_LOADED=1"
+      ]
+    },
+    "esp32dev_ota": {
+      "buildFlags": [
+        "-std=gnu++17",
+        "-DENABLE_PMACHINE",
+        "-DENABLE_CAMERA",
+        "-DBOARD_HAS_PSRAM",
+        "-mfix-esp32-psram-cache-issue"
+      ]
+    }
+  }
+}

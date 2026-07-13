@@ -1,0 +1,79 @@
+transaction "payment-inquiry-lifecycle" begin
+  description "Queue-centric payment lifecycle with multi-decision checks, RTGS window handling, SWIFT completion, and Monday requeue policy";
+
+  state "received_payment" initial label "Received Payment" queue "payments.inbound";
+  state "transaction_created" label "Transaction Created" queue "tx.created";
+
+  state "decision_fraud_pending" label "Fraud Decision" queue "tx.decision.fraud";
+  state "decision_balance_pending" label "Balance Decision" queue "tx.decision.balance";
+  state "decision_additional_pending" label "Additional Decision" queue "tx.decision.additional";
+  state "decision_fraud_recheck_pending" label "Fraud Recheck" queue "tx.decision.fraud.recheck";
+  state "decision_balance_recheck_pending" label "Balance Recheck" queue "tx.decision.balance.recheck";
+  state "decision_additional_recheck_pending" label "Additional Recheck" queue "tx.decision.additional.recheck";
+
+  state "ready_for_rtgs" label "Ready For RTGS" queue "tx.rtgs.ready";
+  state "rtgs_submitted" label "RTGS Submitted" queue "tx.rtgs.submitted";
+  state "swift_outbound_pending" label "SWIFT Pending" queue "tx.swift.outbound.pending";
+
+  state "deferred_rtgs_closed" label "Deferred Until RTGS Opens" queue "tx.deferred.rtgs.closed";
+  state "ready_for_rtgs_retry" label "Ready For RTGS Retry" queue "tx.rtgs.ready.retry";
+  state "rtgs_submitted_retry" label "RTGS Submitted Retry" queue "tx.rtgs.submitted.retry";
+  state "swift_outbound_retry_pending" label "SWIFT Retry Pending" queue "tx.swift.outbound.retry.pending";
+  state "completed" label "Completed" queue "tx.completed";
+  state "rejected" label "Rejected" queue "tx.rejected";
+  state "error" label "Error" queue "tx.lifecycle.onerror";
+  state "timeout" label "Timeout" queue "tx.lifecycle.ontimeout";
+
+  transition "received_payment" -> "transaction_created" on "payment_mapped" action "MAP payment-to-transaction-inquiry";
+
+  transition "transaction_created" -> "decision_fraud_pending" on "start_decision_chain";
+  transition "decision_fraud_pending" -> "decision_balance_pending" on "fraud_approved" when "status = approved";
+  transition "decision_balance_pending" -> "decision_additional_pending" on "balance_ok" when "status = ok";
+  transition "decision_additional_pending" -> "ready_for_rtgs" on "additional_checks_ok" when "status = approved";
+
+  transition "decision_fraud_pending" -> "rejected" on "fraud_rejected" when "status = rejected";
+  transition "decision_balance_pending" -> "rejected" on "balance_failed" when "status = failed";
+  transition "decision_additional_pending" -> "rejected" on "additional_checks_failed" when "status = rejected";
+
+  transition "ready_for_rtgs" -> "rtgs_submitted" on "rtgs_window_open" when "status = open" action "HTTP_SYNC POST rtgs/submit timeout_ms=8000";
+  transition "ready_for_rtgs" -> "deferred_rtgs_closed" on "rtgs_window_closed" when "status = closed";
+
+  transition "deferred_rtgs_closed" -> "decision_fraud_recheck_pending" on "monday_requeue_due" when "schedule.now >= schedule.wakeAt";
+
+  transition "decision_fraud_recheck_pending" -> "decision_balance_recheck_pending" on "fraud_recheck_approved" when "status = approved";
+  transition "decision_balance_recheck_pending" -> "decision_additional_recheck_pending" on "balance_recheck_ok" when "status = ok";
+  transition "decision_additional_recheck_pending" -> "ready_for_rtgs_retry" on "additional_recheck_ok" when "status = approved";
+
+  transition "decision_fraud_recheck_pending" -> "rejected" on "fraud_recheck_rejected" when "status = rejected";
+  transition "decision_balance_recheck_pending" -> "rejected" on "balance_recheck_failed" when "status = failed";
+  transition "decision_additional_recheck_pending" -> "rejected" on "additional_recheck_failed" when "status = rejected";
+
+  transition "ready_for_rtgs_retry" -> "rtgs_submitted_retry" on "rtgs_retry_window_open" when "status = open" action "HTTP_SYNC POST rtgs/submit timeout_ms=8000";
+  transition "rtgs_submitted_retry" -> "swift_outbound_retry_pending" on "rtgs_retry_accepted" when "status = accepted";
+  transition "swift_outbound_retry_pending" -> "completed" on "swift_retry_send_succeeded" action "ENQUEUE swift.outbound";
+
+  transition "rtgs_submitted" -> "swift_outbound_pending" on "rtgs_accepted" when "status = accepted";
+  transition "swift_outbound_pending" -> "completed" on "swift_send_succeeded" action "ENQUEUE swift.outbound";
+
+  transition "decision_fraud_pending" -> "error" on "stage_error" when "lifecycle.outcome = error";
+  transition "decision_balance_pending" -> "error" on "stage_error" when "lifecycle.outcome = error";
+  transition "decision_additional_pending" -> "error" on "stage_error" when "lifecycle.outcome = error";
+  transition "ready_for_rtgs" -> "error" on "stage_error" when "lifecycle.outcome = error";
+  transition "rtgs_submitted" -> "error" on "stage_error" when "lifecycle.outcome = error";
+  transition "decision_fraud_recheck_pending" -> "error" on "stage_error" when "lifecycle.outcome = error";
+  transition "decision_balance_recheck_pending" -> "error" on "stage_error" when "lifecycle.outcome = error";
+  transition "decision_additional_recheck_pending" -> "error" on "stage_error" when "lifecycle.outcome = error";
+  transition "ready_for_rtgs_retry" -> "error" on "stage_error" when "lifecycle.outcome = error";
+  transition "rtgs_submitted_retry" -> "error" on "stage_error" when "lifecycle.outcome = error";
+
+  transition "decision_fraud_pending" -> "timeout" on "stage_timeout" when "lifecycle.outcome = timeout";
+  transition "decision_balance_pending" -> "timeout" on "stage_timeout" when "lifecycle.outcome = timeout";
+  transition "decision_additional_pending" -> "timeout" on "stage_timeout" when "lifecycle.outcome = timeout";
+  transition "ready_for_rtgs" -> "timeout" on "stage_timeout" when "lifecycle.outcome = timeout";
+  transition "rtgs_submitted" -> "timeout" on "stage_timeout" when "lifecycle.outcome = timeout";
+  transition "decision_fraud_recheck_pending" -> "timeout" on "stage_timeout" when "lifecycle.outcome = timeout";
+  transition "decision_balance_recheck_pending" -> "timeout" on "stage_timeout" when "lifecycle.outcome = timeout";
+  transition "decision_additional_recheck_pending" -> "timeout" on "stage_timeout" when "lifecycle.outcome = timeout";
+  transition "ready_for_rtgs_retry" -> "timeout" on "stage_timeout" when "lifecycle.outcome = timeout";
+  transition "rtgs_submitted_retry" -> "timeout" on "stage_timeout" when "lifecycle.outcome = timeout";
+end;

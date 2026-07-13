@@ -1,0 +1,106 @@
+QUEUE "decisionFraud" -> "tx.decision.fraud" TYPE "json";
+QUEUE "decisionBalance" -> "tx.decision.balance" TYPE "json";
+QUEUE "decisionAdditional" -> "tx.decision.additional" TYPE "json";
+QUEUE "rtgsReady" -> "tx.rtgs.ready" TYPE "json";
+QUEUE "rtgsSubmitted" -> "tx.rtgs.submitted" TYPE "json";
+QUEUE "swiftOutboundPending" -> "tx.swift.outbound.pending" TYPE "json";
+QUEUE "completed" -> "tx.completed" TYPE "json";
+QUEUE "deferredRtgsClosed" -> "tx.deferred.rtgs.closed" TYPE "json";
+QUEUE "onError" -> "tx.lifecycle.onerror" TYPE "json";
+QUEUE "onTimeout" -> "tx.lifecycle.ontimeout" TYPE "json";
+QUEUE "rejected" -> "tx.rejected" TYPE "json";
+
+# Runtime contract fields:
+# - lifecycle.outcome: ok | error | timeout | rejected | deferred
+# - lifecycle.stage: decision_fraud | decision_balance | decision_additional | ready_for_rtgs | rtgs_submitted | swift_outbound
+# - rtgs.window: open | closed
+# - rtgs.status: accepted | rejected
+# - gateway.rtgs: up | down
+# - gateway.swift: up | down
+# - schedule.requeueDue: true | false
+
+WORKFLOW "payment-inquiry-routing-policy" BEGIN
+  IF FIELD "lifecycle.outcome" EQUALS "error" THEN
+    STEP "route-on-error" ROUTE QUEUE "onError";
+  ELSE;
+  BEGIN
+    IF FIELD "lifecycle.outcome" EQUALS "timeout" THEN
+      STEP "route-on-timeout" ROUTE QUEUE "onTimeout";
+    ELSE;
+    BEGIN
+      IF FIELD "lifecycle.outcome" EQUALS "rejected" THEN
+        STEP "route-rejected" ROUTE QUEUE "rejected";
+      ELSE;
+      BEGIN
+        IF FIELD "lifecycle.stage" EQUALS "decision_fraud" THEN
+          STEP "route-fraud" ROUTE QUEUE "decisionFraud";
+        ELSE;
+        BEGIN
+          IF FIELD "lifecycle.stage" EQUALS "decision_balance" THEN
+            STEP "route-balance" ROUTE QUEUE "decisionBalance";
+          ELSE;
+          BEGIN
+            IF FIELD "lifecycle.stage" EQUALS "decision_additional" THEN
+              STEP "route-additional" ROUTE QUEUE "decisionAdditional";
+            ELSE;
+            BEGIN
+              IF FIELD "lifecycle.stage" EQUALS "ready_for_rtgs" THEN
+              BEGIN
+                IF FIELD "gateway.rtgs" EQUALS "down" THEN
+                  STEP "route-deferred-gateway-down" ROUTE QUEUE "deferredRtgsClosed";
+                ELSE;
+                BEGIN
+                  IF FIELD "rtgs.window" EQUALS "closed" THEN
+                    STEP "route-deferred" ROUTE QUEUE "deferredRtgsClosed";
+                  ELSE;
+                    STEP "route-rtgs" ROUTE QUEUE "rtgsReady";
+                  ENDIF;
+                END;
+                ENDIF;
+              END;
+              ELSE;
+              BEGIN
+                IF FIELD "lifecycle.stage" EQUALS "rtgs_submitted" THEN
+                BEGIN
+                  IF FIELD "rtgs.status" EQUALS "accepted" THEN
+                  BEGIN
+                    IF FIELD "gateway.swift" EQUALS "down" THEN
+                      STEP "route-on-error-swift-gateway-down" ROUTE QUEUE "onError";
+                    ELSE;
+                      STEP "route-swift-outbound" ROUTE QUEUE "swiftOutboundPending";
+                    ENDIF;
+                  END;
+                  ELSE;
+                    STEP "route-rejected-rtgs" ROUTE QUEUE "rejected";
+                  ENDIF;
+                END;
+                ELSE;
+                BEGIN
+                  IF FIELD "lifecycle.stage" EQUALS "swift_outbound" THEN
+                    STEP "route-completed" ROUTE QUEUE "completed";
+                  ELSE;
+                  BEGIN
+                    IF FIELD "schedule.requeueDue" EQUALS "true" THEN
+                      STEP "route-monday-requeue-fraud" ROUTE QUEUE "decisionFraud";
+                    ELSE;
+                      STEP "fallback-route-rtgs" ROUTE QUEUE "rtgsReady";
+                    ENDIF;
+                  END;
+                  ENDIF;
+                END;
+                ENDIF;
+              END;
+              ENDIF;
+            END;
+            ENDIF;
+          END;
+          ENDIF;
+        END;
+        ENDIF;
+      END;
+      ENDIF;
+    END;
+    ENDIF;
+  END;
+  ENDIF;
+END;

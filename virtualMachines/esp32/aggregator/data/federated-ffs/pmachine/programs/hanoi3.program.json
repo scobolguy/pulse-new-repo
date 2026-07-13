@@ -1,0 +1,117 @@
+{
+  "nodeId": "compute-hanoi-n3",
+  "nodeLabel": "hanoi3",
+  "operationRef": "towers-of-hanoi",
+  "instructionCount": 25,
+  "moves": [
+    "Move disk 1 from A to C",
+    "Move disk 2 from A to B",
+    "Move disk 1 from C to B",
+    "Move disk 3 from A to C",
+    "Move disk 1 from B to A",
+    "Move disk 2 from B to C",
+    "Move disk 1 from A to C"
+  ],
+  "programMap": [
+    {
+      "address": 0,
+      "text": "PUSH_STR \"Towers of Hanoi n=3 (7 moves)\""
+    },
+    {
+      "address": 1,
+      "text": "PRINT"
+    },
+    {
+      "address": 2,
+      "text": "PRINT_NL"
+    },
+    {
+      "address": 3,
+      "text": "PUSH_STR \"Move disk 1 from A to C\""
+    },
+    {
+      "address": 4,
+      "text": "PRINT"
+    },
+    {
+      "address": 5,
+      "text": "PRINT_NL"
+    },
+    {
+      "address": 6,
+      "text": "PUSH_STR \"Move disk 2 from A to B\""
+    },
+    {
+      "address": 7,
+      "text": "PRINT"
+    },
+    {
+      "address": 8,
+      "text": "PRINT_NL"
+    },
+    {
+      "address": 9,
+      "text": "PUSH_STR \"Move disk 1 from C to B\""
+    },
+    {
+      "address": 10,
+      "text": "PRINT"
+    },
+    {
+      "address": 11,
+      "text": "PRINT_NL"
+    },
+    {
+      "address": 12,
+      "text": "PUSH_STR \"Move disk 3 from A to C\""
+    },
+    {
+      "address": 13,
+      "text": "PRINT"
+    },
+    {
+      "address": 14,
+      "text": "PRINT_NL"
+    },
+    {
+      "address": 15,
+      "text": "PUSH_STR \"Move disk 1 from B to A\""
+    },
+    {
+      "address": 16,
+      "text": "PRINT"
+    },
+    {
+      "address": 17,
+      "text": "PRINT_NL"
+    },
+    {
+      "address": 18,
+      "text": "PUSH_STR \"Move disk 2 from B to C\""
+    },
+    {
+      "address": 19,
+      "text": "PRINT"
+    },
+    {
+      "address": 20,
+      "text": "PRINT_NL"
+    },
+    {
+      "address": 21,
+      "text": "PUSH_STR \"Move disk 1 from A to C\""
+    },
+    {
+      "address": 22,
+      "text": "PRINT"
+    },
+    {
+      "address": 23,
+      "text": "PRINT_NL"
+    },
+    {
+      "address": 24,
+      "text": "HALT"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+PUSH_STR "Towers of Hanoi n=3 (7 moves)"
+PRINT
+PRINT_NL
+PUSH_STR "Move disk 1 from A to C"
+PRINT
+PRINT_NL
+PUSH_STR "Move disk 2 from A to B"
+PRINT
+PRINT_NL
+PUSH_STR "Move disk 1 from C to B"
+PRINT
+PRINT_NL
+PUSH_STR "Move disk 3 from A to C"
+PRINT
+PRINT_NL
+PUSH_STR "Move disk 1 from B to A"
+PRINT
+PRINT_NL
+PUSH_STR "Move disk 2 from B to C"
+PRINT
+PRINT_NL
+PUSH_STR "Move disk 1 from A to C"
+PRINT
+PRINT_NL
+HALT
