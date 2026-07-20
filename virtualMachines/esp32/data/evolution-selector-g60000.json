@@ -1,0 +1,356 @@
+{
+  "updatedAt": "2026-07-15T00:10:46.875Z",
+  "generation": 60000,
+  "replacementInterval": 50,
+  "replacementCount": 2,
+  "replacements": [
+    {
+      "transactionCount": 50,
+      "weakestOrganismId": "organism-07",
+      "strongestOrganismId": "organism-03",
+      "replacementOrganismId": "organism-03-r01-g60000",
+      "sourceIndex": 2,
+      "targetIndex": 6,
+      "sourceVariant": "hostile",
+      "targetVariant": "hostile",
+      "strongestScore": 99999.889,
+      "weakestScore": 100000
+    },
+    {
+      "transactionCount": 100,
+      "weakestOrganismId": "organism-03-r01-g60000",
+      "strongestOrganismId": "organism-05",
+      "replacementOrganismId": "organism-05-r02-g60000",
+      "sourceIndex": 4,
+      "targetIndex": 6,
+      "sourceVariant": "jackpot",
+      "targetVariant": "hostile",
+      "strongestScore": 99999.8,
+      "weakestScore": 100000
+    }
+  ],
+  "selector": [
+    {
+      "rank": 1,
+      "organismId": "organism-08",
+      "variant": "normal",
+      "generation": 60000,
+      "transactionCount": 1329,
+      "successCount": 1329,
+      "successRate": 1,
+      "latencyMs": 0.302,
+      "score": 99999.698,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 1,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 2,
+      "organismId": "organism-05-r02-g60000",
+      "variant": "jackpot",
+      "generation": 60000,
+      "transactionCount": 1239,
+      "successCount": 1239,
+      "successRate": 1,
+      "latencyMs": 0.305,
+      "score": 99999.695,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 106,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 3,
+      "organismId": "organism-04",
+      "variant": "normal",
+      "generation": 60000,
+      "transactionCount": 1196,
+      "successCount": 1196,
+      "successRate": 1,
+      "latencyMs": 0.306,
+      "score": 99999.694,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 4,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 4,
+      "organismId": "organism-05",
+      "variant": "jackpot",
+      "generation": 60000,
+      "transactionCount": 1173,
+      "successCount": 1173,
+      "successRate": 1,
+      "latencyMs": 0.309,
+      "score": 99999.691,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 13,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 5,
+      "organismId": "organism-06",
+      "variant": "stress",
+      "generation": 60000,
+      "transactionCount": 1266,
+      "successCount": 1266,
+      "successRate": 1,
+      "latencyMs": 0.31,
+      "score": 99999.69,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 5,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 6,
+      "organismId": "organism-02",
+      "variant": "stress",
+      "generation": 60000,
+      "transactionCount": 1251,
+      "successCount": 1251,
+      "successRate": 1,
+      "latencyMs": 0.325,
+      "score": 99999.675,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 12,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 7,
+      "organismId": "organism-03",
+      "variant": "hostile",
+      "generation": 60000,
+      "transactionCount": 1327,
+      "successCount": 1327,
+      "successRate": 1,
+      "latencyMs": 0.326,
+      "score": 99999.674,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 0,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 8,
+      "organismId": "organism-01",
+      "variant": "normal",
+      "generation": 60000,
+      "transactionCount": 1211,
+      "successCount": 1211,
+      "successRate": 1,
+      "latencyMs": 0.33,
+      "score": 99999.67,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 3,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 9,
+      "organismId": "organism-07",
+      "variant": "hostile",
+      "generation": 60000,
+      "transactionCount": 2,
+      "successCount": 2,
+      "successRate": 1,
+      "latencyMs": 0,
+      "score": 100000,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 9,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 10,
+      "organismId": "organism-03-r01-g60000",
+      "variant": "hostile",
+      "generation": 60000,
+      "transactionCount": 6,
+      "successCount": 6,
+      "successRate": 1,
+      "latencyMs": 0,
+      "score": 100000,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 50,
+      "messageFormat": "unknown"
+    }
+  ],
+  "records": [
+    {
+      "organismId": "organism-08",
+      "parentId": null,
+      "generation": 60000,
+      "variant": "normal",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 1329,
+        "successCount": 1329,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.302,
+        "score": 99999.698
+      }
+    },
+    {
+      "organismId": "organism-03",
+      "parentId": null,
+      "generation": 60000,
+      "variant": "hostile",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 1327,
+        "successCount": 1327,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.326,
+        "score": 99999.674
+      }
+    },
+    {
+      "organismId": "organism-01",
+      "parentId": null,
+      "generation": 60000,
+      "variant": "normal",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 1211,
+        "successCount": 1211,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.33,
+        "score": 99999.67
+      }
+    },
+    {
+      "organismId": "organism-06",
+      "parentId": null,
+      "generation": 60000,
+      "variant": "stress",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 1266,
+        "successCount": 1266,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.31,
+        "score": 99999.69
+      }
+    },
+    {
+      "organismId": "organism-04",
+      "parentId": null,
+      "generation": 60000,
+      "variant": "normal",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 1196,
+        "successCount": 1196,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.306,
+        "score": 99999.694
+      }
+    },
+    {
+      "organismId": "organism-07",
+      "parentId": null,
+      "generation": 60000,
+      "variant": "hostile",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 2,
+        "successCount": 2,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0,
+        "score": 100000
+      }
+    },
+    {
+      "organismId": "organism-02",
+      "parentId": null,
+      "generation": 60000,
+      "variant": "stress",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 1251,
+        "successCount": 1251,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.325,
+        "score": 99999.675
+      }
+    },
+    {
+      "organismId": "organism-05",
+      "parentId": null,
+      "generation": 60000,
+      "variant": "jackpot",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 1173,
+        "successCount": 1173,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.309,
+        "score": 99999.691
+      }
+    },
+    {
+      "organismId": "organism-03-r01-g60000",
+      "parentId": "organism-03",
+      "generation": 60000,
+      "variant": "hostile",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 6,
+        "successCount": 6,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0,
+        "score": 100000
+      }
+    },
+    {
+      "organismId": "organism-05-r02-g60000",
+      "parentId": "organism-05",
+      "generation": 60000,
+      "variant": "jackpot",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 1239,
+        "successCount": 1239,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.305,
+        "score": 99999.695
+      }
+    }
+  ]
+}

@@ -1,0 +1,136 @@
+{
+  "updatedAt": "2026-07-14T21:34:48.037Z",
+  "generation": 5019,
+  "selector": [
+    {
+      "rank": 1,
+      "organismId": "organism-01-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018-g5019",
+      "variant": "normal",
+      "generation": 5019,
+      "transactionCount": 255,
+      "successCount": 255,
+      "successRate": 1,
+      "latencyMs": 0.584,
+      "score": 99999.416,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 994,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 2,
+      "organismId": "organism-02-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018-g5019",
+      "variant": "stress",
+      "generation": 5019,
+      "transactionCount": 244,
+      "successCount": 244,
+      "successRate": 1,
+      "latencyMs": 0.643,
+      "score": 99999.357,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 993,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 3,
+      "organismId": "organism-04-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018-g5019",
+      "variant": "normal",
+      "generation": 5019,
+      "transactionCount": 249,
+      "successCount": 249,
+      "successRate": 1,
+      "latencyMs": 0.647,
+      "score": 99999.353,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 999,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 4,
+      "organismId": "organism-03-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018-g5019",
+      "variant": "hostile",
+      "generation": 5019,
+      "transactionCount": 252,
+      "successCount": 252,
+      "successRate": 1,
+      "latencyMs": 0.667,
+      "score": 99999.333,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 998,
+      "messageFormat": "unknown"
+    }
+  ],
+  "records": [
+    {
+      "organismId": "organism-04-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018-g5019",
+      "parentId": "organism-04-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018",
+      "generation": 5019,
+      "variant": "normal",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 249,
+        "successCount": 249,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.647,
+        "score": 99999.353
+      }
+    },
+    {
+      "organismId": "organism-01-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018-g5019",
+      "parentId": "organism-01-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018",
+      "generation": 5019,
+      "variant": "normal",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 255,
+        "successCount": 255,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.584,
+        "score": 99999.416
+      }
+    },
+    {
+      "organismId": "organism-02-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018-g5019",
+      "parentId": "organism-02-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018",
+      "generation": 5019,
+      "variant": "stress",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 244,
+        "successCount": 244,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.643,
+        "score": 99999.357
+      }
+    },
+    {
+      "organismId": "organism-03-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018-g5019",
+      "parentId": "organism-03-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018",
+      "generation": 5019,
+      "variant": "hostile",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 252,
+        "successCount": 252,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.667,
+        "score": 99999.333
+      }
+    }
+  ]
+}

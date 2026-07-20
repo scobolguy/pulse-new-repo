@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { fetchCatalogSnapshot } from './catalogStudio/catalogApi'
 import { buildCatalogIndex, groupCatalogObjects } from './catalogStudio/catalogModel'
+import { getProjectDefinition, getProjectStorageKey, loadProjectWorkspace, saveProjectWorkspace } from './projectWorkspace'
 
 const LANE_ORDER = ['daemon', 'service', 'device', 'map', 'queue', 'site']
 
@@ -37,9 +38,9 @@ function CatalogIcon({ item, className }) {
   return <span className={className} />
 }
 
-function loadCatalogOverrides() {
+function loadCatalogOverrides(projectId) {
   try {
-    const raw = localStorage.getItem('pulse.catalogOverrides')
+    const raw = localStorage.getItem(getProjectStorageKey(projectId, 'catalog-overrides'))
     if (!raw) return {}
     const parsed = JSON.parse(raw)
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
@@ -49,8 +50,8 @@ function loadCatalogOverrides() {
   }
 }
 
-function saveCatalogOverrides(overrides) {
-  localStorage.setItem('pulse.catalogOverrides', JSON.stringify(overrides))
+function saveCatalogOverrides(projectId, overrides) {
+  localStorage.setItem(getProjectStorageKey(projectId, 'catalog-overrides'), JSON.stringify(overrides))
 }
 
 function CatalogTreeGroup({ label, items, selectedId, onSelect }) {
@@ -223,14 +224,15 @@ function RelationshipPanel({ item, index }) {
   )
 }
 
-export default function CatalogStudioPage() {
+export default function CatalogStudioPage({ projectId }) {
   const [snapshot, setSnapshot] = useState({ loadedAt: '', errors: [], objects: [] })
   const [loading, setLoading] = useState(true)
   const [selectedId, setSelectedId] = useState('daemon.data-librarian.primary')
   const [query, setQuery] = useState('')
   const [sourceFilter, setSourceFilter] = useState('all')
   const [reuseOnly, setReuseOnly] = useState(false)
-  const [overrides, setOverrides] = useState(() => loadCatalogOverrides())
+  const [overrides, setOverrides] = useState(() => loadCatalogOverrides(projectId))
+  const project = getProjectDefinition(projectId)
 
   async function loadSnapshot() {
     setLoading(true)
@@ -249,6 +251,11 @@ export default function CatalogStudioPage() {
     loadSnapshot()
   }, [])
 
+  useEffect(() => {
+    const workspace = loadProjectWorkspace(projectId)
+    setOverrides(workspace.catalogOverrides || loadCatalogOverrides(projectId))
+  }, [projectId])
+
   function patchCatalogObject(objectId, patch) {
     if (!objectId || !patch || typeof patch !== 'object') {
       return
@@ -265,7 +272,11 @@ export default function CatalogStudioPage() {
           ...patch,
         },
       }
-      saveCatalogOverrides(next)
+      saveCatalogOverrides(projectId, next)
+      saveProjectWorkspace(projectId, {
+        ...loadProjectWorkspace(projectId),
+        catalogOverrides: next,
+      })
       return next
     })
   }
@@ -306,6 +317,7 @@ export default function CatalogStudioPage() {
         <div>
           <div className="catalog-studio-product">Pulse Catalog Studio</div>
           <div className="catalog-studio-subtitle">Typed infrastructure design surface driven by the aggregator and seeded by the data librarian.</div>
+          <div className="catalog-studio-subtitle">Project: {project?.label || projectId || 'default'}</div>
         </div>
         <div className="catalog-studio-title-actions">
           <button type="button" onClick={loadSnapshot}>Refresh Catalog</button>

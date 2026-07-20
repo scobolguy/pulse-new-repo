@@ -1,0 +1,89 @@
+{
+  "id": "mt940-to-camt053",
+  "name": "MT940 to CAMT.053",
+  "description": "Direct field mapping rules from SWIFT FIN MT940 statements to ISO 20022 CAMT.053 BankToCustomerStatement (no PL/0 conversion routines).",
+  "sourceTypeId": "swift-mt940",
+  "targetTypeId": "camt",
+  "targetSchemaPath": "schemas/camt.053.001.14.xsd",
+  "version": "1.0",
+  "createdAt": "2026-07-15T00:00:00.000Z",
+  "updatedAt": "2026-07-15T00:00:00.000Z",
+  "rules": [
+    {
+      "sourcePath": "finEnvelope.block4.fields.20",
+      "targetPath": "Document.BkToCstmrStmt.Stmt.Id",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.20",
+      "targetPath": "Document.BkToCstmrStmt.GrpHdr.MsgId",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.25",
+      "targetPath": "Document.BkToCstmrStmt.Stmt.Acct.Id.Othr.Id",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.28C",
+      "targetPath": "Document.BkToCstmrStmt.Stmt.ElctrncSeqNb",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.28C",
+      "targetPath": "Document.BkToCstmrStmt.Stmt.LglSeqNb",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.60F.components.date",
+      "targetPath": "Document.BkToCstmrStmt.Stmt.Bal.Dt.Dt",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.60F.components.currency",
+      "targetPath": "Document.BkToCstmrStmt.Stmt.Bal.Tp.CdOrPrtry.Cd",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.60F.components.amount",
+      "targetPath": "Document.BkToCstmrStmt.Stmt.Bal.Amt.#text",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.60F.components.currency",
+      "targetPath": "Document.BkToCstmrStmt.Stmt.Bal.Amt.@Ccy",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.62F.components.amount",
+      "targetPath": "Document.BkToCstmrStmt.Stmt.Bal.AvailBal.Amt.#text",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.62F.components.currency",
+      "targetPath": "Document.BkToCstmrStmt.Stmt.Bal.AvailBal.Amt.@Ccy",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.62F.components.date",
+      "targetPath": "Document.BkToCstmrStmt.Stmt.Bal.AvailBal.Dt.Dt",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.61",
+      "targetPath": "Document.BkToCstmrStmt.Stmt.Ntry.AddtlNtryInf",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.61",
+      "targetPath": "Document.BkToCstmrStmt.Stmt.Ntry.NtryDtls.TxDtls.RmtInf.Ustrd",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.86",
+      "targetPath": "Document.BkToCstmrStmt.Stmt.Ntry.AddtlNtryInf",
+      "kind": "leaf"
+    }
+  ],
+  "submaps": []
+}

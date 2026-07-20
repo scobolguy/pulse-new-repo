@@ -1,0 +1,42 @@
+{
+  "updatedAt": "2026-07-14T17:19:02.634Z",
+  "generation": 29,
+  "selector": [
+    {
+      "rank": 1,
+      "organismId": "organism-01-g1-g2-g3-g4-g5-g6-g7-g8-g9-g10-g11-g12-g13-g14-g15-g16-g17-g18-g19-g20-g21-g22-g23-g24-g25-g26-g27-g28-g29",
+      "variant": "normal",
+      "generation": 29,
+      "successCount": 1,
+      "latencyMs": 0,
+      "score": 100000,
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown"
+    }
+  ],
+  "records": [
+    {
+      "variant": "normal",
+      "organismId": "organism-01-g1-g2-g3-g4-g5-g6-g7-g8-g9-g10-g11-g12-g13-g14-g15-g16-g17-g18-g19-g20-g21-g22-g23-g24-g25-g26-g27-g28-g29",
+      "parentId": "organism-01-g1-g2-g3-g4-g5-g6-g7-g8-g9-g10-g11-g12-g13-g14-g15-g16-g17-g18-g19-g20-g21-g22-g23-g24-g25-g26-g27-g28",
+      "generation": 29,
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "organismId": "organism-01-g1-g2-g3-g4-g5-g6-g7-g8-g9-g10-g11-g12-g13-g14-g15-g16-g17-g18-g19-g20-g21-g22-g23-g24-g25-g26-g27-g28-g29",
+        "generation": 29,
+        "inputQueue": "swift.mt103.parsed",
+        "mode": "single",
+        "sourceMessageLength": 95,
+        "successCount": 1,
+        "failureCount": 0,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0,
+        "successRate": 1,
+        "score": 100000,
+        "measuredAt": "2026-07-14T17:19:02.632Z"
+      }
+    }
+  ]
+}

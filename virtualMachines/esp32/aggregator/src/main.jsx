@@ -1,10 +1,14 @@
-import { StrictMode, useState } from 'react'
+import { StrictMode, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import NetworkDevicesPage from './NetworkDevicesPage.jsx'
 import TopologyPage from './TopologyPage.jsx'
 import CatalogStudioPage from './CatalogStudioPage.jsx'
 import FlowDesignerPage from './FlowDesignerPage.jsx'
+import ProjectWorkspacePage from './ProjectWorkspacePage.jsx'
+import EvolutionTestPage from './EvolutionTestPage.jsx'
+import QueryPage from './QueryPage.jsx'
+import { PROJECT_DEFINITIONS, getProjectDefinition, hydrateProjectWorkspaceFromServer, loadActiveProjectId, saveActiveProjectId } from './projectWorkspace'
 
 const originalFetch = window.fetch.bind(window)
 const apiBaseUrls = String(import.meta.env.VITE_API_BASES || '')
@@ -82,11 +86,36 @@ window.fetch = async (input, init = {}) => {
 }
 
 function AppShell() {
-  const [page, setPage] = useState('catalog')
+  const [page, setPage] = useState('project')
+  const [activeProjectId, setActiveProjectId] = useState(() => loadActiveProjectId())
+
+  useEffect(() => {
+    saveActiveProjectId(activeProjectId)
+  }, [activeProjectId])
+
+  useEffect(() => {
+    void hydrateProjectWorkspaceFromServer(activeProjectId)
+  }, [activeProjectId])
+
+  const activeProject = getProjectDefinition(activeProjectId)
 
   return (
     <>
       <nav className="app-nav">
+        <button
+          type="button"
+          className={`app-nav-button ${page === 'project' ? 'active' : ''}`}
+          onClick={() => setPage('project')}
+        >
+          Project
+        </button>
+        <button
+          type="button"
+          className={`app-nav-button ${page === 'query' ? 'active' : ''}`}
+          onClick={() => setPage('query')}
+        >
+          Query
+        </button>
         <button
           type="button"
           className={`app-nav-button ${page === 'catalog' ? 'active' : ''}`}
@@ -115,11 +144,40 @@ function AppShell() {
         >
           Devices
         </button>
+        <button
+          type="button"
+          className={`app-nav-button ${page === 'evolution' ? 'active' : ''}`}
+          onClick={() => setPage('evolution')}
+        >
+          Evolution
+        </button>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginLeft: 'auto', color: 'var(--text-h)' }}>
+          Project
+          <select
+            value={activeProjectId}
+            onChange={(event) => setActiveProjectId(event.target.value)}
+            style={{ padding: '7px 10px', borderRadius: 8 }}
+          >
+            {PROJECT_DEFINITIONS.map((project) => (
+              <option key={project.id} value={project.id}>{project.label}</option>
+            ))}
+          </select>
+        </label>
       </nav>
-      {page === 'catalog' ? <CatalogStudioPage /> : null}
-      {page === 'flow' ? <FlowDesignerPage /> : null}
+      {page === 'project' ? (
+        <ProjectWorkspacePage
+          project={activeProject}
+          onSelectProject={setActiveProjectId}
+          onOpenCatalog={() => setPage('catalog')}
+          onOpenFlow={() => setPage('flow')}
+        />
+      ) : null}
+      {page === 'query' ? <QueryPage /> : null}
+      {page === 'catalog' ? <CatalogStudioPage projectId={activeProject.id} projectLabel={activeProject.label} /> : null}
+      {page === 'flow' ? <FlowDesignerPage projectId={activeProject.id} projectLabel={activeProject.label} /> : null}
       {page === 'topology' ? <TopologyPage /> : null}
       {page === 'devices' ? <NetworkDevicesPage /> : null}
+      {page === 'evolution' ? <EvolutionTestPage /> : null}
     </>
   )
 }

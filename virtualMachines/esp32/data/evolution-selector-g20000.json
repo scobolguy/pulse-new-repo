@@ -1,0 +1,184 @@
+{
+  "updatedAt": "2026-07-14T23:52:16.067Z",
+  "generation": 20000,
+  "replacementInterval": 50,
+  "replacementCount": 1,
+  "replacements": [
+    {
+      "transactionCount": 50,
+      "weakestOrganismId": "organism-03",
+      "strongestOrganismId": "organism-01",
+      "replacementOrganismId": "organism-01-r01-g20000",
+      "sourceIndex": 0,
+      "targetIndex": 2,
+      "sourceVariant": "normal",
+      "targetVariant": "hostile",
+      "strongestScore": 99999.667,
+      "weakestScore": 99999.053
+    }
+  ],
+  "selector": [
+    {
+      "rank": 1,
+      "organismId": "organism-04",
+      "variant": "normal",
+      "generation": 20000,
+      "transactionCount": 2434,
+      "successCount": 2434,
+      "successRate": 1,
+      "latencyMs": 0.257,
+      "score": 99999.743,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 3,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 2,
+      "organismId": "organism-02",
+      "variant": "stress",
+      "generation": 20000,
+      "transactionCount": 2570,
+      "successCount": 2570,
+      "successRate": 1,
+      "latencyMs": 0.267,
+      "score": 99999.733,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 2,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 3,
+      "organismId": "organism-01",
+      "variant": "normal",
+      "generation": 20000,
+      "transactionCount": 2505,
+      "successCount": 2505,
+      "successRate": 1,
+      "latencyMs": 0.274,
+      "score": 99999.726,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 8,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 4,
+      "organismId": "organism-01-r01-g20000",
+      "variant": "normal",
+      "generation": 20000,
+      "transactionCount": 2472,
+      "successCount": 2472,
+      "successRate": 1,
+      "latencyMs": 0.282,
+      "score": 99999.718,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 58,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 5,
+      "organismId": "organism-03",
+      "variant": "hostile",
+      "generation": 20000,
+      "transactionCount": 19,
+      "successCount": 19,
+      "successRate": 1,
+      "latencyMs": 0.947,
+      "score": 99999.053,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 0,
+      "messageFormat": "unknown"
+    }
+  ],
+  "records": [
+    {
+      "organismId": "organism-02",
+      "parentId": null,
+      "generation": 20000,
+      "variant": "stress",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 2570,
+        "successCount": 2570,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.267,
+        "score": 99999.733
+      }
+    },
+    {
+      "organismId": "organism-04",
+      "parentId": null,
+      "generation": 20000,
+      "variant": "normal",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 2434,
+        "successCount": 2434,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.257,
+        "score": 99999.743
+      }
+    },
+    {
+      "organismId": "organism-03",
+      "parentId": null,
+      "generation": 20000,
+      "variant": "hostile",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 19,
+        "successCount": 19,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.947,
+        "score": 99999.053
+      }
+    },
+    {
+      "organismId": "organism-01",
+      "parentId": null,
+      "generation": 20000,
+      "variant": "normal",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 2505,
+        "successCount": 2505,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.274,
+        "score": 99999.726
+      }
+    },
+    {
+      "organismId": "organism-01-r01-g20000",
+      "parentId": "organism-01",
+      "generation": 20000,
+      "variant": "normal",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 2472,
+        "successCount": 2472,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.282,
+        "score": 99999.718
+      }
+    }
+  ]
+}

@@ -11,6 +11,25 @@ Use this document to quickly brief any Copilot session on how to design flows in
 - Open Flow Designer from the app nav.
 - File reference: aggregator/src/main.jsx
 
+## Deployment And Cluster Source Of Truth
+
+The deployment pane is backed by the Aggregator topology runtime, not by static documentation.
+
+- Topology runtime routes:
+  - `aggregator/src/backend/roles/topologyRuntimeRoutes.mjs`
+- Persisted topology inputs:
+  - `aggregator/data/cluster-registry.json`
+  - `aggregator/data/site-registry.json`
+  - `aggregator/data/node-topology-overrides.json`
+  - `aggregator/data/node-rename-overrides.json`
+
+Current runtime behavior that matters when designing flow deployment:
+
+- explicit clusters are created through backend APIs
+- unassigned nodes are auto-placed into managed free pools
+- free pools are split into generic, JS, and ESP32 variants
+- cluster/site metadata feeds deployment-tree topology and active cluster assignment
+
 ## Current Flow Designer Capabilities
 - Left palette:
   - compact icon + name tiles
@@ -34,6 +53,8 @@ Use this document to quickly brief any Copilot session on how to design flows in
 ## Files That Matter Most
 - Flow page behavior and tree loading:
   - aggregator/src/FlowDesignerPage.jsx
+- Topology and cluster runtime backing the deployment pane:
+  - aggregator/src/backend/roles/topologyRuntimeRoutes.mjs
 - Flow styling (palette density, tabs, target tree):
   - aggregator/src/index.css
 - Variant and build compatibility sources:
@@ -64,7 +85,7 @@ This section captures implementation gaps between current behavior and the targe
    - Target: add protocol/schema/SLA validation and contract-aware checks.
 6. Binding strategy
    - Current: manual bind to a selected target.
-   - Target: optional auto-bind with scoring (environment, SLA profile, load, locality).
+  - Target: optional auto-bind with scoring (environment, SLA profile, load, locality) and awareness of cluster/site topology.
 7. Artifact output
    - Current: visual flow + playback only.
    - Target: runtime plan JSON export and downstream artifact generation (for example pcode/runtime plan/audit specs).

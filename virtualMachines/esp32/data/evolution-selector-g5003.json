@@ -1,0 +1,136 @@
+{
+  "updatedAt": "2026-07-14T21:34:04.157Z",
+  "generation": 5003,
+  "selector": [
+    {
+      "rank": 1,
+      "organismId": "organism-04-g5001-g5002-g5003",
+      "variant": "normal",
+      "generation": 5003,
+      "transactionCount": 251,
+      "successCount": 251,
+      "successRate": 1,
+      "latencyMs": 0.482,
+      "score": 99999.518,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 996,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 2,
+      "organismId": "organism-02-g5001-g5002-g5003",
+      "variant": "stress",
+      "generation": 5003,
+      "transactionCount": 236,
+      "successCount": 236,
+      "successRate": 1,
+      "latencyMs": 0.496,
+      "score": 99999.504,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 987,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 3,
+      "organismId": "organism-01-g5001-g5002-g5003",
+      "variant": "normal",
+      "generation": 5003,
+      "transactionCount": 257,
+      "successCount": 257,
+      "successRate": 1,
+      "latencyMs": 0.51,
+      "score": 99999.49,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 997,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 4,
+      "organismId": "organism-03-g5001-g5002-g5003",
+      "variant": "hostile",
+      "generation": 5003,
+      "transactionCount": 256,
+      "successCount": 256,
+      "successRate": 1,
+      "latencyMs": 0.512,
+      "score": 99999.488,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 999,
+      "messageFormat": "unknown"
+    }
+  ],
+  "records": [
+    {
+      "organismId": "organism-03-g5001-g5002-g5003",
+      "parentId": "organism-03-g5001-g5002",
+      "generation": 5003,
+      "variant": "hostile",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 256,
+        "successCount": 256,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.512,
+        "score": 99999.488
+      }
+    },
+    {
+      "organismId": "organism-02-g5001-g5002-g5003",
+      "parentId": "organism-02-g5001-g5002",
+      "generation": 5003,
+      "variant": "stress",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 236,
+        "successCount": 236,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.496,
+        "score": 99999.504
+      }
+    },
+    {
+      "organismId": "organism-01-g5001-g5002-g5003",
+      "parentId": "organism-01-g5001-g5002",
+      "generation": 5003,
+      "variant": "normal",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 257,
+        "successCount": 257,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.51,
+        "score": 99999.49
+      }
+    },
+    {
+      "organismId": "organism-04-g5001-g5002-g5003",
+      "parentId": "organism-04-g5001-g5002",
+      "generation": 5003,
+      "variant": "normal",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 251,
+        "successCount": 251,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.482,
+        "score": 99999.518
+      }
+    }
+  ]
+}

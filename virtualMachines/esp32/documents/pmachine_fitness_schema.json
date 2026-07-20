@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pulse-new-repo.local/schemas/pmachine_fitness_schema.json",
+  "title": "PMachine Fitness Report",
+  "type": "object",
+  "required": ["organismId", "generation", "inputQueue", "mode", "successCount", "failureCount", "retryCount", "deliveryCount", "latencyMs", "successRate", "score", "measuredAt"],
+  "properties": {
+    "organismId": { "type": "string" },
+    "generation": { "type": "integer", "minimum": 0 },
+    "inputQueue": { "type": "string" },
+    "mode": { "type": "string", "enum": ["single", "poll"] },
+    "sourceMessageLength": { "type": "integer", "minimum": 0 },
+    "successCount": { "type": "integer", "minimum": 0 },
+    "failureCount": { "type": "integer", "minimum": 0 },
+    "retryCount": { "type": "integer", "minimum": 0 },
+    "deliveryCount": { "type": "integer", "minimum": 0 },
+    "latencyMs": { "type": "integer", "minimum": 0 },
+    "successRate": { "type": "number", "minimum": 0, "maximum": 1 },
+    "score": { "type": "number" },
+    "measuredAt": { "type": "string" }
+  },
+  "additionalProperties": true
+}

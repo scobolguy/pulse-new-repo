@@ -1,5 +1,26 @@
 [
   {
+    "id": "mt103-route",
+    "name": "mt103-route",
+    "serviceId": "interop-router",
+    "enabled": true,
+    "inputQueue": "swift.mt103.inbound",
+    "description": "Route MT103",
+    "outputs": [
+      {
+        "queueName": "swift.mt103.parsed",
+        "dataTypeIds": [
+          "envelope"
+        ],
+        "dataTypeId": "envelope",
+        "whenRule": "output := 1;",
+        "transformRule": "output := src;"
+      }
+    ],
+    "createdAt": "2026-07-13T00:00:00.000Z",
+    "updatedAt": "2026-07-13T00:00:00.000Z"
+  },
+  {
     "id": "risk_check-http",
     "name": "risk_check-http",
     "serviceId": "risk_check",

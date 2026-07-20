@@ -7,7 +7,10 @@
     "dev": "node scripts/startup-fsm-workflow.mjs && node scripts/frontend-startup-fsm-workflow.mjs",
     "dev:raw": "vite",
     "dev:backend": "node --env-file=.env.local backend.mjs",
+    "dev:backend:aux": "node --env-file=.env.local --input-type=module -e \"process.env.BACKEND_AUX_SERVICES_AUTOSTART='1'; await import('./backend.mjs')\"",
     "dev:backend:raw": "node backend.mjs",
+    "dev:librarian": "node data-librarian.mjs",
+    "dev:mapper-service": "node data-mapper.mjs",
     "startup:fsm:backend": "node scripts/startup-fsm-workflow.mjs",
     "startup:fsm:workflow": "node scripts/startup-fsm-workflow.mjs",
     "startup:fsm:frontend": "node scripts/frontend-startup-fsm-workflow.mjs",
@@ -53,7 +56,9 @@
     "test:pascalish:endpoint-bnf": "node scripts/test-pascalish-endpoint-bnf.mjs",
     "test:js-pmachine:negative-opcodes": "node scripts/test-js-pmachine-negative-opcodes.mjs",
     "test:js-pmachine:failure-paths": "node scripts/test-js-pmachine-failure-paths.mjs",
-    "test:smoke:simple": "node scripts/test-simple-smoke-suite.mjs"
+    "test:smoke:simple": "node scripts/test-simple-smoke-suite.mjs",
+    "evolution:first-slice": "node scripts/evolution-first-slice.mjs",
+    "evolution:first-slice:manifest": "node scripts/evolution-first-slice.mjs --manifest ../data/evolution-organisms.json"
   },
   "dependencies": {
     "amqplib": "^0.10.4",

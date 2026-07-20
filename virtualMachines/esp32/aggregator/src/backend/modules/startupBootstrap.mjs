@@ -10,6 +10,7 @@ export async function startBackendRuntime(deps = {}) {
     RUNTIME_DATA_ROOT,
     pathJoin,
     createNodeRegistryRoutes,
+    esp32SeedNodes = [],
     createPascalCompiler,
     pascalCompilerRoutes,
     express,
@@ -73,6 +74,47 @@ export async function startBackendRuntime(deps = {}) {
   });
   await esp32NodeRegistry.initialize();
   console.log(`[ESP32] Node Registry initialized with ${esp32NodeRegistry.getAllNodes().length} nodes`);
+
+  const seedNodes = Array.isArray(esp32SeedNodes) ? esp32SeedNodes : [];
+  let seededNodes = 0;
+  for (const seed of seedNodes) {
+    const host = String(seed?.host || '').trim();
+    const port = Number(seed?.port || 0);
+    if (!host || !Number.isFinite(port) || port <= 0) {
+      continue;
+    }
+
+    const id = String(seed?.id || seed?.label || `${host}:${port}`).trim();
+    if (!id) {
+      continue;
+    }
+
+    const existing = esp32NodeRegistry.getNode(id);
+    if (existing && String(existing.ip || '').trim() === host && Number(existing.port || 0) === port) {
+      continue;
+    }
+
+    await esp32NodeRegistry.registerNode({
+      id,
+      type: String(seed?.type || 'esp32-generic').trim() || 'esp32-generic',
+      name: String(seed?.name || seed?.label || id).trim() || id,
+      ip: host,
+      port,
+      capabilities: seed?.capabilities && typeof seed.capabilities === 'object' ? seed.capabilities : {
+        'edge.ingress': '/pmachine/edge_ingress_stage'
+      },
+      metadata: {
+        hardware: String(seed?.hardware || 'ESP32').trim() || 'ESP32',
+        source: 'startup-seed',
+        ...(seed?.metadata && typeof seed.metadata === 'object' ? seed.metadata : {})
+      }
+    });
+    seededNodes += 1;
+  }
+
+  if (seededNodes > 0) {
+    console.log(`[ESP32] Seeded ${seededNodes} node(s) into the registry from edge configuration`);
+  }
 
   const esp32Routes = createNodeRegistryRoutes(esp32NodeRegistry);
   app.use('/api', esp32Routes);

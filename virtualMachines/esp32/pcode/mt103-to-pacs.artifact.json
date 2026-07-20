@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "compiledAt": "2026-07-10T16:54:56.840Z",
+  "compiledAt": "2026-07-13T20:35:08.415Z",
   "serviceId": "mt103-to-pacs-service",
   "runtimeUnit": {
     "kind": "service",
@@ -157,6 +157,12 @@
           {
             "type": "MapDecl",
             "sourcePath": "block4.20",
+            "targetPath": "Document.hdr:AppHdr.hdr:BizMsgIdr",
+            "conversionRule": "output := trim(src);"
+          },
+          {
+            "type": "MapDecl",
+            "sourcePath": "block4.20",
             "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId",
             "conversionRule": "output := trim(src);"
           },
@@ -242,8 +248,8 @@
           "transformRule": "output := \"mt103-to-pacs-service\";"
         }
       ],
-      "createdAt": "2026-07-10T16:54:56.839Z",
-      "updatedAt": "2026-07-10T16:54:56.839Z"
+      "createdAt": "2026-07-13T20:35:08.415Z",
+      "updatedAt": "2026-07-13T20:35:08.415Z"
     },
     {
       "id": "mt103-to-pacs-router",
@@ -279,8 +285,8 @@
           "transformRule": "output := map(\\\"mt103-to-pacs\\\", src);"
         }
       ],
-      "createdAt": "2026-07-10T16:54:56.839Z",
-      "updatedAt": "2026-07-10T16:54:56.839Z"
+      "createdAt": "2026-07-13T20:35:08.415Z",
+      "updatedAt": "2026-07-13T20:35:08.415Z"
     }
   ],
   "dataMappings": [
@@ -307,6 +313,14 @@
         {
           "sourcePath": "block4.20",
           "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+          "kind": "leaf",
+          "sourceValueType": "unknown",
+          "targetValueType": "unknown",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "block4.20",
+          "targetPath": "Document.hdr:AppHdr.hdr:BizMsgIdr",
           "kind": "leaf",
           "sourceValueType": "unknown",
           "targetValueType": "unknown",
@@ -377,8 +391,8 @@
           "conversionRule": "output := mtchargebearertoiso(src);"
         }
       ],
-      "createdAt": "2026-07-10T16:54:56.840Z",
-      "updatedAt": "2026-07-10T16:54:56.840Z"
+      "createdAt": "2026-07-13T20:35:08.415Z",
+      "updatedAt": "2026-07-13T20:35:08.415Z"
     }
   ]
 }

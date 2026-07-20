@@ -303,4 +303,14 @@ app.listen(port, host, () => {
       console.error('[QM] reap expired claims failed:', err.message);
     }
   }, Math.max(250, claimReapMs));
+  setInterval(() => {
+    try {
+      const removed = queueManager.sweepStalePersistedMessages();
+      if (removed > 0) {
+        console.log(`[QM] hourly stale-file sweep removed=${removed}`);
+      }
+    } catch (err) {
+      console.error('[QM] hourly stale-file sweep failed:', err.message);
+    }
+  }, 60 * 60 * 1000);
 });

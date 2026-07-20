@@ -18,6 +18,8 @@ import { execFile, execFileSync, spawn } from 'child_process';
 // ES module equivalent of __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const WORKSPACE_ROOT = path.resolve(__dirname, '..');
+const EVOLUTION_DATA_ROOT = path.resolve(WORKSPACE_ROOT, 'data');
 import { fileURLToPath } from 'url';
 import { createMessageBroker, createQueueManager } from './src/broker.js';
 import { createFileServer } from './fileServer.js';
@@ -64,8 +66,13 @@ import { registerMapperProxyRoutes } from './src/backend/roles/mapperProxyRoutes
 import { registerRuntimeRegistryRoutes } from './src/backend/roles/runtimeRegistryRoutes.mjs';
 import { registerRouterLifecycleControlRoutes } from './src/backend/roles/routerLifecycleControlRoutes.mjs';
 import { registerDevelopDocumentRoutes } from './src/backend/developDocumentRoutes.mjs';
+import { registerProjectWorkspaceRoutes } from './src/backend/projectWorkspaceRoutes.mjs';
 import { registerStartupFsmRoutes } from './src/backend/startupFsmRoutes.mjs';
 import { registerMapperRoutes } from './src/backend/mapperRoutes.mjs';
+import { registerPatternRoutes } from './src/backend/patternRoutes.mjs';
+import { registerConversionRoutes } from './src/backend/conversionRoutes.mjs';
+import { registerOllamaRoutes } from './src/backend/ollamaRoutes.mjs';
+import { startOllamaWarmthKeeper } from './src/backend/ollamaService.mjs';
 import { registerUserProvisioningRoutes } from './src/backend/modules/userProvisioningRoutes.mjs';
 import { registerDeveloperGovernanceRoutes } from './src/backend/modules/developerGovernanceRoutes.mjs';
 import { registerOrchestrationRegistryRoutes } from './src/backend/modules/orchestrationRegistryRoutes.mjs';
@@ -83,12 +90,13 @@ import { createAuthoritativeTimeService } from './src/backend/modules/authoritat
 import { createRequestPolicyApi } from './src/backend/security/requestPolicy.mjs';
 import { ROUTE_ROLE_MANIFEST } from './src/backend/routes.manifest.mjs';
 import { registerRoutesFromManifest } from './src/backend/routeManifestLoader.mjs';
-import { enumerateApiCatalog } from './src/backend/apiCatalog.mjs';
+import { enumerateApiCatalog, enumerateDiscoveredNodeApiCatalog, findApiCatalogEntry } from './src/backend/apiCatalog.mjs';
 import {
   listServiceProviders,
   getServiceProvider,
   getServiceProviderAction,
-  getServiceProviderCategories
+  getServiceProviderCategories,
+  listServiceProviderActions
 } from './src/backend/providers/serviceProviderRegistry.mjs';
 import { compileQueueDslSpec, diffQueueConfigs } from './src/backend/queueDslCompiler.mjs';
 import { createSanctionsComplianceService } from './src/compliance/sanctionsService.mjs';
@@ -110,6 +118,7 @@ const MODULAR_MODE = readEnvBoolean('MODULAR_BACKEND', ['1'], false);
 const BROKER_SERVICE_URL = readEnvString('BROKER_SERVICE_URL', 'http://localhost:4001').trim().replace(/\/$/, '');
 const DEBUG_BACKEND = readEnvBoolean('DEBUG_BACKEND', ['true'], false);
 const SHOW_UDP_LOGS = readEnvBoolean('SHOW_UDP_LOGS', ['1', 'true', 'yes'], false);
+const DEFAULT_LIBRARIAN_PORT = 4300;
 const LOCAL_TTS_SCRIPT_PATH = path.join(__dirname, 'scripts', 'local-tts.ps1');
 const LOCAL_TTS_OUTPUT_DIR = path.join(__dirname, 'data', 'local-tts');
 const PIPER_BIN_PATH = readEnvString('PIPER_BIN_PATH', path.join(__dirname, 'tools', 'piper', 'piper', 'piper.exe')).trim();
@@ -438,6 +447,11 @@ const PULSE_QUEUE_PERSISTENCE = true;
 const PULSE_QUEUE_DATA_ROOT = PULSE_QUEUE_PERSISTENCE
   ? path.resolve(readEnvString('PULSE_QUEUE_DATA_ROOT', DEFAULT_QUEUE_DATA_ROOT))
   : null;
+// ===== OPERATIONAL DATA ROOT (Federated File System) =====
+// Queue managers and transaction state are stored in an external operational data root,
+// separate from the project code. This enables a catalog/manager infrastructure.
+const DEFAULT_OPERATIONAL_DATA_ROOT = path.resolve(path.dirname(__dirname), 'pulse-operational-data');
+const PULSE_OPERATIONAL_DATA_ROOT = path.resolve(readEnvString('PULSE_OPERATIONAL_DATA_ROOT', DEFAULT_OPERATIONAL_DATA_ROOT));
 const RUNTIME_DATA_ROOT = path.resolve(readEnvString('PULSE_RUNTIME_DATA_ROOT', PULSE_QUEUE_DATA_ROOT || DEFAULT_QUEUE_DATA_ROOT));
 const WORKER_CONFIG_PATH = path.join(RUNTIME_DATA_ROOT, 'worker-config.json');
 const ROUTER_RULES_PATH = path.join(RUNTIME_DATA_ROOT, 'router-rules.json');
@@ -496,6 +510,9 @@ function ensureLifecycleCompiledArtifact() {
 }
 
 fs.mkdirSync(RUNTIME_DATA_ROOT, { recursive: true });
+// Ensure operational data directories exist
+fs.mkdirSync(path.join(PULSE_OPERATIONAL_DATA_ROOT, 'qm-primary'), { recursive: true });
+fs.mkdirSync(path.join(PULSE_OPERATIONAL_DATA_ROOT, 'qm-secondary'), { recursive: true });
 seedRuntimeFileIfMissing(WORKER_CONFIG_PATH, './data/worker-config.json');
 seedRuntimeFileIfMissing(ROUTER_RULES_PATH, './data/router-rules.json');
 seedRuntimeFileIfMissing(DATA_MAPPINGS_PATH, './data/data-mappings.json');
@@ -556,21 +573,28 @@ app.use(enforceHttpsTransport);
 app.use(enforceApiPermission);
 app.use(enforceTwoPersonRule);
 
+registerPatternRoutes(app);
+registerConversionRoutes(app);
+registerOllamaRoutes(app);
+startOllamaWarmthKeeper();
 await registerDevelopDocumentRoutes(app);
+await registerProjectWorkspaceRoutes(app);
 registerStartupFsmRoutes(app);
 
 debugLog('[DEBUG] Creating global state...');
 const queueManagerInstances = new Map(); // Maps managerId to QueueManager instance
 let queueManagers = [
   (() => { 
-    debugLog('[DEBUG] Creating primary QueueManager');
-    const qm = createQueueManager('qm-primary', PULSE_QUEUE_DATA_ROOT);
+    debugLog('[DEBUG] Creating primary QueueManager from operational data root');
+    const qmPrimaryPath = path.join(PULSE_OPERATIONAL_DATA_ROOT, 'qm-primary');
+    const qm = createQueueManager('qm-primary', qmPrimaryPath);
     queueManagerInstances.set('qm-primary', qm);
     return qm;
   })(),
   (() => { 
-    debugLog('[DEBUG] Creating secondary QueueManager'); 
-    const qm = createQueueManager('qm-secondary', PULSE_QUEUE_DATA_ROOT);
+    debugLog('[DEBUG] Creating secondary QueueManager from operational data root'); 
+    const qmSecondaryPath = path.join(PULSE_OPERATIONAL_DATA_ROOT, 'qm-secondary');
+    const qm = createQueueManager('qm-secondary', qmSecondaryPath);
     queueManagerInstances.set('qm-secondary', qm);
     return qm;
   })()
@@ -956,6 +980,18 @@ const lifecycleHarness = {
   active: null,
   history: []
 };
+const evolutionTestRuntime = {
+  child: null,
+  runId: 0,
+  status: 'idle',
+  startedAt: null,
+  stoppedAt: null,
+  params: null,
+  lastExitCode: null,
+  lastSignal: null,
+  lastError: null,
+  logs: []
+};
 let txMssql = null;
 let txMssqlPoolPromise = null;
 let txStateDbWarned = false;
@@ -984,6 +1020,290 @@ const txAttemptStateByEntity = new Map();
 
 function ensureDataRootExists() {
   fs.mkdirSync(PULSE_QUEUE_DATA_ROOT, { recursive: true });
+}
+
+function parseEvolutionInteger(value, fallback, minValue = 1, maxValue = 1000000) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(minValue, Math.min(maxValue, parsed));
+}
+
+function normalizeEvolutionRootId(organismId) {
+  const match = String(organismId || '').match(/^(organism-\d+)/i);
+  return match ? String(match[1]).toLowerCase() : String(organismId || '').trim().toLowerCase();
+}
+
+function appendEvolutionRuntimeLog(source, text) {
+  const line = String(text || '').trim();
+  if (!line) return;
+  evolutionTestRuntime.logs.push({
+    at: new Date().toISOString(),
+    source,
+    line
+  });
+  if (evolutionTestRuntime.logs.length > 300) {
+    evolutionTestRuntime.logs = evolutionTestRuntime.logs.slice(-300);
+  }
+}
+
+function resetEvolutionRuntimeState() {
+  evolutionTestRuntime.runId = 0;
+  evolutionTestRuntime.status = 'idle';
+  evolutionTestRuntime.startedAt = null;
+  evolutionTestRuntime.stoppedAt = null;
+  evolutionTestRuntime.params = null;
+  evolutionTestRuntime.lastExitCode = null;
+  evolutionTestRuntime.lastSignal = null;
+  evolutionTestRuntime.lastError = null;
+  evolutionTestRuntime.logs = [];
+}
+
+function clearEvolutionRunArtifacts(generationStart, cycles) {
+  const start = Number.parseInt(generationStart, 10) || 0;
+  const count = Math.max(0, Number.parseInt(cycles, 10) || 0);
+  if (count <= 0) return 0;
+
+  let removed = 0;
+  for (let generation = start; generation < start + count; generation += 1) {
+    const files = [
+      path.join(EVOLUTION_DATA_ROOT, `evolution-selector-g${generation}.json`),
+      path.join(EVOLUTION_DATA_ROOT, `evolution-fitness-g${generation}.jsonl`),
+      path.join(EVOLUTION_DATA_ROOT, `evolution-generation-${generation}.json`)
+    ];
+
+    for (const filePath of files) {
+      try {
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+          removed += 1;
+        }
+      } catch (error) {
+        if (error?.code !== 'ENOENT') {
+          throw error;
+        }
+      }
+    }
+  }
+
+  return removed;
+}
+
+function resolveEvolutionPath(inputPath = '') {
+  const requested = String(inputPath || '').trim();
+  if (!requested) return '';
+
+  const candidates = [
+    path.resolve(process.cwd(), requested),
+    path.resolve(WORKSPACE_ROOT, requested),
+    path.resolve(EVOLUTION_DATA_ROOT, requested)
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return candidates[0];
+}
+
+function computeEvolutionDriftSnapshot(params = null) {
+  const generationStart = parseEvolutionInteger(params?.generation, 0, 0, 5000000);
+  const cycles = parseEvolutionInteger(params?.cycles, 0, 0, 5000000);
+  let replacementInterval = parseEvolutionInteger(params?.replacementInterval, 100, 1, 1000000);
+  let maxPopulation = parseEvolutionInteger(params?.maxPopulation, 200, 1, 2000);
+  let birthLimit = parseEvolutionInteger(params?.birthLimit, 25, 1, 1000000);
+  let deathLimit = parseEvolutionInteger(params?.deathLimit, 100, 1, 1000000);
+  let organismIdleTtlMs = parseEvolutionInteger(params?.organismIdleTtlMs, 60000, 1000, 86400000);
+  let replacementCount = 0;
+  let birthCount = 0;
+  let deathCount = 0;
+  let activePopulationSize = 0;
+  let lastReplacement = null;
+  let lastBirth = null;
+  let lastDeath = null;
+  if (cycles <= 0) {
+    return {
+      generationStart,
+      cycles,
+      availableCycles: 0,
+      summary: null,
+      series: [],
+      ancestorFrequency: {},
+      selectorChanges: 0,
+      maxPopulation,
+      birthLimit,
+      deathLimit,
+      organismIdleTtlMs,
+      replacementInterval,
+      replacementCount,
+      birthCount,
+      deathCount,
+      activePopulationSize,
+      lastReplacement,
+      lastBirth,
+      lastDeath,
+      latency: null,
+      score: null
+    };
+  }
+
+  const rows = [];
+  for (let generation = generationStart; generation < generationStart + cycles; generation += 1) {
+    const selectorPath = path.join(EVOLUTION_DATA_ROOT, `evolution-selector-g${generation}.json`);
+    if (!fs.existsSync(selectorPath)) continue;
+    try {
+      const parsed = JSON.parse(fs.readFileSync(selectorPath, 'utf8'));
+      if (parsed?.replacementInterval != null && !Number.isFinite(Number(replacementInterval))) {
+        replacementInterval = parseEvolutionInteger(parsed.replacementInterval, replacementInterval, 1, 1000000);
+      }
+      if (Number.isFinite(Number(parsed?.replacementInterval || NaN))) {
+        replacementInterval = parseEvolutionInteger(parsed.replacementInterval, replacementInterval, 1, 1000000);
+      }
+      if (Number.isFinite(Number(parsed?.maxPopulation || NaN))) {
+        maxPopulation = parseEvolutionInteger(parsed.maxPopulation, maxPopulation, 1, 2000);
+      }
+      if (Number.isFinite(Number(parsed?.birthLimit || NaN))) {
+        birthLimit = parseEvolutionInteger(parsed.birthLimit, birthLimit, 1, 1000000);
+      }
+      if (Number.isFinite(Number(parsed?.deathLimit || NaN))) {
+        deathLimit = parseEvolutionInteger(parsed.deathLimit, deathLimit, 1, 1000000);
+      }
+      if (Number.isFinite(Number(parsed?.organismIdleTtlMs || NaN))) {
+        organismIdleTtlMs = parseEvolutionInteger(parsed.organismIdleTtlMs, organismIdleTtlMs, 1000, 86400000);
+      }
+      if (Array.isArray(parsed?.replacements) && parsed.replacements.length > 0) {
+        replacementCount += parsed.replacements.length;
+        const lastEvent = parsed.replacements[parsed.replacements.length - 1];
+        lastReplacement = {
+          generation,
+          transactionCount: Number(lastEvent?.transactionCount || 0),
+          weakestOrganismId: String(lastEvent?.weakestOrganismId || ''),
+          strongestOrganismId: String(lastEvent?.strongestOrganismId || ''),
+          replacementOrganismId: String(lastEvent?.replacementOrganismId || '')
+        };
+      }
+      if (Array.isArray(parsed?.births) && parsed.births.length > 0) {
+        birthCount += parsed.births.length;
+        const lastEvent = parsed.births[parsed.births.length - 1];
+        lastBirth = {
+          generation,
+          transactionCount: Number(lastEvent?.transactionCount || 0),
+          parentOrganismId: String(lastEvent?.parentOrganismId || ''),
+          childOrganismId: String(lastEvent?.childOrganismId || ''),
+          childSlot: Number(lastEvent?.childSlot || 0)
+        };
+      }
+      if (Array.isArray(parsed?.deaths) && parsed.deaths.length > 0) {
+        deathCount += parsed.deaths.length;
+        const lastEvent = parsed.deaths[parsed.deaths.length - 1];
+        lastDeath = {
+          generation,
+          transactionCount: Number(lastEvent?.transactionCount || 0),
+          organismId: String(lastEvent?.organismId || ''),
+          slotIndex: Number(lastEvent?.slotIndex || 0)
+        };
+      }
+      if (Number.isFinite(Number(parsed?.activePopulationSize || NaN))) {
+        activePopulationSize = Number(parsed.activePopulationSize || 0);
+      }
+      const best = Array.isArray(parsed?.selector) ? parsed.selector[0] : null;
+      if (!best) continue;
+      rows.push({
+        generation,
+        organismId: String(best.organismId || ''),
+        ancestorId: normalizeEvolutionRootId(best.organismId),
+        latencyMs: Number(best.latencyMs || 0),
+        score: Number(best.score || 0)
+      });
+    } catch {
+      // Skip malformed snapshot files.
+    }
+  }
+
+  if (rows.length === 0) {
+    return {
+      generationStart,
+      cycles,
+      availableCycles: 0,
+      summary: null,
+      series: [],
+      ancestorFrequency: {},
+      selectorChanges: 0,
+      maxPopulation,
+      birthLimit,
+      deathLimit,
+      organismIdleTtlMs,
+      replacementInterval,
+      replacementCount,
+      birthCount,
+      deathCount,
+      activePopulationSize,
+      lastReplacement,
+      lastBirth,
+      lastDeath,
+      latency: null,
+      score: null
+    };
+  }
+
+  const ancestorFrequency = {};
+  for (const row of rows) {
+    ancestorFrequency[row.ancestorId] = (ancestorFrequency[row.ancestorId] || 0) + 1;
+  }
+
+  let selectorChanges = 0;
+  for (let index = 1; index < rows.length; index += 1) {
+    if (rows[index].ancestorId !== rows[index - 1].ancestorId) {
+      selectorChanges += 1;
+    }
+  }
+
+  const latencies = rows.map((row) => row.latencyMs);
+  const scores = rows.map((row) => row.score);
+  const mean = (values) => values.reduce((sum, value) => sum + value, 0) / values.length;
+  const stdev = (values) => {
+    const avg = mean(values);
+    const variance = values.reduce((sum, value) => sum + ((value - avg) * (value - avg)), 0) / values.length;
+    return Math.sqrt(variance);
+  };
+
+  return {
+    generationStart,
+    cycles,
+    availableCycles: rows.length,
+    series: rows,
+    summary: {
+      bestAncestor: Object.entries(ancestorFrequency).sort((a, b) => b[1] - a[1])[0]?.[0] || null,
+      selectorChanges
+    },
+    ancestorFrequency,
+    selectorChanges,
+    maxPopulation,
+    birthLimit,
+    deathLimit,
+    organismIdleTtlMs,
+    replacementInterval,
+    replacementCount,
+    birthCount,
+    deathCount,
+    activePopulationSize,
+    lastReplacement,
+    lastBirth,
+    lastDeath,
+    latency: {
+      min: Math.min(...latencies),
+      max: Math.max(...latencies),
+      mean: Number(mean(latencies).toFixed(3)),
+      stdev: Number(stdev(latencies).toFixed(3))
+    },
+    score: {
+      min: Math.min(...scores),
+      max: Math.max(...scores),
+      mean: Number(mean(scores).toFixed(3)),
+      stdev: Number(stdev(scores).toFixed(3))
+    }
+  };
 }
 
 function getTxStateQueuedCount() {
@@ -3058,42 +3378,39 @@ async function invokeEsp32EdgeIngressStage({
     const placementConvertPath = selection.placement?.convertPath || EDGE_ESP32_CONVERT_PATH;
     const placementStagePath = selection.placement?.path || EDGE_ESP32_PATH;
     const shouldUseGenericConvert = Boolean(selection.placement && sourceType && destinationType);
-    const payload = {
-      inputQueue,
-      message,
-      runRouter: runRouter ? '1' : '0',
-      convertMtToXml: convertMtToXml ? '1' : '0',
-      file: selection.placement?.file || EDGE_ESP32_ROUTER_FILE,
-      programMap: selection.placement?.programMap || EDGE_ESP32_PROGRAM_MAP
-    };
     const endpoint = shouldUseGenericConvert
       ? `http://${selection.node.host}:${selection.node.port}${placementConvertPath}`
       : `http://${selection.node.host}:${selection.node.port}${placementStagePath}`;
 
-    const requestPayload = shouldUseGenericConvert
-      ? {
-          sourceType,
-          destinationType,
-          message,
-          inputQueue,
-          requireDelivery: true,
-          maxBytes: selection.placement?.maxMessageBytes || EDGE_ESP32_LARGE_MESSAGE_THRESHOLD_BYTES * 8
-        }
-      : payload;
+    const queryParams = new URLSearchParams({
+      inputQueue: String(inputQueue || ''),
+      message: String(message || ''),
+      runRouter: runRouter ? '1' : '0',
+      convertMtToXml: convertMtToXml ? '1' : '0',
+      file: selection.placement?.file || EDGE_ESP32_ROUTER_FILE,
+      programMap: selection.placement?.programMap || EDGE_ESP32_PROGRAM_MAP
+    });
+
+    if (shouldUseGenericConvert) {
+      queryParams.set('sourceType', String(sourceType || ''));
+      queryParams.set('destinationType', String(destinationType || ''));
+      queryParams.set('requireDelivery', '1');
+      queryParams.set('maxBytes', String(selection.placement?.maxMessageBytes || EDGE_ESP32_LARGE_MESSAGE_THRESHOLD_BYTES * 8));
+    }
 
     if (selection.placement?.id) {
       markPlacementInflight(selection.placement.id, +1);
     }
-    const response = await fetch(endpoint, {
+    const responseUrl = `${endpoint}?${queryParams.toString()}`;
+    const queryResponse = await fetch(responseUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(requestPayload),
       signal: controller.signal
     });
-    if (!response.ok) {
-      throw new Error(`edge endpoint status=${response.status}`);
+    if (!queryResponse.ok) {
+      throw new Error(`edge endpoint status=${queryResponse.status}`);
     }
-    const result = await response.json();
+    const result = await queryResponse.json();
     const latencyMs = Math.max(0, performance.now() - startMs);
     recordEdgeOffloadAttemptResult({
       ok: true,
@@ -5424,15 +5741,20 @@ async function enqueueViaRoute(route, queueName, message, sourceService, message
       let dataTypeIds = Array.isArray(preferredDataTypeIds) && preferredDataTypeIds.length > 0
         ? preferredDataTypeIds
         : inferQueueDataTypeIds(queueName);
+      const persistMessages = shouldPersistQueueMessages(queueName, message);
       if (!qm.getConfig(queueName)?.name) {
         qm.createQueue(queueName, {
           dataTypeId: dataTypeIds[0],
           dataTypeIds,
           queueClass: 'permanent',
+          persistMessages,
           createdByUser: false
         });
       } else {
         const cfg = qm.getConfig(queueName) || {};
+        if (cfg.persistMessages !== persistMessages) {
+          qm.updateQueueConfig(queueName, { persistMessages });
+        }
         const configured = cfg.dataTypeIds || cfg.dataTypeId;
         dataTypeIds = Array.isArray(configured) ? configured : (configured ? [configured] : dataTypeIds);
       }
@@ -5466,6 +5788,7 @@ async function enqueueViaRoute(route, queueName, message, sourceService, message
     const dataTypeIds = Array.isArray(preferredDataTypeIds) && preferredDataTypeIds.length > 0
       ? preferredDataTypeIds
       : inferQueueDataTypeIds(queueName);
+    const persistMessages = shouldPersistQueueMessages(queueName, message);
     const normalizedEnvelope = normalizeMessageEnvelope({ message, messageEnvelope, dataTypeIds });
     ensureMessageMatchesQueueType({ queueName, message, messageEnvelope: normalizedEnvelope, sourceService, managerId: manager.managerId, dataTypeIds });
     await fetch(`http://${manager.ip}:${manager.port}/apply-config-change`, {
@@ -5478,6 +5801,7 @@ async function enqueueViaRoute(route, queueName, message, sourceService, message
           dataTypeId: dataTypeIds[0],
           dataTypeIds,
           queueClass: 'permanent',
+          persistMessages,
           createdByUser: false
         }
       })
@@ -5561,6 +5885,25 @@ function unwrapQueueItemMessage(item) {
 
   if (!hasQueueMetadata) return item;
   return item.message;
+}
+
+function shouldPersistQueueMessages(queueName, message = null) {
+  const normalizedQueueName = String(queueName || '').trim().toLowerCase();
+  if (!normalizedQueueName) return true;
+
+  if (normalizedQueueName === 'correspondent.pacs008.outbound') return false;
+  if (normalizedQueueName === 'tx.reconciled') return false;
+  if (normalizedQueueName === 'tx.completed') return false;
+
+  if (message && typeof message === 'object' && message.lifecycleStatus?.terminal === true) {
+    return false;
+  }
+
+  if (typeof message === 'string' && /(?:^|\n):79:STATE=.*;TERMINAL=true(?:\n|$)/.test(message)) {
+    return false;
+  }
+
+  return true;
 }
 
 async function dequeueViaRoute(queueName, consumerService) {
@@ -8915,6 +9258,153 @@ function registerRoutes(app) {
     });
   });
 
+  app.get('/api/evolution-test/status', (req, res) => {
+    const runtime = {
+      runId: evolutionTestRuntime.runId,
+      status: evolutionTestRuntime.status,
+      running: Boolean(evolutionTestRuntime.child),
+      pid: evolutionTestRuntime.child?.pid || null,
+      startedAt: evolutionTestRuntime.startedAt,
+      stoppedAt: evolutionTestRuntime.stoppedAt,
+      lastExitCode: evolutionTestRuntime.lastExitCode,
+      lastSignal: evolutionTestRuntime.lastSignal,
+      lastError: evolutionTestRuntime.lastError,
+      params: evolutionTestRuntime.params,
+      logs: evolutionTestRuntime.logs.slice(-120)
+    };
+
+    res.json({
+      status: 'ok',
+      runtime,
+      drift: computeEvolutionDriftSnapshot(evolutionTestRuntime.params)
+    });
+  });
+
+  app.post('/api/evolution-test/start', (req, res) => {
+    if (evolutionTestRuntime.child) {
+      return res.status(409).json({ error: 'Evolution test is already running.' });
+    }
+
+    const body = req.body || {};
+    const manifestInput = String(body.manifest || 'data/evolution-manifest-4.json').trim();
+    const manifestPath = resolveEvolutionPath(manifestInput);
+    if (!fs.existsSync(manifestPath)) {
+      return res.status(400).json({ error: `Manifest not found: ${manifestInput}` });
+    }
+
+    const cycles = parseEvolutionInteger(body.cycles, 10, 1, 200000);
+    const transactions = parseEvolutionInteger(body.transactions ?? body.runs, 10000, 1, 1000000);
+    const concurrency = parseEvolutionInteger(body.concurrency, 4, 1, 64);
+    const generation = parseEvolutionInteger(body.generation, 7000, 0, 5000000);
+    const replacementInterval = parseEvolutionInteger(body.replacementInterval, 100, 1, 1000000);
+    const maxPopulation = parseEvolutionInteger(body.maxPopulation, 200, 1, 2000);
+    const birthLimit = parseEvolutionInteger(body.birthLimit, 25, 1, 1000000);
+    const deathLimit = parseEvolutionInteger(body.deathLimit, 100, 1, 1000000);
+    const organismIdleTtlMs = parseEvolutionInteger(body.organismIdleTtlMs, 60000, 1000, 86400000);
+    const executionTarget = String(body.executionTarget || 'js').trim().toLowerCase() || 'js';
+    const backendUrl = String(body.backendUrl || process.env.BACKEND_URL || 'http://127.0.0.1:4000').trim() || 'http://127.0.0.1:4000';
+    const scriptPath = path.resolve(process.cwd(), 'scripts', 'evolution-first-slice.mjs');
+
+    if (!fs.existsSync(scriptPath)) {
+      return res.status(500).json({ error: 'Evolution script not found.' });
+    }
+
+    resetEvolutionRuntimeState();
+    clearEvolutionRunArtifacts(generation, cycles);
+
+    const args = [
+      scriptPath,
+      '--manifest', manifestPath,
+      '--transactions', String(transactions),
+      '--cycles', String(cycles),
+      '--generation', String(generation),
+      '--concurrency', String(concurrency),
+      '--replacement-interval', String(replacementInterval),
+      '--max-population', String(maxPopulation),
+      '--birth-limit', String(birthLimit),
+      '--death-limit', String(deathLimit),
+      '--organism-idle-ttl-ms', String(organismIdleTtlMs),
+      '--execution-target', executionTarget,
+      '--backend-url', backendUrl
+    ];
+
+    const child = spawn(process.execPath, args, {
+      cwd: process.cwd(),
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    evolutionTestRuntime.runId = 1;
+    evolutionTestRuntime.child = child;
+    evolutionTestRuntime.status = 'running';
+    evolutionTestRuntime.startedAt = new Date().toISOString();
+    evolutionTestRuntime.stoppedAt = null;
+    evolutionTestRuntime.lastExitCode = null;
+    evolutionTestRuntime.lastSignal = null;
+    evolutionTestRuntime.lastError = null;
+    evolutionTestRuntime.params = {
+      manifest: manifestInput,
+      transactions,
+      cycles,
+      concurrency,
+      generation,
+      replacementInterval,
+      maxPopulation,
+      birthLimit,
+      deathLimit,
+      organismIdleTtlMs,
+      executionTarget,
+      backendUrl
+    };
+    evolutionTestRuntime.logs = [];
+
+    child.stdout.on('data', (chunk) => {
+      const lines = String(chunk || '').split(/\r?\n/);
+      for (const line of lines) appendEvolutionRuntimeLog('stdout', line);
+    });
+
+    child.stderr.on('data', (chunk) => {
+      const lines = String(chunk || '').split(/\r?\n/);
+      for (const line of lines) appendEvolutionRuntimeLog('stderr', line);
+    });
+
+    child.on('error', (error) => {
+      evolutionTestRuntime.lastError = String(error?.message || error || 'spawn-error');
+      evolutionTestRuntime.status = 'error';
+      evolutionTestRuntime.stoppedAt = new Date().toISOString();
+      evolutionTestRuntime.child = null;
+      appendEvolutionRuntimeLog('system', `spawn error: ${evolutionTestRuntime.lastError}`);
+    });
+
+    child.on('exit', (code, signal) => {
+      evolutionTestRuntime.lastExitCode = Number.isFinite(code) ? code : null;
+      evolutionTestRuntime.lastSignal = signal || null;
+      evolutionTestRuntime.status = code === 0 ? 'completed' : 'stopped';
+      evolutionTestRuntime.stoppedAt = new Date().toISOString();
+      evolutionTestRuntime.child = null;
+      appendEvolutionRuntimeLog('system', `process exited code=${code} signal=${signal || 'none'}`);
+    });
+
+    return res.status(202).json({
+      status: 'started',
+      runId: evolutionTestRuntime.runId,
+      pid: child.pid,
+      params: evolutionTestRuntime.params
+    });
+  });
+
+  app.post('/api/evolution-test/stop', (req, res) => {
+    if (!evolutionTestRuntime.child) {
+      return res.json({ status: 'not-running' });
+    }
+
+    const pid = evolutionTestRuntime.child.pid;
+    evolutionTestRuntime.status = 'stopping';
+    const stopped = evolutionTestRuntime.child.kill('SIGTERM');
+    appendEvolutionRuntimeLog('system', `stop requested for pid=${pid}`);
+    return res.json({ status: stopped ? 'stopping' : 'stop-failed', pid });
+  });
+
   app.post('/api/time/authority/sync', async (req, res) => {
     const result = await syncAuthoritativeTimeWithNtp({ reason: 'manual-api' });
     if (!result.ok && !result.skipped) {
@@ -9162,12 +9652,16 @@ function registerRoutes(app) {
       getTxStatePersistenceSummary,
       getNodeRuntimeDiagnosticsSnapshot,
       enumerateApiCatalog,
+      enumerateDiscoveredNodeApiCatalog,
+      findApiCatalogEntry,
       resolvePermissionForApiRequest,
       routeRoleManifest: ROUTE_ROLE_MANIFEST,
       listServiceProviders,
       getServiceProvider,
       getServiceProviderAction,
       getServiceProviderCategories,
+      listServiceProviderActions,
+      discoveredNodes,
       queueManagerInstances,
       express,
       inferQueueDataTypeIds,
@@ -9250,7 +9744,7 @@ function registerRoutes(app) {
   // Queue configuration synchronization endpoints for distributed config management
 
   function resolveLibrarianOrigin() {
-    return readEnvString('LIBRARIAN_URL', 'http://127.0.0.1:4100');
+    return readEnvString('LIBRARIAN_URL', `http://127.0.0.1:${DEFAULT_LIBRARIAN_PORT}`);
   }
 
   function resolveMapperOrigin() {
@@ -9316,6 +9810,12 @@ try {
     RUNTIME_DATA_ROOT,
     pathJoin: path.join,
     createNodeRegistryRoutes,
+    esp32SeedNodes: [
+      ...EDGE_ESP32_GENERAL_NODES,
+      ...EDGE_ESP32_BONECRUSHER_NODES,
+      ...EDGE_ESP32_DRONE_NODES,
+      ...ESP32_DISCOVERY_SEED_NODES
+    ],
     createPascalCompiler,
     pascalCompilerRoutes,
     express,

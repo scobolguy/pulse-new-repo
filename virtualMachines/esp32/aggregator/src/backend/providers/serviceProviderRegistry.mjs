@@ -89,3 +89,36 @@ export function getServiceProviderAction(providerId, actionId) {
 export function getServiceProviderCategories() {
   return Array.from(new Set(PROVIDERS.map(provider => provider.category).filter(Boolean))).sort((a, b) => a.localeCompare(b));
 }
+
+export function listServiceProviderActions() {
+  return PROVIDERS.flatMap((provider) =>
+    (provider.actions || []).map((action) => ({
+      providerId: provider.id,
+      providerName: provider.name,
+      category: provider.category,
+      providerDescription: provider.description,
+      actionId: action.id,
+      actionName: action.name || action.id,
+      kind: action.kind || 'query',
+      description: action.description || '',
+      http: action.http || null,
+      requestExample: action.requestExample || null,
+      responseExample: action.responseExample || null
+    }))
+  ).sort((a, b) => {
+    const methodCompare = String(a.http?.method || '').localeCompare(String(b.http?.method || ''));
+    if (methodCompare !== 0) return methodCompare;
+    return String(a.http?.path || '').localeCompare(String(b.http?.path || ''));
+  });
+}
+
+export function findServiceProviderActionByHttp(method, routePath) {
+  const normalizedMethod = String(method || '').trim().toUpperCase();
+  const normalizedPath = String(routePath || '').trim();
+  if (!normalizedMethod || !normalizedPath) return null;
+
+  return listServiceProviderActions().find((entry) => {
+    return String(entry.http?.method || '').trim().toUpperCase() === normalizedMethod
+      && String(entry.http?.path || '').trim() === normalizedPath;
+  }) || null;
+}

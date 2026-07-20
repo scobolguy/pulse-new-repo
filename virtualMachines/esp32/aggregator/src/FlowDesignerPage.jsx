@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchCatalogSnapshot } from './catalogStudio/catalogApi'
 import { getJsonAsActor } from './http-client'
+import { getDefaultProjectWorkspace, getProjectDefinition, loadProjectWorkspace, saveProjectWorkspace } from './projectWorkspace'
 import nodeVariantRegistry from './catalogStudio/nodeVariantRegistry.json'
 import platformioProfiles from './catalogStudio/platformioProfiles.json'
 
@@ -13,6 +14,7 @@ const FLOW_NODE_TYPES = [
   { id: 'daemon', label: 'Daemon' },
   { id: 'contract', label: 'Contract' },
   { id: 'state', label: 'State' },
+  { id: 'subflow', label: 'Subflow' },
 ]
 
 const EDGE_TYPES = [
@@ -54,8 +56,8 @@ const EDGE_VALIDATION_RULES = {
   'transform-edge': { source: ['mapper'], target: ['compute', 'service', 'gateway', 'queue', 'state'] },
   'compute-edge': { source: ['compute'], target: ['compute', 'gateway', 'queue', 'service', 'state'] },
   'gateway-call-edge': { source: ['mapper', 'compute', 'service', 'daemon'], target: ['gateway'] },
-  'queue-edge': { source: ['mapper', 'compute', 'service', 'gateway', 'daemon'], target: ['queue'] },
-  'service-call-edge': { source: ['mapper', 'compute', 'gateway', 'queue', 'daemon', 'service'], target: ['service'] },
+  'queue-edge': { source: ['mapper', 'compute', 'service', 'gateway', 'daemon', 'subflow', 'queue'], target: ['queue', 'subflow'] },
+  'service-call-edge': { source: ['mapper', 'compute', 'gateway', 'queue', 'daemon', 'service', 'subflow'], target: ['service', 'subflow'] },
   'daemon-trigger-edge': { source: ['daemon'], target: ['mapper', 'compute', 'service', 'gateway', 'queue', 'state'] },
   'state-edge': { source: ['mapper', 'compute', 'gateway', 'queue', 'service', 'daemon'], target: ['state'] },
   'contract-edge': { source: ['service', 'gateway', 'daemon', 'compute'], target: ['contract'] },
@@ -68,6 +70,7 @@ const PALETTE_TABS = [
   { id: 'hardware', label: 'Hardware' },
   { id: 'daemon', label: 'Daemons' },
   { id: 'service', label: 'Services' },
+  { id: 'user-defined', label: 'User Defined' },
   { id: 'device', label: 'Devices' },
   { id: 'map', label: 'Maps' },
   { id: 'queue', label: 'Queues' },
@@ -172,7 +175,144 @@ function isItemInPaletteTab(item, tabId) {
   if (tabId === 'hardware') {
     return isHardwarePaletteItem(item)
   }
+  if (tabId === 'user-defined') {
+    return String(item?.kind || '').toLowerCase() === 'subflow'
+  }
   return String(item?.kind || '').toLowerCase() === tabId
+}
+
+function normalizeSubflowDefinition(subflow, index = 0) {
+  const rawName = String(subflow?.subflowName || subflow?.name || subflow?.label || '').trim()
+  const fallbackName = rawName || `subflow-${index + 1}`
+  const id = String(subflow?.id || fallbackName)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '') || `subflow-${index + 1}`
+  return {
+    id,
+    kind: 'subflow',
+    type: 'subflow',
+    name: rawName || fallbackName,
+    label: rawName || fallbackName,
+    subflowName: rawName || fallbackName,
+    inputShape: normalizeShapeRef(subflow?.inputShape),
+    outputShape: normalizeShapeRef(subflow?.outputShape),
+    implementationRef: String(subflow?.implementationRef || '').trim(),
+    typeParameters: normalizeParameterList(subflow?.typeParameters),
+    typeBindings: normalizeBindingMap(subflow?.typeBindings),
+    description: String(subflow?.description || '').trim(),
+  }
+}
+
+function collectSubflowDefinitions(nodes, existingSubflows = []) {
+  const merged = new Map()
+  for (const subflow of Array.isArray(existingSubflows) ? existingSubflows : []) {
+    const normalized = normalizeSubflowDefinition(subflow, merged.size)
+    merged.set(normalized.id, normalized)
+  }
+  for (const node of Array.isArray(nodes) ? nodes : []) {
+    if (String(node?.flowNodeType || node?.kind || node?.type).toLowerCase() !== 'subflow') continue
+    const config = node?.config && typeof node.config === 'object' ? node.config : {}
+    const normalized = normalizeSubflowDefinition({
+      id: node?.subflowId || node?.id,
+      name: config.subflowName || node?.label || node?.visualObjectName,
+      label: config.subflowName || node?.label || node?.visualObjectName,
+      subflowName: config.subflowName || node?.label || node?.visualObjectName,
+      inputShape: config.inputShape,
+      outputShape: config.outputShape,
+      implementationRef: config.implementationRef,
+      typeParameters: config.typeParameters,
+      typeBindings: config.typeBindings,
+      description: node?.description,
+    }, merged.size)
+    merged.set(normalized.id, normalized)
+  }
+  return Array.from(merged.values()).sort((left, right) => left.name.localeCompare(right.name))
+}
+
+function subflowDefinitionToPaletteItem(subflow) {
+  const normalized = normalizeSubflowDefinition(subflow)
+  return {
+    id: normalized.id,
+    name: normalized.name,
+    kind: 'subflow',
+    type: 'subflow',
+    iconGraphic: createStubIconGraphic(normalized.name),
+    description: normalized.description || 'User-defined subflow',
+    usageNotes: normalized.implementationRef || '',
+    subflowName: normalized.subflowName,
+    inputShape: normalized.inputShape,
+    outputShape: normalized.outputShape,
+    implementationRef: normalized.implementationRef,
+    typeParameters: normalized.typeParameters,
+    typeBindings: normalized.typeBindings,
+  }
+}
+
+function toRulesetPaletteItem(ruleset, index = 0) {
+  const id = String(ruleset?.id || '').trim() || `ruleset-${index + 1}`
+  const label = String(ruleset?.label || id).trim()
+  const sourcePatterns = Array.isArray(ruleset?.sourcePatterns) ? ruleset.sourcePatterns.map((item) => String(item || '').trim()).filter(Boolean) : []
+  const targetPatterns = Array.isArray(ruleset?.targetPatterns) ? ruleset.targetPatterns.map((item) => String(item || '').trim()).filter(Boolean) : []
+  const sourceShape = sourcePatterns[0] || ''
+  const targetShape = targetPatterns[0] || ''
+  return {
+    id,
+    name: label,
+    kind: 'map',
+    type: 'ruleset',
+    iconGraphic: createStubIconGraphic(label),
+    description: String(ruleset?.description || 'Project ruleset').trim(),
+    usageNotes: `${sourcePatterns.length ? sourcePatterns.join(', ') : '*'} -> ${targetPatterns.length ? targetPatterns.join(', ') : '*'}`,
+    rulesetId: id,
+    sourcePatterns,
+    targetPatterns,
+    sourceShape,
+    targetShape,
+  }
+}
+
+function toMessageDefinitionPaletteItem(definition, index = 0) {
+  const id = String(definition?.id || '').trim() || `message-definition-${index + 1}`
+  const name = String(definition?.name || id).trim()
+  const schemaRef = String(definition?.schemaRef || '').trim()
+  const format = String(definition?.format || '').trim()
+  const version = String(definition?.version || '').trim()
+  return {
+    id,
+    name,
+    kind: 'contract',
+    type: 'message-definition',
+    iconGraphic: createStubIconGraphic(name),
+    description: `Message definition${format ? ` (${format})` : ''}`,
+    usageNotes: [schemaRef, version].filter(Boolean).join(' '),
+    contractId: id,
+    inputSchema: schemaRef || id,
+    outputSchema: schemaRef || id,
+    protocol: format || '',
+  }
+}
+
+function collectProjectArtifactPaletteItems(projectModel) {
+  const model = projectModel && typeof projectModel === 'object' ? projectModel : {}
+  const rulesets = Array.isArray(model.rulesets) ? model.rulesets : []
+  const messageDefinitions = Array.isArray(model.messageDefinitions) ? model.messageDefinitions : []
+  return [
+    ...rulesets.map((ruleset, index) => toRulesetPaletteItem(ruleset, index)),
+    ...messageDefinitions.map((definition, index) => toMessageDefinitionPaletteItem(definition, index)),
+  ]
+}
+
+function getPaletteItemBadge(item) {
+  const type = String(item?.type || '').toLowerCase()
+  if (type === 'ruleset') {
+    return { label: 'Project Rule Set', className: 'artifact-ruleset' }
+  }
+  if (type === 'message-definition') {
+    return { label: 'Message Definition', className: 'artifact-message-definition' }
+  }
+  return null
 }
 
 function resolvePlatformioBuildProfile(buildProfile) {
@@ -348,7 +488,84 @@ function ensureFlowFileName(value) {
   return base.toLowerCase().endsWith('.flw') ? base : `${base}.flw`
 }
 
-function getDefaultNodeConfig(flowNodeType) {
+function normalizeShapeRef(value) {
+  return String(value || '').trim().toLowerCase()
+}
+
+function normalizeShapeSignature(value) {
+  return normalizeShapeRef(value).replace(/[^a-z0-9]/g, '')
+}
+
+function normalizeParameterList(value) {
+  const source = Array.isArray(value) ? value.join(',') : String(value || '')
+  const seen = new Set()
+  const next = []
+  for (const part of source.split(',')) {
+    const token = String(part || '').trim()
+    if (!token) continue
+    const lower = token.toLowerCase()
+    if (seen.has(lower)) continue
+    seen.add(lower)
+    next.push(token)
+  }
+  return next
+}
+
+function normalizeBindingMap(value) {
+  const next = {}
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    for (const [key, raw] of Object.entries(value)) {
+      const param = String(key || '').trim()
+      const binding = String(raw || '').trim()
+      if (!param || !binding) continue
+      next[param] = binding
+    }
+    return next
+  }
+  for (const part of String(value || '').split(',')) {
+    const [left, right] = String(part || '').split('=')
+    const param = String(left || '').trim()
+    const binding = String(right || '').trim()
+    if (!param || !binding) continue
+    next[param] = binding
+  }
+  return next
+}
+
+function mapperShapeMatches(candidateShape, allowedPatterns) {
+  if (!Array.isArray(allowedPatterns) || allowedPatterns.length === 0) return false
+  const normalizedCandidate = normalizeShapeRef(candidateShape)
+  const signatureCandidate = normalizeShapeSignature(candidateShape)
+  return allowedPatterns.some((pattern) => {
+    const normalizedPattern = normalizeShapeRef(pattern)
+    if (!normalizedPattern) return false
+    if (normalizedPattern === '*') return true
+    if (normalizedCandidate === normalizedPattern) return true
+    return signatureCandidate === normalizeShapeSignature(normalizedPattern)
+  })
+}
+
+function getMapperRulesetOptions(sourceShape, targetShape, catalog = []) {
+  const source = normalizeShapeRef(sourceShape)
+  const target = normalizeShapeRef(targetShape)
+  if (!source || !target) return []
+
+  const candidateCatalog = Array.isArray(catalog) ? catalog : []
+  if (candidateCatalog.length === 0) return []
+
+  return candidateCatalog
+    .filter((ruleset) => mapperShapeMatches(source, ruleset.sourcePatterns) && mapperShapeMatches(target, ruleset.targetPatterns))
+    .sort((left, right) => Number(right.priority || 0) - Number(left.priority || 0))
+    .map((ruleset) => ({
+      id: String(ruleset.id || '').trim(),
+      label: String(ruleset.label || ruleset.id || '').trim(),
+      description: String(ruleset.description || '').trim(),
+      recommended: ruleset.recommended === true,
+    }))
+    .filter((ruleset) => !!ruleset.id)
+}
+
+  function getDefaultNodeConfig(flowNodeType) {
   const type = normalizeFlowNodeType(flowNodeType)
   if (type === 'mapper') {
     return { inputSchema: '', outputSchema: '', ruleset: '' }
@@ -371,10 +588,13 @@ function getDefaultNodeConfig(flowNodeType) {
     return { endpoint: '', protocol: 'http', contractRef: '' }
   }
   if (type === 'queue') {
-    return { queueName: '', retryPolicy: '', delayMs: '' }
+    return { queueName: '', inputShape: '', outputShape: '', retryPolicy: '', delayMs: '' }
   }
   if (type === 'daemon') {
     return { schedule: '', triggerType: '', maxConcurrency: '' }
+  }
+  if (type === 'subflow') {
+    return { subflowName: '', inputShape: '', outputShape: '', implementationRef: '', typeParameters: [], typeBindings: {} }
   }
   if (type === 'state') {
     return { storeRef: '', stateSchema: '', retentionPolicy: '' }
@@ -382,15 +602,26 @@ function getDefaultNodeConfig(flowNodeType) {
   if (type === 'contract') {
     return { contractId: '', inputSchema: '', outputSchema: '', protocol: '' }
   }
+  if (type === 'service') {
+    return { inputShape: '', outputShape: '', operationRef: '', capabilityRef: '', timeoutMs: '' }
+  }
   return { operationRef: '', capabilityRef: '', timeoutMs: '' }
+}
+
+function getShapeFieldsForNodeType(flowNodeType) {
+  const type = normalizeFlowNodeType(flowNodeType)
+  if (type === 'queue' || type === 'service' || type === 'subflow') {
+    return ['inputShape', 'outputShape']
+  }
+  return []
 }
 
 function getConfigFieldsForNodeType(flowNodeType) {
   const type = normalizeFlowNodeType(flowNodeType)
   if (type === 'mapper') {
     return [
-      { key: 'inputSchema', label: 'Input schema', placeholder: 'MT103' },
-      { key: 'outputSchema', label: 'Output schema', placeholder: 'PACS.008' },
+      { key: 'inputSchema', label: 'Source map', placeholder: 'swift-mt103' },
+      { key: 'outputSchema', label: 'Destination map', placeholder: 'pacs.008.001.14' },
       { key: 'ruleset', label: 'Ruleset', placeholder: 'CBDS_MT103_TO_PACS008' },
     ]
   }
@@ -418,8 +649,20 @@ function getConfigFieldsForNodeType(flowNodeType) {
   if (type === 'queue') {
     return [
       { key: 'queueName', label: 'Queue name', placeholder: 'queue.iso20022.dispatch' },
+      { key: 'inputShape', label: 'Input shape', placeholder: 'MT103' },
+      { key: 'outputShape', label: 'Output shape', placeholder: 'PACS.008' },
       { key: 'retryPolicy', label: 'Retry policy', placeholder: 'retry.exponential.v1' },
       { key: 'delayMs', label: 'Delay (ms)', placeholder: '0' },
+    ]
+  }
+  if (type === 'subflow') {
+    return [
+      { key: 'subflowName', label: 'Black box name', placeholder: 'enrichment.subflow' },
+      { key: 'inputShape', label: 'Input shape', placeholder: 'QueueMessage.v1' },
+      { key: 'outputShape', label: 'Output shape', placeholder: 'EnrichedMessage.v1' },
+      { key: 'implementationRef', label: 'Implementation ref', placeholder: 'service-or-route-name' },
+      { key: 'typeParameters', label: 'Type parameters', placeholder: 'TInput,TOutput' },
+      { key: 'typeBindings', label: 'Type bindings', placeholder: 'TInput=swift-mt103,TOutput=pacs.008' },
     ]
   }
   if (type === 'daemon') {
@@ -444,11 +687,98 @@ function getConfigFieldsForNodeType(flowNodeType) {
       { key: 'protocol', label: 'Protocol', placeholder: 'http|grpc|mq|file' },
     ]
   }
+  if (type === 'service') {
+    return [
+      { key: 'inputShape', label: 'Input shape', placeholder: 'Command.v1' },
+      { key: 'outputShape', label: 'Output shape', placeholder: 'Result.v1' },
+      { key: 'operationRef', label: 'Operation ref', placeholder: 'service.operation.v1' },
+      { key: 'capabilityRef', label: 'Capability ref', placeholder: 'service.call' },
+      { key: 'timeoutMs', label: 'Timeout (ms)', placeholder: '10000' },
+    ]
+  }
   return [
     { key: 'operationRef', label: 'Operation ref', placeholder: 'service.operation.v1' },
     { key: 'capabilityRef', label: 'Capability ref', placeholder: 'service.call' },
     { key: 'timeoutMs', label: 'Timeout (ms)', placeholder: '10000' },
   ]
+}
+
+function getNodeShapeSpec(node) {
+  const type = normalizeFlowNodeType(node?.flowNodeType || node?.kind || node?.type)
+  const config = node?.config && typeof node.config === 'object' ? node.config : {}
+  return {
+    type,
+    inputShape: normalizeShapeRef(config.inputShape || config.inputSchema),
+    outputShape: normalizeShapeRef(config.outputShape || config.outputSchema),
+  }
+}
+
+function validateShapeCompatibility(sourceNode, targetNode) {
+  const sourceShape = getNodeShapeSpec(sourceNode)
+  const targetShape = getNodeShapeSpec(targetNode)
+  const sourceOutput = sourceShape.outputShape || sourceShape.inputShape
+  const targetInput = targetShape.inputShape || targetShape.outputShape
+
+  if (sourceOutput && targetInput && sourceOutput !== targetInput) {
+    return {
+      valid: false,
+      reason: `Shape mismatch: ${sourceShape.type} outputs ${sourceOutput} but ${targetShape.type} expects ${targetInput}.`,
+    }
+  }
+
+  return { valid: true, reason: '' }
+}
+
+function validateSubflowGenericBindings(node) {
+  const nodeType = normalizeFlowNodeType(node?.flowNodeType || node?.kind || node?.type)
+  if (nodeType !== 'subflow') {
+    return { valid: true, reason: '' }
+  }
+
+  const config = node?.config && typeof node.config === 'object' ? node.config : {}
+  const typeParameters = normalizeParameterList(config.typeParameters)
+  const typeBindings = normalizeBindingMap(config.typeBindings)
+  const subflowName = String(config.subflowName || node?.label || node?.visualObjectName || node?.id || 'subflow')
+
+  if (!typeParameters.length) {
+    const bindingKeys = Object.keys(typeBindings)
+    if (bindingKeys.length) {
+      return {
+        valid: false,
+        reason: `Subflow ${subflowName} defines bindings but has no type parameters.`,
+      }
+    }
+    return { valid: true, reason: '' }
+  }
+
+  const parameterSet = new Set(typeParameters)
+  const unknownBindings = Object.keys(typeBindings).filter((key) => !parameterSet.has(key))
+  if (unknownBindings.length) {
+    return {
+      valid: false,
+      reason: `Subflow ${subflowName} has unknown bindings: ${unknownBindings.join(', ')}.`,
+    }
+  }
+  const missing = typeParameters.filter((parameter) => !String(typeBindings[parameter] || '').trim())
+  if (missing.length) {
+    const subflowName = String(config.subflowName || node?.label || node?.visualObjectName || node?.id || 'subflow')
+    return {
+      valid: false,
+      reason: `Subflow ${subflowName} is missing bindings for: ${missing.join(', ')}.`,
+    }
+  }
+
+  return { valid: true, reason: '' }
+}
+
+function validateAllSubflowBindings(nodes) {
+  for (const node of Array.isArray(nodes) ? nodes : []) {
+    const result = validateSubflowGenericBindings(node)
+    if (!result.valid) {
+      return result
+    }
+  }
+  return { valid: true, reason: '' }
 }
 
 function getNodeTypeForValidation(node) {
@@ -470,6 +800,10 @@ function validateEdgeConnection(edgeTypeId, sourceNode, targetNode) {
   const targetAllowed = Array.isArray(rule.target) ? rule.target.includes(targetType) : true
 
   if (sourceAllowed && targetAllowed) {
+    const shapeCheck = validateShapeCompatibility(sourceNode, targetNode)
+    if (!shapeCheck.valid) {
+      return shapeCheck
+    }
     return { valid: true, reason: '' }
   }
 
@@ -482,8 +816,12 @@ function validateEdgeConnection(edgeTypeId, sourceNode, targetNode) {
   }
 }
 
-export default function FlowDesignerPage() {
+export default function FlowDesignerPage({ projectId, projectLabel }) {
   const [catalog, setCatalog] = useState([])
+  const [librarianDataTypes, setLibrarianDataTypes] = useState([])
+  const [librarianSchemas, setLibrarianSchemas] = useState([])
+  const [mapperRulesets, setMapperRulesets] = useState([])
+  const [userDefinedSubflows, setUserDefinedSubflows] = useState([])
   const [targets, setTargets] = useState([])
   const [nodes, setNodes] = useState([])
   const [edges, setEdges] = useState([])
@@ -517,6 +855,7 @@ export default function FlowDesignerPage() {
   const canvasStageRef = useRef(null)
   const flowFileInputRef = useRef(null)
   const shellRef = useRef(null)
+  const activeProject = getProjectDefinition(projectId)
   const suppressNodeClickRef = useRef(false)
   const suppressPaletteClickRef = useRef(false)
 
@@ -542,15 +881,93 @@ export default function FlowDesignerPage() {
       }
     }
 
+    async function loadLibrarianDataTypes() {
+      try {
+        const [typesPayload, schemasPayload, rulesetsPayload] = await Promise.all([
+          getJsonAsActor('/api/librarian/data-types', 'Data librarian request failed'),
+          getJsonAsActor('/api/librarian/schemas', 'Librarian schema request failed').catch(() => ({ schemas: [] })),
+          getJsonAsActor('/api/librarian/mapper-rulesets', 'Librarian mapper rulesets request failed').catch(() => ({ rulesets: [] })),
+        ])
+        if (!active) return
+        setLibrarianDataTypes(Array.isArray(typesPayload?.types) ? typesPayload.types : [])
+        setLibrarianSchemas(Array.isArray(schemasPayload?.schemas) ? schemasPayload.schemas : [])
+        setMapperRulesets(Array.isArray(rulesetsPayload?.rulesets) ? rulesetsPayload.rulesets : [])
+      } catch {
+        if (!active) return
+        setLibrarianDataTypes([])
+        setLibrarianSchemas([])
+        setMapperRulesets([])
+      }
+    }
+
     loadData()
+    loadLibrarianDataTypes()
     return () => {
       active = false
     }
   }, [])
 
+  const shapeOptions = useMemo(() => {
+    const unique = new Map()
+    for (const type of librarianDataTypes) {
+      const id = String(type?.id || '').trim().toLowerCase()
+      if (!id) continue
+      unique.set(id, {
+        id,
+        label: String(type?.label || type?.id || id).trim(),
+      })
+    }
+    return Array.from(unique.values()).sort((left, right) => left.label.localeCompare(right.label))
+  }, [librarianDataTypes])
+
+  const mapperMapOptions = useMemo(() => {
+    const unique = new Map()
+
+    for (const schema of librarianSchemas) {
+      const id = normalizeShapeRef(schema?.typeId || schema?.name || '')
+      if (!id) continue
+      const schemaName = String(schema?.name || id).trim()
+      const schemaPath = String(schema?.path || '').trim()
+      const schemaLabel = schemaPath ? `${id} | ${schemaName} | ${schemaPath}` : `${id} | ${schemaName}`
+      if (!unique.has(id)) {
+        unique.set(id, { id, label: schemaLabel })
+      }
+    }
+
+    for (const option of shapeOptions) {
+      const id = normalizeShapeRef(option?.id)
+      if (!id || unique.has(id)) continue
+      unique.set(id, { id, label: String(option?.label || option?.id || id).trim() })
+    }
+
+    return Array.from(unique.values()).sort((left, right) => left.label.localeCompare(right.label))
+  }, [librarianSchemas, shapeOptions])
+
+  useEffect(() => {
+    const workspace = loadProjectWorkspace(projectId)
+    const savedFlow = workspace.flow?.payload
+    if (savedFlow && typeof savedFlow === 'object') {
+      applyFlowDocument(savedFlow, workspace.flow?.fileName || `${activeProject.id}.flw`)
+      return
+    }
+
+    const defaultWorkspace = getDefaultProjectWorkspace(projectId)
+    setNodes([])
+    setEdges([])
+    setUserDefinedSubflows([])
+    setSelectedNodeId(null)
+    setSelectedEdgeId(null)
+    setEdgeSourceNodeId(null)
+    setFlowFileName(defaultWorkspace.flow?.fileName || `${activeProject.id}.flw`)
+    setStatusText(`Project ${activeProject.label} loaded.`)
+  }, [activeProject.id, activeProject.label, projectId])
+
   const searchableCatalog = useMemo(() => {
+    const workspace = loadProjectWorkspace(projectId)
+    const projectArtifactItems = collectProjectArtifactPaletteItems(workspace?.projectModel)
+    const mergedCatalog = [...catalog, ...projectArtifactItems]
     const normalizedQuery = String(query || '').trim().toLowerCase()
-    return catalog
+    return mergedCatalog
       .filter((item) => {
         if (!normalizedQuery) return true
         const haystack = [
@@ -565,19 +982,40 @@ export default function FlowDesignerPage() {
         return haystack.includes(normalizedQuery)
       })
       .sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || '')))
-  }, [catalog, query])
+  }, [catalog, projectId, query])
+
+  const searchableUserDefinedSubflows = useMemo(() => {
+    const normalizedQuery = String(query || '').trim().toLowerCase()
+    return userDefinedSubflows
+      .filter((item) => {
+        if (!normalizedQuery) return true
+        const haystack = [
+          item?.id,
+          item?.name,
+          item?.subflowName,
+          item?.inputShape,
+          item?.outputShape,
+          item?.implementationRef,
+          item?.description,
+        ].join(' ').toLowerCase()
+        return haystack.includes(normalizedQuery)
+      })
+      .map(subflowDefinitionToPaletteItem)
+  }, [query, userDefinedSubflows])
 
   const paletteTabCounts = useMemo(() => {
     const counts = {}
     for (const tab of PALETTE_TABS) {
-      counts[tab.id] = searchableCatalog.filter((item) => isItemInPaletteTab(item, tab.id)).length
+      const sourceItems = tab.id === 'user-defined' ? searchableUserDefinedSubflows : searchableCatalog
+      counts[tab.id] = sourceItems.filter((item) => isItemInPaletteTab(item, tab.id)).length
     }
     return counts
-  }, [searchableCatalog])
+  }, [searchableCatalog, searchableUserDefinedSubflows])
 
   const filteredCatalog = useMemo(() => {
-    return searchableCatalog.filter((item) => isItemInPaletteTab(item, paletteTab))
-  }, [searchableCatalog, paletteTab])
+    const sourceItems = paletteTab === 'user-defined' ? searchableUserDefinedSubflows : searchableCatalog
+    return sourceItems.filter((item) => isItemInPaletteTab(item, paletteTab))
+  }, [paletteTab, searchableCatalog, searchableUserDefinedSubflows])
 
   const selectedNode = selectedNodeId ? nodes.find((node) => node.id === selectedNodeId) || null : null
 
@@ -628,20 +1066,6 @@ export default function FlowDesignerPage() {
   function updateSelectedRequiredWiring(textValue) {
     if (!selectedNodeId) return
     setRequiredWiringDraft(String(textValue || ''))
-  }
-
-  function updateSelectedNodeConfigField(fieldKey, fieldValue) {
-    if (!selectedNodeId) return
-    setSelectedNodeDraft((previous) => {
-      if (!previous) return previous
-      return {
-        ...previous,
-        config: {
-          ...previous.config,
-          [fieldKey]: fieldValue,
-        },
-      }
-    })
   }
 
   function applyComputeHanoiTemplate() {
@@ -742,6 +1166,8 @@ export default function FlowDesignerPage() {
     const requiredSchemas = Array.from(new Set([
       normalizeCapability(selectedConfig?.inputSchema || ''),
       normalizeCapability(selectedConfig?.outputSchema || ''),
+      normalizeCapability(selectedConfig?.inputShape || ''),
+      normalizeCapability(selectedConfig?.outputShape || ''),
       normalizeCapability(selectedConfig?.stateSchema || ''),
     ].filter(Boolean)))
     const requiredSlaProfiles = Array.from(new Set([
@@ -877,7 +1303,26 @@ export default function FlowDesignerPage() {
       ...previous,
       (() => {
         const flowNodeType = inferFlowNodeTypeFromItem(item)
-        const visualObjectName = nextAvailableVisualObjectName(flowNodeType, previous)
+        const preferredName = String(item?.subflowName || item?.name || '').trim()
+        const visualObjectName = flowNodeType === 'subflow' && preferredName
+          ? preferredName
+          : nextAvailableVisualObjectName(flowNodeType, previous)
+        const rulesetShapeSource = String(item?.sourceShape || '').trim()
+        const rulesetShapeTarget = String(item?.targetShape || '').trim()
+        const artifactConfig = item?.type === 'ruleset'
+          ? {
+              inputSchema: rulesetShapeSource,
+              outputSchema: rulesetShapeTarget,
+              ruleset: String(item?.rulesetId || item?.id || '').trim(),
+            }
+          : (item?.type === 'message-definition'
+            ? {
+                contractId: String(item?.contractId || item?.id || '').trim(),
+                inputSchema: String(item?.inputSchema || '').trim(),
+                outputSchema: String(item?.outputSchema || '').trim(),
+                protocol: String(item?.protocol || '').trim(),
+              }
+            : {})
         return {
           id: createId(item.kind || 'node'),
           label: visualObjectName,
@@ -892,7 +1337,18 @@ export default function FlowDesignerPage() {
           visualObjectActions: Array.isArray(item.actions) ? item.actions : [],
           requiredCapabilities: inferRequiredCapabilitiesFromItem(item),
           requiredWiring: inferRequiredWiringFromItem(item),
-          config: getDefaultNodeConfig(flowNodeType),
+          config: {
+            ...getDefaultNodeConfig(flowNodeType),
+            ...artifactConfig,
+            ...(flowNodeType === 'subflow' ? {
+              subflowName: preferredName || visualObjectName,
+              inputShape: normalizeShapeRef(item?.inputShape),
+              outputShape: normalizeShapeRef(item?.outputShape),
+              implementationRef: String(item?.implementationRef || '').trim(),
+              typeParameters: normalizeParameterList(item?.typeParameters),
+              typeBindings: normalizeBindingMap(item?.typeBindings),
+            } : {}),
+          },
           x,
           y,
           target: null,
@@ -901,7 +1357,7 @@ export default function FlowDesignerPage() {
     ]))
   }
 
-  function buildFlowDocumentPayload(fileNameOverride = null, nodesOverride = nodes, edgesOverride = edges) {
+  function buildFlowDocumentPayload(fileNameOverride = null, nodesOverride = nodes, edgesOverride = edges, subflowsOverride = userDefinedSubflows) {
     const fileName = ensureFlowFileName(fileNameOverride || flowFileName)
     return {
       kind: FLOW_FILE_KIND,
@@ -919,7 +1375,7 @@ export default function FlowDesignerPage() {
         nodeTypes: FLOW_NODE_TYPES,
         edgeTypes: EDGE_TYPES,
       },
-      subflows: [],
+      subflows: collectSubflowDefinitions(nodesOverride, subflowsOverride),
       nodes: nodesOverride,
       edges: edgesOverride,
     }
@@ -939,6 +1395,21 @@ export default function FlowDesignerPage() {
     URL.revokeObjectURL(objectUrl)
     setFlowFileName(fileName)
     setStatusText(`Saved ${fileName}.`)
+  }
+
+  function saveFlowDocumentToProject(payload, fileNameOverride = null) {
+    const fileName = ensureFlowFileName(fileNameOverride || payload?.meta?.name || flowFileName)
+    const nextWorkspace = {
+      ...loadProjectWorkspace(projectId),
+      projectId: activeProject.id,
+      projectLabel: activeProject.label,
+      flow: {
+        fileName,
+        payload,
+        lastSavedAt: new Date().toISOString(),
+      },
+    }
+    saveProjectWorkspace(projectId, nextWorkspace)
   }
 
   function normalizeLoadedNode(node, index) {
@@ -965,6 +1436,10 @@ export default function FlowDesignerPage() {
       config: {
         ...getDefaultNodeConfig(inferredType),
         ...(node?.config || {}),
+        ...(inferredType === 'subflow' ? {
+          typeParameters: normalizeParameterList(node?.config?.typeParameters),
+          typeBindings: normalizeBindingMap(node?.config?.typeBindings),
+        } : {}),
       },
       x: Number.isFinite(parsedX) ? Math.max(0, parsedX) : fallbackX,
       y: Number.isFinite(parsedY) ? Math.max(0, parsedY) : fallbackY,
@@ -996,6 +1471,7 @@ export default function FlowDesignerPage() {
     const normalizedEdges = rawEdges
       .map((edge) => normalizeLoadedEdge(edge, nodeIdSet))
       .filter(Boolean)
+    const normalizedSubflows = collectSubflowDefinitions(normalizedNodes, Array.isArray(payload?.subflows) ? payload.subflows : [])
 
     const nextEdgeType = String(payload?.settings?.defaultEdgeType || '')
     const resolvedEdgeType = EDGE_TYPE_ID_SET.has(nextEdgeType) ? nextEdgeType : 'message-broker-call'
@@ -1003,6 +1479,7 @@ export default function FlowDesignerPage() {
 
     setNodes(normalizedNodes)
     setEdges(normalizedEdges)
+    setUserDefinedSubflows(normalizedSubflows)
     setSelectedNodeId(null)
     setSelectedEdgeId(null)
     setEdgeSourceNodeId(null)
@@ -1016,6 +1493,7 @@ export default function FlowDesignerPage() {
     const rawEdges = Array.isArray(payload?.edges) ? payload.edges : []
     const existingNodeIdSet = new Set(nodes.map((node) => node.id))
     const idMap = new Map()
+    const importedSubflows = Array.isArray(payload?.subflows) ? payload.subflows : []
 
     const importedNodes = rawNodes.map((node, index) => {
       const normalized = normalizeLoadedNode(node, index)
@@ -1051,6 +1529,7 @@ export default function FlowDesignerPage() {
 
     setNodes((previous) => [...previous, ...importedNodes])
     setEdges((previous) => [...previous, ...importedEdges])
+    setUserDefinedSubflows((previous) => collectSubflowDefinitions([...nodes, ...importedNodes], [...previous, ...importedSubflows]))
     setStatusText(`Imported ${ensureFlowFileName(fileNameHint)}: +${importedNodes.length} nodes, +${importedEdges.length} edges.`)
   }
 
@@ -1063,9 +1542,20 @@ export default function FlowDesignerPage() {
   }
 
   function saveFlowToFile(fileNameOverride = null) {
+    const subflowValidation = validateAllSubflowBindings(nodes)
+    if (!subflowValidation.valid) {
+      setStatusText(`Save failed: ${subflowValidation.reason}`)
+      return
+    }
     const fileName = ensureFlowFileName(fileNameOverride || flowFileName)
     const payload = buildFlowDocumentPayload(fileName)
+    setUserDefinedSubflows(Array.isArray(payload?.subflows) ? payload.subflows : [])
+    saveFlowDocumentToProject(payload, fileName)
     downloadFlowDocument(payload, fileName)
+  }
+
+  function buildUserDefinedSubflowPaletteItem(subflow) {
+    return subflowDefinitionToPaletteItem(subflow)
   }
 
   function handleNewFlow() {
@@ -1160,7 +1650,6 @@ export default function FlowDesignerPage() {
     if (!selectedEdgeId) return
     const edgeToDelete = edges.find((edge) => edge.id === selectedEdgeId)
     setEdges((previous) => previous.filter((edge) => edge.id !== selectedEdgeId))
-    setSelectedEdgeId(null)
     if (edgeToDelete) {
       setStatusText(`Deleted ${edgeToDelete.label}.`)
     }
@@ -1225,9 +1714,49 @@ export default function FlowDesignerPage() {
     if (!selectedNodeId) return
     setSelectedNodeDraft((previous) => {
       if (!previous) return previous
+      const nextValue = String(textValue || '')
       return {
         ...previous,
-        labelText: String(textValue ?? ''),
+        labelText: nextValue,
+        ...(selectedNode && normalizeFlowNodeType(selectedNode.flowNodeType || selectedNode.kind || selectedNode.type) === 'subflow'
+          ? {
+              config: {
+                ...previous.config,
+                subflowName: nextValue,
+              },
+            }
+          : {}),
+      }
+    })
+  }
+
+  function updateSelectedNodeConfigField(fieldKey, fieldValue) {
+    if (!selectedNodeId) return
+    setSelectedNodeDraft((previous) => {
+      if (!previous) return previous
+      const nextValue = String(fieldValue || '')
+      const nodeType = normalizeFlowNodeType(selectedNode?.flowNodeType || selectedNode?.kind || selectedNode?.type)
+      const nextConfig = {
+        ...previous.config,
+        [fieldKey]: fieldKey === 'typeParameters'
+          ? normalizeParameterList(nextValue)
+          : (fieldKey === 'typeBindings' ? normalizeBindingMap(nextValue) : nextValue),
+      }
+
+      if (nodeType === 'mapper' && (fieldKey === 'inputSchema' || fieldKey === 'outputSchema')) {
+        const nextRulesetOptions = getMapperRulesetOptions(nextConfig.inputSchema, nextConfig.outputSchema, mapperRulesets)
+        const currentRuleset = String(nextConfig.ruleset || '').trim()
+        const currentIsAllowed = nextRulesetOptions.some((option) => option.id === currentRuleset)
+        if (!currentIsAllowed) {
+          const recommended = nextRulesetOptions.find((option) => option.recommended) || nextRulesetOptions[0]
+          nextConfig.ruleset = recommended ? recommended.id : ''
+        }
+      }
+
+      return {
+        ...previous,
+        config: nextConfig,
+        ...(fieldKey === 'subflowName' ? { labelText: nextValue } : {}),
       }
     })
   }
@@ -1236,7 +1765,7 @@ export default function FlowDesignerPage() {
     if (!selectedNodeId) return
     setSelectedNodeDraft((previous) => {
       if (!previous) return previous
-      const nextValue = String(textValue ?? '')
+      const nextValue = String(textValue || '')
       if (axis === 'x') return { ...previous, xText: nextValue }
       if (axis === 'y') return { ...previous, yText: nextValue }
       return previous
@@ -1268,6 +1797,11 @@ export default function FlowDesignerPage() {
       ...getDefaultNodeConfig(selectedNode.flowNodeType || selectedNode.kind || selectedNode.type),
       ...(selectedNodeDraft.config || {}),
     }
+    const isSubflowNode = normalizeFlowNodeType(selectedNode.flowNodeType || selectedNode.kind || selectedNode.type) === 'subflow'
+    const nextSubflowName = isSubflowNode ? String(nextConfig.subflowName || nextLabel).trim() : ''
+    if (isSubflowNode && nextSubflowName) {
+      nextConfig.subflowName = nextSubflowName
+    }
     const nextActions = String(selectedNodeDraft.actionsText || '')
       .split('\n')
       .map((line) => line.trim())
@@ -1290,8 +1824,8 @@ export default function FlowDesignerPage() {
       if (node.id !== selectedNodeId) return node
       return {
         ...node,
-        label: nextLabel,
-        visualObjectName: nextLabel,
+        label: isSubflowNode && nextSubflowName ? nextSubflowName : nextLabel,
+        visualObjectName: isSubflowNode && nextSubflowName ? nextSubflowName : nextLabel,
         x: Math.max(0, nextX),
         y: Math.max(0, nextY),
         requiredCapabilities: nextRequiredCapabilities,
@@ -1301,22 +1835,37 @@ export default function FlowDesignerPage() {
       }
     })
 
+    if (isSubflowNode) {
+      const nextSubflowNode = nextNodes.find((node) => node.id === selectedNodeId)
+      const subflowValidation = validateSubflowGenericBindings(nextSubflowNode)
+      if (!subflowValidation.valid) {
+        setStatusText(`Save failed: ${subflowValidation.reason}`)
+        return
+      }
+    }
+
     setNodes(nextNodes)
+    const nextSubflows = collectSubflowDefinitions(nextNodes, userDefinedSubflows)
+    setUserDefinedSubflows(nextSubflows)
     setSelectedNodeDraft({
-      labelText: nextLabel,
+      labelText: isSubflowNode && nextSubflowName ? nextSubflowName : nextLabel,
       xText: String(Math.max(0, nextX)),
       yText: String(Math.max(0, nextY)),
       config: nextConfig,
       actionsText: String(selectedNodeDraft.actionsText || ''),
     })
     const payload = buildFlowDocumentPayload(flowFileName, nextNodes, edges)
+    payload.subflows = nextSubflows
+    saveFlowDocumentToProject(payload, flowFileName)
     downloadFlowDocument(payload, flowFileName)
+    setSelectedNodeId(null)
   }
 
   function cancelSelectedNodeDraft() {
     if (!selectedNode) return
     resetSelectedNodeDraft()
     setStatusText('Inspector changes canceled.')
+    setSelectedNodeId(null)
   }
 
   function handlePaletteItemClick(item) {
@@ -1502,6 +2051,11 @@ export default function FlowDesignerPage() {
   }, [edgeSourceNodeId, nodeContextMenu])
 
   function runPlayback(stepByStep = false) {
+    const subflowValidation = validateAllSubflowBindings(nodes)
+    if (!subflowValidation.valid) {
+      setStatusText(`Run blocked: ${subflowValidation.reason}`)
+      return
+    }
     if (!edges.length) {
       if (selectedNode && executeComputeNode(selectedNode)) {
         return
@@ -1732,6 +2286,7 @@ export default function FlowDesignerPage() {
         <div>
           <div className="flow-designer-title">Flow Designer</div>
           <div className="flow-designer-subtitle">Drag reusable visual objects to the center canvas and connect typed edges.</div>
+          <div className="flow-designer-subtitle">Project: {projectLabel || activeProject.label}</div>
         </div>
         <div className="flow-designer-actions">
           <button type="button" onClick={handleNewFlow}>New</button>
@@ -1739,6 +2294,7 @@ export default function FlowDesignerPage() {
           <button type="button" onClick={() => triggerFlowFilePicker('import')}>Import</button>
           <button type="button" onClick={() => saveFlowToFile()}>Save</button>
           <button type="button" onClick={handleSaveAsFlow}>Save As</button>
+          <button type="button" onClick={() => addNodeFromType('subflow')}>Add Black Box</button>
           <label>
             Edge
             <select value={edgeType} onChange={(event) => setEdgeType(event.target.value)}>
@@ -1843,6 +2399,9 @@ export default function FlowDesignerPage() {
           <div className="flow-list flow-list-palette">
             {!filteredCatalog.length ? <div className="flow-empty-side">No visual objects in this tab for the current search.</div> : null}
             {filteredCatalog.map((item) => (
+              (() => {
+                const badge = getPaletteItemBadge(item)
+                return (
               <div
                 key={item.id}
                 className="flow-catalog-card"
@@ -1862,9 +2421,12 @@ export default function FlowDesignerPage() {
                   />
                   <div className="flow-catalog-head-copy">
                     <div className="flow-catalog-name">{item.name}</div>
+                    {badge ? <span className={`flow-catalog-badge ${badge.className}`}>{badge.label}</span> : null}
                   </div>
                 </div>
               </div>
+                )
+              })()
             ))}
           </div>
           <div className="flow-palette-tabs" role="tablist" aria-label="Palette categories">
@@ -2041,16 +2603,53 @@ export default function FlowDesignerPage() {
                       </>
                     ) : null}
                     {getConfigFieldsForNodeType(selectedNode.flowNodeType || selectedNode.kind || selectedNode.type).map((field) => {
+                      const nodeType = normalizeFlowNodeType(selectedNode.flowNodeType || selectedNode.kind || selectedNode.type)
                       const mergedConfig = {
                         ...getDefaultNodeConfig(selectedNode.flowNodeType || selectedNode.kind || selectedNode.type),
                         ...(selectedNodeDraft?.config || {}),
                       }
-                      const value = String(mergedConfig[field.key] || '')
+                      const value = field.key === 'typeParameters'
+                        ? normalizeParameterList(mergedConfig[field.key]).join(',')
+                        : (field.key === 'typeBindings'
+                          ? Object.entries(normalizeBindingMap(mergedConfig[field.key])).map(([param, binding]) => `${param}=${binding}`).join(',')
+                          : String(mergedConfig[field.key] || ''))
                       const isLargeField = field.key === 'programSource' || field.key === 'conditionExpr'
+                      const isShapeField = ['inputShape', 'outputShape', 'inputSchema', 'outputSchema', 'stateSchema'].includes(field.key)
+                      const isMapperMapField = nodeType === 'mapper' && (field.key === 'inputSchema' || field.key === 'outputSchema')
+                      const isMapperRulesetField = nodeType === 'mapper' && field.key === 'ruleset'
+                      const options = isMapperMapField ? mapperMapOptions : shapeOptions
+                      const mapperRulesetOptions = isMapperRulesetField
+                        ? getMapperRulesetOptions(mergedConfig.inputSchema, mergedConfig.outputSchema, mapperRulesets)
+                        : []
+                      const emptyOptionLabel = isMapperMapField ? 'Select a librarian map' : 'Select a librarian type'
                       return (
                         <label key={`${selectedNode.id}-${field.key}`} className="flow-node-config-field">
                           {field.label}
-                          {isLargeField ? (
+                          {isShapeField ? (
+                            <select
+                              value={value}
+                              onChange={(event) => updateSelectedNodeConfigField(field.key, event.target.value)}
+                            >
+                              <option value="">{emptyOptionLabel}</option>
+                              {options.map((option) => (
+                                <option key={option.id} value={option.id}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          ) : isMapperRulesetField ? (
+                            <select
+                              value={value}
+                              onChange={(event) => updateSelectedNodeConfigField(field.key, event.target.value)}
+                            >
+                              <option value="">Select a ruleset option</option>
+                              {mapperRulesetOptions.map((option) => (
+                                <option key={option.id} value={option.id}>
+                                  {option.recommended ? `${option.label} (recommended)` : option.label}
+                                </option>
+                              ))}
+                            </select>
+                          ) : isLargeField ? (
                             <textarea
                               value={value}
                               placeholder={field.placeholder}

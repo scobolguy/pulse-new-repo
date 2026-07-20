@@ -4,6 +4,18 @@
 .vscode/launch.json
 .vscode/ipch
 
+# Top-level scratch and experiment output
+evolution-generation-*.json
+load-test-*.log
+pio-build.log
+tmp-*/
+tmp-*.json
+tmp-*.txt
+tmp-*.pcode
+tmp-*.program.json
+tmp-*.mjs
+REBOOT_CHECKPOINT_agent.patch
+
 # Runtime data artifacts (keep source code clean)
 data/*.jsonl
 data/worker-metrics.json
@@ -13,3 +25,24 @@ data/user-management.json
 
 # Generated local web snapshots
 data/web/*.html
+
+# Aggregator runtime and operator state
+aggregator/data/allocator-decisions.jsonl
+aggregator/data/cluster-registry.json
+aggregator/data/site-registry.json
+aggregator/data/node-topology-overrides.json
+aggregator/data/node-rename-overrides.json
+aggregator/data/startup-fsm-status.json
+aggregator/data/startup-fsm-notes.jsonl
+aggregator/data/frontend-startup-fsm-status.json
+aggregator/data/frontend-startup-fsm-notes.jsonl
+aggregator/data/web-bootstrap-fsm-status.json
+aggregator/data/web-bootstrap-fsm-notes.jsonl
+aggregator/data/archive/
+aggregator/data/run-reports/
+aggregator/data/stress-reports/
+aggregator/data/startup-quarantine/
+aggregator/data/local-tts/
+aggregator/data/federated-ffs/
+aggregator/data/qm-primary/
+aggregator/data/qm-secondary/

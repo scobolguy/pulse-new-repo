@@ -1,0 +1,78 @@
+{
+  "queueConfig": {
+    "swift.mt103.inbound": {
+      "name": "swift.mt103.inbound",
+      "createdAt": 1784469672020,
+      "frozen": false,
+      "queueClass": "permanent",
+      "persistMessages": true,
+      "dataTypeId": "swift-mt103",
+      "dataTypeIds": [
+        "swift-mt103"
+      ],
+      "createdByUser": false
+    },
+    "ops.validation.deadletter": {
+      "name": "ops.validation.deadletter",
+      "createdAt": 1784469672028,
+      "frozen": false,
+      "queueClass": "permanent",
+      "persistMessages": true,
+      "dataTypeId": "text-string",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "createdByUser": false
+    },
+    "pacs.inbound": {
+      "name": "pacs.inbound",
+      "createdAt": 1784469672035,
+      "frozen": false,
+      "queueClass": "permanent",
+      "persistMessages": true,
+      "dataTypeId": "pacs",
+      "dataTypeIds": [
+        "pacs"
+      ],
+      "createdByUser": false
+    },
+    "mt202.inbound": {
+      "name": "mt202.inbound",
+      "createdAt": 1784469672040,
+      "frozen": false,
+      "queueClass": "permanent",
+      "persistMessages": true,
+      "dataTypeId": "swift-mt202",
+      "dataTypeIds": [
+        "swift-mt202"
+      ],
+      "createdByUser": false
+    },
+    "swift.mt103.parsed": {
+      "name": "swift.mt103.parsed",
+      "createdAt": 1784473666232,
+      "frozen": false,
+      "queueClass": "permanent",
+      "persistMessages": true,
+      "dataTypeId": "swift-mt103",
+      "dataTypeIds": [
+        "swift-mt103"
+      ],
+      "createdByUser": false
+    },
+    "payments.inbound": {
+      "name": "payments.inbound",
+      "createdAt": 1784504020402,
+      "frozen": false,
+      "queueClass": "permanent",
+      "persistMessages": true,
+      "dataTypeId": "text-string",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "createdByUser": false
+    }
+  },
+  "configVersion": 6,
+  "timestamp": 1784504020403
+}

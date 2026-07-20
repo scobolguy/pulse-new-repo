@@ -1,0 +1,136 @@
+{
+  "updatedAt": "2026-07-14T21:34:29.303Z",
+  "generation": 5013,
+  "selector": [
+    {
+      "rank": 1,
+      "organismId": "organism-02-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013",
+      "variant": "stress",
+      "generation": 5013,
+      "transactionCount": 231,
+      "successCount": 231,
+      "successRate": 1,
+      "latencyMs": 0.489,
+      "score": 99999.511,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 994,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 2,
+      "organismId": "organism-04-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013",
+      "variant": "normal",
+      "generation": 5013,
+      "transactionCount": 246,
+      "successCount": 246,
+      "successRate": 1,
+      "latencyMs": 0.5,
+      "score": 99999.5,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 997,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 3,
+      "organismId": "organism-03-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013",
+      "variant": "hostile",
+      "generation": 5013,
+      "transactionCount": 266,
+      "successCount": 266,
+      "successRate": 1,
+      "latencyMs": 0.504,
+      "score": 99999.496,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 999,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 4,
+      "organismId": "organism-01-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013",
+      "variant": "normal",
+      "generation": 5013,
+      "transactionCount": 257,
+      "successCount": 257,
+      "successRate": 1,
+      "latencyMs": 0.537,
+      "score": 99999.463,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 998,
+      "messageFormat": "unknown"
+    }
+  ],
+  "records": [
+    {
+      "organismId": "organism-04-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013",
+      "parentId": "organism-04-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012",
+      "generation": 5013,
+      "variant": "normal",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 246,
+        "successCount": 246,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.5,
+        "score": 99999.5
+      }
+    },
+    {
+      "organismId": "organism-01-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013",
+      "parentId": "organism-01-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012",
+      "generation": 5013,
+      "variant": "normal",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 257,
+        "successCount": 257,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.537,
+        "score": 99999.463
+      }
+    },
+    {
+      "organismId": "organism-02-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013",
+      "parentId": "organism-02-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012",
+      "generation": 5013,
+      "variant": "stress",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 231,
+        "successCount": 231,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.489,
+        "score": 99999.511
+      }
+    },
+    {
+      "organismId": "organism-03-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013",
+      "parentId": "organism-03-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012",
+      "generation": 5013,
+      "variant": "hostile",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 266,
+        "successCount": 266,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.504,
+        "score": 99999.496
+      }
+    }
+  ]
+}

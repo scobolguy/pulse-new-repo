@@ -12,7 +12,7 @@ Allow Copilot (or any LLM) to:
 
 ## Endpoints
 
-### Data Librarian (default port `4100`)
+### Data Librarian (default port `4300`)
 
 - `GET /api/librarian/llm/base`
 - `GET /api/librarian/llm/actions`

@@ -1,15 +1,15 @@
-# Router/Mapper Pascal-ish DSL
+# Routing/Mapper Pascal-ish DSL
 
-This DSL is designed for queue routing and message mapping, then compiled into JSON artifacts that can be executed by the existing router engine and PL/0 interpreter.
+This DSL is designed for queue routing and message mapping, then compiled into JSON artifacts that can be executed by the existing routing engine and PL/0 interpreter. Older artifacts may still use router terminology for compatibility.
 
 ## 1) Concrete DSL
 
 Top-level declarations:
 - SERVICE "service-id";
-- ROUTER ... END;
+- ROUTER ... END; (legacy keyword retained for compatibility)
 - MAPPER ... END;
 
-### Router syntax
+### Routing syntax (legacy ROUTER keyword)
 
 ROUTER "rule-id" INPUT "queue.name" [DESCRIPTION "text"] [ENABLED TRUE|FALSE] [SERVICE "service-id"] BEGIN
   OUTPUT "queue.name" [TYPE "type-id" | TYPES ("type-a", "type-b", ...)] WHEN "<pl0-when>" TRANSFORM "<pl0-transform>";
@@ -21,7 +21,7 @@ Notes:
 - WHEN and TRANSFORM can also be unquoted PL/0 blocks using BEGIN ... END.
 - WHEN should produce output truthy/falsy.
 - TRANSFORM should assign to output (for example: output := src;).
-- map("mapping-id", payload) is supported in transform snippets by the router runtime.
+- map("mapping-id", payload) is supported in transform snippets by the routing runtime.
 - TYPE sets a single queue type for auto-created output queues.
 - TYPES sets a set of allowed queue types for auto-created output queues.
 - Comments follow standard Pascal forms: `{ ... }` or `(* ... *)`.
@@ -80,7 +80,7 @@ Output artifacts:
 The compiler flow is:
 1. Tokenize DSL
 2. Parse DSL to AST
-3. Walk AST and emit router + mapper artifacts
+3. Walk AST and emit routing + mapper artifacts
 4. Validate all embedded PL/0 snippets with the PL/0 parser
 5. Write generated artifacts
 

@@ -28,7 +28,15 @@
         "conversionRule": "output := trim(src);"
       },
       {
-        "sourcePath": "block4.21",
+        "sourcePath": "block4.20",
+        "targetPath": "Document.hdr:AppHdr.hdr:BizMsgIdr",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := trim(src);"
+      },
+      {
+        "sourcePath": "block4.20",
         "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId",
         "kind": "leaf",
         "sourceValueType": "unknown",
@@ -90,17 +98,9 @@
         "sourceValueType": "unknown",
         "targetValueType": "unknown",
         "conversionRule": "output := mtchargebearertoiso(src);"
-      },
-      {
-        "sourcePath": "block4.72",
-        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstrForNxtAgt.InstrInf",
-        "kind": "leaf",
-        "sourceValueType": "unknown",
-        "targetValueType": "unknown",
-        "conversionRule": "output := trim(src);"
       }
     ],
-    "createdAt": "2026-07-10T16:54:56.840Z",
-    "updatedAt": "2026-07-10T16:54:56.840Z"
+    "createdAt": "2026-07-13T20:35:08.415Z",
+    "updatedAt": "2026-07-13T20:35:08.415Z"
   }
 ]

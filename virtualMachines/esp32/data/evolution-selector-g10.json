@@ -1,0 +1,42 @@
+{
+  "updatedAt": "2026-07-14T17:19:02.389Z",
+  "generation": 10,
+  "selector": [
+    {
+      "rank": 1,
+      "organismId": "organism-01-g1-g2-g3-g4-g5-g6-g7-g8-g9-g10",
+      "variant": "normal",
+      "generation": 10,
+      "successCount": 1,
+      "latencyMs": 1,
+      "score": 99999,
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown"
+    }
+  ],
+  "records": [
+    {
+      "variant": "normal",
+      "organismId": "organism-01-g1-g2-g3-g4-g5-g6-g7-g8-g9-g10",
+      "parentId": "organism-01-g1-g2-g3-g4-g5-g6-g7-g8-g9",
+      "generation": 10,
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "organismId": "organism-01-g1-g2-g3-g4-g5-g6-g7-g8-g9-g10",
+        "generation": 10,
+        "inputQueue": "swift.mt103.parsed",
+        "mode": "single",
+        "sourceMessageLength": 95,
+        "successCount": 1,
+        "failureCount": 0,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 1,
+        "successRate": 1,
+        "score": 99999,
+        "measuredAt": "2026-07-14T17:19:02.387Z"
+      }
+    }
+  ]
+}

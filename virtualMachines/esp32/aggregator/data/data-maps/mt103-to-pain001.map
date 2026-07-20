@@ -1,0 +1,94 @@
+{
+  "id": "mt103-to-pain001",
+  "name": "MT103 to PAIN.001",
+  "description": "Converts SWIFT FIN MT103 Single Customer Credit Transfer to ISO 20022 pain.001.001 Customer Credit Transfer Initiation.",
+  "sourceTypeId": "swift-mt103",
+  "targetTypeId": "pain",
+  "sourceSchemaPath": "schemas/swift-mt103.json",
+  "targetSchemaPath": "schemas/pain.001.001.13.xsd",
+  "version": "1.0.0",
+  "createdAt": "2026-07-19T00:00:00.000Z",
+  "updatedAt": "2026-07-19T00:00:00.000Z",
+  "rules": [
+    {
+      "sourcePath": "finEnvelope.block4.fields.20",
+      "targetPath": "Document.CstmrCdtTrfInitn.GrpHdr.MsgId",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.20",
+      "targetPath": "Document.CstmrCdtTrfInitn.PmtInf.PmtInfId",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.21",
+      "targetPath": "Document.CstmrCdtTrfInitn.PmtInf.CdtTrfTxInf.PmtId.EndToEndId",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.32A.components.valueDate",
+      "targetPath": "Document.CstmrCdtTrfInitn.PmtInf.ReqdExctnDt",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.32A.components.currency",
+      "targetPath": "Document.CstmrCdtTrfInitn.PmtInf.CdtTrfTxInf.Amt.InstdAmt.@Ccy",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.32A.components.amount",
+      "targetPath": "Document.CstmrCdtTrfInitn.PmtInf.CdtTrfTxInf.Amt.InstdAmt.#text",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.33B.components.currency",
+      "targetPath": "Document.CstmrCdtTrfInitn.PmtInf.CdtTrfTxInf.Amt.EqvtAmt.@Ccy",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.33B.components.amount",
+      "targetPath": "Document.CstmrCdtTrfInitn.PmtInf.CdtTrfTxInf.Amt.EqvtAmt.#text",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.50K",
+      "targetPath": "Document.CstmrCdtTrfInitn.PmtInf.Dbtr.Nm",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.50A",
+      "targetPath": "Document.CstmrCdtTrfInitn.PmtInf.Dbtr.FinInstnId.BICFI",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.52A",
+      "targetPath": "Document.CstmrCdtTrfInitn.PmtInf.DbtrAgt.FinInstnId.BICFI",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.57A",
+      "targetPath": "Document.CstmrCdtTrfInitn.PmtInf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.59",
+      "targetPath": "Document.CstmrCdtTrfInitn.PmtInf.CdtTrfTxInf.Cdtr.Nm",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.59A",
+      "targetPath": "Document.CstmrCdtTrfInitn.PmtInf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.70",
+      "targetPath": "Document.CstmrCdtTrfInitn.PmtInf.CdtTrfTxInf.RmtInf.Ustrd",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.71A",
+      "targetPath": "Document.CstmrCdtTrfInitn.PmtInf.CdtTrfTxInf.ChrgBr",
+      "kind": "leaf"
+    }
+  ]
+}

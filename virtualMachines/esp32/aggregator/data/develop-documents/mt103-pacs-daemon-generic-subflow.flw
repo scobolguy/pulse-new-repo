@@ -1,0 +1,166 @@
+{
+  "kind": "pulse.canvas.generic-flow",
+  "version": "1.0.0",
+  "savedAt": "2026-07-13T00:00:00.000Z",
+  "meta": {
+    "name": "mt103-pacs-daemon-generic-subflow.flw",
+    "canvasModel": "generic-node-edge",
+    "domain": "flow-designer",
+    "serviceVariant": "mt103-pacs-service-generic-subflow.flw",
+    "serviceName": "mt103-pacs-service"
+  },
+  "settings": {
+    "defaultEdgeType": "queue-edge"
+  },
+  "libraries": {
+    "nodeTypes": [
+      { "id": "mapper", "label": "Mapper" },
+      { "id": "compute", "label": "Compute" },
+      { "id": "gateway", "label": "Gateway" },
+      { "id": "queue", "label": "Queue" },
+      { "id": "service", "label": "Service" },
+      { "id": "daemon", "label": "Daemon" },
+      { "id": "contract", "label": "Contract" },
+      { "id": "state", "label": "State" },
+      { "id": "subflow", "label": "Subflow" }
+    ],
+    "edgeTypes": [
+      { "id": "message-broker-call", "label": "Message Broker Call (legacy)" },
+      { "id": "file-feed", "label": "File Feed (legacy)" },
+      { "id": "service-call", "label": "Service Call (legacy)" },
+      { "id": "logical-condition-edge", "label": "Logical Condition" },
+      { "id": "file-transfer-edge", "label": "File Transfer" },
+      { "id": "transform-edge", "label": "Transform Edge" },
+      { "id": "compute-edge", "label": "Compute Edge" },
+      { "id": "gateway-call-edge", "label": "Gateway Call Edge" },
+      { "id": "queue-edge", "label": "Queue Edge" },
+      { "id": "service-call-edge", "label": "Service Call Edge" },
+      { "id": "daemon-trigger-edge", "label": "Daemon Trigger Edge" },
+      { "id": "state-edge", "label": "State Edge" },
+      { "id": "contract-edge", "label": "Contract Edge" },
+      { "id": "retry-path", "label": "Retry Path" },
+      { "id": "completion-edge", "label": "Completion Edge" }
+    ]
+  },
+  "subflows": [
+    {
+      "id": "mt103-pacs-generic-transform",
+      "kind": "subflow",
+      "type": "subflow",
+      "name": "mt103-pacs-generic-transform",
+      "label": "mt103-pacs-generic-transform",
+      "subflowName": "mt103-pacs-generic-transform",
+      "inputShape": "swift-mt103",
+      "outputShape": "pacs",
+      "implementationRef": "mt103-to-pacs-service",
+      "description": "Generic MT103 to PACS transform used by both daemon and service deployments."
+    }
+  ],
+  "nodes": [
+    {
+      "id": "queue-swift-mt103-inbound",
+      "label": "swift.mt103.inbound",
+      "kind": "queue",
+      "flowNodeType": "queue",
+      "type": "queue",
+      "description": "Input queue for MT103 messages.",
+      "usageNotes": "Entry point for the daemon-backed flow.",
+      "visualObjectName": "swift.mt103.inbound",
+      "visualObjectActions": [],
+      "requiredCapabilities": [],
+      "requiredWiring": [],
+      "config": {
+        "queueName": "swift.mt103.inbound",
+        "inputShape": "swift-mt103",
+        "outputShape": "swift-mt103",
+        "retryPolicy": "",
+        "delayMs": ""
+      },
+      "x": 120,
+      "y": 120,
+      "target": null
+    },
+    {
+      "id": "daemon-mt103-pacs-runner",
+      "label": "mt103-pacs-daemon",
+      "kind": "daemon",
+      "flowNodeType": "daemon",
+      "type": "daemon",
+      "description": "Daemon wrapper that consumes MT103 messages and invokes the generic transform subflow.",
+      "usageNotes": "Use as the runtime coordinator for the generic subflow; the deployable service variant lives in mt103-pacs-service-generic-subflow.flw.",
+      "visualObjectName": "mt103-pacs-daemon",
+      "visualObjectActions": [],
+      "requiredCapabilities": [],
+      "requiredWiring": [],
+      "config": {
+        "schedule": "*/1 * * * *",
+        "triggerType": "event",
+        "maxConcurrency": "1"
+      },
+      "x": 360,
+      "y": 100,
+      "target": null
+    },
+    {
+      "id": "subflow-mt103-pacs-generic",
+      "label": "mt103-pacs-generic-transform",
+      "kind": "subflow",
+      "flowNodeType": "subflow",
+      "type": "subflow",
+      "description": "Generic subflow boundary for MT103 to PACS conversion.",
+      "usageNotes": "Reusable from both daemon and service entry points.",
+      "visualObjectName": "mt103-pacs-generic-transform",
+      "visualObjectActions": [],
+      "requiredCapabilities": [],
+      "requiredWiring": [],
+      "config": {
+        "subflowName": "mt103-pacs-generic-transform",
+        "inputShape": "swift-mt103",
+        "outputShape": "pacs",
+        "implementationRef": "mt103-to-pacs-service"
+      },
+      "x": 620,
+      "y": 100,
+      "target": null
+    },
+    {
+      "id": "queue-pacs-outbound",
+      "label": "pacs.outbound",
+      "kind": "queue",
+      "flowNodeType": "queue",
+      "type": "queue",
+      "description": "Output queue for PACS messages.",
+      "usageNotes": "Final handoff after the generic subflow produces PACS.",
+      "visualObjectName": "pacs.outbound",
+      "visualObjectActions": [],
+      "requiredCapabilities": [],
+      "requiredWiring": [],
+      "config": {
+        "queueName": "pacs.outbound",
+        "inputShape": "pacs",
+        "outputShape": "pacs",
+        "retryPolicy": "",
+        "delayMs": ""
+      },
+      "x": 880,
+      "y": 120,
+      "target": null
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-daemon-to-subflow",
+      "from": "daemon-mt103-pacs-runner",
+      "to": "subflow-mt103-pacs-generic",
+      "type": "queue-edge",
+      "label": "Queue Edge"
+    },
+    {
+      "id": "edge-subflow-to-output",
+      "from": "subflow-mt103-pacs-generic",
+      "to": "queue-pacs-outbound",
+      "type": "queue-edge",
+      "label": "Queue Edge"
+    }
+  ]
+}

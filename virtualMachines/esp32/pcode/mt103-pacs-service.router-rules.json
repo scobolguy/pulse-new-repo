@@ -1,0 +1,65 @@
+[
+  {
+    "id": "mt103-pacs-service-http",
+    "name": "mt103-pacs-service-http",
+    "serviceId": "mt103-pacs-service",
+    "enabled": true,
+    "inputQueue": "mt103-pacs-service.in",
+    "methods": [
+      "POST",
+      "GET"
+    ],
+    "description": "HTTP service mt103-pacs-service",
+    "outputs": [
+      {
+        "queueName": "mt103-pacs-service.out",
+        "whenRule": "IF upper(httpVerb) = 'POST' THEN output := 1 ELSE output := 0;",
+        "transformRule": "output := src;"
+      },
+      {
+        "queueName": "mt103-pacs-service.out",
+        "whenRule": "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;",
+        "transformRule": "output := \"mt103-pacs-service\";"
+      }
+    ],
+    "createdAt": "2026-07-13T00:00:00.000Z",
+    "updatedAt": "2026-07-13T00:00:00.000Z"
+  },
+  {
+    "id": "mt103-pacs-router",
+    "name": "mt103-pacs-router",
+    "serviceId": "mt103-pacs-service",
+    "enabled": true,
+    "inputQueue": "swift.mt103.parsed",
+    "description": "Transform MT103 payload to PACS payload",
+    "outputs": [
+      {
+        "queueName": "tx.pacs.created",
+        "dataTypeIds": [
+          "pacs"
+        ],
+        "dataTypeId": "pacs",
+        "dataTypeRef": {
+          "type": "TypeRef",
+          "id": "pacs",
+          "genericArgs": []
+        },
+        "dataTypeSignature": "pacs",
+        "dataTypeRefs": [
+          {
+            "type": "TypeRef",
+            "id": "pacs",
+            "genericArgs": []
+          }
+        ],
+        "dataTypeSignatures": [
+          "pacs"
+        ],
+        "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
+        "transformRule": "output := map(\"mt103-to-pacs\", src);"
+      }
+    ],
+    "createdAt": "2026-07-13T00:00:00.000Z",
+    "updatedAt": "2026-07-13T00:00:00.000Z"
+  }
+]

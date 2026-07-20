@@ -11,6 +11,7 @@ const SECTION_STYLE = {
 export default function DataLibrarian() {
   const [dataTypes, setDataTypes] = useState([]);
   const [schemas, setSchemas] = useState([]);
+  const [mapperRulesets, setMapperRulesets] = useState([]);
   const [msg, setMsg] = useState('');
   const [schemaSearch, setSchemaSearch] = useState('');
   const [treeExpanded, setTreeExpanded] = useState({ types: true, untyped: true });
@@ -29,9 +30,10 @@ export default function DataLibrarian() {
 
   const loadAll = useCallback(async () => {
     try {
-      const [typesRes, schemasRes] = await Promise.all([
+      const [typesRes, schemasRes, rulesetsRes] = await Promise.all([
         fetch('/api/librarian/data-types'),
         fetch('/api/librarian/schemas'),
+        fetch('/api/librarian/mapper-rulesets'),
       ]);
       if (typesRes.ok) {
         const typePayload = await typesRes.json();
@@ -54,6 +56,10 @@ export default function DataLibrarian() {
           }
           return next;
         });
+      }
+      if (rulesetsRes.ok) {
+        const payload = await rulesetsRes.json();
+        setMapperRulesets(Array.isArray(payload.rulesets) ? payload.rulesets : []);
       }
     } catch (e) {
       setMsg(`Load failed: ${e.message}`);
@@ -257,6 +263,175 @@ export default function DataLibrarian() {
       await loadAll();
     } catch (e) {
       setMsg(`Delete type failed: ${e.message}`);
+    }
+  }
+
+  function formatPatternListForPrompt(values) {
+    return Array.isArray(values) ? values.join(', ') : '';
+  }
+
+  function parsePatternListFromPrompt(value) {
+    return String(value || '')
+      .split(',')
+      .map(part => part.trim().toLowerCase().replace(/\s+/g, ''))
+      .filter(Boolean);
+  }
+
+  async function createMapperRuleset() {
+    closeMenus();
+    const idInput = window.prompt('Ruleset ID:', 'MY_RULESET');
+    if (idInput === null) return;
+    const id = idInput.trim();
+    if (!id) {
+      setMsg('Create ruleset cancelled: ID is required.');
+      return;
+    }
+
+    const labelInput = window.prompt('Ruleset label:', id);
+    if (labelInput === null) return;
+    const label = labelInput.trim();
+    if (!label) {
+      setMsg('Create ruleset cancelled: label is required.');
+      return;
+    }
+
+    const sourcePatternsInput = window.prompt('Source patterns (comma-separated):', '*');
+    if (sourcePatternsInput === null) return;
+    const sourcePatterns = parsePatternListFromPrompt(sourcePatternsInput);
+    if (sourcePatterns.length === 0) {
+      setMsg('Create ruleset cancelled: source patterns are required.');
+      return;
+    }
+
+    const targetPatternsInput = window.prompt('Target patterns (comma-separated):', '*');
+    if (targetPatternsInput === null) return;
+    const targetPatterns = parsePatternListFromPrompt(targetPatternsInput);
+    if (targetPatterns.length === 0) {
+      setMsg('Create ruleset cancelled: target patterns are required.');
+      return;
+    }
+
+    const descriptionInput = window.prompt('Description:', '');
+    if (descriptionInput === null) return;
+    const recommended = window.confirm('Mark as recommended?');
+    const priorityInput = window.prompt('Priority (higher = stronger match):', '0');
+    if (priorityInput === null) return;
+    const priority = Number.parseInt(priorityInput.trim(), 10);
+
+    try {
+      const res = await fetch('/api/librarian/mapper-rulesets', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id,
+          label,
+          description: descriptionInput.trim(),
+          sourcePatterns,
+          targetPatterns,
+          recommended,
+          priority: Number.isFinite(priority) ? priority : 0,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMsg(`Create ruleset failed: ${data.error || 'unknown error'}`);
+        return;
+      }
+      setMsg(`Ruleset created: ${data.ruleset?.id || id}`);
+      await loadAll();
+    } catch (e) {
+      setMsg(`Create ruleset failed: ${e.message}`);
+    }
+  }
+
+  async function editMapperRuleset(ruleset) {
+    closeMenus();
+    const currentId = String(ruleset?.id || '').trim();
+    if (!currentId) return;
+    const nextIdInput = window.prompt('Ruleset ID:', currentId);
+    if (nextIdInput === null) return;
+    const nextId = nextIdInput.trim();
+    if (!nextId) {
+      setMsg('Edit ruleset cancelled: ID is required.');
+      return;
+    }
+
+    const nextLabelInput = window.prompt('Ruleset label:', String(ruleset?.label || currentId));
+    if (nextLabelInput === null) return;
+    const nextLabel = nextLabelInput.trim();
+    if (!nextLabel) {
+      setMsg('Edit ruleset cancelled: label is required.');
+      return;
+    }
+
+    const sourcePatternsInput = window.prompt('Source patterns (comma-separated):', formatPatternListForPrompt(ruleset?.sourcePatterns));
+    if (sourcePatternsInput === null) return;
+    const sourcePatterns = parsePatternListFromPrompt(sourcePatternsInput);
+    if (sourcePatterns.length === 0) {
+      setMsg('Edit ruleset cancelled: source patterns are required.');
+      return;
+    }
+
+    const targetPatternsInput = window.prompt('Target patterns (comma-separated):', formatPatternListForPrompt(ruleset?.targetPatterns));
+    if (targetPatternsInput === null) return;
+    const targetPatterns = parsePatternListFromPrompt(targetPatternsInput);
+    if (targetPatterns.length === 0) {
+      setMsg('Edit ruleset cancelled: target patterns are required.');
+      return;
+    }
+
+    const nextDescriptionInput = window.prompt('Description:', String(ruleset?.description || ''));
+    if (nextDescriptionInput === null) return;
+    const recommended = window.confirm(`Mark as recommended?\nCurrent: ${ruleset?.recommended ? 'yes' : 'no'}`);
+    const priorityInput = window.prompt('Priority (higher = stronger match):', String(ruleset?.priority ?? 0));
+    if (priorityInput === null) return;
+    const priority = Number.parseInt(priorityInput.trim(), 10);
+
+    try {
+      const res = await fetch(`/api/librarian/mapper-rulesets/${encodeURIComponent(currentId)}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id: nextId,
+          label: nextLabel,
+          description: nextDescriptionInput.trim(),
+          sourcePatterns,
+          targetPatterns,
+          recommended,
+          priority: Number.isFinite(priority) ? priority : 0,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMsg(`Update ruleset failed: ${data.error || 'unknown error'}`);
+        return;
+      }
+      setMsg(`Ruleset updated: ${data.ruleset?.id || currentId}`);
+      await loadAll();
+    } catch (e) {
+      setMsg(`Update ruleset failed: ${e.message}`);
+    }
+  }
+
+  async function deleteMapperRuleset(ruleset) {
+    closeMenus();
+    const currentId = String(ruleset?.id || '').trim();
+    if (!currentId) return;
+    if (!window.confirm(`Delete ruleset "${currentId}"?`)) return;
+
+    try {
+      const res = await fetch(`/api/librarian/mapper-rulesets/${encodeURIComponent(currentId)}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMsg(`Delete ruleset failed: ${data.error || 'unknown error'}`);
+        return;
+      }
+      setMsg(`Ruleset deleted: ${currentId}`);
+      await loadAll();
+    } catch (e) {
+      setMsg(`Delete ruleset failed: ${e.message}`);
     }
   }
 
@@ -569,6 +744,12 @@ export default function DataLibrarian() {
               >
                 New Type…
               </button>
+              <button
+                onClick={createMapperRuleset}
+                style={{ width: '100%', background: 'none', border: 'none', textAlign: 'left', padding: '8px 14px', fontSize: 13, cursor: 'pointer' }}
+              >
+                New Mapper Ruleset…
+              </button>
               {/* Import submenu trigger */}
               <div
                 style={{ position: 'relative' }}
@@ -618,6 +799,67 @@ export default function DataLibrarian() {
           {msg}
         </div>
       )}
+
+      <div style={SECTION_STYLE}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <h3 style={{ marginTop: 0, marginBottom: 8 }}>Mapper Rulesets</h3>
+          <button type="button" onClick={createMapperRuleset} style={{ fontSize: 12 }}>
+            New Ruleset
+          </button>
+        </div>
+        <p style={{ fontSize: 12, color: '#666', marginTop: 0 }}>
+          Rulesets define mapper behavior by source and destination pattern matching.
+        </p>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: '6px 8px' }}>ID</th>
+                <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: '6px 8px' }}>Source Patterns</th>
+                <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: '6px 8px' }}>Target Patterns</th>
+                <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: '6px 8px' }}>Recommended</th>
+                <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: '6px 8px' }}>Priority</th>
+                <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: '6px 8px' }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {mapperRulesets.map((ruleset) => (
+                <tr key={`ruleset:${ruleset.id}`}>
+                  <td style={{ borderBottom: '1px solid #eee', padding: '6px 8px' }}>
+                    <div style={{ fontWeight: 600 }}>{ruleset.id}</div>
+                    <div style={{ color: '#777' }}>{ruleset.label}</div>
+                    <div style={{ color: '#777' }}>{ruleset.description || ''}</div>
+                    <div style={{ color: '#1d6b2a', fontSize: 11 }}>filesystem</div>
+                  </td>
+                  <td style={{ borderBottom: '1px solid #eee', padding: '6px 8px' }}>{(ruleset.sourcePatterns || []).join(', ')}</td>
+                  <td style={{ borderBottom: '1px solid #eee', padding: '6px 8px' }}>{(ruleset.targetPatterns || []).join(', ')}</td>
+                  <td style={{ borderBottom: '1px solid #eee', padding: '6px 8px' }}>{ruleset.recommended ? 'yes' : 'no'}</td>
+                  <td style={{ borderBottom: '1px solid #eee', padding: '6px 8px' }}>{Number(ruleset.priority || 0)}</td>
+                  <td style={{ borderBottom: '1px solid #eee', padding: '6px 8px', whiteSpace: 'nowrap' }}>
+                    <button type="button" onClick={() => editMapperRuleset(ruleset)} style={{ fontSize: 11, marginRight: 6 }}>
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteMapperRuleset(ruleset)}
+                      style={{ fontSize: 11 }}
+                    >
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {mapperRulesets.length === 0 && (
+                <tr>
+                  <td colSpan={6} style={{ padding: '10px 8px', color: '#888' }}>
+                    No mapper rulesets found.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       {/* Data Librarian Tree */}
       <div style={SECTION_STYLE}>

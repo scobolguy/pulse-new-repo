@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pulse-new-repo.local/schemas/pmachine_organism_manifest_schema.json",
+  "title": "PMachine Organism Manifest",
+  "type": "object",
+  "required": ["organisms"],
+  "properties": {
+    "organisms": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["organismId", "variant"],
+        "properties": {
+          "organismId": { "type": "string" },
+          "variant": { "type": "string" },
+          "generation": { "type": "integer", "minimum": 0 },
+          "message": { "type": "string" },
+          "genome": { "type": "object", "additionalProperties": true },
+          "morphology": { "type": "object", "additionalProperties": true }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

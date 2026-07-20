@@ -1,0 +1,59 @@
+{
+  "id": "mt940-to-camt054",
+  "name": "MT940 to CAMT.054",
+  "description": "Direct field mapping rules from SWIFT FIN MT940 statements to ISO 20022 CAMT.054 debit/credit notifications (no PL/0 conversion routines).",
+  "sourceTypeId": "swift-mt940",
+  "targetTypeId": "camt",
+  "targetSchemaPath": "schemas/camt.054.001.14.xsd",
+  "version": "1.0",
+  "createdAt": "2026-07-15T00:00:00.000Z",
+  "updatedAt": "2026-07-15T00:00:00.000Z",
+  "rules": [
+    {
+      "sourcePath": "finEnvelope.block4.fields.20",
+      "targetPath": "Document.BkToCstmrDbtCdtNtfctn.GrpHdr.MsgId",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.20",
+      "targetPath": "Document.BkToCstmrDbtCdtNtfctn.Ntfctn.Id",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.25",
+      "targetPath": "Document.BkToCstmrDbtCdtNtfctn.Ntfctn.Acct.Id.Othr.Id",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.28C",
+      "targetPath": "Document.BkToCstmrDbtCdtNtfctn.Ntfctn.ElctrncSeqNb",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.60F.components.amount",
+      "targetPath": "Document.BkToCstmrDbtCdtNtfctn.Ntfctn.Ntry.Amt.#text",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.60F.components.currency",
+      "targetPath": "Document.BkToCstmrDbtCdtNtfctn.Ntfctn.Ntry.Amt.@Ccy",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.61",
+      "targetPath": "Document.BkToCstmrDbtCdtNtfctn.Ntfctn.Ntry.AddtlNtryInf",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.61",
+      "targetPath": "Document.BkToCstmrDbtCdtNtfctn.Ntfctn.Ntry.NtryDtls.TxDtls.RmtInf.Ustrd",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.86",
+      "targetPath": "Document.BkToCstmrDbtCdtNtfctn.Ntfctn.Ntry.NtryDtls.TxDtls.AddtlTxInf",
+      "kind": "leaf"
+    }
+  ],
+  "submaps": []
+}

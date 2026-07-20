@@ -16,7 +16,10 @@ function parseArgs(argv) {
     queuePath: '../data',
     backendUrl: 'http://localhost:4000',
     actorUserId: 'system-admin',
-    serviceId: ''
+    serviceId: '',
+    organismId: '',
+    generation: '0',
+    fitnessOut: ''
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -32,6 +35,9 @@ function parseArgs(argv) {
     if (token === '--backend-url') args.backendUrl = argv[i + 1];
     if (token === '--actor-user-id') args.actorUserId = argv[i + 1];
     if (token === '--service-id') args.serviceId = argv[i + 1];
+    if (token === '--organism-id') args.organismId = argv[i + 1];
+    if (token === '--generation') args.generation = argv[i + 1];
+    if (token === '--fitness-out') args.fitnessOut = argv[i + 1];
   }
   return args;
 }
@@ -51,6 +57,19 @@ function trimCopy(s) {
 
 function toUpperCopy(s) {
   return String(s || '').toUpperCase();
+}
+
+const ISO_TYPE_PREFIXES = [
+  'pacs', 'camt', 'pain', 'head', 'remt',
+  'acmt', 'admi', 'auth', 'caaa', 'caam',
+  'cain', 'catm', 'catp', 'reda', 'secl',
+  'seev', 'semt', 'tsin'
+];
+
+function inferIsoTypeId(typeId) {
+  const id = String(typeId || '').trim().toLowerCase();
+  if (!id) return false;
+  return ISO_TYPE_PREFIXES.some((prefix) => id === prefix || id.startsWith(`${prefix}-`) || id.startsWith(`${prefix}.`));
 }
 
 function unquote(text) {
@@ -328,6 +347,245 @@ function parseProgramMapMappings(programMap) {
   mappingsById.__globals = Array.isArray(programMap?.globals) ? programMap.globals : [];
   mappingsById.__proceduresByLabel = programMap?.procedures || {};
   return mappingsById;
+}
+
+function parseProgramMapQueueTypes(programMap) {
+  const entries = Array.isArray(programMap)
+    ? programMap
+    : (Array.isArray(programMap?.entries) ? programMap.entries : []);
+
+  const queueTypes = new Map();
+  for (const entry of entries) {
+    if (!entry || entry.kind !== 'router') continue;
+    const outputs = Array.isArray(entry.outputs) ? entry.outputs : [];
+    for (const output of outputs) {
+      const queueName = String(output?.queueName || '').trim();
+      if (!queueName || queueTypes.has(queueName)) continue;
+      const dataTypeId = String(output?.dataTypeId || (Array.isArray(output?.dataTypeIds) ? output.dataTypeIds[0] : '') || '').trim();
+      if (dataTypeId) {
+        queueTypes.set(queueName, dataTypeId.toLowerCase());
+      }
+    }
+  }
+
+  return queueTypes;
+}
+
+async function loadLibrarianIsoTypeIds() {
+  const candidates = [
+    path.resolve(process.cwd(), 'data', 'services', 'librarian', 'data-types.json'),
+    path.resolve(process.cwd(), 'data', 'data-types.json')
+  ];
+
+  const out = new Set();
+  for (const filePath of candidates) {
+    try {
+      const raw = await fs.readFile(filePath, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) continue;
+      for (const entry of parsed) {
+        const id = String(entry?.id || '').trim().toLowerCase();
+        if (!id) continue;
+        const isIso = typeof entry?.isIso === 'boolean' ? entry.isIso : inferIsoTypeId(id);
+        if (isIso) out.add(id);
+      }
+      if (out.size > 0) return out;
+    } catch {
+      // Try next candidate.
+    }
+  }
+
+  return out;
+}
+
+function xmlEscape(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function objectToXml(name, value, indent = '') {
+  if (value == null) {
+    return `${indent}<${name}></${name}>`;
+  }
+
+  if (typeof value !== 'object') {
+    return `${indent}<${name}>${xmlEscape(value)}</${name}>`;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => objectToXml(name, item, indent)).join('\n');
+  }
+
+  const attrs = [];
+  const childEntries = [];
+  let textValue = null;
+
+  for (const [key, child] of Object.entries(value)) {
+    if (key.startsWith('@')) {
+      attrs.push(`${key.slice(1)}="${xmlEscape(child)}"`);
+    } else if (key === '#text') {
+      textValue = child;
+    } else {
+      childEntries.push([key, child]);
+    }
+  }
+
+  const attrText = attrs.length ? ` ${attrs.join(' ')}` : '';
+  if (childEntries.length === 0) {
+    return `${indent}<${name}${attrText}>${xmlEscape(textValue)}</${name}>`;
+  }
+
+  const childXml = childEntries
+    .map(([childName, childValue]) => objectToXml(childName, childValue, `${indent}  `))
+    .join('\n');
+  const textSegment = textValue == null ? '' : xmlEscape(textValue);
+  if (textSegment) {
+    return `${indent}<${name}${attrText}>${textSegment}\n${childXml}\n${indent}</${name}>`;
+  }
+
+  return `${indent}<${name}${attrText}>\n${childXml}\n${indent}</${name}>`;
+}
+
+function messageObjectToXml(messageObject) {
+  if (!messageObject || typeof messageObject !== 'object') {
+    return `<?xml version="1.0" encoding="UTF-8"?>\n<Document/>`;
+  }
+
+  const xmlBody = Object.entries(messageObject)
+    .map(([rootName, rootValue]) => objectToXml(rootName, rootValue, ''))
+    .join('\n');
+
+  return `<?xml version="1.0" encoding="UTF-8"?>\n${xmlBody}`;
+}
+
+function buildFitnessReport({ args, sourceMessage, result, durationMs, deliveryCount, mode }) {
+  const successCount = Number(deliveryCount || 0) > 0 ? 1 : 0;
+  const failureCount = successCount > 0 ? 0 : 1;
+  const latencyMs = Math.max(0, Number(durationMs || 0));
+  const successRate = successCount > 0 ? 1 : 0;
+  const retryCount = Number(result?.state?.retryCount || result?.orchestration?.retries || 0);
+  const score = (successCount * 100000) - latencyMs - (retryCount * 1000);
+
+  return {
+    organismId: String(args.organismId || args.serviceId || 'organism-0'),
+    generation: Number.parseInt(args.generation || '0', 10) || 0,
+    inputQueue: String(args.inputQueue || ''),
+    mode,
+    sourceMessageLength: String(sourceMessage || '').length,
+    successCount,
+    failureCount,
+    retryCount,
+    deliveryCount: Number(deliveryCount || 0),
+    latencyMs,
+    successRate,
+    score,
+    measuredAt: new Date().toISOString()
+  };
+}
+
+async function appendFitnessRecord(fitnessOutPath, fitnessReport) {
+  if (!fitnessOutPath) return;
+  const resolvedPath = path.resolve(fitnessOutPath);
+  await fs.mkdir(path.dirname(resolvedPath), { recursive: true });
+  await fs.appendFile(resolvedPath, `${JSON.stringify(fitnessReport)}\n`, 'utf8');
+}
+
+function ensurePacsNamespaces(messageObject) {
+  if (!messageObject || typeof messageObject !== 'object') {
+    return messageObject;
+  }
+
+  const docRoot = messageObject.Document;
+  if (!docRoot || typeof docRoot !== 'object') {
+    return messageObject;
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(docRoot, '@xmlns')) {
+    docRoot['@xmlns'] = 'urn:iso:std:iso:20022:tech:xsd:pacs.008.001.10';
+  }
+  if (!Object.prototype.hasOwnProperty.call(docRoot, '@xmlns:xsi')) {
+    docRoot['@xmlns:xsi'] = 'http://www.w3.org/2001/XMLSchema-instance';
+  }
+  if (!Object.prototype.hasOwnProperty.call(docRoot, '@xmlns:hdr')) {
+    docRoot['@xmlns:hdr'] = 'urn:swift:xsd:head.001.001.02';
+  }
+
+  const txNode = docRoot?.FIToFICstmrCdtTrf;
+  const msgId = typeof txNode?.GrpHdr?.MsgId === 'string' ? txNode.GrpHdr.MsgId : '';
+  if (msgId && !docRoot['hdr:AppHdr']) {
+    docRoot['hdr:AppHdr'] = {
+      'hdr:BizMsgIdr': msgId
+    };
+  }
+
+  return messageObject;
+}
+
+function resolveCamtNamespace(docRoot) {
+  if (!docRoot || typeof docRoot !== 'object') return 'urn:iso:std:iso:20022:tech:xsd:camt.053.001.14';
+  if (docRoot.BkToCstmrStmt && typeof docRoot.BkToCstmrStmt === 'object') {
+    return 'urn:iso:std:iso:20022:tech:xsd:camt.053.001.14';
+  }
+  if (docRoot.BkToCstmrAcctRpt && typeof docRoot.BkToCstmrAcctRpt === 'object') {
+    return 'urn:iso:std:iso:20022:tech:xsd:camt.052.001.14';
+  }
+  if (docRoot.BkToCstmrDbtCdtNtfctn && typeof docRoot.BkToCstmrDbtCdtNtfctn === 'object') {
+    return 'urn:iso:std:iso:20022:tech:xsd:camt.054.001.14';
+  }
+  return 'urn:iso:std:iso:20022:tech:xsd:camt.053.001.14';
+}
+
+function ensureCamtNamespaces(messageObject) {
+  if (!messageObject || typeof messageObject !== 'object') return messageObject;
+  const docRoot = messageObject.Document;
+  if (!docRoot || typeof docRoot !== 'object') return messageObject;
+  if (!Object.prototype.hasOwnProperty.call(docRoot, '@xmlns')) {
+    docRoot['@xmlns'] = resolveCamtNamespace(docRoot);
+  }
+  if (!Object.prototype.hasOwnProperty.call(docRoot, '@xmlns:xsi')) {
+    docRoot['@xmlns:xsi'] = 'http://www.w3.org/2001/XMLSchema-instance';
+  }
+  return messageObject;
+}
+
+function ensureIsoNamespaces(messageObject, queueType) {
+  const typeId = String(queueType || '').trim().toLowerCase();
+  if (typeId === 'pacs' || typeId.startsWith('pacs')) return ensurePacsNamespaces(messageObject);
+  if (typeId === 'camt' || typeId.startsWith('camt')) return ensureCamtNamespaces(messageObject);
+  return messageObject;
+}
+
+function maybeConvertIsoDelivery(queueName, message, queueTypes, isoTypeIds = new Set()) {
+  const queueType = String(queueTypes?.get(String(queueName || '').trim()) || '').toLowerCase();
+  const shouldConvert = !!queueType && (isoTypeIds.has(queueType) || inferIsoTypeId(queueType));
+  if (!shouldConvert) {
+    return message;
+  }
+
+  if (typeof message !== 'string') {
+    if (message && typeof message === 'object' && message.Document) {
+      return messageObjectToXml(ensureIsoNamespaces(message, queueType));
+    }
+    return message;
+  }
+
+  const trimmed = message.trim();
+  if (!trimmed.startsWith('{')) {
+    return message;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === 'object' && parsed.Document
+      ? messageObjectToXml(ensureIsoNamespaces(parsed, queueType))
+      : message;
+  } catch {
+    return message;
+  }
 }
 
 function runMappingById(mappingId, sourcePayload, mappingsById) {
@@ -675,7 +933,7 @@ function assignVar(frame, name, value) {
   frame.vars[name] = value;
 }
 
-async function executeProgram({ instructions, opcodeMap, mappingsById, inputQueue, sourceMessage, runtimeContext = {} }) {
+async function executeProgram({ instructions, opcodeMap, mappingsById, queueTypesByName = new Map(), isoTypeIds = new Set(), inputQueue, sourceMessage, runtimeContext = {} }) {
   const stack = [];
   let pc = 0;
   let currentMessage = sourceMessage;
@@ -853,7 +1111,11 @@ async function executeProgram({ instructions, opcodeMap, mappingsById, inputQueu
       continue;
     }
     if (op === 'ROUTE_EMIT') {
-      deliveries.push({ queueName: String(instr.operand || ''), message: currentMessage });
+      const queueName = String(instr.operand || '');
+      deliveries.push({
+        queueName,
+        message: maybeConvertIsoDelivery(queueName, currentMessage, queueTypesByName, isoTypeIds)
+      });
       pc += 1;
       continue;
     }
@@ -1266,7 +1528,7 @@ async function readMessage(args) {
   return args.message;
 }
 
-async function runSingleMessage(args) {
+async function executeSingleMessage(args, { printOutput = true } = {}) {
   const pcodePath = path.resolve(args.pcode);
   const programMapPath = path.resolve(args.programMap);
   const pcodeText = await fs.readFile(pcodePath, 'utf-8');
@@ -1275,6 +1537,8 @@ async function runSingleMessage(args) {
 
   const opcodeMap = await loadOpcodeMap();
   const mappingsById = parseProgramMapMappings(programMap);
+  const queueTypesByName = parseProgramMapQueueTypes(programMap);
+  const isoTypeIds = await loadLibrarianIsoTypeIds();
   const instructions = parsePcode(pcodeText);
   const runtimeUnit = normalizeRuntimeUnit(programMap?.runtimeUnit, programMap?.serviceId);
   const loadedAt = new Date().toISOString();
@@ -1358,10 +1622,13 @@ async function runSingleMessage(args) {
     }
   };
 
+  const startedAt = Date.now();
   const result = await executeProgram({
     instructions,
     opcodeMap,
     mappingsById,
+    queueTypesByName,
+    isoTypeIds,
     inputQueue: args.inputQueue,
     sourceMessage,
     runtimeContext: {
@@ -1370,6 +1637,16 @@ async function runSingleMessage(args) {
       serviceId: args.serviceId || ''
     }
   });
+  const durationMs = Date.now() - startedAt;
+  const fitness = buildFitnessReport({
+    args,
+    sourceMessage,
+    result,
+    durationMs,
+    deliveryCount: result.deliveries.length,
+    mode: 'single'
+  });
+  await appendFitnessRecord(args.fitnessOut, fitness);
 
   const out = {
     runtime: 'js-pmachine',
@@ -1391,10 +1668,23 @@ async function runSingleMessage(args) {
     globals: result.globals || {},
     orchestration: result.orchestration || null,
     response: result.response ?? null,
-    error: result.error || null
+    error: result.error || null,
+    fitness
   };
 
-  console.log(JSON.stringify(out, null, 2));
+  if (printOutput) {
+    console.log(JSON.stringify(out, null, 2));
+  }
+
+  return out;
+}
+
+export async function runSingleMessageForEvolution(args) {
+  return executeSingleMessage(args, { printOutput: false });
+}
+
+async function runSingleMessage(args) {
+  await executeSingleMessage(args, { printOutput: true });
 }
 
 async function pollAndRoute(args) {
@@ -1407,6 +1697,8 @@ async function pollAndRoute(args) {
   
   const opcodeMap = await loadOpcodeMap();
   const mappingsById = parseProgramMapMappings(programMap);
+  const queueTypesByName = parseProgramMapQueueTypes(programMap);
+  const isoTypeIds = await loadLibrarianIsoTypeIds();
   const instructions = parsePcode(pcodeText);
   const runtimeUnit = normalizeRuntimeUnit(programMap?.runtimeUnit, programMap?.serviceId);
   
@@ -1434,6 +1726,10 @@ async function pollAndRoute(args) {
       console.log(`[DAEMON] Refresh cycle tick at ${new Date(lastRefreshAt).toISOString()}`);
     }
 
+    if (typeof qm.loadFromDisk === 'function') {
+      qm.loadFromDisk();
+    }
+
     const msg = qm.dequeue(args.inputQueue, 'pcode-router');
     
     if (!msg) {
@@ -1448,13 +1744,26 @@ async function pollAndRoute(args) {
     console.log(`[POLLER] Message #${messageCount}: processing from ${args.inputQueue}`);
     
     try {
+      const startedAt = Date.now();
       const result = await executeProgram({
         instructions,
         opcodeMap,
         mappingsById,
+        queueTypesByName,
+        isoTypeIds,
         inputQueue: args.inputQueue,
         sourceMessage
       });
+      const durationMs = Date.now() - startedAt;
+      const fitness = buildFitnessReport({
+        args,
+        sourceMessage,
+        result,
+        durationMs,
+        deliveryCount: result.deliveries.length,
+        mode: 'poll'
+      });
+      await appendFitnessRecord(args.fitnessOut, fitness);
       
       // Enqueue deliveries to their output queues
       for (const delivery of result.deliveries) {

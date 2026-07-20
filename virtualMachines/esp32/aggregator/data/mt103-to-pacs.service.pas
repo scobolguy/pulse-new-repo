@@ -14,6 +14,7 @@ END;
 
 MAPPER "mt103-to-pacs" SOURCE "swift-mt103" TARGET "pacs" DESCRIPTION "MT103 to PACS.008 mapping" ENABLED TRUE BEGIN
   MAP "block4.20" TO "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId" USING "output := trim(src);";
+  MAP "block4.20" TO "Document.hdr:AppHdr.hdr:BizMsgIdr" USING "output := trim(src);";
   MAP "block4.20" TO "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId" USING "output := trim(src);";
 
   MAP "block4.32A.date" TO "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt" USING "output := yymmddtoiso(src);";

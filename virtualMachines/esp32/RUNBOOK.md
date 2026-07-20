@@ -1,5 +1,7 @@
 # Pulse ESP32 Quick Runbook
 
+This runbook covers the operational entry points for the workspace. For the current architecture and cleanup boundaries, also read `README.md` and `documents/REPOSITORY_HYGIENE_PLAN.md`.
+
 ## Startup
 
 - Full stack: `./start-servers.bat`
@@ -22,6 +24,37 @@ Checks:
 - Broker: `http://127.0.0.1:4001/health`
 - Queue manager (primary): `http://127.0.0.1:4100/health`
 - Frontend: `http://127.0.0.1:5173/`
+
+## Cluster Operations
+
+Local cluster startup is a bootstrap action, not the full clustering model.
+
+- `start-cluster.bat` starts the local backend as `primary` by default
+- `start-cluster.bat backup <peer-host>` starts the local backend as `backup` and can optionally promote frontend/backend routing
+- cluster membership, cluster state, and topology metadata are managed by backend APIs
+
+Current backend cluster endpoints:
+
+- `GET /api/clusters`
+- `POST /api/clusters`
+- `DELETE /api/clusters/:clusterId`
+- `POST /api/clusters/:clusterId/quiesce`
+- `POST /api/clusters/:clusterId/start`
+- `GET /api/clusters/:clusterId/announce`
+- `POST /api/clusters/:clusterId/deploy`
+
+Persisted cluster-related state:
+
+- `aggregator/data/cluster-registry.json`
+- `aggregator/data/site-registry.json`
+- `aggregator/data/node-topology-overrides.json`
+- `aggregator/data/node-rename-overrides.json`
+
+Important current behavior:
+
+- Unassigned nodes are automatically grouped into managed free pools.
+- The managed free pools are `free-pool`, `free-pool-js`, and `free-pool-esp`.
+- Cluster UDP parent/sibling port pairs are allocated deterministically starting at `4200`.
 
 ## Bonecrusher Phase 1 (COM5)
 
@@ -50,3 +83,4 @@ Example:
 
 - If frontend binds to 5174, free listeners on 5173 and restart frontend.
 - If queue manager is running as backup, check `http://127.0.0.1:4101/health`.
+- `stop-cluster.bat` stops the local backend role and frontend listener, but it does not delete persisted cluster registry state.

@@ -14,7 +14,6 @@ DeviceConfiguration deviceConfig;
 #include <HTTPClient.h>
 #include <WiFi.h>
 #endif
-#include <ArduinoOTA.h>
 #include <ESPAsyncWebServer.h>
 
 #include <ArduinoJson.h>
@@ -91,6 +90,33 @@ int relayPinNumber = 5;
 bool relayStateOn = false;
 std::map<String, bool> serviceBusyMap;
 
+namespace {
+bool gLittleFsInitialized = false;
+
+bool ensureLittleFsInitialized() {
+    if (gLittleFsInitialized) return true;
+
+#if defined(ARDUINO_ARCH_ESP8266)
+    if (LittleFS.begin()) {
+        gLittleFsInitialized = true;
+        return true;
+    }
+#else
+    if (LittleFS.begin()) {
+        gLittleFsInitialized = true;
+        return true;
+    }
+    // Retry with format to recover uninitialized/corrupt local FS on ESP32.
+    if (LittleFS.begin(true)) {
+        gLittleFsInitialized = true;
+        return true;
+    }
+#endif
+
+    return false;
+}
+}
+
 #ifndef DOORBELL_BUTTON_PIN
 #define DOORBELL_BUTTON_PIN 13
 #endif
@@ -123,7 +149,6 @@ pmachine::PMachine pm;
 const char* firmwareVersion = "2026.06.06";
 const char* firmwareBuildStamp = __DATE__ " " __TIME__;
 const char* deviceRole = DEVICE_ROLE;
-bool otaEnabled = true;
 
 constexpr unsigned long NODE_BEACON_ACKED_INTERVAL_MS = 60000;
 constexpr unsigned long NODE_BEACON_UNACKED_INTERVAL_MS = 10000;
@@ -260,7 +285,7 @@ String computeNodeCapabilityHash() {
     hash += '|';
     hash += firmwareTrack;
     hash += '|';
-    hash += otaEnabled ? '1' : '0';
+    hash += '0';
     hash += '|';
     hash += isSupervisorRole() ? '1' : '0';
     hash += '|';
@@ -1092,41 +1117,6 @@ void notFound(AsyncWebServerRequest *request) {
     request->send(404, "text/plain", "Not found");
 }
 
-void setupOtaService() {
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("[OTA] WiFi not connected; OTA disabled");
-        otaEnabled = false;
-        return;
-    }
-
-    ArduinoOTA.setHostname(nodeName.c_str());
-    ArduinoOTA.onStart([]() {
-        Serial.println("[OTA] Update started");
-    });
-    ArduinoOTA.onEnd([]() {
-        Serial.println("[OTA] Update complete");
-    });
-    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-        if (total == 0) return;
-        unsigned int pct = (progress * 100U) / total;
-        Serial.printf("[OTA] Progress: %u%%\n", pct);
-    });
-    ArduinoOTA.onError([](ota_error_t error) {
-        Serial.printf("[OTA] Error[%u]\n", static_cast<unsigned int>(error));
-    });
-
-    ArduinoOTA.begin();
-    otaEnabled = true;
-    Serial.print("[OTA] Ready. Hostname=");
-    Serial.print(nodeName);
-    Serial.print(" IP=");
-    Serial.println(WiFi.localIP());
-    Serial.print("[OTA] Firmware version=");
-    Serial.println(firmwareVersion);
-    Serial.print("[OTA] Firmware build=");
-    Serial.println(firmwareBuildStamp);
-}
-
 // ...existing code...
 
 void setupWebServer() {
@@ -1389,7 +1379,6 @@ void setupWebServer() {
         doc["deviceRole"] = deviceRole;
         doc["preferredTaskType"] = preferredTaskType;
         doc["firmwareTrack"] = firmwareTrack;
-        doc["otaEnabled"] = otaEnabled;
         doc["maxMessageBytes"] = static_cast<uint32_t>(maxMessageBytes);
         doc["maxConcurrentTasks"] = static_cast<uint32_t>(maxConcurrentTasks);
         auto cluster = doc["cluster"].to<JsonObject>();
@@ -1844,7 +1833,6 @@ void setupWebServer() {
         json += "\"deviceRole\":\"" + String(deviceRole) + "\",";
         json += "\"preferredTaskType\":\"" + String(preferredTaskType) + "\",";
         json += "\"firmwareTrack\":\"" + String(firmwareTrack) + "\",";
-        json += String("\"otaEnabled\":") + (otaEnabled ? "true" : "false") + ",";
         json += "\"maxMessageBytes\":" + String((unsigned long)maxMessageBytes) + ",";
         json += "\"maxConcurrentTasks\":" + String((unsigned long)maxConcurrentTasks) + ",";
         json += "\"cluster\":{";
@@ -2509,14 +2497,21 @@ void setup() {
         Serial.println("No SD card detected, falling back to LittleFS");
     }
     if (!sdAvailable) {
-        if (!LittleFS.begin()) {
+        if (!ensureLittleFsInitialized()) {
             Serial.println("LittleFS mount failed");
             while (1) delay(1000);
         }
     }
 #else
-    if (!LittleFS.begin()) {
+    if (!ensureLittleFsInitialized()) {
         Serial.println("LittleFS mount failed");
+        while (1) delay(1000);
+    }
+#endif
+
+#if defined(ESP32)
+    if (!ensureLittleFsInitialized()) {
+        Serial.println("LittleFS unavailable");
         while (1) delay(1000);
     }
 #endif
@@ -2676,12 +2671,7 @@ void setup() {
 
     // 6. Set hostname, start UDP, and announce presence (must be after WiFi is up and nodeName is set)
     WiFi.setHostname(nodeName.c_str());
-    #ifndef DISABLE_OTA
-    setupOtaService();
-    #else
-    otaEnabled = false;
-    Serial.println("[OTA] Disabled by build flag");
-    #endif
+    Serial.println("[OTA] Removed: use serial firmware upload + FFS file upload for delivery");
     configureSupervisorTargets();
     loadSupervisorConfig();
     if (isSupervisorRole()) {
@@ -3016,12 +3006,6 @@ void loop() {
 #ifdef ENABLE_TIME_AUTHORITY
     timeAuthorityLoop();
 #endif
-
-    #ifndef DISABLE_OTA
-    if (otaEnabled) {
-        ArduinoOTA.handle();
-    }
-    #endif
 
 #ifdef ENABLE_AWS_IOT
     // Update AWS IoT Gateway (process MQTT messages)

@@ -1,0 +1,64 @@
+{
+  "id": "mt940-to-camt052",
+  "name": "MT940 to CAMT.052",
+  "description": "Direct field mapping rules from SWIFT FIN MT940 statements to ISO 20022 CAMT.052 account reports (no PL/0 conversion routines).",
+  "sourceTypeId": "swift-mt940",
+  "targetTypeId": "camt",
+  "targetSchemaPath": "schemas/camt.052.001.14.xsd",
+  "version": "1.0",
+  "createdAt": "2026-07-15T00:00:00.000Z",
+  "updatedAt": "2026-07-15T00:00:00.000Z",
+  "rules": [
+    {
+      "sourcePath": "finEnvelope.block4.fields.20",
+      "targetPath": "Document.BkToCstmrAcctRpt.GrpHdr.MsgId",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.20",
+      "targetPath": "Document.BkToCstmrAcctRpt.Rpt.Id",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.25",
+      "targetPath": "Document.BkToCstmrAcctRpt.Rpt.Acct.Id.Othr.Id",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.28C",
+      "targetPath": "Document.BkToCstmrAcctRpt.Rpt.ElctrncSeqNb",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.60F.components.date",
+      "targetPath": "Document.BkToCstmrAcctRpt.Rpt.Bal.Dt.Dt",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.60F.components.amount",
+      "targetPath": "Document.BkToCstmrAcctRpt.Rpt.Bal.Amt.#text",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.60F.components.currency",
+      "targetPath": "Document.BkToCstmrAcctRpt.Rpt.Bal.Amt.@Ccy",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.61",
+      "targetPath": "Document.BkToCstmrAcctRpt.Rpt.Ntry.AddtlNtryInf",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.61",
+      "targetPath": "Document.BkToCstmrAcctRpt.Rpt.Ntry.NtryDtls.TxDtls.RmtInf.Ustrd",
+      "kind": "leaf"
+    },
+    {
+      "sourcePath": "finEnvelope.block4.fields.86",
+      "targetPath": "Document.BkToCstmrAcctRpt.Rpt.Ntry.AddtlNtryInf",
+      "kind": "leaf"
+    }
+  ],
+  "submaps": []
+}

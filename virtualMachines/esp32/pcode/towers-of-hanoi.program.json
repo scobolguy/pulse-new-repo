@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-07-10T21:35:02.296Z",
+  "generatedAt": "2026-07-13T13:09:38.153Z",
   "serviceId": "TowersOfHanoi",
   "runtimeUnit": {
     "kind": "program",
@@ -24,5 +24,13 @@
       "locals": []
     }
   },
-  "entryLabel": "MAIN"
+  "entryLabel": "MAIN",
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "a688b463e531fdc5e3fbbf280059fcd7a0c7affb89467b5d37d474d6335eca54",
+    "signedAt": "2026-07-13T13:09:38.156Z",
+    "pcodeLength": 804,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
 }

@@ -1,0 +1,136 @@
+{
+  "updatedAt": "2026-07-14T21:35:06.964Z",
+  "generation": 5026,
+  "selector": [
+    {
+      "rank": 1,
+      "organismId": "organism-04-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018-g5019-g5020-g5021-g5022-g5023-g5024-g5025-g5026",
+      "variant": "normal",
+      "generation": 5026,
+      "transactionCount": 237,
+      "successCount": 237,
+      "successRate": 1,
+      "latencyMs": 0.439,
+      "score": 99999.561,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 997,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 2,
+      "organismId": "organism-01-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018-g5019-g5020-g5021-g5022-g5023-g5024-g5025-g5026",
+      "variant": "normal",
+      "generation": 5026,
+      "transactionCount": 254,
+      "successCount": 254,
+      "successRate": 1,
+      "latencyMs": 0.449,
+      "score": 99999.551,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 999,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 3,
+      "organismId": "organism-02-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018-g5019-g5020-g5021-g5022-g5023-g5024-g5025-g5026",
+      "variant": "stress",
+      "generation": 5026,
+      "transactionCount": 257,
+      "successCount": 257,
+      "successRate": 1,
+      "latencyMs": 0.475,
+      "score": 99999.525,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 996,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 4,
+      "organismId": "organism-03-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018-g5019-g5020-g5021-g5022-g5023-g5024-g5025-g5026",
+      "variant": "hostile",
+      "generation": 5026,
+      "transactionCount": 252,
+      "successCount": 252,
+      "successRate": 1,
+      "latencyMs": 0.496,
+      "score": 99999.504,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 988,
+      "messageFormat": "unknown"
+    }
+  ],
+  "records": [
+    {
+      "organismId": "organism-03-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018-g5019-g5020-g5021-g5022-g5023-g5024-g5025-g5026",
+      "parentId": "organism-03-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018-g5019-g5020-g5021-g5022-g5023-g5024-g5025",
+      "generation": 5026,
+      "variant": "hostile",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 252,
+        "successCount": 252,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.496,
+        "score": 99999.504
+      }
+    },
+    {
+      "organismId": "organism-02-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018-g5019-g5020-g5021-g5022-g5023-g5024-g5025-g5026",
+      "parentId": "organism-02-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018-g5019-g5020-g5021-g5022-g5023-g5024-g5025",
+      "generation": 5026,
+      "variant": "stress",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 257,
+        "successCount": 257,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.475,
+        "score": 99999.525
+      }
+    },
+    {
+      "organismId": "organism-01-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018-g5019-g5020-g5021-g5022-g5023-g5024-g5025-g5026",
+      "parentId": "organism-01-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018-g5019-g5020-g5021-g5022-g5023-g5024-g5025",
+      "generation": 5026,
+      "variant": "normal",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 254,
+        "successCount": 254,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.449,
+        "score": 99999.551
+      }
+    },
+    {
+      "organismId": "organism-04-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018-g5019-g5020-g5021-g5022-g5023-g5024-g5025-g5026",
+      "parentId": "organism-04-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010-g5011-g5012-g5013-g5014-g5015-g5016-g5017-g5018-g5019-g5020-g5021-g5022-g5023-g5024-g5025",
+      "generation": 5026,
+      "variant": "normal",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 237,
+        "successCount": 237,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.439,
+        "score": 99999.561
+      }
+    }
+  ]
+}

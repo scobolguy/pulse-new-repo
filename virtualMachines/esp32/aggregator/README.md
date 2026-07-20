@@ -7,6 +7,31 @@ Main capabilities:
 - Service instance registry for any service type (for example webapi or broker)
 - Node lifecycle controls (quiesce, drain, maintenance, return-service)
 - Service resolution and proxy to active instances only
+- Cluster, site, and node-topology management for JS and ESP32 nodes
+
+## Current Source Of Truth
+
+The Aggregator backend is the source of truth for runtime clustering and topology behavior.
+
+- Topology runtime implementation:
+  - `src/backend/roles/topologyRuntimeRoutes.mjs`
+- Cluster state files:
+  - `data/cluster-registry.json`
+  - `data/site-registry.json`
+  - `data/node-topology-overrides.json`
+  - `data/node-rename-overrides.json`
+
+### Cluster Model In Production Today
+
+- explicit cluster management via `/api/clusters`
+- three automatically managed free pools:
+  - `free-pool`
+  - `free-pool-js`
+  - `free-pool-esp`
+- per-cluster deterministic UDP parent/sibling port pairs beginning at `4200`
+- lifecycle actions for quiesce, restart-to-up, announce, and deploy
+
+The batch files in the repo start local roles. They do not replace the persisted backend cluster registry.
 
 ## Run
 
@@ -15,6 +40,20 @@ Backend:
 ```powershell
 node backend.mjs
 ```
+
+Librarian service for mapper and schema-driven UI flows:
+
+```powershell
+npm run dev:librarian
+```
+
+Backend with auxiliary child services enabled:
+
+```powershell
+npm run dev:backend:aux
+```
+
+The Data Librarian now defaults to port `4300` so it does not conflict with the queue manager on `4100`.
 
 Standalone queue manager node:
 
@@ -45,6 +84,18 @@ npm run startup:fsm:ordered
 This command enforces backend first, frontend second, and exits non-zero unless both FSM status files report READY.
 
 Detailed procedure and troubleshooting are documented in [startup.md](startup.md).
+
+## Cluster Bootstrap
+
+From the workspace root:
+
+```powershell
+./start-cluster.bat
+./start-cluster.bat backup 192.168.2.101
+./stop-cluster.bat
+```
+
+Use the backend APIs to inspect or mutate actual cluster membership after startup.
 
 ## ESP32 Deploy (Map + Firmware)
 
@@ -94,29 +145,25 @@ To also push filesystem first in the same command:
 powershell -ExecutionPolicy Bypass -File scripts/deploy-esp32.ps1 -Mode serial -Port COM5 -UploadFs -Version 1.1.0
 ```
 
-### 3) Deploy firmware over OTA
+### 3) Deliver Runtime Data Through FFS
 
-OTA is enabled in firmware and PlatformIO via `esp32dev_ota`.
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/deploy-esp32.ps1 -Mode ota -Version 1.1.0
-```
-
-Roll out one version to many nodes in a single command:
+Use FederatedFileSystem upload routes for runtime payloads, routing rules, and mappings.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/rollout-esp32-ota.ps1 -Version 1.1.0 -Nodes 192.168.2.115,192.168.2.116,192.168.2.117
+Invoke-RestMethod -Method Post -Uri http://<node-ip>/ffs/upload -ContentType 'application/x-www-form-urlencoded' -Body @{ file = '/hrr.json'; body = $rulesJson }
+Invoke-RestMethod -Method Post -Uri http://<node-ip>/ffs/upload -ContentType 'application/x-www-form-urlencoded' -Body @{ file = '/hdm.json'; body = $mappingsJson }
 ```
 
 Notes:
-- OTA environment uses `upload_protocol = espota`.
-- Current OTA target IP is configured in `platformio.ini` under `[env:esp32dev_ota]`.
+- OTA is removed from firmware and PlatformIO environments in this repository.
+- Use serial firmware upload plus FFS file upload for deployment.
+- Legacy router terminology may still appear in older artifacts, but the runtime behavior is queue/routing based.
 - OTA deploy updates firmware; filesystem artifacts are handled separately.
 - Node firmware version is published by `/status` and `/services/describe` as `firmwareVersion`.
 
 ### Role-Aware Edge Routing (Backend)
 
-`/api/router/ingest` and `/api/edge/ingest` now accept an optional `edgeRole` value:
+`/api/router/ingest` and `/api/edge/ingest` are compatibility endpoint names and now accept an optional `edgeRole` value:
 - `bonecrusher`
 - `drone`
 
@@ -247,6 +294,17 @@ Then set browser-side gateway failover in `.env.local`:
 ```text
 VITE_API_BASES=http://192.168.2.101:4100,http://192.168.2.102:4100
 ```
+
+## Data Hygiene Warning
+
+`aggregator/data/` is currently mixed-use. It contains:
+
+- hand-authored DSL and reference fixtures
+- generated compiler outputs
+- runtime registries and state files
+- queue message persistence and operational logs
+
+Do not assume every JSON or JSONL file under `data/` is canonical source. The cleanup plan that separates source, generated artifacts, and runtime output is documented in `../documents/REPOSITORY_HYGIENE_PLAN.md`.
 
 Behavior:
 - For `/api`, `/status`, and `/services`, the browser tries one gateway first.
@@ -667,7 +725,7 @@ Response:
 ### Failover Workflow (When Primary Goes Down)
 
 1. **Detect primary failure**: Monitor heartbeat timeout (30 seconds)
-2. **Promote replica**: Update router to use replica for new writes
+2. **Promote replica**: Update the route registry to use replica for new writes
 3. **Redirect reads**: Clients query replica instead of primary
 4. **Recovery**: When primary comes back up, it can become a replica of the new primary
 

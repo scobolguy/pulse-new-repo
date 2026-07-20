@@ -1,0 +1,124 @@
+{
+  "updatedAt": "2026-07-15T01:26:15.709Z",
+  "generation": 7017,
+  "maxPopulation": 200,
+  "birthLimit": 25,
+  "deathLimit": 100,
+  "organismIdleTtlMs": 60000,
+  "replacementInterval": 100,
+  "replacementCount": 0,
+  "replacements": [],
+  "births": [],
+  "deaths": [],
+  "processingLog": [
+    {
+      "transactionCount": 1,
+      "organismId": "organism-03-g7001-g7002-g7003-g7004-g7005-g7006-g7007-g7008-g7009-g7010-g7011-g7012-g7013-g7014-g7015-g7016-g7017",
+      "slotIndex": 2,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 1,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 2,
+      "organismId": "organism-01-g7001-g7002-g7003-g7004-g7005-g7006-g7007-g7008-g7009-g7010-g7011-g7012-g7013-g7014-g7015-g7016-g7017",
+      "slotIndex": 0,
+      "processable": true,
+      "birthCounter": 1,
+      "deathCounter": 1,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 3,
+      "organismId": "organism-01-g7001-g7002-g7003-g7004-g7005-g7006-g7007-g7008-g7009-g7010-g7011-g7012-g7013-g7014-g7015-g7016-g7017",
+      "slotIndex": 0,
+      "processable": true,
+      "birthCounter": 2,
+      "deathCounter": 2,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 4,
+      "organismId": "organism-01-g7001-g7002-g7003-g7004-g7005-g7006-g7007-g7008-g7009-g7010-g7011-g7012-g7013-g7014-g7015-g7016-g7017",
+      "slotIndex": 0,
+      "processable": true,
+      "birthCounter": 3,
+      "deathCounter": 3,
+      "spawnedChildren": [],
+      "died": false
+    }
+  ],
+  "activePopulationSize": 4,
+  "selector": [
+    {
+      "rank": 1,
+      "organismId": "organism-01-g7001-g7002-g7003-g7004-g7005-g7006-g7007-g7008-g7009-g7010-g7011-g7012-g7013-g7014-g7015-g7016-g7017",
+      "variant": "normal",
+      "generation": 7017,
+      "transactionCount": 3,
+      "successCount": 3,
+      "successRate": 1,
+      "latencyMs": 0.667,
+      "score": 99999.333,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 1,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 2,
+      "organismId": "organism-03-g7001-g7002-g7003-g7004-g7005-g7006-g7007-g7008-g7009-g7010-g7011-g7012-g7013-g7014-g7015-g7016-g7017",
+      "variant": "hostile",
+      "generation": 7017,
+      "transactionCount": 1,
+      "successCount": 1,
+      "successRate": 1,
+      "latencyMs": 1,
+      "score": 99999,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 0,
+      "messageFormat": "unknown"
+    }
+  ],
+  "records": [
+    {
+      "organismId": "organism-03-g7001-g7002-g7003-g7004-g7005-g7006-g7007-g7008-g7009-g7010-g7011-g7012-g7013-g7014-g7015-g7016-g7017",
+      "parentId": "organism-03-g7001-g7002-g7003-g7004-g7005-g7006-g7007-g7008-g7009-g7010-g7011-g7012-g7013-g7014-g7015-g7016",
+      "generation": 7017,
+      "variant": "hostile",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 1,
+        "successCount": 1,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 1,
+        "score": 99999
+      }
+    },
+    {
+      "organismId": "organism-01-g7001-g7002-g7003-g7004-g7005-g7006-g7007-g7008-g7009-g7010-g7011-g7012-g7013-g7014-g7015-g7016-g7017",
+      "parentId": "organism-01-g7001-g7002-g7003-g7004-g7005-g7006-g7007-g7008-g7009-g7010-g7011-g7012-g7013-g7014-g7015-g7016",
+      "generation": 7017,
+      "variant": "normal",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 3,
+        "successCount": 3,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.667,
+        "score": 99999.333
+      }
+    }
+  ]
+}

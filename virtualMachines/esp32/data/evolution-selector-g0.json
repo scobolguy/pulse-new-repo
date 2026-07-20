@@ -1,0 +1,42 @@
+{
+  "updatedAt": "2026-07-14T17:19:02.225Z",
+  "generation": 0,
+  "selector": [
+    {
+      "rank": 1,
+      "organismId": "organism-01",
+      "variant": "normal",
+      "generation": 0,
+      "successCount": 1,
+      "latencyMs": 10,
+      "score": 99990,
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown"
+    }
+  ],
+  "records": [
+    {
+      "variant": "normal",
+      "organismId": "organism-01",
+      "parentId": null,
+      "generation": 0,
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "organismId": "organism-01",
+        "generation": 0,
+        "inputQueue": "swift.mt103.parsed",
+        "mode": "single",
+        "sourceMessageLength": 95,
+        "successCount": 1,
+        "failureCount": 0,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 10,
+        "successRate": 1,
+        "score": 99990,
+        "measuredAt": "2026-07-14T17:19:02.221Z"
+      }
+    }
+  ]
+}

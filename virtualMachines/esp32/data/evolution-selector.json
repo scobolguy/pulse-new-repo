@@ -1,0 +1,106 @@
+{
+  "updatedAt": "2026-07-14T16:15:52.757Z",
+  "selector": [
+    {
+      "rank": 1,
+      "organismId": "organism-03",
+      "variant": "hostile",
+      "generation": 0,
+      "successCount": 1,
+      "latencyMs": 10,
+      "score": 99990,
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 2,
+      "organismId": "organism-02",
+      "variant": "stress",
+      "generation": 0,
+      "successCount": 1,
+      "latencyMs": 11,
+      "score": 99989,
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 3,
+      "organismId": "organism-01",
+      "variant": "normal",
+      "generation": 0,
+      "successCount": 1,
+      "latencyMs": 12,
+      "score": 99988,
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown"
+    }
+  ],
+  "records": [
+    {
+      "variant": "normal",
+      "organismId": "organism-01",
+      "generation": 0,
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "organismId": "organism-01",
+        "generation": 0,
+        "inputQueue": "swift.mt103.parsed",
+        "mode": "single",
+        "sourceMessageLength": 95,
+        "successCount": 1,
+        "failureCount": 0,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 12,
+        "successRate": 1,
+        "score": 99988,
+        "measuredAt": "2026-07-14T16:15:52.177Z"
+      }
+    },
+    {
+      "variant": "stress",
+      "organismId": "organism-02",
+      "generation": 0,
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "organismId": "organism-02",
+        "generation": 0,
+        "inputQueue": "swift.mt103.parsed",
+        "mode": "single",
+        "sourceMessageLength": 97,
+        "successCount": 1,
+        "failureCount": 0,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 11,
+        "successRate": 1,
+        "score": 99989,
+        "measuredAt": "2026-07-14T16:15:52.459Z"
+      }
+    },
+    {
+      "variant": "hostile",
+      "organismId": "organism-03",
+      "generation": 0,
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "organismId": "organism-03",
+        "generation": 0,
+        "inputQueue": "swift.mt103.parsed",
+        "mode": "single",
+        "sourceMessageLength": 72,
+        "successCount": 1,
+        "failureCount": 0,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 10,
+        "successRate": 1,
+        "score": 99990,
+        "measuredAt": "2026-07-14T16:15:52.727Z"
+      }
+    }
+  ]
+}

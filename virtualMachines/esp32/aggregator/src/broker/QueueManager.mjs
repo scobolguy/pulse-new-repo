@@ -22,6 +22,24 @@ export default class QueueManager {
     this.loadFromDisk();
   }
 
+  inferDefaultPersistMessages(queueName) {
+    const normalizedQueueName = String(queueName || '').trim().toLowerCase();
+    if (!normalizedQueueName) return true;
+
+    if (normalizedQueueName === 'tx.reconciled') return false;
+    if (normalizedQueueName === 'tx.completed') return false;
+    if (normalizedQueueName === 'correspondent.pacs008.outbound') return false;
+    return true;
+  }
+
+  shouldPersistQueueMessages(queueName) {
+    const config = this.queueConfig[queueName] || null;
+    if (typeof config?.persistMessages === 'boolean') {
+      return config.persistMessages;
+    }
+    return this.inferDefaultPersistMessages(queueName);
+  }
+
   ensureQueueReady(queueName) {
     if (!this.queueConfig[queueName]) {
       throw new Error(`Queue ${queueName} not configured`);
@@ -286,12 +304,15 @@ export default class QueueManager {
     if (!this.persistence) return;
     
     try {
+      let configNeedsSave = false;
+      let snapshotQueueLengths = {};
       const snapshot = this.persistence.loadSnapshot();
       if (snapshot) {
         this.queues = JSON.parse(JSON.stringify(snapshot.queues || {}));
         this.queueConfig = JSON.parse(JSON.stringify(snapshot.queueConfig || {}));
         this.configVersion = Number(snapshot.configVersion || 0);
         this.operationLogVersion = Number(snapshot.operationLogVersion || 0);
+        snapshotQueueLengths = snapshot.queueLengths || {};
       }
 
       const configData = this.persistence.loadConfig();
@@ -300,6 +321,13 @@ export default class QueueManager {
         this.configVersion = Math.max(this.configVersion, Number(configData.configVersion || 0));
         // Reinitialize queues to match config
         for (const queueName of Object.keys(this.queueConfig)) {
+          if (typeof this.queueConfig[queueName]?.persistMessages !== 'boolean') {
+            this.queueConfig[queueName] = {
+              ...(this.queueConfig[queueName] || {}),
+              persistMessages: this.inferDefaultPersistMessages(queueName)
+            };
+            configNeedsSave = true;
+          }
           if (!this.queues[queueName]) {
             this.queues[queueName] = { messages: [] };
           }
@@ -321,16 +349,36 @@ export default class QueueManager {
         this.operationLog = this.operationLog.slice(-1000);
       }
 
-      this.restoreQueueMessagesFromFiles();
+      if (configNeedsSave) {
+        this.persistence.saveConfig(this.queueConfig, this.configVersion);
+      }
+
+      this.restoreQueueMessagesFromFiles(snapshotQueueLengths);
     } catch (e) {
       console.error(`Error loading from disk for ${this.name}:`, e.message);
     }
   }
 
-  restoreQueueMessagesFromFiles() {
+  restoreQueueMessagesFromFiles(snapshotQueueLengths = {}) {
     if (!this.persistence) return;
 
     for (const queueName of Object.keys(this.queues)) {
+      if (!this.shouldPersistQueueMessages(queueName)) {
+        this.persistence.removeQueueStorage(queueName);
+        this.queues[queueName].messages = [];
+        continue;
+      }
+
+      const expectedLength = Number(snapshotQueueLengths?.[queueName]);
+      if (Number.isFinite(expectedLength) && expectedLength === 0) {
+        const removedCount = this.persistence.removeAllQueueMessageFiles(queueName);
+        if (removedCount > 0) {
+          console.warn(`[QueueManager] Swept ${removedCount} stale message file(s) during startup for ${this.name}/${queueName}`);
+        }
+        this.queues[queueName].messages = [];
+        continue;
+      }
+
       const diskMessages = this.persistence.loadQueueMessages(queueName);
       if (diskMessages.length > 0) {
         this.queues[queueName].messages = diskMessages;
@@ -365,6 +413,27 @@ export default class QueueManager {
       }
       this.queues[queueName].messages = migrated;
     }
+  }
+
+  sweepStalePersistedMessages() {
+    if (!this.persistence) return 0;
+
+    let removedCount = 0;
+    for (const queueName of Object.keys(this.queues || {})) {
+      if (!this.shouldPersistQueueMessages(queueName)) {
+        this.persistence.removeQueueStorage(queueName);
+        this.queues[queueName].messages = [];
+        continue;
+      }
+
+      if (this.getQueueLength(queueName) !== 0) {
+        continue;
+      }
+
+      removedCount += this.persistence.removeAllQueueMessageFiles(queueName);
+    }
+
+    return removedCount;
   }
 
   checkpointPersistence() {
@@ -471,6 +540,7 @@ export default class QueueManager {
       createdAt: Date.now(), 
       frozen: false,
       queueClass: 'permanent',
+      persistMessages: this.inferDefaultPersistMessages(queueName),
       ...queueConfig 
     };
     this.queues[queueName] = { messages: [] };
@@ -515,7 +585,11 @@ export default class QueueManager {
     if (!this.queueConfig[queueName]) {
       throw new Error(`Queue ${queueName} does not exist`);
     }
-    this.queueConfig[queueName] = { ...this.queueConfig[queueName], ...updates };
+    this.queueConfig[queueName] = {
+      ...this.queueConfig[queueName],
+      persistMessages: this.inferDefaultPersistMessages(queueName),
+      ...updates
+    };
     this.configVersion++;
     this.saveToDisk();
     
@@ -647,7 +721,7 @@ export default class QueueManager {
     if (!this.queues[queueName].messages) this.queues[queueName].messages = [];
     const resolvedMessageId = messageId || randomUUID();
     let queuedItem = { message, sourceService, messageId: resolvedMessageId, messageEnvelope: messageEnvelope || null };
-    if (this.persistence) {
+    if (this.persistence && this.shouldPersistQueueMessages(queueName)) {
       queuedItem = this.persistence.persistQueueMessage(queueName, queuedItem);
     }
     this.queues[queueName].messages.push(queuedItem);
@@ -668,7 +742,7 @@ export default class QueueManager {
     if (!this.queues[queueName].messages) this.queues[queueName].messages = [];
     const resolvedMessageId = messageId || randomUUID();
     let queuedItem = { message, sourceService, messageId: resolvedMessageId, messageEnvelope: messageEnvelope || null };
-    if (this.persistence) {
+    if (this.persistence && this.shouldPersistQueueMessages(queueName)) {
       queuedItem = this.persistence.persistQueueMessage(queueName, queuedItem);
     }
     this.queues[queueName].messages.push(queuedItem);

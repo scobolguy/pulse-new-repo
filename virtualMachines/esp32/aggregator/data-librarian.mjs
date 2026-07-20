@@ -10,13 +10,55 @@ app.use(express.json());
 // Config: where to look for data files and schemas (independent of process cwd)
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const DATA_ROOT = path.resolve(repoRoot, 'data');
-const SCHEMA_ROOT = path.join(DATA_ROOT, 'schemas');
-const SCHEMA_LIFECYCLE_PATH = path.join(DATA_ROOT, 'schema-lifecycle.json');
+const SERVICES_ROOT = path.join(DATA_ROOT, 'services');
+const LIBRARIAN_SERVICE_ROOT = path.join(SERVICES_ROOT, 'librarian');
+const SCHEMA_ROOT = path.join(LIBRARIAN_SERVICE_ROOT, 'schemas');
+const SCHEMA_LIFECYCLE_PATH = path.join(LIBRARIAN_SERVICE_ROOT, 'schema-lifecycle.json');
+const MAPPER_RULESETS_PATH = path.join(LIBRARIAN_SERVICE_ROOT, 'mapper-rulesets.json');
+const DATA_TYPES_PATH = path.join(LIBRARIAN_SERVICE_ROOT, 'data-types.json');
+
+const LEGACY_SCHEMA_ROOT = path.join(DATA_ROOT, 'schemas');
+const LEGACY_SCHEMA_LIFECYCLE_PATH = path.join(DATA_ROOT, 'schema-lifecycle.json');
+const LEGACY_MAPPER_RULESETS_PATH = path.join(DATA_ROOT, 'mapper-rulesets.json');
+const LEGACY_DATA_TYPES_PATH = path.join(DATA_ROOT, 'data-types.json');
+
+async function pathExists(targetPath) {
+  try {
+    await fs.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function migrateLegacyPath(legacyPath, nextPath) {
+  if (await pathExists(nextPath)) return;
+  if (!(await pathExists(legacyPath))) return;
+  await fs.mkdir(path.dirname(nextPath), { recursive: true });
+  await fs.rename(legacyPath, nextPath);
+}
+
+async function ensureLibrarianStorageLayout() {
+  await fs.mkdir(LIBRARIAN_SERVICE_ROOT, { recursive: true });
+
+  await migrateLegacyPath(LEGACY_SCHEMA_ROOT, SCHEMA_ROOT);
+  await migrateLegacyPath(LEGACY_SCHEMA_LIFECYCLE_PATH, SCHEMA_LIFECYCLE_PATH);
+  await migrateLegacyPath(LEGACY_MAPPER_RULESETS_PATH, MAPPER_RULESETS_PATH);
+  await migrateLegacyPath(LEGACY_DATA_TYPES_PATH, DATA_TYPES_PATH);
+
+  await fs.mkdir(SCHEMA_ROOT, { recursive: true });
+}
 
 // Utility: Recursively list files with metadata, with optional filter
 async function listFiles(dir, relBase = '', filter = null) {
   let results = [];
-  const entries = await fs.readdir(dir, { withFileTypes: true });
+  let entries = [];
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch (e) {
+    if (e?.code === 'ENOENT') return results;
+    throw e;
+  }
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
     const relPath = path.join(relBase, entry.name);
@@ -498,6 +540,14 @@ const LIBRARIAN_LLM_ACTIONS = [
     description: 'Search cataloged files by name and extension.',
     requestSchema: { query: { q: 'string?', ext: 'string?' } },
     responseShape: { files: 'array' }
+  },
+  {
+    id: 'listMapperRulesets',
+    method: 'GET',
+    path: '/api/librarian/mapper-rulesets',
+    description: 'List mapper rulesets used to constrain source->destination map transforms.',
+    requestSchema: null,
+    responseShape: { rulesets: [{ id: 'string', sourcePatterns: 'string[]', targetPatterns: 'string[]' }] }
   }
 ];
 
@@ -527,7 +577,8 @@ app.get('/api/librarian/llm/base', (req, res) => {
       actions: '/api/librarian/llm/actions',
       actionSchema: '/api/librarian/llm/actions/:id',
       schemaCatalog: '/api/librarian/schemas',
-      dataTypes: '/api/librarian/data-types'
+      dataTypes: '/api/librarian/data-types',
+      mapperRulesets: '/api/librarian/mapper-rulesets'
     }
   });
 });
@@ -551,7 +602,7 @@ app.get('/api/librarian/llm/actions/:id', (req, res) => {
 // List all files
 app.get('/api/librarian/files', async (req, res) => {
   try {
-    const files = await listFiles(DATA_ROOT);
+    const files = await listFiles(LIBRARIAN_SERVICE_ROOT);
     res.json({ files });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -562,7 +613,7 @@ app.get('/api/librarian/files', async (req, res) => {
 app.get('/api/librarian/search', async (req, res) => {
   const { q = '', ext = '' } = req.query;
   try {
-    let files = await listFiles(DATA_ROOT);
+    let files = await listFiles(LIBRARIAN_SERVICE_ROOT);
     if (q) files = files.filter(f => f.name.toLowerCase().includes(q.toLowerCase()));
     if (ext) files = files.filter(f => f.ext === ext.replace(/^\./, ''));
     res.json({ files });
@@ -575,13 +626,30 @@ app.get('/api/librarian/search', async (req, res) => {
 app.use('/api/librarian/file', async (req, res) => {
   const relPath = req.path.replace(/^\//, '');
   if (!relPath) return res.status(400).json({ error: 'No file path specified' });
-  const absPath = path.resolve(DATA_ROOT, relPath);
-  // Security: ensure the resolved path is under DATA_ROOT
-  if (!absPath.startsWith(path.resolve(DATA_ROOT))) {
-    return res.status(403).json({ error: 'Access denied' });
+
+  const candidates = [
+    path.resolve(LIBRARIAN_SERVICE_ROOT, relPath),
+    path.resolve(SCHEMA_ROOT, relPath),
+  ];
+  const allowedRoots = [path.resolve(LIBRARIAN_SERVICE_ROOT), path.resolve(SCHEMA_ROOT)];
+
+  let absPath = null;
+  for (const candidate of candidates) {
+    if (!allowedRoots.some(root => candidate.startsWith(root))) continue;
+    try {
+      await fs.access(candidate);
+      absPath = candidate;
+      break;
+    } catch {
+      // Try next candidate.
+    }
   }
+
+  if (!absPath) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+
   try {
-    await fs.access(absPath);
     res.sendFile(absPath);
   } catch (e) {
     res.status(404).json({ error: 'File not found' });
@@ -650,25 +718,154 @@ app.get('/api/librarian/schema/:type/:name', async (req, res) => {
 });
 
 // --- Data Types Registry ---
-const DATA_TYPES_PATH = path.join(DATA_ROOT, 'data-types.json');
-const BUILTIN_TYPES = [
-  { id: 'text-string', label: 'Text String', builtin: true },
-];
 
 async function loadDataTypes() {
-  try {
-    const content = await fs.readFile(DATA_TYPES_PATH, 'utf-8');
-    const stored = JSON.parse(content);
-    const customTypes = Array.isArray(stored) ? stored.filter(t => !t.builtin) : [];
-    return [...BUILTIN_TYPES, ...customTypes];
-  } catch {
-    return [...BUILTIN_TYPES];
+  async function readTypesFromFile(targetPath) {
+    try {
+      const content = await fs.readFile(targetPath, 'utf-8');
+      const stored = JSON.parse(content);
+      const list = Array.isArray(stored) ? stored : [];
+      return list
+        .map(normalizeDataTypeRecord)
+        .filter((item) => !!item);
+    } catch {
+      return [];
+    }
   }
+
+  const primaryTypes = await readTypesFromFile(DATA_TYPES_PATH);
+  if (primaryTypes.length > 0) {
+    return primaryTypes;
+  }
+
+  const legacyTypes = await readTypesFromFile(LEGACY_DATA_TYPES_PATH);
+  if (legacyTypes.length > 0) {
+    // Backfill the new location so subsequent reads use the canonical path.
+    await saveDataTypes(legacyTypes);
+    return legacyTypes;
+  }
+
+  return [];
 }
 
 async function saveDataTypes(types) {
-  await fs.mkdir(DATA_ROOT, { recursive: true });
-  await fs.writeFile(DATA_TYPES_PATH, JSON.stringify(types.filter(t => !t.builtin), null, 2));
+  await fs.mkdir(LIBRARIAN_SERVICE_ROOT, { recursive: true });
+  const normalized = (Array.isArray(types) ? types : [])
+    .map(normalizeDataTypeRecord)
+    .filter((item) => !!item);
+  await fs.writeFile(DATA_TYPES_PATH, JSON.stringify(normalized, null, 2));
+}
+
+const ISO_TYPE_PREFIXES = [
+  'pacs', 'camt', 'pain', 'head', 'remt',
+  'acmt', 'admi', 'auth', 'caaa', 'caam',
+  'cain', 'catm', 'catp', 'reda', 'secl',
+  'seev', 'semt', 'tsin'
+];
+
+function inferIsoTypeFromId(idValue) {
+  const id = String(idValue || '').trim().toLowerCase();
+  if (!id) return false;
+  return ISO_TYPE_PREFIXES.some((prefix) => id === prefix || id.startsWith(`${prefix}.`) || id.startsWith(`${prefix}-`));
+}
+
+function normalizeDataTypeRecord(candidate) {
+  if (!candidate || typeof candidate !== 'object') return null;
+  const id = String(candidate.id || '').trim().toLowerCase();
+  if (!id) return null;
+  const label = String(candidate.label || id).trim() || id;
+  const builtin = candidate.builtin === true;
+  const isIso = typeof candidate.isIso === 'boolean' ? candidate.isIso : inferIsoTypeFromId(id);
+  const next = {
+    ...candidate,
+    id,
+    label,
+    builtin,
+    isIso,
+  };
+  return next;
+}
+
+function sanitizeMapperPattern(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  return raw.replace(/\s+/g, '');
+}
+
+function sanitizeMapperPatternList(values) {
+  const list = Array.isArray(values) ? values : String(values || '').split(',');
+  const unique = new Set();
+  for (const value of list) {
+    const normalized = sanitizeMapperPattern(value);
+    if (!normalized) continue;
+    unique.add(normalized);
+  }
+  return Array.from(unique);
+}
+
+function normalizeMapperRulesetPayload(candidate, options = {}) {
+  const requireId = options.requireId !== false;
+  const requireLabel = options.requireLabel !== false;
+  const source = candidate && typeof candidate === 'object' ? candidate : {};
+
+  const idRaw = String(source.id || '').trim();
+  const id = idRaw.toUpperCase().replace(/[^A-Z0-9_]/g, '_').replace(/_{2,}/g, '_').replace(/^_+|_+$/g, '');
+  const label = String(source.label || '').trim();
+  const description = String(source.description || '').trim();
+  const sourcePatterns = sanitizeMapperPatternList(source.sourcePatterns);
+  const targetPatterns = sanitizeMapperPatternList(source.targetPatterns);
+  const recommended = source.recommended === true;
+  const priorityRaw = Number.parseInt(String(source.priority ?? '0'), 10);
+  const priority = Number.isFinite(priorityRaw) ? priorityRaw : 0;
+
+  if (requireId && !id) throw new Error('id is required');
+  if (requireLabel && !label) throw new Error('label is required');
+  if (sourcePatterns.length === 0) throw new Error('sourcePatterns must include at least one pattern');
+  if (targetPatterns.length === 0) throw new Error('targetPatterns must include at least one pattern');
+
+  return {
+    id,
+    label,
+    description,
+    sourcePatterns,
+    targetPatterns,
+    recommended,
+    priority,
+  };
+}
+
+async function loadStoredMapperRulesets() {
+  try {
+    const content = await fs.readFile(MAPPER_RULESETS_PATH, 'utf-8');
+    const parsed = JSON.parse(content);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveStoredMapperRulesets(rulesets) {
+  await fs.mkdir(LIBRARIAN_SERVICE_ROOT, { recursive: true });
+  await fs.writeFile(MAPPER_RULESETS_PATH, JSON.stringify(rulesets, null, 2));
+}
+
+async function loadMapperRulesets() {
+  const stored = await loadStoredMapperRulesets();
+  const byId = new Map();
+
+  for (const item of stored) {
+    try {
+      const normalized = normalizeMapperRulesetPayload(item);
+      byId.set(normalized.id, normalized);
+    } catch {
+      // Ignore malformed stored entries.
+    }
+  }
+
+  return Array.from(byId.values()).sort((a, b) => {
+    const priorityDelta = Number(b.priority || 0) - Number(a.priority || 0);
+    if (priorityDelta !== 0) return priorityDelta;
+    return String(a.id || '').localeCompare(String(b.id || ''));
+  });
 }
 
 app.get('/api/librarian/data-types', async (req, res) => {
@@ -682,15 +879,19 @@ app.get('/api/librarian/data-types', async (req, res) => {
 
 app.post('/api/librarian/data-types', async (req, res) => {
   try {
-    const { id, label } = req.body || {};
+    const { id, label, isIso } = req.body || {};
     if (!id || !label) return res.status(400).json({ error: 'id and label are required' });
     const cleanId = String(id).toLowerCase().replace(/[^a-z0-9-]/g, '-');
-    if (cleanId === 'text-string') return res.status(409).json({ error: 'text-string is a built-in type' });
     const types = await loadDataTypes();
     if (types.some(t => t.id === cleanId)) {
       return res.status(409).json({ error: `Type ${cleanId} already exists` });
     }
-    const newType = { id: cleanId, label: String(label), builtin: false };
+    const newType = normalizeDataTypeRecord({
+      id: cleanId,
+      label: String(label),
+      builtin: false,
+      isIso: typeof isIso === 'boolean' ? isIso : inferIsoTypeFromId(cleanId)
+    });
     types.push(newType);
     await saveDataTypes(types);
     res.json({ status: 'created', type: newType });
@@ -703,7 +904,6 @@ app.delete('/api/librarian/data-types/:id', async (req, res) => {
   try {
     const id = String(req.params.id || '').trim().toLowerCase();
     if (!id) return res.status(400).json({ error: 'id is required' });
-    if (id === 'text-string') return res.status(409).json({ error: 'text-string is a built-in type' });
 
     const types = await loadDataTypes();
     const nextTypes = types.filter(type => String(type.id || '').toLowerCase() !== id);
@@ -725,8 +925,6 @@ app.post('/api/librarian/data-types/:id/rename', async (req, res) => {
     const nextLabel = String(req.body?.label || '').trim();
     if (!currentId) return res.status(400).json({ error: 'id is required' });
     if (!nextId) return res.status(400).json({ error: 'newId is required' });
-    if (currentId === 'text-string') return res.status(409).json({ error: 'text-string is a built-in type' });
-    if (nextId === 'text-string') return res.status(409).json({ error: 'text-string is a built-in type' });
 
     const types = await loadDataTypes();
     const typeIndex = types.findIndex(type => String(type.id || '').toLowerCase() === currentId);
@@ -742,10 +940,126 @@ app.post('/api/librarian/data-types/:id/rename', async (req, res) => {
       ...currentType,
       id: nextId,
       label: nextLabel || currentType.label || nextId,
+      isIso: typeof req.body?.isIso === 'boolean' ? req.body.isIso : currentType.isIso,
     };
-    types[typeIndex] = updatedType;
+    types[typeIndex] = normalizeDataTypeRecord(updatedType);
     await saveDataTypes(types);
     res.json({ status: 'renamed', type: updatedType });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.patch('/api/librarian/data-types/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim().toLowerCase();
+    if (!id) return res.status(400).json({ error: 'id is required' });
+
+    const types = await loadDataTypes();
+    const typeIndex = types.findIndex(type => String(type.id || '').toLowerCase() === id);
+    if (typeIndex < 0) return res.status(404).json({ error: 'Type not found' });
+
+    const currentType = types[typeIndex];
+    const nextType = normalizeDataTypeRecord({
+      ...currentType,
+      label: req.body?.label ?? currentType.label,
+      isIso: typeof req.body?.isIso === 'boolean' ? req.body.isIso : currentType.isIso,
+    });
+    types[typeIndex] = nextType;
+    await saveDataTypes(types);
+    res.json({ status: 'updated', type: nextType });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/librarian/mapper-rulesets', async (req, res) => {
+  try {
+    const rulesets = await loadMapperRulesets();
+    res.json({ rulesets });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/librarian/mapper-rulesets', async (req, res) => {
+  try {
+    const normalized = normalizeMapperRulesetPayload(req.body || {});
+    const existing = await loadMapperRulesets();
+    if (existing.some((item) => String(item.id || '') === normalized.id)) {
+      return res.status(409).json({ error: `Ruleset ${normalized.id} already exists` });
+    }
+
+    const stored = await loadStoredMapperRulesets();
+    stored.push(normalized);
+    await saveStoredMapperRulesets(stored);
+
+    res.json({ status: 'created', ruleset: normalized });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.put('/api/librarian/mapper-rulesets/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim().toUpperCase();
+    if (!id) return res.status(400).json({ error: 'id is required' });
+
+    const allRulesets = await loadMapperRulesets();
+    const existing = allRulesets.find((item) => String(item.id || '') === id);
+    if (!existing) return res.status(404).json({ error: 'Ruleset not found' });
+
+    const requestedId = String(req.body?.id || id).trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_').replace(/_{2,}/g, '_').replace(/^_+|_+$/g, '');
+    if (!requestedId) return res.status(400).json({ error: 'id is required' });
+
+    const normalized = normalizeMapperRulesetPayload({
+      ...(req.body || {}),
+      id: requestedId,
+      label: req.body?.label ?? existing.label,
+      description: req.body?.description ?? existing.description,
+      sourcePatterns: req.body?.sourcePatterns ?? existing.sourcePatterns,
+      targetPatterns: req.body?.targetPatterns ?? existing.targetPatterns,
+      recommended: req.body?.recommended ?? existing.recommended,
+      priority: req.body?.priority ?? existing.priority,
+    });
+
+    const duplicate = allRulesets.some((item) => String(item.id || '') === normalized.id && String(item.id || '') !== id);
+    if (duplicate) {
+      return res.status(409).json({ error: `Ruleset ${normalized.id} already exists` });
+    }
+
+    const stored = await loadStoredMapperRulesets();
+    const storedIndex = stored.findIndex((item) => String(item.id || '').trim().toUpperCase() === id);
+    if (storedIndex < 0) {
+      stored.push(normalized);
+    } else {
+      stored[storedIndex] = normalized;
+    }
+
+    await saveStoredMapperRulesets(stored);
+    res.json({ status: 'updated', ruleset: normalized });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.delete('/api/librarian/mapper-rulesets/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim().toUpperCase();
+    if (!id) return res.status(400).json({ error: 'id is required' });
+
+    const allRulesets = await loadMapperRulesets();
+    const existing = allRulesets.find((item) => String(item.id || '') === id);
+    if (!existing) return res.status(404).json({ error: 'Ruleset not found' });
+
+    const stored = await loadStoredMapperRulesets();
+    const next = stored.filter((item) => String(item.id || '').trim().toUpperCase() !== id);
+    if (next.length === stored.length) {
+      return res.status(404).json({ error: 'Ruleset not found' });
+    }
+
+    await saveStoredMapperRulesets(next);
+    res.json({ status: 'deleted', id });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -818,7 +1132,7 @@ app.post('/api/librarian/schemas/rename', async (req, res) => {
 });
 
 // Upload a file into the librarian repository
-// :dest = 'schemas' (writes to SCHEMA_ROOT) or 'data' (writes to DATA_ROOT)
+// :dest = 'schemas' (writes to SCHEMA_ROOT) or 'data' (writes to LIBRARIAN_SERVICE_ROOT)
 app.post('/api/librarian/upload/:dest', express.raw({ type: '*/*', limit: '50mb' }), async (req, res) => {
   const dest = req.params.dest;
   if (dest !== 'schemas' && dest !== 'data') {
@@ -830,7 +1144,7 @@ app.post('/api/librarian/upload/:dest', express.raw({ type: '*/*', limit: '50mb'
   if (/[/\\]/.test(rawFilename) || rawFilename.includes('..')) {
     return res.status(400).json({ error: 'Invalid filename' });
   }
-  const targetDir = dest === 'schemas' ? SCHEMA_ROOT : DATA_ROOT;
+  const targetDir = dest === 'schemas' ? SCHEMA_ROOT : LIBRARIAN_SERVICE_ROOT;
   const targetPath = path.join(targetDir, rawFilename);
   // Final safety check: resolved path must stay inside targetDir
   if (!path.resolve(targetPath).startsWith(path.resolve(targetDir))) {
@@ -892,7 +1206,14 @@ app.post('/api/librarian/schema-lifecycle', async (req, res) => {
   }
 });
 
-const PORT = readEnvNumber('LIBRARIAN_PORT', 4100);
+const PORT = readEnvNumber('LIBRARIAN_PORT', 4300);
+
+try {
+  await ensureLibrarianStorageLayout();
+} catch (e) {
+  console.warn(`[Librarian] Storage layout initialization warning: ${e.message}`);
+}
+
 app.listen(PORT, () => {
   console.log(`[Librarian] Service running on http://localhost:${PORT}`);
 });

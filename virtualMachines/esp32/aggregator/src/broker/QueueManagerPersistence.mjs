@@ -2,6 +2,7 @@
 // Handles persistence for QueueManager (configs and operations)
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 
 function sleepSync(ms) {
   const waitMs = Math.max(0, Number(ms) || 0);
@@ -28,7 +29,77 @@ export class QueueManagerPersistence {
     this.maxSeq = (1n << 64n) - 1n;
     this.seqPadWidth = String(this.maxSeq).length;
     this.counterCache = new Map();
+    this.dataSigningKey = String(process.env.BROKER_DATA_SIGNING_KEY || '').trim();
+    this.signingEnabled = this.dataSigningKey.length > 0;
     this.ensureDirectories();
+  }
+
+  getSignaturePath(filePath) {
+    return `${filePath}.sig`;
+  }
+
+  computeDigest(content) {
+    return crypto
+      .createHmac('sha256', this.dataSigningKey)
+      .update(String(content || ''), 'utf-8')
+      .digest('hex');
+  }
+
+  digestsMatch(leftHex, rightHex) {
+    try {
+      const left = Buffer.from(String(leftHex || ''), 'hex');
+      const right = Buffer.from(String(rightHex || ''), 'hex');
+      if (left.length === 0 || right.length === 0 || left.length !== right.length) return false;
+      return crypto.timingSafeEqual(left, right);
+    } catch {
+      return false;
+    }
+  }
+
+  signFile(filePath, content) {
+    if (!this.signingEnabled || !filePath) return;
+    const signaturePath = this.getSignaturePath(filePath);
+    const signature = {
+      algorithm: 'HMAC-SHA256',
+      digest: this.computeDigest(content),
+      signedAt: new Date().toISOString(),
+      queueManagerName: this.queueManagerName,
+    };
+    fs.writeFileSync(signaturePath, JSON.stringify(signature, null, 2));
+  }
+
+  readTextFileVerified(filePath, options = {}) {
+    const { bootstrapIfMissing = true, mismatchReason = 'invalid-signature', quarantineOnMismatch = false } = options;
+    const content = fs.readFileSync(filePath, 'utf-8');
+    if (!this.signingEnabled) return content;
+
+    const signaturePath = this.getSignaturePath(filePath);
+    if (!fs.existsSync(signaturePath)) {
+      if (bootstrapIfMissing) {
+        this.signFile(filePath, content);
+        return content;
+      }
+      throw new Error(`Missing signature for ${filePath}`);
+    }
+
+    let digest = '';
+    try {
+      const signatureRaw = fs.readFileSync(signaturePath, 'utf-8');
+      const signature = JSON.parse(signatureRaw);
+      digest = String(signature?.digest || '').trim().toLowerCase();
+    } catch {
+      digest = '';
+    }
+
+    const expectedDigest = this.computeDigest(content);
+    if (!this.digestsMatch(digest, expectedDigest)) {
+      if (quarantineOnMismatch) {
+        this.quarantineCorruptFile(filePath, mismatchReason);
+      }
+      throw new Error(`Signature mismatch for ${filePath}`);
+    }
+
+    return content;
   }
 
   ensureDirectories() {
@@ -105,6 +176,7 @@ export class QueueManagerPersistence {
           fs.copyFileSync(tmpPath, filePath);
           fs.unlinkSync(tmpPath);
         }
+        this.signFile(filePath, serialized);
         return;
       } catch (error) {
         lastError = error;
@@ -171,7 +243,11 @@ export class QueueManagerPersistence {
 
     if (fs.existsSync(counterPath)) {
       try {
-        const content = fs.readFileSync(counterPath, 'utf-8');
+        const content = this.readTextFileVerified(counterPath, {
+          bootstrapIfMissing: true,
+          mismatchReason: 'order-counter-invalid-signature',
+          quarantineOnMismatch: true,
+        });
         const parsed = JSON.parse(content);
         state = {
           era: Number(parsed.era || 0),
@@ -276,7 +352,11 @@ export class QueueManagerPersistence {
     for (const entry of parsedFiles) {
       const filePath = path.join(queueDir, entry.fileName);
       try {
-        const content = fs.readFileSync(filePath, 'utf-8');
+        const content = this.readTextFileVerified(filePath, {
+          bootstrapIfMissing: true,
+          mismatchReason: 'message-invalid-signature',
+          quarantineOnMismatch: true,
+        });
         const parsed = JSON.parse(content);
         messages.push({
           message: parsed.message,
@@ -300,11 +380,39 @@ export class QueueManagerPersistence {
     return messages;
   }
 
+  removeAllQueueMessageFiles(queueName) {
+    const queueDir = this.getQueueDir(queueName);
+    if (!fs.existsSync(queueDir)) return 0;
+
+    const files = fs.readdirSync(queueDir).filter(name => name.endsWith('.json') && name !== 'order-counter.json');
+    let removedCount = 0;
+
+    for (const fileName of files) {
+      const filePath = path.join(queueDir, fileName);
+      try {
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+          const signaturePath = this.getSignaturePath(filePath);
+          if (fs.existsSync(signaturePath)) fs.unlinkSync(signaturePath);
+          removedCount += 1;
+        }
+      } catch (error) {
+        if (error && error.code !== 'ENOENT') {
+          throw error;
+        }
+      }
+    }
+
+    return removedCount;
+  }
+
   removeMessageFile(filePath) {
     if (!filePath) return;
     if (fs.existsSync(filePath)) {
       try {
         fs.unlinkSync(filePath);
+        const signaturePath = this.getSignaturePath(filePath);
+        if (fs.existsSync(signaturePath)) fs.unlinkSync(signaturePath);
       } catch (error) {
         if (error && error.code !== 'ENOENT') {
           throw error;
@@ -324,14 +432,18 @@ export class QueueManagerPersistence {
   // Save queue manager configuration to disk
   saveConfig(queueConfig, configVersion) {
     const data = { queueConfig, configVersion, timestamp: Date.now() };
-    fs.writeFileSync(this.configPath, JSON.stringify(data, null, 2));
+    this.writeJsonAtomic(this.configPath, JSON.stringify(data, null, 2));
   }
 
   // Load queue manager configuration from disk
   loadConfig() {
     if (fs.existsSync(this.configPath)) {
       try {
-        const content = fs.readFileSync(this.configPath, 'utf-8');
+        const content = this.readTextFileVerified(this.configPath, {
+          bootstrapIfMissing: true,
+          mismatchReason: 'config-invalid-signature',
+          quarantineOnMismatch: true,
+        });
         return JSON.parse(content);
       } catch (e) {
         console.error(`Error loading config for ${this.queueManagerName}:`, e.message);
@@ -346,6 +458,10 @@ export class QueueManagerPersistence {
     try {
       const line = JSON.stringify(operation) + '\n';
       fs.appendFileSync(this.operationsPath, line);
+      if (this.signingEnabled && fs.existsSync(this.operationsPath)) {
+        const content = fs.readFileSync(this.operationsPath, 'utf-8');
+        this.signFile(this.operationsPath, content);
+      }
     } catch (e) {
       console.error(`Error appending operation for ${this.queueManagerName}:`, e.message);
     }
@@ -356,7 +472,11 @@ export class QueueManagerPersistence {
     const operations = [];
     if (fs.existsSync(this.operationsPath)) {
       try {
-        const content = fs.readFileSync(this.operationsPath, 'utf-8');
+        const content = this.readTextFileVerified(this.operationsPath, {
+          bootstrapIfMissing: true,
+          mismatchReason: 'operations-invalid-signature',
+          quarantineOnMismatch: false,
+        });
         const lines = content.split('\n').filter(line => line.trim());
         for (const line of lines) {
           try {
@@ -388,7 +508,11 @@ export class QueueManagerPersistence {
   loadSnapshot() {
     if (!fs.existsSync(this.snapshotPath)) return null;
     try {
-      const content = fs.readFileSync(this.snapshotPath, 'utf-8');
+      const content = this.readTextFileVerified(this.snapshotPath, {
+        bootstrapIfMissing: true,
+        mismatchReason: 'snapshot-invalid-signature',
+        quarantineOnMismatch: true,
+      });
       return JSON.parse(content);
     } catch (e) {
       console.error(`Error loading snapshot for ${this.queueManagerName}:`, e.message);
@@ -399,7 +523,7 @@ export class QueueManagerPersistence {
   replaceOperations(operations = []) {
     try {
       const lines = operations.map(op => JSON.stringify(op)).join('\n');
-      fs.writeFileSync(this.operationsPath, lines ? `${lines}\n` : '');
+      this.writeJsonAtomic(this.operationsPath, lines ? `${lines}\n` : '');
     } catch (e) {
       console.error(`Error compacting operations for ${this.queueManagerName}:`, e.message);
     }
@@ -411,6 +535,9 @@ export class QueueManagerPersistence {
       if (fs.existsSync(this.configPath)) fs.unlinkSync(this.configPath);
       if (fs.existsSync(this.operationsPath)) fs.unlinkSync(this.operationsPath);
       if (fs.existsSync(this.snapshotPath)) fs.unlinkSync(this.snapshotPath);
+      if (fs.existsSync(this.getSignaturePath(this.configPath))) fs.unlinkSync(this.getSignaturePath(this.configPath));
+      if (fs.existsSync(this.getSignaturePath(this.operationsPath))) fs.unlinkSync(this.getSignaturePath(this.operationsPath));
+      if (fs.existsSync(this.getSignaturePath(this.snapshotPath))) fs.unlinkSync(this.getSignaturePath(this.snapshotPath));
       if (fs.existsSync(this.messagesRoot)) fs.rmSync(this.messagesRoot, { recursive: true, force: true });
       this.counterCache.clear();
     } catch (e) {

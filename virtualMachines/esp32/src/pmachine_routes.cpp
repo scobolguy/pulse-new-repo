@@ -34,6 +34,30 @@ struct EdgeIngressConfig {
 
 EdgeIngressConfig gEdgeIngressConfig;
 bool gEdgeIngressConfigLoaded = false;
+bool gLittleFsReady = false;
+
+bool deserializeDocFromPath(const String& path, FederatedFileSystem* ffs, JsonDocument& doc);
+
+bool ensureLittleFsReady() {
+    if (gLittleFsReady) return true;
+
+#if defined(ARDUINO_ARCH_ESP8266)
+    if (LittleFS.begin()) {
+        gLittleFsReady = true;
+        return true;
+    }
+#else
+    if (LittleFS.begin()) {
+        gLittleFsReady = true;
+        return true;
+    }
+    if (LittleFS.begin(true)) {
+        gLittleFsReady = true;
+        return true;
+    }
+#endif
+    return false;
+}
 
 size_t clampSizeT(size_t value, size_t minValue, size_t maxValue) {
     if (value < minValue) return minValue;
@@ -43,6 +67,7 @@ size_t clampSizeT(size_t value, size_t minValue, size_t maxValue) {
 
 EdgeIngressConfig loadEdgeIngressConfig() {
     EdgeIngressConfig config;
+    if (!ensureLittleFsReady()) return config;
     File f = LittleFS.open("/ffs/.EdgeIngressConfig.json", "r");
     if (!f) {
         return config;
@@ -68,6 +93,7 @@ EdgeIngressConfig loadEdgeIngressConfig() {
 }
 
 bool saveEdgeIngressConfig(const EdgeIngressConfig& config) {
+    if (!ensureLittleFsReady()) return false;
     JsonDocument doc;
     doc["workerCount"] = static_cast<unsigned long>(config.workerCount);
     doc["queueLength"] = static_cast<unsigned long>(config.queueLength);
@@ -919,6 +945,256 @@ String xmlEscapeText(const String& value) {
     return out;
 }
 
+String resolveOutputDataTypeId(JsonObjectConst output) {
+    if (output["dataTypeId"].is<const char*>()) {
+        String v = trimCopy(String(output["dataTypeId"].as<const char*>()));
+        if (v.length() > 0) return v;
+    }
+    if (output["dataTypeIds"].is<JsonArrayConst>()) {
+        JsonArrayConst ids = output["dataTypeIds"].as<JsonArrayConst>();
+        for (JsonVariantConst id : ids) {
+            if (!id.is<const char*>()) continue;
+            String v = trimCopy(String(id.as<const char*>()));
+            if (v.length() > 0) return v;
+        }
+    }
+    return "";
+}
+
+void appendIndent(String& out, int indent) {
+    for (int i = 0; i < indent; i += 1) out += ' ';
+}
+
+void appendXmlNode(String& out, const String& name, JsonVariantConst value, int indent) {
+    appendIndent(out, indent);
+
+    if (value.isNull()) {
+        out += "<" + name + "></" + name + ">\n";
+        return;
+    }
+
+    if (value.is<const char*>()) {
+        out += "<" + name + ">" + xmlEscapeText(String(value.as<const char*>())) + "</" + name + ">\n";
+        return;
+    }
+    if (value.is<String>()) {
+        out += "<" + name + ">" + xmlEscapeText(value.as<String>()) + "</" + name + ">\n";
+        return;
+    }
+    if (value.is<long>() || value.is<unsigned long>() || value.is<float>() || value.is<double>() || value.is<bool>()) {
+        out += "<" + name + ">" + xmlEscapeText(value.as<String>()) + "</" + name + ">\n";
+        return;
+    }
+
+    if (value.is<JsonArrayConst>()) {
+        JsonArrayConst arr = value.as<JsonArrayConst>();
+        for (JsonVariantConst item : arr) {
+            appendXmlNode(out, name, item, indent);
+        }
+        return;
+    }
+
+    if (!value.is<JsonObjectConst>()) {
+        out += "<" + name + ">" + xmlEscapeText(value.as<String>()) + "</" + name + ">\n";
+        return;
+    }
+
+    JsonObjectConst obj = value.as<JsonObjectConst>();
+    std::vector<String> attrs;
+    String textValue = "";
+    int childCount = 0;
+
+    for (JsonPairConst pair : obj) {
+        String key = String(pair.key().c_str());
+        if (key.startsWith("@")) {
+            attrs.push_back(key.substring(1) + "=\"" + xmlEscapeText(pair.value().as<String>()) + "\"");
+        } else if (key == "#text") {
+            textValue = pair.value().as<String>();
+        } else {
+            childCount += 1;
+        }
+    }
+
+    out += "<" + name;
+    for (const auto& attr : attrs) {
+        out += " " + attr;
+    }
+
+    if (childCount == 0) {
+        out += ">" + xmlEscapeText(textValue) + "</" + name + ">\n";
+        return;
+    }
+
+    out += ">\n";
+    for (JsonPairConst pair : obj) {
+        String key = String(pair.key().c_str());
+        if (key.startsWith("@") || key == "#text") continue;
+        appendXmlNode(out, key, pair.value(), indent + 2);
+    }
+    appendIndent(out, indent);
+    out += "</" + name + ">\n";
+}
+
+String jsonObjectToXmlDocument(JsonObjectConst rootObj) {
+    String xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
+    for (JsonPairConst pair : rootObj) {
+        appendXmlNode(xml, String(pair.key().c_str()), pair.value(), 0);
+    }
+    return xml;
+}
+
+bool inferIsoTypeId(const String& dataTypeId) {
+    const String normalized = toLowerCopy(trimCopy(dataTypeId));
+    if (normalized.isEmpty()) return false;
+
+    static const char* kIsoPrefixes[] = {
+        "pacs", "camt", "pain", "head", "remt",
+        "acmt", "admi", "auth", "caaa", "caam",
+        "cain", "catm", "catp", "reda", "secl",
+        "seev", "semt", "tsin"
+    };
+
+    for (const char* prefix : kIsoPrefixes) {
+        const String p = String(prefix);
+        if (normalized == p || normalized.startsWith(p + ".") || normalized.startsWith(p + "-")) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool loadPersistedIsoTypeFlag(const String& dataTypeId, FederatedFileSystem* ffs, bool& isIsoOut) {
+    const String normalized = toLowerCopy(trimCopy(dataTypeId));
+    if (normalized.isEmpty()) return false;
+
+    static const char* kCandidatePaths[] = {
+        "/services/librarian/data-types.json",
+        "/data-types.json"
+    };
+
+    for (const char* candidate : kCandidatePaths) {
+        JsonDocument doc;
+        if (!deserializeDocFromPath(String(candidate), ffs, doc)) {
+            continue;
+        }
+        if (!doc.is<JsonArray>()) {
+            continue;
+        }
+
+        for (JsonObjectConst item : doc.as<JsonArrayConst>()) {
+            const String id = toLowerCopy(trimCopy(String(item["id"] | "")));
+            if (id != normalized) continue;
+
+            if (item["isIso"].is<bool>()) {
+                isIsoOut = item["isIso"].as<bool>();
+                return true;
+            }
+
+            isIsoOut = inferIsoTypeId(normalized);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool isIsoDataTypeId(const String& dataTypeId, FederatedFileSystem* ffs) {
+    bool persistedValue = false;
+    if (loadPersistedIsoTypeFlag(dataTypeId, ffs, persistedValue)) {
+        return persistedValue;
+    }
+    return inferIsoTypeId(dataTypeId);
+}
+
+String resolveIsoXmlNamespace(const String& dataTypeId, JsonObjectConst document) {
+    const String normalized = toLowerCopy(trimCopy(dataTypeId));
+    if (normalized == "pacs" || normalized.startsWith("pacs")) {
+        if (document["FIToFICdtTrf"].is<JsonObject>()) {
+            return "urn:iso:std:iso:20022:tech:xsd:pacs.009.001.10";
+        }
+        return "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.10";
+    }
+    if (normalized == "camt" || normalized.startsWith("camt")) {
+        if (document["BkToCstmrAcctRpt"].is<JsonObject>()) {
+            return "urn:iso:std:iso:20022:tech:xsd:camt.052.001.14";
+        }
+        if (document["BkToCstmrDbtCdtNtfctn"].is<JsonObject>()) {
+            return "urn:iso:std:iso:20022:tech:xsd:camt.054.001.14";
+        }
+        return "urn:iso:std:iso:20022:tech:xsd:camt.053.001.14";
+    }
+    return "";
+}
+
+void ensureIsoNamespaces(const String& dataTypeId, JsonObject document) {
+    const String normalized = toLowerCopy(trimCopy(dataTypeId));
+    const String ns = resolveIsoXmlNamespace(normalized, document);
+    if (ns.length() > 0 && !document["@xmlns"].is<const char*>()) {
+        document["@xmlns"] = ns;
+    }
+    if (!document["@xmlns:xsi"].is<const char*>()) {
+        document["@xmlns:xsi"] = "http://www.w3.org/2001/XMLSchema-instance";
+    }
+
+    if (normalized == "pacs" || normalized.startsWith("pacs")) {
+        if (!document["@xmlns:hdr"].is<const char*>()) {
+            document["@xmlns:hdr"] = "urn:swift:xsd:head.001.001.02";
+        }
+
+        String msgId = "";
+        if (document["FIToFICstmrCdtTrf"].is<JsonObject>()) {
+            JsonObject tx = document["FIToFICstmrCdtTrf"].as<JsonObject>();
+            if (tx["GrpHdr"].is<JsonObject>()) {
+                JsonObject grp = tx["GrpHdr"].as<JsonObject>();
+                if (grp["MsgId"].is<const char*>()) {
+                    msgId = String(grp["MsgId"].as<const char*>());
+                }
+            }
+        }
+
+        if (msgId.length() > 0 && !document["hdr:AppHdr"].is<JsonObject>()) {
+            JsonObject appHdr = document["hdr:AppHdr"].to<JsonObject>();
+            appHdr["hdr:BizMsgIdr"] = msgId;
+        }
+    }
+}
+
+bool maybeShapeIsoToXml(const String& dataTypeId, const String& routedMessage, FederatedFileSystem* ffs, String& shapedOut, String& warningOut) {
+    shapedOut = routedMessage;
+    warningOut = "";
+
+    if (!isIsoDataTypeId(dataTypeId, ffs)) {
+        return false;
+    }
+
+    String trimmed = trimCopy(routedMessage);
+    if (!trimmed.startsWith("{")) {
+        warningOut = "iso output is not JSON object; left unchanged";
+        return false;
+    }
+
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, trimmed);
+    if (err || !doc.is<JsonObject>()) {
+        warningOut = "iso output JSON parse failed; left unchanged";
+        return false;
+    }
+
+    JsonObject root = doc.as<JsonObject>();
+    if (!root["Document"].is<JsonObject>()) {
+        warningOut = "iso output missing Document object; left unchanged";
+        return false;
+    }
+
+    JsonObject document = root["Document"].as<JsonObject>();
+    ensureIsoNamespaces(dataTypeId, document);
+
+    JsonObjectConst rootConst = root;
+    shapedOut = jsonObjectToXmlDocument(rootConst);
+    return true;
+}
+
 String requestMethodName(const AsyncWebServerRequest* request) {
     if (request == nullptr) return "";
     WebRequestMethodComposite method = request->method();
@@ -989,9 +1265,12 @@ String buildPacsXmlFromMt(const String& normalizedMessage, const String& message
         : "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.10";
 
     String xml;
-    xml.reserve(900);
+    xml.reserve(1200);
     xml += "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
-    xml += "<Document xmlns=\"" + pacsNs + "\">\n";
+    xml += "<Document xmlns=\"" + pacsNs + "\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:hdr=\"urn:swift:xsd:head.001.001.02\">\n";
+    xml += "  <hdr:AppHdr>\n";
+    xml += "    <hdr:BizMsgIdr>" + xmlEscapeText(txId) + "</hdr:BizMsgIdr>\n";
+    xml += "  </hdr:AppHdr>\n";
     xml += "  <FIToFICstmrCdtTrf>\n";
     xml += "    <GrpHdr>\n";
     xml += "      <MsgId>" + xmlEscapeText(txId) + "</MsgId>\n";
@@ -1019,6 +1298,7 @@ bool deserializeDocFromPath(const String& path, FederatedFileSystem* ffs, JsonDo
         }
     }
 
+    if (!ensureLittleFsReady()) return false;
     File f = LittleFS.open(path, "r");
     if (!f) return false;
     DeserializationError err = deserializeJson(doc, f);
@@ -1039,6 +1319,7 @@ bool readTextFromPath(const String& path, FederatedFileSystem* ffs, String& outT
         }
     }
 
+    if (!ensureLittleFsReady()) return false;
     File f = LittleFS.open(path, "r");
     if (!f) return false;
     outText = f.readString();
@@ -1818,6 +2099,28 @@ struct EdgeIngressWorkerContext {
     EdgeIngressExecutionCache executionCache;
 };
 
+struct RouterAsyncTask {
+    String jobId;
+    String inputQueue;
+    String message;
+    String serviceId;
+    String rulesPath;
+    String mappingsPath;
+    String requestMethodUpper;
+};
+
+struct RouterAsyncResult {
+    String state;
+    int statusCode;
+    String contentType;
+    String body;
+    unsigned long updatedAtMs;
+};
+
+struct RouterWorkerContext {
+    FederatedFileSystem* ffs;
+};
+
 QueueHandle_t gEdgeIngressAsyncQueue = nullptr;
 SemaphoreHandle_t gEdgeIngressAsyncResultsMutex = nullptr;
 std::vector<TaskHandle_t> gEdgeIngressWorkerTasks;
@@ -1825,6 +2128,36 @@ std::vector<EdgeIngressWorkerContext> gEdgeIngressWorkerContexts;
 std::map<String, EdgeIngressAsyncResult> gEdgeIngressAsyncResults;
 std::deque<String> gEdgeIngressAsyncResultOrder;
 uint32_t gEdgeIngressJobCounter = 0;
+QueueHandle_t gRouterAsyncQueue = nullptr;
+SemaphoreHandle_t gRouterAsyncResultsMutex = nullptr;
+std::vector<TaskHandle_t> gRouterWorkerTasks;
+std::vector<RouterWorkerContext> gRouterWorkerContexts;
+std::map<String, RouterAsyncResult> gRouterAsyncResults;
+std::deque<String> gRouterAsyncResultOrder;
+uint32_t gRouterJobCounter = 0;
+
+struct RouterRunExecutionResult {
+    int statusCode = 200;
+    String contentType = "application/json";
+    String body;
+};
+
+RouterRunExecutionResult executeRouterRun(
+    FederatedFileSystem* ffs,
+    const String& inputQueue,
+    const String& message,
+    const String& serviceId,
+    String rulesPath,
+    String mappingsPath,
+    const String& requestMethodUpper
+);
+
+void trimRouterAsyncResultsLocked();
+void upsertRouterAsyncResult(const String& jobId, const RouterAsyncResult& value);
+bool readRouterAsyncResult(const String& jobId, RouterAsyncResult& outResult);
+String makeRouterJobId();
+void routerAsyncWorker(void* rawContext);
+void ensureRouterAsyncWorkerStarted(FederatedFileSystem* ffs);
 
 size_t clearEdgeIngressExecutionCaches() {
     size_t cleared = 0;
@@ -1980,6 +2313,222 @@ void ensureEdgeIngressAsyncWorkerStarted(pmachine::PMachine& machine, FederatedF
         } else {
             Serial.print("[edge_ingress_async] worker creation failed index=");
             Serial.println((unsigned long)i);
+        }
+    }
+}
+
+RouterRunExecutionResult executeRouterRun(
+    FederatedFileSystem* ffs,
+    const String& inputQueue,
+    const String& message,
+    const String& serviceId,
+    String rulesPath,
+    String mappingsPath,
+    const String& requestMethodUpper
+) {
+    RouterRunExecutionResult exec;
+
+    JsonDocument rulesDoc;
+    JsonArrayConst rules;
+    if (!loadRouterRulesArray(rulesPath, ffs, rulesDoc, rules)) {
+        const String fallbackRulesPath = "/hrr.json";
+        if (!(rulesPath == fallbackRulesPath && loadRouterRulesArray(fallbackRulesPath, ffs, rulesDoc, rules))) {
+            exec.statusCode = 404;
+            exec.contentType = "text/plain";
+            exec.body = "Unable to load router rules file (expected /router-rules.generated.json or /hrr.json)";
+            return exec;
+        }
+        rulesPath = fallbackRulesPath;
+    }
+
+    JsonDocument mappingsDoc;
+    JsonArrayConst mappings;
+    if (!loadMappingsArray(mappingsPath, ffs, mappingsDoc, mappings)) {
+        if (!(rulesDoc.is<JsonObject>() && rulesDoc["dataMappings"].is<JsonArray>())) {
+            const String fallbackMappingsPath = "/hdm.json";
+            if (!loadMappingsArray(fallbackMappingsPath, ffs, mappingsDoc, mappings)) {
+                exec.statusCode = 404;
+                exec.contentType = "text/plain";
+                exec.body = "Unable to load mappings file (expected /data-mappings.generated.json or /hdm.json)";
+                return exec;
+            }
+            mappingsPath = fallbackMappingsPath;
+        } else {
+            mappingsPath = rulesPath + "#embedded:dataMappings";
+        }
+        if (rulesDoc.is<JsonObject>() && rulesDoc["dataMappings"].is<JsonArray>()) {
+            mappings = rulesDoc["dataMappings"].as<JsonArrayConst>();
+        }
+    }
+
+    JsonDocument outDoc;
+    outDoc["inputQueue"] = inputQueue;
+    outDoc["serviceId"] = serviceId;
+    outDoc["rulesFile"] = rulesPath;
+    outDoc["mappingsFile"] = mappingsPath;
+    outDoc["sourceMessage"] = message;
+
+    int matchedRuleCount = 0;
+    int publishedCount = 0;
+    JsonArray deliveries = outDoc["deliveries"].to<JsonArray>();
+
+    for (JsonObjectConst rule : rules) {
+        bool enabled = !rule["enabled"].is<bool>() || rule["enabled"].as<bool>();
+        if (!enabled) continue;
+
+        const char* inQueue = rule["inputQueue"] | "";
+        if (String(inQueue) != inputQueue) continue;
+
+        const char* ruleService = rule["serviceId"] | "";
+        if (String(ruleService).length() > 0 && String(ruleService) != serviceId) continue;
+        if (!ruleAllowsMethod(rule, requestMethodUpper)) continue;
+
+        matchedRuleCount += 1;
+        JsonArrayConst outputs = rule["outputs"].as<JsonArrayConst>();
+        for (JsonObjectConst output : outputs) {
+            String whenRule = output["whenRule"] | "";
+            if (!evaluateWhenRule(whenRule, message)) continue;
+
+            bool transformApplied = false;
+            String transformRule = output["transformRule"] | "";
+            String transformError;
+            String routed = applyTransformRule(transformRule, message, mappings, transformApplied, transformError);
+            String outputType = resolveOutputDataTypeId(output);
+            String shapeWarning;
+            String shaped = routed;
+            const bool shapedToXml = maybeShapeIsoToXml(outputType, routed, ffs, shaped, shapeWarning);
+
+            JsonObject d = deliveries.add<JsonObject>();
+            d["ruleId"] = rule["id"] | "";
+            d["outputQueue"] = output["queueName"] | "";
+            d["message"] = shaped;
+            d["transformApplied"] = transformApplied;
+            if (outputType.length() > 0) d["outputType"] = outputType;
+            if (shapedToXml) d["messageFormat"] = "xml";
+            if (shapeWarning.length() > 0) d["shapeWarning"] = shapeWarning;
+            if (transformError.length() > 0) d["transformError"] = transformError;
+            publishedCount += 1;
+        }
+    }
+
+    outDoc["matchedRuleCount"] = matchedRuleCount;
+    outDoc["publishedCount"] = publishedCount;
+    serializeJson(outDoc, exec.body);
+    return exec;
+}
+
+void trimRouterAsyncResultsLocked() {
+    while (gRouterAsyncResultOrder.size() > gEdgeIngressConfig.resultLimit) {
+        const String oldest = gRouterAsyncResultOrder.front();
+        gRouterAsyncResultOrder.pop_front();
+        gRouterAsyncResults.erase(oldest);
+    }
+}
+
+void upsertRouterAsyncResult(const String& jobId, const RouterAsyncResult& value) {
+    if (gRouterAsyncResultsMutex == nullptr) return;
+    if (xSemaphoreTake(gRouterAsyncResultsMutex, pdMS_TO_TICKS(2000)) != pdTRUE) return;
+    if (gRouterAsyncResults.find(jobId) == gRouterAsyncResults.end()) {
+        gRouterAsyncResultOrder.push_back(jobId);
+    }
+    gRouterAsyncResults[jobId] = value;
+    trimRouterAsyncResultsLocked();
+    xSemaphoreGive(gRouterAsyncResultsMutex);
+}
+
+bool readRouterAsyncResult(const String& jobId, RouterAsyncResult& outResult) {
+    if (gRouterAsyncResultsMutex == nullptr) return false;
+    if (xSemaphoreTake(gRouterAsyncResultsMutex, pdMS_TO_TICKS(2000)) != pdTRUE) return false;
+    auto it = gRouterAsyncResults.find(jobId);
+    if (it == gRouterAsyncResults.end()) {
+        xSemaphoreGive(gRouterAsyncResultsMutex);
+        return false;
+    }
+    outResult = it->second;
+    xSemaphoreGive(gRouterAsyncResultsMutex);
+    return true;
+}
+
+String makeRouterJobId() {
+    gRouterJobCounter += 1;
+    return String("router-") + String((unsigned long)millis()) + String("-") + String((unsigned long)gRouterJobCounter);
+}
+
+void routerAsyncWorker(void* rawContext) {
+    RouterWorkerContext* context = static_cast<RouterWorkerContext*>(rawContext);
+    for (;;) {
+        RouterAsyncTask* task = nullptr;
+        if (xQueueReceive(gRouterAsyncQueue, &task, portMAX_DELAY) != pdTRUE || task == nullptr) {
+            continue;
+        }
+
+        RouterAsyncResult running;
+        running.state = "running";
+        running.statusCode = 102;
+        running.contentType = "application/json";
+        running.body = "";
+        running.updatedAtMs = millis();
+        upsertRouterAsyncResult(task->jobId, running);
+
+        RouterRunExecutionResult exec = executeRouterRun(
+            context->ffs,
+            task->inputQueue,
+            task->message,
+            task->serviceId,
+            task->rulesPath,
+            task->mappingsPath,
+            task->requestMethodUpper
+        );
+
+        RouterAsyncResult done;
+        done.state = "completed";
+        done.statusCode = exec.statusCode;
+        done.contentType = exec.contentType;
+        done.body = exec.body;
+        done.updatedAtMs = millis();
+        upsertRouterAsyncResult(task->jobId, done);
+        delete task;
+    }
+}
+
+void ensureRouterAsyncWorkerStarted(FederatedFileSystem* ffs) {
+    if (gRouterAsyncQueue != nullptr) return;
+
+    loadEdgeIngressConfigOnce();
+    gRouterAsyncQueue = xQueueCreate(gEdgeIngressConfig.queueLength, sizeof(RouterAsyncTask*));
+    gRouterAsyncResultsMutex = xSemaphoreCreateMutex();
+    if (gRouterAsyncQueue == nullptr || gRouterAsyncResultsMutex == nullptr) {
+        Serial.println("[router_async] initialization failed");
+        return;
+    }
+
+    gRouterWorkerTasks.clear();
+    gRouterWorkerContexts.clear();
+    gRouterWorkerTasks.resize(gEdgeIngressConfig.workerCount, nullptr);
+    gRouterWorkerContexts.resize(gEdgeIngressConfig.workerCount);
+
+    for (size_t i = 0; i < gEdgeIngressConfig.workerCount; ++i) {
+        gRouterWorkerContexts[i].ffs = ffs;
+        BaseType_t created = xTaskCreatePinnedToCore(
+            routerAsyncWorker,
+            "routerAsync",
+            gEdgeIngressConfig.workerStackBytes,
+            &gRouterWorkerContexts[i],
+            gEdgeIngressConfig.workerPriority,
+            &gRouterWorkerTasks[i],
+            (gEdgeIngressConfig.preferredCore <= 1)
+              ? static_cast<BaseType_t>(gEdgeIngressConfig.preferredCore)
+              : static_cast<BaseType_t>(i % 2)
+        );
+        if (created != pdPASS) {
+            created = xTaskCreate(
+                routerAsyncWorker,
+                "routerAsync",
+                gEdgeIngressConfig.workerStackBytes,
+                &gRouterWorkerContexts[i],
+                gEdgeIngressConfig.workerPriority,
+                &gRouterWorkerTasks[i]
+            );
         }
     }
 }
@@ -3769,6 +4318,7 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         String serviceId = "aggregator-router-service";
         String rulesPath = "/router-rules.generated.json";
         String mappingsPath = "/data-mappings.generated.json";
+        String asyncParam = "0";
 
         if (!getRequestParam(request, "inputQueue", inputQueue)) {
             request->send(400, "text/plain", "Missing inputQueue param");
@@ -3781,76 +4331,105 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         getRequestParam(request, "serviceId", serviceId);
         getRequestParam(request, "rules", rulesPath);
         getRequestParam(request, "mappings", mappingsPath);
+        getRequestParam(request, "async", asyncParam);
         String requestMethodUpper = toUpperCopy(trimCopy(requestMethodName(request)));
 
-        JsonDocument rulesDoc;
-        JsonArrayConst rules;
-        if (!loadRouterRulesArray(rulesPath, ffs, rulesDoc, rules)) {
-            request->send(404, "text/plain", "Unable to load router rules file");
+#if defined(ESP32)
+        String asyncUpper = toUpperCopy(trimCopy(asyncParam));
+        bool useAsync = !(asyncUpper == "0" || asyncUpper == "FALSE" || asyncUpper == "NO");
+        ensureRouterAsyncWorkerStarted(ffs);
+        if (useAsync && gRouterAsyncQueue != nullptr) {
+            const UBaseType_t queueDepth = uxQueueMessagesWaiting(gRouterAsyncQueue);
+            const UBaseType_t queueSpace = uxQueueSpacesAvailable(gRouterAsyncQueue);
+            const UBaseType_t queueCapacity = queueDepth + queueSpace;
+            if (queueSpace == 0) {
+                JsonDocument out;
+                out["error"] = "router async queue overflow";
+                out["mode"] = "async";
+                out["status"] = 429;
+                out["queueDepth"] = static_cast<unsigned long>(queueDepth);
+                out["queueCapacity"] = static_cast<unsigned long>(queueCapacity);
+                out["retryAfterMs"] = 250;
+                String response;
+                serializeJson(out, response);
+                request->send(429, "application/json", response);
+                return;
+            }
+
+            RouterAsyncTask* task = new RouterAsyncTask();
+            task->jobId = makeRouterJobId();
+            task->inputQueue = inputQueue;
+            task->message = message;
+            task->serviceId = serviceId;
+            task->rulesPath = rulesPath;
+            task->mappingsPath = mappingsPath;
+            task->requestMethodUpper = requestMethodUpper;
+
+            BaseType_t ok = xQueueSend(gRouterAsyncQueue, &task, 0);
+            if (ok == pdTRUE) {
+                JsonDocument out;
+                out["mode"] = "async";
+                out["jobId"] = task->jobId;
+                out["inputQueue"] = inputQueue;
+                out["serviceId"] = serviceId;
+                out["statusUrl"] = String("/pmachine/router/status?jobId=") + task->jobId;
+                String response;
+                serializeJson(out, response);
+                request->send(202, "application/json", response);
+                return;
+            }
+
+            delete task;
+            JsonDocument out;
+            out["error"] = "router async queue overflow";
+            out["mode"] = "async";
+            out["status"] = 429;
+            out["queueDepth"] = static_cast<unsigned long>(uxQueueMessagesWaiting(gRouterAsyncQueue));
+            out["queueCapacity"] = static_cast<unsigned long>(uxQueueMessagesWaiting(gRouterAsyncQueue) + uxQueueSpacesAvailable(gRouterAsyncQueue));
+            out["retryAfterMs"] = 250;
+            String response;
+            serializeJson(out, response);
+            request->send(429, "application/json", response);
+            return;
+        }
+#endif
+
+        RouterRunExecutionResult exec = executeRouterRun(
+            ffs,
+            inputQueue,
+            message,
+            serviceId,
+            rulesPath,
+            mappingsPath,
+            requestMethodUpper
+        );
+        request->send(exec.statusCode, exec.contentType, exec.body);
+    });
+
+#if defined(ESP32)
+    server.on("/pmachine/router/status", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (!request->hasParam("jobId")) {
+            request->send(400, "text/plain", "Missing jobId param");
             return;
         }
 
-        JsonDocument mappingsDoc;
-        JsonArrayConst mappings;
-        if (!loadMappingsArray(mappingsPath, ffs, mappingsDoc, mappings)) {
-            if (!(rulesDoc.is<JsonObject>() && rulesDoc["dataMappings"].is<JsonArray>())) {
-                request->send(404, "text/plain", "Unable to load mappings file");
-                return;
-            }
-            mappings = rulesDoc["dataMappings"].as<JsonArrayConst>();
+        String jobId = request->getParam("jobId")->value();
+        RouterAsyncResult result;
+        if (!readRouterAsyncResult(jobId, result)) {
+            request->send(404, "text/plain", "Unknown jobId");
+            return;
         }
 
-        JsonDocument outDoc;
-        outDoc["inputQueue"] = inputQueue;
-        outDoc["serviceId"] = serviceId;
-        outDoc["rulesFile"] = rulesPath;
-        outDoc["mappingsFile"] = mappingsPath;
-        outDoc["sourceMessage"] = message;
-
-        int matchedRuleCount = 0;
-        int publishedCount = 0;
-        JsonArray deliveries = outDoc["deliveries"].to<JsonArray>();
-
-        for (JsonObjectConst rule : rules) {
-            bool enabled = !rule["enabled"].is<bool>() || rule["enabled"].as<bool>();
-            if (!enabled) continue;
-
-            const char* inQueue = rule["inputQueue"] | "";
-            if (String(inQueue) != inputQueue) continue;
-
-            const char* ruleService = rule["serviceId"] | "";
-            if (String(ruleService).length() > 0 && String(ruleService) != serviceId) continue;
-            if (!ruleAllowsMethod(rule, requestMethodUpper)) continue;
-
-            matchedRuleCount += 1;
-
-            JsonArrayConst outputs = rule["outputs"].as<JsonArrayConst>();
-            for (JsonObjectConst output : outputs) {
-                String whenRule = output["whenRule"] | "";
-                if (!evaluateWhenRule(whenRule, message)) continue;
-
-                bool transformApplied = false;
-                String transformRule = output["transformRule"] | "";
-                String transformError;
-                String routed = applyTransformRule(transformRule, message, mappings, transformApplied, transformError);
-
-                JsonObject d = deliveries.add<JsonObject>();
-                d["ruleId"] = rule["id"] | "";
-                d["outputQueue"] = output["queueName"] | "";
-                d["message"] = routed;
-                d["transformApplied"] = transformApplied;
-                if (transformError.length() > 0) {
-                    d["transformError"] = transformError;
-                }
-                publishedCount += 1;
-            }
-        }
-
-        outDoc["matchedRuleCount"] = matchedRuleCount;
-        outDoc["publishedCount"] = publishedCount;
-
+        JsonDocument out;
+        out["jobId"] = jobId;
+        out["state"] = result.state;
+        out["statusCode"] = result.statusCode;
+        out["contentType"] = result.contentType;
+        out["body"] = result.body;
+        out["updatedAtMs"] = result.updatedAtMs;
         String response;
-        serializeJson(outDoc, response);
-        request->send(200, "application/json", response);
+        serializeJson(out, response);
+        request->send(result.statusCode, result.contentType, response);
     });
+#endif
 }

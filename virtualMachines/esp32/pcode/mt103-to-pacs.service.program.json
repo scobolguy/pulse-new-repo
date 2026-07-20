@@ -74,11 +74,16 @@
       "label": "MAPPER_0_MT103_TO_PACS",
       "sourceTypeId": "swift-mt103",
       "targetTypeId": "pacs",
-      "itemCount": 9,
+      "itemCount": 10,
       "items": [
         {
           "sourcePath": "block4.20",
           "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "block4.20",
+          "targetPath": "Document.hdr:AppHdr.hdr:BizMsgIdr",
           "conversionRule": "output := trim(src);"
         },
         {

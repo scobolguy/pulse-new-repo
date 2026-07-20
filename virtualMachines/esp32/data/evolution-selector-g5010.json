@@ -1,0 +1,136 @@
+{
+  "updatedAt": "2026-07-14T21:34:21.428Z",
+  "generation": 5010,
+  "selector": [
+    {
+      "rank": 1,
+      "organismId": "organism-01-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010",
+      "variant": "normal",
+      "generation": 5010,
+      "transactionCount": 260,
+      "successCount": 260,
+      "successRate": 1,
+      "latencyMs": 0.431,
+      "score": 99999.569,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 997,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 2,
+      "organismId": "organism-04-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010",
+      "variant": "normal",
+      "generation": 5010,
+      "transactionCount": 266,
+      "successCount": 266,
+      "successRate": 1,
+      "latencyMs": 0.485,
+      "score": 99999.515,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 999,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 3,
+      "organismId": "organism-02-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010",
+      "variant": "stress",
+      "generation": 5010,
+      "transactionCount": 247,
+      "successCount": 247,
+      "successRate": 1,
+      "latencyMs": 0.498,
+      "score": 99999.502,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 998,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 4,
+      "organismId": "organism-03-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010",
+      "variant": "hostile",
+      "generation": 5010,
+      "transactionCount": 227,
+      "successCount": 227,
+      "successRate": 1,
+      "latencyMs": 0.507,
+      "score": 99999.493,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 994,
+      "messageFormat": "unknown"
+    }
+  ],
+  "records": [
+    {
+      "organismId": "organism-01-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010",
+      "parentId": "organism-01-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009",
+      "generation": 5010,
+      "variant": "normal",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 260,
+        "successCount": 260,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.431,
+        "score": 99999.569
+      }
+    },
+    {
+      "organismId": "organism-03-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010",
+      "parentId": "organism-03-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009",
+      "generation": 5010,
+      "variant": "hostile",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 227,
+        "successCount": 227,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.507,
+        "score": 99999.493
+      }
+    },
+    {
+      "organismId": "organism-04-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010",
+      "parentId": "organism-04-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009",
+      "generation": 5010,
+      "variant": "normal",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 266,
+        "successCount": 266,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.485,
+        "score": 99999.515
+      }
+    },
+    {
+      "organismId": "organism-02-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009-g5010",
+      "parentId": "organism-02-g5001-g5002-g5003-g5004-g5005-g5006-g5007-g5008-g5009",
+      "generation": 5010,
+      "variant": "stress",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 247,
+        "successCount": 247,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.498,
+        "score": 99999.502
+      }
+    }
+  ]
+}

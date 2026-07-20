@@ -1,6 +1,6 @@
 # Workflow DSL (Separate Compiler)
 
-This DSL is intentionally compiled by a separate compiler from the router-mapper DSL so it can evolve independently.
+This DSL is intentionally compiled by a separate compiler from the routing-mapper DSL so it can evolve independently.
 
 Source file extension:
 - .wfl

@@ -1,0 +1,95 @@
+[
+  {
+    "id": "DIRECT_PASSTHROUGH",
+    "label": "Direct Pass-through Mapping",
+    "description": "Copy matching source fields to destination fields when names and shapes align.",
+    "sourcePatterns": [
+      "*"
+    ],
+    "targetPatterns": [
+      "*"
+    ],
+    "recommended": true,
+    "priority": 1
+  },
+  {
+    "id": "CBDS_MT103_TO_PACS008",
+    "label": "CBDS MT103 -> PACS.008",
+    "description": "Canonical CBDS translation from SWIFT MT103 to ISO 20022 PACS.008.",
+    "sourcePatterns": [
+      "swift-mt103",
+      "mt103"
+    ],
+    "targetPatterns": [
+      "pacs.008.001.14",
+      "pacs.008",
+      "pacs008"
+    ],
+    "recommended": true,
+    "priority": 100
+  },
+  {
+    "id": "CBDS_PACS008_TO_MT103",
+    "label": "CBDS PACS.008 -> MT103",
+    "description": "Canonical CBDS translation from ISO 20022 PACS.008 to SWIFT MT103.",
+    "sourcePatterns": [
+      "pacs.008.001.14",
+      "pacs.008",
+      "pacs008"
+    ],
+    "targetPatterns": [
+      "swift-mt103",
+      "mt103"
+    ],
+    "recommended": true,
+    "priority": 90
+  },
+  {
+    "id": "CBDS_MT940_TO_CAMT053",
+    "label": "CBDS MT940 -> CAMT.053",
+    "description": "Canonical CBDS translation from SWIFT MT940 statement to ISO 20022 CAMT.053 BankToCustomerStatement.",
+    "sourcePatterns": [
+      "swift-mt940",
+      "mt940"
+    ],
+    "targetPatterns": [
+      "camt.053.001.14",
+      "camt.053",
+      "camt053"
+    ],
+    "recommended": true,
+    "priority": 95
+  },
+  {
+    "id": "CBDS_MT940_TO_CAMT052",
+    "label": "CBDS MT940 -> CAMT.052",
+    "description": "Canonical CBDS translation from SWIFT MT940 statement to ISO 20022 CAMT.052 BankToCustomerAccountReport.",
+    "sourcePatterns": [
+      "swift-mt940",
+      "mt940"
+    ],
+    "targetPatterns": [
+      "camt.052.001.14",
+      "camt.052",
+      "camt052"
+    ],
+    "recommended": true,
+    "priority": 94
+  },
+  {
+    "id": "CBDS_MT940_TO_CAMT054",
+    "label": "CBDS MT940 -> CAMT.054",
+    "description": "Canonical CBDS translation from SWIFT MT940 statement to ISO 20022 CAMT.054 BankToCustomerDebitCreditNotification.",
+    "sourcePatterns": [
+      "swift-mt940",
+      "mt940"
+    ],
+    "targetPatterns": [
+      "camt.054.001.14",
+      "camt.054",
+      "camt054"
+    ],
+    "recommended": true,
+    "priority": 93
+  }
+]

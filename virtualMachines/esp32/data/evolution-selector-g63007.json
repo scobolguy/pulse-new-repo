@@ -1,0 +1,1125 @@
+{
+  "updatedAt": "2026-07-15T00:35:57.977Z",
+  "generation": 63007,
+  "maxPopulation": 200,
+  "birthLimit": 16,
+  "deathLimit": 12,
+  "replacementInterval": 20,
+  "replacementCount": 3,
+  "replacements": [
+    {
+      "transactionCount": 20,
+      "weakestOrganismId": "organism-05",
+      "strongestOrganismId": "organism-08",
+      "replacementOrganismId": "organism-08-r01-g63007",
+      "sourceIndex": 7,
+      "targetIndex": 4,
+      "sourceVariant": "hostile",
+      "targetVariant": "hostile",
+      "strongestScore": 99999.5,
+      "weakestScore": 99997
+    },
+    {
+      "transactionCount": 40,
+      "weakestOrganismId": "organism-04",
+      "strongestOrganismId": "organism-08-r01-g63007",
+      "replacementOrganismId": "organism-08-r02-g63007",
+      "sourceIndex": 4,
+      "targetIndex": 3,
+      "sourceVariant": "hostile",
+      "targetVariant": "normal",
+      "strongestScore": 99999.667,
+      "weakestScore": 99999
+    },
+    {
+      "transactionCount": 60,
+      "weakestOrganismId": "organism-08-r02-g63007",
+      "strongestOrganismId": "organism-08-r01-g63007",
+      "replacementOrganismId": "organism-08-r03-g63007",
+      "sourceIndex": 4,
+      "targetIndex": 3,
+      "sourceVariant": "hostile",
+      "targetVariant": "hostile",
+      "strongestScore": 99999.75,
+      "weakestScore": 100000
+    }
+  ],
+  "births": [],
+  "deaths": [
+    {
+      "transactionCount": 50,
+      "organismId": "organism-07",
+      "slotIndex": 6,
+      "totalProcessed": 12,
+      "birthCounter": 0,
+      "deathCounter": 12,
+      "populationSize": 7
+    },
+    {
+      "transactionCount": 78,
+      "organismId": "organism-08",
+      "slotIndex": 7,
+      "totalProcessed": 12,
+      "birthCounter": 0,
+      "deathCounter": 12,
+      "populationSize": 6
+    }
+  ],
+  "processingLog": [
+    {
+      "transactionCount": 1,
+      "organismId": "organism-05",
+      "slotIndex": 4,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 1,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 2,
+      "organismId": "organism-07",
+      "slotIndex": 6,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 1,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 3,
+      "organismId": "organism-04",
+      "slotIndex": 3,
+      "processable": true,
+      "birthCounter": 1,
+      "deathCounter": 1,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 4,
+      "organismId": "organism-04",
+      "slotIndex": 3,
+      "processable": true,
+      "birthCounter": 2,
+      "deathCounter": 2,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 5,
+      "organismId": "organism-06",
+      "slotIndex": 5,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 1,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 6,
+      "organismId": "organism-07",
+      "slotIndex": 6,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 2,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 7,
+      "organismId": "organism-07",
+      "slotIndex": 6,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 3,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 8,
+      "organismId": "organism-08",
+      "slotIndex": 7,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 1,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 9,
+      "organismId": "organism-03",
+      "slotIndex": 2,
+      "processable": true,
+      "birthCounter": 1,
+      "deathCounter": 1,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 10,
+      "organismId": "organism-07",
+      "slotIndex": 6,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 4,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 11,
+      "organismId": "organism-04",
+      "slotIndex": 3,
+      "processable": true,
+      "birthCounter": 3,
+      "deathCounter": 3,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 12,
+      "organismId": "organism-07",
+      "slotIndex": 6,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 5,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 13,
+      "organismId": "organism-05",
+      "slotIndex": 4,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 2,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 14,
+      "organismId": "organism-08",
+      "slotIndex": 7,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 2,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 15,
+      "organismId": "organism-04",
+      "slotIndex": 3,
+      "processable": true,
+      "birthCounter": 4,
+      "deathCounter": 4,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 16,
+      "organismId": "organism-08",
+      "slotIndex": 7,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 3,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 17,
+      "organismId": "organism-05",
+      "slotIndex": 4,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 3,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 18,
+      "organismId": "organism-02",
+      "slotIndex": 1,
+      "processable": true,
+      "birthCounter": 1,
+      "deathCounter": 1,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 19,
+      "organismId": "organism-01",
+      "slotIndex": 0,
+      "processable": true,
+      "birthCounter": 1,
+      "deathCounter": 1,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 20,
+      "organismId": "organism-08",
+      "slotIndex": 7,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 4,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 21,
+      "organismId": "organism-06",
+      "slotIndex": 5,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 2,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 22,
+      "organismId": "organism-07",
+      "slotIndex": 6,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 6,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 23,
+      "organismId": "organism-01",
+      "slotIndex": 0,
+      "processable": true,
+      "birthCounter": 2,
+      "deathCounter": 2,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 24,
+      "organismId": "organism-08",
+      "slotIndex": 7,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 5,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 25,
+      "organismId": "organism-07",
+      "slotIndex": 6,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 7,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 26,
+      "organismId": "organism-06",
+      "slotIndex": 5,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 3,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 27,
+      "organismId": "organism-08",
+      "slotIndex": 7,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 6,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 28,
+      "organismId": "organism-03",
+      "slotIndex": 2,
+      "processable": true,
+      "birthCounter": 2,
+      "deathCounter": 2,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 29,
+      "organismId": "organism-01",
+      "slotIndex": 0,
+      "processable": true,
+      "birthCounter": 3,
+      "deathCounter": 3,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 30,
+      "organismId": "organism-02",
+      "slotIndex": 1,
+      "processable": true,
+      "birthCounter": 2,
+      "deathCounter": 2,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 31,
+      "organismId": "organism-08",
+      "slotIndex": 7,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 7,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 32,
+      "organismId": "organism-07",
+      "slotIndex": 6,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 8,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 33,
+      "organismId": "organism-08-r01-g63007",
+      "slotIndex": 4,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 1,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 34,
+      "organismId": "organism-02",
+      "slotIndex": 1,
+      "processable": true,
+      "birthCounter": 3,
+      "deathCounter": 3,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 35,
+      "organismId": "organism-06",
+      "slotIndex": 5,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 4,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 36,
+      "organismId": "organism-08-r01-g63007",
+      "slotIndex": 4,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 2,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 37,
+      "organismId": "organism-03",
+      "slotIndex": 2,
+      "processable": true,
+      "birthCounter": 3,
+      "deathCounter": 3,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 38,
+      "organismId": "organism-07",
+      "slotIndex": 6,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 9,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 39,
+      "organismId": "organism-08-r01-g63007",
+      "slotIndex": 4,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 3,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 40,
+      "organismId": "organism-01",
+      "slotIndex": 0,
+      "processable": true,
+      "birthCounter": 4,
+      "deathCounter": 4,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 41,
+      "organismId": "organism-02",
+      "slotIndex": 1,
+      "processable": true,
+      "birthCounter": 4,
+      "deathCounter": 4,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 42,
+      "organismId": "organism-06",
+      "slotIndex": 5,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 5,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 43,
+      "organismId": "organism-02",
+      "slotIndex": 1,
+      "processable": true,
+      "birthCounter": 5,
+      "deathCounter": 5,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 44,
+      "organismId": "organism-01",
+      "slotIndex": 0,
+      "processable": true,
+      "birthCounter": 5,
+      "deathCounter": 5,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 45,
+      "organismId": "organism-07",
+      "slotIndex": 6,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 10,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 46,
+      "organismId": "organism-08-r02-g63007",
+      "slotIndex": 3,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 1,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 47,
+      "organismId": "organism-08-r01-g63007",
+      "slotIndex": 4,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 4,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 48,
+      "organismId": "organism-07",
+      "slotIndex": 6,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 11,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 49,
+      "organismId": "organism-03",
+      "slotIndex": 2,
+      "processable": true,
+      "birthCounter": 4,
+      "deathCounter": 4,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 50,
+      "organismId": "organism-07",
+      "slotIndex": 6,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 12,
+      "spawnedChildren": [],
+      "died": true
+    },
+    {
+      "transactionCount": 51,
+      "organismId": "organism-01",
+      "slotIndex": 0,
+      "processable": true,
+      "birthCounter": 6,
+      "deathCounter": 6,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 52,
+      "organismId": "organism-02",
+      "slotIndex": 1,
+      "processable": true,
+      "birthCounter": 6,
+      "deathCounter": 6,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 53,
+      "organismId": "organism-03",
+      "slotIndex": 2,
+      "processable": true,
+      "birthCounter": 5,
+      "deathCounter": 5,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 54,
+      "organismId": "organism-03",
+      "slotIndex": 2,
+      "processable": true,
+      "birthCounter": 6,
+      "deathCounter": 6,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 55,
+      "organismId": "organism-03",
+      "slotIndex": 2,
+      "processable": true,
+      "birthCounter": 7,
+      "deathCounter": 7,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 56,
+      "organismId": "organism-01",
+      "slotIndex": 0,
+      "processable": true,
+      "birthCounter": 7,
+      "deathCounter": 7,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 57,
+      "organismId": "organism-08-r02-g63007",
+      "slotIndex": 3,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 2,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 58,
+      "organismId": "organism-08",
+      "slotIndex": 7,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 8,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 59,
+      "organismId": "organism-02",
+      "slotIndex": 1,
+      "processable": true,
+      "birthCounter": 7,
+      "deathCounter": 7,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 60,
+      "organismId": "organism-03",
+      "slotIndex": 2,
+      "processable": true,
+      "birthCounter": 8,
+      "deathCounter": 8,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 61,
+      "organismId": "organism-03",
+      "slotIndex": 2,
+      "processable": true,
+      "birthCounter": 9,
+      "deathCounter": 9,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 62,
+      "organismId": "organism-06",
+      "slotIndex": 5,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 6,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 63,
+      "organismId": "organism-06",
+      "slotIndex": 5,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 7,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 64,
+      "organismId": "organism-01",
+      "slotIndex": 0,
+      "processable": true,
+      "birthCounter": 8,
+      "deathCounter": 8,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 65,
+      "organismId": "organism-08",
+      "slotIndex": 7,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 9,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 66,
+      "organismId": "organism-08",
+      "slotIndex": 7,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 10,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 67,
+      "organismId": "organism-02",
+      "slotIndex": 1,
+      "processable": true,
+      "birthCounter": 8,
+      "deathCounter": 8,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 68,
+      "organismId": "organism-03",
+      "slotIndex": 2,
+      "processable": true,
+      "birthCounter": 10,
+      "deathCounter": 10,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 69,
+      "organismId": "organism-08",
+      "slotIndex": 7,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 11,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 70,
+      "organismId": "organism-06",
+      "slotIndex": 5,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 8,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 71,
+      "organismId": "organism-02",
+      "slotIndex": 1,
+      "processable": true,
+      "birthCounter": 9,
+      "deathCounter": 9,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 72,
+      "organismId": "organism-08-r01-g63007",
+      "slotIndex": 4,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 5,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 73,
+      "organismId": "organism-03",
+      "slotIndex": 2,
+      "processable": true,
+      "birthCounter": 11,
+      "deathCounter": 11,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 74,
+      "organismId": "organism-08-r01-g63007",
+      "slotIndex": 4,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 6,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 75,
+      "organismId": "organism-06",
+      "slotIndex": 5,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 9,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 76,
+      "organismId": "organism-06",
+      "slotIndex": 5,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 10,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 77,
+      "organismId": "organism-01",
+      "slotIndex": 0,
+      "processable": true,
+      "birthCounter": 9,
+      "deathCounter": 9,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 78,
+      "organismId": "organism-08",
+      "slotIndex": 7,
+      "processable": false,
+      "birthCounter": 0,
+      "deathCounter": 12,
+      "spawnedChildren": [],
+      "died": true
+    },
+    {
+      "transactionCount": 79,
+      "organismId": "organism-02",
+      "slotIndex": 1,
+      "processable": true,
+      "birthCounter": 10,
+      "deathCounter": 10,
+      "spawnedChildren": [],
+      "died": false
+    },
+    {
+      "transactionCount": 80,
+      "organismId": "organism-02",
+      "slotIndex": 1,
+      "processable": true,
+      "birthCounter": 11,
+      "deathCounter": 11,
+      "spawnedChildren": [],
+      "died": false
+    }
+  ],
+  "activePopulationSize": 6,
+  "selector": [
+    {
+      "rank": 1,
+      "organismId": "organism-08-r01-g63007",
+      "variant": "hostile",
+      "generation": 63007,
+      "transactionCount": 6,
+      "successCount": 6,
+      "successRate": 1,
+      "latencyMs": 0.167,
+      "score": 99999.833,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 32,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 2,
+      "organismId": "organism-02",
+      "variant": "normal",
+      "generation": 63007,
+      "transactionCount": 11,
+      "successCount": 11,
+      "successRate": 1,
+      "latencyMs": 0.273,
+      "score": 99999.727,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 17,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 3,
+      "organismId": "organism-06",
+      "variant": "hostile",
+      "generation": 63007,
+      "transactionCount": 10,
+      "successCount": 10,
+      "successRate": 1,
+      "latencyMs": 0.3,
+      "score": 99999.7,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 4,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 4,
+      "organismId": "organism-01",
+      "variant": "normal",
+      "generation": 63007,
+      "transactionCount": 9,
+      "successCount": 9,
+      "successRate": 1,
+      "latencyMs": 0.333,
+      "score": 99999.667,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 18,
+      "messageFormat": "unknown"
+    },
+    {
+      "rank": 5,
+      "organismId": "organism-03",
+      "variant": "normal",
+      "generation": 63007,
+      "transactionCount": 11,
+      "successCount": 11,
+      "successRate": 1,
+      "latencyMs": 0.455,
+      "score": 99999.545,
+      "outputQueue": "tx.pacs.created",
+      "offeredOrder": 8,
+      "messageFormat": "unknown"
+    }
+  ],
+  "records": [
+    {
+      "organismId": "organism-05",
+      "parentId": null,
+      "generation": 63007,
+      "variant": "hostile",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 3,
+        "successCount": 3,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 3,
+        "score": 99997
+      }
+    },
+    {
+      "organismId": "organism-07",
+      "parentId": null,
+      "generation": 63007,
+      "variant": "hostile",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 12,
+        "successCount": 12,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.667,
+        "score": 99999.333
+      }
+    },
+    {
+      "organismId": "organism-04",
+      "parentId": null,
+      "generation": 63007,
+      "variant": "normal",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 4,
+        "successCount": 4,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 1,
+        "score": 99999
+      }
+    },
+    {
+      "organismId": "organism-06",
+      "parentId": null,
+      "generation": 63007,
+      "variant": "hostile",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 10,
+        "successCount": 10,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.3,
+        "score": 99999.7
+      }
+    },
+    {
+      "organismId": "organism-08",
+      "parentId": null,
+      "generation": 63007,
+      "variant": "hostile",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 12,
+        "successCount": 12,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.417,
+        "score": 99999.583
+      }
+    },
+    {
+      "organismId": "organism-03",
+      "parentId": null,
+      "generation": 63007,
+      "variant": "normal",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 11,
+        "successCount": 11,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.455,
+        "score": 99999.545
+      }
+    },
+    {
+      "organismId": "organism-02",
+      "parentId": null,
+      "generation": 63007,
+      "variant": "normal",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 11,
+        "successCount": 11,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.273,
+        "score": 99999.727
+      }
+    },
+    {
+      "organismId": "organism-01",
+      "parentId": null,
+      "generation": 63007,
+      "variant": "normal",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 9,
+        "successCount": 9,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.333,
+        "score": 99999.667
+      }
+    },
+    {
+      "organismId": "organism-08-r01-g63007",
+      "parentId": "organism-08",
+      "generation": 63007,
+      "variant": "hostile",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 6,
+        "successCount": 6,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0.167,
+        "score": 99999.833
+      }
+    },
+    {
+      "organismId": "organism-08-r02-g63007",
+      "parentId": "organism-08-r01-g63007",
+      "generation": 63007,
+      "variant": "hostile",
+      "outputQueue": "tx.pacs.created",
+      "messageFormat": "unknown",
+      "fitness": {
+        "transactionCount": 2,
+        "successCount": 2,
+        "failureCount": 0,
+        "successRate": 1,
+        "retryCount": 0,
+        "deliveryCount": 1,
+        "latencyMs": 0,
+        "score": 100000
+      }
+    }
+  ]
+}
