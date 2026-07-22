@@ -45,6 +45,26 @@
       "prompt": "Write a Pascal program to solve the towers of hanoi when n=4",
       "response": "program TowersOfHanoi;\n\nvar\n  diskCount: integer;\n\nprocedure Hanoi(n, fromPeg, toPeg, auxPeg: integer);\nbegin\n  if n = 1 then\n    writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)\n  else\n  begin\n    Hanoi(n - 1, fromPeg, auxPeg, toPeg);\n    writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg);\n    Hanoi(n - 1, auxPeg, toPeg, fromPeg)\n  end\nend;\n\nbegin\n  diskCount := 4;\n  writeln('Towers of Hanoi for ', diskCount, ' disks:');\n  Hanoi(diskCount, 1, 3, 2)\nend.",
       "source": "accepted-esp32-run-verified"
+    },
+    {
+      "id": "factorial-service-src",
+      "prompt": "Write a Pascal program that reads an integer 0-10 from the src variable, calculates factorial recursively, and prints the result or 'Invalid input' if out of range or non-numeric.",
+      "response": "program FactorialService;\n\nvar n, result, i : integer;\n\nprocedure factorial(x : integer);\nbegin\n  if x <= 1 then\n    result := 1\n  else begin\n    factorial(x - 1);\n    result := result * x\n  end\nend;\n\nbegin\n  n := src;\n  if (n >= 0) and (n <= 10) and (not (src = 'Invalid input')) then begin\n    if (n = 0) and (not (src = '0')) then\n      writeln('Invalid input')\n    else begin\n      result := 1;\n      factorial(n);\n      writeln(result)\n    end\n  end else\n    writeln('Invalid input')\nend.",
+      "source": "accepted-tested-12-12",
+      "notes": "factorial(7)=5040. src is injected by pmachine runtime as string; n:=src coerces to int. Non-numeric strings coerce to 0, caught by string comparison (src = '0')."
+    },
+    {
+      "id": "logical-operators-demo",
+      "prompt": "Write a Pascal program demonstrating and, or, not logical operators in if conditions.",
+      "response": "program LogicalDemo;\nvar x, y : integer;\nbegin\n  x := 3;\n  y := 7;\n  if (x > 0) and (y > 0) then\n    writeln('both positive')\n  else\n    writeln('not both positive');\n  if (x < 0) or (y > 0) then\n    writeln('one or both condition')\n  else\n    writeln('neither condition');\n  if not (x = y) then\n    writeln('x not equal y')\n  else\n    writeln('x equals y')\nend.",
+      "source": "accepted-compiler-verified"
+    },
+    {
+      "id": "string-comparison-src",
+      "prompt": "Write a Pascal program that compares the src variable to a string literal and prints a message.",
+      "response": "program StringCompare;\nbegin\n  if src = 'hello' then\n    writeln('got hello')\n  else\n    writeln('not hello')\nend.",
+      "source": "accepted-tested",
+      "notes": "src is a runtime-injected string variable. Use STREQ opcode generated automatically when comparing identifiers to string literals."
     }
   ]
 }
