@@ -652,7 +652,39 @@ Neptune manages device discovery and communication for all child nodes.`
       const isServicesQuery = /service|capability|available|what can|what do|function/i.test(query);
       const isRelayQuery = /relay|switch|activate|deactivate|turn\s+on|turn\s+off|pulse|gpio/i.test(query);
       const isLedQuery = /led|light|ledpin|turn\s+(on|off)/i.test(query);
-      
+
+      // Detect factorial computation queries — route to pascal execute service
+      const factorialMatch = query.match(/factorial\s+(?:of\s+)?(\d+)|(\d+)\s*!|what\s+is\s+(\d+)\s*!|(\d+)\s+factorial/i);
+      if (factorialMatch) {
+        const n = parseInt(factorialMatch[1] || factorialMatch[2] || factorialMatch[3] || factorialMatch[4], 10);
+        console.log(`[OLLAMA] Factorial query detected: n=${n}`);
+        try {
+          const execRes = await fetch('http://127.0.0.1:4000/api/pascal/execute', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              source: `program FactorialService;\nvar n, result, i : integer;\nprocedure factorial(x : integer);\nbegin\n  if x <= 1 then\n    result := 1\n  else begin\n    factorial(x - 1);\n    result := result * x\n  end\nend;\nbegin\n  n := src;\n  if (n >= 0) and (n <= 10) and (not (src = 'Invalid input')) then begin\n    if (n = 0) and (not (src = '0')) then\n      writeln('Invalid input')\n    else begin\n      result := 1;\n      factorial(n);\n      writeln(result)\n    end\n  end else\n    writeln('Invalid input')\nend.`,
+              message: String(n)
+            })
+          });
+          const execData = await execRes.json();
+          if (execData.status === 'ok') {
+            const result = execData.stdout;
+            const response = {
+              success: true,
+              answer: `${n}! = ${result}\n\nComputed by running the Pascal factorial service via pmachine (source message: "${n}").`,
+              model: 'pascal-execute',
+              queryType: 'factorial-compute',
+              computed: { n, result, elapsedMs: execData.elapsedMs }
+            };
+            responseCache.set(cacheKey, { response, timestamp: Date.now() });
+            return res.json(response);
+          }
+        } catch (e) {
+          console.warn('[OLLAMA] Pascal execute failed for factorial:', e.message);
+        }
+      }
+
       let finalQuery = query;
       let queryType = 'general';
       let deviceControl = null;
