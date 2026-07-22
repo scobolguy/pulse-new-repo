@@ -77,6 +77,11 @@
     { "name": "OP_ROUTE_FILE", "hex": "0x48", "targets": ["js"] },
     { "name": "OP_TRIM", "hex": "0x49" },
     { "name": "OP_PARSE_INT", "hex": "0x4A" },
+    { "name": "OP_OR", "hex": "0x4B" },
+    { "name": "OP_AND", "hex": "0x4C" },
+    { "name": "OP_NOT", "hex": "0x4D" },
+    { "name": "OP_STREQ", "hex": "0x4E" },
+    { "name": "OP_STRNEQ", "hex": "0x4F" },
     { "name": "OP_HALT", "hex": "0xFF" }
   ]
 }

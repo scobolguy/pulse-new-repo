@@ -1068,7 +1068,7 @@ function assignVar(frame, name, value) {
   frame.vars[name] = value;
 }
 
-async function executeProgram({ instructions, opcodeMap, mappingsById, queueTypesByName = new Map(), isoTypeIds = new Set(), inputQueue, sourceMessage, runtimeContext = {} }) {
+async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queueTypesByName = new Map(), isoTypeIds = new Set(), inputQueue, sourceMessage, runtimeContext = {} }) {
   const stack = [];
   let pc = 0;
   let currentMessage = sourceMessage;
@@ -1208,6 +1208,34 @@ async function executeProgram({ instructions, opcodeMap, mappingsById, queueType
       const parsed = Number.parseInt(str, 10);
       const result = Number.isNaN(parsed) ? 0 : parsed;
       stack.push(result);
+      pc += 1;
+      continue;
+    }
+    if (op === 'OR') {
+      const b = Number(stack.pop() || 0);
+      const a = Number(stack.pop() || 0);
+      stack.push((a !== 0 || b !== 0) ? 1 : 0);
+      pc += 1;
+      continue;
+    }
+    if (op === 'AND') {
+      const b = Number(stack.pop() || 0);
+      const a = Number(stack.pop() || 0);
+      stack.push((a !== 0 && b !== 0) ? 1 : 0);
+      pc += 1;
+      continue;
+    }
+    if (op === 'NOT') {
+      const a = Number(stack.pop() || 0);
+      stack.push(a === 0 ? 1 : 0);
+      pc += 1;
+      continue;
+    }
+    if (op === 'STREQ' || op === 'STRNEQ') {
+      const b = String(stack.pop() ?? '');
+      const a = String(stack.pop() ?? '');
+      const eq = (a === b) ? 1 : 0;
+      stack.push(op === 'STREQ' ? eq : 1 - eq);
       pc += 1;
       continue;
     }
@@ -1787,7 +1815,7 @@ async function executeSingleMessage(args, { printOutput = true } = {}) {
   };
 
   const startedAt = Date.now();
-  const result = await executeProgram({
+  const result = await executeProgramImpl({
     instructions,
     opcodeMap,
     mappingsById,
@@ -1842,6 +1870,12 @@ async function executeSingleMessage(args, { printOutput = true } = {}) {
 
   return out;
 }
+
+export async function executeProgram(options) {
+  return await executeProgramImpl(options);
+}
+
+export { parsePcode };
 
 export async function runSingleMessageForEvolution(args) {
   return executeSingleMessage(args, { printOutput: false });
@@ -1909,7 +1943,7 @@ async function pollAndRoute(args) {
     
     try {
       const startedAt = Date.now();
-      const result = await executeProgram({
+      const result = await executeProgramImpl({
         instructions,
         opcodeMap,
         mappingsById,

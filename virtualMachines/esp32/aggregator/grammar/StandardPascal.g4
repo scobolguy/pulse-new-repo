@@ -80,6 +80,18 @@ argList
   ;
 
 expr
+  : logicalOrExpr
+  ;
+
+logicalOrExpr
+  : logicalAndExpr (OR logicalAndExpr)*
+  ;
+
+logicalAndExpr
+  : comparisonExpr (AND comparisonExpr)*
+  ;
+
+comparisonExpr
   : additiveExpr ((EQ | NEQ | LT | LE | GT | GE) additiveExpr)?
   ;
 
@@ -93,12 +105,14 @@ multiplicativeExpr
 
 unaryExpr
   : MINUS unaryExpr
+  | NOT unaryExpr
   | primary
   ;
 
 primary
   : NUMBER
   | IDENT
+  | STRING
   | LPAREN expr RPAREN
   ;
 
@@ -112,6 +126,9 @@ IF: 'IF';
 THEN: 'THEN';
 ELSE: 'ELSE';
 WRITELN: 'WRITELN';
+OR: 'OR';
+AND: 'AND';
+NOT: 'NOT';
 
 ASSIGN: ':=';
 COLON: ':';

@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "generatedAt": "2026-07-21T03:01:41.599Z",
+  "serviceId": "default-router-service",
+  "runtimeUnit": {
+    "kind": "service",
+    "id": "default-router-service",
+    "refreshMs": null
+  },
+  "variableDeclarations": [],
+  "entryLabel": "ENTRY",
+  "finishLabel": "FINISH",
+  "instructionSubset": [
+    "JMP",
+    "JZ",
+    "NOP",
+    "ROUTE_MATCH_QUEUE",
+    "ROUTE_EVAL_WHEN",
+    "ROUTE_TRANSFORM",
+    "ROUTE_EMIT",
+    "PARSE_FIN_TEXT",
+    "HALT"
+  ],
+  "orchestrationPrograms": [],
+  "instructionSubsetExtended": [
+    "ORCH_SPAWN",
+    "ORCH_WAIT_ALL",
+    "ORCH_FAIL_TXN",
+    "ORCH_RETURN_SUCCESS"
+  ],
+  "entries": [
+    {
+      "kind": "router",
+      "id": "pacs8_message_to_transaction_router",
+      "label": "ROUTER_0_PACS8_MESSAGE_TO_TRANSACTION_ROUTER",
+      "inputQueue": "pacs8_message.inbound",
+      "outputs": [
+        {
+          "queueName": "transaction.outbound",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "output := 1;",
+          "transformRule": "output := toxml(map(\"pacs8_message_to_transaction\", fromxml(src)));"
+        }
+      ]
+    },
+    {
+      "kind": "mapper",
+      "id": "pacs8_message_to_transaction",
+      "label": "MAPPER_0_PACS8_MESSAGE_TO_TRANSACTION",
+      "sourceTypeId": "pacs8_message",
+      "targetTypeId": "transaction",
+      "itemCount": 2,
+      "items": [
+        {
+          "sourcePath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+          "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf",
+          "conversionRule": "output := src;"
+        }
+      ]
+    }
+  ],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "c99f5a25bbf51c59cc83dbd4cda7f12b21ca83b640ae9e7be28bbf7c79712798",
+    "signedAt": "2026-07-21T03:01:41.641Z",
+    "pcodeLength": 661,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

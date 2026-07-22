@@ -1181,6 +1181,8 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
             instr.type = pmachine::OperandType::NONE;
         } else if (opcode == pmachine::OP_EQ || opcode == pmachine::OP_NEQ || opcode == pmachine::OP_LT ||
                opcode == pmachine::OP_LE || opcode == pmachine::OP_GT || opcode == pmachine::OP_GE ||
+               opcode == pmachine::OP_OR || opcode == pmachine::OP_AND || opcode == pmachine::OP_NOT ||
+               opcode == pmachine::OP_STREQ || opcode == pmachine::OP_STRNEQ ||
                opcode == pmachine::OP_PRINT || opcode == pmachine::OP_PRINT_NL || opcode == pmachine::OP_RET ||
                opcode == pmachine::OP_ROUTE_SET_MESSAGE) {
             instr.type = pmachine::OperandType::NONE;
@@ -1421,6 +1423,42 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
                     break;
                 }
                 stack[sp++] = result;
+            }
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_OR) {
+            if (sp >= 2) {
+                int rhs = stack[--sp];
+                int lhs = stack[sp - 1];
+                stack[sp - 1] = (lhs != 0 || rhs != 0) ? 1 : 0;
+            }
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_AND) {
+            if (sp >= 2) {
+                int rhs = stack[--sp];
+                int lhs = stack[sp - 1];
+                stack[sp - 1] = (lhs != 0 && rhs != 0) ? 1 : 0;
+            }
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_NOT) {
+            if (sp >= 1) {
+                stack[sp - 1] = (stack[sp - 1] == 0) ? 1 : 0;
+            }
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_STREQ || instr.opcode == OP_STRNEQ) {
+            if (strStack.size() >= 2) {
+                std::string rhs = strStack.back(); strStack.pop_back();
+                std::string lhs = strStack.back(); strStack.pop_back();
+                int eq = (lhs == rhs) ? 1 : 0;
+                if (sp >= STACK_SIZE) break;
+                stack[sp++] = (instr.opcode == OP_STREQ) ? eq : (1 - eq);
             }
             ++pc;
             continue;

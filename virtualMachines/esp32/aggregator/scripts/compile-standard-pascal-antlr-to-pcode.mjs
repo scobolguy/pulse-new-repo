@@ -156,6 +156,28 @@ class AstBuilder extends StandardPascalVisitor {
   }
 
   visitExpr(ctx) {
+    return this.visit(ctx.logicalOrExpr());
+  }
+
+  visitLogicalOrExpr(ctx) {
+    const parts = ctx.logicalAndExpr() || [];
+    let node = this.visit(parts[0]);
+    for (let i = 1; i < parts.length; i += 1) {
+      node = { type: 'Binary', op: 'or', left: node, right: this.visit(parts[i]) };
+    }
+    return node;
+  }
+
+  visitLogicalAndExpr(ctx) {
+    const parts = ctx.comparisonExpr() || [];
+    let node = this.visit(parts[0]);
+    for (let i = 1; i < parts.length; i += 1) {
+      node = { type: 'Binary', op: 'and', left: node, right: this.visit(parts[i]) };
+    }
+    return node;
+  }
+
+  visitComparisonExpr(ctx) {
     const parts = ctx.additiveExpr() || [];
     if (parts.length === 2) {
       return {
@@ -200,6 +222,9 @@ class AstBuilder extends StandardPascalVisitor {
     if (ctx.MINUS()) {
       return { type: 'Unary', op: '-', expr: this.visit(ctx.unaryExpr()) };
     }
+    if (ctx.NOT()) {
+      return { type: 'Unary', op: 'not', expr: this.visit(ctx.unaryExpr()) };
+    }
     return this.visit(ctx.primary());
   }
 
@@ -209,6 +234,9 @@ class AstBuilder extends StandardPascalVisitor {
     }
     if (ctx.IDENT()) {
       return { type: 'Identifier', name: ctx.IDENT().getText() };
+    }
+    if (ctx.STRING()) {
+      return { type: 'StringLiteral', value: unquote(ctx.STRING().getText()) };
     }
     return this.visit(ctx.expr());
   }
@@ -245,6 +273,10 @@ class Codegen {
       this.emit(`PUSH_INT ${expr.value}`);
       return;
     }
+    if (expr.type === 'StringLiteral') {
+      this.emit(`PUSH_STR "${this.escapeString(expr.value)}"`);
+      return;
+    }
     if (expr.type === 'Identifier') {
       this.emit(`LOAD ${expr.name}`);
       return;
@@ -255,9 +287,26 @@ class Codegen {
       this.emit('SUB');
       return;
     }
+    if (expr.type === 'Unary' && expr.op === 'not') {
+      this.emitExpr(expr.expr);
+      this.emit('PUSH_INT 0');
+      this.emit('EQ'); // NOT: push 1 if zero, 0 if nonzero
+      return;
+    }
     if (expr.type === 'Binary') {
+      // Check if this is a string comparison
+      const isStrComp = (expr.op === '=' || expr.op === '<>') &&
+        (expr.left.type === 'StringLiteral' || expr.right.type === 'StringLiteral' ||
+         expr.left.type === 'Identifier' || expr.right.type === 'Identifier');
+      const isStringOp = (expr.op === '=' || expr.op === '<>') &&
+        (expr.left.type === 'StringLiteral' || expr.right.type === 'StringLiteral');
+
       this.emitExpr(expr.left);
       this.emitExpr(expr.right);
+      if (isStringOp) {
+        this.emit(expr.op === '=' ? 'STREQ' : 'STRNEQ');
+        return;
+      }
       const opMap = {
         '+': 'ADD',
         '-': 'SUB',
@@ -268,7 +317,9 @@ class Codegen {
         '<': 'LT',
         '<=': 'LE',
         '>': 'GT',
-        '>=': 'GE'
+        '>=': 'GE',
+        'or': 'OR',
+        'and': 'AND'
       };
       const op = opMap[expr.op];
       if (!op) throw new Error(`[STD-PASCAL] Unsupported operator: ${expr.op}`);

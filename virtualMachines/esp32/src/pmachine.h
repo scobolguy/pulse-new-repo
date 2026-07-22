@@ -98,6 +98,11 @@ enum Opcode : uint8_t {
     OP_CALL_EXT = 0x29,          // Call external symbol through lazy thunk resolver
     OP_TRIM = 0x49,              // Pop string, trim whitespace, push trimmed string
     OP_PARSE_INT = 0x4A,         // Pop string, parse as integer, push result (0 on parse failure)
+    OP_OR = 0x4B,                // Pop two integers, push 1 if either is nonzero, else 0
+    OP_AND = 0x4C,               // Pop two integers, push 1 if both are nonzero, else 0
+    OP_NOT = 0x4D,               // Pop integer, push 1 if zero else 0
+    OP_STREQ = 0x4E,             // Pop two strings, push 1 if equal else 0
+    OP_STRNEQ = 0x4F,            // Pop two strings, push 1 if not equal else 0
     OP_HALT = 0xFF      // HALT
 };
 

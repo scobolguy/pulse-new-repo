@@ -1,0 +1,45 @@
+[
+  {
+    "id": "helloService-http",
+    "name": "helloService-http",
+    "serviceId": "helloService",
+    "enabled": true,
+    "inputQueue": "helloService.in",
+    "methods": [
+      "POST",
+      "GET"
+    ],
+    "description": "HTTP service helloService",
+    "outputs": [
+      {
+        "queueName": "helloService.out",
+        "whenRule": "IF upper(httpVerb) = 'POST' THEN output := 1 ELSE output := 0;",
+        "transformRule": "output := src;"
+      },
+      {
+        "queueName": "helloService.out",
+        "whenRule": "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;",
+        "transformRule": "output := \"hello, world\";"
+      }
+    ],
+    "createdAt": "2026-07-22T00:29:51.897Z",
+    "updatedAt": "2026-07-22T00:29:51.897Z"
+  },
+  {
+    "id": "helloService-http",
+    "name": "helloService-http",
+    "serviceId": "helloService",
+    "enabled": true,
+    "inputQueue": "helloService.in",
+    "description": "Return hello, world for GET",
+    "outputs": [
+      {
+        "queueName": "helloService.out",
+        "whenRule": "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;",
+        "transformRule": "output := 'hello, world';"
+      }
+    ],
+    "createdAt": "2026-07-22T00:29:51.897Z",
+    "updatedAt": "2026-07-22T00:29:51.897Z"
+  }
+]

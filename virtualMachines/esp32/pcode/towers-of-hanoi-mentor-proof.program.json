@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "generatedAt": "2026-07-21T23:26:16.848Z",
+  "serviceId": "TowersOfHanoi",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "TowersOfHanoi",
+    "refreshMs": null
+  },
+  "executionModel": "standard-pascal",
+  "sourceLanguage": "pascal",
+  "globals": [
+    "diskCount"
+  ],
+  "procedures": {
+    "PROC_HANOI": {
+      "name": "Hanoi",
+      "params": [
+        "n",
+        "fromPeg",
+        "toPeg",
+        "auxPeg"
+      ],
+      "locals": []
+    }
+  },
+  "entryLabel": "MAIN",
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "a688b463e531fdc5e3fbbf280059fcd7a0c7affb89467b5d37d474d6335eca54",
+    "signedAt": "2026-07-21T23:26:16.851Z",
+    "pcodeLength": 804,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

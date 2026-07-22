@@ -1,0 +1,180 @@
+{
+  "version": 1,
+  "compiledAt": "2026-07-22T00:29:51.898Z",
+  "serviceId": "helloService",
+  "runtimeUnit": {
+    "kind": "service",
+    "id": "helloService",
+    "refreshMs": null
+  },
+  "ast": {
+    "type": "Program",
+    "serviceId": "helloService",
+    "runtimeUnit": {
+      "kind": "service",
+      "id": "helloService",
+      "refreshMs": null
+    },
+    "services": [
+      {
+        "type": "ServiceDecl",
+        "id": "helloService",
+        "runtimeUnit": {
+          "kind": "service",
+          "id": "helloService",
+          "refreshMs": null
+        },
+        "handlers": [
+          {
+            "selectorRaw": "httpVerb.post",
+            "returnExprRaw": "src"
+          },
+          {
+            "selectorRaw": "httpVerb.get",
+            "returnExprRaw": "\"hello, world\""
+          }
+        ],
+        "syntheticRouter": {
+          "type": "RouterDecl",
+          "id": "helloService-http",
+          "inputQueue": "helloService.in",
+          "description": "HTTP service helloService",
+          "enabled": true,
+          "serviceId": "helloService",
+          "methods": [
+            "POST",
+            "GET"
+          ],
+          "outputs": [
+            {
+              "type": "OutputDecl",
+              "queueName": "helloService.out",
+              "httpVerb": "POST",
+              "whenRule": "IF upper(httpVerb) = 'POST' THEN output := 1 ELSE output := 0;",
+              "transformRule": "output := src;"
+            },
+            {
+              "type": "OutputDecl",
+              "queueName": "helloService.out",
+              "httpVerb": "GET",
+              "whenRule": "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;",
+              "transformRule": "output := \"hello, world\";"
+            }
+          ]
+        }
+      }
+    ],
+    "roles": [],
+    "variables": [],
+    "routers": [
+      {
+        "type": "RouterDecl",
+        "id": "helloService-http",
+        "inputQueue": "helloService.in",
+        "description": "HTTP service helloService",
+        "enabled": true,
+        "serviceId": "helloService",
+        "methods": [
+          "POST",
+          "GET"
+        ],
+        "outputs": [
+          {
+            "type": "OutputDecl",
+            "queueName": "helloService.out",
+            "httpVerb": "POST",
+            "whenRule": "IF upper(httpVerb) = 'POST' THEN output := 1 ELSE output := 0;",
+            "transformRule": "output := src;"
+          },
+          {
+            "type": "OutputDecl",
+            "queueName": "helloService.out",
+            "httpVerb": "GET",
+            "whenRule": "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;",
+            "transformRule": "output := \"hello, world\";"
+          }
+        ]
+      },
+      {
+        "type": "RouterDecl",
+        "id": "helloService-http",
+        "inputQueue": "helloService.in",
+        "description": "Return hello, world for GET",
+        "enabled": true,
+        "serviceId": "helloService",
+        "methods": null,
+        "outputs": [
+          {
+            "type": "OutputDecl",
+            "queueName": "helloService.out",
+            "dataType": null,
+            "dataTypes": null,
+            "dataTypeId": null,
+            "dataTypeIds": null,
+            "whenRule": "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;",
+            "transformRule": "output := 'hello, world';"
+          }
+        ]
+      }
+    ],
+    "mappers": [],
+    "codeLibraries": [],
+    "uses": [],
+    "interop": [],
+    "statements": [],
+    "programId": null,
+    "daemonId": null,
+    "daemonRefreshMs": null
+  },
+  "roles": [],
+  "codeLibraries": [],
+  "uses": [],
+  "interoperability": [],
+  "variableDeclarations": [],
+  "routerRules": [
+    {
+      "id": "helloService-http",
+      "name": "helloService-http",
+      "serviceId": "helloService",
+      "enabled": true,
+      "inputQueue": "helloService.in",
+      "methods": [
+        "POST",
+        "GET"
+      ],
+      "description": "HTTP service helloService",
+      "outputs": [
+        {
+          "queueName": "helloService.out",
+          "whenRule": "IF upper(httpVerb) = 'POST' THEN output := 1 ELSE output := 0;",
+          "transformRule": "output := src;"
+        },
+        {
+          "queueName": "helloService.out",
+          "whenRule": "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;",
+          "transformRule": "output := \"hello, world\";"
+        }
+      ],
+      "createdAt": "2026-07-22T00:29:51.897Z",
+      "updatedAt": "2026-07-22T00:29:51.897Z"
+    },
+    {
+      "id": "helloService-http",
+      "name": "helloService-http",
+      "serviceId": "helloService",
+      "enabled": true,
+      "inputQueue": "helloService.in",
+      "description": "Return hello, world for GET",
+      "outputs": [
+        {
+          "queueName": "helloService.out",
+          "whenRule": "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;",
+          "transformRule": "output := 'hello, world';"
+        }
+      ],
+      "createdAt": "2026-07-22T00:29:51.897Z",
+      "updatedAt": "2026-07-22T00:29:51.897Z"
+    }
+  ],
+  "dataMappings": []
+}
