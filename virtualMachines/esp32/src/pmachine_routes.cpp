@@ -1478,6 +1478,113 @@ String applyTransformRule(const String& transformRule, const String& srcMessage,
     return out;
 }
 
+std::vector<String> splitPacsXmlBatchMessages(const String& message) {
+    std::vector<String> out;
+    String trimmed = trimCopy(message);
+    if (trimmed.length() == 0) return out;
+
+    int txProbe = trimmed.indexOf("<CdtTrfTxInf");
+    if (txProbe < 0) return out;
+
+    int docStart = trimmed.indexOf("<Document");
+    if (docStart < 0) return out;
+    int docOpenEnd = trimmed.indexOf('>', docStart);
+    if (docOpenEnd < 0) return out;
+    String documentOpenTag = trimmed.substring(docStart, docOpenEnd + 1);
+
+    int fiStart = trimmed.indexOf("<FIToFICstmrCdtTrf", docOpenEnd);
+    if (fiStart < 0) return out;
+    int fiOpenEnd = trimmed.indexOf('>', fiStart);
+    if (fiOpenEnd < 0) return out;
+    String fiOpenTag = trimmed.substring(fiStart, fiOpenEnd + 1);
+
+    int fiEndStart = trimmed.indexOf("</FIToFICstmrCdtTrf>", fiOpenEnd);
+    if (fiEndStart < 0) return out;
+
+    String fiInner = trimmed.substring(fiOpenEnd + 1, fiEndStart);
+    int grpStart = fiInner.indexOf("<GrpHdr");
+    String grpBlock = "";
+    if (grpStart >= 0) {
+        int grpOpenEnd = fiInner.indexOf('>', grpStart);
+        int grpCloseStart = fiInner.indexOf("</GrpHdr>", grpOpenEnd);
+        if (grpOpenEnd >= 0 && grpCloseStart > grpOpenEnd) {
+            grpBlock = fiInner.substring(grpStart, grpCloseStart + 9);
+        }
+    }
+
+    std::vector<String> txBlocks;
+    int cursor = 0;
+    while (cursor >= 0 && cursor < fiInner.length()) {
+        int txStart = fiInner.indexOf("<CdtTrfTxInf", cursor);
+        if (txStart < 0) break;
+        int txOpenEnd = fiInner.indexOf('>', txStart);
+        if (txOpenEnd < 0) break;
+        int txCloseStart = fiInner.indexOf("</CdtTrfTxInf>", txOpenEnd);
+        if (txCloseStart < 0) break;
+        txBlocks.push_back(fiInner.substring(txStart, txCloseStart + 14));
+        cursor = txCloseStart + 14;
+    }
+
+    if (txBlocks.size() <= 1) return out;
+
+    String xmlDecl = "";
+    if (trimmed.startsWith("<?xml")) {
+        int declEnd = trimmed.indexOf("?>");
+        if (declEnd > 0) {
+            xmlDecl = trimmed.substring(0, declEnd + 2);
+        }
+    }
+
+    for (const String& tx : txBlocks) {
+        String one;
+        if (xmlDecl.length() > 0) {
+            one += xmlDecl;
+        } else {
+            one += "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
+        }
+        one += "\n";
+        one += documentOpenTag;
+        one += fiOpenTag;
+        if (grpBlock.length() > 0) one += grpBlock;
+        one += tx;
+        one += "</FIToFICstmrCdtTrf></Document>";
+        out.push_back(one);
+    }
+
+    return out;
+}
+
+void expandFanoutMessages(const String& message, std::vector<String>& outMessages) {
+    outMessages.clear();
+
+    std::vector<String> xmlSplit = splitPacsXmlBatchMessages(message);
+    if (xmlSplit.size() > 1) {
+        outMessages = xmlSplit;
+        return;
+    }
+
+    String trimmed = trimCopy(message);
+    if (trimmed.startsWith("[")) {
+        JsonDocument arrDoc;
+        DeserializationError arrErr = deserializeJson(arrDoc, trimmed);
+        if (!arrErr && arrDoc.is<JsonArrayConst>()) {
+            JsonArrayConst arr = arrDoc.as<JsonArrayConst>();
+            for (JsonVariantConst item : arr) {
+                String one;
+                if (item.is<const char*>()) {
+                    one = String(item.as<const char*>());
+                } else {
+                    serializeJson(item, one);
+                }
+                outMessages.push_back(one);
+            }
+            if (!outMessages.empty()) return;
+        }
+    }
+
+    outMessages.push_back(message);
+}
+
 bool loadRouterRulesArray(const String& rulesFilePath, FederatedFileSystem* ffs, JsonDocument& doc, JsonArrayConst& rulesOut) {
     if (!deserializeDocFromPath(rulesFilePath, ffs, doc)) {
         return false;
@@ -2398,16 +2505,24 @@ RouterRunExecutionResult executeRouterRun(
             String shaped = routed;
             const bool shapedToXml = maybeShapeIsoToXml(outputType, routed, ffs, shaped, shapeWarning);
 
-            JsonObject d = deliveries.add<JsonObject>();
-            d["ruleId"] = rule["id"] | "";
-            d["outputQueue"] = output["queueName"] | "";
-            d["message"] = shaped;
-            d["transformApplied"] = transformApplied;
-            if (outputType.length() > 0) d["outputType"] = outputType;
-            if (shapedToXml) d["messageFormat"] = "xml";
-            if (shapeWarning.length() > 0) d["shapeWarning"] = shapeWarning;
-            if (transformError.length() > 0) d["transformError"] = transformError;
-            publishedCount += 1;
+            std::vector<String> emittedMessages;
+            expandFanoutMessages(shaped, emittedMessages);
+            for (size_t emitIndex = 0; emitIndex < emittedMessages.size(); emitIndex += 1) {
+                JsonObject d = deliveries.add<JsonObject>();
+                d["ruleId"] = rule["id"] | "";
+                d["outputQueue"] = output["queueName"] | "";
+                d["message"] = emittedMessages[emitIndex];
+                d["transformApplied"] = transformApplied;
+                if (outputType.length() > 0) d["outputType"] = outputType;
+                if (shapedToXml || emittedMessages.size() > 1) d["messageFormat"] = "xml";
+                if (shapeWarning.length() > 0) d["shapeWarning"] = shapeWarning;
+                if (transformError.length() > 0) d["transformError"] = transformError;
+                if (emittedMessages.size() > 1) {
+                    d["fanoutIndex"] = static_cast<uint32_t>(emitIndex + 1);
+                    d["fanoutTotal"] = static_cast<uint32_t>(emittedMessages.size());
+                }
+                publishedCount += 1;
+            }
         }
     }
 

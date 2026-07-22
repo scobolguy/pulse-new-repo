@@ -75,6 +75,8 @@
     { "name": "OP_ROUTE_SERVICE", "hex": "0x46", "targets": ["js"] },
     { "name": "OP_ROUTE_QUEUE", "hex": "0x47", "targets": ["js"] },
     { "name": "OP_ROUTE_FILE", "hex": "0x48", "targets": ["js"] },
+    { "name": "OP_TRIM", "hex": "0x49" },
+    { "name": "OP_PARSE_INT", "hex": "0x4A" },
     { "name": "OP_HALT", "hex": "0xFF" }
   ]
 }

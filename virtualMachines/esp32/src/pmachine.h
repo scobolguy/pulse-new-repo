@@ -96,6 +96,8 @@ enum Opcode : uint8_t {
     OP_ORCH_FAIL_TXN = 0x27,     // Fail current transaction when orchestration result is failure
     OP_ORCH_RETURN_SUCCESS = 0x28,// Return orchestration success payload
     OP_CALL_EXT = 0x29,          // Call external symbol through lazy thunk resolver
+    OP_TRIM = 0x49,              // Pop string, trim whitespace, push trimmed string
+    OP_PARSE_INT = 0x4A,         // Pop string, parse as integer, push result (0 on parse failure)
     OP_HALT = 0xFF      // HALT
 };
 
@@ -157,6 +159,8 @@ enum Opcode : uint8_t {
         if (mnemonic == "GE") return OP_GE;
         if (mnemonic == "PRINT") return OP_PRINT;
         if (mnemonic == "PRINT_NL") return OP_PRINT_NL;
+        if (mnemonic == "TRIM") return OP_TRIM;
+        if (mnemonic == "PARSE_INT") return OP_PARSE_INT;
         if (mnemonic == "HALT") return OP_HALT;
         if (mnemonic == "NOP") return OP_NOP;
         return 0xFE;

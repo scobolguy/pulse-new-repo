@@ -1387,6 +1387,33 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             ++pc;
             continue;
         }
+        if (instr.opcode == OP_TRIM) {
+            if (!strStack.empty()) {
+                std::string str = strStack.back();
+                strStack.pop_back();
+                strStack.push_back(trimCopy(str));
+            }
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_PARSE_INT) {
+            if (!strStack.empty()) {
+                std::string str = strStack.back();
+                strStack.pop_back();
+                // Try to parse as integer
+                char* endptr = nullptr;
+                long value = strtol(trimCopy(str).c_str(), &endptr, 10);
+                int result = (endptr != nullptr && *endptr == '\0') ? (int)value : 0;
+                if (sp >= STACK_SIZE) {
+                    gFlowState["__runtime_error"] = "stack overflow";
+                    gFlowState["__memory_pressure"] = captureMemoryPressureSnapshot(static_cast<size_t>(sp), STACK_SIZE).memoryPressureLevel;
+                    break;
+                }
+                stack[sp++] = result;
+            }
+            ++pc;
+            continue;
+        }
         if (instr.opcode == OP_LOAD_NAME) {
             if (sp >= STACK_SIZE) {
                 gFlowState["__runtime_error"] = "stack overflow";

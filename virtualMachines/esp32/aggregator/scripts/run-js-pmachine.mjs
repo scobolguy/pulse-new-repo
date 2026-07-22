@@ -1185,6 +1185,20 @@ async function executeProgram({ instructions, opcodeMap, mappingsById, queueType
       pc += 1;
       continue;
     }
+    if (op === 'TRIM') {
+      const str = String(stack.pop() ?? '');
+      stack.push(trimCopy(str));
+      pc += 1;
+      continue;
+    }
+    if (op === 'PARSE_INT') {
+      const str = String(stack.pop() ?? '').trim();
+      const parsed = Number.parseInt(str, 10);
+      const result = Number.isNaN(parsed) ? 0 : parsed;
+      stack.push(result);
+      pc += 1;
+      continue;
+    }
     if (op === 'CALL') {
       const call = instr.operand || { label: '', argc: 0 };
       const proc = proceduresByLabel[call.label] || { params: [], locals: [] };
