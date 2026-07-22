@@ -1,14 +1,66 @@
 import { useCallback, useState } from 'react';
 
-const ENGINE_BADGE = {
-  ollama: { label: '🤖 phi3', bg: '#e8f5e9', color: '#2e7d32', border: '#4CAF50' },
-  keyword: { label: '🔑 keyword', bg: '#f5f5f5', color: '#555', border: '#bbb' },
-};
+const ASK_ENDPOINT = '/api/ollama/ask';
+const NODES_ENDPOINT = '/api/ollama/nodes';
+const SERVICES_ENDPOINT = '/api/ollama/services';
 
-/** Returns true if the query is asking about nodes / topology */
-function isNodeQuery(q) {
-  const lower = q.toLowerCase();
-  return /\bnodes?\b|\btopolog|\binfrastructure\b|\bdevices?\b|\bnetwork\s+(nodes?|map)\b|\bshow\s+(all\s+)?nodes?\b|\blist\s+(all\s+)?nodes?\b|\bwhat\s+nodes\b/.test(lower);
+async function postAskQuery(query) {
+  const res = await fetch(ASK_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `${ASK_ENDPOINT} failed: HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  return {
+    endpoint: ASK_ENDPOINT,
+    answer: String(data.answer || '').trim(),
+    model: String(data.model || 'unknown-model'),
+    queryType: String(data.queryType || 'general'),
+  };
+}
+
+async function sendRelayControl(nodeId, pin, action, duration) {
+  const res = await fetch('/api/ollama/relay/control', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ nodeId, pin, action, duration }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Relay control failed: HTTP ${res.status}`);
+  }
+  return await res.json();
+}
+
+async function fetchNodes() {
+  try {
+    const res = await fetch(NODES_ENDPOINT);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.nodes || [];
+  } catch (e) {
+    console.warn('Failed to fetch nodes:', e.message);
+    return null;
+  }
+}
+
+async function fetchServices() {
+  try {
+    const res = await fetch(SERVICES_ENDPOINT);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return {
+      services: data.services || [],
+      servicesByNode: data.servicesByNode || {},
+    };
+  } catch (e) {
+    console.warn('Failed to fetch services:', e.message);
+    return null;
+  }
 }
 
 export default function QueryPage() {
@@ -27,45 +79,57 @@ export default function QueryPage() {
     setResult(null);
 
     try {
-      // --- Node topology shortcut ---
-      if (isNodeQuery(query.trim())) {
-        const nodesRes = await fetch('/api/nodes');
-        if (!nodesRes.ok) throw new Error(`/api/nodes failed: ${nodesRes.status}`);
-        const nodesData = await nodesRes.json();
-        const item = { type: 'nodes', query: query.trim(), nodes: nodesData, ts: new Date() };
-        setResult(item);
-        setHistory((h) => [item, ...h.slice(0, 9)]);
-        return;
+      const response = await postAskQuery(query.trim());
+      
+      // If query is about nodes, also fetch actual node list
+      let nodes = null;
+      let services = null;
+      let relayControl = null;
+      const isNodesQuery = /node|network|topology|infrastructure|devices?|cluster/i.test(query.trim());
+      const isServicesQuery = /service|capability|available|what can|what do|function/i.test(query.trim());
+      const isRelayQuery = /relay|switch|activate|deactivate|turn\s+on|turn\s+off|pulse|gpio/i.test(query.trim());
+      
+      if (isNodesQuery) {
+        nodes = await fetchNodes();
       }
-
-      // 1. Match pattern
-      const matchRes = await fetch('/api/patterns/match', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: query.trim() }),
-      });
-      if (!matchRes.ok) throw new Error(`Pattern match failed: ${matchRes.status}`);
-      const matchData = await matchRes.json();
-      const topMatch = (matchData.matches || [])[0];
-      if (!topMatch) {
-        setError('No matching pattern found.');
-        return;
+      if (isServicesQuery) {
+        services = await fetchServices();
       }
-
-      // 2. Load full pattern
-      const patternRes = await fetch(`/api/patterns/${topMatch.id}`);
-      if (!patternRes.ok) throw new Error('Could not load pattern');
-      const patternData = await patternRes.json();
-
-      // 3. Extract steps from markdown
-      const steps = extractSteps(patternData.content || '');
+      
+      // For relay control, try to parse the answer as JSON command
+      if (isRelayQuery && response.queryType === 'relay-control') {
+        try {
+          // Ollama might wrap JSON in markdown code fences, extract it
+          let jsonStr = response.answer;
+          const jsonMatch = jsonStr.match(/```json\n([\s\S]*?)\n```/) || jsonStr.match(/```\n([\s\S]*?)\n```/) || jsonStr.match(/```([\s\S]*?)```/);
+          if (jsonMatch && jsonMatch[1]) {
+            jsonStr = jsonMatch[1].trim();
+          }
+          
+          // Remove any comments from JSON (e.g., "pin": 0, // comment)
+          jsonStr = jsonStr.replace(/\/\/.*$/gm, '').replace(/,\s*([\]}])/g, '$1');
+          
+          // Try to parse as JSON - Ollama returns structured relay command
+          const relayCmd = JSON.parse(jsonStr);
+          if (relayCmd.action && relayCmd.node && relayCmd.pin !== undefined) {
+            // Execute the relay control command
+            relayControl = await sendRelayControl(relayCmd.node, relayCmd.pin, relayCmd.action, relayCmd.duration);
+          }
+        } catch (parseErr) {
+          // If parsing fails, treat answer as text response
+          console.warn('Could not parse relay command as JSON:', response.answer, parseErr.message);
+        }
+      }
 
       const item = {
+        type: 'ollamaQuery',
         query: query.trim(),
-        engine: matchData.engine || 'keyword',
-        classification: matchData.classification || null,
-        pattern: topMatch,
-        steps,
+        answer: response.answer,
+        model: response.model,
+        provider: 'ollama',
+        nodes: nodes || undefined,
+        services: services || undefined,
+        relayControl: relayControl || undefined,
         ts: new Date(),
       };
 
@@ -78,30 +142,12 @@ export default function QueryPage() {
     }
   }, [query]);
 
-  const handleReloadOllama = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const res = await fetch('/api/ollama/reload', { method: 'POST' });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || `Reload failed: ${res.status}`);
-      }
-      const data = await res.json();
-      setError(''); // Clear any errors
-      // Force re-analysis with fresh context
-      if (query.trim()) {
-        handleSubmit(); // Re-run current query
-      }
-    } catch (e) {
-      setError(`Reload failed: ${e.message}`);
-    } finally {
-      setLoading(false);
-    }
-  }, [query, handleSubmit]);
-
   return (
     <div style={{ maxWidth: 800, margin: '0 auto', padding: '32px 24px', fontFamily: 'system-ui, sans-serif' }}>
+      <h1 style={{ margin: 0, fontSize: 28, fontWeight: 700, color: '#111' }}>Ollama Query</h1>
+      <p style={{ marginTop: 8, marginBottom: 18, color: '#555', fontSize: 14 }}>
+        Single-page query interface backed by the local Ollama instance.
+      </p>
 
       {/* Input */}
       <form onSubmit={handleSubmit}>
@@ -130,7 +176,7 @@ export default function QueryPage() {
               border: 'none', borderRadius: 6, cursor: loading ? 'not-allowed' : 'pointer',
             }}
           >
-            {loading ? 'Thinking…' : 'Analyze'}
+            {loading ? 'Querying...' : 'Ask Ollama'}
           </button>
           {result && (
             <>
@@ -144,19 +190,6 @@ export default function QueryPage() {
               >
                 Clear
               </button>
-              <button
-                type="button"
-                onClick={handleReloadOllama}
-                disabled={loading}
-                title="Reload AI context and re-analyze"
-                style={{
-                  padding: '10px 16px', fontSize: 14, background: 'transparent',
-                  color: loading ? '#ccc' : '#4CAF50', border: '1px solid #4CAF50', borderRadius: 6,
-                  cursor: loading ? 'not-allowed' : 'pointer', fontWeight: 500,
-                }}
-              >
-                🔄 Reload AI
-              </button>
             </>
           )}
         </div>
@@ -169,8 +202,7 @@ export default function QueryPage() {
       )}
 
       {/* Result */}
-      {result && result.type === 'nodes' && <NodeTreeResult nodes={result.nodes} />}
-      {result && result.type !== 'nodes' && <ResultCard result={result} />}
+      {result && <OllamaResultCard result={result} />}
 
       {/* History */}
       {history.length > 1 && (
@@ -189,7 +221,7 @@ export default function QueryPage() {
             >
               <span style={{ fontWeight: 500 }}>{item.query}</span>
               <span style={{ marginLeft: 10, fontSize: 11, color: '#aaa' }}>
-                {item.pattern?.title} · {item.ts.toLocaleTimeString()}
+                {historyLabel(item)} · {item.ts.toLocaleTimeString()}
               </span>
             </button>
           ))}
@@ -199,253 +231,146 @@ export default function QueryPage() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Node tree (lazy-loading collapsible)
-// ---------------------------------------------------------------------------
-
-function NodeTreeResult({ nodes }) {
-  if (!nodes || nodes.length === 0) {
-    return (
-      <div style={{ marginTop: 20, padding: '12px 16px', background: '#fff8e1', border: '1px solid #ffe082', borderRadius: 6, color: '#5d4037', fontSize: 13 }}>
-        No nodes found. The network may be empty or /api/nodes returned nothing.
-      </div>
-    );
-  }
-  return (
-    <div style={{ marginTop: 20 }}>
-      <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: 1, color: '#999', textTransform: 'uppercase', marginBottom: 10 }}>
-        Network Nodes ({nodes.length})
-      </div>
-      {nodes.map((node, i) => (
-        <NodeRow key={node.ip || i} node={node} />
-      ))}
-    </div>
-  );
-}
-
-function NodeRow({ node }) {
-  const [open, setOpen] = useState(false);
-  const name = node.nodeName || node.ip || 'Unknown Node';
-  const status = node.details?.status || 'unknown';
-  const hardware = node.details?.hardware || '';
-  const statusColor = status === 'ok' || status === 'online' ? '#2e7d32' : '#c62828';
-
-  return (
-    <div style={{ marginBottom: 6, border: '1px solid #e0e0e0', borderRadius: 8, overflow: 'hidden' }}>
-      {/* Header row — click to expand */}
-      <button
-        onClick={() => setOpen(o => !o)}
-        style={{
-          width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center',
-          gap: 10, padding: '10px 14px', background: open ? '#f5f5f5' : '#fafafa',
-          border: 'none', cursor: 'pointer', fontFamily: 'inherit',
-        }}
-      >
-        <span style={{ fontSize: 11, color: '#888', width: 14, flexShrink: 0 }}>{open ? '▼' : '▶'}</span>
-        <span style={{ fontWeight: 600, fontSize: 14, color: '#111', flex: 1 }}>{name}</span>
-        {hardware && <span style={{ fontSize: 11, color: '#888' }}>{hardware}</span>}
-        <span style={{
-          fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 20,
-          background: status === 'ok' || status === 'online' ? '#e8f5e9' : '#fff0f0',
-          color: statusColor, border: `1px solid ${statusColor}`,
-        }}>{status}</span>
-        <span style={{ fontSize: 11, color: '#aaa', flexShrink: 0 }}>{node.ip}</span>
-      </button>
-
-      {/* Children — only rendered when open (lazy) */}
-      {open && <NodeDetails node={node} />}
-    </div>
-  );
-}
-
-function NodeDetails({ node }) {
-  const [servicesOpen, setServicesOpen] = useState(false);
-  const [devicesOpen, setDevicesOpen] = useState(false);
-  const services = node.details?.services || [];
-  const devices = node.details?.devices || node.details?.localDevices || [];
-  const lastSeen = node.lastSeen ? new Date(node.lastSeen).toLocaleTimeString() : '—';
-
-  return (
-    <div style={{ padding: '10px 14px 12px 38px', background: '#fff', borderTop: '1px solid #eee', fontSize: 13 }}>
-      <div style={{ color: '#555', marginBottom: 8 }}>
-        <span style={{ color: '#888' }}>Last seen:</span> {lastSeen}
-        {node.details?.version && <span style={{ marginLeft: 14, color: '#888' }}>v{node.details.version}</span>}
-      </div>
-
-      {/* Services subtree */}
-      <TreeSection
-        label={`Services (${services.length})`}
-        open={servicesOpen}
-        onToggle={() => setServicesOpen(o => !o)}
-        empty={services.length === 0}
-      >
-        {services.map((svc, i) => {
-          const svcColor = svc.status === 'online' ? '#2e7d32' : '#c62828';
-          return (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', borderBottom: i < services.length - 1 ? '1px solid #f5f5f5' : 'none' }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: svcColor }}>●</span>
-              <span style={{ flex: 1, fontWeight: 500 }}>{svc.name}</span>
-              {svc.api && <span style={{ fontSize: 11, color: '#888', fontFamily: 'monospace' }}>{svc.api}</span>}
-              <span style={{ fontSize: 11, color: svcColor }}>{svc.status}</span>
-            </div>
-          );
-        })}
-      </TreeSection>
-
-      {/* Devices subtree */}
-      <TreeSection
-        label={`Devices (${devices.length})`}
-        open={devicesOpen}
-        onToggle={() => setDevicesOpen(o => !o)}
-        empty={devices.length === 0}
-        style={{ marginTop: 6 }}
-      >
-        {devices.map((dev, i) => (
-          <div key={i} style={{ padding: '3px 0', color: '#444', fontSize: 12 }}>
-            {dev.name || dev.id || JSON.stringify(dev)}
-          </div>
-        ))}
-      </TreeSection>
-    </div>
-  );
-}
-
-function TreeSection({ label, open, onToggle, empty, children, style }) {
-  return (
-    <div style={style}>
-      <button
-        onClick={onToggle}
-        disabled={empty}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 6,
-          background: 'none', border: 'none', cursor: empty ? 'default' : 'pointer',
-          padding: '3px 0', fontSize: 12, fontFamily: 'inherit',
-          color: empty ? '#bbb' : '#444',
-        }}
-      >
-        <span style={{ fontSize: 10, width: 12 }}>{empty ? '─' : open ? '▼' : '▶'}</span>
-        <span>{label}</span>
-        {empty && <span style={{ fontSize: 11, color: '#bbb' }}>(none)</span>}
-      </button>
-      {open && !empty && (
-        <div style={{ paddingLeft: 18, marginTop: 4 }}>{children}</div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-
-function ResultCard({ result }) {
-  const { engine, classification, pattern, steps } = result;
-  const badge = ENGINE_BADGE[engine] || ENGINE_BADGE.keyword;
-
+function OllamaResultCard({ result }) {
   return (
     <div style={{ marginTop: 28 }}>
-      {/* Understanding block */}
       <div style={{
         padding: '20px 24px', background: '#fafafa',
-        border: '1px solid #e0e0e0', borderRadius: 10, marginBottom: 20,
+        border: '1px solid #e0e0e0', borderRadius: 10,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: '#333' }}>Understanding</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#333' }}>Response</span>
           <span style={{
             fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 20,
-            background: badge.bg, color: badge.color, border: `1px solid ${badge.border}`,
+            background: '#e8f5e9', color: '#2e7d32', border: '1px solid #4CAF50',
           }}>
-            {badge.label}
+            {String(result.provider || 'ollama').toUpperCase()} {result.model || 'unknown-model'}
           </span>
         </div>
-
-        {classification?.intent && (
-          <p style={{ margin: '0 0 14px', fontSize: 15, color: '#111', lineHeight: 1.6 }}>
-            {classification.intent}
-          </p>
-        )}
-
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          {classification?.sourceType && (
-            <Chip label="Source" value={classification.sourceType} color="#1565c0" bg="#e3f2fd" />
-          )}
-          {classification?.targetType && (
-            <Chip label="Target" value={classification.targetType} color="#1565c0" bg="#e3f2fd" />
-          )}
-          <Chip label="Pattern" value={pattern.title} color="#2e7d32" bg="#e8f5e9" />
-          {classification?.confidence != null && (
-            <Chip label="Confidence" value={`${Math.round(classification.confidence * 100)}%`} color="#555" bg="#f5f5f5" />
-          )}
+        <div style={{ whiteSpace: 'pre-wrap', fontSize: 14, color: '#111', lineHeight: 1.6 }}>
+          {result.answer || 'No response text returned.'}
         </div>
       </div>
 
-      {/* Solution steps */}
-      {steps.length > 0 && (
-        <div>
-          <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: 1, color: '#999', textTransform: 'uppercase', marginBottom: 12 }}>
-            Solution Steps
-          </div>
-          {steps.map((step, i) => (
-            <div key={i} style={{
-              display: 'flex', gap: 16, padding: '14px 0',
-              borderBottom: i < steps.length - 1 ? '1px solid #eee' : 'none',
-            }}>
-              <div style={{
-                flexShrink: 0, width: 28, height: 28, borderRadius: '50%',
-                background: '#111', color: '#fff', fontSize: 12, fontWeight: 700,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>
-                {i + 1}
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 600, fontSize: 14, color: '#111', marginBottom: 4 }}>{step.title}</div>
-                {step.verification && (
-                  <div style={{ fontSize: 13, color: '#555' }}>{step.verification}</div>
-                )}
-              </div>
-              {step.needsVerification && (
-                <div style={{ flexShrink: 0, fontSize: 11, color: '#e65100', fontWeight: 600, paddingTop: 6 }}>⚠ Verify</div>
-              )}
+      {/* Nodes Table - if available */}
+      {result.nodes && result.nodes.length > 0 && (
+        <div style={{ marginTop: 18 }}>
+          <div style={{
+            padding: '20px 24px', background: '#f0f7ff',
+            border: '1px solid #b3e5fc', borderRadius: 10,
+          }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#01579b', marginBottom: 12 }}>
+              Network Nodes ({result.nodes.length})
             </div>
-          ))}
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{
+                width: '100%', borderCollapse: 'collapse',
+                fontSize: 13, color: '#333',
+              }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid #4db8ff' }}>
+                    <th style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 600, color: '#01579b' }}>Name</th>
+                    <th style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 600, color: '#01579b' }}>Type</th>
+                    <th style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 600, color: '#01579b' }}>IP</th>
+                    <th style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 600, color: '#01579b' }}>Status</th>
+                    <th style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 600, color: '#01579b' }}>Services</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.nodes.map((node, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid #b3e5fc' }}>
+                      <td style={{ padding: '8px 10px' }}>{node.name}</td>
+                      <td style={{ padding: '8px 10px' }}>{node.type}</td>
+                      <td style={{ padding: '8px 10px', fontFamily: 'monospace', fontSize: 12 }}>{node.ip}</td>
+                      <td style={{ padding: '8px 10px' }}>
+                        <span style={{
+                          padding: '2px 6px', borderRadius: 3,
+                          background: node.status === 'online' ? '#c8e6c9' : '#ffccbc',
+                          color: node.status === 'online' ? '#1b5e20' : '#d84315',
+                          fontSize: 11, fontWeight: 600,
+                        }}>
+                          {node.status}
+                        </span>
+                      </td>
+                      <td style={{ padding: '8px 10px', fontSize: 12, color: '#555' }}>
+                        {node.services && node.services.length > 0 ? node.services.join(', ') : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Services Table - if available */}
+      {result.services && result.services.services && result.services.services.length > 0 && (
+        <div style={{ marginTop: 18 }}>
+          <div style={{
+            padding: '20px 24px', background: '#f3e5f5',
+            border: '1px solid #ce93d8', borderRadius: 10,
+          }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#4a148c', marginBottom: 12 }}>
+              Available Services ({result.services.services.length})
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{
+                width: '100%', borderCollapse: 'collapse',
+                fontSize: 13, color: '#333',
+              }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid #da7fd8' }}>
+                    <th style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 600, color: '#4a148c' }}>Service</th>
+                    <th style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 600, color: '#4a148c' }}>Providers</th>
+                    <th style={{ textAlign: 'center', padding: '8px 10px', fontWeight: 600, color: '#4a148c' }}>Count</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.services.services.map((svc, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid #e1bee7' }}>
+                      <td style={{ padding: '8px 10px', fontWeight: 500 }}>{svc.name}</td>
+                      <td style={{ padding: '8px 10px', fontSize: 12, color: '#555' }}>
+                        {svc.providers.join(', ')}
+                      </td>
+                      <td style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 600, color: '#7b1fa2' }}>
+                        {svc.providerCount}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Relay Control Result - if available */}
+      {result.relayControl && result.relayControl.success && (
+        <div style={{ marginTop: 18 }}>
+          <div style={{
+            padding: '20px 24px', background: '#fff3e0',
+            border: '1px solid #ffb74d', borderRadius: 10,
+          }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#e65100', marginBottom: 12 }}>
+              ✓ Relay Control Executed
+            </div>
+            <div style={{ fontSize: 13, color: '#333', lineHeight: 1.6 }}>
+              {result.relayControl.message}
+            </div>
+            <div style={{ marginTop: 12, fontSize: 12, color: '#666', backgroundColor: '#fff9e6', padding: '8px 12px', borderRadius: 4 }}>
+              <strong>Command Details:</strong>
+              <div style={{ marginTop: 6, fontFamily: 'monospace', whiteSpace: 'pre-wrap', fontSize: 11 }}>
+                {JSON.stringify(result.relayControl.command, null, 2)}
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-function Chip({ label, value, color, bg }) {
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 6,
-      padding: '5px 10px', background: bg, borderRadius: 20,
-      fontSize: 12,
-    }}>
-      <span style={{ color: '#888', fontWeight: 500 }}>{label}:</span>
-      <span style={{ color, fontWeight: 700 }}>{value}</span>
-    </div>
-  );
-}
-
-function extractSteps(content) {
-  const lines = content.split('\n');
-  const steps = [];
-  let current = null;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.match(/^### Step \d+:/)) {
-      if (current) steps.push(current);
-      current = {
-        title: line.replace(/^### Step \d+:\s*/, '').trim(),
-        verification: null,
-        needsVerification: false,
-      };
-    } else if (current && line.includes('**Verification**')) {
-      const next = lines[i + 1] || '';
-      const text = next.replace(/^- /, '').replace(/\*\*/g, '').trim();
-      current.verification = text;
-      current.needsVerification = text.includes('⚠');
-    }
-  }
-  if (current) steps.push(current);
-  return steps;
+function historyLabel(item) {
+  return item.type === 'ollamaQuery' ? 'Ollama query' : 'Query';
 }

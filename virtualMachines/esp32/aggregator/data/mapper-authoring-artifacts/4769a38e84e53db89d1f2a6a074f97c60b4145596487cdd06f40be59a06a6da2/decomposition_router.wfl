@@ -1,0 +1,15 @@
+cluster esp32_edge_pool {
+  local;
+  child;
+  sibling;
+}
+
+// ISO XML transport contract: queues carry XML payloads
+deploy service decomposition_router_service to cluster esp32_edge_pool;
+deploy queue pacs008_queue to cluster esp32_edge_pool;
+deploy queue messages.to.swift to cluster esp32_edge_pool;
+
+bind queue pacs008_queue manager qm name "pacs008_queue" cluster esp32_edge_pool mode parallel_xml;
+bind queue messages.to.swift manager qm name "messages.to.swift" cluster esp32_edge_pool mode parallel_xml;
+
+evict service decomposition_router_service after idle 30 seconds warm reload fallback alternate;

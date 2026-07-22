@@ -1,0 +1,36 @@
+{
+  "artifactHashes": {
+    "maplHash": "8f50cf4ec9847cb7b4979734a01476ac612bacaa02d6d9fd2adcf14253d2da82",
+    "pascalishHash": "d40c81b5b312873b1ee3a7d41b95f98e8ad9abbf3c2074c3502b7002d78adf31",
+    "wflHash": "7d9a7e1ce7c2fadf19b5ab448076759364aabe2a50d1dfc5aa78aeb6bac3ca6d"
+  },
+  "createdAt": "2026-07-21T02:59:01.576Z",
+  "determinismContract": {
+    "clusterId": "esp32_edge_pool",
+    "concurrencyMode": "concurrent",
+    "invariant": "Same normalized intent and versions produce byte-identical artifacts",
+    "maxWorkers": 12
+  },
+  "generatorVersion": "mapper-authoring-deterministic-v1",
+  "intentHash": "c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065",
+  "intentSchemaVersion": "intent-schema-v1",
+  "manifestHash": "b72d337a4ef05cb86ed4fbbc3dd03838500fac5c61cb79e407026c9338f0411f",
+  "normalizedIntent": {
+    "description": "Create a mapper to split PACS8 messages into single transactions and deploy it specifically for child3.",
+    "execution": {
+      "clusterId": "esp32_edge_pool",
+      "maxWorkers": 12,
+      "mode": "concurrent"
+    },
+    "generatorVersion": "mapper-authoring-deterministic-v1",
+    "intentKind": "split-message-to-transactions",
+    "mapId": "pacs8_message_to_transaction",
+    "schemaVersion": "intent-schema-v1",
+    "sourceTypeId": "pacs8_message",
+    "targetTypeId": "transaction",
+    "templateVersion": "templates-v1",
+    "typeAliasVersion": "type-alias-v1"
+  },
+  "templateVersion": "templates-v1",
+  "typeAliasVersion": "type-alias-v1"
+}

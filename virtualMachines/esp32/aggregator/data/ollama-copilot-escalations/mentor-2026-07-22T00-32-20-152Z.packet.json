@@ -1,0 +1,27 @@
+{
+  "sessionId": "mentor-2026-07-22T00-32-20-152Z",
+  "createdAt": "2026-07-22T00:33:00.270Z",
+  "status": "needs-copilot",
+  "reason": "timeout",
+  "prompt": "Create a separate Pascalish service named helloService that returns hello, world on GET, and deploy it to neptune.child1",
+  "generationPrompt": "Create a separate Pascalish service named helloService that returns hello, world on GET",
+  "followUpPrompt": "and deploy it to neptune.child1",
+  "hasDeploymentStage": true,
+  "model": "phi3:latest",
+  "timeoutMs": 30000,
+  "topK": 2,
+  "maxContextChars": 2500,
+  "numPredict": 320,
+  "noRepair": false,
+  "candidatePath": "data/ollama-mentor-candidates/mentor-2026-07-22T00-32-20-152Z.pas",
+  "candidateCaptured": true,
+  "candidateBytes": 0,
+  "coachResult": null,
+  "stdout": "",
+  "stderr": "",
+  "instructions": [
+    "Solve the Pascal program request using the prompt and any partial candidate.",
+    "Return only final Pascal source code.",
+    "Save the answer to a file and ingest it with scripts/ingest-pascal-mentor-answer.mjs."
+  ]
+}

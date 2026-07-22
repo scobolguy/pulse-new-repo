@@ -1,0 +1,18 @@
+{
+  "sessionId": "mentor-2026-07-21T23-30-36-836Z",
+  "createdAt": "2026-07-21T23:35:36.885Z",
+  "status": "needs-copilot",
+  "reason": "timeout",
+  "prompt": "Write a Pascalprogram to solve the towers of hanoi when n=3",
+  "model": "phi3:latest",
+  "timeoutMs": 300000,
+  "candidatePath": "data/tmp-mentor-output.pas",
+  "coachResult": null,
+  "stdout": "",
+  "stderr": "",
+  "instructions": [
+    "Solve the Pascal program request using the prompt and any partial candidate.",
+    "Return only final Pascal source code.",
+    "Save the answer to a file and ingest it with scripts/ingest-pascal-mentor-answer.mjs."
+  ]
+}

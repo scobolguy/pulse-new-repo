@@ -1,0 +1,9 @@
+{
+  "sessionId": "mentor-2026-07-21T23-09-02-258Z",
+  "status": "resolved-by-copilot",
+  "resolvedAt": "2026-07-21T23:11:17.562Z",
+  "prompt": "Write a minimal Pascal program that declares integer x, assigns x := 42, and prints it with writeln.",
+  "answerPath": "data/tmp-ollama-pascal-output.pas",
+  "packetPath": "data/ollama-copilot-escalations/mentor-2026-07-21T23-09-02-258Z.packet.json",
+  "goldenExampleId": "accepted-f39d0579cd15"
+}

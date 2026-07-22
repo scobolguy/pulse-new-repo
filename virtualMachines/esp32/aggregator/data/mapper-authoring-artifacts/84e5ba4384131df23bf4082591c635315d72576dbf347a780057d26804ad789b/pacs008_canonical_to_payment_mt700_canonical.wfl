@@ -1,0 +1,15 @@
+cluster esp32_edge_pool {
+  local;
+  child;
+  sibling;
+}
+
+// ISO XML transport contract: queues carry XML payloads
+deploy service pacs008_canonical_to_payment_mt700_canonical_service to cluster esp32_edge_pool;
+deploy queue pacs008-incoming to cluster esp32_edge_pool;
+deploy queue messages.to.swift to cluster esp32_edge_pool;
+
+bind queue pacs008-incoming manager qm name "pacs008-incoming" cluster esp32_edge_pool mode parallel_xml;
+bind queue messages.to.swift manager qm name "messages.to.swift" cluster esp32_edge_pool mode parallel_xml;
+
+evict service pacs008_canonical_to_payment_mt700_canonical_service after idle 30 seconds warm reload fallback alternate;

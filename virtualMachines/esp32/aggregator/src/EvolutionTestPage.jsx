@@ -39,11 +39,6 @@ export default function EvolutionTestPage() {
   const [cycles, setCycles] = useState('10')
   const [concurrency, setConcurrency] = useState('4')
   const [generation, setGeneration] = useState('7000')
-  const [replacementInterval, setReplacementInterval] = useState('100')
-  const [maxPopulation, setMaxPopulation] = useState('200')
-  const [birthLimit, setBirthLimit] = useState('25')
-  const [deathLimit, setDeathLimit] = useState('100')
-  const [organismIdleTtlMs, setOrganismIdleTtlMs] = useState('60000')
 
   const runtime = statusPayload?.runtime || null
   const drift = statusPayload?.drift || null
@@ -123,12 +118,7 @@ export default function EvolutionTestPage() {
         transactions: Number.parseInt(transactions, 10) || 10000,
         cycles: Number.parseInt(cycles, 10) || 10,
         concurrency: Number.parseInt(concurrency, 10) || 4,
-        generation: Number.parseInt(generation, 10) || 7000,
-        replacementInterval: Number.parseInt(replacementInterval, 10) || 100,
-        maxPopulation: Number.parseInt(maxPopulation, 10) || 200,
-        birthLimit: Number.parseInt(birthLimit, 10) || 25,
-        deathLimit: Number.parseInt(deathLimit, 10) || 100,
-        organismIdleTtlMs: Number.parseInt(organismIdleTtlMs, 10) || 60000
+        generation: Number.parseInt(generation, 10) || 7000
         }
       })
       await refreshStatus()
@@ -184,11 +174,6 @@ export default function EvolutionTestPage() {
           <NumberField label="Cycles" value={cycles} onChange={setCycles} min={1} />
           <NumberField label="Concurrency" value={concurrency} onChange={setConcurrency} min={1} />
           <NumberField label="Generation Start" value={generation} onChange={setGeneration} min={0} />
-          <NumberField label="Replacement interval" value={replacementInterval} onChange={setReplacementInterval} min={1} />
-          <NumberField label="Max Population" value={maxPopulation} onChange={setMaxPopulation} min={1} />
-          <NumberField label="Birth Limit" value={birthLimit} onChange={setBirthLimit} min={1} />
-          <NumberField label="Death Limit" value={deathLimit} onChange={setDeathLimit} min={1} />
-          <NumberField label="Idle TTL (ms)" value={organismIdleTtlMs} onChange={setOrganismIdleTtlMs} min={1000} />
         </div>
 
         <div className="evolution-actions">
@@ -221,16 +206,6 @@ export default function EvolutionTestPage() {
           <div className="kpi"><strong>Window Length</strong><span>{drift?.cycles ?? 0}</span></div>
           <div className="kpi"><strong>Available Cycles</strong><span>{drift?.availableCycles ?? 0}</span></div>
           <div className="kpi"><strong>Selector Changes</strong><span>{drift?.selectorChanges ?? 0}</span></div>
-          <div className="kpi"><strong>Replacement Interval</strong><span>{drift?.replacementInterval ?? replacementInterval ?? 100}</span></div>
-          <div className="kpi"><strong>Replacement Events</strong><span>{drift?.replacementCount ?? 0}</span></div>
-          <div className="kpi"><strong>Max Population</strong><span>{runtime?.params?.maxPopulation ?? maxPopulation ?? 200}</span></div>
-          <div className="kpi"><strong>Birth Limit</strong><span>{runtime?.params?.birthLimit ?? birthLimit ?? 25}</span></div>
-          <div className="kpi"><strong>Death Limit</strong><span>{runtime?.params?.deathLimit ?? deathLimit ?? 100}</span></div>
-          <div className="kpi"><strong>Idle TTL (ms)</strong><span>{runtime?.params?.organismIdleTtlMs ?? organismIdleTtlMs ?? 60000}</span></div>
-          <div className="kpi"><strong>Birth Events</strong><span>{drift?.birthCount ?? 0}</span></div>
-          <div className="kpi"><strong>Death Events</strong><span>{drift?.deathCount ?? 0}</span></div>
-          <div className="kpi"><strong>Active Population</strong><span>{drift?.activePopulationSize ?? '-'}</span></div>
-          <div className="kpi"><strong>Last Replacement</strong><span>{drift?.lastReplacement ? `${drift.lastReplacement.weakestOrganismId} → ${drift.lastReplacement.replacementOrganismId}` : '-'}</span></div>
           <div className="kpi"><strong>Best Ancestor</strong><span>{drift?.summary?.bestAncestor || '-'}</span></div>
           <div className="kpi"><strong>Latency μ/σ</strong><span>{drift?.latency ? `${drift.latency.mean} / ${drift.latency.stdev}` : '-'}</span></div>
           <div className="kpi"><strong>Score μ/σ</strong><span>{drift?.score ? `${drift.score.mean} / ${drift.score.stdev}` : '-'}</span></div>

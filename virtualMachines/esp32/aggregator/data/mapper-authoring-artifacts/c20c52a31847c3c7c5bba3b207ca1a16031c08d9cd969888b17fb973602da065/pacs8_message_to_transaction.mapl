@@ -1,0 +1,11 @@
+map pacs8_message_to_transaction from PACS8_MESSAGE to TRANSACTION;
+  // XML ingress contract: source payload is ISO XML parsed into source tree
+  // XML egress contract: target tree must be serialized back to ISO XML
+  // Deterministic split: one PACS transaction per emitted record
+  for each source.Document.FIToFICstmrCdtTrf.CdtTrfTxInf as tx
+    target.Document.FIToFICstmrCdtTrf.GrpHdr.MsgId := source.Document.FIToFICstmrCdtTrf.GrpHdr.MsgId;
+    target.Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId := tx.PmtId.EndToEndId;
+    target.Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt := tx.IntrBkSttlmAmt;
+    validate tx.PmtId.EndToEndId <> '';
+  end;
+end;

@@ -1,0 +1,36 @@
+{
+  "artifactHashes": {
+    "maplHash": "8c56a6a742aea13687ce5f27cd07908cb7b5c14470bfd5bed03a52565fa50966",
+    "pascalishHash": "c4d1164546a194ae6cfed0219ebfd30b662ee027210e160eae4bd1b14aefffce",
+    "wflHash": "40f86b18de2f933385a7b201e6f4c27109391f7d97a39acdd2e1d52abce380af"
+  },
+  "createdAt": "2026-07-21T02:40:06.969Z",
+  "determinismContract": {
+    "clusterId": "esp32_edge_pool",
+    "concurrencyMode": "concurrent",
+    "invariant": "Same normalized intent and versions produce byte-identical artifacts",
+    "maxWorkers": 12
+  },
+  "generatorVersion": "mapper-authoring-deterministic-v1",
+  "intentHash": "94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace",
+  "intentSchemaVersion": "intent-schema-v1",
+  "manifestHash": "dd33f0a3a63b44a56c343def4a7c90df3fe8327756bba2f60e28a602e5343e2a",
+  "normalizedIntent": {
+    "description": "xml test split",
+    "execution": {
+      "clusterId": "esp32_edge_pool",
+      "maxWorkers": 12,
+      "mode": "concurrent"
+    },
+    "generatorVersion": "mapper-authoring-deterministic-v1",
+    "intentKind": "split-message-to-transactions",
+    "mapId": "pacs_split_xml_test",
+    "schemaVersion": "intent-schema-v1",
+    "sourceTypeId": "pacs",
+    "targetTypeId": "pacs",
+    "templateVersion": "templates-v1",
+    "typeAliasVersion": "type-alias-v1"
+  },
+  "templateVersion": "templates-v1",
+  "typeAliasVersion": "type-alias-v1"
+}

@@ -1,8 +1,10 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createHash } from 'crypto';
 import XLSX from 'xlsx';
 import { runPL0 } from '../../scripts/pl0-interpreter.mjs';
+import { ollamaGenerate } from './ollamaService.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const defaultRuntimeRoot = path.join(repoRoot, 'data');
@@ -14,6 +16,726 @@ const runtimeRoot = path.resolve(
 );
 const mapsRoot = path.join(runtimeRoot, 'data-maps');
 const issueTestStorePath = path.join(runtimeRoot, 'issue-test-system.json');
+const mapperAuthoringRoot = path.join(runtimeRoot, 'mapper-authoring-artifacts');
+const mapperInventoryPath = path.join(runtimeRoot, 'mapper-authoring-inventory.json');
+const mapperDeploymentsPath = path.join(runtimeRoot, 'mapper-authoring-deployments.json');
+const librarianDataTypesPath = path.join(runtimeRoot, 'services', 'librarian', 'data-types.json');
+
+const DETERMINISTIC_GENERATOR_VERSION = 'mapper-authoring-deterministic-v1';
+const TYPE_ALIAS_VERSION = 'type-alias-v1';
+const TEMPLATE_VERSION = 'templates-v1';
+const INTENT_SCHEMA_VERSION = 'intent-schema-v1';
+
+const TYPE_ALIASES = new Map([
+  ['pacs8', 'pacs'],
+  ['pacs008', 'pacs'],
+  ['pacs.008', 'pacs'],
+  ['pacs.008.001.14', 'pacs'],
+  ['swift pacs008', 'pacs'],
+  ['swift pacs8', 'pacs'],
+  ['mt700', 'swift-mt700'],
+  ['swift-mt700', 'swift-mt700'],
+  ['pacs payment', 'pacs'],
+  ['single transactions', 'pacs']
+]);
+
+function stableSortValue(value) {
+  if (Array.isArray(value)) {
+    return value.map(stableSortValue);
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+  const keys = Object.keys(value).sort((a, b) => a.localeCompare(b));
+  const out = {};
+  for (const key of keys) {
+    out[key] = stableSortValue(value[key]);
+  }
+  return out;
+}
+
+function stableStringify(value) {
+  return JSON.stringify(stableSortValue(value), null, 2);
+}
+
+function sha256Hex(text) {
+  return createHash('sha256').update(String(text || ''), 'utf8').digest('hex');
+}
+
+function normalizeTypeToken(value) {
+  const token = String(value || '').trim().toLowerCase();
+  if (!token) return '';
+  return TYPE_ALIASES.get(token) || token;
+}
+
+function toIdent(value, fallback = 'value') {
+  const s = String(value || '').trim().replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+  return s || fallback;
+}
+
+function toPascalString(value) {
+  return String(value || '').replaceAll('"', '\\"');
+}
+
+function normalizeQueueName(value, fallback = '') {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '.')
+    .replace(/\.+/g, '.')
+    .replace(/^\.|\.$/g, '');
+  return normalized || fallback;
+}
+
+function parseExpectedTransactionCount(source) {
+  const n = Number(source);
+  if (!Number.isFinite(n)) return null;
+  const whole = Math.trunc(n);
+  if (whole <= 0) return null;
+  return Math.min(100000, whole);
+}
+
+function normalizeExecution(executionInput = {}) {
+  const rawMode = String(executionInput.mode || 'sequential').trim().toLowerCase();
+  const mode = rawMode === 'concurrent' ? 'concurrent' : 'sequential';
+  const maxWorkersRaw = Number(executionInput.maxWorkers || (mode === 'concurrent' ? 8 : 1));
+  const maxWorkers = Number.isFinite(maxWorkersRaw) ? Math.min(256, Math.max(1, Math.trunc(maxWorkersRaw))) : (mode === 'concurrent' ? 8 : 1);
+  const clusterId = toIdent(executionInput.clusterId || 'esp32_edge_pool', 'esp32_edge_pool').toLowerCase();
+  return {
+    mode,
+    maxWorkers,
+    clusterId
+  };
+}
+
+function parsePromptToIntent(promptText) {
+  const prompt = String(promptText || '').trim();
+  if (!prompt) {
+    throw new Error('prompt is required when intent is not provided');
+  }
+
+  const lower = prompt.toLowerCase();
+  const hasSplit = /single\s+transactions?/.test(lower) || /split|break/.test(lower);
+  const hasMt700 = /mt\s*700|swift\s*-?\s*mt\s*700/.test(lower);
+  const hasPacs = /pacs\s*\.?\s*0*8|pacs\s*payment|pacs8/.test(lower);
+  const outputQueueMatch = lower.match(/queue\s+['"]?([a-z0-9._-]+)['"]?/i);
+  const outputQueue = outputQueueMatch ? normalizeQueueName(outputQueueMatch[1], '') : '';
+  const expectedCountMatch = lower.match(/\b(\d{1,6})\s+(?:payment\s+)?messages?\b/i);
+  const expectedTransactionCount = expectedCountMatch ? parseExpectedTransactionCount(expectedCountMatch[1]) : null;
+
+  if (hasSplit && hasPacs) {
+    return {
+      intentKind: 'split-message-to-transactions',
+      sourceTypeId: normalizeTypeToken('pacs8'),
+      targetTypeId: normalizeTypeToken('pacs'),
+      mapId: 'pacs_split_single_transactions',
+      description: 'Deterministic PACS split into single transaction payloads',
+      outputQueue: outputQueue || 'pacs.outbound',
+      expectedTransactionCount
+    };
+  }
+
+  if (hasMt700 && hasPacs) {
+    return {
+      intentKind: 'map-message-type',
+      sourceTypeId: normalizeTypeToken('mt700'),
+      targetTypeId: normalizeTypeToken('pacs payment'),
+      mapId: 'mt700_to_pacs_payment',
+      description: 'Deterministic MT700 to PACS payment mapping'
+    };
+  }
+
+  throw new Error('Unable to deterministically classify prompt. Provide explicit intent JSON.');
+}
+
+function normalizeIntent(body = {}) {
+  const source = body.intent && typeof body.intent === 'object'
+    ? body.intent
+    : parsePromptToIntent(body.prompt);
+
+  const intentKindRaw = String(source.intentKind || '').trim().toLowerCase();
+  const intentKind = intentKindRaw === 'split-message-to-transactions'
+    ? 'split-message-to-transactions'
+    : (intentKindRaw === 'map-message-type' ? 'map-message-type' : '');
+  if (!intentKind) {
+    throw new Error('intent.intentKind must be split-message-to-transactions or map-message-type');
+  }
+
+  const sourceTypeId = normalizeTypeToken(source.sourceTypeId);
+  const targetTypeId = normalizeTypeToken(source.targetTypeId);
+  if (!sourceTypeId || !targetTypeId) {
+    throw new Error('intent.sourceTypeId and intent.targetTypeId are required');
+  }
+
+  const mapId = toIdent(source.mapId || `${sourceTypeId}_to_${targetTypeId}`, 'deterministic_mapper').toLowerCase();
+  const description = String(source.description || `${sourceTypeId} to ${targetTypeId}`).trim();
+  const execution = normalizeExecution(body.execution || source.execution || {});
+  const inputQueue = normalizeQueueName(source.inputQueue || `${sourceTypeId}.inbound`, `${sourceTypeId}.inbound`);
+  const outputQueue = normalizeQueueName(source.outputQueue || `${targetTypeId}.outbound`, `${targetTypeId}.outbound`);
+  const expectedTransactionCount = parseExpectedTransactionCount(source.expectedTransactionCount);
+
+  return {
+    schemaVersion: INTENT_SCHEMA_VERSION,
+    generatorVersion: DETERMINISTIC_GENERATOR_VERSION,
+    typeAliasVersion: TYPE_ALIAS_VERSION,
+    templateVersion: TEMPLATE_VERSION,
+    intentKind,
+    sourceTypeId,
+    targetTypeId,
+    mapId,
+    description,
+    execution,
+    inputQueue,
+    outputQueue,
+    expectedTransactionCount
+  };
+}
+
+function renderMapl(intent) {
+  const mapName = toIdent(intent.mapId, 'MAP');
+  const sourceIdent = toIdent(intent.sourceTypeId, 'SOURCE').toUpperCase();
+  const targetIdent = toIdent(intent.targetTypeId, 'TARGET').toUpperCase();
+  const xmlContractLines = [
+    `  // XML ingress contract: source payload is ISO XML parsed into source tree`,
+    `  // XML egress contract: target tree must be serialized back to ISO XML`
+  ];
+
+  if (intent.intentKind === 'split-message-to-transactions') {
+    return [
+      `map ${mapName} from ${sourceIdent} to ${targetIdent};`,
+      ...xmlContractLines,
+      `  // Deterministic split: one PACS transaction per emitted record`,
+      `  for each source.Document.FIToFICstmrCdtTrf.CdtTrfTxInf as tx`,
+      `    target.Document.FIToFICstmrCdtTrf.GrpHdr.MsgId := source.Document.FIToFICstmrCdtTrf.GrpHdr.MsgId;`,
+      `    target.Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId := tx.PmtId.EndToEndId;`,
+      `    target.Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt := tx.IntrBkSttlmAmt;`,
+      `    validate tx.PmtId.EndToEndId <> '';`,
+      `  end;`,
+      `end;`
+    ].join('\n');
+  }
+
+  return [
+    `map ${mapName} from ${sourceIdent} to ${targetIdent};`,
+    ...xmlContractLines,
+    `  // Deterministic MT700 -> PACS payment baseline mapping`,
+    `  target.Document.FIToFICstmrCdtTrf.GrpHdr.MsgId := source.block4.20;`,
+    `  target.Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt := source.block4.31C;`,
+    `  target.Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt := source.block4.32B;`,
+    `  target.Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm := source.block4.50;`,
+    `  target.Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm := source.block4.59;`,
+    `  validate source.block4.20 <> '';`,
+    `end;`
+  ].join('\n');
+}
+
+function renderPascalish(intent) {
+  const serviceId = `${intent.mapId}_service`;
+  const inputQueue = String(intent.inputQueue || `${intent.sourceTypeId}.inbound`);
+  const outputQueue = String(intent.outputQueue || `${intent.targetTypeId}.outbound`);
+  const transformRule = `output := toxml(map(\\\"${toPascalString(intent.mapId)}\\\", fromxml(src)));`;
+  const concurrentComment = intent.execution.mode === 'concurrent'
+    ? `CONCURRENT-MODE workers=${intent.execution.maxWorkers}`
+    : 'SEQUENTIAL-MODE workers=1';
+  const xmlContractComment = 'XML-IN-OUT contract: parse from XML at ingress, emit XML at egress';
+  const countComment = intent.expectedTransactionCount
+    ? `EXPECTED-SPLIT-COUNT=${intent.expectedTransactionCount}`
+    : null;
+  const routerDescription = [intent.description, concurrentComment, xmlContractComment]
+    .concat(countComment ? [countComment] : [])
+    .join(' | ');
+
+  if (intent.intentKind === 'split-message-to-transactions') {
+    return [
+      `SERVICE \"${toPascalString(serviceId)}\";`,
+      ``,
+      `ROUTER \"${toPascalString(intent.mapId)}_router\" INPUT \"${toPascalString(inputQueue)}\" DESCRIPTION \"${toPascalString(routerDescription)}\" ENABLED TRUE BEGIN`,
+      `  OUTPUT \"${toPascalString(outputQueue)}\" WHEN \"output := 1;\" TRANSFORM \"${transformRule}\";`,
+      `END;`,
+      ``,
+      `MAPPER \"${toPascalString(intent.mapId)}\" SOURCE \"${toPascalString(intent.sourceTypeId)}\" TARGET \"${toPascalString(intent.targetTypeId)}\" DESCRIPTION \"${toPascalString(intent.description)}\" ENABLED TRUE BEGIN`,
+      `  MAP \"Document.FIToFICstmrCdtTrf.GrpHdr.MsgId\" TO \"Document.FIToFICstmrCdtTrf.GrpHdr.MsgId\" USING \"output := trim(src);\";`,
+      `  MAP \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf\" USING \"output := src;\";`,
+      `END;`
+    ].join('\n');
+  }
+
+  return [
+    `SERVICE \"${toPascalString(serviceId)}\";`,
+    ``,
+    `ROUTER \"${toPascalString(intent.mapId)}_router\" INPUT \"${toPascalString(inputQueue)}\" DESCRIPTION \"${toPascalString(routerDescription)}\" ENABLED TRUE BEGIN`,
+    `  OUTPUT \"${toPascalString(outputQueue)}\" WHEN \"output := 1;\" TRANSFORM \"${transformRule}\";`,
+    `END;`,
+    ``,
+    `MAPPER \"${toPascalString(intent.mapId)}\" SOURCE \"${toPascalString(intent.sourceTypeId)}\" TARGET \"${toPascalString(intent.targetTypeId)}\" DESCRIPTION \"${toPascalString(intent.description)}\" ENABLED TRUE BEGIN`,
+    `  MAP \"block4.20\" TO \"Document.FIToFICstmrCdtTrf.GrpHdr.MsgId\" USING \"output := trim(src);\";`,
+    `  MAP \"block4.31C\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt\" USING \"output := yymmddtoiso(src);\";`,
+    `  MAP \"block4.32B\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt\" USING \"output := trim(src);\";`,
+    `  MAP \"block4.50\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm\" USING \"output := mtpartyname(src);\";`,
+    `  MAP \"block4.59\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm\" USING \"output := mtpartyname(src);\";`,
+    `END;`
+  ].join('\n');
+}
+
+function renderWfl(intent) {
+  const cluster = toIdent(intent.execution.clusterId, 'esp32_edge_pool').toLowerCase();
+  const serviceId = toIdent(`${intent.mapId}_service`, 'mapper_service');
+  const queueIn = normalizeQueueName(intent.inputQueue || `${intent.sourceTypeId}.inbound`, 'source.inbound');
+  const queueOut = normalizeQueueName(intent.outputQueue || `${intent.targetTypeId}.outbound`, 'target.outbound');
+  const mode = intent.execution.mode === 'concurrent' ? 'parallel' : 'sequential';
+  const xmlMode = `${mode}_xml`;
+
+  return [
+    `cluster ${cluster} {`,
+    `  local;`,
+    `  child;`,
+    `  sibling;`,
+    `}`,
+    ``,
+    `// ISO XML transport contract: queues carry XML payloads`,
+    `deploy service ${serviceId} to cluster ${cluster};`,
+    `deploy queue ${queueIn} to cluster ${cluster};`,
+    `deploy queue ${queueOut} to cluster ${cluster};`,
+    ``,
+    `bind queue ${queueIn} manager qm name \"${queueIn}\" cluster ${cluster} mode ${xmlMode};`,
+    `bind queue ${queueOut} manager qm name \"${queueOut}\" cluster ${cluster} mode ${xmlMode};`,
+    ``,
+    `evict service ${serviceId} after idle 30 seconds warm reload fallback alternate;`
+  ].join('\n');
+}
+
+function buildDeterministicArtifacts(normalizedIntent) {
+  const mapl = renderMapl(normalizedIntent);
+  const pascalish = renderPascalish(normalizedIntent);
+  const wfl = renderWfl(normalizedIntent);
+  return {
+    mapl,
+    pascalish,
+    wfl
+  };
+}
+
+async function persistDeterministicArtifacts(normalizedIntent, artifacts, manifest) {
+  const scopeDir = path.join(mapperAuthoringRoot, manifest.intentHash);
+  await fs.mkdir(scopeDir, { recursive: true });
+
+  const mapId = toIdent(normalizedIntent.mapId, 'deterministic_mapper').toLowerCase();
+  const paths = {
+    intent: path.join(scopeDir, `${mapId}.intent.json`),
+    mapl: path.join(scopeDir, `${mapId}.mapl`),
+    pascalish: path.join(scopeDir, `${mapId}.pas`),
+    wfl: path.join(scopeDir, `${mapId}.wfl`),
+    manifest: path.join(scopeDir, `${mapId}.manifest.json`)
+  };
+
+  await fs.writeFile(paths.intent, stableStringify(normalizedIntent), 'utf-8');
+  await fs.writeFile(paths.mapl, artifacts.mapl, 'utf-8');
+  await fs.writeFile(paths.pascalish, artifacts.pascalish, 'utf-8');
+  await fs.writeFile(paths.wfl, artifacts.wfl, 'utf-8');
+  await fs.writeFile(paths.manifest, stableStringify(manifest), 'utf-8');
+
+  return paths;
+}
+
+function extractJsonObject(text) {
+  const source = String(text || '').trim();
+  if (!source) {
+    throw new Error('Ollama returned empty response');
+  }
+  const start = source.indexOf('{');
+  const end = source.lastIndexOf('}');
+  if (start < 0 || end <= start) {
+    throw new Error('Ollama response does not contain a JSON object');
+  }
+  return source.slice(start, end + 1);
+}
+
+function asIsoNow() {
+  return new Date().toISOString();
+}
+
+function boolLike(value, fallback = false) {
+  if (typeof value === 'boolean') return value;
+  if (value == null) return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'y', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) return false;
+  return fallback;
+}
+
+function schemaHintForType(typeId) {
+  const normalized = String(typeId || '').trim().toLowerCase();
+  if (normalized === 'pacs') return ['urn:iso:std:iso:20022:tech:xsd:pacs.008.001.10'];
+  if (normalized === 'pacs-lynx') return ['urn:iso:std:iso:20022:tech:xsd:pacs.009.001.10'];
+  if (normalized === 'swift-mt700') return ['swift-fin:mt700'];
+  return [];
+}
+
+async function readOrDefaultJson(filePath, fallback) {
+  try {
+    const raw = await fs.readFile(filePath, 'utf-8');
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+async function writeStableJson(filePath, value) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, stableStringify(value), 'utf-8');
+}
+
+async function loadTypeCatalogById() {
+  const catalog = await readOrDefaultJson(librarianDataTypesPath, []);
+  const list = Array.isArray(catalog) ? catalog : [];
+  const byId = new Map();
+  for (const item of list) {
+    const id = String(item?.id || '').trim().toLowerCase();
+    if (!id) continue;
+    byId.set(id, item);
+  }
+  return byId;
+}
+
+async function upsertMapperInventory({ normalizedIntent, manifest, stored, deployed }) {
+  const now = asIsoNow();
+  const current = await readOrDefaultJson(mapperInventoryPath, {
+    version: 1,
+    updatedAt: now,
+    mappers: [],
+    messageTypes: [],
+    schemas: []
+  });
+
+  const byId = await loadTypeCatalogById();
+  const sourceType = byId.get(String(normalizedIntent.sourceTypeId || '').toLowerCase()) || null;
+  const targetType = byId.get(String(normalizedIntent.targetTypeId || '').toLowerCase()) || null;
+
+  const mappers = Array.isArray(current.mappers) ? current.mappers : [];
+  const mapperKey = String(normalizedIntent.mapId || '').trim().toLowerCase();
+  const mapperIndex = mappers.findIndex((item) => String(item?.mapId || '').trim().toLowerCase() === mapperKey);
+  const mapperEntry = {
+    mapId: normalizedIntent.mapId,
+    intentKind: normalizedIntent.intentKind,
+    sourceTypeId: normalizedIntent.sourceTypeId,
+    targetTypeId: normalizedIntent.targetTypeId,
+    execution: normalizedIntent.execution,
+    generatorVersion: DETERMINISTIC_GENERATOR_VERSION,
+    intentHash: manifest.intentHash,
+    manifestHash: manifest.manifestHash,
+    artifactHashes: manifest.artifactHashes,
+    artifactPaths: stored || null,
+    deployed: deployed ? true : false,
+    updatedAt: now,
+    createdAt: mapperIndex >= 0 ? (mappers[mapperIndex].createdAt || now) : now
+  };
+  if (mapperIndex >= 0) {
+    mappers[mapperIndex] = mapperEntry;
+  } else {
+    mappers.push(mapperEntry);
+  }
+
+  const messageTypes = Array.isArray(current.messageTypes) ? current.messageTypes : [];
+  const typeUpsert = (typeId, typeMeta) => {
+    const key = String(typeId || '').trim().toLowerCase();
+    if (!key) return;
+    const idx = messageTypes.findIndex((item) => String(item?.id || '').trim().toLowerCase() === key);
+    const next = {
+      id: key,
+      label: String(typeMeta?.label || key),
+      isIso: typeMeta?.isIso === true,
+      kind: String(typeMeta?.kind || 'message'),
+      categoryId: typeMeta?.categoryId ? String(typeMeta.categoryId) : null,
+      parentTypeId: typeMeta?.parentTypeId ? String(typeMeta.parentTypeId) : null,
+      updatedAt: now
+    };
+    if (idx >= 0) {
+      messageTypes[idx] = { ...messageTypes[idx], ...next };
+    } else {
+      messageTypes.push(next);
+    }
+  };
+  typeUpsert(normalizedIntent.sourceTypeId, sourceType);
+  typeUpsert(normalizedIntent.targetTypeId, targetType);
+
+  const schemas = Array.isArray(current.schemas) ? current.schemas : [];
+  const schemaUpsert = (typeId, refs) => {
+    const key = String(typeId || '').trim().toLowerCase();
+    if (!key) return;
+    const idx = schemas.findIndex((item) => String(item?.typeId || '').trim().toLowerCase() === key);
+    const allRefs = Array.from(new Set([...(Array.isArray(refs) ? refs : []), ...schemaHintForType(key)])).filter(Boolean);
+    const next = {
+      typeId: key,
+      schemaRefs: allRefs,
+      transport: allRefs.length > 0 && key.includes('pacs') ? 'xml' : 'unknown',
+      updatedAt: now
+    };
+    if (idx >= 0) {
+      const prevRefs = Array.isArray(schemas[idx].schemaRefs) ? schemas[idx].schemaRefs : [];
+      schemas[idx] = {
+        ...schemas[idx],
+        ...next,
+        schemaRefs: Array.from(new Set([...prevRefs, ...next.schemaRefs]))
+      };
+    } else {
+      schemas.push(next);
+    }
+  };
+  schemaUpsert(normalizedIntent.sourceTypeId, normalizedIntent.sourceSchemaRefs);
+  schemaUpsert(normalizedIntent.targetTypeId, normalizedIntent.targetSchemaRefs);
+
+  const nextInventory = {
+    version: 1,
+    updatedAt: now,
+    mappers,
+    messageTypes,
+    schemas
+  };
+  await writeStableJson(mapperInventoryPath, nextInventory);
+  return nextInventory;
+}
+
+async function upsertDeploymentRecord({ normalizedIntent, manifest, stored, requestedBy }) {
+  const now = asIsoNow();
+  const current = await readOrDefaultJson(mapperDeploymentsPath, {
+    version: 1,
+    updatedAt: now,
+    deployments: []
+  });
+  const deployments = Array.isArray(current.deployments) ? current.deployments : [];
+  const deployId = `${normalizedIntent.mapId}:${manifest.intentHash}`;
+  const idx = deployments.findIndex((item) => String(item?.deployId || '') === deployId);
+  const record = {
+    deployId,
+    mapId: normalizedIntent.mapId,
+    intentHash: manifest.intentHash,
+    manifestHash: manifest.manifestHash,
+    artifactPaths: stored || null,
+    requestedBy: String(requestedBy || 'ollama-intent').trim(),
+    deploymentMode: 'artifact-publish-only',
+    runtimePolicy: {
+      executionEngine: 'pulse-code',
+      modelExecutionAllowed: false,
+      modelMayRequestDeployment: true
+    },
+    updatedAt: now,
+    createdAt: idx >= 0 ? (deployments[idx].createdAt || now) : now
+  };
+  if (idx >= 0) {
+    deployments[idx] = record;
+  } else {
+    deployments.push(record);
+  }
+
+  const next = {
+    version: 1,
+    updatedAt: now,
+    deployments
+  };
+  await writeStableJson(mapperDeploymentsPath, next);
+  return record;
+}
+
+async function generateDeterministicBundle(body = {}) {
+  const normalizedIntent = normalizeIntent(body);
+  const artifacts = buildDeterministicArtifacts(normalizedIntent);
+  const normalizedIntentJson = stableStringify(normalizedIntent);
+  const maplHash = sha256Hex(artifacts.mapl);
+  const pascalishHash = sha256Hex(artifacts.pascalish);
+  const wflHash = sha256Hex(artifacts.wfl);
+  const intentHash = sha256Hex(normalizedIntentJson);
+  const manifestPayload = {
+    createdAt: asIsoNow(),
+    generatorVersion: DETERMINISTIC_GENERATOR_VERSION,
+    typeAliasVersion: TYPE_ALIAS_VERSION,
+    templateVersion: TEMPLATE_VERSION,
+    intentSchemaVersion: INTENT_SCHEMA_VERSION,
+    intentHash,
+    normalizedIntent,
+    artifactHashes: {
+      maplHash,
+      pascalishHash,
+      wflHash
+    },
+    determinismContract: {
+      invariant: 'Same normalized intent and versions produce byte-identical artifacts',
+      concurrencyMode: normalizedIntent.execution.mode,
+      maxWorkers: normalizedIntent.execution.maxWorkers,
+      clusterId: normalizedIntent.execution.clusterId
+    }
+  };
+  const manifestJson = stableStringify(manifestPayload);
+  const manifestHash = sha256Hex(manifestJson);
+  const manifest = {
+    ...manifestPayload,
+    manifestHash
+  };
+
+  const persist = body?.persist !== false;
+  const stored = persist
+    ? await persistDeterministicArtifacts(normalizedIntent, artifacts, manifest)
+    : null;
+
+  return {
+    normalizedIntent,
+    artifacts,
+    manifest,
+    stored
+  };
+}
+
+async function classifyIntentWithOllama(promptText, executionInput = {}, deployArtifactInput = false) {
+  const prompt = String(promptText || '').trim();
+  if (!prompt) {
+    throw new Error('prompt is required');
+  }
+
+  const mode = String(executionInput?.mode || 'sequential').trim().toLowerCase() === 'concurrent' ? 'concurrent' : 'sequential';
+  const maxWorkers = Number(executionInput?.maxWorkers || (mode === 'concurrent' ? 8 : 1));
+  const clusterId = String(executionInput?.clusterId || 'esp32_edge_pool').trim() || 'esp32_edge_pool';
+
+  const llmPrompt = [
+    'You are a mapper-intent classifier for PULSE.',
+    'Return ONLY one JSON object. No markdown. No extra text.',
+    'Allowed intentKind values: split-message-to-transactions, map-message-type.',
+    'Use sourceTypeId and targetTypeId canonical ids when possible (e.g. pacs, swift-mt700).',
+    'Set deployArtifact to true only when user explicitly asks to deploy or publish.',
+    'JSON schema:',
+    '{',
+    '  "intentKind": "split-message-to-transactions|map-message-type",',
+    '  "sourceTypeId": "string",',
+    '  "targetTypeId": "string",',
+    '  "mapId": "string",',
+    '  "description": "string",',
+    '  "inputQueue": "string",',
+    '  "outputQueue": "string",',
+    '  "expectedTransactionCount": 25,',
+    '  "deployArtifact": true,',
+    '  "execution": { "mode": "sequential|concurrent", "maxWorkers": 1, "clusterId": "esp32_edge_pool" }',
+    '}',
+    `Execution defaults: mode=${mode}, maxWorkers=${Number.isFinite(maxWorkers) ? Math.max(1, Math.trunc(maxWorkers)) : 1}, clusterId=${clusterId}.`,
+    `Deploy default requested by caller: ${deployArtifactInput ? 'true' : 'false'}.`,
+    `User request: "${prompt.replaceAll('"', '\\"')}"`
+  ].join('\n');
+
+  const raw = await ollamaGenerate(llmPrompt);
+  const parsed = JSON.parse(extractJsonObject(raw));
+  const deployArtifact = boolLike(parsed?.deployArtifact, boolLike(deployArtifactInput, false));
+  const lowerPrompt = prompt.toLowerCase();
+  const splitHint = /single\s+transactions?|decompose|split|break/.test(lowerPrompt) && /pacs\s*\.?\s*0*8|pacs8|pacs008/.test(lowerPrompt);
+  let promptHints = null;
+  try {
+    promptHints = parsePromptToIntent(prompt);
+  } catch {
+    promptHints = null;
+  }
+
+  const intent = {
+    intentKind: parsed?.intentKind,
+    sourceTypeId: parsed?.sourceTypeId,
+    targetTypeId: parsed?.targetTypeId,
+    mapId: parsed?.mapId,
+    description: parsed?.description,
+    inputQueue: parsed?.inputQueue,
+    outputQueue: parsed?.outputQueue,
+    expectedTransactionCount: parsed?.expectedTransactionCount,
+    execution: parsed?.execution
+  };
+
+  if (splitHint) {
+    intent.intentKind = 'split-message-to-transactions';
+  }
+
+  const maybeFill = (field) => {
+    const current = intent[field];
+    const missing = current == null || (typeof current === 'string' && current.trim() === '');
+    if (missing && promptHints && promptHints[field] != null) {
+      intent[field] = promptHints[field];
+    }
+  };
+
+  maybeFill('intentKind');
+  maybeFill('sourceTypeId');
+  maybeFill('targetTypeId');
+  maybeFill('mapId');
+  maybeFill('description');
+  maybeFill('inputQueue');
+  maybeFill('outputQueue');
+  maybeFill('expectedTransactionCount');
+
+  if (splitHint) {
+    intent.sourceTypeId = intent.sourceTypeId || 'pacs';
+    intent.targetTypeId = intent.targetTypeId || 'pacs';
+  }
+
+  return {
+    intent,
+    deployArtifact,
+    ollamaRaw: raw
+  };
+}
+
+async function assignDeploymentToNode({ req, nodeId, normalizedIntent, manifest, stored, runtimePolicy, requestedBy }) {
+  const targetNodeId = String(nodeId || '').trim();
+  if (!targetNodeId) {
+    throw new Error('nodeId is required for deploy assignment');
+  }
+
+  const backendBaseUrl = String(
+    process.env.PULSE_BACKEND_URL
+    || process.env.BACKEND_URL
+    || 'http://127.0.0.1:4000'
+  ).trim().replace(/\/$/, '');
+  const baseUrl = backendBaseUrl || 'http://127.0.0.1:4000';
+  const serviceName = `${toIdent(normalizedIntent.mapId, 'mapper')}_service`;
+  const packageName = `mapper-authoring/${toIdent(normalizedIntent.mapId, 'mapper').toLowerCase()}`;
+  const packageVersion = String(manifest?.manifestHash || 'latest').slice(0, 16) || 'latest';
+
+  const deploymentBody = {
+    serviceName,
+    packageName,
+    packageVersion,
+    metadata: {
+      intentHash: manifest?.intentHash || null,
+      manifestHash: manifest?.manifestHash || null,
+      artifactPaths: stored || null,
+      inputQueue: `${normalizedIntent.sourceTypeId}.inbound`,
+      outputQueue: `${normalizedIntent.targetTypeId}.outbound`,
+      mapperAuthoring: true,
+      runtimePolicy,
+      requestedBy: String(requestedBy || 'ollama-deploy').trim()
+    }
+  };
+
+  const response = await fetch(`${baseUrl}/api/nodes/${encodeURIComponent(targetNodeId)}/deploy`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify(deploymentBody)
+  });
+
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    payload = { raw: text };
+  }
+
+  if (!response.ok) {
+    const details = payload && typeof payload === 'object' ? (payload.error || JSON.stringify(payload)) : String(text || 'deploy failed');
+    throw new Error(`node deploy failed (${response.status}): ${details}`);
+  }
+
+  return {
+    nodeId: targetNodeId,
+    serviceName,
+    packageName,
+    packageVersion,
+    result: payload
+  };
+}
 
 function normalizePath(value) {
   return String(value || '').trim().replaceAll('\\', '/').replace(/^\/+/, '');
@@ -274,6 +996,209 @@ function createDefaultMap(id, name) {
 }
 
 export function registerMapperRoutes(app) {
+  app.post('/api/mapper/authoring/deterministic-generate', async (req, res) => {
+    try {
+      const generated = await generateDeterministicBundle(req.body || {});
+      const deployArtifact = boolLike(req.body?.deployArtifact, false);
+      const deployment = deployArtifact
+        ? await upsertDeploymentRecord({
+          normalizedIntent: generated.normalizedIntent,
+          manifest: generated.manifest,
+          stored: generated.stored,
+          requestedBy: 'deterministic-endpoint'
+        })
+        : null;
+      const inventory = await upsertMapperInventory({
+        normalizedIntent: generated.normalizedIntent,
+        manifest: generated.manifest,
+        stored: generated.stored,
+        deployed: Boolean(deployment)
+      });
+
+      res.status(201).json({
+        ok: true,
+        normalizedIntent: generated.normalizedIntent,
+        artifacts: generated.artifacts,
+        manifest: generated.manifest,
+        stored: generated.stored,
+        deployment,
+        inventorySummary: {
+          mapperCount: Array.isArray(inventory?.mappers) ? inventory.mappers.length : 0,
+          messageTypeCount: Array.isArray(inventory?.messageTypes) ? inventory.messageTypes.length : 0,
+          schemaCount: Array.isArray(inventory?.schemas) ? inventory.schemas.length : 0
+        }
+      });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/mapper/authoring/ollama-intent', async (req, res) => {
+    try {
+      const prompt = String(req.body?.prompt || '').trim();
+      if (!prompt) {
+        return res.status(400).json({ error: 'prompt is required' });
+      }
+
+      const classified = await classifyIntentWithOllama(
+        prompt,
+        req.body?.execution || {},
+        req.body?.deployArtifact
+      );
+
+      const generated = await generateDeterministicBundle({
+        intent: classified.intent,
+        execution: req.body?.execution || classified.intent?.execution || {},
+        persist: req.body?.persist
+      });
+
+      const deployment = classified.deployArtifact
+        ? await upsertDeploymentRecord({
+          normalizedIntent: generated.normalizedIntent,
+          manifest: generated.manifest,
+          stored: generated.stored,
+          requestedBy: 'ollama-intent'
+        })
+        : null;
+      const inventory = await upsertMapperInventory({
+        normalizedIntent: generated.normalizedIntent,
+        manifest: generated.manifest,
+        stored: generated.stored,
+        deployed: Boolean(deployment)
+      });
+
+      res.status(201).json({
+        ok: true,
+        normalizedIntent: generated.normalizedIntent,
+        artifacts: generated.artifacts,
+        manifest: generated.manifest,
+        stored: generated.stored,
+        deployment,
+        inventorySummary: {
+          mapperCount: Array.isArray(inventory?.mappers) ? inventory.mappers.length : 0,
+          messageTypeCount: Array.isArray(inventory?.messageTypes) ? inventory.messageTypes.length : 0,
+          schemaCount: Array.isArray(inventory?.schemas) ? inventory.schemas.length : 0
+        },
+        ollama: {
+          deployArtifact: classified.deployArtifact,
+          rawResponse: classified.ollamaRaw
+        },
+        runtimePolicy: {
+          executionEngine: 'pulse-code',
+          modelExecutionAllowed: false,
+          modelMayRequestDeployment: true
+        }
+      });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/mapper/authoring/ollama-deploy', async (req, res) => {
+    try {
+      const prompt = String(req.body?.prompt || '').trim();
+      const nodeId = String(req.body?.nodeId || '').trim();
+      if (!prompt) {
+        return res.status(400).json({ error: 'prompt is required' });
+      }
+      if (!nodeId) {
+        return res.status(400).json({ error: 'nodeId is required' });
+      }
+
+      const runtimePolicy = {
+        executionEngine: 'pulse-code',
+        modelExecutionAllowed: false,
+        modelMayRequestDeployment: true
+      };
+
+      const classified = await classifyIntentWithOllama(
+        prompt,
+        req.body?.execution || {},
+        true
+      );
+
+      const generated = await generateDeterministicBundle({
+        intent: classified.intent,
+        execution: req.body?.execution || classified.intent?.execution || {},
+        persist: req.body?.persist
+      });
+
+      const deploymentBookRecord = await upsertDeploymentRecord({
+        normalizedIntent: generated.normalizedIntent,
+        manifest: generated.manifest,
+        stored: generated.stored,
+        requestedBy: 'ollama-deploy'
+      });
+
+      const inventory = await upsertMapperInventory({
+        normalizedIntent: generated.normalizedIntent,
+        manifest: generated.manifest,
+        stored: generated.stored,
+        deployed: true
+      });
+
+      const nodeDeployment = await assignDeploymentToNode({
+        req,
+        nodeId,
+        normalizedIntent: generated.normalizedIntent,
+        manifest: generated.manifest,
+        stored: generated.stored,
+        runtimePolicy,
+        requestedBy: 'ollama-deploy'
+      });
+
+      return res.status(201).json({
+        ok: true,
+        normalizedIntent: generated.normalizedIntent,
+        artifacts: generated.artifacts,
+        manifest: generated.manifest,
+        stored: generated.stored,
+        deploymentBookRecord,
+        nodeDeployment,
+        inventorySummary: {
+          mapperCount: Array.isArray(inventory?.mappers) ? inventory.mappers.length : 0,
+          messageTypeCount: Array.isArray(inventory?.messageTypes) ? inventory.messageTypes.length : 0,
+          schemaCount: Array.isArray(inventory?.schemas) ? inventory.schemas.length : 0
+        },
+        ollama: {
+          deployArtifact: true,
+          rawResponse: classified.ollamaRaw
+        },
+        runtimePolicy
+      });
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/mapper/authoring/inventory', async (req, res) => {
+    try {
+      const inventory = await readOrDefaultJson(mapperInventoryPath, {
+        version: 1,
+        updatedAt: null,
+        mappers: [],
+        messageTypes: [],
+        schemas: []
+      });
+      res.json({ inventory });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/mapper/authoring/deployments', async (req, res) => {
+    try {
+      const deploymentBook = await readOrDefaultJson(mapperDeploymentsPath, {
+        version: 1,
+        updatedAt: null,
+        deployments: []
+      });
+      res.json({ deploymentBook });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // List all maps
   app.get('/api/mapper/maps', async (req, res) => {
     try {

@@ -1,0 +1,26 @@
+{
+  "sessionId": "mentor-2026-07-21T23-11-19-035Z",
+  "status": "solved-by-ollama",
+  "createdAt": "2026-07-21T23:11:44.466Z",
+  "elapsedMs": 25426,
+  "prompt": "Write a minimal Pascal program that declares integer x, assigns x := 42, and prints it with writeln.",
+  "outputPath": "data/tmp-mentor-output.pas",
+  "result": {
+    "status": "ok",
+    "model": "phi3:latest",
+    "corpusChunksUsed": 4,
+    "goldenExamplesUsed": 3,
+    "repaired": false,
+    "validation": {
+      "valid": true,
+      "dialect": "pascal-program",
+      "summary": {
+        "pcodeInstructions": null,
+        "pcodeLines": 12
+      },
+      "errors": []
+    },
+    "outputPath": "aggregator/data/tmp-mentor-output.pas",
+    "candidate": "program MinimalDemo;\nvar\n  x: integer;\nbegin\n  x := 42;\n  writeln(x);\nend."
+  }
+}

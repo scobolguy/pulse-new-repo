@@ -1,0 +1,445 @@
+{
+  "mappers": [
+    {
+      "artifactHashes": {
+        "maplHash": "53d2dfb88a00feda5dcf0d2434f47dc44a0739e279148301a3c3441fcb5bc421",
+        "pascalishHash": "69fb3c0f95c0105776b16650c98c00247647222c3ae6e7be55f8c686df65bb4e",
+        "wflHash": "537f68122efdf2836be757262e12ef00547de1d2564320d69405321636ac6e8a"
+      },
+      "artifactPaths": {
+        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22\\swift_mt700_to_pacs.intent.json",
+        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22\\swift_mt700_to_pacs.manifest.json",
+        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22\\swift_mt700_to_pacs.mapl",
+        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22\\swift_mt700_to_pacs.pas",
+        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22\\swift_mt700_to_pacs.wfl"
+      },
+      "createdAt": "2026-07-21T02:39:42.336Z",
+      "deployed": true,
+      "execution": {
+        "clusterId": "esp32_edge_pool",
+        "maxWorkers": 24,
+        "mode": "concurrent"
+      },
+      "generatorVersion": "mapper-authoring-deterministic-v1",
+      "intentHash": "74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22",
+      "intentKind": "map-message-type",
+      "manifestHash": "aea5dbd1f4ad543f29694c206d92fd1425c2e03799d76852b8166fb1c992b119",
+      "mapId": "swift_mt700_to_pacs",
+      "sourceTypeId": "swift-mt700",
+      "targetTypeId": "pacs",
+      "updatedAt": "2026-07-21T02:39:42.336Z"
+    },
+    {
+      "artifactHashes": {
+        "maplHash": "8c56a6a742aea13687ce5f27cd07908cb7b5c14470bfd5bed03a52565fa50966",
+        "pascalishHash": "c4d1164546a194ae6cfed0219ebfd30b662ee027210e160eae4bd1b14aefffce",
+        "wflHash": "40f86b18de2f933385a7b201e6f4c27109391f7d97a39acdd2e1d52abce380af"
+      },
+      "artifactPaths": {
+        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace\\pacs_split_xml_test.intent.json",
+        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace\\pacs_split_xml_test.manifest.json",
+        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace\\pacs_split_xml_test.mapl",
+        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace\\pacs_split_xml_test.pas",
+        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace\\pacs_split_xml_test.wfl"
+      },
+      "createdAt": "2026-07-21T02:40:07.031Z",
+      "deployed": true,
+      "execution": {
+        "clusterId": "esp32_edge_pool",
+        "maxWorkers": 12,
+        "mode": "concurrent"
+      },
+      "generatorVersion": "mapper-authoring-deterministic-v1",
+      "intentHash": "94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace",
+      "intentKind": "split-message-to-transactions",
+      "manifestHash": "dd33f0a3a63b44a56c343def4a7c90df3fe8327756bba2f60e28a602e5343e2a",
+      "mapId": "pacs_split_xml_test",
+      "sourceTypeId": "pacs",
+      "targetTypeId": "pacs",
+      "updatedAt": "2026-07-21T02:40:07.031Z"
+    },
+    {
+      "artifactHashes": {
+        "maplHash": "1b69962a9f93b51662ec3f981b9e78435d247acf867914bf6fc1588263131a11",
+        "pascalishHash": "e3221c0ec7c2741ed5f05d8ef9f0f06f8fe9bae76f01f4c2263f798cbaf3ecd4",
+        "wflHash": "6b85b177f0f2b84ac910462344a414dd344c272fd7c436935e1ebd8aededcea7"
+      },
+      "artifactPaths": {
+        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\3977af8f7d4fdc7600ee7dc43e460b177e427371b47f5988a4a55fb0944ea5f7\\pacs_to_transaction_id.intent.json",
+        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\3977af8f7d4fdc7600ee7dc43e460b177e427371b47f5988a4a55fb0944ea5f7\\pacs_to_transaction_id.manifest.json",
+        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\3977af8f7d4fdc7600ee7dc43e460b177e427371b47f5988a4a55fb0944ea5f7\\pacs_to_transaction_id.mapl",
+        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\3977af8f7d4fdc7600ee7dc43e460b177e427371b47f5988a4a55fb0944ea5f7\\pacs_to_transaction_id.pas",
+        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\3977af8f7d4fdc7600ee7dc43e460b177e427371b47f5988a4a55fb0944ea5f7\\pacs_to_transaction_id.wfl"
+      },
+      "createdAt": "2026-07-21T02:56:14.434Z",
+      "deployed": false,
+      "execution": {
+        "clusterId": "esp32_edge_pool",
+        "maxWorkers": 1,
+        "mode": "sequential"
+      },
+      "generatorVersion": "mapper-authoring-deterministic-v1",
+      "intentHash": "3977af8f7d4fdc7600ee7dc43e460b177e427371b47f5988a4a55fb0944ea5f7",
+      "intentKind": "split-message-to-transactions",
+      "manifestHash": "211aa7eb8c9692466d654932437d13a39b818344a761af20037d1fb53aa79742",
+      "mapId": "pacs_to_transaction_id",
+      "sourceTypeId": "pacs",
+      "targetTypeId": "transaction_id",
+      "updatedAt": "2026-07-21T02:56:14.434Z"
+    },
+    {
+      "artifactHashes": {
+        "maplHash": "8f50cf4ec9847cb7b4979734a01476ac612bacaa02d6d9fd2adcf14253d2da82",
+        "pascalishHash": "d40c81b5b312873b1ee3a7d41b95f98e8ad9abbf3c2074c3502b7002d78adf31",
+        "wflHash": "7d9a7e1ce7c2fadf19b5ab448076759364aabe2a50d1dfc5aa78aeb6bac3ca6d"
+      },
+      "artifactPaths": {
+        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065\\pacs8_message_to_transaction.intent.json",
+        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065\\pacs8_message_to_transaction.manifest.json",
+        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065\\pacs8_message_to_transaction.mapl",
+        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065\\pacs8_message_to_transaction.pas",
+        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065\\pacs8_message_to_transaction.wfl"
+      },
+      "createdAt": "2026-07-21T02:59:01.630Z",
+      "deployed": true,
+      "execution": {
+        "clusterId": "esp32_edge_pool",
+        "maxWorkers": 12,
+        "mode": "concurrent"
+      },
+      "generatorVersion": "mapper-authoring-deterministic-v1",
+      "intentHash": "c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065",
+      "intentKind": "split-message-to-transactions",
+      "manifestHash": "b72d337a4ef05cb86ed4fbbc3dd03838500fac5c61cb79e407026c9338f0411f",
+      "mapId": "pacs8_message_to_transaction",
+      "sourceTypeId": "pacs8_message",
+      "targetTypeId": "transaction",
+      "updatedAt": "2026-07-21T02:59:01.630Z"
+    },
+    {
+      "artifactHashes": {
+        "maplHash": "f9afddd0ff5dc049b070b06825c1e0553de2cab5e62e120f3e0e8b44b7ce5734",
+        "pascalishHash": "f05e55867d3fb71555664311732851c8b3fd54d0b27e0dc68cb700494876a3d2",
+        "wflHash": "b38c7288d568278231f7870119acc618bf1a1e992eef8c78451fdcb7cf89f1c9"
+      },
+      "artifactPaths": null,
+      "createdAt": "2026-07-21T14:07:14.818Z",
+      "deployed": false,
+      "execution": {
+        "clusterId": "esp32_edge_pool",
+        "maxWorkers": 1,
+        "mode": "sequential"
+      },
+      "generatorVersion": "mapper-authoring-deterministic-v1",
+      "intentHash": "d18a729577d43427350cec63c6a42549a8a5958cc74f4d01c159f6cf5c50824f",
+      "intentKind": "split-message-to-transactions",
+      "manifestHash": "70fa0764cd305441bff2125f3b3114f327b95f137a43c5a6a039b9e917bb6f32",
+      "mapId": "pacs_to_swift_mt700",
+      "sourceTypeId": "pacs",
+      "targetTypeId": "swift-mt700",
+      "updatedAt": "2026-07-21T14:12:18.567Z"
+    },
+    {
+      "artifactHashes": {
+        "maplHash": "39d119e2aab0137b93a6026ae85172169d7835d9dc96f6fcda5b06a735168a32",
+        "pascalishHash": "6824459cd4d26fd95e0c4dca4b7d51d717a5b5aafadfb27636a1d8e5b16ed5fe",
+        "wflHash": "69809379c50100659de66670d6c14f3e782f69791da773fd9a8620f899472fa6"
+      },
+      "artifactPaths": null,
+      "createdAt": "2026-07-21T14:09:12.798Z",
+      "deployed": false,
+      "execution": {
+        "clusterId": "esp32_edge_pool",
+        "maxWorkers": 12,
+        "mode": "concurrent"
+      },
+      "generatorVersion": "mapper-authoring-deterministic-v1",
+      "intentHash": "8b0f9a1c688d82cc1ea313a3367ecbdc0d49359c6fdde6e80702d18c99b41a8d",
+      "intentKind": "map-message-type",
+      "manifestHash": "d54dc27ec6b47bd363f73f9bb00b91eafd43ac43d3240da6daaa1a23bcafdf11",
+      "mapId": "decomposition_mapper_1234567",
+      "sourceTypeId": "pacs",
+      "targetTypeId": "payments-123456789",
+      "updatedAt": "2026-07-21T14:09:12.798Z"
+    },
+    {
+      "artifactHashes": {
+        "maplHash": "28727bd572ece184bec8c773da40243bf98b4509b6bb006dbf0bd3bc0e96a9d2",
+        "pascalishHash": "96e36be7ace9e6d247c07305aec8125742fbf5e2aea88c847253918465492e12",
+        "wflHash": "bcc876490bfaad8f8395d83a9e5ecb910006c2382d7eeffa1b122e7c92227c3b"
+      },
+      "artifactPaths": null,
+      "createdAt": "2026-07-21T14:10:12.170Z",
+      "deployed": false,
+      "execution": {
+        "clusterId": "esp32_edge_pool",
+        "maxWorkers": 1,
+        "mode": "sequential"
+      },
+      "generatorVersion": "mapper-authoring-deterministic-v1",
+      "intentHash": "25510223ed8a0dba7d6836d57b54ef1ac4078b91b394e4104423681c179e3407",
+      "intentKind": "split-message-to-transactions",
+      "manifestHash": "9aec8cdf5b8be360d520739808ef513f101a81e83b29255ec6366fa2f5b93891",
+      "mapId": "mapper_for_decomposing_pacs_to_swift",
+      "sourceTypeId": "pacs",
+      "targetTypeId": "swift-mt700",
+      "updatedAt": "2026-07-21T14:10:12.170Z"
+    },
+    {
+      "artifactHashes": {
+        "maplHash": "81817729c943d78330ae617088a5136d4f2c1730d442b1a06d9f43b75db9cfe1",
+        "pascalishHash": "acfc50b7356dbbb55b4dedc063d8b2266c5913473d5877c49b8428ec82a6a9ed",
+        "wflHash": "a79cbe194e422366e73c2fbf4a26df75599dd026108c2bc5ee61f74c8ea06f5a"
+      },
+      "artifactPaths": null,
+      "createdAt": "2026-07-21T14:10:53.054Z",
+      "deployed": false,
+      "execution": {
+        "clusterId": "esp32_edge_pool",
+        "maxWorkers": 1,
+        "mode": "sequential"
+      },
+      "generatorVersion": "mapper-authoring-deterministic-v1",
+      "intentHash": "b7f27f19c8e3fd6419513a9e05dd3fbebde5d111a9d4225a09f63a9bd36ed189",
+      "intentKind": "split-message-to-transactions",
+      "manifestHash": "bde83c3e30447c8b989f739f4c5deef6ae93b9b57153b62c454c56ae9d8ac02b",
+      "mapId": "pacs_to_payment_message",
+      "sourceTypeId": "pacs",
+      "targetTypeId": "payment_message",
+      "updatedAt": "2026-07-21T14:10:53.054Z"
+    },
+    {
+      "artifactHashes": {
+        "maplHash": "5523e44e5a3eac1ba40ade15fb9294834c55afac516f101a22f8a41773cb8a2e",
+        "pascalishHash": "3629876c04fe5808340c66e5d77472e57bc82f6cf1ab5e69304e7fc973a446a8",
+        "wflHash": "550191b1784e10dcb6b457c7be1026da68f365b41ea6606c4702f61c22acc966"
+      },
+      "artifactPaths": {
+        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b\\pacs008_canonical_to_payment_mt700_canonical.intent.json",
+        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b\\pacs008_canonical_to_payment_mt700_canonical.manifest.json",
+        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b\\pacs008_canonical_to_payment_mt700_canonical.mapl",
+        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b\\pacs008_canonical_to_payment_mt700_canonical.pas",
+        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b\\pacs008_canonical_to_payment_mt700_canonical.wfl"
+      },
+      "createdAt": "2026-07-21T14:15:08.015Z",
+      "deployed": true,
+      "execution": {
+        "clusterId": "esp32_edge_pool",
+        "maxWorkers": 12,
+        "mode": "concurrent"
+      },
+      "generatorVersion": "mapper-authoring-deterministic-v1",
+      "intentHash": "84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b",
+      "intentKind": "split-message-to-transactions",
+      "manifestHash": "44297936f99ba618291d29a3723b65fdc5a1550796191de3ff4b4910bbb4e3b5",
+      "mapId": "pacs008_canonical_to_payment_mt700_canonical",
+      "sourceTypeId": "pacs008-canonical",
+      "targetTypeId": "payment-mt700-canonical",
+      "updatedAt": "2026-07-21T14:15:08.015Z"
+    },
+    {
+      "artifactHashes": {
+        "maplHash": "5452d7d16cf5311bd1d9dfd67efdc7825cfb0ade245c8a293102a45d56137a3b",
+        "pascalishHash": "1f5bfe0130cfc6ebad7cd2a111e9d29eeda2f2566d9dd5f4536802ba44a5682a",
+        "wflHash": "7ffaf85c683967a6b96d3998388094bb18344132017db1b5582f8815d4516da6"
+      },
+      "artifactPaths": {
+        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2\\decomposition_router.intent.json",
+        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2\\decomposition_router.manifest.json",
+        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2\\decomposition_router.mapl",
+        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2\\decomposition_router.pas",
+        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2\\decomposition_router.wfl"
+      },
+      "createdAt": "2026-07-21T14:15:35.604Z",
+      "deployed": true,
+      "execution": {
+        "clusterId": "esp32_edge_pool",
+        "maxWorkers": 12,
+        "mode": "concurrent"
+      },
+      "generatorVersion": "mapper-authoring-deterministic-v1",
+      "intentHash": "4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2",
+      "intentKind": "split-message-to-transactions",
+      "manifestHash": "c683fba454024428edfa458585b58d2cfb40d1b3e409f29a06d73eceb5e37858",
+      "mapId": "decomposition_router",
+      "sourceTypeId": "pacs008_canonical",
+      "targetTypeId": "swiftmt700_canonical",
+      "updatedAt": "2026-07-21T14:15:35.604Z"
+    }
+  ],
+  "messageTypes": [
+    {
+      "categoryId": "legacyswift",
+      "id": "swift-mt700",
+      "isIso": false,
+      "kind": "message",
+      "label": "SWIFT FIN Message - MT700 Issue of a Documentary Credit",
+      "parentTypeId": "swift-mt7xx",
+      "updatedAt": "2026-07-21T14:12:18.567Z"
+    },
+    {
+      "categoryId": null,
+      "id": "pacs",
+      "isIso": true,
+      "kind": "message",
+      "label": "ISO 20022 - Payments Clearing and Settlement (pacs)",
+      "parentTypeId": null,
+      "updatedAt": "2026-07-21T14:12:18.567Z"
+    },
+    {
+      "categoryId": null,
+      "id": "transaction_id",
+      "isIso": false,
+      "kind": "message",
+      "label": "transaction_id",
+      "parentTypeId": null,
+      "updatedAt": "2026-07-21T02:56:14.434Z"
+    },
+    {
+      "categoryId": null,
+      "id": "pacs8_message",
+      "isIso": false,
+      "kind": "message",
+      "label": "pacs8_message",
+      "parentTypeId": null,
+      "updatedAt": "2026-07-21T02:59:01.630Z"
+    },
+    {
+      "categoryId": null,
+      "id": "transaction",
+      "isIso": false,
+      "kind": "message",
+      "label": "transaction",
+      "parentTypeId": null,
+      "updatedAt": "2026-07-21T02:59:01.630Z"
+    },
+    {
+      "categoryId": null,
+      "id": "payments-123456789",
+      "isIso": false,
+      "kind": "message",
+      "label": "payments-123456789",
+      "parentTypeId": null,
+      "updatedAt": "2026-07-21T14:09:12.798Z"
+    },
+    {
+      "categoryId": null,
+      "id": "payment_message",
+      "isIso": false,
+      "kind": "message",
+      "label": "payment_message",
+      "parentTypeId": null,
+      "updatedAt": "2026-07-21T14:10:53.054Z"
+    },
+    {
+      "categoryId": null,
+      "id": "pacs008-canonical",
+      "isIso": false,
+      "kind": "message",
+      "label": "pacs008-canonical",
+      "parentTypeId": null,
+      "updatedAt": "2026-07-21T14:15:08.015Z"
+    },
+    {
+      "categoryId": null,
+      "id": "payment-mt700-canonical",
+      "isIso": false,
+      "kind": "message",
+      "label": "payment-mt700-canonical",
+      "parentTypeId": null,
+      "updatedAt": "2026-07-21T14:15:08.015Z"
+    },
+    {
+      "categoryId": null,
+      "id": "pacs008_canonical",
+      "isIso": false,
+      "kind": "message",
+      "label": "pacs008_canonical",
+      "parentTypeId": null,
+      "updatedAt": "2026-07-21T14:15:35.604Z"
+    },
+    {
+      "categoryId": null,
+      "id": "swiftmt700_canonical",
+      "isIso": false,
+      "kind": "message",
+      "label": "swiftmt700_canonical",
+      "parentTypeId": null,
+      "updatedAt": "2026-07-21T14:15:35.604Z"
+    }
+  ],
+  "schemas": [
+    {
+      "schemaRefs": [
+        "swift-fin:mt700"
+      ],
+      "transport": "unknown",
+      "typeId": "swift-mt700",
+      "updatedAt": "2026-07-21T14:12:18.567Z"
+    },
+    {
+      "schemaRefs": [
+        "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.10"
+      ],
+      "transport": "xml",
+      "typeId": "pacs",
+      "updatedAt": "2026-07-21T14:12:18.567Z"
+    },
+    {
+      "schemaRefs": [],
+      "transport": "unknown",
+      "typeId": "transaction_id",
+      "updatedAt": "2026-07-21T02:56:14.434Z"
+    },
+    {
+      "schemaRefs": [],
+      "transport": "unknown",
+      "typeId": "pacs8_message",
+      "updatedAt": "2026-07-21T02:59:01.630Z"
+    },
+    {
+      "schemaRefs": [],
+      "transport": "unknown",
+      "typeId": "transaction",
+      "updatedAt": "2026-07-21T02:59:01.630Z"
+    },
+    {
+      "schemaRefs": [],
+      "transport": "unknown",
+      "typeId": "payments-123456789",
+      "updatedAt": "2026-07-21T14:09:12.798Z"
+    },
+    {
+      "schemaRefs": [],
+      "transport": "unknown",
+      "typeId": "payment_message",
+      "updatedAt": "2026-07-21T14:10:53.054Z"
+    },
+    {
+      "schemaRefs": [],
+      "transport": "unknown",
+      "typeId": "pacs008-canonical",
+      "updatedAt": "2026-07-21T14:15:08.015Z"
+    },
+    {
+      "schemaRefs": [],
+      "transport": "unknown",
+      "typeId": "payment-mt700-canonical",
+      "updatedAt": "2026-07-21T14:15:08.015Z"
+    },
+    {
+      "schemaRefs": [],
+      "transport": "unknown",
+      "typeId": "pacs008_canonical",
+      "updatedAt": "2026-07-21T14:15:35.604Z"
+    },
+    {
+      "schemaRefs": [],
+      "transport": "unknown",
+      "typeId": "swiftmt700_canonical",
+      "updatedAt": "2026-07-21T14:15:35.604Z"
+    }
+  ],
+  "updatedAt": "2026-07-21T14:15:35.604Z",
+  "version": 1
+}

@@ -1,8 +1,16 @@
 ﻿import fs from 'fs/promises';
 import path from 'path';
 import { pathToFileURL } from 'url';
+import { XMLParser } from 'fast-xml-parser';
 import { loadOpcodeMap } from './pmachine-js-opcodes.mjs';
 import QueueManager from '../src/broker/QueueManager.mjs';
+
+const XML_PARSER = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: '@',
+  parseTagValue: true,
+  trimValues: true
+});
 
 function parseArgs(argv) {
   const args = {
@@ -250,7 +258,7 @@ function parseMT103FinText(text) {
 
 // --- end MT103 parser ---
 
-function getJsonPathValueAsString(root, dotPath) {
+function getJsonPathValue(root, dotPath) {
   const parts = String(dotPath || '').split('.').map(trimCopy).filter(Boolean);
   let cur = root;
   for (const key of parts) {
@@ -258,9 +266,19 @@ function getJsonPathValueAsString(root, dotPath) {
     cur = cur[key];
   }
 
-  if (typeof cur === 'string') return cur;
-  if (typeof cur === 'number' || typeof cur === 'boolean') return String(cur);
-  if (cur && typeof cur === 'object') return JSON.stringify(cur);
+  return cur;
+}
+
+function asStringValue(value) {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (value && typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return '';
+    }
+  }
   return '';
 }
 
@@ -311,13 +329,14 @@ function mapMtChargeBearerToIso(raw) {
 
 function applyConversionRule(conversionRule, srcValue) {
   const rule = toUpperCopy(trimCopy(conversionRule));
+  const srcText = asStringValue(srcValue);
   if (!rule) return srcValue;
-  if (rule.includes('UPPER(SRC)')) return toUpperCopy(srcValue);
-  if (rule.includes('TRIM(SRC)')) return trimCopy(srcValue);
-  if (rule.includes('YYMMDDTOISO(SRC)')) return yyMmDdToIso(srcValue);
-  if (rule.includes('MTPARTYNAME(SRC)')) return extractMtPartyName(srcValue);
-  if (rule.includes('MTCHARGEBEARERTOISO(SRC)')) return mapMtChargeBearerToIso(srcValue);
-  if (rule.includes('MTAMOUNTTODECIMAL(SRC)')) return normalizeMtAmount(srcValue);
+  if (rule.includes('UPPER(SRC)')) return toUpperCopy(srcText);
+  if (rule.includes('TRIM(SRC)')) return trimCopy(srcText);
+  if (rule.includes('YYMMDDTOISO(SRC)')) return yyMmDdToIso(srcText);
+  if (rule.includes('MTPARTYNAME(SRC)')) return extractMtPartyName(srcText);
+  if (rule.includes('MTCHARGEBEARERTOISO(SRC)')) return mapMtChargeBearerToIso(srcText);
+  if (rule.includes('MTAMOUNTTODECIMAL(SRC)')) return normalizeMtAmount(srcText);
   if (rule.includes('OUTPUT := SRC')) return srcValue;
   return srcValue;
 }
@@ -462,6 +481,85 @@ function messageObjectToXml(messageObject) {
   return `<?xml version="1.0" encoding="UTF-8"?>\n${xmlBody}`;
 }
 
+function parseXmlMessage(xmlText) {
+  const raw = String(xmlText || '').trim();
+  if (!raw) return null;
+  if (!raw.startsWith('<') && !raw.startsWith('<?xml')) return null;
+  try {
+    const parsed = XML_PARSER.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function splitPacsBatchObject(payloadObject) {
+  if (!payloadObject || typeof payloadObject !== 'object') return null;
+
+  const doc = payloadObject.Document;
+  const fi = doc && typeof doc === 'object' ? doc.FIToFICstmrCdtTrf : null;
+  if (!fi || typeof fi !== 'object') return null;
+
+  const txList = fi.CdtTrfTxInf;
+  if (!Array.isArray(txList) || txList.length <= 1) return null;
+
+  const grpHdr = fi.GrpHdr && typeof fi.GrpHdr === 'object' ? fi.GrpHdr : {};
+  return txList.map((tx) => ({
+    Document: {
+      FIToFICstmrCdtTrf: {
+        GrpHdr: grpHdr,
+        CdtTrfTxInf: tx
+      }
+    }
+  }));
+}
+
+function expandOutputMessages(message) {
+  if (Array.isArray(message)) {
+    return message;
+  }
+
+  if (message && typeof message === 'object') {
+    const splitObject = splitPacsBatchObject(message);
+    if (splitObject) return splitObject;
+    return [message];
+  }
+
+  const raw = String(message ?? '');
+  const trimmed = raw.trim();
+  if (!trimmed) return [raw];
+
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      return Array.isArray(parsed) ? parsed : [raw];
+    } catch {
+      return [raw];
+    }
+  }
+
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const splitObject = splitPacsBatchObject(parsed);
+      if (!splitObject) return [raw];
+      return splitObject.map((item) => JSON.stringify(item));
+    } catch {
+      return [raw];
+    }
+  }
+
+  if (trimmed.startsWith('<') || trimmed.startsWith('<?xml')) {
+    const parsed = parseXmlMessage(trimmed);
+    if (!parsed) return [raw];
+    const splitObject = splitPacsBatchObject(parsed);
+    if (!splitObject) return [raw];
+    return splitObject.map((item) => messageObjectToXml(item));
+  }
+
+  return [raw];
+}
+
 function buildFitnessReport({ args, sourceMessage, result, durationMs, deliveryCount, mode }) {
   const successCount = Number(deliveryCount || 0) > 0 ? 1 : 0;
   const failureCount = successCount > 0 ? 0 : 1;
@@ -602,10 +700,14 @@ function runMappingById(mappingId, sourcePayload, mappingsById) {
   }
 
   let sourceDoc;
-  try {
-    sourceDoc = JSON.parse(sourcePayload);
-  } catch {
-    sourceDoc = { src: sourcePayload };
+  if (sourcePayload && typeof sourcePayload === 'object') {
+    sourceDoc = sourcePayload;
+  } else {
+    try {
+      sourceDoc = JSON.parse(sourcePayload);
+    } catch {
+      sourceDoc = { src: sourcePayload };
+    }
   }
 
   // For FIN payloads, auto-parse MT103 text when mapper expects swift-mt103 fields.
@@ -622,7 +724,7 @@ function runMappingById(mappingId, sourcePayload, mappingsById) {
 
   const out = {};
   for (const item of mapping.items) {
-    const srcValue = getJsonPathValueAsString(sourceDoc, item.sourcePath);
+    const srcValue = getJsonPathValue(sourceDoc, item.sourcePath);
     const transformed = applyConversionRule(item.conversionRule, srcValue);
     setJsonPathValue(out, item.targetPath, transformed);
   }
@@ -642,31 +744,64 @@ function evaluateTransformExpr(exprText, sourceMessage, mappingsById, depth = 0)
     return unquote(expr);
   }
 
-  if (!upper.startsWith('MAP')) {
+  const openIdx = expr.indexOf('(');
+  const closeIdx = expr.lastIndexOf(')');
+  const hasCallShape = openIdx > 0 && closeIdx > openIdx;
+  if (!hasCallShape) {
     return sourceMessage;
   }
 
-  const openIdx = expr.indexOf('(');
-  const closeIdx = expr.lastIndexOf(')');
-  if (openIdx < 0 || closeIdx <= openIdx) {
-    throw new Error('Invalid MAP expression');
-  }
-
+  const fnName = toUpperCopy(trimCopy(expr.slice(0, openIdx)));
   const inside = trimCopy(expr.slice(openIdx + 1, closeIdx));
-  const commaIdx = findTopLevelComma(inside);
-  if (commaIdx < 0) {
-    throw new Error('MAP requires two arguments');
+
+  if (fnName === 'MAP') {
+    const commaIdx = findTopLevelComma(inside);
+    if (commaIdx < 0) {
+      throw new Error('MAP requires two arguments');
+    }
+
+    const mapIdToken = trimCopy(inside.slice(0, commaIdx));
+    const payloadExpr = trimCopy(inside.slice(commaIdx + 1));
+    const mappingId = unquote(mapIdToken);
+    if (mappingId === mapIdToken) {
+      throw new Error('MAP id must be a quoted string');
+    }
+
+    const payload = evaluateTransformExpr(payloadExpr, sourceMessage, mappingsById, depth + 1);
+    return runMappingById(mappingId, payload, mappingsById);
   }
 
-  const mapIdToken = trimCopy(inside.slice(0, commaIdx));
-  const payloadExpr = trimCopy(inside.slice(commaIdx + 1));
-  const mappingId = unquote(mapIdToken);
-  if (mappingId === mapIdToken) {
-    throw new Error('MAP id must be a quoted string');
+  if (fnName === 'FROMXML') {
+    const payload = evaluateTransformExpr(inside, sourceMessage, mappingsById, depth + 1);
+    if (payload && typeof payload === 'object') return payload;
+    const parsed = parseXmlMessage(payload);
+    return parsed || payload;
   }
 
-  const payload = evaluateTransformExpr(payloadExpr, sourceMessage, mappingsById, depth + 1);
-  return runMappingById(mappingId, payload, mappingsById);
+  if (fnName === 'TOXML') {
+    const payload = evaluateTransformExpr(inside, sourceMessage, mappingsById, depth + 1);
+    if (typeof payload === 'string') {
+      const trimmed = payload.trim();
+      if (trimmed.startsWith('<') || trimmed.startsWith('<?xml')) {
+        return payload;
+      }
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          return parsed && typeof parsed === 'object' ? messageObjectToXml(parsed) : payload;
+        } catch {
+          return payload;
+        }
+      }
+      return payload;
+    }
+    if (payload && typeof payload === 'object') {
+      return messageObjectToXml(payload);
+    }
+    return String(payload ?? '');
+  }
+
+  return sourceMessage;
 }
 
 function applyTransformRule(transformRule, sourceMessage, mappingsById) {
@@ -1112,10 +1247,13 @@ async function executeProgram({ instructions, opcodeMap, mappingsById, queueType
     }
     if (op === 'ROUTE_EMIT') {
       const queueName = String(instr.operand || '');
-      deliveries.push({
-        queueName,
-        message: maybeConvertIsoDelivery(queueName, currentMessage, queueTypesByName, isoTypeIds)
-      });
+      const outputMessages = expandOutputMessages(currentMessage);
+      for (const oneMessage of outputMessages) {
+        deliveries.push({
+          queueName,
+          message: maybeConvertIsoDelivery(queueName, oneMessage, queueTypesByName, isoTypeIds)
+        });
+      }
       pc += 1;
       continue;
     }

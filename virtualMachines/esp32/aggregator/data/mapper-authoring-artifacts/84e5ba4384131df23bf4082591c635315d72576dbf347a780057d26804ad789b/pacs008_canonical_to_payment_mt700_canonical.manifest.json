@@ -1,0 +1,39 @@
+{
+  "artifactHashes": {
+    "maplHash": "5523e44e5a3eac1ba40ade15fb9294834c55afac516f101a22f8a41773cb8a2e",
+    "pascalishHash": "3629876c04fe5808340c66e5d77472e57bc82f6cf1ab5e69304e7fc973a446a8",
+    "wflHash": "550191b1784e10dcb6b457c7be1026da68f365b41ea6606c4702f61c22acc966"
+  },
+  "createdAt": "2026-07-21T14:15:07.989Z",
+  "determinismContract": {
+    "clusterId": "esp32_edge_pool",
+    "concurrencyMode": "concurrent",
+    "invariant": "Same normalized intent and versions produce byte-identical artifacts",
+    "maxWorkers": 12
+  },
+  "generatorVersion": "mapper-authoring-deterministic-v1",
+  "intentHash": "84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b",
+  "intentSchemaVersion": "intent-schema-v1",
+  "manifestHash": "44297936f99ba618291d29a3723b65fdc5a1550796191de3ff4b4910bbb4e3b5",
+  "normalizedIntent": {
+    "description": "Decompose a PACS008 message containing 25 payment messages into individual Swift MT700 transactions.",
+    "execution": {
+      "clusterId": "esp32_edge_pool",
+      "maxWorkers": 12,
+      "mode": "concurrent"
+    },
+    "expectedTransactionCount": 25,
+    "generatorVersion": "mapper-authoring-deterministic-v1",
+    "inputQueue": "pacs008-incoming",
+    "intentKind": "split-message-to-transactions",
+    "mapId": "pacs008_canonical_to_payment_mt700_canonical",
+    "outputQueue": "messages.to.swift",
+    "schemaVersion": "intent-schema-v1",
+    "sourceTypeId": "pacs008-canonical",
+    "targetTypeId": "payment-mt700-canonical",
+    "templateVersion": "templates-v1",
+    "typeAliasVersion": "type-alias-v1"
+  },
+  "templateVersion": "templates-v1",
+  "typeAliasVersion": "type-alias-v1"
+}

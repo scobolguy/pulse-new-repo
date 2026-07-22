@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { allocateJob } from '../allocator/economicAllocator.mjs';
 import { attachPcodeSignature } from '../../../scripts/pcode-signing.mjs';
@@ -412,6 +413,14 @@ function dedupeDeviceAdvertisements(devices, fallbackNodeKey = '') {
   return out;
 }
 
+function getDeploymentName(deployment) {
+  return String(deployment?.displayName || deployment?.deploymentName || deployment?.packageName || deployment?.serviceName || '').trim();
+}
+
+function getDeploymentId(deployment) {
+  return String(deployment?.deploymentId || deployment?.id || '').trim();
+}
+
 export function registerTopologyRuntimeRoutes(app, deps) {
   const {
     discoveredNodes,
@@ -675,7 +684,9 @@ export function registerTopologyRuntimeRoutes(app, deps) {
         ? node.details.cluster
         : {};
       const boardParent = normalizeNodeId(boardCluster.parentNodeId);
-      const normalizedParent = boardParent || normalizeNodeId(override.parentNodeId);
+      // Check node.topology.parentNodeId as well
+      const existingTopologyParent = normalizeNodeId(node?.topology?.parentNodeId);
+      const normalizedParent = boardParent || existingTopologyParent || normalizeNodeId(override.parentNodeId);
       const parentNode = normalizedParent ? keyToNode.get(normalizedParent) : null;
       const parentName = parentNode
         ? String(parentNode.details?.nodeName || parentNode.nodeName || parentNode.nodeId || parentNode.ip || '').trim()
@@ -974,7 +985,145 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       }
     ];
 
-    const nodes = [backendNode, ...magicClusterNodes, ...Array.from(discoveredNodes.values())]
+    // Add Neptune parent node with proper nodeKey
+    const neptuneNode = {
+      id: 'Neptune',
+      nodeId: 'Neptune',
+      nodeName: 'Neptune',
+      ip: '172.18.0.1',
+      port: 8080,
+      kind: 'cluster-node',
+      hardware: 'Neptune Cluster',
+      status: 'available',
+      available: true,
+      lastSeen: now,
+      ts: now,
+      details: {
+        nodeName: 'Neptune',
+        hardware: 'Neptune Cluster',
+        services: ['Cluster Manager', 'Router'],
+        status: 'available'
+      },
+      topology: {
+        nodeKey: 'Neptune',
+        parentNodeId: null,
+        activeClusterId: 'default',
+        site: {
+          siteId: 'primary-site',
+          siteName: 'Primary Site',
+          siteCategory: 'internal',
+          siteMode: 'hot-warm'
+        }
+      }
+    };
+
+    // Add known ESP32 nodes with Neptune as parent
+    const esp32Nodes = [
+      {
+        id: 'child1',
+        nodeId: 'child1',
+        nodeName: 'child1',
+        ip: '192.168.2.157',
+        port: 80,
+        kind: 'esp32-device',
+        hardware: 'ESP32-CAM',
+        status: 'available',
+        available: true,
+        lastSeen: now,
+        ts: now,
+        details: {
+          nodeName: 'child1',
+          hardware: 'ESP32-CAM',
+          services: ['LEDPIN', 'RELAY', 'Camera'],
+          status: 'available'
+        },
+        topology: {
+          nodeKey: 'child1',
+          parentNodeId: 'Neptune',
+          activeClusterId: 'default',
+          site: {
+            siteId: 'primary-site',
+            siteName: 'Primary Site',
+            siteCategory: 'internal',
+            siteMode: 'hot-warm'
+          }
+        }
+      },
+      {
+        id: 'child2',
+        nodeId: 'child2',
+        nodeName: 'child2',
+        ip: '192.168.2.59',
+        port: 80,
+        kind: 'esp8266-device',
+        hardware: 'ESP8266',
+        status: 'available',
+        available: true,
+        lastSeen: now,
+        ts: now,
+        details: {
+          nodeName: 'child2',
+          hardware: 'ESP8266',
+          services: ['RELAY', 'Sensor'],
+          status: 'available'
+        },
+        topology: {
+          nodeKey: 'child2',
+          parentNodeId: 'Neptune',
+          activeClusterId: 'default',
+          site: {
+            siteId: 'primary-site',
+            siteName: 'Primary Site',
+            siteCategory: 'internal',
+            siteMode: 'hot-warm'
+          }
+        }
+      },
+      {
+        id: 'child3',
+        nodeId: 'child3',
+        nodeName: 'child3',
+        ip: '192.168.2.58',
+        port: 80,
+        kind: 'esp32-device',
+        hardware: 'ESP32',
+        status: 'available',
+        available: true,
+        lastSeen: now,
+        ts: now,
+        details: {
+          nodeName: 'child3',
+          hardware: 'ESP32',
+          services: ['GPIO', 'ADC', 'PWM'],
+          status: 'available'
+        },
+        topology: {
+          nodeKey: 'child3',
+          parentNodeId: 'Neptune',
+          activeClusterId: 'default',
+          site: {
+            siteId: 'primary-site',
+            siteName: 'Primary Site',
+            siteCategory: 'internal',
+            siteMode: 'hot-warm'
+          }
+        }
+      }
+    ];
+
+    const allNodes = [backendNode, ...magicClusterNodes, neptuneNode, ...esp32Nodes, ...Array.from(discoveredNodes.values())];
+    
+    // Deduplicate nodes by nodeKey/nodeId/nodeName/ip
+    const seenKeys = new Set();
+    const uniqueNodes = [];
+    for (const node of allNodes) {
+      const key = normalizeNodeId(node?.nodeId || node?.nodeName || node?.ip || '');
+      if (!key || seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      uniqueNodes.push(node);
+    }
+
+    const nodes = uniqueNodes
       .map((node) => applyNodeRename(node))
       .sort((a, b) => b.lastSeen - a.lastSeen);
     const effectiveRegistry = buildEffectiveClusterRegistry(nodes);
@@ -1260,6 +1409,8 @@ export function registerTopologyRuntimeRoutes(app, deps) {
         status: 'resident',
         metadata: {
           deployment: true,
+          deploymentId: getDeploymentId(deployment) || null,
+          deploymentName: getDeploymentName(deployment) || serviceName,
           packageName: deployment?.packageName || null,
           packageVersion: deployment?.packageVersion || null,
           targetNodeId: deployment?.targetNodeId || null,
@@ -1380,6 +1531,8 @@ export function registerTopologyRuntimeRoutes(app, deps) {
           ...(pmachine.metadata || {}),
           route: '/pmachine/router/run',
           deployment: true,
+          deploymentId: getDeploymentId(deployment) || null,
+          deploymentName: getDeploymentName(deployment) || serviceName,
           deploymentServiceName: deployment.serviceName,
           deploymentPackageName: deployment.packageName,
           deploymentPackageVersion: deployment.packageVersion,
@@ -1403,7 +1556,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     const mappings = String(body.mappings || deploymentMeta.mappings || '').trim();
 
     const params = new URLSearchParams();
-    params.set('serviceId', String(body.serviceId || deployment?.serviceName || instance?.serviceName || 'pmachine-service'));
+    params.set('serviceId', String(body.runtimeServiceId || body.serviceId || deployment?.serviceName || instance?.serviceName || 'pmachine-service'));
     params.set('inputQueue', inputQueue);
     params.set('message', message);
     if (rules) params.set('rules', rules);
@@ -1471,6 +1624,74 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     } finally {
       clearTimeout(timeoutId);
     }
+  }
+
+  async function enqueueInvocationDeliveries(invocation, { sourceService } = {}) {
+    const payload = invocation?.payload;
+    const deliveries = Array.isArray(payload?.deliveries) ? payload.deliveries : [];
+    if (deliveries.length === 0) {
+      return { attempted: 0, enqueued: 0, failed: 0, items: [] };
+    }
+
+    const backendBaseUrl = String(
+      process.env.PULSE_BACKEND_URL
+      || process.env.BACKEND_URL
+      || 'http://127.0.0.1:4000'
+    ).trim().replace(/\/$/, '') || 'http://127.0.0.1:4000';
+
+    const items = [];
+    let enqueued = 0;
+    for (const delivery of deliveries) {
+      const queueName = String(delivery?.outputQueue || delivery?.queueName || '').trim();
+      if (!queueName) {
+        items.push({ ok: false, queueName: '', status: 0, error: 'missing queue name' });
+        continue;
+      }
+
+      try {
+        const response = await fetch(`${backendBaseUrl}/api/queue/${encodeURIComponent(queueName)}/enqueue`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json'
+          },
+          body: JSON.stringify({
+            message: delivery?.message ?? '',
+            sourceService: String(sourceService || 'pmachine-route')
+          })
+        });
+
+        const text = await response.text();
+        let payloadBody = null;
+        try {
+          payloadBody = JSON.parse(text);
+        } catch {
+          payloadBody = { raw: text };
+        }
+
+        const ok = response.ok;
+        if (ok) enqueued += 1;
+        items.push({
+          ok,
+          queueName,
+          status: response.status,
+          response: payloadBody
+        });
+      } catch (e) {
+        items.push({
+          ok: false,
+          queueName,
+          status: 0,
+          error: e?.message || String(e)
+        });
+      }
+    }
+
+    return {
+      attempted: deliveries.length,
+      enqueued,
+      failed: Math.max(0, deliveries.length - enqueued),
+      items
+    };
   }
 
   async function persistNodeNameOnBoard(ip, nextName, timeoutMs = 2500) {
@@ -2903,6 +3124,8 @@ export function registerTopologyRuntimeRoutes(app, deps) {
         status: 'ok',
         selected: {
           instanceId: selected.instanceId,
+          deploymentName: getDeploymentName(deployment) || selected.serviceName,
+          deploymentId: getDeploymentId(deployment) || null,
           serviceName: selected.serviceName,
           nodeId: selected.nodeId,
           ip: selected.ip,
@@ -2941,15 +3164,25 @@ export function registerTopologyRuntimeRoutes(app, deps) {
         || selected?.metadata?.deployment === true
       );
 
+      const invocationServiceId = String(body.serviceId || body.runtimeServiceId || serviceName).trim() || serviceName;
       const invocation = isDeploymentBackedSelection
         ? await invokeDeploymentOnPmachine(selected, deployment, {
             ...body,
-            serviceId: serviceName
+            serviceId: invocationServiceId
           })
         : await proxyServiceInvocation(selected, body);
+
+      let outputQueueing = null;
+      const shouldEnqueueOutputs = body.enqueueOutputs !== false;
+      if (shouldEnqueueOutputs && invocation?.ok) {
+        outputQueueing = await enqueueInvocationDeliveries(invocation, { sourceService: serviceName });
+      }
+
       return res.status(invocation.ok ? 200 : 502).json({
         ...responsePayload,
-        invocation
+        invocationServiceId,
+        invocation,
+        outputQueueing
       });
     } catch (e) {
       res.status(500).json({ error: 'Service route failed', details: e.message || String(e) });
@@ -2976,6 +3209,8 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     const key = `${normalizeServiceName(serviceName)}::${normalizeNodeId(targetNodeId || '*')}`;
     const next = {
       key,
+      deploymentId: String(body.deploymentId || crypto.randomUUID()).trim(),
+      displayName: String(body.displayName || body.deploymentName || packageName).trim() || packageName,
       serviceName,
       packageName,
       packageVersion,
@@ -3021,6 +3256,8 @@ export function registerTopologyRuntimeRoutes(app, deps) {
         const key = `${normalizeServiceName(serviceName)}::${normalizeNodeId(requestedNodeId || resolved.node?.nodeId || resolved.boardIp || '*')}`;
         const next = {
           key,
+          deploymentId: String(body.deploymentId || crypto.randomUUID()).trim(),
+          displayName: String(body.displayName || body.deploymentName || packageName).trim() || packageName,
           serviceName,
           packageName,
           packageVersion: String(body.packageVersion || 'latest').trim(),
@@ -3162,6 +3399,8 @@ export function registerTopologyRuntimeRoutes(app, deps) {
             const key = `${normalizeServiceName(serviceName)}::${normalizeNodeId(node.nodeId || node.ip)}`;
             const next = {
               key,
+              deploymentId: String(req.body?.deploymentId || crypto.randomUUID()).trim(),
+              displayName: String(req.body?.displayName || req.body?.deploymentName || packageName).trim() || packageName,
               serviceName,
               packageName,
               packageVersion: String(req.body?.packageVersion || 'latest').trim(),

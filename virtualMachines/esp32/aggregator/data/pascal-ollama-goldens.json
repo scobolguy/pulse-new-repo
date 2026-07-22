@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "description": "Few-shot Pascal prompt examples for local Ollama DSL coaching.",
+  "examples": [
+    {
+      "id": "hello-world",
+      "prompt": "Write a minimal Pascal program that prints Hello, World.",
+      "response": "program HelloWorld;\nbegin\n  writeln('Hello, World!');\nend."
+    },
+    {
+      "id": "simple-variable",
+      "prompt": "Write a Pascal program that declares integer x, assigns x := 42, and prints x.",
+      "response": "program SimpleDemo;\nvar\n  x: integer;\nbegin\n  x := 42;\n  writeln(x);\nend."
+    },
+    {
+      "id": "math-demo",
+      "prompt": "Write a Pascal program that declares integers x and y, adds them into sum, and prints the sum.",
+      "response": "program MathDemo;\nvar\n  x, y, sum: integer;\nbegin\n  x := 10;\n  y := 20;\n  sum := x + y;\n  writeln(sum);\nend."
+    },
+    {
+      "id": "procedure-demo",
+      "prompt": "Write a Pascal program with a procedure that prints a short greeting.",
+      "response": "program ProcedureDemo;\nprocedure SayHello;\nbegin\n  writeln('Hello from a procedure');\nend;\nbegin\n  SayHello;\nend."
+    },
+    {
+      "id": "accepted-f39d0579cd15",
+      "prompt": "Write a minimal Pascal program that declares integer x, assigns x := 42, and prints it with writeln.",
+      "response": "program MinimalDemo;\nvar\n  x: integer;\nbegin\n  x := 42;\n  writeln(x);\nend.",
+      "source": "accepted-mentor-answer"
+    },
+    {
+      "id": "accepted-6eaa2e9471cc",
+      "prompt": "Write a Pascal program to solve the towers of hanoi when n=3",
+      "response": "program TowersOfHanoi;\r\n\r\nvar\r\n  diskCount: integer;\r\n\r\nprocedure Hanoi(n, fromPeg, toPeg, auxPeg: integer);\r\nbegin\r\n  if n = 1 then\r\n    writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)\r\n  else\r\n  begin\r\n    Hanoi(n - 1, fromPeg, auxPeg, toPeg);\r\n    writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg);\r\n    Hanoi(n - 1, auxPeg, toPeg, fromPeg)\r\n  end\r\nend;\r\n\r\nbegin\r\n  diskCount := 3;\r\n  writeln('Towers of Hanoi for ', diskCount, ' disks:');\r\n  Hanoi(diskCount, 1, 3, 2)\r\nend.",
+      "source": "accepted-mentor-answer"
+    },
+    {
+      "id": "accepted-hello-service-neptune-child1",
+      "prompt": "Create a separate Pascalish service named helloService that returns hello, world on GET, and show how to deploy it to the ESP32 node neptune.child1 on the aggregator network.",
+      "response": "SERVICE \"helloService\";\nBEGIN\n  CASE httpVerb OF\n    httpVerb.post: RETURN src;\n    httpVerb.get: RETURN \"hello, world\";\n  END;\nEND;\n\nROUTER \"helloService-http\" INPUT \"helloService.in\" DESCRIPTION \"Return hello, world for GET\" ENABLED TRUE SERVICE \"helloService\" BEGIN\n  OUTPUT \"helloService.out\"\n    WHEN \"IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;\"\n    TRANSFORM \"output := 'hello, world';\";\nEND;\n\nDeployment:\n1) Set-Location .\\aggregator\n2) $env:ESP32_NODE_NAME='neptune.child1'\n3) npm run deploy:esp32:hello-service\n\nThe deploy script resolves neptune.child1 through http://127.0.0.1:4000/api/nodes and deploys to the resolved ESP32 host.",
+      "source": "accepted-manual-deployment"
+    },
+    {
+      "id": "accepted-hanoi-n4",
+      "prompt": "Write a Pascal program to solve the towers of hanoi when n=4",
+      "response": "program TowersOfHanoi;\n\nvar\n  diskCount: integer;\n\nprocedure Hanoi(n, fromPeg, toPeg, auxPeg: integer);\nbegin\n  if n = 1 then\n    writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)\n  else\n  begin\n    Hanoi(n - 1, fromPeg, auxPeg, toPeg);\n    writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg);\n    Hanoi(n - 1, auxPeg, toPeg, fromPeg)\n  end\nend;\n\nbegin\n  diskCount := 4;\n  writeln('Towers of Hanoi for ', diskCount, ' disks:');\n  Hanoi(diskCount, 1, 3, 2)\nend.",
+      "source": "accepted-esp32-run-verified"
+    }
+  ]
+}

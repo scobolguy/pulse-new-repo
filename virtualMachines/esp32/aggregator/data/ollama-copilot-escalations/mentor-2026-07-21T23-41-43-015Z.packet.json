@@ -1,0 +1,23 @@
+{
+  "sessionId": "mentor-2026-07-21T23-41-43-015Z",
+  "createdAt": "2026-07-21T23:41:44.123Z",
+  "status": "needs-copilot",
+  "reason": "timeout",
+  "prompt": "Write a Pascal program to solve the towers of hanoi when n=3 and deploy it on an pmachine available",
+  "generationPrompt": "Write a Pascal program to solve the towers of hanoi when n=3",
+  "followUpPrompt": "and deploy it on an pmachine available",
+  "hasDeploymentStage": true,
+  "model": "phi3:latest",
+  "timeoutMs": 1000,
+  "candidatePath": "data/ollama-mentor-candidates/mentor-2026-07-21T23-41-43-015Z.pas",
+  "candidateCaptured": true,
+  "candidateBytes": 0,
+  "coachResult": null,
+  "stdout": "",
+  "stderr": "",
+  "instructions": [
+    "Solve the Pascal program request using the prompt and any partial candidate.",
+    "Return only final Pascal source code.",
+    "Save the answer to a file and ingest it with scripts/ingest-pascal-mentor-answer.mjs."
+  ]
+}

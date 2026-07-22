@@ -1,0 +1,36 @@
+{
+  "artifactHashes": {
+    "maplHash": "53d2dfb88a00feda5dcf0d2434f47dc44a0739e279148301a3c3441fcb5bc421",
+    "pascalishHash": "69fb3c0f95c0105776b16650c98c00247647222c3ae6e7be55f8c686df65bb4e",
+    "wflHash": "537f68122efdf2836be757262e12ef00547de1d2564320d69405321636ac6e8a"
+  },
+  "createdAt": "2026-07-21T02:39:42.300Z",
+  "determinismContract": {
+    "clusterId": "esp32_edge_pool",
+    "concurrencyMode": "concurrent",
+    "invariant": "Same normalized intent and versions produce byte-identical artifacts",
+    "maxWorkers": 24
+  },
+  "generatorVersion": "mapper-authoring-deterministic-v1",
+  "intentHash": "74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22",
+  "intentSchemaVersion": "intent-schema-v1",
+  "manifestHash": "aea5dbd1f4ad543f29694c206d92fd1425c2e03799d76852b8166fb1c992b119",
+  "normalizedIntent": {
+    "description": "Create and deploy a mapper from MT700 to pacs payment, run on many esp nodes.",
+    "execution": {
+      "clusterId": "esp32_edge_pool",
+      "maxWorkers": 24,
+      "mode": "concurrent"
+    },
+    "generatorVersion": "mapper-authoring-deterministic-v1",
+    "intentKind": "map-message-type",
+    "mapId": "swift_mt700_to_pacs",
+    "schemaVersion": "intent-schema-v1",
+    "sourceTypeId": "swift-mt700",
+    "targetTypeId": "pacs",
+    "templateVersion": "templates-v1",
+    "typeAliasVersion": "type-alias-v1"
+  },
+  "templateVersion": "templates-v1",
+  "typeAliasVersion": "type-alias-v1"
+}

@@ -313,6 +313,7 @@ export function createRouteManifestDependencyFactories(deps = {}) {
     mapperProxy: () => ({
       resolveMapperOrigin
     }),
+    helloService: () => ({}),
     runtimeRegistry: () => ({
       requirePermission,
       serviceInstanceRegistry,

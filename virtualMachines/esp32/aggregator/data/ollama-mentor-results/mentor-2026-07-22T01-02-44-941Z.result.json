@@ -1,0 +1,26 @@
+{
+  "status": "ok",
+  "model": "golden-fuzzy",
+  "normalizedPrompt": "Write a Pascal program to solve the towers of hanoi when n=4",
+  "coachMode": "pascal-program",
+  "simplePrompt": true,
+  "corpusChunksUsed": 0,
+  "goldenExamplesUsed": 1,
+  "numPredict": 0,
+  "noRepair": false,
+  "repaired": false,
+  "fuzzyHit": true,
+  "fuzzyScore": 0.8571428571428571,
+  "validation": {
+    "valid": true,
+    "dialect": "pascal-program",
+    "summary": {
+      "pcodeInstructions": null,
+      "pcodeLines": 70
+    },
+    "errors": [],
+    "normalizedCandidate": "program TowersOfHanoi;\r\n\r\nvar\r\n  diskCount: integer;\r\n\r\nprocedure Hanoi(n, fromPeg, toPeg, auxPeg: integer);\r\nbegin\r\n  if n = 1 then\r\n    writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)\r\n  else\r\n  begin\r\n    Hanoi(n - 1, fromPeg, auxPeg, toPeg);\r\n    writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg);\r\n    Hanoi(n - 1, auxPeg, toPeg, fromPeg)\r\n  end\r\nend;\r\n\r\nbegin\r\n  diskCount := 4;\r\n  writeln('Towers of Hanoi for ', diskCount, ' disks:');\r\n  Hanoi(diskCount, 1, 3, 2)\r\nend."
+  },
+  "outputPath": "aggregator/data/ollama-mentor-candidates/mentor-2026-07-22T01-02-44-941Z.pas",
+  "candidate": "program TowersOfHanoi;\r\n\r\nvar\r\n  diskCount: integer;\r\n\r\nprocedure Hanoi(n, fromPeg, toPeg, auxPeg: integer);\r\nbegin\r\n  if n = 1 then\r\n    writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)\r\n  else\r\n  begin\r\n    Hanoi(n - 1, fromPeg, auxPeg, toPeg);\r\n    writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg);\r\n    Hanoi(n - 1, auxPeg, toPeg, fromPeg)\r\n  end\r\nend;\r\n\r\nbegin\r\n  diskCount := 4;\r\n  writeln('Towers of Hanoi for ', diskCount, ' disks:');\r\n  Hanoi(diskCount, 1, 3, 2)\r\nend."
+}

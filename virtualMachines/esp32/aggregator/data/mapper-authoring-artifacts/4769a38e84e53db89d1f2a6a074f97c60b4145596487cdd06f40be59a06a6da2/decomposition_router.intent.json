@@ -1,0 +1,19 @@
+{
+  "description": "Router to decompose a PACS message into individual messages.",
+  "execution": {
+    "clusterId": "esp32_edge_pool",
+    "maxWorkers": 12,
+    "mode": "concurrent"
+  },
+  "expectedTransactionCount": 25,
+  "generatorVersion": "mapper-authoring-deterministic-v1",
+  "inputQueue": "pacs008_queue",
+  "intentKind": "split-message-to-transactions",
+  "mapId": "decomposition_router",
+  "outputQueue": "messages.to.swift",
+  "schemaVersion": "intent-schema-v1",
+  "sourceTypeId": "pacs008_canonical",
+  "targetTypeId": "swiftmt700_canonical",
+  "templateVersion": "templates-v1",
+  "typeAliasVersion": "type-alias-v1"
+}

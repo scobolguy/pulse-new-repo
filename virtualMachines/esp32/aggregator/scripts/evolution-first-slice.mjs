@@ -1,7 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runSingleMessageForEsp32Evolution } from './run-esp32-evolution.mjs';
 import { runSingleMessageForEvolution } from './run-js-pmachine.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -19,14 +18,7 @@ function parseArgs(argv) {
     generation: 0,
     transactions: 10000,
     cycles: 1,
-    concurrency: 1,
-    replacementInterval: 100,
-    maxPopulation: 200,
-    birthLimit: 25,
-    deathLimit: 100,
-    organismIdleTtlMs: 60000,
-    executionTarget: 'js',
-    backendUrl: 'http://127.0.0.1:4000'
+    concurrency: 1
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -42,13 +34,6 @@ function parseArgs(argv) {
     if (token === '--runs') args.transactions = Number.parseInt(argv[i + 1], 10);
     if (token === '--cycles') args.cycles = Number.parseInt(argv[i + 1], 10);
     if (token === '--concurrency') args.concurrency = Number.parseInt(argv[i + 1], 10);
-    if (token === '--replacement-interval') args.replacementInterval = Number.parseInt(argv[i + 1], 10);
-    if (token === '--max-population') args.maxPopulation = Number.parseInt(argv[i + 1], 10);
-    if (token === '--birth-limit') args.birthLimit = Number.parseInt(argv[i + 1], 10);
-    if (token === '--death-limit') args.deathLimit = Number.parseInt(argv[i + 1], 10);
-    if (token === '--organism-idle-ttl-ms') args.organismIdleTtlMs = Number.parseInt(argv[i + 1], 10);
-    if (token === '--execution-target') args.executionTarget = String(argv[i + 1] || 'js');
-    if (token === '--backend-url') args.backendUrl = argv[i + 1];
   }
 
   return args;
@@ -155,22 +140,15 @@ async function loadManifestInputs(manifestPath) {
   });
 }
 
-async function runVariant({ pcode, programMap, fitnessOut, organismId, parentId, generation, message, variant, executionTarget, backendUrl }) {
-  const runner = String(executionTarget || 'js').trim().toLowerCase() === 'esp32'
-    ? runSingleMessageForEsp32Evolution
-    : runSingleMessageForEvolution;
-
-  const parsed = await runner({
+async function runVariant({ pcode, programMap, fitnessOut, organismId, parentId, generation, message, variant }) {
+  const parsed = await runSingleMessageForEvolution({
     pcode,
     programMap,
     inputQueue: 'swift.mt103.parsed',
     message,
     organismId,
     generation: String(generation),
-    fitnessOut,
-    backendUrl,
-    serviceId: 'evolution-first-slice',
-    actorUserId: 'system-admin'
+    fitnessOut
   });
   const fitness = parsed.fitness || null;
   return {
@@ -284,12 +262,95 @@ function mutateMorphology(morphology = {}, rankIndex = 0) {
   };
 }
 
-function normalizeEvolutionRootId(organismId) {
-  const match = String(organismId || '').match(/^(organism-\d+)/i);
-  return match ? String(match[1]).toLowerCase() : String(organismId || '').trim().toLowerCase();
+function buildNextGenerationManifest({ manifestEntries, rankedSelector, nextGeneration }) {
+  const rankedById = new Map(rankedSelector.map((entry) => [String(entry.organismId || ''), entry]));
+  const nextOrganisms = [];
+
+  manifestEntries.forEach((entry, index) => {
+    const organismId = String(entry?.organismId || `organism-${String(index + 1).padStart(2, '0')}`).trim();
+    const ranked = rankedById.get(organismId) || null;
+    const rankIndex = Math.max(0, (ranked?.rank || 1) - 1);
+    const childId = `${organismId}-g${nextGeneration}`;
+
+    nextOrganisms.push({
+      organismId: childId,
+      parentId: organismId,
+      variant: String(entry?.variant || ranked?.variant || 'normal'),
+      generation: nextGeneration,
+      genome: mutateGenome(entry?.genome || {}, rankIndex),
+      morphology: mutateMorphology(entry?.morphology || {}, rankIndex)
+    });
+  });
+
+  return { organisms: nextOrganisms };
 }
 
-function buildPopulationSummary(results, offeredOrderByOrganism = new Map()) {
+function generationStampedPath(filePath, generation) {
+  const resolved = path.resolve(filePath);
+  const parsed = path.parse(resolved);
+  return path.join(parsed.dir, `${parsed.name}-g${generation}${parsed.ext}`);
+}
+
+function deriveNextManifestPath(currentManifestPath, generation) {
+  return path.resolve(path.dirname(currentManifestPath), `evolution-generation-${generation}.json`);
+}
+
+async function runGenerationCycle({ args, manifestPath, generation, outputRoot, baselineSelectorMap = new Map(), queueStartOffset = null }) {
+  const fitnessOutPath = generationStampedPath(path.join(outputRoot, 'evolution-fitness.jsonl'), generation);
+  const selectorOutPath = generationStampedPath(path.join(outputRoot, 'evolution-selector.json'), generation);
+  const nextManifestPath = deriveNextManifestPath(manifestPath, generation + 1);
+
+  await fs.mkdir(path.dirname(fitnessOutPath), { recursive: true });
+  await fs.mkdir(path.dirname(selectorOutPath), { recursive: true });
+  await fs.mkdir(path.dirname(nextManifestPath), { recursive: true });
+  await fs.writeFile(fitnessOutPath, '', 'utf8');
+
+  const inputs = await loadManifestInputs(manifestPath);
+  const totalTransactions = Math.max(1, Number.parseInt(args.transactions || '10000', 10) || 10000);
+  const workItems = [];
+  for (let transactionIndex = 0; transactionIndex < totalTransactions; transactionIndex += 1) {
+    const index = Math.floor(Math.random() * inputs.length);
+    const item = inputs[index];
+    workItems.push({
+      index,
+      transactionIndex,
+      item,
+      organismId: item.organismId || `${args.organismPrefix}-${String(index + 1).padStart(2, '0')}`
+    });
+  }
+
+  const offeredOrderByOrganism = new Map();
+  for (let order = 0; order < workItems.length; order += 1) {
+    offeredOrderByOrganism.set(String(workItems[order].organismId || ''), order);
+  }
+
+  const results = [];
+  const concurrency = Math.max(1, Math.min(totalTransactions, Number.parseInt(args.concurrency || '1', 10) || 1));
+  let cursor = 0;
+
+  async function worker() {
+    while (true) {
+      const nextIndex = cursor;
+      cursor += 1;
+      if (nextIndex >= workItems.length) return;
+
+      const task = workItems[nextIndex];
+      const result = await runVariant({
+        pcode: path.resolve(args.pcode),
+        programMap: path.resolve(args.programMap),
+        fitnessOut: fitnessOutPath,
+        organismId: task.organismId,
+        parentId: task.item.parentId,
+        generation,
+        message: task.item.message,
+        variant: task.item.variant
+      });
+      results.push(result);
+    }
+  }
+
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
   const aggregates = new Map();
   for (const result of results) {
     const key = String(result.organismId || '');
@@ -349,7 +410,8 @@ function buildPopulationSummary(results, offeredOrderByOrganism = new Map()) {
     };
   });
 
-  const selector = rankByFitness(aggregatedResults, offeredOrderByOrganism).map((entry, index) => ({
+  const ranked = rankByFitness(aggregatedResults, offeredOrderByOrganism);
+  const selector = ranked.map((entry, index) => ({
     rank: index + 1,
     organismId: entry.organismId,
     variant: entry.variant,
@@ -363,452 +425,10 @@ function buildPopulationSummary(results, offeredOrderByOrganism = new Map()) {
     offeredOrder: offeredOrderByOrganism.get(String(entry.organismId || '')) ?? null,
     messageFormat: entry.messageFormat
   }));
-
-  return { aggregatedResults, selector };
-}
-
-function buildPopulationSummaryWithFilter(results, offeredOrderByOrganism = new Map(), activeOrganismIds = null) {
-  const base = buildPopulationSummary(results, offeredOrderByOrganism);
-  if (!(activeOrganismIds instanceof Set) || activeOrganismIds.size === 0) {
-    return base;
-  }
-
-  const activeAggregates = base.aggregatedResults.filter((entry) => activeOrganismIds.has(String(entry.organismId || '')));
-  const selector = rankByFitness(activeAggregates, offeredOrderByOrganism).map((entry, index) => ({
-    rank: index + 1,
-    organismId: entry.organismId,
-    variant: entry.variant,
-    generation: entry.generation,
-    transactionCount: entry.fitness?.transactionCount || 0,
-    successCount: entry.fitness?.successCount || 0,
-    successRate: entry.fitness?.successRate || 0,
-    latencyMs: entry.fitness?.latencyMs || 0,
-    score: entry.fitness?.score || 0,
-    outputQueue: entry.outputQueue,
-    offeredOrder: offeredOrderByOrganism.get(String(entry.organismId || '')) ?? null,
-    messageFormat: entry.messageFormat
-  }));
-
-  return {
-    aggregatedResults: base.aggregatedResults,
-    selector
-  };
-}
-
-function buildReplacementOrganism({ sourceEntry, targetEntry, generation, replacementIndex, transactionCount }) {
-  const sourceRoot = normalizeEvolutionRootId(sourceEntry?.organismId || 'organism');
-  const replacementSuffix = `r${String(replacementIndex + 1).padStart(2, '0')}`;
-  const replacementOrganismId = `${sourceRoot}-${replacementSuffix}-g${generation}`;
-
-  return {
-    organismId: replacementOrganismId,
-    parentId: String(sourceEntry?.organismId || '').trim() || null,
-    variant: String(sourceEntry?.variant || targetEntry?.variant || 'normal'),
-    generation,
-    message: String(sourceEntry?.message || targetEntry?.message || '').trim(),
-    genome: mutateGenome(sourceEntry?.genome || {}, replacementIndex),
-    morphology: mutateMorphology(sourceEntry?.morphology || {}, replacementIndex),
-    replacementFrom: String(sourceEntry?.organismId || '').trim() || null,
-    replacementOf: String(targetEntry?.organismId || '').trim() || null,
-    replacementAtTransaction: transactionCount
-  };
-}
-
-function buildNextGenerationManifest({ manifestEntries, rankedSelector, nextGeneration }) {
-  const rankedById = new Map(rankedSelector.map((entry) => [String(entry.organismId || ''), entry]));
-  const nextOrganisms = [];
-
-  manifestEntries.forEach((entry, index) => {
-    const organismId = String(entry?.organismId || `organism-${String(index + 1).padStart(2, '0')}`).trim();
-    const ranked = rankedById.get(organismId) || null;
-    const rankIndex = Math.max(0, (ranked?.rank || 1) - 1);
-    const childId = `${organismId}-g${nextGeneration}`;
-
-    nextOrganisms.push({
-      organismId: childId,
-      parentId: organismId,
-      variant: String(entry?.variant || ranked?.variant || 'normal'),
-      generation: nextGeneration,
-      message: String(entry?.message || '').trim(),
-      genome: mutateGenome(entry?.genome || {}, rankIndex),
-      morphology: mutateMorphology(entry?.morphology || {}, rankIndex)
-    });
-  });
-
-  return { organisms: nextOrganisms };
-}
-
-function generationStampedPath(filePath, generation) {
-  const resolved = path.resolve(filePath);
-  const parsed = path.parse(resolved);
-  return path.join(parsed.dir, `${parsed.name}-g${generation}${parsed.ext}`);
-}
-
-function deriveNextManifestPath(currentManifestPath, generation) {
-  return path.resolve(path.dirname(currentManifestPath), `evolution-generation-${generation}.json`);
-}
-
-function isLikelyProcessableMt103Message(message) {
-  const text = String(message || '').trim();
-  if (!text) return false;
-  if (!/^MT103\b/i.test(text)) return false;
-
-  const requiredTags = [':20:', ':32A:', ':50K:', ':57A:', ':59:'];
-  for (const tag of requiredTags) {
-    if (!text.includes(tag)) return false;
-  }
-
-  const field32A = text.match(/:32A:([^\n\r]+)/i)?.[1] || '';
-  if (!/^\d{6}[A-Z]{3}.+/.test(String(field32A).trim())) {
-    return false;
-  }
-
-  return true;
-}
-
-async function runGenerationCycle({ args, manifestPath, generation, outputRoot, baselineSelectorMap = new Map(), queueStartOffset = null }) {
-  const fitnessOutPath = generationStampedPath(path.join(outputRoot, 'evolution-fitness.jsonl'), generation);
-  const selectorOutPath = generationStampedPath(path.join(outputRoot, 'evolution-selector.json'), generation);
-  const nextManifestPath = deriveNextManifestPath(manifestPath, generation + 1);
-
-  await fs.mkdir(path.dirname(fitnessOutPath), { recursive: true });
-  await fs.mkdir(path.dirname(selectorOutPath), { recursive: true });
-  await fs.mkdir(path.dirname(nextManifestPath), { recursive: true });
-  await fs.writeFile(fitnessOutPath, '', 'utf8');
-
-  const inputs = await loadManifestInputs(manifestPath);
-  const totalTransactions = Math.max(1, Number.parseInt(args.transactions || '10000', 10) || 10000);
-  const maxPopulation = Math.max(1, Math.min(2000, Number.parseInt(args.maxPopulation || '200', 10) || 200));
-  const birthLimit = Math.max(1, Number.parseInt(args.birthLimit || '25', 10) || 25);
-  const deathLimit = Math.max(1, Number.parseInt(args.deathLimit || '100', 10) || 100);
-  const organismIdleTtlMs = Math.max(1000, Number.parseInt(args.organismIdleTtlMs || '60000', 10) || 60000);
-  const runStartedAtMs = Date.now();
-  const offeredOrderByOrganism = new Map();
-  const slots = Array.from({ length: maxPopulation }, () => null);
-  const organismById = new Map();
-  const activeOrganismIds = [];
-  const activeIndexByOrganismId = new Map();
-
-  function addActiveOrganismId(organismId) {
-    const id = String(organismId || '').trim();
-    if (!id || activeIndexByOrganismId.has(id)) return;
-    activeIndexByOrganismId.set(id, activeOrganismIds.length);
-    activeOrganismIds.push(id);
-  }
-
-  function removeActiveOrganismId(organismId) {
-    const id = String(organismId || '').trim();
-    const index = activeIndexByOrganismId.get(id);
-    if (!Number.isInteger(index)) return;
-    const lastIndex = activeOrganismIds.length - 1;
-    const lastId = activeOrganismIds[lastIndex];
-    activeOrganismIds[index] = lastId;
-    activeIndexByOrganismId.set(lastId, index);
-    activeOrganismIds.pop();
-    activeIndexByOrganismId.delete(id);
-  }
-
-  function findNextAvailableSlot(startIndex = 0) {
-    if (!slots.length) return -1;
-    const start = Math.max(0, Math.min(slots.length - 1, Number(startIndex) || 0));
-    for (let step = 0; step < slots.length; step += 1) {
-      const index = (start + step) % slots.length;
-      if (slots[index] == null) return index;
-    }
-    return -1;
-  }
-
-  function canCountAsProcessable(result, sourceMessage) {
-    const structurallyValid = isLikelyProcessableMt103Message(sourceMessage);
-    if (!structurallyValid) return false;
-    const successCount = Number(result?.fitness?.successCount || 0);
-    const deliveryCount = Number(result?.fitness?.deliveryCount || 0);
-    const successRate = Number(result?.fitness?.successRate || 0);
-    return successCount > 0 || deliveryCount > 0 || successRate > 0;
-  }
-
-  function buildLiveOrganismState(entry, slotIndex, bornAtTransaction = 0, bornAtMs = runStartedAtMs) {
-    const organismId = String(entry?.organismId || `${args.organismPrefix}-${String(slotIndex + 1).padStart(2, '0')}`).trim();
-    return {
-      ...entry,
-      organismId,
-      slotIndex,
-      alive: true,
-      bornAtTransaction,
-      bornAtMs,
-      diedAtTransaction: null,
-      replacedAtTransaction: null,
-      totalProcessed: 0,
-      birthCounter: 0,
-      deathCounter: 0,
-      reproductionCount: 0,
-      lastProcessedAtMs: bornAtMs
-    };
-  }
-
-  function markOrganismDead(organism, transactionCount, reason, nowMs = Date.now()) {
-    if (!organism || !organism.alive) return false;
-    organism.alive = false;
-    organism.diedAtTransaction = transactionCount;
-    organism.diedAtMs = nowMs;
-    slots[organism.slotIndex] = null;
-    removeActiveOrganismId(organism.organismId);
-    deathEvents.push({
-      transactionCount,
-      organismId: organism.organismId,
-      slotIndex: organism.slotIndex,
-      totalProcessed: organism.totalProcessed,
-      birthCounter: organism.birthCounter,
-      deathCounter: organism.deathCounter,
-      lastProcessedAtMs: organism.lastProcessedAtMs,
-      idleForMs: Math.max(0, nowMs - Number(organism.lastProcessedAtMs || nowMs)),
-      reason,
-      populationSize: activeOrganismIds.length
-    });
-    return true;
-  }
-
-  function expireIdleOrganisms(transactionCount, nowMs = Date.now()) {
-    const expired = [];
-    for (const organismId of [...activeOrganismIds]) {
-      const organism = organismById.get(String(organismId || ''));
-      if (!organism || !organism.alive) continue;
-      const lastProcessedAtMs = Number(organism.lastProcessedAtMs || organism.bornAtMs || runStartedAtMs);
-      if (nowMs - lastProcessedAtMs >= organismIdleTtlMs) {
-        if (markOrganismDead(organism, transactionCount, 'idle-ttl', nowMs)) {
-          expired.push(organism.organismId);
-        }
-      }
-    }
-    return expired;
-  }
-
-  for (let index = 0; index < Math.min(inputs.length, maxPopulation); index += 1) {
-    const entry = inputs[index];
-    const organism = buildLiveOrganismState({
-      ...entry,
-      __sourceIndex: index,
-      organismId: String(entry.organismId || `${args.organismPrefix}-${String(index + 1).padStart(2, '0')}`).trim()
-    }, index, 0);
-    slots[index] = organism;
-    organismById.set(organism.organismId, organism);
-    addActiveOrganismId(organism.organismId);
-  }
-
-  if (inputs.length > maxPopulation) {
-    console.warn(`[evolution-first-slice] manifest has ${inputs.length} organisms, truncating initial population to maxPopulation=${maxPopulation}`);
-  }
-
-  const replacementInterval = Math.max(1, Number.parseInt(args.replacementInterval || '100', 10) || 100);
-  const results = [];
-  const concurrency = Math.max(1, Math.min(totalTransactions, Number.parseInt(args.concurrency || '1', 10) || 1));
-  let processedTransactions = 0;
-  let replacementCount = 0;
-  const replacementEvents = [];
-  const birthEvents = [];
-  const deathEvents = [];
-  const processingLog = [];
-
-  async function runBatch(batchWorkItems) {
-    const batchResults = [];
-    let cursor = 0;
-
-    async function worker() {
-      while (true) {
-        const nextIndex = cursor;
-        cursor += 1;
-        if (nextIndex >= batchWorkItems.length) return;
-
-        const task = batchWorkItems[nextIndex];
-        const result = await runVariant({
-          pcode: path.resolve(args.pcode),
-          programMap: path.resolve(args.programMap),
-          fitnessOut: fitnessOutPath,
-          organismId: task.organismId,
-          parentId: task.item.parentId,
-          generation,
-          message: task.item.message,
-          variant: task.item.variant,
-          executionTarget: args.executionTarget,
-          backendUrl: args.backendUrl
-        });
-        batchResults.push({
-          ...result,
-          slotIndex: task.slotIndex,
-          sourceIndex: task.sourceIndex,
-          transactionIndex: task.transactionIndex
-        });
-      }
-    }
-
-    await Promise.all(Array.from({ length: concurrency }, () => worker()));
-    return batchResults;
-  }
-
-  while (processedTransactions < totalTransactions) {
-    expireIdleOrganisms(processedTransactions, Date.now());
-
-    if (activeOrganismIds.length <= 0) {
-      console.warn(`[evolution-first-slice] generation ${generation} ended early: no live organisms available at tx ${processedTransactions}`);
-      break;
-    }
-
-    const batchSize = Math.min(replacementInterval, totalTransactions - processedTransactions);
-    const batchWorkItems = [];
-    for (let offset = 0; offset < batchSize; offset += 1) {
-      const transactionIndex = processedTransactions + offset;
-      const activeIndex = Math.floor(Math.random() * activeOrganismIds.length);
-      const organismId = String(activeOrganismIds[activeIndex] || '').trim();
-      const item = organismById.get(organismId);
-      if (!item || !item.alive) {
-        continue;
-      }
-      batchWorkItems.push({
-        index: item.slotIndex,
-        sourceIndex: item.slotIndex,
-        slotIndex: item.slotIndex,
-        transactionIndex,
-        item,
-        organismId
-      });
-      if (!offeredOrderByOrganism.has(organismId)) {
-        offeredOrderByOrganism.set(organismId, transactionIndex);
-      }
-    }
-
-    const batchResults = await runBatch(batchWorkItems);
-    batchResults.sort((left, right) => Number(left.transactionIndex || 0) - Number(right.transactionIndex || 0));
-    for (const result of batchResults) {
-      const organismId = String(result.organismId || '').trim();
-      const organism = organismById.get(organismId);
-      if (!organism || !organism.alive) {
-        continue;
-      }
-
-      results.push(result);
-      processedTransactions += 1;
-      const nowMs = Date.now();
-      organism.lastProcessedAtMs = nowMs;
-
-      const processable = canCountAsProcessable(result, organism.message);
-      organism.totalProcessed += 1;
-      organism.deathCounter += 1;
-      if (processable) {
-        organism.birthCounter += 1;
-      }
-
-      const spawnedChildren = [];
-      while (organism.alive && organism.birthCounter >= birthLimit) {
-        const nextSlot = findNextAvailableSlot(organism.slotIndex + 1);
-        if (nextSlot < 0) break;
-        organism.birthCounter -= birthLimit;
-        organism.reproductionCount += 1;
-        const birthIndex = birthEvents.length + 1;
-        const childId = `${normalizeEvolutionRootId(organism.organismId)}-b${String(birthIndex).padStart(4, '0')}-g${generation}`;
-        const child = buildLiveOrganismState({
-          organismId: childId,
-          parentId: organism.organismId,
-          variant: organism.variant,
-          generation,
-          message: String(organism.message || '').trim(),
-          genome: mutateGenome(organism.genome || {}, organism.reproductionCount),
-          morphology: mutateMorphology(organism.morphology || {}, organism.reproductionCount)
-        }, nextSlot, processedTransactions, nowMs);
-        slots[nextSlot] = child;
-        organismById.set(child.organismId, child);
-        addActiveOrganismId(child.organismId);
-        spawnedChildren.push(child.organismId);
-        birthEvents.push({
-          transactionCount: processedTransactions,
-          parentOrganismId: organism.organismId,
-          childOrganismId: child.organismId,
-          parentSlot: organism.slotIndex,
-          childSlot: nextSlot,
-          parentBirthCounter: organism.birthCounter,
-          populationSize: activeOrganismIds.length
-        });
-      }
-
-      let died = false;
-      if (organism.alive && organism.deathCounter >= deathLimit) {
-        died = markOrganismDead(organism, processedTransactions, 'death-limit', nowMs);
-      }
-
-      processingLog.push({
-        transactionCount: processedTransactions,
-        organismId: organism.organismId,
-        slotIndex: organism.slotIndex,
-        processable,
-        birthCounter: organism.birthCounter,
-        deathCounter: organism.deathCounter,
-        spawnedChildren,
-        died
-      });
-
-      if (replacementInterval > 0 && processedTransactions < totalTransactions && processedTransactions % replacementInterval === 0) {
-        const { selector: liveSelector } = buildPopulationSummaryWithFilter(
-          results,
-          offeredOrderByOrganism,
-          new Set(activeOrganismIds)
-        );
-        if (liveSelector.length >= 2) {
-          const strongest = liveSelector[0];
-          const weakest = liveSelector[liveSelector.length - 1];
-          const sourceEntry = organismById.get(String(strongest.organismId || ''));
-          const targetEntry = organismById.get(String(weakest.organismId || ''));
-
-          if (sourceEntry && targetEntry && sourceEntry.alive && targetEntry.alive && String(sourceEntry.organismId || '') !== String(targetEntry.organismId || '')) {
-            const replacement = buildReplacementOrganism({
-              sourceEntry,
-              targetEntry,
-              generation,
-              replacementIndex: replacementCount,
-              transactionCount: processedTransactions
-            });
-            const replacementState = buildLiveOrganismState(replacement, targetEntry.slotIndex, processedTransactions);
-            slots[targetEntry.slotIndex] = replacementState;
-            targetEntry.alive = false;
-            targetEntry.replacedAtTransaction = processedTransactions;
-            removeActiveOrganismId(targetEntry.organismId);
-            organismById.set(replacementState.organismId, replacementState);
-            addActiveOrganismId(replacementState.organismId);
-            replacementEvents.push({
-              transactionCount: processedTransactions,
-              weakestOrganismId: String(targetEntry.organismId || ''),
-              strongestOrganismId: String(sourceEntry.organismId || ''),
-              replacementOrganismId: String(replacementState.organismId || ''),
-              sourceIndex: sourceEntry.slotIndex,
-              targetIndex: targetEntry.slotIndex,
-              sourceVariant: sourceEntry.variant,
-              targetVariant: targetEntry.variant,
-              strongestScore: Number(strongest.score || 0),
-              weakestScore: Number(weakest.score || 0)
-            });
-            replacementCount += 1;
-            console.log(`[evolution-first-slice] generation ${generation} tx ${processedTransactions}: replaced weakest ${targetEntry.organismId} with clone of ${sourceEntry.organismId} -> ${replacementState.organismId}`);
-          }
-        }
-      }
-    }
-
-  }
-
-  const { aggregatedResults, selector } = buildPopulationSummaryWithFilter(results, offeredOrderByOrganism, new Set(activeOrganismIds));
 
   await fs.writeFile(selectorOutPath, JSON.stringify({
     updatedAt: new Date().toISOString(),
     generation,
-    maxPopulation,
-    birthLimit,
-    deathLimit,
-    organismIdleTtlMs,
-    replacementInterval,
-    replacementCount,
-    replacements: replacementEvents,
-    births: birthEvents,
-    deaths: deathEvents,
-    processingLog,
-    activePopulationSize: activeOrganismIds.length,
     selector,
     records: aggregatedResults
   }, null, 2), 'utf8');
@@ -816,15 +436,7 @@ async function runGenerationCycle({ args, manifestPath, generation, outputRoot, 
   const comparison = buildComparisonSummary(aggregatedResults, selector, generation, baselineSelectorMap);
 
   const nextGenerationManifest = buildNextGenerationManifest({
-    manifestEntries: slots.filter((entry) => entry && entry.alive).map((entry) => ({
-      organismId: entry.organismId,
-      parentId: entry.parentId || null,
-      variant: entry.variant,
-      generation: entry.generation,
-      message: String(entry.message || '').trim(),
-      genome: entry.genome || {},
-      morphology: entry.morphology || {}
-    })),
+    manifestEntries: inputs,
     rankedSelector: selector,
     nextGeneration: generation + 1
   });
@@ -833,17 +445,6 @@ async function runGenerationCycle({ args, manifestPath, generation, outputRoot, 
   return {
     generation,
     transactionCount: totalTransactions,
-    maxPopulation,
-    birthLimit,
-    deathLimit,
-    organismIdleTtlMs,
-    replacementInterval,
-    replacementCount,
-    replacements: replacementEvents,
-    births: birthEvents,
-    deaths: deathEvents,
-    processingLog,
-    activePopulationSize: activeOrganismIds.length,
     fitnessOut: fitnessOutPath,
     selectorOut: selectorOutPath,
     nextManifestOut: nextManifestPath,

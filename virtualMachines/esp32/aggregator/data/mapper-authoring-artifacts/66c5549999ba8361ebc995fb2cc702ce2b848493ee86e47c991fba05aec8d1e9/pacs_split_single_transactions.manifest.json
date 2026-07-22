@@ -1,0 +1,36 @@
+{
+  "artifactHashes": {
+    "maplHash": "824766be6fff5b794b3f893e14b3f43f95ffc44d5f516f57fd31bb28ec8708e1",
+    "pascalishHash": "e1f7d86860e78f61582f1c5056699de18c93748fc0d506ecbfb856d39a6a523e",
+    "wflHash": "14b1cf2af14dbf80436621846ea4fa482258fdcdddd5029ea3b1d2ed9794160e"
+  },
+  "createdAt": "2026-07-21T01:40:12.591Z",
+  "determinismContract": {
+    "clusterId": "esp32_edge_pool",
+    "concurrencyMode": "concurrent",
+    "invariant": "Same normalized intent and versions produce byte-identical artifacts",
+    "maxWorkers": 32
+  },
+  "generatorVersion": "mapper-authoring-deterministic-v1",
+  "intentHash": "66c5549999ba8361ebc995fb2cc702ce2b848493ee86e47c991fba05aec8d1e9",
+  "intentSchemaVersion": "intent-schema-v1",
+  "manifestHash": "0ee7532742c200b852f82d7a62782f682fd13e5ecb5bd2ded2ac97544c6dcfde",
+  "normalizedIntent": {
+    "description": "Deterministic PACS split into single transaction payloads",
+    "execution": {
+      "clusterId": "esp32_edge_pool",
+      "maxWorkers": 32,
+      "mode": "concurrent"
+    },
+    "generatorVersion": "mapper-authoring-deterministic-v1",
+    "intentKind": "split-message-to-transactions",
+    "mapId": "pacs_split_single_transactions",
+    "schemaVersion": "intent-schema-v1",
+    "sourceTypeId": "pacs",
+    "targetTypeId": "pacs",
+    "templateVersion": "templates-v1",
+    "typeAliasVersion": "type-alias-v1"
+  },
+  "templateVersion": "templates-v1",
+  "typeAliasVersion": "type-alias-v1"
+}

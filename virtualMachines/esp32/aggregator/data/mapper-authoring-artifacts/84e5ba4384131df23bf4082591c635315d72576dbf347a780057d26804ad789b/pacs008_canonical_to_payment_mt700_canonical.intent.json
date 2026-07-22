@@ -1,0 +1,19 @@
+{
+  "description": "Decompose a PACS008 message containing 25 payment messages into individual Swift MT700 transactions.",
+  "execution": {
+    "clusterId": "esp32_edge_pool",
+    "maxWorkers": 12,
+    "mode": "concurrent"
+  },
+  "expectedTransactionCount": 25,
+  "generatorVersion": "mapper-authoring-deterministic-v1",
+  "inputQueue": "pacs008-incoming",
+  "intentKind": "split-message-to-transactions",
+  "mapId": "pacs008_canonical_to_payment_mt700_canonical",
+  "outputQueue": "messages.to.swift",
+  "schemaVersion": "intent-schema-v1",
+  "sourceTypeId": "pacs008-canonical",
+  "targetTypeId": "payment-mt700-canonical",
+  "templateVersion": "templates-v1",
+  "typeAliasVersion": "type-alias-v1"
+}

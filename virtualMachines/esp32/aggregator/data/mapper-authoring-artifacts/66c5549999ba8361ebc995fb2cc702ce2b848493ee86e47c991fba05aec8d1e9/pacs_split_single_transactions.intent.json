@@ -1,0 +1,16 @@
+{
+  "description": "Deterministic PACS split into single transaction payloads",
+  "execution": {
+    "clusterId": "esp32_edge_pool",
+    "maxWorkers": 32,
+    "mode": "concurrent"
+  },
+  "generatorVersion": "mapper-authoring-deterministic-v1",
+  "intentKind": "split-message-to-transactions",
+  "mapId": "pacs_split_single_transactions",
+  "schemaVersion": "intent-schema-v1",
+  "sourceTypeId": "pacs",
+  "targetTypeId": "pacs",
+  "templateVersion": "templates-v1",
+  "typeAliasVersion": "type-alias-v1"
+}

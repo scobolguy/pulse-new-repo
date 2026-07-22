@@ -1,0 +1,18 @@
+{
+  "sessionId": "mentor-2026-07-22T00-41-09-813Z",
+  "status": "needs-copilot",
+  "createdAt": "2026-07-22T00:41:50.055Z",
+  "elapsedMs": 35040,
+  "prompt": "Create a separate Pascalish service named helloService that returns hello, world on GET, and deploy it to neptune.child1",
+  "generationPrompt": "Create a separate Pascalish service named helloService that returns hello, world on GET",
+  "followUpPrompt": "and deploy it to neptune.child1",
+  "hasDeploymentStage": true,
+  "coachMode": "pascalish-service",
+  "topK": 2,
+  "maxContextChars": 2500,
+  "numPredict": 320,
+  "noRepair": false,
+  "escalationPacketPath": "data/ollama-copilot-escalations/mentor-2026-07-22T00-41-09-813Z.packet.json",
+  "coachResult": null,
+  "reason": "timeout"
+}

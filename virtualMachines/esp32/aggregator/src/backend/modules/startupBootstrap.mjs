@@ -75,6 +75,60 @@ export async function startBackendRuntime(deps = {}) {
   await esp32NodeRegistry.initialize();
   console.log(`[ESP32] Node Registry initialized with ${esp32NodeRegistry.getAllNodes().length} nodes`);
 
+  // Register known ESP32 nodes that aren't discovered via heartbeat
+  const knownEsp32Nodes = [
+    { id: 'child1', name: 'child1', ip: '192.168.2.157', port: 80, hardware: 'ESP32-CAM', parentNodeId: 'Neptune' },
+    { id: 'child2', name: 'child2', ip: '192.168.2.59', port: 80, hardware: 'ESP8266', parentNodeId: 'Neptune' },
+    { id: 'child3', name: 'child3', ip: '192.168.2.58', port: 80, hardware: 'ESP32', parentNodeId: 'Neptune' }
+  ];
+  
+  let knownNodesRegistered = 0;
+  for (const knownNode of knownEsp32Nodes) {
+    const existing = esp32NodeRegistry.getNode(knownNode.id);
+    if (existing) {
+      // Update parent if needed
+      if (existing.topology?.parentNodeId !== knownNode.parentNodeId) {
+        existing.topology = existing.topology || {};
+        existing.topology.parentNodeId = knownNode.parentNodeId;
+      }
+      continue;
+    }
+    
+    await esp32NodeRegistry.registerNode({
+      id: knownNode.id,
+      type: 'esp32-device',
+      name: knownNode.name,
+      ip: knownNode.ip,
+      port: knownNode.port,
+      capabilities: {
+        'device.control': true,
+        'led.control': true,
+        'relay.control': true
+      },
+      metadata: {
+        hardware: knownNode.hardware,
+        source: 'known-device',
+        discoveryMethod: 'manual'
+      },
+      topology: {
+        nodeKey: knownNode.id,
+        parentNodeId: knownNode.parentNodeId,
+        activeClusterId: 'default',
+        site: {
+          siteId: 'primary-site',
+          siteName: 'Primary Site',
+          siteCategory: 'internal',
+          siteMode: 'hot-warm'
+        }
+      }
+    });
+    knownNodesRegistered += 1;
+  }
+
+  if (knownNodesRegistered > 0) {
+    console.log(`[ESP32] Registered ${knownNodesRegistered} known ESP32 node(s) into the registry`);
+  }
+
   const seedNodes = Array.isArray(esp32SeedNodes) ? esp32SeedNodes : [];
   let seededNodes = 0;
   for (const seed of seedNodes) {

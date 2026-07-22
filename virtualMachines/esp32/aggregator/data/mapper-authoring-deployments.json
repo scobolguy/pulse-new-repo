@@ -1,0 +1,116 @@
+{
+  "deployments": [
+    {
+      "artifactPaths": {
+        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22\\swift_mt700_to_pacs.intent.json",
+        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22\\swift_mt700_to_pacs.manifest.json",
+        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22\\swift_mt700_to_pacs.mapl",
+        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22\\swift_mt700_to_pacs.pas",
+        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22\\swift_mt700_to_pacs.wfl"
+      },
+      "createdAt": "2026-07-21T02:39:42.323Z",
+      "deployId": "swift_mt700_to_pacs:74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22",
+      "deploymentMode": "artifact-publish-only",
+      "intentHash": "74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22",
+      "manifestHash": "aea5dbd1f4ad543f29694c206d92fd1425c2e03799d76852b8166fb1c992b119",
+      "mapId": "swift_mt700_to_pacs",
+      "requestedBy": "ollama-intent",
+      "runtimePolicy": {
+        "executionEngine": "pulse-code",
+        "modelExecutionAllowed": false,
+        "modelMayRequestDeployment": true
+      },
+      "updatedAt": "2026-07-21T02:39:42.323Z"
+    },
+    {
+      "artifactPaths": {
+        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace\\pacs_split_xml_test.intent.json",
+        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace\\pacs_split_xml_test.manifest.json",
+        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace\\pacs_split_xml_test.mapl",
+        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace\\pacs_split_xml_test.pas",
+        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace\\pacs_split_xml_test.wfl"
+      },
+      "createdAt": "2026-07-21T02:40:07.015Z",
+      "deployId": "pacs_split_xml_test:94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace",
+      "deploymentMode": "artifact-publish-only",
+      "intentHash": "94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace",
+      "manifestHash": "dd33f0a3a63b44a56c343def4a7c90df3fe8327756bba2f60e28a602e5343e2a",
+      "mapId": "pacs_split_xml_test",
+      "requestedBy": "deterministic-endpoint",
+      "runtimePolicy": {
+        "executionEngine": "pulse-code",
+        "modelExecutionAllowed": false,
+        "modelMayRequestDeployment": true
+      },
+      "updatedAt": "2026-07-21T02:40:07.015Z"
+    },
+    {
+      "artifactPaths": {
+        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065\\pacs8_message_to_transaction.intent.json",
+        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065\\pacs8_message_to_transaction.manifest.json",
+        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065\\pacs8_message_to_transaction.mapl",
+        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065\\pacs8_message_to_transaction.pas",
+        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065\\pacs8_message_to_transaction.wfl"
+      },
+      "createdAt": "2026-07-21T02:59:01.625Z",
+      "deployId": "pacs8_message_to_transaction:c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065",
+      "deploymentMode": "artifact-publish-only",
+      "intentHash": "c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065",
+      "manifestHash": "b72d337a4ef05cb86ed4fbbc3dd03838500fac5c61cb79e407026c9338f0411f",
+      "mapId": "pacs8_message_to_transaction",
+      "requestedBy": "ollama-deploy",
+      "runtimePolicy": {
+        "executionEngine": "pulse-code",
+        "modelExecutionAllowed": false,
+        "modelMayRequestDeployment": true
+      },
+      "updatedAt": "2026-07-21T02:59:01.625Z"
+    },
+    {
+      "artifactPaths": {
+        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b\\pacs008_canonical_to_payment_mt700_canonical.intent.json",
+        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b\\pacs008_canonical_to_payment_mt700_canonical.manifest.json",
+        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b\\pacs008_canonical_to_payment_mt700_canonical.mapl",
+        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b\\pacs008_canonical_to_payment_mt700_canonical.pas",
+        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b\\pacs008_canonical_to_payment_mt700_canonical.wfl"
+      },
+      "createdAt": "2026-07-21T14:15:08.003Z",
+      "deployId": "pacs008_canonical_to_payment_mt700_canonical:84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b",
+      "deploymentMode": "artifact-publish-only",
+      "intentHash": "84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b",
+      "manifestHash": "44297936f99ba618291d29a3723b65fdc5a1550796191de3ff4b4910bbb4e3b5",
+      "mapId": "pacs008_canonical_to_payment_mt700_canonical",
+      "requestedBy": "ollama-deploy",
+      "runtimePolicy": {
+        "executionEngine": "pulse-code",
+        "modelExecutionAllowed": false,
+        "modelMayRequestDeployment": true
+      },
+      "updatedAt": "2026-07-21T14:15:08.003Z"
+    },
+    {
+      "artifactPaths": {
+        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2\\decomposition_router.intent.json",
+        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2\\decomposition_router.manifest.json",
+        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2\\decomposition_router.mapl",
+        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2\\decomposition_router.pas",
+        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2\\decomposition_router.wfl"
+      },
+      "createdAt": "2026-07-21T14:15:35.596Z",
+      "deployId": "decomposition_router:4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2",
+      "deploymentMode": "artifact-publish-only",
+      "intentHash": "4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2",
+      "manifestHash": "c683fba454024428edfa458585b58d2cfb40d1b3e409f29a06d73eceb5e37858",
+      "mapId": "decomposition_router",
+      "requestedBy": "ollama-deploy",
+      "runtimePolicy": {
+        "executionEngine": "pulse-code",
+        "modelExecutionAllowed": false,
+        "modelMayRequestDeployment": true
+      },
+      "updatedAt": "2026-07-21T14:15:35.596Z"
+    }
+  ],
+  "updatedAt": "2026-07-21T14:15:35.596Z",
+  "version": 1
+}

@@ -1,0 +1,9 @@
+map mt700_to_pacs_payment from SWIFT_MT700 to PACS;
+  // Deterministic MT700 -> PACS payment baseline mapping
+  target.Document.FIToFICstmrCdtTrf.GrpHdr.MsgId := source.block4.20;
+  target.Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt := source.block4.31C;
+  target.Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt := source.block4.32B;
+  target.Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm := source.block4.50;
+  target.Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm := source.block4.59;
+  validate source.block4.20 <> '';
+end;

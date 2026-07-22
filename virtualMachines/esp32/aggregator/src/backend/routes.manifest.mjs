@@ -16,5 +16,6 @@ export const ROUTE_ROLE_MANIFEST = [
   { id: 'librarian-proxy', registrar: 'registerLibrarianProxyRoutes', dependencyKey: 'librarianProxy', enabled: true },
   { id: 'mapper-proxy', registrar: 'registerMapperProxyRoutes', dependencyKey: 'mapperProxy', enabled: true },
   { id: 'runtime-registry', registrar: 'registerRuntimeRegistryRoutes', dependencyKey: 'runtimeRegistry', enabled: true },
-  { id: 'router-lifecycle-control', registrar: 'registerRouterLifecycleControlRoutes', dependencyKey: 'routerLifecycleControl', enabled: true }
+  { id: 'router-lifecycle-control', registrar: 'registerRouterLifecycleControlRoutes', dependencyKey: 'routerLifecycleControl', enabled: true },
+  { id: 'hello-service', registrar: 'registerHelloServiceRoutes', dependencyKey: 'helloService', enabled: true }
 ];

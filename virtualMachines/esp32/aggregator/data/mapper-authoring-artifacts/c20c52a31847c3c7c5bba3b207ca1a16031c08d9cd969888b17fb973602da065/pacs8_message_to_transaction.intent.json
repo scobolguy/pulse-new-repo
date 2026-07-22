@@ -1,0 +1,16 @@
+{
+  "description": "Create a mapper to split PACS8 messages into single transactions and deploy it specifically for child3.",
+  "execution": {
+    "clusterId": "esp32_edge_pool",
+    "maxWorkers": 12,
+    "mode": "concurrent"
+  },
+  "generatorVersion": "mapper-authoring-deterministic-v1",
+  "intentKind": "split-message-to-transactions",
+  "mapId": "pacs8_message_to_transaction",
+  "schemaVersion": "intent-schema-v1",
+  "sourceTypeId": "pacs8_message",
+  "targetTypeId": "transaction",
+  "templateVersion": "templates-v1",
+  "typeAliasVersion": "type-alias-v1"
+}

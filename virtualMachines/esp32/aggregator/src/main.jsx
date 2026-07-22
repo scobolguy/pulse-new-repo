@@ -1,14 +1,8 @@
 import { StrictMode, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
-import NetworkDevicesPage from './NetworkDevicesPage.jsx'
-import TopologyPage from './TopologyPage.jsx'
-import CatalogStudioPage from './CatalogStudioPage.jsx'
-import FlowDesignerPage from './FlowDesignerPage.jsx'
-import ProjectWorkspacePage from './ProjectWorkspacePage.jsx'
-import EvolutionTestPage from './EvolutionTestPage.jsx'
 import QueryPage from './QueryPage.jsx'
-import { PROJECT_DEFINITIONS, getProjectDefinition, hydrateProjectWorkspaceFromServer, loadActiveProjectId, saveActiveProjectId } from './projectWorkspace'
+import TopologyPage from './TopologyPage.jsx'
 
 const originalFetch = window.fetch.bind(window)
 const apiBaseUrls = String(import.meta.env.VITE_API_BASES || '')
@@ -86,99 +80,71 @@ window.fetch = async (input, init = {}) => {
 }
 
 function AppShell() {
-  const [page, setPage] = useState('project')
-  const [activeProjectId, setActiveProjectId] = useState(() => loadActiveProjectId())
+  const [currentPath, setCurrentPath] = useState(window.location.pathname)
 
   useEffect(() => {
-    saveActiveProjectId(activeProjectId)
-  }, [activeProjectId])
+    const handlePopState = () => {
+      setCurrentPath(window.location.pathname)
+    }
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
 
-  useEffect(() => {
-    void hydrateProjectWorkspaceFromServer(activeProjectId)
-  }, [activeProjectId])
+  const navigateTo = (path) => {
+    window.history.pushState(null, '', path)
+    setCurrentPath(path)
+  }
 
-  const activeProject = getProjectDefinition(activeProjectId)
+  let currentPage = <QueryPage />
+  if (currentPath === '/topology') {
+    currentPage = <TopologyPage />
+  }
 
   return (
-    <>
-      <nav className="app-nav">
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+      <nav style={{
+        padding: '12px 20px',
+        backgroundColor: '#f5f5f5',
+        borderBottom: '1px solid #ddd',
+        display: 'flex',
+        gap: '12px',
+        alignItems: 'center'
+      }}>
         <button
-          type="button"
-          className={`app-nav-button ${page === 'project' ? 'active' : ''}`}
-          onClick={() => setPage('project')}
+          onClick={() => navigateTo('/')}
+          style={{
+            padding: '8px 16px',
+            backgroundColor: currentPath === '/' ? '#333' : '#fff',
+            color: currentPath === '/' ? '#fff' : '#333',
+            border: '1px solid #ccc',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '14px',
+            fontWeight: currentPath === '/' ? 'bold' : 'normal'
+          }}
         >
-          Project
+          Ollama Query
         </button>
         <button
-          type="button"
-          className={`app-nav-button ${page === 'query' ? 'active' : ''}`}
-          onClick={() => setPage('query')}
+          onClick={() => navigateTo('/topology')}
+          style={{
+            padding: '8px 16px',
+            backgroundColor: currentPath === '/topology' ? '#333' : '#fff',
+            color: currentPath === '/topology' ? '#fff' : '#333',
+            border: '1px solid #ccc',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '14px',
+            fontWeight: currentPath === '/topology' ? 'bold' : 'normal'
+          }}
         >
-          Query
+          Network Topology
         </button>
-        <button
-          type="button"
-          className={`app-nav-button ${page === 'catalog' ? 'active' : ''}`}
-          onClick={() => setPage('catalog')}
-        >
-          Catalog Studio
-        </button>
-        <button
-          type="button"
-          className={`app-nav-button ${page === 'flow' ? 'active' : ''}`}
-          onClick={() => setPage('flow')}
-        >
-          Flow Designer
-        </button>
-        <button
-          type="button"
-          className={`app-nav-button ${page === 'topology' ? 'active' : ''}`}
-          onClick={() => setPage('topology')}
-        >
-          Topology
-        </button>
-        <button
-          type="button"
-          className={`app-nav-button ${page === 'devices' ? 'active' : ''}`}
-          onClick={() => setPage('devices')}
-        >
-          Devices
-        </button>
-        <button
-          type="button"
-          className={`app-nav-button ${page === 'evolution' ? 'active' : ''}`}
-          onClick={() => setPage('evolution')}
-        >
-          Evolution
-        </button>
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginLeft: 'auto', color: 'var(--text-h)' }}>
-          Project
-          <select
-            value={activeProjectId}
-            onChange={(event) => setActiveProjectId(event.target.value)}
-            style={{ padding: '7px 10px', borderRadius: 8 }}
-          >
-            {PROJECT_DEFINITIONS.map((project) => (
-              <option key={project.id} value={project.id}>{project.label}</option>
-            ))}
-          </select>
-        </label>
       </nav>
-      {page === 'project' ? (
-        <ProjectWorkspacePage
-          project={activeProject}
-          onSelectProject={setActiveProjectId}
-          onOpenCatalog={() => setPage('catalog')}
-          onOpenFlow={() => setPage('flow')}
-        />
-      ) : null}
-      {page === 'query' ? <QueryPage /> : null}
-      {page === 'catalog' ? <CatalogStudioPage projectId={activeProject.id} projectLabel={activeProject.label} /> : null}
-      {page === 'flow' ? <FlowDesignerPage projectId={activeProject.id} projectLabel={activeProject.label} /> : null}
-      {page === 'topology' ? <TopologyPage /> : null}
-      {page === 'devices' ? <NetworkDevicesPage /> : null}
-      {page === 'evolution' ? <EvolutionTestPage /> : null}
-    </>
+      <div style={{ flex: 1, overflow: 'auto' }}>
+        {currentPage}
+      </div>
+    </div>
   )
 }
 

@@ -1,0 +1,24 @@
+{
+  "status": "ok",
+  "model": "phi3:latest",
+  "normalizedPrompt": "Write a Pascal program to solve the towers of hanoi when n=3",
+  "coachMode": "pascal-program",
+  "simplePrompt": true,
+  "corpusChunksUsed": 2,
+  "goldenExamplesUsed": 1,
+  "numPredict": 220,
+  "noRepair": false,
+  "repaired": true,
+  "validation": {
+    "valid": true,
+    "dialect": "pascal-program",
+    "summary": {
+      "pcodeInstructions": null,
+      "pcodeLines": 70
+    },
+    "errors": [],
+    "normalizedCandidate": "program TowersOfHanoi;\n\nvar\n  diskCount: integer;\n\nprocedure Hanoi(n, fromPeg, toPeg, auxPeg: integer);\nbegin\n  if n = 1 then\n    writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)\n  else\n  begin\n    Hanoi(n - 1, fromPeg, auxPeg, toPeg);\n    writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg);\n    Hanoi(n - 1, auxPeg, toPeg, fromPeg)\n  end\nend;\n\nbegin\n  diskCount := 3;\n  writeln('Towers of Hanoi for ', diskCount, ' disks:');\n  Hanoi(diskCount, 1, 3, 2);\nend."
+  },
+  "outputPath": "aggregator/data/ollama-mentor-candidates/mentor-2026-07-22T00-51-58-363Z.pas",
+  "candidate": "program TowersOfHanoi;\n\nvar\n  diskCount: integer;\n\nprocedure Hanoi(n, fromPeg, toPeg, auxPeg: integer);\nbegin\n  if n = 1 then\n    writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)\n  else\n  begin\n    Hanoi(n - 1, fromPeg, auxPeg, toPeg);\n    writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg);\n    Hanoi(n - 1, auxPeg, toPeg, fromPeg)\n  end\nend;\n\nbegin\n  diskCount := 3;\n  writeln('Towers of Hanoi for ', diskCount, ' disks:');\n  Hanoi(diskCount, 1, 3, 2);\nend."
+}

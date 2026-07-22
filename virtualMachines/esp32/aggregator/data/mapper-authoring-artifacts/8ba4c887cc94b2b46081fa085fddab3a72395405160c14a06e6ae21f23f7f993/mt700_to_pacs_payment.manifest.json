@@ -1,0 +1,36 @@
+{
+  "artifactHashes": {
+    "maplHash": "7aebe8e78026621ea18fa664275bda0963de3ca2018590f02cd213a05708ce29",
+    "pascalishHash": "99a554006ab5ac07de2a3dace061f498b34ae803659b21cba2a3d93450fc7ef0",
+    "wflHash": "ea5ee8cefdc74f8075aa1c01ede7825cb60d7d189f49e4438ce64a18c3a0ee6f"
+  },
+  "createdAt": "2026-07-21T01:40:19.084Z",
+  "determinismContract": {
+    "clusterId": "esp32_edge_pool",
+    "concurrencyMode": "concurrent",
+    "invariant": "Same normalized intent and versions produce byte-identical artifacts",
+    "maxWorkers": 32
+  },
+  "generatorVersion": "mapper-authoring-deterministic-v1",
+  "intentHash": "8ba4c887cc94b2b46081fa085fddab3a72395405160c14a06e6ae21f23f7f993",
+  "intentSchemaVersion": "intent-schema-v1",
+  "manifestHash": "3d782948d32744cd49e7c8f4953e9522d6a4b22d7a3f06c4639cc5dd38d38765",
+  "normalizedIntent": {
+    "description": "Deterministic MT700 to PACS payment mapping",
+    "execution": {
+      "clusterId": "esp32_edge_pool",
+      "maxWorkers": 32,
+      "mode": "concurrent"
+    },
+    "generatorVersion": "mapper-authoring-deterministic-v1",
+    "intentKind": "map-message-type",
+    "mapId": "mt700_to_pacs_payment",
+    "schemaVersion": "intent-schema-v1",
+    "sourceTypeId": "swift-mt700",
+    "targetTypeId": "pacs",
+    "templateVersion": "templates-v1",
+    "typeAliasVersion": "type-alias-v1"
+  },
+  "templateVersion": "templates-v1",
+  "typeAliasVersion": "type-alias-v1"
+}

@@ -1,0 +1,16 @@
+{
+  "description": "Deterministic MT700 to PACS payment mapping",
+  "execution": {
+    "clusterId": "esp32_edge_pool",
+    "maxWorkers": 32,
+    "mode": "concurrent"
+  },
+  "generatorVersion": "mapper-authoring-deterministic-v1",
+  "intentKind": "map-message-type",
+  "mapId": "mt700_to_pacs_payment",
+  "schemaVersion": "intent-schema-v1",
+  "sourceTypeId": "swift-mt700",
+  "targetTypeId": "pacs",
+  "templateVersion": "templates-v1",
+  "typeAliasVersion": "type-alias-v1"
+}

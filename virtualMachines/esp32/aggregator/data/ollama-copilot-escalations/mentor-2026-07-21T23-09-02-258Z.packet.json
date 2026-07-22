@@ -1,0 +1,18 @@
+{
+  "sessionId": "mentor-2026-07-21T23-09-02-258Z",
+  "createdAt": "2026-07-21T23:11:02.341Z",
+  "status": "needs-copilot",
+  "reason": "timeout",
+  "prompt": "Write a minimal Pascal program that declares integer x, assigns x := 42, and prints it with writeln.",
+  "model": "phi3:latest",
+  "timeoutMs": 120000,
+  "candidatePath": "data/tmp-mentor-output.pas",
+  "coachResult": null,
+  "stdout": "",
+  "stderr": "",
+  "instructions": [
+    "Solve the Pascal program request using the prompt and any partial candidate.",
+    "Return only final Pascal source code.",
+    "Save the answer to a file and ingest it with scripts/ingest-pascal-mentor-answer.mjs."
+  ]
+}

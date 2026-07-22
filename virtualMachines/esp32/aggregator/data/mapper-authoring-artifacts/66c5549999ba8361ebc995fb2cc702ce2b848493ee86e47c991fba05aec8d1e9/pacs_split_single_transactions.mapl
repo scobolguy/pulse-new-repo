@@ -1,0 +1,9 @@
+map pacs_split_single_transactions from PACS to PACS;
+  // Deterministic split: one PACS transaction per emitted record
+  for each source.Document.FIToFICstmrCdtTrf.CdtTrfTxInf as tx
+    target.Document.FIToFICstmrCdtTrf.GrpHdr.MsgId := source.Document.FIToFICstmrCdtTrf.GrpHdr.MsgId;
+    target.Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId := tx.PmtId.EndToEndId;
+    target.Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt := tx.IntrBkSttlmAmt;
+    validate tx.PmtId.EndToEndId <> '';
+  end;
+end;

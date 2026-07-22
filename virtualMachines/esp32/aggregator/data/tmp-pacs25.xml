@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document>
+  <FIToFICstmrCdtTrf>
+    <GrpHdr>
+      <MsgId>MSG-SPLIT-25</MsgId>
+      <CreDtTm>2026-07-21T14:20:00Z</CreDtTm>
+    </GrpHdr>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00001</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">101.01</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00002</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">102.02</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00003</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">103.03</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00004</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">104.04</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00005</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">105.05</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00006</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">106.06</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00007</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">107.07</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00008</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">108.08</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00009</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">109.09</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00010</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">110.10</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00011</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">111.11</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00012</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">112.12</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00013</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">113.13</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00014</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">114.14</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00015</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">115.15</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00016</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">116.16</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00017</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">117.17</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00018</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">118.18</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00019</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">119.19</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00020</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">120.20</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00021</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">121.21</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00022</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">122.22</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00023</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">123.23</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00024</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">124.24</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId><EndToEndId>E2E-00025</EndToEndId></PmtId>
+      <IntrBkSttlmAmt Ccy="USD">125.25</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+  </FIToFICstmrCdtTrf>
+</Document>

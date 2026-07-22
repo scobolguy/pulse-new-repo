@@ -1,0 +1,16 @@
+{
+  "description": "Create and deploy a mapper from MT700 to pacs payment, run on many esp nodes.",
+  "execution": {
+    "clusterId": "esp32_edge_pool",
+    "maxWorkers": 24,
+    "mode": "concurrent"
+  },
+  "generatorVersion": "mapper-authoring-deterministic-v1",
+  "intentKind": "map-message-type",
+  "mapId": "swift_mt700_to_pacs",
+  "schemaVersion": "intent-schema-v1",
+  "sourceTypeId": "swift-mt700",
+  "targetTypeId": "pacs",
+  "templateVersion": "templates-v1",
+  "typeAliasVersion": "type-alias-v1"
+}

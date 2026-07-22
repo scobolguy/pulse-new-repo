@@ -1,0 +1,10 @@
+{
+  "sessionId": "mentor-2026-07-21T23-09-02-258Z",
+  "status": "needs-copilot",
+  "createdAt": "2026-07-21T23:11:02.345Z",
+  "elapsedMs": 120078,
+  "prompt": "Write a minimal Pascal program that declares integer x, assigns x := 42, and prints it with writeln.",
+  "escalationPacketPath": "data/ollama-copilot-escalations/mentor-2026-07-21T23-09-02-258Z.packet.json",
+  "coachResult": null,
+  "reason": "timeout"
+}

@@ -1,0 +1,100 @@
+{
+  "sessionId": "mentor-2026-07-22T01-13-16-140Z",
+  "status": "solved-by-ollama",
+  "createdAt": "2026-07-22T01:13:16.724Z",
+  "elapsedMs": 34,
+  "prompt": "Write a Pascal program to solve the towers of hanoi when n=4 and deploy it on neptune.child1",
+  "generationPrompt": "Write a Pascal program to solve the towers of hanoi when n=4",
+  "followUpPrompt": "and deploy it on neptune.child1",
+  "hasDeploymentStage": true,
+  "coachMode": "pascal-program",
+  "topK": 2,
+  "maxContextChars": 2500,
+  "numPredict": 320,
+  "noRepair": false,
+  "completedAfterTimeout": false,
+  "followUp": {
+    "type": "deployment-follow-up",
+    "prompt": "and deploy it on neptune.child1",
+    "nodeName": "neptune.child1",
+    "deployType": "pascal-program",
+    "commands": [
+      "Set-Location .\\aggregator",
+      "$env:ESP32_NODE_NAME='neptune.child1'",
+      "npm run run:pascal:esp32"
+    ]
+  },
+  "deployResult": {
+    "node": "neptune.child1",
+    "host": "192.168.2.157",
+    "source": "mentor-2026-07-22T01-13-16-140Z.pas",
+    "pcodeLines": 70,
+    "result": {
+      "ok": true,
+      "source": "file",
+      "inputQueue": "hanoi.run",
+      "message": "",
+      "stepLimitHit": false,
+      "stepCount": 394,
+      "memoryPressure": {
+        "freeHeapBytes": 115048,
+        "stackHighWaterBytes": 33440,
+        "stackHeapGapBytes": 81608,
+        "riskLevel": "ok",
+        "stackHeapCollisionRisk": false
+      },
+      "stdout": [
+        "Towers of Hanoi for 4",
+        "Move disk 1 from 1 to 2",
+        "Move disk 2 from 1 to 3",
+        "Move disk 1 from 2 to 3",
+        "Move disk 3 from 1 to 2",
+        "Move disk 1 from 3 to 1",
+        "Move disk 2 from 3 to 2",
+        "Move disk 1 from 1 to 2",
+        "Move disk 4 from 1 to 3",
+        "Move disk 1 from 2 to 3",
+        "Move disk 2 from 2 to 1",
+        "Move disk 1 from 3 to 1",
+        "Move disk 3 from 2 to 3",
+        "Move disk 1 from 1 to 2",
+        "Move disk 2 from 1 to 3",
+        "Move disk 1 from 2 to 3"
+      ],
+      "deliveries": [],
+      "publishedCount": 0,
+      "file": "/hanoi.pcode",
+      "programMap": "/hanoi.map.json",
+      "runRouter": false,
+      "instructionCount": 64,
+      "binaryBytes": 1495,
+      "thunkBindingsApplied": 0
+    }
+  },
+  "outputPath": "data/ollama-mentor-candidates/mentor-2026-07-22T01-13-16-140Z.pas",
+  "result": {
+    "status": "ok",
+    "model": "golden-cache",
+    "normalizedPrompt": "Write a Pascal program to solve the towers of hanoi when n=4",
+    "coachMode": "pascal-program",
+    "simplePrompt": true,
+    "corpusChunksUsed": 0,
+    "goldenExamplesUsed": 1,
+    "numPredict": 0,
+    "noRepair": false,
+    "repaired": false,
+    "cacheHit": true,
+    "validation": {
+      "valid": true,
+      "dialect": "pascal-program",
+      "summary": {
+        "pcodeInstructions": null,
+        "pcodeLines": 70
+      },
+      "errors": [],
+      "normalizedCandidate": "program TowersOfHanoi;\n\nvar\n  diskCount: integer;\n\nprocedure Hanoi(n, fromPeg, toPeg, auxPeg: integer);\nbegin\n  if n = 1 then\n    writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)\n  else\n  begin\n    Hanoi(n - 1, fromPeg, auxPeg, toPeg);\n    writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg);\n    Hanoi(n - 1, auxPeg, toPeg, fromPeg)\n  end\nend;\n\nbegin\n  diskCount := 4;\n  writeln('Towers of Hanoi for ', diskCount, ' disks:');\n  Hanoi(diskCount, 1, 3, 2)\nend."
+    },
+    "outputPath": "aggregator/data/ollama-mentor-candidates/mentor-2026-07-22T01-13-16-140Z.pas",
+    "candidate": "program TowersOfHanoi;\n\nvar\n  diskCount: integer;\n\nprocedure Hanoi(n, fromPeg, toPeg, auxPeg: integer);\nbegin\n  if n = 1 then\n    writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)\n  else\n  begin\n    Hanoi(n - 1, fromPeg, auxPeg, toPeg);\n    writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg);\n    Hanoi(n - 1, auxPeg, toPeg, fromPeg)\n  end\nend;\n\nbegin\n  diskCount := 4;\n  writeln('Towers of Hanoi for ', diskCount, ' disks:');\n  Hanoi(diskCount, 1, 3, 2)\nend."
+  }
+}

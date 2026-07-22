@@ -41,11 +41,14 @@ function buildTree(nodes) {
   return { byKey, childrenByParent, roots };
 }
 
-function TreeNode({ nodeKey, tree, depth = 0 }) {
+function TreeNode({ nodeKey, tree, depth = 0, expanded, onToggle }) {
   const node = tree.byKey.get(nodeKey);
   if (!node) return null;
 
   const children = tree.childrenByParent.get(nodeKey) || [];
+  const hasChildren = children.length > 0;
+  const isExpanded = expanded[nodeKey] === true;
+  
   const nodeName = String(node?.nodeName || node?.nodeId || node?.ip || nodeKey);
   const nodeIp = String(node?.ip || 'n/a');
   const clusterId = String(node?.topology?.activeClusterId || 'default');
@@ -54,22 +57,46 @@ function TreeNode({ nodeKey, tree, depth = 0 }) {
   const siteMode = String(node?.topology?.siteMode || 'hot-warm');
   const siteCategory = String(node?.topology?.siteCategory || 'internal');
 
+  const handleToggle = () => {
+    onToggle(nodeKey);
+  };
+
   return (
     <li>
-      <div className="topology-node" style={{ marginLeft: `${depth * 16}px` }}>
+      <div className="topology-node" style={{ marginLeft: `${depth * 16}px`, display: 'flex', alignItems: 'center', gap: '8px' }}>
+        {hasChildren ? (
+          <button
+            onClick={handleToggle}
+            style={{
+              border: 'none',
+              background: 'none',
+              cursor: 'pointer',
+              padding: '0 4px',
+              fontSize: '12px',
+              color: '#666',
+              minWidth: '20px'
+            }}
+            aria-label={isExpanded ? 'Collapse' : 'Expand'}
+          >
+            {isExpanded ? '▼' : '▶'}
+          </button>
+        ) : (
+          <span style={{ width: '20px', display: 'inline-block' }}></span>
+        )}
         <span className="topology-node-name">{nodeName}</span>
         <span className="topology-node-meta">{nodeIp}</span>
         <span className="topology-node-meta">cluster: {clusterId}</span>
         <span className="topology-node-meta">site: {siteName} ({siteMode}, {siteCategory})</span>
         {clusterController ? <span className="topology-node-badge">clusterController</span> : null}
+        {hasChildren ? <span className="topology-node-badge" style={{ backgroundColor: '#e3f2fd' }}>+{children.length} children</span> : null}
       </div>
-      {children.length > 0 ? (
+      {hasChildren && isExpanded && (
         <ul className="topology-tree-list">
           {children.map((childKey) => (
-            <TreeNode key={childKey} nodeKey={childKey} tree={tree} depth={depth + 1} />
+            <TreeNode key={childKey} nodeKey={childKey} tree={tree} depth={depth + 1} expanded={expanded} onToggle={onToggle} />
           ))}
         </ul>
-      ) : null}
+      )}
     </li>
   );
 }
@@ -79,6 +106,7 @@ export default function TopologyPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [lastRefreshedAt, setLastRefreshedAt] = useState('');
+  const [expanded, setExpanded] = useState({});
 
   async function loadTopology() {
     try {
@@ -98,6 +126,13 @@ export default function TopologyPage() {
     }
   }
 
+  const handleToggleNode = (nodeKey) => {
+    setExpanded(prev => ({
+      ...prev,
+      [nodeKey]: !prev[nodeKey]
+    }));
+  };
+
   useEffect(() => {
     loadTopology();
     const intervalId = window.setInterval(loadTopology, REFRESH_MS);
@@ -110,7 +145,7 @@ export default function TopologyPage() {
     <div className="topology-page">
       <header className="topology-header">
         <h1>Network Topology</h1>
-        <p>Auto-refreshes every 30 seconds.</p>
+        <p>Auto-refreshes every 30 seconds. Click the arrow (▶/▼) to expand/collapse nodes with children.</p>
         <div className="topology-actions">
           <button type="button" onClick={loadTopology}>Refresh now</button>
           <span className="topology-last-refresh">Last refresh: {lastRefreshedAt || 'never'}</span>
@@ -127,7 +162,7 @@ export default function TopologyPage() {
         ) : (
           <ul className="topology-tree-list">
             {tree.roots.map((rootKey) => (
-              <TreeNode key={rootKey} nodeKey={rootKey} tree={tree} />
+              <TreeNode key={rootKey} nodeKey={rootKey} tree={tree} depth={0} expanded={expanded} onToggle={handleToggleNode} />
             ))}
           </ul>
         )}

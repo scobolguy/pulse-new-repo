@@ -1,0 +1,9 @@
+{
+  "sessionId": "mentor-2026-07-21T23-19-54-372Z",
+  "status": "resolved-by-copilot",
+  "resolvedAt": "2026-07-21T23:26:25.973Z",
+  "prompt": "Write a Pascal program to solve the towers of hanoi when n=3",
+  "answerPath": "data/towers-of-hanoi.pas",
+  "packetPath": "data/ollama-copilot-escalations/mentor-2026-07-21T23-19-54-372Z.packet.json",
+  "goldenExampleId": "accepted-6eaa2e9471cc"
+}

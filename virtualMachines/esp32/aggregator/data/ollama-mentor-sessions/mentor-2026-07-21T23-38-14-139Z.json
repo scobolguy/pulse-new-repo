@@ -1,0 +1,10 @@
+{
+  "sessionId": "mentor-2026-07-21T23-38-14-139Z",
+  "status": "needs-copilot",
+  "createdAt": "2026-07-21T23:38:24.200Z",
+  "elapsedMs": 10051,
+  "prompt": "Write a Pascal program to solve the towers of hanoi when n=3",
+  "escalationPacketPath": "data/ollama-copilot-escalations/mentor-2026-07-21T23-38-14-139Z.packet.json",
+  "coachResult": null,
+  "reason": "timeout"
+}

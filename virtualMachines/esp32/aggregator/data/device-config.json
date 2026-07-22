@@ -1,0 +1,64 @@
+{
+  "deviceTypes": {
+    "ESP32": {
+      "ledPin": 2,
+      "alternativePins": [5, 12, 13, 14, 15],
+      "controlMethod": "GPIO",
+      "voltage": "3.3V",
+      "description": "32-bit dual-core microcontroller"
+    },
+    "ESP8266": {
+      "ledPin": 2,
+      "alternativePins": [4, 5, 12, 13, 14, 15],
+      "controlMethod": "GPIO",
+      "voltage": "3.3V",
+      "description": "32-bit single-core microcontroller"
+    },
+    "ESP32-CAM": {
+      "ledPin": 4,
+      "alternativePins": [12, 13, 14, 15],
+      "controlMethod": "GPIO",
+      "voltage": "3.3V",
+      "description": "32-bit dual-core microcontroller with camera"
+    }
+  },
+  "devices": {
+    "child1": {
+      "type": "ESP32-CAM",
+      "ip": "192.168.2.157",
+      "port": 80,
+      "ledPin": 2,
+      "parent": "Neptune",
+      "description": "Front-facing camera module"
+    },
+    "child2": {
+      "type": "ESP8266",
+      "ip": "192.168.2.59",
+      "port": 80,
+      "ledPin": 2,
+      "parent": "Neptune",
+      "description": "WiFi-only microcontroller"
+    },
+    "child3": {
+      "type": "ESP32",
+      "ip": "192.168.2.58",
+      "port": 80,
+      "ledPin": 2,
+      "parent": "Neptune",
+      "description": "Standard dual-core microcontroller"
+    }
+  },
+  "commands": {
+    "gpio_set": {
+      "endpoint": "/api/device/{device}/gpio/{pin}/set",
+      "method": "POST",
+      "body": {
+        "value": "0 (LOW/OFF) or 1 (HIGH/ON)"
+      }
+    },
+    "gpio_read": {
+      "endpoint": "/api/device/{device}/gpio/{pin}/read",
+      "method": "GET"
+    }
+  }
+}

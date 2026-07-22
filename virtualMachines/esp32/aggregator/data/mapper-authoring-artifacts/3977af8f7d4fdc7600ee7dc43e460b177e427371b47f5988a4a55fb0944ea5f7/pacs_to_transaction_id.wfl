@@ -1,0 +1,15 @@
+cluster esp32_edge_pool {
+  local;
+  child;
+  sibling;
+}
+
+// ISO XML transport contract: queues carry XML payloads
+deploy service pacs_to_transaction_id_service to cluster esp32_edge_pool;
+deploy queue pacs_inbound to cluster esp32_edge_pool;
+deploy queue transaction_id_outbound to cluster esp32_edge_pool;
+
+bind queue pacs_inbound manager qm name "pacs_inbound" cluster esp32_edge_pool mode sequential_xml;
+bind queue transaction_id_outbound manager qm name "transaction_id_outbound" cluster esp32_edge_pool mode sequential_xml;
+
+evict service pacs_to_transaction_id_service after idle 30 seconds warm reload fallback alternate;

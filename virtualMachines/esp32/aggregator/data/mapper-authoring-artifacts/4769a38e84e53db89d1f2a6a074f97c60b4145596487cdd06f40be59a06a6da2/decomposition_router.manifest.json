@@ -1,0 +1,39 @@
+{
+  "artifactHashes": {
+    "maplHash": "5452d7d16cf5311bd1d9dfd67efdc7825cfb0ade245c8a293102a45d56137a3b",
+    "pascalishHash": "1f5bfe0130cfc6ebad7cd2a111e9d29eeda2f2566d9dd5f4536802ba44a5682a",
+    "wflHash": "7ffaf85c683967a6b96d3998388094bb18344132017db1b5582f8815d4516da6"
+  },
+  "createdAt": "2026-07-21T14:15:35.583Z",
+  "determinismContract": {
+    "clusterId": "esp32_edge_pool",
+    "concurrencyMode": "concurrent",
+    "invariant": "Same normalized intent and versions produce byte-identical artifacts",
+    "maxWorkers": 12
+  },
+  "generatorVersion": "mapper-authoring-deterministic-v1",
+  "intentHash": "4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2",
+  "intentSchemaVersion": "intent-schema-v1",
+  "manifestHash": "c683fba454024428edfa458585b58d2cfb40d1b3e409f29a06d73eceb5e37858",
+  "normalizedIntent": {
+    "description": "Router to decompose a PACS message into individual messages.",
+    "execution": {
+      "clusterId": "esp32_edge_pool",
+      "maxWorkers": 12,
+      "mode": "concurrent"
+    },
+    "expectedTransactionCount": 25,
+    "generatorVersion": "mapper-authoring-deterministic-v1",
+    "inputQueue": "pacs008_queue",
+    "intentKind": "split-message-to-transactions",
+    "mapId": "decomposition_router",
+    "outputQueue": "messages.to.swift",
+    "schemaVersion": "intent-schema-v1",
+    "sourceTypeId": "pacs008_canonical",
+    "targetTypeId": "swiftmt700_canonical",
+    "templateVersion": "templates-v1",
+    "typeAliasVersion": "type-alias-v1"
+  },
+  "templateVersion": "templates-v1",
+  "typeAliasVersion": "type-alias-v1"
+}
