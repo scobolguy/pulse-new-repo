@@ -654,7 +654,7 @@ Neptune manages device discovery and communication for all child nodes.`
       const isLedQuery = /led|light|ledpin|turn\s+(on|off)/i.test(query);
 
       // Detect factorial computation queries — route to pascal execute service
-      const factorialMatch = query.match(/factorial\s+(?:of\s+)?(\d+)|(\d+)\s*!|what\s+is\s+(\d+)\s*!|(\d+)\s+factorial/i);
+      const factorialMatch = query.match(/factorial\s+(?:of\s+)?(-?\d+)|(-?\d+)\s*!|what\s+is\s+(-?\d+)\s*!|(-?\d+)\s+factorial/i);
       if (factorialMatch) {
         const n = parseInt(factorialMatch[1] || factorialMatch[2] || factorialMatch[3] || factorialMatch[4], 10);
         console.log(`[OLLAMA] Factorial query detected: n=${n}`);
@@ -670,9 +670,13 @@ Neptune manages device discovery and communication for all child nodes.`
           const execData = await execRes.json();
           if (execData.status === 'ok') {
             const result = execData.stdout;
+            const isInvalid = result.trim() === 'Invalid input';
+            const answer = isInvalid
+              ? `factorial(${n}) → Invalid input\n\nThe Pascal factorial service only accepts integers 0–10. ${n} is out of range.`
+              : `${n}! = ${result}\n\nComputed by running the Pascal factorial service via pmachine (source message: "${n}").`;
             const response = {
               success: true,
-              answer: `${n}! = ${result}\n\nComputed by running the Pascal factorial service via pmachine (source message: "${n}").`,
+              answer,
               model: 'pascal-execute',
               queryType: 'factorial-compute',
               computed: { n, result, elapsedMs: execData.elapsedMs }
