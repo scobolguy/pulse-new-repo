@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import http from 'http';
 import { reloadOllamaContext, getOllamaWarmthStatus, ollamaGenerate } from './ollamaService.mjs';
+import { matchPascalExecuteRoute, matchPrecomputedRoute, detectQueryTypes } from './queryRouteLoader.mjs';
 
 const SLOW_QUERY_THRESHOLD = 60000; // 60 seconds
 const SLOW_QUERY_LOG_FILE = path.resolve('./logs/slow-queries.jsonl');
@@ -479,13 +480,16 @@ Neptune manages device discovery and communication for all child nodes.`
       res.setHeader('Connection', 'keep-alive');
       res.setHeader('Access-Control-Allow-Origin', '*');
 
-      // Check for pre-computed answers first
-      const precomputed = checkPreComputedAnswer(query);
-      if (precomputed) {
-        console.log('[OLLAMA] Pre-computed answer for:', query);
-        res.write(`data: ${JSON.stringify({ chunk: precomputed.answer, final: true })}\n\n`);
-        res.end();
-        return;
+      // Check for pre-computed answers first (from data/ollama-query-routes.json)
+      const precomputedType = await matchPrecomputedRoute(query);
+      if (precomputedType) {
+        const precomputed = checkPreComputedAnswer(query);
+        if (precomputed) {
+          console.log('[OLLAMA] Pre-computed answer for:', query);
+          res.write(`data: ${JSON.stringify({ chunk: precomputed.answer, final: true })}\n\n`);
+          res.end();
+          return;
+        }
       }
 
       // Check cache
@@ -563,17 +567,20 @@ Neptune manages device discovery and communication for all child nodes.`
         }
       }
 
-      // Check for pre-computed answers first (instant response)
-      const precomputed = checkPreComputedAnswer(query);
-      if (precomputed) {
-        console.log('[OLLAMA] Pre-computed answer for:', query.substring(0, 50));
-        return res.json({
-          success: true,
-          answer: precomputed.answer,
-          model: process.env.OLLAMA_MODEL || 'phi3:latest',
-          queryType: precomputed.type,
-          fromCache: 'precomputed'
-        });
+      // Check for pre-computed answers first (from data/ollama-query-routes.json)
+      const precomputedType = await matchPrecomputedRoute(query);
+      if (precomputedType) {
+        const precomputed = checkPreComputedAnswer(query);
+        if (precomputed) {
+          console.log('[OLLAMA] Pre-computed answer for:', query.substring(0, 50));
+          return res.json({
+            success: true,
+            answer: precomputed.answer,
+            model: process.env.OLLAMA_MODEL || 'phi3:latest',
+            queryType: precomputed.type,
+            fromCache: 'precomputed'
+          });
+        }
       }
 
       // Check for device control queries and route to device-control endpoint
@@ -646,46 +653,48 @@ Neptune manages device discovery and communication for all child nodes.`
         }
       }
 
-      // Detect query type for routing and prompt customization
-      const isTreeQuery = /tree|hierarchy|structure|parent|child|under|belongs to|relationship/i.test(query);
-      const isNodesQuery = /node|network|topology|infrastructure|devices?|cluster/i.test(query) && !isTreeQuery;
-      const isServicesQuery = /service|capability|available|what can|what do|function/i.test(query);
-      const isRelayQuery = /relay|switch|activate|deactivate|turn\s+on|turn\s+off|pulse|gpio/i.test(query);
-      const isLedQuery = /led|light|ledpin|turn\s+(on|off)/i.test(query);
+      // Route matching via externalized config (data/ollama-query-routes.json)
+      const queryTypes = await detectQueryTypes(query);
+      const isTreeQuery = queryTypes.has('tree-query');
+      const isNodesQuery = queryTypes.has('nodes-query');
+      const isServicesQuery = queryTypes.has('services-query');
+      const isRelayQuery = queryTypes.has('relay-control');
+      const isLedQuery = queryTypes.has('led-control');
 
-      // Detect factorial computation queries — route to pascal execute service
-      const factorialMatch = query.match(/factorial\s+(?:of\s+)?(-?\d+)|(-?\d+)\s*!|what\s+is\s+(-?\d+)\s*!|(-?\d+)\s+factorial/i);
-      if (factorialMatch) {
-        const n = parseInt(factorialMatch[1] || factorialMatch[2] || factorialMatch[3] || factorialMatch[4], 10);
-        console.log(`[OLLAMA] Factorial query detected: n=${n}`);
+      // Check pascal-execute routes (factorial, etc.) from config
+      const pascalRoute = await matchPascalExecuteRoute(query);
+      if (pascalRoute) {
+        const { route, capturedValue } = pascalRoute;
+        const n = parseInt(capturedValue, 10);
+        console.log(`[OLLAMA] Pascal-execute route matched: ${route.id}, capture=${capturedValue}`);
         try {
+          const sourceFile = path.resolve(process.cwd(), route.action.sourceFile);
+          const source = await fs.promises.readFile(sourceFile, 'utf-8');
           const execRes = await fetch('http://127.0.0.1:4000/api/pascal/execute', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              source: `program FactorialService;\nvar n, result, i : integer;\nprocedure factorial(x : integer);\nbegin\n  if x <= 1 then\n    result := 1\n  else begin\n    factorial(x - 1);\n    result := result * x\n  end\nend;\nbegin\n  n := src;\n  if (n >= 0) and (n <= 10) and (not (src = 'Invalid input')) then begin\n    if (n = 0) and (not (src = '0')) then\n      writeln('Invalid input')\n    else begin\n      result := 1;\n      factorial(n);\n      writeln(result)\n    end\n  end else\n    writeln('Invalid input')\nend.`,
-              message: String(n)
-            })
+            body: JSON.stringify({ source, message: String(capturedValue) })
           });
           const execData = await execRes.json();
           if (execData.status === 'ok') {
             const result = execData.stdout;
             const isInvalid = result.trim() === 'Invalid input';
-            const answer = isInvalid
-              ? `factorial(${n}) → Invalid input\n\nThe Pascal factorial service only accepts integers 0–10. ${n} is out of range.`
-              : `${n}! = ${result}\n\nComputed by running the Pascal factorial service via pmachine (source message: "${n}").`;
+            const fmt = isInvalid ? route.formatResult.invalid : route.formatResult.valid;
+            const answer = fmt
+              .replace(/{n}/g, capturedValue)
+              .replace(/{result}/g, result);
             const response = {
               success: true,
               answer,
               model: 'pascal-execute',
-              queryType: 'factorial-compute',
+              queryType: route.id,
               computed: { n, result, elapsedMs: execData.elapsedMs }
             };
             responseCache.set(cacheKey, { response, timestamp: Date.now() });
             return res.json(response);
           }
         } catch (e) {
-          console.warn('[OLLAMA] Pascal execute failed for factorial:', e.message);
+          console.warn(`[OLLAMA] Pascal execute failed for route ${route.id}:`, e.message);
         }
       }
 

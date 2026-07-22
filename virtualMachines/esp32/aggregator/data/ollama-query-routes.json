@@ -1,0 +1,122 @@
+{
+  "version": 1,
+  "description": "Query routing rules for the Ollama ask endpoint. Add new routes here without touching ollamaRoutes.mjs.",
+  "routes": [
+    {
+      "id": "factorial-compute",
+      "type": "pascal-execute",
+      "description": "Compute factorial(n) via the Pascal pmachine service",
+      "patterns": [
+        "factorial\\s+(?:of\\s+)?(-?\\d+)",
+        "(-?\\d+)\\s*!",
+        "what\\s+is\\s+(-?\\d+)\\s*!",
+        "(-?\\d+)\\s+factorial"
+      ],
+      "flags": "i",
+      "captureGroup": "first-non-null",
+      "action": {
+        "endpoint": "/api/pascal/execute",
+        "sourceFile": "data/factorial-service.pas",
+        "messageFromCapture": true
+      },
+      "formatResult": {
+        "valid": "{n}! = {result}\n\nComputed by running the Pascal factorial service via pmachine (source message: \"{n}\").",
+        "invalid": "factorial({n}) → Invalid input\n\nThe Pascal factorial service only accepts integers 0–10. {n} is out of range."
+      }
+    }
+  ],
+  "precomputed": [
+    {
+      "id": "topology-tree",
+      "type": "topology",
+      "description": "Show the network node hierarchy tree",
+      "patterns": [
+        "show.*tree",
+        "network.*topology",
+        "node.*hierarchy",
+        "structure.*node",
+        "how.*arranged",
+        "how.*organized"
+      ],
+      "flags": ""
+    },
+    {
+      "id": "node-count",
+      "type": "quick",
+      "description": "How many nodes are registered",
+      "patterns": [
+        "how many nodes",
+        "node count",
+        "total nodes",
+        "devices.*available",
+        "list.*nodes",
+        "all.*nodes",
+        "count.*device"
+      ],
+      "flags": ""
+    },
+    {
+      "id": "esp32-list",
+      "type": "devices",
+      "description": "List ESP32/ESP8266 devices",
+      "patterns": [
+        "list.*esp32",
+        "esp32.*list",
+        "list.*esp8266",
+        "what.*esp32",
+        "what.*devices",
+        "esp32.*devices",
+        "esp8266.*available"
+      ],
+      "flags": ""
+    },
+    {
+      "id": "neptune-info",
+      "type": "neptune",
+      "description": "Information about the Neptune cluster controller",
+      "patterns": [
+        "what.*neptune",
+        "neptune.*what",
+        "tell.*neptune",
+        "neptune.*info",
+        "who.*neptune",
+        "what.*cluster controller",
+        "cluster controller.*info"
+      ],
+      "flags": ""
+    }
+  ],
+  "queryTypeDetectors": [
+    {
+      "id": "tree-query",
+      "type": "tree-query",
+      "patterns": ["tree", "hierarchy", "structure", "parent", "child", "under", "belongs to", "relationship"],
+      "flags": "i"
+    },
+    {
+      "id": "nodes-query",
+      "type": "nodes-query",
+      "patterns": ["node", "network", "topology", "infrastructure", "devices?", "cluster"],
+      "flags": "i",
+      "excludeIfAlso": "tree-query"
+    },
+    {
+      "id": "services-query",
+      "type": "services-query",
+      "patterns": ["service", "capability", "available", "what can", "what do", "function"],
+      "flags": "i"
+    },
+    {
+      "id": "relay-query",
+      "type": "relay-control",
+      "patterns": ["relay", "switch", "activate", "deactivate", "turn\\s+on", "turn\\s+off", "pulse", "gpio"],
+      "flags": "i"
+    },
+    {
+      "id": "led-query",
+      "type": "led-control",
+      "patterns": ["led", "light", "ledpin", "turn\\s+(on|off)"],
+      "flags": "i"
+    }
+  ]
+}
