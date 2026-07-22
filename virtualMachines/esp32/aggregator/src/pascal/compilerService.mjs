@@ -1,288 +1,119 @@
 /**
  * Pascal Compiler Service
- * 
- * Provides REST API for compiling Pascal code to p-code using ANTLR-based PulseSys grammar.
- * Supports symbol table extraction and autocomplete suggestions.
+ *
+ * Wraps the ANTLR-based StandardPascal compiler for use via REST API.
  */
 
-import { spawn } from 'child_process';
 import path from 'path';
-import { fileURLToPath } from 'url';
-import fs from 'fs/promises';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const COMPILER_URL = pathToFileURL(
+  path.resolve(__dirname, '../../scripts/compile-standard-pascal-antlr-to-pcode.mjs')
+).href;
+
 export class PascalCompilerService {
-  constructor(options = {}) {
-    this.grammarPath = options.grammarPath || path.join(__dirname, '../../../dsl/languages/PulseSys');
-    this.antlrJar = options.antlrJar || path.join(__dirname, '../../../dsl/services/Pulse0Compiler/antlr-4.9.2-complete.jar');
-    this.timeout = options.timeout || 30000;
-  }
+  constructor(_options = {}) {}
 
   /**
-   * Compile Pascal source code to p-code
-   * 
-   * This is a simplified implementation that validates syntax and extracts symbols.
-   * Full p-code generation would require a complete code generator.
+   * Compile Pascal source to pcode using the real ANTLR compiler.
+   * Returns { status, pcode, pcodeText, programMap, symbols, errors, warnings }
    */
-  async compile(source, options = {}) {
+  async compile(source, _options = {}) {
     try {
-      // Validate syntax
-      const validation = await this.validate(source);
-      
-      if (!validation.valid) {
-        return {
-          status: 'error',
-          errors: validation.errors,
-          pcode: null
-        };
-      }
+      const { compileStandardPascalWithAntlr } = await import(COMPILER_URL);
+      const result = compileStandardPascalWithAntlr(String(source));
 
-      // Extract symbols
-      const symbolResult = await this.extractSymbols(source);
-
-      // Generate placeholder p-code
-      // In a full implementation, this would use a code generator
-      const pcode = this.generatePlaceholderPCode(source, symbolResult.symbols);
+      const symbols = this._extractSymbols(source);
 
       return {
         status: 'ok',
-        pcode,
-        symbols: symbolResult.symbols,
+        pcode: result.pcodeText,
+        pcodeText: result.pcodeText,
+        programMap: result.programMap,
+        symbols,
         errors: [],
         warnings: []
       };
     } catch (err) {
-      console.error('[PascalCompiler] Compilation error:', err);
-      return {
-        status: 'error',
-        error: err.message,
-        errors: [{ line: 0, column: 0, message: err.message }]
-      };
+      const errors = err.message.startsWith('[STD-PASCAL]')
+        ? err.message.split('\n').map((msg, i) => ({ line: i, column: 0, message: msg }))
+        : [{ line: 0, column: 0, message: err.message }];
+      return { status: 'error', error: err.message, errors, pcode: null };
     }
   }
 
   /**
-   * Validate Pascal syntax
+   * Validate by attempting compilation — errors are real ANTLR parse errors.
    */
   async validate(source) {
-    try {
-      const errors = [];
-
-      // Basic syntax validation using regex patterns
-      // Check for program declaration
-      if (!source.match(/program\s+\w+\s*;/i)) {
-        errors.push({
-          line: 1,
-          column: 1,
-          message: 'Missing program declaration'
-        });
-      }
-
-      // Check for begin/end pairs
-      const beginCount = (source.match(/\bbegin\b/gi) || []).length;
-      const endCount = (source.match(/\bend\b/gi) || []).length;
-      if (beginCount !== endCount) {
-        errors.push({
-          line: 0,
-          column: 0,
-          message: `Mismatched begin/end blocks (${beginCount} begin, ${endCount} end)`
-        });
-      }
-
-      // Check for final period
-      if (!source.trim().endsWith('.')) {
-        errors.push({
-          line: source.split('\n').length,
-          column: 1,
-          message: 'Program must end with a period'
-        });
-      }
-
-      return {
-        status: 'ok',
-        valid: errors.length === 0,
-        errors
-      };
-    } catch (err) {
-      return {
-        status: 'error',
-        valid: false,
-        errors: [{ line: 0, column: 0, message: err.message }]
-      };
-    }
+    const result = await this.compile(source);
+    return {
+      status: 'ok',
+      valid: result.status === 'ok',
+      errors: result.errors || []
+    };
   }
 
   /**
-   * Extract symbols from Pascal source
+   * Extract symbols via regex (fast path; no full compile needed).
    */
   async extractSymbols(source) {
-    try {
-      const symbols = [];
-      
-      // Extract program name
-      const programMatch = source.match(/program\s+(\w+)/i);
-      if (programMatch) {
-        symbols.push({
-          name: programMatch[1],
-          type: 'program',
-          kind: 'program',
-          line: this.getLineNumber(source, programMatch.index),
-          detail: 'Program entry point'
-        });
-      }
-
-      // Extract variables
-      const varMatches = source.matchAll(/var\s+(\w+(?:\s*,\s*\w+)*)\s*:\s*(\w+)/gi);
-      for (const match of varMatches) {
-        const varNames = match[1].split(',').map(v => v.trim());
-        const varType = match[2];
-        for (const varName of varNames) {
-          symbols.push({
-            name: varName,
-            type: 'variable',
-            kind: 'variable',
-            dataType: varType,
-            line: this.getLineNumber(source, match.index),
-            detail: `Variable of type ${varType}`
-          });
-        }
-      }
-
-      // Extract procedures
-      const procMatches = source.matchAll(/procedure\s+(\w+)/gi);
-      for (const match of procMatches) {
-        symbols.push({
-          name: match[1],
-          type: 'procedure',
-          kind: 'function',
-          line: this.getLineNumber(source, match.index),
-          detail: 'Procedure'
-        });
-      }
-
-      // Extract functions
-      const funcMatches = source.matchAll(/function\s+(\w+)/gi);
-      for (const match of funcMatches) {
-        symbols.push({
-          name: match[1],
-          type: 'function',
-          kind: 'function',
-          line: this.getLineNumber(source, match.index),
-          detail: 'Function'
-        });
-      }
-
-      return {
-        status: 'ok',
-        symbols
-      };
-    } catch (err) {
-      console.error('[PascalCompiler] Symbol extraction error:', err);
-      return {
-        status: 'error',
-        error: err.message,
-        symbols: []
-      };
-    }
+    return { status: 'ok', symbols: this._extractSymbols(source) };
   }
 
-  /**
-   * Get autocomplete suggestions
-   */
-  async getCompletions(source, position) {
-    try {
-      // Extract symbols for autocomplete
-      const symbolResult = await this.extractSymbols(source);
-      const symbols = symbolResult.symbols || [];
-
-      // Pascal keywords based on PulseSys grammar
-      const keywords = [
-        'program', 'begin', 'end', 'var', 'const', 'type',
-        'procedure', 'function', 'if', 'then', 'else',
-        'while', 'do', 'for', 'to', 'downto', 'repeat', 'until',
-        'case', 'of', 'array', 'record', 'integer', 'boolean', 'real',
-        'true', 'false', 'and', 'or', 'not', 'div', 'mod',
-        'spawn', 'send', 'receive' // PulseSys extensions
-      ];
-
-      const completions = [
-        ...keywords.map(kw => ({
-          label: kw,
-          kind: 'keyword',
-          detail: 'Pascal keyword',
-          insertText: kw
-        })),
-        ...symbols.map(sym => ({
-          label: sym.name,
-          kind: sym.kind || sym.type,
-          detail: sym.detail || sym.dataType || sym.type,
-          insertText: sym.name
-        }))
-      ];
-
-      return {
-        status: 'ok',
-        completions
-      };
-    } catch (err) {
-      console.error('[PascalCompiler] Autocomplete error:', err);
-      return {
-        status: 'error',
-        error: err.message,
-        completions: []
-      };
+  _extractSymbols(source) {
+    const symbols = [];
+    const programMatch = source.match(/program\s+(\w+)/i);
+    if (programMatch) {
+      symbols.push({ name: programMatch[1], kind: 'program', type: 'program',
+        line: this._lineOf(source, programMatch.index), detail: 'Program entry point' });
     }
-  }
-
-  /**
-   * Generate placeholder p-code
-   * In a full implementation, this would use a proper code generator
-   */
-  generatePlaceholderPCode(source, symbols) {
-    const lines = [];
-    lines.push('; Generated p-code');
-    lines.push('; Source: Pascal program');
-    lines.push('');
-    
-    // Add symbol declarations
-    for (const sym of symbols) {
-      if (sym.type === 'variable') {
-        lines.push(`DECL ${sym.name} ${sym.dataType || 'INTEGER'}`);
+    for (const m of source.matchAll(/var\s+(\w+(?:\s*,\s*\w+)*)\s*:\s*(\w+)/gi)) {
+      for (const v of m[1].split(',').map(s => s.trim())) {
+        symbols.push({ name: v, kind: 'variable', type: 'variable', dataType: m[2],
+          line: this._lineOf(source, m.index), detail: `Variable of type ${m[2]}` });
       }
     }
-    
-    lines.push('');
-    lines.push('START:');
-    lines.push('  ; Program logic would go here');
-    lines.push('  HALT');
-    
-    return lines.join('\n');
+    for (const m of source.matchAll(/procedure\s+(\w+)/gi)) {
+      symbols.push({ name: m[1], kind: 'function', type: 'procedure',
+        line: this._lineOf(source, m.index), detail: 'Procedure' });
+    }
+    return symbols;
   }
 
-  /**
-   * Get line number from string index
-   */
-  getLineNumber(source, index) {
+  async getCompletions(source, _position) {
+    const { symbols } = await this.extractSymbols(source);
+    const keywords = [
+      'program', 'begin', 'end', 'var', 'procedure', 'if', 'then', 'else',
+      'while', 'do', 'for', 'to', 'repeat', 'until', 'integer', 'boolean',
+      'and', 'or', 'not', 'div', 'mod', 'writeln'
+    ];
+    return {
+      status: 'ok',
+      completions: [
+        ...keywords.map(kw => ({ label: kw, kind: 'keyword', detail: 'Pascal keyword', insertText: kw })),
+        ...symbols.map(s => ({ label: s.name, kind: s.kind, detail: s.detail, insertText: s.name }))
+      ]
+    };
+  }
+
+  _lineOf(source, index) {
     return source.substring(0, index).split('\n').length;
   }
 }
 
-// Singleton instance
 let compilerInstance = null;
 
 export function createPascalCompiler(options) {
-  if (!compilerInstance) {
-    compilerInstance = new PascalCompilerService(options);
-  }
+  if (!compilerInstance) compilerInstance = new PascalCompilerService(options);
   return compilerInstance;
 }
 
 export function getPascalCompiler() {
-  if (!compilerInstance) {
-    throw new Error('Pascal compiler not initialized. Call createPascalCompiler() first.');
-  }
+  if (!compilerInstance) throw new Error('Pascal compiler not initialized. Call createPascalCompiler() first.');
   return compilerInstance;
 }
 

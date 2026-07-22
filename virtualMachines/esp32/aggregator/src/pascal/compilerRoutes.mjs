@@ -5,7 +5,15 @@
  */
 
 import express from 'express';
+import path from 'path';
+import { fileURLToPath, pathToFileURL } from 'url';
+import fs from 'fs/promises';
 import { getPascalCompiler } from './compilerService.mjs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const OPCODE_MANIFEST = path.resolve(__dirname, '../../../pcode/pcode-opcodes.manifest.json');
+const ANTLR_COMPILER_URL = pathToFileURL(path.resolve(__dirname, '../../scripts/compile-standard-pascal-antlr-to-pcode.mjs')).href;
+const PMACHINE_URL = pathToFileURL(path.resolve(__dirname, '../../scripts/run-js-pmachine.mjs')).href;
 
 const router = express.Router();
 
@@ -321,6 +329,79 @@ router.get('/keywords', (req, res) => {
     status: 'ok',
     keywords
   });
+});
+
+/**
+ * POST /api/pascal/execute
+ *
+ * Compile and run Pascal source code through the pmachine.
+ *
+ * Request body:
+ * {
+ *   "source": "program T; begin writeln(src) end.",
+ *   "message": "hello"      // optional: injected as 'src' variable
+ * }
+ *
+ * Response:
+ * {
+ *   "status": "ok",
+ *   "output": ["hello"],
+ *   "stdout": "hello\n",
+ *   "elapsedMs": 12
+ * }
+ */
+router.post('/execute', async (req, res) => {
+  const t0 = Date.now();
+  try {
+    const { source, message = '' } = req.body;
+
+    if (!source) {
+      return res.status(400).json({ status: 'error', error: 'Missing required field: source' });
+    }
+
+    // Use the real ANTLR-based compiler directly
+    const { compileStandardPascalWithAntlr } = await import(ANTLR_COMPILER_URL);
+    const { executeProgram, parsePcode } = await import(PMACHINE_URL);
+
+    let compiled;
+    try {
+      compiled = compileStandardPascalWithAntlr(String(source));
+    } catch (compileErr) {
+      return res.status(400).json({ status: 'error', error: `Compile error: ${compileErr.message}` });
+    }
+
+    const manifestText = await fs.readFile(OPCODE_MANIFEST, 'utf-8');
+    const opcodeMap = new Map(Object.entries(JSON.parse(manifestText).opcodes || {}));
+
+    const instructions = parsePcode(compiled.pcodeText);
+    const programMap = compiled.programMap || {};
+
+    const mappingsById = new Map();
+    mappingsById.__globals = Array.isArray(programMap.globals) ? programMap.globals : [];
+    mappingsById.__proceduresByLabel = programMap.procedures || {};
+
+    const result = await executeProgram({
+      instructions,
+      opcodeMap,
+      mappingsById,
+      queueTypesByName: new Map(),
+      isoTypeIds: new Set(),
+      inputQueue: 'pascal.execute.in',
+      sourceMessage: String(message),
+      runtimeContext: {}
+    });
+
+    const output = result?.stdout || [];
+    res.json({
+      status: 'ok',
+      output,
+      stdout: output.join('\n'),
+      elapsedMs: Date.now() - t0
+    });
+  } catch (err) {
+    console.error('[PascalRoutes] Execute error:', err);
+    res.status(500).json({ status: 'error', error: err.message });
+  }
 });
 
 export default router;

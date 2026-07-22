@@ -65,6 +65,13 @@
       "response": "program StringCompare;\nbegin\n  if src = 'hello' then\n    writeln('got hello')\n  else\n    writeln('not hello')\nend.",
       "source": "accepted-tested",
       "notes": "src is a runtime-injected string variable. Use STREQ opcode generated automatically when comparing identifiers to string literals."
+    },
+    {
+      "id": "factorial-of-5",
+      "prompt": "What is the factorial of 5?",
+      "response": "program FactorialOf5;\n\nvar result : integer;\n\nprocedure factorial(x : integer);\nbegin\n  if x <= 1 then\n    result := 1\n  else begin\n    factorial(x - 1);\n    result := result * x\n  end\nend;\n\nbegin\n  result := 1;\n  factorial(5);\n  writeln(result)\nend.",
+      "source": "accepted-verified",
+      "notes": "factorial(5) = 120. Verified by running the compiled program on the JS pmachine."
     }
   ]
 }
