@@ -331,6 +331,8 @@ public:
     bool readPCodeByte(uint32_t virtualAddress, uint8_t& outByte);
     void run(const std::vector<PInstruction>& instructions);
     void setRoutingContext(const std::string& inputQueue, const std::string& message);
+    void setNamedStringVariable(const std::string& name, const std::string& value);
+    std::string getNamedStringVariable(const std::string& name) const;
     const std::vector<RouteDelivery>& getRoutingDeliveries() const;
     void clearRoutingDeliveries();
     void setMappings(const std::vector<MappingDef>& defs);
@@ -387,6 +389,7 @@ private:
     ThunkResolveHook thunkResolveHook = nullptr;
     void* thunkResolverContext = nullptr;
     std::map<std::string, int> thunkBindings;
+    std::map<std::string, std::string> namedStringVariables;  // String-valued named variables (e.g., 'src')
 
     // Handler table for opcode dispatch
     using HandlerFunc = void (*)(PMachine&, const PInstruction&, int*, int&, int&, int&);

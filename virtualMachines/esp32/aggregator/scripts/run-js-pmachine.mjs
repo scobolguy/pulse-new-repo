@@ -1083,6 +1083,11 @@ async function executeProgram({ instructions, opcodeMap, mappingsById, queueType
     vars: Object.fromEntries(programGlobals.map(name => [name, 0])),
     parent: null
   };
+  
+  // Inject 'src' variable with sourceMessage if provided
+  if (sourceMessage !== undefined && sourceMessage !== null) {
+    globalFrame.vars['src'] = String(sourceMessage);
+  }
   let currentFrame = globalFrame;
   const callStack = [];
   const pendingOrchTasks = [];
@@ -1152,7 +1157,14 @@ async function executeProgram({ instructions, opcodeMap, mappingsById, queueType
       continue;
     }
     if (op === 'LOAD') {
-      stack.push(Number(resolveVar(currentFrame, String(instr.operand || '')) || 0));
+      const varName = String(instr.operand || '');
+      const varValue = resolveVar(currentFrame, varName);
+      // If loading 'src', keep it as a string; otherwise convert to number
+      if (varName === 'src' && typeof varValue === 'string') {
+        stack.push(varValue);
+      } else {
+        stack.push(Number(varValue || 0));
+      }
       pc += 1;
       continue;
     }

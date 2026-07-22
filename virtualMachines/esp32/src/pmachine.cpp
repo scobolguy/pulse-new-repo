@@ -630,6 +630,17 @@ void PMachine::register_extension(uint8_t opcode, HandlerFunc func) {
 void PMachine::setRoutingContext(const std::string& inputQueue, const std::string& message) {
     currentInputQueue = inputQueue;
     currentMessage = message;
+    // Pre-populate 'src' as a string-valued named variable so it's accessible in programs
+    setNamedStringVariable("src", message);
+}
+
+void PMachine::setNamedStringVariable(const std::string& name, const std::string& value) {
+    namedStringVariables[name] = value;
+}
+
+std::string PMachine::getNamedStringVariable(const std::string& name) const {
+    auto it = namedStringVariables.find(name);
+    return (it != namedStringVariables.end()) ? it->second : "";
 }
 const std::vector<RouteDelivery>& PMachine::getRoutingDeliveries() const {
     return routingDeliveries;
@@ -1415,12 +1426,25 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             continue;
         }
         if (instr.opcode == OP_LOAD_NAME) {
-            if (sp >= STACK_SIZE) {
-                gFlowState["__runtime_error"] = "stack overflow";
-                gFlowState["__memory_pressure"] = captureMemoryPressureSnapshot(static_cast<size_t>(sp), STACK_SIZE).memoryPressureLevel;
-                break;
+            const std::string varName = instr.strOperand;
+            // Check if this is a string-valued named variable like 'src'
+            std::string strValue = getNamedStringVariable(varName);
+            if (!strValue.empty() || varName == "src") {
+                // Push string-valued variable onto string stack
+                if (strValue.empty() && varName == "src") {
+                    strStack.push_back(currentMessage);
+                } else {
+                    strStack.push_back(strValue);
+                }
+            } else {
+                // Push integer-valued variable onto integer stack
+                if (sp >= STACK_SIZE) {
+                    gFlowState["__runtime_error"] = "stack overflow";
+                    gFlowState["__memory_pressure"] = captureMemoryPressureSnapshot(static_cast<size_t>(sp), STACK_SIZE).memoryPressureLevel;
+                    break;
+                }
+                stack[sp++] = resolveName(varName);
             }
-            stack[sp++] = resolveName(instr.strOperand);
             ++pc;
             continue;
         }
