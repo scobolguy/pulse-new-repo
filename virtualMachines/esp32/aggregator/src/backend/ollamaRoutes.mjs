@@ -809,7 +809,7 @@ Neptune manages device discovery and communication for all child nodes.`
         responseCache.set(cacheKey, { response: treeResponse, timestamp: Date.now() });
         
         return res.json(treeResponse);
-      } else if (isLedQuery && !isNodesQuery && !isServicesQuery) {
+      } else if (isLedQuery && !isNodesQuery && !isServicesQuery && !queryTypes.has('queue-query')) {
         queryType = 'device-control';
         // For LED control, ask Ollama to parse the command
         finalQuery = `Parse this LED/light control request and respond with ONLY valid JSON (no other text):

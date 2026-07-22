@@ -116,6 +116,13 @@
       "id": "led-query",
       "type": "led-control",
       "patterns": ["led", "light", "ledpin", "turn\\s+(on|off)"],
+      "flags": "i",
+      "excludeIfAlso": "queue-query"
+    },
+    {
+      "id": "queue-query",
+      "type": "queue-query",
+      "patterns": ["queue", "queuemanager", "enqueue", "dequeue", "create.*queue"],
       "flags": "i"
     }
   ]
