@@ -1,0 +1,18 @@
+{
+  "sessionId": "mentor-2026-07-22T12-47-22-547Z",
+  "status": "needs-copilot",
+  "createdAt": "2026-07-22T12:47:57.605Z",
+  "elapsedMs": 30015,
+  "prompt": "Write a Pascalish service that reads a number 0-10 from the message, calculates factorial recursively with caching, and returns the result or 'Invalid input' if out of range. The number should be parsed from src. Deploy it on neptune.child1",
+  "generationPrompt": "Write a Pascalish service that reads a number 0-10 from the message, calculates factorial recursively with caching, and returns the result or 'Invalid input' if out of range. The number should be parsed from src.",
+  "followUpPrompt": "Deploy it on neptune.child1",
+  "hasDeploymentStage": true,
+  "coachMode": "pascalish-service",
+  "topK": 2,
+  "maxContextChars": 2500,
+  "numPredict": 320,
+  "noRepair": false,
+  "escalationPacketPath": "data/ollama-copilot-escalations/mentor-2026-07-22T12-47-22-547Z.packet.json",
+  "coachResult": null,
+  "reason": "timeout"
+}
