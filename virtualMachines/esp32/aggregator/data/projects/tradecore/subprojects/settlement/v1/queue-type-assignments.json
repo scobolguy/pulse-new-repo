@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "projectId": "tradecore",
+  "subprojectPath": "settlement/v1",
+  "updatedAt": "2026-07-22T20:15:49.598Z",
+  "assignments": [
+    {
+      "queueName": "q.alpha",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "managerId": "qm-primary",
+      "assignedAt": "2026-07-22T20:15:49.598Z",
+      "source": "ollama-assign-command"
+    },
+    {
+      "queueName": "q.beta",
+      "dataTypeIds": [
+        "pacs"
+      ],
+      "managerId": "qm-primary",
+      "assignedAt": "2026-07-22T20:15:49.565Z",
+      "source": "ollama-assign-command"
+    }
+  ]
+}

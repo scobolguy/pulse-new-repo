@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Pulse Home</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #22263a;
+    --border: #2e3250;
+    --accent: #4f8ef7;
+    --accent2: #7c5cd8;
+    --green: #22c55e;
+    --red: #ef4444;
+    --amber: #f59e0b;
+    --text: #e8eaf6;
+    --muted: #8892b0;
+    --radius: 16px;
+    --shadow: 0 4px 24px rgba(0,0,0,0.5);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, "Segoe UI", system-ui, sans-serif; font-size: 15px; line-height: 1.5; }
+
+  /* ── Layout ── */
+  #app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; min-height: 0; }
+
+  /* ── Tab bar ── */
+  #tabs { display: flex; background: var(--surface); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .tab { flex: 1; padding: 10px 4px 8px; text-align: center; cursor: pointer; font-size: 11px; color: var(--muted); border-bottom: 2px solid transparent; transition: color .2s, border-color .2s; user-select: none; }
+  .tab .tab-icon { font-size: 22px; display: block; margin-bottom: 2px; }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* ── Panels ── */
+  #panels { flex: 1; overflow: hidden; position: relative; min-height: 0; }
+  /* Non-assistant panels scroll normally */
+  .panel { position: absolute; inset: 0; overflow-y: auto; padding: 16px; display: none; flex-direction: column; gap: 14px; }
+  .panel.active { display: flex; }
+  /* Assistant panel: fixed layout — chat scrolls, input stays pinned */
+  #panel-assistant { overflow: hidden; padding: 0; gap: 0; }
+  #chat-scroll { flex: 1; overflow-y: auto; padding: 16px 16px 8px; min-height: 0; }
+  #input-dock { flex-shrink: 0; padding: 8px 16px 16px; background: var(--bg); border-top: 1px solid var(--border); }
+
+  /* ── Cards ── */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+  .card-title { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+
+  /* ── Assistant chat ── */
+  #chat-log { display: flex; flex-direction: column; gap: 10px; padding-bottom: 4px; }
+  .bubble { max-width: 88%; padding: 10px 14px; border-radius: 18px; font-size: 14px; line-height: 1.5; word-break: break-word; }
+  .bubble.user { background: var(--accent); color: #fff; align-self: flex-end; border-bottom-right-radius: 4px; }
+  .bubble.assistant { background: var(--surface2); color: var(--text); align-self: flex-start; border-bottom-left-radius: 4px; }
+  .bubble.thinking { color: var(--muted); font-style: italic; }
+
+  /* ── TTS / input dock ── */
+  .tts-row { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); margin-bottom: 10px; }
+  #input-row { display: flex; gap: 8px; align-items: flex-end; }
+  #query-input { flex: 1; background: var(--surface2); border: 1px solid var(--border); border-radius: 22px; padding: 10px 16px; color: var(--text); font-size: 15px; resize: none; height: 44px; overflow: hidden; outline: none; transition: border-color .2s; }
+  #query-input:focus { border-color: var(--accent); }
+  #query-input::placeholder { color: var(--muted); }
+  .icon-btn { width: 44px; height: 44px; border-radius: 50%; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; transition: transform .1s, opacity .2s; }
+  .icon-btn:active { transform: scale(.93); }
+  #mic-btn { background: var(--accent2); color: #fff; }
+  #mic-btn.listening { background: var(--red); animation: pulse-ring 1s infinite; }
+  #send-btn { background: var(--accent); color: #fff; }
+  #send-btn:disabled { opacity: .4; }
+
+  @keyframes pulse-ring {
+    0%   { box-shadow: 0 0 0 0 rgba(239,68,68,.5); }
+    70%  { box-shadow: 0 0 0 12px rgba(239,68,68,0); }
+    100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); }
+  }
+
+  .toggle { position: relative; width: 40px; height: 22px; }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle-track { position: absolute; inset: 0; background: var(--surface2); border-radius: 11px; cursor: pointer; transition: background .2s; }
+  .toggle input:checked + .toggle-track { background: var(--accent); }
+  .toggle-track::after { content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: transform .2s; }
+  .toggle input:checked + .toggle-track::after { transform: translateX(18px); }
+
+  /* ── Camera panel ── */
+  .cam-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .cam-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; }
+  .cam-name { font-weight: 600; font-size: 14px; }
+  .cam-status { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+  .cam-status.online { background: rgba(34,197,94,.15); color: var(--green); }
+  .cam-status.offline { background: rgba(239,68,68,.15); color: var(--red); }
+  .cam-img-wrap { background: #000; aspect-ratio: 4/3; display: flex; align-items: center; justify-content: center; position: relative; }
+  .cam-img-wrap img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .cam-img-wrap .cam-placeholder { color: var(--muted); font-size: 13px; text-align: center; padding: 20px; }
+  .cam-controls { display: flex; gap: 8px; padding: 10px 14px; flex-wrap: wrap; }
+  .cam-btn { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; transition: background .15s; }
+  .cam-btn:active { background: var(--border); }
+  .cam-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .cam-fps { font-size: 11px; color: var(--muted); padding: 0 14px 8px; }
+
+  /* ── Nodes / dashboard panel ── */
+  .node-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .node-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
+  .node-card-name { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .node-card-type { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+  .node-card-ip { font-size: 11px; color: var(--muted); font-family: monospace; }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 4px; }
+  .dot.ok { background: var(--green); }
+  .dot.unknown { background: var(--amber); }
+  .dot.offline { background: var(--red); }
+  .services-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .svc-tag { font-size: 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px; color: var(--muted); }
+
+  /* relay controls inline */
+  .relay-btns { display: flex; gap: 6px; margin-top: 8px; }
+  .relay-btn { flex: 1; padding: 6px 0; font-size: 12px; border-radius: 8px; border: 1px solid var(--border); cursor: pointer; transition: background .15s; }
+  .relay-btn.on  { background: rgba(34,197,94,.15); color: var(--green); border-color: var(--green); }
+  .relay-btn.off { background: rgba(239,68,68,.15); color: var(--red); border-color: var(--red); }
+  .relay-btn.pulse { background: rgba(245,158,11,.15); color: var(--amber); border-color: var(--amber); }
+
+  /* ── Queue dashboard ── */
+  .queue-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .queue-table th { text-align: left; color: var(--muted); font-size: 11px; font-weight: 600; padding: 4px 6px; border-bottom: 1px solid var(--border); }
+  .queue-table td { padding: 6px 6px; border-bottom: 1px solid var(--border); }
+  .queue-depth { font-variant-numeric: tabular-nums; text-align: right; font-weight: 600; }
+  .queue-depth.has-items { color: var(--amber); }
+
+  /* ── Refresh / status strip ── */
+  .status-strip { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); padding-bottom: 4px; }
+  .refresh-btn { background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 8px; padding: 3px 10px; font-size: 11px; cursor: pointer; }
+
+  /* ── Toast ── */
+  #toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 8px 18px; font-size: 13px; color: var(--text); opacity: 0; transition: opacity .3s; pointer-events: none; white-space: nowrap; z-index: 100; }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- Tab bar -->
+  <div id="tabs">
+    <div class="tab active" data-panel="assistant" onclick="switchTab(this)">
+      <span class="tab-icon">🏠</span>Assistant
+    </div>
+    <div class="tab" data-panel="cameras" onclick="switchTab(this)">
+      <span class="tab-icon">📷</span>Cameras
+    </div>
+    <div class="tab" data-panel="nodes" onclick="switchTab(this)">
+      <span class="tab-icon">🔌</span>Nodes
+    </div>
+    <div class="tab" data-panel="queues" onclick="switchTab(this)">
+      <span class="tab-icon">📊</span>Queues
+    </div>
+  </div>
+
+  <!-- Panels -->
+  <div id="panels">
+
+    <!-- ── ASSISTANT ── -->
+    <div id="panel-assistant" class="panel active">
+      <div id="chat-scroll">
+        <div id="chat-log"></div>
+      </div>
+      <div id="input-dock">
+        <div class="tts-row">
+          <label class="toggle">
+            <input type="checkbox" id="tts-toggle" checked>
+            <span class="toggle-track"></span>
+          </label>
+          <span>Speak replies</span>
+          <span style="width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0;" id="stt-dot" title="STT ready"></span>
+          <span id="stt-status" style="margin-left:2px; font-size:11px; color:var(--green);">Voice ready</span>
+        </div>
+        <div id="input-row">
+          <textarea id="query-input" placeholder="Ask anything…" rows="1"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendQuery();}"></textarea>
+          <button class="icon-btn" id="mic-btn" onclick="toggleMic()" title="Hold to speak">🎤</button>
+          <button class="icon-btn" id="send-btn" onclick="sendQuery()" title="Send">➤</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── CAMERAS ── -->
+    <div id="panel-cameras" class="panel">
+      <div class="status-strip">
+        <span id="cam-last-update">No snapshots yet</span>
+        <button class="refresh-btn" onclick="refreshCameras()">↻ Refresh</button>
+      </div>
+      <div id="cam-list"></div>
+    </div>
+
+    <!-- ── NODES ── -->
+    <div id="panel-nodes" class="panel">
+      <div class="status-strip">
+        <span id="nodes-last-update">Loading…</span>
+        <button class="refresh-btn" onclick="loadNodes()">↻ Refresh</button>
+      </div>
+      <div id="node-grid" class="node-grid"></div>
+    </div>
+
+    <!-- ── QUEUES ── -->
+    <div id="panel-queues" class="panel">
+      <div class="status-strip">
+        <span id="queues-last-update">Loading…</span>
+        <button class="refresh-btn" onclick="loadQueues()">↻ Refresh</button>
+      </div>
+      <div id="queue-dashboard"></div>
+    </div>
+
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+
+/* ─────────────────────────────────────────────
+   CONFIG  — set BACKEND_BASE to the aggregator IP
+   when serving this page from a different host.
+   Override via URL: ?backend=http://192.168.2.11:4000
+───────────────────────────────────────────── */
+const _params = new URLSearchParams(location.search);
+const BACKEND_BASE = _params.get('backend') ||
+  (/^(localhost|127\.|0\.0\.0\.0)/.test(location.hostname)
+    ? 'http://192.168.2.11:4000'
+    : '');
+
+const API = {
+  ask:    () => `${BACKEND_BASE}/api/ollama/ask`,
+  nodes:  () => `${BACKEND_BASE}/api/ollama/nodes`,
+  relay:  () => `${BACKEND_BASE}/api/ollama/relay/control`,
+  tts:    () => `${BACKEND_BASE}/api/local-tts/speak`,
+  queues: () => `${BACKEND_BASE}/api/registry/queues`,
+  qLen:   (q) => `${BACKEND_BASE}/api/queue/${encodeURIComponent(q)}/length`,
+};
+
+// ESP32 camera nodes — discovered dynamically from /api/ollama/nodes
+// but pre-seeded with known addresses
+let cameraNodes = [
+  { id: 'child1', name: 'child1', ip: '192.168.2.157', type: 'ESP32-CAM' }
+];
+
+/* ─── Tab switching ─── */
+function switchTab(el) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  const panel = document.getElementById('panel-' + el.dataset.panel);
+  if (panel) panel.classList.add('active');
+
+  // Lazy-load panel content on first switch
+  if (el.dataset.panel === 'cameras')  buildCameraPanel();
+  if (el.dataset.panel === 'nodes')    loadNodes();
+  if (el.dataset.panel === 'queues')   loadQueues();
+}
+
+/* ─── Toast ─── */
+let toastTimer;
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
+}
+
+/* ─────────────────────────────────────────────
+   ASSISTANT
+───────────────────────────────────────────── */
+const chatLog = document.getElementById('chat-log');
+
+const chatScroll = document.getElementById('chat-scroll');
+
+function addBubble(text, role) {
+  const div = document.createElement('div');
+  div.className = `bubble ${role}`;
+  div.textContent = text;
+  chatLog.appendChild(div);
+  chatScroll.scrollTop = chatScroll.scrollHeight;
+  return div;
+}
+
+async function sendQuery() {
+  const input = document.getElementById('query-input');
+  const query = input.value.trim();
+  if (!query) return;
+  input.value = '';
+  input.style.height = '44px';
+
+  addBubble(query, 'user');
+  const thinking = addBubble('…', 'assistant thinking');
+
+  try {
+    const res = await fetch(API.ask(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query }),
+    });
+    const data = await res.json();
+    const answer = data.answer || data.error || 'No response';
+    thinking.textContent = answer;
+    thinking.classList.remove('thinking');
+
+    if (document.getElementById('tts-toggle').checked) speakText(answer);
+
+    // If the response includes runtimeState, show a quick summary
+    if (data.runtimeState) {
+      const { gateways = [], topQueues = [], queueCount = 0 } = data.runtimeState;
+      const summary = `${gateways.length} gateways, ${queueCount} queues`;
+      addBubble(`📊 Runtime: ${summary}`, 'assistant');
+    }
+  } catch (e) {
+    thinking.textContent = 'Error: ' + e.message;
+    thinking.classList.remove('thinking');
+  }
+}
+
+/* ─────────────────────────────────────────────
+   SPEECH TO TEXT  (Web Speech API)
+───────────────────────────────────────────── */
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+let micActive = false;
+
+function setSttStatus(text, color) {
+  const dot = document.getElementById('stt-dot');
+  const label = document.getElementById('stt-status');
+  if (dot) dot.style.background = color || 'var(--green)';
+  if (label) { label.textContent = text; label.style.color = color || 'var(--green)'; }
+}
+
+if (SpeechRecognition) {
+  recognition = new SpeechRecognition();
+  recognition.continuous = false;
+  recognition.interimResults = true;
+  recognition.lang = 'en-US';
+
+  recognition.onstart = () => {
+    micActive = true;
+    document.getElementById('mic-btn').classList.add('listening');
+    setSttStatus('Listening…', 'var(--red)');
+  };
+
+  recognition.onend = () => {
+    micActive = false;
+    document.getElementById('mic-btn').classList.remove('listening');
+    setSttStatus('Voice ready', 'var(--green)');
+  };
+
+  recognition.onresult = (e) => {
+    const input = document.getElementById('query-input');
+    let interim = '';
+    let final = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) final += e.results[i][0].transcript;
+      else interim += e.results[i][0].transcript;
+    }
+    input.value = final || interim;
+    if (final) sendQuery();
+  };
+
+  recognition.onerror = (e) => {
+    setSttStatus('Error: ' + e.error, 'var(--red)');
+    micActive = false;
+    document.getElementById('mic-btn').classList.remove('listening');
+  };
+} else {
+  document.getElementById('mic-btn').style.opacity = '0.35';
+  document.getElementById('mic-btn').title = 'Speech recognition not supported in this browser';
+  setSttStatus('Voice N/A', 'var(--muted)');
+}
+
+function toggleMic() {
+  if (!recognition) { toast('Speech recognition not supported in this browser'); return; }
+  if (micActive) { recognition.stop(); }
+  else { recognition.start(); }
+}
+
+/* ─────────────────────────────────────────────
+   TEXT TO SPEECH  (browser-native first, backend fallback)
+───────────────────────────────────────────── */
+function speakText(text) {
+  // Truncate very long responses to first 3 sentences for speech
+  const spoken = text.split(/(?<=[.!?])\s+/).slice(0, 3).join(' ');
+
+  if ('speechSynthesis' in window) {
+    window.speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(spoken);
+    utt.lang = 'en-US';
+    utt.rate = 1.0;
+    utt.pitch = 1.0;
+    // Prefer a local voice if available
+    const voices = window.speechSynthesis.getVoices();
+    const preferred = voices.find(v => v.lang === 'en-US' && v.localService) || voices[0];
+    if (preferred) utt.voice = preferred;
+    window.speechSynthesis.speak(utt);
+  } else {
+    // Fallback: ask backend TTS (Windows SAPI) to speak on host
+    fetch(API.tts(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: spoken, playOnHost: true }),
+    }).catch(() => {});
+  }
+}
+
+/* ─────────────────────────────────────────────
+   CAMERAS
+───────────────────────────────────────────── */
+const camIntervals = {};
+let camerasPanelBuilt = false;
+
+function buildCameraPanel() {
+  if (camerasPanelBuilt) { refreshCameras(); return; }
+  camerasPanelBuilt = true;
+
+  const list = document.getElementById('cam-list');
+  list.innerHTML = '';
+
+  if (cameraNodes.length === 0) {
+    list.innerHTML = '<p style="color:var(--muted);font-size:13px;">No camera nodes found. Refresh nodes first.</p>';
+    return;
+  }
+
+  cameraNodes.forEach(node => {
+    const card = document.createElement('div');
+    card.className = 'cam-card';
+    card.id = `camcard-${node.id}`;
+    card.innerHTML = `
+      <div class="cam-header">
+        <span class="cam-name">${node.name}</span>
+        <span class="cam-status offline" id="camstatus-${node.id}">Checking…</span>
+      </div>
+      <div class="cam-img-wrap" id="camwrap-${node.id}">
+        <div class="cam-placeholder">Tap Refresh to load snapshot</div>
+      </div>
+      <div class="cam-fps" id="camfps-${node.id}"></div>
+      <div class="cam-controls">
+        <button class="cam-btn" id="cmlive-${node.id}" onclick="toggleLive('${node.id}','${node.ip}')">▶ Live</button>
+        <button class="cam-btn" onclick="snapOnce('${node.id}','${node.ip}')">📸 Snap</button>
+        <button class="cam-btn" onclick="checkMotion('${node.id}','${node.ip}')">👁 Motion</button>
+        <button class="cam-btn" onclick="openFullscreen('${node.id}')">⛶ Full</button>
+      </div>`;
+    list.appendChild(card);
+    checkCameraStatus(node.id, node.ip);
+  });
+}
+
+async function checkCameraStatus(nodeId, ip) {
+  const statusEl = document.getElementById(`camstatus-${nodeId}`);
+  try {
+    const r = await fetch(`http://${ip}/api/camera/status`, { signal: AbortSignal.timeout(4000) });
+    if (r.ok) {
+      const d = await r.json();
+      if (d.initialized) {
+        statusEl.textContent = 'Online';
+        statusEl.className = 'cam-status online';
+      } else {
+        statusEl.textContent = 'No camera';
+        statusEl.className = 'cam-status offline';
+      }
+    } else {
+      statusEl.textContent = r.status === 503 ? 'No camera' : 'Offline';
+      statusEl.className = 'cam-status offline';
+    }
+  } catch {
+    statusEl.textContent = 'Unreachable';
+    statusEl.className = 'cam-status offline';
+  }
+}
+
+function snapOnce(nodeId, ip) {
+  const wrap = document.getElementById(`camwrap-${nodeId}`);
+  const url = `http://${ip}/api/camera/capture?t=${Date.now()}`;
+  wrap.innerHTML = `<img src="${url}" alt="Snapshot from ${nodeId}"
+    onerror="this.parentNode.innerHTML='<div class=cam-placeholder>Snapshot failed — camera may not be enabled on this firmware build</div>'"
+    onload="document.getElementById('cam-last-update').textContent='Last snap: '+new Date().toLocaleTimeString()">`;
+  checkCameraStatus(nodeId, ip);
+}
+
+let liveIntervals = {};
+function toggleLive(nodeId, ip) {
+  const btn = document.getElementById(`cmlive-${nodeId}`);
+  const fpsEl = document.getElementById(`camfps-${nodeId}`);
+
+  if (liveIntervals[nodeId]) {
+    clearInterval(liveIntervals[nodeId]);
+    delete liveIntervals[nodeId];
+    btn.classList.remove('active');
+    btn.textContent = '▶ Live';
+    fpsEl.textContent = '';
+    return;
+  }
+
+  btn.classList.add('active');
+  btn.textContent = '⏹ Stop';
+  let frameCount = 0;
+  let startMs = Date.now();
+
+  const tick = () => {
+    snapOnce(nodeId, ip);
+    frameCount++;
+    const elapsed = (Date.now() - startMs) / 1000;
+    fpsEl.textContent = `${(frameCount / elapsed).toFixed(1)} fps  ·  frame #${frameCount}`;
+  };
+  tick();
+  liveIntervals[nodeId] = setInterval(tick, 1000);
+}
+
+async function checkMotion(nodeId, ip) {
+  try {
+    const r = await fetch(`http://${ip}/api/camera/motion/check`, { signal: AbortSignal.timeout(5000) });
+    const d = await r.json();
+    if (d.motionDetected) {
+      toast(`${nodeId}: Motion detected! ${d.changePercentage?.toFixed(1) ?? '?'}% change`);
+      addBubble(`🚨 Motion on ${nodeId}: ${d.changePercentage?.toFixed(1) ?? '?'}% change at ${new Date().toLocaleTimeString()}`, 'assistant');
+    } else {
+      toast(`${nodeId}: No motion`);
+    }
+  } catch {
+    toast(`${nodeId}: Motion check failed`);
+  }
+}
+
+function openFullscreen(nodeId) {
+  const img = document.querySelector(`#camwrap-${nodeId} img`);
+  if (!img) { toast('Load a snapshot first'); return; }
+  if (img.requestFullscreen) img.requestFullscreen();
+  else if (img.webkitRequestFullscreen) img.webkitRequestFullscreen();
+}
+
+function refreshCameras() {
+  cameraNodes.forEach(n => snapOnce(n.id, n.ip));
+  document.getElementById('cam-last-update').textContent = 'Refreshed ' + new Date().toLocaleTimeString();
+}
+
+/* ─────────────────────────────────────────────
+   NODES
+───────────────────────────────────────────── */
+async function loadNodes() {
+  document.getElementById('nodes-last-update').textContent = 'Loading…';
+  const grid = document.getElementById('node-grid');
+  grid.innerHTML = '';
+
+  try {
+    const r = await fetch(API.nodes(), { signal: AbortSignal.timeout(6000) });
+    const data = await r.json();
+    const nodes = data.nodes || [];
+
+    // Update camera node list from live data
+    const camNodes = nodes.filter(n =>
+      String(n.type || '').toLowerCase().includes('cam') ||
+      (n.services || []).some(s => String(s).toLowerCase().includes('camera'))
+    );
+    if (camNodes.length) {
+      cameraNodes = camNodes.map(n => ({
+        id: n.id, name: n.name, ip: n.ip || '',
+        type: n.type || 'ESP32-CAM'
+      }));
+      camerasPanelBuilt = false; // force rebuild on next camera tab open
+    }
+
+    nodes.forEach(node => {
+      const isRelay = (node.services || []).some(s => String(s).toLowerCase().includes('relay'));
+      const relayHtml = isRelay ? `
+        <div class="relay-btns">
+          <button class="relay-btn on"    onclick="relay('${node.id}','ON')">ON</button>
+          <button class="relay-btn pulse" onclick="relay('${node.id}','PULSE')">PULSE</button>
+          <button class="relay-btn off"   onclick="relay('${node.id}','OFF')">OFF</button>
+        </div>` : '';
+
+      const svcs = (node.services || []).map(s => `<span class="svc-tag">${s}</span>`).join('');
+      const dotClass = node.status === 'ok' || node.status === 'available' ? 'ok' : node.status === 'unknown' ? 'unknown' : 'offline';
+
+      const card = document.createElement('div');
+      card.className = 'node-card';
+      card.innerHTML = `
+        <div class="node-card-name"><span class="dot ${dotClass}"></span>${node.name}</div>
+        <div class="node-card-type">${node.type || 'Node'}</div>
+        <div class="node-card-ip">${node.ip || ''}</div>
+        <div class="services-list">${svcs}</div>
+        ${relayHtml}`;
+      grid.appendChild(card);
+    });
+
+    document.getElementById('nodes-last-update').textContent =
+      `${nodes.length} nodes · ${new Date().toLocaleTimeString()}`;
+  } catch (e) {
+    grid.innerHTML = `<p style="color:var(--muted);font-size:13px;grid-column:span 2">Failed to load nodes: ${e.message}</p>`;
+    document.getElementById('nodes-last-update').textContent = 'Error';
+  }
+}
+
+async function relay(nodeId, action) {
+  try {
+    const r = await fetch(API.relay(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nodeId, action, pin: 5 }),
+      signal: AbortSignal.timeout(6000),
+    });
+    const d = await r.json();
+    toast(d.message || `${nodeId} relay → ${action}`);
+  } catch (e) {
+    toast(`Relay error: ${e.message}`);
+  }
+}
+
+/* ─────────────────────────────────────────────
+   QUEUES DASHBOARD
+───────────────────────────────────────────── */
+async function loadQueues() {
+  document.getElementById('queues-last-update').textContent = 'Loading…';
+  const container = document.getElementById('queue-dashboard');
+
+  try {
+    // Ask ollama for runtime state — it returns gateway + queue info
+    const r = await fetch(API.ask(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: 'show gateway and queue state' }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const data = await r.json();
+    const rs = data.runtimeState;
+
+    if (!rs) {
+      container.innerHTML = `<div class="card"><p style="color:var(--muted);font-size:13px;">${data.answer || 'No runtime state available'}</p></div>`;
+      document.getElementById('queues-last-update').textContent = 'No data';
+      return;
+    }
+
+    // Gateways card
+    let html = `<div class="card"><div class="card-title">Gateways (${rs.gateways.length})</div>`;
+    if (rs.gateways.length) {
+      html += `<table class="queue-table"><thead><tr><th>ID</th><th>Mode</th><th>State</th><th style="text-align:right">Processed</th></tr></thead><tbody>`;
+      rs.gateways.forEach(g => {
+        const state = g.running ? (g.quiesced ? '⏸ Quiesced' : '▶ Running') : '⏹ Stopped';
+        html += `<tr><td style="font-family:monospace;font-size:12px">${g.gatewayId}</td><td>${g.mode}</td><td>${state}</td><td class="queue-depth ${g.processedCount>0?'has-items':''}">${g.processedCount}</td></tr>`;
+      });
+      html += `</tbody></table>`;
+    } else {
+      html += `<p style="color:var(--muted);font-size:13px;">No active gateways</p>`;
+    }
+    html += `</div>`;
+
+    // Top queues card
+    html += `<div class="card"><div class="card-title">Top Queues by Depth (${rs.queueCount} total)</div>`;
+    if (rs.topQueues.length) {
+      html += `<table class="queue-table"><thead><tr><th>Queue</th><th style="text-align:right">Depth</th></tr></thead><tbody>`;
+      rs.topQueues.forEach(q => {
+        html += `<tr><td style="font-family:monospace;font-size:12px">${q.queue}</td><td class="queue-depth ${q.depth>0?'has-items':''}">${q.depth}</td></tr>`;
+      });
+      html += `</tbody></table>`;
+    } else {
+      html += `<p style="color:var(--muted);font-size:13px;">No queues with depth</p>`;
+    }
+    html += `</div>`;
+
+    container.innerHTML = html;
+    document.getElementById('queues-last-update').textContent =
+      `Updated ${new Date(rs.generatedAt || Date.now()).toLocaleTimeString()}`;
+  } catch (e) {
+    container.innerHTML = `<div class="card"><p style="color:var(--muted);font-size:13px;">Error: ${e.message}</p></div>`;
+    document.getElementById('queues-last-update').textContent = 'Error';
+  }
+}
+
+/* ─────────────────────────────────────────────
+   AUTO-EXPAND TEXTAREA
+───────────────────────────────────────────── */
+document.getElementById('query-input').addEventListener('input', function () {
+  this.style.height = '44px';
+  this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+});
+
+/* ─────────────────────────────────────────────
+   INIT — greet and warm up voices
+───────────────────────────────────────────── */
+window.addEventListener('load', () => {
+  // Warm up browser voice list (Chrome lazy-loads it)
+  if ('speechSynthesis' in window) {
+    speechSynthesis.getVoices();
+    speechSynthesis.addEventListener('voiceschanged', () => speechSynthesis.getVoices());
+  }
+
+  addBubble('Hi! I\'m your Pulse home assistant. Ask me anything about your nodes, queues, or devices — or tap 🎤 to speak.', 'assistant');
+});
+</script>
+</body>
+</html>

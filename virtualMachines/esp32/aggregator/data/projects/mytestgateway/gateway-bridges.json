@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "projectId": "mytestgateway",
+  "subprojectPath": "",
+  "updatedAt": "2026-07-22T21:11:30.000Z",
+  "bridges": [
+    {
+      "workerId": "myTestGateway3",
+      "managerId": "qm-primary",
+      "inputQueue": "foo3",
+      "outputQueue": "bar3",
+      "pascalishFile": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\projects\\mytestgateway\\gateways\\myTestGateway3.pas",
+      "pcodeFile": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\projects\\mytestgateway\\gateways\\myTestGateway3.pcode",
+      "programMapFile": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\projects\\mytestgateway\\gateways\\myTestGateway3.program.json",
+      "updatedAt": "2026-07-22T21:08:21.728Z",
+      "source": "ollama-gateway-command"
+    },
+    {
+      "workerId": "myTestGateway",
+      "managerId": "qm-primary",
+      "inputQueue": "foo",
+      "outputQueue": "bar",
+      "pascalishFile": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\projects\\mytestgateway\\gateways\\myTestGateway.pas",
+      "pcodeFile": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\projects\\mytestgateway\\gateways\\myTestGateway.pcode",
+      "programMapFile": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\projects\\mytestgateway\\gateways\\myTestGateway.program.json",
+      "updatedAt": "2026-07-22T21:08:21.644Z",
+      "source": "ollama-gateway-command"
+    },
+    {
+      "workerId": "myTestGateway2",
+      "managerId": "qm-primary",
+      "inputQueue": "foo2",
+      "outputQueue": "bar2",
+      "pascalishFile": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\projects\\mytestgateway\\gateways\\myTestGateway2.pas",
+      "pcodeFile": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\projects\\mytestgateway\\gateways\\myTestGateway2.pcode",
+      "programMapFile": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\projects\\mytestgateway\\gateways\\myTestGateway2.program.json",
+      "updatedAt": "2026-07-22T21:08:21.694Z",
+      "source": "ollama-gateway-command"
+    },
+    {
+      "workerId": "myTestGateway4",
+      "managerId": "qm-primary",
+      "inputQueue": "foo4",
+      "outputQueue": "bar4",
+      "pascalishFile": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\projects\\mytestgateway\\gateways\\myTestGateway4.pas",
+      "pcodeFile": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\projects\\mytestgateway\\gateways\\myTestGateway4.pcode",
+      "programMapFile": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\projects\\mytestgateway\\gateways\\myTestGateway4.program.json",
+      "updatedAt": "2026-07-22T21:08:21.758Z",
+      "source": "ollama-gateway-command"
+    }
+  ]
+}

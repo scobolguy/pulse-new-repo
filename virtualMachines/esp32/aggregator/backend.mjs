@@ -67,6 +67,7 @@ import { registerRuntimeRegistryRoutes } from './src/backend/roles/runtimeRegist
 import { registerRouterLifecycleControlRoutes } from './src/backend/roles/routerLifecycleControlRoutes.mjs';
 import { registerHelloServiceRoutes } from './src/backend/roles/helloServiceRoutes.mjs';
 import { registerDevelopDocumentRoutes } from './src/backend/developDocumentRoutes.mjs';
+import { registerProjectWorkspaceRoutes } from './src/backend/projectWorkspaceRoutes.mjs';
 import { registerStartupFsmRoutes } from './src/backend/startupFsmRoutes.mjs';
 import { registerMapperRoutes } from './src/backend/mapperRoutes.mjs';
 import { registerOllamaRoutes } from './src/backend/ollamaRoutes.mjs';
@@ -87,12 +88,13 @@ import { createAuthoritativeTimeService } from './src/backend/modules/authoritat
 import { createRequestPolicyApi } from './src/backend/security/requestPolicy.mjs';
 import { ROUTE_ROLE_MANIFEST } from './src/backend/routes.manifest.mjs';
 import { registerRoutesFromManifest } from './src/backend/routeManifestLoader.mjs';
-import { enumerateApiCatalog } from './src/backend/apiCatalog.mjs';
+import { enumerateApiCatalog, enumerateDiscoveredNodeApiCatalog, findApiCatalogEntry } from './src/backend/apiCatalog.mjs';
 import {
   listServiceProviders,
   getServiceProvider,
   getServiceProviderAction,
-  getServiceProviderCategories
+  getServiceProviderCategories,
+  listServiceProviderActions
 } from './src/backend/providers/serviceProviderRegistry.mjs';
 import { compileQueueDslSpec, diffQueueConfigs } from './src/backend/queueDslCompiler.mjs';
 import { createSanctionsComplianceService } from './src/compliance/sanctionsService.mjs';
@@ -114,10 +116,7 @@ const MODULAR_MODE = readEnvBoolean('MODULAR_BACKEND', ['1'], false);
 const BROKER_SERVICE_URL = readEnvString('BROKER_SERVICE_URL', 'http://localhost:4001').trim().replace(/\/$/, '');
 const DEBUG_BACKEND = readEnvBoolean('DEBUG_BACKEND', ['true'], false);
 const SHOW_UDP_LOGS = readEnvBoolean('SHOW_UDP_LOGS', ['1', 'true', 'yes'], false);
-const OPENAI_API_KEY = readEnvSecret('OPENAI_API_KEY', '').trim();
-const OPENAI_MODEL = readEnvString('OPENAI_MODEL', 'gpt-4.1-mini').trim() || 'gpt-4.1-mini';
-const OPENAI_BASE_URL = readEnvString('OPENAI_BASE_URL', 'https://api.openai.com/v1').trim().replace(/\/$/, '');
-const OPENAI_TIMEOUT_MS = Math.max(1000, readEnvNumber('OPENAI_TIMEOUT_MS', 45000));
+const DEFAULT_LIBRARIAN_PORT = 4300;
 const LOCAL_TTS_SCRIPT_PATH = path.join(__dirname, 'scripts', 'local-tts.ps1');
 const LOCAL_TTS_OUTPUT_DIR = path.join(__dirname, 'data', 'local-tts');
 const PIPER_BIN_PATH = readEnvString('PIPER_BIN_PATH', path.join(__dirname, 'tools', 'piper', 'piper', 'piper.exe')).trim();
@@ -141,67 +140,6 @@ const authoritativeTimeSyncState = {
   lastSuccessAt: null,
   lastError: null
 };
-
-function isOpenAiConfigured() {
-  return Boolean(OPENAI_API_KEY);
-}
-
-async function openAiAsk(query) {
-  if (!isOpenAiConfigured()) {
-    throw new Error('OPENAI_API_KEY is not configured');
-  }
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
-  try {
-    const response = await fetch(`${OPENAI_BASE_URL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        temperature: 0.2,
-        messages: [
-          { role: 'system', content: 'You are a concise, practical technical assistant.' },
-          { role: 'user', content: String(query || '') }
-        ]
-      }),
-      signal: controller.signal
-    });
-
-    const text = await response.text();
-    let payload = {};
-    try {
-      payload = text ? JSON.parse(text) : {};
-    } catch {
-      payload = { raw: text };
-    }
-
-    if (!response.ok) {
-      const apiError = payload?.error?.message || payload?.error || text || `HTTP ${response.status}`;
-      throw new Error(`OpenAI request failed: ${apiError}`);
-    }
-
-    const answer = String(payload?.choices?.[0]?.message?.content || '').trim();
-    if (!answer) {
-      throw new Error('OpenAI returned an empty response');
-    }
-    return {
-      answer,
-      model: String(payload?.model || OPENAI_MODEL),
-      usage: payload?.usage || null
-    };
-  } catch (error) {
-    if (error?.name === 'AbortError') {
-      throw new Error(`OpenAI request timed out after ${Math.round(OPENAI_TIMEOUT_MS / 1000)}s`);
-    }
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 async function syncAuthoritativeTimeWithNtp({ reason = 'scheduled' } = {}) {
   if (authoritativeTimeSyncState.running) {
@@ -626,6 +564,7 @@ app.use(enforceApiPermission);
 app.use(enforceTwoPersonRule);
 
 await registerDevelopDocumentRoutes(app);
+await registerProjectWorkspaceRoutes(app);
 registerStartupFsmRoutes(app);
 
 debugLog('[DEBUG] Creating global state...');
@@ -1155,6 +1094,18 @@ function resolveEvolutionPath(inputPath = '') {
 function computeEvolutionDriftSnapshot(params = null) {
   const generationStart = parseEvolutionInteger(params?.generation, 0, 0, 5000000);
   const cycles = parseEvolutionInteger(params?.cycles, 0, 0, 5000000);
+  let replacementInterval = parseEvolutionInteger(params?.replacementInterval, 100, 1, 1000000);
+  let maxPopulation = parseEvolutionInteger(params?.maxPopulation, 200, 1, 2000);
+  let birthLimit = parseEvolutionInteger(params?.birthLimit, 25, 1, 1000000);
+  let deathLimit = parseEvolutionInteger(params?.deathLimit, 100, 1, 1000000);
+  let organismIdleTtlMs = parseEvolutionInteger(params?.organismIdleTtlMs, 60000, 1000, 86400000);
+  let replacementCount = 0;
+  let birthCount = 0;
+  let deathCount = 0;
+  let activePopulationSize = 0;
+  let lastReplacement = null;
+  let lastBirth = null;
+  let lastDeath = null;
   if (cycles <= 0) {
     return {
       generationStart,
@@ -1164,6 +1115,18 @@ function computeEvolutionDriftSnapshot(params = null) {
       series: [],
       ancestorFrequency: {},
       selectorChanges: 0,
+      maxPopulation,
+      birthLimit,
+      deathLimit,
+      organismIdleTtlMs,
+      replacementInterval,
+      replacementCount,
+      birthCount,
+      deathCount,
+      activePopulationSize,
+      lastReplacement,
+      lastBirth,
+      lastDeath,
       latency: null,
       score: null
     };
@@ -1175,6 +1138,59 @@ function computeEvolutionDriftSnapshot(params = null) {
     if (!fs.existsSync(selectorPath)) continue;
     try {
       const parsed = JSON.parse(fs.readFileSync(selectorPath, 'utf8'));
+      if (parsed?.replacementInterval != null && !Number.isFinite(Number(replacementInterval))) {
+        replacementInterval = parseEvolutionInteger(parsed.replacementInterval, replacementInterval, 1, 1000000);
+      }
+      if (Number.isFinite(Number(parsed?.replacementInterval || NaN))) {
+        replacementInterval = parseEvolutionInteger(parsed.replacementInterval, replacementInterval, 1, 1000000);
+      }
+      if (Number.isFinite(Number(parsed?.maxPopulation || NaN))) {
+        maxPopulation = parseEvolutionInteger(parsed.maxPopulation, maxPopulation, 1, 2000);
+      }
+      if (Number.isFinite(Number(parsed?.birthLimit || NaN))) {
+        birthLimit = parseEvolutionInteger(parsed.birthLimit, birthLimit, 1, 1000000);
+      }
+      if (Number.isFinite(Number(parsed?.deathLimit || NaN))) {
+        deathLimit = parseEvolutionInteger(parsed.deathLimit, deathLimit, 1, 1000000);
+      }
+      if (Number.isFinite(Number(parsed?.organismIdleTtlMs || NaN))) {
+        organismIdleTtlMs = parseEvolutionInteger(parsed.organismIdleTtlMs, organismIdleTtlMs, 1000, 86400000);
+      }
+      if (Array.isArray(parsed?.replacements) && parsed.replacements.length > 0) {
+        replacementCount += parsed.replacements.length;
+        const lastEvent = parsed.replacements[parsed.replacements.length - 1];
+        lastReplacement = {
+          generation,
+          transactionCount: Number(lastEvent?.transactionCount || 0),
+          weakestOrganismId: String(lastEvent?.weakestOrganismId || ''),
+          strongestOrganismId: String(lastEvent?.strongestOrganismId || ''),
+          replacementOrganismId: String(lastEvent?.replacementOrganismId || '')
+        };
+      }
+      if (Array.isArray(parsed?.births) && parsed.births.length > 0) {
+        birthCount += parsed.births.length;
+        const lastEvent = parsed.births[parsed.births.length - 1];
+        lastBirth = {
+          generation,
+          transactionCount: Number(lastEvent?.transactionCount || 0),
+          parentOrganismId: String(lastEvent?.parentOrganismId || ''),
+          childOrganismId: String(lastEvent?.childOrganismId || ''),
+          childSlot: Number(lastEvent?.childSlot || 0)
+        };
+      }
+      if (Array.isArray(parsed?.deaths) && parsed.deaths.length > 0) {
+        deathCount += parsed.deaths.length;
+        const lastEvent = parsed.deaths[parsed.deaths.length - 1];
+        lastDeath = {
+          generation,
+          transactionCount: Number(lastEvent?.transactionCount || 0),
+          organismId: String(lastEvent?.organismId || ''),
+          slotIndex: Number(lastEvent?.slotIndex || 0)
+        };
+      }
+      if (Number.isFinite(Number(parsed?.activePopulationSize || NaN))) {
+        activePopulationSize = Number(parsed.activePopulationSize || 0);
+      }
       const best = Array.isArray(parsed?.selector) ? parsed.selector[0] : null;
       if (!best) continue;
       rows.push({
@@ -1198,6 +1214,18 @@ function computeEvolutionDriftSnapshot(params = null) {
       series: [],
       ancestorFrequency: {},
       selectorChanges: 0,
+      maxPopulation,
+      birthLimit,
+      deathLimit,
+      organismIdleTtlMs,
+      replacementInterval,
+      replacementCount,
+      birthCount,
+      deathCount,
+      activePopulationSize,
+      lastReplacement,
+      lastBirth,
+      lastDeath,
       latency: null,
       score: null
     };
@@ -1235,6 +1263,18 @@ function computeEvolutionDriftSnapshot(params = null) {
     },
     ancestorFrequency,
     selectorChanges,
+    maxPopulation,
+    birthLimit,
+    deathLimit,
+    organismIdleTtlMs,
+    replacementInterval,
+    replacementCount,
+    birthCount,
+    deathCount,
+    activePopulationSize,
+    lastReplacement,
+    lastBirth,
+    lastDeath,
     latency: {
       min: Math.min(...latencies),
       max: Math.max(...latencies),
@@ -3322,42 +3362,39 @@ async function invokeEsp32EdgeIngressStage({
     const placementConvertPath = selection.placement?.convertPath || EDGE_ESP32_CONVERT_PATH;
     const placementStagePath = selection.placement?.path || EDGE_ESP32_PATH;
     const shouldUseGenericConvert = Boolean(selection.placement && sourceType && destinationType);
-    const payload = {
-      inputQueue,
-      message,
-      runRouter: runRouter ? '1' : '0',
-      convertMtToXml: convertMtToXml ? '1' : '0',
-      file: selection.placement?.file || EDGE_ESP32_ROUTER_FILE,
-      programMap: selection.placement?.programMap || EDGE_ESP32_PROGRAM_MAP
-    };
     const endpoint = shouldUseGenericConvert
       ? `http://${selection.node.host}:${selection.node.port}${placementConvertPath}`
       : `http://${selection.node.host}:${selection.node.port}${placementStagePath}`;
 
-    const requestPayload = shouldUseGenericConvert
-      ? {
-          sourceType,
-          destinationType,
-          message,
-          inputQueue,
-          requireDelivery: true,
-          maxBytes: selection.placement?.maxMessageBytes || EDGE_ESP32_LARGE_MESSAGE_THRESHOLD_BYTES * 8
-        }
-      : payload;
+    const queryParams = new URLSearchParams({
+      inputQueue: String(inputQueue || ''),
+      message: String(message || ''),
+      runRouter: runRouter ? '1' : '0',
+      convertMtToXml: convertMtToXml ? '1' : '0',
+      file: selection.placement?.file || EDGE_ESP32_ROUTER_FILE,
+      programMap: selection.placement?.programMap || EDGE_ESP32_PROGRAM_MAP
+    });
+
+    if (shouldUseGenericConvert) {
+      queryParams.set('sourceType', String(sourceType || ''));
+      queryParams.set('destinationType', String(destinationType || ''));
+      queryParams.set('requireDelivery', '1');
+      queryParams.set('maxBytes', String(selection.placement?.maxMessageBytes || EDGE_ESP32_LARGE_MESSAGE_THRESHOLD_BYTES * 8));
+    }
 
     if (selection.placement?.id) {
       markPlacementInflight(selection.placement.id, +1);
     }
-    const response = await fetch(endpoint, {
+    const responseUrl = `${endpoint}?${queryParams.toString()}`;
+    const queryResponse = await fetch(responseUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(requestPayload),
       signal: controller.signal
     });
-    if (!response.ok) {
-      throw new Error(`edge endpoint status=${response.status}`);
+    if (!queryResponse.ok) {
+      throw new Error(`edge endpoint status=${queryResponse.status}`);
     }
-    const result = await response.json();
+    const result = await queryResponse.json();
     const latencyMs = Math.max(0, performance.now() - startMs);
     recordEdgeOffloadAttemptResult({
       ok: true,
@@ -9172,9 +9209,6 @@ const {
 });
 
 function registerRoutes(app) {
-  // Register Ollama routes first (handles both /api/ollama/* and /api/openai/* for compatibility)
-  registerOllamaRoutes(app);
-
   function startSecondaryBroker() {
     if (globalThis.brokerClassDown) {
       throw new Error('Broker class is down. Bring class up before starting secondary broker.');
@@ -9207,9 +9241,6 @@ function registerRoutes(app) {
       }
     });
   });
-
-  // Ollama routes handle both /api/ollama/* and /api/openai/* for backward compatibility
-  // (see ollamaRoutes.mjs for implementation)
 
   app.get('/api/evolution-test/status', (req, res) => {
     const runtime = {
@@ -9249,6 +9280,13 @@ function registerRoutes(app) {
     const transactions = parseEvolutionInteger(body.transactions ?? body.runs, 10000, 1, 1000000);
     const concurrency = parseEvolutionInteger(body.concurrency, 4, 1, 64);
     const generation = parseEvolutionInteger(body.generation, 7000, 0, 5000000);
+    const replacementInterval = parseEvolutionInteger(body.replacementInterval, 100, 1, 1000000);
+    const maxPopulation = parseEvolutionInteger(body.maxPopulation, 200, 1, 2000);
+    const birthLimit = parseEvolutionInteger(body.birthLimit, 25, 1, 1000000);
+    const deathLimit = parseEvolutionInteger(body.deathLimit, 100, 1, 1000000);
+    const organismIdleTtlMs = parseEvolutionInteger(body.organismIdleTtlMs, 60000, 1000, 86400000);
+    const executionTarget = String(body.executionTarget || 'js').trim().toLowerCase() || 'js';
+    const backendUrl = String(body.backendUrl || process.env.BACKEND_URL || 'http://127.0.0.1:4000').trim() || 'http://127.0.0.1:4000';
     const scriptPath = path.resolve(process.cwd(), 'scripts', 'evolution-first-slice.mjs');
 
     if (!fs.existsSync(scriptPath)) {
@@ -9264,7 +9302,14 @@ function registerRoutes(app) {
       '--transactions', String(transactions),
       '--cycles', String(cycles),
       '--generation', String(generation),
-      '--concurrency', String(concurrency)
+      '--concurrency', String(concurrency),
+      '--replacement-interval', String(replacementInterval),
+      '--max-population', String(maxPopulation),
+      '--birth-limit', String(birthLimit),
+      '--death-limit', String(deathLimit),
+      '--organism-idle-ttl-ms', String(organismIdleTtlMs),
+      '--execution-target', executionTarget,
+      '--backend-url', backendUrl
     ];
 
     const child = spawn(process.execPath, args, {
@@ -9281,7 +9326,20 @@ function registerRoutes(app) {
     evolutionTestRuntime.lastExitCode = null;
     evolutionTestRuntime.lastSignal = null;
     evolutionTestRuntime.lastError = null;
-    evolutionTestRuntime.params = { manifest: manifestInput, transactions, cycles, concurrency, generation };
+    evolutionTestRuntime.params = {
+      manifest: manifestInput,
+      transactions,
+      cycles,
+      concurrency,
+      generation,
+      replacementInterval,
+      maxPopulation,
+      birthLimit,
+      deathLimit,
+      organismIdleTtlMs,
+      executionTarget,
+      backendUrl
+    };
     evolutionTestRuntime.logs = [];
 
     child.stdout.on('data', (chunk) => {
@@ -9398,6 +9456,8 @@ function registerRoutes(app) {
     playWavOnHost,
     forwardEsp32BluetoothTts
   });
+
+  registerOllamaRoutes(app);
 
   registerIdentityRoutes(app, {
     normalizeUserIdentifier,
@@ -9579,12 +9639,16 @@ function registerRoutes(app) {
       getTxStatePersistenceSummary,
       getNodeRuntimeDiagnosticsSnapshot,
       enumerateApiCatalog,
+      enumerateDiscoveredNodeApiCatalog,
+      findApiCatalogEntry,
       resolvePermissionForApiRequest,
       routeRoleManifest: ROUTE_ROLE_MANIFEST,
       listServiceProviders,
       getServiceProvider,
       getServiceProviderAction,
       getServiceProviderCategories,
+      listServiceProviderActions,
+      discoveredNodes,
       queueManagerInstances,
       express,
       inferQueueDataTypeIds,
@@ -9667,7 +9731,7 @@ function registerRoutes(app) {
   // Queue configuration synchronization endpoints for distributed config management
 
   function resolveLibrarianOrigin() {
-    return readEnvString('LIBRARIAN_URL', 'http://127.0.0.1:4100');
+    return readEnvString('LIBRARIAN_URL', `http://127.0.0.1:${DEFAULT_LIBRARIAN_PORT}`);
   }
 
   function resolveMapperOrigin() {
@@ -9733,6 +9797,12 @@ try {
     RUNTIME_DATA_ROOT,
     pathJoin: path.join,
     createNodeRegistryRoutes,
+    esp32SeedNodes: [
+      ...EDGE_ESP32_GENERAL_NODES,
+      ...EDGE_ESP32_BONECRUSHER_NODES,
+      ...EDGE_ESP32_DRONE_NODES,
+      ...ESP32_DISCOVERY_SEED_NODES
+    ],
     createPascalCompiler,
     pascalCompilerRoutes,
     express,

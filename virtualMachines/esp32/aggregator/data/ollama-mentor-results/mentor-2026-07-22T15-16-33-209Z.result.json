@@ -1,0 +1,21 @@
+{
+  "status": "error",
+  "model": "phi3:latest",
+  "normalizedPrompt": "What is the factorial of 5?",
+  "coachMode": "pascalish-service",
+  "simplePrompt": true,
+  "corpusChunksUsed": 2,
+  "goldenExamplesUsed": 1,
+  "numPredict": 220,
+  "noRepair": false,
+  "repaired": true,
+  "validation": {
+    "valid": false,
+    "dialect": null,
+    "errors": [
+      "pascalish-service: [PASCALISH-PROGRAM] Parse failed:\nline 3:1 mismatched input 'var' expecting 'begin'\nline 3:6 mismatched input ',' expecting ':'"
+    ]
+  },
+  "outputPath": "aggregator/data/ollama-mentor-candidates/mentor-2026-07-22T15-16-33-209Z.pas",
+  "candidate": "program FactorialService;\n\nvar i, result : integer;\nbegin\n  readln(i);\n  if (i >= 0) and (i <= 10) then begin\n    result := 1;\n    while not (i = 0) do begin\n      result := result * (i - 0.5); // This line is incorrect, factorial should be calculated with integers only without floating point operations here\n      i := i - 1;\n    end;\n    writeln(result)\n  end else\n    writeln('Invalid input')\nend."
+}

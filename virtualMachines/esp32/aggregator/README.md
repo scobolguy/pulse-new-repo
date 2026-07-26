@@ -295,6 +295,29 @@ Then set browser-side gateway failover in `.env.local`:
 VITE_API_BASES=http://192.168.2.101:4100,http://192.168.2.102:4100
 ```
 
+## Natural Language Command Interface
+
+The Query Page and `/api/ollama/ask` support deterministic natural language commands in addition to general-purpose Ollama queries.
+
+Commands handled without an LLM call:
+- `create queue <name>` — creates a queue in the active queue manager
+- `create gateway from queue <a> to queue <b>` — starts a bridge worker and persists Pascalish/pcode artifacts
+- `assign <dataTypeIds> to queue <name>` — assigns data types to a queue and persists artifact
+- `rename project <old> to <new>` — renames a project workspace directory
+- `rename subproject <old> to <new> in project <id>`
+- `deploy project <id> to node <nodeId>` — deploys project artifacts to a cluster node
+- Gateway/queue state queries — returns live dashboard of gateways and queue depths
+- Device control (LED/GPIO) — routes to known child ESP32 nodes directly
+
+Project workspace artifacts are written to `data/projects/<projectId>/`. See `QUERY_PAGE_GUIDE.md` for full documentation.
+
+## Service Provider Registry
+
+`src/backend/providers/serviceProviderRegistry.mjs` exposes ten named service providers for use in the workbench and API catalog:
+- broker, router, queue, lifecycle, observability, topology, librarian, mapper, platform, iam
+
+Providers are discoverable via `/api/service-providers` and `/api/service-providers/actions`.
+
 ## Data Hygiene Warning
 
 `aggregator/data/` is currently mixed-use. It contains:
@@ -303,6 +326,8 @@ VITE_API_BASES=http://192.168.2.101:4100,http://192.168.2.102:4100
 - generated compiler outputs
 - runtime registries and state files
 - queue message persistence and operational logs
+- Ollama mentor session output and escalation packets (`ollama-mentor-*`, `ollama-copilot-escalations/`)
+- project workspace artifacts (`projects/`)
 
 Do not assume every JSON or JSONL file under `data/` is canonical source. The cleanup plan that separates source, generated artifacts, and runtime output is documented in `../documents/REPOSITORY_HYGIENE_PLAN.md`.
 

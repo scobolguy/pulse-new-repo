@@ -59,6 +59,10 @@ Clustering is controlled by the Aggregator backend topology runtime routes, not 
 - `documents/REPOSITORY_HYGIENE_PLAN.md`
 - `aggregator/README.md`
 
+## Natural Language Command Interface
+
+The Aggregator backend exposes a natural language command interface via `/api/ollama/ask`. Deterministic commands (queue create, gateway bridge, project deploy, etc.) are resolved without LLM inference. See `aggregator/QUERY_PAGE_GUIDE.md` for the full command reference.
+
 ## Repository Hygiene: Current Reality
 
 The workspace is mixing three file classes in the same directories:
@@ -69,8 +73,15 @@ The workspace is mixing three file classes in the same directories:
 
 That is the main repository hygiene problem to fix for handoff. The concrete cleanup plan is documented in `documents/REPOSITORY_HYGIENE_PLAN.md`.
 
+Additional operational directories that have grown since initial handoff:
+- `aggregator/data/projects/` — project workspace artifacts (gateway/queue assignments, Pascalish/pcode)
+- `aggregator/data/ollama-mentor-sessions/` — Ollama mentor loop session records
+- `aggregator/data/ollama-mentor-candidates/` — raw Pascal candidate files from Ollama
+- `aggregator/data/ollama-mentor-results/` — validation results
+- `aggregator/data/ollama-copilot-escalations/` — escalation packets for human review
+
 ## Immediate Working Rules
 
 - Treat `src/`, `include/`, `scripts/`, `documents/`, `aggregator/src/`, `aggregator/scripts/`, and `aggregator/tools/` as code and maintained documentation.
-- Treat JSONL logs, queue message stores, cluster registries, FSM status files, `tmp-*` paths, and `evolution-generation-*.json` as operational or generated artifacts unless explicitly promoted.
+- Treat JSONL logs, queue message stores, cluster registries, FSM status files, `tmp-*` paths, `evolution-generation-*.json`, `aggregator/data/projects/`, and `aggregator/data/ollama-mentor-*` as operational or generated artifacts unless explicitly promoted.
 - Treat `pcode/` as mixed-use today: it contains useful reference artifacts, but most `.pcode` and `.program.json` outputs are generated and should eventually move behind a cleaner artifact boundary.

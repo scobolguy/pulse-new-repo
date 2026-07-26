@@ -1,0 +1,25 @@
+{
+  "status": "ok",
+  "model": "golden-cache",
+  "normalizedPrompt": "Write a Pascal program that reads an integer 0-10 from the src variable, calculates factorial recursively, and prints the result or 'Invalid input' if out of range or non-numeric.",
+  "coachMode": "pascal-program",
+  "simplePrompt": true,
+  "corpusChunksUsed": 0,
+  "goldenExamplesUsed": 1,
+  "numPredict": 0,
+  "noRepair": false,
+  "repaired": false,
+  "cacheHit": true,
+  "validation": {
+    "valid": true,
+    "dialect": "pascal-program",
+    "summary": {
+      "pcodeInstructions": null,
+      "pcodeLines": 75
+    },
+    "errors": [],
+    "normalizedCandidate": "program FactorialService;\n\nvar n, result, i : integer;\n\nprocedure factorial(x : integer);\nbegin\n  if x <= 1 then\n    result := 1\n  else begin\n    factorial(x - 1);\n    result := result * x\n  end\nend;\n\nbegin\n  n := src;\n  if (n >= 0) and (n <= 10) and (not (src = 'Invalid input')) then begin\n    if (n = 0) and (not (src = '0')) then\n      writeln('Invalid input')\n    else begin\n      result := 1;\n      factorial(n);\n      writeln(result)\n    end\n  end else\n    writeln('Invalid input')\nend."
+  },
+  "outputPath": "aggregator/data/ollama-mentor-candidates/mentor-2026-07-22T15-14-19-515Z.pas",
+  "candidate": "program FactorialService;\n\nvar n, result, i : integer;\n\nprocedure factorial(x : integer);\nbegin\n  if x <= 1 then\n    result := 1\n  else begin\n    factorial(x - 1);\n    result := result * x\n  end\nend;\n\nbegin\n  n := src;\n  if (n >= 0) and (n <= 10) and (not (src = 'Invalid input')) then begin\n    if (n = 0) and (not (src = '0')) then\n      writeln('Invalid input')\n    else begin\n      result := 1;\n      factorial(n);\n      writeln(result)\n    end\n  end else\n    writeln('Invalid input')\nend."
+}

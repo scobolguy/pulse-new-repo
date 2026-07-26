@@ -2,6 +2,7 @@
 #include "SensorService.h"
 #include "DevicePin.h"
 #include <map>
+#include <vector>
 std::map<int, DevicePin*> devicePins;
 DeviceConfiguration deviceConfig;
 #include <FS.h>
@@ -737,6 +738,22 @@ struct BonecrusherWorkerStats {
 BonecrusherWorkerConfig bonecrusherConfig;
 BonecrusherWorkerStats bonecrusherStats;
 const char* bonecrusherConfigPath = "/bonecrusher-worker-config.json";
+const char* esp32GatewayConfigPath = "/esp32-gateway-workers.json";
+
+struct Esp32GatewayWorkerEntry {
+    String gatewayId;
+    BonecrusherWorkerConfig worker;
+    BonecrusherWorkerStats stats;
+};
+
+std::vector<Esp32GatewayWorkerEntry> esp32GatewayWorkers;
+bool esp32GatewayWorkersEnabled = false;
+uint32_t esp32GatewayIdleDelayMs = 250;
+#if defined(ESP32)
+TaskHandle_t esp32GatewayWorkerTaskHandle = nullptr;
+#endif
+
+constexpr size_t ESP32_GATEWAY_WORKER_MAX = 8;
 #if defined(ESP32)
 TaskHandle_t bonecrusherWorkerTaskHandle = nullptr;
 #endif
@@ -778,6 +795,135 @@ String trimTrailingSlash(const String& value) {
 void initializeBonecrusherWorkerDefaults() {
     bonecrusherConfig.enabled = isBonecrusherRole();
     bonecrusherConfig.workerId = nodeName.length() > 0 ? nodeName : "bonecrusher-worker";
+}
+
+BonecrusherWorkerConfig makeDefaultGatewayWorkerConfig(size_t index) {
+    BonecrusherWorkerConfig cfg;
+    cfg.enabled = true;
+    cfg.queueManagerUrl = bonecrusherConfig.queueManagerUrl;
+    cfg.queueName = String("gateway.in.") + String(static_cast<unsigned long>(index + 1));
+    cfg.workerId = String("esp32-gateway-") + String(static_cast<unsigned long>(index + 1));
+    cfg.leaseMs = bonecrusherConfig.leaseMs;
+    cfg.pollIntervalMs = bonecrusherConfig.pollIntervalMs;
+    cfg.heartbeatMs = bonecrusherConfig.heartbeatMs;
+    cfg.processTimeoutMs = bonecrusherConfig.processTimeoutMs;
+    cfg.retryDelayMs = bonecrusherConfig.retryDelayMs;
+    cfg.maxAttempts = bonecrusherConfig.maxAttempts;
+    return cfg;
+}
+
+void saveEsp32GatewayWorkersConfig() {
+    JsonDocument doc;
+    doc["enabled"] = esp32GatewayWorkersEnabled;
+    doc["idleDelayMs"] = esp32GatewayIdleDelayMs;
+    JsonArray gateways = doc["gateways"].to<JsonArray>();
+    for (size_t i = 0; i < esp32GatewayWorkers.size(); ++i) {
+        const auto& gw = esp32GatewayWorkers[i];
+        JsonObject g = gateways.add<JsonObject>();
+        g["gatewayId"] = gw.gatewayId;
+        g["enabled"] = gw.worker.enabled;
+        g["queueManagerUrl"] = gw.worker.queueManagerUrl;
+        g["queueName"] = gw.worker.queueName;
+        g["workerId"] = gw.worker.workerId;
+        g["leaseMs"] = gw.worker.leaseMs;
+        g["pollIntervalMs"] = gw.worker.pollIntervalMs;
+        g["heartbeatMs"] = gw.worker.heartbeatMs;
+        g["processTimeoutMs"] = gw.worker.processTimeoutMs;
+        g["retryDelayMs"] = gw.worker.retryDelayMs;
+        g["maxAttempts"] = gw.worker.maxAttempts;
+    }
+
+    File f = LittleFS.open(esp32GatewayConfigPath, "w");
+    if (!f) {
+        Serial.println("[ESP32-GATEWAY] Failed to save config");
+        return;
+    }
+    serializeJson(doc, f);
+    f.close();
+}
+
+void loadEsp32GatewayWorkersConfig() {
+    esp32GatewayWorkers.clear();
+    // Open in append+read mode so first boot creates the file silently
+    // instead of emitting a VFS missing-file error.
+    File f = LittleFS.open(esp32GatewayConfigPath, "a+");
+    if (!f) return;
+
+    if (f.size() == 0) {
+        f.close();
+        return;
+    }
+
+    f.seek(0, SeekSet);
+
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, f);
+    f.close();
+    if (err) {
+        Serial.println("[ESP32-GATEWAY] Failed to parse gateway config, ignoring");
+        return;
+    }
+
+    if (doc["enabled"].is<bool>()) {
+        esp32GatewayWorkersEnabled = doc["enabled"].as<bool>();
+    }
+    if (doc["idleDelayMs"].is<uint32_t>()) {
+        esp32GatewayIdleDelayMs = doc["idleDelayMs"].as<uint32_t>();
+    }
+
+    JsonArray gateways = doc["gateways"].as<JsonArray>();
+    if (gateways.isNull()) return;
+
+    for (JsonObject g : gateways) {
+        if (esp32GatewayWorkers.size() >= ESP32_GATEWAY_WORKER_MAX) break;
+        Esp32GatewayWorkerEntry entry;
+        entry.gatewayId = String(g["gatewayId"] | "");
+        entry.worker = makeDefaultGatewayWorkerConfig(esp32GatewayWorkers.size());
+        if (g["enabled"].is<bool>()) entry.worker.enabled = g["enabled"].as<bool>();
+        if (g["queueManagerUrl"].is<const char*>()) entry.worker.queueManagerUrl = g["queueManagerUrl"].as<const char*>();
+        if (g["queueName"].is<const char*>()) entry.worker.queueName = g["queueName"].as<const char*>();
+        if (g["workerId"].is<const char*>()) entry.worker.workerId = g["workerId"].as<const char*>();
+        if (g["leaseMs"].is<uint32_t>()) entry.worker.leaseMs = g["leaseMs"].as<uint32_t>();
+        if (g["pollIntervalMs"].is<uint32_t>()) entry.worker.pollIntervalMs = g["pollIntervalMs"].as<uint32_t>();
+        if (g["heartbeatMs"].is<uint32_t>()) entry.worker.heartbeatMs = g["heartbeatMs"].as<uint32_t>();
+        if (g["processTimeoutMs"].is<uint32_t>()) entry.worker.processTimeoutMs = g["processTimeoutMs"].as<uint32_t>();
+        if (g["retryDelayMs"].is<uint32_t>()) entry.worker.retryDelayMs = g["retryDelayMs"].as<uint32_t>();
+        if (g["maxAttempts"].is<uint32_t>()) entry.worker.maxAttempts = g["maxAttempts"].as<uint32_t>();
+
+        if (entry.gatewayId.length() == 0) {
+            entry.gatewayId = entry.worker.workerId.length() ? entry.worker.workerId : String("gateway-") + String(static_cast<unsigned long>(esp32GatewayWorkers.size() + 1));
+        }
+        if (entry.worker.workerId.length() == 0) {
+            entry.worker.workerId = entry.gatewayId;
+        }
+        esp32GatewayWorkers.push_back(entry);
+    }
+}
+
+void appendGatewayWorkerJson(JsonObject obj, const Esp32GatewayWorkerEntry& gw) {
+    obj["gatewayId"] = gw.gatewayId;
+    obj["enabled"] = gw.worker.enabled;
+    obj["queueManagerUrl"] = gw.worker.queueManagerUrl;
+    obj["queueName"] = gw.worker.queueName;
+    obj["workerId"] = gw.worker.workerId;
+    obj["leaseMs"] = gw.worker.leaseMs;
+    obj["pollIntervalMs"] = gw.worker.pollIntervalMs;
+    obj["heartbeatMs"] = gw.worker.heartbeatMs;
+    obj["processTimeoutMs"] = gw.worker.processTimeoutMs;
+    obj["retryDelayMs"] = gw.worker.retryDelayMs;
+    obj["maxAttempts"] = gw.worker.maxAttempts;
+    JsonObject stats = obj["stats"].to<JsonObject>();
+    stats["claimAttempts"] = gw.stats.claimAttempts;
+    stats["claimed"] = gw.stats.claimed;
+    stats["completed"] = gw.stats.completed;
+    stats["failed"] = gw.stats.failed;
+    stats["requeued"] = gw.stats.requeued;
+    stats["deadLettered"] = gw.stats.deadLettered;
+    stats["heartbeatsSent"] = gw.stats.heartbeatsSent;
+    stats["lastQueueHttpCode"] = gw.stats.lastQueueHttpCode;
+    stats["lastEdgeHttpCode"] = gw.stats.lastEdgeHttpCode;
+    stats["lastRunMs"] = static_cast<uint32_t>(gw.stats.lastRunMs);
+    stats["lastError"] = gw.stats.lastError;
 }
 
 void saveBonecrusherWorkerConfig() {
@@ -1068,14 +1214,41 @@ void runBonecrusherWorkerIteration() {
     bonecrusherStats.lastError = processError;
 }
 
+void runEsp32GatewayWorkersIteration() {
+    if (!isBonecrusherRole() || !esp32GatewayWorkersEnabled) return;
+    if (WiFi.status() != WL_CONNECTED) return;
+    if (esp32GatewayWorkers.empty()) return;
+
+    for (size_t i = 0; i < esp32GatewayWorkers.size(); ++i) {
+        auto& gw = esp32GatewayWorkers[i];
+        if (!gw.worker.enabled) continue;
+
+        BonecrusherWorkerConfig prevConfig = bonecrusherConfig;
+        BonecrusherWorkerStats prevStats = bonecrusherStats;
+
+        bonecrusherConfig = gw.worker;
+        bonecrusherStats = gw.stats;
+        runBonecrusherWorkerIteration();
+        gw.worker = bonecrusherConfig;
+        gw.stats = bonecrusherStats;
+
+        bonecrusherConfig = prevConfig;
+        bonecrusherStats = prevStats;
+    }
+}
+
 #if defined(ESP32)
 void bonecrusherWorkerTask(void* param) {
     (void)param;
     for (;;) {
-        runBonecrusherWorkerIteration();
-        const uint32_t delayMs = bonecrusherConfig.enabled
-          ? (bonecrusherConfig.pollIntervalMs > 20 ? bonecrusherConfig.pollIntervalMs : 20)
-          : 1000;
+        if (esp32GatewayWorkersEnabled && !esp32GatewayWorkers.empty()) {
+            runEsp32GatewayWorkersIteration();
+        } else {
+            runBonecrusherWorkerIteration();
+        }
+        const uint32_t delayMs = esp32GatewayWorkersEnabled
+          ? (esp32GatewayIdleDelayMs > 20 ? esp32GatewayIdleDelayMs : 20)
+          : (bonecrusherConfig.enabled ? (bonecrusherConfig.pollIntervalMs > 20 ? bonecrusherConfig.pollIntervalMs : 20) : 1000);
         vTaskDelay(pdMS_TO_TICKS(delayMs));
     }
 }
@@ -1107,6 +1280,36 @@ void startBonecrusherWorkerTaskIfNeeded() {
         Serial.println("[BONECRUSHER] Worker task started");
     } else {
         Serial.println("[BONECRUSHER] Worker task failed to start");
+    }
+}
+
+void startEsp32GatewayWorkerTaskIfNeeded() {
+    if (!isBonecrusherRole()) return;
+    if (esp32GatewayWorkerTaskHandle != nullptr) return;
+    constexpr uint32_t gatewayWorkerStackBytes = 12288;
+    BaseType_t ok = xTaskCreatePinnedToCore(
+        bonecrusherWorkerTask,
+        "esp32GatewayWorker",
+        gatewayWorkerStackBytes,
+        nullptr,
+        1,
+        &esp32GatewayWorkerTaskHandle,
+        1
+    );
+    if (ok != pdPASS) {
+        ok = xTaskCreate(
+            bonecrusherWorkerTask,
+            "esp32GatewayWorker",
+            gatewayWorkerStackBytes,
+            nullptr,
+            1,
+            &esp32GatewayWorkerTaskHandle
+        );
+    }
+    if (ok == pdPASS) {
+        Serial.println("[ESP32-GATEWAY] Worker task started");
+    } else {
+        Serial.println("[ESP32-GATEWAY] Worker task failed to start");
     }
 }
 #endif
@@ -2223,6 +2426,103 @@ void setupWebServer() {
         serializeJson(doc, json);
         request->send(200, "application/json", json);
     });
+
+    server.on("/esp32/gateways/status", HTTP_GET, [](AsyncWebServerRequest *request){
+        JsonDocument doc;
+        doc["role"] = deviceRole;
+        doc["enabled"] = esp32GatewayWorkersEnabled;
+        doc["idleDelayMs"] = esp32GatewayIdleDelayMs;
+        doc["count"] = static_cast<unsigned long>(esp32GatewayWorkers.size());
+        doc["max"] = static_cast<unsigned long>(ESP32_GATEWAY_WORKER_MAX);
+        JsonArray gateways = doc["gateways"].to<JsonArray>();
+        for (size_t i = 0; i < esp32GatewayWorkers.size(); ++i) {
+            JsonObject g = gateways.add<JsonObject>();
+            appendGatewayWorkerJson(g, esp32GatewayWorkers[i]);
+        }
+        String json;
+        serializeJson(doc, json);
+        request->send(200, "application/json", json);
+    });
+
+    server.on("/esp32/gateways/config", HTTP_POST, [](AsyncWebServerRequest *request){
+        if (request->hasParam("enabled", true)) {
+            esp32GatewayWorkersEnabled = parseBoolValue(request->getParam("enabled", true)->value());
+        }
+        if (request->hasParam("idleDelayMs", true)) {
+            const uint32_t parsed = static_cast<uint32_t>(request->getParam("idleDelayMs", true)->value().toInt());
+            esp32GatewayIdleDelayMs = parsed > 20 ? parsed : 20;
+        }
+
+        if (request->hasParam("configJson", true)) {
+            String configJson = request->getParam("configJson", true)->value();
+            JsonDocument doc;
+            DeserializationError err = deserializeJson(doc, configJson);
+            if (err) {
+                request->send(400, "application/json", String("{\"error\":\"Invalid configJson: ") + err.c_str() + "\"}");
+                return;
+            }
+
+            if (doc["enabled"].is<bool>()) {
+                esp32GatewayWorkersEnabled = doc["enabled"].as<bool>();
+            }
+            if (doc["idleDelayMs"].is<uint32_t>()) {
+                const uint32_t parsed = doc["idleDelayMs"].as<uint32_t>();
+                esp32GatewayIdleDelayMs = parsed > 20 ? parsed : 20;
+            }
+
+            JsonArray arr = doc["gateways"].as<JsonArray>();
+            if (!arr.isNull()) {
+                esp32GatewayWorkers.clear();
+                for (JsonObject g : arr) {
+                    if (esp32GatewayWorkers.size() >= ESP32_GATEWAY_WORKER_MAX) break;
+                    Esp32GatewayWorkerEntry entry;
+                    entry.gatewayId = String(g["gatewayId"] | "");
+                    entry.worker = makeDefaultGatewayWorkerConfig(esp32GatewayWorkers.size());
+                    if (g["enabled"].is<bool>()) entry.worker.enabled = g["enabled"].as<bool>();
+                    if (g["queueManagerUrl"].is<const char*>()) entry.worker.queueManagerUrl = g["queueManagerUrl"].as<const char*>();
+                    if (g["queueName"].is<const char*>()) entry.worker.queueName = g["queueName"].as<const char*>();
+                    if (g["workerId"].is<const char*>()) entry.worker.workerId = g["workerId"].as<const char*>();
+                    if (g["leaseMs"].is<uint32_t>()) entry.worker.leaseMs = g["leaseMs"].as<uint32_t>();
+                    if (g["pollIntervalMs"].is<uint32_t>()) entry.worker.pollIntervalMs = g["pollIntervalMs"].as<uint32_t>();
+                    if (g["heartbeatMs"].is<uint32_t>()) entry.worker.heartbeatMs = g["heartbeatMs"].as<uint32_t>();
+                    if (g["processTimeoutMs"].is<uint32_t>()) entry.worker.processTimeoutMs = g["processTimeoutMs"].as<uint32_t>();
+                    if (g["retryDelayMs"].is<uint32_t>()) entry.worker.retryDelayMs = g["retryDelayMs"].as<uint32_t>();
+                    if (g["maxAttempts"].is<uint32_t>()) entry.worker.maxAttempts = g["maxAttempts"].as<uint32_t>();
+
+                    if (entry.gatewayId.length() == 0) {
+                        entry.gatewayId = entry.worker.workerId.length() ? entry.worker.workerId : String("gateway-") + String(static_cast<unsigned long>(esp32GatewayWorkers.size() + 1));
+                    }
+                    if (entry.worker.workerId.length() == 0) {
+                        entry.worker.workerId = entry.gatewayId;
+                    }
+                    esp32GatewayWorkers.push_back(entry);
+                }
+            }
+        }
+
+        bool persist = true;
+        if (request->hasParam("persist", true)) {
+            persist = parseBoolValue(request->getParam("persist", true)->value());
+        }
+        if (persist) {
+            saveEsp32GatewayWorkersConfig();
+        }
+
+        JsonDocument out;
+        out["updated"] = true;
+        out["persisted"] = persist;
+        out["enabled"] = esp32GatewayWorkersEnabled;
+        out["idleDelayMs"] = esp32GatewayIdleDelayMs;
+        out["count"] = static_cast<unsigned long>(esp32GatewayWorkers.size());
+        JsonArray gateways = out["gateways"].to<JsonArray>();
+        for (size_t i = 0; i < esp32GatewayWorkers.size(); ++i) {
+            JsonObject g = gateways.add<JsonObject>();
+            appendGatewayWorkerJson(g, esp32GatewayWorkers[i]);
+        }
+        String json;
+        serializeJson(out, json);
+        request->send(200, "application/json", json);
+    });
     #endif
 
     #ifndef DISABLE_FFS_ROUTES
@@ -2667,6 +2967,7 @@ void setup() {
     if (bonecrusherConfig.workerId.length() == 0) {
         bonecrusherConfig.workerId = nodeName;
     }
+    loadEsp32GatewayWorkersConfig();
     #endif
 
     // 6. Set hostname, start UDP, and announce presence (must be after WiFi is up and nodeName is set)
@@ -2996,7 +3297,7 @@ void setup() {
     // 8. Web server for node name config (Async)
     setupWebServer();
 #if defined(ESP32) && !defined(DISABLE_BONECRUSHER)
-    startBonecrusherWorkerTaskIfNeeded();
+    startEsp32GatewayWorkerTaskIfNeeded();
 #endif
 }
 

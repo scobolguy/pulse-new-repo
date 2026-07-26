@@ -8,7 +8,6 @@ import { librarianServiceProvider } from './librarianServiceProvider.mjs';
 import { mapperServiceProvider } from './mapperServiceProvider.mjs';
 import { platformServiceProvider } from './platformServiceProvider.mjs';
 import { iamServiceProvider } from './iamServiceProvider.mjs';
-import { helloServiceProvider } from './helloServiceProvider.mjs';
 
 const PROVIDERS = Object.freeze([
   brokerServiceProvider,
@@ -20,8 +19,7 @@ const PROVIDERS = Object.freeze([
   librarianServiceProvider,
   mapperServiceProvider,
   platformServiceProvider,
-  iamServiceProvider,
-  helloServiceProvider
+  iamServiceProvider
 ]);
 
 const providerById = new Map(PROVIDERS.map(provider => [provider.id, provider]));

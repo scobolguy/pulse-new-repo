@@ -1,0 +1,18 @@
+{
+  "sessionId": "mentor-2026-07-22T15-16-33-209Z",
+  "status": "needs-copilot",
+  "createdAt": "2026-07-22T15:17:08.373Z",
+  "elapsedMs": 30014,
+  "prompt": "What is the factorial of 5?",
+  "generationPrompt": "What is the factorial of 5?",
+  "followUpPrompt": null,
+  "hasDeploymentStage": false,
+  "coachMode": "pascalish-service",
+  "topK": 2,
+  "maxContextChars": 2500,
+  "numPredict": 320,
+  "noRepair": false,
+  "escalationPacketPath": "data/ollama-copilot-escalations/mentor-2026-07-22T15-16-33-209Z.packet.json",
+  "coachResult": null,
+  "reason": "timeout"
+}

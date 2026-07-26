@@ -1,194 +1,247 @@
-# Query Page: Natural Language Solution Constructor
+# Query Page: Natural Language Command Interface
 
 ## Overview
-The Query Page is a frontend interface that helps users construct solutions to integration problems by analyzing natural language queries and matching them against available APIs and resources.
 
-## Features
+The Query Page is a frontend interface that lets users issue natural language commands and queries to the aggregator backend. It routes requests directly to deterministic backend actions before falling back to Ollama for general-purpose answers.
 
-### 1. Natural Language Query Input
-- Users enter a description of what they want to accomplish
-- Examples:
-  - "Create a service to convert MT103 to CAMT message"
-  - "Convert SWIFT MT942 to ISO 20022 CAMT.053"
-  - "Build a payment validation service"
+## How Routing Works
 
-### 2. Intelligent Query Analysis
-The system analyzes queries to extract:
-- **Conversion patterns**: Identifies source and target message formats
-- **Service creation intent**: Detects when building new services
-- **Operations**: Identifies operations like validate, reconcile, parse, etc.
-- **Message types**: Extracts message type references (MT103, CAMT, etc.)
+The query is processed in a strict priority order. The first matching path wins:
 
-### 3. API-Driven Resource Discovery
-The Query Page fetches data from available APIs:
-- `/api/librarian/data-types` - Available data types
-- `/api/librarian/schemas` - Defined message schemas
-- `/api/librarian/mapper-rulesets` - Mapper rule definitions
-- `/api/mapper/maps` - Available mappers
+1. **Queue create command** — deterministic; calls `/api/queues/:managerId/create`
+2. **Gateway bridge command** — deterministic; creates queues then starts a bridge worker
+3. **Ollama ask** — sends query to `/api/ollama/ask` which applies its own layered routing (see below)
 
-### 4. Solution Generation
-Based on analysis and available resources, the system generates:
-- **Step-by-step solution plan**: Breaks down the problem into actionable steps
-- **Resource recommendations**: Lists schemas, mappers, and data types matching the query
-- **Verification requirements**: Highlights what needs user confirmation vs. what's automated
+Ollama ask applies this sub-routing:
+1. Queue type assignment command
+2. Project rename command
+3. Subproject rename command
+4. Project deploy command
+5. Gateway/queue state query
+6. Queue create command (server-side duplicate guard)
+7. Gateway bridge command (server-side duplicate guard)
+8. Pre-computed answer check (topology, node count, ESP device list, Neptune info)
+9. Device control query (LED/GPIO on known child nodes)
+10. General Ollama generate with knowledge context
 
-### 5. Verification Tags
-Each solution step is tagged with verification status:
-- **✓ Verified (Green)**: Information extracted from query or directly available from APIs
-- **⚠ Verify (Orange)**: Recommendations that need user confirmation or custom implementation
+## Natural Language Commands
 
-### 6. Solution Export
-- Export proposed solutions as JSON
-- Share solutions with team members
-- Integrate with external tools or documentation
+### Create a Queue
 
-## Workflow
+**Trigger patterns** (client-side):
+- `create queue <name>`
+- `add queue <name>`
+- `make queue <name>`
+- `build queue <name>`
+- `I need a queue called <name>`
 
-### Step 1: Enter Query
+**Example**:
 ```
-"Create a service to convert MT103 to CAMT.053"
+create queue swift.mt103.inbound
 ```
 
-### Step 2: Analysis
-The system:
-1. Detects conversion intent
-2. Identifies source (MT103) and target (CAMT.053) formats
-3. Searches APIs for matching schemas
+**Result**: Queue created in the active queue manager. Response includes `managerId`, `queueName`, `created`, `alreadyExists`.
 
-### Step 3: Resource Discovery
-Results include:
-- Available MT103 schema definitions
-- Available CAMT.053 schema definitions
-- Existing mappers that might help
-- Related data types
+---
 
-### Step 4: Solution Steps
-Generated solution includes:
-1. Identify Source and Target Formats (✓ Verified from query)
-2. Select Source Schema (⚠ Verify - needs selection from options)
-3. Select Target Schema (⚠ Verify - needs selection from options)
-4. Create or Select Mapper (⚠ Verify - may need new mapper creation)
-5. Implement Service (⚠ Verify - custom code required)
+### Create a Gateway Bridge
 
-### Step 5: Export & Execute
-- Export solution as JSON
-- Use recommendations to implement
-- Track in project workspace
+A gateway bridge moves messages from one queue to another via a bridge worker.
 
-## API Integration
+**Trigger**: Query must contain `gateway` and specify input/output queues.
 
-### Required APIs
-For optimal Query Page functionality, ensure these endpoints are available:
-
-```javascript
-// Get all data types
-GET /api/librarian/data-types
-Response: { types: [...] }
-
-// Get all schemas
-GET /api/librarian/schemas
-Response: { schemas: [...] }
-
-// Get mapper rulesets
-GET /api/librarian/mapper-rulesets
-Response: { rulesets: [...] }
-
-// Get available mappers
-GET /api/mapper/maps
-Response: { maps: [...] } or [...]
+**Example patterns**:
+```
+create gateway from queue swift.mt103.inbound to queue swift.mt103.processed
+create gateway myBridge from queue q.alpha to queue q.beta in project tradecore subproject settlement/v1
 ```
 
-### Fallback Behavior
-- If APIs are unavailable, the Query Page gracefully handles errors
-- Users can still analyze queries but may see fewer resource matches
-- "Refresh API Data" button allows retry after API recovery
+**What happens**:
+1. Input and output queues are created if they do not exist.
+2. A bridge worker is started at `/api/lifecycle/bridge-workers/start`.
+3. A Pascalish source (`.pas`), pcode text (`.pcode`), and program map (`.program.json`) are persisted under `data/projects/<projectId>/gateways/`.
 
-## Example Queries
+**Response includes**: `workerId`, `inputQueue`, `outputQueue`, `inputQueueCreated`, `outputQueueCreated`, `projectId`, `subprojectPath`, `pascalishFile`, `pcodeFile`, `programMapFile`.
 
-### Conversion Service
-**Query**: "Convert MT103 to CAMT message"
-**Result**: 5-step solution covering schema selection, mapper creation, and service implementation
+---
 
-### Validation Service
-**Query**: "Create a payment message validation service for MT103"
-**Result**: Steps for defining validation rules, selecting schemas, and building validators
+### Assign Data Types to a Queue
 
-### Data Transformation
-**Query**: "Map SWIFT to ISO 20022 format"
-**Result**: Steps for format identification, mapper selection, and transformation logic
+**Trigger pattern**:
+```
+assign <dataTypeId[, dataTypeId]> to queue <name>
+assign <dataTypeId[, dataTypeId]> to queue <name> in project <projectId> subproject <path>
+```
 
-### Multi-Step Integration
-**Query**: "Receive MT103, validate it, convert to CAMT.053, and send to correspondent"
-**Result**: Complex multi-step solution with several service components
+**Example**:
+```
+assign swift-mt103, iso20022-camt053 to queue swift.mt103.inbound in project tradecore subproject settlement/v1
+```
 
-## Query Hints for Users
+**What happens**:
+- Validates type IDs against `/api/librarian/data-types`.
+- Creates or updates queue config via `/api/queues/:managerId/create` or `/update`.
+- Persists a `queue-type-assignments.json` artifact in the project workspace.
 
-### Best Practices
-1. **Be specific about message types**: Use full names (MT103, CAMT.053) or aliases (SWIFT, ISO 20022)
-2. **Include both source and target**: For conversions, specify both formats
-3. **Mention operations**: Use verbs like convert, validate, map, transform
-4. **Reference existing services**: If building on existing services, mention them
+---
 
-### Query Templates
-- "Convert [source format] to [target format]"
-- "Create a [service type] service for [message type]"
-- "Map [source format] fields to [target format]"
-- "Build a validation service that checks [message type]"
+### Rename a Project
 
-## Advanced Usage
+**Trigger pattern**:
+```
+rename project <oldId> to <newId>
+```
 
-### Query History
-- Recent queries are stored in a history section
-- Click any history item to view its solution
-- Solutions are not persisted (refresh resets history)
+**Example**:
+```
+rename project mytestgateway to myproductiongateway
+```
 
-### Solution Refinement
-- Modify your query and re-analyze
-- Export multiple solutions for comparison
-- Track changes across iterations
+Renames the project directory under `data/projects/`.
 
-### Integration with Other Tools
-- Export solutions and import into Flow Designer
-- Create mappers from query recommendations
-- Use in project workspace documentation
+---
 
-## Limitations & Constraints
+### Rename a Subproject
 
-### What the Query Page Does
-✓ Analyzes natural language and extracts patterns
-✓ Searches available APIs for matching resources
-✓ Generates recommended solution steps
-✓ Highlights what needs verification vs. what's automated
-✓ Exports solutions as structured JSON
+**Trigger pattern**:
+```
+rename subproject <oldPath> to <newPath> in project <projectId>
+```
 
-### What the Query Page Does NOT Do
-✗ Execute code or generate executable services (that's for Flow Designer)
-✗ Access APIs beyond those available at `/api/`
-✗ Automatically create new schemas or mappers
-✗ Validate that proposed solutions are technically feasible
-✗ Require manual verification beyond the system's recommendations
+**Example**:
+```
+rename subproject settlement/v1 to settlement/v2 in project tradecore
+```
 
-## Troubleshooting
+---
 
-### No Results Found
-- Check that APIs are responding (click "Refresh API Data")
-- Try more specific message type names
-- Ensure message types match those in available schemas
+### Deploy a Project to a Node
 
-### Missing Resources
-- Click "Refresh API Data" to reload from backends
-- Verify APIs are running (backend, librarian service)
-- Check API response format matches expected structure
+**Trigger pattern**:
+```
+deploy project <projectId> to node <nodeId>
+deploy project <projectId> subproject <path> to node <nodeId>
+deploy subproject <path> in project <projectId> to node <nodeId>
+```
 
-### Query Analysis Unclear
-- Use more specific terminology
-- Include both source and target formats for conversions
-- Reference known message types (MT103, CAMT, etc.)
+**Example**:
+```
+deploy project tradecore subproject settlement/v1 to node neptune
+```
 
-## Future Enhancements
-- AI-powered natural language understanding
-- Integration with Flow Designer for direct execution
-- Persistent solution storage and versioning
-- Collaborative solution review workflows
-- Real-time API schema validation
-- Suggested query templates based on common patterns
+**What happens**:
+1. Resolves node ID (supports partial/alias names and dotted hierarchy paths like `neptune.child1`).
+2. Reads all files from the project artifact directory recursively.
+3. Posts the file bundle to `/api/nodes/:nodeId/deploy`.
+
+---
+
+### Gateway and Queue State Query
+
+Ask about the current runtime state of gateways and queues.
+
+**Trigger**: Query contains words like `state`, `status`, `health`, `show`, `display`, `graphic`, or `dashboard` combined with `gateway` and `queue`.
+
+**Example**:
+```
+show gateway and queue state
+dashboard status gateways and queues
+```
+
+**Response includes**: `runtimeState` with `gateways` (id, running, quiesced, mode, processed count), `topQueues` (name, depth), `queueCount`.
+
+---
+
+### Device Control (LED/GPIO)
+
+**Trigger**: Query mentions a known child node name (`child1`, `child2`, `child3`, `neptune.child1`, etc.) and an action (`turn on`, `turn off`, `toggle`, `activate`, `deactivate`).
+
+**Example**:
+```
+turn on the LED on child1
+turn off neptune.child1 LED
+```
+
+Routes to `/api/ollama/device-control` which calls `POST /devices/ledpin/action?action=on|off` on the device directly.
+
+---
+
+### Relay Control
+
+**Trigger**: Query type returned by Ollama is `relay-control` and the answer contains a JSON relay command (`{ action, node, pin, duration }`).
+
+Routes to `POST /api/ollama/relay/control` for hardware relay execution.
+
+---
+
+### Reload Knowledge Context
+
+Button in the UI calls `POST /api/ollama/reload` to reload `data/general-knowledge.md` into the Ollama prompt context.
+
+---
+
+### General Query (Ollama)
+
+Anything not matched by the above falls through to `/api/ollama/ask` which uses `data/general-knowledge.md` as system context plus the ANTLR grammar corpus and Pascal few-shot examples.
+
+---
+
+## Pre-Computed Instant Answers
+
+The backend answers certain topology queries without calling Ollama (zero-latency):
+
+| Query pattern | Answer |
+|---|---|
+| show tree / network topology / node hierarchy | Full 8-node tree with Neptune's children |
+| how many nodes / node count / total nodes | Node count summary |
+| list ESP32 / ESP32 devices | child1/2/3 IP list |
+| what is Neptune | Neptune cluster controller info |
+
+These are hardcoded in `ollamaRoutes.mjs` and intended to be updated as the network changes.
+
+---
+
+## Response Cache
+
+Responses are cached in memory with a 5-minute TTL. Cache is invalidated on write operations (queue create, gateway create, project rename, deploy).
+
+Slow queries (> 60 seconds) are logged to `logs/slow-queries.jsonl`.
+
+---
+
+## Project Workspace Artifacts
+
+Gateway and queue-type-assignment artifacts are written to:
+
+```
+aggregator/data/projects/<projectId>/
+  gateways/
+    <workerId>.pas          # Pascalish source
+    <workerId>.pcode        # pcode text (ESP32-compatible subset)
+    <workerId>.program.json # program map with metadata
+  gateway-bridges.json      # index of all gateways in this project
+  queue-type-assignments.json
+
+aggregator/data/projects/<projectId>/subprojects/<path>/
+  gateways/
+  gateway-bridges.json
+  queue-type-assignments.json
+```
+
+`data/projects/` is an operational runtime directory. It follows the same hygiene rules as other `aggregator/data/` subdirectories.
+
+---
+
+## Query History
+
+- Last 10 queries are stored in component state.
+- History is not persisted across page refresh.
+
+---
+
+## Limitations
+
+- Ollama queue/gateway/project commands also fire on the server side in `ollamaRoutes.mjs`; the client-side parsing in `QueryPage.jsx` intercepts a subset of them before the Ollama round-trip.
+- Device control only recognises the three hardcoded child nodes (`child1`, `child2`, `child3`) plus nodes discovered via `/api/nodes`.
+- Relay control depends on Ollama correctly identifying the query type as `relay-control` and returning a valid JSON command in its answer.
+- Project deploy requires the target node to have an active `/api/nodes/:nodeId/deploy` handler.

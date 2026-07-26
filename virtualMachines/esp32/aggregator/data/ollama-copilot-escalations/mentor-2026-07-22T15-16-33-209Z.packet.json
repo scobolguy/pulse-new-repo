@@ -1,0 +1,27 @@
+{
+  "sessionId": "mentor-2026-07-22T15-16-33-209Z",
+  "createdAt": "2026-07-22T15:17:08.370Z",
+  "status": "needs-copilot",
+  "reason": "timeout",
+  "prompt": "What is the factorial of 5?",
+  "generationPrompt": "What is the factorial of 5?",
+  "followUpPrompt": null,
+  "hasDeploymentStage": false,
+  "model": "phi3:latest",
+  "timeoutMs": 30000,
+  "topK": 2,
+  "maxContextChars": 2500,
+  "numPredict": 320,
+  "noRepair": false,
+  "candidatePath": "data/ollama-mentor-candidates/mentor-2026-07-22T15-16-33-209Z.pas",
+  "candidateCaptured": true,
+  "candidateBytes": 0,
+  "coachResult": null,
+  "stdout": "",
+  "stderr": "",
+  "instructions": [
+    "Solve the Pascal program request using the prompt and any partial candidate.",
+    "Return only final Pascal source code.",
+    "Save the answer to a file and ingest it with scripts/ingest-pascal-mentor-answer.mjs."
+  ]
+}

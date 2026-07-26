@@ -1,0 +1,6 @@
+# Auto-generated gateway pcode (ESP32-compatible route opcode subset)
+ROUTE_MATCH_QUEUE "q.alpha"
+JZ FINISH
+ROUTE_EMIT "q.beta"
+FINISH:
+HALT

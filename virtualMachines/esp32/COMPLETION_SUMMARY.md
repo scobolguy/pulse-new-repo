@@ -34,7 +34,73 @@ Current clustering behavior includes:
 
 `start-cluster.bat` and `scripts/start-cluster.ps1` help start local primary or backup roles. They do not define cluster membership. Cluster membership and topology come from the backend topology routes and persisted registry files.
 
-### 3. Repository hygiene is the next structural job
+### 3. Ollama query interface now handles live operations
+
+`aggregator/src/backend/ollamaRoutes.mjs` is not just a Q&A proxy. It handles several deterministic commands before falling back to the LLM:
+
+- **Queue create**: `create queue <name>` → creates queue in the active queue manager
+- **Gateway bridge create**: `create gateway from queue <a> to queue <b>` → creates queues and starts a bridge worker; persists Pascalish + pcode artifacts in `data/projects/`
+- **Queue type assignment**: `assign <dataTypeIds> to queue <name>` → validates types, assigns, persists artifact
+- **Project rename**: `rename project <old> to <new>`
+- **Subproject rename**: `rename subproject <old> to <new> in project <id>`
+- **Project deploy**: `deploy project <id> subproject <path> to node <nodeId>` → resolves node, reads project artifacts, calls `/api/nodes/:nodeId/deploy`
+- **Gateway/queue state query**: asks for runtime dashboard of gateways and queue depths
+- **Device control**: LED/GPIO commands for known child ESP32 nodes
+- **Relay control**: hardware relay execution via structured Ollama response
+
+All commands use a 5-minute in-memory response cache that is invalidated on writes. Slow queries (> 60 s) are logged to `logs/slow-queries.jsonl`.
+
+### 4. Project workspace artifacts live under aggregator/data/projects/
+
+When gateway or queue-type commands are executed, artifacts are written to:
+
+```
+aggregator/data/projects/<projectId>/
+  gateways/<workerId>.pas
+  gateways/<workerId>.pcode
+  gateways/<workerId>.program.json
+  gateway-bridges.json
+  queue-type-assignments.json
+  subprojects/<path>/...
+```
+
+Examples already present: `data/projects/mytestgateway/`, `data/projects/tradecore/`.
+
+This directory is operational runtime output. It follows the same hygiene rules as the rest of `aggregator/data/`.
+
+### 5. Service provider registry now includes IAM
+
+`aggregator/src/backend/providers/serviceProviderRegistry.mjs` registers ten service providers:
+
+- broker
+- router
+- queue
+- lifecycle
+- observability
+- topology
+- librarian
+- mapper
+- platform
+- **iam** (new)
+
+A new `findServiceProviderActionByHttp(method, path)` function allows looking up a provider action by its HTTP method and path, used for route-manifest and API catalog integration.
+
+### 6. Ollama mentor loop has active sessions and escalations
+
+The mentor loop is running and producing session artifacts under `data/ollama-mentor-*`:
+
+- `data/ollama-mentor-sessions/` — per-session JSON record
+- `data/ollama-mentor-candidates/` — raw `.pas` output from Ollama
+- `data/ollama-mentor-results/` — validation result including errors and repair flag
+- `data/ollama-copilot-escalations/` — escalation packet when `status: needs-copilot`
+
+See `aggregator/docs/ollama-copilot-mentor-loop.md` for the full workflow and field reference.
+
+### 7. helloService pcode artifact is now committed
+
+`pcode/helloService.artifact.json` and `pcode/helloService.router-rules.json` are compiled Pascalish service artifacts for a simple GET/POST echo service. These are reference artifacts, not source of truth. The source lives in the DSL files.
+
+### 8. Repository hygiene is the next structural job
 
 The workspace currently mixes:
 
@@ -67,6 +133,11 @@ Examples already present in the repo:
 - `aggregator/data/qm-secondary/`
 - `aggregator/data/run-reports/`
 - `aggregator/data/stress-reports/`
+- `aggregator/data/projects/`
+- `aggregator/data/ollama-mentor-sessions/`
+- `aggregator/data/ollama-mentor-candidates/`
+- `aggregator/data/ollama-mentor-results/`
+- `aggregator/data/ollama-copilot-escalations/`
 - `evolution-generation-*.json`
 - `tmp-*`
 
@@ -74,5 +145,6 @@ Examples already present in the repo:
 
 - If you need to understand clustering, start with the topology runtime routes and the cluster/site registry files.
 - If you need to understand deployment or operator flow, use `RUNBOOK.md` and `aggregator/README.md`.
+- If you need to understand the natural language command interface, read `aggregator/QUERY_PAGE_GUIDE.md`.
 - If you need to clean the repo, follow `documents/REPOSITORY_HYGIENE_PLAN.md` and do the separation in phases instead of a single mass move.
-- If a file looks like a log, queue payload, registry snapshot, generated pcode sidecar, or temporary scratch output, assume it is not canonical source until proven otherwise.
+- If a file looks like a log, queue payload, registry snapshot, generated pcode sidecar, mentor session, or temporary scratch output, assume it is not canonical source until proven otherwise.

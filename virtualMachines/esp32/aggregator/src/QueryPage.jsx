@@ -3,6 +3,10 @@ import { useCallback, useState } from 'react';
 const ASK_ENDPOINT = '/api/ollama/ask';
 const NODES_ENDPOINT = '/api/ollama/nodes';
 const SERVICES_ENDPOINT = '/api/ollama/services';
+const RELOAD_KNOWLEDGE_ENDPOINT = '/api/ollama/reload';
+const REGISTRY_QM_ENDPOINT = '/api/registry/queue-managers';
+const BRIDGE_WORKER_START_ENDPOINT = '/api/lifecycle/bridge-workers/start';
+const ACTOR_USER_ID = 'systemadmin';
 
 async function postAskQuery(query) {
   const res = await fetch(ASK_ENDPOINT, {
@@ -20,6 +24,7 @@ async function postAskQuery(query) {
     answer: String(data.answer || '').trim(),
     model: String(data.model || 'unknown-model'),
     queryType: String(data.queryType || 'general'),
+    raw: data,
   };
 }
 
@@ -63,9 +68,126 @@ async function fetchServices() {
   }
 }
 
+async function reloadKnowledgeContext() {
+  const res = await fetch(RELOAD_KNOWLEDGE_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || data.message || `${RELOAD_KNOWLEDGE_ENDPOINT} failed: HTTP ${res.status}`);
+  }
+  return data;
+}
+
+function parseGatewayBridgeQuery(query) {
+  const q = String(query || '').trim();
+  if (!q || !/\bgateway\b/i.test(q)) return null;
+
+  const fromMatch = q.match(/\bfrom\s+queue\s+["']?([a-zA-Z0-9._:-]+)["']?/i)
+    || q.match(/\binput\s*queue\s+["']?([a-zA-Z0-9._:-]+)["']?/i);
+  const toMatch = q.match(/\b(?:to|onto|into)\s+queue\s+["']?([a-zA-Z0-9._:-]+)["']?/i)
+    || q.match(/\boutput\s*queue\s+["']?([a-zA-Z0-9._:-]+)["']?/i);
+
+  const inputQueue = fromMatch?.[1] ? String(fromMatch[1]).trim() : '';
+  const outputQueue = toMatch?.[1] ? String(toMatch[1]).trim() : '';
+  if (!inputQueue || !outputQueue) return null;
+  return { inputQueue, outputQueue };
+}
+
+function parseQueueCreateQuery(query) {
+  const q = String(query || '').trim();
+  if (!q) return null;
+
+  const match = q.match(/\b(?:create|add|make|build)\s+(?:a\s+)?queue\s+(?:called\s+|named\s+)?["']?([a-zA-Z0-9._:-]+)["']?/i)
+    || q.match(/\bi\s+need\s+(?:a\s+)?queue\s+(?:called\s+|named\s+)?["']?([a-zA-Z0-9._:-]+)["']?/i);
+  if (!match || !match[1]) return null;
+  return String(match[1]).trim();
+}
+
+function toSafeWorkerToken(value) {
+  return String(value || '').trim().replace(/[^a-zA-Z0-9._:-]/g, '-');
+}
+
+async function ensureQueueExists(queueName) {
+  const registryRes = await fetch(REGISTRY_QM_ENDPOINT, {
+    headers: { 'x-user-id': ACTOR_USER_ID },
+  });
+  if (!registryRes.ok) {
+    throw new Error(`Queue manager lookup failed: HTTP ${registryRes.status}`);
+  }
+  const registry = await registryRes.json();
+  const managerId = registry?.managerId || registry?.managers?.[0]?.managerId || 'qm-primary';
+
+  const createRes = await fetch(`/api/queues/${encodeURIComponent(managerId)}/create`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-user-id': ACTOR_USER_ID,
+    },
+    body: JSON.stringify({
+      queueName,
+      config: {
+        dataTypeId: 'text-string',
+        dataTypeIds: ['text-string'],
+        createdByUser: true,
+      },
+    }),
+  });
+
+  if (createRes.ok) return { created: true, managerId };
+
+  const createErr = await createRes.json().catch(() => ({}));
+  const msg = String(createErr?.error || '').toLowerCase();
+  if (msg.includes('already exists')) {
+    return { created: false, alreadyExists: true, managerId };
+  }
+  throw new Error(createErr.error || `Queue create failed for ${queueName}: HTTP ${createRes.status}`);
+}
+
+async function createGatewayBridge({ inputQueue, outputQueue }) {
+  await ensureQueueExists(inputQueue);
+  await ensureQueueExists(outputQueue);
+
+  const workerId = `bridge-${toSafeWorkerToken(inputQueue)}-to-${toSafeWorkerToken(outputQueue)}`;
+  const bridgeRes = await fetch(BRIDGE_WORKER_START_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-user-id': ACTOR_USER_ID,
+    },
+    body: JSON.stringify({
+      workerId,
+      inputQueue,
+      outputQueue,
+      consumerService: 'ollama-gateway-bridge',
+      sourceService: 'ollama-gateway-bridge',
+      intervalMs: 250,
+      batchSize: 50,
+    }),
+  });
+
+  if (!bridgeRes.ok) {
+    const err = await bridgeRes.json().catch(() => ({}));
+    throw new Error(err.error || `Gateway bridge start failed: HTTP ${bridgeRes.status}`);
+  }
+
+  const data = await bridgeRes.json();
+  return {
+    workerId,
+    inputQueue,
+    outputQueue,
+    message: `gateway bridge created from ${inputQueue} to ${outputQueue}`,
+    data,
+  };
+}
+
 export default function QueryPage() {
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
+  const [reloadingKnowledge, setReloadingKnowledge] = useState(false);
+  const [knowledgeStatus, setKnowledgeStatus] = useState('');
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
   const [history, setHistory] = useState([]);
@@ -74,20 +196,63 @@ export default function QueryPage() {
     e?.preventDefault?.();
     if (!query.trim()) return;
 
+    const normalizedQuery = query.trim();
     setLoading(true);
     setError('');
     setResult(null);
 
     try {
-      const response = await postAskQuery(query.trim());
+      const queueRequest = parseQueueCreateQuery(normalizedQuery);
+      if (queueRequest) {
+        const queueResult = await ensureQueueExists(queueRequest);
+        const queueAnswer = queueResult.created ? `queue ${queueRequest} created` : 'queue already exists';
+        const queueItem = {
+          type: 'ollamaQuery',
+          query: normalizedQuery,
+          answer: queueAnswer,
+          model: 'queue-manager',
+          provider: 'runtime',
+          queue: {
+            queueName: queueRequest,
+            managerId: queueResult.managerId,
+            created: queueResult.created === true,
+            alreadyExists: queueResult.alreadyExists === true,
+          },
+          ts: new Date(),
+        };
+
+        setResult(queueItem);
+        setHistory((h) => [queueItem, ...h.slice(0, 9)]);
+        return;
+      }
+
+      const gatewayRequest = parseGatewayBridgeQuery(normalizedQuery);
+      if (gatewayRequest) {
+        const gateway = await createGatewayBridge(gatewayRequest);
+        const gatewayItem = {
+          type: 'ollamaQuery',
+          query: normalizedQuery,
+          answer: gateway.message,
+          model: 'gateway-manager',
+          provider: 'runtime',
+          gatewayBridge: gateway,
+          ts: new Date(),
+        };
+
+        setResult(gatewayItem);
+        setHistory((h) => [gatewayItem, ...h.slice(0, 9)]);
+        return;
+      }
+
+      const response = await postAskQuery(normalizedQuery);
       
       // If query is about nodes, also fetch actual node list
       let nodes = null;
       let services = null;
       let relayControl = null;
-      const isNodesQuery = /node|network|topology|infrastructure|devices?|cluster/i.test(query.trim());
-      const isServicesQuery = /service|capability|available|what can|what do|function/i.test(query.trim());
-      const isRelayQuery = /relay|switch|activate|deactivate|turn\s+on|turn\s+off|pulse|gpio/i.test(query.trim());
+      const isNodesQuery = /node|network|topology|infrastructure|devices?|cluster/i.test(normalizedQuery);
+      const isServicesQuery = /service|capability|available|what can|what do|function/i.test(normalizedQuery);
+      const isRelayQuery = /relay|switch|activate|deactivate|turn\s+on|turn\s+off|pulse|gpio/i.test(normalizedQuery);
       
       if (isNodesQuery) {
         nodes = await fetchNodes();
@@ -123,10 +288,12 @@ export default function QueryPage() {
 
       const item = {
         type: 'ollamaQuery',
-        query: query.trim(),
+        query: normalizedQuery,
         answer: response.answer,
         model: response.model,
         provider: 'ollama',
+        queryType: response.queryType,
+        ...(response.raw && typeof response.raw === 'object' ? response.raw : {}),
         nodes: nodes || undefined,
         services: services || undefined,
         relayControl: relayControl || undefined,
@@ -141,6 +308,20 @@ export default function QueryPage() {
       setLoading(false);
     }
   }, [query]);
+
+  const handleReloadKnowledge = useCallback(async () => {
+    setReloadingKnowledge(true);
+    setError('');
+    setKnowledgeStatus('');
+    try {
+      const response = await reloadKnowledgeContext();
+      setKnowledgeStatus(response.message || 'Knowledge reloaded successfully.');
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setReloadingKnowledge(false);
+    }
+  }, []);
 
   return (
     <div style={{ maxWidth: 800, margin: '0 auto', padding: '32px 24px', fontFamily: 'system-ui, sans-serif' }}>
@@ -178,6 +359,19 @@ export default function QueryPage() {
           >
             {loading ? 'Querying...' : 'Ask Ollama'}
           </button>
+          <button
+            type="button"
+            onClick={handleReloadKnowledge}
+            disabled={reloadingKnowledge}
+            style={{
+              padding: '10px 16px', fontSize: 14, fontWeight: 600,
+              background: reloadingKnowledge ? '#aaa' : '#00695c', color: '#fff',
+              border: 'none', borderRadius: 6, cursor: reloadingKnowledge ? 'not-allowed' : 'pointer',
+            }}
+            title="Reload general-knowledge.md context"
+          >
+            {reloadingKnowledge ? 'Reloading...' : 'Reload Knowledge'}
+          </button>
           {result && (
             <>
               <button
@@ -194,6 +388,12 @@ export default function QueryPage() {
           )}
         </div>
       </form>
+
+      {knowledgeStatus && (
+        <div style={{ marginTop: 16, padding: '12px 16px', background: '#e8f5e9', border: '1px solid #4CAF50', borderRadius: 6, color: '#1b5e20', fontSize: 14 }}>
+          {knowledgeStatus}
+        </div>
+      )}
 
       {error && (
         <div style={{ marginTop: 16, padding: '12px 16px', background: '#fff0f0', border: '1px solid #f44336', borderRadius: 6, color: '#c62828', fontSize: 14 }}>
@@ -232,6 +432,11 @@ export default function QueryPage() {
 }
 
 function OllamaResultCard({ result }) {
+  const runtimeState = result.runtimeState && typeof result.runtimeState === 'object' ? result.runtimeState : null;
+  const maxQueueDepth = runtimeState && Array.isArray(runtimeState.topQueues) && runtimeState.topQueues.length > 0
+    ? Math.max(...runtimeState.topQueues.map((item) => Number(item.depth || 0)), 1)
+    : 1;
+
   return (
     <div style={{ marginTop: 28 }}>
       <div style={{
@@ -364,6 +569,80 @@ function OllamaResultCard({ result }) {
                 {JSON.stringify(result.relayControl.command, null, 2)}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Runtime State Graphic */}
+      {runtimeState && (
+        <div style={{ marginTop: 18 }}>
+          <div style={{
+            padding: '20px 24px',
+            background: 'linear-gradient(135deg, #fffde7 0%, #e8f5e9 100%)',
+            border: '1px solid #c5e1a5',
+            borderRadius: 10,
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#33691e' }}>Gateway + Queue Runtime State</div>
+              <div style={{ fontSize: 11, color: '#558b2f' }}>{runtimeState.generatedAt || ''}</div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+              <div style={{ padding: '8px 12px', background: '#f1f8e9', border: '1px solid #dcedc8', borderRadius: 6, fontSize: 12, color: '#33691e' }}>
+                Queues: <strong>{Number(runtimeState.queueCount || 0)}</strong>
+              </div>
+              <div style={{ padding: '8px 12px', background: '#f1f8e9', border: '1px solid #dcedc8', borderRadius: 6, fontSize: 12, color: '#33691e' }}>
+                Gateways: <strong>{Array.isArray(runtimeState.gateways) ? runtimeState.gateways.length : 0}</strong>
+              </div>
+            </div>
+
+            {Array.isArray(runtimeState.gateways) && runtimeState.gateways.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: '#2e7d32', marginBottom: 6 }}>Gateways</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8 }}>
+                  {runtimeState.gateways.map((gateway) => (
+                    <div key={gateway.gatewayId} style={{ padding: '10px', border: '1px solid #dcedc8', borderRadius: 8, background: '#ffffffb3' }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: '#1b5e20' }}>{gateway.gatewayId}</div>
+                      <div style={{ marginTop: 4, fontSize: 11, color: '#4e342e' }}>mode: {gateway.mode}</div>
+                      <div style={{ marginTop: 4, fontSize: 11, color: '#4e342e' }}>processed: {gateway.processedCount}</div>
+                      <div style={{ marginTop: 4 }}>
+                        <span style={{
+                          padding: '2px 6px',
+                          borderRadius: 12,
+                          fontSize: 10,
+                          fontWeight: 700,
+                          color: gateway.running ? '#1b5e20' : '#b71c1c',
+                          background: gateway.running ? '#c8e6c9' : '#ffcdd2',
+                        }}>
+                          {gateway.running ? 'RUNNING' : 'STOPPED'}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {Array.isArray(runtimeState.topQueues) && runtimeState.topQueues.length > 0 && (
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: '#2e7d32', marginBottom: 6 }}>Top Queue Depths</div>
+                {runtimeState.topQueues.map((queueItem) => {
+                  const depth = Number(queueItem.depth || 0);
+                  const widthPct = Math.max(4, Math.round((depth / maxQueueDepth) * 100));
+                  return (
+                    <div key={queueItem.queue} style={{ marginBottom: 6 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#2f3e1f', marginBottom: 2 }}>
+                        <span>{queueItem.queue}</span>
+                        <span>{depth}</span>
+                      </div>
+                      <div style={{ height: 8, background: '#f0f4c3', borderRadius: 99, overflow: 'hidden', border: '1px solid #dce775' }}>
+                        <div style={{ height: '100%', width: `${widthPct}%`, background: 'linear-gradient(90deg, #7cb342 0%, #558b2f 100%)' }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}

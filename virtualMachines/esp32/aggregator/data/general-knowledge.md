@@ -439,6 +439,76 @@ Returns: { output: {...}, diagnostics: [...] }
 ### API Base URL
 All APIs are accessed at: `http://localhost:4000/api/*`
 
+### Resources Supported
+the following resources are defined 
+- Queues, which connect two processes together. There is a producer and a consumer. Queues are of a certain type of message. The message types can be found by asking the data librarian.
+- Gateways, which connect two systems together. There are 4 queues to consider
+   - The input queue which contains the messages going to the gateway
+   - The output queue which conssists of messages coming from the gateway
+   - The error queue which consists of the messages that are not in a valid format
+   - The breakout queue which consist of messages that were broken out at the gateway
+
+
+### Ollama Queue Manager Actions
+
+Ollama executes deterministic actions from natural language commands. These commands bypass the LLM and call backend APIs directly.
+
+**Create a queue:**
+- `create queue myQueue`
+- `add queue myQueue`
+- `make queue myQueue`
+- `I need a queue called myQueue`
+
+Execution behavior:
+1. Resolve a queue manager via `GET /api/registry/queue-managers`
+2. Create the queue via `POST /api/queues/:managerId/create`
+3. Use queue defaults: `dataTypeId: text-string`, `dataTypeIds: [text-string]`, `createdByUser: true`
+
+Duplicate queue behavior:
+- If the queue already exists, return this exact message: `queue already exists`
+
+**Create a gateway bridge:**
+- `create gateway from queue <inputQueue> to queue <outputQueue>`
+- `create gateway <name> from queue <inputQueue> to queue <outputQueue> in project <projectId> subproject <path>`
+
+Execution behavior:
+1. Ensure input and output queues exist (create if needed).
+2. Start bridge worker via `POST /api/lifecycle/bridge-workers/start`.
+3. Persist Pascalish source (`.pas`), pcode (`.pcode`), and program map (`.program.json`) under `data/projects/<projectId>/gateways/`.
+4. Update `gateway-bridges.json` index for the project/subproject.
+
+Queue type assignment behavior:
+- Supported command pattern: `assign <dataTypeId>[, <dataTypeId>...] to queue <queueName> [in project <projectId>] [subproject <subprojectPath>]`
+- Data types must be valid Data Librarian type IDs.
+- Assignment updates queue config with `dataTypeId` and `dataTypeIds`.
+- Assignment artifacts are serialized under the current workspace project tree and are deployable later.
+
+Project and subproject artifact model:
+- A project can contain multiple queues and multiple gateway bridges.
+- Subprojects are nested under the project and maintain their own artifact files.
+- Queue assignment index file: `aggregator/data/projects/<project>/[subprojects/<path>/]queue-type-assignments.json`
+- Gateway bridge index file: `aggregator/data/projects/<project>/[subprojects/<path>/]gateway-bridges.json`
+- Per-gateway artifacts include Pascalish and pcode files for ESP32 deployment:
+  - `gateways/<workerId>.pas`
+  - `gateways/<workerId>.pcode`
+  - `gateways/<workerId>.program.json`
+
+Project lifecycle commands (Ollama deterministic actions):
+- Rename project: `rename project <oldProjectId> to <newProjectId>`
+- Rename subproject: `rename subproject <oldSubprojectPath> to <newSubprojectPath> in project <projectId>`
+- Deploy artifacts: `deploy project <projectId> [subproject <subprojectPath>] to node <nodeId>`
+- Runtime state query: `show gateway and queue state` (returns structured state for UI graphics)
+
+Project lifecycle APIs:
+- `POST /api/ollama/projects/rename` with body `{ "oldProjectId": "...", "newProjectId": "..." }`
+- `POST /api/ollama/subprojects/rename` with body `{ "projectId": "...", "oldSubproject": "...", "newSubproject": "..." }`
+- `POST /api/ollama/projects/deploy` with body `{ "projectId": "...", "subproject": "...", "nodeId": "..." }`
+- `GET /api/ollama/runtime/state` for gateway + queue runtime snapshot
+
+Governance identity note:
+- Queue creation is a governed action and requires a known enabled actor identity (`x-user-id`).
+- Default actor used by Ollama queue-create flow: `systemadmin` (override via `OLLAMA_QUEUE_ACTION_USER_ID`).
+
 ---
 
 ### Network Topology & Tree Structure

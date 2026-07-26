@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "projectId": "tradecore",
+  "subprojectPath": "settlement/v1",
+  "updatedAt": "2026-07-22T20:15:49.664Z",
+  "bridges": [
+    {
+      "workerId": "bridge-q.alpha-to-q.beta",
+      "managerId": "qm-primary",
+      "inputQueue": "q.alpha",
+      "outputQueue": "q.beta",
+      "pascalishFile": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\projects\\tradecore\\subprojects\\settlement\\v1\\gateways\\bridge-q.alpha-to-q.beta.pas",
+      "pcodeFile": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\projects\\tradecore\\subprojects\\settlement\\v1\\gateways\\bridge-q.alpha-to-q.beta.pcode",
+      "programMapFile": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\projects\\tradecore\\subprojects\\settlement\\v1\\gateways\\bridge-q.alpha-to-q.beta.program.json",
+      "updatedAt": "2026-07-22T20:15:49.636Z",
+      "source": "ollama-gateway-command"
+    },
+    {
+      "workerId": "bridge-q.beta-to-q.gamma",
+      "managerId": "qm-primary",
+      "inputQueue": "q.beta",
+      "outputQueue": "q.gamma",
+      "pascalishFile": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\projects\\tradecore\\subprojects\\settlement\\v1\\gateways\\bridge-q.beta-to-q.gamma.pas",
+      "pcodeFile": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\projects\\tradecore\\subprojects\\settlement\\v1\\gateways\\bridge-q.beta-to-q.gamma.pcode",
+      "programMapFile": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\projects\\tradecore\\subprojects\\settlement\\v1\\gateways\\bridge-q.beta-to-q.gamma.program.json",
+      "updatedAt": "2026-07-22T20:15:49.664Z",
+      "source": "ollama-gateway-command"
+    }
+  ]
+}
