@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>BOB Console – Ollama Voice, Upload, Reset, Camera/Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    background: #f7f8fa;
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Header ── */
+  #header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px 8px;
+    border-bottom: 1px solid #e5e7eb;
+    background: #ffffff;
+  }
+  #header h1 {
+    font-size: 15px;
+    font-weight: 600;
+    color: #1f2328;
+    margin: 0;
+    letter-spacing: .3px;
+  }
+  #statusDot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #57606a;
+    flex-shrink: 0;
+    transition: background .3s;
+  }
+  #statusDot.listening { background: #e36209; }
+  #statusDot.busy      { background: #3b82d4; }
+  #statusDot.ok        { background: #2da44e; }
+  #statusLabel {
+    font-size: 11px;
+    color: #57606a;
+    margin-left: -6px;
+  }
+
+  /* ── Main layout ── */
+  #container {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    padding: 10px 14px 12px;
+    gap: 8px;
+    min-height: 0;
+  }
+
+  /* ── Output pane ── */
+  #outputPane {
+    flex: 1;
+    font-size: 13px;
+    line-height: 1.6;
+    padding: 12px 14px;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    overflow-y: auto;
+    background: #ffffff;
+    color: #1f2328;
+    white-space: pre-wrap;
+    word-break: break-word;
+    min-height: 0;
+  }
+  #outputPane.html-mode {
+    white-space: normal;
+  }
+  #outputPane .placeholder {
+    color: #57606a;
+    font-style: italic;
+  }
+
+  /* ── Controls row ── */
+  #controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  button {
+    padding: 8px 14px;
+    font-size: 13px;
+    font-family: inherit;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    font-weight: 500;
+    transition: filter .15s, opacity .15s;
+  }
+  button:disabled { opacity: .55; cursor: not-allowed; }
+  button:not(:disabled):hover { filter: brightness(.93); }
+
+  #talkBtn  { background: #0078d4; color: #fff; border-color: #0063b1; }
+  #talkBtn.active { background: #e36209; border-color: #b74b00; }
+  #sendBtn  { background: #2da44e; color: #fff; border-color: #228f3e; }
+  #resetBtn { background: #cf222e; color: #fff; border-color: #a10e1a; }
+
+  /* file upload styled */
+  #uploadWrapper {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+  }
+  #uploadLabel {
+    padding: 8px 14px;
+    font-size: 13px;
+    font-family: inherit;
+    border-radius: 6px;
+    border: 1px solid #e5e7eb;
+    background: #f7f8fa;
+    color: #1f2328;
+    cursor: pointer;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  #uploadLabel:hover { filter: brightness(.95); }
+  #uploadInput { display: none; }
+  #fileCount {
+    font-size: 11px;
+    color: #57606a;
+    margin-left: 4px;
+  }
+
+  /* ── Query textarea ── */
+  #queryBox {
+    width: 100%;
+    height: 80px;
+    font-size: 13px;
+    font-family: inherit;
+    line-height: 1.5;
+    padding: 10px 12px;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    resize: vertical;
+    background: #ffffff;
+    color: #1f2328;
+    outline: none;
+    transition: border-color .15s;
+  }
+  #queryBox:focus { border-color: #3b82d4; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <div id="statusDot"></div>
+  <h1>BOB Console</h1>
+  <span id="statusLabel">idle</span>
+</div>
+
+<div id="container">
+
+  <div id="outputPane">
+    <span class="placeholder">Model replies, camera feeds, and dashboards will appear here.</span>
+  </div>
+
+  <div id="controls">
+    <button id="talkBtn">&#127908; Push to Talk</button>
+    <button id="sendBtn">Send</button>
+    <button id="resetBtn">Reset Model</button>
+    <div id="uploadWrapper">
+      <label id="uploadLabel" for="uploadInput">&#128206; Attach Files</label>
+      <input type="file" id="uploadInput" multiple>
+      <span id="fileCount"></span>
+    </div>
+  </div>
+
+  <textarea id="queryBox" placeholder="Type your query here… (Enter to send, Shift+Enter for new line)"></textarea>
+
+</div>
+
+<script>
+/* ─────────────────────────────────────────────────────────
+   CONFIG  —  aggregator runs on port 4000; /agent is served
+   from the same host as this page, so we use a relative URL.
+───────────────────────────────────────────────────────── */
+const AGENT_URL = '/agent';
+
+/* ─────────────────────────────────────────────────────────
+   STATUS INDICATOR
+───────────────────────────────────────────────────────── */
+const dot   = document.getElementById('statusDot');
+const label = document.getElementById('statusLabel');
+
+function setStatus(state, text) {
+  dot.className = state;
+  label.textContent = text;
+}
+
+/* ─────────────────────────────────────────────────────────
+   RENDER OUTPUT
+───────────────────────────────────────────────────────── */
+function renderOutput(content) {
+  const pane = document.getElementById('outputPane');
+  const trimmed = (content || '').trim();
+
+  if (trimmed.startsWith('<')) {
+    pane.classList.add('html-mode');
+    pane.innerHTML = trimmed;
+  } else {
+    pane.classList.remove('html-mode');
+    pane.textContent = trimmed;
+  }
+
+  pane.scrollTop = pane.scrollHeight;
+}
+
+/* ─────────────────────────────────────────────────────────
+   SPEECH TO TEXT – Push-to-Talk
+───────────────────────────────────────────────────────── */
+let recognizer = null;
+let sttReady   = true;
+let sttActive  = false;
+
+function initSTT() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { alert('Speech Recognition is not supported in this browser.'); return false; }
+  recognizer = new SR();
+  recognizer.lang           = 'en-US';
+  recognizer.interimResults = false;
+  recognizer.continuous     = false;
+
+  recognizer.onresult = (event) => {
+    const text = event.results[0][0].transcript;
+    document.getElementById('queryBox').value = text;
+    sendQuery(text);
+  };
+  recognizer.onerror = () => finishSTT();
+  recognizer.onend   = () => finishSTT();
+  return true;
+}
+
+function finishSTT() {
+  sttActive = false;
+  sttReady  = true;
+  document.getElementById('talkBtn').classList.remove('active');
+  document.getElementById('talkBtn').textContent = '\u{1F3A4} Push to Talk';
+  setStatus('', 'idle');
+}
+
+function startSTT() {
+  if (!sttReady || sttActive) return;
+  if (!recognizer && !initSTT()) return;
+  sttReady  = false;
+  sttActive = true;
+  document.getElementById('talkBtn').classList.add('active');
+  document.getElementById('talkBtn').textContent = '\uD83D\uDD34 Listening\u2026';
+  setStatus('listening', 'listening');
+  try { recognizer.start(); } catch (e) { finishSTT(); }
+}
+
+/* ─────────────────────────────────────────────────────────
+   TEXT TO SPEECH
+───────────────────────────────────────────────────────── */
+function speak(text) {
+  if (!window.speechSynthesis) return;
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = 'en-US';
+  utter.rate = 1.0;
+  speechSynthesis.speak(utter);
+}
+
+/* ─────────────────────────────────────────────────────────
+   SEND QUERY
+───────────────────────────────────────────────────────── */
+async function sendQuery(text) {
+  if (!text || !text.trim()) return;
+
+  setStatus('busy', 'sending\u2026');
+  document.getElementById('sendBtn').disabled = true;
+
+  try {
+    const files    = document.getElementById('uploadInput').files;
+    const formData = new FormData();
+    formData.append('message', text);
+    for (let i = 0; i < files.length; i++) formData.append('files', files[i]);
+
+    const res  = await fetch(AGENT_URL, { method: 'POST', body: formData });
+    const data = await res.json();
+
+    const reply = data.output || JSON.stringify(data, null, 2);
+    renderOutput(reply);
+    speak(reply);
+    setStatus('ok', 'ok');
+  } catch (err) {
+    renderOutput('Error: ' + err.message);
+    setStatus('', 'error');
+  } finally {
+    document.getElementById('sendBtn').disabled = false;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────
+   RESET MODEL
+───────────────────────────────────────────────────────── */
+async function resetModel() {
+  setStatus('busy', 'resetting\u2026');
+  document.getElementById('resetBtn').disabled = true;
+
+  try {
+    const formData = new FormData();
+    formData.append('message', '__RESET_MODEL__');
+    const res  = await fetch(AGENT_URL, { method: 'POST', body: formData });
+    const data = await res.json();
+    renderOutput(data.output || JSON.stringify(data, null, 2));
+    setStatus('ok', 'reset ok');
+  } catch (err) {
+    renderOutput('Reset error: ' + err.message);
+    setStatus('', 'error');
+  } finally {
+    document.getElementById('resetBtn').disabled = false;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────
+   UI EVENTS
+───────────────────────────────────────────────────────── */
+document.getElementById('talkBtn').addEventListener('click', startSTT);
+document.getElementById('sendBtn').addEventListener('click', () => sendQuery(document.getElementById('queryBox').value));
+document.getElementById('resetBtn').addEventListener('click', resetModel);
+
+document.getElementById('uploadInput').addEventListener('change', () => {
+  const count = document.getElementById('uploadInput').files.length;
+  document.getElementById('fileCount').textContent = count > 0 ? count + ' file' + (count > 1 ? 's' : '') : '';
+});
+
+document.getElementById('queryBox').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendQuery(document.getElementById('queryBox').value); }
+});
+</script>
+
+</body>
+</html>

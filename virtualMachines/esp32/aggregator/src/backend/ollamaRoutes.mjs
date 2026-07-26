@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import http from 'http';
+import multer from 'multer';
 import { reloadOllamaContext, getOllamaWarmthStatus, ollamaGenerate } from './ollamaService.mjs';
 import { matchPascalExecuteRoute, matchPrecomputedRoute, detectQueryTypes } from './queryRouteLoader.mjs';
 
@@ -2675,5 +2676,77 @@ User request: "${query}"`;
 
   app.get('/api/topology', topologyHandler);
 
+  /**
+   * POST /agent
+   * Unified voice/chat console endpoint used by bob-console.html.
+   * Accepts multipart/form-data with a `message` field (and optional `files`),
+   * OR application/json with a `message` field.
+   *
+   * Special messages:
+   *   __RESET_MODEL__ – clears the response cache and reloads the Ollama context.
+   *
+   * Returns: { output: string }
+   */
+  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+  app.post('/agent', upload.array('files'), async (req, res) => {
+    try {
+      // Support both multipart (FormData) and plain JSON bodies
+      const message = String(req.body?.message || '').trim();
+
+      if (!message) {
+        return res.status(400).json({ output: 'No message provided.' });
+      }
+
+      // ── Reset command ────────────────────────────────────────────────────────
+      if (message === '__RESET_MODEL__') {
+        console.log('[AGENT] Reset model requested');
+        responseCache.clear();
+        const reloadResult = await reloadOllamaContext();
+        return res.json({
+          output: reloadResult.success
+            ? 'Model context cleared and reloaded successfully.'
+            : `Reset attempted, but reload reported: ${reloadResult.error || 'unknown error'}`
+        });
+      }
+
+      // ── Delegate to the existing ask handler ─────────────────────────────────
+      // Synthesise a minimal req/res pair so we can reuse askHandler directly.
+      const syntheticReq = {
+        body: { query: message },
+        // Expose uploaded file metadata as context (not processed by askHandler but
+        // available for future extension)
+        files: req.files || [],
+      };
+
+      let settled = false;
+      await new Promise((resolve) => {
+        const syntheticRes = {
+          status(code) { this._status = code; return this; },
+          json(data) {
+            if (settled) return;
+            settled = true;
+            const answer = data?.answer || data?.output || JSON.stringify(data, null, 2);
+            res.json({ output: answer });
+            resolve();
+          }
+        };
+        // askHandler is async; wrap in Promise.resolve so we can await it
+        Promise.resolve(askHandler(syntheticReq, syntheticRes)).catch((err) => {
+          if (!settled) {
+            settled = true;
+            res.json({ output: `Error: ${err.message || String(err)}` });
+          }
+          resolve();
+        });
+      });
+    } catch (e) {
+      const msg = e?.message || String(e);
+      console.error('[AGENT] Unhandled error:', msg);
+      res.status(500).json({ output: `Server error: ${msg}` });
+    }
+  });
+
   console.log('[OLLAMA] Routes registered at /api/ollama/* and /api/openai/* (compat)');
+  console.log('[AGENT] /agent endpoint registered (BOB Console)');
 }
