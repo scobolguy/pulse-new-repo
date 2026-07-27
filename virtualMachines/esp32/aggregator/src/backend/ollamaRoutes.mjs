@@ -2795,6 +2795,135 @@ User request: "${query}"`;
         </table>
       </div>`;
     },
+
+    time(data) {
+      const t = data?.time;
+      if (!t) return '<p style="font-family:-apple-system,sans-serif;color:#cf222e">Time data unavailable.</p>';
+      const local = new Date(t.nowMs);
+      const pad = n => String(n).padStart(2, '0');
+      const dateStr = `${local.getFullYear()}-${pad(local.getMonth()+1)}-${pad(local.getDate())}`;
+      const timeStr = `${pad(local.getHours())}:${pad(local.getMinutes())}:${pad(local.getSeconds())}`;
+      const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+      const dayName  = dayNames[local.getDay()];
+      const syncAgo  = t.lastSyncAt ? Math.round((Date.now() - new Date(t.lastSyncAt).getTime()) / 1000) : null;
+      return `<div style="font-family:-apple-system,'Segoe UI',sans-serif">
+        <div style="font-size:42px;font-weight:300;letter-spacing:-1px;color:#1f2328;line-height:1">${timeStr}</div>
+        <div style="font-size:16px;color:#57606a;margin-top:4px">${dayName}, ${dateStr}</div>
+        <div style="margin-top:12px;font-size:11px;color:#57606a;border-top:1px solid #e5e7eb;padding-top:8px">
+          Source: <strong>${t.source}</strong> &nbsp;·&nbsp;
+          Offset: ${t.offsetMs > 0 ? '+' : ''}${t.offsetMs}ms &nbsp;·&nbsp;
+          ${syncAgo !== null ? `Last NTP sync: ${syncAgo}s ago` : ''}
+        </div>
+      </div>`;
+    },
+
+    camera(_data, captures) {
+      const node = (captures?.value || '').toLowerCase();
+      // Node → IP mapping (matches data in knownNodes / esp32-nodes)
+      const NODE_IPS = { child1: '192.168.2.157', child2: '192.168.2.59', child3: '192.168.2.58' };
+      const ip = NODE_IPS[node];
+      if (!ip) return `<p style="font-family:-apple-system,sans-serif;color:#cf222e">Unknown node "${node}". Known camera nodes: child1 (ESP32-CAM at ${NODE_IPS.child1}).</p>`;
+      const streamUrl  = `http://${ip}/stream`;
+      const captureUrl = `http://${ip}/capture`;
+      return `<div style="font-family:-apple-system,'Segoe UI',sans-serif">
+        <p style="margin:0 0 8px;font-size:13px;color:#57606a">
+          Live feed — <strong>${node}</strong> &nbsp;·&nbsp; <span style="font-family:monospace">${ip}</span>
+          &nbsp;·&nbsp; <a href="${streamUrl}" target="_blank" style="color:#3b82d4">open in new tab</a>
+          &nbsp;·&nbsp; <a href="${captureUrl}" target="_blank" style="color:#3b82d4">snapshot</a>
+        </p>
+        <img src="${streamUrl}"
+             style="width:100%;max-width:640px;border-radius:6px;border:1px solid #e5e7eb;display:block"
+             alt="Live feed from ${node}"
+             onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+        <p style="display:none;color:#cf222e;font-size:13px">
+          Could not load stream from ${node} (${ip}). The device may be offline or not reachable from this browser.
+        </p>
+      </div>`;
+    },
+
+    dashboard(data) {
+      const p = data?.performance;
+      if (!p) return '<p style="font-family:-apple-system,sans-serif;color:#cf222e">Performance data unavailable.</p>';
+      const mb = b => (b / 1024 / 1024).toFixed(0) + ' MB';
+      const pct = (used, total) => total > 0 ? ((used / total) * 100).toFixed(1) + '%' : '—';
+      const bar = (used, total) => {
+        const w = total > 0 ? Math.min(100, (used / total) * 100).toFixed(1) : 0;
+        const color = w > 85 ? '#cf222e' : w > 65 ? '#e36209' : '#2da44e';
+        return `<div style="background:#f7f8fa;border-radius:3px;height:8px;overflow:hidden;margin-top:4px">
+          <div style="width:${w}%;background:${color};height:100%;border-radius:3px"></div></div>`;
+      };
+      const qRows = (p.queueManagers || []).map(qm =>
+        `<tr>
+          <td style="padding:5px 8px">${qm.managerId}</td>
+          <td style="padding:5px 8px;text-align:center">${qm.queueCount}</td>
+          <td style="padding:5px 8px;text-align:center">${qm.totalQueuedMessages.toLocaleString()}</td>
+        </tr>`).join('');
+      return `<div style="font-family:-apple-system,'Segoe UI',sans-serif;font-size:13px">
+        <p style="margin:0 0 10px;color:#57606a">Sampled ${new Date(p.sampledAt).toLocaleTimeString()} · Node ${p.node?.version} · PID ${p.node?.pid} · uptime ${Math.round(p.node?.uptimeSeconds/3600)}h</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+          <div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;background:#fff">
+            <div style="color:#57606a;font-size:11px;text-transform:uppercase;letter-spacing:.5px">Heap Used</div>
+            <div style="font-size:20px;font-weight:600;color:#1f2328;margin:4px 0">${mb(p.node?.memoryUsage?.heapUsed)}</div>
+            ${bar(p.node?.memoryUsage?.heapUsed, p.node?.memoryUsage?.heapTotal)}
+            <div style="color:#57606a;font-size:11px;margin-top:3px">of ${mb(p.node?.memoryUsage?.heapTotal)} heap</div>
+          </div>
+          <div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;background:#fff">
+            <div style="color:#57606a;font-size:11px;text-transform:uppercase;letter-spacing:.5px">System RAM</div>
+            <div style="font-size:20px;font-weight:600;color:#1f2328;margin:4px 0">${pct(p.os?.memoryUsed, p.os?.totalMemory)}</div>
+            ${bar(p.os?.memoryUsed, p.os?.totalMemory)}
+            <div style="color:#57606a;font-size:11px;margin-top:3px">${mb(p.os?.memoryUsed)} / ${mb(p.os?.totalMemory)}</div>
+          </div>
+        </div>
+        <div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;background:#fff;margin-bottom:10px">
+          <div style="color:#57606a;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">CPU · ${p.os?.cpuModel?.replace(/\s+/g,' ') || '—'} · ${p.os?.cpuCount} cores</div>
+          <div style="font-size:13px;color:#1f2328">${p.os?.cpuSpeedMHz} MHz &nbsp;·&nbsp; OS uptime ${Math.round(p.os?.uptimeSeconds/3600)}h</div>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead><tr style="background:#f7f8fa;text-align:left">
+            <th style="padding:5px 8px;border-bottom:1px solid #e5e7eb">Queue Manager</th>
+            <th style="padding:5px 8px;border-bottom:1px solid #e5e7eb;text-align:center">Queues</th>
+            <th style="padding:5px 8px;border-bottom:1px solid #e5e7eb;text-align:center">Messages</th>
+          </tr></thead>
+          <tbody>${qRows}</tbody>
+        </table>
+      </div>`;
+    },
+
+    lifecycle(data) {
+      if (!data) return '<p style="font-family:-apple-system,sans-serif;color:#cf222e">Lifecycle data unavailable.</p>';
+      const states = data.states || [];
+      const totals = data.totalsByLayer || {};
+      const totalMsgs = data.totalMessagesAcrossStates || 0;
+      const rows = states.slice(0, 20).map(s => {
+        const count = s.messageCount ?? 0;
+        const pct = totalMsgs > 0 ? ((count / totalMsgs) * 100).toFixed(1) : '0';
+        const barW = totalMsgs > 0 ? Math.min(100, (count / totalMsgs) * 100).toFixed(1) : 0;
+        return `<tr>
+          <td style="padding:5px 8px;font-weight:500">${s.stateId || s.id || '—'}</td>
+          <td style="padding:5px 8px;color:#57606a">${s.layer ?? '—'}</td>
+          <td style="padding:5px 8px;text-align:right">${count.toLocaleString()}</td>
+          <td style="padding:5px 8px;width:120px">
+            <div style="background:#f7f8fa;border-radius:3px;height:6px">
+              <div style="width:${barW}%;background:#3b82d4;height:100%;border-radius:3px"></div>
+            </div>
+          </td>
+          <td style="padding:5px 8px;color:#57606a;text-align:right">${pct}%</td>
+        </tr>`;
+      }).join('');
+      return `<div style="font-family:-apple-system,'Segoe UI',sans-serif;font-size:13px">
+        <p style="margin:0 0 8px;color:#57606a">${states.length} FSM states · ${totalMsgs.toLocaleString()} messages total · generated ${data.generatedAt ? new Date(data.generatedAt).toLocaleTimeString() : '—'}</p>
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead><tr style="background:#f7f8fa;text-align:left">
+            <th style="padding:5px 8px;border-bottom:1px solid #e5e7eb">State</th>
+            <th style="padding:5px 8px;border-bottom:1px solid #e5e7eb">Layer</th>
+            <th style="padding:5px 8px;border-bottom:1px solid #e5e7eb;text-align:right">Messages</th>
+            <th style="padding:5px 8px;border-bottom:1px solid #e5e7eb;min-width:80px"></th>
+            <th style="padding:5px 8px;border-bottom:1px solid #e5e7eb;text-align:right">%</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+    },
   };
 
   app.post('/agent', upload.array('files'), async (req, res) => {
@@ -2816,13 +2945,18 @@ User request: "${query}"`;
       }
 
       // ── Intent dispatch (driven by data/agent-routes.json) ─────────────────
-      const intent = await matchAgentIntent(message);
-      if (intent) {
-        console.log(`[AGENT] intent="${intent.id}" api="${intent.api}" formatter="${intent.formatter}"`);
-        const data = await fetchLocalApi(intent.api);
+      const match = await matchAgentIntent(message);
+      if (match) {
+        const { intent, captures } = match;
+        console.log(`[AGENT] intent="${intent.id}" formatter="${intent.formatter}" captures=${JSON.stringify(captures)}`);
         const formatter = FORMATTERS[intent.formatter];
+        // Camera (and future no-api intents) skip the API fetch
+        if (intent.api === null && formatter) {
+          return res.json({ output: formatter(null, captures) });
+        }
+        const data = await fetchLocalApi(intent.api);
         if (data && formatter) {
-          return res.json({ output: formatter(data) });
+          return res.json({ output: formatter(data, captures) });
         }
         console.warn(`[AGENT] intent "${intent.id}" matched but api/formatter failed — falling through`);
       }

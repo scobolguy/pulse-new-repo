@@ -35,14 +35,29 @@ async function loadRoutes() {
 
 /**
  * Find the first intent whose patterns match the given message.
- * Returns the full intent object, or null if nothing matches.
+ * Returns { intent, captures } where captures is a Map of named capture
+ * groups (or positional groups) from the intent's optional `capture` pattern,
+ * or null if nothing matches.
  */
 export async function matchAgentIntent(message) {
   const config = await loadRoutes();
   for (const intent of (config.intents || [])) {
     const flags = intent.flags ?? 'i';
     const matched = (intent.patterns || []).some(p => new RegExp(p, flags).test(message));
-    if (matched) return intent;
+    if (!matched) continue;
+
+    // Run the optional capture pattern to extract values from the message
+    let captures = {};
+    if (intent.capture) {
+      const m = message.match(new RegExp(intent.capture, intent.captureFlags ?? 'i'));
+      if (m) {
+        // Named groups take priority, fall back to positional
+        captures = m.groups ?? {};
+        if (Object.keys(captures).length === 0 && m[1]) captures = { value: m[1] };
+      }
+    }
+
+    return { intent, captures };
   }
   return null;
 }

@@ -3,6 +3,78 @@
   "description": "Intent routing rules for POST /agent (BOB Console). Add or edit intents here — no code changes needed. The loader re-reads this file every 30 seconds so changes take effect without a restart.",
   "intents": [
     {
+      "id": "time",
+      "description": "Show the current NTP-authoritative time and date",
+      "patterns": [
+        "\\bwhat.*time\\b",
+        "\\bcurrent time\\b",
+        "\\bshow.*time\\b",
+        "\\bwhat time is it\\b",
+        "\\btell me the time\\b",
+        "\\bwhat.*(date|day)\\b",
+        "\\bcurrent date\\b",
+        "\\bshow.*date\\b",
+        "\\bwhat day is it\\b",
+        "\\btime (now|is|please)\\b",
+        "\\bwhat('s| is) the (time|date)\\b"
+      ],
+      "flags": "i",
+      "api": "/api/time/authority",
+      "formatter": "time"
+    },
+    {
+      "id": "camera-feed",
+      "description": "Show live MJPEG camera feed from a named ESP32-CAM node. Captures the node name.",
+      "patterns": [
+        "\\bfeed\\b.*\\b(neptune\\.)?(child[123])\\b",
+        "\\b(neptune\\.)?(child[123])\\b.*\\bfeed\\b",
+        "\\bcamera\\b.*\\b(neptune\\.)?(child[123])\\b",
+        "\\b(neptune\\.)?(child[123])\\b.*\\bcamera\\b",
+        "\\bstream\\b.*\\b(neptune\\.)?(child[123])\\b",
+        "\\b(neptune\\.)?(child[123])\\b.*\\bstream\\b",
+        "\\bshow.*\\b(neptune\\.)?(child[123])\\b",
+        "\\bview.*\\b(neptune\\.)?(child[123])\\b"
+      ],
+      "flags": "i",
+      "capture": "\\b(child[123])\\b",
+      "captureFlags": "i",
+      "api": null,
+      "formatter": "camera"
+    },
+    {
+      "id": "system-dashboard",
+      "description": "Show system performance dashboard — CPU, memory, queues",
+      "patterns": [
+        "\\b(show|display|get|open)\\b.*\\bdashboard\\b",
+        "\\bdashboard\\b",
+        "\\bsystem (performance|health|status|stats)\\b",
+        "\\bperformance (dashboard|stats|metrics)\\b",
+        "\\bhow.*system.*doing\\b",
+        "\\bserver (stats|status|health)\\b",
+        "\\bcpu\\b",
+        "\\bmemory usage\\b",
+        "\\bqueue stats\\b",
+        "\\bhow.*memory\\b"
+      ],
+      "flags": "i",
+      "api": "/api/system/performance",
+      "formatter": "dashboard"
+    },
+    {
+      "id": "lifecycle-dashboard",
+      "description": "Show the transaction lifecycle FSM dashboard",
+      "patterns": [
+        "\\blifecycle\\b",
+        "\\btransaction (lifecycle|state|status|dashboard)\\b",
+        "\\bfsm (state|status|dashboard)\\b",
+        "\\bshow.*lifecycle\\b",
+        "\\bstate machine\\b"
+      ],
+      "flags": "i",
+      "api": "/api/lifecycle/dashboard",
+      "formatter": "lifecycle"
+    },
+    {
       "id": "topology",
       "description": "Show the network node hierarchy as an indented tree",
       "patterns": [
