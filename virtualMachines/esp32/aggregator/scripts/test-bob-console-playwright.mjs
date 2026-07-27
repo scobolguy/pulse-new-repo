@@ -102,17 +102,61 @@ async function run() {
     pass(`Enter key submits → output: "${output2.substring(0, 80).replace(/\n/g, ' ')}…"`);
 
     // ── 7. Reset Model button ────────────────────────────────────────────────
+    // Clear the query box first so output pane text is predictably "reset" text
+    await page.locator('#queryBox').fill('');
     const before3 = await page.locator('#outputPane').innerText();
     await page.locator('#resetBtn').click();
     console.log('  Waiting for reset confirmation...');
-    await waitForOutputChange(page, before3, 10000);
+    // Wait for output to contain reset-related keywords (up to 15s for reload)
+    await page.waitForFunction(
+      () => {
+        const text = (document.getElementById('outputPane')?.innerText || '').toLowerCase();
+        return text.includes('reset') || text.includes('reload') || text.includes('cleared');
+      },
+      null, { timeout: 15000 }
+    );
     const output3 = await page.locator('#outputPane').innerText();
-    if (!output3.toLowerCase().includes('reset') && !output3.toLowerCase().includes('model') && !output3.toLowerCase().includes('reload')) {
-      fail(`Reset response didn't mention reset/model/reload: "${output3.substring(0, 120)}"`);
+    if (!output3.toLowerCase().includes('reset') && !output3.toLowerCase().includes('reload') && !output3.toLowerCase().includes('cleared')) {
+      fail(`Reset response didn't mention reset/reload/cleared: "${output3.substring(0, 120)}"`);
     }
     pass(`Reset Model button works → "${output3.substring(0, 80).replace(/\n/g, ' ')}…"`);
 
-    // ── 8. File attach label is clickable (input exists behind it) ───────────
+    // ── 8. Time / date query ─────────────────────────────────────────────────
+    const before4 = await page.locator('#outputPane').innerText();
+    await page.locator('#queryBox').fill('what time is it');
+    await page.locator('#sendBtn').click();
+    console.log('  Waiting for /agent response (query: "what time is it")...');
+    await waitForOutputChange(page, before4, 10000);
+    const output4 = await page.locator('#outputPane').innerText();
+    if (!output4.match(/\d{2}:\d{2}:\d{2}/)) fail(`Time response missing HH:MM:SS pattern: "${output4.substring(0, 120)}"`);
+    pass(`Time query works → "${output4.replace(/\s+/g,' ').trim().substring(0, 80)}…"`);
+
+    // ── 9. Dashboard query ───────────────────────────────────────────────────
+    const before5 = await page.locator('#outputPane').innerText();
+    await page.locator('#queryBox').fill('show me the dashboard');
+    await page.locator('#sendBtn').click();
+    console.log('  Waiting for /agent response (query: "show me the dashboard")...');
+    await waitForOutputChange(page, before5, 10000);
+    const output5 = await page.locator('#outputPane').innerText();
+    if (!output5.toLowerCase().includes('heap') && !output5.toLowerCase().includes('memory')) {
+      fail(`Dashboard response missing heap/memory: "${output5.substring(0, 120)}"`);
+    }
+    pass(`Dashboard query works → "${output5.replace(/\s+/g,' ').trim().substring(0, 80)}…"`);
+
+    // ── 10. Camera feed query ────────────────────────────────────────────────
+    const before6 = await page.locator('#outputPane').innerHTML();
+    await page.locator('#queryBox').fill('show me the feed from child1');
+    await page.locator('#sendBtn').click();
+    console.log('  Waiting for /agent response (query: "show me the feed from child1")...');
+    await page.waitForFunction(
+      () => document.getElementById('outputPane')?.innerHTML?.includes('192.168.2.157'),
+      null, { timeout: 10000 }
+    );
+    const hasImg = await page.locator('#outputPane img').count();
+    if (hasImg === 0) fail('Camera response missing <img> element');
+    pass(`Camera feed query works → <img> rendered pointing at 192.168.2.157`);
+
+    // ── 11. File attach label is clickable (input exists behind it) ──────────
     const uploadInput = page.locator('#uploadInput');
     const inputType   = await uploadInput.getAttribute('type');
     const inputMulti  = await uploadInput.getAttribute('multiple');
@@ -120,7 +164,7 @@ async function run() {
     if (inputMulti === null) fail('Upload input missing "multiple" attribute');
     pass('file upload input present, type=file, multiple');
 
-    // ── 9. Screenshot ────────────────────────────────────────────────────────
+    // ── 12. Screenshot ───────────────────────────────────────────────────────
     await page.screenshot({ path: SCREENSHOT, fullPage: false });
     pass(`screenshot saved → ${SCREENSHOT}`);
 
