@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "description": "Intent routing rules for POST /agent (BOB Console). Add or edit intents here — no code changes needed. The loader re-reads this file every 30 seconds so changes take effect without a restart.",
+  "intents": [
+    {
+      "id": "topology",
+      "description": "Show the network node hierarchy as an indented tree",
+      "patterns": [
+        "\\b(show|display|get)\\b.*\\b(topology|tree|hierarchy|structure)\\b",
+        "\\b(topology|tree|hierarchy)\\b.*(show|display|network)\\b",
+        "show.*network.*tree",
+        "show.*node.*tree",
+        "network structure"
+      ],
+      "flags": "i",
+      "api": "/api/topology",
+      "formatter": "topology"
+    },
+    {
+      "id": "esp-devices",
+      "description": "Show only ESP32 / ESP8266 edge devices",
+      "patterns": [
+        "\\besp32\\b",
+        "\\besp8266\\b",
+        "\\b(edge|iot|microcontroller)\\b.*(device|node)",
+        "\\b(device|node).*(esp|edge|iot|microcontroller)",
+        "list.*esp",
+        "show.*esp"
+      ],
+      "flags": "i",
+      "api": "/api/nodes",
+      "formatter": "esp-nodes"
+    },
+    {
+      "id": "all-nodes",
+      "description": "Show all nodes registered on the network",
+      "patterns": [
+        "\\b(show|list|get|display|what|all)\\b.*\\bnodes?\\b",
+        "\\bnodes?\\b.*(network|online|available|show|list)",
+        "\\bhow many nodes\\b",
+        "\\bnetwork nodes?\\b",
+        "what.*nodes",
+        "nodes.*available"
+      ],
+      "flags": "i",
+      "api": "/api/ollama/nodes",
+      "formatter": "nodes"
+    },
+    {
+      "id": "services",
+      "description": "Show all services available across the network",
+      "patterns": [
+        "\\b(show|list|get|display|what|all)\\b.*\\bservices?\\b",
+        "\\bservices?\\b.*(network|online|available|show|list)",
+        "\\bwhat services\\b",
+        "what.*running",
+        "available services"
+      ],
+      "flags": "i",
+      "api": "/api/ollama/services",
+      "formatter": "services"
+    }
+  ]
+}

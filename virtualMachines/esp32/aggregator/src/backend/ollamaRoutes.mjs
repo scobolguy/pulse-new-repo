@@ -4,6 +4,7 @@ import http from 'http';
 import multer from 'multer';
 import { reloadOllamaContext, getOllamaWarmthStatus, ollamaGenerate } from './ollamaService.mjs';
 import { matchPascalExecuteRoute, matchPrecomputedRoute, detectQueryTypes } from './queryRouteLoader.mjs';
+import { matchAgentIntent } from './agentRouteLoader.mjs';
 
 const SLOW_QUERY_THRESHOLD = 60000; // 60 seconds
 const SLOW_QUERY_LOG_FILE = path.resolve('./logs/slow-queries.jsonl');
@@ -2685,22 +2686,126 @@ User request: "${query}"`;
    * Special messages:
    *   __RESET_MODEL__ – clears the response cache and reloads the Ollama context.
    *
+   * Intent dispatch is driven by data/agent-routes.json — add intents there,
+   * not here. The formatters below are keyed by the "formatter" field in that file.
+   *
    * Returns: { output: string }
    */
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
+  // ── Live API helper ──────────────────────────────────────────────────────────
+  const fetchLocalApi = (apiPath) => new Promise((resolve) => {
+    const req = http.get(`http://127.0.0.1:4000${apiPath}`, { timeout: 5000 }, (apiRes) => {
+      let raw = '';
+      apiRes.on('data', chunk => { raw += chunk; });
+      apiRes.on('end', () => { try { resolve(JSON.parse(raw)); } catch { resolve(null); } });
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+  });
+
+  // ── Formatters (keyed by the "formatter" field in agent-routes.json) ─────────
+  const FORMATTERS = {
+
+    nodes(data) {
+      const nodes = data?.nodes ?? (Array.isArray(data) ? data : []);
+      const rows = nodes.map(n => {
+        const statusColor = n.status === 'ok' || n.status === 'available' ? '#2da44e' : '#cf222e';
+        const services = (n.services || []).join(', ') || '—';
+        return `<tr>
+          <td style="padding:6px 10px;font-weight:500">${n.name || n.nodeName || n.nodeId}</td>
+          <td style="padding:6px 10px;font-family:monospace">${n.ip}</td>
+          <td style="padding:6px 10px">${n.type || n.hardware || '—'}</td>
+          <td style="padding:6px 10px"><span style="color:${statusColor};font-weight:600">${n.status}</span></td>
+          <td style="padding:6px 10px;color:#57606a;font-size:12px">${services}</td>
+        </tr>`;
+      }).join('');
+      return `<div style="font-family:-apple-system,'Segoe UI',sans-serif">
+        <p style="margin:0 0 8px;font-size:13px;color:#57606a">${nodes.length} node${nodes.length !== 1 ? 's' : ''} on the network</p>
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead><tr style="background:#f7f8fa;text-align:left">
+            <th style="padding:6px 10px;border-bottom:1px solid #e5e7eb">Name</th>
+            <th style="padding:6px 10px;border-bottom:1px solid #e5e7eb">IP</th>
+            <th style="padding:6px 10px;border-bottom:1px solid #e5e7eb">Hardware</th>
+            <th style="padding:6px 10px;border-bottom:1px solid #e5e7eb">Status</th>
+            <th style="padding:6px 10px;border-bottom:1px solid #e5e7eb">Services</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+    },
+
+    'esp-nodes'(data) {
+      const all = Array.isArray(data) ? data : [];
+      const esp = all
+        .filter(n => /esp/i.test(n.hardware || n.kind || ''))
+        .map(n => ({
+          name: n.nodeName, ip: n.ip, type: n.hardware, status: n.status,
+          services: (n.details?.services || []).map(s => typeof s === 'string' ? s : s.name)
+        }));
+      return esp.length ? FORMATTERS.nodes({ nodes: esp }) : '<p style="font-family:-apple-system,sans-serif;color:#57606a">No ESP devices found.</p>';
+    },
+
+    topology(data) {
+      const nodeMap = new Map((data.nodes || []).map(n => [n.nodeId, n]));
+      const childrenOf = new Map();
+      for (const n of (data.nodes || [])) {
+        if (n.parentNodeId) {
+          if (!childrenOf.has(n.parentNodeId)) childrenOf.set(n.parentNodeId, []);
+          childrenOf.get(n.parentNodeId).push(n.nodeId);
+        }
+      }
+      const renderNode = (nodeId, depth) => {
+        const n = nodeMap.get(nodeId);
+        if (!n) return '';
+        const indent = depth * 20;
+        const badge = n.isClusterController ? ' <span style="font-size:10px;background:#3b82d4;color:#fff;border-radius:3px;padding:1px 5px">controller</span>' : '';
+        let html = `<div style="padding:4px 0 4px ${indent}px;font-size:13px">
+          <span style="color:#57606a;margin-right:6px">${depth > 0 ? '└─' : '●'}</span>
+          <strong>${n.nodeName}</strong> <span style="font-family:monospace;color:#57606a">${n.ip}</span>
+          <span style="color:#57606a;font-size:11px;margin-left:6px">${n.hardware || ''}</span>${badge}
+        </div>`;
+        for (const cid of (childrenOf.get(nodeId) || [])) html += renderNode(cid, depth + 1);
+        return html;
+      };
+      const roots = data.rootNodes || [];
+      return `<div style="font-family:-apple-system,'Segoe UI',sans-serif">
+        <p style="margin:0 0 8px;font-size:13px;color:#57606a">${data.totalNodes || 0} nodes · ${roots.length} root${roots.length !== 1 ? 's' : ''}</p>
+        <div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;background:#fff">${roots.map(r => renderNode(r, 0)).join('')}</div>
+      </div>`;
+    },
+
+    services(data) {
+      const rows = (data.services || []).map(s =>
+        `<tr>
+          <td style="padding:6px 10px;font-weight:500">${s.name}</td>
+          <td style="padding:6px 10px">${s.providers.join(', ')}</td>
+          <td style="padding:6px 10px;text-align:center">${s.providerCount}</td>
+        </tr>`
+      ).join('');
+      return `<div style="font-family:-apple-system,'Segoe UI',sans-serif">
+        <p style="margin:0 0 8px;font-size:13px;color:#57606a">${data.count || 0} services across the network</p>
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead><tr style="background:#f7f8fa;text-align:left">
+            <th style="padding:6px 10px;border-bottom:1px solid #e5e7eb">Service</th>
+            <th style="padding:6px 10px;border-bottom:1px solid #e5e7eb">Providers</th>
+            <th style="padding:6px 10px;border-bottom:1px solid #e5e7eb;text-align:center">Count</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+    },
+  };
+
   app.post('/agent', upload.array('files'), async (req, res) => {
     try {
-      // Support both multipart (FormData) and plain JSON bodies
       const message = String(req.body?.message || '').trim();
+      if (!message) return res.status(400).json({ output: 'No message provided.' });
 
-      if (!message) {
-        return res.status(400).json({ output: 'No message provided.' });
-      }
+      console.log(`[AGENT] message="${message.substring(0, 80)}"`);
 
-      // ── Reset command ────────────────────────────────────────────────────────
+      // ── Reset ──────────────────────────────────────────────────────────────
       if (message === '__RESET_MODEL__') {
-        console.log('[AGENT] Reset model requested');
         responseCache.clear();
         const reloadResult = await reloadOllamaContext();
         return res.json({
@@ -2710,15 +2815,20 @@ User request: "${query}"`;
         });
       }
 
-      // ── Delegate to the existing ask handler ─────────────────────────────────
-      // Synthesise a minimal req/res pair so we can reuse askHandler directly.
-      const syntheticReq = {
-        body: { query: message },
-        // Expose uploaded file metadata as context (not processed by askHandler but
-        // available for future extension)
-        files: req.files || [],
-      };
+      // ── Intent dispatch (driven by data/agent-routes.json) ─────────────────
+      const intent = await matchAgentIntent(message);
+      if (intent) {
+        console.log(`[AGENT] intent="${intent.id}" api="${intent.api}" formatter="${intent.formatter}"`);
+        const data = await fetchLocalApi(intent.api);
+        const formatter = FORMATTERS[intent.formatter];
+        if (data && formatter) {
+          return res.json({ output: formatter(data) });
+        }
+        console.warn(`[AGENT] intent "${intent.id}" matched but api/formatter failed — falling through`);
+      }
 
+      // ── Fall through to Ollama askHandler for everything else ──────────────
+      const syntheticReq = { body: { query: message }, files: req.files || [] };
       let settled = false;
       await new Promise((resolve) => {
         const syntheticRes = {
@@ -2726,24 +2836,19 @@ User request: "${query}"`;
           json(data) {
             if (settled) return;
             settled = true;
-            const answer = data?.answer || data?.output || JSON.stringify(data, null, 2);
-            res.json({ output: answer });
+            res.json({ output: data?.answer || data?.output || JSON.stringify(data, null, 2) });
             resolve();
           }
         };
-        // askHandler is async; wrap in Promise.resolve so we can await it
         Promise.resolve(askHandler(syntheticReq, syntheticRes)).catch((err) => {
-          if (!settled) {
-            settled = true;
-            res.json({ output: `Error: ${err.message || String(err)}` });
-          }
+          if (!settled) { settled = true; res.json({ output: `Error: ${err.message || String(err)}` }); }
           resolve();
         });
       });
+
     } catch (e) {
-      const msg = e?.message || String(e);
-      console.error('[AGENT] Unhandled error:', msg);
-      res.status(500).json({ output: `Server error: ${msg}` });
+      console.error('[AGENT] Unhandled error:', e?.message || String(e));
+      res.status(500).json({ output: `Server error: ${e?.message || String(e)}` });
     }
   });
 
