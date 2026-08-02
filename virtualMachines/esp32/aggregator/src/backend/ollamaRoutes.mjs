@@ -4878,9 +4878,25 @@ timerId = setInterval(refresh, intervalMs);
     }
   });
 
-  app.post('/api/agent/corrections/run', express.json(), (req, res) => {
+  app.post('/api/agent/corrections/run', express.json(), async (req, res) => {
     try {
-      const result = runPendingNliCorrections();
+      const result = await runPendingNliCorrections({
+        enqueueEscalation: async (packet) => {
+          const backendPort = Number(process.env.HTTP_PORT || process.env.PORT || 4000);
+          const response = await fetch(
+            `http://127.0.0.1:${backendPort}/api/queue/nli.corrections.escalation/enqueue`,
+            {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ message: packet, sourceService: 'nli-correction-service' }),
+            },
+          );
+          if (!response.ok) {
+            const details = await response.text().catch(() => '');
+            throw new Error(`Escalation queue returned ${response.status}: ${details}`);
+          }
+        },
+      });
       rebuildSystemPrompt();
       res.json({ ok: true, ...result });
     } catch (e) {

@@ -49,6 +49,7 @@ async function main() {
   await fs.rm(outputDir, { recursive: true, force: true });
   await fs.mkdir(outputDir, { recursive: true });
   await generateForGrammar('Pascalish.g4');
+  await generateForGrammar('MAPL.g4');
   await generateForGrammar('PascalishRouterMapper.g4');
   await generateForGrammar('WorkflowDsl.g4');
   await generateForGrammar('Cobolish85.g4');

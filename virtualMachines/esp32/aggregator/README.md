@@ -86,6 +86,30 @@ after a crash, and recycles it after repeated health-check failures. Set
 The check and restart timing can be changed with `PULSE_MCP_CHECK_INTERVAL_MS`
 and `PULSE_MCP_RESTART_DELAY_MS`.
 
+### Windows MCP Service
+
+To run MCP independently at boot, first add these values to `.env.local` so
+the backend and frontend do not launch competing MCP processes:
+
+```dotenv
+PULSE_MCP_AUTOSTART=false
+FRONTEND_FSM_MCP_AUTOSTART=false
+```
+
+Then install the auto-starting `PulseMcpService` from an elevated PowerShell:
+
+```powershell
+npm run service:mcp:install
+Invoke-RestMethod http://127.0.0.1:4011/health
+```
+
+The service uses the current Node executable, loads `.env.local` when present,
+and restarts after unexpected exits. Remove it from an elevated PowerShell with:
+
+```powershell
+npm run service:mcp:uninstall
+```
+
 The default `t490-fast` profile uses `phi3:latest`, a 1024-token context, an
 8-thread CPU setting, and a 64-token response limit. The model stays resident
 for 30 minutes to avoid repeated load latency. This is sized for the T490's

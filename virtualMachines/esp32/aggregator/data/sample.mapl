@@ -1,0 +1,6 @@
+map CustomerToAccount from Customer to Account;
+  account.name := customer.name;
+  account.code := upper(customer.code);
+  account.country := customer.country default "UNKNOWN";
+  validate customer.id <> "";
+end;

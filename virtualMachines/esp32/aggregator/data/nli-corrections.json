@@ -19,6 +19,24 @@
       "recordedAt": "2026-08-02T14:03:03.278Z",
       "enabled": true,
       "appliedAt": "2026-08-02T14:04:35.532Z"
+    },
+    {
+      "interactionId": "1785682736046-g6xrxu",
+      "message": "Show me all nofes",
+      "expected": "I want to see all of the nodes on the he network",
+      "previousIntentId": "ollama-fallback",
+      "recordedAt": "2026-08-02T15:00:07.034Z",
+      "enabled": true,
+      "appliedAt": "2026-08-02T15:00:17.921Z"
+    },
+    {
+      "interactionId": "1785687157629-2o8vmj",
+      "message": "sow me all devices",
+      "expected": "'as an excel spreadsheet' is optional",
+      "previousIntentId": "ollama-fallback",
+      "recordedAt": "2026-08-02T16:13:46.910Z",
+      "enabled": true,
+      "appliedAt": "2026-08-02T16:13:51.535Z"
     }
   ]
 }

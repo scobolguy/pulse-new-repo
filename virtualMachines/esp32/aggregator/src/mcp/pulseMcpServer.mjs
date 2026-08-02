@@ -138,12 +138,35 @@ export function createPulseMcpApp() {
   return app;
 }
 
+export function startPulseMcpService({ host = MCP_HOST, port = MCP_PORT } = {}) {
+  const app = createPulseMcpApp();
+  const httpServer = app.listen(port, host, () => {
+    const address = httpServer.address();
+    const listeningPort = typeof address === 'object' && address ? address.port : port;
+    console.log(`[MCP] Pulse local MCP listening at http://${host}:${listeningPort}/mcp`);
+  });
+  return httpServer;
+}
+
 const isMain = process.argv[1]
   && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (isMain) {
-  const app = createPulseMcpApp();
-  app.listen(MCP_PORT, MCP_HOST, () => {
-    console.log(`[MCP] Pulse local MCP listening at http://${MCP_HOST}:${MCP_PORT}/mcp`);
-  });
+  const httpServer = startPulseMcpService();
+  let shuttingDown = false;
+
+  const shutdown = (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[MCP] ${signal} received; stopping.`);
+    httpServer.close((error) => {
+      if (error) {
+        console.error('[MCP] Shutdown failed:', error?.stack || error);
+        process.exitCode = 1;
+      }
+    });
+  };
+
+  process.once('SIGINT', () => shutdown('SIGINT'));
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
 }

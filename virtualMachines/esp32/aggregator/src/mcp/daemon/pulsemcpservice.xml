@@ -1,0 +1,31 @@
+<service>
+	<id>pulsemcpservice.exe</id>
+	<name>PulseMcpService</name>
+	<description>Pulse local Model Context Protocol HTTP service</description>
+	<executable>C:\Program Files\nodejs\node.exe</executable>
+	<argument>--env-file-if-exists=C:\dev\pulse-new-repo\virtualMachines\esp32\aggregator\.env.local</argument>
+	<argument>C:\dev\pulse-new-repo\virtualMachines\esp32\aggregator\node_modules\node-windows\lib\wrapper.js</argument>
+	<argument>--file</argument>
+	<argument>C:\dev\pulse-new-repo\virtualMachines\esp32\aggregator\src\mcp\pulseMcpServer.mjs</argument>
+	<argument>--scriptoptions=</argument>
+	<argument>--log</argument>
+	<argument>PulseMcpService wrapper</argument>
+	<argument>--grow</argument>
+	<argument>0.5</argument>
+	<argument>--wait</argument>
+	<argument>2</argument>
+	<argument>--maxrestarts</argument>
+	<argument>10</argument>
+	<argument>--abortonerror</argument>
+	<argument>n</argument>
+	<argument>--stopparentfirst</argument>
+	<argument>undefined</argument>
+	<logmode>rotate</logmode>
+	<stoptimeout>30sec</stoptimeout>
+	<serviceaccount>
+		<domain>NEPTUNE</domain>
+		<user>LocalSystem</user>
+		<password></password>
+	</serviceaccount>
+	<workingdirectory>C:\dev\pulse-new-repo\virtualMachines\esp32\aggregator</workingdirectory>
+</service>

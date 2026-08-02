@@ -6,6 +6,9 @@ import { spawn, execFileSync } from 'node:child_process';
 const BACKEND_URL = process.env.FRONTEND_FSM_BACKEND_URL || 'http://127.0.0.1:4000/api/authz/me?userId=system-admin';
 const MCP_URL = process.env.FRONTEND_FSM_MCP_URL || 'http://127.0.0.1:4011/health';
 const MCP_CMD = process.env.FRONTEND_FSM_MCP_CMD || 'node --env-file=.env.local src/mcp/pulseMcpServer.mjs';
+const MCP_AUTOSTART = !['0', 'false', 'no', 'off'].includes(
+  String(process.env.FRONTEND_FSM_MCP_AUTOSTART || 'true').trim().toLowerCase()
+);
 const FRONTEND_URL = process.env.FRONTEND_FSM_FRONTEND_URL || 'http://127.0.0.1:5173/';
 const FRONTEND_CMD = process.env.FRONTEND_FSM_FRONTEND_CMD || 'node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173 --strictPort --force';
 const FRONTEND_PORT = Number(process.env.FRONTEND_FSM_FRONTEND_PORT || new URL(FRONTEND_URL).port || 5173);
@@ -313,6 +316,9 @@ async function run() {
           }
         });
         await appendLog('state', { state, mcpUrl: MCP_URL, mcpOk });
+        if (!mcpOk && !MCP_AUTOSTART) {
+          throw new Error(`MCP service dependency is not ready at ${MCP_URL}`);
+        }
         state = mcpOk ? STATES.START_FRONTEND : STATES.START_MCP;
         continue;
       }

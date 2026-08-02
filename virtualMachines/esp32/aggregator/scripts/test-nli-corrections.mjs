@@ -29,8 +29,12 @@ try {
   assert.equal(status.pendingCount, 1);
   assert.equal(status.pending[0].interactionId, 'new-1');
 
-  const result = service.runPendingNliCorrections();
+  const queuedEscalations = [];
+  const result = await service.runPendingNliCorrections({
+    enqueueEscalation: async packet => queuedEscalations.push(packet),
+  });
   assert.equal(result.appliedCount, 1);
+  assert.equal(result.escalatedCount, 0);
   status = service.getNliCorrectionStatus();
   assert.equal(status.pendingCount, 0);
 
@@ -38,7 +42,35 @@ try {
   assert.equal(promoted.corrections.length, 1);
   assert.equal(promoted.corrections[0].expected, 'use the compact view');
 
-  console.log('[nli-corrections] PASS: baseline, deduplication, promotion, and applied state');
+  fs.appendFileSync(interactionLogPath, [
+    JSON.stringify({
+      type: 'interaction',
+      interactionId: 'new-2',
+      message: '  SHOW the new   view ',
+      intentId: 'ollama-fallback',
+      recordedAt: '2026-08-03T20:02:00.000Z',
+    }),
+    JSON.stringify({
+      type: 'feedback',
+      interactionId: 'new-2',
+      rating: 'bad',
+      expected: 'the local correction still did not work',
+      recordedAt: '2026-08-03T20:03:00.000Z',
+    }),
+  ].join('\n') + '\n', 'utf8');
+
+  const retryResult = await service.runPendingNliCorrections({
+    enqueueEscalation: async packet => queuedEscalations.push(packet),
+  });
+  assert.equal(retryResult.appliedCount, 0);
+  assert.equal(retryResult.escalatedCount, 1);
+  assert.equal(queuedEscalations.length, 1);
+  assert.equal(queuedEscalations[0].queue, 'nli.corrections.escalation');
+  assert.equal(queuedEscalations[0].reason, 'repeat-failure-after-local-correction');
+  assert.equal(queuedEscalations[0].problem.interactionId, 'new-2');
+  assert.equal(service.getNliCorrectionStatus().pendingCount, 0);
+
+  console.log('[nli-corrections] PASS: local promotion and repeated-failure escalation');
 } finally {
   fs.rmSync(temporaryDirectory, { recursive: true, force: true });
 }

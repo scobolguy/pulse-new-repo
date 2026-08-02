@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "generatedAt": "2026-08-02T21:14:09.284Z",
+  "serviceId": "mapl-CustomerToAccount",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "mapl-CustomerToAccount",
+    "refreshMs": null
+  },
+  "executionModel": "mapl-op-map",
+  "sourceLanguage": "mapl",
+  "globals": [
+    "mappedPayload"
+  ],
+  "entryMapId": "CustomerToAccount",
+  "entries": [
+    {
+      "kind": "mapper",
+      "id": "CustomerToAccount",
+      "sourceTypeId": "Customer",
+      "targetTypeId": "Account",
+      "items": [
+        {
+          "sourcePath": "customer.name",
+          "targetPath": "account.name",
+          "conversionRule": "OUTPUT := SRC;"
+        },
+        {
+          "sourcePath": "customer.code",
+          "targetPath": "account.code",
+          "conversionRule": "OUTPUT := upper(SRC);"
+        },
+        {
+          "sourcePath": "customer.country",
+          "targetPath": "account.country",
+          "conversionRule": "OUTPUT := SRC;",
+          "defaultExpression": "\"UNKNOWN\""
+        }
+      ],
+      "maplIr": [
+        {
+          "type": "Assign",
+          "targetPath": "account.name",
+          "sourcePath": "customer.name"
+        },
+        {
+          "type": "FunctionAssign",
+          "targetPath": "account.code",
+          "function": {
+            "type": "FunctionCall",
+            "name": "upper",
+            "arguments": [
+              "customer.code"
+            ]
+          }
+        },
+        {
+          "type": "AssignDefault",
+          "targetPath": "account.country",
+          "sourcePath": "customer.country",
+          "defaultExpression": "\"UNKNOWN\""
+        },
+        {
+          "type": "Validate",
+          "expression": "customer.id<>\"\""
+        }
+      ]
+    }
+  ],
+  "compatibility": [
+    {
+      "mapId": "CustomerToAccount",
+      "executableItems": 3,
+      "irOnly": [
+        {
+          "type": "AssignDefault",
+          "reason": "Current OP_MAP runtime does not apply default expressions."
+        },
+        {
+          "type": "Validate",
+          "reason": "Construct is preserved in MAPL IR but is not executable by the current OP_MAP runtime."
+        }
+      ]
+    }
+  ],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "15acd23b4016f4d5ea25ac5246501dd0994b376497695424c2105dbb8627c453",
+    "signedAt": "2026-08-02T21:14:09.286Z",
+    "pcodeLength": 93,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

@@ -435,6 +435,16 @@ async function run() {
         await appendLog('state', { state, subflow: 'Kill all back end processes', backendPort: BACKEND_PORT });
         const outcome = await runKillAllBackEndProcessesSubflow(BACKEND_PORT);
         await appendLog('subflow-complete', { subflow: 'Kill all back end processes', ...outcome });
+        const failedKills = outcome.results.filter((result) => !result.killed);
+        if (failedKills.length > 0) {
+          await appendFailureNote({
+            type: 'backend-stop-failed',
+            state,
+            port: BACKEND_PORT,
+            failures: failedKills
+          });
+          throw new Error(`Unable to stop existing backend process(es) on port ${BACKEND_PORT}`);
+        }
         state = STATES.SANITIZE_QUEUE_PERSISTENCE;
         continue;
       }
