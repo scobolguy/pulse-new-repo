@@ -1,16 +1,17 @@
 import fs from 'fs';
 import path from 'path';
 import http from 'http';
+import express from 'express';
 import multer from 'multer';
 import { reloadOllamaContext, getOllamaWarmthStatus, ollamaGenerate } from './ollamaService.mjs';
 import { matchPascalExecuteRoute, matchPrecomputedRoute, detectQueryTypes } from './queryRouteLoader.mjs';
 import { matchAgentIntent } from './agentRouteLoader.mjs';
 
 const SLOW_QUERY_THRESHOLD = 60000; // 60 seconds
-const SLOW_QUERY_LOG_FILE = path.resolve('./logs/slow-queries.jsonl');
+const SLOW_QUERY_LOG_FILE = path.resolve('./data/logs/slow-queries.jsonl');
 
 // Ensure logs directory exists
-const logsDir = path.resolve('./logs');
+const logsDir = path.resolve('./data/logs');
 if (!fs.existsSync(logsDir)) {
   fs.mkdirSync(logsDir, { recursive: true });
 }
@@ -2695,13 +2696,704 @@ User request: "${query}"`;
 
   // ── Live API helper ──────────────────────────────────────────────────────────
   const fetchLocalApi = (apiPath) => new Promise((resolve) => {
-    const req = http.get(`http://127.0.0.1:4000${apiPath}`, { timeout: 5000 }, (apiRes) => {
+    const opts = {
+      timeout: 5000,
+      headers: { 'x-user-id': OLLAMA_QUEUE_ACTION_USER_ID }
+    };
+    const req = http.get(`http://127.0.0.1:4000${apiPath}`, opts, (apiRes) => {
       let raw = '';
       apiRes.on('data', chunk => { raw += chunk; });
       apiRes.on('end', () => { try { resolve(JSON.parse(raw)); } catch { resolve(null); } });
     });
     req.on('error', () => resolve(null));
     req.on('timeout', () => { req.destroy(); resolve(null); });
+  });
+
+  // ── Agent summary endpoints (used by agent-routes.json api fields) ───────────
+
+  /**
+   * GET /api/agent/queue-summary
+   * Aggregates queue depths + maxLength (capacity) from all managers, gateway state, manager list.
+   * Merges maxLength from each manager's /api/queues/:managerId/config so capacity % is available.
+   */
+  app.get('/api/agent/queue-summary', async (req, res) => {
+    try {
+      const [queuesData, managersData, gatewaysData] = await Promise.all([
+        fetchLocalApi('/api/registry/queues'),
+        fetchLocalApi('/api/registry/queue-managers'),
+        fetchLocalApi('/api/gateways'),
+      ]);
+
+      const registryQueues = Array.isArray(queuesData?.queues) ? queuesData.queues : [];
+      const managers       = Array.isArray(managersData?.queueManagers) ? managersData.queueManagers : [];
+
+      // Collect every local manager id — from the registry plus well-known defaults.
+      const registryManagerIds = [...new Set(registryQueues.map(q => q.managerId).filter(Boolean))];
+      const localManagerIds    = managers.filter(m => m.local).map(m => m.managerId);
+      const allManagerIds      = [...new Set([...registryManagerIds, ...localManagerIds, 'qm-primary', 'qm-secondary'])];
+
+      // Fetch config from every manager in parallel to get the full queue list + maxLength.
+      const maxLengthByQueue = {};
+      const configQueuesByManager = {};
+      await Promise.all(allManagerIds.map(async (managerId) => {
+        try {
+          const cfg = await fetchLocalApi(`/api/queues/${encodeURIComponent(managerId)}/config`);
+          const queuesMap = cfg?.queues || {};
+          configQueuesByManager[managerId] = queuesMap;
+          for (const [queueName, queueCfg] of Object.entries(queuesMap)) {
+            const ml = Number(queueCfg?.maxLength || 0);
+            if (ml > 0 && !maxLengthByQueue[queueName]) {
+              maxLengthByQueue[queueName] = ml;
+            }
+          }
+        } catch { /* manager unreachable — skip */ }
+      }));
+
+      // Build a depth lookup from the registry.
+      const depthByQueue = {};
+      for (const q of registryQueues) {
+        depthByQueue[q.queueName] = Number(q.queueLength ?? 0);
+      }
+
+      // Union: start with registry entries, then add any config-only queues not already present.
+      const seenQueues = new Set(registryQueues.map(q => `${q.managerId}::${q.queueName}`));
+      const extraQueues = [];
+      for (const [managerId, queuesMap] of Object.entries(configQueuesByManager)) {
+        for (const queueName of Object.keys(queuesMap)) {
+          const key = `${managerId}::${queueName}`;
+          if (!seenQueues.has(key)) {
+            seenQueues.add(key);
+            extraQueues.push({ queueName, managerId, queueLength: 0 });
+          }
+        }
+      }
+
+      // Fetch live depths for config-only queues via their export endpoint.
+      await Promise.all(extraQueues.map(async (q) => {
+        try {
+          const exportData = await fetchLocalApi(`/api/queues/${encodeURIComponent(q.managerId)}/${encodeURIComponent(q.queueName)}/export`);
+          if (exportData && !exportData.error && Array.isArray(exportData.messages)) {
+            q.queueLength = exportData.messages.length;
+          }
+        } catch { /* unreachable — leave as 0 */ }
+      }));
+
+      const allRawQueues = [...registryQueues, ...extraQueues];
+
+      // Merge maxLength into every queue entry.
+      const queues = allRawQueues.map(q => ({
+        ...q,
+        maxLength: maxLengthByQueue[q.queueName] || maxLengthByQueue[q.queue] || 0,
+      }));
+
+      res.json({
+        queues,
+        managers,
+        gateways: (gatewaysData && typeof gatewaysData === 'object') ? gatewaysData : {},
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  /**
+   * GET /api/agent/librarian-summary
+   * Aggregates data types and schema catalog from the librarian service for the agent formatter.
+   */
+  app.get('/api/agent/librarian-summary', async (req, res) => {
+    try {
+      const [typesData, schemasData] = await Promise.all([
+        fetchLocalApi('/api/librarian/data-types'),
+        fetchLocalApi('/api/librarian/schemas'),
+      ]);
+      res.json({
+        types:   Array.isArray(typesData?.types)     ? typesData.types   : [],
+        schemas: Array.isArray(schemasData?.schemas) ? schemasData.schemas : [],
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  /**
+   * GET /api/agent/queue-item?manager=qm-primary&queue=swift.mt103.inbound&index=0
+   *
+   * Non-destructively reads one message from a local queue manager (peek by position).
+   * Runs three validation tiers against the queue's declared dataTypeIds and any
+   * matching schema in the librarian:
+   *   1. Structural shape  — does the message match the declared type at all?
+   *   2. XSD field presence — for XML/ISO payloads: are required elements present?
+   *   3. Enum conformance   — do constrained fields carry a value in the allowed set?
+   *
+   * Returns everything the queueItem formatter needs in one payload.
+   */
+  app.get('/api/agent/queue-item', async (req, res) => {
+    try {
+      const managerId  = String(req.query.manager || 'qm-primary').trim();
+      const queueName  = String(req.query.queue   || '').trim();
+      const itemIndex  = Math.max(0, parseInt(req.query.index || '0', 10) || 0);
+
+      if (!queueName) return res.status(400).json({ error: 'queue parameter is required' });
+
+      // ── 1. Fetch the message from the local queue manager via its config API ──
+      const configData = await fetchLocalApi(`/api/queues/${encodeURIComponent(managerId)}/config`);
+      const queueCfg   = configData?.queues?.[queueName] || null;
+      if (!queueCfg) {
+        // Try the export endpoint as fallback — it includes messages for local managers
+        const exportData = await fetchLocalApi(`/api/queues/${encodeURIComponent(managerId)}/${encodeURIComponent(queueName)}/export`);
+        if (!exportData || exportData.error) {
+          return res.status(404).json({ error: `Queue ${queueName} not found on manager ${managerId}` });
+        }
+        const msgs = Array.isArray(exportData.messages) ? exportData.messages : [];
+        if (msgs.length === 0) return res.json({ empty: true, queueName, managerId, itemIndex, dataTypeIds: [], validations: [], schema: null, item: null });
+        const item = msgs[Math.min(itemIndex, msgs.length - 1)];
+        return res.json({ empty: false, queueName, managerId, itemIndex, queueLength: msgs.length,
+          dataTypeIds: [], validations: [], schema: null, item });
+      }
+
+      // Use the per-queue export to get actual messages non-destructively
+      const exportData = await fetchLocalApi(`/api/queues/${encodeURIComponent(managerId)}/${encodeURIComponent(queueName)}/export`);
+      const msgs = Array.isArray(exportData?.messages) ? exportData.messages : [];
+
+      if (msgs.length === 0) {
+        return res.json({ empty: true, queueName, managerId, itemIndex, queueLength: 0,
+          dataTypeIds: queueCfg.dataTypeIds || [queueCfg.dataTypeId || 'text-string'],
+          validations: [], schema: null, item: null });
+      }
+
+      const item       = msgs[Math.min(itemIndex, msgs.length - 1)];
+      const dataTypeIds = Array.isArray(queueCfg.dataTypeIds) && queueCfg.dataTypeIds.length
+        ? queueCfg.dataTypeIds
+        : (queueCfg.dataTypeId ? [queueCfg.dataTypeId] : ['text-string']);
+      const primaryType = dataTypeIds[0];
+
+      // ── 2. Tier-1: structural shape check ─────────────────────────────────
+      const message    = item.message;
+      const validations = [];
+
+      const shape      = !message ? 'null'
+        : typeof message === 'string'     ? 'string'
+        : Array.isArray(message)          ? 'array'
+        : typeof message === 'object' && message.Document  ? 'iso20022-document'
+        : typeof message === 'object' && message.finEnvelope ? 'swift-fin-envelope'
+        : typeof message === 'object'     ? 'object'
+        : typeof message;
+
+      function tier1Check(typeId, msg) {
+        const t = String(typeId || '').toLowerCase();
+        if (!t || t === 'text-string') return { valid: true, tier: 'structural', typeId };
+        if (t === 'pacs') {
+          const ok = msg && typeof msg === 'object' && msg.Document && typeof msg.Document === 'object';
+          return { valid: ok, tier: 'structural', typeId,
+            reason: ok ? null : 'Expected ISO 20022 object with top-level Document key' };
+        }
+        if (t === 'swift-mt103') {
+          const ok = (typeof msg === 'string' && msg.toUpperCase().startsWith('MT103'))
+            || (msg && typeof msg === 'object' && msg.finEnvelope?.block4?.fields);
+          return { valid: ok, tier: 'structural', typeId,
+            reason: ok ? null : 'Expected MT103 raw string or parsed finEnvelope.block4.fields object' };
+        }
+        if (t === 'swift-mt202' || t === 'swift-mt202cov') {
+          const prefix = t === 'swift-mt202cov' ? 'MT202COV' : 'MT202';
+          const ok = (typeof msg === 'string' && msg.toUpperCase().startsWith(prefix))
+            || (msg && typeof msg === 'object' && msg.finEnvelope?.block4?.fields);
+          return { valid: ok, tier: 'structural', typeId,
+            reason: ok ? null : `Expected ${prefix} string or parsed finEnvelope.block4.fields object` };
+        }
+        return { valid: true, tier: 'structural', typeId };
+      }
+
+      for (const typeId of dataTypeIds) validations.push(tier1Check(typeId, message));
+
+      // ── 3. Fetch matching schema from librarian (best-effort) ─────────────
+      const schemasData   = await fetchLocalApi('/api/librarian/schemas');
+      const allSchemas    = Array.isArray(schemasData?.schemas) ? schemasData.schemas : [];
+
+      // Match on typeId — a schema whose typeId prefix matches primaryType (e.g. 'pacs' matches pacs.002.001.12)
+      const normalPrimary = primaryType.toLowerCase().replace(/^swift-/, '');
+      const matchedSchema = allSchemas.find(s => {
+        const tid = String(s.typeId || '').toLowerCase();
+        return tid === normalPrimary || tid.startsWith(normalPrimary + '.') || normalPrimary.startsWith(tid);
+      }) || null;
+
+      // ── 4. Tier-2: XSD / JSON field-presence check using librarian tree ──
+      if (matchedSchema?.structure && typeof message === 'object' && message !== null) {
+        const tree = matchedSchema.structure;
+
+        // Flatten required leaf/branch names from the schema tree (1 level deep for brevity)
+        function collectRequired(node, depth = 0) {
+          const found = [];
+          if (!node || !Array.isArray(node.children)) return found;
+          for (const child of node.children) {
+            if (child.required !== false) {  // required is true when minOccurs > 0 or unset
+              found.push({ name: child.name, required: child.required !== false, valueType: child.valueType || null,
+                isEnum: child.isEnum || false, enumValues: child.enumValues || [], depth });
+            }
+            if (Array.isArray(child.children) && child.children.length > 0 && depth < 2) {
+              found.push(...collectRequired(child, depth + 1));
+            }
+          }
+          return found;
+        }
+
+        // Flatten the message object to a set of present key names (recursive, max depth 4)
+        function collectKeys(obj, depth = 0) {
+          const keys = new Set();
+          if (!obj || typeof obj !== 'object' || depth > 4) return keys;
+          for (const [k, v] of Object.entries(obj)) {
+            keys.add(k.toLowerCase());
+            for (const sk of collectKeys(v, depth + 1)) keys.add(sk);
+          }
+          return keys;
+        }
+
+        const requiredFields = collectRequired(tree);
+        const presentKeys    = collectKeys(message);
+
+        for (const field of requiredFields.slice(0, 30)) {  // cap at 30 to keep response manageable
+          const present = presentKeys.has(field.name.toLowerCase());
+          const v = { tier: 'field-presence', field: field.name, required: field.required,
+            present, valid: !field.required || present,
+            reason: (!field.required || present) ? null : `Required field "${field.name}" not found in message` };
+
+          // Tier-3: enum check if the field is present and has enumValues
+          if (present && field.isEnum && field.enumValues.length > 0) {
+            // Find the value in the message (shallow search)
+            function findValue(obj, key, d = 0) {
+              if (!obj || typeof obj !== 'object' || d > 4) return undefined;
+              const lk = key.toLowerCase();
+              for (const [k, val] of Object.entries(obj)) {
+                if (k.toLowerCase() === lk) return val;
+                const found = findValue(val, key, d + 1);
+                if (found !== undefined) return found;
+              }
+              return undefined;
+            }
+            const val = findValue(message, field.name);
+            if (val !== undefined && val !== null) {
+              const valStr = String(val);
+              const enumOk = field.enumValues.includes(valStr);
+              v.enumCheck = { value: valStr, allowedValues: field.enumValues.slice(0, 20), valid: enumOk };
+              if (!enumOk) {
+                v.valid = false;
+                v.reason = `Field "${field.name}" value "${valStr}" is not in allowed enum [${field.enumValues.slice(0,5).join(', ')}${field.enumValues.length > 5 ? '…' : ''}]`;
+              }
+            }
+          }
+          validations.push(v);
+        }
+      }
+
+      // ── 5. Try to parse XML string payloads so the formatter can render them ─
+      let parsedXml = null;
+      if (typeof message === 'string' && message.trimStart().startsWith('<')) {
+        try {
+          const { XMLParser } = await import('fast-xml-parser');
+          const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@', parseTagValue: true, trimValues: true });
+          parsedXml = parser.parse(message);
+        } catch { /* leave parsedXml null */ }
+      }
+
+      res.json({
+        empty: false,
+        queueName,
+        managerId,
+        itemIndex,
+        queueLength: msgs.length,
+        dataTypeIds,
+        shape,
+        item,
+        parsedXml,
+        schema: matchedSchema ? {
+          path: matchedSchema.path,
+          typeId: matchedSchema.typeId,
+          type: matchedSchema.type,
+          lifecycle: matchedSchema.lifecycle,
+        } : null,
+        validations,
+      });
+
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  /**
+   * GET /api/agent/queue-query
+   *
+   * SQL-like SELECT on queue messages (non-destructive peek).
+   *
+   * Query parameters:
+   *   queue    – queue name (required)
+   *   manager  – queue manager id (default: qm-primary)
+   *   select   – comma-separated dot-path field names to project from each message,
+   *              e.g. "messageId,sourceService,message.Amount,messageEnvelope.dataTypeId"
+   *              Use * or omit to project all top-level fields.
+   *   where    – optional filter expression: <dot-path><op><value>
+   *              Supported operators: =, !=, >, <, >=, <=, ~= (case-insensitive regex contains)
+   *              e.g. "sourceService=router" or "message.Currency=USD"
+   *   limit    – max rows to return (default 50, max 500)
+   *   offset   – skip first N rows (default 0)
+   *
+   * Returns:
+   *   { queue, manager, totalMessages, matchedCount, columns: string[], rows: object[] }
+   */
+  app.get('/api/agent/queue-query', async (req, res) => {
+    try {
+      const managerId = String(req.query.manager || 'qm-primary').trim();
+      const queueName = String(req.query.queue   || '').trim();
+      const selectRaw = String(req.query.select  || '*').trim();
+      const whereRaw  = String(req.query.where   || '').trim();
+      const limitRaw  = parseInt(req.query.limit  || '50', 10);
+      const offsetRaw = parseInt(req.query.offset || '0',  10);
+      const limit     = Number.isFinite(limitRaw)  && limitRaw  > 0 ? Math.min(limitRaw,  500) : 50;
+      const offset    = Number.isFinite(offsetRaw) && offsetRaw >= 0 ? offsetRaw : 0;
+
+      if (!queueName) return res.status(400).json({ error: 'queue parameter is required' });
+
+      // ── Fetch messages non-destructively via export endpoint ──────────────
+      const exportData = await fetchLocalApi(
+        `/api/queues/${encodeURIComponent(managerId)}/${encodeURIComponent(queueName)}/export`
+      );
+
+      if (!exportData || exportData.error) {
+        return res.status(404).json({ error: `Queue ${queueName} not found on manager ${managerId}` });
+      }
+
+      const allMessages = Array.isArray(exportData.messages) ? exportData.messages : [];
+
+      // ── Helper: resolve a dot-path on the queue item object ───────────────
+      // The top-level item has: messageId, sourceService, message, messageEnvelope
+      // Dot paths navigate into nested objects, e.g. "message.Amount" or
+      // "messageEnvelope.dataTypeId"
+      function resolvePath(item, dotPath) {
+        const parts = dotPath.split('.');
+        let cur = item;
+        for (const part of parts) {
+          if (cur === null || cur === undefined || typeof cur !== 'object') return undefined;
+          cur = cur[part];
+        }
+        return cur;
+      }
+
+      // ── Parse WHERE clause ────────────────────────────────────────────────
+      // Supported: field<op>value  where op is =  !=  >=  <=  >  <  ~=
+      let wherePredicate = null;
+      if (whereRaw) {
+        const whereMatch = whereRaw.match(/^([^=!<>~]+?)\s*(~=|!=|>=|<=|>|<|=)\s*(.*)$/);
+        if (!whereMatch) {
+          return res.status(400).json({
+            error: `Invalid where expression "${whereRaw}". Use format: field=value, field!=value, field>value, field~=substring`
+          });
+        }
+        const [, wField, wOp, wValue] = whereMatch;
+        const field = wField.trim();
+        const value = wValue.trim();
+        wherePredicate = (item) => {
+          const raw = resolvePath(item, field);
+          const actual = raw === undefined || raw === null ? '' : String(raw);
+          const expected = value;
+          switch (wOp) {
+            case '=':  return actual === expected;
+            case '!=': return actual !== expected;
+            case '>':  return Number(actual) >  Number(expected);
+            case '<':  return Number(actual) <  Number(expected);
+            case '>=': return Number(actual) >= Number(expected);
+            case '<=': return Number(actual) <= Number(expected);
+            case '~=': return actual.toLowerCase().includes(expected.toLowerCase());
+            default:   return true;
+          }
+        };
+      }
+
+      // ── Parse SELECT columns ──────────────────────────────────────────────
+      const isSelectAll   = !selectRaw || selectRaw === '*';
+      const selectColumns = isSelectAll ? [] : selectRaw.split(',').map(s => s.trim()).filter(Boolean);
+
+      // ── Apply WHERE, OFFSET, LIMIT ────────────────────────────────────────
+      const filtered  = wherePredicate ? allMessages.filter(wherePredicate) : allMessages;
+      const paged     = filtered.slice(offset, offset + limit);
+
+      // ── Project each row to requested columns ─────────────────────────────
+      let columns;
+      if (isSelectAll) {
+        // Derive columns from first item
+        const first = paged[0];
+        columns = first ? Object.keys(first).filter(k => k !== 'messageEnvelope' || paged.some(r => r.messageEnvelope))
+          : ['messageId', 'sourceService', 'message'];
+      } else {
+        columns = selectColumns;
+      }
+
+      const rows = paged.map(item => {
+        if (isSelectAll) {
+          // Flatten top-level fields; stringify deep objects
+          return Object.fromEntries(
+            columns.map(col => [col, item[col]])
+          );
+        }
+        return Object.fromEntries(
+          selectColumns.map(col => [col, resolvePath(item, col)])
+        );
+      });
+
+      res.json({
+        queue: queueName,
+        manager: managerId,
+        totalMessages: allMessages.length,
+        matchedCount: filtered.length,
+        offset,
+        limit,
+        columns,
+        rows,
+        where: whereRaw || null,
+        select: isSelectAll ? '*' : selectRaw,
+      });
+
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  /**
+   * GET /api/agent/flow-diagram
+   *
+   * Builds a flow topology from the active router rules + live queue depths.
+   * Returns a normalised graph suitable for SVG rendering:
+   *   { nodes: [{id, label, depth, kind}], edges: [{from, to, ruleId, label}] }
+   *
+   * kind values: 'queue' | 'rule'
+   */
+  app.get('/api/agent/flow-diagram', async (req, res) => {
+    try {
+      const [rulesData, summaryData] = await Promise.all([
+        fetchLocalApi('/api/router/rules'),
+        fetchLocalApi('/api/agent/queue-summary'),
+      ]);
+
+      const rules  = Array.isArray(rulesData?.rules)  ? rulesData.rules  : [];
+      const queues = Array.isArray(summaryData?.queues) ? summaryData.queues : [];
+
+      // Build a depth lookup by queue name (take max across managers)
+      const depthByQueue = {};
+      for (const q of queues) {
+        const name  = q.queueName || q.queue || '';
+        const depth = Number(q.queueLength ?? q.depth ?? 0);
+        if (name) depthByQueue[name] = Math.max(depthByQueue[name] || 0, depth);
+      }
+
+      // Collect unique queue names and build graph
+      const queueSet = new Set();
+      const edges    = [];
+
+      for (const rule of rules) {
+        if (!rule.inputQueue) continue;
+        queueSet.add(rule.inputQueue);
+        for (const out of (rule.outputs || [])) {
+          if (!out.queueName) continue;
+          queueSet.add(out.queueName);
+          edges.push({
+            from:    rule.inputQueue,
+            to:      out.queueName,
+            ruleId:  rule.id || rule.name || '',
+            label:   rule.description || rule.name || rule.id || '',
+            service: rule.serviceId || '',
+          });
+        }
+      }
+
+      const nodes = Array.from(queueSet).map(id => ({
+        id,
+        label: id,
+        depth: depthByQueue[id] || 0,
+        kind:  'queue',
+      }));
+
+      res.json({
+        nodes,
+        edges,
+        rules,
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  /**
+   * GET /api/agent/animated-flow-page?interval=30
+   *
+   * Serves the self-contained animated flow HTML page directly so the browser
+   * can navigate to it (data:text/html navigation is blocked by modern browsers).
+   */
+  app.get('/api/agent/animated-flow-page', (req, res) => {
+    const interval = Math.max(5, Math.min(300, parseInt(req.query.interval || '30', 10) || 30));
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Live Flow Diagram</title>
+<style>
+  body { margin:0; font-family:-apple-system,'Segoe UI',sans-serif; background:#f7f8fa; color:#1f2328; }
+  #header { display:flex; align-items:center; gap:14px; padding:10px 16px; background:#fff; border-bottom:1px solid #e5e7eb; flex-wrap:wrap; }
+  #header h2 { margin:0; font-size:15px; font-weight:600; }
+  #meta { font-size:12px; color:#57606a; }
+  #status { font-size:11px; padding:2px 8px; border-radius:10px; background:#e5e7eb; }
+  #status.ok { background:#dcfce7; color:#15803d; }
+  #status.err { background:#fee2e2; color:#b91c1c; }
+  #canvas { padding:16px; overflow:auto; }
+  #canvas svg { display:block; max-width:100%; }
+  #legend { padding:6px 16px; font-size:11px; color:#57606a; }
+  #controls { display:flex; gap:10px; align-items:center; }
+  button { font-size:12px; padding:3px 10px; border:1px solid #d0d7de; border-radius:5px; background:#f7f8fa; cursor:pointer; }
+  button:hover { background:#e5e7eb; }
+  input[type=number] { width:56px; font-size:12px; padding:2px 6px; border:1px solid #d0d7de; border-radius:4px; }
+</style>
+</head>
+<body>
+<div id="header">
+  <h2>&#9654; Live Flow Diagram</h2>
+  <div id="meta">Refreshing every <input type="number" id="ivInput" min="5" max="300" value="${interval}">s</div>
+  <div id="controls">
+    <button onclick="applyInterval()">Apply</button>
+    <button onclick="pause()">Pause</button>
+    <button onclick="exportSvg()">&#11015; Export SVG</button>
+  </div>
+  <div id="status">connecting\u2026</div>
+</div>
+<div id="canvas"><p style="color:#57606a;padding:20px">Loading\u2026</p></div>
+<div id="legend">
+  Node colour:
+  <span style="background:#e5e7eb;padding:1px 6px;border-radius:3px">empty</span>
+  <span style="background:#fde68a;padding:1px 6px;border-radius:3px">&lt;10 msgs</span>
+  <span style="background:#fbbf24;padding:1px 6px;border-radius:3px">&lt;100 msgs</span>
+  <span style="background:#f87171;color:#fff;padding:1px 6px;border-radius:3px">&#8805;100 msgs</span>
+  &nbsp;\u00b7 Blue badge = live depth
+</div>
+<script>
+const BASE = location.origin;
+let intervalMs = ${interval} * 1000;
+let timerId = null;
+let paused  = false;
+let lastSvg = '';
+
+function depthColor(d) {
+  if (d === 0) return '#e5e7eb';
+  if (d < 10)  return '#fde68a';
+  if (d < 100) return '#fbbf24';
+  return '#f87171';
+}
+function textColor(d) { return d >= 100 ? '#fff' : '#1f2328'; }
+
+function buildSvg(nodes, edges, generatedAt) {
+  if (!nodes.length) return '<p style="color:#57606a;padding:20px">No routing rules \u2014 no flow to display.</p>';
+  const NODE_W=160,NODE_H=38,COL_GAP=60,ROW_GAP=18,PAD_X=20,PAD_Y=40;
+  const inDegree=new Map(nodes.map(n=>[n.id,0]));
+  const adjOut=new Map(nodes.map(n=>[n.id,[]]));
+  for(const e of edges){
+    if(!inDegree.has(e.from)||!inDegree.has(e.to))continue;
+    inDegree.set(e.to,(inDegree.get(e.to)||0)+1);
+    adjOut.get(e.from).push(e.to);
+  }
+  const layer=new Map();const q=[];
+  for(const n of nodes){if(!inDegree.get(n.id)){layer.set(n.id,0);q.push(n.id);}}
+  for(const n of nodes){if(!layer.has(n.id)){layer.set(n.id,0);q.push(n.id);}}
+  let qi=0;
+  while(qi<q.length){
+    const cur=q[qi++];const cl=layer.get(cur)||0;
+    for(const nxt of(adjOut.get(cur)||[])){
+      if((layer.get(nxt)||0)<=cl)layer.set(nxt,cl+1);
+      if(!q.includes(nxt))q.push(nxt);
+    }
+  }
+  const byLayer=new Map();
+  for(const n of nodes){const l=layer.get(n.id)||0;if(!byLayer.has(l))byLayer.set(l,[]);byLayer.get(l).push(n);}
+  const maxLayer=Math.max(...byLayer.keys());
+  const colX=[];let xCursor=PAD_X;
+  for(let l=0;l<=maxLayer;l++){colX[l]=xCursor;xCursor+=NODE_W+COL_GAP;}
+  const pos=new Map();let maxY=PAD_Y;
+  for(let l=0;l<=maxLayer;l++){
+    const col=byLayer.get(l)||[];let y=PAD_Y;
+    for(const n of col){pos.set(n.id,{x:colX[l],y});y+=NODE_H+ROW_GAP;}
+    if(y>maxY)maxY=y;
+  }
+  const svgW=xCursor-COL_GAP+PAD_X,svgH=maxY+20;
+  const nodeSvg=nodes.map(n=>{
+    const p=pos.get(n.id);if(!p)return '';
+    const d=n.depth||0;const fill=depthColor(d);const tc=textColor(d);
+    const lbl=n.label.length>20?n.label.slice(0,18)+'\u2026':n.label;
+    const badge=d>0
+      ? '<rect x="'+(p.x+NODE_W-32)+'" y="'+(p.y+4)+'" width="28" height="16" rx="8" fill="#3b82d4"/><text x="'+(p.x+NODE_W-18)+'" y="'+(p.y+15)+'" font-size="9" fill="#fff" text-anchor="middle" font-family="monospace">'+d+'</text>'
+      : '';
+    return '<g><rect x="'+p.x+'" y="'+p.y+'" width="'+NODE_W+'" height="'+NODE_H+'" rx="6" fill="'+fill+'" stroke="#d0d7de" stroke-width="1.2"/>'+badge+'<text x="'+(p.x+NODE_W/2)+'" y="'+(p.y+NODE_H/2+5)+'" font-size="11" fill="'+tc+'" text-anchor="middle" font-family="-apple-system,sans-serif" font-weight="500">'+lbl+'</text></g>';
+  }).join('');
+  const edgeSvg=edges.map(e=>{
+    const f=pos.get(e.from),t=pos.get(e.to);if(!f||!t)return '';
+    const x1=f.x+NODE_W,y1=f.y+NODE_H/2,x2=t.x,y2=t.y+NODE_H/2,cx=(x1+x2)/2;
+    return '<path d="M'+x1+','+y1+' C'+cx+','+y1+' '+cx+','+y2+' '+x2+','+y2+'" fill="none" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arr)"/>';
+  }).join('');
+  const timeStr=generatedAt?new Date(generatedAt).toLocaleTimeString():'';
+  return '<svg xmlns="http://www.w3.org/2000/svg" width="'+svgW+'" height="'+svgH+'" viewBox="0 0 '+svgW+' '+svgH+'" id="flowSvg">'
+    +'<defs><marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#8b949e"/></marker></defs>'
+    +'<text x="20" y="24" font-size="13" font-weight="600" fill="#1f2328" font-family="-apple-system,sans-serif">Message Flow Diagram</text>'
+    +'<text x="'+(svgW-20)+'" y="24" font-size="10" fill="#57606a" text-anchor="end" font-family="monospace">'+timeStr+'</text>'
+    +edgeSvg+nodeSvg+'</svg>';
+}
+
+async function refresh() {
+  if (paused) return;
+  const st = document.getElementById('status');
+  try {
+    const r = await fetch('/api/agent/flow-diagram', { headers: { 'x-user-id': 'systemadmin' } });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    lastSvg = buildSvg(data.nodes||[], data.edges||[], data.generatedAt);
+    document.getElementById('canvas').innerHTML = lastSvg;
+    st.className = 'ok';
+    st.textContent = 'live \u00b7 ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    st.className = 'err';
+    st.textContent = 'error: ' + e.message;
+  }
+}
+
+function applyInterval() {
+  const v = parseInt(document.getElementById('ivInput').value, 10);
+  if (!v || v < 5) return;
+  intervalMs = v * 1000;
+  clearInterval(timerId);
+  timerId = setInterval(refresh, intervalMs);
+  paused = false;
+  document.querySelector('button[onclick="pause()"]').textContent = 'Pause';
+}
+
+function pause() {
+  paused = !paused;
+  document.querySelector('button[onclick="pause()"]').textContent = paused ? '\u25b6 Resume' : 'Pause';
+}
+
+function exportSvg() {
+  const el = document.getElementById('flowSvg');
+  if (!el) return;
+  const src = new XMLSerializer().serializeToString(el);
+  const a = document.createElement('a');
+  a.href = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(src);
+  a.download = 'flow-diagram-' + new Date().toISOString().slice(0,19).replace(/[:.]/g,'-') + '.svg';
+  a.click();
+}
+
+refresh();
+timerId = setInterval(refresh, intervalMs);
+</script>
+</body>
+</html>`;
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.send(html);
   });
 
   // ── Formatters (keyed by the "formatter" field in agent-routes.json) ─────────
@@ -2747,31 +3439,126 @@ User request: "${query}"`;
     },
 
     topology(data) {
-      const nodeMap = new Map((data.nodes || []).map(n => [n.nodeId, n]));
+      const normalizeNodeId = value => String(value || '').trim().toLowerCase();
+      const nodeMap = new Map((data.nodes || []).map(n => [normalizeNodeId(n.nodeId), n]));
       const childrenOf = new Map();
       for (const n of (data.nodes || [])) {
         if (n.parentNodeId) {
-          if (!childrenOf.has(n.parentNodeId)) childrenOf.set(n.parentNodeId, []);
-          childrenOf.get(n.parentNodeId).push(n.nodeId);
+          const parentId = normalizeNodeId(n.parentNodeId);
+          if (!childrenOf.has(parentId)) childrenOf.set(parentId, []);
+          childrenOf.get(parentId).push(normalizeNodeId(n.nodeId));
         }
       }
       const renderNode = (nodeId, depth) => {
-        const n = nodeMap.get(nodeId);
+        const normalizedNodeId = normalizeNodeId(nodeId);
+        const n = nodeMap.get(normalizedNodeId);
         if (!n) return '';
-        const indent = depth * 20;
-        const badge = n.isClusterController ? ' <span style="font-size:10px;background:#3b82d4;color:#fff;border-radius:3px;padding:1px 5px">controller</span>' : '';
-        let html = `<div style="padding:4px 0 4px ${indent}px;font-size:13px">
-          <span style="color:#57606a;margin-right:6px">${depth > 0 ? '└─' : '●'}</span>
-          <strong>${n.nodeName}</strong> <span style="font-family:monospace;color:#57606a">${n.ip}</span>
-          <span style="color:#57606a;font-size:11px;margin-left:6px">${n.hardware || ''}</span>${badge}
-        </div>`;
-        for (const cid of (childrenOf.get(nodeId) || [])) html += renderNode(cid, depth + 1);
-        return html;
+        const marker = depth > 0 ? `${'  '.repeat(depth - 1)}└─ ` : '';
+        const controller = n.isClusterController ? ' [controller]' : '';
+        const line = `${marker}${n.nodeName} (${n.ip || 'no IP'})${n.hardware ? ` - ${n.hardware}` : ''}${controller}`;
+        return [line, ...(childrenOf.get(normalizedNodeId) || []).map(cid => renderNode(cid, depth + 1))]
+          .filter(Boolean)
+          .join('\n');
       };
       const roots = data.rootNodes || [];
+      return `${data.totalNodes || 0} nodes, ${roots.length} root${roots.length !== 1 ? 's' : ''}\n\n${roots.map(r => renderNode(r, 0)).join('\n')}`;
+    },
+
+    topologyTree(data) {
+      const escapeHtml = value => String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+      const normalizeNodeId = value => String(value || '').trim().toLowerCase();
+      const nodeMap = new Map((data.nodes || []).map(node => [normalizeNodeId(node.nodeId), node]));
+      const childrenOf = new Map();
+      for (const node of (data.nodes || [])) {
+        if (!node.parentNodeId) continue;
+        const parentId = normalizeNodeId(node.parentNodeId);
+        if (!childrenOf.has(parentId)) childrenOf.set(parentId, []);
+        childrenOf.get(parentId).push(normalizeNodeId(node.nodeId));
+      }
+      const renderNode = (nodeId, open = false) => {
+        const normalizedNodeId = normalizeNodeId(nodeId);
+        const node = nodeMap.get(normalizedNodeId);
+        if (!node) return '';
+        const childIds = childrenOf.get(normalizedNodeId) || [];
+        const label = `${escapeHtml(node.nodeName)} · ${escapeHtml(node.ip || 'no IP')}`;
+        if (childIds.length === 0) {
+          return `<li style="padding:4px 0"><span style="font-weight:600">${label}</span></li>`;
+        }
+        return `<li style="padding:4px 0"><details${open ? ' open' : ''}>
+          <summary style="cursor:pointer;font-weight:600">${label} <span style="color:#57606a;font-weight:400">(${childIds.length})</span></summary>
+          <ul style="list-style:none;margin:4px 0 0 14px;padding-left:12px;border-left:1px solid #d0d7de">${childIds.map(id => renderNode(id)).join('')}</ul>
+        </details></li>`;
+      };
+      const roots = data.rootNodes || [];
+      return `<div style="font-family:-apple-system,'Segoe UI',sans-serif;font-size:13px">
+        <p style="margin:0 0 8px;color:#57606a">${data.totalNodes || 0} nodes · expand a node to load its branch</p>
+        <ul style="list-style:none;margin:0;padding:0">${roots.map(id => renderNode(id, true)).join('')}</ul>
+      </div>`;
+    },
+
+    topologyLive() {
       return `<div style="font-family:-apple-system,'Segoe UI',sans-serif">
-        <p style="margin:0 0 8px;font-size:13px;color:#57606a">${data.totalNodes || 0} nodes · ${roots.length} root${roots.length !== 1 ? 's' : ''}</p>
-        <div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;background:#fff">${roots.map(r => renderNode(r, 0)).join('')}</div>
+        <p style="margin:0 0 8px;color:#57606a;font-size:13px">Live network diagram · refreshes every 30 seconds</p>
+        <iframe src="/topology" title="Live network topology" style="width:100%;height:520px;border:1px solid #d0d7de;border-radius:6px;background:#fff"></iframe>
+        <p style="margin:8px 0 0"><a href="/topology" target="_blank" rel="noopener" style="color:#0969da">Open the live diagram</a></p>
+      </div>`;
+    },
+
+    fsmsByNode(data) {
+      const nodes = Array.isArray(data) ? data : [];
+      const rows = nodes.flatMap(node => {
+        const details = node?.details || {};
+        const candidates = [
+          details.fsms,
+          details.finiteStateMachines,
+          details.stateMachines,
+          details.runtime?.fsms,
+          node?.fsms,
+        ].filter(Array.isArray).flat();
+        const names = [...new Set(candidates.map(fsm => String(
+          typeof fsm === 'string' ? fsm : (fsm?.name || fsm?.id || fsm?.fsmId || '')
+        ).trim()).filter(Boolean))];
+        return names.map(name => ({ nodeName: node.nodeName || node.ip || 'unknown', name }));
+      });
+      if (rows.length === 0) {
+        return `<p style="font-family:-apple-system,'Segoe UI',sans-serif;color:#57606a">No finite state machines were reported by any of the ${nodes.length} nodes.</p>`;
+      }
+      return `<div style="font-family:-apple-system,'Segoe UI',sans-serif;font-size:13px">
+        <p style="margin:0 0 8px;color:#57606a">${rows.length} finite state machine${rows.length !== 1 ? 's' : ''} across ${nodes.length} nodes</p>
+        <table style="width:100%;border-collapse:collapse"><thead><tr style="text-align:left;background:#f7f8fa"><th style="padding:6px 10px">Node</th><th style="padding:6px 10px">Finite State Machine</th></tr></thead>
+        <tbody>${rows.map(row => `<tr><td style="padding:6px 10px">${row.nodeName}</td><td style="padding:6px 10px">${row.name}</td></tr>`).join('')}</tbody></table>
+      </div>`;
+    },
+
+    devicesByNode(data) {
+      const nodes = Array.isArray(data) ? data : [];
+      const deviceServiceNames = new Set(['ledpin', 'relay', 'camera', 'sensor', 'gpio', 'adc', 'pwm']);
+      const rows = nodes.map(node => {
+        const details = node?.details || {};
+        const explicitDevices = [details.devices, details.localDevices, node?.devices]
+          .filter(Array.isArray)
+          .flat();
+        const explicitNames = explicitDevices.map(device => String(
+          typeof device === 'string' ? device : (device?.name || device?.deviceName || device?.id || '')
+        ).trim()).filter(Boolean);
+        const capabilityNames = (Array.isArray(details.services) ? details.services : [])
+          .map(service => String(typeof service === 'string' ? service : (service?.name || '')).trim())
+          .filter(name => deviceServiceNames.has(name.toLowerCase()));
+        const devices = [...new Set([...explicitNames, ...capabilityNames])];
+        return {
+          nodeName: node.nodeName || details.nodeName || node.ip || 'unknown',
+          devices,
+        };
+      });
+      const totalDevices = rows.reduce((total, row) => total + row.devices.length, 0);
+      return `<div style="font-family:-apple-system,'Segoe UI',sans-serif;font-size:13px">
+        <p style="margin:0 0 8px;color:#57606a">${totalDevices} device${totalDevices !== 1 ? 's' : ''} across ${rows.length} nodes</p>
+        <table style="width:100%;border-collapse:collapse"><thead><tr style="text-align:left;background:#f7f8fa"><th style="padding:6px 10px">Node</th><th style="padding:6px 10px">Devices</th></tr></thead>
+        <tbody>${rows.map(row => `<tr><td style="padding:6px 10px;font-weight:500">${row.nodeName}</td><td style="padding:6px 10px">${row.devices.join(', ') || 'none'}</td></tr>`).join('')}</tbody></table>
       </div>`;
     },
 
@@ -2889,6 +3676,608 @@ User request: "${query}"`;
       </div>`;
     },
 
+    datetimeArithmetic(_data, captures) {
+      // ── Parse the raw query from captures.query ──────────────────────────
+      const raw = (captures?.query || '').toLowerCase().trim();
+      const now = new Date();
+      const dayNames   = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+      const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+      function formatDate(d) {
+        return `${dayNames[d.getDay()]}, ${monthNames[d.getMonth()]} ${d.getDate()} ${d.getFullYear()}`;
+      }
+      function addDays(base, n) {
+        const d = new Date(base); d.setDate(d.getDate() + n); return d;
+      }
+      function startOfDay(d) {
+        return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      }
+
+      // ── Named reference dates ─────────────────────────────────────────────
+      const NAMED_DATES = {
+        'christmas':       () => new Date(now.getFullYear(), 11, 25),
+        'new year':        () => new Date(now.getFullYear() + 1, 0, 1),
+        "new year's day":  () => new Date(now.getFullYear() + 1, 0, 1),
+        'halloween':       () => new Date(now.getFullYear(), 9, 31),
+        'valentines day':  () => new Date(now.getFullYear(), 1, 14),
+        "valentine's day": () => new Date(now.getFullYear(), 1, 14),
+        'thanksgiving':    () => {
+          // 4th Thursday of November
+          const nov = new Date(now.getFullYear(), 10, 1);
+          const thu = (11 - nov.getDay()) % 7; // first Thursday
+          return new Date(now.getFullYear(), 10, 1 + thu + 21);
+        }
+      };
+
+      // ── Detect "how many days until X" ───────────────────────────────────
+      const untilMatch = raw.match(/how many (?:days?|weeks?|months?)\s+(?:until|till|before|to|until)\s+(.+)/);
+      const daysUntilMatch = raw.match(/days?\s+(?:until|till|before|to)\s+(.+)/);
+      const refText = (untilMatch || daysUntilMatch)?.[1]?.trim().replace(/[?.!]+$/, '');
+      if (refText) {
+        let target = null;
+        // Try named dates first
+        for (const [key, fn] of Object.entries(NAMED_DATES)) {
+          if (refText.includes(key)) { target = fn(); break; }
+        }
+        // Try to parse an explicit date
+        if (!target) {
+          const parsed = Date.parse(refText);
+          if (!isNaN(parsed)) target = new Date(parsed);
+        }
+        if (target) {
+          const diff = Math.round((startOfDay(target) - startOfDay(now)) / 86400000);
+          if (diff === 0) {
+            return `<p style="font-family:-apple-system,sans-serif;font-size:15px"><strong>${formatDate(target)}</strong> is <strong>today</strong>.</p>`;
+          } else if (diff > 0) {
+            const weeks = Math.floor(diff / 7), days = diff % 7;
+            const breakdown = weeks > 0 ? ` (${weeks} week${weeks !== 1 ? 's' : ''}${days > 0 ? ` and ${days} day${days !== 1 ? 's' : ''}` : ''})` : '';
+            return `<p style="font-family:-apple-system,sans-serif;font-size:15px">There are <strong>${diff} day${diff !== 1 ? 's' : ''}${breakdown}</strong> until <strong>${formatDate(target)}</strong>.</p>`;
+          } else {
+            return `<p style="font-family:-apple-system,sans-serif;font-size:15px"><strong>${formatDate(target)}</strong> was <strong>${Math.abs(diff)} day${Math.abs(diff) !== 1 ? 's' : ''} ago</strong>.</p>`;
+          }
+        }
+      }
+
+      // ── Detect "what date/day is it in N days/weeks/months" ──────────────
+      const inFutureMatch = raw.match(/(?:what\s+(?:date|day)\s+(?:is\s+it|will\s+it\s+be)\s+)?(?:in|after)\s+(\d+)\s+(day|days|week|weeks|month|months)/);
+      if (inFutureMatch) {
+        const n    = parseInt(inFutureMatch[1], 10);
+        const unit = inFutureMatch[2].replace(/s$/, '');
+        let target;
+        if (unit === 'day')   { target = addDays(now, n); }
+        else if (unit === 'week')  { target = addDays(now, n * 7); }
+        else { // month
+          target = new Date(now);
+          target.setMonth(target.getMonth() + n);
+        }
+        return `<p style="font-family:-apple-system,sans-serif;font-size:15px">In <strong>${n} ${unit}${n !== 1 ? 's' : ''}</strong> it will be <strong>${formatDate(target)}</strong>.</p>`;
+      }
+
+      // ── Detect "N days ago / N weeks ago" ─────────────────────────────────
+      const agoMatch = raw.match(/(\d+)\s+(day|days|week|weeks|month|months)\s+ago/);
+      if (agoMatch) {
+        const n    = parseInt(agoMatch[1], 10);
+        const unit = agoMatch[2].replace(/s$/, '');
+        let target;
+        if (unit === 'day')   { target = addDays(now, -n); }
+        else if (unit === 'week')  { target = addDays(now, -n * 7); }
+        else {
+          target = new Date(now);
+          target.setMonth(target.getMonth() - n);
+        }
+        return `<p style="font-family:-apple-system,sans-serif;font-size:15px"><strong>${n} ${unit}${n !== 1 ? 's' : ''} ago</strong> was <strong>${formatDate(target)}</strong>.</p>`;
+      }
+
+      // ── Detect "add N days/weeks/months to [date or today]" ──────────────
+      const addMatch = raw.match(/add\s+(\d+)\s+(day|days|week|weeks|month|months)\s+to\s+(.+)/);
+      if (addMatch) {
+        const n    = parseInt(addMatch[1], 10);
+        const unit = addMatch[2].replace(/s$/, '');
+        const baseText = addMatch[3].trim();
+        const base = /today|now/.test(baseText) ? now : (Date.parse(baseText) ? new Date(Date.parse(baseText)) : now);
+        let target;
+        if (unit === 'day')   { target = addDays(base, n); }
+        else if (unit === 'week')  { target = addDays(base, n * 7); }
+        else {
+          target = new Date(base);
+          target.setMonth(target.getMonth() + n);
+        }
+        return `<p style="font-family:-apple-system,sans-serif;font-size:15px">Adding <strong>${n} ${unit}${n !== 1 ? 's' : ''}</strong> gives <strong>${formatDate(target)}</strong>.</p>`;
+      }
+
+      // ── Detect "difference between [date1] and [date2]" ──────────────────
+      const diffMatch = raw.match(/(?:difference|days?)\s+between\s+(.+?)\s+and\s+(.+)/);
+      if (diffMatch) {
+        const d1 = Date.parse(diffMatch[1].trim());
+        const d2 = Date.parse(diffMatch[2].trim());
+        if (!isNaN(d1) && !isNaN(d2)) {
+          const diff = Math.abs(Math.round((d2 - d1) / 86400000));
+          return `<p style="font-family:-apple-system,sans-serif;font-size:15px">There are <strong>${diff} day${diff !== 1 ? 's' : ''}</strong> between those dates.</p>`;
+        }
+      }
+
+      // ── Fallback: show today ──────────────────────────────────────────────
+      return `<p style="font-family:-apple-system,sans-serif;font-size:15px">Today is <strong>${formatDate(now)}</strong>.</p>`;
+    },
+
+    queues(data, captures) {
+      const queues   = Array.isArray(data?.queues)   ? data.queues   : [];
+
+      // ── Detect Excel/spreadsheet export request ────────────────────────────
+      const isExcelRequest = Boolean(captures?.excel);
+
+      // ── Resolve capacity threshold from captures ───────────────────────────
+      // "half-full" / "almost full" → 50 / 80; explicit "75%" → 75
+      let threshold = null;
+      if (captures?.threshold) {
+        threshold = Math.min(100, Math.max(0, Number(captures.threshold)));
+      } else if (captures?.named) {
+        const n = String(captures.named).toLowerCase();
+        threshold = /half/.test(n) ? 50 : 80;
+      }
+      const isCapacityQuery = threshold !== null;
+
+      // ── Normalise each queue entry; compute fill % when maxLength is known ─
+      const enriched = queues.map(q => {
+        const name      = q.queueName || q.queue || '—';
+        const depth     = Number(q.queueLength ?? q.depth ?? 0);
+        const maxLength = Number(q.maxLength || 0);
+        const fillPct   = maxLength > 0 ? (depth / maxLength) * 100 : null;
+        return { name, depth, maxLength, fillPct, managerId: q.managerId || '—' };
+      });
+
+      // ── Apply threshold filter when this is a capacity query ───────────────
+      const display = isCapacityQuery
+        ? enriched.filter(q => q.fillPct !== null && q.fillPct >= threshold)
+        : enriched;
+
+      // Sort by fill % (capacity queries) or depth (general queries), descending
+      const sorted = [...display].sort((a, b) =>
+        isCapacityQuery
+          ? (b.fillPct ?? -1) - (a.fillPct ?? -1)
+          : b.depth - a.depth
+      );
+
+      const totalMessages = enriched.reduce((s, q) => s + q.depth, 0);
+
+      // ── Depth / capacity bar ───────────────────────────────────────────────
+      const capacityBar = (depth, maxLength, fillPct) => {
+        if (maxLength > 0 && fillPct !== null) {
+          const w     = Math.min(100, fillPct).toFixed(1);
+          const color = fillPct >= 90 ? '#cf222e' : fillPct >= 75 ? '#e36209' : '#2da44e';
+          return `<div style="background:#f7f8fa;border-radius:3px;height:6px;margin-top:3px" title="${fillPct.toFixed(1)}% of ${maxLength.toLocaleString()}">
+            <div style="width:${w}%;background:${color};height:100%;border-radius:3px"></div></div>`;
+        }
+        // No capacity configured — show depth bar relative to peers
+        const maxPeerDepth = Math.max(...enriched.map(q => q.depth), 1);
+        const w = Math.min(100, (depth / maxPeerDepth) * 100).toFixed(1);
+        const color = depth > 1000 ? '#cf222e' : depth > 100 ? '#e36209' : '#2da44e';
+        return `<div style="background:#f7f8fa;border-radius:3px;height:6px;margin-top:3px">
+          <div style="width:${w}%;background:${color};height:100%;border-radius:3px"></div></div>`;
+      };
+
+      // ── Table rows ─────────────────────────────────────────────────────────
+      const showCapacityCol = enriched.some(q => q.maxLength > 0);
+      const queueRows = sorted.slice(0, 25).map(q => {
+        const fillLabel = q.fillPct !== null
+          ? `<span style="color:${q.fillPct >= 90 ? '#cf222e' : q.fillPct >= 75 ? '#e36209' : '#2da44e'};font-weight:600">${q.fillPct.toFixed(1)}%</span>`
+          : '<span style="color:#57606a">—</span>';
+        const capacityLabel = q.maxLength > 0 ? q.maxLength.toLocaleString() : '∞';
+        return `<tr>
+          <td style="padding:5px 8px;font-weight:500;font-family:monospace;font-size:12px">${q.name}</td>
+          <td style="padding:5px 8px;color:#57606a;font-size:11px">${q.managerId}</td>
+          <td style="padding:5px 8px;text-align:right;font-weight:600">${q.depth.toLocaleString()}</td>
+          ${showCapacityCol ? `<td style="padding:5px 8px;text-align:right;color:#57606a">${capacityLabel}</td>
+          <td style="padding:5px 8px;text-align:right">${fillLabel}</td>` : ''}
+          <td style="padding:5px 8px;min-width:80px">${capacityBar(q.depth, q.maxLength, q.fillPct)}</td>
+        </tr>`;
+      }).join('');
+
+      // ── Capacity-query header ──────────────────────────────────────────────
+      const thresholdLabel = threshold !== null
+        ? (captures?.named ? String(captures.named) : `${threshold}%`)
+        : null;
+
+      const summaryLine = isCapacityQuery
+        ? `${sorted.length} queue${sorted.length !== 1 ? 's' : ''} at ≥ ${thresholdLabel} capacity · ${totalMessages.toLocaleString()} total messages across all queues`
+        : `${enriched.length} queue${enriched.length !== 1 ? 's' : ''} · ${totalMessages.toLocaleString()} total messages`;
+
+      // ── Build Excel download link (data URI, HTML-table-in-xls trick) ──────
+      const buildExcelDownloadHtml = () => {
+        const tsNow = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const fileName = `queues-${tsNow}.xls`;
+
+        // Build an HTML table that Excel opens natively via data URI
+        const capacityHeader = showCapacityCol
+          ? '<th>Capacity</th><th>Fill %</th>'
+          : '';
+        const dataRows = enriched.map(q => {
+          const fillLabel = q.fillPct !== null ? q.fillPct.toFixed(2) : '';
+          const capacityLabel = q.maxLength > 0 ? q.maxLength : '';
+          return `<tr>
+            <td>${q.name}</td>
+            <td>${q.managerId}</td>
+            <td>${q.depth}</td>
+            ${showCapacityCol ? `<td>${capacityLabel}</td><td>${fillLabel}</td>` : ''}
+          </tr>`;
+        }).join('');
+
+        const xlsHtml = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+<head><meta charset="UTF-8"><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>
+<x:Name>Queues</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>
+</x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml></head>
+<body><table>
+<thead><tr><th>Queue</th><th>Manager</th><th>Messages</th>${capacityHeader}</tr></thead>
+<tbody>${dataRows}</tbody>
+</table></body></html>`;
+
+        // Encode as base64 data URI so it works as a plain <a href> (no script needed)
+        const b64 = Buffer.from(xlsHtml, 'utf8').toString('base64');
+        const dataUri = `data:application/vnd.ms-excel;base64,${b64}`;
+
+        return `<div style="margin-bottom:12px">
+          <a href="${dataUri}" download="${fileName}"
+             style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:#217346;color:#fff;border-radius:6px;font-size:13px;font-weight:500;text-decoration:none;font-family:-apple-system,'Segoe UI',sans-serif">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Download ${fileName}
+          </a>
+          <span style="margin-left:10px;font-size:11px;color:#57606a;font-family:-apple-system,sans-serif">${enriched.length} queue${enriched.length !== 1 ? 's' : ''} · ${totalMessages.toLocaleString()} messages</span>
+        </div>`;
+      };
+
+      // ── Render ─────────────────────────────────────────────────────────────
+      const noQueuesMsg = isCapacityQuery
+        ? `<p style="color:#2da44e;font-style:italic">No queues are at or above ${thresholdLabel} capacity.</p>`
+        : '<p style="color:#57606a;font-style:italic">No queues registered.</p>';
+
+      return `<div style="font-family:-apple-system,'Segoe UI',sans-serif;font-size:13px">
+        <p style="margin:0 0 10px;color:#57606a">${summaryLine}</p>
+
+        ${isExcelRequest ? buildExcelDownloadHtml() : ''}
+
+        ${sorted.length > 0 ? `
+        <div style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;margin-bottom:10px">
+          <table style="width:100%;border-collapse:collapse;font-size:13px">
+            <thead><tr style="background:#f7f8fa;text-align:left">
+              <th style="padding:5px 8px;border-bottom:1px solid #e5e7eb">Queue</th>
+              <th style="padding:5px 8px;border-bottom:1px solid #e5e7eb">Manager</th>
+              <th style="padding:5px 8px;border-bottom:1px solid #e5e7eb;text-align:right">Depth</th>
+              ${showCapacityCol ? '<th style="padding:5px 8px;border-bottom:1px solid #e5e7eb;text-align:right">Capacity</th><th style="padding:5px 8px;border-bottom:1px solid #e5e7eb;text-align:right">Fill</th>' : ''}
+              <th style="padding:5px 8px;border-bottom:1px solid #e5e7eb;min-width:80px"></th>
+            </tr></thead>
+            <tbody>${queueRows}</tbody>
+          </table>
+          ${sorted.length < display.length || (!isCapacityQuery && sorted.length < enriched.length) ? `<p style="margin:4px 8px;color:#57606a;font-size:11px">Showing ${sorted.length} of ${isCapacityQuery ? display.length : enriched.length}</p>` : ''}
+        </div>` : noQueuesMsg}
+
+      </div>`;
+    },
+
+    librarian(data) {
+      const types   = Array.isArray(data?.types)   ? data.types   : [];
+      const schemas = Array.isArray(data?.schemas) ? data.schemas : [];
+
+      const isoTypes   = types.filter(t => t.isIso);
+      const builtinTypes = types.filter(t => t.builtin && !t.isIso);
+      const customTypes  = types.filter(t => !t.builtin && !t.isIso);
+
+      const typeRow = (t) => {
+        const badge = t.builtin
+          ? `<span style="font-size:10px;background:#e8f0fe;color:#3b82d4;border-radius:3px;padding:1px 4px;margin-left:4px">builtin</span>`
+          : (t.isIso ? `<span style="font-size:10px;background:#e6f4ea;color:#2da44e;border-radius:3px;padding:1px 4px;margin-left:4px">ISO</span>` : '');
+        return `<tr>
+          <td style="padding:4px 8px;font-family:monospace;font-size:12px">${t.id}${badge}</td>
+          <td style="padding:4px 8px;color:#57606a">${t.label || '—'}</td>
+        </tr>`;
+      };
+
+      const typeSection = (title, list) => list.length === 0 ? '' : `
+        <div style="font-size:11px;color:#57606a;text-transform:uppercase;letter-spacing:.5px;margin:10px 0 4px">${title}</div>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden">
+          <tbody>${list.map(typeRow).join('')}</tbody>
+        </table>`;
+
+      const schemaRows = schemas.slice(0, 20).map(s => {
+        const statusColor = s.lifecycle?.status === 'active' ? '#2da44e' : s.lifecycle?.status === 'scheduled' ? '#e36209' : '#cf222e';
+        const mtime = s.mtime ? new Date(s.mtime).toLocaleDateString() : '—';
+        return `<tr>
+          <td style="padding:4px 8px;font-family:monospace;font-size:11px">${s.path || s.name || '—'}</td>
+          <td style="padding:4px 8px;color:#57606a">${s.typeId || s.type || '—'}</td>
+          <td style="padding:4px 8px"><span style="color:${statusColor};font-size:11px">${s.lifecycle?.status || '—'}</span></td>
+          <td style="padding:4px 8px;color:#57606a;font-size:11px;text-align:right">${mtime}</td>
+        </tr>`;
+      }).join('');
+
+      return `<div style="font-family:-apple-system,'Segoe UI',sans-serif;font-size:13px">
+        <p style="margin:0 0 8px;color:#57606a">${types.length} data type${types.length !== 1 ? 's' : ''} · ${schemas.length} schema${schemas.length !== 1 ? 's' : ''} registered</p>
+
+        ${typeSection('ISO 20022 Types', isoTypes)}
+        ${typeSection('Built-in Types', builtinTypes)}
+        ${typeSection('Custom Types', customTypes)}
+        ${types.length === 0 ? '<p style="color:#57606a;font-style:italic">No data types registered (librarian may be offline).</p>' : ''}
+
+        ${schemas.length > 0 ? `
+        <div style="font-size:11px;color:#57606a;text-transform:uppercase;letter-spacing:.5px;margin:10px 0 4px">Schemas (${schemas.length})</div>
+        <div style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden">
+          <table style="width:100%;border-collapse:collapse;font-size:13px">
+            <thead><tr style="background:#f7f8fa;text-align:left">
+              <th style="padding:5px 8px;border-bottom:1px solid #e5e7eb">Path</th>
+              <th style="padding:5px 8px;border-bottom:1px solid #e5e7eb">Type</th>
+              <th style="padding:5px 8px;border-bottom:1px solid #e5e7eb">Status</th>
+              <th style="padding:5px 8px;border-bottom:1px solid #e5e7eb;text-align:right">Modified</th>
+            </tr></thead>
+            <tbody>${schemaRows}</tbody>
+          </table>
+          ${schemas.length > 20 ? `<p style="margin:6px 8px;color:#57606a;font-size:11px">Showing 20 of ${schemas.length}</p>` : ''}
+        </div>` : ''}
+      </div>`;
+    },
+
+    async queueItem(_data, captures) {
+      // ── Resolve captured queue name and optional params ────────────────────
+      const queueName = (captures?.queue || captures?.queue2 || captures?.value || '').trim();
+      const manager   = (captures?.manager || 'qm-primary').trim();
+      const itemIndex = captures?.index ? Math.max(0, parseInt(captures.index, 10) || 0) : 0;
+      const count     = captures?.count ? Math.min(100, Math.max(1, parseInt(captures.count, 10) || 1)) : 1;
+
+      if (!queueName) {
+        return `<p style="font-family:-apple-system,sans-serif;color:#cf222e">
+          Could not determine which queue to inspect. Try: <em>"show first 5 items in payments.inbound"</em>.
+        </p>`;
+      }
+
+      // ── Multi-item path: fetch count items and render a compact table ──────
+      if (count > 1) {
+        const indices = Array.from({ length: count }, (_, i) => i + itemIndex);
+        const results = await Promise.all(indices.map(i =>
+          fetchLocalApi(`/api/agent/queue-item?manager=${encodeURIComponent(manager)}&queue=${encodeURIComponent(queueName)}&index=${i}`)
+        ));
+
+        // Find the first non-error result to check queue state
+        const first = results.find(r => r && !r.error);
+        if (!first) return `<p style="font-family:-apple-system,sans-serif;color:#cf222e">Could not reach queue manager.</p>`;
+        if (first.empty) return `<p style="font-family:-apple-system,'Segoe UI',sans-serif;color:#57606a">Queue <strong>${queueName}</strong> is empty.</p>`;
+
+        // Stop at the last valid item (index >= queueLength returns the last item repeated)
+        const queueLength = first.queueLength || 0;
+        const showing = Math.min(count, queueLength);
+        const validResults = results.slice(0, showing).filter(r => r && !r.error && !r.empty && r.item);
+
+        function truncate(val, max = 120) {
+          if (val === null || val === undefined) return '—';
+          const s = typeof val === 'string' ? val : JSON.stringify(val);
+          const esc = s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          return esc.length > max ? esc.slice(0, max) + '…' : esc;
+        }
+
+        const rows = validResults.map((r, i) => {
+          const msg = r.item?.message;
+          return `<tr style="${i % 2 === 1 ? 'background:#f7f8fa' : ''}">
+            <td style="padding:4px 8px;text-align:right;color:#57606a;font-size:11px;white-space:nowrap">${itemIndex + i + 1}</td>
+            <td style="padding:4px 8px;font-family:monospace;font-size:11px;max-width:480px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              ${r.item?.messageId ? `<span style="color:#57606a;font-size:10px">${truncate(r.item.messageId, 24)}</span><br>` : ''}
+              ${truncate(msg)}
+            </td>
+          </tr>`;
+        }).join('');
+
+        return `<div style="font-family:-apple-system,'Segoe UI',sans-serif;font-size:13px">
+          <p style="margin:0 0 8px;color:#57606a">
+            Showing ${validResults.length} of ${queueLength.toLocaleString()} items in
+            <strong style="font-family:monospace">${queueName}</strong> on <strong>${manager}</strong>
+            &nbsp;·&nbsp; read-only peek, nothing dequeued
+          </p>
+          <table style="width:100%;border-collapse:collapse;font-size:13px">
+            <thead><tr style="background:#f7f8fa;text-align:left">
+              <th style="padding:4px 8px;border-bottom:1px solid #e5e7eb;text-align:right">#</th>
+              <th style="padding:4px 8px;border-bottom:1px solid #e5e7eb">Message</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+      }
+
+      // ── Single-item path (original behaviour) ─────────────────────────────
+      const url = `/api/agent/queue-item?manager=${encodeURIComponent(manager)}&queue=${encodeURIComponent(queueName)}&index=${itemIndex}`;
+      const d = await fetchLocalApi(url);
+
+      if (!d) {
+        return `<p style="font-family:-apple-system,sans-serif;color:#cf222e">Could not reach queue manager. Is the backend running?</p>`;
+      }
+      if (d.error) {
+        return `<p style="font-family:-apple-system,sans-serif;color:#cf222e">Error: ${d.error}</p>`;
+      }
+      if (d.empty) {
+        return `<div style="font-family:-apple-system,'Segoe UI',sans-serif;font-size:13px">
+          <p style="color:#57606a">Queue <strong style="font-family:monospace">${d.queueName}</strong> on <strong>${d.managerId}</strong> is empty.</p>
+        </div>`;
+      }
+
+      const { item, dataTypeIds, shape, parsedXml, schema, validations, queueLength } = d;
+      const message     = item?.message;
+      const envelope    = item?.messageEnvelope;
+      const primaryType = (dataTypeIds || [])[0] || 'text-string';
+
+      // ── Validation verdict ─────────────────────────────────────────────────
+      const failures  = (validations || []).filter(v => !v.valid);
+      const warnings  = (validations || []).filter(v => v.valid && v.tier === 'field-presence' && !v.present && !v.required);
+      const allPassed = failures.length === 0;
+
+      const verdictColor = allPassed ? '#2da44e' : '#cf222e';
+      const verdictLabel = allPassed
+        ? `✓ Valid — passes all ${validations.length} check${validations.length !== 1 ? 's' : ''}`
+        : `✗ ${failures.length} validation failure${failures.length !== 1 ? 's' : ''}`;
+
+      // ── Schema badge ───────────────────────────────────────────────────────
+      const schemaBadge = schema
+        ? `<span style="font-size:11px;background:#e8f0fe;color:#3b82d4;border-radius:3px;padding:2px 6px;margin-left:6px">
+             schema: ${schema.path}
+             <span style="color:${schema.lifecycle?.status === 'active' ? '#2da44e' : '#e36209'}"> · ${schema.lifecycle?.status || '?'}</span>
+           </span>`
+        : `<span style="font-size:11px;background:#fff8e1;color:#b08000;border-radius:3px;padding:2px 6px;margin-left:6px">no schema in librarian</span>`;
+
+      // ── Failure rows ───────────────────────────────────────────────────────
+      const failureRows = failures.map(v =>
+        `<tr>
+          <td style="padding:4px 8px;font-family:monospace;font-size:11px;color:#cf222e">${v.field || v.typeId || '?'}</td>
+          <td style="padding:4px 8px;font-size:11px;color:#57606a">${v.tier}</td>
+          <td style="padding:4px 8px;font-size:11px;color:#cf222e">${v.reason || 'failed'}</td>
+        </tr>`
+      ).join('');
+
+      // ── Message payload renderer ───────────────────────────────────────────
+      // Build a two-column field table for object payloads; fall back to <pre> for strings.
+      function renderValue(val, depth) {
+        if (val === null || val === undefined) return '<span style="color:#57606a">null</span>';
+        if (typeof val === 'boolean') return `<span style="color:#7c5cd8">${val}</span>`;
+        if (typeof val === 'number')  return `<span style="color:#0969da">${val}</span>`;
+        if (typeof val === 'string') {
+          const esc = val.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          return `<span style="color:#116329">"${esc.length > 120 ? esc.slice(0,120) + '…' : esc}"</span>`;
+        }
+        if (Array.isArray(val)) {
+          if (val.length === 0) return '<span style="color:#57606a">[]</span>';
+          return `<span style="color:#57606a">[${val.length} item${val.length !== 1 ? 's' : ''}]</span>`;
+        }
+        if (typeof val === 'object' && depth < 2) {
+          const entries = Object.entries(val).slice(0, 12);
+          const rows = entries.map(([k, v2]) =>
+            `<tr>
+              <td style="padding:2px 6px;font-weight:500;color:#57606a;white-space:nowrap;vertical-align:top">${k}</td>
+              <td style="padding:2px 6px">${renderValue(v2, depth + 1)}</td>
+            </tr>`
+          ).join('');
+          const more = Object.keys(val).length > 12 ? `<tr><td colspan="2" style="padding:2px 6px;color:#57606a;font-size:11px">… ${Object.keys(val).length - 12} more keys</td></tr>` : '';
+          return `<table style="border-collapse:collapse;font-size:12px;width:100%">${rows}${more}</table>`;
+        }
+        return `<span style="color:#57606a">{…}</span>`;
+      }
+
+      const displayMessage = parsedXml || message;
+      const messageHtml = typeof displayMessage === 'string'
+        ? `<pre style="font-size:11px;white-space:pre-wrap;word-break:break-all;margin:0;color:#1f2328;line-height:1.5">${
+            displayMessage.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').slice(0, 4000)
+          }${displayMessage.length > 4000 ? '\n… (truncated)' : ''}</pre>`
+        : renderValue(displayMessage, 0);
+
+      return `<div style="font-family:-apple-system,'Segoe UI',sans-serif;font-size:13px">
+
+        <!-- Header -->
+        <div style="display:flex;align-items:baseline;flex-wrap:wrap;gap:6px;margin-bottom:10px">
+          <span style="font-weight:600;font-family:monospace">${d.queueName}</span>
+          <span style="color:#57606a">on ${d.managerId}</span>
+          <span style="color:#57606a;font-size:11px">item ${d.itemIndex + 1} of ${queueLength}</span>
+          <span style="font-size:11px;background:#f7f8fa;border:1px solid #e5e7eb;border-radius:3px;padding:1px 5px">${primaryType}</span>
+          <span style="font-size:11px;color:#57606a">shape: ${shape}</span>
+          ${schemaBadge}
+        </div>
+
+        <!-- Verdict banner -->
+        <div style="border-left:3px solid ${verdictColor};padding:8px 10px;background:${allPassed ? '#f0fff4' : '#fff0f0'};margin-bottom:10px;border-radius:0 4px 4px 0">
+          <span style="color:${verdictColor};font-weight:600">${verdictLabel}</span>
+          ${item?.messageId ? `<span style="float:right;font-size:10px;color:#57606a;font-family:monospace">${item.messageId}</span>` : ''}
+        </div>
+
+        <!-- Failure table -->
+        ${failures.length > 0 ? `
+        <div style="border:1px solid #ffcdd2;border-radius:6px;overflow:hidden;margin-bottom:10px">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr style="background:#fff0f0;text-align:left">
+              <th style="padding:4px 8px;border-bottom:1px solid #ffcdd2">Field / Type</th>
+              <th style="padding:4px 8px;border-bottom:1px solid #ffcdd2">Tier</th>
+              <th style="padding:4px 8px;border-bottom:1px solid #ffcdd2">Reason</th>
+            </tr></thead>
+            <tbody>${failureRows}</tbody>
+          </table>
+        </div>` : ''}
+
+        <!-- Envelope metadata -->
+        ${envelope ? `
+        <div style="font-size:11px;color:#57606a;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Envelope</div>
+        <div style="background:#f7f8fa;border:1px solid #e5e7eb;border-radius:6px;padding:8px 10px;font-family:monospace;font-size:11px;margin-bottom:10px;display:flex;gap:16px;flex-wrap:wrap">
+          ${envelope.formatToken ? `<span><strong>formatToken</strong> ${envelope.formatToken}</span>` : ''}
+          ${envelope.mediaType   ? `<span><strong>mediaType</strong> ${envelope.mediaType}</span>` : ''}
+          ${envelope.dataTypeId  ? `<span><strong>dataTypeId</strong> ${envelope.dataTypeId}</span>` : ''}
+          ${item.sourceService   ? `<span><strong>source</strong> ${item.sourceService}</span>` : ''}
+        </div>` : ''}
+
+        <!-- Message payload -->
+        <div style="font-size:11px;color:#57606a;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">
+          Payload${parsedXml ? ' (parsed from XML)' : ''}
+        </div>
+        <div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;background:#fff;overflow:auto;max-height:400px">
+          ${messageHtml}
+        </div>
+
+        <!-- Source info -->
+        ${item.sourceService ? `<p style="margin:6px 0 0;font-size:11px;color:#57606a">Enqueued by: ${item.sourceService}</p>` : ''}
+      </div>`;
+    },
+
+    async queueItemEach(data) {
+      // data is the queue-summary payload: { queues: [...], managers: [...], ... }
+      const queues = Array.isArray(data?.queues) ? data.queues : [];
+
+      if (queues.length === 0) {
+        return `<p style="font-family:-apple-system,sans-serif;color:#57606a">No queues found.</p>`;
+      }
+
+      // Fetch the first item from each queue in parallel (only non-empty queues)
+      const nonEmpty = queues.filter(q => Number(q.queueLength ?? q.depth ?? 0) > 0);
+      const empty    = queues.filter(q => Number(q.queueLength ?? q.depth ?? 0) === 0);
+
+      const peeks = await Promise.all(nonEmpty.map(async q => {
+        const queueName = q.queueName || q.queue;
+        const managerId = q.managerId || 'qm-primary';
+        const d = await fetchLocalApi(
+          `/api/agent/queue-item?manager=${encodeURIComponent(managerId)}&queue=${encodeURIComponent(queueName)}&index=0`
+        );
+        return { queueName, managerId, depth: Number(q.queueLength ?? q.depth ?? 0), d };
+      }));
+
+      const rows = peeks.map(({ queueName, managerId, depth, d }) => {
+        let preview = '<span style="color:#57606a;font-style:italic">unavailable</span>';
+        if (d && !d.error && !d.empty && d.item) {
+          const msg = d.item.message;
+          const raw = typeof msg === 'string'
+            ? msg.slice(0, 120) + (msg.length > 120 ? '…' : '')
+            : JSON.stringify(msg).slice(0, 120);
+          const esc = raw.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          preview = `<code style="font-size:11px;color:#1f2328">${esc}</code>`;
+        } else if (d?.error) {
+          preview = `<span style="color:#cf222e;font-size:11px">${d.error}</span>`;
+        }
+        return `<tr>
+          <td style="padding:5px 8px;font-family:monospace;font-weight:500;font-size:12px;white-space:nowrap">${queueName}</td>
+          <td style="padding:5px 8px;color:#57606a;font-size:11px">${managerId}</td>
+          <td style="padding:5px 8px;text-align:right;font-weight:600">${depth.toLocaleString()}</td>
+          <td style="padding:5px 8px;max-width:320px;overflow:hidden;text-overflow:ellipsis">${preview}</td>
+        </tr>`;
+      }).join('');
+
+      const emptyNote = empty.length > 0
+        ? `<p style="margin:8px 0 0;font-size:11px;color:#57606a">${empty.length} empty queue${empty.length !== 1 ? 's' : ''} not shown.</p>`
+        : '';
+
+      return `<div style="font-family:-apple-system,'Segoe UI',sans-serif;font-size:13px">
+        <p style="margin:0 0 8px;color:#57606a">
+          First item from each non-empty queue · ${nonEmpty.length} of ${queues.length} queue${queues.length !== 1 ? 's' : ''} have messages
+        </p>
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead><tr style="background:#f7f8fa;text-align:left">
+            <th style="padding:5px 8px;border-bottom:1px solid #e5e7eb">Queue</th>
+            <th style="padding:5px 8px;border-bottom:1px solid #e5e7eb">Manager</th>
+            <th style="padding:5px 8px;border-bottom:1px solid #e5e7eb;text-align:right">Depth</th>
+            <th style="padding:5px 8px;border-bottom:1px solid #e5e7eb">First Item</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        ${emptyNote}
+      </div>`;
+    },
+
     lifecycle(data) {
       if (!data) return '<p style="font-family:-apple-system,sans-serif;color:#cf222e">Lifecycle data unavailable.</p>';
       const states = data.states || [];
@@ -2924,12 +4313,592 @@ User request: "${query}"`;
         </table>
       </div>`;
     },
+
+    async queueQuery(_data, captures) {
+      // ── Parse captures from the query DSL intent ──────────────────────────
+      // Expected capture groups (from agent-routes.json):
+      //   queue    – required queue name
+      //   manager  – optional queue manager id (default: qm-primary)
+      //   select   – optional comma-separated field list (default: *)
+      //   where    – optional filter expression (field op value)
+      //   limit    – optional row limit
+      const queueName = (captures?.queue || captures?.queue2 || captures?.value || '').trim();
+      const manager   = (captures?.manager || 'qm-primary').trim();
+      const select    = (captures?.select  || '*').trim();
+      const where     = (captures?.where   || '').trim();
+      const limit     = captures?.limit ? Math.min(500, Math.max(1, parseInt(captures.limit, 10) || 50)) : 50;
+
+      if (!queueName) {
+        return `<p style="font-family:-apple-system,sans-serif;color:#cf222e">
+          Could not determine which queue to query. Try:<br>
+          <em>"select messageId, sourceService from queue payments.inbound"</em><br>
+          <em>"select message.Currency from queue swift.mt103.inbound where message.Currency=USD"</em>
+        </p>`;
+      }
+
+      // ── Fetch messages directly from the export endpoint (non-destructive peek) ──
+      const exportData = await fetchLocalApi(
+        `/api/queues/${encodeURIComponent(manager)}/${encodeURIComponent(queueName)}/export`
+      );
+
+      if (!exportData) {
+        return `<p style="font-family:-apple-system,sans-serif;color:#cf222e">Could not reach queue manager. Is the backend running?</p>`;
+      }
+      if (exportData.error) {
+        return `<p style="font-family:-apple-system,sans-serif;color:#cf222e">Error: ${exportData.error}</p>`;
+      }
+
+      const allMessages = Array.isArray(exportData.messages) ? exportData.messages : [];
+
+      // ── Helper: resolve a dot-path on the queue item object ──────────────
+      function resolvePath(item, dotPath) {
+        const parts = dotPath.split('.');
+        let cur = item;
+        for (const part of parts) {
+          if (cur === null || cur === undefined || typeof cur !== 'object') return undefined;
+          cur = cur[part];
+        }
+        return cur;
+      }
+
+      // ── Apply WHERE filter ────────────────────────────────────────────────
+      let filtered = allMessages;
+      let whereError = null;
+      if (where) {
+        const whereMatch = where.match(/^([^=!<>~]+?)\s*(~=|!=|>=|<=|>|<|=)\s*(.*)$/);
+        if (!whereMatch) {
+          whereError = `Invalid where expression "${where}". Use: field=value, field!=value, field>value, field~=substring`;
+        } else {
+          const [, wField, wOp, wValue] = whereMatch;
+          const field = wField.trim();
+          const expected = wValue.trim();
+          filtered = allMessages.filter(item => {
+            const raw = resolvePath(item, field);
+            const actual = raw === undefined || raw === null ? '' : String(raw);
+            switch (wOp) {
+              case '=':  return actual === expected;
+              case '!=': return actual !== expected;
+              case '>':  return Number(actual) >  Number(expected);
+              case '<':  return Number(actual) <  Number(expected);
+              case '>=': return Number(actual) >= Number(expected);
+              case '<=': return Number(actual) <= Number(expected);
+              case '~=': return actual.toLowerCase().includes(expected.toLowerCase());
+              default:   return true;
+            }
+          });
+        }
+      }
+
+      if (whereError) {
+        return `<p style="font-family:-apple-system,sans-serif;color:#cf222e">${whereError}</p>`;
+      }
+
+      // ── Apply LIMIT ───────────────────────────────────────────────────────
+      const paged = filtered.slice(0, limit);
+
+      // ── Parse SELECT columns ──────────────────────────────────────────────
+      const isSelectAll   = !select || select === '*';
+      const selectColumns = isSelectAll ? [] : select.split(',').map(s => s.trim()).filter(Boolean);
+
+      let columns;
+      if (isSelectAll) {
+        const first = paged[0];
+        columns = first ? Object.keys(first) : ['messageId', 'sourceService', 'message'];
+      } else {
+        columns = selectColumns;
+      }
+
+      const rows = paged.map(item =>
+        Object.fromEntries(
+          columns.map(col => [col, isSelectAll ? item[col] : resolvePath(item, col)])
+        )
+      );
+
+      if (rows.length === 0) {
+        const reason = where
+          ? ` — no rows matched <code>where ${where}</code>`
+          : ` — queue is empty`;
+        return `<p style="font-family:-apple-system,'Segoe UI',sans-serif;color:#57606a">
+          Query on <strong style="font-family:monospace">${queueName}</strong>${reason}.
+        </p>`;
+      }
+
+      // ── Render results ────────────────────────────────────────────────────
+      function cellValue(val) {
+        if (val === null || val === undefined) return '<span style="color:#57606a">null</span>';
+        if (typeof val === 'object') {
+          const s = JSON.stringify(val);
+          const esc = s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          return `<span style="font-family:monospace;font-size:11px;color:#57606a">${esc.length > 80 ? esc.slice(0, 80) + '…' : esc}</span>`;
+        }
+        const s = String(val);
+        const esc = s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return esc.length > 120
+          ? `<span title="${esc}" style="font-family:monospace;font-size:11px">${esc.slice(0, 120)}…</span>`
+          : `<span style="font-family:monospace;font-size:11px">${esc}</span>`;
+      }
+
+      const headerCells = columns.map(c =>
+        `<th style="padding:4px 8px;border-bottom:1px solid #e5e7eb;text-align:left;white-space:nowrap">${c}</th>`
+      ).join('');
+
+      const bodyRows = rows.map((row, i) => {
+        const cells = columns.map(col =>
+          `<td style="padding:4px 8px;vertical-align:top${i % 2 === 1 ? ';background:#f7f8fa' : ''}">${cellValue(row[col])}</td>`
+        ).join('');
+        return `<tr>${cells}</tr>`;
+      }).join('');
+
+      const filterNote = where
+        ? ` · <code style="font-size:11px">where ${where}</code> → ${filtered.length.toLocaleString()} of ${allMessages.length.toLocaleString()} matched`
+        : ` · ${allMessages.length.toLocaleString()} total`;
+      const selectNote = !isSelectAll ? ` · columns: <code style="font-size:11px">${select}</code>` : '';
+
+      return `<div style="font-family:-apple-system,'Segoe UI',sans-serif;font-size:13px">
+        <p style="margin:0 0 8px;color:#57606a">
+          <strong style="font-family:monospace">${queueName}</strong> on <strong>${manager}</strong>
+          ${filterNote}${selectNote}
+          &nbsp;·&nbsp; showing ${rows.length.toLocaleString()} row${rows.length !== 1 ? 's' : ''} · read-only peek
+        </p>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr style="background:#f7f8fa">${headerCells}</tr></thead>
+            <tbody>${bodyRows}</tbody>
+          </table>
+        </div>
+      </div>`;
+    },
+
+    // ── Flow diagram helpers (shared by flow + animatedFlow) ──────────────────
+    async _buildFlowDiagramSvg(data, { title = 'Flow Diagram', width = 820, showDepths = true } = {}) {
+      // data = { nodes, edges, generatedAt }
+      const nodes = Array.isArray(data?.nodes) ? data.nodes : [];
+      const edges = Array.isArray(data?.edges) ? data.edges : [];
+
+      if (nodes.length === 0) {
+        return { svg: `<text x="20" y="30" font-family="sans-serif" font-size="13" fill="#57606a">No routing rules found — no flow to display.</text>`, height: 60 };
+      }
+
+      // ── Layered layout (left-to-right topological sort) ─────────────────────
+      // Assign a column (layer) to each node via longest-path from sources
+      const inDegree  = new Map(nodes.map(n => [n.id, 0]));
+      const adjOut    = new Map(nodes.map(n => [n.id, []]));
+      const adjIn     = new Map(nodes.map(n => [n.id, []]));
+
+      for (const e of edges) {
+        if (!inDegree.has(e.from) || !inDegree.has(e.to)) continue;
+        inDegree.set(e.to, (inDegree.get(e.to) || 0) + 1);
+        adjOut.get(e.from).push(e.to);
+        adjIn.get(e.to).push(e.from);
+      }
+
+      // BFS layers
+      const layer  = new Map();
+      const queue  = [];
+      for (const n of nodes) {
+        if ((inDegree.get(n.id) || 0) === 0) { layer.set(n.id, 0); queue.push(n.id); }
+      }
+      // Fallback — isolated nodes that have in-edges (cycles) get layer 0
+      for (const n of nodes) { if (!layer.has(n.id)) { layer.set(n.id, 0); queue.push(n.id); } }
+
+      let qi = 0;
+      while (qi < queue.length) {
+        const cur = queue[qi++];
+        const curLayer = layer.get(cur) || 0;
+        for (const next of (adjOut.get(cur) || [])) {
+          if ((layer.get(next) || 0) <= curLayer) {
+            layer.set(next, curLayer + 1);
+          }
+          if (!queue.includes(next)) queue.push(next);
+        }
+      }
+
+      // Group nodes by layer
+      const byLayer = new Map();
+      for (const n of nodes) {
+        const l = layer.get(n.id) || 0;
+        if (!byLayer.has(l)) byLayer.set(l, []);
+        byLayer.get(l).push(n);
+      }
+      const maxLayer = Math.max(...byLayer.keys());
+
+      // Layout constants
+      const NODE_W    = 160;
+      const NODE_H    = 38;
+      const COL_GAP   = 60;
+      const ROW_GAP   = 18;
+      const PAD_X     = 20;
+      const PAD_Y     = 40;  // space for title
+
+      // Assign x/y to each node
+      const pos = new Map();
+      const colX = [];
+      let xCursor = PAD_X;
+      for (let l = 0; l <= maxLayer; l++) {
+        colX[l] = xCursor;
+        xCursor += NODE_W + COL_GAP;
+      }
+
+      let maxY = PAD_Y;
+      for (let l = 0; l <= maxLayer; l++) {
+        const col = byLayer.get(l) || [];
+        let y = PAD_Y;
+        for (const n of col) {
+          pos.set(n.id, { x: colX[l], y });
+          y += NODE_H + ROW_GAP;
+        }
+        if (y > maxY) maxY = y;
+      }
+
+      const svgWidth  = xCursor - COL_GAP + PAD_X;
+      const svgHeight = maxY + 20;
+
+      // ── Render nodes ─────────────────────────────────────────────────────────
+      function depthColor(d) {
+        if (d === 0) return '#e5e7eb';
+        if (d < 10)  return '#fde68a';
+        if (d < 100) return '#fbbf24';
+        return '#f87171';
+      }
+      function textColor(d) { return d >= 100 ? '#fff' : '#1f2328'; }
+
+      const nodeSvg = nodes.map(n => {
+        const p = pos.get(n.id);
+        if (!p) return '';
+        const depth    = n.depth || 0;
+        const fill     = depthColor(depth);
+        const tc       = textColor(depth);
+        const label    = n.label.length > 20 ? n.label.slice(0, 18) + '…' : n.label;
+        const depthBadge = showDepths && depth > 0
+          ? `<rect x="${p.x + NODE_W - 32}" y="${p.y + 4}" width="28" height="16" rx="8" fill="#3b82d4"/>
+             <text x="${p.x + NODE_W - 18}" y="${p.y + 15}" font-size="9" fill="#fff" text-anchor="middle" font-family="monospace">${depth}</text>`
+          : '';
+        return `<g>
+          <rect x="${p.x}" y="${p.y}" width="${NODE_W}" height="${NODE_H}" rx="6" fill="${fill}" stroke="#d0d7de" stroke-width="1.2"/>
+          ${depthBadge}
+          <text x="${p.x + NODE_W / 2}" y="${p.y + NODE_H / 2 + 5}" font-size="11" fill="${tc}" text-anchor="middle" font-family="-apple-system,sans-serif" font-weight="500">${label}</text>
+        </g>`;
+      }).join('\n');
+
+      // ── Render edges (cubic bezier) ───────────────────────────────────────────
+      const edgeSvg = edges.map(e => {
+        const from = pos.get(e.from);
+        const to   = pos.get(e.to);
+        if (!from || !to) return '';
+        const x1 = from.x + NODE_W;
+        const y1 = from.y + NODE_H / 2;
+        const x2 = to.x;
+        const y2 = to.y + NODE_H / 2;
+        const cx = (x1 + x2) / 2;
+        return `<path d="M${x1},${y1} C${cx},${y1} ${cx},${y2} ${x2},${y2}" fill="none" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arr)"/>`;
+      }).join('\n');
+
+      const titleSvg = `<text x="${PAD_X}" y="24" font-size="13" font-weight="600" fill="#1f2328" font-family="-apple-system,sans-serif">${title}</text>
+        <text x="${svgWidth - PAD_X}" y="24" font-size="10" fill="#57606a" text-anchor="end" font-family="monospace">${data.generatedAt ? new Date(data.generatedAt).toLocaleTimeString() : ''}</text>`;
+
+      const defs = `<defs>
+        <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L0,6 L8,3 z" fill="#8b949e"/>
+        </marker>
+      </defs>`;
+
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}" viewBox="0 0 ${svgWidth} ${svgHeight}">
+        ${defs}
+        ${titleSvg}
+        ${edgeSvg}
+        ${nodeSvg}
+      </svg>`;
+
+      return { svg, width: svgWidth, height: svgHeight };
+    },
+
+    async flow(data) {
+      // data = /api/agent/flow-diagram payload
+      if (!data) return `<p style="font-family:-apple-system,sans-serif;color:#cf222e">Flow data unavailable.</p>`;
+
+      const { svg, width, height } = await FORMATTERS._buildFlowDiagramSvg(data, { title: 'Message Flow Diagram' });
+
+      // Base64-encode the SVG for a download link
+      const svgB64  = Buffer.from(svg, 'utf8').toString('base64');
+      const dlHref  = `data:image/svg+xml;base64,${svgB64}`;
+      const ts      = data.generatedAt ? new Date(data.generatedAt).toISOString().replace(/[:.]/g, '-').slice(0, 19) : 'export';
+      const dlName  = `flow-diagram-${ts}.svg`;
+
+      const nodeCount = (data.nodes || []).length;
+      const edgeCount = (data.edges || []).length;
+      const withDepth = (data.nodes || []).filter(n => n.depth > 0).length;
+
+      return `<div style="font-family:-apple-system,'Segoe UI',sans-serif;font-size:13px">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap">
+          <span style="color:#57606a">${nodeCount} queue${nodeCount !== 1 ? 's' : ''} · ${edgeCount} route${edgeCount !== 1 ? 's' : ''}${withDepth > 0 ? ` · <strong style="color:#f59e0b">${withDepth} with messages</strong>` : ''}</span>
+          <a href="${dlHref}" download="${dlName}" style="font-size:11px;padding:3px 10px;border:1px solid #d0d7de;border-radius:5px;color:#3b82d4;text-decoration:none;background:#f7f8fa">⬇ Export SVG</a>
+        </div>
+        <div style="border:1px solid #e5e7eb;border-radius:6px;overflow:auto;background:#fff;padding:8px">
+          ${svg}
+        </div>
+        <p style="margin:6px 0 0;font-size:11px;color:#57606a">Node colour: <span style="background:#e5e7eb;padding:1px 6px;border-radius:3px">empty</span> <span style="background:#fde68a;padding:1px 6px;border-radius:3px">&lt;10</span> <span style="background:#fbbf24;padding:1px 6px;border-radius:3px">&lt;100</span> <span style="background:#f87171;color:#fff;padding:1px 6px;border-radius:3px">≥100</span></p>
+      </div>`;
+    },
+
+    async animatedFlow(_data, captures) {
+      // Builds a self-contained HTML page that polls /api/agent/flow-diagram
+      // every N seconds and re-renders the SVG — delivered as a data:text/html link
+      // that opens in a new tab, plus a live inline preview note.
+      const interval = captures?.interval
+        ? Math.max(5, Math.min(300, parseInt(captures.interval, 10) || 30))
+        : 30;
+
+      // Fetch current snapshot for the inline preview
+      const data = await fetchLocalApi('/api/agent/flow-diagram');
+      const nodes    = Array.isArray(data?.nodes) ? data.nodes : [];
+      const edges    = Array.isArray(data?.edges) ? data.edges : [];
+      const nodeCount = nodes.length;
+      const edgeCount = edges.length;
+
+      // Build the self-contained animated HTML page
+      // It uses fetch() + setInterval to poll the live endpoint and redraw the SVG.
+      const animatedHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Animated Flow Diagram</title>
+<style>
+  body { margin:0; font-family:-apple-system,'Segoe UI',sans-serif; background:#f7f8fa; color:#1f2328; }
+  #header { display:flex; align-items:center; gap:14px; padding:10px 16px; background:#fff; border-bottom:1px solid #e5e7eb; flex-wrap:wrap; }
+  #header h2 { margin:0; font-size:15px; font-weight:600; }
+  #meta { font-size:12px; color:#57606a; }
+  #status { font-size:11px; padding:2px 8px; border-radius:10px; background:#e5e7eb; }
+  #status.ok { background:#dcfce7; color:#15803d; }
+  #status.err { background:#fee2e2; color:#b91c1c; }
+  #canvas { padding:16px; overflow:auto; }
+  #canvas svg { display:block; max-width:100%; }
+  #legend { padding:6px 16px; font-size:11px; color:#57606a; }
+  #controls { display:flex; gap:10px; align-items:center; }
+  button { font-size:12px; padding:3px 10px; border:1px solid #d0d7de; border-radius:5px; background:#f7f8fa; cursor:pointer; }
+  button:hover { background:#e5e7eb; }
+  input[type=number] { width:56px; font-size:12px; padding:2px 6px; border:1px solid #d0d7de; border-radius:4px; }
+</style>
+</head>
+<body>
+<div id="header">
+  <h2>&#9654; Live Flow Diagram</h2>
+  <div id="meta">Refreshing every <input type="number" id="ivInput" min="5" max="300" value="${interval}">s</div>
+  <div id="controls">
+    <button onclick="applyInterval()">Apply</button>
+    <button onclick="pause()">Pause</button>
+    <button onclick="exportSvg()">&#11015; Export SVG</button>
+  </div>
+  <div id="status">connecting…</div>
+</div>
+<div id="canvas"><p style="color:#57606a;padding:20px">Loading…</p></div>
+<div id="legend">
+  Node colour:
+  <span style="background:#e5e7eb;padding:1px 6px;border-radius:3px">empty</span>
+  <span style="background:#fde68a;padding:1px 6px;border-radius:3px">&lt;10 msgs</span>
+  <span style="background:#fbbf24;padding:1px 6px;border-radius:3px">&lt;100 msgs</span>
+  <span style="background:#f87171;color:#fff;padding:1px 6px;border-radius:3px">&#8805;100 msgs</span>
+  &nbsp;· Blue badge = live depth
+</div>
+
+<script>
+const BASE = location.origin;
+let intervalMs = ${interval} * 1000;
+let timerId = null;
+let paused  = false;
+let lastSvg = '';
+
+function depthColor(d) {
+  if (d === 0) return '#e5e7eb';
+  if (d < 10)  return '#fde68a';
+  if (d < 100) return '#fbbf24';
+  return '#f87171';
+}
+function textColor(d) { return d >= 100 ? '#fff' : '#1f2328'; }
+
+function buildSvg(nodes, edges, generatedAt) {
+  if (!nodes.length) return '<p style="color:#57606a;padding:20px">No routing rules — no flow to display.</p>';
+
+  const NODE_W=160, NODE_H=38, COL_GAP=60, ROW_GAP=18, PAD_X=20, PAD_Y=40;
+
+  const inDegree = new Map(nodes.map(n=>[n.id,0]));
+  const adjOut   = new Map(nodes.map(n=>[n.id,[]]));
+  for (const e of edges) {
+    if (!inDegree.has(e.from)||!inDegree.has(e.to)) continue;
+    inDegree.set(e.to,(inDegree.get(e.to)||0)+1);
+    adjOut.get(e.from).push(e.to);
+  }
+
+  const layer = new Map();
+  const q = [];
+  for (const n of nodes) { if (!inDegree.get(n.id)) { layer.set(n.id,0); q.push(n.id); } }
+  for (const n of nodes) { if (!layer.has(n.id)) { layer.set(n.id,0); q.push(n.id); } }
+  let qi=0;
+  while (qi<q.length) {
+    const cur=q[qi++]; const cl=layer.get(cur)||0;
+    for (const nxt of (adjOut.get(cur)||[])) {
+      if ((layer.get(nxt)||0)<=cl) layer.set(nxt,cl+1);
+      if (!q.includes(nxt)) q.push(nxt);
+    }
+  }
+
+  const byLayer=new Map();
+  for (const n of nodes) { const l=layer.get(n.id)||0; if(!byLayer.has(l))byLayer.set(l,[]); byLayer.get(l).push(n); }
+  const maxLayer=Math.max(...byLayer.keys());
+
+  const colX=[]; let xCursor=PAD_X;
+  for(let l=0;l<=maxLayer;l++){colX[l]=xCursor;xCursor+=NODE_W+COL_GAP;}
+
+  const pos=new Map(); let maxY=PAD_Y;
+  for(let l=0;l<=maxLayer;l++){
+    const col=byLayer.get(l)||[]; let y=PAD_Y;
+    for(const n of col){pos.set(n.id,{x:colX[l],y}); y+=NODE_H+ROW_GAP;}
+    if(y>maxY)maxY=y;
+  }
+
+  const svgW=xCursor-COL_GAP+PAD_X, svgH=maxY+20;
+
+  const nodeSvg=nodes.map(n=>{
+    const p=pos.get(n.id); if(!p)return '';
+    const d=n.depth||0; const fill=depthColor(d); const tc=textColor(d);
+    const lbl=n.label.length>20?n.label.slice(0,18)+'…':n.label;
+    const badge=d>0?\`<rect x="\${p.x+NODE_W-32}" y="\${p.y+4}" width="28" height="16" rx="8" fill="#3b82d4"/><text x="\${p.x+NODE_W-18}" y="\${p.y+15}" font-size="9" fill="#fff" text-anchor="middle" font-family="monospace">\${d}</text>\`:'';
+    return \`<g><rect x="\${p.x}" y="\${p.y}" width="\${NODE_W}" height="\${NODE_H}" rx="6" fill="\${fill}" stroke="#d0d7de" stroke-width="1.2"/>\${badge}<text x="\${p.x+NODE_W/2}" y="\${p.y+NODE_H/2+5}" font-size="11" fill="\${tc}" text-anchor="middle" font-family="-apple-system,sans-serif" font-weight="500">\${lbl}</text></g>\`;
+  }).join('');
+
+  const edgeSvg=edges.map(e=>{
+    const f=pos.get(e.from),t=pos.get(e.to); if(!f||!t)return '';
+    const x1=f.x+NODE_W,y1=f.y+NODE_H/2,x2=t.x,y2=t.y+NODE_H/2,cx=(x1+x2)/2;
+    return \`<path d="M\${x1},\${y1} C\${cx},\${y1} \${cx},\${y2} \${x2},\${y2}" fill="none" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arr)"/>\`;
+  }).join('');
+
+  const timeStr=generatedAt?new Date(generatedAt).toLocaleTimeString():'';
+  return \`<svg xmlns="http://www.w3.org/2000/svg" width="\${svgW}" height="\${svgH}" viewBox="0 0 \${svgW} \${svgH}" id="flowSvg">
+    <defs><marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#8b949e"/></marker></defs>
+    <text x="20" y="24" font-size="13" font-weight="600" fill="#1f2328" font-family="-apple-system,sans-serif">Message Flow Diagram</text>
+    <text x="\${svgW-20}" y="24" font-size="10" fill="#57606a" text-anchor="end" font-family="monospace">\${timeStr}</text>
+    \${edgeSvg}\${nodeSvg}
+  </svg>\`;
+}
+
+async function refresh() {
+  if (paused) return;
+  const st = document.getElementById('status');
+  try {
+    const r = await fetch(BASE + '/api/agent/flow-diagram', { headers:{'x-user-id':'systemadmin'} });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    const svg = buildSvg(data.nodes||[], data.edges||[], data.generatedAt);
+    lastSvg = svg;
+    document.getElementById('canvas').innerHTML = svg;
+    st.className = 'ok';
+    st.textContent = 'live · ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    st.className = 'err';
+    st.textContent = 'error: ' + e.message;
+  }
+}
+
+function applyInterval() {
+  const v = parseInt(document.getElementById('ivInput').value, 10);
+  if (!v || v < 5) return;
+  intervalMs = v * 1000;
+  clearInterval(timerId);
+  timerId = setInterval(refresh, intervalMs);
+  paused = false;
+  document.querySelector('button[onclick="pause()"]').textContent = 'Pause';
+}
+
+function pause() {
+  paused = !paused;
+  document.querySelector('button[onclick="pause()"]').textContent = paused ? '▶ Resume' : 'Pause';
+}
+
+function exportSvg() {
+  const el = document.getElementById('flowSvg');
+  if (!el) return;
+  const src = new XMLSerializer().serializeToString(el);
+  const a = document.createElement('a');
+  a.href = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(src);
+  a.download = 'flow-diagram-' + new Date().toISOString().slice(0,19).replace(/[:.]/g,'-') + '.svg';
+  a.click();
+}
+
+refresh();
+timerId = setInterval(refresh, intervalMs);
+</script>
+</body>
+</html>`;
+
+      // Build inline static preview
+      const previewSvg = nodeCount > 0
+        ? (await FORMATTERS._buildFlowDiagramSvg(data, { title: 'Current Snapshot' })).svg
+        : `<p style="color:#57606a">No routing rules found.</p>`;
+
+      const liveUrl    = `/api/agent/animated-flow-page?interval=${interval}`;
+      // Export: encode the animatedHtml as a data: download (download attr, not navigation)
+      const pageB64    = Buffer.from(animatedHtml, 'utf8').toString('base64');
+      const exportHref = `data:text/html;base64,${pageB64}`;
+
+      return `<div style="font-family:-apple-system,'Segoe UI',sans-serif;font-size:13px">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap">
+          <span style="font-weight:600">Animated Flow Diagram</span>
+          <span style="color:#57606a;font-size:12px">${nodeCount} queue${nodeCount!==1?'s':''} · ${edgeCount} route${edgeCount!==1?'s':''} · refreshes every ${interval}s</span>
+          <a href="${liveUrl}" target="_blank" rel="noopener" style="font-size:12px;padding:4px 12px;border-radius:5px;background:#3b82d4;color:#fff;text-decoration:none;font-weight:500">&#9654; Open Live View</a>
+          <a href="${exportHref}" download="animated-flow-${interval}s.html" style="font-size:11px;padding:3px 10px;border:1px solid #d0d7de;border-radius:5px;color:#3b82d4;text-decoration:none;background:#f7f8fa">&#11015; Export HTML</a>
+        </div>
+        <div style="border:1px solid #e5e7eb;border-radius:6px;overflow:auto;background:#fff;padding:8px;position:relative">
+          ${previewSvg}
+          <div style="position:absolute;top:8px;right:10px;font-size:10px;background:#f7f8fa;border:1px solid #e5e7eb;border-radius:3px;padding:2px 7px;color:#57606a">snapshot · click &#9654; for live</div>
+        </div>
+        <p style="margin:6px 0 0;font-size:11px;color:#57606a">The live view opens in a new tab and polls <code>/api/agent/flow-diagram</code> every ${interval} seconds. Use "animated flow every 10 seconds" to change the interval.</p>
+      </div>`;
+    },
   };
 
+  // ── Interaction log (feedback dataset) ──────────────────────────────────────
+  const INTERACTION_LOG_PATH = path.resolve('./data/interaction-log.jsonl');
+
+  function appendInteractionLog(record) {
+    try {
+      fs.appendFileSync(INTERACTION_LOG_PATH, JSON.stringify(record) + '\n', 'utf8');
+    } catch (e) {
+      console.warn('[AGENT] Could not write interaction log:', e.message);
+    }
+  }
+
+  // POST /api/agent/feedback
+  // Body: { interactionId, rating: 'good'|'bad', expected?: string }
+  app.post('/api/agent/feedback', express.json(), (req, res) => {
+    try {
+      const { interactionId, rating, expected } = req.body || {};
+      if (!interactionId || !['good', 'bad'].includes(rating)) {
+        return res.status(400).json({ error: 'interactionId and rating (good|bad) are required' });
+      }
+      appendInteractionLog({
+        type: 'feedback',
+        interactionId: String(interactionId),
+        rating: String(rating),
+        expected: expected ? String(expected).slice(0, 500) : null,
+        recordedAt: new Date().toISOString(),
+      });
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.post('/agent', upload.array('files'), async (req, res) => {
+    const interactionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const shouldRecordInteraction = req.get('x-agent-test') !== '1';
     try {
       const message = String(req.body?.message || '').trim();
-      if (!message) return res.status(400).json({ output: 'No message provided.' });
+      if (!message) return res.status(400).json({
+        output: 'No message provided.',
+        voiceReply: "I'm unclear, can you help me with this",
+        _needsClarification: true,
+      });
 
       console.log(`[AGENT] message="${message.substring(0, 80)}"`);
 
@@ -2940,25 +4909,62 @@ User request: "${query}"`;
         return res.json({
           output: reloadResult.success
             ? 'Model context cleared and reloaded successfully.'
-            : `Reset attempted, but reload reported: ${reloadResult.error || 'unknown error'}`
+            : `Reset attempted, but reload reported: ${reloadResult.error || 'unknown error'}`,
+          voiceReply: reloadResult.success ? 'OK' : "I'm unclear, can you help me with this",
+          _needsClarification: !reloadResult.success,
         });
       }
 
       // ── Intent dispatch (driven by data/agent-routes.json) ─────────────────
       const match = await matchAgentIntent(message);
+      let intentId = match ? match.intent.id : 'ollama-fallback';
+
+      const respond = (result, confidence = 1) => {
+        const structured = result && typeof result === 'object' && !Array.isArray(result)
+          ? result
+          : { output: result };
+        const output = structured.output ?? '';
+        const normalizedConfidence = Number(confidence) > 1
+          ? Number(confidence) / 100
+          : Number(confidence);
+        const needsClarification = !Number.isFinite(normalizedConfidence) || normalizedConfidence < 0.95;
+        const explicitVoiceReply = String(structured.voiceReply || '').trim();
+        const voiceReply = explicitVoiceReply
+          || (needsClarification ? "I'm unclear, can you help me with this" : 'OK');
+
+        // Log the interaction before responding
+        if (shouldRecordInteraction) {
+          appendInteractionLog({
+            type: 'interaction',
+            interactionId,
+            message,
+            intentId,
+            outputSummary: String(output || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300),
+            recordedAt: new Date().toISOString(),
+          });
+        }
+        res.json({
+          output,
+          voiceReply,
+          _interactionId: interactionId,
+          _intentId: intentId,
+          _needsClarification: needsClarification,
+        });
+      };
+
       if (match) {
         const { intent, captures } = match;
         console.log(`[AGENT] intent="${intent.id}" formatter="${intent.formatter}" captures=${JSON.stringify(captures)}`);
         const formatter = FORMATTERS[intent.formatter];
-        // Camera (and future no-api intents) skip the API fetch
         if (intent.api === null && formatter) {
-          return res.json({ output: formatter(null, captures) });
+          return respond(await Promise.resolve(formatter(null, captures)));
         }
         const data = await fetchLocalApi(intent.api);
         if (data && formatter) {
-          return res.json({ output: formatter(data, captures) });
+          return respond(await Promise.resolve(formatter(data, captures)));
         }
         console.warn(`[AGENT] intent "${intent.id}" matched but api/formatter failed — falling through`);
+        intentId = 'ollama-fallback';
       }
 
       // ── Fall through to Ollama askHandler for everything else ──────────────
@@ -2970,19 +4976,29 @@ User request: "${query}"`;
           json(data) {
             if (settled) return;
             settled = true;
-            res.json({ output: data?.answer || data?.output || JSON.stringify(data, null, 2) });
+            respond({
+              output: data?.answer || data?.output || JSON.stringify(data, null, 2),
+              voiceReply: data?.voiceReply,
+            }, data?.confidence ?? 0);
             resolve();
           }
         };
         Promise.resolve(askHandler(syntheticReq, syntheticRes)).catch((err) => {
-          if (!settled) { settled = true; res.json({ output: `Error: ${err.message || String(err)}` }); }
+          if (!settled) {
+            settled = true;
+            respond(`Error: ${err.message || String(err)}`, 0);
+          }
           resolve();
         });
       });
 
     } catch (e) {
       console.error('[AGENT] Unhandled error:', e?.message || String(e));
-      res.status(500).json({ output: `Server error: ${e?.message || String(e)}` });
+      res.status(500).json({
+        output: `Server error: ${e?.message || String(e)}`,
+        voiceReply: "I'm unclear, can you help me with this",
+        _needsClarification: true,
+      });
     }
   });
 

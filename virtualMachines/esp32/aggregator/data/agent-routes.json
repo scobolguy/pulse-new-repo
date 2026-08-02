@@ -1,7 +1,173 @@
 {
   "version": 1,
-  "description": "Intent routing rules for POST /agent (BOB Console). Add or edit intents here — no code changes needed. The loader re-reads this file every 30 seconds so changes take effect without a restart.",
+  "description": "Intent routing rules for POST /agent (BOB Console). Add or edit intents here — no code changes needed. The loader re-reads this file every 30 seconds so changes take effect without a restart.\n\nV2 intents use slot-first matching: the loader extracts all slots defined in 'slots' from the\nmessage, then picks the highest-scoring intent whose 'requires' are all present and 'excludes'\nare all absent. Output modifiers (OUTPUT_FORMAT, COUNT, etc.) are cross-cutting — extracted once,\nflowed automatically to whichever formatter wins. No ordering dependency.\n\nV1 intents (no 'version' field) use the original first-match ordered pattern scan.",
+
+  "slots": {
+    "QUEUE_NAME":    "(?:(?:queue|in\\s+queue|from\\s+queue|in\\s+the\\s+queue|of\\s+queue)\\s+)(?<QUEUE_NAME>[\\w][\\w/.-]{2,})",
+    "COUNT":         "(?:first|top|next)\\s+(?<COUNT>\\d+)",
+    "OUTPUT_FORMAT": "(?:as\\s+(?:an?\\s+)?|format\\s+|in\\s+(?:an?\\s+)?)(?<OUTPUT_FORMAT>excel\\s+spreadsheet|spreadsheet|excel|xlsx|csv|html)",
+    "SCOPE_ALL":     "(?:all|every|each)\\s+(?:the\\s+)?queues?(?!\\s+\\w+\\.\\w)",
+    "ACTION_LIST_QUEUES": "(?:(?:show|list|display|get|what|how\\s+many)\\b.{0,60}\\bqueues?|queues?\\b.{0,40}\\b(?:status|depth|count|state|all|list|show|overview|backlog))",
+    "ACTION_PEEK":   "(?:peek|inspect|read\\s+(?:from|off)|show\\s+(?:queue\\s+)?(?:item|message|content|transaction)|first\\s+\\d+\\s+(?:item|message|transaction)|first\\s+(?:item|message|transaction))",
+    "EACH_QUEUE":    "(?:(?:first|next)\\s+item\\s+(?:in|from|of)\\s+(?:each|every|all)|(?:each|every|all)\\s+queue(?:s)?\\s+item|peek\\s+(?:all|each|every)\\s+queues?)"
+  },
+
   "intents": [
+
+    {
+      "id": "animated-flow",
+      "description": "Show a live-updating animated flow diagram that polls every N seconds. Captures optional interval. Examples: 'animated flow', 'show animated flow every 10 seconds', 'live flow diagram every 60s'.",
+      "patterns": [
+        "\\banimated\\s+flow\\b",
+        "\\blive\\s+flow\\b",
+        "\\bflow.*animated\\b",
+        "\\bflow.*live\\b",
+        "\\bflow.*every\\s+\\d+",
+        "\\banimated.*diagram\\b",
+        "\\blive.*flow.*diagram\\b"
+      ],
+      "flags": "i",
+      "capture": "every\\s+(?<interval>\\d+)\\s*s(?:ec(?:ond)?s?)?",
+      "captureFlags": "i",
+      "api": null,
+      "formatter": "animatedFlow"
+    },
+
+    {
+      "id": "flow",
+      "description": "Show a static flow diagram of all router rules as a left-to-right SVG with queue depths and an export button. Examples: 'show flow diagram', 'flow diagram', 'show message flow', 'routing diagram'.",
+      "patterns": [
+        "\\bflow\\s+diagram\\b",
+        "\\bshow.*flow\\b",
+        "\\bflow.*chart\\b",
+        "\\bmessage\\s+flow\\b",
+        "\\brouting\\s+diagram\\b",
+        "\\bshow.*routing\\b",
+        "\\bflow.*overview\\b",
+        "\\bpipeline\\s+diagram\\b",
+        "\\bshow.*pipeline\\b"
+      ],
+      "flags": "i",
+      "api": "/api/agent/flow-diagram",
+      "formatter": "flow"
+    },
+
+    {
+      "id": "queue-query",
+      "description": "SQL-like SELECT query on queue messages — supports field projection (select), field filtering (where), output format (format html|csv|xls). Examples: 'select messageId from queue payments.inbound', 'select message.Currency from queue swift.mt103.inbound where message.Currency=USD format csv', 'query queue payments.inbound format xls'.",
+      "patterns": [
+        "\\bselect\\b.*\\bfrom\\s+queue\\b",
+        "\\bselect\\b.*\\bqueue\\b.*\\bfrom\\b",
+        "\\bquery\\s+queue\\b",
+        "\\blist\\s+fields?\\b.*\\bqueue\\b",
+        "\\bshow\\s+fields?\\b.*\\bqueue\\b",
+        "\\bsql\\b.*\\bqueue\\b",
+        "\\bqueue\\b.*\\bwhere\\b.*[=!<>~]",
+        "\\bquery\\b.*\\bqueue\\b.*\\bwhere\\b"
+      ],
+      "flags": "i",
+      "capture": "(?:select\\s+(?<select>[\\w.,*\\s]+?)\\s+from\\s+queue\\s+|query\\s+queue\\s+|(?:list|show)\\s+fields?\\s+(?:(?:from|in|of)\\s+)?(?:queue\\s+)?|sql\\s+(?:query\\s+)?(?:on\\s+)?queue\\s+)(?<queue>[\\w][\\w/.-]*)(?:\\s+(?:on|manager|via)\\s+(?<manager>[\\w-]+))?(?:\\s+where\\s+(?<where>(?:(?!\\b(?:limit\\s+\\d|format\\s+(?:html|csv|xls|xlsx)))\\S)+(?:\\s+(?:(?!\\b(?:limit\\s+\\d|format\\s+(?:html|csv|xls|xlsx)))\\S)+)*))?(?:\\s+limit\\s+(?<limit>\\d+))?(?:\\s+format\\s+(?<format>html|csv|xls|xlsx))?",
+      "captureFlags": "i",
+      "api": null,
+      "formatter": "queueQuery"
+    },
+
+    {
+      "id": "queue-item-each",
+      "version": 2,
+      "description": "Show the first item from every queue. Requires EACH_QUEUE slot. Excluded when a specific QUEUE_NAME is present.",
+      "requires": ["EACH_QUEUE"],
+      "excludes": ["QUEUE_NAME"],
+      "score": 30,
+      "api": "/api/agent/queue-summary",
+      "formatter": "queueItemEach"
+    },
+
+    {
+      "id": "queue-item",
+      "version": 2,
+      "description": "Peek at items from a specific queue. QUEUE_NAME required. Optional COUNT, OUTPUT_FORMAT. Excluded when SCOPE_ALL or ACTION_LIST_QUEUES are present without a QUEUE_NAME.",
+      "requires": ["QUEUE_NAME"],
+      "excludes": ["EACH_QUEUE", "ACTION_LIST_QUEUES"],
+      "score": 20,
+      "api": null,
+      "formatter": "queueItem"
+    },
+
+    {
+      "id": "queues",
+      "version": 2,
+      "description": "Show all queues with depths, gateway state, manager status. Optional OUTPUT_FORMAT for excel export, optional capacity threshold. Fires when listing/summarising queues without a specific queue name.",
+      "requires": ["ACTION_LIST_QUEUES"],
+      "excludes": ["QUEUE_NAME", "EACH_QUEUE"],
+      "score": 10,
+      "api": "/api/agent/queue-summary",
+      "formatter": "queues"
+    },
+
+    {
+      "id": "datetime-arithmetic",
+      "description": "Date and time arithmetic: days until an event, what date in N days/weeks/months, N days ago, add N days to a date, days between two dates",
+      "patterns": [
+        "\\bhow many days?\\b",
+        "\\bhow many weeks?\\b",
+        "\\bdays? until\\b",
+        "\\bdays? till\\b",
+        "\\bdays? before\\b",
+        "\\bdays? between\\b",
+        "\\bdifference between\\b",
+        "\\buntil christmas\\b",
+        "\\buntil new year\\b",
+        "\\buntil halloween\\b",
+        "\\buntil thanksgiving\\b",
+        "\\buntil valentine\\b",
+        "\\bin \\d+ days?\\b",
+        "\\bin \\d+ weeks?\\b",
+        "\\bin \\d+ months?\\b",
+        "\\bafter \\d+ days?\\b",
+        "\\bafter \\d+ weeks?\\b",
+        "\\bafter \\d+ months?\\b",
+        "\\b\\d+ days? ago\\b",
+        "\\b\\d+ weeks? ago\\b",
+        "\\b\\d+ months? ago\\b",
+        "\\badd \\d+ days?\\b",
+        "\\badd \\d+ weeks?\\b",
+        "\\badd \\d+ months?\\b",
+        "\\bwhat date.*in \\d+\\b",
+        "\\bwhat day.*in \\d+\\b",
+        "\\bwhat.*will.*it.*be in \\d+\\b"
+      ],
+      "flags": "i",
+      "capture": "^(?<query>.+)$",
+      "captureFlags": "i",
+      "api": null,
+      "formatter": "datetimeArithmetic"
+    },
+
+    {
+      "id": "librarian",
+      "description": "Show data librarian status: registered data types, schema catalog with lifecycle",
+      "patterns": [
+        "\\b(show|list|display|get|what)\\b.*\\b(data.?types?|schemas?)\\b",
+        "\\b(data.?types?|schemas?)\\b.*(list|show|available|registered|status)",
+        "\\blibrarian\\b",
+        "\\bdata librarian\\b",
+        "\\bschema catalog\\b",
+        "\\bregistered.*schemas?\\b",
+        "\\bregistered.*types?\\b",
+        "\\bwhat.*data types?\\b",
+        "\\bwhat.*schemas?\\b",
+        "\\bschemas?.*available\\b",
+        "\\bdata types?.*available\\b",
+        "\\biso.*types?\\b",
+        "\\bswift.*schemas?\\b",
+        "\\bmapper.*types?\\b"
+      ],
+      "flags": "i",
+      "api": "/api/agent/librarian-summary",
+      "formatter": "librarian"
+    },
+
     {
       "id": "time",
       "description": "Show the current NTP-authoritative time and date",
@@ -22,6 +188,7 @@
       "api": "/api/time/authority",
       "formatter": "time"
     },
+
     {
       "id": "camera-feed",
       "description": "Show live MJPEG camera feed from a named ESP32-CAM node. Captures the node name.",
@@ -41,6 +208,7 @@
       "api": null,
       "formatter": "camera"
     },
+
     {
       "id": "system-dashboard",
       "description": "Show system performance dashboard — CPU, memory, queues",
@@ -60,6 +228,7 @@
       "api": "/api/system/performance",
       "formatter": "dashboard"
     },
+
     {
       "id": "lifecycle-dashboard",
       "description": "Show the transaction lifecycle FSM dashboard",
@@ -74,6 +243,55 @@
       "api": "/api/lifecycle/dashboard",
       "formatter": "lifecycle"
     },
+
+    {
+      "id": "topology-live",
+      "description": "Show a live network diagram that refreshes every 30 seconds",
+      "patterns": [
+        "\\b(show|display|open|get)\\b.*\\b(network|topology|nodes?)\\b.*\\b(mermaid|live|refreshing)\\b",
+        "\\b(mermaid|live)\\b.*\\b(network|topology|nodes?)\\b"
+      ],
+      "flags": "i",
+      "api": "/api/topology",
+      "formatter": "topologyLive"
+    },
+
+    {
+      "id": "topology-tree",
+      "description": "Show the network as a collapsible tree",
+      "patterns": [
+        "\\b(show|display|open|get)\\b.*\\b(network|topology|nodes?)\\b.*\\b(tree|hierarchy)\\b",
+        "\\b(tree|hierarchy)\\b.*\\b(network|topology|nodes?)\\b"
+      ],
+      "flags": "i",
+      "api": "/api/topology",
+      "formatter": "topologyTree"
+    },
+
+    {
+      "id": "all-fsms",
+      "description": "Show finite state machines exposed by every node",
+      "patterns": [
+        "\\b(show|list|get|display)\\b.*\\b(all|every)\\b.*\\b(fsms?|finite state machines?|state machines?)\\b",
+        "\\b(show|list|get|display)\\b.*\\b(fsms?|finite state machines?|state machines?)\\b"
+      ],
+      "flags": "i",
+      "api": "/api/nodes",
+      "formatter": "fsmsByNode"
+    },
+
+    {
+      "id": "all-devices",
+      "description": "Show devices and hardware capabilities grouped by node",
+      "patterns": [
+        "\\b(show|list|get|display)\\b.*\\b(all|every)\\b.*\\bdevices?\\b",
+        "\\b(show|list|get|display)\\b.*\\bdevices?\\b.*\\b(each|every|nodes?)\\b"
+      ],
+      "flags": "i",
+      "api": "/api/nodes",
+      "formatter": "devicesByNode"
+    },
+
     {
       "id": "topology",
       "description": "Show the network node hierarchy as an indented tree",
@@ -88,6 +306,7 @@
       "api": "/api/topology",
       "formatter": "topology"
     },
+
     {
       "id": "esp-devices",
       "description": "Show only ESP32 / ESP8266 edge devices",
@@ -103,6 +322,7 @@
       "api": "/api/nodes",
       "formatter": "esp-nodes"
     },
+
     {
       "id": "all-nodes",
       "description": "Show all nodes registered on the network",
@@ -118,6 +338,7 @@
       "api": "/api/ollama/nodes",
       "formatter": "nodes"
     },
+
     {
       "id": "services",
       "description": "Show all services available across the network",
@@ -132,5 +353,6 @@
       "api": "/api/ollama/services",
       "formatter": "services"
     }
+
   ]
 }

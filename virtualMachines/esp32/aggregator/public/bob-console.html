@@ -83,6 +83,91 @@
     font-style: italic;
   }
 
+  /* ── Spinner ── */
+  #spinnerPane {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    font-size: 13px;
+    color: #57606a;
+  }
+  #spinnerPane.visible { display: flex; }
+  @keyframes bob-spin {
+    to { transform: rotate(360deg); }
+  }
+  .spinner-ring {
+    width: 18px;
+    height: 18px;
+    border: 2px solid #e5e7eb;
+    border-top-color: #3b82d4;
+    border-radius: 50%;
+    animation: bob-spin .7s linear infinite;
+    flex-shrink: 0;
+  }
+
+  /* ── Feedback bar ── */
+  #feedbackBar {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: #f7f8fa;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    font-size: 12px;
+    color: #57606a;
+    flex-wrap: wrap;
+  }
+  #feedbackBar.visible  { display: flex; }
+  #feedbackBar.fallback { background: #fff8e1; border-color: #f0c040; }
+  .fb-btn {
+    padding: 3px 10px;
+    font-size: 13px;
+    border-radius: 5px;
+    border: 1px solid #e5e7eb;
+    background: #fff;
+    cursor: pointer;
+    line-height: 1.4;
+    font-family: inherit;
+  }
+  .fb-btn:hover { background: #f0f0f0; }
+  .fb-btn.good  { border-color: #2da44e; color: #2da44e; }
+  .fb-btn.bad   { border-color: #cf222e; color: #cf222e; }
+  #feedbackExpected {
+    display: none;
+    gap: 6px;
+    align-items: center;
+    width: 100%;
+    margin-top: 4px;
+  }
+  #feedbackExpected.visible { display: flex; }
+  #feedbackExpectedInput {
+    flex: 1;
+    font-size: 12px;
+    font-family: inherit;
+    padding: 4px 8px;
+    border: 1px solid #e5e7eb;
+    border-radius: 5px;
+    outline: none;
+  }
+  #feedbackExpectedInput:focus { border-color: #3b82d4; }
+  #feedbackSubmitBtn {
+    padding: 4px 12px;
+    font-size: 12px;
+    font-family: inherit;
+    border-radius: 5px;
+    border: 1px solid #3b82d4;
+    background: #3b82d4;
+    color: #fff;
+    cursor: pointer;
+  }
+  #feedbackNote {
+    font-size: 11px;
+    color: #57606a;
+    font-style: italic;
+  }
+
   /* ── Controls row ── */
   #controls {
     display: flex;
@@ -168,6 +253,23 @@
     <span class="placeholder">Model replies, camera feeds, and dashboards will appear here.</span>
   </div>
 
+  <div id="spinnerPane">
+    <div class="spinner-ring"></div>
+    <span id="spinnerLabel">Thinking…</span>
+  </div>
+
+  <!-- ── Feedback bar ── -->
+  <div id="feedbackBar">
+    <span>Was this correct?</span>
+    <button class="fb-btn good" id="fbGood">&#128077; Yes</button>
+    <button class="fb-btn bad"  id="fbBad">&#128078; No</button>
+    <span id="feedbackNote"></span>
+    <div id="feedbackExpected">
+      <input id="feedbackExpectedInput" type="text" placeholder="What did you expect instead?">
+      <button id="feedbackSubmitBtn">Submit</button>
+    </div>
+  </div>
+
   <div id="controls">
     <button id="talkBtn">&#127908; Push to Talk</button>
     <button id="sendBtn">Send</button>
@@ -185,10 +287,10 @@
 
 <script>
 /* ─────────────────────────────────────────────────────────
-   CONFIG  —  aggregator runs on port 4000; /agent is served
-   from the same host as this page, so we use a relative URL.
+   CONFIG
 ───────────────────────────────────────────────────────── */
-const AGENT_URL = '/agent';
+const AGENT_URL    = '/agent';
+const FEEDBACK_URL = '/api/agent/feedback';
 
 /* ─────────────────────────────────────────────────────────
    STATUS INDICATOR
@@ -202,9 +304,129 @@ function setStatus(state, text) {
 }
 
 /* ─────────────────────────────────────────────────────────
+   FEEDBACK
+───────────────────────────────────────────────────────── */
+let currentInteractionId = null;
+let currentIntentId      = null;
+let feedbackSubmitting   = false;
+
+function showFeedbackBar(interactionId, intentId, needsClarification = false) {
+  currentInteractionId = interactionId;
+  currentIntentId      = intentId;
+
+  const bar      = document.getElementById('feedbackBar');
+  const note     = document.getElementById('feedbackNote');
+  const expected = document.getElementById('feedbackExpected');
+  const input    = document.getElementById('feedbackExpectedInput');
+  const prompt   = document.querySelector('#feedbackBar > span:first-child');
+  const fbGood   = document.getElementById('fbGood');
+  const fbBad    = document.getElementById('fbBad');
+
+  input.value = '';
+  feedbackSubmitting = false;
+  fbGood.disabled = false;
+  fbBad.disabled = false;
+  document.getElementById('feedbackSubmitBtn').disabled = false;
+  bar.classList.add('visible');
+
+  if (needsClarification || intentId === 'ollama-fallback') {
+    // Ollama didn't understand — skip the Yes/No choice, go straight to "what did you expect?"
+    bar.classList.add('fallback');
+    prompt.textContent = "I wasn't sure what you meant — what were you expecting?";
+    note.textContent   = '';
+    fbGood.style.display = 'none';
+    fbBad.style.display  = 'none';
+    expected.classList.add('visible');
+    setTimeout(() => input.focus(), 50);
+  } else {
+    bar.classList.remove('fallback');
+    prompt.textContent   = 'Was this correct?';
+    note.textContent     = intentId ? `intent: ${intentId}` : '';
+    fbGood.style.display = '';
+    fbBad.style.display  = '';
+    expected.classList.remove('visible');
+  }
+}
+
+function hideFeedbackBar() {
+  document.getElementById('feedbackBar').classList.remove('visible');
+  document.getElementById('feedbackExpected').classList.remove('visible');
+  currentInteractionId = null;
+  currentIntentId      = null;
+}
+
+async function submitFeedback(rating, expected) {
+  if (!currentInteractionId || feedbackSubmitting) return false;
+  feedbackSubmitting = true;
+  const fbGood = document.getElementById('fbGood');
+  const fbBad = document.getElementById('fbBad');
+  const submitBtn = document.getElementById('feedbackSubmitBtn');
+  fbGood.disabled = true;
+  fbBad.disabled = true;
+  submitBtn.disabled = true;
+  try {
+    const response = await fetch(FEEDBACK_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ interactionId: currentInteractionId, rating, expected: expected || null })
+    });
+    if (!response.ok) throw new Error(`Feedback request failed (${response.status})`);
+    return true;
+  } catch (e) {
+    console.warn('Feedback submit failed:', e.message);
+    fbGood.disabled = false;
+    fbBad.disabled = false;
+    submitBtn.disabled = false;
+    return false;
+  } finally {
+    feedbackSubmitting = false;
+  }
+}
+
+document.getElementById('fbGood').addEventListener('click', async () => {
+  if (!await submitFeedback('good')) return;
+  const note = document.getElementById('feedbackNote');
+  note.textContent = '✓ Recorded — thank you';
+  document.getElementById('feedbackExpected').classList.remove('visible');
+  setTimeout(hideFeedbackBar, 1800);
+});
+
+document.getElementById('fbBad').addEventListener('click', () => {
+  document.getElementById('feedbackExpected').classList.add('visible');
+  document.getElementById('feedbackExpectedInput').focus();
+});
+
+document.getElementById('feedbackSubmitBtn').addEventListener('click', async () => {
+  const expected = document.getElementById('feedbackExpectedInput').value.trim();
+  if (!await submitFeedback('bad', expected)) return;
+  const prompt = document.querySelector('#feedbackBar > span:first-child');
+  const note   = document.getElementById('feedbackNote');
+  prompt.textContent = '✓ Recorded — thank you';
+  note.textContent   = '';
+  document.getElementById('feedbackExpected').classList.remove('visible');
+  setTimeout(hideFeedbackBar, 1800);
+});
+
+document.getElementById('feedbackExpectedInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.getElementById('feedbackSubmitBtn').click();
+});
+
+/* ─────────────────────────────────────────────────────────
    RENDER OUTPUT
 ───────────────────────────────────────────────────────── */
+function showSpinner(msg) {
+  document.getElementById('outputPane').style.display    = 'none';
+  document.getElementById('spinnerLabel').textContent    = msg || 'Thinking…';
+  document.getElementById('spinnerPane').classList.add('visible');
+}
+
+function hideSpinner() {
+  document.getElementById('spinnerPane').classList.remove('visible');
+  document.getElementById('outputPane').style.display = '';
+}
+
 function renderOutput(content) {
+  hideSpinner();
   const pane = document.getElementById('outputPane');
   const trimmed = (content || '').trim();
 
@@ -245,8 +467,9 @@ function initSTT() {
 }
 
 function finishSTT() {
-  sttActive = false;
-  sttReady  = true;
+  sttActive  = false;
+  sttReady   = true;
+  recognizer = null;
   document.getElementById('talkBtn').classList.remove('active');
   document.getElementById('talkBtn').textContent = '\u{1F3A4} Push to Talk';
   setStatus('', 'idle');
@@ -254,7 +477,7 @@ function finishSTT() {
 
 function startSTT() {
   if (!sttReady || sttActive) return;
-  if (!recognizer && !initSTT()) return;
+  if (!initSTT()) return;
   sttReady  = false;
   sttActive = true;
   document.getElementById('talkBtn').classList.add('active');
@@ -280,8 +503,12 @@ function speak(text) {
 async function sendQuery(text) {
   if (!text || !text.trim()) return;
 
+  hideFeedbackBar();
+  showSpinner('Thinking\u2026');
   setStatus('busy', 'sending\u2026');
   document.getElementById('sendBtn').disabled = true;
+  document.getElementById('fbGood').disabled  = false;
+  document.getElementById('fbBad').disabled   = false;
 
   try {
     const files    = document.getElementById('uploadInput').files;
@@ -294,8 +521,13 @@ async function sendQuery(text) {
 
     const reply = data.output || JSON.stringify(data, null, 2);
     renderOutput(reply);
-    speak(reply);
+    if (data.voiceReply) speak(data.voiceReply);
     setStatus('ok', 'ok');
+
+    // Show feedback bar for every real query (not reset)
+    if (data._interactionId) {
+      showFeedbackBar(data._interactionId, data._intentId, data._needsClarification === true);
+    }
   } catch (err) {
     renderOutput('Error: ' + err.message);
     setStatus('', 'error');
@@ -308,6 +540,8 @@ async function sendQuery(text) {
    RESET MODEL
 ───────────────────────────────────────────────────────── */
 async function resetModel() {
+  hideFeedbackBar();
+  showSpinner('Resetting model\u2026');
   setStatus('busy', 'resetting\u2026');
   document.getElementById('resetBtn').disabled = true;
 
