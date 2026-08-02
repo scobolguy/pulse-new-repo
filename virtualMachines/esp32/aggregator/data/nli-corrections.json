@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "description": "User-approved NLI guidance promoted from BOB feedback. This file is updated by Run Corrections.",
+  "corrections": [
+    {
+      "interactionId": "1785678584075-vd8jtq",
+      "message": "show me all devices as an excel spreadsheet",
+      "expected": "I wanted to see an excel spreadsheet",
+      "previousIntentId": "all-devices",
+      "recordedAt": "2026-08-02T13:51:38.800Z",
+      "enabled": true,
+      "appliedAt": "2026-08-02T13:56:20.516Z"
+    },
+    {
+      "interactionId": "1785679151325-q2ad7n",
+      "message": "show me all devices as an excel spreadsheet",
+      "expected": "if I say excel spreadsheet then I expect you to create an excel spreadsheet. I fou cannot do that then create a .csv file and put it in the download directory",
+      "previousIntentId": "all-devices",
+      "recordedAt": "2026-08-02T14:03:03.278Z",
+      "enabled": true,
+      "appliedAt": "2026-08-02T14:04:35.532Z"
+    }
+  ]
+}

@@ -9,6 +9,7 @@ const correctionCases = [
   ['show all devices', 'all-devices'],
   ['show all services', 'services'],
   ['how many queues are defined in the message broker', 'queues'],
+  ['show me the size of all queues', 'queues'],
 ];
 
 await reloadAgentRoutes();

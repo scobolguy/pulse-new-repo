@@ -193,6 +193,8 @@
   #talkBtn.active { background: #e36209; border-color: #b74b00; }
   #sendBtn  { background: #2da44e; color: #fff; border-color: #228f3e; }
   #resetBtn { background: #cf222e; color: #fff; border-color: #a10e1a; }
+  #correctionsBtn { background: #f7f8fa; color: #57606a; border-color: #d0d7de; }
+  #correctionsBtn.pending { background: #bf8700; color: #fff; border-color: #9a6700; }
 
   /* file upload styled */
   #uploadWrapper {
@@ -274,6 +276,7 @@
     <button id="talkBtn">&#127908; Push to Talk</button>
     <button id="sendBtn">Send</button>
     <button id="resetBtn">Reset Model</button>
+    <button id="correctionsBtn" disabled>Run Corrections (0)</button>
     <div id="uploadWrapper">
       <label id="uploadLabel" for="uploadInput">&#128206; Attach Files</label>
       <input type="file" id="uploadInput" multiple>
@@ -289,8 +292,9 @@
 /* ─────────────────────────────────────────────────────────
    CONFIG
 ───────────────────────────────────────────────────────── */
-const AGENT_URL    = '/agent';
+const MCP_QUERY_URL = '/mcp-query';
 const FEEDBACK_URL = '/api/agent/feedback';
+const CORRECTIONS_URL = '/api/agent/corrections';
 
 /* ─────────────────────────────────────────────────────────
    STATUS INDICATOR
@@ -371,7 +375,9 @@ async function submitFeedback(rating, expected) {
       body: JSON.stringify({ interactionId: currentInteractionId, rating, expected: expected || null })
     });
     if (!response.ok) throw new Error(`Feedback request failed (${response.status})`);
-    return true;
+    const data = await response.json();
+    updateCorrectionButton(data.pendingCount);
+    return data;
   } catch (e) {
     console.warn('Feedback submit failed:', e.message);
     fbGood.disabled = false;
@@ -412,6 +418,53 @@ document.getElementById('feedbackExpectedInput').addEventListener('keydown', (e)
 });
 
 /* ─────────────────────────────────────────────────────────
+   NLI CORRECTIONS
+───────────────────────────────────────────────────────── */
+let correctionRunActive = false;
+
+function updateCorrectionButton(pendingCount) {
+  const count = Math.max(0, Number(pendingCount) || 0);
+  const button = document.getElementById('correctionsBtn');
+  button.textContent = `Run Corrections (${count})`;
+  button.disabled = correctionRunActive || count === 0;
+  button.classList.toggle('pending', count > 0);
+}
+
+async function refreshCorrectionStatus() {
+  try {
+    const response = await fetch(CORRECTIONS_URL, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`Correction status failed (${response.status})`);
+    const data = await response.json();
+    updateCorrectionButton(data.pendingCount);
+  } catch (e) {
+    console.warn('Correction status failed:', e.message);
+    updateCorrectionButton(0);
+  }
+}
+
+async function runCorrections() {
+  if (correctionRunActive) return;
+  correctionRunActive = true;
+  const button = document.getElementById('correctionsBtn');
+  button.disabled = true;
+  setStatus('busy', 'applying corrections...');
+  try {
+    const response = await fetch(`${CORRECTIONS_URL}/run`, { method: 'POST' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `Correction run failed (${response.status})`);
+    renderOutput(`Applied ${data.appliedCount} NLI correction${data.appliedCount === 1 ? '' : 's'}.`);
+    updateCorrectionButton(data.pendingCount);
+    setStatus('ok', 'corrections applied');
+  } catch (e) {
+    renderOutput(`Correction error: ${e.message}`);
+    setStatus('', 'error');
+  } finally {
+    correctionRunActive = false;
+    await refreshCorrectionStatus();
+  }
+}
+
+/* ─────────────────────────────────────────────────────────
    RENDER OUTPUT
 ───────────────────────────────────────────────────────── */
 function showSpinner(msg) {
@@ -439,6 +492,25 @@ function renderOutput(content) {
   }
 
   pane.scrollTop = pane.scrollHeight;
+}
+
+async function readJsonResponse(response, operation) {
+  const text = await response.text();
+  let data = {};
+  if (text.trim()) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(`${operation} returned an invalid response (${response.status})`);
+    }
+  }
+  if (!response.ok) {
+    throw new Error(data.error || `${operation} failed (${response.status})`);
+  }
+  if (!text.trim()) {
+    throw new Error(`${operation} returned an empty response (${response.status})`);
+  }
+  return data;
 }
 
 /* ─────────────────────────────────────────────────────────
@@ -516,8 +588,8 @@ async function sendQuery(text) {
     formData.append('message', text);
     for (let i = 0; i < files.length; i++) formData.append('files', files[i]);
 
-    const res  = await fetch(AGENT_URL, { method: 'POST', body: formData });
-    const data = await res.json();
+    const res  = await fetch(MCP_QUERY_URL, { method: 'POST', body: formData });
+    const data = await readJsonResponse(res, 'MCP request');
 
     const reply = data.output || JSON.stringify(data, null, 2);
     renderOutput(reply);
@@ -548,8 +620,8 @@ async function resetModel() {
   try {
     const formData = new FormData();
     formData.append('message', '__RESET_MODEL__');
-    const res  = await fetch(AGENT_URL, { method: 'POST', body: formData });
-    const data = await res.json();
+    const res  = await fetch(MCP_QUERY_URL, { method: 'POST', body: formData });
+    const data = await readJsonResponse(res, 'Model reset');
     renderOutput(data.output || JSON.stringify(data, null, 2));
     setStatus('ok', 'reset ok');
   } catch (err) {
@@ -566,6 +638,7 @@ async function resetModel() {
 document.getElementById('talkBtn').addEventListener('click', startSTT);
 document.getElementById('sendBtn').addEventListener('click', () => sendQuery(document.getElementById('queryBox').value));
 document.getElementById('resetBtn').addEventListener('click', resetModel);
+document.getElementById('correctionsBtn').addEventListener('click', runCorrections);
 
 document.getElementById('uploadInput').addEventListener('change', () => {
   const count = document.getElementById('uploadInput').files.length;
@@ -575,6 +648,9 @@ document.getElementById('uploadInput').addEventListener('change', () => {
 document.getElementById('queryBox').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendQuery(document.getElementById('queryBox').value); }
 });
+
+refreshCorrectionStatus();
+setInterval(refreshCorrectionStatus, 10000);
 </script>
 
 </body>

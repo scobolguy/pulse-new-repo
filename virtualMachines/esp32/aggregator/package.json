@@ -11,6 +11,7 @@
     "dev:backend:raw": "node backend.mjs",
     "dev:librarian": "node data-librarian.mjs",
     "dev:mapper-service": "node data-mapper.mjs",
+    "dev:mcp": "node src/mcp/pulseMcpServer.mjs",
     "startup:fsm:backend": "node scripts/startup-fsm-workflow.mjs",
     "startup:fsm:workflow": "node scripts/startup-fsm-workflow.mjs",
     "startup:fsm:frontend": "node scripts/frontend-startup-fsm-workflow.mjs",
@@ -55,8 +56,14 @@
     "test:js-pmachine:spec-opcodes": "node scripts/test-js-pmachine-spec-opcodes.mjs",
     "test:pcode-compiler:string-escaping": "node scripts/test-pcode-compiler-string-escaping.mjs",
     "test:pascalish:endpoint-bnf": "node scripts/test-pascalish-endpoint-bnf.mjs",
+    "test:nli:config": "node scripts/test-nli-config.mjs",
+    "test:nli:corrections": "node scripts/test-nli-corrections.mjs",
+    "test:bob:corrections-button": "node scripts/test-bob-corrections-button.mjs",
+    "test:companion-supervisor": "node scripts/test-companion-service-supervisor.mjs",
     "test:agent:corrections": "node scripts/test-agent-corrections.mjs",
     "test:agent:corrections:e2e": "node scripts/test-agent-corrections-e2e.mjs",
+    "test:mcp": "node scripts/test-pulse-mcp.mjs",
+    "test:alexa": "node scripts/test-pulse-alexa-skill.mjs",
     "test:js-pmachine:negative-opcodes": "node scripts/test-js-pmachine-negative-opcodes.mjs",
     "test:js-pmachine:failure-paths": "node scripts/test-js-pmachine-failure-paths.mjs",
     "test:smoke:simple": "node scripts/test-simple-smoke-suite.mjs",
@@ -72,8 +79,11 @@
     "evolution:first-slice:manifest": "node scripts/evolution-first-slice.mjs --manifest ../data/evolution-organisms.json"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "amqplib": "^0.10.4",
     "antlr4": "^4.13.2",
+    "ask-sdk-core": "^2.14.0",
+    "ask-sdk-express-adapter": "^2.14.0",
     "axios": "^1.18.0",
     "cors": "^2.8.6",
     "express": "^5.2.1",
@@ -90,7 +100,8 @@
     "stompit": "^1.0.0",
     "vscode-languageserver": "^9.0.1",
     "vscode-languageserver-textdocument": "^1.0.12",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

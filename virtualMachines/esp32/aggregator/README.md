@@ -73,6 +73,35 @@ Frontend:
 npm run dev
 ```
 
+## Local NLI On The T490
+
+The MCP-backed NLI uses local Ollama and is configured in `data/nli-config.json`.
+Intent and slot routing remains deterministic in `data/agent-routes.json`; Ollama
+handles unmatched natural-language requests.
+
+The backend starts and supervises the local MCP companion on port `4011` by
+default. It adopts an already healthy MCP process, restarts an owned process
+after a crash, and recycles it after repeated health-check failures. Set
+`PULSE_MCP_AUTOSTART=false` only when MCP is managed by an external service.
+The check and restart timing can be changed with `PULSE_MCP_CHECK_INTERVAL_MS`
+and `PULSE_MCP_RESTART_DELAY_MS`.
+
+The default `t490-fast` profile uses `phi3:latest`, a 1024-token context, an
+8-thread CPU setting, and a 64-token response limit. The model stays resident
+for 30 minutes to avoid repeated load latency. This is sized for the T490's
+16 GB RAM and CPU-only inference. The installed 23 GB `qwen3.6:latest` model is
+too large for this laptop.
+
+To select the slower, higher-quality installed model, change `activeProfile` to
+`t490-quality`. For a temporary override, set `NLI_PROFILE` or `OLLAMA_MODEL` in
+`.env.local`. Any Ollama model can be used; it does not have to be Phi-3.
+
+Run the configuration test with:
+
+```powershell
+npm run test:nli:config
+```
+
 ## Startup (Backend First)
 
 Canonical ordered startup command:

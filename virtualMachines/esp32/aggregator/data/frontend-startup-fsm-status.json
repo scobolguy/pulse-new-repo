@@ -1,17 +1,19 @@
 {
-  "ok": true,
-  "state": "READY",
+  "ok": false,
+  "state": "FAILED",
   "workflow": [
     "INIT",
     "KILL_VITE_PROCESSES",
     "CHECK_BACKEND",
     "START_FRONTEND",
     "WAIT_FRONTEND",
-    "READY"
+    "START_FRONTEND",
+    "WAIT_FRONTEND",
+    "START_FRONTEND"
   ],
   "logs": [
     {
-      "at": "2026-07-23T14:07:49.721Z",
+      "at": "2026-08-01T22:42:17.734Z",
       "event": "workflow-start",
       "data": {
         "fsmId": "frontend-startup-fsm",
@@ -21,14 +23,14 @@
       }
     },
     {
-      "at": "2026-07-23T14:07:49.733Z",
+      "at": "2026-08-01T22:42:17.740Z",
       "event": "state",
       "data": {
         "state": "INIT"
       }
     },
     {
-      "at": "2026-07-23T14:07:50.974Z",
+      "at": "2026-08-01T22:42:19.942Z",
       "event": "subflow-complete",
       "data": {
         "state": "KILL_VITE_PROCESSES",
@@ -39,7 +41,7 @@
       }
     },
     {
-      "at": "2026-07-23T14:07:51.047Z",
+      "at": "2026-08-01T22:42:20.073Z",
       "event": "state",
       "data": {
         "state": "CHECK_BACKEND",
@@ -48,17 +50,17 @@
       }
     },
     {
-      "at": "2026-07-23T14:07:51.105Z",
+      "at": "2026-08-01T22:42:20.206Z",
       "event": "frontend-started",
       "data": {
         "command": "node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173 --strictPort --force",
-        "pid": 15048,
+        "pid": 16284,
         "attempt": 1
       }
     },
     {
-      "at": "2026-07-23T14:08:01.465Z",
-      "event": "frontend-ready",
+      "at": "2026-08-01T22:42:50.533Z",
+      "event": "frontend-timeout",
       "data": {
         "frontendUrl": "http://127.0.0.1:5173/",
         "timeoutMs": 30000,
@@ -66,28 +68,85 @@
       }
     },
     {
-      "at": "2026-07-23T14:08:01.469Z",
-      "event": "complete",
+      "at": "2026-08-01T22:42:50.544Z",
+      "event": "retry-scheduled",
       "data": {
-        "ok": true,
+        "state": "WAIT_FRONTEND",
+        "nextState": "START_FRONTEND",
+        "reason": "frontend wait timeout",
+        "currentAttempt": 1,
+        "maxRetries": 2,
+        "retryBackoffMs": 2500
+      }
+    },
+    {
+      "at": "2026-08-01T22:42:53.104Z",
+      "event": "frontend-started",
+      "data": {
+        "command": "node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173 --strictPort --force",
+        "pid": 27792,
+        "attempt": 2
+      }
+    },
+    {
+      "at": "2026-08-01T22:43:26.439Z",
+      "event": "frontend-timeout",
+      "data": {
+        "frontendUrl": "http://127.0.0.1:5173/",
+        "timeoutMs": 30000,
+        "attempt": 2
+      }
+    },
+    {
+      "at": "2026-08-01T22:43:26.449Z",
+      "event": "retry-scheduled",
+      "data": {
+        "state": "WAIT_FRONTEND",
+        "nextState": "START_FRONTEND",
+        "reason": "frontend wait timeout",
+        "currentAttempt": 2,
+        "maxRetries": 2,
+        "retryBackoffMs": 2500
+      }
+    },
+    {
+      "at": "2026-08-01T22:43:34.080Z",
+      "event": "port-occupied",
+      "data": {
+        "state": "START_FRONTEND",
+        "port": 5173,
+        "occupiedBy": [
+          16292,
+          22584
+        ],
+        "command": "node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173 --strictPort --force",
+        "alreadyReady": false
+      }
+    },
+    {
+      "at": "2026-08-01T22:43:34.089Z",
+      "event": "failed",
+      "data": {
+        "ok": false,
         "service": "frontend",
-        "state": "READY",
+        "state": "FAILED",
         "workflow": [
           "INIT",
           "KILL_VITE_PROCESSES",
           "CHECK_BACKEND",
           "START_FRONTEND",
           "WAIT_FRONTEND",
-          "READY"
+          "START_FRONTEND",
+          "WAIT_FRONTEND",
+          "START_FRONTEND"
         ],
-        "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
-        "frontendUrl": "http://127.0.0.1:5173/",
+        "error": "Port 5173 is already occupied before frontend launch",
         "fsmId": "frontend-startup-fsm"
       }
     }
   ],
-  "updatedAt": "2026-07-23T14:08:01.473Z",
-  "error": null,
+  "updatedAt": "2026-08-01T22:43:34.097Z",
+  "error": "Port 5173 is already occupied before frontend launch",
   "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
   "frontendUrl": "http://127.0.0.1:5173/",
   "fsmId": "frontend-startup-fsm",
@@ -97,7 +156,7 @@
       "required": true,
       "url": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
       "ok": true,
-      "checkedAt": "2026-07-23T14:07:51.044Z"
+      "checkedAt": "2026-08-01T22:42:20.066Z"
     }
   }
 }

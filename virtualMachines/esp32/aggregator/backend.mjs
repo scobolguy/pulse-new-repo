@@ -86,8 +86,7 @@ import { createLifecycleQueueMetricsApi } from './src/backend/modules/lifecycleQ
 import { createDatabaseRegistrySnapshotApi } from './src/backend/modules/databaseRegistrySnapshotApi.mjs';
 import { createAuthoritativeTimeService } from './src/backend/modules/authoritativeTimeService.mjs';
 import { createRequestPolicyApi } from './src/backend/security/requestPolicy.mjs';
-import { ROUTE_ROLE_MANIFEST } from './src/backend/routes.manifest.mjs';
-import { registerRoutesFromManifest } from './src/backend/routeManifestLoader.mjs';
+import { loadRouteManifest, registerRoutesFromManifest } from './src/backend/routeManifestLoader.mjs';
 import { enumerateApiCatalog, enumerateDiscoveredNodeApiCatalog, findApiCatalogEntry } from './src/backend/apiCatalog.mjs';
 import {
   listServiceProviders,
@@ -2483,6 +2482,7 @@ const LIFECYCLE_HEARTBEAT_CHECK_INTERVAL_MS = readEnvNumber('LIFECYCLE_HEARTBEAT
 const LIFECYCLE_HEARTBEAT_ENABLED = readEnvBoolean('LIFECYCLE_HEARTBEAT_ENABLED', ['1', 'true', 'yes'], true);
 const BACKEND_WORKER_AUTOSTART = readEnvBoolean('BACKEND_WORKER_AUTOSTART', ['1', 'true', 'yes'], false);
 const BACKEND_AUX_SERVICES_AUTOSTART = readEnvBoolean('BACKEND_AUX_SERVICES_AUTOSTART', ['1', 'true', 'yes'], false);
+const PULSE_MCP_AUTOSTART = readEnvBoolean('PULSE_MCP_AUTOSTART', ['1', 'true', 'yes'], true);
 const ROUTER_WORKER_MAX_BACKOFF_MULTIPLIER = Math.max(1.5, readEnvNumber('ROUTER_WORKER_MAX_BACKOFF_MULTIPLIER', 3.5));
 const LIFECYCLE_WORKER_MAX_BACKOFF_MULTIPLIER = Math.max(1.5, readEnvNumber('LIFECYCLE_WORKER_MAX_BACKOFF_MULTIPLIER', 4.5));
 const BRIDGE_WORKER_MAX_BACKOFF_MULTIPLIER = Math.max(1.5, readEnvNumber('BRIDGE_WORKER_MAX_BACKOFF_MULTIPLIER', 4));
@@ -9545,6 +9545,7 @@ function registerRoutes(app) {
     supervisorHeartbeatRegistry
   });
 
+  const ROUTE_ROLE_MANIFEST = loadRouteManifest();
   registerRoutesFromManifest({
     app,
     manifest: ROUTE_ROLE_MANIFEST,
@@ -9642,7 +9643,7 @@ function registerRoutes(app) {
       enumerateDiscoveredNodeApiCatalog,
       findApiCatalogEntry,
       resolvePermissionForApiRequest,
-      routeRoleManifest: ROUTE_ROLE_MANIFEST,
+      routeRoleManifest: ROUTE_ROLE_MANIFEST,  // loaded from data/route-manifest.json at startup
       listServiceProviders,
       getServiceProvider,
       getServiceProviderAction,
@@ -9836,9 +9837,11 @@ try {
     gatewayModeState,
     startFedGateway,
     BACKEND_AUX_SERVICES_AUTOSTART,
+    PULSE_MCP_AUTOSTART,
     spawn,
     librarianScriptPath: fileURLToPath(new URL('./data-librarian.mjs', import.meta.url)),
-    mapperScriptPath: fileURLToPath(new URL('./data-mapper.mjs', import.meta.url))
+    mapperScriptPath: fileURLToPath(new URL('./data-mapper.mjs', import.meta.url)),
+    mcpScriptPath: fileURLToPath(new URL('./src/mcp/pulseMcpServer.mjs', import.meta.url))
   });
 } catch (err) {
   console.error('[ERROR] Backend failed to start:', err);

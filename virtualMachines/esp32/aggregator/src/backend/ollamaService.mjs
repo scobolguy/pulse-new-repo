@@ -1,20 +1,20 @@
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
-
-const OLLAMA_HOST = process.env.OLLAMA_HOST || 'localhost';
-const OLLAMA_PORT = parseInt(process.env.OLLAMA_PORT || '11434', 10);
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'phi3:latest';
-const OLLAMA_TIMEOUT_MS = 120000; // phi3 needs up to 2 min on first load
-const OLLAMA_WARMTH_INTERVAL_MS = 45000; // Send keep-alive every 45 seconds
+import { getNliConfig, reloadNliConfig } from './nliConfig.mjs';
+import { loadNliCorrections } from './nliCorrectionService.mjs';
 
 let warmthIntervalId = null;
 let lastWarmthTimestamp = 0;
 
 /**
  * Load global system knowledge that constrains LLM behavior.
+ * The full file is kept for classifyQueryWithOllama(); a compact
+ * version is derived for use as the system prompt in every generate call.
  */
 let globalKnowledge = '';
+let systemPrompt = '';
+
 try {
   const knowledgePath = path.resolve('./data/general-knowledge.md');
   if (fs.existsSync(knowledgePath)) {
@@ -25,20 +25,69 @@ try {
 }
 
 /**
+ * Build a compact system prompt from the loaded knowledge.
+ * Kept short (<300 tokens) so it doesn't dominate the context window.
+ * Derived once at startup; call rebuildSystemPrompt() after a hot-reload.
+ */
+function buildSystemPrompt(knowledge) {
+  const config = getNliConfig();
+  const promptConfig = config.systemPrompt || {};
+  const resourcesMatch = knowledge.match(/###\s*Resources Supported([\s\S]*?)(?=\n###|\n##|$)/i);
+  const resourcesSnippet = resourcesMatch
+    ? resourcesMatch[1].trim().split('\n').slice(0, 12).join('\n')
+    : '';
+
+  const assistantName = promptConfig.assistantName || 'BOB';
+  const role = promptConfig.role || 'an assistant for the Pulse integration platform';
+  const capabilities = Array.isArray(promptConfig.capabilities) ? promptConfig.capabilities.join(', ') : '';
+  const rules = Array.isArray(promptConfig.rules) ? promptConfig.rules.map(rule => `- ${rule}`).join('\n') : '';
+  const corrections = loadNliCorrections()
+    .slice(-config.corrections.maxPromptCorrections)
+    .map(correction => `- When the user says "${correction.message}", follow this guidance: ${correction.expected}`)
+    .join('\n');
+
+  return `You are ${assistantName}, ${role}.
+${promptConfig.platformSummary || ''}
+${capabilities ? `Capabilities you can speak to: ${capabilities}.` : ''}
+${rules ? `Rules:\n${rules}` : ''}
+${corrections ? `User-approved corrections:\n${corrections}` : ''}
+${resourcesSnippet ? `\nPlatform resources:\n${resourcesSnippet}` : ''}`.trim();
+}
+
+systemPrompt = buildSystemPrompt(globalKnowledge);
+
+/**
+ * Rebuild the system prompt (called after a context reload so the new
+ * knowledge takes effect without restarting the process).
+ */
+export function rebuildSystemPrompt() {
+  systemPrompt = buildSystemPrompt(globalKnowledge);
+}
+
+/**
  * Send a prompt to Ollama and return the response text.
+ * The system prompt is passed via the dedicated `system` field so it is
+ * handled as a true system message rather than prepended user text.
  */
 export async function ollamaGenerate(prompt) {
+  const config = getNliConfig();
+  if (config.provider !== 'ollama') {
+    throw new Error(`Unsupported local NLI provider: ${config.provider}`);
+  }
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
-      model: OLLAMA_MODEL,
+      model: config.model,
+      system: systemPrompt,
       prompt,
       stream: false,
+      keep_alive: config.keepAlive,
+      options: config.options,
     });
 
     const req = http.request(
       {
-        hostname: OLLAMA_HOST,
-        port: OLLAMA_PORT,
+        hostname: config.host,
+        port: config.port,
         path: '/api/generate',
         method: 'POST',
         headers: {
@@ -61,7 +110,7 @@ export async function ollamaGenerate(prompt) {
       }
     );
 
-    req.setTimeout(OLLAMA_TIMEOUT_MS, () => {
+    req.setTimeout(config.timeoutMs, () => {
       req.destroy();
       reject(new Error('Ollama request timed out'));
     });
@@ -76,9 +125,10 @@ export async function ollamaGenerate(prompt) {
  * Check if Ollama is reachable.
  */
 export async function ollamaHealthCheck() {
+  const config = getNliConfig();
   return new Promise((resolve) => {
     const req = http.get(
-      { hostname: OLLAMA_HOST, port: OLLAMA_PORT, path: '/api/tags', timeout: 3000 },
+      { hostname: config.host, port: config.port, path: '/api/tags', timeout: 3000 },
       (res) => {
         res.resume();
         resolve(res.statusCode === 200);
@@ -117,7 +167,7 @@ Respond with ONLY a JSON object (no markdown, no explanation) in this exact form
 
   const responseText = await ollamaGenerate(prompt);
 
-  // Extract JSON from response (phi3 sometimes adds text around it)
+  // Tolerate models that add prose around the requested JSON object.
   const jsonMatch = responseText.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error('Ollama did not return valid JSON');
 
@@ -135,6 +185,7 @@ Respond with ONLY a JSON object (no markdown, no explanation) in this exact form
  */
 export function startOllamaWarmthKeeper() {
   if (warmthIntervalId) return; // Already running
+  const { warmthIntervalMs } = getNliConfig();
 
   const sendWarmthPulse = async () => {
     try {
@@ -154,8 +205,8 @@ export function startOllamaWarmthKeeper() {
 
   // Send first pulse immediately, then periodic pulses
   sendWarmthPulse();
-  warmthIntervalId = setInterval(sendWarmthPulse, OLLAMA_WARMTH_INTERVAL_MS);
-  console.log(`[OLLAMA] Warmth keeper started (pulse every ${OLLAMA_WARMTH_INTERVAL_MS / 1000}s)`);
+  warmthIntervalId = setInterval(sendWarmthPulse, warmthIntervalMs);
+  console.log(`[OLLAMA] Warmth keeper started (pulse every ${warmthIntervalMs / 1000}s)`);
 }
 
 /**
@@ -173,11 +224,14 @@ export function stopOllamaWarmthKeeper() {
  * Get warmth keeper status for diagnostic purposes.
  */
 export function getOllamaWarmthStatus() {
+  const config = getNliConfig();
   return {
     running: warmthIntervalId !== null,
     lastPulseTimestamp: lastWarmthTimestamp,
     secondsSinceLastPulse: lastWarmthTimestamp ? Math.round((Date.now() - lastWarmthTimestamp) / 1000) : null,
-    pulseIntervalSeconds: OLLAMA_WARMTH_INTERVAL_MS / 1000,
+    pulseIntervalSeconds: config.warmthIntervalMs / 1000,
+    profile: config.profile,
+    model: config.model,
   };
 }
 
@@ -187,10 +241,22 @@ export function getOllamaWarmthStatus() {
  */
 export async function reloadOllamaContext() {
   try {
+    reloadNliConfig();
     const alive = await ollamaHealthCheck();
     if (!alive) {
       throw new Error('Ollama is not available for context reload');
     }
+    // Re-read general-knowledge.md from disk so edits take effect without a restart
+    try {
+      const knowledgePath = path.resolve('./data/general-knowledge.md');
+      if (fs.existsSync(knowledgePath)) {
+        globalKnowledge = fs.readFileSync(knowledgePath, 'utf8');
+      }
+    } catch (e) {
+      console.warn('[OLLAMA] Could not reload general-knowledge.md:', e.message);
+    }
+    rebuildSystemPrompt();
+
     // Send a reset prompt that clears context
     const resetPrompt = 'Forget everything. You are starting fresh. Respond with: context_cleared';
     const response = await ollamaGenerate(resetPrompt);

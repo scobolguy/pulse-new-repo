@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "description": "Local NLI provider configuration. Change activeProfile or a profile's model/options without editing application code.",
+  "activeProfile": "t490-fast",
+  "reloadIntervalMs": 30000,
+  "systemPrompt": {
+    "assistantName": "BOB",
+    "role": "an assistant for the Pulse integration platform",
+    "platformSummary": "The platform manages message queues, gateways, data types, network nodes, and transaction lifecycle state.",
+    "capabilities": [
+      "queues",
+      "gateways",
+      "nodes and topology",
+      "data types and schemas",
+      "system performance",
+      "NTP time",
+      "transaction lifecycle",
+      "ESP32 and ESP8266 device control"
+    ],
+    "rules": [
+      "Never invent queue names, node IPs, schema types, or API paths that have not been confirmed.",
+      "If asked about something outside your knowledge, say so clearly.",
+      "Keep answers concise and factual."
+    ]
+  },
+  "responsePolicy": {
+    "clarificationConfidence": 0.95,
+    "clarificationReply": "I'm unclear, can you help me with this",
+    "successReply": "OK"
+  },
+  "corrections": {
+    "baselineAt": "2026-08-02T00:00:00.000Z",
+    "maxPromptCorrections": 10
+  },
+  "profiles": {
+    "t490-fast": {
+      "provider": "ollama",
+      "host": "127.0.0.1",
+      "port": 11434,
+      "model": "phi3:latest",
+      "timeoutMs": 45000,
+      "warmthIntervalMs": 1200000,
+      "keepAlive": "30m",
+      "options": {
+        "num_ctx": 1024,
+        "num_predict": 64,
+        "num_thread": 8,
+        "temperature": 0
+      }
+    },
+    "t490-quality": {
+      "provider": "ollama",
+      "host": "127.0.0.1",
+      "port": 11434,
+      "model": "llama3:latest",
+      "timeoutMs": 120000,
+      "warmthIntervalMs": 90000,
+      "keepAlive": "5m",
+      "options": {
+        "num_ctx": 2048,
+        "num_predict": 256,
+        "temperature": 0.1
+      }
+    }
+  }
+}

@@ -2,7 +2,7 @@
  * Playwright smoke test for bob-console.html
  *
  * Run:  node scripts/test-bob-console-playwright.mjs [url]
- * Default URL: http://127.0.0.1:4000/public/bob-console.html
+ * Default URL: http://127.0.0.1:5173/bob-console.html
  *
  * Tests:
  *  1. Page loads and key elements are visible
@@ -16,7 +16,7 @@
 
 import { chromium } from 'playwright';
 
-const CONSOLE_URL = process.argv[2] || 'http://127.0.0.1:4000/public/bob-console.html';
+const CONSOLE_URL = process.argv[2] || 'http://127.0.0.1:5173/bob-console.html';
 const SCREENSHOT   = 'bob-console-test.png';
 
 function pass(msg) { console.log(`  PASS  ${msg}`); }
@@ -76,7 +76,7 @@ async function run() {
     const before1 = await page.locator('#outputPane').innerText();
     await page.locator('#queryBox').fill('how many nodes');
     await page.locator('#sendBtn').click();
-    console.log('  Waiting for /agent response (query: "how many nodes")...');
+    console.log('  Waiting for MCP response (query: "how many nodes")...');
     await waitForOutputChange(page, before1, 15000);
     const output1 = await page.locator('#outputPane').innerText();
     if (!output1.trim()) fail('Output pane is empty after Send');
@@ -94,7 +94,7 @@ async function run() {
     const before2 = await page.locator('#outputPane').innerText();
     await page.locator('#queryBox').fill('list esp32 devices');
     await page.locator('#queryBox').press('Enter');
-    console.log('  Waiting for /agent response (query: "list esp32 devices")...');
+    console.log('  Waiting for MCP response (query: "list esp32 devices")...');
     await waitForOutputChange(page, before2, 15000);
     const output2 = await page.locator('#outputPane').innerText();
     if (!output2.trim()) fail('Output pane empty after Enter-key submit');
@@ -125,7 +125,7 @@ async function run() {
     const before4 = await page.locator('#outputPane').innerText();
     await page.locator('#queryBox').fill('what time is it');
     await page.locator('#sendBtn').click();
-    console.log('  Waiting for /agent response (query: "what time is it")...');
+    console.log('  Waiting for MCP response (query: "what time is it")...');
     await waitForOutputChange(page, before4, 10000);
     const output4 = await page.locator('#outputPane').innerText();
     if (!output4.match(/\d{2}:\d{2}:\d{2}/)) fail(`Time response missing HH:MM:SS pattern: "${output4.substring(0, 120)}"`);
@@ -135,7 +135,7 @@ async function run() {
     const before5 = await page.locator('#outputPane').innerText();
     await page.locator('#queryBox').fill('show me the dashboard');
     await page.locator('#sendBtn').click();
-    console.log('  Waiting for /agent response (query: "show me the dashboard")...');
+    console.log('  Waiting for MCP response (query: "show me the dashboard")...');
     await waitForOutputChange(page, before5, 10000);
     const output5 = await page.locator('#outputPane').innerText();
     if (!output5.toLowerCase().includes('heap') && !output5.toLowerCase().includes('memory')) {
@@ -147,7 +147,7 @@ async function run() {
     const before6 = await page.locator('#outputPane').innerHTML();
     await page.locator('#queryBox').fill('show me the feed from child1');
     await page.locator('#sendBtn').click();
-    console.log('  Waiting for /agent response (query: "show me the feed from child1")...');
+    console.log('  Waiting for MCP response (query: "show me the feed from child1")...');
     await page.waitForFunction(
       () => document.getElementById('outputPane')?.innerHTML?.includes('192.168.2.157'),
       null, { timeout: 10000 }

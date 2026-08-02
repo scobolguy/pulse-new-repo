@@ -4508,7 +4508,7 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
             return;
         }
 #endif
-
+#if defined(ESP32)
         RouterRunExecutionResult exec = executeRouterRun(
             ffs,
             inputQueue,
@@ -4520,7 +4520,7 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         );
         request->send(exec.statusCode, exec.contentType, exec.body);
     });
-
+#endif
 #if defined(ESP32)
     server.on("/pmachine/router/status", HTTP_GET, [](AsyncWebServerRequest *request){
         if (!request->hasParam("jobId")) {
@@ -4548,3 +4548,4 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
     });
 #endif
 }
+

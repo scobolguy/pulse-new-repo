@@ -3,10 +3,9 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 
-var logPath = Environment.GetEnvironmentVariable("PULSE_CTL_LOG_PATH")
-    ?? Path.Combine(AppContext.BaseDirectory, "PulseSystemCtl.log");
-
 var root = Environment.GetEnvironmentVariable("PULSE_CTL_REPO_ROOT") ?? ResolveRepoRoot();
+var logPath = Environment.GetEnvironmentVariable("PULSE_CTL_LOG_PATH")
+    ?? Path.Combine(root, "data", "logs", "PulseSystemCtl.log");
 var mode = args.Length > 0 ? args[0].Trim().ToLowerInvariant() : "cycle";
 
 var options = new LauncherOptions(
@@ -48,6 +47,7 @@ static void Log(string logPath, string message, string? details = null)
 {
     try
     {
+        Directory.CreateDirectory(Path.GetDirectoryName(logPath) ?? ".");
         var sb = new StringBuilder();
         sb.Append(DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss.fff zzz"));
         sb.Append(" ");

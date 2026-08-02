@@ -5,7 +5,7 @@ const baseUrl = process.env.PULSE_AGENT_BASE_URL || 'http://127.0.0.1:4000';
 async function ask(message) {
   const body = new FormData();
   body.set('message', message);
-  const response = await fetch(`${baseUrl}/agent`, {
+  const response = await fetch(`${baseUrl}/api/nli/query`, {
     method: 'POST',
     headers: { 'x-agent-test': '1' },
     body,

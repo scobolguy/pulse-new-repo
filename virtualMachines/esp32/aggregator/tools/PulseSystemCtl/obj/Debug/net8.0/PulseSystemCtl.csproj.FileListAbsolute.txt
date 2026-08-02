@@ -1,0 +1,15 @@
+C:\dev\pulse-new-repo\virtualMachines\esp32\aggregator\tools\PulseSystemCtl\bin\Debug\net8.0\PulseSystemCtl.exe
+C:\dev\pulse-new-repo\virtualMachines\esp32\aggregator\tools\PulseSystemCtl\bin\Debug\net8.0\PulseSystemCtl.deps.json
+C:\dev\pulse-new-repo\virtualMachines\esp32\aggregator\tools\PulseSystemCtl\bin\Debug\net8.0\PulseSystemCtl.runtimeconfig.json
+C:\dev\pulse-new-repo\virtualMachines\esp32\aggregator\tools\PulseSystemCtl\bin\Debug\net8.0\PulseSystemCtl.dll
+C:\dev\pulse-new-repo\virtualMachines\esp32\aggregator\tools\PulseSystemCtl\bin\Debug\net8.0\PulseSystemCtl.pdb
+C:\dev\pulse-new-repo\virtualMachines\esp32\aggregator\tools\PulseSystemCtl\obj\Debug\net8.0\PulseSystemCtl.GeneratedMSBuildEditorConfig.editorconfig
+C:\dev\pulse-new-repo\virtualMachines\esp32\aggregator\tools\PulseSystemCtl\obj\Debug\net8.0\PulseSystemCtl.AssemblyInfoInputs.cache
+C:\dev\pulse-new-repo\virtualMachines\esp32\aggregator\tools\PulseSystemCtl\obj\Debug\net8.0\PulseSystemCtl.AssemblyInfo.cs
+C:\dev\pulse-new-repo\virtualMachines\esp32\aggregator\tools\PulseSystemCtl\obj\Debug\net8.0\PulseSystemCtl.csproj.CoreCompileInputs.cache
+C:\dev\pulse-new-repo\virtualMachines\esp32\aggregator\tools\PulseSystemCtl\obj\Debug\net8.0\PulseSystemCtl.sourcelink.json
+C:\dev\pulse-new-repo\virtualMachines\esp32\aggregator\tools\PulseSystemCtl\obj\Debug\net8.0\PulseSystemCtl.dll
+C:\dev\pulse-new-repo\virtualMachines\esp32\aggregator\tools\PulseSystemCtl\obj\Debug\net8.0\refint\PulseSystemCtl.dll
+C:\dev\pulse-new-repo\virtualMachines\esp32\aggregator\tools\PulseSystemCtl\obj\Debug\net8.0\PulseSystemCtl.pdb
+C:\dev\pulse-new-repo\virtualMachines\esp32\aggregator\tools\PulseSystemCtl\obj\Debug\net8.0\PulseSystemCtl.genruntimeconfig.cache
+C:\dev\pulse-new-repo\virtualMachines\esp32\aggregator\tools\PulseSystemCtl\obj\Debug\net8.0\ref\PulseSystemCtl.dll

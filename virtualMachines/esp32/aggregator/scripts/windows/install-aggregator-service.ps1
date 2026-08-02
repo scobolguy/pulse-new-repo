@@ -10,10 +10,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$groupOutput = (whoami /groups) 2>$null
-$isAdmin = ($LASTEXITCODE -eq 0) -and ($groupOutput | Select-String 'S-1-5-32-544' -Quiet)
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = [Security.Principal.WindowsPrincipal]::new($identity)
+$isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-  throw "Run this script in an elevated PowerShell session (Administrator)."
+  throw "Administrator access is required. Open PowerShell with 'Run as administrator', then rerun this script."
 }
 
 if ([string]::IsNullOrWhiteSpace($AggregatorRoot)) {
@@ -84,7 +85,8 @@ function Get-PortOwnerPid {
 }
 
 $runner = (Resolve-Path (Join-Path $PSScriptRoot "run-aggregator-backend.ps1")).Path
-$logsDir = Join-Path $AggregatorRoot "logs"
+$logsDir = Join-Path $AggregatorRoot "data\logs"
+$legacyLogsDir = Join-Path $AggregatorRoot "logs"
 New-Item -ItemType Directory -Path $logsDir -Force | Out-Null
 
 $nssm = Get-Command nssm -ErrorAction SilentlyContinue
@@ -98,6 +100,11 @@ $nssmPath = $nssm.Source
 if ($existing) {
   try { Invoke-ExternalOrThrow -FilePath $nssmPath -Arguments @('stop', $ServiceName) -Action "nssm stop $ServiceName" | Out-Null } catch {}
   try { Invoke-ExternalOrThrow -FilePath $nssmPath -Arguments @('remove', $ServiceName, 'confirm') -Action "nssm remove $ServiceName" | Out-Null } catch {}
+}
+
+if (Test-Path $legacyLogsDir) {
+  Get-ChildItem -Path $legacyLogsDir -Force | Move-Item -Destination $logsDir -Force
+  Remove-Item -Path $legacyLogsDir -Force
 }
 
 $arguments = "-NoProfile -ExecutionPolicy Bypass -File $runner -AggregatorRoot $AggregatorRoot -DataRoot $DataRoot -Role $Role"

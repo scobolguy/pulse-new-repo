@@ -47,7 +47,9 @@ call node scripts\startup-fsm-workflow.mjs
 set "RUN_EXIT=%ERRORLEVEL%"
 
 if "%RUN_EXIT%"=="0" (
-  echo [startup] Startup complete. Opening UI...
+  echo [startup] Startup complete.
+  node scripts\process-interaction-log.mjs --summary-only
+  echo [startup] Opening UI...
   start "" "http://127.0.0.1:5173/"
   exit /b 0
 )

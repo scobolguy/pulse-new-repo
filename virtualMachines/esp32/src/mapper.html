@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>MAPL Oberon Mapping Designer</title>
+  <style>
+    body { font-family: sans-serif; display: flex; gap: 20px; margin: 20px; }
+    .panel { border: 1px solid #ccc; padding: 10px; flex: 1; }
+    .panel h2 { margin-top: 0; }
+    .field { padding: 4px 8px; margin: 2px 0; border: 1px solid #999; background: #f7f7f7; cursor: grab; }
+    .target-field { padding: 4px 8px; margin: 4px 0; border: 1px solid #999; min-height: 24px; background: #fff; }
+    .target-field.over { background: #e0ffe0; }
+    #output { width: 100%; height: 300px; font-family: monospace; }
+    .mapping-label { font-size: 12px; color: #555; }
+  </style>
+</head>
+<body>
+
+  <div class="panel" id="sourcePanel">
+    <h2>Source: MT103</h2>
+    <div class="field" draggable="true" data-selector="MT103:32A.amount">32A.amount</div>
+    <div class="field" draggable="true" data-selector="MT103:32A.currency">32A.currency</div>
+    <div class="field" draggable="true" data-selector="MT103:23B.code">23B.code</div>
+    <div class="field" draggable="true" data-selector="MT103:70.text">70.text</div>
+    <div class="field" draggable="true" data-selector="MT103:57A.code">57A.code</div>
+    <div class="field" draggable="true" data-selector="MT103:57B.code">57B.code</div>
+    <div class="field" draggable="true" data-selector="MT103:57D.name">57D.name</div>
+  </div>
+
+  <div class="panel" id="targetPanel">
+    <h2>Target: PACS008</h2>
+
+    <div>
+      <div class="mapping-label">amount</div>
+      <div class="target-field" data-target="amount"></div>
+    </div>
+
+    <div>
+      <div class="mapping-label">currency</div>
+      <div class="target-field" data-target="currency"></div>
+    </div>
+
+    <div>
+      <div class="mapping-label">payment.chargeBearer</div>
+      <div class="target-field" data-target="payment.chargeBearer"></div>
+    </div>
+
+    <div>
+      <div class="mapping-label">remittance.type</div>
+      <div class="target-field" data-target="remittance.type"></div>
+    </div>
+
+    <div>
+      <div class="mapping-label">remittance.reference</div>
+      <div class="target-field" data-target="remittance.reference"></div>
+    </div>
+
+    <div>
+      <div class="mapping-label">clearing.system</div>
+      <div class="target-field" data-target="clearing.system"></div>
+    </div>
+
+    <div>
+      <div class="mapping-label">clearing.id</div>
+      <div class="target-field" data-target="clearing.id"></div>
+    </div>
+
+    <button id="generateBtn">Generate MAPL</button>
+  </div>
+
+  <div class="panel">
+    <h2>Generated Oberon‑MAPL</h2>
+    <textarea id="output"></textarea>
+  </div>
+
+<script>
+(function() {
+  const mappings = {}; // targetField -> sourceSelector
+
+  // Drag handlers
+  const sourceFields = document.querySelectorAll('.field');
+  sourceFields.forEach(f => {
+    f.addEventListener('dragstart', e => {
+      e.dataTransfer.setData('text/plain', f.getAttribute('data-selector'));
+    });
+  });
+
+  const targetFields = document.querySelectorAll('.target-field');
+  targetFields.forEach(tf => {
+    tf.addEventListener('dragover', e => {
+      e.preventDefault();
+      tf.classList.add('over');
+    });
+    tf.addEventListener('dragleave', () => tf.classList.remove('over'));
+    tf.addEventListener('drop', e => {
+      e.preventDefault();
+      tf.classList.remove('over');
+      const src = e.dataTransfer.getData('text/plain');
+      const tgt = tf.getAttribute('data-target');
+      mappings[tgt] = src;
+      tf.textContent = src;
+    });
+  });
+
+  // Generate MAPL
+  document.getElementById('generateBtn').addEventListener('click', () => {
+    const lines = [];
+    lines.push('MODULE MT103_TO_PACS008;');
+    lines.push('');
+    lines.push('  IMPORT Thunks, Tables;');
+    lines.push('');
+    lines.push('  MAP MT103 TO PACS008;');
+    lines.push('  BEGIN');
+
+    Object.keys(mappings).forEach(tgt => {
+      const src = mappings[tgt];
+      lines.push(`    ${tgt} := ${src};`);
+    });
+
+    lines.push('  END MAP;');
+    lines.push('');
+    lines.push('END MT103_TO_PACS008.');
+
+    document.getElementById('output').value = lines.join('\n');
+  });
+})();
+</script>
+
+</body>
+</html>

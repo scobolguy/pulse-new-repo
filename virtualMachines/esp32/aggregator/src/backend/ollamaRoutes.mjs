@@ -3,9 +3,11 @@ import path from 'path';
 import http from 'http';
 import express from 'express';
 import multer from 'multer';
-import { reloadOllamaContext, getOllamaWarmthStatus, ollamaGenerate } from './ollamaService.mjs';
+import { reloadOllamaContext, getOllamaWarmthStatus, ollamaGenerate, rebuildSystemPrompt } from './ollamaService.mjs';
 import { matchPascalExecuteRoute, matchPrecomputedRoute, detectQueryTypes } from './queryRouteLoader.mjs';
 import { matchAgentIntent } from './agentRouteLoader.mjs';
+import { getNliConfig } from './nliConfig.mjs';
+import { getNliCorrectionStatus, runPendingNliCorrections } from './nliCorrectionService.mjs';
 
 const SLOW_QUERY_THRESHOLD = 60000; // 60 seconds
 const SLOW_QUERY_LOG_FILE = path.resolve('./data/logs/slow-queries.jsonl');
@@ -2679,7 +2681,7 @@ User request: "${query}"`;
   app.get('/api/topology', topologyHandler);
 
   /**
-   * POST /agent
+  * POST /api/nli/query
    * Unified voice/chat console endpoint used by bob-console.html.
    * Accepts multipart/form-data with a `message` field (and optional `files`),
    * OR application/json with a `message` field.
@@ -4868,6 +4870,25 @@ timerId = setInterval(refresh, intervalMs);
     }
   }
 
+  app.get('/api/agent/corrections', (req, res) => {
+    try {
+      res.json(getNliCorrectionStatus());
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/agent/corrections/run', express.json(), (req, res) => {
+    try {
+      const result = runPendingNliCorrections();
+      rebuildSystemPrompt();
+      res.json({ ok: true, ...result });
+    } catch (e) {
+      console.error('[NLI] Correction run failed:', e.message);
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
   // POST /api/agent/feedback
   // Body: { interactionId, rating: 'good'|'bad', expected?: string }
   app.post('/api/agent/feedback', express.json(), (req, res) => {
@@ -4883,13 +4904,13 @@ timerId = setInterval(refresh, intervalMs);
         expected: expected ? String(expected).slice(0, 500) : null,
         recordedAt: new Date().toISOString(),
       });
-      res.json({ ok: true });
+      res.json({ ok: true, ...getNliCorrectionStatus() });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  app.post('/agent', upload.array('files'), async (req, res) => {
+  app.post('/api/nli/query', upload.array('files'), async (req, res) => {
     const interactionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const shouldRecordInteraction = req.get('x-agent-test') !== '1';
     try {
@@ -4920,6 +4941,7 @@ timerId = setInterval(refresh, intervalMs);
       let intentId = match ? match.intent.id : 'ollama-fallback';
 
       const respond = (result, confidence = 1) => {
+        const { responsePolicy } = getNliConfig();
         const structured = result && typeof result === 'object' && !Array.isArray(result)
           ? result
           : { output: result };
@@ -4927,10 +4949,11 @@ timerId = setInterval(refresh, intervalMs);
         const normalizedConfidence = Number(confidence) > 1
           ? Number(confidence) / 100
           : Number(confidence);
-        const needsClarification = !Number.isFinite(normalizedConfidence) || normalizedConfidence < 0.95;
+        const needsClarification = !Number.isFinite(normalizedConfidence)
+          || normalizedConfidence < Number(responsePolicy.clarificationConfidence);
         const explicitVoiceReply = String(structured.voiceReply || '').trim();
         const voiceReply = explicitVoiceReply
-          || (needsClarification ? "I'm unclear, can you help me with this" : 'OK');
+          || (needsClarification ? responsePolicy.clarificationReply : responsePolicy.successReply);
 
         // Log the interaction before responding
         if (shouldRecordInteraction) {
@@ -5003,5 +5026,5 @@ timerId = setInterval(refresh, intervalMs);
   });
 
   console.log('[OLLAMA] Routes registered at /api/ollama/* and /api/openai/* (compat)');
-  console.log('[AGENT] /agent endpoint registered (BOB Console)');
+  console.log('[NLI] /api/nli/query endpoint registered');
 }

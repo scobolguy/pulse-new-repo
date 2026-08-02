@@ -7,7 +7,7 @@
     "COUNT":         "(?:first|top|next)\\s+(?<COUNT>\\d+)",
     "OUTPUT_FORMAT": "(?:as\\s+(?:an?\\s+)?|format\\s+|in\\s+(?:an?\\s+)?)(?<OUTPUT_FORMAT>excel\\s+spreadsheet|spreadsheet|excel|xlsx|csv|html)",
     "SCOPE_ALL":     "(?:all|every|each)\\s+(?:the\\s+)?queues?(?!\\s+\\w+\\.\\w)",
-    "ACTION_LIST_QUEUES": "(?:(?:show|list|display|get|what|how\\s+many)\\b.{0,60}\\bqueues?|queues?\\b.{0,40}\\b(?:status|depth|count|state|all|list|show|overview|backlog))",
+    "ACTION_LIST_QUEUES": "(?:(?:show|list|display|get|what|how\\s+many)\\b.{0,60}\\bqueues?|queues?\\b.{0,40}\\b(?:status|depth|size|sizes|count|state|all|list|show|overview|backlog))",
     "ACTION_PEEK":   "(?:peek|inspect|read\\s+(?:from|off)|show\\s+(?:queue\\s+)?(?:item|message|content|transaction)|first\\s+\\d+\\s+(?:item|message|transaction)|first\\s+(?:item|message|transaction))",
     "EACH_QUEUE":    "(?:(?:first|next)\\s+item\\s+(?:in|from|of)\\s+(?:each|every|all)|(?:each|every|all)\\s+queue(?:s)?\\s+item|peek\\s+(?:all|each|every)\\s+queues?)"
   },

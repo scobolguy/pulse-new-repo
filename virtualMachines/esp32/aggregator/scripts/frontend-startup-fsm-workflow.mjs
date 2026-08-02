@@ -4,6 +4,8 @@ import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 
 const BACKEND_URL = process.env.FRONTEND_FSM_BACKEND_URL || 'http://127.0.0.1:4000/api/authz/me?userId=system-admin';
+const MCP_URL = process.env.FRONTEND_FSM_MCP_URL || 'http://127.0.0.1:4011/health';
+const MCP_CMD = process.env.FRONTEND_FSM_MCP_CMD || 'node --env-file=.env.local src/mcp/pulseMcpServer.mjs';
 const FRONTEND_URL = process.env.FRONTEND_FSM_FRONTEND_URL || 'http://127.0.0.1:5173/';
 const FRONTEND_CMD = process.env.FRONTEND_FSM_FRONTEND_CMD || 'node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173 --strictPort --force';
 const FRONTEND_PORT = Number(process.env.FRONTEND_FSM_FRONTEND_PORT || new URL(FRONTEND_URL).port || 5173);
@@ -20,6 +22,9 @@ const STATES = {
   INIT: 'INIT',
   KILL_VITE_PROCESSES: 'KILL_VITE_PROCESSES',
   CHECK_BACKEND: 'CHECK_BACKEND',
+  CHECK_MCP: 'CHECK_MCP',
+  START_MCP: 'START_MCP',
+  WAIT_MCP: 'WAIT_MCP',
   START_FRONTEND: 'START_FRONTEND',
   WAIT_FRONTEND: 'WAIT_FRONTEND',
   READY: 'READY',
@@ -226,6 +231,12 @@ async function run() {
           url: BACKEND_URL,
           ok: false,
           checkedAt: null
+        },
+        mcp: {
+          required: true,
+          url: MCP_URL,
+          ok: false,
+          checkedAt: null
         }
       },
       workflow: [],
@@ -235,6 +246,7 @@ async function run() {
     await appendLog('workflow-start', {
       fsmId: FSM_ID,
       backendUrl: BACKEND_URL,
+      mcpUrl: MCP_URL,
       frontendUrl: FRONTEND_URL,
       statusPath: STATUS_PATH
     });
@@ -277,6 +289,72 @@ async function run() {
             backendUrl: BACKEND_URL
           });
           throw new Error(`Backend dependency is not ready at ${BACKEND_URL}. Start backend FSM first.`);
+        }
+        state = STATES.CHECK_MCP;
+        continue;
+      }
+
+      if (state === STATES.CHECK_MCP) {
+        const mcpOk = await isHealthy(MCP_URL);
+        await writeStatus({
+          dependencies: {
+            backend: {
+              required: true,
+              url: BACKEND_URL,
+              ok: true,
+              checkedAt: nowIso()
+            },
+            mcp: {
+              required: true,
+              url: MCP_URL,
+              ok: mcpOk,
+              checkedAt: nowIso()
+            }
+          }
+        });
+        await appendLog('state', { state, mcpUrl: MCP_URL, mcpOk });
+        state = mcpOk ? STATES.START_FRONTEND : STATES.START_MCP;
+        continue;
+      }
+
+      if (state === STATES.START_MCP) {
+        const pid = spawnDetached(MCP_CMD, process.cwd());
+        await appendLog('mcp-started', { command: MCP_CMD, pid });
+        state = STATES.WAIT_MCP;
+        continue;
+      }
+
+      if (state === STATES.WAIT_MCP) {
+        const mcpOk = await waitUntilHealthy(MCP_URL, FRONTEND_WAIT_TIMEOUT_MS, POLL_MS);
+        await writeStatus({
+          dependencies: {
+            backend: {
+              required: true,
+              url: BACKEND_URL,
+              ok: true,
+              checkedAt: nowIso()
+            },
+            mcp: {
+              required: true,
+              url: MCP_URL,
+              ok: mcpOk,
+              checkedAt: nowIso()
+            }
+          }
+        });
+        await appendLog(mcpOk ? 'mcp-ready' : 'mcp-timeout', {
+          mcpUrl: MCP_URL,
+          timeoutMs: FRONTEND_WAIT_TIMEOUT_MS
+        });
+        if (!mcpOk) {
+          await appendFailureNote({
+            type: 'timeout',
+            state,
+            dependency: 'mcp',
+            mcpUrl: MCP_URL,
+            command: MCP_CMD
+          });
+          throw new Error(`MCP dependency did not become ready at ${MCP_URL}`);
         }
         state = STATES.START_FRONTEND;
         continue;
@@ -346,6 +424,7 @@ async function run() {
         state,
         workflow,
         backendUrl: BACKEND_URL,
+        mcpUrl: MCP_URL,
         frontendUrl: FRONTEND_URL,
         fsmId: FSM_ID
       };

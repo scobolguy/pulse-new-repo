@@ -11,7 +11,7 @@
   ],
   "logs": [
     {
-      "at": "2026-07-23T14:07:47.985Z",
+      "at": "2026-08-01T23:20:15.297Z",
       "event": "workflow-start",
       "data": {
         "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
@@ -19,14 +19,14 @@
       }
     },
     {
-      "at": "2026-07-23T14:07:47.992Z",
+      "at": "2026-08-01T23:20:15.311Z",
       "event": "state",
       "data": {
         "state": "INIT"
       }
     },
     {
-      "at": "2026-07-23T14:07:47.996Z",
+      "at": "2026-08-01T23:20:15.319Z",
       "event": "state",
       "data": {
         "state": "KILL_BACKEND_PROCESSES",
@@ -35,26 +35,26 @@
       }
     },
     {
-      "at": "2026-07-23T14:07:48.266Z",
+      "at": "2026-08-01T23:20:15.701Z",
       "event": "subflow-complete",
       "data": {
         "subflow": "Kill all back end processes",
         "port": 4000,
         "pids": [
-          19732
+          20056
         ],
         "results": [
           {
-            "pid": 19732,
+            "pid": 20056,
             "killed": false,
-            "error": "Command failed: taskkill /PID 19732 /F /T\nERROR: The process with PID 19732 (child process of PID 28188) could not be terminated.\r\nReason: Access is denied.\r\r\n"
+            "error": "Command failed: taskkill /PID 20056 /F /T\nERROR: The process with PID 20056 (child process of PID 10876) could not be terminated.\r\nReason: Access is denied.\r\r\n"
           }
         ],
         "killedCount": 0
       }
     },
     {
-      "at": "2026-07-23T14:07:48.273Z",
+      "at": "2026-08-01T23:20:15.709Z",
       "event": "state",
       "data": {
         "state": "SANITIZE_QUEUE_PERSISTENCE",
@@ -62,7 +62,7 @@
       }
     },
     {
-      "at": "2026-07-23T14:07:49.469Z",
+      "at": "2026-08-01T23:20:16.109Z",
       "event": "subflow-complete",
       "data": {
         "subflow": "Sanitize queue persistence files",
@@ -86,7 +86,7 @@
       }
     },
     {
-      "at": "2026-07-23T14:07:49.476Z",
+      "at": "2026-08-01T23:20:16.115Z",
       "event": "state",
       "data": {
         "state": "CHECK_BACKEND",
@@ -94,7 +94,7 @@
       }
     },
     {
-      "at": "2026-07-23T14:07:49.543Z",
+      "at": "2026-08-01T23:20:16.221Z",
       "event": "complete",
       "data": {
         "ok": true,
@@ -111,7 +111,7 @@
       }
     }
   ],
-  "updatedAt": "2026-07-23T14:07:49.548Z",
+  "updatedAt": "2026-08-01T23:20:16.229Z",
   "error": null,
   "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin"
 }

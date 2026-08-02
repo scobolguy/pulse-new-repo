@@ -95,6 +95,12 @@ function AppShell() {
     setCurrentPath(path)
   }
 
+  // Default: redirect to BOB Console
+  if (currentPath === '/' || currentPath === '/index.html') {
+    window.location.replace('/bob-console.html')
+    return null
+  }
+
   let currentPage = <QueryPage />
   if (currentPath === '/topology') {
     currentPage = <TopologyPage />

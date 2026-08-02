@@ -1,21 +1,6 @@
-export const ROUTE_ROLE_MANIFEST = [
-  { id: 'lifecycle-inquiry', registrar: 'registerLifecycleInquiryRoutes', dependencyKey: 'lifecycleInquiry', enabled: true },
-  { id: 'lifecycle-nlp', registrar: 'registerLifecycleNlpRoutes', dependencyKey: 'lifecycleNlp', enabled: false },
-  { id: 'lifecycle-worker-gateway', registrar: 'registerLifecycleWorkerGatewayRoutes', dependencyKey: 'lifecycleWorkerGateway', enabled: true },
-  { id: 'queue-broker-ops', registrar: 'registerQueueBrokerOpsRoutes', dependencyKey: 'queueBrokerOps', enabled: true },
-  { id: 'compliance', registrar: 'registerComplianceRoutes', dependencyKey: 'compliance', enabled: true },
-  { id: 'governance-role-policy', registrar: 'registerGovernanceRolePolicyRoutes', dependencyKey: 'governanceRolePolicy', enabled: true },
-  { id: 'observability', registrar: 'registerObservabilityRoutes', dependencyKey: 'observability', enabled: true },
-  { id: 'platform', registrar: 'registerPlatformRoutes', dependencyKey: 'platform', enabled: true },
-  { id: 'replication', registrar: 'registerReplicationRoutes', dependencyKey: 'replication', enabled: true },
-  { id: 'queue-config', registrar: 'registerQueueConfigRoutes', dependencyKey: 'queueConfig', enabled: true },
-  { id: 'queue-transfer', registrar: 'registerQueueTransferRoutes', dependencyKey: 'queueTransfer', enabled: true },
-  { id: 'availability-presence', registrar: 'registerAvailabilityPresenceRoutes', dependencyKey: 'availabilityPresence', enabled: true },
-  { id: 'topology-runtime', registrar: 'registerTopologyRuntimeRoutes', dependencyKey: 'topologyRuntime', enabled: true },
-  { id: 'allocator', registrar: 'registerAllocatorRoutes', dependencyKey: 'allocator', enabled: true },
-  { id: 'librarian-proxy', registrar: 'registerLibrarianProxyRoutes', dependencyKey: 'librarianProxy', enabled: true },
-  { id: 'mapper-proxy', registrar: 'registerMapperProxyRoutes', dependencyKey: 'mapperProxy', enabled: true },
-  { id: 'runtime-registry', registrar: 'registerRuntimeRegistryRoutes', dependencyKey: 'runtimeRegistry', enabled: true },
-  { id: 'router-lifecycle-control', registrar: 'registerRouterLifecycleControlRoutes', dependencyKey: 'routerLifecycleControl', enabled: true },
-  { id: 'hello-service', registrar: 'registerHelloServiceRoutes', dependencyKey: 'helloService', enabled: true }
-];
+/**
+ * @deprecated This file has been replaced by data/route-manifest.json.
+ * The manifest is now loaded at startup via loadRouteManifest() from routeManifestLoader.mjs.
+ * Do not add entries here — edit data/route-manifest.json instead.
+ */
+throw new Error('[ROUTES] routes.manifest.mjs is deprecated. Use data/route-manifest.json via loadRouteManifest().');

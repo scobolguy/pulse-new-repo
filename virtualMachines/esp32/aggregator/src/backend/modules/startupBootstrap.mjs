@@ -1,3 +1,5 @@
+import { startCompanionServiceSupervisor } from './companionServiceSupervisor.mjs';
+
 export async function startBackendRuntime(deps = {}) {
   const {
     debugLog,
@@ -44,9 +46,11 @@ export async function startBackendRuntime(deps = {}) {
     gatewayModeState,
     startFedGateway,
     BACKEND_AUX_SERVICES_AUTOSTART,
+    PULSE_MCP_AUTOSTART,
     spawn,
     librarianScriptPath,
-    mapperScriptPath
+    mapperScriptPath,
+    mcpScriptPath
   } = deps;
 
   debugLog('[DEBUG] Starting backend server...');
@@ -194,6 +198,7 @@ export async function startBackendRuntime(deps = {}) {
   });
 
   app.use('/public', express.static(publicRoot));
+  app.get('/', (req, res) => res.redirect('/public/bob-console.html'));
   console.log('[PASCAL] Editor available at /editor');
 
   app.get('/api/openapi.json', (req, res) => {
@@ -305,6 +310,34 @@ export async function startBackendRuntime(deps = {}) {
     }
   } else {
     console.log('[AUTOSTART] Worker and gateway autostart is disabled (BACKEND_WORKER_AUTOSTART=false).');
+  }
+
+  if (PULSE_MCP_AUTOSTART) {
+    const mcpHealthUrl = process.env.PULSE_MCP_HEALTH_URL || 'http://127.0.0.1:4011/health';
+    const mcpCheckIntervalMs = Math.max(1000, Number(process.env.PULSE_MCP_CHECK_INTERVAL_MS || 5000));
+    const mcpRestartDelayMs = Math.max(500, Number(process.env.PULSE_MCP_RESTART_DELAY_MS || 2000));
+    const mcpSupervisor = await startCompanionServiceSupervisor({
+      name: 'MCP',
+      scriptPath: mcpScriptPath,
+      healthUrl: mcpHealthUrl,
+      spawn,
+      checkIntervalMs: mcpCheckIntervalMs,
+      restartDelayMs: mcpRestartDelayMs,
+    });
+    const stopMcp = () => mcpSupervisor.stop();
+
+    process.once('exit', stopMcp);
+    process.once('SIGINT', () => {
+      stopMcp();
+      process.exit();
+    });
+    process.once('SIGTERM', () => {
+      stopMcp();
+      process.exit();
+    });
+    console.log(`[MCP] Companion supervisor enabled (health=${mcpHealthUrl}, interval=${mcpCheckIntervalMs}ms)`);
+  } else {
+    console.log('[MCP] Companion autostart is disabled (PULSE_MCP_AUTOSTART=false).');
   }
 
   if (BACKEND_AUX_SERVICES_AUTOSTART) {
