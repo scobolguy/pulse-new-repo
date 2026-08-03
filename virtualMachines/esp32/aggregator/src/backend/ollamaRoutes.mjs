@@ -8,6 +8,7 @@ import { matchPascalExecuteRoute, matchPrecomputedRoute, detectQueryTypes } from
 import { matchAgentIntent } from './agentRouteLoader.mjs';
 import { getNliConfig } from './nliConfig.mjs';
 import { getNliCorrectionStatus, runPendingNliCorrections } from './nliCorrectionService.mjs';
+import { buildAuthoredFlowDocument, buildAuthoredFlowPcodeArtifacts, normalizeFlowTypeId, parseFlowAuthoringPrompt } from './flowAuthoringAgent.mjs';
 
 const SLOW_QUERY_THRESHOLD = 60000; // 60 seconds
 const SLOW_QUERY_LOG_FILE = path.resolve('./data/logs/slow-queries.jsonl');
@@ -2720,7 +2721,7 @@ User request: "${query}"`;
     req.on('timeout', () => { req.destroy(); resolve(null); });
   });
 
-  const postLocalApi = (apiPath, body) => new Promise((resolve) => {
+  const postLocalApi = (apiPath, body, requestHeaders = {}) => new Promise((resolve) => {
     const payload = JSON.stringify(body);
     const backendPort = Number(process.env.HTTP_PORT || process.env.PORT || 4000);
     const req = http.request({
@@ -2732,7 +2733,8 @@ User request: "${query}"`;
       headers: {
         'content-type': 'application/json',
         'content-length': Buffer.byteLength(payload),
-        'x-user-id': OLLAMA_QUEUE_ACTION_USER_ID
+        'x-user-id': OLLAMA_QUEUE_ACTION_USER_ID,
+        ...requestHeaders
       }
     }, (apiRes) => {
       let raw = '';
@@ -3443,6 +3445,133 @@ timerId = setInterval(refresh, intervalMs);
   // ── Formatters (keyed by the "formatter" field in agent-routes.json) ─────────
   const FORMATTERS = {
 
+    async flowAuthoring(data, captures) {
+      const prompt = String(captures?.prompt || captures?.FLOW_PROMPT || '').trim();
+      const request = parseFlowAuthoringPrompt(prompt);
+      if (request.missing.length > 0) {
+        return {
+          output: `<p style="font-family:-apple-system,'Segoe UI',sans-serif;color:#9a6700">I need ${escapeAgentHtml(request.missing.join(', '))}. Try: <code>create a flow to read queue payments.in; convert MT103 to PACS.008 and MT202 to PACS.009; output to queue payments.out</code>.</p>`,
+          voiceReply: `I need ${request.missing.join(', ')}`,
+          confidence: 0.5
+        };
+      }
+
+      const mapCatalog = await fetchLocalApi('/api/mapper/maps');
+      const mapSummaries = Array.isArray(mapCatalog?.maps) ? mapCatalog.maps : [];
+      const fullMaps = [];
+      for (const summary of mapSummaries) {
+        const payload = await fetchLocalApi(`/api/mapper/maps/${encodeURIComponent(summary.id)}`);
+        if (payload?.map) fullMaps.push(payload.map);
+      }
+
+      const resolvedMaps = [];
+      const unresolved = [];
+      for (const conversion of request.conversions) {
+        const match = fullMaps.find(map => (
+          normalizeFlowTypeId(map?.sourceTypeId) === conversion.sourceTypeId
+          && normalizeFlowTypeId(map?.targetTypeId) === conversion.targetTypeId
+        ));
+        if (match) resolvedMaps.push(match);
+        else unresolved.push(`${conversion.sourceTypeId} to ${conversion.targetTypeId}`);
+      }
+
+      if (unresolved.length > 0) {
+        return {
+          output: `<p style="font-family:-apple-system,'Segoe UI',sans-serif;color:#cf222e">No deployable mapper is registered for ${escapeAgentHtml(unresolved.join(', '))}. Create those mapper rules first, then repeat the flow request.</p>`,
+          voiceReply: 'One or more mapper rules are missing',
+          confidence: 0.5
+        };
+      }
+
+      const inputAssignment = await assignQueueTypesFromOllamaRequest({
+        queueName: request.inputQueue,
+        dataTypeIds: request.inputTypeIds,
+        projectId: 'default',
+        subproject: 'flow-authoring'
+      });
+      if (!inputAssignment.success) {
+        return {
+          output: `<p style="font-family:monospace;color:#cf222e">Input queue setup failed: ${escapeAgentHtml(inputAssignment.error)}</p>`,
+          voiceReply: 'Input queue setup failed',
+          confidence: 0
+        };
+      }
+
+      const outputAssignment = await assignQueueTypesFromOllamaRequest({
+        queueName: request.outputQueue,
+        dataTypeIds: request.outputTypeIds,
+        projectId: 'default',
+        subproject: 'flow-authoring'
+      });
+      if (!outputAssignment.success) {
+        return {
+          output: `<p style="font-family:monospace;color:#cf222e">Output queue setup failed: ${escapeAgentHtml(outputAssignment.error)}</p>`,
+          voiceReply: 'Output queue setup failed',
+          confidence: 0
+        };
+      }
+
+      const flowName = `${request.inputQueue}-to-${request.outputQueue}`;
+      const flow = buildAuthoredFlowDocument({ flowName, request, maps: resolvedMaps });
+      const executable = buildAuthoredFlowPcodeArtifacts({ flowName, request, maps: resolvedMaps });
+      const workspace = {
+        version: 1,
+        projectId: 'default',
+        projectLabel: 'BOB Authored Flow',
+        projectDescription: `Flow from ${request.inputQueue} to ${request.outputQueue}`,
+        documents: {
+          pcode: {
+            id: 'pcode',
+            kind: 'pcode',
+            label: 'Compiled Pcode',
+            fileName: executable.pcodeFileName,
+            content: executable.pcodeText
+          },
+          programMap: {
+            id: 'programMap',
+            kind: 'program-map',
+            label: 'Pcode Program Map',
+            fileName: executable.programMapFileName,
+            content: JSON.stringify(executable.programMap, null, 2)
+          }
+        },
+        catalogOverrides: {},
+        projectModel: {
+          programs: [{
+            id: executable.programId,
+            fileName: executable.pcodeFileName,
+            programMapFileName: executable.programMapFileName,
+            language: 'pcode'
+          }],
+          flows: [{ id: 'default.main.flow', fileName: flow.meta.name, contains: flow.nodes.map(node => node.id) }],
+          daemons: [],
+          services: [],
+          rulesets: resolvedMaps.map(map => ({ id: map.id, fileName: `${map.id}.map` })),
+          messageDefinitions: Array.from(new Set([...request.inputTypeIds, ...request.outputTypeIds])).map(id => ({ id }))
+        },
+        flow: { fileName: flow.meta.name, payload: flow, lastSavedAt: flow.savedAt }
+      };
+      const saved = await callLocalJsonApi('http://127.0.0.1:4000/api/projects/default/workspace', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', 'x-user-id': OLLAMA_QUEUE_ACTION_USER_ID },
+        body: JSON.stringify({ workspace })
+      });
+      if (!saved.ok) {
+        return {
+          output: `<p style="font-family:monospace;color:#cf222e">Flow persistence failed: ${escapeAgentHtml(saved.data?.error || saved.text || `HTTP ${saved.status}`)}</p>`,
+          voiceReply: 'Flow persistence failed',
+          confidence: 0
+        };
+      }
+
+      const mappingRows = resolvedMaps.map(map => `<li><code>${escapeAgentHtml(map.sourceTypeId)}</code> → <code>${escapeAgentHtml(map.targetTypeId)}</code> using <strong>${escapeAgentHtml(map.name || map.id)}</strong></li>`).join('');
+      return {
+        output: `<div style="font-family:-apple-system,'Segoe UI',sans-serif"><h3 style="margin:0 0 8px">Flow created</h3><p><code>${escapeAgentHtml(request.inputQueue)}</code> → ${resolvedMaps.length} mapper${resolvedMaps.length === 1 ? '' : 's'} → <code>${escapeAgentHtml(request.outputQueue)}</code></p><ul>${mappingRows}</ul><p>Queue type contracts were applied. <strong>${escapeAgentHtml(flow.meta.name)}</strong> and executable <strong>${escapeAgentHtml(executable.pcodeFileName)}</strong> were saved to the default Flow Designer workspace.</p></div>`,
+        voiceReply: `Flow created from ${request.inputQueue} to ${request.outputQueue}`,
+        confidence: 1
+      };
+    },
+
     async maplAuthoring(data, captures) {
       const prompt = String(captures?.prompt || '').trim();
       const result = await postLocalApi('/api/mapper/authoring/ollama-intent', {
@@ -3670,6 +3799,85 @@ timerId = setInterval(refresh, intervalMs);
           ${syncAgo !== null ? `Last NTP sync: ${syncAgo}s ago` : ''}
         </div>
       </div>`;
+    },
+
+    async temporalQuery(_data, captures, context = {}) {
+      const query = String(captures?.query || '').trim();
+      const userId = String(context.userId || OLLAMA_QUEUE_ACTION_USER_ID);
+      const result = await postLocalApi('/api/time/query', { query }, { 'x-user-id': userId });
+      const data = result?.data;
+      if (result?.status !== 200 || !data?.kind) {
+        const message = data?.error || 'Date and time data unavailable';
+        return { output: `<p style="font-family:-apple-system,sans-serif;color:#cf222e">${escapeAgentHtml(message)}</p>`, confidence: 0 };
+      }
+      if (data.kind === 'date-weekday') {
+        return {
+          output: `<p style="font-family:-apple-system,sans-serif;font-size:15px"><strong>${escapeAgentHtml(data.monthName)} ${data.day}, ${data.year}</strong> is a <strong>${escapeAgentHtml(data.weekday)}</strong>.</p><p style="font-family:-apple-system,sans-serif;font-size:11px;color:#57606a">Year inferred from the current date in ${escapeAgentHtml(data.timeZone)}.</p>`,
+          voiceReply: `${data.monthName} ${data.day}, ${data.year} is a ${data.weekday}`,
+          confidence: 1
+        };
+      }
+      if (data.kind === 'timezone-set') {
+        return {
+          output: `<p style="font-family:-apple-system,sans-serif;font-size:15px">Your timezone is now <strong>${escapeAgentHtml(data.timeZone)}</strong>.</p><p style="font-family:-apple-system,sans-serif;font-size:13px;color:#57606a">Local time: ${escapeAgentHtml(data.current.time)} · ${escapeAgentHtml(data.current.weekday)}, ${escapeAgentHtml(data.current.monthName)} ${data.current.day}, ${data.current.year}</p>`,
+          voiceReply: `Your timezone is now ${data.timeZone}`,
+          confidence: 1
+        };
+      }
+      return {
+        output: `<div style="font-family:-apple-system,'Segoe UI',sans-serif"><div style="font-size:36px;font-weight:300">${escapeAgentHtml(data.current.time)}</div><div style="font-size:16px;color:#57606a">${escapeAgentHtml(data.current.weekday)}, ${escapeAgentHtml(data.current.monthName)} ${data.current.day}, ${data.current.year}</div><div style="margin-top:8px;font-size:11px;color:#57606a">${escapeAgentHtml(data.timeZone)} · ${escapeAgentHtml(data.current.zoneName)}</div></div>`,
+        voiceReply: `It is ${data.current.time} on ${data.current.weekday}, ${data.current.monthName} ${data.current.day} in ${data.timeZone}`,
+        confidence: 1
+      };
+    },
+
+    async calendar(_data, captures) {
+      const query = String(captures?.query || '').trim();
+      const data = await fetchLocalApi(`/api/calendar/month?query=${encodeURIComponent(query)}`);
+      if (!data?.days || !data?.calendar) {
+        return {
+          output: '<p style="font-family:-apple-system,sans-serif;color:#cf222e">Calendar data unavailable.</p>',
+          voiceReply: 'Calendar data is unavailable',
+          confidence: 0
+        };
+      }
+
+      const weekdayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const cells = [];
+      for (let index = 0; index < data.days[0].weekday; index += 1) {
+        cells.push('<div style="min-height:74px;border:1px solid #e5e7eb;background:#f7f8fa"></div>');
+      }
+      for (const day of data.days) {
+        const background = day.today ? '#ddf4ff' : (day.holiday ? '#fff8c5' : (day.weekend ? '#f6f8fa' : '#fff'));
+        const border = day.today ? '#0969da' : '#e5e7eb';
+        const label = day.holiday
+          ? `<div style="margin-top:5px;font-size:10px;line-height:1.25;color:#7d4e00">${escapeAgentHtml(day.holiday)}</div>`
+          : (day.businessDay ? '<div style="margin-top:5px;font-size:10px;color:#2da44e">Business day</div>' : '');
+        cells.push(`<div style="min-height:74px;padding:6px;border:1px solid ${border};background:${background}">
+          <div style="font-size:13px;font-weight:${day.today ? '700' : '500'}">${day.day}${day.today ? ' · Today' : ''}</div>
+          ${label}
+        </div>`);
+      }
+
+      const holidayRows = data.holidays.length
+        ? data.holidays.map(holiday => `<li><strong>${escapeAgentHtml(holiday.date)}</strong> · ${escapeAgentHtml(holiday.name)}</li>`).join('')
+        : '<li>None</li>';
+      return {
+        output: `<div style="font-family:-apple-system,'Segoe UI',sans-serif;color:#1f2328">
+          <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;margin-bottom:10px;flex-wrap:wrap">
+            <div><div style="font-size:20px;font-weight:600">${escapeAgentHtml(data.monthName)} ${data.year}</div>
+            <div style="font-size:12px;color:#57606a">${escapeAgentHtml(data.calendar.name)} · ${escapeAgentHtml(data.calendar.timeZone)}</div></div>
+            <div style="font-size:12px;color:#57606a"><strong>${data.businessDayCount}</strong> business days</div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));font-size:11px;text-align:center;font-weight:600;color:#57606a">
+            ${weekdayNames.map(name => `<div style="padding:5px">${name}</div>`).join('')}
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr))">${cells.join('')}</div>
+          <div style="margin-top:10px;font-size:12px"><strong>Holidays and observed dates</strong><ul style="margin:5px 0 0;padding-left:20px">${holidayRows}</ul></div>
+        </div>`,
+        voiceReply: `${data.monthName} ${data.year} calendar for ${data.calendar.name}`,
+        confidence: 1
+      };
     },
 
     camera(_data, captures) {
@@ -5062,12 +5270,16 @@ timerId = setInterval(refresh, intervalMs);
         console.log(`[AGENT] intent="${intent.id}" formatter="${intent.formatter}" captures=${JSON.stringify(captures)}`);
         const formatter = FORMATTERS[intent.formatter];
         if (intent.api === null && formatter) {
-          const formatted = await Promise.resolve(formatter(null, captures));
+          const formatted = await Promise.resolve(formatter(null, captures, {
+            userId: String(req.get('x-user-id') || req.body?.userId || OLLAMA_QUEUE_ACTION_USER_ID)
+          }));
           return respond(formatted, formatted?.confidence ?? 1);
         }
         const data = await fetchLocalApi(intent.api);
         if (data && formatter) {
-          return respond(await Promise.resolve(formatter(data, captures)));
+          return respond(await Promise.resolve(formatter(data, captures, {
+            userId: String(req.get('x-user-id') || req.body?.userId || OLLAMA_QUEUE_ACTION_USER_ID)
+          })));
         }
         console.warn(`[AGENT] intent "${intent.id}" matched but api/formatter failed — falling through`);
         intentId = 'ollama-fallback';

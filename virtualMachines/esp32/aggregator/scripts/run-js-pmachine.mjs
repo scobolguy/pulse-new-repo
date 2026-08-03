@@ -411,6 +411,7 @@ function applyConversionRule(conversionRule, srcValue) {
   const rule = toUpperCopy(trimCopy(conversionRule));
   const srcText = asStringValue(srcValue);
   if (!rule) return srcValue;
+  if (rule.includes('UPPER(TRIM(SRC))')) return toUpperCopy(trimCopy(srcText));
   if (rule.includes('UPPER(SRC)')) return toUpperCopy(srcText);
   if (rule.includes('TRIM(SRC)')) return trimCopy(srcText);
   if (rule.includes('YYMMDDTOISO(SRC)')) return yyMmDdToIso(srcText);
@@ -718,7 +719,9 @@ function ensurePacsNamespaces(messageObject) {
   }
 
   if (!Object.prototype.hasOwnProperty.call(docRoot, '@xmlns')) {
-    docRoot['@xmlns'] = 'urn:iso:std:iso:20022:tech:xsd:pacs.008.001.10';
+    docRoot['@xmlns'] = docRoot.FIToFICdtTrf
+      ? 'urn:iso:std:iso:20022:tech:xsd:pacs.009.001.13'
+      : 'urn:iso:std:iso:20022:tech:xsd:pacs.008.001.14';
   }
   if (!Object.prototype.hasOwnProperty.call(docRoot, '@xmlns:xsi')) {
     docRoot['@xmlns:xsi'] = 'http://www.w3.org/2001/XMLSchema-instance';

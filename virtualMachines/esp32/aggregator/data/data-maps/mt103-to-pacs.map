@@ -20,32 +20,38 @@
     {
       "sourcePath": "finEnvelope.block4.fields.23B",
       "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtTpInf.LclInstrm.Prtry",
-      "kind": "leaf"
+      "kind": "leaf",
+      "conversionRule": "output := upper(trim(src));"
     },
     {
       "sourcePath": "finEnvelope.block4.fields.32A.components.valueDate",
       "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt",
-      "kind": "leaf"
+      "kind": "leaf",
+      "conversionRule": "output := yymmddtoiso(src);"
     },
     {
       "sourcePath": "finEnvelope.block4.fields.32A.components.currency",
       "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
-      "kind": "leaf"
+      "kind": "leaf",
+      "conversionRule": "output := upper(trim(src));"
     },
     {
       "sourcePath": "finEnvelope.block4.fields.32A.components.amount",
       "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
-      "kind": "leaf"
+      "kind": "leaf",
+      "conversionRule": "output := mtamounttodecimal(src);"
     },
     {
       "sourcePath": "finEnvelope.block4.fields.33B.components.currency",
       "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstdAmt.@Ccy",
-      "kind": "leaf"
+      "kind": "leaf",
+      "conversionRule": "output := upper(trim(src));"
     },
     {
       "sourcePath": "finEnvelope.block4.fields.33B.components.amount",
       "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstdAmt.#text",
-      "kind": "leaf"
+      "kind": "leaf",
+      "conversionRule": "output := mtamounttodecimal(src);"
     },
     {
       "sourcePath": "finEnvelope.block4.fields.50A",
@@ -55,32 +61,38 @@
     {
       "sourcePath": "finEnvelope.block4.fields.50K",
       "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm",
-      "kind": "leaf"
+      "kind": "leaf",
+      "conversionRule": "output := mtpartyname(src);"
     },
     {
       "sourcePath": "finEnvelope.block4.fields.52A",
       "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI",
-      "kind": "leaf"
+      "kind": "leaf",
+      "conversionRule": "output := upper(trim(src));"
     },
     {
       "sourcePath": "finEnvelope.block4.fields.53A",
       "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrmyAgt1.FinInstnId.BICFI",
-      "kind": "leaf"
+      "kind": "leaf",
+      "conversionRule": "output := upper(trim(src));"
     },
     {
       "sourcePath": "finEnvelope.block4.fields.56A",
       "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrmyAgt2.FinInstnId.BICFI",
-      "kind": "leaf"
+      "kind": "leaf",
+      "conversionRule": "output := upper(trim(src));"
     },
     {
       "sourcePath": "finEnvelope.block4.fields.57A",
       "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI",
-      "kind": "leaf"
+      "kind": "leaf",
+      "conversionRule": "output := upper(trim(src));"
     },
     {
       "sourcePath": "finEnvelope.block4.fields.59",
       "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm",
-      "kind": "leaf"
+      "kind": "leaf",
+      "conversionRule": "output := mtpartyname(src);"
     },
     {
       "sourcePath": "finEnvelope.block4.fields.59A",
@@ -95,12 +107,14 @@
     {
       "sourcePath": "finEnvelope.block4.fields.71A",
       "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgBr",
-      "kind": "leaf"
+      "kind": "leaf",
+      "conversionRule": "output := mtchargebearertoiso(src);"
     },
     {
       "sourcePath": "finEnvelope.block4.fields.71B",
       "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgsInf.Amt.#text",
-      "kind": "leaf"
+      "kind": "leaf",
+      "conversionRule": "output := mtamounttodecimal(src);"
     },
     {
       "sourcePath": "finEnvelope.block4.fields.72",

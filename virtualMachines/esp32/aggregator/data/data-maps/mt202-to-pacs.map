@@ -20,37 +20,44 @@
     {
       "sourcePath": "finEnvelope.block4.fields.32A.components.valueDate",
       "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrBkSttlmDt",
-      "kind": "leaf"
+      "kind": "leaf",
+      "conversionRule": "output := yymmddtoiso(src);"
     },
     {
       "sourcePath": "finEnvelope.block4.fields.32A.components.currency",
       "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
-      "kind": "leaf"
+      "kind": "leaf",
+      "conversionRule": "output := upper(trim(src));"
     },
     {
       "sourcePath": "finEnvelope.block4.fields.32A.components.amount",
       "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
-      "kind": "leaf"
+      "kind": "leaf",
+      "conversionRule": "output := mtamounttodecimal(src);"
     },
     {
       "sourcePath": "finEnvelope.block4.fields.52A",
       "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI",
-      "kind": "leaf"
+      "kind": "leaf",
+      "conversionRule": "output := upper(trim(src));"
     },
     {
       "sourcePath": "finEnvelope.block4.fields.56A",
       "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.IntrmyAgt1.FinInstnId.BICFI",
-      "kind": "leaf"
+      "kind": "leaf",
+      "conversionRule": "output := upper(trim(src));"
     },
     {
       "sourcePath": "finEnvelope.block4.fields.57A",
       "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI",
-      "kind": "leaf"
+      "kind": "leaf",
+      "conversionRule": "output := upper(trim(src));"
     },
     {
       "sourcePath": "finEnvelope.block4.fields.58A",
       "targetPath": "Document.FIToFICdtTrf.CdtTrfTxInf.Cdtr.FinInstnId.BICFI",
-      "kind": "leaf"
+      "kind": "leaf",
+      "conversionRule": "output := upper(trim(src));"
     },
     {
       "sourcePath": "finEnvelope.block4.fields.72",

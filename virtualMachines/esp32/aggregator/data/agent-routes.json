@@ -6,6 +6,8 @@
     "QUEUE_NAME":    "(?:(?:queue|in\\s+queue|from\\s+queue|in\\s+the\\s+queue|of\\s+queue)\\s+)(?<QUEUE_NAME>[\\w][\\w/.-]{2,})",
     "COUNT":         "(?:first|top|next)\\s+(?<COUNT>\\d+)",
     "OUTPUT_FORMAT": "(?:as\\s+(?:an?\\s+)?|format\\s+|in\\s+(?:an?\\s+)?)(?<OUTPUT_FORMAT>excel\\s+spreadsheet|spreadsheet|excel|xlsx|csv|html)",
+    "ACTION_CREATE_FLOW": "\\b(?:create|build|make|design)\\b[\\s\\S]{0,50}\\bflow\\b",
+    "prompt": "(?<prompt>[\\s\\S]+)",
     "SCOPE_ALL":     "(?:all|every|each)\\s+(?:the\\s+)?queues?(?!\\s+\\w+\\.\\w)",
     "ACTION_LIST_QUEUES": "(?:(?:show|list|display|get|what|how\\s+many)\\b.{0,60}\\bqueues?|queues?\\b.{0,40}\\b(?:status|depth|size|sizes|count|state|all|list|show|overview|backlog))",
     "ACTION_PEEK":   "(?:peek|inspect|read\\s+(?:from|off)|show\\s+(?:queue\\s+)?(?:item|message|content|transaction)|first\\s+\\d+\\s+(?:item|message|transaction)|first\\s+(?:item|message|transaction))",
@@ -13,6 +15,38 @@
   },
 
   "intents": [
+
+    {
+      "id": "flow-authoring",
+      "version": 2,
+      "description": "Create a typed queue-to-mapper flow and save it in Flow Designer.",
+      "requires": ["ACTION_CREATE_FLOW", "prompt"],
+      "score": 100,
+      "patterns": [
+        "\\b(?:create|build|make|design)\\b[\\s\\S]{0,50}\\bflow\\b[\\s\\S]{0,160}\\b(?:read|consume|listen)\\b[\\s\\S]{0,40}\\bqueue\\b",
+        "\\bflow\\b[\\s\\S]{0,100}\\b(?:convert|map|transform)\\b[\\s\\S]{0,120}\\boutput\\b[\\s\\S]{0,30}\\bqueue\\b"
+      ],
+      "flags": "i",
+      "capture": "(?<prompt>[\\s\\S]+)",
+      "captureFlags": "i",
+      "api": null,
+      "formatter": "flowAuthoring"
+    },
+
+    {
+      "id": "mapl-authoring",
+      "description": "Create a valid MAPL program, compile it to p-code, and persist the source and compiled program map.",
+      "patterns": [
+        "\\b(?:create|generate|build|write|make|compile)\\b[\\s\\S]{0,120}\\bmapl\\b",
+        "\\bmapl\\b[\\s\\S]{0,120}\\b(?:create|generate|build|write|make|compile)\\b",
+        "\\b(?:convert|map|transform)\\b[\\s\\S]{1,80}\\b(?:to|into)\\b[\\s\\S]{0,80}\\b(?:message|mt\\d{3}|camt|pacs|pain)\\b"
+      ],
+      "flags": "i",
+      "capture": "(?<prompt>[\\s\\S]+)",
+      "captureFlags": "i",
+      "api": null,
+      "formatter": "maplAuthoring"
+    },
 
     {
       "id": "animated-flow",
@@ -145,6 +179,36 @@
     },
 
     {
+      "id": "temporal-query",
+      "description": "Resolve calendar weekdays, current time/date in user or city time zones, and set a user's default time zone.",
+      "patterns": [
+        "\\bwhat\\s+day\\s+(?:is|was|will)\\s+[a-z]+\\s+\\d{1,2}(?:st|nd|rd|th)?\\b",
+        "\\bwhat\\s+(?:time|date|day).{0,40}\\bin\\s+[a-z]",
+        "\\b(?:set|change|update)\\s+(?:my\\s+)?time\\s*zone\\b"
+      ],
+      "flags": "i",
+      "capture": "^(?<query>.+)$",
+      "captureFlags": "i",
+      "api": null,
+      "formatter": "temporalQuery"
+    },
+
+    {
+      "id": "calendar",
+      "description": "Show civil or geography-specific business calendars, including weekends, holidays, observed holidays, and business days.",
+      "patterns": [
+        "\\b(?:calendar|calandar|calaendar|calender)\\b",
+        "\\b(?:business|working)\\s+days?\\b",
+        "\\b(?:bank|public|statutory)\\s+holidays?\\b"
+      ],
+      "flags": "i",
+      "capture": "^(?<query>.+)$",
+      "captureFlags": "i",
+      "api": null,
+      "formatter": "calendar"
+    },
+
+    {
       "id": "librarian",
       "description": "Show data librarian status: registered data types, schema catalog with lifecycle",
       "patterns": [
@@ -185,8 +249,10 @@
         "\\bwhat('s| is) the (time|date)\\b"
       ],
       "flags": "i",
-      "api": "/api/time/authority",
-      "formatter": "time"
+      "capture": "^(?<query>.+)$",
+      "captureFlags": "i",
+      "api": null,
+      "formatter": "temporalQuery"
     },
 
     {

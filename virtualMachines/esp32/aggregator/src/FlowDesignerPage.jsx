@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchCatalogSnapshot } from './catalogStudio/catalogApi'
 import { getJsonAsActor } from './http-client'
-import { getDefaultProjectWorkspace, getProjectDefinition, loadProjectWorkspace, saveProjectWorkspace } from './projectWorkspace'
+import { getDefaultProjectWorkspace, getProjectDefinition, hydrateProjectWorkspaceFromServer, loadProjectWorkspace, saveProjectWorkspace } from './projectWorkspace'
 import nodeVariantRegistry from './catalogStudio/nodeVariantRegistry.json'
 import platformioProfiles from './catalogStudio/platformioProfiles.json'
 
@@ -924,7 +924,7 @@ export default function FlowDesignerPage({ projectId, projectLabel }) {
     const unique = new Map()
 
     for (const schema of librarianSchemas) {
-      const id = normalizeShapeRef(schema?.typeId || schema?.name || '')
+      const id = normalizeShapeRef(schema?.name || schema?.typeId || '')
       if (!id) continue
       const schemaName = String(schema?.name || id).trim()
       const schemaPath = String(schema?.path || '').trim()
@@ -944,22 +944,33 @@ export default function FlowDesignerPage({ projectId, projectLabel }) {
   }, [librarianSchemas, shapeOptions])
 
   useEffect(() => {
-    const workspace = loadProjectWorkspace(projectId)
-    const savedFlow = workspace.flow?.payload
-    if (savedFlow && typeof savedFlow === 'object') {
-      applyFlowDocument(savedFlow, workspace.flow?.fileName || `${activeProject.id}.flw`)
-      return
+    let active = true
+
+    async function loadWorkspaceFlow() {
+      const hydrated = await hydrateProjectWorkspaceFromServer(projectId)
+      if (!active) return
+      const workspace = hydrated?.workspace || loadProjectWorkspace(projectId)
+      const savedFlow = workspace.flow?.payload
+      if (savedFlow && typeof savedFlow === 'object') {
+        applyFlowDocument(savedFlow, workspace.flow?.fileName || `${activeProject.id}.flw`)
+        return
+      }
+
+      const defaultWorkspace = getDefaultProjectWorkspace(projectId)
+      setNodes([])
+      setEdges([])
+      setUserDefinedSubflows([])
+      setSelectedNodeId(null)
+      setSelectedEdgeId(null)
+      setEdgeSourceNodeId(null)
+      setFlowFileName(defaultWorkspace.flow?.fileName || `${activeProject.id}.flw`)
+      setStatusText(`Project ${activeProject.label} loaded.`)
     }
 
-    const defaultWorkspace = getDefaultProjectWorkspace(projectId)
-    setNodes([])
-    setEdges([])
-    setUserDefinedSubflows([])
-    setSelectedNodeId(null)
-    setSelectedEdgeId(null)
-    setEdgeSourceNodeId(null)
-    setFlowFileName(defaultWorkspace.flow?.fileName || `${activeProject.id}.flw`)
-    setStatusText(`Project ${activeProject.label} loaded.`)
+    void loadWorkspaceFlow()
+    return () => {
+      active = false
+    }
   }, [activeProject.id, activeProject.label, projectId])
 
   const searchableCatalog = useMemo(() => {
@@ -1448,8 +1459,8 @@ export default function FlowDesignerPage({ projectId, projectLabel }) {
   }
 
   function normalizeLoadedEdge(edge, nodeIdSet) {
-    const from = String(edge?.from || '')
-    const to = String(edge?.to || '')
+    const from = String(edge?.from || edge?.source || '')
+    const to = String(edge?.to || edge?.target || '')
     if (!from || !to) return null
     if (!nodeIdSet.has(from) || !nodeIdSet.has(to)) return null
     const type = String(edge?.type || 'message-broker-call')
