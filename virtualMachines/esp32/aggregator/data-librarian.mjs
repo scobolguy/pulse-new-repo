@@ -9,11 +9,12 @@ app.use(express.json());
 
 // Config: where to look for data files and schemas (independent of process cwd)
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
-const DATA_ROOT = path.resolve(repoRoot, 'data');
+const DATA_ROOT = path.resolve(process.env.PULSE_LIBRARIAN_DATA_ROOT || path.join(repoRoot, 'data'));
 const SERVICES_ROOT = path.join(DATA_ROOT, 'services');
 const LIBRARIAN_SERVICE_ROOT = path.join(SERVICES_ROOT, 'librarian');
 const SCHEMA_ROOT = path.join(LIBRARIAN_SERVICE_ROOT, 'schemas');
 const SCHEMA_LIFECYCLE_PATH = path.join(LIBRARIAN_SERVICE_ROOT, 'schema-lifecycle.json');
+const SUBSCHEMAS_PATH = path.join(LIBRARIAN_SERVICE_ROOT, 'subschemas.json');
 const MAPPER_RULESETS_PATH = path.join(LIBRARIAN_SERVICE_ROOT, 'mapper-rulesets.json');
 const DATA_TYPES_PATH = path.join(LIBRARIAN_SERVICE_ROOT, 'data-types.json');
 
@@ -454,6 +455,93 @@ async function extractStructureForFile(filePath, schemaType) {
   }
 }
 
+function isSchemaContainerNode(node) {
+  return ['sequence', 'choice', 'all', 'complextype'].includes(String(node?.valueType || '').toLowerCase());
+}
+
+function normalizeSchemaFieldPath(value) {
+  return String(value || '')
+    .trim()
+    .replace(/^root\.?/i, '')
+    .split('.')
+    .map(part => part.trim())
+    .filter(Boolean)
+    .join('.');
+}
+
+function collectSchemaFieldPaths(structure) {
+  const fields = [];
+  function visit(node, parentPath = '') {
+    if (!node || typeof node !== 'object') return;
+    const nodeName = String(node.name || '').trim();
+    const contributesPath = nodeName && nodeName !== 'root' && !isSchemaContainerNode(node);
+    const currentPath = contributesPath
+      ? (parentPath ? `${parentPath}.${nodeName}` : nodeName)
+      : parentPath;
+    if (contributesPath && !fields.includes(currentPath)) fields.push(currentPath);
+    for (const child of Array.isArray(node.children) ? node.children : []) {
+      visit(child, currentPath);
+    }
+  }
+  visit(structure);
+  return fields;
+}
+
+function filterSchemaStructure(structure, accessibleFields) {
+  const allowed = Array.from(new Set((accessibleFields || []).map(normalizeSchemaFieldPath).filter(Boolean)));
+  function visit(node, parentPath = '') {
+    if (!node || typeof node !== 'object') return null;
+    const nodeName = String(node.name || '').trim();
+    const contributesPath = nodeName && nodeName !== 'root' && !isSchemaContainerNode(node);
+    const currentPath = contributesPath
+      ? (parentPath ? `${parentPath}.${nodeName}` : nodeName)
+      : parentPath;
+    const pathIsVisible = !currentPath || allowed.some(field => (
+      field === currentPath
+      || field.startsWith(`${currentPath}.`)
+      || currentPath.startsWith(`${field}.`)
+    ));
+    if (!pathIsVisible) return null;
+    const children = (Array.isArray(node.children) ? node.children : [])
+      .map(child => visit(child, currentPath))
+      .filter(Boolean);
+    return { ...node, children };
+  }
+  return visit(structure);
+}
+
+function normalizeSubschemaDefinition(candidate) {
+  const source = candidate && typeof candidate === 'object' ? candidate : {};
+  const id = String(source.id || '').trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  const label = String(source.label || id).trim();
+  const parentSchemaPath = String(source.parentSchemaPath || '').trim().replace(/\\/g, '/');
+  const parentTypeId = String(source.parentTypeId || '').trim().toLowerCase();
+  const accessibleFields = Array.from(new Set(
+    (Array.isArray(source.accessibleFields) ? source.accessibleFields : [])
+      .map(normalizeSchemaFieldPath)
+      .filter(Boolean)
+  )).sort((a, b) => a.localeCompare(b));
+  if (!id) throw new Error('id is required');
+  if (!label) throw new Error('label is required');
+  if (!parentSchemaPath) throw new Error('parentSchemaPath is required');
+  if (accessibleFields.length === 0) throw new Error('accessibleFields must include at least one field path');
+  return { id, label, parentSchemaPath, ...(parentTypeId ? { parentTypeId } : {}), accessibleFields };
+}
+
+async function loadSubschemas() {
+  try {
+    const parsed = JSON.parse(await fs.readFile(SUBSCHEMAS_PATH, 'utf-8'));
+    return (Array.isArray(parsed) ? parsed : []).map(normalizeSubschemaDefinition);
+  } catch {
+    return [];
+  }
+}
+
+async function saveSubschemas(subschemas) {
+  await fs.mkdir(LIBRARIAN_SERVICE_ROOT, { recursive: true });
+  await fs.writeFile(SUBSCHEMAS_PATH, JSON.stringify(subschemas, null, 2));
+}
+
 async function loadSchemaLifecycleByPath() {
   try {
     const content = await fs.readFile(SCHEMA_LIFECYCLE_PATH, 'utf-8');
@@ -492,6 +580,22 @@ const LIBRARIAN_LLM_ACTIONS = [
     description: 'Return schema catalog with inferred structure trees and lifecycle status.',
     requestSchema: null,
     responseShape: { schemas: [{ typeId: 'string', path: 'string', structure: 'tree', lifecycle: 'object' }] }
+  },
+  {
+    id: 'listSubschemas',
+    method: 'GET',
+    path: '/api/librarian/subschemas',
+    description: 'List field-restricted virtual schemas and their parent schema contracts.',
+    requestSchema: null,
+    responseShape: { subschemas: [{ id: 'string', parentSchemaPath: 'string', accessibleFields: 'string[]', structure: 'tree' }] }
+  },
+  {
+    id: 'createSubschema',
+    method: 'POST',
+    path: '/api/librarian/subschemas',
+    description: 'Create a virtual schema that exposes only selected canonical field paths from a parent schema.',
+    requestSchema: { id: 'string', label: 'string', parentSchemaPath: 'string', accessibleFields: 'string[]' },
+    responseShape: { status: 'created', subschema: 'object' }
   },
   {
     id: 'listDataTypes',
@@ -577,6 +681,7 @@ app.get('/api/librarian/llm/base', (req, res) => {
       actions: '/api/librarian/llm/actions',
       actionSchema: '/api/librarian/llm/actions/:id',
       schemaCatalog: '/api/librarian/schemas',
+      subschemas: '/api/librarian/subschemas',
       dataTypes: '/api/librarian/data-types',
       mapperRulesets: '/api/librarian/mapper-rulesets'
     }
@@ -657,38 +762,148 @@ app.use('/api/librarian/file', async (req, res) => {
 });
 
 
-// List all schemas with metadata
+async function loadPhysicalSchemaCatalog() {
+  const files = await listFiles(SCHEMA_ROOT);
+  const lifecycleByPath = await loadSchemaLifecycleByPath();
+  const schemas = files.map(async file => {
+    const meta = parseSchemaFilename(file.name);
+    if (!meta) return null;
+    const lifecycle = lifecycleByPath[file.path] || {
+      activeFrom: null,
+      rejectAfter: null,
+      keepForDisplay: true,
+    };
+    const structure = await extractStructureForFile(file.fullPath, meta.type);
+    return {
+      ...meta,
+      typeId: inferTypeIdFromSchema(meta),
+      path: file.path,
+      size: file.size,
+      mtime: file.mtime,
+      structure,
+      lifecycle: {
+        activeFrom: lifecycle.activeFrom || null,
+        rejectAfter: lifecycle.rejectAfter || null,
+        keepForDisplay: lifecycle.keepForDisplay !== false,
+        status: computeLifecycleStatus(lifecycle),
+      },
+    };
+  });
+  return (await Promise.all(schemas)).filter(Boolean);
+}
+
+async function loadSubschemaCatalog(physicalSchemas) {
+  const parentByPath = new Map(physicalSchemas.map(schema => [schema.path, schema]));
+  return (await loadSubschemas()).map(definition => {
+    const parent = parentByPath.get(definition.parentSchemaPath);
+    if (!parent) return null;
+    return {
+      name: definition.id,
+      label: definition.label,
+      type: 'subschema',
+      typeId: parent.typeId,
+      path: `subschemas/${definition.id}`,
+      parentSchemaPath: definition.parentSchemaPath,
+      accessibleFields: definition.accessibleFields,
+      availableFields: collectSchemaFieldPaths(parent.structure),
+      size: Buffer.byteLength(JSON.stringify(definition)),
+      mtime: parent.mtime,
+      structure: filterSchemaStructure(parent.structure, definition.accessibleFields),
+      lifecycle: parent.lifecycle,
+      virtual: true,
+    };
+  }).filter(Boolean);
+}
+
+async function validateSubschemaDefinition(candidate) {
+  const definition = normalizeSubschemaDefinition(candidate);
+  const physicalSchemas = await loadPhysicalSchemaCatalog();
+  const parent = physicalSchemas.find(schema => schema.path === definition.parentSchemaPath);
+  if (!parent) {
+    throw new Error(`Parent schema not found: ${definition.parentSchemaPath}`);
+  }
+  if (!parent.structure) {
+    throw new Error(`Parent schema structure is unavailable: ${definition.parentSchemaPath}`);
+  }
+  const availableFields = new Set(collectSchemaFieldPaths(parent.structure));
+  const unknownFields = definition.accessibleFields.filter(field => !availableFields.has(field));
+  if (unknownFields.length > 0) {
+    throw new Error(`Fields are not present in parent schema: ${unknownFields.join(', ')}`);
+  }
+  return {
+    definition: { ...definition, parentTypeId: String(parent.typeId || '').trim().toLowerCase() },
+    physicalSchemas
+  };
+}
+
+// List physical schemas and their field-restricted virtual subschemas.
 app.get('/api/librarian/schemas', async (req, res) => {
   try {
-    const files = await listFiles(SCHEMA_ROOT);
-    const lifecycleByPath = await loadSchemaLifecycleByPath();
-    const schemas = files
-      .map(async f => {
-        const meta = parseSchemaFilename(f.name);
-        if (!meta) return null;
-        const lifecycle = lifecycleByPath[f.path] || {
-          activeFrom: null,
-          rejectAfter: null,
-          keepForDisplay: true,
-        };
-        const structure = await extractStructureForFile(f.fullPath, meta.type);
-        return {
-          ...meta,
-          typeId: inferTypeIdFromSchema(meta),
-          path: f.path,
-          size: f.size,
-          mtime: f.mtime,
-          structure,
-          lifecycle: {
-            activeFrom: lifecycle.activeFrom || null,
-            rejectAfter: lifecycle.rejectAfter || null,
-            keepForDisplay: lifecycle.keepForDisplay !== false,
-            status: computeLifecycleStatus(lifecycle),
-          },
-        };
-      })
-    const resolvedSchemas = (await Promise.all(schemas)).filter(Boolean);
-    res.json({ schemas: resolvedSchemas });
+    const physicalSchemas = await loadPhysicalSchemaCatalog();
+    const subschemas = await loadSubschemaCatalog(physicalSchemas);
+    res.json({ schemas: [...physicalSchemas, ...subschemas], subschemas });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/librarian/subschemas', async (req, res) => {
+  try {
+    const physicalSchemas = await loadPhysicalSchemaCatalog();
+    const subschemas = await loadSubschemaCatalog(physicalSchemas);
+    res.json({ subschemas });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/librarian/subschemas', async (req, res) => {
+  try {
+    const { definition, physicalSchemas } = await validateSubschemaDefinition(req.body || {});
+    const stored = await loadSubschemas();
+    if (stored.some(item => item.id === definition.id)) {
+      return res.status(409).json({ error: `Subschema ${definition.id} already exists` });
+    }
+    stored.push(definition);
+    await saveSubschemas(stored);
+    const subschema = (await loadSubschemaCatalog(physicalSchemas)).find(item => item.name === definition.id);
+    res.status(201).json({ status: 'created', subschema });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.put('/api/librarian/subschemas/:id', async (req, res) => {
+  try {
+    const currentId = String(req.params.id || '').trim().toLowerCase();
+    const stored = await loadSubschemas();
+    const index = stored.findIndex(item => item.id === currentId);
+    if (index < 0) return res.status(404).json({ error: 'Subschema not found' });
+    const { definition, physicalSchemas } = await validateSubschemaDefinition({
+      ...stored[index],
+      ...(req.body || {}),
+      id: req.body?.id || currentId,
+    });
+    if (stored.some((item, itemIndex) => item.id === definition.id && itemIndex !== index)) {
+      return res.status(409).json({ error: `Subschema ${definition.id} already exists` });
+    }
+    stored[index] = definition;
+    await saveSubschemas(stored);
+    const subschema = (await loadSubschemaCatalog(physicalSchemas)).find(item => item.name === definition.id);
+    res.json({ status: 'updated', subschema });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.delete('/api/librarian/subschemas/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim().toLowerCase();
+    const stored = await loadSubschemas();
+    const next = stored.filter(item => item.id !== id);
+    if (next.length === stored.length) return res.status(404).json({ error: 'Subschema not found' });
+    await saveSubschemas(next);
+    res.json({ status: 'deleted', id });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1070,6 +1285,13 @@ app.delete('/api/librarian/schemas', async (req, res) => {
     const relPath = String(req.body?.path || '').trim().replace(/\\/g, '/');
     if (!relPath) return res.status(400).json({ error: 'path is required' });
 
+    const dependentSubschemas = (await loadSubschemas()).filter(item => item.parentSchemaPath === relPath);
+    if (dependentSubschemas.length > 0) {
+      return res.status(409).json({
+        error: `Schema is used by subschemas: ${dependentSubschemas.map(item => item.id).join(', ')}`
+      });
+    }
+
     const absPath = path.resolve(SCHEMA_ROOT, relPath);
     if (!absPath.startsWith(path.resolve(SCHEMA_ROOT))) {
       return res.status(403).json({ error: 'Access denied' });
@@ -1121,6 +1343,15 @@ app.post('/api/librarian/schemas/rename', async (req, res) => {
       delete lifecycleByPath[currentPath];
       await saveSchemaLifecycleByPath(lifecycleByPath);
     }
+
+    const subschemas = await loadSubschemas();
+    let subschemasChanged = false;
+    for (const subschema of subschemas) {
+      if (subschema.parentSchemaPath !== currentPath) continue;
+      subschema.parentSchemaPath = nextRelPath;
+      subschemasChanged = true;
+    }
+    if (subschemasChanged) await saveSubschemas(subschemas);
 
     res.json({ status: 'renamed', path: nextRelPath });
   } catch (e) {

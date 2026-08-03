@@ -19,6 +19,8 @@ export default function DataLibrarian() {
   const [lifecycleDrafts, setLifecycleDrafts] = useState({});
   const [nowTs, setNowTs] = useState(() => Date.now());
   const [contextMenu, setContextMenu] = useState(null);
+  const [subschemaEditor, setSubschemaEditor] = useState(null);
+  const [subschemaFieldSearch, setSubschemaFieldSearch] = useState('');
 
   function toLocalDateTimeInput(value) {
     if (!value) return '';
@@ -490,6 +492,95 @@ export default function DataLibrarian() {
     }
   }
 
+  function collectSubschemaFieldPaths(structure) {
+    const paths = [];
+    const containerTypes = new Set(['sequence', 'choice', 'all', 'complextype']);
+    function visit(node, parentPath = '') {
+      if (!node || typeof node !== 'object') return;
+      const name = String(node.name || '').trim();
+      const contributesPath = name && name !== 'root' && !containerTypes.has(String(node.valueType || '').toLowerCase());
+      const currentPath = contributesPath ? (parentPath ? `${parentPath}.${name}` : name) : parentPath;
+      if (contributesPath && !paths.includes(currentPath)) paths.push(currentPath);
+      for (const child of Array.isArray(node.children) ? node.children : []) visit(child, currentPath);
+    }
+    visit(structure);
+    return paths;
+  }
+
+  function openSubschemaEditor(schema) {
+    closeMenus();
+    setSubschemaFieldSearch('');
+    setSubschemaEditor({
+      mode: schema.virtual ? 'edit' : 'create',
+      schema,
+      id: schema.virtual ? schema.name : '',
+      label: schema.virtual ? (schema.label || schema.name) : '',
+      selectedFields: schema.virtual ? [...(schema.accessibleFields || [])] : [],
+    });
+  }
+
+  function toggleSubschemaField(fieldPath) {
+    setSubschemaEditor(current => {
+      if (!current) return current;
+      const selected = new Set(current.selectedFields || []);
+      if (selected.has(fieldPath)) selected.delete(fieldPath);
+      else selected.add(fieldPath);
+      return { ...current, selectedFields: Array.from(selected).sort((a, b) => a.localeCompare(b)) };
+    });
+  }
+
+  async function saveSubschema() {
+    if (!subschemaEditor) return;
+    const id = String(subschemaEditor.id || '').trim();
+    const label = String(subschemaEditor.label || '').trim();
+    const accessibleFields = subschemaEditor.selectedFields || [];
+    if (!id || !label || accessibleFields.length === 0) {
+      setMsg('Subschema ID, label, and at least one accessible field are required.');
+      return;
+    }
+    const isEdit = subschemaEditor.mode === 'edit';
+    const parentSchemaPath = isEdit
+      ? subschemaEditor.schema.parentSchemaPath
+      : subschemaEditor.schema.path;
+    const endpoint = isEdit
+      ? `/api/librarian/subschemas/${encodeURIComponent(subschemaEditor.schema.name)}`
+      : '/api/librarian/subschemas';
+    try {
+      const response = await fetch(endpoint, {
+        method: isEdit ? 'PUT' : 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id, label, parentSchemaPath, accessibleFields }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setMsg(`Subschema save failed: ${data.error || 'unknown error'}`);
+        return;
+      }
+      setMsg(`Subschema ${isEdit ? 'updated' : 'created'}: ${data.subschema?.name || id}`);
+      setSubschemaEditor(null);
+      await loadAll();
+    } catch (e) {
+      setMsg(`Subschema save failed: ${e.message}`);
+    }
+  }
+
+  async function deleteSubschema(schema) {
+    closeMenus();
+    if (!window.confirm(`Delete subschema "${schema.name}"?`)) return;
+    try {
+      const response = await fetch(`/api/librarian/subschemas/${encodeURIComponent(schema.name)}`, { method: 'DELETE' });
+      const data = await response.json();
+      if (!response.ok) {
+        setMsg(`Delete subschema failed: ${data.error || 'unknown error'}`);
+        return;
+      }
+      setMsg(`Subschema deleted: ${schema.name}`);
+      await loadAll();
+    } catch (e) {
+      setMsg(`Delete subschema failed: ${e.message}`);
+    }
+  }
+
   function setDraftValue(path, key, value) {
     setLifecycleDrafts(prev => ({
       ...prev,
@@ -646,6 +737,15 @@ export default function DataLibrarian() {
       .filter(schema => !knownTypeIds.has(String(schema.typeId || schema.name || '').trim().toLowerCase()))
       .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
   }, [filteredSchemas, filteredTypes]);
+
+  const subschemaFieldOptions = useMemo(() => {
+    if (!subschemaEditor) return [];
+    const available = subschemaEditor.schema.virtual
+      ? (subschemaEditor.schema.availableFields || [])
+      : collectSubschemaFieldPaths(subschemaEditor.schema.structure);
+    const query = subschemaFieldSearch.trim().toLowerCase();
+    return available.filter(field => !query || field.toLowerCase().includes(query));
+  }, [subschemaEditor, subschemaFieldSearch]);
 
   function summarizeStructure(node) {
     if (!node) return 'Structure unavailable.';
@@ -942,25 +1042,34 @@ export default function DataLibrarian() {
                               <li key={format.path} style={{ marginBottom: 4 }}>
                                 <div
                                   onClick={() => setItemExpanded(prev => ({ ...prev, [format.path]: !prev[format.path] }))}
-                                  onContextMenu={e => openContextMenu(e, 'schema', format)}
+                                  onContextMenu={e => openContextMenu(e, format.virtual ? 'subschema' : 'schema', format)}
                                   style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '2px 4px', borderRadius: 4, cursor: 'pointer', userSelect: 'none' }}
                                 >
                                   <span style={{ width: 12, color: '#5a6b7b' }}>{itemExpanded[format.path] ? '▾' : '▸'}</span>
-                                  <span>{format.type === 'copybook' ? '📘' : '📄'}</span>
+                                  <span>{format.type === 'copybook' ? '📘' : (format.virtual ? '◫' : '📄')}</span>
                                   <span style={{ fontWeight: 600, fontSize: 12 }}>{format.name}</span>
                                   <span style={{ fontSize: 11, color: '#777' }}>{format.type}</span>
-                                  <span style={{ fontSize: 10, color: '#555' }}>v{format.version ?? '-'}</span>
+                                  {!format.virtual && <span style={{ fontSize: 10, color: '#555' }}>v{format.version ?? '-'}</span>}
                                   <span style={{ fontSize: 10, color: '#555' }}>{format.size} B</span>
+                                  {format.virtual && <span style={{ fontSize: 10, color: '#555' }}>{format.accessibleFields?.length || 0} accessible field(s)</span>}
                                   <span style={{ fontSize: 10, borderRadius: 12, padding: '2px 8px', ...badge.style }}>{badge.label}</span>
                                 </div>
                                 {itemExpanded[format.path] && (
                                   <div style={{ marginTop: 4, marginLeft: 20, display: 'grid', gap: 8 }}>
+                                    {format.virtual && (
+                                      <div style={{ fontSize: 11, color: '#555' }}>
+                                        Parent schema: <code>{format.parentSchemaPath}</code>
+                                      </div>
+                                    )}
                                     {format.structure && (
                                       <div>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                                           <div style={{ fontSize: 12, color: '#444' }}>Message Structure</div>
                                           <button type="button" onClick={() => speakStructure(format)} style={{ fontSize: 11 }}>
                                             Speak summary
+                                          </button>
+                                          <button type="button" onClick={() => openSubschemaEditor(format)} style={{ fontSize: 11 }}>
+                                            {format.virtual ? 'Edit Subschema' : 'New Subschema'}
                                           </button>
                                         </div>
                                         <ul style={{ listStyle: 'none', paddingLeft: 0, margin: 0 }}>
@@ -971,7 +1080,7 @@ export default function DataLibrarian() {
                                     {!format.structure && (
                                       <div style={{ fontSize: 12, color: '#777' }}>Structure preview unavailable for this format type.</div>
                                     )}
-                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8 }}>
+                                    {!format.virtual && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8 }}>
                                       <label style={{ fontSize: 12, color: '#444' }}>
                                         Active From
                                         <input
@@ -1003,7 +1112,7 @@ export default function DataLibrarian() {
                                           Save Lifecycle
                                         </button>
                                       </div>
-                                    </div>
+                                    </div>}
                                   </div>
                                 )}
                               </li>
@@ -1088,7 +1197,7 @@ export default function DataLibrarian() {
             }}
           >
             <div style={{ padding: '8px 12px', borderBottom: '1px solid #374151', fontSize: 11, color: '#9ca3af' }}>
-              {contextMenu.kind === 'type' ? `Type: ${contextMenu.item?.id || ''}` : `Schema: ${contextMenu.item?.name || contextMenu.item?.path || ''}`}
+              {contextMenu.kind === 'type' ? `Type: ${contextMenu.item?.id || ''}` : `${contextMenu.kind === 'subschema' ? 'Subschema' : 'Schema'}: ${contextMenu.item?.name || contextMenu.item?.path || ''}`}
             </div>
             {contextMenu.kind === 'type' && (
               <>
@@ -1112,6 +1221,13 @@ export default function DataLibrarian() {
               <>
                 <button
                   type="button"
+                  onClick={() => openSubschemaEditor(contextMenu.item)}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer' }}
+                >
+                  New Subschema
+                </button>
+                <button
+                  type="button"
                   onClick={() => createTypeFromSchema(contextMenu.item)}
                   style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer' }}
                 >
@@ -1133,8 +1249,66 @@ export default function DataLibrarian() {
                 </button>
               </>
             )}
+            {contextMenu.kind === 'subschema' && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => openSubschemaEditor(contextMenu.item)}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer' }}
+                >
+                  Edit Subschema
+                </button>
+                <button
+                  type="button"
+                  onClick={() => deleteSubschema(contextMenu.item)}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', background: 'transparent', border: 'none', color: '#fca5a5', cursor: 'pointer' }}
+                >
+                  Delete Subschema
+                </button>
+              </>
+            )}
           </div>
         </>
+      )}
+
+      {subschemaEditor && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(17,24,39,0.48)', display: 'grid', placeItems: 'center', padding: 20 }}>
+          <div role="dialog" aria-modal="true" aria-label="Subschema editor" style={{ width: 'min(760px, 100%)', maxHeight: 'min(760px, 92vh)', background: '#fff', border: '1px solid #cbd5e1', borderRadius: 8, boxShadow: '0 24px 60px rgba(0,0,0,0.28)', display: 'grid', gridTemplateRows: 'auto auto minmax(180px, 1fr) auto', overflow: 'hidden' }}>
+            <div style={{ padding: '14px 16px', borderBottom: '1px solid #e5e7eb' }}>
+              <div style={{ fontWeight: 700 }}>{subschemaEditor.mode === 'edit' ? 'Edit Subschema' : 'New Subschema'}</div>
+              <div style={{ marginTop: 3, fontSize: 11, color: '#64748b' }}>Parent: {subschemaEditor.schema.parentSchemaPath || subschemaEditor.schema.path}</div>
+            </div>
+            <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) minmax(220px, 2fr)', gap: 10, borderBottom: '1px solid #e5e7eb' }}>
+              <label style={{ fontSize: 12 }}>ID
+                <input value={subschemaEditor.id} onChange={event => setSubschemaEditor(current => ({ ...current, id: event.target.value }))} style={{ display: 'block', width: '100%' }} />
+              </label>
+              <label style={{ fontSize: 12 }}>Label
+                <input value={subschemaEditor.label} onChange={event => setSubschemaEditor(current => ({ ...current, label: event.target.value }))} style={{ display: 'block', width: '100%' }} />
+              </label>
+              <label style={{ gridColumn: '1 / -1', fontSize: 12 }}>Find fields
+                <input value={subschemaFieldSearch} onChange={event => setSubschemaFieldSearch(event.target.value)} placeholder="Filter canonical paths" style={{ display: 'block', width: '100%' }} />
+              </label>
+              <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, alignItems: 'center', fontSize: 11 }}>
+                <button type="button" onClick={() => setSubschemaEditor(current => ({ ...current, selectedFields: Array.from(new Set([...(current.selectedFields || []), ...subschemaFieldOptions])).sort((a, b) => a.localeCompare(b)) }))}>Select visible</button>
+                <button type="button" onClick={() => setSubschemaEditor(current => ({ ...current, selectedFields: [] }))}>Clear</button>
+                <span style={{ color: '#64748b' }}>{subschemaEditor.selectedFields.length} selected</span>
+              </div>
+            </div>
+            <div style={{ overflow: 'auto', padding: '8px 16px' }}>
+              {subschemaFieldOptions.map(fieldPath => (
+                <label key={fieldPath} style={{ display: 'grid', gridTemplateColumns: '18px minmax(0, 1fr)', gap: 8, alignItems: 'start', padding: '5px 2px', borderBottom: '1px solid #f1f5f9', fontFamily: 'Consolas, monospace', fontSize: 11 }}>
+                  <input type="checkbox" checked={subschemaEditor.selectedFields.includes(fieldPath)} onChange={() => toggleSubschemaField(fieldPath)} />
+                  <span style={{ overflowWrap: 'anywhere' }}>{fieldPath}</span>
+                </label>
+              ))}
+              {subschemaFieldOptions.length === 0 && <div style={{ padding: 16, color: '#64748b', fontSize: 12 }}>No matching fields.</div>}
+            </div>
+            <div style={{ padding: '12px 16px', borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button type="button" onClick={() => setSubschemaEditor(null)}>Cancel</button>
+              <button type="button" onClick={saveSubschema}>Save Subschema</button>
+            </div>
+          </div>
+        </div>
       )}
       </div>
     </div>

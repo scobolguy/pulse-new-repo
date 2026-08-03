@@ -293,6 +293,8 @@
    CONFIG
 ───────────────────────────────────────────────────────── */
 const MCP_QUERY_URL = '/mcp-query';
+const MAPL_STREAM_URL = '/api/mapper/authoring/ollama-intent-stream';
+const MAPL_TEST_STREAM_URL = '/api/mapper/authoring/test-last-stream';
 const FEEDBACK_URL = '/api/agent/feedback';
 const CORRECTIONS_URL = '/api/agent/corrections';
 
@@ -494,6 +496,80 @@ function renderOutput(content) {
   pane.scrollTop = pane.scrollHeight;
 }
 
+function renderMappingProgress(messages) {
+  const pane = document.getElementById('outputPane');
+  pane.style.display = '';
+  pane.classList.remove('html-mode');
+  pane.textContent = messages.map((message, index) => `${index === messages.length - 1 ? 'Working' : 'Done'}: ${message}`).join('\n');
+  document.getElementById('spinnerLabel').textContent = messages[messages.length - 1] || 'Generating MAPL';
+  document.getElementById('spinnerPane').classList.add('visible');
+  pane.scrollTop = pane.scrollHeight;
+}
+
+function isMappingAuthoringQuery(text) {
+  return /\b(?:create|generate|build|write|make|compile)\b[\s\S]{0,120}\bmapl\b/i.test(text)
+    || /\bmapl\b[\s\S]{0,120}\b(?:create|generate|build|write|make|compile)\b/i.test(text)
+    || /\b(?:convert|map|transform)\b[\s\S]{1,80}\b(?:to|into)\b[\s\S]{0,80}\b(?:message|mt\d{3}|camt|pacs|pain)\b/i.test(text);
+}
+
+function isMappingTestQuery(text) {
+  return /\btest\b[\s\S]{0,80}\b(?:map|mapping)\b/i.test(text)
+    || /\b(?:map|mapping)\b[\s\S]{0,80}\btest\b/i.test(text);
+}
+
+async function readMaplStream(response, progressLabel) {
+  if (!response.ok || !response.body) {
+    throw new Error(`${progressLabel} failed (${response.status})`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const progress = [];
+  let buffer = '';
+  let result = null;
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const lines = buffer.split('\n');
+    buffer = done ? '' : lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line);
+      if (event.type === 'progress') {
+        progress.push(event.message);
+        renderMappingProgress(progress);
+      } else if (event.type === 'error') {
+        throw new Error(event.message || `${progressLabel} failed`);
+      } else if (event.type === 'result') {
+        result = event;
+      }
+    }
+    if (done) break;
+  }
+  if (!result) throw new Error(`${progressLabel} returned no result`);
+  return result;
+}
+
+async function streamMaplAuthoring(prompt) {
+  const response = await fetch(MAPL_STREAM_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ prompt })
+  });
+  const result = await readMaplStream(response, 'MAPL generation');
+  if (!result?.output) throw new Error('MAPL generation returned no source artifact');
+  return result;
+}
+
+async function streamLastMapTest() {
+  const response = await fetch(MAPL_TEST_STREAM_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}'
+  });
+  return readMaplStream(response, 'MAPL test');
+}
+
 async function readJsonResponse(response, operation) {
   const text = await response.text();
   let data = {};
@@ -583,6 +659,24 @@ async function sendQuery(text) {
   document.getElementById('fbBad').disabled   = false;
 
   try {
+    if (isMappingTestQuery(text)) {
+      const tested = await streamLastMapTest();
+      const output = typeof tested.output === 'string'
+        ? tested.output
+        : JSON.stringify(tested.output, null, 2);
+      const outputLabel = tested.outputFormat === 'xml' ? 'CAMT.053 XML' : 'CAMT.053';
+      renderOutput(`INPUT (SWIFT MT940)\n${tested.input}\n\nOUTPUT (${outputLabel})\n${output}`);
+      setStatus('ok', `tested: ${tested.mapId}`);
+      return;
+    }
+
+    if (isMappingAuthoringQuery(text)) {
+      const generated = await streamMaplAuthoring(text);
+      renderOutput(generated.output);
+      setStatus('ok', generated.savedPath ? `saved: ${generated.savedPath}` : 'MAPL ready');
+      return;
+    }
+
     const files    = document.getElementById('uploadInput').files;
     const formData = new FormData();
     formData.append('message', text);

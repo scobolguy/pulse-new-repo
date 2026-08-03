@@ -82,6 +82,7 @@
     { "name": "OP_NOT", "hex": "0x4D" },
     { "name": "OP_STREQ", "hex": "0x4E" },
     { "name": "OP_STRNEQ", "hex": "0x4F" },
+    { "name": "OP_MAP_RETURN", "hex": "0x50", "targets": ["js"] },
     { "name": "OP_HALT", "hex": "0xFF" }
   ]
 }

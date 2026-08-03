@@ -1,89 +1,85 @@
 {
   "id": "mt940-to-camt053",
   "name": "MT940 to CAMT.053",
-  "description": "Direct field mapping rules from SWIFT FIN MT940 statements to ISO 20022 CAMT.053 BankToCustomerStatement (no PL/0 conversion routines).",
+  "description": "SWIFT FIN MT940 to ISO 20022 CAMT.053.001.14 booked statement mapping.",
   "sourceTypeId": "swift-mt940",
   "targetTypeId": "camt",
   "targetSchemaPath": "schemas/camt.053.001.14.xsd",
-  "version": "1.0",
-  "createdAt": "2026-07-15T00:00:00.000Z",
-  "updatedAt": "2026-07-15T00:00:00.000Z",
-  "rules": [
+  "targetNamespace": "urn:iso:std:iso:20022:tech:xsd:camt.053.001.14",
+  "version": "2.0.0",
+  "testCases": [
     {
-      "sourcePath": "finEnvelope.block4.fields.20",
-      "targetPath": "Document.BkToCstmrStmt.Stmt.Id",
-      "kind": "leaf"
-    },
-    {
-      "sourcePath": "finEnvelope.block4.fields.20",
-      "targetPath": "Document.BkToCstmrStmt.GrpHdr.MsgId",
-      "kind": "leaf"
-    },
-    {
-      "sourcePath": "finEnvelope.block4.fields.25",
-      "targetPath": "Document.BkToCstmrStmt.Stmt.Acct.Id.Othr.Id",
-      "kind": "leaf"
-    },
-    {
-      "sourcePath": "finEnvelope.block4.fields.28C",
-      "targetPath": "Document.BkToCstmrStmt.Stmt.ElctrncSeqNb",
-      "kind": "leaf"
-    },
-    {
-      "sourcePath": "finEnvelope.block4.fields.28C",
-      "targetPath": "Document.BkToCstmrStmt.Stmt.LglSeqNb",
-      "kind": "leaf"
-    },
-    {
-      "sourcePath": "finEnvelope.block4.fields.60F.components.date",
-      "targetPath": "Document.BkToCstmrStmt.Stmt.Bal.Dt.Dt",
-      "kind": "leaf"
-    },
-    {
-      "sourcePath": "finEnvelope.block4.fields.60F.components.currency",
-      "targetPath": "Document.BkToCstmrStmt.Stmt.Bal.Tp.CdOrPrtry.Cd",
-      "kind": "leaf"
-    },
-    {
-      "sourcePath": "finEnvelope.block4.fields.60F.components.amount",
-      "targetPath": "Document.BkToCstmrStmt.Stmt.Bal.Amt.#text",
-      "kind": "leaf"
-    },
-    {
-      "sourcePath": "finEnvelope.block4.fields.60F.components.currency",
-      "targetPath": "Document.BkToCstmrStmt.Stmt.Bal.Amt.@Ccy",
-      "kind": "leaf"
-    },
-    {
-      "sourcePath": "finEnvelope.block4.fields.62F.components.amount",
-      "targetPath": "Document.BkToCstmrStmt.Stmt.Bal.AvailBal.Amt.#text",
-      "kind": "leaf"
-    },
-    {
-      "sourcePath": "finEnvelope.block4.fields.62F.components.currency",
-      "targetPath": "Document.BkToCstmrStmt.Stmt.Bal.AvailBal.Amt.@Ccy",
-      "kind": "leaf"
-    },
-    {
-      "sourcePath": "finEnvelope.block4.fields.62F.components.date",
-      "targetPath": "Document.BkToCstmrStmt.Stmt.Bal.AvailBal.Dt.Dt",
-      "kind": "leaf"
-    },
-    {
-      "sourcePath": "finEnvelope.block4.fields.61",
-      "targetPath": "Document.BkToCstmrStmt.Stmt.Ntry.AddtlNtryInf",
-      "kind": "leaf"
-    },
-    {
-      "sourcePath": "finEnvelope.block4.fields.61",
-      "targetPath": "Document.BkToCstmrStmt.Stmt.Ntry.NtryDtls.TxDtls.RmtInf.Ustrd",
-      "kind": "leaf"
-    },
-    {
-      "sourcePath": "finEnvelope.block4.fields.86",
-      "targetPath": "Document.BkToCstmrStmt.Stmt.Ntry.AddtlNtryInf",
-      "kind": "leaf"
+      "id": "booked-credit-transfer",
+      "description": "Booked EUR credit transfer with opening and closing balances",
+      "input": "{1:F01BANKBEBBAXXX0000000000}{2:I940BANKDEFFXXXXN}{4:\n:20:STATEMENT-20260802\n:25:DE89370400440532013000\n:28C:00001/001\n:60F:C260801EUR1234,56\n:61:2608020802C250,00NTRFNONREF\n:86:Invoice 2026-0802\n:62F:C260802EUR1484,56\n-}"
     }
   ],
-  "submaps": []
+  "rules": [
+    { "sourcePath": "source.block4.field20", "targetPath": "target.Document.BkToCstmrStmt.GrpHdr.MsgId", "kind": "leaf" },
+    { "sourcePath": "source.meta.createdAt", "targetPath": "target.Document.BkToCstmrStmt.GrpHdr.CreDtTm", "kind": "leaf" },
+    { "sourcePath": "source.block4.field20", "targetPath": "target.Document.BkToCstmrStmt.Stmt.Id", "kind": "leaf" },
+    { "sourcePath": "source.block4.field28CStatementNumber", "targetPath": "target.Document.BkToCstmrStmt.Stmt.ElctrncSeqNb", "kind": "leaf" },
+    { "sourcePath": "source.block4.field28CSequenceNumber", "targetPath": "target.Document.BkToCstmrStmt.Stmt.LglSeqNb", "kind": "leaf" },
+    { "sourcePath": "source.block4.field25", "targetPath": "target.Document.BkToCstmrStmt.Stmt.Acct.Id.Othr.Id", "kind": "leaf" },
+    { "sourcePath": "source.block4.fieldBalances", "targetPath": "target.Document.BkToCstmrStmt.Stmt.Bal", "kind": "branch" },
+    { "sourcePath": "source.block4.fieldEntries", "targetPath": "target.Document.BkToCstmrStmt.Stmt.Ntry", "kind": "branch" }
+  ],
+  "validations": ["source.block4.field20 <> ''"],
+  "sourceParsing": {
+    "createdAtPath": "meta.createdAt",
+    "fieldRules": [
+      {
+        "tags": ["60F", "62F"],
+        "pattern": "^([CD])(\\d{6})([A-Z]{3})([0-9,]+)$",
+        "outputPath": "block4.fieldBalances",
+        "append": true,
+        "values": [
+          { "targetPath": "Tp.CdOrPrtry.Cd", "tagValues": { "60F": "OPBD", "62F": "CLBD" } },
+          { "targetPath": "Amt.@Ccy", "capture": 3 },
+          { "targetPath": "Amt.#text", "capture": 4, "transform": "mtAmountToDecimal" },
+          { "targetPath": "CdtDbtInd", "capture": 1, "values": { "C": "CRDT", "D": "DBIT" } },
+          { "targetPath": "Dt.Dt", "capture": 2, "transform": "yymmddToIso" }
+        ]
+      },
+      {
+        "tags": ["61"],
+        "pattern": "^(\\d{6})(\\d{4})?(R)?([CD])([A-Z])?([0-9,]+)([A-Z])([A-Z0-9]{3})(.*)$",
+        "outputPath": "block4.fieldEntries",
+        "append": true,
+        "values": [
+          { "targetPath": "Amt.@Ccy", "constant": "" },
+          { "targetPath": "Amt.#text", "capture": 6, "transform": "mtAmountToDecimal" },
+          { "targetPath": "CdtDbtInd", "capture": 4, "values": { "C": "CRDT", "D": "DBIT" } },
+          { "targetPath": "RvslInd", "capture": 3, "values": { "R": true }, "omitEmpty": true },
+          { "targetPath": "Sts.Cd", "constant": "BOOK" },
+          { "targetPath": "BookgDt.Dt", "captures": [1, 2], "transform": "mt940BookingDate" },
+          { "targetPath": "ValDt.Dt", "capture": 1, "transform": "yymmddToIso" },
+          { "targetPath": "BkTxCd.Prtry.Cd", "captures": [7, 8], "transform": "concat" },
+          { "targetPath": "BkTxCd.Prtry.Issr", "constant": "SWIFT" },
+          { "targetPath": "AddtlNtryInf", "source": "raw" }
+        ]
+      }
+    ],
+    "derivedRules": [
+      {
+        "sourcePath": "block4.field28C",
+        "pattern": "^(\\d+)(?:/(\\d+))?",
+        "values": [
+          { "targetPath": "block4.field28CStatementNumber", "capture": 1, "transform": "integerString" },
+          { "targetPath": "block4.field28CSequenceNumber", "capture": 2, "transform": "integerString", "omitEmpty": true }
+        ]
+      }
+    ],
+    "entryCurrency": {
+      "entriesPath": "block4.fieldEntries",
+      "sourcePaths": ["block4.fieldBalances.1.Amt.@Ccy", "block4.fieldBalances.0.Amt.@Ccy"],
+      "targetPath": "Amt.@Ccy"
+    },
+    "narrative": {
+      "tag": "86",
+      "entriesPath": "block4.fieldEntries",
+      "targetPath": "AddtlNtryInf",
+      "separator": "\n:86:"
+    }
+  }
 }

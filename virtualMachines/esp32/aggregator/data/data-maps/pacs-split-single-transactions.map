@@ -1,0 +1,21 @@
+{
+  "id": "pacs-split-single-transactions",
+  "name": "PACS split to single transactions",
+  "sourceTypeId": "pacs",
+  "targetTypeId": "pacs",
+  "version": "1.0.0",
+  "forEach": {
+    "sourcePath": "source.Document.FIToFICstmrCdtTrf.CdtTrfTxInf",
+    "variable": "tx"
+  },
+  "rules": [
+    { "sourcePath": "source.Document.FIToFICstmrCdtTrf.GrpHdr.MsgId", "targetPath": "target.Document.FIToFICstmrCdtTrf.GrpHdr.MsgId", "kind": "leaf" },
+    { "sourcePath": "tx.PmtId.EndToEndId", "targetPath": "target.Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId", "kind": "leaf" },
+    { "sourcePath": "tx.IntrBkSttlmAmt", "targetPath": "target.Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt", "kind": "leaf" }
+  ],
+  "pascalishRules": [
+    { "sourcePath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId", "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId", "kind": "leaf" },
+    { "sourcePath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf", "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf", "kind": "branch" }
+  ],
+  "validations": ["tx.PmtId.EndToEndId <> ''"]
+}

@@ -1,0 +1,15 @@
+{
+  "id": "mt700-to-pacs-payment",
+  "name": "MT700 to PACS payment",
+  "sourceTypeId": "swift-mt700",
+  "targetTypeId": "pacs",
+  "version": "1.0.0",
+  "rules": [
+    { "sourcePath": "source.block4.field20", "targetPath": "target.Document.FIToFICstmrCdtTrf.GrpHdr.MsgId", "kind": "leaf", "pascalishConversionRule": "output := trim(src);" },
+    { "sourcePath": "source.block4.field31C", "targetPath": "target.Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt", "kind": "leaf", "pascalishConversionRule": "output := yymmddtoiso(src);" },
+    { "sourcePath": "source.block4.field32B", "targetPath": "target.Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt", "kind": "leaf", "pascalishConversionRule": "output := trim(src);" },
+    { "sourcePath": "source.block4.field50", "targetPath": "target.Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm", "kind": "leaf", "pascalishConversionRule": "output := mtpartyname(src);" },
+    { "sourcePath": "source.block4.field59", "targetPath": "target.Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm", "kind": "leaf", "pascalishConversionRule": "output := mtpartyname(src);" }
+  ],
+  "validations": ["source.block4.field20 <> ''"]
+}

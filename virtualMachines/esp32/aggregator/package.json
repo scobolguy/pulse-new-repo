@@ -60,6 +60,7 @@
     "test:pcode-compiler:string-escaping": "node scripts/test-pcode-compiler-string-escaping.mjs",
     "test:pascalish:endpoint-bnf": "node scripts/test-pascalish-endpoint-bnf.mjs",
     "test:mapl:compiler": "node scripts/test-mapl-compiler.mjs",
+    "test:librarian:subschemas": "node scripts/test-librarian-subschemas.mjs",
     "test:nli:config": "node scripts/test-nli-config.mjs",
     "test:nli:corrections": "node scripts/test-nli-corrections.mjs",
     "test:bob:corrections-button": "node scripts/test-bob-corrections-button.mjs",

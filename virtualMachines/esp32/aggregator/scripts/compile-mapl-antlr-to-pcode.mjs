@@ -208,6 +208,7 @@ export function compileMaplWithAntlr(sourceText) {
   const pcodeText = [
     '# Auto-generated from ANTLR MAPL grammar',
     `OP_MAP SRC, ${quote(firstMap.id)}, mappedPayload`,
+    'MAP_RETURN mappedPayload',
     'HALT',
     ''
   ].join('\n');
@@ -219,7 +220,7 @@ export function compileMaplWithAntlr(sourceText) {
       generatedAt: new Date().toISOString(),
       serviceId: `mapl-${firstMap.id}`,
       runtimeUnit: { kind: 'program', id: `mapl-${firstMap.id}`, refreshMs: null },
-      executionModel: 'mapl-op-map',
+      executionModel: 'mapl-op-map-return',
       sourceLanguage: 'mapl',
       globals: ['mappedPayload'],
       entryMapId: firstMap.id,

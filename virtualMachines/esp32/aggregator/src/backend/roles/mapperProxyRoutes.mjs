@@ -20,6 +20,15 @@ export function registerMapperProxyRoutes(app, deps) {
       res.status(upstream.status);
       if (contentType.includes('application/json')) {
         res.json(await upstream.json());
+      } else if (contentType.includes('application/x-ndjson') && upstream.body) {
+        res.setHeader('content-type', contentType);
+        res.setHeader('cache-control', 'no-cache, no-transform');
+        res.setHeader('x-accel-buffering', 'no');
+        res.flushHeaders?.();
+        for await (const chunk of upstream.body) {
+          res.write(chunk);
+        }
+        res.end();
       } else {
         res.send(await upstream.text());
       }

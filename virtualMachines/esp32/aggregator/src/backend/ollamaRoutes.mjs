@@ -12,6 +12,15 @@ import { getNliCorrectionStatus, runPendingNliCorrections } from './nliCorrectio
 const SLOW_QUERY_THRESHOLD = 60000; // 60 seconds
 const SLOW_QUERY_LOG_FILE = path.resolve('./data/logs/slow-queries.jsonl');
 
+function escapeAgentHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
 // Ensure logs directory exists
 const logsDir = path.resolve('./data/logs');
 if (!fs.existsSync(logsDir)) {
@@ -2711,6 +2720,39 @@ User request: "${query}"`;
     req.on('timeout', () => { req.destroy(); resolve(null); });
   });
 
+  const postLocalApi = (apiPath, body) => new Promise((resolve) => {
+    const payload = JSON.stringify(body);
+    const backendPort = Number(process.env.HTTP_PORT || process.env.PORT || 4000);
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port: backendPort,
+      path: apiPath,
+      method: 'POST',
+      timeout: 120000,
+      headers: {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(payload),
+        'x-user-id': OLLAMA_QUEUE_ACTION_USER_ID
+      }
+    }, (apiRes) => {
+      let raw = '';
+      apiRes.on('data', chunk => { raw += chunk; });
+      apiRes.on('end', () => {
+        try {
+          resolve({ status: apiRes.statusCode, data: JSON.parse(raw) });
+        } catch {
+          resolve({ status: apiRes.statusCode, data: { error: raw || 'Invalid backend response' } });
+        }
+      });
+    });
+    req.on('error', error => resolve({ status: 503, data: { error: error.message } }));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ status: 504, data: { error: 'MAPL authoring request timed out' } });
+    });
+    req.end(payload);
+  });
+
   // ── Agent summary endpoints (used by agent-routes.json api fields) ───────────
 
   /**
@@ -3400,6 +3442,30 @@ timerId = setInterval(refresh, intervalMs);
 
   // ── Formatters (keyed by the "formatter" field in agent-routes.json) ─────────
   const FORMATTERS = {
+
+    async maplAuthoring(data, captures) {
+      const prompt = String(captures?.prompt || '').trim();
+      const result = await postLocalApi('/api/mapper/authoring/ollama-intent', {
+        prompt,
+        persist: true
+      });
+      const generated = result.data || {};
+      if (result.status < 200 || result.status >= 300 || !generated.ok) {
+        return {
+          output: `<p style="font-family:monospace;color:#cf222e">MAPL generation or compilation failed: ${escapeAgentHtml(generated.error || `HTTP ${result.status}`)}</p>`,
+          voiceReply: 'MAPL compilation failed',
+          confidence: 0
+        };
+      }
+
+      const source = generated.artifacts?.mapl || '';
+      const stored = generated.stored || {};
+      return {
+        output: source || `MAPL generation completed, but no MAPL source was returned. Stored artifact: ${stored.mapl || 'unknown'}`,
+        voiceReply: 'MAPL program created and compiled',
+        confidence: 1
+      };
+    },
 
     nodes(data) {
       const nodes = data?.nodes ?? (Array.isArray(data) ? data : []);
@@ -4996,7 +5062,8 @@ timerId = setInterval(refresh, intervalMs);
         console.log(`[AGENT] intent="${intent.id}" formatter="${intent.formatter}" captures=${JSON.stringify(captures)}`);
         const formatter = FORMATTERS[intent.formatter];
         if (intent.api === null && formatter) {
-          return respond(await Promise.resolve(formatter(null, captures)));
+          const formatted = await Promise.resolve(formatter(null, captures));
+          return respond(formatted, formatted?.confidence ?? 1);
         }
         const data = await fetchLocalApi(intent.api);
         if (data && formatter) {

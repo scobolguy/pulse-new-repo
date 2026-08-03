@@ -1,6 +1,6 @@
 ﻿import fs from 'fs/promises';
 import path from 'path';
-import { pathToFileURL } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { XMLParser } from 'fast-xml-parser';
 import { loadOpcodeMap } from './pmachine-js-opcodes.mjs';
 import QueueManager from '../src/broker/QueueManager.mjs';
@@ -198,9 +198,9 @@ function evaluateWhenRule(whenRule, message, state = {}) {
   return false;
 }
 
-// --- MT103 FIN text parser ---
+// --- SWIFT FIN text parser ---
 
-function isMT103FinText(text) {
+function isSwiftFinText(text) {
   const t = trimCopy(text);
   return /^:\w{1,3}:/m.test(t) || t.startsWith('{1:') || t.startsWith('{2:') || t.startsWith('{4:');
 }
@@ -214,8 +214,43 @@ function parse32AField(value) {
   return { raw: value, date: '', currency: '', amount: trimCopy(value) };
 }
 
-function parseMT103FinText(text) {
+function transformParsedCapture(name, values) {
+  const list = Array.isArray(values) ? values : [values];
+  if (name === 'mtAmountToDecimal') return normalizeMtAmount(list[0]);
+  if (name === 'yymmddToIso') return yyMmDdToIso(list[0]);
+  if (name === 'integerString') return list[0] ? String(Number(list[0])) : '';
+  if (name === 'concat') return list.map(value => String(value || '')).join('');
+  if (name === 'mt940BookingDate') {
+    const valueDate = yyMmDdToIso(list[0]);
+    return list[1] ? `${valueDate.slice(0, 4)}-${String(list[1]).slice(0, 2)}-${String(list[1]).slice(2, 4)}` : valueDate;
+  }
+  return list.length === 1 ? list[0] : list;
+}
+
+function resolveParsedValue(spec, match, tag, raw) {
+  let value;
+  if (Object.prototype.hasOwnProperty.call(spec, 'constant')) value = spec.constant;
+  else if (spec.source === 'raw') value = raw;
+  else if (spec.tagValues) value = spec.tagValues[tag];
+  else if (Array.isArray(spec.captures)) value = spec.captures.map(index => match?.[index] || '');
+  else value = match?.[spec.capture] || '';
+  if (spec.values) value = spec.values[value];
+  return spec.transform ? transformParsedCapture(spec.transform, value) : value;
+}
+
+function applyParsedValues(target, specs, match, tag, raw) {
+  for (const spec of Array.isArray(specs) ? specs : []) {
+    const value = resolveParsedValue(spec, match, tag, raw);
+    if (spec.omitEmpty && (value === '' || value == null)) continue;
+    setJsonPathValue(target, spec.targetPath, value);
+  }
+}
+
+function parseSwiftFinText(text, sourceParsing = null) {
   const result = { block4: {} };
+  if (sourceParsing?.createdAtPath) {
+    setJsonPathValue(result, sourceParsing.createdAtPath, new Date().toISOString());
+  }
 
   // If wrapped in full FIN block delimiters, extract block 4 content
   let block4Text = text;
@@ -234,8 +269,34 @@ function parseMT103FinText(text) {
     const val = trimCopy(currentValue);
     if (currentTag === '32A') {
       result.block4['32A'] = parse32AField(val);
+      result.block4.field32A = result.block4['32A'];
     } else {
       result.block4[currentTag] = val;
+      result.block4[`field${currentTag}`] = val;
+      for (const rule of Array.isArray(sourceParsing?.fieldRules) ? sourceParsing.fieldRules : []) {
+        if (!Array.isArray(rule.tags) || !rule.tags.includes(currentTag)) continue;
+        const match = val.match(new RegExp(rule.pattern));
+        if (!match) continue;
+        const parsed = {};
+        applyParsedValues(parsed, rule.values, match, currentTag, val);
+        if (rule.append) {
+          const current = getByPath(result, rule.outputPath);
+          const list = Array.isArray(current) ? current : [];
+          list.push(parsed);
+          setJsonPathValue(result, rule.outputPath, list);
+        } else {
+          setJsonPathValue(result, rule.outputPath, parsed);
+        }
+      }
+      const narrative = sourceParsing?.narrative;
+      if (narrative?.tag === currentTag) {
+        const entries = getByPath(result, narrative.entriesPath);
+        if (Array.isArray(entries) && entries.length > 0) {
+          const lastEntry = entries[entries.length - 1];
+          const previous = getByPath(lastEntry, narrative.targetPath) || '';
+          setJsonPathValue(lastEntry, narrative.targetPath, `${previous}${narrative.separator || ''}${val}`);
+        }
+      }
     }
     currentTag = null;
     currentValue = '';
@@ -253,13 +314,31 @@ function parseMT103FinText(text) {
   }
   flushField();
 
+  for (const rule of Array.isArray(sourceParsing?.derivedRules) ? sourceParsing.derivedRules : []) {
+    const raw = getByPath(result, rule.sourcePath);
+    const match = String(raw || '').match(new RegExp(rule.pattern));
+    if (match) applyParsedValues(result, rule.values, match, '', String(raw || ''));
+  }
+
+  const currencyRule = sourceParsing?.entryCurrency;
+  if (currencyRule) {
+    const currency = (Array.isArray(currencyRule.sourcePaths) ? currencyRule.sourcePaths : [])
+      .map(sourcePath => getByPath(result, sourcePath))
+      .find(Boolean) || '';
+    const entries = getByPath(result, currencyRule.entriesPath);
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      setJsonPathValue(entry, currencyRule.targetPath, currency);
+    }
+  }
+
   return result;
 }
 
-// --- end MT103 parser ---
+// --- end SWIFT FIN parser ---
 
 function getJsonPathValue(root, dotPath) {
   const parts = String(dotPath || '').split('.').map(trimCopy).filter(Boolean);
+  if (String(parts[0] || '').toLowerCase() === 'source') parts.shift();
   let cur = root;
   for (const key of parts) {
     if (!cur || typeof cur !== 'object' || !(key in cur)) return '';
@@ -284,6 +363,7 @@ function asStringValue(value) {
 
 function setJsonPathValue(root, dotPath, value) {
   const parts = String(dotPath || '').split('.').map(trimCopy).filter(Boolean);
+  if (String(parts[0] || '').toLowerCase() === 'target') parts.shift();
   let cur = root;
   for (let i = 0; i < parts.length; i += 1) {
     const key = parts[i];
@@ -366,6 +446,41 @@ function parseProgramMapMappings(programMap) {
   mappingsById.__globals = Array.isArray(programMap?.globals) ? programMap.globals : [];
   mappingsById.__proceduresByLabel = programMap?.procedures || {};
   return mappingsById;
+}
+
+function normalizedDefinitionId(value) {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+async function attachExternalMapDefinitions(mappingsById) {
+  const roots = Array.from(new Set([
+    process.env.PULSE_RUNTIME_DATA_ROOT ? path.resolve(process.env.PULSE_RUNTIME_DATA_ROOT, 'data-maps') : '',
+    path.resolve(process.cwd(), 'data', 'data-maps'),
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'data-maps')
+  ].filter(Boolean)));
+  const definitions = [];
+  for (const root of roots) {
+    try {
+      for (const name of (await fs.readdir(root)).filter(item => item.endsWith('.map')).sort()) {
+        try {
+          const definition = JSON.parse(await fs.readFile(path.join(root, name), 'utf-8'));
+          if (Array.isArray(definition.rules)) definitions.push(definition);
+        } catch {
+          // Ignore unrelated or malformed map artifacts here; authoring validates selected definitions.
+        }
+      }
+    } catch {
+      // Try the next configured map root.
+    }
+  }
+
+  for (const [id, mapping] of mappingsById.entries()) {
+    const exact = definitions.find(definition => normalizedDefinitionId(definition.id) === normalizedDefinitionId(id));
+    const compatible = definitions.find(definition => definition.sourceParsing
+      && String(definition.sourceTypeId || '').toLowerCase().replaceAll('_', '-') === String(mapping.sourceTypeId || '').toLowerCase().replaceAll('_', '-')
+      && String(definition.targetTypeId || '').toLowerCase().replaceAll('_', '-') === String(mapping.targetTypeId || '').toLowerCase().replaceAll('_', '-'));
+    mapping.externalDefinition = exact || compatible || null;
+  }
 }
 
 function parseProgramMapQueueTypes(programMap) {
@@ -637,12 +752,12 @@ function resolveCamtNamespace(docRoot) {
   return 'urn:iso:std:iso:20022:tech:xsd:camt.053.001.14';
 }
 
-function ensureCamtNamespaces(messageObject) {
+function ensureCamtNamespaces(messageObject, configuredNamespace = '') {
   if (!messageObject || typeof messageObject !== 'object') return messageObject;
   const docRoot = messageObject.Document;
   if (!docRoot || typeof docRoot !== 'object') return messageObject;
   if (!Object.prototype.hasOwnProperty.call(docRoot, '@xmlns')) {
-    docRoot['@xmlns'] = resolveCamtNamespace(docRoot);
+    docRoot['@xmlns'] = configuredNamespace || resolveCamtNamespace(docRoot);
   }
   if (!Object.prototype.hasOwnProperty.call(docRoot, '@xmlns:xsi')) {
     docRoot['@xmlns:xsi'] = 'http://www.w3.org/2001/XMLSchema-instance';
@@ -710,15 +825,15 @@ function runMappingById(mappingId, sourcePayload, mappingsById) {
     }
   }
 
-  // For FIN payloads, auto-parse MT103 text when mapper expects swift-mt103 fields.
-  const sourceTypeId = String(mapping.sourceTypeId || '').toLowerCase();
-  if (sourceTypeId === 'swift-mt103' && typeof sourcePayload === 'string') {
+  // Parse FIN text for any concrete SWIFT MT message type.
+  const sourceTypeId = String(mapping.sourceTypeId || '').toLowerCase().replaceAll('_', '-');
+  if (sourceTypeId.startsWith('swift-mt') && typeof sourcePayload === 'string') {
     const normalizedPayload = sourcePayload
       .replaceAll('\\r\\n', '\n')
       .replaceAll('\\n', '\n');
     const hasBlock4 = sourceDoc && typeof sourceDoc === 'object' && sourceDoc.block4 && typeof sourceDoc.block4 === 'object';
-    if (!hasBlock4 && isMT103FinText(normalizedPayload)) {
-      sourceDoc = parseMT103FinText(normalizedPayload);
+    if (!hasBlock4 && isSwiftFinText(normalizedPayload)) {
+      sourceDoc = parseSwiftFinText(normalizedPayload, mapping.externalDefinition?.sourceParsing);
     }
   }
 
@@ -728,7 +843,10 @@ function runMappingById(mappingId, sourcePayload, mappingsById) {
     const transformed = applyConversionRule(item.conversionRule, srcValue);
     setJsonPathValue(out, item.targetPath, transformed);
   }
-  return JSON.stringify(out);
+  const targetTypeId = String(mapping.targetTypeId || '').toLowerCase().replaceAll('_', '-');
+  return JSON.stringify(targetTypeId === 'camt'
+    ? ensureCamtNamespaces(out, mapping.externalDefinition?.targetNamespace)
+    : out);
 }
 
 function evaluateTransformExpr(exprText, sourceMessage, mappingsById, depth = 0) {
@@ -1029,7 +1147,7 @@ function parsePcode(text) {
       instr.operand = parseGenericOperand(rest);
     } else if (mnemonic === 'PUSH_INT') {
       instr.operand = Number.parseInt(trimCopy(rest), 10);
-    } else if (mnemonic === 'LOAD' || mnemonic === 'STORE') {
+    } else if (mnemonic === 'LOAD' || mnemonic === 'STORE' || mnemonic === 'MAP_RETURN') {
       instr.operand = parseBareOperand(rest);
     } else if (mnemonic === 'CALL') {
       instr.operand = parseCallOperand(rest);
@@ -1323,7 +1441,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       continue;
     }
     if (op === 'PARSE_FIN_TEXT') {
-      currentMessage = JSON.stringify(parseMT103FinText(currentMessage));
+      currentMessage = JSON.stringify(parseSwiftFinText(currentMessage));
       pc += 1;
       continue;
     }
@@ -1539,6 +1657,17 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       continue;
     }
 
+    if (op === 'MAP_RETURN') {
+      const value = resolveVar(currentFrame, String(instr.operand || 'mappedPayload'));
+      try {
+        state.__response = typeof value === 'string' ? JSON.parse(value) : value;
+      } catch {
+        state.__response = value;
+      }
+      pc += 1;
+      continue;
+    }
+
     if (op === 'DL_LOAD_SCHEMA') {
       const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
       const name = unquote(args[0] || 'default-schema');
@@ -1729,6 +1858,7 @@ async function executeSingleMessage(args, { printOutput = true } = {}) {
 
   const opcodeMap = await loadOpcodeMap();
   const mappingsById = parseProgramMapMappings(programMap);
+  await attachExternalMapDefinitions(mappingsById);
   const queueTypesByName = parseProgramMapQueueTypes(programMap);
   const isoTypeIds = await loadLibrarianIsoTypeIds();
   const instructions = parsePcode(pcodeText);
@@ -1895,6 +2025,7 @@ async function pollAndRoute(args) {
   
   const opcodeMap = await loadOpcodeMap();
   const mappingsById = parseProgramMapMappings(programMap);
+  await attachExternalMapDefinitions(mappingsById);
   const queueTypesByName = parseProgramMapQueueTypes(programMap);
   const isoTypeIds = await loadLibrarianIsoTypeIds();
   const instructions = parsePcode(pcodeText);
