@@ -6,13 +6,36 @@ import { runSingleMessageForEvolution } from './run-js-pmachine.mjs';
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const aggregatorRoot = path.resolve(scriptDir, '..');
 const repoRoot = path.resolve(aggregatorRoot, '..');
+const defaultOperationalDataRoot = path.resolve(
+  process.env.PULSE_OPERATIONAL_DATA_ROOT
+  || (process.platform === 'win32' ? 'c:/dev/pulse-operational-data' : '/opt/pulse/operational-data')
+);
+const defaultRuntimeDataRoot = path.resolve(
+  process.env.PULSE_RUNTIME_DATA_ROOT
+  || process.env.PULSE_QUEUE_DATA_ROOT
+  || defaultOperationalDataRoot
+);
+const defaultEvolutionDataRoot = path.resolve(
+  process.env.PULSE_EVOLUTION_DATA_ROOT
+  || path.join(defaultRuntimeDataRoot, 'evolution')
+);
+
+function assertNotWorkspaceDataRoot(label, targetPath) {
+  const resolved = path.resolve(String(targetPath || ''));
+  const forbiddenRoot = path.resolve(repoRoot, 'data');
+  if (resolved === forbiddenRoot || resolved.startsWith(`${forbiddenRoot}${path.sep}`)) {
+    throw new Error(`${label} points to ${resolved}. Writes to workspace data are disabled; use federated storage via PULSE_OPERATIONAL_DATA_ROOT/PULSE_RUNTIME_DATA_ROOT/PULSE_QUEUE_DATA_ROOT/PULSE_EVOLUTION_DATA_ROOT.`);
+  }
+}
+
+assertNotWorkspaceDataRoot('defaultEvolutionDataRoot', defaultEvolutionDataRoot);
 
 function parseArgs(argv) {
   const args = {
     pcode: path.resolve(repoRoot, 'pcode', 'mt103-to-pacs.service.pcode'),
     programMap: path.resolve(repoRoot, 'pcode', 'mt103-to-pacs.service.program.json'),
-    fitnessOut: path.resolve(repoRoot, 'data', 'evolution-fitness.jsonl'),
-    selectorOut: path.resolve(repoRoot, 'data', 'evolution-selector.json'),
+    fitnessOut: path.resolve(defaultEvolutionDataRoot, 'evolution-fitness.jsonl'),
+    selectorOut: path.resolve(defaultEvolutionDataRoot, 'evolution-selector.json'),
     manifest: '',
     organismPrefix: 'organism',
     generation: 0,
@@ -501,7 +524,8 @@ function buildComparisonSummary(results, selector, generation, baselineSelectorM
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const outputRoot = path.resolve(repoRoot, 'data');
+  const outputRoot = defaultEvolutionDataRoot;
+  assertNotWorkspaceDataRoot('outputRoot', outputRoot);
   let manifestPath = args.manifest ? path.resolve(args.manifest) : '';
   const generationStart = Number(args.generation || 0);
   const cycles = Math.max(1, Number.parseInt(args.cycles || '1', 10) || 1);

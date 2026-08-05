@@ -139,6 +139,36 @@ namespace {
         return -1;
     }
 
+    std::vector<std::string> splitOperands(const std::string& text) {
+        std::vector<std::string> operands;
+        size_t start = 0;
+        int depth = 0;
+        char quote = '\0';
+        for (size_t i = 0; i <= text.size(); ++i) {
+            const char ch = i < text.size() ? text[i] : ',';
+            if (quote != '\0') {
+                if (ch == '\\') {
+                    ++i;
+                } else if (ch == quote) {
+                    quote = '\0';
+                }
+                continue;
+            }
+            if (ch == '"' || ch == '\'') {
+                quote = ch;
+            } else if (ch == '(') {
+                ++depth;
+            } else if (ch == ')') {
+                --depth;
+            } else if (ch == ',' && depth == 0) {
+                operands.push_back(trimCopy(text.substr(start, i - start)));
+                start = i + 1;
+            }
+        }
+        if (operands.size() == 1 && operands.front().empty()) operands.clear();
+        return operands;
+    }
+
     std::string getJsonPathValueAsString(JsonVariantConst root, const std::string& dotPath) {
         JsonVariantConst cursor = root;
         size_t start = 0;
@@ -689,6 +719,10 @@ void PMachine::setThunkResolverHook(ThunkResolveHook hook, void* context) {
     thunkResolveHook = hook;
     thunkResolverContext = context;
 }
+void PMachine::setServiceCallHook(ServiceCallHook hook, void* context) {
+    serviceCallHook = hook;
+    serviceCallContext = context;
+}
 void PMachine::setThunkBinding(const std::string& symbol, int targetPc) {
     const std::string key = trimCopy(symbol);
     if (key.empty()) return;
@@ -763,10 +797,18 @@ const MappingDef* PMachine::getMappingById(const std::string& mappingId) const {
     if (it == mappingDefs.end()) return nullptr;
     return &(it->second);
 }
-int PMachine::openFile(const String&, const String&) { return -1; }
-bool PMachine::closeFile(int) { return false; }
-bool PMachine::readLine(int, String&) { return false; }
-bool PMachine::writeLine(int, const String&) { return false; }
+int PMachine::openFile(const String& logicalName, const String& mode) {
+    return ffs == nullptr ? -1 : ffs->openFile(logicalName, mode);
+}
+bool PMachine::closeFile(int handle) {
+    return ffs != nullptr && ffs->closeFile(handle);
+}
+bool PMachine::readLine(int handle, String& outLine) {
+    return ffs != nullptr && ffs->readLine(handle, outLine);
+}
+bool PMachine::writeLine(int handle, const String& line) {
+    return ffs != nullptr && ffs->writeLine(handle, line);
+}
 const PCodeMap& PMachine::getPCodeMap() const { return pcodeMap; }
 const MemoryMap& PMachine::getMemoryMap() const { return memoryMap; }
 const std::vector<std::string> PMachine::getStringPool() const {
@@ -1148,10 +1190,17 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
             lss >> targetLabel;
             instr.label = targetLabel;
             unresolvedJumps.push_back({instructions.size(), targetLabel});
-        } else if (opcode == pmachine::OP_LOAD_NAME || opcode == pmachine::OP_STORE_NAME) {
+        } else if (opcode == pmachine::OP_LOAD_NAME || opcode == pmachine::OP_STORE_NAME ||
+                   opcode == pmachine::OP_MAP_RETURN) {
             std::string name;
             lss >> name;
             instr.strOperand = name;
+            instr.type = pmachine::OperandType::STRING;
+        } else if ((opcode >= pmachine::OP_FORK && opcode <= pmachine::OP_ROUTE_FILE) ||
+                   opcode == pmachine::OP_MAP) {
+            std::string operands;
+            std::getline(lss, operands);
+            instr.strOperand = trimCopy(operands);
             instr.type = pmachine::OperandType::STRING;
         } else if (opcode == pmachine::OP_CALL_LABEL) {
             std::string targetLabel;
@@ -1222,6 +1271,24 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
     std::vector<std::string> outputLines;
     std::vector<OrchestrationSpawnRequest> pendingOrchTasks;
     bool lastOrchWaitSuccess = false;
+    struct IntCollection {
+        size_t capacity = 0;
+        std::vector<int> items;
+    };
+    struct FileSession {
+        int ffsHandle = -1;
+        size_t cursor = 0;
+        std::vector<std::string> rows;
+    };
+    std::map<std::string, IntCollection> queues;
+    std::map<std::string, IntCollection> stacks;
+    std::map<std::string, IntCollection> priorityQueues;
+    std::map<int, bool> tasks;
+    std::map<int, FileSession> files;
+    int nextTaskId = 1;
+    int nextFileHandle = 1;
+    int nextSchemaHandle = 1;
+    int nextMapHandle = 1;
     
     // Declare variables before lambdas that use them
     int sp = 0;
@@ -1246,6 +1313,24 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
         }
         if (nameFrames.empty()) nameFrames.emplace_back();
         nameFrames.back()[key] = value;
+    };
+
+    auto resolveIntToken = [&](const std::string& token) -> int {
+        const std::string value = trimCopy(token);
+        if (value.empty()) return sp > 0 ? stack[--sp] : 0;
+        char* end = nullptr;
+        const long parsed = strtol(value.c_str(), &end, 10);
+        if (end != value.c_str() && end != nullptr && *end == '\0') return static_cast<int>(parsed);
+        return resolveName(value);
+    };
+
+    auto assignIntTarget = [&](const std::string& target, int value) {
+        const std::string name = trimCopy(target);
+        if (name.empty() || name == "$PUSH") {
+            if (sp < STACK_SIZE) stack[sp++] = value;
+        } else {
+            assignName(name, value);
+        }
     };
 
     std::string lastCallError;
@@ -1369,6 +1454,19 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
                 break;
             }
             stack[sp++] = instr.intOperand;
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_PUSH_ENUM) {
+            int value = -1;
+            if (enumManager != nullptr) {
+                value = enumManager->getValue(instr.enumType, instr.strOperand);
+            }
+            if (sp >= STACK_SIZE) {
+                gFlowState["__runtime_error"] = "stack overflow";
+                break;
+            }
+            stack[sp++] = value;
             ++pc;
             continue;
         }
@@ -1645,6 +1743,205 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             ++pc;
             continue;
         }
+        if (instr.opcode == OP_FORK || instr.opcode == OP_FORK_SUBFLOW) {
+            const int taskId = nextTaskId++;
+            tasks[taskId] = true;
+            if (sp < STACK_SIZE) stack[sp++] = taskId;
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_JOIN_ALL) {
+            bool allDone = true;
+            for (const auto& task : tasks) allDone = allDone && task.second;
+            if (sp < STACK_SIZE) stack[sp++] = allDone ? 1 : 0;
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_JOIN || instr.opcode == OP_SYNC) {
+            const auto args = splitOperands(instr.strOperand);
+            const int taskId = resolveIntToken(args.empty() ? "" : args[0]);
+            auto task = tasks.find(taskId);
+            if (sp < STACK_SIZE) stack[sp++] = (task != tasks.end() && task->second) ? 1 : 0;
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_BQ_NEW_STATIC || instr.opcode == OP_BQ_NEW_DYNAMIC ||
+            instr.opcode == OP_STK_NEW_STATIC || instr.opcode == OP_STK_NEW_DYNAMIC ||
+            instr.opcode == OP_PQ_NEW_STATIC || instr.opcode == OP_PQ_NEW_DYNAMIC) {
+            const auto args = splitOperands(instr.strOperand);
+            const std::string key = args.empty() ? "" : unquote(args[0]);
+            const size_t capacity = (instr.opcode == OP_BQ_NEW_STATIC || instr.opcode == OP_STK_NEW_STATIC ||
+                                     instr.opcode == OP_PQ_NEW_STATIC) && args.size() > 1
+                ? static_cast<size_t>(std::max(0, resolveIntToken(args[1]))) : 0;
+            IntCollection collection;
+            collection.capacity = capacity;
+            if (instr.opcode == OP_BQ_NEW_STATIC || instr.opcode == OP_BQ_NEW_DYNAMIC) queues[key] = collection;
+            if (instr.opcode == OP_STK_NEW_STATIC || instr.opcode == OP_STK_NEW_DYNAMIC) stacks[key] = collection;
+            if (instr.opcode == OP_PQ_NEW_STATIC || instr.opcode == OP_PQ_NEW_DYNAMIC) priorityQueues[key] = collection;
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_BQ_ENQ || instr.opcode == OP_STK_PUSH || instr.opcode == OP_PQ_ENQ) {
+            const auto args = splitOperands(instr.strOperand);
+            const std::string key = args.empty() ? "" : unquote(args[0]);
+            const int value = resolveIntToken(args.size() > 1 ? args[1] : "");
+            IntCollection* collection = instr.opcode == OP_BQ_ENQ ? &queues[key]
+                : (instr.opcode == OP_STK_PUSH ? &stacks[key] : &priorityQueues[key]);
+            const char* errorKey = instr.opcode == OP_BQ_ENQ ? "__queue_overflow"
+                : (instr.opcode == OP_STK_PUSH ? "__stack_overflow" : "__pqueue_overflow");
+            if (collection->capacity > 0 && collection->items.size() >= collection->capacity) {
+                gFlowState[errorKey] = key;
+            } else {
+                collection->items.push_back(value);
+                if (instr.opcode == OP_PQ_ENQ) {
+                    std::sort(collection->items.begin(), collection->items.end(), std::greater<int>());
+                }
+            }
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_BQ_DEQ || instr.opcode == OP_BQ_PEEK ||
+            instr.opcode == OP_STK_POP || instr.opcode == OP_STK_PEEK ||
+            instr.opcode == OP_PQ_DEQ || instr.opcode == OP_PQ_PEEK) {
+            const auto args = splitOperands(instr.strOperand);
+            const std::string key = args.empty() ? "" : unquote(args[0]);
+            IntCollection* collection = (instr.opcode == OP_BQ_DEQ || instr.opcode == OP_BQ_PEEK) ? &queues[key]
+                : ((instr.opcode == OP_STK_POP || instr.opcode == OP_STK_PEEK) ? &stacks[key] : &priorityQueues[key]);
+            const bool isStack = instr.opcode == OP_STK_POP || instr.opcode == OP_STK_PEEK;
+            const bool remove = instr.opcode == OP_BQ_DEQ || instr.opcode == OP_STK_POP || instr.opcode == OP_PQ_DEQ;
+            int value = 0;
+            if (collection->items.empty()) {
+                const char* errorKey = isStack ? "__stack_underflow"
+                    : ((instr.opcode == OP_BQ_DEQ || instr.opcode == OP_BQ_PEEK) ? "__queue_underflow" : "__pqueue_underflow");
+                gFlowState[errorKey] = (isStack ? "stack:" : ((instr.opcode == OP_BQ_DEQ || instr.opcode == OP_BQ_PEEK) ? "queue:" : "pqueue:")) + key;
+            } else {
+                const size_t index = isStack ? collection->items.size() - 1 : 0;
+                value = collection->items[index];
+                if (remove) collection->items.erase(collection->items.begin() + static_cast<long>(index));
+            }
+            assignIntTarget(args.size() > 1 ? args[1] : "", value);
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_FILE_OPEN) {
+            const auto args = splitOperands(instr.strOperand);
+            const std::string fileId = unquote(args.empty() ? "file.dat" : args[0]);
+            const std::string mode = unquote(args.size() > 1 ? args[1] : "read");
+            FileSession session;
+            session.ffsHandle = openFile(String(fileId.c_str()), String(mode.c_str()));
+            const int handle = nextFileHandle++;
+            files[handle] = session;
+            if (sp < STACK_SIZE) stack[sp++] = handle;
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_FILE_WRITE) {
+            const auto args = splitOperands(instr.strOperand);
+            const int handle = resolveIntToken(args.empty() ? "" : args[0]);
+            auto file = files.find(handle);
+            if (file != files.end()) {
+                std::string value;
+                if (args.size() > 1 && args[1].size() >= 2 && (args[1].front() == '"' || args[1].front() == '\'')) {
+                    value = unquote(args[1]);
+                } else {
+                    value = std::to_string(resolveIntToken(args.size() > 1 ? args[1] : ""));
+                }
+                file->second.rows.push_back(value);
+                if (file->second.ffsHandle >= 0) writeLine(file->second.ffsHandle, String(value.c_str()));
+            }
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_FILE_READ) {
+            const auto args = splitOperands(instr.strOperand);
+            const int handle = resolveIntToken(args.empty() ? "" : args[0]);
+            std::string value;
+            auto file = files.find(handle);
+            if (file != files.end()) {
+                if (file->second.cursor < file->second.rows.size()) {
+                    value = file->second.rows[file->second.cursor++];
+                } else if (file->second.ffsHandle >= 0) {
+                    String line;
+                    if (readLine(file->second.ffsHandle, line)) value = line.c_str();
+                }
+            }
+            const std::string target = args.size() > 1 ? trimCopy(args[1]) : "$PUSH";
+            if (target == "$PUSH") strStack.push_back(value);
+            else namedStringVariables[target] = value;
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_FILE_CLOSE) {
+            const auto args = splitOperands(instr.strOperand);
+            const int handle = resolveIntToken(args.empty() ? "" : args[0]);
+            auto file = files.find(handle);
+            if (file != files.end()) {
+                if (file->second.ffsHandle >= 0) closeFile(file->second.ffsHandle);
+                files.erase(file);
+            }
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_MAP) {
+            const auto args = splitOperands(instr.strOperand);
+            const std::string payload = args.empty() || toUpperCopy(args[0]) == "SRC"
+                ? currentMessage : getNamedStringVariable(trimCopy(args[0]));
+            const std::string mapId = unquote(args.size() > 1 ? args[1] : "");
+            std::string mapped;
+            std::string error;
+            if (!runMappingById(*this, mapId, payload, mapped, error)) {
+                gFlowState["__map_error"] = error;
+                mapped = payload;
+            }
+            currentMessage = mapped;
+            if (args.size() > 2) namedStringVariables[trimCopy(args[2])] = mapped;
+            else strStack.push_back(mapped);
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_MAP_RETURN) {
+            gFlowState["__response"] = getNamedStringVariable(trimCopy(instr.strOperand));
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_DL_LOAD_SCHEMA || instr.opcode == OP_DL_LOAD_MAP) {
+            const auto args = splitOperands(instr.strOperand);
+            const std::string name = unquote(args.empty() ? "default" : args[0]);
+            const bool isSchema = instr.opcode == OP_DL_LOAD_SCHEMA;
+            loadResidentDomain(isSchema ? "global-types" : "mapper-artifacts", name, 0, false);
+            if (sp < STACK_SIZE) stack[sp++] = isSchema ? nextSchemaHandle++ : nextMapHandle++;
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_SRV_CALL) {
+            const auto args = splitOperands(instr.strOperand);
+            const std::string serviceId = unquote(args.empty() ? "" : args[0]);
+            const std::string endpoint = unquote(args.size() > 1 ? args[1] : "");
+            const std::string payload = args.size() <= 2 || toUpperCopy(args[2]) == "SRC"
+                ? currentMessage : getNamedStringVariable(trimCopy(args[2]));
+            std::string response = payload;
+            std::string error;
+            bool success = true;
+            if (serviceCallHook != nullptr) {
+                success = serviceCallHook(serviceId, endpoint, payload, response, error, serviceCallContext);
+            }
+            currentMessage = response;
+            gFlowState["__last_service_call.serviceId"] = serviceId;
+            gFlowState["__last_service_call.endpoint"] = endpoint;
+            gFlowState["__last_service_call.success"] = success ? "true" : "false";
+            gFlowState["__last_service_call.error"] = error;
+            if (sp < STACK_SIZE) stack[sp++] = success ? 1 : 0;
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_ROUTE_SERVICE || instr.opcode == OP_ROUTE_QUEUE || instr.opcode == OP_ROUTE_FILE) {
+            const auto args = splitOperands(instr.strOperand);
+            gFlowState["__placement.kind"] = instr.opcode == OP_ROUTE_SERVICE ? "service"
+                : (instr.opcode == OP_ROUTE_QUEUE ? "queue" : "file");
+            gFlowState["__placement.id"] = unquote(args.empty() ? instr.strOperand : args[0]);
+            ++pc;
+            continue;
+        }
         if (instr.opcode == OP_ORCH_SPAWN) {
             OrchestrationSpawnRequest req;
             std::string parseError;
@@ -1736,8 +2033,8 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
                 break;
             }
         } else {
-            // Unknown opcode: skip
-            ++pc;
+            gFlowState["__runtime_error"] = std::string("unsupported opcode 0x") + std::to_string(instr.opcode);
+            break;
         }
     }
     if (!currentOutputLine.empty()) {

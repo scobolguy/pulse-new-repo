@@ -1,0 +1,19 @@
+{
+  "description": "Deterministic SWIFT MT940 to ISO 20022 CAMT.053 statement mapping",
+  "execution": {
+    "clusterId": "esp32_edge_pool",
+    "maxWorkers": 1,
+    "mode": "sequential"
+  },
+  "expectedTransactionCount": null,
+  "generatorVersion": "mapper-authoring-deterministic-v1",
+  "inputQueue": "swift-mt940.inbound",
+  "intentKind": "map-message-type",
+  "mapId": "mt940_to_camt053",
+  "outputQueue": "camt.outbound",
+  "schemaVersion": "intent-schema-v1",
+  "sourceTypeId": "swift-mt940",
+  "targetTypeId": "camt",
+  "templateVersion": "external-json-maps-v2",
+  "typeAliasVersion": "type-alias-v1"
+}

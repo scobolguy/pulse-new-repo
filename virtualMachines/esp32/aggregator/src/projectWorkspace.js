@@ -3,6 +3,7 @@ const ACTIVE_PROJECT_KEY = 'pulse.project.active-id';
 const PROJECT_WORKSPACE_SAVE_DEBOUNCE_MS = 450;
 const pendingProjectSaveTimers = new Map();
 const pendingProjectSavePayloads = new Map();
+const DEFAULT_PROJECT_ID = 'default';
 
 export const PROJECT_DEFINITIONS = [
   {
@@ -14,25 +15,39 @@ export const PROJECT_DEFINITIONS = [
 ];
 
 function getProjectSlug(projectId) {
-  return String(projectId || PROJECT_DEFINITIONS[0].id)
+  return String(projectId || PROJECT_DEFINITIONS[0]?.id || DEFAULT_PROJECT_ID)
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '') || PROJECT_DEFINITIONS[0].id;
+    .replace(/(^-|-$)/g, '') || PROJECT_DEFINITIONS[0]?.id || DEFAULT_PROJECT_ID;
 }
 
-export function getProjectStorageKey(projectId, suffix = 'workspace') {
-  return `${PROJECT_STORAGE_PREFIX}.${getProjectSlug(projectId)}.${suffix}`;
+function normalizeSubprojectPath(value) {
+  return String(value || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\/+|\/+$/g, '');
 }
 
-function getProjectWorkspaceApiPath(projectId) {
-  return `/api/projects/${encodeURIComponent(String(projectId || PROJECT_DEFINITIONS[0].id))}/workspace`;
+export function getProjectStorageKey(projectId, suffix = 'workspace', options = {}) {
+  const subprojectPath = normalizeSubprojectPath(options?.subprojectPath || '');
+  if (!subprojectPath) return `${PROJECT_STORAGE_PREFIX}.${getProjectSlug(projectId)}.${suffix}`;
+  const subprojectToken = subprojectPath.replace(/[^a-z0-9]+/gi, '.');
+  return `${PROJECT_STORAGE_PREFIX}.${getProjectSlug(projectId)}.${suffix}.subproject.${subprojectToken}`;
 }
 
-async function persistProjectWorkspaceToServer(projectId, workspace) {
+function getProjectWorkspaceApiPath(projectId, options = {}) {
+  const normalizedProjectId = String(projectId || PROJECT_DEFINITIONS[0]?.id || DEFAULT_PROJECT_ID).trim() || DEFAULT_PROJECT_ID;
+  const subprojectPath = normalizeSubprojectPath(options?.subprojectPath || '');
+  const basePath = `/api/projects/${encodeURIComponent(normalizedProjectId)}/workspace`;
+  if (!subprojectPath) return basePath;
+  return `${basePath}?subproject=${encodeURIComponent(subprojectPath)}`;
+}
+
+async function persistProjectWorkspaceToServer(projectId, workspace, options = {}) {
   if (typeof window === 'undefined' || typeof window.fetch !== 'function') return;
   try {
-    await window.fetch(getProjectWorkspaceApiPath(projectId), {
+    await window.fetch(getProjectWorkspaceApiPath(projectId, options), {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ workspace }),
@@ -42,28 +57,37 @@ async function persistProjectWorkspaceToServer(projectId, workspace) {
   }
 }
 
-function scheduleProjectWorkspaceServerSave(projectId, workspace) {
+function scheduleProjectWorkspaceServerSave(projectId, workspace, options = {}) {
   if (typeof window === 'undefined') return;
-  const key = String(projectId || PROJECT_DEFINITIONS[0].id);
-  pendingProjectSavePayloads.set(key, workspace);
-  const existingTimer = pendingProjectSaveTimers.get(key);
+  const storageKey = getProjectStorageKey(projectId, 'workspace', options);
+  const payloadKey = `${String(projectId || PROJECT_DEFINITIONS[0]?.id || DEFAULT_PROJECT_ID)}::${storageKey}`;
+  pendingProjectSavePayloads.set(payloadKey, { workspace, options });
+  const existingTimer = pendingProjectSaveTimers.get(payloadKey);
   if (existingTimer) {
     clearTimeout(existingTimer);
   }
 
   const timerId = setTimeout(() => {
-    const nextWorkspace = pendingProjectSavePayloads.get(key);
-    pendingProjectSaveTimers.delete(key);
-    pendingProjectSavePayloads.delete(key);
-    if (!nextWorkspace) return;
-    void persistProjectWorkspaceToServer(key, nextWorkspace);
+    const queued = pendingProjectSavePayloads.get(payloadKey);
+    pendingProjectSaveTimers.delete(payloadKey);
+    pendingProjectSavePayloads.delete(payloadKey);
+    if (!queued || !queued.workspace) return;
+    void persistProjectWorkspaceToServer(projectId, queued.workspace, queued.options || options);
   }, PROJECT_WORKSPACE_SAVE_DEBOUNCE_MS);
 
-  pendingProjectSaveTimers.set(key, timerId);
+  pendingProjectSaveTimers.set(payloadKey, timerId);
 }
 
 export function getProjectDefinition(projectId) {
-  return PROJECT_DEFINITIONS.find((project) => project.id === projectId) || PROJECT_DEFINITIONS[0];
+  const matched = PROJECT_DEFINITIONS.find((project) => project.id === projectId);
+  if (matched) return matched;
+  const fallbackId = String(projectId || PROJECT_DEFINITIONS[0]?.id || DEFAULT_PROJECT_ID).trim() || DEFAULT_PROJECT_ID;
+  return {
+    id: fallbackId,
+    label: fallbackId,
+    description: `Workspace for ${fallbackId}.`,
+    owner: 'project-owner',
+  };
 }
 
 export function loadActiveProjectId() {
@@ -71,14 +95,14 @@ export function loadActiveProjectId() {
     const stored = String(localStorage.getItem(ACTIVE_PROJECT_KEY) || '').trim();
     return PROJECT_DEFINITIONS.some((project) => project.id === stored)
       ? stored
-      : PROJECT_DEFINITIONS[0].id;
+      : PROJECT_DEFINITIONS[0]?.id || DEFAULT_PROJECT_ID;
   } catch {
-    return PROJECT_DEFINITIONS[0].id;
+    return PROJECT_DEFINITIONS[0]?.id || DEFAULT_PROJECT_ID;
   }
 }
 
 export function saveActiveProjectId(projectId) {
-  localStorage.setItem(ACTIVE_PROJECT_KEY, String(projectId || PROJECT_DEFINITIONS[0].id));
+  localStorage.setItem(ACTIVE_PROJECT_KEY, String(projectId || PROJECT_DEFINITIONS[0]?.id || DEFAULT_PROJECT_ID));
 }
 
 function buildDocument(project, kind, label, extension, starterContent) {
@@ -206,10 +230,10 @@ export function getDefaultProjectWorkspace(projectId) {
   };
 }
 
-export function loadProjectWorkspace(projectId) {
+export function loadProjectWorkspace(projectId, options = {}) {
   const fallback = getDefaultProjectWorkspace(projectId);
   try {
-    const raw = localStorage.getItem(getProjectStorageKey(projectId));
+    const raw = localStorage.getItem(getProjectStorageKey(projectId, 'workspace', options));
     if (!raw) return fallback;
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return fallback;
@@ -243,28 +267,30 @@ export function loadProjectWorkspace(projectId) {
   }
 }
 
-export function saveProjectWorkspace(projectId, workspace) {
-  localStorage.setItem(getProjectStorageKey(projectId), JSON.stringify(workspace));
-  scheduleProjectWorkspaceServerSave(projectId, workspace);
+export function saveProjectWorkspace(projectId, workspace, options = {}) {
+  localStorage.setItem(getProjectStorageKey(projectId, 'workspace', options), JSON.stringify(workspace));
+  scheduleProjectWorkspaceServerSave(projectId, workspace, options);
 }
 
-export async function hydrateProjectWorkspaceFromServer(projectId) {
+export async function hydrateProjectWorkspaceFromServer(projectId, options = {}) {
   if (typeof window === 'undefined' || typeof window.fetch !== 'function') {
     return null;
   }
 
   try {
-    const response = await window.fetch(getProjectWorkspaceApiPath(projectId), { method: 'GET' });
+    const response = await window.fetch(getProjectWorkspaceApiPath(projectId, options), { method: 'GET' });
     if (!response.ok) return null;
     const payload = await response.json();
     if (!payload || typeof payload !== 'object' || !payload.workspace || typeof payload.workspace !== 'object') {
       return null;
     }
 
-    localStorage.setItem(getProjectStorageKey(projectId), JSON.stringify(payload.workspace));
+    localStorage.setItem(getProjectStorageKey(projectId, 'workspace', options), JSON.stringify(payload.workspace));
     return {
-      workspace: loadProjectWorkspace(projectId),
+      workspace: loadProjectWorkspace(projectId, options),
       projectRoot: String(payload.projectRoot || ''),
+      workspaceRoot: String(payload.workspaceRoot || ''),
+      subprojectPath: String(payload.subprojectPath || ''),
     };
   } catch {
     return null;

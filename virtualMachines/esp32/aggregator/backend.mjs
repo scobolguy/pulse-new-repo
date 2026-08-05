@@ -19,7 +19,6 @@ import { execFile, execFileSync, spawn } from 'child_process';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const WORKSPACE_ROOT = path.resolve(__dirname, '..');
-const EVOLUTION_DATA_ROOT = path.resolve(WORKSPACE_ROOT, 'data');
 import { fileURLToPath } from 'url';
 import { createMessageBroker, createQueueManager } from './src/broker.js';
 import { createFileServer } from './fileServer.js';
@@ -66,8 +65,10 @@ import { registerMapperProxyRoutes } from './src/backend/roles/mapperProxyRoutes
 import { registerRuntimeRegistryRoutes } from './src/backend/roles/runtimeRegistryRoutes.mjs';
 import { registerRouterLifecycleControlRoutes } from './src/backend/roles/routerLifecycleControlRoutes.mjs';
 import { registerHelloServiceRoutes } from './src/backend/roles/helloServiceRoutes.mjs';
+import { registerProvisioningAgentRoutes } from './src/backend/roles/provisioningAgentRoutes.mjs';
 import { registerDevelopDocumentRoutes } from './src/backend/developDocumentRoutes.mjs';
 import { registerProjectWorkspaceRoutes } from './src/backend/projectWorkspaceRoutes.mjs';
+import { registerTransformerServiceRoutes } from './src/backend/transformerServiceRoutes.mjs';
 import { registerStartupFsmRoutes } from './src/backend/startupFsmRoutes.mjs';
 import { registerMapperRoutes } from './src/backend/mapperRoutes.mjs';
 import { registerOllamaRoutes } from './src/backend/ollamaRoutes.mjs';
@@ -85,6 +86,8 @@ import { createMachineAvailabilityPresenceApi } from './src/backend/modules/mach
 import { createLifecycleQueueMetricsApi } from './src/backend/modules/lifecycleQueueMetricsApi.mjs';
 import { createDatabaseRegistrySnapshotApi } from './src/backend/modules/databaseRegistrySnapshotApi.mjs';
 import { createAuthoritativeTimeService } from './src/backend/modules/authoritativeTimeService.mjs';
+import { createBusinessCalendarService } from './src/backend/modules/businessCalendarService.mjs';
+import { createTemporalQueryService } from './src/backend/modules/temporalQueryService.mjs';
 import { createRequestPolicyApi } from './src/backend/security/requestPolicy.mjs';
 import { loadRouteManifest, registerRoutesFromManifest } from './src/backend/routeManifestLoader.mjs';
 import { enumerateApiCatalog, enumerateDiscoveredNodeApiCatalog, findApiCatalogEntry } from './src/backend/apiCatalog.mjs';
@@ -131,6 +134,10 @@ const authoritativeTimeService = createAuthoritativeTimeService({
   authorityId: TIME_AUTHORITY_ID,
   offsetMs: TIME_AUTHORITY_OFFSET_MS,
   source: 'aggregator-local'
+});
+const businessCalendarService = createBusinessCalendarService({
+  nowProvider: () => authoritativeTimeService.nowMs(),
+  defaultCalendarId: readEnvString('BUSINESS_CALENDAR_DEFAULT', 'CA-ON').trim() || 'CA-ON'
 });
 const authoritativeTimeSyncState = {
   running: false,
@@ -437,7 +444,10 @@ const BROKER_APACHE_PORT = readEnvNumber('APACHE_BROKER_PORT', 61613);
 const BROKER_APACHE_USERNAME = readEnvString('APACHE_BROKER_USER', '');
 const BROKER_APACHE_PASSWORD = readEnvSecret('APACHE_BROKER_PASSWORD', '');
 const BROKER_APACHE_TOPIC_PREFIX = readEnvString('APACHE_BROKER_TOPIC_PREFIX', '/topic/pulse');
-const DEFAULT_QUEUE_DATA_ROOT = fileURLToPath(new URL('./data', import.meta.url));
+const DEFAULT_OPERATIONAL_DATA_ROOT = process.platform === 'win32'
+  ? 'c:/dev/pulse-operational-data'
+  : '/opt/pulse/operational-data';
+const DEFAULT_QUEUE_DATA_ROOT = path.resolve(readEnvString('PULSE_OPERATIONAL_DATA_ROOT', DEFAULT_OPERATIONAL_DATA_ROOT));
 const UI_CARD_OVERRIDES_FILE = path.resolve(DEFAULT_QUEUE_DATA_ROOT, 'ui-card-overrides.json');
 const rawQueuePersistenceFlag = String(process.env.PULSE_QUEUE_PERSISTENCE || '').trim().toLowerCase();
 const PULSE_QUEUE_PERSISTENCE = true;
@@ -445,6 +455,26 @@ const PULSE_QUEUE_DATA_ROOT = PULSE_QUEUE_PERSISTENCE
   ? path.resolve(readEnvString('PULSE_QUEUE_DATA_ROOT', DEFAULT_QUEUE_DATA_ROOT))
   : null;
 const RUNTIME_DATA_ROOT = path.resolve(readEnvString('PULSE_RUNTIME_DATA_ROOT', PULSE_QUEUE_DATA_ROOT || DEFAULT_QUEUE_DATA_ROOT));
+const EVOLUTION_DATA_ROOT = path.resolve(
+  readEnvString('PULSE_EVOLUTION_DATA_ROOT', path.join(RUNTIME_DATA_ROOT, 'evolution'))
+);
+
+function assertNotLittleFsStagingRoot(label, targetPath) {
+  const resolved = path.resolve(String(targetPath || ''));
+  const littleFsRoot = path.resolve(WORKSPACE_ROOT, 'data');
+  if (resolved === littleFsRoot || resolved.startsWith(`${littleFsRoot}${path.sep}`)) {
+    throw new Error(`${label} points to ${resolved}. Runtime writes to workspace data are disabled; use federated storage via PULSE_OPERATIONAL_DATA_ROOT/PULSE_QUEUE_DATA_ROOT/PULSE_RUNTIME_DATA_ROOT.`);
+  }
+}
+
+if (PULSE_QUEUE_DATA_ROOT) assertNotLittleFsStagingRoot('PULSE_QUEUE_DATA_ROOT', PULSE_QUEUE_DATA_ROOT);
+assertNotLittleFsStagingRoot('PULSE_RUNTIME_DATA_ROOT', RUNTIME_DATA_ROOT);
+assertNotLittleFsStagingRoot('PULSE_EVOLUTION_DATA_ROOT', EVOLUTION_DATA_ROOT);
+const temporalQueryService = createTemporalQueryService({
+  nowProvider: () => authoritativeTimeService.nowMs(),
+  preferencesPath: path.join(DEFAULT_QUEUE_DATA_ROOT, 'user-timezone-preferences.json'),
+  defaultTimeZone: readEnvString('DEFAULT_USER_TIMEZONE', 'America/New_York').trim() || 'America/New_York'
+});
 const WORKER_CONFIG_PATH = path.join(RUNTIME_DATA_ROOT, 'worker-config.json');
 const ROUTER_RULES_PATH = path.join(RUNTIME_DATA_ROOT, 'router-rules.json');
 const DATA_MAPPINGS_PATH = path.join(RUNTIME_DATA_ROOT, 'data-mappings.json');
@@ -564,6 +594,7 @@ app.use(enforceTwoPersonRule);
 
 await registerDevelopDocumentRoutes(app);
 await registerProjectWorkspaceRoutes(app);
+await registerTransformerServiceRoutes(app);
 registerStartupFsmRoutes(app);
 
 debugLog('[DEBUG] Creating global state...');
@@ -9242,6 +9273,50 @@ function registerRoutes(app) {
     });
   });
 
+  app.post('/api/time/query', (req, res) => {
+    try {
+      const userId = String(req.get('x-user-id') || req.body?.userId || DEFAULT_ACTOR_USER_ID || 'system-admin').trim();
+      res.json({ status: 'ok', ...temporalQueryService.query({ query: req.body?.query, userId }) });
+    } catch (error) {
+      res.status(400).json({ status: 'error', error: error?.message || String(error) });
+    }
+  });
+
+  app.get('/api/users/timezone', (req, res) => {
+    const userId = String(req.get('x-user-id') || req.query?.userId || DEFAULT_ACTOR_USER_ID || 'system-admin').trim();
+    res.json({ status: 'ok', userId, timeZone: temporalQueryService.getUserTimeZone(userId) });
+  });
+
+  app.put('/api/users/timezone', (req, res) => {
+    try {
+      const userId = String(req.get('x-user-id') || req.body?.userId || DEFAULT_ACTOR_USER_ID || 'system-admin').trim();
+      const timeZone = temporalQueryService.setUserTimeZone(userId, req.body?.timeZone || req.body?.location);
+      res.json({ status: 'ok', userId, timeZone });
+    } catch (error) {
+      res.status(400).json({ status: 'error', error: error?.message || String(error) });
+    }
+  });
+
+  app.get('/api/calendars', (req, res) => {
+    res.json({ status: 'ok', calendars: businessCalendarService.listCalendars() });
+  });
+
+  app.get('/api/calendar/month', (req, res) => {
+    try {
+      res.json({
+        status: 'ok',
+        ...businessCalendarService.getMonth({
+          query: String(req.query?.query || ''),
+          calendarId: String(req.query?.calendarId || ''),
+          year: req.query?.year,
+          month: req.query?.month
+        })
+      });
+    } catch (error) {
+      res.status(400).json({ status: 'error', error: error?.message || String(error) });
+    }
+  });
+
   app.get('/api/evolution-test/status', (req, res) => {
     const runtime = {
       runId: evolutionTestRuntime.runId,
@@ -9567,7 +9642,8 @@ function registerRoutes(app) {
       registerMapperProxyRoutes,
       registerRuntimeRegistryRoutes,
       registerRouterLifecycleControlRoutes,
-      registerHelloServiceRoutes
+      registerHelloServiceRoutes,
+      registerProvisioningAgentRoutes
     },
     dependencyFactories: createRouteManifestDependencyFactories({
       requirePermission,

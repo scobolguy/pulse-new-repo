@@ -598,7 +598,11 @@ let sttActive  = false;
 
 function initSTT() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) { alert('Speech Recognition is not supported in this browser.'); return false; }
+  if (!SR) {
+    renderOutput('Speech recognition is not supported in this browser. Use Chrome or Edge over HTTPS.');
+    setStatus('', 'speech unavailable');
+    return false;
+  }
   recognizer = new SR();
   recognizer.lang           = 'en-US';
   recognizer.interimResults = false;
@@ -609,18 +613,30 @@ function initSTT() {
     document.getElementById('queryBox').value = text;
     sendQuery(text);
   };
-  recognizer.onerror = () => finishSTT();
+  recognizer.onerror = (event) => {
+    const messages = {
+      'not-allowed': 'microphone permission denied',
+      'service-not-allowed': 'speech service permission denied',
+      'audio-capture': 'microphone unavailable',
+      'network': 'speech recognition network error',
+      'no-speech': 'no speech detected',
+      'aborted': 'listening stopped'
+    };
+    const status = messages[event?.error] || `speech recognition error${event?.error ? `: ${event.error}` : ''}`;
+    if (recognizer) recognizer.onend = null;
+    finishSTT(status);
+  };
   recognizer.onend   = () => finishSTT();
   return true;
 }
 
-function finishSTT() {
+function finishSTT(statusText = 'idle') {
   sttActive  = false;
   sttReady   = true;
   recognizer = null;
   document.getElementById('talkBtn').classList.remove('active');
   document.getElementById('talkBtn').textContent = '\u{1F3A4} Push to Talk';
-  setStatus('', 'idle');
+  setStatus('', statusText);
 }
 
 function startSTT() {
@@ -631,7 +647,16 @@ function startSTT() {
   document.getElementById('talkBtn').classList.add('active');
   document.getElementById('talkBtn').textContent = '\uD83D\uDD34 Listening\u2026';
   setStatus('listening', 'listening');
-  try { recognizer.start(); } catch (e) { finishSTT(); }
+  try { recognizer.start(); } catch (e) { finishSTT(`could not start listening: ${e.message}`); }
+}
+
+function toggleSTT() {
+  if (sttActive && recognizer) {
+    setStatus('', 'stopping...');
+    try { recognizer.stop(); } catch (e) { finishSTT(`could not stop listening: ${e.message}`); }
+    return;
+  }
+  startSTT();
 }
 
 /* ─────────────────────────────────────────────────────────
@@ -682,7 +707,12 @@ async function sendQuery(text) {
     formData.append('message', text);
     for (let i = 0; i < files.length; i++) formData.append('files', files[i]);
 
-    const res  = await fetch(MCP_QUERY_URL, { method: 'POST', body: formData });
+    const actorUserId = localStorage.getItem('pulse.actorUserId') || 'system-admin';
+    const res  = await fetch(MCP_QUERY_URL, {
+      method: 'POST',
+      headers: { 'x-user-id': actorUserId },
+      body: formData
+    });
     const data = await readJsonResponse(res, 'MCP request');
 
     const reply = data.output || JSON.stringify(data, null, 2);
@@ -729,7 +759,7 @@ async function resetModel() {
 /* ─────────────────────────────────────────────────────────
    UI EVENTS
 ───────────────────────────────────────────────────────── */
-document.getElementById('talkBtn').addEventListener('click', startSTT);
+document.getElementById('talkBtn').addEventListener('click', toggleSTT);
 document.getElementById('sendBtn').addEventListener('click', () => sendQuery(document.getElementById('queryBox').value));
 document.getElementById('resetBtn').addEventListener('click', resetModel);
 document.getElementById('correctionsBtn').addEventListener('click', runCorrections);

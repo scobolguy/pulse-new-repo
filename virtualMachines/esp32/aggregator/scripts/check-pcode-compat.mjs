@@ -4,6 +4,7 @@ import path from 'path';
 const workspaceRoot = path.resolve(process.cwd(), '..');
 const manifestPath = path.join(workspaceRoot, 'pcode', 'pcode-opcodes.manifest.json');
 const pmachineHeaderPath = path.join(workspaceRoot, 'src', 'pmachine.h');
+const pmachineSourcePath = path.join(workspaceRoot, 'src', 'pmachine.cpp');
 
 function parseHexToNumber(hexText) {
   const s = String(hexText || '').trim();
@@ -59,6 +60,29 @@ function diffOpcodes(manifestOps, headerOps) {
   return issues;
 }
 
+function verifyCppExecutionSurface(manifestOps, headerText, sourceText) {
+  const issues = [];
+  const mnemonicOpcodes = new Set(
+    [...headerText.matchAll(/return\s+(OP_[A-Z0-9_]+)\s*;/g)].map(match => match[1]),
+  );
+  const registeredHandlers = new Set(
+    [...sourceText.matchAll(/handler_table\[(OP_[A-Z0-9_]+)\]/g)].map(match => match[1]),
+  );
+  const runStart = sourceText.indexOf('void PMachine::run(');
+  const runEnd = sourceText.indexOf('bool PMachine::didLastRunHitStepLimit()', runStart);
+  const runBody = runStart >= 0 && runEnd > runStart ? sourceText.slice(runStart, runEnd) : '';
+
+  for (const op of manifestOps) {
+    if (!mnemonicOpcodes.has(op.name)) {
+      issues.push(`Missing mnemonic mapping in pmachine.h: ${op.name}`);
+    }
+    if (!registeredHandlers.has(op.name) && !runBody.includes(op.name)) {
+      issues.push(`Missing runtime dispatch in pmachine.cpp: ${op.name}`);
+    }
+  }
+  return issues;
+}
+
 async function main() {
   const manifestRaw = await fs.readFile(manifestPath, 'utf-8');
   const manifestJson = JSON.parse(manifestRaw);
@@ -71,8 +95,12 @@ async function main() {
 
   const headerRaw = await fs.readFile(pmachineHeaderPath, 'utf-8');
   const headerOps = parseCppOpcodeEnum(headerRaw);
+  const sourceRaw = await fs.readFile(pmachineSourcePath, 'utf-8');
 
-  const issues = diffOpcodes(manifestOps, headerOps);
+  const issues = [
+    ...diffOpcodes(manifestOps, headerOps),
+    ...verifyCppExecutionSurface(manifestOps, headerRaw, sourceRaw),
+  ];
   if (issues.length > 0) {
     for (const issue of issues) {
       console.error(`[PCODE-COMPAT] ${issue}`);
@@ -81,7 +109,7 @@ async function main() {
     return;
   }
 
-  console.log(`[PCODE-COMPAT] OK: ${manifestOps.length} opcodes match between manifest and src/pmachine.h`);
+  console.log(`[PCODE-COMPAT] OK: ${manifestOps.length} opcodes match the ESP32 ABI, parser, and runtime dispatch`);
 }
 
 main().catch(err => {

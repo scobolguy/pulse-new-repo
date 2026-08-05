@@ -1,36 +1,39 @@
 {
-  "ok": false,
-  "state": "FAILED",
+  "ok": true,
+  "state": "READY",
   "workflow": [
     "INIT",
     "KILL_VITE_PROCESSES",
     "CHECK_BACKEND",
+    "CHECK_MCP",
     "START_FRONTEND",
-    "WAIT_FRONTEND",
-    "START_FRONTEND",
-    "WAIT_FRONTEND",
-    "START_FRONTEND"
+    "CHECK_CADDY",
+    "START_CADDY",
+    "WAIT_CADDY",
+    "READY"
   ],
   "logs": [
     {
-      "at": "2026-08-01T22:42:17.734Z",
+      "at": "2026-08-03T13:17:28.374Z",
       "event": "workflow-start",
       "data": {
         "fsmId": "frontend-startup-fsm",
         "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
+        "mcpUrl": "http://127.0.0.1:4011/health",
         "frontendUrl": "http://127.0.0.1:5173/",
+        "caddyUrl": "https://localhost/bob-console.html",
         "statusPath": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\frontend-startup-fsm-status.json"
       }
     },
     {
-      "at": "2026-08-01T22:42:17.740Z",
+      "at": "2026-08-03T13:17:28.381Z",
       "event": "state",
       "data": {
         "state": "INIT"
       }
     },
     {
-      "at": "2026-08-01T22:42:19.942Z",
+      "at": "2026-08-03T13:17:29.468Z",
       "event": "subflow-complete",
       "data": {
         "state": "KILL_VITE_PROCESSES",
@@ -41,7 +44,7 @@
       }
     },
     {
-      "at": "2026-08-01T22:42:20.073Z",
+      "at": "2026-08-03T13:17:29.606Z",
       "event": "state",
       "data": {
         "state": "CHECK_BACKEND",
@@ -50,103 +53,93 @@
       }
     },
     {
-      "at": "2026-08-01T22:42:20.206Z",
-      "event": "frontend-started",
+      "at": "2026-08-03T13:17:29.628Z",
+      "event": "state",
       "data": {
-        "command": "node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173 --strictPort --force",
-        "pid": 16284,
-        "attempt": 1
+        "state": "CHECK_MCP",
+        "mcpUrl": "http://127.0.0.1:4011/health",
+        "mcpOk": true
       }
     },
     {
-      "at": "2026-08-01T22:42:50.533Z",
-      "event": "frontend-timeout",
-      "data": {
-        "frontendUrl": "http://127.0.0.1:5173/",
-        "timeoutMs": 30000,
-        "attempt": 1
-      }
-    },
-    {
-      "at": "2026-08-01T22:42:50.544Z",
-      "event": "retry-scheduled",
-      "data": {
-        "state": "WAIT_FRONTEND",
-        "nextState": "START_FRONTEND",
-        "reason": "frontend wait timeout",
-        "currentAttempt": 1,
-        "maxRetries": 2,
-        "retryBackoffMs": 2500
-      }
-    },
-    {
-      "at": "2026-08-01T22:42:53.104Z",
-      "event": "frontend-started",
-      "data": {
-        "command": "node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173 --strictPort --force",
-        "pid": 27792,
-        "attempt": 2
-      }
-    },
-    {
-      "at": "2026-08-01T22:43:26.439Z",
-      "event": "frontend-timeout",
-      "data": {
-        "frontendUrl": "http://127.0.0.1:5173/",
-        "timeoutMs": 30000,
-        "attempt": 2
-      }
-    },
-    {
-      "at": "2026-08-01T22:43:26.449Z",
-      "event": "retry-scheduled",
-      "data": {
-        "state": "WAIT_FRONTEND",
-        "nextState": "START_FRONTEND",
-        "reason": "frontend wait timeout",
-        "currentAttempt": 2,
-        "maxRetries": 2,
-        "retryBackoffMs": 2500
-      }
-    },
-    {
-      "at": "2026-08-01T22:43:34.080Z",
+      "at": "2026-08-03T13:17:29.703Z",
       "event": "port-occupied",
       "data": {
         "state": "START_FRONTEND",
         "port": 5173,
         "occupiedBy": [
-          16292,
-          22584
+          24668
         ],
         "command": "node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173 --strictPort --force",
-        "alreadyReady": false
+        "alreadyReady": true
       }
     },
     {
-      "at": "2026-08-01T22:43:34.089Z",
-      "event": "failed",
+      "at": "2026-08-03T13:17:29.709Z",
+      "event": "frontend-already-running",
       "data": {
-        "ok": false,
+        "state": "START_FRONTEND",
+        "frontendUrl": "http://127.0.0.1:5173/",
+        "occupiedBy": [
+          24668
+        ]
+      }
+    },
+    {
+      "at": "2026-08-03T13:17:29.730Z",
+      "event": "state",
+      "data": {
+        "state": "CHECK_CADDY",
+        "caddyUrl": "https://localhost/bob-console.html",
+        "caddyAdminUrl": "http://127.0.0.1:2019/config/",
+        "caddyOk": false
+      }
+    },
+    {
+      "at": "2026-08-03T13:17:29.840Z",
+      "event": "caddy-started",
+      "data": {
+        "command": "\"C:\\Users\\scobo\\AppData\\Local\\Microsoft\\WinGet\\Packages\\CaddyServer.Caddy_Microsoft.Winget.Source_8wekyb3d8bbwe\\caddy.exe\" run --config deploy/caddy/Caddyfile --adapter caddyfile",
+        "pid": 10936
+      }
+    },
+    {
+      "at": "2026-08-03T13:17:34.727Z",
+      "event": "caddy-ready",
+      "data": {
+        "caddyUrl": "https://localhost/bob-console.html",
+        "caddyAdminUrl": "http://127.0.0.1:2019/config/",
+        "timeoutMs": 30000
+      }
+    },
+    {
+      "at": "2026-08-03T13:17:34.730Z",
+      "event": "complete",
+      "data": {
+        "ok": true,
         "service": "frontend",
-        "state": "FAILED",
+        "state": "READY",
         "workflow": [
           "INIT",
           "KILL_VITE_PROCESSES",
           "CHECK_BACKEND",
+          "CHECK_MCP",
           "START_FRONTEND",
-          "WAIT_FRONTEND",
-          "START_FRONTEND",
-          "WAIT_FRONTEND",
-          "START_FRONTEND"
+          "CHECK_CADDY",
+          "START_CADDY",
+          "WAIT_CADDY",
+          "READY"
         ],
-        "error": "Port 5173 is already occupied before frontend launch",
+        "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
+        "mcpUrl": "http://127.0.0.1:4011/health",
+        "frontendUrl": "http://127.0.0.1:5173/",
+        "caddyUrl": "https://localhost/bob-console.html",
         "fsmId": "frontend-startup-fsm"
       }
     }
   ],
-  "updatedAt": "2026-08-01T22:43:34.097Z",
-  "error": "Port 5173 is already occupied before frontend launch",
+  "updatedAt": "2026-08-03T13:17:34.736Z",
+  "error": null,
   "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
   "frontendUrl": "http://127.0.0.1:5173/",
   "fsmId": "frontend-startup-fsm",
@@ -156,7 +149,21 @@
       "required": true,
       "url": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
       "ok": true,
-      "checkedAt": "2026-08-01T22:42:20.066Z"
+      "checkedAt": "2026-08-03T13:17:34.723Z"
+    },
+    "mcp": {
+      "required": true,
+      "url": "http://127.0.0.1:4011/health",
+      "ok": true,
+      "checkedAt": "2026-08-03T13:17:34.723Z"
+    },
+    "caddy": {
+      "required": true,
+      "url": "https://localhost/bob-console.html",
+      "ok": true,
+      "checkedAt": "2026-08-03T13:17:34.723Z"
     }
-  }
+  },
+  "mcpUrl": "http://127.0.0.1:4011/health",
+  "caddyUrl": "https://localhost/bob-console.html"
 }

@@ -4,9 +4,13 @@ import { fileURLToPath } from 'url';
 import { createNewDocumentFileName, DOCUMENT_TYPES, getDocumentTypeByFileName, getDocumentTypeById, normalizeDocumentFileName } from '../documentRegistry.js';
 import { compileRouterMapperDSL } from '../../scripts/compile-pascal.mjs';
 import { compileCobolishWithAntlr } from '../../scripts/cobolish-antlr-compiler.mjs';
+import { validatePascalishSubschemaMappings } from '../librarianSchemaContracts.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const defaultRuntimeRoot = path.join(repoRoot, 'data');
+const defaultRuntimeRoot = path.resolve(
+  process.env.PULSE_OPERATIONAL_DATA_ROOT
+  || (process.platform === 'win32' ? 'c:/dev/pulse-operational-data' : '/opt/pulse/operational-data')
+);
 const runtimeRoot = path.resolve(
   process.env.PULSE_DEVELOP_WORKSPACE_ROOT
   || process.env.PULSE_RUNTIME_DATA_ROOT
@@ -14,6 +18,16 @@ const runtimeRoot = path.resolve(
   || defaultRuntimeRoot
 );
 const workspaceRoot = path.join(runtimeRoot, 'develop-documents');
+const librarianSubschemasPath = path.join(runtimeRoot, 'services', 'librarian', 'subschemas.json');
+
+async function loadLibrarianSubschemas() {
+  try {
+    const parsed = JSON.parse(await fs.readFile(librarianSubschemasPath, 'utf-8'));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
 function resolveWorkspaceFile(fileName) {
   const normalized = String(fileName || '').trim().replace(/[\\/]+/g, '_');
@@ -218,6 +232,35 @@ export async function registerDevelopDocumentRoutes(app) {
       const compiled = languageId === 'cobolish'
         ? compileCobolishWithAntlr(sourceText, { fileName })
         : compileRouterMapperDSL(sourceText);
+
+      if (languageId === 'pascalish') {
+        const subschemaValidation = validatePascalishSubschemaMappings(
+          compiled.dataMappings,
+          await loadLibrarianSubschemas()
+        );
+        if (subschemaValidation.errors.length > 0) {
+          return applyJson(res, 400, {
+            error: `Pascalish subschema validation failed:\n${subschemaValidation.errors.join('\n')}`,
+            subschemaErrors: subschemaValidation.errors
+          });
+        }
+        compiled.librarianSubschemas = subschemaValidation.usedContracts;
+        const contractById = new Map(
+          subschemaValidation.usedContracts.map(contract => [String(contract.id || '').toLowerCase(), contract])
+        );
+        for (const mapping of compiled.dataMappings || []) {
+          const sourceContract = contractById.get(String(mapping.sourceTypeId || '').toLowerCase());
+          const targetContract = contractById.get(String(mapping.targetTypeId || '').toLowerCase());
+          if (sourceContract) {
+            mapping.sourceSubschemaId = sourceContract.id;
+            mapping.sourceParentTypeId = sourceContract.parentTypeId || null;
+          }
+          if (targetContract) {
+            mapping.targetSubschemaId = targetContract.id;
+            mapping.targetParentTypeId = targetContract.parentTypeId || null;
+          }
+        }
+      }
 
       const compileSummary = languageId === 'cobolish'
         ? {

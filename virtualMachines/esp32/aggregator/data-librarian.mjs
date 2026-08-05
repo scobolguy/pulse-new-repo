@@ -9,7 +9,16 @@ app.use(express.json());
 
 // Config: where to look for data files and schemas (independent of process cwd)
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
-const DATA_ROOT = path.resolve(process.env.PULSE_LIBRARIAN_DATA_ROOT || path.join(repoRoot, 'data'));
+const defaultOperationalDataRoot = process.platform === 'win32'
+  ? 'c:/dev/pulse-operational-data'
+  : '/opt/pulse/operational-data';
+const DATA_ROOT = path.resolve(
+  process.env.PULSE_LIBRARIAN_DATA_ROOT
+  || process.env.PULSE_RUNTIME_DATA_ROOT
+  || process.env.PULSE_QUEUE_DATA_ROOT
+  || process.env.PULSE_OPERATIONAL_DATA_ROOT
+  || defaultOperationalDataRoot
+);
 const SERVICES_ROOT = path.join(DATA_ROOT, 'services');
 const LIBRARIAN_SERVICE_ROOT = path.join(SERVICES_ROOT, 'librarian');
 const SCHEMA_ROOT = path.join(LIBRARIAN_SERVICE_ROOT, 'schemas');

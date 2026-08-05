@@ -161,7 +161,7 @@ constexpr uint8_t OP_DL_LIST = 0xA4;
  * Mode: 0=read, 1=write, 2=append
  * Returns file handle or 0xFFFF on error.
  */
-constexpr uint8_t OP_FILE_OPEN = 0x90;
+constexpr uint8_t OP_EXT_FILE_OPEN = 0x90;
 
 /**
  * OP_FILE_READ - Read from file
@@ -170,7 +170,7 @@ constexpr uint8_t OP_FILE_OPEN = 0x90;
  * Reads up to size bytes from file into buffer.
  * Returns number of bytes actually read.
  */
-constexpr uint8_t OP_FILE_READ = 0x91;
+constexpr uint8_t OP_EXT_FILE_READ = 0x91;
 
 /**
  * OP_FILE_WRITE - Write to file
@@ -179,7 +179,7 @@ constexpr uint8_t OP_FILE_READ = 0x91;
  * Writes size bytes from buffer to file.
  * Returns number of bytes actually written.
  */
-constexpr uint8_t OP_FILE_WRITE = 0x92;
+constexpr uint8_t OP_EXT_FILE_WRITE = 0x92;
 
 /**
  * OP_FILE_CLOSE - Close file
@@ -188,7 +188,7 @@ constexpr uint8_t OP_FILE_WRITE = 0x92;
  * Closes file handle.
  * Returns 1 on success, 0 on failure.
  */
-constexpr uint8_t OP_FILE_CLOSE = 0x93;
+constexpr uint8_t OP_EXT_FILE_CLOSE = 0x93;
 
 /**
  * OP_FILE_SEEK - Seek to position

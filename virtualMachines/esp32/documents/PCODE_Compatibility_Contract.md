@@ -29,7 +29,7 @@ Run from the aggregator folder:
 
 `npm run check:pcode-compat`
 
-This validates that `src/pmachine.h` opcode enum matches the shared manifest.
+This validates that every shared opcode matches the `src/pmachine.h` ABI and has both a mnemonic mapping and an executable ESP32 dispatch path.
 
 ## Evolution Process
 

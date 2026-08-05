@@ -2,6 +2,50 @@
 
 Aggregator is a control plane and routing layer for distributed services.
 
+## Terminology
+
+Use the terms below consistently across UI, NLI, and docs:
+
+- Router: consumes a message and emits one or more queue deliveries based on routing rules.
+- Transformer (Mapper): converts payload shape or content from one schema/form to another.
+- Flow: a larger pipeline that can include router stages, transformer stages, and other runtime logic.
+- Deployment: binds a runtime artifact or service instance to a node or cluster target.
+
+## Project Build Tree Model
+
+Projects are recursive containers. Every project can contain subprojects, and each subproject can contain more subprojects.
+
+- Root project: top-level delivery boundary (domain, ownership, release intent).
+- Subproject: independently buildable unit under a parent project.
+- Leaf subproject: lowest-level unit that emits deployable artifacts.
+
+Tree rules:
+
+- Each node in the tree has a unique id within its parent scope.
+- Each node records parent id (root uses null parent).
+- Build order is bottom-up by default: build leaves first, then parents.
+- Deployment targeting is inherited downward unless overridden at a child.
+- Contract compatibility is validated upward: child outputs must satisfy parent inputs.
+
+Recommended node shape:
+
+- id
+- parentId
+- kind (project | subproject)
+- name
+- children[]
+- flows[]
+- routerStages[]
+- transformerStages[]
+- artifacts[]
+- deploymentDefaults
+
+Operational behavior:
+
+- Local changes can be built at the nearest subtree root.
+- Promotion to higher environments can move recursively up the tree.
+- Health and readiness can be evaluated per subtree, then aggregated to parent status.
+
 Main capabilities:
 - Queue manager registry and routing
 - Service instance registry for any service type (for example webapi or broker)
@@ -347,6 +391,31 @@ Then set browser-side gateway failover in `.env.local`:
 ```text
 VITE_API_BASES=http://192.168.2.101:4100,http://192.168.2.102:4100
 ```
+
+## BOB Console HTTPS (Caddy)
+
+Caddy terminates HTTPS while Vite, the API, MCP, and ESP32 devices continue using private HTTP connections.
+
+```powershell
+winget install --id CaddyServer.Caddy -e
+npm run startup:fsm:ordered
+npm run edge:https
+```
+
+Open `https://localhost/bob-console.html`. Port 80 is not required; use the `https://` URL explicitly. On first use, trust Caddy's local certificate authority from an elevated terminal:
+
+```powershell
+npm run edge:https:trust
+```
+
+For LAN access, set the hostname before starting Caddy:
+
+```powershell
+$env:BOB_HTTPS_HOST = "neptune"
+npm run edge:https
+```
+
+Optional upstream overrides are `BOB_FRONTEND_UPSTREAM`, `BOB_API_UPSTREAM`, and `BOB_MCP_UPSTREAM`. ESP32 devices remain on the private HTTP API and do not require certificate changes.
 
 ## Natural Language Command Interface
 

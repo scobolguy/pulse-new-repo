@@ -1,0 +1,15 @@
+cluster esp32_edge_pool {
+  local;
+  child;
+  sibling;
+}
+
+// ISO XML transport contract: queues carry XML payloads
+deploy service mt940_to_camt053_service to cluster esp32_edge_pool;
+deploy queue swift-mt940.inbound to cluster esp32_edge_pool;
+deploy queue camt.outbound to cluster esp32_edge_pool;
+
+bind queue swift-mt940.inbound manager qm name "swift-mt940.inbound" cluster esp32_edge_pool mode sequential_xml;
+bind queue camt.outbound manager qm name "camt.outbound" cluster esp32_edge_pool mode sequential_xml;
+
+evict service mt940_to_camt053_service after idle 30 seconds warm reload fallback alternate;

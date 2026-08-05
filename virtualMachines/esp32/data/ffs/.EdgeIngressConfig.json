@@ -1,8 +1,0 @@
-{
-  "workerCount": 2,
-  "queueLength": 24,
-  "resultLimit": 64,
-  "workerStackBytes": 12288,
-  "workerPriority": 1,
-  "preferredCore": 1
-}

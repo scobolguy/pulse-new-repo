@@ -8,7 +8,13 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Resolve relative to the broker file itself so the path is stable regardless of cwd
-const runtimeDataRoot = process.env.PULSE_RUNTIME_DATA_ROOT || process.env.PULSE_QUEUE_DATA_ROOT || path.resolve(__dirname, '../../data');
+const defaultOperationalDataRoot = process.platform === 'win32'
+  ? 'c:/dev/pulse-operational-data'
+  : '/opt/pulse/operational-data';
+const runtimeDataRoot = process.env.PULSE_RUNTIME_DATA_ROOT
+  || process.env.PULSE_QUEUE_DATA_ROOT
+  || process.env.PULSE_OPERATIONAL_DATA_ROOT
+  || defaultOperationalDataRoot;
 const SUBSCRIBERS_PATH = path.resolve(runtimeDataRoot, 'broker-subscribers.json');
 
 export default class MessageBroker {

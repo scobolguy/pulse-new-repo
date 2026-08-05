@@ -19,7 +19,7 @@
     {
       "id": "flow-authoring",
       "version": 2,
-      "description": "Create a typed queue-to-mapper flow and save it in Flow Designer.",
+      "description": "Create a typed queue pipeline flow (router + transformer stages) and save it in Flow Designer.",
       "requires": ["ACTION_CREATE_FLOW", "prompt"],
       "score": 100,
       "patterns": [
@@ -35,7 +35,7 @@
 
     {
       "id": "mapl-authoring",
-      "description": "Create a valid MAPL program, compile it to p-code, and persist the source and compiled program map.",
+      "description": "Create a valid MAPL transformer program, compile it to p-code, and persist the source and compiled program map.",
       "patterns": [
         "\\b(?:create|generate|build|write|make|compile)\\b[\\s\\S]{0,120}\\bmapl\\b",
         "\\bmapl\\b[\\s\\S]{0,120}\\b(?:create|generate|build|write|make|compile)\\b",
@@ -69,7 +69,7 @@
 
     {
       "id": "flow",
-      "description": "Show a static flow diagram of all router rules as a left-to-right SVG with queue depths and an export button. Examples: 'show flow diagram', 'flow diagram', 'show message flow', 'routing diagram'.",
+      "description": "Show a static flow diagram of routing stages and queue fanout as a left-to-right SVG with queue depths and an export button. Examples: 'show flow diagram', 'flow diagram', 'show message flow', 'routing diagram'.",
       "patterns": [
         "\\bflow\\s+diagram\\b",
         "\\bshow.*flow\\b",

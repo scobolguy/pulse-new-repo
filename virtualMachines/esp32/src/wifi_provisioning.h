@@ -9,6 +9,7 @@
 #endif
 #include <DNSServer.h>
 #include <ESPAsyncWebServer.h>
+#include <vector>
 
 /**
  * WiFi Provisioning System
@@ -32,6 +33,11 @@ enum ProvisioningMethod {
 struct WiFiCredentials {
     String ssid;
     String password;
+    String authMode;
+    String eapMethod;
+    String identity;
+    String username;
+    String enterprisePassword;
     String hostname;
     bool dhcp;
     String staticIP;
@@ -40,7 +46,7 @@ struct WiFiCredentials {
     String dns1;
     String dns2;
     
-    WiFiCredentials() : dhcp(true) {}
+    WiFiCredentials() : authMode("wpa2-psk"), dhcp(true) {}
 };
 
 class WiFiProvisioning {
@@ -74,12 +80,39 @@ public:
      * @return true if saved successfully
      */
     bool saveCredentials(const WiFiCredentials& creds);
+
+    /**
+     * Save or update a WiFi profile and keep only the most recent maxProfiles entries.
+     * @param creds Credentials to upsert
+     * @param maxProfiles Max number of stored profiles (default 5)
+     * @return true if saved successfully
+     */
+    bool addOrUpdateCredential(const WiFiCredentials& creds, size_t maxProfiles = 5);
+
+    /**
+     * Load all stored WiFi profiles.
+     * @param credsList Output profile list
+     * @return true if at least one profile was loaded
+     */
+    bool loadCredentialsList(std::vector<WiFiCredentials>& credsList);
+
+    /**
+     * Replace stored WiFi profile list.
+     * @param credsList Profiles to persist
+     * @return true if saved successfully
+     */
+    bool saveCredentialsList(const std::vector<WiFiCredentials>& credsList);
     
     /**
      * Clear stored credentials
      * @return true if cleared successfully
      */
     bool clearCredentials();
+
+    /**
+     * Remove legacy WiFi credential stores to reduce stale secret exposure.
+     */
+    bool eraseLegacyCredentialStores();
     
     /**
      * Start captive portal for WiFi setup
@@ -136,6 +169,11 @@ public:
      * @return WiFi status string
      */
     String getStatus();
+
+    /**
+     * Access currently active credentials (if connected/provisioned during runtime).
+     */
+    const WiFiCredentials& getCurrentCredentials() const { return currentCreds; }
     
     /**
      * Get provisioning method used

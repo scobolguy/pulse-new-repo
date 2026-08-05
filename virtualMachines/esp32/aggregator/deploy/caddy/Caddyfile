@@ -1,0 +1,32 @@
+{
+	auto_https disable_redirects
+}
+
+https://{$BOB_HTTPS_HOST:localhost} {
+	tls internal
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "geolocation=(), microphone=(self), camera=()"
+	}
+
+	handle /mcp-query {
+		rewrite * /query
+		reverse_proxy {$BOB_MCP_UPSTREAM:127.0.0.1:4011}
+	}
+
+	@backend path /api/* /status /services /services/*
+	handle @backend {
+		reverse_proxy {$BOB_API_UPSTREAM:127.0.0.1:4000} {
+			header_up X-Forwarded-Proto https
+		}
+	}
+
+	handle {
+		reverse_proxy {$BOB_FRONTEND_UPSTREAM:127.0.0.1:5173}
+	}
+}

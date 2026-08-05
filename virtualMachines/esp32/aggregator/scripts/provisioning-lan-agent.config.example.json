@@ -1,0 +1,41 @@
+{
+  "scanPattern": "^Pulse-.*-Provision$",
+  "controlProfileName": "YourManagementWifiProfileName",
+  "useDerivedNodeName": true,
+  "targetLan": {
+    "authMode": "wpa2-psk",
+    "ssid": "YOUR_PROVISIONING_LAN_SSID",
+    "password": "YOUR_PROVISIONING_LAN_PASSWORD",
+    "eapMethod": "",
+    "identity": "",
+    "username": "",
+    "enterprisePassword": "",
+    "hostname": "",
+    "dhcp": true,
+    "staticIP": "",
+    "gateway": "",
+    "subnet": "",
+    "dns1": "",
+    "dns2": ""
+  },
+  "aggregator": {
+    "baseUrl": "http://127.0.0.1:4000",
+    "actorUserId": "system-admin"
+  },
+  "nodeIds": [
+    "node-1",
+    "node-2"
+  ],
+  "nodeNameById": {
+    "node-1": "huey",
+    "node-2": "dewey"
+  },
+  "hostnameById": {
+    "node-1": "pulse-node-1",
+    "node-2": "pulse-node-2"
+  },
+  "staticIPById": {
+    "node-1": "",
+    "node-2": ""
+  }
+}

@@ -2,6 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
+import http from 'node:http';
+import https from 'node:https';
 import { execFile } from 'node:child_process';
 import { allocateJob } from '../allocator/economicAllocator.mjs';
 import { attachPcodeSignature } from '../../../scripts/pcode-signing.mjs';
@@ -421,6 +423,300 @@ function getDeploymentId(deployment) {
   return String(deployment?.deploymentId || deployment?.id || '').trim();
 }
 
+function getDeploymentTargets(deployment) {
+  const rawTargets = Array.isArray(deployment?.targetNodeIds)
+    ? deployment.targetNodeIds
+    : (deployment?.targetNodeId ? [deployment.targetNodeId] : []);
+  return Array.from(new Set(
+    rawTargets
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+  ));
+}
+
+function getDeploymentScope(deployment) {
+  const explicitScope = String(deployment?.scope || '').trim().toLowerCase();
+  if (explicitScope) return explicitScope;
+  if (getDeploymentTargets(deployment).length > 1) return 'collective';
+  return 'node';
+}
+
+function getDeploymentRuntimeState(deployment) {
+  return String(deployment?.runtimeState || deployment?.state || 'running').trim().toLowerCase() || 'running';
+}
+
+function getDeploymentServiceStatus(runtimeState) {
+  const normalized = String(runtimeState || '').trim().toLowerCase();
+  if (normalized === 'running') return 'up';
+  if (normalized === 'paused') return 'paused';
+  if (normalized === 'stopped') return 'resident';
+  return 'resident';
+}
+
+function getDeploymentKey(serviceName, targetNodeId, deploymentId = '') {
+  const normalizedService = String(serviceName || '').trim().toLowerCase();
+  const normalizedTarget = String(targetNodeId || '').trim().toLowerCase();
+  if (normalizedService && normalizedTarget) {
+    return `${normalizedService}::${normalizedTarget}`;
+  }
+  if (normalizedService) {
+    return `${normalizedService}::${String(deploymentId || 'collective').trim().toLowerCase()}`;
+  }
+  return String(deploymentId || crypto.randomUUID()).trim();
+}
+
+function parseDeploymentRef(rawRef) {
+  const text = String(rawRef || '').trim();
+  if (!text) {
+    return { deploymentId: '', serviceName: '', targetNodeId: '' };
+  }
+
+  if (text.includes('::')) {
+    const [serviceName, ...rest] = text.split('::');
+    return {
+      deploymentId: '',
+      serviceName: String(serviceName || '').trim(),
+      targetNodeId: rest.join('::').trim(),
+    };
+  }
+
+  if (text.includes('.')) {
+    const dotIndex = text.lastIndexOf('.');
+    const left = text.slice(0, dotIndex).trim();
+    const right = text.slice(dotIndex + 1).trim();
+    if (left && right) {
+      return {
+        deploymentId: '',
+        serviceName: right,
+        targetNodeId: left,
+      };
+    }
+  }
+
+  return { deploymentId: text, serviceName: text, targetNodeId: '' };
+}
+
+function buildDeploymentInstanceId(deployment, targetNodeId) {
+  const deploymentId = getDeploymentId(deployment) || String(deployment?.key || '').trim() || 'deployment';
+  const targetToken = String(targetNodeId || deployment?.targetNodeId || '*').trim().toLowerCase() || '*';
+  return `deploy:${deploymentId}:${targetToken}`;
+}
+
+function buildDeploymentAliases(deployment) {
+  const serviceName = String(deployment?.serviceName || '').trim();
+  const targets = getDeploymentTargets(deployment);
+  const aliases = new Set();
+  if (serviceName && targets.length > 0) {
+    for (const targetNodeId of targets) {
+      aliases.add(`${targetNodeId}.${serviceName}`);
+      aliases.add(`${serviceName}::${targetNodeId}`);
+    }
+  }
+  if (serviceName) {
+    aliases.add(serviceName);
+    aliases.add(`${serviceName}::*`);
+  }
+  const deploymentId = getDeploymentId(deployment);
+  if (deploymentId) aliases.add(deploymentId);
+  return Array.from(aliases);
+}
+
+function normalizeDeploymentRecord(deployment = {}) {
+  const serviceName = String(deployment?.serviceName || '').trim();
+  const targetNodeIds = getDeploymentTargets(deployment);
+  const targetNodeId = String(deployment?.targetNodeId || targetNodeIds[0] || '').trim() || null;
+  const runtimeState = getDeploymentRuntimeState(deployment);
+  const createdAt = String(deployment?.createdAt || deployment?.updatedAt || new Date().toISOString());
+  const updatedAt = String(deployment?.updatedAt || createdAt);
+  const deploymentId = String(deployment?.deploymentId || crypto.randomUUID()).trim();
+  const scope = getDeploymentScope(deployment);
+  const key = String(deployment?.key || getDeploymentKey(serviceName, targetNodeId || '*', deploymentId)).trim();
+  const instanceStates = deployment?.instances && typeof deployment.instances === 'object'
+    ? deployment.instances
+    : {};
+
+  return {
+    ...deployment,
+    key,
+    deploymentId,
+    deploymentRef: String(deployment?.deploymentRef || key).trim(),
+    serviceName,
+    targetNodeId,
+    targetNodeIds,
+    scope,
+    runtimeState,
+    state: runtimeState,
+    createdAt,
+    updatedAt,
+    instances: targetNodeIds.reduce((acc, nodeId) => {
+      const normalizedNodeId = String(nodeId || '').trim();
+      if (!normalizedNodeId) return acc;
+      const nextState = String(instanceStates[normalizedNodeId]?.state || runtimeState || 'running').trim().toLowerCase() || 'running';
+      acc[normalizedNodeId] = {
+        state: nextState,
+        updatedAt,
+        startedAt: String(instanceStates[normalizedNodeId]?.startedAt || createdAt),
+        stoppedAt: nextState === 'stopped' ? String(instanceStates[normalizedNodeId]?.stoppedAt || updatedAt) : null
+      };
+      return acc;
+    }, {}),
+    aliases: buildDeploymentAliases({ ...deployment, serviceName, targetNodeId, targetNodeIds, deploymentId, key })
+  };
+}
+
+async function readDeploymentIndexFromDisk(deploymentIndexPath) {
+  if (!deploymentIndexPath) return { updatedAt: new Date().toISOString(), deployments: [] };
+  try {
+    const raw = await fs.readFile(deploymentIndexPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    return {
+      updatedAt: String(parsed?.updatedAt || new Date().toISOString()),
+      deployments: Array.isArray(parsed?.deployments) ? parsed.deployments : []
+    };
+  } catch {
+    return { updatedAt: new Date().toISOString(), deployments: [] };
+  }
+}
+
+async function writeDeploymentIndexToDisk(deploymentIndexPath, index) {
+  if (!deploymentIndexPath) return;
+  await fs.mkdir(path.dirname(deploymentIndexPath), { recursive: true });
+  await fs.writeFile(deploymentIndexPath, `${JSON.stringify(index, null, 2)}\n`, 'utf8');
+}
+
+function syncDeploymentRegistry(deploymentRegistry, deployments) {
+  if (!(deploymentRegistry instanceof Map)) return;
+  deploymentRegistry.clear();
+  for (const deployment of Array.isArray(deployments) ? deployments : []) {
+    const normalized = normalizeDeploymentRecord(deployment);
+    deploymentRegistry.set(normalized.key, normalized);
+  }
+}
+
+function collectDeploymentServiceInstances(deployment, serviceInstanceRegistry) {
+  const targetNodeIds = getDeploymentTargets(deployment);
+  const runtimeState = getDeploymentRuntimeState(deployment);
+  const serviceStatus = getDeploymentServiceStatus(runtimeState);
+  const deploymentId = getDeploymentId(deployment) || String(deployment?.key || '').trim();
+  const records = [];
+
+  for (const targetNodeId of targetNodeIds.length > 0 ? targetNodeIds : [null]) {
+    const normalizedTargetNodeId = String(targetNodeId || '').trim() || null;
+    const pmachineInstance = normalizedTargetNodeId
+      ? Array.from(serviceInstanceRegistry.values()).find((instance) => {
+          if (String(instance?.serviceName || '').trim().toLowerCase() !== 'pmachine') return false;
+          return String(instance?.nodeId || instance?.ip || '').trim().toLowerCase() === normalizedTargetNodeId;
+        })
+      : null;
+
+    records.push({
+      instanceId: buildDeploymentInstanceId(deployment, normalizedTargetNodeId),
+      serviceName: String(deployment?.serviceName || '').trim(),
+      nodeId: normalizedTargetNodeId,
+      ip: pmachineInstance?.ip || null,
+      port: pmachineInstance?.port || null,
+      status: serviceStatus,
+      metadata: {
+        deployment: true,
+        deploymentId,
+        deploymentKey: String(deployment?.key || '').trim(),
+        deploymentName: getDeploymentName(deployment) || String(deployment?.serviceName || '').trim(),
+        packageName: deployment?.packageName || null,
+        packageVersion: deployment?.packageVersion || null,
+        targetNodeId: normalizedTargetNodeId,
+        targetNodeIds,
+        scope: getDeploymentScope(deployment),
+        runtimeState,
+        collective: targetNodeIds.length > 1,
+        ...(deployment?.metadata && typeof deployment.metadata === 'object' ? deployment.metadata : {})
+      },
+      lastHeartbeat: pmachineInstance?.lastHeartbeat || null
+    });
+  }
+
+  return records;
+}
+
+function upsertDeploymentServiceInstances(serviceInstanceRegistry, deployment) {
+  if (!(serviceInstanceRegistry instanceof Map)) return;
+  const instances = collectDeploymentServiceInstances(deployment, serviceInstanceRegistry);
+  for (const instance of instances) {
+    serviceInstanceRegistry.set(instance.instanceId, {
+      ...(serviceInstanceRegistry.get(instance.instanceId) || {}),
+      ...instance,
+      lastHeartbeat: Date.now()
+    });
+  }
+}
+
+function updateDeploymentRuntimeState(deployment, nextState) {
+  const normalizedState = String(nextState || '').trim().toLowerCase();
+  const targetNodeIds = getDeploymentTargets(deployment);
+  const now = new Date().toISOString();
+  const currentInstances = deployment?.instances && typeof deployment.instances === 'object' ? deployment.instances : {};
+  const nextInstances = {};
+  for (const targetNodeId of targetNodeIds.length > 0 ? targetNodeIds : [null]) {
+    const normalizedTargetNodeId = String(targetNodeId || '').trim() || null;
+    if (!normalizedTargetNodeId) continue;
+    const prevInstance = currentInstances[normalizedTargetNodeId] || {};
+    nextInstances[normalizedTargetNodeId] = {
+      state: normalizedState || String(prevInstance.state || deployment?.runtimeState || 'running').trim().toLowerCase() || 'running',
+      startedAt: String(prevInstance.startedAt || deployment?.createdAt || now),
+      updatedAt: now,
+      stoppedAt: normalizedState === 'stopped' ? now : (prevInstance.stoppedAt || null)
+    };
+  }
+
+  return normalizeDeploymentRecord({
+    ...deployment,
+    runtimeState: normalizedState || getDeploymentRuntimeState(deployment),
+    state: normalizedState || getDeploymentRuntimeState(deployment),
+    updatedAt: now,
+    instances: nextInstances
+  });
+}
+
+function resolveDeploymentMatches(rawRef, deploymentRegistry) {
+  const ref = String(rawRef || '').trim();
+  const deployments = Array.from(deploymentRegistry instanceof Map ? deploymentRegistry.values() : []);
+  if (!ref) return [];
+
+  const exact = deploymentRegistry instanceof Map ? deploymentRegistry.get(ref) : null;
+  if (exact) return [exact];
+
+  const byDeploymentId = deployments.filter((deployment) => getDeploymentId(deployment) === ref);
+  if (byDeploymentId.length > 0) return byDeploymentId;
+
+  const parsed = parseDeploymentRef(ref);
+  if (parsed.serviceName && parsed.targetNodeId) {
+    const targeted = deployments.filter((deployment) => {
+      if (String(deployment?.serviceName || '').trim().toLowerCase() !== String(parsed.serviceName || '').trim().toLowerCase()) return false;
+      const targets = getDeploymentTargets(deployment).map((value) => value.toLowerCase());
+      return targets.includes(String(parsed.targetNodeId || '').trim().toLowerCase());
+    });
+    if (targeted.length > 0) return targeted;
+  }
+
+  if (parsed.serviceName) {
+    return deployments.filter((deployment) => String(deployment?.serviceName || '').trim().toLowerCase() === String(parsed.serviceName || '').trim().toLowerCase());
+  }
+
+  return [];
+}
+
+async function persistDeploymentRecords({ deploymentIndexPath, deploymentRegistry, deployments }) {
+  const normalizedDeployments = Array.isArray(deployments)
+    ? deployments.map((deployment) => normalizeDeploymentRecord(deployment))
+    : [];
+  const payload = {
+    updatedAt: new Date().toISOString(),
+    deployments: normalizedDeployments
+  };
+  await writeDeploymentIndexToDisk(deploymentIndexPath, payload);
+  syncDeploymentRegistry(deploymentRegistry, normalizedDeployments);
+  return payload;
+}
+
 export function registerTopologyRuntimeRoutes(app, deps) {
   const {
     discoveredNodes,
@@ -431,7 +727,8 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     upsertServiceInstance,
     resolveServiceInstance,
     ffsDeploymentRegistry,
-    setNodeLifecycleState
+    setNodeLifecycleState,
+    deploymentIndexPath
   } = deps;
   let nodeRenameMap = {};
   let nodeRenameMapLoaded = false;
@@ -1393,33 +1690,27 @@ export function registerTopologyRuntimeRoutes(app, deps) {
         });
       }
 
-      const normalizedTarget = normalizeNodeId(deployment?.targetNodeId || '');
-      const pmachineInstance = Array.from(serviceInstanceRegistry.values()).find((instance) => {
-        if (normalizeServiceName(instance.serviceName) !== 'pmachine') return false;
-        if (!normalizedTarget) return false;
-        return normalizeNodeId(instance.nodeId || instance.ip) === normalizedTarget;
-      }) || null;
+      const deployedInstances = collectDeploymentServiceInstances(deployment, serviceInstanceRegistry);
+      for (const deployedInstance of deployedInstances) {
+        const pmachineInstance = deployedInstance.nodeId
+          ? Array.from(serviceInstanceRegistry.values()).find((instance) => {
+              if (normalizeServiceName(instance.serviceName) !== 'pmachine') return false;
+              return normalizeNodeId(instance.nodeId || instance.ip) === normalizeNodeId(deployedInstance.nodeId);
+            }) || null
+          : null;
 
-      byService.get(key).instances.push({
-        instanceId: `deploy:${key}:${normalizedTarget || '*'}`,
-        serviceName,
-        nodeId: deployment?.targetNodeId || null,
-        ip: pmachineInstance?.ip || null,
-        port: pmachineInstance?.port || null,
-        status: 'resident',
-        metadata: {
-          deployment: true,
-          deploymentId: getDeploymentId(deployment) || null,
-          deploymentName: getDeploymentName(deployment) || serviceName,
-          packageName: deployment?.packageName || null,
-          packageVersion: deployment?.packageVersion || null,
-          targetNodeId: deployment?.targetNodeId || null,
-          updatedAt: deployment?.updatedAt || null,
-          ...(deployment?.metadata || {})
-        },
-        lastHeartbeat: pmachineInstance?.lastHeartbeat || null,
-        staleMs: pmachineInstance?.lastHeartbeat ? Math.max(0, now - Number(pmachineInstance.lastHeartbeat || 0)) : null
-      });
+        byService.get(key).instances.push({
+          instanceId: deployedInstance.instanceId,
+          serviceName,
+          nodeId: deployedInstance.nodeId,
+          ip: deployedInstance.ip || null,
+          port: deployedInstance.port || null,
+          status: deployedInstance.status,
+          metadata: deployedInstance.metadata,
+          lastHeartbeat: pmachineInstance?.lastHeartbeat || deployedInstance.lastHeartbeat || null,
+          staleMs: pmachineInstance?.lastHeartbeat ? Math.max(0, now - Number(pmachineInstance.lastHeartbeat || 0)) : null
+        });
+      }
     }
 
     const servicesOut = Array.from(byService.values());
@@ -1439,9 +1730,9 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     let wildcard = null;
     for (const entry of entries) {
       if (normalizeServiceName(entry.serviceName) !== normalizedService) continue;
-      const target = normalizeNodeId(entry.targetNodeId);
-      if (target && normalizedNodeId && target === normalizedNodeId) return entry;
-      if (!target) wildcard = entry;
+      const targets = getDeploymentTargets(entry).map((target) => normalizeNodeId(target));
+      if (normalizedNodeId && targets.includes(normalizedNodeId)) return entry;
+      if (targets.length === 0 || String(entry?.scope || '').trim().toLowerCase() === 'collective') wildcard = entry;
     }
     return wildcard;
   }
@@ -1513,11 +1804,14 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       const node = nodeByKey.get(pmachineKey) || null;
       const nodeKeys = node ? getNodeIdentityCandidates(node) : [pmachineKey];
       const deployment = entries.find((entry) => {
-        const target = normalizeNodeId(entry?.targetNodeId || '');
-        if (!target) return true;
-        return nodeKeys.includes(target) || target === pmachineKey;
+        const targets = getDeploymentTargets(entry).map((target) => normalizeNodeId(target));
+        if (targets.length === 0) return true;
+        return targets.some((target) => nodeKeys.includes(target) || target === pmachineKey);
       }) || null;
       if (!deployment) continue;
+
+      const runtimeState = getDeploymentRuntimeState(deployment);
+      if (runtimeState === 'stopped' || runtimeState === 'paused') continue;
 
       out.push({
         instanceId: `resident:${normalizedService}:${pmachine.instanceId || pmachineKey}`,
@@ -1525,7 +1819,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
         nodeId: pmachine.nodeId || node?.nodeId || node?.nodeName || pmachine.ip,
         ip: pmachine.ip,
         port: pmachine.port,
-        status: 'up',
+        status: runtimeState === 'running' ? 'up' : 'resident',
         lastHeartbeat: pmachine.lastHeartbeat,
         metadata: {
           ...(pmachine.metadata || {}),
@@ -1536,6 +1830,8 @@ export function registerTopologyRuntimeRoutes(app, deps) {
           deploymentServiceName: deployment.serviceName,
           deploymentPackageName: deployment.packageName,
           deploymentPackageVersion: deployment.packageVersion,
+          deploymentRuntimeState: runtimeState,
+          targetNodeIds: getDeploymentTargets(deployment),
           ...(deployment.metadata || {})
         }
       });
@@ -1827,6 +2123,106 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     } finally {
       clearTimeout(timeoutId);
     }
+  }
+
+  async function requestBoard({
+    protocol = 'http:',
+    ip,
+    port,
+    path: requestPath,
+    method = 'GET',
+    headers = {},
+    body = null,
+    timeoutMs = 5000,
+    insecureTls = true
+  }) {
+    const normalizedIp = String(ip || '').trim();
+    if (!normalizedIp) throw new Error('board ip is required');
+    const normalizedPath = String(requestPath || '/').trim() || '/';
+    const normalizedProtocol = String(protocol || 'http:').trim().toLowerCase();
+    const isHttps = normalizedProtocol === 'https:';
+    const targetPort = Number(port || (isHttps ? 443 : 80));
+
+    const payload = body == null ? null : (typeof body === 'string' ? body : String(body));
+    const requestHeaders = { ...headers };
+    if (payload != null && requestHeaders['content-length'] == null && requestHeaders['Content-Length'] == null) {
+      requestHeaders['content-length'] = Buffer.byteLength(payload);
+    }
+
+    return await new Promise((resolve, reject) => {
+      const client = isHttps ? https : http;
+      const req = client.request({
+        hostname: normalizedIp,
+        port: targetPort,
+        path: normalizedPath,
+        method,
+        headers: requestHeaders,
+        rejectUnauthorized: isHttps ? !insecureTls : undefined,
+      }, (res) => {
+        let raw = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          raw += chunk;
+        });
+        res.on('end', () => {
+          const contentType = String(res.headers['content-type'] || '').toLowerCase();
+          let parsed = raw;
+          if (contentType.includes('application/json')) {
+            try {
+              parsed = raw.length ? JSON.parse(raw) : {};
+            } catch {
+              parsed = raw;
+            }
+          }
+          resolve({
+            ok: Number(res.statusCode || 0) >= 200 && Number(res.statusCode || 0) < 300,
+            status: Number(res.statusCode || 0),
+            headers: res.headers,
+            body: parsed,
+            raw
+          });
+        });
+      });
+
+      req.setTimeout(Math.max(250, Number(timeoutMs || 0)), () => {
+        req.destroy(new Error('request timed out'));
+      });
+
+      req.on('error', (error) => reject(error));
+
+      if (payload != null) {
+        req.write(payload);
+      }
+      req.end();
+    });
+  }
+
+  async function requestBoardJson(options) {
+    const response = await requestBoard(options);
+    if (!response.ok) {
+      const detail = typeof response.body === 'object'
+        ? (response.body?.error || response.body?.message || JSON.stringify(response.body))
+        : String(response.body || response.raw || `HTTP ${response.status}`);
+      throw new Error(`${options?.method || 'GET'} ${options?.path || '/'} failed: ${detail}`);
+    }
+    return response.body;
+  }
+
+  function resolveProvisionTarget(req, nodes = []) {
+    const requestedNodeId = String(req.params.nodeId || req.body?.nodeId || '').trim();
+    const requestedIp = String(req.body?.ip || req.query?.ip || '').trim();
+    const resolved = resolveManagedNode(requestedNodeId, requestedIp, nodes);
+    if (!resolved.boardIp) {
+      const err = new Error('target board ip not found');
+      err.httpStatus = 404;
+      throw err;
+    }
+    return {
+      resolved,
+      requestedNodeId,
+      requestedIp,
+      boardIp: resolved.boardIp
+    };
   }
 
   async function uploadFileToBoard(ip, remotePath, content, timeoutMs = 5000) {
@@ -2879,6 +3275,280 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     }
   });
 
+  app.get('/api/nodes/:nodeId/wifi/profiles', async (req, res) => {
+    try {
+      const nodes = await buildCurrentNodesWithTopology();
+      const { boardIp, requestedNodeId, requestedIp } = resolveProvisionTarget(req, nodes);
+      const profiles = await requestBoardJson({
+        protocol: 'http:',
+        ip: boardIp,
+        path: '/api/wifi/profiles',
+        method: 'GET',
+        timeoutMs: 5000
+      });
+
+      return res.json({
+        status: 'ok',
+        nodeId: requestedNodeId || requestedIp || boardIp,
+        ip: boardIp,
+        profiles
+      });
+    } catch (error) {
+      const status = Number(error?.httpStatus || 500);
+      return res.status(status).json({ error: error?.message || 'failed to fetch wifi profiles' });
+    }
+  });
+
+  app.delete('/api/nodes/:nodeId/wifi/profiles', async (req, res) => {
+    try {
+      const nodes = await buildCurrentNodesWithTopology();
+      const { boardIp, requestedNodeId, requestedIp } = resolveProvisionTarget(req, nodes);
+
+      const cleared = await requestBoard({
+        protocol: 'http:',
+        ip: boardIp,
+        path: '/api/wifi/profiles',
+        method: 'DELETE',
+        timeoutMs: 5000
+      });
+
+      if (!cleared.ok) {
+        return res.status(502).json({
+          error: 'board profile clear failed',
+          nodeId: requestedNodeId || requestedIp || boardIp,
+          ip: boardIp,
+          status: cleared.status,
+          response: cleared.body
+        });
+      }
+
+      return res.json({
+        status: 'ok',
+        nodeId: requestedNodeId || requestedIp || boardIp,
+        ip: boardIp,
+        result: cleared.body
+      });
+    } catch (error) {
+      const status = Number(error?.httpStatus || 500);
+      return res.status(status).json({ error: error?.message || 'failed to clear wifi profiles' });
+    }
+  });
+
+  app.post('/api/nodes/:nodeId/provision/wifi', async (req, res) => {
+    try {
+      const nodes = await buildCurrentNodesWithTopology();
+      const { boardIp, requestedNodeId, requestedIp } = resolveProvisionTarget(req, nodes);
+
+      const profilesRaw = Array.isArray(req.body?.profiles) ? req.body.profiles : [];
+      const profiles = profilesRaw
+        .map((item) => ({
+          ssid: String(item?.ssid || '').trim(),
+          password: String(item?.password || ''),
+          authMode: String(item?.authMode || '').trim().toLowerCase() || 'wpa2-psk',
+          eapMethod: String(item?.eapMethod || '').trim(),
+          identity: String(item?.identity || '').trim(),
+          username: String(item?.username || '').trim(),
+          enterprisePassword: String(item?.enterprisePassword || ''),
+          hostname: String(item?.hostname || '').trim(),
+          dhcp: item?.dhcp !== false,
+          staticIP: String(item?.staticIP || '').trim(),
+          gateway: String(item?.gateway || '').trim(),
+          subnet: String(item?.subnet || '').trim(),
+          dns1: String(item?.dns1 || '').trim(),
+          dns2: String(item?.dns2 || '').trim(),
+        }))
+        .filter((item) => item.ssid.length > 0)
+        .slice(0, 5);
+
+      if (profiles.length === 0) {
+        return res.status(400).json({ error: 'profiles array with at least one ssid is required' });
+      }
+
+      for (let i = 0; i < profiles.length; i += 1) {
+        const profile = profiles[i];
+        if (profile.authMode === 'wpa2-enterprise') {
+          const identity = profile.identity || profile.username;
+          const username = profile.username || profile.identity;
+          const enterprisePassword = profile.enterprisePassword || profile.password;
+          if (!identity || !username || !enterprisePassword) {
+            return res.status(400).json({
+              error: `enterprise profile at index ${i} requires identity/username/password`
+            });
+          }
+        }
+      }
+
+      const nodeName = String(req.body?.nodeName || '').trim();
+      const replaceExisting = req.body?.replaceExisting !== false;
+      const rebootAfter = req.body?.rebootAfter !== false;
+
+      const actions = [];
+      if (replaceExisting) {
+        const clearResult = await requestBoard({
+          protocol: 'http:',
+          ip: boardIp,
+          path: '/api/wifi/profiles',
+          method: 'DELETE',
+          timeoutMs: 5000
+        });
+        actions.push({ action: 'clearProfiles', ok: clearResult.ok, status: clearResult.status, response: clearResult.body });
+      }
+
+      for (let i = 0; i < profiles.length; i += 1) {
+        const profile = profiles[i];
+        const params = new URLSearchParams();
+        params.set('ssid', profile.ssid);
+        params.set('password', profile.password);
+        params.set('authMode', profile.authMode);
+        if (profile.eapMethod) params.set('eapMethod', profile.eapMethod);
+        if (profile.identity) params.set('identity', profile.identity);
+        if (profile.username) params.set('username', profile.username);
+        if (profile.enterprisePassword) params.set('enterprisePassword', profile.enterprisePassword);
+        if (profile.hostname) params.set('hostname', profile.hostname);
+        if (nodeName) params.set('nodeName', nodeName);
+        params.set('dhcp', profile.dhcp ? 'true' : 'false');
+        if (!profile.dhcp) {
+          if (profile.staticIP) params.set('staticIP', profile.staticIP);
+          if (profile.gateway) params.set('gateway', profile.gateway);
+          if (profile.subnet) params.set('subnet', profile.subnet);
+          if (profile.dns1) params.set('dns1', profile.dns1);
+          if (profile.dns2) params.set('dns2', profile.dns2);
+        }
+        params.set('reboot', rebootAfter && i === profiles.length - 1 ? 'true' : 'false');
+
+        const provisionResult = await requestBoard({
+          protocol: 'http:',
+          ip: boardIp,
+          path: '/api/wifi/provision',
+          method: 'POST',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: params.toString(),
+          timeoutMs: 8000
+        });
+
+        actions.push({
+          action: 'upsertProfile',
+          profileIndex: i,
+          ssid: profile.ssid,
+          ok: provisionResult.ok,
+          status: provisionResult.status,
+          response: provisionResult.body
+        });
+
+        if (!provisionResult.ok) {
+          return res.status(502).json({
+            error: 'board provisioning failed',
+            nodeId: requestedNodeId || requestedIp || boardIp,
+            ip: boardIp,
+            actions
+          });
+        }
+      }
+
+      return res.json({
+        status: 'ok',
+        nodeId: requestedNodeId || requestedIp || boardIp,
+        ip: boardIp,
+        profilesApplied: profiles.length,
+        rebootAfter,
+        actions
+      });
+    } catch (error) {
+      const status = Number(error?.httpStatus || 500);
+      return res.status(status).json({ error: error?.message || 'failed to provision wifi profiles' });
+    }
+  });
+
+  app.get('/api/nodes/:nodeId/tls/status', async (req, res) => {
+    try {
+      const nodes = await buildCurrentNodesWithTopology();
+      const { boardIp, requestedNodeId, requestedIp } = resolveProvisionTarget(req, nodes);
+      const strictTls = req.query?.strictTls === '1' || req.query?.strictTls === 'true';
+      const statusPayload = await requestBoardJson({
+        protocol: 'https:',
+        ip: boardIp,
+        path: '/tls/status',
+        method: 'GET',
+        insecureTls: !strictTls,
+        timeoutMs: 7000
+      });
+      return res.json({
+        status: 'ok',
+        nodeId: requestedNodeId || requestedIp || boardIp,
+        ip: boardIp,
+        tls: statusPayload
+      });
+    } catch (error) {
+      const status = Number(error?.httpStatus || 500);
+      return res.status(status).json({ error: error?.message || 'failed to read tls status' });
+    }
+  });
+
+  app.post('/api/nodes/:nodeId/tls/enroll/commit', async (req, res) => {
+    try {
+      const nodes = await buildCurrentNodesWithTopology();
+      const { boardIp, requestedNodeId, requestedIp } = resolveProvisionTarget(req, nodes);
+
+      const bootstrapSecret = String(req.body?.bootstrapSecret || '').trim();
+      const certPem = String(req.body?.certPem || '').trim();
+      const keyPem = String(req.body?.keyPem || '').trim();
+      const caPem = String(req.body?.caPem || '').trim();
+      const requireMtls = req.body?.requireMtls === true;
+      const strictTls = req.body?.strictTls === true;
+
+      if (!bootstrapSecret) {
+        return res.status(400).json({ error: 'bootstrapSecret is required' });
+      }
+      if (!certPem || !keyPem) {
+        return res.status(400).json({ error: 'certPem and keyPem are required' });
+      }
+
+      const startPayload = await requestBoardJson({
+        protocol: 'https:',
+        ip: boardIp,
+        path: '/tls/enroll/start',
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ bootstrapSecret }),
+        insecureTls: !strictTls,
+        timeoutMs: 8000
+      });
+
+      const sessionId = String(startPayload?.sessionId || '').trim();
+      if (!sessionId) {
+        return res.status(502).json({ error: 'missing sessionId from /tls/enroll/start', start: startPayload });
+      }
+
+      const commitPayload = await requestBoardJson({
+        protocol: 'https:',
+        ip: boardIp,
+        path: '/tls/enroll/commit',
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          certPem,
+          keyPem,
+          caPem,
+          requireMtls
+        }),
+        insecureTls: !strictTls,
+        timeoutMs: 10000
+      });
+
+      return res.json({
+        status: 'ok',
+        nodeId: requestedNodeId || requestedIp || boardIp,
+        ip: boardIp,
+        start: startPayload,
+        commit: commitPayload
+      });
+    } catch (error) {
+      const status = Number(error?.httpStatus || 500);
+      return res.status(status).json({ error: error?.message || 'failed to complete tls enrollment commit' });
+    }
+  });
+
   app.post('/api/pmachine/announce', (req, res) => {
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const ip = String(body.ip || req.ip || '').replace('::ffff:', '').trim();
@@ -3191,35 +3861,179 @@ export function registerTopologyRuntimeRoutes(app, deps) {
 
   app.get('/api/pmachine/deployments', (req, res) => {
     const deployments = Array.from(ffsDeploymentRegistry.values())
+      .map((deployment) => normalizeDeploymentRecord(deployment))
       .sort((a, b) => `${a.serviceName}:${a.targetNodeId || '*'}`.localeCompare(`${b.serviceName}:${b.targetNodeId || '*'}`));
     res.json({ deployments });
   });
 
-  app.post('/api/pmachine/deployments', (req, res) => {
-    const body = req.body && typeof req.body === 'object' ? req.body : {};
-    const serviceName = String(body.serviceName || '').trim();
-    const packageName = String(body.packageName || '').trim();
-    const packageVersion = String(body.packageVersion || 'latest').trim();
-    const targetNodeId = String(body.targetNodeId || '').trim() || null;
+  app.post('/api/pmachine/deployments', async (req, res) => {
+    try {
+      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const serviceName = String(body.serviceName || '').trim();
+      const packageName = String(body.packageName || '').trim();
+      const packageVersion = String(body.packageVersion || 'latest').trim();
+      const targetNodeIds = Array.from(new Set([
+        ...(Array.isArray(body.targetNodeIds) ? body.targetNodeIds : []),
+        ...(Array.isArray(body.targets) ? body.targets : []),
+        body.targetNodeId || body.nodeId || body.target || null
+      ]
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)));
 
-    if (!serviceName || !packageName) {
-      return res.status(400).json({ error: 'serviceName and packageName are required' });
+      if (!serviceName || !packageName) {
+        return res.status(400).json({ error: 'serviceName and packageName are required' });
+      }
+
+      const deploymentId = String(body.deploymentId || crypto.randomUUID()).trim();
+      const runtimeState = String(body.autoStart === false ? 'stopped' : (body.runtimeState || 'running')).trim().toLowerCase() || 'running';
+      const key = getDeploymentKey(serviceName, targetNodeIds[0] || '*', deploymentId);
+      const next = normalizeDeploymentRecord({
+        key,
+        deploymentId,
+        deploymentRef: String(body.deploymentRef || key).trim(),
+        displayName: String(body.displayName || body.deploymentName || packageName).trim() || packageName,
+        serviceName,
+        packageName,
+        packageVersion,
+        targetNodeId: targetNodeIds[0] || null,
+        targetNodeIds,
+        scope: String(body.scope || (targetNodeIds.length > 1 ? 'collective' : 'node')).trim().toLowerCase() || 'node',
+        runtimeState,
+        state: runtimeState,
+        createdAt: String(body.createdAt || new Date().toISOString()),
+        updatedAt: new Date().toISOString(),
+        metadata: body.metadata && typeof body.metadata === 'object' ? body.metadata : {},
+        instances: targetNodeIds.reduce((acc, nodeId) => {
+          const normalizedNodeId = String(nodeId || '').trim();
+          if (!normalizedNodeId) return acc;
+          acc[normalizedNodeId] = {
+            state: runtimeState,
+            startedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            stoppedAt: runtimeState === 'stopped' ? new Date().toISOString() : null
+          };
+          return acc;
+        }, {})
+      });
+
+      const currentDeployments = Array.from(ffsDeploymentRegistry.values());
+      const existingIdx = currentDeployments.findIndex((deployment) => String(deployment?.key || '') === key);
+      if (existingIdx >= 0) {
+        currentDeployments[existingIdx] = next;
+      } else {
+        currentDeployments.push(next);
+      }
+
+      const persisted = await persistDeploymentRecords({
+        deploymentIndexPath,
+        deploymentRegistry: ffsDeploymentRegistry,
+        deployments: currentDeployments
+      });
+
+      upsertDeploymentServiceInstances(serviceInstanceRegistry, next);
+
+      return res.json({
+        status: 'ok',
+        deployment: next,
+        aliases: buildDeploymentAliases(next),
+        persistedAt: persisted.updatedAt
+      });
+    } catch (error) {
+      return res.status(500).json({ error: error?.message || 'failed to deploy flow' });
     }
+  });
 
-    const key = `${normalizeServiceName(serviceName)}::${normalizeNodeId(targetNodeId || '*')}`;
-    const next = {
-      key,
-      deploymentId: String(body.deploymentId || crypto.randomUUID()).trim(),
-      displayName: String(body.displayName || body.deploymentName || packageName).trim() || packageName,
-      serviceName,
-      packageName,
-      packageVersion,
-      targetNodeId,
-      updatedAt: new Date().toISOString(),
-      metadata: body.metadata && typeof body.metadata === 'object' ? body.metadata : {}
-    };
-    ffsDeploymentRegistry.set(key, next);
-    res.json({ status: 'ok', deployment: next });
+  app.post('/api/pmachine/deployments/:deploymentRef/actions/:action', async (req, res) => {
+    try {
+      const deploymentRef = String(req.params.deploymentRef || '').trim();
+      const action = String(req.params.action || '').trim().toLowerCase();
+      const allowed = new Set(['start', 'pause', 'resume', 'stop']);
+      if (!allowed.has(action)) {
+        return res.status(400).json({ error: 'Unsupported action. Use start, pause, resume, or stop.' });
+      }
+
+      const matches = resolveDeploymentMatches(deploymentRef, ffsDeploymentRegistry);
+      if (matches.length === 0) {
+        return res.status(404).json({ error: 'deployment not found', deploymentRef });
+      }
+
+      const targetNodeId = String(req.body?.targetNodeId || req.query?.targetNodeId || '').trim();
+      const filteredMatches = targetNodeId
+        ? matches.filter((deployment) => getDeploymentTargets(deployment).map((value) => normalizeNodeId(value)).includes(normalizeNodeId(targetNodeId)))
+        : matches;
+      if (filteredMatches.length === 0) {
+        return res.status(404).json({ error: 'deployment target not found', deploymentRef, targetNodeId });
+      }
+
+      const nextState = action === 'resume' ? 'running' : action;
+      const updatedDeployments = Array.from(ffsDeploymentRegistry.values()).map((deployment) => {
+        if (!filteredMatches.some((match) => String(match?.key || '') === String(deployment?.key || ''))) {
+          return deployment;
+        }
+        return updateDeploymentRuntimeState(deployment, nextState);
+      });
+
+      const persisted = await persistDeploymentRecords({
+        deploymentIndexPath,
+        deploymentRegistry: ffsDeploymentRegistry,
+        deployments: updatedDeployments
+      });
+
+      for (const deployment of filteredMatches) {
+        upsertDeploymentServiceInstances(serviceInstanceRegistry, updateDeploymentRuntimeState(deployment, nextState));
+      }
+
+      return res.json({
+        status: 'ok',
+        action,
+        deploymentRef,
+        affected: filteredMatches.map((deployment) => ({
+          deploymentId: getDeploymentId(deployment),
+          key: deployment.key,
+          serviceName: deployment.serviceName,
+          targetNodeIds: getDeploymentTargets(deployment),
+          runtimeState: nextState
+        })),
+        persistedAt: persisted.updatedAt
+      });
+    } catch (error) {
+      return res.status(500).json({ error: error?.message || 'failed to update deployment state' });
+    }
+  });
+
+  app.delete('/api/pmachine/deployments/:deploymentRef', async (req, res) => {
+    try {
+      const deploymentRef = String(req.params.deploymentRef || '').trim();
+      const matches = resolveDeploymentMatches(deploymentRef, ffsDeploymentRegistry);
+      if (matches.length === 0) {
+        return res.status(404).json({ error: 'deployment not found', deploymentRef });
+      }
+
+      const remaining = Array.from(ffsDeploymentRegistry.values()).filter((deployment) => {
+        return !matches.some((match) => String(match?.key || '') === String(deployment?.key || ''));
+      });
+
+      const persisted = await persistDeploymentRecords({
+        deploymentIndexPath,
+        deploymentRegistry: ffsDeploymentRegistry,
+        deployments: remaining
+      });
+
+      return res.json({
+        status: 'ok',
+        action: 'removed',
+        deploymentRef,
+        removed: matches.map((deployment) => ({
+          deploymentId: getDeploymentId(deployment),
+          key: deployment.key,
+          serviceName: deployment.serviceName,
+          targetNodeIds: getDeploymentTargets(deployment),
+        })),
+        persistedAt: persisted.updatedAt
+      });
+    } catch (error) {
+      return res.status(500).json({ error: error?.message || 'failed to remove deployment' });
+    }
   });
 
   app.post('/api/nodes/:nodeId/deploy', async (req, res) => {

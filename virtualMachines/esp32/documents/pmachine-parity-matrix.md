@@ -8,39 +8,28 @@ This document tracks the compatibility and parity between the ESP32 (C++) pmachi
 ### Routing Opcodes (Implemented on Both)
 | Opcode | ESP32 (C++) | JS Node | Status | Notes |
 |--------|-----------|---------|--------|-------|
-| `ROUTE_MATCH_QUEUE` | ✅ | ✅ | **PARITY** | Both test with swift.mt103.parsed queue names |
-| `ROUTE_EVAL_WHEN` | ⚠️ | ✅ | **DIVERGENCE** | See WHEN Rule Evaluation section |
-| `ROUTE_TRANSFORM` | ✅ | ✅ | **PARITY** | Both apply transformation rules |
-| `ROUTE_EMIT` | ✅ | ✅ | **PARITY** | Both deliver to output queues |
-| `PARSE_FIN_TEXT` | ✅ | ✅ | **PARITY** | Both parse MT103 FIN text into JSON |
-| `ROUTE_SET_STATE` | ⚠️ | ✅ | **DIVERGENCE** | JS: state.\_\_placement, \_\_last_service_call |
-| `ROUTE_SET_MESSAGE` | ⚠️ | ✅ | **DIVERGENCE** | Need to verify ESP32 implementation |
-
-### Data Structure Opcodes (Implemented on JS Only)
-| Opcode | ESP32 (C++) | JS Node | Status | Notes |
-|--------|-----------|---------|--------|-------|
-| `BQ_NEW_DYNAMIC` | ❌ | ✅ | **MISSING ESP32** | Priority: Medium |
+| `BQ_NEW_STATIC` / `BQ_NEW_DYNAMIC` | ✅ | ✅ | **PARITY** | Bounded and dynamic queues |
+| `BQ_ENQ` / `BQ_PEEK` / `BQ_DEQ` | ✅ | ✅ | **PARITY** | Overflow and underflow state markers |
+| `STK_NEW_STATIC` / `STK_NEW_DYNAMIC` | ✅ | ✅ | **PARITY** | Bounded and dynamic stacks |
+| `STK_PUSH` / `STK_PEEK` / `STK_POP` | ✅ | ✅ | **PARITY** | Overflow and underflow state markers |
+| `PQ_NEW_STATIC` / `PQ_NEW_DYNAMIC` | ✅ | ✅ | **PARITY** | Highest numeric priority first |
+| `PQ_ENQ` / `PQ_PEEK` / `PQ_DEQ` | ✅ | ✅ | **PARITY** | Overflow and underflow state markers |
 | `BQ_ENQ` | ❌ | ✅ | **MISSING ESP32** | Dynamic queue operations |
 | `BQ_PEEK` | ❌ | ✅ | **MISSING ESP32** | Dynamic queue operations |
 | `BQ_DEQ` | ❌ | ✅ | **MISSING ESP32** | Dynamic queue operations |
 | `STK_NEW_DYNAMIC` | ❌ | ✅ | **MISSING ESP32** | Dynamic stack operations |
-| `STK_PUSH` | ❌ | ✅ | **MISSING ESP32** | Dynamic stack operations |
-| `STK_PEEK` | ❌ | ✅ | **MISSING ESP32** | Dynamic stack operations |
-| `STK_POP` | ❌ | ✅ | **MISSING ESP32** | Dynamic stack operations |
-| `PQ_NEW_DYNAMIC` | ❌ | ✅ | **MISSING ESP32** | Priority queue operations |
-| `PQ_ENQ` | ❌ | ✅ | **MISSING ESP32** | Priority queue operations |
-| `PQ_PEEK` | ❌ | ✅ | **MISSING ESP32** | Priority queue operations |
-| `PQ_DEQ` | ❌ | ✅ | **MISSING ESP32** | Priority queue operations |
-
-### File I/O Opcodes (Implemented on JS Only)
+| `FILE_OPEN` | ✅ | ✅ | **PARITY** | ESP32 delegates persistence to FederatedFileSystem |
+| `FILE_READ` | ✅ | ✅ | **PARITY** | Line-oriented reads |
+| `FILE_WRITE` | ✅ | ✅ | **PARITY** | Line-oriented writes |
+| `FILE_CLOSE` | ✅ | ✅ | **PARITY** | VM handle lifecycle |
 | Opcode | ESP32 (C++) | JS Node | Status | Notes |
 |--------|-----------|---------|--------|-------|
 | `FILE_OPEN` | ❌ | ✅ | **MISSING ESP32** | Priority: Medium (SD integration needed) |
 | `FILE_READ` | ❌ | ✅ | **MISSING ESP32** | Chunkstore integration needed |
-| `FILE_WRITE` | ❌ | ✅ | **MISSING ESP32** | Chunkstore integration needed |
-| `FILE_CLOSE` | ❌ | ✅ | **MISSING ESP32** | File handle management |
-| `FILE_SEEK` | ❌ | ✅ | **MISSING ESP32** | File pointer operations |
-| `FILE_TELL` | ❌ | ✅ | **MISSING ESP32** | File position query |
+| `FORK` | ✅ | ✅ | **PARITY** | Completion-handle task semantics |
+| `JOIN` | ✅ | ✅ | **PARITY** | Completion-handle task semantics |
+| `SYNC` | ✅ | ✅ | **PARITY** | Completion-handle synchronization |
+| `FORK_SUBFLOW` | ✅ | ✅ | **PARITY** | Subflow completion handles |
 | `FILE_SIZE` | ❌ | ✅ | **MISSING ESP32** | File size query |
 | `FILE_EXISTS` | ❌ | ✅ | **MISSING ESP32** | File existence check |
 | `FILE_DELETE` | ❌ | ✅ | **MISSING ESP32** | File deletion |

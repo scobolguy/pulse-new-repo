@@ -37,6 +37,51 @@
       "recordedAt": "2026-08-02T16:13:46.910Z",
       "enabled": true,
       "appliedAt": "2026-08-02T16:13:51.535Z"
+    },
+    {
+      "interactionId": "1785704490756-8k77wo",
+      "message": "create a daemon that runs in pascalish",
+      "expected": "Create a source program in a language called pascalish.",
+      "previousIntentId": "ollama-fallback",
+      "recordedAt": "2026-08-02T21:02:56.598Z",
+      "enabled": true,
+      "appliedAt": "2026-08-03T12:13:36.258Z"
+    },
+    {
+      "interactionId": "1785759103369-6ze0xh",
+      "message": "what day is this friday",
+      "expected": "I expected to see the date on the first friday in the future",
+      "previousIntentId": "time",
+      "recordedAt": "2026-08-03T12:13:32.129Z",
+      "enabled": true,
+      "appliedAt": "2026-08-03T12:13:36.258Z"
+    },
+    {
+      "interactionId": "1785759359561-pva38z",
+      "message": "show me the calendar for this month",
+      "expected": "determine the current date, take out the month and year and show a calendar for it",
+      "previousIntentId": "ollama-fallback",
+      "recordedAt": "2026-08-03T12:17:02.711Z",
+      "enabled": true,
+      "appliedAt": "2026-08-03T12:24:43.241Z"
+    },
+    {
+      "interactionId": "1785759655598-9k9hke",
+      "message": "create an mt940 to camt mapper and create a new service to translate mt940s to camt message.",
+      "expected": "make the mapper and then create the service for it",
+      "previousIntentId": "ollama-fallback",
+      "recordedAt": "2026-08-03T12:21:47.328Z",
+      "enabled": true,
+      "appliedAt": "2026-08-03T12:24:43.241Z"
+    },
+    {
+      "interactionId": "1785765322048-irnnco",
+      "message": "When is August 6th?",
+      "expected": "If you know the current date then you should be able figure out the when another date is",
+      "previousIntentId": "ollama-fallback",
+      "recordedAt": "2026-08-03T13:57:16.989Z",
+      "enabled": true,
+      "appliedAt": "2026-08-03T13:57:19.601Z"
     }
   ]
 }

@@ -265,6 +265,37 @@
       "sourceTypeId": "pacs008_canonical",
       "targetTypeId": "swiftmt700_canonical",
       "updatedAt": "2026-07-21T14:15:35.604Z"
+    },
+    {
+      "artifactHashes": {
+        "maplHash": "93c162849d80ae34eeac16b8201f4d269a1360eb68924e87346eeaf21323e496",
+        "pascalishHash": "04f7d46df0f79fe0d311a04b0d9b37924bab0d12b6592efc99cb76bf76370528",
+        "wflHash": "5539edaa81dfcee9b21c9f1b7c9f6fe9bf595b2475e72dec4cebe951c0cd4a23"
+      },
+      "artifactPaths": {
+        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\6daaa4f2703c07c8db30e0bc7fe896131b5ac4f46cee205b59f36afb0d7a6ce9\\mt940_to_camt053.intent.json",
+        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\6daaa4f2703c07c8db30e0bc7fe896131b5ac4f46cee205b59f36afb0d7a6ce9\\mt940_to_camt053.manifest.json",
+        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\6daaa4f2703c07c8db30e0bc7fe896131b5ac4f46cee205b59f36afb0d7a6ce9\\mt940_to_camt053.mapl",
+        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\6daaa4f2703c07c8db30e0bc7fe896131b5ac4f46cee205b59f36afb0d7a6ce9\\mt940_to_camt053.pas",
+        "pcode": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\6daaa4f2703c07c8db30e0bc7fe896131b5ac4f46cee205b59f36afb0d7a6ce9\\mt940_to_camt053.pcode",
+        "programMap": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\6daaa4f2703c07c8db30e0bc7fe896131b5ac4f46cee205b59f36afb0d7a6ce9\\mt940_to_camt053.program.json",
+        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\6daaa4f2703c07c8db30e0bc7fe896131b5ac4f46cee205b59f36afb0d7a6ce9\\mt940_to_camt053.wfl"
+      },
+      "createdAt": "2026-08-02T22:29:38.414Z",
+      "deployed": false,
+      "execution": {
+        "clusterId": "esp32_edge_pool",
+        "maxWorkers": 1,
+        "mode": "sequential"
+      },
+      "generatorVersion": "mapper-authoring-deterministic-v1",
+      "intentHash": "6daaa4f2703c07c8db30e0bc7fe896131b5ac4f46cee205b59f36afb0d7a6ce9",
+      "intentKind": "map-message-type",
+      "manifestHash": "6a9c7cf44be297b47e2cb36d186988d487df2076ddd59ceab03e032f24011ab3",
+      "mapId": "mt940_to_camt053",
+      "sourceTypeId": "swift-mt940",
+      "targetTypeId": "camt",
+      "updatedAt": "2026-08-03T03:11:00.652Z"
     }
   ],
   "messageTypes": [
@@ -366,6 +397,24 @@
       "label": "swiftmt700_canonical",
       "parentTypeId": null,
       "updatedAt": "2026-07-21T14:15:35.604Z"
+    },
+    {
+      "categoryId": "legacyswift",
+      "id": "swift-mt940",
+      "isIso": false,
+      "kind": "message",
+      "label": "SWIFT FIN Message - MT940 Customer Statement Message",
+      "parentTypeId": "swift-mt9xx",
+      "updatedAt": "2026-08-03T03:11:00.652Z"
+    },
+    {
+      "categoryId": null,
+      "id": "camt",
+      "isIso": true,
+      "kind": "message",
+      "label": "ISO 20022 - Cash Management (camt)",
+      "parentTypeId": null,
+      "updatedAt": "2026-08-03T03:11:00.652Z"
     }
   ],
   "schemas": [
@@ -438,8 +487,20 @@
       "transport": "unknown",
       "typeId": "swiftmt700_canonical",
       "updatedAt": "2026-07-21T14:15:35.604Z"
+    },
+    {
+      "schemaRefs": [],
+      "transport": "unknown",
+      "typeId": "swift-mt940",
+      "updatedAt": "2026-08-03T03:11:00.652Z"
+    },
+    {
+      "schemaRefs": [],
+      "transport": "unknown",
+      "typeId": "camt",
+      "updatedAt": "2026-08-03T03:11:00.652Z"
     }
   ],
-  "updatedAt": "2026-07-21T14:15:35.604Z",
+  "updatedAt": "2026-08-03T03:11:00.652Z",
   "version": 1
 }

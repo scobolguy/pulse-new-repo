@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "generatedAt": "2026-08-03T02:53:05.674Z",
+  "serviceId": "mapl-mt940_to_camt053",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "mapl-mt940_to_camt053",
+    "refreshMs": null
+  },
+  "executionModel": "mapl-op-map-return",
+  "sourceLanguage": "mapl",
+  "globals": [
+    "mappedPayload"
+  ],
+  "entryMapId": "mt940_to_camt053",
+  "entries": [
+    {
+      "kind": "mapper",
+      "id": "mt940_to_camt053",
+      "sourceTypeId": "SWIFT_MT940",
+      "targetTypeId": "CAMT",
+      "items": [
+        {
+          "sourcePath": "source.block4.field20",
+          "targetPath": "target.Document.BkToCstmrStmt.GrpHdr.MsgId",
+          "conversionRule": "OUTPUT := SRC;"
+        },
+        {
+          "sourcePath": "source.block4.field28C",
+          "targetPath": "target.Document.BkToCstmrStmt.Stmt.Id",
+          "conversionRule": "OUTPUT := SRC;"
+        },
+        {
+          "sourcePath": "source.block4.field25",
+          "targetPath": "target.Document.BkToCstmrStmt.Stmt.Acct.Id.Othr.Id",
+          "conversionRule": "OUTPUT := SRC;"
+        },
+        {
+          "sourcePath": "source.block4.field62FAmount",
+          "targetPath": "target.Document.BkToCstmrStmt.Stmt.Bal.Amt",
+          "conversionRule": "OUTPUT := SRC;"
+        },
+        {
+          "sourcePath": "source.block4.field61Amount",
+          "targetPath": "target.Document.BkToCstmrStmt.Stmt.Ntry.Amt",
+          "conversionRule": "OUTPUT := SRC;"
+        }
+      ],
+      "maplIr": [
+        {
+          "type": "Assign",
+          "targetPath": "target.Document.BkToCstmrStmt.GrpHdr.MsgId",
+          "sourcePath": "source.block4.field20"
+        },
+        {
+          "type": "Assign",
+          "targetPath": "target.Document.BkToCstmrStmt.Stmt.Id",
+          "sourcePath": "source.block4.field28C"
+        },
+        {
+          "type": "Assign",
+          "targetPath": "target.Document.BkToCstmrStmt.Stmt.Acct.Id.Othr.Id",
+          "sourcePath": "source.block4.field25"
+        },
+        {
+          "type": "Assign",
+          "targetPath": "target.Document.BkToCstmrStmt.Stmt.Bal.Amt",
+          "sourcePath": "source.block4.field62FAmount"
+        },
+        {
+          "type": "Assign",
+          "targetPath": "target.Document.BkToCstmrStmt.Stmt.Ntry.Amt",
+          "sourcePath": "source.block4.field61Amount"
+        },
+        {
+          "type": "Validate",
+          "expression": "source.block4.field20<>''"
+        }
+      ]
+    }
+  ],
+  "compatibility": [
+    {
+      "mapId": "mt940_to_camt053",
+      "executableItems": 5,
+      "irOnly": [
+        {
+          "type": "Validate",
+          "reason": "Construct is preserved in MAPL IR but is not executable by the current OP_MAP runtime."
+        }
+      ]
+    }
+  ],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "e935d0f9bb987fe1c3f792e76b27d0397a43801cb93a1d57db5dc34de4728bd7",
+    "signedAt": "2026-08-03T02:53:05.675Z",
+    "pcodeLength": 117,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

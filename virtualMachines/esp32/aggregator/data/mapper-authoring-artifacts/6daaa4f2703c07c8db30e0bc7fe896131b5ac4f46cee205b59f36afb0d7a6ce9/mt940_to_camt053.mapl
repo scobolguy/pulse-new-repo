@@ -1,0 +1,13 @@
+map mt940_to_camt053 from SWIFT_MT940 to CAMT;
+  // XML ingress contract: source payload is ISO XML parsed into source tree
+  // XML egress contract: target tree must be serialized back to ISO XML
+  target.Document.BkToCstmrStmt.GrpHdr.MsgId := source.block4.field20;
+  target.Document.BkToCstmrStmt.GrpHdr.CreDtTm := source.meta.createdAt;
+  target.Document.BkToCstmrStmt.Stmt.Id := source.block4.field20;
+  target.Document.BkToCstmrStmt.Stmt.ElctrncSeqNb := source.block4.field28CStatementNumber;
+  target.Document.BkToCstmrStmt.Stmt.LglSeqNb := source.block4.field28CSequenceNumber;
+  target.Document.BkToCstmrStmt.Stmt.Acct.Id.Othr.Id := source.block4.field25;
+  target.Document.BkToCstmrStmt.Stmt.Bal := source.block4.fieldBalances;
+  target.Document.BkToCstmrStmt.Stmt.Ntry := source.block4.fieldEntries;
+  validate source.block4.field20 <> '';
+end;

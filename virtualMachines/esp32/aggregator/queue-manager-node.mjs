@@ -35,8 +35,11 @@ const heartbeatMs = Number(getArg('heartbeat-ms', '5000'));
 const claimLeaseMsDefault = Number(getArg('claim-lease-ms', '30000'));
 const claimReapMs = Number(getArg('claim-reap-ms', '1000'));
 const queuePersistenceEnabled = readEnvBoolean('PULSE_QUEUE_PERSISTENCE', ['1'], false);
+const defaultOperationalDataRoot = process.env.PULSE_OPERATIONAL_DATA_ROOT
+  || (process.platform === 'win32' ? 'c:/dev/pulse-operational-data' : '/opt/pulse/operational-data');
+const defaultQueueDataRoot = path.resolve(defaultOperationalDataRoot, 'queue-data');
 const persistPath = queuePersistenceEnabled
-  ? readEnvString('PULSE_QUEUE_DATA_ROOT', 'C:\\pulse-new-repo-data\\queue-data')
+  ? readEnvString('PULSE_QUEUE_DATA_ROOT', defaultQueueDataRoot)
   : null;
 
 const app = express();

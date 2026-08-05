@@ -18,6 +18,8 @@ What this command does:
 4. Verifies frontend status file reports READY
 5. Exits with non-zero code if either verification fails
 
+The frontend FSM also starts Caddy after Vite is ready and verifies its admin endpoint before reporting READY. Set `FRONTEND_FSM_CADDY_AUTOSTART=false` to opt out.
+
 ## Required startup order
 
 Always start backend first, then frontend.

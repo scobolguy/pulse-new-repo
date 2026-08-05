@@ -1,0 +1,53 @@
+{
+  "artifactHashes": {
+    "maplHash": "3530f30cd390a23fa1886578dc53d0af1623fdea7f0742de2d8a5b7f60d35a7a",
+    "pascalishHash": "18e7a3d5fef08607c7da93179847bec9bfda07bda05816fa9e5f944a2b78516d",
+    "wflHash": "5539edaa81dfcee9b21c9f1b7c9f6fe9bf595b2475e72dec4cebe951c0cd4a23"
+  },
+  "createdAt": "2026-08-03T02:53:05.675Z",
+  "determinismContract": {
+    "clusterId": "esp32_edge_pool",
+    "concurrencyMode": "sequential",
+    "invariant": "Same normalized intent and versions produce byte-identical artifacts",
+    "maxWorkers": 1
+  },
+  "generatorVersion": "mapper-authoring-deterministic-v1",
+  "intentHash": "6e3e2a3a55c00aaf7c0b8a60912b6a617a35bcec5b8e9c353c258c99ce2eb08e",
+  "intentSchemaVersion": "intent-schema-v1",
+  "librarianContracts": {
+    "source": {
+      "id": "swift-mt940",
+      "isIso": false,
+      "kind": "message",
+      "label": "SWIFT FIN Message - MT940 Customer Statement Message"
+    },
+    "target": {
+      "id": "camt",
+      "isIso": true,
+      "kind": "message",
+      "label": "ISO 20022 - Cash Management (camt)"
+    }
+  },
+  "manifestHash": "91712919734cd6ff68721580e7f68b0e6ffad5b425b5458c0e606af1a781d2eb",
+  "normalizedIntent": {
+    "description": "Deterministic SWIFT MT940 to ISO 20022 CAMT.053 statement mapping",
+    "execution": {
+      "clusterId": "esp32_edge_pool",
+      "maxWorkers": 1,
+      "mode": "sequential"
+    },
+    "expectedTransactionCount": null,
+    "generatorVersion": "mapper-authoring-deterministic-v1",
+    "inputQueue": "swift-mt940.inbound",
+    "intentKind": "map-message-type",
+    "mapId": "mt940_to_camt053",
+    "outputQueue": "camt.outbound",
+    "schemaVersion": "intent-schema-v1",
+    "sourceTypeId": "swift-mt940",
+    "targetTypeId": "camt",
+    "templateVersion": "templates-v1",
+    "typeAliasVersion": "type-alias-v1"
+  },
+  "templateVersion": "templates-v1",
+  "typeAliasVersion": "type-alias-v1"
+}

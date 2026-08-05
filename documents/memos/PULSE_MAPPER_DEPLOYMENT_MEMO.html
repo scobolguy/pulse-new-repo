@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Creating and Deploying Data Mappers with Pulse</title>
+  <style>
+    :root { --ink: #182536; --muted: #536273; --rule: #c9d3df; --accent: #126e82; --wash: #f2f6f8; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background: white; font: 10.5pt/1.48 Georgia, 'Times New Roman', serif; }
+    article { max-width: 7.35in; margin: 0 auto; }
+    h1, h2, h3 { color: #123451; font-family: 'Segoe UI', Calibri, sans-serif; break-after: avoid; letter-spacing: 0; }
+    h1 { margin: 0 0 12pt; padding-bottom: 9pt; border-bottom: 3px solid var(--accent); font-size: 25pt; line-height: 1.12; }
+    h2 { margin: 22pt 0 7pt; font-size: 16pt; line-height: 1.2; }
+    h3 { margin: 16pt 0 6pt; font-size: 12.5pt; }
+    p { margin: 0 0 9pt; }
+    li { margin: 2pt 0; }
+    blockquote { margin: 12pt 0; padding: 8pt 12pt; border-left: 4px solid var(--accent); background: var(--wash); color: #2d4053; }
+    blockquote p { margin: 0; }
+    code { font: 9pt Consolas, 'Courier New', monospace; }
+    p code, li code, td code { padding: 1pt 3pt; border: 1px solid #dce3e8; background: #f7f9fa; border-radius: 2px; }
+    pre { margin: 10pt 0 12pt; padding: 10pt; overflow-wrap: anywhere; white-space: pre-wrap; border: 1px solid var(--rule); background: #f7f9fa; break-inside: avoid; }
+    table { width: 100%; margin: 10pt 0 14pt; border-collapse: collapse; font-size: 9.5pt; break-inside: avoid; }
+    th, td { padding: 6pt 7pt; border: 1px solid var(--rule); text-align: left; vertical-align: top; }
+    th { color: #123451; background: #eaf1f4; font-family: 'Segoe UI', Calibri, sans-serif; }
+    img { display: block; width: 100%; max-height: 6.35in; margin: 13pt auto 5pt; object-fit: contain; object-position: left top; border: 1px solid var(--rule); }
+    p:has(> img) { margin-bottom: 0; break-after: avoid; }
+    p:has(> img) + p { color: var(--muted); font-size: 9pt; line-height: 1.35; break-before: avoid; }
+    .mermaid { display: flex; justify-content: center; margin: 12pt auto 15pt; break-inside: avoid; }
+    .mermaid svg { max-width: 100%; max-height: 3in; }
+    hr { margin: 20pt 0; border: 0; border-top: 1px solid var(--rule); }
+    a { color: #075d70; text-decoration: none; }
+    @page { size: Letter; margin: 0.7in 0.65in 0.68in; }
+    @media print {
+      article { max-width: none; }
+      h2 { break-before: auto; }
+      tr, img, blockquote { break-inside: avoid; }
+    }
+  </style>
+  <script src="file:///C:/dev/pulse-new-repo/virtualMachines/esp32/aggregator/node_modules/mermaid/dist/mermaid.min.js"></script>
+</head>
+<body>
+  <article><h1>Creating and Deploying Data Mappers with Pulse</h1>
+<p><strong>Draft technical memo</strong><br><strong>Date:</strong> August 3, 2026<br><strong>Audience:</strong> Solution architects, developers, integration specialists, and technical managers</p>
+<h2>Purpose</h2>
+<p>Pulse can be used to define how one message format becomes another, test that definition with real or sample data, and make the finished mapper available to other parts of a system. A mapper can be offered through a focused HTTP service, or it can be included as a step inside a larger transformation flow.</p>
+<p>This memo explains both approaches. It uses a common payment example: converting a SWIFT MT103 message into a PACS message. The same method can be applied to other business documents, device messages, or internal data structures.</p>
+<blockquote>
+<p><strong>Reading note:</strong> In Pulse, a <em>map</em> is the saved transformation definition. A <em>mapper</em> is the software that applies that definition to a message.</p>
+</blockquote>
+<h2>1. The Mapper Lifecycle</h2>
+<p>A mapper moves through five practical stages:</p>
+<ol>
+<li>Discover the source and target schemas.</li>
+<li>Create field-to-field rules.</li>
+<li>Add conversion logic where a direct move is not enough.</li>
+<li>Run the map against a test message.</li>
+<li>Publish or bind the map for runtime use.</li>
+</ol>
+<div class="mermaid">graph LR
+    A[Select schemas] --&gt; B[Create map]
+    B --&gt; C[Add rules]
+    C --&gt; D[Test output]
+    D --&gt; E{Deployment choice}
+    E --&gt; F[Mapper HTTP service]
+    E --&gt; G[Transformation flow]</div><p>Pulse separates the map from its runtime placement. This is useful because the same map can be tested centrally, called through an API, or attached to a distributed flow without rewriting its business rules.</p>
+<h2>2. Select the Source and Target Schemas</h2>
+<p>The Data Librarian provides the contracts used by the mapper. A contract describes the structure of a message, including its fields, nested groups, data types, and lifecycle status.</p>
+<p>In the mapper screen, the author selects a source schema and a destination schema. For the example in this memo, the source is a SWIFT MT103 structure and the destination is a PACS structure.</p>
+<p><img src="assets/01-mapper-schema-selection.png" alt="The Data Mapper with SWIFT MT103 selected as the source and PACS.008 selected as the destination.">
+<strong>Figure 1. Selecting the source and destination schemas in the Data Mapper.</strong> The source tree appears on the left and the destination tree appears on the right. The selected schemas become part of the saved map.</p>
+<p>The schema choice is more than a label. Pulse stores schema paths and shape information with the map. Before a saved map runs, the runtime can detect whether a source or target schema has changed since the map was saved. This helps prevent an older map from silently processing a newer message structure.</p>
+<h2>3. Build the Mapping Rules</h2>
+<p>The Data Mapper presents the source and destination structures side by side. An author can drag a source field to a compatible destination field. Each link becomes a mapping rule.</p>
+<p>A rule records at least:</p>
+<ul>
+<li>the source field path;</li>
+<li>the destination field path;</li>
+<li>whether the rule maps a leaf or a branch;</li>
+<li>the source and destination value types; and</li>
+<li>an optional conversion routine.</li>
+</ul>
+<p><img src="assets/02-mapper-field-rules.png" alt="The mapper rules table showing source paths, destination paths, value types, and conversion controls.">
+<strong>Figure 2. Building field rules in the mapper.</strong> The centre area shows the links already created. Search and mapped-only controls help when schemas contain many fields.</p>
+<p>For branches with the same shape, Pulse can generate a group of leaf-to-leaf rules through shape-aware mapping. The system first checks that the selected branches are structurally equivalent. It then adds rules that do not already exist.</p>
+<p>Direct moves do not require code when the source and destination types are compatible. A direct move is appropriate for values such as an identifier copied from one text field to another text field.</p>
+<h2>4. Add Conversion Logic</h2>
+<p>Some fields need more than a direct copy. A source value may need trimming, case conversion, formatting, calculation, or another controlled operation. Pulse allows a rule to include a small Pascalish/PL0 conversion routine.</p>
+<p>For example:</p>
+<pre><code class="language-text">output := trim(src);</code></pre><p>The runtime passes the source value in <code>src</code>. The routine places the final value in <code>output</code>. This convention keeps each rule focused and makes the transformation easier to inspect.</p>
+<p><img src="assets/03-mapper-conversion-rule.png" alt="A selected mapping rule with its Pascalish conversion routine.">
+<strong>Figure 3. Adding a conversion routine to a field rule.</strong> Pulse validates the routine before the map is saved or run.</p>
+<p>If a source and destination field have different known types, Pulse requires a conversion routine instead of guessing. This is a useful control: an author must make the intended conversion explicit.</p>
+<h2>5. Save and Test the Map</h2>
+<p>Pulse saves the mapper definition as a <code>.map</code> artifact. The artifact contains its identity, schema references, shape signatures, rules, timestamps, and optional submaps.</p>
+<p>The mapper can be run with a JSON payload or a stored test case. During a test, Pulse:</p>
+<ol>
+<li>reads the selected map;</li>
+<li>checks the saved schema timestamps;</li>
+<li>reads each source value;</li>
+<li>runs any conversion routine;</li>
+<li>writes the value to the destination path; and</li>
+<li>returns the output with diagnostics.</li>
+</ol>
+<p><img src="assets/04-mapper-test-result.png" alt="The mapper test output preview with transformed PACS data and diagnostics.">
+<strong>Figure 4. Running a saved map and reviewing the transformed output.</strong> Diagnostics identify missing source fields and confirm when a conversion routine was applied.</p>
+<p>A successful test should confirm more than an HTTP status. The author should compare the output structure with the destination contract and check required business values, field formats, and any warnings.</p>
+<h2>6. Deployment Option A: Mapper as a Service</h2>
+<p>The first deployment option is to expose mapping through the dedicated Data Mapper service. By default, this service listens on port <code>4200</code>. Applications can also reach it through the main Pulse backend proxy, which keeps callers on the common secure application address.</p>
+<p>A client runs a saved map with:</p>
+<pre><code class="language-http">POST /api/mapper/maps/{mapId}/run
+Content-Type: application/json
+
+{
+  &quot;payload&quot;: {
+    &quot;sourceField&quot;: &quot;source value&quot;
+  }
+}</code></pre><p>The response contains the original input, transformed output, and diagnostics.</p>
+<pre><code class="language-json">{
+  &quot;mapId&quot;: &quot;mt103_to_pacs&quot;,
+  &quot;input&quot;: {},
+  &quot;output&quot;: {},
+  &quot;diagnostics&quot;: []
+}</code></pre><p><img src="assets/05-mapper-service-call.png" alt="The secure mapper API response listing available map artifacts.">
+<strong>Figure 5. Calling the mapper through the secure Pulse API.</strong> The service model is useful when another application needs a clear request-and-response contract.</p>
+<p>This option works well when:</p>
+<ul>
+<li>several applications need the same mapper;</li>
+<li>clients already use HTTP APIs;</li>
+<li>the mapper should be managed and scaled separately; or</li>
+<li>a team wants a simple integration boundary.</li>
+</ul>
+<p>The service should be monitored like any other production API. Health checks, map version control, request limits, authentication, logging, and rollback procedures remain important.</p>
+<h2>7. Deployment Option B: Mapper in a Transformation Engine</h2>
+<p>The second option is to place the mapper inside a larger Pulse flow. In the Flow Designer, a Mapper node identifies an input schema, an output schema, and a ruleset. A transform edge passes the mapped result to the next node.</p>
+<p>A typical payment flow may look like this:</p>
+<div class="mermaid">graph LR
+    Q1[MT103 input queue] --&gt; M[MT103 to PACS mapper]
+    M --&gt; V[Validation or decision]
+    V --&gt; Q2[PACS output queue]</div><p><img src="assets/06-flow-mapper-node.png" alt="A Flow Designer Mapper node bound to SWIFT MT103, PACS.008, and the recommended ruleset.">
+<strong>Figure 6. A Mapper node inside a larger transformation flow.</strong> The node refers to mapping logic while the surrounding flow controls queues, services, decisions, and completion paths.</p>
+<p>Pulse can publish a deployment package containing several related artifacts:</p>
+<ul>
+<li>an intent document describing the requested mapper;</li>
+<li>a manifest with identity and integrity information;</li>
+<li>MAPL mapping source;</li>
+<li>Pascalish routing or service source; and</li>
+<li>WFL deployment and queue bindings.</li>
+</ul>
+<p>A WFL artifact can describe a service, its input and output queues, a target cluster, and queue binding modes. The deployment planner then binds a Mapper node to a target that provides the <code>mapper-engine</code> capability.</p>
+<p>This option works well when:</p>
+<ul>
+<li>mapping is one stage in a longer message flow;</li>
+<li>queues provide buffering, retry, or parallel processing;</li>
+<li>placement near the data source is valuable;</li>
+<li>the flow includes validation, routing, gateways, or state recording; or</li>
+<li>the workload should run across compatible JavaScript or edge pmachine nodes.</li>
+</ul>
+<h3>Current Deployment Boundary</h3>
+<p>Pulse records published mapper deployments and can mark mapper inventory entries as deployed. The current deployment records use the mode <code>artifact-publish-only</code>. This means that the required artifacts have been generated and registered. It should not be read as proof that every target runtime has already loaded and started the mapper.</p>
+<p>Runtime readiness should be confirmed separately by checking target bindings, service or worker health, queue status, and a test message sent through the deployed path.</p>
+<h2>8. Choosing a Deployment Model</h2>
+<table>
+<thead>
+<tr>
+<th>Question</th>
+<th>Mapper service</th>
+<th>Transformation engine</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>How is it called?</td>
+<td>HTTP request</td>
+<td>Flow, queue, or service step</td>
+</tr>
+<tr>
+<td>Best fit</td>
+<td>Direct application integration</td>
+<td>Multi-stage processing</td>
+</tr>
+<tr>
+<td>Scaling unit</td>
+<td>Mapper service process</td>
+<td>Bound workers or runtime nodes</td>
+</tr>
+<tr>
+<td>Flow controls</td>
+<td>Managed by the caller</td>
+<td>Queues, retries, routes, and state</td>
+</tr>
+<tr>
+<td>Placement</td>
+<td>Central service host</td>
+<td>Compatible flow targets</td>
+</tr>
+<tr>
+<td>Validation</td>
+<td>API result and diagnostics</td>
+<td>End-to-end flow and queue evidence</td>
+</tr>
+</tbody></table>
+<p>The two approaches are not mutually exclusive. A team may first publish a stable map through the service API, then reuse the same business mapping in a flow that adds routing, workload distribution, and operational controls.</p>
+<h2>9. Recommended Delivery Process</h2>
+<p>For a production mapper, use a controlled promotion path:</p>
+<ol>
+<li>Confirm the active source and destination schemas.</li>
+<li>Create and review mapping rules.</li>
+<li>Add explicit conversion routines for type changes.</li>
+<li>Test normal, missing-field, and invalid-value cases.</li>
+<li>Save and version the map artifact.</li>
+<li>Choose the service or transformation-flow model.</li>
+<li>Publish the deployment artifacts.</li>
+<li>Confirm the target is bound and healthy.</li>
+<li>Send a known test message through the deployed path.</li>
+<li>Record output, diagnostics, and rollback information.</li>
+</ol>
+<p>This process keeps authoring, deployment, and runtime evidence separate. That separation makes approvals clearer and reduces the chance of treating a generated artifact as a running production service.</p>
+<h2>10. Conclusion</h2>
+<p>Pulse provides a practical path from schema discovery to a tested mapper. The Data Librarian supplies the contracts, the Data Mapper captures and tests the rules, and the runtime layer offers two ways to use the result.</p>
+<p>A standalone mapper service gives applications a direct API. A mapper inside a transformation engine becomes part of a broader flow with queues, routing, services, and distributed runtime placement. Both models use the same central idea: transformation rules should be visible, testable, versioned, and deployed with evidence.</p>
+<hr>
+<h2>Appendix A: Main Runtime Interfaces</h2>
+<table>
+<thead>
+<tr>
+<th>Purpose</th>
+<th>Interface</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>List Librarian schemas</td>
+<td><code>GET /api/librarian/schemas</code></td>
+</tr>
+<tr>
+<td>List maps</td>
+<td><code>GET /api/mapper/maps</code></td>
+</tr>
+<tr>
+<td>Read one map</td>
+<td><code>GET /api/mapper/maps/{id}</code></td>
+</tr>
+<tr>
+<td>Create a map</td>
+<td><code>POST /api/mapper/maps</code></td>
+</tr>
+<tr>
+<td>Update a map</td>
+<td><code>PUT /api/mapper/maps/{id}</code></td>
+</tr>
+<tr>
+<td>Generate compatible branch rules</td>
+<td><code>POST /api/mapper/maps/{id}/auto-shape-map</code></td>
+</tr>
+<tr>
+<td>Run and validate a map</td>
+<td><code>POST /api/mapper/maps/{id}/run</code></td>
+</tr>
+<tr>
+<td>Secure application entry point</td>
+<td><code>https://neptune/</code></td>
+</tr>
+</tbody></table>
+<h2>Appendix B: Screenshot Production Notes</h2>
+<p>Screenshots were captured from the live secure application at <code>https://neptune/</code> with a 1440 by 1000 pixel browser viewport. Each image shows the control or result discussed in the nearby text. Sensitive values and unrelated browser controls were excluded. The PDF layout keeps captions with their images where page space permits.</p>
+</article>
+  <script>
+    mermaid.initialize({ startOnLoad: false, theme: 'neutral', securityLevel: 'strict' });
+  </script>
+</body>
+</html>

@@ -1,17 +1,22 @@
 {
-  "ok": true,
+  "ok": false,
   "service": "backend",
-  "state": "READY",
+  "state": "FAILED",
   "workflow": [
     "INIT",
     "KILL_BACKEND_PROCESSES",
     "SANITIZE_QUEUE_PERSISTENCE",
     "CHECK_BACKEND",
-    "READY"
+    "START_BACKEND",
+    "WAIT_BACKEND",
+    "START_BACKEND",
+    "WAIT_BACKEND",
+    "START_BACKEND",
+    "WAIT_BACKEND"
   ],
   "logs": [
     {
-      "at": "2026-08-02T14:46:22.682Z",
+      "at": "2026-08-03T14:29:32.837Z",
       "event": "workflow-start",
       "data": {
         "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
@@ -19,14 +24,14 @@
       }
     },
     {
-      "at": "2026-08-02T14:46:22.688Z",
+      "at": "2026-08-03T14:29:32.849Z",
       "event": "state",
       "data": {
         "state": "INIT"
       }
     },
     {
-      "at": "2026-08-02T14:46:22.692Z",
+      "at": "2026-08-03T14:29:32.858Z",
       "event": "state",
       "data": {
         "state": "KILL_BACKEND_PROCESSES",
@@ -35,26 +40,18 @@
       }
     },
     {
-      "at": "2026-08-02T14:46:22.900Z",
+      "at": "2026-08-03T14:29:32.935Z",
       "event": "subflow-complete",
       "data": {
         "subflow": "Kill all back end processes",
         "port": 4000,
-        "pids": [
-          11108
-        ],
-        "results": [
-          {
-            "pid": 11108,
-            "killed": false,
-            "error": "Command failed: taskkill /PID 11108 /F /T\nERROR: The process with PID 11108 (child process of PID 4352) could not be terminated.\r\nReason: Access is denied.\r\r\n"
-          }
-        ],
+        "pids": [],
+        "results": [],
         "killedCount": 0
       }
     },
     {
-      "at": "2026-08-02T14:46:22.904Z",
+      "at": "2026-08-03T14:29:32.943Z",
       "event": "state",
       "data": {
         "state": "SANITIZE_QUEUE_PERSISTENCE",
@@ -62,7 +59,7 @@
       }
     },
     {
-      "at": "2026-08-02T14:46:23.607Z",
+      "at": "2026-08-03T14:29:33.732Z",
       "event": "subflow-complete",
       "data": {
         "subflow": "Sanitize queue persistence files",
@@ -86,7 +83,7 @@
       }
     },
     {
-      "at": "2026-08-02T14:46:23.611Z",
+      "at": "2026-08-03T14:29:33.737Z",
       "event": "state",
       "data": {
         "state": "CHECK_BACKEND",
@@ -94,24 +91,143 @@
       }
     },
     {
-      "at": "2026-08-02T14:46:23.688Z",
-      "event": "complete",
+      "at": "2026-08-03T14:29:33.865Z",
+      "event": "backend-started",
       "data": {
-        "ok": true,
+        "command": "node --env-file=.env.local backend.mjs",
+        "pid": 24816,
+        "attempt": 1
+      }
+    },
+    {
+      "at": "2026-08-03T14:29:33.873Z",
+      "event": "state",
+      "data": {
+        "state": "WAIT_BACKEND",
+        "url": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
+        "timeoutMs": 36000,
+        "attempt": 1
+      }
+    },
+    {
+      "at": "2026-08-03T14:30:10.166Z",
+      "event": "timeout",
+      "data": {
+        "state": "WAIT_BACKEND",
+        "url": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
+        "timeoutMs": 36000,
+        "attempt": 1,
+        "error": "Not responding in reasonable amount of time"
+      }
+    },
+    {
+      "at": "2026-08-03T14:30:10.169Z",
+      "event": "retry-scheduled",
+      "data": {
+        "state": "WAIT_BACKEND",
+        "nextState": "START_BACKEND",
+        "reason": "backend wait timeout",
+        "currentAttempt": 1,
+        "maxRetries": 2,
+        "retryBackoffMs": 2000
+      }
+    },
+    {
+      "at": "2026-08-03T14:30:12.219Z",
+      "event": "backend-started",
+      "data": {
+        "command": "node --env-file=.env.local backend.mjs",
+        "pid": 8324,
+        "attempt": 2
+      }
+    },
+    {
+      "at": "2026-08-03T14:30:12.225Z",
+      "event": "state",
+      "data": {
+        "state": "WAIT_BACKEND",
+        "url": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
+        "timeoutMs": 38000,
+        "attempt": 2
+      }
+    },
+    {
+      "at": "2026-08-03T14:30:51.602Z",
+      "event": "timeout",
+      "data": {
+        "state": "WAIT_BACKEND",
+        "url": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
+        "timeoutMs": 38000,
+        "attempt": 2,
+        "error": "Not responding in reasonable amount of time"
+      }
+    },
+    {
+      "at": "2026-08-03T14:30:51.606Z",
+      "event": "retry-scheduled",
+      "data": {
+        "state": "WAIT_BACKEND",
+        "nextState": "START_BACKEND",
+        "reason": "backend wait timeout",
+        "currentAttempt": 2,
+        "maxRetries": 2,
+        "retryBackoffMs": 2000
+      }
+    },
+    {
+      "at": "2026-08-03T14:30:53.657Z",
+      "event": "backend-started",
+      "data": {
+        "command": "node --env-file=.env.local backend.mjs",
+        "pid": 23492,
+        "attempt": 3
+      }
+    },
+    {
+      "at": "2026-08-03T14:30:53.664Z",
+      "event": "state",
+      "data": {
+        "state": "WAIT_BACKEND",
+        "url": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
+        "timeoutMs": 40000,
+        "attempt": 3
+      }
+    },
+    {
+      "at": "2026-08-03T14:31:34.484Z",
+      "event": "timeout",
+      "data": {
+        "state": "WAIT_BACKEND",
+        "url": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
+        "timeoutMs": 40000,
+        "attempt": 3,
+        "error": "Not responding in reasonable amount of time"
+      }
+    },
+    {
+      "at": "2026-08-03T14:31:34.489Z",
+      "event": "failed",
+      "data": {
+        "ok": false,
         "service": "backend",
-        "state": "READY",
+        "state": "FAILED",
         "workflow": [
           "INIT",
           "KILL_BACKEND_PROCESSES",
           "SANITIZE_QUEUE_PERSISTENCE",
           "CHECK_BACKEND",
-          "READY"
+          "START_BACKEND",
+          "WAIT_BACKEND",
+          "START_BACKEND",
+          "WAIT_BACKEND",
+          "START_BACKEND",
+          "WAIT_BACKEND"
         ],
-        "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin"
+        "error": "Startup workflow failed to reach READY state."
       }
     }
   ],
-  "updatedAt": "2026-08-02T14:46:23.692Z",
-  "error": null,
+  "updatedAt": "2026-08-03T14:31:34.495Z",
+  "error": "Startup workflow failed to reach READY state.",
   "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin"
 }

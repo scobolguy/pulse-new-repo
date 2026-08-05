@@ -6,6 +6,7 @@ import { observabilityServiceProvider } from './observabilityServiceProvider.mjs
 import { topologyServiceProvider } from './topologyServiceProvider.mjs';
 import { librarianServiceProvider } from './librarianServiceProvider.mjs';
 import { mapperServiceProvider } from './mapperServiceProvider.mjs';
+import { transformerServiceProvider } from './transformerServiceProvider.mjs';
 import { platformServiceProvider } from './platformServiceProvider.mjs';
 import { iamServiceProvider } from './iamServiceProvider.mjs';
 
@@ -18,6 +19,7 @@ const PROVIDERS = Object.freeze([
   topologyServiceProvider,
   librarianServiceProvider,
   mapperServiceProvider,
+  transformerServiceProvider,
   platformServiceProvider,
   iamServiceProvider
 ]);

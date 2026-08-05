@@ -96,6 +96,37 @@ enum Opcode : uint8_t {
     OP_ORCH_FAIL_TXN = 0x27,     // Fail current transaction when orchestration result is failure
     OP_ORCH_RETURN_SUCCESS = 0x28,// Return orchestration success payload
     OP_CALL_EXT = 0x29,          // Call external symbol through lazy thunk resolver
+    OP_FORK = 0x2A,
+    OP_JOIN_ALL = 0x2B,
+    OP_JOIN = 0x2C,
+    OP_SYNC = 0x2D,
+    OP_FORK_SUBFLOW = 0x2E,
+    OP_BQ_NEW_STATIC = 0x2F,
+    OP_BQ_NEW_DYNAMIC = 0x30,
+    OP_BQ_ENQ = 0x31,
+    OP_BQ_DEQ = 0x32,
+    OP_BQ_PEEK = 0x33,
+    OP_STK_NEW_STATIC = 0x34,
+    OP_STK_NEW_DYNAMIC = 0x35,
+    OP_STK_PUSH = 0x36,
+    OP_STK_POP = 0x37,
+    OP_STK_PEEK = 0x38,
+    OP_PQ_NEW_STATIC = 0x39,
+    OP_PQ_NEW_DYNAMIC = 0x3A,
+    OP_PQ_ENQ = 0x3B,
+    OP_PQ_DEQ = 0x3C,
+    OP_PQ_PEEK = 0x3D,
+    OP_FILE_OPEN = 0x3E,
+    OP_FILE_READ = 0x3F,
+    OP_FILE_WRITE = 0x40,
+    OP_FILE_CLOSE = 0x41,
+    OP_MAP = 0x42,
+    OP_DL_LOAD_SCHEMA = 0x43,
+    OP_DL_LOAD_MAP = 0x44,
+    OP_SRV_CALL = 0x45,
+    OP_ROUTE_SERVICE = 0x46,
+    OP_ROUTE_QUEUE = 0x47,
+    OP_ROUTE_FILE = 0x48,
     OP_TRIM = 0x49,              // Pop string, trim whitespace, push trimmed string
     OP_PARSE_INT = 0x4A,         // Pop string, parse as integer, push result (0 on parse failure)
     OP_OR = 0x4B,                // Pop two integers, push 1 if either is nonzero, else 0
@@ -103,6 +134,7 @@ enum Opcode : uint8_t {
     OP_NOT = 0x4D,               // Pop integer, push 1 if zero else 0
     OP_STREQ = 0x4E,             // Pop two strings, push 1 if equal else 0
     OP_STRNEQ = 0x4F,            // Pop two strings, push 1 if not equal else 0
+    OP_MAP_RETURN = 0x50,
     OP_HALT = 0xFF      // HALT
 };
 
@@ -152,8 +184,40 @@ enum Opcode : uint8_t {
         if (mnemonic == "ORCH_FAIL_TXN") return OP_ORCH_FAIL_TXN;
         if (mnemonic == "ORCH_RETURN_SUCCESS") return OP_ORCH_RETURN_SUCCESS;
         if (mnemonic == "CALL_EXT") return OP_CALL_EXT;
+        if (mnemonic == "FORK") return OP_FORK;
+        if (mnemonic == "JOIN_ALL") return OP_JOIN_ALL;
+        if (mnemonic == "JOIN") return OP_JOIN;
+        if (mnemonic == "SYNC") return OP_SYNC;
+        if (mnemonic == "FORK_SUBFLOW") return OP_FORK_SUBFLOW;
+        if (mnemonic == "BQ_NEW_STATIC") return OP_BQ_NEW_STATIC;
+        if (mnemonic == "BQ_NEW_DYNAMIC") return OP_BQ_NEW_DYNAMIC;
+        if (mnemonic == "BQ_ENQ") return OP_BQ_ENQ;
+        if (mnemonic == "BQ_DEQ") return OP_BQ_DEQ;
+        if (mnemonic == "BQ_PEEK") return OP_BQ_PEEK;
+        if (mnemonic == "STK_NEW_STATIC") return OP_STK_NEW_STATIC;
+        if (mnemonic == "STK_NEW_DYNAMIC") return OP_STK_NEW_DYNAMIC;
+        if (mnemonic == "STK_PUSH") return OP_STK_PUSH;
+        if (mnemonic == "STK_POP") return OP_STK_POP;
+        if (mnemonic == "STK_PEEK") return OP_STK_PEEK;
+        if (mnemonic == "PQ_NEW_STATIC") return OP_PQ_NEW_STATIC;
+        if (mnemonic == "PQ_NEW_DYNAMIC") return OP_PQ_NEW_DYNAMIC;
+        if (mnemonic == "PQ_ENQ") return OP_PQ_ENQ;
+        if (mnemonic == "PQ_DEQ") return OP_PQ_DEQ;
+        if (mnemonic == "PQ_PEEK") return OP_PQ_PEEK;
+        if (mnemonic == "FILE_OPEN") return OP_FILE_OPEN;
+        if (mnemonic == "FILE_READ") return OP_FILE_READ;
+        if (mnemonic == "FILE_WRITE") return OP_FILE_WRITE;
+        if (mnemonic == "FILE_CLOSE") return OP_FILE_CLOSE;
+        if (mnemonic == "OP_MAP") return OP_MAP;
+        if (mnemonic == "DL_LOAD_SCHEMA") return OP_DL_LOAD_SCHEMA;
+        if (mnemonic == "DL_LOAD_MAP") return OP_DL_LOAD_MAP;
+        if (mnemonic == "SRV_CALL") return OP_SRV_CALL;
+        if (mnemonic == "ROUTE_SERVICE") return OP_ROUTE_SERVICE;
+        if (mnemonic == "ROUTE_QUEUE") return OP_ROUTE_QUEUE;
+        if (mnemonic == "ROUTE_FILE") return OP_ROUTE_FILE;
         if (mnemonic == "LOAD") return OP_LOAD_NAME;
         if (mnemonic == "STORE") return OP_STORE_NAME;
+        if (mnemonic == "MAP_RETURN") return OP_MAP_RETURN;
         if (mnemonic == "CALL") return OP_CALL_LABEL;
         if (mnemonic == "RET") return OP_RET;
         if (mnemonic == "EQ") return OP_EQ;
@@ -166,6 +230,11 @@ enum Opcode : uint8_t {
         if (mnemonic == "PRINT_NL") return OP_PRINT_NL;
         if (mnemonic == "TRIM") return OP_TRIM;
         if (mnemonic == "PARSE_INT") return OP_PARSE_INT;
+        if (mnemonic == "OR") return OP_OR;
+        if (mnemonic == "AND") return OP_AND;
+        if (mnemonic == "NOT") return OP_NOT;
+        if (mnemonic == "STREQ") return OP_STREQ;
+        if (mnemonic == "STRNEQ") return OP_STRNEQ;
         if (mnemonic == "HALT") return OP_HALT;
         if (mnemonic == "NOP") return OP_NOP;
         return 0xFE;
@@ -217,6 +286,14 @@ using OrchestrationWaitHook = bool (*)(
 using ThunkResolveHook = bool (*)(
     const std::string& symbol,
     int& outTargetPc,
+    std::string& outError,
+    void* context);
+
+using ServiceCallHook = bool (*)(
+    const std::string& serviceId,
+    const std::string& endpoint,
+    const std::string& payload,
+    std::string& outResponse,
     std::string& outError,
     void* context);
 
@@ -355,6 +432,7 @@ public:
     std::map<std::string, std::string> getFlowStateSnapshot() const;
     void setOrchestrationWaitHook(OrchestrationWaitHook hook, void* context = nullptr);
     void setThunkResolverHook(ThunkResolveHook hook, void* context = nullptr);
+    void setServiceCallHook(ServiceCallHook hook, void* context = nullptr);
     void setThunkBinding(const std::string& symbol, int targetPc);
     bool clearThunkBinding(const std::string& symbol);
     void clearAllThunkBindings();
@@ -394,6 +472,8 @@ private:
     ThunkResolveHook thunkResolveHook = nullptr;
     void* thunkResolverContext = nullptr;
     std::map<std::string, int> thunkBindings;
+    ServiceCallHook serviceCallHook = nullptr;
+    void* serviceCallContext = nullptr;
     std::map<std::string, std::string> namedStringVariables;  // String-valued named variables (e.g., 'src')
 
     // Handler table for opcode dispatch

@@ -11,6 +11,7 @@ import { callPulseMcp } from './pulseMcpClient.mjs';
 const MCP_HOST = process.env.PULSE_MCP_HOST || '127.0.0.1';
 const MCP_PORT = Number(process.env.PULSE_MCP_PORT || 4011);
 const NLI_URL = process.env.PULSE_NLI_URL || 'http://127.0.0.1:4000/api/nli/query';
+const NLI_TIMEOUT_MS = Number(process.env.PULSE_NLI_TIMEOUT_MS || 125000);
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { files: 8, fileSize: 10 * 1024 * 1024 },
@@ -20,7 +21,7 @@ export async function executePulseQuery({ message, channel = 'mcp', attachments 
   const requestInit = {
     method: 'POST',
     headers: { 'x-pulse-channel': channel },
-    signal: AbortSignal.timeout(65_000),
+    signal: AbortSignal.timeout(NLI_TIMEOUT_MS),
   };
 
   if (attachments.length > 0) {

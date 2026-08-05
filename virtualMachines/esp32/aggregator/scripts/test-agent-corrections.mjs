@@ -10,6 +10,7 @@ const correctionCases = [
   ['show all services', 'services'],
   ['how many queues are defined in the message broker', 'queues'],
   ['show me the size of all queues', 'queues'],
+  ['convert an MT940 to a camt message', 'mapl-authoring'],
 ];
 
 await reloadAgentRoutes();

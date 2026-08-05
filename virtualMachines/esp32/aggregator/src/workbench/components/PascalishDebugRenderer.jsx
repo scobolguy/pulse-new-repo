@@ -2,6 +2,7 @@
 import React, { Suspense, useEffect, useState } from 'react';
 const MonacoEditor = React.lazy(() => import('@monaco-editor/react'));
 import { initializePascalishLanguage } from '../../pascalishLanguage';
+import { buildPascalishLibrarianContracts } from '../../librarianSchemaContracts';
 
 /**
  * PascalishDebugRenderer - Displays Pascalish code with debug state (current line, registers, stack)
@@ -11,6 +12,8 @@ const PascalishDebugRenderer = ({ file, role, mode, debugState }) => {
   const [schemas, setSchemas] = useState([]);
   const [decorations, setDecorations] = useState([]);
   const editorRef = React.useRef(null);
+  const typeNamesRef = React.useRef([]);
+  const typeFieldMapRef = React.useRef({});
   const code = file?.content || '';
   
   const currentLine = debugState?.currentLine || 1;
@@ -44,6 +47,12 @@ const PascalishDebugRenderer = ({ file, role, mode, debugState }) => {
   }, []);
 
   useEffect(() => {
+    const contracts = buildPascalishLibrarianContracts(types, schemas);
+    typeNamesRef.current = contracts.typeNames;
+    typeFieldMapRef.current = contracts.typeFieldMap;
+  }, [types, schemas]);
+
+  useEffect(() => {
     // Update line decorations when current line changes
     if (editorRef.current && currentLine) {
       const editor = editorRef.current;
@@ -62,7 +71,10 @@ const PascalishDebugRenderer = ({ file, role, mode, debugState }) => {
   }, [currentLine]);
 
   const handleEditorWillMount = (monaco) => {
-    initializePascalishLanguage(monaco, types, schemas);
+    const contracts = buildPascalishLibrarianContracts(types, schemas);
+    typeNamesRef.current = contracts.typeNames;
+    typeFieldMapRef.current = contracts.typeFieldMap;
+    initializePascalishLanguage(monaco, typeNamesRef, typeFieldMapRef);
     
     // Define custom CSS for debug highlighting
     const style = document.createElement('style');

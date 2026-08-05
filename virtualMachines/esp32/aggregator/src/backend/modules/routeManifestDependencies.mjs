@@ -378,6 +378,9 @@ export function createRouteManifestDependencyFactories(deps = {}) {
       metricsCollector,
       routerWorkers,
       serviceInstanceRegistry
+    }),
+    provisioningAgent: () => ({
+      requirePermission
     })
   };
 }

@@ -4519,8 +4519,10 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
             requestMethodUpper
         );
         request->send(exec.statusCode, exec.contentType, exec.body);
-    });
+#else
+        request->send(501, "application/json", "{\"error\":\"router run not supported on ESP8266 build\"}");
 #endif
+    });
 #if defined(ESP32)
     server.on("/pmachine/router/status", HTTP_GET, [](AsyncWebServerRequest *request){
         if (!request->hasParam("jobId")) {

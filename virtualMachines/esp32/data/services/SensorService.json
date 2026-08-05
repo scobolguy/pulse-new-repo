@@ -1,5 +1,0 @@
-{
-  "type": "service",
-  "name": "SensorService",
-  "description": "Provides temperature, humidity, and pressure readings from DHT, BME280, and BMP280 sensors via /sensor/read. Supports C/F units."
-}

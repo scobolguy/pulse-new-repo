@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 
-const LazyDataMapperEditor = lazy(() => import('./DataMapperEditor.jsx')); 
+const LazyDataMapperEditor = lazy(() => import('./archived-old-app/DataMapperEditor.jsx'));
 
 const SECTION_STYLE = {
   border: '1px solid #ccc',
@@ -896,8 +896,8 @@ export default function DataMapper() {
           name={name}
           sourceTypeId={sourceTypeId}
           targetTypeId={targetTypeId}
-          sourceSchemaPath={sourceSchemaPath}
-          targetSchemaPath={targetSchemaPath}
+          sourceSchemaPath={effectiveSourceSchemaPath}
+          targetSchemaPath={effectiveTargetSchemaPath}
           schemaChoices={schemaChoices}
           sourceSchema={sourceSchema}
           targetSchema={targetSchema}

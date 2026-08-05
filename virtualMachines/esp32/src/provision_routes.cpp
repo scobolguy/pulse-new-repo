@@ -2,6 +2,7 @@
 #include "config_types.h"
 #include "main_globals.h"
 #include "provision_routes.h"
+#include "wifi_provisioning.h"
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 
@@ -34,8 +35,18 @@ void registerProvisionRoutes(AsyncWebServer& server) {
             // Save WiFi credentials to LittleFS
             wifiConfig.ssid = ssid;
             wifiConfig.password = password;
-            //saveConfigToFile(wifiConfig, WifiConfig::schema, 2, WIFI_CONFIG_PATH);
-            //saveConfigToFile(wifiConfig, WifiConfig::schema, 2, WIFI_CONFIG_PATH, LittleFS);
+
+            if (!globalWiFiProvisioning) {
+                globalWiFiProvisioning = new WiFiProvisioning();
+                globalWiFiProvisioning->begin(nodeName.c_str());
+            }
+            WiFiCredentials creds;
+            creds.ssid = ssid;
+            creds.password = password;
+            creds.hostname = nodeName;
+            globalWiFiProvisioning->addOrUpdateCredential(creds, 5);
+            globalWiFiProvisioning->eraseLegacyCredentialStores();
+
             request->send(200, "text/plain", "Provisioned. Rebooting...");
             delay(1000);
             ESP.restart();

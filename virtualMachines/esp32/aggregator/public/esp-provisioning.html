@@ -1,0 +1,223 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Aggregator ESP Provisioning</title>
+  <style>
+    body { font-family: Segoe UI, Arial, sans-serif; margin: 20px; background: #f8fafc; color: #0f172a; }
+    .card { max-width: 980px; margin: 0 auto; background: #fff; border: 1px solid #cbd5e1; border-radius: 12px; padding: 16px; }
+    h1 { margin: 0 0 8px; font-size: 1.3rem; }
+    .hint { color: #475569; margin-bottom: 10px; }
+    .row { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+    input, textarea, button { font-size: 14px; }
+    input[type=text], input[type=password], textarea {
+      width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #cbd5e1; background: #fff;
+    }
+    .grid4 { display: grid; grid-template-columns: 1.1fr 1.2fr 1fr 80px; gap: 8px; }
+    .section { margin-top: 14px; padding-top: 12px; border-top: 1px dashed #cbd5e1; }
+    .profiles .entry { border: 1px solid #e2e8f0; border-radius: 10px; padding: 8px; margin-bottom: 8px; background: #f8fafc; }
+    button { padding: 8px 12px; border-radius: 8px; border: 1px solid #0f766e; background: #0f766e; color: #fff; cursor: pointer; }
+    button.alt { background: #fff; color: #0f766e; }
+    .out { white-space: pre-wrap; background: #0b1220; color: #dbeafe; border-radius: 8px; padding: 10px; min-height: 140px; }
+    @media (max-width: 900px) { .grid4 { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Aggregator ESP Provisioning</h1>
+    <div class="hint">Drive board provisioning and TLS enrollment from aggregator. Node id can be node name, node id, or IP token used in topology.</div>
+
+    <div class="section">
+      <div class="row">
+        <div style="flex:1 1 280px"><input id="nodeId" type="text" placeholder="Node id (or name)" /></div>
+        <div style="flex:1 1 220px"><input id="nodeIp" type="text" placeholder="Optional explicit board IP" /></div>
+        <div><button id="loadProfiles" class="alt" type="button">Load Profiles</button></div>
+      </div>
+      <div class="row">
+        <div style="flex:1 1 320px"><input id="nodeName" type="text" placeholder="Node name to set during provisioning" /></div>
+        <label><input id="replaceExisting" type="checkbox" checked /> replace existing</label>
+        <label><input id="rebootAfter" type="checkbox" checked /> reboot after</label>
+      </div>
+    </div>
+
+    <div class="section profiles" id="profiles"></div>
+    <div class="row">
+      <button id="saveProfiles" type="button">Provision Wi-Fi Profiles</button>
+      <button id="clearProfiles" class="alt" type="button">Clear Board Profiles</button>
+      <button id="addProfile" class="alt" type="button">Add Profile</button>
+    </div>
+
+    <div class="section">
+      <h3>TLS Certificate Management</h3>
+      <div class="row"><input id="bootstrapSecret" type="password" placeholder="Bootstrap secret" /></div>
+      <div class="row"><textarea id="certPem" rows="6" placeholder="certPem"></textarea></div>
+      <div class="row"><textarea id="keyPem" rows="6" placeholder="keyPem"></textarea></div>
+      <div class="row"><textarea id="caPem" rows="4" placeholder="caPem (optional)"></textarea></div>
+      <div class="row">
+        <label><input id="requireMtls" type="checkbox" /> require mTLS</label>
+        <label><input id="strictTls" type="checkbox" /> strict TLS verify</label>
+      </div>
+      <div class="row">
+        <button id="tlsStatus" class="alt" type="button">TLS Status</button>
+        <button id="tlsCommit" type="button">Enroll + Commit Cert</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <div id="out" class="out">Ready.</div>
+    </div>
+  </div>
+
+  <script>
+    const MAX_PROFILES = 5;
+
+    function out(msg) {
+      const el = document.getElementById('out');
+      const line = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
+      el.textContent = line + '\n\n' + el.textContent;
+    }
+
+    function profileHtml(idx, p = {}) {
+      return `
+      <div class="entry" data-idx="${idx}">
+        <div class="grid4">
+          <input data-k="ssid" type="text" placeholder="SSID" value="${p.ssid || ''}" />
+          <input data-k="password" type="password" placeholder="Password" value="" />
+          <input data-k="hostname" type="text" placeholder="Hostname (optional)" value="${p.hostname || ''}" />
+          <label><input data-k="enabled" type="checkbox" ${p.ssid ? 'checked' : ''} /> use</label>
+        </div>
+      </div>`;
+    }
+
+    function renderProfiles(items = []) {
+      const host = document.getElementById('profiles');
+      let html = '';
+      for (let i = 0; i < Math.min(MAX_PROFILES, Math.max(1, items.length || 0)); i++) {
+        html += profileHtml(i, items[i] || {});
+      }
+      if (!items.length) {
+        html = profileHtml(0, {});
+      }
+      host.innerHTML = html;
+    }
+
+    function addProfileRow() {
+      const host = document.getElementById('profiles');
+      const count = host.querySelectorAll('.entry').length;
+      if (count >= MAX_PROFILES) return;
+      host.insertAdjacentHTML('beforeend', profileHtml(count, {}));
+    }
+
+    function collectProfiles() {
+      const rows = Array.from(document.querySelectorAll('#profiles .entry'));
+      const outProfiles = [];
+      for (const row of rows) {
+        const enabled = row.querySelector('[data-k="enabled"]').checked;
+        const ssid = row.querySelector('[data-k="ssid"]').value.trim();
+        const password = row.querySelector('[data-k="password"]').value;
+        const hostname = row.querySelector('[data-k="hostname"]').value.trim();
+        if (!enabled || !ssid) continue;
+        outProfiles.push({ ssid, password, hostname });
+      }
+      return outProfiles.slice(0, MAX_PROFILES);
+    }
+
+    function currentTargetPath(suffix) {
+      const nodeId = String(document.getElementById('nodeId').value || '').trim();
+      if (!nodeId) throw new Error('nodeId is required');
+      return `/api/nodes/${encodeURIComponent(nodeId)}${suffix}`;
+    }
+
+    function currentBody(extra = {}) {
+      const ip = String(document.getElementById('nodeIp').value || '').trim();
+      return ip ? { ...extra, ip } : extra;
+    }
+
+    async function callJson(path, options = {}) {
+      const res = await fetch(path, options);
+      const text = await res.text();
+      let body = text;
+      try { body = JSON.parse(text); } catch (_) {}
+      if (!res.ok) throw new Error(`${res.status}: ${typeof body === 'string' ? body : JSON.stringify(body)}`);
+      return body;
+    }
+
+    async function loadProfiles() {
+      const payload = await callJson(
+        currentTargetPath('/wifi/profiles') + (document.getElementById('nodeIp').value.trim() ? `?ip=${encodeURIComponent(document.getElementById('nodeIp').value.trim())}` : ''),
+        { method: 'GET' }
+      );
+      const profiles = Array.isArray(payload?.profiles?.profiles) ? payload.profiles.profiles : [];
+      renderProfiles(profiles);
+      out(payload);
+    }
+
+    async function saveProfiles() {
+      const profiles = collectProfiles();
+      if (!profiles.length) throw new Error('Add at least one enabled profile');
+      const nodeName = String(document.getElementById('nodeName').value || '').trim();
+      const payload = await callJson(currentTargetPath('/provision/wifi'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(currentBody({
+          nodeName,
+          profiles,
+          replaceExisting: document.getElementById('replaceExisting').checked,
+          rebootAfter: document.getElementById('rebootAfter').checked
+        }))
+      });
+      out(payload);
+    }
+
+    async function clearProfiles() {
+      const ip = String(document.getElementById('nodeIp').value || '').trim();
+      const path = currentTargetPath('/wifi/profiles') + (ip ? `?ip=${encodeURIComponent(ip)}` : '');
+      const payload = await callJson(path, { method: 'DELETE' });
+      out(payload);
+    }
+
+    async function tlsStatus() {
+      const qs = [];
+      const ip = String(document.getElementById('nodeIp').value || '').trim();
+      if (ip) qs.push(`ip=${encodeURIComponent(ip)}`);
+      if (document.getElementById('strictTls').checked) qs.push('strictTls=true');
+      const payload = await callJson(currentTargetPath('/tls/status') + (qs.length ? `?${qs.join('&')}` : ''), {
+        method: 'GET'
+      });
+      out(payload);
+    }
+
+    async function tlsCommit() {
+      const bootstrapSecret = String(document.getElementById('bootstrapSecret').value || '').trim();
+      const certPem = String(document.getElementById('certPem').value || '');
+      const keyPem = String(document.getElementById('keyPem').value || '');
+      const caPem = String(document.getElementById('caPem').value || '');
+      if (!bootstrapSecret || !certPem || !keyPem) throw new Error('bootstrapSecret, certPem, keyPem are required');
+
+      const payload = await callJson(currentTargetPath('/tls/enroll/commit'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(currentBody({
+          bootstrapSecret,
+          certPem,
+          keyPem,
+          caPem,
+          requireMtls: document.getElementById('requireMtls').checked,
+          strictTls: document.getElementById('strictTls').checked
+        }))
+      });
+      out(payload);
+    }
+
+    document.getElementById('loadProfiles').addEventListener('click', () => loadProfiles().catch(e => out(e.message)));
+    document.getElementById('saveProfiles').addEventListener('click', () => saveProfiles().catch(e => out(e.message)));
+    document.getElementById('clearProfiles').addEventListener('click', () => clearProfiles().catch(e => out(e.message)));
+    document.getElementById('addProfile').addEventListener('click', addProfileRow);
+    document.getElementById('tlsStatus').addEventListener('click', () => tlsStatus().catch(e => out(e.message)));
+    document.getElementById('tlsCommit').addEventListener('click', () => tlsCommit().catch(e => out(e.message)));
+
+    renderProfiles([]);
+  </script>
+</body>
+</html>

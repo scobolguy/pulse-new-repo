@@ -1,0 +1,4 @@
+# Auto-generated from ANTLR MAPL grammar
+OP_MAP SRC, "mt940_to_camt053", mappedPayload
+MAP_RETURN mappedPayload
+HALT

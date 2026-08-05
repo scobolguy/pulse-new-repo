@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "projectId": "default",
+  "subprojectPath": "flow-authoring",
+  "updatedAt": "2026-08-03T17:31:11.141Z",
+  "assignments": [
+    {
+      "queueName": "payments.in",
+      "dataTypeIds": [
+        "swift-mt103",
+        "swift-mt202"
+      ],
+      "managerId": "qm-primary",
+      "assignedAt": "2026-08-03T17:31:11.118Z",
+      "source": "ollama-assign-command"
+    },
+    {
+      "queueName": "payments.out",
+      "dataTypeIds": [
+        "pacs"
+      ],
+      "managerId": "qm-primary",
+      "assignedAt": "2026-08-03T17:31:11.141Z",
+      "source": "ollama-assign-command"
+    }
+  ]
+}

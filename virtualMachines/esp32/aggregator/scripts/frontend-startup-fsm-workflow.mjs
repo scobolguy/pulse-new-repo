@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 
@@ -12,6 +13,22 @@ const MCP_AUTOSTART = !['0', 'false', 'no', 'off'].includes(
 const FRONTEND_URL = process.env.FRONTEND_FSM_FRONTEND_URL || 'http://127.0.0.1:5173/';
 const FRONTEND_CMD = process.env.FRONTEND_FSM_FRONTEND_CMD || 'node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173 --strictPort --force';
 const FRONTEND_PORT = Number(process.env.FRONTEND_FSM_FRONTEND_PORT || new URL(FRONTEND_URL).port || 5173);
+const CADDY_URL = process.env.FRONTEND_FSM_CADDY_URL || 'https://localhost/bob-console.html';
+const CADDY_ADMIN_URL = process.env.FRONTEND_FSM_CADDY_ADMIN_URL || 'http://127.0.0.1:2019/config/';
+const WINGET_CADDY_PATH = path.join(
+  process.env.LOCALAPPDATA || '',
+  'Microsoft',
+  'WinGet',
+  'Packages',
+  'CaddyServer.Caddy_Microsoft.Winget.Source_8wekyb3d8bbwe',
+  'caddy.exe'
+);
+const CADDY_EXECUTABLE = existsSync(WINGET_CADDY_PATH) ? `"${WINGET_CADDY_PATH}"` : 'caddy';
+const CADDY_CMD = process.env.FRONTEND_FSM_CADDY_CMD || `${CADDY_EXECUTABLE} run --config deploy/caddy/Caddyfile --adapter caddyfile`;
+const CADDY_PORT = Number(process.env.FRONTEND_FSM_CADDY_PORT || new URL(CADDY_URL).port || 443);
+const CADDY_AUTOSTART = !['0', 'false', 'no', 'off'].includes(
+  String(process.env.FRONTEND_FSM_CADDY_AUTOSTART || 'true').trim().toLowerCase()
+);
 const POLL_MS = Number(process.env.FRONTEND_FSM_POLL_MS || 1200);
 const FRONTEND_WAIT_TIMEOUT_MS = Number(process.env.FRONTEND_FSM_FRONTEND_WAIT_TIMEOUT_MS || 30000);
 const FRONTEND_RETRY_COUNT = Math.max(0, Number(process.env.FRONTEND_FSM_FRONTEND_RETRY_COUNT || 2));
@@ -30,6 +47,9 @@ const STATES = {
   WAIT_MCP: 'WAIT_MCP',
   START_FRONTEND: 'START_FRONTEND',
   WAIT_FRONTEND: 'WAIT_FRONTEND',
+  CHECK_CADDY: 'CHECK_CADDY',
+  START_CADDY: 'START_CADDY',
+  WAIT_CADDY: 'WAIT_CADDY',
   READY: 'READY',
   FAILED: 'FAILED'
 };
@@ -101,16 +121,23 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function isHealthy(url) {
+async function isHealthy(url, options = {}) {
   try {
     const response = await fetch(url, {
       method: 'GET',
+      ...options,
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
     });
     return response.ok;
   } catch {
     return false;
   }
+}
+
+function isCaddyHealthy() {
+  return isHealthy(CADDY_ADMIN_URL, {
+    headers: { origin: new URL(CADDY_ADMIN_URL).origin }
+  });
 }
 
 function spawnDetached(command, cwd) {
@@ -133,7 +160,7 @@ function parseNetstatForPort(raw, port) {
   for (const line of lines) {
     const text = line.trim();
     if (!text || !text.includes(needle)) continue;
-    if (!/LISTENING/i.test(text) && !/ESTABLISHED/i.test(text)) continue;
+    if (!/LISTENING/i.test(text)) continue;
     const parts = text.split(/\s+/);
     const pidToken = parts[parts.length - 1];
     const pid = Number(pidToken);
@@ -240,6 +267,12 @@ async function run() {
           url: MCP_URL,
           ok: false,
           checkedAt: null
+        },
+        caddy: {
+          required: CADDY_AUTOSTART,
+          url: CADDY_URL,
+          ok: false,
+          checkedAt: null
         }
       },
       workflow: [],
@@ -251,6 +284,7 @@ async function run() {
       backendUrl: BACKEND_URL,
       mcpUrl: MCP_URL,
       frontendUrl: FRONTEND_URL,
+      caddyUrl: CADDY_URL,
       statusPath: STATUS_PATH
     });
 
@@ -373,7 +407,7 @@ async function run() {
           await appendLog('port-occupied', { state, port: FRONTEND_PORT, occupiedBy, command: FRONTEND_CMD, alreadyReady });
           if (alreadyReady) {
             await appendLog('frontend-already-running', { state, frontendUrl: FRONTEND_URL, occupiedBy });
-            state = STATES.READY;
+            state = STATES.CHECK_CADDY;
             continue;
           }
           await appendFailureNote({ type: 'port-occupied', state, port: FRONTEND_PORT, occupiedBy, command: FRONTEND_CMD });
@@ -417,7 +451,74 @@ async function run() {
             attempts: frontendStartAttempt
           });
         }
-        state = ok ? STATES.READY : STATES.FAILED;
+        state = ok ? STATES.CHECK_CADDY : STATES.FAILED;
+        continue;
+      }
+
+      if (state === STATES.CHECK_CADDY) {
+        const caddyOk = await isCaddyHealthy();
+        await writeStatus({
+          dependencies: {
+            backend: { required: true, url: BACKEND_URL, ok: true, checkedAt: nowIso() },
+            mcp: { required: true, url: MCP_URL, ok: true, checkedAt: nowIso() },
+            caddy: { required: CADDY_AUTOSTART, url: CADDY_URL, ok: caddyOk, checkedAt: nowIso() }
+          }
+        });
+        await appendLog('state', { state, caddyUrl: CADDY_URL, caddyAdminUrl: CADDY_ADMIN_URL, caddyOk });
+        if (caddyOk) {
+          state = STATES.READY;
+          continue;
+        }
+        if (!CADDY_AUTOSTART) {
+          state = STATES.READY;
+          continue;
+        }
+        const occupiedBy = findPidsUsingPort(CADDY_PORT);
+        if (occupiedBy.length) {
+          await appendFailureNote({ type: 'port-occupied', state, port: CADDY_PORT, occupiedBy, command: CADDY_CMD });
+          throw new Error(`Port ${CADDY_PORT} is occupied, but the Caddy admin endpoint is not ready`);
+        }
+        state = STATES.START_CADDY;
+        continue;
+      }
+
+      if (state === STATES.START_CADDY) {
+        const pid = spawnDetached(CADDY_CMD, process.cwd());
+        await appendLog('caddy-started', { command: CADDY_CMD, pid });
+        state = STATES.WAIT_CADDY;
+        continue;
+      }
+
+      if (state === STATES.WAIT_CADDY) {
+        const deadline = Date.now() + FRONTEND_WAIT_TIMEOUT_MS;
+        let caddyOk = false;
+        while (!caddyOk && Date.now() < deadline) {
+          caddyOk = await isCaddyHealthy();
+          if (!caddyOk) await sleep(POLL_MS);
+        }
+        await writeStatus({
+          dependencies: {
+            backend: { required: true, url: BACKEND_URL, ok: true, checkedAt: nowIso() },
+            mcp: { required: true, url: MCP_URL, ok: true, checkedAt: nowIso() },
+            caddy: { required: true, url: CADDY_URL, ok: caddyOk, checkedAt: nowIso() }
+          }
+        });
+        await appendLog(caddyOk ? 'caddy-ready' : 'caddy-timeout', {
+          caddyUrl: CADDY_URL,
+          caddyAdminUrl: CADDY_ADMIN_URL,
+          timeoutMs: FRONTEND_WAIT_TIMEOUT_MS
+        });
+        if (!caddyOk) {
+          await appendFailureNote({
+            type: 'timeout',
+            state,
+            dependency: 'caddy',
+            caddyUrl: CADDY_URL,
+            command: CADDY_CMD
+          });
+          throw new Error(`Caddy did not become ready at ${CADDY_ADMIN_URL}`);
+        }
+        state = STATES.READY;
         continue;
       }
     }
@@ -432,6 +533,7 @@ async function run() {
         backendUrl: BACKEND_URL,
         mcpUrl: MCP_URL,
         frontendUrl: FRONTEND_URL,
+        caddyUrl: CADDY_URL,
         fsmId: FSM_ID
       };
       await appendLog('complete', result);

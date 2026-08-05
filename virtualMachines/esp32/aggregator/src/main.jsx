@@ -1,8 +1,20 @@
 import { StrictMode, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
-import QueryPage from './QueryPage.jsx'
 import TopologyPage from './TopologyPage.jsx'
+import DataMapper from './DataMapper.jsx'
+import FlowDesignerPage from './FlowDesignerPage.jsx'
+import ProjectTreePage from './ProjectTreePage.jsx'
+import ProvisioningAgentPage from './ProvisioningAgentPage.jsx'
+
+const TOOL_ROUTES = [
+  { path: '/query', label: 'Query', shortLabel: 'Q', description: 'Ask BOB, submit files, and inspect operational results.' },
+  { path: '/projects', label: 'Projects', shortLabel: 'P', description: 'Browse project and subproject build trees and inspect flows per node.' },
+  { path: '/data-mapper', label: 'Data Mapper', shortLabel: 'M', description: 'Define and test transformations between message formats.' },
+  { path: '/flow-designer', label: 'Flow Designer', shortLabel: 'F', description: 'Compose typed processing flows and bind deployment targets.' },
+  { path: '/topology', label: 'Topology', shortLabel: 'T', description: 'Inspect nodes, services, and runtime connectivity.' },
+  { path: '/provisioning-agent', label: 'Provisioning Agent', shortLabel: 'A', description: 'Run fleet provisioning jobs with retry policy and job history.' },
+]
 
 const originalFetch = window.fetch.bind(window)
 const apiBaseUrls = String(import.meta.env.VITE_API_BASES || '')
@@ -81,18 +93,25 @@ window.fetch = async (input, init = {}) => {
 
 function AppShell() {
   const [currentPath, setCurrentPath] = useState(window.location.pathname)
+  const [currentSearch, setCurrentSearch] = useState(window.location.search)
 
   useEffect(() => {
     const handlePopState = () => {
       setCurrentPath(window.location.pathname)
+      setCurrentSearch(window.location.search)
     }
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
   }, [])
 
   const navigateTo = (path) => {
+    if (path === '/query') {
+      window.location.assign('/bob-console.html')
+      return
+    }
     window.history.pushState(null, '', path)
     setCurrentPath(path)
+    setCurrentSearch('')
   }
 
   // Default: redirect to BOB Console
@@ -101,55 +120,89 @@ function AppShell() {
     return null
   }
 
-  let currentPage = <QueryPage />
-  if (currentPath === '/topology') {
-    currentPage = <TopologyPage />
+  if (currentPath === '/query') {
+    window.location.replace('/bob-console.html')
+    return null
   }
 
+  let currentPage = null
+  if (currentPath === '/topology') {
+    currentPage = <TopologyPage />
+  } else if (currentPath === '/projects') {
+    currentPage = <ProjectTreePage />
+  } else if (currentPath === '/data-mapper') {
+    currentPage = <DataMapper />
+  } else if (currentPath === '/flow-designer') {
+    const params = new URLSearchParams(currentSearch || '')
+    const projectId = String(params.get('projectId') || 'default').trim() || 'default'
+    const projectLabel = String(params.get('projectLabel') || projectId).trim() || projectId
+    const subprojectPath = String(params.get('subproject') || '').trim()
+    currentPage = (
+      <FlowDesignerPage
+        projectId={projectId}
+        projectLabel={projectLabel}
+        subprojectPath={subprojectPath}
+      />
+    )
+  } else if (currentPath === '/provisioning-agent') {
+    currentPage = <ProvisioningAgentPage />
+  }
+
+  const activeTool = TOOL_ROUTES.find(tool => tool.path === currentPath) || TOOL_ROUTES[0]
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
-      <nav style={{
-        padding: '12px 20px',
-        backgroundColor: '#f5f5f5',
-        borderBottom: '1px solid #ddd',
-        display: 'flex',
-        gap: '12px',
-        alignItems: 'center'
-      }}>
-        <button
-          onClick={() => navigateTo('/')}
-          style={{
-            padding: '8px 16px',
-            backgroundColor: currentPath === '/' ? '#333' : '#fff',
-            color: currentPath === '/' ? '#fff' : '#333',
-            border: '1px solid #ccc',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            fontSize: '14px',
-            fontWeight: currentPath === '/' ? 'bold' : 'normal'
-          }}
-        >
-          Ollama Query
-        </button>
-        <button
-          onClick={() => navigateTo('/topology')}
-          style={{
-            padding: '8px 16px',
-            backgroundColor: currentPath === '/topology' ? '#333' : '#fff',
-            color: currentPath === '/topology' ? '#fff' : '#333',
-            border: '1px solid #ccc',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            fontSize: '14px',
-            fontWeight: currentPath === '/topology' ? 'bold' : 'normal'
-          }}
-        >
-          Network Topology
-        </button>
-      </nav>
-      <div style={{ flex: 1, overflow: 'auto' }}>
-        {currentPage}
+    <div className="tool-workbench">
+      <header className="tool-workbench-titlebar">
+        <strong>PULSE Workbench</strong>
+        <span>{activeTool.label}</span>
+      </header>
+      <div className="tool-workbench-body">
+        <nav className="tool-activity-bar" aria-label="Workbench tools">
+          {TOOL_ROUTES.map(tool => (
+            <button
+              key={tool.path}
+              type="button"
+              className={currentPath === tool.path ? 'active' : ''}
+              onClick={() => navigateTo(tool.path)}
+              aria-label={tool.label}
+              title={tool.label}
+            >
+              {tool.shortLabel}
+            </button>
+          ))}
+        </nav>
+        <aside className="tool-explorer">
+          <div className="tool-explorer-heading">TOOLS</div>
+          {TOOL_ROUTES.map(tool => (
+            <button
+              key={tool.path}
+              type="button"
+              className={currentPath === tool.path ? 'active' : ''}
+              onClick={() => navigateTo(tool.path)}
+            >
+              {tool.label}
+            </button>
+          ))}
+        </aside>
+        <main className="tool-workbench-main">
+          <header className="tool-page-bar">
+            <div>
+              <h1>{activeTool.label}</h1>
+              <p>{activeTool.description}</p>
+            </div>
+            <span className="tool-page-context">LOCAL WORKSPACE</span>
+          </header>
+          <div className="tool-page-content">
+            {currentPage}
+          </div>
+        </main>
       </div>
+      <footer className="tool-status-bar">
+        <span>PULSE</span>
+        <span>Connected</span>
+        <span className="tool-status-spacer" />
+        <span>Local runtime</span>
+      </footer>
     </div>
   )
 }

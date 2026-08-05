@@ -1,6 +1,0 @@
-[
-    { "type": "SetInput", "name": "set_input" },
-    { "type": "SetOutput", "name": "set_output" },
-    { "type": "RaisePin", "name": "raise" },
-    { "type": "LowerPin", "name": "lower" }
-]

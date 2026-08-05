@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <ctype.h>
 #include "SensorService.h"
 #include "DevicePin.h"
 #include <map>
@@ -11,11 +12,14 @@ DeviceConfiguration deviceConfig;
 #if defined(ARDUINO_ARCH_ESP8266)
 #include <ESP8266HTTPClient.h>
 #include <ESP8266WiFi.h>
+#include <ESP8266mDNS.h>
 #else
 #include <HTTPClient.h>
 #include <WiFi.h>
+#include <ESPmDNS.h>
 #endif
 #include <ESPAsyncWebServer.h>
+#include "https_service.h"
 
 #include <ArduinoJson.h>
 #include "ConfigSchema.h"
@@ -27,6 +31,7 @@ DeviceConfiguration deviceConfig;
 #include "broker_client.h"
 #include "provision_routes.h"
 #include "wifi_provisioning.h"
+#include "serial_provisioning.h"
 #include "cluster_routes.h"
 #include "udp_announcement.h"
 #include "udp_runtime.h"
@@ -93,6 +98,8 @@ std::map<String, bool> serviceBusyMap;
 
 namespace {
 bool gLittleFsInitialized = false;
+bool gMdnsInitialized = false;
+String gMdnsHost;
 
 bool ensureLittleFsInitialized() {
     if (gLittleFsInitialized) return true;
@@ -115,6 +122,58 @@ bool ensureLittleFsInitialized() {
 #endif
 
     return false;
+}
+
+String toMdnsHostLabel(const String& raw) {
+    String host = raw;
+    host.trim();
+    host.toLowerCase();
+    String out;
+    out.reserve(host.length());
+    for (size_t i = 0; i < host.length(); ++i) {
+        const char c = host[i];
+        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
+            out += c;
+        } else if (c == ' ' || c == '_' || c == '.') {
+            out += '-';
+        }
+    }
+    while (out.startsWith("-")) out.remove(0, 1);
+    while (out.endsWith("-")) out.remove(out.length() - 1);
+    if (out.length() == 0) out = "pulse-node";
+    if (out.length() > 63) out = out.substring(0, 63);
+    return out;
+}
+
+void startOrRefreshMdns(const String& preferredNodeName) {
+    if (WiFi.status() != WL_CONNECTED) {
+        return;
+    }
+
+    const String host = toMdnsHostLabel(preferredNodeName);
+    const bool hostChanged = gMdnsHost.length() && gMdnsHost != host;
+
+    if (gMdnsInitialized && hostChanged) {
+        MDNS.end();
+        gMdnsInitialized = false;
+    }
+
+    if (!gMdnsInitialized) {
+        if (!MDNS.begin(host.c_str())) {
+            Serial.printf("[mDNS] Failed to start for host %s.local\n", host.c_str());
+            return;
+        }
+        MDNS.addService("http", "tcp", 80);
+        MDNS.addService("https", "tcp", 443);
+        gMdnsInitialized = true;
+        gMdnsHost = host;
+        Serial.printf("[mDNS] Advertising as %s.local\n", gMdnsHost.c_str());
+        return;
+    }
+
+#if defined(ARDUINO_ARCH_ESP8266)
+    MDNS.update();
+#endif
 }
 }
 
@@ -2283,6 +2342,17 @@ void setupWebServer() {
     server.on("/BTConnect", HTTP_GET, serveBtConnectPage);
     server.on("/BRConnect", HTTP_GET, serveBtConnectPage);
 
+    server.on("/web/provisioning.html", HTTP_GET, [](AsyncWebServerRequest *request) {
+        if (LittleFS.exists("/web/provisioning.html")) {
+            request->send(LittleFS, "/web/provisioning.html", "text/html");
+            return;
+        }
+        request->send(404, "text/plain", "Missing /web/provisioning.html on LittleFS. Upload data/ first.");
+    });
+    server.on("/provisioning", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->redirect("/web/provisioning.html");
+    });
+
     server.on("/supervisor/config", HTTP_POST, [](AsyncWebServerRequest *request){
         if (!isSupervisorRole()) {
             request->send(409, "application/json", "{\"error\":\"supervisor role required\"}");
@@ -2573,13 +2643,18 @@ void setupWebServer() {
     #else
     Serial.println("[WIFI-PROV] Disabled by build flag");
     #endif
-    
+
+#if defined(ENABLE_HTTPS) && (defined(ESP32) || defined(ESP8266))
+    registerHttpsTlsRoutes(server);
+#endif
+
     server.begin();
 }
 
 
 #define ANNOUNCE_INTERVAL 10000 // ms
 #define WIFI_RECONNECT_INTERVAL 5000 // ms
+constexpr unsigned long WIFI_FAILOVER_INTERVAL_MS = 15000;
 
 constexpr uint16_t DEFAULT_UDP_PARENT_PORT = 4210;
 constexpr uint16_t DEFAULT_UDP_SIBLING_PORT = 4211;
@@ -2590,6 +2665,7 @@ uint16_t runtimeUdpSiblingPort = DEFAULT_UDP_SIBLING_PORT;
 unsigned long lastTopologySyncMs = 0;
 
 unsigned long lastAnnounce = 0;
+unsigned long lastWifiFailoverAttemptMs = 0;
 
 #if 0 // UDP announcement and discovery disabled
 #define ANNOUNCE_PORT 4210
@@ -2816,27 +2892,75 @@ void setup() {
     }
 #endif
 
+    // Load persisted node identity early so provisioning AP/hostname can use it.
+    if (loadNodeConfig(nodeConfig) && nodeConfig.nodeName.length()) {
+        nodeName = nodeConfig.nodeName;
+    } else {
+        File f = LittleFS.open(NODE_NAME_PATH, "r");
+        if (f) {
+            String savedName = f.readString();
+            f.close();
+            savedName.trim();
+            if (savedName.length()) {
+                nodeName = savedName;
+            }
+        }
+    }
+
     // 2. WiFi connection logic
     Serial.println("[BOOT] Connecting to WiFi...");
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
     WiFi.persistent(false);
-    String wifiSsid = wifiConfig.ssid.length() ? wifiConfig.ssid : "Home";
-    String wifiPassword = wifiConfig.password.length() ? wifiConfig.password : "Brady123";
-    WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
-    udpRuntimeConfigureWifiCredentials(wifiSsid, wifiPassword);
-    int retries = 0;
-    while (WiFi.status() != WL_CONNECTED && retries < 30) {
-        delay(500);
-        Serial.print(".");
-        retries++;
+    WiFi.disconnect(true, true);
+    delay(50);
+
+    initializeWiFiProvisioning(nodeName.c_str());
+    if (globalWiFiProvisioning) {
+        globalWiFiProvisioning->eraseLegacyCredentialStores();
     }
+
+    bool connected = false;
+    if (globalWiFiProvisioning) {
+        connected = globalWiFiProvisioning->connectWiFi(nullptr, 12);
+        if (connected) {
+            const WiFiCredentials& active = globalWiFiProvisioning->getCurrentCredentials();
+            udpRuntimeConfigureWifiCredentials(active.ssid, active.password);
+        }
+    }
+
+    if (!connected && wifiConfig.ssid.length() > 0) {
+        Serial.println("[BOOT] Falling back to in-memory wifiConfig credentials");
+        WiFi.begin(wifiConfig.ssid.c_str(), wifiConfig.password.c_str());
+        udpRuntimeConfigureWifiCredentials(wifiConfig.ssid, wifiConfig.password);
+        int retries = 0;
+        while (WiFi.status() != WL_CONNECTED && retries < 20) {
+            delay(500);
+            Serial.print(".");
+            retries++;
+        }
+    }
+
     Serial.println();
     if (WiFi.status() == WL_CONNECTED) {
         Serial.print("[BOOT] WiFi connected: ");
         Serial.println(WiFi.localIP());
     } else {
-        Serial.println("[BOOT] WiFi connection failed");
+        Serial.println("[BOOT] WiFi connection failed (no usable provisioned profile)");
+        String ssidBase = nodeName.length() ? nodeName : String("ESP32");
+        ssidBase.replace(" ", "-");
+        String apName = String("Pulse-") + ssidBase + "-Provision";
+        if (apName.length() > 31) {
+            apName = apName.substring(0, 31);
+        }
+        WiFi.mode(WIFI_AP_STA);
+        const bool apStarted = WiFi.softAP(apName.c_str());
+        if (apStarted) {
+            Serial.printf("[WIFI-PROV] Provisioning AP started: %s\n", apName.c_str());
+            Serial.printf("[WIFI-PROV] AP IP: %s\n", WiFi.softAPIP().toString().c_str());
+        } else {
+            Serial.printf("[WIFI-PROV] Failed to start provisioning AP: %s\n", apName.c_str());
+        }
     }
 
     // 3. Ensure /devices, /services, and /flows directories exist at root at boot
@@ -2946,19 +3070,27 @@ void setup() {
     if (loadNodeConfig(nodeConfig) && nodeConfig.nodeName.length()) {
         nodeName = nodeConfig.nodeName;
     } else {
-        // Fallback: Load node name if exists
+        bool loadedStoredName = false;
         File f = LittleFS.open(NODE_NAME_PATH, "r");
         if (f) {
-            nodeName = f.readString();
+            String savedName = f.readString();
             f.close();
+            savedName.trim();
+            if (savedName.length()) {
+                nodeName = savedName;
+                loadedStoredName = true;
+            }
         }
-        // Append last 4 hex digits of MAC for uniqueness
-        uint8_t mac[6];
-        WiFi.macAddress(mac);
-        char macSuffix[5];
-        sprintf(macSuffix, "%02X%02X", mac[4], mac[5]);
-        nodeName += "-";
-        nodeName += macSuffix;
+
+        // If no persisted name exists, append last 4 hex digits of MAC for uniqueness.
+        if (!loadedStoredName) {
+            uint8_t mac[6];
+            WiFi.macAddress(mac);
+            char macSuffix[5];
+            sprintf(macSuffix, "%02X%02X", mac[4], mac[5]);
+            nodeName += "-";
+            nodeName += macSuffix;
+        }
     }
 
     #ifndef DISABLE_BONECRUSHER
@@ -2972,6 +3104,7 @@ void setup() {
 
     // 6. Set hostname, start UDP, and announce presence (must be after WiFi is up and nodeName is set)
     WiFi.setHostname(nodeName.c_str());
+    startOrRefreshMdns(nodeName);
     Serial.println("[OTA] Removed: use serial firmware upload + FFS file upload for delivery");
     configureSupervisorTargets();
     loadSupervisorConfig();
@@ -3296,12 +3429,33 @@ void setup() {
 
     // 8. Web server for node name config (Async)
     setupWebServer();
+#if defined(ENABLE_HTTPS) && (defined(ESP32) || defined(ESP8266))
+    startHttpsService();
+#endif
 #if defined(ESP32) && !defined(DISABLE_BONECRUSHER)
     startEsp32GatewayWorkerTaskIfNeeded();
 #endif
 }
 
 void loop() {
+    serialProvisioningPoll();
+
+    if (WiFi.status() != WL_CONNECTED && globalWiFiProvisioning) {
+        const unsigned long now = millis();
+        if (now - lastWifiFailoverAttemptMs >= WIFI_FAILOVER_INTERVAL_MS) {
+            lastWifiFailoverAttemptMs = now;
+            if (globalWiFiProvisioning->connectWiFi(nullptr, 10)) {
+                const WiFiCredentials& active = globalWiFiProvisioning->getCurrentCredentials();
+                udpRuntimeConfigureWifiCredentials(active.ssid, active.password);
+                startOrRefreshMdns(nodeName);
+            }
+        }
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+        startOrRefreshMdns(nodeName);
+    }
+
     udpRuntimeMaintainConnectivity(runtimeUdpParentPort, runtimeUdpSiblingPort, WIFI_RECONNECT_INTERVAL);
 
 #ifdef ENABLE_TIME_AUTHORITY

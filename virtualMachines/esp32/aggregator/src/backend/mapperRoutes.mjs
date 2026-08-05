@@ -11,7 +11,10 @@ import { runSingleMessageForEvolution } from '../../scripts/run-js-pmachine.mjs'
 import { ollamaGenerate } from './ollamaService.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const defaultRuntimeRoot = path.join(repoRoot, 'data');
+const defaultRuntimeRoot = path.resolve(
+  process.env.PULSE_OPERATIONAL_DATA_ROOT
+  || (process.platform === 'win32' ? 'c:/dev/pulse-operational-data' : '/opt/pulse/operational-data')
+);
 const runtimeRoot = path.resolve(
   process.env.PULSE_DEVELOP_WORKSPACE_ROOT
   || process.env.PULSE_RUNTIME_DATA_ROOT

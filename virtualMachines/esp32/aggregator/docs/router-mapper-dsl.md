@@ -1,13 +1,18 @@
-# Routing/Mapper Pascal-ish DSL
+# Routing/Transformer Pascal-ish DSL
 
-This DSL is designed for queue routing and message mapping, then compiled into JSON artifacts that can be executed by the existing routing engine and PL/0 interpreter. Older artifacts may still use router terminology for compatibility.
+This DSL is designed for queue routing and message transformation, then compiled into JSON artifacts that can be executed by the existing routing engine and PL/0 interpreter. Older artifacts may still use mapper terminology for compatibility.
+
+Terminology used in this document:
+- Router: reads a message and emits one or more queue deliveries.
+- Transformer (Mapper): changes payload shape/content between source and target schemas.
+- Flow: a broader pipeline that can include both routing and transformation stages.
 
 ## 1) Concrete DSL
 
 Top-level declarations:
 - SERVICE "service-id";
 - ROUTER ... END; (legacy keyword retained for compatibility)
-- MAPPER ... END;
+- MAPPER ... END; (mapper keyword represents transformer declarations)
 
 ### Routing syntax (legacy ROUTER keyword)
 
@@ -42,7 +47,7 @@ OUTPUT "correspondent.pacs008.outbound"
   WHEN "output := 1;"
   TRANSFORM "output := src;";
 
-### Mapper syntax
+### Transformer syntax (MAPPER keyword)
 
 MAPPER "mapping-id" SOURCE "source-type" TARGET "target-type" [DESCRIPTION "text"] [ENABLED TRUE|FALSE] BEGIN
   MAP "source.path" TO "target.path" [USING "<pl0-conversion>"];
@@ -80,7 +85,7 @@ Output artifacts:
 The compiler flow is:
 1. Tokenize DSL
 2. Parse DSL to AST
-3. Walk AST and emit routing + mapper artifacts
+3. Walk AST and emit router + transformer artifacts
 4. Validate all embedded PL/0 snippets with the PL/0 parser
 5. Write generated artifacts
 
