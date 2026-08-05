@@ -16,7 +16,7 @@ begin
 end;
 
 begin
-  diskCount := 3;
+  diskCount := 6;
   writeln('Towers of Hanoi for ', diskCount, ' disks:');
   Hanoi(diskCount, 1, 3, 2)
 end.

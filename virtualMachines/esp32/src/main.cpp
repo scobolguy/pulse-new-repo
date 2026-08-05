@@ -1038,6 +1038,11 @@ void loadBonecrusherWorkerConfig() {
 }
 
 int httpPostJson(const String& url, const String& body, String& responseBody, uint16_t timeoutMs = 4000) {
+#if defined(ESP32) && defined(ENABLE_BT_CONTROL_PLANE)
+    if (WiFi.status() != WL_CONNECTED && !url.startsWith("http://127.0.0.1")) {
+        return bluetoothControlPlaneHttpPost(url, body, responseBody, timeoutMs);
+    }
+#endif
     HTTPClient http;
 #if defined(ARDUINO_ARCH_ESP8266)
     WiFiClient postJsonClient;
@@ -1050,6 +1055,13 @@ int httpPostJson(const String& url, const String& body, String& responseBody, ui
     const int code = http.POST(body);
     responseBody = (code > 0) ? http.getString() : "";
     http.end();
+#if defined(ESP32) && defined(ENABLE_BT_CONTROL_PLANE)
+    if (code <= 0
+        && !url.startsWith("http://127.0.0.1")
+        && bluetoothControlPlaneClientConnected()) {
+        return bluetoothControlPlaneHttpPost(url, body, responseBody, timeoutMs);
+    }
+#endif
     return code;
 }
 
@@ -1172,7 +1184,11 @@ bool processClaimWithLocalIngress(
 
 void runBonecrusherWorkerIteration() {
     if (!isBonecrusherRole() || !bonecrusherConfig.enabled) return;
-    if (WiFi.status() != WL_CONNECTED) return;
+    if (WiFi.status() != WL_CONNECTED
+#if defined(ESP32) && defined(ENABLE_BT_CONTROL_PLANE)
+        && !bluetoothControlPlaneClientConnected()
+#endif
+    ) return;
 
     const String qmBase = trimTrailingSlash(bonecrusherConfig.queueManagerUrl);
 
@@ -1279,7 +1295,11 @@ void runBonecrusherWorkerIteration() {
 
 void runEsp32GatewayWorkersIteration() {
     if (!isBonecrusherRole() || !esp32GatewayWorkersEnabled) return;
-    if (WiFi.status() != WL_CONNECTED) return;
+    if (WiFi.status() != WL_CONNECTED
+#if defined(ESP32) && defined(ENABLE_BT_CONTROL_PLANE)
+        && !bluetoothControlPlaneClientConnected()
+#endif
+    ) return;
     if (esp32GatewayWorkers.empty()) return;
 
     for (size_t i = 0; i < esp32GatewayWorkers.size(); ++i) {

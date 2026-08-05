@@ -52,7 +52,7 @@ RET
 MAIN:
 PUSH_INT 0
 STORE diskCount
-PUSH_INT 3
+PUSH_INT 6
 STORE diskCount
 PUSH_STR "Towers of Hanoi for "
 PRINT

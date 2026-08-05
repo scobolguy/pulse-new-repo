@@ -2651,6 +2651,91 @@ void ensureRouterAsyncWorkerStarted(FederatedFileSystem* ffs) {
 
 }
 
+PMachineFileExecutionResult executePMachineFile(
+    pmachine::PMachine& machine,
+    FederatedFileSystem* ffs,
+    const String& file,
+    const String& programMap,
+    const String& inputQueue,
+    const String& message,
+    size_t maxBytes
+) {
+    PMachineFileExecutionResult result;
+    machine.unloadUnit();
+    std::vector<pmachine::PInstruction> instructions;
+    size_t binaryBytes = 0;
+    size_t thunkBindingsApplied = 0;
+    {
+        String text;
+        if (!readTextFromPath(file, ffs, text)) {
+            result.statusCode = 404;
+            result.body = "File not found or read error";
+            return result;
+        }
+        if (maxBytes > 0 && static_cast<size_t>(text.length()) > maxBytes) {
+            result.statusCode = 413;
+            result.body = "File too large";
+            return result;
+        }
+
+        JsonDocument programMapDoc;
+        if (!deserializeDocFromPath(programMap, ffs, programMapDoc)) {
+            result.statusCode = 404;
+            result.body = "Unable to load program map file";
+            return result;
+        }
+
+        String verifyError;
+        if (!verifySignedPcode(text, programMapDoc, verifyError)) {
+            result.statusCode = 403;
+            result.body = verifyError;
+            return result;
+        }
+
+        std::vector<pmachine::MappingDef> mappingDefs;
+        std::map<std::string, std::vector<std::string>> procedureSignatures;
+        ProgramMapMetadata metadata;
+        String mappingError;
+        if (!loadProgramMapMappingsFromDoc(
+                programMapDoc,
+                mappingDefs,
+                &procedureSignatures,
+                mappingError,
+                &metadata
+            )) {
+            result.statusCode = 404;
+            result.body = mappingError;
+            return result;
+        }
+
+        instructions = pmachine::loadTextPCode(std::string(text.c_str()));
+        std::vector<uint8_t> binary = assembleInstructionsToBinary(instructions);
+        PMachineExecutionPolicy policy;
+        applyRuntimeAndResidencyPolicy(machine, &policy, &metadata);
+        machine.clearMappings();
+        machine.setProcedureSignatures(procedureSignatures);
+        thunkBindingsApplied = applyLibraryReferencesFromMetadata(machine, metadata);
+        binaryBytes = binary.size();
+        const size_t programLimit = maxBytes > 0 ? maxBytes : binaryBytes;
+        machine.loadProgram(std::move(binary), std::string(file.c_str()), programLimit);
+    }
+    machine.clearRoutingDeliveries();
+    machine.setRoutingContext(std::string(inputQueue.c_str()), std::string(message.c_str()));
+    machine.run(instructions);
+
+    JsonDocument out;
+    addRunOutputsToJson(out, machine, "file", inputQueue, message);
+    out["file"] = file;
+    out["programMap"] = programMap;
+    out["runRouter"] = false;
+    out["instructionCount"] = static_cast<uint32_t>(instructions.size());
+    out["binaryBytes"] = static_cast<uint32_t>(binaryBytes);
+    out["thunkBindingsApplied"] = static_cast<uint32_t>(thunkBindingsApplied);
+    serializeJson(out, result.body);
+    result.statusCode = 200;
+    return result;
+}
+
 void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine, FederatedFileSystem* ffs) {
     // Generic map-driven conversion service.
     server.on("/api/convert", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL,
@@ -3758,7 +3843,8 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
             }
         }
 
-        machine.loadProgram(binary, std::string(file.c_str()), max > 0 ? max : binary.size());
+        const size_t programLimit = max > 0 ? max : binary.size();
+        machine.loadProgram(std::move(binary), std::string(file.c_str()), programLimit);
 
         machine.clearRoutingDeliveries();
         machine.setRoutingContext(std::string(inputQueue.c_str()), std::string(message.c_str()));
@@ -3862,7 +3948,8 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
             }
         }
 
-        machine.loadProgram(binary, "payload://inline", max > 0 ? max : binary.size());
+        const size_t programLimit = max > 0 ? max : binary.size();
+        machine.loadProgram(std::move(binary), "payload://inline", programLimit);
 
         machine.clearRoutingDeliveries();
         machine.setRoutingContext(std::string(inputQueue.c_str()), std::string(message.c_str()));
@@ -4030,7 +4117,8 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
                 }
             }
 
-            machine.loadProgram(binary, "payload://json", max > 0 ? max : binary.size());
+            const size_t programLimit = max > 0 ? max : binary.size();
+            machine.loadProgram(std::move(binary), "payload://json", programLimit);
             machine.clearRoutingDeliveries();
             machine.setRoutingContext(std::string(inputQueue.c_str()), std::string(message.c_str()));
             machine.run(instructions);

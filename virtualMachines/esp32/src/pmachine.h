@@ -297,6 +297,8 @@ using ServiceCallHook = bool (*)(
     std::string& outError,
     void* context);
 
+using TextOutputHook = void (*)(const std::string& line, void* context);
+
 enum class RuntimeUnitKind : uint8_t {
     Program = 0,
     Service = 1,
@@ -397,7 +399,7 @@ public:
     const std::vector<std::string> getStringPool() const;
     std::map<std::string, int> getEnumTypes() const;
     Status getStatus() const;
-    bool loadProgram(const std::vector<uint8_t>& pcode, const std::string& backingFile, size_t maxSpace);
+    bool loadProgram(std::vector<uint8_t> pcode, const std::string& backingFile, size_t maxSpace);
     bool loadUnit(const std::string& kind, const std::string& id, uint32_t refreshMs = 0);
     bool unloadUnit();
     void setMemoryConfig(size_t pageSizeBytes, size_t maxFrames);
@@ -433,6 +435,7 @@ public:
     void setOrchestrationWaitHook(OrchestrationWaitHook hook, void* context = nullptr);
     void setThunkResolverHook(ThunkResolveHook hook, void* context = nullptr);
     void setServiceCallHook(ServiceCallHook hook, void* context = nullptr);
+    void setTextOutputHook(TextOutputHook hook, void* context = nullptr);
     void setThunkBinding(const std::string& symbol, int targetPc);
     bool clearThunkBinding(const std::string& symbol);
     void clearAllThunkBindings();
@@ -473,6 +476,8 @@ private:
     void* thunkResolverContext = nullptr;
     std::map<std::string, int> thunkBindings;
     ServiceCallHook serviceCallHook = nullptr;
+    TextOutputHook textOutputHook = nullptr;
+    void* textOutputContext = nullptr;
     void* serviceCallContext = nullptr;
     std::map<std::string, std::string> namedStringVariables;  // String-valued named variables (e.g., 'src')
 

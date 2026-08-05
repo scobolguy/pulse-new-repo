@@ -723,6 +723,10 @@ void PMachine::setServiceCallHook(ServiceCallHook hook, void* context) {
     serviceCallHook = hook;
     serviceCallContext = context;
 }
+void PMachine::setTextOutputHook(TextOutputHook hook, void* context) {
+    textOutputHook = hook;
+    textOutputContext = context;
+}
 void PMachine::setThunkBinding(const std::string& symbol, int targetPc) {
     const std::string key = trimCopy(symbol);
     if (key.empty()) return;
@@ -966,16 +970,25 @@ bool PMachine::loadUnit(const std::string& kind, const std::string& id, uint32_t
 }
 
 bool PMachine::unloadUnit() {
-    if (!runtimeUnit.resident) return true;
-    unloadResidentDomain("program-image", runtimeUnit.id);
+    if (runtimeUnit.resident) {
+        unloadResidentDomain("program-image", runtimeUnit.id);
+    }
     runtimeUnit.resident = false;
     pcodeMap.clear();
     memoryMap.clear();
-    programImage.clear();
-    pageTable.clear();
-    frames.clear();
-    backingFile.clear();
+    decltype(programImage)().swap(programImage);
+    decltype(pageTable)().swap(pageTable);
+    decltype(frames)().swap(frames);
+    decltype(routingDeliveries)().swap(routingDeliveries);
+    decltype(lastRunTextOutput)().swap(lastRunTextOutput);
+    namedStringVariables.clear();
+    clearProcedureSignatures();
+    std::string().swap(currentInputQueue);
+    std::string().swap(currentMessage);
+    std::string().swap(backingFile);
     numPages = 0;
+    maxSpace = 0;
+    lruTick = 0;
     return true;
 }
 
@@ -987,10 +1000,10 @@ void PMachine::tickDaemonRefresh(uint32_t nowMs) {
     }
 }
 
-bool PMachine::loadProgram(const std::vector<uint8_t>& pcode, const std::string& file, size_t maxBytes) {
+bool PMachine::loadProgram(std::vector<uint8_t> pcode, const std::string& file, size_t maxBytes) {
     pcodeMap.clear();
     memoryMap.clear();
-    programImage = pcode;
+    programImage = std::move(pcode);
     pageTable.clear();
     frames.clear();
     lruTick = 0;
@@ -1002,15 +1015,19 @@ bool PMachine::loadProgram(const std::vector<uint8_t>& pcode, const std::string&
     if (pagingConfig.maxFrames == 0) pagingConfig.maxFrames = 24;
 
     const size_t pageSize = pagingConfig.pageSizeBytes;
-    numPages = static_cast<int>((pcode.size() + pageSize - 1) / pageSize);
+    numPages = static_cast<int>((programImage.size() + pageSize - 1) / pageSize);
     pageTable.resize(static_cast<size_t>(numPages));
 
     // Keep a bounded debug view of the image to avoid heap exhaustion from
     // one map node per byte on constrained devices.
+#if defined(ESP32)
+    constexpr size_t kMaxPcodeMapEntries = 64;
+#else
     constexpr size_t kMaxPcodeMapEntries = 512;
-    const size_t pcodeMapCount = std::min(pcode.size(), kMaxPcodeMapEntries);
+#endif
+    const size_t pcodeMapCount = std::min(programImage.size(), kMaxPcodeMapEntries);
     for (size_t i = 0; i < pcodeMapCount; ++i) {
-        pcodeMap[static_cast<uint16_t>(i)] = pcode[i];
+        pcodeMap[static_cast<uint16_t>(i)] = programImage[i];
     }
 
     const size_t residentPages = std::min(static_cast<size_t>(numPages), pagingConfig.maxFrames);
@@ -1113,6 +1130,11 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
     std::vector<pmachine::PInstruction> instructions;
     std::map<std::string, size_t> labelToIndex;
     std::vector<std::pair<size_t, std::string>> unresolvedJumps;
+    const size_t estimatedLineCount = 1 + static_cast<size_t>(
+        std::count(text.begin(), text.end(), '\n')
+    );
+    instructions.reserve(estimatedLineCount);
+    unresolvedJumps.reserve(std::min(estimatedLineCount, static_cast<size_t>(64)));
     std::istringstream iss(text);
     std::string line;
     while (std::getline(iss, line)) {
@@ -1128,7 +1150,17 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
         // Check for label: prefix
         std::string label, rest = line;
         size_t colon = line.find(':');
-        if (colon != std::string::npos && colon > 0 && isalpha(line[0])) {
+        const size_t firstWhitespace = line.find_first_of(" \t");
+        const bool hasLabelToken = colon != std::string::npos
+            && colon > 0
+            && (firstWhitespace == std::string::npos || colon < firstWhitespace)
+            && isalpha(static_cast<unsigned char>(line[0]))
+            && std::all_of(
+                line.begin(),
+                line.begin() + colon,
+                [](unsigned char value) { return isalnum(value) || value == '_'; }
+            );
+        if (hasLabelToken) {
             label = line.substr(0, colon);
             rest = line.substr(colon + 1);
             // Remove leading whitespace after colon
@@ -1258,17 +1290,31 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
 void PMachine::run(const std::vector<PInstruction>& instructions) {
     static const size_t MAX_RUN_STEPS = 20000;
     static const int STACK_SIZE = 1024;
+    static const size_t MAX_NAME_FRAME_DEPTH = 128;
+    static const size_t INITIAL_NAME_FRAME_CAPACITY = 8;
     int stack[STACK_SIZE] = {0};
     std::vector<std::string> strStack;
-    std::vector<std::map<std::string, int>> nameFrames;
+    using NameBinding = std::pair<std::string, int>;
+    using NameFrame = std::vector<NameBinding>;
+    std::vector<NameFrame> nameFrames;
+    nameFrames.reserve(INITIAL_NAME_FRAME_CAPACITY);
     nameFrames.emplace_back();
     struct NameCallFrame {
         int returnPc = 0;
         size_t envDepth = 1;
     };
     std::vector<NameCallFrame> nameCallStack;
+    nameCallStack.reserve(INITIAL_NAME_FRAME_CAPACITY);
     std::string currentOutputLine;
-    std::vector<std::string> outputLines;
+    std::vector<std::string>& outputLines = lastRunTextOutput;
+    outputLines.clear();
+    auto emitOutputLine = [&](const std::string& line) {
+        if (textOutputHook) {
+            textOutputHook(line, textOutputContext);
+        } else {
+            outputLines.push_back(line);
+        }
+    };
     std::vector<OrchestrationSpawnRequest> pendingOrchTasks;
     bool lastOrchWaitSuccess = false;
     struct IntCollection {
@@ -1297,22 +1343,24 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
 
     auto resolveName = [&](const std::string& key) -> int {
         for (auto it = nameFrames.rbegin(); it != nameFrames.rend(); ++it) {
-            auto found = it->find(key);
-            if (found != it->end()) return found->second;
+            for (auto binding = it->rbegin(); binding != it->rend(); ++binding) {
+                if (binding->first == key) return binding->second;
+            }
         }
         return 0;
     };
 
     auto assignName = [&](const std::string& key, int value) {
         for (auto it = nameFrames.rbegin(); it != nameFrames.rend(); ++it) {
-            auto found = it->find(key);
-            if (found != it->end()) {
-                found->second = value;
-                return;
+            for (auto binding = it->rbegin(); binding != it->rend(); ++binding) {
+                if (binding->first == key) {
+                    binding->second = value;
+                    return;
+                }
             }
         }
         if (nameFrames.empty()) nameFrames.emplace_back();
-        nameFrames.back()[key] = value;
+        nameFrames.back().emplace_back(key, value);
     };
 
     auto resolveIntToken = [&](const std::string& token) -> int {
@@ -1341,7 +1389,6 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             return false;
         }
         // Prevent runaway recursion from exhausting heap on ESP32.
-        constexpr size_t MAX_NAME_FRAME_DEPTH = 128;
         if (nameFrames.size() >= MAX_NAME_FRAME_DEPTH) {
             lastCallError = "max call depth exceeded";
             return false;
@@ -1354,7 +1401,8 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
         }
         std::reverse(args.begin(), args.end());
 
-        std::map<std::string, int> frameVars;
+        NameFrame frameVars;
+        frameVars.reserve(static_cast<size_t>(argc > 0 ? argc : 0));
         auto sigIt = procedureParamsByLabel.find(lookupLabel);
         if (sigIt == procedureParamsByLabel.end()) {
             const std::string targetLabel = instructions[targetPc].label;
@@ -1380,20 +1428,21 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             const std::vector<std::string>& names = sigIt->second;
             for (size_t i = 0; i < names.size(); ++i) {
                 const int value = (i < args.size()) ? args[i] : 0;
-                frameVars[names[i]] = value;
+                frameVars.emplace_back(names[i], value);
             }
         } else {
             // Canonical fallback for common recursive procedure shape.
             if (args.size() >= 4) {
-                frameVars["n"] = args[0];
-                frameVars["fromPeg"] = args[1];
-                frameVars["toPeg"] = args[2];
-                frameVars["auxPeg"] = args[3];
-            }
-            // Keep fallback bindings bounded to avoid unbounded per-frame allocations.
-            constexpr size_t MAX_FALLBACK_PARAMS = 8;
-            for (size_t i = 0; i < args.size() && i < MAX_FALLBACK_PARAMS; ++i) {
-                frameVars[std::string("p") + std::to_string(i)] = args[i];
+                frameVars.emplace_back("n", args[0]);
+                frameVars.emplace_back("fromPeg", args[1]);
+                frameVars.emplace_back("toPeg", args[2]);
+                frameVars.emplace_back("auxPeg", args[3]);
+            } else {
+                // Keep generic fallback bindings bounded to avoid unbounded per-frame allocations.
+                constexpr size_t MAX_FALLBACK_PARAMS = 8;
+                for (size_t i = 0; i < args.size() && i < MAX_FALLBACK_PARAMS; ++i) {
+                    frameVars.emplace_back(std::string("p") + std::to_string(i), args[i]);
+                }
             }
         }
 
@@ -1410,7 +1459,6 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
     gFlowState.clear();
     lastRunStepLimitHit = false;
     lastRunStepCount = 0;
-    lastRunTextOutput.clear();
     running = true;
     PMTRACE(Serial.println("[DEBUG] Executing pinstructions:"));
     while (pc < (int)instructions.size()) {
@@ -1662,7 +1710,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             continue;
         }
         if (instr.opcode == OP_PRINT_NL) {
-            outputLines.push_back(currentOutputLine);
+            emitOutputLine(currentOutputLine);
             currentOutputLine.clear();
             ++pc;
             continue;
@@ -2038,9 +2086,8 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
         }
     }
     if (!currentOutputLine.empty()) {
-        outputLines.push_back(currentOutputLine);
+        emitOutputLine(currentOutputLine);
     }
-    lastRunTextOutput = outputLines;
     lastRunStepCount = steps;
     running = false;
     if (runtimeUnit.kind == RuntimeUnitKind::Program) {
