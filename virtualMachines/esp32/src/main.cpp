@@ -70,6 +70,10 @@ DeviceConfiguration deviceConfig;
 #include "bluetooth_routes.h"
 #endif
 
+#if defined(ESP32) && defined(ENABLE_BT_CONTROL_PLANE)
+#include "bluetooth_control_plane.h"
+#endif
+
 #if defined(ENABLE_BLUETOOTH_AUDIO_TTS) && defined(ENABLE_BLUETOOTH_DEVICES)
 #include "BluetoothAudioTtsService.h"
 #endif
@@ -3349,6 +3353,11 @@ void setup() {
 #endif
 #endif
 
+#if defined(ESP32) && defined(ENABLE_BT_CONTROL_PLANE)
+    Serial.println("[BOOT] Initializing Bluetooth control plane...");
+    initializeBluetoothControlPlane(nodeName);
+#endif
+
 #ifdef ENABLE_EVENT_SCHEDULER
     Serial.println("[BOOT] Initializing Event Scheduler service...");
     globalEventScheduler = new EventScheduler();
@@ -3479,6 +3488,10 @@ void loop() {
         globalBluetoothAudioTtsService->loop();
     }
 #endif
+#endif
+
+#if defined(ESP32) && defined(ENABLE_BT_CONTROL_PLANE)
+    bluetoothControlPlaneLoop();
 #endif
 
 #ifdef ENABLE_EVENT_SCHEDULER
