@@ -1358,6 +1358,61 @@ export function registerOllamaRoutes(app) {
     });
   };
 
+  const requestNodeJson = ({ host, port = 80, path: requestPath, method = 'GET', timeout = 8000 }) => new Promise((resolve) => {
+    const request = http.request({ hostname: host, port, path: requestPath, method, timeout }, response => {
+      let raw = '';
+      response.on('data', chunk => { raw += chunk; });
+      response.on('end', () => {
+        let data = null;
+        try { data = raw ? JSON.parse(raw) : null; } catch { data = { error: raw || 'Invalid device response' }; }
+        resolve({ status: response.statusCode || 0, data });
+      });
+    });
+    request.on('error', error => resolve({ status: 503, data: { error: error.message } }));
+    request.on('timeout', () => {
+      request.destroy();
+      resolve({ status: 504, data: { error: 'Device request timed out' } });
+    });
+    request.end();
+  });
+
+  const normalizeDeviceName = value => String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^(?:the|some)\s+/, '')
+    .replace(/[^a-z0-9]/g, '');
+
+  const nodeServices = node => (Array.isArray(node?.details?.services) ? node.details.services : [])
+    .map(service => String(typeof service === 'string' ? service : service?.name || '').toLowerCase());
+
+  const resolveNamedNode = (nodes, requestedName, capability = '') => {
+    const requested = normalizeDeviceName(requestedName);
+    if (!requested) return null;
+
+    const candidates = (Array.isArray(nodes) ? nodes : []).filter(node => {
+      if (!capability) return true;
+      const hardware = String(node?.hardware || node?.details?.hardware || '').toLowerCase();
+      const role = String(node?.deviceRole || node?.details?.deviceRole || '').toLowerCase();
+      return nodeServices(node).includes(capability) || hardware.includes(capability) || role.includes(capability);
+    }).sort((left, right) => {
+      const score = node => {
+        const hardware = String(node?.hardware || node?.details?.hardware || '').toLowerCase();
+        const role = String(node?.deviceRole || node?.details?.deviceRole || '').toLowerCase();
+        return (hardware.includes(capability) ? 4 : 0)
+          + (role.includes(capability) ? 2 : 0)
+          + (nodeServices(node).includes(capability) ? 1 : 0);
+      };
+      return score(right) - score(left);
+    });
+    const exact = candidates.find(node => [node?.nodeId, node?.nodeName, node?.ip]
+      .some(value => normalizeDeviceName(value) === requested));
+    if (exact) return exact;
+
+    const numbered = requested.match(new RegExp(`^${capability}(\\d+)$`));
+    if (numbered) return candidates[Number(numbered[1]) - 1] || null;
+    return null;
+  };
+
   /**
    * Known ESP32 nodes - hard-coded mapping of node names to IPs
    */
@@ -3880,28 +3935,68 @@ timerId = setInterval(refresh, intervalMs);
       };
     },
 
-    camera(_data, captures) {
-      const node = (captures?.value || '').toLowerCase();
-      // Node → IP mapping (matches data in knownNodes / esp32-nodes)
-      const NODE_IPS = { child1: '192.168.2.157', child2: '192.168.2.59', child3: '192.168.2.58' };
-      const ip = NODE_IPS[node];
-      if (!ip) return `<p style="font-family:-apple-system,sans-serif;color:#cf222e">Unknown node "${node}". Known camera nodes: child1 (ESP32-CAM at ${NODE_IPS.child1}).</p>`;
-      const streamUrl  = `http://${ip}/stream`;
-      const captureUrl = `http://${ip}/capture`;
+    async camera(_data, captures) {
+      const requestedCamera = String(captures?.camera || captures?.value || '').trim();
+      const nodes = await fetchNodeData();
+      const cameraNode = resolveNamedNode(nodes, requestedCamera, 'camera');
+      if (!cameraNode?.ip) {
+        return `<p style="font-family:-apple-system,sans-serif;color:#cf222e">Camera "${escapeAgentHtml(requestedCamera)}" was not found in the live node registry.</p>`;
+      }
+      const node = cameraNode.nodeName || cameraNode.nodeId || requestedCamera;
+      const ip = cameraNode.ip;
+      const streamUrl = `http://${ip}/api/camera/stream`;
+      const captureUrl = `http://${ip}/api/camera/capture`;
       return `<div style="font-family:-apple-system,'Segoe UI',sans-serif">
         <p style="margin:0 0 8px;font-size:13px;color:#57606a">
           Live feed — <strong>${node}</strong> &nbsp;·&nbsp; <span style="font-family:monospace">${ip}</span>
           &nbsp;·&nbsp; <a href="${streamUrl}" target="_blank" style="color:#3b82d4">open in new tab</a>
           &nbsp;·&nbsp; <a href="${captureUrl}" target="_blank" style="color:#3b82d4">snapshot</a>
         </p>
-        <img src="${streamUrl}"
-             style="width:100%;max-width:640px;border-radius:6px;border:1px solid #e5e7eb;display:block"
-             alt="Live feed from ${node}"
-             onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
-        <p style="display:none;color:#cf222e;font-size:13px">
-          Could not load stream from ${node} (${ip}). The device may be offline or not reachable from this browser.
-        </p>
+        <iframe src="${streamUrl}" title="Live feed from ${node}"
+                style="width:100%;max-width:640px;height:480px;border-radius:6px;border:1px solid #e5e7eb;display:block;background:#000"></iframe>
       </div>`;
+    },
+
+    async cameraDisplayStream(_data, captures) {
+      const requestedCamera = String(captures?.camera || '').trim();
+      const requestedDisplay = String(captures?.display || '').trim();
+      const nodes = await fetchNodeData();
+      const cameraNode = resolveNamedNode(nodes, requestedCamera, 'camera');
+      const displayNode = resolveNamedNode(nodes, requestedDisplay);
+
+      if (!cameraNode?.ip) {
+        return {
+          output: `<p style="font-family:-apple-system,sans-serif;color:#cf222e">Camera "${escapeAgentHtml(requestedCamera)}" was not found in the live node registry.</p>`,
+          voiceReply: `Camera ${requestedCamera} was not found`,
+          confidence: 0
+        };
+      }
+      if (!displayNode?.ip) {
+        return {
+          output: `<p style="font-family:-apple-system,sans-serif;color:#cf222e">Display "${escapeAgentHtml(requestedDisplay)}" was not found in the live node registry.</p>`,
+          voiceReply: `Display ${requestedDisplay} was not found`,
+          confidence: 0
+        };
+      }
+
+      const cameraName = cameraNode.nodeName || cameraNode.nodeId || requestedCamera;
+      const displayName = displayNode.nodeName || displayNode.nodeId || requestedDisplay;
+      const startPath = `/api/doorbell/display-stream/start?target=${encodeURIComponent(displayNode.ip)}&port=${encodeURIComponent(displayNode.port || 80)}&intervalMs=500`;
+      const result = await requestNodeJson({ host: cameraNode.ip, port: cameraNode.port || 80, path: startPath, method: 'POST' });
+      if (result.status < 200 || result.status >= 300 || !result.data?.ok) {
+        const error = result.data?.error || `HTTP ${result.status}`;
+        return {
+          output: `<p style="font-family:-apple-system,sans-serif;color:#cf222e">Could not route <strong>${escapeAgentHtml(cameraName)}</strong> to <strong>${escapeAgentHtml(displayName)}</strong>: ${escapeAgentHtml(error)}</p>`,
+          voiceReply: `Could not start the camera feed: ${error}`,
+          confidence: 0
+        };
+      }
+
+      return {
+        output: `<div style="font-family:-apple-system,'Segoe UI',sans-serif"><strong>Camera feed started</strong><p style="margin:6px 0 0"><code>${escapeAgentHtml(cameraName)}</code> (${escapeAgentHtml(cameraNode.ip)}) → <code>${escapeAgentHtml(displayName)}</code> (${escapeAgentHtml(displayNode.ip)})</p></div>`,
+        voiceReply: `Showing ${cameraName} on ${displayName}`,
+        confidence: 1
+      };
     },
 
     dashboard(data) {

@@ -1,6 +1,5 @@
 #include <Arduino.h>
 #include <ctype.h>
-#include "SensorService.h"
 #include "DevicePin.h"
 #include <map>
 #include <vector>
@@ -88,6 +87,56 @@ WifiConfig wifiConfig;
 ClusterConfig clusterConfig;
 FederatedFileSystem federatedFS;
 bool ffsUp = false;
+
+#if defined(ENABLE_DISPLAY) && !defined(DISPLAY_NO_LVGL)
+bool displayStatusDashboardActive = false;
+unsigned long lastDisplayStatusUpdateMs = 0;
+
+void updateDisplayStatusDashboard(bool force = false) {
+    if (!displayStatusDashboardActive || !displayService.isInitialized()) return;
+
+    const unsigned long now = millis();
+    if (!force && now - lastDisplayStatusUpdateMs < 1000) return;
+    lastDisplayStatusUpdateMs = now;
+
+    const bool wifiConnected = WiFi.status() == WL_CONNECTED;
+    String transport = "Transport: offline";
+    if (wifiConnected) {
+        transport = "Transport: WiFi";
+    }
+#if defined(ESP32) && defined(ENABLE_BT_CONTROL_PLANE)
+    else if (bluetoothControlPlaneClientConnected()) {
+        transport = "Transport: BLE fallback";
+    }
+#endif
+
+    String address = "Address: unavailable";
+    if (wifiConnected) {
+        address = "IP: " + WiFi.localIP().toString();
+    } else {
+        const IPAddress apAddress = WiFi.softAPIP();
+        if (apAddress != IPAddress(0, 0, 0, 0)) {
+            address = "AP: " + apAddress.toString();
+        }
+    }
+
+    const unsigned long uptimeSeconds = now / 1000;
+    const unsigned long hours = uptimeSeconds / 3600;
+    const unsigned long minutes = (uptimeSeconds / 60) % 60;
+    const unsigned long seconds = uptimeSeconds % 60;
+
+    ddlRenderer.updateTextWidget("transportStatus", transport);
+    ddlRenderer.updateTextWidget("addressStatus", address);
+    ddlRenderer.updateTextWidget(
+        "uptimeStatus",
+        String("Uptime: ") + hours + "h " + minutes + "m " + seconds + "s"
+    );
+    ddlRenderer.updateTextWidget(
+        "heapStatus",
+        String("Free heap: ") + ESP.getFreeHeap() + " bytes"
+    );
+}
+#endif
 AsyncWebServer server(80);
 DevicePin* devicePin = nullptr;
 int devicePinNumber = 2;
@@ -198,6 +247,13 @@ bool doorbellButtonLastReading = false;
 bool doorbellButtonStablePressed = false;
 unsigned long doorbellButtonLastChangeMs = 0;
 unsigned long doorbellLastMotionCheckMs = 0;
+String doorbellDisplayStreamHost;
+uint16_t doorbellDisplayStreamPort = 80;
+unsigned long doorbellDisplayStreamIntervalMs = 500;
+unsigned long doorbellDisplayStreamLastFrameMs = 0;
+unsigned long doorbellDisplayStreamFramesSent = 0;
+unsigned long doorbellDisplayStreamFailures = 0;
+int doorbellDisplayStreamLastStatus = 0;
 #endif
 
 #if defined(ENABLE_DOORBELL_DISPLAY)
@@ -437,6 +493,71 @@ void pollDoorbellButton() {
         if (doorbellButtonStablePressed) {
             emitDoorbellAlert("doorbell");
         }
+    }
+}
+
+bool startDoorbellDisplayStream(const String& host, uint16_t port, unsigned long intervalMs) {
+    if (!cameraService.isInitialized() || host.length() == 0) return false;
+
+    if (!cameraService.isStreaming() && !cameraService.startVideoStream(static_cast<int>(intervalMs))) {
+        return false;
+    }
+
+    doorbellDisplayStreamHost = host;
+    doorbellDisplayStreamPort = port;
+    doorbellDisplayStreamIntervalMs = intervalMs;
+    doorbellDisplayStreamLastFrameMs = 0;
+    doorbellDisplayStreamFramesSent = 0;
+    doorbellDisplayStreamFailures = 0;
+    doorbellDisplayStreamLastStatus = 0;
+    Serial.printf("[DOORBELL] Display stream started: %s:%u every %lums\n",
+                  host.c_str(), port, intervalMs);
+    return true;
+}
+
+void stopDoorbellDisplayStream() {
+    cameraService.stopVideoStream();
+    doorbellDisplayStreamHost = "";
+    doorbellDisplayStreamLastFrameMs = 0;
+    Serial.println("[DOORBELL] Display stream stopped");
+}
+
+void pollDoorbellDisplayStream() {
+    if (!cameraService.isStreaming() || doorbellDisplayStreamHost.length() == 0) return;
+
+    const unsigned long now = millis();
+    if (doorbellDisplayStreamLastFrameMs != 0
+        && now - doorbellDisplayStreamLastFrameMs < doorbellDisplayStreamIntervalMs) {
+        return;
+    }
+    doorbellDisplayStreamLastFrameMs = now;
+
+    uint8_t* jpeg = nullptr;
+    size_t jpegLength = 0;
+    if (!cameraService.captureToBuffer(&jpeg, &jpegLength)) {
+        doorbellDisplayStreamFailures++;
+        doorbellDisplayStreamLastStatus = -1;
+        return;
+    }
+
+    const String url = String("http://") + doorbellDisplayStreamHost + ":"
+        + String(doorbellDisplayStreamPort) + "/api/doorbell/frame";
+    HTTPClient http;
+    http.setTimeout(4000);
+    int status = -1;
+    if (http.begin(url)) {
+        http.addHeader("Content-Type", "image/jpeg");
+        status = http.POST(jpeg, jpegLength);
+        http.end();
+    }
+    free(jpeg);
+
+    doorbellDisplayStreamLastStatus = status;
+    if (status >= 200 && status < 300) {
+        doorbellDisplayStreamFramesSent++;
+    } else {
+        doorbellDisplayStreamFailures++;
+        Serial.printf("[DOORBELL] Display frame delivery failed: HTTP %d\n", status);
     }
 }
 #endif
@@ -822,8 +943,12 @@ TaskHandle_t bonecrusherWorkerTaskHandle = nullptr;
 #endif
 
 bool isBonecrusherRole() {
+#ifdef DISABLE_BONECRUSHER
+    return false;
+#else
     const String role = String(deviceRole);
     return role.equalsIgnoreCase("bonecrusher") || role.equalsIgnoreCase("generalist");
+#endif
 }
 
 String percentEncode(const String& in) {
@@ -1645,6 +1770,129 @@ void setupWebServer() {
         serializeJson(doc, json);
         request->send(200, "application/json", json);
     };
+
+#if defined(ENABLE_DOORBELL_CAMERA)
+    server.on("/api/doorbell/display-stream/start", HTTP_POST, [](AsyncWebServerRequest *request) {
+        if (!request->hasParam("target")) {
+            request->send(400, "application/json", "{\"ok\":false,\"error\":\"target is required\"}");
+            return;
+        }
+
+        String target = request->getParam("target")->value();
+        target.trim();
+        const int requestedPort = request->hasParam("port")
+            ? request->getParam("port")->value().toInt()
+            : 80;
+        const unsigned long requestedInterval = request->hasParam("intervalMs")
+            ? request->getParam("intervalMs")->value().toInt()
+            : 500;
+        if (target.length() == 0 || requestedPort < 1 || requestedPort > 65535
+            || requestedInterval < 250 || requestedInterval > 5000) {
+            request->send(400, "application/json", "{\"ok\":false,\"error\":\"invalid target, port, or intervalMs\"}");
+            return;
+        }
+
+        const bool started = startDoorbellDisplayStream(
+            target,
+            static_cast<uint16_t>(requestedPort),
+            requestedInterval);
+        String response = String("{\"ok\":") + (started ? "true" : "false")
+            + ",\"streaming\":" + (cameraService.isStreaming() ? "true" : "false")
+            + ",\"target\":\"" + doorbellDisplayStreamHost + "\""
+            + ",\"port\":" + String(doorbellDisplayStreamPort)
+            + ",\"intervalMs\":" + String(doorbellDisplayStreamIntervalMs) + "}";
+        request->send(started ? 200 : 503, "application/json", response);
+    });
+
+    server.on("/api/doorbell/display-stream/stop", HTTP_POST, [](AsyncWebServerRequest *request) {
+        stopDoorbellDisplayStream();
+        request->send(200, "application/json", "{\"ok\":true,\"streaming\":false}");
+    });
+
+    server.on("/api/doorbell/display-stream/status", HTTP_GET, [](AsyncWebServerRequest *request) {
+        JsonDocument doc;
+        doc["ok"] = true;
+        doc["streaming"] = cameraService.isStreaming() && doorbellDisplayStreamHost.length() > 0;
+        doc["target"] = doorbellDisplayStreamHost;
+        doc["port"] = doorbellDisplayStreamPort;
+        doc["intervalMs"] = static_cast<uint32_t>(doorbellDisplayStreamIntervalMs);
+        doc["framesSent"] = static_cast<uint32_t>(doorbellDisplayStreamFramesSent);
+        doc["failures"] = static_cast<uint32_t>(doorbellDisplayStreamFailures);
+        doc["lastStatus"] = doorbellDisplayStreamLastStatus;
+        String response;
+        serializeJson(doc, response);
+        request->send(200, "application/json", response);
+    });
+#endif
+
+#ifdef ENABLE_DISPLAY
+    server.on("/api/doorbell/frame", HTTP_POST, [](AsyncWebServerRequest *request) {}, nullptr,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            constexpr size_t kMaxFrameJpegBytes = 24 * 1024;
+            uint8_t *frame = reinterpret_cast<uint8_t *>(request->_tempObject);
+
+            if (index == 0) {
+                if (total == 0 || total > kMaxFrameJpegBytes) {
+                    request->send(413, "application/json", "{\"ok\":false,\"error\":\"frame is empty or too large\"}");
+                    return;
+                }
+                frame = static_cast<uint8_t *>(malloc(total));
+                request->_tempObject = frame;
+                if (!frame) {
+                    request->send(500, "application/json", "{\"ok\":false,\"error\":\"frame allocation failed\"}");
+                    return;
+                }
+            }
+
+            if (!frame || index + len > total) {
+                if (frame) free(frame);
+                request->_tempObject = nullptr;
+                request->send(400, "application/json", "{\"ok\":false,\"error\":\"invalid frame body\"}");
+                return;
+            }
+            memcpy(frame + index, data, len);
+            if ((index + len) < total) return;
+
+            const bool shown = displayService.showJpegFrame(frame, total, 0, 0);
+            free(frame);
+            request->_tempObject = nullptr;
+            String response = String("{\"ok\":") + (shown ? "true" : "false")
+                + ",\"bytes\":" + String(static_cast<unsigned long>(total)) + "}";
+            request->send(shown ? 200 : 500, "application/json", response);
+        });
+
+    server.on("/api/doorbell/ring", HTTP_POST, [](AsyncWebServerRequest *request) {}, nullptr,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            constexpr size_t kMaxDoorbellJpegBytes = 96 * 1024;
+            constexpr const char *kDoorbellJpegPath = "/doorbell-current.jpg";
+
+            if (index == 0) {
+                if (total == 0 || total > kMaxDoorbellJpegBytes) {
+                    request->send(413, "application/json", "{\"ok\":false,\"error\":\"JPEG is empty or too large\"}");
+                    return;
+                }
+                request->_tempFile = LittleFS.open(kDoorbellJpegPath, "w");
+                if (!request->_tempFile) {
+                    request->send(500, "application/json", "{\"ok\":false,\"error\":\"unable to open JPEG file\"}");
+                    return;
+                }
+            }
+
+            if (!request->_tempFile || request->_tempFile.write(data, len) != len) {
+                if (request->_tempFile) request->_tempFile.close();
+                LittleFS.remove(kDoorbellJpegPath);
+                request->send(500, "application/json", "{\"ok\":false,\"error\":\"JPEG write failed\"}");
+                return;
+            }
+            if ((index + len) < total) return;
+
+            request->_tempFile.close();
+            const bool shown = displayService.showJpegFile(kDoorbellJpegPath, LittleFS);
+            String response = String("{\"ok\":") + (shown ? "true" : "false")
+                + ",\"bytes\":" + String(static_cast<unsigned long>(total)) + "}";
+            request->send(shown ? 200 : 500, "application/json", response);
+        });
+#endif
 
     server.on("/devices/ledpin/action", HTTP_POST, handleLedAction);
     server.on("/devices/LEDPIN/action", HTTP_POST, handleLedAction);
@@ -3232,6 +3480,14 @@ void setup() {
     }
 #endif
 
+    // Reserve network server tasks before display and BLE fragment the CYD heap.
+    setupWebServer();
+#if defined(ENABLE_HTTPS) && (defined(ESP32) || defined(ESP8266))
+    if (startHttpsService()) {
+        announcePresence();
+    }
+#endif
+
 #ifdef ENABLE_DISPLAY
     Serial.println("[BOOT] Initializing display service...");
     if (displayService.begin()) {
@@ -3265,46 +3521,34 @@ void setup() {
                     Serial.println("[DDL] Failed to load DDL file");
                 }
             } else {
-                Serial.println("[DDL] No DDL file found, using embedded touch test DDL");
-                
-                // Embedded touch test DDL - compact single card design
-                String touchTestDDL = R"({
-                    "display": "TouchTest",
+                Serial.println("[DDL] No DDL file found, using embedded status dashboard");
+
+                String statusDashboardDDL = R"({
+                    "display": "NodeStatus",
                     "version": "1.0",
                     "layout": {
                         "type": "column",
                         "cards": [
                             {
-                                "id": "touchCard",
-                                "title": "Touch Test - IP: )" + WiFi.localIP().toString() + R"(",
-                                "actions": [
-                                    {
-                                        "id": "btn1",
-                                        "type": "button",
-                                        "label": "Button 1",
-                                        "action": "test.button1"
-                                    },
-                                    {
-                                        "id": "btn2",
-                                        "type": "button",
-                                        "label": "Button 2",
-                                        "action": "test.button2"
-                                    },
-                                    {
-                                        "id": "btn3",
-                                        "type": "button",
-                                        "label": "Button 3",
-                                        "action": "test.button3"
-                                    }
+                                "id": "statusCard",
+                                "title": ")" + nodeName + R"(",
+                                "subtitle": "Pulse ESP32 node status",
+                                "content": [
+                                    {"id":"transportStatus","type":"text","label":"Transport: starting"},
+                                    {"id":"addressStatus","type":"text","label":"Address: starting"},
+                                    {"id":"uptimeStatus","type":"text","label":"Uptime: 0h 0m 0s"},
+                                    {"id":"heapStatus","type":"text","label":"Free heap: measuring"}
                                 ]
                             }
                         ]
                     }
                 })";
-                
-                if (ddlRenderer.parseDDL(touchTestDDL)) {
+
+                if (ddlRenderer.parseDDL(statusDashboardDDL)) {
                     ddlRenderer.render();
-                    Serial.println("[DDL] Embedded touch test DDL rendered successfully");
+                    displayStatusDashboardActive = true;
+                    updateDisplayStatusDashboard(true);
+                    Serial.println("[DDL] Embedded status dashboard rendered successfully");
                 } else {
                     Serial.println("[DDL] Failed to parse embedded DDL");
                 }
@@ -3312,6 +3556,10 @@ void setup() {
         } else {
             Serial.println("[DDL] DDL renderer initialization failed");
         }
+#else
+        const String displayStatus = nodeName + "\n" + WiFi.localIP().toString() + "\nHTTPS: port 443";
+        displayService.showStatus("Pulse CYD", displayStatus.c_str(), COLOR_CYAN);
+        Serial.println("[DISPLAY] Lightweight HTTPS status screen rendered");
 #endif // DISPLAY_NO_LVGL
     } else {
         Serial.println("[DISPLAY] Display initialization failed");
@@ -3374,8 +3622,17 @@ void setup() {
 #endif
 
 #if defined(ESP32) && defined(ENABLE_BT_CONTROL_PLANE)
+#if defined(BT_CONTROL_PLANE_WIFI_FALLBACK_ONLY)
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[BOOT] WiFi unavailable; initializing Bluetooth provisioning fallback...");
+        initializeBluetoothControlPlane(nodeName);
+    } else {
+        Serial.println("[BOOT] Bluetooth provisioning fallback on standby while WiFi is connected");
+    }
+#else
     Serial.println("[BOOT] Initializing Bluetooth control plane...");
     initializeBluetoothControlPlane(nodeName);
+#endif
 #endif
 
 #ifdef ENABLE_EVENT_SCHEDULER
@@ -3456,11 +3713,6 @@ void setup() {
     if (firstAdvertised) advertisedServices += "none";
     Serial.println(advertisedServices);
 
-    // 8. Web server for node name config (Async)
-    setupWebServer();
-#if defined(ENABLE_HTTPS) && (defined(ESP32) || defined(ESP8266))
-    startHttpsService();
-#endif
 #if defined(ESP32) && !defined(DISABLE_BONECRUSHER)
     startEsp32GatewayWorkerTaskIfNeeded();
 #endif
@@ -3468,6 +3720,13 @@ void setup() {
 
 void loop() {
     serialProvisioningPoll();
+
+#if defined(ESP32) && defined(ENABLE_BT_CONTROL_PLANE) && defined(BT_CONTROL_PLANE_WIFI_FALLBACK_ONLY)
+    if (WiFi.status() != WL_CONNECTED && !globalBluetoothControlPlane) {
+        Serial.println("[BLE-CP] WiFi lost; starting Bluetooth provisioning fallback");
+        initializeBluetoothControlPlane(nodeName);
+    }
+#endif
 
     if (WiFi.status() != WL_CONNECTED && globalWiFiProvisioning) {
         const unsigned long now = millis();
@@ -3539,7 +3798,8 @@ void loop() {
 
 #if defined(ENABLE_DOORBELL_CAMERA)
     pollDoorbellButton();
-    if (millis() - doorbellLastMotionCheckMs > 500) {
+    pollDoorbellDisplayStream();
+    if (!cameraService.isStreaming() && millis() - doorbellLastMotionCheckMs > 500) {
         MotionEvent motionEvent;
         if (cameraService.checkMotion(motionEvent)) {
             Serial.printf("[DOORBELL] Person alert: %d blocks changed (%.1f%%)\n",
@@ -3580,9 +3840,10 @@ void loop() {
 
     runSupervisorHealthChecks();
     
-#ifdef ENABLE_DISPLAY
+#if defined(ENABLE_DISPLAY) && !defined(DISPLAY_NO_LVGL)
     // Update LVGL (handles rendering and touch)
     displayService.update();
+    updateDisplayStatusDashboard();
 #endif
 
 #ifdef ENABLE_PRINTER_SCANNER

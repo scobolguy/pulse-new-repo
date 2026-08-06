@@ -256,20 +256,29 @@
     },
 
     {
-      "id": "camera-feed",
-      "description": "Show live MJPEG camera feed from a named ESP32-CAM node. Captures the node name.",
+      "id": "camera-display-stream",
+      "description": "Route a named camera feed to a named physical display. The camera owns frame delivery to the display.",
       "patterns": [
-        "\\bfeed\\b.*\\b(neptune\\.)?(child[123])\\b",
-        "\\b(neptune\\.)?(child[123])\\b.*\\bfeed\\b",
-        "\\bcamera\\b.*\\b(neptune\\.)?(child[123])\\b",
-        "\\b(neptune\\.)?(child[123])\\b.*\\bcamera\\b",
-        "\\bstream\\b.*\\b(neptune\\.)?(child[123])\\b",
-        "\\b(neptune\\.)?(child[123])\\b.*\\bstream\\b",
-        "\\bshow.*\\b(neptune\\.)?(child[123])\\b",
-        "\\bview.*\\b(neptune\\.)?(child[123])\\b"
+        "\\b(?:show|display|stream|send|route)\\b[\\s\\S]{0,40}\\b(?:video|feed|camera)\\b[\\s\\S]{0,20}\\bfrom\\b[\\s\\S]{1,40}\\b(?:to|on)\\b[\\s\\S]{0,20}\\bdisplay\\b",
+        "\\bdisplay\\b[\\s\\S]{0,30}\\b(?:video|feed)\\b[\\s\\S]{0,20}\\bfrom\\b"
       ],
       "flags": "i",
-      "capture": "\\b(child[123])\\b",
+      "capture": "\\bfrom\\s+(?:the\\s+|some\\s+)?(?<camera>[\\w.-]+(?:\\s+\\d+)?)\\s+(?:to|on)\\s+(?:the\\s+)?(?:display\\s+)?(?<display>[\\w.-]+(?:\\s+\\d+)?)\\s*$",
+      "captureFlags": "i",
+      "api": null,
+      "formatter": "cameraDisplayStream"
+    },
+
+    {
+      "id": "camera-feed",
+      "description": "Show a camera feed from any named camera node in the NLI console.",
+      "patterns": [
+        "\\b(?:show|view|open|watch|stream|display)\\b[\\s\\S]{0,30}\\b(?:video|feed|camera)\\b[\\s\\S]{0,20}\\bfrom\\b",
+        "\\b(?:show|view|open|watch|stream)\\b[\\s\\S]{0,20}\\b(?:camera|child)[\\w.-]*\\b",
+        "\\b(?:camera|child)[\\w.-]*\\b[\\s\\S]{0,20}\\b(?:feed|video|stream|camera)\\b"
+      ],
+      "flags": "i",
+      "capture": "(?:\\bfrom\\s+|\\b(?:show|view|open|watch|stream|display)\\s+(?:me\\s+)?(?:the\\s+)?(?:video|feed|camera)?\\s*(?:from\\s+)?)(?:the\\s+|some\\s+)?(?<camera>[\\w.-]+(?:\\s+\\d+)?)\\s*$",
       "captureFlags": "i",
       "api": null,
       "formatter": "camera"

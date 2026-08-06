@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CYD Doorbell Tester</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17201d;
+      --muted: #60706a;
+      --paper: #f4f2ea;
+      --panel: #fffdf7;
+      --line: #c9cec5;
+      --signal: #d94f35;
+      --signal-dark: #a93420;
+      --ready: #19734c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, transparent 49px, rgba(23, 32, 29, .05) 50px, transparent 51px),
+        linear-gradient(rgba(23, 32, 29, .035) 1px, transparent 1px),
+        var(--paper);
+      background-size: 100% 100%, 100% 24px, auto;
+      font-family: Georgia, "Times New Roman", serif;
+    }
+    main { width: min(1040px, calc(100% - 32px)); margin: 0 auto; padding: 28px 0 40px; }
+    header { display: flex; align-items: end; justify-content: space-between; gap: 20px; border-bottom: 2px solid var(--ink); padding-bottom: 14px; }
+    h1 { margin: 0; font-size: clamp(28px, 5vw, 52px); font-weight: 700; line-height: .95; letter-spacing: 0; }
+    .eyebrow { margin: 0 0 7px; color: var(--signal-dark); font: 700 12px/1.2 ui-monospace, Consolas, monospace; text-transform: uppercase; }
+    #connection { font: 700 13px/1.3 ui-monospace, Consolas, monospace; color: var(--muted); text-align: right; }
+    .workspace { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(260px, .8fr); gap: 24px; padding-top: 24px; }
+    .preview { position: relative; aspect-ratio: 4 / 3; overflow: hidden; border: 1px solid var(--ink); background: #101513; }
+    video, canvas { display: block; width: 100%; height: 100%; object-fit: cover; }
+    canvas { display: none; }
+    .stamp { position: absolute; left: 12px; bottom: 12px; padding: 5px 8px; background: rgba(255,253,247,.88); font: 700 11px/1 ui-monospace, Consolas, monospace; }
+    aside { display: flex; flex-direction: column; gap: 12px; }
+    button, .file-label {
+      width: 100%; min-height: 44px; border: 1px solid var(--ink); border-radius: 4px; padding: 10px 14px;
+      background: var(--panel); color: var(--ink); font: 700 14px/1.2 ui-monospace, Consolas, monospace;
+      cursor: pointer; text-align: left;
+    }
+    button:hover, .file-label:hover { background: #e9ebe3; }
+    button.primary { background: var(--signal); color: white; border-color: var(--signal-dark); }
+    button.primary:hover { background: var(--signal-dark); }
+    button:disabled { cursor: not-allowed; opacity: .45; }
+    input[type=text], input[type=password] {
+      width: 100%; min-height: 42px; border: 1px solid var(--line); border-radius: 4px; padding: 9px 12px;
+      background: var(--panel); color: var(--ink); font: 14px/1.2 ui-monospace, Consolas, monospace;
+    }
+    input[type=file] { position: absolute; inline-size: 1px; block-size: 1px; opacity: 0; }
+    progress { width: 100%; height: 10px; accent-color: var(--signal); }
+    .meta { color: var(--muted); font: 12px/1.55 ui-monospace, Consolas, monospace; }
+    #log { min-height: 130px; max-height: 230px; overflow: auto; margin: 0; padding: 12px; border: 1px solid var(--line); background: rgba(255,253,247,.75); white-space: pre-wrap; font: 12px/1.5 ui-monospace, Consolas, monospace; }
+    @media (max-width: 760px) { .workspace { grid-template-columns: 1fr; } header { align-items: start; flex-direction: column; } #connection { text-align: left; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div><p class="eyebrow">LAN with Bluetooth fallback</p><h1>Doorbell to CYD</h1></div>
+      <div id="connection">Not connected</div>
+    </header>
+    <section class="workspace">
+      <div class="preview">
+        <video id="camera" autoplay muted playsinline></video>
+        <canvas id="frame" width="320" height="240"></canvas>
+        <span class="stamp">320 × 240 JPEG</span>
+      </div>
+      <aside>
+        <button id="connect">Connect Bluetooth fallback</button>
+        <input id="wifiSsid" type="text" autocomplete="off" placeholder="Wi-Fi SSID">
+        <input id="wifiPassword" type="password" autocomplete="new-password" placeholder="Wi-Fi password">
+        <button id="provision" disabled>Provision Wi-Fi over BLE</button>
+        <button id="cameraButton">Start PC camera</button>
+        <button id="streamButton" disabled>Start LAN video</button>
+        <label class="file-label" for="imageFile">Choose an image</label>
+        <input id="imageFile" type="file" accept="image/jpeg,image/png,image/webp">
+        <button id="testCard">Use generated test card</button>
+        <button class="primary" id="ring" disabled>Ring and send image</button>
+        <progress id="progress" value="0" max="1"></progress>
+        <div class="meta" id="imageInfo">No frame prepared</div>
+        <pre id="log" aria-live="polite"></pre>
+      </aside>
+    </section>
+  </main>
+<script>
+const UUID = {
+  service: '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
+  rx: '6e400002-b5a3-f393-e0a9-e50e24dcca9e',
+  tx: '6e400003-b5a3-f393-e0a9-e50e24dcca9e'
+};
+const FILE_PATH = '/doorbell-current.jpg';
+const MAX_JPEG_BYTES = 96 * 1024;
+const FILE_CHUNK_BYTES = 96;
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+const video = document.querySelector('#camera');
+const canvas = document.querySelector('#frame');
+const context = canvas.getContext('2d', { alpha: false });
+const connectButton = document.querySelector('#connect');
+const provisionButton = document.querySelector('#provision');
+const cameraButton = document.querySelector('#cameraButton');
+const streamButton = document.querySelector('#streamButton');
+const ringButton = document.querySelector('#ring');
+const progress = document.querySelector('#progress');
+const logNode = document.querySelector('#log');
+const connectionNode = document.querySelector('#connection');
+const imageInfo = document.querySelector('#imageInfo');
+let device;
+let rx;
+let tx;
+let receiveText = '';
+let preparedBlob;
+let waiter;
+let operationBusy = false;
+let lanAvailable = false;
+let streamActive = false;
+let streamFrameCount = 0;
+
+function log(message) {
+  const time = new Date().toLocaleTimeString();
+  logNode.textContent += `[${time}] ${message}\n`;
+  logNode.scrollTop = logNode.scrollHeight;
+}
+
+function setConnected(connected) {
+  connectionNode.textContent = lanAvailable ? 'LAN connected' : connected ? `Bluetooth: ${device.name || 'CYD'}` : 'LAN unavailable';
+  connectionNode.style.color = (lanAvailable || connected) ? 'var(--ready)' : 'var(--muted)';
+  connectButton.disabled = operationBusy;
+  streamButton.disabled = !lanAvailable || operationBusy;
+  provisionButton.disabled = !connected || operationBusy;
+  ringButton.disabled = (!lanAvailable && !connected) || !preparedBlob || operationBusy;
+}
+
+async function probeLan() {
+  try {
+    const response = await fetch('/api/cyd/status', { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const status = await response.json();
+    lanAvailable = true;
+    setConnected(Boolean(rx));
+    log(`LAN ready: ${status.nodeName || 'CYD'} at 192.168.2.155`);
+  } catch (error) {
+    lanAvailable = false;
+    setConnected(Boolean(rx));
+    log(`LAN unavailable; Bluetooth fallback enabled (${error.message})`);
+  }
+}
+
+function onDisconnected() {
+  rx = undefined;
+  tx = undefined;
+  setConnected(false);
+  log('CYD disconnected');
+}
+
+function onNotification(event) {
+  receiveText += decoder.decode(event.target.value, { stream: true });
+  let newline;
+  while ((newline = receiveText.indexOf('\n')) >= 0) {
+    const line = receiveText.slice(0, newline).replace(/\r$/, '');
+    receiveText = receiveText.slice(newline + 1);
+    log(`CYD ${line}`);
+    if (waiter && line.startsWith(waiter.prefix)) {
+      const resolve = waiter.resolve;
+      clearTimeout(waiter.timer);
+      waiter = undefined;
+      resolve(line);
+    } else if (waiter && /^\[BLE-CP\] (failed|invalid|ssid is required)/i.test(line)) {
+      const reject = waiter.reject;
+      clearTimeout(waiter.timer);
+      waiter = undefined;
+      reject(new Error(line.replace(/^\[BLE-CP\]\s*/, '')));
+    }
+  }
+}
+
+async function connect() {
+  if (!navigator.bluetooth) throw new Error('Web Bluetooth is unavailable. Use Chrome or Edge on localhost.');
+  device = await navigator.bluetooth.requestDevice({
+    acceptAllDevices: true,
+    optionalServices: [UUID.service]
+  });
+  device.addEventListener('gattserverdisconnected', onDisconnected);
+  const server = await device.gatt.connect();
+  const service = await server.getPrimaryService(UUID.service);
+  rx = await service.getCharacteristic(UUID.rx);
+  tx = await service.getCharacteristic(UUID.tx);
+  await tx.startNotifications();
+  tx.addEventListener('characteristicvaluechanged', onNotification);
+  setConnected(true);
+  log('BLE control plane ready');
+}
+
+async function writeBytes(bytes) {
+  let packetBytes = 180;
+  for (let offset = 0; offset < bytes.length;) {
+    if (!rx || !device?.gatt?.connected) {
+      throw new Error('CYD disconnected during BLE write');
+    }
+    const packet = bytes.slice(offset, offset + packetBytes);
+    try {
+      if (rx.writeValueWithResponse) await rx.writeValueWithResponse(packet);
+      else await rx.writeValue(packet);
+      offset += packet.length;
+    } catch (error) {
+      if (!rx || !device?.gatt?.connected) {
+        throw new Error('CYD disconnected during BLE write');
+      }
+      if (packetBytes <= 20) throw error;
+      packetBytes = Math.max(20, Math.floor(packetBytes / 2));
+      log(`Using ${packetBytes}-byte BLE writes`);
+    }
+  }
+}
+
+function waitFor(prefix, timeoutMs = 15000) {
+  if (waiter) throw new Error('Another BLE command is still pending');
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { waiter = undefined; reject(new Error(`Timed out waiting for ${prefix}`)); }, timeoutMs);
+    waiter = { prefix, resolve, reject, timer };
+  });
+}
+
+async function command(text, responsePrefix) {
+  const response = waitFor(responsePrefix);
+  await writeBytes(encoder.encode(`${text}\n`));
+  const line = await response;
+  if (!line.includes('"ok":true')) {
+    throw new Error(`CYD rejected command: ${line}`);
+  }
+  return line;
+}
+
+async function provisionWifi() {
+  if (!rx) return;
+  const ssid = document.querySelector('#wifiSsid').value.trim();
+  const password = document.querySelector('#wifiPassword').value;
+  if (!ssid) throw new Error('Wi-Fi SSID is required');
+
+  operationBusy = true;
+  setConnected(true);
+  try {
+    const ssidBase64 = bytesToBase64(encoder.encode(ssid));
+    const passwordBase64 = bytesToBase64(encoder.encode(password));
+    log(`Provisioning Wi-Fi network ${ssid}`);
+    await command(`PROVISION_WIFI ${ssidBase64} ${passwordBase64}`, '[BLE-CP] saved ');
+    document.querySelector('#wifiPassword').value = '';
+    log('Wi-Fi profile saved; CYD is connecting and will reboot');
+  } finally {
+    operationBusy = false;
+    setConnected(Boolean(rx));
+  }
+}
+
+function blobFromCanvas() {
+  return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('JPEG encoding failed')), 'image/jpeg', 0.62));
+}
+
+function streamBlobFromCanvas() {
+  return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('JPEG encoding failed')), 'image/jpeg', 0.48));
+}
+
+async function prepareCanvasFrame() {
+  preparedBlob = await blobFromCanvas();
+  if (preparedBlob.size > MAX_JPEG_BYTES) throw new Error(`JPEG is ${preparedBlob.size} bytes; limit is ${MAX_JPEG_BYTES}`);
+  imageInfo.textContent = `Prepared ${preparedBlob.size.toLocaleString()} bytes from ${video.srcObject ? 'PC camera' : 'still image'}`;
+  ringButton.disabled = (!lanAvailable && !rx) || operationBusy;
+}
+
+function drawCover(source, width, height) {
+  const scale = Math.max(320 / width, 240 / height);
+  const sourceWidth = 320 / scale;
+  const sourceHeight = 240 / scale;
+  context.drawImage(source, (width - sourceWidth) / 2, (height - sourceHeight) / 2, sourceWidth, sourceHeight, 0, 0, 320, 240);
+}
+
+async function startCamera() {
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+  video.srcObject = stream;
+  await video.play();
+  cameraButton.textContent = 'Capture current camera frame';
+  drawCover(video, video.videoWidth, video.videoHeight);
+  await prepareCanvasFrame();
+  log('PC camera frame prepared');
+}
+
+async function captureCameraFrame() {
+  if (!video.srcObject) return startCamera();
+  drawCover(video, video.videoWidth, video.videoHeight);
+  await prepareCanvasFrame();
+  log('PC camera frame refreshed');
+}
+
+async function streamVideo() {
+  if (!video.srcObject) await startCamera();
+  streamActive = true;
+  streamFrameCount = 0;
+  streamButton.textContent = 'Stop LAN video';
+  log('LAN video started at up to 2 FPS');
+
+  try {
+    while (streamActive && lanAvailable) {
+      const startedAt = performance.now();
+      drawCover(video, video.videoWidth, video.videoHeight);
+      const frame = await streamBlobFromCanvas();
+      const response = await fetch('/api/cyd/frame', {
+        method: 'POST',
+        headers: { 'content-type': 'image/jpeg' },
+        body: frame
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || `frame failed (${response.status})`);
+      streamFrameCount++;
+      progress.value = 1;
+      imageInfo.textContent = `Streaming frame ${streamFrameCount.toLocaleString()} · ${frame.size.toLocaleString()} bytes · LAN`;
+      if (streamFrameCount % 10 === 0) log(`LAN video: ${streamFrameCount} frames displayed`);
+      const remainingMs = 500 - (performance.now() - startedAt);
+      if (remainingMs > 0) await new Promise(resolve => setTimeout(resolve, remainingMs));
+    }
+  } catch (error) {
+    lanAvailable = false;
+    log(`LAN video stopped: ${error.message}; Bluetooth fallback enabled`);
+  } finally {
+    streamActive = false;
+    streamButton.textContent = 'Start LAN video';
+    setConnected(Boolean(rx));
+  }
+}
+
+function toggleVideoStream() {
+  if (streamActive) {
+    streamActive = false;
+    streamButton.textContent = 'Start LAN video';
+    log('LAN video stop requested');
+    return;
+  }
+  streamVideo().catch(error => log(`ERROR ${error.message}`));
+}
+
+async function loadImage(file) {
+  const bitmap = await createImageBitmap(file);
+  drawCover(bitmap, bitmap.width, bitmap.height);
+  bitmap.close();
+  video.srcObject = null;
+  await prepareCanvasFrame();
+  log(`Image prepared: ${file.name}`);
+}
+
+async function generateTestCard() {
+  video.srcObject = null;
+  context.fillStyle = '#f1efe3'; context.fillRect(0, 0, 320, 240);
+  context.fillStyle = '#d94f35'; context.fillRect(0, 0, 320, 42);
+  context.fillStyle = '#17201d'; context.font = 'bold 28px Georgia'; context.fillText('DOORBELL TEST', 22, 94);
+  context.font = '18px Georgia'; context.fillText(new Date().toLocaleString(), 22, 130);
+  context.font = 'bold 15px monospace'; context.fillText(lanAvailable ? 'PC → LAN → CYD' : 'PC → BLE → CYD', 22, 178);
+  context.strokeStyle = '#17201d'; context.lineWidth = 3; context.strokeRect(10, 10, 300, 220);
+  await prepareCanvasFrame();
+  log('Generated test card prepared');
+}
+
+function bytesToBase64(bytes) {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+async function uploadAndDisplay() {
+  if (!preparedBlob || (!lanAvailable && !rx)) return;
+  operationBusy = true;
+  setConnected(Boolean(rx));
+  progress.value = 0;
+  try {
+    if (video.srcObject) {
+      drawCover(video, video.videoWidth, video.videoHeight);
+      await prepareCanvasFrame();
+    }
+    const jpeg = new Uint8Array(await preparedBlob.arrayBuffer());
+    if (lanAvailable) {
+      log(`Sending doorbell image by LAN (${jpeg.length} bytes)`);
+      const response = await fetch('/api/cyd/ring', { method: 'POST', headers: { 'content-type': 'image/jpeg' }, body: jpeg });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || `LAN request failed (${response.status})`);
+      progress.value = 1;
+      log('Doorbell image displayed on CYD over LAN');
+      return;
+    }
+    log(`LAN down; starting Bluetooth upload (${jpeg.length} bytes)`);
+    await command(`FILE_BEGIN ${FILE_PATH} ${jpeg.length}`, '[BLE-CP] fileBegin ');
+    for (let offset = 0; offset < jpeg.length; offset += FILE_CHUNK_BYTES) {
+      const chunk = jpeg.slice(offset, offset + FILE_CHUNK_BYTES);
+      await command(`FILE_APPEND ${FILE_PATH} ${offset} ${bytesToBase64(chunk)}`, '[BLE-CP] fileAppend ');
+      progress.value = Math.min(1, (offset + chunk.length) / jpeg.length);
+    }
+    await command(`RING ${FILE_PATH}`, '[BLE-CP] ring ');
+    log('Doorbell image displayed on CYD');
+  } finally {
+    operationBusy = false;
+    setConnected(Boolean(rx));
+  }
+}
+
+connectButton.addEventListener('click', () => connect().catch(error => log(`ERROR ${error.message}`)));
+provisionButton.addEventListener('click', () => provisionWifi().catch(error => log(`ERROR ${error.message}`)));
+cameraButton.addEventListener('click', () => captureCameraFrame().catch(error => log(`ERROR ${error.message}`)));
+streamButton.addEventListener('click', toggleVideoStream);
+document.querySelector('#imageFile').addEventListener('change', event => {
+  const file = event.target.files[0];
+  if (file) loadImage(file).catch(error => log(`ERROR ${error.message}`));
+});
+document.querySelector('#testCard').addEventListener('click', () => generateTestCard().catch(error => log(`ERROR ${error.message}`)));
+ringButton.addEventListener('click', () => uploadAndDisplay().catch(error => log(`ERROR ${error.message}`)));
+probeLan().then(generateTestCard).catch(error => log(`ERROR ${error.message}`));
+</script>
+</body>
+</html>

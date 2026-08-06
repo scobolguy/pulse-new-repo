@@ -5,6 +5,7 @@
 
 #include <Arduino.h>
 #include <TFT_eSPI.h>
+#include <FS.h>
 
 #ifndef DISPLAY_NO_LVGL
 #include <lvgl.h>
@@ -89,6 +90,12 @@ public:
     void drawBitmap(int16_t x, int16_t y, const uint8_t* bitmap, int16_t w, int16_t h, uint16_t color);
     void drawRGBBitmap(int16_t x, int16_t y, const uint16_t* bitmap, int16_t w, int16_t h);
     bool showJpeg(const uint8_t* data, size_t length, int16_t x = 0, int16_t y = 0);
+    bool showJpegFile(const String& path, fs::FS& filesystem, int16_t x = 0, int16_t y = 0);
+    bool showJpegFile(fs::File file, int16_t x = 0, int16_t y = 0);
+    void beginJpegStream(uint16_t backgroundColor = COLOR_BLACK);
+    bool showJpegFrame(const uint8_t* data, size_t length, int16_t x = 0, int16_t y = 0);
+    void endJpegStream();
+    bool isJpegStreaming() const { return jpegStreaming; }
 
 #ifndef DISPLAY_NO_LVGL
     // Touch operations (only with LVGL)
@@ -121,6 +128,7 @@ public:
 
 private:
     bool initialized;
+    bool jpegStreaming;
     TFT_eSPI tft;
     uint8_t currentBrightness;
     

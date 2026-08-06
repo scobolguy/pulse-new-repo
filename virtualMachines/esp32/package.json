@@ -1,5 +1,6 @@
 {
   "scripts": {
+    "doorbell:test": "node ./scripts/serve-ble-doorbell-tester.mjs",
     "pascalishc": "node ./aggregator/tools/pascalishc/cli/pascalishc.mjs",
     "phase1:bonecrusher:compile": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/phase1-bonecrusher.ps1 -Action compile",
     "phase1:bonecrusher:upload": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/phase1-bonecrusher.ps1 -Action upload",

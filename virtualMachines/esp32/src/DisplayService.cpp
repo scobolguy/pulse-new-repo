@@ -26,7 +26,7 @@ bool jpegDrawCallback(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bi
 // TFT_eSPI pin configuration is in User_Setup.h or platformio.ini
 
 DisplayService::DisplayService()
-    : initialized(false), currentBrightness(255)
+    : initialized(false), jpegStreaming(false), currentBrightness(255)
 #ifndef DISPLAY_NO_LVGL
       , touchCalibrated(false), touchType(TOUCH_NONE),
       lvglDisplay(nullptr), lvglBuf1(nullptr), lvglBuf2(nullptr), lvglTouchDev(nullptr)
@@ -156,20 +156,36 @@ bool DisplayService::begin() {
 bool DisplayService::initLVGL() {
     // Initialize LVGL
     lv_init();
-    
-    // Allocate display buffers (1/10 of screen size each)
-    const size_t bufSize = (DISPLAY_WIDTH * DISPLAY_HEIGHT) / 10;
+
+#ifndef LVGL_BUFFER_ROWS
+#define LVGL_BUFFER_ROWS ((DISPLAY_HEIGHT + 9) / 10)
+#endif
+    static_assert(LVGL_BUFFER_ROWS > 0 && LVGL_BUFFER_ROWS <= DISPLAY_HEIGHT,
+                  "LVGL_BUFFER_ROWS must fit within the display height");
+    const size_t bufSize = DISPLAY_WIDTH * LVGL_BUFFER_ROWS;
     lvglBuf1 = (lv_color_t*)heap_caps_malloc(bufSize * sizeof(lv_color_t), MALLOC_CAP_DMA);
+#ifndef LVGL_SINGLE_BUFFER
     lvglBuf2 = (lv_color_t*)heap_caps_malloc(bufSize * sizeof(lv_color_t), MALLOC_CAP_DMA);
+#endif
     
-    if (!lvglBuf1 || !lvglBuf2) {
+    if (!lvglBuf1
+#ifndef LVGL_SINGLE_BUFFER
+        || !lvglBuf2
+#endif
+    ) {
         SERIAL_PRINTLN("[Display] ERROR: Failed to allocate LVGL buffers");
         if (lvglBuf1) free(lvglBuf1);
         if (lvglBuf2) free(lvglBuf2);
         return false;
     }
 
-    SERIAL_PRINTF("[Display] LVGL buffers allocated: %d bytes each\n", bufSize * sizeof(lv_color_t));
+#ifdef LVGL_SINGLE_BUFFER
+    SERIAL_PRINTF("[Display] LVGL single buffer allocated: %d bytes (%d rows)\n",
+                  bufSize * sizeof(lv_color_t), LVGL_BUFFER_ROWS);
+#else
+    SERIAL_PRINTF("[Display] LVGL buffers allocated: %d bytes each (%d rows)\n",
+                  bufSize * sizeof(lv_color_t), LVGL_BUFFER_ROWS);
+#endif
     
     // Initialize display buffer
     lv_disp_draw_buf_init(&lvglDrawBuf, lvglBuf1, lvglBuf2, bufSize);
@@ -283,6 +299,7 @@ void DisplayService::initTouch() {
     touchCalibrated = false;
 #endif
 }
+#endif // DISPLAY_NO_LVGL
 
 void DisplayService::end() {
     if (!initialized) return;
@@ -300,6 +317,7 @@ void DisplayService::end() {
 #endif
     
     clear();
+    jpegStreaming = false;
     initialized = false;
     SERIAL_PRINTLN("[Display] Display deinitialized");
 }
@@ -436,10 +454,46 @@ void DisplayService::drawRGBBitmap(int16_t x, int16_t y, const uint16_t* bitmap,
 bool DisplayService::showJpeg(const uint8_t* data, size_t length, int16_t x, int16_t y) {
     if (!initialized || !data || length == 0) return false;
 
+    jpegStreaming = false;
     clear(COLOR_BLACK);
-    return TJpgDec.drawJpg(x, y, data, length);
+    return TJpgDec.drawJpg(x, y, data, length) == JDR_OK;
 }
 
+bool DisplayService::showJpegFile(const String& path, fs::FS& filesystem, int16_t x, int16_t y) {
+    if (!initialized || path.length() == 0 || !filesystem.exists(path)) return false;
+
+    jpegStreaming = false;
+    clear(COLOR_BLACK);
+    return TJpgDec.drawFsJpg(x, y, path, filesystem) == JDR_OK;
+}
+
+bool DisplayService::showJpegFile(fs::File file, int16_t x, int16_t y) {
+    if (!initialized || !file) return false;
+
+    jpegStreaming = false;
+    clear(COLOR_BLACK);
+    return TJpgDec.drawFsJpg(x, y, file) == JDR_OK;
+}
+
+void DisplayService::beginJpegStream(uint16_t backgroundColor) {
+    if (!initialized || jpegStreaming) return;
+
+    clear(backgroundColor);
+    jpegStreaming = true;
+}
+
+bool DisplayService::showJpegFrame(const uint8_t* data, size_t length, int16_t x, int16_t y) {
+    if (!initialized || !data || length == 0) return false;
+
+    beginJpegStream();
+    return TJpgDec.drawJpg(x, y, data, length) == JDR_OK;
+}
+
+void DisplayService::endJpegStream() {
+    jpegStreaming = false;
+}
+
+#ifndef DISPLAY_NO_LVGL
 bool DisplayService::touchAvailable() {
     if (!initialized || !touchCalibrated) return false;
     
