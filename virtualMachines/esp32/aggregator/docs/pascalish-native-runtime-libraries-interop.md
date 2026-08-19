@@ -31,6 +31,26 @@ END;
 
 `TYPE` and `TYPES` clauses on `OUTPUT` also accept generic type references.
 
+## Librarian Type References in Programs
+
+A `var` declaration inside a `program`, `service`, or `daemon` block can now
+pull its type from the data librarian:
+
+```pascal
+var inbound : envelope<swift-mt103> from librarian;
+var report  : monthlyReport from "finance-types";
+```
+
+- `from librarian` — marks the variable as a type reference resolved at
+  runtime from the data librarian.  The compiled artifact will carry
+  `fromLibrarian: true` on the variable's `VarDecl` node.
+- `from "<source>"` / `from identName` — marks the variable as resolved from
+  a named source; the compiled artifact carries `fromLibrarian: false` and
+  `source: "<source>"`.
+
+Both forms are also accepted in the `PascalishRouterMapper` grammar
+(router/mapper programs).
+
 Generic declarations are also available on Pascalish type and class definitions:
 
 ```pascal

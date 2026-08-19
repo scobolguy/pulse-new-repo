@@ -511,6 +511,408 @@ Governance identity note:
 
 ---
 
+### Pascalish Language Reference
+
+#### Language Overview
+Pascalish is a **single, case-insensitive language** — all keywords work in any case (`service`, `SERVICE`, `Service` are identical). Lowercase is the preferred and canonical style. There is one grammar and one tokenizer shared across all compilation targets. There are two **compiler endpoints**, not two dialects:
+
+- `POST /api/develop/compile` — compiles `service`, `router`, and `mapper` declarations into integration service artifacts.
+- `POST /api/pascal/compile` — compiles `program`, `daemon`, and algorithmic `service` declarations into p-machine p-code.
+
+**Always use lowercase keywords when generating Pascalish code.** Never write ALL-CAPS.
+
+---
+
+#### Router/Mapper DSL (BNF)
+
+```
+compilation-unit  ::= declaration* EOF
+
+declaration       ::= service-decl
+                    | router-decl
+                    | mapper-decl
+
+service-decl      ::= 'SERVICE' STRING ';'
+                    | 'SERVICE' STRING ';'? 'BEGIN' service-body 'END' ';'
+
+service-body      ::= statement*
+
+router-decl       ::= 'ROUTER' STRING
+                       'INPUT' STRING
+                       'DESCRIPTION' STRING
+                       'ENABLED' ('TRUE' | 'FALSE')
+                       'BEGIN' output-clause+ 'END' ';'
+
+output-clause     ::= 'OUTPUT' STRING ('TYPE' STRING)?
+                       'WHEN' (STRING | inline-block)
+                       'TRANSFORM' (STRING | inline-block) ';'
+
+inline-block      ::= 'BEGIN' rule-expr* 'END'
+
+mapper-decl       ::= 'MAPPER' STRING
+                       'SOURCE' STRING
+                       'TARGET' STRING
+                       'DESCRIPTION' STRING
+                       'ENABLED' ('TRUE' | 'FALSE')
+                       'BEGIN' map-rule* 'END' ';'
+
+map-rule          ::= 'MAP' STRING 'TO' STRING 'USING' (STRING | inline-block) ';'
+
+rule-expr         ::= assignment ';'
+                    | if-expr ';'
+
+assignment        ::= lvalue ':=' expr
+
+if-expr           ::= 'IF' expr 'THEN' assignment ('ELSE' assignment)?
+
+lvalue            ::= IDENT ('.' IDENT)*
+
+expr              ::= STRING | NUMBER | lvalue | fn-call | expr op expr
+
+fn-call           ::= IDENT '(' expr (',' expr)* ')'
+
+op                ::= ':=' | '+' | '-' | '*' | '/' | '=' | '<>' | '<' | '>' | '<=' | '>='
+```
+
+**Built-in transform functions:**
+- `trim(src)` — strip whitespace
+- `upper(src)` / `lower(src)` — case conversion
+- `startswith(str, prefix)` — prefix test, returns 0 or 1
+- `map("mapId", src)` — apply a named mapper to src
+- `toxml(val)` / `fromxml(val)` — XML serialization
+- `mtamounttodecimal(src)` — SWIFT MT amount field to decimal string
+- `yymmddtoiso(src)` — SWIFT date `YYMMDD` to ISO 8601
+- `mtpartyname(src)` — extract party name from MT field
+- `mtchargebearertoiso(src)` — SWIFT charge bearer code to ISO
+
+**Special variables in WHEN/TRANSFORM expressions:**
+- `src` — the incoming message payload
+- `output` — the outgoing message payload (assign to this)
+- `httpVerb` — HTTP method context (`httpVerb.get`, `httpVerb.post`)
+
+---
+
+#### Canonical Examples
+
+**Minimal router — forward all messages:**
+```
+service "my-service";
+
+router "forward-all" input "source.queue" description "Forward all messages" enabled true begin
+  output "dest.queue"
+    when "output := 1;"
+    transform "output := src;";
+end;
+```
+
+**Router with conditional routing:**
+```
+service "mt103-router-service";
+
+router "mt103-inbound" input "swift.mt103.inbound" description "Route MT103 messages" enabled true begin
+  output "swift.mt103.parsed"
+    when "if startswith(upper(src), \"MT103\") then output := 1 else output := 0;"
+    transform "output := src;";
+end;
+```
+
+**Router using a mapper in the transform:**
+```
+service "mt103-to-pacs-service";
+
+router "mt103-to-pacs-router" input "swift.mt103.parsed" description "Transform MT103 to PACS" enabled true begin
+  output "tx.pacs.created" type "pacs"
+    when "if startswith(upper(src), \"MT103\") then output := 1 else output := 0;"
+    transform "output := map(\"mt103-to-pacs\", src);";
+end;
+
+mapper "mt103-to-pacs" source "swift-mt103" target "pacs" description "MT103 to PACS.008" enabled true begin
+  map "block4.20" to "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId" using "output := trim(src);";
+  map "block4.32A.date" to "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt" using "output := yymmddtoiso(src);";
+  map "block4.32A.currency" to "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy" using "output := upper(src);";
+  map "block4.32A.amount" to "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text" using "output := mtamounttodecimal(src);";
+end;
+```
+
+**Fanout router — one input, multiple outputs:**
+```
+service "fanout-service";
+
+router "swift-fanout" input "swift.inbound" description "Fanout by MT type" enabled true begin
+  output "audit.all"
+    when "output := 1;"
+    transform "output := src;";
+  output "payments.mt103"
+    when "if startswith(upper(src), \"MT103\") then output := 1 else output := 0;"
+    transform "output := src;";
+  output "payments.mt202"
+    when "if startswith(upper(src), \"MT202\") then output := 1 else output := 0;"
+    transform "output := src;";
+end;
+```
+
+**Mapper-only block (no router):**
+```
+mapper "mt940-to-camt052" source "swift-mt940" target "camt.052.001.14" description "MT940 to CAMT.052" enabled true begin
+  map "block4.20" to "Document.BkToCstmrAcctRpt.GrpHdr.MsgId" using "output := trim(src);";
+  map "block4.25.accountId" to "Document.BkToCstmrAcctRpt.Rpt.Acct.Id.Othr.Id" using "output := trim(src);";
+  map "block4.60F.amount" to "Document.BkToCstmrAcctRpt.Rpt.Bal.Amt.#text" using "output := mtamounttodecimal(src);";
+end;
+```
+
+---
+
+#### Program/Daemon BNF (p-machine targets)
+
+```
+compilation-unit  ::= decl* EOF
+
+decl              ::= program-decl | service-decl | daemon-decl
+                    | type-decl | class-decl | var-decl
+                    | queue-decl | file-decl
+
+program-decl      ::= 'program' IDENT placement? ';' block '.'
+service-decl      ::= 'service' IDENT placement? ';'? block '.'
+daemon-decl       ::= 'daemon' IDENT placement? daemon-schedule ';'? block '.'
+
+daemon-schedule   ::= 'refresh' expr 'ms'
+                    | 'every' expr ('ms' | 'second' | 'seconds')
+
+placement         ::= 'on' ('local' | 'parent' | 'child' | 'sibling' | 'alternate')
+
+block             ::= 'begin' statement* 'end'
+
+statement         ::= assign-stmt | call-stmt | if-stmt | while-stmt
+                    | for-stmt | repeat-stmt | with-stmt | block
+                    | enqueue-stmt | dequeue-stmt | peek-stmt
+                    | push-stmt | pop-stmt | concurrent-stmt | file-stmt
+
+assign-stmt       ::= lvalue ':=' expr ';'
+call-stmt         ::= 'call' qualified-name '(' expr-list? ')' ';'
+if-stmt           ::= 'if' expr 'then' statement* ('else' statement*)? 'end' ';'
+while-stmt        ::= 'while' expr 'do' statement
+for-stmt          ::= 'for' IDENT ':=' expr 'to' expr 'do' statement
+repeat-stmt       ::= 'repeat' statement* 'until' expr ';'
+with-stmt         ::= 'with' expr 'do' statement* 'end' ';'
+
+enqueue-stmt      ::= 'enqueue' IDENT 'with' expr ';'
+dequeue-stmt      ::= 'dequeue' IDENT 'into' IDENT ';'
+peek-stmt         ::= 'peek' IDENT 'into' IDENT ';'
+push-stmt         ::= 'push' IDENT 'with' expr ';'
+pop-stmt          ::= 'pop' IDENT 'into' IDENT ';'
+
+concurrent-stmt   ::= cobegin-stmt | async-stmt | wait-stmt | sync-stmt | subflow-stmt
+cobegin-stmt      ::= 'cobegin' statement* 'coend' ';'
+async-stmt        ::= 'async' statement
+wait-stmt         ::= 'wait' 'all' ';' | 'wait' IDENT ';'
+sync-stmt         ::= 'sync' IDENT ';'
+subflow-stmt      ::= 'subflow' STRING ('with' expr-list)? ';'
+
+file-stmt         ::= 'open' IDENT 'for' ('read'|'write') ';'
+                    | 'read' IDENT 'into' IDENT ';'
+                    | 'write' IDENT 'with' expr ';'
+                    | 'close' IDENT ';'
+
+var-decl          ::= 'var' IDENT ':' type-ref placement? var-source? ';'
+var-source        ::= 'from' 'librarian' | 'from' (IDENT | STRING)
+
+type-ref          ::= 'integer' | 'real' | 'boolean' | 'string'
+                    | record-type | queue-type | stack-type
+                    | priority-queue-type | array-type | IDENT generic-args?
+
+queue-type        ::= 'queue' '<' type-ref '>'
+stack-type        ::= 'stack' '<' type-ref '>'
+priority-queue-type ::= 'priorityqueue' '<' type-ref '>'
+
+expr              ::= logical-or-expr
+logical-or-expr   ::= logical-and-expr ('or' logical-and-expr)*
+logical-and-expr  ::= equality-expr ('and' equality-expr)*
+equality-expr     ::= relational-expr (('=' | '<>') relational-expr)*
+relational-expr   ::= additive-expr (('<'|'<='|'>'|'>=') additive-expr)*
+additive-expr     ::= mult-expr (('+'|'-') mult-expr)*
+mult-expr         ::= unary-expr (('*'|'/'|'mod') unary-expr)*
+unary-expr        ::= ('not'|'-') unary-expr | primary-expr
+primary-expr      ::= NUMBER | STRING | 'true' | 'false'
+                    | qualified-name '(' expr-list? ')'
+                    | lvalue | '(' expr ')'
+```
+
+**Daemon example:**
+```
+daemon "my-service" refresh 2000 ms;
+var msg : string;
+begin
+  dequeue inputQueue into msg;
+  enqueue outputQueue with msg;
+end.
+```
+
+---
+
+#### Pascalish Compiler Services (API Reference)
+
+**Service/Router/Mapper compile (integration services):**
+```
+POST /api/develop/compile
+Content-Type: application/json
+Body: { "content": "<pascalish source>", "mode": "compile" | "compile-run" | "compile-debug" }
+
+Response: {
+  "compile": { "routers": <n>, "mappings": <n> },
+  "debug": { "fsmId": "..." }   // only for compile-debug mode
+}
+```
+- Use `"mode": "compile"` — syntax check and generate artifacts
+- Use `"mode": "compile-run"` — compile and activate the runtime rules immediately
+- Use `"mode": "compile-debug"` — compile and open the debugger FSM
+
+**Program/Daemon compile (p-machine targets):**
+```
+POST /api/pascal/compile
+Content-Type: application/json
+Body: { "source": "<pascalish source>", "options": {} }
+
+Response: {
+  "status": "ok" | "error",
+  "pcode": "<p-code text>",
+  "pcodeText": "<p-code text>",
+  "programMap": { ... },
+  "symbols": [...],
+  "errors": [],
+  "warnings": []
+}
+```
+
+**Validate syntax only (no artifact generation):**
+```
+POST /api/pascal/validate
+Body: { "source": "<pascalish source>" }
+Response: { "status": "ok", "valid": true|false, "errors": [...] }
+```
+
+**Compile and execute immediately:**
+```
+POST /api/pascal/execute
+Body: { "source": "<pascalish source>", "message": "<optional src value>" }
+Response: { "status": "ok", "output": [...], "stdout": "...", "elapsedMs": <n> }
+```
+
+**List keywords:**
+```
+GET /api/pascal/keywords
+Response: { "status": "ok", "keywords": [...] }
+```
+
+---
+
+#### Rules for Generating Pascalish Code
+- **Always use lowercase keywords.** Pascalish is case-insensitive but lowercase is the canonical style. Never generate ALL-CAPS.
+- For **routers and mappers**, use `service`, `router`, `mapper`, `map`, `output`, `when`, `transform` — all lowercase.
+- For **programs and daemons**, use `program`, `daemon`, `begin`, `end` — all lowercase.
+- Strings are double-quoted: `"my-queue"`. When a string contains a double quote, escape it: `\"`.
+- Inline rule expressions end with `;` — e.g. `when "output := 1;"`.
+- Multi-line rule blocks use `begin ... end` — e.g. `when begin output := 1; end`.
+- `enabled true` is required on every `router` and `mapper`.
+- `description` is required on every `router` and `mapper`.
+- Queue names must already exist or be created before compiling with `compile-run`.
+- After generating Pascalish source, always validate it with `POST /api/pascal/validate` or `POST /api/develop/compile` before presenting to the user as final.
+
+---
+
+### Creating Data Maps and Map-Driven Services
+
+#### What is a Data Map?
+A data map defines field-level transformations between two message types (e.g. `swift-mt103` → `pacs.008.001.14`).
+Maps are stored as `.map.json` files and referenced by the mapper service at runtime.
+
+#### Step 1 — Create the Map (via NLI)
+Natural language patterns that trigger map creation:
+- `"create a mapper from <sourceType> to <targetType>"`
+- `"create an <sourceType> to <targetType> map"`
+- `"make a mapping from <sourceType> to <targetType>"`
+- `"build a <sourceType> to <targetType> mapper"`
+
+Execution behavior:
+1. Verify both types exist in the Data Librarian: `GET /api/librarian/data-types`
+2. Verify schemas exist: `GET /api/librarian/schemas`
+3. Create the map via `POST /api/mapper/maps` with body:
+```json
+{
+  "id": "<sourceType>-to-<targetType>",
+  "name": "<SourceType> to <TargetType>",
+  "sourceTypeId": "<sourceType>",
+  "targetTypeId": "<targetType>",
+  "sourceSchemaPath": "schemas/<sourceType>.json",
+  "targetSchemaPath": "schemas/<targetType>.xsd",
+  "rules": []
+}
+```
+4. Respond with the created map ID and a link to the Data Mapper page to add field rules.
+
+#### Step 2 — Create a Service that Uses the Map
+Natural language patterns that trigger service creation from a map:
+- `"create a service to translate <sourceType> to <targetType>"`
+- `"create a service that uses the <mapId> map"`
+- `"make a <sourceType> to <targetType> translation service"`
+- `"build a service for the <mapId> mapper"`
+- `"create a service and a map for <sourceType> to <targetType>"`
+
+Execution behavior:
+1. Confirm the map exists: `GET /api/mapper/maps/<mapId>`
+2. Determine input and output queue names from the source/target types:
+   - Input queue: `<sourceType>.inbound`
+   - Output queue: `<targetType>.outbound`
+3. Create queues if they do not exist: `POST /api/queues/:managerId/create`
+4. Generate a Pascalish service daemon:
+
+```
+daemon "<mapId>-service" refresh 1 s;
+role data_mapper;
+library "<sourceTypeId>" from librarian;
+library "<targetTypeId>" from librarian;
+
+router "<mapId>-router"
+  input "<sourceType>.inbound"
+  description "Route <sourceType> messages for transformation"
+  enabled true
+begin
+  output "<targetType>.outbound"
+    when "output := 1;"
+    transform "output := toxml(map(\"<mapId>\", fromxml(src)));";
+end;
+```
+
+5. Compile the Pascalish source: `POST /api/develop/compile` with `{ content: <source>, mode: "compile-run" }`
+6. Confirm with the user: list the map ID, input queue, output queue, and Pascalish file created.
+
+#### Step 3 — Verify the Service is Running
+- `GET /api/mapper/maps` — lists all maps
+- `GET /api/queues/:managerId` — shows queue state and message counts
+- `POST /api/mapper/maps/<mapId>/run` — test the mapper with a sample payload
+
+#### Combined "Create map AND service" command
+When the user asks to create both in one sentence (e.g. `"create an mt940 to camt052 mapper and service"`):
+1. Execute Step 1 (create the map) first.
+2. Then immediately execute Step 2 (create the service) using the map just created.
+3. Report both outcomes together.
+
+#### Known Map IDs (already defined)
+- `mt103-to-pacs` — Swift MT103 → pacs.008.001.14
+- `mt202-to-pacs` — Swift MT202 → pacs.009.001.13
+- `mt940-to-camt052` — MT940 → camt.052.001.14
+- `mt940-to-camt053` — MT940 → camt.053.001.14
+- `mt940-to-camt054` — MT940 → camt.054.001.14
+
+#### Rules for Map/Service Generation
+- Never invent a type ID that is not confirmed in the Data Librarian.
+- If the user asks for a type not in the Librarian, say: "The type '<type>' is not registered in the Data Librarian. Please upload its schema first."
+- Always use lowercase hyphenated IDs for map IDs (e.g. `mt103-to-pacs`, not `MT103ToPacs`).
+- Queue names follow the pattern `<typeId>.inbound` / `<typeId>.outbound`.
+- If the user only asks to create a map (no service), only do Step 1.
+- If the user only asks to create a service (no map), confirm which existing map to use first.
+
+---
+
 ### Network Topology & Tree Structure
 
 The network is organized in a hierarchical tree structure with Neptune as the parent cluster node and ESP32 devices as child nodes.

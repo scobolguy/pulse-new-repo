@@ -65,9 +65,9 @@ export function rebuildSystemPrompt() {
 }
 
 /**
- * Send a prompt to Ollama and return the response text.
- * The system prompt is passed via the dedicated `system` field so it is
- * handled as a true system message rather than prepended user text.
+ * Send a prompt to Ollama and return the complete response text.
+ * Uses native streaming internally so tokens are received as they are generated —
+ * the timeout only fires if *no data at all* arrives within timeoutMs.
  */
 export async function ollamaGenerate(prompt) {
   const config = getNliConfig();
@@ -79,10 +79,22 @@ export async function ollamaGenerate(prompt) {
       model: config.model,
       system: systemPrompt,
       prompt,
-      stream: false,
+      stream: true,
       keep_alive: config.keepAlive,
       options: config.options,
     });
+
+    let accumulated = '';
+    let firstChunkReceived = false;
+    let idleTimer = null;
+
+    const resetIdleTimer = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        req.destroy();
+        reject(new Error('Ollama request timed out (no data received)'));
+      }, config.timeoutMs);
+    };
 
     const req = http.request(
       {
@@ -96,26 +108,135 @@ export async function ollamaGenerate(prompt) {
         },
       },
       (res) => {
-        let data = '';
-        res.on('data', (chunk) => { data += chunk; });
-        res.on('end', () => {
-          try {
-            const parsed = JSON.parse(data);
-            if (parsed.error) return reject(new Error(parsed.error));
-            resolve(String(parsed.response || '').trim());
-          } catch (e) {
-            reject(new Error(`Ollama response parse error: ${e.message}`));
+        let buffer = '';
+        res.on('data', (chunk) => {
+          if (!firstChunkReceived) {
+            firstChunkReceived = true;
+            clearTimeout(idleTimer);
+            idleTimer = null;
           }
+          buffer += chunk.toString();
+          const lines = buffer.split('\n');
+          buffer = lines.pop(); // keep incomplete line
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            try {
+              const parsed = JSON.parse(trimmed);
+              if (parsed.error) { req.destroy(); reject(new Error(parsed.error)); return; }
+              accumulated += String(parsed.response || '');
+            } catch { /* skip malformed lines */ }
+          }
+        });
+        res.on('end', () => {
+          clearTimeout(idleTimer);
+          resolve(accumulated.trim());
         });
       }
     );
 
-    req.setTimeout(config.timeoutMs, () => {
-      req.destroy();
-      reject(new Error('Ollama request timed out'));
+    resetIdleTimer(); // start the first-token deadline
+    req.on('error', (e) => { clearTimeout(idleTimer); reject(new Error(`Ollama connection error: ${e.message}`)); });
+    req.write(body);
+    req.end();
+  });
+}
+
+/**
+ * Stream a prompt to Ollama, calling onToken for each token as it arrives and
+ * onStatus for progress notes. Returns the full accumulated text.
+ *
+ * onToken(token: string) — called for each generated token
+ * onStatus(msg: string) — called with human-readable progress notes
+ */
+export async function ollamaGenerateStream(prompt, { onToken, onStatus } = {}) {
+  const config = getNliConfig();
+  if (config.provider !== 'ollama') {
+    throw new Error(`Unsupported local NLI provider: ${config.provider}`);
+  }
+
+  onStatus?.(`Using model ${config.model} — waiting for first token...`);
+
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({
+      model: config.model,
+      system: systemPrompt,
+      prompt,
+      stream: true,
+      keep_alive: config.keepAlive,
+      options: config.options,
     });
 
-    req.on('error', (e) => reject(new Error(`Ollama connection error: ${e.message}`)));
+    let accumulated = '';
+    let tokenCount = 0;
+    let firstChunkReceived = false;
+    let idleTimer = null;
+
+    const resetIdleTimer = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        req.destroy();
+        // Resolve with partial result rather than reject — caller decides what to do
+        resolve({ text: accumulated.trim(), partial: true, reason: 'timeout' });
+      }, config.timeoutMs);
+    };
+
+    const req = http.request(
+      {
+        hostname: config.host,
+        port: config.port,
+        path: '/api/generate',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      },
+      (res) => {
+        let buffer = '';
+        res.on('data', (chunk) => {
+          if (!firstChunkReceived) {
+            firstChunkReceived = true;
+            clearTimeout(idleTimer);
+            idleTimer = null;
+            onStatus?.('Generating response...');
+          }
+          buffer += chunk.toString();
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            try {
+              const parsed = JSON.parse(trimmed);
+              if (parsed.error) { req.destroy(); reject(new Error(parsed.error)); return; }
+              const token = String(parsed.response || '');
+              if (token) {
+                accumulated += token;
+                tokenCount += 1;
+                onToken?.(token);
+                if (tokenCount % 50 === 0) {
+                  onStatus?.(`Generated ${tokenCount} tokens...`);
+                }
+              }
+              if (parsed.done) {
+                const stats = parsed.eval_count
+                  ? ` (${parsed.eval_count} tokens, ${Math.round((parsed.eval_count / (parsed.eval_duration / 1e9)) * 10) / 10} t/s)`
+                  : '';
+                onStatus?.(`Done${stats}`);
+              }
+            } catch { /* skip malformed lines */ }
+          }
+        });
+        res.on('end', () => {
+          clearTimeout(idleTimer);
+          resolve({ text: accumulated.trim(), partial: false });
+        });
+      }
+    );
+
+    resetIdleTimer();
+    req.on('error', (e) => { clearTimeout(idleTimer); reject(new Error(`Ollama connection error: ${e.message}`)); });
     req.write(body);
     req.end();
   });
@@ -185,27 +306,28 @@ Respond with ONLY a JSON object (no markdown, no explanation) in this exact form
  */
 export function startOllamaWarmthKeeper() {
   if (warmthIntervalId) return; // Already running
-  const { warmthIntervalMs } = getNliConfig();
+  const { warmthIntervalMs, model } = getNliConfig();
 
-  const sendWarmthPulse = async () => {
+  const sendWarmthPulse = async (reason = 'interval') => {
     try {
       const alive = await ollamaHealthCheck();
       if (!alive) {
         console.log('[OLLAMA] Model not available for warmth pulse, will retry next interval');
         return;
       }
-      // Send a minimal prompt to keep model warm
-      await ollamaGenerate('Reply with just the word: ok');
+      // Use a real short prompt so the model is fully loaded into VRAM, not just health-checked
+      await ollamaGenerate('Respond with: ready');
       lastWarmthTimestamp = Date.now();
-      console.log('[OLLAMA] Warmth pulse sent - model kept in VRAM');
+      console.log(`[OLLAMA] Warmth pulse sent (${reason}) — model ${model} loaded and ready`);
     } catch (e) {
       console.log(`[OLLAMA] Warmth pulse failed (non-critical): ${e.message}`);
     }
   };
 
-  // Send first pulse immediately, then periodic pulses
-  sendWarmthPulse();
-  warmthIntervalId = setInterval(sendWarmthPulse, warmthIntervalMs);
+  // Send first pulse immediately at startup so the model is in VRAM before the first user query
+  console.log(`[OLLAMA] Loading model ${model} into VRAM at startup...`);
+  sendWarmthPulse('startup');
+  warmthIntervalId = setInterval(() => sendWarmthPulse('interval'), warmthIntervalMs);
   console.log(`[OLLAMA] Warmth keeper started (pulse every ${warmthIntervalMs / 1000}s)`);
 }
 

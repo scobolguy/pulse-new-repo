@@ -60,6 +60,80 @@ void printLine(Stream& io, const char* channelTag, const String& message) {
     io.println(message);
 }
 
+bool decodeBase64Field(const String& encoded, String& decoded, size_t maxBytes) {
+    if (encoded.isEmpty() || encoded.length() > 128 || maxBytes > 64) return false;
+    uint8_t buffer[65] = {0};
+    size_t outputLength = 0;
+    uint32_t accumulator = 0;
+    uint8_t bits = 0;
+    for (size_t index = 0; index < encoded.length(); ++index) {
+        const char ch = encoded.charAt(index);
+        if (ch == '=') break;
+        int8_t value = -1;
+        if (ch >= 'A' && ch <= 'Z') value = ch - 'A';
+        else if (ch >= 'a' && ch <= 'z') value = ch - 'a' + 26;
+        else if (ch >= '0' && ch <= '9') value = ch - '0' + 52;
+        else if (ch == '+') value = 62;
+        else if (ch == '/') value = 63;
+        else return false;
+
+        accumulator = (accumulator << 6) | static_cast<uint8_t>(value);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            if (outputLength >= maxBytes) return false;
+            buffer[outputLength++] = static_cast<uint8_t>((accumulator >> bits) & 0xFF);
+        }
+    }
+    if (outputLength == 0) return false;
+    buffer[outputLength] = 0;
+    decoded = reinterpret_cast<const char*>(buffer);
+    return true;
+}
+
+bool provisionWifiLowMemory(const String& arguments, Stream& io, const char* channelTag) {
+    const int separator = arguments.indexOf(' ');
+    if (separator <= 0) {
+        printLine(io, channelTag, "Use: PROVISION_WIFI <ssid-base64> <password-base64>");
+        return false;
+    }
+
+    String ssid;
+    String password;
+    if (!decodeBase64Field(arguments.substring(0, separator), ssid, 32)
+        || !decodeBase64Field(arguments.substring(separator + 1), password, 64)) {
+        printLine(io, channelTag, "invalid PROVISION_WIFI fields");
+        return false;
+    }
+
+    WiFiCredentials creds;
+    creds.ssid = ssid;
+    creds.password = password;
+    if (!globalWiFiProvisioning) {
+        globalWiFiProvisioning = new WiFiProvisioning();
+        globalWiFiProvisioning->begin(nodeName.c_str());
+    }
+    if (!globalWiFiProvisioning->replaceCredentials(creds)) {
+        printLine(io, channelTag, "failed to save encrypted Wi-Fi profile");
+        return false;
+    }
+
+    wifiConfig.ssid = creds.ssid;
+    wifiConfig.password = creds.password;
+    udpRuntimeConfigureWifiCredentials(creds.ssid, creds.password);
+    printLine(io, channelTag, "saved {\"ok\":true,\"storedEncrypted\":true,\"connectRequested\":true}");
+
+    if (!globalWiFiProvisioning->connectWiFi(&creds, 30)) {
+        printLine(io, channelTag, "Wi-Fi connection failed after save");
+        return false;
+    }
+    printLine(io, channelTag, String("Wi-Fi connected ") + WiFi.localIP().toString());
+    printLine(io, channelTag, "rebooting");
+    delay(500);
+    ESP.restart();
+    return true;
+}
+
 }  // namespace
 
 bool controlPlaneHandleLine(const String& rawLine, Stream& io, const char* channelTag) {
@@ -84,8 +158,12 @@ bool controlPlaneHandleLine(const String& rawLine, Stream& io, const char* chann
         return true;
     }
 
+    if (line.startsWith("PROVISION_WIFI ")) {
+        return provisionWifiLowMemory(line.substring(String("PROVISION_WIFI ").length()), io, channelTag);
+    }
+
     if (!line.startsWith("PROVISION ")) {
-        printLine(io, channelTag, "Use: PROVISION {json}");
+        printLine(io, channelTag, "Use: PROVISION_WIFI <ssid-base64> <password-base64> or PROVISION {json}");
         return false;
     }
 
@@ -135,7 +213,7 @@ bool controlPlaneHandleLine(const String& rawLine, Stream& io, const char* chann
         globalWiFiProvisioning->begin(nodeName.c_str());
     }
 
-    const bool saved = globalWiFiProvisioning->addOrUpdateCredential(creds, 5);
+    const bool saved = globalWiFiProvisioning->replaceCredentials(creds);
     if (!saved) {
         printLine(io, channelTag, "failed to save encrypted Wi-Fi profile");
         return false;

@@ -4,15 +4,19 @@ import './index.css'
 import TopologyPage from './TopologyPage.jsx'
 import DataMapper from './DataMapper.jsx'
 import FlowDesignerPage from './FlowDesignerPage.jsx'
+import NetworkDevicesPage from './NetworkDevicesPage.jsx'
 import ProjectTreePage from './ProjectTreePage.jsx'
 import ProvisioningAgentPage from './ProvisioningAgentPage.jsx'
+import PascalishEditorPage from './PascalishEditorPage.jsx'
 
 const TOOL_ROUTES = [
   { path: '/query', label: 'Query', shortLabel: 'Q', description: 'Ask BOB, submit files, and inspect operational results.' },
   { path: '/projects', label: 'Projects', shortLabel: 'P', description: 'Browse project and subproject build trees and inspect flows per node.' },
   { path: '/data-mapper', label: 'Data Mapper', shortLabel: 'M', description: 'Define and test transformations between message formats.' },
   { path: '/flow-designer', label: 'Flow Designer', shortLabel: 'F', description: 'Compose typed processing flows and bind deployment targets.' },
+  { path: '/pascalish', label: 'Pascalish', shortLabel: 'Ps', description: 'Author and compile Pascalish programs with Monaco editor, Librarian type autocomplete, and F7 run shortcuts.' },
   { path: '/topology', label: 'Topology', shortLabel: 'T', description: 'Inspect nodes, services, and runtime connectivity.' },
+  { path: '/bluetooth-devices', label: 'Bluetooth Devices', shortLabel: 'B', description: 'Inspect nearby BLE devices, inferred types, manufacturers, and signal strength.' },
   { path: '/provisioning-agent', label: 'Provisioning Agent', shortLabel: 'A', description: 'Run fleet provisioning jobs with retry policy and job history.' },
 ]
 
@@ -128,6 +132,8 @@ function AppShell() {
   let currentPage = null
   if (currentPath === '/topology') {
     currentPage = <TopologyPage />
+  } else if (currentPath === '/bluetooth-devices') {
+    currentPage = <NetworkDevicesPage />
   } else if (currentPath === '/projects') {
     currentPage = <ProjectTreePage />
   } else if (currentPath === '/data-mapper') {
@@ -144,6 +150,8 @@ function AppShell() {
         subprojectPath={subprojectPath}
       />
     )
+  } else if (currentPath === '/pascalish') {
+    currentPage = <PascalishEditorPage />
   } else if (currentPath === '/provisioning-agent') {
     currentPage = <ProvisioningAgentPage />
   }

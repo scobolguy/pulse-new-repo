@@ -94,6 +94,7 @@ export function createRouteManifestDependencyFactories(deps = {}) {
     upsertBrowserPresenceNode,
     setBrowserPresenceUnavailable,
     discoveredNodes,
+    homeAutomationService,
     getBrokerNodeDetails,
     getSystemPerformanceSnapshot,
     services,
@@ -294,6 +295,7 @@ export function createRouteManifestDependencyFactories(deps = {}) {
     }),
     topologyRuntime: () => ({
       discoveredNodes,
+      homeAutomationService,
       getBrokerNodeDetails,
       getSystemPerformanceSnapshot,
       services,

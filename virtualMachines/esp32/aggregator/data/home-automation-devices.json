@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "devices": {
+    "shark-account:you@email.com": {
+      "protocol": "shark",
+      "username": "scobolguy@hotmail.com",
+      "password": "@1234Apples",
+      "europe": false,
+      "name": ""
+    }
+  }
+}

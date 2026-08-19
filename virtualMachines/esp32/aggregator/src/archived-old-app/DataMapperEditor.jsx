@@ -65,6 +65,7 @@ export default function DataMapperEditor({
   updateItemConversionRule,
   removeItem,
   saveMapping,
+  saveAsMapping,
   runMapping,
   testCases,
   selectedTestCaseId,
@@ -299,6 +300,16 @@ export default function DataMapperEditor({
                 style={{ width: '100%', textAlign: 'left', border: 'none', background: 'transparent', padding: '8px 10px', cursor: 'pointer', color: MAPPER_TEXT_COLOR }}
               >
                 Save
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void saveAsMapping();
+                  setMenuOpen(false);
+                }}
+                style={{ width: '100%', textAlign: 'left', border: 'none', background: 'transparent', padding: '8px 10px', cursor: 'pointer', color: MAPPER_TEXT_COLOR }}
+              >
+                Save As...
               </button>
             </div>
           )}
@@ -632,10 +643,10 @@ export default function DataMapperEditor({
               <tbody>
                 {items.map((item, index) => (
                   <tr key={`item:${index}`}>
-                    <td style={{ padding: '10px 12px', borderTop: '1px solid #edf2f7', fontSize: 12, fontFamily: 'Consolas, monospace', verticalAlign: 'top', color: MAPPER_TEXT_COLOR, background: MAPPER_SURFACE }}>
+                    <td style={{ padding: '10px 12px', borderTop: '1px solid #edf2f7', fontSize: 12, fontFamily: 'Consolas, monospace', verticalAlign: 'top', color: MAPPER_TEXT_COLOR, background: MAPPER_SURFACE, wordBreak: 'break-all', overflowWrap: 'anywhere' }}>
                       {labelForPath(item.sourcePath, sourceMtFieldDefs)}
                     </td>
-                    <td style={{ padding: '10px 12px', borderTop: '1px solid #edf2f7', fontSize: 12, fontFamily: 'Consolas, monospace', verticalAlign: 'top', color: MAPPER_TEXT_COLOR, background: MAPPER_SURFACE }}>
+                    <td style={{ padding: '10px 12px', borderTop: '1px solid #edf2f7', fontSize: 12, fontFamily: 'Consolas, monospace', verticalAlign: 'top', color: MAPPER_TEXT_COLOR, background: MAPPER_SURFACE, wordBreak: 'break-all', overflowWrap: 'anywhere' }}>
                       {labelForPath(item.targetPath, targetMtFieldDefs)}
                     </td>
                     <td style={{ padding: '10px 12px', borderTop: '1px solid #edf2f7', fontSize: 12, verticalAlign: 'top', color: MAPPER_TEXT_COLOR }}>

@@ -144,7 +144,7 @@ function mergeFieldCandidates(typeFieldMapRef, definedByType, typeId) {
   return Array.from(known).sort((a, b) => a.localeCompare(b));
 }
 
-function buildPascalishMarkers(monaco, model, typeNamesRef, typeFieldMapRef) {
+function buildPascalishMarkers(monaco, model, typeNamesRef, typeFieldMapRef, mapNamesRef) {
   const text = model.getValue();
   const lines = text.split(/\r?\n/);
   const markers = [];
@@ -172,6 +172,31 @@ function buildPascalishMarkers(monaco, model, typeNamesRef, typeFieldMapRef) {
           endLineNumber: index + 1,
           startColumn,
           endColumn: startColumn + rawType.length
+        });
+      }
+    }
+  }
+
+  // Validate  import mapper "<id>" from mapper;  declarations
+  const knownMapIds = new Set(
+    (mapNamesRef?.current || []).map((m) => String(m.id || '').trim().toLowerCase())
+  );
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = String(lines[index] || '');
+    const importMatch = line.match(/^\s*import\s+mapper\s+("[^"]*"|'[^']*')\s+from\s+mapper\s*;/i);
+    if (importMatch) {
+      const raw = String(importMatch[1] || '');
+      const mapId = raw.replace(/^["']|["']$/g, '').trim().toLowerCase();
+      if (mapId && knownMapIds.size > 0 && !knownMapIds.has(mapId)) {
+        const start = line.indexOf(raw);
+        const startColumn = start >= 0 ? start + 1 : 1;
+        markers.push({
+          severity: monaco.MarkerSeverity.Warning,
+          message: `Unknown map '${mapId}'. Check the Data Mapper for available maps.`,
+          startLineNumber: index + 1,
+          endLineNumber: index + 1,
+          startColumn,
+          endColumn: startColumn + raw.length,
         });
       }
     }
@@ -369,7 +394,7 @@ function attachCobolishValidation(monaco, model) {
   });
 }
 
-function attachPascalishValidation(monaco, model, typeNamesRef, typeFieldMapRef) {
+function attachPascalishValidation(monaco, model, typeNamesRef, typeFieldMapRef, mapNamesRef) {
   if (!model || model.getLanguageId() !== 'pascalish') return;
   const key = model.uri.toString();
 
@@ -380,7 +405,7 @@ function attachPascalishValidation(monaco, model, typeNamesRef, typeFieldMapRef)
   }
 
   const runValidation = () => {
-    const markers = buildPascalishMarkers(monaco, model, typeNamesRef, typeFieldMapRef);
+    const markers = buildPascalishMarkers(monaco, model, typeNamesRef, typeFieldMapRef, mapNamesRef);
     monaco.editor.setModelMarkers(model, 'pascalish-validation', markers);
   };
 
@@ -408,7 +433,7 @@ function attachPascalishValidation(monaco, model, typeNamesRef, typeFieldMapRef)
   });
 }
 
-export function initializePascalishLanguage(monaco, typeNamesRef, typeFieldMapRef = { current: {} }) {
+export function initializePascalishLanguage(monaco, typeNamesRef, typeFieldMapRef = { current: {} }, mapNamesRef = { current: [] }) {
   if (!languageInitialized) {
     monaco.languages.register({ id: 'pascalish' });
     monaco.languages.register({ id: 'cobolish' });
@@ -418,6 +443,7 @@ export function initializePascalishLanguage(monaco, typeNamesRef, typeFieldMapRe
       keywords: PASCALISH_KEYWORDS,
       tokenizer: {
         root: [
+          [/\/\/.*$/, 'comment'],
           [/\{[^}]*\}/, 'comment'],
           [/\(\*[\s\S]*?\*\)/, 'comment'],
           [/[A-Za-z_][A-Za-z0-9_-]*/, {
@@ -428,11 +454,12 @@ export function initializePascalishLanguage(monaco, typeNamesRef, typeFieldMapRe
           }],
           [/"([^"\\]|\\.)*"/, 'string'],
           [/'([^'\\]|\\.)*'/, 'string'],
-          [/[0-9]+/, 'number'],
-          [/[:=]/, 'operator'],
-          [/\|\|/, 'operator'],
-          [/[<>]=?/, 'operator'],
+          [/[0-9]+(\.[0-9]+)?/, 'number'],
+          [/:=/, 'operator'],
           [/<>/, 'operator'],
+          [/[<>]=?/, 'operator'],
+          [/\|\|/, 'operator'],
+          [/[-+*\/]/, 'operator'],
           [/[;,.()]/, 'delimiter'],
         ]
       }
@@ -590,28 +617,155 @@ export function initializePascalishLanguage(monaco, typeNamesRef, typeFieldMapRe
 
       const snippetItems = [
         {
+          label: 'service',
+          kind: monaco.languages.CompletionItemKind.Snippet,
+          insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          insertText: 'service "${1:my-service}";',
+          detail: 'Service declaration',
+          range,
+        },
+        {
+          label: 'router',
+          kind: monaco.languages.CompletionItemKind.Snippet,
+          insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          insertText: [
+            'router "${1:route-id}"',
+            '  input "${2:queue.in}"',
+            '  description "${3:Description}"',
+            '  enabled true',
+            'begin',
+            '  output "${4:queue.out}"',
+            '    when "output := 1;"',
+            '    transform "output := src;";',
+            'end;',
+          ].join('\n'),
+          detail: 'Router skeleton',
+          range,
+        },
+        {
+          label: 'mapper',
+          kind: monaco.languages.CompletionItemKind.Snippet,
+          insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          insertText: [
+            'mapper "${1:map-id}"',
+            '  source "${2:source-type}"',
+            '  target "${3:target-type}"',
+            '  description "${4:Description}"',
+            '  enabled true',
+            'begin',
+            '  map "${5:source.field}" to "${6:target.field}" using "output := src;";',
+            'end;',
+          ].join('\n'),
+          detail: 'Mapper skeleton',
+          range,
+        },
+        {
+          label: 'output-clause',
+          kind: monaco.languages.CompletionItemKind.Snippet,
+          insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          insertText: [
+            'output "${1:queue.out}"',
+            '  when "output := 1;"',
+            '  transform "output := src;";',
+          ].join('\n'),
+          detail: 'Output clause for a router',
+          range,
+        },
+        {
+          label: 'map-rule',
+          kind: monaco.languages.CompletionItemKind.Snippet,
+          insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          insertText: 'map "${1:source.field}" to "${2:target.field}" using "output := ${3:trim(src)};";',
+          detail: 'Map field rule',
+          range,
+        },
+        {
+          label: 'program',
+          kind: monaco.languages.CompletionItemKind.Snippet,
+          insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          insertText: [
+            'program ${1:MyProgram};',
+            'begin',
+            '  ${0}',
+            'end.',
+          ].join('\n'),
+          detail: 'Program skeleton',
+          range,
+        },
+        {
+          label: 'daemon',
+          kind: monaco.languages.CompletionItemKind.Snippet,
+          insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          insertText: [
+            'daemon "${1:my-daemon}" refresh ${2:1000} ms;',
+            'begin',
+            '  ${0}',
+            'end.',
+          ].join('\n'),
+          detail: 'Daemon skeleton',
+          range,
+        },
+        {
           label: 'var-from-librarian',
           kind: monaco.languages.CompletionItemKind.Snippet,
           insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-          insertText: 'var ${1:myLegacyMessage} : ${2:swift-mt103} from librarian;',
+          insertText: 'var ${1:myMessage} : ${2:swift-mt103} from librarian;',
           detail: 'Librarian-aware variable declaration',
           range,
         },
         {
-          label: 'router-skeleton',
+          label: 'import-mapper',
+          kind: monaco.languages.CompletionItemKind.Snippet,
+          insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          insertText: 'import mapper "${1:map-id}" from mapper;',
+          detail: 'Import a data map from the Data Mapper',
+          documentation: 'Declares a dependency on a named map. The map ID must match one registered in the Data Mapper service.',
+          range,
+        },
+        {
+          label: 'if-then-else',
           kind: monaco.languages.CompletionItemKind.Snippet,
           insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
           insertText: [
-            'router "${1:route-id}" input "${2:queue.in}" description "${3:description}" enabled true begin',
-            '  output "${4:queue.out}"',
-            '    when "output := 1;"',
-            '    transform "output := src;";',
-            'end;'
+            'if ${1:condition} then',
+            '  ${2}',
+            'else',
+            '  ${3}',
+            'end;',
           ].join('\n'),
-          detail: 'Router definition skeleton',
+          detail: 'if/then/else block',
           range,
-        }
+        },
+        {
+          label: 'cobegin',
+          kind: monaco.languages.CompletionItemKind.Snippet,
+          insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          insertText: [
+            'cobegin',
+            '  ${1}',
+            'coend;',
+          ].join('\n'),
+          detail: 'Concurrent block',
+          range,
+        },
       ];
+
+      // Suggest known map IDs when cursor is inside  import mapper "..."
+      const mapIdMatch = beforeCursor.match(/\bimport\s+mapper\s+["']([^"']*)$/i);
+      if (mapIdMatch) {
+        const typed = String(mapIdMatch[1] || '').toLowerCase();
+        const mapItems = (mapNamesRef.current || [])
+          .filter((m) => !typed || String(m.id || '').toLowerCase().startsWith(typed))
+          .map((m) => ({
+            label: m.id,
+            kind: monaco.languages.CompletionItemKind.Reference,
+            insertText: m.id,
+            detail: m.name || m.id,
+            documentation: `Data Mapper map: ${m.name || m.id}`,
+            range,
+          }));
+        return { suggestions: mapItems };
+      }
 
       return {
         suggestions: [...fieldItems, ...snippetItems, ...typeItems, ...keywordItems]

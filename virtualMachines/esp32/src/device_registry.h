@@ -265,7 +265,7 @@ public:
     bool saveConfig(const char* configPath);
     
 private:
-    StaticJsonDocument<8192> configDoc;
+    JsonDocument configDoc;
     bool loaded;
     bool validated;
     std::string lastError;

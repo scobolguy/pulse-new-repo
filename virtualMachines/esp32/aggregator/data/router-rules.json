@@ -2,56 +2,18 @@
   {
     "id": "mt103-route",
     "name": "mt103-route",
-    "serviceId": "interop-router",
+    "serviceId": "librarian-aware-demo",
     "enabled": true,
     "inputQueue": "swift.mt103.inbound",
     "description": "Route MT103",
     "outputs": [
       {
         "queueName": "swift.mt103.parsed",
-        "dataTypeIds": [
-          "envelope"
-        ],
-        "dataTypeId": "envelope",
         "whenRule": "output := 1;",
         "transformRule": "output := src;"
       }
     ],
-    "createdAt": "2026-07-13T00:00:00.000Z",
-    "updatedAt": "2026-07-13T00:00:00.000Z"
-  },
-  {
-    "id": "risk_check-http",
-    "name": "risk_check-http",
-    "serviceId": "risk_check",
-    "enabled": true,
-    "inputQueue": "risk_check.in",
-    "description": "HTTP service risk_check",
-    "outputs": [
-      {
-        "queueName": "risk_check.out",
-        "whenRule": "output := 1;",
-        "transformRule": "output := '{\"success\":true,\"replyJson\":\"{\\\"stage\\\":\\\"risk_check\\\",\\\"node\\\":\\\"childNode\\\"}\"}';"
-      }
-    ],
-    "createdAt": "2026-06-09T21:30:46.570Z",
-    "updatedAt": "2026-06-09T21:30:46.570Z"
-  },
-  {
-    "id": "limits_check-http",
-    "name": "limits_check-http",
-    "serviceId": "limits_check",
-    "enabled": true,
-    "inputQueue": "limits_check.in",
-    "description": "HTTP service limits_check",
-    "outputs": [
-      {
-        "queueName": "limits_check.out",
-        "whenRule": "output := 1;",
-        "transformRule": "output := '{\"success\":true,\"replyJson\":\"{\\\"stage\\\":\\\"limits_check\\\",\\\"node\\\":\\\"childNode\\\"}\"}';"
-      }
-    ],
-    "createdAt": "2026-06-09T21:30:46.570Z",
-    "updatedAt": "2026-06-09T21:30:46.570Z"
+    "createdAt": "2026-08-15T17:43:42.232Z",
+    "updatedAt": "2026-08-15T17:43:42.232Z"
   }
 ]

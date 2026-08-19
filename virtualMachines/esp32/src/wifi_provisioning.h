@@ -82,6 +82,11 @@ public:
     bool saveCredentials(const WiFiCredentials& creds);
 
     /**
+     * Replace all stored profiles with one credential without loading the old profile set.
+     */
+    bool replaceCredentials(const WiFiCredentials& creds);
+
+    /**
      * Save or update a WiFi profile and keep only the most recent maxProfiles entries.
      * @param creds Credentials to upsert
      * @param maxProfiles Max number of stored profiles (default 5)

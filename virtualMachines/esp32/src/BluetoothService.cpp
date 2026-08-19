@@ -255,10 +255,10 @@ bool BluetoothService::startScan(int duration) {
     
     scanning = true;
     
-    // Start scan (non-blocking)
-    pBLEScan->start(duration, false);
-    
-    return true;
+    // The callback overload runs asynchronously; the two-argument overload blocks.
+    const bool started = pBLEScan->start(duration, [](NimBLEScanResults) {}, false);
+    if (!started) scanning = false;
+    return started;
 }
 
 void BluetoothService::stopScan() {
@@ -357,15 +357,8 @@ BLEDeviceType BluetoothService::detectDeviceType(NimBLEAdvertisedDevice* device)
         return BLEDeviceType::WATCH;
     }
 
-    if (device->haveManufacturerData()) {
-        std::string mfgData = device->getManufacturerData();
-        if (mfgData.length() >= 2 && (uint8_t)mfgData[0] == 0x4C && (uint8_t)mfgData[1] == 0x00) {
-            return BLEDeviceType::WATCH;
-        }
-    }
-
     if (hasService(device, "0000180f-0000-1000-8000-00805f9b34fb")) {
-        return BLEDeviceType::WATCH;
+        return BLEDeviceType::SENSOR;
     }
     
     // Check for specific device types
@@ -396,7 +389,7 @@ BLEDeviceType BluetoothService::detectDeviceType(NimBLEAdvertisedDevice* device)
     }
     
     if (name.indexOf("water") >= 0 || name.indexOf("valve") >= 0 || 
-        name.indexOf("sprinkler") >= 0 || name.indexOf("melnow") >= 0) {
+        name.indexOf("sprinkler") >= 0 || name.indexOf("melnor") >= 0) {
         return BLEDeviceType::WATER_CONTROLLER;
     }
     
@@ -405,7 +398,8 @@ BLEDeviceType BluetoothService::detectDeviceType(NimBLEAdvertisedDevice* device)
     }
     
     if (name.indexOf("sensor") >= 0 || name.indexOf("temp") >= 0 || 
-        name.indexOf("humidity") >= 0) {
+        name.indexOf("humidity") >= 0 || name.indexOf("thermo") >= 0 ||
+        name.indexOf("meter") >= 0 || name.indexOf("probe") >= 0) {
         return BLEDeviceType::SENSOR;
     }
     
@@ -456,7 +450,7 @@ bool BluetoothService::isWaterController(NimBLEAdvertisedDevice* device) {
     if (device->haveName()) {
         String name = device->getName().c_str();
         name.toLowerCase();
-        if (name.indexOf("melnow") >= 0 || name.indexOf("water") >= 0) {
+        if (name.indexOf("melnor") >= 0 || name.indexOf("water") >= 0) {
             return true;
         }
     }
@@ -821,7 +815,23 @@ String BluetoothService::extractManufacturer(NimBLEAdvertisedDevice* device) {
         if (name.startsWith("Philips")) return "Philips";
         if (name.startsWith("LIFX")) return "LIFX";
         if (name.startsWith("TP-Link")) return "TP-Link";
-        if (name.startsWith("Melnow")) return "Melnow";
+        if (name.startsWith("Melnor")) return "Melnor";
+        if (name.startsWith("T8503")) return "Smart Innovation LLC";
+    }
+
+    if (device->haveManufacturerData()) {
+        const std::string manufacturerData = device->getManufacturerData();
+        if (manufacturerData.length() >= 2) {
+            const uint8_t companyLow = static_cast<uint8_t>(manufacturerData[0]);
+            const uint8_t companyHigh = static_cast<uint8_t>(manufacturerData[1]);
+            if (companyLow == 0x4C && companyHigh == 0x00) return "Apple";
+            if (companyLow == 0x06 && companyHigh == 0x00) return "Microsoft";
+            if (companyLow == 0x75 && companyHigh == 0x00) return "Samsung Electronics";
+        }
+    }
+
+    if (device->getAddress().toString().rfind("8c:85:80", 0) == 0) {
+        return "Smart Innovation LLC";
     }
     
     return "Unknown";

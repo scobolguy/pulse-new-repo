@@ -1,7 +1,7 @@
 {
   "version": 1,
   "description": "Local NLI provider configuration. Change activeProfile or a profile's model/options without editing application code.",
-  "activeProfile": "t490-fast",
+  "activeProfile": "t490-quality",
   "reloadIntervalMs": 30000,
   "systemPrompt": {
     "assistantName": "BOB",
@@ -12,6 +12,8 @@
       "gateways",
       "nodes and topology",
       "data types and schemas",
+      "data maps and field-level transformations",
+      "map-driven translation services (Pascalish daemons)",
       "system performance",
       "NTP time",
       "transaction lifecycle",

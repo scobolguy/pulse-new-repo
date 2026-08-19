@@ -156,11 +156,26 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
   }
 
   visitVarDecl(ctx) {
-    return {
+    const node = {
       type: 'VarDecl',
       name: ctx.IDENT().getText(),
       dataType: this.visit(ctx.typeRef())
     };
+    if (ctx.varSource()) {
+      const src = this.visit(ctx.varSource());
+      node.fromLibrarian = src.fromLibrarian;
+      if (src.source !== undefined) node.source = src.source;
+    }
+    return node;
+  }
+
+  visitVarSource(ctx) {
+    const ident = ctx.IDENT();
+    const str = ctx.STRING();
+    if (ident) return { fromLibrarian: false, source: ident.getText() };
+    if (str) return { fromLibrarian: false, source: str.getText().replace(/^["']|["']$/g, '') };
+    // neither IDENT nor STRING → matched `from librarian`
+    return { fromLibrarian: true };
   }
 
   visitIdentList(ctx) {
@@ -270,10 +285,19 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
     if (ctx.whileStmt()) return this.visit(ctx.whileStmt());
     if (ctx.forStmt()) return this.visit(ctx.forStmt());
     if (ctx.repeatStmt()) return this.visit(ctx.repeatStmt());
+    if (ctx.withStmt()) return this.visit(ctx.withStmt());
     if (ctx.enqueueStmt()) return this.visit(ctx.enqueueStmt());
     if (ctx.dequeueStmt()) return this.visit(ctx.dequeueStmt());
     if (ctx.block()) return this.visit(ctx.block());
     return null;
+  }
+
+  visitWithStmt(ctx) {
+    return {
+      type: 'With',
+      contextExpr: this.visit(ctx.expr()),
+      body: (ctx.statement() || []).map(s => this.visit(s)).filter(Boolean)
+    };
   }
 
   visitEnqueueStmt(ctx) {
@@ -684,6 +708,16 @@ class Codegen {
       this.emit(`JZ ${loopLabel}`);
       return;
     }
+    if (stmt.type === 'With') {
+      // Evaluate the context expression onto the stack, then MSG_WITH_PUSH
+      // pops it and installs it as the current dot-path prefix.
+      // After the body, MSG_WITH_POP restores the previous prefix.
+      this.emitExpr(stmt.contextExpr);
+      this.emit('MSG_WITH_PUSH');
+      for (const entry of stmt.body || []) this.emitStatement(entry);
+      this.emit('MSG_WITH_POP');
+      return;
+    }
     if (stmt.type === 'Enqueue') {
       this.emitExpr(stmt.expr);
       this.emit('ROUTE_SET_MESSAGE');
@@ -801,8 +835,38 @@ class Codegen {
   }
 }
 
+/**
+ * Pre-pass: extract  import mapper "<id>" from mapper;  declarations before
+ * handing source to ANTLR.  These lines are stripped from the source so the
+ * ANTLR grammar sees a clean program, and the imports are returned separately.
+ *
+ * Syntax variants (case-insensitive):
+ *   import mapper "my-map-id" from mapper;
+ *   import mapper 'my-map-id' from mapper;
+ */
+function extractMapperImports(sourceText) {
+  const MAPPER_IMPORT_RE = /^\s*import\s+mapper\s+("[^"]*"|'[^']*')\s+from\s+mapper\s*;\s*$/gim;
+  const imports = [];
+  let match;
+  while ((match = MAPPER_IMPORT_RE.exec(sourceText)) !== null) {
+    const raw = String(match[1] || '');
+    const mapId = raw.replace(/^["']|["']$/g, '').trim();
+    if (mapId) {
+      imports.push({
+        type: 'MapperImport',
+        mapId,
+      });
+    }
+  }
+  // Strip the import lines so ANTLR does not choke on unknown syntax
+  const stripped = sourceText.replace(MAPPER_IMPORT_RE, '');
+  return { imports, stripped };
+}
+
 export function compilePascalishProgramWithAntlr(sourceText) {
-  const input = new antlr4.InputStream(String(sourceText || ''));
+  const { imports: mapperImports, stripped } = extractMapperImports(String(sourceText || ''));
+
+  const input = new antlr4.InputStream(stripped);
   const lexer = new PascalishLexer(input);
   const lexerErrors = new CollectingErrorListener();
   lexer.removeErrorListeners();
@@ -822,7 +886,12 @@ export function compilePascalishProgramWithAntlr(sourceText) {
   }
 
   const ast = new PascalishProgramAstBuilder().visit(tree);
-  return new Codegen(ast).build();
+  const result = new Codegen(ast).build();
+
+  // Attach mapper imports to the program map
+  result.programMap.mapperImports = mapperImports;
+
+  return result;
 }
 
 function parseArgs(argv) {

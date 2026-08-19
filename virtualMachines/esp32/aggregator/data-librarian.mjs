@@ -1446,6 +1446,10 @@ app.post('/api/librarian/schema-lifecycle', async (req, res) => {
   }
 });
 
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', service: 'data-librarian' });
+});
+
 const PORT = readEnvNumber('LIBRARIAN_PORT', 4300);
 
 try {

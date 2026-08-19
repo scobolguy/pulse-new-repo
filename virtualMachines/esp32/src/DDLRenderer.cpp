@@ -426,6 +426,12 @@ void DDLRenderer::updateWidget(const String& widgetId, JsonVariant value) {
         }
     }
 }
+void DDLRenderer::updateTextWidget(const String& widgetId, const String& text) {
+    lv_obj_t* widget = getWidget(widgetId);
+    if (widget && lv_obj_check_type(widget, &lv_label_class)) {
+        lv_label_set_text(widget, text.c_str());
+    }
+}
 
 void DDLRenderer::registerWidget(const String& id, lv_obj_t* obj) {
     widgets[id] = obj;

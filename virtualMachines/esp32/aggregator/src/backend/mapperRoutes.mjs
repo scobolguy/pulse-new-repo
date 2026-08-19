@@ -1454,6 +1454,28 @@ export function registerMapperRoutes(app) {
   });
 
   // List all maps
+  // List map IDs and names only — used by Pascalish autocomplete and validation
+  app.get('/api/mapper/maps/names', async (req, res) => {
+    try {
+      await seedLegacyMaps();
+      const entries = await fs.readdir(mapsRoot).catch(() => []);
+      const names = [];
+      for (const entry of entries) {
+        if (!entry.endsWith('.map')) continue;
+        try {
+          const content = await fs.readFile(path.join(mapsRoot, entry), 'utf-8');
+          const map = JSON.parse(content);
+          if (map.id) names.push({ id: map.id, name: map.name || map.id });
+        } catch {
+          // skip malformed
+        }
+      }
+      res.json({ maps: names });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get('/api/mapper/maps', async (req, res) => {
     try {
       await seedLegacyMaps();

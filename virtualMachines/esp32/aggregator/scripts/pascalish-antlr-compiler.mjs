@@ -730,8 +730,109 @@ class PascalishAstBuilder extends PascalishRouterMapperVisitor {
   }
 }
 
+// All keyword tokens from the PascalishRouterMapper grammar that must be matched uppercase.
+// The grammar was authored with caseInsensitive=true but the generated JS lexer does not
+// implement case-folding, so we uppercase these words in a pre-pass instead.
+const PASCALISH_KEYWORDS = new Set([
+  'SERVICE','CASE','OF','RETURN','METHODS','PROGRAM','DAEMON','REFRESH','MS','LIBRARY',
+  'USE','AS','INTEROP','ROLE','CODE_LIBRARIAN','WFL','WORKFLOW','COBOLISH','PASCALISH',
+  'ROUTER','MAPPER','INPUT','SOURCE','TARGET','DESCRIPTION','ENABLED','BEGIN','END',
+  'OUTPUT','TYPE','TYPES','WHEN','TRANSFORM','MAP','TO','USING','TRUE','FALSE',
+  'IF','THEN','ELSE','WHILE','DO','FOR','CALL','NOT','COBEGIN','COEND','SUBFLOW',
+  'SYNC','ASYNC','WAIT','ALL','WITH','TIMEOUT','INTO','ON','LOCAL','PARENT','CHILD',
+  'SIBLING','ALTERNATE','GET','POST','PUT','DELETE','PATCH','ACCEPTS','RETURNS',
+  'ERROR','FAIL','TRANSACTION','SUCCESS','BACKOUT','TRY','CATCH','ENDTRY',
+  'VAR','FROM','LIBRARIAN'
+]);
+
+/**
+ * Uppercase known Pascalish keywords in source text while leaving string literals
+ * and identifiers with hyphens (type names like swift-mt103) unchanged.
+ * This compensates for the generated PascalishRouterMapperLexer not implementing caseInsensitive.
+ */
+function normalizeKeywordCase(sourceText) {
+  // Walk character-by-character to skip over string literals, then uppercase bare words
+  // that are known keywords.
+  const src = String(sourceText || '');
+  const out = [];
+  let i = 0;
+  while (i < src.length) {
+    const ch = src[i];
+    // String literals — copy verbatim
+    if (ch === '"' || ch === "'") {
+      const quote = ch;
+      out.push(ch);
+      i++;
+      while (i < src.length) {
+        const c = src[i];
+        out.push(c);
+        if (c === '\\') { i++; if (i < src.length) { out.push(src[i]); i++; } }
+        else if (c === quote) { i++; break; }
+        else i++;
+      }
+      continue;
+    }
+    // Word characters — collect word (letters, digits, underscores; NOT hyphens so type names survive)
+    if (/[a-zA-Z_]/.test(ch)) {
+      let word = '';
+      const start = i;
+      while (i < src.length && /[a-zA-Z0-9_]/.test(src[i])) {
+        word += src[i++];
+      }
+      // Only uppercase if it is a known keyword (case-insensitive match)
+      if (PASCALISH_KEYWORDS.has(word.toUpperCase())) {
+        out.push(word.toUpperCase());
+      } else {
+        out.push(word);
+      }
+      continue;
+    }
+    // Everything else — copy as-is
+    out.push(ch);
+    i++;
+  }
+  return out.join('');
+}
+
+function stripLineComments(sourceText) {
+  // Strip // line comments before feeding to the ANTLR lexer, which
+  // does not have a LINE_COMMENT rule in the generated PascalishRouterMapper grammar.
+  // Replace each comment with whitespace to preserve line numbers.
+  return String(sourceText || '').replace(/\/\/[^\r\n]*/g, (match) => ' '.repeat(match.length));
+}
+
+function extractAndStripMapperImports(sourceText) {
+  // Strip  import mapper "..." from mapper;  lines and collect them as MapperImport nodes.
+  // Same pre-pass used in compile-pascalish-program-antlr-to-pcode.mjs.
+  const MAPPER_IMPORT_RE = /^\s*import\s+mapper\s+("[^"]*"|'[^']*')\s+from\s+mapper\s*;\s*$/gim;
+  const imports = [];
+  let match;
+  while ((match = MAPPER_IMPORT_RE.exec(sourceText)) !== null) {
+    const raw = String(match[1] || '');
+    const mapId = raw.replace(/^["']|["']$/g, '').trim();
+    if (mapId) imports.push({ type: 'MapperImport', mapId });
+  }
+  let stripped = sourceText.replace(MAPPER_IMPORT_RE, (m) => ' '.repeat(m.length));
+
+  // Rewrite bare service declarations (no body) so the ANTLR grammar is satisfied.
+  // The grammar rule requires  SERVICE id ; (serviceBody | serviceEndpoint* END)
+  // but Pascalish programs use  service "name";  as a standalone namespace/ID declaration.
+  // We inject  begin end  after the semicolon to produce  service "name" ; begin end;
+  // which the grammar accepts, without changing the parsed serviceId.
+  // The lookahead ensures we don't touch service declarations that already have a body.
+  stripped = stripped.replace(
+    /\bservice\s+("[^"]*"|'[^']*'|[a-z_][a-z0-9_-]*)\s*;(?=[ \t]*(\r?\n|\/\/))/gi,
+    (fullMatch) => fullMatch.replace(/;$/, '; begin end;')
+  );
+
+  return { imports, stripped };
+}
+
 export function parsePascalishWithAntlr(sourceText) {
-  const input = new antlr4.InputStream(String(sourceText || ''));
+  const { imports: mapperImports, stripped: withoutImports } = extractAndStripMapperImports(String(sourceText || ''));
+  // Order matters: strip comments first (so // inside strings are handled by stripLineComments
+  // comment-aware pass), then normalise keyword case (so var→VAR etc.), then feed to ANTLR.
+  const input = new antlr4.InputStream(normalizeKeywordCase(stripLineComments(withoutImports)));
   const lexer = new PascalishRouterMapperLexer(input);
   const lexerErrors = new CollectingErrorListener();
   lexer.removeErrorListeners();
@@ -751,7 +852,9 @@ export function parsePascalishWithAntlr(sourceText) {
   }
 
   const builder = new PascalishAstBuilder(tokens);
-  return builder.visit(tree);
+  const ast = builder.visit(tree);
+  ast.mapperImports = mapperImports;
+  return ast;
 }
 
 export function compilePascalishWithAntlr(sourceText) {
@@ -774,7 +877,8 @@ export function compilePascalishWithAntlr(sourceText) {
     interoperability: ast.interop || [],
     variableDeclarations: ast.variables || [],
     routerRules: ast.routers,
-    dataMappings: ast.mappers
+    dataMappings: ast.mappers,
+    mapperImports: ast.mapperImports || []
   };
 }
 

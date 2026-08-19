@@ -270,6 +270,18 @@
     },
 
     {
+      "id": "all-camera-feeds",
+      "description": "Show feeds from every dedicated camera node, labeled with each camera's registered node name.",
+      "patterns": [
+        "\\b(?:show|view|open|watch|stream|display)\\b[\\s\\S]{0,40}\\b(?:all|al|every|each)\\s+(?:the\\s+)?cameras?\\b",
+        "\\b(?:all|al|every|each)\\s+(?:the\\s+)?cameras?\\b[\\s\\S]{0,30}\\b(?:feed|feeds|video|stream|streams)\\b"
+      ],
+      "flags": "i",
+      "api": null,
+      "formatter": "allCameras"
+    },
+
+    {
       "id": "camera-feed",
       "description": "Show a camera feed from any named camera node in the NLI console.",
       "patterns": [

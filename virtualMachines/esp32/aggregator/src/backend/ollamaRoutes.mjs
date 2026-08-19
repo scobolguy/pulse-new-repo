@@ -3,7 +3,24 @@ import path from 'path';
 import http from 'http';
 import express from 'express';
 import multer from 'multer';
-import { reloadOllamaContext, getOllamaWarmthStatus, ollamaGenerate, rebuildSystemPrompt } from './ollamaService.mjs';
+import { reloadOllamaContext, getOllamaWarmthStatus, ollamaGenerate, ollamaGenerateStream, rebuildSystemPrompt } from './ollamaService.mjs';
+
+// ── Partial result store for streaming NLI queries ──────────────────────────
+// Keyed by interactionId. Holds { text, partial, startedAt, completedAt, message }
+const partialResults = new Map();
+const PARTIAL_TTL_MS = 30 * 60 * 1000; // 30 min
+
+function savePartial(id, data) {
+  partialResults.set(id, { ...data, savedAt: Date.now() });
+  // Evict stale entries
+  for (const [key, entry] of partialResults) {
+    if (Date.now() - entry.savedAt > PARTIAL_TTL_MS) partialResults.delete(key);
+  }
+}
+
+function getPartial(id) {
+  return partialResults.get(String(id || '')) || null;
+}
 import { matchPascalExecuteRoute, matchPrecomputedRoute, detectQueryTypes } from './queryRouteLoader.mjs';
 import { matchAgentIntent } from './agentRouteLoader.mjs';
 import { getNliConfig } from './nliConfig.mjs';
@@ -1644,10 +1661,11 @@ Neptune manages device discovery and communication for all child nodes.`
 
       // Stream response from Ollama (word by word)
       console.log('[OLLAMA] Streaming response for query:', query.substring(0, 50) + '...');
-      const fullResponse = await ollamaGenerate(query);
-      
+      const streamResult0 = await ollamaGenerateStream(query, {});
+      const fullResponse = streamResult0.text ?? streamResult0;
+
       // Split response into chunks and stream
-      const words = fullResponse.split(' ');
+      const words = (typeof fullResponse === 'string' ? fullResponse : '').split(' ');
       let accumulated = '';
       
       for (const word of words) {
@@ -2128,7 +2146,8 @@ Neptune manages device discovery and communication for all child nodes.`
         
         // Ask Ollama to provide a nice summary of the tree
         const treePrompt = `Here is the network topology tree structure:\n\n${treeText}\n\nThe user asked: "${query}"\n\nProvide a clear, concise answer about the network topology and hierarchy.`;
-        const answer = await ollamaGenerate(treePrompt);
+        const treeStreamResult = await ollamaGenerateStream(treePrompt, {});
+        const answer = treeStreamResult.text ?? treeStreamResult;
         
         console.log('[OLLAMA] Tree query completed successfully');
         
@@ -2160,7 +2179,8 @@ Neptune manages device discovery and communication for all child nodes.`
 
 User request: "${query}"`;
         
-        const answer = await ollamaGenerate(finalQuery);
+        const ledStreamResult = await ollamaGenerateStream(finalQuery, {});
+        const answer = ledStreamResult.text ?? ledStreamResult;
         try {
           // Extract JSON from response (may be wrapped in markdown)
           let jsonStr = answer;
@@ -2207,8 +2227,9 @@ User request: "${query}"`;
         finalQuery = `Briefly summarize what the user is asking for in one sentence:\n\n"${query}"\n\nRespond with only a one-sentence summary, no details.`;
       }
 
-      const answer = await ollamaGenerate(finalQuery);
-      
+      const generalStreamResult = await ollamaGenerateStream(finalQuery, {});
+      const answer = generalStreamResult.text ?? generalStreamResult;
+
       const generalResponse = {
         success: true,
         answer,
@@ -2703,17 +2724,54 @@ User request: "${query}"`;
         return res.json({ nodes: [], topology: {} });
       }
 
-      // Build minimal topology structure
-      const topologyNodes = nodeData.map(node => ({
-        nodeId: node?.nodeId || node?.nodeName || node?.ip || '',
-        nodeName: node?.nodeName || '',
-        ip: node?.ip || '',
-        port: node?.port || 80,
-        parentNodeId: node?.topology?.parentNodeId || '',
-        children: (node?.topology?.childNodeIds || '').toString().split(' ').filter(c => c),
-        isClusterController: node?.topology?.clusterController === true,
-        hardware: node?.hardware || node?.details?.hardware || ''
-      }));
+      // Build minimal topology structure while retaining the effective HTTP transport.
+      const topologyNodes = nodeData.map(node => {
+        let rawMetadata = null;
+        try { rawMetadata = typeof node?.raw === 'string' ? JSON.parse(node.raw) : node?.raw; } catch { rawMetadata = null; }
+        const protocolCandidates = [
+          node?.protocol,
+          node?.scheme,
+          node?.url,
+          node?.baseUrl,
+          node?.statusUrl,
+          node?.servicesUrl,
+          node?.details?.protocol,
+          node?.details?.scheme,
+          node?.details?.url,
+          node?.details?.baseUrl,
+          node?.details?.statusUrl,
+          node?.details?.servicesUrl,
+          rawMetadata?.statusUrl,
+          rawMetadata?.servicesUrl
+        ];
+        const advertisedUrl = protocolCandidates.find(value => /^https?:\/\//i.test(String(value || '').trim()));
+        let advertisedPort = null;
+        if (advertisedUrl) {
+          try { advertisedPort = Number(new URL(String(advertisedUrl)).port || 0) || null; } catch { advertisedPort = null; }
+        }
+        const usesHttps = node?.httpsPort != null
+          || node?.details?.httpsPort != null
+          || node?.httpsEnabled === true
+          || node?.details?.httpsEnabled === true
+          || protocolCandidates.some(value => /^https(?::|$)/i.test(String(value || '').trim()));
+        const protocol = usesHttps ? 'https' : 'http';
+        const port = Number(usesHttps
+          ? (node?.httpsPort || node?.details?.httpsPort || advertisedPort || node?.port || 443)
+          : (advertisedPort || node?.port || node?.details?.httpPort || 80));
+        const ip = node?.ip || '';
+        return {
+          nodeId: node?.nodeId || node?.nodeName || ip || '',
+          nodeName: node?.nodeName || '',
+          ip,
+          port,
+          protocol,
+          endpoint: ip ? `${protocol}://${ip}${port === (usesHttps ? 443 : 80) ? '' : `:${port}`}` : '',
+          parentNodeId: node?.topology?.parentNodeId || '',
+          children: (node?.topology?.childNodeIds || '').toString().split(' ').filter(c => c),
+          isClusterController: node?.topology?.clusterController === true,
+          hardware: node?.hardware || node?.details?.hardware || ''
+        };
+      });
 
       // Build parent-child relationships
       const childrenByParent = new Map();
@@ -3497,6 +3555,26 @@ timerId = setInterval(refresh, intervalMs);
     res.send(html);
   });
 
+  const cameraViewerSrcDoc = (captureUrl, nodeName) => escapeAgentHtml(`<!doctype html>
+<html><head><meta charset="utf-8"><style>
+html,body{width:100%;height:100%;margin:0;background:#000;overflow:hidden}
+body{display:grid;place-items:center}
+img{display:block;width:100%;height:100%;object-fit:cover}
+</style></head><body>
+<img id="camera-frame" src="${captureUrl}" alt="Live feed from ${nodeName}">
+<script>
+const frame=document.getElementById('camera-frame');
+const captureUrl=${JSON.stringify(captureUrl)};
+const separator=captureUrl.includes('?')?'&':'?';
+function refresh(){
+  const nextFrame=new Image();
+  nextFrame.onload=()=>{frame.src=nextFrame.src;setTimeout(refresh,400)};
+  nextFrame.onerror=()=>setTimeout(refresh,1000);
+  nextFrame.src=captureUrl+separator+'t='+Date.now();
+}
+frame.addEventListener('load',()=>setTimeout(refresh,400),{once:true});
+</script></body></html>`);
+
   // ── Formatters (keyed by the "formatter" field in agent-routes.json) ─────────
   const FORMATTERS = {
 
@@ -3707,7 +3785,8 @@ timerId = setInterval(refresh, intervalMs);
         if (!n) return '';
         const marker = depth > 0 ? `${'  '.repeat(depth - 1)}└─ ` : '';
         const controller = n.isClusterController ? ' [controller]' : '';
-        const line = `${marker}${n.nodeName} (${n.ip || 'no IP'})${n.hardware ? ` - ${n.hardware}` : ''}${controller}`;
+        const transport = String(n.endpoint || `${n.protocol || 'http'}://${n.ip || 'no IP'}`);
+        const line = `${marker}${n.nodeName} (${transport})${n.hardware ? ` - ${n.hardware}` : ''}${controller}`;
         return [line, ...(childrenOf.get(normalizedNodeId) || []).map(cid => renderNode(cid, depth + 1))]
           .filter(Boolean)
           .join('\n');
@@ -3736,7 +3815,8 @@ timerId = setInterval(refresh, intervalMs);
         const node = nodeMap.get(normalizedNodeId);
         if (!node) return '';
         const childIds = childrenOf.get(normalizedNodeId) || [];
-        const label = `${escapeHtml(node.nodeName)} · ${escapeHtml(node.ip || 'no IP')}`;
+        const transport = node.endpoint || `${node.protocol || 'http'}://${node.ip || 'no IP'}`;
+        const label = `${escapeHtml(node.nodeName)} · ${escapeHtml(transport)} · ${escapeHtml(String(node.protocol || 'http').toUpperCase())}`;
         if (childIds.length === 0) {
           return `<li style="padding:4px 0"><span style="font-weight:600">${label}</span></li>`;
         }
@@ -3946,15 +4026,74 @@ timerId = setInterval(refresh, intervalMs);
       const ip = cameraNode.ip;
       const streamUrl = `http://${ip}/api/camera/stream`;
       const captureUrl = `http://${ip}/api/camera/capture`;
+      const viewerSrcDoc = cameraViewerSrcDoc(captureUrl, node);
       return `<div style="font-family:-apple-system,'Segoe UI',sans-serif">
         <p style="margin:0 0 8px;font-size:13px;color:#57606a">
           Live feed — <strong>${node}</strong> &nbsp;·&nbsp; <span style="font-family:monospace">${ip}</span>
           &nbsp;·&nbsp; <a href="${streamUrl}" target="_blank" style="color:#3b82d4">open in new tab</a>
           &nbsp;·&nbsp; <a href="${captureUrl}" target="_blank" style="color:#3b82d4">snapshot</a>
         </p>
-        <iframe src="${streamUrl}" title="Live feed from ${node}"
-                style="width:100%;max-width:640px;height:480px;border-radius:6px;border:1px solid #e5e7eb;display:block;background:#000"></iframe>
+        <iframe srcdoc="${viewerSrcDoc}" title="Live feed from ${escapeAgentHtml(node)}"
+          style="width:100%;aspect-ratio:4/3;border-radius:6px;border:1px solid #e5e7eb;display:block;background:#000"></iframe>
       </div>`;
+    },
+
+    async allCameras() {
+      const nodes = await fetchNodeData();
+      const camerasByIdentity = new Map();
+
+      for (const node of (Array.isArray(nodes) ? nodes : [])) {
+        const hardware = String(node?.hardware || node?.details?.hardware || '').toLowerCase();
+        const role = String(node?.deviceRole || node?.details?.deviceRole || '').toLowerCase();
+        if (!hardware.includes('camera') && !role.includes('camera')) continue;
+
+        const nodeName = String(node?.nodeName || '').trim();
+        const ip = String(node?.ip || '').trim();
+        if (!nodeName || !ip) continue;
+
+        const identity = String(node?.nodeId || nodeName || ip).trim().toLowerCase();
+        if (!camerasByIdentity.has(identity)) camerasByIdentity.set(identity, { ...node, nodeName, ip });
+      }
+
+      const cameras = [...camerasByIdentity.values()]
+        .sort((left, right) => left.nodeName.localeCompare(right.nodeName, undefined, { numeric: true }));
+      if (cameras.length === 0) {
+        return {
+          output: '<p style="font-family:-apple-system,sans-serif;color:#57606a">No dedicated camera nodes were found in the live node registry.</p>',
+          voiceReply: 'No cameras were found',
+          confidence: 1
+        };
+      }
+
+      const feeds = cameras.map(camera => {
+        const port = Number(camera.port || camera.details?.httpPort || 80);
+        const origin = `http://${camera.ip}${port === 80 ? '' : `:${port}`}`;
+        const streamUrl = `${origin}/api/camera/stream`;
+        const captureUrl = `${origin}/api/camera/capture`;
+        const nodeName = escapeAgentHtml(camera.nodeName);
+        const ip = escapeAgentHtml(camera.ip);
+        const safeStreamUrl = escapeAgentHtml(streamUrl);
+        const safeCaptureUrl = escapeAgentHtml(captureUrl);
+        const viewerSrcDoc = cameraViewerSrcDoc(captureUrl, camera.nodeName);
+        return `<section style="min-width:0">
+          <p style="margin:0 0 8px;font-size:13px;color:#57606a">
+            <strong>${nodeName}</strong> &nbsp;·&nbsp; <span style="font-family:monospace">${ip}</span>
+            &nbsp;·&nbsp; <a href="${safeStreamUrl}" target="_blank" rel="noopener" style="color:#3b82d4">open in new tab</a>
+            &nbsp;·&nbsp; <a href="${safeCaptureUrl}" target="_blank" rel="noopener" style="color:#3b82d4">snapshot</a>
+          </p>
+            <iframe srcdoc="${viewerSrcDoc}" title="Live feed from ${nodeName}"
+                  style="width:100%;aspect-ratio:4/3;border-radius:6px;border:1px solid #e5e7eb;display:block;background:#000"></iframe>
+        </section>`;
+      }).join('');
+
+      return {
+        output: `<div style="font-family:-apple-system,'Segoe UI',sans-serif">
+          <p style="margin:0 0 12px;font-size:13px;color:#57606a">${cameras.length} camera${cameras.length === 1 ? '' : 's'} in the live node registry</p>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:16px">${feeds}</div>
+        </div>`,
+        voiceReply: `Showing ${cameras.length} camera${cameras.length === 1 ? '' : 's'}: ${cameras.map(camera => camera.nodeName).join(', ')}`,
+        confidence: 1
+      };
     },
 
     async cameraDisplayStream(_data, captures) {
@@ -5295,6 +5434,115 @@ timerId = setInterval(refresh, intervalMs);
     }
   });
 
+  /**
+   * POST /api/nli/query-stream
+   * SSE endpoint — streams tokens + status notes in real time.
+   * Saves partial results so the client can resume if connection drops.
+   * Events: { type: 'status'|'token'|'done'|'error', text, interactionId, partial }
+   */
+  app.post('/api/nli/query-stream', upload.array('files'), async (req, res) => {
+    const interactionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const message = String(req.body?.message || '').trim();
+
+    if (!message) {
+      return res.status(400).json({ error: 'No message provided.' });
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Interaction-Id', interactionId);
+    res.flushHeaders();
+
+    const send = (type, payload) => {
+      try { res.write(`data: ${JSON.stringify({ type, interactionId, ...payload })}\n\n`); } catch { /* client disconnected */ }
+    };
+
+    send('status', { text: `Interaction ${interactionId} started` });
+
+    // Check deterministic intent first — no Ollama needed
+    const match = await matchAgentIntent(message).catch(() => null);
+    if (match) {
+      const { intent, captures } = match;
+      const formatter = FORMATTERS[intent.formatter];
+      try {
+        let data = null;
+        if (intent.api !== null) data = await fetchLocalApi(intent.api);
+        const result = formatter ? await Promise.resolve(formatter(data, captures, {
+          userId: String(req.get('x-user-id') || OLLAMA_QUEUE_ACTION_USER_ID)
+        })) : { output: String(data) };
+        const text = result?.output ?? JSON.stringify(result);
+        savePartial(interactionId, { text, partial: false, message, intentId: intent.id });
+        send('done', { text, partial: false, intentId: intent.id });
+        return res.end();
+      } catch (e) {
+        send('status', { text: `Intent handler failed (${e.message}), falling back to Ollama...` });
+      }
+    }
+
+    send('status', { text: 'Sending to Ollama...' });
+
+    // Build the same prompt the askHandler would use
+    const syntheticQuery = message;
+    let accumulated = '';
+
+    try {
+      const result = await ollamaGenerateStream(syntheticQuery, {
+        onToken(token) {
+          accumulated += token;
+          send('token', { text: token });
+        },
+        onStatus(msg) {
+          send('status', { text: msg });
+        },
+      });
+
+      const finalText = result.text || accumulated;
+      savePartial(interactionId, { text: finalText, partial: result.partial, message, intentId: 'ollama-stream' });
+
+      if (result.partial) {
+        send('done', {
+          text: finalText,
+          partial: true,
+          canContinue: true,
+          text_so_far: finalText,
+          note: 'Response was cut short. Use POST /api/nli/continue with this interactionId to get more.',
+        });
+      } else {
+        send('done', { text: finalText, partial: false });
+      }
+    } catch (e) {
+      savePartial(interactionId, { text: accumulated, partial: true, message, intentId: 'ollama-stream', error: e.message });
+      send('error', { text: e.message, text_so_far: accumulated, canContinue: !!accumulated });
+    }
+
+    res.end();
+  });
+
+  /**
+   * POST /api/nli/continue
+   * Resume a partial or timed-out interaction.
+   * Body: { interactionId }
+   * Returns the saved partial text and status.
+   */
+  app.post('/api/nli/continue', express.json(), (req, res) => {
+    const id = String(req.body?.interactionId || '').trim();
+    if (!id) return res.status(400).json({ error: 'interactionId is required' });
+    const saved = getPartial(id);
+    if (!saved) {
+      return res.status(404).json({ error: `No partial result found for interactionId "${id}". It may have expired (30 min TTL).` });
+    }
+    res.json({
+      interactionId: id,
+      text: saved.text,
+      partial: saved.partial,
+      message: saved.message,
+      intentId: saved.intentId,
+      savedAt: new Date(saved.savedAt).toISOString(),
+      error: saved.error || null,
+    });
+  });
+
   app.post('/api/nli/query', upload.array('files'), async (req, res) => {
     const interactionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const shouldRecordInteraction = req.get('x-agent-test') !== '1';
@@ -5389,10 +5637,12 @@ timerId = setInterval(refresh, intervalMs);
           json(data) {
             if (settled) return;
             settled = true;
-            respond({
-              output: data?.answer || data?.output || JSON.stringify(data, null, 2),
-              voiceReply: data?.voiceReply,
-            }, data?.confidence ?? 0);
+            const rawOutput = data?.answer || data?.output;
+            // If Ollama timed out before producing any tokens, give a helpful message
+            const output = rawOutput
+              ? String(rawOutput)
+              : 'The model is still loading — please try again in a few seconds. (Ollama did not respond within the timeout window.)';
+            respond({ output, voiceReply: data?.voiceReply }, rawOutput ? (data?.confidence ?? 0) : 0);
             resolve();
           }
         };

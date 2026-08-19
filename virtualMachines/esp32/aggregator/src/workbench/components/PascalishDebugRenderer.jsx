@@ -14,6 +14,7 @@ const PascalishDebugRenderer = ({ file, role, mode, debugState }) => {
   const editorRef = React.useRef(null);
   const typeNamesRef = React.useRef([]);
   const typeFieldMapRef = React.useRef({});
+  const mapNamesRef = React.useRef([]);
   const code = file?.content || '';
   
   const currentLine = debugState?.currentLine || 1;
@@ -53,6 +54,15 @@ const PascalishDebugRenderer = ({ file, role, mode, debugState }) => {
   }, [types, schemas]);
 
   useEffect(() => {
+    let cancelled = false;
+    fetch('/api/mapper/maps/names')
+      .then((r) => r.ok ? r.json() : { maps: [] })
+      .then((data) => { if (!cancelled) mapNamesRef.current = Array.isArray(data.maps) ? data.maps : []; })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
     // Update line decorations when current line changes
     if (editorRef.current && currentLine) {
       const editor = editorRef.current;
@@ -74,7 +84,7 @@ const PascalishDebugRenderer = ({ file, role, mode, debugState }) => {
     const contracts = buildPascalishLibrarianContracts(types, schemas);
     typeNamesRef.current = contracts.typeNames;
     typeFieldMapRef.current = contracts.typeFieldMap;
-    initializePascalishLanguage(monaco, typeNamesRef, typeFieldMapRef);
+    initializePascalishLanguage(monaco, typeNamesRef, typeFieldMapRef, mapNamesRef);
     
     // Define custom CSS for debug highlighting
     const style = document.createElement('style');

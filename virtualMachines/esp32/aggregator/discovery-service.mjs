@@ -225,13 +225,15 @@ async function enrichNodeDetails(ip) {
   try {
     const servicesRes = await fetch(`http://${ip}:80/services/describe`, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
     const statusRes = await fetch(`http://${ip}:80/status`, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
-    let details = {};
-    if (servicesRes.ok) {
-      details = await servicesRes.json();
-    }
+    let serviceDetails = {};
+    let statusDetails = {};
     if (statusRes.ok) {
-      details = { ...details, ...(await statusRes.json()) };
+      statusDetails = await statusRes.json();
     }
+    if (servicesRes.ok) {
+      serviceDetails = await servicesRes.json();
+    }
+    const details = { ...statusDetails, ...serviceDetails };
     const node = discoveredNodes.get(ip);
     if (node) {
       node.details = details;

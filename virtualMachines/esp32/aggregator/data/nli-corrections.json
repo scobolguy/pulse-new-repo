@@ -82,6 +82,51 @@
       "recordedAt": "2026-08-03T13:57:16.989Z",
       "enabled": true,
       "appliedAt": "2026-08-03T13:57:19.601Z"
+    },
+    {
+      "interactionId": "1785927337427-j8z6dn",
+      "message": "is there a node called huey",
+      "expected": "The user wants to know if a network node named Huey exists within their system.",
+      "previousIntentId": "ollama-fallback",
+      "recordedAt": "2026-08-05T10:56:50.580Z",
+      "enabled": true,
+      "appliedAt": "2026-08-07T17:16:17.846Z"
+    },
+    {
+      "interactionId": "1786122787122-3ysc0y",
+      "message": "rename ESP32-VM-1254 to Camera1",
+      "expected": "expected you to rename the esp32 node to camera1.",
+      "previousIntentId": "esp-devices",
+      "recordedAt": "2026-08-07T17:14:18.302Z",
+      "enabled": true,
+      "appliedAt": "2026-08-07T17:16:17.846Z"
+    },
+    {
+      "interactionId": "1786122882631-7v2th8",
+      "message": "show me the topology",
+      "expected": "on the node listing want to see if communication is done by https",
+      "previousIntentId": "topology",
+      "recordedAt": "2026-08-07T17:16:12.701Z",
+      "enabled": true,
+      "appliedAt": "2026-08-07T17:16:17.846Z"
+    },
+    {
+      "interactionId": "1786293421587-n6h59b",
+      "message": "Rename my name to myNofeName",
+      "expected": "S",
+      "previousIntentId": "ollama-fallback",
+      "recordedAt": "2026-08-09T16:56:10.360Z",
+      "enabled": true,
+      "appliedAt": "2026-08-17T14:56:54.210Z"
+    },
+    {
+      "interactionId": "1786294638603-8yxybc",
+      "message": "Show me the calamar got sept of this year",
+      "expected": "To see the calendar for September of the present year",
+      "previousIntentId": "ollama-fallback",
+      "recordedAt": "2026-08-09T16:57:58.999Z",
+      "enabled": true,
+      "appliedAt": "2026-08-17T14:56:54.210Z"
     }
   ]
 }

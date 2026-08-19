@@ -1,8 +1,9 @@
-bblanchon/ArduinoJson
-adafruit/Adafruit BME280 Library
+h2zero/NimBLE-Arduino@^1.4.1
 adafruit/DHT sensor library
+bblanchon/ArduinoJson
+knolleary/PubSubClient@^2.8
+me-no-dev/AsyncTCP
+adafruit/Adafruit BME280 Library
 adafruit/Adafruit BMP280 Library
 ESP Async WebServer
 adafruit/Adafruit Unified Sensor
-knolleary/PubSubClient@^2.8
-me-no-dev/AsyncTCP

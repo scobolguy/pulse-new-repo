@@ -61,27 +61,27 @@ bool DeviceRegistry::validateConfig() {
     clearError();
     
     // Check required fields
-    if (!configDoc.containsKey("device")) {
+    if (!configDoc["device"].is<JsonObject>()) {
         setError("Missing 'device' section");
         return false;
     }
     
     JsonObject device = configDoc["device"];
-    if (!device.containsKey("id") || !device.containsKey("role")) {
+    if (!device["id"].is<const char*>() || !device["role"].is<const char*>()) {
         setError("Missing required device fields");
         return false;
     }
     
     // Validate hardware section if present
-    if (configDoc.containsKey("hardware")) {
+    if (configDoc["hardware"].is<JsonObject>()) {
         JsonObject hardware = configDoc["hardware"];
         
         // Validate sensors
-        if (hardware.containsKey("sensors")) {
+        if (hardware["sensors"].is<JsonArray>()) {
             JsonArray sensors = hardware["sensors"];
             for (JsonObject sensor : sensors) {
-                if (!sensor.containsKey("id") || !sensor.containsKey("type") || 
-                    !sensor.containsKey("pin")) {
+                if (!sensor["id"].is<const char*>() || !sensor["type"].is<const char*>() || 
+                    !sensor["pin"].is<int>()) {
                     setError("Invalid sensor configuration");
                     return false;
                 }
@@ -89,11 +89,11 @@ bool DeviceRegistry::validateConfig() {
         }
         
         // Validate actuators
-        if (hardware.containsKey("actuators")) {
+        if (hardware["actuators"].is<JsonArray>()) {
             JsonArray actuators = hardware["actuators"];
             for (JsonObject actuator : actuators) {
-                if (!actuator.containsKey("id") || !actuator.containsKey("type") || 
-                    !actuator.containsKey("pin")) {
+                if (!actuator["id"].is<const char*>() || !actuator["type"].is<const char*>() || 
+                    !actuator["pin"].is<int>()) {
                     setError("Invalid actuator configuration");
                     return false;
                 }
@@ -349,10 +349,10 @@ LoggingConfig DeviceRegistry::getLoggingConfig() const {
 }
 
 bool DeviceRegistry::updateSensor(const char* id, const SensorConfig& config) {
-    if (!loaded || !configDoc.containsKey("hardware")) return false;
+    if (!loaded || !configDoc["hardware"].is<JsonObject>()) return false;
     
     JsonObject hardware = configDoc["hardware"];
-    if (!hardware.containsKey("sensors")) return false;
+    if (!hardware["sensors"].is<JsonArray>()) return false;
     
     JsonArray sensors = hardware["sensors"];
     for (JsonObject sensor : sensors) {
@@ -360,8 +360,8 @@ bool DeviceRegistry::updateSensor(const char* id, const SensorConfig& config) {
             sensor["enabled"] = config.enabled;
             sensor["sampleRate"] = config.sampleRate;
             
-            if (!sensor.containsKey("calibration")) {
-                sensor.createNestedObject("calibration");
+            if (!sensor["calibration"].is<JsonObject>()) {
+                sensor["calibration"].to<JsonObject>();
             }
             JsonObject cal = sensor["calibration"];
             cal["offset"] = config.calibrationOffset;
@@ -375,10 +375,10 @@ bool DeviceRegistry::updateSensor(const char* id, const SensorConfig& config) {
 }
 
 bool DeviceRegistry::updateActuator(const char* id, const ActuatorConfig& config) {
-    if (!loaded || !configDoc.containsKey("hardware")) return false;
+    if (!loaded || !configDoc["hardware"].is<JsonObject>()) return false;
     
     JsonObject hardware = configDoc["hardware"];
-    if (!hardware.containsKey("actuators")) return false;
+    if (!hardware["actuators"].is<JsonArray>()) return false;
     
     JsonArray actuators = hardware["actuators"];
     for (JsonObject actuator : actuators) {

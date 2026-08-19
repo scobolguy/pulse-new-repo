@@ -170,6 +170,12 @@ bool FederatedFileSystem::writeLine(int handle, const String &line) {
     size_t written = it->second.file.print(line + "\n");
     return written == (line.length() + 1);
 }
+
+size_t FederatedFileSystem::writeBytes(int handle, const uint8_t *data, size_t len) {
+    auto it = _openFiles.find(handle);
+    if (it == _openFiles.end() || !data || len == 0) return 0;
+    return it->second.file.write(data, len);
+}
 // FederatedFileSystem.cpp
 // ESP32 Federated File System (FFS) core implementation
 // Supports SD (SD_MMC/SD) and LittleFS backends
@@ -270,6 +276,22 @@ FFSStatus FederatedFileSystem::read(const String &logicalName, std::vector<uint8
     return FFSStatus::OK;
 #else
     return FFSStatus::ERR_UNSUPPORTED;
+#endif
+}
+
+File FederatedFileSystem::openReadFile(const String &logicalName) {
+    ResolvedPath resolved = resolvePath(logicalName);
+    if (resolved.remote) return File();
+#if defined(ESP32)
+    if (resolved.resolvedPath.startsWith("/sd/")) {
+        return SD.open(resolved.resolvedPath.substring(3), FILE_READ);
+    }
+    if (resolved.resolvedPath.startsWith("sd/")) {
+        return SD.open(resolved.resolvedPath.substring(3), FILE_READ);
+    }
+    return LittleFS.open(resolved.resolvedPath, FILE_READ);
+#else
+    return LittleFS.open(resolved.resolvedPath, "r");
 #endif
 }
 

@@ -6,6 +6,7 @@
 #include <WiFi.h>
 #endif
 #include <ArduinoJson.h>
+#include "https_service.h"
 
 bool sendNodeBeaconAnnouncement(
     WiFiUDP& udp,
@@ -38,6 +39,15 @@ bool sendNodeBeaconAnnouncement(
     announceDoc["deviceRole"] = deviceRole;
     announceDoc["firmwareBuildStamp"] = firmwareBuildStamp;
     announceDoc["httpPort"] = 80;
+#if defined(ENABLE_HTTPS) && (defined(ESP32) || defined(ESP8266))
+    const bool httpsRunning = isHttpsRunning();
+    announceDoc["protocol"] = httpsRunning ? "https" : "http";
+    if (httpsRunning) {
+        announceDoc["httpsPort"] = 443;
+    }
+#else
+    announceDoc["protocol"] = "http";
+#endif
     announceDoc["udpParentPort"] = parentPort;
     announceDoc["udpSiblingPort"] = siblingPort;
     announceDoc["flowDirection"] = "bottom-up";

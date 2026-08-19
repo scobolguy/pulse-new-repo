@@ -355,6 +355,10 @@ export default function DataMapper() {
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [openDialog, setOpenDialog] = useState(false);
+  const [newMapDialog, setNewMapDialog] = useState(false);
+  const [newMapName, setNewMapName] = useState('');
+  const [newMapSourcePath, setNewMapSourcePath] = useState('');
+  const [newMapTargetPath, setNewMapTargetPath] = useState('');
 
   const [editingId, setEditingId] = useState('');
   const [name, setName] = useState('');
@@ -581,31 +585,36 @@ export default function DataMapper() {
   }, []);
 
   const createNewMap = useCallback(() => {
-    const proposedName = prompt('New map name:', name || 'Untitled Map');
-    if (!proposedName) return;
+    setNewMapName('Untitled Map');
+    setNewMapSourcePath(sourceSchemaPath || (schemaChoices[0]?.path ?? ''));
+    setNewMapTargetPath(targetSchemaPath || (schemaChoices[1]?.path ?? schemaChoices[0]?.path ?? ''));
+    setNewMapDialog(true);
+    setMenuOpen(false);
+  }, [sourceSchemaPath, targetSchemaPath, schemaChoices]);
 
+  const confirmNewMap = useCallback(() => {
+    const proposedName = newMapName.trim();
+    if (!proposedName) return;
+    const srcPath = newMapSourcePath;
+    const dstPath = newMapTargetPath;
+    const srcChoice = schemaChoices.find(c => c.path === srcPath);
+    const dstChoice = schemaChoices.find(c => c.path === dstPath);
     const nextId = proposedName
-      .trim()
       .toLowerCase()
       .replaceAll(/[^a-z0-9_-]/g, '_')
       .slice(0, 50);
-
-    const fallbackSourceSchema = sourceSchemaPath || 'schemas/swift-mt103.json';
-    const fallbackTargetSchema = targetSchemaPath || 'schemas/pacs.008.001.14.xsd';
-    const fallbackSourceType = sourceTypeId || 'swift-mt103';
-    const fallbackTargetType = targetTypeId || 'pacs';
-
     openMapping({
       id: nextId,
-      name: proposedName.trim(),
-      sourceTypeId: fallbackSourceType,
-      targetTypeId: fallbackTargetType,
-      sourceSchemaPath: fallbackSourceSchema,
-      targetSchemaPath: fallbackTargetSchema,
+      name: proposedName,
+      sourceTypeId: srcChoice?.typeId || srcPath,
+      targetTypeId: dstChoice?.typeId || dstPath,
+      sourceSchemaPath: srcPath,
+      targetSchemaPath: dstPath,
       items: [],
       persisted: false,
     });
-  }, [name, openMapping, sourceSchemaPath, sourceTypeId, targetSchemaPath, targetTypeId]);
+    setNewMapDialog(false);
+  }, [newMapName, newMapSourcePath, newMapTargetPath, schemaChoices, openMapping]);
 
   const openMapFile = useCallback(async (mapId) => {
     const res = await fetch(`/api/mapper/maps/${encodeURIComponent(mapId)}`);
@@ -793,6 +802,72 @@ export default function DataMapper() {
     }
   }
 
+  async function saveAsMapping() {
+    try {
+      if (hasConversionRuleErrors) {
+        setStatus('Save As failed: one or more conversion rules are invalid');
+        return;
+      }
+
+      const newName = window.prompt(
+        'Save a copy as — enter a name for the new map:',
+        `${name || editingId || 'map'} copy`,
+      );
+      if (!newName || !newName.trim()) return;
+      const trimmedName = newName.trim();
+
+      const payload = {
+        name: trimmedName,
+        description: '',
+        sourceTypeId,
+        targetTypeId,
+        sourceSchemaPath,
+        targetSchemaPath,
+        sourceSchemaMtime: sourceSchema?.mtime ? String(sourceSchema.mtime) : '',
+        targetSchemaMtime: targetSchema?.mtime ? String(targetSchema.mtime) : '',
+        sourceStructure: sourceSchema?.structure || null,
+        targetStructure: targetSchema?.structure || null,
+        projectPath: 'projects/myProject',
+        rules: items.map((item) => ({
+          sourcePath: item.sourcePath,
+          targetPath: item.targetPath,
+          kind: item.kind,
+          sourceValueType: item.sourceValueType,
+          targetValueType: item.targetValueType,
+          conversionRule: item.conversionRule,
+        })),
+        submaps: [],
+      };
+
+      const res = await fetch('/api/mapper/maps', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setStatus(`Save As failed: ${data.error || 'unknown error'}`);
+        return;
+      }
+
+      const savedMap = data.map || payload;
+      await loadAvailableMaps();
+      setStatus(`Saved copy as: ${savedMap.name || trimmedName}`);
+      openMapping({
+        id: String(savedMap.id || ''),
+        name: String(savedMap.name || trimmedName),
+        sourceTypeId: String(savedMap.sourceTypeId || sourceTypeId).toLowerCase(),
+        targetTypeId: String(savedMap.targetTypeId || targetTypeId).toLowerCase(),
+        sourceSchemaPath: String(savedMap.sourceSchemaPath || sourceSchemaPath),
+        targetSchemaPath: String(savedMap.targetSchemaPath || targetSchemaPath),
+        items,
+        persisted: true,
+      });
+    } catch (e) {
+      setStatus(`Save As failed: ${e.message}`);
+    }
+  }
+
   async function runMapping() {
     try {
       if (!editingId) {
@@ -882,6 +957,46 @@ export default function DataMapper() {
 
   return (
     <div style={{ maxWidth: 1300, color: '#111827', background: '#ffffff' }}>
+      {newMapDialog && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: '#fff', borderRadius: 8, padding: 24, minWidth: 440, boxShadow: '0 8px 32px rgba(0,0,0,0.18)', color: '#111827' }}>
+            <h3 style={{ margin: '0 0 16px' }}>New Map</h3>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13, marginBottom: 14 }}>
+              <span>Map Name</span>
+              <input
+                type="text"
+                value={newMapName}
+                onChange={e => setNewMapName(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') confirmNewMap(); if (e.key === 'Escape') setNewMapDialog(false); }}
+                autoFocus
+                style={{ fontSize: 13, padding: '7px 10px', border: '1px solid #cbd5e1', borderRadius: 4 }}
+              />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13, marginBottom: 14 }}>
+              <span>Source Data Type</span>
+              {schemaChoices.length === 0
+                ? <span style={{ fontSize: 12, color: '#6b7280' }}>Librarian unavailable — no schemas loaded</span>
+                : <select value={newMapSourcePath} onChange={e => setNewMapSourcePath(e.target.value)} style={{ fontSize: 13, padding: '7px 10px', border: '1px solid #cbd5e1', borderRadius: 4 }}>
+                    {schemaChoices.map(c => <option key={`new-src:${c.path}`} value={c.path}>{c.label}</option>)}
+                  </select>
+              }
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13, marginBottom: 20 }}>
+              <span>Destination Data Type</span>
+              {schemaChoices.length === 0
+                ? <span style={{ fontSize: 12, color: '#6b7280' }}>Librarian unavailable — no schemas loaded</span>
+                : <select value={newMapTargetPath} onChange={e => setNewMapTargetPath(e.target.value)} style={{ fontSize: 13, padding: '7px 10px', border: '1px solid #cbd5e1', borderRadius: 4 }}>
+                    {schemaChoices.map(c => <option key={`new-dst:${c.path}`} value={c.path}>{c.label}</option>)}
+                  </select>
+              }
+            </label>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button type="button" onClick={() => setNewMapDialog(false)} style={{ padding: '7px 16px' }}>Cancel</button>
+              <button type="button" onClick={confirmNewMap} disabled={!newMapName.trim()} style={{ padding: '7px 16px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 4 }}>Create</button>
+            </div>
+          </div>
+        </div>
+      )}
       <Suspense fallback={<div style={{ ...SECTION_STYLE, padding: 22 }}>Loading drag-and-drop mapper…</div>}>
         <LazyDataMapperEditor
           availableMaps={availableMaps}
@@ -927,6 +1042,7 @@ export default function DataMapper() {
           updateItemConversionRule={updateItemConversionRule}
           removeItem={removeItem}
           saveMapping={saveMapping}
+          saveAsMapping={saveAsMapping}
           runMapping={runMapping}
           testCases={testCases}
           selectedTestCaseId={selectedTestCaseId}

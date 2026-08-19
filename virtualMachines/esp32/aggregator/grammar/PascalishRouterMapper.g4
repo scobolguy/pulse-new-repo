@@ -1,3 +1,9 @@
+// SUPERSEDED — Pascalish.g4 is now the single canonical grammar.
+// This file is retained only because the generated JS parser files
+// (PascalishRouterMapperLexer.js, PascalishRouterMapperParser.js) are still
+// used at runtime by pascalish-antlr-compiler.mjs until the ANTLR tool
+// regenerates parsers from Pascalish.g4.
+// Do NOT add new rules here. Edit Pascalish.g4 instead.
 grammar PascalishRouterMapper;
 
 options { caseInsensitive = true; }
@@ -403,4 +409,5 @@ STRING: '"' (~["\\\r\n] | '\\' .)* '"' | '\'' (~['\\\r\n] | '\\' .)* '\'';
 
 BRACE_COMMENT: '{' .*? '}' -> skip;
 PAREN_COMMENT: '(*' .*? '*)' -> skip;
+LINE_COMMENT: '//' ~[\r\n]* -> skip;
 WS: [ \t\r\n]+ -> skip;

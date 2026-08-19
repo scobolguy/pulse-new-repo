@@ -8,11 +8,20 @@
 #include <mbedtls/base64.h>
 
 #include "control_plane_commands.h"
+#include "ffs/FederatedFileSystem.h"
+#if defined(ENABLE_PMACHINE)
 #include "pmachine_routes.h"
+#endif
+#if defined(ENABLE_DISPLAY)
+#include "DisplayService.h"
+#endif
 
+extern FederatedFileSystem federatedFS;
 #if defined(ENABLE_PMACHINE)
 extern pmachine::PMachine pm;
-extern FederatedFileSystem federatedFS;
+#endif
+#if defined(ENABLE_DISPLAY) && !defined(DISPLAY_NO_LVGL)
+extern bool displayStatusDashboardActive;
 #endif
 
 namespace {
@@ -23,6 +32,7 @@ constexpr size_t kMaxRxChunkBytes = 512;
 constexpr size_t kMaxControlLineBytes = 16384;
 constexpr size_t kNotificationChunkBytes = 20;
 constexpr size_t kMaxRpcResponseBytes = 65536;
+constexpr size_t kMaxBleFileBytes = 96U * 1024U;
 constexpr uint32_t kPcodeWorkerStackBytes = 12288;
 constexpr TickType_t kStreamAckTimeoutTicks = pdMS_TO_TICKS(1500);
 constexpr uint8_t kStreamFrameAttempts = 3;
@@ -52,6 +62,10 @@ String gRpcResponseBody;
 size_t gRpcExpectedBodyBytes = 0;
 size_t gRpcReceivedBodyBytes = 0;
 bool gRpcReceivingBody = false;
+int gBleFileHandle = 0;
+String gBleFilePath;
+size_t gBleFileExpectedBytes = 0;
+size_t gBleFileWrittenBytes = 0;
 #if defined(ENABLE_PMACHINE)
 TaskHandle_t gPcodeWorkerTask = nullptr;
 uint32_t gNextPcodeStreamId = 1;
@@ -267,6 +281,10 @@ class ControlPlaneServerCallbacks : public NimBLEServerCallbacks {
 
     void onDisconnect(NimBLEServer*) override {
         gClientConnected = false;
+        if (gBleFileHandle != 0) {
+            federatedFS.closeFile(gBleFileHandle);
+            gBleFileHandle = 0;
+        }
         Serial.println("[BLE-CP] client disconnected");
         NimBLEDevice::startAdvertising();
     }
@@ -363,6 +381,137 @@ bool handleFilePut(const String& line) {
     String body;
     serializeJson(response, body);
     gBleResponse.println(String("[BLE-CP] file ") + body);
+    return true;
+}
+
+bool isAllowedBleFilePath(const String& path) {
+    return path.startsWith("/") && path.indexOf("..") < 0;
+}
+
+bool handleFileBegin(const String& line) {
+    const size_t prefixLength = String("FILE_BEGIN ").length();
+    const int pathEnd = line.indexOf(' ', prefixLength);
+    if (pathEnd < 0) {
+        gBleResponse.println("[BLE-CP] fileBegin {\"ok\":false,\"error\":\"invalid command\"}");
+        return true;
+    }
+
+    const String path = line.substring(prefixLength, pathEnd);
+    const String sizeText = line.substring(pathEnd + 1);
+    const size_t expectedBytes = static_cast<size_t>(strtoul(sizeText.c_str(), nullptr, 10));
+    if (!isAllowedBleFilePath(path) || expectedBytes == 0 || expectedBytes > kMaxBleFileBytes) {
+        gBleResponse.println("[BLE-CP] fileBegin {\"ok\":false,\"error\":\"invalid path or size\"}");
+        return true;
+    }
+    if (gBleFileHandle != 0) {
+        federatedFS.closeFile(gBleFileHandle);
+    }
+    gBleFileHandle = federatedFS.openFile(path, "w");
+    gBleFilePath = gBleFileHandle != 0 ? path : "";
+    gBleFileExpectedBytes = gBleFileHandle != 0 ? expectedBytes : 0;
+    gBleFileWrittenBytes = 0;
+    const bool opened = gBleFileHandle != 0;
+    gBleResponse.print("[BLE-CP] fileBegin {\"ok\":");
+    gBleResponse.print(opened ? "true" : "false");
+    gBleResponse.print(",\"expectedBytes\":");
+    gBleResponse.print(static_cast<uint32_t>(expectedBytes));
+    gBleResponse.println("}");
+    return true;
+}
+
+bool handleFileAppend(const String& line) {
+    const size_t prefixLength = String("FILE_APPEND ").length();
+    const int pathEnd = line.indexOf(' ', prefixLength);
+    const int offsetEnd = pathEnd >= 0 ? line.indexOf(' ', pathEnd + 1) : -1;
+    if (pathEnd < 0 || offsetEnd < 0) {
+        gBleResponse.println("[BLE-CP] fileAppend {\"ok\":false,\"error\":\"invalid command\"}");
+        return true;
+    }
+
+    const String path = line.substring(prefixLength, pathEnd);
+    const String offsetText = line.substring(pathEnd + 1, offsetEnd);
+    const size_t requestedOffset = static_cast<size_t>(strtoul(offsetText.c_str(), nullptr, 10));
+    const String encoded = line.substring(offsetEnd + 1);
+    if (!isAllowedBleFilePath(path) || encoded.isEmpty()
+        || gBleFileHandle == 0 || path != gBleFilePath) {
+        gBleResponse.println("[BLE-CP] fileAppend {\"ok\":false,\"error\":\"invalid path or data\"}");
+        return true;
+    }
+
+    std::vector<uint8_t> decoded;
+    if (!decodeBase64(encoded, decoded)) {
+        gBleResponse.println("[BLE-CP] fileAppend {\"ok\":false,\"error\":\"invalid base64\"}");
+        return true;
+    }
+
+    const bool inBounds = requestedOffset == gBleFileWrittenBytes
+        && gBleFileWrittenBytes + decoded.size() <= gBleFileExpectedBytes;
+    const bool written = inBounds
+        && federatedFS.writeBytes(gBleFileHandle, decoded.data(), decoded.size()) == decoded.size();
+    if (written) {
+        gBleFileWrittenBytes += decoded.size();
+        if (gBleFileWrittenBytes == gBleFileExpectedBytes) {
+            federatedFS.closeFile(gBleFileHandle);
+            gBleFileHandle = 0;
+            federatedFS.sync();
+        }
+    }
+    const size_t resultingSize = gBleFileWrittenBytes;
+
+    gBleResponse.print("[BLE-CP] fileAppend {\"ok\":");
+    gBleResponse.print(written ? "true" : "false");
+    gBleResponse.print(",\"bytes\":");
+    gBleResponse.print(static_cast<uint32_t>(resultingSize));
+    if (!inBounds) {
+        gBleResponse.print(",\"error\":\"offset mismatch or file too large\"");
+    }
+    gBleResponse.println("}");
+    return true;
+}
+
+bool handleDisplayJpeg(const String& line) {
+#if defined(ENABLE_DISPLAY)
+    JsonDocument request;
+    if (deserializeJson(request, line.substring(String("DISPLAY_JPEG ").length()))) {
+        gBleResponse.println("[BLE-CP] DISPLAY_JPEG invalid JSON");
+        return true;
+    }
+    const String path = request["path"] | "";
+#if !defined(DISPLAY_NO_LVGL)
+    displayStatusDashboardActive = false;
+#endif
+    const bool shown = isAllowedBleFilePath(path)
+        && displayService.showJpegFile(path, LittleFS);
+    gBleResponse.print("[BLE-CP] displayJpeg {\"ok\":");
+    gBleResponse.print(shown ? "true" : "false");
+    gBleResponse.println("}");
+#else
+    gBleResponse.println("[BLE-CP] DISPLAY_JPEG unavailable");
+#endif
+    return true;
+}
+
+bool handleDoorbellRing(const String& line) {
+#if defined(ENABLE_DISPLAY)
+    String path = line.substring(String("RING ").length());
+    path.trim();
+    File jpeg = isAllowedBleFilePath(path) && gBleFileHandle == 0
+        ? federatedFS.openReadFile(path)
+        : File();
+    const size_t jpegBytes = jpeg ? jpeg.size() : 0;
+#if !defined(DISPLAY_NO_LVGL)
+    if (jpeg) displayStatusDashboardActive = false;
+#endif
+    const bool shown = jpeg && displayService.showJpegFile(jpeg);
+    if (jpeg) jpeg.close();
+    gBleResponse.print("[BLE-CP] ring {\"ok\":");
+    gBleResponse.print(shown ? "true" : "false");
+    gBleResponse.print(",\"bytes\":");
+    gBleResponse.print(static_cast<uint32_t>(jpegBytes));
+    gBleResponse.println("}");
+#else
+    gBleResponse.println("[BLE-CP] ring {\"ok\":false,\"error\":\"display unavailable\"}");
+#endif
     return true;
 }
 
@@ -614,7 +763,15 @@ void BluetoothControlPlane::loop() {
                     lineBuffer_.clear();
                     continue;
                 }
-                if (lineBuffer_.startsWith("FILE_PUT ")) {
+                if (lineBuffer_.startsWith("FILE_BEGIN ")) {
+                    handleFileBegin(lineBuffer_);
+                } else if (lineBuffer_.startsWith("FILE_APPEND ")) {
+                    handleFileAppend(lineBuffer_);
+                } else if (lineBuffer_.startsWith("RING ")) {
+                    handleDoorbellRing(lineBuffer_);
+                } else if (lineBuffer_.startsWith("DISPLAY_JPEG ")) {
+                    handleDisplayJpeg(lineBuffer_);
+                } else if (lineBuffer_.startsWith("FILE_PUT ")) {
                     handleFilePut(lineBuffer_);
                 } else if (lineBuffer_.startsWith("PCODE_RUN ")) {
 #if defined(ENABLE_PMACHINE)

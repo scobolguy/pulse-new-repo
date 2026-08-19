@@ -66,6 +66,10 @@ class DSLTokenizer {
       if (this.pos >= this.source.length) break;
 
       const ch = this.source[this.pos];
+      if (ch === '/' && this.peek() === '/') {
+        this.skipLineComment();
+        continue;
+      }
       if (ch === '{') {
         this.skipBraceComment();
         continue;
@@ -227,6 +231,13 @@ class DSLTokenizer {
 
   skipWhitespace() {
     while (this.pos < this.source.length && /\s/.test(this.source[this.pos])) {
+      this.advance();
+    }
+  }
+
+  skipLineComment() {
+    this.advance(2); // skip the //
+    while (this.pos < this.source.length && this.source[this.pos] !== '\n') {
       this.advance();
     }
   }
@@ -708,7 +719,8 @@ export function compileRouterMapperDSL(sourceText) {
     interoperability: compiledAntlr.interoperability || ast.interop || [],
     variableDeclarations: compiledAntlr.variableDeclarations || ast.variables || [],
     routerRules,
-    dataMappings
+    dataMappings,
+    mapperImports: compiledAntlr.mapperImports || ast.mapperImports || []
   };
 }
 

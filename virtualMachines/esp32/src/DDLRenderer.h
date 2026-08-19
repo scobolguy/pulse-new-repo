@@ -55,6 +55,7 @@ public:
     // Widget management
     lv_obj_t* getWidget(const String& widgetId);
     void updateWidget(const String& widgetId, JsonVariant value);
+    void updateTextWidget(const String& widgetId, const String& text);
     
     // Layout management
     lv_obj_t* getScreen() { return screen; }

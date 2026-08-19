@@ -254,12 +254,54 @@ unsigned long doorbellDisplayStreamLastFrameMs = 0;
 unsigned long doorbellDisplayStreamFramesSent = 0;
 unsigned long doorbellDisplayStreamFailures = 0;
 int doorbellDisplayStreamLastStatus = 0;
+constexpr unsigned long DOORBELL_DISPLAY_MIN_INTERVAL_MS = 334;
 #endif
 
 #if defined(ENABLE_DOORBELL_DISPLAY)
 String doorbellLastAlertType;
 String doorbellLastSnapshotUrl;
 unsigned long doorbellLastAlertMs = 0;
+#endif
+
+#if defined(ESP32) && defined(ENABLE_DISPLAY)
+portMUX_TYPE doorbellFrameMux = portMUX_INITIALIZER_UNLOCKED;
+uint8_t* doorbellPendingFrame = nullptr;
+size_t doorbellPendingFrameLength = 0;
+unsigned long doorbellFramesQueued = 0;
+unsigned long doorbellFramesRendered = 0;
+unsigned long doorbellFramesDropped = 0;
+unsigned long doorbellFrameRenderFailures = 0;
+
+void queueDoorbellDisplayFrame(uint8_t* frame, size_t length) {
+    uint8_t* replacedFrame = nullptr;
+    portENTER_CRITICAL(&doorbellFrameMux);
+    replacedFrame = doorbellPendingFrame;
+    doorbellPendingFrame = frame;
+    doorbellPendingFrameLength = length;
+    doorbellFramesQueued++;
+    if (replacedFrame) doorbellFramesDropped++;
+    portEXIT_CRITICAL(&doorbellFrameMux);
+    if (replacedFrame) free(replacedFrame);
+}
+
+void pollDoorbellDisplayFrame() {
+    uint8_t* frame = nullptr;
+    size_t length = 0;
+    portENTER_CRITICAL(&doorbellFrameMux);
+    frame = doorbellPendingFrame;
+    length = doorbellPendingFrameLength;
+    doorbellPendingFrame = nullptr;
+    doorbellPendingFrameLength = 0;
+    portEXIT_CRITICAL(&doorbellFrameMux);
+
+    if (!frame) return;
+    if (displayService.showJpegFrame(frame, length, 0, 0)) {
+        doorbellFramesRendered++;
+    } else {
+        doorbellFrameRenderFailures++;
+    }
+    free(frame);
+}
 #endif
 
 #ifdef ENABLE_PMACHINE
@@ -498,6 +540,8 @@ void pollDoorbellButton() {
 
 bool startDoorbellDisplayStream(const String& host, uint16_t port, unsigned long intervalMs) {
     if (!cameraService.isInitialized() || host.length() == 0) return false;
+
+    intervalMs = max(intervalMs, DOORBELL_DISPLAY_MIN_INTERVAL_MS);
 
     if (!cameraService.isStreaming() && !cameraService.startVideoStream(static_cast<int>(intervalMs))) {
         return false;
@@ -1787,7 +1831,7 @@ void setupWebServer() {
             ? request->getParam("intervalMs")->value().toInt()
             : 500;
         if (target.length() == 0 || requestedPort < 1 || requestedPort > 65535
-            || requestedInterval < 250 || requestedInterval > 5000) {
+            || requestedInterval > 5000) {
             request->send(400, "application/json", "{\"ok\":false,\"error\":\"invalid target, port, or intervalMs\"}");
             return;
         }
@@ -1826,6 +1870,23 @@ void setupWebServer() {
 #endif
 
 #ifdef ENABLE_DISPLAY
+    server.on("/api/doorbell/frame/status", HTTP_GET, [](AsyncWebServerRequest *request) {
+        JsonDocument doc;
+        doc["ok"] = true;
+#if defined(ESP32)
+        portENTER_CRITICAL(&doorbellFrameMux);
+        doc["pending"] = doorbellPendingFrame != nullptr;
+        doc["queued"] = static_cast<uint32_t>(doorbellFramesQueued);
+        doc["rendered"] = static_cast<uint32_t>(doorbellFramesRendered);
+        doc["dropped"] = static_cast<uint32_t>(doorbellFramesDropped);
+        doc["renderFailures"] = static_cast<uint32_t>(doorbellFrameRenderFailures);
+        portEXIT_CRITICAL(&doorbellFrameMux);
+#endif
+        String response;
+        serializeJson(doc, response);
+        request->send(200, "application/json", response);
+    });
+
     server.on("/api/doorbell/frame", HTTP_POST, [](AsyncWebServerRequest *request) {}, nullptr,
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
             constexpr size_t kMaxFrameJpegBytes = 24 * 1024;
@@ -1853,12 +1914,19 @@ void setupWebServer() {
             memcpy(frame + index, data, len);
             if ((index + len) < total) return;
 
+            request->_tempObject = nullptr;
+#if defined(ESP32)
+            queueDoorbellDisplayFrame(frame, total);
+            String response = String("{\"ok\":true,\"queued\":true,\"bytes\":")
+                + String(static_cast<unsigned long>(total)) + "}";
+            request->send(202, "application/json", response);
+#else
             const bool shown = displayService.showJpegFrame(frame, total, 0, 0);
             free(frame);
-            request->_tempObject = nullptr;
             String response = String("{\"ok\":") + (shown ? "true" : "false")
                 + ",\"bytes\":" + String(static_cast<unsigned long>(total)) + "}";
             request->send(shown ? 200 : 500, "application/json", response);
+#endif
         });
 
     server.on("/api/doorbell/ring", HTTP_POST, [](AsyncWebServerRequest *request) {}, nullptr,
@@ -1900,7 +1968,9 @@ void setupWebServer() {
     // Self-describing services endpoint
     server.on("/services/describe", HTTP_GET, [](AsyncWebServerRequest *request){
         JsonDocument doc;
-        #if defined(ESP32)
+        #if defined(ESP32) && defined(ENABLE_CAMERA)
+        doc["hardware"] = "ESP32-CAM";
+        #elif defined(ESP32)
         doc["hardware"] = "ESP32";
         #elif defined(ESP8266)
         doc["hardware"] = "ESP8266";
@@ -1923,6 +1993,42 @@ void setupWebServer() {
         cluster["parentPort"] = nodeConfig.parentPort;
         cluster["siblingPort"] = nodeConfig.siblingPort;
         auto services = doc["services"].to<JsonArray>();
+
+    #ifdef ENABLE_CAMERA
+        auto camera = services.add<JsonObject>();
+        camera["name"] = "CameraService";
+        camera["description"] = "Captures JPEG images and provides camera streaming, configuration, and motion detection.";
+        camera["status"] = cameraService.isInitialized() ? "ready" : "down";
+        auto cameraCmds = camera["commands"].to<JsonArray>();
+        for (const char* command : {"capture", "status", "snapshot", "stream", "configure", "motion"}) {
+            auto cmd = cameraCmds.add<JsonObject>();
+            cmd["name"] = command;
+        }
+    #endif
+
+    #ifdef ENABLE_DOORBELL_CAMERA
+        auto doorbell = services.add<JsonObject>();
+        doorbell["name"] = "DoorbellService";
+        doorbell["description"] = "Emits doorbell and motion alerts and streams camera frames to a display node.";
+        doorbell["status"] = "ready";
+        auto doorbellCmds = doorbell["commands"].to<JsonArray>();
+        for (const char* command : {"ring", "startDisplayStream", "stopDisplayStream", "displayStreamStatus"}) {
+            auto cmd = doorbellCmds.add<JsonObject>();
+            cmd["name"] = command;
+        }
+    #endif
+
+    #ifdef ENABLE_DISPLAY
+        auto display = services.add<JsonObject>();
+        display["name"] = "DisplayService";
+        display["description"] = "Renders status information and JPEG frames on the attached display.";
+        display["status"] = displayService.isInitialized() ? "ready" : "down";
+        auto displayCmds = display["commands"].to<JsonArray>();
+        for (const char* command : {"status", "showJpeg", "clear"}) {
+            auto cmd = displayCmds.add<JsonObject>();
+            cmd["name"] = command;
+        }
+    #endif
 
         if (isSupervisorRole()) {
             auto supervisor = services.add<JsonObject>();
@@ -2236,6 +2342,7 @@ void setupWebServer() {
         #endif
 
         // Sensor Service (example, static)
+    #ifndef DISABLE_SENSOR_SERVICE
         auto sensor = services.add<JsonObject>();
         sensor["name"] = "SensorService";
         {
@@ -2271,6 +2378,7 @@ void setupWebServer() {
             else { docText = "Convert sensor result to JSON."; }
             cmd["description"] = docText;
         }
+#endif
 
 #ifdef ENABLE_TIME_AUTHORITY
         auto timeAuthority = services.add<JsonObject>();
@@ -2457,6 +2565,184 @@ void setupWebServer() {
 #endif
         json += "}";
         request->send(200, "application/json", json);
+    });
+
+    // GET /api/manifest — structured capability manifest for aggregator self-discovery
+    server.on("/api/manifest", HTTP_GET, [](AsyncWebServerRequest *request){
+        JsonDocument doc;
+
+        // Node identity
+        doc["nodeId"] = nodeName;
+        doc["nodeName"] = nodeName;
+        doc["role"] = deviceRole;
+        doc["version"] = firmwareVersion;
+        doc["firmwareBuildStamp"] = firmwareBuildStamp;
+        doc["manufacturer"] = "RichardLabs";
+        #if defined(ESP32) && defined(ENABLE_CAMERA)
+        doc["model"] = "ESP32-CAM";
+        #elif defined(ESP32)
+        doc["model"] = "ESP32";
+        #elif defined(ARDUINO_ARCH_ESP8266)
+        doc["model"] = "ESP8266";
+        #else
+        doc["model"] = "Unknown";
+        #endif
+        doc["ip"] = WiFi.localIP().toString();
+        doc["httpPort"] = 80;
+        doc["preferredTaskType"] = preferredTaskType;
+        doc["firmwareTrack"] = firmwareTrack;
+
+        // Devices: enumerate from /devices/*.json on LittleFS
+        JsonArray devices = doc["devices"].to<JsonArray>();
+        if (LittleFS.exists("/devices")) {
+            File devDir = LittleFS.open("/devices", "r");
+            File devEntry = devDir.openNextFile();
+            while (devEntry) {
+                if (!devEntry.isDirectory()) {
+                    String devFileName = String(devEntry.name());
+                    if (devFileName.startsWith("/devices/")) devFileName = devFileName.substring(9);
+                    if (devFileName.endsWith(".json")) {
+                        String devId = devFileName.substring(0, devFileName.length() - 5);
+                        String devJson = devEntry.readString();
+                        JsonDocument devDoc;
+                        JsonObject devObj = devices.add<JsonObject>();
+                        devObj["id"] = devId;
+                        if (!deserializeJson(devDoc, devJson)) {
+                            devObj["type"] = devDoc["type"] | "device";
+                            devObj["driver"] = devDoc["driver"] | "gpio";
+                            if (devDoc["pin"].is<int>()) devObj["pin"] = devDoc["pin"].as<int>();
+                            if (devDoc["actions"].is<JsonArray>()) {
+                                JsonArray caps = devObj["capabilities"].to<JsonArray>();
+                                for (JsonVariant action : devDoc["actions"].as<JsonArray>()) {
+                                    caps.add(action);
+                                }
+                            }
+                            if (devDoc["visibility"].is<const char*>()) {
+                                devObj["visibility"] = devDoc["visibility"].as<const char*>();
+                            }
+                        } else {
+                            devObj["type"] = "device";
+                            devObj["driver"] = "gpio";
+                        }
+                    }
+                }
+                devEntry.close();
+                devEntry = devDir.openNextFile();
+            }
+            devDir.close();
+        }
+
+        // Services: enumerate active firmware services
+        JsonArray services = doc["services"].to<JsonArray>();
+
+        if (ffsUp) {
+            JsonObject svc = services.add<JsonObject>();
+            svc["id"] = "ffs";
+            svc["type"] = "filesystem-service";
+            JsonArray eps = svc["endpoints"].to<JsonArray>();
+            JsonObject ep1 = eps.add<JsonObject>(); ep1["path"] = "/ffs/list"; ep1["method"] = "GET";
+            JsonObject ep2 = eps.add<JsonObject>(); ep2["path"] = "/ffs/read"; ep2["method"] = "GET";
+            JsonObject ep3 = eps.add<JsonObject>(); ep3["path"] = "/ffs/write"; ep3["method"] = "POST";
+        }
+
+#ifdef ENABLE_PMACHINE
+        {
+            JsonObject svc = services.add<JsonObject>();
+            svc["id"] = "pmachine";
+            svc["type"] = "vm-service";
+            JsonArray eps = svc["endpoints"].to<JsonArray>();
+            JsonObject ep1 = eps.add<JsonObject>(); ep1["path"] = "/pmachine/run"; ep1["method"] = "POST";
+            JsonObject ep2 = eps.add<JsonObject>(); ep2["path"] = "/pmachine/status"; ep2["method"] = "GET";
+            JsonObject ep3 = eps.add<JsonObject>(); ep3["path"] = "/pmachine/edge_ingress_stage"; ep3["method"] = "POST";
+        }
+#endif
+
+#ifdef ENABLE_CAMERA
+        {
+            JsonObject svc = services.add<JsonObject>();
+            svc["id"] = "camera";
+            svc["type"] = "camera-service";
+            JsonArray eps = svc["endpoints"].to<JsonArray>();
+            JsonObject ep1 = eps.add<JsonObject>(); ep1["path"] = "/api/camera/capture"; ep1["method"] = "GET"; ep1["returns"] = "jpeg";
+            JsonObject ep2 = eps.add<JsonObject>(); ep2["path"] = "/api/camera/status"; ep2["method"] = "GET"; ep2["returns"] = "json";
+        }
+#endif
+
+#ifdef ENABLE_BLUETOOTH_DEVICES
+        {
+            JsonObject svc = services.add<JsonObject>();
+            svc["id"] = "bluetooth";
+            svc["type"] = "bluetooth-service";
+            JsonArray eps = svc["endpoints"].to<JsonArray>();
+            JsonObject ep1 = eps.add<JsonObject>(); ep1["path"] = "/api/bluetooth/status"; ep1["method"] = "GET";
+            JsonObject ep2 = eps.add<JsonObject>(); ep2["path"] = "/api/bluetooth/control"; ep2["method"] = "POST";
+        }
+#endif
+
+#ifdef ENABLE_TIME_AUTHORITY
+        {
+            JsonObject svc = services.add<JsonObject>();
+            svc["id"] = "time-authority";
+            svc["type"] = "time-service";
+            JsonArray eps = svc["endpoints"].to<JsonArray>();
+            JsonObject ep1 = eps.add<JsonObject>(); ep1["path"] = "/time/authority"; ep1["method"] = "GET"; ep1["returns"] = "json";
+        }
+#endif
+
+        // Events the node can emit
+        JsonArray events = doc["events"].to<JsonArray>();
+        {
+            JsonObject ev1 = events.add<JsonObject>(); ev1["id"] = "nodeBeacon"; ev1["type"] = "udp-broadcast"; ev1["transport"] = "udp";
+        }
+#ifdef ENABLE_CAMERA
+        {
+            JsonObject ev2 = events.add<JsonObject>(); ev2["id"] = "motionDetected"; ev2["type"] = "object"; ev2["transport"] = "udp";
+        }
+#endif
+
+        // Control metadata: switch and sensor device maps
+        JsonObject control = doc["control"].to<JsonObject>();
+        JsonObject switchCtrl = control["switch"].to<JsonObject>();
+        JsonObject sensorCtrl = control["sensor"].to<JsonObject>();
+
+        if (LittleFS.exists("/devices")) {
+            File ctrlDir = LittleFS.open("/devices", "r");
+            File ctrlEntry = ctrlDir.openNextFile();
+            while (ctrlEntry) {
+                if (!ctrlEntry.isDirectory()) {
+                    String ctrlFileName = String(ctrlEntry.name());
+                    if (ctrlFileName.startsWith("/devices/")) ctrlFileName = ctrlFileName.substring(9);
+                    if (ctrlFileName.endsWith(".json")) {
+                        String ctrlId = ctrlFileName.substring(0, ctrlFileName.length() - 5);
+                        String ctrlJson = ctrlEntry.readString();
+                        JsonDocument ctrlDoc;
+                        if (!deserializeJson(ctrlDoc, ctrlJson)) {
+                            const String devType = ctrlDoc["type"] | "";
+                            if (devType == "switch" || devType == "relay" || devType == "actuator") {
+                                JsonObject swDev = switchCtrl[ctrlId].to<JsonObject>();
+                                if (ctrlDoc["actions"].is<JsonArray>()) {
+                                    JsonArray cmds = swDev["commands"].to<JsonArray>();
+                                    for (JsonVariant action : ctrlDoc["actions"].as<JsonArray>()) {
+                                        cmds.add(action);
+                                    }
+                                }
+                                swDev["api"] = String("/api/devices/") + ctrlId + "/<cmd>";
+                            } else if (devType == "sensor" || devType == "temperature-sensor" || devType == "humidity-sensor") {
+                                JsonObject snDev = sensorCtrl[ctrlId].to<JsonObject>();
+                                snDev["read"] = String("/api/devices/") + ctrlId + "/read";
+                            }
+                        }
+                    }
+                }
+                ctrlEntry.close();
+                ctrlEntry = ctrlDir.openNextFile();
+            }
+            ctrlDir.close();
+        }
+
+        String manifestJson;
+        serializeJson(doc, manifestJson);
+        request->send(200, "application/json", manifestJson);
     });
 
 #ifdef ENABLE_TIME_AUTHORITY
@@ -3807,6 +4093,10 @@ void loop() {
         }
         doorbellLastMotionCheckMs = millis();
     }
+#endif
+
+#if defined(ESP32) && defined(ENABLE_DISPLAY)
+    pollDoorbellDisplayFrame();
 #endif
 
     // Remove nodes not seen in last 10 minutes (600000 ms)

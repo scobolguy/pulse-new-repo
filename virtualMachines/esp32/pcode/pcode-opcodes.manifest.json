@@ -82,7 +82,13 @@
     { "name": "OP_NOT", "hex": "0x4D" },
     { "name": "OP_STREQ", "hex": "0x4E" },
     { "name": "OP_STRNEQ", "hex": "0x4F" },
-    { "name": "OP_MAP_RETURN", "hex": "0x50" },
+    { "name": "OP_MAP_RETURN",     "hex": "0x50" },
+    { "name": "OP_MSG_MAX_COUNT",  "hex": "0x51" },
+    { "name": "OP_MSG_SAX_OPEN",   "hex": "0x52" },
+    { "name": "OP_MSG_SAX_NEXT",   "hex": "0x53" },
+    { "name": "OP_MSG_SAX_GET",    "hex": "0x54" },
+    { "name": "OP_MSG_WITH_PUSH",  "hex": "0x55" },
+    { "name": "OP_MSG_WITH_POP",   "hex": "0x56" },
     { "name": "OP_HALT", "hex": "0xFF" }
   ]
 }

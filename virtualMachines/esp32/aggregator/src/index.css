@@ -406,6 +406,14 @@ code {
   color: var(--text-h);
 }
 
+.topology-device-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: #334155;
+  flex: 0 0 auto;
+}
+
 .topology-node-meta {
   color: var(--text);
   font-size: 14px;
@@ -418,6 +426,57 @@ code {
   font-size: 12px;
   border-radius: 999px;
   padding: 2px 8px;
+}
+
+.topology-node-tools {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.topology-node-tools button {
+  width: 28px;
+  height: 28px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.topology-node-tools button:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.topology-node-tools button:disabled {
+  cursor: wait;
+  opacity: 0.45;
+}
+
+.topology-free-pool {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+
+.topology-free-pool h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.topology-free-pool h3 span {
+  min-width: 22px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  text-align: center;
+  font-size: 12px;
 }
 
 .topology-table-wrap {

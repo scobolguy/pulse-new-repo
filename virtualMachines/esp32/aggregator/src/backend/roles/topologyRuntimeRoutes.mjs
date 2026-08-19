@@ -141,6 +141,11 @@ function normalizeNodeTopologyMap(raw) {
     out[normalizedKey] = {
       parentNodeId,
       isClusterGateway: value?.isClusterGateway === true,
+      activeClusterId: String(value?.activeClusterId || '').trim().toLowerCase(),
+      parentHost: String(value?.parentHost || '').trim(),
+      parentPort: Number(value?.parentPort || 0) || undefined,
+      siblingPort: Number(value?.siblingPort || 0) || undefined,
+      pendingBoardSync: value?.pendingBoardSync === true,
       ...normalizeSiteMetadata(value || {})
     };
   }
@@ -720,6 +725,7 @@ async function persistDeploymentRecords({ deploymentIndexPath, deploymentRegistr
 export function registerTopologyRuntimeRoutes(app, deps) {
   const {
     discoveredNodes,
+    homeAutomationService,
     getBrokerNodeDetails,
     getSystemPerformanceSnapshot,
     services,
@@ -983,7 +989,10 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       const boardParent = normalizeNodeId(boardCluster.parentNodeId);
       // Check node.topology.parentNodeId as well
       const existingTopologyParent = normalizeNodeId(node?.topology?.parentNodeId);
-      const normalizedParent = boardParent || existingTopologyParent || normalizeNodeId(override.parentNodeId);
+      const overrideParent = normalizeNodeId(override.parentNodeId);
+      const normalizedParent = override.pendingBoardSync
+        ? overrideParent
+        : (boardParent || existingTopologyParent || overrideParent);
       const parentNode = normalizedParent ? keyToNode.get(normalizedParent) : null;
       const parentName = parentNode
         ? String(parentNode.details?.nodeName || parentNode.nodeName || parentNode.nodeId || parentNode.ip || '').trim()
@@ -1013,6 +1022,8 @@ export function registerTopologyRuntimeRoutes(app, deps) {
           parentNodeId: normalizedParent || '',
           parentNodeName: parentName,
           parentNodeIp: parentIp,
+          parentAvailable: !normalizedParent || Boolean(parentNode),
+          waitingForParent: Boolean(normalizedParent) && !parentNode,
           activeClusterId,
           site,
           siteId: site.siteId,
@@ -1408,7 +1419,8 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       }
     ];
 
-    const allNodes = [backendNode, ...magicClusterNodes, neptuneNode, ...esp32Nodes, ...Array.from(discoveredNodes.values())];
+    const homeAutomationNodes = homeAutomationService?.getTopologyNodes?.() || [];
+    const allNodes = [backendNode, ...magicClusterNodes, neptuneNode, ...esp32Nodes, ...homeAutomationNodes, ...Array.from(discoveredNodes.values())];
     
     // Deduplicate nodes by nodeKey/nodeId/nodeName/ip
     const seenKeys = new Set();
@@ -1423,6 +1435,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     const nodes = uniqueNodes
       .map((node) => applyNodeRename(node))
       .sort((a, b) => b.lastSeen - a.lastSeen);
+    await reconcilePendingNodeTopologies(nodes);
     const effectiveRegistry = buildEffectiveClusterRegistry(nodes);
     return attachTopologyMetadata(nodes, effectiveRegistry);
   }
@@ -1467,7 +1480,16 @@ export function registerTopologyRuntimeRoutes(app, deps) {
 
     if (shouldPushToBoard) {
       await persistNodeTopologyOnBoard(boardIp, topology);
-      delete nodeTopologyMap[normalizedNodeId];
+      nodeTopologyMap[normalizedNodeId] = {
+        parentNodeId: normalizeNodeId(topology.parentNodeId) || '',
+        isClusterGateway: topology.isClusterGateway === true,
+        activeClusterId: String(topology.activeClusterId || '').trim().toLowerCase(),
+        parentHost: String(topology.parentHost || '').trim(),
+        parentPort: Number(topology.parentPort || 0) || undefined,
+        siblingPort: Number(topology.siblingPort || 0) || undefined,
+        pendingBoardSync: false,
+        ...normalizeSiteMetadata(topology || {})
+      };
       await saveNodeTopologyMap(nodeTopologyMap);
       return { nodeId: normalizedNodeId, status: 'applied', source: 'board', ip: boardIp };
     }
@@ -1475,17 +1497,64 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     nodeTopologyMap[normalizedNodeId] = {
       parentNodeId: normalizeNodeId(topology.parentNodeId) || '',
       isClusterGateway: topology.isClusterGateway === true,
+      activeClusterId: String(topology.activeClusterId || '').trim().toLowerCase(),
+      parentHost: String(topology.parentHost || '').trim(),
+      parentPort: Number(topology.parentPort || 0) || undefined,
+      siblingPort: Number(topology.siblingPort || 0) || undefined,
+      pendingBoardSync: true,
       ...normalizeSiteMetadata(topology || {})
     };
     await saveNodeTopologyMap(nodeTopologyMap);
     return { nodeId: normalizedNodeId, status: 'applied', source: 'server' };
   }
 
+  async function reconcilePendingNodeTopologies(nodes = []) {
+    await ensureNodeTopologyMapLoaded();
+    let changed = false;
+
+    for (const [nodeId, topology] of Object.entries(nodeTopologyMap)) {
+      if (topology?.pendingBoardSync !== true) continue;
+
+      const node = (Array.isArray(nodes) ? nodes : []).find((candidate) => {
+        const aliases = [
+          ...getNodeIdentityCandidates(candidate),
+          normalizeNodeId(candidate?.topology?.nodeKey)
+        ].filter(Boolean);
+        return aliases.includes(normalizeNodeId(nodeId));
+      }) || null;
+      const boardIp = String(node?.ip || '').trim();
+      if (!boardIp || boardIp.startsWith('127.') || !isLikelyEspBoard(normalizeNodeId(nodeId), nodes)) continue;
+
+      try {
+        await persistNodeTopologyOnBoard(boardIp, topology);
+        nodeTopologyMap[nodeId] = {
+          ...topology,
+          pendingBoardSync: false
+        };
+        changed = true;
+      } catch {
+        // Keep the assignment queued until this board is reachable again.
+      }
+    }
+
+    if (changed) await saveNodeTopologyMap(nodeTopologyMap);
+  }
+
   async function renameNodeByIdentity(requestedNodeId, requestedIp, nextName) {
     await ensureNodeRenameMapLoaded();
+    await ensureNodeTopologyMapLoaded();
 
     const normalizedNodeId = normalizeNodeId(requestedNodeId);
     const normalizedIp = normalizeNodeId(requestedIp);
+    const nodes = await buildCurrentNodesWithTopology();
+    const resolvedNode = resolveManagedNode(requestedNodeId, requestedIp, nodes).node;
+    const renamedAliases = new Set([
+      normalizedNodeId,
+      normalizedIp,
+      ...getNodeIdentityCandidates(resolvedNode),
+      normalizeNodeId(resolvedNode?.topology?.nodeKey)
+    ].filter(Boolean));
+    const childNodes = nodes.filter((node) => renamedAliases.has(normalizeNodeId(node?.topology?.parentNodeId)));
     let boardIp = String(requestedIp || '').trim();
 
     if (!boardIp && normalizedNodeId) {
@@ -1522,11 +1591,41 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     if (normalizedNodeId) delete nodeRenameMap[normalizedNodeId];
     if (normalizedIp) delete nodeRenameMap[normalizedIp];
 
-    if (!boardRenameApplied) {
-      if (normalizedNodeId) nodeRenameMap[normalizedNodeId] = nextName;
-      if (normalizedIp) nodeRenameMap[normalizedIp] = nextName;
-      const normalizedBoardIp = normalizeNodeId(boardIp);
-      if (normalizedBoardIp) nodeRenameMap[normalizedBoardIp] = nextName;
+    if (normalizedNodeId) nodeRenameMap[normalizedNodeId] = nextName;
+    if (normalizedIp) nodeRenameMap[normalizedIp] = nextName;
+    const normalizedBoardIp = normalizeNodeId(boardIp);
+    if (normalizedBoardIp) nodeRenameMap[normalizedBoardIp] = nextName;
+
+    const topologyUpdates = [];
+    for (const child of childNodes) {
+      const childKey = getNodeIdentityCandidates(child)[0] || normalizeNodeId(child?.ip);
+      if (!childKey) continue;
+
+      const desiredTopology = {
+        activeClusterId: String(child?.topology?.activeClusterId || 'default').trim().toLowerCase(),
+        parentHost: boardIp,
+        parentNodeId: normalizeNodeId(nextName),
+        isClusterGateway: child?.topology?.isClusterGateway === true,
+        parentPort: child?.topology?.udp?.parentPort,
+        siblingPort: child?.topology?.udp?.siblingPort,
+        ...normalizeSiteMetadata(child?.topology || {})
+      };
+      let synchronized = false;
+      const childIp = String(child?.ip || '').trim();
+      if (childIp && !childIp.startsWith('127.') && isLikelyEspBoard(childKey, nodes)) {
+        try {
+          await persistNodeTopologyOnBoard(childIp, desiredTopology);
+          synchronized = true;
+        } catch {
+          synchronized = false;
+        }
+      }
+
+      nodeTopologyMap[childKey] = {
+        ...desiredTopology,
+        pendingBoardSync: !synchronized
+      };
+      topologyUpdates.push({ nodeId: childKey, synchronized });
     }
 
     for (const [key, existing] of discoveredNodes.entries()) {
@@ -1552,12 +1651,14 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     }
 
     await saveNodeRenameMap(nodeRenameMap);
+    if (topologyUpdates.length > 0) await saveNodeTopologyMap(nodeTopologyMap);
 
     return {
       status: 'ok',
       nodeId: requestedNodeId || requestedIp,
       nodeName: nextName,
-      sourceOfTruth: boardRenameApplied ? 'board' : 'server'
+      sourceOfTruth: boardRenameApplied ? 'board' : 'server',
+      childTopologyUpdates: topologyUpdates
     };
   }
 
@@ -2451,6 +2552,31 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     };
   }
 
+  function hierarchyWouldCycle(nodes, targetKey, nextParentKey) {
+    const normalizedTarget = normalizeNodeId(targetKey);
+    let cursor = normalizeNodeId(nextParentKey);
+    if (!normalizedTarget || !cursor) return false;
+
+    const parentByAlias = new Map();
+    for (const node of Array.isArray(nodes) ? nodes : []) {
+      const parent = normalizeNodeId(node?.topology?.parentNodeId);
+      for (const alias of getNodeIdentityCandidates(node)) {
+        parentByAlias.set(alias, parent);
+      }
+      const topologyKey = normalizeNodeId(node?.topology?.nodeKey);
+      if (topologyKey) parentByAlias.set(topologyKey, parent);
+    }
+
+    const visited = new Set();
+    while (cursor) {
+      if (cursor === normalizedTarget) return true;
+      if (visited.has(cursor)) return true;
+      visited.add(cursor);
+      cursor = normalizeNodeId(parentByAlias.get(cursor));
+    }
+    return false;
+  }
+
   app.get('/api/discover-primary', async (req, res) => {
     const now = Date.now();
     const nodes = Array.from(discoveredNodes.values())
@@ -3061,6 +3187,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     try {
       await ensureNodeTopologyMapLoaded();
       await ensureSiteRegistryLoaded();
+      const nodes = await buildCurrentNodesWithTopology();
 
       const requestedNodeId = String(req.params.nodeId || req.body?.nodeId || '').trim();
       const requestedIp = String(req.body?.ip || '').trim();
@@ -3076,6 +3203,9 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       const nextParent = normalizeNodeId(nextParentRaw);
       if (nextParent && nextParent === targetKey) {
         return res.status(400).json({ error: 'node cannot be its own parent' });
+      }
+      if (hierarchyWouldCycle(nodes, targetKey, nextParent)) {
+        return res.status(409).json({ error: 'parent assignment would create a hierarchy cycle' });
       }
 
       const nextGateway = req.body?.isClusterGateway === true;
@@ -3119,21 +3249,17 @@ export function registerTopologyRuntimeRoutes(app, deps) {
         }
       }
 
-      if (boardTopologyApplied) {
-        nodeTopologyMap[targetKey] = {
-          parentNodeId: '',
-          isClusterGateway: false,
-          siteId: nextSiteId,
-          ...normalizeSiteMetadata({ ...(req.body || {}), siteId: nextSiteId })
-        };
-      } else {
-        nodeTopologyMap[targetKey] = {
-          parentNodeId: nextParent || '',
-          isClusterGateway: nextGateway,
-          siteId: nextSiteId,
-          ...normalizeSiteMetadata({ ...(req.body || {}), siteId: nextSiteId })
-        };
-      }
+      nodeTopologyMap[targetKey] = {
+        parentNodeId: nextParent || '',
+        isClusterGateway: nextGateway,
+        activeClusterId: String(req.body?.activeClusterId || 'default').trim().toLowerCase(),
+        parentHost: String(req.body?.parentHost || '').trim(),
+        parentPort: Number(req.body?.parentPort || 0) || undefined,
+        siblingPort: Number(req.body?.siblingPort || 0) || undefined,
+        pendingBoardSync: !boardTopologyApplied,
+        siteId: nextSiteId,
+        ...normalizeSiteMetadata({ ...(req.body || {}), siteId: nextSiteId })
+      };
       await saveNodeTopologyMap(nodeTopologyMap);
 
       const site = normalizeSiteMetadata({ ...(siteRegistry[nextSiteId] || {}), ...(req.body || {}), siteId: nextSiteId });
@@ -3179,6 +3305,9 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       if (nextParent && nextParent === resolved.targetKey) {
         return res.status(400).json({ error: 'node cannot be its own parent' });
       }
+      if (hierarchyWouldCycle(nodes, resolved.targetKey, nextParent)) {
+        return res.status(409).json({ error: 'parent assignment would create a hierarchy cycle' });
+      }
 
       const nextGateway = req.body?.isClusterGateway === true;
       const nextClusterId = String(req.body?.activeClusterId || resolved.node?.topology?.activeClusterId || 'default').trim().toLowerCase() || 'default';
@@ -3210,21 +3339,17 @@ export function registerTopologyRuntimeRoutes(app, deps) {
         }
       }
 
-      if (boardTopologyApplied) {
-        nodeTopologyMap[resolved.targetKey] = {
-          parentNodeId: '',
-          isClusterGateway: false,
-          siteId: nextSiteId,
-          ...normalizeSiteMetadata({ ...(req.body || {}), siteId: nextSiteId })
-        };
-      } else {
-        nodeTopologyMap[resolved.targetKey] = {
-          parentNodeId: nextParent || '',
-          isClusterGateway: nextGateway,
-          siteId: nextSiteId,
-          ...normalizeSiteMetadata({ ...(req.body || {}), siteId: nextSiteId })
-        };
-      }
+      nodeTopologyMap[resolved.targetKey] = {
+        parentNodeId: nextParent || '',
+        isClusterGateway: nextGateway,
+        activeClusterId: nextClusterId,
+        parentHost: String(req.body?.parentHost || '').trim(),
+        parentPort: Number(req.body?.parentPort || 0) || undefined,
+        siblingPort: Number(req.body?.siblingPort || 0) || undefined,
+        pendingBoardSync: !boardTopologyApplied,
+        siteId: nextSiteId,
+        ...normalizeSiteMetadata({ ...(req.body || {}), siteId: nextSiteId })
+      };
       await saveNodeTopologyMap(nodeTopologyMap);
 
       const site = normalizeSiteMetadata({ ...(siteRegistry[nextSiteId] || {}), ...(req.body || {}), siteId: nextSiteId });

@@ -345,8 +345,7 @@ void setJsonPathValue(JsonDocument& doc, const String& dotPath, const String& va
         }
 
         if (!current[key].is<JsonObject>()) {
-            current.remove(key);
-            current.createNestedObject(key);
+            current[key].to<JsonObject>();
         }
         current = current[key].as<JsonObject>();
         start = dot + 1;
@@ -395,14 +394,14 @@ String mtPartyName(const String& raw) {
 void parseMt103FinText(const String& text, JsonDocument& outDoc) {
     outDoc.clear();
     JsonObject root = outDoc.to<JsonObject>();
-    JsonObject block4 = root.createNestedObject("block4");
+    JsonObject block4 = root["block4"].to<JsonObject>();
 
     String currentTag;
     String currentValue;
     auto commitTag = [&](const String& tag, const String& value) {
         if (tag.length() == 0) return;
         if (tag == "32A") {
-            JsonObject field32A = block4.createNestedObject("32A");
+            JsonObject field32A = block4["32A"].to<JsonObject>();
             String v = trimCopy(value);
             if (v.length() >= 9) {
                 field32A["date"] = v.substring(0, 6);
@@ -414,7 +413,7 @@ void parseMt103FinText(const String& text, JsonDocument& outDoc) {
             return;
         }
         if (tag == "33B") {
-            JsonObject field33B = block4.createNestedObject("33B");
+            JsonObject field33B = block4["33B"].to<JsonObject>();
             String v = trimCopy(value);
             if (v.length() >= 3) {
                 field33B["currency"] = v.substring(0, 3);

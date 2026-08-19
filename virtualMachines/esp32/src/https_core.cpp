@@ -14,7 +14,15 @@
 #include "https_service.h"
 #include "tls_default_pair.h"
 
-static constexpr size_t kMaxProxyBodyBytes = 32768;
+#ifndef HTTPS_MAX_PROXY_BODY_BYTES
+#define HTTPS_MAX_PROXY_BODY_BYTES 32768
+#endif
+
+#ifndef HTTPS_SERVER_STACK_BYTES
+#define HTTPS_SERVER_STACK_BYTES 12288
+#endif
+
+static constexpr size_t kMaxProxyBodyBytes = HTTPS_MAX_PROXY_BODY_BYTES;
 
 static httpd_handle_t sHttpsHandle = nullptr;
 static uint8_t* sCertBuf = nullptr;
@@ -22,6 +30,7 @@ static size_t   sCertLen = 0;
 static uint8_t* sKeyBuf  = nullptr;
 static size_t   sKeyLen  = 0;
 static bool     sUsingBundledPair = false;
+static bool     sOwnsPemBuffers = false;
 
 static bool loadPemFile(const char* path, uint8_t** buf, size_t* len) {
     if (!LittleFS.exists(path)) return false;
@@ -36,25 +45,6 @@ static bool loadPemFile(const char* path, uint8_t** buf, size_t* len) {
     tmp[sz] = '\0';
     *buf = tmp;
     *len = sz + 1;
-    return true;
-}
-
-static bool loadBundledPemPair(uint8_t** certBuf, size_t* certLen, uint8_t** keyBuf, size_t* keyLen) {
-    const size_t bundledCertLen = strlen(kDefaultTlsCertPem) + 1;
-    const size_t bundledKeyLen = strlen(kDefaultTlsKeyPem) + 1;
-    uint8_t* certCopy = static_cast<uint8_t*>(malloc(bundledCertLen));
-    uint8_t* keyCopy = static_cast<uint8_t*>(malloc(bundledKeyLen));
-    if (!certCopy || !keyCopy) {
-        free(certCopy);
-        free(keyCopy);
-        return false;
-    }
-    memcpy(certCopy, kDefaultTlsCertPem, bundledCertLen);
-    memcpy(keyCopy, kDefaultTlsKeyPem, bundledKeyLen);
-    *certBuf = certCopy;
-    *certLen = bundledCertLen;
-    *keyBuf = keyCopy;
-    *keyLen = bundledKeyLen;
     return true;
 }
 
@@ -173,11 +163,14 @@ bool startHttpsService() {
             if (certBuf) { free(certBuf); certBuf = nullptr; certLen = 0; }
             if (keyBuf) { free(keyBuf); keyBuf = nullptr; keyLen = 0; }
             Serial.println("[TLS] Missing persistent cert/key pair — using bundled self-signed fallback");
-            if (!loadBundledPemPair(&certBuf, &certLen, &keyBuf, &keyLen)) {
-                Serial.println("[TLS] Failed to allocate bundled TLS fallback");
-                return false;
-            }
+            certBuf = reinterpret_cast<uint8_t*>(const_cast<char*>(kDefaultTlsCertPem));
+            certLen = sizeof(kDefaultTlsCertPem);
+            keyBuf = reinterpret_cast<uint8_t*>(const_cast<char*>(kDefaultTlsKeyPem));
+            keyLen = sizeof(kDefaultTlsKeyPem);
             sUsingBundledPair = true;
+            sOwnsPemBuffers = false;
+        } else {
+            sOwnsPemBuffers = true;
         }
 
         sCertBuf = certBuf;
@@ -187,7 +180,7 @@ bool startHttpsService() {
     }
 
     httpd_ssl_config_t conf = HTTPD_SSL_CONFIG_DEFAULT();
-    conf.httpd.stack_size       = 12288;
+    conf.httpd.stack_size       = HTTPS_SERVER_STACK_BYTES;
     conf.httpd.max_uri_handlers = 8;
     conf.httpd.uri_match_fn     = httpd_uri_match_wildcard;
     // In this IDF build cacert_pem/cacert_len hold the SERVER cert (see comment in header).
@@ -225,8 +218,13 @@ void stopHttpsService() {
     httpd_stop(sHttpsHandle);
     sHttpsHandle = nullptr;
     // Free cert buffers so startHttpsService() reloads fresh from LittleFS.
-    if (sCertBuf) { free(sCertBuf); sCertBuf = nullptr; sCertLen = 0; }
-    if (sKeyBuf)  { free(sKeyBuf);  sKeyBuf  = nullptr; sKeyLen  = 0; }
+    if (sOwnsPemBuffers && sCertBuf) free(sCertBuf);
+    if (sOwnsPemBuffers && sKeyBuf) free(sKeyBuf);
+    sCertBuf = nullptr;
+    sCertLen = 0;
+    sKeyBuf = nullptr;
+    sKeyLen = 0;
+    sOwnsPemBuffers = false;
     Serial.println("[TLS] HTTPS server stopped");
 }
 

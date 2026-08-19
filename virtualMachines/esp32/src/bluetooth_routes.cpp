@@ -57,6 +57,16 @@ void addDeviceToArray(JsonArray arr, const BluetoothDevice& device) {
     }
 }
 
+void addCompactDeviceToArray(JsonArray arr, const BluetoothDevice& device) {
+    JsonObject obj = arr.add<JsonObject>();
+    obj["address"] = device.address;
+    obj["name"] = device.name;
+    obj["type"] = deviceTypeToString(device.type);
+    obj["manufacturer"] = device.manufacturer;
+    obj["rssi"] = device.rssi;
+    obj["distanceFeet"] = device.distanceFeet;
+}
+
 void sendJson(AsyncWebServerRequest* request, JsonDocument& doc, int code = 200) {
     String body;
     serializeJson(doc, body);
@@ -78,8 +88,14 @@ void registerBluetoothRoutes(AsyncWebServer& server) {
         doc["scanning"] = globalBluetoothService->isScanning();
         auto devices = doc["devices"].to<JsonArray>();
         const auto allDevices = globalBluetoothService->getAllDevices();
+        String requestedType;
+        String compactValue;
+        getRequestValue(request, "type", requestedType);
+        const bool compact = getRequestValue(request, "compact", compactValue) && parseBoolValue(compactValue);
         for (const auto& device : allDevices) {
-            addDeviceToArray(devices, device);
+            if (!requestedType.isEmpty() && deviceTypeToString(device.type) != requestedType) continue;
+            if (compact) addCompactDeviceToArray(devices, device);
+            else addDeviceToArray(devices, device);
         }
         sendJson(request, doc);
     });

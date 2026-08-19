@@ -5,6 +5,7 @@
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 #include <LittleFS.h>
+#include <memory>
 
 void setupCameraRoutes(AsyncWebServer& server) {
     // GET /camera - Serve camera viewer HTML page
@@ -31,15 +32,23 @@ void setupCameraRoutes(AsyncWebServer& server) {
             return;
         }
 
-        AsyncWebServerResponse* response = request->beginResponse_P(
-            200, "image/jpeg", buffer, length
+        std::shared_ptr<uint8_t> jpeg(buffer, [](uint8_t* data) { free(data); });
+        AsyncWebServerResponse* response = request->beginResponse(
+            "image/jpeg",
+            length,
+            [jpeg, length](uint8_t* output, size_t maxLength, size_t index) -> size_t {
+                if (index >= length) {
+                    return 0;
+                }
+                const size_t bytesToCopy = min(maxLength, length - index);
+                memcpy(output, jpeg.get() + index, bytesToCopy);
+                return bytesToCopy;
+            }
         );
         response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
         response->addHeader("Pragma", "no-cache");
         response->addHeader("Expires", "0");
         request->send(response);
-        
-        free(buffer);
     });
 
     // GET /api/camera/status - Get camera status

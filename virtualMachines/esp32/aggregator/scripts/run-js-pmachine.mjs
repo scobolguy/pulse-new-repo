@@ -1,4 +1,4 @@
-﻿import fs from 'fs/promises';
+import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { XMLParser } from 'fast-xml-parser';
@@ -531,6 +531,112 @@ async function loadLibrarianIsoTypeIds() {
   }
 
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Librarian var-decl validation
+// ---------------------------------------------------------------------------
+// Called at program-load time (before execution starts) for every variable
+// declared with `from librarian` or `from "<source>"`.
+//
+// Resolution rules:
+//   fromLibrarian: true   → the complexType/simpleType must appear in at
+//                           least one XSD in the schemas directory.
+//   source: "<stem>"      → an XSD whose filename stem starts with <stem>
+//                           must exist AND must declare that type.
+//
+// Throws a descriptive Error listing every unresolved variable so the
+// operator sees all problems in one shot rather than one at a time.
+// ---------------------------------------------------------------------------
+async function validateLibrarianVarDecls(programMap) {
+  const varDecls = Array.isArray(programMap?.variableDeclarations)
+    ? programMap.variableDeclarations
+    : [];
+
+  const librarianVars = varDecls.filter(v => v.fromLibrarian === true || v.source);
+  if (librarianVars.length === 0) return;
+
+  const schemaDir = path.resolve(process.cwd(), 'data', 'services', 'librarian', 'schemas');
+  let schemaFiles;
+  try {
+    schemaFiles = (await fs.readdir(schemaDir)).filter(f => f.toLowerCase().endsWith('.xsd'));
+  } catch {
+    // Librarian schema directory not present — skip validation rather than
+    // hard-failing (supports offline / edge environments).
+    return;
+  }
+
+  // Build a lazy cache: schemaFile → Set<typeName> (populated on first access)
+  const typeCache = new Map();
+  async function typesInFile(filename) {
+    if (typeCache.has(filename)) return typeCache.get(filename);
+    const xsdPath = path.join(schemaDir, filename);
+    let text;
+    try {
+      text = await fs.readFile(xsdPath, 'utf-8');
+    } catch {
+      typeCache.set(filename, new Set());
+      return typeCache.get(filename);
+    }
+    // Match both complexType and simpleType name= attributes.
+    const names = new Set();
+    for (const match of text.matchAll(/(?:complexType|simpleType)\s+name\s*=\s*"([^"]+)"/g)) {
+      names.add(match[1]);
+    }
+    typeCache.set(filename, names);
+    return names;
+  }
+
+  const failures = [];
+
+  for (const v of librarianVars) {
+    const typeName = v.dataType?.id;
+    if (!typeName || v.dataType?.kind === 'simple') continue; // primitives are always valid
+
+    if (v.fromLibrarian === true && !v.source) {
+      // Search all schema files.
+      let found = false;
+      for (const filename of schemaFiles) {
+        const names = await typesInFile(filename);
+        if (names.has(typeName)) { found = true; break; }
+      }
+      if (!found) {
+        failures.push(
+          `  var ${v.name} : ${typeName} from librarian` +
+          `  → type "${typeName}" not found in any librarian schema`
+        );
+      }
+    } else if (v.source) {
+      // Match files whose stem starts with the source hint (case-insensitive).
+      const sourceLower = String(v.source).toLowerCase();
+      const candidates = schemaFiles.filter(f => f.toLowerCase().replace(/\.xsd$/, '').startsWith(sourceLower));
+      if (candidates.length === 0) {
+        failures.push(
+          `  var ${v.name} : ${typeName} from "${v.source}"` +
+          `  → no schema file matching "${v.source}" found in librarian`
+        );
+        continue;
+      }
+      let found = false;
+      for (const filename of candidates) {
+        const names = await typesInFile(filename);
+        if (names.has(typeName)) { found = true; break; }
+      }
+      if (!found) {
+        failures.push(
+          `  var ${v.name} : ${typeName} from "${v.source}"` +
+          `  → type "${typeName}" not declared in schema "${candidates.join('", "')}"`
+        );
+      }
+    }
+  }
+
+  if (failures.length > 0) {
+    throw new Error(
+      `[PMACHINE] Librarian type resolution failed for program "${programMap?.serviceId || '?'}":\n` +
+      failures.join('\n')
+    );
+  }
 }
 
 function xmlEscape(value) {
@@ -1168,6 +1274,19 @@ function parsePcode(text) {
   return instructions;
 }
 
+// Returns the storage name to use for a LOAD/STORE operand given the current
+// with-context stack.  A name that already contains a dot or bracket, or that
+// matches a known reserved prefix, is returned unchanged.  Otherwise it is
+// prepended with the innermost context path.
+function applyWithContext(name, withContextStack) {
+  if (!name || withContextStack.length === 0) return name;
+  // Already qualified — leave alone.
+  if (name.includes('.') || name.includes('[')) return name;
+  // Reserved internal names — never prefixed.
+  if (name === 'src' || name.startsWith('__')) return name;
+  return `${withContextStack[withContextStack.length - 1]}.${name}`;
+}
+
 function resolveVar(frame, name) {
   let cursor = frame;
   while (cursor) {
@@ -1224,6 +1343,9 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
   let nextSchemaHandle = 1;
   let nextMapHandle = 1;
   let orchestrationSummary = null;
+  // Stack of dot-path prefixes pushed/popped by with...do...end statements.
+  // Each entry is a string such as "doc.FIToFICstmrCdtTrf.CdtTrfTxInf[0]".
+  const withContextStack = [];
 
   const requiredMnemonics = [
     'NOP', 'JMP', 'JZ', 'HALT',
@@ -1278,10 +1400,12 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       continue;
     }
     if (op === 'LOAD') {
-      const varName = String(instr.operand || '');
+      const rawName = String(instr.operand || '');
+      // Apply with-context prefix to bare (non-dotted, non-reserved) names.
+      const varName = applyWithContext(rawName, withContextStack);
       const varValue = resolveVar(currentFrame, varName);
-      // If loading 'src', keep it as a string; otherwise convert to number
-      if (varName === 'src' && typeof varValue === 'string') {
+      // Preserve strings (src, or values stored via MSG_WITH_PUSH / PUSH_STR).
+      if (typeof varValue === 'string') {
         stack.push(varValue);
       } else {
         stack.push(Number(varValue || 0));
@@ -1290,7 +1414,24 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       continue;
     }
     if (op === 'STORE') {
-      assignVar(currentFrame, String(instr.operand || ''), Number(stack.pop() || 0));
+      const rawName = String(instr.operand || '');
+      const varName = applyWithContext(rawName, withContextStack);
+      const top = stack.pop();
+      assignVar(currentFrame, varName, typeof top === 'string' ? top : Number(top || 0));
+      pc += 1;
+      continue;
+    }
+    if (op === 'MSG_WITH_PUSH') {
+      // Top of stack is the context path (a string such as "doc.GrpHdr").
+      const ctx = String(stack.pop() ?? '');
+      // If there is already a context, concatenate with dot.
+      const parent = withContextStack.length > 0 ? withContextStack[withContextStack.length - 1] : '';
+      withContextStack.push(parent ? `${parent}.${ctx}` : ctx);
+      pc += 1;
+      continue;
+    }
+    if (op === 'MSG_WITH_POP') {
+      withContextStack.pop();
       pc += 1;
       continue;
     }
@@ -1859,6 +2000,7 @@ async function executeSingleMessage(args, { printOutput = true } = {}) {
   const programMap = JSON.parse(await fs.readFile(programMapPath, 'utf-8'));
   const sourceMessage = await readMessage(args);
 
+  await validateLibrarianVarDecls(programMap);
   const opcodeMap = await loadOpcodeMap();
   const mappingsById = parseProgramMapMappings(programMap);
   await attachExternalMapDefinitions(mappingsById);
@@ -2026,6 +2168,7 @@ async function pollAndRoute(args) {
   const pcodeText = await fs.readFile(pcodePath, 'utf-8');
   const programMap = JSON.parse(await fs.readFile(programMapPath, 'utf-8'));
   
+  await validateLibrarianVarDecls(programMap);
   const opcodeMap = await loadOpcodeMap();
   const mappingsById = parseProgramMapMappings(programMap);
   await attachExternalMapDefinitions(mappingsById);

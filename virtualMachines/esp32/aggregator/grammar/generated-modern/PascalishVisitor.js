@@ -108,6 +108,12 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by PascalishParser#varSource.
+	visitVarSource(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by PascalishParser#identList.
 	visitIdentList(ctx) {
 	  return this.visitChildren(ctx);
@@ -206,6 +212,12 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by PascalishParser#statement.
 	visitStatement(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#withStmt.
+	visitWithStmt(ctx) {
 	  return this.visitChildren(ctx);
 	}
 

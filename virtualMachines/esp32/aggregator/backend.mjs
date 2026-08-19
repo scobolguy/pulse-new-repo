@@ -78,6 +78,7 @@ import { registerOrchestrationRegistryRoutes } from './src/backend/modules/orche
 import { registerBrokerAdminRoutes } from './src/backend/modules/brokerAdminRoutes.mjs';
 import { registerMediaGatewayRoutes } from './src/backend/modules/mediaGatewayRoutes.mjs';
 import { registerIdentityRoutes } from './src/backend/modules/identityRoutes.mjs';
+import { createHomeAutomationService, registerHomeAutomationRoutes } from './src/backend/modules/home-automation/index.mjs';
 import { createRouteManifestDependencyFactories } from './src/backend/modules/routeManifestDependencies.mjs';
 import { startBackendRuntime } from './src/backend/modules/startupBootstrap.mjs';
 import { createLifecycleHarnessPathApi } from './src/backend/modules/lifecycleHarnessPaths.mjs';
@@ -419,6 +420,7 @@ function proxyRequest(method, path, req, res, targetUrl = BROKER_SERVICE_URL) {
 
 
 const HTTP_PORT = readEnvNumber('HTTP_PORT', readEnvNumber('PORT', 4000));
+const homeAutomationService = createHomeAutomationService({ backendPort: HTTP_PORT });
 const UDP_PORT = 4210;
 const BROKER_SERVICE = 'broker';
 const ROUTER_SERVICE = 'router';
@@ -8218,13 +8220,15 @@ async function enrichNodeDetails(ip) {
   try {
     const servicesRes = await fetch(`http://${ip}:80/services/describe`);
     const statusRes = await fetch(`http://${ip}:80/status`);
-    let details = {};
-    if (servicesRes.ok) {
-      details = await servicesRes.json();
-    }
+    let serviceDetails = {};
+    let statusDetails = {};
     if (statusRes.ok) {
-      details = { ...details, ...(await statusRes.json()) };
+      statusDetails = await statusRes.json();
     }
+    if (servicesRes.ok) {
+      serviceDetails = await servicesRes.json();
+    }
+    const details = { ...statusDetails, ...serviceDetails };
     const node = discoveredNodes.get(ip);
     if (node) {
       node.details = details;
@@ -9240,6 +9244,11 @@ const {
 });
 
 function registerRoutes(app) {
+  registerHomeAutomationRoutes(app, homeAutomationService);
+  void homeAutomationService.start().catch((error) => {
+    console.error('[HOME-AUTOMATION] Startup failed:', error?.stack || error);
+  });
+
   function startSecondaryBroker() {
     if (globalThis.brokerClassDown) {
       throw new Error('Broker class is down. Bring class up before starting secondary broker.');
@@ -9744,6 +9753,7 @@ function registerRoutes(app) {
       upsertBrowserPresenceNode,
       setBrowserPresenceUnavailable,
       discoveredNodes,
+      homeAutomationService,
       getBrokerNodeDetails,
       getSystemPerformanceSnapshot,
       services: [BROKER_SERVICE, ROUTER_SERVICE, QUEUE_SERVICE, FILE_SERVER_SERVICE],

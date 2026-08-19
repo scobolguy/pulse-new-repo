@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { actorHeaders, getJsonAsActor } from './http-client.js';
 
-const BLUETOOTH_API_HOST = String(import.meta.env.VITE_BLUETOOTH_API_HOST || '192.168.2.157').replace(/^https?:\/\//, '').replace(/\/$/, '');
+const BLUETOOTH_API_HOST = String(import.meta.env.VITE_BLUETOOTH_API_HOST || '192.168.2.246').replace(/^https?:\/\//, '').replace(/\/$/, '');
 
 function normalizeText(value) {
   return String(value || '').toLowerCase();
@@ -190,7 +190,7 @@ export default function NetworkDevicesPage() {
       const [nodesResult, clustersResult, bluetoothResult, providersResult] = await Promise.allSettled([
         getJsonAsActor('/api/nodes', 'Node topology request failed'),
         getJsonAsActor('/api/clusters', 'Cluster request failed'),
-        fetch(`/api/proxy/${encodeURIComponent(BLUETOOTH_API_HOST)}?path=${encodeURIComponent('/api/bluetooth/devices')}`, {
+        fetch(`/api/proxy/${encodeURIComponent(BLUETOOTH_API_HOST)}?path=${encodeURIComponent('/api/bluetooth/devices?compact=1')}`, {
           headers: actorHeaders()
         }).then(async (response) => {
           if (!response.ok) {
@@ -326,7 +326,19 @@ export default function NetworkDevicesPage() {
           <article className="network-card">
             <h3>Bluetooth devices</h3>
             <div className="network-card-stat">{bluetoothDevices.length}</div>
-            <p>{quickFacts.topBluetooth.map((device) => `${device.name || device.address}`).join(', ') || 'No bluetooth devices yet.'}</p>
+            {bluetoothDevices.length > 0 ? (
+              <ul>
+                {dedupeBy([...bluetoothDevices].sort((a, b) => Number(b.rssi || -999) - Number(a.rssi || -999)), (device) => device.address)
+                  .map((device) => (
+                    <li key={device.address}>
+                      <strong>{device.name && device.name !== 'Unknown' ? device.name : device.address}</strong>
+                      {' - '}{device.type && device.type !== 'unknown' ? device.type : 'type unknown'}
+                      {' - '}{device.manufacturer && device.manufacturer !== 'Unknown' ? device.manufacturer : 'manufacturer unknown'}
+                      {Number.isFinite(Number(device.rssi)) ? ` - ${device.rssi} dBm` : ''}
+                    </li>
+                  ))}
+              </ul>
+            ) : <p>No bluetooth devices yet.</p>}
           </article>
           <article className="network-card">
             <h3>UPnP-like providers</h3>

@@ -6,6 +6,9 @@
 #else
 #include <WiFi.h>
 #endif
+#if defined(ENABLE_HTTPS) && (defined(ESP32) || defined(ESP8266))
+#include "https_service.h"
+#endif
 
 namespace {
 WiFiUDP udpParentSocket;
@@ -98,8 +101,22 @@ void sendNodeDetailsResponse(WiFiUDP& socket, const UdpRuntimeContext& context, 
     doc["nodeName"] = context.nodeName;
     doc["ip"] = WiFi.localIP().toString();
     doc["httpPort"] = 80;
-    doc["statusUrl"] = String("http://") + WiFi.localIP().toString() + ":80/status";
-    doc["servicesUrl"] = String("http://") + WiFi.localIP().toString() + ":80/services/describe";
+#if defined(ENABLE_HTTPS) && (defined(ESP32) || defined(ESP8266))
+    const bool httpsRunning = isHttpsRunning();
+    const String protocol = httpsRunning ? "https" : "http";
+    const uint16_t servicePort = httpsRunning ? 443 : 80;
+    doc["protocol"] = protocol;
+    if (httpsRunning) {
+        doc["httpsPort"] = servicePort;
+    }
+#else
+    const String protocol = "http";
+    const uint16_t servicePort = 80;
+    doc["protocol"] = protocol;
+#endif
+    const String serviceBaseUrl = protocol + "://" + WiFi.localIP().toString() + ":" + String(servicePort);
+    doc["statusUrl"] = serviceBaseUrl + "/status";
+    doc["servicesUrl"] = serviceBaseUrl + "/services/describe";
     doc["capabilityHash"] = capabilityHash;
     doc["capabilitiesChanged"] = capabilityChanged;
     doc["acknowledged"] = nodeBeaconAcknowledged;
@@ -296,6 +313,10 @@ void udpRuntimeMaintainConnectivity(uint16_t parentPort, uint16_t siblingPort, u
 
     udpParentReady = false;
     udpSiblingReady = false;
+
+    if (wifiSsid.isEmpty()) {
+        return;
+    }
 
     const unsigned long now = millis();
     if (now - lastWifiReconnectAttempt < wifiReconnectIntervalMs) {

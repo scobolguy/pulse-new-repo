@@ -17,6 +17,12 @@
     flex-direction: column;
   }
 
+  body.camera-mode {
+    height: auto;
+    min-height: 100vh;
+    overflow-y: auto;
+  }
+
   /* ── Header ── */
   #header {
     display: flex;
@@ -77,6 +83,10 @@
   }
   #outputPane.html-mode {
     white-space: normal;
+  }
+  body.camera-mode #outputPane {
+    flex: 0 0 auto;
+    overflow: visible;
   }
   #outputPane .placeholder {
     color: #57606a;
@@ -293,6 +303,8 @@
    CONFIG
 ───────────────────────────────────────────────────────── */
 const MCP_QUERY_URL = '/mcp-query';
+const NLI_STREAM_URL = '/api/nli/query-stream';
+const NLI_CONTINUE_URL = '/api/nli/continue';
 const MAPL_STREAM_URL = '/api/mapper/authoring/ollama-intent-stream';
 const MAPL_TEST_STREAM_URL = '/api/mapper/authoring/test-last-stream';
 const FEEDBACK_URL = '/api/agent/feedback';
@@ -470,6 +482,7 @@ async function runCorrections() {
    RENDER OUTPUT
 ───────────────────────────────────────────────────────── */
 function showSpinner(msg) {
+  document.body.classList.remove('camera-mode');
   document.getElementById('outputPane').style.display    = 'none';
   document.getElementById('spinnerLabel').textContent    = msg || 'Thinking…';
   document.getElementById('spinnerPane').classList.add('visible');
@@ -484,6 +497,7 @@ function renderOutput(content) {
   hideSpinner();
   const pane = document.getElementById('outputPane');
   const trimmed = (content || '').trim();
+  document.body.classList.toggle('camera-mode', /<iframe\b[^>]*title=["']Live feed from/i.test(trimmed));
 
   if (trimmed.startsWith('<')) {
     pane.classList.add('html-mode');
@@ -497,6 +511,7 @@ function renderOutput(content) {
 }
 
 function renderMappingProgress(messages) {
+  document.body.classList.remove('camera-mode');
   const pane = document.getElementById('outputPane');
   pane.style.display = '';
   pane.classList.remove('html-mode');
@@ -671,6 +686,116 @@ function speak(text) {
 }
 
 /* ─────────────────────────────────────────────────────────
+   NLI STREAMING
+───────────────────────────────────────────────────────── */
+let _lastPartialInteractionId = null;
+
+/**
+ * Stream a query through /api/nli/query-stream (SSE).
+ * Shows tokens live in the output pane as they arrive.
+ * Returns { text, partial, interactionId, intentId, canContinue }.
+ */
+async function streamNliQuery(text, files) {
+  const formData = new FormData();
+  formData.append('message', text);
+  if (files) {
+    for (let i = 0; i < files.length; i++) formData.append('files', files[i]);
+  }
+  const actorUserId = localStorage.getItem('pulse.actorUserId') || 'system-admin';
+
+  const res = await fetch(NLI_STREAM_URL, {
+    method: 'POST',
+    headers: { 'x-user-id': actorUserId },
+    body: formData,
+  });
+
+  if (!res.ok || !res.body) {
+    const errText = await res.text().catch(() => '');
+    let errMsg = `NLI stream request failed (${res.status})`;
+    try { const j = JSON.parse(errText); if (j.error) errMsg = j.error; } catch {}
+    throw new Error(errMsg);
+  }
+
+  const pane = document.getElementById('outputPane');
+  pane.classList.remove('html-mode');
+  pane.textContent = '';
+  pane.style.display = '';
+  document.getElementById('spinnerPane').classList.remove('visible');
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let accumulated = '';
+  let interactionId = res.headers.get('X-Interaction-Id') || '';
+  let intentId = '';
+  let partial = false;
+  let canContinue = false;
+  let statusText = '';
+
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+
+    const parts = buffer.split('\n\n');
+    buffer = done ? '' : parts.pop();
+
+    for (const part of parts) {
+      const line = part.trim();
+      if (!line.startsWith('data:')) continue;
+      let event;
+      try { event = JSON.parse(line.slice(5).trim()); } catch { continue; }
+
+      if (!interactionId && event.interactionId) interactionId = event.interactionId;
+
+      if (event.type === 'token') {
+        accumulated += event.text || '';
+        pane.textContent = accumulated;
+        pane.scrollTop = pane.scrollHeight;
+        setStatus('busy', 'receiving…');
+      } else if (event.type === 'status') {
+        statusText = event.text || '';
+        if (!accumulated) {
+          document.getElementById('spinnerLabel').textContent = statusText;
+          document.getElementById('spinnerPane').classList.add('visible');
+          pane.style.display = 'none';
+        }
+      } else if (event.type === 'done') {
+        intentId = event.intentId || intentId;
+        partial = !!event.partial;
+        canContinue = !!event.canContinue;
+        if (event.text && !accumulated) {
+          accumulated = event.text;
+          pane.style.display = '';
+          document.getElementById('spinnerPane').classList.remove('visible');
+          pane.textContent = accumulated;
+          pane.scrollTop = pane.scrollHeight;
+        }
+      } else if (event.type === 'error') {
+        partial = true;
+        canContinue = !!event.canContinue;
+        if (event.text_so_far) {
+          accumulated = event.text_so_far;
+          pane.style.display = '';
+          document.getElementById('spinnerPane').classList.remove('visible');
+          pane.textContent = accumulated + '\n\n[Error: ' + (event.text || 'unknown error') + ']';
+          pane.scrollTop = pane.scrollHeight;
+        } else {
+          throw new Error(event.text || 'NLI stream error');
+        }
+      }
+    }
+    if (done) break;
+  }
+
+  // Ensure spinner is hidden and pane is visible
+  document.getElementById('spinnerPane').classList.remove('visible');
+  pane.style.display = '';
+  if (!accumulated) pane.textContent = '(No response)';
+
+  return { text: accumulated, partial, canContinue, interactionId, intentId };
+}
+
+/* ─────────────────────────────────────────────────────────
    SEND QUERY
 ───────────────────────────────────────────────────────── */
 async function sendQuery(text) {
@@ -683,7 +808,28 @@ async function sendQuery(text) {
   document.getElementById('fbGood').disabled  = false;
   document.getElementById('fbBad').disabled   = false;
 
+  // Save before clearing so the continue check below can see it
+  const savedPartialId = _lastPartialInteractionId;
+  _lastPartialInteractionId = null;
+
   try {
+    // "continue" — resume a partial NLI response
+    if (/^\s*continue\s*$/i.test(text) && savedPartialId) {
+      const id = savedPartialId;
+      const res = await fetch(NLI_CONTINUE_URL, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-user-id': localStorage.getItem('pulse.actorUserId') || 'system-admin' },
+        body: JSON.stringify({ interactionId: id }),
+      });
+      const data = await readJsonResponse(res, 'Continue request');
+      renderOutput(data.text || '(No saved text)');
+      setStatus('ok', data.partial ? 'partial result retrieved' : 'ok');
+      if (data.interactionId) {
+        showFeedbackBar(data.interactionId, data.intentId, true);
+      }
+      return;
+    }
+
     if (isMappingTestQuery(text)) {
       const tested = await streamLastMapTest();
       const output = typeof tested.output === 'string'
@@ -702,27 +848,20 @@ async function sendQuery(text) {
       return;
     }
 
-    const files    = document.getElementById('uploadInput').files;
-    const formData = new FormData();
-    formData.append('message', text);
-    for (let i = 0; i < files.length; i++) formData.append('files', files[i]);
+    const files = document.getElementById('uploadInput').files;
+    const result = await streamNliQuery(text, files);
 
-    const actorUserId = localStorage.getItem('pulse.actorUserId') || 'system-admin';
-    const res  = await fetch(MCP_QUERY_URL, {
-      method: 'POST',
-      headers: { 'x-user-id': actorUserId },
-      body: formData
-    });
-    const data = await readJsonResponse(res, 'MCP request');
+    if (result.partial && result.canContinue) {
+      _lastPartialInteractionId = result.interactionId;
+      setStatus('', 'partial \u2014 response was cut short');
+      document.getElementById('outputPane').textContent +=
+        '\n\n\u2026 [Response cut short — type "continue" or press the Continue button to resume]';
+    } else {
+      setStatus('ok', 'ok');
+    }
 
-    const reply = data.output || JSON.stringify(data, null, 2);
-    renderOutput(reply);
-    if (data.voiceReply) speak(data.voiceReply);
-    setStatus('ok', 'ok');
-
-    // Show feedback bar for every real query (not reset)
-    if (data._interactionId) {
-      showFeedbackBar(data._interactionId, data._intentId, data._needsClarification === true);
+    if (result.interactionId) {
+      showFeedbackBar(result.interactionId, result.intentId, !result.intentId || result.intentId === 'ollama-stream');
     }
   } catch (err) {
     renderOutput('Error: ' + err.message);

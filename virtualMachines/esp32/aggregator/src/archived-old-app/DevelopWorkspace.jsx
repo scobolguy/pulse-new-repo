@@ -328,6 +328,7 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
   const handledCreateRequestKeyRef = useRef('');
   const typeNamesRef = useRef([]);
   const typeFieldMapRef = useRef({});
+  const mapNamesRef = useRef([]);
   const menuPanelStyle = {
     position: 'absolute',
     top: 34,
@@ -354,6 +355,15 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
     fontWeight: 600,
     lineHeight: 1.3
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/mapper/maps/names')
+      .then((r) => r.ok ? r.json() : { maps: [] })
+      .then((data) => { if (!cancelled) mapNamesRef.current = Array.isArray(data.maps) ? data.maps : []; })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1217,7 +1227,7 @@ export default function DevelopWorkspace({ createRequest, onCreateRequestHandled
                 theme={editorDescriptor.id === 'workflow' ? 'workflowWorkbench' : 'pascalishWorkbench'}
                 value={content}
                 beforeMount={(monaco) => {
-                  initializePascalishLanguage(monaco, typeNamesRef, typeFieldMapRef);
+                  initializePascalishLanguage(monaco, typeNamesRef, typeFieldMapRef, mapNamesRef);
                   initializeWorkflowLanguage(monaco, typeFieldMapRef);
                 }}
                 onChange={(value) => {

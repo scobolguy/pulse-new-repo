@@ -27,6 +27,7 @@ export default function PascalishEditor() {
   const [runError, setRunError] = useState('');
   const typeNamesRef = useRef([]);
   const typeFieldMapRef = useRef({});
+  const mapNamesRef = useRef([]);
   const runMenuPanelStyle = {
     position: 'absolute',
     top: 34,
@@ -64,6 +65,15 @@ export default function PascalishEditor() {
   useEffect(() => {
     typeNamesRef.current = typeNames;
   }, [typeNames]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/mapper/maps/names')
+      .then((r) => r.ok ? r.json() : { maps: [] })
+      .then((data) => { if (!cancelled) mapNamesRef.current = Array.isArray(data.maps) ? data.maps : []; })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -238,7 +248,7 @@ export default function PascalishEditor() {
             theme="pascalishWorkbench"
             value={source}
             onChange={(value) => setSource(value || '')}
-            beforeMount={(monaco) => initializePascalishLanguage(monaco, typeNamesRef, typeFieldMapRef)}
+            beforeMount={(monaco) => initializePascalishLanguage(monaco, typeNamesRef, typeFieldMapRef, mapNamesRef)}
             options={{
               minimap: { enabled: false },
               fontSize: 14,

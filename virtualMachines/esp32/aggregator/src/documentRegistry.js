@@ -1,55 +1,41 @@
 export const PASCALISH_KEYWORDS = [
-  'program',
-  'daemon',
-  'refresh',
-  'ms',
-  's',
-  'm',
-  'service',
-  'role',
-  'code_librarian',
-  'library',
-  'use',
-  'as',
-  'interop',
-  'wfl',
-  'workflow',
-  'cobolish',
-  'pascalish',
-  'router',
-  'mapper',
-  'input',
-  'source',
-  'target',
-  'description',
-  'enabled',
-  'begin',
-  'end',
-  'output',
-  'type',
-  'types',
-  'when',
-  'transform',
-  'map',
-  'to',
-  'using',
-  'true',
-  'false',
-  'var',
-  'from',
-  'librarian',
-  'cobegin',
-  'coend',
-  'subflow',
-  'sync',
-  'async',
-  'wait',
-  'on',
-  'error',
-  'backout',
-  'try',
-  'catch',
-  'endtry'
+  // top-level declarations
+  'program', 'service', 'daemon',
+  // daemon schedule
+  'refresh', 'every', 'ms', 'second', 'seconds',
+  // placement
+  'on', 'local', 'parent', 'child', 'sibling', 'alternate',
+  // integration DSL
+  'router', 'mapper', 'input', 'source', 'target',
+  'description', 'enabled', 'output', 'type', 'types',
+  'when', 'transform', 'map', 'to', 'using',
+  // block
+  'begin', 'end',
+  // statements
+  'if', 'then', 'else', 'while', 'do', 'for', 'repeat', 'until', 'with',
+  'call', 'return',
+  // queue/stack ops
+  'enqueue', 'dequeue', 'peek', 'push', 'pop',
+  // concurrency
+  'cobegin', 'coend', 'async', 'sync', 'wait', 'all', 'subflow',
+  // file ops
+  'open', 'read', 'write', 'close',
+  // error handling
+  'try', 'catch', 'endtry', 'error', 'backout',
+  // declarations
+  'var', 'const', 'class', 'record', 'extends', 'array', 'queue', 'stack',
+  'priorityqueue', 'file', 'of',
+  // procedure/function
+  'procedure', 'function',
+  // primitive types
+  'integer', 'real', 'boolean', 'string',
+  // literals
+  'true', 'false', 'nil',
+  // operators
+  'and', 'or', 'not', 'mod', 'div',
+  // librarian / interop / mapper import
+  'from', 'librarian', 'mapper', 'import', 'role', 'use', 'as', 'interop', 'wfl', 'workflow',
+  'cobolish', 'pascalish', 'library', 'code_librarian',
 ];
 
 export const COBOLISH_KEYWORDS = [
@@ -208,6 +194,9 @@ export const DOCUMENT_TYPES = [
       'interop wfl "new-workflow" as wf;',
       '',
       'var myLegacyMessage : swift-mt103 from librarian;',
+      '',
+      '// Import a data map from the Data Mapper',
+      'import mapper "my-map-id" from mapper;',
       ''
     ].join('\n')
   },

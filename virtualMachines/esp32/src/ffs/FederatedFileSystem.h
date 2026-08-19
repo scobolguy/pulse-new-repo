@@ -76,10 +76,12 @@ public:
     bool closeFile(int handle);
     bool readLine(int handle, String &outLine);
     bool writeLine(int handle, const String &line);
+    size_t writeBytes(int handle, const uint8_t *data, size_t len);
 
     // Basic file ops
     FFSStatus write(const String &logicalName, const uint8_t *data, size_t len);
     FFSStatus read(const String &logicalName, std::vector<uint8_t> &outData);
+    File openReadFile(const String &logicalName);
     FFSStatus remove(const String &logicalName);
     FFSStatus listFiles(std::vector<String> &outNames);
 

@@ -85,7 +85,7 @@ bool SDChunkstore::loadMetadata() {
     }
     
     // Read JSON
-    StaticJsonDocument<8192> doc;
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, file);
     file.close();
     
@@ -118,13 +118,13 @@ bool SDChunkstore::loadMetadata() {
 
 bool SDChunkstore::saveMetadata() {
     // Create JSON document
-    StaticJsonDocument<8192> doc;
+    JsonDocument doc;
     
     // Save chunk metadata (only allocated chunks to save space)
-    JsonArray chunks = doc.createNestedArray("chunks");
+    JsonArray chunks = doc["chunks"].to<JsonArray>();
     for (const auto& pair : chunkMetadata) {
         if (pair.second.allocated) {
-            JsonObject chunk = chunks.createNestedObject();
+            JsonObject chunk = chunks.add<JsonObject>();
             chunk["id"] = pair.second.chunkId;
             chunk["writes"] = pair.second.writeCount;
             chunk["allocated"] = pair.second.allocated;
@@ -133,7 +133,7 @@ bool SDChunkstore::saveMetadata() {
     }
     
     // Save file directory
-    JsonObject files = doc.createNestedObject("files");
+    JsonObject files = doc["files"].to<JsonObject>();
     for (const auto& pair : fileDirectory) {
         files[pair.first] = pair.second;
     }

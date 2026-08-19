@@ -1,5 +1,8 @@
 import { startCompanionServiceSupervisor } from './companionServiceSupervisor.mjs';
 
+const DEFAULT_LIBRARIAN_PORT = 4300;
+const DEFAULT_MAPPER_PORT = 4200;
+
 export async function startBackendRuntime(deps = {}) {
   const {
     debugLog,
@@ -341,44 +344,34 @@ export async function startBackendRuntime(deps = {}) {
   }
 
   if (BACKEND_AUX_SERVICES_AUTOSTART) {
-    const librarianPath = librarianScriptPath;
-    const librarian = spawn(process.execPath, [librarianPath], {
-      stdio: 'inherit',
-      env: { ...process.env },
-    });
-    librarian.on('error', err => console.error('[Librarian] Failed to start:', err.message));
-    librarian.on('exit', (code, signal) => {
-      if (code !== 0 && signal !== 'SIGTERM') {
-        console.warn(`[Librarian] Exited with code=${code} signal=${signal}`);
-      }
+    const librarianPort = Number(process.env.LIBRARIAN_PORT || DEFAULT_LIBRARIAN_PORT);
+    const mapperPort = Number(process.env.MAPPER_PORT || DEFAULT_MAPPER_PORT);
+
+    const librarianSupervisor = await startCompanionServiceSupervisor({
+      name: 'Librarian',
+      scriptPath: librarianScriptPath,
+      healthUrl: `http://127.0.0.1:${librarianPort}/health`,
+      spawn,
     });
 
-    const mapperPath = mapperScriptPath;
-    const mapper = spawn(process.execPath, [mapperPath], {
-      stdio: 'inherit',
-      env: { ...process.env },
-    });
-    mapper.on('error', err => console.error('[Mapper] Failed to start:', err.message));
-    mapper.on('exit', (code, signal) => {
-      if (code !== 0 && signal !== 'SIGTERM') {
-        console.warn(`[Mapper] Exited with code=${code} signal=${signal}`);
-      }
+    const mapperSupervisor = await startCompanionServiceSupervisor({
+      name: 'Mapper',
+      scriptPath: mapperScriptPath,
+      healthUrl: `http://127.0.0.1:${mapperPort}/health`,
+      spawn,
     });
 
-    process.on('exit', () => {
-      librarian.kill();
-      mapper.kill();
-    });
-    process.on('SIGINT', () => {
-      librarian.kill();
-      mapper.kill();
-      process.exit();
-    });
-    process.on('SIGTERM', () => {
-      librarian.kill();
-      mapper.kill();
-      process.exit();
-    });
+    const stopAux = () => {
+      librarianSupervisor.stop();
+      mapperSupervisor.stop();
+    };
+
+    process.once('exit', stopAux);
+    process.once('SIGINT', () => { stopAux(); process.exit(); });
+    process.once('SIGTERM', () => { stopAux(); process.exit(); });
+
+    console.log(`[Librarian] Companion supervisor enabled (health=http://127.0.0.1:${librarianPort}/health)`);
+    console.log(`[Mapper] Companion supervisor enabled (health=http://127.0.0.1:${mapperPort}/health)`);
   } else {
     console.log('[AUTOSTART] Auxiliary child services are disabled (BACKEND_AUX_SERVICES_AUTOSTART=false).');
   }

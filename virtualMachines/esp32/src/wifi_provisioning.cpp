@@ -29,6 +29,9 @@ constexpr size_t kCredentialKeySize = 32;
 constexpr size_t kCredentialNonceSize = 12;
 const char* kCredentialPrefsNamespace = "wifi-prov";
 const char* kCredentialPrefsKey = "enc_key";
+const char* kCredentialPrefsNonce = "nonce";
+const char* kCredentialPrefsTag = "tag";
+const char* kCredentialPrefsPayload = "payload";
 #endif
 
 #if defined(ARDUINO_ARCH_ESP8266)
@@ -61,10 +64,43 @@ bool parseBoolLike(const String& raw, bool defaultValue = false) {
     return raw == "1" || raw.equalsIgnoreCase("true") || raw.equalsIgnoreCase("yes") || raw.equalsIgnoreCase("on");
 }
 
+void appendJsonString(String& output, const String& value) {
+    static const char hex[] = "0123456789abcdef";
+    output += '"';
+    for (size_t index = 0; index < value.length(); ++index) {
+        const uint8_t ch = static_cast<uint8_t>(value.charAt(index));
+        switch (ch) {
+            case '"': output += "\\\""; break;
+            case '\\': output += "\\\\"; break;
+            case '\b': output += "\\b"; break;
+            case '\f': output += "\\f"; break;
+            case '\n': output += "\\n"; break;
+            case '\r': output += "\\r"; break;
+            case '\t': output += "\\t"; break;
+            default:
+                if (ch < 0x20) {
+                    output += "\\u00";
+                    output += hex[(ch >> 4) & 0x0F];
+                    output += hex[ch & 0x0F];
+                } else {
+                    output += static_cast<char>(ch);
+                }
+        }
+    }
+    output += '"';
+}
+
+void appendJsonStringProperty(String& output, const char* name, const String& value) {
+    appendJsonString(output, String(name));
+    output += ':';
+    appendJsonString(output, value);
+}
+
 #if defined(ESP32)
 bool getCredentialKey(uint8_t key[kCredentialKeySize]) {
     Preferences prefs;
     if (!prefs.begin(kCredentialPrefsNamespace, false)) {
+        Serial.println("[WIFI-PROV] Failed to open credential key namespace");
         return false;
     }
 
@@ -84,18 +120,27 @@ bool getCredentialKey(uint8_t key[kCredentialKeySize]) {
 
     const size_t written = prefs.putBytes(kCredentialPrefsKey, key, kCredentialKeySize);
     prefs.end();
+    if (written != kCredentialKeySize) {
+        Serial.printf("[WIFI-PROV] Failed to persist credential key: wrote %u of %u bytes\n",
+                      static_cast<unsigned>(written), static_cast<unsigned>(kCredentialKeySize));
+    }
     return written == kCredentialKeySize;
 }
 
-String base64Encode(const uint8_t* data, size_t length) {
-    size_t outputLength = 0;
-    mbedtls_base64_encode(nullptr, 0, &outputLength, data, length);
-    std::vector<uint8_t> output(outputLength + 1, 0);
-    if (mbedtls_base64_encode(output.data(), output.size(), &outputLength, data, length) != 0) {
-        return String();
+bool writeBase64(Print& output, const uint8_t* data, size_t length) {
+    constexpr size_t kInputChunkBytes = 96;
+    uint8_t encoded[4 * kInputChunkBytes / 3 + 1];
+    for (size_t offset = 0; offset < length; offset += kInputChunkBytes) {
+        const size_t inputLength = min(kInputChunkBytes, length - offset);
+        size_t outputLength = 0;
+        if (mbedtls_base64_encode(encoded, sizeof(encoded), &outputLength, data + offset, inputLength) != 0) {
+            return false;
+        }
+        if (output.write(encoded, outputLength) != outputLength) {
+            return false;
+        }
     }
-    output[outputLength] = 0;
-    return String(reinterpret_cast<const char*>(output.data()));
+    return true;
 }
 
 bool base64Decode(const String& encoded, std::vector<uint8_t>& output) {
@@ -119,7 +164,7 @@ bool base64Decode(const String& encoded, std::vector<uint8_t>& output) {
     return true;
 }
 
-bool encryptCredentialPayload(const String& plaintext, JsonDocument& envelope) {
+bool writeEncryptedCredentialPayload(const String& plaintext, File& output) {
     uint8_t key[kCredentialKeySize];
     uint8_t nonce[kCredentialNonceSize];
     if (!getCredentialKey(key)) {
@@ -133,23 +178,38 @@ bool encryptCredentialPayload(const String& plaintext, JsonDocument& envelope) {
     mbedtls_gcm_context ctx;
     mbedtls_gcm_init(&ctx);
     bool ok = false;
-    std::vector<uint8_t> ciphertext(plaintext.length());
+    uint8_t* ciphertext = static_cast<uint8_t*>(malloc(plaintext.length()));
+    if (!ciphertext) {
+        Serial.printf("[WIFI-PROV] Failed to allocate %u-byte credential ciphertext\n",
+                      static_cast<unsigned>(plaintext.length()));
+        mbedtls_gcm_free(&ctx);
+        return false;
+    }
     uint8_t tag[16];
 
-    if (mbedtls_gcm_setkey(&ctx, MBEDTLS_CIPHER_ID_AES, key, 256) == 0 &&
-        mbedtls_gcm_crypt_and_tag(&ctx, MBEDTLS_GCM_ENCRYPT, plaintext.length(), nonce, kCredentialNonceSize,
-                                   nullptr, 0,
-                                   reinterpret_cast<const uint8_t*>(plaintext.c_str()), ciphertext.data(),
-                                   sizeof(tag), tag) == 0) {
-        envelope.clear();
-        envelope["version"] = 3;
-        envelope["cipher"] = "aes-256-gcm";
-        envelope["nonce"] = base64Encode(nonce, sizeof(nonce));
-        envelope["tag"] = base64Encode(tag, sizeof(tag));
-        envelope["payload"] = base64Encode(ciphertext.data(), plaintext.length());
-        ok = envelope["nonce"].as<String>().length() > 0 && envelope["tag"].as<String>().length() > 0 && envelope["payload"].as<String>().length() > 0;
+    const int setKeyResult = mbedtls_gcm_setkey(&ctx, MBEDTLS_CIPHER_ID_AES, key, 256);
+    const int encryptResult = setKeyResult == 0
+        ? mbedtls_gcm_crypt_and_tag(&ctx, MBEDTLS_GCM_ENCRYPT, plaintext.length(), nonce, kCredentialNonceSize,
+                                    nullptr, 0,
+                                    reinterpret_cast<const uint8_t*>(plaintext.c_str()), ciphertext,
+                                    sizeof(tag), tag)
+        : setKeyResult;
+    if (encryptResult == 0) {
+        output.print("{\"version\":3,\"cipher\":\"aes-256-gcm\",\"nonce\":\"");
+        ok = writeBase64(output, nonce, sizeof(nonce));
+        output.print("\",\"tag\":\"");
+        ok = writeBase64(output, tag, sizeof(tag)) && ok;
+        output.print("\",\"payload\":\"");
+        ok = writeBase64(output, ciphertext, plaintext.length()) && ok;
+        output.print("\",\"schema\":\"wifi-credentials\"}");
+        if (!ok) {
+            Serial.println("[WIFI-PROV] Failed to write encrypted credential envelope");
+        }
+    } else {
+        Serial.printf("[WIFI-PROV] AES-GCM credential encryption failed: %d\n", encryptResult);
     }
 
+    free(ciphertext);
     mbedtls_gcm_free(&ctx);
     return ok;
 }
@@ -193,6 +253,97 @@ bool decryptCredentialPayload(const JsonDocument& envelope, String& plaintext) {
     clear[ciphertext.size()] = 0;
     plaintext = reinterpret_cast<const char*>(clear.data());
     return true;
+}
+
+bool saveEncryptedCredentialPayloadToPreferences(const String& plaintext) {
+    uint8_t key[kCredentialKeySize];
+    uint8_t nonce[kCredentialNonceSize];
+    uint8_t tag[16];
+    if (!getCredentialKey(key)) return false;
+
+    for (size_t index = 0; index < sizeof(nonce); ++index) {
+        nonce[index] = static_cast<uint8_t>(esp_random() & 0xFF);
+    }
+
+    uint8_t* ciphertext = static_cast<uint8_t*>(malloc(plaintext.length()));
+    if (!ciphertext) return false;
+
+    mbedtls_gcm_context ctx;
+    mbedtls_gcm_init(&ctx);
+    const int keyResult = mbedtls_gcm_setkey(&ctx, MBEDTLS_CIPHER_ID_AES, key, 256);
+    const int encryptResult = keyResult == 0
+        ? mbedtls_gcm_crypt_and_tag(&ctx, MBEDTLS_GCM_ENCRYPT, plaintext.length(), nonce, sizeof(nonce),
+                                    nullptr, 0, reinterpret_cast<const uint8_t*>(plaintext.c_str()),
+                                    ciphertext, sizeof(tag), tag)
+        : keyResult;
+    mbedtls_gcm_free(&ctx);
+
+    bool saved = false;
+    if (encryptResult == 0) {
+        Preferences prefs;
+        if (prefs.begin(kCredentialPrefsNamespace, false)) {
+            saved = prefs.putBytes(kCredentialPrefsNonce, nonce, sizeof(nonce)) == sizeof(nonce)
+                && prefs.putBytes(kCredentialPrefsTag, tag, sizeof(tag)) == sizeof(tag)
+                && prefs.putBytes(kCredentialPrefsPayload, ciphertext, plaintext.length()) == plaintext.length();
+            prefs.end();
+        }
+    }
+    free(ciphertext);
+    return saved;
+}
+
+bool loadEncryptedCredentialPayloadFromPreferences(String& plaintext) {
+    Preferences prefs;
+    if (!prefs.begin(kCredentialPrefsNamespace, true)) return false;
+    const size_t nonceLength = prefs.getBytesLength(kCredentialPrefsNonce);
+    const size_t tagLength = prefs.getBytesLength(kCredentialPrefsTag);
+    const size_t payloadLength = prefs.getBytesLength(kCredentialPrefsPayload);
+    if (nonceLength != kCredentialNonceSize || tagLength != 16 || payloadLength == 0) {
+        prefs.end();
+        return false;
+    }
+
+    uint8_t nonce[kCredentialNonceSize];
+    uint8_t tag[16];
+    uint8_t* ciphertext = static_cast<uint8_t*>(malloc(payloadLength));
+    uint8_t* cleartext = static_cast<uint8_t*>(malloc(payloadLength + 1));
+    if (!ciphertext || !cleartext) {
+        free(ciphertext);
+        free(cleartext);
+        prefs.end();
+        return false;
+    }
+    const bool read = prefs.getBytes(kCredentialPrefsNonce, nonce, sizeof(nonce)) == sizeof(nonce)
+        && prefs.getBytes(kCredentialPrefsTag, tag, sizeof(tag)) == sizeof(tag)
+        && prefs.getBytes(kCredentialPrefsPayload, ciphertext, payloadLength) == payloadLength;
+    prefs.end();
+
+    uint8_t key[kCredentialKeySize];
+    bool decrypted = false;
+    if (read && getCredentialKey(key)) {
+        mbedtls_gcm_context ctx;
+        mbedtls_gcm_init(&ctx);
+        const int keyResult = mbedtls_gcm_setkey(&ctx, MBEDTLS_CIPHER_ID_AES, key, 256);
+        decrypted = keyResult == 0
+            && mbedtls_gcm_auth_decrypt(&ctx, payloadLength, nonce, sizeof(nonce), nullptr, 0,
+                                        tag, sizeof(tag), ciphertext, cleartext) == 0;
+        mbedtls_gcm_free(&ctx);
+    }
+    if (decrypted) {
+        cleartext[payloadLength] = 0;
+        plaintext = reinterpret_cast<const char*>(cleartext);
+    }
+    free(ciphertext);
+    free(cleartext);
+    return decrypted;
+}
+
+bool hasCredentialPayloadInPreferences() {
+    Preferences prefs;
+    if (!prefs.begin(kCredentialPrefsNamespace, true)) return false;
+    const bool present = prefs.getBytesLength(kCredentialPrefsPayload) > 0;
+    prefs.end();
+    return present;
 }
 #endif
 
@@ -586,7 +737,11 @@ bool WiFiProvisioning::begin(const char* name) {
 }
 
 bool WiFiProvisioning::hasStoredCredentials() {
-    return LittleFS.exists(kCredsPath);
+    return LittleFS.exists(kCredsPath)
+#if defined(ESP32)
+        || hasCredentialPayloadInPreferences()
+#endif
+        ;
 }
 
 bool WiFiProvisioning::loadCredentials(WiFiCredentials& creds) {
@@ -602,30 +757,47 @@ bool WiFiProvisioning::saveCredentials(const WiFiCredentials& creds) {
     return addOrUpdateCredential(creds, kMaxStoredWifiProfiles);
 }
 
+bool WiFiProvisioning::replaceCredentials(const WiFiCredentials& creds) {
+    if (creds.ssid.isEmpty()) return false;
+    std::vector<WiFiCredentials> replacement;
+    replacement.reserve(1);
+    replacement.push_back(creds);
+    return saveCredentialsList(replacement);
+}
+
 bool WiFiProvisioning::loadCredentialsList(std::vector<WiFiCredentials>& credsList) {
     credsList.clear();
     if (!hasStoredCredentials()) {
         return false;
     }
 
-    File f = LittleFS.open(kCredsPath, "r");
-    if (!f) {
-        Serial.println("[WIFI-PROV] Failed to open credentials file");
-        return false;
-    }
-
-    JsonDocument doc;
-    const DeserializationError err = deserializeJson(doc, f);
-    f.close();
-    if (err) {
-        Serial.println("[WIFI-PROV] Failed to parse credentials JSON");
-        return false;
-    }
-
     JsonDocument plaintextDoc;
-    if (!loadPlainOrEncryptedProfiles(doc, plaintextDoc)) {
-        Serial.println("[WIFI-PROV] Failed to decrypt credentials JSON");
+    bool loaded = false;
+    if (LittleFS.exists(kCredsPath)) {
+        File f = LittleFS.open(kCredsPath, "r");
+        if (f) {
+            JsonDocument doc;
+            const DeserializationError err = deserializeJson(doc, f);
+            f.close();
+            loaded = !err && loadPlainOrEncryptedProfiles(doc, plaintextDoc);
+        }
+        if (!loaded) {
+            Serial.println("[WIFI-PROV] Credential file invalid; trying encrypted NVS storage");
+        }
+    }
+
+    if (!loaded) {
+#if defined(ESP32)
+        String plaintext;
+        if (!loadEncryptedCredentialPayloadFromPreferences(plaintext)
+            || deserializeJson(plaintextDoc, plaintext)) {
+            Serial.println("[WIFI-PROV] Failed to decrypt NVS credentials");
+            return false;
+        }
+        loaded = true;
+#else
         return false;
+#endif
     }
 
     if (plaintextDoc["networks"].is<JsonArray>()) {
@@ -641,7 +813,7 @@ bool WiFiProvisioning::loadCredentialsList(std::vector<WiFiCredentials>& credsLi
     } else {
         // Backward compatibility: single profile object.
         WiFiCredentials profile;
-        if (readProfileJson(doc.as<JsonObjectConst>(), profile)) {
+        if (readProfileJson(plaintextDoc.as<JsonObjectConst>(), profile)) {
             credsList.push_back(profile);
         }
     }
@@ -654,46 +826,61 @@ bool WiFiProvisioning::saveCredentialsList(const std::vector<WiFiCredentials>& c
         return false;
     }
 
-    JsonDocument doc;
-    doc["version"] = 2;
-    JsonArray arr = doc["networks"].to<JsonArray>();
+    String plaintext = "{\"version\":2,\"networks\":[";
     size_t count = 0;
     for (const auto& creds : credsList) {
         if (creds.ssid.isEmpty()) continue;
-        JsonObject entry = arr.add<JsonObject>();
-        writeProfileJson(entry, creds);
+        if (count > 0) plaintext += ',';
+        plaintext += '{';
+        appendJsonStringProperty(plaintext, "ssid", creds.ssid);
+        plaintext += ',';
+        appendJsonStringProperty(plaintext, "password", creds.password);
+        plaintext += ',';
+        appendJsonStringProperty(plaintext, "authMode", normalizeAuthMode(creds.authMode));
+        plaintext += ',';
+        appendJsonStringProperty(plaintext, "eapMethod", creds.eapMethod);
+        plaintext += ',';
+        appendJsonStringProperty(plaintext, "identity", creds.identity);
+        plaintext += ',';
+        appendJsonStringProperty(plaintext, "username", creds.username);
+        plaintext += ',';
+        appendJsonStringProperty(plaintext, "enterprisePassword", creds.enterprisePassword);
+        plaintext += ',';
+        appendJsonStringProperty(plaintext, "hostname", creds.hostname);
+        plaintext += String(",\"dhcp\":") + (creds.dhcp ? "true" : "false") + ',';
+        appendJsonStringProperty(plaintext, "staticIP", creds.staticIP);
+        plaintext += ',';
+        appendJsonStringProperty(plaintext, "gateway", creds.gateway);
+        plaintext += ',';
+        appendJsonStringProperty(plaintext, "subnet", creds.subnet);
+        plaintext += ',';
+        appendJsonStringProperty(plaintext, "dns1", creds.dns1);
+        plaintext += ',';
+        appendJsonStringProperty(plaintext, "dns2", creds.dns2);
+        plaintext += '}';
         ++count;
         if (count >= kMaxStoredWifiProfiles) break;
     }
 
-    if (arr.size() == 0) {
+    if (count == 0) {
         return false;
     }
-
-    String plaintext;
-    serializeJson(doc, plaintext);
+    plaintext += "]}";
 
 #if defined(ESP32)
-    JsonDocument envelope;
-    if (!encryptCredentialPayload(plaintext, envelope)) {
-        Serial.println("[WIFI-PROV] Failed to encrypt credentials JSON");
-        return false;
-    }
-
-    envelope["schema"] = "wifi-credentials";
-
-    String body;
-    serializeJson(envelope, body);
-
     File f = LittleFS.open(kCredsPath, "w");
     if (!f) {
-        Serial.println("[WIFI-PROV] Failed to open credentials file for write");
-        return false;
+        Serial.println("[WIFI-PROV] Credentials file unavailable; using encrypted NVS storage");
+        return saveEncryptedCredentialPayloadToPreferences(plaintext);
     }
 
-    f.print(body);
+    const bool saved = writeEncryptedCredentialPayload(plaintext, f);
     f.close();
-    return true;
+    if (!saved) {
+        LittleFS.remove(kCredsPath);
+        Serial.println("[WIFI-PROV] Failed to encrypt credentials JSON");
+    }
+    return saved;
 #else
     File f = LittleFS.open(kCredsPath, "w");
     if (!f) {
@@ -701,7 +888,7 @@ bool WiFiProvisioning::saveCredentialsList(const std::vector<WiFiCredentials>& c
         return false;
     }
 
-    serializeJson(doc, f);
+    f.print(plaintext);
     f.close();
     return true;
 #endif
@@ -737,6 +924,17 @@ bool WiFiProvisioning::clearCredentials() {
     if (LittleFS.exists(kCredsPath)) {
         ok = LittleFS.remove(kCredsPath) && ok;
     }
+#if defined(ESP32)
+    Preferences prefs;
+    if (prefs.begin(kCredentialPrefsNamespace, false)) {
+        prefs.remove(kCredentialPrefsNonce);
+        prefs.remove(kCredentialPrefsTag);
+        prefs.remove(kCredentialPrefsPayload);
+        prefs.end();
+    } else {
+        ok = false;
+    }
+#endif
     ok = eraseLegacyCredentialStores() && ok;
     return ok;
 }

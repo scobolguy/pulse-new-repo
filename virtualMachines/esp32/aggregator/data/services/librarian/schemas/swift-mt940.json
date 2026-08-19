@@ -1,0 +1,160 @@
+{
+  "messageType": "MT940",
+  "description": "SWIFT FIN MT940 Customer Statement Message",
+  "finEnvelope": {
+    "block1": {
+      "applicationId": "F",
+      "serviceId": "01",
+      "logicalTerminal": "BANKBEBBAXXX",
+      "sessionNumber": "0000",
+      "sequenceNumber": "000000"
+    },
+    "block2": {
+      "inputOutputId": "O",
+      "messageType": "940",
+      "senderAddress": "BANKDEFFXXXX",
+      "priority": "N"
+    },
+    "block4": {
+      "fields": {
+        "20": {
+          "tag": "20",
+          "name": "TransactionReferenceNumber",
+          "format": "16x",
+          "required": true
+        },
+        "21": {
+          "tag": "21",
+          "name": "RelatedReference",
+          "format": "16x",
+          "required": false
+        },
+        "25": {
+          "tag": "25",
+          "name": "AccountIdentification",
+          "format": "35x",
+          "required": true,
+          "components": {
+            "accountId": "IBAN or BBAN",
+            "currencyCode": "ISO4217 (optional)"
+          }
+        },
+        "28C": {
+          "tag": "28C",
+          "name": "StatementSequenceNumber",
+          "format": "5n/5n",
+          "required": true,
+          "components": {
+            "statementNumber": "Numeric",
+            "sequenceNumber": "Numeric"
+          }
+        },
+        "60F": {
+          "tag": "60F",
+          "name": "OpeningBalance",
+          "format": "1!a6!n3!a15d",
+          "required": true,
+          "components": {
+            "debitCreditMark": "D or C",
+            "date": "YYMMDD",
+            "currency": "ISO4217",
+            "amount": "Decimal"
+          }
+        },
+        "60M": {
+          "tag": "60M",
+          "name": "IntermediateOpeningBalance",
+          "format": "1!a6!n3!a15d",
+          "required": false,
+          "components": {
+            "debitCreditMark": "D or C",
+            "date": "YYMMDD",
+            "currency": "ISO4217",
+            "amount": "Decimal"
+          }
+        },
+        "61": {
+          "tag": "61",
+          "name": "StatementLine",
+          "format": "6!n[4!n]2a[1!a]15d1!a3!c16x[//16x][34x]",
+          "required": false,
+          "repeating": true,
+          "components": {
+            "valueDate": "YYMMDD",
+            "entryDate": "MMDD (optional)",
+            "debitCreditMark": "D, C, RD, or RC",
+            "thirdCurrencyMark": "Optional single character",
+            "amount": "Decimal",
+            "transactionType": "S=SWIFT, N=Non-SWIFT, F=First-Advice",
+            "identificationCode": "3-character code",
+            "referenceForAccountOwner": "16x",
+            "referenceOfAccountServicingInstitution": "16x (optional)",
+            "supplementaryDetails": "34x (optional)"
+          }
+        },
+        "86": {
+          "tag": "86",
+          "name": "InformationToAccountOwner",
+          "format": "6*65x",
+          "required": false,
+          "repeating": true
+        },
+        "62F": {
+          "tag": "62F",
+          "name": "ClosingBalance",
+          "format": "1!a6!n3!a15d",
+          "required": true,
+          "components": {
+            "debitCreditMark": "D or C",
+            "date": "YYMMDD",
+            "currency": "ISO4217",
+            "amount": "Decimal"
+          }
+        },
+        "62M": {
+          "tag": "62M",
+          "name": "IntermediateClosingBalance",
+          "format": "1!a6!n3!a15d",
+          "required": false,
+          "components": {
+            "debitCreditMark": "D or C",
+            "date": "YYMMDD",
+            "currency": "ISO4217",
+            "amount": "Decimal"
+          }
+        },
+        "64": {
+          "tag": "64",
+          "name": "ClosingAvailableBalance",
+          "format": "1!a6!n3!a15d",
+          "required": false,
+          "components": {
+            "debitCreditMark": "D or C",
+            "date": "YYMMDD",
+            "currency": "ISO4217",
+            "amount": "Decimal"
+          }
+        },
+        "65": {
+          "tag": "65",
+          "name": "ForwardAvailableBalance",
+          "format": "1!a6!n3!a15d",
+          "required": false,
+          "repeating": true,
+          "components": {
+            "debitCreditMark": "D or C",
+            "date": "YYMMDD",
+            "currency": "ISO4217",
+            "amount": "Decimal"
+          }
+        }
+      }
+    },
+    "block5": {
+      "optional": true,
+      "tags": {
+        "CHK": "Checksum"
+      }
+    }
+  }
+}

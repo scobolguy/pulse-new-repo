@@ -76,11 +76,11 @@ bool MessageQueue::save() {
     if (!persistent) return true;
     
     // Create JSON document
-    StaticJsonDocument<4096> doc;
+    JsonDocument doc;
     JsonArray array = doc.to<JsonArray>();
     
     for (const auto& msg : messages) {
-        JsonObject obj = array.createNestedObject();
+        JsonObject obj = array.add<JsonObject>();
         obj["id"] = msg.id;
         obj["source"] = msg.sourceDevice;
         obj["target"] = msg.targetDevice;
@@ -112,7 +112,7 @@ bool MessageQueue::load() {
     }
     
     // Parse JSON
-    StaticJsonDocument<4096> doc;
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, file);
     file.close();
     
@@ -237,7 +237,7 @@ bool BrokerClient::registerDevice() {
     }
     
     // Create registration JSON
-    StaticJsonDocument<512> doc;
+    JsonDocument doc;
     doc["deviceId"] = deviceInfo.id;
     doc["name"] = deviceInfo.name;
     doc["role"] = deviceInfo.role;
@@ -277,7 +277,7 @@ void BrokerClient::broadcastDiscovery() {
     if (!discoveryRunning) return;
     
     // Create discovery message
-    StaticJsonDocument<512> doc;
+    JsonDocument doc;
     doc["type"] = "discovery";
     doc["deviceId"] = deviceInfo.id;
     doc["role"] = deviceInfo.role;
@@ -309,7 +309,7 @@ void BrokerClient::listenForDiscovery() {
     buffer[len] = '\0';
     
     // Parse JSON
-    StaticJsonDocument<512> doc;
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, buffer);
     if (error) return;
     
@@ -365,7 +365,7 @@ bool BrokerClient::sendMessageWithPriority(const char* targetDevice,
     }
     
     // Create message JSON
-    StaticJsonDocument<2048> doc;
+    JsonDocument doc;
     doc["id"] = generateMessageId();
     doc["source"] = deviceInfo.id;
     doc["target"] = targetDevice;
