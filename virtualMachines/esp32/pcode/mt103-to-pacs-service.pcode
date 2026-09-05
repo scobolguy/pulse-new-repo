@@ -1,0 +1,4 @@
+# Auto-generated from ANTLR Pascalish grammar
+JMP MAIN
+MAIN:
+HALT

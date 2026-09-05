@@ -1,4 +1,4 @@
-import { COBOLISH_KEYWORDS, PASCALISH_KEYWORDS } from './documentRegistry';
+import { COBOLISH_KEYWORDS, PASCALISH_KEYWORDS, VBISH_KEYWORDS } from './documentRegistry';
 
 let languageInitialized = false;
 let completionDisposable = null;
@@ -437,6 +437,7 @@ export function initializePascalishLanguage(monaco, typeNamesRef, typeFieldMapRe
   if (!languageInitialized) {
     monaco.languages.register({ id: 'pascalish' });
     monaco.languages.register({ id: 'cobolish' });
+    monaco.languages.register({ id: 'vbish' });
 
     monaco.languages.setMonarchTokensProvider('pascalish', {
       ignoreCase: true,
@@ -503,6 +504,32 @@ export function initializePascalishLanguage(monaco, typeNamesRef, typeFieldMapRe
       ]
     });
 
+    monaco.languages.setMonarchTokensProvider('vbish', {
+      ignoreCase: true,
+      keywords: VBISH_KEYWORDS,
+      tokenizer: {
+        root: [
+          [/'.*$/, 'comment'],
+          [/\b(?:Sub|Function|End|If|Then|Else|For|While|Do|Loop|Select|Case|Return)\b/i, 'keyword'],
+          [/\b(?:Dim|As|String|Integer|Double|Boolean|True|False)\b/i, 'keyword'],
+          [/\b(?:Daemon|Service|Program|Interop|Option|Explicit|On|Every|Local|Parent|Child|Sibling|Alternate)\b/i, 'keyword'],
+          [/[A-Za-z_][A-Za-z0-9_]*/, {
+            cases: {
+              '@keywords': 'keyword',
+              '@default': 'identifier'
+            }
+          }],
+          [/"([^"\\]|\\.)*"/, 'string'],
+          [/'([^'\\]|\\.)*'/, 'string'],
+          [/[0-9]+(\.[0-9]+)?/, 'number'],
+          [/=/, 'operator'],
+          [/<>|<=|>=|<|>/, 'operator'],
+          [/[-+*\/]/, 'operator'],
+          [/[;,.()]/, 'delimiter']
+        ]
+      }
+    });
+
     monaco.languages.setLanguageConfiguration('cobolish', {
       comments: {
         lineComment: '*',
@@ -510,10 +537,21 @@ export function initializePascalishLanguage(monaco, typeNamesRef, typeFieldMapRe
       },
       autoClosingPairs: [
         { open: '"', close: '"' },
-        { open: '\'', close: '\'' },
+        { open: "'", close: "'" },
         { open: '(', close: ')' }
       ],
       surroundingPairs: [
+        { open: '"', close: '"' },
+        { open: "'", close: "'" },
+        { open: '(', close: ')' }
+      ]
+    });
+
+    monaco.languages.setLanguageConfiguration('vbish', {
+      comments: {
+        lineComment: "'"
+      },
+      autoClosingPairs: [
         { open: '"', close: '"' },
         { open: '\'', close: '\'' },
         { open: '(', close: ')' }

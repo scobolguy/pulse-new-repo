@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-03T00:36:02.732Z",
+  "serviceId": "MT103HttpService",
+  "runtimeUnit": {
+    "kind": "service",
+    "id": "MT103HttpService",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-service",
+  "sourceLanguage": "pascalish",
+  "globals": [],
+  "variableDeclarations": [],
+  "procedures": {},
+  "typeDeclarations": [],
+  "classDeclarations": [],
+  "entryLabel": "MAIN",
+  "mapperImports": [],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "6d248946d3f4fe7272f54105d438f65a7c8a8a283992fc90983fc33752e2d481",
+    "signedAt": "2026-09-03T00:36:02.738Z",
+    "pcodeLength": 98,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

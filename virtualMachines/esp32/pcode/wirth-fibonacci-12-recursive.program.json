@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-03T15:27:20.574Z",
+  "serviceId": "RecursiveFibonacci",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "RecursiveFibonacci",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-program",
+  "sourceLanguage": "pascalish",
+  "entries": [],
+  "localResources": {
+    "serviceId": "RecursiveFibonacci",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "routers": [],
+  "serviceEndpoints": [],
+  "globals": [],
+  "variableDeclarations": [],
+  "procedures": {
+    "PROC_PRINTFIBRANGE": {
+      "name": "PrintFibRange",
+      "params": [
+        "i",
+        "max",
+        "a",
+        "b"
+      ],
+      "locals": []
+    }
+  },
+  "typeDeclarations": [],
+  "classDeclarations": [],
+  "entryLabel": "MAIN",
+  "mapperImports": [],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "965fcb2a7af641ab64015a99fac1f3380d7e87360d94e9f7bb671f0460cac61a",
+    "signedAt": "2026-09-03T15:27:20.577Z",
+    "pcodeLength": 386,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

@@ -23,3 +23,5 @@ MAPPER "cbds-mt103-to-pacs008" SOURCE "swift-mt103" TARGET "pacs" DESCRIPTION "C
   MAP "finEnvelope.meta.createdAt" TO "Document.FIToFICstmrCdtTrf.GrpHdr.CreDtTm" USING "output := trim(src);";
 END;
 
+begin
+end.

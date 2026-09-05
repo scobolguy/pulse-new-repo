@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-03T00:21:02.562Z",
+  "serviceId": "FibonacciSmoke",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "FibonacciSmoke",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-program",
+  "sourceLanguage": "pascalish",
+  "globals": [
+    "counter",
+    "sum"
+  ],
+  "variableDeclarations": [
+    {
+      "type": "VarDecl",
+      "name": "counter",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "integer",
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "sum",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "integer",
+        "genericArgs": []
+      }
+    }
+  ],
+  "procedures": {},
+  "typeDeclarations": [],
+  "classDeclarations": [],
+  "entryLabel": "MAIN",
+  "mapperImports": [],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "0d94abf1cac2adc9465fc2d39ee08a99b6df1cef9ed111f5d988b5a761cbc131",
+    "signedAt": "2026-09-03T00:21:02.565Z",
+    "pcodeLength": 362,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

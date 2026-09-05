@@ -275,7 +275,7 @@ constexpr uint8_t OP_FDIV = 0x19;  // Floating-point divide
 // ADDITIONAL STACK OPCODES (0x22-0x25) - Already defined in spec
 // ============================================================================
 
-constexpr uint8_t OP_PUSH_REAL = 0x22;  // Push real literal
+// OP_PUSH_REAL lives in the main Opcode enum (0x57); the 0x22 value here collided with OP_PRINT.
 constexpr uint8_t OP_POP = 0x23;        // Discard top of stack
 constexpr uint8_t OP_DUP = 0x24;        // Duplicate top of stack
 constexpr uint8_t OP_SWAP = 0x25;       // Swap top two items

@@ -14,3 +14,6 @@ END;
 MAPPER "mt103-map" SOURCE envelope<swift-mt103> TARGET envelope<pacs008> DESCRIPTION "map payload" ENABLED TRUE BEGIN
   MAP "src.sender" TO "dst.sender";
 END;
+
+begin
+end.

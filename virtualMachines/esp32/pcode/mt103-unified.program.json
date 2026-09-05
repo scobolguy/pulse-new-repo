@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-03T14:15:11.382Z",
+  "serviceId": "MT103ToPACS008",
+  "runtimeUnit": {
+    "kind": "service",
+    "id": "MT103ToPACS008",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-service",
+  "sourceLanguage": "pascalish",
+  "entries": [
+    {
+      "kind": "mapper",
+      "id": "MT103_TO_PACS008",
+      "scope": "global",
+      "ownerServiceId": null,
+      "sourceTypeId": "MT103",
+      "targetTypeId": "PACS008",
+      "items": [
+        {
+          "sourcePath": "block4.20",
+          "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "block4.32A.amount",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+          "conversionRule": "output := mtamounttodecimal(src);"
+        }
+      ]
+    }
+  ],
+  "localResources": {
+    "serviceId": "MT103ToPACS008",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "routers": [
+    {
+      "type": "RouterDecl",
+      "id": "MT103ToPACS008-http",
+      "inputQueue": "MT103ToPACS008.in",
+      "outputs": [
+        {
+          "queueName": "MT103ToPACS008.out",
+          "whenRule": "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;",
+          "transformRule": "output := map(\"MT103_TO_PACS008\", src);"
+        }
+      ]
+    }
+  ],
+  "serviceEndpoints": [
+    {
+      "verb": "GET",
+      "path": "/convert",
+      "acceptsType": "MT103",
+      "returnsType": "PACS008",
+      "returnExpr": "map(\"MT103_TO_PACS008\", src)"
+    }
+  ],
+  "globals": [],
+  "variableDeclarations": [],
+  "procedures": {},
+  "typeDeclarations": [],
+  "classDeclarations": [],
+  "entryLabel": "MAIN",
+  "mapperImports": [],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "46a2f838d925234e1ba0c0db9e5b1c8c8fff4af5d0471b5a38c3b3364a82d897",
+    "signedAt": "2026-09-03T14:15:11.386Z",
+    "pcodeLength": 334,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

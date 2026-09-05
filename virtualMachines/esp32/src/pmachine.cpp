@@ -3,6 +3,7 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <set>
 #include <ArduinoJson.h>
 #include "pmachine.h"
 #include "StringPool.h"
@@ -182,7 +183,8 @@ namespace {
             }
             if (!cursor.is<JsonObjectConst>()) return "";
             JsonObjectConst obj = cursor.as<JsonObjectConst>();
-            if (!obj[key.c_str()]) return "";
+            // isNull() rather than truthiness, so 0/false/"" resolve instead of reading as absent.
+            if (obj[key.c_str()].isNull()) return "";
             cursor = obj[key.c_str()];
             if (dot == std::string::npos) break;
             start = dot + 1;
@@ -224,8 +226,9 @@ namespace {
                 break;
             }
 
+            // to<JsonObject>() binds a new child; assigning a bare JsonObject() stores null.
             if (!current[key.c_str()].is<JsonObject>()) {
-                current[key.c_str()] = JsonObject();
+                current[key.c_str()].to<JsonObject>();
             }
             current = current[key.c_str()].as<JsonObject>();
             start = dot + 1;
@@ -557,11 +560,11 @@ namespace {
         return outValue;
     }
 
-    void handle_LIT(PMachine& vm, const PInstruction& instr, int* stack, int& sp, int& bp, int& pc) {
+    void handle_LIT(PMachine& vm, const PInstruction& instr, Value* stack, int& sp, int& bp, int& pc) {
         stack[sp++] = instr.value;
         ++pc;
     }
-    void handle_OPR(PMachine& vm, const PInstruction& instr, int* stack, int& sp, int& bp, int& pc) {
+    void handle_OPR(PMachine& vm, const PInstruction& instr, Value* stack, int& sp, int& bp, int& pc) {
         switch (instr.value) {
             case 0: // RET
                 sp = bp;
@@ -573,23 +576,23 @@ namespace {
                 ++pc;
                 break;
             case 2: // ADD
-                --sp; stack[sp-1] += stack[sp]; ++pc;
+                --sp; stack[sp-1] = static_cast<int>(stack[sp-1]) + static_cast<int>(stack[sp]); ++pc;
                 break;
             case 3: // SUB
-                --sp; stack[sp-1] -= stack[sp]; ++pc;
+                --sp; stack[sp-1] = static_cast<int>(stack[sp-1]) - static_cast<int>(stack[sp]); ++pc;
                 break;
             case 4: // MUL
-                --sp; stack[sp-1] *= stack[sp]; ++pc;
+                --sp; stack[sp-1] = static_cast<int>(stack[sp-1]) * static_cast<int>(stack[sp]); ++pc;
                 break;
             case 5: // DIV
-                --sp; stack[sp-1] /= stack[sp]; ++pc;
+                --sp; stack[sp-1] = static_cast<int>(stack[sp]) == 0 ? 0 : static_cast<int>(stack[sp-1]) / static_cast<int>(stack[sp]); ++pc;
                 break;
             default:
                 ++pc;
                 break;
         }
     }
-    void handle_LOD(PMachine& vm, const PInstruction& instr, int* stack, int& sp, int& bp, int& pc) {
+    void handle_LOD(PMachine& vm, const PInstruction& instr, Value* stack, int& sp, int& bp, int& pc) {
         auto base = [&](int l, int b) -> int {
             int b1 = b;
             while (l > 0) { b1 = stack[b1]; --l; }
@@ -598,7 +601,7 @@ namespace {
         stack[sp++] = stack[base(instr.level, bp) + instr.address];
         ++pc;
     }
-    void handle_STO(PMachine& vm, const PInstruction& instr, int* stack, int& sp, int& bp, int& pc) {
+    void handle_STO(PMachine& vm, const PInstruction& instr, Value* stack, int& sp, int& bp, int& pc) {
         auto base = [&](int l, int b) -> int {
             int b1 = b;
             while (l > 0) { b1 = stack[b1]; --l; }
@@ -607,7 +610,7 @@ namespace {
         stack[base(instr.level, bp) + instr.address] = stack[--sp];
         ++pc;
     }
-    void handle_CAL(PMachine& vm, const PInstruction& instr, int* stack, int& sp, int& bp, int& pc) {
+    void handle_CAL(PMachine& vm, const PInstruction& instr, Value* stack, int& sp, int& bp, int& pc) {
         stack[sp] = 0; // static link (filled below)
         stack[sp+1] = bp; // dynamic link
         stack[sp+2] = pc + 1; // return address
@@ -621,22 +624,22 @@ namespace {
         bp = sp;
         pc = instr.address;
     }
-    void handle_INT(PMachine&, const PInstruction& instr, int* /*stack*/, int& sp, int& /*bp*/, int& pc) {
+    void handle_INT(PMachine&, const PInstruction& instr, Value* /*stack*/, int& sp, int& /*bp*/, int& pc) {
         sp += instr.value;
         ++pc;
     }
-    void handle_JMP(PMachine&, const PInstruction& instr, int* /*stack*/, int& /*sp*/, int& /*bp*/, int& pc) {
+    void handle_JMP(PMachine&, const PInstruction& instr, Value* /*stack*/, int& /*sp*/, int& /*bp*/, int& pc) {
         const int target = (instr.intOperand >= 0) ? instr.intOperand : instr.address;
         pc = target;
     }
-    void handle_JZ(PMachine&, const PInstruction& instr, int* stack, int& sp, int& /*bp*/, int& pc) {
+    void handle_JZ(PMachine&, const PInstruction& instr, Value* stack, int& sp, int& /*bp*/, int& pc) {
         const int target = (instr.intOperand >= 0) ? instr.intOperand : instr.address;
         if (stack[--sp] == 0) pc = target; else ++pc;
     }
-    void handle_HALT(PMachine&, const PInstruction&, int*, int&, int&, int&) {
+    void handle_HALT(PMachine&, const PInstruction&, Value*, int&, int&, int&) {
         // No-op: run() will exit after handler returns
     }
-    void handle_NOP(PMachine&, const PInstruction&, int*, int&, int&, int& pc) {
+    void handle_NOP(PMachine&, const PInstruction&, Value*, int&, int&, int& pc) {
         ++pc;
     }
 }
@@ -979,9 +982,9 @@ bool PMachine::unloadUnit() {
     decltype(programImage)().swap(programImage);
     decltype(pageTable)().swap(pageTable);
     decltype(frames)().swap(frames);
-    decltype(routingDeliveries)().swap(routingDeliveries);
-    decltype(lastRunTextOutput)().swap(lastRunTextOutput);
     namedStringVariables.clear();
+    namedRealVariables.clear();
+    namedEnumVariables.clear();
     clearProcedureSignatures();
     std::string().swap(currentInputQueue);
     std::string().swap(currentMessage);
@@ -1125,6 +1128,28 @@ void PMachine::setBreakpoint(uint16_t) {}
 void PMachine::clearBreakpoint(uint16_t) {}
 void PMachine::clearAllBreakpoints() {}
 
+// Extracts the first double-quoted literal, honouring \" and \\ escapes like the JS parser.
+static bool extractQuotedLiteral(const std::string& text, std::string& out) {
+    const size_t open = text.find('"');
+    if (open == std::string::npos) return false;
+
+    out.clear();
+    for (size_t i = open + 1; i < text.size(); ++i) {
+        const char c = text[i];
+        if (c == '\\' && (i + 1) < text.size()) {
+            const char next = text[i + 1];
+            if (next == '"' || next == '\\') {
+                out.push_back(next);
+                ++i;
+                continue;
+            }
+        }
+        if (c == '"') return true;
+        out.push_back(c);
+    }
+    return false;
+}
+
 // Standalone loader function (inside pmachine namespace, fully qualified types)
 std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
     std::vector<pmachine::PInstruction> instructions;
@@ -1187,10 +1212,9 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
         if (opcode == pmachine::OP_PUSH_STR) {
             std::string rest2;
             std::getline(lss, rest2);
-            size_t q1 = rest2.find('"');
-            size_t q2 = rest2.find('"', q1 + 1);
-            if (q1 != std::string::npos && q2 != std::string::npos && q2 > q1) {
-                instr.strOperand = rest2.substr(q1 + 1, q2 - q1 - 1);
+            std::string literal;
+            if (extractQuotedLiteral(rest2, literal)) {
+                instr.strOperand = literal;
                 instr.type = pmachine::OperandType::STRING;
             }
         } else if (opcode == pmachine::OP_PUSH_INT) {
@@ -1198,6 +1222,11 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
             lss >> value;
             instr.intOperand = value;
             instr.type = pmachine::OperandType::INT;
+        } else if (opcode == pmachine::OP_PUSH_REAL) {
+            std::string rest2;
+            std::getline(lss, rest2);
+            instr.strOperand = trimCopy(rest2);
+            instr.type = pmachine::OperandType::STRING;
         } else if (opcode == pmachine::OP_PUSH_ENUM) {
             std::string enumType, enumValue;
             lss >> enumType >> enumValue;
@@ -1211,10 +1240,9 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
                    opcode == pmachine::OP_ORCH_RETURN_SUCCESS) {
             std::string rest2;
             std::getline(lss, rest2);
-            size_t q1 = rest2.find('"');
-            size_t q2 = rest2.find('"', q1 + 1);
-            if (q1 != std::string::npos && q2 != std::string::npos && q2 > q1) {
-                instr.strOperand = rest2.substr(q1 + 1, q2 - q1 - 1);
+            std::string literal;
+            if (extractQuotedLiteral(rest2, literal)) {
+                instr.strOperand = literal;
                 instr.type = pmachine::OperandType::STRING;
             }
         } else if (opcode == pmachine::OP_JMP || opcode == pmachine::OP_JZ) {
@@ -1229,7 +1257,10 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
             instr.strOperand = name;
             instr.type = pmachine::OperandType::STRING;
         } else if ((opcode >= pmachine::OP_FORK && opcode <= pmachine::OP_ROUTE_FILE) ||
-                   opcode == pmachine::OP_MAP) {
+                   opcode == pmachine::OP_MAP ||
+                   opcode == pmachine::OP_REC_NEW || opcode == pmachine::OP_REC_SET ||
+                   opcode == pmachine::OP_REC_GET ||
+                   (opcode >= pmachine::OP_SET_NEW && opcode <= pmachine::OP_SET_DIFF)) {
             std::string operands;
             std::getline(lss, operands);
             instr.strOperand = trimCopy(operands);
@@ -1288,12 +1319,13 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
 }
 
 void PMachine::run(const std::vector<PInstruction>& instructions) {
-    static const size_t MAX_RUN_STEPS = 20000;
-    static const int STACK_SIZE = 1024;
+    static const size_t MAX_RUN_STEPS = 200000;
+    static const int STACK_SIZE = 512;
     static const size_t MAX_NAME_FRAME_DEPTH = 128;
     static const size_t INITIAL_NAME_FRAME_CAPACITY = 8;
-    int stack[STACK_SIZE] = {0};
-    std::vector<std::string> strStack;
+    Value stack[STACK_SIZE];
+    // Backing store for StringRef values; freed wholesale when the run ends.
+    std::vector<std::string> stringPool;
     using NameBinding = std::pair<std::string, int>;
     using NameFrame = std::vector<NameBinding>;
     std::vector<NameFrame> nameFrames;
@@ -1307,7 +1339,9 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
     nameCallStack.reserve(INITIAL_NAME_FRAME_CAPACITY);
     std::string currentOutputLine;
     std::vector<std::string>& outputLines = lastRunTextOutput;
-    outputLines.clear();
+    // Reclaim the previous run's result capacity here; the results themselves must
+    // outlive run() so callers can read them.
+    decltype(lastRunTextOutput)().swap(lastRunTextOutput);
     auto emitOutputLine = [&](const std::string& line) {
         if (textOutputHook) {
             textOutputHook(line, textOutputContext);
@@ -1329,6 +1363,9 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
     std::map<std::string, IntCollection> queues;
     std::map<std::string, IntCollection> stacks;
     std::map<std::string, IntCollection> priorityQueues;
+    std::map<std::string, std::map<std::string, Value>> records;
+    // Pascal sets: ordered, duplicate-free ordinal members.
+    std::map<std::string, std::set<int>> sets;
     std::map<int, bool> tasks;
     std::map<int, FileSession> files;
     int nextTaskId = 1;
@@ -1340,6 +1377,66 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
     int sp = 0;
     int bp = 0;
     int pc = 0;
+
+    auto stringAt = [&](const Value& value) -> std::string {
+        if (value.kind == ValueKind::StringRef) {
+            return value.handle < stringPool.size() ? stringPool[value.handle] : std::string();
+        }
+        if (value.kind == ValueKind::EnumRef) {
+            return getEnumValueName(value.handle, value.i);
+        }
+        if (value.kind == ValueKind::Real) {
+            // Pascal-style scientific form; 7 significant digits matches float precision.
+            char buf[32] = {0};
+            snprintf(buf, sizeof(buf), "%.6E", static_cast<double>(value.r));
+            return std::string(buf);
+        }
+        return std::to_string(value.i);
+    };
+
+    auto pushString = [&](const std::string& text) {
+        if (sp >= STACK_SIZE) {
+            gFlowState["__runtime_error"] = "stack overflow";
+            return;
+        }
+        stringPool.push_back(text);
+        stack[sp++] = Value::makeString(static_cast<uint16_t>(stringPool.size() - 1));
+    };
+
+    // depth 1 is the top of stack, 2 the value beneath it.
+    auto isStringAtDepth = [&](int depth) -> bool {
+        return sp >= depth && stack[sp - depth].isString();
+    };
+
+    auto popString = [&]() -> std::string {
+        if (sp <= 0) return std::string();
+        return stringAt(stack[--sp]);
+    };
+
+    auto jsonQuote = [&](const std::string& text) -> std::string {
+        std::string out = "\"";
+        for (char c : text) {
+            if (c == '"' || c == '\\') { out += '\\'; out += c; }
+            else if (c == '\n') out += "\\n";
+            else if (c == '\r') out += "\\r";
+            else if (c == '\t') out += "\\t";
+            else out += c;
+        }
+        out += '"';
+        return out;
+    };
+
+    auto valueToJson = [&](const Value& value) -> std::string {
+        if (value.kind == ValueKind::StringRef || value.kind == ValueKind::EnumRef) {
+            return jsonQuote(stringAt(value));
+        }
+        if (value.kind == ValueKind::Real) {
+            char buf[32] = {0};
+            snprintf(buf, sizeof(buf), "%.6E", static_cast<double>(value.r));
+            return std::string(buf);
+        }
+        return std::to_string(value.i);
+    };
 
     auto resolveName = [&](const std::string& key) -> int {
         for (auto it = nameFrames.rbegin(); it != nameFrames.rend(); ++it) {
@@ -1365,7 +1462,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
 
     auto resolveIntToken = [&](const std::string& token) -> int {
         const std::string value = trimCopy(token);
-        if (value.empty()) return sp > 0 ? stack[--sp] : 0;
+        if (value.empty()) return sp > 0 ? static_cast<int>(stack[--sp]) : 0;
         char* end = nullptr;
         const long parsed = strtol(value.c_str(), &end, 10);
         if (end != value.c_str() && end != nullptr && *end == '\0') return static_cast<int>(parsed);
@@ -1491,7 +1588,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
         });
 
         if (instr.opcode == OP_PUSH_STR) {
-            strStack.push_back(instr.strOperand);
+            pushString(instr.strOperand);
             ++pc;
             continue;
         }
@@ -1506,34 +1603,89 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             continue;
         }
         if (instr.opcode == OP_PUSH_ENUM) {
-            int value = -1;
-            if (enumManager != nullptr) {
-                value = enumManager->getValue(instr.enumType, instr.strOperand);
-            }
             if (sp >= STACK_SIZE) {
                 gFlowState["__runtime_error"] = "stack overflow";
                 break;
             }
-            stack[sp++] = value;
+            const uint16_t typeIndex = getEnumTypeIndex(instr.enumType);
+            const int ordinal = getEnumOrdinal(typeIndex, instr.strOperand);
+            if (typeIndex == 0xFFFF || ordinal < 0) {
+                gFlowState["__enum_error"] = std::string("Unknown enum value: ") + instr.enumType + "." + instr.strOperand;
+                stack[sp++] = -1;
+            } else {
+                stack[sp++] = Value::makeEnum(typeIndex, ordinal);
+            }
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_PUSH_REAL) {
+            if (sp >= STACK_SIZE) {
+                gFlowState["__runtime_error"] = "stack overflow";
+                break;
+            }
+            stack[sp++] = Value::makeReal(strtof(instr.strOperand.c_str(), nullptr));
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_RDIV) {
+            if (sp >= 2) {
+                const Value rhs = stack[--sp];
+                const Value lhs = stack[sp - 1];
+                const float divisor = rhs.asReal();
+                stack[sp - 1] = Value::makeReal(divisor == 0.0f ? 0.0f : lhs.asReal() / divisor);
+            }
             ++pc;
             continue;
         }
         if (instr.opcode == OP_ADD || instr.opcode == OP_SUB || instr.opcode == OP_MUL || instr.opcode == OP_DIV) {
             if (sp >= 2) {
-                int rhs = stack[--sp];
-                int lhs = stack[sp - 1];
-                if (instr.opcode == OP_ADD) stack[sp - 1] = lhs + rhs;
-                if (instr.opcode == OP_SUB) stack[sp - 1] = lhs - rhs;
-                if (instr.opcode == OP_MUL) stack[sp - 1] = lhs * rhs;
-                if (instr.opcode == OP_DIV) stack[sp - 1] = (rhs == 0 ? 0 : lhs / rhs);
+                const Value rhsValue = stack[--sp];
+                const Value lhsValue = stack[sp - 1];
+                // Either operand being real promotes the whole expression, Pascal-style.
+                if (rhsValue.isReal() || lhsValue.isReal()) {
+                    const float lhs = lhsValue.asReal();
+                    const float rhs = rhsValue.asReal();
+                    float out = 0.0f;
+                    if (instr.opcode == OP_ADD) out = lhs + rhs;
+                    if (instr.opcode == OP_SUB) out = lhs - rhs;
+                    if (instr.opcode == OP_MUL) out = lhs * rhs;
+                    if (instr.opcode == OP_DIV) out = (rhs == 0.0f) ? 0.0f : static_cast<float>(static_cast<int32_t>(lhs / rhs));
+                    stack[sp - 1] = Value::makeReal(out);
+                } else {
+                    const int rhs = rhsValue;
+                    const int lhs = lhsValue;
+                    if (instr.opcode == OP_ADD) stack[sp - 1] = lhs + rhs;
+                    if (instr.opcode == OP_SUB) stack[sp - 1] = lhs - rhs;
+                    if (instr.opcode == OP_MUL) stack[sp - 1] = lhs * rhs;
+                    if (instr.opcode == OP_DIV) stack[sp - 1] = (rhs == 0 ? 0 : lhs / rhs);
+                }
             }
             ++pc;
             continue;
         }
         if (instr.opcode == OP_EQ || instr.opcode == OP_NEQ || instr.opcode == OP_LT || instr.opcode == OP_LE || instr.opcode == OP_GT || instr.opcode == OP_GE) {
+            // Two pending strings compare lexicographically; otherwise fall back to integers.
+            if (isStringAtDepth(1) && isStringAtDepth(2)) {
+                const std::string rhs = popString();
+                const std::string lhs = popString();
+                const int cmp = lhs.compare(rhs);
+                int truth = 0;
+                if (instr.opcode == OP_EQ) truth = (cmp == 0) ? 1 : 0;
+                if (instr.opcode == OP_NEQ) truth = (cmp != 0) ? 1 : 0;
+                if (instr.opcode == OP_LT) truth = (cmp < 0) ? 1 : 0;
+                if (instr.opcode == OP_LE) truth = (cmp <= 0) ? 1 : 0;
+                if (instr.opcode == OP_GT) truth = (cmp > 0) ? 1 : 0;
+                if (instr.opcode == OP_GE) truth = (cmp >= 0) ? 1 : 0;
+                if (sp < STACK_SIZE) stack[sp++] = truth;
+                ++pc;
+                continue;
+            }
             if (sp >= 2) {
-                int rhs = stack[--sp];
-                int lhs = stack[sp - 1];
+                const Value rhsValue = stack[--sp];
+                const Value lhsValue = stack[sp - 1];
+                const bool asReal = rhsValue.isReal() || lhsValue.isReal();
+                const float rhs = asReal ? rhsValue.asReal() : static_cast<float>(static_cast<int>(rhsValue));
+                const float lhs = asReal ? lhsValue.asReal() : static_cast<float>(static_cast<int>(lhsValue));
                 int truth = 0;
                 if (instr.opcode == OP_EQ) truth = (lhs == rhs) ? 1 : 0;
                 if (instr.opcode == OP_NEQ) truth = (lhs != rhs) ? 1 : 0;
@@ -1547,18 +1699,16 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             continue;
         }
         if (instr.opcode == OP_TRIM) {
-            if (!strStack.empty()) {
-                std::string str = strStack.back();
-                strStack.pop_back();
-                strStack.push_back(trimCopy(str));
+            if (isStringAtDepth(1)) {
+                const std::string str = popString();
+                pushString(trimCopy(str));
             }
             ++pc;
             continue;
         }
         if (instr.opcode == OP_PARSE_INT) {
-            if (!strStack.empty()) {
-                std::string str = strStack.back();
-                strStack.pop_back();
+            if (isStringAtDepth(1)) {
+                const std::string str = popString();
                 // Try to parse as integer
                 char* endptr = nullptr;
                 long value = strtol(trimCopy(str).c_str(), &endptr, 10);
@@ -1599,9 +1749,9 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             continue;
         }
         if (instr.opcode == OP_STREQ || instr.opcode == OP_STRNEQ) {
-            if (strStack.size() >= 2) {
-                std::string rhs = strStack.back(); strStack.pop_back();
-                std::string lhs = strStack.back(); strStack.pop_back();
+            if (isStringAtDepth(1) && isStringAtDepth(2)) {
+                const std::string rhs = popString();
+                const std::string lhs = popString();
                 int eq = (lhs == rhs) ? 1 : 0;
                 if (sp >= STACK_SIZE) break;
                 stack[sp++] = (instr.opcode == OP_STREQ) ? eq : (1 - eq);
@@ -1611,15 +1761,24 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
         }
         if (instr.opcode == OP_LOAD_NAME) {
             const std::string varName = instr.strOperand;
-            // Check if this is a string-valued named variable like 'src'
-            std::string strValue = getNamedStringVariable(varName);
-            if (!strValue.empty() || varName == "src") {
-                // Push string-valued variable onto string stack
-                if (strValue.empty() && varName == "src") {
-                    strStack.push_back(currentMessage);
-                } else {
-                    strStack.push_back(strValue);
+            // Dispatch on binding presence, not value emptiness, so "" stays a string.
+            auto strBinding = namedStringVariables.find(varName);
+            if (strBinding != namedStringVariables.end()) {
+                pushString(strBinding->second);
+            } else if (namedRealVariables.count(varName) > 0) {
+                if (sp >= STACK_SIZE) {
+                    gFlowState["__runtime_error"] = "stack overflow";
+                    break;
                 }
+                stack[sp++] = Value::makeReal(namedRealVariables[varName]);
+            } else if (namedEnumVariables.count(varName) > 0) {
+                if (sp >= STACK_SIZE) {
+                    gFlowState["__runtime_error"] = "stack overflow";
+                    break;
+                }
+                stack[sp++] = namedEnumVariables[varName];
+            } else if (varName == "src") {
+                pushString(currentMessage);
             } else {
                 // Push integer-valued variable onto integer stack
                 if (sp >= STACK_SIZE) {
@@ -1633,8 +1792,21 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             continue;
         }
         if (instr.opcode == OP_STORE_NAME) {
-            if (sp > 0) {
+            // String stack wins, matching OP_PRINT precedence, so TRIM/FILE_READ results survive STORE.
+            if (isStringAtDepth(1)) {
+                namedStringVariables[instr.strOperand] = popString();
+                namedRealVariables.erase(instr.strOperand);
+            } else if (sp > 0 && stack[sp - 1].isReal()) {
+                namedRealVariables[instr.strOperand] = stack[--sp].asReal();
+                namedStringVariables.erase(instr.strOperand);
+                namedEnumVariables.erase(instr.strOperand);
+            } else if (sp > 0 && stack[sp - 1].isEnum()) {
+                namedEnumVariables[instr.strOperand] = stack[--sp];
+                namedStringVariables.erase(instr.strOperand);
+                namedRealVariables.erase(instr.strOperand);
+            } else if (sp > 0) {
                 int value = stack[--sp];
+                namedStringVariables.erase(instr.strOperand);
                 assignName(instr.strOperand, value);
             }
             ++pc;
@@ -1699,12 +1871,9 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             continue;
         }
         if (instr.opcode == OP_PRINT) {
-            if (!strStack.empty()) {
-                currentOutputLine += strStack.back();
-                strStack.pop_back();
-            } else if (sp > 0) {
-                int v = stack[--sp];
-                currentOutputLine += std::to_string(v);
+            if (sp > 0) {
+                // stringAt formats each kind, so reals print in Pascal scientific form.
+                currentOutputLine += stringAt(stack[--sp]);
             }
             ++pc;
             continue;
@@ -1726,8 +1895,87 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
         }
         if (instr.opcode == OP_PRINT_ENUM) {
             if (sp > 0) {
-                int v = stack[--sp];
-                PMTRACE({ Serial.print("[PRINT_ENUM] "); Serial.println(v); });
+                currentOutputLine += stringAt(stack[--sp]);
+            }
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_ORD) {
+            if (sp > 0) {
+                const Value top = stack[--sp];
+                stack[sp++] = top.isEnum() ? top.i : static_cast<int>(top);
+            }
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_REC_NEW) {
+            records[trimCopy(instr.strOperand)].clear();
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_REC_SET) {
+            const auto args = splitOperands(instr.strOperand);
+            if (args.size() >= 2 && sp > 0) {
+                records[trimCopy(args[0])][unquote(args[1])] = stack[--sp];
+            }
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_REC_GET) {
+            const auto args = splitOperands(instr.strOperand);
+            Value out;
+            if (args.size() >= 2) {
+                auto record = records.find(trimCopy(args[0]));
+                if (record != records.end()) {
+                    auto field = record->second.find(unquote(args[1]));
+                    if (field != record->second.end()) out = field->second;
+                }
+            }
+            if (sp < STACK_SIZE) stack[sp++] = out;
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_SET_NEW) {
+            sets[trimCopy(instr.strOperand)].clear();
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_SET_ADD) {
+            const auto args = splitOperands(instr.strOperand);
+            if (!args.empty()) {
+                const int member = args.size() >= 2 ? resolveIntToken(args[1]) : (sp > 0 ? static_cast<int>(stack[--sp]) : 0);
+                sets[trimCopy(args[0])].insert(member);
+            }
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_SET_IN) {
+            const auto args = splitOperands(instr.strOperand);
+            int present = 0;
+            if (!args.empty()) {
+                const int member = args.size() >= 2 ? resolveIntToken(args[1]) : (sp > 0 ? static_cast<int>(stack[--sp]) : 0);
+                auto found = sets.find(trimCopy(args[0]));
+                present = (found != sets.end() && found->second.count(member) > 0) ? 1 : 0;
+            }
+            if (sp < STACK_SIZE) stack[sp++] = present;
+            ++pc;
+            continue;
+        }
+        if (instr.opcode == OP_SET_UNION || instr.opcode == OP_SET_INTERSECT || instr.opcode == OP_SET_DIFF) {
+            const auto args = splitOperands(instr.strOperand);
+            if (args.size() >= 3) {
+                const std::set<int>& lhs = sets[trimCopy(args[0])];
+                const std::set<int>& rhs = sets[trimCopy(args[1])];
+                std::set<int> out;
+                if (instr.opcode == OP_SET_UNION) {
+                    out = lhs;
+                    out.insert(rhs.begin(), rhs.end());
+                } else if (instr.opcode == OP_SET_INTERSECT) {
+                    for (int member : lhs) if (rhs.count(member) > 0) out.insert(member);
+                } else {
+                    for (int member : lhs) if (rhs.count(member) == 0) out.insert(member);
+                }
+                sets[trimCopy(args[2])] = out;
             }
             ++pc;
             continue;
@@ -1770,9 +2018,8 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             continue;
         }
         if (instr.opcode == OP_ROUTE_SET_MESSAGE) {
-            if (!strStack.empty()) {
-                currentMessage = strStack.back();
-                strStack.pop_back();
+            if (isStringAtDepth(1)) {
+                currentMessage = popString();
             } else if (sp > 0) {
                 int v = stack[--sp];
                 currentMessage = std::to_string(v);
@@ -1914,7 +2161,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
                 }
             }
             const std::string target = args.size() > 1 ? trimCopy(args[1]) : "$PUSH";
-            if (target == "$PUSH") strStack.push_back(value);
+            if (target == "$PUSH") pushString(value);
             else namedStringVariables[target] = value;
             ++pc;
             continue;
@@ -1943,7 +2190,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             }
             currentMessage = mapped;
             if (args.size() > 2) namedStringVariables[trimCopy(args[2])] = mapped;
-            else strStack.push_back(mapped);
+            else pushString(mapped);
             ++pc;
             continue;
         }
@@ -2088,6 +2335,61 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
     if (!currentOutputLine.empty()) {
         emitOutputLine(currentOutputLine);
     }
+    lastRunGlobals.clear();
+    if (!nameFrames.empty()) {
+        for (const auto& binding : nameFrames.front()) {
+            GlobalValue value;
+            value.intValue = binding.second;
+            lastRunGlobals[binding.first] = value;
+        }
+    }
+    for (const auto& entry : namedStringVariables) {
+        GlobalValue value;
+        value.isString = true;
+        value.strValue = entry.second;
+        lastRunGlobals[entry.first] = value;
+    }
+    for (const auto& entry : namedRealVariables) {
+        GlobalValue value;
+        value.isReal = true;
+        value.realValue = entry.second;
+        lastRunGlobals[entry.first] = value;
+    }
+    for (const auto& entry : namedEnumVariables) {
+        GlobalValue value;
+        value.isEnum = true;
+        value.intValue = entry.second.i;
+        value.strValue = getEnumValueName(entry.second.handle, entry.second.i);
+        lastRunGlobals[entry.first] = value;
+    }
+    for (const auto& record : records) {
+        std::string json = "{";
+        bool first = true;
+        for (const auto& field : record.second) {
+            if (!first) json += ",";
+            json += jsonQuote(field.first) + ":" + valueToJson(field.second);
+            first = false;
+        }
+        json += "}";
+        GlobalValue value;
+        value.isJson = true;
+        value.strValue = json;
+        lastRunGlobals[record.first] = value;
+    }
+    for (const auto& setEntry : sets) {
+        std::string json = "[";
+        bool firstMember = true;
+        for (int member : setEntry.second) {
+            if (!firstMember) json += ",";
+            json += std::to_string(member);
+            firstMember = false;
+        }
+        json += "]";
+        GlobalValue value;
+        value.isJson = true;
+        value.strValue = json;
+        lastRunGlobals[setEntry.first] = value;
+    }
     lastRunStepCount = steps;
     running = false;
     if (runtimeUnit.kind == RuntimeUnitKind::Program) {
@@ -2110,5 +2412,49 @@ const std::vector<std::string>& PMachine::getLastRunTextOutput() const {
 
 std::map<std::string, std::string> PMachine::getFlowStateSnapshot() const {
     return gFlowState;
+}
+
+std::map<std::string, GlobalValue> PMachine::getGlobalsSnapshot() const {
+    return lastRunGlobals;
+}
+
+uint16_t PMachine::registerEnumType(const std::string& typeName, const std::vector<std::string>& values) {
+    for (size_t i = 0; i < enumTypeNames.size(); ++i) {
+        if (enumTypeNames[i] == typeName) {
+            enumTypeValues[i] = values;
+            return static_cast<uint16_t>(i);
+        }
+    }
+    enumTypeNames.push_back(typeName);
+    enumTypeValues.push_back(values);
+    return static_cast<uint16_t>(enumTypeNames.size() - 1);
+}
+
+uint16_t PMachine::getEnumTypeIndex(const std::string& typeName) const {
+    for (size_t i = 0; i < enumTypeNames.size(); ++i) {
+        if (enumTypeNames[i] == typeName) return static_cast<uint16_t>(i);
+    }
+    return 0xFFFF;
+}
+
+int PMachine::getEnumOrdinal(uint16_t typeIndex, const std::string& valueName) const {
+    if (typeIndex >= enumTypeValues.size()) return -1;
+    const auto& values = enumTypeValues[typeIndex];
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (values[i] == valueName) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+std::string PMachine::getEnumValueName(uint16_t typeIndex, int ordinal) const {
+    if (typeIndex >= enumTypeValues.size()) return std::string();
+    const auto& values = enumTypeValues[typeIndex];
+    if (ordinal < 0 || static_cast<size_t>(ordinal) >= values.size()) return std::string();
+    return values[ordinal];
+}
+
+void PMachine::clearEnumTypes() {
+    enumTypeNames.clear();
+    enumTypeValues.clear();
 }
 }

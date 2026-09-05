@@ -3,7 +3,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createNewDocumentFileName, DOCUMENT_TYPES, getDocumentTypeByFileName, getDocumentTypeById, normalizeDocumentFileName } from '../documentRegistry.js';
 import { compileRouterMapperDSL } from '../../scripts/compile-pascal.mjs';
-import { compileCobolishWithAntlr } from '../../scripts/cobolish-antlr-compiler.mjs';
+import { compileCobolishToPmachine, compileVbishToPmachine } from '../../scripts/compile-interoperable-language.mjs';
+import { executeProgram, parsePcode } from '../../scripts/run-js-pmachine.mjs';
+import { loadOpcodeMap } from '../../scripts/pmachine-js-opcodes.mjs';
 import { validatePascalishSubschemaMappings } from '../librarianSchemaContracts.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -19,6 +21,29 @@ const runtimeRoot = path.resolve(
 );
 const workspaceRoot = path.join(runtimeRoot, 'develop-documents');
 const librarianSubschemasPath = path.join(runtimeRoot, 'services', 'librarian', 'subschemas.json');
+
+async function runCompiledPmachineArtifact(compiled) {
+  const programMap = compiled.programMap || {};
+  const mappingsById = new Map();
+  mappingsById.__globals = Array.isArray(programMap.globals) ? programMap.globals : [];
+  mappingsById.__proceduresByLabel = programMap.procedures || {};
+  const result = await executeProgram({
+    instructions: parsePcode(compiled.pcodeText),
+    opcodeMap: await loadOpcodeMap(),
+    mappingsById,
+    queueTypesByName: new Map(),
+    isoTypeIds: new Set(),
+    inputQueue: `${compiled.runtimeUnit?.id || 'language'}.run`,
+    sourceMessage: '',
+    runtimeContext: {}
+  });
+  return {
+    stdout: result?.stdout || [],
+    deliveries: result?.deliveries || [],
+    response: result?.response ?? null,
+    error: result?.error || null
+  };
+}
 
 async function loadLibrarianSubschemas() {
   try {
@@ -216,7 +241,7 @@ export async function registerDevelopDocumentRoutes(app) {
       const fileName = String(req.body?.fileName || '').trim();
       const fileType = getDocumentTypeByFileName(fileName);
       const languageId = fileType?.id || 'pascalish';
-      const supportedLanguages = new Set(['pascalish', 'cobolish']);
+      const supportedLanguages = new Set(['pascalish', 'cobolish', 'vbish']);
       if (!supportedLanguages.has(languageId)) {
         return applyJson(res, 400, { error: `Compile is not supported for ${languageId}.` });
       }
@@ -226,12 +251,14 @@ export async function registerDevelopDocumentRoutes(app) {
         sourceText = await readDocumentFile(fileName);
       }
       if (!sourceText.trim()) {
-        return applyJson(res, 400, { error: `No ${languageId === 'cobolish' ? 'COBOLISH' : 'Pascalish'} source content provided.` });
+        return applyJson(res, 400, { error: `No ${languageId.toUpperCase()} source content provided.` });
       }
 
       const compiled = languageId === 'cobolish'
-        ? compileCobolishWithAntlr(sourceText, { fileName })
-        : compileRouterMapperDSL(sourceText);
+        ? compileCobolishToPmachine(sourceText, { fileName })
+        : languageId === 'vbish'
+          ? compileVbishToPmachine(sourceText, { fileName })
+          : compileRouterMapperDSL(sourceText);
 
       if (languageId === 'pascalish') {
         const subschemaValidation = validatePascalishSubschemaMappings(
@@ -262,16 +289,14 @@ export async function registerDevelopDocumentRoutes(app) {
         }
       }
 
-      const compileSummary = languageId === 'cobolish'
+      const compileSummary = languageId === 'cobolish' || languageId === 'vbish'
         ? {
-            language: 'cobolish',
-            programId: compiled.programId,
-            sections: Array.isArray(compiled.sections) ? compiled.sections.length : 0,
-            paragraphs: Array.isArray(compiled.paragraphs) ? compiled.paragraphs.length : 0,
-            dataItems: Array.isArray(compiled.dataItems) ? compiled.dataItems.length : 0,
-            interop: Array.isArray(compiled.interop) ? compiled.interop.length : 0,
-            syntaxErrors: Number(compiled.syntaxErrorCount || 0),
-            valid: Boolean(compiled.valid),
+        language: languageId,
+        programId: compiled.runtimeUnit?.id || compiled.programId,
+        runtimeKind: compiled.runtimeUnit?.kind || 'program',
+        interop: Array.isArray(compiled.interoperability) ? compiled.interoperability.length : 0,
+        syntaxErrors: Number(compiled.native?.syntaxErrorCount || 0),
+        valid: true,
             compiledAt: compiled.compiledAt || new Date().toISOString()
           }
         : {
@@ -284,13 +309,14 @@ export async function registerDevelopDocumentRoutes(app) {
           };
 
       let deployed = false;
+      let run = null;
       if (mode === 'compile-run' || mode === 'compile-debug') {
-        const artifactOutPath = languageId === 'cobolish'
-          ? path.join(runtimeRoot, 'cobolish-compiled.json')
+        const artifactOutPath = languageId === 'cobolish' || languageId === 'vbish'
+          ? path.join(runtimeRoot, `${languageId}-compiled.json`)
           : path.join(runtimeRoot, 'router-mapper-compiled.json');
 
         await fs.mkdir(path.dirname(artifactOutPath), { recursive: true });
-        if (languageId === 'cobolish') {
+        if (languageId === 'cobolish' || languageId === 'vbish') {
           await fs.writeFile(artifactOutPath, `${JSON.stringify(compiled, null, 2)}\n`, 'utf-8');
         } else {
           const routerOutPath = path.join(runtimeRoot, 'router-rules.json');
@@ -300,6 +326,9 @@ export async function registerDevelopDocumentRoutes(app) {
           await fs.writeFile(artifactOutPath, `${JSON.stringify(compiled, null, 2)}\n`, 'utf-8');
         }
         deployed = true;
+        if ((languageId === 'cobolish' || languageId === 'vbish') && mode === 'compile-run') {
+          run = await runCompiledPmachineArtifact(compiled);
+        }
       }
 
       return applyJson(res, 200, {
@@ -308,6 +337,7 @@ export async function registerDevelopDocumentRoutes(app) {
         fileName,
         language: languageId,
         deployed,
+        run,
         compile: compileSummary,
         debug: mode === 'compile-debug'
           && languageId === 'pascalish'
@@ -318,7 +348,9 @@ export async function registerDevelopDocumentRoutes(app) {
           : null
       });
     } catch (error) {
-      return applyJson(res, 400, { error: error.message });
+      const requestId = `compile-${Date.now().toString(36)}`;
+      console.error(`[DevelopCompile:${requestId}]`, error?.stack || error);
+      return applyJson(res, 400, { error: error.message, requestId });
     }
   });
 }

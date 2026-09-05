@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-03T15:13:52.456Z",
+  "serviceId": "RecursiveFibonacci",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "RecursiveFibonacci",
+    "refreshMs": null
+  },
+  "executionModel": "standard-pascal",
+  "sourceLanguage": "pascal",
+  "globals": [],
+  "procedures": {
+    "PROC_PRINTFIBRANGE": {
+      "name": "PrintFibRange",
+      "params": [
+        "i",
+        "max",
+        "a",
+        "b"
+      ],
+      "locals": []
+    }
+  },
+  "entryLabel": "MAIN",
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "126174fe34eeab87625c0871407f8b7352087f6edb8f9c812e8d977de1385217",
+    "signedAt": "2026-09-03T15:13:52.457Z",
+    "pcodeLength": 391,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

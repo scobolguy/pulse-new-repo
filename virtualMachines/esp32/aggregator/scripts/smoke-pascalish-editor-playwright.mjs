@@ -1,5 +1,19 @@
 import { chromium } from 'playwright';
 
+// The default Pascalish demo is router/daemon-only (no executable begin...end.
+// block), so the Single Step portion of this test replaces the editor content
+// with a minimal program + procedure call before exercising Single Step.
+const sampleProgram = [
+  'program demo;',
+  'procedure announce();',
+  'begin',
+  "  writeln('PAYMENTS READY');",
+  'end;',
+  'begin',
+  '  announce();',
+  'end.'
+].join('\n');
+
 async function run() {
   const targetUrl = process.argv[2] || 'http://127.0.0.1:5173/';
   const browser = await chromium.launch({ headless: true });
@@ -7,43 +21,34 @@ async function run() {
   const result = { steps: [] };
 
   try {
-    await page.goto(targetUrl, {
+    await page.goto(new URL('/pascalish', targetUrl).href, {
       waitUntil: 'domcontentloaded',
       timeout: 20000,
     });
-    result.steps.push('loaded-home');
-
-    await page.getByRole('button', { name: /data librarian/i }).first().click({ timeout: 10000 });
-    result.steps.push('clicked-data-librarian');
-
-    await page.getByRole('button', { name: /pascalish editor/i }).first().click({ timeout: 10000 });
-    result.steps.push('opened-pascalish-editor');
+    result.steps.push('loaded-pascalish');
 
     await page.waitForSelector('.monaco-editor', { timeout: 15000 });
     result.steps.push('monaco-mounted');
 
-    await page.click('.monaco-editor', { timeout: 10000 });
-    await page.keyboard.type('\nVAR smokeTyped : LegacyMT103 FROM Librarian;');
-    result.steps.push('typed-in-editor');
+    await page.getByRole('button', { name: 'Compile', exact: true }).click({ timeout: 10000 });
+    await page.getByText(/Compiled: \d+ router\(s\), \d+ mapping\(s\)\./).waitFor({ timeout: 15000 });
+    result.steps.push('compiled-pascalish');
 
-    await page.keyboard.press('Control+Space');
-    await page.waitForTimeout(600);
+    await page.locator('.monaco-editor').first().click({ timeout: 10000 });
+    await page.keyboard.press('Control+A');
+    await page.keyboard.type(sampleProgram);
+    result.steps.push('replaced-sample-for-stepping');
 
-    const suggestVisible = await page
-      .locator('.suggest-widget')
-      .first()
-      .isVisible()
-      .catch(() => false);
-    result.steps.push(suggestVisible ? 'suggestions-visible' : 'suggestions-not-visible');
+    const stepButton = page.getByRole('button', { name: 'Single Step', exact: true });
+    await stepButton.click({ timeout: 10000 }); // announce(); -> PERFORM, opens tab
+    await page.getByRole('tab', { name: 'announce', exact: true }).waitFor({ timeout: 10000 });
+    result.steps.push('stepped-into-announce-tab');
 
-    const statusText = await page
-      .locator('span')
-      .filter({ hasText: /Librarian data types/i })
-      .first()
-      .textContent()
-      .catch(() => null);
+    await stepButton.click({ timeout: 10000 }); // writeln('PAYMENTS READY'); -> DISPLAY
+    await page.getByTestId('pascalish-step-log').filter({ hasText: 'DISPLAY: PAYMENTS READY' }).waitFor({ timeout: 10000 });
+    result.steps.push('stepped-display');
 
-    console.log(JSON.stringify({ ok: true, ...result, statusText }, null, 2));
+    console.log(JSON.stringify({ ok: true, ...result }, null, 2));
   } catch (err) {
     console.log(
       JSON.stringify(

@@ -59,8 +59,73 @@ function normalizeRuntimeUnit(runtimeUnit, fallbackServiceId = 'default-router-s
   return { kind, id, refreshMs };
 }
 
+// Must match MAX_RUN_STEPS in src/pmachine.cpp: a program that trips the limit on one
+// runtime has to trip it identically on the other.
+const MAX_RUN_STEPS = 200000;
+
 function trimCopy(s) {
   return String(s || '').trim();
+}
+
+// JS cannot distinguish the real 2.0 from the integer 2, so reals carry a tag.
+// Values are held at float32 precision to match the ESP32 runtime.
+class PReal {
+  constructor(value) {
+    this.v = Math.fround(Number(value) || 0);
+  }
+}
+
+function isReal(value) {
+  return value instanceof PReal;
+}
+
+// Enum values carry their type and ordinal so they print by name and compare by ordinal.
+class PEnum {
+  constructor(typeName, ordinal, name) {
+    this.typeName = typeName;
+    this.ordinal = ordinal;
+    this.name = name;
+  }
+}
+
+function isEnum(value) {
+  return value instanceof PEnum;
+}
+
+function numberOf(value) {
+  if (value instanceof PReal) return value.v;
+  if (value instanceof PEnum) return value.ordinal;
+  return Number(value || 0);
+}
+
+// Pascal-style scientific form at 7 significant digits, matching printf("%.6E").
+function formatReal(value) {
+  const text = Math.fround(value).toExponential(6).toUpperCase();
+  return text.replace(/E([+-])(\d)$/, 'E$10$2');
+}
+
+// Reals are observable at 7 significant digits so both runtimes report identical numbers.
+function observableValue(value) {
+  if (isReal(value)) return Number(formatReal(value.v));
+  if (isEnum(value)) return value.name;
+  return value;
+}
+
+function exportGlobals(vars, records, sets) {
+  const out = {};
+  for (const [name, value] of Object.entries(vars || {})) {
+    out[name] = observableValue(value);
+  }
+  for (const [name, fields] of (records || new Map())) {
+    const record = {};
+    for (const [field, value] of fields) record[field] = observableValue(value);
+    out[name] = record;
+  }
+  // Sets are observable as ascending member arrays, matching the device ordering.
+  for (const [name, members] of (sets || new Map())) {
+    out[name] = [...members].sort((a, b) => a - b);
+  }
+  return out;
 }
 
 function toUpperCopy(s) {
@@ -269,10 +334,8 @@ function parseSwiftFinText(text, sourceParsing = null) {
     const val = trimCopy(currentValue);
     if (currentTag === '32A') {
       result.block4['32A'] = parse32AField(val);
-      result.block4.field32A = result.block4['32A'];
     } else {
       result.block4[currentTag] = val;
-      result.block4[`field${currentTag}`] = val;
       for (const rule of Array.isArray(sourceParsing?.fieldRules) ? sourceParsing.fieldRules : []) {
         if (!Array.isArray(rule.tags) || !rule.tags.includes(currentTag)) continue;
         const match = val.match(new RegExp(rule.pattern));
@@ -446,6 +509,7 @@ function parseProgramMapMappings(programMap) {
   }
   mappingsById.__globals = Array.isArray(programMap?.globals) ? programMap.globals : [];
   mappingsById.__proceduresByLabel = programMap?.procedures || {};
+  mappingsById.__enums = programMap?.enums || {};
   return mappingsById;
 }
 
@@ -1252,11 +1316,31 @@ function parsePcode(text) {
       || mnemonic === 'ROUTE_SERVICE'
       || mnemonic === 'ROUTE_QUEUE'
       || mnemonic === 'ROUTE_FILE'
+      || mnemonic === 'REC_NEW'
+      || mnemonic === 'REC_SET'
+      || mnemonic === 'REC_GET'
+      || mnemonic === 'SET_NEW'
+      || mnemonic === 'SET_ADD'
+      || mnemonic === 'SET_IN'
+      || mnemonic === 'SET_UNION'
+      || mnemonic === 'SET_INTERSECT'
+      || mnemonic === 'SET_DIFF'
     ) {
       instr.operand = parseGenericOperand(rest);
     } else if (mnemonic === 'PUSH_INT') {
       instr.operand = Number.parseInt(trimCopy(rest), 10);
-    } else if (mnemonic === 'LOAD' || mnemonic === 'STORE' || mnemonic === 'MAP_RETURN') {
+    } else if (mnemonic === 'PUSH_REAL') {
+      instr.operand = Number.parseFloat(trimCopy(rest));
+    } else if (mnemonic === 'PUSH_ENUM') {
+      const parts = trimCopy(rest).split(/\s+/).filter(Boolean);
+      instr.operand = { typeName: parts[0] || '', valueName: parts[1] || '' };
+    } else if (
+      mnemonic === 'LOAD'
+      || mnemonic === 'STORE'
+      || mnemonic === 'LOAD_NAME'
+      || mnemonic === 'STORE_NAME'
+      || mnemonic === 'MAP_RETURN'
+    ) {
       instr.operand = parseBareOperand(rest);
     } else if (mnemonic === 'CALL') {
       instr.operand = parseCallOperand(rest);
@@ -1319,6 +1403,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
 
   const programGlobals = Array.isArray(mappingsById?.__globals) ? mappingsById.__globals : [];
   const proceduresByLabel = mappingsById?.__proceduresByLabel || {};
+  const enumTypes = mappingsById?.__enums || {};
   const globalFrame = {
     vars: Object.fromEntries(programGlobals.map(name => [name, 0])),
     parent: null
@@ -1336,6 +1421,8 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
   const stacks = new Map();
   const pqueues = new Map();
   const fileHandles = new Map();
+  const records = new Map();
+  const sets = new Map();
   const schemaHandles = new Map();
   const mapHandles = new Map();
   let nextTaskId = 1;
@@ -1367,7 +1454,14 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     }
   }
 
+  let steps = 0;
+  let stepLimitHit = false;
   while (pc >= 0 && pc < instructions.length) {
+    steps += 1;
+    if (steps > MAX_RUN_STEPS) {
+      stepLimitHit = true;
+      break;
+    }
     const instr = instructions[pc];
     const op = instr.mnemonic;
 
@@ -1399,13 +1493,13 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       pc += 1;
       continue;
     }
-    if (op === 'LOAD') {
+    if (op === 'LOAD' || op === 'LOAD_NAME') {
       const rawName = String(instr.operand || '');
       // Apply with-context prefix to bare (non-dotted, non-reserved) names.
       const varName = applyWithContext(rawName, withContextStack);
       const varValue = resolveVar(currentFrame, varName);
-      // Preserve strings (src, or values stored via MSG_WITH_PUSH / PUSH_STR).
-      if (typeof varValue === 'string') {
+      // Preserve strings (src, or values stored via MSG_WITH_PUSH / PUSH_STR), reals and enums.
+      if (typeof varValue === 'string' || isReal(varValue) || isEnum(varValue)) {
         stack.push(varValue);
       } else {
         stack.push(Number(varValue || 0));
@@ -1413,11 +1507,12 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       pc += 1;
       continue;
     }
-    if (op === 'STORE') {
+    if (op === 'STORE' || op === 'STORE_NAME') {
       const rawName = String(instr.operand || '');
       const varName = applyWithContext(rawName, withContextStack);
       const top = stack.pop();
-      assignVar(currentFrame, varName, typeof top === 'string' ? top : Number(top || 0));
+      const stored = (typeof top === 'string' || isReal(top) || isEnum(top)) ? top : Number(top || 0);
+      assignVar(currentFrame, varName, stored);
       pc += 1;
       continue;
     }
@@ -1436,18 +1531,138 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       continue;
     }
     if (op === 'ADD' || op === 'SUB' || op === 'MUL' || op === 'DIV') {
-      const b = Number(stack.pop() || 0);
-      const a = Number(stack.pop() || 0);
-      if (op === 'ADD') stack.push(a + b);
-      if (op === 'SUB') stack.push(a - b);
-      if (op === 'MUL') stack.push(a * b);
-      if (op === 'DIV') stack.push(Math.trunc(a / (b || 1)));
+      const rawB = stack.pop();
+      const rawA = stack.pop();
+      // Either operand being real promotes the whole expression, Pascal-style.
+      if (isReal(rawA) || isReal(rawB)) {
+        const a = numberOf(rawA);
+        const b = numberOf(rawB);
+        let out = 0;
+        if (op === 'ADD') out = a + b;
+        if (op === 'SUB') out = a - b;
+        if (op === 'MUL') out = a * b;
+        if (op === 'DIV') out = b === 0 ? 0 : Math.trunc(a / b);
+        stack.push(new PReal(out));
+        pc += 1;
+        continue;
+      }
+      const b = Number(rawB || 0);
+      const a = Number(rawA || 0);
+      // int32 wrapping and divide-by-zero => 0, matching the ESP32 runtime.
+      if (op === 'ADD') stack.push((a + b) | 0);
+      if (op === 'SUB') stack.push((a - b) | 0);
+      if (op === 'MUL') stack.push(Math.imul(a, b));
+      if (op === 'DIV') stack.push(b === 0 ? 0 : (Math.trunc(a / b) | 0));
+      pc += 1;
+      continue;
+    }
+    if (op === 'PUSH_REAL') {
+      stack.push(new PReal(instr.operand));
+      pc += 1;
+      continue;
+    }
+    if (op === 'RDIV') {
+      const divisor = numberOf(stack.pop());
+      const dividend = numberOf(stack.pop());
+      stack.push(new PReal(divisor === 0 ? 0 : dividend / divisor));
+      pc += 1;
+      continue;
+    }
+    if (op === 'PUSH_ENUM') {
+      const spec = instr.operand || { typeName: '', valueName: '' };
+      const values = enumTypes[spec.typeName];
+      const ordinal = Array.isArray(values) ? values.indexOf(spec.valueName) : -1;
+      if (ordinal < 0) {
+        state.__enum_error = `Unknown enum value: ${spec.typeName}.${spec.valueName}`;
+        stack.push(-1);
+      } else {
+        stack.push(new PEnum(spec.typeName, ordinal, spec.valueName));
+      }
+      pc += 1;
+      continue;
+    }
+    if (op === 'PRINT_ENUM') {
+      const top = stack.pop();
+      currentLine += isEnum(top) ? top.name : String(top ?? '');
+      pc += 1;
+      continue;
+    }
+    if (op === 'ORD') {
+      const top = stack.pop();
+      stack.push(isEnum(top) ? top.ordinal : Number(top || 0));
+      pc += 1;
+      continue;
+    }
+    if (op === 'REC_NEW') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      records.set(trimCopy(unquote(args[0] || '')), new Map());
+      pc += 1;
+      continue;
+    }
+    if (op === 'REC_SET') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const recordName = trimCopy(unquote(args[0] || ''));
+      const fieldName = unquote(args[1] || '');
+      if (!records.has(recordName)) records.set(recordName, new Map());
+      records.get(recordName).set(fieldName, stack.pop());
+      pc += 1;
+      continue;
+    }
+    if (op === 'REC_GET') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const record = records.get(trimCopy(unquote(args[0] || '')));
+      const fieldValue = record ? record.get(unquote(args[1] || '')) : undefined;
+      stack.push(fieldValue === undefined ? 0 : fieldValue);
+      pc += 1;
+      continue;
+    }
+    if (op === 'SET_NEW') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      sets.set(trimCopy(unquote(args[0] || '')), new Set());
+      pc += 1;
+      continue;
+    }
+    if (op === 'SET_ADD' || op === 'SET_IN') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      const setName = trimCopy(unquote(args[0] || ''));
+      const member = args.length >= 2
+        ? Number(tokenValue(args[1], stack, currentFrame) || 0)
+        : Number(stack.pop() || 0);
+      if (op === 'SET_ADD') {
+        if (!sets.has(setName)) sets.set(setName, new Set());
+        sets.get(setName).add(member);
+      } else {
+        stack.push(sets.get(setName)?.has(member) ? 1 : 0);
+      }
+      pc += 1;
+      continue;
+    }
+    if (op === 'SET_UNION' || op === 'SET_INTERSECT' || op === 'SET_DIFF') {
+      const args = Array.isArray(instr.operand?.args) ? instr.operand.args : [];
+      if (args.length >= 3) {
+        const lhs = sets.get(trimCopy(unquote(args[0]))) || new Set();
+        const rhs = sets.get(trimCopy(unquote(args[1]))) || new Set();
+        const out = new Set();
+        if (op === 'SET_UNION') {
+          for (const member of lhs) out.add(member);
+          for (const member of rhs) out.add(member);
+        } else if (op === 'SET_INTERSECT') {
+          for (const member of lhs) if (rhs.has(member)) out.add(member);
+        } else {
+          for (const member of lhs) if (!rhs.has(member)) out.add(member);
+        }
+        sets.set(trimCopy(unquote(args[2])), out);
+      }
       pc += 1;
       continue;
     }
     if (op === 'EQ' || op === 'NEQ' || op === 'LT' || op === 'LE' || op === 'GT' || op === 'GE') {
-      const b = Number(stack.pop() || 0);
-      const a = Number(stack.pop() || 0);
+      const rawB = stack.pop();
+      const rawA = stack.pop();
+      // Two strings compare lexicographically; anything else is numeric.
+      const bothStrings = typeof rawA === 'string' && typeof rawB === 'string';
+      const a = bothStrings ? rawA : numberOf(rawA);
+      const b = bothStrings ? rawB : numberOf(rawB);
       let truth = 0;
       if (op === 'EQ') truth = a === b ? 1 : 0;
       if (op === 'NEQ') truth = a !== b ? 1 : 0;
@@ -1531,7 +1746,10 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       continue;
     }
     if (op === 'PRINT') {
-      currentLine += String(stack.pop() ?? '');
+      const top = stack.pop();
+      if (isReal(top)) currentLine += formatReal(top.v);
+      else if (isEnum(top)) currentLine += top.name;
+      else currentLine += String(top ?? '');
       pc += 1;
       continue;
     }
@@ -1570,6 +1788,12 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
           message: maybeConvertIsoDelivery(queueName, oneMessage, queueTypesByName, isoTypeIds)
         });
       }
+      pc += 1;
+      continue;
+    }
+    if (op === 'ROUTE_SET_MESSAGE') {
+      const top = stack.pop();
+      currentMessage = typeof top === 'string' ? top : String(top ?? '');
       pc += 1;
       continue;
     }
@@ -1982,7 +2206,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
   }
 
   if (currentLine.length > 0) stdout.push(currentLine);
-  return { deliveries, state, stdout, globals: globalFrame.vars, orchestration: state.__orchestration || null, response: state.__response ?? null, error: state.__orch_error || null };
+  return { deliveries, state, stdout, globals: exportGlobals(globalFrame.vars, records, sets), stepCount: steps, stepLimitHit, orchestration: state.__orchestration || null, response: state.__response ?? null, error: state.__orch_error || null };
 }
 
 async function readMessage(args) {
@@ -2133,6 +2357,8 @@ async function executeSingleMessage(args, { printOutput = true } = {}) {
     state: result.state,
     stdout: result.stdout || [],
     globals: result.globals || {},
+    stepCount: result.stepCount ?? null,
+    stepLimitHit: result.stepLimitHit ?? false,
     orchestration: result.orchestration || null,
     response: result.response ?? null,
     error: result.error || null,

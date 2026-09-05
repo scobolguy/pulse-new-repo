@@ -1,4 +1,4 @@
-import { compileStandardPascalWithAntlr } from './compile-standard-pascal-antlr-to-pcode.mjs';
+import { compilePascalishProgramWithAntlr } from './compile-pascalish-program-antlr-to-pcode.mjs';
 import { executeProgram, parsePcode } from './run-js-pmachine.mjs';
 import fs from 'fs/promises';
 import path from 'path';
@@ -25,7 +25,7 @@ function buildMappingsById(programMap) {
 }
 
 const factorialSrc = await fs.readFile(path.resolve(__dirname, '../data/factorial-service.pas'), 'utf-8');
-const compiled = compileStandardPascalWithAntlr(factorialSrc);
+const compiled = compilePascalishProgramWithAntlr(factorialSrc);
 const opcodeMap = await loadOpcodeMap();
 const instructions = parsePcode(compiled.pcodeText);
 const mappingsById = buildMappingsById(compiled.programMap);

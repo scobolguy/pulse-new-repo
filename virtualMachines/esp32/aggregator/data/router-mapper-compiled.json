@@ -1,167 +1,100 @@
 {
   "version": 1,
-  "compiledAt": "2026-08-15T17:43:42.232Z",
+  "compiledAt": "2026-09-03T22:54:56.864Z",
+  "compilerPipeline": "pascalish-g4",
   "serviceId": "librarian-aware-demo",
   "runtimeUnit": {
     "kind": "daemon",
     "id": "librarian-aware-demo",
-    "refreshMs": 2000
+    "refreshMs": 2
   },
   "ast": {
-    "type": "Program",
-    "serviceId": "librarian-aware-demo",
+    "type": "CompilationUnit",
     "runtimeUnit": {
-      "kind": "daemon",
-      "id": "librarian-aware-demo",
-      "refreshMs": 2000
-    },
-    "services": [],
-    "roles": [
-      {
-        "type": "RoleDecl",
-        "role": "code_librarian",
-        "capabilities": [
-          "manage_common_code",
-          "publish_library_units",
-          "version_library_units"
-        ]
+      "type": "DaemonDecl",
+      "name": "librarian-aware-demo",
+      "unit": {
+        "globals": [],
+        "procedures": [],
+        "mappers": [],
+        "routers": [],
+        "types": [],
+        "classes": [],
+        "libraries": []
+      },
+      "schedule": {
+        "type": "DaemonSchedule",
+        "unit": "s",
+        "expr": {
+          "type": "NumberLiteral",
+          "value": 2
+        }
+      },
+      "block": {
+        "type": "Block",
+        "statements": []
       }
-    ],
+    },
     "variables": [
       {
         "type": "VarDecl",
-        "id": "myLegacyMessage",
+        "name": "myLegacyMessage",
         "dataType": {
           "type": "TypeRef",
+          "kind": "user",
           "id": "envelope",
           "genericArgs": [
             {
               "type": "TypeRef",
+              "kind": "user",
               "id": "swift-mt103",
               "genericArgs": []
             }
           ]
         },
-        "dataTypeId": "envelope",
-        "source": {
-          "sourceId": "librarian",
-          "fromLibrarian": true
-        },
-        "sourceId": "librarian",
         "fromLibrarian": true
       }
     ],
+    "types": [],
+    "classes": [],
+    "procedures": [],
+    "mappers": [],
     "routers": [
       {
         "type": "RouterDecl",
         "id": "mt103-route",
         "inputQueue": "swift.mt103.inbound",
-        "description": "Route MT103",
-        "enabled": true,
-        "serviceId": null,
-        "methods": null,
         "outputs": [
           {
-            "type": "OutputDecl",
             "queueName": "swift.mt103.parsed",
-            "dataType": null,
-            "dataTypes": null,
-            "dataTypeId": null,
-            "dataTypeIds": null,
             "whenRule": "output := 1;",
             "transformRule": "output := src;"
           }
         ]
       }
-    ],
-    "mappers": [],
-    "codeLibraries": [
-      {
-        "type": "LibraryDecl",
-        "id": "payments-common",
-        "source": {
-          "kind": "librarian",
-          "value": "librarian"
-        }
-      }
-    ],
-    "uses": [
-      {
-        "type": "UseDecl",
-        "libraryId": "payments-common",
-        "alias": "payments"
-      }
-    ],
-    "interop": [
-      {
-        "type": "InteropDecl",
-        "target": "wfl",
-        "id": "pain2-routing",
-        "alias": "routingFlow"
-      }
-    ],
-    "statements": [],
-    "programId": null,
-    "daemonId": "librarian-aware-demo",
-    "daemonRefreshMs": 2000
+    ]
   },
-  "roles": [
-    {
-      "type": "RoleDecl",
-      "role": "code_librarian",
-      "capabilities": [
-        "manage_common_code",
-        "publish_library_units",
-        "version_library_units"
-      ]
-    }
-  ],
-  "codeLibraries": [
-    {
-      "type": "LibraryDecl",
-      "id": "payments-common",
-      "source": {
-        "kind": "librarian",
-        "value": "librarian"
-      }
-    }
-  ],
-  "uses": [
-    {
-      "type": "UseDecl",
-      "libraryId": "payments-common",
-      "alias": "payments"
-    }
-  ],
-  "interoperability": [
-    {
-      "type": "InteropDecl",
-      "target": "wfl",
-      "id": "pain2-routing",
-      "alias": "routingFlow"
-    }
-  ],
+  "roles": [],
+  "codeLibraries": [],
+  "uses": [],
+  "interoperability": [],
   "variableDeclarations": [
     {
       "type": "VarDecl",
-      "id": "myLegacyMessage",
+      "name": "myLegacyMessage",
       "dataType": {
         "type": "TypeRef",
+        "kind": "user",
         "id": "envelope",
         "genericArgs": [
           {
             "type": "TypeRef",
+            "kind": "user",
             "id": "swift-mt103",
             "genericArgs": []
           }
         ]
       },
-      "dataTypeId": "envelope",
-      "source": {
-        "sourceId": "librarian",
-        "fromLibrarian": true
-      },
-      "sourceId": "librarian",
       "fromLibrarian": true
     }
   ],
@@ -172,7 +105,7 @@
       "serviceId": "librarian-aware-demo",
       "enabled": true,
       "inputQueue": "swift.mt103.inbound",
-      "description": "Route MT103",
+      "description": "",
       "outputs": [
         {
           "queueName": "swift.mt103.parsed",
@@ -180,10 +113,91 @@
           "transformRule": "output := src;"
         }
       ],
-      "createdAt": "2026-08-15T17:43:42.232Z",
-      "updatedAt": "2026-08-15T17:43:42.232Z"
+      "createdAt": "2026-09-03T22:54:56.864Z",
+      "updatedAt": "2026-09-03T22:54:56.864Z"
     }
   ],
   "dataMappings": [],
+  "mapperImports": [],
+  "localResources": {
+    "serviceId": "librarian-aware-demo",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "pcodeText": "# Auto-generated from ANTLR Pascalish grammar\nJMP MAIN\nMAIN:\nPUSH_INT 0\nSTORE myLegacyMessage\nROUTE_MATCH_QUEUE \"swift.mt103.inbound\"\nJZ ROUTER_SKIP_1\nROUTE_EVAL_WHEN \"output := 1;\"\nJZ OUT_SKIP_2\nROUTE_TRANSFORM \"output := src;\"\nROUTE_EMIT \"swift.mt103.parsed\"\nOUT_SKIP_2:\nROUTER_SKIP_1:\nHALT\n",
+  "programMap": {
+    "version": 1,
+    "generatedAt": "2026-09-03T22:54:56.864Z",
+    "serviceId": "librarian-aware-demo",
+    "runtimeUnit": {
+      "kind": "daemon",
+      "id": "librarian-aware-demo",
+      "refreshMs": 2
+    },
+    "executionModel": "pascalish-daemon",
+    "sourceLanguage": "pascalish",
+    "entries": [],
+    "localResources": {
+      "serviceId": "librarian-aware-demo",
+      "mappers": [],
+      "types": [],
+      "libraries": [],
+      "variables": [],
+      "publishable": false
+    },
+    "routers": [
+      {
+        "type": "RouterDecl",
+        "id": "mt103-route",
+        "inputQueue": "swift.mt103.inbound",
+        "outputs": [
+          {
+            "queueName": "swift.mt103.parsed",
+            "whenRule": "output := 1;",
+            "transformRule": "output := src;"
+          }
+        ]
+      }
+    ],
+    "serviceEndpoints": [],
+    "globals": [
+      "myLegacyMessage"
+    ],
+    "variableDeclarations": [
+      {
+        "type": "VarDecl",
+        "name": "myLegacyMessage",
+        "dataType": {
+          "type": "TypeRef",
+          "kind": "user",
+          "id": "envelope",
+          "genericArgs": [
+            {
+              "type": "TypeRef",
+              "kind": "user",
+              "id": "swift-mt103",
+              "genericArgs": []
+            }
+          ]
+        },
+        "fromLibrarian": true
+      }
+    ],
+    "procedures": {},
+    "typeDeclarations": [],
+    "classDeclarations": [],
+    "entryLabel": "MAIN",
+    "mapperImports": []
+  },
+  "ir": {
+    "typeDeclarations": [],
+    "classDeclarations": [],
+    "methodProcedures": []
+  },
+  "typeDeclarations": [],
+  "classDeclarations": [],
   "librarianSubschemas": []
 }

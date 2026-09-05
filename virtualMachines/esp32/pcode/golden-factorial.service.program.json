@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-03T15:13:53.536Z",
+  "serviceId": "FactorialService",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "FactorialService",
+    "refreshMs": null
+  },
+  "executionModel": "standard-pascal",
+  "sourceLanguage": "pascal",
+  "globals": [
+    "n"
+  ],
+  "procedures": {
+    "PROC_COMPUTEFACTORIAL": {
+      "name": "computeFactorial",
+      "params": [
+        "n"
+      ],
+      "locals": []
+    }
+  },
+  "entryLabel": "MAIN",
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "f01dc9497be4b58774ace0654954586d211b7e987af9ba8a53e6d47d078cefc8",
+    "signedAt": "2026-09-03T15:13:53.538Z",
+    "pcodeLength": 1230,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

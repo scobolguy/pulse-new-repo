@@ -91,6 +91,11 @@ Librarian service for mapper and schema-driven UI flows:
 npm run dev:librarian
 ```
 
+Set `LIBRARIAN_DATA_ROOT` to select the catalog directory. It defaults to the
+platform operational-data root when started directly, while `start-backend.bat`
+defaults it to `aggregator/data`. `PULSE_LIBRARIAN_DATA_ROOT` remains accepted
+for existing deployments.
+
 Backend with auxiliary child services enabled:
 
 ```powershell

@@ -1,11 +1,10 @@
 grammar Pascalish;
 
-// Case-insensitive so programs can use lowercase, UPPERCASE or Mixed keywords.
+// Case-insensitive so programs can use lowercase, UPPERCASE or mixed keywords.
 options { caseInsensitive = true; }
 
 // ============================================================
-//  Top-level compilation unit
-//  Accepts any mix of declarations in any order.
+// Top-level compilation unit
 // ============================================================
 
 compilationUnit
@@ -27,11 +26,12 @@ decl
     | interopDecl
     | routerDecl
     | mapperDecl
+    | importDecl
     | blockStmt
     ;
 
 // ============================================================
-//  Runtime unit declarations
+// Runtime placement and unit declarations
 // ============================================================
 
 placement
@@ -39,15 +39,62 @@ placement
     ;
 
 programDecl
-    : 'program' stringOrIdent placement? ';' block '.'
+    : 'program' stringOrIdent placement? ';' unitDecl* block? unitEnd
     ;
 
 serviceDecl
-    : 'service' stringOrIdent placement? ';'? (serviceBody | serviceEndpoint* 'end') ('.' | ';')?
+    : 'service' stringOrIdent placement? ';'? unitDecl* (serviceBody | serviceEndpoint* 'end')? unitEnd
     ;
 
 daemonDecl
-    : 'daemon' stringOrIdent placement? daemonSchedule ';'? block '.'
+    : 'daemon' stringOrIdent placement? daemonSchedule? ';'? unitDecl* block? unitEnd
+    ;
+
+// Wirth compilation units terminate with '.'; ';' is still accepted while the
+// existing corpus is migrated.
+unitEnd
+    : '.'
+    | ';'
+    ;
+
+// Declared inside a unit: private to that unit, never published to the Data
+// Librarian or Mapping Librarian.
+unitDecl
+    : varSection
+    | subprogramDecl
+    | serviceDecl
+    | daemonDecl
+    | typeDecl
+    | classDecl
+    | queueDecl
+    | fileDecl
+    | roleDecl
+    | libraryDecl
+    | useDecl
+    | interopDecl
+    | routerDecl
+    | mapperDecl
+    | importDecl
+    ;
+
+varSection
+    : 'var' varLine+
+    ;
+
+varLine
+    : identList ':' typeRef placement? varSource? ';'
+    ;
+
+subprogramDecl
+    : ('procedure' | 'function') IDENT '(' paramSection? ')' (':' typeRef)? ';' unitDecl* block ';'
+    ;
+
+paramSection
+    : paramGroup (';' paramGroup)*
+    ;
+
+paramGroup
+    : identList ':' typeRef
     ;
 
 daemonSchedule
@@ -56,7 +103,7 @@ daemonSchedule
     ;
 
 // ============================================================
-//  Type, class, variable, queue and file declarations
+// Types, classes, variables, queues, and files
 // ============================================================
 
 typeDecl
@@ -146,6 +193,7 @@ typeRef
     | fixedArrayType
     | dynamicArrayType
     | userType
+    | STRING
     ;
 
 genericTypeParams
@@ -160,7 +208,13 @@ simpleType
     ;
 
 userType
-    : IDENT genericTypeArgs?
+    : typeName genericTypeArgs?
+    ;
+
+// Librarian type ids may contain hyphens (e.g. swift-mt103). Safe here because
+// type position never contains arithmetic.
+typeName
+    : IDENT ('-' IDENT)*
     ;
 
 genericTypeArgs
@@ -176,7 +230,7 @@ dynamicArrayType
     ;
 
 // ============================================================
-//  Integration DSL: role, library, use, interop
+// Integration DSL: role, library, use, interop, import
 // ============================================================
 
 roleDecl
@@ -212,8 +266,21 @@ interopKind
     | 'pascalish'
     ;
 
+importDecl
+    : 'import' importTarget 'from' serviceProvider ';'
+    ;
+
+importTarget
+    : IDENT
+    | STRING
+    ;
+
+serviceProvider
+    : stringOrIdent
+    ;
+
 // ============================================================
-//  Router declaration
+// Router declaration
 // ============================================================
 
 routerDecl
@@ -247,7 +314,7 @@ typeRefList
     ;
 
 // ============================================================
-//  Mapper declaration
+// Mapper declaration
 // ============================================================
 
 mapperDecl
@@ -264,11 +331,20 @@ mapDecl
     ;
 
 // ============================================================
-//  Service body and HTTP endpoints
+// Service body and HTTP endpoints
 // ============================================================
 
 serviceBody
-    : 'begin' serviceStmt* 'end'
+    : 'begin' serviceBodyElement* 'end'
+    ;
+
+serviceBodyElement
+    : serviceLocalDecl
+    | serviceStmt
+    ;
+
+serviceLocalDecl
+    : unitDecl
     ;
 
 serviceEndpoint
@@ -289,7 +365,12 @@ endpointReturns
 
 serviceStmt
     : serviceCaseStmt
+    | serviceRouteStmt ';'
     | serviceReturnStmt ';'
+    ;
+
+serviceRouteStmt
+    : 'route' IDENT? 'from' stringOrIdent 'to' stringOrIdent
     ;
 
 serviceCaseStmt
@@ -313,7 +394,7 @@ serviceExpr
     ;
 
 // ============================================================
-//  PL/0 snippet (inline rule body, map transform, when clause)
+// PL/0 snippet and inline rule bodies
 // ============================================================
 
 pl0Snippet
@@ -345,11 +426,16 @@ pl0Element
     ;
 
 // ============================================================
-//  Block and statements (imperative / program body)
+// Block and imperative statements
 // ============================================================
 
 block
-    : 'begin' statement* 'end'
+    : 'begin' statementList? 'end'
+    ;
+
+// Wirth: ';' separates statements; a trailing one before END is tolerated.
+statementList
+    : statement (';' statement)* ';'?
     ;
 
 blockStmt
@@ -372,22 +458,23 @@ statement
     | popStmt
     | concurrentStmt
     | fileStmt
+    | returnStmt
     ;
 
 withStmt
-    : 'with' expr 'do' statement* 'end' ';'
+    : 'with' expr 'do' statement
     ;
 
 assignStmt
-    : lvalue ':=' expr ';'
+    : lvalue ':=' expr
     ;
 
 callStmt
-    : 'call' qualifiedName '(' exprList? ')' ';'
+    : 'call'? qualifiedName '(' exprList? ')'
     ;
 
 ifStmt
-    : 'if' expr 'then' statement* ('else' statement*)? 'end' ';'
+    : 'if' expr 'then' statement ('else' statement)?
     ;
 
 whileStmt
@@ -399,27 +486,27 @@ forStmt
     ;
 
 repeatStmt
-    : 'repeat' statement* 'until' expr ';'
+    : 'repeat' statementList 'until' expr
     ;
 
 enqueueStmt
-    : 'enqueue' IDENT 'with' expr ';'
+    : 'enqueue' IDENT 'with' expr
     ;
 
 dequeueStmt
-    : 'dequeue' IDENT 'into' IDENT ';'
+    : 'dequeue' IDENT 'into' IDENT
     ;
 
 peekStmt
-    : 'peek' IDENT 'into' IDENT ';'
+    : 'peek' IDENT 'into' IDENT
     ;
 
 pushStmt
-    : 'push' IDENT 'with' expr ';'
+    : 'push' IDENT 'with' expr
     ;
 
 popStmt
-    : 'pop' IDENT 'into' IDENT ';'
+    : 'pop' IDENT 'into' IDENT
     ;
 
 concurrentStmt
@@ -431,7 +518,7 @@ concurrentStmt
     ;
 
 cobeginStmt
-    : 'cobegin' statement* 'coend' ';'
+    : 'cobegin' statementList? 'coend'
     ;
 
 asyncStmt
@@ -439,27 +526,53 @@ asyncStmt
     ;
 
 waitStmt
-    : 'wait' 'all' ';'
-    | 'wait' IDENT ';'
+    : 'wait' 'all' identGroup? ('into' identGroup)? ('timeout' expr timeUnit)? waitErrorClause?
+    | 'wait' IDENT
+    ;
+
+identGroup
+    : '(' IDENT (',' IDENT)* ')'
+    | IDENT
+    ;
+
+waitErrorClause
+    : 'on' 'error' 'fail' 'transaction' stringValue
+    ;
+
+timeUnit
+    : 'ms'
+    | 's'
+    | 'm'
     ;
 
 syncStmt
-    : 'sync' IDENT ';'
+    : 'sync' IDENT
     ;
 
 subflowStmt
-    : 'subflow' STRING ('with' exprList)? ';'
+    : 'subflow' stringValue subflowOption*
+    ;
+
+subflowOption
+    : 'on' stringOrIdent
+    | 'with' exprList
+    | 'timeout' expr timeUnit
+    | 'into' IDENT
+    ;
+
+returnStmt
+    : 'return' 'success'? expr?
     ;
 
 fileStmt
-    : 'open' IDENT 'for' ('read' | 'write') ';'
-    | 'read' IDENT 'into' IDENT ';'
-    | 'write' IDENT 'with' expr ';'
-    | 'close' IDENT ';'
+    : 'open' IDENT 'for' ('read' | 'write')
+    | 'read' IDENT 'into' IDENT
+    | 'write' IDENT 'with' expr
+    | 'close' IDENT
     ;
 
 // ============================================================
-//  Expressions
+// Expressions
 // ============================================================
 
 lvalue
@@ -467,7 +580,13 @@ lvalue
     ;
 
 qualifiedName
-    : IDENT ('.' IDENT)*
+    : IDENT ('.' qualifiedPart)*
+    ;
+
+// HTTP verbs are keywords, so allow them after a dot (e.g. httpVerb.post).
+qualifiedPart
+    : IDENT
+    | httpVerb
     ;
 
 stringOrIdent
@@ -532,7 +651,7 @@ primaryExpr
     ;
 
 // ============================================================
-//  Lexer rules
+// Lexer rules
 // ============================================================
 
 IDENT
@@ -560,10 +679,6 @@ BRACE_COMMENT
     : '{' .*? '}' -> skip
     ;
 
-PAREN_COMMENT
-    : '(*' .*? '*)' -> skip
-    ;
-
 WS
-    : [ \t\r\n\f]+ -> skip
+    : [ \t\r\n]+ -> skip
     ;

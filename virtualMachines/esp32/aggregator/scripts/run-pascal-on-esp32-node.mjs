@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { compileStandardPascalWithAntlr } from './compile-standard-pascal-antlr-to-pcode.mjs';
+import { compilePascalishProgramWithAntlr } from './compile-pascalish-program-antlr-to-pcode.mjs';
 import { attachPcodeSignature } from './pcode-signing.mjs';
 
 const NODE_REGISTRY_URL = process.env.NODE_REGISTRY_URL || 'http://127.0.0.1:4000/api/nodes';
@@ -38,7 +38,7 @@ export async function runPascalOnEsp32({ source = '', node = 'neptune.child1', i
   const sourcePath = source || await latestCandidatePas();
   const sourceText = await fs.readFile(sourcePath, 'utf-8');
 
-  const { pcodeText, programMap } = compileStandardPascalWithAntlr(sourceText);
+  const { pcodeText, programMap } = compilePascalishProgramWithAntlr(sourceText);
   const signedMap = attachPcodeSignature(programMap, pcodeText);
   const signedMapText = `${JSON.stringify(signedMap, null, 2)}\n`;
 

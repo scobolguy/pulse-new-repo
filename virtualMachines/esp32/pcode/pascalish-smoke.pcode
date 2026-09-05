@@ -1,0 +1,30 @@
+# Auto-generated from ANTLR Pascalish grammar
+JMP MAIN
+MAIN:
+PUSH_INT 0
+STORE counter
+PUSH_INT 0
+STORE sum
+PUSH_INT 0
+STORE counter
+PUSH_INT 0
+STORE sum
+WHILE_1:
+LOAD counter
+PUSH_INT 3
+LT
+JZ ENDWHILE_2
+LOAD sum
+LOAD counter
+ADD
+STORE sum
+LOAD counter
+PUSH_INT 1
+ADD
+STORE counter
+JMP WHILE_1
+ENDWHILE_2:
+LOAD sum
+ROUTE_SET_MESSAGE
+ROUTE_EMIT "outputQueue"
+HALT

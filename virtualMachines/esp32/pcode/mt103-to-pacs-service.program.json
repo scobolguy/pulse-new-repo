@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-03T00:27:59.429Z",
+  "serviceId": "MT103ToPacsService",
+  "runtimeUnit": {
+    "kind": "service",
+    "id": "MT103ToPacsService",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-service",
+  "sourceLanguage": "pascalish",
+  "globals": [],
+  "variableDeclarations": [],
+  "procedures": {},
+  "typeDeclarations": [],
+  "classDeclarations": [],
+  "entryLabel": "MAIN",
+  "mapperImports": [],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "6cd799b9144a829496d27b6811dba84a6828193062419d53e14a15d2fa914cc4",
+    "signedAt": "2026-09-03T00:27:59.431Z",
+    "pcodeLength": 66,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

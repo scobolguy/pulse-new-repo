@@ -666,6 +666,24 @@ export default class Cobolish85Visitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by Cobolish85Parser#cobolishRuntimeClause.
+	visitCobolishRuntimeClause(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#runtimePlacement.
+	visitRuntimePlacement(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#runtimeIntervalUnit.
+	visitRuntimeIntervalUnit(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by Cobolish85Parser#endProgramClause.
 	visitEndProgramClause(ctx) {
 	  return this.visitChildren(ctx);

@@ -6,7 +6,7 @@ import {
   TextDocumentSyncKind
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { parsePascalishWithAntlr } from '../../scripts/pascalish-antlr-compiler.mjs';
+import { compilePascalishProgramWithAntlr } from '../../scripts/compile-pascalish-program-antlr-to-pcode.mjs';
 import { PASCALISH_KEYWORDS } from '../../src/documentRegistry.js';
 
 const connection = createConnection(ProposedFeatures.all);
@@ -14,7 +14,7 @@ const documents = new TextDocuments(TextDocument);
 
 function parseDiagnostics(text) {
   try {
-    parsePascalishWithAntlr(text);
+    compilePascalishProgramWithAntlr(text);
     return [];
   } catch (error) {
     const msg = String(error?.message || error);

@@ -58,6 +58,14 @@ export default defineConfig({
       '/api': {
         target: apiProxyTarget,
         changeOrigin: true,
+        configure(proxy) {
+          proxy.on('error', (_error, _req, res) => {
+            if (!res.headersSent) {
+              res.writeHead(502, { 'content-type': 'application/json' })
+            }
+            res.end(JSON.stringify({ error: `Backend unavailable at ${apiProxyTarget}. Start the backend with npm run dev:backend.` }))
+          })
+        },
       },
       '/mcp-query': {
         target: mcpProxyTarget,

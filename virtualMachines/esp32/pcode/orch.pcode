@@ -1,0 +1,9 @@
+# Auto-generated from ANTLR Pascalish grammar
+JMP MAIN
+MAIN:
+ORCH_SPAWN "{\"subflowId\":\"risk_check\",\"nodeId\":\"childNode\",\"timeoutMs\":5000,\"handleRef\":\"h_node1\"}"
+ORCH_SPAWN "{\"subflowId\":\"limits_check\",\"nodeId\":\"childNode\",\"timeoutMs\":5000,\"handleRef\":\"h_node2\"}"
+ORCH_WAIT_ALL "{\"timeoutMs\":8000,\"reason\":\"subtasks timeout or transport error\"}"
+ORCH_FAIL_TXN "subtasks timeout or transport error"
+ORCH_RETURN_SUCCESS "merged_reply"
+HALT

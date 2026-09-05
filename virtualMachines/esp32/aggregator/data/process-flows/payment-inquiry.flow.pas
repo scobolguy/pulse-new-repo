@@ -109,3 +109,6 @@ mapper payment_inquiry_query_response source "tx-inquiry-state" target "payment-
   MAP "blockingReason" TO "inquiry.blockingReason" USING "output := trim(src);";
   MAP "nextAction" TO "inquiry.nextAction" USING "output := trim(src);";
 end;
+
+begin
+end.

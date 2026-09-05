@@ -14,6 +14,9 @@ if "%PULSE_QUEUE_DATA_ROOT%"=="" (
 if "%PULSE_RUNTIME_DATA_ROOT%"=="" (
   set "PULSE_RUNTIME_DATA_ROOT=%PULSE_QUEUE_DATA_ROOT%"
 )
+if "%LIBRARIAN_DATA_ROOT%"=="" (
+  set "LIBRARIAN_DATA_ROOT=%AGGREGATOR_DIR%\data"
+)
 
 if not exist "%PULSE_QUEUE_DATA_ROOT%" (
   mkdir "%PULSE_QUEUE_DATA_ROOT%" >nul 2>&1
@@ -51,9 +54,11 @@ if not exist "%AGGREGATOR_DIR%\backend.mjs" (
 echo Starting backend from "%AGGREGATOR_DIR%"...
 echo Using queue data root "%PULSE_QUEUE_DATA_ROOT%"...
 echo Using runtime data root "%PULSE_RUNTIME_DATA_ROOT%"...
+echo Using Librarian data root "%LIBRARIAN_DATA_ROOT%"...
 cd /d "%AGGREGATOR_DIR%"
 set "PULSE_QUEUE_DATA_ROOT=%PULSE_QUEUE_DATA_ROOT%"
 set "PULSE_RUNTIME_DATA_ROOT=%PULSE_RUNTIME_DATA_ROOT%"
+set "LIBRARIAN_DATA_ROOT=%LIBRARIAN_DATA_ROOT%"
 node backend.mjs
 
 exit /b %ERRORLEVEL%

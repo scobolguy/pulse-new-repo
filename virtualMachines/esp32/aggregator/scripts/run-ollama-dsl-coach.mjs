@@ -2,7 +2,7 @@ import fs from 'fs/promises';
 import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { compileStandardPascalWithAntlr } from './compile-standard-pascal-antlr-to-pcode.mjs';
+import { compilePascalishProgramWithAntlr } from './compile-pascalish-program-antlr-to-pcode.mjs';
 import { compileRouterMapperDSL } from './compile-pascal.mjs';
 
 const WORKSPACE_ROOT = path.resolve(process.cwd(), '..');
@@ -453,7 +453,7 @@ function validateDslCandidate(candidateText, mode) {
         };
       }
 
-      const compiledProgram = compileStandardPascalWithAntlr(variant);
+      const compiledProgram = compilePascalishProgramWithAntlr(variant);
       return {
         valid: true,
         dialect: COACH_MODES.PASCAL_PROGRAM,

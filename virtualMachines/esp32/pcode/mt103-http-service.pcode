@@ -1,0 +1,5 @@
+# Auto-generated from ANTLR Pascalish grammar
+JMP MAIN
+MAIN:
+PUSH_STR "PACS.008|MT103|12345"
+HALT

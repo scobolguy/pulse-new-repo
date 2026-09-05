@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "notes": "Single source of truth for pcode opcode IDs shared by ESP32 and JavaScript PMachines.",
+  "notes": "Single source of truth for pcode opcode IDs shared by ESP32 and JavaScript PMachines. An opcode without `targets` must be implemented by both runtimes; `targets` narrows that contract (\"js\" = JS only, \"reserved\" = ID allocated but unimplemented everywhere).",
   "opcodes": [
     { "name": "OP_NOP", "hex": "0x00" },
     { "name": "OP_LIT", "hex": "0x01" },
@@ -83,12 +83,24 @@
     { "name": "OP_STREQ", "hex": "0x4E" },
     { "name": "OP_STRNEQ", "hex": "0x4F" },
     { "name": "OP_MAP_RETURN",     "hex": "0x50" },
-    { "name": "OP_MSG_MAX_COUNT",  "hex": "0x51" },
-    { "name": "OP_MSG_SAX_OPEN",   "hex": "0x52" },
-    { "name": "OP_MSG_SAX_NEXT",   "hex": "0x53" },
-    { "name": "OP_MSG_SAX_GET",    "hex": "0x54" },
-    { "name": "OP_MSG_WITH_PUSH",  "hex": "0x55" },
-    { "name": "OP_MSG_WITH_POP",   "hex": "0x56" },
+    { "name": "OP_PUSH_REAL",     "hex": "0x57" },
+    { "name": "OP_RDIV",          "hex": "0x58" },
+    { "name": "OP_ORD",           "hex": "0x59" },
+    { "name": "OP_REC_NEW",       "hex": "0x5A" },
+    { "name": "OP_REC_SET",       "hex": "0x5B" },
+    { "name": "OP_REC_GET",       "hex": "0x5C" },
+    { "name": "OP_SET_NEW",       "hex": "0x5D" },
+    { "name": "OP_SET_ADD",       "hex": "0x5E" },
+    { "name": "OP_SET_IN",        "hex": "0x5F" },
+    { "name": "OP_SET_UNION",     "hex": "0x60" },
+    { "name": "OP_SET_INTERSECT", "hex": "0x61" },
+    { "name": "OP_SET_DIFF",      "hex": "0x62" },
+    { "name": "OP_MSG_MAX_COUNT",  "hex": "0x51", "targets": ["reserved"] },
+    { "name": "OP_MSG_SAX_OPEN",   "hex": "0x52", "targets": ["reserved"] },
+    { "name": "OP_MSG_SAX_NEXT",   "hex": "0x53", "targets": ["reserved"] },
+    { "name": "OP_MSG_SAX_GET",    "hex": "0x54", "targets": ["reserved"] },
+    { "name": "OP_MSG_WITH_PUSH",  "hex": "0x55", "targets": ["js"] },
+    { "name": "OP_MSG_WITH_POP",   "hex": "0x56", "targets": ["js"] },
     { "name": "OP_HALT", "hex": "0xFF" }
   ]
 }

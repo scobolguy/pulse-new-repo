@@ -1080,6 +1080,12 @@ function normalizeRuleForRuntime(rule) {
   };
 }
 
+// Service-local maps are namespaced "ServiceId.MapId" by the Pascalish compiler
+// and must stay private to their service.
+function isServiceLocalMapId(id) {
+  return /^[A-Za-z_][A-Za-z0-9_-]*\.[A-Za-z_][A-Za-z0-9_-]*$/.test(String(id || '').trim());
+}
+
 function resolveMapFile(fileName) {
   const normalized = String(fileName || '').trim().replace(/[\\/]+/g, '_');
   if (!normalized || normalized.includes('..') || !normalized.endsWith('.map')) {
@@ -1550,6 +1556,11 @@ export function registerMapperRoutes(app) {
       const { id, name, description } = req.body;
       if (!id || !name) {
         return res.status(400).json({ error: 'id and name are required' });
+      }
+      if (isServiceLocalMapId(id) || String(req.body?.scope || '').toLowerCase() === 'local') {
+        return res.status(400).json({
+          error: `Service-local map '${id}' cannot be published to the Mapping Librarian.`
+        });
       }
       const fileName = `${id}.map`;
       const filePath = resolveMapFile(fileName);

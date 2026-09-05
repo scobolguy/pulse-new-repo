@@ -1,6 +1,29 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 const MonacoEditor = React.lazy(() => import('@monaco-editor/react'))
 import { initializePascalishLanguage } from './pascalishLanguage'
+import { useLanguageStepper } from './useLanguageStepper'
+import StepDebugPanel from './components/StepDebugPanel'
+
+// Compile errors arrive as one blob; split them into per-line diagnostics.
+// ANTLR reports 0-based columns, so shift to Monaco's 1-based columns.
+function parseCompileDiagnostics(rawText) {
+  const diagnostics = []
+  for (const rawLine of String(rawText || '').split('\n')) {
+    const match = /line\s+(\d+):(\d+)\s+(.*)$/i.exec(rawLine.trim())
+    if (!match) continue
+    diagnostics.push({
+      line: Math.max(1, Number.parseInt(match[1], 10) || 1),
+      column: Math.max(1, (Number.parseInt(match[2], 10) || 0) + 1),
+      message: String(match[3] || '').trim(),
+    })
+  }
+  return diagnostics
+}
+
+function offendingTokenLength(message) {
+  const match = /(?:input|at:|token recognition error at:)\s*'((?:[^'\\]|\\.)*)'/i.exec(String(message || ''))
+  return match ? Math.max(1, match[1].length) : 0
+}
 
 const DEFAULT_PROGRAM = [
   'daemon "librarian-aware-demo" refresh 2 s;',
@@ -25,9 +48,13 @@ export default function PascalishEditorPage() {
   const [runMenuOpen, setRunMenuOpen] = useState(false)
   const [runBusy, setRunBusy] = useState(false)
   const [runError, setRunError] = useState('')
+  const [diagnostics, setDiagnostics] = useState([])
+  const editorRef = useRef(null)
+  const monacoRef = useRef(null)
   const typeNamesRef = useRef([])
   const typeFieldMapRef = useRef({})
   const mapNamesRef = useRef([])
+  const { stepTabs, activeStepTab, stepLog, singleStep, selectStepTab } = useLanguageStepper('pascalish', editorRef)
 
   const typeNames = useMemo(() => {
     return (types || [])
@@ -140,11 +167,45 @@ export default function PascalishEditorPage() {
         setStatus(baseMessage)
       }
       setRunError('')
+      setDiagnostics([])
     } catch (errorValue) {
-      setRunError(errorValue.message)
+      const parsed = parseCompileDiagnostics(errorValue.message)
+      setDiagnostics(parsed)
+      // Keep the raw banner only when there is no line-level detail to show inline.
+      setRunError(parsed.length > 0 ? '' : errorValue.message)
     } finally {
       setRunBusy(false)
     }
+  }
+
+  useEffect(() => {
+    const monaco = monacoRef.current
+    const model = editorRef.current?.getModel?.()
+    if (!monaco || !model) return
+
+    monaco.editor.setModelMarkers(model, 'pascalish-compile', diagnostics.map((item) => {
+      const lineLength = model.getLineMaxColumn(Math.min(item.line, model.getLineCount()))
+      const tokenLength = offendingTokenLength(item.message)
+      const endColumn = tokenLength > 0
+        ? Math.min(item.column + tokenLength, lineLength)
+        : lineLength
+      return {
+        severity: monaco.MarkerSeverity.Error,
+        message: item.message,
+        startLineNumber: item.line,
+        endLineNumber: item.line,
+        startColumn: item.column,
+        endColumn: Math.max(endColumn, item.column + 1),
+      }
+    }))
+  }, [diagnostics])
+
+  function goToDiagnostic(item) {
+    const editor = editorRef.current
+    if (!editor) return
+    editor.revealLineInCenter(item.line)
+    editor.setPosition({ lineNumber: item.line, column: item.column })
+    editor.focus()
   }
 
   useEffect(() => {
@@ -170,6 +231,7 @@ export default function PascalishEditorPage() {
             <button type="button" onClick={() => runPascalishAction('compile')} disabled={runBusy}>Compile</button>
             <button type="button" onClick={() => runPascalishAction('compile-run')} disabled={runBusy}>Compile &amp; Run</button>
             <button type="button" onClick={() => runPascalishAction('compile-debug')} disabled={runBusy}>Compile &amp; Debug</button>
+            <button type="button" onClick={() => setStatus(singleStep(source))} disabled={runBusy}>Single Step</button>
           </div>
           <span style={{ fontSize: 12, opacity: 0.75 }}>{status}</span>
         </div>
@@ -182,6 +244,16 @@ export default function PascalishEditorPage() {
         </div>
       )}
 
+      <StepDebugPanel
+        stepTabs={stepTabs}
+        activeStepTab={activeStepTab}
+        onSelectTab={selectStepTab}
+        stepLog={stepLog}
+        tabListLabel="Pascalish execution tabs"
+        monacoLanguage="pascalish"
+        testIdPrefix="pascalish"
+      />
+
       <div style={{ flex: 1, minHeight: 0, border: '1px solid rgba(148,163,184,0.25)', borderRadius: 6, overflow: 'hidden' }}>
         <React.Suspense fallback={<div style={{ padding: 20, opacity: 0.6 }}>Loading editor…</div>}>
           <MonacoEditor
@@ -191,6 +263,7 @@ export default function PascalishEditorPage() {
             value={source}
             onChange={(value) => setSource(value || '')}
             beforeMount={(monaco) => initializePascalishLanguage(monaco, typeNamesRef, typeFieldMapRef, mapNamesRef)}
+            onMount={(editor, monaco) => { editorRef.current = editor; monacoRef.current = monaco }}
             options={{
               minimap: { enabled: false },
               fontSize: 14,
@@ -211,6 +284,28 @@ export default function PascalishEditorPage() {
           <> &nbsp;·&nbsp; Types: {typeNames.slice(0, 10).join(', ')}{typeNames.length > 10 ? ` +${typeNames.length - 10} more` : ''}</>
         )}
       </div>
+
+      {diagnostics.length > 0 && (
+        <div style={{ maxHeight: 160, overflowY: 'auto', border: '1px solid rgba(148,163,184,0.25)', borderRadius: 6 }}>
+          <div style={{ padding: '6px 10px', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6, opacity: 0.7, borderBottom: '1px solid rgba(148,163,184,0.2)' }}>
+            Problems ({diagnostics.length})
+          </div>
+          {diagnostics.map((item, index) => (
+            <div
+              key={`${item.line}-${item.column}-${index}`}
+              role="button"
+              tabIndex={0}
+              onClick={() => goToDiagnostic(item)}
+              onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); goToDiagnostic(item) } }}
+              style={{ display: 'flex', gap: 8, alignItems: 'baseline', padding: '5px 10px', fontSize: 12, cursor: 'pointer' }}
+            >
+              <span style={{ color: '#f87171' }}>✖</span>
+              <span style={{ flex: 1, minWidth: 0 }}>{item.message}</span>
+              <span style={{ opacity: 0.55, whiteSpace: 'nowrap' }}>Ln {item.line}, Col {item.column}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

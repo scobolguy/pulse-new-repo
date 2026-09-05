@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-03T14:28:25.714Z",
+  "serviceId": "MT103LocalScope",
+  "runtimeUnit": {
+    "kind": "service",
+    "id": "MT103LocalScope",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-service",
+  "sourceLanguage": "pascalish",
+  "entries": [
+    {
+      "kind": "mapper",
+      "id": "MT103LocalScope.LOCAL_MT103_TO_PACS",
+      "scope": "local",
+      "ownerServiceId": "MT103LocalScope",
+      "sourceTypeId": "MT103",
+      "targetTypeId": "PACS008",
+      "items": [
+        {
+          "sourcePath": "block4.20",
+          "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "block4.32A.amount",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+          "conversionRule": "output := trim(src);"
+        }
+      ]
+    }
+  ],
+  "localResources": {
+    "serviceId": "MT103LocalScope",
+    "mappers": [
+      "MT103LocalScope.LOCAL_MT103_TO_PACS"
+    ],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "routers": [
+    {
+      "type": "RouterDecl",
+      "id": "MT103LocalScope-http",
+      "inputQueue": "MT103LocalScope.in",
+      "outputs": [
+        {
+          "queueName": "MT103LocalScope.out",
+          "whenRule": "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;",
+          "transformRule": "output := map(\"MT103LocalScope.LOCAL_MT103_TO_PACS\", src);"
+        }
+      ]
+    }
+  ],
+  "serviceEndpoints": [
+    {
+      "verb": "GET",
+      "path": "/convert",
+      "acceptsType": "MT103",
+      "returnsType": "PACS008",
+      "returnExpr": "map(\"MT103LocalScope.LOCAL_MT103_TO_PACS\", src)"
+    }
+  ],
+  "globals": [],
+  "variableDeclarations": [],
+  "procedures": {},
+  "typeDeclarations": [],
+  "classDeclarations": [],
+  "entryLabel": "MAIN",
+  "mapperImports": [],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "4cf4188d7deff1cce62b345e69898df4092eb64e1e5b601769d6f2a4d07a3919",
+    "signedAt": "2026-09-03T14:28:25.716Z",
+    "pcodeLength": 355,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

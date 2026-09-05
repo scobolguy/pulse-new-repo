@@ -36,14 +36,50 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
-	// Visit a parse tree produced by PascalishParser#serviceBody.
-	visitServiceBody(ctx) {
+	// Visit a parse tree produced by PascalishParser#daemonDecl.
+	visitDaemonDecl(ctx) {
 	  return this.visitChildren(ctx);
 	}
 
 
-	// Visit a parse tree produced by PascalishParser#daemonDecl.
-	visitDaemonDecl(ctx) {
+	// Visit a parse tree produced by PascalishParser#unitEnd.
+	visitUnitEnd(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#unitDecl.
+	visitUnitDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#varSection.
+	visitVarSection(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#varLine.
+	visitVarLine(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#subprogramDecl.
+	visitSubprogramDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#paramSection.
+	visitParamSection(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#paramGroup.
+	visitParamGroup(ctx) {
 	  return this.visitChildren(ctx);
 	}
 
@@ -186,6 +222,12 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by PascalishParser#typeName.
+	visitTypeName(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by PascalishParser#genericTypeArgs.
 	visitGenericTypeArgs(ctx) {
 	  return this.visitChildren(ctx);
@@ -204,8 +246,230 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by PascalishParser#roleDecl.
+	visitRoleDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#roleName.
+	visitRoleName(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#libraryDecl.
+	visitLibraryDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#librarySource.
+	visitLibrarySource(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#useDecl.
+	visitUseDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#interopDecl.
+	visitInteropDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#interopKind.
+	visitInteropKind(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#importDecl.
+	visitImportDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#importTarget.
+	visitImportTarget(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#serviceProvider.
+	visitServiceProvider(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#routerDecl.
+	visitRouterDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#routerHeaderProp.
+	visitRouterHeaderProp(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#verbList.
+	visitVerbList(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#outputDecl.
+	visitOutputDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#outputTypeMeta.
+	visitOutputTypeMeta(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#typeRefList.
+	visitTypeRefList(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#mapperDecl.
+	visitMapperDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#mapperHeaderProp.
+	visitMapperHeaderProp(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#mapDecl.
+	visitMapDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#serviceBody.
+	visitServiceBody(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#serviceBodyElement.
+	visitServiceBodyElement(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#serviceLocalDecl.
+	visitServiceLocalDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#serviceEndpoint.
+	visitServiceEndpoint(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#httpVerb.
+	visitHttpVerb(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#endpointAccepts.
+	visitEndpointAccepts(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#endpointReturns.
+	visitEndpointReturns(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#serviceStmt.
+	visitServiceStmt(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#serviceRouteStmt.
+	visitServiceRouteStmt(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#serviceCaseStmt.
+	visitServiceCaseStmt(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#serviceCaseArm.
+	visitServiceCaseArm(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#serviceReturnStmt.
+	visitServiceReturnStmt(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#serviceExpr.
+	visitServiceExpr(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#pl0Snippet.
+	visitPl0Snippet(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#pl0Block.
+	visitPl0Block(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#pl0Element.
+	visitPl0Element(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by PascalishParser#block.
 	visitBlock(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#statementList.
+	visitStatementList(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#blockStmt.
+	visitBlockStmt(ctx) {
 	  return this.visitChildren(ctx);
 	}
 
@@ -312,6 +576,24 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by PascalishParser#identGroup.
+	visitIdentGroup(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#waitErrorClause.
+	visitWaitErrorClause(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#timeUnit.
+	visitTimeUnit(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by PascalishParser#syncStmt.
 	visitSyncStmt(ctx) {
 	  return this.visitChildren(ctx);
@@ -320,6 +602,18 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by PascalishParser#subflowStmt.
 	visitSubflowStmt(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#subflowOption.
+	visitSubflowOption(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#returnStmt.
+	visitReturnStmt(ctx) {
 	  return this.visitChildren(ctx);
 	}
 
@@ -338,6 +632,30 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by PascalishParser#qualifiedName.
 	visitQualifiedName(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#qualifiedPart.
+	visitQualifiedPart(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#stringOrIdent.
+	visitStringOrIdent(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#stringValue.
+	visitStringValue(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#booleanValue.
+	visitBooleanValue(ctx) {
 	  return this.visitChildren(ctx);
 	}
 

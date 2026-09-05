@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-03T15:27:19.753Z",
+  "serviceId": "TowersOfHanoi",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "TowersOfHanoi",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-program",
+  "sourceLanguage": "pascalish",
+  "entries": [],
+  "localResources": {
+    "serviceId": "TowersOfHanoi",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "routers": [],
+  "serviceEndpoints": [],
+  "globals": [
+    "diskCount"
+  ],
+  "variableDeclarations": [
+    {
+      "type": "VarDecl",
+      "name": "diskCount",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "integer",
+        "genericArgs": []
+      }
+    }
+  ],
+  "procedures": {
+    "PROC_HANOI": {
+      "name": "Hanoi",
+      "params": [
+        "n",
+        "fromPeg",
+        "toPeg",
+        "auxPeg"
+      ],
+      "locals": []
+    }
+  },
+  "typeDeclarations": [],
+  "classDeclarations": [],
+  "entryLabel": "MAIN",
+  "mapperImports": [],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "0628ad74ae48fe465af5f66cdc5213bfa373017a46b8f68bdb31dfef926be4ec",
+    "signedAt": "2026-09-03T15:27:19.755Z",
+    "pcodeLength": 799,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

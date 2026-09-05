@@ -65,6 +65,21 @@ async function main() {
     'npm run test:js-pmachine:failure-paths'
   ));
 
+  results.push(await runCommand(
+    'PMachine conformance suite (JS runtime)',
+    'npm run test:pmachine:conformance'
+  ));
+
+  // Device parity only runs when hardware is addressable.
+  if (process.env.ESP32_HOST || process.env.ESP32_BASE_URL) {
+    results.push(await runCommand(
+      'PMachine JS/ESP32 parity diff',
+      'npm run test:pmachine:conformance:diff'
+    ));
+  } else {
+    console.log('[simple-smoke] ESP32_HOST not set, skipping JS/ESP32 parity diff');
+  }
+
   const antlrJar = path.join(root, 'tools', 'antlr-4.13.2-complete.jar');
   if (!fs.existsSync(antlrJar)) {
     results.push({ label: 'ANTLR smoke generation (Pascalish/WFL/MAPL)', code: 2 });

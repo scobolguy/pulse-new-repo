@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-03T15:43:24.732Z",
+  "serviceId": "dual-node-atomic-check",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "dual-node-atomic-check",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-program",
+  "sourceLanguage": "pascalish",
+  "entries": [],
+  "localResources": {
+    "serviceId": "dual-node-atomic-check",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "routers": [],
+  "serviceEndpoints": [],
+  "globals": [],
+  "variableDeclarations": [],
+  "procedures": {},
+  "typeDeclarations": [],
+  "classDeclarations": [],
+  "entryLabel": "MAIN",
+  "mapperImports": [],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "ce608fe2778ffb162bfa47feef117025c83bb14a9415003fd60a6f9653500bb9",
+    "signedAt": "2026-09-03T15:43:24.736Z",
+    "pcodeLength": 471,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

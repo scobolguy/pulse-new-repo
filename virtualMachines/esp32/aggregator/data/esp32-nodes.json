@@ -1,64 +1,6 @@
 {
   "version": "1.0",
-  "timestamp": "2026-08-19T00:11:56.825Z",
-  "nodes": [
-    {
-      "id": "child1",
-      "type": "esp32-device",
-      "name": "child1",
-      "ip": "192.168.2.157",
-      "port": 80,
-      "capabilities": {
-        "device.control": true,
-        "led.control": true,
-        "relay.control": true
-      },
-      "metadata": {
-        "hardware": "ESP32-CAM",
-        "source": "known-device",
-        "discoveryMethod": "manual"
-      },
-      "registeredAt": 1787098316817,
-      "lastSeen": 1787098316817
-    },
-    {
-      "id": "child2",
-      "type": "esp32-device",
-      "name": "child2",
-      "ip": "192.168.2.59",
-      "port": 80,
-      "capabilities": {
-        "device.control": true,
-        "led.control": true,
-        "relay.control": true
-      },
-      "metadata": {
-        "hardware": "ESP8266",
-        "source": "known-device",
-        "discoveryMethod": "manual"
-      },
-      "registeredAt": 1787098316823,
-      "lastSeen": 1787098316823
-    },
-    {
-      "id": "child3",
-      "type": "esp32-device",
-      "name": "child3",
-      "ip": "192.168.2.58",
-      "port": 80,
-      "capabilities": {
-        "device.control": true,
-        "led.control": true,
-        "relay.control": true
-      },
-      "metadata": {
-        "hardware": "ESP32",
-        "source": "known-device",
-        "discoveryMethod": "manual"
-      },
-      "registeredAt": 1787098316825,
-      "lastSeen": 1787098316825
-    }
-  ],
+  "timestamp": "2026-09-04T16:39:41.272Z",
+  "nodes": [],
   "manifests": {}
 }

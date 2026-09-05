@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-03T15:27:21.828Z",
+  "serviceId": "FactorialService",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "FactorialService",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-program",
+  "sourceLanguage": "pascalish",
+  "entries": [],
+  "localResources": {
+    "serviceId": "FactorialService",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "routers": [],
+  "serviceEndpoints": [],
+  "globals": [
+    "n"
+  ],
+  "variableDeclarations": [
+    {
+      "type": "VarDecl",
+      "name": "n",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "integer",
+        "genericArgs": []
+      }
+    }
+  ],
+  "procedures": {
+    "PROC_COMPUTEFACTORIAL": {
+      "name": "computeFactorial",
+      "params": [
+        "n"
+      ],
+      "locals": []
+    }
+  },
+  "typeDeclarations": [],
+  "classDeclarations": [],
+  "entryLabel": "MAIN",
+  "mapperImports": [],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "1499d32967aa55215dbde43d6d74d5f96f733d2add96a0d0450bd7b722437d7a",
+    "signedAt": "2026-09-03T15:27:21.830Z",
+    "pcodeLength": 1225,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

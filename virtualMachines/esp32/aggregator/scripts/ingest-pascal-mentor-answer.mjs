@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'node:crypto';
-import { compileStandardPascalWithAntlr } from './compile-standard-pascal-antlr-to-pcode.mjs';
+import { compilePascalishProgramWithAntlr } from './compile-pascalish-program-antlr-to-pcode.mjs';
 
 const WORKDIR = process.cwd();
 const GOLDENS_PATH = path.resolve(WORKDIR, 'data', 'pascal-ollama-goldens.json');
@@ -51,7 +51,7 @@ async function main() {
   const answerText = (await fs.readFile(args.answer, 'utf-8')).trim();
   if (!answerText) throw new Error('Answer file is empty');
 
-  compileStandardPascalWithAntlr(answerText);
+  compilePascalishProgramWithAntlr(answerText);
 
   let prompt = args.prompt.trim();
   let sessionId = null;

@@ -1,0 +1,7 @@
+# Auto-generated from ANTLR Pascalish grammar
+JMP MAIN
+MAIN:
+LOAD inboundMessage
+ROUTE_SET_MESSAGE
+ROUTE_EMIT "pacsOut"
+HALT

@@ -5,7 +5,7 @@
     "serviceId": "librarian-aware-demo",
     "enabled": true,
     "inputQueue": "swift.mt103.inbound",
-    "description": "Route MT103",
+    "description": "",
     "outputs": [
       {
         "queueName": "swift.mt103.parsed",
@@ -13,7 +13,7 @@
         "transformRule": "output := src;"
       }
     ],
-    "createdAt": "2026-08-15T17:43:42.232Z",
-    "updatedAt": "2026-08-15T17:43:42.232Z"
+    "createdAt": "2026-09-03T22:54:56.864Z",
+    "updatedAt": "2026-09-03T22:54:56.864Z"
   }
 ]

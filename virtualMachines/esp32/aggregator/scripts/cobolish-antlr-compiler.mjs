@@ -104,6 +104,12 @@ function collectCobolishMetadata(sourceText) {
     (match) => String(match?.[1] || '').trim()
   );
 
+  const displayStatements = extractMatches(
+    sourceText,
+    /\bDISPLAY\s+"((?:[^"\\]|\\.)*)"\s*\./gi,
+    (match) => String(match?.[1] || '').replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+  );
+
   const programIdMatch = String(sourceText || '').match(/^\s*PROGRAM-ID\.?\s+([A-Za-z0-9_-]+)/im);
   const programId = programIdMatch ? String(programIdMatch[1] || '').trim() : null;
 
@@ -118,6 +124,7 @@ function collectCobolishMetadata(sourceText) {
     paragraphs: Array.from(new Set(paragraphs)),
     interop,
     dataItems: Array.from(new Set(dataItems)),
+    displayStatements,
     divisions,
     lineCount: String(sourceText || '').split(/\r?\n/).length
   };
@@ -162,6 +169,7 @@ export function compileCobolishWithAntlr(sourceText, options = {}) {
     sections: parsed.metadata.divisions,
     paragraphs: parsed.metadata.paragraphs,
     dataItems: parsed.metadata.dataItems,
+    displayStatements: parsed.metadata.displayStatements,
     interop: parsed.metadata.interop,
     lineCount: parsed.metadata.lineCount,
     syntaxErrors: parsed.errors,

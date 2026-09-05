@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-03T15:13:52.796Z",
+  "serviceId": "MutualRecursionEvenOdd",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "MutualRecursionEvenOdd",
+    "refreshMs": null
+  },
+  "executionModel": "standard-pascal",
+  "sourceLanguage": "pascal",
+  "globals": [
+    "parity"
+  ],
+  "procedures": {
+    "PROC_ISEVEN": {
+      "name": "IsEven",
+      "params": [
+        "n"
+      ],
+      "locals": []
+    },
+    "PROC_ISODD": {
+      "name": "IsOdd",
+      "params": [
+        "n"
+      ],
+      "locals": []
+    },
+    "PROC_PRINTCHECKS": {
+      "name": "PrintChecks",
+      "params": [
+        "i",
+        "max"
+      ],
+      "locals": []
+    }
+  },
+  "entryLabel": "MAIN",
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "7b4fd3e708f2e39492bbf02de11da904df7fcd9b6c842ae07cd122f670eb09ea",
+    "signedAt": "2026-09-03T15:13:52.797Z",
+    "pcodeLength": 791,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

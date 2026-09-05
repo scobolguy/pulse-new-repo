@@ -22,6 +22,93 @@ function text(node) {
   return node ? String(node.getText()) : '';
 }
 
+function stringOrIdentText(ctx) {
+  if (!ctx) return '';
+  const node = ctx.stringOrIdent ? ctx.stringOrIdent() : null;
+  return node ? text(node) : '';
+}
+
+function unquote(value) {
+  const raw = String(value == null ? '' : value);
+  if (raw.length >= 2) {
+    const first = raw[0];
+    const last = raw[raw.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) return raw.slice(1, -1);
+  }
+  return raw;
+}
+
+// ANTLR getText() drops whitespace, so recover the original slice for pl0/blocks.
+function originalText(ctx) {
+  if (!ctx || !ctx.start || !ctx.stop) return '';
+  try {
+    return ctx.start.getInputStream().getText(ctx.start.start, ctx.stop.stop);
+  } catch {
+    return text(ctx);
+  }
+}
+
+function pl0SnippetText(ctx) {
+  if (!ctx) return '';
+  if (ctx.STRING && ctx.STRING()) return unquote(ctx.STRING().getText());
+  return originalText(ctx);
+}
+
+function durationToMs(value, unit) {
+  const amount = Number.parseInt(String(value || '').trim(), 10);
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+  const normalized = String(unit || '').trim().toLowerCase();
+  if (normalized === 'm') return amount * 60 * 1000;
+  if (normalized === 's') return amount * 1000;
+  return amount;
+}
+
+function collectUnitDecls(ctx, visitor) {
+  const decls = (ctx.unitDecl ? ctx.unitDecl() : []) || [];
+  const visited = decls.map(item => visitor.visit(item)).filter(Boolean);
+  return {
+    globals: visited.filter(d => d.type === 'VarSection').flatMap(d => d.vars),
+    procedures: visited.filter(d => d.type === 'SubprogramDecl'),
+    mappers: visited.filter(d => d.type === 'MapperDecl'),
+    routers: visited.filter(d => d.type === 'RouterDecl'),
+    types: visited.filter(d => d.type === 'TypeDecl'),
+    classes: visited.filter(d => d.type === 'ClassDecl'),
+    libraries: visited.filter(d => d.type === 'LibraryDecl')
+  };
+}
+
+function extractReturnExpr(blockCode) {
+  const source = String(blockCode || '');
+  // A RETURN inside a TRANSACTION body wins over any later SUCCESS/BACKOUT return.
+  const txnMatch = /transaction\s+[^\n;]+\s+begin([\s\S]*?)success[\s\S]*?backout[\s\S]*?end\s*;/i.exec(source);
+  if (txnMatch) {
+    const txnReturn = /return\s+([^;]+);/i.exec(String(txnMatch[1] || ''));
+    if (txnReturn) return String(txnReturn[1] || '').trim();
+  }
+  const match = /return\s+([^;]+);/i.exec(source);
+  return match ? String(match[1] || '').trim() : '';
+}
+
+// Render a service expression back into a PL/0 transform fragment.
+function renderServiceExpr(expr) {
+  if (!expr) return "''";
+  if (expr.type === 'StringLiteral') return `'${String(expr.value).replace(/'/g, "''")}'`;
+  if (expr.type === 'NumberLiteral' || expr.type === 'RealLiteral') return String(expr.value);
+  if (expr.type === 'BooleanLiteral') return expr.value ? '1' : '0';
+  if (expr.type === 'Identifier') return expr.name;
+  return "''";
+}
+
+// Rewrite map("X", ...) to the service-qualified id when X is service-local.
+function qualifyLocalMapRefs(exprText, localMapperIds) {
+  if (!exprText || !localMapperIds || localMapperIds.size === 0) return exprText;
+  return String(exprText).replace(/\bmap\s*\(\s*("[^"]*"|'[^']*')/gi, (whole, rawId) => {
+    const bare = rawId.slice(1, -1);
+    const qualified = localMapperIds.get(bare.toLowerCase());
+    return qualified ? whole.replace(rawId, `"${qualified}"`) : whole;
+  });
+}
+
 class PascalishProgramAstBuilder extends PascalishVisitor {
   visitCompilationUnit(ctx) {
     const ast = {
@@ -29,7 +116,10 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
       runtimeUnit: null,
       variables: [],
       types: [],
-      classes: []
+      classes: [],
+      procedures: [],
+      mappers: [],
+      routers: []
     };
 
     for (const decl of ctx.decl() || []) {
@@ -37,10 +127,23 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
       if (!value) continue;
       if (value.type === 'ProgramDecl' || value.type === 'ServiceDecl' || value.type === 'DaemonDecl') {
         ast.runtimeUnit = value;
+        if (value.syntheticRouter) ast.routers.push(value.syntheticRouter);
+        for (const variable of value.unit?.globals || []) ast.variables.push(variable);
+        for (const procedure of value.unit?.procedures || []) ast.procedures.push(procedure);
+        for (const mapper of value.unit?.mappers || []) ast.mappers.push(mapper);
+        for (const router of value.unit?.routers || []) ast.routers.push(router);
+        for (const typeDecl of value.unit?.types || []) ast.types.push(typeDecl);
+        for (const classDecl of value.unit?.classes || []) ast.classes.push(classDecl);
       }
       if (value.type === 'VarDecl') ast.variables.push(value);
       if (value.type === 'TypeDecl') ast.types.push(value);
       if (value.type === 'ClassDecl') ast.classes.push(value);
+      if (value.type === 'MapperDecl') ast.mappers.push(value);
+      if (value.type === 'RouterDecl') ast.routers.push(value);
+      if (value.type === 'ServiceDecl') {
+        for (const mapper of value.localMappers || []) ast.mappers.push(mapper);
+        for (const router of value.gatewayRouters || []) ast.routers.push(router);
+      }
     }
 
     return ast;
@@ -53,31 +156,294 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
     if (ctx.varDecl()) return this.visit(ctx.varDecl());
     if (ctx.typeDecl()) return this.visit(ctx.typeDecl());
     if (ctx.classDecl()) return this.visit(ctx.classDecl());
+    if (ctx.routerDecl()) return this.visit(ctx.routerDecl());
+    if (ctx.mapperDecl()) return this.visit(ctx.mapperDecl());
     return null;
   }
 
+  visitMapperDecl(ctx) {
+    const typeRefs = ctx.typeRef() || [];
+    return {
+      type: 'MapperDecl',
+      id: unquote(text(ctx.stringOrIdent())),
+      sourceTypeId: unquote(text(typeRefs[0])),
+      targetTypeId: unquote(text(typeRefs[1])),
+      maps: (ctx.mapDecl() || []).map(item => this.visit(item)).filter(Boolean)
+    };
+  }
+
+  visitMapDecl(ctx) {
+    const paths = ctx.stringValue() || [];
+    return {
+      sourcePath: unquote(text(paths[0])),
+      targetPath: unquote(text(paths[1])),
+      conversionRule: pl0SnippetText(ctx.pl0Snippet())
+    };
+  }
+
+  visitRouterDecl(ctx) {
+    return {
+      type: 'RouterDecl',
+      id: unquote(text(ctx.stringOrIdent())),
+      inputQueue: unquote(text(ctx.stringValue())),
+      outputs: (ctx.outputDecl() || []).map(item => this.visit(item)).filter(Boolean)
+    };
+  }
+
+  visitOutputDecl(ctx) {
+    const snippets = ctx.pl0Snippet() || [];
+    return {
+      queueName: unquote(text(ctx.stringValue())),
+      whenRule: pl0SnippetText(snippets[0]),
+      transformRule: pl0SnippetText(snippets[1])
+    };
+  }
+
   visitProgramDecl(ctx) {
+    const nameNode = ctx.stringOrIdent ? ctx.stringOrIdent() : null;
+    const unit = collectUnitDecls(ctx, this);
     return {
       type: 'ProgramDecl',
-      name: ctx.IDENT().getText(),
-      block: this.visit(ctx.block())
+      name: nameNode ? unquote(text(nameNode)) : '',
+      unit,
+      block: ctx.block() ? this.visit(ctx.block()) : { type: 'Block', statements: [] }
     };
   }
 
   visitServiceDecl(ctx) {
-    return {
+    const nameNode = ctx.stringOrIdent ? ctx.stringOrIdent() : null;
+    const serviceId = nameNode ? unquote(text(nameNode)) : '';
+
+    const localDecls = [];
+    const unit = collectUnitDecls(ctx, this);
+    for (const mapper of unit.mappers) localDecls.push(mapper);
+    for (const type of unit.types) localDecls.push(type);
+    for (const library of unit.libraries) localDecls.push(library);
+    for (const variable of unit.globals) localDecls.push(variable);
+    const body = ctx.serviceBody() ? this.visit(ctx.serviceBody()) : { type: 'Block', statements: [] };
+    for (const entry of body.localDecls || []) localDecls.push(entry);
+
+    const localMappers = localDecls.filter(item => item.type === 'MapperDecl');    const localTypes = localDecls.filter(item => item.type === 'TypeDecl');
+    const localLibraries = localDecls.filter(item => item.type === 'LibraryDecl');
+    const localVariables = localDecls.filter(item => item.type === 'VarDecl');
+
+    // Local mappers are namespaced under the service so they can never collide
+    // with, or be mistaken for, a Mapping Librarian entry.
+    const localMapperIds = new Map();
+    for (const mapper of localMappers) {
+      const qualified = `${serviceId}.${mapper.id}`;
+      localMapperIds.set(mapper.id.toLowerCase(), qualified);
+      mapper.localName = mapper.id;
+      mapper.id = qualified;
+      mapper.scope = 'local';
+      mapper.ownerServiceId = serviceId;
+    }
+    for (const item of [...localTypes, ...localLibraries, ...localVariables]) {
+      item.scope = 'local';
+      item.ownerServiceId = serviceId;
+    }
+
+    const endpoints = (ctx.serviceEndpoint() || [])
+      .map(item => this.visit(item))
+      .filter(Boolean)
+      .map(endpoint => ({
+        ...endpoint,
+        returnExpr: qualifyLocalMapRefs(endpoint.returnExpr, localMapperIds)
+      }));
+
+    const node = {
       type: 'ServiceDecl',
-      name: ctx.IDENT().getText(),
-      block: this.visit(ctx.block())
+      name: serviceId,
+      endpoints,
+      localMappers,
+      localTypes,
+      localLibraries,
+      localVariables,
+      gatewayRouters: (body.statements || [])
+        .filter(item => item.type === 'RouteMessage')
+        .map((item, index) => ({
+          type: 'RouterDecl',
+          id: `${serviceId}-route-${index + 1}`,
+          inputQueue: item.fromQueue,
+          outputs: [{
+            queueName: item.toQueue,
+            whenRule: 'output := 1;',
+            transformRule: 'output := src;'
+          }]
+        })),
+      block: {
+        ...body,
+        statements: (body.statements || []).filter(item => item.type !== 'RouteMessage' && item.type !== 'ServiceCase')
+      }
+    };
+
+    const caseStmt = (body.statements || []).find(item => item.type === 'ServiceCase');
+    if (caseStmt && caseStmt.arms.length > 0) {
+      node.syntheticRouter = {
+        type: 'RouterDecl',
+        id: `${serviceId}-http`,
+        inputQueue: `${serviceId}.in`,
+        outputs: caseStmt.arms.map(arm => ({
+          queueName: `${serviceId}.out`,
+          whenRule: `IF upper(httpVerb) = '${arm.verb}' THEN output := 1 ELSE output := 0;`,
+          transformRule: `output := ${qualifyLocalMapRefs(renderServiceExpr(arm.expr), localMapperIds)};`
+        }))
+      };
+    }
+
+    // A service with no endpoints and no CASE still exposes one always-on
+    // route, matching the legacy compiler's behaviour.
+    if (!node.syntheticRouter && endpoints.length === 0) {
+      const bareReturn = (body.statements || []).find(item => item.type === 'Return');
+      node.syntheticRouter = {
+        type: 'RouterDecl',
+        id: `${serviceId}-http`,
+        inputQueue: `${serviceId}.in`,
+        outputs: [{
+          queueName: `${serviceId}.out`,
+          whenRule: 'output := 1;',
+          transformRule: `output := ${qualifyLocalMapRefs(renderServiceExpr(bareReturn?.expr), localMapperIds)};`
+        }]
+      };
+    }
+
+    if (endpoints.length > 0) {
+      node.syntheticRouter = {
+        type: 'RouterDecl',
+        id: `${serviceId}-http`,
+        inputQueue: `${serviceId}.in`,
+        serviceId,
+        methods: endpoints.map(endpoint => endpoint.verb),
+        outputs: endpoints.map(endpoint => ({
+          queueName: `${serviceId}.out`,
+          httpVerb: endpoint.verb,
+          whenRule: `IF upper(httpVerb) = '${endpoint.verb}' THEN output := 1 ELSE output := 0;`,
+          transformRule: `output := ${endpoint.returnExpr || "''"};`
+        }))
+      };
+    }
+
+    return node;
+  }
+
+  visitServiceBody(ctx) {
+    const statements = [];
+    const localDecls = [];
+    for (const element of ctx.serviceBodyElement() || []) {
+      if (element.serviceLocalDecl && element.serviceLocalDecl()) {
+        const decl = this.visit(element.serviceLocalDecl());
+        if (decl) localDecls.push(decl);
+        continue;
+      }
+      if (element.serviceStmt && element.serviceStmt()) {
+        const stmt = this.visit(element.serviceStmt());
+        if (stmt) statements.push(stmt);
+      }
+    }
+    return { type: 'Block', statements, localDecls };
+  }
+
+  visitServiceLocalDecl(ctx) {
+    if (ctx.mapperDecl()) return this.visit(ctx.mapperDecl());
+    if (ctx.typeDecl()) return this.visit(ctx.typeDecl());
+    if (ctx.libraryDecl()) return this.visit(ctx.libraryDecl());
+    if (ctx.varDecl()) return this.visit(ctx.varDecl());
+    return null;
+  }
+
+  visitLibraryDecl(ctx) {
+    return {
+      type: 'LibraryDecl',
+      id: unquote(text(ctx.stringOrIdent())),
+      source: unquote(text(ctx.librarySource()))
     };
   }
 
+  visitServiceEndpoint(ctx) {
+    const returnExpr = extractReturnExpr(originalText(ctx.blockStmt()));
+    return {
+      verb: text(ctx.httpVerb()).toUpperCase(),
+      path: unquote(text(ctx.stringValue())),
+      acceptsType: ctx.endpointAccepts() ? text(ctx.endpointAccepts().typeRef()) : '',
+      returnsType: ctx.endpointReturns() ? text(ctx.endpointReturns().typeRef()) : '',
+      returnExpr
+    };
+  }
+
+  visitServiceCaseStmt(ctx) {
+    const returns = ctx.serviceReturnStmt() || [];
+    const arms = (ctx.serviceCaseArm() || []).map(arm => this.visit(arm)).filter(Boolean);
+    // A trailing ELSE RETURN sits outside the arms in the parse tree.
+    const elseReturn = returns.length > 0 ? this.visit(returns[returns.length - 1]) : null;
+    return {
+      type: 'ServiceCase',
+      arms,
+      elseExpr: elseReturn ? elseReturn.expr : null
+    };
+  }
+
+  visitServiceCaseArm(ctx) {
+    const selector = text(ctx.serviceExpr());
+    const returnStmt = ctx.serviceReturnStmt() ? this.visit(ctx.serviceReturnStmt()) : null;
+    return {
+      selector,
+      verb: selector.split('.').pop().toUpperCase(),
+      expr: returnStmt ? returnStmt.expr : null
+    };
+  }
+
+  visitServiceStmt(ctx) {
+    if (ctx.serviceReturnStmt()) return this.visit(ctx.serviceReturnStmt());
+    if (ctx.serviceCaseStmt()) return this.visit(ctx.serviceCaseStmt());
+    if (ctx.serviceRouteStmt()) return this.visit(ctx.serviceRouteStmt());
+    return null;
+  }
+
+  visitServiceRouteStmt(ctx) {
+    const endpoints = ctx.stringOrIdent() || [];
+    return {
+      type: 'RouteMessage',
+      fromQueue: unquote(text(endpoints[0])),
+      toQueue: unquote(text(endpoints[1]))
+    };
+  }
+
+  visitServiceReturnStmt(ctx) {
+    const expr = ctx.serviceExpr() ? this.visit(ctx.serviceExpr()) : null;
+    return {
+      type: 'Return',
+      expr: expr || { type: 'StringLiteral', value: '' }
+    };
+  }
+
+  visitServiceExpr(ctx) {
+    if (ctx.STRING()) {
+      return { type: 'StringLiteral', value: ctx.STRING().getText().slice(1, -1) };
+    }
+    if (ctx.NUMBER()) {
+      const raw = ctx.NUMBER().getText();
+      return raw.includes('.')
+        ? { type: 'RealLiteral', value: Number.parseFloat(raw) }
+        : { type: 'NumberLiteral', value: Number.parseInt(raw, 10) };
+    }
+    if (ctx.getChildCount() === 1 && (text(ctx) === 'true' || text(ctx) === 'false')) {
+      return { type: 'BooleanLiteral', value: text(ctx) === 'true' };
+    }
+    if (ctx.qualifiedName()) {
+      return { type: 'Identifier', name: this.visit(ctx.qualifiedName()) };
+    }
+    return { type: 'UnknownExpr', raw: text(ctx) };
+  }
+
   visitDaemonDecl(ctx) {
+    const nameNode = ctx.stringOrIdent ? ctx.stringOrIdent() : null;
+    const unit = collectUnitDecls(ctx, this);
     return {
       type: 'DaemonDecl',
-      name: ctx.IDENT().getText(),
-      schedule: this.visit(ctx.daemonSchedule()),
-      block: this.visit(ctx.block())
+      name: nameNode ? unquote(text(nameNode)) : '',
+      unit,
+      schedule: ctx.daemonSchedule() ? this.visit(ctx.daemonSchedule()) : null,
+      block: ctx.block() ? this.visit(ctx.block()) : { type: 'Block', statements: [] }
     };
   }
 
@@ -183,6 +549,9 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
   }
 
   visitTypeRef(ctx) {
+    if (ctx.STRING && ctx.STRING()) {
+      return { type: 'TypeRef', kind: 'quoted', id: unquote(ctx.STRING().getText()), genericArgs: [] };
+    }
     if (ctx.simpleType()) return this.visit(ctx.simpleType());
     if (ctx.recordType()) return this.visit(ctx.recordType());
     if (ctx.queueType()) return this.visit(ctx.queueType());
@@ -211,7 +580,7 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
     return {
       type: 'TypeRef',
       kind: 'user',
-      id: ctx.IDENT().getText(),
+      id: text(ctx.typeName()),
       genericArgs: ctx.genericTypeArgs() ? this.visit(ctx.genericTypeArgs()) : []
     };
   }
@@ -272,10 +641,57 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
   }
 
   visitBlock(ctx) {
+    const list = ctx.statementList ? ctx.statementList() : null;
     return {
       type: 'Block',
-      statements: (ctx.statement() || []).map(item => this.visit(item)).filter(Boolean)
+      statements: list ? (list.statement() || []).map(item => this.visit(item)).filter(Boolean) : []
     };
+  }
+
+  visitUnitDecl(ctx) {
+    if (ctx.varSection()) return this.visit(ctx.varSection());
+    if (ctx.subprogramDecl()) return this.visit(ctx.subprogramDecl());
+    if (ctx.typeDecl()) return this.visit(ctx.typeDecl());
+    if (ctx.classDecl()) return this.visit(ctx.classDecl());
+    if (ctx.routerDecl()) return this.visit(ctx.routerDecl());
+    if (ctx.mapperDecl()) return this.visit(ctx.mapperDecl());
+    if (ctx.libraryDecl()) return this.visit(ctx.libraryDecl());
+    return null;
+  }
+
+  visitVarSection(ctx) {
+    return {
+      type: 'VarSection',
+      vars: (ctx.varLine() || []).flatMap(line => this.visit(line))
+    };
+  }
+
+  visitVarLine(ctx) {
+    const dataType = this.visit(ctx.typeRef());
+    return this.visit(ctx.identList()).map(name => ({ type: 'VarDecl', name, dataType }));
+  }
+
+  visitSubprogramDecl(ctx) {
+    const inner = (ctx.unitDecl() || []).map(item => this.visit(item)).filter(Boolean);
+    const locals = inner
+      .filter(item => item.type === 'VarSection')
+      .flatMap(item => item.vars.map(v => v.name));
+    return {
+      type: 'SubprogramDecl',
+      kind: text(ctx.getChild(0)).toLowerCase(),
+      name: ctx.IDENT().getText(),
+      params: ctx.paramSection() ? this.visit(ctx.paramSection()) : [],
+      locals,
+      body: this.visit(ctx.block())
+    };
+  }
+
+  visitParamSection(ctx) {
+    return (ctx.paramGroup() || []).flatMap(group => this.visit(group));
+  }
+
+  visitParamGroup(ctx) {
+    return this.visit(ctx.identList());
   }
 
   visitStatement(ctx) {
@@ -288,15 +704,82 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
     if (ctx.withStmt()) return this.visit(ctx.withStmt());
     if (ctx.enqueueStmt()) return this.visit(ctx.enqueueStmt());
     if (ctx.dequeueStmt()) return this.visit(ctx.dequeueStmt());
+    if (ctx.concurrentStmt()) return this.visit(ctx.concurrentStmt());
+    if (ctx.returnStmt()) return this.visit(ctx.returnStmt());
     if (ctx.block()) return this.visit(ctx.block());
     return null;
+  }
+
+  visitConcurrentStmt(ctx) {
+    if (ctx.cobeginStmt()) return this.visit(ctx.cobeginStmt());
+    if (ctx.asyncStmt()) return this.visit(ctx.asyncStmt());
+    if (ctx.waitStmt()) return this.visit(ctx.waitStmt());
+    if (ctx.syncStmt()) return this.visit(ctx.syncStmt());
+    if (ctx.subflowStmt()) return this.visit(ctx.subflowStmt());
+    return null;
+  }
+
+  visitCobeginStmt(ctx) {
+    const list = ctx.statementList ? ctx.statementList() : null;
+    return {
+      type: 'Cobegin',
+      body: list ? (list.statement() || []).map(item => this.visit(item)).filter(Boolean) : []
+    };
+  }
+
+  visitAsyncStmt(ctx) {
+    return { type: 'Async', body: this.visit(ctx.statement()) };
+  }
+
+  visitSubflowStmt(ctx) {
+    const node = {
+      type: 'Subflow',
+      subflowId: unquote(text(ctx.stringValue())),
+      nodeId: '',
+      timeoutMs: 0,
+      handleRef: ''
+    };
+    for (const option of ctx.subflowOption() || []) {
+      if (option.stringOrIdent && option.stringOrIdent()) node.nodeId = unquote(text(option.stringOrIdent()));
+      if (option.IDENT && option.IDENT()) node.handleRef = option.IDENT().getText();
+      if (option.expr && option.expr() && option.timeUnit && option.timeUnit()) {
+        node.timeoutMs = durationToMs(text(option.expr()), text(option.timeUnit()));
+      }
+    }
+    return node;
+  }
+
+  visitWaitStmt(ctx) {
+    if (!ctx.identGroup || ctx.identGroup().length === 0) {
+      return { type: 'WaitAll', handles: [], targets: [], timeoutMs: 0, reason: '' };
+    }
+    const groups = ctx.identGroup();
+    const errorClause = ctx.waitErrorClause ? ctx.waitErrorClause() : null;
+    return {
+      type: 'WaitAll',
+      handles: this.visit(groups[0]),
+      targets: groups[1] ? this.visit(groups[1]) : [],
+      timeoutMs: ctx.expr() && ctx.timeUnit() ? durationToMs(text(ctx.expr()), text(ctx.timeUnit())) : 0,
+      reason: errorClause ? unquote(text(errorClause.stringValue())) : ''
+    };
+  }
+
+  visitIdentGroup(ctx) {
+    return (ctx.IDENT() || []).map(token => token.getText());
+  }
+
+  visitReturnStmt(ctx) {
+    return {
+      type: 'ReturnSuccess',
+      ref: ctx.expr() ? text(ctx.expr()) : ''
+    };
   }
 
   visitWithStmt(ctx) {
     return {
       type: 'With',
       contextExpr: this.visit(ctx.expr()),
-      body: (ctx.statement() || []).map(s => this.visit(s)).filter(Boolean)
+      body: ctx.statement() ? [this.visit(ctx.statement())].filter(Boolean) : []
     };
   }
 
@@ -362,10 +845,10 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
   }
 
   visitRepeatStmt(ctx) {
-    const statements = ctx.statement() || [];
+    const list = ctx.statementList ? ctx.statementList() : null;
     return {
       type: 'Repeat',
-      body: statements.map(item => this.visit(item)).filter(Boolean),
+      body: list ? (list.statement() || []).map(item => this.visit(item)).filter(Boolean) : [],
       untilExpr: this.visit(ctx.expr())
     };
   }
@@ -375,7 +858,7 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
   }
 
   visitQualifiedName(ctx) {
-    return (ctx.IDENT() || []).map(token => token.getText()).join('.');
+    return text(ctx);
   }
 
   visitExprList(ctx) {
@@ -484,6 +967,13 @@ class Codegen {
     this.labelId = 0;
     this.procLabels = new Map();
     this.classInfo = new Map();
+    this.typeRegistry = new Map(); // User-defined type aliases
+
+    // Build type registry from type declarations (compile-time type aliasing)
+    for (const typeDecl of this.ast.types || []) {
+      // typeDecl = { type: 'TypeDecl', name: string, alias: TypeRef }
+      this.typeRegistry.set(String(typeDecl.name || '').toLowerCase(), typeDecl.alias);
+    }
 
     for (const classDecl of this.ast.classes || []) {
       const fields = new Set();
@@ -517,6 +1007,29 @@ class Codegen {
 
   currentContext() {
     return this.methodContext || null;
+  }
+
+  /**
+   * Resolve a type reference by following user-defined type aliases.
+   * User-defined types are erased at compile time - this method follows chains
+   * of type aliases and returns the underlying base type.
+   * @param {object} typeRef - TypeRef AST node
+   * @returns {object} - Resolved TypeRef (base type)
+   */
+  resolveType(typeRef) {
+    if (!typeRef) return typeRef;
+    
+    // If it's a userType with a single identifier, check the type registry
+    if (typeRef.type === 'TypeRef' && typeRef.kind === 'userType' && typeRef.id) {
+      const key = String(typeRef.id).toLowerCase();
+      const aliasedType = this.typeRegistry.get(key);
+      if (aliasedType) {
+        // Recursively resolve to handle chains like type A = B; type B = integer;
+        return this.resolveType(aliasedType);
+      }
+    }
+    
+    return typeRef;
   }
 
   normalizeStorageName(name) {
@@ -617,8 +1130,15 @@ class Codegen {
       return;
     }
     if (expr.type === 'Binary') {
+      // String comparisons need STREQ/STRNEQ; EQ coerces operands to numbers.
+      const comparesStrings = (expr.op === '=' || expr.op === '<>')
+        && (expr.left?.type === 'StringLiteral' || expr.right?.type === 'StringLiteral');
       this.emitExpr(expr.left);
       this.emitExpr(expr.right);
+      if (comparesStrings) {
+        this.emit(expr.op === '=' ? 'STREQ' : 'STRNEQ');
+        return;
+      }
       const opMap = {
         '+': 'ADD',
         '-': 'SUB',
@@ -630,8 +1150,8 @@ class Codegen {
         '<=': 'LE',
         '>': 'GT',
         '>=': 'GE',
-        'and': 'MUL',
-        'or': 'ADD'
+        'and': 'AND',
+        'or': 'OR'
       };
       const opcode = opMap[expr.op];
       if (!opcode) throw new Error(`[PASCALISH-PROGRAM] Unsupported operator: ${expr.op}`);
@@ -653,6 +1173,15 @@ class Codegen {
       return;
     }
     if (stmt.type === 'Call') {
+      const bareName = String(stmt.name || '').toLowerCase();
+      if (bareName === 'writeln' || bareName === 'write') {
+        for (const argument of stmt.args || []) {
+          this.emitExpr(argument);
+          this.emit(argument?.type === 'StringLiteral' ? 'PRINT' : 'PRINT_INT');
+        }
+        if (bareName === 'writeln') this.emit('PRINT_NL');
+        return;
+      }
       for (const argument of stmt.args || []) this.emitExpr(argument);
       this.emit(`CALL ${this.lookupProcedureLabel(this.normalizeProcedureName(stmt.name))} ${(stmt.args || []).length}`);
       return;
@@ -718,6 +1247,38 @@ class Codegen {
       this.emit('MSG_WITH_POP');
       return;
     }
+    if (stmt.type === 'Cobegin') {
+      for (const entry of stmt.body || []) this.emitStatement(entry);
+      return;
+    }
+    if (stmt.type === 'Async') {
+      this.emitStatement(stmt.body);
+      return;
+    }
+    if (stmt.type === 'Subflow') {
+      const task = {
+        subflowId: stmt.subflowId,
+        nodeId: stmt.nodeId,
+        timeoutMs: stmt.timeoutMs,
+        handleRef: stmt.handleRef
+      };
+      this.emit(`ORCH_SPAWN "${this.escapeString(JSON.stringify(task))}"`);
+      return;
+    }
+    if (stmt.type === 'WaitAll') {
+      const config = { timeoutMs: stmt.timeoutMs, reason: stmt.reason };
+      this.emit(`ORCH_WAIT_ALL "${this.escapeString(JSON.stringify(config))}"`);
+      if (stmt.reason) this.emit(`ORCH_FAIL_TXN "${this.escapeString(stmt.reason)}"`);
+      return;
+    }
+    if (stmt.type === 'ReturnSuccess') {
+      this.emit(`ORCH_RETURN_SUCCESS "${this.escapeString(stmt.ref)}"`);
+      return;
+    }
+    if (stmt.type === 'Return') {
+      this.emitExpr(stmt.expr);
+      return;
+    }
     if (stmt.type === 'Enqueue') {
       this.emitExpr(stmt.expr);
       this.emit('ROUTE_SET_MESSAGE');
@@ -740,6 +1301,27 @@ class Codegen {
       return;
     }
     throw new Error(`[PASCALISH-PROGRAM] Unsupported statement node: ${stmt.type}`);
+  }
+
+  emitRouters() {
+    for (const router of this.ast.routers || []) {
+      const skipLabel = this.nextLabel('ROUTER_SKIP');
+      this.emit(`ROUTE_MATCH_QUEUE "${this.escapeString(router.inputQueue)}"`);
+      this.emit(`JZ ${skipLabel}`);
+      for (const output of router.outputs || []) {
+        const nextLabel = this.nextLabel('OUT_SKIP');
+        if (output.whenRule) {
+          this.emit(`ROUTE_EVAL_WHEN "${this.escapeString(output.whenRule)}"`);
+          this.emit(`JZ ${nextLabel}`);
+        }
+        if (output.transformRule) {
+          this.emit(`ROUTE_TRANSFORM "${this.escapeString(output.transformRule)}"`);
+        }
+        this.emit(`ROUTE_EMIT "${this.escapeString(output.queueName)}"`);
+        this.emit(`${nextLabel}:`);
+      }
+      this.emit(`${skipLabel}:`);
+    }
   }
 
   zeroInit(name) {
@@ -792,6 +1374,22 @@ class Codegen {
       }
     }
 
+    for (const procedure of this.ast.procedures || []) {
+      const label = this.registerProcedure(procedure.name);
+      this.emit(`${label}:`);
+      const paramNames = new Set(procedure.params || []);
+      for (const localName of procedure.locals || []) {
+        if (!paramNames.has(localName)) this.zeroInit(localName);
+      }
+      this.emitStatement(procedure.body);
+      this.emit('RET');
+      procedures[label] = {
+        name: procedure.name,
+        params: procedure.params || [],
+        locals: procedure.locals || []
+      };
+    }
+
     this.emit('MAIN:');
     for (const classDecl of this.ast.classes || []) {
       const classState = this.classInfo.get(classDecl.name);
@@ -803,6 +1401,7 @@ class Codegen {
       this.zeroInit(this.normalizeStorageName(variable.name));
     }
     this.emitStatement(runtimeUnit.block);
+    this.emitRouters();
     this.emit('HALT');
 
     return {
@@ -818,6 +1417,25 @@ class Codegen {
         },
         executionModel: `pascalish-${runtimeKind}`,
         sourceLanguage: 'pascalish',
+        entries: (this.ast.mappers || []).map(mapper => ({
+          kind: 'mapper',
+          id: mapper.id,
+          scope: mapper.scope === 'local' ? 'local' : 'global',
+          ownerServiceId: mapper.ownerServiceId || null,
+          sourceTypeId: mapper.sourceTypeId,
+          targetTypeId: mapper.targetTypeId,
+          items: mapper.maps || []
+        })),
+        localResources: {
+          serviceId: runtimeUnit.name || null,
+          mappers: (runtimeUnit.localMappers || []).map(item => item.id),
+          types: (runtimeUnit.localTypes || []).map(item => item.name),
+          libraries: (runtimeUnit.localLibraries || []).map(item => item.id),
+          variables: (runtimeUnit.localVariables || []).map(item => item.name),
+          publishable: false
+        },
+        routers: this.ast.routers || [],
+        serviceEndpoints: runtimeUnit.endpoints || [],
         globals: (this.ast.variables || []).map(item => item.name),
         variableDeclarations: this.ast.variables,
         procedures,

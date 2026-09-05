@@ -104,7 +104,16 @@ export const COBOLISH_KEYWORDS = [
   'end-id',
   'interop',
   'wfl',
-  'pascalish'
+  'pascalish',
+  'cobolish',
+  'vbish'
+];
+
+export const VBISH_KEYWORDS = [
+  'option', 'explicit', 'dim', 'as', 'string', 'integer', 'double', 'boolean',
+  'sub', 'function', 'end', 'if', 'then', 'else', 'for', 'each', 'while', 'do',
+  'loop', 'select', 'case', 'return', 'service', 'daemon', 'program', 'interop',
+  'pascalish', 'cobolish', 'workflow', 'wfl'
 ];
 
 export const WORKFLOW_KEYWORDS = [
@@ -222,6 +231,7 @@ export const DOCUMENT_TYPES = [
     starterContent: [
       'IDENTIFICATION DIVISION.',
       'PROGRAM-ID. NEW-COBOLISH-PROGRAM.',
+      'PULSE SERVICE "new-cobolish-service" ON LOCAL.',
       'ENVIRONMENT DIVISION.',
       'CONFIGURATION SECTION.',
       'DATA DIVISION.',
@@ -235,6 +245,25 @@ export const DOCUMENT_TYPES = [
       '    DISPLAY "COBOLISH READY".',
       '    GOBACK.',
       'END PROGRAM NEW-COBOLISH-PROGRAM.'
+    ].join('\n')
+  },
+  {
+    id: 'vbish',
+    label: 'VBish',
+    extension: '.vbs',
+    editorId: 'vbish',
+    editorLabel: 'VBish Editor',
+    monacoLanguage: 'vbish',
+    starterContent: [
+      'Service "new-vbish-service" On Local',
+      'Option Explicit',
+      'Interop Pascalish "router-mapper" As RouterMapper',
+      'Interop COBOLISH "core-posting" As CorePosting',
+      '',
+      'Sub Main()',
+      '  Dim status As String',
+      '  status = "VBish service ready"',
+      'End Sub'
     ].join('\n')
   }
 ];

@@ -1,0 +1,12 @@
+# Auto-generated from ANTLR Pascalish grammar
+JMP MAIN
+MAIN:
+ROUTE_MATCH_QUEUE "MT103LocalScope.in"
+JZ ROUTER_SKIP_1
+ROUTE_EVAL_WHEN "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;"
+JZ OUT_SKIP_2
+ROUTE_TRANSFORM "output := map(\"MT103LocalScope.LOCAL_MT103_TO_PACS\", src);"
+ROUTE_EMIT "MT103LocalScope.out"
+OUT_SKIP_2:
+ROUTER_SKIP_1:
+HALT

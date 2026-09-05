@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-03T15:27:21.469Z",
+  "serviceId": "FactorialService",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "FactorialService",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-program",
+  "sourceLanguage": "pascalish",
+  "entries": [],
+  "localResources": {
+    "serviceId": "FactorialService",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "routers": [],
+  "serviceEndpoints": [],
+  "globals": [
+    "n",
+    "result",
+    "i"
+  ],
+  "variableDeclarations": [
+    {
+      "type": "VarDecl",
+      "name": "n",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "integer",
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "result",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "integer",
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "i",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "integer",
+        "genericArgs": []
+      }
+    }
+  ],
+  "procedures": {
+    "PROC_FACTORIAL": {
+      "name": "factorial",
+      "params": [
+        "x"
+      ],
+      "locals": []
+    }
+  },
+  "typeDeclarations": [],
+  "classDeclarations": [],
+  "entryLabel": "MAIN",
+  "mapperImports": [],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "204141b2f199cbf41b4cacb49e8bffcc1f9713255ab003d3abc0beb611e96565",
+    "signedAt": "2026-09-03T15:27:21.471Z",
+    "pcodeLength": 743,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

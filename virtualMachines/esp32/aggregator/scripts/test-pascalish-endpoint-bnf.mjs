@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { compilePascalishWithAntlr } from './pascalish-antlr-compiler.mjs';
+import { compileRouterMapperDSL } from './compile-pascal.mjs';
 
 function getRouterByServiceId(compiled, serviceId) {
   return (compiled?.routerRules || []).find(
@@ -29,7 +29,7 @@ async function main() {
     'END;'
   ].join('\n');
 
-  const compiled = compilePascalishWithAntlr(source);
+  const compiled = compileRouterMapperDSL(source);
   assert.equal(compiled.serviceId, 'mt103-pacs-endpoint', 'service id should be parsed');
 
   const router = getRouterByServiceId(compiled, 'mt103-pacs-endpoint');
@@ -41,14 +41,13 @@ async function main() {
   assert.ok(postOutput, 'POST endpoint output should exist');
   assert.equal(
     postOutput.transformRule,
-    'output := map ("mt103-to-pacs", src);',
+    'output := map("mt103-to-pacs", src);',
     'transaction endpoint should lower its transaction return expression'
   );
 
   const getOutput = (router.outputs || []).find((o) => o.httpVerb === 'GET');
   assert.ok(getOutput, 'GET endpoint output should exist');
   assert.equal(getOutput.transformRule, 'output := "alive";', 'GET endpoint return should lower to transform rule');
-
   console.log('[pascalish-endpoint-bnf] PASS: endpoint and transaction syntax compiles');
 }
 

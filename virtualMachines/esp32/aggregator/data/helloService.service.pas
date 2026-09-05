@@ -11,3 +11,6 @@ ROUTER "helloService-http" INPUT "helloService.in" DESCRIPTION "Return hello, wo
     WHEN "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;"
     TRANSFORM "output := 'hello, world';";
 END;
+
+begin
+end.

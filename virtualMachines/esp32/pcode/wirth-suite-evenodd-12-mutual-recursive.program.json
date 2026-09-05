@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-05T01:12:05.804Z",
+  "serviceId": "MutualRecursionEvenOdd",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "MutualRecursionEvenOdd",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-program",
+  "sourceLanguage": "pascalish",
+  "entries": [],
+  "localResources": {
+    "serviceId": "MutualRecursionEvenOdd",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "routers": [],
+  "serviceEndpoints": [],
+  "globals": [
+    "parity"
+  ],
+  "variableDeclarations": [
+    {
+      "type": "VarDecl",
+      "name": "parity",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "integer",
+        "genericArgs": []
+      }
+    }
+  ],
+  "procedures": {
+    "PROC_ISEVEN": {
+      "name": "IsEven",
+      "params": [
+        "n"
+      ],
+      "locals": []
+    },
+    "PROC_ISODD": {
+      "name": "IsOdd",
+      "params": [
+        "n"
+      ],
+      "locals": []
+    },
+    "PROC_PRINTCHECKS": {
+      "name": "PrintChecks",
+      "params": [
+        "i",
+        "max"
+      ],
+      "locals": []
+    }
+  },
+  "typeDeclarations": [],
+  "classDeclarations": [],
+  "entryLabel": "MAIN",
+  "mapperImports": [],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "85a2eda65c3ed8682fef3de51e56d588651cde244ffc3029e40070a417326473",
+    "signedAt": "2026-09-05T01:12:05.806Z",
+    "pcodeLength": 786,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

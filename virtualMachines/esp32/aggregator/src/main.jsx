@@ -8,6 +8,7 @@ import NetworkDevicesPage from './NetworkDevicesPage.jsx'
 import ProjectTreePage from './ProjectTreePage.jsx'
 import ProvisioningAgentPage from './ProvisioningAgentPage.jsx'
 import PascalishEditorPage from './PascalishEditorPage.jsx'
+import LanguageCompilerPage from './LanguageCompilerPage.jsx'
 
 const TOOL_ROUTES = [
   { path: '/query', label: 'Query', shortLabel: 'Q', description: 'Ask BOB, submit files, and inspect operational results.' },
@@ -15,6 +16,8 @@ const TOOL_ROUTES = [
   { path: '/data-mapper', label: 'Data Mapper', shortLabel: 'M', description: 'Define and test transformations between message formats.' },
   { path: '/flow-designer', label: 'Flow Designer', shortLabel: 'F', description: 'Compose typed processing flows and bind deployment targets.' },
   { path: '/pascalish', label: 'Pascalish', shortLabel: 'Ps', description: 'Author and compile Pascalish programs with Monaco editor, Librarian type autocomplete, and F7 run shortcuts.' },
+  { path: '/cobolish', label: 'COBOLISH', shortLabel: 'Cb', description: 'Author COBOL-85 compatible programs, services, and daemons.' },
+  { path: '/vbish', label: 'VBish', shortLabel: 'Vb', description: 'Author VB-like programs, services, and daemons.' },
   { path: '/topology', label: 'Topology', shortLabel: 'T', description: 'Inspect nodes, services, and runtime connectivity.' },
   { path: '/bluetooth-devices', label: 'Bluetooth Devices', shortLabel: 'B', description: 'Inspect nearby BLE devices, inferred types, manufacturers, and signal strength.' },
   { path: '/provisioning-agent', label: 'Provisioning Agent', shortLabel: 'A', description: 'Run fleet provisioning jobs with retry policy and job history.' },
@@ -152,6 +155,10 @@ function AppShell() {
     )
   } else if (currentPath === '/pascalish') {
     currentPage = <PascalishEditorPage />
+  } else if (currentPath === '/cobolish') {
+    currentPage = <LanguageCompilerPage languageId="cobolish" />
+  } else if (currentPath === '/vbish') {
+    currentPage = <LanguageCompilerPage languageId="vbish" />
   } else if (currentPath === '/provisioning-agent') {
     currentPage = <ProvisioningAgentPage />
   }

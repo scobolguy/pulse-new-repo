@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-05T01:12:04.954Z",
+  "serviceId": "RecursiveFactorial",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "RecursiveFactorial",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-program",
+  "sourceLanguage": "pascalish",
+  "entries": [],
+  "localResources": {
+    "serviceId": "RecursiveFactorial",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "routers": [],
+  "serviceEndpoints": [],
+  "globals": [],
+  "variableDeclarations": [],
+  "procedures": {
+    "PROC_PRINTFACTRANGE": {
+      "name": "PrintFactRange",
+      "params": [
+        "i",
+        "max",
+        "acc"
+      ],
+      "locals": []
+    }
+  },
+  "typeDeclarations": [],
+  "classDeclarations": [],
+  "entryLabel": "MAIN",
+  "mapperImports": [],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "a5bb4ea4609f40c14e40450346f825f3c8fb60d96c93c9eeb88e90bc8f13b378",
+    "signedAt": "2026-09-05T01:12:04.957Z",
+    "pcodeLength": 391,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

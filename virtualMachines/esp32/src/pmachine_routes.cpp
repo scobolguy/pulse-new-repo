@@ -542,6 +542,24 @@ void addRunOutputsToJson(
         stdoutLines.add(line.c_str());
     }
 
+    JsonObject globals = out["globals"].to<JsonObject>();
+    for (const auto& entry : machine.getGlobalsSnapshot()) {
+        if (entry.second.isString) {
+            globals[entry.first.c_str()] = entry.second.strValue.c_str();
+        } else if (entry.second.isReal) {
+            // 7 significant digits: the observable precision contract shared with the JS runtime.
+            char realBuf[32] = {0};
+            snprintf(realBuf, sizeof(realBuf), "%.6E", static_cast<double>(entry.second.realValue));
+            globals[entry.first.c_str()] = serialized(realBuf);
+        } else if (entry.second.isEnum) {
+            globals[entry.first.c_str()] = entry.second.strValue.c_str();
+        } else if (entry.second.isJson) {
+            globals[entry.first.c_str()] = serialized(entry.second.strValue.c_str());
+        } else {
+            globals[entry.first.c_str()] = entry.second.intValue;
+        }
+    }
+
     const std::map<std::string, std::string> flowState = machine.getFlowStateSnapshot();
     if (!flowState.empty()) {
         JsonObject flow = out["flowState"].to<JsonObject>();
@@ -803,6 +821,20 @@ void applyRuntimeAndResidencyPolicy(
         refreshMs
     );
 
+    machine.clearEnumTypes();
+    if (metadata != nullptr && metadata->raw["enums"].is<JsonObjectConst>()) {
+        JsonObjectConst enums = metadata->raw["enums"].as<JsonObjectConst>();
+        for (JsonPairConst pair : enums) {
+            std::vector<std::string> values;
+            for (JsonVariantConst item : pair.value().as<JsonArrayConst>()) {
+                if (item.is<const char*>()) values.push_back(std::string(item.as<const char*>()));
+            }
+            if (!values.empty()) {
+                machine.registerEnumType(std::string(pair.key().c_str()), values);
+            }
+        }
+    }
+
     if (policy != nullptr && policy->hasResidentLoad) {
         machine.loadResidentDomain(
             std::string(policy->residentDomain.c_str()),
@@ -870,6 +902,7 @@ void parseProgramMapMetadata(const JsonDocument& doc, ProgramMapMetadata& metada
     if (doc["codeLibraries"].is<JsonArrayConst>()) raw["codeLibraries"] = doc["codeLibraries"];
     if (doc["uses"].is<JsonArrayConst>()) raw["uses"] = doc["uses"];
     if (doc["interoperability"].is<JsonArrayConst>()) raw["interoperability"] = doc["interoperability"];
+    if (doc["enums"].is<JsonObjectConst>()) raw["enums"] = doc["enums"];
 }
 
 bool evaluateWhenRule(const String& whenRule, const String& srcMessage) {
@@ -1635,7 +1668,7 @@ bool loadProgramMapMappingsFromDoc(
 
     if (procedureSignaturesOut != nullptr) {
         procedureSignaturesOut->clear();
-        if (doc.is<JsonObject>() && doc["procedures"].is<JsonObjectConst>()) {
+        if (doc.is<JsonObjectConst>() && doc["procedures"].is<JsonObjectConst>()) {
             JsonObjectConst procedures = doc["procedures"].as<JsonObjectConst>();
             for (JsonPairConst pair : procedures) {
                 const char* label = pair.key().c_str();
@@ -1655,14 +1688,14 @@ bool loadProgramMapMappingsFromDoc(
 
     mappingsOut.clear();
     JsonArrayConst entries;
-    if (doc.is<JsonArray>()) {
+    // Const documents yield const variants, so the Const type checks are required here.
+    if (doc.is<JsonArrayConst>()) {
         entries = doc.as<JsonArrayConst>();
-    } else if (doc.is<JsonObject>() && doc["entries"].is<JsonArray>()) {
+    } else if (doc.is<JsonObjectConst>() && doc["entries"].is<JsonArrayConst>()) {
         entries = doc["entries"].as<JsonArrayConst>();
     } else {
         return true;
     }
-
     for (JsonObjectConst entry : entries) {
         String kind = entry["kind"] | "";
         if (kind != "mapper") continue;
@@ -2146,6 +2179,24 @@ EdgeIngressExecutionResult executeEdgeIngressStage(
     JsonArray stdoutLines = out["stdout"].to<JsonArray>();
     for (const auto& line : machine.getLastRunTextOutput()) {
         stdoutLines.add(line.c_str());
+    }
+
+    JsonObject globals = out["globals"].to<JsonObject>();
+    for (const auto& entry : machine.getGlobalsSnapshot()) {
+        if (entry.second.isString) {
+            globals[entry.first.c_str()] = entry.second.strValue.c_str();
+        } else if (entry.second.isReal) {
+            // 7 significant digits: the observable precision contract shared with the JS runtime.
+            char realBuf[32] = {0};
+            snprintf(realBuf, sizeof(realBuf), "%.6E", static_cast<double>(entry.second.realValue));
+            globals[entry.first.c_str()] = serialized(realBuf);
+        } else if (entry.second.isEnum) {
+            globals[entry.first.c_str()] = entry.second.strValue.c_str();
+        } else if (entry.second.isJson) {
+            globals[entry.first.c_str()] = serialized(entry.second.strValue.c_str());
+        } else {
+            globals[entry.first.c_str()] = entry.second.intValue;
+        }
     }
 
     const std::map<std::string, std::string> flowState = machine.getFlowStateSnapshot();
@@ -3824,22 +3875,16 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
             hasProgramMap = true;
         }
 
-        if (runRouter) {
-            applyRuntimeAndResidencyPolicy(machine, &policy, hasProgramMap ? &metadata : nullptr);
-            machine.setMappings(mappingDefs);
+        // Mappings are program data, not router-only state, so OP_MAP resolves in both modes.
+        applyRuntimeAndResidencyPolicy(machine, &policy, hasProgramMap ? &metadata : nullptr);
+        machine.setMappings(mappingDefs);
+        if (hasProgramMap || runRouter) {
             machine.setProcedureSignatures(procedureSignatures);
             if (hasProgramMap) {
                 thunkBindingsApplied += applyLibraryReferencesFromMetadata(machine, metadata);
             }
         } else {
-            applyRuntimeAndResidencyPolicy(machine, &policy, hasProgramMap ? &metadata : nullptr);
-            machine.clearMappings();
-            if (hasProgramMap) {
-                machine.setProcedureSignatures(procedureSignatures);
-                thunkBindingsApplied += applyLibraryReferencesFromMetadata(machine, metadata);
-            } else {
-                machine.clearProcedureSignatures();
-            }
+            machine.clearProcedureSignatures();
         }
 
         const size_t programLimit = max > 0 ? max : binary.size();
@@ -3929,22 +3974,15 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
             hasProgramMap = true;
         }
 
-        if (runRouter) {
-            applyRuntimeAndResidencyPolicy(machine, &policy, hasProgramMap ? &metadata : nullptr);
-            machine.setMappings(mappingDefs);
+        applyRuntimeAndResidencyPolicy(machine, &policy, hasProgramMap ? &metadata : nullptr);
+        machine.setMappings(mappingDefs);
+        if (hasProgramMap || runRouter) {
             machine.setProcedureSignatures(procedureSignatures);
             if (hasProgramMap) {
                 thunkBindingsApplied += applyLibraryReferencesFromMetadata(machine, metadata);
             }
         } else {
-            applyRuntimeAndResidencyPolicy(machine, &policy, hasProgramMap ? &metadata : nullptr);
-            machine.clearMappings();
-            if (hasProgramMap) {
-                machine.setProcedureSignatures(procedureSignatures);
-                thunkBindingsApplied += applyLibraryReferencesFromMetadata(machine, metadata);
-            } else {
-                machine.clearProcedureSignatures();
-            }
+            machine.clearProcedureSignatures();
         }
 
         const size_t programLimit = max > 0 ? max : binary.size();
@@ -4098,22 +4136,15 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
                 hasProgramMap = true;
             }
 
-            if (runRouter) {
-                applyRuntimeAndResidencyPolicy(machine, &policy, hasProgramMap ? &metadata : nullptr);
-                machine.setMappings(mappingDefs);
+            applyRuntimeAndResidencyPolicy(machine, &policy, hasProgramMap ? &metadata : nullptr);
+            machine.setMappings(mappingDefs);
+            if (hasProgramMap || runRouter) {
                 machine.setProcedureSignatures(procedureSignatures);
                 if (hasProgramMap) {
                     thunkBindingsApplied += applyLibraryReferencesFromMetadata(machine, metadata);
                 }
             } else {
-                applyRuntimeAndResidencyPolicy(machine, &policy, hasProgramMap ? &metadata : nullptr);
-                machine.clearMappings();
-                if (hasProgramMap) {
-                    machine.setProcedureSignatures(procedureSignatures);
-                    thunkBindingsApplied += applyLibraryReferencesFromMetadata(machine, metadata);
-                } else {
-                    machine.clearProcedureSignatures();
-                }
+                machine.clearProcedureSignatures();
             }
 
             const size_t programLimit = max > 0 ? max : binary.size();

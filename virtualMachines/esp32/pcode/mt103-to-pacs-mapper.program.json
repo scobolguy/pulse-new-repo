@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-03T00:25:09.391Z",
+  "serviceId": "MT103ToPacsMapper",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "MT103ToPacsMapper",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-program",
+  "sourceLanguage": "pascalish",
+  "globals": [],
+  "variableDeclarations": [],
+  "procedures": {},
+  "typeDeclarations": [],
+  "classDeclarations": [],
+  "entryLabel": "MAIN",
+  "mapperImports": [],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "e0171a6ae58cd2ec5431c51acbe310cf5ca98668d8c0e5b7bbf85e6290eb7b32",
+    "signedAt": "2026-09-03T00:25:09.393Z",
+    "pcodeLength": 125,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

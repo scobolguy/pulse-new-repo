@@ -2,7 +2,6 @@ import fs from 'fs/promises';
 import path from 'path';
 import { pathToFileURL } from 'url';
 import { compilePascalishProgramWithAntlr } from './compile-pascalish-program-antlr-to-pcode.mjs';
-import { compileStandardPascalWithAntlr } from './compile-standard-pascal-antlr-to-pcode.mjs';
 
 function parseArgs(argv) {
   const args = {
@@ -56,17 +55,7 @@ async function main() {
   const mapOutPath = path.resolve(args.mapOut);
 
   const sourceText = await fs.readFile(inputPath, 'utf-8');
-  let compiled;
-  try {
-    compiled = compilePascalishProgramWithAntlr(sourceText);
-  } catch (pascalishError) {
-    try {
-      compiled = compileStandardPascalWithAntlr(sourceText);
-      console.warn(`[pascalishc-antlr] Pascalish.g4 parse failed; used Standard Pascal ANTLR parser: ${pascalishError.message}`);
-    } catch {
-      throw pascalishError;
-    }
-  }
+  const compiled = compilePascalishProgramWithAntlr(sourceText);
 
   await fs.mkdir(path.dirname(outPath), { recursive: true });
   await fs.mkdir(path.dirname(mapOutPath), { recursive: true });

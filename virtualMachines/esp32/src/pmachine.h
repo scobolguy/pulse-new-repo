@@ -135,10 +135,84 @@ enum Opcode : uint8_t {
     OP_STREQ = 0x4E,             // Pop two strings, push 1 if equal else 0
     OP_STRNEQ = 0x4F,            // Pop two strings, push 1 if not equal else 0
     OP_MAP_RETURN = 0x50,
+    OP_PUSH_REAL = 0x57,         // Push real literal operand
+    OP_RDIV = 0x58,              // Real division; integer operands are promoted
+    OP_ORD = 0x59,               // Pop enum, push its integer ordinal
+    OP_REC_NEW = 0x5A,           // Create an empty record variable
+    OP_REC_SET = 0x5B,           // Pop a value into record.field
+    OP_REC_GET = 0x5C,           // Push record.field
+    OP_SET_NEW = 0x5D,           // Create an empty set variable
+    OP_SET_ADD = 0x5E,           // Add an ordinal member to a set
+    OP_SET_IN = 0x5F,            // Push 1 if the ordinal is a member
+    OP_SET_UNION = 0x60,         // dest := a + b
+    OP_SET_INTERSECT = 0x61,     // dest := a * b
+    OP_SET_DIFF = 0x62,          // dest := a - b
     OP_HALT = 0xFF      // HALT
 };
 
     enum class OperandType { NONE, INT, STRING };
+
+// Tagged runtime value. The implicit int conversions keep integer-only opcode
+// handlers source-compatible while typed opcodes inspect `kind` directly.
+// Strings (and later records/sets/arrays) are pool handles so Value stays 8 bytes.
+enum class ValueKind : uint8_t {
+    Integer = 0,
+    Real = 1,
+    Boolean = 2,
+    StringRef = 3,
+    EnumRef = 4
+};
+
+struct Value {
+    ValueKind kind = ValueKind::Integer;
+    uint8_t flags = 0;
+    uint16_t handle = 0;
+    union {
+        int32_t i;
+        float r;
+    };
+
+    Value() : i(0) {}
+    Value(int v) : kind(ValueKind::Integer), i(v) {}
+
+    operator int() const {
+        if (kind == ValueKind::Real) return static_cast<int32_t>(r);
+        return i;
+    }
+
+    bool isString() const { return kind == ValueKind::StringRef; }
+
+    static Value makeString(uint16_t poolHandle) {
+        Value v;
+        v.kind = ValueKind::StringRef;
+        v.handle = poolHandle;
+        v.i = 0;
+        return v;
+    }
+
+    static Value makeReal(float value) {
+        Value v;
+        v.kind = ValueKind::Real;
+        v.r = value;
+        return v;
+    }
+
+    bool isReal() const { return kind == ValueKind::Real; }
+
+    float asReal() const {
+        return kind == ValueKind::Real ? r : static_cast<float>(i);
+    }
+
+    static Value makeEnum(uint16_t typeIndex, int ordinal) {
+        Value v;
+        v.kind = ValueKind::EnumRef;
+        v.handle = typeIndex;
+        v.i = ordinal;
+        return v;
+    }
+
+    bool isEnum() const { return kind == ValueKind::EnumRef; }
+};
 
 
     struct PInstruction {
@@ -164,6 +238,18 @@ enum Opcode : uint8_t {
         if (mnemonic == "JMP") return OP_JMP;
         if (mnemonic == "JZ") return OP_JZ;
         if (mnemonic == "PUSH_INT") return OP_PUSH_INT;
+        if (mnemonic == "PUSH_REAL") return OP_PUSH_REAL;
+        if (mnemonic == "RDIV") return OP_RDIV;
+        if (mnemonic == "ORD") return OP_ORD;
+        if (mnemonic == "REC_NEW") return OP_REC_NEW;
+        if (mnemonic == "REC_SET") return OP_REC_SET;
+        if (mnemonic == "REC_GET") return OP_REC_GET;
+        if (mnemonic == "SET_NEW") return OP_SET_NEW;
+        if (mnemonic == "SET_ADD") return OP_SET_ADD;
+        if (mnemonic == "SET_IN") return OP_SET_IN;
+        if (mnemonic == "SET_UNION") return OP_SET_UNION;
+        if (mnemonic == "SET_INTERSECT") return OP_SET_INTERSECT;
+        if (mnemonic == "SET_DIFF") return OP_SET_DIFF;
         if (mnemonic == "PUSH_STR") return OP_PUSH_STR;
         if (mnemonic == "PUSH_ENUM") return OP_PUSH_ENUM;
         if (mnemonic == "ADD") return OP_ADD;
@@ -217,6 +303,8 @@ enum Opcode : uint8_t {
         if (mnemonic == "ROUTE_FILE") return OP_ROUTE_FILE;
         if (mnemonic == "LOAD") return OP_LOAD_NAME;
         if (mnemonic == "STORE") return OP_STORE_NAME;
+        if (mnemonic == "LOAD_NAME") return OP_LOAD_NAME;
+        if (mnemonic == "STORE_NAME") return OP_STORE_NAME;
         if (mnemonic == "MAP_RETURN") return OP_MAP_RETURN;
         if (mnemonic == "CALL") return OP_CALL_LABEL;
         if (mnemonic == "RET") return OP_RET;
@@ -298,6 +386,17 @@ using ServiceCallHook = bool (*)(
     void* context);
 
 using TextOutputHook = void (*)(const std::string& line, void* context);
+
+// Observable value of a named global after a run; mirrors the JS PMachine `globals` map.
+struct GlobalValue {
+    bool isString = false;
+    bool isReal = false;
+    bool isEnum = false;
+    bool isJson = false;      // strValue already holds a serialised JSON fragment
+    int intValue = 0;
+    float realValue = 0.0f;
+    std::string strValue;
+};
 
 enum class RuntimeUnitKind : uint8_t {
     Program = 0,
@@ -432,6 +531,12 @@ public:
     size_t getLastRunStepCount() const;
     const std::vector<std::string>& getLastRunTextOutput() const;
     std::map<std::string, std::string> getFlowStateSnapshot() const;
+    std::map<std::string, GlobalValue> getGlobalsSnapshot() const;
+    uint16_t registerEnumType(const std::string& typeName, const std::vector<std::string>& values);
+    uint16_t getEnumTypeIndex(const std::string& typeName) const;
+    int getEnumOrdinal(uint16_t typeIndex, const std::string& valueName) const;
+    std::string getEnumValueName(uint16_t typeIndex, int ordinal) const;
+    void clearEnumTypes();
     void setOrchestrationWaitHook(OrchestrationWaitHook hook, void* context = nullptr);
     void setThunkResolverHook(ThunkResolveHook hook, void* context = nullptr);
     void setServiceCallHook(ServiceCallHook hook, void* context = nullptr);
@@ -462,6 +567,7 @@ private:
     bool lastRunStepLimitHit = false;
     size_t lastRunStepCount = 0;
     std::vector<std::string> lastRunTextOutput;
+    std::map<std::string, GlobalValue> lastRunGlobals;
     PagingConfig pagingConfig;
     PagingStats pagingStats;
     RuntimeUnitDescriptor runtimeUnit;
@@ -480,9 +586,13 @@ private:
     void* textOutputContext = nullptr;
     void* serviceCallContext = nullptr;
     std::map<std::string, std::string> namedStringVariables;  // String-valued named variables (e.g., 'src')
+    std::map<std::string, float> namedRealVariables;
+    std::map<std::string, Value> namedEnumVariables;
+    std::vector<std::string> enumTypeNames;
+    std::vector<std::vector<std::string>> enumTypeValues;
 
     // Handler table for opcode dispatch
-    using HandlerFunc = void (*)(PMachine&, const PInstruction&, int*, int&, int&, int&);
+    using HandlerFunc = void (*)(PMachine&, const PInstruction&, Value*, int&, int&, int&);
     HandlerFunc handler_table[256] = {nullptr};
     void init_handler_table();
     int ensurePageResident(uint16_t vpage);

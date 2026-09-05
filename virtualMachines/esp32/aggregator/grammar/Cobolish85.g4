@@ -7,7 +7,7 @@ compilationUnit
   ;
 
 programUnit
-  : identificationDivision environmentDivision? dataDivision? procedureDivision cobolishMetaClause* endProgramClause?
+  : identificationDivision cobolishRuntimeClause? environmentDivision? dataDivision? procedureDivision cobolishMetaClause* endProgramClause?
   ;
 
 identificationDivision
@@ -565,6 +565,28 @@ cobolishMetaClause
   | USE stringLiteral (AS IDENTIFIER)?
   ;
 
+// Pulse extensions preserve COBOL-85 divisions while declaring a deployable
+// PMachine unit. They are deliberately explicit, never inferred from comments.
+cobolishRuntimeClause
+  : PULSE (SERVICE | DAEMON | PROGRAM) programName (ON runtimePlacement)? (EVERY NUMBER runtimeIntervalUnit)? DOT?
+  ;
+
+runtimePlacement
+  : LOCAL
+  | PARENT
+  | CHILD
+  | SIBLING
+  | ALTERNATE
+  ;
+
+runtimeIntervalUnit
+  : MS
+  | S
+  | M
+  | SECOND
+  | SECONDS
+  ;
+
 endProgramClause
   : END_PROGRAM programName? DOT?
   ;
@@ -611,12 +633,29 @@ SPECIAL_NAMES: 'SPECIAL-NAMES';
 SOURCE_COMPUTER: 'SOURCE-COMPUTER';
 OBJECT_COMPUTER: 'OBJECT-COMPUTER';
 LIBRARIAN: 'LIBRARIAN';
+PULSE: 'PULSE';
+SERVICE: 'SERVICE';
+DAEMON: 'DAEMON';
+PROGRAM: 'PROGRAM';
+EVERY: 'EVERY';
+LOCAL: 'LOCAL';
+PARENT: 'PARENT';
+CHILD: 'CHILD';
+SIBLING: 'SIBLING';
+ALTERNATE: 'ALTERNATE';
+MS: 'MS';
+S: 'S';
+M: 'M';
 SELECT: 'SELECT';
 ASSIGN: 'ASSIGN';
 TO: 'TO';
 ORGANIZATION: 'ORGANIZATION';
 ACCESS: 'ACCESS';
 MODE: 'MODE';
+SEQUENTIAL: 'SEQUENTIAL';
+RELATIVE: 'RELATIVE';
+DYNAMIC: 'DYNAMIC';
+RANDOM: 'RANDOM';
 RECORD: 'RECORD';
 KEY: 'KEY';
 FILE_STATUS: 'FILE-STATUS';
@@ -661,6 +700,7 @@ COMP_3: 'COMP-3';
 COMP_4: 'COMP-4';
 COMP_5: 'COMP-5';
 DISPLAY: 'DISPLAY';
+INDEX: 'INDEX';
 PACKED_DECIMAL: 'PACKED-DECIMAL';
 FROM: 'FROM';
 GIVING: 'GIVING';
@@ -679,6 +719,7 @@ OPEN: 'OPEN';
 CLOSE: 'CLOSE';
 READ: 'READ';
 WRITE: 'WRITE';
+ACCEPT: 'ACCEPT';
 START: 'START';
 DELETE: 'DELETE';
 COMPUTE: 'COMPUTE';
@@ -711,6 +752,8 @@ OR: 'OR';
 I_O: 'I-O';
 EXTEND: 'EXTEND';
 LINES: 'LINES';
+LINE: 'LINE';
+COLUMN: 'COLUMN';
 PAGE: 'PAGE';
 HEADING: 'HEADING';
 FOOTING: 'FOOTING';
@@ -721,6 +764,8 @@ SPACE: 'SPACE';
 SPACES: 'SPACES';
 QUOTES: 'QUOTES';
 NOT: 'NOT';
+SECOND: 'SECOND';
+SECONDS: 'SECONDS';
 LEVEL_77: '77';
 LEVEL_NUMBER: '01' | '02' | '03' | '04' | '05' | '06' | '07' | '08' | '09' | '10'
   | '11' | '12' | '13' | '14' | '15' | '16' | '17' | '18' | '19' | '20'

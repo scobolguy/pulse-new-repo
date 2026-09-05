@@ -27,3 +27,6 @@ MAPPER "mt103-to-pacs" SOURCE "swift-mt103" TARGET "pacs" DESCRIPTION "MT103 to 
   MAP "block4.70" TO "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.RmtInf.Ustrd" USING "output := trim(src);";
   MAP "block4.71A" TO "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgBr" USING "output := mtchargebearertoiso(src);";
 END;
+
+begin
+end.
