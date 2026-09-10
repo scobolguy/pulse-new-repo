@@ -38,6 +38,11 @@ aggregator/data/frontend-startup-fsm-status.json
 aggregator/data/frontend-startup-fsm-notes.jsonl
 aggregator/data/web-bootstrap-fsm-status.json
 aggregator/data/web-bootstrap-fsm-notes.jsonl
+
+# Encrypted credential store (key + ciphertext, never commit)
+aggregator/data/.credential-key
+aggregator/data/camera-credentials.json
+
 aggregator/data/archive/
 aggregator/data/run-reports/
 aggregator/data/stress-reports/

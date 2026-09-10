@@ -13,6 +13,7 @@ import { createTuyaDriver } from './drivers/tuya.mjs';
 import { createBluetoothDriver } from './drivers/bluetooth.mjs';
 import { createSharkDriver } from './drivers/shark.mjs';
 import { createAlexaDriver } from './drivers/alexa.mjs';
+import { createUpnpDriver } from './drivers/upnp.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AGGREGATOR_ROOT = path.resolve(__dirname, '../../../..'); // home-automation -> modules -> backend -> src -> aggregator
@@ -60,6 +61,7 @@ export function createHomeAutomationService({
   const bluetooth = createBluetoothDriver({ devices, bluetoothGateways });
   const shark     = createSharkDriver({ devices, credentials, saveCredentials, pythonPath, sharkBridgePath });
   const alexa     = createAlexaDriver({ devices, cookiePath: alexaCookiePath });
+  const upnp      = createUpnpDriver({ devices, discoveryTimeoutMs });
 
   // ── Discovery ──────────────────────────────────────────────────────────────
   async function discover({ timeoutMs = discoveryTimeoutMs } = {}) {
@@ -72,7 +74,8 @@ export function createHomeAutomationService({
         kasa.discover(t),
         bluetooth.discover(t),
         shark.discover(t),
-        alexa.discover()
+        alexa.discover(),
+        upnp.discover(t)
       ]);
       lastDiscoveryAt = new Date().toISOString();
       const errors = results.filter((r) => r.status === 'rejected').map((r) => String(r.reason?.message || r.reason));
@@ -141,6 +144,12 @@ export function createHomeAutomationService({
     }
 
     if (device.protocol === 'bluetooth') throw new Error(device.managementReason || 'Bluetooth control is not implemented for this device');
+
+    if (device.protocol === 'upnp') {
+      const action = normalizeAction(actionValue);
+      if (!['status', 'on', 'off', 'toggle'].includes(action)) throw new Error(`Unsupported action: ${action}`);
+      return upnp.invoke(device, action);
+    }
 
     const action = normalizeAction(actionValue);
     if (!['status', 'on', 'off', 'toggle'].includes(action)) throw new Error(`Unsupported action: ${action}`);

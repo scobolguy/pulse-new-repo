@@ -30,7 +30,8 @@ export function normalizeVacuumAction(value) {
 }
 
 export function getLanDiscoveryTarget() {
-  for (const entries of Object.values(os.networkInterfaces())) {
+  const candidates = [];
+  for (const [name, entries] of Object.entries(os.networkInterfaces())) {
     for (const entry of entries || []) {
       if (!entry || entry.internal || entry.family !== 'IPv4') continue;
       const octets = entry.address.split('.');
@@ -39,10 +40,20 @@ export function getLanDiscoveryTarget() {
         || octets[0] === '192'
         || (octets[0] === '172' && Number(octets[1]) >= 16 && Number(octets[1]) <= 31)
       );
-      if (privateAddress) {
-        return { interfaceAddress: entry.address, broadcast: `${octets[0]}.${octets[1]}.${octets[2]}.255` };
-      }
+      if (!privateAddress) continue;
+      candidates.push({
+        interfaceAddress: entry.address,
+        broadcast: `${octets[0]}.${octets[1]}.${octets[2]}.255`,
+        // Virtual adapters (WSL, Hyper-V, VPN, containers) rank last — they
+        // rarely lead to the real physical LAN where smart devices live.
+        isVirtual: /wsl|v(irtual)?ethernet|hyper-v|docker|tailscale|vmware|vbox/i.test(name),
+        isSlash24: entry.netmask === '255.255.255.0'
+      });
     }
   }
-  return { interfaceAddress: '', broadcast: '255.255.255.255' };
+  if (candidates.length === 0) return { interfaceAddress: '', broadcast: '255.255.255.255' };
+  const best = candidates.find((candidate) => !candidate.isVirtual && candidate.isSlash24)
+    || candidates.find((candidate) => !candidate.isVirtual)
+    || candidates[0];
+  return { interfaceAddress: best.interfaceAddress, broadcast: best.broadcast };
 }
