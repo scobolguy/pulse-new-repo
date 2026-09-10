@@ -30,14 +30,16 @@ const services = {
   broker: null,
   gateway: null,
   queueManager: null,
-  router: null
+  router: null,
+  homeAutomation: null
 };
 
 const serviceFiles = {
   broker: 'broker-service.mjs',
   gateway: 'backend.mjs',  // Will be split later, for now use existing backend
   queueManager: 'queue-manager-service.mjs',
-  router: 'router-service.mjs'
+  router: 'router-service.mjs',
+  homeAutomation: 'home-automation-service.mjs'
 };
 
 /**

@@ -197,6 +197,9 @@ function proxyRequest(method, path, req, res, targetUrl = BROKER_SERVICE_URL) {
 
 
 const HTTP_PORT = readEnvNumber('HTTP_PORT', readEnvNumber('PORT', 4000));
+// When set, Home Automation runs as its own process (home-automation-service.mjs) and the
+// gateway proxies /api/home-automation/* to it instead of running discovery in-process.
+const HOME_AUTOMATION_SERVICE_URL = readEnvString('HOME_AUTOMATION_SERVICE_URL', '').trim().replace(/\/$/, '');
 const homeAutomationService = createHomeAutomationService({ backendPort: HTTP_PORT });
 const UDP_PORT = 4210;
 const BROKER_SERVICE = 'broker';
@@ -9330,10 +9333,15 @@ const {
 });
 
 function registerRoutes(app) {
-  registerHomeAutomationRoutes(app, homeAutomationService);
-  void homeAutomationService.start().catch((error) => {
-    console.error('[HOME-AUTOMATION] Startup failed:', error?.stack || error);
-  });
+  if (HOME_AUTOMATION_SERVICE_URL) {
+    app.all('/api/home-automation/*splat', (req, res) => proxyRequest(req.method, req.originalUrl, req, res, HOME_AUTOMATION_SERVICE_URL));
+    console.log(`[HOME-AUTOMATION] Proxying /api/home-automation/* to ${HOME_AUTOMATION_SERVICE_URL}`);
+  } else {
+    registerHomeAutomationRoutes(app, homeAutomationService);
+    void homeAutomationService.start().catch((error) => {
+      console.error('[HOME-AUTOMATION] Startup failed:', error?.stack || error);
+    });
+  }
 
   function startSecondaryBroker() {
     if (globalThis.brokerClassDown) {
