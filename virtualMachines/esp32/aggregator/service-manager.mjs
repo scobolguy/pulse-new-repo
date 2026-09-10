@@ -2,12 +2,18 @@
 /**
  * Service Manager
  * 
- * Spawns and manages individual microservices:
+ * Spawns and manages individual microservices in split (multi-process) mode:
  * - Broker Service (port 4001)
- * - Queue Manager Service (port 4002)  [future]
- * - Router Service (port 4003)         [future]
- * - API Gateway (port 4000)
- * 
+ * - Home Automation Service (port 4102)
+ * - API Gateway (port 4000) - started with BROKER_SERVICE_URL/MODULAR_BACKEND
+ *   and HOME_AUTOMATION_SERVICE_URL pointed at the two services above.
+ *
+ * queue-manager-node.mjs is a separate, optional REMOTE/clustered queue
+ * manager (used for scaling queues across nodes) - it is not part of the
+ * default single-machine split and is not started by startAll(); the
+ * Gateway's own qm-primary/qm-secondary (in-process by default, or
+ * RabbitMQ-backed via QUEUE_MANAGER_PROVIDER) handle queueing on their own.
+ *
  * Usage:
  *   node service-manager.mjs          # Start all services
  *   BROKER_PROVIDER=msmq node service-manager.mjs  # Start with MSMQ broker
@@ -15,6 +21,7 @@
  * Commands (via stdin):
  *   restart-broker      # Restart broker service
  *   restart-gateway     # Restart API gateway
+ *   restart-home-automation  # Restart home automation service
  *   stop                # Stop all services
  *   status              # Show service status
  */
@@ -28,18 +35,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Track child processes
 const services = {
   broker: null,
-  gateway: null,
-  queueManager: null,
-  router: null,
-  homeAutomation: null
+  homeAutomation: null,
+  gateway: null
 };
 
 const serviceFiles = {
   broker: 'broker-service.mjs',
-  gateway: 'backend.mjs',  // Will be split later, for now use existing backend
-  queueManager: 'queue-manager-service.mjs',
-  router: 'router-service.mjs',
-  homeAutomation: 'home-automation-service.mjs'
+  homeAutomation: 'home-automation-service.mjs',
+  gateway: 'backend.mjs'
 };
 
 /**
@@ -125,14 +128,20 @@ function showStatus() {
  * Start all services
  */
 function startAll() {
-  console.log('[MANAGER] Starting all services...');
-  
-  // Broker first
+  console.log('[MANAGER] Starting all services (split mode)...');
+
+  // Broker and Home Automation first, in parallel - both are independent.
   startService('broker');
-  
-  // Wait a bit for broker to start, then gateway
+  startService('homeAutomation');
+
+  // Give them time to bind their ports, then start the Gateway configured
+  // to proxy to both instead of running them in-process.
   setTimeout(() => {
-    startService('gateway');
+    startService('gateway', {
+      MODULAR_BACKEND: '1',
+      BROKER_SERVICE_URL: 'http://localhost:4001',
+      HOME_AUTOMATION_SERVICE_URL: 'http://localhost:4102'
+    });
   }, 2000);
 }
 
@@ -181,6 +190,8 @@ function prompt() {
       restartService('broker', env);
     } else if (cmd.startsWith('restart-gateway')) {
       restartService('gateway');
+    } else if (cmd.startsWith('restart-home-automation')) {
+      restartService('homeAutomation');
     } else if (cmd === 'stop') {
       stopAll();
       setTimeout(() => process.exit(0), 2000);
@@ -191,6 +202,7 @@ function prompt() {
 Available commands:
   restart-broker [ENV=value ...]  - Restart broker service (e.g., restart-broker BROKER_PROVIDER=msmq)
   restart-gateway                 - Restart API gateway
+  restart-home-automation          - Restart home automation service
   stop                            - Stop all services and exit
   status                          - Show service status
   help                            - Show this help
