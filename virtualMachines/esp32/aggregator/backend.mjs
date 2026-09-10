@@ -20,7 +20,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const WORKSPACE_ROOT = path.resolve(__dirname, '..');
 import { fileURLToPath } from 'url';
-import { createMessageBroker, createQueueManager } from './src/broker.js';
+import { createMessageBroker } from './src/broker.js';
+import { createQueueManagerProvider } from './src/broker/queueManagerProviders/index.mjs';
 import { createFileServer } from './fileServer.js';
 import { createRouterEngine } from './router-engine.mjs';
 import { MetricsCollector } from './src/metrics-collector.mjs';
@@ -384,13 +385,13 @@ const queueManagerInstances = new Map(); // Maps managerId to QueueManager insta
 let queueManagers = [
   (() => { 
     debugLog('[DEBUG] Creating primary QueueManager');
-    const qm = createQueueManager('qm-primary', PULSE_QUEUE_DATA_ROOT);
+    const qm = createQueueManagerProvider('qm-primary', PULSE_QUEUE_DATA_ROOT);
     queueManagerInstances.set('qm-primary', qm);
     return qm;
   })(),
   (() => { 
     debugLog('[DEBUG] Creating secondary QueueManager'); 
-    const qm = createQueueManager('qm-secondary', PULSE_QUEUE_DATA_ROOT);
+    const qm = createQueueManagerProvider('qm-secondary', PULSE_QUEUE_DATA_ROOT);
     queueManagerInstances.set('qm-secondary', qm);
     return qm;
   })()
