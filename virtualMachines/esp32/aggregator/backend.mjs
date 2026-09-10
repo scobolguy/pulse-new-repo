@@ -79,6 +79,7 @@ import { registerBrokerAdminRoutes } from './src/backend/modules/brokerAdminRout
 import { registerMediaGatewayRoutes } from './src/backend/modules/mediaGatewayRoutes.mjs';
 import { registerIdentityRoutes } from './src/backend/modules/identityRoutes.mjs';
 import { createHomeAutomationService, registerHomeAutomationRoutes } from './src/backend/modules/home-automation/index.mjs';
+import { createJsPmachineDeploymentSupervisor } from './src/backend/modules/jsPmachineDeploymentSupervisor.mjs';
 import { createRouteManifestDependencyFactories } from './src/backend/modules/routeManifestDependencies.mjs';
 import { startBackendRuntime } from './src/backend/modules/startupBootstrap.mjs';
 import { createLifecycleHarnessPathApi } from './src/backend/modules/lifecycleHarnessPaths.mjs';
@@ -103,6 +104,22 @@ import { compileQueueDslSpec, diffQueueConfigs } from './src/backend/queueDslCom
 import { createSanctionsComplianceService } from './src/compliance/sanctionsService.mjs';
 import crypto from 'crypto';
 
+// ===== EXTRACTED HELPERS (Phase 1 cleanup) =====
+import {
+  LOCAL_TTS_SCRIPT_PATH,
+  LOCAL_TTS_OUTPUT_DIR,
+  PIPER_BIN_PATH,
+  PIPER_MODEL_PATH,
+  clampInteger,
+  runLocalTtsScript,
+  runPiperSynthesis,
+  playWavOnHost,
+  forwardEsp32BluetoothTts
+} from './src/backend/modules/localAudioBridge.mjs';
+import { initializeUdpLogFilter } from './src/backend/modules/udpLogFilter.mjs';
+import { createDebugLog, formatErrorDetails } from './src/backend/modules/debugLogger.mjs';
+import { createAuthoritativeTimeSyncMonitor } from './src/backend/modules/authoritativeTimeSyncMonitor.mjs';
+
 // ===== ESP32 NODE REGISTRY =====
 import { createNodeRegistry } from './src/esp32/nodeRegistry.mjs';
 import { createNodeRegistryRoutes } from './src/esp32/nodeRegistryRoutes.mjs';
@@ -120,10 +137,6 @@ const BROKER_SERVICE_URL = readEnvString('BROKER_SERVICE_URL', 'http://localhost
 const DEBUG_BACKEND = readEnvBoolean('DEBUG_BACKEND', ['true'], false);
 const SHOW_UDP_LOGS = readEnvBoolean('SHOW_UDP_LOGS', ['1', 'true', 'yes'], false);
 const DEFAULT_LIBRARIAN_PORT = 4300;
-const LOCAL_TTS_SCRIPT_PATH = path.join(__dirname, 'scripts', 'local-tts.ps1');
-const LOCAL_TTS_OUTPUT_DIR = path.join(__dirname, 'data', 'local-tts');
-const PIPER_BIN_PATH = readEnvString('PIPER_BIN_PATH', path.join(__dirname, 'tools', 'piper', 'piper', 'piper.exe')).trim();
-const PIPER_MODEL_PATH = readEnvString('PIPER_MODEL_PATH', path.join(__dirname, 'tools', 'piper', 'models', 'en_US-lessac-medium', 'en_US-lessac-medium.onnx')).trim();
 const TIME_AUTHORITY_ID = readEnvString('TIME_AUTHORITY_ID', 'aggregator-local-clock').trim() || 'aggregator-local-clock';
 const TIME_AUTHORITY_OFFSET_MS = readEnvNumber('TIME_AUTHORITY_OFFSET_MS', 0);
 const TIME_NTP_ENABLED = readEnvBoolean('TIME_NTP_ENABLED', ['1', 'true', 'yes'], true);
@@ -140,253 +153,17 @@ const businessCalendarService = createBusinessCalendarService({
   nowProvider: () => authoritativeTimeService.nowMs(),
   defaultCalendarId: readEnvString('BUSINESS_CALENDAR_DEFAULT', 'CA-ON').trim() || 'CA-ON'
 });
-const authoritativeTimeSyncState = {
-  running: false,
-  timerId: null,
-  lastAttemptAt: null,
-  lastSuccessAt: null,
-  lastError: null
-};
+const authoritativeTimeSyncMonitor = createAuthoritativeTimeSyncMonitor({
+  authoritativeTimeService,
+  enabled: TIME_NTP_ENABLED,
+  server: TIME_NTP_SERVER,
+  port: TIME_NTP_PORT,
+  timeoutMs: TIME_NTP_TIMEOUT_MS,
+  intervalMs: TIME_NTP_SYNC_INTERVAL_MS
+});
 
-async function syncAuthoritativeTimeWithNtp({ reason = 'scheduled' } = {}) {
-  if (authoritativeTimeSyncState.running) {
-    return { skipped: true, reason: 'sync-already-running' };
-  }
-
-  authoritativeTimeSyncState.running = true;
-  authoritativeTimeSyncState.lastAttemptAt = authoritativeTimeService.nowIso();
-  try {
-    const result = await authoritativeTimeService.syncFromNtp({
-      server: TIME_NTP_SERVER,
-      port: TIME_NTP_PORT,
-      timeoutMs: TIME_NTP_TIMEOUT_MS
-    });
-    authoritativeTimeSyncState.lastSuccessAt = authoritativeTimeService.nowIso();
-    authoritativeTimeSyncState.lastError = null;
-    return {
-      ok: true,
-      reason,
-      ...result
-    };
-  } catch (error) {
-    authoritativeTimeService.markSyncError(error, {
-      source: `ntp:${TIME_NTP_SERVER}`,
-      ntpServer: TIME_NTP_SERVER,
-      ntpPort: TIME_NTP_PORT,
-      reason
-    });
-    authoritativeTimeSyncState.lastError = String(error?.message || error || 'ntp-sync-failed');
-    return {
-      ok: false,
-      reason,
-      error: authoritativeTimeSyncState.lastError
-    };
-  } finally {
-    authoritativeTimeSyncState.running = false;
-  }
-}
-
-function startAuthoritativeTimeSyncMonitor() {
-  if (!TIME_NTP_ENABLED || authoritativeTimeSyncState.timerId) {
-    return;
-  }
-
-  void syncAuthoritativeTimeWithNtp({ reason: 'startup' });
-  authoritativeTimeSyncState.timerId = setInterval(() => {
-    void syncAuthoritativeTimeWithNtp({ reason: 'interval' });
-  }, TIME_NTP_SYNC_INTERVAL_MS);
-}
-
-function runLocalTtsScript(args, timeoutMs = 30000) {
-  return new Promise((resolve, reject) => {
-    execFile(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', LOCAL_TTS_SCRIPT_PATH, ...args],
-      { timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 },
-      (error, stdout, stderr) => {
-        if (error) {
-          const details = String(stderr || stdout || error.message || '').trim();
-          return reject(new Error(details || 'Local TTS script failed'));
-        }
-        return resolve(String(stdout || '').trim());
-      }
-    );
-  });
-}
-
-function resolveEsp32BluetoothAudioOrigin() {
-  const explicit = readEnvString('ESP32_BT_AUDIO_ORIGIN', '').trim();
-  if (explicit) {
-    return explicit.replace(/\/$/, '');
-  }
-  const host = readEnvString('EDGE_ESP32_HOST', '127.0.0.1').trim() || '127.0.0.1';
-  const port = Math.max(1, readEnvNumber('EDGE_ESP32_PORT', 80));
-  return `http://${host}:${port}`;
-}
-
-async function forwardEsp32BluetoothTts({ text, voice = 'default', timeoutMs = 15000, origin = '' }) {
-  const base = String(origin || '').trim().replace(/\/$/, '') || resolveEsp32BluetoothAudioOrigin();
-  const params = new URLSearchParams();
-  params.set('text', String(text || ''));
-  params.set('voice', String(voice || 'default'));
-  const endpoint = `${base}/api/bluetooth-audio/tts?${params.toString()}`;
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      signal: controller.signal
-    });
-    const bodyText = await response.text();
-    let payload = null;
-    try {
-      payload = bodyText ? JSON.parse(bodyText) : null;
-    } catch {
-      payload = { raw: bodyText };
-    }
-    if (!response.ok) {
-      throw new Error(`ESP32 Bluetooth TTS failed (${response.status}): ${bodyText}`);
-    }
-    return {
-      ok: true,
-      endpoint,
-      payload
-    };
-  } catch (err) {
-    throw new Error(err?.message || String(err));
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function clampInteger(value, min, max, fallback) {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.max(min, Math.min(max, parsed));
-}
-
-function runPiperSynthesis({ text, outputFile, timeoutMs = 30000 }) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(PIPER_BIN_PATH, ['--model', PIPER_MODEL_PATH, '--output_file', outputFile], {
-      windowsHide: true,
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-
-    let stderr = '';
-    let stdout = '';
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        // ignore kill errors
-      }
-    }, timeoutMs);
-
-    child.stdout.on('data', (chunk) => {
-      stdout += String(chunk || '');
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += String(chunk || '');
-    });
-
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      reject(new Error(err?.message || 'Failed to start Piper process'));
-    });
-
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (timedOut) {
-        return reject(new Error('Piper synthesis timed out'));
-      }
-      if (code !== 0) {
-        const detail = String(stderr || stdout || `Piper exited with code ${code}`).trim();
-        return reject(new Error(detail));
-      }
-      return resolve({ stdout: stdout.trim(), stderr: stderr.trim() });
-    });
-
-    child.stdin.write(String(text || ''));
-    child.stdin.end();
-  });
-}
-
-function playWavOnHost(filePath, timeoutMs = 30000) {
-  return new Promise((resolve, reject) => {
-    const command = `$p=New-Object System.Media.SoundPlayer '${String(filePath || '').replace(/'/g, "''")}';$p.PlaySync();$p.Dispose()`;
-    execFile(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command],
-      { timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 },
-      (error, stdout, stderr) => {
-        if (error) {
-          const details = String(stderr || stdout || error.message || '').trim();
-          return reject(new Error(details || 'Failed to play wav file'));
-        }
-        return resolve();
-      }
-    );
-  });
-}
-
-if (!SHOW_UDP_LOGS) {
-  const originalLog = console.log.bind(console);
-  const originalInfo = console.info.bind(console);
-  const originalDebug = console.debug.bind(console);
-  const isUdpLog = (args) => typeof args?.[0] === 'string' && args[0].startsWith('[UDP]');
-
-  console.log = (...args) => {
-    if (isUdpLog(args)) return;
-    originalLog(...args);
-  };
-
-  console.info = (...args) => {
-    if (isUdpLog(args)) return;
-    originalInfo(...args);
-  };
-
-  console.debug = (...args) => {
-    if (isUdpLog(args)) return;
-    originalDebug(...args);
-  };
-}
-
-function debugLog(...args) {
-  if (DEBUG_BACKEND) {
-    console.debug(...args);
-  }
-}
-
-function formatErrorDetails(error) {
-  if (!error) return 'Unknown error';
-  if (typeof error === 'string') return error;
-
-  const details = {
-    name: error?.name || undefined,
-    message: error?.message || undefined,
-    code: error?.code || undefined,
-    originalMessage: error?.original?.message || undefined,
-    originalCode: error?.original?.code || undefined
-  };
-
-  if (details.message) {
-    if (details.code || details.originalCode) {
-      return `${details.message} (code=${details.code || details.originalCode})`;
-    }
-    return details.message;
-  }
-
-  try {
-    const compact = JSON.stringify(details);
-    if (compact && compact !== '{}') return compact;
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
-}
+initializeUdpLogFilter(SHOW_UDP_LOGS);
+const debugLog = createDebugLog(DEBUG_BACKEND);
 
 /**
  * Proxy HTTP request to another service
@@ -742,6 +519,9 @@ const MANAGER_ACTIVE_STATES = new Set(['up', 'degraded']);
 const MANAGER_SYNC_STATES = new Set(['syncing', 'sync-failed']);
 const serviceInstanceRegistry = new Map();
 const ffsDeploymentRegistry = new Map();
+const jsPmachineDeploymentSupervisor = createJsPmachineDeploymentSupervisor();
+const federatedFfsRoot = path.join(RUNTIME_DATA_ROOT, 'federated-ffs');
+const deploymentIndexPath = path.join(federatedFfsRoot, 'service-deployments.json');
 const localQueueManagerProcesses = new Map();
 const pendingManagerSync = new Map();
 const remoteAgentRegistry = new Map();
@@ -4875,6 +4655,10 @@ function inferQueueDataTypeIds(queueName) {
   const normalizedName = String(queueName || '').trim().toLowerCase();
   if (!normalizedName) return ['text-string'];
 
+  if (normalizedName.startsWith('service.') && normalizedName.endsWith('.requests')) {
+    return ['text-string'];
+  }
+
   if (EXPLICIT_QUEUE_TYPE_HINTS[normalizedName]) {
     return EXPLICIT_QUEUE_TYPE_HINTS[normalizedName];
   }
@@ -5741,7 +5525,7 @@ function ensureRoute(queueName) {
   return route;
 }
 
-async function enqueueViaRoute(route, queueName, message, sourceService, messageEnvelope = null, preferredDataTypeIds = null) {
+async function enqueueViaRoute(route, queueName, message, sourceService, messageEnvelope = null, preferredDataTypeIds = null, messageIdOverride = null) {
   const startedAt = performance.now();
   let enqueueMode = null;
   let succeeded = false;
@@ -5749,7 +5533,7 @@ async function enqueueViaRoute(route, queueName, message, sourceService, message
   const manager = queueManagerRegistry.get(route.managerId);
   if (!manager) throw new Error(`Route manager ${route.managerId} not found`);
 
-  const messageId = crypto.randomUUID();
+  const messageId = messageIdOverride || crypto.randomUUID();
 
   try {
     if (manager.local) {
@@ -5776,6 +5560,12 @@ async function enqueueViaRoute(route, queueName, message, sourceService, message
         dataTypeIds = Array.isArray(configured) ? configured : (configured ? [configured] : dataTypeIds);
       }
 
+      if (String(queueName || '').toLowerCase().startsWith('service.')
+        && String(queueName || '').toLowerCase().endsWith('.requests')) {
+        dataTypeIds = ['text-string'];
+        qm.updateQueueConfig(queueName, { dataTypeId: 'text-string', dataTypeIds });
+      }
+
       const normalizedEnvelope = normalizeMessageEnvelope({ message, messageEnvelope, dataTypeIds });
       ensureMessageMatchesQueueType({ queueName, message, messageEnvelope: normalizedEnvelope, sourceService, managerId: manager.managerId, dataTypeIds });
 
@@ -5794,8 +5584,14 @@ async function enqueueViaRoute(route, queueName, message, sourceService, message
       trackStep3IngressEnqueue(queueName, message);
       trackStep3Arrival(queueName, message);
       incrementLifecycleCumulativeByQueue(queueName, 1);
-      replicateEnqueueToFollowers(queueName, message, sourceService, route.managerId, messageId, normalizedEnvelope)
-        .catch(e => console.warn(`[REPLICATION] Fan-out error: ${e.message}`));
+      await requireFollowerReplication(
+        queueName,
+        message,
+        sourceService,
+        route.managerId,
+        messageId,
+        normalizedEnvelope
+      );
       succeeded = true;
       return { deliveredTo: manager.managerId, mode: 'local', messageId };
     }
@@ -5842,11 +5638,33 @@ async function enqueueViaRoute(route, queueName, message, sourceService, message
     trackStep3IngressEnqueue(queueName, message);
     trackStep3Arrival(queueName, message);
     incrementLifecycleCumulativeByQueue(queueName, 1);
-    replicateEnqueueToFollowers(queueName, message, sourceService, route.managerId, messageId, normalizedEnvelope)
-      .catch(e => console.warn(`[REPLICATION] Fan-out error: ${e.message}`));
+    await requireFollowerReplication(
+      queueName,
+      message,
+      sourceService,
+      route.managerId,
+      messageId,
+      normalizedEnvelope
+    );
     succeeded = true;
     return { deliveredTo: manager.managerId, mode: 'remote', url, messageId };
   } catch (error) {
+    if (enqueueMode === 'remote' && !succeeded) {
+      setQueueManagerStatus(manager.managerId, 'down');
+      queueRoutes.delete(queueName);
+      const fallbackRoute = ensureRoute(queueName);
+      if (fallbackRoute && fallbackRoute.managerId !== manager.managerId) {
+        return enqueueViaRoute(
+          fallbackRoute,
+          queueName,
+          message,
+          sourceService,
+          messageEnvelope,
+          preferredDataTypeIds,
+          messageId
+        );
+      }
+    }
     enqueueError = error;
     throw error;
   } finally {
@@ -5864,16 +5682,21 @@ async function replicateEnqueueToFollowers(queueName, message, sourceService, le
   const followers = Array.from(queueManagerRegistry.values()).filter(
     m => MANAGER_ACTIVE_STATES.has(m.status) && m.managerId !== leaderManagerId
   );
+  let succeeded = 0;
+  let failed = 0;
   for (const follower of followers) {
     try {
       if (follower.local) {
         queueManagers[follower.localIndex].enqueueReplicated(queueName, message, sourceService, messageId, messageEnvelope);
       } else {
-        await fetch(`http://${follower.ip}:${follower.port}/replicate-enqueue`, {
+        const response = await fetch(`http://${follower.ip}:${follower.port}/replicate-enqueue`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ queueName, message, sourceService, messageId, messageEnvelope })
         });
+        if (!response.ok) {
+          throw new Error(`replication returned HTTP ${response.status}`);
+        }
       }
       appendCoordinationTraceFromMessage(message, {
         eventKind: 'queue-replicated',
@@ -5883,10 +5706,28 @@ async function replicateEnqueueToFollowers(queueName, message, sourceService, le
         mode: follower.local ? 'local' : 'remote',
         details: { leaderManagerId, messageId }
       });
+      succeeded += 1;
     } catch (e) {
+      failed += 1;
       console.warn(`[REPLICATION] Failed to replicate to ${follower.managerId}: ${e.message}`);
     }
   }
+  return { attempted: followers.length, succeeded, failed };
+}
+
+async function requireFollowerReplication(queueName, message, sourceService, leaderManagerId, messageId, messageEnvelope = null) {
+  const result = await replicateEnqueueToFollowers(
+    queueName,
+    message,
+    sourceService,
+    leaderManagerId,
+    messageId,
+    messageEnvelope
+  );
+  if (result.attempted > 0 && result.succeeded === 0) {
+    throw new Error(`No queue-manager follower acknowledged message ${messageId}`);
+  }
+  return result;
 }
 
 function unwrapQueueItemMessage(item) {
@@ -6046,6 +5887,251 @@ async function dequeueViaRoute(queueName, consumerService) {
       return null;
     }
   }
+}
+
+const serviceRequestWorkers = new Map();
+let serviceEdgeInstanceCursor = 0;
+
+async function claimViaRoute(queueName, workerId, leaseMs = 30000) {
+  const route = ensureRoute(queueName);
+  if (!route) return null;
+  const manager = queueManagerRegistry.get(route.managerId);
+  if (!manager) return null;
+
+  if (manager.local) {
+    const claim = queueManagers[manager.localIndex].claim(queueName, workerId, leaseMs);
+    return claim || null;
+  }
+
+  const response = await fetch(`http://${manager.ip}:${manager.port}/claim`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ queueName, workerId, leaseMs })
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`Remote claim failed: ${response.status}`);
+  return (await response.json()).claim || null;
+}
+
+async function completeClaimViaRoute(queueName, workerId, claimToken, completionMeta) {
+  const route = ensureRoute(queueName);
+  if (!route) return null;
+  const manager = queueManagerRegistry.get(route.managerId);
+  if (!manager) return null;
+  if (manager.local) {
+    const result = queueManagers[manager.localIndex].completeClaim(queueName, claimToken, workerId, completionMeta);
+    if (result === null || result === 'forbidden') return null;
+    return result;
+  }
+  const response = await fetch(`http://${manager.ip}:${manager.port}/claim/complete`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ queueName, workerId, claimToken, completionMeta })
+  });
+  if (response.status === 404 || response.status === 409) return null;
+  if (!response.ok) throw new Error(`Remote claim completion failed: ${response.status}`);
+  return (await response.json()).result || null;
+}
+
+async function heartbeatClaimViaRoute(queueName, workerId, claimToken, extendMs = 30000) {
+  const route = ensureRoute(queueName);
+  if (!route) return null;
+  const manager = queueManagerRegistry.get(route.managerId);
+  if (!manager) return null;
+  if (manager.local) {
+    return queueManagers[manager.localIndex].heartbeatClaim(queueName, claimToken, workerId, extendMs);
+  }
+  const response = await fetch(`http://${manager.ip}:${manager.port}/claim/heartbeat`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ queueName, workerId, claimToken, extendMs })
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`Remote claim heartbeat failed: ${response.status}`);
+  return (await response.json()).claim || null;
+}
+
+async function failClaimViaRoute(queueName, workerId, claimToken, options = {}) {
+  const route = ensureRoute(queueName);
+  if (!route) return null;
+  const manager = queueManagerRegistry.get(route.managerId);
+  if (!manager) return null;
+  if (manager.local) {
+    const result = queueManagers[manager.localIndex].failClaim(queueName, claimToken, workerId, options);
+    if (result === null || result === 'forbidden') return null;
+    return result;
+  }
+  const response = await fetch(`http://${manager.ip}:${manager.port}/claim/fail`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ queueName, workerId, claimToken, ...options })
+  });
+  if (response.status === 404 || response.status === 409) return null;
+  if (!response.ok) throw new Error(`Remote claim failure failed: ${response.status}`);
+  return (await response.json()).result || null;
+}
+
+function serializeServiceArtifact(value) {
+  if (value === undefined) return null;
+  if (value === null) return null;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return { value };
+  }
+  return value;
+}
+
+async function writeServiceReplyArtifacts(replyRoot, payload) {
+  const normalizedRoot = String(replyRoot || '').trim();
+  if (!normalizedRoot) return null;
+  await fs.promises.mkdir(path.dirname(normalizedRoot), { recursive: true });
+  const payloadValue = serializeServiceArtifact(payload);
+  const jsonText = `${JSON.stringify(payloadValue ?? null, null, 2)}\n`;
+  await fs.promises.writeFile(`${normalizedRoot}.json`, jsonText, 'utf8');
+
+  let xmlText = '<?xml version="1.0" encoding="UTF-8"?>\n<Document/>\n';
+  try {
+    const xmlPayload = payloadValue && typeof payloadValue === 'object' ? payloadValue : { value: payloadValue };
+    xmlText = `<?xml version="1.0" encoding="UTF-8"?>\n${messageObjectToXml(xmlPayload)}\n`;
+  } catch {
+    xmlText = '<?xml version="1.0" encoding="UTF-8"?>\n<Document/>\n';
+  }
+  await fs.promises.writeFile(`${normalizedRoot}.xml`, xmlText, 'utf8');
+  return { jsonFile: `${normalizedRoot}.json`, xmlFile: `${normalizedRoot}.xml` };
+}
+
+function startServiceRequestWorker(serviceId) {
+  const normalizedServiceId = String(serviceId || '').trim().toLowerCase();
+  if (!normalizedServiceId || serviceRequestWorkers.has(normalizedServiceId)) return;
+  const workerId = `js-service-${normalizedServiceId}-${process.pid}`;
+  const queueName = `service.${normalizedServiceId}.requests`;
+  const worker = { serviceId: normalizedServiceId, workerId, queueName, stopped: false };
+  serviceRequestWorkers.set(normalizedServiceId, worker);
+
+  const processSingleClaim = async (claim) => {
+    const envelope = claim.message?.message || claim.message || {};
+    const replyRoot = String(envelope.replyRoot || '').trim();
+    const claimedQueueName = String(envelope.queueName || queueName).trim() || queueName;
+    let heartbeatTimer = null;
+
+    const stopHeartbeat = () => {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+    };
+
+    const startHeartbeat = () => {
+      stopHeartbeat();
+      heartbeatTimer = setInterval(async () => {
+        try {
+          await heartbeatClaimViaRoute(claimedQueueName, workerId, claim.claimToken, 30000);
+        } catch {
+          // Heartbeat failures are tolerated for short-lived jobs; the next error path retries.
+        }
+      }, 12000);
+    };
+
+    try {
+      startHeartbeat();
+      const inputText = await fs.promises.readFile(envelope.inputFile, 'utf8');
+      const input = JSON.parse(inputText);
+      const serviceMessage = input.body && typeof input.body === 'object' && Object.prototype.hasOwnProperty.call(input.body, 'message')
+        ? input.body.message
+        : input.body ?? input;
+      let result;
+      if (normalizedServiceId === 'mt103-to-pacs008' || normalizedServiceId === 'mt202-to-pacs009') {
+        const expectedType = normalizedServiceId.startsWith('mt202') ? 'MT202' : 'MT103';
+        const expectedQueue = expectedType === 'MT202' ? 'mt202.inbound' : 'swift.mt103.inbound';
+        const configuredEdgeBases = String(
+          process.env.SERVICE_EDGE_BASE_URLS
+          || process.env.SERVICE_EDGE_BASE_URL
+          || 'http://192.168.2.155'
+        ).split(',').map(value => value.trim().replace(/\/$/, '')).filter(Boolean);
+        const edgeBase = configuredEdgeBases[serviceEdgeInstanceCursor++ % configuredEdgeBases.length];
+        const edgeUrl = new URL('/pmachine/edge_ingress_stage', edgeBase);
+        edgeUrl.searchParams.set('message', String(serviceMessage || ''));
+        edgeUrl.searchParams.set('inputQueue', expectedQueue);
+        edgeUrl.searchParams.set('runRouter', '0');
+        edgeUrl.searchParams.set('async', '0');
+        edgeUrl.searchParams.set('convertMtToXml', '1');
+        const edgeResponse = await fetch(edgeUrl, { method: 'POST', signal: AbortSignal.timeout(30000) });
+        const edgeResult = await edgeResponse.json();
+        if (!edgeResponse.ok) throw new Error(`Service instance returned HTTP ${edgeResponse.status}`);
+        result = {
+          serviceId: normalizedServiceId,
+          inputQueue: expectedQueue,
+          response: edgeResult.normalizedMessage || null,
+          conversionFormat: edgeResult.conversionFormat || null,
+          messageType: edgeResult.messageType || expectedType,
+          conversionApplied: edgeResult.conversionApplied === true,
+          serviceInstanceId: edgeBase,
+          edgeResult
+        };
+      } else {
+        result = await messageRouter.invokeHttpService({
+          serviceId: envelope.serviceId || normalizedServiceId,
+          httpVerb: input.method || envelope.method || 'POST',
+          inputQueue: input.inputQueue || envelope.inputQueue || `${normalizedServiceId}.in`,
+          message: serviceMessage,
+          sourceService: workerId,
+          requestContext: { path: envelope.endpoint || '', query: input.query || {}, body: serviceMessage }
+        });
+      }
+
+      const outputPayload = result?.serviceInstanceId
+        ? {
+            value: result.response ?? null,
+            serviceInstanceId: result.serviceInstanceId,
+            serviceId: result.serviceId || normalizedServiceId,
+            conversionFormat: result.conversionFormat || null,
+            messageType: result.messageType || null,
+            conversionApplied: result.conversionApplied === true
+          }
+        : (result?.response ?? result);
+      if (replyRoot) {
+        await writeServiceReplyArtifacts(replyRoot, outputPayload);
+      }
+      await completeClaimViaRoute(claimedQueueName, workerId, claim.claimToken, { jobId: envelope.jobId, state: 'completed' });
+    } catch (error) {
+      const message = error?.message || String(error);
+      const stack = error?.stack || null;
+      const failurePayload = { error: message, stack };
+      if (replyRoot) {
+        await fs.promises.mkdir(path.dirname(replyRoot), { recursive: true });
+        await fs.promises.writeFile(`${replyRoot}.error.json`, `${JSON.stringify(failurePayload, null, 2)}\n`, 'utf8');
+      }
+      try {
+        await failClaimViaRoute(claimedQueueName, workerId, claim.claimToken, {
+          reason: message,
+          maxAttempts: 5,
+          deadLetter: false,
+          delayMs: 1000
+        });
+      } catch {
+        // If claim already completed or expired, ignore the failure retry.
+      }
+      console.warn(`[SERVICE-WORKER] ${normalizedServiceId}: ${message}`);
+    } finally {
+      stopHeartbeat();
+    }
+  };
+
+  const tick = async () => {
+    if (worker.stopped) return;
+    try {
+      while (!worker.stopped) {
+        const claim = await claimViaRoute(queueName, workerId, 30000);
+        if (!claim?.claimToken) break;
+        await processSingleClaim(claim);
+      }
+    } catch (error) {
+      console.warn(`[SERVICE-WORKER] ${normalizedServiceId}: ${error?.message || String(error)}`);
+    }
+    if (!worker.stopped) {
+      setTimeout(tick, 25);
+    }
+  };
+  void tick();
 }
 
 async function replicateDequeueToFollowers(queueName, removedMessage, leaderManagerId) {
@@ -9274,10 +9360,10 @@ function registerRoutes(app) {
         port: TIME_NTP_PORT,
         intervalMs: TIME_NTP_SYNC_INTERVAL_MS,
         timeoutMs: TIME_NTP_TIMEOUT_MS,
-        running: authoritativeTimeSyncState.running,
-        lastAttemptAt: authoritativeTimeSyncState.lastAttemptAt,
-        lastSuccessAt: authoritativeTimeSyncState.lastSuccessAt,
-        lastError: authoritativeTimeSyncState.lastError
+        running: authoritativeTimeSyncMonitor.state.running,
+        lastAttemptAt: authoritativeTimeSyncMonitor.state.lastAttemptAt,
+        lastSuccessAt: authoritativeTimeSyncMonitor.state.lastSuccessAt,
+        lastError: authoritativeTimeSyncMonitor.state.lastError
       }
     });
   });
@@ -9474,7 +9560,7 @@ function registerRoutes(app) {
   });
 
   app.post('/api/time/authority/sync', async (req, res) => {
-    const result = await syncAuthoritativeTimeWithNtp({ reason: 'manual-api' });
+    const result = await authoritativeTimeSyncMonitor.sync({ reason: 'manual-api' });
     if (!result.ok && !result.skipped) {
       return res.status(502).json({
         status: 'error',
@@ -9704,6 +9790,7 @@ function registerRoutes(app) {
       startSecondaryBroker,
       ensureRoute,
       enqueueViaRoute,
+      startServiceRequestWorker,
       messageRouter,
       getActiveQueueManagers,
       ensureQueueTriggeredFlowForQueue,
@@ -9760,6 +9847,8 @@ function registerRoutes(app) {
       serviceInstanceRegistry,
       upsertServiceInstance,
       ffsDeploymentRegistry,
+      jsPmachineDeploymentSupervisor,
+      deploymentIndexPath,
       setNodeLifecycleState,
       getUiCardOverrides: () => uiCardOverrides,
       setUiCardOverrides: (payload) => {
@@ -9835,14 +9924,13 @@ function registerRoutes(app) {
     debugLog('[DEBUG] Registered replication-test endpoint');
   }
   
-  const federatedFfsRoot = path.join(RUNTIME_DATA_ROOT, 'federated-ffs');
   const fileServer = createFileServer({
     ffsConfig: {
       root: federatedFfsRoot
     },
     federatedConfig: {
       packageRoot: path.join(federatedFfsRoot, 'packages'),
-      deploymentIndexPath: path.join(federatedFfsRoot, 'service-deployments.json'),
+      deploymentIndexPath,
       deploymentRegistry: ffsDeploymentRegistry
     }
   });
@@ -9852,7 +9940,7 @@ function registerRoutes(app) {
   registerLocalServiceHeartbeats();
   setInterval(registerLocalServiceHeartbeats, 10000);
   setInterval(updateVirtualNodes, 3000);
-  startAuthoritativeTimeSyncMonitor();
+  authoritativeTimeSyncMonitor.start();
   startLifecycleHeartbeatMonitor();
   startScheduledDispatchWatcher();
   setMachineAvailable();
