@@ -6,7 +6,12 @@
  * manage-mcp-windows-service.cjs).
  *
  * Usage:
- *   node scripts/windows/manage-service.cjs <install|uninstall|start|stop> <gateway|broker|homeAutomation|queueManager> [--environment <name>]
+ *   node scripts/windows/manage-service.cjs <install|uninstall|start|stop> <gateway|broker|homeAutomation|queueManager> [--environment <name>] [--split]
+ *
+ * By default the gateway installs in plain monolithic mode (in-process
+ * broker + home automation, same as start-backend-primary.bat). Pass
+ * --split to instead point it at sibling Broker/Home-Automation services
+ * (which must also be installed/running in the same environment).
  *
  * Requires an elevated (Administrator) PowerShell/cmd session for
  * install/uninstall/start/stop — this script does not attempt to elevate
@@ -27,9 +32,10 @@ async function main() {
   const serviceKey = String(process.argv[3] || '').trim();
   const envArgIndex = process.argv.indexOf('--environment');
   const environmentName = envArgIndex >= 0 ? process.argv[envArgIndex + 1] : resolveEnvironmentName();
+  const splitMode = process.argv.includes('--split');
 
   if (!['install', 'uninstall', 'start', 'stop'].includes(action) || !serviceKey) {
-    console.error('Usage: node scripts/windows/manage-service.cjs <install|uninstall|start|stop> <gateway|broker|homeAutomation|queueManager> [--environment <name>]');
+    console.error('Usage: node scripts/windows/manage-service.cjs <install|uninstall|start|stop> <gateway|broker|homeAutomation|queueManager> [--environment <name>] [--split]');
     process.exitCode = 2;
     return;
   }
@@ -46,10 +52,10 @@ async function main() {
   const envOverrides = { PULSE_ENVIRONMENT: entry.environment };
   if (entry.portEnvVar) envOverrides[entry.portEnvVar] = String(entry.port);
 
-  if (serviceKey === 'gateway') {
-    // Installing the Gateway as its own OS service assumes Broker and Home
-    // Automation are also installed/running as services in the SAME
-    // environment, so point the Gateway at them instead of running in-process.
+  if (serviceKey === 'gateway' && splitMode) {
+    // --split: point the Gateway at sibling Broker/Home-Automation services
+    // instead of running them in-process. Both must be installed/running in
+    // the same environment for this to work.
     const brokerEntry = getServiceEntry('broker', entry.environment);
     const homeAutomationEntry = getServiceEntry('homeAutomation', entry.environment);
     envOverrides.MODULAR_BACKEND = '1';
