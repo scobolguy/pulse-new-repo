@@ -3,10 +3,15 @@
  * Service Manager
  * 
  * Spawns and manages individual microservices in split (multi-process) mode:
- * - Broker Service (port 4001)
- * - Home Automation Service (port 4102)
- * - API Gateway (port 4000) - started with BROKER_SERVICE_URL/MODULAR_BACKEND
- *   and HOME_AUTOMATION_SERVICE_URL pointed at the two services above.
+ * - Broker Service
+ * - Home Automation Service
+ * - API Gateway - started with BROKER_SERVICE_URL/MODULAR_BACKEND and
+ *   HOME_AUTOMATION_SERVICE_URL pointed at the two services above.
+ *
+ * Ports and OS-service names come from config/service-registry.json for the
+ * environment named by PULSE_ENVIRONMENT (default 'default'), so the same
+ * box can run a second independent stack (e.g. PULSE_ENVIRONMENT=secondary)
+ * on a different port set without colliding with the first.
  *
  * queue-manager-node.mjs is a separate, optional REMOTE/clustered queue
  * manager (used for scaling queues across nodes) - it is not part of the
@@ -17,6 +22,7 @@
  * Usage:
  *   node service-manager.mjs          # Start all services
  *   BROKER_PROVIDER=msmq node service-manager.mjs  # Start with MSMQ broker
+ *   PULSE_ENVIRONMENT=secondary node service-manager.mjs  # Second stack, own ports
  *   
  * Commands (via stdin):
  *   restart-broker      # Restart broker service
@@ -29,8 +35,10 @@ import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import readline from 'readline';
+import { getServiceEntry, getServiceUrl, resolveEnvironmentName } from './src/backend/modules/serviceRegistry.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ENVIRONMENT = resolveEnvironmentName();
 
 // Track child processes
 const services = {
@@ -40,9 +48,9 @@ const services = {
 };
 
 const serviceFiles = {
-  broker: 'broker-service.mjs',
-  homeAutomation: 'home-automation-service.mjs',
-  gateway: 'backend.mjs'
+  broker: getServiceEntry('broker', ENVIRONMENT).entry,
+  homeAutomation: getServiceEntry('homeAutomation', ENVIRONMENT).entry,
+  gateway: getServiceEntry('gateway', ENVIRONMENT).entry
 };
 
 /**
@@ -128,19 +136,24 @@ function showStatus() {
  * Start all services
  */
 function startAll() {
-  console.log('[MANAGER] Starting all services (split mode)...');
+  console.log(`[MANAGER] Starting all services (split mode, environment=${ENVIRONMENT})...`);
+
+  const brokerEntry = getServiceEntry('broker', ENVIRONMENT);
+  const homeAutomationEntry = getServiceEntry('homeAutomation', ENVIRONMENT);
 
   // Broker and Home Automation first, in parallel - both are independent.
-  startService('broker');
-  startService('homeAutomation');
+  startService('broker', { [brokerEntry.portEnvVar]: String(brokerEntry.port) });
+  startService('homeAutomation', { [homeAutomationEntry.portEnvVar]: String(homeAutomationEntry.port) });
 
   // Give them time to bind their ports, then start the Gateway configured
   // to proxy to both instead of running them in-process.
   setTimeout(() => {
+    const gatewayEntry = getServiceEntry('gateway', ENVIRONMENT);
     startService('gateway', {
       MODULAR_BACKEND: '1',
-      BROKER_SERVICE_URL: 'http://localhost:4001',
-      HOME_AUTOMATION_SERVICE_URL: 'http://localhost:4102'
+      [gatewayEntry.portEnvVar]: String(gatewayEntry.port),
+      [brokerEntry.gatewayEnvVar]: getServiceUrl('broker', ENVIRONMENT),
+      [homeAutomationEntry.gatewayEnvVar]: getServiceUrl('homeAutomation', ENVIRONMENT)
     });
   }, 2000);
 }

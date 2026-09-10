@@ -1,0 +1,56 @@
+{
+  "version": 2,
+  "description": "Single source of truth for PULSE aggregator service processes. 'services' describes each process (entry script, default host, which env var sets its port, which env var the Gateway uses to reach it). 'environments' assigns a full port set + service-name prefix per named environment, so one box can run multiple independent PULSE stacks (e.g. 'default' and 'staging') without port or OS-service-name collisions. Consumed by service-manager.mjs (dev orchestration), the OS-service install scripts (Windows/Linux), and the Gateway's public /api/services/registry endpoint (client discovery). Select an environment via the PULSE_ENVIRONMENT env var (defaults to 'default').",
+  "services": {
+    "gateway": {
+      "name": "Pulse Gateway",
+      "entry": "backend.mjs",
+      "defaultHost": "0.0.0.0",
+      "healthPath": "/health",
+      "public": true,
+      "portEnvVar": "HTTP_PORT",
+      "description": "API gateway: the only externally-reachable service. Proxies to broker/home-automation when running in split mode."
+    },
+    "broker": {
+      "name": "Pulse Broker",
+      "entry": "broker-service.mjs",
+      "defaultHost": "127.0.0.1",
+      "healthPath": "/health",
+      "public": false,
+      "portEnvVar": "BROKER_PORT",
+      "gatewayEnvVar": "BROKER_SERVICE_URL",
+      "description": "Pub/sub message broker (legacy/msmq/rabbitmq/kafka/ibmmq/apache providers)."
+    },
+    "homeAutomation": {
+      "name": "Pulse Home Automation",
+      "entry": "home-automation-service.mjs",
+      "defaultHost": "127.0.0.1",
+      "healthPath": "/health",
+      "public": false,
+      "portEnvVar": "HOME_AUTOMATION_PORT",
+      "gatewayEnvVar": "HOME_AUTOMATION_SERVICE_URL",
+      "description": "Kasa/TP-Link/Tuya/Bluetooth/Shark/Alexa/UPnP device discovery and control."
+    },
+    "queueManager": {
+      "name": "Pulse Remote Queue Manager",
+      "entry": "queue-manager-node.mjs",
+      "defaultHost": "127.0.0.1",
+      "healthPath": "/health",
+      "public": false,
+      "optional": true,
+      "portCliArg": "--port",
+      "description": "Optional remote/clustered queue manager instance for scaling queues across nodes. Not started by default; the Gateway's own qm-primary/qm-secondary (in-process legacy engine, or a QUEUE_MANAGER_PROVIDER-selected backend) handle queueing on their own."
+    }
+  },
+  "environments": {
+    "default": {
+      "servicePrefix": "Pulse",
+      "ports": { "gateway": 4000, "broker": 4001, "homeAutomation": 4102, "queueManager": 4100 }
+    },
+    "secondary": {
+      "servicePrefix": "Pulse",
+      "ports": { "gateway": 4010, "broker": 4011, "homeAutomation": 4112, "queueManager": 4110 }
+    }
+  }
+}
+

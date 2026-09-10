@@ -120,6 +120,7 @@ import {
 import { initializeUdpLogFilter } from './src/backend/modules/udpLogFilter.mjs';
 import { createDebugLog, formatErrorDetails } from './src/backend/modules/debugLogger.mjs';
 import { createAuthoritativeTimeSyncMonitor } from './src/backend/modules/authoritativeTimeSyncMonitor.mjs';
+import { listServiceEntries, resolveEnvironmentName } from './src/backend/modules/serviceRegistry.mjs';
 
 // ===== ESP32 NODE REGISTRY =====
 import { createNodeRegistry } from './src/esp32/nodeRegistry.mjs';
@@ -374,6 +375,29 @@ app.use(applyRequestSecurityHeaders);
 app.use(enforceHttpsTransport);
 app.use(enforceApiPermission);
 app.use(enforceTwoPersonRule);
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', service: 'gateway', environment: resolveEnvironmentName() });
+});
+
+app.get('/api/services/registry', (req, res) => {
+  try {
+    const entries = listServiceEntries(req.query?.environment).map((entry) => ({
+      key: entry.key,
+      name: entry.name,
+      url: entry.host === '0.0.0.0' ? `http://<host>:${entry.port}` : `http://${entry.host}:${entry.port}`,
+      port: entry.port,
+      healthPath: entry.healthPath,
+      public: Boolean(entry.public),
+      optional: Boolean(entry.optional),
+      environment: entry.environment,
+      description: entry.description || ''
+    }));
+    res.json({ status: 'ok', environment: resolveEnvironmentName(req.query?.environment), services: entries });
+  } catch (error) {
+    res.status(400).json({ status: 'error', error: error?.message || String(error) });
+  }
+});
 
 await registerDevelopDocumentRoutes(app);
 await registerProjectWorkspaceRoutes(app);

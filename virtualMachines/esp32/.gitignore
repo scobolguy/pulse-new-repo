@@ -43,6 +43,10 @@ aggregator/data/web-bootstrap-fsm-notes.jsonl
 aggregator/data/.credential-key
 aggregator/data/camera-credentials.json
 
+# Generated systemd units bake in this machine's absolute paths — regenerate
+# at deploy time via aggregator/scripts/linux/generate-systemd-units.mjs
+deploy/systemd/*.service
+
 aggregator/data/archive/
 aggregator/data/run-reports/
 aggregator/data/stress-reports/
