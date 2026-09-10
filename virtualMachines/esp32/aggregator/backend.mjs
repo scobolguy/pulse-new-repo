@@ -5375,7 +5375,7 @@ async function waitForManagerRegistration(managerId, timeoutMs = 20000) {
 async function getManagerSnapshot(managerId) {
   const qm = queueManagerInstances.get(managerId);
   if (qm) {
-    return qm.getSnapshot();
+    return await qm.getSnapshot();
   }
 
   const manager = queueManagerRegistry.get(managerId);
@@ -5395,7 +5395,7 @@ async function getManagerSnapshot(managerId) {
 async function applyManagerSnapshot(managerId, snapshot) {
   const qm = queueManagerInstances.get(managerId);
   if (qm) {
-    qm.applySnapshot(snapshot);
+    await qm.applySnapshot(snapshot);
     return { mode: 'local' };
   }
 
@@ -5548,7 +5548,7 @@ async function enqueueViaRoute(route, queueName, message, sourceService, message
         : inferQueueDataTypeIds(queueName);
       const persistMessages = shouldPersistQueueMessages(queueName, message);
       if (!qm.getConfig(queueName)?.name) {
-        qm.createQueue(queueName, {
+        await qm.createQueue(queueName, {
           dataTypeId: dataTypeIds[0],
           dataTypeIds,
           queueClass: 'permanent',
@@ -5558,7 +5558,7 @@ async function enqueueViaRoute(route, queueName, message, sourceService, message
       } else {
         const cfg = qm.getConfig(queueName) || {};
         if (cfg.persistMessages !== persistMessages) {
-          qm.updateQueueConfig(queueName, { persistMessages });
+          await qm.updateQueueConfig(queueName, { persistMessages });
         }
         const configured = cfg.dataTypeIds || cfg.dataTypeId;
         dataTypeIds = Array.isArray(configured) ? configured : (configured ? [configured] : dataTypeIds);
@@ -5567,7 +5567,7 @@ async function enqueueViaRoute(route, queueName, message, sourceService, message
       if (String(queueName || '').toLowerCase().startsWith('service.')
         && String(queueName || '').toLowerCase().endsWith('.requests')) {
         dataTypeIds = ['text-string'];
-        qm.updateQueueConfig(queueName, { dataTypeId: 'text-string', dataTypeIds });
+        await qm.updateQueueConfig(queueName, { dataTypeId: 'text-string', dataTypeIds });
       }
 
       const normalizedEnvelope = normalizeMessageEnvelope({ message, messageEnvelope, dataTypeIds });
@@ -5576,7 +5576,7 @@ async function enqueueViaRoute(route, queueName, message, sourceService, message
       // Record enqueue for metrics
       metricsCollector.recordEnqueue(messageId, queueName);
 
-      qm.enqueue(queueName, message, sourceService || 'unknown', messageId, normalizedEnvelope);
+      await qm.enqueue(queueName, message, sourceService || 'unknown', messageId, normalizedEnvelope);
       appendCoordinationTraceFromMessage(message, {
         eventKind: 'queue-enqueue',
         queueName,
@@ -5691,7 +5691,7 @@ async function replicateEnqueueToFollowers(queueName, message, sourceService, le
   for (const follower of followers) {
     try {
       if (follower.local) {
-        queueManagers[follower.localIndex].enqueueReplicated(queueName, message, sourceService, messageId, messageEnvelope);
+        await queueManagers[follower.localIndex].enqueueReplicated(queueName, message, sourceService, messageId, messageEnvelope);
       } else {
         const response = await fetch(`http://${follower.ip}:${follower.port}/replicate-enqueue`, {
           method: 'POST',
@@ -5779,7 +5779,7 @@ async function dequeueViaRoute(queueName, consumerService) {
   }
 
   if (manager.local) {
-    const item = queueManagers[manager.localIndex].dequeue(queueName, consumerService || 'unknown');
+    const item = await queueManagers[manager.localIndex].dequeue(queueName, consumerService || 'unknown');
     if (item !== null) {
       const unwrappedItem = unwrapQueueItemMessage(item);
       appendCoordinationTraceFromMessage(unwrappedItem, {
@@ -5869,7 +5869,7 @@ async function dequeueViaRoute(queueName, consumerService) {
     console.log(`[FAILOVER] Promoted ${route.managerId} as new leader for queue ${queueName}`);
 
     if (newManager.local) {
-      return queueManagers[newManager.localIndex].dequeue(queueName, consumerService || 'unknown');
+      return await queueManagers[newManager.localIndex].dequeue(queueName, consumerService || 'unknown');
     }
     try {
       const url = `http://${newManager.ip}:${newManager.port}/dequeue`;
@@ -5903,7 +5903,7 @@ async function claimViaRoute(queueName, workerId, leaseMs = 30000) {
   if (!manager) return null;
 
   if (manager.local) {
-    const claim = queueManagers[manager.localIndex].claim(queueName, workerId, leaseMs);
+    const claim = await queueManagers[manager.localIndex].claim(queueName, workerId, leaseMs);
     return claim || null;
   }
 
@@ -5923,7 +5923,7 @@ async function completeClaimViaRoute(queueName, workerId, claimToken, completion
   const manager = queueManagerRegistry.get(route.managerId);
   if (!manager) return null;
   if (manager.local) {
-    const result = queueManagers[manager.localIndex].completeClaim(queueName, claimToken, workerId, completionMeta);
+    const result = await queueManagers[manager.localIndex].completeClaim(queueName, claimToken, workerId, completionMeta);
     if (result === null || result === 'forbidden') return null;
     return result;
   }
@@ -5943,7 +5943,7 @@ async function heartbeatClaimViaRoute(queueName, workerId, claimToken, extendMs 
   const manager = queueManagerRegistry.get(route.managerId);
   if (!manager) return null;
   if (manager.local) {
-    return queueManagers[manager.localIndex].heartbeatClaim(queueName, claimToken, workerId, extendMs);
+    return await queueManagers[manager.localIndex].heartbeatClaim(queueName, claimToken, workerId, extendMs);
   }
   const response = await fetch(`http://${manager.ip}:${manager.port}/claim/heartbeat`, {
     method: 'POST',
@@ -5961,7 +5961,7 @@ async function failClaimViaRoute(queueName, workerId, claimToken, options = {}) 
   const manager = queueManagerRegistry.get(route.managerId);
   if (!manager) return null;
   if (manager.local) {
-    const result = queueManagers[manager.localIndex].failClaim(queueName, claimToken, workerId, options);
+    const result = await queueManagers[manager.localIndex].failClaim(queueName, claimToken, workerId, options);
     if (result === null || result === 'forbidden') return null;
     return result;
   }
@@ -6145,7 +6145,7 @@ async function replicateDequeueToFollowers(queueName, removedMessage, leaderMana
   for (const follower of followers) {
     try {
       if (follower.local) {
-        queueManagers[follower.localIndex].dequeueReplicated(queueName, removedMessage || null);
+        await queueManagers[follower.localIndex].dequeueReplicated(queueName, removedMessage || null);
       } else {
         await fetch(`http://${follower.ip}:${follower.port}/replicate-dequeue`, {
           method: 'POST',
@@ -6255,7 +6255,7 @@ const metricsCollector = new MetricsCollector({
 /**
  * Update queue depths in metrics collector from queue managers
  */
-function updateMetricsQueueDepths() {
+async function updateMetricsQueueDepths() {
   try {
     const allQueues = new Set();
     
@@ -6263,7 +6263,7 @@ function updateMetricsQueueDepths() {
     for (const qm of queueManagers) {
       if (qm && qm.queueConfig) {
         for (const queueName of Object.keys(qm.queueConfig)) {
-          const depth = qm.getQueueLength(queueName);
+          const depth = await qm.getQueueLength(queueName);
           metricsCollector.recordQueueDepth(queueName, depth);
           allQueues.add(queueName);
         }
@@ -6273,7 +6273,7 @@ function updateMetricsQueueDepths() {
     // Ensure we track all priority queues
     const priorityQueues = ['swift.mt103.inbound', 'ops.validation.deadletter', 'pacs.inbound', 'mt202.inbound'];
     for (const queueName of priorityQueues) {
-      const depth = queueManagers[0].getQueueLength(queueName) + queueManagers[1].getQueueLength(queueName);
+      const depth = (await queueManagers[0].getQueueLength(queueName)) + (await queueManagers[1].getQueueLength(queueName));
       metricsCollector.recordQueueDepth(queueName, depth);
     }
   } catch (e) {
@@ -6282,7 +6282,7 @@ function updateMetricsQueueDepths() {
 }
 
 // Update queue depths every 5 seconds (twice per collection cycle)
-setInterval(updateMetricsQueueDepths, 5000);
+setInterval(() => { void updateMetricsQueueDepths(); }, 5000);
 
 const routerWorkers = new Map();
 const lifecycleWorkers = new Map();
@@ -6339,7 +6339,7 @@ function validateRouterRuleCoverageForWorkerQueues() {
   return { ok: true, missingQueues: [], strictMode };
 }
 
-function ensurePriorityInputQueuesConfigured() {
+async function ensurePriorityInputQueuesConfigured() {
   const defaults = getWorkerDefaults();
   const priorityQueues = Array.isArray(defaults.priorityQueues)
     ? defaults.priorityQueues.map(q => String(q || '').trim()).filter(Boolean)
@@ -6359,7 +6359,7 @@ function ensurePriorityInputQueuesConfigured() {
         }
 
         const dataTypeIds = inferQueueDataTypeIds(queueName);
-        qm.createQueue(queueName, {
+        await qm.createQueue(queueName, {
           dataTypeId: dataTypeIds[0],
           dataTypeIds,
           queueClass: 'permanent',

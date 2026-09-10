@@ -77,6 +77,11 @@ export default class RabbitMqQueueManagerAdapter {
   getStatus(queueName) { return this.queueConfig[queueName] || { frozen: false }; }
   getAllQueueConfigs() { return { configVersion: 0, operationVersion: 0, queues: { ...this.queueConfig } }; }
 
+  updateQueueConfig(queueName, updates = {}) {
+    this.queueConfig[queueName] = { ...(this.queueConfig[queueName] || { name: queueName, createdAt: Date.now(), frozen: false }), ...updates };
+    return this.queueConfig[queueName];
+  }
+
   async deleteQueue(queueName) {
     const channel = await this.connect();
     await channel.deleteQueue(this.fullQueueName(queueName));

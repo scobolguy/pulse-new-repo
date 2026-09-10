@@ -11,6 +11,7 @@
  *   createQueue(queueName, queueConfig?) -> queueConfig
  *   getConfig(queueName) -> queueConfig
  *   getStatus(queueName) -> queueConfig (frozen flag)
+ *   updateQueueConfig(queueName, updates) -> queueConfig
  *   deleteQueue(queueName) -> void
  *   truncateQueue(queueName) -> removedCount
  *   enqueue(queueName, message, sourceService, messageId?, messageEnvelope?) -> messageId

@@ -80,6 +80,7 @@ export async function startBackendRuntime(deps = {}) {
     nodeTimeout: 600000
   });
   await esp32NodeRegistry.initialize();
+  app.locals.esp32NodeRegistry = esp32NodeRegistry;
   console.log(`[ESP32] Node Registry initialized with ${esp32NodeRegistry.getAllNodes().length} nodes`);
 
   // Register known ESP32 nodes that aren't discovered via heartbeat
@@ -223,7 +224,7 @@ export async function startBackendRuntime(deps = {}) {
   }
 
   console.log('[STARTUP] Ensuring priority queue bindings...');
-  const ensuredPriorityQueues = ensurePriorityInputQueuesConfigured();
+  const ensuredPriorityQueues = await ensurePriorityInputQueuesConfigured();
   if (ensuredPriorityQueues.length > 0) {
     console.log(`[PRECHECK] Ensured ${ensuredPriorityQueues.length} priority queue binding(s) across local queue managers.`);
   }
