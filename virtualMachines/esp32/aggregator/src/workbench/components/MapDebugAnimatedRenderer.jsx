@@ -1,10 +1,9 @@
 // Map Debug Animated Renderer - Animated data mapping debugger
-import React from 'react';
 
 /**
  * MapDebugAnimatedRenderer - Displays data mappings with debug state highlighting
  */
-const MapDebugAnimatedRenderer = ({ file, role, mode, debugState }) => {
+const MapDebugAnimatedRenderer = ({ file, debugState }) => {
   const mappings = file?.mappings || [];
   const fileName = file?.name || 'Untitled.map';
   const currentStep = debugState?.currentStep || 0;

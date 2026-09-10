@@ -1,10 +1,9 @@
 // Node Card Renderer - Simple card view for node data
-import React from 'react';
 
 /**
  * NodeCardRenderer - Displays node information in a card format
  */
-const NodeCardRenderer = ({ file, role, mode }) => {
+const NodeCardRenderer = ({ file, role }) => {
   const node = file || {};
   const name = node.name || 'Unnamed Node';
   const type = node.type || 'unknown';

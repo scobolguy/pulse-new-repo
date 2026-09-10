@@ -1,10 +1,9 @@
 // Map Spreadsheet Renderer - Data mapping table view
-import React from 'react';
 
 /**
  * MapSpreadsheetRenderer - Displays data mappings in a spreadsheet-style table
  */
-const MapSpreadsheetRenderer = ({ file, role, mode }) => {
+const MapSpreadsheetRenderer = ({ file, role }) => {
   const mappings = file?.mappings || [];
   const fileName = file?.name || 'Untitled.map';
 

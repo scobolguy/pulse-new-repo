@@ -1,12 +1,11 @@
 // WFL View Renderer - Static workflow diagram viewer
-import React from 'react';
 import MermaidRenderer from './MermaidRenderer';
 import { wflToMermaid } from '../wflToMermaid';
 
 /**
  * WFLViewRenderer - Displays WFL workflow as a static Mermaid state diagram
  */
-const WFLViewRenderer = ({ file, role, mode }) => {
+const WFLViewRenderer = ({ file, role }) => {
   const wflSource = file?.content || '';
   const mermaidSource = wflToMermaid(wflSource);
 

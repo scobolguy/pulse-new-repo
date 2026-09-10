@@ -1,12 +1,11 @@
 // WFL Run Animated Renderer - Animated workflow execution viewer
-import React from 'react';
 import MermaidRenderer from './MermaidRenderer';
 import { wflToMermaid } from '../wflToMermaid';
 
 /**
  * WFLRunAnimatedRenderer - Displays WFL workflow with animated execution state
  */
-const WFLRunAnimatedRenderer = ({ file, role, mode, executionState }) => {
+const WFLRunAnimatedRenderer = ({ file, executionState }) => {
   const wflSource = file?.content || '';
   const mermaidSource = wflToMermaid(wflSource);
   const activeStates = executionState?.activeStates || [];
