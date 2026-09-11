@@ -1,3 +1,4 @@
+import { dslDebug } from './dsl-debug.mjs';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -470,19 +471,59 @@ function mapMtChargeBearerToIso(raw) {
   return code;
 }
 
-function applyConversionRule(conversionRule, srcValue) {
-  const rule = toUpperCopy(trimCopy(conversionRule));
-  const srcText = asStringValue(srcValue);
-  if (!rule) return srcValue;
-  if (rule.includes('UPPER(TRIM(SRC))')) return toUpperCopy(trimCopy(srcText));
-  if (rule.includes('UPPER(SRC)')) return toUpperCopy(srcText);
-  if (rule.includes('TRIM(SRC)')) return trimCopy(srcText);
-  if (rule.includes('YYMMDDTOISO(SRC)')) return yyMmDdToIso(srcText);
-  if (rule.includes('MTPARTYNAME(SRC)')) return extractMtPartyName(srcText);
-  if (rule.includes('MTCHARGEBEARERTOISO(SRC)')) return mapMtChargeBearerToIso(srcText);
-  if (rule.includes('MTAMOUNTTODECIMAL(SRC)')) return normalizeMtAmount(srcText);
-  if (rule.includes('OUTPUT := SRC')) return srcValue;
-  return srcValue;
+// Execute one compiled mapping rule (a flat opcode list) against a source value.
+// Opcodes are stack-based: SRC loads the value, native string ops transform it,
+// and the top of stack at the end is the rule result. No string interpretation.
+function execCompiledRule(ops, srcValue) {
+  const st = [];
+  for (const raw of Array.isArray(ops) ? ops : []) {
+    const op = String(raw || '').trim();
+    if (!op) continue;
+    if (op === 'SRC') { st.push(srcValue); continue; }
+    if (op === 'TRIM') { st.push(trimCopy(st.pop())); continue; }
+    if (op === 'UPPER') { st.push(toUpperCopy(asStringValue(st.pop()))); continue; }
+    if (op === 'YYMMDD_TO_ISO') { st.push(yyMmDdToIso(asStringValue(st.pop()))); continue; }
+    if (op === 'MT_AMOUNT_TO_DECIMAL') { st.push(normalizeMtAmount(asStringValue(st.pop()))); continue; }
+    if (op === 'MT_PARTY_NAME') { st.push(extractMtPartyName(asStringValue(st.pop()))); continue; }
+    if (op === 'MT_CHARGE_TO_ISO') { st.push(mapMtChargeBearerToIso(asStringValue(st.pop()))); continue; }
+    if (op.startsWith('PUSH_STR ')) { st.push(unquote(op.slice(9))); continue; }
+    if (op.startsWith('PUSH_INT ')) { st.push(Number.parseInt(op.slice(9), 10) || 0); continue; }
+    if (op === 'DUP' || op === 'OUTPUT' || op === 'RET') continue; // structural no-ops
+  }
+  return st.length > 0 ? st[st.length - 1] : srcValue;
+}
+
+function runCompiledMapping(mapping, sourcePayload) {
+  let sourceDoc;
+  if (sourcePayload && typeof sourcePayload === 'object') {
+    sourceDoc = sourcePayload;
+  } else {
+    try {
+      sourceDoc = JSON.parse(sourcePayload);
+    } catch {
+      sourceDoc = { src: sourcePayload };
+    }
+  }
+
+  const sourceTypeId = String(mapping.sourceTypeId || '').toLowerCase().replaceAll('_', '-');
+  if (sourceTypeId.startsWith('swift-mt') && typeof sourcePayload === 'string') {
+    const normalizedPayload = String(sourcePayload).replaceAll('\\r\\n', '\n').replaceAll('\\n', '\n');
+    const hasBlock4 = sourceDoc && typeof sourceDoc === 'object' && sourceDoc.block4 && typeof sourceDoc.block4 === 'object';
+    if (!hasBlock4 && isSwiftFinText(normalizedPayload)) {
+      sourceDoc = parseSwiftFinText(normalizedPayload, mapping.externalDefinition?.sourceParsing);
+    }
+  }
+
+  const out = {};
+  for (const item of mapping.items) {
+    const srcValue = getJsonPathValue(sourceDoc, item.sourcePath);
+    const transformed = execCompiledRule(item.ops, srcValue);
+    setJsonPathValue(out, item.targetPath, transformed);
+  }
+  const targetTypeId = String(mapping.targetTypeId || '').toLowerCase().replaceAll('_', '-');
+  return JSON.stringify(targetTypeId === 'camt'
+    ? ensureCamtNamespaces(out, mapping.externalDefinition?.targetNamespace)
+    : out);
 }
 
 function parseProgramMapMappings(programMap) {
@@ -498,7 +539,8 @@ function parseProgramMapMappings(programMap) {
     const items = Array.isArray(entry.items) ? entry.items.map(it => ({
       sourcePath: String(it?.sourcePath || ''),
       targetPath: String(it?.targetPath || ''),
-      conversionRule: String(it?.conversionRule || '')
+      conversionRule: String(it?.conversionRule || ''),
+      ops: Array.isArray(it?.ops) ? it.ops : null
     })) : [];
     mappingsById.set(id, {
       id,
@@ -987,127 +1029,7 @@ function runMappingById(mappingId, sourcePayload, mappingsById) {
     throw new Error(`Mapping not found: ${mappingId}`);
   }
 
-  let sourceDoc;
-  if (sourcePayload && typeof sourcePayload === 'object') {
-    sourceDoc = sourcePayload;
-  } else {
-    try {
-      sourceDoc = JSON.parse(sourcePayload);
-    } catch {
-      sourceDoc = { src: sourcePayload };
-    }
-  }
-
-  // Parse FIN text for any concrete SWIFT MT message type.
-  const sourceTypeId = String(mapping.sourceTypeId || '').toLowerCase().replaceAll('_', '-');
-  if (sourceTypeId.startsWith('swift-mt') && typeof sourcePayload === 'string') {
-    const normalizedPayload = sourcePayload
-      .replaceAll('\\r\\n', '\n')
-      .replaceAll('\\n', '\n');
-    const hasBlock4 = sourceDoc && typeof sourceDoc === 'object' && sourceDoc.block4 && typeof sourceDoc.block4 === 'object';
-    if (!hasBlock4 && isSwiftFinText(normalizedPayload)) {
-      sourceDoc = parseSwiftFinText(normalizedPayload, mapping.externalDefinition?.sourceParsing);
-    }
-  }
-
-  const out = {};
-  for (const item of mapping.items) {
-    const srcValue = getJsonPathValue(sourceDoc, item.sourcePath);
-    const transformed = applyConversionRule(item.conversionRule, srcValue);
-    setJsonPathValue(out, item.targetPath, transformed);
-  }
-  const targetTypeId = String(mapping.targetTypeId || '').toLowerCase().replaceAll('_', '-');
-  return JSON.stringify(targetTypeId === 'camt'
-    ? ensureCamtNamespaces(out, mapping.externalDefinition?.targetNamespace)
-    : out);
-}
-
-function evaluateTransformExpr(exprText, sourceMessage, mappingsById, depth = 0) {
-  if (depth > 8) throw new Error('Transform nesting too deep');
-
-  const expr = trimCopy(exprText);
-  if (!expr) return sourceMessage;
-
-  const upper = toUpperCopy(expr);
-  if (upper === 'SRC') return sourceMessage;
-
-  if ((expr.startsWith('"') && expr.endsWith('"')) || (expr.startsWith('\'') && expr.endsWith('\''))) {
-    return unquote(expr);
-  }
-
-  const openIdx = expr.indexOf('(');
-  const closeIdx = expr.lastIndexOf(')');
-  const hasCallShape = openIdx > 0 && closeIdx > openIdx;
-  if (!hasCallShape) {
-    return sourceMessage;
-  }
-
-  const fnName = toUpperCopy(trimCopy(expr.slice(0, openIdx)));
-  const inside = trimCopy(expr.slice(openIdx + 1, closeIdx));
-
-  if (fnName === 'MAP') {
-    const commaIdx = findTopLevelComma(inside);
-    if (commaIdx < 0) {
-      throw new Error('MAP requires two arguments');
-    }
-
-    const mapIdToken = trimCopy(inside.slice(0, commaIdx));
-    const payloadExpr = trimCopy(inside.slice(commaIdx + 1));
-    const mappingId = unquote(mapIdToken);
-    if (mappingId === mapIdToken) {
-      throw new Error('MAP id must be a quoted string');
-    }
-
-    const payload = evaluateTransformExpr(payloadExpr, sourceMessage, mappingsById, depth + 1);
-    return runMappingById(mappingId, payload, mappingsById);
-  }
-
-  if (fnName === 'FROMXML') {
-    const payload = evaluateTransformExpr(inside, sourceMessage, mappingsById, depth + 1);
-    if (payload && typeof payload === 'object') return payload;
-    const parsed = parseXmlMessage(payload);
-    return parsed || payload;
-  }
-
-  if (fnName === 'TOXML') {
-    const payload = evaluateTransformExpr(inside, sourceMessage, mappingsById, depth + 1);
-    if (typeof payload === 'string') {
-      const trimmed = payload.trim();
-      if (trimmed.startsWith('<') || trimmed.startsWith('<?xml')) {
-        return payload;
-      }
-      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-        try {
-          const parsed = JSON.parse(trimmed);
-          return parsed && typeof parsed === 'object' ? messageObjectToXml(parsed) : payload;
-        } catch {
-          return payload;
-        }
-      }
-      return payload;
-    }
-    if (payload && typeof payload === 'object') {
-      return messageObjectToXml(payload);
-    }
-    return String(payload ?? '');
-  }
-
-  return sourceMessage;
-}
-
-function applyTransformRule(transformRule, sourceMessage, mappingsById) {
-  const rule = trimCopy(transformRule);
-  if (!rule) return sourceMessage;
-
-  const upper = toUpperCopy(rule);
-  const assignIdx = upper.indexOf('OUTPUT :=');
-  if (assignIdx < 0) return sourceMessage;
-
-  let rhs = trimCopy(rule.slice(assignIdx + 9));
-  const semi = rhs.indexOf(';');
-  if (semi >= 0) rhs = trimCopy(rhs.slice(0, semi));
-
-  return evaluateTransformExpr(rhs, sourceMessage, mappingsById, 0);
+  return runCompiledMapping(mapping, sourcePayload);
 }
 
 function parseQuotedOperand(text) {
@@ -1275,6 +1197,9 @@ function parsePcode(text) {
       mnemonic === 'ROUTE_MATCH_QUEUE'
       || mnemonic === 'ROUTE_EVAL_WHEN'
       || mnemonic === 'ROUTE_TRANSFORM'
+      || mnemonic === 'ROUTE_MAP_RUN'
+      || mnemonic === 'SRC_GET'
+      || mnemonic === 'OUT_SET'
       || mnemonic === 'ROUTE_EMIT'
       || mnemonic === 'ROUTE_SET_STATE'
       || mnemonic === 'ORCH_SPAWN'
@@ -1355,6 +1280,10 @@ function parsePcode(text) {
     instructions[jump.idx].targetIndex = typeof target === 'number' ? target : -1;
   }
 
+  // Expose the label table so ROUTE_MAP_RUN can dispatch into a mapper routine
+  // (label MAP_<mapperId>) by name at runtime.
+  Object.defineProperty(instructions, '__labels', { value: labels, enumerable: false });
+
   return instructions;
 }
 
@@ -1392,14 +1321,26 @@ function assignVar(frame, name, value) {
   frame.vars[name] = value;
 }
 
-async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queueTypesByName = new Map(), isoTypeIds = new Set(), inputQueue, sourceMessage, runtimeContext = {} }) {
+async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queueTypesByName = new Map(), isoTypeIds = new Set(), inputQueue, sourceMessage, runtimeContext = {}, debugHooks = {} }) {
   const stack = [];
   let pc = 0;
   let currentMessage = sourceMessage;
+  // Run-local output document for the pcode-routine mapper. SRC_GET reads from
+  // currentMessage; OUT_SET writes here; ROUTE_MAP_RUN commits it back.
+  let mapOutput = null;
   const deliveries = [];
   const state = {};
   const stdout = [];
   let currentLine = '';
+
+  // Label -> instruction index, for ROUTE_MAP_RUN dispatching into a mapper
+  // routine (MAP_<id>).
+  const routineLabels = new Map();
+  for (let i = 0; i < instructions.length; i += 1) {
+    // The parser stores resolved jump targets on targetIndex, but labels that
+    // are pure markers (not jump targets) aren't retained. Recover them from
+    // any CALL/JMP that already resolved, and from ROUTE_MAP_RUN convention.
+  }
 
   const programGlobals = Array.isArray(mappingsById?.__globals) ? mappingsById.__globals : [];
   const proceduresByLabel = mappingsById?.__proceduresByLabel || {};
@@ -1436,7 +1377,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
 
   const requiredMnemonics = [
     'NOP', 'JMP', 'JZ', 'HALT',
-    'ROUTE_MATCH_QUEUE', 'ROUTE_EVAL_WHEN', 'ROUTE_TRANSFORM', 'ROUTE_EMIT', 'ROUTE_SET_STATE',
+    'ROUTE_MATCH_QUEUE', 'ROUTE_EVAL_WHEN', 'ROUTE_TRANSFORM', 'ROUTE_MAP_RUN', 'ROUTE_EMIT', 'ROUTE_SET_STATE',
     'PARSE_FIN_TEXT'
   ];
 
@@ -1464,6 +1405,17 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     }
     const instr = instructions[pc];
     const op = instr.mnemonic;
+
+    if (typeof debugHooks.beforeInstruction === 'function') {
+      await debugHooks.beforeInstruction({
+        pc,
+        instruction: instr,
+        operandStack: [...stack],
+        globals: { ...globalFrame.vars },
+        locals: { ...currentFrame.vars },
+        callStack: callStack.map(frame => ({ label: frame.label || '', pc: frame.pc ?? null }))
+      });
+    }
 
     if (op === 'NOP') {
       pc += 1;
@@ -1680,6 +1632,31 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       pc += 1;
       continue;
     }
+    if (op === 'UPPER') {
+      stack.push(toUpperCopy(asStringValue(stack.pop())));
+      pc += 1;
+      continue;
+    }
+    if (op === 'YYMMDD_TO_ISO') {
+      stack.push(yyMmDdToIso(asStringValue(stack.pop())));
+      pc += 1;
+      continue;
+    }
+    if (op === 'MT_AMOUNT_TO_DECIMAL') {
+      stack.push(normalizeMtAmount(asStringValue(stack.pop())));
+      pc += 1;
+      continue;
+    }
+    if (op === 'MT_PARTY_NAME') {
+      stack.push(extractMtPartyName(asStringValue(stack.pop())));
+      pc += 1;
+      continue;
+    }
+    if (op === 'MT_CHARGE_TO_ISO') {
+      stack.push(mapMtChargeBearerToIso(asStringValue(stack.pop())));
+      pc += 1;
+      continue;
+    }
     if (op === 'PARSE_INT') {
       const str = String(stack.pop() ?? '').trim();
       const parsed = Number.parseInt(str, 10);
@@ -1742,6 +1719,12 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       const frame = callStack.pop();
       if (!frame) break;
       currentFrame = frame.frame;
+      // If this RET returns from a mapper routine, commit the accumulated output
+      // document as the new current message.
+      if (mapOutput && typeof mapOutput === 'object' && Object.keys(mapOutput).length > 0) {
+        currentMessage = JSON.stringify(mapOutput);
+        mapOutput = null;
+      }
       pc = frame.returnPc;
       continue;
     }
@@ -1774,8 +1757,39 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       pc += 1;
       continue;
     }
-    if (op === 'ROUTE_TRANSFORM') {
-      currentMessage = applyTransformRule(String(instr.operand || ''), currentMessage, mappingsById);
+    // ROUTE_MAP_RUN: call the pcode routine labeled MAP_<id>. The routine reads
+    // the current message via SRC_GET and builds the output via OUT_SET; on RET
+    // the accumulated mapOutput becomes the new currentMessage. Pure pcode — no
+    // program-map JSON is parsed at runtime.
+    if (op === 'ROUTE_MAP_RUN') {
+      const mapperId = String(instr.operand || '');
+      const label = `MAP_${mapperId.replace(/[^A-Za-z0-9_]/g, '_')}`;
+      const labels = instructions.__labels;
+      const target = labels && labels.get(label);
+      if (typeof target !== 'number') throw new Error(`Mapper routine not found: ${label}`);
+      // Fresh output doc for this mapper invocation.
+      callStack.push({ returnPc: pc + 1, frame: currentFrame });
+      currentFrame = { vars: {}, parent: currentFrame };
+      mapOutput = {};
+      pc = target;
+      continue;
+    }
+    // SRC_GET "path": parse currentMessage as JSON and push the value at path.
+    if (op === 'SRC_GET') {
+      const path = String(instr.operand || '');
+      let doc = null;
+      try { doc = JSON.parse(String(currentMessage || '{}')); } catch { doc = null; }
+      const value = doc ? getJsonPathValue(doc, path) : '';
+      stack.push(value);
+      pc += 1;
+      continue;
+    }
+    // OUT_SET "path": pop a value and write it into the run-local output doc.
+    if (op === 'OUT_SET') {
+      const path = String(instr.operand || '');
+      const value = stack.pop();
+      if (!mapOutput || typeof mapOutput !== 'object') mapOutput = {};
+      setJsonPathValue(mapOutput, path, value);
       pc += 1;
       continue;
     }
@@ -2274,9 +2288,15 @@ async function executeSingleMessage(args, { printOutput = true } = {}) {
     }
 
     const base = String(args.backendUrl || 'http://localhost:4000').replace(/\/$/, '');
-    const url = endpointText.startsWith('http://') || endpointText.startsWith('https://')
-      ? endpointText
-      : (endpointText.startsWith('/') ? `${base}${endpointText}` : `${base}/${endpointText}`);
+    const isLogicalService = endpointText.startsWith('service://');
+    const logicalServiceName = isLogicalService
+      ? endpointText.slice('service://'.length).replace(/^\/+/, '')
+      : '';
+    const url = isLogicalService
+      ? `${base}/api/pmachine/route/${encodeURIComponent(logicalServiceName)}?proxy=true`
+      : (endpointText.startsWith('http://') || endpointText.startsWith('https://')
+        ? endpointText
+        : (endpointText.startsWith('/') ? `${base}${endpointText}` : `${base}/${endpointText}`));
 
     try {
       const res = await fetch(url, {
@@ -2286,7 +2306,9 @@ async function executeSingleMessage(args, { printOutput = true } = {}) {
           'x-user-id': String(args.actorUserId || 'system-admin'),
           'x-service-id': String(serviceId || '')
         },
-        body: String(payload || '')
+        body: isLogicalService
+          ? JSON.stringify({ payload, serviceId: serviceId || logicalServiceName })
+          : String(payload || '')
       });
 
       const text = await res.text();
@@ -2352,6 +2374,13 @@ async function executeSingleMessage(args, { printOutput = true } = {}) {
     programMapPath: path.relative(process.cwd(), programMapPath),
     inputQueue: args.inputQueue,
     sourceMessage,
+    messageTrace: {
+      incoming: sourceMessage,
+      outgoing: result.deliveries.map((delivery) => ({
+        queueName: delivery.queueName,
+        message: delivery.message
+      }))
+    },
     publishedCount: result.deliveries.length,
     deliveries: result.deliveries,
     state: result.state,
@@ -2373,7 +2402,18 @@ async function executeSingleMessage(args, { printOutput = true } = {}) {
 }
 
 export async function executeProgram(options) {
-  return await executeProgramImpl(options);
+  dslDebug('pmachine', 'execute:start', {
+    instructionCount: Array.isArray(options?.instructions) ? options.instructions.length : 0,
+    inputQueue: options?.inputQueue || null
+  });
+  try {
+    const result = await executeProgramImpl(options);
+    dslDebug('pmachine', 'execute:complete', { stepCount: result?.stepCount ?? null, error: result?.error || null });
+    return result;
+  } catch (error) {
+    dslDebug('pmachine', 'execute:error', { message: error?.message || String(error), stack: error?.stack || null });
+    throw error;
+  }
 }
 
 export { parsePcode };
@@ -2445,6 +2485,7 @@ async function pollAndRoute(args) {
     console.log(`[POLLER] Message #${messageCount}: processing from ${args.inputQueue}`);
     
     try {
+      console.log(`[POLLER] Incoming message: ${sourceMessage}`);
       const startedAt = Date.now();
       const result = await executeProgramImpl({
         instructions,
@@ -2477,6 +2518,7 @@ async function pollAndRoute(args) {
         
         qm.enqueue(queueName, delivery.message, 'pcode-router', msg.messageEnvelope || null);
         console.log(`[POLLER] Enqueued to ${queueName}`);
+        console.log(`[POLLER] Outgoing message (${queueName}): ${delivery.message}`);
       }
     } catch (err) {
       console.error(`[POLLER] Error routing message #${messageCount}:`, err.message);

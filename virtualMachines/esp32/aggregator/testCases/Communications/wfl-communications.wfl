@@ -1,0 +1,4 @@
+WORKFLOW "communications-calls" BEGIN
+STEP "sync-map" CALL SERVICE "communications-normalize" "COMM-WFL-SYNC-001";
+STEP "async-map" CALL SERVICE "communications-normalize" "COMM-WFL-ASYNC-001" ASYNC;
+END;

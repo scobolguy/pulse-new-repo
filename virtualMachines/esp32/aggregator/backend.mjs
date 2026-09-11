@@ -75,6 +75,7 @@ import { registerMapperRoutes } from './src/backend/mapperRoutes.mjs';
 import { registerOllamaRoutes } from './src/backend/ollamaRoutes.mjs';
 import { registerUserProvisioningRoutes } from './src/backend/modules/userProvisioningRoutes.mjs';
 import { registerDeveloperGovernanceRoutes } from './src/backend/modules/developerGovernanceRoutes.mjs';
+import { registerJavaScriptPmachineDebuggerRoutes } from './src/backend/modules/javascriptPmachineDebugger.mjs';
 import { registerOrchestrationRegistryRoutes } from './src/backend/modules/orchestrationRegistryRoutes.mjs';
 import { registerBrokerAdminRoutes } from './src/backend/modules/brokerAdminRoutes.mjs';
 import { registerMediaGatewayRoutes } from './src/backend/modules/mediaGatewayRoutes.mjs';
@@ -9713,6 +9714,7 @@ function registerRoutes(app) {
     pendingApprovalRequests,
     appendAuditEvent
   });
+  registerJavaScriptPmachineDebuggerRoutes(app);
 
   registerOrchestrationRegistryRoutes(app, {
     HTTP_PORT,

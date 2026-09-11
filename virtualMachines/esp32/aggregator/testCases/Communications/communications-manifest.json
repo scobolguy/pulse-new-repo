@@ -1,0 +1,24 @@
+{
+  "name": "communications-mapper-interoperability",
+  "version": 1,
+  "mapper": {
+    "id": "communications-normalize",
+    "sourceType": "swift-mt103",
+    "targetType": "pacs",
+    "transformer": "normalize-amount-and-reference"
+  },
+  "librarians": {
+    "data": ["swift-mt103", "pacs"],
+    "code": ["communications-normalize", "normalize-amount-and-reference"]
+  },
+  "calls": {
+    "sync": "POST /map",
+    "async": "POST /map/async then GET /jobs/:jobId"
+  },
+  "callers": ["javascript", "java", "wfl", "cobolish", "vbish", "pascalish"],
+  "referenceMessage": {
+    "reference": "COMM-SYNC-001",
+    "amount": "100,25",
+    "currency": "USD"
+  }
+}

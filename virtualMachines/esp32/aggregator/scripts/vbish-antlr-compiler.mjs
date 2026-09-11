@@ -33,15 +33,26 @@ function unquote(value) {
 }
 
 export class VbishToPascalishVisitor extends VbishVisitor {
-  constructor() {
+  constructor(metadata = {}) {
     super();
+    this.metadata = metadata;
     this.globals = new Map();
     this.mainStatements = [];
     this.procedures = [];
     this.functions = [];
+    this.routers = [];
   }
 
   visitCompilationUnit(ctx) {
+    for (const routeCtx of ctx.routeDecl() || []) {
+      const parts = routeCtx.stringOrIdentifier() || [];
+      const fromQueue = unquote(text(parts[0]));
+      const toQueue = unquote(text(parts[1]));
+      const mapperId = unquote(text(parts[2]));
+      if (fromQueue && toQueue && mapperId) {
+        this.routers.push({ fromQueue, toQueue, mapperId });
+      }
+    }
     for (const topDecl of ctx.topLevelDecl() || []) {
       if (topDecl.variableDecl && topDecl.variableDecl()) {
         const v = topDecl.variableDecl();
@@ -288,8 +299,28 @@ export class VbishToPascalishVisitor extends VbishVisitor {
     const refresh = runtimeUnit?.refresh ? runtimeUnit.refresh : '';
 
     lines.push(`${kind} "${id}"${placement}${refresh};`);
+
+    const meta = this.metadata || {};
+    if (meta.role) lines.push(`role ${String(meta.role).toLowerCase()};`);
+    for (const lib of meta.libraries || []) {
+      const libSource = String(lib.source || 'librarian').toLowerCase();
+      lines.push(`library "${lib.id}" from ${libSource};`);
+    }
+    for (const use of meta.uses || []) {
+      lines.push(`use "${use.id}"${use.alias ? ` as ${use.alias}` : ''};`);
+    }
+    for (const mapper of meta.mapperImports || []) {
+      lines.push(`import mapper "${mapper.id}" from mapper;`);
+    }
+
     for (const item of interopDecls) {
       lines.push(`interop ${item.kind.toLowerCase()} "${item.target}";`);
+    }
+
+    for (const route of this.routers) {
+      lines.push(`router "${route.mapperId}-route" input "${route.fromQueue}" begin`);
+      lines.push(`  output "${route.toQueue}" when "output := 1;" transform "output := map('${route.mapperId}', src);";`);
+      lines.push('end;');
     }
 
     if (this.globals.size > 0) {
@@ -356,11 +387,24 @@ export function compileVbishWithAntlr(sourceText, options = {}) {
   }));
   const members = collectMatches(source, /\b(?:SUB|FUNCTION)\s+([A-Za-z_][A-Za-z0-9_-]*)/gi, (match) => String(match[1]));
   const variables = collectMatches(source, /\bDIM\s+([A-Za-z_][A-Za-z0-9_-]*)/gi, (match) => String(match[1]));
+  const role = (source.match(/\bROLE\s+([A-Za-z_][A-Za-z0-9_-]*)/i) || [])[1] || null;
+  const libraries = collectMatches(source, /\bLIBRARY\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))\s+FROM\s+(?:LIBRARIAN|"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))/gi, (match) => ({
+    id: String(match[1] || match[2] || match[3] || '').trim(),
+    source: String(match[4] || match[5] || match[6] || 'librarian').trim() || 'librarian'
+  })).filter((x) => x.id);
+  const uses = collectMatches(source, /\bUSE\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))(?:\s+AS\s+([A-Za-z_][A-Za-z0-9_-]*))?/gi, (match) => ({
+    id: String(match[1] || match[2] || match[3] || '').trim(),
+    alias: String(match[4] || '').trim() || null
+  })).filter((x) => x.id);
+  const mapperImports = collectMatches(source, /\bIMPORT\s+MAPPER\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))\s+FROM\s+(?:MAPPER|LIBRARIAN|"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))/gi, (match) => ({
+    id: String(match[1] || match[2] || match[3] || '').trim(),
+    source: String(match[4] || match[5] || match[6] || 'mapper').trim() || 'mapper'
+  })).filter((x) => x.id);
 
   let pascalishSource = '';
   if (syntaxErrors.length === 0) {
     try {
-      const visitor = new VbishToPascalishVisitor();
+      const visitor = new VbishToPascalishVisitor({ role, libraries, uses, mapperImports });
       visitor.visitCompilationUnit(tree);
       const runtimeUnit = runtimeMatch ? {
         kind: runtimeMatch[1].toLowerCase(),
@@ -379,6 +423,10 @@ export function compileVbishWithAntlr(sourceText, options = {}) {
     language: 'vbish', version: 1, compiledAt: new Date().toISOString(), fileName: options.fileName || null,
     valid: syntaxErrors.length === 0, syntaxErrors, syntaxErrorCount: syntaxErrors.length,
     runtime: runtimeMatch ? { kind: runtimeMatch[1].toLowerCase(), id: runtimeMatch[2] || runtimeMatch[3], placement: String(runtimeMatch[4] || 'LOCAL').toLowerCase(), interval: Number(runtimeMatch[5] || 0), unit: String(runtimeMatch[6] || 'MS').toLowerCase() } : null,
+    role,
+    libraries,
+    uses,
+    mapperImports,
     interop, members, variables, source, pascalishSource
   };
 }

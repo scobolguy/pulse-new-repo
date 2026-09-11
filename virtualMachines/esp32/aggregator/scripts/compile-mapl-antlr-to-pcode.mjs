@@ -5,6 +5,7 @@ import antlr4 from 'antlr4';
 import MAPLLexer from '../grammar/generated-modern/MAPLLexer.js';
 import MAPLParser from '../grammar/generated-modern/MAPLParser.js';
 import MAPLVisitor from '../grammar/generated-modern/MAPLVisitor.js';
+import { dslDebug, dslError } from './dsl-debug.mjs';
 import { attachPcodeSignature } from './pcode-signing.mjs';
 
 class CollectingErrorListener extends antlr4.error.ErrorListener {
@@ -161,6 +162,9 @@ function lowerStaticItems(map) {
 }
 
 export function compileMaplWithAntlr(sourceText) {
+  const text = String(sourceText || '');
+  dslDebug('mapl', 'compile:start', { chars: text.length });
+  try {
   const input = new antlr4.InputStream(String(sourceText || ''));
   const lexer = new MAPLLexer(input);
   const lexerErrors = new CollectingErrorListener();
@@ -213,7 +217,7 @@ export function compileMaplWithAntlr(sourceText) {
     ''
   ].join('\n');
 
-  return {
+  const result = {
     pcodeText,
     programMap: {
       version: 1,
@@ -229,6 +233,11 @@ export function compileMaplWithAntlr(sourceText) {
     },
     ast
   };
+  dslDebug('mapl', 'compile:complete', { maps: result.ast.maps.length });
+  return result;
+  } catch (error) {
+    throw dslError('mapl', 'compile', error, { chars: text.length });
+  }
 }
 
 function parseArgs(argv) {

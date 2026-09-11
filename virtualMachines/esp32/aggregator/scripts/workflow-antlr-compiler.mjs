@@ -1,4 +1,5 @@
 import antlr4 from 'antlr4';
+import { dslDebug, dslError } from './dsl-debug.mjs';
 import WorkflowDslLexer from '../grammar/generated-modern/WorkflowDslLexer.js';
 import WorkflowDslParser from '../grammar/generated-modern/WorkflowDslParser.js';
 import WorkflowDslVisitor from '../grammar/generated-modern/WorkflowDslVisitor.js';
@@ -8,7 +9,11 @@ function parseQuoted(value) {
   if (s.length < 2) return null;
   const q = s[0];
   if ((q !== '"' && q !== '\'') || s[s.length - 1] !== q) return null;
-  return s.slice(1, -1);
+  return s.slice(1, -1)
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\r')
+    .replace(/\\t/g, '\t')
+    .replace(/\\(["'\\])/g, '$1');
 }
 
 function quoteDouble(value) {
@@ -24,6 +29,18 @@ function parseStepCallApi(stepLine) {
     apiSymbol: parseQuoted(stepMatch[2]),
     method: stepMatch[3].toUpperCase(),
     route: parseQuoted(stepMatch[4])
+  };
+}
+
+function parseStepCallService(stepLine) {
+  const stepMatch = stepLine.match(/^STEP\s+("[^"]+"|'[^']+')\s+CALL\s+SERVICE\s+("[^"]+"|'[^']+')\s+("[^"]+"|'[^']+')(?:\s+(ASYNC))?\s*;$/i);
+  if (!stepMatch) return null;
+  return {
+    id: parseQuoted(stepMatch[1]),
+    action: 'call_service',
+    serviceId: parseQuoted(stepMatch[2]),
+    message: parseQuoted(stepMatch[3]),
+    asynchronous: Boolean(stepMatch[4])
   };
 }
 
@@ -264,6 +281,7 @@ function parseStepProjectPlanAdd(stepLine, objectType, actionName) {
 
 function parseStepFromLine(stepLine) {
   const parsers = [
+    parseStepCallService,
     parseStepCallApi,
     parseStepRouteQueue,
     parseStepSetState,
@@ -318,6 +336,7 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
   visitProgram(ctx) {
     const symbols = { queues: [], files: [], apis: [] };
     const workflows = [];
+    const deployments = [];
 
     for (const item of ctx.item() || []) {
       const value = this.visit(item);
@@ -326,9 +345,10 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
       if (value.type === 'file') symbols.files.push(value.payload);
       if (value.type === 'api') symbols.apis.push(value.payload);
       if (value.type === 'workflow') workflows.push(value.payload);
+      if (value.type === 'deployment') deployments.push(value.payload);
     }
 
-    return { symbols, workflows };
+    return { symbols, workflows, deployments };
   }
 
   visitItem(ctx) {
@@ -336,7 +356,34 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
     if (ctx.fileDecl()) return this.visit(ctx.fileDecl());
     if (ctx.apiDecl()) return this.visit(ctx.apiDecl());
     if (ctx.workflowDecl()) return this.visit(ctx.workflowDecl());
+    if (ctx.deploymentDecl()) return this.visit(ctx.deploymentDecl());
     return null;
+  }
+
+  visitDeploymentDecl(ctx) {
+    return {
+      type: 'deployment',
+      payload: {
+        id: parseQuoted(ctx.quotedString(0).getText()),
+        projectId: parseQuoted(ctx.quotedString(1).getText()),
+        targets: this.visit(ctx.quotedList(0)),
+        resources: (ctx.deploymentItem() || []).map((item) => this.visit(item))
+      }
+    };
+  }
+
+  visitDeploymentItem(ctx) {
+    const kind = ctx.SERVICE() ? 'service' : (ctx.PROGRAM() ? 'program' : 'daemon');
+    const strings = ctx.quotedString() || [];
+    return {
+      kind,
+      id: parseQuoted(strings[0].getText()),
+      fileName: parseQuoted(strings[1].getText()),
+      inputQueue: parseQuoted(strings[2].getText()),
+      outputQueue: parseQuoted(strings[3].getText()),
+      targets: this.visit(ctx.quotedList()),
+      startup: Boolean(ctx.booleanLiteral()?.TRUE())
+    };
   }
 
   visitQueueDecl(ctx) {
@@ -525,11 +572,20 @@ export function parseWorkflowDslWithAntlr(sourceText) {
 }
 
 export function compileWorkflowDSLWithAntlr(sourceText) {
-  const parsed = parseWorkflowDslWithAntlr(sourceText);
-  return {
-    version: 4,
-    compiledAt: new Date().toISOString(),
-    symbols: parsed.symbols,
-    workflows: parsed.workflows
-  };
+  const text = String(sourceText || '');
+  dslDebug('wfl', 'compile:start', { chars: text.length });
+  try {
+    const parsed = parseWorkflowDslWithAntlr(text);
+    const result = {
+      version: 4,
+      compiledAt: new Date().toISOString(),
+      symbols: parsed.symbols,
+      workflows: parsed.workflows,
+      deployments: parsed.deployments
+    };
+    dslDebug('wfl', 'compile:complete', { workflows: result.workflows.length, deployments: result.deployments.length });
+    return result;
+  } catch (error) {
+    throw dslError('wfl', 'compile', error, { chars: text.length });
+  }
 }

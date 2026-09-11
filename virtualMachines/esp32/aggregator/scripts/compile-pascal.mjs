@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { pathToFileURL } from 'url';
 import { compilePascalishProgramWithAntlr } from './compile-pascalish-program-antlr-to-pcode.mjs';
+import { dslDebug, dslError } from './dsl-debug.mjs';
 
 function parseArgs(argv) {
   const args = {
@@ -22,6 +23,14 @@ function parseArgs(argv) {
   return args;
 }
 
+function normalizeRouterRuleText(value) {
+  return String(value || '')
+    .replace(/\\(["'\\])/g, '$1')
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\r')
+    .replace(/\\t/g, '\t');
+}
+
 function programMapToRouterRules(programMap, serviceId) {
   const now = new Date().toISOString();
   return (programMap?.routers || []).map(router => ({
@@ -35,8 +44,8 @@ function programMapToRouterRules(programMap, serviceId) {
     outputs: (router.outputs || []).map(out => ({
       queueName: out.queueName,
       ...(out.httpVerb ? { httpVerb: out.httpVerb } : {}),
-      whenRule: out.whenRule,
-      transformRule: out.transformRule
+      whenRule: normalizeRouterRuleText(out.whenRule),
+      transformRule: normalizeRouterRuleText(out.transformRule)
     })),
     createdAt: now,
     updatedAt: now
@@ -99,7 +108,15 @@ function compileViaPascalishGrammar(sourceText) {
 }
 
 export function compileRouterMapperDSL(sourceText) {
-  return compileViaPascalishGrammar(String(sourceText || ''));
+  const text = String(sourceText || '');
+  dslDebug('pascalish', 'compile:start', { chars: text.length });
+  try {
+    const result = compileViaPascalishGrammar(text);
+    dslDebug('pascalish', 'compile:complete', { serviceId: result.serviceId, routers: result.routerRules.length, mappings: result.dataMappings.length });
+    return result;
+  } catch (error) {
+    throw dslError('pascalish', 'compile', error, { chars: text.length });
+  }
 }
 
 async function main() {
