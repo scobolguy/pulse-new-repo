@@ -354,6 +354,105 @@ export function registerQueueBrokerOpsRoutes(app, deps) {
     }
   });
 
+  app.post('/api/queue/:queueName/claim', async (req, res) => {
+    const { queueName } = req.params;
+    const { workerId, leaseMs = 30000 } = req.body || {};
+    try {
+      const route = ensureRoute(queueName);
+      if (!route) return res.status(503).json({ error: 'No available queue managers' });
+      const manager = queueManagerRegistry.get(route.managerId);
+      if (!manager) return res.status(503).json({ error: `Route manager ${route.managerId} not found` });
+      if (manager.local) {
+        const claim = queueManagers[manager.localIndex].claim(queueName, workerId || 'anonymous-worker', leaseMs);
+        return claim ? res.json({ claim, managerId: manager.managerId }) : res.status(404).json({ error: 'Queue empty' });
+      }
+      const upstream = await fetch(`http://${manager.ip}:${manager.port}/claim`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ queueName, workerId, leaseMs })
+      });
+      const payload = await upstream.json().catch(() => ({}));
+      return res.status(upstream.status).json({ ...payload, managerId: manager.managerId });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/queue/:queueName/claim/complete', async (req, res) => {
+    const { queueName } = req.params;
+    const { workerId, claimToken, completionMeta = null } = req.body || {};
+    try {
+      const route = ensureRoute(queueName);
+      if (!route) return res.status(503).json({ error: 'No available queue managers' });
+      const manager = queueManagerRegistry.get(route.managerId);
+      if (!manager) return res.status(503).json({ error: `Route manager ${route.managerId} not found` });
+      if (manager.local) {
+        const result = queueManagers[manager.localIndex].completeClaim(queueName, claimToken, workerId, completionMeta);
+        if (result === 'forbidden') return res.status(403).json({ error: 'claim worker mismatch' });
+        return result ? res.json({ result, managerId: manager.managerId }) : res.status(404).json({ error: 'claim not found' });
+      }
+      const upstream = await fetch(`http://${manager.ip}:${manager.port}/claim/complete`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ queueName, workerId, claimToken, completionMeta })
+      });
+      const payload = await upstream.json().catch(() => ({}));
+      return res.status(upstream.status).json({ ...payload, managerId: manager.managerId });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/queue/:queueName/claim/heartbeat', async (req, res) => {
+    const { queueName } = req.params;
+    const { workerId, claimToken, extendMs = 30000 } = req.body || {};
+    try {
+      const route = ensureRoute(queueName);
+      if (!route) return res.status(503).json({ error: 'No available queue managers' });
+      const manager = queueManagerRegistry.get(route.managerId);
+      if (!manager) return res.status(503).json({ error: `Route manager ${route.managerId} not found` });
+      if (manager.local) {
+        const claim = queueManagers[manager.localIndex].heartbeatClaim(queueName, claimToken, workerId, extendMs);
+        if (claim === 'forbidden') return res.status(403).json({ error: 'claim worker mismatch' });
+        return claim ? res.json({ claim, managerId: manager.managerId }) : res.status(404).json({ error: 'claim not found' });
+      }
+      const upstream = await fetch(`http://${manager.ip}:${manager.port}/claim/heartbeat`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ queueName, workerId, claimToken, extendMs })
+      });
+      const payload = await upstream.json().catch(() => ({}));
+      return res.status(upstream.status).json({ ...payload, managerId: manager.managerId });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/queue/:queueName/claim/fail', async (req, res) => {
+    const { queueName } = req.params;
+    const { workerId, claimToken, ...options } = req.body || {};
+    try {
+      const route = ensureRoute(queueName);
+      if (!route) return res.status(503).json({ error: 'No available queue managers' });
+      const manager = queueManagerRegistry.get(route.managerId);
+      if (!manager) return res.status(503).json({ error: `Route manager ${route.managerId} not found` });
+      if (manager.local) {
+        const result = queueManagers[manager.localIndex].failClaim(queueName, claimToken, workerId, options);
+        if (result === 'forbidden') return res.status(403).json({ error: 'claim worker mismatch' });
+        return result ? res.json({ result, managerId: manager.managerId }) : res.status(404).json({ error: 'claim not found' });
+      }
+      const upstream = await fetch(`http://${manager.ip}:${manager.port}/claim/fail`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ queueName, workerId, claimToken, ...options })
+      });
+      const payload = await upstream.json().catch(() => ({}));
+      return res.status(upstream.status).json({ ...payload, managerId: manager.managerId });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.post('/api/queue/:queueName/truncate', (req, res) => {
     const { queueName } = req.params;
     try {

@@ -76,6 +76,14 @@ enum Opcode : uint8_t {
     OP_ROUTE_EVAL_WHEN = 0x13,   // Evaluate WHEN rule against current message, push 1/0
     OP_ROUTE_TRANSFORM = 0x14,   // Apply TRANSFORM rule to current message
     OP_ROUTE_EMIT = 0x15,        // Emit current message to operand output queue
+    OP_ROUTE_MAP_RUN = 0x63,     // Call a pcode mapper routine (operand = mapper id -> MAP_<id> label)
+    OP_SRC_GET = 0x64,           // Read current-message field by path, push onto stack
+    OP_OUT_SET = 0x65,           // Pop stack, write into the mapper output document by path
+    OP_UPPER = 0x66,             // Uppercase top-of-stack string
+    OP_YYMMDD_TO_ISO = 0x67,     // YYMMDD -> YYYY-MM-DD on top-of-stack
+    OP_MT_AMOUNT_TO_DECIMAL = 0x68, // "12500,45" -> "12500.45"
+    OP_MT_PARTY_NAME = 0x69,     // Strip MT account line, keep party name
+    OP_MT_CHARGE_TO_ISO = 0x6A,  // MT charge-bearer code -> ISO
     OP_PARSE_FIN_TEXT = 0x16,    // Parse routing source message from MT FIN text into JSON
     OP_ROUTE_SET_STATE = 0x17,   // Set runtime state from operand "key=value"
     OP_ROUTE_SET_MESSAGE = 0x24, // Pop stack value and set current routing message
@@ -261,6 +269,14 @@ struct Value {
         if (mnemonic == "ROUTE_MATCH_QUEUE") return OP_ROUTE_MATCH_QUEUE;
         if (mnemonic == "ROUTE_EVAL_WHEN") return OP_ROUTE_EVAL_WHEN;
         if (mnemonic == "ROUTE_TRANSFORM") return OP_ROUTE_TRANSFORM;
+        if (mnemonic == "ROUTE_MAP_RUN") return OP_ROUTE_MAP_RUN;
+        if (mnemonic == "SRC_GET") return OP_SRC_GET;
+        if (mnemonic == "OUT_SET") return OP_OUT_SET;
+        if (mnemonic == "UPPER") return OP_UPPER;
+        if (mnemonic == "YYMMDD_TO_ISO") return OP_YYMMDD_TO_ISO;
+        if (mnemonic == "MT_AMOUNT_TO_DECIMAL") return OP_MT_AMOUNT_TO_DECIMAL;
+        if (mnemonic == "MT_PARTY_NAME") return OP_MT_PARTY_NAME;
+        if (mnemonic == "MT_CHARGE_TO_ISO") return OP_MT_CHARGE_TO_ISO;
         if (mnemonic == "ROUTE_EMIT") return OP_ROUTE_EMIT;
         if (mnemonic == "PARSE_FIN_TEXT") return OP_PARSE_FIN_TEXT;
         if (mnemonic == "ROUTE_SET_STATE") return OP_ROUTE_SET_STATE;
@@ -337,6 +353,9 @@ struct MappingItem {
     std::string sourcePath;
     std::string targetPath;
     std::string conversionRule;
+    // Compiled conversion opcodes (e.g. {"SRC","TRIM","UPPER"}). When present,
+    // the PMachine executes these natively instead of interpreting conversionRule.
+    std::vector<std::string> ops;
 };
 
 struct MappingDef {
@@ -514,6 +533,7 @@ public:
     bool readPCodeByte(uint32_t virtualAddress, uint8_t& outByte);
     void run(const std::vector<PInstruction>& instructions);
     void setRoutingContext(const std::string& inputQueue, const std::string& message);
+    const std::string& getCurrentMessage() const;
     void setNamedStringVariable(const std::string& name, const std::string& value);
     std::string getNamedStringVariable(const std::string& name) const;
     const std::vector<RouteDelivery>& getRoutingDeliveries() const;
@@ -530,6 +550,10 @@ public:
     bool didLastRunHitStepLimit() const;
     size_t getLastRunStepCount() const;
     const std::vector<std::string>& getLastRunTextOutput() const;
+    const std::vector<std::string>& getLastRunTrace() const;
+    void loadDebugInstructions(const std::vector<PInstruction>& instructions);
+    bool hasDebugInstructions() const;
+    uint16_t getDebugPc() const;
     std::map<std::string, std::string> getFlowStateSnapshot() const;
     std::map<std::string, GlobalValue> getGlobalsSnapshot() const;
     uint16_t registerEnumType(const std::string& typeName, const std::vector<std::string>& values);
@@ -567,6 +591,10 @@ private:
     bool lastRunStepLimitHit = false;
     size_t lastRunStepCount = 0;
     std::vector<std::string> lastRunTextOutput;
+    std::vector<std::string> lastRunTrace;
+    std::vector<PInstruction> debugInstructions;
+    uint16_t debugPc = 0;
+    bool debugLoaded = false;
     std::map<std::string, GlobalValue> lastRunGlobals;
     PagingConfig pagingConfig;
     PagingStats pagingStats;

@@ -1,0 +1,1 @@
+{"method":"POST","inputQueue":"mt103-to-pacs008.in","query":{},"body":{"messageId":"central-test-001","message":"MT103\n:20:CENTRAL-TEST-001\n:23B:CRED\n:32A:260907USD100,01\n:50K:ALPHA IMPORTS LTD\n:57A:BKTRUS33\n:59:/000123456\nBETA SUPPLIES INC\n:70:Central service interface test\n:71A:SHA","inputQueue":"swift.mt103.inbound"}}

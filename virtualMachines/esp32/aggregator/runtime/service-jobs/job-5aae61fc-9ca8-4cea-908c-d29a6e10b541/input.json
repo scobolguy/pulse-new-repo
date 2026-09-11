@@ -1,0 +1,1 @@
+{"method":"POST","inputQueue":"mt103-to-pacs008.in","query":{},"body":{"messageId":"wfl-service-call-test-sync-call-1788879742173","message":"MT103\n:20:WFL-SYNC-001\n:23B:CRED\n:32A:260907USD100,01","inputQueue":"mt103-to-pacs008.in"}}

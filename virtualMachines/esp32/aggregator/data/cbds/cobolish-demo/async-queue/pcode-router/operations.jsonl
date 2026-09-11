@@ -1,0 +1,1 @@
+{"version":1,"timestamp":1788708846952,"type":"createQueue","queueName":"swift.mt103.parsed","config":{"name":"swift.mt103.parsed","createdAt":1788708846951,"frozen":false,"queueClass":"permanent","persistMessages":true},"configVersion":1}

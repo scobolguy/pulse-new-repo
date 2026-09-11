@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MT103 to PACS.008 Playwright Deployment Review</title>
+<style>
+  :root { color-scheme: light; --ink:#17202a; --muted:#5c6773; --line:#d8dee6; --panel:#f5f7fa; --ok:#137333; --fail:#b3261e; --accent:#125ea8; }
+  * { box-sizing:border-box; }
+  body { margin:0; color:var(--ink); font:15px/1.55 "Segoe UI", system-ui, sans-serif; }
+  main { max-width:1050px; margin:0 auto; padding:42px 48px 64px; }
+  h1 { margin:0 0 8px; font-size:30px; }
+  h2 { margin:34px 0 10px; padding-bottom:6px; border-bottom:2px solid var(--line); font-size:21px; }
+  h3 { margin:22px 0 8px; font-size:17px; }
+  .subtitle { color:var(--muted); margin:0 0 24px; }
+  .summary { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin:20px 0; }
+  .metric { border:1px solid var(--line); border-radius:8px; padding:13px; background:var(--panel); }
+  .metric strong { display:block; font-size:20px; }
+  .metric span { color:var(--muted); font-size:12px; }
+  table { width:100%; border-collapse:collapse; margin:10px 0 20px; }
+  th,td { text-align:left; vertical-align:top; border-bottom:1px solid var(--line); padding:9px 8px; }
+  th { background:var(--panel); font-weight:600; }
+  .ok { color:var(--ok); font-weight:700; }
+  .fail { color:var(--fail); font-weight:700; }
+  code, pre { font-family:Consolas,"Cascadia Code",monospace; }
+  pre { overflow:auto; padding:14px; border:1px solid var(--line); border-radius:7px; background:#f7f8fa; font-size:12px; line-height:1.45; white-space:pre-wrap; }
+  .callout { border-left:4px solid var(--accent); background:#eef5fc; padding:12px 15px; margin:14px 0; }
+  .warning { border-left-color:#b3261e; background:#fff2f0; }
+  img { max-width:100%; border:1px solid var(--line); border-radius:7px; }
+  .small { color:var(--muted); font-size:12px; }
+  @media print { main { max-width:none; padding:0; } h2 { break-after:avoid; } pre, table, img { break-inside:avoid; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>MT103 to PACS.008 Deployment Review</h1>
+  <p class="subtitle">Playwright walkthrough of project creation, mapper-service authoring, deployment-plan persistence, and runtime deployment.</p>
+
+  <div class="summary">
+    <div class="metric"><strong>Created</strong><span>Project and service source</span></div>
+    <div class="metric"><strong class="ok">1 target online</strong><span>JS PMachine deployment registered</span></div>
+    <div class="metric"><strong class="fail">1 target blocked</strong><span>ESP32 upload returned fetch failed</span></div>
+  </div>
+
+  <h2>Run Context</h2>
+  <table>
+    <tr><th>Project</th><td><code>mt103-pacs008-demo-1788790108903</code><br>MT103 to PACS.008 Demo</td></tr>
+    <tr><th>Service source</th><td><code>programs/mt103-to-pacs008.pas</code></td></tr>
+    <tr><th>Mapping</th><td><code>swift-mt103</code> to <code>pacs.008</code></td></tr>
+    <tr><th>Input queue</th><td><code>swift.mt103.parsed</code></td></tr>
+    <tr><th>Output queue</th><td><code>pacs.008.outbound</code></td></tr>
+    <tr><th>Playwright origin</th><td><code>http://127.0.0.1:5174</code></td></tr>
+  </table>
+
+  <h2>Workflow Results</h2>
+  <table>
+    <thead><tr><th>Step</th><th>Result</th><th>Details</th></tr></thead>
+    <tbody>
+      <tr><td>Create project</td><td class="ok">PASS</td><td>Project created and selected in the Projects UI.</td></tr>
+      <tr><td>Create and open service source</td><td class="ok">PASS</td><td>Source saved and opened in the in-window Monaco tabbed editor.</td></tr>
+      <tr><td>Register mapper service metadata</td><td class="ok">PASS</td><td>HTTP 200; service metadata registered in the project workspace.</td></tr>
+      <tr><td>Save deployment plan</td><td class="ok">PASS</td><td>HTTP 200; plan targets the ESP32 IP and JS PMachine.</td></tr>
+      <tr><td>Deploy to <code>192.168.2.155</code></td><td class="fail">BLOCKED</td><td>HTTP 500 from the backend: <code>fetch failed</code> while uploading to the board.</td></tr>
+      <tr><td>Deploy to <code>magic-js-pmachine-01</code></td><td class="ok">PASS</td><td>HTTP 200; deployment record persisted with runtime state <code>running</code>.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout warning"><strong>ESP32 follow-up:</strong> the device status endpoint was reachable at <code>http://192.168.2.155/status</code>, but the backend deployment helper attempted its file upload service on port <code>4000</code>. The upload-port or endpoint contract needs to be reconciled before the ESP32 deployment can complete.</div>
+
+  <h2>Service Source</h2>
+  <pre>service "mt103-to-pacs008" on local;
+role code_librarian;
+mapper "cbds-mt103-to-pacs008" source "swift-mt103" target "pacs.008" begin
+  map "block4.20" to "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId" using "output := trim(src);";
+  map "block4.32A.amount" to "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt" using "output := mtamounttodecimal(src);";
+end;
+router "mt103-to-pacs008-route" input "swift.mt103.parsed" begin
+  output "pacs.008.outbound" when "output := 1;" transform "output := map('cbds-mt103-to-pacs008', src);";
+end;
+begin
+end.</pre>
+
+  <h2>JS PMachine Deployment</h2>
+  <table>
+    <tr><th>Target</th><td><code>magic-js-pmachine-01</code></td></tr>
+    <tr><th>Deployment reference</th><td><code>mt103-to-pacs008::magic-js-pmachine-01</code></td></tr>
+    <tr><th>Package</th><td><code>projects/mt103-pacs008-demo-1788790108903</code></td></tr>
+    <tr><th>Runtime state</th><td class="ok">running</td></tr>
+    <tr><th>Deployment ID</th><td><code>401061bc-ddcd-40d7-84ec-df478698b058</code></td></tr>
+    <tr><th>Persisted at</th><td><code>2026-09-07T14:08:34.065Z</code></td></tr>
+  </table>
+
+  <h2>Browser Evidence</h2>
+  <p>The screenshot below captures the project-management window after creation, with the source file opened as an editor tab.</p>
+  <img src="mt103-pacs008-project-tabs.png" alt="Project management page showing the MT103 to PACS.008 project and source editor tabs">
+  <p class="small">Generated by <code>demo-project-mt103-pacs008-playwright.mjs</code>.</p>
+</main>
+</body>
+</html>

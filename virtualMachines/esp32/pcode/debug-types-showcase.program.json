@@ -1,0 +1,349 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-11T19:53:47.046Z",
+  "serviceId": "DebugTypesShowcase",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "DebugTypesShowcase",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-program",
+  "sourceLanguage": "pascalish",
+  "entries": [],
+  "localResources": {
+    "serviceId": "DebugTypesShowcase",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "routers": [],
+  "serviceEndpoints": [],
+  "globals": [
+    "probe_tag",
+    "probe_severity",
+    "probe_channel",
+    "probe_weight",
+    "probe_active",
+    "probe_origin_x",
+    "probe_origin_y",
+    "mirror_tag",
+    "mirror_severity",
+    "mirror_channel",
+    "mirror_weight",
+    "mirror_active",
+    "mirror_origin_x",
+    "mirror_origin_y",
+    "escalations",
+    "deepestLevel",
+    "finalSeverity",
+    "totalWeight"
+  ],
+  "variableDeclarations": [
+    {
+      "type": "VarDecl",
+      "name": "probe",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "user",
+        "id": "Sample",
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "mirror",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "user",
+        "id": "Sample",
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "escalations",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "integer",
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "deepestLevel",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "integer",
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "finalSeverity",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "user",
+        "id": "Alert",
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "totalWeight",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "user",
+        "id": "Score",
+        "genericArgs": []
+      }
+    }
+  ],
+  "enums": {
+    "Severity": [
+      "SevInfo",
+      "SevWarning",
+      "SevError",
+      "SevFatal"
+    ],
+    "Channel": [
+      "ChFile",
+      "ChQueue",
+      "ChHttp"
+    ],
+    "Alert": [
+      "SevInfo",
+      "SevWarning",
+      "SevError",
+      "SevFatal"
+    ]
+  },
+  "procedures": {
+    "PROC_SEVERITYNAME": {
+      "name": "SeverityName",
+      "returnType": null,
+      "params": [
+        "value"
+      ],
+      "locals": []
+    },
+    "PROC_CHANNELNAME": {
+      "name": "ChannelName",
+      "returnType": null,
+      "params": [
+        "value"
+      ],
+      "locals": []
+    },
+    "PROC_BUILDPROBE": {
+      "name": "BuildProbe",
+      "returnType": null,
+      "params": [],
+      "locals": []
+    },
+    "PROC_MIRRORPROBE": {
+      "name": "MirrorProbe",
+      "returnType": null,
+      "params": [],
+      "locals": []
+    },
+    "PROC_ESCALATE": {
+      "name": "Escalate",
+      "returnType": null,
+      "params": [
+        "level",
+        "current"
+      ],
+      "locals": [
+        "nextSeverity",
+        "localWeight",
+        "marker"
+      ]
+    },
+    "PROC_REPORTPAIR": {
+      "name": "ReportPair",
+      "returnType": null,
+      "params": [],
+      "locals": [
+        "spread"
+      ]
+    }
+  },
+  "typeDeclarations": [
+    {
+      "type": "TypeDecl",
+      "name": "Severity",
+      "genericParams": [],
+      "targetType": {
+        "type": "TypeRef",
+        "kind": "enum",
+        "values": [
+          "SevInfo",
+          "SevWarning",
+          "SevError",
+          "SevFatal"
+        ],
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "TypeDecl",
+      "name": "Channel",
+      "genericParams": [],
+      "targetType": {
+        "type": "TypeRef",
+        "kind": "enum",
+        "values": [
+          "ChFile",
+          "ChQueue",
+          "ChHttp"
+        ],
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "TypeDecl",
+      "name": "Alert",
+      "genericParams": [],
+      "targetType": {
+        "type": "TypeRef",
+        "kind": "user",
+        "id": "Severity",
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "TypeDecl",
+      "name": "Score",
+      "genericParams": [],
+      "targetType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "real",
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "TypeDecl",
+      "name": "Tag",
+      "genericParams": [],
+      "targetType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "string",
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "TypeDecl",
+      "name": "Vector",
+      "genericParams": [],
+      "targetType": {
+        "type": "TypeRef",
+        "kind": "record",
+        "fields": [
+          {
+            "name": "x",
+            "dataType": {
+              "type": "TypeRef",
+              "kind": "simple",
+              "id": "integer",
+              "genericArgs": []
+            }
+          },
+          {
+            "name": "y",
+            "dataType": {
+              "type": "TypeRef",
+              "kind": "simple",
+              "id": "integer",
+              "genericArgs": []
+            }
+          }
+        ],
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "TypeDecl",
+      "name": "Sample",
+      "genericParams": [],
+      "targetType": {
+        "type": "TypeRef",
+        "kind": "record",
+        "fields": [
+          {
+            "name": "tag",
+            "dataType": {
+              "type": "TypeRef",
+              "kind": "user",
+              "id": "Tag",
+              "genericArgs": []
+            }
+          },
+          {
+            "name": "severity",
+            "dataType": {
+              "type": "TypeRef",
+              "kind": "user",
+              "id": "Severity",
+              "genericArgs": []
+            }
+          },
+          {
+            "name": "channel",
+            "dataType": {
+              "type": "TypeRef",
+              "kind": "user",
+              "id": "Channel",
+              "genericArgs": []
+            }
+          },
+          {
+            "name": "weight",
+            "dataType": {
+              "type": "TypeRef",
+              "kind": "user",
+              "id": "Score",
+              "genericArgs": []
+            }
+          },
+          {
+            "name": "active",
+            "dataType": {
+              "type": "TypeRef",
+              "kind": "simple",
+              "id": "boolean",
+              "genericArgs": []
+            }
+          },
+          {
+            "name": "origin",
+            "dataType": {
+              "type": "TypeRef",
+              "kind": "user",
+              "id": "Vector",
+              "genericArgs": []
+            }
+          }
+        ],
+        "genericArgs": []
+      }
+    }
+  ],
+  "classDeclarations": [],
+  "entryLabel": "MAIN",
+  "libraries": [],
+  "mapperImports": [],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "73df2cb54238de8dbce268bf3ad5137519a38335c78c9cd0f3fb5320e83c6c25",
+    "signedAt": "2026-09-11T19:53:47.047Z",
+    "pcodeLength": 3929,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

@@ -473,6 +473,76 @@ async function executeSteps(steps, runtime, output) {
       continue;
     }
 
+    if (step.action === 'call_service') {
+      const serviceBaseUrl = String(runtime.context?.serviceBaseUrl || 'http://127.0.0.1:4000').replace(/\/+$/, '');
+      const submitUrl = `${serviceBaseUrl}/api/services/${encodeURIComponent(step.serviceId)}`;
+      if (runtime.dryRun) {
+        output.push({
+          stepId: step.id,
+          mode: 'dry-run',
+          action: step.action,
+          serviceId: step.serviceId,
+          asynchronous: step.asynchronous,
+          submitUrl
+        });
+        continue;
+      }
+
+      const messageId = `wfl-${runtime.workflowId}-${step.id}-${Date.now()}`;
+      const submitResponse = await fetch(submitUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          messageId,
+          message: step.message,
+          inputQueue: `${step.serviceId}.in`
+        })
+      });
+      const submission = await submitResponse.json();
+      if (!submitResponse.ok || !submission.jobId) {
+        throw new Error(`Workflow service step ${step.id} was rejected (${submitResponse.status})`);
+      }
+
+      if (step.asynchronous) {
+        runtime.state[`${step.id}.jobId`] = submission.jobId;
+        output.push({
+          stepId: step.id,
+          mode: 'executed',
+          action: step.action,
+          serviceId: step.serviceId,
+          asynchronous: true,
+          messageId,
+          jobId: submission.jobId,
+          state: submission.state || 'queued'
+        });
+        continue;
+      }
+
+      let job = submission;
+      for (let attempt = 0; attempt < 150; attempt += 1) {
+        await sleep(200);
+        const statusResponse = await fetch(`${serviceBaseUrl}/api/service-jobs/${encodeURIComponent(submission.jobId)}`);
+        job = await statusResponse.json();
+        if (job.state === 'completed' || job.state === 'failed') break;
+      }
+      if (job.state !== 'completed') {
+        throw new Error(`Workflow service step ${step.id} did not complete`);
+      }
+      runtime.state[`${step.id}.result`] = job.result || null;
+      output.push({
+        stepId: step.id,
+        mode: 'executed',
+        action: step.action,
+        serviceId: step.serviceId,
+        asynchronous: false,
+        messageId,
+        jobId: submission.jobId,
+        state: job.state,
+        result: job.result || null
+      });
+      continue;
+    }
+
     if (step.action === 'wait') {
       if (!runtime.dryRun) {
         await sleep(step.durationMs);
@@ -1105,7 +1175,7 @@ async function executeSteps(steps, runtime, output) {
   }
 }
 
-async function executeWorkflow(compiled, workflowId, dryRun = false, context = {}) {
+export async function executeWorkflow(compiled, workflowId, dryRun = false, context = {}) {
   const workflow = (compiled.workflows || []).find(w => w.id === workflowId);
   if (!workflow) {
     throw new Error(`Workflow not found: ${workflowId}`);
@@ -1139,6 +1209,50 @@ async function executeWorkflow(compiled, workflowId, dryRun = false, context = {
     state,
     issueTestStorePath
   };
+}
+
+export async function executeDeploymentPlan(compiled, dryRun = true, context = {}) {
+  const serviceBaseUrl = String(context?.serviceBaseUrl || 'http://127.0.0.1:4000').replace(/\/+$/, '');
+  const nodesResponse = await fetch(`${serviceBaseUrl}/api/nodes`);
+  const nodesPayload = await nodesResponse.json();
+  const nodes = Array.isArray(nodesPayload) ? nodesPayload : (nodesPayload.nodes || []);
+  const deployments = [];
+
+  for (const plan of compiled?.deployments || []) {
+    for (const resource of plan.resources || []) {
+      const targetNodeIds = Array.from(new Set((resource.targets || []).map(value => String(value).trim()).filter(Boolean)));
+      const request = {
+        serviceName: resource.id,
+        packageName: resource.fileName,
+        packageVersion: 'latest',
+        workloadKind: resource.kind,
+        targetNodeIds,
+        autoStart: resource.startup,
+        metadata: {
+          projectId: plan.projectId,
+          inputQueue: resource.inputQueue,
+          outputQueue: resource.outputQueue,
+          source: 'wfl'
+        }
+      };
+
+      if (dryRun) {
+        deployments.push({ request, matchedNodes: nodes.filter(node => targetNodeIds.includes(node.nodeId || node.nodeName || node.id)) });
+        continue;
+      }
+
+      const response = await fetch(`${serviceBaseUrl}/api/pmachine/deployments`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(request)
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(`Deployment ${resource.id} failed with HTTP ${response.status}`);
+      deployments.push(payload);
+    }
+  }
+
+  return { nodes, deployments, dryRun };
 }
 
 async function main() {

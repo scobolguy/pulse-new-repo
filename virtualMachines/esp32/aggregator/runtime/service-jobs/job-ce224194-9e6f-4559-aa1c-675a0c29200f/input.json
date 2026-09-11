@@ -1,0 +1,1 @@
+{"method":"POST","inputQueue":"mt103-to-pacs008.in","query":{},"body":{"messageId":"telem-001","message":"MT103\n:20:TELEM-001\n:23B:CRED\n:32A:260907USD101,00","inputQueue":"swift.mt103.inbound"}}

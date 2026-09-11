@@ -1,41 +1,51 @@
 {
   "version": 1,
-  "generatedAt": "2026-06-08T15:18:41.539Z",
+  "generatedAt": "2026-09-07T16:45:32.766Z",
   "serviceId": "allocator-shadow-smoke",
   "runtimeUnit": {
     "kind": "program",
     "id": "allocator-shadow-smoke",
     "refreshMs": null
   },
-  "variableDeclarations": [],
-  "entryLabel": "ENTRY",
-  "finishLabel": "FINISH",
-  "instructionSubset": [
-    "JMP",
-    "JZ",
-    "NOP",
-    "ROUTE_MATCH_QUEUE",
-    "ROUTE_EVAL_WHEN",
-    "ROUTE_TRANSFORM",
-    "ROUTE_EMIT",
-    "PARSE_FIN_TEXT",
-    "HALT"
-  ],
-  "entries": [
+  "executionModel": "pascalish-program",
+  "sourceLanguage": "pascalish",
+  "entries": [],
+  "localResources": {
+    "serviceId": "allocator-shadow-smoke",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "routers": [
     {
-      "kind": "router",
+      "type": "RouterDecl",
       "id": "allocator-shadow-smoke-route",
-      "label": "ROUTER_0_ALLOCATOR_SHADOW_SMOKE_ROUTE",
       "inputQueue": "allocator.shadow.test.in",
       "outputs": [
         {
           "queueName": "allocator.shadow.test.out",
-          "dataTypeIds": [],
-          "dataTypeId": null,
           "whenRule": "output := 1;",
           "transformRule": "output := '{\\\"smoke\\\":\\\"allocator-shadow\\\",\\\"source\\\":\\\"pascalish\\\"}';"
         }
       ]
     }
-  ]
+  ],
+  "serviceEndpoints": [],
+  "globals": [],
+  "variableDeclarations": [],
+  "procedures": {},
+  "typeDeclarations": [],
+  "classDeclarations": [],
+  "entryLabel": "MAIN",
+  "mapperImports": [],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "9018c4c27f1bc6787418b354b0c88a3da47ac7654fba2f77b693153c47bc49c1",
+    "signedAt": "2026-09-07T16:45:32.771Z",
+    "pcodeLength": 344,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
 }

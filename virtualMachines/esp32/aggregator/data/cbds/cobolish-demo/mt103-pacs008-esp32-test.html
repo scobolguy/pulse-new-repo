@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>COBOLish MT103 to PACS.008 ESP32 Test</title>
+<style>
+:root { color-scheme: light; --ink:#17212b; --muted:#65727e; --line:#d8e0e7; --blue:#1769aa; --green:#087f5b; --paper:#f5f7fa; }
+* { box-sizing:border-box; }
+body { margin:0; color:var(--ink); background:var(--paper); font:15px/1.5 Georgia, serif; }
+main { max-width:1280px; margin:0 auto; padding:32px 22px 64px; }
+header { border-bottom:4px solid var(--blue); padding-bottom:22px; margin-bottom:24px; }
+h1 { margin:0 0 8px; font:700 34px/1.1 Georgia, serif; }
+h2 { margin:28px 0 10px; font:700 22px/1.2 Georgia, serif; }
+p { margin:6px 0; }
+.meta { color:var(--muted); }
+.status { display:inline-block; padding:6px 12px; color:white; background:var(--green); border-radius:4px; font:700 13px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; margin:18px 0; }
+.card { background:white; border:1px solid var(--line); padding:14px; }
+.label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+.value { margin-top:4px; font:600 15px ui-monospace, SFMono-Regular, Consolas, monospace; word-break:break-word; }
+pre { overflow:auto; white-space:pre-wrap; word-break:break-word; background:#101820; color:#e8f0f5; border-left:4px solid var(--blue); padding:18px; margin:0; font:13px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.xml { border-left-color:var(--green); }
+.note { color:var(--muted); font-style:italic; }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <span class="status">ESP32 TEST PASSED</span>
+  <h1>COBOLish MT103 to PACS.008</h1>
+  <p class="meta">Fresh execution against http://192.168.2.155 using FFS-resident <code>/cobolish.pc</code> and <code>/cobolish.map.json</code>.</p>
+</header>
+<section class="grid">
+  <div class="card"><div class="label">Service</div><div class="value">cbds-converter</div></div>
+  <div class="card"><div class="label">Input Queue</div><div class="value">swift.mt103.parsed</div></div>
+  <div class="card"><div class="label">Output Queue</div><div class="value">cbds.pacs.outbound</div></div>
+  <div class="card"><div class="label">Message Format</div><div class="value">xml</div></div>
+  <div class="card"><div class="label">Instructions / Steps</div><div class="value">85 / 13</div></div>
+</section>
+<h2>COBOLish Service Source</h2>
+<pre>IDENTIFICATION DIVISION.
+PROGRAM-ID. CBDS-CONVERTER.
+PULSE SERVICE &quot;cbds-converter&quot; ON LOCAL.
+
+ROLE CODE_LIBRARIAN.
+LIBRARY &quot;payments-common&quot; FROM LIBRARIAN.
+USE &quot;payments-common&quot; AS CORE.
+ROUTE &quot;swift.mt103.parsed&quot; TO &quot;cbds.pacs.outbound&quot; USING MAPPER cbds-mt103-to-pacs008.
+
+DATA DIVISION.
+MAPPING SECTION.
+MAPPER-ENTRY cbds-mt103-to-pacs008
+    SOURCE-TYPE swift-mt103
+    TARGET-TYPE pacs.
+
+MAP-RULE block4.20 TO Document.FIToFICstmrCdtTrf.GrpHdr.MsgId
+    USING BEGIN output = trim(src) END.
+MAP-RULE block4.20 TO Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.InstrId
+    USING BEGIN output = trim(src) END.
+MAP-RULE block4.21 TO Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId
+    USING BEGIN output = trim(src) END.
+MAP-RULE block4.23B TO Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtTpInf.LclInstrm.Prtry
+    USING BEGIN output = upper(trim(src)) END.
+MAP-RULE block4.32A.date TO Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt
+    USING BEGIN output = yymmddtoiso(src) END.
+MAP-RULE block4.32A.currency TO Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy
+    USING BEGIN output = upper(trim(src)) END.
+MAP-RULE block4.32A.amount TO Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text
+    USING BEGIN output = mtamounttodecimal(src) END.
+MAP-RULE block4.33B.currency TO Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstdAmt.@Ccy
+    USING BEGIN output = upper(trim(src)) END.
+MAP-RULE block4.33B.amount TO Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstdAmt.#text
+    USING BEGIN output = mtamounttodecimal(src) END.
+MAP-RULE block4.50K TO Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm
+    USING BEGIN output = mtpartyname(src) END.
+MAP-RULE block4.52A TO Document.FIToFICstmrCdtTrf.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI
+    USING BEGIN output = upper(trim(src)) END.
+MAP-RULE block4.53A TO Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrmyAgt1.FinInstnId.BICFI
+    USING BEGIN output = upper(trim(src)) END.
+MAP-RULE block4.56A TO Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrmyAgt2.FinInstnId.BICFI
+    USING BEGIN output = upper(trim(src)) END.
+MAP-RULE block4.57A TO Document.FIToFICstmrCdtTrf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI
+    USING BEGIN output = upper(trim(src)) END.
+MAP-RULE block4.59 TO Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm
+    USING BEGIN output = mtpartyname(src) END.
+MAP-RULE block4.70 TO Document.FIToFICstmrCdtTrf.CdtTrfTxInf.RmtInf.Ustrd
+    USING BEGIN output = trim(src) END.
+MAP-RULE block4.71A TO Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgBr
+    USING BEGIN output = mtchargebearertoiso(src) END.
+MAP-RULE block4.71B TO Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgsInf.Amt.#text
+    USING BEGIN output = mtamounttodecimal(src) END.
+MAP-RULE block4.72 TO Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstrForNxtAgt.InstrInf
+    USING BEGIN output = trim(src) END.
+MAP-RULE meta.createdAt TO Document.FIToFICstmrCdtTrf.GrpHdr.CreDtTm
+    USING BEGIN output = trim(src) END.
+
+PROCEDURE DIVISION.
+    DISPLAY &quot;CBDS-CONVERTER READY&quot;.
+    GOBACK.
+END PROGRAM CBDS-CONVERTER.
+</pre>
+<h2>MT103 Input</h2>
+<pre>MT103
+:20:CBDSREF123456
+:21:CBDS-E2E-0001
+:23B:CRED
+:32A:260702CAD12500,45
+:33B:CAD12500,45
+:50K:/123456789
+ALPHA IMPORTS LTD
+:52A:ROYCCAT2
+:53A:BOFACATT
+:56A:CITIUS33
+:57A:TDOMCATTTOR
+:59:/000987654321
+BETA SUPPLIES INC
+:70:INV-2026-07-02
+:71A:SHA
+:71B:15,00
+:72:/INS/CBDS ROUTING</pre>
+<h2>PACS.008 XML Reply</h2>
+<pre class="xml">&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;
+&lt;Document xmlns=&quot;urn:iso:std:iso:20022:tech:xsd:pacs.008.001.10&quot; xmlns:xsi=&quot;http://www.w3.org/2001/XMLSchema-instance&quot; xmlns:hdr=&quot;urn:swift:xsd:head.001.001.02&quot;&gt;
+  &lt;FIToFICstmrCdtTrf&gt;
+    &lt;GrpHdr&gt;
+      &lt;MsgId&gt;CBDSREF123456&lt;/MsgId&gt;
+      &lt;CreDtTm&gt;&lt;/CreDtTm&gt;
+    &lt;/GrpHdr&gt;
+    &lt;CdtTrfTxInf&gt;
+      &lt;PmtId&gt;
+        &lt;InstrId&gt;CBDSREF123456&lt;/InstrId&gt;
+        &lt;EndToEndId&gt;CBDS-E2E-0001&lt;/EndToEndId&gt;
+      &lt;/PmtId&gt;
+      &lt;PmtTpInf&gt;
+        &lt;LclInstrm&gt;
+          &lt;Prtry&gt;CRED&lt;/Prtry&gt;
+        &lt;/LclInstrm&gt;
+      &lt;/PmtTpInf&gt;
+      &lt;IntrBkSttlmDt&gt;2026-07-02&lt;/IntrBkSttlmDt&gt;
+      &lt;IntrBkSttlmAmt&gt;12500.45&lt;/IntrBkSttlmAmt&gt;
+      &lt;InstdAmt&gt;12500.45&lt;/InstdAmt&gt;
+      &lt;Dbtr&gt;
+        &lt;Nm&gt;ALPHA IMPORTS LTD&lt;/Nm&gt;
+      &lt;/Dbtr&gt;
+      &lt;DbtrAgt&gt;
+        &lt;FinInstnId&gt;
+          &lt;BICFI&gt;ROYCCAT2&lt;/BICFI&gt;
+        &lt;/FinInstnId&gt;
+      &lt;/DbtrAgt&gt;
+      &lt;IntrmyAgt1&gt;
+        &lt;FinInstnId&gt;
+          &lt;BICFI&gt;BOFACATT&lt;/BICFI&gt;
+        &lt;/FinInstnId&gt;
+      &lt;/IntrmyAgt1&gt;
+      &lt;IntrmyAgt2&gt;
+        &lt;FinInstnId&gt;
+          &lt;BICFI&gt;CITIUS33&lt;/BICFI&gt;
+        &lt;/FinInstnId&gt;
+      &lt;/IntrmyAgt2&gt;
+      &lt;CdtrAgt&gt;
+        &lt;FinInstnId&gt;
+          &lt;BICFI&gt;TDOMCATTTOR&lt;/BICFI&gt;
+        &lt;/FinInstnId&gt;
+      &lt;/CdtrAgt&gt;
+      &lt;Cdtr&gt;
+        &lt;Nm&gt;BETA SUPPLIES INC&lt;/Nm&gt;
+      &lt;/Cdtr&gt;
+      &lt;RmtInf&gt;
+        &lt;Ustrd&gt;INV-2026-07-02&lt;/Ustrd&gt;
+      &lt;/RmtInf&gt;
+      &lt;ChrgBr&gt;SHA&lt;/ChrgBr&gt;
+      &lt;ChrgsInf&gt;
+        &lt;Amt&gt;15.00&lt;/Amt&gt;
+      &lt;/ChrgsInf&gt;
+      &lt;InstrForNxtAgt&gt;
+        &lt;InstrInf&gt;/INS/CBDS ROUTING&lt;/InstrInf&gt;
+      &lt;/InstrForNxtAgt&gt;
+    &lt;/CdtTrfTxInf&gt;
+  &lt;/FIToFICstmrCdtTrf&gt;
+  &lt;hdr:AppHdr&gt;
+    &lt;hdr:BizMsgIdr&gt;CBDSREF123456&lt;/hdr:BizMsgIdr&gt;
+  &lt;/hdr:AppHdr&gt;
+&lt;/Document&gt;
+</pre>
+<p class="note">The mapper is declared in the COBOLish DATA DIVISION MAPPING SECTION and executed by the ESP32 PMachine.</p>
+</main>
+</body>
+</html>

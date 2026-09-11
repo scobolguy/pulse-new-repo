@@ -1,0 +1,3 @@
+{
+  "value": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Document xmlns=\"urn:iso:std:iso:20022:tech:xsd:pacs.008.001.10\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:hdr=\"urn:swift:xsd:head.001.001.02\">\n  <hdr:AppHdr>\n    <hdr:BizMsgIdr>CENTRAL-TEST-003</hdr:BizMsgIdr>\n  </hdr:AppHdr>\n  <FIToFICstmrCdtTrf>\n    <GrpHdr>\n      <MsgId>CENTRAL-TEST-003</MsgId>\n    </GrpHdr>\n    <CdtTrfTxInf>\n      <PmtId>\n        <InstrId>CENTRAL-TEST-003</InstrId>\n        <EndToEndId>CENTRAL-TEST-003</EndToEndId>\n        <TxId>CENTRAL-TEST-003</TxId>\n      </PmtId>\n      <IntrBkSttlmAmt Ccy=\"USD\">100.01</IntrBkSttlmAmt>\n    </CdtTrfTxInf>\n  </FIToFICstmrCdtTrf>\n</Document>"
+}

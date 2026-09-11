@@ -7,6 +7,10 @@
 #include <ArduinoJson.h>
 #include "pmachine.h"
 #include "StringPool.h"
+#if defined(ESP32)
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#endif
 
 namespace pmachine {
 
@@ -207,14 +211,18 @@ namespace {
     }
 
     void setJsonPathValue(JsonDocument& doc, const std::string& dotPath, const std::string& value) {
+        std::string effectivePath = dotPath;
+        if (effectivePath.size() >= 6 && effectivePath.compare(effectivePath.size() - 6, 6, ".#text") == 0) {
+            effectivePath.resize(effectivePath.size() - 6);
+        }
         if (!doc.is<JsonObject>()) doc.to<JsonObject>();
         JsonObject root = doc.as<JsonObject>();
         JsonObject current = root;
 
         size_t start = 0;
-        while (start <= dotPath.size()) {
-            size_t dot = dotPath.find('.', start);
-            std::string key = trimCopy(dot == std::string::npos ? dotPath.substr(start) : dotPath.substr(start, dot - start));
+        while (start <= effectivePath.size()) {
+            size_t dot = effectivePath.find('.', start);
+            std::string key = trimCopy(dot == std::string::npos ? effectivePath.substr(start) : effectivePath.substr(start, dot - start));
             if (key.empty()) {
                 if (dot == std::string::npos) break;
                 start = dot + 1;
@@ -251,6 +259,58 @@ namespace {
         if (rule.find("MTAMOUNTTODECIMAL(SRC)") != std::string::npos) return normalizeMtAmount(srcValue);
         if (rule.find("OUTPUT := SRC") != std::string::npos) return srcValue;
         return srcValue;
+    }
+
+    // Native mapping helpers (compiled-op runtime library). These mirror the JS
+    // PMachine ops so a compiled mapper runs identically on-device.
+    std::string mapOpYymmddToIso(const std::string& raw) {
+        const std::string s = trimCopy(raw);
+        if (s.size() != 6) return s;
+        const int yy = std::stoi(s.substr(0, 2));
+        const int mm = std::stoi(s.substr(2, 2));
+        const int dd = std::stoi(s.substr(4, 2));
+        if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return s;
+        char out[11];
+        snprintf(out, sizeof(out), "%04d-%02d-%02d", (yy >= 70 ? 1900 + yy : 2000 + yy), mm, dd);
+        return std::string(out);
+    }
+
+    std::string mapOpMtPartyName(const std::string& raw) {
+        const std::string s = trimCopy(raw);
+        const size_t nl = s.find('\n');
+        if (nl == std::string::npos) return s;
+        const std::string first = trimCopy(s.substr(0, nl));
+        if (!first.empty() && first[0] == '/') return trimCopy(s.substr(nl + 1));
+        return s;
+    }
+
+    std::string mapOpMtChargeToIso(const std::string& raw) {
+        const std::string s = toUpperCopy(trimCopy(raw));
+        if (s == "OUR" || s == "SHA" || s == "BEN") return s;
+        return trimCopy(raw);
+    }
+
+    // Execute one compiled mapping rule (a flat opcode list) against a source
+    // value. Stack-based: SRC pushes the value, native string ops transform it,
+    // and the top of stack at the end is the mapped result. No string parsing.
+    std::string execCompiledMappingOps(const std::vector<std::string>& ops, const std::string& srcValue) {
+        std::vector<std::string> st;
+        for (const auto& rawOp : ops) {
+            const std::string op = toUpperCopy(trimCopy(rawOp));
+            if (op.empty()) continue;
+            if (op == "SRC") { st.push_back(srcValue); continue; }
+            auto popOr = [&]() { std::string a = st.empty() ? std::string() : st.back(); if (!st.empty()) st.pop_back(); return a; };
+            if (op == "TRIM") { st.push_back(trimCopy(popOr())); continue; }
+            if (op == "UPPER") { st.push_back(toUpperCopy(popOr())); continue; }
+            if (op == "YYMMDD_TO_ISO") { st.push_back(mapOpYymmddToIso(popOr())); continue; }
+            if (op == "MT_AMOUNT_TO_DECIMAL") { st.push_back(normalizeMtAmount(popOr())); continue; }
+            if (op == "MT_PARTY_NAME") { st.push_back(mapOpMtPartyName(popOr())); continue; }
+            if (op == "MT_CHARGE_TO_ISO") { st.push_back(mapOpMtChargeToIso(popOr())); continue; }
+            if (op.rfind("PUSH_STR ", 0) == 0) { st.push_back(unquote(rawOp.substr(9))); continue; }
+            if (op.rfind("PUSH_INT ", 0) == 0) { st.push_back(rawOp.substr(9)); continue; }
+            // DUP / OUTPUT / RET are structural no-ops here.
+        }
+        return st.empty() ? srcValue : st.back();
     }
 
     std::map<std::string, std::string> gFlowState;
@@ -353,7 +413,11 @@ namespace {
         targetDoc.to<JsonObject>();
         for (const auto& item : mapping->items) {
             const std::string srcValue = getJsonPathValueAsString(sourceDoc.as<JsonVariantConst>(), item.sourcePath);
-            const std::string outValue = applyConversionRule(item.conversionRule, srcValue);
+            // Prefer compiled opcodes; fall back to the legacy string rule only
+            // when no ops were compiled for this item.
+            const std::string outValue = (!item.ops.empty())
+                ? execCompiledMappingOps(item.ops, srcValue)
+                : applyConversionRule(item.conversionRule, srcValue);
             setJsonPathValue(targetDoc, item.targetPath, outValue);
         }
 
@@ -537,6 +601,22 @@ namespace {
 
         const std::string upperRule = toUpperCopy(rule);
         const size_t assignIdx = upperRule.find("OUTPUT :=");
+
+        // Compiled ROUTE_MAP_RUN passes a bare mapper id (no "OUTPUT :=", no
+        // call syntax). Dispatch straight into the compiled mapper.
+        if (assignIdx == std::string::npos && rule.find('(') == std::string::npos && rule.find(' ') == std::string::npos) {
+            std::string mapped;
+            std::string mapErr;
+            if (runMappingById(vm, unquote(rule), message, mapped, mapErr)) {
+                return mapped;
+            }
+            PMTRACE({
+                Serial.print("[ROUTE_MAP_RUN] Error: ");
+                Serial.println(mapErr.c_str());
+            });
+            return message;
+        }
+
         if (assignIdx == std::string::npos) {
             return message;
         }
@@ -665,6 +745,10 @@ void PMachine::setRoutingContext(const std::string& inputQueue, const std::strin
     currentMessage = message;
     // Pre-populate 'src' as a string-valued named variable so it's accessible in programs
     setNamedStringVariable("src", message);
+}
+
+const std::string& PMachine::getCurrentMessage() const {
+    return currentMessage;
 }
 
 void PMachine::setNamedStringVariable(const std::string& name, const std::string& value) {
@@ -1123,10 +1207,20 @@ bool PMachine::readPCodeByte(uint32_t virtualAddress, uint8_t& outByte) {
     return true;
 }
 
-void PMachine::singleStep() {}
-void PMachine::setBreakpoint(uint16_t) {}
-void PMachine::clearBreakpoint(uint16_t) {}
-void PMachine::clearAllBreakpoints() {}
+void PMachine::singleStep() {
+    // A full persistent-frame stepper is added separately; this keeps the
+    // existing public operation explicit until run-state persistence exists.
+    running = false;
+}
+void PMachine::setBreakpoint(uint16_t breakpointPc) {
+    if (std::find(breakpoints.begin(), breakpoints.end(), breakpointPc) == breakpoints.end()) {
+        breakpoints.push_back(breakpointPc);
+    }
+}
+void PMachine::clearBreakpoint(uint16_t breakpointPc) {
+    breakpoints.erase(std::remove(breakpoints.begin(), breakpoints.end(), breakpointPc), breakpoints.end());
+}
+void PMachine::clearAllBreakpoints() { breakpoints.clear(); }
 
 // Extracts the first double-quoted literal, honouring \" and \\ escapes like the JS parser.
 static bool extractQuotedLiteral(const std::string& text, std::string& out) {
@@ -1160,11 +1254,27 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
     );
     instructions.reserve(estimatedLineCount);
     unresolvedJumps.reserve(std::min(estimatedLineCount, static_cast<size_t>(64)));
-    std::istringstream iss(text);
     std::string line;
-    while (std::getline(iss, line)) {
-        // Remove comments and trim
-        auto comment = line.find('#');
+    size_t lineStart = 0;
+    while (lineStart <= text.size()) {
+        const size_t lineEnd = text.find('\n', lineStart);
+        const size_t lineLength = lineEnd == std::string::npos
+            ? text.size() - lineStart
+            : lineEnd - lineStart;
+        line.assign(text, lineStart, lineLength);
+        lineStart = lineEnd == std::string::npos ? text.size() + 1 : lineEnd + 1;
+        // Remove comments, but preserve quoted paths such as "Amt.#text".
+        size_t comment = std::string::npos;
+        char quote = 0;
+        for (size_t i = 0; i < line.size(); ++i) {
+            const char c = line[i];
+            if ((c == '"' || c == '\'') && (i == 0 || line[i - 1] != '\\')) {
+                quote = quote == 0 ? c : (quote == c ? 0 : quote);
+            } else if (c == '#' && quote == 0) {
+                comment = i;
+                break;
+            }
+        }
         if (comment != std::string::npos) line = line.substr(0, comment);
         size_t first = line.find_first_not_of(" \t\r\n");
         if (first == std::string::npos) continue;
@@ -1234,10 +1344,11 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
             instr.strOperand = enumValue;
             instr.type = pmachine::OperandType::INT;
         } else if (opcode == pmachine::OP_ROUTE_MATCH_QUEUE || opcode == pmachine::OP_ROUTE_EVAL_WHEN ||
-               opcode == pmachine::OP_ROUTE_TRANSFORM || opcode == pmachine::OP_ROUTE_EMIT ||
+               opcode == pmachine::OP_ROUTE_TRANSFORM || opcode == pmachine::OP_ROUTE_MAP_RUN || opcode == pmachine::OP_ROUTE_EMIT ||
                    opcode == pmachine::OP_ROUTE_SET_STATE || opcode == pmachine::OP_ORCH_SPAWN ||
                    opcode == pmachine::OP_ORCH_WAIT_ALL || opcode == pmachine::OP_ORCH_FAIL_TXN ||
-                   opcode == pmachine::OP_ORCH_RETURN_SUCCESS) {
+                   opcode == pmachine::OP_ORCH_RETURN_SUCCESS || opcode == pmachine::OP_SRC_GET ||
+                   opcode == pmachine::OP_OUT_SET) {
             std::string rest2;
             std::getline(lss, rest2);
             std::string literal;
@@ -1342,6 +1453,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
     // Reclaim the previous run's result capacity here; the results themselves must
     // outlive run() so callers can read them.
     decltype(lastRunTextOutput)().swap(lastRunTextOutput);
+    decltype(lastRunTrace)().swap(lastRunTrace);
     auto emitOutputLine = [&](const std::string& line) {
         if (textOutputHook) {
             textOutputHook(line, textOutputContext);
@@ -1351,6 +1463,11 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
     };
     std::vector<OrchestrationSpawnRequest> pendingOrchTasks;
     bool lastOrchWaitSuccess = false;
+    // Run-local output document for the pcode-routine mapper. OP_SRC_GET reads
+    // from currentMessage; OP_OUT_SET accumulates here; RET from a mapper
+    // routine commits it back to currentMessage. Pure pcode, no JSON map parse.
+    JsonDocument mapOutputDoc;
+    bool mapOutputActive = false;
     struct IntCollection {
         size_t capacity = 0;
         std::vector<int> items;
@@ -1557,15 +1674,30 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
     lastRunStepLimitHit = false;
     lastRunStepCount = 0;
     running = true;
+    this->pc = 0;
     PMTRACE(Serial.println("[DEBUG] Executing pinstructions:"));
     while (pc < (int)instructions.size()) {
+        this->pc = static_cast<uint16_t>(pc);
+        if (std::find(breakpoints.begin(), breakpoints.end(), this->pc) != breakpoints.end()) {
+            running = false;
+            PMTRACE({ Serial.print("[DEBUG] Breakpoint hit at pc="); Serial.println(this->pc); });
+            break;
+        }
         tickDaemonRefresh();
         ++steps;
+    #if defined(ESP32)
+        if ((steps & 31u) == 0u) vTaskDelay(1);
+    #endif
         if (steps > MAX_RUN_STEPS) {
             lastRunStepLimitHit = true;
             break;
         }
         const auto& instr = instructions[pc];
+        lastRunTrace.push_back(
+            std::string("{\"pc\":") + std::to_string(pc)
+            + ",\"opcode\":" + std::to_string(instr.opcode)
+            + ",\"address\":" + std::to_string(instr.address) + "}"
+        );
         PMTRACE({
             Serial.print("[STEP] ");
             Serial.print(pc);
@@ -1777,6 +1909,12 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
                     break;
                 }
                 stack[sp++] = namedEnumVariables[varName];
+            } else if (varName == "__reply") {
+                if (!routingDeliveries.empty()) {
+                    pushString(routingDeliveries.back().message);
+                } else {
+                    pushString("");
+                }
             } else if (varName == "src") {
                 pushString(currentMessage);
             } else {
@@ -1866,6 +2004,15 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             nameCallStack.pop_back();
             while (nameFrames.size() > frame.envDepth) {
                 nameFrames.pop_back();
+            }
+            // If this RET returns from a mapper routine, commit the accumulated
+            // output document as the new current message.
+            if (mapOutputActive) {
+                std::string serialized;
+                serializeJson(mapOutputDoc, serialized);
+                currentMessage = serialized;
+                mapOutputDoc.clear();
+                mapOutputActive = false;
             }
             pc = frame.returnPc;
             continue;
@@ -1991,7 +2138,51 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             ++pc;
             continue;
         }
+        // OP_SRC_GET "path": read a field from the current message JSON, push it.
+        if (instr.opcode == OP_SRC_GET) {
+            JsonDocument srcDoc;
+            const std::string path = unquote(instr.strOperand);
+            if (deserializeJson(srcDoc, currentMessage.c_str())) {
+                srcDoc.clear();
+                srcDoc.to<JsonObject>()["src"] = currentMessage.c_str();
+            }
+            pushString(getJsonPathValueAsString(srcDoc.as<JsonVariantConst>(), path));
+            ++pc;
+            continue;
+        }
+        // OP_OUT_SET "path": pop a value, write it into the mapper output doc.
+        if (instr.opcode == OP_OUT_SET) {
+            const std::string path = unquote(instr.strOperand);
+            const std::string value = popString();
+            if (!mapOutputActive) { mapOutputDoc.clear(); mapOutputDoc.to<JsonObject>(); mapOutputActive = true; }
+            setJsonPathValue(mapOutputDoc, path, value);
+            ++pc;
+            continue;
+        }
+        // Native mapping string ops: transform the top-of-stack string in place.
+        if (instr.opcode == OP_UPPER) {
+            std::string v = popString(); pushString(toUpperCopy(v)); ++pc; continue;
+        }
+        if (instr.opcode == OP_YYMMDD_TO_ISO) {
+            std::string v = popString(); pushString(mapOpYymmddToIso(v)); ++pc; continue;
+        }
+        if (instr.opcode == OP_MT_AMOUNT_TO_DECIMAL) {
+            std::string v = popString(); pushString(normalizeMtAmount(v)); ++pc; continue;
+        }
+        if (instr.opcode == OP_MT_PARTY_NAME) {
+            std::string v = popString(); pushString(mapOpMtPartyName(v)); ++pc; continue;
+        }
+        if (instr.opcode == OP_MT_CHARGE_TO_ISO) {
+            std::string v = popString(); pushString(mapOpMtChargeToIso(v)); ++pc; continue;
+        }
         if (instr.opcode == OP_ROUTE_TRANSFORM) {
+            currentMessage = applyTransformRuleText(*this, instr.strOperand, currentMessage);
+            ++pc;
+            continue;
+        }
+        // ROUTE_MAP_RUN carries a bare mapper id; dispatch straight into the
+        // compiled mapper via the same handler (no string interpretation).
+        if (instr.opcode == OP_ROUTE_MAP_RUN) {
             currentMessage = applyTransformRuleText(*this, instr.strOperand, currentMessage);
             ++pc;
             continue;
@@ -2332,6 +2523,8 @@ void PMachine::run(const std::vector<PInstruction>& instructions) {
             break;
         }
     }
+    this->pc = static_cast<uint16_t>(std::max(0, pc));
+    running = false;
     if (!currentOutputLine.empty()) {
         emitOutputLine(currentOutputLine);
     }
@@ -2409,6 +2602,21 @@ size_t PMachine::getLastRunStepCount() const {
 const std::vector<std::string>& PMachine::getLastRunTextOutput() const {
     return lastRunTextOutput;
 }
+
+const std::vector<std::string>& PMachine::getLastRunTrace() const {
+    return lastRunTrace;
+}
+
+void PMachine::loadDebugInstructions(const std::vector<PInstruction>& instructions) {
+    debugInstructions = instructions;
+    debugPc = 0;
+    debugLoaded = !debugInstructions.empty();
+    pc = 0;
+    running = false;
+}
+
+bool PMachine::hasDebugInstructions() const { return debugLoaded; }
+uint16_t PMachine::getDebugPc() const { return debugPc; }
 
 std::map<std::string, std::string> PMachine::getFlowStateSnapshot() const {
     return gFlowState;

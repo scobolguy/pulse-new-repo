@@ -1,0 +1,93 @@
+{
+  "baseUrl": "http://127.0.0.1:5174",
+  "projectId": "mt103-pacs008-demo-1788790108903",
+  "projectLabel": "MT103 to PACS.008 Demo",
+  "esp32Target": "DisplayNode",
+  "esp32Ip": "192.168.2.155",
+  "jsPmachineTarget": "magic-js-pmachine-01",
+  "steps": [
+    {
+      "step": "create project",
+      "ok": true,
+      "projectId": "mt103-pacs008-demo-1788790108903"
+    },
+    {
+      "step": "create and open service source",
+      "ok": true,
+      "file": "mt103-to-pacs008.pas"
+    },
+    {
+      "step": "register mapper service metadata",
+      "ok": true,
+      "status": 200
+    },
+    {
+      "step": "save deployment plan",
+      "ok": true,
+      "status": 200
+    },
+    {
+      "step": "deploy to 192.168.2.155",
+      "ok": false,
+      "status": 500,
+      "response": {
+        "error": "fetch failed"
+      }
+    },
+    {
+      "step": "deploy to magic-js-pmachine-01",
+      "ok": true,
+      "status": 200,
+      "response": {
+        "status": "ok",
+        "deployment": {
+          "key": "mt103-to-pacs008::magic-js-pmachine-01",
+          "deploymentId": "401061bc-ddcd-40d7-84ec-df478698b058",
+          "deploymentRef": "mt103-to-pacs008::magic-js-pmachine-01",
+          "displayName": "projects/mt103-pacs008-demo-1788790108903",
+          "serviceName": "mt103-to-pacs008",
+          "packageName": "projects/mt103-pacs008-demo-1788790108903",
+          "packageVersion": "demo-1",
+          "workloadKind": "service",
+          "targetNodeId": "magic-js-pmachine-01",
+          "targetNodeIds": [
+            "magic-js-pmachine-01"
+          ],
+          "scope": "node",
+          "runtimeState": "running",
+          "state": "running",
+          "createdAt": "2026-09-07T14:08:34.062Z",
+          "updatedAt": "2026-09-07T14:08:34.062Z",
+          "metadata": {
+            "projectId": "mt103-pacs008-demo-1788790108903",
+            "mapping": "swift-mt103 -> pacs.008",
+            "source": "playwright-demo"
+          },
+          "instances": {
+            "magic-js-pmachine-01": {
+              "state": "running",
+              "updatedAt": "2026-09-07T14:08:34.062Z",
+              "startedAt": "2026-09-07T14:08:34.063Z",
+              "stoppedAt": null
+            }
+          },
+          "aliases": [
+            "magic-js-pmachine-01.mt103-to-pacs008",
+            "mt103-to-pacs008::magic-js-pmachine-01",
+            "mt103-to-pacs008",
+            "mt103-to-pacs008::*",
+            "401061bc-ddcd-40d7-84ec-df478698b058"
+          ]
+        },
+        "aliases": [
+          "magic-js-pmachine-01.mt103-to-pacs008",
+          "mt103-to-pacs008::magic-js-pmachine-01",
+          "mt103-to-pacs008",
+          "mt103-to-pacs008::*",
+          "401061bc-ddcd-40d7-84ec-df478698b058"
+        ],
+        "persistedAt": "2026-09-07T14:08:34.065Z"
+      }
+    }
+  ]
+}

@@ -5,7 +5,7 @@ var
 
 begin
   n := 42;
-  emit(metrics_out, n);
-  send(events_out, 7);
+  enqueue metrics_out with n;
+  enqueue events_out with 7;
   writeln('done')
 end.

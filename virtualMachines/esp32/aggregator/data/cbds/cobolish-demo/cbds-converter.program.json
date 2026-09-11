@@ -1,0 +1,257 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-06T15:25:25.719Z",
+  "serviceId": "cbds-converter",
+  "runtimeUnit": {
+    "kind": "service",
+    "id": "cbds-converter",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-service",
+  "sourceLanguage": "pascalish",
+  "entries": [
+    {
+      "kind": "mapper",
+      "id": "cbds-converter.cbds-mt103-to-pacs008",
+      "scope": "local",
+      "ownerServiceId": "cbds-converter",
+      "sourceTypeId": "swift-mt103",
+      "targetTypeId": "pacs",
+      "items": [
+        {
+          "sourcePath": "block4.20",
+          "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+          "conversionRule": "output = trim(src)",
+          "ops": [
+            "SRC",
+            "TRIM"
+          ]
+        },
+        {
+          "sourcePath": "block4.20",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.InstrId",
+          "conversionRule": "output = trim(src)",
+          "ops": [
+            "SRC",
+            "TRIM"
+          ]
+        },
+        {
+          "sourcePath": "block4.21",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId",
+          "conversionRule": "output = trim(src)",
+          "ops": [
+            "SRC",
+            "TRIM"
+          ]
+        },
+        {
+          "sourcePath": "block4.23B",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtTpInf.LclInstrm.Prtry",
+          "conversionRule": "output = upper(trim(src))",
+          "ops": [
+            "SRC",
+            "TRIM",
+            "UPPER"
+          ]
+        },
+        {
+          "sourcePath": "block4.32A.date",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt",
+          "conversionRule": "output = yymmddtoiso(src)",
+          "ops": [
+            "SRC",
+            "YYMMDD_TO_ISO"
+          ]
+        },
+        {
+          "sourcePath": "block4.32A.currency",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+          "conversionRule": "output = upper(trim(src))",
+          "ops": [
+            "SRC",
+            "TRIM",
+            "UPPER"
+          ]
+        },
+        {
+          "sourcePath": "block4.32A.amount",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+          "conversionRule": "output = mtamounttodecimal(src)",
+          "ops": [
+            "SRC",
+            "MT_AMOUNT_TO_DECIMAL"
+          ]
+        },
+        {
+          "sourcePath": "block4.33B.currency",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstdAmt.@Ccy",
+          "conversionRule": "output = upper(trim(src))",
+          "ops": [
+            "SRC",
+            "TRIM",
+            "UPPER"
+          ]
+        },
+        {
+          "sourcePath": "block4.33B.amount",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstdAmt.#text",
+          "conversionRule": "output = mtamounttodecimal(src)",
+          "ops": [
+            "SRC",
+            "MT_AMOUNT_TO_DECIMAL"
+          ]
+        },
+        {
+          "sourcePath": "block4.50K",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm",
+          "conversionRule": "output = mtpartyname(src)",
+          "ops": [
+            "SRC",
+            "MT_PARTY_NAME"
+          ]
+        },
+        {
+          "sourcePath": "block4.52A",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI",
+          "conversionRule": "output = upper(trim(src))",
+          "ops": [
+            "SRC",
+            "TRIM",
+            "UPPER"
+          ]
+        },
+        {
+          "sourcePath": "block4.53A",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrmyAgt1.FinInstnId.BICFI",
+          "conversionRule": "output = upper(trim(src))",
+          "ops": [
+            "SRC",
+            "TRIM",
+            "UPPER"
+          ]
+        },
+        {
+          "sourcePath": "block4.56A",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrmyAgt2.FinInstnId.BICFI",
+          "conversionRule": "output = upper(trim(src))",
+          "ops": [
+            "SRC",
+            "TRIM",
+            "UPPER"
+          ]
+        },
+        {
+          "sourcePath": "block4.57A",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI",
+          "conversionRule": "output = upper(trim(src))",
+          "ops": [
+            "SRC",
+            "TRIM",
+            "UPPER"
+          ]
+        },
+        {
+          "sourcePath": "block4.59",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm",
+          "conversionRule": "output = mtpartyname(src)",
+          "ops": [
+            "SRC",
+            "MT_PARTY_NAME"
+          ]
+        },
+        {
+          "sourcePath": "block4.70",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.RmtInf.Ustrd",
+          "conversionRule": "output = trim(src)",
+          "ops": [
+            "SRC",
+            "TRIM"
+          ]
+        },
+        {
+          "sourcePath": "block4.71A",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgBr",
+          "conversionRule": "output = mtchargebearertoiso(src)",
+          "ops": [
+            "SRC",
+            "MT_CHARGE_TO_ISO"
+          ]
+        },
+        {
+          "sourcePath": "block4.71B",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgsInf.Amt.#text",
+          "conversionRule": "output = mtamounttodecimal(src)",
+          "ops": [
+            "SRC",
+            "MT_AMOUNT_TO_DECIMAL"
+          ]
+        },
+        {
+          "sourcePath": "block4.72",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstrForNxtAgt.InstrInf",
+          "conversionRule": "output = trim(src)",
+          "ops": [
+            "SRC",
+            "TRIM"
+          ]
+        },
+        {
+          "sourcePath": "meta.createdAt",
+          "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.CreDtTm",
+          "conversionRule": "output = trim(src)",
+          "ops": [
+            "SRC",
+            "TRIM"
+          ]
+        }
+      ]
+    }
+  ],
+  "localResources": {
+    "serviceId": "cbds-converter",
+    "mappers": [
+      "cbds-converter.cbds-mt103-to-pacs008"
+    ],
+    "types": [],
+    "libraries": [
+      "payments-common"
+    ],
+    "variables": [],
+    "publishable": false
+  },
+  "routers": [
+    {
+      "type": "RouterDecl",
+      "id": "cbds-converter-http",
+      "inputQueue": "cbds-converter.in",
+      "outputs": [
+        {
+          "queueName": "cbds-converter.out",
+          "whenRule": "output := 1;",
+          "transformRule": "output := '';"
+        }
+      ]
+    },
+    {
+      "type": "RouterDecl",
+      "id": "cbds-converter-route-1",
+      "inputQueue": "swift.mt103.parsed",
+      "outputs": [
+        {
+          "queueName": "cbds.pacs.outbound",
+          "whenRule": "output := 1;",
+          "transformRule": "output := map('cbds-converter.cbds-mt103-to-pacs008', src);"
+        }
+      ]
+    }
+  ],
+  "serviceEndpoints": [],
+  "globals": [],
+  "variableDeclarations": [],
+  "procedures": {},
+  "typeDeclarations": [],
+  "classDeclarations": [],
+  "entryLabel": "MAIN",
+  "mapperImports": []
+}

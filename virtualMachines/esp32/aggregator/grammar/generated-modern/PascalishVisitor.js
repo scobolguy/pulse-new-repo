@@ -126,6 +126,18 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by PascalishParser#classOperatorDecl.
+	visitClassOperatorDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#operatorTarget.
+	visitOperatorTarget(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by PascalishParser#methodParamList.
 	visitMethodParamList(ctx) {
 	  return this.visitChildren(ctx);
@@ -192,6 +204,12 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by PascalishParser#enumType.
+	visitEnumType(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by PascalishParser#recordField.
 	visitRecordField(ctx) {
 	  return this.visitChildren(ctx);
@@ -212,6 +230,12 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by PascalishParser#simpleType.
 	visitSimpleType(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#decimalType.
+	visitDecimalType(ctx) {
 	  return this.visitChildren(ctx);
 	}
 

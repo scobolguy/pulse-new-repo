@@ -86,6 +86,39 @@ NodeConfig nodeConfig;
 WifiConfig wifiConfig;
 ClusterConfig clusterConfig;
 FederatedFileSystem federatedFS;
+
+static void loadStartupDeploymentManifest() {
+    if (!federatedFS.openReadFile("/startup/deployments.json")) {
+        Serial.println("[BOOT] No startup deployment manifest found");
+        return;
+    }
+
+    std::vector<uint8_t> manifestBytes;
+    if (federatedFS.read("/startup/deployments.json", manifestBytes) != FFSStatus::OK || manifestBytes.empty()) {
+        Serial.println("[BOOT] Startup deployment manifest could not be read");
+        return;
+    }
+
+    JsonDocument manifest;
+    const DeserializationError error = deserializeJson(manifest, manifestBytes.data(), manifestBytes.size());
+    if (error) {
+        Serial.printf("[BOOT] Startup deployment manifest invalid: %s\n", error.c_str());
+        return;
+    }
+
+    const bool enabled = manifest["startup"]["enabled"] | false;
+    const JsonArray deployments = manifest["deployments"].as<JsonArray>();
+    Serial.printf("[BOOT] Startup deployment manifest loaded: enabled=%s deployments=%u\n",
+                  enabled ? "true" : "false",
+                  static_cast<unsigned>(deployments.size()));
+    for (JsonObject deployment : deployments) {
+        const char* serviceName = deployment["serviceName"] | "";
+        const char* packageName = deployment["packageName"] | "";
+        const char* runtimeState = deployment["runtimeState"] | deployment["state"] | "stopped";
+        Serial.printf("[BOOT] Startup deployment: service=%s package=%s state=%s\n",
+                      serviceName, packageName, runtimeState);
+    }
+}
 bool ffsUp = false;
 
 #if defined(ENABLE_DISPLAY) && !defined(DISPLAY_NO_LVGL)
@@ -140,7 +173,9 @@ void updateDisplayStatusDashboard(bool force = false) {
 AsyncWebServer server(80);
 DevicePin* devicePin = nullptr;
 int devicePinNumber = 2;
-#ifdef ENABLE_CAMERA
+#ifdef RELAY_PIN
+int relayPinNumber = RELAY_PIN;
+#elif defined(ENABLE_CAMERA)
 // GPIO 5 is used by camera (Y2 data line), move relay to GPIO 12
 int relayPinNumber = 12;
 #else
@@ -3206,6 +3241,7 @@ void setupWebServer() {
     registerHttpsTlsRoutes(server);
 #endif
 
+    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
     server.begin();
 }
 
@@ -3424,12 +3460,16 @@ void setup() {
     // 1. Mount filesystem (SD or LittleFS)
 #if defined(ESP32)
     bool sdAvailable = false;
+#if !defined(DISABLE_SD)
     if (SD.begin()) {
         Serial.println("SD card detected and mounted");
         sdAvailable = true;
     } else {
         Serial.println("No SD card detected, falling back to LittleFS");
     }
+#else
+    Serial.println("SD disabled for this hardware profile; using LittleFS");
+#endif
     if (!sdAvailable) {
         if (!ensureLittleFsInitialized()) {
             Serial.println("LittleFS mount failed");
@@ -3473,6 +3513,8 @@ void setup() {
     WiFi.disconnect(true, true);
     delay(50);
 
+#if 0
+    // Old WiFi provisioning flow retained for reference.
     initializeWiFiProvisioning(nodeName.c_str());
     if (globalWiFiProvisioning) {
         globalWiFiProvisioning->eraseLegacyCredentialStores();
@@ -3519,6 +3561,26 @@ void setup() {
         } else {
             Serial.printf("[WIFI-PROV] Failed to start provisioning AP: %s\n", apName.c_str());
         }
+    }
+#endif
+
+    const char* fixedWifiSsid = "Home";
+    const char* fixedWifiPassword = "Brady123";
+    WiFi.begin(fixedWifiSsid, fixedWifiPassword);
+    udpRuntimeConfigureWifiCredentials(fixedWifiSsid, fixedWifiPassword);
+    int fixedWifiRetries = 0;
+    while (WiFi.status() != WL_CONNECTED && fixedWifiRetries < 20) {
+        delay(500);
+        Serial.print(".");
+        fixedWifiRetries++;
+    }
+
+    Serial.println();
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.print("[BOOT] WiFi connected: ");
+        Serial.println(WiFi.localIP());
+    } else {
+        Serial.println("[BOOT] WiFi connection failed for fixed Home network");
     }
 
     // 3. Ensure /devices, /services, and /flows directories exist at root at boot
@@ -3714,6 +3776,8 @@ void setup() {
         Serial.println("FederatedFileSystem failed to initialize LittleFS");
     }
 #endif
+
+    loadStartupDeploymentManifest();
 
 #ifdef ENABLE_PMACHINE
     pm.setFFS(&federatedFS);

@@ -5,11 +5,7 @@
     "serviceId": "mt103-to-pacs-service",
     "enabled": true,
     "inputQueue": "mt103-to-pacs-service.in",
-    "methods": [
-      "POST",
-      "GET"
-    ],
-    "description": "HTTP service mt103-to-pacs-service",
+    "description": "",
     "outputs": [
       {
         "queueName": "mt103-to-pacs-service.out",
@@ -19,11 +15,11 @@
       {
         "queueName": "mt103-to-pacs-service.out",
         "whenRule": "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;",
-        "transformRule": "output := \"mt103-to-pacs-service\";"
+        "transformRule": "output := 'mt103-to-pacs-service';"
       }
     ],
-    "createdAt": "2026-07-13T20:35:08.415Z",
-    "updatedAt": "2026-07-13T20:35:08.415Z"
+    "createdAt": "2026-09-07T20:37:11.070Z",
+    "updatedAt": "2026-09-07T20:37:11.070Z"
   },
   {
     "id": "mt103-to-pacs-router",
@@ -31,35 +27,15 @@
     "serviceId": "mt103-to-pacs-service",
     "enabled": true,
     "inputQueue": "swift.mt103.parsed",
-    "description": "Transform MT103 payload to PACS payload",
+    "description": "",
     "outputs": [
       {
         "queueName": "tx.pacs.created",
-        "dataTypeIds": [
-          "pacs"
-        ],
-        "dataTypeId": "pacs",
-        "dataTypeRef": {
-          "type": "TypeRef",
-          "id": "pacs",
-          "genericArgs": []
-        },
-        "dataTypeSignature": "pacs",
-        "dataTypeRefs": [
-          {
-            "type": "TypeRef",
-            "id": "pacs",
-            "genericArgs": []
-          }
-        ],
-        "dataTypeSignatures": [
-          "pacs"
-        ],
-        "whenRule": "IF startswith(upper(src), \\\"MT103\\\") THEN output := 1 ELSE output := 0;",
-        "transformRule": "output := map(\\\"mt103-to-pacs\\\", src);"
+        "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
+        "transformRule": "output := map(\"mt103-to-pacs\", src);"
       }
     ],
-    "createdAt": "2026-07-13T20:35:08.415Z",
-    "updatedAt": "2026-07-13T20:35:08.415Z"
+    "createdAt": "2026-09-07T20:37:11.070Z",
+    "updatedAt": "2026-09-07T20:37:11.070Z"
   }
 ]

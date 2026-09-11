@@ -2,7 +2,7 @@
 ENTRY:
 ROUTE_MATCH_QUEUE "swift.mt103.parsed"
 JZ FINISH
-ROUTE_TRANSFORM "output := map('cbds-mt103-to-pacs008', src);"
+ROUTE_MAP_RUN "cbds-mt103-to-pacs008"
 ROUTE_EMIT "cbds.pacs.outbound"
 FINISH:
 HALT

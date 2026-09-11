@@ -497,7 +497,7 @@ function renderOutput(content) {
   hideSpinner();
   const pane = document.getElementById('outputPane');
   const trimmed = (content || '').trim();
-  document.body.classList.toggle('camera-mode', /<iframe\b[^>]*title=["']Live feed from/i.test(trimmed));
+  document.body.classList.toggle('camera-mode', /<iframe\b[^>]*(?:title=["']Live feed from|src=["']\/api\/cameras\/)/i.test(trimmed));
 
   if (trimmed.startsWith('<')) {
     pane.classList.add('html-mode');
@@ -790,7 +790,8 @@ async function streamNliQuery(text, files) {
   // Ensure spinner is hidden and pane is visible
   document.getElementById('spinnerPane').classList.remove('visible');
   pane.style.display = '';
-  if (!accumulated) pane.textContent = '(No response)';
+  if (accumulated) renderOutput(accumulated);
+  else pane.textContent = '(No response)';
 
   return { text: accumulated, partial, canContinue, interactionId, intentId };
 }

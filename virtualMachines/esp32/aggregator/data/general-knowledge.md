@@ -1,3 +1,23 @@
+# WFL deployment control plane
+
+WFL is the reviewable deployment language for assigning project files, runtime kinds, queues, target nodes, and startup behavior. Use the deterministic deployment compiler when a request asks to deploy a service, program, or daemon with a source file and queues.
+
+Deployment declaration syntax:
+
+```wfl
+DEPLOYMENT "mt103-pacs008" PROJECT "payments" TARGETS ("DisplayNode","magic-js-pmachine-01") BEGIN
+  SERVICE "mt103-to-pacs008" FILE "programs/mt103-to-pacs008.pas" QUEUE "swift.mt103.parsed" -> "pacs.008.outbound" TARGETS ("DisplayNode","magic-js-pmachine-01") STARTUP true;
+END;
+```
+
+The declaration identifies the project, service/program/daemon file, input queue, output queue, target nodes, and whether the node should restore the deployment at startup. The WFL compiler persists the structured deployment plan and generates a per-node startup manifest. Do not invent alternate field names such as `sourcePath`, `inQueue`, or `destination`; use `FILE`, `QUEUE`, `TARGETS`, and `STARTUP`.
+
+Natural-language examples that map to WFL:
+
+- `Deploy service mt103-to-pacs008 file programs/mt103-to-pacs008.pas from project payments from queue swift.mt103.parsed to queue pacs.008.outbound on nodes DisplayNode and magic-js-pmachine-01 with startup.`
+- `Create a WFL deployment for service mapper.file using programs/mapper.pas, input queue swift.in, output queue pacs.out, project payments, target DisplayNode.`
+
+The deterministic endpoint is `POST /api/deployments/wfl/compile` with `{ projectId, source, persist: true }`. It returns the parsed deployment declarations and the persisted JSON/Markdown deployment-plan files.
 # Global System Knowledge & Constraints
 
 ## Core Operating Principles

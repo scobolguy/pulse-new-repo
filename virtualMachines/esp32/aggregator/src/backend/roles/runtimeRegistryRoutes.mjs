@@ -50,6 +50,28 @@ export function registerRuntimeRegistryRoutes(app, deps) {
     res.json({ services });
   });
 
+  app.get('/api/registry/workloads', (req, res) => {
+    const workloads = Array.from(serviceInstanceRegistry.values()).map((instance) => ({
+      instanceId: instance.instanceId,
+      name: instance.serviceName,
+      workloadKind: instance.workloadKind || instance.metadata?.workloadKind || 'service',
+      nodeId: instance.nodeId || null,
+      ip: instance.ip || null,
+      port: instance.port || null,
+      status: instance.status || 'resident',
+      runtimeState: instance.metadata?.runtimeState || null,
+      deploymentId: instance.metadata?.deploymentId || null,
+      packageName: instance.metadata?.packageName || null,
+      packageVersion: instance.metadata?.packageVersion || null,
+      inputQueue: instance.metadata?.inputQueue || null,
+      outputQueue: instance.metadata?.outputQueue || null,
+      route: instance.metadata?.route || null,
+      lastHeartbeat: instance.lastHeartbeat || null,
+      metadata: instance.metadata || {}
+    }));
+    res.json({ workloads });
+  });
+
   app.get('/api/ui/card-overrides', requirePermission('lifecycle.read'), (req, res) => {
     const overrides = getUiCardOverrides();
     res.json({

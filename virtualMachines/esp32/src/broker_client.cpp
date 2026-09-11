@@ -278,11 +278,15 @@ void BrokerClient::broadcastDiscovery() {
     
     // Create discovery message
     JsonDocument doc;
-    doc["type"] = "discovery";
+    const bool isRouter = deviceInfo.role.find("router") != std::string::npos;
+    doc["type"] = isRouter ? "routerDiscovery" : "discovery";
     doc["deviceId"] = deviceInfo.id;
     doc["role"] = deviceInfo.role;
     doc["ip"] = WiFi.localIP().toString();
     doc["port"] = brokerPort;
+    if (isRouter) {
+        doc["leaseMs"] = 120000;
+    }
     doc["timestamp"] = millis();
     
     String payload;
@@ -313,6 +317,23 @@ void BrokerClient::listenForDiscovery() {
     DeserializationError error = deserializeJson(doc, buffer);
     if (error) return;
     
+    const std::string role = doc["role"].as<std::string>();
+    const std::string deviceId = doc["deviceId"].as<std::string>();
+    const std::string ip = doc["ip"].as<std::string>();
+    const int port = doc["port"] | 0;
+
+    if ((doc["type"] == "routerDiscovery" || role == "router")
+        && !deviceId.empty() && !ip.empty() && port > 0
+        && deviceId != deviceInfo.id) {
+        RouterDiscoveryInfo router;
+        router.routerId = deviceId;
+        router.ip = ip;
+        router.port = port;
+        router.lastSeen = millis();
+        discoveredRouters[router.routerId] = router;
+        return;
+    }
+
     // Extract device info
     if (doc["type"] != "discovery") return;
     
@@ -345,6 +366,30 @@ void BrokerClient::cleanupStaleDevices() {
     }
     
     lastDeviceCleanup = now;
+    cleanupStaleRouters();
+}
+
+void BrokerClient::cleanupStaleRouters() {
+    const unsigned long now = millis();
+    auto it = discoveredRouters.begin();
+    while (it != discoveredRouters.end()) {
+        if (now - it->second.lastSeen > 120000) {
+            it = discoveredRouters.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+std::vector<RouterDiscoveryInfo> BrokerClient::getAvailableRouters() const {
+    std::vector<RouterDiscoveryInfo> routers;
+    const unsigned long now = millis();
+    for (const auto& pair : discoveredRouters) {
+        if (now - pair.second.lastSeen <= 120000) {
+            routers.push_back(pair.second);
+        }
+    }
+    return routers;
 }
 
 // ============================================================================
@@ -377,10 +422,24 @@ bool BrokerClient::sendMessageWithPriority(const char* targetDevice,
     String jsonPayload;
     serializeJson(doc, jsonPayload);
     
-    // Send to broker
+    std::vector<std::string> endpoints;
+    endpoints.push_back(brokerUrl + ":" + std::to_string(brokerPort) + "/send");
+    for (const RouterDiscoveryInfo& router : getAvailableRouters()) {
+        const std::string endpoint = "http://" + router.ip + ":"
+            + std::to_string(router.port) + "/send";
+        if (std::find(endpoints.begin(), endpoints.end(), endpoint) == endpoints.end()) {
+            endpoints.push_back(endpoint);
+        }
+    }
+
     std::string response;
-    std::string endpoint = brokerUrl + ":" + std::to_string(brokerPort) + "/send";
-    return sendHttpPost(endpoint.c_str(), jsonPayload.c_str(), response);
+    for (const std::string& endpoint : endpoints) {
+        if (sendHttpPost(endpoint.c_str(), jsonPayload.c_str(), response)) {
+            return true;
+        }
+    }
+    setError("All broker routers unavailable");
+    return false;
 }
 
 bool BrokerClient::receiveMessage(const char* queue, BrokerMessage& message,

@@ -49,7 +49,7 @@ async function main() {
     '',
     'ROUTER "mt103-to-pacs-router" INPUT "swift.mt103.parsed" DESCRIPTION "Transform MT103 payload to PACS payload" ENABLED TRUE BEGIN',
     '  OUTPUT "tx.pacs.created" TYPE "pacs"',
-    '    WHEN "IF startswith(upper(src), \\"MT103\\") THEN output := 1 ELSE output := 0;"',
+    '    WHEN "output := 1;"',
     '    TRANSFORM "output := map(\\"mt103-to-pacs\\", src);";',
     'END;',
     '',
@@ -76,8 +76,8 @@ async function main() {
   const firstOutput = router.outputs?.[0] || {};
   assert.equal(
     firstOutput.whenRule,
-    'IF startswith(upper(src), "MT103") THEN output := 1 ELSE output := 0;',
-    'compiler should normalize escaped quotes in whenRule'
+    'output := 1;',
+    'compiler should preserve the parsed-queue route rule'
   );
   assert.equal(
     firstOutput.transformRule,
@@ -91,7 +91,16 @@ async function main() {
       '--pcode', pcodePath,
       '--program-map', mapPath,
       '--input-queue', 'swift.mt103.parsed',
-      '--message', 'MT103\\n:20:REF-123\\n:32A:260705USD12500,\\n:50K:/12345678\\nACME CORP\\n:59:/99988877\\nBENEFICIARY LTD\\n:70:Invoice 445\\n:71A:OUR'
+      '--message', JSON.stringify({
+        block4: {
+          '20': 'REF-123',
+          '32A': { date: '260705', currency: 'USD', amount: '12500,' },
+          '50K': '/12345678\\nACME CORP',
+          '59': '/99988877\\nBENEFICIARY LTD',
+          '70': 'Invoice 445',
+          '71A': 'OUR'
+        }
+      })
     ],
     root
   );

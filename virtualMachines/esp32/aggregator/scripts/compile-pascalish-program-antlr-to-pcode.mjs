@@ -6,6 +6,23 @@ import PascalishLexer from '../grammar/generated-modern/PascalishLexer.js';
 import PascalishParser from '../grammar/generated-modern/PascalishParser.js';
 import PascalishVisitor from '../grammar/generated-modern/PascalishVisitor.js';
 import { attachPcodeSignature } from './pcode-signing.mjs';
+import { compileConversionRuleToOps, emitMapperRoutinePcode } from './compile-mapping-rule.mjs';
+import { resolveLibrary } from './pascalish-library-registry.mjs';
+
+const OPERATOR_METHOD_NAMES = {
+  '+': 'op_add',
+  '-': 'op_sub',
+  '*': 'op_mul',
+  '/': 'op_div',
+  '=': 'op_eq',
+  '<>': 'op_ne',
+  '<': 'op_lt',
+  '<=': 'op_le',
+  '>': 'op_gt',
+  '>=': 'op_ge'
+};
+
+const BINARY_OPERATOR_METHODS = OPERATOR_METHOD_NAMES;
 
 class CollectingErrorListener extends antlr4.error.ErrorListener {
   constructor() {
@@ -48,10 +65,20 @@ function originalText(ctx) {
   }
 }
 
+function normalizeEscapedDslText(value) {
+  return String(value || '')
+    .replace(/\\(["'\\])/g, '$1')
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\r')
+    .replace(/\\t/g, '\t');
+}
+
 function pl0SnippetText(ctx) {
   if (!ctx) return '';
-  if (ctx.STRING && ctx.STRING()) return unquote(ctx.STRING().getText());
-  return originalText(ctx);
+  if (ctx.STRING && ctx.STRING()) {
+    return normalizeEscapedDslText(unquote(ctx.STRING().getText()));
+  }
+  return normalizeEscapedDslText(originalText(ctx));
 }
 
 function durationToMs(value, unit) {
@@ -73,7 +100,7 @@ function collectUnitDecls(ctx, visitor) {
     routers: visited.filter(d => d.type === 'RouterDecl'),
     types: visited.filter(d => d.type === 'TypeDecl'),
     classes: visited.filter(d => d.type === 'ClassDecl'),
-    libraries: visited.filter(d => d.type === 'LibraryDecl')
+    libraries: visited.filter(d => d.type === 'LibraryDecl' || d.type === 'UseDecl')
   };
 }
 
@@ -119,7 +146,8 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
       classes: [],
       procedures: [],
       mappers: [],
-      routers: []
+      routers: [],
+      libraries: []
     };
 
     for (const decl of ctx.decl() || []) {
@@ -134,12 +162,14 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
         for (const router of value.unit?.routers || []) ast.routers.push(router);
         for (const typeDecl of value.unit?.types || []) ast.types.push(typeDecl);
         for (const classDecl of value.unit?.classes || []) ast.classes.push(classDecl);
+        for (const library of value.unit?.libraries || []) ast.libraries.push(library);
       }
       if (value.type === 'VarDecl') ast.variables.push(value);
       if (value.type === 'TypeDecl') ast.types.push(value);
       if (value.type === 'ClassDecl') ast.classes.push(value);
       if (value.type === 'MapperDecl') ast.mappers.push(value);
       if (value.type === 'RouterDecl') ast.routers.push(value);
+      if (value.type === 'LibraryDecl' || value.type === 'UseDecl') ast.libraries.push(value);
       if (value.type === 'ServiceDecl') {
         for (const mapper of value.localMappers || []) ast.mappers.push(mapper);
         for (const router of value.gatewayRouters || []) ast.routers.push(router);
@@ -158,7 +188,17 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
     if (ctx.classDecl()) return this.visit(ctx.classDecl());
     if (ctx.routerDecl()) return this.visit(ctx.routerDecl());
     if (ctx.mapperDecl()) return this.visit(ctx.mapperDecl());
+    if (ctx.libraryDecl()) return this.visit(ctx.libraryDecl());
+    if (ctx.useDecl()) return this.visit(ctx.useDecl());
     return null;
+  }
+
+  visitUseDecl(ctx) {
+    return {
+      type: 'UseDecl',
+      id: unquote(text(ctx.stringOrIdent())),
+      alias: ctx.IDENT() ? ctx.IDENT().getText() : null
+    };
   }
 
   visitMapperDecl(ctx) {
@@ -267,8 +307,12 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
           inputQueue: item.fromQueue,
           outputs: [{
             queueName: item.toQueue,
+            dataTypeId: localMappers[0]?.targetTypeId || 'pacs',
+            dataTypeIds: [localMappers[0]?.targetTypeId || 'pacs'],
             whenRule: 'output := 1;',
-            transformRule: 'output := src;'
+            transformRule: localMapperIds.size > 0
+              ? `output := map('${localMapperIds.get(String(item.mapperId || '').toLowerCase()) || [...localMapperIds.values()][0]}', src);`
+              : 'output := src;'
           }]
         })),
       block: {
@@ -401,10 +445,13 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
 
   visitServiceRouteStmt(ctx) {
     const endpoints = ctx.stringOrIdent() || [];
+    const mapperId = endpoints.length > 2 ? unquote(text(endpoints[0])) : null;
+    const queueStart = endpoints.length > 2 ? 1 : 0;
     return {
       type: 'RouteMessage',
-      fromQueue: unquote(text(endpoints[0])),
-      toQueue: unquote(text(endpoints[1]))
+      mapperId,
+      fromQueue: unquote(text(endpoints[queueStart])),
+      toQueue: unquote(text(endpoints[queueStart + 1]))
     };
   }
 
@@ -495,15 +542,74 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
     };
   }
 
+  visitClassMember(ctx) {
+    if (ctx.classFieldDecl()) return this.visit(ctx.classFieldDecl());
+    if (ctx.classMethodDecl()) return this.visit(ctx.classMethodDecl());
+    if (ctx.classOperatorDecl && ctx.classOperatorDecl()) return this.visit(ctx.classOperatorDecl());
+    return null;
+  }
+
+  visitClassOperatorDecl(ctx) {
+    const target = text(ctx.operatorTarget());
+    const parameters = ctx.methodParamList() ? this.visit(ctx.methodParamList()) : [];
+    const declaredReturn = ctx.typeRef() ? this.visit(ctx.typeRef()) : null;
+    const symbolName = OPERATOR_METHOD_NAMES[target];
+    const localDecls = (ctx.unitDecl() || [])
+      .map(item => this.visit(item))
+      .filter(item => item?.type === 'VarSection')
+      .flatMap(item => item.vars);
+
+    // A non-symbolic target names a type: with parameters it converts into this class
+    // and is keyed by the source type, without them it converts out of this class.
+    const sourceType = parameters.length > 0 ? String(parameters[0]?.dataType?.id || '') : '';
+    const name = symbolName
+      || (parameters.length > 0 ? `op_from_${sourceType.toLowerCase()}` : `op_to_${target.toLowerCase()}`);
+    const returnType = declaredReturn
+      || (symbolName || parameters.length > 0 ? null : { type: 'TypeRef', kind: 'simple', id: target, genericArgs: [] });
+
+    const previousFunction = this.currentFunction || null;
+    this.currentFunction = name;
+    const body = this.visit(ctx.block());
+    this.currentFunction = previousFunction;
+
+    return {
+      type: 'ClassMethodDecl',
+      methodKind: 'function',
+      isOperator: true,
+      // A conversion into this class constructs a value, so it takes no receiver.
+      isStatic: !symbolName && parameters.length > 0,
+      operatorTarget: target,
+      name,
+      genericParams: [],
+      parameters,
+      localDecls,
+      returnType,
+      body
+    };
+  }
+
   visitClassMethodDecl(ctx) {
+    const name = ctx.IDENT() ? ctx.IDENT().getText() : '';
+    const returnType = ctx.typeRef() ? this.visit(ctx.typeRef()) : null;
+    const localDecls = (ctx.unitDecl() || [])
+      .map(item => this.visit(item))
+      .filter(item => item?.type === 'VarSection')
+      .flatMap(item => item.vars);
+
+    const previousFunction = this.currentFunction || null;
+    this.currentFunction = returnType ? name : null;
+    const body = this.visit(ctx.block());
+    this.currentFunction = previousFunction;
+
     return {
       type: 'ClassMethodDecl',
       methodKind: text(ctx.getChild(0)).toLowerCase(),
-      name: ctx.IDENT() ? ctx.IDENT().getText() : '',
+      name,
       genericParams: ctx.genericTypeParams() ? this.visit(ctx.genericTypeParams()) : [],
       parameters: ctx.methodParamList() ? this.visit(ctx.methodParamList()) : [],
-      returnType: ctx.typeRef() ? this.visit(ctx.typeRef()) : null,
-      body: this.visit(ctx.block())
+      localDecls,
+      returnType,
+      body
     };
   }
 
@@ -554,6 +660,7 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
     }
     if (ctx.simpleType()) return this.visit(ctx.simpleType());
     if (ctx.recordType()) return this.visit(ctx.recordType());
+    if (ctx.enumType && ctx.enumType()) return this.visit(ctx.enumType());
     if (ctx.queueType()) return this.visit(ctx.queueType());
     if (ctx.stackType()) return this.visit(ctx.stackType());
     if (ctx.priorityQueueType()) return this.visit(ctx.priorityQueueType());
@@ -568,6 +675,18 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
   }
 
   visitSimpleType(ctx) {
+    const decimalCtx = ctx.decimalType && ctx.decimalType();
+    if (decimalCtx) {
+      const numbers = (decimalCtx.NUMBER() || []).map(token => Number.parseInt(token.getText(), 10));
+      return {
+        type: 'TypeRef',
+        kind: 'simple',
+        id: 'decimal',
+        precision: Number.isFinite(numbers[0]) ? numbers[0] : 18,
+        scale: Number.isFinite(numbers[1]) ? numbers[1] : 0,
+        genericArgs: []
+      };
+    }
     return {
       type: 'TypeRef',
       kind: 'simple',
@@ -602,6 +721,15 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
     return {
       name: ctx.IDENT().getText(),
       dataType: this.visit(ctx.typeRef())
+    };
+  }
+
+  visitEnumType(ctx) {
+    return {
+      type: 'TypeRef',
+      kind: 'enum',
+      values: this.visit(ctx.identList()),
+      genericArgs: []
     };
   }
 
@@ -656,6 +784,7 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
     if (ctx.routerDecl()) return this.visit(ctx.routerDecl());
     if (ctx.mapperDecl()) return this.visit(ctx.mapperDecl());
     if (ctx.libraryDecl()) return this.visit(ctx.libraryDecl());
+    if (ctx.useDecl()) return this.visit(ctx.useDecl());
     return null;
   }
 
@@ -673,16 +802,30 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
 
   visitSubprogramDecl(ctx) {
     const inner = (ctx.unitDecl() || []).map(item => this.visit(item)).filter(Boolean);
-    const locals = inner
+    const localDecls = inner
       .filter(item => item.type === 'VarSection')
-      .flatMap(item => item.vars.map(v => v.name));
+      .flatMap(item => item.vars);
+    const paramDecls = ctx.paramSection() ? this.visit(ctx.paramSection()) : [];
+    const name = ctx.IDENT().getText();
+    const returnType = ctx.typeRef() ? this.visit(ctx.typeRef()) : null;
+
+    // `return expr` means a value return only inside a function; elsewhere it stays an
+    // orchestration ReturnSuccess, which existing service/daemon sources rely on.
+    const previousFunction = this.currentFunction || null;
+    this.currentFunction = returnType ? name : null;
+    const body = this.visit(ctx.block());
+    this.currentFunction = previousFunction;
+
     return {
       type: 'SubprogramDecl',
       kind: text(ctx.getChild(0)).toLowerCase(),
-      name: ctx.IDENT().getText(),
-      params: ctx.paramSection() ? this.visit(ctx.paramSection()) : [],
-      locals,
-      body: this.visit(ctx.block())
+      name,
+      returnType,
+      params: paramDecls.map(item => item.name),
+      paramDecls,
+      locals: localDecls.map(item => item.name),
+      localDecls,
+      body
     };
   }
 
@@ -691,7 +834,8 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
   }
 
   visitParamGroup(ctx) {
-    return this.visit(ctx.identList());
+    const dataType = this.visit(ctx.typeRef());
+    return this.visit(ctx.identList()).map(name => ({ name, dataType }));
   }
 
   visitStatement(ctx) {
@@ -769,6 +913,12 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
   }
 
   visitReturnStmt(ctx) {
+    if (this.currentFunction) {
+      if (!ctx.expr()) {
+        throw new Error(`[PASCALISH-PROGRAM] Function ${this.currentFunction} has a bare return; a value is required`);
+      }
+      return { type: 'Return', expr: this.visit(ctx.expr()) };
+    }
     return {
       type: 'ReturnSuccess',
       ref: ctx.expr() ? text(ctx.expr()) : ''
@@ -804,6 +954,7 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
     return {
       type: 'Assign',
       target: this.visit(ctx.lvalue()),
+      rounded: text(ctx).toLowerCase().endsWith('rounded'),
       expr: this.visit(ctx.expr())
     };
   }
@@ -910,8 +1061,8 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
     if (ctx.NUMBER()) {
       const raw = ctx.NUMBER().getText();
       return raw.includes('.')
-        ? { type: 'RealLiteral', value: Number.parseFloat(raw) }
-        : { type: 'NumberLiteral', value: Number.parseInt(raw, 10) };
+        ? { type: 'RealLiteral', value: Number.parseFloat(raw), raw }
+        : { type: 'NumberLiteral', value: Number.parseInt(raw, 10), raw };
     }
     if (ctx.STRING()) {
       const raw = ctx.STRING().getText();
@@ -924,6 +1075,13 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
       return {
         type: 'CallExpr',
         name: this.visit(ctx.qualifiedName()),
+        args: ctx.exprList() ? this.visit(ctx.exprList()) : []
+      };
+    }
+    if (ctx.simpleType && ctx.simpleType()) {
+      return {
+        type: 'CallExpr',
+        name: text(ctx.simpleType()),
         args: ctx.exprList() ? this.visit(ctx.exprList()) : []
       };
     }
@@ -967,23 +1125,412 @@ class Codegen {
     this.labelId = 0;
     this.procLabels = new Map();
     this.classInfo = new Map();
-    this.typeRegistry = new Map(); // User-defined type aliases
-
-    // Build type registry from type declarations (compile-time type aliasing)
-    for (const typeDecl of this.ast.types || []) {
-      // typeDecl = { type: 'TypeDecl', name: string, alias: TypeRef }
-      this.typeRegistry.set(String(typeDecl.name || '').toLowerCase(), typeDecl.alias);
-    }
 
     for (const classDecl of this.ast.classes || []) {
       const fields = new Set();
       const methods = new Set();
+      const staticMethods = new Set();
+      const fieldDecls = [];
       for (const member of classDecl.members || []) {
-        if (member.type === 'ClassFieldDecl') fields.add(member.name);
-        if (member.type === 'ClassMethodDecl') methods.add(member.name);
+        if (member.type === 'ClassFieldDecl') {
+          fields.add(member.name);
+          fieldDecls.push({ name: member.name, dataType: member.dataType });
+        }
+        if (member.type === 'ClassMethodDecl') {
+          methods.add(member.name);
+          if (member.isStatic) staticMethods.add(member.name);
+        }
       }
-      this.classInfo.set(classDecl.name, { fields, methods });
+      this.classInfo.set(classDecl.name, { fields, fieldDecls, methods, staticMethods });
     }
+
+    this.classesByName = new Map(
+      (this.ast.classes || []).map(item => [String(item.name).toLowerCase(), item])
+    );
+
+    this.typeDecls = new Map();
+    for (const typeDecl of this.ast.types || []) {
+      this.typeDecls.set(String(typeDecl.name).toLowerCase(), typeDecl);
+    }
+
+    // enumTypes: declared name -> ordered value names. enumValueOwners maps each
+    // value name back to its type so bare identifiers can be emitted as PUSH_ENUM.
+    this.enumTypes = {};
+    this.enumValueOwners = new Map();
+    for (const typeDecl of this.ast.types || []) {
+      const resolved = this.resolveTypeRef(typeDecl.targetType);
+      if (resolved?.kind !== 'enum') continue;
+      this.enumTypes[typeDecl.name] = [...(resolved.values || [])];
+      if (resolved === typeDecl.targetType) {
+        for (const value of resolved.values || []) {
+          const key = String(value).toLowerCase();
+          if (!this.enumValueOwners.has(key)) {
+            this.enumValueOwners.set(key, { typeName: typeDecl.name, valueName: value });
+          }
+        }
+      }
+    }
+
+    this.variableTypes = new Map();
+    for (const variable of this.ast.variables || []) {
+      this.variableTypes.set(String(variable.name).toLowerCase(), variable.dataType);
+    }
+
+    this.functionReturnTypes = new Map();
+    for (const procedure of this.ast.procedures || []) {
+      if (procedure.returnType) {
+        this.functionReturnTypes.set(String(procedure.name).toLowerCase(), procedure.returnType);
+      }
+    }
+    for (const classDecl of this.ast.classes || []) {
+      for (const member of classDecl.members || []) {
+        if (member.type === 'ClassMethodDecl' && member.returnType) {
+          this.functionReturnTypes.set(`${classDecl.name}.${member.name}`.toLowerCase(), member.returnType);
+        }
+      }
+    }
+
+    // Declared (non-self) parameters, so call sites know which arguments are aggregates.
+    this.subprogramParams = new Map();
+    for (const procedure of this.ast.procedures || []) {
+      this.subprogramParams.set(String(procedure.name).toLowerCase(), procedure.paramDecls || []);
+    }
+    for (const classDecl of this.ast.classes || []) {
+      for (const member of classDecl.members || []) {
+        if (member.type !== 'ClassMethodDecl') continue;
+        this.subprogramParams.set(`${classDecl.name}.${member.name}`.toLowerCase(), member.parameters || []);
+      }
+    }
+  }
+
+  classOfVariable(name) {
+    const key = String(name || '').trim().toLowerCase();
+    const declared = this.scopeTypes?.get(key) || this.variableTypes.get(key);
+    if (declared?.kind !== 'user') return null;
+    return this.classesByName.get(String(declared.id).toLowerCase()) || null;
+  }
+
+  // Aggregates have no runtime representation: every leaf field becomes its own scalar
+  // slot, and parameters, arguments and results are expanded to match.
+  flattenLeaves(path, typeRef) {
+    const resolved = this.resolveTypeRef(typeRef);
+    if (resolved?.kind === 'record') {
+      return (resolved.fields || []).flatMap(field => this.flattenLeaves(`${path}.${field.name}`, field.dataType));
+    }
+    return [{ path, dataType: resolved }];
+  }
+
+  isAggregateType(typeRef) {
+    return this.resolveTypeRef(typeRef)?.kind === 'record';
+  }
+
+  storageLeaves(path, typeRef) {
+    return this.flattenLeaves(path, typeRef).map(leaf => this.normalizeStorageName(leaf.path));
+  }
+
+  expandParamNames(paramDecls) {
+    return (paramDecls || []).flatMap(item => this.storageLeaves(item.name, item.dataType));
+  }
+
+  resultSlots(label, returnType) {
+    return this.flattenLeaves('', returnType)
+      .map(leaf => `${label}__ret${leaf.path.replace(/\./g, '_')}`);
+  }
+
+  nextTempPrefix() {
+    this.tempId = (this.tempId || 0) + 1;
+    return `__tmp${this.tempId}`;
+  }
+
+  /**
+   * Leaves an aggregate value in addressable slots and returns their storage names.
+   * Identifiers are already addressable; a call's result is copied out of the callee's
+   * result slots into fresh temporaries so a later call cannot clobber it.
+   */
+  materializeAggregate(expr, expectedType) {
+    if (expr?.type === 'Identifier') {
+      const declared = this.declaredTypeOf(expr.name);
+      if (declared && this.isAggregateType(declared)) return this.storageLeaves(expr.name, declared);
+    }
+    if (expr?.type === 'CallExpr') {
+      const resolved = this.resolveCallTarget(expr.name);
+      const returnType = this.functionReturnTypes.get(resolved.toLowerCase());
+      if (returnType && this.isAggregateType(returnType)) {
+        this.emitCall(expr.name, expr.args);
+        return this.captureResult(this.lookupProcedureLabel(resolved), returnType);
+      }
+    }
+    if (expr?.type === 'Binary') {
+      const operator = this.resolveOperator(expr);
+      if (operator) {
+        const returnType = this.functionReturnTypes.get(operator.resolvedName.toLowerCase());
+        if (returnType && this.isAggregateType(returnType)) {
+          this.emitOperatorCall(operator);
+          return this.captureResult(this.lookupProcedureLabel(operator.resolvedName), returnType);
+        }
+      }
+    }
+
+    // Widening: the target class declares `operator <ThisClass>(x: <kind>)`.
+    const targetClass = expectedType?.kind === 'user'
+      ? this.classesByName.get(String(expectedType.id).toLowerCase())
+      : null;
+    const methodName = `op_from_${this.staticKindOf(expr)}`;
+    if (this.hasMethod(targetClass, methodName)) {
+      const resolvedName = `${targetClass.name}.${methodName}`;
+      const formals = this.subprogramParams.get(resolvedName.toLowerCase()) || [];
+      const argc = this.emitArguments(formals, [expr]);
+      this.emit(`CALL ${this.lookupProcedureLabel(resolvedName)} ${argc}`);
+      return this.captureResult(this.lookupProcedureLabel(resolvedName), expectedType);
+    }
+
+    throw new Error(`[PASCALISH-PROGRAM] Expression is not a ${this.describeType(expectedType)} value`);
+  }
+
+  // Result slots are shared per subprogram, so copy them out before the next call.
+  captureResult(label, returnType) {
+    const prefix = this.nextTempPrefix();
+    return this.resultSlots(label, returnType).map((slot, index) => {
+      const temp = `${prefix}_${index}`;
+      this.emit(`LOAD ${slot}`);
+      this.emit(`STORE ${temp}`);
+      return temp;
+    });
+  }
+
+  declaredTypeOf(name) {
+    const segments = String(name || '').split('.').filter(Boolean);
+    if (segments.length === 0) return null;
+    let current = this.scopeTypes?.get(segments[0].toLowerCase()) || this.variableTypes.get(segments[0].toLowerCase());
+    for (const segment of segments.slice(1)) {
+      const resolved = this.resolveTypeRef(current);
+      if (resolved?.kind !== 'record') return null;
+      const field = (resolved.fields || []).find(item => item.name.toLowerCase() === segment.toLowerCase());
+      if (!field) return null;
+      current = field.dataType;
+    }
+    return current || null;
+  }
+
+  describeType(typeRef) {
+    return typeRef?.id || typeRef?.kind || 'value';
+  }
+
+  classOfExpr(expr) {
+    if (expr?.type === 'Identifier') {
+      const declared = this.declaredTypeOf(expr.name);
+      if (declared?.kind === 'user') return this.classesByName.get(String(declared.id).toLowerCase()) || null;
+      return null;
+    }
+    if (expr?.type === 'CallExpr') {
+      const returnType = this.functionReturnTypes.get(this.resolveCallTarget(expr.name).toLowerCase());
+      if (returnType?.kind === 'user') return this.classesByName.get(String(returnType.id).toLowerCase()) || null;
+      return null;
+    }
+    if (expr?.type === 'Binary') {
+      const operator = this.resolveOperator(expr);
+      if (!operator) return null;
+      const returnType = this.functionReturnTypes.get(operator.resolvedName.toLowerCase());
+      if (returnType?.kind === 'user') return this.classesByName.get(String(returnType.id).toLowerCase()) || null;
+    }
+    return null;
+  }
+
+  hasMethod(classDecl, methodName) {
+    return Boolean(classDecl) && Boolean(this.classInfo.get(classDecl.name)?.methods.has(methodName));
+  }
+
+  // `a + b` becomes a method call on whichever side declares the operator; the other
+  // side is converted into that class if it declares a matching conversion.
+  resolveOperator(expr) {
+    const methodName = BINARY_OPERATOR_METHODS[expr.op];
+    if (!methodName) return null;
+
+    const leftClass = this.classOfExpr(expr.left);
+    if (this.hasMethod(leftClass, methodName)) {
+      return { classDecl: leftClass, methodName, self: expr.left, argument: expr.right, resolvedName: `${leftClass.name}.${methodName}` };
+    }
+    const rightClass = this.classOfExpr(expr.right);
+    if (this.hasMethod(rightClass, methodName)) {
+      return { classDecl: rightClass, methodName, self: expr.left, argument: expr.right, resolvedName: `${rightClass.name}.${methodName}` };
+    }
+    return null;
+  }
+
+  emitOperatorCall(operator) {
+    const info = this.classInfo.get(operator.classDecl.name);
+    const selfType = { type: 'TypeRef', kind: 'user', id: operator.classDecl.name, genericArgs: [] };
+    for (const slot of this.materializeAggregate(operator.self, selfType)) this.emit(`LOAD ${slot}`);
+
+    const formals = this.subprogramParams.get(operator.resolvedName.toLowerCase()) || [];
+    const argc = info.fieldDecls.length + this.emitArguments(formals, [operator.argument]);
+    this.emit(`CALL ${this.lookupProcedureLabel(operator.resolvedName)} ${argc}`);
+    return operator.resolvedName;
+  }
+
+  // Explicit `real(x)` style narrowing declared as `operator real();` on the class.
+  resolveConversionOut(name, args) {
+    if ((args || []).length !== 1) return null;
+    const classDecl = this.classOfExpr(args[0]);
+    const methodName = `op_to_${String(name || '').toLowerCase()}`;
+    if (!this.hasMethod(classDecl, methodName)) return null;
+    return { classDecl, methodName, resolvedName: `${classDecl.name}.${methodName}` };
+  }
+
+  resolveCallTarget(name) {
+    const segments = String(name || '').trim().split('.').filter(Boolean);
+    if (segments.length === 2) {
+      const classDecl = this.classOfVariable(segments[0]);
+      if (classDecl && this.classInfo.get(classDecl.name)?.methods.has(segments[1])) {
+        return `${classDecl.name}.${segments[1]}`;
+      }
+    }
+    return this.normalizeProcedureName(name);
+  }
+
+  /**
+   * Emits a call and returns the resolved subprogram name. `receiver.method(...)` on a
+   * class-typed variable passes the receiver's fields as leading arguments, which is how
+   * a method reaches `self` without the runtime having object references.
+   */
+  emitCall(name, args) {
+    const segments = String(name || '').trim().split('.').filter(Boolean);
+    let leading = [];
+    let resolved = this.normalizeProcedureName(name);
+
+    if (segments.length === 2) {
+      const classDecl = this.classOfVariable(segments[0]);
+      const info = classDecl ? this.classInfo.get(classDecl.name) : null;
+      if (info?.methods.has(segments[1])) {
+        resolved = `${classDecl.name}.${segments[1]}`;
+        leading = info.fieldDecls.flatMap(field => this.storageLeaves(`${segments[0]}.${field.name}`, field.dataType));
+      }
+    }
+
+    for (const slot of leading) this.emit(`LOAD ${slot}`);
+    const formals = this.subprogramParams.get(resolved.toLowerCase()) || null;
+    const argc = leading.length + this.emitArguments(formals, args);
+    this.emit(`CALL ${this.lookupProcedureLabel(resolved)} ${argc}`);
+    return resolved;
+  }
+
+  emitArguments(formals, args) {
+    let count = 0;
+    (args || []).forEach((argument, index) => {
+      const formal = formals ? formals[index] : null;
+      if (formal && this.isAggregateType(formal.dataType)) {
+        for (const slot of this.materializeAggregate(argument, formal.dataType)) {
+          this.emit(`LOAD ${slot}`);
+          count += 1;
+        }
+        return;
+      }
+      this.emitExpr(argument);
+      count += 1;
+    });
+    return count;
+  }
+
+  isFunction(name) {
+    return this.functionReturnTypes.has(String(name || '').trim().toLowerCase());
+  }
+
+  // Calls are emitted to a label eagerly, so an undeclared target only shows up as a
+  // label that was never defined. Catch it here rather than at runtime.
+  assertAllCallTargetsDefined() {
+    const defined = new Set(
+      this.lines.filter(line => line.endsWith(':')).map(line => line.slice(0, -1))
+    );
+    const missing = [...this.procLabels.entries()]
+      .filter(([, label]) => !defined.has(label))
+      .map(([name]) => name);
+    if (missing.length > 0) {
+      throw new Error(`[PASCALISH-PROGRAM] Call to undeclared subprogram: ${missing.join(', ')}`);
+    }
+  }
+
+  // Follows `type A = B` aliases until a structural or simple type is reached.
+  resolveTypeRef(typeRef, seen = new Set()) {
+    let current = typeRef;
+    while (current && current.kind === 'user') {
+      const key = String(current.id || '').toLowerCase();
+      if (seen.has(key)) return null;
+      seen.add(key);
+      const decl = this.typeDecls.get(key);
+      if (!decl) {
+        // A class used as a variable type lays out like a record; methods are shared.
+        const classDecl = this.classesByName.get(key);
+        const info = classDecl ? this.classInfo.get(classDecl.name) : null;
+        if (info) return { type: 'TypeRef', kind: 'record', fields: info.fieldDecls, genericArgs: [] };
+        return current;
+      }
+      current = decl.targetType;
+    }
+    return current || null;
+  }
+
+  lookupEnumValue(name) {
+    const segments = String(name || '').split('.');
+    if (segments.length === 1) return this.enumValueOwners.get(segments[0].toLowerCase()) || null;
+    if (segments.length === 2) {
+      const typeDecl = this.typeDecls.get(segments[0].toLowerCase());
+      const resolved = typeDecl ? this.resolveTypeRef(typeDecl.targetType) : null;
+      if (resolved?.kind !== 'enum') return null;
+      const valueName = (resolved.values || []).find(v => v.toLowerCase() === segments[1].toLowerCase());
+      return valueName ? { typeName: typeDecl.name, valueName } : null;
+    }
+    return null;
+  }
+
+  // Best-effort static kind used to pick PRINT vs PRINT_INT.
+  staticKindOf(expr) {
+    if (!expr) return 'integer';
+    if (expr.type === 'StringLiteral') return 'string';
+    if (expr.type === 'RealLiteral') return 'real';
+    if (expr.type === 'Identifier') {
+      if (this.lookupEnumValue(expr.name)) return 'enum';
+      return this.kindOfPath(expr.name);
+    }
+    if (expr.type === 'Binary') {
+      const left = this.staticKindOf(expr.left);
+      const right = this.staticKindOf(expr.right);
+      if (left === 'string' || right === 'string') return 'string';
+      if (left === 'real' || right === 'real') return 'real';
+      return 'integer';
+    }
+    if (expr.type === 'Unary') return this.staticKindOf(expr.expr);
+    if (expr.type === 'CallExpr') {
+      return this.kindOfTypeRef(this.functionReturnTypes.get(this.resolveCallTarget(expr.name).toLowerCase()));
+    }
+    return 'integer';
+  }
+
+  kindOfTypeRef(typeRef) {
+    const resolved = this.resolveTypeRef(typeRef);
+    if (!resolved) return 'integer';
+    if (resolved.kind === 'enum') return 'enum';
+    if (resolved.kind === 'simple') {
+      const id = String(resolved.id || '').toLowerCase();
+      if (id === 'real') return 'real';
+      if (id === 'string') return 'string';
+      if (id === 'decimal') return 'decimal';
+    }
+    return 'integer';
+  }
+
+  kindOfPath(name) {
+    const segments = String(name || '').split('.').filter(Boolean);
+    if (segments.length === 0) return 'integer';
+    const head = segments[0].toLowerCase();
+    const declared = this.scopeTypes?.get(head) || this.variableTypes.get(head);
+    let current = this.resolveTypeRef(declared);
+    for (const segment of segments.slice(1)) {
+      if (current?.kind !== 'record') return 'integer';
+      const field = (current.fields || []).find(f => f.name.toLowerCase() === segment.toLowerCase());
+      if (!field) return 'integer';
+      current = this.resolveTypeRef(field.dataType);
+    }
+    return this.kindOfTypeRef(current);
   }
 
   emit(line) {
@@ -1009,29 +1556,6 @@ class Codegen {
     return this.methodContext || null;
   }
 
-  /**
-   * Resolve a type reference by following user-defined type aliases.
-   * User-defined types are erased at compile time - this method follows chains
-   * of type aliases and returns the underlying base type.
-   * @param {object} typeRef - TypeRef AST node
-   * @returns {object} - Resolved TypeRef (base type)
-   */
-  resolveType(typeRef) {
-    if (!typeRef) return typeRef;
-    
-    // If it's a userType with a single identifier, check the type registry
-    if (typeRef.type === 'TypeRef' && typeRef.kind === 'userType' && typeRef.id) {
-      const key = String(typeRef.id).toLowerCase();
-      const aliasedType = this.typeRegistry.get(key);
-      if (aliasedType) {
-        // Recursively resolve to handle chains like type A = B; type B = integer;
-        return this.resolveType(aliasedType);
-      }
-    }
-    
-    return typeRef;
-  }
-
   normalizeStorageName(name) {
     const raw = String(name || '').trim();
     if (!raw) return raw;
@@ -1041,12 +1565,9 @@ class Codegen {
 
     const context = this.currentContext();
     if (context) {
-      if (segments[0] === 'self') {
-        return `${context.className}__self__${segments.slice(1).join('_')}`;
-      }
-      if (context.fields.has(segments[0])) {
-        return `${context.className}__self__${segments.join('_')}`;
-      }
+      // Inside a method the receiver's fields arrive as ordinary frame parameters.
+      if (segments[0] === 'self') return segments.slice(1).join('_');
+      if (context.fields.has(segments[0])) return segments.join('_');
     }
 
     const topLevelClass = this.classInfo.get(segments[0]);
@@ -1095,7 +1616,21 @@ class Codegen {
   emitExpr(expr) {
     if (!expr) return;
     if (expr.type === 'NumberLiteral') {
+      if (this.decimalContext) {
+        this.emit(`PUSH_DEC ${expr.raw ?? expr.value} 0`);
+        return;
+      }
       this.emit(`PUSH_INT ${expr.value}`);
+      return;
+    }
+    if (expr.type === 'RealLiteral') {
+      if (this.decimalContext) {
+        // Emit the literal's digits verbatim so no float rounding creeps in.
+        const [whole, fraction = ''] = String(expr.raw ?? expr.value).split('.');
+        this.emit(`PUSH_DEC ${whole}${fraction} ${fraction.length}`);
+        return;
+      }
+      this.emit(`PUSH_REAL ${expr.value}`);
       return;
     }
     if (expr.type === 'BooleanLiteral') {
@@ -1107,6 +1642,11 @@ class Codegen {
       return;
     }
     if (expr.type === 'Identifier') {
+      const enumValue = this.lookupEnumValue(expr.name);
+      if (enumValue) {
+        this.emit(`PUSH_ENUM ${enumValue.typeName} ${enumValue.valueName}`);
+        return;
+      }
       this.emit(`LOAD ${this.normalizeStorageName(expr.name)}`);
       return;
     }
@@ -1125,18 +1665,50 @@ class Codegen {
       }
     }
     if (expr.type === 'CallExpr') {
-      for (const argument of expr.args || []) this.emitExpr(argument);
-      this.emit(`CALL ${this.lookupProcedureLabel(this.normalizeProcedureName(expr.name))} ${(expr.args || []).length}`);
+      if (String(expr.name || '').toLowerCase() === 'ord' && (expr.args || []).length === 1) {
+        this.emitExpr(expr.args[0]);
+        this.emit('ORD');
+        return;
+      }
+      if (String(expr.name || '').toLowerCase() === 'decimal' && (expr.args || []).length === 1) {
+        const previous = this.decimalContext;
+        this.decimalContext = true;
+        this.emitExpr(expr.args[0]);
+        this.decimalContext = previous;
+        this.emit('DEC_CONV');
+        return;
+      }
+      const conversion = this.resolveConversionOut(expr.name, expr.args);
+      if (conversion) {
+        const selfType = { type: 'TypeRef', kind: 'user', id: conversion.classDecl.name, genericArgs: [] };
+        const slots = this.materializeAggregate(expr.args[0], selfType);
+        for (const slot of slots) this.emit(`LOAD ${slot}`);
+        this.emit(`CALL ${this.lookupProcedureLabel(conversion.resolvedName)} ${slots.length}`);
+        return;
+      }
+      this.emitCall(expr.name, expr.args);
       return;
     }
     if (expr.type === 'Binary') {
+      const operator = this.resolveOperator(expr);
+      if (operator) {
+        this.emitOperatorCall(operator);
+        return;
+      }
       // String comparisons need STREQ/STRNEQ; EQ coerces operands to numbers.
       const comparesStrings = (expr.op === '=' || expr.op === '<>')
         && (expr.left?.type === 'StringLiteral' || expr.right?.type === 'StringLiteral');
+      // `+` is concatenation as soon as one side is known to be a string.
+      const concatenates = expr.op === '+'
+        && (this.staticKindOf(expr.left) === 'string' || this.staticKindOf(expr.right) === 'string');
       this.emitExpr(expr.left);
       this.emitExpr(expr.right);
       if (comparesStrings) {
         this.emit(expr.op === '=' ? 'STREQ' : 'STRNEQ');
+        return;
+      }
+      if (concatenates) {
+        this.emit('CONCAT');
         return;
       }
       const opMap = {
@@ -1168,6 +1740,27 @@ class Codegen {
       return;
     }
     if (stmt.type === 'Assign') {
+      const targetType = this.declaredTypeOf(stmt.target);
+      if (targetType && this.isAggregateType(targetType)) {
+        const sources = this.materializeAggregate(stmt.expr, targetType);
+        const targets = this.storageLeaves(stmt.target, targetType);
+        targets.forEach((slot, index) => {
+          this.emit(`LOAD ${sources[index]}`);
+          this.emit(`STORE ${slot}`);
+        });
+        return;
+      }
+      // A decimal receiving field fixes the result scale, as a COBOL PICTURE does.
+      const resolved = this.resolveTypeRef(targetType);
+      if (this.kindOfTypeRef(targetType) === 'decimal') {
+        const previous = this.decimalContext;
+        this.decimalContext = true;
+        this.emitExpr(stmt.expr);
+        this.decimalContext = previous;
+        this.emit(`DEC_QUANT ${resolved.scale ?? 0}${stmt.rounded ? ' ROUNDED' : ''}`);
+        this.emit(`STORE ${this.normalizeStorageName(stmt.target)}`);
+        return;
+      }
       this.emitExpr(stmt.expr);
       this.emit(`STORE ${this.normalizeStorageName(stmt.target)}`);
       return;
@@ -1177,13 +1770,15 @@ class Codegen {
       if (bareName === 'writeln' || bareName === 'write') {
         for (const argument of stmt.args || []) {
           this.emitExpr(argument);
-          this.emit(argument?.type === 'StringLiteral' ? 'PRINT' : 'PRINT_INT');
+          // PRINT renders strings, reals and enum names; PRINT_INT is integer-only.
+          this.emit(this.staticKindOf(argument) === 'integer' ? 'PRINT_INT' : 'PRINT');
         }
         if (bareName === 'writeln') this.emit('PRINT_NL');
         return;
       }
-      for (const argument of stmt.args || []) this.emitExpr(argument);
-      this.emit(`CALL ${this.lookupProcedureLabel(this.normalizeProcedureName(stmt.name))} ${(stmt.args || []).length}`);
+      const procedureName = this.emitCall(stmt.name, stmt.args);
+      // A function used as a statement still leaves its result on the stack.
+      if (this.isFunction(procedureName)) this.emit('STORE __discard');
       return;
     }
     if (stmt.type === 'If') {
@@ -1276,7 +1871,18 @@ class Codegen {
       return;
     }
     if (stmt.type === 'Return') {
+      const returnType = this.currentReturnType || null;
+      if (returnType && this.isAggregateType(returnType)) {
+        const sources = this.materializeAggregate(stmt.expr, returnType);
+        this.resultSlots(this.currentReturnLabel, returnType).forEach((slot, index) => {
+          this.emit(`LOAD ${sources[index]}`);
+          this.emit(`STORE ${slot}`);
+        });
+        this.emit('RET');
+        return;
+      }
       this.emitExpr(stmt.expr);
+      this.emit('RET');
       return;
     }
     if (stmt.type === 'Enqueue') {
@@ -1315,7 +1921,12 @@ class Codegen {
           this.emit(`JZ ${nextLabel}`);
         }
         if (output.transformRule) {
-          this.emit(`ROUTE_TRANSFORM "${this.escapeString(output.transformRule)}"`);
+          const mapCall = String(output.transformRule).match(/^output\s*:=\s*map\(\s*['"]([^'"]+)['"]\s*,\s*src\s*\)\s*;?$/i);
+          if (mapCall) {
+            this.emit(`ROUTE_MAP_RUN "${this.escapeString(mapCall[1])}"`);
+          } else {
+            this.emit(`ROUTE_TRANSFORM "${this.escapeString(output.transformRule)}"`);
+          }
         }
         this.emit(`ROUTE_EMIT "${this.escapeString(output.queueName)}"`);
         this.emit(`${nextLabel}:`);
@@ -1327,6 +1938,44 @@ class Codegen {
   zeroInit(name) {
     this.emit('PUSH_INT 0');
     this.emit(`STORE ${name}`);
+  }
+
+  initVariable(variable) {
+    this.initStorage(variable.name, variable.dataType);
+  }
+
+  // Records have no aggregate slot at runtime: each leaf field gets its own
+  // flattened storage name, which must exist before any procedure assigns it.
+  initStorage(path, typeRef) {
+    const resolved = this.resolveTypeRef(typeRef);
+    if (resolved?.kind === 'record') {
+      for (const field of resolved.fields || []) this.initStorage(`${path}.${field.name}`, field.dataType);
+      return;
+    }
+    const storageName = this.normalizeStorageName(path);
+    if (resolved?.kind === 'enum' && (resolved.values || []).length > 0) {
+      const owner = this.enumValueOwners.get(String(resolved.values[0]).toLowerCase());
+      if (owner) {
+        this.emit(`PUSH_ENUM ${owner.typeName} ${owner.valueName}`);
+        this.emit(`STORE ${storageName}`);
+        return;
+      }
+    }
+    if (resolved?.kind === 'simple' && String(resolved.id).toLowerCase() === 'string') {
+      this.emit('PUSH_STR ""');
+      this.emit(`STORE ${storageName}`);
+      return;
+    }
+    if (resolved?.kind === 'simple' && String(resolved.id).toLowerCase() === 'decimal') {
+      this.emit(`PUSH_DEC 0 ${resolved.scale ?? 0}`);
+      this.emit(`STORE ${storageName}`);
+      return;
+    }
+    this.zeroInit(storageName);
+  }
+
+  storageNamesOf(path, typeRef) {
+    return this.storageLeaves(path, typeRef);
   }
 
   build() {
@@ -1361,14 +2010,30 @@ class Codegen {
           fields: classState?.fields || new Set(),
           methods: classState?.methods || new Set()
         };
+        this.scopeTypes = new Map();
+        if (!member.isStatic) {
+          for (const field of classState?.fieldDecls || []) this.scopeTypes.set(field.name.toLowerCase(), field.dataType);
+        }
+        for (const item of member.parameters || []) this.scopeTypes.set(item.name.toLowerCase(), item.dataType);
+        for (const item of member.localDecls || []) this.scopeTypes.set(item.name.toLowerCase(), item.dataType);
+        for (const local of member.localDecls || []) this.initVariable(local);
+        this.currentReturnType = member.returnType || null;
+        this.currentReturnLabel = label;
         this.emitStatement(member.body);
+        this.currentReturnType = null;
+        this.scopeTypes = null;
         this.methodContext = null;
         this.emit('RET');
         procedures[label] = {
           name: fullName,
           className: classDecl.name,
           methodName: member.name,
-          params: (member.parameters || []).map(item => item.name),
+          returnType: member.returnType || null,
+          params: [
+            ...(member.isStatic ? [] : this.expandParamNames(classState?.fieldDecls || [])),
+            ...this.expandParamNames(member.parameters || [])
+          ],
+          locals: (member.localDecls || []).flatMap(item => this.storageLeaves(item.name, item.dataType)),
           genericParams: member.genericParams || []
         };
       }
@@ -1377,32 +2042,79 @@ class Codegen {
     for (const procedure of this.ast.procedures || []) {
       const label = this.registerProcedure(procedure.name);
       this.emit(`${label}:`);
+      this.scopeTypes = new Map();
+      for (const item of procedure.paramDecls || []) this.scopeTypes.set(item.name.toLowerCase(), item.dataType);
+      for (const item of procedure.localDecls || []) this.scopeTypes.set(item.name.toLowerCase(), item.dataType);
       const paramNames = new Set(procedure.params || []);
-      for (const localName of procedure.locals || []) {
-        if (!paramNames.has(localName)) this.zeroInit(localName);
+      for (const local of procedure.localDecls || []) {
+        if (!paramNames.has(local.name)) this.initVariable(local);
       }
+      this.currentReturnType = procedure.returnType || null;
+      this.currentReturnLabel = label;
       this.emitStatement(procedure.body);
+      this.currentReturnType = null;
+      this.scopeTypes = null;
       this.emit('RET');
       procedures[label] = {
         name: procedure.name,
-        params: procedure.params || [],
-        locals: procedure.locals || []
+        returnType: procedure.returnType || null,
+        params: this.expandParamNames(procedure.paramDecls || []),
+        locals: (procedure.localDecls || []).flatMap(item => this.storageLeaves(item.name, item.dataType))
       };
     }
 
     this.emit('MAIN:');
-    for (const classDecl of this.ast.classes || []) {
-      const classState = this.classInfo.get(classDecl.name);
-      for (const fieldName of classState?.fields || []) {
-        this.zeroInit(`${classDecl.name}__self__${fieldName}`);
+    for (const definition of Object.entries(procedures)) {
+      const [label, info] = definition;
+      if (info.returnType && this.isAggregateType(info.returnType)) {
+        for (const slot of this.resultSlots(label, info.returnType)) this.zeroInit(slot);
       }
     }
     for (const variable of this.ast.variables || []) {
-      this.zeroInit(this.normalizeStorageName(variable.name));
+      this.initVariable(variable);
     }
     this.emitStatement(runtimeUnit.block);
     this.emitRouters();
     this.emit('HALT');
+    this.assertAllCallTargetsDefined();
+
+    const mapperEntries = (this.ast.mappers || []).map(mapper => ({
+      kind: 'mapper',
+      id: mapper.id,
+      scope: mapper.scope === 'local' ? 'local' : 'global',
+      ownerServiceId: mapper.ownerServiceId || null,
+      sourceTypeId: mapper.sourceTypeId,
+      targetTypeId: mapper.targetTypeId,
+      items: (mapper.maps || []).map((item) => ({
+        ...item,
+        ops: item.ops || compileConversionRuleToOps(item.conversionRule)
+      }))
+    }));
+
+    const mapperRoutines = mapperEntries
+      .map((entry) => emitMapperRoutinePcode(entry))
+      .filter(Boolean);
+    if (mapperRoutines.length > 0) {
+      this.lines.push(...mapperRoutines.join('\n').split('\n'));
+    }
+
+    const routerEntries = (this.ast.routers || []).map(router => ({
+      kind: 'router',
+      id: router.id,
+      name: router.id,
+      serviceId: runtimeUnit.name,
+      inputQueue: router.inputQueue,
+      description: router.description || '',
+      enabled: router.enabled !== false,
+      outputs: (router.outputs || []).map(output => ({
+        queueName: output.queueName,
+        httpVerb: output.httpVerb || null,
+        dataTypeIds: output.dataTypeIds || [],
+        dataTypeId: output.dataTypeId || null,
+        whenRule: output.whenRule,
+        transformRule: output.transformRule
+      }))
+    }));
 
     return {
       pcodeText: `${this.lines.join('\n')}\n`,
@@ -1417,15 +2129,7 @@ class Codegen {
         },
         executionModel: `pascalish-${runtimeKind}`,
         sourceLanguage: 'pascalish',
-        entries: (this.ast.mappers || []).map(mapper => ({
-          kind: 'mapper',
-          id: mapper.id,
-          scope: mapper.scope === 'local' ? 'local' : 'global',
-          ownerServiceId: mapper.ownerServiceId || null,
-          sourceTypeId: mapper.sourceTypeId,
-          targetTypeId: mapper.targetTypeId,
-          items: mapper.maps || []
-        })),
+        entries: [...routerEntries, ...mapperEntries],
         localResources: {
           serviceId: runtimeUnit.name || null,
           mappers: (runtimeUnit.localMappers || []).map(item => item.id),
@@ -1436,8 +2140,9 @@ class Codegen {
         },
         routers: this.ast.routers || [],
         serviceEndpoints: runtimeUnit.endpoints || [],
-        globals: (this.ast.variables || []).map(item => item.name),
+        globals: (this.ast.variables || []).flatMap(item => this.storageNamesOf(item.name, item.dataType)),
         variableDeclarations: this.ast.variables,
+        enums: this.enumTypes,
         procedures,
         typeDeclarations: this.ast.types,
         classDeclarations: this.ast.classes,
@@ -1504,12 +2209,112 @@ export function compilePascalishProgramWithAntlr(sourceText) {
   }
 
   const ast = new PascalishProgramAstBuilder().visit(tree);
+  const linkedLibraries = linkLibraries(ast);
   const result = new Codegen(ast).build();
 
+  result.programMap.libraries = linkedLibraries;
   // Attach mapper imports to the program map
   result.programMap.mapperImports = mapperImports;
 
   return result;
+}
+
+function parsePascalishAst(sourceText) {
+  const input = new antlr4.InputStream(String(sourceText || ''));
+  const lexer = new PascalishLexer(input);
+  const lexerErrors = new CollectingErrorListener();
+  lexer.removeErrorListeners();
+  lexer.addErrorListener(lexerErrors);
+
+  const tokens = new antlr4.CommonTokenStream(lexer);
+  const parser = new PascalishParser(tokens);
+  const parserErrors = new CollectingErrorListener();
+  parser.removeErrorListeners();
+  parser.addErrorListener(parserErrors);
+  parser.buildParseTrees = true;
+
+  const tree = parser.compilationUnit();
+  const errors = [...lexerErrors.errors, ...parserErrors.errors];
+  if (errors.length > 0) {
+    throw new Error(`[PASCALISH-PROGRAM] Parse failed:\n${errors.join('\n')}`);
+  }
+
+  return new PascalishProgramAstBuilder().visit(tree);
+}
+
+/**
+ * Resolves `use "<id>";` / `library "<id>" from librarian;` declarations and merges each
+ * library's types, globals and subprograms into the front of the compiling unit, so user
+ * code can reference them. Returns the ordered list of linked library ids.
+ */
+function linkLibraries(ast) {
+  const linked = [];
+  const seen = new Set();
+  const declarations = [...(ast.libraries || [])];
+
+  // `FROM LIBRARIAN` names a remote unit resolved by the Code Librarian, not a local
+  // native library, so it is recorded as metadata and never linked from disk.
+  const librarianHosted = new Set(
+    declarations
+      .filter(item => String(item?.source || '').toLowerCase() === 'librarian')
+      .map(item => String(item.id).toLowerCase())
+  );
+
+  const pending = declarations.map(item => String(item?.id || '').trim());
+
+  const declaredTypes = new Set((ast.types || []).map(item => String(item.name).toLowerCase()));
+  const declaredProcedures = new Set((ast.procedures || []).map(item => String(item.name).toLowerCase()));
+  const declaredVariables = new Set((ast.variables || []).map(item => String(item.name).toLowerCase()));
+
+  while (pending.length > 0) {
+    const id = String(pending.shift() || '').trim();
+    const key = id.toLowerCase();
+    if (!id || seen.has(key) || librarianHosted.has(key)) continue;
+    seen.add(key);
+
+    const library = resolveLibrary(id);
+    const libraryAst = parsePascalishAst(library.sourceText);
+
+    // Depth-first so a library's own dependencies are linked ahead of it.
+    for (const nested of libraryAst.libraries || []) pending.push(String(nested?.id || '').trim());
+
+    for (const typeDecl of libraryAst.types || []) {
+      const name = String(typeDecl.name).toLowerCase();
+      if (declaredTypes.has(name)) {
+        throw new Error(`[PASCALISH-PROGRAM] Library "${id}" type ${typeDecl.name} collides with a declaration in the program`);
+      }
+      declaredTypes.add(name);
+      ast.types.unshift(typeDecl);
+    }
+    for (const classDecl of libraryAst.classes || []) {
+      const name = String(classDecl.name).toLowerCase();
+      if (declaredTypes.has(name)) {
+        throw new Error(`[PASCALISH-PROGRAM] Library "${id}" class ${classDecl.name} collides with a declaration in the program`);
+      }
+      declaredTypes.add(name);
+      ast.classes.unshift(classDecl);
+    }
+    for (const variable of libraryAst.variables || []) {
+      const name = String(variable.name).toLowerCase();
+      if (declaredVariables.has(name)) {
+        throw new Error(`[PASCALISH-PROGRAM] Library "${id}" variable ${variable.name} collides with a declaration in the program`);
+      }
+      declaredVariables.add(name);
+      ast.variables.unshift(variable);
+    }
+    for (const procedure of libraryAst.procedures || []) {
+      const name = String(procedure.name).toLowerCase();
+      if (declaredProcedures.has(name)) {
+        throw new Error(`[PASCALISH-PROGRAM] Library "${id}" subprogram ${procedure.name} collides with a declaration in the program`);
+      }
+      declaredProcedures.add(name);
+      ast.procedures.unshift(procedure);
+    }
+
+    linked.push(library.id);
+  }
+
+  return linked;
 }
 
 function parseArgs(argv) {

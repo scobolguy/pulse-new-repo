@@ -272,7 +272,10 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
             request->send(404, "text/plain", "File not found");
             return;
         }
-        request->send(200, "application/octet-stream", data.data(), data.size());
+        String contentType = "application/octet-stream";
+        if (file.endsWith(".json")) contentType = "application/json";
+        else if (file.endsWith(".xml")) contentType = "application/xml";
+        request->send(200, contentType, data.data(), data.size());
     };
     server.on("/ffs/get", HTTP_GET, getHandler);
     server.on("/ffs/get", HTTP_POST, getHandler);

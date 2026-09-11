@@ -85,6 +85,31 @@ Backend:
 node backend.mjs
 ```
 
+### Tapo / ONVIF cameras
+
+The NLI can discover ONVIF cameras, display their RTSP feeds, and control PTZ.
+For each Tapo camera, enable **Camera Account** under the camera's Advanced
+Settings in the Tapo app. RTSP port `554` and ONVIF port `2020` are not exposed
+until that account is enabled.
+
+Set the camera account on the backend in `.env.local`:
+
+```dotenv
+TAPO_CAMERA_USERNAME=your-camera-account-user
+TAPO_CAMERA_PASSWORD=your-camera-account-password
+TAPO_CAMERA_HOSTS=Kitchen@192.168.2.28,Driveway@192.168.2.29
+```
+
+`TAPO_CAMERA_HOSTS` is optional when WS-Discovery works. Explicit hosts make
+camera names stable and avoid multicast restrictions. Supported NLI examples:
+
+- `find Tapo cameras on the network`
+- `show network camera Kitchen`
+- `pan Kitchen camera left`
+- `tilt Driveway camera up`
+- `zoom in Kitchen camera`
+- `move Kitchen camera home`
+
 Librarian service for mapper and schema-driven UI flows:
 
 ```powershell

@@ -1,0 +1,138 @@
+{
+  "status": "ok",
+  "startedAt": "2026-09-07T19:01:13.342Z",
+  "sourcePath": "data\\cbds\\pascalish-demo\\cbds-converter.pas",
+  "serviceId": "cbds-converter",
+  "inputQueue": "swift.mt103.parsed",
+  "outputQueue": "cbds.pacs.outbound",
+  "fixture": {
+    "rawMt103": "MT103\n:20:CBDSREF123456\n:21:CBDS-E2E-0001\n:23B:CRED\n:32A:260702CAD12500,45\n:33B:CAD12500,45\n:50K:/123456789\nALPHA IMPORTS LTD\n:52A:ROYCCAT2\n:53A:BOFACATT\n:56A:CITIUS33\n:57A:TDOMCATTTOR\n:59:/000987654321\nBETA SUPPLIES INC\n:70:INV-2026-07-02\n:71A:SHA\n:71B:15,00\n:72:/INS/CBDS ROUTING",
+    "parsedMessage": {
+      "block4": {
+        "20": "CBDSREF123456",
+        "21": "CBDS-E2E-0001",
+        "59": "/000987654321\nBETA SUPPLIES INC",
+        "70": "INV-2026-07-02",
+        "72": "/INS/CBDS ROUTING",
+        "23B": "CRED",
+        "32A": {
+          "date": "260702",
+          "currency": "CAD",
+          "amount": "12500,45"
+        },
+        "33B": {
+          "currency": "CAD",
+          "amount": "12500,45"
+        },
+        "50K": "/123456789\nALPHA IMPORTS LTD",
+        "52A": "ROYCCAT2",
+        "53A": "BOFACATT",
+        "56A": "CITIUS33",
+        "57A": "TDOMCATTTOR",
+        "71A": "SHA",
+        "71B": "15,00"
+      },
+      "meta": {
+        "createdAt": "PROOF-TIMESTAMP"
+      }
+    }
+  },
+  "artifacts": {
+    "pcodeBytes": 2509,
+    "mapperIds": [
+      "cbds-converter.cbds-mt103-to-pacs008"
+    ],
+    "signedMap": true
+  },
+  "js": {
+    "status": "skipped",
+    "reason": "DISPLAY_ONLY is enabled; no JS PMachine message was sent"
+  },
+  "display": {
+    "status": "passed",
+    "baseUrl": "http://192.168.2.155",
+    "remotePcode": "/display-mt103.pcode",
+    "remoteProgramMap": "/display-mt103.map.json",
+    "repeatCount": 1,
+    "runs": [
+      {
+        "run": 1,
+        "status": "passed",
+        "delivery": {
+          "queue": "cbds.pacs.outbound",
+          "rawMessage": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Document xmlns=\"urn:iso:std:iso:20022:tech:xsd:pacs.008.001.10\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:hdr=\"urn:swift:xsd:head.001.001.02\">\n  <FIToFICstmrCdtTrf>\n    <GrpHdr>\n      <MsgId>CBDSREF123456</MsgId>\n      <CreDtTm>PROOF-TIMESTAMP</CreDtTm>\n    </GrpHdr>\n    <CdtTrfTxInf>\n      <PmtId>\n        <InstrId>CBDSREF123456</InstrId>\n        <EndToEndId>CBDS-E2E-0001</EndToEndId>\n      </PmtId>\n      <PmtTpInf>\n        <LclInstrm>\n          <Prtry>CRED</Prtry>\n        </LclInstrm>\n      </PmtTpInf>\n      <IntrBkSttlmDt>2026-07-02</IntrBkSttlmDt>\n      <IntrBkSttlmAmt>12500.45</IntrBkSttlmAmt>\n      <InstdAmt>12500.45</InstdAmt>\n      <Dbtr>\n        <Nm>ALPHA IMPORTS LTD</Nm>\n      </Dbtr>\n      <DbtrAgt>\n        <FinInstnId>\n          <BICFI>ROYCCAT2</BICFI>\n        </FinInstnId>\n      </DbtrAgt>\n      <IntrmyAgt1>\n        <FinInstnId>\n          <BICFI>BOFACATT</BICFI>\n        </FinInstnId>\n      </IntrmyAgt1>\n      <IntrmyAgt2>\n        <FinInstnId>\n          <BICFI>CITIUS33</BICFI>\n        </FinInstnId>\n      </IntrmyAgt2>\n      <CdtrAgt>\n        <FinInstnId>\n          <BICFI>TDOMCATTTOR</BICFI>\n        </FinInstnId>\n      </CdtrAgt>\n      <Cdtr>\n        <Nm>BETA SUPPLIES INC</Nm>\n      </Cdtr>\n      <RmtInf>\n        <Ustrd>INV-2026-07-02</Ustrd>\n      </RmtInf>\n      <ChrgBr>SHA</ChrgBr>\n      <ChrgsInf>\n        <Amt>15.00</Amt>\n      </ChrgsInf>\n      <InstrForNxtAgt>\n        <InstrInf>/INS/CBDS ROUTING</InstrInf>\n      </InstrForNxtAgt>\n    </CdtTrfTxInf>\n  </FIToFICstmrCdtTrf>\n  <hdr:AppHdr>\n    <hdr:BizMsgIdr>CBDSREF123456</hdr:BizMsgIdr>\n  </hdr:AppHdr>\n</Document>\n",
+          "message": {
+            "?xml": {
+              "@version": "1.0",
+              "@encoding": "UTF-8"
+            },
+            "Document": {
+              "FIToFICstmrCdtTrf": {
+                "GrpHdr": {
+                  "MsgId": "CBDSREF123456",
+                  "CreDtTm": "PROOF-TIMESTAMP"
+                },
+                "CdtTrfTxInf": {
+                  "PmtId": {
+                    "InstrId": "CBDSREF123456",
+                    "EndToEndId": "CBDS-E2E-0001"
+                  },
+                  "PmtTpInf": {
+                    "LclInstrm": {
+                      "Prtry": "CRED"
+                    }
+                  },
+                  "IntrBkSttlmDt": "2026-07-02",
+                  "IntrBkSttlmAmt": 12500.45,
+                  "InstdAmt": 12500.45,
+                  "Dbtr": {
+                    "Nm": "ALPHA IMPORTS LTD"
+                  },
+                  "DbtrAgt": {
+                    "FinInstnId": {
+                      "BICFI": "ROYCCAT2"
+                    }
+                  },
+                  "IntrmyAgt1": {
+                    "FinInstnId": {
+                      "BICFI": "BOFACATT"
+                    }
+                  },
+                  "IntrmyAgt2": {
+                    "FinInstnId": {
+                      "BICFI": "CITIUS33"
+                    }
+                  },
+                  "CdtrAgt": {
+                    "FinInstnId": {
+                      "BICFI": "TDOMCATTTOR"
+                    }
+                  },
+                  "Cdtr": {
+                    "Nm": "BETA SUPPLIES INC"
+                  },
+                  "RmtInf": {
+                    "Ustrd": "INV-2026-07-02"
+                  },
+                  "ChrgBr": "SHA",
+                  "ChrgsInf": {
+                    "Amt": 15
+                  },
+                  "InstrForNxtAgt": {
+                    "InstrInf": "/INS/CBDS ROUTING"
+                  }
+                }
+              },
+              "hdr:AppHdr": {
+                "hdr:BizMsgIdr": "CBDSREF123456"
+              },
+              "@xmlns": "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.10",
+              "@xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
+              "@xmlns:hdr": "urn:swift:xsd:head.001.001.02"
+            }
+          }
+        }
+      }
+    ]
+  }
+}

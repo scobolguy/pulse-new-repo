@@ -1,4 +1,30 @@
-import { useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
+
+const MonacoEditor = lazy(() => import('@monaco-editor/react'))
+
+function languageForFileName(fileName) {
+  const extension = String(fileName || '').split('.').pop()?.toLowerCase()
+  if (extension === 'pas') return 'pascal'
+  if (extension === 'wfl') return 'wfl'
+  if (extension === 'flw') return 'json'
+  if (extension === 'json') return 'json'
+  if (extension === 'md') return 'markdown'
+  if (extension === 'cob' || extension === 'cbl') return 'plaintext'
+  if (extension === 'vbs') return 'vb'
+  return 'plaintext'
+}
+
+function initializeWflLanguage(monaco) {
+  if (!monaco.languages.getLanguages().some((language) => language.id === 'wfl')) {
+    monaco.languages.register({ id: 'wfl' })
+    monaco.languages.setMonarchTokensProvider('wfl', {
+      ignoreCase: true,
+      keywords: ['DEPLOYMENT', 'PROJECT', 'TARGETS', 'SERVICE', 'PROGRAM', 'DAEMON', 'FILE', 'QUEUE', 'STARTUP', 'WORKFLOW', 'STEP', 'BEGIN', 'END', 'TRUE', 'FALSE'],
+      tokenizer: { root: [/[A-Za-z_][A-Za-z0-9_-]*/, { cases: { '@keywords': 'keyword', '@default': 'identifier' } }], strings: [[/"([^"\\]|\\.)*"/, 'string'], [/'([^'\\]|\\.)*'/, 'string']], brackets: [[/[()]/, '@brackets']], whitespace: [[/[ \t\r\n]+/, 'white']], comments: [[/--.*$/, 'comment'], [/\/\/.*$/, 'comment']] }
+    })
+    monaco.editor.defineTheme('wflWorkbench', { base: 'vs-dark', inherit: true, rules: [{ token: 'keyword', foreground: '4FC1FF', fontStyle: 'bold' }, { token: 'string', foreground: 'CE9178' }], colors: { 'editor.background': '#0f172a' } })
+  }
+}
 
 function flattenPathSegments(value) {
   return String(value || '')
@@ -10,18 +36,14 @@ function flattenPathSegments(value) {
 function computeProjectStats(node) {
   let subprojectCount = 0
   let flowCount = Number(node?.flowCount || 0)
-
   const stack = Array.isArray(node?.children) ? [...node.children] : []
   while (stack.length > 0) {
     const current = stack.pop()
     if (!current || typeof current !== 'object') continue
     subprojectCount += 1
     flowCount += Number(current.flowCount || 0)
-    if (Array.isArray(current.children) && current.children.length > 0) {
-      for (const child of current.children) stack.push(child)
-    }
+    if (Array.isArray(current.children)) stack.push(...current.children)
   }
-
   return { subprojectCount, flowCount }
 }
 
@@ -84,9 +106,19 @@ export default function ProjectTreePage() {
   const [newProjectLabel, setNewProjectLabel] = useState('')
   const [newSubprojectName, setNewSubprojectName] = useState('')
   const [newFlowName, setNewFlowName] = useState('')
+  const [resourceFolders, setResourceFolders] = useState({})
+  const [deploymentPlan, setDeploymentPlan] = useState(null)
+  const [deploymentPlanText, setDeploymentPlanText] = useState('')
+  const [metadataLabel, setMetadataLabel] = useState('')
+  const [metadataDescription, setMetadataDescription] = useState('')
+  const [newResourceFolder, setNewResourceFolder] = useState('programs')
+  const [newResourceFileName, setNewResourceFileName] = useState('')
+  const [newResourceContent, setNewResourceContent] = useState('')
+  const [openSourceTabs, setOpenSourceTabs] = useState([])
+  const [activeSourceTabId, setActiveSourceTabId] = useState('')
   const [isMutating, setIsMutating] = useState(false)
 
-  async function refreshTree() {
+  const refreshTree = useCallback(async () => {
     setIsLoading(true)
     try {
       const response = await fetch('/api/projects/tree')
@@ -118,22 +150,50 @@ export default function ProjectTreePage() {
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [selectedProjectId, selectedSubprojectPath])
 
   useEffect(() => {
-    void refreshTree()
+    const timer = setTimeout(() => {
+      void refreshTree()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [refreshTree])
+
+  const refreshSelectedNodeResources = useCallback(async (node) => {
+    if (!node) {
+      setResourceFolders({})
+      setDeploymentPlan(null)
+      return
+    }
+    const subproject = normalizeSubprojectTokenPath(node.subprojectPath || '')
+    const query = subproject ? `?subproject=${encodeURIComponent(subproject)}` : ''
+    try {
+      const [resourcesResponse, planResponse] = await Promise.all([
+        fetch(`/api/projects/${encodeURIComponent(node.projectId)}/resources${query}`),
+        fetch(`/api/projects/${encodeURIComponent(node.projectId)}/deployment-plan${query}`),
+      ])
+      const workspaceResponse = await fetch(buildWorkspaceApiPath(node.projectId, subproject))
+      const resourcesPayload = await resourcesResponse.json().catch(() => ({}))
+      const planPayload = await planResponse.json().catch(() => ({}))
+      const workspacePayload = await workspaceResponse.json().catch(() => ({}))
+      if (resourcesResponse.ok) setResourceFolders(resourcesPayload.resourceFolders || {})
+      if (planResponse.ok) {
+        setDeploymentPlan(planPayload.plan || null)
+        setDeploymentPlanText(planPayload.plan ? JSON.stringify(planPayload.plan, null, 2) : '')
+      }
+      if (workspaceResponse.ok && workspacePayload.workspace) {
+        setMetadataLabel(String(workspacePayload.workspace.projectLabel || node.name || node.projectId))
+        setMetadataDescription(String(workspacePayload.workspace.projectDescription || ''))
+      }
+    } catch {
+      setResourceFolders({})
+      setDeploymentPlan(null)
+    }
   }, [])
 
-  const selectedProject = useMemo(() => {
-    return projects.find((entry) => entry.projectId === selectedProjectId) || projects[0] || null
-  }, [projects, selectedProjectId])
-
-  const selectedNode = useMemo(() => {
-    if (!selectedProject) return null
-    return findNodeBySubprojectPath(selectedProject, selectedSubprojectPath)
-  }, [selectedProject, selectedSubprojectPath])
-
-  const breadcrumbSegments = useMemo(() => {
+  const selectedProject = projects.find((entry) => entry.projectId === selectedProjectId) || projects[0] || null
+  const selectedNode = selectedProject ? findNodeBySubprojectPath(selectedProject, selectedSubprojectPath) : null
+  const breadcrumbSegments = (() => {
     if (!selectedProject) return []
     const segments = [{
       label: selectedProject.name || selectedProject.projectId,
@@ -150,16 +210,20 @@ export default function ProjectTreePage() {
       segments.push({ label: part, subprojectPath: cursor })
     }
     return segments
-  }, [selectedProject, selectedNode])
-
-  const stats = useMemo(() => {
-    if (!selectedProject) return { subprojectCount: 0, flowCount: 0 }
-    return computeProjectStats(selectedProject)
-  }, [selectedProject])
+  })()
 
   const childNodes = Array.isArray(selectedNode?.children) ? selectedNode.children : []
   const flowItems = Array.isArray(selectedNode?.flows) ? selectedNode.flows : []
   const parentPath = String(selectedNode?.parentSubprojectPath || '').trim()
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setOpenSourceTabs([])
+      setActiveSourceTabId('')
+      void refreshSelectedNodeResources(selectedNode)
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [refreshSelectedNodeResources, selectedNode])
 
   function openNode(subprojectPath) {
     setSelectedSubprojectPath(normalizeSubprojectTokenPath(subprojectPath))
@@ -303,6 +367,175 @@ export default function ProjectTreePage() {
     }
   }
 
+  async function createResource() {
+    if (!selectedNode) {
+      setStatusText('Select a project node before creating a resource.')
+      return
+    }
+    const fileName = String(newResourceFileName || '').trim()
+    if (!fileName) {
+      setStatusText('Resource file name is required.')
+      return
+    }
+    const subprojectPath = normalizeSubprojectTokenPath(selectedNode.subprojectPath || '')
+    setIsMutating(true)
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(selectedNode.projectId)}/resources/${encodeURIComponent(newResourceFolder)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ subprojectPath, fileName, content: newResourceContent }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload?.error || response.statusText || `HTTP ${response.status}`)
+      setNewResourceFileName('')
+      setNewResourceContent('')
+      await refreshSelectedNodeResources(selectedNode)
+      await refreshTree()
+      setStatusText(`${newResourceFolder}/${fileName} saved.`)
+    } catch (error) {
+      setStatusText(`Failed to save resource: ${error?.message || String(error)}`)
+    } finally {
+      setIsMutating(false)
+    }
+  }
+
+  async function deleteResource(folder, fileName) {
+    if (!selectedNode || (folder === 'deployment' && fileName.startsWith('deployment-plan.'))) return
+    const subprojectPath = normalizeSubprojectTokenPath(selectedNode.subprojectPath || '')
+    setIsMutating(true)
+    try {
+      const query = subprojectPath ? `?subproject=${encodeURIComponent(subprojectPath)}` : ''
+      const response = await fetch(`/api/projects/${encodeURIComponent(selectedNode.projectId)}/resources/${encodeURIComponent(folder)}/${encodeURIComponent(fileName)}${query}`, { method: 'DELETE' })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload?.error || response.statusText || `HTTP ${response.status}`)
+      await refreshSelectedNodeResources(selectedNode)
+      await refreshTree()
+      setStatusText(`${folder}/${fileName} deleted.`)
+    } catch (error) {
+      setStatusText(`Failed to delete resource: ${error?.message || String(error)}`)
+    } finally {
+      setIsMutating(false)
+    }
+  }
+
+  async function openResourceFile(folder, fileName) {
+    if (!selectedNode) return
+    const subprojectPath = normalizeSubprojectTokenPath(selectedNode.subprojectPath || '')
+    const query = subprojectPath ? `?subproject=${encodeURIComponent(subprojectPath)}` : ''
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(selectedNode.projectId)}/resources/${encodeURIComponent(folder)}${query}`)
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload?.error || response.statusText || `HTTP ${response.status}`)
+      const file = (payload.files || []).find((item) => item.fileName === fileName)
+      if (!file) throw new Error(`${fileName} was not found`)
+      const tabId = `${selectedNode.projectId}:${subprojectPath}:${folder}:${fileName}`
+      setOpenSourceTabs((current) => current.some((tab) => tab.id === tabId)
+        ? current
+        : [...current, { id: tabId, folder, fileName, content: file.content, dirty: false }])
+      setActiveSourceTabId(tabId)
+    } catch (error) {
+      setStatusText(`Failed to open ${folder}/${fileName}: ${error?.message || String(error)}`)
+    }
+  }
+
+  function updateActiveSourceContent(content) {
+    setOpenSourceTabs((current) => current.map((tab) => tab.id === activeSourceTabId ? { ...tab, content, dirty: true } : tab))
+  }
+
+  function closeSourceTab(tabId) {
+    const tab = openSourceTabs.find((item) => item.id === tabId)
+    if (tab?.dirty && !window.confirm(`Discard unsaved changes in ${tab.fileName}?`)) return
+    const remaining = openSourceTabs.filter((item) => item.id !== tabId)
+    setOpenSourceTabs(remaining)
+    if (activeSourceTabId === tabId) setActiveSourceTabId(remaining[remaining.length - 1]?.id || '')
+  }
+
+  async function saveActiveSourceTab() {
+    const tab = openSourceTabs.find((item) => item.id === activeSourceTabId)
+    if (!tab || !selectedNode) return
+    const subprojectPath = normalizeSubprojectTokenPath(selectedNode.subprojectPath || '')
+    setIsMutating(true)
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(selectedNode.projectId)}/resources/${encodeURIComponent(tab.folder)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ subprojectPath, fileName: tab.fileName, content: tab.content }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload?.error || response.statusText || `HTTP ${response.status}`)
+      setOpenSourceTabs((current) => current.map((item) => item.id === tab.id ? { ...item, dirty: false } : item))
+      await refreshSelectedNodeResources(selectedNode)
+      setStatusText(`${tab.fileName} saved.`)
+    } catch (error) {
+      setStatusText(`Failed to save ${tab.fileName}: ${error?.message || String(error)}`)
+    } finally {
+      setIsMutating(false)
+    }
+  }
+
+  async function saveDeploymentPlan() {
+    if (!selectedNode || !deploymentPlan) return
+    let parsedPlan
+    try {
+      parsedPlan = JSON.parse(deploymentPlanText)
+    } catch {
+      setStatusText('Deployment plan JSON is invalid.')
+      return
+    }
+    const subprojectPath = normalizeSubprojectTokenPath(selectedNode.subprojectPath || '')
+    setIsMutating(true)
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(selectedNode.projectId)}/deployment-plan${subprojectPath ? `?subproject=${encodeURIComponent(subprojectPath)}` : ''}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ plan: parsedPlan }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload?.error || response.statusText || `HTTP ${response.status}`)
+      setDeploymentPlan(payload.plan || deploymentPlan)
+      setDeploymentPlanText(JSON.stringify(payload.plan || parsedPlan, null, 2))
+      await refreshSelectedNodeResources(selectedNode)
+      await refreshTree()
+      setStatusText('Deployment plan saved.')
+    } catch (error) {
+      setStatusText(`Failed to save deployment plan: ${error?.message || String(error)}`)
+    } finally {
+      setIsMutating(false)
+    }
+  }
+
+  async function saveMetadata() {
+    if (!selectedNode) return
+    const subprojectPath = normalizeSubprojectTokenPath(selectedNode.subprojectPath || '')
+    setIsMutating(true)
+    try {
+      const workspacePath = buildWorkspaceApiPath(selectedNode.projectId, subprojectPath)
+      const workspaceResponse = await fetch(workspacePath)
+      const workspacePayload = await workspaceResponse.json().catch(() => ({}))
+      if (!workspaceResponse.ok || !workspacePayload.workspace) throw new Error(workspacePayload?.error || workspaceResponse.statusText)
+      const response = await fetch(workspacePath, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          workspace: {
+            ...workspacePayload.workspace,
+            projectLabel: String(metadataLabel || selectedNode.projectId).trim(),
+            projectDescription: String(metadataDescription || '').trim(),
+          },
+        }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload?.error || response.statusText || `HTTP ${response.status}`)
+      await refreshTree()
+      await refreshSelectedNodeResources(selectedNode)
+      setStatusText('Project metadata saved.')
+    } catch (error) {
+      setStatusText(`Failed to save project metadata: ${error?.message || String(error)}`)
+    } finally {
+      setIsMutating(false)
+    }
+  }
+
   function openInFlowDesigner() {
     if (!selectedProject || !selectedNode) {
       setStatusText('Select a project node first.')
@@ -421,6 +654,90 @@ export default function ProjectTreePage() {
                 Path: {formatNodePath(selectedNode)}
               </div>
 
+              <section style={{ marginTop: 12, border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 10 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                  <h3 style={{ margin: 0 }}>Metadata</h3>
+                  <button type="button" onClick={() => void saveMetadata()} disabled={isMutating}>Save Metadata</button>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1fr) minmax(240px, 2fr)', gap: 8, marginTop: 8 }}>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
+                    Label
+                    <input type="text" value={metadataLabel} onChange={(event) => setMetadataLabel(event.target.value)} />
+                  </label>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
+                    Description
+                    <input type="text" value={metadataDescription} onChange={(event) => setMetadataDescription(event.target.value)} />
+                  </label>
+                </div>
+              </section>
+
+              <section style={{ marginTop: 12, border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 10 }}>
+                <h3 style={{ margin: '0 0 8px' }}>Project Folders</h3>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8 }}>
+                  {['programs', 'services', 'daemons', 'artifacts', 'deployment'].map((folder) => (
+                    <div key={folder} style={{ border: '1px solid rgba(148,163,184,0.2)', borderRadius: 8, padding: 8 }}>
+                      <div style={{ fontSize: 12, opacity: 0.7 }}>{folder}</div>
+                      <div style={{ fontWeight: 700 }}>{resourceFolders[folder]?.count || 0} files</div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
+                        {(resourceFolders[folder]?.files || []).map((fileName) => {
+                          const managedPlanFile = folder === 'deployment' && fileName.startsWith('deployment-plan.')
+                          return (
+                            <div key={`${folder}/${fileName}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, fontSize: 11 }}>
+                              <button type="button" onClick={() => void openResourceFile(folder, fileName)} style={{ border: 0, background: 'transparent', color: 'inherit', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left', cursor: 'pointer' }} title={`Open ${fileName}`}>
+                                {fileName}
+                              </button>
+                              <button type="button" onClick={() => void deleteResource(folder, fileName)} disabled={isMutating || managedPlanFile} title={managedPlanFile ? 'Managed by the deployment plan editor' : `Delete ${fileName}`}>
+                                {managedPlanFile ? 'Managed' : 'Delete'}
+                              </button>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              {openSourceTabs.length > 0 ? (
+                <section style={{ marginTop: 12, border: '1px solid rgba(148,163,184,0.3)', borderRadius: 10, overflow: 'hidden', background: '#1e1e1e' }}>
+                  <div role="tablist" aria-label="Project source files" style={{ display: 'flex', alignItems: 'stretch', overflowX: 'auto', background: '#252526', borderBottom: '1px solid #3e3e42' }}>
+                    {openSourceTabs.map((tab) => (
+                      <div key={tab.id} role="tab" aria-selected={tab.id === activeSourceTabId} style={{ display: 'flex', alignItems: 'center', gap: 6, background: tab.id === activeSourceTabId ? '#1e1e1e' : '#2d2d30', borderRight: '1px solid #3e3e42', color: '#d4d4d4' }}>
+                        <button type="button" onClick={() => setActiveSourceTabId(tab.id)} style={{ border: 0, background: 'transparent', color: 'inherit', padding: '8px 8px 8px 10px', cursor: 'pointer' }}>
+                          {tab.dirty ? '● ' : ''}{tab.fileName}
+                        </button>
+                        <button type="button" onClick={() => closeSourceTab(tab.id)} title={`Close ${tab.fileName}`} style={{ border: 0, background: 'transparent', color: '#aaa', padding: '4px 8px 4px 0', cursor: 'pointer' }}>×</button>
+                      </div>
+                    ))}
+                  </div>
+                  {(() => {
+                    const activeTab = openSourceTabs.find((tab) => tab.id === activeSourceTabId) || openSourceTabs[0]
+                    if (!activeTab) return null
+                    return (
+                      <>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '6px 10px', color: '#aaa', fontSize: 12, background: '#1e1e1e' }}>
+                          <span>{activeTab.folder}/{activeTab.fileName}</span>
+                          <button type="button" onClick={() => void saveActiveSourceTab()} disabled={isMutating || !activeTab.dirty}>Save</button>
+                        </div>
+                        <div style={{ height: 460, minHeight: 300 }}>
+                          <Suspense fallback={<div style={{ padding: 20, color: '#d4d4d4' }}>Loading editor...</div>}>
+                            <MonacoEditor
+                              height="100%"
+                              language={languageForFileName(activeTab.fileName)}
+                              theme={languageForFileName(activeTab.fileName) === 'wfl' ? 'wflWorkbench' : 'vs-dark'}
+                              value={activeTab.content}
+                              onChange={(value) => updateActiveSourceContent(value || '')}
+                              beforeMount={(monaco) => initializeWflLanguage(monaco)}
+                              options={{ automaticLayout: true, minimap: { enabled: false }, fontSize: 13, lineNumbers: 'on', scrollBeyondLastLine: false, wordWrap: 'on' }}
+                            />
+                          </Suspense>
+                        </div>
+                      </>
+                    )
+                  })()}
+                </section>
+              ) : null}
+
               <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8 }}>
                 <div style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 10 }}>
                   <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>Create Subproject</div>
@@ -459,7 +776,32 @@ export default function ProjectTreePage() {
                     Open In Flow Designer
                   </button>
                 </div>
+
+                <div style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 10 }}>
+                  <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>Save Resource</div>
+                  <select value={newResourceFolder} onChange={(event) => setNewResourceFolder(event.target.value)} style={{ width: '100%', marginBottom: 6 }}>
+                    {['programs', 'services', 'daemons', 'artifacts'].map((folder) => <option key={folder} value={folder}>{folder}</option>)}
+                  </select>
+                  <input type="text" value={newResourceFileName} onChange={(event) => setNewResourceFileName(event.target.value)} placeholder="file-name.pas" style={{ width: '100%', marginBottom: 6 }} />
+                  <textarea value={newResourceContent} onChange={(event) => setNewResourceContent(event.target.value)} placeholder="Resource content" rows={3} style={{ width: '100%', marginBottom: 6 }} />
+                  <button type="button" onClick={() => void createResource()} disabled={isMutating || isLoading} style={{ width: '100%' }}>Save Resource</button>
+                </div>
               </div>
+
+              {deploymentPlan ? (
+                <section style={{ marginTop: 14, border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                    <h3 style={{ margin: 0 }}>Deployment Plan</h3>
+                    <button type="button" onClick={() => void saveDeploymentPlan()} disabled={isMutating}>Save Plan</button>
+                  </div>
+                  <textarea
+                    value={deploymentPlanText}
+                    onChange={(event) => setDeploymentPlanText(event.target.value)}
+                    rows={12}
+                    style={{ width: '100%', marginTop: 8, fontFamily: 'monospace' }}
+                  />
+                </section>
+              ) : null}
 
               <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
                 <div style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 10 }}>

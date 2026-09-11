@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-09-05T01:12:05.381Z",
+  "generatedAt": "2026-09-11T20:39:03.636Z",
   "serviceId": "RecursiveFibonacci",
   "runtimeUnit": {
     "kind": "program",
@@ -22,9 +22,11 @@
   "serviceEndpoints": [],
   "globals": [],
   "variableDeclarations": [],
+  "enums": {},
   "procedures": {
     "PROC_PRINTFIBRANGE": {
       "name": "PrintFibRange",
+      "returnType": null,
       "params": [
         "i",
         "max",
@@ -37,12 +39,13 @@
   "typeDeclarations": [],
   "classDeclarations": [],
   "entryLabel": "MAIN",
+  "libraries": [],
   "mapperImports": [],
   "signing": {
     "algorithm": "hmac-sha256",
     "keyId": "profile-default",
     "signature": "965fcb2a7af641ab64015a99fac1f3380d7e87360d94e9f7bb671f0460cac61a",
-    "signedAt": "2026-09-05T01:12:05.384Z",
+    "signedAt": "2026-09-11T20:39:03.639Z",
     "pcodeLength": 386,
     "canonicalForm": "raw-pcode-text-v1"
   }

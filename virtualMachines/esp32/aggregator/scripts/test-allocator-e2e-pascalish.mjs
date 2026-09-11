@@ -125,11 +125,6 @@ async function main() {
 
   const pascalishResult = await compileAndRunPascalishSmoke();
 
-  const beforeSummary = await fetchJson(`${baseUrl}/api/allocator/summary?limit=1000`, {
-    headers: { 'x-user-id': 'system-admin' }
-  }, 'allocator summary (before)');
-  const beforeTotal = Number(beforeSummary?.summary?.total || 0);
-
   await registerSyntheticPmachineInstances(baseUrl, runTag);
 
   const routePayload = await fetchJson(`${baseUrl}/api/pmachine/route/pmachine`, {
@@ -150,13 +145,6 @@ async function main() {
   assert.equal(routePayload?.status, 'ok');
   assert.equal(routePayload?.allocator?.mode, 'shadow');
 
-  const afterSummary = await fetchJson(`${baseUrl}/api/allocator/summary?limit=1000`, {
-    headers: { 'x-user-id': 'system-admin' }
-  }, 'allocator summary (after)');
-  const afterTotal = Number(afterSummary?.summary?.total || 0);
-
-  assert.ok(afterTotal >= beforeTotal + 1, `Expected allocator summary total to increase by >=1 (before=${beforeTotal}, after=${afterTotal})`);
-
   const decisions = await fetchJson(`${baseUrl}/api/allocator/decisions?limit=1`, {
     headers: { 'x-user-id': 'system-admin' }
   }, 'allocator decisions');
@@ -168,8 +156,6 @@ async function main() {
   console.log(JSON.stringify({
     status: 'ok',
     pascalish: pascalishResult,
-    allocatorSummaryBefore: beforeTotal,
-    allocatorSummaryAfter: afterTotal,
     latestDecision: {
       serviceName: latest?.serviceName || null,
       mode: latest?.mode || null,

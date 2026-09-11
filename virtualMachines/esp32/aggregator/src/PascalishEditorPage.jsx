@@ -1,8 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 const MonacoEditor = React.lazy(() => import('@monaco-editor/react'))
 import { initializePascalishLanguage } from './pascalishLanguage'
-import { useLanguageStepper } from './useLanguageStepper'
-import StepDebugPanel from './components/StepDebugPanel'
 
 // Compile errors arrive as one blob; split them into per-line diagnostics.
 // ANTLR reports 0-based columns, so shift to Monaco's 1-based columns.
@@ -51,10 +49,10 @@ export default function PascalishEditorPage() {
   const [diagnostics, setDiagnostics] = useState([])
   const editorRef = useRef(null)
   const monacoRef = useRef(null)
+  const editorInitializedRef = useRef(false)
   const typeNamesRef = useRef([])
   const typeFieldMapRef = useRef({})
   const mapNamesRef = useRef([])
-  const { stepTabs, activeStepTab, stepLog, singleStep, selectStepTab } = useLanguageStepper('pascalish', editorRef)
 
   const typeNames = useMemo(() => {
     return (types || [])
@@ -231,7 +229,6 @@ export default function PascalishEditorPage() {
             <button type="button" onClick={() => runPascalishAction('compile')} disabled={runBusy}>Compile</button>
             <button type="button" onClick={() => runPascalishAction('compile-run')} disabled={runBusy}>Compile &amp; Run</button>
             <button type="button" onClick={() => runPascalishAction('compile-debug')} disabled={runBusy}>Compile &amp; Debug</button>
-            <button type="button" onClick={() => setStatus(singleStep(source))} disabled={runBusy}>Single Step</button>
           </div>
           <span style={{ fontSize: 12, opacity: 0.75 }}>{status}</span>
         </div>
@@ -244,26 +241,26 @@ export default function PascalishEditorPage() {
         </div>
       )}
 
-      <StepDebugPanel
-        stepTabs={stepTabs}
-        activeStepTab={activeStepTab}
-        onSelectTab={selectStepTab}
-        stepLog={stepLog}
-        tabListLabel="Pascalish execution tabs"
-        monacoLanguage="pascalish"
-        testIdPrefix="pascalish"
-      />
-
-      <div style={{ flex: 1, minHeight: 0, border: '1px solid rgba(148,163,184,0.25)', borderRadius: 6, overflow: 'hidden' }}>
+      <div style={{ flex: 1, minHeight: 320, height: '60vh', border: '1px solid rgba(148,163,184,0.25)', borderRadius: 6, overflow: 'hidden' }}>
         <React.Suspense fallback={<div style={{ padding: 20, opacity: 0.6 }}>Loading editor…</div>}>
           <MonacoEditor
             height="100%"
             language="pascalish"
             theme="pascalishWorkbench"
             value={source}
-            onChange={(value) => setSource(value || '')}
+            onChange={(value) => {
+              if (!editorInitializedRef.current && !value) return
+              setSource(value || '')
+            }}
             beforeMount={(monaco) => initializePascalishLanguage(monaco, typeNamesRef, typeFieldMapRef, mapNamesRef)}
-            onMount={(editor, monaco) => { editorRef.current = editor; monacoRef.current = monaco }}
+            onMount={(editor, monaco) => {
+              editorRef.current = editor
+              monacoRef.current = monaco
+              if (!editor.getValue().trim() && source) {
+                editor.setValue(source)
+              }
+              editorInitializedRef.current = true
+            }}
             options={{
               minimap: { enabled: false },
               fontSize: 14,

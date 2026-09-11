@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { compileConversionRuleToOps } from './compile-mapping-rule.mjs';
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve('.');
@@ -152,7 +153,7 @@ async function main() {
     'ENTRY:',
     'ROUTE_MATCH_QUEUE "swift.mt103.parsed"',
     'JZ FINISH',
-    "ROUTE_TRANSFORM \"output := map('cbds-mt103-to-pacs008', src);\"",
+    "ROUTE_MAP_RUN \"cbds-mt103-to-pacs008\"",
     'ROUTE_EMIT "cbds.pacs.outbound"',
     'FINISH:',
     'HALT',
@@ -203,6 +204,14 @@ async function main() {
   const mapAbsPath = path.resolve(ROOT, MAP_PATH);
   await fs.mkdir(path.dirname(pcodeAbsPath), { recursive: true });
   await fs.mkdir(path.dirname(mapAbsPath), { recursive: true });
+  // Compile every conversion rule to native ops so the VM runs the mapper
+  // without any runtime string interpretation.
+  for (const entry of programMap.entries || []) {
+    if (entry.kind !== 'mapper') continue;
+    for (const item of entry.items || []) {
+      item.ops = compileConversionRuleToOps(item.conversionRule);
+    }
+  }
   await fs.writeFile(pcodeAbsPath, pcodeText, 'utf-8');
   await fs.writeFile(mapAbsPath, `${JSON.stringify(programMap, null, 2)}\n`, 'utf-8');
 

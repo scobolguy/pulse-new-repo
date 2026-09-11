@@ -1,0 +1,214 @@
+{
+  "runId": "run-1788902237734",
+  "serviceId": "mt103-to-pacs008",
+  "submissionInterface": "/api/services/mt103-to-pacs008",
+  "requestQueue": "service.mt103-to-pacs008.requests",
+  "count": 10,
+  "concurrency": 2,
+  "elapsedMs": 13637,
+  "averageMs": 789.5,
+  "passed": 10,
+  "failed": 0,
+  "queueBefore": {
+    "primary": {
+      "name": "service.mt103-to-pacs008.requests",
+      "createdAt": 1788877574562,
+      "frozen": false,
+      "queueClass": "permanent",
+      "persistMessages": true,
+      "dataTypeId": "text-string",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "createdByUser": false
+    },
+    "secondary": {
+      "name": "service.mt103-to-pacs008.requests",
+      "createdAt": 1788878074062,
+      "frozen": false,
+      "queueClass": "permanent",
+      "persistMessages": true,
+      "dataTypeId": "text-string",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "createdByUser": false
+    }
+  },
+  "queueAfter": {
+    "primary": {
+      "name": "service.mt103-to-pacs008.requests",
+      "createdAt": 1788877574562,
+      "frozen": false,
+      "queueClass": "permanent",
+      "persistMessages": true,
+      "dataTypeId": "text-string",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "createdByUser": false
+    },
+    "secondary": {
+      "name": "service.mt103-to-pacs008.requests",
+      "createdAt": 1788878074062,
+      "frozen": false,
+      "queueClass": "permanent",
+      "persistMessages": true,
+      "dataTypeId": "text-string",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "createdByUser": false
+    }
+  },
+  "observedInstanceIds": [
+    "http://192.168.2.155",
+    "http://192.168.2.83"
+  ],
+  "observedInstanceCount": 2,
+  "byServiceInstance": {
+    "http://192.168.2.155": {
+      "count": 4,
+      "passed": 4,
+      "failed": 0,
+      "averageMs": 941.5
+    },
+    "http://192.168.2.83": {
+      "count": 6,
+      "passed": 6,
+      "failed": 0,
+      "averageMs": 688.17
+    }
+  },
+  "proofStatus": "TWO_INSTANCES_OBSERVED",
+  "note": "At least two distinct instance identities were reported by service completions.",
+  "failures": [],
+  "serviceRegistryBefore": {
+    "services": {
+      "broker": [
+        {
+          "instanceId": "broker:local:4000",
+          "serviceName": "broker",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/broker",
+            "label": "Message Broker"
+          },
+          "lastHeartbeat": 1788902235231
+        }
+      ],
+      "router": [
+        {
+          "instanceId": "router:local:4000",
+          "serviceName": "router",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/router",
+            "label": "Router Service"
+          },
+          "lastHeartbeat": 1788902235231
+        }
+      ],
+      "queue-manager": [
+        {
+          "instanceId": "queue-manager:local:4000",
+          "serviceName": "queue-manager",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/queue",
+            "label": "Queue Manager"
+          },
+          "lastHeartbeat": 1788902235231
+        }
+      ],
+      "file-server": [
+        {
+          "instanceId": "file-server:local:4000",
+          "serviceName": "file-server",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/fileserver",
+            "label": "File Server"
+          },
+          "lastHeartbeat": 1788902235231
+        }
+      ]
+    }
+  },
+  "serviceRegistryAfter": {
+    "services": {
+      "broker": [
+        {
+          "instanceId": "broker:local:4000",
+          "serviceName": "broker",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/broker",
+            "label": "Message Broker"
+          },
+          "lastHeartbeat": 1788902245236
+        }
+      ],
+      "router": [
+        {
+          "instanceId": "router:local:4000",
+          "serviceName": "router",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/router",
+            "label": "Router Service"
+          },
+          "lastHeartbeat": 1788902245236
+        }
+      ],
+      "queue-manager": [
+        {
+          "instanceId": "queue-manager:local:4000",
+          "serviceName": "queue-manager",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/queue",
+            "label": "Queue Manager"
+          },
+          "lastHeartbeat": 1788902245236
+        }
+      ],
+      "file-server": [
+        {
+          "instanceId": "file-server:local:4000",
+          "serviceName": "file-server",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/fileserver",
+            "label": "File Server"
+          },
+          "lastHeartbeat": 1788902245236
+        }
+      ]
+    }
+  }
+}

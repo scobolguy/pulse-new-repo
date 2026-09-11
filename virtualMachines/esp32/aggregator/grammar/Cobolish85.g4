@@ -7,7 +7,13 @@ compilationUnit
   ;
 
 programUnit
-  : identificationDivision cobolishRuntimeClause? environmentDivision? dataDivision? procedureDivision cobolishMetaClause* endProgramClause?
+  : identificationDivision cobolishRuntimeClause? preProcedureContent* procedureDivision cobolishMetaClause* endProgramClause?
+  ;
+
+preProcedureContent
+  : cobolishMetaClause
+  | environmentDivision
+  | dataDivision
   ;
 
 identificationDivision
@@ -71,7 +77,7 @@ fileStatusClause
   ;
 
 dataDivision
-  : DATA DIVISION DOT fileSection? workingStorageSection? linkageSection? localStorageSection? reportSection? screenSection?
+  : DATA DIVISION DOT fileSection? workingStorageSection? mappingSection? linkageSection? localStorageSection? reportSection? screenSection?
   ;
 
 fileSection
@@ -80,6 +86,42 @@ fileSection
 
 workingStorageSection
   : WORKING_STORAGE SECTION DOT dataDescriptionEntry*
+  ;
+
+// Inline mapper definitions. A MAPPING SECTION holds one or more named mappers,
+// each with a set of field-level MAP-RULE entries. Paths may be quoted strings
+// or bare dotted identifiers (DOTTED_PATH). The USING rule may be a quoted
+// string or a BEGIN...END block; both compile to native mapping opcodes.
+mappingSection
+  : MAPPING SECTION DOT mapperEntry*
+  ;
+
+mapperEntry
+  : MAPPER_ENTRY mappingName SOURCE_TYPE mappingName TARGET_TYPE mappingName DOT? mapRule*
+  ;
+
+mapRule
+  : MAP_RULE mappingPath TO mappingPath USING mapRuleBody DOT?
+  ;
+
+mappingName
+  : IDENTIFIER
+  | STRING_LITERAL
+  ;
+
+mappingPath
+  : DOTTED_PATH
+  | IDENTIFIER
+  | STRING_LITERAL
+  ;
+
+mapRuleBody
+  : STRING_LITERAL
+  | BEGIN_KW mapRuleExpr END
+  ;
+
+mapRuleExpr
+  : (IDENTIFIER | DOTTED_PATH | OUTPUT | INPUT | LPAREN | RPAREN | EQ | COMMA | STRING_LITERAL | NUMBER)+
   ;
 
 linkageSection
@@ -164,6 +206,10 @@ screenClause
   ;
 
 pictureClause
+  : pictureTerm+
+  ;
+
+pictureTerm
   : pictureAtom (LPAREN cobolNumber RPAREN)?
   ;
 
@@ -248,6 +294,7 @@ statement
   | gobackStatement
   | stopRunStatement
   | interopStatement
+  | sendServiceStatement
   | copyStatement
   | execStatement
   | continueStatement
@@ -289,6 +336,10 @@ performClause
 
 callStatement
   : CALL callTarget callUsingClause? callGivingClause? callOnExceptionClause? END_CALL?
+  ;
+
+sendServiceStatement
+  : SEND SERVICE callTarget USING callParameter
   ;
 
 callTarget
@@ -412,23 +463,27 @@ deleteStatement
   ;
 
 computeStatement
-  : COMPUTE IDENTIFIER ASSIGN expression
+  : COMPUTE IDENTIFIER ROUNDED? (ASSIGN | EQ) expression sizeErrorClause? END_COMPUTE?
+  ;
+
+sizeErrorClause
+  : ON? SIZE ERROR sentence*
   ;
 
 addStatement
-  : ADD expression TO identifierList
+  : ADD expression TO identifierList ROUNDED? sizeErrorClause?
   ;
 
 subtractStatement
-  : SUBTRACT expression FROM identifierList
+  : SUBTRACT expression FROM identifierList ROUNDED? sizeErrorClause?
   ;
 
 multiplyStatement
-  : MULTIPLY expression BY identifierList
+  : MULTIPLY expression BY identifierList ROUNDED? sizeErrorClause?
   ;
 
 divideStatement
-  : DIVIDE expression BY identifierList
+  : DIVIDE expression BY identifierList ROUNDED? sizeErrorClause?
   ;
 
 stringStatement
@@ -546,12 +601,14 @@ stringLiteral
 
 numericLiteral
   : NUMBER
+  | LEVEL_NUMBER
+  | LEVEL_77
   | signedNumber
   ;
 
 signedNumber
-  : PLUS? NUMBER
-  | MINUS NUMBER
+  : PLUS? (NUMBER | LEVEL_NUMBER | LEVEL_77)
+  | MINUS (NUMBER | LEVEL_NUMBER | LEVEL_77)
   ;
 
 booleanLiteral
@@ -560,9 +617,22 @@ booleanLiteral
   ;
 
 cobolishMetaClause
-  : INTEROP interopKind stringLiteral (AS IDENTIFIER)?
-  | LIBRARY stringLiteral FROM librarySource
-  | USE stringLiteral (AS IDENTIFIER)?
+  : INTEROP interopKind stringLiteral (AS IDENTIFIER)? DOT?
+  | ROLE roleName DOT?
+  | LIBRARY stringLiteral FROM librarySource DOT?
+  | USE stringLiteral (AS IDENTIFIER)? DOT?
+  | IMPORT mapperImportDecl DOT?
+  | ROUTE mappingPath TO mappingPath USING MAPPER mappingName DOT?
+  ;
+
+roleName
+  : CODE_LIBRARIAN
+  | IDENTIFIER
+  ;
+
+mapperImportDecl
+  : MAPPER stringLiteral FROM librarySource
+  | MAPPER IDENTIFIER FROM librarySource
   ;
 
 // Pulse extensions preserve COBOL-85 divisions while declaring a deployable
@@ -593,6 +663,7 @@ endProgramClause
 
 librarySource
   : LIBRARIAN
+  | MAPPER
   | IDENTIFIER
   | stringLiteral
   ;
@@ -600,10 +671,14 @@ librarySource
 END_PROGRAM: 'END PROGRAM';
 END_CALL: 'END-CALL';
 END_IF: 'END-IF';
+END_COMPUTE: 'END-COMPUTE';
 END_EVALUATE: 'END-EVALUATE';
 END_PERFORM: 'END-PERFORM';
 END_EXEC: 'END-EXEC';
 END: 'END';
+ROUNDED: 'ROUNDED';
+SIZE: 'SIZE';
+ERROR: 'ERROR';
 AT: 'AT';
 BY: 'BY';
 DELIMITED: 'DELIMITED';
@@ -635,6 +710,7 @@ OBJECT_COMPUTER: 'OBJECT-COMPUTER';
 LIBRARIAN: 'LIBRARIAN';
 PULSE: 'PULSE';
 SERVICE: 'SERVICE';
+SEND: 'SEND';
 DAEMON: 'DAEMON';
 PROGRAM: 'PROGRAM';
 EVERY: 'EVERY';
@@ -735,14 +811,25 @@ INTEROP: 'INTEROP';
 WFL: 'WFL';
 PASCALISH: 'PASCALISH';
 COBOLISH: 'COBOLISH';
+ROLE: 'ROLE';
+CODE_LIBRARIAN: 'CODE_LIBRARIAN';
 LIBRARY: 'LIBRARY';
 USE: 'USE';
+IMPORT: 'IMPORT';
+MAPPER: 'MAPPER';
+MAPPER_ENTRY: 'MAPPER-ENTRY';
+MAP_RULE: 'MAP-RULE';
+MAPPING: 'MAPPING';
+SOURCE_TYPE: 'SOURCE-TYPE';
+TARGET_TYPE: 'TARGET-TYPE';
+ROUTE: 'ROUTE';
+USING: 'USING';
+BEGIN_KW: 'BEGIN';
 AS: 'AS';
 REPLACING: 'REPLACING';
 COPY: 'COPY';
 EXEC: 'EXEC';
 CONTINUE: 'CONTINUE';
-USING: 'USING';
 REFERENCE: 'REFERENCE';
 CONTENT: 'CONTENT';
 RETURNING: 'RETURNING';
@@ -796,7 +883,7 @@ NUMBER: [0-9]+ ('.' [0-9]+)?;
 STRING_LITERAL: '"' ( ~['"\\\r\n] | '\\' . )* '"'
   | '\'' ( ~['"\\\r\n] | '\\' . )* '\''
   ;
+DOTTED_PATH: [A-Z][A-Z0-9_-]* ('.' [A-Z0-9@#_-]+)+;
 IDENTIFIER: [A-Z][A-Z0-9_-]*;
 WS: [ \t\r\n]+ -> skip;
 COMMENT: '*>'.*? '\n' -> skip;
-LINE_COMMENT: '*' ~[\r\n]* -> skip;

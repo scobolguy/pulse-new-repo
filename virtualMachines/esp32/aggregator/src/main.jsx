@@ -6,6 +6,7 @@ import DataMapper from './DataMapper.jsx'
 import FlowDesignerPage from './FlowDesignerPage.jsx'
 import NetworkDevicesPage from './NetworkDevicesPage.jsx'
 import ProjectTreePage from './ProjectTreePage.jsx'
+import DeploymentPage from './DeploymentPage.jsx'
 import ProvisioningAgentPage from './ProvisioningAgentPage.jsx'
 import PascalishEditorPage from './PascalishEditorPage.jsx'
 import LanguageCompilerPage from './LanguageCompilerPage.jsx'
@@ -13,6 +14,7 @@ import LanguageCompilerPage from './LanguageCompilerPage.jsx'
 const TOOL_ROUTES = [
   { path: '/query', label: 'Query', shortLabel: 'Q', description: 'Ask BOB, submit files, and inspect operational results.' },
   { path: '/projects', label: 'Projects', shortLabel: 'P', description: 'Browse project and subproject build trees and inspect flows per node.' },
+  { path: '/deployments', label: 'Deployments', shortLabel: 'D', description: 'Package projects, target nodes, and generate startup manifests.' },
   { path: '/data-mapper', label: 'Data Mapper', shortLabel: 'M', description: 'Define and test transformations between message formats.' },
   { path: '/flow-designer', label: 'Flow Designer', shortLabel: 'F', description: 'Compose typed processing flows and bind deployment targets.' },
   { path: '/pascalish', label: 'Pascalish', shortLabel: 'Ps', description: 'Author and compile Pascalish programs with Monaco editor, Librarian type autocomplete, and F7 run shortcuts.' },
@@ -139,6 +141,8 @@ function AppShell() {
     currentPage = <NetworkDevicesPage />
   } else if (currentPath === '/projects') {
     currentPage = <ProjectTreePage />
+  } else if (currentPath === '/deployments') {
+    currentPage = <DeploymentPage />
   } else if (currentPath === '/data-mapper') {
     currentPage = <DataMapper />
   } else if (currentPath === '/flow-designer') {

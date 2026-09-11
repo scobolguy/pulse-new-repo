@@ -1,6 +1,7 @@
 {
   "version": 1,
-  "compiledAt": "2026-07-13T20:35:08.415Z",
+  "compiledAt": "2026-09-07T20:37:11.070Z",
+  "compilerPipeline": "pascalish-g4",
   "serviceId": "mt103-to-pacs-service",
   "runtimeUnit": {
     "kind": "service",
@@ -8,202 +9,96 @@
     "refreshMs": null
   },
   "ast": {
-    "type": "Program",
-    "serviceId": "mt103-to-pacs-service",
+    "type": "CompilationUnit",
     "runtimeUnit": {
-      "kind": "service",
-      "id": "mt103-to-pacs-service",
-      "refreshMs": null
-    },
-    "services": [
-      {
-        "type": "ServiceDecl",
-        "id": "mt103-to-pacs-service",
-        "runtimeUnit": {
-          "kind": "service",
-          "id": "mt103-to-pacs-service",
-          "refreshMs": null
-        },
-        "handlers": [
-          {
-            "selectorRaw": "httpVerb.post",
-            "returnExprRaw": "src"
-          },
-          {
-            "selectorRaw": "httpVerb.get",
-            "returnExprRaw": "\"mt103-to-pacs-service\""
-          }
-        ],
-        "syntheticRouter": {
-          "type": "RouterDecl",
-          "id": "mt103-to-pacs-service-http",
-          "inputQueue": "mt103-to-pacs-service.in",
-          "description": "HTTP service mt103-to-pacs-service",
-          "enabled": true,
-          "serviceId": "mt103-to-pacs-service",
-          "methods": [
-            "POST",
-            "GET"
-          ],
-          "outputs": [
-            {
-              "type": "OutputDecl",
-              "queueName": "mt103-to-pacs-service.out",
-              "httpVerb": "POST",
-              "whenRule": "IF upper(httpVerb) = 'POST' THEN output := 1 ELSE output := 0;",
-              "transformRule": "output := src;"
-            },
-            {
-              "type": "OutputDecl",
-              "queueName": "mt103-to-pacs-service.out",
-              "httpVerb": "GET",
-              "whenRule": "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;",
-              "transformRule": "output := \"mt103-to-pacs-service\";"
-            }
-          ]
-        }
-      }
-    ],
-    "roles": [],
-    "variables": [],
-    "routers": [
-      {
+      "type": "ServiceDecl",
+      "name": "mt103-to-pacs-service",
+      "endpoints": [],
+      "localMappers": [],
+      "localTypes": [],
+      "localLibraries": [],
+      "localVariables": [],
+      "gatewayRouters": [],
+      "block": {
+        "type": "Block",
+        "statements": [],
+        "localDecls": []
+      },
+      "syntheticRouter": {
         "type": "RouterDecl",
         "id": "mt103-to-pacs-service-http",
         "inputQueue": "mt103-to-pacs-service.in",
-        "description": "HTTP service mt103-to-pacs-service",
-        "enabled": true,
-        "serviceId": "mt103-to-pacs-service",
-        "methods": [
-          "POST",
-          "GET"
-        ],
         "outputs": [
           {
-            "type": "OutputDecl",
             "queueName": "mt103-to-pacs-service.out",
-            "httpVerb": "POST",
             "whenRule": "IF upper(httpVerb) = 'POST' THEN output := 1 ELSE output := 0;",
             "transformRule": "output := src;"
           },
           {
-            "type": "OutputDecl",
             "queueName": "mt103-to-pacs-service.out",
-            "httpVerb": "GET",
             "whenRule": "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;",
-            "transformRule": "output := \"mt103-to-pacs-service\";"
-          }
-        ]
-      },
-      {
-        "type": "RouterDecl",
-        "id": "mt103-to-pacs-router",
-        "inputQueue": "swift.mt103.parsed",
-        "description": "Transform MT103 payload to PACS payload",
-        "enabled": true,
-        "serviceId": null,
-        "methods": null,
-        "outputs": [
-          {
-            "type": "OutputDecl",
-            "queueName": "tx.pacs.created",
-            "dataType": {
-              "type": "TypeRef",
-              "id": "pacs",
-              "genericArgs": []
-            },
-            "dataTypes": [
-              {
-                "type": "TypeRef",
-                "id": "pacs",
-                "genericArgs": []
-              }
-            ],
-            "dataTypeId": "pacs",
-            "dataTypeIds": [
-              "pacs"
-            ],
-            "whenRule": "IF startswith(upper(src), \\\"MT103\\\") THEN output := 1 ELSE output := 0;",
-            "transformRule": "output := map(\\\"mt103-to-pacs\\\", src);"
+            "transformRule": "output := 'mt103-to-pacs-service';"
           }
         ]
       }
-    ],
+    },
+    "variables": [],
+    "types": [],
+    "classes": [],
+    "procedures": [],
     "mappers": [
       {
         "type": "MapperDecl",
         "id": "mt103-to-pacs",
-        "sourceType": {
-          "type": "TypeRef",
-          "id": "swift-mt103",
-          "genericArgs": []
-        },
-        "targetType": {
-          "type": "TypeRef",
-          "id": "pacs",
-          "genericArgs": []
-        },
         "sourceTypeId": "swift-mt103",
         "targetTypeId": "pacs",
-        "description": "MT103 to PACS.008 mapping",
-        "enabled": true,
         "maps": [
           {
-            "type": "MapDecl",
             "sourcePath": "block4.20",
             "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
             "conversionRule": "output := trim(src);"
           },
           {
-            "type": "MapDecl",
             "sourcePath": "block4.20",
             "targetPath": "Document.hdr:AppHdr.hdr:BizMsgIdr",
             "conversionRule": "output := trim(src);"
           },
           {
-            "type": "MapDecl",
             "sourcePath": "block4.20",
             "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId",
             "conversionRule": "output := trim(src);"
           },
           {
-            "type": "MapDecl",
             "sourcePath": "block4.32A.date",
             "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt",
             "conversionRule": "output := yymmddtoiso(src);"
           },
           {
-            "type": "MapDecl",
             "sourcePath": "block4.32A.currency",
             "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
             "conversionRule": "output := upper(src);"
           },
           {
-            "type": "MapDecl",
             "sourcePath": "block4.32A.amount",
             "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
             "conversionRule": "output := mtamounttodecimal(src);"
           },
           {
-            "type": "MapDecl",
             "sourcePath": "block4.50K",
             "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm",
             "conversionRule": "output := mtpartyname(src);"
           },
           {
-            "type": "MapDecl",
             "sourcePath": "block4.59",
             "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm",
             "conversionRule": "output := mtpartyname(src);"
           },
           {
-            "type": "MapDecl",
             "sourcePath": "block4.70",
             "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.RmtInf.Ustrd",
             "conversionRule": "output := trim(src);"
           },
           {
-            "type": "MapDecl",
             "sourcePath": "block4.71A",
             "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgBr",
             "conversionRule": "output := mtchargebearertoiso(src);"
@@ -211,13 +106,37 @@
         ]
       }
     ],
-    "codeLibraries": [],
-    "uses": [],
-    "interop": [],
-    "statements": [],
-    "programId": null,
-    "daemonId": null,
-    "daemonRefreshMs": null
+    "routers": [
+      {
+        "type": "RouterDecl",
+        "id": "mt103-to-pacs-service-http",
+        "inputQueue": "mt103-to-pacs-service.in",
+        "outputs": [
+          {
+            "queueName": "mt103-to-pacs-service.out",
+            "whenRule": "IF upper(httpVerb) = 'POST' THEN output := 1 ELSE output := 0;",
+            "transformRule": "output := src;"
+          },
+          {
+            "queueName": "mt103-to-pacs-service.out",
+            "whenRule": "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;",
+            "transformRule": "output := 'mt103-to-pacs-service';"
+          }
+        ]
+      },
+      {
+        "type": "RouterDecl",
+        "id": "mt103-to-pacs-router",
+        "inputQueue": "swift.mt103.parsed",
+        "outputs": [
+          {
+            "queueName": "tx.pacs.created",
+            "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
+            "transformRule": "output := map(\"mt103-to-pacs\", src);"
+          }
+        ]
+      }
+    ]
   },
   "roles": [],
   "codeLibraries": [],
@@ -231,11 +150,7 @@
       "serviceId": "mt103-to-pacs-service",
       "enabled": true,
       "inputQueue": "mt103-to-pacs-service.in",
-      "methods": [
-        "POST",
-        "GET"
-      ],
-      "description": "HTTP service mt103-to-pacs-service",
+      "description": "",
       "outputs": [
         {
           "queueName": "mt103-to-pacs-service.out",
@@ -245,11 +160,11 @@
         {
           "queueName": "mt103-to-pacs-service.out",
           "whenRule": "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;",
-          "transformRule": "output := \"mt103-to-pacs-service\";"
+          "transformRule": "output := 'mt103-to-pacs-service';"
         }
       ],
-      "createdAt": "2026-07-13T20:35:08.415Z",
-      "updatedAt": "2026-07-13T20:35:08.415Z"
+      "createdAt": "2026-09-07T20:37:11.070Z",
+      "updatedAt": "2026-09-07T20:37:11.070Z"
     },
     {
       "id": "mt103-to-pacs-router",
@@ -257,58 +172,28 @@
       "serviceId": "mt103-to-pacs-service",
       "enabled": true,
       "inputQueue": "swift.mt103.parsed",
-      "description": "Transform MT103 payload to PACS payload",
+      "description": "",
       "outputs": [
         {
           "queueName": "tx.pacs.created",
-          "dataTypeIds": [
-            "pacs"
-          ],
-          "dataTypeId": "pacs",
-          "dataTypeRef": {
-            "type": "TypeRef",
-            "id": "pacs",
-            "genericArgs": []
-          },
-          "dataTypeSignature": "pacs",
-          "dataTypeRefs": [
-            {
-              "type": "TypeRef",
-              "id": "pacs",
-              "genericArgs": []
-            }
-          ],
-          "dataTypeSignatures": [
-            "pacs"
-          ],
-          "whenRule": "IF startswith(upper(src), \\\"MT103\\\") THEN output := 1 ELSE output := 0;",
-          "transformRule": "output := map(\\\"mt103-to-pacs\\\", src);"
+          "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
+          "transformRule": "output := map(\"mt103-to-pacs\", src);"
         }
       ],
-      "createdAt": "2026-07-13T20:35:08.415Z",
-      "updatedAt": "2026-07-13T20:35:08.415Z"
+      "createdAt": "2026-09-07T20:37:11.070Z",
+      "updatedAt": "2026-09-07T20:37:11.070Z"
     }
   ],
   "dataMappings": [
     {
       "id": "mt103-to-pacs",
       "name": "mt103-to-pacs",
+      "scope": "global",
+      "ownerServiceId": null,
       "sourceTypeId": "swift-mt103",
       "targetTypeId": "pacs",
-      "sourceTypeRef": {
-        "type": "TypeRef",
-        "id": "swift-mt103",
-        "genericArgs": []
-      },
-      "targetTypeRef": {
-        "type": "TypeRef",
-        "id": "pacs",
-        "genericArgs": []
-      },
-      "sourceTypeSignature": "swift-mt103",
-      "targetTypeSignature": "pacs",
       "enabled": true,
-      "description": "MT103 to PACS.008 mapping",
+      "description": "",
       "items": [
         {
           "sourcePath": "block4.20",
@@ -391,8 +276,232 @@
           "conversionRule": "output := mtchargebearertoiso(src);"
         }
       ],
-      "createdAt": "2026-07-13T20:35:08.415Z",
-      "updatedAt": "2026-07-13T20:35:08.415Z"
+      "createdAt": "2026-09-07T20:37:11.070Z",
+      "updatedAt": "2026-09-07T20:37:11.070Z"
     }
-  ]
+  ],
+  "mapperImports": [],
+  "localResources": {
+    "serviceId": "mt103-to-pacs-service",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "pcodeText": "# Auto-generated from ANTLR Pascalish grammar\nJMP MAIN\nMAIN:\nROUTE_MATCH_QUEUE \"mt103-to-pacs-service.in\"\nJZ ROUTER_SKIP_1\nROUTE_EVAL_WHEN \"IF upper(httpVerb) = 'POST' THEN output := 1 ELSE output := 0;\"\nJZ OUT_SKIP_2\nROUTE_TRANSFORM \"output := src;\"\nROUTE_EMIT \"mt103-to-pacs-service.out\"\nOUT_SKIP_2:\nROUTE_EVAL_WHEN \"IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;\"\nJZ OUT_SKIP_3\nROUTE_TRANSFORM \"output := 'mt103-to-pacs-service';\"\nROUTE_EMIT \"mt103-to-pacs-service.out\"\nOUT_SKIP_3:\nROUTER_SKIP_1:\nROUTE_MATCH_QUEUE \"swift.mt103.parsed\"\nJZ ROUTER_SKIP_4\nROUTE_EVAL_WHEN \"IF startswith(upper(src), \\\"MT103\\\") THEN output := 1 ELSE output := 0;\"\nJZ OUT_SKIP_5\nROUTE_MAP_RUN \"mt103-to-pacs\"\nROUTE_EMIT \"tx.pacs.created\"\nOUT_SKIP_5:\nROUTER_SKIP_4:\nHALT\nMAP_mt103_to_pacs:\nSRC_GET \"block4.20\"\nTRIM\nOUT_SET \"Document.FIToFICstmrCdtTrf.GrpHdr.MsgId\"\nSRC_GET \"block4.20\"\nTRIM\nOUT_SET \"Document.hdr:AppHdr.hdr:BizMsgIdr\"\nSRC_GET \"block4.20\"\nTRIM\nOUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId\"\nSRC_GET \"block4.32A.date\"\nYYMMDD_TO_ISO\nOUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt\"\nSRC_GET \"block4.32A.currency\"\nUPPER\nOUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy\"\nSRC_GET \"block4.32A.amount\"\nMT_AMOUNT_TO_DECIMAL\nOUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text\"\nSRC_GET \"block4.50K\"\nMT_PARTY_NAME\nOUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm\"\nSRC_GET \"block4.59\"\nMT_PARTY_NAME\nOUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm\"\nSRC_GET \"block4.70\"\nTRIM\nOUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.RmtInf.Ustrd\"\nSRC_GET \"block4.71A\"\nMT_CHARGE_TO_ISO\nOUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgBr\"\nRET\n",
+  "programMap": {
+    "version": 1,
+    "generatedAt": "2026-09-07T20:37:11.069Z",
+    "serviceId": "mt103-to-pacs-service",
+    "runtimeUnit": {
+      "kind": "service",
+      "id": "mt103-to-pacs-service",
+      "refreshMs": null
+    },
+    "executionModel": "pascalish-service",
+    "sourceLanguage": "pascalish",
+    "entries": [
+      {
+        "kind": "router",
+        "id": "mt103-to-pacs-service-http",
+        "name": "mt103-to-pacs-service-http",
+        "serviceId": "mt103-to-pacs-service",
+        "inputQueue": "mt103-to-pacs-service.in",
+        "description": "",
+        "enabled": true,
+        "outputs": [
+          {
+            "queueName": "mt103-to-pacs-service.out",
+            "httpVerb": null,
+            "dataTypeIds": [],
+            "dataTypeId": null,
+            "whenRule": "IF upper(httpVerb) = 'POST' THEN output := 1 ELSE output := 0;",
+            "transformRule": "output := src;"
+          },
+          {
+            "queueName": "mt103-to-pacs-service.out",
+            "httpVerb": null,
+            "dataTypeIds": [],
+            "dataTypeId": null,
+            "whenRule": "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;",
+            "transformRule": "output := 'mt103-to-pacs-service';"
+          }
+        ]
+      },
+      {
+        "kind": "router",
+        "id": "mt103-to-pacs-router",
+        "name": "mt103-to-pacs-router",
+        "serviceId": "mt103-to-pacs-service",
+        "inputQueue": "swift.mt103.parsed",
+        "description": "",
+        "enabled": true,
+        "outputs": [
+          {
+            "queueName": "tx.pacs.created",
+            "httpVerb": null,
+            "dataTypeIds": [],
+            "dataTypeId": null,
+            "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
+            "transformRule": "output := map(\"mt103-to-pacs\", src);"
+          }
+        ]
+      },
+      {
+        "kind": "mapper",
+        "id": "mt103-to-pacs",
+        "scope": "global",
+        "ownerServiceId": null,
+        "sourceTypeId": "swift-mt103",
+        "targetTypeId": "pacs",
+        "items": [
+          {
+            "sourcePath": "block4.20",
+            "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+            "conversionRule": "output := trim(src);",
+            "ops": [
+              "SRC",
+              "TRIM"
+            ]
+          },
+          {
+            "sourcePath": "block4.20",
+            "targetPath": "Document.hdr:AppHdr.hdr:BizMsgIdr",
+            "conversionRule": "output := trim(src);",
+            "ops": [
+              "SRC",
+              "TRIM"
+            ]
+          },
+          {
+            "sourcePath": "block4.20",
+            "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId",
+            "conversionRule": "output := trim(src);",
+            "ops": [
+              "SRC",
+              "TRIM"
+            ]
+          },
+          {
+            "sourcePath": "block4.32A.date",
+            "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt",
+            "conversionRule": "output := yymmddtoiso(src);",
+            "ops": [
+              "SRC",
+              "YYMMDD_TO_ISO"
+            ]
+          },
+          {
+            "sourcePath": "block4.32A.currency",
+            "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+            "conversionRule": "output := upper(src);",
+            "ops": [
+              "SRC",
+              "UPPER"
+            ]
+          },
+          {
+            "sourcePath": "block4.32A.amount",
+            "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+            "conversionRule": "output := mtamounttodecimal(src);",
+            "ops": [
+              "SRC",
+              "MT_AMOUNT_TO_DECIMAL"
+            ]
+          },
+          {
+            "sourcePath": "block4.50K",
+            "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm",
+            "conversionRule": "output := mtpartyname(src);",
+            "ops": [
+              "SRC",
+              "MT_PARTY_NAME"
+            ]
+          },
+          {
+            "sourcePath": "block4.59",
+            "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm",
+            "conversionRule": "output := mtpartyname(src);",
+            "ops": [
+              "SRC",
+              "MT_PARTY_NAME"
+            ]
+          },
+          {
+            "sourcePath": "block4.70",
+            "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.RmtInf.Ustrd",
+            "conversionRule": "output := trim(src);",
+            "ops": [
+              "SRC",
+              "TRIM"
+            ]
+          },
+          {
+            "sourcePath": "block4.71A",
+            "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgBr",
+            "conversionRule": "output := mtchargebearertoiso(src);",
+            "ops": [
+              "SRC",
+              "MT_CHARGE_TO_ISO"
+            ]
+          }
+        ]
+      }
+    ],
+    "localResources": {
+      "serviceId": "mt103-to-pacs-service",
+      "mappers": [],
+      "types": [],
+      "libraries": [],
+      "variables": [],
+      "publishable": false
+    },
+    "routers": [
+      {
+        "type": "RouterDecl",
+        "id": "mt103-to-pacs-service-http",
+        "inputQueue": "mt103-to-pacs-service.in",
+        "outputs": [
+          {
+            "queueName": "mt103-to-pacs-service.out",
+            "whenRule": "IF upper(httpVerb) = 'POST' THEN output := 1 ELSE output := 0;",
+            "transformRule": "output := src;"
+          },
+          {
+            "queueName": "mt103-to-pacs-service.out",
+            "whenRule": "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;",
+            "transformRule": "output := 'mt103-to-pacs-service';"
+          }
+        ]
+      },
+      {
+        "type": "RouterDecl",
+        "id": "mt103-to-pacs-router",
+        "inputQueue": "swift.mt103.parsed",
+        "outputs": [
+          {
+            "queueName": "tx.pacs.created",
+            "whenRule": "IF startswith(upper(src), \"MT103\") THEN output := 1 ELSE output := 0;",
+            "transformRule": "output := map(\"mt103-to-pacs\", src);"
+          }
+        ]
+      }
+    ],
+    "serviceEndpoints": [],
+    "globals": [],
+    "variableDeclarations": [],
+    "procedures": {},
+    "typeDeclarations": [],
+    "classDeclarations": [],
+    "entryLabel": "MAIN",
+    "mapperImports": []
+  },
+  "ir": {
+    "typeDeclarations": [],
+    "classDeclarations": [],
+    "methodProcedures": []
+  },
+  "typeDeclarations": [],
+  "classDeclarations": []
 }

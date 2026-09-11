@@ -24,7 +24,7 @@
 namespace {
 
 struct EdgeIngressConfig {
-    size_t workerCount = 2;
+    size_t workerCount = 1;
     size_t queueLength = 64;
     size_t resultLimit = 64;
     size_t workerStackBytes = 12288;
@@ -36,7 +36,31 @@ EdgeIngressConfig gEdgeIngressConfig;
 bool gEdgeIngressConfigLoaded = false;
 bool gLittleFsReady = false;
 
+#if defined(ESP32)
+struct AsyncPcodeJob {
+    uint32_t id = 0;
+    uint8_t state = 0; // 0=free, 1=queued, 2=running, 3=complete
+    String file;
+    String inputFile;
+    String inputQueue;
+    size_t maxBytes = 32768;
+    int statusCode = 0;
+    String body;
+};
+
+constexpr size_t ASYNC_PCODE_JOB_LIMIT = 1;
+AsyncPcodeJob gAsyncPcodeJobs[ASYNC_PCODE_JOB_LIMIT];
+SemaphoreHandle_t gAsyncPcodeJobsMutex = nullptr;
+TaskHandle_t gAsyncPcodeWorkerTask = nullptr;
+uint32_t gNextAsyncPcodeJobId = 1;
+
+String asyncPcodeResultPath(uint32_t jobId) {
+    return String("/pmachine-result-") + String(jobId) + ".json";
+}
+#endif
+
 bool deserializeDocFromPath(const String& path, FederatedFileSystem* ffs, JsonDocument& doc);
+bool deserializeProgramMapForExec(const String& path, FederatedFileSystem* ffs, JsonDocument& doc);
 
 bool ensureLittleFsReady() {
     if (gLittleFsReady) return true;
@@ -464,6 +488,28 @@ String applyConversionRule(const String& conversionRule, const String& srcValue)
     if (rule.indexOf("OUTPUT := SRC") >= 0) return srcValue;
 
     return srcValue;
+}
+
+// Execute one compiled mapping rule (a flat opcode list) against a source value.
+// Stack-based: SRC pushes the value, native string ops transform it, and the top
+// of stack at the end is the mapped result. No string interpretation at runtime.
+String execCompiledRule(const JsonArrayConst& ops, const String& srcValue) {
+    std::vector<String> st;
+    for (JsonVariantConst v : ops) {
+        String op = toUpperCopy(trimCopy(String(v | "")));
+        if (op.length() == 0) continue;
+        if (op == "SRC") { st.push_back(srcValue); continue; }
+        if (op == "TRIM") { String a = st.empty() ? String("") : st.back(); if (!st.empty()) st.pop_back(); st.push_back(trimCopy(a)); continue; }
+        if (op == "UPPER") { String a = st.empty() ? String("") : st.back(); if (!st.empty()) st.pop_back(); st.push_back(toUpperCopy(a)); continue; }
+        if (op == "YYMMDD_TO_ISO") { String a = st.empty() ? String("") : st.back(); if (!st.empty()) st.pop_back(); st.push_back(yymmddToIsoDate(a)); continue; }
+        if (op == "MT_AMOUNT_TO_DECIMAL") { String a = st.empty() ? String("") : st.back(); if (!st.empty()) st.pop_back(); st.push_back(normalizeMtAmount(a)); continue; }
+        if (op == "MT_PARTY_NAME") { String a = st.empty() ? String("") : st.back(); if (!st.empty()) st.pop_back(); st.push_back(mtPartyName(a)); continue; }
+        if (op == "MT_CHARGE_TO_ISO") { String a = st.empty() ? String("") : st.back(); if (!st.empty()) st.pop_back(); st.push_back(normalizeChargeBearer(a)); continue; }
+        if (op.startsWith("PUSH_STR ")) { st.push_back(unquote(String(v | "").substring(9))); continue; }
+        if (op.startsWith("PUSH_INT ")) { st.push_back(String(v | "").substring(9)); continue; }
+        // DUP / OUTPUT / RET are structural no-ops here.
+    }
+    return st.empty() ? srcValue : st.back();
 }
 
 struct ProgramMapMetadata {
@@ -901,6 +947,7 @@ void parseProgramMapMetadata(const JsonDocument& doc, ProgramMapMetadata& metada
     if (doc["roles"].is<JsonArrayConst>()) raw["roles"] = doc["roles"];
     if (doc["codeLibraries"].is<JsonArrayConst>()) raw["codeLibraries"] = doc["codeLibraries"];
     if (doc["uses"].is<JsonArrayConst>()) raw["uses"] = doc["uses"];
+    if (doc["entries"].is<JsonArrayConst>()) raw["entries"] = doc["entries"];
     if (doc["interoperability"].is<JsonArrayConst>()) raw["interoperability"] = doc["interoperability"];
     if (doc["enums"].is<JsonObjectConst>()) raw["enums"] = doc["enums"];
 }
@@ -938,11 +985,11 @@ String normalizeIngressMessage(const String& message) {
 
 String detectIngressMessageType(const String& normalizedMessage) {
     String upper = toUpperCopy(normalizedMessage);
-    if (upper.startsWith("MT103") || upper.indexOf("\n:20:") >= 0 || upper.indexOf(":23B:") >= 0) {
-        return "MT103";
-    }
     if (upper.startsWith("MT202") || upper.indexOf(":21:") >= 0) {
         return "MT202";
+    }
+    if (upper.startsWith("MT103") || upper.indexOf("\n:20:") >= 0 || upper.indexOf(":23B:") >= 0) {
+        return "MT103";
     }
     if (upper.indexOf("<DOCUMENT") >= 0 && upper.indexOf("PACS") >= 0) {
         if (upper.indexOf("PACS.008") >= 0 || upper.indexOf("PACS008") >= 0) return "PACS008";
@@ -1338,6 +1385,50 @@ bool deserializeDocFromPath(const String& path, FederatedFileSystem* ffs, JsonDo
     return !err;
 }
 
+// Filtered program-map parse for execution paths. Conversion rules now compile
+// to `ops` at build time, so the redundant `conversionRule` text is the largest
+// per-item string and is dropped here to keep big mappers inside the device heap
+// ceiling. Everything the runtime actually reads is kept.
+bool deserializeProgramMapForExec(const String& path, FederatedFileSystem* ffs, JsonDocument& doc) {
+    JsonDocument filter;
+    filter["signing"] = true;
+    filter["version"] = true;
+    filter["serviceId"] = true;
+    filter["runtimeUnit"] = true;
+    filter["enums"] = true;
+    filter["globals"] = true;
+    filter["procedures"] = true;
+    filter["variableDeclarations"] = true;
+    filter["roles"] = true;
+    filter["codeLibraries"] = true;
+    filter["uses"] = true;
+    filter["interoperability"] = true;
+    filter["entries"][0]["kind"] = true;
+    filter["entries"][0]["id"] = true;
+    filter["entries"][0]["sourceTypeId"] = true;
+    filter["entries"][0]["targetTypeId"] = true;
+    filter["entries"][0]["items"][0]["sourcePath"] = true;
+    filter["entries"][0]["items"][0]["targetPath"] = true;
+    filter["entries"][0]["items"][0]["ops"] = true;
+    // conversionRule intentionally excluded: ops are the executable form.
+
+    if (ffs != nullptr) {
+        std::vector<uint8_t> bytes;
+        if (ffs->read(path, bytes) == FFSStatus::OK && !bytes.empty()) {
+            DeserializationError ffsErr = deserializeJson(doc, bytes.data(), bytes.size(), DeserializationOption::Filter(filter));
+            if (!ffsErr) return true;
+            doc.clear();
+        }
+    }
+
+    if (!ensureLittleFsReady()) return false;
+    File f = LittleFS.open(path, "r");
+    if (!f) return false;
+    DeserializationError err = deserializeJson(doc, f, DeserializationOption::Filter(filter));
+    f.close();
+    return !err;
+}
+
 bool readTextFromPath(const String& path, FederatedFileSystem* ffs, String& outText) {
     if (ffs != nullptr) {
         std::vector<uint8_t> bytes;
@@ -1411,9 +1502,13 @@ bool runMappingById(const String& mappingId, const String& sourcePayload, JsonAr
     for (JsonObjectConst item : items) {
         String sourcePath = item["sourcePath"] | "";
         String targetPath = item["targetPath"] | "";
-        String conversionRule = item["conversionRule"] | "";
         String srcValue = getJsonPathValueAsString(sourceDoc.as<JsonVariantConst>(), sourcePath);
-        String outValue = applyConversionRule(conversionRule, srcValue);
+        // Prefer compiled opcodes; fall back to the legacy string rule only when
+        // no ops were compiled for this item.
+        JsonArrayConst ops = item["ops"].as<JsonArrayConst>();
+        String outValue = (!ops.isNull() && ops.size() > 0)
+            ? execCompiledRule(ops, srcValue)
+            : applyConversionRule(String(item["conversionRule"] | ""), srcValue);
         setJsonPathValue(targetDoc, targetPath, outValue);
     }
 
@@ -1492,6 +1587,20 @@ String applyTransformRule(const String& transformRule, const String& srcMessage,
 
     String upperRule = toUpperCopy(rule);
     int assignIdx = upperRule.indexOf("OUTPUT :=");
+
+    // Compiled ROUTE_MAP_RUN passes a bare mapper id (no "OUTPUT :=", no call
+    // syntax). Dispatch straight into the compiled mapper.
+    if (assignIdx < 0 && rule.indexOf('(') < 0 && rule.indexOf(' ') < 0) {
+        String mapped;
+        String mapErr;
+        if (runMappingById(unquote(rule), srcMessage, mappings, mapped, mapErr)) {
+            transformApplied = true;
+            return mapped;
+        }
+        transformError = mapErr;
+        return srcMessage;
+    }
+
     if (assignIdx < 0) {
         transformApplied = true;
         return srcMessage;
@@ -1711,6 +1820,12 @@ bool loadProgramMapMappingsFromDoc(
             mi.sourcePath = String(item["sourcePath"] | "").c_str();
             mi.targetPath = String(item["targetPath"] | "").c_str();
             mi.conversionRule = String(item["conversionRule"] | "").c_str();
+            JsonArrayConst ops = item["ops"].as<JsonArrayConst>();
+            if (!ops.isNull()) {
+                for (JsonVariantConst op : ops) {
+                    mi.ops.push_back(String(op | "").c_str());
+                }
+            }
             def.items.push_back(mi);
         }
 
@@ -2728,43 +2843,50 @@ PMachineFileExecutionResult executePMachineFile(
             return result;
         }
 
-        JsonDocument programMapDoc;
-        if (!deserializeDocFromPath(programMap, ffs, programMapDoc)) {
-            result.statusCode = 404;
-            result.body = "Unable to load program map file";
-            return result;
-        }
-
-        String verifyError;
-        if (!verifySignedPcode(text, programMapDoc, verifyError)) {
-            result.statusCode = 403;
-            result.body = verifyError;
-            return result;
-        }
-
-        std::vector<pmachine::MappingDef> mappingDefs;
-        std::map<std::string, std::vector<std::string>> procedureSignatures;
-        ProgramMapMetadata metadata;
-        String mappingError;
-        if (!loadProgramMapMappingsFromDoc(
-                programMapDoc,
-                mappingDefs,
-                &procedureSignatures,
-                mappingError,
-                &metadata
-            )) {
-            result.statusCode = 404;
-            result.body = mappingError;
-            return result;
-        }
-
         instructions = pmachine::loadTextPCode(std::string(text.c_str()));
         std::vector<uint8_t> binary = assembleInstructionsToBinary(instructions);
         PMachineExecutionPolicy policy;
-        applyRuntimeAndResidencyPolicy(machine, &policy, &metadata);
+        std::vector<pmachine::MappingDef> mappingDefs;
+        std::map<std::string, std::vector<std::string>> procedureSignatures;
+        ProgramMapMetadata metadata;
+        if (programMap.length() > 0) {
+            JsonDocument programMapDoc;
+            if (!deserializeDocFromPath(programMap, ffs, programMapDoc)) {
+                result.statusCode = 404;
+                result.body = "Unable to load program map file";
+                return result;
+            }
+
+            String verifyError;
+            if (!verifySignedPcode(text, programMapDoc, verifyError)) {
+                result.statusCode = 403;
+                result.body = verifyError;
+                return result;
+            }
+
+            String mappingError;
+            if (!loadProgramMapMappingsFromDoc(
+                    programMapDoc,
+                    mappingDefs,
+                    &procedureSignatures,
+                    mappingError,
+                    &metadata
+                )) {
+                result.statusCode = 404;
+                result.body = mappingError;
+                return result;
+            }
+            applyRuntimeAndResidencyPolicy(machine, &policy, &metadata);
+        } else {
+            applyRuntimeAndResidencyPolicy(machine, &policy, nullptr);
+        }
         machine.clearMappings();
-        machine.setProcedureSignatures(procedureSignatures);
-        thunkBindingsApplied = applyLibraryReferencesFromMetadata(machine, metadata);
+        if (programMap.length() > 0) {
+            machine.setProcedureSignatures(procedureSignatures);
+            thunkBindingsApplied = applyLibraryReferencesFromMetadata(machine, metadata);
+        } else {
+            machine.clearProcedureSignatures();
+        }
         binaryBytes = binary.size();
         const size_t programLimit = maxBytes > 0 ? maxBytes : binaryBytes;
         machine.loadProgram(std::move(binary), std::string(file.c_str()), programLimit);
@@ -2786,7 +2908,197 @@ PMachineFileExecutionResult executePMachineFile(
     return result;
 }
 
+#if defined(ESP32)
+void asyncPcodeWorkerTask(void* rawContext) {
+    auto* context = static_cast<std::pair<pmachine::PMachine*, FederatedFileSystem*>*>(rawContext);
+    pmachine::PMachine* machine = context->first;
+    FederatedFileSystem* ffs = context->second;
+
+    for (;;) {
+        size_t jobIndex = ASYNC_PCODE_JOB_LIMIT;
+        if (gAsyncPcodeJobsMutex != nullptr &&
+            xSemaphoreTake(gAsyncPcodeJobsMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            for (size_t i = 0; i < ASYNC_PCODE_JOB_LIMIT; ++i) {
+                if (gAsyncPcodeJobs[i].state == 1) {
+                    gAsyncPcodeJobs[i].state = 2;
+                    jobIndex = i;
+                    break;
+                }
+            }
+            xSemaphoreGive(gAsyncPcodeJobsMutex);
+        }
+
+        if (jobIndex == ASYNC_PCODE_JOB_LIMIT) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
+        String file;
+        String inputFile;
+        String inputQueue;
+        size_t maxBytes = 32768;
+        const uint32_t jobId = gAsyncPcodeJobs[jobIndex].id;
+        if (gAsyncPcodeJobsMutex != nullptr &&
+            xSemaphoreTake(gAsyncPcodeJobsMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            file = gAsyncPcodeJobs[jobIndex].file;
+            inputFile = gAsyncPcodeJobs[jobIndex].inputFile;
+            inputQueue = gAsyncPcodeJobs[jobIndex].inputQueue;
+            maxBytes = gAsyncPcodeJobs[jobIndex].maxBytes;
+            xSemaphoreGive(gAsyncPcodeJobsMutex);
+        }
+
+        String message;
+        PMachineFileExecutionResult result;
+        if (!readTextFromPath(inputFile, ffs, message)) {
+            result.statusCode = 404;
+            result.body = "Input file not found or read error";
+        } else {
+            result = executePMachineFile(*machine, ffs, file, "", inputQueue, message, maxBytes);
+        }
+
+        // Let the async TCP task and filesystem finish pending work before the
+        // job slot is published as reusable.
+        vTaskDelay(pdMS_TO_TICKS(1));
+
+        if (gAsyncPcodeJobsMutex != nullptr &&
+            xSemaphoreTake(gAsyncPcodeJobsMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+            gAsyncPcodeJobs[jobIndex].statusCode = result.statusCode;
+            gAsyncPcodeJobs[jobIndex].body = result.body;
+            gAsyncPcodeJobs[jobIndex].state = 3;
+            xSemaphoreGive(gAsyncPcodeJobsMutex);
+        }
+        // Keep async results in the in-memory job slot. Persisting a result,
+        // debug snapshot, pretty JSON copy, and XML copy for every request
+        // grows the LittleFS root directory without bound and can corrupt the
+        // filesystem under sustained load.
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}
+
+void startAsyncPcodeWorker(pmachine::PMachine& machine, FederatedFileSystem* ffs) {
+    if (gAsyncPcodeWorkerTask != nullptr) return;
+    if (gAsyncPcodeJobsMutex == nullptr) {
+        gAsyncPcodeJobsMutex = xSemaphoreCreateMutex();
+    }
+    if (gAsyncPcodeJobsMutex == nullptr) return;
+
+    static std::pair<pmachine::PMachine*, FederatedFileSystem*> context;
+    context = { &machine, ffs };
+    xTaskCreatePinnedToCore(
+        asyncPcodeWorkerTask,
+        "pmachineAsync",
+        12288,
+        &context,
+        1,
+        &gAsyncPcodeWorkerTask,
+        1
+    );
+}
+#endif
+
 void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine, FederatedFileSystem* ffs) {
+#if defined(ESP32)
+    startAsyncPcodeWorker(machine, ffs);
+
+    server.on("/pmachine/execute_file_async", HTTP_POST, [&machine, ffs](AsyncWebServerRequest *request){
+        String file;
+        String inputFile;
+        String inputQueue;
+        String maxParam = "32768";
+        if (!getRequestParam(request, "file", file) ||
+            !getRequestParam(request, "inputFile", inputFile)) {
+            request->send(400, "text/plain", "Missing file or inputFile param");
+            return;
+        }
+        getRequestParam(request, "inputQueue", inputQueue);
+        getRequestParam(request, "max", maxParam);
+
+        if (gAsyncPcodeJobsMutex == nullptr ||
+            xSemaphoreTake(gAsyncPcodeJobsMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+            request->send(503, "text/plain", "Async pcode worker unavailable");
+            return;
+        }
+
+        AsyncPcodeJob* selected = nullptr;
+        for (size_t i = 0; i < ASYNC_PCODE_JOB_LIMIT; ++i) {
+            if (gAsyncPcodeJobs[i].state == 0 || gAsyncPcodeJobs[i].state == 3) {
+                selected = &gAsyncPcodeJobs[i];
+                break;
+            }
+        }
+        if (selected == nullptr) {
+            xSemaphoreGive(gAsyncPcodeJobsMutex);
+            request->send(429, "text/plain", "Async pcode queue full");
+            return;
+        }
+
+        selected->id = gNextAsyncPcodeJobId++;
+        selected->state = 1;
+        selected->file = file;
+        selected->inputFile = inputFile;
+        selected->inputQueue = inputQueue;
+        selected->maxBytes = static_cast<size_t>(maxParam.toInt());
+        selected->statusCode = 0;
+        selected->body = "";
+        const uint32_t jobId = selected->id;
+        xSemaphoreGive(gAsyncPcodeJobsMutex);
+
+        String response = String("{\"jobId\":") + String(jobId) +
+            ",\"state\":\"queued\""+
+            ",\"jsonFile\":\"/pmachine-output-" + String(jobId) + ".json\""+
+            ",\"xmlFile\":\"/pmachine-output-" + String(jobId) + ".xml\"}";
+        request->send(202, "application/json", response);
+    });
+
+    server.on("/pmachine/execute_file_async_status", HTTP_GET, [ffs](AsyncWebServerRequest *request){
+        String idParam;
+        if (!getRequestParam(request, "jobId", idParam)) {
+            request->send(400, "text/plain", "Missing jobId param");
+            return;
+        }
+        const uint32_t jobId = static_cast<uint32_t>(idParam.toInt());
+        if (gAsyncPcodeJobsMutex == nullptr ||
+            xSemaphoreTake(gAsyncPcodeJobsMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+            request->send(503, "text/plain", "Async pcode worker unavailable");
+            return;
+        }
+
+        AsyncPcodeJob* selected = nullptr;
+        for (size_t i = 0; i < ASYNC_PCODE_JOB_LIMIT; ++i) {
+            if (gAsyncPcodeJobs[i].id == jobId) {
+                selected = &gAsyncPcodeJobs[i];
+                break;
+            }
+        }
+        if (selected == nullptr) {
+            xSemaphoreGive(gAsyncPcodeJobsMutex);
+            if (ffs != nullptr) {
+                std::vector<uint8_t> bytes;
+                if (ffs->read(asyncPcodeResultPath(jobId), bytes) == FFSStatus::OK && !bytes.empty()) {
+                    request->send(200, "application/json", String(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+                    return;
+                }
+            }
+            request->send(404, "text/plain", "Unknown async pcode job");
+            return;
+        }
+
+        const uint8_t state = selected->state;
+        const int statusCode = selected->statusCode;
+        const String body = selected->body;
+        xSemaphoreGive(gAsyncPcodeJobsMutex);
+
+        if (state < 3) {
+            const char* stateText = state == 2 ? "running" : "queued";
+            String response = String("{\"jobId\":") + String(jobId) +
+                ",\"state\":\"" + stateText + "\"}";
+            request->send(200, "application/json", response);
+            return;
+        }
+        request->send(statusCode > 0 ? statusCode : 500, "application/json", body);
+    });
+#endif
+
     // Generic map-driven conversion service.
     server.on("/api/convert", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL,
         [&machine, ffs](AsyncWebServerRequest *request, uint8_t* data, size_t len, size_t index, size_t total) {
@@ -3561,6 +3873,18 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         request->send(200, "application/json", json);
     });
 
+    // Last-run instruction trace for source-level replay in the host debugger.
+    server.on("/pmachine/trace", HTTP_GET, [&machine](AsyncWebServerRequest *request){
+        String json = "{\"stepCount\":" + String((unsigned long)machine.getLastRunStepCount()) + ",\"trace\":[";
+        const auto& trace = machine.getLastRunTrace();
+        for (size_t index = 0; index < trace.size(); ++index) {
+            if (index > 0) json += ",";
+            json += String(trace[index].c_str());
+        }
+        json += "]}";
+        request->send(200, "application/json", json);
+    });
+
     server.on("/pmachine/image-map", HTTP_GET, [&machine](AsyncWebServerRequest *request){
         request->send(200, "application/json", String(machine.getImageMemoryMapJson().c_str()));
     });
@@ -3858,7 +4182,7 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         bool hasProgramMap = false;
         if (programMap.length() > 0) {
             JsonDocument programMapDoc;
-            if (!deserializeDocFromPath(programMap, ffs, programMapDoc)) {
+            if (!deserializeProgramMapForExec(programMap, ffs, programMapDoc)) {
                 request->send(404, "text/plain", "Unable to load program map file");
                 return;
             }
@@ -3891,11 +4215,45 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         machine.loadProgram(std::move(binary), std::string(file.c_str()), programLimit);
 
         machine.clearRoutingDeliveries();
-        machine.setRoutingContext(std::string(inputQueue.c_str()), std::string(message.c_str()));
+        String executionMessage = message;
+        const String rawMessageUpper = toUpperCopy(trimCopy(message));
+        if (rawMessageUpper.startsWith("MT103") || rawMessageUpper.indexOf("\n:20:") >= 0 || rawMessageUpper.indexOf(":23B:") >= 0) {
+            JsonDocument parsedMt103;
+            parseMt103FinText(message, parsedMt103);
+            String parsedMessage;
+            serializeJson(parsedMt103, parsedMessage);
+            executionMessage = parsedMessage;
+        }
+        machine.setRoutingContext(std::string(inputQueue.c_str()), std::string(executionMessage.c_str()));
         machine.run(instructions);
 
         JsonDocument out;
         addRunOutputsToJson(out, machine, "file", inputQueue, message);
+        String isoOutputType;
+        JsonArrayConst mapEntries = metadata.raw["entries"].as<JsonArrayConst>();
+        for (JsonObjectConst entry : mapEntries) {
+            if (String(entry["kind"] | "") != "mapper") continue;
+            const String targetType = entry["targetTypeId"] | "";
+            if (isIsoDataTypeId(targetType, ffs)) {
+                isoOutputType = targetType;
+                break;
+            }
+        }
+        JsonArray deliveries = out["deliveries"].as<JsonArray>();
+        for (JsonObject item : deliveries) {
+            String shapedMessage;
+            String shapeWarning;
+            const bool shapedToXml = maybeShapeIsoToXml(
+                isoOutputType,
+                String(item["message"] | ""),
+                ffs,
+                shapedMessage,
+                shapeWarning
+            );
+            item["message"] = shapedMessage;
+            if (shapedToXml) item["messageFormat"] = "xml";
+            if (shapeWarning.length() > 0) item["shapeWarning"] = shapeWarning;
+        }
         out["file"] = file;
         out["programMap"] = programMap;
         out["runRouter"] = runRouter;
@@ -4249,10 +4607,25 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         }
         JsonArray deliveries = out["deliveries"].to<JsonArray>();
         const std::vector<pmachine::RouteDelivery>& routed = machine.getRoutingDeliveries();
+        String isoOutputType;
+        JsonArrayConst mapEntries = metadata.raw["entries"].as<JsonArrayConst>();
+        for (JsonObjectConst entry : mapEntries) {
+            if (String(entry["kind"] | "") != "mapper") continue;
+            const String targetType = entry["targetTypeId"] | "";
+            if (isIsoDataTypeId(targetType, ffs)) {
+                isoOutputType = targetType;
+                break;
+            }
+        }
         for (const auto& d : routed) {
             JsonObject item = deliveries.add<JsonObject>();
             item["queueName"] = d.queueName.c_str();
-            item["message"] = d.message.c_str();
+            String shapedMessage;
+            String shapeWarning;
+            const bool shapedToXml = maybeShapeIsoToXml(isoOutputType, d.message.c_str(), ffs, shapedMessage, shapeWarning);
+            item["message"] = shapedMessage.c_str();
+            if (shapedToXml) item["messageFormat"] = "xml";
+            if (shapeWarning.length() > 0) item["shapeWarning"] = shapeWarning.c_str();
         }
         out["publishedCount"] = routed.size();
         JsonArray stdoutLines = out["stdout"].to<JsonArray>();
@@ -4418,7 +4791,10 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         out["updatedAtMs"] = result.updatedAtMs;
         String response;
         serializeJson(out, response);
-        request->send(result.statusCode, result.contentType, response);
+        // The polling envelope is always a completed HTTP response. The
+        // execution status remains available in the JSON statusCode field;
+        // returning 102 here makes clients treat the body as an interim response.
+        request->send(200, "application/json", response);
     });
 
     server.on("/pmachine/edge_ingress_config", HTTP_GET, [](AsyncWebServerRequest *request){

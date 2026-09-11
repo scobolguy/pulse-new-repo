@@ -70,11 +70,13 @@ void CameraService::end() {
 
 bool CameraService::initCamera() {
     Serial.println("[Camera] ===== CAMERA INIT START =====");
-    
+
+    bool hasPsram = false;
     #ifdef BOARD_HAS_PSRAM
     Serial.println("[Camera] BOARD_HAS_PSRAM is DEFINED");
     Serial.printf("[Camera] PSRAM size: %d bytes\n", ESP.getPsramSize());
     Serial.printf("[Camera] Free PSRAM: %d bytes\n", ESP.getFreePsram());
+    hasPsram = psramFound();
     #else
     Serial.println("[Camera] BOARD_HAS_PSRAM is NOT DEFINED");
     #endif
@@ -117,11 +119,13 @@ bool CameraService::initCamera() {
     camera_config.pin_reset = RESET_GPIO_NUM;
     camera_config.xclk_freq_hz = 20000000;
     camera_config.sccb_i2c_port = 0;
-    
-    // Try lower XCLK frequency for better compatibility
-    // Some camera modules need 10MHz instead of 20MHz
-    Serial.println("[Camera] Using 10MHz XCLK for better compatibility");
+
+#ifdef CAMERA_XCLK_FREQ_HZ
+    camera_config.xclk_freq_hz = CAMERA_XCLK_FREQ_HZ;
+#else
     camera_config.xclk_freq_hz = 10000000;
+#endif
+    Serial.printf("[Camera] Using %luHz XCLK\n", static_cast<unsigned long>(camera_config.xclk_freq_hz));
     camera_config.pixel_format = PIXFORMAT_JPEG;
     
     // Try to initialize with different frame sizes for better compatibility
@@ -133,16 +137,15 @@ bool CameraService::initCamera() {
     Serial.printf("[Camera] Pin config: SIOD=%d, SIOC=%d, PWDN=%d, RESET=%d\n",
                   SIOD_GPIO_NUM, SIOC_GPIO_NUM, PWDN_GPIO_NUM, RESET_GPIO_NUM);
     
-    // PSRAM configuration for ESP32-CAM
-    #ifdef BOARD_HAS_PSRAM
-    camera_config.fb_location = CAMERA_FB_IN_PSRAM;
-    camera_config.fb_count = 2;
-    Serial.println("[Camera] Using PSRAM for frame buffers (fb_count=2)");
-    #else
-    camera_config.fb_location = CAMERA_FB_IN_DRAM;
-    camera_config.fb_count = 1;
-    Serial.println("[Camera] Using DRAM for frame buffers (fb_count=1)");
-    #endif
+    if (hasPsram) {
+        camera_config.fb_location = CAMERA_FB_IN_PSRAM;
+        camera_config.fb_count = 2;
+        Serial.println("[Camera] Using PSRAM for frame buffers (fb_count=2)");
+    } else {
+        camera_config.fb_location = CAMERA_FB_IN_DRAM;
+        camera_config.fb_count = 1;
+        Serial.println("[Camera] Using DRAM for frame buffers (fb_count=1)");
+    }
     
     camera_config.grab_mode = CAMERA_GRAB_LATEST;
 

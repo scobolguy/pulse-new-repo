@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ESP32 JavaScript Service Test</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #111827;
+      --panel: #1f2937;
+      --border: #374151;
+      --text: #f3f4f6;
+      --muted: #9ca3af;
+      --accent: #38bdf8;
+      --good: #34d399;
+      --bad: #fb7185;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(circle at top right, #164e63 0, transparent 32rem), var(--bg);
+      color: var(--text);
+      font: 16px/1.5 Georgia, "Times New Roman", serif;
+    }
+
+    main { width: min(1100px, calc(100% - 32px)); margin: 32px auto; }
+    h1 { margin: 0 0 8px; font-size: clamp(2rem, 5vw, 3.4rem); letter-spacing: .02em; }
+    h2 { margin: 0 0 12px; font-size: 1.15rem; color: var(--accent); }
+    p { color: var(--muted); margin: 0 0 24px; }
+    .panel { background: rgba(31, 41, 55, .92); border: 1px solid var(--border); padding: 20px; margin-top: 16px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    label { display: block; color: var(--muted); margin-bottom: 6px; }
+    input, textarea, button {
+      width: 100%; border: 1px solid var(--border); border-radius: 4px; font: inherit;
+    }
+    input, textarea { background: #111827; color: var(--text); padding: 10px 12px; }
+    textarea { min-height: 250px; resize: vertical; font-family: "Cascadia Code", Consolas, monospace; font-size: .9rem; }
+    button { background: var(--accent); color: #082f49; cursor: pointer; font-weight: bold; padding: 11px 16px; margin-top: 16px; }
+    button:disabled { cursor: wait; opacity: .6; }
+    pre { background: #0b1220; border: 1px solid var(--border); padding: 14px; overflow: auto; white-space: pre-wrap; word-break: break-word; min-height: 80px; }
+    .status { min-height: 1.5em; color: var(--muted); }
+    .ok { color: var(--good); }
+    .error { color: var(--bad); }
+    @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } main { width: min(100% - 20px, 680px); margin: 20px auto; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>JavaScript Service Interface Test</h1>
+    <p>Submit a message through the central service interface and inspect the result returned by the selected service instance.</p>
+
+    <section class="panel">
+      <h2>Request</h2>
+      <label for="baseUrl">Service interface URL</label>
+      <input id="baseUrl" value="http://127.0.0.1:4000" spellcheck="false">
+      <label for="messageType" style="margin-top: 14px">Message type</label>
+      <select id="messageType">
+        <option value="MT103">MT103 to PACS.008</option>
+        <option value="MT202">MT202 to PACS.009</option>
+      </select>
+      <label for="inputMessage" style="margin-top: 14px">Input MT103 message</label>
+      <textarea id="inputMessage" spellcheck="false">MT103
+:20:JS-BROWSER-E2E-001
+:23B:CRED
+:32A:260907USD100,01
+:50K:ALPHA IMPORTS LTD
+:57A:BKTRUS33
+:59:/000123456
+BETA SUPPLIES INC
+:70:Browser JavaScript service test
+:71A:SHA</textarea>
+      <button id="runButton" type="button">Run Service</button>
+  <label for="batchCount" style="margin-top: 14px">Batch transaction count</label>
+  <input id="batchCount" type="number" min="1" max="10000" step="1" value="10000">
+  <button id="batchButton" type="button">Run Batch and Measure Average</button>
+  <button id="asyncButton" type="button">Run 10 Async Promise Transactions</button>
+      <div id="status" class="status" role="status" aria-live="polite"></div>
+    </section>
+
+    <section class="grid">
+      <div class="panel">
+        <h2>Output Message</h2>
+        <pre id="outputMessage">Run the test to display the transformed XML.</pre>
+      </div>
+      <div class="panel">
+        <h2>Service Response</h2>
+        <pre id="responseJson">No response yet.</pre>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const baseUrl = document.querySelector('#baseUrl');
+    const messageType = document.querySelector('#messageType');
+    const inputMessage = document.querySelector('#inputMessage');
+    const runButton = document.querySelector('#runButton');
+    const batchCount = document.querySelector('#batchCount');
+    const batchButton = document.querySelector('#batchButton');
+    const asyncButton = document.querySelector('#asyncButton');
+    const status = document.querySelector('#status');
+    const outputMessage = document.querySelector('#outputMessage');
+    const responseJson = document.querySelector('#responseJson');
+
+    class ServiceTimeoutError extends Error {
+      constructor(serviceId, messageId, timeoutMs) {
+        super(`Service ${serviceId} timed out after ${timeoutMs} ms`);
+        this.name = 'ServiceTimeoutError';
+        this.serviceId = serviceId;
+        this.messageId = messageId;
+        this.timeoutMs = timeoutMs;
+      }
+    }
+
+    class ServiceClient {
+      constructor({ baseUrl, timeoutMs = 30000 } = {}) {
+        this.baseUrl = baseUrl;
+        this.timeoutMs = timeoutMs;
+      }
+
+      async call(serviceId, input, { timeoutMs = this.timeoutMs } = {}) {
+        const messageId = `${serviceId}-${Date.now()}-${crypto.randomUUID()}`;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+          const submission = await this.submit(serviceId, messageId, input, controller.signal);
+          if (submission.state === 'completed') {
+            return { ok: true, serviceId, messageId, ...submission.result };
+          }
+
+          const result = await this.waitForCompletion(
+            serviceId,
+            messageId,
+            submission,
+            controller.signal,
+            timeoutMs
+          );
+          return { ok: true, serviceId, messageId, ...result };
+        } catch (error) {
+          if (error.name === 'AbortError') {
+            throw new ServiceTimeoutError(serviceId, messageId, timeoutMs);
+          }
+          throw error;
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+
+      async submit(serviceId, messageId, input, signal) {
+        const url = new URL(`/api/services/${encodeURIComponent(serviceId)}`, this.baseUrl);
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            messageId,
+            message: input,
+            inputQueue: `${serviceId}.in`
+          }),
+          signal
+        });
+        const body = await response.json();
+        if (!response.ok || !body.jobId) {
+          throw new Error(`Service ${serviceId} rejected request (${response.status})`);
+        }
+        return body;
+      }
+
+      async waitForCompletion(serviceId, messageId, submission, signal, timeoutMs) {
+        const statusUrl = new URL(
+          `/api/service-jobs/${encodeURIComponent(submission.jobId)}`,
+          this.baseUrl
+        );
+        for (;;) {
+          await new Promise((resolve, reject) => {
+            const timer = setTimeout(resolve, 100);
+            signal.addEventListener('abort', () => {
+              clearTimeout(timer);
+              reject(new DOMException('Request timed out', 'AbortError'));
+            }, { once: true });
+          });
+          const response = await fetch(statusUrl, { signal });
+          const body = await response.json();
+          if (!response.ok) throw new Error(`Service ${serviceId} status failed (${response.status})`);
+          if (body.state === 'failed') {
+            throw new Error(`Service ${serviceId} failed: ${JSON.stringify(body.error || body)}`);
+          }
+          if (body.state !== 'completed') continue;
+          return body.result || body;
+        }
+      }
+    }
+
+    function buildTransaction(index) {
+      const field20 = `JS-BATCH-${Date.now()}-${String(index).padStart(5, '0')}`;
+      const amount = (100.01 + index * 1.11).toFixed(2);
+      const type = messageType.value;
+      const input = type === 'MT202'
+        ? [
+            'MT202',
+            `:20:${field20}`,
+            `:21:RELATED-${String(index).padStart(5, '0')}`,
+            `:32A:260907USD${amount.replace('.', ',')}`,
+            ':52A:BANKAUS33',
+            ':58A:BANKBUS44'
+          ].join('\n')
+        : [
+            'MT103',
+            `:20:${field20}`,
+            ':23B:CRED',
+            `:32A:260907USD${amount.replace('.', ',')}`,
+            ':50K:ALPHA IMPORTS LTD',
+            ':57A:BKTRUS33',
+            ':59:/000123456',
+            'BETA SUPPLIES INC',
+            ':70:Browser batch service test',
+            ':71A:SHA'
+          ].join('\n');
+      return { field20, amount, input, type };
+    }
+
+    function serviceIdFor(type) {
+      return type === 'MT202' ? 'mt202-to-pacs009' : 'mt103-to-pacs008';
+    }
+
+    async function callService(input, type = messageType.value) {
+      const client = new ServiceClient({ baseUrl: baseUrl.value.trim() });
+      const result = await client.call(serviceIdFor(type), input);
+      if (!result.ok) throw new Error(`Service ${result.serviceId} did not complete`);
+      return result;
+    }
+
+    function verifyTransaction(payload, expected) {
+      const output = payload.normalizedMessage || '';
+      const field20Match = output.match(/<MsgId>([^<]+)<\/MsgId>/);
+      const amountMatch = output.match(/<IntrBkSttlmAmt[^>]*>([^<]+)<\/IntrBkSttlmAmt>/);
+      const actualField20 = field20Match ? field20Match[1] : '';
+      const actualAmount = amountMatch ? amountMatch[1] : '';
+      const expectedOutputType = expected.type === 'MT202' ? 'pacs.009.001.10' : 'pacs.008.001.10';
+      return {
+        ok: payload.conversionApplied === true
+          && payload.conversionFormat === `${expected.type.toLowerCase()}->pacs-xml`
+          && output.includes(expectedOutputType)
+          && actualField20 === expected.field20
+          && actualAmount === expected.amount,
+        field20: actualField20,
+        amount: actualAmount,
+        output
+      };
+    }
+
+    function setBusy(busy) {
+      runButton.disabled = busy;
+      batchButton.disabled = busy;
+      asyncButton.disabled = busy;
+    }
+
+    asyncButton.addEventListener('click', async () => {
+      setBusy(true);
+      status.className = 'status';
+      outputMessage.textContent = '';
+      responseJson.textContent = '';
+      const results = [];
+      const startedAt = performance.now();
+
+      try {
+        for (let index = 1; index <= 10; index += 1) {
+          const expected = buildTransaction(index);
+          status.textContent = `Running async Promise transaction ${index} of 10...`;
+          try {
+            const payload = await callService(expected.input, expected.type);
+            results.push({ index, expected, ...verifyTransaction(payload, expected) });
+          } catch (error) {
+            results.push({ index, expected, ok: false, error: error.message, field20: '', amount: '', output: '' });
+          }
+        }
+
+        const elapsedMs = performance.now() - startedAt;
+        const passed = results.filter(result => result.ok).length;
+        const mismatches = results.filter(result => !result.ok).map(result => ({
+          index: result.index,
+          expectedField20: result.expected.field20,
+          actualField20: result.field20,
+          expectedAmount: result.expected.amount,
+          actualAmount: result.amount,
+          error: result.error || null
+        }));
+        const last = results[results.length - 1];
+        const report = {
+          mode: 'async-promise',
+          transactions: 10,
+          passed,
+          failed: 10 - passed,
+          elapsedMs: Math.round(elapsedMs),
+          averageMsPerTransaction: Number((elapsedMs / 10).toFixed(2)),
+          transactionsPerSecond: Number((10 / (elapsedMs / 1000)).toFixed(2)),
+          uniqueField20: new Set(results.map(result => result.expected.field20)).size === 10,
+          uniqueAmounts: new Set(results.map(result => result.expected.amount)).size === 10,
+          allValuesVerified: passed === 10 && mismatches.length === 0,
+          mismatches
+        };
+        outputMessage.textContent = last.output || '(No output returned for the final transaction)';
+        responseJson.textContent = JSON.stringify(report, null, 2);
+        status.className = report.allValuesVerified ? 'status ok' : 'status error';
+        status.textContent = `${passed}/10 async Promise transactions passed; average ${report.averageMsPerTransaction} ms/transaction`;
+      } finally {
+        setBusy(false);
+      }
+    });
+
+    runButton.addEventListener('click', async () => {
+      setBusy(true);
+      status.className = 'status';
+      status.textContent = 'Calling ESP32...';
+      outputMessage.textContent = '';
+      responseJson.textContent = '';
+
+      try {
+        const payload = await callService(inputMessage.value);
+        responseJson.textContent = JSON.stringify(payload, null, 2);
+        outputMessage.textContent = payload.normalizedMessage || '(No normalized output message returned)';
+
+        status.className = 'status ok';
+        status.textContent = `Success: ${payload.conversionFormat || 'service response'}`;
+      } catch (error) {
+        status.className = 'status error';
+        status.textContent = `${error.name}: ${error.message}. If this is a CORS error, serve this page locally and use the ESP32 HTTPS endpoint.`;
+        responseJson.textContent = error.stack || String(error);
+      } finally {
+        setBusy(false);
+      }
+    });
+
+    batchButton.addEventListener('click', async () => {
+      setBusy(true);
+      status.className = 'status';
+      outputMessage.textContent = '';
+      responseJson.textContent = '';
+      const results = [];
+      const requestedCount = Math.min(10000, Math.max(1, Number.parseInt(batchCount.value, 10) || 10000));
+      batchCount.value = requestedCount;
+      const startedAt = performance.now();
+
+      try {
+        for (let index = 1; index <= requestedCount; index += 1) {
+          const expected = buildTransaction(index);
+          status.textContent = `Running transaction ${index} of ${requestedCount}...`;
+          try {
+            const payload = await callService(expected.input);
+            results.push({ index, expected, ...verifyTransaction(payload, expected) });
+          } catch (error) {
+            results.push({ index, expected, ok: false, error: error.message, field20: '', amount: '', output: '' });
+          }
+        }
+
+        const passed = results.filter(result => result.ok).length;
+        const elapsedMs = performance.now() - startedAt;
+        const uniqueField20 = new Set(results.map(result => result.expected.field20)).size === requestedCount;
+        const uniqueAmounts = new Set(results.map(result => result.expected.amount)).size === requestedCount;
+        const mismatches = results.filter(result => !result.ok).map(result => ({
+          index: result.index,
+          expectedField20: result.expected.field20,
+          actualField20: result.field20,
+          expectedAmount: result.expected.amount,
+          actualAmount: result.amount,
+          error: result.error || null
+        }));
+        const last = results[results.length - 1];
+        const averageMs = elapsedMs / requestedCount;
+
+        outputMessage.textContent = last.output || '(No output returned for the final transaction)';
+        responseJson.textContent = JSON.stringify({
+          transactions: requestedCount,
+          passed,
+          failed: requestedCount - passed,
+          elapsedMs: Math.round(elapsedMs),
+          averageMsPerTransaction: Number(averageMs.toFixed(2)),
+          transactionsPerSecond: Number((requestedCount / (elapsedMs / 1000)).toFixed(2)),
+          uniqueField20,
+          uniqueAmounts,
+          allValuesVerified: passed === requestedCount && uniqueField20 && uniqueAmounts,
+          mismatches: mismatches.slice(0, 20)
+        }, null, 2);
+        status.className = passed === requestedCount && uniqueField20 && uniqueAmounts ? 'status ok' : 'status error';
+        status.textContent = `${passed}/${requestedCount} passed; average ${averageMs.toFixed(2)} ms/transaction`;
+      } finally {
+        setBusy(false);
+      }
+    });
+  </script>
+</body>
+</html>

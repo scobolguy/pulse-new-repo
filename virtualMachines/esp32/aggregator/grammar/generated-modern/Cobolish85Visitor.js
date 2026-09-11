@@ -18,6 +18,12 @@ export default class Cobolish85Visitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by Cobolish85Parser#preProcedureContent.
+	visitPreProcedureContent(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by Cobolish85Parser#identificationDivision.
 	visitIdentificationDivision(ctx) {
 	  return this.visitChildren(ctx);
@@ -120,6 +126,48 @@ export default class Cobolish85Visitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by Cobolish85Parser#mappingSection.
+	visitMappingSection(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#mapperEntry.
+	visitMapperEntry(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#mapRule.
+	visitMapRule(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#mappingName.
+	visitMappingName(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#mappingPath.
+	visitMappingPath(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#mapRuleBody.
+	visitMapRuleBody(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#mapRuleExpr.
+	visitMapRuleExpr(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by Cobolish85Parser#linkageSection.
 	visitLinkageSection(ctx) {
 	  return this.visitChildren(ctx);
@@ -200,6 +248,12 @@ export default class Cobolish85Visitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by Cobolish85Parser#pictureClause.
 	visitPictureClause(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#pictureTerm.
+	visitPictureTerm(ctx) {
 	  return this.visitChildren(ctx);
 	}
 
@@ -320,6 +374,12 @@ export default class Cobolish85Visitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by Cobolish85Parser#callStatement.
 	visitCallStatement(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#sendServiceStatement.
+	visitSendServiceStatement(ctx) {
 	  return this.visitChildren(ctx);
 	}
 
@@ -482,6 +542,12 @@ export default class Cobolish85Visitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by Cobolish85Parser#computeStatement.
 	visitComputeStatement(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#sizeErrorClause.
+	visitSizeErrorClause(ctx) {
 	  return this.visitChildren(ctx);
 	}
 
@@ -662,6 +728,18 @@ export default class Cobolish85Visitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by Cobolish85Parser#cobolishMetaClause.
 	visitCobolishMetaClause(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#roleName.
+	visitRoleName(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#mapperImportDecl.
+	visitMapperImportDecl(ctx) {
 	  return this.visitChildren(ctx);
 	}
 

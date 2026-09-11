@@ -3,6 +3,7 @@ import path from 'path';
 import { pathToFileURL } from 'url';
 import { compileRouterMapperDSL as compileRouterMapperDSLAntlr } from './compile-pascal.mjs';
 import { attachPcodeSignature } from './pcode-signing.mjs';
+import { emitMapperRoutinePcode } from './compile-mapping-rule.mjs';
 
 function parseArgs(argv) {
   const args = {
@@ -55,8 +56,34 @@ function sanitizeLabel(text) {
 
 function normalizeDslRuleText(text) {
   return String(text || '')
-    .replace(/\\"/g, '"')
-    .replace(/\\\\/g, '\\');
+    .replace(/\\(["'\\])/g, '$1')
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\r')
+    .replace(/\\t/g, '\t');
+}
+
+function normalizeProgramMapRules(programMap) {
+  if (!programMap || !Array.isArray(programMap.entries)) return programMap;
+  const next = structuredClone(programMap);
+  for (const entry of next.entries) {
+    if (!entry || entry.kind !== 'router' || !Array.isArray(entry.outputs)) continue;
+    entry.outputs = entry.outputs.map((output) => ({
+      ...output,
+      whenRule: normalizeDslRuleText(output.whenRule),
+      transformRule: normalizeDslRuleText(output.transformRule)
+    }));
+  }
+  if (Array.isArray(next.routers)) {
+    next.routers = next.routers.map((router) => ({
+      ...router,
+      outputs: (router.outputs || []).map((output) => ({
+        ...output,
+        whenRule: normalizeDslRuleText(output.whenRule),
+        transformRule: normalizeDslRuleText(output.transformRule)
+      }))
+    }));
+  }
+  return next;
 }
 
 function encodePcodeStringLiteral(text) {
@@ -301,9 +328,22 @@ async function main() {
 
   const sourceText = await fs.readFile(inputPath, 'utf-8');
   const compiled = compileRouterMapperDSLAntlr(sourceText);
-  const emitted = (compiled && compiled.pcodeText && compiled.programMap)
-    ? { pcodeText: compiled.pcodeText, symbolMap: compiled.programMap }
+  const normalizedProgramMap = compiled && compiled.programMap
+    ? normalizeProgramMapRules(compiled.programMap)
+    : null;
+  const emitted = (compiled && compiled.pcodeText && normalizedProgramMap)
+    ? { pcodeText: compiled.pcodeText, symbolMap: normalizedProgramMap }
     : emitPortableProgram(compiled);
+
+  const mapperRoutinePcode = (normalizedProgramMap?.entries || [])
+    .filter((entry) => entry && entry.kind === 'mapper')
+    .map((entry) => emitMapperRoutinePcode(entry))
+    .join('\n');
+
+  if (mapperRoutinePcode) {
+    emitted.pcodeText = `${String(emitted.pcodeText || '').trimEnd()}\n${mapperRoutinePcode}\n`;
+  }
+
   const signedSymbolMap = attachPcodeSignature(emitted.symbolMap, emitted.pcodeText);
 
   await fs.mkdir(path.dirname(outPath), { recursive: true });

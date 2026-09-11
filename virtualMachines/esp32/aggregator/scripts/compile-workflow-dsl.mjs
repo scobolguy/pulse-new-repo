@@ -8,7 +8,11 @@ function parseQuoted(value) {
   if (s.length < 2) return null;
   const q = s[0];
   if ((q !== '"' && q !== '\'') || s[s.length - 1] !== q) return null;
-  return s.slice(1, -1);
+  return s.slice(1, -1)
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\r')
+    .replace(/\\t/g, '\t')
+    .replace(/\\(["'\\])/g, '$1');
 }
 
 function stripComments(sourceText) {
@@ -69,6 +73,18 @@ function parseStepCallApi(stepLine) {
     apiSymbol: parseQuoted(stepMatch[2]),
     method: stepMatch[3].toUpperCase(),
     route: parseQuoted(stepMatch[4])
+  };
+}
+
+function parseStepCallService(stepLine) {
+  const stepMatch = stepLine.match(/^STEP\s+("[^"]+"|'[^']+')\s+CALL\s+SERVICE\s+("[^"]+"|'[^']+')\s+("[^"]+"|'[^']+')(?:\s+(ASYNC))?\s*;$/i);
+  if (!stepMatch) return null;
+  return {
+    id: parseQuoted(stepMatch[1]),
+    action: 'call_service',
+    serviceId: parseQuoted(stepMatch[2]),
+    message: parseQuoted(stepMatch[3]),
+    asynchronous: Boolean(stepMatch[4])
   };
 }
 
@@ -400,6 +416,11 @@ function parseStatementAt(lines, index, ifCounterRef) {
   const callApi = parseStepCallApi(stepLine);
   if (callApi) {
     return { step: callApi, nextIndex: index + 1 };
+  }
+
+  const callService = parseStepCallService(stepLine);
+  if (callService) {
+    return { step: callService, nextIndex: index + 1 };
   }
 
   const routeQueue = parseStepRouteQueue(stepLine);

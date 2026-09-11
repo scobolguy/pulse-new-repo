@@ -1,0 +1,10 @@
+{
+  "serviceId": "mt202-to-pacs008",
+  "inputQueue": "mt202-to-pacs008.in",
+  "httpVerb": "POST",
+  "sourceService": "js-service-mt202-to-pacs008-27720",
+  "matchedRuleCount": 0,
+  "matchedOutputCount": 0,
+  "response": null,
+  "responses": []
+}

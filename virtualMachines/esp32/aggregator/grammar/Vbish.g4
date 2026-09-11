@@ -3,7 +3,7 @@ grammar Vbish;
 options { caseInsensitive = true; }
 
 compilationUnit
-  : optionExplicit? runtimeDecl? interopDecl* topLevelDecl* EOF
+  : optionExplicit? runtimeDecl? (interopDecl | roleDecl | libraryDecl | useDecl | importDecl | routeDecl | topLevelDecl)* EOF
   ;
 
 optionExplicit
@@ -36,8 +36,39 @@ topLevelDecl
   | functionDecl
   ;
 
+roleDecl
+  : ROLE roleName
+  ;
+
+roleName
+  : CODE_LIBRARIAN
+  | IDENTIFIER
+  ;
+
+libraryDecl
+  : LIBRARY stringOrIdentifier (FROM librarySource)?
+  ;
+
+librarySource
+  : LIBRARIAN
+  | MAPPER
+  | stringOrIdentifier
+  ;
+
+useDecl
+  : USE stringOrIdentifier (AS IDENTIFIER)?
+  ;
+
+importDecl
+  : IMPORT MAPPER stringOrIdentifier FROM librarySource
+  ;
+
+routeDecl
+  : ROUTE stringOrIdentifier TO stringOrIdentifier USING MAPPER stringOrIdentifier
+  ;
+
 variableDecl
-  : DIM IDENTIFIER (AS typeName) ? (ASSIGN expression)?
+  : DIM IDENTIFIER (AS typeName)? ((FROM (LIBRARIAN | MAPPER)) | (ASSIGN expression) | (FROM (LIBRARIAN | MAPPER) ASSIGN expression) | (ASSIGN expression FROM (LIBRARIAN | MAPPER)))?
   ;
 
 subDecl
@@ -179,6 +210,16 @@ COBOLISH: 'COBOLISH';
 VBISH: 'VBISH';
 WFL: 'WFL';
 WORKFLOW: 'WORKFLOW';
+ROLE: 'ROLE';
+CODE_LIBRARIAN: 'CODE_LIBRARIAN';
+LIBRARY: 'LIBRARY';
+USE: 'USE';
+IMPORT: 'IMPORT';
+MAPPER: 'MAPPER';
+ROUTE: 'ROUTE';
+USING: 'USING';
+LIBRARIAN: 'LIBRARIAN';
+FROM: 'FROM';
 AS: 'AS';
 OPTION: 'OPTION';
 EXPLICIT: 'EXPLICIT';

@@ -1,0 +1,1452 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-11T20:24:59.510Z",
+  "serviceId": "ComplexShowcase",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "ComplexShowcase",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-program",
+  "sourceLanguage": "pascalish",
+  "entries": [],
+  "localResources": {
+    "serviceId": "ComplexShowcase",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "routers": [],
+  "serviceEndpoints": [],
+  "globals": [
+    "z_re",
+    "z_im",
+    "w_re",
+    "w_im",
+    "t_re",
+    "t_im",
+    "modulus",
+    "realPart"
+  ],
+  "variableDeclarations": [
+    {
+      "type": "VarDecl",
+      "name": "z",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "user",
+        "id": "Complex",
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "w",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "user",
+        "id": "Complex",
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "t",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "user",
+        "id": "Complex",
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "modulus",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "real",
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "realPart",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "real",
+        "genericArgs": []
+      }
+    }
+  ],
+  "enums": {},
+  "procedures": {
+    "PROC_COMPLEX_OP_ADD": {
+      "name": "Complex.op_add",
+      "className": "Complex",
+      "methodName": "op_add",
+      "returnType": {
+        "type": "TypeRef",
+        "kind": "user",
+        "id": "Complex",
+        "genericArgs": []
+      },
+      "params": [
+        "re",
+        "im",
+        "b_re",
+        "b_im"
+      ],
+      "locals": [
+        "r_re",
+        "r_im"
+      ],
+      "genericParams": []
+    },
+    "PROC_COMPLEX_OP_SUB": {
+      "name": "Complex.op_sub",
+      "className": "Complex",
+      "methodName": "op_sub",
+      "returnType": {
+        "type": "TypeRef",
+        "kind": "user",
+        "id": "Complex",
+        "genericArgs": []
+      },
+      "params": [
+        "re",
+        "im",
+        "b_re",
+        "b_im"
+      ],
+      "locals": [
+        "r_re",
+        "r_im"
+      ],
+      "genericParams": []
+    },
+    "PROC_COMPLEX_OP_MUL": {
+      "name": "Complex.op_mul",
+      "className": "Complex",
+      "methodName": "op_mul",
+      "returnType": {
+        "type": "TypeRef",
+        "kind": "user",
+        "id": "Complex",
+        "genericArgs": []
+      },
+      "params": [
+        "re",
+        "im",
+        "b_re",
+        "b_im"
+      ],
+      "locals": [
+        "r_re",
+        "r_im"
+      ],
+      "genericParams": []
+    },
+    "PROC_COMPLEX_OP_DIV": {
+      "name": "Complex.op_div",
+      "className": "Complex",
+      "methodName": "op_div",
+      "returnType": {
+        "type": "TypeRef",
+        "kind": "user",
+        "id": "Complex",
+        "genericArgs": []
+      },
+      "params": [
+        "re",
+        "im",
+        "b_re",
+        "b_im"
+      ],
+      "locals": [
+        "r_re",
+        "r_im",
+        "d"
+      ],
+      "genericParams": []
+    },
+    "PROC_COMPLEX_OP_EQ": {
+      "name": "Complex.op_eq",
+      "className": "Complex",
+      "methodName": "op_eq",
+      "returnType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "boolean",
+        "genericArgs": []
+      },
+      "params": [
+        "re",
+        "im",
+        "b_re",
+        "b_im"
+      ],
+      "locals": [],
+      "genericParams": []
+    },
+    "PROC_COMPLEX_OP_FROM_REAL": {
+      "name": "Complex.op_from_real",
+      "className": "Complex",
+      "methodName": "op_from_real",
+      "returnType": {
+        "type": "TypeRef",
+        "kind": "user",
+        "id": "Complex",
+        "genericArgs": []
+      },
+      "params": [
+        "x"
+      ],
+      "locals": [
+        "r_re",
+        "r_im"
+      ],
+      "genericParams": []
+    },
+    "PROC_COMPLEX_OP_TO_REAL": {
+      "name": "Complex.op_to_real",
+      "className": "Complex",
+      "methodName": "op_to_real",
+      "returnType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "real",
+        "genericArgs": []
+      },
+      "params": [
+        "re",
+        "im"
+      ],
+      "locals": [],
+      "genericParams": []
+    },
+    "PROC_COMPLEX_CONJ": {
+      "name": "Complex.conj",
+      "className": "Complex",
+      "methodName": "conj",
+      "returnType": {
+        "type": "TypeRef",
+        "kind": "user",
+        "id": "Complex",
+        "genericArgs": []
+      },
+      "params": [
+        "re",
+        "im"
+      ],
+      "locals": [
+        "r_re",
+        "r_im"
+      ],
+      "genericParams": []
+    },
+    "PROC_COMPLEX_NORMSQ": {
+      "name": "Complex.normSq",
+      "className": "Complex",
+      "methodName": "normSq",
+      "returnType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "real",
+        "genericArgs": []
+      },
+      "params": [
+        "re",
+        "im"
+      ],
+      "locals": [],
+      "genericParams": []
+    },
+    "PROC_COMPLEX_ABS": {
+      "name": "Complex.abs",
+      "className": "Complex",
+      "methodName": "abs",
+      "returnType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "real",
+        "genericArgs": []
+      },
+      "params": [
+        "re",
+        "im"
+      ],
+      "locals": [
+        "guess",
+        "mag",
+        "step"
+      ],
+      "genericParams": []
+    },
+    "PROC_COMPLEX_TOSTRING": {
+      "name": "Complex.toString",
+      "className": "Complex",
+      "methodName": "toString",
+      "returnType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "string",
+        "genericArgs": []
+      },
+      "params": [
+        "re",
+        "im"
+      ],
+      "locals": [],
+      "genericParams": []
+    }
+  },
+  "typeDeclarations": [],
+  "classDeclarations": [
+    {
+      "type": "ClassDecl",
+      "name": "Complex",
+      "genericParams": [],
+      "extendsType": null,
+      "members": [
+        {
+          "type": "ClassFieldDecl",
+          "name": "re",
+          "dataType": {
+            "type": "TypeRef",
+            "kind": "simple",
+            "id": "real",
+            "genericArgs": []
+          }
+        },
+        {
+          "type": "ClassFieldDecl",
+          "name": "im",
+          "dataType": {
+            "type": "TypeRef",
+            "kind": "simple",
+            "id": "real",
+            "genericArgs": []
+          }
+        },
+        {
+          "type": "ClassMethodDecl",
+          "methodKind": "function",
+          "isOperator": true,
+          "isStatic": false,
+          "operatorTarget": "+",
+          "name": "op_add",
+          "genericParams": [],
+          "parameters": [
+            {
+              "type": "ParameterDecl",
+              "name": "b",
+              "dataType": {
+                "type": "TypeRef",
+                "kind": "user",
+                "id": "Complex",
+                "genericArgs": []
+              }
+            }
+          ],
+          "localDecls": [
+            {
+              "type": "VarDecl",
+              "name": "r",
+              "dataType": {
+                "type": "TypeRef",
+                "kind": "user",
+                "id": "Complex",
+                "genericArgs": []
+              }
+            }
+          ],
+          "returnType": {
+            "type": "TypeRef",
+            "kind": "user",
+            "id": "Complex",
+            "genericArgs": []
+          },
+          "body": {
+            "type": "Block",
+            "statements": [
+              {
+                "type": "Assign",
+                "target": "r.re",
+                "expr": {
+                  "type": "Binary",
+                  "op": "+",
+                  "left": {
+                    "type": "Identifier",
+                    "name": "self.re"
+                  },
+                  "right": {
+                    "type": "Identifier",
+                    "name": "b.re"
+                  }
+                }
+              },
+              {
+                "type": "Assign",
+                "target": "r.im",
+                "expr": {
+                  "type": "Binary",
+                  "op": "+",
+                  "left": {
+                    "type": "Identifier",
+                    "name": "self.im"
+                  },
+                  "right": {
+                    "type": "Identifier",
+                    "name": "b.im"
+                  }
+                }
+              },
+              {
+                "type": "Return",
+                "expr": {
+                  "type": "Identifier",
+                  "name": "r"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "ClassMethodDecl",
+          "methodKind": "function",
+          "isOperator": true,
+          "isStatic": false,
+          "operatorTarget": "-",
+          "name": "op_sub",
+          "genericParams": [],
+          "parameters": [
+            {
+              "type": "ParameterDecl",
+              "name": "b",
+              "dataType": {
+                "type": "TypeRef",
+                "kind": "user",
+                "id": "Complex",
+                "genericArgs": []
+              }
+            }
+          ],
+          "localDecls": [
+            {
+              "type": "VarDecl",
+              "name": "r",
+              "dataType": {
+                "type": "TypeRef",
+                "kind": "user",
+                "id": "Complex",
+                "genericArgs": []
+              }
+            }
+          ],
+          "returnType": {
+            "type": "TypeRef",
+            "kind": "user",
+            "id": "Complex",
+            "genericArgs": []
+          },
+          "body": {
+            "type": "Block",
+            "statements": [
+              {
+                "type": "Assign",
+                "target": "r.re",
+                "expr": {
+                  "type": "Binary",
+                  "op": "-",
+                  "left": {
+                    "type": "Identifier",
+                    "name": "self.re"
+                  },
+                  "right": {
+                    "type": "Identifier",
+                    "name": "b.re"
+                  }
+                }
+              },
+              {
+                "type": "Assign",
+                "target": "r.im",
+                "expr": {
+                  "type": "Binary",
+                  "op": "-",
+                  "left": {
+                    "type": "Identifier",
+                    "name": "self.im"
+                  },
+                  "right": {
+                    "type": "Identifier",
+                    "name": "b.im"
+                  }
+                }
+              },
+              {
+                "type": "Return",
+                "expr": {
+                  "type": "Identifier",
+                  "name": "r"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "ClassMethodDecl",
+          "methodKind": "function",
+          "isOperator": true,
+          "isStatic": false,
+          "operatorTarget": "*",
+          "name": "op_mul",
+          "genericParams": [],
+          "parameters": [
+            {
+              "type": "ParameterDecl",
+              "name": "b",
+              "dataType": {
+                "type": "TypeRef",
+                "kind": "user",
+                "id": "Complex",
+                "genericArgs": []
+              }
+            }
+          ],
+          "localDecls": [
+            {
+              "type": "VarDecl",
+              "name": "r",
+              "dataType": {
+                "type": "TypeRef",
+                "kind": "user",
+                "id": "Complex",
+                "genericArgs": []
+              }
+            }
+          ],
+          "returnType": {
+            "type": "TypeRef",
+            "kind": "user",
+            "id": "Complex",
+            "genericArgs": []
+          },
+          "body": {
+            "type": "Block",
+            "statements": [
+              {
+                "type": "Assign",
+                "target": "r.re",
+                "expr": {
+                  "type": "Binary",
+                  "op": "-",
+                  "left": {
+                    "type": "Binary",
+                    "op": "*",
+                    "left": {
+                      "type": "Identifier",
+                      "name": "self.re"
+                    },
+                    "right": {
+                      "type": "Identifier",
+                      "name": "b.re"
+                    }
+                  },
+                  "right": {
+                    "type": "Binary",
+                    "op": "*",
+                    "left": {
+                      "type": "Identifier",
+                      "name": "self.im"
+                    },
+                    "right": {
+                      "type": "Identifier",
+                      "name": "b.im"
+                    }
+                  }
+                }
+              },
+              {
+                "type": "Assign",
+                "target": "r.im",
+                "expr": {
+                  "type": "Binary",
+                  "op": "+",
+                  "left": {
+                    "type": "Binary",
+                    "op": "*",
+                    "left": {
+                      "type": "Identifier",
+                      "name": "self.re"
+                    },
+                    "right": {
+                      "type": "Identifier",
+                      "name": "b.im"
+                    }
+                  },
+                  "right": {
+                    "type": "Binary",
+                    "op": "*",
+                    "left": {
+                      "type": "Identifier",
+                      "name": "self.im"
+                    },
+                    "right": {
+                      "type": "Identifier",
+                      "name": "b.re"
+                    }
+                  }
+                }
+              },
+              {
+                "type": "Return",
+                "expr": {
+                  "type": "Identifier",
+                  "name": "r"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "ClassMethodDecl",
+          "methodKind": "function",
+          "isOperator": true,
+          "isStatic": false,
+          "operatorTarget": "/",
+          "name": "op_div",
+          "genericParams": [],
+          "parameters": [
+            {
+              "type": "ParameterDecl",
+              "name": "b",
+              "dataType": {
+                "type": "TypeRef",
+                "kind": "user",
+                "id": "Complex",
+                "genericArgs": []
+              }
+            }
+          ],
+          "localDecls": [
+            {
+              "type": "VarDecl",
+              "name": "r",
+              "dataType": {
+                "type": "TypeRef",
+                "kind": "user",
+                "id": "Complex",
+                "genericArgs": []
+              }
+            },
+            {
+              "type": "VarDecl",
+              "name": "d",
+              "dataType": {
+                "type": "TypeRef",
+                "kind": "simple",
+                "id": "real",
+                "genericArgs": []
+              }
+            }
+          ],
+          "returnType": {
+            "type": "TypeRef",
+            "kind": "user",
+            "id": "Complex",
+            "genericArgs": []
+          },
+          "body": {
+            "type": "Block",
+            "statements": [
+              {
+                "type": "Assign",
+                "target": "d",
+                "expr": {
+                  "type": "Binary",
+                  "op": "+",
+                  "left": {
+                    "type": "Binary",
+                    "op": "*",
+                    "left": {
+                      "type": "Identifier",
+                      "name": "b.re"
+                    },
+                    "right": {
+                      "type": "Identifier",
+                      "name": "b.re"
+                    }
+                  },
+                  "right": {
+                    "type": "Binary",
+                    "op": "*",
+                    "left": {
+                      "type": "Identifier",
+                      "name": "b.im"
+                    },
+                    "right": {
+                      "type": "Identifier",
+                      "name": "b.im"
+                    }
+                  }
+                }
+              },
+              {
+                "type": "If",
+                "condition": {
+                  "type": "Binary",
+                  "op": "=",
+                  "left": {
+                    "type": "Identifier",
+                    "name": "d"
+                  },
+                  "right": {
+                    "type": "RealLiteral",
+                    "value": 0
+                  }
+                },
+                "thenStatements": [
+                  {
+                    "type": "Block",
+                    "statements": [
+                      {
+                        "type": "Assign",
+                        "target": "r.re",
+                        "expr": {
+                          "type": "RealLiteral",
+                          "value": 0
+                        }
+                      },
+                      {
+                        "type": "Assign",
+                        "target": "r.im",
+                        "expr": {
+                          "type": "RealLiteral",
+                          "value": 0
+                        }
+                      },
+                      {
+                        "type": "Return",
+                        "expr": {
+                          "type": "Identifier",
+                          "name": "r"
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "elseStatements": []
+              },
+              {
+                "type": "Assign",
+                "target": "r.re",
+                "expr": {
+                  "type": "Binary",
+                  "op": "/",
+                  "left": {
+                    "type": "Binary",
+                    "op": "+",
+                    "left": {
+                      "type": "Binary",
+                      "op": "*",
+                      "left": {
+                        "type": "Identifier",
+                        "name": "self.re"
+                      },
+                      "right": {
+                        "type": "Identifier",
+                        "name": "b.re"
+                      }
+                    },
+                    "right": {
+                      "type": "Binary",
+                      "op": "*",
+                      "left": {
+                        "type": "Identifier",
+                        "name": "self.im"
+                      },
+                      "right": {
+                        "type": "Identifier",
+                        "name": "b.im"
+                      }
+                    }
+                  },
+                  "right": {
+                    "type": "Identifier",
+                    "name": "d"
+                  }
+                }
+              },
+              {
+                "type": "Assign",
+                "target": "r.im",
+                "expr": {
+                  "type": "Binary",
+                  "op": "/",
+                  "left": {
+                    "type": "Binary",
+                    "op": "-",
+                    "left": {
+                      "type": "Binary",
+                      "op": "*",
+                      "left": {
+                        "type": "Identifier",
+                        "name": "self.im"
+                      },
+                      "right": {
+                        "type": "Identifier",
+                        "name": "b.re"
+                      }
+                    },
+                    "right": {
+                      "type": "Binary",
+                      "op": "*",
+                      "left": {
+                        "type": "Identifier",
+                        "name": "self.re"
+                      },
+                      "right": {
+                        "type": "Identifier",
+                        "name": "b.im"
+                      }
+                    }
+                  },
+                  "right": {
+                    "type": "Identifier",
+                    "name": "d"
+                  }
+                }
+              },
+              {
+                "type": "Return",
+                "expr": {
+                  "type": "Identifier",
+                  "name": "r"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "ClassMethodDecl",
+          "methodKind": "function",
+          "isOperator": true,
+          "isStatic": false,
+          "operatorTarget": "=",
+          "name": "op_eq",
+          "genericParams": [],
+          "parameters": [
+            {
+              "type": "ParameterDecl",
+              "name": "b",
+              "dataType": {
+                "type": "TypeRef",
+                "kind": "user",
+                "id": "Complex",
+                "genericArgs": []
+              }
+            }
+          ],
+          "localDecls": [],
+          "returnType": {
+            "type": "TypeRef",
+            "kind": "simple",
+            "id": "boolean",
+            "genericArgs": []
+          },
+          "body": {
+            "type": "Block",
+            "statements": [
+              {
+                "type": "If",
+                "condition": {
+                  "type": "Binary",
+                  "op": "<>",
+                  "left": {
+                    "type": "Identifier",
+                    "name": "self.re"
+                  },
+                  "right": {
+                    "type": "Identifier",
+                    "name": "b.re"
+                  }
+                },
+                "thenStatements": [
+                  {
+                    "type": "Return",
+                    "expr": {
+                      "type": "BooleanLiteral",
+                      "value": false
+                    }
+                  }
+                ],
+                "elseStatements": []
+              },
+              {
+                "type": "Return",
+                "expr": {
+                  "type": "Binary",
+                  "op": "=",
+                  "left": {
+                    "type": "Identifier",
+                    "name": "self.im"
+                  },
+                  "right": {
+                    "type": "Identifier",
+                    "name": "b.im"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "ClassMethodDecl",
+          "methodKind": "function",
+          "isOperator": true,
+          "isStatic": true,
+          "operatorTarget": "Complex",
+          "name": "op_from_real",
+          "genericParams": [],
+          "parameters": [
+            {
+              "type": "ParameterDecl",
+              "name": "x",
+              "dataType": {
+                "type": "TypeRef",
+                "kind": "simple",
+                "id": "real",
+                "genericArgs": []
+              }
+            }
+          ],
+          "localDecls": [
+            {
+              "type": "VarDecl",
+              "name": "r",
+              "dataType": {
+                "type": "TypeRef",
+                "kind": "user",
+                "id": "Complex",
+                "genericArgs": []
+              }
+            }
+          ],
+          "returnType": {
+            "type": "TypeRef",
+            "kind": "user",
+            "id": "Complex",
+            "genericArgs": []
+          },
+          "body": {
+            "type": "Block",
+            "statements": [
+              {
+                "type": "Assign",
+                "target": "r.re",
+                "expr": {
+                  "type": "Identifier",
+                  "name": "x"
+                }
+              },
+              {
+                "type": "Assign",
+                "target": "r.im",
+                "expr": {
+                  "type": "RealLiteral",
+                  "value": 0
+                }
+              },
+              {
+                "type": "Return",
+                "expr": {
+                  "type": "Identifier",
+                  "name": "r"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "ClassMethodDecl",
+          "methodKind": "function",
+          "isOperator": true,
+          "isStatic": false,
+          "operatorTarget": "real",
+          "name": "op_to_real",
+          "genericParams": [],
+          "parameters": [],
+          "localDecls": [],
+          "returnType": {
+            "type": "TypeRef",
+            "kind": "simple",
+            "id": "real",
+            "genericArgs": []
+          },
+          "body": {
+            "type": "Block",
+            "statements": [
+              {
+                "type": "Return",
+                "expr": {
+                  "type": "Identifier",
+                  "name": "self.re"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "ClassMethodDecl",
+          "methodKind": "function",
+          "name": "conj",
+          "genericParams": [],
+          "parameters": [],
+          "localDecls": [
+            {
+              "type": "VarDecl",
+              "name": "r",
+              "dataType": {
+                "type": "TypeRef",
+                "kind": "user",
+                "id": "Complex",
+                "genericArgs": []
+              }
+            }
+          ],
+          "returnType": {
+            "type": "TypeRef",
+            "kind": "user",
+            "id": "Complex",
+            "genericArgs": []
+          },
+          "body": {
+            "type": "Block",
+            "statements": [
+              {
+                "type": "Assign",
+                "target": "r.re",
+                "expr": {
+                  "type": "Identifier",
+                  "name": "self.re"
+                }
+              },
+              {
+                "type": "Assign",
+                "target": "r.im",
+                "expr": {
+                  "type": "Binary",
+                  "op": "-",
+                  "left": {
+                    "type": "RealLiteral",
+                    "value": 0
+                  },
+                  "right": {
+                    "type": "Identifier",
+                    "name": "self.im"
+                  }
+                }
+              },
+              {
+                "type": "Return",
+                "expr": {
+                  "type": "Identifier",
+                  "name": "r"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "ClassMethodDecl",
+          "methodKind": "function",
+          "name": "normSq",
+          "genericParams": [],
+          "parameters": [],
+          "localDecls": [],
+          "returnType": {
+            "type": "TypeRef",
+            "kind": "simple",
+            "id": "real",
+            "genericArgs": []
+          },
+          "body": {
+            "type": "Block",
+            "statements": [
+              {
+                "type": "Return",
+                "expr": {
+                  "type": "Binary",
+                  "op": "+",
+                  "left": {
+                    "type": "Binary",
+                    "op": "*",
+                    "left": {
+                      "type": "Identifier",
+                      "name": "self.re"
+                    },
+                    "right": {
+                      "type": "Identifier",
+                      "name": "self.re"
+                    }
+                  },
+                  "right": {
+                    "type": "Binary",
+                    "op": "*",
+                    "left": {
+                      "type": "Identifier",
+                      "name": "self.im"
+                    },
+                    "right": {
+                      "type": "Identifier",
+                      "name": "self.im"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "ClassMethodDecl",
+          "methodKind": "function",
+          "name": "abs",
+          "genericParams": [],
+          "parameters": [],
+          "localDecls": [
+            {
+              "type": "VarDecl",
+              "name": "guess",
+              "dataType": {
+                "type": "TypeRef",
+                "kind": "simple",
+                "id": "real",
+                "genericArgs": []
+              }
+            },
+            {
+              "type": "VarDecl",
+              "name": "mag",
+              "dataType": {
+                "type": "TypeRef",
+                "kind": "simple",
+                "id": "real",
+                "genericArgs": []
+              }
+            },
+            {
+              "type": "VarDecl",
+              "name": "step",
+              "dataType": {
+                "type": "TypeRef",
+                "kind": "simple",
+                "id": "integer",
+                "genericArgs": []
+              }
+            }
+          ],
+          "returnType": {
+            "type": "TypeRef",
+            "kind": "simple",
+            "id": "real",
+            "genericArgs": []
+          },
+          "body": {
+            "type": "Block",
+            "statements": [
+              {
+                "type": "Assign",
+                "target": "mag",
+                "expr": {
+                  "type": "Binary",
+                  "op": "+",
+                  "left": {
+                    "type": "Binary",
+                    "op": "*",
+                    "left": {
+                      "type": "Identifier",
+                      "name": "self.re"
+                    },
+                    "right": {
+                      "type": "Identifier",
+                      "name": "self.re"
+                    }
+                  },
+                  "right": {
+                    "type": "Binary",
+                    "op": "*",
+                    "left": {
+                      "type": "Identifier",
+                      "name": "self.im"
+                    },
+                    "right": {
+                      "type": "Identifier",
+                      "name": "self.im"
+                    }
+                  }
+                }
+              },
+              {
+                "type": "If",
+                "condition": {
+                  "type": "Binary",
+                  "op": "<=",
+                  "left": {
+                    "type": "Identifier",
+                    "name": "mag"
+                  },
+                  "right": {
+                    "type": "RealLiteral",
+                    "value": 0
+                  }
+                },
+                "thenStatements": [
+                  {
+                    "type": "Return",
+                    "expr": {
+                      "type": "RealLiteral",
+                      "value": 0
+                    }
+                  }
+                ],
+                "elseStatements": []
+              },
+              {
+                "type": "Assign",
+                "target": "guess",
+                "expr": {
+                  "type": "Identifier",
+                  "name": "mag"
+                }
+              },
+              {
+                "type": "Assign",
+                "target": "step",
+                "expr": {
+                  "type": "NumberLiteral",
+                  "value": 0
+                }
+              },
+              {
+                "type": "While",
+                "condition": {
+                  "type": "Binary",
+                  "op": "<",
+                  "left": {
+                    "type": "Identifier",
+                    "name": "step"
+                  },
+                  "right": {
+                    "type": "NumberLiteral",
+                    "value": 24
+                  }
+                },
+                "body": {
+                  "type": "Block",
+                  "statements": [
+                    {
+                      "type": "Assign",
+                      "target": "guess",
+                      "expr": {
+                        "type": "Binary",
+                        "op": "/",
+                        "left": {
+                          "type": "Binary",
+                          "op": "+",
+                          "left": {
+                            "type": "Identifier",
+                            "name": "guess"
+                          },
+                          "right": {
+                            "type": "Binary",
+                            "op": "/",
+                            "left": {
+                              "type": "Identifier",
+                              "name": "mag"
+                            },
+                            "right": {
+                              "type": "Identifier",
+                              "name": "guess"
+                            }
+                          }
+                        },
+                        "right": {
+                          "type": "RealLiteral",
+                          "value": 2
+                        }
+                      }
+                    },
+                    {
+                      "type": "Assign",
+                      "target": "step",
+                      "expr": {
+                        "type": "Binary",
+                        "op": "+",
+                        "left": {
+                          "type": "Identifier",
+                          "name": "step"
+                        },
+                        "right": {
+                          "type": "NumberLiteral",
+                          "value": 1
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "type": "Return",
+                "expr": {
+                  "type": "Identifier",
+                  "name": "guess"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "ClassMethodDecl",
+          "methodKind": "function",
+          "name": "toString",
+          "genericParams": [],
+          "parameters": [],
+          "localDecls": [],
+          "returnType": {
+            "type": "TypeRef",
+            "kind": "simple",
+            "id": "string",
+            "genericArgs": []
+          },
+          "body": {
+            "type": "Block",
+            "statements": [
+              {
+                "type": "If",
+                "condition": {
+                  "type": "Binary",
+                  "op": "<",
+                  "left": {
+                    "type": "Identifier",
+                    "name": "self.im"
+                  },
+                  "right": {
+                    "type": "RealLiteral",
+                    "value": 0
+                  }
+                },
+                "thenStatements": [
+                  {
+                    "type": "Return",
+                    "expr": {
+                      "type": "Binary",
+                      "op": "+",
+                      "left": {
+                        "type": "Binary",
+                        "op": "+",
+                        "left": {
+                          "type": "Binary",
+                          "op": "+",
+                          "left": {
+                            "type": "Binary",
+                            "op": "+",
+                            "left": {
+                              "type": "StringLiteral",
+                              "value": ""
+                            },
+                            "right": {
+                              "type": "Identifier",
+                              "name": "self.re"
+                            }
+                          },
+                          "right": {
+                            "type": "StringLiteral",
+                            "value": "-"
+                          }
+                        },
+                        "right": {
+                          "type": "Binary",
+                          "op": "-",
+                          "left": {
+                            "type": "RealLiteral",
+                            "value": 0
+                          },
+                          "right": {
+                            "type": "Identifier",
+                            "name": "self.im"
+                          }
+                        }
+                      },
+                      "right": {
+                        "type": "StringLiteral",
+                        "value": "i"
+                      }
+                    }
+                  }
+                ],
+                "elseStatements": []
+              },
+              {
+                "type": "Return",
+                "expr": {
+                  "type": "Binary",
+                  "op": "+",
+                  "left": {
+                    "type": "Binary",
+                    "op": "+",
+                    "left": {
+                      "type": "Binary",
+                      "op": "+",
+                      "left": {
+                        "type": "Binary",
+                        "op": "+",
+                        "left": {
+                          "type": "StringLiteral",
+                          "value": ""
+                        },
+                        "right": {
+                          "type": "Identifier",
+                          "name": "self.re"
+                        }
+                      },
+                      "right": {
+                        "type": "StringLiteral",
+                        "value": "+"
+                      }
+                    },
+                    "right": {
+                      "type": "Identifier",
+                      "name": "self.im"
+                    }
+                  },
+                  "right": {
+                    "type": "StringLiteral",
+                    "value": "i"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "entryLabel": "MAIN",
+  "libraries": [
+    "imaginary"
+  ],
+  "mapperImports": [],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "9f47b3bac556be1d425d5d10e3b8e92784536f814a7e0167e08333117884023f",
+    "signedAt": "2026-09-11T20:24:59.512Z",
+    "pcodeLength": 6442,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

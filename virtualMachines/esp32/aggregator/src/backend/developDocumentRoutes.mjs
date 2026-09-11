@@ -22,7 +22,7 @@ const runtimeRoot = path.resolve(
 const workspaceRoot = path.join(runtimeRoot, 'develop-documents');
 const librarianSubschemasPath = path.join(runtimeRoot, 'services', 'librarian', 'subschemas.json');
 
-async function runCompiledPmachineArtifact(compiled) {
+async function runCompiledPmachineArtifact(compiled, sourceMessage = '') {
   const programMap = compiled.programMap || {};
   const mappingsById = new Map();
   mappingsById.__globals = Array.isArray(programMap.globals) ? programMap.globals : [];
@@ -34,12 +34,19 @@ async function runCompiledPmachineArtifact(compiled) {
     queueTypesByName: new Map(),
     isoTypeIds: new Set(),
     inputQueue: `${compiled.runtimeUnit?.id || 'language'}.run`,
-    sourceMessage: '',
+    sourceMessage,
     runtimeContext: {}
   });
   return {
     stdout: result?.stdout || [],
     deliveries: result?.deliveries || [],
+    messageTrace: {
+      incoming: sourceMessage,
+      outgoing: (result?.deliveries || []).map((delivery) => ({
+        queueName: delivery.queueName,
+        message: delivery.message
+      }))
+    },
     response: result?.response ?? null,
     error: result?.error || null
   };
@@ -327,7 +334,7 @@ export async function registerDevelopDocumentRoutes(app) {
         }
         deployed = true;
         if ((languageId === 'cobolish' || languageId === 'vbish') && mode === 'compile-run') {
-          run = await runCompiledPmachineArtifact(compiled);
+          run = await runCompiledPmachineArtifact(compiled, String(req.body?.message ?? ''));
         }
       }
 

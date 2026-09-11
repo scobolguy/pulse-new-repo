@@ -528,6 +528,9 @@ function buildDeploymentAliases(deployment) {
 
 function normalizeDeploymentRecord(deployment = {}) {
   const serviceName = String(deployment?.serviceName || '').trim();
+  const workloadKind = ['program', 'service', 'daemon', 'transient'].includes(String(deployment?.workloadKind || deployment?.runtimeKind || '').trim().toLowerCase())
+    ? String(deployment?.workloadKind || deployment?.runtimeKind).trim().toLowerCase()
+    : 'service';
   const targetNodeIds = getDeploymentTargets(deployment);
   const targetNodeId = String(deployment?.targetNodeId || targetNodeIds[0] || '').trim() || null;
   const runtimeState = getDeploymentRuntimeState(deployment);
@@ -546,6 +549,7 @@ function normalizeDeploymentRecord(deployment = {}) {
     deploymentId,
     deploymentRef: String(deployment?.deploymentRef || key).trim(),
     serviceName,
+    workloadKind,
     targetNodeId,
     targetNodeIds,
     scope,
@@ -617,6 +621,7 @@ function collectDeploymentServiceInstances(deployment, serviceInstanceRegistry) 
     records.push({
       instanceId: buildDeploymentInstanceId(deployment, normalizedTargetNodeId),
       serviceName: String(deployment?.serviceName || '').trim(),
+      workloadKind: String(deployment?.workloadKind || 'service').trim().toLowerCase(),
       nodeId: normalizedTargetNodeId,
       ip: pmachineInstance?.ip || null,
       port: pmachineInstance?.port || null,
@@ -626,6 +631,7 @@ function collectDeploymentServiceInstances(deployment, serviceInstanceRegistry) 
         deploymentId,
         deploymentKey: String(deployment?.key || '').trim(),
         deploymentName: getDeploymentName(deployment) || String(deployment?.serviceName || '').trim(),
+        workloadKind: String(deployment?.workloadKind || 'service').trim().toLowerCase(),
         packageName: deployment?.packageName || null,
         packageVersion: deployment?.packageVersion || null,
         targetNodeId: normalizedTargetNodeId,
@@ -733,6 +739,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     upsertServiceInstance,
     resolveServiceInstance,
     ffsDeploymentRegistry,
+    jsPmachineDeploymentSupervisor,
     setNodeLifecycleState,
     deploymentIndexPath
   } = deps;
@@ -744,6 +751,28 @@ export function registerTopologyRuntimeRoutes(app, deps) {
   let clusterRegistryLoaded = false;
   let siteRegistry = {};
   let siteRegistryLoaded = false;
+
+  async function restorePersistedDeployments() {
+    const index = await readDeploymentIndexFromDisk(deploymentIndexPath);
+    syncDeploymentRegistry(ffsDeploymentRegistry, index.deployments);
+    for (const deployment of ffsDeploymentRegistry.values()) {
+      upsertDeploymentServiceInstances(serviceInstanceRegistry, deployment);
+    }
+    return index.deployments.length;
+  }
+
+  void restorePersistedDeployments().then((count) => {
+    if (count > 0) console.log(`[DEPLOYMENT] Restored ${count} persisted deployment record(s)`);
+    if (jsPmachineDeploymentSupervisor) {
+      void jsPmachineDeploymentSupervisor.restore(Array.from(ffsDeploymentRegistry.values()));
+    }
+  }).catch((error) => {
+    console.warn('[DEPLOYMENT] Failed to restore persisted deployments:', error?.message || error);
+  });
+
+  app.get('/api/pmachine/deployment-runtime', (req, res) => {
+    res.json({ status: 'ok', runtimes: jsPmachineDeploymentSupervisor?.list?.() || [] });
+  });
 
   async function ensureNodeRenameMapLoaded() {
     if (nodeRenameMapLoaded) return;
@@ -2331,18 +2360,18 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     const normalizedPath = String(remotePath || '').trim();
     if (!normalizedIp) throw new Error('board ip is required');
     if (!normalizedPath) throw new Error('remote path is required');
+    const boardPort = String(process.env.PULSE_ESP32_HTTP_PORT || '80').trim() || '80';
+    const boardBaseUrl = `http://${normalizedIp}${boardPort === '80' ? '' : `:${boardPort}`}`;
 
     const pathSegments = normalizedPath.split('/').filter(Boolean);
     const parentSegments = pathSegments.slice(0, -1);
     let parentPath = '';
     for (const segment of parentSegments) {
       parentPath += `/${segment}`;
-      const createResponse = await fetch(`http://${normalizedIp}:4000/api/fileserver/ffs/create`, {
+      const createResponse = await fetch(`${boardBaseUrl}/ffs/mkdir`, {
         method: 'POST',
-        headers: {
-          'content-type': 'application/json'
-        },
-        body: JSON.stringify({ path: parentPath, type: 'directory' })
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ dir: parentPath }),
       });
       if (!createResponse.ok && createResponse.status !== 409) {
         const createText = await createResponse.text().catch(() => '');
@@ -2350,19 +2379,17 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       }
     }
 
-    const body = JSON.stringify({
-      path: normalizedPath,
-      data: String(content || '')
+    const body = new URLSearchParams({
+      file: normalizedPath,
+      body: String(content || '')
     });
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), Math.max(250, timeoutMs));
     try {
-      const response = await fetch(`http://${normalizedIp}:4000/api/fileserver/ffs/put`, {
+      const response = await fetch(`${boardBaseUrl}/ffs/upload`, {
         method: 'POST',
-        headers: {
-          'content-type': 'application/json'
-        },
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
         body,
         signal: controller.signal
       });
@@ -3991,6 +4018,77 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     res.json({ deployments });
   });
 
+  app.get('/api/deployments/startup-manifests', async (req, res) => {
+    try {
+      const manifestDirectory = path.join(path.dirname(deploymentIndexPath), 'startup-manifests');
+      const entries = await fs.readdir(manifestDirectory, { withFileTypes: true }).catch(() => []);
+      const manifests = [];
+      for (const entry of entries.filter((item) => item.isFile() && item.name.endsWith('.json'))) {
+        const raw = await fs.readFile(path.join(manifestDirectory, entry.name), 'utf8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') manifests.push(parsed);
+      }
+      return res.json({ manifests });
+    } catch (error) {
+      return res.status(500).json({ error: error?.message || 'failed to list startup manifests' });
+    }
+  });
+
+  app.get('/api/nodes/:nodeId/startup-manifest', async (req, res) => {
+    try {
+      const requestedNodeId = String(req.params.nodeId || '').trim();
+      const requestedIp = String(req.query?.ip || '').trim();
+      const nodes = await buildCurrentNodesWithTopology();
+      const resolved = resolveManagedNode(requestedNodeId, requestedIp, nodes);
+      const nodeKey = normalizeNodeId(requestedNodeId || resolved.node?.nodeId || resolved.node?.nodeName || resolved.boardIp);
+      if (!nodeKey) return res.status(400).json({ error: 'nodeId is required' });
+      const manifestPath = path.join(path.dirname(deploymentIndexPath), 'startup-manifests', `${nodeKey}.json`);
+      try {
+        const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+        return res.json({ manifest });
+      } catch (error) {
+        if (error?.code === 'ENOENT') return res.status(404).json({ error: 'startup manifest not found', nodeId: requestedNodeId });
+        throw error;
+      }
+    } catch (error) {
+      return res.status(500).json({ error: error?.message || 'failed to read startup manifest' });
+    }
+  });
+
+  app.post('/api/deployments/startup-manifests', async (req, res) => {
+    try {
+      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const nodeId = String(body.nodeId || body.targetNodeId || '').trim();
+      if (!nodeId) return res.status(400).json({ error: 'nodeId is required' });
+      const nodes = await buildCurrentNodesWithTopology();
+      const resolved = resolveManagedNode(nodeId, String(body.ip || '').trim(), nodes);
+      const targetNodeIds = Array.from(new Set((Array.isArray(body.targetNodeIds) ? body.targetNodeIds : [nodeId])
+        .map((value) => String(value || '').trim()).filter(Boolean)));
+      const deployments = Array.from(ffsDeploymentRegistry.values())
+        .filter((deployment) => getDeploymentTargets(deployment).some((target) => targetNodeIds.map(normalizeNodeId).includes(normalizeNodeId(target))))
+        .map((deployment) => normalizeDeploymentRecord(deployment));
+      const manifest = {
+        version: 1,
+        nodeId,
+        targetNodeIds,
+        generatedAt: new Date().toISOString(),
+        startup: { enabled: body.enabled !== false, applyMode: String(body.applyMode || 'restore-running').trim() || 'restore-running' },
+        deployments,
+      };
+      const manifestDirectory = path.join(path.dirname(deploymentIndexPath), 'startup-manifests');
+      await fs.mkdir(manifestDirectory, { recursive: true });
+      const manifestPath = path.join(manifestDirectory, `${normalizeNodeId(nodeId)}.json`);
+      await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+      let nodeFile = null;
+      if (resolved.boardIp) {
+        nodeFile = await uploadFileToBoard(resolved.boardIp, '/startup/deployments.json', `${JSON.stringify(manifest, null, 2)}\n`);
+      }
+      return res.json({ status: 'ok', manifest, manifestPath, nodeFile });
+    } catch (error) {
+      return res.status(500).json({ error: error?.message || 'failed to write startup manifest' });
+    }
+  });
+
   app.post('/api/pmachine/deployments', async (req, res) => {
     try {
       const body = req.body && typeof req.body === 'object' ? req.body : {};
@@ -4020,6 +4118,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
         serviceName,
         packageName,
         packageVersion,
+        workloadKind: String(body.workloadKind || body.runtimeKind || 'service').trim().toLowerCase(),
         targetNodeId: targetNodeIds[0] || null,
         targetNodeIds,
         scope: String(body.scope || (targetNodeIds.length > 1 ? 'collective' : 'node')).trim().toLowerCase() || 'node',
@@ -4043,6 +4142,15 @@ export function registerTopologyRuntimeRoutes(app, deps) {
 
       const currentDeployments = Array.from(ffsDeploymentRegistry.values());
       const existingIdx = currentDeployments.findIndex((deployment) => String(deployment?.key || '') === key);
+      const previousDeployment = existingIdx >= 0 ? normalizeDeploymentRecord(currentDeployments[existingIdx]) : null;
+      const history = previousDeployment
+        ? [...(Array.isArray(previousDeployment.history) ? previousDeployment.history : []), {
+            packageName: previousDeployment.packageName,
+            packageVersion: previousDeployment.packageVersion,
+            updatedAt: previousDeployment.updatedAt
+          }].slice(-10)
+        : [];
+      next.history = history;
       if (existingIdx >= 0) {
         currentDeployments[existingIdx] = next;
       } else {
@@ -4056,15 +4164,67 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       });
 
       upsertDeploymentServiceInstances(serviceInstanceRegistry, next);
+      const runtime = jsPmachineDeploymentSupervisor
+        ? await jsPmachineDeploymentSupervisor.start(next)
+        : null;
+
+      const startupManifestDirectory = path.join(path.dirname(deploymentIndexPath), 'startup-manifests');
+      await fs.mkdir(startupManifestDirectory, { recursive: true });
+      for (const targetNodeId of targetNodeIds) {
+        const targetDeployments = Array.from(ffsDeploymentRegistry.values())
+          .filter((deployment) => getDeploymentTargets(deployment).some((target) => normalizeNodeId(target) === normalizeNodeId(targetNodeId)))
+          .map((deployment) => normalizeDeploymentRecord(deployment));
+        const startupManifest = {
+          version: 1,
+          nodeId: targetNodeId,
+          targetNodeIds: [targetNodeId],
+          generatedAt: new Date().toISOString(),
+          startup: { enabled: true, applyMode: 'restore-running' },
+          deployments: targetDeployments
+        };
+        await fs.writeFile(path.join(startupManifestDirectory, `${normalizeNodeId(targetNodeId)}.json`), `${JSON.stringify(startupManifest, null, 2)}\n`, 'utf8');
+      }
 
       return res.json({
         status: 'ok',
         deployment: next,
+        runtime,
         aliases: buildDeploymentAliases(next),
         persistedAt: persisted.updatedAt
       });
     } catch (error) {
       return res.status(500).json({ error: error?.message || 'failed to deploy flow' });
+    }
+  });
+
+  app.post('/api/pmachine/deployments/:deploymentRef/rollback', async (req, res) => {
+    try {
+      const deploymentRef = String(req.params.deploymentRef || '').trim();
+      const matches = resolveDeploymentMatches(deploymentRef, ffsDeploymentRegistry);
+      if (matches.length === 0) return res.status(404).json({ error: 'deployment not found', deploymentRef });
+      const current = matches[0];
+      const history = Array.isArray(current.history) ? current.history : [];
+      const requestedVersion = String(req.body?.packageVersion || '').trim();
+      const previous = requestedVersion
+        ? history.find((entry) => String(entry?.packageVersion || '') === requestedVersion)
+        : history[history.length - 1];
+      if (!previous?.packageVersion) return res.status(409).json({ error: 'no previous package version is available', deploymentRef });
+
+      const next = normalizeDeploymentRecord({
+        ...current,
+        packageName: previous.packageName || current.packageName,
+        packageVersion: previous.packageVersion,
+        updatedAt: new Date().toISOString(),
+        history: history.filter((entry) => entry !== previous)
+      });
+      const updatedDeployments = Array.from(ffsDeploymentRegistry.values()).map((deployment) => (
+        String(deployment?.key || '') === String(current.key || '') ? next : deployment
+      ));
+      const persisted = await persistDeploymentRecords({ deploymentIndexPath, deploymentRegistry: ffsDeploymentRegistry, deployments: updatedDeployments });
+      upsertDeploymentServiceInstances(serviceInstanceRegistry, next);
+      return res.json({ status: 'ok', action: 'rollback', deployment: next, persistedAt: persisted.updatedAt });
+    } catch (error) {
+      return res.status(500).json({ error: error?.message || 'failed to rollback deployment' });
     }
   });
 
@@ -4105,7 +4265,12 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       });
 
       for (const deployment of filteredMatches) {
-        upsertDeploymentServiceInstances(serviceInstanceRegistry, updateDeploymentRuntimeState(deployment, nextState));
+        const nextDeployment = updateDeploymentRuntimeState(deployment, nextState);
+        upsertDeploymentServiceInstances(serviceInstanceRegistry, nextDeployment);
+        if (jsPmachineDeploymentSupervisor) {
+          if (nextState === 'running') await jsPmachineDeploymentSupervisor.start(nextDeployment);
+          if (nextState === 'stopped' || nextState === 'paused') await jsPmachineDeploymentSupervisor.stop(nextDeployment);
+        }
       }
 
       return res.json({
@@ -4137,6 +4302,12 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       const remaining = Array.from(ffsDeploymentRegistry.values()).filter((deployment) => {
         return !matches.some((match) => String(match?.key || '') === String(deployment?.key || ''));
       });
+
+      if (jsPmachineDeploymentSupervisor) {
+        for (const deployment of matches) {
+          await jsPmachineDeploymentSupervisor.stop(deployment);
+        }
+      }
 
       const persisted = await persistDeploymentRecords({
         deploymentIndexPath,

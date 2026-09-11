@@ -18,6 +18,24 @@ export default class WorkflowDslVisitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by WorkflowDslParser#deploymentDecl.
+	visitDeploymentDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#deploymentItem.
+	visitDeploymentItem(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#booleanLiteral.
+	visitBooleanLiteral(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by WorkflowDslParser#queueDecl.
 	visitQueueDecl(ctx) {
 	  return this.visitChildren(ctx);

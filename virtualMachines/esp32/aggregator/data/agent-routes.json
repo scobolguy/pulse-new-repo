@@ -256,6 +256,48 @@
     },
 
     {
+      "id": "camera-ptz",
+      "description": "Control pan, tilt, zoom, stop, or home position on a Tapo/ONVIF camera.",
+      "patterns": [
+        "\\b(?:pan|tilt|move|turn|rotate|zoom|centre|center|home|stop)\\b[\\s\\S]{0,60}\\b(?:camera|tapo)\\b",
+        "\\b(?:camera|tapo)\\b[\\s\\S]{0,60}\\b(?:left|right|up|down|zoom\\s+in|zoom\\s+out|centre|center|home|stop)\\b"
+      ],
+      "flags": "i",
+      "capture": "^(?<prompt>[\\s\\S]+)$",
+      "captureFlags": "i",
+      "api": null,
+      "formatter": "cameraPtz"
+    },
+
+    {
+      "id": "network-camera-discovery",
+      "description": "Discover and display Tapo, ONVIF, and RTSP cameras on the local network.",
+      "patterns": [
+        "\\b(?:find|discover|scan|locate)\\b[\\s\\S]{0,40}\\b(?:tapo|onvif|rtsp|network|ip)?\\s*cameras?\\b",
+        "\\b(?:show|display|view)\\b[\\s\\S]{0,40}\\b(?:tapo|onvif|rtsp|network|ip)\\s+cameras\\b",
+        "\\b(?:tapo|onvif|rtsp)\\s+cameras\\b"
+      ],
+      "flags": "i",
+      "api": null,
+      "formatter": "networkCameras"
+    },
+
+    {
+      "id": "network-camera-feed",
+      "description": "Show one named Tapo or ONVIF network camera with PTZ controls.",
+      "patterns": [
+        "\\bshow\\s+me\\s+(?:the\\s+)?office\\b",
+        "\\b(?:show|view|open|watch|stream|display)\\b[\\s\\S]{0,30}\\b(?:tapo|onvif|rtsp)\\b[\\s\\S]{0,30}\\bcamera\\b",
+        "\\b(?:show|view|open|watch|stream|display)\\b[\\s\\S]{0,30}\\bnetwork\\s+camera\\b"
+      ],
+      "flags": "i",
+      "capture": "(?:show\\s+me\\s+(?:the\\s+)?|camera\\s+|tapo\\s+|onvif\\s+)(?<camera>[\\w.-]+(?:\\s+\\d+)?)\\s*$",
+      "captureFlags": "i",
+      "api": null,
+      "formatter": "networkCamera"
+    },
+
+    {
       "id": "camera-display-stream",
       "description": "Route a named camera feed to a named physical display. The camera owns frame delivery to the display.",
       "patterns": [

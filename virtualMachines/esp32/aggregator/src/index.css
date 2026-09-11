@@ -346,6 +346,61 @@ code {
   padding: 20px;
 }
 
+.topology-area {
+  border-top: 1px solid #d0d7de;
+  background: #fff;
+}
+
+.topology-area:last-child {
+  border-bottom: 1px solid #d0d7de;
+}
+
+.topology-area-toggle {
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 14px;
+  border: 0;
+  background: #f6f8fa;
+  color: #1f2328;
+  font: 600 14px/1.3 Verdana, sans-serif;
+  text-align: left;
+  cursor: pointer;
+}
+
+.topology-area-toggle:hover {
+  background: #eef1f4;
+}
+
+.topology-area-count {
+  margin-left: auto;
+  padding: 2px 7px;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  color: #57606a;
+  background: #fff;
+  font-size: 11px;
+}
+
+.topology-area-content {
+  padding: 14px;
+}
+
+.topology-raw-list {
+  margin-top: 16px;
+  border-top: 1px solid #d8dee4;
+  padding-top: 10px;
+}
+
+.topology-raw-list > summary {
+  cursor: pointer;
+  color: #57606a;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .topology-header h1 {
   margin: 0 0 8px;
   font-size: 32px;

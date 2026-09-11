@@ -1,0 +1,12 @@
+{
+  "attempt": 100,
+  "passed": 0,
+  "failed": 100,
+  "last": {
+    "attempt": 100,
+    "ok": false,
+    "ms": 30005,
+    "error": "The operation was aborted due to timeout"
+  },
+  "updatedAt": "2026-09-07T22:20:51.270Z"
+}

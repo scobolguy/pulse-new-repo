@@ -103,6 +103,7 @@ export async function createAlexaVacuumController({
     return new Promise((resolve, reject) => {
       const options = {
         acceptLanguage: 'en-US',
+        amazonPageProxyLanguage: 'en_US',
         amazonPage,
         useWsMqtt: false,
         logger: () => {},
@@ -110,6 +111,7 @@ export async function createAlexaVacuumController({
           ? { cookie, refreshCookie: true }
           : {
               proxyOnly: true,
+              proxyOwnIp: 'localhost',
               proxyPort,
               onProxyRequestCookies: async (c) => {
                 await fs.mkdir(path.dirname(cookiePath), { recursive: true });

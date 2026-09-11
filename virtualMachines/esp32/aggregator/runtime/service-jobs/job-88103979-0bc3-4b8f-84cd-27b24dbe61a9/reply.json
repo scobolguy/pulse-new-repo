@@ -1,0 +1,8 @@
+{
+  "value": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Document xmlns=\"urn:iso:std:iso:20022:tech:xsd:pacs.008.001.10\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:hdr=\"urn:swift:xsd:head.001.001.02\">\n  <hdr:AppHdr>\n    <hdr:BizMsgIdr>INSTANCE-PROOF-run-1788897388998-0863</hdr:BizMsgIdr>\n  </hdr:AppHdr>\n  <FIToFICstmrCdtTrf>\n    <GrpHdr>\n      <MsgId>INSTANCE-PROOF-run-1788897388998-0863</MsgId>\n    </GrpHdr>\n    <CdtTrfTxInf>\n      <PmtId>\n        <InstrId>INSTANCE-PROOF-run-1788897388998-0863</InstrId>\n        <EndToEndId>INSTANCE-PROOF-run-1788897388998-0863</EndToEndId>\n        <TxId>INSTANCE-PROOF-run-1788897388998-0863</TxId>\n      </PmtId>\n      <IntrBkSttlmAmt Ccy=\"USD\">1282.31</IntrBkSttlmAmt>\n    </CdtTrfTxInf>\n  </FIToFICstmrCdtTrf>\n</Document>",
+  "serviceInstanceId": "http://192.168.2.155",
+  "serviceId": "mt103-to-pacs008",
+  "conversionFormat": "mt103->pacs-xml",
+  "messageType": "PACS008",
+  "conversionApplied": true
+}

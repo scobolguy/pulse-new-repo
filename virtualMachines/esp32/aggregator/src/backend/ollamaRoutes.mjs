@@ -26,6 +26,7 @@ import { matchAgentIntent } from './agentRouteLoader.mjs';
 import { getNliConfig } from './nliConfig.mjs';
 import { getNliCorrectionStatus, runPendingNliCorrections } from './nliCorrectionService.mjs';
 import { buildAuthoredFlowDocument, buildAuthoredFlowPcodeArtifacts, normalizeFlowTypeId, parseFlowAuthoringPrompt } from './flowAuthoringAgent.mjs';
+import { discoverOnvifCameras, moveOnvifCamera, registerOnvifCameraRoutes, resolveOnvifCamera } from './onvifCameraService.mjs';
 
 const SLOW_QUERY_THRESHOLD = 60000; // 60 seconds
 const SLOW_QUERY_LOG_FILE = path.resolve('./data/logs/slow-queries.jsonl');
@@ -270,6 +271,38 @@ const parseDeployProjectRequest = (query) => {
     projectId: String(projectFirst[1] || OLLAMA_DEFAULT_PROJECT_ID).trim() || OLLAMA_DEFAULT_PROJECT_ID,
     subproject: String(projectFirst[2] || '').trim(),
     nodeId: String(projectFirst[3] || '').trim(),
+  };
+};
+
+const parseWflDeploymentRequest = (query) => {
+  const q = String(query || '').trim();
+  if (!q || !/\b(wfl|workflow|service|daemon|program)\b/i.test(q) || !/\bdeploy\b/i.test(q)) return null;
+  const serviceMatch = q.match(/\bservice\s+["']?([a-zA-Z0-9._:-]+)["']?/i);
+  const fileMatch = q.match(/\b(?:file|source)\s+["']?([a-zA-Z0-9._\/-]+)["']?/i);
+  const projectMatch = q.match(/\bproject\s+["']?([a-zA-Z0-9._:-]+)["']?/i);
+  const inputMatch = q.match(/\b(?:input|from)\s+(?:queue\s+)?["']?([a-zA-Z0-9._:-]+)["']?/i);
+  const outputMatch = q.match(/\b(?:output|to)\s+(?:queue\s+)?["']?([a-zA-Z0-9._:-]+)["']?/i);
+  const targetsMatch = q.match(/\b(?:node|nodes|targets?)\s+(.+?)(?:\s+startup\b|\s*$)/i);
+  const targets = String(targetsMatch?.[1] || '')
+    .split(/,|\s+and\s+/i)
+    .map((value) => value.trim().replace(/^["']|["']$/g, ''))
+    .filter((value) => value && !/^(startup|with|using)$/i.test(value));
+  if (!serviceMatch?.[1] || !fileMatch?.[1] || !projectMatch?.[1] || !inputMatch?.[1] || !outputMatch?.[1] || targets.length === 0) return null;
+  const serviceName = serviceMatch[1];
+  const projectId = projectMatch[1];
+  const fileName = fileMatch[1];
+  return {
+    projectId,
+    serviceName,
+    fileName,
+    inputQueue: inputMatch[1],
+    outputQueue: outputMatch[1],
+    targets,
+    wfl: [
+      `DEPLOYMENT "${serviceName}" PROJECT "${projectId}" TARGETS (${targets.map((target) => `"${target}"`).join(',')}) BEGIN`,
+      `  SERVICE "${serviceName}" FILE "${fileName}" QUEUE "${inputMatch[1]}" -> "${outputMatch[1]}" TARGETS (${targets.map((target) => `"${target}"`).join(',')}) STARTUP true;`,
+      'END;'
+    ].join('\n')
   };
 };
 
@@ -1200,6 +1233,9 @@ const parseDeviceName = (query) => {
   // Pattern 1: "child1", "child2", "child3"
   const childMatch = lowerQuery.match(/child[123]\b/);
   if (childMatch) return childMatch[0];
+
+  const namedNode = lowerQuery.match(/\b(den|bedroom|displaynode|kasa|home\s+automation)\b/i);
+  if (namedNode) return namedNode[1].replace(/\s+/g, '');
   
   // Pattern 2: "neptune.child1"
   const fullyQualified = lowerQuery.match(/neptune\.child[123]\b/);
@@ -1309,7 +1345,7 @@ const sendGpioCommand = (command) => {
  */
 const isDeviceControlQuery = (query) => {
   const lowerQuery = query.toLowerCase();
-  const hasDevice = /child1|child2|child3|neptune\.child\d/.test(lowerQuery);
+  const hasDevice = /child1|child2|child3|neptune\.child\d|\bden\b|\bbedroom\b|\bdisplaynode\b|\bkasa\b/.test(lowerQuery);
   const hasAction = /turn\s+(on|off)|toggle|switch|activate|deactivate|blink|pulse|set.*(?:led|light)/i.test(lowerQuery);
   return hasDevice && hasAction;
 };
@@ -1341,6 +1377,7 @@ const parseDeviceControlQuery = (query) => {
  */
 export function registerOllamaRoutes(app) {
   console.log('[OLLAMA] registerOllamaRoutes() called, starting route registration...');
+  registerOnvifCameraRoutes(app);
   
   /**
    * Fetch real node data from topology using HTTP and enhance with system context.
@@ -1436,13 +1473,45 @@ export function registerOllamaRoutes(app) {
   const knownNodes = {
     'child1': { ip: '192.168.2.157', port: 80 },
     'child2': { ip: '192.168.2.59', port: 80 },
-    'child3': { ip: '192.168.2.58', port: 80 }
+    'child3': { ip: '192.168.2.58', port: 80 },
+    'den': { ip: '192.168.2.29', port: 80 },
+    'bedroom': { ip: '192.168.2.28', port: 80 },
+    'displaynode': { ip: '192.168.2.155', port: 80 }
   };
 
   /**
    * Control device on a node by making HTTP request directly to the device endpoint
    */
   const controlDeviceOnNode = async (nodeId, device, action) => {
+    try {
+      const homeAutomationResponse = await fetch('http://127.0.0.1:4000/api/home-automation/devices');
+      if (homeAutomationResponse.ok) {
+        const homeAutomationPayload = await homeAutomationResponse.json();
+        const requestedName = String(nodeId || '').trim().toLowerCase();
+        const homeDevice = (Array.isArray(homeAutomationPayload?.devices) ? homeAutomationPayload.devices : [])
+          .find((candidate) => String(candidate?.name || '').trim().toLowerCase() === requestedName);
+        if (homeDevice && ['tplink', 'kasa'].includes(String(homeDevice.protocol || '').trim().toLowerCase())) {
+          const actionResponse = await fetch(`http://127.0.0.1:4000/api/home-automation/devices/${encodeURIComponent(homeDevice.id)}/action`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', 'x-user-id': OLLAMA_QUEUE_ACTION_USER_ID },
+            body: JSON.stringify({ action: String(action || '').toLowerCase() })
+          });
+          const actionPayload = await actionResponse.json().catch(() => ({}));
+          return {
+            success: actionResponse.ok && !actionPayload?.error,
+            device: homeDevice.name,
+            protocol: homeDevice.protocol,
+            nodeId,
+            action,
+            response: actionPayload,
+            ...(actionPayload?.error ? { error: actionPayload.error } : {})
+          };
+        }
+      }
+    } catch (error) {
+      console.warn('[OLLAMA] Home automation device dispatch failed:', error.message);
+    }
+
     return new Promise((resolve) => {
       let nodeIp, nodePort;
       
@@ -1462,7 +1531,10 @@ export function registerOllamaRoutes(app) {
         res.on('end', () => {
           try {
             const nodes = JSON.parse(data);
-            const node = nodes.find(n => n.nodeName === nodeId || n.nodeId === nodeId);
+            const normalizedNodeId = String(nodeId || '').trim().toLowerCase();
+            const node = nodes.find(n => String(n.nodeName || '').trim().toLowerCase() === normalizedNodeId
+              || String(n.nodeId || '').trim().toLowerCase() === normalizedNodeId
+              || String(n.ip || '').trim().toLowerCase() === normalizedNodeId);
             if (!node) {
               resolve({ success: false, error: `Node ${nodeId} not found in registry or known nodes` });
               return;
@@ -1808,6 +1880,32 @@ Neptune manages device discovery and communication for all child nodes.`
         responseCache.set(cacheKey, { response: renameResponse, timestamp: Date.now() });
         invalidateCachePatterns(['project', requestedSubprojectRename.projectId.toLowerCase()]);
         return res.json(renameResponse);
+      }
+
+      const requestedWflDeployment = parseWflDeploymentRequest(query);
+      if (requestedWflDeployment) {
+        const compileResult = await callLocalJsonApi('http://127.0.0.1:4000/api/deployments/wfl/compile', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-user-id': OLLAMA_QUEUE_ACTION_USER_ID },
+          body: JSON.stringify({ projectId: requestedWflDeployment.projectId, source: requestedWflDeployment.wfl, persist: true })
+        });
+        if (!compileResult.ok) {
+          return res.status(400).json({
+            success: false,
+            answer: `failed to compile WFL deployment: ${compileResult.data?.error || compileResult.text}`,
+            model: 'wfl-deployment-manager',
+            queryType: 'wfl-deployment',
+            ...requestedWflDeployment
+          });
+        }
+        return res.json({
+          success: true,
+          answer: `WFL deployment plan compiled for ${requestedWflDeployment.serviceName} on ${requestedWflDeployment.targets.join(', ')}.`,
+          model: 'wfl-deployment-manager',
+          queryType: 'wfl-deployment',
+          ...requestedWflDeployment,
+          compiled: compileResult.data
+        });
       }
 
       const requestedProjectDeploy = parseDeployProjectRequest(query);
@@ -2409,9 +2507,13 @@ User request: "${query}"`;
         targetValue = action.toLowerCase() === 'on' ? 1 : 0;
         const deviceInfo = getDeviceInfo(targetDevice);
         if (!deviceInfo) {
-          return res.status(404).json({
-            error: `Device '${targetDevice}' not found in configuration`,
-            availableDevices: Object.keys(deviceConfig.devices || {})
+          const liveResult = await controlDeviceOnNode(String(targetDevice).trim(), 'LEDPIN', action);
+          return res.status(liveResult.success ? 200 : 502).json({
+            success: liveResult.success,
+            device: targetDevice,
+            action: action.toUpperCase(),
+            deviceResponse: liveResult,
+            ...(liveResult.error ? { error: liveResult.error } : {})
           });
         }
         targetPin = deviceInfo.ledPin;
@@ -4036,6 +4138,69 @@ frame.addEventListener('load',()=>setTimeout(refresh,400),{once:true});
         <iframe srcdoc="${viewerSrcDoc}" title="Live feed from ${escapeAgentHtml(node)}"
           style="width:100%;aspect-ratio:4/3;border-radius:6px;border:1px solid #e5e7eb;display:block;background:#000"></iframe>
       </div>`;
+    },
+
+    async networkCameras() {
+      const cameras = await discoverOnvifCameras({ force: true });
+      if (cameras.length === 0) {
+        return {
+          output: `<div style="font-family:-apple-system,'Segoe UI',sans-serif"><strong>No ONVIF/RTSP cameras are currently exposed.</strong><p style="margin:8px 0 0;color:#57606a">For each Tapo camera, enable a Camera Account in the Tapo app under Advanced Settings, then configure <code>TAPO_CAMERA_USERNAME</code>, <code>TAPO_CAMERA_PASSWORD</code>, and optional <code>TAPO_CAMERA_HOSTS</code> on the backend.</p></div>`,
+          voiceReply: 'No ONVIF cameras are currently exposed on the network',
+          confidence: 1
+        };
+      }
+      const feeds = cameras.map(camera => `<section style="min-width:0"><p style="margin:0 0 8px;font-size:13px;color:#57606a"><strong>${escapeAgentHtml(camera.name)}</strong> · <code>${escapeAgentHtml(camera.host)}</code></p><iframe src="/api/cameras/${encodeURIComponent(camera.id)}/viewer" title="${escapeAgentHtml(camera.name)}" style="width:100%;aspect-ratio:4/3;border:1px solid #d0d7de;border-radius:6px;background:#000"></iframe></section>`).join('');
+      return {
+        output: `<div style="font-family:-apple-system,'Segoe UI',sans-serif"><p style="margin:0 0 12px;color:#57606a">${cameras.length} ONVIF camera${cameras.length === 1 ? '' : 's'} found</p><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));gap:16px">${feeds}</div></div>`,
+        voiceReply: `Showing ${cameras.length} network camera${cameras.length === 1 ? '' : 's'}`,
+        confidence: 1
+      };
+    },
+
+    async networkCamera(_data, captures) {
+      const requestedCamera = String(captures?.camera || captures?.value || '').trim();
+      const camera = await resolveOnvifCamera(requestedCamera);
+      if (!camera) {
+        return {
+          output: `<p style="font-family:-apple-system,sans-serif;color:#cf222e">Network camera "${escapeAgentHtml(requestedCamera)}" was not found.</p>`,
+          voiceReply: `Camera ${requestedCamera} was not found`,
+          confidence: 0
+        };
+      }
+      return {
+        output: `<iframe src="/api/cameras/${encodeURIComponent(camera.id)}/viewer" title="${escapeAgentHtml(camera.name)}" style="width:100%;aspect-ratio:4/3;border:1px solid #d0d7de;border-radius:6px;background:#000"></iframe>`,
+        voiceReply: `Showing ${camera.name}`,
+        confidence: 1
+      };
+    },
+
+    async cameraPtz(_data, captures) {
+      const prompt = String(captures?.prompt || captures?.value || '').trim();
+      const lowerPrompt = prompt.toLowerCase();
+      const rawDirection = lowerPrompt.includes('zoom out') ? 'zoom-out'
+        : lowerPrompt.includes('zoom in') ? 'zoom-in'
+          : /\b(?:centre|center|home)\b/.test(lowerPrompt) ? 'home'
+            : /\bstop\b/.test(lowerPrompt) ? 'stop'
+              : lowerPrompt.match(/\b(left|right|up|down)\b/)?.[1] || '';
+      const camera = prompt
+        .replace(/\b(?:pan|tilt|move|turn|rotate|zoom|in|out|left|right|up|down|centre|center|home|stop|the|camera|please)\b/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      try {
+        if (!rawDirection) throw new Error('Specify left, right, up, down, zoom in, zoom out, home, or stop');
+        const result = await moveOnvifCamera(camera, rawDirection);
+        return {
+          output: `<p style="font-family:-apple-system,sans-serif"><strong>${escapeAgentHtml(result.camera.name)}</strong>: ${escapeAgentHtml(rawDirection)} complete.</p>`,
+          voiceReply: `${result.camera.name} ${rawDirection} complete`,
+          confidence: 1
+        };
+      } catch (error) {
+        return {
+          output: `<p style="font-family:-apple-system,sans-serif;color:#cf222e">${escapeAgentHtml(error.message)}</p>`,
+          voiceReply: error.message,
+          confidence: 1
+        };
+      }
     },
 
     async allCameras() {

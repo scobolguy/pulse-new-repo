@@ -1,6 +1,7 @@
 import antlr4 from 'antlr4';
 import Cobolish85Lexer from '../grammar/generated-modern/Cobolish85Lexer.js';
 import Cobolish85Parser from '../grammar/generated-modern/Cobolish85Parser.js';
+import { parsePicture } from './cobol-picture.mjs';
 
 class CollectingErrorListener extends antlr4.error.ErrorListener {
   constructor() {
@@ -163,6 +164,21 @@ function collectCobolishMetadata(sourceText) {
     (match) => String(match?.[1] || '').trim()
   );
 
+  // PICTURE drives arithmetic: the receiving field's scale decides truncation/rounding.
+  const dataItemTypes = extractMatches(
+    sourceText,
+    /^\s*(?:01|77|88|[0-9]{2})\s+([A-Za-z0-9_-]+)\b[^.]*?\b(?:PIC|PICTURE)\s+(?:IS\s+)?([^\s.]+)/gim,
+    (match) => {
+      const picture = parsePicture(match?.[2]);
+      if (!picture) return null;
+      return {
+        name: String(match?.[1] || '').trim(),
+        picture: String(match?.[2] || '').trim(),
+        ...picture
+      };
+    }
+  ).filter(Boolean);
+
   const displayStatements = extractMatches(
     sourceText,
     /\bDISPLAY\s+"((?:[^"\\]|\\.)*)"\s*\./gi,
@@ -205,6 +221,7 @@ function collectCobolishMetadata(sourceText) {
     paragraphs: Array.from(new Set(paragraphs)),
     interop,
     dataItems: Array.from(new Set(dataItems)),
+    dataItemTypes,
     displayStatements,
     displayVariables,
     assignments,
@@ -253,6 +270,7 @@ export function compileCobolishWithAntlr(sourceText, options = {}) {
     sections: parsed.metadata.divisions,
     paragraphs: parsed.metadata.paragraphs,
     dataItems: parsed.metadata.dataItems,
+    dataItemTypes: parsed.metadata.dataItemTypes,
     displayStatements: parsed.metadata.displayStatements,
     displayVariables: parsed.metadata.displayVariables,
     assignments: parsed.metadata.assignments,

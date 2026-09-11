@@ -58,7 +58,8 @@ export default function LanguageCompilerPage({ languageId }) {
   const [runResult, setRunResult] = useState(null)
   const [busy, setBusy] = useState(false)
   const editorRef = useRef(null)
-  const { stepTabs, activeStepTab, stepLog, singleStep, selectStepTab } = useLanguageStepper(languageId, editorRef)
+  const editorInitializedRef = useRef(false)
+  const { stepTabs, activeStepTab, stepLog, debugState, singleStep, selectStepTab } = useLanguageStepper(languageId, editorRef)
 
   async function compile(mode = 'compile') {
     setBusy(true)
@@ -89,7 +90,7 @@ export default function LanguageCompilerPage({ languageId }) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, height: '100%' }}>
+    <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 10, height: '100%' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <button type="button" onClick={() => compile()} disabled={busy}>Compile</button>
         <button type="button" onClick={() => compile('compile-run')} disabled={busy}>Compile &amp; Run</button>
@@ -115,19 +116,29 @@ export default function LanguageCompilerPage({ languageId }) {
         activeStepTab={activeStepTab}
         onSelectTab={selectStepTab}
         stepLog={stepLog}
+        debugState={debugState}
         tabListLabel={`${config.label} execution tabs`}
-        monacoLanguage={config.monacoLanguage}
         testIdPrefix={languageId}
       />
-      <div style={{ flex: 1, minHeight: 0, border: '1px solid rgba(148,163,184,0.25)', borderRadius: 6, overflow: 'hidden' }}>
+      <div style={{ flex: 1, minHeight: 320, height: '60vh', border: '1px solid rgba(148,163,184,0.25)', borderRadius: 6, overflow: 'hidden' }}>
         <React.Suspense fallback={<div style={{ padding: 20, opacity: 0.6 }}>Loading editor...</div>}>
           <MonacoEditor
             height="100%"
             language={config.monacoLanguage}
             theme="pascalishWorkbench"
             value={source}
-            onChange={(value) => setSource(value || '')}
-            onMount={(editor) => { editorRef.current = editor }}
+            onChange={(value) => {
+              if (!editorInitializedRef.current && !value) return
+              setSource(value || '')
+            }}
+            onMount={(editor) => {
+              editorRef.current = editor
+              if (!editor.getValue().trim() && config.source) {
+                editor.setValue(config.source)
+                setSource(config.source)
+              }
+              editorInitializedRef.current = true
+            }}
             beforeMount={(monaco) => initializePascalishLanguage(monaco)}
             options={{ minimap: { enabled: false }, fontSize: 13, wordWrap: 'on', automaticLayout: true }}
           />

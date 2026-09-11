@@ -3,9 +3,12 @@
 import express from 'express';
 import fs from 'fs/promises';
 import path from 'path';
+import { compileCobolishToPmachine, compileVbishToPmachine } from './scripts/compile-interoperable-language.mjs';
+import { compilePascalishProgramWithAntlr } from './scripts/compile-pascalish-program-antlr-to-pcode.mjs';
+import { attachPcodeSignature } from './scripts/pcode-signing.mjs';
 
 // Placeholder for FFS and WebDAV integration
-export function createFileServer({ ffsConfig = {}, webdavConfig = {}, federatedConfig = {} } = {}) {
+export function createFileServer({ ffsConfig = {}, webdavConfig = {}, federatedConfig = {}, nodeRegistry = null } = {}) {
   const router = express.Router();
   // FFS root directory (default: ./ffs-root)
   const ffsRoot = ffsConfig.root || path.resolve(process.cwd(), 'ffs-root');
@@ -242,6 +245,85 @@ export function createFileServer({ ffsConfig = {}, webdavConfig = {}, federatedC
     }
   });
 
+  // Compile source into an immutable, signed FFS package for later deployment.
+  router.post('/ffs/packages/compile-publish', async (req, res) => {
+    try {
+      const {
+        name,
+        version = 'latest',
+        language = 'pascalish',
+        source = '',
+        runtimeKind = null,
+        metadata = {}
+      } = req.body || {};
+      if (!name) return res.status(400).json({ error: 'name is required' });
+      if (typeof source !== 'string' || !source.trim()) {
+        return res.status(400).json({ error: 'source must be a non-empty string' });
+      }
+
+      const normalizedLanguage = String(language).trim().toLowerCase();
+      let artifact;
+      if (normalizedLanguage === 'cobolish') {
+        artifact = compileCobolishToPmachine(source, { fileName: `${name}.cob` });
+      } else if (normalizedLanguage === 'vbish') {
+        artifact = compileVbishToPmachine(source, { fileName: `${name}.vbs` });
+      } else if (normalizedLanguage === 'pascalish') {
+        artifact = compilePascalishProgramWithAntlr(source);
+      } else {
+        return res.status(400).json({ error: `Unsupported source language: ${normalizedLanguage}` });
+      }
+
+      const pcode = String(artifact.pcodeText || '').endsWith('\n')
+        ? String(artifact.pcodeText)
+        : `${String(artifact.pcodeText || '')}\n`;
+      if (!pcode.trim()) return res.status(422).json({ error: 'Compiler emitted empty pcode' });
+
+      const signedProgramMap = attachPcodeSignature(
+        structuredClone(artifact.programMap || {}),
+        pcode
+      );
+      const packageName = sanitizePackageToken(name, 'service');
+      const packageVersion = sanitizePackageToken(version, 'latest');
+      const pkgDir = resolvePackagePath(packageName, packageVersion);
+      await fs.mkdir(pkgDir, { recursive: true });
+
+      const runtime = artifact.runtimeUnit || {};
+      const manifest = {
+        name: packageName,
+        version: packageVersion,
+        sourceLanguage: normalizedLanguage,
+        runtimeKind: String(runtimeKind || runtime.kind || 'service').trim().toLowerCase(),
+        runtimeUnit: runtime,
+        serviceId: artifact.serviceId || runtime.id || packageName,
+        pcodeFile: 'program.pcode',
+        programMapFile: 'program.json',
+        pcodeBytes: Buffer.byteLength(pcode, 'utf8'),
+        programMapBytes: Buffer.byteLength(JSON.stringify(signedProgramMap), 'utf8'),
+        signing: signedProgramMap.signing || null,
+        publishedAt: new Date().toISOString(),
+        metadata: metadata && typeof metadata === 'object' ? metadata : {}
+      };
+
+      await fs.writeFile(path.join(pkgDir, 'program.pcode'), pcode, 'utf8');
+      await fs.writeFile(path.join(pkgDir, 'program.json'), `${JSON.stringify(signedProgramMap, null, 2)}\n`, 'utf8');
+      await fs.writeFile(path.join(pkgDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+
+      res.json({
+        ok: true,
+        package: {
+          name: packageName,
+          version: packageVersion,
+          manifest,
+          pcodePath: path.relative(ffsRoot, path.join(pkgDir, 'program.pcode')).replace(/\\/g, '/'),
+          programMapPath: path.relative(ffsRoot, path.join(pkgDir, 'program.json')).replace(/\\/g, '/'),
+          manifestPath: path.relative(ffsRoot, path.join(pkgDir, 'manifest.json')).replace(/\\/g, '/')
+        }
+      });
+    } catch (e) {
+      res.status(422).json({ error: 'Compilation or package publication failed', details: e.message || String(e) });
+    }
+  });
+
   router.get('/ffs/packages/:name/:version', async (req, res) => {
     try {
       const pkgDir = resolvePackagePath(req.params.name, req.params.version);
@@ -329,6 +411,154 @@ export function createFileServer({ ffsConfig = {}, webdavConfig = {}, federatedC
       res.json({ ok: true, deployment: nextEntry });
     } catch (e) {
       res.status(500).json({ error: 'FFS deployment update failed', details: e.toString() });
+    }
+  });
+
+  // Push a published package to an ESP32 FFS node. The caller supplies the
+  // resolved node base URL; node discovery/selection remains a control-plane concern.
+  router.post('/ffs/packages/deploy-node', async (req, res) => {
+    try {
+      const { name, version = 'latest', nodeBaseUrl } = req.body || {};
+      if (!name || !nodeBaseUrl) {
+        return res.status(400).json({ error: 'name and nodeBaseUrl are required' });
+      }
+
+      const pkgDir = resolvePackagePath(name, version);
+      const pcode = await fs.readFile(path.join(pkgDir, 'program.pcode'), 'utf8');
+      const programMap = await fs.readFile(path.join(pkgDir, 'program.json'), 'utf8');
+      const manifest = JSON.parse(await fs.readFile(path.join(pkgDir, 'manifest.json'), 'utf8'));
+      const base = String(nodeBaseUrl).replace(/\/+$/, '');
+      const upload = async (file, body) => {
+        const response = await fetch(`${base}/ffs/upload`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ file, body }),
+          signal: AbortSignal.timeout(20000)
+        });
+        const text = await response.text();
+        if (!response.ok) throw new Error(`FFS upload ${file} failed (${response.status}): ${text.slice(0, 240)}`);
+      };
+
+      const token = sanitizePackageToken(name, 'service');
+      const remotePcode = `/${token.slice(0, 8)}.pc`;
+      const remoteMap = `/${token.slice(0, 6)}.map.json`;
+      await upload(remotePcode, pcode);
+      await upload(remoteMap, programMap);
+
+      const listingResponse = await fetch(`${base}/ffs/list`, { signal: AbortSignal.timeout(10000) });
+      const listing = listingResponse.ok ? await listingResponse.text() : null;
+      const deployment = {
+        key: `${manifest.serviceId}::${nodeBaseUrl}`.toLowerCase(),
+        deploymentId: `${manifest.name}-${manifest.version}`,
+        deploymentRef: `${manifest.serviceId}::${nodeBaseUrl}`,
+        displayName: manifest.serviceId,
+        serviceName: manifest.serviceId,
+        packageName: token,
+        packageVersion: sanitizePackageToken(version, 'latest'),
+        workloadKind: manifest.runtimeKind || 'service',
+        targetNodeId: base,
+        targetNodeIds: [base],
+        scope: 'node',
+        runtimeState: 'running',
+        state: 'running',
+        createdAt: manifest.publishedAt,
+        updatedAt: new Date().toISOString(),
+        metadata: {
+          ...(manifest.metadata || {}),
+          nodeBaseUrl: base,
+          remotePcode,
+          remoteProgramMap: remoteMap,
+          pcodePath: remotePcode,
+          programMapPath: remoteMap,
+          signing: manifest.signing || null
+        },
+        instances: {
+          [base]: {
+            state: 'running',
+            startedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            stoppedAt: null
+          }
+        }
+      };
+      if (deploymentRegistry instanceof Map) {
+        deploymentRegistry.set(deployment.key, deployment);
+      }
+      const deploymentIndex = await readDeploymentIndex();
+      const deployments = Array.isArray(deploymentIndex.deployments) ? deploymentIndex.deployments : [];
+      const existingIndex = deployments.findIndex((item) => String(item.key || '') === deployment.key);
+      if (existingIndex >= 0) deployments[existingIndex] = deployment;
+      else deployments.push(deployment);
+      await writeDeploymentIndex({ updatedAt: new Date().toISOString(), deployments });
+      res.json({
+        ok: true,
+        nodeBaseUrl: base,
+        package: { name: token, version: sanitizePackageToken(version, 'latest') },
+        manifest,
+        deployment,
+        remote: { pcode: remotePcode, programMap: remoteMap },
+        verified: listing == null || listing.includes(remotePcode.slice(1)) && listing.includes(remoteMap.slice(1))
+      });
+    } catch (e) {
+      res.status(502).json({ error: 'Node package deployment failed', details: e.message || String(e) });
+    }
+  });
+
+  // Reconcile a published package onto one ESP32 node through its FFS API.
+  router.post('/ffs/services/deploy-to-node', async (req, res) => {
+    try {
+      const {
+        packageName,
+        packageVersion = 'latest',
+        targetNodeId,
+        remotePrefix = ''
+      } = req.body || {};
+      if (!packageName || !targetNodeId) {
+        return res.status(400).json({ error: 'packageName and targetNodeId are required' });
+      }
+      const registry = nodeRegistry || req.app?.locals?.esp32NodeRegistry || null;
+      if (!registry || typeof registry.getNode !== 'function') {
+        return res.status(503).json({ error: 'Node registry is not available' });
+      }
+
+      const node = registry.getNode(String(targetNodeId).trim());
+      if (!node?.ip) return res.status(404).json({ error: `Target node not found: ${targetNodeId}` });
+
+      const pkgDir = resolvePackagePath(packageName, packageVersion);
+      const manifest = JSON.parse(await fs.readFile(path.join(pkgDir, 'manifest.json'), 'utf8'));
+      const pcode = await fs.readFile(path.join(pkgDir, manifest.pcodeFile || 'program.pcode'), 'utf8');
+      const programMap = await fs.readFile(path.join(pkgDir, manifest.programMapFile || 'program.json'), 'utf8');
+      const prefix = sanitizePackageToken(remotePrefix || packageName, 'service').slice(0, 8);
+      const remotePcode = `/${prefix}.pc`;
+      const remoteMap = `/${prefix}.map.json`;
+      const baseUrl = `http://${node.ip}:${Number(node.port || 80)}`.replace(/:80$/, '');
+
+      async function upload(file, body) {
+        const response = await fetch(`${baseUrl}/ffs/upload`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ file, body }),
+          signal: AbortSignal.timeout(20000)
+        });
+        const text = await response.text();
+        if (!response.ok) throw new Error(`FFS upload ${file} failed (${response.status}): ${text.slice(0, 240)}`);
+        return text;
+      }
+
+      await upload(remotePcode, pcode);
+      await upload(remoteMap, programMap);
+
+      return res.json({
+        ok: true,
+        targetNodeId: node.id,
+        target: { ip: node.ip, port: Number(node.port || 80) },
+        package: { name: packageName, version: packageVersion },
+        manifest,
+        remote: { pcode: remotePcode, programMap: remoteMap },
+        reconciledAt: new Date().toISOString()
+      });
+    } catch (e) {
+      return res.status(502).json({ error: 'ESP32 package deployment failed', details: e.message || String(e) });
     }
   });
 

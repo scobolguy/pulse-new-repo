@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-11T19:46:13.556Z",
+  "serviceId": "FunctionReturnsShowcase",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "FunctionReturnsShowcase",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-program",
+  "sourceLanguage": "pascalish",
+  "entries": [],
+  "localResources": {
+    "serviceId": "FunctionReturnsShowcase",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "routers": [],
+  "serviceEndpoints": [],
+  "globals": [
+    "doubled",
+    "ratio",
+    "greeting",
+    "fact"
+  ],
+  "variableDeclarations": [
+    {
+      "type": "VarDecl",
+      "name": "doubled",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "integer",
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "ratio",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "real",
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "greeting",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "string",
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "fact",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "integer",
+        "genericArgs": []
+      }
+    }
+  ],
+  "enums": {},
+  "procedures": {
+    "PROC_DOUBLE": {
+      "name": "Double",
+      "returnType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "integer",
+        "genericArgs": []
+      },
+      "params": [
+        "x"
+      ],
+      "locals": []
+    },
+    "PROC_QUARTER": {
+      "name": "Quarter",
+      "returnType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "real",
+        "genericArgs": []
+      },
+      "params": [
+        "x"
+      ],
+      "locals": []
+    },
+    "PROC_GREET": {
+      "name": "Greet",
+      "returnType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "string",
+        "genericArgs": []
+      },
+      "params": [
+        "who"
+      ],
+      "locals": []
+    },
+    "PROC_FACTORIAL": {
+      "name": "Factorial",
+      "returnType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "integer",
+        "genericArgs": []
+      },
+      "params": [
+        "n"
+      ],
+      "locals": []
+    }
+  },
+  "typeDeclarations": [],
+  "classDeclarations": [],
+  "entryLabel": "MAIN",
+  "mapperImports": [],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "d50c14456c35cceb1bd2c39bef2a82628206be9a960a23ed3045d6647cd9fa56",
+    "signedAt": "2026-09-11T19:46:13.559Z",
+    "pcodeLength": 1022,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

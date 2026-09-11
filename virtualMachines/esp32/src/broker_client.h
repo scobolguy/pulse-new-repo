@@ -33,6 +33,15 @@ struct DeviceDiscoveryInfo {
                            timestamp(0), lastSeen(0) {}
 };
 
+struct RouterDiscoveryInfo {
+    std::string routerId;
+    std::string ip;
+    int port;
+    unsigned long lastSeen;
+
+    RouterDiscoveryInfo() : routerId(""), ip(""), port(0), lastSeen(0) {}
+};
+
 /**
  * Broker Message
  */
@@ -316,6 +325,11 @@ public:
      * @return Device count
      */
     int getDeviceCount() const { return discoveredDevices.size(); }
+
+    /**
+     * Get the number of currently live routers discovered over UDP.
+     */
+    int getRouterCount() const { return discoveredRouters.size(); }
     
     /**
      * Get last error message
@@ -359,6 +373,7 @@ private:
     
     // Discovered devices
     std::map<std::string, DeviceDiscoveryInfo> discoveredDevices;
+    std::map<std::string, RouterDiscoveryInfo> discoveredRouters;
     unsigned long lastDiscoveryBroadcast;
     unsigned long lastDeviceCleanup;
     
@@ -373,6 +388,8 @@ private:
     void broadcastDiscovery();
     void listenForDiscovery();
     void cleanupStaleDevices();
+    void cleanupStaleRouters();
+    std::vector<RouterDiscoveryInfo> getAvailableRouters() const;
     std::string generateMessageId();
 };
 

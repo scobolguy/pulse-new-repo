@@ -49,6 +49,7 @@ export function createRouteManifestDependencyFactories(deps = {}) {
     startSecondaryBroker,
     ensureRoute,
     enqueueViaRoute,
+    startServiceRequestWorker,
     messageRouter,
     getActiveQueueManagers,
     ensureQueueTriggeredFlowForQueue,
@@ -101,6 +102,8 @@ export function createRouteManifestDependencyFactories(deps = {}) {
     serviceInstanceRegistry,
     upsertServiceInstance,
     ffsDeploymentRegistry,
+    jsPmachineDeploymentSupervisor,
+    deploymentIndexPath,
     setNodeLifecycleState,
     getUiCardOverrides,
     setUiCardOverrides,
@@ -303,6 +306,8 @@ export function createRouteManifestDependencyFactories(deps = {}) {
       upsertServiceInstance,
       resolveServiceInstance,
       ffsDeploymentRegistry,
+      jsPmachineDeploymentSupervisor,
+      deploymentIndexPath,
       setNodeLifecycleState
     }),
     allocator: () => ({
@@ -346,6 +351,9 @@ export function createRouteManifestDependencyFactories(deps = {}) {
     }),
     routerLifecycleControl: () => ({
       messageRouter,
+      ensureRoute,
+      enqueueViaRoute,
+      startServiceRequestWorker,
       parseBooleanLike,
       ingestWithEdgeFallback,
       getRouterWorkersPayload,

@@ -11,6 +11,20 @@ item
   | fileDecl
   | apiDecl
   | workflowDecl
+  | deploymentDecl
+  ;
+
+deploymentDecl
+  : DEPLOYMENT quotedString PROJECT quotedString TARGETS quotedList BEGIN deploymentItem* END SEMICOLON
+  ;
+
+deploymentItem
+  : (SERVICE | PROGRAM | DAEMON) quotedString FILE quotedString QUEUE quotedString ARROW quotedString TARGETS quotedList STARTUP booleanLiteral SEMICOLON
+  ;
+
+booleanLiteral
+  : TRUE
+  | FALSE
   ;
 
 queueDecl
@@ -70,6 +84,7 @@ stepToken
   | COMMA
   | ASSIGN_EQ
   | CALL
+  | SERVICE
   | API
   | ROUTE
   | QUEUE
@@ -206,6 +221,13 @@ CONTAINS: 'CONTAINS';
 THEN: 'THEN';
 ELSE: 'ELSE';
 ENDIF: 'ENDIF';
+SERVICE: 'SERVICE';
+PROGRAM: 'PROGRAM';
+DAEMON: 'DAEMON';
+TARGETS: 'TARGETS';
+STARTUP: 'STARTUP';
+TRUE: 'TRUE';
+FALSE: 'FALSE';
 
 ARROW: '->';
 ASSIGN_EQ: '=';

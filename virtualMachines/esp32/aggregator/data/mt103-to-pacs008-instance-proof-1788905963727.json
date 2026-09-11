@@ -1,0 +1,158 @@
+{
+  "runId": "run-1788905963728",
+  "serviceId": "mt103-to-pacs008",
+  "submissionInterface": "/api/services/mt103-to-pacs008",
+  "requestQueue": "service.mt103-to-pacs008.requests",
+  "count": 1000,
+  "concurrency": 20,
+  "elapsedMs": 1212,
+  "averageMs": null,
+  "passed": 0,
+  "failed": 1000,
+  "queueBefore": {
+    "error": "fetch failed"
+  },
+  "queueAfter": {
+    "error": "fetch failed"
+  },
+  "observedInstanceIds": [],
+  "observedInstanceCount": 0,
+  "byServiceInstance": {
+    "unknown": {
+      "count": 1000,
+      "passed": 0,
+      "failed": 1000,
+      "averageMs": 0
+    }
+  },
+  "proofStatus": "INSTANCE_EVIDENCE_INSUFFICIENT",
+  "note": "The generic service path completed requests, but completion telemetry did not expose two distinct downstream instance identities.",
+  "failures": [
+    {
+      "index": 1,
+      "state": "error",
+      "valid": false,
+      "error": "fetch failed"
+    },
+    {
+      "index": 2,
+      "state": "error",
+      "valid": false,
+      "error": "fetch failed"
+    },
+    {
+      "index": 3,
+      "state": "error",
+      "valid": false,
+      "error": "fetch failed"
+    },
+    {
+      "index": 4,
+      "state": "error",
+      "valid": false,
+      "error": "fetch failed"
+    },
+    {
+      "index": 5,
+      "state": "error",
+      "valid": false,
+      "error": "fetch failed"
+    },
+    {
+      "index": 6,
+      "state": "error",
+      "valid": false,
+      "error": "fetch failed"
+    },
+    {
+      "index": 7,
+      "state": "error",
+      "valid": false,
+      "error": "fetch failed"
+    },
+    {
+      "index": 8,
+      "state": "error",
+      "valid": false,
+      "error": "fetch failed"
+    },
+    {
+      "index": 9,
+      "state": "error",
+      "valid": false,
+      "error": "fetch failed"
+    },
+    {
+      "index": 10,
+      "state": "error",
+      "valid": false,
+      "error": "fetch failed"
+    },
+    {
+      "index": 11,
+      "state": "error",
+      "valid": false,
+      "error": "fetch failed"
+    },
+    {
+      "index": 12,
+      "state": "error",
+      "valid": false,
+      "error": "fetch failed"
+    },
+    {
+      "index": 13,
+      "state": "error",
+      "valid": false,
+      "error": "fetch failed"
+    },
+    {
+      "index": 14,
+      "state": "error",
+      "valid": false,
+      "error": "fetch failed"
+    },
+    {
+      "index": 15,
+      "state": "error",
+      "valid": false,
+      "error": "fetch failed"
+    },
+    {
+      "index": 16,
+      "state": "error",
+      "valid": false,
+      "error": "fetch failed"
+    },
+    {
+      "index": 17,
+      "state": "error",
+      "valid": false,
+      "error": "fetch failed"
+    },
+    {
+      "index": 18,
+      "state": "error",
+      "valid": false,
+      "error": "fetch failed"
+    },
+    {
+      "index": 19,
+      "state": "error",
+      "valid": false,
+      "error": "fetch failed"
+    },
+    {
+      "index": 20,
+      "state": "error",
+      "valid": false,
+      "error": "fetch failed"
+    }
+  ],
+  "serviceRegistryBefore": {
+    "error": "fetch failed"
+  },
+  "serviceRegistryAfter": {
+    "error": "fetch failed"
+  }
+}

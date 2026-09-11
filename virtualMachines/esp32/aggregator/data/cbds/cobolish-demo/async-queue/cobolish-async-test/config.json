@@ -1,0 +1,20 @@
+{
+  "queueConfig": {
+    "swift.mt103.parsed": {
+      "name": "swift.mt103.parsed",
+      "createdAt": 1788708846770,
+      "frozen": false,
+      "queueClass": "permanent",
+      "persistMessages": true
+    },
+    "cbds.pacs.outbound": {
+      "name": "cbds.pacs.outbound",
+      "createdAt": 1788708846773,
+      "frozen": false,
+      "queueClass": "permanent",
+      "persistMessages": true
+    }
+  },
+  "configVersion": 2,
+  "timestamp": 1788708846773
+}

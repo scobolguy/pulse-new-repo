@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MT103 &rarr; PACS.008 with a Mapper &mdash; Pascalish, VBish &amp; Cobolish</title>
+<style>
+  :root {
+    --bg: #0f1418;
+    --panel: #161d24;
+    --panel-2: #1b242e;
+    --ink: #e8eef3;
+    --muted: #9fb0bd;
+    --line: #2a3743;
+    --accent: #4fc1ff;
+    --pas: #7ee787;
+    --vb: #4fc1ff;
+    --cob: #ff9e64;
+    --ok: #3fb950;
+    --chip: #22303c;
+    --mono: "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 2.5rem 1.5rem 5rem; }
+  header h1 { font-size: 2rem; margin: 0 0 .25rem; letter-spacing: -.01em; }
+  header p { color: var(--muted); margin: 0 0 2rem; font-size: 1.05rem; max-width: 70ch; }
+  h2 { font-size: 1.4rem; margin: 3rem 0 .75rem; border-bottom: 1px solid var(--line); padding-bottom: .4rem; }
+  h3 { font-size: 1.1rem; margin: 1.75rem 0 .5rem; }
+  p, li { color: var(--ink); }
+  .muted { color: var(--muted); }
+  code.inline {
+    font-family: var(--mono); font-size: .88em;
+    background: var(--chip); padding: .1em .4em; border-radius: 5px;
+    border: 1px solid var(--line);
+  }
+  pre {
+    background: #0b0f13;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 1rem 1.1rem;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: .82rem;
+    line-height: 1.5;
+  }
+  pre code { font-family: inherit; white-space: pre; }
+  .prog { border-left: 4px solid var(--line); }
+  .prog.pas { border-left-color: var(--pas); }
+  .prog.vb { border-left-color: var(--vb); }
+  .prog.cob { border-left-color: var(--cob); }
+  .tag {
+    display: inline-block; font-family: var(--mono); font-size: .72rem;
+    padding: .15rem .55rem; border-radius: 999px; vertical-align: middle;
+    margin-left: .5rem; letter-spacing: .02em;
+  }
+  .tag.pas { background: rgba(126,231,135,.12); color: var(--pas); border: 1px solid rgba(126,231,135,.3); }
+  .tag.vb { background: rgba(79,193,255,.12); color: var(--vb); border: 1px solid rgba(79,193,255,.3); }
+  .tag.cob { background: rgba(255,158,100,.12); color: var(--cob); border: 1px solid rgba(255,158,100,.3); }
+  .ok { color: var(--ok); font-weight: 600; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 1rem 1.25rem; margin: 1rem 0;
+  }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; }
+  .card h4 { margin: 0 0 .35rem; font-size: .95rem; }
+  .card p { margin: 0; color: var(--muted); font-size: .9rem; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .9rem; }
+  th, td { text-align: left; padding: .55rem .7rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  td code { font-family: var(--mono); font-size: .82em; }
+  .arrow { color: var(--accent); font-weight: 700; }
+  .flow { font-family: var(--mono); font-size: .82rem; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 1rem 1.1rem; overflow-x: auto; }
+  .note { background: rgba(79,193,255,.06); border: 1px solid rgba(79,193,255,.25); border-radius: 10px; padding: .9rem 1.1rem; color: var(--muted); font-size: .92rem; }
+  .hl-k { color: var(--accent); }      /* keyword */
+  .hl-s { color: #a5d6a7; }            /* string */
+  .hl-c { color: #7d8b98; font-style: italic; } /* comment */
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>MT103 &rarr; PACS.008 with a Mapper</h1>
+  <p>How to build the same CBDS payment-conversion service in <strong>Pascalish</strong>, <strong>VBish</strong>, and <strong>Cobolish</strong>. All three compile to the same pcode and produce byte-identical output on the PMachine.</p>
+</header>
+
+<h2>The three programs</h2>
+<p class="muted">Each service declares its librarian role, defines (or imports) the CBDS mapper, and binds the input queue &rarr; mapper &rarr; output queue. Conversion rules compile to <em>native opcodes</em> &mdash; nothing is string-interpreted at runtime.</p>
+
+<h3>Pascalish <span class="tag pas">canonical</span></h3>
+<p class="muted">The reference language. The mapper is declared inline and a <code class="inline">router</code> applies it.</p>
+<pre class="prog pas"><code><span class="hl-k">service</span> <span class="hl-s">"cbds-converter"</span> on local;
+<span class="hl-k">role</span> code_librarian;
+<span class="hl-k">library</span> <span class="hl-s">"payments-common"</span> from librarian;
+<span class="hl-k">use</span> <span class="hl-s">"payments-common"</span> as CORE;
+
+<span class="hl-k">mapper</span> <span class="hl-s">"cbds-mt103-to-pacs008"</span> source <span class="hl-s">"swift-mt103"</span> target <span class="hl-s">"pacs"</span> begin
+  map <span class="hl-s">"block4.20"</span> to <span class="hl-s">"Document.FIToFICstmrCdtTrf.GrpHdr.MsgId"</span> using <span class="hl-s">"output = trim(src)"</span>;
+  map <span class="hl-s">"block4.32A.date"</span> to <span class="hl-s">"...CdtTrfTxInf.IntrBkSttlmDt"</span> using <span class="hl-s">"output = yymmddtoiso(src)"</span>;
+  map <span class="hl-s">"block4.32A.amount"</span> to <span class="hl-s">"...IntrBkSttlmAmt.#text"</span> using <span class="hl-s">"output = mtamounttodecimal(src)"</span>;
+  <span class="hl-c">// ... 16 more MAP rules ...</span>
+end;
+
+<span class="hl-k">router</span> <span class="hl-s">"cbds-mt103-to-pacs008-route"</span> input <span class="hl-s">"swift.mt103.parsed"</span> begin
+  output <span class="hl-s">"cbds.pacs.outbound"</span>
+    when <span class="hl-s">"output := 1;"</span>
+    transform <span class="hl-s">"output := map('cbds-converter.cbds-mt103-to-pacs008', src);"</span>;
+end;
+
+begin
+end.</code></pre>
+
+<h3>VBish <span class="tag vb">declarative</span></h3>
+<p class="muted">The shortest form. <code class="inline">Import Mapper</code> pulls the shared CBDS definition from the Mapping Librarian; one <code class="inline">Route</code> line wires the flow.</p>
+<pre class="prog vb"><code><span class="hl-k">Service</span> <span class="hl-s">"vbish-mt103-to-pacs008"</span> On Local
+
+<span class="hl-k">Role</span> Code_Librarian
+<span class="hl-k">Library</span> <span class="hl-s">"payments-common"</span> From Librarian
+<span class="hl-k">Use</span> <span class="hl-s">"payments-common"</span> As Core
+<span class="hl-k">Import</span> <span class="hl-k">Mapper</span> <span class="hl-s">"cbds-mt103-to-pacs008"</span> From Mapper
+
+<span class="hl-k">Route</span> <span class="hl-s">"swift.mt103.parsed"</span> <span class="hl-k">To</span> <span class="hl-s">"cbds.pacs.outbound"</span> <span class="hl-k">Using</span> <span class="hl-k">Mapper</span> <span class="hl-s">"cbds-mt103-to-pacs008"</span></code></pre>
+
+<h3>Cobolish <span class="tag cob">MAPPING SECTION</span></h3>
+<p class="muted">COBOL-85 divisions plus a <code class="inline">MAPPING SECTION</code> in the <code class="inline">DATA DIVISION</code>. Paths are bare; rules use <code class="inline">BEGIN output = fn(src) END</code>.</p>
+<pre class="prog cob"><code><span class="hl-k">IDENTIFICATION DIVISION.</span>
+<span class="hl-k">PROGRAM-ID.</span> CBDS-CONVERTER.
+<span class="hl-k">PULSE SERVICE</span> <span class="hl-s">"cbds-converter"</span> ON LOCAL.
+
+<span class="hl-k">ROLE</span> CODE_LIBRARIAN.
+<span class="hl-k">LIBRARY</span> <span class="hl-s">"payments-common"</span> FROM LIBRARIAN.
+<span class="hl-k">USE</span> <span class="hl-s">"payments-common"</span> AS CORE.
+<span class="hl-k">ROUTE</span> <span class="hl-s">"swift.mt103.parsed"</span> TO <span class="hl-s">"cbds.pacs.outbound"</span> USING MAPPER cbds-mt103-to-pacs008.
+
+<span class="hl-k">DATA DIVISION.</span>
+<span class="hl-k">MAPPING SECTION.</span>
+<span class="hl-k">MAPPER-ENTRY</span> cbds-mt103-to-pacs008
+    <span class="hl-k">SOURCE-TYPE</span> swift-mt103
+    <span class="hl-k">TARGET-TYPE</span> pacs.
+
+<span class="hl-k">MAP-RULE</span> block4.20 TO Document.FIToFICstmrCdtTrf.GrpHdr.MsgId
+    <span class="hl-k">USING BEGIN</span> output = trim(src) <span class="hl-k">END</span>.
+<span class="hl-k">MAP-RULE</span> block4.32A.date TO Document...CdtTrfTxInf.IntrBkSttlmDt
+    <span class="hl-k">USING BEGIN</span> output = yymmddtoiso(src) <span class="hl-k">END</span>.
+<span class="hl-k">MAP-RULE</span> block4.32A.amount TO Document...IntrBkSttlmAmt.#text
+    <span class="hl-k">USING BEGIN</span> output = mtamounttodecimal(src) <span class="hl-k">END</span>.
+<span class="hl-c">      * ... 16 more MAP-RULE entries ...</span>
+
+<span class="hl-k">PROCEDURE DIVISION.</span>
+    <span class="hl-k">DISPLAY</span> <span class="hl-s">"CBDS-CONVERTER READY"</span>.
+    <span class="hl-k">GOBACK</span>.
+<span class="hl-k">END PROGRAM</span> CBDS-CONVERTER.</code></pre>
+
+<h2>How a mapper works</h2>
+<p>A <strong>mapper</strong> is a named set of field-level rules. Each rule reads one value out of the source message by path, transforms it, and writes it to a target path. The rules are the <em>only</em> place conversion logic lives &mdash; the service code just points a queue at the mapper.</p>
+
+<div class="grid">
+  <div class="card"><h4>1. Declare the mapper</h4><p>Give it an id and the source/target type ids (e.g. <code class="inline">swift-mt103</code> &rarr; <code class="inline">pacs</code>).</p></div>
+  <div class="card"><h4>2. Add MAP rules</h4><p>Each rule maps a source path to a target path with a conversion like <code class="inline">trim(src)</code> or <code class="inline">mtamounttodecimal(src)</code>.</p></div>
+  <div class="card"><h4>3. Route through it</h4><p>Bind an input queue to an output queue using the mapper. The runtime applies every rule per message.</p></div>
+  <div class="card"><h4>4. It compiles to pcode</h4><p>Rules become native opcodes (<code class="inline">["SRC","YYMMDD_TO_ISO"]</code>) and the route becomes <code class="inline">ROUTE_MAP_RUN</code>.</p></div>
+</div>
+
+<h2>The compile pipeline</h2>
+<div class="flow">VBish / Cobolish <span class="arrow">&rarr;</span> portable Pascalish <span class="arrow">&rarr;</span> pcode + program map <span class="arrow">&rarr;</span> PMachine
+                                            Pascalish <span class="arrow">&nearr;</span></div>
+<p class="muted">VBish and Cobolish compile <em>into</em> Pascalish (the canonical portable form), then the shared Pascalish compiler emits pcode and the program map. Pascalish compiles directly. All three produce the same artifacts.</p>
+
+<h2>Compiled, not interpreted</h2>
+<p>Conversion rules are stored as <strong>native opcode lists</strong> in the program map, executed directly by the PMachine. There is no runtime string parsing of rules on either the JavaScript or the ESP32 PMachine.</p>
+
+<table>
+  <thead><tr><th>Rule written as</th><th>Compiles to opcodes</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><code>output = trim(src)</code></td><td><code>["SRC","TRIM"]</code></td><td>Trim whitespace</td></tr>
+    <tr><td><code>output = upper(trim(src))</code></td><td><code>["SRC","TRIM","UPPER"]</code></td><td>Trim then uppercase</td></tr>
+    <tr><td><code>output = yymmddtoiso(src)</code></td><td><code>["SRC","YYMMDD_TO_ISO"]</code></td><td><code>260702</code> &rarr; <code>2026-07-02</code></td></tr>
+    <tr><td><code>output = mtamounttodecimal(src)</code></td><td><code>["SRC","MT_AMOUNT_TO_DECIMAL"]</code></td><td><code>12500,45</code> &rarr; <code>12500.45</code></td></tr>
+    <tr><td><code>output = mtpartyname(src)</code></td><td><code>["SRC","MT_PARTY_NAME"]</code></td><td>Strip account line, keep name</td></tr>
+    <tr><td><code>output = mtchargebearertoiso(src)</code></td><td><code>["SRC","MT_CHARGE_TO_ISO"]</code></td><td><code>SHA</code> / <code>OUR</code> &rarr; ISO charge code</td></tr>
+  </tbody>
+</table>
+
+<p>The router line compiles to a single dispatch opcode:</p>
+<pre><code><span class="hl-c">// route: "swift.mt103.parsed" -> mapper -> "cbds.pacs.outbound"</span>
+ROUTE_MATCH_QUEUE <span class="hl-s">"swift.mt103.parsed"</span>
+JZ ROUTER_SKIP_3
+ROUTE_EVAL_WHEN <span class="hl-s">"output := 1;"</span>
+JZ OUT_SKIP_4
+<span class="hl-k">ROUTE_MAP_RUN</span> <span class="hl-s">"cbds-converter.cbds-mt103-to-pacs008"</span>   <span class="hl-c">// the mapper, compiled</span>
+ROUTE_EMIT <span class="hl-s">"cbds.pacs.outbound"</span>
+OUT_SKIP_4:
+ROUTER_SKIP_3:</code></pre>
+
+<div class="note"><strong>Smaller interpreter.</strong> Because rules are pcode, the PMachine does no <code class="inline">trim(src)</code>-style string matching per message. The same opcode executor runs on the JS PMachine and the ESP32 firmware, which share one opcode manifest (<code class="inline">OP_ROUTE_MAP_RUN = 0x63</code>).</div>
+
+<h2>Verified result</h2>
+<p>All three programs were run against the same MT103. Output is <span class="ok">byte-identical</span> (timestamp excluded) across Pascalish, VBish, and Cobolish.</p>
+
+<h3>Input (MT103)</h3>
+<pre><code>MT103
+:20:CBDSREF123456
+:21:CBDS-E2E-0001
+:23B:CRED
+:32A:260702CAD12500,45
+:33B:CAD12500,45
+:50K:/123456789
+ALPHA IMPORTS LTD
+:52A:ROYCCAT2
+:53A:BOFACATT
+:56A:CITIUS33
+:57A:TDOMCATTTOR
+:59:/000987654321
+BETA SUPPLIES INC
+:70:INV-2026-07-02
+:71A:SHA
+:71B:15,00
+:72:/INS/CBDS ROUTING</code></pre>
+
+<h3>Output (PACS.008, delivered to <code class="inline">cbds.pacs.outbound</code>)</h3>
+<pre><code>{
+  "Document": {
+    "FIToFICstmrCdtTrf": {
+      "GrpHdr": { "MsgId": "CBDSREF123456", "CreDtTm": "2026-09-05T23:10:32.752Z" },
+      "CdtTrfTxInf": {
+        "PmtId": { "InstrId": "CBDSREF123456", "EndToEndId": "CBDS-E2E-0001" },
+        "PmtTpInf": { "LclInstrm": { "Prtry": "CRED" } },
+        "IntrBkSttlmDt": "2026-07-02",
+        "IntrBkSttlmAmt": { "@Ccy": "CAD", "#text": "12500.45" },
+        "InstdAmt": { "@Ccy": "CAD", "#text": "12500.45" },
+        "Dbtr": { "Nm": "ALPHA IMPORTS LTD" },
+        "DbtrAgt": { "FinInstnId": { "BICFI": "ROYCCAT2" } },
+        "IntrmyAgt1": { "FinInstnId": { "BICFI": "BOFACATT" } },
+        "IntrmyAgt2": { "FinInstnId": { "BICFI": "CITIUS33" } },
+        "CdtrAgt": { "FinInstnId": { "BICFI": "TDOMCATTTOR" } },
+        "Cdtr": { "Nm": "BETA SUPPLIES INC" },
+        "RmtInf": { "Ustrd": "INV-2026-07-02" },
+        "ChrgBr": "SHA",
+        "ChrgsInf": { "Amt": { "#text": "15.00" } },
+        "InstrForNxtAgt": { "InstrInf": "/INS/CBDS ROUTING" }
+      }
+    }
+  }
+}</code></pre>
+
+<h2>Syntax reference</h2>
+<table>
+  <thead><tr><th>Concept</th><th>Pascalish</th><th>VBish</th><th>Cobolish</th></tr></thead>
+  <tbody>
+    <tr><td>Service</td><td><code>service "id" on local;</code></td><td><code>Service "id" On Local</code></td><td><code>PULSE SERVICE "id" ON LOCAL.</code></td></tr>
+    <tr><td>Role</td><td><code>role code_librarian;</code></td><td><code>Role Code_Librarian</code></td><td><code>ROLE CODE_LIBRARIAN.</code></td></tr>
+    <tr><td>Library</td><td><code>library "x" from librarian;</code></td><td><code>Library "x" From Librarian</code></td><td><code>LIBRARY "x" FROM LIBRARIAN.</code></td></tr>
+    <tr><td>Import mapper</td><td><code>import "m" from mapper;</code></td><td><code>Import Mapper "m" From Mapper</code></td><td><code>IMPORT MAPPER "m" FROM MAPPER.</code></td></tr>
+    <tr><td>Define mapper</td><td><code>mapper "m" source "s" target "t" begin &hellip; end;</code></td><td>&mdash; (import it)</td><td><code>MAPPING SECTION. MAPPER-ENTRY m &hellip;</code></td></tr>
+    <tr><td>Map rule</td><td><code>map "a" to "b" using "output = f(src)";</code></td><td>&mdash; (in the mapper)</td><td><code>MAP-RULE a TO b USING BEGIN output = f(src) END.</code></td></tr>
+    <tr><td>Route</td><td><code>router "r" input "q" begin output "o" &hellip; transform "output := map('m', src);"; end;</code></td><td><code>Route "q" To "o" Using Mapper "m"</code></td><td><code>ROUTE "q" TO "o" USING MAPPER m.</code></td></tr>
+  </tbody>
+</table>
+
+<p class="muted" style="margin-top:2.5rem; font-size:.85rem;">Runnable demos: <code class="inline">scripts/run-pascalish-cbds-demo.mjs</code>, <code class="inline">scripts/run-vbish-cbds-demo.mjs</code>, <code class="inline">scripts/run-cobolish-cbds-demo.mjs</code>. Artifacts land in <code class="inline">data/cbds/{pascalish,vbish,cobolish}-demo/</code>.</p>
+
+</div>
+</body>
+</html>

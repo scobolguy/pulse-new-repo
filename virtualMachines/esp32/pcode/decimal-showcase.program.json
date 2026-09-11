@@ -1,0 +1,157 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-11T20:34:33.621Z",
+  "serviceId": "DecimalShowcase",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "DecimalShowcase",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-program",
+  "sourceLanguage": "pascalish",
+  "entries": [],
+  "localResources": {
+    "serviceId": "DecimalShowcase",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "routers": [],
+  "serviceEndpoints": [],
+  "globals": [
+    "price",
+    "qty",
+    "gross",
+    "vat",
+    "vatRounded",
+    "share",
+    "shareRounded",
+    "running",
+    "step"
+  ],
+  "variableDeclarations": [
+    {
+      "type": "VarDecl",
+      "name": "price",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "decimal",
+        "precision": 11,
+        "scale": 2,
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "qty",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "decimal",
+        "precision": 9,
+        "scale": 0,
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "gross",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "decimal",
+        "precision": 13,
+        "scale": 2,
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "vat",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "decimal",
+        "precision": 13,
+        "scale": 2,
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "vatRounded",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "decimal",
+        "precision": 13,
+        "scale": 2,
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "share",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "decimal",
+        "precision": 13,
+        "scale": 2,
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "shareRounded",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "decimal",
+        "precision": 13,
+        "scale": 2,
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "running",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "decimal",
+        "precision": 15,
+        "scale": 2,
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "step",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "integer",
+        "genericArgs": []
+      }
+    }
+  ],
+  "enums": {},
+  "procedures": {},
+  "typeDeclarations": [],
+  "classDeclarations": [],
+  "entryLabel": "MAIN",
+  "libraries": [],
+  "mapperImports": [],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "96e2a9f3287dff77b952c2dd1225b1fcca60ed4a08942155654fa74b4bf90ad1",
+    "signedAt": "2026-09-11T20:34:33.623Z",
+    "pcodeLength": 1398,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

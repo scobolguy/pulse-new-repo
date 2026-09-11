@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml version="1.0" encoding="UTF-8"?>
+<serviceId>mt202-to-pacs008</serviceId>
+<inputQueue>mt202-to-pacs008.in</inputQueue>
+<httpVerb>POST</httpVerb>
+<sourceService>js-service-mt202-to-pacs008-27720</sourceService>
+<matchedRuleCount>0</matchedRuleCount>
+<matchedOutputCount>0</matchedOutputCount>
+<response></response>
+

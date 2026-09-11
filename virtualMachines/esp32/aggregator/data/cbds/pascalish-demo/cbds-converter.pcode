@@ -1,0 +1,89 @@
+# Auto-generated from ANTLR Pascalish grammar
+JMP MAIN
+MAIN:
+ROUTE_MATCH_QUEUE "cbds-converter.in"
+JZ ROUTER_SKIP_1
+ROUTE_EVAL_WHEN "output := 1;"
+JZ OUT_SKIP_2
+ROUTE_TRANSFORM "output := '';"
+ROUTE_EMIT "cbds-converter.out"
+OUT_SKIP_2:
+ROUTER_SKIP_1:
+ROUTE_MATCH_QUEUE "swift.mt103.parsed"
+JZ ROUTER_SKIP_3
+ROUTE_EVAL_WHEN "output := 1;"
+JZ OUT_SKIP_4
+ROUTE_MAP_RUN "cbds-converter.cbds-mt103-to-pacs008"
+ROUTE_EMIT "cbds.pacs.outbound"
+OUT_SKIP_4:
+ROUTER_SKIP_3:
+HALT
+MAP_cbds_converter_cbds_mt103_to_pacs008:
+SRC_GET "block4.20"
+TRIM
+OUT_SET "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId"
+SRC_GET "block4.20"
+TRIM
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.InstrId"
+SRC_GET "block4.21"
+TRIM
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId"
+SRC_GET "block4.23B"
+TRIM
+UPPER
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtTpInf.LclInstrm.Prtry"
+SRC_GET "block4.32A.date"
+YYMMDD_TO_ISO
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt"
+SRC_GET "block4.32A.currency"
+TRIM
+UPPER
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy"
+SRC_GET "block4.32A.amount"
+MT_AMOUNT_TO_DECIMAL
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text"
+SRC_GET "block4.33B.currency"
+TRIM
+UPPER
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstdAmt.@Ccy"
+SRC_GET "block4.33B.amount"
+MT_AMOUNT_TO_DECIMAL
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstdAmt.#text"
+SRC_GET "block4.50K"
+MT_PARTY_NAME
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm"
+SRC_GET "block4.52A"
+TRIM
+UPPER
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI"
+SRC_GET "block4.53A"
+TRIM
+UPPER
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrmyAgt1.FinInstnId.BICFI"
+SRC_GET "block4.56A"
+TRIM
+UPPER
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrmyAgt2.FinInstnId.BICFI"
+SRC_GET "block4.57A"
+TRIM
+UPPER
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI"
+SRC_GET "block4.59"
+MT_PARTY_NAME
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm"
+SRC_GET "block4.70"
+TRIM
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.RmtInf.Ustrd"
+SRC_GET "block4.71A"
+MT_CHARGE_TO_ISO
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgBr"
+SRC_GET "block4.71B"
+MT_AMOUNT_TO_DECIMAL
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgsInf.Amt.#text"
+SRC_GET "block4.72"
+TRIM
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstrForNxtAgt.InstrInf"
+SRC_GET "meta.createdAt"
+TRIM
+OUT_SET "Document.FIToFICstmrCdtTrf.GrpHdr.CreDtTm"
+RET

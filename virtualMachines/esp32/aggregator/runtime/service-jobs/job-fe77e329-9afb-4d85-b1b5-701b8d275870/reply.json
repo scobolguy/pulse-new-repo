@@ -1,0 +1,21 @@
+{
+  "value": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Document xmlns=\"urn:iso:std:iso:20022:tech:xsd:pacs.008.001.10\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:hdr=\"urn:swift:xsd:head.001.001.02\">\n  <FIToFICstmrCdtTrf>\n    <GrpHdr>\n      <MsgId>INSTANCE-PROOF-run-1788905089041-0330</MsgId>\n    </GrpHdr>\n    <CdtTrfTxInf>\n      <PmtId>\n        <EndToEndId>INSTANCE-E2E-0330</EndToEndId>\n      </PmtId>\n      <PmtTpInf>\n        <LclInstrm>\n          <Prtry>CRED</Prtry>\n        </LclInstrm>\n      </PmtTpInf>\n      <IntrBkSttlmDt>2026-09-07</IntrBkSttlmDt>\n      <IntrBkSttlmAmt>552.10</IntrBkSttlmAmt>\n      <Dbtr>\n        <Nm>ALPHA IMPORTS LTD</Nm>\n      </Dbtr>\n      <CdtrAgt>\n        <FinInstnId>\n          <BICFI>BKTRUS33</BICFI>\n        </FinInstnId>\n      </CdtrAgt>\n      <Cdtr>\n        <Nm>BETA SUPPLIES INC</Nm>\n      </Cdtr>\n      <RmtInf>\n        <Ustrd>Two-instance proof 330</Ustrd>\n      </RmtInf>\n      <ChrgBr>SHA</ChrgBr>\n    </CdtTrfTxInf>\n  </FIToFICstmrCdtTrf>\n  <hdr:AppHdr>\n    <hdr:BizMsgIdr>INSTANCE-PROOF-run-1788905089041-0330</hdr:BizMsgIdr>\n  </hdr:AppHdr>\n</Document>\n",
+  "serviceId": "mt103-to-pacs008",
+  "serviceInstanceId": "http://192.168.2.155",
+  "workerId": "mt103-to-pacs008:worker-1:http://192.168.2.155",
+  "conversionFormat": "mt103->pacs008",
+  "messageType": "PACS008",
+  "conversionApplied": true,
+  "edgeResult": {
+    "ok": true,
+    "publishedCount": 1,
+    "stepCount": 26,
+    "memoryPressure": {
+      "freeHeapBytes": 83512,
+      "stackHighWaterBytes": 26784,
+      "stackHeapGapBytes": 56728,
+      "riskLevel": "ok",
+      "stackHeapCollisionRisk": false
+    }
+  }
+}

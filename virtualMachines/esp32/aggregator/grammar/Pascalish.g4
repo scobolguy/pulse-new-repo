@@ -121,6 +121,7 @@ classInheritance
 classMember
     : classFieldDecl
     | classMethodDecl
+    | classOperatorDecl
     ;
 
 classFieldDecl
@@ -128,7 +129,19 @@ classFieldDecl
     ;
 
 classMethodDecl
-    : ('procedure' | 'function') IDENT genericTypeParams? '(' methodParamList? ')' (':' typeRef)? ';' block ';'
+    : ('procedure' | 'function') IDENT genericTypeParams? '(' methodParamList? ')' (':' typeRef)? ';' unitDecl* block ';'
+    ;
+
+// `operator +(b: T): T;` overloads an operator; `operator T(x: U);` and
+// `operator U(): U;` declare conversions to and from T.
+classOperatorDecl
+    : 'operator' operatorTarget '(' methodParamList? ')' (':' typeRef)? ';' unitDecl* block ';'
+    ;
+
+operatorTarget
+    : '+' | '-' | '*' | '/'
+    | '=' | '<>' | '<' | '<=' | '>' | '>='
+    | typeRef
     ;
 
 methodParamList
@@ -180,6 +193,10 @@ recordType
     : 'record' recordField* 'end'
     ;
 
+enumType
+    : '(' identList ')'
+    ;
+
 recordField
     : IDENT ':' typeRef ';'
     ;
@@ -187,6 +204,7 @@ recordField
 typeRef
     : simpleType
     | recordType
+    | enumType
     | queueType
     | stackType
     | priorityQueueType
@@ -205,6 +223,12 @@ simpleType
     | 'real'
     | 'boolean'
     | 'string'
+    | decimalType
+    ;
+
+// Fixed-point, COBOL style: decimal(precision, scale) mirrors PIC S9(p-s)V9(s).
+decimalType
+    : 'decimal' ('(' NUMBER (',' NUMBER)? ')')?
     ;
 
 userType
@@ -466,7 +490,7 @@ withStmt
     ;
 
 assignStmt
-    : lvalue ':=' expr
+    : lvalue ':=' expr 'rounded'?
     ;
 
 callStmt
@@ -646,6 +670,7 @@ primaryExpr
     | 'true'
     | 'false'
     | qualifiedName '(' exprList? ')'
+    | simpleType '(' exprList? ')'
     | lvalue
     | '(' expr ')'
     ;

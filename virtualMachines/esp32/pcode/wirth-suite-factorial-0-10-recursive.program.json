@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-09-05T01:12:04.954Z",
+  "generatedAt": "2026-09-11T20:39:02.737Z",
   "serviceId": "RecursiveFactorial",
   "runtimeUnit": {
     "kind": "program",
@@ -22,9 +22,11 @@
   "serviceEndpoints": [],
   "globals": [],
   "variableDeclarations": [],
+  "enums": {},
   "procedures": {
     "PROC_PRINTFACTRANGE": {
       "name": "PrintFactRange",
+      "returnType": null,
       "params": [
         "i",
         "max",
@@ -36,12 +38,13 @@
   "typeDeclarations": [],
   "classDeclarations": [],
   "entryLabel": "MAIN",
+  "libraries": [],
   "mapperImports": [],
   "signing": {
     "algorithm": "hmac-sha256",
     "keyId": "profile-default",
     "signature": "a5bb4ea4609f40c14e40450346f825f3c8fb60d96c93c9eeb88e90bc8f13b378",
-    "signedAt": "2026-09-05T01:12:04.957Z",
+    "signedAt": "2026-09-11T20:39:02.740Z",
     "pcodeLength": 391,
     "canonicalForm": "raw-pcode-text-v1"
   }

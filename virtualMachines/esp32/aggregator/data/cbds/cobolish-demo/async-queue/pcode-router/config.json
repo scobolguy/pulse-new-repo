@@ -1,0 +1,13 @@
+{
+  "queueConfig": {
+    "swift.mt103.parsed": {
+      "name": "swift.mt103.parsed",
+      "createdAt": 1788708846951,
+      "frozen": false,
+      "queueClass": "permanent",
+      "persistMessages": true
+    }
+  },
+  "configVersion": 1,
+  "timestamp": 1788708846951
+}

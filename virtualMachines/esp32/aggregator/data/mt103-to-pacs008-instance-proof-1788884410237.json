@@ -1,0 +1,197 @@
+{
+  "runId": "run-1788884410237",
+  "serviceId": "mt103-to-pacs008",
+  "submissionInterface": "/api/services/mt103-to-pacs008",
+  "requestQueue": "service.mt103-to-pacs008.requests",
+  "count": 1000,
+  "concurrency": 20,
+  "elapsedMs": 241693,
+  "averageMs": 4786.73,
+  "passed": 1000,
+  "failed": 0,
+  "queueBefore": {
+    "primary": {
+      "name": "service.mt103-to-pacs008.requests",
+      "createdAt": 1788877574562,
+      "frozen": false,
+      "queueClass": "permanent",
+      "persistMessages": true,
+      "dataTypeId": "text-string",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "createdByUser": false
+    },
+    "secondary": {
+      "name": "service.mt103-to-pacs008.requests",
+      "createdAt": 1788878074062,
+      "frozen": false,
+      "queueClass": "permanent",
+      "persistMessages": true,
+      "dataTypeId": "text-string",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "createdByUser": false
+    }
+  },
+  "queueAfter": {
+    "primary": {
+      "name": "service.mt103-to-pacs008.requests",
+      "createdAt": 1788877574562,
+      "frozen": false,
+      "queueClass": "permanent",
+      "persistMessages": true,
+      "dataTypeId": "text-string",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "createdByUser": false
+    },
+    "secondary": {
+      "name": "service.mt103-to-pacs008.requests",
+      "createdAt": 1788878074062,
+      "frozen": false,
+      "queueClass": "permanent",
+      "persistMessages": true,
+      "dataTypeId": "text-string",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "createdByUser": false
+    }
+  },
+  "observedInstanceIds": [],
+  "observedInstanceCount": 0,
+  "proofStatus": "INSTANCE_EVIDENCE_INSUFFICIENT",
+  "note": "The generic service path completed requests, but completion telemetry did not expose two distinct downstream instance identities.",
+  "failures": [],
+  "serviceRegistryBefore": {
+    "services": {
+      "broker": [
+        {
+          "instanceId": "broker:local:4000",
+          "serviceName": "broker",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/broker",
+            "label": "Message Broker"
+          },
+          "lastHeartbeat": 1788884401702
+        }
+      ],
+      "router": [
+        {
+          "instanceId": "router:local:4000",
+          "serviceName": "router",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/router",
+            "label": "Router Service"
+          },
+          "lastHeartbeat": 1788884401702
+        }
+      ],
+      "queue-manager": [
+        {
+          "instanceId": "queue-manager:local:4000",
+          "serviceName": "queue-manager",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/queue",
+            "label": "Queue Manager"
+          },
+          "lastHeartbeat": 1788884401702
+        }
+      ],
+      "file-server": [
+        {
+          "instanceId": "file-server:local:4000",
+          "serviceName": "file-server",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/fileserver",
+            "label": "File Server"
+          },
+          "lastHeartbeat": 1788884401702
+        }
+      ]
+    }
+  },
+  "serviceRegistryAfter": {
+    "services": {
+      "broker": [
+        {
+          "instanceId": "broker:local:4000",
+          "serviceName": "broker",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/broker",
+            "label": "Message Broker"
+          },
+          "lastHeartbeat": 1788884651828
+        }
+      ],
+      "router": [
+        {
+          "instanceId": "router:local:4000",
+          "serviceName": "router",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/router",
+            "label": "Router Service"
+          },
+          "lastHeartbeat": 1788884651828
+        }
+      ],
+      "queue-manager": [
+        {
+          "instanceId": "queue-manager:local:4000",
+          "serviceName": "queue-manager",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/queue",
+            "label": "Queue Manager"
+          },
+          "lastHeartbeat": 1788884651828
+        }
+      ],
+      "file-server": [
+        {
+          "instanceId": "file-server:local:4000",
+          "serviceName": "file-server",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/fileserver",
+            "label": "File Server"
+          },
+          "lastHeartbeat": 1788884651828
+        }
+      ]
+    }
+  }
+}

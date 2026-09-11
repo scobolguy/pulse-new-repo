@@ -1,0 +1,274 @@
+# Auto-generated from ANTLR Pascalish grammar
+JMP MAIN
+PROC_SEVERITYNAME:
+PUSH_STR "severity="
+PRINT
+LOAD value
+PRINT
+PUSH_STR " ordinal="
+PRINT
+LOAD value
+ORD
+PRINT_INT
+PRINT_NL
+RET
+PROC_CHANNELNAME:
+PUSH_STR "channel="
+PRINT
+LOAD value
+PRINT
+PUSH_STR " ordinal="
+PRINT
+LOAD value
+ORD
+PRINT_INT
+PRINT_NL
+RET
+PROC_BUILDPROBE:
+PUSH_STR "ingress-probe"
+STORE probe_tag
+PUSH_ENUM Severity SevInfo
+STORE probe_severity
+PUSH_ENUM Channel ChQueue
+STORE probe_channel
+PUSH_REAL 1.25
+STORE probe_weight
+PUSH_INT 1
+STORE probe_active
+PUSH_INT 10
+STORE probe_origin_x
+PUSH_INT 20
+STORE probe_origin_y
+RET
+PROC_MIRRORPROBE:
+PUSH_STR "echo-probe"
+STORE mirror_tag
+PUSH_ENUM Severity SevError
+STORE mirror_severity
+PUSH_ENUM Channel ChHttp
+STORE mirror_channel
+LOAD probe_weight
+PUSH_REAL 0.75
+ADD
+STORE mirror_weight
+PUSH_INT 0
+STORE mirror_active
+LOAD probe_origin_y
+STORE mirror_origin_x
+LOAD probe_origin_x
+STORE mirror_origin_y
+RET
+PROC_ESCALATE:
+PUSH_ENUM Severity SevInfo
+STORE nextSeverity
+PUSH_INT 0
+STORE localWeight
+PUSH_STR ""
+STORE marker
+PUSH_STR "frame"
+STORE marker
+LOAD level
+PUSH_REAL 0.5
+MUL
+STORE localWeight
+LOAD totalWeight
+LOAD localWeight
+ADD
+STORE totalWeight
+LOAD escalations
+PUSH_INT 1
+ADD
+STORE escalations
+LOAD level
+LOAD deepestLevel
+GT
+JZ ELSE_1
+LOAD level
+STORE deepestLevel
+JMP ENDIF_2
+ELSE_1:
+ENDIF_2:
+LOAD marker
+PRINT
+PUSH_STR " level="
+PRINT
+LOAD level
+PRINT_INT
+PUSH_STR " severity="
+PRINT
+LOAD current
+PRINT
+PUSH_STR " weight="
+PRINT
+LOAD localWeight
+PRINT
+PRINT_NL
+LOAD current
+ORD
+PUSH_INT 0
+EQ
+JZ ELSE_3
+PUSH_ENUM Severity SevWarning
+STORE nextSeverity
+JMP ENDIF_4
+ELSE_3:
+LOAD current
+ORD
+PUSH_INT 1
+EQ
+JZ ELSE_5
+PUSH_ENUM Severity SevError
+STORE nextSeverity
+JMP ENDIF_6
+ELSE_5:
+PUSH_ENUM Severity SevFatal
+STORE nextSeverity
+ENDIF_6:
+ENDIF_4:
+LOAD current
+ORD
+PUSH_INT 3
+LT
+JZ ELSE_7
+LOAD level
+PUSH_INT 1
+ADD
+LOAD nextSeverity
+CALL PROC_ESCALATE 2
+JMP ENDIF_8
+ELSE_7:
+LOAD current
+STORE finalSeverity
+ENDIF_8:
+RET
+PROC_REPORTPAIR:
+PUSH_INT 0
+STORE spread
+LOAD mirror_origin_x
+LOAD probe_origin_x
+SUB
+STORE spread
+PUSH_STR "probe.tag="
+PRINT
+LOAD probe_tag
+PRINT
+PUSH_STR " mirror.tag="
+PRINT
+LOAD mirror_tag
+PRINT
+PRINT_NL
+PUSH_STR "probe.origin=("
+PRINT
+LOAD probe_origin_x
+PRINT_INT
+PUSH_STR ","
+PRINT
+LOAD probe_origin_y
+PRINT_INT
+PUSH_STR ")"
+PRINT
+PRINT_NL
+PUSH_STR "mirror.origin=("
+PRINT
+LOAD mirror_origin_x
+PRINT_INT
+PUSH_STR ","
+PRINT
+LOAD mirror_origin_y
+PRINT_INT
+PUSH_STR ")"
+PRINT
+PRINT_NL
+PUSH_STR "origin.x spread="
+PRINT
+LOAD spread
+PRINT_INT
+PRINT_NL
+PUSH_STR "probe.weight="
+PRINT
+LOAD probe_weight
+PRINT
+PUSH_STR " mirror.weight="
+PRINT
+LOAD mirror_weight
+PRINT
+PRINT_NL
+RET
+MAIN:
+PUSH_STR ""
+STORE probe_tag
+PUSH_ENUM Severity SevInfo
+STORE probe_severity
+PUSH_ENUM Channel ChFile
+STORE probe_channel
+PUSH_INT 0
+STORE probe_weight
+PUSH_INT 0
+STORE probe_active
+PUSH_INT 0
+STORE probe_origin_x
+PUSH_INT 0
+STORE probe_origin_y
+PUSH_STR ""
+STORE mirror_tag
+PUSH_ENUM Severity SevInfo
+STORE mirror_severity
+PUSH_ENUM Channel ChFile
+STORE mirror_channel
+PUSH_INT 0
+STORE mirror_weight
+PUSH_INT 0
+STORE mirror_active
+PUSH_INT 0
+STORE mirror_origin_x
+PUSH_INT 0
+STORE mirror_origin_y
+PUSH_INT 0
+STORE escalations
+PUSH_INT 0
+STORE deepestLevel
+PUSH_ENUM Severity SevInfo
+STORE finalSeverity
+PUSH_INT 0
+STORE totalWeight
+PUSH_INT 0
+STORE escalations
+PUSH_INT 0
+STORE deepestLevel
+PUSH_REAL 0
+STORE totalWeight
+CALL PROC_BUILDPROBE 0
+CALL PROC_MIRRORPROBE 0
+LOAD probe_severity
+CALL PROC_SEVERITYNAME 1
+LOAD probe_channel
+CALL PROC_CHANNELNAME 1
+LOAD mirror_severity
+CALL PROC_SEVERITYNAME 1
+LOAD mirror_channel
+CALL PROC_CHANNELNAME 1
+CALL PROC_REPORTPAIR 0
+PUSH_INT 1
+PUSH_ENUM Severity SevInfo
+CALL PROC_ESCALATE 2
+PUSH_STR "escalations="
+PRINT
+LOAD escalations
+PRINT_INT
+PRINT_NL
+PUSH_STR "deepestLevel="
+PRINT
+LOAD deepestLevel
+PRINT_INT
+PRINT_NL
+PUSH_STR "totalWeight="
+PRINT
+LOAD totalWeight
+PRINT
+PRINT_NL
+PUSH_STR "finalSeverity="
+PRINT
+LOAD finalSeverity
+PRINT
+PRINT_NL
+HALT

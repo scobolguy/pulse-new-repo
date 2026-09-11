@@ -100,6 +100,7 @@ export default function ProjectWorkspacePage({ project, onSelectProject, onOpenC
   const [projectRootInput, setProjectRootInput] = useState('')
   const [isSavingRoot, setIsSavingRoot] = useState(false)
   const [statusText, setStatusText] = useState('')
+  const [workflowResult, setWorkflowResult] = useState(null)
 
   async function refreshProjectsRoot() {
     try {
@@ -120,6 +121,7 @@ export default function ProjectWorkspacePage({ project, onSelectProject, onOpenC
     setProjectRootPath('')
     setProjectRootInput('')
     setStatusText('')
+    setWorkflowResult(null)
     let cancelled = false
 
     void refreshProjectsRoot().then((rootPath) => {
@@ -371,12 +373,44 @@ export default function ProjectWorkspacePage({ project, onSelectProject, onOpenC
             <article key={group.key} style={{ border: '1px solid rgba(148, 163, 184, 0.22)', borderRadius: 14, padding: 14, background: 'rgba(15, 23, 42, 0.55)' }}>
               <div style={{ fontSize: 12, letterSpacing: 0.1, textTransform: 'uppercase', opacity: 0.68 }}>{group.label}</div>
               <div style={{ marginTop: 6, fontWeight: 700 }}>{document.fileName || 'untitled'}</div>
+              {group.key === 'workflow' ? (
+                <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setStatusText('Executing WFL...')
+                      try {
+                        const response = await fetch('/api/workflows/wfl/execute', {
+                          method: 'POST',
+                          headers: { 'content-type': 'application/json' },
+                          body: JSON.stringify({ source: document.content || '' }),
+                        })
+                        const payload = await response.json()
+                        if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`)
+                        setWorkflowResult(payload.result)
+                        setStatusText(`WFL executed: ${payload.workflowId}`)
+                      } catch (error) {
+                        setWorkflowResult({ error: error.message })
+                        setStatusText(`WFL failed: ${error.message}`)
+                      }
+                    }}
+                  >
+                    Execute
+                  </button>
+                  {workflowResult ? <button type="button" onClick={() => setWorkflowResult(null)}>Clear result</button> : null}
+                </div>
+              ) : null}
               <textarea
                 value={document.content || ''}
                 onChange={(event) => updateDocument(group.key, { content: event.target.value })}
                 style={{ width: '100%', minHeight: group.key === 'canvas' ? 180 : 220, marginTop: 10, borderRadius: 12, border: '1px solid rgba(148, 163, 184, 0.24)', background: 'rgba(2, 6, 23, 0.62)', color: 'inherit', padding: 12, font: 'inherit', resize: 'vertical' }}
                 placeholder={`Edit ${group.label}`}
               />
+              {group.key === 'workflow' && workflowResult ? (
+                <pre style={{ marginTop: 10, maxHeight: 320, overflow: 'auto', whiteSpace: 'pre-wrap' }}>
+                  {JSON.stringify(workflowResult, null, 2)}
+                </pre>
+              ) : null}
             </article>
           )
         })}

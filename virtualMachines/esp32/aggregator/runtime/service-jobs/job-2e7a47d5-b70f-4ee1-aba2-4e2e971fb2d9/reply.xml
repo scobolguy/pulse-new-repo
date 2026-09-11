@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:hdr="urn:swift:xsd:head.001.001.02">
+  <FIToFICstmrCdtTrf>
+    <GrpHdr>
+      <MsgId>INSTANCE-PROOF-run-1788904729660-0352</MsgId>
+    </GrpHdr>
+    <CdtTrfTxInf>
+      <PmtId>
+        <EndToEndId>INSTANCE-E2E-0352</EndToEndId>
+      </PmtId>
+      <PmtTpInf>
+        <LclInstrm>
+          <Prtry>CRED</Prtry>
+        </LclInstrm>
+      </PmtTpInf>
+      <IntrBkSttlmDt>2026-09-07</IntrBkSttlmDt>
+      <IntrBkSttlmAmt>582.24</IntrBkSttlmAmt>
+      <Dbtr>
+        <Nm>ALPHA IMPORTS LTD</Nm>
+      </Dbtr>
+      <CdtrAgt>
+        <FinInstnId>
+          <BICFI>BKTRUS33</BICFI>
+        </FinInstnId>
+      </CdtrAgt>
+      <Cdtr>
+        <Nm>BETA SUPPLIES INC</Nm>
+      </Cdtr>
+      <RmtInf>
+        <Ustrd>Two-instance proof 352</Ustrd>
+      </RmtInf>
+      <ChrgBr>SHA</ChrgBr>
+    </CdtTrfTxInf>
+  </FIToFICstmrCdtTrf>
+  <hdr:AppHdr>
+    <hdr:BizMsgIdr>INSTANCE-PROOF-run-1788904729660-0352</hdr:BizMsgIdr>
+  </hdr:AppHdr>
+</Document>
+

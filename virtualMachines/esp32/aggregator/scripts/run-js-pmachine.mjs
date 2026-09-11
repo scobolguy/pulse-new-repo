@@ -93,9 +93,108 @@ function isEnum(value) {
   return value instanceof PEnum;
 }
 
+// COBOL-compatible fixed-point: an exact BigInt numerator over a fixed power of ten.
+// Scale never drifts implicitly; the receiving field decides it, as PICTURE does.
+class PDecimal {
+  constructor(unscaled, scale) {
+    this.unscaled = BigInt(unscaled);
+    this.scale = Math.max(0, Number(scale) || 0);
+  }
+}
+
+function isDecimal(value) {
+  return value instanceof PDecimal;
+}
+
+// Values that must survive a store, load or call boundary without numeric coercion.
+function isBoxed(value) {
+  return typeof value === 'string' || isReal(value) || isEnum(value) || isDecimal(value);
+}
+
+const TEN = 10n;
+
+function pow10(exponent) {
+  return TEN ** BigInt(Math.max(0, exponent));
+}
+
+function rescaleDecimal(value, scale, roundHalfUp = false) {
+  if (value.scale === scale) return value;
+  if (scale > value.scale) {
+    return new PDecimal(value.unscaled * pow10(scale - value.scale), scale);
+  }
+  const divisor = pow10(value.scale - scale);
+  const quotient = value.unscaled / divisor;
+  if (!roundHalfUp) return new PDecimal(quotient, scale);
+  // COBOL ROUNDED is half-up away from zero.
+  const remainder = value.unscaled % divisor;
+  const twice = (remainder < 0n ? -remainder : remainder) * 2n;
+  if (twice < divisor) return new PDecimal(quotient, scale);
+  return new PDecimal(value.unscaled < 0n ? quotient - 1n : quotient + 1n, scale);
+}
+
+function decimalFromString(text) {
+  const raw = String(text ?? '').trim().replace(/,/g, '.');
+  const match = /^([+-]?)(\d*)(?:\.(\d*))?$/.exec(raw);
+  if (!match) return new PDecimal(0n, 0);
+  const fraction = match[3] || '';
+  const digits = `${match[2] || '0'}${fraction}`;
+  return new PDecimal(BigInt(`${match[1] === '-' ? '-' : ''}${digits || '0'}`), fraction.length);
+}
+
+function toDecimal(value, scaleHint = 0) {
+  if (isDecimal(value)) return value;
+  if (typeof value === 'string') return decimalFromString(value);
+  if (isReal(value)) return decimalFromString(value.v.toFixed(Math.max(scaleHint, 6)));
+  return new PDecimal(BigInt(Math.trunc(numberOf(value))), 0);
+}
+
+function formatDecimal(value) {
+  const negative = value.unscaled < 0n;
+  const digits = (negative ? -value.unscaled : value.unscaled).toString().padStart(value.scale + 1, '0');
+  const whole = digits.slice(0, digits.length - value.scale) || '0';
+  const fraction = value.scale > 0 ? `.${digits.slice(digits.length - value.scale)}` : '';
+  return `${negative ? '-' : ''}${whole}${fraction}`;
+}
+
+// Digits required to hold the value, for COBOL ON SIZE ERROR checks.
+function decimalDigitCount(value) {
+  const digits = (value.unscaled < 0n ? -value.unscaled : value.unscaled).toString();
+  return Math.max(digits.length, value.scale + 1);
+}
+
+// Intermediate scale for division, quantized down by the receiving field afterwards.
+const DECIMAL_DIVISION_SCALE = 20;
+
+function decimalArithmetic(op, rawA, rawB) {
+  const a = toDecimal(rawA);
+  const b = toDecimal(rawB);
+
+  if (op === 'MUL') return new PDecimal(a.unscaled * b.unscaled, a.scale + b.scale);
+  if (op === 'DIV') {
+    if (b.unscaled === 0n) return new PDecimal(0n, a.scale);
+    const scale = Math.max(a.scale, b.scale, DECIMAL_DIVISION_SCALE);
+    const numerator = a.unscaled * pow10(scale + b.scale - a.scale);
+    return new PDecimal(numerator / b.unscaled, scale);
+  }
+
+  const scale = Math.max(a.scale, b.scale);
+  const left = rescaleDecimal(a, scale).unscaled;
+  const right = rescaleDecimal(b, scale).unscaled;
+  return new PDecimal(op === 'ADD' ? left + right : left - right, scale);
+}
+
+function compareDecimals(rawA, rawB) {
+  const scale = Math.max(toDecimal(rawA).scale, toDecimal(rawB).scale);
+  const left = rescaleDecimal(toDecimal(rawA), scale).unscaled;
+  const right = rescaleDecimal(toDecimal(rawB), scale).unscaled;
+  if (left < right) return -1;
+  return left > right ? 1 : 0;
+}
+
 function numberOf(value) {
   if (value instanceof PReal) return value.v;
   if (value instanceof PEnum) return value.ordinal;
+  if (value instanceof PDecimal) return Number(formatDecimal(value));
   return Number(value || 0);
 }
 
@@ -109,7 +208,16 @@ function formatReal(value) {
 function observableValue(value) {
   if (isReal(value)) return Number(formatReal(value.v));
   if (isEnum(value)) return value.name;
+  if (isDecimal(value)) return formatDecimal(value);
   return value;
+}
+
+// How a value reads when printed or concatenated into a string.
+function displayText(value) {
+  if (isReal(value)) return formatReal(value.v);
+  if (isEnum(value)) return value.name;
+  if (isDecimal(value)) return formatDecimal(value);
+  return String(value ?? '');
 }
 
 function exportGlobals(vars, records, sets) {
@@ -1256,6 +1364,17 @@ function parsePcode(text) {
       instr.operand = Number.parseInt(trimCopy(rest), 10);
     } else if (mnemonic === 'PUSH_REAL') {
       instr.operand = Number.parseFloat(trimCopy(rest));
+    } else if (mnemonic === 'PUSH_DEC') {
+      const parts = trimCopy(rest).split(/\s+/).filter(Boolean);
+      instr.operand = { unscaled: parts[0] || '0', scale: Number.parseInt(parts[1] || '0', 10) };
+    } else if (mnemonic === 'DEC_QUANT') {
+      const parts = trimCopy(rest).split(/\s+/).filter(Boolean);
+      instr.operand = {
+        scale: Number.parseInt(parts[0] || '0', 10),
+        rounded: String(parts[1] || '').toUpperCase() === 'ROUNDED'
+      };
+    } else if (mnemonic === 'DEC_FITS') {
+      instr.operand = Number.parseInt(trimCopy(rest), 10);
     } else if (mnemonic === 'PUSH_ENUM') {
       const parts = trimCopy(rest).split(/\s+/).filter(Boolean);
       instr.operand = { typeName: parts[0] || '', valueName: parts[1] || '' };
@@ -1451,7 +1570,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       const varName = applyWithContext(rawName, withContextStack);
       const varValue = resolveVar(currentFrame, varName);
       // Preserve strings (src, or values stored via MSG_WITH_PUSH / PUSH_STR), reals and enums.
-      if (typeof varValue === 'string' || isReal(varValue) || isEnum(varValue)) {
+      if (isBoxed(varValue)) {
         stack.push(varValue);
       } else {
         stack.push(Number(varValue || 0));
@@ -1463,7 +1582,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       const rawName = String(instr.operand || '');
       const varName = applyWithContext(rawName, withContextStack);
       const top = stack.pop();
-      const stored = (typeof top === 'string' || isReal(top) || isEnum(top)) ? top : Number(top || 0);
+      const stored = isBoxed(top) ? top : Number(top || 0);
       assignVar(currentFrame, varName, stored);
       pc += 1;
       continue;
@@ -1485,6 +1604,12 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     if (op === 'ADD' || op === 'SUB' || op === 'MUL' || op === 'DIV') {
       const rawB = stack.pop();
       const rawA = stack.pop();
+      // Decimal outranks real: exactness wins over float contagion.
+      if (isDecimal(rawA) || isDecimal(rawB)) {
+        stack.push(decimalArithmetic(op, rawA, rawB));
+        pc += 1;
+        continue;
+      }
       // Either operand being real promotes the whole expression, Pascal-style.
       if (isReal(rawA) || isReal(rawB)) {
         const a = numberOf(rawA);
@@ -1493,7 +1618,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
         if (op === 'ADD') out = a + b;
         if (op === 'SUB') out = a - b;
         if (op === 'MUL') out = a * b;
-        if (op === 'DIV') out = b === 0 ? 0 : Math.trunc(a / b);
+        if (op === 'DIV') out = b === 0 ? 0 : a / b;
         stack.push(new PReal(out));
         pc += 1;
         continue;
@@ -1510,6 +1635,37 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     }
     if (op === 'PUSH_REAL') {
       stack.push(new PReal(instr.operand));
+      pc += 1;
+      continue;
+    }
+    if (op === 'PUSH_DEC') {
+      const spec = instr.operand || { unscaled: '0', scale: 0 };
+      stack.push(new PDecimal(spec.unscaled, spec.scale));
+      pc += 1;
+      continue;
+    }
+    if (op === 'DEC_CONV') {
+      stack.push(toDecimal(stack.pop()));
+      pc += 1;
+      continue;
+    }
+    // The receiving field decides the scale, as a COBOL PICTURE does.
+    if (op === 'DEC_QUANT') {
+      const spec = instr.operand || { scale: 0, rounded: false };
+      stack.push(rescaleDecimal(toDecimal(stack.pop()), Number(spec.scale) || 0, Boolean(spec.rounded)));
+      pc += 1;
+      continue;
+    }
+    if (op === 'DEC_STR') {
+      stack.push(formatDecimal(toDecimal(stack.pop())));
+      pc += 1;
+      continue;
+    }
+    // COBOL ON SIZE ERROR: true when the value still fits the declared precision.
+    if (op === 'DEC_FITS') {
+      const digits = Number(instr.operand || 0);
+      const value = toDecimal(stack.pop());
+      stack.push(digits > 0 && decimalDigitCount(value) <= digits ? 1 : 0);
       pc += 1;
       continue;
     }
@@ -1611,10 +1767,19 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     if (op === 'EQ' || op === 'NEQ' || op === 'LT' || op === 'LE' || op === 'GT' || op === 'GE') {
       const rawB = stack.pop();
       const rawA = stack.pop();
-      // Two strings compare lexicographically; anything else is numeric.
-      const bothStrings = typeof rawA === 'string' && typeof rawB === 'string';
-      const a = bothStrings ? rawA : numberOf(rawA);
-      const b = bothStrings ? rawB : numberOf(rawB);
+      // Decimals compare exactly; two strings compare lexicographically; else numeric.
+      let a;
+      let b;
+      if (isDecimal(rawA) || isDecimal(rawB)) {
+        a = compareDecimals(rawA, rawB);
+        b = 0;
+      } else if (typeof rawA === 'string' && typeof rawB === 'string') {
+        a = rawA;
+        b = rawB;
+      } else {
+        a = numberOf(rawA);
+        b = numberOf(rawB);
+      }
       let truth = 0;
       if (op === 'EQ') truth = a === b ? 1 : 0;
       if (op === 'NEQ') truth = a !== b ? 1 : 0;
@@ -1685,6 +1850,13 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       pc += 1;
       continue;
     }
+    if (op === 'CONCAT') {
+      const b = stack.pop();
+      const a = stack.pop();
+      stack.push(`${displayText(a)}${displayText(b)}`);
+      pc += 1;
+      continue;
+    }
     if (op === 'STREQ' || op === 'STRNEQ') {
       const b = String(stack.pop() ?? '');
       const a = String(stack.pop() ?? '');
@@ -1698,13 +1870,16 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       const proc = proceduresByLabel[call.label] || { params: [], locals: [] };
       const args = [];
       for (let i = 0; i < Number(call.argc || 0); i += 1) {
-        args.push(Number(stack.pop() || 0));
+        // Boxed values must survive the call boundary intact.
+        const raw = stack.pop();
+        args.push(isBoxed(raw) ? raw : Number(raw || 0));
       }
       args.reverse();
 
       const vars = {};
       for (let i = 0; i < (proc.params || []).length; i += 1) {
-        vars[String(proc.params[i])] = Number(args[i] || 0);
+        const value = args[i];
+        vars[String(proc.params[i])] = isBoxed(value) ? value : Number(value || 0);
       }
       for (const localName of (proc.locals || [])) {
         if (!Object.prototype.hasOwnProperty.call(vars, localName)) vars[String(localName)] = 0;
@@ -1730,9 +1905,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     }
     if (op === 'PRINT') {
       const top = stack.pop();
-      if (isReal(top)) currentLine += formatReal(top.v);
-      else if (isEnum(top)) currentLine += top.name;
-      else currentLine += String(top ?? '');
+      currentLine += displayText(top);
       pc += 1;
       continue;
     }
@@ -2416,7 +2589,7 @@ export async function executeProgram(options) {
   }
 }
 
-export { parsePcode };
+export { parsePcode, parseProgramMapMappings };
 
 export async function runSingleMessageForEvolution(args) {
   return executeSingleMessage(args, { printOutput: false });

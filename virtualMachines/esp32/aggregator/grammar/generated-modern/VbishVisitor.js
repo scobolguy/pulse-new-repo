@@ -54,6 +54,48 @@ export default class VbishVisitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by VbishParser#roleDecl.
+	visitRoleDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#roleName.
+	visitRoleName(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#libraryDecl.
+	visitLibraryDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#librarySource.
+	visitLibrarySource(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#useDecl.
+	visitUseDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#importDecl.
+	visitImportDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#routeDecl.
+	visitRouteDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by VbishParser#variableDecl.
 	visitVariableDecl(ctx) {
 	  return this.visitChildren(ctx);

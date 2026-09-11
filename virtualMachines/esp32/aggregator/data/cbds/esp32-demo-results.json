@@ -1,0 +1,21 @@
+{
+  "target": "http://192.168.2.155",
+  "ranAt": "2026-09-07T20:38:10.062Z",
+  "results": [
+    {
+      "name": "pascalish",
+      "pass": false,
+      "error": "The operation was aborted due to timeout"
+    },
+    {
+      "name": "vbish",
+      "pass": false,
+      "error": "ENOENT: no such file or directory, open 'C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\cbds\\vbish-demo\\cbds-converter.program.json'"
+    },
+    {
+      "name": "cobolish",
+      "pass": false,
+      "error": "The operation was aborted due to timeout"
+    }
+  ]
+}

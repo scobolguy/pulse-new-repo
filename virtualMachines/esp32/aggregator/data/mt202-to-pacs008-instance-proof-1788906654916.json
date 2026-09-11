@@ -1,0 +1,414 @@
+{
+  "runId": "run-1788906654917",
+  "serviceId": "mt202-to-pacs008",
+  "submissionInterface": "/api/services/mt202-to-pacs008",
+  "requestQueue": "service.mt202-to-pacs008.requests",
+  "count": 100,
+  "concurrency": 10,
+  "elapsedMs": 31267,
+  "averageMs": 1015.72,
+  "passed": 17,
+  "failed": 83,
+  "queueBefore": {
+    "primary": {
+      "frozen": false
+    },
+    "secondary": {
+      "frozen": false
+    }
+  },
+  "queueAfter": {
+    "primary": {
+      "name": "service.mt202-to-pacs008.requests",
+      "createdAt": 1788906655091,
+      "frozen": false,
+      "queueClass": "permanent",
+      "persistMessages": true,
+      "dataTypeId": "text-string",
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "createdByUser": false
+    },
+    "secondary": {
+      "frozen": false
+    }
+  },
+  "observedInstanceIds": [
+    "http://192.168.2.155",
+    "http://192.168.2.83"
+  ],
+  "observedInstanceCount": 2,
+  "byServiceInstance": {
+    "unknown": {
+      "count": 83,
+      "passed": 0,
+      "failed": 83,
+      "averageMs": 1005.88
+    },
+    "http://192.168.2.155": {
+      "count": 1,
+      "passed": 1,
+      "failed": 0,
+      "averageMs": 1423
+    },
+    "http://192.168.2.83": {
+      "count": 16,
+      "passed": 16,
+      "failed": 0,
+      "averageMs": 1041.31
+    }
+  },
+  "proofStatus": "TWO_INSTANCES_OBSERVED",
+  "note": "At least two distinct instance identities were reported by service completions.",
+  "failures": [
+    {
+      "index": 1,
+      "jobId": "job-eec2c77b-20bd-439e-98f9-261ed3f6b383",
+      "state": "completed",
+      "valid": false,
+      "field20": "INSTANCE-PROOF-run-1788906654917-0001",
+      "amount": "101.37",
+      "elapsedMs": 530,
+      "serviceInstanceId": null,
+      "instanceCandidates": []
+    },
+    {
+      "index": 4,
+      "jobId": "job-34260154-75fc-452c-906c-1563a5e53d8e",
+      "state": "completed",
+      "valid": false,
+      "field20": "INSTANCE-PROOF-run-1788906654917-0004",
+      "amount": "105.48",
+      "elapsedMs": 614,
+      "serviceInstanceId": null,
+      "instanceCandidates": []
+    },
+    {
+      "index": 5,
+      "jobId": "job-a583a4a5-1296-4ddd-83ea-e28deda9566f",
+      "state": "completed",
+      "valid": false,
+      "field20": "INSTANCE-PROOF-run-1788906654917-0005",
+      "amount": "106.85",
+      "elapsedMs": 626,
+      "serviceInstanceId": null,
+      "instanceCandidates": []
+    },
+    {
+      "index": 6,
+      "jobId": "job-c21c38bb-5d94-4ea0-b755-e403ce760683",
+      "state": "completed",
+      "valid": false,
+      "field20": "INSTANCE-PROOF-run-1788906654917-0006",
+      "amount": "108.22",
+      "elapsedMs": 675,
+      "serviceInstanceId": null,
+      "instanceCandidates": []
+    },
+    {
+      "index": 7,
+      "jobId": "job-2f23ec31-072b-42c4-b5ff-61bbcfe3ef46",
+      "state": "completed",
+      "valid": false,
+      "field20": "INSTANCE-PROOF-run-1788906654917-0007",
+      "amount": "109.59",
+      "elapsedMs": 630,
+      "serviceInstanceId": null,
+      "instanceCandidates": []
+    },
+    {
+      "index": 9,
+      "jobId": "job-e6c811fd-7e35-4407-9889-240983b97b47",
+      "state": "completed",
+      "valid": false,
+      "field20": "INSTANCE-PROOF-run-1788906654917-0009",
+      "amount": "112.33",
+      "elapsedMs": 933,
+      "serviceInstanceId": null,
+      "instanceCandidates": []
+    },
+    {
+      "index": 10,
+      "jobId": "job-cdb8ea63-c35b-4f11-91b3-54c719fccd43",
+      "state": "completed",
+      "valid": false,
+      "field20": "INSTANCE-PROOF-run-1788906654917-0010",
+      "amount": "113.70",
+      "elapsedMs": 636,
+      "serviceInstanceId": null,
+      "instanceCandidates": []
+    },
+    {
+      "index": 11,
+      "jobId": "job-751fa319-2568-43e6-a2ec-406c60d8846e",
+      "state": "completed",
+      "valid": false,
+      "field20": "INSTANCE-PROOF-run-1788906654917-0011",
+      "amount": "115.07",
+      "elapsedMs": 549,
+      "serviceInstanceId": null,
+      "instanceCandidates": []
+    },
+    {
+      "index": 12,
+      "jobId": "job-bbb3f8ab-3c81-4cb5-97e8-87a3a1722444",
+      "state": "completed",
+      "valid": false,
+      "field20": "INSTANCE-PROOF-run-1788906654917-0012",
+      "amount": "116.44",
+      "elapsedMs": 508,
+      "serviceInstanceId": null,
+      "instanceCandidates": []
+    },
+    {
+      "index": 13,
+      "jobId": "job-652dc28b-0479-4d8d-ba4a-7087cf372bc4",
+      "state": "completed",
+      "valid": false,
+      "field20": "INSTANCE-PROOF-run-1788906654917-0013",
+      "amount": "117.81",
+      "elapsedMs": 323,
+      "serviceInstanceId": null,
+      "instanceCandidates": []
+    },
+    {
+      "index": 14,
+      "jobId": "job-7ea62be6-7477-4276-ac3b-fe9e2a7b7b74",
+      "state": "completed",
+      "valid": false,
+      "field20": "INSTANCE-PROOF-run-1788906654917-0014",
+      "amount": "119.18",
+      "elapsedMs": 547,
+      "serviceInstanceId": null,
+      "instanceCandidates": []
+    },
+    {
+      "index": 15,
+      "jobId": "job-bc034ed9-ebcd-46f5-bd58-4064f70bddad",
+      "state": "completed",
+      "valid": false,
+      "field20": "INSTANCE-PROOF-run-1788906654917-0015",
+      "amount": "120.55",
+      "elapsedMs": 906,
+      "serviceInstanceId": null,
+      "instanceCandidates": []
+    },
+    {
+      "index": 16,
+      "jobId": "job-5ffc133d-241f-4671-a45a-aa389cefe130",
+      "state": "completed",
+      "valid": false,
+      "field20": "INSTANCE-PROOF-run-1788906654917-0016",
+      "amount": "121.92",
+      "elapsedMs": 30553,
+      "serviceInstanceId": null,
+      "instanceCandidates": []
+    },
+    {
+      "index": 18,
+      "jobId": "job-cb6cbff8-6df7-4aa5-98d2-039b441ca1df",
+      "state": "completed",
+      "valid": false,
+      "field20": "INSTANCE-PROOF-run-1788906654917-0018",
+      "amount": "124.66",
+      "elapsedMs": 773,
+      "serviceInstanceId": null,
+      "instanceCandidates": []
+    },
+    {
+      "index": 19,
+      "jobId": "job-634b9887-5533-4728-9f34-47ada3e476ff",
+      "state": "completed",
+      "valid": false,
+      "field20": "INSTANCE-PROOF-run-1788906654917-0019",
+      "amount": "126.03",
+      "elapsedMs": 859,
+      "serviceInstanceId": null,
+      "instanceCandidates": []
+    },
+    {
+      "index": 20,
+      "jobId": "job-de797630-cce4-4ae4-8f45-034c10c161ac",
+      "state": "completed",
+      "valid": false,
+      "field20": "INSTANCE-PROOF-run-1788906654917-0020",
+      "amount": "127.40",
+      "elapsedMs": 749,
+      "serviceInstanceId": null,
+      "instanceCandidates": []
+    },
+    {
+      "index": 21,
+      "jobId": "job-320235fe-d6bd-4138-a62a-6df12f3c2b4d",
+      "state": "completed",
+      "valid": false,
+      "field20": "INSTANCE-PROOF-run-1788906654917-0021",
+      "amount": "128.77",
+      "elapsedMs": 707,
+      "serviceInstanceId": null,
+      "instanceCandidates": []
+    },
+    {
+      "index": 22,
+      "jobId": "job-c399b0cb-28a1-4d59-bcde-2037e741aa01",
+      "state": "completed",
+      "valid": false,
+      "field20": "INSTANCE-PROOF-run-1788906654917-0022",
+      "amount": "130.14",
+      "elapsedMs": 1047,
+      "serviceInstanceId": null,
+      "instanceCandidates": []
+    },
+    {
+      "index": 23,
+      "jobId": "job-c9f4b8a0-7d50-4a23-a6c7-dfe1c9b70dda",
+      "state": "completed",
+      "valid": false,
+      "field20": "INSTANCE-PROOF-run-1788906654917-0023",
+      "amount": "131.51",
+      "elapsedMs": 1007,
+      "serviceInstanceId": null,
+      "instanceCandidates": []
+    },
+    {
+      "index": 25,
+      "jobId": "job-1470bb02-8f39-4541-affd-f87984c0b5de",
+      "state": "completed",
+      "valid": false,
+      "field20": "INSTANCE-PROOF-run-1788906654917-0025",
+      "amount": "134.25",
+      "elapsedMs": 1334,
+      "serviceInstanceId": null,
+      "instanceCandidates": []
+    }
+  ],
+  "serviceRegistryBefore": {
+    "services": {
+      "broker": [
+        {
+          "instanceId": "broker:local:4000",
+          "serviceName": "broker",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/broker",
+            "label": "Message Broker"
+          },
+          "lastHeartbeat": 1788906653797
+        }
+      ],
+      "router": [
+        {
+          "instanceId": "router:local:4000",
+          "serviceName": "router",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/router",
+            "label": "Router Service"
+          },
+          "lastHeartbeat": 1788906653797
+        }
+      ],
+      "queue-manager": [
+        {
+          "instanceId": "queue-manager:local:4000",
+          "serviceName": "queue-manager",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/queue",
+            "label": "Queue Manager"
+          },
+          "lastHeartbeat": 1788906653797
+        }
+      ],
+      "file-server": [
+        {
+          "instanceId": "file-server:local:4000",
+          "serviceName": "file-server",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/fileserver",
+            "label": "File Server"
+          },
+          "lastHeartbeat": 1788906653797
+        }
+      ]
+    }
+  },
+  "serviceRegistryAfter": {
+    "services": {
+      "broker": [
+        {
+          "instanceId": "broker:local:4000",
+          "serviceName": "broker",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/broker",
+            "label": "Message Broker"
+          },
+          "lastHeartbeat": 1788906683830
+        }
+      ],
+      "router": [
+        {
+          "instanceId": "router:local:4000",
+          "serviceName": "router",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/router",
+            "label": "Router Service"
+          },
+          "lastHeartbeat": 1788906683830
+        }
+      ],
+      "queue-manager": [
+        {
+          "instanceId": "queue-manager:local:4000",
+          "serviceName": "queue-manager",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/queue",
+            "label": "Queue Manager"
+          },
+          "lastHeartbeat": 1788906683830
+        }
+      ],
+      "file-server": [
+        {
+          "instanceId": "file-server:local:4000",
+          "serviceName": "file-server",
+          "nodeId": "Neptune",
+          "ip": "127.0.0.1",
+          "port": 4000,
+          "status": "up",
+          "metadata": {
+            "api": "/api/fileserver",
+            "label": "File Server"
+          },
+          "lastHeartbeat": 1788906683830
+        }
+      ]
+    }
+  }
+}

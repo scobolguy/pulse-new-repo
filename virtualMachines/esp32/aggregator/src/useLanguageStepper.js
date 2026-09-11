@@ -11,16 +11,32 @@ export function useLanguageStepper(languageId, editorRef) {
   const [activeStepTab, setActiveStepTab] = useState('main')
   const [stepIndex, setStepIndex] = useState(0)
   const [stepLog, setStepLog] = useState([])
+  const [debugState, setDebugState] = useState({ runtime: 'source-narrator', status: 'ready', sourceLine: null, sourceText: '', variables: {}, operandStack: [], callStack: [], exception: null })
 
   function singleStep(source) {
     const { main, callables } = buildExecutionTabs(languageId, source)
     const tabs = stepTabs.length ? stepTabs : [main]
     const activeTab = tabs.find((tab) => tab.id === activeStepTab) || main
     const steps = getExecutableSteps(languageId, activeTab, callables)
+    if (stepTabs.length === 0) setStepTabs([main])
     const step = steps[stepIndex]
     if (!step) {
+      setDebugState(current => ({ ...current, status: 'completed' }))
       return 'No further executable statements in this tab.'
     }
+    const assignment = /(?:MOVE\s+(.+?)\s+TO\s+([A-Za-z_][A-Za-z0-9_-]*)\.?|([A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*(.+?);?$)/i.exec(step.value || '')
+    const name = assignment?.[2] || assignment?.[3]
+    const value = assignment?.[1] || assignment?.[4]
+    setDebugState(current => ({
+      ...current,
+      status: 'paused',
+      sourceLine: step.line,
+      sourceText: step.value || '',
+      lastInstruction: `${step.kind}: ${step.value || ''}`,
+      variables: name ? { ...current.variables, [name]: value } : current.variables,
+      callStack: activeTab?.label && activeTab.label !== 'MAIN' ? [activeTab.label] : ['MAIN'],
+      exception: null
+    }))
     setStepIndex((current) => current + 1)
     editorRef.current?.revealLineInCenter(step.line)
     editorRef.current?.setPosition({ lineNumber: step.line, column: 1 })
@@ -40,5 +56,5 @@ export function useLanguageStepper(languageId, editorRef) {
     setStepIndex(0)
   }
 
-  return { stepTabs, activeStepTab, stepLog, singleStep, selectStepTab }
+  return { stepTabs, activeStepTab, stepLog, debugState, singleStep, selectStepTab }
 }

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-09-05T01:12:05.804Z",
+  "generatedAt": "2026-09-11T20:39:04.683Z",
   "serviceId": "MutualRecursionEvenOdd",
   "runtimeUnit": {
     "kind": "program",
@@ -35,9 +35,11 @@
       }
     }
   ],
+  "enums": {},
   "procedures": {
     "PROC_ISEVEN": {
       "name": "IsEven",
+      "returnType": null,
       "params": [
         "n"
       ],
@@ -45,6 +47,7 @@
     },
     "PROC_ISODD": {
       "name": "IsOdd",
+      "returnType": null,
       "params": [
         "n"
       ],
@@ -52,6 +55,7 @@
     },
     "PROC_PRINTCHECKS": {
       "name": "PrintChecks",
+      "returnType": null,
       "params": [
         "i",
         "max"
@@ -62,12 +66,13 @@
   "typeDeclarations": [],
   "classDeclarations": [],
   "entryLabel": "MAIN",
+  "libraries": [],
   "mapperImports": [],
   "signing": {
     "algorithm": "hmac-sha256",
     "keyId": "profile-default",
     "signature": "85a2eda65c3ed8682fef3de51e56d588651cde244ffc3029e40070a417326473",
-    "signedAt": "2026-09-05T01:12:05.806Z",
+    "signedAt": "2026-09-11T20:39:04.688Z",
     "pcodeLength": 786,
     "canonicalForm": "raw-pcode-text-v1"
   }
