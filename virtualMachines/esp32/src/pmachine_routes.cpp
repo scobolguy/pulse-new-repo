@@ -13,6 +13,8 @@
 #include <cstdio>
 #if defined(ESP32)
 #include <mbedtls/md.h>
+#elif defined(ESP8266)
+#include <bearssl/bearssl_hmac.h>
 #endif
 #if defined(ESP32)
 #include <freertos/FreeRTOS.h>
@@ -24,7 +26,7 @@
 namespace {
 
 struct EdgeIngressConfig {
-    size_t workerCount = 1;
+    size_t workerCount = 2;
     size_t queueLength = 64;
     size_t resultLimit = 64;
     size_t workerStackBytes = 12288;
@@ -188,6 +190,23 @@ bool computeHmacSha256Hex(const String& key, const String& text, String& outHex)
         digest
     );
     if (rc != 0) return false;
+
+    char hexBuf[65];
+    for (size_t i = 0; i < 32; ++i) {
+        snprintf(&hexBuf[i * 2], 3, "%02x", static_cast<unsigned int>(digest[i]));
+    }
+    hexBuf[64] = '\0';
+    outHex = String(hexBuf);
+    return true;
+#elif defined(ESP8266)
+    br_hmac_key_context keyContext;
+    br_hmac_context hmacContext;
+    br_hmac_key_init(&keyContext, &br_sha256_vtable, key.c_str(), key.length());
+    br_hmac_init(&hmacContext, &keyContext, 32);
+    br_hmac_update(&hmacContext, text.c_str(), text.length());
+
+    unsigned char digest[32] = {0};
+    br_hmac_out(&hmacContext, digest);
 
     char hexBuf[65];
     for (size_t i = 0; i < 32; ++i) {
@@ -1468,13 +1487,68 @@ bool loadMappingsArray(const String& mappingsFilePath, FederatedFileSystem* ffs,
     return false;
 }
 
-bool runMappingById(const String& mappingId, const String& sourcePayload, JsonArrayConst mappings, String& mappedPayload, String& error) {
+struct RouterExecutionCache {
+    bool ready = false;
+    String rulesPath;
+    String mappingsPath;
+    JsonDocument rulesDoc;
+    JsonDocument mappingsDoc;
+    JsonArrayConst rules;
+    JsonArrayConst mappings;
+    std::map<String, JsonObjectConst> mappingsById;
+};
+
+RouterExecutionCache gRouterExecutionCache;
+#if defined(ESP32)
+SemaphoreHandle_t gRouterExecutionCacheMutex = nullptr;
+#endif
+
+void ensureRouterExecutionCacheMutex() {
+#if defined(ESP32)
+    if (gRouterExecutionCacheMutex == nullptr) {
+        gRouterExecutionCacheMutex = xSemaphoreCreateMutex();
+    }
+#endif
+}
+
+void clearRouterExecutionCache(RouterExecutionCache& cache) {
+    cache.ready = false;
+    cache.rulesPath = "";
+    cache.mappingsPath = "";
+    cache.rules = JsonArrayConst();
+    cache.mappings = JsonArrayConst();
+    cache.mappingsById.clear();
+    cache.rulesDoc.clear();
+    cache.mappingsDoc.clear();
+}
+
+void indexMappings(RouterExecutionCache& cache) {
+    cache.mappingsById.clear();
+    for (JsonObjectConst mapping : cache.mappings) {
+        const char* id = mapping["id"] | "";
+        if (id[0] != '\0') cache.mappingsById[String(id)] = mapping;
+    }
+}
+
+bool runMappingById(
+    const String& mappingId,
+    const String& sourcePayload,
+    JsonArrayConst mappings,
+    String& mappedPayload,
+    String& error,
+    const std::map<String, JsonObjectConst>* mappingsById = nullptr
+) {
     JsonObjectConst selected;
-    for (JsonObjectConst m : mappings) {
-        const char* id = m["id"] | "";
-        if (String(id) == mappingId) {
-            selected = m;
-            break;
+    if (mappingsById != nullptr) {
+        auto found = mappingsById->find(mappingId);
+        if (found != mappingsById->end()) selected = found->second;
+    } else {
+        for (JsonObjectConst m : mappings) {
+            const char* id = m["id"] | "";
+            if (String(id) == mappingId) {
+                selected = m;
+                break;
+            }
         }
     }
 
@@ -1517,7 +1591,15 @@ bool runMappingById(const String& mappingId, const String& sourcePayload, JsonAr
     return true;
 }
 
-bool evaluateTransformExpr(const String& exprText, const String& srcMessage, JsonArrayConst mappings, int depth, String& outValue, String& error) {
+bool evaluateTransformExpr(
+    const String& exprText,
+    const String& srcMessage,
+    JsonArrayConst mappings,
+    int depth,
+    String& outValue,
+    String& error,
+    const std::map<String, JsonObjectConst>* mappingsById = nullptr
+) {
     if (depth > 4) {
         error = "Transform nesting too deep";
         return false;
@@ -1568,14 +1650,21 @@ bool evaluateTransformExpr(const String& exprText, const String& srcMessage, Jso
     }
 
     String payload;
-    if (!evaluateTransformExpr(payloadExpr, srcMessage, mappings, depth + 1, payload, error)) {
+    if (!evaluateTransformExpr(payloadExpr, srcMessage, mappings, depth + 1, payload, error, mappingsById)) {
         return false;
     }
 
-    return runMappingById(mappingId, payload, mappings, outValue, error);
+    return runMappingById(mappingId, payload, mappings, outValue, error, mappingsById);
 }
 
-String applyTransformRule(const String& transformRule, const String& srcMessage, JsonArrayConst mappings, bool& transformApplied, String& transformError) {
+String applyTransformRule(
+    const String& transformRule,
+    const String& srcMessage,
+    JsonArrayConst mappings,
+    bool& transformApplied,
+    String& transformError,
+    const std::map<String, JsonObjectConst>* mappingsById = nullptr
+) {
     String rule = trimCopy(normalizeDslEscapes(transformRule));
     transformApplied = false;
     transformError = "";
@@ -1593,7 +1682,7 @@ String applyTransformRule(const String& transformRule, const String& srcMessage,
     if (assignIdx < 0 && rule.indexOf('(') < 0 && rule.indexOf(' ') < 0) {
         String mapped;
         String mapErr;
-        if (runMappingById(unquote(rule), srcMessage, mappings, mapped, mapErr)) {
+        if (runMappingById(unquote(rule), srcMessage, mappings, mapped, mapErr, mappingsById)) {
             transformApplied = true;
             return mapped;
         }
@@ -1611,7 +1700,7 @@ String applyTransformRule(const String& transformRule, const String& srcMessage,
     if (semicolon >= 0) rhs = trimCopy(rhs.substring(0, semicolon));
 
     String out;
-    if (!evaluateTransformExpr(rhs, srcMessage, mappings, 0, out, transformError)) {
+    if (!evaluateTransformExpr(rhs, srcMessage, mappings, 0, out, transformError, mappingsById)) {
         return srcMessage;
     }
 
@@ -1742,6 +1831,77 @@ bool loadRouterRulesArray(const String& rulesFilePath, FederatedFileSystem* ffs,
     }
 
     return false;
+}
+
+bool loadRouterExecutionCache(
+    RouterExecutionCache& cache,
+    FederatedFileSystem* ffs,
+    const String& requestedRulesPath,
+    const String& requestedMappingsPath
+) {
+    ensureRouterExecutionCacheMutex();
+#if defined(ESP32)
+    if (gRouterExecutionCacheMutex != nullptr) {
+        xSemaphoreTake(gRouterExecutionCacheMutex, portMAX_DELAY);
+    }
+#endif
+    auto unlockAndFail = [&]() {
+#if defined(ESP32)
+        if (gRouterExecutionCacheMutex != nullptr) xSemaphoreGive(gRouterExecutionCacheMutex);
+#endif
+        return false;
+    };
+
+    if (cache.ready && cache.rulesPath == requestedRulesPath && cache.mappingsPath == requestedMappingsPath) {
+#if defined(ESP32)
+        if (gRouterExecutionCacheMutex != nullptr) xSemaphoreGive(gRouterExecutionCacheMutex);
+#endif
+        return true;
+    }
+
+    RouterExecutionCache next;
+    JsonArrayConst rules;
+    if (!loadRouterRulesArray(requestedRulesPath, ffs, next.rulesDoc, rules)) {
+        const String fallbackRulesPath = "/hrr.json";
+        if (!(requestedRulesPath == fallbackRulesPath && loadRouterRulesArray(fallbackRulesPath, ffs, next.rulesDoc, rules))) {
+            return unlockAndFail();
+        }
+        next.rulesPath = fallbackRulesPath;
+    } else {
+        next.rulesPath = requestedRulesPath;
+    }
+    next.rules = rules;
+
+    JsonArrayConst mappings;
+    if (!loadMappingsArray(requestedMappingsPath, ffs, next.mappingsDoc, mappings)) {
+        if (!(next.rulesDoc.is<JsonObject>() && next.rulesDoc["dataMappings"].is<JsonArray>())) {
+            const String fallbackMappingsPath = "/hdm.json";
+            if (!loadMappingsArray(fallbackMappingsPath, ffs, next.mappingsDoc, mappings)) {
+                return unlockAndFail();
+            }
+            next.mappingsPath = fallbackMappingsPath;
+        } else {
+            next.mappingsPath = next.rulesPath + "#embedded:dataMappings";
+            mappings = next.rulesDoc["dataMappings"].as<JsonArrayConst>();
+        }
+    } else {
+        next.mappingsPath = requestedMappingsPath;
+    }
+    next.mappings = mappings;
+    indexMappings(next);
+    next.ready = true;
+    cache = std::move(next);
+    cache.rules = cache.rulesDoc.as<JsonArrayConst>();
+    if (cache.mappingsPath.indexOf("#embedded:dataMappings") >= 0) {
+        cache.mappings = cache.rulesDoc["dataMappings"].as<JsonArrayConst>();
+    } else {
+        cache.mappings = cache.mappingsDoc.as<JsonArrayConst>();
+    }
+    indexMappings(cache);
+#if defined(ESP32)
+    if (gRouterExecutionCacheMutex != nullptr) xSemaphoreGive(gRouterExecutionCacheMutex);
+#endif
+    return true;
 }
 
 bool loadProgramMapMappings(
@@ -2445,7 +2605,26 @@ size_t clearEdgeIngressExecutionCaches() {
         ctx.executionCache.mappingDefs.clear();
         ctx.executionCache.metadata = ProgramMapMetadata{};
     }
+    ensureRouterExecutionCacheMutex();
+#if defined(ESP32)
+    if (gRouterExecutionCacheMutex != nullptr) xSemaphoreTake(gRouterExecutionCacheMutex, portMAX_DELAY);
+#endif
+    clearRouterExecutionCache(gRouterExecutionCache);
+#if defined(ESP32)
+    if (gRouterExecutionCacheMutex != nullptr) xSemaphoreGive(gRouterExecutionCacheMutex);
+#endif
     return cleared;
+}
+
+void invalidateRouterExecutionCacheInternal() {
+    ensureRouterExecutionCacheMutex();
+#if defined(ESP32)
+    if (gRouterExecutionCacheMutex != nullptr) xSemaphoreTake(gRouterExecutionCacheMutex, portMAX_DELAY);
+#endif
+    clearRouterExecutionCache(gRouterExecutionCache);
+#if defined(ESP32)
+    if (gRouterExecutionCacheMutex != nullptr) xSemaphoreGive(gRouterExecutionCacheMutex);
+#endif
 }
 
 void trimEdgeIngressAsyncResultsLocked() {
@@ -2600,38 +2779,18 @@ RouterRunExecutionResult executeRouterRun(
 ) {
     RouterRunExecutionResult exec;
 
-    JsonDocument rulesDoc;
-    JsonArrayConst rules;
-    if (!loadRouterRulesArray(rulesPath, ffs, rulesDoc, rules)) {
-        const String fallbackRulesPath = "/hrr.json";
-        if (!(rulesPath == fallbackRulesPath && loadRouterRulesArray(fallbackRulesPath, ffs, rulesDoc, rules))) {
-            exec.statusCode = 404;
-            exec.contentType = "text/plain";
-            exec.body = "Unable to load router rules file (expected /router-rules.generated.json or /hrr.json)";
-            return exec;
-        }
-        rulesPath = fallbackRulesPath;
+    RouterExecutionCache& cache = gRouterExecutionCache;
+    if (!loadRouterExecutionCache(cache, ffs, rulesPath, mappingsPath)) {
+        exec.statusCode = 404;
+        exec.contentType = "text/plain";
+        exec.body = "Unable to load router rules or mappings file";
+        return exec;
     }
-
-    JsonDocument mappingsDoc;
-    JsonArrayConst mappings;
-    if (!loadMappingsArray(mappingsPath, ffs, mappingsDoc, mappings)) {
-        if (!(rulesDoc.is<JsonObject>() && rulesDoc["dataMappings"].is<JsonArray>())) {
-            const String fallbackMappingsPath = "/hdm.json";
-            if (!loadMappingsArray(fallbackMappingsPath, ffs, mappingsDoc, mappings)) {
-                exec.statusCode = 404;
-                exec.contentType = "text/plain";
-                exec.body = "Unable to load mappings file (expected /data-mappings.generated.json or /hdm.json)";
-                return exec;
-            }
-            mappingsPath = fallbackMappingsPath;
-        } else {
-            mappingsPath = rulesPath + "#embedded:dataMappings";
-        }
-        if (rulesDoc.is<JsonObject>() && rulesDoc["dataMappings"].is<JsonArray>()) {
-            mappings = rulesDoc["dataMappings"].as<JsonArrayConst>();
-        }
-    }
+    rulesPath = cache.rulesPath;
+    mappingsPath = cache.mappingsPath;
+    JsonArrayConst rules = cache.rules;
+    JsonArrayConst mappings = cache.mappings;
+    const std::map<String, JsonObjectConst>& mappingsById = cache.mappingsById;
 
     JsonDocument outDoc;
     outDoc["inputQueue"] = inputQueue;
@@ -2664,7 +2823,7 @@ RouterRunExecutionResult executeRouterRun(
             bool transformApplied = false;
             String transformRule = output["transformRule"] | "";
             String transformError;
-            String routed = applyTransformRule(transformRule, message, mappings, transformApplied, transformError);
+            String routed = applyTransformRule(transformRule, message, mappings, transformApplied, transformError, &mappingsById);
             String outputType = resolveOutputDataTypeId(output);
             String shapeWarning;
             String shaped = routed;
@@ -4216,6 +4375,7 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
 
         machine.clearRoutingDeliveries();
         String executionMessage = message;
+        String executionQueue = inputQueue;
         const String rawMessageUpper = toUpperCopy(trimCopy(message));
         if (rawMessageUpper.startsWith("MT103") || rawMessageUpper.indexOf("\n:20:") >= 0 || rawMessageUpper.indexOf(":23B:") >= 0) {
             JsonDocument parsedMt103;
@@ -4223,8 +4383,14 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
             String parsedMessage;
             serializeJson(parsedMt103, parsedMessage);
             executionMessage = parsedMessage;
+            // The conversion router consumes the parsed MT103 stage. Keep the
+            // request queue in the response, but execute that stage after FIN
+            // text has been parsed so a single device invocation can convert.
+            if (executionQueue == "swift.mt103.inbound") {
+                executionQueue = "swift.mt103.parsed";
+            }
         }
-        machine.setRoutingContext(std::string(inputQueue.c_str()), std::string(executionMessage.c_str()));
+        machine.setRoutingContext(std::string(executionQueue.c_str()), std::string(executionMessage.c_str()));
         machine.run(instructions);
 
         JsonDocument out;
@@ -5043,5 +5209,9 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         request->send(result.statusCode, result.contentType, response);
     });
 #endif
+}
+
+void invalidateRouterExecutionCache() {
+    invalidateRouterExecutionCacheInternal();
 }
 

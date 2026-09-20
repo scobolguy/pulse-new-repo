@@ -1,5 +1,6 @@
 #include "DevicePin.h"
 #include "FederatedFileSystemRoutes.h"
+#include "pmachine_routes.h"
 #include <vector>
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -222,6 +223,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
         }
         if (!file.startsWith("/")) file = "/" + file;
         FFSStatus st = federatedFS.remove(file);
+        if (st == FFSStatus::OK) invalidateRouterExecutionCache();
         request->send(st == FFSStatus::OK ? 200 : 500, "text/plain", st == FFSStatus::OK ? "File deleted" : "Failed to delete file");
     };
     server.on("/ffs/delete", HTTP_POST, deleteHandler);
@@ -250,6 +252,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
         }
         std::vector<uint8_t> data(body.begin(), body.end());
         FFSStatus st = federatedFS.write(file, data.data(), data.size());
+        if (st == FFSStatus::OK) invalidateRouterExecutionCache();
         request->send(st == FFSStatus::OK ? 200 : 500, "text/plain", st == FFSStatus::OK ? "File uploaded" : "Failed to upload file");
     };
     server.on("/ffs/upload", HTTP_POST, uploadHandler);

@@ -19,3 +19,4 @@ PMachineFileExecutionResult executePMachineFile(
 );
 
 void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& pm, FederatedFileSystem* ffs = nullptr);
+void invalidateRouterExecutionCache();
