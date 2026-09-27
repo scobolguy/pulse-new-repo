@@ -1,0 +1,772 @@
+// Minimal, clean, and buildable header for pmachine
+#define PMTRACE(x)
+#pragma once
+#include <Arduino.h> // For String
+#include <map>
+#include <vector>
+#include <string>
+#include <cstdint>
+#include <atomic>
+#include <algorithm>
+#if defined(PLATFORM_RPIB)
+#include <ffs/FederatedFileSystem.h>
+#else
+#include "ffs/FederatedFileSystem.h"
+#endif
+#include "StringPool.h"
+
+
+// Standalone EnumManager
+class EnumManager {
+public:
+    void registerEnum(const std::string& name, const std::vector<std::string>& values) {
+        for (size_t i = 0; i < values.size(); ++i) {
+            valueToInt[name][values[i]] = (int)i;
+            intToValue[name][(int)i] = values[i];
+        }
+        enums[name] = values;
+    }
+    int getValue(const std::string& name, const std::string& value) const {
+        auto it = valueToInt.find(name);
+        if (it != valueToInt.end()) {
+            auto jt = it->second.find(value);
+            if (jt != it->second.end()) return jt->second;
+        }
+        return -1;
+    }
+    std::string getName(const std::string& name, int value) const {
+        auto it = intToValue.find(name);
+        if (it != intToValue.end()) {
+            auto jt = it->second.find(value);
+            if (jt != it->second.end()) return jt->second;
+        }
+        return "";
+    }
+    bool hasEnum(const std::string& name) const { return enums.count(name) > 0; }
+private:
+    std::map<std::string, std::vector<std::string>> enums;
+    std::map<std::string, std::map<std::string, int>> valueToInt;
+    std::map<std::string, std::map<int, std::string>> intToValue;
+};
+
+
+
+namespace pmachine {
+
+
+// PL/0-style opcodes
+enum Opcode : uint8_t {
+    OP_NOP = 0x00,
+    OP_LIT = 0x01,      // LIT 0, a: Push constant a
+    OP_OPR = 0x02,      // OPR 0, a: Operator (return, arithmetic, etc)
+    OP_LOD = 0x03,      // LOD l, a: Load variable at level l, address a
+    OP_STO = 0x04,      // STO l, a: Store variable at level l, address a
+    OP_CAL = 0x05,      // CAL l, a: Call procedure at level l, address a
+    OP_INT = 0x06,      // INT 0, a: Increment stack for locals
+    OP_JMP = 0x07,      // JMP 0, a: Jump to address a
+    OP_JZ  = 0x08,      // JZ  0, a: Jump if zero
+    OP_PUSH_INT = 0x09, // Push integer operand
+    OP_PUSH_STR = 0x0A, // Push string operand
+    OP_PUSH_ENUM = 0x0B,// Push enum operand
+    OP_ADD = 0x0C,      // Add
+    OP_SUB = 0x0D,      // Subtract
+    OP_MUL = 0x0E,      // Multiply
+    OP_DIV = 0x0F,      // Divide
+    OP_PRINT_INT = 0x10,// Print integer
+    OP_PRINT_ENUM = 0x11,// Print enum
+    OP_ROUTE_MATCH_QUEUE = 0x12, // Compare runtime input queue to operand queue, push 1/0
+    OP_ROUTE_EVAL_WHEN = 0x13,   // Evaluate WHEN rule against current message, push 1/0
+    OP_ROUTE_TRANSFORM = 0x14,   // Apply TRANSFORM rule to current message
+    OP_ROUTE_EMIT = 0x15,        // Emit current message to operand output queue
+    OP_ROUTE_MAP_RUN = 0x63,     // Call a pcode mapper routine (operand = mapper id -> MAP_<id> label)
+    OP_SRC_GET = 0x64,           // Read current-message field by path, push onto stack
+    OP_OUT_SET = 0x65,           // Pop stack, write into the mapper output document by path
+    OP_UPPER = 0x66,             // Uppercase top-of-stack string
+    OP_YYMMDD_TO_ISO = 0x67,     // YYMMDD -> YYYY-MM-DD on top-of-stack
+    OP_MT_AMOUNT_TO_DECIMAL = 0x68, // "12500,45" -> "12500.45"
+    OP_MT_PARTY_NAME = 0x69,     // Strip MT account line, keep party name
+    OP_MT_CHARGE_TO_ISO = 0x6A,  // MT charge-bearer code -> ISO
+    OP_PARSE_FIN_TEXT = 0x16,    // Parse routing source message from MT FIN text into JSON
+    OP_ROUTE_SET_STATE = 0x17,   // Set runtime state from operand "key=value"
+    OP_ROUTE_SET_MESSAGE = 0x24, // Pop stack value and set current routing message
+    OP_LOAD_NAME = 0x18,         // Load named variable from runtime frame stack
+    OP_STORE_NAME = 0x19,        // Store named variable to runtime frame stack
+    OP_CALL_LABEL = 0x1A,        // Call label with stack-based args
+    OP_RET = 0x1B,               // Return from call frame
+    OP_EQ = 0x1C,                // Compare equality
+    OP_NEQ = 0x1D,               // Compare inequality
+    OP_LT = 0x1E,                // Compare less-than
+    OP_LE = 0x1F,                // Compare less-or-equal
+    OP_GT = 0x20,                // Compare greater-than
+    OP_GE = 0x21,                // Compare greater-or-equal
+    OP_PRINT = 0x22,             // Print string/int token to current output line
+    OP_PRINT_NL = 0x23,          // End current output line
+    OP_ORCH_SPAWN = 0x25,        // Queue orchestration subflow spawn metadata
+    OP_ORCH_WAIT_ALL = 0x26,     // Await orchestration subflow completion (native transport hook)
+    OP_ORCH_FAIL_TXN = 0x27,     // Fail current transaction when orchestration result is failure
+    OP_ORCH_RETURN_SUCCESS = 0x28,// Return orchestration success payload
+    OP_CALL_EXT = 0x29,          // Call external symbol through lazy thunk resolver
+    OP_FORK = 0x2A,
+    OP_JOIN_ALL = 0x2B,
+    OP_JOIN = 0x2C,
+    OP_SYNC = 0x2D,
+    OP_FORK_SUBFLOW = 0x2E,
+    OP_BQ_NEW_STATIC = 0x2F,
+    OP_BQ_NEW_DYNAMIC = 0x30,
+    OP_BQ_ENQ = 0x31,
+    OP_BQ_DEQ = 0x32,
+    OP_BQ_PEEK = 0x33,
+    OP_STK_NEW_STATIC = 0x34,
+    OP_STK_NEW_DYNAMIC = 0x35,
+    OP_STK_PUSH = 0x36,
+    OP_STK_POP = 0x37,
+    OP_STK_PEEK = 0x38,
+    OP_PQ_NEW_STATIC = 0x39,
+    OP_PQ_NEW_DYNAMIC = 0x3A,
+    OP_PQ_ENQ = 0x3B,
+    OP_PQ_DEQ = 0x3C,
+    OP_PQ_PEEK = 0x3D,
+    OP_FILE_OPEN = 0x3E,
+    OP_FILE_READ = 0x3F,
+    OP_FILE_WRITE = 0x40,
+    OP_FILE_CLOSE = 0x41,
+    OP_MAP = 0x42,
+    OP_DL_LOAD_SCHEMA = 0x43,
+    OP_DL_LOAD_MAP = 0x44,
+    OP_SRV_CALL = 0x45,
+    OP_ROUTE_SERVICE = 0x46,
+    OP_ROUTE_QUEUE = 0x47,
+    OP_ROUTE_FILE = 0x48,
+    OP_TRIM = 0x49,              // Pop string, trim whitespace, push trimmed string
+    OP_PARSE_INT = 0x4A,         // Pop string, parse as integer, push result (0 on parse failure)
+    OP_OR = 0x4B,                // Pop two integers, push 1 if either is nonzero, else 0
+    OP_AND = 0x4C,               // Pop two integers, push 1 if both are nonzero, else 0
+    OP_NOT = 0x4D,               // Pop integer, push 1 if zero else 0
+    OP_STREQ = 0x4E,             // Pop two strings, push 1 if equal else 0
+    OP_STRNEQ = 0x4F,            // Pop two strings, push 1 if not equal else 0
+    OP_MAP_RETURN = 0x50,
+    OP_DB_INSERT = 0x51,         // Pop one value per column, emit a row to the database sink
+    OP_DB_SELECT = 0x53,         // Read one row through the host reader, push column values
+    OP_DB_UPDATE = 0x54,         // Pop predicate and column values, emit an update to the sink
+    OP_DB_DELETE = 0x55,         // Pop predicate value, emit a delete to the sink
+    OP_ROUTE_GET_MESSAGE = 0x52, // Push the current routing message onto the stack
+    OP_PUSH_REAL = 0x57,         // Push real literal operand
+    OP_RDIV = 0x58,              // Real division; integer operands are promoted
+    OP_ORD = 0x59,               // Pop enum, push its integer ordinal
+    OP_REC_NEW = 0x5A,           // Create an empty record variable
+    OP_REC_SET = 0x5B,           // Pop a value into record.field
+    OP_REC_GET = 0x5C,           // Push record.field
+    OP_SET_NEW = 0x5D,           // Create an empty set variable
+    OP_SET_ADD = 0x5E,           // Add an ordinal member to a set
+    OP_SET_IN = 0x5F,            // Push 1 if the ordinal is a member
+    OP_SET_UNION = 0x60,         // dest := a + b
+    OP_SET_INTERSECT = 0x61,     // dest := a * b
+    OP_SET_DIFF = 0x62,          // dest := a - b
+    OP_ORCH_SYNC_SERVICE = 0x6B, // Synchronous service request/reply
+    OP_ARR_GET = 0x71,           // Pop zero-based index, push base_<index>
+    OP_ARR_SET = 0x72,           // Pop value then zero-based index, store into base_<index>
+    OP_QUEUE_WRITE_SYNC = 0x73,  // Write current message and wait for broker acknowledgement
+    OP_QUEUE_WRITE_ASYNC = 0x74, // Dispatch current message without blocking the program
+    OP_HALT = 0xFF      // HALT
+};
+
+    enum class OperandType { NONE, INT, STRING };
+
+// Tagged runtime value. The implicit int conversions keep integer-only opcode
+// handlers source-compatible while typed opcodes inspect `kind` directly.
+// Strings (and later records/sets/arrays) are pool handles so Value stays 8 bytes.
+enum class ValueKind : uint8_t {
+    Integer = 0,
+    Real = 1,
+    Boolean = 2,
+    StringRef = 3,
+    EnumRef = 4
+};
+
+struct Value {
+    ValueKind kind = ValueKind::Integer;
+    uint8_t flags = 0;
+    uint16_t handle = 0;
+    union {
+        int32_t i;
+        float r;
+    };
+
+    Value() : i(0) {}
+    Value(int v) : kind(ValueKind::Integer), i(v) {}
+
+    operator int() const {
+        if (kind == ValueKind::Real) return static_cast<int32_t>(r);
+        return i;
+    }
+
+    bool isString() const { return kind == ValueKind::StringRef; }
+
+    static Value makeString(uint16_t poolHandle) {
+        Value v;
+        v.kind = ValueKind::StringRef;
+        v.handle = poolHandle;
+        v.i = 0;
+        return v;
+    }
+
+    static Value makeReal(float value) {
+        Value v;
+        v.kind = ValueKind::Real;
+        v.r = value;
+        return v;
+    }
+
+    bool isReal() const { return kind == ValueKind::Real; }
+
+    float asReal() const {
+        return kind == ValueKind::Real ? r : static_cast<float>(i);
+    }
+
+    static Value makeEnum(uint16_t typeIndex, int ordinal) {
+        Value v;
+        v.kind = ValueKind::EnumRef;
+        v.handle = typeIndex;
+        v.i = ordinal;
+        return v;
+    }
+
+    bool isEnum() const { return kind == ValueKind::EnumRef; }
+};
+
+
+    struct PInstruction {
+        uint8_t opcode;
+        int level = 0;         // Lexical level (for LOD, STO, CAL)
+        int address = 0;       // Address/offset (for LOD, STO, CAL, JMP, etc)
+        int value = 0;         // For LIT, INT, OPR
+        std::string label;     // For JMP/JZ, label name (resolved to address after parsing)
+        // Added fields for extended operand support
+        OperandType type = OperandType::NONE;
+        int intOperand = 0;
+        std::string strOperand;
+        std::string enumType;
+    };
+
+    inline uint8_t opcodeFromMnemonic(const std::string& mnemonic) {
+        if (mnemonic == "LIT") return OP_LIT;
+        if (mnemonic == "OPR") return OP_OPR;
+        if (mnemonic == "LOD") return OP_LOD;
+        if (mnemonic == "STO") return OP_STO;
+        if (mnemonic == "CAL") return OP_CAL;
+        if (mnemonic == "INT") return OP_INT;
+        if (mnemonic == "JMP") return OP_JMP;
+        if (mnemonic == "JZ") return OP_JZ;
+        if (mnemonic == "PUSH_INT") return OP_PUSH_INT;
+        if (mnemonic == "PUSH_REAL") return OP_PUSH_REAL;
+        if (mnemonic == "RDIV") return OP_RDIV;
+        if (mnemonic == "ORD") return OP_ORD;
+        if (mnemonic == "REC_NEW") return OP_REC_NEW;
+        if (mnemonic == "REC_SET") return OP_REC_SET;
+        if (mnemonic == "REC_GET") return OP_REC_GET;
+        if (mnemonic == "SET_NEW") return OP_SET_NEW;
+        if (mnemonic == "SET_ADD") return OP_SET_ADD;
+        if (mnemonic == "SET_IN") return OP_SET_IN;
+        if (mnemonic == "SET_UNION") return OP_SET_UNION;
+        if (mnemonic == "SET_INTERSECT") return OP_SET_INTERSECT;
+        if (mnemonic == "SET_DIFF") return OP_SET_DIFF;
+        if (mnemonic == "ARR_GET") return OP_ARR_GET;
+        if (mnemonic == "ARR_SET") return OP_ARR_SET;
+        if (mnemonic == "PUSH_STR") return OP_PUSH_STR;
+        if (mnemonic == "PUSH_ENUM") return OP_PUSH_ENUM;
+        if (mnemonic == "ADD") return OP_ADD;
+        if (mnemonic == "SUB") return OP_SUB;
+        if (mnemonic == "MUL") return OP_MUL;
+        if (mnemonic == "DIV") return OP_DIV;
+        if (mnemonic == "PRINT_INT") return OP_PRINT_INT;
+        if (mnemonic == "PRINT_ENUM") return OP_PRINT_ENUM;
+        if (mnemonic == "ROUTE_MATCH_QUEUE") return OP_ROUTE_MATCH_QUEUE;
+        if (mnemonic == "ROUTE_EVAL_WHEN") return OP_ROUTE_EVAL_WHEN;
+        if (mnemonic == "ROUTE_TRANSFORM") return OP_ROUTE_TRANSFORM;
+        if (mnemonic == "ROUTE_MAP_RUN") return OP_ROUTE_MAP_RUN;
+        if (mnemonic == "SRC_GET") return OP_SRC_GET;
+        if (mnemonic == "OUT_SET") return OP_OUT_SET;
+        if (mnemonic == "UPPER") return OP_UPPER;
+        if (mnemonic == "YYMMDD_TO_ISO") return OP_YYMMDD_TO_ISO;
+        if (mnemonic == "MT_AMOUNT_TO_DECIMAL") return OP_MT_AMOUNT_TO_DECIMAL;
+        if (mnemonic == "MT_PARTY_NAME") return OP_MT_PARTY_NAME;
+        if (mnemonic == "MT_CHARGE_TO_ISO") return OP_MT_CHARGE_TO_ISO;
+        if (mnemonic == "ROUTE_EMIT") return OP_ROUTE_EMIT;
+        if (mnemonic == "QUEUE_WRITE_SYNC") return OP_QUEUE_WRITE_SYNC;
+        if (mnemonic == "QUEUE_WRITE_ASYNC") return OP_QUEUE_WRITE_ASYNC;
+        if (mnemonic == "PARSE_FIN_TEXT") return OP_PARSE_FIN_TEXT;
+        if (mnemonic == "ROUTE_SET_STATE") return OP_ROUTE_SET_STATE;
+        if (mnemonic == "ROUTE_SET_MESSAGE") return OP_ROUTE_SET_MESSAGE;
+        if (mnemonic == "ORCH_SPAWN") return OP_ORCH_SPAWN;
+        if (mnemonic == "ORCH_WAIT_ALL") return OP_ORCH_WAIT_ALL;
+        if (mnemonic == "ORCH_FAIL_TXN") return OP_ORCH_FAIL_TXN;
+        if (mnemonic == "ORCH_RETURN_SUCCESS") return OP_ORCH_RETURN_SUCCESS;
+        if (mnemonic == "ORCH_SYNC_SERVICE") return OP_ORCH_SYNC_SERVICE;
+        if (mnemonic == "CALL_EXT") return OP_CALL_EXT;
+        if (mnemonic == "FORK") return OP_FORK;
+        if (mnemonic == "JOIN_ALL") return OP_JOIN_ALL;
+        if (mnemonic == "JOIN") return OP_JOIN;
+        if (mnemonic == "SYNC") return OP_SYNC;
+        if (mnemonic == "FORK_SUBFLOW") return OP_FORK_SUBFLOW;
+        if (mnemonic == "BQ_NEW_STATIC") return OP_BQ_NEW_STATIC;
+        if (mnemonic == "BQ_NEW_DYNAMIC") return OP_BQ_NEW_DYNAMIC;
+        if (mnemonic == "BQ_ENQ") return OP_BQ_ENQ;
+        if (mnemonic == "BQ_DEQ") return OP_BQ_DEQ;
+        if (mnemonic == "BQ_PEEK") return OP_BQ_PEEK;
+        if (mnemonic == "STK_NEW_STATIC") return OP_STK_NEW_STATIC;
+        if (mnemonic == "STK_NEW_DYNAMIC") return OP_STK_NEW_DYNAMIC;
+        if (mnemonic == "STK_PUSH") return OP_STK_PUSH;
+        if (mnemonic == "STK_POP") return OP_STK_POP;
+        if (mnemonic == "STK_PEEK") return OP_STK_PEEK;
+        if (mnemonic == "PQ_NEW_STATIC") return OP_PQ_NEW_STATIC;
+        if (mnemonic == "PQ_NEW_DYNAMIC") return OP_PQ_NEW_DYNAMIC;
+        if (mnemonic == "PQ_ENQ") return OP_PQ_ENQ;
+        if (mnemonic == "PQ_DEQ") return OP_PQ_DEQ;
+        if (mnemonic == "PQ_PEEK") return OP_PQ_PEEK;
+        if (mnemonic == "FILE_OPEN") return OP_FILE_OPEN;
+        if (mnemonic == "FILE_READ") return OP_FILE_READ;
+        if (mnemonic == "FILE_WRITE") return OP_FILE_WRITE;
+        if (mnemonic == "FILE_CLOSE") return OP_FILE_CLOSE;
+        if (mnemonic == "OP_MAP") return OP_MAP;
+        if (mnemonic == "DL_LOAD_SCHEMA") return OP_DL_LOAD_SCHEMA;
+        if (mnemonic == "DL_LOAD_MAP") return OP_DL_LOAD_MAP;
+        if (mnemonic == "SRV_CALL") return OP_SRV_CALL;
+        if (mnemonic == "ROUTE_SERVICE") return OP_ROUTE_SERVICE;
+        if (mnemonic == "ROUTE_QUEUE") return OP_ROUTE_QUEUE;
+        if (mnemonic == "ROUTE_FILE") return OP_ROUTE_FILE;
+        if (mnemonic == "LOAD") return OP_LOAD_NAME;
+        if (mnemonic == "STORE") return OP_STORE_NAME;
+        if (mnemonic == "LOAD_NAME") return OP_LOAD_NAME;
+        if (mnemonic == "STORE_NAME") return OP_STORE_NAME;
+        if (mnemonic == "MAP_RETURN") return OP_MAP_RETURN;
+        if (mnemonic == "DB_INSERT") return OP_DB_INSERT;
+        if (mnemonic == "DB_SELECT") return OP_DB_SELECT;
+        if (mnemonic == "DB_UPDATE") return OP_DB_UPDATE;
+        if (mnemonic == "DB_DELETE") return OP_DB_DELETE;
+        if (mnemonic == "ROUTE_GET_MESSAGE") return OP_ROUTE_GET_MESSAGE;
+        if (mnemonic == "CALL") return OP_CALL_LABEL;
+        if (mnemonic == "RET") return OP_RET;
+        if (mnemonic == "EQ") return OP_EQ;
+        if (mnemonic == "NEQ") return OP_NEQ;
+        if (mnemonic == "LT") return OP_LT;
+        if (mnemonic == "LE") return OP_LE;
+        if (mnemonic == "GT") return OP_GT;
+        if (mnemonic == "GE") return OP_GE;
+        if (mnemonic == "PRINT") return OP_PRINT;
+        if (mnemonic == "PRINT_NL") return OP_PRINT_NL;
+        if (mnemonic == "TRIM") return OP_TRIM;
+        if (mnemonic == "PARSE_INT") return OP_PARSE_INT;
+        if (mnemonic == "OR") return OP_OR;
+        if (mnemonic == "AND") return OP_AND;
+        if (mnemonic == "NOT") return OP_NOT;
+        if (mnemonic == "STREQ") return OP_STREQ;
+        if (mnemonic == "STRNEQ") return OP_STRNEQ;
+        if (mnemonic == "HALT") return OP_HALT;
+        if (mnemonic == "NOP") return OP_NOP;
+        return 0xFE;
+    }
+
+struct RouteDelivery {
+    std::string queueName;
+    std::string message;
+    std::string deliveryMode = "async";
+};
+
+// Installed by the host so DB_SELECT can read a row without the runtime owning a
+// SQL client. Returns false when the row cannot be read.
+using DatabaseRowReader = bool (*)(const std::string& database,
+                                   const std::string& table,
+                                   const std::vector<std::string>& columns,
+                                   const std::string& whereColumn,
+                                   const std::string& whereOp,
+                                   const std::string& whereValue,
+                                   std::vector<std::string>& values);
+
+void setDatabaseRowReader(DatabaseRowReader reader);
+
+struct MappingItem {
+    std::string sourcePath;
+    std::string targetPath;
+    std::string conversionRule;
+    // Compiled conversion opcodes (e.g. {"SRC","TRIM","UPPER"}). When present,
+    // the PMachine executes these natively instead of interpreting conversionRule.
+    std::vector<std::string> ops;
+};
+
+struct MappingDef {
+    std::string id;
+    std::string sourceTypeId;
+    std::string targetTypeId;
+    std::vector<MappingItem> items;
+};
+
+struct OrchestrationSpawnRequest {
+    std::string subflowId;
+    std::string nodeId;
+    std::string payloadRef;
+    uint32_t timeoutMs = 0;
+    std::string handleRef;
+};
+
+struct OrchestrationTaskResult {
+    std::string handleRef;
+    std::string subflowId;
+    std::string nodeId;
+    bool success = false;
+    std::string responseJson;
+    std::string errorCode;
+    std::string errorMessage;
+};
+
+using OrchestrationWaitHook = bool (*)(
+    const std::vector<OrchestrationSpawnRequest>& requests,
+    uint32_t timeoutMs,
+    std::vector<OrchestrationTaskResult>& outResults,
+    std::string& outError,
+    void* context);
+
+using ThunkResolveHook = bool (*)(
+    const std::string& symbol,
+    int& outTargetPc,
+    std::string& outError,
+    void* context);
+
+using ServiceCallHook = bool (*)(
+    const std::string& serviceId,
+    const std::string& endpoint,
+    const std::string& payload,
+    std::string& outResponse,
+    std::string& outError,
+    void* context);
+
+using TextOutputHook = void (*)(const std::string& line, void* context);
+
+// Observable value of a named global after a run; mirrors the JS PMachine `globals` map.
+struct GlobalValue {
+    bool isString = false;
+    bool isReal = false;
+    bool isEnum = false;
+    bool isJson = false;      // strValue already holds a serialised JSON fragment
+    int intValue = 0;
+    float realValue = 0.0f;
+    std::string strValue;
+};
+
+enum class RuntimeUnitKind : uint8_t {
+    Program = 0,
+    Service = 1,
+    Daemon = 2
+};
+
+enum class ResidentDomain : uint8_t {
+    StringPool = 0,
+    GlobalEnumeratedTypes = 1,
+    GlobalTypes = 2,
+    MapperArtifacts = 3,
+    ProgramImage = 4
+};
+
+struct RuntimeUnitDescriptor {
+    RuntimeUnitKind kind = RuntimeUnitKind::Service;
+    std::string id;
+    uint32_t refreshMs = 0;
+    uint32_t loadedAtMs = 0;
+    uint32_t lastRefreshAtMs = 0;
+    bool resident = false;
+};
+
+struct ResidentAssetRecord {
+    ResidentDomain domain = ResidentDomain::ProgramImage;
+    std::string id;
+    size_t bytes = 0;
+    uint16_t pinCount = 0;
+    uint32_t loadedAtMs = 0;
+    uint32_t lastUsedAtMs = 0;
+    bool resident = false;
+};
+
+struct PagingConfig {
+    size_t pageSizeBytes = 1024;
+    size_t maxFrames = 24;
+};
+
+struct PagingStats {
+    uint32_t pageFaults = 0;
+    uint32_t evictions = 0;
+    uint32_t ffsReads = 0;
+    uint32_t cacheHits = 0;
+};
+
+struct PageTableEntry {
+    bool present = false;
+    uint16_t frameIndex = 0;
+};
+
+struct PageFrame {
+    bool used = false;
+    bool pinned = false;
+    uint16_t vpage = 0;
+    uint32_t lastAccessTick = 0;
+};
+
+using PCodeMap = std::map<uint16_t, uint8_t>;
+using MemoryMap = std::map<uint16_t, uint32_t>;
+
+struct Status {
+    int numPages;
+    std::string backingFile;
+    size_t maxSpace = 0;
+    uint32_t freeHeapBytes = 0;
+    uint32_t stackHighWaterBytes = 0;
+    uint32_t stackHeapGapBytes = 0;
+    bool stackHeapCollisionRisk = false;
+    std::string memoryPressureLevel = "unknown";
+    std::vector<std::string> dynamicLibs;
+    bool running = false;
+    uint16_t pc = 0;
+    std::vector<uint16_t> breakpoints;
+    RuntimeUnitDescriptor runtimeUnit;
+    PagingConfig pagingConfig;
+    PagingStats pagingStats;
+    std::vector<ResidentAssetRecord> residentAssets;
+    MemoryMap memoryMap;
+    std::map<std::string, int> thunkBindings;
+};
+
+} // namespace pmachine
+
+
+namespace pmachine {
+
+class PMachine {
+public:
+    PMachine();
+
+    PMachine(PMachine&& other) noexcept {
+        *this = std::move(other);
+    }
+
+    PMachine& operator=(PMachine&& other) noexcept {
+        if (this != &other) {
+            ffs = other.ffs;
+            pcodeMap = std::move(other.pcodeMap);
+            memoryMap = std::move(other.memoryMap);
+            enumTypes = std::move(other.enumTypes);
+            numPages = other.numPages;
+            backingFile = std::move(other.backingFile);
+            maxSpace = other.maxSpace;
+            dynamicLibs = std::move(other.dynamicLibs);
+            running = other.running;
+            pc = other.pc;
+            debugRunStatus.store(other.debugRunStatus.load());
+            debugAction.store(other.debugAction.load());
+            debugStepOutDepth.store(other.debugStepOutDepth.load());
+            debugGlobals = std::move(other.debugGlobals);
+            debugLocals = std::move(other.debugLocals);
+            debugCallDepth = other.debugCallDepth;
+            breakpoints = std::move(other.breakpoints);
+            currentInputQueue = std::move(other.currentInputQueue);
+            currentMessage = std::move(other.currentMessage);
+            routingDeliveries = std::move(other.routingDeliveries);
+            mappingDefs = std::move(other.mappingDefs);
+            procedureParamsByLabel = std::move(other.procedureParamsByLabel);
+            enumManager = other.enumManager;
+            lastRunStepLimitHit = other.lastRunStepLimitHit;
+            lastRunStepCount = other.lastRunStepCount;
+            lastRunTextOutput = std::move(other.lastRunTextOutput);
+            lastRunTrace = std::move(other.lastRunTrace);
+            debugInstructions = std::move(other.debugInstructions);
+            debugPc = other.debugPc;
+            debugLoaded = other.debugLoaded;
+            lastRunGlobals = std::move(other.lastRunGlobals);
+            pagingConfig = other.pagingConfig;
+            pagingStats = other.pagingStats;
+            runtimeUnit = other.runtimeUnit;
+            residentAssets = std::move(other.residentAssets);
+            programImage = std::move(other.programImage);
+            pageTable = std::move(other.pageTable);
+            frames = std::move(other.frames);
+            lruTick = other.lruTick;
+            orchestrationWaitHook = other.orchestrationWaitHook;
+            orchestrationHookContext = other.orchestrationHookContext;
+            thunkResolveHook = other.thunkResolveHook;
+            thunkResolverContext = other.thunkResolverContext;
+            thunkBindings = std::move(other.thunkBindings);
+            serviceCallHook = other.serviceCallHook;
+            textOutputHook = other.textOutputHook;
+            textOutputContext = other.textOutputContext;
+            serviceCallContext = other.serviceCallContext;
+            namedStringVariables = std::move(other.namedStringVariables);
+            namedRealVariables = std::move(other.namedRealVariables);
+            namedEnumVariables = std::move(other.namedEnumVariables);
+            enumTypeNames = std::move(other.enumTypeNames);
+            enumTypeValues = std::move(other.enumTypeValues);
+            std::copy(std::begin(other.handler_table), std::end(other.handler_table), std::begin(handler_table));
+            other.ffs = nullptr;
+            other.enumManager = nullptr;
+            other.running = false;
+            other.pc = 0;
+            other.debugRunStatus.store(0);
+            other.debugAction.store(0);
+            other.debugStepOutDepth.store(0);
+            other.debugCallDepth = 0;
+            other.lastRunStepLimitHit = false;
+            other.lastRunStepCount = 0;
+            other.debugPc = 0;
+            other.debugLoaded = false;
+            other.orchestrationWaitHook = nullptr;
+            other.orchestrationHookContext = nullptr;
+            other.thunkResolveHook = nullptr;
+            other.thunkResolverContext = nullptr;
+            other.serviceCallHook = nullptr;
+            other.textOutputHook = nullptr;
+            other.textOutputContext = nullptr;
+            other.serviceCallContext = nullptr;
+            return *this;
+        }
+        return *this;
+    }
+
+    void setEnumManager(::EnumManager* mgr) { enumManager = mgr; }
+    int openFile(const String &logicalName, const String &mode);
+    bool closeFile(int handle);
+    bool readLine(int handle, String &outLine);
+    bool writeLine(int handle, const String &line);
+    void setFFS(::FederatedFileSystem *ffsPtr) { ffs = ffsPtr; }
+    const PCodeMap& getPCodeMap() const;
+    const MemoryMap& getMemoryMap() const;
+    const std::vector<std::string> getStringPool() const;
+    std::map<std::string, int> getEnumTypes() const;
+    Status getStatus() const;
+    bool loadProgram(std::vector<uint8_t> pcode, const std::string& backingFile, size_t maxSpace);
+    bool loadUnit(const std::string& kind, const std::string& id, uint32_t refreshMs = 0);
+    bool unloadUnit();
+    void setMemoryConfig(size_t pageSizeBytes, size_t maxFrames);
+    PagingConfig getPagingConfig() const;
+    PagingStats getPagingStats() const;
+    void setRuntimeUnit(const std::string& kind, const std::string& id, uint32_t refreshMs = 0);
+    const RuntimeUnitDescriptor& getRuntimeUnit() const;
+    bool loadResidentDomain(const std::string& domain, const std::string& id, size_t bytes = 0, bool pin = false);
+    bool unloadResidentDomain(const std::string& domain, const std::string& id);
+    std::vector<ResidentAssetRecord> getResidentAssets() const;
+    void touchResidentAsset(const std::string& domain, const std::string& id);
+    void tickDaemonRefresh(uint32_t nowMs = 0);
+    bool readPCodeByte(uint32_t virtualAddress, uint8_t& outByte);
+    void run(const std::vector<PInstruction>& instructions, int startPc = 0);
+    void setRoutingContext(const std::string& inputQueue, const std::string& message);
+    const std::string& getCurrentMessage() const;
+    void setNamedStringVariable(const std::string& name, const std::string& value);
+    std::string getNamedStringVariable(const std::string& name) const;
+    const std::vector<RouteDelivery>& getRoutingDeliveries() const;
+    void clearRoutingDeliveries();
+    void setMappings(const std::vector<MappingDef>& defs);
+    void clearMappings();
+    void setProcedureSignatures(const std::map<std::string, std::vector<std::string>>& signatures);
+    void clearProcedureSignatures();
+    const MappingDef* getMappingById(const std::string& mappingId) const;
+    void singleStep();
+    void beginDebugRun();
+    void controlDebugRun(int action);
+    int getDebugRunStatus() const;
+    std::map<std::string, int> getDebugGlobals() const;
+    std::map<std::string, int> getDebugLocals() const;
+    int getDebugCallDepth() const;
+    void setBreakpoint(uint16_t pc);
+    void clearBreakpoint(uint16_t pc);
+    void clearAllBreakpoints();
+    bool didLastRunHitStepLimit() const;
+    size_t getLastRunStepCount() const;
+    const std::vector<std::string>& getLastRunTextOutput() const;
+    const std::vector<std::string>& getLastRunTrace() const;
+    void loadDebugInstructions(const std::vector<PInstruction>& instructions);
+    bool hasDebugInstructions() const;
+    uint16_t getDebugPc() const;
+    std::map<std::string, std::string> getFlowStateSnapshot() const;
+    std::map<std::string, GlobalValue> getGlobalsSnapshot() const;
+    uint16_t registerEnumType(const std::string& typeName, const std::vector<std::string>& values);
+    uint16_t getEnumTypeIndex(const std::string& typeName) const;
+    int getEnumOrdinal(uint16_t typeIndex, const std::string& valueName) const;
+    std::string getEnumValueName(uint16_t typeIndex, int ordinal) const;
+    void clearEnumTypes();
+    void setOrchestrationWaitHook(OrchestrationWaitHook hook, void* context = nullptr);
+    void setThunkResolverHook(ThunkResolveHook hook, void* context = nullptr);
+    void setServiceCallHook(ServiceCallHook hook, void* context = nullptr);
+    void setTextOutputHook(TextOutputHook hook, void* context = nullptr);
+    void setThunkBinding(const std::string& symbol, int targetPc);
+    bool clearThunkBinding(const std::string& symbol);
+    void clearAllThunkBindings();
+    std::map<std::string, int> getThunkBindings() const;
+    std::string getImageMemoryMapJson() const;
+private:
+    ::FederatedFileSystem *ffs = nullptr;
+    PCodeMap pcodeMap;
+    MemoryMap memoryMap;
+    std::map<std::string, int> enumTypes;
+    int numPages = 0;
+    std::string backingFile = "";
+    size_t maxSpace = 0;
+    std::vector<std::string> dynamicLibs;
+    bool running = false;
+    uint16_t pc = 0;
+    std::atomic<int> debugRunStatus{0};
+    std::atomic<int> debugAction{0};
+    std::atomic<int> debugStepOutDepth{0};
+    std::map<std::string, int> debugGlobals;
+    std::map<std::string, int> debugLocals;
+    int debugCallDepth = 0;
+    std::vector<uint16_t> breakpoints;
+    std::string currentInputQueue;
+    std::string currentMessage;
+    std::vector<RouteDelivery> routingDeliveries;
+    std::map<std::string, MappingDef> mappingDefs;
+    std::map<std::string, std::vector<std::string>> procedureParamsByLabel;
+    ::EnumManager* enumManager = nullptr;
+    bool lastRunStepLimitHit = false;
+    size_t lastRunStepCount = 0;
+    std::vector<std::string> lastRunTextOutput;
+    std::vector<std::string> lastRunTrace;
+    std::vector<PInstruction> debugInstructions;
+    uint16_t debugPc = 0;
+    bool debugLoaded = false;
+    std::map<std::string, GlobalValue> lastRunGlobals;
+    PagingConfig pagingConfig;
+    PagingStats pagingStats;
+    RuntimeUnitDescriptor runtimeUnit;
+    std::vector<ResidentAssetRecord> residentAssets;
+    std::vector<uint8_t> programImage;
+    std::vector<PageTableEntry> pageTable;
+    std::vector<PageFrame> frames;
+    uint32_t lruTick = 0;
+    OrchestrationWaitHook orchestrationWaitHook = nullptr;
+    void* orchestrationHookContext = nullptr;
+    ThunkResolveHook thunkResolveHook = nullptr;
+    void* thunkResolverContext = nullptr;
+    std::map<std::string, int> thunkBindings;
+    ServiceCallHook serviceCallHook = nullptr;
+    TextOutputHook textOutputHook = nullptr;
+    void* textOutputContext = nullptr;
+    void* serviceCallContext = nullptr;
+    std::map<std::string, std::string> namedStringVariables;  // String-valued named variables (e.g., 'src')
+    std::map<std::string, float> namedRealVariables;
+    std::map<std::string, Value> namedEnumVariables;
+    std::vector<std::string> enumTypeNames;
+    std::vector<std::vector<std::string>> enumTypeValues;
+
+    // Handler table for opcode dispatch
+    using HandlerFunc = void (*)(PMachine&, const PInstruction&, Value*, int&, int&, int&);
+    HandlerFunc handler_table[256] = {nullptr};
+    void init_handler_table();
+    int ensurePageResident(uint16_t vpage);
+    int findLruVictimFrame() const;
+public:
+    // Register a native extension handler for an opcode
+    void register_extension(uint8_t opcode, HandlerFunc func);
+    // (For testing/diagnostics) Get handler for an opcode
+    HandlerFunc get_handler(uint8_t opcode) const { return handler_table[opcode]; }
+};
+
+// Standalone loader function
+typedef PInstruction PInstruction;
+std::vector<PInstruction> loadTextPCode(const std::string& text);
+
+} // namespace pmachine
