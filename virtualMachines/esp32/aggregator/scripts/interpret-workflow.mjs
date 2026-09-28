@@ -1216,7 +1216,25 @@ export async function executeDeploymentPlan(compiled, dryRun = true, context = {
   const nodesResponse = await fetch(`${serviceBaseUrl}/api/nodes`);
   const nodesPayload = await nodesResponse.json();
   const nodes = Array.isArray(nodesPayload) ? nodesPayload : (nodesPayload.nodes || []);
+  const clusters = [];
   const deployments = [];
+  const artifactDeployments = [];
+
+  for (const cluster of compiled?.clusters || []) {
+    const request = { clusterId: cluster.clusterId, label: cluster.label, nodes: cluster.nodes || [] };
+    if (dryRun) {
+      clusters.push({ request, matchedNodes: nodes.filter(node => request.nodes.includes(node.nodeId || node.nodeName || node.id)) });
+      continue;
+    }
+    const response = await fetch(`${serviceBaseUrl}/api/clusters`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(request)
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(`Cluster ${cluster.clusterId} creation failed with HTTP ${response.status}: ${payload?.error || 'unknown error'}`);
+    clusters.push(payload);
+  }
 
   for (const plan of compiled?.deployments || []) {
     for (const resource of plan.resources || []) {
@@ -1252,7 +1270,33 @@ export async function executeDeploymentPlan(compiled, dryRun = true, context = {
     }
   }
 
-  return { nodes, deployments, dryRun };
+  for (const artifact of compiled?.artifactDeployments || []) {
+    const sourcePath = path.resolve(String(context?.artifactRoot || process.cwd()), artifact.fileName);
+    const remotePath = `/${path.basename(artifact.fileName)}`;
+    const request = {
+      deploymentId: `${artifact.artifactId}-${artifact.clusterId}`,
+      displayName: artifact.artifactId,
+      serviceName: artifact.artifactId,
+      packageName: path.basename(artifact.fileName),
+      packageVersion: 'latest',
+      files: [{ path: remotePath, ...(dryRun ? {} : { content: await fs.readFile(sourcePath, 'utf8') }) }],
+      metadata: { source: 'wfl', sourceFile: artifact.fileName }
+    };
+    if (dryRun) {
+      artifactDeployments.push({ clusterId: artifact.clusterId, request, sourcePath });
+      continue;
+    }
+    const response = await fetch(`${serviceBaseUrl}/api/clusters/${encodeURIComponent(artifact.clusterId)}/deploy`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(request)
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(`Artifact ${artifact.artifactId} deployment failed with HTTP ${response.status}: ${payload?.error || 'unknown error'}`);
+    artifactDeployments.push(payload);
+  }
+
+  return { nodes, clusters, deployments, artifactDeployments, dryRun };
 }
 
 async function main() {

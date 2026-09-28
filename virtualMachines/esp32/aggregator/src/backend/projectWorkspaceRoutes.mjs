@@ -729,6 +729,17 @@ export async function registerProjectWorkspaceRoutes(app) {
     }
   });
 
+  app.post('/api/deployments/wfl/bindings', async (req, res) => {
+    const source = String(req.body?.source || '');
+    if (!source.trim()) return res.status(400).json({ error: 'source is required' });
+    try {
+      const compiled = compileWorkflowDSLWithAntlr(source);
+      return res.json({ ok: true, bindings: compiled.bindings, symbols: compiled.symbols });
+    } catch (error) {
+      return res.status(400).json({ error: error?.message || String(error) });
+    }
+  });
+
   app.get('/api/projects/:projectId/workspace', async (req, res) => {
     const projectId = String(req.params.projectId || '').trim();
     if (!projectId) {

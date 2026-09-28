@@ -1,0 +1,16 @@
+# Logical resources are translated by WFL at deployment time.
+QUEUE "incoming_mt103" -> "swift.mt103.inbound" MANAGER "qm-secondary" TYPE "swift-mt103";
+QUEUE "outgoing_message" -> "swift.pacs008.outbound" MANAGER "qm-secondary" TYPE "pacs008";
+DATABASE "message_store" -> "PaymentMessages" TYPE "Mt103Pacs008Record" MANAGER "db-mssql";
+FILE "daemon_artifact" -> "packages/mt103-pacs008-daemon" MANAGER "artifact-manager";
+
+DEPLOYMENT "mt103-pacs008-daemon"
+PROJECT "payments"
+TARGETS ("magic-js-pmachine-01", "esp32-edge-pool")
+BEGIN
+  DAEMON "mt103-pacs008-daemon"
+    FILE "programs/mt103-pacs008-daemon.pas"
+    QUEUE "incoming_mt103" -> "outgoing_message"
+    TARGETS ("magic-js-pmachine-01", "esp32-edge-pool")
+    STARTUP true;
+END;

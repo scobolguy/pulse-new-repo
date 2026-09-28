@@ -4408,6 +4408,48 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         request->send(200, "application/json", String("{\"sessionId\":\"") + sessionId + "\",\"status\":\"paused\"}");
     });
 
+    auto updateDebugSessionBreakpoint = [](AsyncWebServerRequest *request, bool enabled) {
+        if (!request->hasParam("id") || !request->hasParam("pc")) {
+            request->send(400, "text/plain", "Missing id or pc param");
+            return;
+        }
+        const String sessionId = request->getParam("id")->value();
+        const long parsedPc = request->getParam("pc")->value().toInt();
+        if (parsedPc < 0 || parsedPc > 65535) {
+            request->send(400, "text/plain", "Invalid pc param");
+            return;
+        }
+        const uint16_t pc = static_cast<uint16_t>(parsedPc);
+        if (gPmachineDebugSessionsMutex != nullptr) xSemaphoreTake(gPmachineDebugSessionsMutex, portMAX_DELAY);
+        auto it = gPmachineDebugSessions.find(sessionId);
+        if (it == gPmachineDebugSessions.end()) {
+            if (gPmachineDebugSessionsMutex != nullptr) xSemaphoreGive(gPmachineDebugSessionsMutex);
+            request->send(404, "text/plain", "Session not found");
+            return;
+        }
+
+        auto& breakpoints = it->second.breakpoints;
+        if (enabled) {
+            if (std::find(breakpoints.begin(), breakpoints.end(), pc) == breakpoints.end()) {
+                breakpoints.push_back(pc);
+                it->second.machine.setBreakpoint(pc);
+            }
+        } else {
+            breakpoints.erase(std::remove(breakpoints.begin(), breakpoints.end(), pc), breakpoints.end());
+            it->second.machine.clearBreakpoint(pc);
+        }
+        if (gPmachineDebugSessionsMutex != nullptr) xSemaphoreGive(gPmachineDebugSessionsMutex);
+        request->send(200, "application/json", String("{\"sessionId\":\"") + sessionId
+            + "\",\"pc\":" + String(pc)
+            + ",\"enabled\":" + String(enabled ? "true" : "false") + "}");
+    };
+    server.on("/pmachine/debug/session/breakpoint/set", HTTP_POST, [updateDebugSessionBreakpoint](AsyncWebServerRequest *request){
+        updateDebugSessionBreakpoint(request, true);
+    });
+    server.on("/pmachine/debug/session/breakpoint/clear", HTTP_POST, [updateDebugSessionBreakpoint](AsyncWebServerRequest *request){
+        updateDebugSessionBreakpoint(request, false);
+    });
+
     server.on("/pmachine/debug/session", HTTP_POST, [ffs](AsyncWebServerRequest *request){
         String file;
         String maxParam = "32768";
@@ -4558,6 +4600,8 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         for (const auto& pair : session.machine.getDebugLocals()) {
             locals[pair.first.c_str()] = pair.second;
         }
+        JsonArray breakpoints = doc["breakpoints"].to<JsonArray>();
+        for (uint16_t pc : session.breakpoints) breakpoints.add(pc);
         String body;
         serializeJson(doc, body);
         if (gPmachineDebugSessionsMutex != nullptr) xSemaphoreGive(gPmachineDebugSessionsMutex);

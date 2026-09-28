@@ -22,6 +22,8 @@ const WORKSPACE_ROOT = path.resolve(__dirname, '..');
 import { fileURLToPath } from 'url';
 import { createMessageBroker } from './src/broker.js';
 import { createQueueManagerProvider } from './src/broker/queueManagerProviders/index.mjs';
+import { createDatabaseProvider } from './src/backend/databaseProviders/index.mjs';
+import { registerDatabaseRoutes } from './src/backend/databaseRoutes.mjs';
 import { createFileServer } from './fileServer.js';
 import { createRouterEngine } from './router-engine.mjs';
 import { MetricsCollector } from './src/metrics-collector.mjs';
@@ -57,6 +59,7 @@ import { registerObservabilityRoutes } from './src/backend/roles/observabilityRo
 import { registerPlatformRoutes } from './src/backend/roles/platformRoutes.mjs';
 import { registerReplicationRoutes } from './src/backend/roles/replicationRoutes.mjs';
 import { registerQueueConfigRoutes } from './src/backend/roles/queueConfigRoutes.mjs';
+import { registerSystemRegistryRoutes } from './src/backend/roles/systemRegistryRoutes.mjs';
 import { registerQueueTransferRoutes } from './src/backend/roles/queueTransferRoutes.mjs';
 import { registerAvailabilityPresenceRoutes } from './src/backend/roles/availabilityPresenceRoutes.mjs';
 import { registerTopologyRuntimeRoutes } from './src/backend/roles/topologyRuntimeRoutes.mjs';
@@ -68,6 +71,8 @@ import { registerRouterLifecycleControlRoutes } from './src/backend/roles/router
 import { registerHelloServiceRoutes } from './src/backend/roles/helloServiceRoutes.mjs';
 import { registerProvisioningAgentRoutes } from './src/backend/roles/provisioningAgentRoutes.mjs';
 import { registerDevelopDocumentRoutes } from './src/backend/developDocumentRoutes.mjs';
+import { registerPmachineDeploymentRoutes } from './src/backend/pmachineDeploymentRoutes.mjs';
+import { registerFlowDeploymentRoutes } from './src/backend/flowDeploymentRoutes.mjs';
 import { registerProjectWorkspaceRoutes } from './src/backend/projectWorkspaceRoutes.mjs';
 import { registerTransformerServiceRoutes } from './src/backend/transformerServiceRoutes.mjs';
 import { registerStartupFsmRoutes } from './src/backend/startupFsmRoutes.mjs';
@@ -84,6 +89,7 @@ import { createHomeAutomationService, registerHomeAutomationRoutes } from './src
 import { createJsPmachineDeploymentSupervisor } from './src/backend/modules/jsPmachineDeploymentSupervisor.mjs';
 import { createRouteManifestDependencyFactories } from './src/backend/modules/routeManifestDependencies.mjs';
 import { startBackendRuntime } from './src/backend/modules/startupBootstrap.mjs';
+import { createServiceProcessManager, registerServiceProcessRoutes } from './src/backend/modules/serviceProcessManager.mjs';
 import { createLifecycleHarnessPathApi } from './src/backend/modules/lifecycleHarnessPaths.mjs';
 import { createRuntimeDiagnosticsApi } from './src/backend/modules/runtimeDiagnosticsApi.mjs';
 import { createMachineAvailabilityPresenceApi } from './src/backend/modules/machineAvailabilityPresenceApi.mjs';
@@ -102,7 +108,8 @@ import {
   getServiceProviderCategories,
   listServiceProviderActions
 } from './src/backend/providers/serviceProviderRegistry.mjs';
-import { compileQueueDslSpec, diffQueueConfigs } from './src/backend/queueDslCompiler.mjs';
+import { compileQueueDslSpec, diffQueueConfigs, queueConfigMapFromWorkflowSymbols } from './src/backend/queueDslCompiler.mjs';
+import { migratePersistedQueueTypeIds as migrateQueueTypeConfigs } from './src/backend/queueTypeMigration.mjs';
 import { createSanctionsComplianceService } from './src/compliance/sanctionsService.mjs';
 import crypto from 'crypto';
 
@@ -121,7 +128,8 @@ import {
 import { initializeUdpLogFilter } from './src/backend/modules/udpLogFilter.mjs';
 import { createDebugLog, formatErrorDetails } from './src/backend/modules/debugLogger.mjs';
 import { createAuthoritativeTimeSyncMonitor } from './src/backend/modules/authoritativeTimeSyncMonitor.mjs';
-import { listServiceEntries, resolveEnvironmentName } from './src/backend/modules/serviceRegistry.mjs';
+import { getInfrastructureCatalog, listServiceEntries, resolveEnvironmentName } from './src/backend/modules/serviceRegistry.mjs';
+import { createSystemRegistry } from './src/backend/modules/systemRegistry.mjs';
 
 // ===== ESP32 NODE REGISTRY =====
 import { createNodeRegistry } from './src/esp32/nodeRegistry.mjs';
@@ -200,6 +208,13 @@ function proxyRequest(method, path, req, res, targetUrl = BROKER_SERVICE_URL) {
 
 
 const HTTP_PORT = readEnvNumber('HTTP_PORT', readEnvNumber('PORT', 4000));
+const SERVICE_MANIFEST_PATH = path.join(__dirname, 'data', 'service-manifest.json');
+const serviceProcessManager = await createServiceProcessManager({
+  manifestPath: SERVICE_MANIFEST_PATH,
+  appRoot: __dirname,
+  spawn,
+  logger: console
+});
 // When set, Home Automation runs as its own process (home-automation-service.mjs) and the
 // gateway proxies /api/home-automation/* to it instead of running discovery in-process.
 const HOME_AUTOMATION_SERVICE_URL = readEnvString('HOME_AUTOMATION_SERVICE_URL', '').trim().replace(/\/$/, '');
@@ -394,10 +409,18 @@ app.get('/api/services/registry', (req, res) => {
       environment: entry.environment,
       description: entry.description || ''
     }));
-    res.json({ status: 'ok', environment: resolveEnvironmentName(req.query?.environment), services: entries });
+    res.json({ status: 'ok', environment: resolveEnvironmentName(req.query?.environment), services: entries, catalog: getInfrastructureCatalog() });
   } catch (error) {
     res.status(400).json({ status: 'error', error: error?.message || String(error) });
   }
+});
+
+app.get('/api/infrastructure/catalog', (req, res) => {
+  res.json({
+    status: 'ok',
+    environment: resolveEnvironmentName(req.query?.environment),
+    catalog: getInfrastructureCatalog()
+  });
 });
 
 await registerDevelopDocumentRoutes(app);
@@ -407,16 +430,30 @@ registerStartupFsmRoutes(app);
 
 debugLog('[DEBUG] Creating global state...');
 const queueManagerInstances = new Map(); // Maps managerId to QueueManager instance
+const queueManagerProviderOptions = {
+  rabbitmq: {
+    provider: 'rabbitmq',
+    url: process.env.RABBITMQ_URL || 'amqp://127.0.0.1:5672',
+    queuePrefix: process.env.RABBITMQ_QUEUE_PREFIX || 'pulse-rabbit'
+  },
+  msmq: {
+    provider: 'msmq',
+    baseQueuePath: process.env.MSMQ_BASE_QUEUE_PATH || '.\\private$',
+    queuePrefix: process.env.MSMQ_QUEUE_PREFIX || 'pulse-msmq'
+  }
+};
+const primaryQueueManagerProvider = String(process.env.QUEUE_MANAGER_PRIMARY_PROVIDER || 'rabbitmq').trim().toLowerCase();
+const secondaryQueueManagerProvider = String(process.env.QUEUE_MANAGER_SECONDARY_PROVIDER || 'msmq').trim().toLowerCase();
 let queueManagers = [
   (() => { 
     debugLog('[DEBUG] Creating primary QueueManager');
-    const qm = createQueueManagerProvider('qm-primary', PULSE_QUEUE_DATA_ROOT);
+    const qm = createQueueManagerProvider('qm-primary', PULSE_QUEUE_DATA_ROOT, queueManagerProviderOptions[primaryQueueManagerProvider] || { provider: primaryQueueManagerProvider });
     queueManagerInstances.set('qm-primary', qm);
     return qm;
   })(),
   (() => { 
     debugLog('[DEBUG] Creating secondary QueueManager'); 
-    const qm = createQueueManagerProvider('qm-secondary', PULSE_QUEUE_DATA_ROOT);
+    const qm = createQueueManagerProvider('qm-secondary', PULSE_QUEUE_DATA_ROOT, queueManagerProviderOptions[secondaryQueueManagerProvider] || { provider: secondaryQueueManagerProvider });
     queueManagerInstances.set('qm-secondary', qm);
     return qm;
   })()
@@ -543,6 +580,12 @@ brokerInstances.set('secondary', { instanceId: 'secondary', active: false, quies
 const discoveredNodes = new Map();
 const nodeEnrichmentLastAttempt = new Map();
 const queueManagerRegistry = new Map();
+const databaseManagerInstances = new Map([
+  ['db-mssql', createDatabaseProvider('mssql', { connectionString: process.env.MSSQL_DATABASE_CONNECTION_STRING || process.env.FSM_MSSQL_CONNECTION_STRING || process.env.GROUP_MSSQL_CONNECTION_STRING || '' })],
+  ['db-access', createDatabaseProvider('access', { connectionString: process.env.ACCESS_DATABASE_CONNECTION_STRING || '' })],
+  ['db-mysql', createDatabaseProvider('mysql', { uri: process.env.MYSQL_DATABASE_CONNECTION_STRING || '' })]
+]);
+const systemRegistry = createSystemRegistry({ queueManagerInstances, queueManagerRegistry });
 const queueRoutes = new Map();
 const MANAGER_ACTIVE_STATES = new Set(['up', 'degraded']);
 const MANAGER_SYNC_STATES = new Set(['syncing', 'sync-failed']);
@@ -1912,8 +1955,12 @@ const FSM_MSSQL_CURRENT_TABLE_SQL = toSqlIdentifier(FSM_MSSQL_CURRENT_TABLE);
 const FSM_MSSQL_HISTORY_TABLE_SQL = toSqlIdentifier(FSM_MSSQL_HISTORY_TABLE);
 const NLP_MSSQL_INTERACTION_TABLE = 'NlpInteractionLog';
 const NLP_MSSQL_USER_PROFILE_TABLE = 'NlpUserProfile';
+const QUEUE_MSSQL_DEFINITION_TABLE = readEnvString('QUEUE_MSSQL_DEFINITION_TABLE', 'QueueDefinitions').trim() || 'QueueDefinitions';
+const MESSAGE_MSSQL_LEDGER_TABLE = readEnvString('MESSAGE_MSSQL_LEDGER_TABLE', 'QueueMessageLedger').trim() || 'QueueMessageLedger';
 const NLP_MSSQL_INTERACTION_TABLE_SQL = toSqlIdentifier(NLP_MSSQL_INTERACTION_TABLE);
 const NLP_MSSQL_USER_PROFILE_TABLE_SQL = toSqlIdentifier(NLP_MSSQL_USER_PROFILE_TABLE);
+const QUEUE_MSSQL_DEFINITION_TABLE_SQL = toSqlIdentifier(QUEUE_MSSQL_DEFINITION_TABLE);
+const MESSAGE_MSSQL_LEDGER_TABLE_SQL = toSqlIdentifier(MESSAGE_MSSQL_LEDGER_TABLE);
 
 async function getTransactionStateMssqlPool() {
   if (txMssqlPoolPromise) return txMssqlPoolPromise;
@@ -2059,6 +2106,35 @@ BEGIN
     updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
   )
 END
+IF OBJECT_ID('${QUEUE_MSSQL_DEFINITION_TABLE.replace(/'/g, "''")}', 'U') IS NULL
+BEGIN
+  CREATE TABLE ${QUEUE_MSSQL_DEFINITION_TABLE_SQL} (
+    queue_name NVARCHAR(256) NOT NULL PRIMARY KEY,
+    manager_id NVARCHAR(128) NULL,
+    queue_class NVARCHAR(64) NULL,
+    data_type_ids_json NVARCHAR(MAX) NULL,
+    persist_messages BIT NOT NULL DEFAULT 1,
+    declared_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+  )
+END
+IF OBJECT_ID('${MESSAGE_MSSQL_LEDGER_TABLE.replace(/'/g, "''")}', 'U') IS NULL
+BEGIN
+  CREATE TABLE ${MESSAGE_MSSQL_LEDGER_TABLE_SQL} (
+    id BIGINT IDENTITY(1,1) PRIMARY KEY,
+    message_id NVARCHAR(128) NOT NULL,
+    queue_name NVARCHAR(256) NOT NULL,
+    direction NVARCHAR(16) NOT NULL,
+    lifecycle_status NVARCHAR(32) NOT NULL,
+    source_service NVARCHAR(256) NULL,
+    worker_id NVARCHAR(256) NULL,
+    message_json NVARCHAR(MAX) NOT NULL,
+    envelope_json NVARCHAR(MAX) NULL,
+    occurred_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+  )
+  CREATE INDEX IX_QueueMessageLedger_Message_Id ON ${MESSAGE_MSSQL_LEDGER_TABLE_SQL}(message_id, id)
+  CREATE INDEX IX_QueueMessageLedger_Queue_Occurred ON ${MESSAGE_MSSQL_LEDGER_TABLE_SQL}(queue_name, occurred_at DESC)
+END
 `);
 
     return pool;
@@ -2068,6 +2144,51 @@ END
   });
 
   return txMssqlPoolPromise;
+}
+
+async function recordQueueDefinitionToSql({ queueName, managerId, config = {} }) {
+  const pool = await getTransactionStateMssqlPool();
+  const normalizedQueueName = String(queueName || '').trim();
+  if (!normalizedQueueName) return;
+  await pool.request()
+    .input('queue_name', txMssql.NVarChar(256), normalizedQueueName)
+    .input('manager_id', txMssql.NVarChar(128), managerId ? String(managerId).slice(0, 128) : null)
+    .input('queue_class', txMssql.NVarChar(64), config.queueClass ? String(config.queueClass).slice(0, 64) : null)
+    .input('data_type_ids_json', txMssql.NVarChar(txMssql.MAX), JSON.stringify(config.dataTypeIds || (config.dataTypeId ? [config.dataTypeId] : [])))
+    .input('persist_messages', txMssql.Bit, config.persistMessages === false ? 0 : 1)
+    .query(`
+MERGE ${QUEUE_MSSQL_DEFINITION_TABLE_SQL} AS target
+USING (SELECT @queue_name AS queue_name) AS source
+ON target.queue_name = source.queue_name
+WHEN MATCHED THEN UPDATE SET
+  manager_id = @manager_id,
+  queue_class = @queue_class,
+  data_type_ids_json = @data_type_ids_json,
+  persist_messages = @persist_messages,
+  updated_at = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (queue_name, manager_id, queue_class, data_type_ids_json, persist_messages)
+  VALUES (@queue_name, @manager_id, @queue_class, @data_type_ids_json, @persist_messages);`);
+}
+
+async function recordQueueMessageToSql({ queueName, message, messageId, messageEnvelope, sourceService, direction, lifecycleStatus, workerId = null }) {
+  try {
+    const pool = await getTransactionStateMssqlPool();
+    await pool.request()
+      .input('message_id', txMssql.NVarChar(128), String(messageId || crypto.randomUUID()).slice(0, 128))
+      .input('queue_name', txMssql.NVarChar(256), String(queueName || '').slice(0, 256))
+      .input('direction', txMssql.NVarChar(16), String(direction || 'INBOUND').slice(0, 16))
+      .input('lifecycle_status', txMssql.NVarChar(32), String(lifecycleStatus || 'ACCEPTED').slice(0, 32))
+      .input('source_service', txMssql.NVarChar(256), sourceService ? String(sourceService).slice(0, 256) : null)
+      .input('worker_id', txMssql.NVarChar(256), workerId ? String(workerId).slice(0, 256) : null)
+      .input('message_json', txMssql.NVarChar(txMssql.MAX), JSON.stringify(message ?? null))
+      .input('envelope_json', txMssql.NVarChar(txMssql.MAX), messageEnvelope == null ? null : JSON.stringify(messageEnvelope))
+      .query(`
+INSERT INTO ${MESSAGE_MSSQL_LEDGER_TABLE_SQL}
+  (message_id, queue_name, direction, lifecycle_status, source_service, worker_id, message_json, envelope_json)
+VALUES (@message_id, @queue_name, @direction, @lifecycle_status, @source_service, @worker_id, @message_json, @envelope_json);`);
+  } catch (error) {
+    console.warn(`[MESSAGE-SQL] Unable to record ${direction || 'message'} message: ${error.message}`);
+  }
 }
 
 async function logNlpInteractionToSql(payload = {}) {
@@ -5034,6 +5155,7 @@ function registerLocalQueueManagers() {
     replicaOf: null,        // null means it's the primary
     replicas: [],           // list of replica managerId
     operationVersion: 0     // current operation log version
+    ,provider: queueManagerInstances.get('qm-primary')?.provider || 'legacy'
   });
   queueManagerRegistry.set('qm-secondary', {
     managerId: 'qm-secondary',
@@ -5049,6 +5171,7 @@ function registerLocalQueueManagers() {
     replicaOf: null,        // null means it's the primary
     replicas: [],           // list of replica managerId
     operationVersion: 0     // current operation log version
+    ,provider: queueManagerInstances.get('qm-secondary')?.provider || 'legacy'
   });
 }
 
@@ -5595,6 +5718,12 @@ async function enqueueViaRoute(route, queueName, message, sourceService, message
         await qm.updateQueueConfig(queueName, { dataTypeId: 'text-string', dataTypeIds });
       }
 
+      await recordQueueDefinitionToSql({
+        queueName,
+        managerId: manager.managerId,
+        config: qm.getConfig(queueName)
+      }).catch(error => console.warn(`[QUEUE-SQL] Unable to record queue ${queueName}: ${error.message}`));
+
       const normalizedEnvelope = normalizeMessageEnvelope({ message, messageEnvelope, dataTypeIds });
       ensureMessageMatchesQueueType({ queueName, message, messageEnvelope: normalizedEnvelope, sourceService, managerId: manager.managerId, dataTypeIds });
 
@@ -5602,6 +5731,15 @@ async function enqueueViaRoute(route, queueName, message, sourceService, message
       metricsCollector.recordEnqueue(messageId, queueName);
 
       await qm.enqueue(queueName, message, sourceService || 'unknown', messageId, normalizedEnvelope);
+      await recordQueueMessageToSql({
+        queueName,
+        message,
+        messageId,
+        messageEnvelope: normalizedEnvelope,
+        sourceService: sourceService || 'unknown',
+        direction: 'INBOUND',
+        lifecycleStatus: 'QUEUED'
+      });
       appendCoordinationTraceFromMessage(message, {
         eventKind: 'queue-enqueue',
         queueName,
@@ -5648,6 +5786,11 @@ async function enqueueViaRoute(route, queueName, message, sourceService, message
         }
       })
     }).catch(() => null);
+    await recordQueueDefinitionToSql({
+      queueName,
+      managerId: manager.managerId,
+      config: { dataTypeIds, dataTypeId: dataTypeIds[0], queueClass: 'permanent', persistMessages }
+    }).catch(error => console.warn(`[QUEUE-SQL] Unable to record queue ${queueName}: ${error.message}`));
     const remoteRes = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -5656,6 +5799,15 @@ async function enqueueViaRoute(route, queueName, message, sourceService, message
     if (!remoteRes.ok) {
       throw new Error(`Remote enqueue failed at ${url} with status ${remoteRes.status}`);
     }
+    await recordQueueMessageToSql({
+      queueName,
+      message,
+      messageId,
+      messageEnvelope: normalizedEnvelope,
+      sourceService: sourceService || 'unknown',
+      direction: 'INBOUND',
+      lifecycleStatus: 'QUEUED'
+    });
     appendCoordinationTraceFromMessage(message, {
       eventKind: 'queue-enqueue',
       queueName,
@@ -5929,6 +6081,18 @@ async function claimViaRoute(queueName, workerId, leaseMs = 30000) {
 
   if (manager.local) {
     const claim = await queueManagers[manager.localIndex].claim(queueName, workerId, leaseMs);
+    if (claim?.message) {
+      await recordQueueMessageToSql({
+        queueName,
+        message: claim.message.message,
+        messageId: claim.message.messageId,
+        messageEnvelope: claim.message.messageEnvelope,
+        sourceService: claim.message.sourceService,
+        workerId,
+        direction: 'OUTBOUND',
+        lifecycleStatus: 'CLAIMED'
+      });
+    }
     return claim || null;
   }
 
@@ -5939,7 +6103,20 @@ async function claimViaRoute(queueName, workerId, leaseMs = 30000) {
   });
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(`Remote claim failed: ${response.status}`);
-  return (await response.json()).claim || null;
+  const claim = (await response.json()).claim || null;
+  if (claim?.message) {
+    await recordQueueMessageToSql({
+      queueName,
+      message: claim.message.message,
+      messageId: claim.message.messageId,
+      messageEnvelope: claim.message.messageEnvelope,
+      sourceService: claim.message.sourceService,
+      workerId,
+      direction: 'OUTBOUND',
+      lifecycleStatus: 'CLAIMED'
+    });
+  }
+  return claim;
 }
 
 async function completeClaimViaRoute(queueName, workerId, claimToken, completionMeta) {
@@ -9715,6 +9892,10 @@ function registerRoutes(app) {
     appendAuditEvent
   });
   registerJavaScriptPmachineDebuggerRoutes(app);
+  registerPmachineDeploymentRoutes(app);
+  registerFlowDeploymentRoutes(app, { runtimeRoot: RUNTIME_DATA_ROOT });
+  registerDatabaseRoutes(app, { databaseManagers: databaseManagerInstances });
+  registerServiceProcessRoutes(app, { serviceProcessManager, requirePermission });
 
   registerOrchestrationRegistryRoutes(app, {
     HTTP_PORT,
@@ -9733,6 +9914,7 @@ function registerRoutes(app) {
     getSupervisorHeartbeatSnapshot,
     getSupervisorHeartbeatEntry,
     getDatabaseRegistrySnapshot,
+    databaseManagerInstances,
     getLocalQueueManagerLaunchers,
     getRemoteAgentsPayload,
     normalizeRemoteAgentUrl,
@@ -9764,6 +9946,7 @@ function registerRoutes(app) {
       registerPlatformRoutes,
       registerReplicationRoutes,
       registerQueueConfigRoutes,
+      registerSystemRegistryRoutes,
       registerQueueTransferRoutes,
       registerAvailabilityPresenceRoutes,
       registerTopologyRuntimeRoutes,
@@ -9851,6 +10034,7 @@ function registerRoutes(app) {
       findApiCatalogEntry,
       resolvePermissionForApiRequest,
       routeRoleManifest: ROUTE_ROLE_MANIFEST,  // loaded from data/route-manifest.json at startup
+      serviceProcessManager,
       listServiceProviders,
       getServiceProvider,
       getServiceProviderAction,
@@ -9858,10 +10042,12 @@ function registerRoutes(app) {
       listServiceProviderActions,
       discoveredNodes,
       queueManagerInstances,
+      systemRegistry,
       express,
       inferQueueDataTypeIds,
       compileQueueDslSpec,
       diffQueueConfigs,
+      queueConfigMapFromWorkflowSymbols,
       resolveLibrarianOrigin,
       IS_PRODUCTION_ENV,
       ALLOW_TEMP_QUEUES_IN_PRODUCTION,
@@ -9969,6 +10155,8 @@ function registerRoutes(app) {
       deploymentRegistry: ffsDeploymentRegistry
     }
   });
+  app.locals.ensurePmachinePublicDirectory = fileServer.ensureNodePublicDirectory;
+  app.locals.ensurePmachinePublicDirectories = fileServer.ensureNodePublicDirectories;
   debugLog('[DEBUG] File server routes registered');
   app.use('/api/fileserver', fileServer.router);
 
@@ -9995,7 +10183,23 @@ function registerRoutes(app) {
   });
 }
 
+async function migratePersistedQueueTypeIds() {
+  const librarianOrigin = readEnvString('LIBRARIAN_URL', `http://127.0.0.1:${DEFAULT_LIBRARIAN_PORT}`);
+  const response = await fetch(`${librarianOrigin}/api/librarian/data-types`, { method: 'GET' });
+  if (!response.ok) throw new Error(`Librarian returned ${response.status}`);
+
+  const payload = await response.json();
+  const migrated = await migrateQueueTypeConfigs(queueManagerInstances, payload.types || []);
+  if (migrated > 0) debugLog(`[TYPE-IDS] Migrated ${migrated} persisted queue configuration(s) to canonical IDs`);
+}
+
 try {
+  await migratePersistedQueueTypeIds().catch(error => {
+    console.warn(`[TYPE-IDS] Queue type migration unavailable: ${error.message}`);
+  });
+  await getTransactionStateMssqlPool().catch(error => {
+    console.warn(`[MESSAGE-SQL] SQL message ledger initialization unavailable: ${error.message}`);
+  });
   await startBackendRuntime({
     debugLog,
     app,
@@ -10052,6 +10256,16 @@ try {
     mapperScriptPath: fileURLToPath(new URL('./data-mapper.mjs', import.meta.url)),
     mcpScriptPath: fileURLToPath(new URL('./src/mcp/pulseMcpServer.mjs', import.meta.url))
   });
+  for (const [localIndex, qm] of queueManagers.entries()) {
+    const configuredQueues = qm.getAllQueueConfigs?.().queues || {};
+    for (const [queueName, config] of Object.entries(configuredQueues)) {
+      await recordQueueDefinitionToSql({
+        queueName,
+        managerId: `qm-${localIndex === 0 ? 'primary' : 'secondary'}`,
+        config
+      }).catch(error => console.warn(`[QUEUE-SQL] Unable to sync queue ${queueName}: ${error.message}`));
+    }
+  }
 } catch (err) {
   console.error('[ERROR] Backend failed to start:', err);
 }

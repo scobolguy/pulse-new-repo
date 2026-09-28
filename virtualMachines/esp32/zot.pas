@@ -1,0 +1,1 @@
+program zot; begin end.

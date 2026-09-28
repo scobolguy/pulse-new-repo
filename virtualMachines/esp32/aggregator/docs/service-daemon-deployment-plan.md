@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document defines how PULSE packages, validates, deploys, and restores project programs, services, and daemons across JavaScript PMachines and ESP32 PMachines. It is both the implementation plan and the review checklist for the deployment control plane.
+This document defines how PULSE packages, validates, deploys, and restores project programs, services, and daemons across JavaScript, Java, and ESP32 PMachines. It is both the implementation plan and the review checklist for the deployment control plane.
 
 ## Deployment Model
 
@@ -44,6 +44,16 @@ DEPLOYMENT "mt103-pacs008" PROJECT "payments" TARGETS ("DisplayNode","magic-js-p
 END;
 ```
 
+WFL also translates logical resource bindings:
+
+```wfl
+DATABASE "SqlLedger" -> "PulseSqlLedger" TYPE "PaymentRecord" MANAGER "db-mssql" CONNECTION "env:MSSQL_DATABASE_CONNECTION_STRING";
+QUEUE "Orders" -> "payments.orders" MANAGER "qm-primary" TYPE "PaymentRecord" MODE SYNC;
+QUEUE "Audit" -> "payments.audit" MANAGER "qm-primary" TYPE "AuditTrail" MODE ASYNC;
+```
+
+Connection references point to host configuration and never embed credentials in WFL or p-code. Queue mode controls whether the host waits for acknowledgement.
+
 The WFL flow is:
 
 ```text
@@ -56,6 +66,8 @@ WFL source
 ```
 
 Natural-language requests should generate this WFL representation before persistence or execution. This keeps NLI behavior deterministic, reviewable, and testable.
+
+Application source is compiled independently from Pascalish, Cobolish, or VBish to p-code. WFL does not translate one application language into another.
 
 ## Runtime Targets
 

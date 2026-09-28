@@ -2,9 +2,9 @@ import fs from 'fs/promises';
 import path from 'path';
 
 const workspaceRoot = path.resolve(process.cwd(), '..');
-const manifestPath = path.join(workspaceRoot, 'pcode', 'pcode-opcodes.manifest.json');
-const pmachineHeaderPath = path.join(workspaceRoot, 'src', 'pmachine.h');
-const pmachineSourcePath = path.join(workspaceRoot, 'src', 'pmachine.cpp');
+const manifestPath = path.join(workspaceRoot, 'pmachines', 'shared', 'contracts', 'pcode-opcodes.manifest.json');
+const pmachineHeaderPath = path.join(workspaceRoot, 'pmachines', 'arduino', 'src', 'pmachine.h');
+const pmachineSourcePath = path.join(workspaceRoot, 'pmachines', 'arduino', 'src', 'pmachine.cpp');
 
 function parseHexToNumber(hexText) {
   const s = String(hexText || '').trim();
@@ -23,7 +23,7 @@ function isCppTargetedOpcode(op) {
 function parseCppOpcodeEnum(headerText) {
   const enumMatch = headerText.match(/enum\s+Opcode\s*:\s*uint8_t\s*\{([\s\S]*?)\};/m);
   if (!enumMatch) {
-    throw new Error('Unable to locate enum Opcode in src/pmachine.h');
+    throw new Error('Unable to locate enum Opcode in pmachines/arduino/src/pmachine.h');
   }
 
   const body = enumMatch[1];

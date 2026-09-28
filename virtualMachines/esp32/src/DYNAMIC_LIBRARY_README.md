@@ -501,7 +501,7 @@ g++ -std=c++11 \
 ## References
 
 ### Related Documentation
-- **Target Architecture:** `documents/ESP_VIRTUAL_PMACHINE_TARGET_ARCHITECTURE_V2026.md`
+- **Target Architecture:** `../documentation/architecture/ESPVM_Architecture_Spec_v1.0.txt`
 - **Scheduler:** `src/SCHEDULER_README.md`
 - **Extended Opcodes:** `src/pmachine_opcodes_extended.h`
 - **Phase 5 Guide:** `dsl/PHASE5_IMPLEMENTATION_GUIDE.md`

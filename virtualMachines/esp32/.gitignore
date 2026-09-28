@@ -4,6 +4,12 @@
 .vscode/launch.json
 .vscode/ipch
 
+# Generated and operational output must not enter source packages.
+artifacts/generated/
+artifacts/work/
+runtime/*
+!runtime/README.md
+
 # Top-level scratch and experiment output
 evolution-generation-*.json
 load-test-*.log

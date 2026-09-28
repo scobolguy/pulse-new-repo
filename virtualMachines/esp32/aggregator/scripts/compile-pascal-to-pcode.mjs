@@ -8,9 +8,9 @@ import { emitMapperRoutinePcode } from './compile-mapping-rule.mjs';
 function parseArgs(argv) {
   const args = {
     in: './data/router-mapper.dsl',
-    out: '../pcode/router-mapper.pcode',
-    mapOut: '../pcode/router-mapper.program.json',
-    manifest: '../pcode/pcode-opcodes.manifest.json'
+    out: '../artifacts/pcode/router-mapper.pcode',
+    mapOut: '../artifacts/pcode/router-mapper.program.json',
+    manifest: '../pmachines/shared/contracts/pcode-opcodes.manifest.json'
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -188,7 +188,12 @@ function emitPortableProgram(compiled) {
 
       lines.push(`ROUTE_EVAL_WHEN "${whenText}"`);
       lines.push(`JZ ${skipLabel}`);
-      lines.push(`ROUTE_TRANSFORM "${transformText}"`);
+      const mapCall = transformRule.match(/^output\s*:=\s*map\(\s*"([^"]+)"\s*,\s*src\s*\)\s*;?$/i);
+      if (mapCall) {
+        lines.push(`ROUTE_MAP_RUN "${encodePcodeStringLiteral(mapCall[1])}"`);
+      } else {
+        lines.push(`ROUTE_TRANSFORM "${transformText}"`);
+      }
       lines.push(`ROUTE_EMIT "${queueText}"`);
       lines.push(`${skipLabel}:`);
       lines.push('NOP');
@@ -331,9 +336,10 @@ async function main() {
   const normalizedProgramMap = compiled && compiled.programMap
     ? normalizeProgramMapRules(compiled.programMap)
     : null;
-  const emitted = (compiled && compiled.pcodeText && normalizedProgramMap)
-    ? { pcodeText: compiled.pcodeText, symbolMap: normalizedProgramMap }
-    : emitPortableProgram(compiled);
+  const emitted = emitPortableProgram({
+    ...compiled,
+    programMap: normalizedProgramMap
+  });
 
   const mapperRoutinePcode = (normalizedProgramMap?.entries || [])
     .filter((entry) => entry && entry.kind === 'mapper')

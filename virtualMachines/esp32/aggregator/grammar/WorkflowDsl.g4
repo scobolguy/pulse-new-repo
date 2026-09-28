@@ -8,10 +8,42 @@ program
 
 item
   : queueDecl
+  | databaseDecl
+  | systemTypeDecl
+  | systemDecl
   | fileDecl
   | apiDecl
   | workflowDecl
   | deploymentDecl
+  | clusterCreateDecl
+  | artifactDeployDecl
+  | genericSystemDecl
+  ;
+
+genericSystemDecl
+  : GENERIC_SYSTEM quotedString BEGIN genericSystemMember* END SEMICOLON
+  ;
+
+genericSystemMember
+  : genericSystemDecl
+  | genericSystemPortDecl
+  | genericSystemConnectionDecl
+  ;
+
+genericSystemPortDecl
+  : PORT quotedString (INPUT | OUTPUT) TYPE quotedString SEMICOLON
+  ;
+
+genericSystemConnectionDecl
+  : CONNECT QUEUE quotedString FROM quotedString TO quotedString TYPE quotedString SEMICOLON
+  ;
+
+clusterCreateDecl
+  : CREATE CLUSTER quotedString (LABEL quotedString)? NODES quotedList SEMICOLON
+  ;
+
+artifactDeployDecl
+  : DEPLOY ARTIFACT quotedString FILE quotedString TO CLUSTER quotedString SEMICOLON
   ;
 
 deploymentDecl
@@ -19,7 +51,11 @@ deploymentDecl
   ;
 
 deploymentItem
-  : (SERVICE | PROGRAM | DAEMON) quotedString FILE quotedString QUEUE quotedString ARROW quotedString TARGETS quotedList STARTUP booleanLiteral SEMICOLON
+  : (SERVICE | PROGRAM | DAEMON) quotedString FILE quotedString QUEUE quotedString ARROW quotedString TARGETS quotedList STARTUP booleanLiteral serviceLifecycleClause? SEMICOLON
+  ;
+
+serviceLifecycleClause
+  : PERSISTENT booleanLiteral MIN_INSTANCES NUMBER MAX_INSTANCES NUMBER IDLE_TIMEOUT NUMBER TIME_UNIT
   ;
 
 booleanLiteral
@@ -28,11 +64,41 @@ booleanLiteral
   ;
 
 queueDecl
-  : QUEUE quotedString ARROW quotedString (TYPE quotedString | TYPES quotedList)? SEMICOLON
+  : QUEUE quotedString ARROW quotedString (MANAGER quotedString)? (TYPE quotedString | TYPES quotedList)? (MODE (SYNC | ASYNC))? SEMICOLON
+  ;
+
+databaseDecl
+  : DATABASE quotedString ARROW quotedString (TYPE quotedString)? (MANAGER quotedString)? (CONNECTION quotedString)? SEMICOLON
+  ;
+
+systemTypeDecl
+  : SYSTEM TYPE quotedString BEGIN systemMember* END SEMICOLON
+  ;
+
+systemDecl
+  : SYSTEM quotedString (OF TYPE quotedString)? visibilityClause? BEGIN systemMember* END SEMICOLON
+  ;
+
+systemMember
+  : systemQueueDecl
+  | serviceDecl
+   | systemDecl
+  ;
+
+systemQueueDecl
+  : QUEUE quotedString (ARROW quotedString)? (MANAGER quotedString)? (TYPE quotedString | TYPES quotedList)? visibilityClause? SEMICOLON
+  ;
+
+serviceDecl
+  : SERVICE quotedString ARROW quotedString visibilityClause? SEMICOLON
+  ;
+
+visibilityClause
+  : VISIBILITY (INTERNAL | EXPOSED)
   ;
 
 fileDecl
-  : FILE quotedString ARROW quotedString SEMICOLON
+  : FILE quotedString ARROW quotedString (MANAGER quotedString)? SEMICOLON
   ;
 
 apiDecl
@@ -156,6 +222,15 @@ quotedString
   ;
 
 QUEUE: 'QUEUE';
+DATABASE: 'DATABASE';
+MANAGER: 'MANAGER';
+CONNECTION: 'CONNECTION';
+MODE: 'MODE';
+SYSTEM: 'SYSTEM';
+OF: 'OF';
+VISIBILITY: 'VISIBILITY';
+INTERNAL: 'INTERNAL';
+EXPOSED: 'EXPOSED';
 FILE: 'FILE';
 API: 'API';
 BASE: 'BASE';
@@ -193,7 +268,17 @@ PROJECT: 'PROJECT';
 RELEASE: 'RELEASE';
 FOR: 'FOR';
 DEPLOYMENT: 'DEPLOYMENT';
+DEPLOY: 'DEPLOY';
 ARTIFACT: 'ARTIFACT';
+CLUSTER: 'CLUSTER';
+NODES: 'NODES';
+LABEL: 'LABEL';
+GENERIC_SYSTEM: 'GENERIC_SYSTEM';
+PORT: 'PORT';
+INPUT: 'INPUT';
+OUTPUT: 'OUTPUT';
+CONNECT: 'CONNECT';
+FROM: 'FROM';
 LOCATION: 'LOCATION';
 PROJECTPLAN: 'PROJECTPLAN';
 MILESTONE: 'MILESTONE';
@@ -224,6 +309,11 @@ ENDIF: 'ENDIF';
 SERVICE: 'SERVICE';
 PROGRAM: 'PROGRAM';
 DAEMON: 'DAEMON';
+PERSISTENT: 'PERSISTENT';
+MIN_INSTANCES: 'MIN_INSTANCES';
+MAX_INSTANCES: 'MAX_INSTANCES';
+IDLE_TIMEOUT: 'IDLE_TIMEOUT';
+TIME_UNIT: 'MS' | 'S' | 'M';
 TARGETS: 'TARGETS';
 STARTUP: 'STARTUP';
 TRUE: 'TRUE';

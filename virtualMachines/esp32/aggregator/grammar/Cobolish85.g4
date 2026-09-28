@@ -623,6 +623,29 @@ cobolishMetaClause
   | USE stringLiteral (AS IDENTIFIER)? DOT?
   | IMPORT mapperImportDecl DOT?
   | ROUTE mappingPath TO mappingPath USING MAPPER mappingName DOT?
+  | DATABASE (stringLiteral | IDENTIFIER) TYPE (stringLiteral | IDENTIFIER) DOT?
+  | systemMetaClause
+  ;
+
+systemMetaClause
+  : 'SYSTEM' ('TYPE' stringLiteral | stringLiteral ('OF' 'TYPE' stringLiteral)?) systemVisibilityClause? BEGIN_KW systemMember* END DOT?
+  ;
+
+systemMember
+  : systemQueueMember
+  | systemServiceMember
+  ;
+
+systemQueueMember
+  : 'QUEUE' stringLiteral (ARROW stringLiteral)? 'TYPE' stringLiteral systemVisibilityClause? DOT?
+  ;
+
+systemServiceMember
+  : SERVICE stringLiteral ARROW? stringLiteral? systemVisibilityClause? DOT?
+  ;
+
+systemVisibilityClause
+  : 'VISIBILITY' ('INTERNAL' | 'EXPOSED')
   ;
 
 roleName
@@ -822,6 +845,7 @@ MAP_RULE: 'MAP-RULE';
 MAPPING: 'MAPPING';
 SOURCE_TYPE: 'SOURCE-TYPE';
 TARGET_TYPE: 'TARGET-TYPE';
+ARROW: '->';
 ROUTE: 'ROUTE';
 USING: 'USING';
 BEGIN_KW: 'BEGIN';
@@ -884,6 +908,8 @@ STRING_LITERAL: '"' ( ~['"\\\r\n] | '\\' . )* '"'
   | '\'' ( ~['"\\\r\n] | '\\' . )* '\''
   ;
 DOTTED_PATH: [A-Z][A-Z0-9_-]* ('.' [A-Z0-9@#_-]+)+;
+DATABASE: 'DATABASE';
+TYPE: 'TYPE';
 IDENTIFIER: [A-Z][A-Z0-9_-]*;
 WS: [ \t\r\n]+ -> skip;
 COMMENT: '*>'.*? '\n' -> skip;

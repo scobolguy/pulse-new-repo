@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "description": "Single source of truth for PULSE aggregator service processes. 'services' describes each process (entry script, default host, which env var sets its port, which env var the Gateway uses to reach it). 'environments' assigns a full port set + service-name prefix per named environment, so one box can run multiple independent PULSE stacks (e.g. 'default' and 'staging') without port or OS-service-name collisions. Consumed by service-manager.mjs (dev orchestration), the OS-service install scripts (Windows/Linux), and the Gateway's public /api/services/registry endpoint (client discovery). Select an environment via the PULSE_ENVIRONMENT env var (defaults to 'default').",
+  "description": "Infrastructure catalog and local process configuration. servers are hosting nodes; serviceOfferings are logical capabilities that may be local, LAN, or cloud hosted; managedProcesses are the subset this workspace may spawn. Select an environment via PULSE_ENVIRONMENT.",
   "services": {
     "gateway": {
       "name": "Pulse Gateway",
@@ -10,6 +10,16 @@
       "public": true,
       "portEnvVar": "HTTP_PORT",
       "description": "API gateway: the only externally-reachable service. Proxies to broker/home-automation when running in split mode."
+    },
+    "discovery": {
+      "name": "Pulse Discovery",
+      "entry": "discovery-service.mjs",
+      "defaultHost": "127.0.0.1",
+      "healthPath": "/health",
+      "public": true,
+      "autoStart": true,
+      "portEnvVar": "DISCOVERY_HTTP_PORT",
+      "description": "Base discovery service and local service registry."
     },
     "broker": {
       "name": "Pulse Broker",
@@ -31,13 +41,33 @@
       "gatewayEnvVar": "HOME_AUTOMATION_SERVICE_URL",
       "description": "Kasa/TP-Link/Tuya/Bluetooth/Shark/Alexa/UPnP device discovery and control."
     },
+    "mapper": {
+      "name": "Pulse Data Mapper",
+      "entry": "data-mapper.mjs",
+      "defaultHost": "127.0.0.1",
+      "healthPath": "/health",
+      "public": false,
+      "autoStart": true,
+      "portEnvVar": "MAPPER_PORT",
+      "description": "Typed data transformation and mapping service."
+    },
+    "librarian": {
+      "name": "Pulse Data Librarian",
+      "entry": "data-librarian.mjs",
+      "defaultHost": "127.0.0.1",
+      "healthPath": "/health",
+      "public": false,
+      "autoStart": true,
+      "portEnvVar": "LIBRARIAN_PORT",
+      "description": "Schema, data type, and mapper contract catalog service."
+    },
     "queueManager": {
       "name": "Pulse Remote Queue Manager",
       "entry": "queue-manager-node.mjs",
       "defaultHost": "127.0.0.1",
       "healthPath": "/health",
       "public": false,
-      "optional": true,
+      "autoStart": true,
       "portCliArg": "--port",
       "description": "Optional remote/clustered queue manager instance for scaling queues across nodes. Not started by default; the Gateway's own qm-primary/qm-secondary (in-process legacy engine, or a QUEUE_MANAGER_PROVIDER-selected backend) handle queueing on their own."
     }
@@ -45,12 +75,149 @@
   "environments": {
     "default": {
       "servicePrefix": "Pulse",
-      "ports": { "gateway": 4000, "broker": 4001, "homeAutomation": 4102, "queueManager": 4100 }
+      "ports": { "gateway": 4000, "discovery": 4300, "broker": 4001, "homeAutomation": 4102, "mapper": 4200, "librarian": 4301, "queueManager": 4100 }
     },
     "secondary": {
       "servicePrefix": "Pulse",
-      "ports": { "gateway": 4010, "broker": 4011, "homeAutomation": 4112, "queueManager": 4110 }
+      "ports": { "gateway": 4010, "discovery": 4310, "broker": 4011, "homeAutomation": 4112, "mapper": 4210, "librarian": 4311, "queueManager": 4110 }
     }
+  },
+  "servers": [
+    {
+      "id": "local-workspace",
+      "name": "Local Pulse Workspace",
+      "kind": "development-host",
+      "provider": "local",
+      "address": "127.0.0.1",
+      "description": "The host running workspace-managed processes."
+    }
+  ],
+  "serviceOfferings": [
+    {
+      "id": "service.gateway",
+      "name": "Pulse Gateway",
+      "kind": "api",
+      "provider": "pulse-local",
+      "protocol": "http",
+      "serverRef": "local-workspace",
+      "endpoint": "http://127.0.0.1:4000",
+      "description": "Public API gateway capability."
+    },
+    {
+      "id": "service.discovery",
+      "name": "Pulse Discovery",
+      "kind": "discovery",
+      "provider": "pulse-local",
+      "protocol": "http",
+      "serverRef": "local-workspace",
+      "endpoint": "http://127.0.0.1:4300",
+      "description": "Infrastructure and service catalog discovery capability."
+    },
+    {
+      "id": "service.broker",
+      "name": "Pulse Broker Runtime",
+      "kind": "messaging-runtime",
+      "provider": "pulse-local",
+      "protocol": "http",
+      "serverRef": "local-workspace",
+      "endpoint": "http://127.0.0.1:4001",
+      "description": "Broker adapter runtime; concrete broker offerings are listed separately."
+    },
+    {
+      "id": "service.home-automation",
+      "name": "Pulse Home Automation",
+      "kind": "automation",
+      "provider": "pulse-local",
+      "protocol": "http",
+      "serverRef": "local-workspace",
+      "endpoint": "http://127.0.0.1:4102",
+      "description": "Device discovery and control capability."
+    },
+    {
+      "id": "service.mapper",
+      "name": "Pulse Data Mapper",
+      "kind": "transformation",
+      "provider": "pulse-local",
+      "protocol": "http",
+      "serverRef": "local-workspace",
+      "endpoint": "http://127.0.0.1:4200",
+      "description": "Typed data transformation capability."
+    },
+    {
+      "id": "service.librarian",
+      "name": "Pulse Data Librarian",
+      "kind": "catalog",
+      "provider": "pulse-local",
+      "protocol": "http",
+      "serverRef": "local-workspace",
+      "endpoint": "http://127.0.0.1:4301",
+      "description": "Schema and data contract catalog capability."
+    },
+    {
+      "id": "service.queue-manager",
+      "name": "Pulse Queue Manager",
+      "kind": "queue-management",
+      "provider": "pulse-local",
+      "protocol": "http",
+      "serverRef": "local-workspace",
+      "endpoint": "http://127.0.0.1:4100",
+      "description": "Queue management capability."
+    },
+    {
+      "id": "broker-msmq",
+      "name": "MSMQ Broker",
+      "kind": "messaging",
+      "provider": "msmq",
+      "protocol": "msmq",
+      "serverRef": null,
+      "endpoint": null,
+      "configurationRef": "broker.msmq",
+      "description": "Microsoft Message Queuing capability; deployment and endpoint are configured independently of the host catalog."
+    },
+    {
+      "id": "broker-rabbitmq",
+      "name": "RabbitMQ Broker",
+      "provider": "rabbitmq",
+      "kind": "messaging",
+      "protocol": "amqp",
+      "serverRef": null,
+      "endpoint": null,
+      "configurationRef": "broker.rabbitmq",
+      "description": "RabbitMQ messaging capability; it may be local, LAN-hosted, or cloud-hosted."
+    }
+  ],
+  "dataStores": [
+    {
+      "id": "database-mssql",
+      "name": "MSSQL Database",
+      "kind": "database",
+      "provider": "mssql",
+      "protocol": "tds",
+      "serverRef": null,
+      "endpoint": null,
+      "configurationRef": "database.mssql",
+      "description": "SQL Server data capability; credentials and endpoint stay outside the catalog."
+    },
+    {
+      "id": "database-access",
+      "name": "Access Database",
+      "kind": "database",
+      "provider": "access",
+      "protocol": "odbc",
+      "serverRef": null,
+      "endpoint": null,
+      "configurationRef": "database.access",
+      "description": "Access data capability; the file or ODBC endpoint stays outside the catalog."
+    }
+  ],
+  "managedProcesses": {
+    "gateway": { "serviceOfferingRef": "service.gateway", "serverRef": "local-workspace" },
+    "discovery": { "serviceOfferingRef": "service.discovery", "serverRef": "local-workspace" },
+    "broker": { "serviceOfferingRef": "service.broker", "serverRef": "local-workspace" },
+    "homeAutomation": { "serviceOfferingRef": "service.home-automation", "serverRef": "local-workspace" },
+    "mapper": { "serviceOfferingRef": "service.mapper", "serverRef": "local-workspace" },
+    "librarian": { "serviceOfferingRef": "service.librarian", "serverRef": "local-workspace" },
+    "queueManager": { "serviceOfferingRef": "service.queue-manager", "serverRef": "local-workspace" }
   }
 }
 

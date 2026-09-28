@@ -3,7 +3,7 @@ grammar Vbish;
 options { caseInsensitive = true; }
 
 compilationUnit
-  : optionExplicit? runtimeDecl? (interopDecl | roleDecl | libraryDecl | useDecl | importDecl | routeDecl | topLevelDecl)* EOF
+  : optionExplicit? runtimeDecl? (interopDecl | roleDecl | libraryDecl | useDecl | importDecl | routeDecl | systemDecl | databaseDecl | topLevelDecl)* EOF
   ;
 
 optionExplicit
@@ -65,6 +65,32 @@ importDecl
 
 routeDecl
   : ROUTE stringOrIdentifier TO stringOrIdentifier USING MAPPER stringOrIdentifier
+  ;
+
+systemDecl
+  : SYSTEM (TYPE stringOrIdentifier | stringOrIdentifier (OF TYPE stringOrIdentifier)?) systemVisibilityClause? BEGIN_KW systemMember* END
+  ;
+
+databaseDecl
+  : DATABASE stringOrIdentifier TYPE typeName
+  ;
+
+systemMember
+  : systemQueueDecl
+  | systemServiceDecl
+  | systemDecl
+  ;
+
+systemQueueDecl
+  : QUEUE stringOrIdentifier (ARROW stringOrIdentifier)? TYPE stringOrIdentifier systemVisibilityClause?
+  ;
+
+systemServiceDecl
+  : SERVICE stringOrIdentifier (ARROW stringOrIdentifier)? systemVisibilityClause?
+  ;
+
+systemVisibilityClause
+  : VISIBILITY (INTERNAL | EXPOSED)
   ;
 
 variableDecl
@@ -139,7 +165,7 @@ logicalAnd
   ;
 
 equality
-  : relational ((EQ | NE) relational)*
+  : relational ((ASSIGN | NE) relational)*
   ;
 
 relational
@@ -217,6 +243,16 @@ USE: 'USE';
 IMPORT: 'IMPORT';
 MAPPER: 'MAPPER';
 ROUTE: 'ROUTE';
+SYSTEM: 'SYSTEM';
+TYPE: 'TYPE';
+DATABASE: 'DATABASE';
+OF: 'OF';
+QUEUE: 'QUEUE';
+VISIBILITY: 'VISIBILITY';
+INTERNAL: 'INTERNAL';
+EXPOSED: 'EXPOSED';
+BEGIN_KW: 'BEGIN';
+ARROW: '->';
 USING: 'USING';
 LIBRARIAN: 'LIBRARIAN';
 FROM: 'FROM';
@@ -258,7 +294,6 @@ PLUS: '+';
 MINUS: '-';
 MUL: '*';
 DIV: '/';
-EQ: '=';
 NE: '<>';
 LT: '<';
 GT: '>';

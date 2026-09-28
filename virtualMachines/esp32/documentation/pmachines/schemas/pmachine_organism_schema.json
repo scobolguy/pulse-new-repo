@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pulse-new-repo.local/schemas/pmachine_organism_schema.json",
+  "title": "PMachine Organism Metadata",
+  "type": "object",
+  "required": ["organismId", "generation", "kind", "serviceId", "genome"],
+  "properties": {
+    "organismId": { "type": "string" },
+    "parentId": { "type": ["string", "null"] },
+    "generation": { "type": "integer", "minimum": 0 },
+    "kind": { "type": "string" },
+    "serviceId": { "type": "string" },
+    "genome": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "morphology": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "placement": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

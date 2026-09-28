@@ -18,6 +18,14 @@ Natural-language examples that map to WFL:
 - `Create a WFL deployment for service mapper.file using programs/mapper.pas, input queue swift.in, output queue pacs.out, project payments, target DisplayNode.`
 
 The deterministic endpoint is `POST /api/deployments/wfl/compile` with `{ projectId, source, persist: true }`. It returns the parsed deployment declarations and the persisted JSON/Markdown deployment-plan files.
+
+## Pmachine deployment through Ollama
+
+The existing local Pulse MCP exposes `pmachine_deploy_and_run`; do not create a second MCP server for this capability. It accepts complete Pascalish source text plus `runtime` (`js` or `esp32`), optional `targetNodeId`, `inputQueue`, `message`, `debug`, and optional WFL source. Use it only after explicit confirmation because it executes code and may upload pcode to hardware.
+
+The underlying API is `POST /api/pmachine/deploy-and-run`. Use `runtime: "js"` for the local JavaScript pmachine. Use `runtime: "esp32"` only after querying `GET /api/nodes` and confirming the selected node. `debug: true` is supported for JS; ESP32 debug/stepping is not yet available and must be reported as a fallback.
+
+For general API knowledge, query the live catalog at `GET /api/platform/apis`, its compact summary at `GET /api/platform/apis/summary`, and provider actions at `GET /api/platform/providers`. Do not place a stale copy of every route in the prompt or invent API paths. Require confirmation before code execution, ESP32 uploads, queue reassignment, persistent deployment changes, or topology mutations. See `documentation/OLLAMA_PMACHINE_DEPLOYMENT.md` for the full contract.
 # Global System Knowledge & Constraints
 
 ## Core Operating Principles

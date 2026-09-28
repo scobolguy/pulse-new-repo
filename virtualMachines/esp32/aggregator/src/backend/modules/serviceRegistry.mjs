@@ -23,8 +23,13 @@ export function loadServiceRegistry({ force = false } = {}) {
   const parsed = JSON.parse(raw);
   cachedRegistry = {
     version: parsed?.version || 1,
+    description: parsed?.description || '',
     services: parsed?.services && typeof parsed.services === 'object' ? parsed.services : {},
-    environments: parsed?.environments && typeof parsed.environments === 'object' ? parsed.environments : {}
+    environments: parsed?.environments && typeof parsed.environments === 'object' ? parsed.environments : {},
+    servers: Array.isArray(parsed?.servers) ? parsed.servers : [],
+    serviceOfferings: Array.isArray(parsed?.serviceOfferings) ? parsed.serviceOfferings : [],
+    dataStores: Array.isArray(parsed?.dataStores) ? parsed.dataStores : [],
+    managedProcesses: parsed?.managedProcesses && typeof parsed.managedProcesses === 'object' ? parsed.managedProcesses : {}
   };
   return cachedRegistry;
 }
@@ -71,10 +76,26 @@ export function listServiceEntries(environmentName) {
   return listServiceKeys().map((key) => getServiceEntry(key, environmentName));
 }
 
+export function getInfrastructureCatalog() {
+  const registry = loadServiceRegistry();
+  return {
+    servers: registry.servers,
+    serviceOfferings: registry.serviceOfferings,
+    dataStores: registry.dataStores,
+    managedProcesses: registry.managedProcesses
+  };
+}
+
 export function getServiceUrl(key, environmentName) {
   const entry = getServiceEntry(key, environmentName);
   const host = entry.host === '0.0.0.0' ? '127.0.0.1' : entry.host;
   return `http://${host}:${entry.port}`;
+}
+
+export function getServiceHealthUrl(key, environmentName) {
+  const entry = getServiceEntry(key, environmentName);
+  const healthPath = String(entry.healthPath || '/health');
+  return `${getServiceUrl(key, environmentName)}${healthPath.startsWith('/') ? healthPath : `/${healthPath}`}`;
 }
 
 export const SERVICE_REGISTRY_PATH = REGISTRY_PATH;

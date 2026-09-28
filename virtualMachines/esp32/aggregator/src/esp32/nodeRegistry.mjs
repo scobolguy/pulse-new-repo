@@ -19,6 +19,9 @@ export class NodeRegistry {
     this.persistPath = options.persistPath || path.join(__dirname, '../../data/esp32-nodes.json');
     this.autoSave = options.autoSave !== false;
     this.nodeTimeout = options.nodeTimeout || 600000; // 10 minutes default
+    this.onNodeRegistered = typeof options.onNodeRegistered === 'function'
+      ? options.onNodeRegistered
+      : null;
   }
 
   /**
@@ -88,6 +91,10 @@ export class NodeRegistry {
 
     if (this.autoSave) {
       await this.persist();
+    }
+
+    if (this.onNodeRegistered) {
+      await this.onNodeRegistered(node);
     }
 
     return node;

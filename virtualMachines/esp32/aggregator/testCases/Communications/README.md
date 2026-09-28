@@ -68,7 +68,7 @@ $env:COMMUNICATIONS_MAPPER_PORT = '4780'
 node testCases/Communications/run-communications-test.mjs
 ```
 
-The harness starts the mapper service, tests JavaScript sync/async calls, checks Java availability and Java client compilation, compiles the WFL/COBOLISH/VBish/Pascalish fixtures, and reports unsupported compiler capabilities as explicit gaps.
+The harness starts the mapper service, tests JavaScript sync/async calls, checks Java availability and Java client compilation, and compiles the WFL/COBOLISH/VBish/Pascalish fixtures.
 
 ## Acceptance criteria
 
@@ -76,14 +76,14 @@ The harness starts the mapper service, tests JavaScript sync/async calls, checks
 2. Async JavaScript call returns HTTP 202, a job ID, and a completed result.
 3. Java client compiles when `javac` is available and uses the same JSON contract.
 4. WFL compiles both `CALL SERVICE` and `CALL SERVICE ... ASYNC`.
-5. COBOLISH, VBish, and Pascalish fixtures compile to shared PMachine artifacts or produce a named capability gap.
+5. COBOLISH, VBish, and Pascalish fixtures compile independently to shared PMachine p-code artifacts.
 6. Data Librarian and code librarian declarations are present in every language fixture.
 7. Mapper and transformer declarations are present in every language fixture.
 8. No language-specific payload shape is accepted at the service boundary.
 
-## Expected current gap
+## Queue and database contract
 
-WFL has a tested direct sync/async service-call grammar. The other language front ends currently prove shared librarian, mapper, transformer, and PMachine artifact generation, but may not yet lower a direct service call in their native syntax. The harness records that as a capability gap so it becomes a concrete implementation target rather than an undocumented assumption.
+Pascalish, Cobolish, and VBish emit portable synchronous and asynchronous queue writes and database DML. WFL translates logical resource names to physical managers and connection references. See `../../../documentation/compilers/LANGUAGE_DATABASE_QUEUE_RUNTIME.md`.
 
 ## Baseline run
 

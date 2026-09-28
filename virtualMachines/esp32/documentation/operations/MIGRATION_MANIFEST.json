@@ -1,0 +1,230 @@
+{
+  "version": 1,
+  "status": "in-progress",
+  "completed": [
+    {
+      "kind": "documentation",
+      "from": "RUNBOOK.md",
+      "to": "documentation/operations/RUNBOOK.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/REPOSITORY_HYGIENE_PLAN.md",
+      "to": "documentation/operations/REPOSITORY_HYGIENE_PLAN.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/PCODE_Compatibility_Contract.md",
+      "to": "documentation/pmachines/PCODE_Compatibility_Contract.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/pmachine-parity-matrix.md",
+      "to": "documentation/pmachines/PARITY_MATRIX.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/pmachine_evolution.md",
+      "to": "documentation/pmachines/EVOLUTION_STRATEGY.md"
+    },
+    {
+      "kind": "documentation-contract",
+      "from": "documents/pmachine_*_schema.json",
+      "to": "documentation/pmachines/schemas/"
+    },
+    {
+      "kind": "shared-contract",
+      "from": "artifacts/pcode/pcode-opcodes.manifest.json",
+      "to": "pmachines/shared/contracts/pcode-opcodes.manifest.json"
+    },
+    {
+      "kind": "javascript-runtime-module",
+      "from": "aggregator/scripts/pmachine-js-opcodes.mjs",
+      "to": "pmachines/javascript/src/opcodes.mjs",
+      "compatibilityPath": "aggregator/scripts/pmachine-js-opcodes.mjs"
+    },
+    {
+      "kind": "javascript-runtime-cli",
+      "from": "implicit legacy script import",
+      "to": "pmachines/javascript/run.mjs",
+      "notes": "The package CLI explicitly invokes the exported runCli function."
+    },
+    {
+      "kind": "javascript-runtime-core",
+      "from": "aggregator/scripts/run-js-pmachine.mjs",
+      "to": "pmachines/javascript/src/runtime.mjs",
+      "compatibilityPath": "aggregator/scripts/run-js-pmachine.mjs",
+      "notes": "The legacy path is now a re-exporting CLI wrapper; parser dependency is owned by the package."
+    },
+    {
+      "kind": "arduino-runtime-core",
+      "from": "src/pmachine*.{h,cpp}",
+      "to": "pmachines/arduino/src/",
+      "notes": "The complete runtime slice is now a PlatformIO local library; firmware headers remain supplied through the shared src include path."
+    },
+    {
+      "kind": "testing",
+      "from": "src/pmachine_scheduler_test.cpp",
+      "to": "testing/pmachines/arduino-scheduler.test.cpp"
+    },
+    {
+      "kind": "testing",
+      "from": "src/pmachine_dynamic_library_test.cpp",
+      "to": "testing/pmachines/arduino-dynamic-library.test.cpp"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/API_REFERENCE.md",
+      "to": "documentation/api/README.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/FFS_API.md",
+      "to": "documentation/api/FFS_API.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/CAMERA_API.md",
+      "to": "documentation/api/CAMERA_API.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/DISPLAY_API.md",
+      "to": "documentation/api/DISPLAY_API.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/TLS_ENROLLMENT_API_CONTRACT.md",
+      "to": "documentation/api/TLS_ENROLLMENT_API_CONTRACT.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/CAMERA_INTEGRATION_GUIDE.md",
+      "to": "documentation/guides/CAMERA_INTEGRATION_GUIDE.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/CAMERA_TESTING_GUIDE.md",
+      "to": "documentation/guides/CAMERA_TESTING_GUIDE.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/COMPILER_PMACHINE_ISSUES_RESOLUTION.md",
+      "to": "documentation/compilers/COMPILER_PMACHINE_ISSUES_RESOLUTION.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/LANGUAGE_DATABASE_QUEUE_RUNTIME.md",
+      "to": "documentation/compilers/LANGUAGE_DATABASE_QUEUE_RUNTIME.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/MAPL-BNF.md",
+      "to": "documentation/compilers/MAPL-BNF.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/Pascalish-BNF.md",
+      "to": "documentation/compilers/Pascalish-BNF.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/PASCALISH_WFL_MAPL_PCODE_DESIGN_SPEC.md",
+      "to": "documentation/compilers/PASCALISH_WFL_MAPL_PCODE_DESIGN_SPEC.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/PCODE_CONSTRUCT_OPCODE_COMPATIBILITY_MATRIX.md",
+      "to": "documentation/compilers/PCODE_CONSTRUCT_OPCODE_COMPATIBILITY_MATRIX.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/Language-Quick-Reference.md",
+      "to": "documentation/compilers/Language-Quick-Reference.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/GENERIC_FLOW_NODE_MODEL_RUNTIME_SEMANTICS.md",
+      "to": "documentation/architecture/GENERIC_FLOW_NODE_MODEL_RUNTIME_SEMANTICS.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/AWS_IOT_GATEWAY_README.md",
+      "to": "documentation/guides/AWS_IOT_GATEWAY_README.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/AWS_IOT_GATEWAY_SETUP.md",
+      "to": "documentation/guides/AWS_IOT_GATEWAY_SETUP.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/FLOW_BUILD_HANDOFF.md",
+      "to": "documentation/guides/FLOW_BUILD_HANDOFF.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/PRINTER_SCANNER_CONTROLLER.md",
+      "to": "documentation/guides/PRINTER_SCANNER_CONTROLLER.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/ESPVM_Architecture_Spec_v1.0.txt",
+      "to": "documentation/architecture/ESPVM_Architecture_Spec_v1.0.txt"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/SITUATION_RESOLUTION_SCHEMA.md",
+      "to": "documentation/architecture/SITUATION_RESOLUTION_SCHEMA.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/JSON_Approach.md",
+      "to": "documentation/architecture/JSON_Approach.md"
+    },
+    {
+      "kind": "documentation",
+      "from": "documents/future-enhancements.md",
+      "to": "documentation/pmachines/FUTURE_ENHANCEMENTS.md"
+    },
+    {
+      "kind": "tooling",
+      "from": "no repository-wide editor conventions",
+      "to": ".editorconfig"
+    },
+    {
+      "kind": "continuous-integration",
+      "from": "no GitHub Actions quality gate",
+      "to": ".github/workflows/quality.yml"
+    }
+  ],
+  "activeBoundaries": [
+    "documentation/",
+    "code/",
+    "pmachines/",
+    "testing/",
+    "artifacts/",
+    "runtime/"
+  ],
+  "remaining": [
+    {
+      "kind": "aggregator-package",
+      "from": "aggregator/",
+      "to": "code/aggregator/",
+      "blockers": [
+        "Root launchers and package scripts use the current path.",
+        "The current worktree contains unrelated Aggregator changes that must be preserved through a physical move."
+      ],
+      "migrationRule": "Move only after a complete launcher, package-script, deployment-config, and relative-import path audit."
+    }
+  ],
+  "verification": [
+    "npm run test:layout",
+    "npm run test:aggregator:modules",
+    "npm run test:runtime-data-policy",
+    "npm run test:pmachine:javascript-package",
+    "npm run test:pmachine:javascript",
+    "npm run test:pmachine:arduino-layout",
+    "platformio run -e esp32dev"
+  ]
+}

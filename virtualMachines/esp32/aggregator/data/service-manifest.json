@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "description": "On-demand Pulse service processes. The gateway/supervisor reads this manifest and starts services only when requested or required by a route.",
+  "services": [
+    {
+      "id": "broker",
+      "name": "Pulse Broker",
+      "command": "node",
+      "args": ["broker-service.mjs"],
+      "cwd": ".",
+      "port": 4001,
+      "healthUrl": "http://127.0.0.1:4001/health",
+      "startPolicy": "on-demand",
+      "idleTimeoutMs": 0,
+      "dependencies": []
+    },
+    {
+      "id": "queue-manager-primary",
+      "name": "Pulse Queue Manager Primary",
+      "command": "node",
+      "args": [
+        "queue-manager-node.mjs",
+        "--aggregator=http://127.0.0.1:4000",
+        "--port=4100",
+        "--manager-id=qm-local-4100",
+        "--node-id=local-qm-4100",
+        "--advertise-ip=127.0.0.1"
+      ],
+      "cwd": ".",
+      "port": 4100,
+      "healthUrl": "http://127.0.0.1:4100/health",
+      "startPolicy": "on-demand",
+      "idleTimeoutMs": 0,
+      "dependencies": []
+    },
+    {
+      "id": "mapper",
+      "name": "Pulse Mapper",
+      "command": "node",
+      "args": ["data-mapper.mjs"],
+      "cwd": ".",
+      "port": 4200,
+      "healthUrl": "http://127.0.0.1:4200/health",
+      "startPolicy": "on-demand",
+      "idleTimeoutMs": 600000,
+      "dependencies": []
+    },
+    {
+      "id": "librarian",
+      "name": "Pulse Librarian",
+      "command": "node",
+      "args": ["data-librarian.mjs"],
+      "cwd": ".",
+      "port": 4300,
+      "healthUrl": "http://127.0.0.1:4300/health",
+      "startPolicy": "on-demand",
+      "idleTimeoutMs": 600000,
+      "dependencies": []
+    },
+    {
+      "id": "frontend",
+      "name": "Pulse Frontend",
+      "command": "npm",
+      "args": ["run", "dev:raw", "--", "--host", "0.0.0.0"],
+      "cwd": ".",
+      "port": 5173,
+      "healthUrl": "http://127.0.0.1:5173/",
+      "startPolicy": "manual",
+      "idleTimeoutMs": 0,
+      "dependencies": []
+    }
+  ]
+}

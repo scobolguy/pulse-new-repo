@@ -1,4 +1,7 @@
 const path = require('node:path')
+const fs = require('node:fs')
+const http = require('node:http')
+const https = require('node:https')
 const vscode = require('vscode')
 
 const VIEW_TYPE = 'pulseCatalogStudio.webview'
@@ -11,7 +14,7 @@ const DEFAULT_VFL_TEMPLATE = Object.freeze({
   metadata: {
     name: 'New Visual Flow',
     description: 'Describe the infrastructure flow represented by this Visual Flow Language document.',
-    createdBy: 'Pulse Catalog Studio',
+    createdBy: 'Pulse Studio',
   },
   catalog: {
     seedObjects: [
@@ -102,6 +105,33 @@ const EDGE_TYPES = Object.freeze([
   { id: 'service-call', label: 'Service Call' },
 ])
 
+// Static fallback: the ticketing database provisioned by
+// aggregator/scripts/provision-ticketing-db.mjs isn't listed in
+// service-registry.json, so it's seeded here directly.
+const DEFAULT_DATABASE_INSTANCES = Object.freeze([
+  {
+    name: 'PulseGovernance',
+    engine: 'SQL Server',
+    description: 'Ticketing/governance database (scripts/provision-ticketing-db.mjs)',
+  },
+])
+
+function getWorkspaceRoot() {
+  const folder = vscode.workspace.workspaceFolders?.[0]
+  return folder ? folder.uri.fsPath : null
+}
+
+function readServiceRegistry() {
+  const root = getWorkspaceRoot()
+  if (!root) return null
+  const registryPath = path.join(root, 'aggregator', 'config', 'service-registry.json')
+  try {
+    return JSON.parse(fs.readFileSync(registryPath, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
 function getCatalogStudioUrl() {
   const configured = vscode.workspace.getConfiguration('pulse').get('catalogStudio.url', 'http://localhost:5173/')
   const value = String(configured || 'http://localhost:5173/').trim()
@@ -112,21 +142,53 @@ function getCatalogStudioUrl() {
 }
 
 function getCatalogStudioApiBase() {
-  const configured = vscode.workspace.getConfiguration('pulse').get('catalogStudio.apiBase', 'http://localhost:4000')
-  const value = String(configured || 'http://localhost:4000').trim()
+  const configured = vscode.workspace.getConfiguration('pulse').get('catalogStudio.apiBase', 'http://127.0.0.1:4000')
+  const value = String(configured || 'http://127.0.0.1:4000').trim()
   if (!value) {
-    return 'http://localhost:4000'
+    return 'http://127.0.0.1:4000'
   }
   return value.endsWith('/') ? value.slice(0, -1) : value
+}
+
+function getNetworkApiBases() {
+  const configured = getCatalogStudioApiBase()
+  const candidates = [configured]
+  if (/^http:\/\/localhost(?::|$)/i.test(configured)) {
+    candidates.push(configured.replace(/^http:\/\/localhost/i, 'http://127.0.0.1'))
+  }
+  candidates.push('http://127.0.0.1:4000', 'http://127.0.0.1:4300')
+  return Array.from(new Set(candidates.map((candidate) => candidate.replace(/\/$/, ''))))
+}
+
+function requestJson(url, timeoutMs = 2000) {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url)
+    const client = target.protocol === 'https:' ? https : http
+    const request = client.get(target, { timeout: timeoutMs }, (response) => {
+      let body = ''
+      response.setEncoding('utf8')
+      response.on('data', (chunk) => { body += chunk })
+      response.on('end', () => {
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          reject(new Error(`HTTP ${response.statusCode}`))
+          return
+        }
+        try {
+          resolve(JSON.parse(body))
+        } catch (error) {
+          reject(error)
+        }
+      })
+    })
+    request.on('timeout', () => request.destroy(new Error('Request timed out')))
+    request.on('error', reject)
+  })
 }
 
 function getDefaultVflExtension() {
   const configured = vscode.workspace.getConfiguration('pulse').get('catalogStudio.defaultVflExtension', '.vfl')
   const value = String(configured || '.vfl').trim()
-  if (!value) {
-    return '.vfl'
-  }
-  return value.startsWith('.') ? value : `.${value}`
+  return value ? (value.startsWith('.') ? value : `.${value}`) : '.vfl'
 }
 
 function getDefaultVflFolder() {
@@ -149,40 +211,76 @@ function escapeHtml(value) {
 
 function parseVflText(text) {
   const rawText = String(text || '')
+  if (!rawText.trim()) return { valid: true, value: JSON.parse(JSON.stringify(DEFAULT_VFL_TEMPLATE)), diagnostics: [], prettyText: getDefaultVflText() }
+  try {
+    const value = JSON.parse(rawText)
+    const diagnostics = []
+    if (!value || typeof value !== 'object' || Array.isArray(value)) diagnostics.push('Root value should be a JSON object.')
+    if (!Array.isArray(value?.nodes)) diagnostics.push('Expected nodes to be an array.')
+    if (!Array.isArray(value?.edges)) diagnostics.push('Expected edges to be an array.')
+    return { valid: diagnostics.length === 0, value, diagnostics, prettyText: `${JSON.stringify(value, null, 2)}\n` }
+  } catch (error) {
+    return { valid: false, value: null, diagnostics: [String(error.message || error)], prettyText: rawText }
+  }
+}
+
+function getServerItems() {
+  const registry = readServiceRegistry()
+  const servers = Array.isArray(registry?.servers) ? registry.servers : []
+  if (servers.length === 0) return [new InfraItem('No servers configured', vscode.TreeItemCollapsibleState.None, { kind: 'server-instance', iconId: 'warning' })]
+  return servers.map((server) => new InfraItem(server.name || server.id || 'Unnamed server', vscode.TreeItemCollapsibleState.None, {
+    kind: 'server-instance', iconId: 'server',
+    description: [server.provider, server.address].filter(Boolean).join(' · '), tooltip: server.description || '',
+  }))
+}
+
+function getServiceItems() {
+  const registry = readServiceRegistry()
+  const offerings = [
+    ...(Array.isArray(registry?.serviceOfferings) ? registry.serviceOfferings : []),
+    ...(Array.isArray(registry?.dataStores) ? registry.dataStores : []),
+  ]
+  if (offerings.length === 0) {
+    return [new InfraItem('No service offerings configured', vscode.TreeItemCollapsibleState.None, {
+      kind: 'service-offering',
+      iconId: 'warning',
+      description: 'aggregator/config/service-registry.json',
+    })]
+  }
+
+  return offerings.map((service) => new InfraItem(service.name || service.id || 'Unnamed service', vscode.TreeItemCollapsibleState.None, {
+    kind: service.kind === 'database' ? 'database-service' : 'service-offering',
+    iconId: service.kind === 'database' ? 'database' : 'symbol-event',
+    description: [service.provider, service.protocol, service.endpoint || 'remote or unbound'].filter(Boolean).join(' · '),
+    tooltip: service.description || '',
+  }))
+}
+
+function getVflDiagnosticEntries(text) {
+  const rawText = String(text || '')
   if (!rawText.trim()) {
-    return {
-      valid: true,
-      value: JSON.parse(JSON.stringify(DEFAULT_VFL_TEMPLATE)),
-      diagnostics: [],
-      prettyText: getDefaultVflText(),
-    }
+    return []
   }
 
   try {
     const value = JSON.parse(rawText)
     const diagnostics = []
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      diagnostics.push('Root value should be a JSON object.')
+      diagnostics.push({ message: 'Root value should be a JSON object.', offset: 0 })
     }
-    if (!Array.isArray(value.nodes)) {
-      diagnostics.push('Expected nodes to be an array.')
+    if (!Array.isArray(value?.nodes)) {
+      diagnostics.push({ message: 'Expected nodes to be an array.', offset: 0 })
     }
-    if (!Array.isArray(value.edges)) {
-      diagnostics.push('Expected edges to be an array.')
+    if (!Array.isArray(value?.edges)) {
+      diagnostics.push({ message: 'Expected edges to be an array.', offset: 0 })
     }
-    return {
-      valid: diagnostics.length === 0,
-      value,
-      diagnostics,
-      prettyText: `${JSON.stringify(value, null, 2)}\n`,
-    }
+    return diagnostics
   } catch (error) {
-    return {
-      valid: false,
-      value: null,
-      diagnostics: [String(error.message || error)],
-      prettyText: rawText,
-    }
+    const match = String(error.message || error).match(/position (\d+)/i)
+    return [{
+      message: String(error.message || error),
+      offset: match ? Number(match[1]) : 0,
+    }]
   }
 }
 
@@ -217,7 +315,7 @@ function getCatalogStudioHostHtml(webview, extensionUri) {
       <meta charset="UTF-8" />
       <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https: data:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; frame-src http: https:; connect-src http: https:;" />
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <title>Pulse Catalog Studio</title>
+      <title>Pulse Studio</title>
       <style>
         :root {
           color-scheme: light dark;
@@ -263,9 +361,9 @@ function getCatalogStudioHostHtml(webview, extensionUri) {
       <div class="shell">
         <div class="toolbar">
           <div class="brand">
-            <img alt="Catalog Studio" src="${iconUri}" />
+            <img alt="Pulse Studio" src="${iconUri}" />
             <div class="brand-copy">
-              <div class="brand-title">Pulse Catalog Studio</div>
+              <div class="brand-title">Pulse Studio</div>
               <div class="brand-subtitle">Webview entry point for the typed infrastructure designer</div>
             </div>
           </div>
@@ -276,7 +374,7 @@ function getCatalogStudioHostHtml(webview, extensionUri) {
         </div>
         <iframe id="catalogFrame" src="${appUrl}"></iframe>
         <div id="fallback" class="fallback hidden">
-          <p><strong>Catalog Studio is not reachable yet.</strong></p>
+          <p><strong>Pulse Studio is not reachable yet.</strong></p>
           <p>Start the frontend dev server in the workspace and reload this view.</p>
           <p>Expected URL: <code>${appUrl}</code></p>
           <p>Suggested command: <code>cd aggregator && npm run dev:raw</code></p>
@@ -459,7 +557,7 @@ function getVflEditorHtml(webview, extensionUri, document, parsed) {
       <div class="shell">
         <div class="toolbar">
           <div class="brand">
-            <img alt="Catalog Studio" src="${iconUri}" />
+            <img alt="Pulse Studio" src="${iconUri}" />
             <div class="brand-copy">
               <div class="brand-title">Visual Flow Language</div>
               <div class="brand-subtitle">${escapeHtml(document.uri.fsPath)}</div>
@@ -468,7 +566,7 @@ function getVflEditorHtml(webview, extensionUri, document, parsed) {
           <div class="actions">
             <button id="insertTemplate" type="button">Reset Template</button>
             <button id="formatDocument" type="button">Format JSON</button>
-            <a href="${appUrl}" target="_blank" rel="noreferrer">Open Catalog Studio</a>
+            <a href="${appUrl}" target="_blank" rel="noreferrer">Open Pulse Studio</a>
           </div>
         </div>
         <div class="main">
@@ -1273,12 +1371,13 @@ class CatalogStudioViewProvider {
 }
 
 class VflEditorProvider {
-  constructor(context) {
+  constructor(context, diagnostics) {
     this.context = context
+    this.diagnostics = diagnostics
   }
 
-  static register(context) {
-    const provider = new VflEditorProvider(context)
+  static register(context, diagnostics) {
+    const provider = new VflEditorProvider(context, diagnostics)
     return vscode.window.registerCustomTextEditorProvider(VFL_EDITOR_VIEW_TYPE, provider, {
       webviewOptions: {
         retainContextWhenHidden: true,
@@ -1294,6 +1393,23 @@ class VflEditorProvider {
     }
 
     let suppressUpdates = 0
+
+    const updateDiagnostics = () => {
+      const entries = getVflDiagnosticEntries(document.getText())
+      const documentDiagnostics = entries.map((entry) => {
+        const offset = Math.max(0, Math.min(entry.offset, document.getText().length))
+        const start = document.positionAt(offset)
+        const end = document.positionAt(Math.min(offset + 1, document.getText().length))
+        const diagnostic = new vscode.Diagnostic(
+          new vscode.Range(start, end),
+          entry.message,
+          vscode.DiagnosticSeverity.Error,
+        )
+        diagnostic.source = 'Pulse VFL'
+        return diagnostic
+      })
+      this.diagnostics.set(document.uri, documentDiagnostics)
+    }
 
     const render = () => {
       const parsed = parseVflText(document.getText())
@@ -1317,6 +1433,7 @@ class VflEditorProvider {
       if (event.document.uri.toString() !== document.uri.toString()) {
         return
       }
+      updateDiagnostics()
       if (suppressUpdates > 0) {
         return
       }
@@ -1325,6 +1442,7 @@ class VflEditorProvider {
 
     webviewPanel.onDidDispose(() => {
       changeSubscription.dispose()
+      this.diagnostics.delete(document.uri)
     })
 
     webviewPanel.webview.onDidReceiveMessage(async (message) => {
@@ -1343,14 +1461,106 @@ class VflEditorProvider {
       }
     })
 
-    render()
+  updateDiagnostics()
+  render()
+  }
+}
+
+class InfraItem extends vscode.TreeItem {
+  constructor(label, collapsibleState, options = {}) {
+    super(label, collapsibleState)
+    this.kind = options.kind || 'leaf'
+    this.contextValue = options.contextValue || this.kind
+    if (options.description) this.description = options.description
+    if (options.tooltip) this.tooltip = options.tooltip
+    this.iconPath = new vscode.ThemeIcon(options.iconId || 'circle-outline')
+  }
+}
+
+async function getNetworkItems() {
+  const errors = []
+  for (const base of getNetworkApiBases()) {
+    try {
+      const payload = await requestJson(`${base}/api/nodes`)
+      const nodes = Array.isArray(payload) ? payload : (Array.isArray(payload?.nodes) ? payload.nodes : [])
+      if (nodes.length === 0) {
+        return [new InfraItem('No network nodes discovered', vscode.TreeItemCollapsibleState.None, {
+          kind: 'network-node',
+          iconId: 'info',
+          description: base,
+        })]
+      }
+      return nodes.map((node) => new InfraItem(node.nodeName || node.ip || 'Unknown node', vscode.TreeItemCollapsibleState.None, {
+        kind: 'network-node',
+        iconId: 'circuit-board',
+        description: node.ip || '',
+        tooltip: node.hardware ? `${node.hardware}` : '',
+      }))
+    } catch (error) {
+      errors.push(`${base}: ${String(error?.message || error)}`)
+    }
+  }
+
+  return [new InfraItem('Network discovery not reachable', vscode.TreeItemCollapsibleState.None, {
+    kind: 'network-node',
+    iconId: 'debug-disconnect',
+    description: getNetworkApiBases().join(', '),
+    tooltip: errors.join('\n'),
+  })]
+}
+
+class PulseInfrastructureTreeProvider {
+  constructor() {
+    this._onDidChangeTreeData = new vscode.EventEmitter()
+    this.onDidChangeTreeData = this._onDidChangeTreeData.event
+  }
+
+  refresh() {
+    this._onDidChangeTreeData.fire()
+  }
+
+  getTreeItem(element) {
+    return element
+  }
+
+  getChildren(element) {
+    if (!element) {
+      return [
+        new InfraItem('Servers', vscode.TreeItemCollapsibleState.Expanded, { kind: 'servers-category', iconId: 'server' }),
+        new InfraItem('Services', vscode.TreeItemCollapsibleState.Expanded, { kind: 'services-category', iconId: 'symbol-namespace' }),
+        new InfraItem('Network', vscode.TreeItemCollapsibleState.Expanded, { kind: 'network-category', iconId: 'globe' }),
+      ]
+    }
+    if (element.kind === 'servers-category') {
+      return [
+        new InfraItem('Hosting Nodes', vscode.TreeItemCollapsibleState.Expanded, { kind: 'hosting-nodes-category', iconId: 'server' }),
+        new InfraItem('Message Brokers', vscode.TreeItemCollapsibleState.Expanded, { kind: 'message-brokers-category', iconId: 'broadcast' }),
+        new InfraItem('Databases', vscode.TreeItemCollapsibleState.Expanded, { kind: 'databases-category', iconId: 'database' }),
+      ]
+    }
+    if (element.kind === 'hosting-nodes-category') {
+      return getServerItems()
+    }
+    if (element.kind === 'message-brokers-category') {
+      return getMessageBrokerItems()
+    }
+    if (element.kind === 'databases-category') {
+      return getDatabaseItems()
+    }
+    if (element.kind === 'services-category') {
+      return getServiceItems()
+    }
+    if (element.kind === 'network-category') {
+      return getNetworkItems()
+    }
+    return []
   }
 }
 
 function openCatalogStudioPanel(extensionUri) {
   const panel = vscode.window.createWebviewPanel(
     VIEW_TYPE,
-    'Pulse Catalog Studio',
+    'Pulse Studio',
     vscode.ViewColumn.Active,
     {
       enableScripts: true,
@@ -1393,11 +1603,16 @@ async function createNewVflDocument() {
 
 function activate(context) {
   const provider = new CatalogStudioViewProvider(context.extensionUri)
+  const diagnostics = vscode.languages.createDiagnosticCollection('pulse-vfl')
+  const infrastructureProvider = new PulseInfrastructureTreeProvider()
   context.subscriptions.push(
+    diagnostics,
     vscode.window.registerWebviewViewProvider(SIDEBAR_VIEW_TYPE, provider),
+    vscode.window.registerTreeDataProvider('pulseCatalogStudio.infrastructure', infrastructureProvider),
     vscode.commands.registerCommand('pulseCatalogStudio.open', () => openCatalogStudioPanel(context.extensionUri)),
     vscode.commands.registerCommand('pulseCatalogStudio.newVfl', () => createNewVflDocument()),
-    VflEditorProvider.register(context),
+    vscode.commands.registerCommand('pulseCatalogStudio.refreshInfrastructure', () => infrastructureProvider.refresh()),
+    VflEditorProvider.register(context, diagnostics),
   )
 }
 

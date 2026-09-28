@@ -1,0 +1,41 @@
+# Auto-generated from ANTLR Pascalish grammar
+JMP MAIN
+MAIN:
+PUSH_INT 0
+STORE msg
+PUSH_STR ""
+STORE seen
+ROUTE_MATCH_QUEUE "mt103Inbound"
+JZ DEQMISS_1
+ROUTE_GET_MESSAGE
+STORE msg
+JMP DEQEND_2
+DEQMISS_1:
+PUSH_STR ""
+STORE msg
+DEQEND_2:
+LOAD msg
+PUSH_STR ""
+STRNEQ
+JZ ELSE_3
+LOAD msg
+DB_SELECT "messageStore","incomingMessages","status","payload","="
+STORE seen
+LOAD seen
+PUSH_STR ""
+STREQ
+JZ ELSE_5
+LOAD msg
+LOAD msg
+PUSH_STR "received"
+DB_INSERT "messageStore","incomingMessages","reference,payload,status"
+JMP ENDIF_6
+ELSE_5:
+LOAD msg
+PUSH_STR "duplicate"
+DB_UPDATE "messageStore","incomingMessages","status","payload","="
+ENDIF_6:
+JMP ENDIF_4
+ELSE_3:
+ENDIF_4:
+HALT

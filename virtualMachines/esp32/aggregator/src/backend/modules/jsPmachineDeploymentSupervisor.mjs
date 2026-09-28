@@ -11,7 +11,7 @@ function deploymentKey(deployment) {
   return String(deployment?.key || deployment?.deploymentId || `${deployment?.serviceName || 'deployment'}:${deployment?.targetNodeId || '*'}`).trim();
 }
 
-export function createJsPmachineDeploymentSupervisor({ runnerPath = path.resolve(process.cwd(), 'scripts/run-js-pmachine.mjs') } = {}) {
+export function createJsPmachineDeploymentSupervisor({ runnerPath = path.resolve(process.cwd(), '..', 'pmachines', 'javascript', 'run.mjs') } = {}) {
   const processes = new Map();
   const states = new Map();
 

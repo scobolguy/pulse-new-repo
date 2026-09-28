@@ -119,6 +119,105 @@ static void loadStartupDeploymentManifest() {
                       serviceName, packageName, runtimeState);
     }
 }
+
+static bool httpInvokeServiceTransport(
+    const std::string& serviceId,
+    const std::string& endpoint,
+    const std::string& payload,
+    std::string& outResponse,
+    std::string& outError,
+    void* context
+) {
+    (void)context;
+    if (WiFi.status() != WL_CONNECTED) {
+        outError = "WiFi not connected";
+        return false;
+    }
+
+    HTTPClient http;
+    WiFiClient client;
+    String url = "http://192.168.2.155/api/services/";
+    url += serviceId.c_str();
+    if (!endpoint.empty()) {
+        if (endpoint[0] == '/') {
+            url += endpoint.c_str();
+        } else {
+            url += "/";
+            url += endpoint.c_str();
+        }
+    }
+
+    if (!http.begin(client, url.c_str())) {
+        outError = "failed to open HTTP client";
+        return false;
+    }
+
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("Accept", "application/json");
+
+    String requestBody = payload.empty() ? "{}" : String(payload.c_str());
+    const int status = http.POST(requestBody);
+    const String responseText = http.getString();
+    http.end();
+
+    if (status < 200 || status >= 300) {
+        outError = std::string("HTTP status ") + std::to_string(status);
+        if (responseText.length() > 0) {
+            outError += ": ";
+            outError += responseText.c_str();
+        }
+        return false;
+    }
+
+    outResponse = std::string(responseText.c_str());
+    return true;
+}
+
+static bool httpInvokeOrchestrationWait(
+    const std::vector<pmachine::OrchestrationSpawnRequest>& requests,
+    uint32_t timeoutMs,
+    std::vector<pmachine::OrchestrationTaskResult>& outResults,
+    std::string& outError,
+    void* context
+) {
+    (void)timeoutMs;
+    (void)context;
+    if (requests.empty()) {
+        outError = "no orchestration requests";
+        return false;
+    }
+
+    for (const auto& request : requests) {
+        pmachine::OrchestrationTaskResult result;
+        result.handleRef = request.handleRef;
+        result.subflowId = request.subflowId;
+        result.nodeId = request.nodeId;
+
+        std::string response;
+        std::string error;
+        const bool ok = httpInvokeServiceTransport(
+            request.subflowId,
+            "",
+            request.payloadRef,
+            response,
+            error,
+            nullptr
+        );
+
+        result.success = ok;
+        result.responseJson = response;
+        result.errorCode = ok ? "" : "transport_error";
+        result.errorMessage = error;
+        outResults.push_back(result);
+        if (!ok) {
+            outError = error;
+            return false;
+        }
+    }
+
+    return true;
+}
+
 bool ffsUp = false;
 
 #if defined(ENABLE_DISPLAY) && !defined(DISPLAY_NO_LVGL)
@@ -1026,7 +1125,9 @@ bool isBonecrusherRole() {
     return false;
 #else
     const String role = String(deviceRole);
-    return role.equalsIgnoreCase("bonecrusher") || role.equalsIgnoreCase("generalist");
+    return role.equalsIgnoreCase("bonecrusher")
+        || role.equalsIgnoreCase("generalist")
+        || pm.getRuntimeUnit().kind == pmachine::RuntimeUnitKind::Daemon;
 #endif
 }
 
@@ -1387,7 +1488,9 @@ bool processClaimWithLocalIngress(
 }
 
 void runBonecrusherWorkerIteration() {
-    if (!isBonecrusherRole() || !bonecrusherConfig.enabled) return;
+    const bool daemonRuntime = pm.getRuntimeUnit().kind == pmachine::RuntimeUnitKind::Daemon;
+    if ((!isBonecrusherRole() && !daemonRuntime) || (!bonecrusherConfig.enabled && !daemonRuntime)) return;
+    if (daemonRuntime) bonecrusherConfig.enabled = true;
     if (WiFi.status() != WL_CONNECTED
 #if defined(ESP32) && defined(ENABLE_BT_CONTROL_PLANE)
         && !bluetoothControlPlaneClientConnected()
@@ -1541,7 +1644,7 @@ void bonecrusherWorkerTask(void* param) {
 }
 
 void startBonecrusherWorkerTaskIfNeeded() {
-    if (!isBonecrusherRole()) return;
+    if (!isBonecrusherRole() && pm.getRuntimeUnit().kind != pmachine::RuntimeUnitKind::Daemon) return;
     if (bonecrusherWorkerTaskHandle != nullptr) return;
     constexpr uint32_t bonecrusherWorkerStackBytes = 12288;
     BaseType_t ok = xTaskCreatePinnedToCore(
@@ -3781,6 +3884,9 @@ void setup() {
 
 #ifdef ENABLE_PMACHINE
     pm.setFFS(&federatedFS);
+    pm.setServiceCallHook(httpInvokeServiceTransport, nullptr);
+    pm.setOrchestrationWaitHook(httpInvokeOrchestrationWait, nullptr);
+    Serial.println("[PMACHINE] Service and orchestration transport hooks registered");
 #endif
 
 #ifdef ENABLE_CAMERA
@@ -4070,6 +4176,12 @@ void setup() {
 
 void loop() {
     serialProvisioningPoll();
+
+#if defined(ESP32) && !defined(DISABLE_BONECRUSHER)
+    if (pm.getRuntimeUnit().kind == pmachine::RuntimeUnitKind::Daemon) {
+        startBonecrusherWorkerTaskIfNeeded();
+    }
+#endif
 
 #if defined(ESP32) && defined(ENABLE_BT_CONTROL_PLANE) && defined(BT_CONTROL_PLANE_WIFI_FALLBACK_ONLY)
     if (WiFi.status() != WL_CONNECTED && !globalBluetoothControlPlane) {

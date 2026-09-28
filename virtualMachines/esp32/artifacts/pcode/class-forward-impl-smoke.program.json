@@ -1,0 +1,250 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-16T21:28:40.630Z",
+  "serviceId": "ClassForwardImplSmoke",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "ClassForwardImplSmoke",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-program",
+  "sourceLanguage": "pascalish",
+  "symbols": {
+    "systems": [],
+    "queues": [],
+    "services": [],
+    "databases": [],
+    "tables": []
+  },
+  "typeRegistry": {},
+  "exportedFunctions": [],
+  "entries": [],
+  "localResources": {
+    "serviceId": "ClassForwardImplSmoke",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "routers": [],
+  "serviceEndpoints": [],
+  "globals": [
+    "c_total"
+  ],
+  "variableDeclarations": [
+    {
+      "type": "VarDecl",
+      "name": "c",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "user",
+        "id": "Counter",
+        "genericArgs": []
+      }
+    }
+  ],
+  "enums": {},
+  "procedures": {
+    "PROC_COUNTER_CREATE": {
+      "name": "Counter.Create",
+      "className": "Counter",
+      "methodName": "Create",
+      "returnType": null,
+      "params": [
+        "total"
+      ],
+      "locals": [],
+      "genericParams": []
+    },
+    "PROC_COUNTER_BUMP": {
+      "name": "Counter.Bump",
+      "className": "Counter",
+      "methodName": "Bump",
+      "returnType": null,
+      "params": [
+        "total"
+      ],
+      "locals": [],
+      "genericParams": []
+    },
+    "PROC_COUNTER_TOTAL": {
+      "name": "Counter.Total",
+      "className": "Counter",
+      "methodName": "Total",
+      "returnType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "integer",
+        "genericArgs": []
+      },
+      "params": [
+        "total"
+      ],
+      "locals": [],
+      "genericParams": []
+    },
+    "PROC_COUNTER_DESTROY": {
+      "name": "Counter.Destroy",
+      "className": "Counter",
+      "methodName": "Destroy",
+      "returnType": null,
+      "params": [
+        "total"
+      ],
+      "locals": [],
+      "genericParams": []
+    }
+  },
+  "typeDeclarations": [],
+  "classDeclarations": [
+    {
+      "type": "ClassDecl",
+      "name": "Counter",
+      "genericParams": [],
+      "extendsType": null,
+      "members": [
+        {
+          "type": "ClassFieldDecl",
+          "name": "total",
+          "dataType": {
+            "type": "TypeRef",
+            "kind": "simple",
+            "id": "integer",
+            "genericArgs": []
+          },
+          "visibility": "private"
+        },
+        {
+          "type": "ClassMethodDecl",
+          "methodKind": "constructor",
+          "name": "Create",
+          "genericParams": [],
+          "parameters": [],
+          "localDecls": [],
+          "returnType": null,
+          "body": {
+            "type": "Block",
+            "statements": [
+              {
+                "type": "Assign",
+                "target": "total",
+                "rounded": false,
+                "expr": {
+                  "type": "NumberLiteral",
+                  "value": 0,
+                  "raw": "0"
+                }
+              }
+            ]
+          },
+          "forward": false,
+          "visibility": "public"
+        },
+        {
+          "type": "ClassMethodDecl",
+          "methodKind": "procedure",
+          "name": "Bump",
+          "genericParams": [],
+          "parameters": [],
+          "localDecls": [],
+          "returnType": null,
+          "body": {
+            "type": "Block",
+            "statements": [
+              {
+                "type": "Assign",
+                "target": "total",
+                "rounded": false,
+                "expr": {
+                  "type": "Binary",
+                  "op": "+",
+                  "left": {
+                    "type": "Identifier",
+                    "name": "total"
+                  },
+                  "right": {
+                    "type": "NumberLiteral",
+                    "value": 1,
+                    "raw": "1"
+                  }
+                }
+              }
+            ]
+          },
+          "forward": false,
+          "visibility": "public"
+        },
+        {
+          "type": "ClassMethodDecl",
+          "methodKind": "function",
+          "name": "Total",
+          "genericParams": [],
+          "parameters": [],
+          "localDecls": [],
+          "returnType": {
+            "type": "TypeRef",
+            "kind": "simple",
+            "id": "integer",
+            "genericArgs": []
+          },
+          "body": {
+            "type": "Block",
+            "statements": [
+              {
+                "type": "Return",
+                "expr": {
+                  "type": "Identifier",
+                  "name": "total"
+                }
+              }
+            ]
+          },
+          "forward": false,
+          "visibility": "public"
+        },
+        {
+          "type": "ClassMethodDecl",
+          "methodKind": "destructor",
+          "name": "Destroy",
+          "genericParams": [],
+          "parameters": [],
+          "localDecls": [],
+          "returnType": null,
+          "body": {
+            "type": "Block",
+            "statements": [
+              {
+                "type": "Assign",
+                "target": "total",
+                "rounded": false,
+                "expr": {
+                  "type": "Unary",
+                  "op": "-",
+                  "expr": {
+                    "type": "NumberLiteral",
+                    "value": 1,
+                    "raw": "1"
+                  }
+                }
+              }
+            ]
+          },
+          "forward": false,
+          "visibility": "public"
+        }
+      ]
+    }
+  ],
+  "entryLabel": "MAIN",
+  "libraries": [],
+  "mapperImports": [],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "ffc14b836d5fd5be93eb6cd4ed75328168f95ee3782435ab12d5948a9435b8f6",
+    "signedAt": "2026-09-16T21:28:40.632Z",
+    "pcodeLength": 901,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

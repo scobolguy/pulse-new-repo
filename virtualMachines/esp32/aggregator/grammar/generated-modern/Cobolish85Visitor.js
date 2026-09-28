@@ -732,6 +732,36 @@ export default class Cobolish85Visitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by Cobolish85Parser#systemMetaClause.
+	visitSystemMetaClause(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#systemMember.
+	visitSystemMember(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#systemQueueMember.
+	visitSystemQueueMember(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#systemServiceMember.
+	visitSystemServiceMember(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#systemVisibilityClause.
+	visitSystemVisibilityClause(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by Cobolish85Parser#roleName.
 	visitRoleName(ctx) {
 	  return this.visitChildren(ctx);

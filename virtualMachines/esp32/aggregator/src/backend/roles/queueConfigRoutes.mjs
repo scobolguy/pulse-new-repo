@@ -6,6 +6,8 @@ export function registerQueueConfigRoutes(app, deps) {
     inferQueueDataTypeIds,
     compileQueueDslSpec,
     diffQueueConfigs,
+    queueConfigMapFromWorkflowSymbols,
+    systemRegistry,
     resolveLibrarianOrigin,
     IS_PRODUCTION_ENV,
     ALLOW_TEMP_QUEUES_IN_PRODUCTION
@@ -18,11 +20,19 @@ export function registerQueueConfigRoutes(app, deps) {
         throw new Error(`Librarian returned ${response.status}`);
       }
       const payload = await response.json();
-      const ids = new Set((payload.types || []).map(item => String(item.id || '').trim().toLowerCase()).filter(Boolean));
-      ids.add('text-string');
+      const ids = new Map();
+      for (const item of payload.types || []) {
+        const canonicalId = String(item.canonicalId || item.id || item.logicalId || '').trim().toLowerCase();
+        if (!canonicalId) continue;
+        for (const value of [item.id, item.logicalId, item.canonicalId, ...(Array.isArray(item.aliases) ? item.aliases : [])]) {
+          const normalized = String(value || '').trim().toLowerCase();
+          if (normalized) ids.set(normalized, canonicalId);
+        }
+      }
+      ids.set('text-string', 'text-string');
       return ids;
     } catch {
-      return new Set(['text-string']);
+      return new Map([['text-string', 'text-string']]);
     }
   }
 
@@ -35,7 +45,7 @@ export function registerQueueConfigRoutes(app, deps) {
     if (!allowed.has(normalized)) {
       throw new Error(`Invalid queue data type: ${normalized}`);
     }
-    return normalized;
+    return allowed.get(normalized) || normalized;
   }
 
   async function normalizeAndValidateDataTypeIds(candidate) {
@@ -250,6 +260,53 @@ export function registerQueueConfigRoutes(app, deps) {
       res.json({ success: true, queueName, mode: applied.mode, config: applied.result });
     } catch (e) {
       res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/queues/:managerId/apply-wfl-symbols', async (req, res) => {
+    try {
+      const { managerId } = req.params;
+      const desiredQueues = queueConfigMapFromWorkflowSymbols(req.body?.symbols || {});
+      if (Object.keys(desiredQueues).length === 0) {
+        throw new Error('symbols.queues must contain at least one queue');
+      }
+
+      const snapshot = await getQueueConfigSnapshot(managerId);
+      const diff = diffQueueConfigs(snapshot.config?.queues || {}, desiredQueues, { compareDeclaredFields: true });
+      const applied = { creates: [], updates: [], unchanged: diff.unchanged };
+
+      for (const item of diff.creates) {
+        const selectedTypes = item.desiredConfig.dataTypeIds || inferQueueDataTypeIds(item.queueName);
+        const dataTypeIds = await normalizeAndValidateDataTypeIds(selectedTypes);
+        const config = {
+          ...item.desiredConfig,
+          dataTypeId: dataTypeIds[0],
+          dataTypeIds,
+          ...normalizeQueueDurabilityForCreate(item.desiredConfig),
+          createdByUser: false
+        };
+        const result = await applyQueueConfigOperation(managerId, { type: 'createQueue', queueName: item.queueName, config });
+        applied.creates.push({ queueName: item.queueName, mode: result.mode, config: result.result });
+      }
+
+      for (const item of diff.updates) {
+        const dataTypeIds = await normalizeAndValidateDataTypeIds(item.desiredConfig.dataTypeIds || inferQueueDataTypeIds(item.queueName));
+        const updates = {
+          ...item.desiredConfig,
+          dataTypeId: dataTypeIds[0],
+          dataTypeIds,
+          ...normalizeQueueDurabilityForUpdate(item.desiredConfig),
+          createdByUser: false
+        };
+        const result = await applyQueueConfigOperation(managerId, { type: 'updateQueueConfig', queueName: item.queueName, updates });
+        applied.updates.push({ queueName: item.queueName, mode: result.mode, config: result.result });
+      }
+
+      const systems = systemRegistry.registerWorkflowSymbols(managerId, req.body?.symbols || {});
+
+      return res.json({ success: true, managerId, systems, counts: { creates: applied.creates.length, updates: applied.updates.length, unchanged: applied.unchanged.length }, applied });
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
     }
   });
 

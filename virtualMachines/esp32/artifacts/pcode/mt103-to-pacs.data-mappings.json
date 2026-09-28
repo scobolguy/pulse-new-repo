@@ -1,0 +1,96 @@
+[
+  {
+    "id": "mt103-to-pacs",
+    "name": "mt103-to-pacs",
+    "scope": "global",
+    "ownerServiceId": null,
+    "sourceTypeId": "swift-mt103",
+    "targetTypeId": "pacs",
+    "enabled": true,
+    "description": "",
+    "items": [
+      {
+        "sourcePath": "block4.20",
+        "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := trim(src);"
+      },
+      {
+        "sourcePath": "block4.20",
+        "targetPath": "Document.hdr:AppHdr.hdr:BizMsgIdr",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := trim(src);"
+      },
+      {
+        "sourcePath": "block4.20",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := trim(src);"
+      },
+      {
+        "sourcePath": "block4.32A.date",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := yymmddtoiso(src);"
+      },
+      {
+        "sourcePath": "block4.32A.currency",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := upper(src);"
+      },
+      {
+        "sourcePath": "block4.32A.amount",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := mtamounttodecimal(src);"
+      },
+      {
+        "sourcePath": "block4.50K",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := mtpartyname(src);"
+      },
+      {
+        "sourcePath": "block4.59",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := mtpartyname(src);"
+      },
+      {
+        "sourcePath": "block4.70",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.RmtInf.Ustrd",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := trim(src);"
+      },
+      {
+        "sourcePath": "block4.71A",
+        "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgBr",
+        "kind": "leaf",
+        "sourceValueType": "unknown",
+        "targetValueType": "unknown",
+        "conversionRule": "output := mtchargebearertoiso(src);"
+      }
+    ],
+    "createdAt": "2026-09-20T14:07:40.026Z",
+    "updatedAt": "2026-09-20T14:07:40.026Z"
+  }
+]

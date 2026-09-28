@@ -1,0 +1,883 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-22T00:09:54.957Z",
+  "serviceId": "GenericMapperDemo",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "GenericMapperDemo",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-program",
+  "sourceLanguage": "pascalish",
+  "entries": [
+    {
+      "kind": "mapper",
+      "id": "cbds-mt103-to-pacs008",
+      "scope": "global",
+      "ownerServiceId": null,
+      "sourceTypeId": "swift-mt103",
+      "targetTypeId": "pacs",
+      "items": [
+        {
+          "sourcePath": "finEnvelope.block4.fields.20",
+          "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "finEnvelope.block4.fields.20",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.InstrId",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "finEnvelope.block4.fields.21",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "finEnvelope.block4.fields.23B",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtTpInf.LclInstrm.Prtry",
+          "conversionRule": "output := upper(trim(src));"
+        },
+        {
+          "sourcePath": "finEnvelope.block4.fields.32A.components.valueDate",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt",
+          "conversionRule": "output := yymmddtoiso(src);"
+        },
+        {
+          "sourcePath": "finEnvelope.block4.fields.32A.components.currency",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy",
+          "conversionRule": "output := upper(trim(src));"
+        },
+        {
+          "sourcePath": "finEnvelope.block4.fields.32A.components.amount",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text",
+          "conversionRule": "output := mtamounttodecimal(src);"
+        },
+        {
+          "sourcePath": "finEnvelope.block4.fields.33B.components.currency",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstdAmt.@Ccy",
+          "conversionRule": "output := upper(trim(src));"
+        },
+        {
+          "sourcePath": "finEnvelope.block4.fields.33B.components.amount",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstdAmt.#text",
+          "conversionRule": "output := mtamounttodecimal(src);"
+        },
+        {
+          "sourcePath": "finEnvelope.block4.fields.50K",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm",
+          "conversionRule": "output := mtpartyname(src);"
+        },
+        {
+          "sourcePath": "finEnvelope.block4.fields.52A",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI",
+          "conversionRule": "output := upper(trim(src));"
+        },
+        {
+          "sourcePath": "finEnvelope.block4.fields.53A",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrmyAgt1.FinInstnId.BICFI",
+          "conversionRule": "output := upper(trim(src));"
+        },
+        {
+          "sourcePath": "finEnvelope.block4.fields.56A",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrmyAgt2.FinInstnId.BICFI",
+          "conversionRule": "output := upper(trim(src));"
+        },
+        {
+          "sourcePath": "finEnvelope.block4.fields.57A",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI",
+          "conversionRule": "output := upper(trim(src));"
+        },
+        {
+          "sourcePath": "finEnvelope.block4.fields.59",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm",
+          "conversionRule": "output := mtpartyname(src);"
+        },
+        {
+          "sourcePath": "finEnvelope.block4.fields.70",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.RmtInf.Ustrd",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "finEnvelope.block4.fields.71A",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgBr",
+          "conversionRule": "output := mtchargebearertoiso(src);"
+        },
+        {
+          "sourcePath": "finEnvelope.block4.fields.71B",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgsInf.Amt.#text",
+          "conversionRule": "output := mtamounttodecimal(src);"
+        },
+        {
+          "sourcePath": "finEnvelope.block4.fields.72",
+          "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstrForNxtAgt.InstrInf",
+          "conversionRule": "output := trim(src);"
+        },
+        {
+          "sourcePath": "finEnvelope.meta.createdAt",
+          "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.CreDtTm",
+          "conversionRule": "output := trim(src);"
+        }
+      ]
+    }
+  ],
+  "localResources": {
+    "serviceId": "GenericMapperDemo",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "routers": [
+    {
+      "type": "RouterDecl",
+      "id": "generic-mapper-router",
+      "inputQueue": "swift.mt103.inbound",
+      "outputs": [
+        {
+          "queueName": "swift.pacs008.outbound",
+          "whenRule": "output := 1;",
+          "transformRule": "output := map('cbds-mt103-to-pacs008', src);"
+        }
+      ]
+    }
+  ],
+  "serviceEndpoints": [],
+  "globals": [
+    "genericInstance"
+  ],
+  "variableDeclarations": [
+    {
+      "type": "VarDecl",
+      "name": "genericInstance",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "user",
+        "id": "GenericMapper",
+        "genericArgs": []
+      }
+    }
+  ],
+  "procedures": {
+    "PROC_GENERICMAPPER_PROCESS": {
+      "name": "GenericMapper.Process",
+      "className": "GenericMapper",
+      "methodName": "Process",
+      "params": [],
+      "genericParams": []
+    },
+    "PROC_GENERICMAPPER_PROCESSED": {
+      "name": "GenericMapper.Processed",
+      "className": "GenericMapper",
+      "methodName": "Processed",
+      "params": [],
+      "genericParams": []
+    }
+  },
+  "typeDeclarations": [],
+  "classDeclarations": [
+    {
+      "type": "ClassDecl",
+      "name": "GenericMapper",
+      "genericParams": [],
+      "extendsType": null,
+      "members": [
+        {
+          "type": "ClassFieldDecl",
+          "name": "processed",
+          "dataType": {
+            "type": "TypeRef",
+            "kind": "simple",
+            "id": "integer",
+            "genericArgs": []
+          }
+        },
+        {
+          "type": "ClassMethodDecl",
+          "methodKind": "procedure",
+          "name": "Process",
+          "genericParams": [],
+          "parameters": [],
+          "returnType": null,
+          "body": {
+            "type": "Block",
+            "statements": [
+              {
+                "type": "Assign",
+                "target": "processed",
+                "expr": {
+                  "type": "Binary",
+                  "op": "+",
+                  "left": {
+                    "type": "Identifier",
+                    "name": "processed"
+                  },
+                  "right": {
+                    "type": "NumberLiteral",
+                    "value": 1
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "ClassMethodDecl",
+          "methodKind": "function",
+          "name": "Processed",
+          "genericParams": [],
+          "parameters": [],
+          "returnType": {
+            "type": "TypeRef",
+            "kind": "simple",
+            "id": "integer",
+            "genericArgs": []
+          },
+          "body": {
+            "type": "Block",
+            "statements": [
+              {
+                "type": "ReturnSuccess",
+                "ref": "processed"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "symbols": {
+    "databases": []
+  },
+  "entryLabel": "MAIN",
+  "typeRegistry": {},
+  "exportedFunctions": [],
+  "mapperImports": [],
+  "sourceMap": {
+    "0": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 1,
+      "sourceText": "program GenericMapperDemo;",
+      "instruction": "JMP MAIN"
+    },
+    "1": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 1,
+      "sourceText": "program GenericMapperDemo;",
+      "instruction": "LOAD GenericMapper__self__processed"
+    },
+    "2": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 3,
+      "sourceText": "class GenericMapper;",
+      "instruction": "PUSH_INT 1"
+    },
+    "3": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 3,
+      "sourceText": "class GenericMapper;",
+      "instruction": "ADD"
+    },
+    "4": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 4,
+      "sourceText": "processed: integer;",
+      "instruction": "STORE GenericMapper__self__processed"
+    },
+    "5": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 4,
+      "sourceText": "processed: integer;",
+      "instruction": "RET"
+    },
+    "6": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 5,
+      "sourceText": "procedure Process();",
+      "instruction": "ORCH_RETURN_SUCCESS \"processed\""
+    },
+    "7": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 5,
+      "sourceText": "procedure Process();",
+      "instruction": "RET"
+    },
+    "8": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 6,
+      "sourceText": "begin",
+      "instruction": "SRC_GET \"finEnvelope.block4.fields.20\""
+    },
+    "9": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 6,
+      "sourceText": "begin",
+      "instruction": "TRIM"
+    },
+    "10": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 7,
+      "sourceText": "processed := processed + 1",
+      "instruction": "OUT_SET \"Document.FIToFICstmrCdtTrf.GrpHdr.MsgId\""
+    },
+    "11": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 7,
+      "sourceText": "processed := processed + 1",
+      "instruction": "SRC_GET \"finEnvelope.block4.fields.20\""
+    },
+    "12": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 8,
+      "sourceText": "end;",
+      "instruction": "TRIM"
+    },
+    "13": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 8,
+      "sourceText": "end;",
+      "instruction": "OUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.InstrId\""
+    },
+    "14": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 10,
+      "sourceText": "function Processed(): integer;",
+      "instruction": "SRC_GET \"finEnvelope.block4.fields.21\""
+    },
+    "15": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 10,
+      "sourceText": "function Processed(): integer;",
+      "instruction": "TRIM"
+    },
+    "16": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 11,
+      "sourceText": "begin",
+      "instruction": "OUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId\""
+    },
+    "17": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 11,
+      "sourceText": "begin",
+      "instruction": "SRC_GET \"finEnvelope.block4.fields.23B\""
+    },
+    "18": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 12,
+      "sourceText": "return processed",
+      "instruction": "TRIM"
+    },
+    "19": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 12,
+      "sourceText": "return processed",
+      "instruction": "UPPER"
+    },
+    "20": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 13,
+      "sourceText": "end;",
+      "instruction": "OUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtTpInf.LclInstrm.Prtry\""
+    },
+    "21": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 13,
+      "sourceText": "end;",
+      "instruction": "SRC_GET \"finEnvelope.block4.fields.32A.components.valueDate\""
+    },
+    "22": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 14,
+      "sourceText": "end;",
+      "instruction": "YYMMDD_TO_ISO"
+    },
+    "23": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 14,
+      "sourceText": "end;",
+      "instruction": "OUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt\""
+    },
+    "24": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 16,
+      "sourceText": "MAPPER \"cbds-mt103-to-pacs008\" SOURCE \"swift-mt103\" TARGET \"pacs\" DESCRIPTION \"GenericMapper MT103 to PACS.008 transformation\" ENABLED TRUE BEGIN",
+      "instruction": "SRC_GET \"finEnvelope.block4.fields.32A.components.currency\""
+    },
+    "25": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 16,
+      "sourceText": "MAPPER \"cbds-mt103-to-pacs008\" SOURCE \"swift-mt103\" TARGET \"pacs\" DESCRIPTION \"GenericMapper MT103 to PACS.008 transformation\" ENABLED TRUE BEGIN",
+      "instruction": "TRIM"
+    },
+    "26": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 17,
+      "sourceText": "MAP \"finEnvelope.block4.fields.20\" TO \"Document.FIToFICstmrCdtTrf.GrpHdr.MsgId\" USING \"output := trim(src);\";",
+      "instruction": "UPPER"
+    },
+    "27": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 17,
+      "sourceText": "MAP \"finEnvelope.block4.fields.20\" TO \"Document.FIToFICstmrCdtTrf.GrpHdr.MsgId\" USING \"output := trim(src);\";",
+      "instruction": "OUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy\""
+    },
+    "28": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 18,
+      "sourceText": "MAP \"finEnvelope.block4.fields.20\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.InstrId\" USING \"output := trim(src);\";",
+      "instruction": "SRC_GET \"finEnvelope.block4.fields.32A.components.amount\""
+    },
+    "29": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 18,
+      "sourceText": "MAP \"finEnvelope.block4.fields.20\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.InstrId\" USING \"output := trim(src);\";",
+      "instruction": "MT_AMOUNT_TO_DECIMAL"
+    },
+    "30": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 19,
+      "sourceText": "MAP \"finEnvelope.block4.fields.21\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId\" USING \"output := trim(src);\";",
+      "instruction": "OUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text\""
+    },
+    "31": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 19,
+      "sourceText": "MAP \"finEnvelope.block4.fields.21\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId\" USING \"output := trim(src);\";",
+      "instruction": "SRC_GET \"finEnvelope.block4.fields.33B.components.currency\""
+    },
+    "32": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 20,
+      "sourceText": "MAP \"finEnvelope.block4.fields.23B\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtTpInf.LclInstrm.Prtry\" USING \"output := upper(trim(src));\";",
+      "instruction": "TRIM"
+    },
+    "33": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 20,
+      "sourceText": "MAP \"finEnvelope.block4.fields.23B\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtTpInf.LclInstrm.Prtry\" USING \"output := upper(trim(src));\";",
+      "instruction": "UPPER"
+    },
+    "34": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 21,
+      "sourceText": "MAP \"finEnvelope.block4.fields.32A.components.valueDate\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt\" USING \"output := yymmddtoiso(src);\";",
+      "instruction": "OUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstdAmt.@Ccy\""
+    },
+    "35": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 21,
+      "sourceText": "MAP \"finEnvelope.block4.fields.32A.components.valueDate\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt\" USING \"output := yymmddtoiso(src);\";",
+      "instruction": "SRC_GET \"finEnvelope.block4.fields.33B.components.amount\""
+    },
+    "36": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 22,
+      "sourceText": "MAP \"finEnvelope.block4.fields.32A.components.currency\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy\" USING \"output := upper(trim(src));\";",
+      "instruction": "MT_AMOUNT_TO_DECIMAL"
+    },
+    "37": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 22,
+      "sourceText": "MAP \"finEnvelope.block4.fields.32A.components.currency\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy\" USING \"output := upper(trim(src));\";",
+      "instruction": "OUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstdAmt.#text\""
+    },
+    "38": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 23,
+      "sourceText": "MAP \"finEnvelope.block4.fields.32A.components.amount\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text\" USING \"output := mtamounttodecimal(src);\";",
+      "instruction": "SRC_GET \"finEnvelope.block4.fields.50K\""
+    },
+    "39": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 23,
+      "sourceText": "MAP \"finEnvelope.block4.fields.32A.components.amount\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text\" USING \"output := mtamounttodecimal(src);\";",
+      "instruction": "MT_PARTY_NAME"
+    },
+    "40": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 24,
+      "sourceText": "MAP \"finEnvelope.block4.fields.33B.components.currency\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstdAmt.@Ccy\" USING \"output := upper(trim(src));\";",
+      "instruction": "OUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm\""
+    },
+    "41": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 24,
+      "sourceText": "MAP \"finEnvelope.block4.fields.33B.components.currency\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstdAmt.@Ccy\" USING \"output := upper(trim(src));\";",
+      "instruction": "SRC_GET \"finEnvelope.block4.fields.52A\""
+    },
+    "42": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 25,
+      "sourceText": "MAP \"finEnvelope.block4.fields.33B.components.amount\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstdAmt.#text\" USING \"output := mtamounttodecimal(src);\";",
+      "instruction": "TRIM"
+    },
+    "43": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 25,
+      "sourceText": "MAP \"finEnvelope.block4.fields.33B.components.amount\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstdAmt.#text\" USING \"output := mtamounttodecimal(src);\";",
+      "instruction": "UPPER"
+    },
+    "44": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 26,
+      "sourceText": "MAP \"finEnvelope.block4.fields.50K\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm\" USING \"output := mtpartyname(src);\";",
+      "instruction": "OUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI\""
+    },
+    "45": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 26,
+      "sourceText": "MAP \"finEnvelope.block4.fields.50K\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm\" USING \"output := mtpartyname(src);\";",
+      "instruction": "SRC_GET \"finEnvelope.block4.fields.53A\""
+    },
+    "46": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 27,
+      "sourceText": "MAP \"finEnvelope.block4.fields.52A\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI\" USING \"output := upper(trim(src));\";",
+      "instruction": "TRIM"
+    },
+    "47": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 27,
+      "sourceText": "MAP \"finEnvelope.block4.fields.52A\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI\" USING \"output := upper(trim(src));\";",
+      "instruction": "UPPER"
+    },
+    "48": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 28,
+      "sourceText": "MAP \"finEnvelope.block4.fields.53A\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrmyAgt1.FinInstnId.BICFI\" USING \"output := upper(trim(src));\";",
+      "instruction": "OUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrmyAgt1.FinInstnId.BICFI\""
+    },
+    "49": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 28,
+      "sourceText": "MAP \"finEnvelope.block4.fields.53A\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrmyAgt1.FinInstnId.BICFI\" USING \"output := upper(trim(src));\";",
+      "instruction": "SRC_GET \"finEnvelope.block4.fields.56A\""
+    },
+    "50": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 29,
+      "sourceText": "MAP \"finEnvelope.block4.fields.56A\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrmyAgt2.FinInstnId.BICFI\" USING \"output := upper(trim(src));\";",
+      "instruction": "TRIM"
+    },
+    "51": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 29,
+      "sourceText": "MAP \"finEnvelope.block4.fields.56A\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrmyAgt2.FinInstnId.BICFI\" USING \"output := upper(trim(src));\";",
+      "instruction": "UPPER"
+    },
+    "52": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 30,
+      "sourceText": "MAP \"finEnvelope.block4.fields.57A\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI\" USING \"output := upper(trim(src));\";",
+      "instruction": "OUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrmyAgt2.FinInstnId.BICFI\""
+    },
+    "53": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 30,
+      "sourceText": "MAP \"finEnvelope.block4.fields.57A\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI\" USING \"output := upper(trim(src));\";",
+      "instruction": "SRC_GET \"finEnvelope.block4.fields.57A\""
+    },
+    "54": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 31,
+      "sourceText": "MAP \"finEnvelope.block4.fields.59\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm\" USING \"output := mtpartyname(src);\";",
+      "instruction": "TRIM"
+    },
+    "55": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 31,
+      "sourceText": "MAP \"finEnvelope.block4.fields.59\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm\" USING \"output := mtpartyname(src);\";",
+      "instruction": "UPPER"
+    },
+    "56": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 32,
+      "sourceText": "MAP \"finEnvelope.block4.fields.70\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.RmtInf.Ustrd\" USING \"output := trim(src);\";",
+      "instruction": "OUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI\""
+    },
+    "57": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 32,
+      "sourceText": "MAP \"finEnvelope.block4.fields.70\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.RmtInf.Ustrd\" USING \"output := trim(src);\";",
+      "instruction": "SRC_GET \"finEnvelope.block4.fields.59\""
+    },
+    "58": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 33,
+      "sourceText": "MAP \"finEnvelope.block4.fields.71A\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgBr\" USING \"output := mtchargebearertoiso(src);\";",
+      "instruction": "MT_PARTY_NAME"
+    },
+    "59": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 33,
+      "sourceText": "MAP \"finEnvelope.block4.fields.71A\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgBr\" USING \"output := mtchargebearertoiso(src);\";",
+      "instruction": "OUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm\""
+    },
+    "60": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 34,
+      "sourceText": "MAP \"finEnvelope.block4.fields.71B\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgsInf.Amt.#text\" USING \"output := mtamounttodecimal(src);\";",
+      "instruction": "SRC_GET \"finEnvelope.block4.fields.70\""
+    },
+    "61": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 34,
+      "sourceText": "MAP \"finEnvelope.block4.fields.71B\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgsInf.Amt.#text\" USING \"output := mtamounttodecimal(src);\";",
+      "instruction": "TRIM"
+    },
+    "62": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 35,
+      "sourceText": "MAP \"finEnvelope.block4.fields.72\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstrForNxtAgt.InstrInf\" USING \"output := trim(src);\";",
+      "instruction": "OUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.RmtInf.Ustrd\""
+    },
+    "63": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 35,
+      "sourceText": "MAP \"finEnvelope.block4.fields.72\" TO \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstrForNxtAgt.InstrInf\" USING \"output := trim(src);\";",
+      "instruction": "SRC_GET \"finEnvelope.block4.fields.71A\""
+    },
+    "64": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 36,
+      "sourceText": "MAP \"finEnvelope.meta.createdAt\" TO \"Document.FIToFICstmrCdtTrf.GrpHdr.CreDtTm\" USING \"output := trim(src);\";",
+      "instruction": "MT_CHARGE_TO_ISO"
+    },
+    "65": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 36,
+      "sourceText": "MAP \"finEnvelope.meta.createdAt\" TO \"Document.FIToFICstmrCdtTrf.GrpHdr.CreDtTm\" USING \"output := trim(src);\";",
+      "instruction": "OUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgBr\""
+    },
+    "66": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 37,
+      "sourceText": "END;",
+      "instruction": "SRC_GET \"finEnvelope.block4.fields.71B\""
+    },
+    "67": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 37,
+      "sourceText": "END;",
+      "instruction": "MT_AMOUNT_TO_DECIMAL"
+    },
+    "68": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 39,
+      "sourceText": "ROUTER \"generic-mapper-router\" INPUT \"swift.mt103.inbound\" DESCRIPTION \"Process MT103 through GenericMapper\" ENABLED TRUE BEGIN",
+      "instruction": "OUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgsInf.Amt.#text\""
+    },
+    "69": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 39,
+      "sourceText": "ROUTER \"generic-mapper-router\" INPUT \"swift.mt103.inbound\" DESCRIPTION \"Process MT103 through GenericMapper\" ENABLED TRUE BEGIN",
+      "instruction": "SRC_GET \"finEnvelope.block4.fields.72\""
+    },
+    "70": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 40,
+      "sourceText": "OUTPUT \"swift.pacs008.outbound\" TYPE \"pacs\"",
+      "instruction": "TRIM"
+    },
+    "71": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 40,
+      "sourceText": "OUTPUT \"swift.pacs008.outbound\" TYPE \"pacs\"",
+      "instruction": "OUT_SET \"Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstrForNxtAgt.InstrInf\""
+    },
+    "72": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 41,
+      "sourceText": "WHEN \"output := 1;\"",
+      "instruction": "SRC_GET \"finEnvelope.meta.createdAt\""
+    },
+    "73": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 41,
+      "sourceText": "WHEN \"output := 1;\"",
+      "instruction": "TRIM"
+    },
+    "74": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 42,
+      "sourceText": "TRANSFORM \"output := map('cbds-mt103-to-pacs008', src);\";",
+      "instruction": "OUT_SET \"Document.FIToFICstmrCdtTrf.GrpHdr.CreDtTm\""
+    },
+    "75": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 42,
+      "sourceText": "TRANSFORM \"output := map('cbds-mt103-to-pacs008', src);\";",
+      "instruction": "RET"
+    },
+    "76": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 43,
+      "sourceText": "END;",
+      "instruction": "PUSH_INT 0"
+    },
+    "77": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 43,
+      "sourceText": "END;",
+      "instruction": "STORE GenericMapper__self__processed"
+    },
+    "78": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 45,
+      "sourceText": "var",
+      "instruction": "PUSH_INT 0"
+    },
+    "79": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 45,
+      "sourceText": "var",
+      "instruction": "STORE genericInstance"
+    },
+    "80": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 46,
+      "sourceText": "genericInstance: GenericMapper;",
+      "instruction": "CALL PROC_GENERICMAPPER_PROCESS 0"
+    },
+    "81": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 46,
+      "sourceText": "genericInstance: GenericMapper;",
+      "instruction": "ROUTE_MATCH_QUEUE \"swift.mt103.inbound\""
+    },
+    "82": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 48,
+      "sourceText": "begin",
+      "instruction": "JZ ROUTER_SKIP_1"
+    },
+    "83": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 48,
+      "sourceText": "begin",
+      "instruction": "ROUTE_EVAL_WHEN \"output := 1;\""
+    },
+    "84": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 49,
+      "sourceText": "genericInstance.Process();",
+      "instruction": "JZ OUT_SKIP_2"
+    },
+    "85": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 49,
+      "sourceText": "genericInstance.Process();",
+      "instruction": "ROUTE_MAP_RUN \"cbds-mt103-to-pacs008\""
+    },
+    "86": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 50,
+      "sourceText": "end.",
+      "instruction": "ROUTE_EMIT \"swift.pacs008.outbound\""
+    },
+    "87": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 50,
+      "sourceText": "end.",
+      "instruction": "HALT"
+    }
+  },
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "872336dcfea10c5ba4b042d22223dacc03a8b021aee57a6cd7da5e0f7b267793",
+    "signedAt": "2026-09-22T00:09:54.963Z",
+    "pcodeLength": 3027,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

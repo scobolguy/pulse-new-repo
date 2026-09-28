@@ -410,6 +410,11 @@ async function run() {
             state = STATES.CHECK_CADDY;
             continue;
           }
+          if (frontendStartAttempt > 0) {
+            await appendLog('frontend-listener-wait', { state, frontendUrl: FRONTEND_URL, occupiedBy });
+            state = STATES.WAIT_FRONTEND;
+            continue;
+          }
           await appendFailureNote({ type: 'port-occupied', state, port: FRONTEND_PORT, occupiedBy, command: FRONTEND_CMD });
           throw new Error(`Port ${FRONTEND_PORT} is already occupied before frontend launch`);
         }

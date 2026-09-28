@@ -1,6 +1,8 @@
 import { compileRouterMapperDSL } from './compile-pascal.mjs';
 import { compileCobolishWithAntlr } from './cobolish-antlr-compiler.mjs';
 import { compileVbishWithAntlr } from './vbish-antlr-compiler.mjs';
+import { compileCobolishToPcode } from './compile-cobolish-to-pcode.mjs';
+import { compileVbishToPcode } from './compile-vbish-to-pcode.mjs';
 import { emitMapperRoutinePcode } from './compile-mapping-rule.mjs';
 import { dslDebug, dslError } from './dsl-debug.mjs';
 
@@ -63,6 +65,12 @@ function buildPascalishRuntimeSource(runtime, interop, integration = {}) {
   const assignmentLines = (integration.assignments || []).map((assignment) =>
     `  ${String(assignment.target || '').toLowerCase()} := ${assignment.value || "''"};`
   );
+  const databaseLines = (integration.databases || []).map((database) =>
+    `database ${database.symbol} type ${database.typeName};`
+  );
+  const databaseCallLines = (integration.databaseCalls || []).map((call) =>
+    `  ${call.operation}(${(call.args || []).join(', ')});`
+  );
   const placementPart = runtime.placement ? ` on ${runtime.placement}` : '';
   const refreshPart = runtime.refresh ? runtime.refresh : '';
   const header = `${runtime.kind} "${runtime.id}"${placementPart}${refreshPart};`;
@@ -74,8 +82,10 @@ function buildPascalishRuntimeSource(runtime, interop, integration = {}) {
     ...mapperLines,
     ...mapperDeclLines,
     ...declarations,
+    ...databaseLines,
     'begin',
     ...assignmentLines,
+    ...databaseCallLines,
     ...routeLines,
     'end.'
   ].filter(Boolean).join('\n');
@@ -89,7 +99,9 @@ function buildCommonArtifact(language, sourceText, runtime, interop, native) {
     mapperImports: native?.mapperImports || [],
     routes: native?.routes || [],
     mappers: native?.mappers || [],
-    assignments: native?.assignments || []
+    assignments: native?.assignments || [],
+    databases: native?.databases || [],
+    databaseCalls: native?.databaseCalls || []
   };
   const portableSource = native?.pascalishSource || buildPascalishRuntimeSource(runtime, interop, integration);
   const portable = compileRouterMapperDSL(portableSource);
@@ -138,6 +150,27 @@ function buildCommonArtifact(language, sourceText, runtime, interop, native) {
     portable.pcodeText = `${lines.join('\n')}\n`;
   }
   portable.programMap.globals = [...new Set([...(portable.programMap.globals || []), ...(native.assignments || []).map(item => String(item.target || '').trim()), ...(native.displayVariables || [])])];
+  const systems = Array.isArray(native?.systems) ? native.systems : [];
+  if (systems.length > 0) {
+    const systemSymbols = systems.map(system => ({
+      name: system.name,
+      systemId: system.systemId || system.name,
+      typeName: system.typeName || null,
+      abstract: system.abstract === true,
+      visibility: system.visibility || 'internal',
+      members: system.members || []
+    }));
+    portable.programMap.symbols = {
+      ...(portable.programMap.symbols || {}),
+      systems: systemSymbols,
+      queues: systemSymbols.filter(system => !system.abstract).flatMap(system => (system.members || [])
+        .filter(member => member.kind === 'queue')
+        .map(member => ({ ...member, systemId: system.systemId, queueName: `${system.systemId}.${member.queueName}` }))),
+      services: systemSymbols.filter(system => !system.abstract).flatMap(system => (system.members || [])
+        .filter(member => member.kind === 'service')
+        .map(member => ({ ...member, systemId: system.systemId })))
+    };
+  }
   const mapperRoutines = (portable.programMap?.entries || [])
     .filter((entry) => entry?.kind === 'mapper')
     .map((entry) => emitMapperRoutinePcode(entry));
@@ -167,7 +200,21 @@ export function compileCobolishToPmachine(sourceText, options = {}) {
   }
   const runtime = parseRuntimeDirective(sourceText, normalizeId(native.programId, 'cobolish-program'));
   const interop = native.interop.length > 0 ? native.interop : extractInterop(sourceText);
-  const result = buildCommonArtifact('cobolish', sourceText, runtime, interop, native);
+  const compiled = compileCobolishToPcode(sourceText);
+  compiled.programMap.symbols = {
+    ...(compiled.programMap.symbols || {}),
+    databases: native.databases || []
+  };
+  const result = {
+    ...compiled,
+    language: 'cobolish',
+    sourceLanguage: 'cobolish',
+    compilerPipeline: 'cobolish-to-pcode',
+    runtimeUnit: { kind: runtime.kind, id: runtime.id, refreshMs: null },
+    interoperability: interop,
+    native,
+    source: String(sourceText || '')
+  };
   dslDebug('cobolish', 'compile:complete', { runtimeId: result.runtimeUnit?.id });
   return result;
 }
@@ -177,9 +224,9 @@ export function compileVbishToPmachine(sourceText, options = {}) {
   let native;
   try { native = compileVbishWithAntlr(sourceText, options); } catch (error) { throw dslError('vbish', 'antlr', error); }
   if (!native.valid) throw dslError('vbish', 'parse', new Error(native.syntaxErrors.join('\n')));
-  const runtime = native.runtime || parseRuntimeDirective(sourceText, normalizeId(options.fileName?.replace(/\.[^.]+$/, ''), 'vbish-program'));
-  const refresh = runtime.kind === 'daemon' && runtime.interval > 0 ? ` refresh ${runtime.interval} ${runtime.unit}` : '';
-  const result = buildCommonArtifact('vbish', sourceText, { ...runtime, refresh }, native.interop, native);
+  const result = compileVbishToPcode(sourceText, options);
+  result.interoperability = native.interop;
+  result.source = String(sourceText || '');
   dslDebug('vbish', 'compile:complete', { runtimeId: result.runtimeUnit?.id });
   return result;
 }

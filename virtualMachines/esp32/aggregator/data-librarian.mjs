@@ -1,6 +1,7 @@
 import express from 'express';
 import fs from 'fs/promises';
 import path from 'path';
+import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 import { readEnvNumber } from './src/env-config.mjs';
 
@@ -950,24 +951,31 @@ async function loadDataTypes() {
       const content = await fs.readFile(targetPath, 'utf-8');
       const stored = JSON.parse(content);
       const list = Array.isArray(stored) ? stored : [];
-      return list
+      const types = ensureUniqueCanonicalDataTypeIds(list
         .map(normalizeDataTypeRecord)
-        .filter((item) => !!item);
+        .filter((item) => !!item));
+      return {
+        types,
+        needsPersist: JSON.stringify(list) !== JSON.stringify(types)
+      };
     } catch {
-      return [];
+      return { types: [], needsPersist: false };
     }
   }
 
-  const primaryTypes = await readTypesFromFile(DATA_TYPES_PATH);
-  if (primaryTypes.length > 0) {
-    return primaryTypes;
+  const primary = await readTypesFromFile(DATA_TYPES_PATH);
+  if (primary.types.length > 0) {
+    if (primary.needsPersist) {
+      await saveDataTypes(primary.types);
+    }
+    return primary.types;
   }
 
-  const legacyTypes = await readTypesFromFile(LEGACY_DATA_TYPES_PATH);
-  if (legacyTypes.length > 0) {
+  const legacy = await readTypesFromFile(LEGACY_DATA_TYPES_PATH);
+  if (legacy.types.length > 0) {
     // Backfill the new location so subsequent reads use the canonical path.
-    await saveDataTypes(legacyTypes);
-    return legacyTypes;
+    await saveDataTypes(legacy.types);
+    return legacy.types;
   }
 
   return [];
@@ -978,7 +986,7 @@ async function saveDataTypes(types) {
   const normalized = (Array.isArray(types) ? types : [])
     .map(normalizeDataTypeRecord)
     .filter((item) => !!item);
-  await fs.writeFile(DATA_TYPES_PATH, JSON.stringify(normalized, null, 2));
+  await fs.writeFile(DATA_TYPES_PATH, JSON.stringify(ensureUniqueCanonicalDataTypeIds(normalized), null, 2));
 }
 
 const ISO_TYPE_PREFIXES = [
@@ -994,19 +1002,112 @@ function inferIsoTypeFromId(idValue) {
   return ISO_TYPE_PREFIXES.some((prefix) => id === prefix || id.startsWith(`${prefix}.`) || id.startsWith(`${prefix}-`));
 }
 
-function normalizeDataTypeRecord(candidate) {
+function slugifyDataTypeName(value) {
+  return String(value || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase();
+}
+
+function deriveCanonicalDataTypeId(logicalId, fallbackId = '') {
+  return `type:${slugifyDataTypeName(logicalId || fallbackId || 'unnamed') || 'unnamed'}`;
+}
+
+function ensureUniqueCanonicalDataTypeIds(types) {
+  const records = Array.isArray(types) ? types.map(item => ({ ...item })) : [];
+  const byCanonicalId = new Map();
+  for (const record of records) {
+    const canonicalId = String(record.canonicalId || '').trim().toLowerCase();
+    if (!canonicalId) continue;
+    const group = byCanonicalId.get(canonicalId) || [];
+    group.push(record);
+    byCanonicalId.set(canonicalId, group);
+  }
+
+  for (const [canonicalId, group] of byCanonicalId.entries()) {
+    if (group.length < 2) continue;
+    for (const record of group) {
+      const logicalId = String(record.logicalId || record.id || 'unnamed').trim().toLowerCase();
+      const suffix = createHash('sha256').update(logicalId).digest('hex').slice(0, 10);
+      const uniqueCanonicalId = `${canonicalId}-${suffix}`;
+      record.canonicalId = uniqueCanonicalId;
+      record.aliases = mergeUniqueAliases(record.aliases, canonicalId, uniqueCanonicalId);
+    }
+  }
+
+  return records;
+}
+
+function mergeUniqueAliases(existingAliases, ...values) {
+  const aliases = [];
+  for (const value of values) {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const alias = String(item || '').trim();
+        if (alias) aliases.push(alias);
+      }
+      continue;
+    }
+    const alias = String(value || '').trim();
+    if (alias) aliases.push(alias);
+  }
+
+  if (Array.isArray(existingAliases)) {
+    for (const item of existingAliases) {
+      const alias = String(item || '').trim();
+      if (alias) aliases.push(alias);
+    }
+  }
+
+  return Array.from(new Set(aliases.filter(Boolean)));
+}
+
+function ensureCanonicalDataTypeMetadata(candidate) {
   if (!candidate || typeof candidate !== 'object') return null;
-  const id = String(candidate.id || '').trim().toLowerCase();
-  if (!id) return null;
-  const label = String(candidate.label || id).trim() || id;
-  const builtin = candidate.builtin === true;
-  const isIso = typeof candidate.isIso === 'boolean' ? candidate.isIso : inferIsoTypeFromId(id);
-  const next = {
+
+  const logicalId = String(candidate.logicalId || candidate.id || '').trim().toLowerCase();
+  const id = String(candidate.id || logicalId || '').trim().toLowerCase();
+  const canonicalId = String(candidate.canonicalId || '').trim().toLowerCase();
+  const normalizedCanonicalId = canonicalId.startsWith('type:') ? canonicalId : deriveCanonicalDataTypeId(logicalId || id, id);
+
+  return {
     ...candidate,
     id,
+    logicalId: logicalId || id,
+    canonicalId: normalizedCanonicalId,
+    aliases: mergeUniqueAliases(
+      candidate.aliases,
+      logicalId || id,
+      id,
+      normalizedCanonicalId,
+      slugifyDataTypeName(logicalId || id),
+      canonicalId || normalizedCanonicalId,
+    ),
+  };
+}
+
+function normalizeDataTypeRecord(candidate) {
+  if (!candidate || typeof candidate !== 'object') return null;
+  const enriched = ensureCanonicalDataTypeMetadata(candidate);
+  if (!enriched) return null;
+
+  const id = String(enriched.id || '').trim().toLowerCase();
+  if (!id) return null;
+  const logicalId = String(enriched.logicalId || id).trim().toLowerCase();
+  const canonicalId = String(enriched.canonicalId || deriveCanonicalDataTypeId(logicalId, id)).trim().toLowerCase();
+  const label = String(enriched.label || logicalId || id).trim() || logicalId || id;
+  const builtin = enriched.builtin === true;
+  const isIso = typeof enriched.isIso === 'boolean' ? enriched.isIso : inferIsoTypeFromId(id);
+  const next = {
+    ...enriched,
+    id,
+    logicalId,
+    canonicalId,
     label,
     builtin,
     isIso,
+    aliases: mergeUniqueAliases(enriched.aliases, logicalId, id, canonicalId),
   };
   return next;
 }

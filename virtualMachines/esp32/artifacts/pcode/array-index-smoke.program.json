@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-16T21:41:22.680Z",
+  "serviceId": "ArrayIndexSmoke",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "ArrayIndexSmoke",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-program",
+  "sourceLanguage": "pascalish",
+  "symbols": {
+    "systems": [],
+    "queues": [],
+    "services": [],
+    "databases": [],
+    "tables": []
+  },
+  "typeRegistry": {},
+  "exportedFunctions": [],
+  "entries": [],
+  "localResources": {
+    "serviceId": "ArrayIndexSmoke",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "routers": [],
+  "serviceEndpoints": [],
+  "globals": [
+    "nums_0",
+    "nums_1",
+    "nums_2",
+    "nums_3",
+    "nums_4",
+    "i"
+  ],
+  "variableDeclarations": [
+    {
+      "type": "VarDecl",
+      "name": "nums",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "fixed-array",
+        "id": "array",
+        "low": "0",
+        "high": "4",
+        "elementType": {
+          "type": "TypeRef",
+          "kind": "simple",
+          "id": "integer",
+          "genericArgs": []
+        },
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "i",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "integer",
+        "genericArgs": []
+      }
+    }
+  ],
+  "enums": {},
+  "procedures": {},
+  "typeDeclarations": [],
+  "classDeclarations": [],
+  "entryLabel": "MAIN",
+  "libraries": [],
+  "mapperImports": [],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "1eb54037bdc4cab1a9e75d4f4e914e1842271a88de075d7071246e6667582573",
+    "signedAt": "2026-09-16T21:41:22.686Z",
+    "pcodeLength": 583,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

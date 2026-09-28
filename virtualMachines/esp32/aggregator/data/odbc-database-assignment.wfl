@@ -1,0 +1,4 @@
+DATABASE "SqlLedger" -> "PulseSqlLedger" TYPE "PaymentRecord" MANAGER "db-mssql" CONNECTION "env:MSSQL_DATABASE_CONNECTION_STRING";
+DATABASE "AuditLedger" -> "PulseAudit" TYPE "AuditTrail" MANAGER "db-mssql" CONNECTION "env:MSSQL_DATABASE_CONNECTION_STRING";
+QUEUE "Orders" -> "payments.orders" MANAGER "qm-primary" TYPE "PaymentRecord" MODE SYNC;
+QUEUE "Audit" -> "payments.audit" MANAGER "qm-primary" TYPE "AuditTrail" MODE ASYNC;

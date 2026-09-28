@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-17T12:09:58.349Z",
+  "serviceId": "incoming-messages-daemon",
+  "runtimeUnit": {
+    "kind": "daemon",
+    "id": "incoming-messages-daemon",
+    "refreshMs": 2
+  },
+  "executionModel": "pascalish-daemon",
+  "sourceLanguage": "pascalish",
+  "symbols": {
+    "systems": [],
+    "queues": [],
+    "services": [],
+    "databases": [
+      {
+        "kind": "database",
+        "symbol": "messageStore",
+        "typeName": "sqlserver",
+        "server": "localhost",
+        "schema": "dbo",
+        "catalog": "pulse",
+        "connection": null,
+        "connectionSecret": "messagestore-connection"
+      }
+    ],
+    "tables": [
+      {
+        "kind": "table",
+        "symbol": "incomingMessages",
+        "database": "messageStore",
+        "schema": null,
+        "schemaFromDatabase": false,
+        "rowType": {
+          "type": "TypeRef",
+          "kind": "user",
+          "id": "text",
+          "genericArgs": []
+        },
+        "columns": [
+          {
+            "name": "reference",
+            "dataType": {
+              "type": "TypeRef",
+              "kind": "user",
+              "id": "text",
+              "genericArgs": []
+            }
+          },
+          {
+            "name": "payload",
+            "dataType": {
+              "type": "TypeRef",
+              "kind": "user",
+              "id": "text",
+              "genericArgs": []
+            }
+          },
+          {
+            "name": "status",
+            "dataType": {
+              "type": "TypeRef",
+              "kind": "user",
+              "id": "text",
+              "genericArgs": []
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "typeRegistry": {},
+  "exportedFunctions": [],
+  "entries": [],
+  "localResources": {
+    "serviceId": "incoming-messages-daemon",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "routers": [],
+  "serviceEndpoints": [],
+  "globals": [
+    "msg",
+    "seen"
+  ],
+  "variableDeclarations": [
+    {
+      "type": "VarDecl",
+      "name": "msg",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "user",
+        "id": "mt103",
+        "genericArgs": []
+      }
+    },
+    {
+      "type": "VarDecl",
+      "name": "seen",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "string",
+        "genericArgs": []
+      }
+    }
+  ],
+  "enums": {},
+  "procedures": {},
+  "typeDeclarations": [],
+  "classDeclarations": [],
+  "entryLabel": "MAIN",
+  "libraries": [],
+  "mapperImports": []
+}

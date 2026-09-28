@@ -2,13 +2,14 @@ import fs from 'fs/promises';
 import path from 'path';
 import { pathToFileURL } from 'url';
 import { compileWorkflowDSL } from './compile-workflow-dsl.mjs';
+import { buildPcodeSourceMap } from './pcode-source-map.mjs';
 
 function parseArgs(argv) {
   const args = {
     in: './data/workflow.wfl',
     workflow: null,
-    out: '../pcode/workflow-router.pcode',
-    outMap: '../pcode/workflow-router.program.json'
+    out: '../artifacts/pcode/workflow-router.pcode',
+    outMap: '../artifacts/pcode/workflow-router.program.json'
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -149,7 +150,7 @@ function emitStatements(steps, lines, labels, branchCounterRef) {
   }
 }
 
-function compileWorkflowToPcode(compiled, workflowId) {
+export function compileWorkflowToPcode(compiled, workflowId, options = {}) {
   const workflow = (compiled.workflows || []).find(item => item.id === workflowId);
   if (!workflow) {
     throw new Error(`Workflow not found: ${workflowId}`);
@@ -192,6 +193,12 @@ function compileWorkflowToPcode(compiled, workflowId) {
     instructionCount: address,
     pcodeText: `${lines.join('\n')}\n`,
     programMap,
+    sourceMap: buildPcodeSourceMap({
+      pcodeText: `${lines.join('\n')}\n`,
+      sourceText: options.sourceText || '',
+      sourceFile: options.fileName || null,
+      sourceLanguage: 'wfl'
+    }),
     notes: emitted
   };
 }
@@ -207,7 +214,7 @@ async function main() {
     throw new Error('No workflow found to compile');
   }
 
-  const out = compileWorkflowToPcode(compiled, workflowId);
+  const out = compileWorkflowToPcode(compiled, workflowId, { sourceText, fileName: inputPath });
 
   const outPath = path.resolve(args.out);
   const outMapPath = path.resolve(args.outMap);

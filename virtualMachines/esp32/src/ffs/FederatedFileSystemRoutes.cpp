@@ -417,6 +417,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
             String peerId = getParamValue(request, "peer");
             String type = getParamValue(request, "type");
             String readOnlyValue = getParamValue(request, "readOnly");
+            String persistValue = getParamValue(request, "persist");
 
             if (mountPoint.length() == 0) {
                 request->send(400, "text/plain", "Missing mount param");
@@ -426,6 +427,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
             if (type.length() == 0) type = peerId.length() > 0 ? "peer" : "local";
             FFSMountType mountType = mountTypeFromString(type);
             bool readOnly = parseBoolLike(readOnlyValue, mountType == FFSMountType::Peer);
+            bool persist = parseBoolLike(persistValue, true);
 
             if (mountType == FFSMountType::Peer) {
                 if (peerId.length() == 0) {
@@ -440,7 +442,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
                 }
             }
 
-            FFSStatus st = federatedFS.addMountPoint(mountPoint, targetPath, mountType, peerId, readOnly);
+            FFSStatus st = federatedFS.addMountPoint(mountPoint, targetPath, mountType, peerId, readOnly, persist);
             request->send(st == FFSStatus::OK ? 200 : 500, "application/json", st == FFSStatus::OK ? "{\"status\":\"ok\"}" : "{\"status\":\"error\"}");
         };
         server.on("/ffs/mount", HTTP_POST, mountHandler);

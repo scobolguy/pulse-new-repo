@@ -1,0 +1,18 @@
+solution payment_ingestion;
+problem "Accept MT103 messages, persist them, convert them, and route PACS008 output";
+
+system PaymentSystem;
+database MessageStore provider sqlserver table incoming_messages manager db-mssql physical PaymentMessages;
+queue IncomingMessages type mt103 direction input manager qm-secondary physical swift.mt103.inbound;
+queue OutgoingPayments type pacs008 direction output manager qm-secondary physical swift.pacs008.outbound;
+service ConversionService;
+conversion MT103ToPACS008 input mt103 output pacs008 map "mt103-to-pacs";
+daemon MessageDaemon refresh 2 s reads IncomingMessages writes MessageStore uses ConversionService emits OutgoingPayments;
+
+method process_message(message: mt103): pacs008
+steps
+  validate message;
+  persist message in MessageStore as received;
+  convert message using MT103ToPACS008;
+  emit result to OutgoingPayments;
+end;

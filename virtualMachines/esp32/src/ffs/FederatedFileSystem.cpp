@@ -528,7 +528,7 @@ FFSStatus FederatedFileSystem::fetchFileFromPeer(const String &logicalName, cons
     return FFSStatus::OK;
 }
 
-    FFSStatus FederatedFileSystem::addMountPoint(const String &mountPoint, const String &targetPath, FFSMountType type, const String &peerId, bool readOnly) {
+    FFSStatus FederatedFileSystem::addMountPoint(const String &mountPoint, const String &targetPath, FFSMountType type, const String &peerId, bool readOnly, bool persist) {
         String mount = makeAbsolutePath(mountPoint);
         if (mount == "/") return FFSStatus::ERR_INVALID_ARG;
         if (targetPath.length() == 0 && type == FFSMountType::LocalAlias) return FFSStatus::ERR_INVALID_ARG;
@@ -540,12 +540,12 @@ FFSStatus FederatedFileSystem::fetchFileFromPeer(const String &logicalName, cons
                 entry.peerId = peerId;
                 entry.type = type;
                 entry.readOnly = readOnly;
-                return saveMountPoints();
+                return persist ? saveMountPoints() : FFSStatus::OK;
             }
         }
 
         _mounts.push_back({mount, targetPath, peerId, type, readOnly});
-        return saveMountPoints();
+        return persist ? saveMountPoints() : FFSStatus::OK;
     }
 
     FFSStatus FederatedFileSystem::removeMountPoint(const String &mountPoint) {

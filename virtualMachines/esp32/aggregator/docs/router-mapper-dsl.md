@@ -79,8 +79,8 @@ Output artifacts:
 - data/router-rules.generated.json
 - data/data-mappings.generated.json
 - data/router-mapper-compiled.json (contains AST + emitted artifacts)
-- ../pcode/router-mapper.pcode (portable pcode text)
-- ../pcode/router-mapper.program.json (symbol and metadata sidecar)
+- ../artifacts/pcode/router-mapper.pcode (portable pcode text)
+- ../artifacts/pcode/router-mapper.program.json (symbol and metadata sidecar)
 
 The compiler flow is:
 1. Tokenize DSL
@@ -101,15 +101,15 @@ Compile to portable pcode for PMachine runtimes:
 
 node scripts/compile-pascal-to-pcode.mjs \
   --in data/router-mapper.dsl \
-  --out ../pcode/router-mapper.pcode \
-  --map-out ../pcode/router-mapper.program.json \
-  --manifest ../pcode/pcode-opcodes.manifest.json
+  --out ../artifacts/pcode/router-mapper.pcode \
+  --map-out ../artifacts/pcode/router-mapper.program.json \
+  --manifest ../artifacts/pcode/pcode-opcodes.manifest.json
 
 Run generated .pcode on the JavaScript PMachine runtime:
 
 node scripts/run-js-pmachine.mjs \
-  --pcode ../pcode/router-mapper.pcode \
-  --program-map ../pcode/router-mapper.program.json \
+  --pcode ../artifacts/pcode/router-mapper.pcode \
+  --program-map ../artifacts/pcode/router-mapper.program.json \
   --input-queue swift.mt103.parsed \
   --message "MT103 SAMPLE"
 

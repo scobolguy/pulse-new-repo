@@ -61,6 +61,14 @@ function collectCobolishMetadata(sourceText) {
     serviceId: String(match[1] || match[2] || match[3] || '').trim(),
     input: String(match[4] || 'SRC').trim()
   })).filter(item => item.serviceId);
+  const databases = Array.from(String(sourceText || '').matchAll(/\bDATABASE\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))\s+TYPE\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))/gi), (match) => ({
+    symbol: String(match[1] || match[2] || match[3] || '').trim(),
+    typeName: String(match[4] || match[5] || match[6] || '').trim()
+  })).filter(item => item.symbol && item.typeName);
+  const databaseCalls = Array.from(String(sourceText || '').matchAll(/\bCALL\s+(?:"(DB-(?:INSERT|SELECT|UPDATE|DELETE))"|'(DB-(?:INSERT|SELECT|UPDATE|DELETE))'|(DB-(?:INSERT|SELECT|UPDATE|DELETE)))\s+USING\s+([^\r\n.]+)/gi), (match) => ({
+    operation: String(match[1] || match[2] || match[3] || '').replace(/-/g, ''),
+    args: String(match[4] || '').match(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,]+/g) || []
+  }));
 
   // Extract inline MAPPING SECTION mapper definitions.
   // MAPPER-ENTRY <id> SOURCE-TYPE <s> TARGET-TYPE <t>. MAP-RULE <src> TO <tgt> USING <body>.
@@ -217,6 +225,8 @@ function collectCobolishMetadata(sourceText) {
     mapperImports,
     routes,
     serviceCalls,
+    databases,
+    databaseCalls,
     mappers,
     paragraphs: Array.from(new Set(paragraphs)),
     interop,
@@ -281,6 +291,8 @@ export function compileCobolishWithAntlr(sourceText, options = {}) {
     mapperImports: parsed.metadata.mapperImports,
     routes: parsed.metadata.routes,
     serviceCalls: parsed.metadata.serviceCalls,
+    databases: parsed.metadata.databases,
+    databaseCalls: parsed.metadata.databaseCalls,
     mappers: parsed.metadata.mappers,
     interop: parsed.metadata.interop,
     lineCount: parsed.metadata.lineCount,

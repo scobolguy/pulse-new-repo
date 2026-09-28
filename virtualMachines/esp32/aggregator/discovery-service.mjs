@@ -8,6 +8,12 @@ import {
   isLoopbackHost,
   isEsp32DiscoveryNode
 } from './src/discovery-topology.mjs';
+import {
+  getInfrastructureCatalog,
+  getServiceHealthUrl,
+  listServiceEntries,
+  resolveEnvironmentName
+} from './src/backend/modules/serviceRegistry.mjs';
 
 const HTTP_PORT = Number(process.env.DISCOVERY_HTTP_PORT || 4300);
 const UDP_PORT = Number(process.env.UDP_PORT || 4210);
@@ -27,6 +33,41 @@ const udpServer = dgram.createSocket('udp4');
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
+
+async function refreshConfiguredServiceHealth() {
+  const environment = resolveEnvironmentName();
+  for (const entry of listServiceEntries(environment)) {
+    const serviceId = `service.${entry.key}`;
+    let status = 'down';
+    let health = null;
+    try {
+      const response = await fetch(getServiceHealthUrl(entry.key, environment), {
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS)
+      });
+      status = response.ok ? 'up' : 'down';
+      if (response.ok) health = await response.json().catch(() => null);
+    } catch {
+      // A configured service can be remote or temporarily offline.
+    }
+    upsertServiceInstance({
+      serviceName: serviceId,
+      instanceId: `${environment}.${entry.key}`,
+      nodeId: entry.host,
+      ip: entry.host,
+      port: entry.port,
+      status,
+      metadata: {
+        logicalServiceId: serviceId,
+        provider: 'pulse-local',
+        environment,
+        healthPath: entry.healthPath || '/health',
+        health
+      }
+    });
+  }
+}
+
+const ENVIRONMENT = resolveEnvironmentName();
 
 function getLocalAdvertiseIp() {
   const interfaces = os.networkInterfaces();
@@ -244,6 +285,49 @@ async function enrichNodeDetails(ip) {
   }
 }
 
+async function probeConfiguredService(entry) {
+  const host = entry.host === '0.0.0.0' ? '127.0.0.1' : entry.host;
+  const healthPath = String(entry.healthPath || '/health');
+  const url = `http://${host}:${entry.port}${healthPath.startsWith('/') ? healthPath : `/${healthPath}`}`;
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+    upsertServiceInstance({
+      serviceName: entry.key,
+      instanceId: `${entry.key}-${ENVIRONMENT}`,
+      nodeId: `${host}:${entry.port}`,
+      ip: host,
+      port: entry.port,
+      status: response.ok ? 'up' : 'down',
+      metadata: {
+        configuredName: entry.name,
+        environment: ENVIRONMENT,
+        healthPath,
+        configured: true,
+        httpStatus: response.status
+      }
+    });
+  } catch (error) {
+    upsertServiceInstance({
+      serviceName: entry.key,
+      instanceId: `${entry.key}-${ENVIRONMENT}`,
+      nodeId: `${host}:${entry.port}`,
+      ip: host,
+      port: entry.port,
+      status: 'down',
+      metadata: {
+        configuredName: entry.name,
+        environment: ENVIRONMENT,
+        configured: true,
+        error: String(error?.message || error)
+      }
+    });
+  }
+}
+
+async function refreshConfiguredServices() {
+  await Promise.all(listServiceEntries(ENVIRONMENT).map((entry) => probeConfiguredService(entry)));
+}
+
 async function probeEsp32Node(node, visited = new Set()) {
   const host = String(node?.host || '').trim();
   const port = Number(node?.port) > 0 ? Number(node.port) : 80;
@@ -257,10 +341,9 @@ async function probeEsp32Node(node, visited = new Set()) {
     const statusRes = await fetch(statusUrl, { signal: controller.signal });
     if (!statusRes.ok) return;
     const statusPayload = await statusRes.json();
-    if (!isEsp32DiscoveryNode({ details: statusPayload, lastSeen: now }, NODE_TTL_MS, now)) return;
-
     const ip = host;
     const now = Date.now();
+    if (!isEsp32DiscoveryNode({ details: statusPayload, lastSeen: now }, NODE_TTL_MS, now)) return;
     const previous = discoveredNodes.get(ip) || {};
     const normalized = normalizeDiscoveryNode({
       ...previous,
@@ -388,6 +471,11 @@ if (PROBE_ENABLED && SEED_NODES.length > 0) {
   }, PROBE_INTERVAL_MS);
 }
 
+refreshConfiguredServices().catch(() => {});
+setInterval(() => {
+  refreshConfiguredServices().catch(() => {});
+}, PROBE_INTERVAL_MS);
+
 setInterval(() => {
   const now = Date.now();
   for (const [key, node] of discoveredNodes.entries()) {
@@ -413,6 +501,15 @@ app.get('/api/nodes', (req, res) => {
     status: 'ok',
     nodes,
     count: nodes.length
+  });
+});
+
+app.get('/api/catalog', (req, res) => {
+  res.json({
+    status: 'ok',
+    environment: resolveEnvironmentName(req.query?.environment),
+    catalog: getInfrastructureCatalog(),
+    nodes: mergeDiscoveryNodes(Array.from(discoveredNodes.values()))
   });
 });
 
@@ -448,4 +545,10 @@ app.post('/api/cluster-controller/register', (req, res) => {
 
 app.listen(HTTP_PORT, () => {
   console.log(`[DISCOVERY] HTTP service listening on ${HTTP_PORT}`);
+  refreshConfiguredServiceHealth().catch((error) => {
+    console.warn(`[DISCOVERY] Initial service health refresh failed: ${error.message}`);
+  });
+  setInterval(() => {
+    refreshConfiguredServiceHealth().catch(() => {});
+  }, Math.max(5000, PROBE_INTERVAL_MS));
 });

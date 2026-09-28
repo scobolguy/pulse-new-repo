@@ -1,6 +1,6 @@
-# Workflow DSL (Separate Compiler)
+# Workflow DSL (Deployment Translator)
 
-This DSL is intentionally compiled by a separate compiler from the routing-mapper DSL so it can evolve independently.
+WFL translates logical resources and deployment intent into binding manifests. Application behavior remains p-code produced independently from Pascalish, Cobolish, or VBish.
 
 Source file extension:
 - .wfl
@@ -20,8 +20,16 @@ Generated outputs:
 
 Queue symbol:
 
-QUEUE "symbol" -> "physical.queue.name" TYPE "type-id";
-QUEUE "symbol" -> "physical.queue.name" TYPES ("type-a", "type-b");
+QUEUE "symbol" -> "physical.queue.name" MANAGER "qm-primary" TYPE "type-id" MODE SYNC;
+QUEUE "symbol" -> "physical.queue.name" MANAGER "qm-primary" TYPES ("type-a", "type-b") MODE ASYNC;
+
+Database symbol:
+
+```wfl
+DATABASE "SqlLedger" -> "PulseSqlLedger" TYPE "PaymentRecord" MANAGER "db-mssql" CONNECTION "env:MSSQL_DATABASE_CONNECTION_STRING";
+```
+
+WFL stores the connection reference, never the secret value.
 
 File symbol:
 
@@ -58,9 +66,10 @@ END;
 ```bnf
 <file> ::= { <symbol_decl> | <workflow_decl> }
 
-<symbol_decl> ::= <queue_decl> | <file_decl> | <api_decl>
+<symbol_decl> ::= <queue_decl> | <database_decl> | <file_decl> | <api_decl>
 
-<queue_decl> ::= 'QUEUE' <qstring> '->' <qstring> [ 'TYPE' <qstring> | 'TYPES' '(' <qstring_list> ')' ] ';'
+<queue_decl> ::= 'QUEUE' <qstring> '->' <qstring> [ 'MANAGER' <qstring> ] [ 'TYPE' <qstring> | 'TYPES' '(' <qstring_list> ')' ] [ 'MODE' ( 'SYNC' | 'ASYNC' ) ] ';'
+<database_decl> ::= 'DATABASE' <qstring> '->' <qstring> [ 'TYPE' <qstring> ] [ 'MANAGER' <qstring> ] [ 'CONNECTION' <qstring> ] ';'
 <file_decl> ::= 'FILE' <qstring> '->' <qstring> ';'
 <api_decl> ::= 'API' <qstring> 'BASE' <qstring> ';'
 
@@ -140,18 +149,20 @@ node scripts/interpret-workflow.mjs \
   --dry-run \
   --context-file data/workflow-context-reject.json
 
-Compile one workflow to PMachine pcode (ESP32-compatible runtime path):
+Workflow control steps may still be lowered to p-code for legacy execution. Resource declarations translate to the binding manifest and are not application instructions.
+
+Compile one workflow control block to PMachine p-code:
 
 node scripts/compile-workflow-to-pcode.mjs \
   --in data/workflow.wfl \
   --workflow pain2-routing \
-  --out ../pcode/workflow-router.pcode \
-  --out-map ../pcode/workflow-router.program.json
+  --out ../artifacts/pcode/workflow-router.pcode \
+  --out-map ../artifacts/pcode/workflow-router.program.json
 
 Run the generated workflow pcode in JS PMachine simulator:
 
 node scripts/run-js-pmachine.mjs \
-  --pcode ../pcode/workflow-router.pcode \
-  --program-map ../pcode/workflow-router.program.json \
+  --pcode ../artifacts/pcode/workflow-router.pcode \
+  --program-map ../artifacts/pcode/workflow-router.program.json \
   --input-queue queue.pain2.in \
   --message-file data/lynx-reply-pacs002.xml

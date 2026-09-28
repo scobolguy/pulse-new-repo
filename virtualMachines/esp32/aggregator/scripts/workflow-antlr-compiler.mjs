@@ -3,6 +3,9 @@ import { dslDebug, dslError } from './dsl-debug.mjs';
 import WorkflowDslLexer from '../grammar/generated-modern/WorkflowDslLexer.js';
 import WorkflowDslParser from '../grammar/generated-modern/WorkflowDslParser.js';
 import WorkflowDslVisitor from '../grammar/generated-modern/WorkflowDslVisitor.js';
+import { listServiceKeys, resolveEnvironmentName } from '../src/backend/modules/serviceRegistry.mjs';
+import { buildDeploymentBindingManifest } from '../src/backend/deploymentBindingManifest.mjs';
+import { buildGenericSystem } from '../src/backend/genericSystem.mjs';
 
 function parseQuoted(value) {
   const s = String(value || '').trim();
@@ -14,6 +17,33 @@ function parseQuoted(value) {
     .replace(/\\r/g, '\r')
     .replace(/\\t/g, '\t')
     .replace(/\\(["'\\])/g, '$1');
+}
+
+function validateSystemConformance(systems) {
+  const abstractTypes = new Map(
+    systems.filter(system => system.abstract).map(system => [system.name, system])
+  );
+
+  const concreteSystems = systems.filter(item => !item.abstract && item.typeName);
+
+  for (const system of concreteSystems) {
+    const contract = abstractTypes.get(system.typeName);
+    if (!contract) {
+      throw new Error(`System '${system.systemId}' references unknown SYSTEM TYPE '${system.typeName}'`);
+    }
+
+    for (const required of contract.members) {
+      const actual = system.members.find(member => member.kind === required.kind && member.symbol === required.symbol);
+      if (!actual) {
+        throw new Error(`System '${system.systemId}' is missing required member '${required.symbol}' from SYSTEM TYPE '${system.typeName}'`);
+      }
+      const requiredInterface = required.kind === 'queue' ? required.dataTypeId : required.serviceId;
+      const actualInterface = actual.kind === 'queue' ? actual.dataTypeId : actual.serviceId;
+      if (requiredInterface !== actualInterface) {
+        throw new Error(`System '${system.systemId}' member '${required.symbol}' does not match SYSTEM TYPE '${system.typeName}'`);
+      }
+    }
+  }
 }
 
 function quoteDouble(value) {
@@ -327,6 +357,18 @@ class CollectingErrorListener extends antlr4.error.ErrorListener {
   }
 }
 
+function flattenSystemMembers(system) {
+  const members = [];
+  for (const member of system.members || []) {
+    if (member.kind === 'system') {
+      members.push(...flattenSystemMembers(member));
+    } else {
+      members.push(member);
+    }
+  }
+  return members;
+}
+
 class WorkflowAstBuilder extends WorkflowDslVisitor {
   constructor(tokens) {
     super();
@@ -334,30 +376,110 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
   }
 
   visitProgram(ctx) {
-    const symbols = { queues: [], files: [], apis: [] };
+    const symbols = { queues: [], databases: [], services: [], systems: [], files: [], apis: [] };
     const workflows = [];
     const deployments = [];
+    const clusters = [];
+    const artifactDeployments = [];
+    const genericSystems = [];
 
     for (const item of ctx.item() || []) {
       const value = this.visit(item);
       if (!value) continue;
       if (value.type === 'queue') symbols.queues.push(value.payload);
+      if (value.type === 'database') symbols.databases.push(value.payload);
+      if (value.type === 'service') symbols.services.push(value.payload);
+      if (value.type === 'system') {
+        symbols.systems.push(value.payload);
+        if (!value.payload.abstract) {
+          for (const member of flattenSystemMembers(value.payload)) {
+            if (member.kind === 'queue') symbols.queues.push(member);
+            if (member.kind === 'service') symbols.services.push(member);
+          }
+        }
+      }
       if (value.type === 'file') symbols.files.push(value.payload);
       if (value.type === 'api') symbols.apis.push(value.payload);
       if (value.type === 'workflow') workflows.push(value.payload);
       if (value.type === 'deployment') deployments.push(value.payload);
+      if (value.type === 'cluster') clusters.push(value.payload);
+      if (value.type === 'artifactDeployment') artifactDeployments.push(value.payload);
+      if (value.type === 'genericSystem') genericSystems.push(value.payload);
     }
 
-    return { symbols, workflows, deployments };
+    return { symbols, workflows, deployments, clusters, artifactDeployments, genericSystems };
   }
+
+  
 
   visitItem(ctx) {
     if (ctx.queueDecl()) return this.visit(ctx.queueDecl());
+    if (ctx.databaseDecl()) return this.visit(ctx.databaseDecl());
+    if (ctx.systemTypeDecl()) return this.visit(ctx.systemTypeDecl());
+    if (ctx.systemDecl()) return this.visit(ctx.systemDecl());
     if (ctx.fileDecl()) return this.visit(ctx.fileDecl());
     if (ctx.apiDecl()) return this.visit(ctx.apiDecl());
     if (ctx.workflowDecl()) return this.visit(ctx.workflowDecl());
     if (ctx.deploymentDecl()) return this.visit(ctx.deploymentDecl());
+    if (ctx.clusterCreateDecl()) return this.visit(ctx.clusterCreateDecl());
+    if (ctx.artifactDeployDecl()) return this.visit(ctx.artifactDeployDecl());
+    if (ctx.genericSystemDecl()) return this.visit(ctx.genericSystemDecl());
     return null;
+  }
+
+  visitGenericSystemDecl(ctx) {
+    const raw = {
+      systemId: parseQuoted(ctx.quotedString().getText()),
+      ports: [],
+      systems: [],
+      connections: []
+    };
+    for (const member of ctx.genericSystemMember() || []) {
+      if (member.genericSystemDecl()) {
+        raw.systems.push(this.visitGenericSystemDecl(member.genericSystemDecl()).payload);
+      } else if (member.genericSystemPortDecl()) {
+        const port = member.genericSystemPortDecl();
+        raw.ports.push({
+          symbol: parseQuoted(port.quotedString(0).getText()),
+          direction: port.INPUT() ? 'input' : 'output',
+          dataTypeId: parseQuoted(port.quotedString(1).getText())
+        });
+      } else if (member.genericSystemConnectionDecl()) {
+        const connection = member.genericSystemConnectionDecl();
+        raw.connections.push({
+          symbol: parseQuoted(connection.quotedString(0).getText()),
+          source: parseQuoted(connection.quotedString(1).getText()),
+          target: parseQuoted(connection.quotedString(2).getText()),
+          dataTypeId: parseQuoted(connection.quotedString(3).getText())
+        });
+      }
+    }
+    return { type: 'genericSystem', payload: buildGenericSystem(raw) };
+  }
+
+  visitClusterCreateDecl(ctx) {
+    const strings = ctx.quotedString() || [];
+    const clusterId = parseQuoted(strings[0].getText());
+    return {
+      type: 'cluster',
+      payload: {
+        clusterId,
+        label: ctx.LABEL() ? parseQuoted(strings[1].getText()) : clusterId,
+        nodes: this.visit(ctx.quotedList())
+      }
+    };
+  }
+
+  visitArtifactDeployDecl(ctx) {
+    const strings = ctx.quotedString() || [];
+    return {
+      type: 'artifactDeployment',
+      payload: {
+        artifactId: parseQuoted(strings[0].getText()),
+        fileName: parseQuoted(strings[1].getText()),
+        clusterId: parseQuoted(strings[2].getText())
+      }
+    };
   }
 
   visitDeploymentDecl(ctx) {
@@ -375,6 +497,7 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
   visitDeploymentItem(ctx) {
     const kind = ctx.SERVICE() ? 'service' : (ctx.PROGRAM() ? 'program' : 'daemon');
     const strings = ctx.quotedString() || [];
+    const lifecycle = ctx.serviceLifecycleClause ? ctx.serviceLifecycleClause() : null;
     return {
       kind,
       id: parseQuoted(strings[0].getText()),
@@ -382,17 +505,26 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
       inputQueue: parseQuoted(strings[2].getText()),
       outputQueue: parseQuoted(strings[3].getText()),
       targets: this.visit(ctx.quotedList()),
-      startup: Boolean(ctx.booleanLiteral()?.TRUE())
+      startup: Boolean(ctx.booleanLiteral()?.TRUE()),
+      lifecycle: lifecycle ? {
+        persistent: Boolean(lifecycle.booleanLiteral()?.TRUE()),
+        minInstances: Number(lifecycle.NUMBER(0)?.getText() || 0),
+        maxInstances: Number(lifecycle.NUMBER(1)?.getText() || 0),
+        idleTimeout: Number(lifecycle.NUMBER(2)?.getText() || 0),
+        idleTimeoutUnit: lifecycle.TIME_UNIT()?.getText()?.toLowerCase() || 's'
+      } : null
     };
   }
 
   visitQueueDecl(ctx) {
-    const symbol = parseQuoted(ctx.quotedString(0).getText());
-    const queueName = parseQuoted(ctx.quotedString(1).getText());
+    const strings = ctx.quotedString() || [];
+    const symbol = parseQuoted(strings[0].getText());
+    const queueName = parseQuoted(strings[1].getText());
+    const managerId = ctx.MANAGER() ? parseQuoted(strings[2].getText()) : null;
     let dataTypeIds = [];
 
     if (ctx.TYPE()) {
-      dataTypeIds = [parseQuoted(ctx.quotedString(2).getText())];
+      dataTypeIds = [parseQuoted(strings[managerId ? 3 : 2].getText())];
     } else if (ctx.TYPES()) {
       dataTypeIds = this.visit(ctx.quotedList());
     }
@@ -402,9 +534,133 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
       payload: {
         symbol,
         queueName,
+        managerId,
         dataTypeIds,
-        dataTypeId: dataTypeIds[0] || null
+        dataTypeId: dataTypeIds[0] || null,
+        deliveryMode: ctx.MODE() ? (ctx.SYNC() ? 'sync' : 'async') : 'async'
       }
+    };
+  }
+
+  visitDatabaseDecl(ctx) {
+    const strings = ctx.quotedString() || [];
+    let index = 2;
+    const typeName = ctx.TYPE() ? parseQuoted(strings[index++].getText()) : null;
+    const managerId = ctx.MANAGER() ? parseQuoted(strings[index++].getText()) : null;
+    const connectionRef = ctx.CONNECTION() ? parseQuoted(strings[index++].getText()) : null;
+    return {
+      type: 'database',
+      payload: {
+        symbol: parseQuoted(strings[0].getText()),
+        databaseName: parseQuoted(strings[1].getText()),
+        typeName,
+        managerId,
+        connectionRef
+      }
+    };
+  }
+
+  visitSystemTypeDecl(ctx) {
+    const systemName = parseQuoted(ctx.quotedString().getText());
+    return {
+      type: 'system',
+      payload: {
+        kind: 'system',
+        name: systemName,
+        systemId: systemName,
+        abstract: true,
+        typeName: null,
+        visibility: 'internal',
+        members: (ctx.systemMember() || []).map(member => this.visitSystemMember(member, {
+          abstract: true
+        }))
+      }
+    };
+  }
+
+  visitSystemDecl(ctx) {
+    return this.buildSystemDecl(ctx, {});
+  }
+
+  buildSystemDecl(ctx, parentContext = {}) {
+    const strings = ctx.quotedString() || [];
+    const systemId = parseQuoted(strings[0].getText());
+    const typeName = strings[1] ? parseQuoted(strings[1].getText()) : null;
+    const environmentName = resolveEnvironmentName();
+    const systemPath = [...(parentContext.systemPath || []), systemId];
+    return {
+      type: 'system',
+      payload: {
+        kind: 'system',
+        name: systemId,
+        systemId,
+        abstract: false,
+        typeName,
+        visibility: this.visitVisibility(ctx.visibilityClause()),
+        runtimeName: `${environmentName}.${systemPath.join('.')}`,
+        systemPath,
+        members: (ctx.systemMember() || []).map(member => this.visitSystemMember(member, {
+          environmentName,
+          systemId,
+          systemPath
+        }))
+      }
+    };
+  }
+
+  visitSystemMember(ctx, context = {}) {
+    if (ctx.systemQueueDecl()) return this.visitSystemQueueDecl(ctx.systemQueueDecl(), context);
+    if (ctx.serviceDecl()) return this.visitServiceDecl(ctx.serviceDecl(), context);
+    if (ctx.systemDecl()) return this.buildSystemDecl(ctx.systemDecl(), context).payload;
+    return null;
+  }
+
+  visitVisibility(ctx) {
+    if (!ctx) return 'internal';
+    return ctx.EXPOSED() ? 'exposed' : 'internal';
+  }
+
+  visitSystemQueueDecl(ctx, context = {}) {
+    const strings = ctx.quotedString() || [];
+    const symbol = parseQuoted(strings[0].getText());
+    const hasRuntimeName = Boolean(ctx.ARROW());
+    const declaredName = hasRuntimeName ? parseQuoted(strings[1].getText()) : symbol;
+    const typeStrings = ctx.quotedString() || [];
+    const typeStart = hasRuntimeName ? 2 : 1;
+    const managerId = ctx.MANAGER()
+      ? parseQuoted(typeStrings[hasRuntimeName ? 2 : 1].getText())
+      : null;
+    const typeOffset = hasRuntimeName ? (managerId ? 3 : 2) : (managerId ? 2 : 1);
+    const dataTypeIds = (ctx.TYPE() || ctx.TYPES())
+      ? typeStrings.slice(typeOffset).map(item => parseQuoted(item.getText())).filter(Boolean)
+      : [];
+    const systemId = context.systemPath?.join('.') || context.systemId || null;
+    return {
+      kind: 'queue',
+      symbol,
+      declaredName,
+      queueName: systemId ? `${context.environmentName}.${systemId}.${declaredName}` : declaredName,
+      managerId,
+      dataTypeIds,
+      dataTypeId: dataTypeIds[0] || null,
+      systemId,
+      visibility: this.visitVisibility(ctx.visibilityClause()),
+      abstract: Boolean(context.abstract) || !strings[1]
+    };
+  }
+
+  visitServiceDecl(ctx, context = {}) {
+    const strings = ctx.quotedString() || [];
+    const serviceId = parseQuoted(strings[1].getText());
+    if (!listServiceKeys().includes(serviceId)) {
+      throw new Error(`Unknown service '${serviceId}' in service registry`);
+    }
+    return {
+      kind: 'service',
+      symbol: parseQuoted(strings[0].getText()),
+      serviceId,
+      systemId: context.systemPath?.join('.') || context.systemId || null,
+      visibility: this.visitVisibility(ctx.visibilityClause())
     };
   }
 
@@ -413,11 +669,13 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
   }
 
   visitFileDecl(ctx) {
+    const strings = ctx.quotedString() || [];
     return {
       type: 'file',
       payload: {
-        symbol: parseQuoted(ctx.quotedString(0).getText()),
-        path: parseQuoted(ctx.quotedString(1).getText())
+        symbol: parseQuoted(strings[0].getText()),
+        path: parseQuoted(strings[1].getText()),
+        managerId: ctx.MANAGER() ? parseQuoted(strings[2].getText()) : null
       }
     };
   }
@@ -568,7 +826,9 @@ export function parseWorkflowDslWithAntlr(sourceText) {
   }
 
   const builder = new WorkflowAstBuilder(tokens);
-  return builder.visit(tree);
+  const parsed = builder.visit(tree);
+  validateSystemConformance(parsed.symbols.systems);
+  return parsed;
 }
 
 export function compileWorkflowDSLWithAntlr(sourceText) {
@@ -580,8 +840,12 @@ export function compileWorkflowDSLWithAntlr(sourceText) {
       version: 4,
       compiledAt: new Date().toISOString(),
       symbols: parsed.symbols,
+      bindings: buildDeploymentBindingManifest(parsed.symbols),
       workflows: parsed.workflows,
-      deployments: parsed.deployments
+      deployments: parsed.deployments,
+      clusters: parsed.clusters,
+      artifactDeployments: parsed.artifactDeployments,
+      genericSystems: parsed.genericSystems
     };
     dslDebug('wfl', 'compile:complete', { workflows: result.workflows.length, deployments: result.deployments.length });
     return result;

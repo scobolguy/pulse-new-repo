@@ -3,6 +3,7 @@ import Cobolish85Lexer from '../grammar/generated-modern/Cobolish85Lexer.js';
 import Cobolish85Parser from '../grammar/generated-modern/Cobolish85Parser.js';
 import Cobolish85Visitor from '../grammar/generated-modern/Cobolish85Visitor.js';
 import { parsePicture } from './cobol-picture.mjs';
+import { buildPcodeSourceMap } from './pcode-source-map.mjs';
 
 class CollectingErrorListener extends antlr4.error.ErrorListener {
   constructor() {
@@ -86,6 +87,69 @@ class CobolishCodegen extends Cobolish85Visitor {
       }
       this.fields.set(name, picture || { kind: 'decimal', precision: 18, scale: 0 });
     }
+  }
+
+  collectSystemMetadata(tree) {
+    const systems = [];
+    const queues = [];
+    const services = [];
+    const walk = node => {
+      if (!node) return;
+      if (node.constructor?.name === 'SystemMetaClauseContext') {
+        const names = asArray(node.stringLiteral?.()).map(item => text(item).replace(/^"|"$/g, ''));
+        const raw = text(node).toUpperCase();
+        const abstract = raw.startsWith('SYSTEMTYPE');
+        const systemId = names[0] || '';
+        const typeName = abstract ? null : (names[1] || null);
+        const system = {
+          name: systemId,
+          systemId,
+          typeName,
+          abstract,
+          visibility: text(node.systemVisibilityClause?.()).toUpperCase().includes('EXPOSED') ? 'exposed' : 'internal',
+          members: []
+        };
+
+        for (const member of asArray(node.systemMember?.())) {
+          const memberNames = asArray(member.systemQueueMember?.()?.stringLiteral?.() || member.systemServiceMember?.()?.stringLiteral?.())
+            .map(item => text(item).replace(/^"|"$/g, ''));
+          const memberText = text(member).toUpperCase();
+          const visibility = memberText.includes('EXPOSED') ? 'exposed' : 'internal';
+          if (member.systemQueueMember?.()) {
+            const queueContext = member.systemQueueMember();
+            const hasAlias = Boolean(queueContext.ARROW?.());
+            const queue = {
+              kind: 'queue',
+              symbol: memberNames[0],
+              queueName: hasAlias ? (memberNames[1] || memberNames[0]) : memberNames[0],
+              dataTypeId: hasAlias ? (memberNames[2] || null) : (memberNames[1] || null),
+              dataTypeIds: [hasAlias ? memberNames[2] : memberNames[1]].filter(Boolean),
+              systemId,
+              visibility
+            };
+            system.members.push(queue);
+            if (!abstract) queues.push({ ...queue, queueName: `${systemId}.${queue.queueName}` });
+          } else if (member.systemServiceMember?.()) {
+            const serviceContext = member.systemServiceMember();
+            const hasAlias = Boolean(serviceContext.ARROW?.());
+            const service = {
+              kind: 'service',
+              symbol: memberNames[0],
+              serviceId: hasAlias ? (memberNames[1] || memberNames[0]) : memberNames[0],
+              systemId,
+              visibility
+            };
+            system.members.push(service);
+            if (!abstract) services.push(service);
+          }
+        }
+        systems.push(system);
+        return;
+      }
+      for (let index = 0; index < (node.getChildCount?.() || 0); index += 1) walk(node.getChild(index));
+    };
+    walk(tree);
+    return { systems, queues, services };
   }
 
   // Every numeric value on the stack is a decimal, so mixed-scale arithmetic is exact.
@@ -238,9 +302,80 @@ class CobolishCodegen extends Cobolish85Visitor {
     if (ctx.performStatement && ctx.performStatement()) return this.emitPerform(ctx.performStatement());
     if (ctx.displayStatement && ctx.displayStatement()) return this.emitDisplay(ctx.displayStatement());
     if (ctx.acceptStatement && ctx.acceptStatement()) return this.emitAccept(ctx.acceptStatement());
+    if (ctx.callStatement && ctx.callStatement()) return this.emitCall(ctx.callStatement());
     if (ctx.stopRunStatement && ctx.stopRunStatement()) return this.emit('HALT');
     // GOBACK, CONTINUE and the I/O verbs are accepted but emit nothing.
     return undefined;
+  }
+
+  emitCall(ctx) {
+    const target = text(ctx.callTarget()).replace(/^['"]|['"]$/g, '').toUpperCase();
+    const parameters = (ctx.callUsingClause()?.callUsingItem() || []).map(item => item.callParameter());
+    if (target === 'QUEUE-WRITE-SYNC' || target === 'QUEUE-WRITE-ASYNC') {
+      if (parameters.length !== 2) throw new Error(`[COBOLISH] ${target} requires a queue symbol and message`);
+      const queue = text(parameters[0]).replace(/^['"]|['"]$/g, '');
+      const message = parameters[1];
+      if (message.literal && message.literal()) this.emitLiteral(message.literal());
+      else this.emit(`LOAD ${storageName(text(message))}`);
+      this.emit('ROUTE_SET_MESSAGE');
+      this.emit(`${target === 'QUEUE-WRITE-SYNC' ? 'QUEUE_WRITE_SYNC' : 'QUEUE_WRITE_ASYNC'} ${JSON.stringify(queue)}`);
+      return;
+    }
+    if (!['DB-INSERT', 'DB-SELECT', 'DB-UPDATE', 'DB-DELETE'].includes(target)) {
+      this.emit(`CALL ${storageName(target)} 0`);
+      return;
+    }
+
+    const staticValue = (parameter, label) => {
+      const raw = text(parameter).trim();
+      if (!raw) throw new Error(`[COBOLISH] ${target} ${label} is required`);
+      return raw.replace(/^['"]|['"]$/g, '');
+    };
+    const emitValue = (parameter) => {
+      if (parameter.literal && parameter.literal()) this.emitLiteral(parameter.literal());
+      else this.emit(`LOAD ${storageName(text(parameter))}`);
+    };
+    const quoted = value => JSON.stringify(String(value));
+    const database = staticValue(parameters[0], 'database');
+    const table = staticValue(parameters[1], 'table');
+
+    if (target === 'DB-INSERT') {
+      const columns = staticValue(parameters[2], 'columns');
+      const values = parameters.slice(3);
+      if (values.length !== columns.split(',').filter(Boolean).length) throw new Error('[COBOLISH] DB-INSERT requires one value per column');
+      values.forEach(emitValue);
+      this.emit(`DB_INSERT ${quoted(database)},${quoted(table)},${quoted(columns)}`);
+      return;
+    }
+
+    if (target === 'DB-SELECT') {
+      const columns = staticValue(parameters[2], 'columns');
+      const whereColumn = staticValue(parameters[3], 'where column');
+      const whereOperator = staticValue(parameters[4], 'where operator');
+      const targets = parameters.slice(6);
+      if (targets.length !== columns.split(',').filter(Boolean).length) throw new Error('[COBOLISH] DB-SELECT requires one target per selected column');
+      if (whereColumn) emitValue(parameters[5]);
+      this.emit(`DB_SELECT ${quoted(database)},${quoted(table)},${quoted(columns)},${quoted(whereColumn)},${quoted(whereOperator)}`);
+      [...targets].reverse().forEach(parameter => this.emit(`STORE ${storageName(text(parameter))}`));
+      return;
+    }
+
+    if (target === 'DB-UPDATE') {
+      const columns = staticValue(parameters[2], 'columns');
+      const whereColumn = staticValue(parameters[3], 'where column');
+      const whereOperator = staticValue(parameters[4], 'where operator');
+      const values = parameters.slice(6);
+      if (values.length !== columns.split(',').filter(Boolean).length) throw new Error('[COBOLISH] DB-UPDATE requires one value per column');
+      if (whereColumn) emitValue(parameters[5]);
+      values.forEach(emitValue);
+      this.emit(`DB_UPDATE ${quoted(database)},${quoted(table)},${quoted(columns)},${quoted(whereColumn)},${quoted(whereOperator)}`);
+      return;
+    }
+
+    const whereColumn = staticValue(parameters[2], 'where column');
+    const whereOperator = staticValue(parameters[3], 'where operator');
+    if (whereColumn) emitValue(parameters[4]);
+    this.emit(`DB_DELETE ${quoted(database)},${quoted(table)},${quoted(whereColumn)},${quoted(whereOperator)}`);
   }
 
   emitMove(ctx) {
@@ -387,6 +522,7 @@ class CobolishCodegen extends Cobolish85Visitor {
 
   build(tree) {
     this.collectDataItems(tree);
+    const symbols = this.collectSystemMetadata(tree);
 
     const paragraphs = [];
     const topLevel = [];
@@ -434,12 +570,13 @@ class CobolishCodegen extends Cobolish85Visitor {
       pcodeText: `${this.lines.join('\n')}\n`,
       globals: [...this.fields.keys()],
       fields: Object.fromEntries(this.fields),
+      symbols,
       procedures
     };
   }
 }
 
-export function compileCobolishToPcode(sourceText) {
+export function compileCobolishToPcode(sourceText, options = {}) {
   const input = new antlr4.InputStream(String(sourceText || ''));
   const lexer = new Cobolish85Lexer(input);
   const lexerErrors = new CollectingErrorListener();
@@ -471,7 +608,14 @@ export function compileCobolishToPcode(sourceText) {
       executionModel: 'cobolish-program',
       globals: built.globals,
       fields: built.fields,
+      symbols: built.symbols,
       procedures: built.procedures,
+      sourceMap: buildPcodeSourceMap({
+        pcodeText: built.pcodeText,
+        sourceText,
+        sourceFile: options.fileName || null,
+        sourceLanguage: 'cobolish'
+      }),
       entryLabel: 'MAIN'
     }
   };

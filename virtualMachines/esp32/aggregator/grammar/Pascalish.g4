@@ -20,11 +20,11 @@ decl
     | varDecl
     | queueDecl
     | fileDecl
+    | databaseDecl
     | roleDecl
     | libraryDecl
     | useDecl
     | interopDecl
-    | routerDecl
     | mapperDecl
     | importDecl
     | blockStmt
@@ -43,7 +43,7 @@ programDecl
     ;
 
 serviceDecl
-    : 'service' stringOrIdent placement? ';'? unitDecl* (serviceBody | serviceEndpoint* 'end')? unitEnd
+    : 'service' stringOrIdent placement? ';'? unitDecl* (serviceBody | serviceEndpoint* block)? unitEnd
     ;
 
 daemonDecl
@@ -68,13 +68,13 @@ unitDecl
     | classDecl
     | queueDecl
     | fileDecl
+    | databaseDecl
     | roleDecl
     | libraryDecl
     | useDecl
     | interopDecl
-    | routerDecl
-    | mapperDecl
     | importDecl
+    | mapperDecl
     ;
 
 varSection
@@ -121,7 +121,6 @@ classInheritance
 classMember
     : classFieldDecl
     | classMethodDecl
-    | classOperatorDecl
     ;
 
 classFieldDecl
@@ -129,19 +128,7 @@ classFieldDecl
     ;
 
 classMethodDecl
-    : ('procedure' | 'function') IDENT genericTypeParams? '(' methodParamList? ')' (':' typeRef)? ';' unitDecl* block ';'
-    ;
-
-// `operator +(b: T): T;` overloads an operator; `operator T(x: U);` and
-// `operator U(): U;` declare conversions to and from T.
-classOperatorDecl
-    : 'operator' operatorTarget '(' methodParamList? ')' (':' typeRef)? ';' unitDecl* block ';'
-    ;
-
-operatorTarget
-    : '+' | '-' | '*' | '/'
-    | '=' | '<>' | '<' | '<=' | '>' | '>='
-    | typeRef
+    : ('procedure' | 'function') IDENT genericTypeParams? '(' methodParamList? ')' (':' typeRef)? ';' block ';'
     ;
 
 methodParamList
@@ -170,6 +157,10 @@ fileDecl
     : 'file' IDENT 'of' typeRef placement? ';'
     ;
 
+databaseDecl
+    : 'database' IDENT 'type' typeName ';'
+    ;
+
 queueDecl
     : 'queue' IDENT queueType placement? ';'
     ;
@@ -193,10 +184,6 @@ recordType
     : 'record' recordField* 'end'
     ;
 
-enumType
-    : '(' identList ')'
-    ;
-
 recordField
     : IDENT ':' typeRef ';'
     ;
@@ -204,7 +191,6 @@ recordField
 typeRef
     : simpleType
     | recordType
-    | enumType
     | queueType
     | stackType
     | priorityQueueType
@@ -223,12 +209,6 @@ simpleType
     | 'real'
     | 'boolean'
     | 'string'
-    | decimalType
-    ;
-
-// Fixed-point, COBOL style: decimal(precision, scale) mirrors PIC S9(p-s)V9(s).
-decimalType
-    : 'decimal' ('(' NUMBER (',' NUMBER)? ')')?
     ;
 
 userType
@@ -304,42 +284,9 @@ serviceProvider
     ;
 
 // ============================================================
-// Router declaration
-// ============================================================
-
-routerDecl
-    : 'router' stringOrIdent 'input' stringValue routerHeaderProp* 'begin' outputDecl* 'end' ';'
-    ;
-
-routerHeaderProp
-    : 'description' stringValue
-    | 'enabled' booleanValue
-    | 'service' stringValue
-    | 'methods' verbList
-    ;
-
-verbList
-    : stringOrIdent
-    | '(' stringOrIdent (',' stringOrIdent)* ')'
-    ;
-
-outputDecl
-    : 'output' stringValue outputTypeMeta? 'when' pl0Snippet 'transform' pl0Snippet ';'
-    ;
-
-outputTypeMeta
-    : 'type' typeRef
-    | 'types' typeRefList
-    ;
-
-typeRefList
-    : typeRef
-    | '(' typeRef (',' typeRef)* ')'
-    ;
-
-// ============================================================
 // Mapper declaration
 // ============================================================
+
 
 mapperDecl
     : 'mapper' stringOrIdent 'source' typeRef 'target' typeRef mapperHeaderProp* 'begin' mapDecl* 'end' ';'
@@ -372,11 +319,11 @@ serviceLocalDecl
     ;
 
 serviceEndpoint
-    : httpVerb stringValue endpointAccepts? endpointReturns? ';' blockStmt
+    : 'on' httpVerb stringValue endpointAccepts? endpointReturns? statement ';'?
     ;
 
 httpVerb
-    : 'get' | 'post' | 'put' | 'delete' | 'patch'
+    : 'get' | 'post' | 'put' | 'delete' | 'patch' | IDENT
     ;
 
 endpointAccepts
@@ -388,21 +335,7 @@ endpointReturns
     ;
 
 serviceStmt
-    : serviceCaseStmt
-    | serviceRouteStmt ';'
-    | serviceReturnStmt ';'
-    ;
-
-serviceRouteStmt
-    : 'route' IDENT? 'from' stringOrIdent 'to' stringOrIdent
-    ;
-
-serviceCaseStmt
-    : 'case' serviceExpr 'of' serviceCaseArm+ ('else' serviceReturnStmt ';')? 'end' ';'?
-    ;
-
-serviceCaseArm
-    : serviceExpr ':' serviceReturnStmt ';'
+    : serviceReturnStmt ';'
     ;
 
 serviceReturnStmt
@@ -490,7 +423,7 @@ withStmt
     ;
 
 assignStmt
-    : lvalue ':=' expr 'rounded'?
+    : lvalue ':=' expr
     ;
 
 callStmt
@@ -670,7 +603,6 @@ primaryExpr
     | 'true'
     | 'false'
     | qualifiedName '(' exprList? ')'
-    | simpleType '(' exprList? ')'
     | lvalue
     | '(' expr ')'
     ;

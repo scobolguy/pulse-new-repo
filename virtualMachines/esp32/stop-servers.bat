@@ -2,27 +2,8 @@
 setlocal
 
 set "ROOT=%~dp0"
-set "AGGREGATOR_DIR=%ROOT%aggregator"
 
-if not exist "%AGGREGATOR_DIR%\scripts\interpret-workflow.mjs" (
-  echo [ERROR] Missing "%AGGREGATOR_DIR%\scripts\interpret-workflow.mjs"
-  exit /b 1
-)
-
-if not exist "%AGGREGATOR_DIR%\data\workflow.wfl" (
-  echo [ERROR] Missing "%AGGREGATOR_DIR%\data\workflow.wfl"
-  exit /b 1
-)
-
-echo Running workflow "stack-stop"...
-pushd "%AGGREGATOR_DIR%" >nul
-node scripts\interpret-workflow.mjs --in data\workflow.wfl --workflow stack-stop
-set "EXIT_CODE=%ERRORLEVEL%"
-popd >nul
-
-if not "%EXIT_CODE%"=="0" (
-  echo [ERROR] Shutdown workflow failed.
-  exit /b %EXIT_CODE%
-)
-
-echo Shutdown workflow complete.
+echo Stopping configured stack listeners...
+taskkill /FI "WINDOWTITLE eq Aggregator Frontend" /T /F >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\stop-stack.ps1" -Ports 5173
+exit /b %ERRORLEVEL%

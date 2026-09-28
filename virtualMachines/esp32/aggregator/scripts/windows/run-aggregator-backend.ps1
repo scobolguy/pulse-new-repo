@@ -25,6 +25,14 @@ $env:MODULAR_BACKEND = '1'
 $env:PULSE_QUEUE_DATA_ROOT = $DataRoot
 $env:PULSE_RUNTIME_DATA_ROOT = $DataRoot
 $env:PULSE_BACKEND_ROLE = $Role
+$env:PULSE_START_POLICY = 'lazy'
+
+# The Windows service should be the small, reliable gateway/supervisor only.
+# Child services are started on demand through /api/runtime/services or by start-pulse-stack.ps1.
+$env:BACKEND_AUX_SERVICES_AUTOSTART = '0'
+$env:BACKEND_WORKER_AUTOSTART = '0'
+$env:PULSE_MCP_AUTOSTART = '0'
+$env:PULSE_SERVICE_CONTROL_LOCAL_BYPASS = '1'
 
 # Service defaults: avoid noisy SQL group-provider failures and strict startup-only router prechecks.
 # Operators can override by defining machine/user environment variables.

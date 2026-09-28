@@ -6,7 +6,7 @@ ROUTER "mt103-correspondent-and-lynx-fanout" INPUT "swift.mt103.parsed" DESCRIPT
       output := 1;
     END
     TRANSFORM BEGIN
-      output := map("mt103-to-pacs", src);
+      output := map("mt103-to-pacs-mini", src);
     END;
 
   OUTPUT "lynx.pacs009.outbound"
@@ -14,7 +14,7 @@ ROUTER "mt103-correspondent-and-lynx-fanout" INPUT "swift.mt103.parsed" DESCRIPT
       output := 1;
     END
     TRANSFORM BEGIN
-      output := map("pacs-to-lynx", map("mt103-to-pacs", src));
+      output := map("pacs-to-lynx-mini", map("mt103-to-pacs-mini", src));
     END;
 END;
 

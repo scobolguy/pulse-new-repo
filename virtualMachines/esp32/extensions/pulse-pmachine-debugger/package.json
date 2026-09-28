@@ -1,0 +1,117 @@
+{
+  "name": "pulse-pmachine-debugger",
+  "displayName": "Pulse PMachine Debugger",
+  "description": "Native VS Code debugging for Pulse PMachine programs.",
+  "version": "0.1.5",
+  "publisher": "pulse",
+  "files": [
+    "package.json",
+    "README.md",
+    "out/**"
+  ],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Debuggers",
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onDebug",
+    "onLanguage:pascalish",
+    "onLanguage:cobolish",
+    "onLanguage:vbish"
+  ],
+  "main": "./out/extension.js",
+  "type": "module",
+  "contributes": {
+    "debuggers": [
+      {
+        "type": "pulse-pmachine",
+        "label": "Pulse PMachine",
+        "languages": [
+          "pascalish",
+          "cobolish",
+          "vbish"
+        ],
+        "configurationAttributes": {
+          "program": {
+            "type": "string",
+            "description": "Source program to execute."
+          },
+          "breakpointLine": {
+            "type": "number",
+            "description": "Initial source breakpoint line."
+          },
+          "animate": {
+            "type": "boolean",
+            "description": "Step through source statements automatically and print variables after each step."
+          },
+          "animationDelayMs": {
+            "type": "number",
+            "description": "Delay between animated source statements."
+          },
+          "runtime": {
+            "type": "string",
+            "enum": ["js", "esp32"],
+            "description": "PMachine runtime target."
+          },
+          "debugSession": {
+            "type": "boolean",
+            "description": "Use a persistent interactive debug session on the ESP32."
+          },
+          "targetHost": {
+            "type": "string",
+            "description": "ESP32 HTTP host when runtime is esp32."
+          },
+          "debugApiUrl": {
+            "type": "string",
+            "description": "Pulse backend URL (e.g. http://127.0.0.1:4000). When set, deployment and stepping are driven through /api/pmachine/debug/esp32/session instead of talking to the board directly."
+          },
+          "fileserverUrl": {
+            "type": "string",
+            "description": "Shared FFS server URL used by the ESP32 runtime."
+          },
+          "uploadMode": {
+            "type": "string",
+            "enum": ["direct", "shared"],
+            "description": "ESP32 artifact upload mode. Direct uploads use the board FFS API."
+          },
+          "inputQueue": {
+            "type": "string",
+            "description": "Input queue supplied to the PMachine."
+          },
+          "message": {
+            "type": "string",
+            "description": "Input message supplied to the PMachine."
+          },
+          "maxSteps": {
+            "type": "number",
+            "description": "Maximum PMachine steps for a remote run."
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "pulse-pmachine",
+            "request": "launch",
+            "name": "Debug Hanoi on JS PMachine",
+            "program": "${workspaceFolder}/artifactPrograms/towers-of-hanoi-program.pas",
+            "animate": false,
+            "animationDelayMs": 1000
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "package": "npm run compile && vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/debugprotocol": "^1.68.0",
+    "@vscode/vsce": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}

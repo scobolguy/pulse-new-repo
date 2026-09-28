@@ -78,11 +78,14 @@ export function createRouteManifestDependencyFactories(deps = {}) {
     getServiceProviderAction,
     getServiceProviderCategories,
     queueManagerInstances,
+    systemRegistry,
     express,
     inferQueueDataTypeIds,
     compileQueueDslSpec,
     diffQueueConfigs,
+    queueConfigMapFromWorkflowSymbols,
     resolveLibrarianOrigin,
+    serviceProcessManager,
     IS_PRODUCTION_ENV,
     ALLOW_TEMP_QUEUES_IN_PRODUCTION,
     machineWorkloadState,
@@ -230,7 +233,8 @@ export function createRouteManifestDependencyFactories(deps = {}) {
       requirePermission,
       dlqEvents,
       summarizeDlqEvents,
-      dequeueViaRoute
+      dequeueViaRoute,
+      serviceProcessManager
     }),
     compliance: () => ({
       requirePermission,
@@ -277,9 +281,15 @@ export function createRouteManifestDependencyFactories(deps = {}) {
       inferQueueDataTypeIds,
       compileQueueDslSpec,
       diffQueueConfigs,
+      queueConfigMapFromWorkflowSymbols,
+      systemRegistry,
       resolveLibrarianOrigin,
       IS_PRODUCTION_ENV,
       ALLOW_TEMP_QUEUES_IN_PRODUCTION
+    }),
+    systemRegistry: () => ({
+      requirePermission,
+      systemRegistry
     }),
     queueTransfer: () => ({
       requirePermission,

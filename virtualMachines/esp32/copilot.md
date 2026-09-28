@@ -7,7 +7,7 @@ This document summarizes the main files that make up the ESP Federated File Syst
 ## Top-Level Project Structure
 - **platformio.ini**: Main PlatformIO configuration for all environments (ESP32, ESP8266, Pico W).
 - **data/web/**: Web assets served by the device (HTML, etc).
-- **documents/**: Project documentation, specs, and API docs.
+- **documentation/**: Project documentation, specs, and API docs.
 - **dsl/**: Domain-specific language and compiler service files.
 - **src/**: Main source code for firmware and services.
 
@@ -40,9 +40,9 @@ This document summarizes the main files that make up the ESP Federated File Syst
 ---
 
 ## Documentation
-- **documents/FFS_API.md**
+- **documentation/api/FFS_API.md**
   - HTTP API documentation for the Federated File System endpoints.
-- **documents/ESPVM_Architecture_Spec_v1.0.txt**
+- **documentation/architecture/ESPVM_Architecture_Spec_v1.0.txt**
   - High-level architecture and design notes.
 
 ---

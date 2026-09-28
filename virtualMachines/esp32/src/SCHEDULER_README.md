@@ -286,9 +286,9 @@ Test: Semaphore Operations
 
 ## References
 
-- Target Architecture Specification: `documents/ESP_VIRTUAL_PMACHINE_TARGET_ARCHITECTURE_V2026.md`
+- Target Architecture Specification: `../documentation/architecture/ESPVM_Architecture_Spec_v1.0.txt`
 - Original PMachine: `src/pmachine.h`, `src/pmachine.cpp`
-- Evolution Strategy: `documents/pmachine_evolution.md`
+- Evolution Strategy: `../documentation/pmachines/EVOLUTION_STRATEGY.md`
 
 ## Status
 

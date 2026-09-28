@@ -477,6 +477,11 @@ async function run() {
       if (state === STATES.START_BACKEND) {
         const occupiedBy = findPidsUsingPort(BACKEND_PORT).filter((pid) => pid !== process.pid);
         if (occupiedBy.length) {
+          if (await isHealthy(BACKEND_URL)) {
+            await appendLog('backend-already-running', { state, backendUrl: BACKEND_URL, occupiedBy });
+            state = STATES.READY;
+            continue;
+          }
           await appendLog('port-occupied', { state, port: BACKEND_PORT, occupiedBy, command: BACKEND_CMD });
           await appendFailureNote({ type: 'port-occupied', state, port: BACKEND_PORT, occupiedBy, command: BACKEND_CMD });
           throw new Error(`Port ${BACKEND_PORT} is already occupied before backend launch`);

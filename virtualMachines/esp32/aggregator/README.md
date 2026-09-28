@@ -2,6 +2,8 @@
 
 Aggregator is a control plane and routing layer for distributed services.
 
+Pascalish, Cobolish, and VBish compile independently to portable PMachine p-code. WFL translates logical database and queue resources into deployment bindings; it is not an application-language intermediate representation. See `../documentation/compilers/LANGUAGE_DATABASE_QUEUE_RUNTIME.md`.
+
 ## Terminology
 
 Use the terms below consistently across UI, NLI, and docs:
@@ -481,7 +483,7 @@ Providers are discoverable via `/api/service-providers` and `/api/service-provid
 - Ollama mentor session output and escalation packets (`ollama-mentor-*`, `ollama-copilot-escalations/`)
 - project workspace artifacts (`projects/`)
 
-Do not assume every JSON or JSONL file under `data/` is canonical source. The cleanup plan that separates source, generated artifacts, and runtime output is documented in `../documents/REPOSITORY_HYGIENE_PLAN.md`.
+Do not assume every JSON or JSONL file under `data/` is canonical source. The cleanup plan that separates source, generated artifacts, and runtime output is documented in `../documentation/operations/REPOSITORY_HYGIENE_PLAN.md`.
 
 Behavior:
 - For `/api`, `/status`, and `/services`, the browser tries one gateway first.
@@ -515,10 +517,9 @@ States used by queue managers and generic service instances:
 ## API Reference
 
 For consolidated API docs and language guides, see:
-- `../../../documents/API_REFERENCE.md`
-- `../../../documents/PASCALISH_USER_GUIDE.md`
-- `../../../documents/COBOLISH_USER_GUIDE.md`
-- `../../../documents/WFL_USER_GUIDE.md`
+- `../../../documentation/api/README.md`
+- `../../../documentation/compilers/Language-Quick-Reference.md`
+- `../../../documentation/compilers/PASCALISH_WFL_MAPL_PCODE_DESIGN_SPEC.md`
 
 ### Queue Manager Registry
 

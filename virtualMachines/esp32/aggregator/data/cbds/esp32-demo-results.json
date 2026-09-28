@@ -1,11 +1,11 @@
 {
   "target": "http://192.168.2.155",
-  "ranAt": "2026-09-07T20:38:10.062Z",
+  "ranAt": "2026-09-21T23:18:52.312Z",
   "results": [
     {
       "name": "pascalish",
       "pass": false,
-      "error": "The operation was aborted due to timeout"
+      "error": "fetch failed"
     },
     {
       "name": "vbish",
@@ -15,7 +15,7 @@
     {
       "name": "cobolish",
       "pass": false,
-      "error": "The operation was aborted due to timeout"
+      "error": "execute_file 404: Unable to load program map file"
     }
   ]
 }

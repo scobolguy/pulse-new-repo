@@ -13,10 +13,82 @@ function stableStringify(value) {
   return JSON.stringify(value);
 }
 
+function resolveNominalTypeId(typeValue, registry = {}) {
+  if (typeValue == null) return '';
+  if (typeof typeValue === 'string') {
+    const key = String(typeValue).trim();
+    if (!key) return '';
+    const normalizedKey = key.toLowerCase();
+    const match = registry[normalizedKey] || registry[key] || registry[`type:${normalizedKey}`] || registry[`type:${key}`];
+    if (match) {
+      const canonicalId = typeof match.canonicalId === 'string' && match.canonicalId.trim() ? String(match.canonicalId).trim() : '';
+      if (canonicalId) return canonicalId.toLowerCase();
+      const logicalId = typeof match.logicalId === 'string' && match.logicalId.trim() ? String(match.logicalId).trim() : '';
+      if (logicalId) return logicalId.toLowerCase();
+    }
+    return key.toLowerCase();
+  }
+
+  if (Array.isArray(typeValue)) {
+    const results = typeValue.map(item => resolveNominalTypeId(item, registry)).filter(Boolean);
+    return results[0] || '';
+  }
+
+  if (isObject(typeValue)) {
+    if (typeValue.type === 'TypeRef') {
+      if (typeValue.kind === 'list' && typeValue.elementType) {
+        return resolveNominalTypeId(typeValue.elementType, registry);
+      }
+      const key = String(typeValue.id || typeValue.name || '').trim();
+      if (!key) return '';
+      const normalizedKey = key.toLowerCase();
+      const match = registry[normalizedKey] || registry[key] || registry[`type:${normalizedKey}`] || registry[`type:${key}`];
+      if (match) {
+        const canonicalId = typeof match.canonicalId === 'string' && match.canonicalId.trim() ? String(match.canonicalId).trim() : '';
+        if (canonicalId) return canonicalId.toLowerCase();
+        const logicalId = typeof match.logicalId === 'string' && match.logicalId.trim() ? String(match.logicalId).trim() : '';
+        if (logicalId) return logicalId.toLowerCase();
+      }
+      return key.toLowerCase();
+    }
+    if (typeof typeValue.canonicalId === 'string' && typeValue.canonicalId.trim()) {
+      return String(typeValue.canonicalId).trim().toLowerCase();
+    }
+    if (typeof typeValue.logicalId === 'string' && typeValue.logicalId.trim()) {
+      return String(typeValue.logicalId).trim().toLowerCase();
+    }
+    if (typeof typeValue.name === 'string' && typeValue.name.trim()) {
+      const key = typeValue.name.trim();
+      const match = registry[key.toLowerCase()] || registry[key] || registry[`type:${key.toLowerCase()}`] || registry[`type:${key}`];
+      if (match) {
+        const canonicalId = typeof match.canonicalId === 'string' && match.canonicalId.trim() ? String(match.canonicalId).trim() : '';
+        if (canonicalId) return canonicalId.toLowerCase();
+        const logicalId = typeof match.logicalId === 'string' && match.logicalId.trim() ? String(match.logicalId).trim() : '';
+        if (logicalId) return logicalId.toLowerCase();
+      }
+      return key.toLowerCase();
+    }
+  }
+
+  return '';
+}
+
+export function resolveQueueTypeIds(candidate, registry = {}) {
+  const values = Array.isArray(candidate) ? candidate : [candidate];
+  const result = [];
+  for (const item of values) {
+    const resolved = resolveNominalTypeId(item, registry);
+    if (resolved) result.push(resolved);
+  }
+  return Array.from(new Set(result));
+}
+
 function normalizeQueueConfig(config = {}) {
   const payload = isObject(config) ? { ...config } : {};
   const queueClass = String(payload.queueClass || payload.retentionClass || (payload.temporary === true ? 'temporary' : 'permanent')).trim().toLowerCase();
   payload.queueClass = queueClass === 'temporary' ? 'temporary' : 'permanent';
+
+  const registry = payload.typeRegistry || payload.registry || {};
 
   if (Object.prototype.hasOwnProperty.call(payload, 'messageTypeId') && !Object.prototype.hasOwnProperty.call(payload, 'dataTypeId')) {
     payload.dataTypeId = payload.messageTypeId;
@@ -24,16 +96,16 @@ function normalizeQueueConfig(config = {}) {
 
   if (Object.prototype.hasOwnProperty.call(payload, 'dataTypeIds')) {
     const ids = Array.isArray(payload.dataTypeIds) ? payload.dataTypeIds : [payload.dataTypeIds];
-    const normalizedIds = ids.map(item => String(item || '').trim().toLowerCase()).filter(Boolean);
+    const normalizedIds = resolveQueueTypeIds(ids, registry);
     if (normalizedIds.length > 0) {
-      payload.dataTypeIds = Array.from(new Set(normalizedIds));
+      payload.dataTypeIds = normalizedIds;
       payload.dataTypeId = payload.dataTypeIds[0];
     } else {
       delete payload.dataTypeIds;
       delete payload.dataTypeId;
     }
   } else if (Object.prototype.hasOwnProperty.call(payload, 'dataTypeId')) {
-    const normalized = String(payload.dataTypeId || '').trim().toLowerCase();
+    const normalized = resolveQueueTypeIds([payload.dataTypeId], registry)[0] || '';
     if (normalized) {
       payload.dataTypeId = normalized;
       payload.dataTypeIds = [normalized];
@@ -61,6 +133,22 @@ function normalizeQueueSpecEntry(entry) {
     config: normalizeQueueConfig(configSource),
     artifacts: isObject(entry.artifacts) ? entry.artifacts : {}
   };
+}
+
+export function queueConfigMapFromWorkflowSymbols(symbols = {}) {
+  const queueMap = {};
+  for (const queue of Array.isArray(symbols?.queues) ? symbols.queues : []) {
+    const queueName = String(queue?.queueName || '').trim();
+    if (!queueName) continue;
+    queueMap[queueName] = normalizeQueueConfig({
+      dataTypeIds: queue.dataTypeIds || queue.dataTypeId,
+      systemId: queue.systemId || null,
+      managerId: queue.managerId || null,
+      visibility: queue.visibility || 'internal',
+      sourceSymbol: queue.symbol || null
+    });
+  }
+  return queueMap;
 }
 
 function normalizeManagerSpec(manager) {
@@ -164,9 +252,10 @@ export function compileQueueDslSpec(spec) {
   };
 }
 
-export function diffQueueConfigs(existingQueues = {}, desiredQueueMap = {}) {
+export function diffQueueConfigs(existingQueues = {}, desiredQueueMap = {}, options = {}) {
   const existing = isObject(existingQueues) ? existingQueues : {};
   const desired = isObject(desiredQueueMap) ? desiredQueueMap : {};
+  const compareDeclaredFields = options?.compareDeclaredFields === true;
 
   const creates = [];
   const updates = [];
@@ -181,7 +270,10 @@ export function diffQueueConfigs(existingQueues = {}, desiredQueueMap = {}) {
       continue;
     }
 
-    if (stableStringify(currentConfig) !== stableStringify(desiredConfig)) {
+    const comparableCurrentConfig = compareDeclaredFields
+      ? Object.fromEntries(Object.keys(desiredConfig).map(key => [key, currentConfig[key]]))
+      : currentConfig;
+    if (stableStringify(comparableCurrentConfig) !== stableStringify(desiredConfig)) {
       updates.push({ queueName, currentConfig, desiredConfig });
       continue;
     }

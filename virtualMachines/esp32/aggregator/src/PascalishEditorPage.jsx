@@ -47,9 +47,13 @@ export default function PascalishEditorPage() {
   const [runBusy, setRunBusy] = useState(false)
   const [runError, setRunError] = useState('')
   const [diagnostics, setDiagnostics] = useState([])
+  const [breakpointLine, setBreakpointLine] = useState(21)
+  const [debugState, setDebugState] = useState(null)
+  const [debugError, setDebugError] = useState('')
+  const [lastRunOutput, setLastRunOutput] = useState('')
   const editorRef = useRef(null)
   const monacoRef = useRef(null)
-  const editorInitializedRef = useRef(false)
+  const debugDecorationsRef = useRef([])
   const typeNamesRef = useRef([])
   const typeFieldMapRef = useRef({})
   const mapNamesRef = useRef([])
@@ -139,10 +143,127 @@ export default function PascalishEditorPage() {
     }
   }, [])
 
+  async function debugRequest(sessionId, action = '') {
+    const url = action
+      ? `/api/debug/js-pmachine/sessions/${encodeURIComponent(sessionId)}/${action}`
+      : `/api/debug/js-pmachine/sessions/${encodeURIComponent(sessionId)}`
+    const response = await fetch(url, action ? { method: 'POST' } : undefined)
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(payload?.error || `Debug request failed (${response.status}).`)
+    return payload.state || payload.session || payload
+  }
+
+  function formatRuntimeOutput(resultOrStdout) {
+    const rows = Array.isArray(resultOrStdout)
+      ? resultOrStdout
+      : (Array.isArray(resultOrStdout?.stdout) ? resultOrStdout.stdout : [])
+    if (rows.length > 0) return rows.map((line) => String(line ?? '')).join('\n')
+    if (typeof resultOrStdout === 'string') return resultOrStdout
+    if (resultOrStdout && typeof resultOrStdout === 'object') {
+      if (Array.isArray(resultOrStdout.stdout)) return formatRuntimeOutput(resultOrStdout.stdout)
+      if (resultOrStdout.error) return `ERROR: ${String(resultOrStdout.error)}`
+    }
+    return 'Program completed with no visible output.'
+  }
+
+  async function launchDebug() {
+    setRunBusy(true)
+    setDebugError('')
+    try {
+      const response = await fetch('/api/pmachine/deploy-and-run', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          source,
+          sourceFileName: 'towers-of-hanoi-program.pas',
+          runtime: 'js',
+          debug: true,
+          breakAtSourceLine: Number(breakpointLine),
+        }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload?.error || `Debug launch failed (${response.status}).`)
+      const session = payload.session
+      if (!session?.id) throw new Error('Debug launch returned no session.')
+      const state = await debugRequest(session.id, 'continue')
+      setDebugState(state)
+      setLastRunOutput(formatRuntimeOutput(state))
+      setStatus(`Debug session started; running to line ${breakpointLine}.`)
+    } catch (errorValue) {
+      setDebugError(errorValue?.message || String(errorValue))
+      setStatus('Debug launch failed.')
+    } finally {
+      setRunBusy(false)
+    }
+  }
+
+  async function runDebugAction(action) {
+    if (!debugState?.id) return
+    try {
+      setDebugState(await debugRequest(debugState.id, action))
+      setDebugError('')
+    } catch (errorValue) {
+      setDebugError(errorValue?.message || String(errorValue))
+    }
+  }
+
+  useEffect(() => {
+    const sessionId = debugState?.id
+    if (!sessionId || ['completed', 'error', 'stopped'].includes(debugState?.status)) return undefined
+    const timer = setInterval(async () => {
+      try {
+        const nextState = await debugRequest(sessionId)
+        setDebugState(nextState)
+        setLastRunOutput(formatRuntimeOutput(nextState))
+      } catch (errorValue) {
+        setDebugError(errorValue?.message || String(errorValue))
+      }
+    }, 250)
+    return () => clearInterval(timer)
+  }, [debugState?.id, debugState?.status])
+
+  useEffect(() => {
+    const editor = editorRef.current
+    const monaco = monacoRef.current
+    const line = Number(debugState?.sourceLocation?.sourceLine)
+    if (!editor || !monaco) return
+    debugDecorationsRef.current = editor.deltaDecorations(debugDecorationsRef.current, Number.isInteger(line) ? [{
+      range: new monaco.Range(line, 1, line, 1),
+      options: { isWholeLine: true, className: 'debug-current-line', glyphMarginClassName: 'debug-current-line-glyph' },
+    }] : [])
+    if (Number.isInteger(line)) editor.revealLineInCenter(line)
+  }, [debugState?.sourceLocation?.sourceLine])
+
   async function runPascalishAction(mode) {
     setRunMenuOpen(false)
+    if (mode === 'compile-debug') {
+      await launchDebug()
+      return
+    }
     setRunBusy(true)
     try {
+      if (mode === 'compile-run') {
+        const response = await fetch('/api/pmachine/deploy-and-run', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            source,
+            sourceFileName: 'towers-of-hanoi-program.pas',
+            runtime: 'js',
+            debug: false,
+          }),
+        })
+        const payload = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(payload?.error || `Runtime execution failed (${response.status}).`)
+        const result = payload.result || {}
+        const outputText = formatRuntimeOutput(result)
+        setLastRunOutput(outputText)
+        setStatus(`Runtime completed: ${Array.isArray(result.stdout) ? result.stdout.length : 0} output line(s).`)
+        setRunError('')
+        setDiagnostics([])
+        return
+      }
+
       const response = await fetch('/api/develop/compile', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -154,22 +275,12 @@ export default function PascalishEditorPage() {
       }
       const compile = payload.compile || {}
       const baseMessage = `Compiled: ${Number(compile.routers || 0)} router(s), ${Number(compile.mappings || 0)} mapping(s).`
-      if (mode === 'compile-run') {
-        setStatus(`${baseMessage} Runtime artifacts updated.`)
-      } else if (mode === 'compile-debug') {
-        setStatus(`${baseMessage} Opening debugger...`)
-        window.dispatchEvent(new CustomEvent('pulse:open-debugger', {
-          detail: { fsmId: payload?.debug?.fsmId || 'startup-fsm' },
-        }))
-      } else {
-        setStatus(baseMessage)
-      }
+      setStatus(baseMessage)
       setRunError('')
       setDiagnostics([])
     } catch (errorValue) {
       const parsed = parseCompileDiagnostics(errorValue.message)
       setDiagnostics(parsed)
-      // Keep the raw banner only when there is no line-level detail to show inline.
       setRunError(parsed.length > 0 ? '' : errorValue.message)
     } finally {
       setRunBusy(false)
@@ -232,8 +343,26 @@ export default function PascalishEditorPage() {
           </div>
           <span style={{ fontSize: 12, opacity: 0.75 }}>{status}</span>
         </div>
-        <span style={{ fontSize: 11, opacity: 0.55 }}>F7 compile · Ctrl+F7 run · Shift+F7 debug</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <label style={{ fontSize: 11, opacity: 0.7 }}>Breakpoint line</label>
+          <input type="number" min="1" value={breakpointLine} onChange={(event) => setBreakpointLine(Number(event.target.value) || 1)} style={{ width: 58 }} />
+          {debugState?.id ? <>
+            <button type="button" onClick={() => void runDebugAction('continue')} disabled={runBusy}>Continue</button>
+            <button type="button" onClick={() => void runDebugAction('step-in')} disabled={runBusy}>Step</button>
+            <button type="button" onClick={() => void runDebugAction('pause')} disabled={runBusy}>Pause</button>
+            <button type="button" onClick={() => void runDebugAction('stop')} disabled={runBusy}>Stop</button>
+          </> : null}
+        </div>
       </div>
+
+      {debugState ? (
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', fontSize: 12, opacity: 0.82 }}>
+          <strong>JS PMachine: {debugState.status}</strong>
+          <span>Line {debugState.sourceLocation?.sourceLine || '-'}</span>
+          <span>PC {debugState.pc ?? '-'}</span>
+          <span>{debugState.sourceLocation?.sourceText || ''}</span>
+        </div>
+      ) : null}
 
       {runError && (
         <div style={{ padding: '8px 10px', borderRadius: 6, background: 'rgba(239,68,68,0.12)', color: '#fca5a5', fontSize: 12 }}>
@@ -241,26 +370,33 @@ export default function PascalishEditorPage() {
         </div>
       )}
 
-      <div style={{ flex: 1, minHeight: 320, height: '60vh', border: '1px solid rgba(148,163,184,0.25)', borderRadius: 6, overflow: 'hidden' }}>
+      {debugError && (
+        <div style={{ padding: '8px 10px', borderRadius: 6, background: 'rgba(239,68,68,0.12)', color: '#fca5a5', fontSize: 12 }}>
+          {debugError}
+        </div>
+      )}
+
+      {(lastRunOutput || debugState?.stdout?.length) && (
+        <div style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 6, overflow: 'hidden' }}>
+          <div style={{ padding: '6px 10px', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6, opacity: 0.7, borderBottom: '1px solid rgba(148,163,184,0.2)' }}>
+            Program output
+          </div>
+          <pre style={{ margin: 0, padding: 10, fontSize: 12, lineHeight: 1.5, whiteSpace: 'pre-wrap', background: 'rgba(15, 23, 42, 0.45)', color: '#e2e8f0', maxHeight: 180, overflow: 'auto' }}>
+            {String((debugState?.stdout && debugState.stdout.length > 0 ? formatRuntimeOutput(debugState.stdout) : lastRunOutput) || 'Program completed with no visible output.')}
+          </pre>
+        </div>
+      )}
+
+      <div style={{ flex: 1, minHeight: 0, border: '1px solid rgba(148,163,184,0.25)', borderRadius: 6, overflow: 'hidden' }}>
         <React.Suspense fallback={<div style={{ padding: 20, opacity: 0.6 }}>Loading editor…</div>}>
           <MonacoEditor
             height="100%"
             language="pascalish"
             theme="pascalishWorkbench"
             value={source}
-            onChange={(value) => {
-              if (!editorInitializedRef.current && !value) return
-              setSource(value || '')
-            }}
+            onChange={(value) => setSource(value || '')}
             beforeMount={(monaco) => initializePascalishLanguage(monaco, typeNamesRef, typeFieldMapRef, mapNamesRef)}
-            onMount={(editor, monaco) => {
-              editorRef.current = editor
-              monacoRef.current = monaco
-              if (!editor.getValue().trim() && source) {
-                editor.setValue(source)
-              }
-              editorInitializedRef.current = true
-            }}
+            onMount={(editor, monaco) => { editorRef.current = editor; monacoRef.current = monaco }}
             options={{
               minimap: { enabled: false },
               fontSize: 14,

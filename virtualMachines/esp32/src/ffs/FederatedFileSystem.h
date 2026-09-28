@@ -105,7 +105,7 @@ public:
     FFSStatus fetchFileFromPeer(const String &logicalName, const String &peerId);
 
     // Mounts
-    FFSStatus addMountPoint(const String &mountPoint, const String &targetPath, FFSMountType type, const String &peerId = "", bool readOnly = true);
+    FFSStatus addMountPoint(const String &mountPoint, const String &targetPath, FFSMountType type, const String &peerId = "", bool readOnly = true, bool persist = true);
     FFSStatus removeMountPoint(const String &mountPoint);
     std::vector<FFSMountEntry> listMountPoints() const;
     FFSStatus reloadMountPoints();

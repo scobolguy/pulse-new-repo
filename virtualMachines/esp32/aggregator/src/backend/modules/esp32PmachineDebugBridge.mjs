@@ -2,7 +2,7 @@ import { attachPcodeSignature } from '../../../scripts/pcode-signing.mjs';
 
 const REQUEST_TIMEOUT_MS = 15000;
 const HOST_PATTERN = /^(?:https?:\/\/)?[a-z0-9._-]+(?::\d{1,5})?$/i;
-const DEBUG_ACTIONS = new Set(['step', 'stepout', 'continue', 'pause']);
+const DEBUG_ACTIONS = new Set(['step', 'stepin', 'stepout', 'continue', 'pause', 'breakpoint-set', 'breakpoint-clear']);
 
 // The debug session endpoints accept a device address from the caller, so the
 // value is constrained to a bare host/port before it is ever used in a URL.
@@ -110,7 +110,8 @@ export async function startEsp32DebugSession({
     sessionId: String(session.sessionId || ''),
     status: String(session.status || 'unknown'),
     pc: Number(session.pc || 0),
-    callDepth: Number(session.callDepth || 0)
+    callDepth: Number(session.callDepth || 0),
+    breakpoints: parseBreakpoints(breakpoints)
   };
 }
 
@@ -125,12 +126,13 @@ export async function readEsp32DebugSession({ host, sessionId } = {}) {
     status: String(state.status || 'unknown'),
     pc: Number(state.pc || 0),
     callDepth: Number(state.callDepth || 0),
+    breakpoints: Array.isArray(state.breakpoints) ? state.breakpoints.map(Number) : [],
     globals: state.globals && typeof state.globals === 'object' ? state.globals : {},
     locals: state.locals && typeof state.locals === 'object' ? state.locals : {}
   };
 }
 
-export async function controlEsp32DebugSession({ host, sessionId, action } = {}) {
+export async function controlEsp32DebugSession({ host, sessionId, action, pc } = {}) {
   const baseUrl = resolveDeviceBaseUrl(host);
   const id = String(sessionId || '').trim();
   if (!id) throw new Error('sessionId is required');
@@ -138,7 +140,16 @@ export async function controlEsp32DebugSession({ host, sessionId, action } = {})
   if (!DEBUG_ACTIONS.has(command)) {
     throw new Error(`action must be one of ${[...DEBUG_ACTIONS].join(', ')}`);
   }
-  await deviceRequest(baseUrl, `/pmachine/debug/session/${command}?id=${encodeURIComponent(id)}`, { method: 'POST' });
+  let endpoint = `/pmachine/debug/session/${command}`;
+  if (command === 'stepin') endpoint = '/pmachine/debug/session/step';
+  if (command === 'breakpoint-set' || command === 'breakpoint-clear') {
+    const breakpointPc = Number.parseInt(pc, 10);
+    if (!Number.isInteger(breakpointPc) || breakpointPc < 0) throw new Error('pc must be a non-negative integer');
+    endpoint = `/pmachine/debug/session/breakpoint/${command === 'breakpoint-set' ? 'set' : 'clear'}?id=${encodeURIComponent(id)}&pc=${breakpointPc}`;
+  } else {
+    endpoint += `?id=${encodeURIComponent(id)}`;
+  }
+  await deviceRequest(baseUrl, endpoint, { method: 'POST' });
   return readEsp32DebugSession({ host, sessionId: id });
 }
 

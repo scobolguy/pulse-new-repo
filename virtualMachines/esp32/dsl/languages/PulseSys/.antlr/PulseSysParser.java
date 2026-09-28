@@ -1,4 +1,4 @@
-// Generated from c:/Users/scobo/OneDrive/Documents/GitHub/pulse-new-repo/virtualMachines/esp32/dsl/languages/PulseSys/PulseSys.g4 by ANTLR 4.13.1
+// Generated from c:/dev/pulse-new-repo/virtualMachines/esp32/dsl/languages/PulseSys/PulseSys.g4 by ANTLR 4.13.1
 import org.antlr.v4.runtime.atn.*;
 import org.antlr.v4.runtime.dfa.DFA;
 import org.antlr.v4.runtime.*;
@@ -135,14 +135,6 @@ public class PulseSysParser extends Parser {
 			super(parent, invokingState);
 		}
 		@Override public int getRuleIndex() { return RULE_program; }
-		@Override
-		public void enterRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).enterProgram(this);
-		}
-		@Override
-		public void exitRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).exitProgram(this);
-		}
 	}
 
 	public final ProgramContext program() throws RecognitionException {
@@ -217,14 +209,6 @@ public class PulseSysParser extends Parser {
 			super(parent, invokingState);
 		}
 		@Override public int getRuleIndex() { return RULE_declaration; }
-		@Override
-		public void enterRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).enterDeclaration(this);
-		}
-		@Override
-		public void exitRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).exitDeclaration(this);
-		}
 	}
 
 	public final DeclarationContext declaration() throws RecognitionException {
@@ -237,7 +221,38 @@ public class PulseSysParser extends Parser {
 			case T__5:
 				enterOuterAlt(_localctx, 1);
 				{
-				setSta int invokingState) {
+				setState(77);
+				var_decl();
+				}
+				break;
+			case T__17:
+				enterOuterAlt(_localctx, 2);
+				{
+				setState(78);
+				proc_decl();
+				}
+				break;
+			default:
+				throw new NoViableAltException(this);
+			}
+		}
+		catch (RecognitionException re) {
+			_localctx.exception = re;
+			_errHandler.reportError(this, re);
+			_errHandler.recover(this, re);
+		}
+		finally {
+			exitRule();
+		}
+		return _localctx;
+	}
+
+	@SuppressWarnings("CheckReturnValue")
+	public static class Var_declContext extends ParserRuleContext {
+		public Var_listContext var_list() {
+			return getRuleContext(Var_listContext.class,0);
+		}
+		public Var_declContext(ParserRuleContext parent, int invokingState) {
 			super(parent, invokingState);
 		}
 		@Override public int getRuleIndex() { return RULE_var_decl; }
@@ -918,192 +933,6 @@ public class PulseSysParser extends Parser {
 		}
 		catch (RecognitionException re) {
 			_localctx.exception = re;
-			_errHandler.repo
-		enterRule(_localctx, 20, RULE_statement);
-		try {
-			setState(176);
-			_errHandler.sync(this);
-			switch ( getInterpreter().adaptivePredict(_input,11,_ctx) ) {
-			case 1:
-				enterOuterAlt(_localctx, 1);
-				{
-				setState(167);
-				assign_stmt();
-				}
-				break;
-			case 2:
-				enterOuterAlt(_localctx, 2);
-				{
-				setState(168);
-				if_stmt();
-				}
-				break;
-			case 3:
-				enterOuterAlt(_localctx, 3);
-				{
-				setState(169);
-				while_stmt();
-				}
-				break;
-			case 4:
-				enterOuterAlt(_localctx, 4);
-				{
-				setState(170);
-				for_stmt();
-				}
-				break;
-			case 5:
-				enterOuterAlt(_localctx, 5);
-				{
-				setState(171);
-				proc_call();
-				}
-				break;
-			case 6:
-				enterOuterAlt(_localctx, 6);
-				{
-				setState(172);
-				spawn_stmt();
-				}
-				break;
-			case 7:
-				enterOuterAlt(_localctx, 7);
-				{
-				setState(173);
-				send_stmt();
-				}
-				break;
-			case 8:
-				enterOuterAlt(_localctx, 8);
-				{
-				setState(174);
-				recv_stmt();
-				}
-				break;
-			case 9:
-				enterOuterAlt(_localctx, 9);
-				{
-				setState(175);
-				match(T__1);
-				}
-				break;
-			}
-		}
-		catch (RecognitionException re) {
-			_localctx.exception = re;
-			_errHandler.reportError(this, re);
-			_errHandler.recover(this, re);
-		}
-		finally {
-			exitRule();
-		}
-		return _localctx;
-	}
-
-	@SuppressWarnings("CheckReturnValue")
-	public static class Assign_stmtContext extends ParserRuleContext {
-		public IdentifierContext identifier() {
-			return getRuleContext(IdentifierContext.class,0);
-		}
-		public ExprContext expr() {
-			return getRuleContext(ExprContext.class,0);
-		}
-		public Assign_stmtContext(ParserRuleContext parent, int invokingState) {
-			super(parent, invokingState);
-		}
-		@Override public int getRuleIndex() { return RULE_assign_stmt; }
-		@Override
-		public void enterRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).enterAssign_stmt(this);
-		}
-		@Override
-		public void exitRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).exitAssign_stmt(this);
-		}
-	}
-
-	public final Assign_stmtContext assign_stmt() throws RecognitionException {
-		Assign_stmtContext _localctx = new Assign_stmtContext(_ctx, getState());
-		enterRule(_localctx, 22, RULE_assign_stmt);
-		try {
-			enterOuterAlt(_localctx, 1);
-			{
-			setState(178);
-			identifier();
-			setState(179);
-			match(T__20);
-			setState(180);
-			expr();
-			setState(181);
-			match(T__1);
-			}
-		}
-		catch (RecognitionException re) {
-			_localctx.exception = re;
-			_errHandler.reportError(this, re);
-			_errHandler.recover(this, re);
-		}
-		finally {
-			exitRule();
-		}
-		return _localctx;
-	}
-
-	@SuppressWarnings("CheckReturnValue")
-	public static class If_stmtContext extends ParserRuleContext {
-		public ExprContext expr() {
-			return getRuleContext(ExprContext.class,0);
-		}
-		public List<StatementContext> statement() {
-			return getRuleContexts(StatementContext.class);
-		}
-		public StatementContext statement(int i) {
-			return getRuleContext(StatementContext.class,i);
-		}
-		public If_stmtContext(ParserRuleContext parent, int invokingState) {
-			super(parent, invokingState);
-		}
-		@Override public int getRuleIndex() { return RULE_if_stmt; }
-		@Override
-		public void enterRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).enterIf_stmt(this);
-		}
-		@Override
-		public void exitRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).exitIf_stmt(this);
-		}
-	}
-
-	public final If_stmtContext if_stmt() throws RecognitionException {
-		If_stmtContext _localctx = new If_stmtContext(_ctx, getState());
-		enterRule(_localctx, 24, RULE_if_stmt);
-		try {
-			enterOuterAlt(_localctx, 1);
-			{
-			setState(183);
-			match(T__21);
-			setState(184);
-			expr();
-			setState(185);
-			match(T__22);
-			setState(186);
-			statement();
-			setState(189);
-			_errHandler.sync(this);
-			switch ( getInterpreter().adaptivePredict(_input,12,_ctx) ) {
-			case 1:
-				{
-				setState(187);
-				match(T__23);
-				setState(188);
-				statement();
-				}
-				break;
-			}
-			}
-		}
-		catch (RecognitionException re) {
-			_localctx.exception = re;
 			_errHandler.reportError(this, re);
 			_errHandler.recover(this, re);
 		}
@@ -1125,14 +954,6 @@ public class PulseSysParser extends Parser {
 			super(parent, invokingState);
 		}
 		@Override public int getRuleIndex() { return RULE_while_stmt; }
-		@Override
-		public void enterRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).enterWhile_stmt(this);
-		}
-		@Override
-		public void exitRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).exitWhile_stmt(this);
-		}
 	}
 
 	public final While_stmtContext while_stmt() throws RecognitionException {
@@ -1180,14 +1001,6 @@ public class PulseSysParser extends Parser {
 			super(parent, invokingState);
 		}
 		@Override public int getRuleIndex() { return RULE_for_stmt; }
-		@Override
-		public void enterRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).enterFor_stmt(this);
-		}
-		@Override
-		public void exitRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).exitFor_stmt(this);
-		}
 	}
 
 	public final For_stmtContext for_stmt() throws RecognitionException {
@@ -1240,14 +1053,6 @@ public class PulseSysParser extends Parser {
 			super(parent, invokingState);
 		}
 		@Override public int getRuleIndex() { return RULE_proc_call; }
-		@Override
-		public void enterRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).enterProc_call(this);
-		}
-		@Override
-		public void exitRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).exitProc_call(this);
-		}
 	}
 
 	public final Proc_callContext proc_call() throws RecognitionException {
@@ -1327,14 +1132,6 @@ public class PulseSysParser extends Parser {
 			super(parent, invokingState);
 		}
 		@Override public int getRuleIndex() { return RULE_spawn_stmt; }
-		@Override
-		public void enterRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).enterSpawn_stmt(this);
-		}
-		@Override
-		public void exitRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).exitSpawn_stmt(this);
-		}
 	}
 
 	public final Spawn_stmtContext spawn_stmt() throws RecognitionException {
@@ -1416,14 +1213,6 @@ public class PulseSysParser extends Parser {
 			super(parent, invokingState);
 		}
 		@Override public int getRuleIndex() { return RULE_send_stmt; }
-		@Override
-		public void enterRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).enterSend_stmt(this);
-		}
-		@Override
-		public void exitRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).exitSend_stmt(this);
-		}
 	}
 
 	public final Send_stmtContext send_stmt() throws RecognitionException {
@@ -1484,14 +1273,6 @@ public class PulseSysParser extends Parser {
 			super(parent, invokingState);
 		}
 		@Override public int getRuleIndex() { return RULE_recv_stmt; }
-		@Override
-		public void enterRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).enterRecv_stmt(this);
-		}
-		@Override
-		public void exitRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).exitRecv_stmt(this);
-		}
 	}
 
 	public final Recv_stmtContext recv_stmt() throws RecognitionException {
@@ -1555,14 +1336,6 @@ public class PulseSysParser extends Parser {
 			super(parent, invokingState);
 		}
 		@Override public int getRuleIndex() { return RULE_expr; }
-		@Override
-		public void enterRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).enterExpr(this);
-		}
-		@Override
-		public void exitRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).exitExpr(this);
-		}
 	}
 
 	public final ExprContext expr() throws RecognitionException {
@@ -1617,14 +1390,6 @@ public class PulseSysParser extends Parser {
 			super(parent, invokingState);
 		}
 		@Override public int getRuleIndex() { return RULE_simple_expr; }
-		@Override
-		public void enterRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).enterSimple_expr(this);
-		}
-		@Override
-		public void exitRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).exitSimple_expr(this);
-		}
 	}
 
 	public final Simple_exprContext simple_expr() throws RecognitionException {
@@ -1683,14 +1448,6 @@ public class PulseSysParser extends Parser {
 			super(parent, invokingState);
 		}
 		@Override public int getRuleIndex() { return RULE_term; }
-		@Override
-		public void enterRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).enterTerm(this);
-		}
-		@Override
-		public void exitRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).exitTerm(this);
-		}
 	}
 
 	public final TermContext term() throws RecognitionException {
@@ -1749,14 +1506,6 @@ public class PulseSysParser extends Parser {
 			super(parent, invokingState);
 		}
 		@Override public int getRuleIndex() { return RULE_factor; }
-		@Override
-		public void enterRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).enterFactor(this);
-		}
-		@Override
-		public void exitRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).exitFactor(this);
-		}
 	}
 
 	public final FactorContext factor() throws RecognitionException {
@@ -1820,14 +1569,6 @@ public class PulseSysParser extends Parser {
 			super(parent, invokingState);
 		}
 		@Override public int getRuleIndex() { return RULE_relop; }
-		@Override
-		public void enterRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).enterRelop(this);
-		}
-		@Override
-		public void exitRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).exitRelop(this);
-		}
 	}
 
 	public final RelopContext relop() throws RecognitionException {
@@ -1866,14 +1607,6 @@ public class PulseSysParser extends Parser {
 			super(parent, invokingState);
 		}
 		@Override public int getRuleIndex() { return RULE_addop; }
-		@Override
-		public void enterRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).enterAddop(this);
-		}
-		@Override
-		public void exitRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).exitAddop(this);
-		}
 	}
 
 	public final AddopContext addop() throws RecognitionException {
@@ -1912,14 +1645,6 @@ public class PulseSysParser extends Parser {
 			super(parent, invokingState);
 		}
 		@Override public int getRuleIndex() { return RULE_mulop; }
-		@Override
-		public void enterRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).enterMulop(this);
-		}
-		@Override
-		public void exitRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).exitMulop(this);
-		}
 	}
 
 	public final MulopContext mulop() throws RecognitionException {
@@ -1959,14 +1684,6 @@ public class PulseSysParser extends Parser {
 			super(parent, invokingState);
 		}
 		@Override public int getRuleIndex() { return RULE_identifier; }
-		@Override
-		public void enterRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).enterIdentifier(this);
-		}
-		@Override
-		public void exitRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).exitIdentifier(this);
-		}
 	}
 
 	public final IdentifierContext identifier() throws RecognitionException {
@@ -1997,14 +1714,6 @@ public class PulseSysParser extends Parser {
 			super(parent, invokingState);
 		}
 		@Override public int getRuleIndex() { return RULE_int_lit; }
-		@Override
-		public void enterRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).enterInt_lit(this);
-		}
-		@Override
-		public void exitRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).exitInt_lit(this);
-		}
 	}
 
 	public final Int_litContext int_lit() throws RecognitionException {
@@ -2034,14 +1743,6 @@ public class PulseSysParser extends Parser {
 			super(parent, invokingState);
 		}
 		@Override public int getRuleIndex() { return RULE_bool_lit; }
-		@Override
-		public void enterRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).enterBool_lit(this);
-		}
-		@Override
-		public void exitRule(ParseTreeListener listener) {
-			if ( listener instanceof PulseSysListener ) ((PulseSysListener)listener).exitBool_lit(this);
-		}
 	}
 
 	public final Bool_litContext bool_lit() throws RecognitionException {

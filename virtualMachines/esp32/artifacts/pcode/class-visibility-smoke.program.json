@@ -1,0 +1,172 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-16T21:29:45.948Z",
+  "serviceId": "ClassVisibilitySmoke",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "ClassVisibilitySmoke",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-program",
+  "sourceLanguage": "pascalish",
+  "symbols": {
+    "systems": [],
+    "queues": [],
+    "services": [],
+    "databases": [],
+    "tables": []
+  },
+  "typeRegistry": {},
+  "exportedFunctions": [],
+  "entries": [],
+  "localResources": {
+    "serviceId": "ClassVisibilitySmoke",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "routers": [],
+  "serviceEndpoints": [],
+  "globals": [
+    "c_total"
+  ],
+  "variableDeclarations": [
+    {
+      "type": "VarDecl",
+      "name": "c",
+      "dataType": {
+        "type": "TypeRef",
+        "kind": "user",
+        "id": "Counter",
+        "genericArgs": []
+      }
+    }
+  ],
+  "enums": {},
+  "procedures": {
+    "PROC_COUNTER_BUMP": {
+      "name": "Counter.Bump",
+      "className": "Counter",
+      "methodName": "Bump",
+      "returnType": null,
+      "params": [
+        "total"
+      ],
+      "locals": [],
+      "genericParams": []
+    },
+    "PROC_COUNTER_TOTAL": {
+      "name": "Counter.Total",
+      "className": "Counter",
+      "methodName": "Total",
+      "returnType": {
+        "type": "TypeRef",
+        "kind": "simple",
+        "id": "integer",
+        "genericArgs": []
+      },
+      "params": [
+        "total"
+      ],
+      "locals": [],
+      "genericParams": []
+    }
+  },
+  "typeDeclarations": [],
+  "classDeclarations": [
+    {
+      "type": "ClassDecl",
+      "name": "Counter",
+      "genericParams": [],
+      "extendsType": null,
+      "members": [
+        {
+          "type": "ClassFieldDecl",
+          "name": "total",
+          "dataType": {
+            "type": "TypeRef",
+            "kind": "simple",
+            "id": "integer",
+            "genericArgs": []
+          },
+          "visibility": "private"
+        },
+        {
+          "type": "ClassMethodDecl",
+          "methodKind": "procedure",
+          "name": "Bump",
+          "genericParams": [],
+          "parameters": [],
+          "localDecls": [],
+          "returnType": null,
+          "body": {
+            "type": "Block",
+            "statements": [
+              {
+                "type": "Assign",
+                "target": "total",
+                "rounded": false,
+                "expr": {
+                  "type": "Binary",
+                  "op": "+",
+                  "left": {
+                    "type": "Identifier",
+                    "name": "total"
+                  },
+                  "right": {
+                    "type": "NumberLiteral",
+                    "value": 1,
+                    "raw": "1"
+                  }
+                }
+              }
+            ]
+          },
+          "forward": false,
+          "visibility": "public"
+        },
+        {
+          "type": "ClassMethodDecl",
+          "methodKind": "function",
+          "name": "Total",
+          "genericParams": [],
+          "parameters": [],
+          "localDecls": [],
+          "returnType": {
+            "type": "TypeRef",
+            "kind": "simple",
+            "id": "integer",
+            "genericArgs": []
+          },
+          "body": {
+            "type": "Block",
+            "statements": [
+              {
+                "type": "Return",
+                "expr": {
+                  "type": "Identifier",
+                  "name": "total"
+                }
+              }
+            ]
+          },
+          "forward": false,
+          "visibility": "public"
+        }
+      ]
+    }
+  ],
+  "entryLabel": "MAIN",
+  "libraries": [],
+  "mapperImports": [],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "27d99f7cc249275724c380a12dd4f270dfd9d79a9a95ed09f8dde1047ea4b559",
+    "signedAt": "2026-09-16T21:29:45.953Z",
+    "pcodeLength": 463,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

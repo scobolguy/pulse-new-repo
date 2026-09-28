@@ -1,0 +1,14 @@
+GENERIC_SYSTEM "payments" BEGIN
+  GENERIC_SYSTEM "ingress" BEGIN
+    PORT "ordersOut" OUTPUT TYPE "PaymentRecord";
+  END;
+  GENERIC_SYSTEM "ledger" BEGIN
+    PORT "ordersIn" INPUT TYPE "PaymentRecord";
+    GENERIC_SYSTEM "audit" BEGIN
+      PORT "eventsIn" INPUT TYPE "AuditEvent";
+    END;
+    PORT "auditOut" OUTPUT TYPE "AuditEvent";
+    CONNECT QUEUE "auditEvents" FROM "auditOut" TO "audit.eventsIn" TYPE "AuditEvent";
+  END;
+  CONNECT QUEUE "orders" FROM "ingress.ordersOut" TO "ledger.ordersIn" TYPE "PaymentRecord";
+END;

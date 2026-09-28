@@ -730,6 +730,10 @@ export default class QueueManager {
     return this.queueConfig[queueName] || {};
   }
 
+  isExternallyVisible(queueName) {
+    return this.getConfig(queueName).visibility !== 'internal';
+  }
+
   enqueue(queueName, message, sourceService, messageId = null, messageEnvelope = null) {
     if (!this.queueConfig[queueName]) {
       throw new Error(`Queue ${queueName} not configured`);

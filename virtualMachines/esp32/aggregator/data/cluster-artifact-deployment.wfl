@@ -1,0 +1,2 @@
+CREATE CLUSTER "payments-edge" LABEL "Payments Edge" NODES ("edge-01", "edge-02");
+DEPLOY ARTIFACT "queue-writer" FILE "tools/java-pmachine/queue-write-conformance.pcode" TO CLUSTER "payments-edge";

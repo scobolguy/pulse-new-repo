@@ -17,6 +17,7 @@ export function registerOrchestrationRegistryRoutes(app, deps = {}) {
     getSupervisorHeartbeatSnapshot,
     getSupervisorHeartbeatEntry,
     getDatabaseRegistrySnapshot,
+    databaseManagerInstances,
     getLocalQueueManagerLaunchers,
     getRemoteAgentsPayload,
     normalizeRemoteAgentUrl,
@@ -120,7 +121,40 @@ export function registerOrchestrationRegistryRoutes(app, deps = {}) {
   });
 
   app.get('/api/registry/databases', (req, res) => {
-    res.json({ databases: getDatabaseRegistrySnapshot() });
+    const databases = getDatabaseRegistrySnapshot().map(database => ({
+      ...database,
+      tables: databaseManagerInstances?.get(database.serverId)?.listTables
+        ? undefined
+        : database.tables
+    }));
+    Promise.all(databases.map(async database => {
+      const manager = databaseManagerInstances?.get(database.serverId);
+      if (!manager?.listTables) return database;
+      const tables = await manager.listTables().catch(() => []);
+      return {
+        ...database,
+        tables: tables.map(table => ({
+          symbol: null,
+          physicalName: table.table_name || table.TABLE_NAME || table.name,
+          rowCount: Number(table.row_count ?? table.rowCount ?? 0),
+          typeName: null,
+          discovered: true
+        })).filter(table => table.physicalName)
+      };
+    })).then(result => res.json({ databases: result }));
+  });
+
+  app.get('/api/registry/managers', (req, res) => {
+    const queueManagers = Array.from(queueManagerRegistry.values()).map(manager => ({
+      ...manager,
+      managerType: 'queue'
+    }));
+    const databaseManagers = getDatabaseRegistrySnapshot().map(manager => ({
+      ...manager,
+      managerType: 'database',
+      managerId: manager.serverId
+    }));
+    res.json({ managers: [...queueManagers, ...databaseManagers] });
   });
 
   app.get('/api/replication/manager-sync-status', (req, res) => {

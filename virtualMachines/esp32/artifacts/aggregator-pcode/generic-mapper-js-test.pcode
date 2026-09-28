@@ -1,0 +1,95 @@
+# Auto-generated from ANTLR Pascalish grammar
+JMP MAIN
+PROC_GENERICMAPPER_PROCESS:
+LOAD GenericMapper__self__processed
+PUSH_INT 1
+ADD
+STORE GenericMapper__self__processed
+RET
+PROC_GENERICMAPPER_PROCESSED:
+ORCH_RETURN_SUCCESS "processed"
+RET
+MAP_cbds_mt103_to_pacs008:
+SRC_GET "finEnvelope.block4.fields.20"
+TRIM
+OUT_SET "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId"
+SRC_GET "finEnvelope.block4.fields.20"
+TRIM
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.InstrId"
+SRC_GET "finEnvelope.block4.fields.21"
+TRIM
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId"
+SRC_GET "finEnvelope.block4.fields.23B"
+TRIM
+UPPER
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtTpInf.LclInstrm.Prtry"
+SRC_GET "finEnvelope.block4.fields.32A.components.valueDate"
+YYMMDD_TO_ISO
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmDt"
+SRC_GET "finEnvelope.block4.fields.32A.components.currency"
+TRIM
+UPPER
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy"
+SRC_GET "finEnvelope.block4.fields.32A.components.amount"
+MT_AMOUNT_TO_DECIMAL
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text"
+SRC_GET "finEnvelope.block4.fields.33B.components.currency"
+TRIM
+UPPER
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstdAmt.@Ccy"
+SRC_GET "finEnvelope.block4.fields.33B.components.amount"
+MT_AMOUNT_TO_DECIMAL
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstdAmt.#text"
+SRC_GET "finEnvelope.block4.fields.50K"
+MT_PARTY_NAME
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm"
+SRC_GET "finEnvelope.block4.fields.52A"
+TRIM
+UPPER
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI"
+SRC_GET "finEnvelope.block4.fields.53A"
+TRIM
+UPPER
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrmyAgt1.FinInstnId.BICFI"
+SRC_GET "finEnvelope.block4.fields.56A"
+TRIM
+UPPER
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrmyAgt2.FinInstnId.BICFI"
+SRC_GET "finEnvelope.block4.fields.57A"
+TRIM
+UPPER
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI"
+SRC_GET "finEnvelope.block4.fields.59"
+MT_PARTY_NAME
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm"
+SRC_GET "finEnvelope.block4.fields.70"
+TRIM
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.RmtInf.Ustrd"
+SRC_GET "finEnvelope.block4.fields.71A"
+MT_CHARGE_TO_ISO
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgBr"
+SRC_GET "finEnvelope.block4.fields.71B"
+MT_AMOUNT_TO_DECIMAL
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.ChrgsInf.Amt.#text"
+SRC_GET "finEnvelope.block4.fields.72"
+TRIM
+OUT_SET "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstrForNxtAgt.InstrInf"
+SRC_GET "finEnvelope.meta.createdAt"
+TRIM
+OUT_SET "Document.FIToFICstmrCdtTrf.GrpHdr.CreDtTm"
+RET
+MAIN:
+PUSH_INT 0
+STORE GenericMapper__self__processed
+PUSH_INT 0
+STORE genericInstance
+CALL PROC_GENERICMAPPER_PROCESS 0
+ROUTE_MATCH_QUEUE "swift.mt103.inbound"
+JZ ROUTER_SKIP_1
+ROUTE_EVAL_WHEN "output := 1;"
+JZ OUT_SKIP_2
+ROUTE_MAP_RUN "cbds-mt103-to-pacs008"
+ROUTE_EMIT "swift.pacs008.outbound"
+OUT_SKIP_2:
+ROUTER_SKIP_1:
+HALT

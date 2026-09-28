@@ -49,8 +49,9 @@
 import { readEnvString } from '../../env-config.mjs';
 import QueueManager from '../QueueManager.mjs';
 import RabbitMqQueueManagerAdapter from './RabbitMqQueueManagerAdapter.mjs';
+import MsmqQueueManagerAdapter from './MsmqQueueManagerAdapter.mjs';
 
-export const QUEUE_MANAGER_SUPPORTED_PROVIDERS = ['legacy', 'rabbitmq'];
+export const QUEUE_MANAGER_SUPPORTED_PROVIDERS = ['legacy', 'rabbitmq', 'msmq'];
 
 export function normalizeQueueManagerProvider(value) {
   const normalized = String(value || 'legacy').trim().toLowerCase();
@@ -69,9 +70,18 @@ export function createQueueManagerProvider(name, persistPath, options = {}) {
   );
 
   if (provider === 'rabbitmq') {
-    return new RabbitMqQueueManagerAdapter(name, options);
+    const manager = new RabbitMqQueueManagerAdapter(name, options);
+    manager.provider = provider;
+    return manager;
+  }
+  if (provider === 'msmq') {
+    const manager = new MsmqQueueManagerAdapter(name, options);
+    manager.provider = provider;
+    return manager;
   }
 
   // Default: unchanged in-house engine (identical behavior to before this module existed).
-  return new QueueManager(name, persistPath);
+  const manager = new QueueManager(name, persistPath);
+  manager.provider = provider;
+  return manager;
 }

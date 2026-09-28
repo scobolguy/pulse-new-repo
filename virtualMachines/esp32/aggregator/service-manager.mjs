@@ -35,29 +35,21 @@ import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import readline from 'readline';
-import { getServiceEntry, getServiceUrl, resolveEnvironmentName } from './src/backend/modules/serviceRegistry.mjs';
+import { getServiceEntry, getServiceUrl, listServiceEntries, resolveEnvironmentName } from './src/backend/modules/serviceRegistry.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENVIRONMENT = resolveEnvironmentName();
 
 // Track child processes
-const services = {
-  broker: null,
-  homeAutomation: null,
-  gateway: null
-};
-
-const serviceFiles = {
-  broker: getServiceEntry('broker', ENVIRONMENT).entry,
-  homeAutomation: getServiceEntry('homeAutomation', ENVIRONMENT).entry,
-  gateway: getServiceEntry('gateway', ENVIRONMENT).entry
-};
+const serviceEntries = Object.fromEntries(listServiceEntries(ENVIRONMENT).map((entry) => [entry.key, entry]));
+const services = Object.fromEntries(Object.keys(serviceEntries).map((key) => [key, null]));
 
 /**
  * Start a service
  */
 function startService(serviceName, env = {}) {
-  if (!serviceFiles[serviceName]) {
+  const entry = serviceEntries[serviceName];
+  if (!entry) {
     console.error(`[MANAGER] Unknown service: ${serviceName}`);
     return;
   }
@@ -68,7 +60,9 @@ function startService(serviceName, env = {}) {
   }
 
   const envVars = { ...process.env, ...env };
-  const child = spawn('node', [serviceFiles[serviceName]], {
+  const args = [entry.entry];
+  if (entry.portCliArg) args.push(entry.portCliArg, String(entry.port));
+  const child = spawn('node', args, {
     cwd: __dirname,
     env: envVars,
     stdio: 'inherit',  // Inherit parent's stdio so we see logs
@@ -138,24 +132,20 @@ function showStatus() {
 function startAll() {
   console.log(`[MANAGER] Starting all services (split mode, environment=${ENVIRONMENT})...`);
 
-  const brokerEntry = getServiceEntry('broker', ENVIRONMENT);
-  const homeAutomationEntry = getServiceEntry('homeAutomation', ENVIRONMENT);
+  const env = {};
+  for (const entry of Object.values(serviceEntries)) {
+    if (entry.portEnvVar) env[entry.portEnvVar] = String(entry.port);
+  }
+  const broker = serviceEntries.broker;
+  const homeAutomation = serviceEntries.homeAutomation;
+  if (broker?.gatewayEnvVar) env[broker.gatewayEnvVar] = getServiceUrl('broker', ENVIRONMENT);
+  if (homeAutomation?.gatewayEnvVar) env[homeAutomation.gatewayEnvVar] = getServiceUrl('homeAutomation', ENVIRONMENT);
+  env.MODULAR_BACKEND = '1';
 
-  // Broker and Home Automation first, in parallel - both are independent.
-  startService('broker', { [brokerEntry.portEnvVar]: String(brokerEntry.port) });
-  startService('homeAutomation', { [homeAutomationEntry.portEnvVar]: String(homeAutomationEntry.port) });
-
-  // Give them time to bind their ports, then start the Gateway configured
-  // to proxy to both instead of running them in-process.
-  setTimeout(() => {
-    const gatewayEntry = getServiceEntry('gateway', ENVIRONMENT);
-    startService('gateway', {
-      MODULAR_BACKEND: '1',
-      [gatewayEntry.portEnvVar]: String(gatewayEntry.port),
-      [brokerEntry.gatewayEnvVar]: getServiceUrl('broker', ENVIRONMENT),
-      [homeAutomationEntry.gatewayEnvVar]: getServiceUrl('homeAutomation', ENVIRONMENT)
-    });
-  }, 2000);
+  for (const entry of Object.values(serviceEntries)) {
+    if (entry.autoStart === false) continue;
+    startService(entry.key, env);
+  }
 }
 
 /**
@@ -193,18 +183,9 @@ function prompt() {
   rl.question('[manager] > ', (line) => {
     const cmd = line.trim().toLowerCase();
 
-    if (cmd.startsWith('restart-broker')) {
-      const args = cmd.split(' ').slice(1);
-      const env = {};
-      for (const arg of args) {
-        const [k, v] = arg.split('=');
-        if (k && v) env[k.toUpperCase()] = v;
-      }
-      restartService('broker', env);
-    } else if (cmd.startsWith('restart-gateway')) {
-      restartService('gateway');
-    } else if (cmd.startsWith('restart-home-automation')) {
-      restartService('homeAutomation');
+    if (cmd.startsWith('restart-')) {
+      const serviceName = cmd.slice('restart-'.length).split(' ')[0];
+      restartService(serviceName);
     } else if (cmd === 'stop') {
       stopAll();
       setTimeout(() => process.exit(0), 2000);
@@ -213,9 +194,7 @@ function prompt() {
     } else if (cmd === 'help') {
       console.log(`
 Available commands:
-  restart-broker [ENV=value ...]  - Restart broker service (e.g., restart-broker BROKER_PROVIDER=msmq)
-  restart-gateway                 - Restart API gateway
-  restart-home-automation          - Restart home automation service
+  restart-<service>               - Restart any configured service
   stop                            - Stop all services and exit
   status                          - Show service status
   help                            - Show this help

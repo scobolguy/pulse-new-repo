@@ -3,8 +3,8 @@ setlocal
 
 set "ROOT=%~dp0"
 
-if not exist "%ROOT%start-backend.bat" (
-  echo [ERROR] Missing "%ROOT%start-backend.bat"
+if not exist "%ROOT%aggregator\service-manager.mjs" (
+  echo [ERROR] Missing "%ROOT%aggregator\service-manager.mjs"
   exit /b 1
 )
 
@@ -13,10 +13,8 @@ if not exist "%ROOT%start-frontend.bat" (
   exit /b 1
 )
 
-echo Launching backend and frontend in separate windows...
-start "Aggregator Backend" "%ROOT%start-backend.bat"
-timeout /t 2 /nobreak >nul
+echo Backend is managed by Windows Services; launching frontend only...
 start "Aggregator Frontend" "%ROOT%start-frontend.bat"
 
 echo Done.
-echo Backend and frontend were started in new terminal windows.
+echo Frontend was started in a new terminal window.

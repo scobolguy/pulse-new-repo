@@ -1,0 +1,15 @@
+service "HelloService";
+on get "/hello" begin
+	return "hello, world";
+end;
+
+on post "/hello" begin
+	return src;
+end;
+
+on health "/health" begin
+	return "ok";
+end;
+
+begin
+end.

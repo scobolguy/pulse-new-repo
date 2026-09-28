@@ -1,0 +1,58 @@
+{
+  "name": "Pascal",
+  "scopeName": "source.pascal",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.block.pascal", "begin": "\\{", "end": "\\}" },
+        { "name": "comment.block.pascal", "begin": "\\(\\*", "end": "\\*\\)" },
+        { "name": "comment.line.pascal", "match": "//.*$" }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        { "name": "string.quoted.single.pascal", "match": "'(?:''|[^'])*'" }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.pascal", "match": "\\b(?:[0-9]+(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|\\$[0-9A-Fa-f]+)\\b" }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.pascal",
+          "match": "\\b(?:and|array|asm|begin|case|const|constructor|destructor|div|do|downto|else|end|except|exports|file|finalization|finally|for|function|goto|if|implementation|in|inherited|initialization|inline|interface|label|library|mod|nil|not|object|of|operator|or|otherwise|packed|procedure|program|property|raise|record|repeat|requires|set|shl|shr|specialize|then|threadvar|to|try|type|unit|until|uses|var|while|with|xor)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.pascal",
+          "match": "\\b(?:ansistring|boolean|byte|cardinal|char|currency|double|extended|int64|integer|longint|longword|real|shortint|single|string|text|uint64|unicodeString|variant|word)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        { "name": "constant.language.pascal", "match": "\\b(?:false|true)\\b" }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        { "name": "keyword.operator.pascal", "match": ":=|<=|>=|<>|\\+|-|\\*|/|=|<|>|\\^" }
+      ]
+    }
+  }
+}

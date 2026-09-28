@@ -24,11 +24,38 @@ export function registerQueueBrokerOpsRoutes(app, deps) {
     requirePermission,
     dlqEvents,
     summarizeDlqEvents,
-    dequeueViaRoute
+    dequeueViaRoute,
+    serviceProcessManager
   } = deps;
 
+  async function ensureQueueManagerRuntime() {
+    if (!serviceProcessManager?.ensureServiceRunning) return null;
+    try {
+      return await serviceProcessManager.ensureServiceRunning('queue-manager-primary', { waitForHealthy: false });
+    } catch (error) {
+      return { status: 'failed', error: error.message };
+    }
+  }
+
+  function isExternallyVisible(queueName) {
+    const route = queueRoutes.get(queueName);
+    const managers = route?.managerId
+      ? [queueManagerRegistry.get(route.managerId)]
+      : queueManagers;
+    const configuredManager = managers.find(manager => manager?.getConfig?.(queueName)?.visibility || manager?.queueConfig?.[queueName]?.visibility);
+    if (!configuredManager) return true;
+    const config = configuredManager.getConfig?.(queueName) || configuredManager.queueConfig?.[queueName] || {};
+    return config.visibility !== 'internal';
+  }
+
+  function rejectInternalQueue(queueName, res) {
+    if (isExternallyVisible(queueName)) return false;
+    res.status(404).json({ error: 'Queue not found' });
+    return true;
+  }
+
   app.get('/api/broker/routes', (req, res) => {
-    res.json({ routes: Array.from(queueRoutes.values()) });
+    res.json({ routes: Array.from(queueRoutes.values()).filter(route => isExternallyVisible(route.queueName)) });
   });
 
   app.get('/api/services/resolve/:serviceName', (req, res) => {
@@ -179,6 +206,7 @@ export function registerQueueBrokerOpsRoutes(app, deps) {
     if (!queueName) {
       return res.status(400).json({ error: 'queueName is required' });
     }
+    if (rejectInternalQueue(queueName, res)) return;
 
     let route = ensureRoute(queueName);
     if (!route) {
@@ -227,6 +255,7 @@ export function registerQueueBrokerOpsRoutes(app, deps) {
 
   app.post('/api/queue/:queueName/freeze', (req, res) => {
     const { queueName } = req.params;
+    if (rejectInternalQueue(queueName, res)) return;
     for (const qm of getActiveQueueManagers()) {
       qm.freezeQueue(queueName);
     }
@@ -235,14 +264,28 @@ export function registerQueueBrokerOpsRoutes(app, deps) {
 
   app.post('/api/queue/:queueName/thaw', (req, res) => {
     const { queueName } = req.params;
+    if (rejectInternalQueue(queueName, res)) return;
     for (const qm of getActiveQueueManagers()) {
       qm.thawQueue(queueName);
     }
     res.json({ status: 'thawed' });
   });
 
+  app.get('/api/queues/status', async (req, res) => {
+    const queueManagerService = await ensureQueueManagerRuntime();
+    const queueNames = Array.from(queueRoutes.keys()).filter(isExternallyVisible).sort();
+    const queues = queueNames.map(queueName => ({
+      queueName,
+      route: queueRoutes.get(queueName) || null,
+      primary: queueManagers[0]?.getStatus(queueName) || null,
+      secondary: queueManagers[1]?.getStatus(queueName) || null
+    }));
+    res.json({ status: 'ok', count: queues.length, queueManagerService, queues });
+  });
+
   app.get('/api/queue/:queueName/status', (req, res) => {
     const { queueName } = req.params;
+    if (rejectInternalQueue(queueName, res)) return;
     res.json({
       primary: queueManagers[0].getStatus(queueName),
       secondary: queueManagers[1].getStatus(queueName)
@@ -251,6 +294,7 @@ export function registerQueueBrokerOpsRoutes(app, deps) {
 
   app.post('/api/queue/:queueName/config', (req, res) => {
     const { queueName } = req.params;
+    if (rejectInternalQueue(queueName, res)) return;
     for (const qm of getActiveQueueManagers()) {
       qm.setConfig(queueName, req.body);
     }
@@ -259,6 +303,7 @@ export function registerQueueBrokerOpsRoutes(app, deps) {
 
   app.get('/api/queue/:queueName/config', (req, res) => {
     const { queueName } = req.params;
+    if (rejectInternalQueue(queueName, res)) return;
     res.json({
       primary: queueManagers[0].getConfig(queueName),
       secondary: queueManagers[1].getConfig(queueName)
@@ -267,6 +312,7 @@ export function registerQueueBrokerOpsRoutes(app, deps) {
 
   app.post('/api/queue/:queueName/enqueue', async (req, res) => {
     const { queueName } = req.params;
+    if (rejectInternalQueue(queueName, res)) return;
     const { message, sourceService, messageEnvelope } = req.body || {};
     try {
       if (!Object.prototype.hasOwnProperty.call(req.body || {}, 'message')) {
@@ -341,6 +387,7 @@ export function registerQueueBrokerOpsRoutes(app, deps) {
 
   app.post('/api/queue/:queueName/dequeue', async (req, res) => {
     const { queueName } = req.params;
+    if (rejectInternalQueue(queueName, res)) return;
     const { consumerService } = req.body;
     try {
       const message = await dequeueViaRoute(queueName, consumerService);

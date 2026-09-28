@@ -11,6 +11,7 @@ import { callPulseMcp } from './pulseMcpClient.mjs';
 const MCP_HOST = process.env.PULSE_MCP_HOST || '127.0.0.1';
 const MCP_PORT = Number(process.env.PULSE_MCP_PORT || 4011);
 const NLI_URL = process.env.PULSE_NLI_URL || 'http://127.0.0.1:4000/api/nli/query';
+const PMACHINE_DEPLOY_URL = process.env.PULSE_PMACHINE_DEPLOY_URL || 'http://127.0.0.1:4000/api/pmachine/deploy-and-run';
 const NLI_TIMEOUT_MS = Number(process.env.PULSE_NLI_TIMEOUT_MS || 180000);
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -52,6 +53,18 @@ export async function executePulseQuery({ message, channel = 'mcp', attachments 
   };
 }
 
+export async function executePmachineDeployment(input) {
+  const response = await fetch(PMACHINE_DEPLOY_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-pulse-channel': 'mcp' },
+    signal: AbortSignal.timeout(NLI_TIMEOUT_MS),
+    body: JSON.stringify(input || {}),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload?.error || `Pmachine deployment failed (${response.status})`);
+  return payload;
+}
+
 export function createPulseMcpServer() {
   const server = new McpServer({
     name: 'pulse-local',
@@ -77,6 +90,28 @@ export function createPulseMcpServer() {
       content: [{ type: 'text', text: JSON.stringify(result) }],
       structuredContent: result,
     };
+  });
+
+  server.registerTool('pmachine_deploy_and_run', {
+    title: 'Deploy and Run Pascalish on a Pmachine',
+    description: 'Compile Pascalish and run it on the local JavaScript pmachine or an ESP32 pmachine. This executes code and may upload it to hardware, so require explicit user intent before calling it.',
+    inputSchema: {
+      source: z.string().min(1).max(2_000_000).describe('Complete Pascalish source text'),
+      sourceFileName: z.string().min(1).max(255).default('program.program.pas'),
+      runtime: z.enum(['js', 'esp32']).default('js'),
+      targetNodeId: z.string().max(255).default('').describe('ESP32 node id/name; omit for the local JS pmachine'),
+      inputQueue: z.string().max(255).default('deploy-api.in'),
+      message: z.string().max(1_000_000).default(''),
+      debug: z.boolean().default(false),
+      stepCount: z.number().int().min(0).max(10000).default(0),
+      breakAt: z.array(z.number().int().min(0)).max(100).default([]),
+      wflSource: z.string().max(2_000_000).default(''),
+      wflDeploymentId: z.string().max(255).default(''),
+      wflResourceId: z.string().max(255).default(''),
+    },
+  }, async (input) => {
+    const result = await executePmachineDeployment(input);
+    return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
   });
 
   return server;

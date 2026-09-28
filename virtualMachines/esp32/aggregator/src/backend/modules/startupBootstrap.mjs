@@ -77,10 +77,18 @@ export async function startBackendRuntime(deps = {}) {
   const esp32NodeRegistry = createNodeRegistry({
     persistPath: pathJoin(RUNTIME_DATA_ROOT, 'esp32-nodes.json'),
     autoSave: true,
-    nodeTimeout: 600000
+    nodeTimeout: 600000,
+    onNodeRegistered: async (node) => {
+      if (typeof app.locals.ensurePmachinePublicDirectory === 'function') {
+        await app.locals.ensurePmachinePublicDirectory(node.id);
+      }
+    }
   });
   await esp32NodeRegistry.initialize();
   app.locals.esp32NodeRegistry = esp32NodeRegistry;
+  if (typeof app.locals.ensurePmachinePublicDirectories === 'function') {
+    await app.locals.ensurePmachinePublicDirectories(esp32NodeRegistry);
+  }
   console.log(`[ESP32] Node Registry initialized with ${esp32NodeRegistry.getAllNodes().length} nodes`);
 
   // Register known ESP32 nodes that aren't discovered via heartbeat
@@ -176,6 +184,10 @@ export async function startBackendRuntime(deps = {}) {
 
   if (seededNodes > 0) {
     console.log(`[ESP32] Seeded ${seededNodes} node(s) into the registry from edge configuration`);
+  }
+
+  if (typeof app.locals.ensurePmachinePublicDirectories === 'function') {
+    await app.locals.ensurePmachinePublicDirectories(esp32NodeRegistry);
   }
 
   const esp32Routes = createNodeRegistryRoutes(esp32NodeRegistry);

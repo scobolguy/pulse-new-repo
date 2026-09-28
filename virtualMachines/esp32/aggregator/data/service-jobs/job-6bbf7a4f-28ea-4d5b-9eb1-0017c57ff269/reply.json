@@ -1,0 +1,10 @@
+{
+  "serviceId": "pmachine",
+  "inputQueue": "pmachine.in",
+  "httpVerb": "GET",
+  "sourceService": "js-service-pmachine-1680",
+  "matchedRuleCount": 0,
+  "matchedOutputCount": 0,
+  "response": null,
+  "responses": []
+}

@@ -2,7 +2,6 @@ import fs from 'fs/promises';
 import path from 'path';
 import { pathToFileURL } from 'url';
 import { compilePascalishProgramWithAntlr } from './compile-pascalish-program-antlr-to-pcode.mjs';
-import { dslDebug, dslError } from './dsl-debug.mjs';
 
 function parseArgs(argv) {
   const args = {
@@ -23,14 +22,6 @@ function parseArgs(argv) {
   return args;
 }
 
-function normalizeRouterRuleText(value) {
-  return String(value || '')
-    .replace(/\\(["'\\])/g, '$1')
-    .replace(/\\n/g, '\n')
-    .replace(/\\r/g, '\r')
-    .replace(/\\t/g, '\t');
-}
-
 function programMapToRouterRules(programMap, serviceId) {
   const now = new Date().toISOString();
   return (programMap?.routers || []).map(router => ({
@@ -44,8 +35,8 @@ function programMapToRouterRules(programMap, serviceId) {
     outputs: (router.outputs || []).map(out => ({
       queueName: out.queueName,
       ...(out.httpVerb ? { httpVerb: out.httpVerb } : {}),
-      whenRule: normalizeRouterRuleText(out.whenRule),
-      transformRule: normalizeRouterRuleText(out.transformRule)
+      whenRule: out.whenRule,
+      transformRule: out.transformRule
     })),
     createdAt: now,
     updatedAt: now
@@ -81,6 +72,10 @@ function programMapToDataMappings(programMap) {
 function compileViaPascalishGrammar(sourceText) {
   const compiledProgram = compilePascalishProgramWithAntlr(sourceText);
   const programMap = compiledProgram.programMap || {};
+  programMap.entries = [
+    ...(programMap.routers || []).map(router => ({ kind: 'router', ...router })),
+    ...(programMap.entries || [])
+  ];
   const serviceId = programMap.serviceId || 'default-program';
 
   return {
@@ -108,15 +103,7 @@ function compileViaPascalishGrammar(sourceText) {
 }
 
 export function compileRouterMapperDSL(sourceText) {
-  const text = String(sourceText || '');
-  dslDebug('pascalish', 'compile:start', { chars: text.length });
-  try {
-    const result = compileViaPascalishGrammar(text);
-    dslDebug('pascalish', 'compile:complete', { serviceId: result.serviceId, routers: result.routerRules.length, mappings: result.dataMappings.length });
-    return result;
-  } catch (error) {
-    throw dslError('pascalish', 'compile', error, { chars: text.length });
-  }
+  return compileViaPascalishGrammar(String(sourceText || ''));
 }
 
 async function main() {

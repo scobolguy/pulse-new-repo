@@ -18,6 +18,15 @@ export function createFileServer({ ffsConfig = {}, webdavConfig = {}, federatedC
     ? federatedConfig.deploymentRegistry
     : null;
 
+  function sanitizeNodeToken(value) {
+    const token = String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]/g, '-');
+    if (!token) throw new Error('nodeId is required');
+    return token;
+  }
+
   // Utility: resolve FFS path safely
   function resolveFFSPath(relPath) {
     const safePath = path.normalize(relPath).replace(/^([/\\]+)/, '');
@@ -33,6 +42,31 @@ export function createFileServer({ ffsConfig = {}, webdavConfig = {}, federatedC
   async function ensureFederatedRoots() {
     await fs.mkdir(ffsRoot, { recursive: true });
     await fs.mkdir(packageRoot, { recursive: true });
+    await fs.mkdir(path.join(ffsRoot, 'nodes'), { recursive: true });
+  }
+
+  function resolveNodePublicPath(nodeId, relPath = '') {
+    const publicRoot = resolveFFSPath(path.join('nodes', sanitizeNodeToken(nodeId), 'public'));
+    const artifactPath = path.resolve(publicRoot, String(relPath || '').replace(/^([/\\])+/, ''));
+    if (artifactPath !== publicRoot && !artifactPath.startsWith(`${publicRoot}${path.sep}`)) {
+      throw new Error('Path escapes node public directory');
+    }
+    return artifactPath;
+  }
+
+  async function ensureNodePublicDirectory(nodeId) {
+    await ensureFederatedRoots();
+    const publicRoot = resolveNodePublicPath(nodeId);
+    await fs.mkdir(publicRoot, { recursive: true });
+    return path.relative(ffsRoot, publicRoot).replace(/\\/g, '/');
+  }
+
+  async function ensureNodePublicDirectories(registry = nodeRegistry) {
+    const nodes = typeof registry?.getAllNodes === 'function' ? registry.getAllNodes() : [];
+    return Promise.all(nodes
+      .map((node) => node?.id || node?.nodeId || node?.name)
+      .filter(Boolean)
+      .map((nodeId) => ensureNodePublicDirectory(nodeId)));
   }
 
   function sanitizePackageToken(value, fallback = 'unnamed') {
@@ -149,6 +183,26 @@ export function createFileServer({ ffsConfig = {}, webdavConfig = {}, federatedC
     }
   });
 
+  // Chunk protocol consumed by ESP32 peer-backed FFS mounts.
+  router.get('/ffs/chunk', async (req, res) => {
+    try {
+      await ensureFederatedRoots();
+      const relPath = req.query.file;
+      const chunkIndex = Number.parseInt(String(req.query.chunk || '0'), 10);
+      const chunkSize = Math.max(1, Number.parseInt(String(req.query.size || '512'), 10));
+      if (!relPath || !Number.isInteger(chunkIndex) || chunkIndex < 0) {
+        return res.status(400).send('Missing or invalid file/chunk param');
+      }
+      const data = await fs.readFile(resolveFFSPath(relPath));
+      const offset = chunkIndex * chunkSize;
+      if (offset >= data.length) return res.status(416).send('Chunk out of range');
+      res.set('X-File-Size', String(data.length));
+      return res.status(200).send(data.subarray(offset, offset + chunkSize));
+    } catch (e) {
+      return res.status(404).send(`FFS chunk failed: ${e.message || String(e)}`);
+    }
+  });
+
   // Create file or directory (FFS)
   router.post('/ffs/create', async (req, res) => {
     try {
@@ -160,6 +214,7 @@ export function createFileServer({ ffsConfig = {}, webdavConfig = {}, federatedC
         await fs.mkdir(absPath, { recursive: true });
         res.json({ ok: true });
       } else if (type === 'file') {
+        await fs.mkdir(path.dirname(absPath), { recursive: true });
         await fs.writeFile(absPath, '');
         res.json({ ok: true });
       } else {
@@ -188,13 +243,27 @@ export function createFileServer({ ffsConfig = {}, webdavConfig = {}, federatedC
   router.post('/ffs/put', async (req, res) => {
     try {
       await ensureFederatedRoots();
-      const { path: relPath, data } = req.body;
+      const { nodeId, path: relPath, data } = req.body;
       if (!relPath || typeof data !== 'string') return res.status(400).json({ error: 'Missing path or data' });
-      const absPath = resolveFFSPath(relPath);
+      const absPath = nodeId ? resolveNodePublicPath(nodeId, relPath) : resolveFFSPath(relPath);
+      await fs.mkdir(path.dirname(absPath), { recursive: true });
       await fs.writeFile(absPath, data);
-      res.json({ ok: true });
+      res.json({
+        ok: true,
+        path: path.relative(ffsRoot, absPath).replace(/\\/g, '/'),
+        nodeId: nodeId ? sanitizeNodeToken(nodeId) : null
+      });
     } catch (e) {
       res.status(500).json({ error: 'FFS put failed', details: e.toString() });
+    }
+  });
+
+  router.post('/ffs/nodes/:nodeId/public/ensure', async (req, res) => {
+    try {
+      const publicPath = await ensureNodePublicDirectory(req.params.nodeId);
+      res.json({ ok: true, nodeId: sanitizeNodeToken(req.params.nodeId), publicPath });
+    } catch (e) {
+      res.status(400).json({ error: 'Node public directory creation failed', details: e.toString() });
     }
   });
 
@@ -254,6 +323,8 @@ export function createFileServer({ ffsConfig = {}, webdavConfig = {}, federatedC
         language = 'pascalish',
         source = '',
         runtimeKind = null,
+        targetNodeId = '',
+        artifactName = '',
         metadata = {}
       } = req.body || {};
       if (!name) return res.status(400).json({ error: 'name is required' });
@@ -308,6 +379,26 @@ export function createFileServer({ ffsConfig = {}, webdavConfig = {}, federatedC
       await fs.writeFile(path.join(pkgDir, 'program.json'), `${JSON.stringify(signedProgramMap, null, 2)}\n`, 'utf8');
       await fs.writeFile(path.join(pkgDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 
+      let nodePublic = null;
+      if (String(targetNodeId || '').trim()) {
+        const publicName = sanitizePackageToken(artifactName || packageName, 'service');
+        const publicRoot = resolveNodePublicPath(targetNodeId);
+        await fs.mkdir(publicRoot, { recursive: true });
+        const publicPcodePath = path.join(publicRoot, `${publicName}.pcode`);
+        const publicProgramMapPath = path.join(publicRoot, `${publicName}.program.json`);
+        const publicManifestPath = path.join(publicRoot, `${publicName}.manifest.json`);
+        await fs.writeFile(publicPcodePath, pcode, 'utf8');
+        await fs.writeFile(publicProgramMapPath, `${JSON.stringify(signedProgramMap, null, 2)}\n`, 'utf8');
+        await fs.writeFile(publicManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+        nodePublic = {
+          nodeId: sanitizeNodeToken(targetNodeId),
+          publicPath: path.relative(ffsRoot, publicRoot).replace(/\\/g, '/'),
+          pcodePath: path.relative(ffsRoot, publicPcodePath).replace(/\\/g, '/'),
+          programMapPath: path.relative(ffsRoot, publicProgramMapPath).replace(/\\/g, '/'),
+          manifestPath: path.relative(ffsRoot, publicManifestPath).replace(/\\/g, '/')
+        };
+      }
+
       res.json({
         ok: true,
         package: {
@@ -317,7 +408,8 @@ export function createFileServer({ ffsConfig = {}, webdavConfig = {}, federatedC
           pcodePath: path.relative(ffsRoot, path.join(pkgDir, 'program.pcode')).replace(/\\/g, '/'),
           programMapPath: path.relative(ffsRoot, path.join(pkgDir, 'program.json')).replace(/\\/g, '/'),
           manifestPath: path.relative(ffsRoot, path.join(pkgDir, 'manifest.json')).replace(/\\/g, '/')
-        }
+        },
+        nodePublic
       });
     } catch (e) {
       res.status(422).json({ error: 'Compilation or package publication failed', details: e.message || String(e) });
@@ -580,5 +672,10 @@ export function createFileServer({ ffsConfig = {}, webdavConfig = {}, federatedC
     res.status(501).json({ error: 'WebDAV put not implemented' });
   });
 
-  return { router };
+  return {
+    router,
+    ensureNodePublicDirectory,
+    ensureNodePublicDirectories,
+    resolveNodePublicPath
+  };
 }

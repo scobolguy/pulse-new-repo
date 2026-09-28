@@ -1,0 +1,16 @@
+# GenericMapper acceptance deployment
+QUEUE "generic_mapper_input" -> "swift.mt103.inbound" MANAGER "qm-secondary" TYPE "swift-mt103";
+QUEUE "generic_mapper_output" -> "swift.pacs008.outbound" MANAGER "qm-secondary" TYPE "pacs";
+DATABASE "generic_mapper_store" -> "GenericMapperMessages" TYPE "GenericMapperRecord" MANAGER "db-mssql";
+FILE "generic_mapper_artifact" -> "packages/generic-mapper" MANAGER "artifact-manager";
+
+DEPLOYMENT "generic-mapper-acceptance"
+PROJECT "payments"
+TARGETS ("magic-js-pmachine-01")
+BEGIN
+  DAEMON "generic-mapper-runtime"
+    FILE "programs/generic-mapper.pas"
+    QUEUE "generic_mapper_input" -> "generic_mapper_output"
+    TARGETS ("magic-js-pmachine-01")
+    STARTUP false;
+END;

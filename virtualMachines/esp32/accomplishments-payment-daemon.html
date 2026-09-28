@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Payment Daemon Implementation Report</title>
+  <style>
+    :root {
+      --ink: #18222d;
+      --muted: #5d6b78;
+      --paper: #f5f7f8;
+      --panel: #ffffff;
+      --line: #d9e0e5;
+      --blue: #0b6477;
+      --blue-soft: #e7f3f5;
+      --green: #176b4d;
+      --green-soft: #e4f4ec;
+      --amber: #8a5a00;
+      --amber-soft: #fff4d6;
+      --code: #17232d;
+      --code-ink: #e7f1f5;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.55 Georgia, 'Times New Roman', serif; }
+    main { max-width: 1180px; margin: 0 auto; padding: 42px 24px 72px; }
+    header { border-bottom: 1px solid var(--line); padding-bottom: 32px; margin-bottom: 28px; }
+    .eyebrow { color: var(--blue); font: 700 12px/1.2 'Trebuchet MS', Arial, sans-serif; letter-spacing: .12em; text-transform: uppercase; }
+    h1, h2, h3 { font-family: 'Trebuchet MS', Arial, sans-serif; line-height: 1.15; }
+    h1 { max-width: 800px; font-size: clamp(2.2rem, 5vw, 4.4rem); margin: 12px 0 16px; letter-spacing: -.03em; }
+    h2 { font-size: 1.65rem; margin: 42px 0 14px; }
+    h3 { font-size: 1.05rem; margin: 26px 0 8px; }
+    p { max-width: 78ch; }
+    .lede { color: var(--muted); font-size: 1.18rem; max-width: 70ch; }
+    .stamp { color: var(--muted); font: 13px/1.4 'Trebuchet MS', Arial, sans-serif; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    .card { background: var(--panel); border: 1px solid var(--line); padding: 18px; }
+    .card strong { display: block; font: 700 14px 'Trebuchet MS', Arial, sans-serif; margin-bottom: 5px; }
+    .pass { color: var(--green); background: var(--green-soft); border-color: #a8d9c2; }
+    .note { color: var(--amber); background: var(--amber-soft); border-color: #ead39a; }
+    .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 24px 0; }
+    .flow div { min-height: 78px; display: grid; place-items: center; padding: 10px; text-align: center; background: var(--blue-soft); border: 1px solid #b8dce2; font: 700 13px/1.25 'Trebuchet MS', Arial, sans-serif; }
+    .flow div:not(:last-child)::after { content: '\2192'; position: absolute; transform: translateX(calc(50% + 8px)); color: var(--blue); font-size: 20px; }
+    .flow div { position: relative; }
+    pre { overflow: auto; margin: 12px 0 22px; padding: 18px; background: var(--code); color: var(--code-ink); border: 1px solid #0b151d; font: 13px/1.55 Consolas, 'Cascadia Code', monospace; tab-size: 2; }
+    code { font-family: Consolas, 'Cascadia Code', monospace; font-size: .9em; }
+    table { width: 100%; border-collapse: collapse; background: var(--panel); font-size: .95rem; }
+    th, td { padding: 10px 12px; text-align: left; vertical-align: top; border: 1px solid var(--line); }
+    th { background: #e9eef1; font: 700 12px 'Trebuchet MS', Arial, sans-serif; text-transform: uppercase; letter-spacing: .05em; }
+    .small { color: var(--muted); font-size: .92rem; }
+    footer { border-top: 1px solid var(--line); margin-top: 44px; padding-top: 16px; color: var(--muted); font-size: .9rem; }
+    @media (max-width: 760px) { .flow { grid-template-columns: 1fr; } .flow div:not(:last-child)::after { content: '\2193'; transform: translate(-50%, 32px); } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">PULSE implementation report</div>
+    <h1>MT103 to PACS008 payment daemon</h1>
+    <p class="lede">A working vertical slice from a problem-oriented solution description through Pascalish, MAPL, WFL, pcode, queue bindings, database bindings, and runtime verification.</p>
+    <div class="stamp">Prepared from the current workspace artifacts and tests. 2026-09-15.</div>
+  </header>
+
+  <section>
+    <h2>What Was Accomplished</h2>
+    <div class="grid">
+      <div class="card pass"><strong>Solution description</strong>Declared the system, database, queues, conversion service, daemon, and processing method in one source file.</div>
+      <div class="card pass"><strong>Pascalish execution</strong>Generated and compiled daemon pcode with dequeue, validation, database insert, routing, and output emission.</div>
+      <div class="card pass"><strong>CBDS mapping</strong>Loaded the real MT103-to-PACS mapping with dates, amounts, agents, parties, remittance, and charge transformations.</div>
+      <div class="card pass"><strong>Deployment binding</strong>Resolved logical resources to physical queues, queue manager, SQL Server database, and database manager.</div>
+      <div class="card pass"><strong>Runtime boundary</strong>Applied database deliveries through <code>insert()</code> and output deliveries through <code>enqueue()</code>.</div>
+      <div class="card note"><strong>Live infrastructure</strong>The deterministic tests use provider-shaped fake managers. A live SQL Server/MSMQ run remains opt-in and requires connection configuration.</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Execution Path</h2>
+    <div class="flow">
+      <div>Solution source<br><code>.solution</code></div>
+      <div>Semantic IR<br>validated declarations</div>
+      <div>Generated artifacts<br>Pascalish / MAPL / WFL</div>
+      <div>pcode + program map<br>JS or ESP32 PMachine</div>
+      <div>Bound runtime<br>SQL Server + queue manager</div>
+    </div>
+    <p>The daemon receives an MT103 payload, records it as <code>received</code>, invokes the compiled CBDS mapper, and sends the resulting PACS008 payload to the bound physical output queue.</p>
+  </section>
+
+  <section>
+    <h2>Resolved Bindings</h2>
+    <table>
+      <thead><tr><th>Logical resource</th><th>Kind</th><th>Physical resource</th><th>Manager</th><th>Provider</th></tr></thead>
+      <tbody>
+        <tr><td>IncomingMessages</td><td>Input queue</td><td>swift.mt103.inbound</td><td>qm-secondary</td><td>Queue manager</td></tr>
+        <tr><td>OutgoingPayments</td><td>Output queue</td><td>swift.pacs008.outbound</td><td>qm-secondary</td><td>Queue manager</td></tr>
+        <tr><td>MessageStore</td><td>Database</td><td>PaymentMessages</td><td>db-mssql</td><td>SQL Server</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Pascalish Solution Source</h2>
+    <p class="small">This is the problem-oriented source used by the solution compiler. It describes what the daemon does and which logical resources it uses.</p>
+    <pre>solution payment_ingestion;
+problem "Accept MT103 messages, persist them, convert them, and route PACS008 output";
+
+system PaymentSystem;
+database MessageStore provider sqlserver table incoming_messages manager db-mssql physical PaymentMessages;
+queue IncomingMessages type mt103 direction input manager qm-secondary physical swift.mt103.inbound;
+queue OutgoingPayments type pacs008 direction output manager qm-secondary physical swift.pacs008.outbound;
+service ConversionService;
+conversion MT103ToPACS008 input mt103 output pacs008 map "mt103-to-pacs";
+daemon MessageDaemon refresh 2 s reads IncomingMessages writes MessageStore uses ConversionService emits OutgoingPayments;
+
+method process_message(message: mt103): pacs008
+steps
+  validate message;
+  persist message in MessageStore as received;
+  convert message using MT103ToPACS008;
+  emit result to OutgoingPayments;
+end;</pre>
+  </section>
+
+  <section>
+    <h2>Generated Pascalish Execution Shape</h2>
+    <p class="small">The compiler lowers the solution into provider-independent Pascalish constructs. The mapper and router are generated after the daemon body.</p>
+    <pre>database MessageStore type MessageStoreRecord;
+table incoming_messages of MessageStoreRecord in MessageStore
+  columns (reference: string, payload: string, status: string);
+
+queue IncomingMessages queue&lt;mt103&gt;;
+queue OutgoingPayments queue&lt;pacs008&gt;;
+
+var
+  message: string;
+
+daemon "MessageDaemon" refresh 2 s;
+begin
+  dequeue IncomingMessages into message;
+  if message &lt;&gt; '' then
+  begin
+    insert into incoming_messages (reference, payload, status)
+      values (message, message, "received");
+  end;
+end.
+
+mapper "MT103ToPACS008" source "swift-mt103" target "pacs" begin
+  { CBDS rules are emitted here from mt103-to-pacs.map }
+end;
+
+router "payment_ingestion_conversion" input "IncomingMessages" begin
+  output "OutgoingPayments"
+    when "output := 1"
+    transform "output := map('MT103ToPACS008', src);";
+end;</pre>
+  </section>
+
+  <section>
+    <h2>WFL Deployment Source</h2>
+    <p class="small">WFL translates logical names into deploy-time resources and selects the queue/database managers.</p>
+    <pre># Logical resources are translated by WFL at deployment time.
+QUEUE "incoming_mt103" -&gt; "swift.mt103.inbound" MANAGER "qm-secondary" TYPE "swift-mt103";
+QUEUE "outgoing_message" -&gt; "swift.pacs008.outbound" MANAGER "qm-secondary" TYPE "pacs008";
+DATABASE "message_store" -&gt; "PaymentMessages" TYPE "Mt103Pacs008Record" MANAGER "db-mssql";
+FILE "daemon_artifact" -&gt; "packages/mt103-pacs008-daemon" MANAGER "artifact-manager";
+
+DEPLOYMENT "mt103-pacs008-daemon"
+PROJECT "payments"
+TARGETS ("magic-js-pmachine-01", "esp32-edge-pool")
+BEGIN
+  DAEMON "mt103-pacs008-daemon"
+    FILE "programs/mt103-pacs008-daemon.pas"
+    QUEUE "incoming_mt103" -&gt; "outgoing_message"
+    TARGETS ("magic-js-pmachine-01", "esp32-edge-pool")
+    STARTUP true;
+END;</pre>
+  </section>
+
+  <section>
+    <h2>MAPL / CBDS Mapping Source</h2>
+    <p class="small">The solution selects <code>mt103-to-pacs.map</code>. The mapping definition below is the source contract consumed by the generated mapper. It contains 20 field rules.</p>
+    <pre>{
+  "id": "mt103-to-pacs",
+  "sourceTypeId": "swift-mt103",
+  "targetTypeId": "pacs",
+  "targetSchemaPath": "schemas/pacs.008.001.14.xsd",
+  "rules": [
+    { "sourcePath": "finEnvelope.block4.fields.20", "targetPath": "Document.FIToFICstmrCdtTrf.GrpHdr.MsgId" },
+    { "sourcePath": "finEnvelope.block4.fields.21", "targetPath": "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId" },
+    { "sourcePath": "finEnvelope.block4.fields.23B", "targetPath": "...PmtTpInf.LclInstrm.Prtry", "conversionRule": "output := upper(trim(src));" },
+    { "sourcePath": "finEnvelope.block4.fields.32A.components.valueDate", "targetPath": "...IntrBkSttlmDt", "conversionRule": "output := yymmddtoiso(src);" },
+    { "sourcePath": "finEnvelope.block4.fields.32A.components.currency", "targetPath": "...IntrBkSttlmAmt.@Ccy", "conversionRule": "output := upper(trim(src));" },
+    { "sourcePath": "finEnvelope.block4.fields.32A.components.amount", "targetPath": "...IntrBkSttlmAmt.#text", "conversionRule": "output := mtamounttodecimal(src);" },
+    { "sourcePath": "finEnvelope.block4.fields.33B.components.currency", "targetPath": "...InstdAmt.@Ccy", "conversionRule": "output := upper(trim(src));" },
+    { "sourcePath": "finEnvelope.block4.fields.33B.components.amount", "targetPath": "...InstdAmt.#text", "conversionRule": "output := mtamounttodecimal(src);" },
+    { "sourcePath": "finEnvelope.block4.fields.50K", "targetPath": "...Dbtr.Nm", "conversionRule": "output := mtpartyname(src);" },
+    { "sourcePath": "finEnvelope.block4.fields.52A", "targetPath": "...DbtrAgt.FinInstnId.BICFI", "conversionRule": "output := upper(trim(src));" },
+    { "sourcePath": "finEnvelope.block4.fields.53A", "targetPath": "...IntrmyAgt1.FinInstnId.BICFI", "conversionRule": "output := upper(trim(src));" },
+    { "sourcePath": "finEnvelope.block4.fields.56A", "targetPath": "...IntrmyAgt2.FinInstnId.BICFI", "conversionRule": "output := upper(trim(src));" },
+    { "sourcePath": "finEnvelope.block4.fields.57A", "targetPath": "...CdtrAgt.FinInstnId.BICFI", "conversionRule": "output := upper(trim(src));" },
+    { "sourcePath": "finEnvelope.block4.fields.59", "targetPath": "...Cdtr.Nm", "conversionRule": "output := mtpartyname(src);" },
+    { "sourcePath": "finEnvelope.block4.fields.59A", "targetPath": "...Cdtr.FinInstnId.BICFI" },
+    { "sourcePath": "finEnvelope.block4.fields.70", "targetPath": "...RmtInf.Ustrd" },
+    { "sourcePath": "finEnvelope.block4.fields.71A", "targetPath": "...ChrgBr", "conversionRule": "output := mtchargebearertoiso(src);" },
+    { "sourcePath": "finEnvelope.block4.fields.71B", "targetPath": "...ChrgsInf.Amt.#text", "conversionRule": "output := mtamounttodecimal(src);" },
+    { "sourcePath": "finEnvelope.block4.fields.72", "targetPath": "...InstrForNxtAgt.InstrInf" }
+  ]
+}</pre>
+  </section>
+
+  <section>
+    <h2>Verified Runtime Result</h2>
+    <div class="grid">
+      <div class="card pass"><strong>Incoming database event</strong><code>DB_INSERT</code> produced an insert for <code>MessageStore.incoming_messages</code> with the full incoming payload and status <code>received</code>.</div>
+      <div class="card pass"><strong>Mapped output event</strong><code>ROUTE_MAP_RUN</code> produced PACS008 data and sent it to logical queue <code>OutgoingPayments</code>.</div>
+      <div class="card pass"><strong>Physical output resolution</strong>The binding adapter resolved that logical queue to <code>swift.pacs008.outbound</code> on <code>qm-secondary</code>.</div>
+      <div class="card pass"><strong>Database resolution</strong>The binding adapter resolved <code>MessageStore</code> to <code>PaymentMessages</code> on <code>db-mssql</code>.</div>
+    </div>
+    <h3>Representative PACS008 assertions</h3>
+    <table>
+      <thead><tr><th>Field</th><th>Verified value</th></tr></thead>
+      <tbody>
+        <tr><td>GrpHdr.MsgId</td><td><code>CBDSREF123456</code></td></tr>
+        <tr><td>PmtId.EndToEndId</td><td><code>CBDS-E2E-0001</code></td></tr>
+        <tr><td>IntrBkSttlmDt</td><td><code>2026-07-02</code></td></tr>
+        <tr><td>IntrBkSttlmAmt currency</td><td><code>CAD</code></td></tr>
+        <tr><td>IntrBkSttlmAmt amount</td><td><code>12500.45</code></td></tr>
+        <tr><td>Creditor name</td><td><code>BETA SUPPLIES INC</code></td></tr>
+        <tr><td>Charge bearer</td><td><code>SHA</code></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Tests That Pass</h2>
+    <pre>[solution-dsl] PASS: solution IR, Pascalish/WFL generation, pcode, database and queue delivery
+[MAPL-TEST] Compiler, librarian contract, and runtime artifact checks passed
+CBDS MT103 -&gt; PACS test passed
+[pascalish-type-system] PASS
+[mt103-pacs008-daemon] PASS
+[mt103-pacs008-wfl] PASS
+[wfl-manager-bindings] PASS
+[deployment-binding-manifest] PASS
+[database-provider-contract] PASS</pre>
+    <p class="small">The repeatable tests use provider-shaped managers where appropriate. The live SQL Server/MSMQ proof is available through the existing live runner and requires connection/environment configuration; the report does not claim that a live external database was modified.</p>
+  </section>
+
+    <section>
+      <h2>Meeting Evidence: Complete Test Case</h2>
+      <p>This is the primary demonstration case. It proves that a described daemon can be compiled into pcode, receive an MT103-shaped payload, persist the incoming message, apply a complex CBDS mapping, and route the resulting PACS008 payload through the bound output queue.</p>
+
+      <h3>Test identity</h3>
+      <table>
+        <tbody>
+          <tr><th>Test name</th><td>Generated payment-ingestion daemon: MT103 to PACS008</td></tr>
+          <tr><th>Source solution</th><td><code>aggregator/data/payment-ingestion.solution</code></td></tr>
+          <tr><th>Mapping source</th><td><code>aggregator/data/data-maps/mt103-to-pacs.map</code></td></tr>
+          <tr><th>Runtime under test</th><td>JavaScript PMachine using generated pcode</td></tr>
+          <tr><th>Input logical queue</th><td><code>IncomingMessages</code></td></tr>
+          <tr><th>Output logical queue</th><td><code>OutgoingPayments</code></td></tr>
+          <tr><th>Database symbol</th><td><code>MessageStore</code></td></tr>
+        </tbody>
+      </table>
+
+      <h3>Input message</h3>
+      <p>The test uses a structured MT103 payload containing identifiers, settlement date, currencies, amounts, parties, agents, remittance data, charges, and routing instructions.</p>
+      <pre>{
+    "finEnvelope": {
+      "block4": {
+        "fields": {
+          "20": "CBDSREF123456",
+          "21": "CBDS-E2E-0001",
+          "23B": "CRED",
+          "32A": { "components": { "valueDate": "260702", "currency": "CAD", "amount": "12500,45" } },
+          "33B": { "components": { "currency": "CAD", "amount": "12500,45" } },
+          "50K": "/123456789\nALPHA IMPORTS LTD",
+          "52A": "ROYCCAT2",
+          "53A": "BOFACATT",
+          "56A": "CITIUS33",
+          "57A": "TDOMCATTTOR",
+          "59": "/000987654321\nBETA SUPPLIES INC",
+          "70": "INV-2026-07-02",
+          "71A": "SHA",
+          "71B": "15,00",
+          "72": "/INS/CBDS ROUTING"
+        }
+      }
+    }
+  }</pre>
+
+      <h3>Execution steps</h3>
+      <ol>
+        <li>The solution compiler parses the logical declarations and creates a semantic IR.</li>
+        <li>Pascalish is generated with a daemon, input/output queues, a database table, and a mapper.</li>
+        <li>The Pascalish compiler emits pcode and a program map.</li>
+        <li>The PMachine matches <code>IncomingMessages</code> and reads the input payload.</li>
+        <li>The daemon emits a <code>DB_INSERT</code> delivery for the incoming message.</li>
+        <li>The router invokes <code>ROUTE_MAP_RUN</code> for <code>MT103ToPACS008</code>.</li>
+        <li>The mapper applies the CBDS rules and creates PACS008 output.</li>
+        <li>The output is delivered to <code>OutgoingPayments</code>.</li>
+        <li>The deployment manifest translates that logical queue to <code>swift.pacs008.outbound</code> on <code>qm-secondary</code>.</li>
+        <li>The database binding translates <code>MessageStore</code> to <code>PaymentMessages</code> on <code>db-mssql</code>.</li>
+      </ol>
+
+      <h3>Database proof</h3>
+      <pre>PMachine delivery:
+  {
+    "queueName": "db.MessageStore.dml",
+    "message": {
+      "operation": "insert",
+      "database": "MessageStore",
+      "table": "incoming_messages",
+      "row": {
+        "reference": "&lt;complete incoming payload&gt;",
+        "payload": "&lt;complete incoming payload&gt;",
+        "status": "received"
+      }
+    }
+  }
+
+  Deployment resolution:
+  MessageStore -&gt; PaymentMessages -&gt; db-mssql</pre>
+      <p>This proves the generated daemon creates the database insert and that the runtime adapter resolves it to the SQL Server binding. The repeatable test uses a fake provider-shaped manager; the live SQL Server runner is separate and requires credentials.</p>
+
+      <h3>Output queue proof</h3>
+      <pre>PMachine delivery:
+  {
+    "queueName": "OutgoingPayments",
+    "message": "&lt;PACS008 JSON payload&gt;"
+  }
+
+  Deployment resolution:
+  OutgoingPayments -&gt; swift.pacs008.outbound -&gt; qm-secondary</pre>
+
+      <h3>Observed PACS008 result</h3>
+      <table>
+        <thead><tr><th>Mapped target field</th><th>Expected and observed value</th><th>Rule exercised</th></tr></thead>
+        <tbody>
+          <tr><td><code>GrpHdr.MsgId</code></td><td><code>CBDSREF123456</code></td><td>Direct field copy from MT103 field 20</td></tr>
+          <tr><td><code>PmtId.EndToEndId</code></td><td><code>CBDS-E2E-0001</code></td><td>Direct field copy from MT103 field 21</td></tr>
+          <tr><td><code>IntrBkSttlmDt</code></td><td><code>2026-07-02</code></td><td><code>yymmddtoiso</code></td></tr>
+          <tr><td><code>IntrBkSttlmAmt.@Ccy</code></td><td><code>CAD</code></td><td><code>upper(trim(src))</code></td></tr>
+          <tr><td><code>IntrBkSttlmAmt.#text</code></td><td><code>12500.45</code></td><td><code>mtamounttodecimal</code></td></tr>
+          <tr><td><code>Cdtr.Nm</code></td><td><code>BETA SUPPLIES INC</code></td><td><code>mtpartyname</code></td></tr>
+          <tr><td><code>ChrgBr</code></td><td><code>SHA</code></td><td><code>mtchargebearertoiso</code></td></tr>
+        </tbody>
+      </table>
+
+      <h3>Reproduce the evidence</h3>
+      <pre>node .\aggregator\scripts\test-solution-dsl.mjs
+  Push-Location .\aggregator
+  node .\scripts\test-cbds-mt103-to-pacs.mjs
+  Pop-Location
+  node .\aggregator\scripts\test-mt103-pacs008-wfl.mjs
+  node .\aggregator\scripts\test-database-provider-contract.mjs</pre>
+      <p class="pass card"><strong>Observed result</strong>All four commands pass. The complete solution proof reports <code>[solution-dsl] PASS</code>; the standalone CBDS proof reports <code>CBDS MT103 -&gt; PACS test passed</code>; WFL and SQL Server provider contract checks also pass.</p>
+    </section>
+
+  <footer>
+    Source artifacts: <code>aggregator/data/payment-ingestion.solution</code>, <code>aggregator/data/mt103-pacs008-daemon.wfl</code>, <code>aggregator/data/data-maps/mt103-to-pacs.map</code>, <code>aggregator/scripts/compile-solution-dsl.mjs</code>, and <code>aggregator/scripts/test-solution-dsl.mjs</code>.
+  </footer>
+</main>
+</body>
+</html>

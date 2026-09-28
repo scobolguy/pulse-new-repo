@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml version="1.0" encoding="UTF-8"?>
+<serviceId>pmachine</serviceId>
+<inputQueue>pmachine.in</inputQueue>
+<httpVerb>GET</httpVerb>
+<sourceService>js-service-pmachine-1680</sourceService>
+<matchedRuleCount>0</matchedRuleCount>
+<matchedOutputCount>0</matchedOutputCount>
+<response></response>
+

@@ -18,6 +18,42 @@ export default class WorkflowDslVisitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by WorkflowDslParser#genericSystemDecl.
+	visitGenericSystemDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#genericSystemMember.
+	visitGenericSystemMember(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#genericSystemPortDecl.
+	visitGenericSystemPortDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#genericSystemConnectionDecl.
+	visitGenericSystemConnectionDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#clusterCreateDecl.
+	visitClusterCreateDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#artifactDeployDecl.
+	visitArtifactDeployDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by WorkflowDslParser#deploymentDecl.
 	visitDeploymentDecl(ctx) {
 	  return this.visitChildren(ctx);
@@ -30,6 +66,12 @@ export default class WorkflowDslVisitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by WorkflowDslParser#serviceLifecycleClause.
+	visitServiceLifecycleClause(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by WorkflowDslParser#booleanLiteral.
 	visitBooleanLiteral(ctx) {
 	  return this.visitChildren(ctx);
@@ -38,6 +80,48 @@ export default class WorkflowDslVisitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by WorkflowDslParser#queueDecl.
 	visitQueueDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#databaseDecl.
+	visitDatabaseDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#systemTypeDecl.
+	visitSystemTypeDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#systemDecl.
+	visitSystemDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#systemMember.
+	visitSystemMember(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#systemQueueDecl.
+	visitSystemQueueDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#serviceDecl.
+	visitServiceDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#visibilityClause.
+	visitVisibilityClause(ctx) {
 	  return this.visitChildren(ctx);
 	}
 

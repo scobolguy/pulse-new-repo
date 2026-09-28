@@ -4,8 +4,7 @@ import { fileURLToPath } from 'url';
 import { createNewDocumentFileName, DOCUMENT_TYPES, getDocumentTypeByFileName, getDocumentTypeById, normalizeDocumentFileName } from '../documentRegistry.js';
 import { compileRouterMapperDSL } from '../../scripts/compile-pascal.mjs';
 import { compileCobolishToPmachine, compileVbishToPmachine } from '../../scripts/compile-interoperable-language.mjs';
-import { executeProgram, parsePcode } from '../../scripts/run-js-pmachine.mjs';
-import { loadOpcodeMap } from '../../scripts/pmachine-js-opcodes.mjs';
+import { executeProgram, loadOpcodeMap, parsePcode } from '../../../pmachines/javascript/index.mjs';
 import { validatePascalishSubschemaMappings } from '../librarianSchemaContracts.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');

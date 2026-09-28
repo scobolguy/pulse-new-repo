@@ -1,14 +1,19 @@
 {
-  "ok": false,
+  "ok": true,
   "service": "backend",
-  "state": "FAILED",
+  "state": "READY",
   "workflow": [
     "INIT",
-    "KILL_BACKEND_PROCESSES"
+    "KILL_BACKEND_PROCESSES",
+    "SANITIZE_QUEUE_PERSISTENCE",
+    "CHECK_BACKEND",
+    "START_BACKEND",
+    "WAIT_BACKEND",
+    "READY"
   ],
   "logs": [
     {
-      "at": "2026-08-06T17:08:43.242Z",
+      "at": "2026-09-14T14:41:21.580Z",
       "event": "workflow-start",
       "data": {
         "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
@@ -16,14 +21,14 @@
       }
     },
     {
-      "at": "2026-08-06T17:08:43.249Z",
+      "at": "2026-09-14T14:41:21.600Z",
       "event": "state",
       "data": {
         "state": "INIT"
       }
     },
     {
-      "at": "2026-08-06T17:08:43.254Z",
+      "at": "2026-09-14T14:41:21.613Z",
       "event": "state",
       "data": {
         "state": "KILL_BACKEND_PROCESSES",
@@ -32,40 +37,96 @@
       }
     },
     {
-      "at": "2026-08-06T17:08:43.474Z",
+      "at": "2026-09-14T14:41:21.802Z",
       "event": "subflow-complete",
       "data": {
         "subflow": "Kill all back end processes",
         "port": 4000,
-        "pids": [
-          23684
-        ],
-        "results": [
-          {
-            "pid": 23684,
-            "killed": false,
-            "error": "Command failed: taskkill /PID 23684 /F /T\nERROR: The process with PID 23684 (child process of PID 23960) could not be terminated.\r\nReason: Access is denied.\r\r\n"
-          }
-        ],
+        "pids": [],
+        "results": [],
         "killedCount": 0
       }
     },
     {
-      "at": "2026-08-06T17:08:43.478Z",
-      "event": "failed",
+      "at": "2026-09-14T14:41:21.827Z",
+      "event": "state",
       "data": {
-        "ok": false,
+        "state": "SANITIZE_QUEUE_PERSISTENCE",
+        "subflow": "Sanitize queue persistence files"
+      }
+    },
+    {
+      "at": "2026-09-14T14:41:22.486Z",
+      "event": "subflow-complete",
+      "data": {
+        "subflow": "Sanitize queue persistence files",
+        "queueManagers": 2,
+        "quarantinedMessageFiles": 0,
+        "quarantinedCounterFiles": 0,
+        "sanitizedOperationLogs": 0,
+        "skippedOperationLogs": 0,
+        "droppedOperationLines": 0,
+        "scannedMessageFiles": 500,
+        "capped": true,
+        "details": [
+          {
+            "queueManager": "qm-primary",
+            "quarantinedMessageFiles": 0,
+            "quarantinedCounterFiles": 0,
+            "sanitizedOperationLogs": 0,
+            "droppedOperationLines": 0
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-09-14T14:41:22.492Z",
+      "event": "state",
+      "data": {
+        "state": "CHECK_BACKEND",
+        "url": "http://127.0.0.1:4000/api/authz/me?userId=system-admin"
+      }
+    },
+    {
+      "at": "2026-09-14T14:41:22.586Z",
+      "event": "backend-started",
+      "data": {
+        "command": "node --env-file=\"C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\.env.local\" \"C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\backend.mjs\"",
+        "pid": 26352,
+        "attempt": 1
+      }
+    },
+    {
+      "at": "2026-09-14T14:41:22.593Z",
+      "event": "state",
+      "data": {
+        "state": "WAIT_BACKEND",
+        "url": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
+        "timeoutMs": 66000,
+        "attempt": 1
+      }
+    },
+    {
+      "at": "2026-09-14T14:41:27.158Z",
+      "event": "complete",
+      "data": {
+        "ok": true,
         "service": "backend",
-        "state": "FAILED",
+        "state": "READY",
         "workflow": [
           "INIT",
-          "KILL_BACKEND_PROCESSES"
+          "KILL_BACKEND_PROCESSES",
+          "SANITIZE_QUEUE_PERSISTENCE",
+          "CHECK_BACKEND",
+          "START_BACKEND",
+          "WAIT_BACKEND",
+          "READY"
         ],
-        "error": "Unable to stop existing backend process(es) on port 4000"
+        "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin"
       }
     }
   ],
-  "updatedAt": "2026-08-06T17:08:43.482Z",
-  "error": "Unable to stop existing backend process(es) on port 4000",
+  "updatedAt": "2026-09-14T14:41:27.164Z",
+  "error": null,
   "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin"
 }

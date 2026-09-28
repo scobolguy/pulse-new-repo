@@ -1,0 +1,148 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-23T20:20:47.652Z",
+  "serviceId": "HelloService",
+  "runtimeUnit": {
+    "kind": "service",
+    "id": "HelloService",
+    "refreshMs": null
+  },
+  "executionModel": "pascalish-service",
+  "sourceLanguage": "pascalish",
+  "entries": [],
+  "localResources": {
+    "serviceId": "HelloService",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "routers": [],
+  "serviceEndpoints": [
+    {
+      "verb": "GET",
+      "path": "/hello",
+      "acceptsType": "",
+      "returnsType": "",
+      "body": {
+        "type": "Block",
+        "statements": [
+          {
+            "type": "ReturnSuccess",
+            "ref": "\"hello, world\""
+          }
+        ]
+      },
+      "returnExpr": "\"hello, world\"",
+      "entryLabel": "SERVICE_GET_1",
+      "exitLabel": "SERVICE_ENDPOINT_EXIT_1"
+    },
+    {
+      "verb": "POST",
+      "path": "/hello",
+      "acceptsType": "",
+      "returnsType": "",
+      "body": {
+        "type": "Block",
+        "statements": [
+          {
+            "type": "ReturnSuccess",
+            "ref": "src"
+          }
+        ]
+      },
+      "returnExpr": "src",
+      "entryLabel": "SERVICE_POST_2",
+      "exitLabel": "SERVICE_ENDPOINT_EXIT_2"
+    },
+    {
+      "verb": "HEALTH",
+      "path": "/health",
+      "acceptsType": "",
+      "returnsType": "",
+      "body": {
+        "type": "Block",
+        "statements": [
+          {
+            "type": "ReturnSuccess",
+            "ref": "\"ok\""
+          }
+        ]
+      },
+      "returnExpr": "\"ok\"",
+      "entryLabel": "SERVICE_HEALTH_3",
+      "exitLabel": "SERVICE_ENDPOINT_EXIT_3"
+    }
+  ],
+  "globals": [],
+  "variableDeclarations": [],
+  "procedures": {},
+  "typeDeclarations": [],
+  "classDeclarations": [],
+  "symbols": {
+    "databases": []
+  },
+  "entryLabel": "MAIN",
+  "typeRegistry": {},
+  "exportedFunctions": [],
+  "mapperImports": [],
+  "sourceMap": {
+    "0": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 1,
+      "sourceText": "service \"HelloService\";",
+      "instruction": "JMP MAIN"
+    },
+    "1": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 2,
+      "sourceText": "on get \"/hello\" begin",
+      "instruction": "ORCH_RETURN_SUCCESS \"\\\"hello, world\\\"\""
+    },
+    "2": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 4,
+      "sourceText": "end;",
+      "instruction": "HALT"
+    },
+    "3": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 6,
+      "sourceText": "on post \"/hello\" begin",
+      "instruction": "ORCH_RETURN_SUCCESS \"src\""
+    },
+    "4": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 8,
+      "sourceText": "end;",
+      "instruction": "HALT"
+    },
+    "5": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 10,
+      "sourceText": "on health \"/health\" begin",
+      "instruction": "ORCH_RETURN_SUCCESS \"\\\"ok\\\"\""
+    },
+    "6": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 12,
+      "sourceText": "end;",
+      "instruction": "HALT"
+    },
+    "7": {
+      "sourceFile": null,
+      "sourceLanguage": "pascalish",
+      "sourceLine": 14,
+      "sourceText": "begin",
+      "instruction": "HALT"
+    }
+  }
+}

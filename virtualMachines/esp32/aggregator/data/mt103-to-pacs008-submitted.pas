@@ -12,8 +12,5 @@ begin
 end;
 
 service MT103ToPACS008 on local;
-  get "/convert" accepts MT103 returns PACS008;
-  begin
-    return map("MT103_TO_PACS008", src);
-  end
+  on get "/convert" accepts MT103 returns PACS008 return map("MT103_TO_PACS008", src);
 end.

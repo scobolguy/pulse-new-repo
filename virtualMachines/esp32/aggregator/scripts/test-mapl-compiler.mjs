@@ -91,7 +91,7 @@ try {
   assert.match(mt940.artifacts.mapl, /BkToCstmrStmt/);
   assert.doesNotMatch(mt940.artifacts.mapl, /FIToFICstmrCdtTrf/);
   assert.match(mt940.compiledMapl.pcodeText, /OP_MAP SRC, "mt940_to_camt053", mappedPayload/);
-  const externalMap = JSON.parse(fs.readFileSync(path.resolve('data/data-maps/mt940-to-camt053.map'), 'utf8'));
+  const externalMap = JSON.parse(fs.readFileSync(path.resolve('aggregator/data/data-maps/mt940-to-camt053.map'), 'utf8'));
   for (const rule of externalMap.rules) {
     assert.ok(mt940.artifacts.mapl.includes(`${rule.targetPath} := ${rule.sourcePath};`));
     assert.ok(mt940.artifacts.pascalish.includes(`MAP \"${rule.sourcePath.replace(/^source\./, '')}\" TO \"${rule.targetPath.replace(/^target\./, '')}\"`));
@@ -108,7 +108,7 @@ try {
     '-}'
   ].join('\n');
   const runtimeResult = JSON.parse(execFileSync(process.execPath, [
-    path.resolve('scripts/run-js-pmachine.mjs'),
+    path.resolve('aggregator/scripts/run-js-pmachine.mjs'),
     '--pcode', mt940.stored.pcode,
     '--program-map', mt940.stored.programMap,
     '--input-queue', 'swift.mt940.inbound',

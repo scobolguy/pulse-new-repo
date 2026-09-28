@@ -47,8 +47,6 @@ function Stop-ComPortHolders {
 
 Push-Location $repoRoot
 try {
-    $buildFlags = "build_flags=-std=gnu++17 -DENABLE_PMACHINE -DFIRMWARE_VERSION=`"$Version`""
-
     if ($Mode -eq 'serial') {
         Stop-ComPortHolders -ComPort $Port
 
@@ -56,12 +54,12 @@ try {
             & $pio run --target uploadfs --environment $EnvName
         }
 
-        & $pio run --target upload --environment $EnvName --upload-port $Port --project-option $buildFlags
+        & $pio run --target upload --environment $EnvName --upload-port $Port
     } else {
         if ($UploadFs) {
             Write-Host 'Skipping uploadfs in OTA mode (requires serial or explicit OTA FS workflow).'
         }
-        & $pio run --target upload --environment $OtaEnvName --project-option $buildFlags
+        & $pio run --target upload --environment $OtaEnvName
     }
 } finally {
     Pop-Location

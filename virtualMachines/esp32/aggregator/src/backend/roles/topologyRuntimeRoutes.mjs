@@ -2418,7 +2418,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     await fs.writeFile(pcodePath, `${fallbackPcodeText}\n`, 'utf-8');
     await fs.writeFile(programMapPath, `${fallbackProgramMapText}\n`, 'utf-8');
 
-    const runnerPath = path.resolve(process.cwd(), 'scripts', 'run-js-pmachine.mjs');
+    const runnerPath = path.resolve(process.cwd(), '..', 'pmachines', 'javascript', 'run.mjs');
     const stdout = await new Promise((resolve, reject) => {
       execFile(
         'node',
@@ -3699,6 +3699,59 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       const status = Number(error?.httpStatus || 500);
       return res.status(status).json({ error: error?.message || 'failed to complete tls enrollment commit' });
     }
+  });
+
+  app.get('/api/pmachine/nodes', async (req, res) => {
+    const nodes = await buildCurrentNodesWithTopology();
+    const candidates = new Map();
+    const hasPmachineService = (services) => (Array.isArray(services) ? services : []).some((service) => {
+      const name = typeof service === 'string' ? service : service?.name || service?.serviceName;
+      return String(name || '').trim().toLowerCase().includes('pmachine');
+    });
+
+    for (const node of nodes) {
+      if (!hasPmachineService(node?.details?.services)) continue;
+      const ip = String(node?.ip || '').trim();
+      if (ip) candidates.set(ip, node);
+    }
+
+    const configuredEdgeBases = String(
+      process.env.SERVICE_EDGE_BASE_URLS
+      || process.env.SERVICE_EDGE_BASE_URL
+      || 'http://192.168.2.155'
+    ).split(',').map((value) => value.trim().replace(/\/$/, '')).filter(Boolean);
+
+    await Promise.all(configuredEdgeBases.map(async (baseUrl) => {
+      try {
+        const base = new URL(baseUrl);
+        if (!['http:', 'https:'].includes(base.protocol)) return;
+        const response = await fetch(new URL('/status', base), { signal: AbortSignal.timeout(5000) });
+        if (!response.ok) return;
+        const status = await response.json();
+        if (!hasPmachineService(status?.services)) return;
+        const ip = base.hostname;
+        candidates.set(ip, {
+          nodeId: String(status.nodeName || ip),
+          nodeName: String(status.nodeName || ip),
+          ip,
+          port: Number(base.port || (base.protocol === 'https:' ? 443 : 80)),
+          kind: 'machineAvailability',
+          serviceName: 'pmachine',
+          status: 'available',
+          available: true,
+          details: {
+            hardware: String(status.deviceRole || 'ESP32'),
+            runtime: 'esp32-pmachine',
+            services: status.services,
+            firmwareVersion: status.firmwareVersion || null
+          }
+        });
+      } catch {
+        // Omit configured edge nodes that do not respond with PMachine capability.
+      }
+    }));
+
+    res.json(Array.from(candidates.values()));
   });
 
   app.post('/api/pmachine/announce', (req, res) => {

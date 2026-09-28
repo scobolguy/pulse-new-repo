@@ -7,20 +7,24 @@ import FlowDesignerPage from './FlowDesignerPage.jsx'
 import NetworkDevicesPage from './NetworkDevicesPage.jsx'
 import ProjectTreePage from './ProjectTreePage.jsx'
 import DeploymentPage from './DeploymentPage.jsx'
+import PmachineDeployPage from './PmachineDeployPage.jsx'
 import ProvisioningAgentPage from './ProvisioningAgentPage.jsx'
 import PascalishEditorPage from './PascalishEditorPage.jsx'
 import LanguageCompilerPage from './LanguageCompilerPage.jsx'
+import ManagersPage from './ManagersPage.jsx'
 
 const TOOL_ROUTES = [
   { path: '/query', label: 'Query', shortLabel: 'Q', description: 'Ask BOB, submit files, and inspect operational results.' },
   { path: '/projects', label: 'Projects', shortLabel: 'P', description: 'Browse project and subproject build trees and inspect flows per node.' },
   { path: '/deployments', label: 'Deployments', shortLabel: 'D', description: 'Package projects, target nodes, and generate startup manifests.' },
+  { path: '/pmachine', label: 'PMachine', shortLabel: 'PM', description: 'Deploy and debug programs on physical PMachine nodes through FFS.' },
   { path: '/data-mapper', label: 'Data Mapper', shortLabel: 'M', description: 'Define and test transformations between message formats.' },
   { path: '/flow-designer', label: 'Flow Designer', shortLabel: 'F', description: 'Compose typed processing flows and bind deployment targets.' },
   { path: '/pascalish', label: 'Pascalish', shortLabel: 'Ps', description: 'Author and compile Pascalish programs with Monaco editor, Librarian type autocomplete, and F7 run shortcuts.' },
   { path: '/cobolish', label: 'COBOLISH', shortLabel: 'Cb', description: 'Author COBOL-85 compatible programs, services, and daemons.' },
   { path: '/vbish', label: 'VBish', shortLabel: 'Vb', description: 'Author VB-like programs, services, and daemons.' },
   { path: '/topology', label: 'Topology', shortLabel: 'T', description: 'Inspect nodes, services, and runtime connectivity.' },
+  { path: '/managers', label: 'Managers', shortLabel: 'Mg', description: 'Inspect queue managers, database providers, and their deployed resources.' },
   { path: '/bluetooth-devices', label: 'Bluetooth Devices', shortLabel: 'B', description: 'Inspect nearby BLE devices, inferred types, manufacturers, and signal strength.' },
   { path: '/provisioning-agent', label: 'Provisioning Agent', shortLabel: 'A', description: 'Run fleet provisioning jobs with retry policy and job history.' },
 ]
@@ -137,12 +141,16 @@ function AppShell() {
   let currentPage = null
   if (currentPath === '/topology') {
     currentPage = <TopologyPage />
+  } else if (currentPath === '/managers') {
+    currentPage = <ManagersPage />
   } else if (currentPath === '/bluetooth-devices') {
     currentPage = <NetworkDevicesPage />
   } else if (currentPath === '/projects') {
     currentPage = <ProjectTreePage />
   } else if (currentPath === '/deployments') {
     currentPage = <DeploymentPage />
+  } else if (currentPath === '/pmachine') {
+    currentPage = <PmachineDeployPage />
   } else if (currentPath === '/data-mapper') {
     currentPage = <DataMapper />
   } else if (currentPath === '/flow-designer') {

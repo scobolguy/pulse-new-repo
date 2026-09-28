@@ -41,9 +41,20 @@ export class VbishToPascalishVisitor extends VbishVisitor {
     this.procedures = [];
     this.functions = [];
     this.routers = [];
+    this.systems = [];
+    this.databases = [];
   }
 
   visitCompilationUnit(ctx) {
+    for (const systemCtx of ctx.systemDecl?.() || []) {
+      this.systems.push(this.visitSystemDecl(systemCtx));
+    }
+    for (const databaseCtx of ctx.databaseDecl?.() || []) {
+      this.databases.push({
+        symbol: unquote(text(databaseCtx.stringOrIdentifier())),
+        typeName: text(databaseCtx.typeName())
+      });
+    }
     for (const routeCtx of ctx.routeDecl() || []) {
       const parts = routeCtx.stringOrIdentifier() || [];
       const fromQueue = unquote(text(parts[0]));
@@ -70,6 +81,47 @@ export class VbishToPascalishVisitor extends VbishVisitor {
       }
     }
     return this;
+  }
+
+  visitSystemDecl(ctx, parentPath = []) {
+    const names = (ctx.stringOrIdentifier?.() || []).map(item => unquote(text(item)));
+    const raw = text(ctx).toUpperCase();
+    const abstract = raw.startsWith('SYSTEMTYPE');
+    const systemId = names[0] || '';
+    const systemPath = [...parentPath, systemId];
+    const scopedSystemId = systemPath.join('.');
+    const typeName = abstract ? null : (names[1] || null);
+    const visibility = text(ctx.systemVisibilityClause?.()).toUpperCase().includes('EXPOSED') ? 'exposed' : 'internal';
+    const members = (ctx.systemMember?.() || []).map(member => {
+      if (member.systemDecl?.()) {
+        return this.visitSystemDecl(member.systemDecl(), systemPath);
+      }
+      if (member.systemQueueDecl?.()) {
+        const queueContext = member.systemQueueDecl();
+        const values = (queueContext.stringOrIdentifier?.() || []).map(item => unquote(text(item)));
+        const hasAlias = Boolean(queueContext.ARROW?.());
+        const dataTypeId = hasAlias ? values[2] : values[1];
+        return {
+          kind: 'queue',
+          symbol: values[0],
+          queueName: `${scopedSystemId}.${hasAlias ? (values[1] || values[0]) : values[0]}`,
+          dataTypeId: dataTypeId || null,
+          dataTypeIds: dataTypeId ? [dataTypeId] : [],
+          visibility: text(queueContext.systemVisibilityClause?.()).toUpperCase().includes('EXPOSED') ? 'exposed' : 'internal'
+        };
+      }
+      const serviceContext = member.systemServiceDecl?.();
+      if (!serviceContext) return null;
+      const values = (serviceContext.stringOrIdentifier?.() || []).map(item => unquote(text(item)));
+      const hasAlias = Boolean(serviceContext.ARROW?.());
+      return {
+        kind: 'service',
+        symbol: values[0],
+        serviceId: hasAlias ? (values[1] || values[0]) : values[0],
+        visibility: text(serviceContext.systemVisibilityClause?.()).toUpperCase().includes('EXPOSED') ? 'exposed' : 'internal'
+      };
+    }).filter(Boolean);
+    return { kind: 'system', name: systemId, systemId: scopedSystemId, systemPath, typeName, abstract, visibility, members };
   }
 
   visitSubDecl(ctx) {
@@ -300,6 +352,22 @@ export class VbishToPascalishVisitor extends VbishVisitor {
 
     lines.push(`${kind} "${id}"${placement}${refresh};`);
 
+    for (const system of this.systems) {
+      const header = system.abstract
+        ? `system type "${system.name}"`
+        : `system "${system.name}"${system.typeName ? ` of type "${system.typeName}"` : ''}`;
+      lines.push(`${header} begin`);
+      for (const member of system.members || []) {
+        const visibility = member.visibility === 'exposed' ? ' visibility exposed' : '';
+        if (member.kind === 'queue') {
+          lines.push(`  queue "${member.symbol}" -> "${member.queueName}" type "${member.dataTypeId || 'text-string'}"${visibility};`);
+        } else {
+          lines.push(`  service "${member.symbol}" -> "${member.serviceId}"${visibility};`);
+        }
+      }
+      lines.push('end;');
+    }
+
     const meta = this.metadata || {};
     if (meta.role) lines.push(`role ${String(meta.role).toLowerCase()};`);
     for (const lib of meta.libraries || []) {
@@ -315,6 +383,10 @@ export class VbishToPascalishVisitor extends VbishVisitor {
 
     for (const item of interopDecls) {
       lines.push(`interop ${item.kind.toLowerCase()} "${item.target}";`);
+    }
+
+    for (const database of this.databases) {
+      lines.push(`database ${database.symbol} type ${database.typeName};`);
     }
 
     for (const route of this.routers) {
@@ -381,12 +453,16 @@ export function compileVbishWithAntlr(sourceText, options = {}) {
   const tree = parser.compilationUnit();
 
   const syntaxErrors = [...lexerErrors.errors, ...parserErrors.errors];
-  const runtimeMatch = /\b(?:PULSE\s+)?(SERVICE|DAEMON|PROGRAM)\s+(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_-]*))(?:\s+ON\s+(LOCAL|PARENT|CHILD|SIBLING|ALTERNATE))?(?:\s+EVERY\s+(\d+)\s*(MS|S|M|SECOND|SECONDS)?)?/i.exec(source);
+  const runtimeMatch = /^\s*(?:PULSE\s+)?(SERVICE|DAEMON|PROGRAM)\s+(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_-]*))(?:\s+ON\s+(LOCAL|PARENT|CHILD|SIBLING|ALTERNATE))?(?:\s+EVERY\s+(\d+)\s*(MS|S|M|SECOND|SECONDS)?)?/im.exec(source);
   const interop = collectMatches(source, /\bINTEROP\s+(WFL|WORKFLOW|PASCALISH|COBOLISH|VBISH)\s+"([^"]+)"(?:\s+AS\s+([A-Za-z_][A-Za-z0-9_-]*))?/gi, (match) => ({
     kind: String(match[1]).toUpperCase(), target: String(match[2]), alias: String(match[3] || '').trim() || null
   }));
   const members = collectMatches(source, /\b(?:SUB|FUNCTION)\s+([A-Za-z_][A-Za-z0-9_-]*)/gi, (match) => String(match[1]));
   const variables = collectMatches(source, /\bDIM\s+([A-Za-z_][A-Za-z0-9_-]*)/gi, (match) => String(match[1]));
+  const databases = collectMatches(source, /\bDATABASE\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))\s+TYPE\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))/gi, (match) => ({
+    symbol: String(match[1] || match[2] || match[3] || '').trim(),
+    typeName: String(match[4] || match[5] || match[6] || '').trim()
+  })).filter((item) => item.symbol && item.typeName);
   const role = (source.match(/\bROLE\s+([A-Za-z_][A-Za-z0-9_-]*)/i) || [])[1] || null;
   const libraries = collectMatches(source, /\bLIBRARY\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))\s+FROM\s+(?:LIBRARIAN|"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))/gi, (match) => ({
     id: String(match[1] || match[2] || match[3] || '').trim(),
@@ -402,9 +478,10 @@ export function compileVbishWithAntlr(sourceText, options = {}) {
   })).filter((x) => x.id);
 
   let pascalishSource = '';
+  let visitor = null;
   if (syntaxErrors.length === 0) {
     try {
-      const visitor = new VbishToPascalishVisitor({ role, libraries, uses, mapperImports });
+      visitor = new VbishToPascalishVisitor({ role, libraries, uses, mapperImports });
       visitor.visitCompilationUnit(tree);
       const runtimeUnit = runtimeMatch ? {
         kind: runtimeMatch[1].toLowerCase(),
@@ -427,6 +504,6 @@ export function compileVbishWithAntlr(sourceText, options = {}) {
     libraries,
     uses,
     mapperImports,
-    interop, members, variables, source, pascalishSource
+    interop, members, variables, databases: visitor?.databases?.length ? visitor.databases : databases, systems: visitor?.systems || [], source, pascalishSource
   };
 }
