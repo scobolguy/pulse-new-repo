@@ -4,6 +4,8 @@
 #include <Arduino.h>
 #include <string>
 
+#include "DeviceDriverTemplate.h"
+
 /**
  * Abstract Sensor Interface
  * 
@@ -304,6 +306,62 @@ private:
     bool ready;
     int currentValue;
 };
+
+#if __has_include(<DHT.h>)
+/**
+ * DHT11 Temperature Sensor
+ * Uses assignable GPIO pin and applies calibration values.
+ */
+class DHT11TemperatureSensor : public ISensor {
+public:
+    DHT11TemperatureSensor(const std::string& id, int pin);
+    virtual ~DHT11TemperatureSensor();
+
+    bool read(float& value) override;
+    bool calibrate(float offset, float scale) override;
+    std::string getType() const override { return "temperature"; }
+    std::string getId() const override { return id; }
+    bool initialize() override;
+    bool isReady() const override { return ready; }
+
+    void setPin(int pin);
+
+private:
+    std::string id;
+    int pin;
+    bool ready;
+    float calibrationOffset;
+    float calibrationScale;
+    class DHT* dht;
+};
+
+/**
+ * DHT11 Humidity Sensor
+ * Uses assignable GPIO pin and applies calibration values.
+ */
+class DHT11HumiditySensor : public ISensor {
+public:
+    DHT11HumiditySensor(const std::string& id, int pin);
+    virtual ~DHT11HumiditySensor();
+
+    bool read(float& value) override;
+    bool calibrate(float offset, float scale) override;
+    std::string getType() const override { return "humidity"; }
+    std::string getId() const override { return id; }
+    bool initialize() override;
+    bool isReady() const override { return ready; }
+
+    void setPin(int pin);
+
+private:
+    std::string id;
+    int pin;
+    bool ready;
+    float calibrationOffset;
+    float calibrationScale;
+    class DHT* dht;
+};
+#endif
 
 // ============================================================================
 // Factory Functions

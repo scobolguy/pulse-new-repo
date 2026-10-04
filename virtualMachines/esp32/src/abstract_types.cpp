@@ -1,5 +1,9 @@
 #include "abstract_types.h"
 
+#if __has_include(<DHT.h>)
+#include <DHT.h>
+#endif
+
 // ============================================================================
 // Temperature Sensor Implementation
 // ============================================================================
@@ -141,6 +145,116 @@ bool AnalogSensor::calibrate(float offset, float scale) {
     calibrationScale = scale;
     return true;
 }
+
+#if __has_include(<DHT.h>)
+DHT11TemperatureSensor::DHT11TemperatureSensor(const std::string& id, int pin)
+    : id(id), pin(pin), ready(false), calibrationOffset(0.0f), calibrationScale(1.0f), dht(nullptr) {
+}
+
+DHT11TemperatureSensor::~DHT11TemperatureSensor() {
+    if (dht != nullptr) {
+        delete dht;
+        dht = nullptr;
+    }
+}
+
+void DHT11TemperatureSensor::setPin(int newPin) {
+    pin = newPin;
+    if (dht != nullptr) {
+        delete dht;
+        dht = nullptr;
+    }
+    dht = new DHT(pin, DHT11);
+    if (dht != nullptr) {
+        dht->begin();
+        ready = true;
+    }
+}
+
+bool DHT11TemperatureSensor::initialize() {
+    dht = new DHT(pin, DHT11);
+    if (dht == nullptr) {
+        return false;
+    }
+    dht->begin();
+    ready = true;
+    return true;
+}
+
+bool DHT11TemperatureSensor::read(float& value) {
+    if (!ready || dht == nullptr) {
+        return false;
+    }
+
+    const float temp = dht->readTemperature();
+    if (isnan(temp)) {
+        return false;
+    }
+
+    value = (temp + calibrationOffset) * calibrationScale;
+    return true;
+}
+
+bool DHT11TemperatureSensor::calibrate(float offset, float scale) {
+    calibrationOffset = offset;
+    calibrationScale = scale;
+    return true;
+}
+
+DHT11HumiditySensor::DHT11HumiditySensor(const std::string& id, int pin)
+    : id(id), pin(pin), ready(false), calibrationOffset(0.0f), calibrationScale(1.0f), dht(nullptr) {
+}
+
+DHT11HumiditySensor::~DHT11HumiditySensor() {
+    if (dht != nullptr) {
+        delete dht;
+        dht = nullptr;
+    }
+}
+
+void DHT11HumiditySensor::setPin(int newPin) {
+    pin = newPin;
+    if (dht != nullptr) {
+        delete dht;
+        dht = nullptr;
+    }
+    dht = new DHT(pin, DHT11);
+    if (dht != nullptr) {
+        dht->begin();
+        ready = true;
+    }
+}
+
+bool DHT11HumiditySensor::initialize() {
+    dht = new DHT(pin, DHT11);
+    if (dht == nullptr) {
+        return false;
+    }
+    dht->begin();
+    ready = true;
+    return true;
+}
+
+bool DHT11HumiditySensor::read(float& value) {
+    if (!ready || dht == nullptr) {
+        return false;
+    }
+
+    const float humidity = dht->readHumidity();
+    if (isnan(humidity)) {
+        return false;
+    }
+
+    value = (humidity + calibrationOffset) * calibrationScale;
+    return true;
+}
+
+bool DHT11HumiditySensor::calibrate(float offset, float scale) {
+    calibrationOffset = offset;
+    calibrationScale = scale;
+    return true;
+}
+#endif
 
 // ============================================================================
 // Relay Actuator Implementation
@@ -328,6 +442,12 @@ ISensor* createSensor(const std::string& type, const std::string& id, int pin) {
         return new PressureSensor(id, pin);
     } else if (type == "analog") {
         return new AnalogSensor(id, pin);
+#if __has_include(<DHT.h>)
+    } else if (type == "dht11" || type == "DHT11" || type == "dht11-temperature") {
+        return new DHT11TemperatureSensor(id, pin);
+    } else if (type == "dht11-humidity") {
+        return new DHT11HumiditySensor(id, pin);
+#endif
     }
     return nullptr;
 }

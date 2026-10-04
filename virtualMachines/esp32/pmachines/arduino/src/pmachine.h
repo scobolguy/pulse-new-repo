@@ -86,6 +86,9 @@ enum Opcode : uint8_t {
     OP_MT_AMOUNT_TO_DECIMAL = 0x68, // "12500,45" -> "12500.45"
     OP_MT_PARTY_NAME = 0x69,     // Strip MT account line, keep party name
     OP_MT_CHARGE_TO_ISO = 0x6A,  // MT charge-bearer code -> ISO
+    OP_FSM = 0x75,               // Open or operate a generic FSM instance
+    OP_GPIO_WRITE = 0x76,        // Pop level and pin, then set an ESP32 GPIO output
+    OP_DELAY_MS = 0x77,          // Pop milliseconds and yield for that duration
     OP_PARSE_FIN_TEXT = 0x16,    // Parse routing source message from MT FIN text into JSON
     OP_ROUTE_SET_STATE = 0x17,   // Set runtime state from operand "key=value"
     OP_ROUTE_SET_MESSAGE = 0x24, // Pop stack value and set current routing message
@@ -291,6 +294,9 @@ struct Value {
         if (mnemonic == "MT_AMOUNT_TO_DECIMAL") return OP_MT_AMOUNT_TO_DECIMAL;
         if (mnemonic == "MT_PARTY_NAME") return OP_MT_PARTY_NAME;
         if (mnemonic == "MT_CHARGE_TO_ISO") return OP_MT_CHARGE_TO_ISO;
+        if (mnemonic == "FSM") return OP_FSM;
+        if (mnemonic == "GPIO_WRITE") return OP_GPIO_WRITE;
+        if (mnemonic == "DELAY_MS") return OP_DELAY_MS;
         if (mnemonic == "ROUTE_EMIT") return OP_ROUTE_EMIT;
         if (mnemonic == "QUEUE_WRITE_SYNC") return OP_QUEUE_WRITE_SYNC;
         if (mnemonic == "QUEUE_WRITE_ASYNC") return OP_QUEUE_WRITE_ASYNC;
@@ -439,6 +445,36 @@ using ServiceCallHook = bool (*)(
     std::string& outError,
     void* context);
 
+struct FsmCallRequest {
+    std::string operation;
+    std::string kind;
+    std::string name;
+    std::string type;
+    int pin = -1;
+    int handle = 0;
+    std::string member;
+    std::string value;
+};
+
+struct FsmCallResult {
+    int handle = 0;
+    std::string value;
+};
+
+struct FsmHandleInfo {
+    int handle = 0;
+    std::string kind;
+    std::string name;
+    std::string type;
+    int pin = -1;
+};
+
+using FsmCallHook = bool (*)(
+    const FsmCallRequest& request,
+    FsmCallResult& result,
+    std::string& outError,
+    void* context);
+
 using TextOutputHook = void (*)(const std::string& line, void* context);
 
 // Observable value of a named global after a run; mirrors the JS PMachine `globals` map.
@@ -567,6 +603,7 @@ public:
             breakpoints = std::move(other.breakpoints);
             currentInputQueue = std::move(other.currentInputQueue);
             currentMessage = std::move(other.currentMessage);
+            flowState = std::move(other.flowState);
             routingDeliveries = std::move(other.routingDeliveries);
             mappingDefs = std::move(other.mappingDefs);
             procedureParamsByLabel = std::move(other.procedureParamsByLabel);
@@ -593,9 +630,12 @@ public:
             thunkResolverContext = other.thunkResolverContext;
             thunkBindings = std::move(other.thunkBindings);
             serviceCallHook = other.serviceCallHook;
+            fsmCallHook = other.fsmCallHook;
             textOutputHook = other.textOutputHook;
             textOutputContext = other.textOutputContext;
             serviceCallContext = other.serviceCallContext;
+            fsmCallContext = other.fsmCallContext;
+            fsmTable = std::move(other.fsmTable);
             namedStringVariables = std::move(other.namedStringVariables);
             namedRealVariables = std::move(other.namedRealVariables);
             namedEnumVariables = std::move(other.namedEnumVariables);
@@ -619,9 +659,11 @@ public:
             other.thunkResolveHook = nullptr;
             other.thunkResolverContext = nullptr;
             other.serviceCallHook = nullptr;
+            other.fsmCallHook = nullptr;
             other.textOutputHook = nullptr;
             other.textOutputContext = nullptr;
             other.serviceCallContext = nullptr;
+            other.fsmCallContext = nullptr;
             return *this;
         }
         return *this;
@@ -691,6 +733,10 @@ public:
     void setOrchestrationWaitHook(OrchestrationWaitHook hook, void* context = nullptr);
     void setThunkResolverHook(ThunkResolveHook hook, void* context = nullptr);
     void setServiceCallHook(ServiceCallHook hook, void* context = nullptr);
+    void setFsmCallHook(FsmCallHook hook, void* context = nullptr);
+    FsmCallHook getFsmCallHook() const { return fsmCallHook; }
+    void* getFsmCallContext() const { return fsmCallContext; }
+    std::vector<FsmHandleInfo> getFsmTableSnapshot() const;
     void setTextOutputHook(TextOutputHook hook, void* context = nullptr);
     void setThunkBinding(const std::string& symbol, int targetPc);
     bool clearThunkBinding(const std::string& symbol);
@@ -717,6 +763,7 @@ private:
     std::vector<uint16_t> breakpoints;
     std::string currentInputQueue;
     std::string currentMessage;
+    std::map<std::string, std::string> flowState;
     std::vector<RouteDelivery> routingDeliveries;
     std::map<std::string, MappingDef> mappingDefs;
     std::map<std::string, std::vector<std::string>> procedureParamsByLabel;
@@ -743,9 +790,12 @@ private:
     void* thunkResolverContext = nullptr;
     std::map<std::string, int> thunkBindings;
     ServiceCallHook serviceCallHook = nullptr;
+    FsmCallHook fsmCallHook = nullptr;
     TextOutputHook textOutputHook = nullptr;
     void* textOutputContext = nullptr;
     void* serviceCallContext = nullptr;
+    void* fsmCallContext = nullptr;
+    std::map<int, FsmHandleInfo> fsmTable;
     std::map<std::string, std::string> namedStringVariables;  // String-valued named variables (e.g., 'src')
     std::map<std::string, float> namedRealVariables;
     std::map<std::string, Value> namedEnumVariables;

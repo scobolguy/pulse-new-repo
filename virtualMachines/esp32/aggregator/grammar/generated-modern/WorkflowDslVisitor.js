@@ -1,4 +1,4 @@
-// Generated from C:/dev/pulse-new-repo/virtualMachines/esp32/aggregator/grammar/WorkflowDsl.g4 by ANTLR 4.13.2
+// Generated from grammar/WorkflowDsl.g4 by ANTLR 4.13.2
 // jshint ignore: start
 import antlr4 from 'antlr4';
 

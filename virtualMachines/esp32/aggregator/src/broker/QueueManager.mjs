@@ -354,25 +354,8 @@ export default class QueueManager {
       }
 
       this.restoreQueueMessagesFromFiles(snapshotQueueLengths);
-      this.rebuildSeenMessageIds();
     } catch (e) {
       console.error(`Error loading from disk for ${this.name}:`, e.message);
-    }
-  }
-
-  rebuildSeenMessageIds() {
-    for (const operation of this.operationLog || []) {
-      if (operation?.type === 'enqueue' && operation.messageId) {
-        this.seenMessageIds.add(operation.messageId);
-      }
-    }
-    for (const queue of Object.values(this.queues || {})) {
-      for (const item of Array.isArray(queue?.messages) ? queue.messages : []) {
-        if (item?.messageId) this.seenMessageIds.add(item.messageId);
-      }
-    }
-    while (this.seenMessageIds.size > 10000) {
-      this.seenMessageIds.delete(this.seenMessageIds.values().next().value);
     }
   }
 
@@ -730,10 +713,6 @@ export default class QueueManager {
     return this.queueConfig[queueName] || {};
   }
 
-  isExternallyVisible(queueName) {
-    return this.getConfig(queueName).visibility !== 'internal';
-  }
-
   enqueue(queueName, message, sourceService, messageId = null, messageEnvelope = null) {
     if (!this.queueConfig[queueName]) {
       throw new Error(`Queue ${queueName} not configured`);
@@ -741,13 +720,6 @@ export default class QueueManager {
     if (!this.queues[queueName]) this.queues[queueName] = { messages: [] };
     if (!this.queues[queueName].messages) this.queues[queueName].messages = [];
     const resolvedMessageId = messageId || randomUUID();
-    if (messageId && this.seenMessageIds.has(messageId)) return resolvedMessageId;
-    if (messageId) {
-      this.seenMessageIds.add(messageId);
-      if (this.seenMessageIds.size > 10000) {
-        this.seenMessageIds.delete(this.seenMessageIds.values().next().value);
-      }
-    }
     let queuedItem = { message, sourceService, messageId: resolvedMessageId, messageEnvelope: messageEnvelope || null };
     if (this.persistence && this.shouldPersistQueueMessages(queueName)) {
       queuedItem = this.persistence.persistQueueMessage(queueName, queuedItem);

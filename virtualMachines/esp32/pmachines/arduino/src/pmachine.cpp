@@ -4,12 +4,17 @@
 #include <algorithm>
 #include <cctype>
 #include <set>
+#if defined(ARDUINO)
+#include <Arduino.h>
+#endif
 #include <ArduinoJson.h>
 #include "pmachine.h"
 #include "StringPool.h"
+#include "GpioPinSemaphore.h"
 #if defined(ESP32)
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <esp_task_wdt.h>
 #endif
 
 namespace pmachine {
@@ -310,8 +315,6 @@ namespace {
         return st.empty() ? srcValue : st.back();
     }
 
-    std::map<std::string, std::string> gFlowState;
-
     // Host-installed reader; absent on nodes with no SQL client, which makes
     // DB_SELECT yield empty columns and record a flow-state error.
     DatabaseRowReader gDatabaseRowReader = nullptr;
@@ -332,9 +335,12 @@ namespace {
 
     // WFL rebinds a database symbol to a physical sink at deploy time by seeding
     // flow state; the default keeps the symbol so an unbound unit stays inspectable.
-    std::string databaseSinkQueue(const std::string& database) {
-        const auto it = gFlowState.find("db." + database + ".sink");
-        if (it != gFlowState.end() && !it->second.empty()) return it->second;
+    std::string databaseSinkQueue(
+        const std::string& database,
+        const std::map<std::string, std::string>& flowState
+    ) {
+        const auto it = flowState.find("db." + database + ".sink");
+        if (it != flowState.end() && !it->second.empty()) return it->second;
         return "db." + database + ".dml";
     }
 
@@ -507,7 +513,11 @@ namespace {
         return runMappingById(vm, mappingId, payload, outValue, error);
     }
 
-    bool evaluateWhenRuleText(const std::string& whenRule, const std::string& message) {
+    bool evaluateWhenRuleText(
+        const std::string& whenRule,
+        const std::string& message,
+        const std::map<std::string, std::string>& flowState
+    ) {
         const std::string normalizedWhen = normalizeDslEscapes(whenRule);
         const std::string whenUpper = toUpperCopy(normalizedWhen);
         const std::string msgUpper = toUpperCopy(message);
@@ -547,8 +557,8 @@ namespace {
             const std::string statePrefix = "state.";
             if (field.rfind(statePrefix, 0) == 0) {
                 const std::string stateKey = field.substr(statePrefix.size());
-                auto it = gFlowState.find(stateKey);
-                if (it != gFlowState.end()) actual = it->second;
+                auto it = flowState.find(stateKey);
+                if (it != flowState.end()) actual = it->second;
             } else {
                 JsonDocument parsed;
                 DeserializationError err = deserializeJson(parsed, message.c_str());
@@ -836,6 +846,16 @@ void PMachine::setThunkResolverHook(ThunkResolveHook hook, void* context) {
 void PMachine::setServiceCallHook(ServiceCallHook hook, void* context) {
     serviceCallHook = hook;
     serviceCallContext = context;
+}
+void PMachine::setFsmCallHook(FsmCallHook hook, void* context) {
+    fsmCallHook = hook;
+    fsmCallContext = context;
+}
+std::vector<FsmHandleInfo> PMachine::getFsmTableSnapshot() const {
+    std::vector<FsmHandleInfo> result;
+    result.reserve(fsmTable.size());
+    for (const auto& entry : fsmTable) result.push_back(entry.second);
+    return result;
 }
 void PMachine::setTextOutputHook(TextOutputHook hook, void* context) {
     textOutputHook = hook;
@@ -1426,6 +1446,7 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
                    opcode == pmachine::OP_DB_SELECT ||
                    opcode == pmachine::OP_DB_UPDATE ||
                    opcode == pmachine::OP_DB_DELETE ||
+                   opcode == pmachine::OP_FSM ||
                    opcode == pmachine::OP_REC_NEW || opcode == pmachine::OP_REC_SET ||
                    opcode == pmachine::OP_REC_GET ||
                    (opcode >= pmachine::OP_SET_NEW && opcode <= pmachine::OP_SET_DIFF)) {
@@ -1487,6 +1508,7 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
 }
 
 void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
+    auto& gFlowState = flowState;
     static const size_t MAX_RUN_STEPS = 200000;
     static const int STACK_SIZE = 512;
     static const size_t MAX_NAME_FRAME_DEPTH = 128;
@@ -1739,6 +1761,11 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
         this->pc = static_cast<uint16_t>(pc);
         if (debugRunStatus.load() != 0) {
             debugPc = static_cast<uint16_t>(pc);
+            if (debugAction.load() == 3 && debugStepOutDepth.load() > 0
+                && static_cast<int>(nameCallStack.size()) < debugStepOutDepth.load()) {
+                debugAction.store(0);
+                debugStepOutDepth.store(0);
+            }
             if (resumedPc != pc && std::find(breakpoints.begin(), breakpoints.end(), this->pc) != breakpoints.end()) {
                 debugAction.store(0);
             }
@@ -1780,7 +1807,10 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
         tickDaemonRefresh();
         ++steps;
     #if defined(ESP32)
-        if ((steps & 31u) == 0u) vTaskDelay(1);
+        if ((steps & 31u) == 0u) {
+            esp_task_wdt_reset();
+            vTaskDelay(1);
+        }
     #endif
         if (steps > MAX_RUN_STEPS) {
             lastRunStepLimitHit = true;
@@ -1815,56 +1845,77 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             Serial.println("]");
         });
 
-        // Hot mapper conversions use direct numeric dispatch. The remaining
-        // handlers below retain their existing stateful execution flow.
+        // Dispatch each instruction by opcode; related opcodes share case bodies.
         switch (instr.opcode) {
-            case OP_YYMMDD_TO_ISO: {
-                std::string v = popString();
-                pushString(mapOpYymmddToIso(v));
-                ++pc;
-                continue;
-            }
-            case OP_MT_AMOUNT_TO_DECIMAL: {
-                std::string v = popString();
-                pushString(normalizeMtAmount(v));
-                ++pc;
-                continue;
-            }
-            case OP_MT_PARTY_NAME: {
-                std::string v = popString();
-                pushString(mapOpMtPartyName(v));
-                ++pc;
-                continue;
-            }
-            case OP_MT_CHARGE_TO_ISO: {
-                std::string v = popString();
-                pushString(mapOpMtChargeToIso(v));
-                ++pc;
-                continue;
-            }
-            default:
-                break;
-        }
-
-        if (instr.opcode == OP_PUSH_STR) {
+        case OP_PUSH_STR: {
             pushString(instr.strOperand);
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_PUSH_INT) {
+        case OP_PUSH_INT: {
             if (sp >= STACK_SIZE) {
                 gFlowState["__runtime_error"] = "stack overflow";
                 gFlowState["__memory_pressure"] = captureMemoryPressureSnapshot(static_cast<size_t>(sp), STACK_SIZE).memoryPressureLevel;
-                break;
+                goto pmachineRunExit;
             }
             stack[sp++] = instr.intOperand;
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_PUSH_ENUM) {
+        case OP_GPIO_WRITE: {
+#if defined(ESP32)
+            if (sp < 2) {
+                gFlowState["__runtime_error"] = "GPIO_WRITE requires pin and level";
+                goto pmachineRunExit;
+            }
+            const int level = stack[--sp];
+            const int pin = stack[--sp];
+            if (!isGpioOutputCapablePin(pin) || (level != 0 && level != 1)) {
+                gFlowState["__runtime_error"] = "GPIO_WRITE requires an output-capable ESP32 pin and level 0 or 1";
+                goto pmachineRunExit;
+            }
+            GpioPinSemaphore pinSemaphore(pin);
+            if (!pinSemaphore.acquired()) {
+                gFlowState["__runtime_error"] = "GPIO pin is busy";
+                goto pmachineRunExit;
+            }
+            pinMode(pin, OUTPUT);
+            digitalWrite(pin, level == 1 ? HIGH : LOW);
+            ++pc;
+            continue;
+#else
+            gFlowState["__runtime_error"] = "GPIO_WRITE is only supported on ESP32";
+            goto pmachineRunExit;
+#endif
+        }
+        case OP_DELAY_MS: {
+#if defined(ESP32)
+            if (sp < 1) {
+                gFlowState["__runtime_error"] = "DELAY_MS requires milliseconds";
+                goto pmachineRunExit;
+            }
+            const int delayMs = stack[--sp];
+            if (delayMs < 0 || delayMs > 10000) {
+                gFlowState["__runtime_error"] = "DELAY_MS must be between 0 and 10000";
+                goto pmachineRunExit;
+            }
+            for (int elapsedMs = 0; elapsedMs < delayMs;) {
+                const int sliceMs = std::min(250, delayMs - elapsedMs);
+                delay(static_cast<unsigned long>(sliceMs));
+                esp_task_wdt_reset();
+                elapsedMs += sliceMs;
+            }
+            ++pc;
+            continue;
+#else
+            gFlowState["__runtime_error"] = "DELAY_MS is only supported on ESP32";
+            goto pmachineRunExit;
+#endif
+        }
+        case OP_PUSH_ENUM: {
             if (sp >= STACK_SIZE) {
                 gFlowState["__runtime_error"] = "stack overflow";
-                break;
+                goto pmachineRunExit;
             }
             const uint16_t typeIndex = getEnumTypeIndex(instr.enumType);
             const int ordinal = getEnumOrdinal(typeIndex, instr.strOperand);
@@ -1877,16 +1928,16 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_PUSH_REAL) {
+        case OP_PUSH_REAL: {
             if (sp >= STACK_SIZE) {
                 gFlowState["__runtime_error"] = "stack overflow";
-                break;
+                goto pmachineRunExit;
             }
             stack[sp++] = Value::makeReal(strtof(instr.strOperand.c_str(), nullptr));
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_RDIV) {
+        case OP_RDIV: {
             if (sp >= 2) {
                 const Value rhs = stack[--sp];
                 const Value lhs = stack[sp - 1];
@@ -1896,7 +1947,10 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_ADD || instr.opcode == OP_SUB || instr.opcode == OP_MUL || instr.opcode == OP_DIV) {
+        case OP_ADD:
+        case OP_SUB:
+        case OP_MUL:
+        case OP_DIV: {
             if (sp >= 2) {
                 const Value rhsValue = stack[--sp];
                 const Value lhsValue = stack[sp - 1];
@@ -1922,7 +1976,12 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_EQ || instr.opcode == OP_NEQ || instr.opcode == OP_LT || instr.opcode == OP_LE || instr.opcode == OP_GT || instr.opcode == OP_GE) {
+        case OP_EQ:
+        case OP_NEQ:
+        case OP_LT:
+        case OP_LE:
+        case OP_GT:
+        case OP_GE: {
             // Two pending strings compare lexicographically; otherwise fall back to integers.
             if (isStringAtDepth(1) && isStringAtDepth(2)) {
                 const std::string rhs = popString();
@@ -1957,7 +2016,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_TRIM) {
+        case OP_TRIM: {
             if (isStringAtDepth(1)) {
                 const std::string str = popString();
                 pushString(trimCopy(str));
@@ -1965,7 +2024,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_PARSE_INT) {
+        case OP_PARSE_INT: {
             if (isStringAtDepth(1)) {
                 const std::string str = popString();
                 // Try to parse as integer
@@ -1975,14 +2034,14 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
                 if (sp >= STACK_SIZE) {
                     gFlowState["__runtime_error"] = "stack overflow";
                     gFlowState["__memory_pressure"] = captureMemoryPressureSnapshot(static_cast<size_t>(sp), STACK_SIZE).memoryPressureLevel;
-                    break;
+                    goto pmachineRunExit;
                 }
                 stack[sp++] = result;
             }
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_OR) {
+        case OP_OR: {
             if (sp >= 2) {
                 int rhs = stack[--sp];
                 int lhs = stack[sp - 1];
@@ -1991,7 +2050,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_AND) {
+        case OP_AND: {
             if (sp >= 2) {
                 int rhs = stack[--sp];
                 int lhs = stack[sp - 1];
@@ -2000,25 +2059,26 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_NOT) {
+        case OP_NOT: {
             if (sp >= 1) {
                 stack[sp - 1] = (stack[sp - 1] == 0) ? 1 : 0;
             }
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_STREQ || instr.opcode == OP_STRNEQ) {
+        case OP_STREQ:
+        case OP_STRNEQ: {
             if (isStringAtDepth(1) && isStringAtDepth(2)) {
                 const std::string rhs = popString();
                 const std::string lhs = popString();
                 int eq = (lhs == rhs) ? 1 : 0;
-                if (sp >= STACK_SIZE) break;
+                if (sp >= STACK_SIZE) goto pmachineRunExit;
                 stack[sp++] = (instr.opcode == OP_STREQ) ? eq : (1 - eq);
             }
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_LOAD_NAME) {
+        case OP_LOAD_NAME: {
             const std::string varName = instr.strOperand;
             // Dispatch on binding presence, not value emptiness, so "" stays a string.
             auto strBinding = namedStringVariables.find(varName);
@@ -2027,13 +2087,13 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             } else if (namedRealVariables.count(varName) > 0) {
                 if (sp >= STACK_SIZE) {
                     gFlowState["__runtime_error"] = "stack overflow";
-                    break;
+                    goto pmachineRunExit;
                 }
                 stack[sp++] = Value::makeReal(namedRealVariables[varName]);
             } else if (namedEnumVariables.count(varName) > 0) {
                 if (sp >= STACK_SIZE) {
                     gFlowState["__runtime_error"] = "stack overflow";
-                    break;
+                    goto pmachineRunExit;
                 }
                 stack[sp++] = namedEnumVariables[varName];
             } else if (varName == "__reply") {
@@ -2049,14 +2109,14 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
                 if (sp >= STACK_SIZE) {
                     gFlowState["__runtime_error"] = "stack overflow";
                     gFlowState["__memory_pressure"] = captureMemoryPressureSnapshot(static_cast<size_t>(sp), STACK_SIZE).memoryPressureLevel;
-                    break;
+                    goto pmachineRunExit;
                 }
                 stack[sp++] = resolveName(varName);
             }
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_STORE_NAME) {
+        case OP_STORE_NAME: {
             // String stack wins, matching OP_PRINT precedence, so TRIM/FILE_READ results survive STORE.
             if (isStringAtDepth(1)) {
                 namedStringVariables[instr.strOperand] = popString();
@@ -2077,7 +2137,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_ARR_GET) {
+        case OP_ARR_GET: {
             // Index arrives zero-based (compiler already subtracted the array's low
             // bound); out-of-range reads yield 0 and record __arr_error, mirroring the
             // divide-by-zero / unknown-enum "safe default" convention elsewhere.
@@ -2085,7 +2145,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             int idx = stack[--sp];
             if (idx < 0 || idx >= instr.intOperand) {
                 gFlowState["__arr_error"] = std::string("index out of range: ") + instr.strOperand + "[" + std::to_string(idx) + "]";
-                if (sp >= STACK_SIZE) break;
+                if (sp >= STACK_SIZE) goto pmachineRunExit;
                 stack[sp++] = 0;
                 ++pc;
                 continue;
@@ -2095,23 +2155,23 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             if (strBinding != namedStringVariables.end()) {
                 pushString(strBinding->second);
             } else if (namedRealVariables.count(varName) > 0) {
-                if (sp >= STACK_SIZE) { gFlowState["__runtime_error"] = "stack overflow"; break; }
+                if (sp >= STACK_SIZE) { gFlowState["__runtime_error"] = "stack overflow"; goto pmachineRunExit; }
                 stack[sp++] = Value::makeReal(namedRealVariables[varName]);
             } else if (namedEnumVariables.count(varName) > 0) {
-                if (sp >= STACK_SIZE) { gFlowState["__runtime_error"] = "stack overflow"; break; }
+                if (sp >= STACK_SIZE) { gFlowState["__runtime_error"] = "stack overflow"; goto pmachineRunExit; }
                 stack[sp++] = namedEnumVariables[varName];
             } else {
                 if (sp >= STACK_SIZE) {
                     gFlowState["__runtime_error"] = "stack overflow";
                     gFlowState["__memory_pressure"] = captureMemoryPressureSnapshot(static_cast<size_t>(sp), STACK_SIZE).memoryPressureLevel;
-                    break;
+                    goto pmachineRunExit;
                 }
                 stack[sp++] = resolveName(varName);
             }
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_ARR_SET) {
+        case OP_ARR_SET: {
             // Value is on top of stack, the zero-based index just below it; mirrors
             // OP_STORE_NAME's per-kind branching, then resolves the computed slot name.
             if (isStringAtDepth(1)) {
@@ -2164,18 +2224,18 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_CALL_LABEL) {
+        case OP_CALL_LABEL: {
             if (!invokeCallFrame(instr.intOperand, instr.label, instr.value)) {
                 gFlowState["__thunk_error"] = lastCallError.empty() ? "invalid local call target" : lastCallError;
-                break;
+                goto pmachineRunExit;
             }
             continue;
         }
-        if (instr.opcode == OP_CALL_EXT) {
+        case OP_CALL_EXT: {
             const std::string symbol = trimCopy(instr.strOperand);
             if (symbol.empty()) {
                 gFlowState["__thunk_error"] = "empty external symbol";
-                break;
+                goto pmachineRunExit;
             }
 
             int targetPc = -1;
@@ -2195,7 +2255,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
                     gFlowState["__thunk_error"] = resolveError.empty()
                         ? std::string("failed to resolve external symbol: ") + symbol
                         : resolveError;
-                    break;
+                    goto pmachineRunExit;
                 }
                 thunkBindings[symbol] = targetPc;
             }
@@ -2206,13 +2266,13 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
                 } else {
                     gFlowState["__thunk_error"] = std::string("call failed for symbol ") + symbol + ": " + lastCallError;
                 }
-                break;
+                goto pmachineRunExit;
             }
             continue;
         }
-        if (instr.opcode == OP_RET) {
+        case OP_RET: {
             if (nameCallStack.empty()) {
-                break;
+                goto pmachineRunExit;
             }
             NameCallFrame frame = nameCallStack.back();
             nameCallStack.pop_back();
@@ -2231,7 +2291,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             pc = frame.returnPc;
             continue;
         }
-        if (instr.opcode == OP_PRINT) {
+        case OP_PRINT: {
             if (sp > 0) {
                 // stringAt formats each kind, so reals print in Pascal scientific form.
                 currentOutputLine += stringAt(stack[--sp]);
@@ -2239,7 +2299,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_PRINT_NL) {
+        case OP_PRINT_NL: {
 #if defined(ESP32)
             Serial.print("[WRITELN] ");
             Serial.println(currentOutputLine.c_str());
@@ -2249,7 +2309,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_PRINT_INT) {
+        case OP_PRINT_INT: {
             if (sp > 0) {
                 int v = stack[--sp];
                 currentOutputLine += std::to_string(v);
@@ -2258,14 +2318,14 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_PRINT_ENUM) {
+        case OP_PRINT_ENUM: {
             if (sp > 0) {
                 currentOutputLine += stringAt(stack[--sp]);
             }
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_ORD) {
+        case OP_ORD: {
             if (sp > 0) {
                 const Value top = stack[--sp];
                 stack[sp++] = top.isEnum() ? top.i : static_cast<int>(top);
@@ -2273,12 +2333,12 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_REC_NEW) {
+        case OP_REC_NEW: {
             records[trimCopy(instr.strOperand)].clear();
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_REC_SET) {
+        case OP_REC_SET: {
             const auto args = splitOperands(instr.strOperand);
             if (args.size() >= 2 && sp > 0) {
                 records[trimCopy(args[0])][unquote(args[1])] = stack[--sp];
@@ -2286,7 +2346,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_REC_GET) {
+        case OP_REC_GET: {
             const auto args = splitOperands(instr.strOperand);
             Value out;
             if (args.size() >= 2) {
@@ -2300,12 +2360,12 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_SET_NEW) {
+        case OP_SET_NEW: {
             sets[trimCopy(instr.strOperand)].clear();
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_SET_ADD) {
+        case OP_SET_ADD: {
             const auto args = splitOperands(instr.strOperand);
             if (!args.empty()) {
                 const int member = args.size() >= 2 ? resolveIntToken(args[1]) : (sp > 0 ? static_cast<int>(stack[--sp]) : 0);
@@ -2314,7 +2374,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_SET_IN) {
+        case OP_SET_IN: {
             const auto args = splitOperands(instr.strOperand);
             int present = 0;
             if (!args.empty()) {
@@ -2326,7 +2386,9 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_SET_UNION || instr.opcode == OP_SET_INTERSECT || instr.opcode == OP_SET_DIFF) {
+        case OP_SET_UNION:
+        case OP_SET_INTERSECT:
+        case OP_SET_DIFF: {
             const auto args = splitOperands(instr.strOperand);
             if (args.size() >= 3) {
                 const std::set<int>& lhs = sets[trimCopy(args[0])];
@@ -2345,19 +2407,19 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_ROUTE_MATCH_QUEUE) {
+        case OP_ROUTE_MATCH_QUEUE: {
             const std::string queueName = instr.strOperand;
             stack[sp++] = (queueName == currentInputQueue) ? 1 : 0;
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_ROUTE_EVAL_WHEN) {
-            stack[sp++] = evaluateWhenRuleText(instr.strOperand, currentMessage) ? 1 : 0;
+        case OP_ROUTE_EVAL_WHEN: {
+            stack[sp++] = evaluateWhenRuleText(instr.strOperand, currentMessage, flowState) ? 1 : 0;
             ++pc;
             continue;
         }
         // OP_SRC_GET "path": read a field from the current message JSON, push it.
-        if (instr.opcode == OP_SRC_GET) {
+        case OP_SRC_GET: {
             JsonDocument srcDoc;
             const std::string path = unquote(instr.strOperand);
             if (deserializeJson(srcDoc, currentMessage.c_str())) {
@@ -2369,7 +2431,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             continue;
         }
         // OP_OUT_SET "path": pop a value, write it into the mapper output doc.
-        if (instr.opcode == OP_OUT_SET) {
+        case OP_OUT_SET: {
             const std::string path = unquote(instr.strOperand);
             const std::string value = popString();
             if (!mapOutputActive) { mapOutputDoc.clear(); mapOutputDoc.to<JsonObject>(); mapOutputActive = true; }
@@ -2378,34 +2440,34 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             continue;
         }
         // Native mapping string ops: transform the top-of-stack string in place.
-        if (instr.opcode == OP_UPPER) {
+        case OP_UPPER: {
             std::string v = popString(); pushString(toUpperCopy(v)); ++pc; continue;
         }
-        if (instr.opcode == OP_YYMMDD_TO_ISO) {
+        case OP_YYMMDD_TO_ISO: {
             std::string v = popString(); pushString(mapOpYymmddToIso(v)); ++pc; continue;
         }
-        if (instr.opcode == OP_MT_AMOUNT_TO_DECIMAL) {
+        case OP_MT_AMOUNT_TO_DECIMAL: {
             std::string v = popString(); pushString(normalizeMtAmount(v)); ++pc; continue;
         }
-        if (instr.opcode == OP_MT_PARTY_NAME) {
+        case OP_MT_PARTY_NAME: {
             std::string v = popString(); pushString(mapOpMtPartyName(v)); ++pc; continue;
         }
-        if (instr.opcode == OP_MT_CHARGE_TO_ISO) {
+        case OP_MT_CHARGE_TO_ISO: {
             std::string v = popString(); pushString(mapOpMtChargeToIso(v)); ++pc; continue;
         }
-        if (instr.opcode == OP_ROUTE_TRANSFORM) {
+        case OP_ROUTE_TRANSFORM: {
             currentMessage = applyTransformRuleText(*this, instr.strOperand, currentMessage);
             ++pc;
             continue;
         }
         // ROUTE_MAP_RUN carries a bare mapper id; dispatch straight into the
         // compiled mapper via the same handler (no string interpretation).
-        if (instr.opcode == OP_ROUTE_MAP_RUN) {
+        case OP_ROUTE_MAP_RUN: {
             currentMessage = applyTransformRuleText(*this, instr.strOperand, currentMessage);
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_ROUTE_EMIT) {
+        case OP_ROUTE_EMIT: {
             RouteDelivery d;
             d.queueName = instr.strOperand;
             d.message = currentMessage;
@@ -2413,7 +2475,8 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_QUEUE_WRITE_SYNC || instr.opcode == OP_QUEUE_WRITE_ASYNC) {
+        case OP_QUEUE_WRITE_SYNC:
+        case OP_QUEUE_WRITE_ASYNC: {
             RouteDelivery d;
             d.queueName = instr.strOperand;
             d.message = currentMessage;
@@ -2422,13 +2485,15 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_ROUTE_GET_MESSAGE) {
+        case OP_ROUTE_GET_MESSAGE: {
             pushString(currentMessage);
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_DB_INSERT || instr.opcode == OP_DB_SELECT ||
-            instr.opcode == OP_DB_UPDATE || instr.opcode == OP_DB_DELETE) {
+        case OP_DB_INSERT:
+        case OP_DB_SELECT:
+        case OP_DB_UPDATE:
+        case OP_DB_DELETE: {
             const auto args = splitOperands(instr.strOperand);
             const std::string database = unquote(args.empty() ? "" : args[0]);
             const std::string table = unquote(args.size() > 1 ? args[1] : "");
@@ -2481,13 +2546,13 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
                 where["value"] = whereValue;
             }
             RouteDelivery d;
-            d.queueName = databaseSinkQueue(database);
+            d.queueName = databaseSinkQueue(database, flowState);
             serializeJson(row, d.message);
             routingDeliveries.push_back(d);
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_ROUTE_SET_STATE) {
+        case OP_ROUTE_SET_STATE: {
             const std::string payload = instr.strOperand;
             const size_t eq = payload.find('=');
             if (eq != std::string::npos) {
@@ -2500,7 +2565,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_ROUTE_SET_MESSAGE) {
+        case OP_ROUTE_SET_MESSAGE: {
             if (isStringAtDepth(1)) {
                 currentMessage = popString();
             } else if (sp > 0) {
@@ -2512,7 +2577,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_PARSE_FIN_TEXT) {
+        case OP_PARSE_FIN_TEXT: {
             JsonDocument parsed;
             parseMT103FinText(currentMessage, parsed);
             std::string asJson;
@@ -2521,21 +2586,23 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_FORK || instr.opcode == OP_FORK_SUBFLOW) {
+        case OP_FORK:
+        case OP_FORK_SUBFLOW: {
             const int taskId = nextTaskId++;
             tasks[taskId] = true;
             if (sp < STACK_SIZE) stack[sp++] = taskId;
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_JOIN_ALL) {
+        case OP_JOIN_ALL: {
             bool allDone = true;
             for (const auto& task : tasks) allDone = allDone && task.second;
             if (sp < STACK_SIZE) stack[sp++] = allDone ? 1 : 0;
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_JOIN || instr.opcode == OP_SYNC) {
+        case OP_JOIN:
+        case OP_SYNC: {
             const auto args = splitOperands(instr.strOperand);
             const int taskId = resolveIntToken(args.empty() ? "" : args[0]);
             auto task = tasks.find(taskId);
@@ -2543,9 +2610,12 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_BQ_NEW_STATIC || instr.opcode == OP_BQ_NEW_DYNAMIC ||
-            instr.opcode == OP_STK_NEW_STATIC || instr.opcode == OP_STK_NEW_DYNAMIC ||
-            instr.opcode == OP_PQ_NEW_STATIC || instr.opcode == OP_PQ_NEW_DYNAMIC) {
+        case OP_BQ_NEW_STATIC:
+        case OP_BQ_NEW_DYNAMIC:
+        case OP_STK_NEW_STATIC:
+        case OP_STK_NEW_DYNAMIC:
+        case OP_PQ_NEW_STATIC:
+        case OP_PQ_NEW_DYNAMIC: {
             const auto args = splitOperands(instr.strOperand);
             const std::string key = args.empty() ? "" : unquote(args[0]);
             const size_t capacity = (instr.opcode == OP_BQ_NEW_STATIC || instr.opcode == OP_STK_NEW_STATIC ||
@@ -2559,7 +2629,9 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_BQ_ENQ || instr.opcode == OP_STK_PUSH || instr.opcode == OP_PQ_ENQ) {
+        case OP_BQ_ENQ:
+        case OP_STK_PUSH:
+        case OP_PQ_ENQ: {
             const auto args = splitOperands(instr.strOperand);
             const std::string key = args.empty() ? "" : unquote(args[0]);
             const int value = resolveIntToken(args.size() > 1 ? args[1] : "");
@@ -2578,9 +2650,12 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_BQ_DEQ || instr.opcode == OP_BQ_PEEK ||
-            instr.opcode == OP_STK_POP || instr.opcode == OP_STK_PEEK ||
-            instr.opcode == OP_PQ_DEQ || instr.opcode == OP_PQ_PEEK) {
+        case OP_BQ_DEQ:
+        case OP_BQ_PEEK:
+        case OP_STK_POP:
+        case OP_STK_PEEK:
+        case OP_PQ_DEQ:
+        case OP_PQ_PEEK: {
             const auto args = splitOperands(instr.strOperand);
             const std::string key = args.empty() ? "" : unquote(args[0]);
             IntCollection* collection = (instr.opcode == OP_BQ_DEQ || instr.opcode == OP_BQ_PEEK) ? &queues[key]
@@ -2601,7 +2676,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_FILE_OPEN) {
+        case OP_FILE_OPEN: {
             const auto args = splitOperands(instr.strOperand);
             const std::string fileId = unquote(args.empty() ? "file.dat" : args[0]);
             const std::string mode = unquote(args.size() > 1 ? args[1] : "read");
@@ -2613,7 +2688,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_FILE_WRITE) {
+        case OP_FILE_WRITE: {
             const auto args = splitOperands(instr.strOperand);
             const int handle = resolveIntToken(args.empty() ? "" : args[0]);
             auto file = files.find(handle);
@@ -2630,7 +2705,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_FILE_READ) {
+        case OP_FILE_READ: {
             const auto args = splitOperands(instr.strOperand);
             const int handle = resolveIntToken(args.empty() ? "" : args[0]);
             std::string value;
@@ -2649,7 +2724,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_FILE_CLOSE) {
+        case OP_FILE_CLOSE: {
             const auto args = splitOperands(instr.strOperand);
             const int handle = resolveIntToken(args.empty() ? "" : args[0]);
             auto file = files.find(handle);
@@ -2660,7 +2735,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_MAP) {
+        case OP_MAP: {
             const auto args = splitOperands(instr.strOperand);
             const std::string payload = args.empty() || toUpperCopy(args[0]) == "SRC"
                 ? currentMessage : getNamedStringVariable(trimCopy(args[0]));
@@ -2677,12 +2752,13 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_MAP_RETURN) {
+        case OP_MAP_RETURN: {
             gFlowState["__response"] = getNamedStringVariable(trimCopy(instr.strOperand));
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_DL_LOAD_SCHEMA || instr.opcode == OP_DL_LOAD_MAP) {
+        case OP_DL_LOAD_SCHEMA:
+        case OP_DL_LOAD_MAP: {
             const auto args = splitOperands(instr.strOperand);
             const std::string name = unquote(args.empty() ? "default" : args[0]);
             const bool isSchema = instr.opcode == OP_DL_LOAD_SCHEMA;
@@ -2691,7 +2767,110 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_SRV_CALL) {
+        case OP_FSM: {
+            const auto args = splitOperands(instr.strOperand);
+            FsmCallRequest call;
+            call.operation = args.empty() ? "" : toUpperCopy(unquote(args[0]));
+            if (call.operation == "READ") call.operation = "OBSERVE";
+            else if (call.operation == "WRITE") call.operation = "SET";
+            else if (call.operation == "ACTION") call.operation = "EVENT";
+            bool valid = true;
+            if (call.operation == "OPEN") {
+                call.kind = unquote(args.size() > 1 ? args[1] : "");
+                call.name = unquote(args.size() > 2 ? args[2] : "");
+                call.type = unquote(args.size() > 3 ? args[3] : "");
+                if (args.size() == 5) {
+                    const std::string pinText = unquote(args[4]);
+                    char* end = nullptr;
+                    const long pin = strtol(pinText.c_str(), &end, 10);
+                    valid = end != pinText.c_str() && *end == '\0' && pin >= 0 && pin <= 255;
+                    call.pin = static_cast<int>(pin);
+                } else {
+                    valid = args.size() == 4;
+                }
+                valid = valid && !call.kind.empty() && !call.name.empty() && !call.type.empty();
+            } else if (call.operation == "OBSERVE" || call.operation == "SET" ||
+                       call.operation == "EVENT" || call.operation == "CLOSE") {
+                valid = sp > 0;
+                if (call.operation == "SET") {
+                    valid = valid && sp > 1 && args.size() == 2;
+                    if (valid) {
+                        const Value value = stack[--sp];
+                        call.value = value.isString() ? stringAt(value)
+                            : (value.isReal() ? std::to_string(value.r) : std::to_string(static_cast<int>(value)));
+                    }
+                } else if ((call.operation == "OBSERVE" || call.operation == "EVENT") && args.size() != 2) {
+                    valid = false;
+                } else if (call.operation == "CLOSE" && args.size() != 1) {
+                    valid = false;
+                }
+                if (valid) {
+                    call.handle = static_cast<int>(stack[--sp]);
+                    const auto handleInfo = fsmTable.find(call.handle);
+                    if (handleInfo != fsmTable.end()) {
+                        call.kind = handleInfo->second.kind;
+                        call.name = handleInfo->second.name;
+                        call.type = handleInfo->second.type;
+                        call.pin = handleInfo->second.pin;
+                    }
+                }
+                if (call.operation == "OBSERVE" || call.operation == "EVENT" || call.operation == "SET") {
+                    call.member = unquote(args.size() > 1 ? args[1] : "");
+                }
+            } else {
+                valid = false;
+            }
+
+            FsmCallResult result;
+            std::string error;
+            bool success = valid && fsmCallHook != nullptr;
+            if (success) success = fsmCallHook(call, result, error, fsmCallContext);
+            else if (!valid) error = "invalid FSM operands";
+            else error = "FSM runtime is not available";
+
+            if (success && call.operation == "OPEN") {
+                if (result.handle <= 0) {
+                    success = false;
+                    error = "device runtime returned an invalid handle";
+                } else {
+                    FsmHandleInfo info;
+                    info.handle = result.handle;
+                    info.kind = call.kind;
+                    info.name = call.name;
+                    info.type = call.type;
+                    info.pin = call.pin;
+                    fsmTable[result.handle] = info;
+                    if (sp < STACK_SIZE) stack[sp++] = result.handle;
+                }
+            } else if (success && call.operation == "OBSERVE") {
+                pushString(result.value);
+            } else if (success && call.operation == "CLOSE") {
+                fsmTable.erase(call.handle);
+                if (sp < STACK_SIZE) stack[sp++] = 1;
+            } else if (success) {
+                if (sp < STACK_SIZE) stack[sp++] = 1;
+            }
+
+            if (!success) {
+                gFlowState["__fsm_error"] = error;
+                if (call.operation == "OPEN") {
+                    if (sp < STACK_SIZE) stack[sp++] = 0;
+                } else if (call.operation == "OBSERVE") {
+                    pushString("");
+                } else if (call.operation == "SET" || call.operation == "EVENT" || call.operation == "CLOSE") {
+                    if (sp < STACK_SIZE) stack[sp++] = 0;
+                }
+            } else {
+                gFlowState.erase("__fsm_error");
+            }
+            gFlowState["__last_fsm_call.operation"] = call.operation;
+            gFlowState["__last_fsm_call.kind"] = call.kind;
+            gFlowState["__last_fsm_call.handle"] = std::to_string(call.operation == "OPEN" ? result.handle : call.handle);
+            gFlowState["__last_fsm_call.success"] = success ? "true" : "false";
+            ++pc;
+            continue;
+        }
+        case OP_SRV_CALL: {
             const auto args = splitOperands(instr.strOperand);
             const std::string serviceId = unquote(args.empty() ? "" : args[0]);
             const std::string endpoint = unquote(args.size() > 1 ? args[1] : "");
@@ -2712,7 +2891,9 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_ROUTE_SERVICE || instr.opcode == OP_ROUTE_QUEUE || instr.opcode == OP_ROUTE_FILE) {
+        case OP_ROUTE_SERVICE:
+        case OP_ROUTE_QUEUE:
+        case OP_ROUTE_FILE: {
             const auto args = splitOperands(instr.strOperand);
             gFlowState["__placement.kind"] = instr.opcode == OP_ROUTE_SERVICE ? "service"
                 : (instr.opcode == OP_ROUTE_QUEUE ? "queue" : "file");
@@ -2720,7 +2901,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_ORCH_SPAWN) {
+        case OP_ORCH_SPAWN: {
             OrchestrationSpawnRequest req;
             std::string parseError;
             if (parseOrchestrationSpawnOperand(instr.strOperand, req, parseError)) {
@@ -2732,7 +2913,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_ORCH_SYNC_SERVICE) {
+        case OP_ORCH_SYNC_SERVICE: {
             JsonDocument doc;
             DeserializationError err = deserializeJson(doc, instr.strOperand.c_str());
             if (err) {
@@ -2788,7 +2969,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_ORCH_WAIT_ALL) {
+        case OP_ORCH_WAIT_ALL: {
             uint32_t waitTimeoutMs = 0;
             std::string waitReason;
             std::string waitParseError;
@@ -2843,42 +3024,56 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_ORCH_FAIL_TXN) {
+        case OP_ORCH_FAIL_TXN: {
             if (!lastOrchWaitSuccess) {
                 gFlowState["__orch_error"] = instr.strOperand.empty()
                     ? std::string("orchestration failed")
                     : instr.strOperand;
-                break;
+                goto pmachineRunExit;
             }
             ++pc;
             continue;
         }
-        if (instr.opcode == OP_ORCH_RETURN_SUCCESS) {
+        case OP_ORCH_RETURN_SUCCESS: {
             const std::string ref = trimCopy(instr.strOperand);
             if (ref == "SRC" || ref == "src") {
                 gFlowState["__response"] = currentMessage;
             } else if (ref.size() >= 2 && ((ref.front() == '"' && ref.back() == '"') || (ref.front() == '\'' && ref.back() == '\''))) {
                 gFlowState["__response"] = unquote(ref);
             } else {
-                gFlowState["__response"] = getNamedStringVariable(ref);
+                auto namedString = namedStringVariables.find(ref);
+                auto namedReal = namedRealVariables.find(ref);
+                auto namedEnum = namedEnumVariables.find(ref);
+                if (namedString != namedStringVariables.end()) {
+                    gFlowState["__response"] = namedString->second;
+                } else if (namedReal != namedRealVariables.end()) {
+                    gFlowState["__response"] = std::to_string(namedReal->second);
+                } else if (namedEnum != namedEnumVariables.end()) {
+                    gFlowState["__response"] = stringAt(namedEnum->second);
+                } else {
+                    gFlowState["__response"] = std::to_string(resolveName(ref));
+                }
             }
             ++pc;
             continue;
         }
 
+        default:
         HandlerFunc handler = handler_table[instr.opcode];
         if (handler) {
             handler(*this, instr, stack, sp, bp, pc);
             if (instr.opcode == OP_HALT) {
                 PMTRACE(Serial.println("[HALT]"));
-                break;
+                goto pmachineRunExit;
             }
         } else {
             gFlowState["__runtime_error"] = std::string("unsupported opcode 0x") + std::to_string(instr.opcode);
-            break;
+            goto pmachineRunExit;
         }
     }
-    this->pc = static_cast<uint16_t>(std::max(0, pc));
+    }
+    pmachineRunExit:
+        this->pc = static_cast<uint16_t>(std::max(0, pc));
     running = false;
     if (!currentOutputLine.empty()) {
         emitOutputLine(currentOutputLine);
@@ -2974,9 +3169,7 @@ void PMachine::loadDebugInstructions(const std::vector<PInstruction>& instructio
 bool PMachine::hasDebugInstructions() const { return debugLoaded; }
 uint16_t PMachine::getDebugPc() const { return debugPc; }
 
-std::map<std::string, std::string> PMachine::getFlowStateSnapshot() const {
-    return gFlowState;
-}
+std::map<std::string, std::string> PMachine::getFlowStateSnapshot() const { return flowState; }
 
 std::map<std::string, GlobalValue> PMachine::getGlobalsSnapshot() const {
     return lastRunGlobals;

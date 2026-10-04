@@ -291,6 +291,8 @@ body {
 .pmachine-gutter-line { display: grid; grid-template-columns: 18px 1fr; align-items: center; flex: 0 0 21.45px; height: 21.45px; padding: 0 8px 0 2px; border: 0; color: #78909a; background: transparent; text-align: right; font: 12px/21.45px 'Cascadia Code', 'JetBrains Mono', Consolas, monospace; cursor: pointer; }
 .pmachine-gutter-line:hover:not(:disabled) { color: #fff; background: #203640; }
 .pmachine-gutter-line.breakpoint { color: #ff9678; background: #40261f; }
+.pmachine-gutter-line.breakpoint-disabled { color: #8fa3ab; background: #1b2a31; }
+.pmachine-gutter-line.breakpoint-disabled .pmachine-gutter-marker { color: #8fa3ab; }
 .pmachine-gutter-line.current { color: #9fe1ed; background: #193844; }
 .pmachine-gutter-marker { color: #ff8969; font-weight: 800; text-align: left; }
 .pmachine-gutter-line.current .pmachine-gutter-marker { color: #85d5e4; }
@@ -298,6 +300,13 @@ body {
 .pmachine-source { width: 100%; min-height: 360px; max-height: 680px; resize: vertical; border: 0; outline: 0; padding: 18px; box-sizing: border-box; color: #d9e8ed; background: #10232e; font: 13px/1.65 'Cascadia Code', 'JetBrains Mono', Consolas, monospace; tab-size: 2; white-space: pre; overflow: auto; }
 .pmachine-source:focus { box-shadow: inset 0 0 0 2px #4db6c8; }
 .pmachine-debug-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.pmachine-breakpoint-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.pmachine-breakpoint-item { display: flex; align-items: center; gap: 2px; border: 1px solid #d2dce1; border-radius: 3px; color: #243746; background: #f7f9fb; font: 11px var(--sans); }
+.pmachine-breakpoint-item label { display: flex; align-items: center; gap: 5px; padding: 3px 5px; cursor: pointer; }
+.pmachine-breakpoint-item input { accent-color: #b65332; }
+.pmachine-breakpoint-item button { display: grid; place-items: center; width: 24px; height: 24px; border: 0; color: #637682; background: transparent; cursor: pointer; }
+.pmachine-breakpoint-item button:hover:not(:disabled) { color: #a13e29; background: #f6e9e5; }
+.pmachine-breakpoint-item button:disabled { opacity: .45; cursor: not-allowed; }
 .pmachine-tool-button { min-height: 32px; padding: 0 10px; border: 1px solid #cbd5df; border-radius: 3px; color: #243746; background: #f7f9fb; font: 700 11px var(--sans); cursor: pointer; }
 .pmachine-tool-button:hover:not(:disabled) { border-color: #4a9aac; background: #edf7f8; }
 .pmachine-tool-button.primary { border-color: #0e639c; color: #fff; background: #0e639c; }

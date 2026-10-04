@@ -5,10 +5,11 @@ import { compilePascalishProgramWithAntlr } from './compile-pascalish-program-an
 import { attachPcodeSignature } from './pcode-signing.mjs';
 
 const NODE_REGISTRY_URL = process.env.NODE_REGISTRY_URL || 'http://127.0.0.1:4000/api/nodes';
-const FILESERVER_URL = process.env.PULSE_FILESERVER_URL || 'http://192.168.2.11:4000/api/fileserver';
 const CANDIDATES_DIR = path.resolve(process.cwd(), 'data', 'ollama-mentor-candidates');
-const REMOTE_PCODE = '/pulse-service.pcode';
-const REMOTE_MAP = '/pulse-service.map.json';
+
+// Short remote names; long names are unreliable on some ESP32 FFS uploads.
+const REMOTE_PCODE = '/hanoi.pcode';
+const REMOTE_MAP = '/hanoi.map.json';
 
 function parseArgs(argv) {
   const args = {
@@ -40,21 +41,17 @@ export async function runPascalOnEsp32({ source = '', node = 'neptune.child1', i
   const { pcodeText, programMap } = compilePascalishProgramWithAntlr(sourceText);
   const signedMap = attachPcodeSignature(programMap, pcodeText);
   const signedMapText = `${JSON.stringify(signedMap, null, 2)}\n`;
-  const remotePcode = `/pmachine/${path.basename(REMOTE_PCODE)}`;
-  const remoteMap = `/pmachine/${path.basename(REMOTE_MAP)}`;
 
   const host = await resolveHost(node);
   const baseUrl = `http://${host}`;
 
-  await putFileOnFileserver(remotePcode, pcodeText, 'publish pcode');
-  await putFileOnFileserver(remoteMap, signedMapText, 'publish map');
-  await ensureEphemeralFileserverMount(baseUrl);
+  await postForm(`${baseUrl}/ffs/upload`, { file: REMOTE_PCODE, body: pcodeText }, 'upload pcode');
+  await postForm(`${baseUrl}/ffs/upload`, { file: REMOTE_MAP, body: signedMapText }, 'upload map');
 
-  const isDirectService = Array.isArray(programMap.serviceEndpoints) && programMap.serviceEndpoints.length > 0;
-  const executionPath = isDirectService ? '/pmachine/service' : '/pmachine/execute_file';
-  const rawResult = await postForm(`${baseUrl}${executionPath}`, {
-    file: remotePcode,
-    programMap: remoteMap,
+  const rawResult = await postForm(`${baseUrl}/pmachine/execute_file`, {
+    file: REMOTE_PCODE,
+    programMap: REMOTE_MAP,
+    runRouter: '0',
     inputQueue,
     message,
     max: '65536'
@@ -63,7 +60,53 @@ export async function runPascalOnEsp32({ source = '', node = 'neptune.child1', i
   let result;
   try { result = JSON.parse(rawResult); } catch { result = { raw: rawResult }; }
 
-  return { node, host, source: path.basename(sourcePath), executionPath, pcodeLines: pcodeText.split('\n').length, result };
+  return { node, host, source: path.basename(sourcePath), pcodeLines: pcodeText.split('\n').length, result };
+}
+
+export async function runPcodeOnEsp32({
+  pcodeText = '',
+  programMap = {},
+  node = 'neptune.child1',
+  inputQueue = 'vscode.pmachine',
+  message = '',
+  maxSteps = 200000,
+  sourceFileName = 'program.pcode'
+} = {}) {
+  const pcode = String(pcodeText || '');
+  if (!pcode.trim()) throw new Error('pcodeText is required');
+  if (!programMap || typeof programMap !== 'object' || Array.isArray(programMap)) {
+    throw new Error('programMap must be an object');
+  }
+
+  const tag = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const remotePcode = `/v${tag}.pcode`;
+  const remoteMap = `/v${tag}.json`;
+  const signedMap = attachPcodeSignature(programMap, pcode);
+  const signedMapText = `${JSON.stringify(signedMap, null, 2)}\n`;
+  const host = await resolveHost(node);
+  const baseUrl = `http://${host}`;
+
+  await postForm(`${baseUrl}/ffs/upload`, { file: remotePcode, body: pcode }, 'upload pcode');
+  await postForm(`${baseUrl}/ffs/upload`, { file: remoteMap, body: signedMapText }, 'upload map');
+
+  const rawResult = await postForm(`${baseUrl}/pmachine/execute_file`, {
+    file: remotePcode,
+    programMap: remoteMap,
+    runRouter: '0',
+    inputQueue,
+    message,
+    max: String(Math.max(1, Number(maxSteps) || 200000))
+  }, 'execute_file');
+
+  let result;
+  try { result = JSON.parse(rawResult); } catch { result = { raw: rawResult }; }
+  return {
+    node,
+    host,
+    source: path.basename(String(sourceFileName || 'program.pcode')),
+    pcodeLines: pcode.split('\n').length,
+    result
+  };
 }
 
 function normalizeNodeName(v) {
@@ -74,47 +117,22 @@ async function resolveHost(requestedNode) {
   try {
     const res = await fetch(NODE_REGISTRY_URL);
     if (!res.ok) return requestedNode;
-    const payload = await res.json();
-    const entries = Array.isArray(payload)
-      ? payload
-      : Array.isArray(payload?.nodes)
-        ? payload.nodes
-        : Array.isArray(payload?.value)
-          ? payload.value
-          : [];
+    const nodes = await res.json();
+    const entries = Array.isArray(nodes) ? nodes : [];
     const wanted = normalizeNodeName(requestedNode);
-    // Last segment of a dotted name (e.g., "neptune.child1" → "child1")
+    // Last segment of a dotted name (e.g. "neptune.child1" → "child1")
     const wantedTail = wanted.includes('.') ? wanted.split('.').pop() : wanted;
-    const findHost = (candidates) => {
-      // Priority: exact match → last-segment exact → substring
-      for (const pass of ['exact', 'tail', 'substr']) {
-        for (const entry of candidates) {
-          const nodeName = normalizeNodeName(entry?.nodeName || entry?.details?.nodeName || '');
-          const host = String(entry?.ip || '').trim();
-          if (!host || host === '127.0.0.1') continue;
-          if (pass === 'exact' && nodeName === wanted) return host;
-          if (pass === 'tail' && nodeName === wantedTail) return host;
-          if (pass === 'substr' && (nodeName.includes(wanted) || wanted.includes(nodeName))) return host;
-        }
+
+    // Priority: exact match → last-segment exact → substring
+    for (const pass of ['exact', 'tail', 'substr']) {
+      for (const entry of entries) {
+        const nodeName = normalizeNodeName(entry?.nodeName || entry?.details?.nodeName || '');
+        const host = String(entry?.ip || '').trim();
+        if (!host || host === '127.0.0.1') continue;
+        if (pass === 'exact' && nodeName === wanted) return host;
+        if (pass === 'tail' && nodeName === wantedTail) return host;
+        if (pass === 'substr' && (nodeName.includes(wanted) || wanted.includes(nodeName))) return host;
       }
-      return '';
-    };
-
-    const registryHost = findHost(entries);
-    if (registryHost) return registryHost;
-
-    const pmachineRes = await fetch(new URL('/api/pmachine/nodes', NODE_REGISTRY_URL));
-    if (pmachineRes.ok) {
-      const pmachinePayload = await pmachineRes.json();
-      const pmachineEntries = Array.isArray(pmachinePayload)
-        ? pmachinePayload
-        : Array.isArray(pmachinePayload?.nodes)
-          ? pmachinePayload.nodes
-          : Array.isArray(pmachinePayload?.value)
-            ? pmachinePayload.value
-            : [];
-      const pmachineHost = findHost(pmachineEntries);
-      if (pmachineHost) return pmachineHost;
     }
   } catch {
     // fall through to raw value
@@ -122,60 +140,18 @@ async function resolveHost(requestedNode) {
   return requestedNode;
 }
 
-async function fetchWithContext(url, options, label) {
-  try {
-    return await fetch(url, options);
-  } catch (error) {
-    const cause = error?.cause?.message ? `: ${error.cause.message}` : '';
-    throw new Error(`${label} request failed for ${url}: ${error?.message || String(error)}${cause}`);
-  }
-}
-
 async function postForm(url, params, label) {
   const body = new URLSearchParams(params);
-  const res = await fetchWithContext(url, {
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body
-  }, label);
+  });
   const text = await res.text();
   if (!res.ok) {
     throw new Error(`${label} failed (${res.status}): ${text.slice(0, 240)}`);
   }
   return text;
-}
-
-async function putFileOnFileserver(file, data, label) {
-  const url = `${FILESERVER_URL}/ffs/put`;
-  const response = await fetchWithContext(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ path: file, data })
-  }, label);
-  if (!response.ok) {
-    throw new Error(`${label} failed (${response.status}): ${(await response.text()).slice(0, 240)}`);
-  }
-}
-
-async function ensureEphemeralFileserverMount(baseUrl) {
-  const fileserver = new URL(FILESERVER_URL);
-  const peerId = `${fileserver.host}${fileserver.pathname.replace(/\/$/, '')}`;
-  const url = `${baseUrl}/ffs/mount`;
-  const response = await fetchWithContext(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      mount: '/pmachine',
-      target: '/pmachine',
-      peer: peerId,
-      type: 'peer',
-      readOnly: '1',
-      persist: '0'
-    })
-  }, 'configure ephemeral fileserver mount');
-  if (!response.ok) {
-    throw new Error(`configure ephemeral fileserver mount failed (${response.status}): ${(await response.text()).slice(0, 240)}`);
-  }
 }
 
 async function main() {

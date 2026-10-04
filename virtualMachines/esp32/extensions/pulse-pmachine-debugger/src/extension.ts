@@ -79,9 +79,11 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
   private debugApiUrl = '';
   private debugApiHost = '';
   private remoteSourceMap: Record<string, any> = {};
+  private remoteBreakpoints: number[] = [];
   private entryLine = 0;
   private reachedEntry = false;
   private terminated = false;
+  private readonly pendingRequests = new Set<number>();
 
   constructor(private readonly configuration: any) {
     this.root = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(configuration.program || ''))?.uri.fsPath
@@ -100,8 +102,11 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
 
   handleMessage(message: DebugProtocol.ProtocolMessage): void {
     if (message.type !== 'request') return;
+    this.pendingRequests.add(message.seq);
     void this.handleRequest(message as DebugProtocol.Request).catch((error) => {
-      this.respond(message as DebugProtocol.Request, false, undefined, error?.message || String(error));
+      const details = error?.message || String(error);
+      if (this.pendingRequests.has(message.seq)) this.respond(message as DebugProtocol.Request, false, undefined, details);
+      else this.event('output', { category: 'stderr', output: `${details}\n` });
     });
   }
 
@@ -110,6 +115,7 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
   }
 
   private respond(request: DebugProtocol.Request, success = true, body: any = {}, message?: string): void {
+    this.pendingRequests.delete(request.seq);
     this.send({
       type: 'response',
       seq: 0,
@@ -190,10 +196,7 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
       case 'stepOut':
         this.respond(request);
         if (this.remoteEsp32) await this.stepEsp32('step-out');
-        else {
-          this.state = this.debug.stepOutJavaScriptPmachineDebugSession(this.sessionId);
-          this.event('stopped', { reason: 'step', threadId: this.threadId });
-        }
+        else await this.stepToNextSource('step-out');
         return;
       case 'pause':
         this.respond(request);
@@ -273,20 +276,27 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
     }
     try {
       const pcode = this.runtime.artifact.pcodeText;
+      const mapPath = `${pcodePath}.map.json`;
+      const { attachPcodeSignature } = await import(pathToFileURL(path.join(this.root, 'aggregator', 'scripts', 'pcode-signing.mjs')).href);
+      const remoteProgramMap = { ...this.runtime.artifact.programMap };
+      delete remoteProgramMap.sourceMap;
+      const programMap = JSON.stringify(attachPcodeSignature(remoteProgramMap, pcode));
       this.remoteBaseUrl = /^https?:\/\//i.test(targetHost) ? targetHost.replace(/\/$/, '') : `http://${targetHost}`;
       const uploadMode = String(configuration.uploadMode || 'direct').toLowerCase();
+      for (const [remotePath, data] of [[pcodePath, pcode], [mapPath, programMap]]) {
       const publish = uploadMode === 'shared'
         ? await fetch(`${fileserverUrl}/ffs/put`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ path: pcodePath, data: pcode }),
+          body: JSON.stringify({ path: remotePath, data }),
         })
         : await fetch(`${this.remoteBaseUrl}/ffs/upload`, {
           method: 'POST',
           headers: { 'content-type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({ file: pcodePath, body: pcode }),
+          body: new URLSearchParams({ file: remotePath, body: data }),
         });
       if (!publish.ok) throw new Error(`${uploadMode} FFS upload failed (${publish.status}): ${await publish.text()}`);
+      }
       if (uploadMode === 'shared') {
         const peer = new URL(fileserverUrl);
         const mount = await fetch(`${this.remoteBaseUrl}/ffs/mount`, {
@@ -305,6 +315,7 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
       const breakpointPcs = this.remoteBreakpointAddresses();
       const params = new URLSearchParams({
         file: pcodePath,
+        programMap: mapPath,
         max: String(Math.max(32768, pcode.length * 2)),
         startPc: String(startPc),
         breakpoints: breakpointPcs.join(','),
@@ -316,6 +327,7 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
       const session = await response.json() as { sessionId: string };
       this.remoteSessionId = session.sessionId;
       this.sessionId = session.sessionId;
+      this.remoteBreakpoints = breakpointPcs;
       this.state = await this.readEsp32State();
       await this.waitForEsp32Stop('entry');
     } catch (error) {
@@ -424,6 +436,7 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
       this.remoteSessionId = String(payload.session?.sessionId || '');
       if (!this.remoteSessionId) throw new Error('deployment API returned no sessionId');
       this.sessionId = this.remoteSessionId;
+      this.remoteBreakpoints = this.remoteBreakpointAddresses();
       this.state = await this.readEsp32State();
       await this.waitForEsp32Stop('entry');
     } catch (error) {
@@ -446,14 +459,22 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
   // equivalents so both transports share the rest of the adapter logic.
   private async debugApiRequest(endpoint: string, init: RequestInit): Promise<any> {
     const method = String(init.method || 'GET').toUpperCase();
-    const action = endpoint.match(/\/pmachine\/debug\/session\/([a-z-]+)/i)?.[1] || '';
+    const deviceUrl = new URL(endpoint, 'http://pmachine');
+    const breakpointAction = deviceUrl.pathname.match(/\/breakpoint\/(set|clear)$/)?.[1];
+    const action = breakpointAction
+      ? `breakpoint-${breakpointAction}`
+      : deviceUrl.pathname.match(/\/pmachine\/debug\/session\/([a-z-]+)/i)?.[1] || '';
     const base = `${this.debugApiUrl}/api/pmachine/debug/esp32/session`;
     const query = `host=${encodeURIComponent(this.debugApiHost)}&sessionId=${encodeURIComponent(this.remoteSessionId)}`;
     const request: RequestInit = action
       ? {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ host: this.debugApiHost, sessionId: this.remoteSessionId }),
+        body: JSON.stringify({
+          host: this.debugApiHost,
+          sessionId: this.remoteSessionId,
+          ...(breakpointAction ? { pc: Number(deviceUrl.searchParams.get('pc')) } : {}),
+        }),
       }
       : { method };
     const url = action ? `${base}/${action}` : `${base}?${query}`;
@@ -472,8 +493,9 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
       .sort((left, right) => left.address - right.address);
     const addresses = new Set<number>();
     for (const breakpoint of this.breakpoints) {
-      const candidates = entries.filter(item => item.line >= breakpoint.line);
-      const selected = candidates[0] || [...entries].reverse().find(item => item.line < breakpoint.line);
+      const candidates = entries.filter(item => item.line >= breakpoint.line)
+        .sort((left, right) => left.line - right.line || left.address - right.address);
+      const selected = candidates[0];
       if (selected) addresses.add(selected.address);
     }
     return [...addresses].sort((left, right) => left - right);
@@ -493,12 +515,13 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
     };
   }
 
-  private async waitForEsp32Stop(reason: 'entry' | 'breakpoint' | 'step' | 'pause'): Promise<void> {
+  private async waitForEsp32Stop(reason: 'entry' | 'breakpoint' | 'step' | 'pause', emitStop = true): Promise<void> {
     for (let index = 0; index < 3000; index += 1) {
       await new Promise(resolve => setTimeout(resolve, 10));
       this.state = await this.readEsp32State();
+      this.forwardOutput();
       if (this.state.status === 'paused') {
-        this.event('stopped', { reason, threadId: this.threadId });
+        if (emitStop) this.event('stopped', { reason, threadId: this.threadId });
         return;
       }
       if (this.state.status === 'stopped') {
@@ -521,22 +544,61 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
     for (let index = 0; index < 3000; index += 1) {
       await new Promise(resolve => setTimeout(resolve, 10));
       this.state = await this.readEsp32State();
+      this.forwardOutput();
       if (this.state.status === 'stopped') {
         this.event('terminated');
         return;
       }
       if (this.state.status === 'paused' && (Number(this.state.pc) !== previousPc
-        || Number(this.state.callDepth) !== previousDepth || index >= 1)) return;
+        || Number(this.state.callDepth) !== previousDepth)) return;
     }
     throw new Error('Timed out waiting for the ESP32 PMachine step.');
   }
 
   private async stepEsp32(mode: 'step-in' | 'step-over' | 'step-out'): Promise<void> {
-    const action = mode === 'step-out' ? 'stepout' : 'step';
-    await this.remoteRequest(`/pmachine/debug/session/${action}?id=${encodeURIComponent(this.remoteSessionId)}`, { method: 'POST' });
-    await this.waitForEsp32Stop(mode === 'step-out' ? 'step' : 'step');
-    this.state = await this.readEsp32State();
-    this.event('stopped', { reason: 'step', threadId: this.threadId });
+    const origin = this.sourceKey(this.state?.sourceLocation);
+    const depth = Number(this.state?.callDepth || 0);
+    if (mode === 'step-out' && depth > 0) {
+      await this.remoteRequest(`/pmachine/debug/session/stepout?id=${encodeURIComponent(this.remoteSessionId)}`, { method: 'POST' });
+      await this.waitForEsp32Stop('step', false);
+      if (this.terminated) return;
+      this.event('stopped', { reason: 'step', threadId: this.threadId });
+      return;
+    }
+    const instructions = String(this.runtime?.artifact?.pcodeText || '').split(/\r?\n/)
+      .map(line => line.trim()).filter(line => line && !line.startsWith('#') && !line.endsWith(':'));
+    for (let index = 0; index < 5000; index += 1) {
+      const pc = Number(this.state?.pc || 0);
+      if (mode === 'step-over' && /^CALL\s/.test(instructions[pc] || '')) {
+        const returnPc = pc + 1;
+        const temporary = !this.remoteBreakpoints.includes(returnPc);
+        if (temporary) await this.remoteRequest(`/pmachine/debug/session/breakpoint/set?id=${encodeURIComponent(this.remoteSessionId)}&pc=${returnPc}`, { method: 'POST' });
+        try {
+          await this.remoteRequest(`/pmachine/debug/session/continue?id=${encodeURIComponent(this.remoteSessionId)}`, { method: 'POST' });
+          await this.waitForEsp32Stop('step', false);
+        } finally {
+          if (temporary) await this.remoteRequest(`/pmachine/debug/session/breakpoint/clear?id=${encodeURIComponent(this.remoteSessionId)}&pc=${returnPc}`, { method: 'POST' });
+        }
+      } else {
+        await this.advanceEsp32Instruction();
+      }
+      if (this.terminated) return;
+      const nextDepth = Number(this.state?.callDepth || 0);
+      const changedSource = Number(this.state?.sourceLocation?.sourceLine) > 0
+        && (this.sourceKey(this.state?.sourceLocation) !== origin || nextDepth !== depth);
+      if (changedSource && this.remoteBreakpoints.includes(Number(this.state.pc))) {
+        this.event('stopped', { reason: 'breakpoint', threadId: this.threadId });
+        return;
+      }
+      const stop = mode === 'step-out'
+        ? nextDepth < depth || (depth === 0 && changedSource)
+        : changedSource && (mode === 'step-in' || nextDepth <= depth);
+      if (stop) {
+        this.event('stopped', { reason: 'step', threadId: this.threadId });
+        return;
+      }
+    }
+    throw new Error('Timed out waiting for the next ESP32 source statement.');
   }
 
   private async setBreakpoints(request: DebugProtocol.Request, argumentsValue: any): Promise<void> {
@@ -553,9 +615,22 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
   }
 
   private async applyBreakpoints(): Promise<void> {
+    if (this.remoteEsp32) {
+      if (!this.remoteSessionId) return;
+      const desired = this.remoteBreakpointAddresses();
+      for (const pc of this.remoteBreakpoints.filter(pc => !desired.includes(pc))) {
+        await this.remoteRequest(`/pmachine/debug/session/breakpoint/clear?id=${encodeURIComponent(this.remoteSessionId)}&pc=${pc}`, { method: 'POST' });
+      }
+      for (const pc of desired.filter(pc => !this.remoteBreakpoints.includes(pc))) {
+        await this.remoteRequest(`/pmachine/debug/session/breakpoint/set?id=${encodeURIComponent(this.remoteSessionId)}&pc=${pc}`, { method: 'POST' });
+      }
+      this.remoteBreakpoints = desired;
+      return;
+    }
     const sourceFile = path.basename(this.runtime.program);
     const lines = this.breakpoints.map((item) => item.line);
     if (!this.reachedEntry && this.entryLine > 0 && !lines.includes(this.entryLine)) lines.push(this.entryLine);
+    this.debug.setJavaScriptPmachineDebugBreakpoints(this.sessionId, []);
     this.state = this.debug.setJavaScriptPmachineSourceBreakpoints(this.sessionId, lines.map((line) => ({
       sourceFile,
       sourceLanguage: this.runtime.language,
@@ -600,12 +675,16 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
     throw new Error('Timed out waiting for PMachine debug state.');
   }
 
-  private async stepToNextSource(action: 'step-in' | 'step-over'): Promise<void> {
+  private async stepToNextSource(action: 'step-in' | 'step-over' | 'step-out'): Promise<void> {
     const origin = this.sourceKey(this.state?.sourceLocation);
+    const depth = this.state?.callStack?.length || 0;
     const savedBreakpoints = [...(this.state?.breakpoints || [])];
     this.state = this.debug.setJavaScriptPmachineDebugBreakpoints(this.sessionId, []);
+    try {
     for (let index = 0; index < 5000; index += 1) {
-      if (action === 'step-over' && index === 0) {
+      if (action === 'step-out' && index === 0 && depth > 0) {
+        this.state = this.debug.stepOutJavaScriptPmachineDebugSession(this.sessionId);
+      } else if (action === 'step-over') {
         this.state = this.debug.stepOverJavaScriptPmachineDebugSession(this.sessionId);
       } else {
         this.state = this.debug.stepJavaScriptPmachineDebugSession(this.sessionId);
@@ -620,20 +699,26 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
 
       if (!this.state || this.state.status === 'completed' || this.state.status === 'error') {
         if (this.state?.status === 'error') this.event('output', { category: 'stderr', output: `${this.state.error}\n` });
-        this.event(this.state?.status === 'error' ? 'output' : 'terminated', this.state?.status === 'error' ? {} : {});
+        this.event('terminated');
         return;
       }
 
       const nextSourceKey = this.sourceKey(this.state.sourceLocation);
       const hasSourceLine = Number(this.state.sourceLocation?.sourceLine) > 0;
-      if (hasSourceLine && nextSourceKey !== origin) {
-        this.state = this.debug.setJavaScriptPmachineDebugBreakpoints(this.sessionId, savedBreakpoints);
+      const nextDepth = this.state.callStack?.length || 0;
+      const changedSource = nextSourceKey !== origin || nextDepth !== depth;
+      const shouldStop = action === 'step-out' && depth > 0
+        ? nextDepth < depth
+        : changedSource && (action !== 'step-over' || nextDepth <= depth);
+      if (hasSourceLine && shouldStop) {
         this.event('stopped', { reason: 'step', threadId: this.threadId });
         return;
       }
     }
-    this.debug.setJavaScriptPmachineDebugBreakpoints(this.sessionId, savedBreakpoints);
     throw new Error('Timed out waiting for the next source statement.');
+    } finally {
+      this.debug.setJavaScriptPmachineDebugBreakpoints(this.sessionId, savedBreakpoints);
+    }
   }
 
   private async animateSource(): Promise<void> {
@@ -710,9 +795,209 @@ class PulseDebugFactory implements vscode.DebugAdapterDescriptorFactory {
   }
 }
 
+type PmachineRunTarget = vscode.QuickPickItem & {
+  key: string;
+  runtime: 'js' | 'esp32';
+  nodeId?: string;
+};
+
+type CompiledPcodeArtifact = {
+  pcodeText: string;
+  programMap: Record<string, any>;
+};
+
+function pcodeLanguage(document: vscode.TextDocument): 'pascalish' | 'vbish' | 'wfl' | 'mapl' | null {
+  const languageId = document.languageId.toLowerCase();
+  const extension = path.extname(document.fileName).toLowerCase();
+  if (['pascalish', 'pascal'].includes(languageId) || extension === '.pas') return 'pascalish';
+  if (languageId === 'vbish' || ['.bas', '.vb', '.vbs'].includes(extension)) return 'vbish';
+  if (languageId === 'wfl' || extension === '.wfl') return 'wfl';
+  if (languageId === 'mapl' || extension === '.mapl') return 'mapl';
+  return null;
+}
+
+async function compileDocumentToPcode(document: vscode.TextDocument): Promise<CompiledPcodeArtifact> {
+  const language = pcodeLanguage(document);
+  if (!language) throw new Error('This file is not a supported pcode language.');
+  const root = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath
+    || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!root) throw new Error('Open the project workspace before compiling a DSL program.');
+  const scripts = path.join(root, 'aggregator', 'scripts');
+  const sourceText = document.getText();
+  const fileName = path.basename(document.fileName);
+
+  if (language === 'pascalish') {
+    const compiler = await import(pathToFileURL(path.join(scripts, 'compile-pascalish-program-antlr-to-pcode.mjs')).href);
+    return compiler.compilePascalishProgramWithAntlr(sourceText, { fileName });
+  }
+
+  if (language === 'vbish') {
+    const compiler = await import(pathToFileURL(path.join(scripts, 'compile-interoperable-language.mjs')).href);
+    return compiler.compileVbishToPmachine(sourceText, { fileName });
+  }
+
+  if (language === 'wfl') {
+    const [dslCompiler, pcodeCompiler] = await Promise.all([
+      import(pathToFileURL(path.join(scripts, 'compile-workflow-dsl.mjs')).href),
+      import(pathToFileURL(path.join(scripts, 'compile-workflow-to-pcode.mjs')).href),
+    ]);
+    const workflowSet = dslCompiler.compileWorkflowDSL(sourceText);
+    const workflow = workflowSet.workflows?.[0];
+    if (!workflow) throw new Error('No workflow found to compile.');
+    const artifact = pcodeCompiler.compileWorkflowToPcode(workflowSet, workflow.id, { sourceText, fileName });
+    return {
+      pcodeText: artifact.pcodeText,
+      programMap: {
+        version: 1,
+        serviceId: `wfl-${workflow.id}`,
+        sourceLanguage: 'wfl',
+        runtimeUnit: { kind: 'program', id: workflow.id, refreshMs: null },
+        entries: [],
+        sourceMap: artifact.sourceMap || {},
+      },
+    };
+  }
+
+  const compiler = await import(pathToFileURL(path.join(scripts, 'compile-mapl-antlr-to-pcode.mjs')).href);
+  const artifact = compiler.compileMaplWithAntlr(sourceText);
+  return { pcodeText: artifact.pcodeText, programMap: artifact.programMap };
+}
+
+function backendUrl(): string {
+  return String(vscode.workspace.getConfiguration('pulse-pmachine').get('backendUrl', 'http://127.0.0.1:4000'))
+    .trim()
+    .replace(/\/$/, '');
+}
+
+async function loadPmachineTargets(): Promise<PmachineRunTarget[]> {
+  const targets: PmachineRunTarget[] = [{
+    key: 'js',
+    label: 'JavaScript PMachine',
+    description: 'Local runtime',
+    runtime: 'js',
+  }];
+  const response = await fetch(`${backendUrl()}/api/pmachine/nodes`, { signal: AbortSignal.timeout(5000) });
+  const payload = await response.json().catch(() => ({})) as any;
+  if (!response.ok) throw new Error(payload?.error || `PMachine target lookup failed (${response.status})`);
+  const nodes = Array.isArray(payload) ? payload : Array.isArray(payload?.nodes) ? payload.nodes : [];
+  for (const node of nodes) {
+    const address = String(node?.ip || node?.address || '').trim();
+    const services = node?.details?.services || node?.services || [];
+    const hasPmachine = Array.isArray(services) && services.some((service: any) => {
+      const name = typeof service === 'string' ? service : service?.name || service?.serviceName;
+      return String(name || '').trim().toLowerCase().includes('pmachine');
+    });
+    if (!address || !hasPmachine) continue;
+    const nodeId = String(node?.nodeName || node?.nodeId || node?.id || address).trim();
+    targets.push({
+      key: `esp32:${nodeId}`,
+      label: String(node?.nodeName || node?.name || nodeId),
+      description: `${address} · ESP32 PMachine`,
+      runtime: 'esp32',
+      nodeId,
+    });
+  }
+  return targets;
+}
+
+async function runCurrentFile(context: vscode.ExtensionContext, output: vscode.OutputChannel, uri?: vscode.Uri): Promise<void> {
+  const activeEditor = vscode.window.activeTextEditor;
+  const document = uri
+    ? await vscode.workspace.openTextDocument(uri)
+    : activeEditor?.document;
+  if (!document) {
+    void vscode.window.showWarningMessage('Open a Pascalish program before running it.');
+    return;
+  }
+  if (!pcodeLanguage(document)) {
+    void vscode.window.showWarningMessage('Run on PMachine supports Pascalish, VBish, WFL, and MAPL programs.');
+    return;
+  }
+
+  output.clear();
+  output.appendLine(`Program: ${document.fileName}`);
+
+  let targets: PmachineRunTarget[];
+  try {
+    targets = await loadPmachineTargets();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    output.appendLine(`Could not load ESP32 targets: ${detail}`);
+    targets = [{ key: 'js', label: 'JavaScript PMachine', description: 'Local runtime', runtime: 'js' }];
+  }
+
+  const lastTarget = context.globalState.get<string>('lastPmachineRunTarget');
+  const target = await vscode.window.showQuickPick(
+    targets.map((item) => ({ ...item, picked: item.key === lastTarget })),
+    { placeHolder: 'Choose a PMachine to run this program on', matchOnDescription: true },
+  );
+  if (!target) return;
+  await context.globalState.update('lastPmachineRunTarget', target.key);
+
+  output.appendLine(`Target: ${target.label}${target.description ? ` (${target.description})` : ''}`);
+  try {
+    const artifact = await compileDocumentToPcode(document);
+    await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: `Running ${path.basename(document.fileName)} on ${target.label}`,
+      cancellable: false,
+    }, async () => {
+      const response = await fetch(`${backendUrl()}/api/pmachine/deploy-and-run`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          pcodeText: artifact.pcodeText,
+          programMap: artifact.programMap,
+          sourceFileName: path.basename(document.fileName),
+          sourceLanguage: pcodeLanguage(document),
+          runtime: target.runtime,
+          ...(target.nodeId ? { targetNodeId: target.nodeId } : {}),
+          inputQueue: 'vscode.pmachine',
+          message: '',
+        }),
+        signal: AbortSignal.timeout(120000),
+      });
+      const payload = await response.json().catch(() => ({})) as any;
+      if (!response.ok) throw new Error(payload?.error || `PMachine run failed (${response.status})`);
+      const result = payload?.result?.result || payload?.result || payload;
+      const stdout = Array.isArray(result?.stdout) ? result.stdout : [];
+      output.appendLine('');
+      if (stdout.length === 0) output.appendLine('(no output)');
+      else for (const line of stdout) output.appendLine(String(line));
+      output.appendLine('');
+      output.appendLine(`Completed in ${target.label}.`);
+      output.show(true);
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    output.appendLine(`Run failed: ${detail}`);
+    output.show(true);
+    void vscode.window.showErrorMessage(`PMachine run failed: ${detail}`);
+  }
+}
+
 export function activate(context: vscode.ExtensionContext): void {
+  const output = vscode.window.createOutputChannel('Pulse PMachine');
   context.subscriptions.push(
+    output,
     vscode.debug.registerDebugAdapterDescriptorFactory('pulse-pmachine', new PulseDebugFactory(context.extensionUri)),
+    vscode.commands.registerCommand('pulse-pmachine.runCurrentFile', (uri?: vscode.Uri) => runCurrentFile(context, output, uri)),
+    vscode.languages.registerCodeLensProvider([
+      { language: 'pascalish' },
+      { language: 'pascal' },
+      { language: 'vbish' },
+      { language: 'wfl' },
+      { language: 'mapl' },
+    ], {
+      provideCodeLenses(document) {
+        if (!pcodeLanguage(document)) return [];
+        return [new vscode.CodeLens(new vscode.Range(0, 0, 0, 0), {
+          title: '$(play) Run on PMachine',
+          command: 'pulse-pmachine.runCurrentFile',
+          arguments: [document.uri],
+        })];
+      },
+    }),
   );
 }
 

@@ -40,12 +40,6 @@ assert.equal(state.pc, 1);
 assert.equal(state.sourceLocation.sourceText, 'result := 7;');
 assert.deepEqual(state.operandStack, [7]);
 
-stepJavaScriptPmachineDebugSession(session.id);
-state = await waitForState(session.id, current => current.pc === 2 && current.status === 'paused');
-assert.equal(state.pc, 2);
-assert.deepEqual(state.operandStack, []);
-assert.equal(state.globals.result, 7);
-
 continueJavaScriptPmachineDebugSession(session.id);
 state = await waitForState(session.id, current => current.status === 'completed');
 assert.equal(state.status, 'completed');

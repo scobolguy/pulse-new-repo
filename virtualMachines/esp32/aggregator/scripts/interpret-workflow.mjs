@@ -1218,6 +1218,7 @@ export async function executeDeploymentPlan(compiled, dryRun = true, context = {
   const nodes = Array.isArray(nodesPayload) ? nodesPayload : (nodesPayload.nodes || []);
   const clusters = [];
   const deployments = [];
+  const removals = [];
   const artifactDeployments = [];
 
   for (const cluster of compiled?.clusters || []) {
@@ -1238,7 +1239,26 @@ export async function executeDeploymentPlan(compiled, dryRun = true, context = {
 
   for (const plan of compiled?.deployments || []) {
     for (const resource of plan.resources || []) {
+      if (resource.action === 'remove') {
+        for (const targetNodeId of Array.from(new Set((resource.targets || []).map(value => String(value).trim()).filter(Boolean)))) {
+          const request = { deploymentRef: resource.id, targetNodeId, method: 'DELETE' };
+          if (dryRun) {
+            removals.push({ request, matchedNodes: nodes.filter(node => (node.nodeId || node.nodeName || node.id) === targetNodeId) });
+            continue;
+          }
+          const url = `${serviceBaseUrl}/api/pmachine/deployments/${encodeURIComponent(resource.id)}?targetNodeId=${encodeURIComponent(targetNodeId)}`;
+          const response = await fetch(url, { method: 'DELETE' });
+          const payload = await response.json();
+          if (!response.ok) throw new Error(`Removal of service ${resource.id} from ${targetNodeId} failed with HTTP ${response.status}: ${payload?.error || 'unknown error'}`);
+          removals.push(payload);
+        }
+        continue;
+      }
+
       const targetNodeIds = Array.from(new Set((resource.targets || []).map(value => String(value).trim()).filter(Boolean)));
+      const artifactRoot = path.resolve(String(context?.artifactRoot || process.cwd()));
+      const pcodePath = path.resolve(artifactRoot, resource.fileName);
+      const programMapPath = path.resolve(artifactRoot, String(resource.programMapFile || resource.fileName.replace(/\.pcode$/i, '.program.json')));
       const request = {
         serviceName: resource.id,
         packageName: resource.fileName,
@@ -1250,6 +1270,9 @@ export async function executeDeploymentPlan(compiled, dryRun = true, context = {
           projectId: plan.projectId,
           inputQueue: resource.inputQueue,
           outputQueue: resource.outputQueue,
+          pcodePath,
+          programMapPath,
+          backendUrl: serviceBaseUrl,
           source: 'wfl'
         }
       };
@@ -1257,6 +1280,14 @@ export async function executeDeploymentPlan(compiled, dryRun = true, context = {
       if (dryRun) {
         deployments.push({ request, matchedNodes: nodes.filter(node => targetNodeIds.includes(node.nodeId || node.nodeName || node.id)) });
         continue;
+      }
+
+      for (const artifactPath of [pcodePath, programMapPath]) {
+        try {
+          await fs.access(artifactPath);
+        } catch {
+          throw new Error(`Deployment ${resource.id} requires an existing p-code artifact and program map; missing ${artifactPath}`);
+        }
       }
 
       const response = await fetch(`${serviceBaseUrl}/api/pmachine/deployments`, {
@@ -1296,7 +1327,7 @@ export async function executeDeploymentPlan(compiled, dryRun = true, context = {
     artifactDeployments.push(payload);
   }
 
-  return { nodes, clusters, deployments, artifactDeployments, dryRun };
+  return { nodes, clusters, deployments, removals, artifactDeployments, dryRun };
 }
 
 async function main() {

@@ -100,6 +100,7 @@ export async function startEsp32DebugSession({
     startPc: String(Number.parseInt(startPc, 10) || 0),
     breakpoints: parseBreakpoints(breakpoints).join(',')
   });
+  if (remoteMapPath) params.set('programMap', remoteMapPath);
 
   const session = await deviceRequest(baseUrl, `/pmachine/debug/session?${params}`, { method: 'POST' });
   return {
@@ -128,7 +129,8 @@ export async function readEsp32DebugSession({ host, sessionId } = {}) {
     callDepth: Number(state.callDepth || 0),
     breakpoints: Array.isArray(state.breakpoints) ? state.breakpoints.map(Number) : [],
     globals: state.globals && typeof state.globals === 'object' ? state.globals : {},
-    locals: state.locals && typeof state.locals === 'object' ? state.locals : {}
+    locals: state.locals && typeof state.locals === 'object' ? state.locals : {},
+    stdout: Array.isArray(state.stdout) ? state.stdout.map(String) : []
   };
 }
 

@@ -20,11 +20,11 @@ decl
     | varDecl
     | queueDecl
     | fileDecl
-    | databaseDecl
     | roleDecl
     | libraryDecl
     | useDecl
     | interopDecl
+    | routerDecl
     | mapperDecl
     | importDecl
     | blockStmt
@@ -43,7 +43,7 @@ programDecl
     ;
 
 serviceDecl
-    : 'service' stringOrIdent placement? ';'? unitDecl* (serviceBody | serviceEndpoint* block)? unitEnd
+    : 'service' stringOrIdent placement? ';'? unitDecl* (serviceBody | serviceEndpoint* 'end')? unitEnd
     ;
 
 daemonDecl
@@ -68,13 +68,13 @@ unitDecl
     | classDecl
     | queueDecl
     | fileDecl
-    | databaseDecl
     | roleDecl
     | libraryDecl
     | useDecl
     | interopDecl
-    | importDecl
+    | routerDecl
     | mapperDecl
+    | importDecl
     ;
 
 varSection
@@ -155,10 +155,6 @@ identList
 
 fileDecl
     : 'file' IDENT 'of' typeRef placement? ';'
-    ;
-
-databaseDecl
-    : 'database' IDENT 'type' typeName ';'
     ;
 
 queueDecl
@@ -284,9 +280,42 @@ serviceProvider
     ;
 
 // ============================================================
-// Mapper declaration
+// Router declaration
 // ============================================================
 
+routerDecl
+    : 'router' stringOrIdent 'input' stringValue routerHeaderProp* 'begin' outputDecl* 'end' ';'
+    ;
+
+routerHeaderProp
+    : 'description' stringValue
+    | 'enabled' booleanValue
+    | 'service' stringValue
+    | 'methods' verbList
+    ;
+
+verbList
+    : stringOrIdent
+    | '(' stringOrIdent (',' stringOrIdent)* ')'
+    ;
+
+outputDecl
+    : 'output' stringValue outputTypeMeta? 'when' pl0Snippet 'transform' pl0Snippet ';'
+    ;
+
+outputTypeMeta
+    : 'type' typeRef
+    | 'types' typeRefList
+    ;
+
+typeRefList
+    : typeRef
+    | '(' typeRef (',' typeRef)* ')'
+    ;
+
+// ============================================================
+// Mapper declaration
+// ============================================================
 
 mapperDecl
     : 'mapper' stringOrIdent 'source' typeRef 'target' typeRef mapperHeaderProp* 'begin' mapDecl* 'end' ';'
@@ -319,11 +348,11 @@ serviceLocalDecl
     ;
 
 serviceEndpoint
-    : 'on' httpVerb stringValue endpointAccepts? endpointReturns? statement ';'?
+    : httpVerb stringValue endpointAccepts? endpointReturns? ';' block
     ;
 
 httpVerb
-    : 'get' | 'post' | 'put' | 'delete' | 'patch' | IDENT
+    : 'get' | 'post' | 'put' | 'delete' | 'patch'
     ;
 
 endpointAccepts
@@ -335,7 +364,21 @@ endpointReturns
     ;
 
 serviceStmt
-    : serviceReturnStmt ';'
+    : serviceCaseStmt
+    | serviceRouteStmt ';'
+    | serviceReturnStmt ';'
+    ;
+
+serviceRouteStmt
+    : 'route' IDENT? 'from' stringOrIdent 'to' stringOrIdent
+    ;
+
+serviceCaseStmt
+    : 'case' serviceExpr 'of' serviceCaseArm+ ('else' serviceReturnStmt ';')? 'end' ';'?
+    ;
+
+serviceCaseArm
+    : serviceExpr ':' serviceReturnStmt ';'
     ;
 
 serviceReturnStmt
@@ -544,6 +587,18 @@ qualifiedName
 qualifiedPart
     : IDENT
     | httpVerb
+    | fsmOperation
+    ;
+
+fsmOperation
+    : 'open'
+    | 'read'
+    | 'write'
+    | 'action'
+    | 'close'
+    | 'set'
+    | 'event'
+    | 'observe'
     ;
 
 stringOrIdent

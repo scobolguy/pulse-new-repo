@@ -18,5 +18,10 @@ PMachineFileExecutionResult executePMachineFile(
 	size_t maxBytes = 65536
 );
 
-void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& pm, FederatedFileSystem* ffs = nullptr);
+void registerPMachineRoutes(
+	AsyncWebServer& server,
+	pmachine::PMachine& pm,
+	FederatedFileSystem* ffs = nullptr,
+	pmachine::PMachine* asyncWorkerMachine = nullptr
+);
 void invalidateRouterExecutionCache();

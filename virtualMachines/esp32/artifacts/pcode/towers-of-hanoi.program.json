@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-09-25T20:14:48.407Z",
+  "generatedAt": "2026-09-28T17:22:35.188Z",
   "serviceId": "TowersOfHanoi",
   "runtimeUnit": {
     "kind": "program",
@@ -18,7 +18,6 @@
     "variables": [],
     "publishable": false
   },
-  "routers": [],
   "serviceEndpoints": [],
   "globals": [
     "diskCount"
@@ -67,232 +66,232 @@
     "1": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 1,
-      "sourceText": "program TowersOfHanoi;",
+      "sourceLine": 8,
+      "sourceText": "if n = 1 then",
       "instruction": "LOAD n"
     },
     "2": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 1,
-      "sourceText": "program TowersOfHanoi;",
+      "sourceLine": 8,
+      "sourceText": "if n = 1 then",
       "instruction": "PUSH_INT 1"
     },
     "3": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 1,
-      "sourceText": "program TowersOfHanoi;",
+      "sourceLine": 8,
+      "sourceText": "if n = 1 then",
       "instruction": "EQ"
     },
     "4": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 3,
-      "sourceText": "var",
+      "sourceLine": 8,
+      "sourceText": "if n = 1 then",
       "instruction": "JZ ELSE_1"
     },
     "5": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 3,
-      "sourceText": "var",
+      "sourceLine": 9,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)",
       "instruction": "PUSH_STR \"Move disk \""
     },
     "6": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 3,
-      "sourceText": "var",
+      "sourceLine": 9,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)",
       "instruction": "PRINT"
     },
     "7": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 4,
-      "sourceText": "diskCount: integer;",
+      "sourceLine": 9,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)",
       "instruction": "LOAD n"
     },
     "8": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 4,
-      "sourceText": "diskCount: integer;",
+      "sourceLine": 9,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)",
       "instruction": "PRINT_INT"
     },
     "9": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 4,
-      "sourceText": "diskCount: integer;",
+      "sourceLine": 9,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)",
       "instruction": "PUSH_STR \" from \""
     },
     "10": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 4,
-      "sourceText": "diskCount: integer;",
+      "sourceLine": 9,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)",
       "instruction": "PRINT"
     },
     "11": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 6,
-      "sourceText": "procedure Hanoi(n, fromPeg, toPeg, auxPeg: integer);",
+      "sourceLine": 9,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)",
       "instruction": "LOAD fromPeg"
     },
     "12": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 6,
-      "sourceText": "procedure Hanoi(n, fromPeg, toPeg, auxPeg: integer);",
+      "sourceLine": 9,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)",
       "instruction": "PRINT_INT"
     },
     "13": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 6,
-      "sourceText": "procedure Hanoi(n, fromPeg, toPeg, auxPeg: integer);",
+      "sourceLine": 9,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)",
       "instruction": "PUSH_STR \" to \""
     },
     "14": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 7,
-      "sourceText": "begin",
+      "sourceLine": 9,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)",
       "instruction": "PRINT"
     },
     "15": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 7,
-      "sourceText": "begin",
+      "sourceLine": 9,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)",
       "instruction": "LOAD toPeg"
     },
     "16": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 7,
-      "sourceText": "begin",
+      "sourceLine": 9,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)",
       "instruction": "PRINT_INT"
     },
     "17": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 8,
-      "sourceText": "if n = 1 then",
+      "sourceLine": 9,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)",
       "instruction": "PRINT_NL"
     },
     "18": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 8,
-      "sourceText": "if n = 1 then",
+      "sourceLine": 9,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)",
       "instruction": "JMP ENDIF_2"
     },
     "19": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 8,
-      "sourceText": "if n = 1 then",
+      "sourceLine": 12,
+      "sourceText": "Hanoi(n - 1, fromPeg, auxPeg, toPeg);",
       "instruction": "LOAD n"
     },
     "20": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 8,
-      "sourceText": "if n = 1 then",
+      "sourceLine": 12,
+      "sourceText": "Hanoi(n - 1, fromPeg, auxPeg, toPeg);",
       "instruction": "PUSH_INT 1"
     },
     "21": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 9,
-      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)",
+      "sourceLine": 12,
+      "sourceText": "Hanoi(n - 1, fromPeg, auxPeg, toPeg);",
       "instruction": "SUB"
     },
     "22": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 9,
-      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)",
+      "sourceLine": 12,
+      "sourceText": "Hanoi(n - 1, fromPeg, auxPeg, toPeg);",
       "instruction": "LOAD fromPeg"
     },
     "23": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 9,
-      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg)",
+      "sourceLine": 12,
+      "sourceText": "Hanoi(n - 1, fromPeg, auxPeg, toPeg);",
       "instruction": "LOAD auxPeg"
     },
     "24": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 10,
-      "sourceText": "else",
+      "sourceLine": 12,
+      "sourceText": "Hanoi(n - 1, fromPeg, auxPeg, toPeg);",
       "instruction": "LOAD toPeg"
     },
     "25": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 10,
-      "sourceText": "else",
+      "sourceLine": 12,
+      "sourceText": "Hanoi(n - 1, fromPeg, auxPeg, toPeg);",
       "instruction": "CALL PROC_HANOI 4"
     },
     "26": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 10,
-      "sourceText": "else",
+      "sourceLine": 13,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg);",
       "instruction": "PUSH_STR \"Move disk \""
     },
     "27": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 11,
-      "sourceText": "begin",
+      "sourceLine": 13,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg);",
       "instruction": "PRINT"
     },
     "28": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 11,
-      "sourceText": "begin",
+      "sourceLine": 13,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg);",
       "instruction": "LOAD n"
     },
     "29": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 11,
-      "sourceText": "begin",
+      "sourceLine": 13,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg);",
       "instruction": "PRINT_INT"
     },
     "30": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 11,
-      "sourceText": "begin",
+      "sourceLine": 13,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg);",
       "instruction": "PUSH_STR \" from \""
     },
     "31": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 12,
-      "sourceText": "Hanoi(n - 1, fromPeg, auxPeg, toPeg);",
+      "sourceLine": 13,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg);",
       "instruction": "PRINT"
     },
     "32": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 12,
-      "sourceText": "Hanoi(n - 1, fromPeg, auxPeg, toPeg);",
+      "sourceLine": 13,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg);",
       "instruction": "LOAD fromPeg"
     },
     "33": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 12,
-      "sourceText": "Hanoi(n - 1, fromPeg, auxPeg, toPeg);",
+      "sourceLine": 13,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg);",
       "instruction": "PRINT_INT"
     },
     "34": {
@@ -326,8 +325,8 @@
     "38": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 14,
-      "sourceText": "Hanoi(n - 1, auxPeg, toPeg, fromPeg)",
+      "sourceLine": 13,
+      "sourceText": "writeln('Move disk ', n, ' from ', fromPeg, ' to ', toPeg);",
       "instruction": "PRINT_NL"
     },
     "39": {
@@ -347,50 +346,50 @@
     "41": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 15,
-      "sourceText": "end",
+      "sourceLine": 14,
+      "sourceText": "Hanoi(n - 1, auxPeg, toPeg, fromPeg)",
       "instruction": "SUB"
     },
     "42": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 15,
-      "sourceText": "end",
+      "sourceLine": 14,
+      "sourceText": "Hanoi(n - 1, auxPeg, toPeg, fromPeg)",
       "instruction": "LOAD auxPeg"
     },
     "43": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 15,
-      "sourceText": "end",
+      "sourceLine": 14,
+      "sourceText": "Hanoi(n - 1, auxPeg, toPeg, fromPeg)",
       "instruction": "LOAD toPeg"
     },
     "44": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 16,
-      "sourceText": "end;",
+      "sourceLine": 14,
+      "sourceText": "Hanoi(n - 1, auxPeg, toPeg, fromPeg)",
       "instruction": "LOAD fromPeg"
     },
     "45": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 16,
-      "sourceText": "end;",
+      "sourceLine": 14,
+      "sourceText": "Hanoi(n - 1, auxPeg, toPeg, fromPeg)",
       "instruction": "CALL PROC_HANOI 4"
     },
     "46": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 16,
-      "sourceText": "end;",
+      "sourceLine": 14,
+      "sourceText": "Hanoi(n - 1, auxPeg, toPeg, fromPeg)",
       "instruction": "RET"
     },
     "47": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 16,
-      "sourceText": "end;",
+      "sourceLine": 18,
+      "sourceText": "begin",
       "instruction": "PUSH_INT 0"
     },
     "48": {
@@ -403,36 +402,36 @@
     "49": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 18,
-      "sourceText": "begin",
+      "sourceLine": 19,
+      "sourceText": "diskCount := 6;",
       "instruction": "PUSH_INT 6"
     },
     "50": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 18,
-      "sourceText": "begin",
+      "sourceLine": 19,
+      "sourceText": "diskCount := 6;",
       "instruction": "STORE diskCount"
     },
     "51": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 19,
-      "sourceText": "diskCount := 6;",
+      "sourceLine": 20,
+      "sourceText": "writeln('Towers of Hanoi for ', diskCount, ' disks:');",
       "instruction": "PUSH_STR \"Towers of Hanoi for \""
     },
     "52": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 19,
-      "sourceText": "diskCount := 6;",
+      "sourceLine": 20,
+      "sourceText": "writeln('Towers of Hanoi for ', diskCount, ' disks:');",
       "instruction": "PRINT"
     },
     "53": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 19,
-      "sourceText": "diskCount := 6;",
+      "sourceLine": 20,
+      "sourceText": "writeln('Towers of Hanoi for ', diskCount, ' disks:');",
       "instruction": "LOAD diskCount"
     },
     "54": {
@@ -487,22 +486,22 @@
     "61": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 22,
-      "sourceText": "end.",
+      "sourceLine": 21,
+      "sourceText": "Hanoi(diskCount, 1, 3, 2)",
       "instruction": "PUSH_INT 2"
     },
     "62": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 22,
-      "sourceText": "end.",
+      "sourceLine": 21,
+      "sourceText": "Hanoi(diskCount, 1, 3, 2)",
       "instruction": "CALL PROC_HANOI 4"
     },
     "63": {
       "sourceFile": null,
       "sourceLanguage": "pascalish",
-      "sourceLine": 22,
-      "sourceText": "end.",
+      "sourceLine": 21,
+      "sourceText": "Hanoi(diskCount, 1, 3, 2)",
       "instruction": "HALT"
     }
   },
@@ -510,7 +509,7 @@
     "algorithm": "hmac-sha256",
     "keyId": "profile-default",
     "signature": "0628ad74ae48fe465af5f66cdc5213bfa373017a46b8f68bdb31dfef926be4ec",
-    "signedAt": "2026-09-25T20:14:48.413Z",
+    "signedAt": "2026-09-28T17:22:35.194Z",
     "pcodeLength": 799,
     "canonicalForm": "raw-pcode-text-v1"
   }

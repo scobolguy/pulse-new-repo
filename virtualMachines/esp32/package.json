@@ -11,7 +11,7 @@
     "test:pmachine:javascript-package": "node ./testing/pmachines/javascript-package.test.mjs",
     "test:runtime-data-policy": "node ./testing/runtime-data-policy.test.mjs",
     "doorbell:test": "node ./scripts/serve-ble-doorbell-tester.mjs",
-    "pascalishc": "node ./aggregator/scripts/pascalishc-antlr-gateway.mjs",
+    "pascalishc": "node ./aggregator/tools/pascalishc/cli/pascalishc.mjs",
     "phase1:bonecrusher:compile": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/phase1-bonecrusher.ps1 -Action compile",
     "phase1:bonecrusher:upload": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/phase1-bonecrusher.ps1 -Action upload",
     "phase1:bonecrusher:persist": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/phase1-bonecrusher.ps1 -Action persist-proof",

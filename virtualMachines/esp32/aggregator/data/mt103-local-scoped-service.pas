@@ -9,5 +9,8 @@ service MT103LocalScope on local;
     map "block4.32A.amount" to "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt.#text" using "output := trim(src);";
   end;
 
-  on get "/convert" accepts MT103 returns PACS008 return map("LOCAL_MT103_TO_PACS", src);
+  get "/convert" accepts MT103 returns PACS008;
+  begin
+    return map("LOCAL_MT103_TO_PACS", src);
+  end
 end.

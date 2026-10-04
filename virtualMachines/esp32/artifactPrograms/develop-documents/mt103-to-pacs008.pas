@@ -2,14 +2,10 @@
 // Source: swift-mt103  (finEnvelope.block4.fields.*)
 // Target: pacs.008.001.14  (Document.FIToFICstmrCdtTrf.*)
 
-service "mt103-to-pacs008-svc";
+library "swift-mt103" from librarian;
+library "pacs" from librarian;
 
-// Import the registered map from the Data Mapper
-import mapper "cbds-mt103-to-pacs008" from mapper;
-
-// Source and target types resolved from the Librarian
-var inboundMessage  : swift-mt103 from librarian;
-var outboundMessage : pacs        from librarian;
+service "mt103-to-pacs008-svc" on local;
 
 // Mapper block
 MAPPER "cbds-mt103-to-pacs008"
@@ -73,15 +69,4 @@ BEGIN
   MAP "finEnvelope.block4.fields.72"        TO "Document.FIToFICstmrCdtTrf.CdtTrfTxInf.InstrForNxtAgt.InstrInf"
     USING "output := trim(src);";
 
-END;
-
-// Router feeds the mapper and emits to the output queue
-ROUTER "mt103-inbound-router"
-  INPUT "swift.mt103.inbound"
-  DESCRIPTION "Route MT103 messages through the pacs.008 mapper"
-  ENABLED TRUE
-BEGIN
-  OUTPUT "pacs008.outbound"
-    WHEN "output := 1;"
-    TRANSFORM "output := toxml(map(\"cbds-mt103-to-pacs008\", fromxml(src)));";
 END;

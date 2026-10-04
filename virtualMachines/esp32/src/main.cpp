@@ -19,6 +19,7 @@ DeviceConfiguration deviceConfig;
 #endif
 #include <ESPAsyncWebServer.h>
 #include "https_service.h"
+#include "DeviceDriverTemplate.h"
 
 #include <ArduinoJson.h>
 #include "ConfigSchema.h"
@@ -37,6 +38,10 @@ DeviceConfiguration deviceConfig;
 #include "main_globals.h"
 #include "time_authority.h"
 #include "unique_id_service.h"
+
+#if defined(ENABLE_DHT11_HTTP_SERVER)
+#include "devices/dht11/Dht11HttpServer.h"
+#endif
 
 #ifdef ENABLE_PMACHINE
 #include "pmachine.h"
@@ -170,6 +175,42 @@ static bool httpInvokeServiceTransport(
     }
 
     outResponse = std::string(responseText.c_str());
+    return true;
+}
+
+bool pmachineInvokeFsm(
+    const pmachine::FsmCallRequest& request,
+    pmachine::FsmCallResult& result,
+    std::string& outError,
+    void* context
+) {
+    (void)context;
+    if (request.kind != "device") {
+        outError = "unsupported local FSM kind: " + request.kind;
+        return false;
+    }
+    DeviceRuntime& runtime = deviceRuntime();
+    if (request.operation == "OPEN") {
+        result.handle = runtime.open(request.name, request.type, request.pin, outError);
+        return result.handle > 0;
+    }
+    if (request.operation == "CLOSE") {
+        if (runtime.close(request.handle)) return true;
+        outError = "invalid device handle";
+        return false;
+    }
+    const char* driverOperation = nullptr;
+    if (request.operation == "OBSERVE") driverOperation = "read";
+    else if (request.operation == "SET") driverOperation = "write";
+    else if (request.operation == "EVENT") driverOperation = "action";
+    if (!driverOperation) {
+        outError = "unsupported local FSM operation: " + request.operation;
+        return false;
+    }
+    if (!runtime.operate(request.handle, driverOperation, request.member, request.value,
+                         result.value, outError)) {
+        return false;
+    }
     return true;
 }
 
@@ -440,6 +481,7 @@ void pollDoorbellDisplayFrame() {
 
 #ifdef ENABLE_PMACHINE
 pmachine::PMachine pm;
+pmachine::PMachine pmAsyncWorker;
 #endif
 
 const char* firmwareVersion = "2026.06.06";
@@ -1867,7 +1909,6 @@ void setupWebServer() {
             return;
         }
 
-        pinMode(relayPinNumber, OUTPUT);
         if (action.equalsIgnoreCase("toggle")) {
             relayStateOn = !relayStateOn;
         } else if (action.equalsIgnoreCase("turnOn")) {
@@ -1879,6 +1920,12 @@ void setupWebServer() {
             return;
         }
 
+        GpioPinSemaphore pinSemaphore(relayPinNumber);
+        if (!pinSemaphore.acquired()) {
+            request->send(503, "application/json", "{\"error\":\"relay GPIO pin is busy\"}");
+            return;
+        }
+        pinMode(relayPinNumber, OUTPUT);
         digitalWrite(relayPinNumber, relayStateOn ? HIGH : LOW);
 
         JsonDocument doc;
@@ -1916,9 +1963,6 @@ void setupWebServer() {
 
         Serial.printf("[LEDPIN] Received action=%s value=%s\n", action.c_str(), valueParam.c_str());
 
-        // Always configure the LED pin as output before any state change.
-        pinMode(ledPinNumber, OUTPUT);
-
         bool nextOn = false;
         if (action.equalsIgnoreCase("raise") || action.equalsIgnoreCase("turnOn") || action.equalsIgnoreCase("on")) {
             nextOn = true;
@@ -1939,6 +1983,12 @@ void setupWebServer() {
             return;
         }
 
+        GpioPinSemaphore pinSemaphore(ledPinNumber);
+        if (!pinSemaphore.acquired()) {
+            request->send(503, "application/json", "{\"error\":\"LED GPIO pin is busy\"}");
+            return;
+        }
+        pinMode(ledPinNumber, OUTPUT);
         digitalWrite(ledPinNumber, nextOn ? HIGH : LOW);
         Serial.printf("[LEDPIN] Pin %d set to %s\n", ledPinNumber, nextOn ? "HIGH" : "LOW");
 
@@ -2677,6 +2727,22 @@ void setupWebServer() {
         firstService = false;
     #endif
         json += "]";
+        JsonDocument openDevicesDoc;
+        JsonArray openDevices = openDevicesDoc.to<JsonArray>();
+        for (const auto& device : deviceRuntime().openedDevices()) {
+            JsonObject item = openDevices.add<JsonObject>();
+            item["id"] = device.name.c_str();
+            item["kind"] = "device";
+            item["name"] = device.name.c_str();
+            item["type"] = device.type.c_str();
+            item["driver"] = device.driver.c_str();
+            item["pin"] = device.pin;
+            item["handle"] = device.handle;
+            item["nodeName"] = nodeName;
+        }
+        String openDevicesJson;
+        serializeJson(openDevices, openDevicesJson);
+        json += ",\"devices\":" + openDevicesJson;
         json += ",\"discoveredNodes\":[";
         bool first = true;
         size_t emittedNodes = 0;
@@ -2881,6 +2947,95 @@ void setupWebServer() {
         String manifestJson;
         serializeJson(doc, manifestJson);
         request->send(200, "application/json", manifestJson);
+    });
+
+    server.on("/api/devices/discover", HTTP_GET, [](AsyncWebServerRequest *request){
+        String typeQuery;
+        if (request->hasParam("type", true)) {
+            typeQuery = request->getParam("type", true)->value();
+        } else if (request->hasParam("type")) {
+            typeQuery = request->getParam("type")->value();
+        }
+        typeQuery.trim();
+
+        JsonDocument doc;
+        JsonArray devices = doc["devices"].to<JsonArray>();
+        std::vector<DeviceCapabilityDescriptor> candidates = DeviceCapabilityRegistry::instance().all();
+        if (!typeQuery.isEmpty()) {
+            candidates = DeviceCapabilityRegistry::instance().findByType(typeQuery.c_str());
+        }
+
+        for (const auto& device : candidates) {
+            JsonObject item = devices.add<JsonObject>();
+            item["id"] = device.id.c_str();
+            item["type"] = device.deviceType.c_str();
+            item["driver"] = device.driverType.c_str();
+            if (!device.nodeId.empty()) {
+                item["nodeId"] = device.nodeId.c_str();
+            }
+            if (!device.nodeIp.empty()) {
+                item["nodeIp"] = device.nodeIp.c_str();
+            }
+            JsonArray states = item["states"].to<JsonArray>();
+            for (const auto& state : device.states) {
+                states.add(state.c_str());
+            }
+            JsonArray actions = item["actions"].to<JsonArray>();
+            for (const auto& action : device.actions) {
+                actions.add(action.c_str());
+            }
+            JsonObject meta = item["metadata"].to<JsonObject>();
+            for (const auto& pair : device.metadata) {
+                meta[pair.first.c_str()] = pair.second.c_str();
+            }
+        }
+
+        if (devices.size() == 0 && LittleFS.exists("/devices")) {
+            File devDir = LittleFS.open("/devices", "r");
+            File devEntry = devDir.openNextFile();
+            while (devEntry) {
+                if (!devEntry.isDirectory()) {
+                    String devFileName = String(devEntry.name());
+                    if (devFileName.startsWith("/devices/")) devFileName = devFileName.substring(9);
+                    if (devFileName.endsWith(".json")) {
+                        String devId = devFileName.substring(0, devFileName.length() - 5);
+                        String devJson = devEntry.readString();
+                        JsonDocument devDoc;
+                        if (!deserializeJson(devDoc, devJson)) {
+                            const String devType = devDoc["type"] | "device";
+                            if (!typeQuery.isEmpty() && !String(devType).equalsIgnoreCase(typeQuery)) {
+                                devEntry.close();
+                                devEntry = devDir.openNextFile();
+                                continue;
+                            }
+                            JsonObject item = devices.add<JsonObject>();
+                            item["id"] = devId.c_str();
+                            item["type"] = devType.c_str();
+                            item["driver"] = devDoc["driver"] | "gpio";
+                            if (devDoc["actions"].is<JsonArray>()) {
+                                JsonArray actions = item["actions"].to<JsonArray>();
+                                for (JsonVariant action : devDoc["actions"].as<JsonArray>()) {
+                                    actions.add(action.as<const char*>());
+                                }
+                            }
+                            JsonArray states = item["states"].to<JsonArray>();
+                            if (devDoc["states"].is<JsonArray>()) {
+                                for (JsonVariant state : devDoc["states"].as<JsonArray>()) {
+                                    states.add(state.as<const char*>());
+                                }
+                            }
+                        }
+                    }
+                }
+                devEntry.close();
+                devEntry = devDir.openNextFile();
+            }
+            devDir.close();
+        }
+
+        String payload;
+        serializeJson(doc, payload);
+        request->send(200, "application/json", payload);
     });
 
 #ifdef ENABLE_TIME_AUTHORITY
@@ -3296,8 +3451,12 @@ void setupWebServer() {
     #endif
 #ifdef ENABLE_PMACHINE
 #ifndef DISABLE_PMACHINE_ROUTES
-    registerPMachineRoutes(server, pm, &federatedFS);
+    registerPMachineRoutes(server, pm, &federatedFS, &pmAsyncWorker);
 #endif
+#endif
+#if defined(ENABLE_DHT11_HTTP_SERVER)
+    Dht11HttpServer::registerRoutes(server);
+    Serial.println("[DHT11] HTTP route registered");
 #endif
     server.onNotFound(notFound);
     
@@ -3556,9 +3715,11 @@ void ensureDocsTreeAndDefaults() {
 
 void setup() {
 
+    const bool gpioSemaphoresReady = initializeGpioPinSemaphores();
     Serial.begin(115200);
     delay(100);
     Serial.println("[BOOT] setup() starting...");
+    if (!gpioSemaphoresReady) Serial.println("[GPIO] Failed to initialize pin semaphores");
 
     // 1. Mount filesystem (SD or LittleFS)
 #if defined(ESP32)
@@ -3717,13 +3878,18 @@ void setup() {
             File f = LittleFS.open("/devices/LEDPIN.json", "w");
             if (f) {
                 JsonDocument doc;
-                doc["type"] = "device";
+                doc["type"] = "led";
+                doc["driver"] = "digital-output";
                 doc["name"] = "LEDPIN";
                 doc["pin"] = 2;
+                doc["visibility"] = "public";
+                auto states = doc["states"].to<JsonArray>();
+                states.add("off");
+                states.add("on");
                 auto arr = doc["actions"].to<JsonArray>();
-                arr.add("set_output");
-                arr.add("raise");
-                arr.add("lower");
+                arr.add("turnOn");
+                arr.add("turnOff");
+                arr.add("toggle");
                 String json;
                 serializeJson(doc, json);
                 f.print(json);
@@ -3732,8 +3898,11 @@ void setup() {
             } else {
                 Serial.println("[LEDPIN] Failed to create /devices/LEDPIN.json!");
             }
-            pinMode(2, OUTPUT);
-            digitalWrite(2, LOW);
+            GpioPinSemaphore ledSemaphore(2);
+            if (ledSemaphore.acquired()) {
+                pinMode(2, OUTPUT);
+                digitalWrite(2, LOW);
+            }
             Serial.println("[LEDPIN] Pin 2 set as OUTPUT and LOW (LED off)");
 
             File relayFile = LittleFS.open("/devices/RELAY.json", "w");
@@ -3778,9 +3947,12 @@ void setup() {
                 Serial.println("[RELAY] Failed to create /devices/RELAY.json!");
             }
 
-            pinMode(relayPinNumber, OUTPUT);
+            GpioPinSemaphore relaySemaphore(relayPinNumber);
             relayStateOn = false;
-            digitalWrite(relayPinNumber, LOW);
+            if (relaySemaphore.acquired()) {
+                pinMode(relayPinNumber, OUTPUT);
+                digitalWrite(relayPinNumber, LOW);
+            }
             Serial.printf("[RELAY] Pin %d set as OUTPUT and LOW (relay off)\n", relayPinNumber);
         } else {
             Serial.println("[LEDPIN] /devices directory does NOT exist!");
@@ -3885,7 +4057,12 @@ void setup() {
 #ifdef ENABLE_PMACHINE
     pm.setFFS(&federatedFS);
     pm.setServiceCallHook(httpInvokeServiceTransport, nullptr);
+    pm.setFsmCallHook(pmachineInvokeFsm, nullptr);
     pm.setOrchestrationWaitHook(httpInvokeOrchestrationWait, nullptr);
+    pmAsyncWorker.setFFS(&federatedFS);
+    pmAsyncWorker.setServiceCallHook(httpInvokeServiceTransport, nullptr);
+    pmAsyncWorker.setFsmCallHook(pmachineInvokeFsm, nullptr);
+    pmAsyncWorker.setOrchestrationWaitHook(httpInvokeOrchestrationWait, nullptr);
     Serial.println("[PMACHINE] Service and orchestration transport hooks registered");
 #endif
 

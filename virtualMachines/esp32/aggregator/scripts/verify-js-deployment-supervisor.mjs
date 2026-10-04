@@ -23,7 +23,7 @@ try {
   const started = await supervisor.start(deployment);
   if (started.state !== 'running') throw new Error(`expected running, got ${started.state}`);
   await new Promise((resolve) => setTimeout(resolve, 100));
-  const listed = supervisor.list().find((entry) => entry.key === deployment.key);
+  const listed = supervisor.list().find((entry) => entry.deploymentKey === deployment.key && entry.targetNodeId === deployment.targetNodeId);
   if (!listed || listed.state !== 'running') throw new Error(`runtime did not remain running: ${JSON.stringify(listed)}`);
   const stopped = await supervisor.stop(deployment);
   if (stopped.state !== 'stopped') throw new Error(`expected stopped, got ${stopped.state}`);

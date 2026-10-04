@@ -1,12 +1,14 @@
 {
   "name": "pulse-pmachine-debugger",
   "displayName": "Pulse PMachine Debugger",
-  "description": "Native VS Code debugging for Pulse PMachine programs.",
-  "version": "0.1.5",
+  "description": "Run and debug Pulse PMachine programs from VS Code.",
+  "version": "0.1.6",
   "publisher": "pulse",
+  "icon": "media/pulse-icon.png",
   "files": [
     "package.json",
     "README.md",
+    "media/pulse-icon.png",
     "out/**"
   ],
   "engines": {
@@ -18,13 +20,56 @@
   ],
   "activationEvents": [
     "onDebug",
+    "onCommand:pulse-pmachine.runCurrentFile",
     "onLanguage:pascalish",
+    "onLanguage:pascal",
+    "onLanguage:vbish",
+    "onLanguage:wfl",
+    "onLanguage:mapl",
     "onLanguage:cobolish",
     "onLanguage:vbish"
   ],
   "main": "./out/extension.js",
   "type": "module",
   "contributes": {
+    "languages": [
+      { "id": "pascalish", "aliases": ["Pascalish"], "extensions": [".pas"] },
+      { "id": "vbish", "aliases": ["VBish"], "extensions": [".bas", ".vb", ".vbs"] },
+      { "id": "wfl", "aliases": ["Work Flow Language"], "extensions": [".wfl"] },
+      { "id": "mapl", "aliases": ["MAPL"], "extensions": [".mapl"] }
+    ],
+    "commands": [
+      {
+        "command": "pulse-pmachine.runCurrentFile",
+        "title": "Run on PMachine",
+        "icon": "$(play)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "pulse-pmachine.runCurrentFile",
+          "when": "editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl",
+          "group": "navigation@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "pulse-pmachine.runCurrentFile",
+          "when": "editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Pulse PMachine",
+      "properties": {
+        "pulse-pmachine.backendUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:4000",
+          "description": "Aggregator backend URL used to discover PMachine targets and run programs."
+        }
+      }
+    },
     "debuggers": [
       {
         "type": "pulse-pmachine",

@@ -1494,11 +1494,9 @@ function assignVar(frame, name, value) {
   frame.vars[name] = value;
 }
 
-async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queueTypesByName = new Map(), isoTypeIds = new Set(), inputQueue, sourceMessage, startLabel = '', runtimeContext = {}, debugHooks = {} }) {
+async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queueTypesByName = new Map(), isoTypeIds = new Set(), inputQueue, sourceMessage, runtimeContext = {}, debugHooks = {} }) {
   const stack = [];
-  let pc = startLabel && instructions.__labels?.has(startLabel)
-    ? instructions.__labels.get(startLabel)
-    : 0;
+  let pc = 0;
   let currentMessage = sourceMessage;
   // Run-local output document for the pcode-routine mapper. SRC_GET reads from
   // currentMessage; OUT_SET writes here; ROUTE_MAP_RUN commits it back.
@@ -1586,10 +1584,10 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
         pc,
         instruction: instr,
         operandStack: [...stack],
-        stdout: [...stdout],
         globals: { ...globalFrame.vars },
         locals: { ...currentFrame.vars },
         runtimeState: { ...state },
+        stdout: [...stdout],
         callStack: callStack.map(frame => ({ label: frame.label || '', pc: frame.pc ?? null }))
       });
     }
@@ -2601,9 +2599,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
         parsedSource = null;
       }
       state.__orchestration = state.__orchestration || orchestrationSummary || { success: true, results: [] };
-      if ((ref.startsWith('"') && ref.endsWith('"')) || (ref.startsWith("'") && ref.endsWith("'"))) {
-        state.__response = ref.slice(1, -1).replace(/''/g, "'").replace(/\\"/g, '"');
-      } else if (parsedSource && ref && Object.prototype.hasOwnProperty.call(parsedSource, ref)) {
+      if (parsedSource && ref && Object.prototype.hasOwnProperty.call(parsedSource, ref)) {
         state.__response = parsedSource[ref];
       } else {
         state.__response = state.__orchestration?.results || null;
@@ -2627,59 +2623,6 @@ async function readMessage(args) {
   return args.message;
 }
 
-function evaluateDirectServiceExpression(expression, request, sourceMessage) {
-  const value = String(expression || '').trim();
-  if (!value) return '';
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-    return value.slice(1, -1).replace(/''/g, "'").replace(/\\"/g, '"');
-  }
-  if (value.toLowerCase() === 'src') {
-    return request?.src ?? request?.payload ?? sourceMessage;
-  }
-  if (/^-?\d+(?:\.\d+)?$/.test(value)) return Number(value);
-  return request?.[value] ?? '';
-}
-
-function executeDirectService(programMap, sourceMessage) {
-  let request = null;
-  try {
-    request = JSON.parse(String(sourceMessage || ''));
-  } catch {
-    request = { httpVerb: 'POST', src: sourceMessage };
-  }
-  if (!request || typeof request !== 'object' || Array.isArray(request)) {
-    request = { httpVerb: 'POST', src: sourceMessage };
-  }
-
-  const verb = String(request.httpVerb || request.method || 'POST').trim().toUpperCase();
-  const endpoint = (programMap.serviceEndpoints || []).find(item => String(item.verb || '').toUpperCase() === verb);
-  if (!endpoint) {
-    return {
-      deliveries: [],
-      state: {},
-      stdout: [],
-      globals: { src: request.src ?? sourceMessage },
-      stepCount: 0,
-      stepLimitHit: false,
-      orchestration: null,
-      response: null,
-      error: `No service endpoint for HTTP verb ${verb}`
-    };
-  }
-
-  return {
-    deliveries: [],
-    state: {},
-    stdout: [],
-    globals: { src: request.src ?? sourceMessage },
-    stepCount: 0,
-    stepLimitHit: false,
-    orchestration: null,
-    response: evaluateDirectServiceExpression(endpoint.returnExpr, request, sourceMessage),
-    error: null
-  };
-}
-
 async function executeSingleMessage(args, { printOutput = true } = {}) {
   const pcodePath = path.resolve(args.pcode);
   const programMapPath = path.resolve(args.programMap);
@@ -2695,14 +2638,6 @@ async function executeSingleMessage(args, { printOutput = true } = {}) {
   const isoTypeIds = await loadLibrarianIsoTypeIds();
   const instructions = parsePcode(pcodeText);
   const runtimeUnit = normalizeRuntimeUnit(programMap?.runtimeUnit, programMap?.serviceId);
-  let directServiceEndpoint = null;
-  if (runtimeUnit.kind === 'service' && (programMap.serviceEndpoints || []).length > 0) {
-    let request = null;
-    try { request = JSON.parse(String(sourceMessage || '')); } catch { request = null; }
-    const verb = String(request?.httpVerb || request?.method || 'POST').trim().toUpperCase();
-    directServiceEndpoint = (programMap.serviceEndpoints || [])
-      .find(endpoint => String(endpoint.verb || '').toUpperCase() === verb) || null;
-  }
   const loadedAt = new Date().toISOString();
   const invokeSubflow = async ({ subflowId, nodeId, payload, timeoutMs }) => {
     const base = String(args.backendUrl || 'http://localhost:4000').replace(/\/$/, '');
@@ -2793,36 +2728,20 @@ async function executeSingleMessage(args, { printOutput = true } = {}) {
   };
 
   const startedAt = Date.now();
-  const result = directServiceEndpoint
-    ? await executeProgramImpl({
-      instructions,
-      opcodeMap,
-      mappingsById,
-      queueTypesByName,
-      isoTypeIds,
-      inputQueue: args.inputQueue,
-      sourceMessage,
-      startLabel: directServiceEndpoint.entryLabel,
-      runtimeContext: {
-        invokeSubflow,
-        invokeService,
-        serviceId: args.serviceId || ''
-      }
-    })
-    : await executeProgramImpl({
-      instructions,
-      opcodeMap,
-      mappingsById,
-      queueTypesByName,
-      isoTypeIds,
-      inputQueue: args.inputQueue,
-      sourceMessage,
-      runtimeContext: {
-        invokeSubflow,
-        invokeService,
-        serviceId: args.serviceId || ''
-      }
-    });
+  const result = await executeProgramImpl({
+    instructions,
+    opcodeMap,
+    mappingsById,
+    queueTypesByName,
+    isoTypeIds,
+    inputQueue: args.inputQueue,
+    sourceMessage,
+    runtimeContext: {
+      invokeSubflow,
+      invokeService,
+      serviceId: args.serviceId || ''
+    }
+  });
   const durationMs = Date.now() - startedAt;
   const fitness = buildFitnessReport({
     args,

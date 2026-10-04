@@ -15,11 +15,11 @@ const CASES = [
 ];
 
 async function compileAndRun(name) {
-  const pcode = `../artifacts/pcode/wirth-suite-${name}.pcode`;
-  const map = `../artifacts/pcode/wirth-suite-${name}.program.json`;
+  const pcode = `../pcode/wirth-suite-${name}.pcode`;
+  const map = `../pcode/wirth-suite-${name}.program.json`;
   await run('node', [
     'scripts/compile-pascalish-program-antlr-to-pcode.mjs',
-    '--in', `../artifactPrograms/${name}.pas`, '--out', pcode, '--map-out', map
+    '--in', `./data/${name}.pas`, '--out', pcode, '--map-out', map
   ]);
   const { stdout } = await run('node', [
     'scripts/run-js-pmachine.mjs',
@@ -46,7 +46,7 @@ async function main() {
 // child nodes, so only the emitted pcode is asserted here.
 async function assertOrchestrationLowering() {
   const { compilePascalishProgramWithAntlr } = await import('./compile-pascalish-program-antlr-to-pcode.mjs');
-  const source = await fs.readFile('../artifactPrograms/parent-child-orchestration.pas', 'utf-8');
+  const source = await fs.readFile('./data/parent-child-orchestration.pas', 'utf-8');
   const { pcodeText } = compilePascalishProgramWithAntlr(source);
 
   const spawns = pcodeText.split('\n').filter(line => line.startsWith('ORCH_SPAWN'));

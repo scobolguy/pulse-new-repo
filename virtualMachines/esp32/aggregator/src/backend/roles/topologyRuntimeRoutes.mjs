@@ -7,6 +7,7 @@ import https from 'node:https';
 import { execFile } from 'node:child_process';
 import { allocateJob } from '../allocator/economicAllocator.mjs';
 import { attachPcodeSignature } from '../../../scripts/pcode-signing.mjs';
+import { enrichDiscoveredNode } from '../modules/nodeDiscovery.mjs';
 
 const NODE_RENAME_OVERRIDES_PATH = path.resolve(process.cwd(), 'data', 'node-rename-overrides.json');
 const NODE_TOPOLOGY_OVERRIDES_PATH = path.resolve(process.cwd(), 'data', 'node-topology-overrides.json');
@@ -3702,56 +3703,65 @@ export function registerTopologyRuntimeRoutes(app, deps) {
   });
 
   app.get('/api/pmachine/nodes', async (req, res) => {
-    const nodes = await buildCurrentNodesWithTopology();
-    const candidates = new Map();
-    const hasPmachineService = (services) => (Array.isArray(services) ? services : []).some((service) => {
-      const name = typeof service === 'string' ? service : service?.name || service?.serviceName;
-      return String(name || '').trim().toLowerCase().includes('pmachine');
-    });
+    try {
+      const missingCapabilities = Array.from(discoveredNodes.entries()).filter(([, node]) => {
+        const ip = String(node?.ip || '').trim();
+        const services = node?.details?.services;
+        return ip && !ip.startsWith('127.') && ip !== '::1'
+          && Date.now() - Number(node.lastSeen || 0) <= 10 * 60 * 1000
+          && (!Array.isArray(services) || services.length === 0);
+      });
+      await Promise.all(missingCapabilities.map(([key]) => enrichDiscoveredNode({
+        ip: key,
+        discoveredNodes,
+        timeoutMs: 3000
+      })));
+      const nodes = await buildCurrentNodesWithTopology();
+      const candidates = new Map();
+      const hasPmachineService = (services) => (Array.isArray(services) ? services : []).some((service) => {
+        const name = typeof service === 'string' ? service : service?.name || service?.serviceName;
+        return String(name || '').trim().toLowerCase().includes('pmachine');
+      });
 
-    for (const node of nodes) {
-      if (!hasPmachineService(node?.details?.services)) continue;
-      const ip = String(node?.ip || '').trim();
-      if (ip) candidates.set(ip, node);
-    }
-
-    const configuredEdgeBases = String(
-      process.env.SERVICE_EDGE_BASE_URLS
-      || process.env.SERVICE_EDGE_BASE_URL
-      || 'http://192.168.2.155'
-    ).split(',').map((value) => value.trim().replace(/\/$/, '')).filter(Boolean);
-
-    await Promise.all(configuredEdgeBases.map(async (baseUrl) => {
-      try {
-        const base = new URL(baseUrl);
-        if (!['http:', 'https:'].includes(base.protocol)) return;
-        const response = await fetch(new URL('/status', base), { signal: AbortSignal.timeout(5000) });
-        if (!response.ok) return;
-        const status = await response.json();
-        if (!hasPmachineService(status?.services)) return;
-        const ip = base.hostname;
-        candidates.set(ip, {
-          nodeId: String(status.nodeName || ip),
-          nodeName: String(status.nodeName || ip),
-          ip,
-          port: Number(base.port || (base.protocol === 'https:' ? 443 : 80)),
-          kind: 'machineAvailability',
-          serviceName: 'pmachine',
-          status: 'available',
-          available: true,
-          details: {
-            hardware: String(status.deviceRole || 'ESP32'),
-            runtime: 'esp32-pmachine',
-            services: status.services,
-            firmwareVersion: status.firmwareVersion || null
-          }
-        });
-      } catch {
-        // Omit configured edge nodes that do not respond with PMachine capability.
+      for (const node of nodes) {
+        const ip = String(node?.ip || '').trim();
+        if (ip && hasPmachineService(node?.details?.services)) candidates.set(ip, node);
       }
-    }));
 
-    res.json(Array.from(candidates.values()));
+      const configuredEdgeBases = String(
+        process.env.SERVICE_EDGE_BASE_URLS || process.env.SERVICE_EDGE_BASE_URL || ''
+      ).split(',').map((value) => value.trim()).filter(Boolean);
+      await Promise.all(configuredEdgeBases.map(async (baseUrl) => {
+        try {
+          const base = new URL(baseUrl);
+          if (!['http:', 'https:'].includes(base.protocol)) throw new Error('Expected an HTTP(S) URL');
+          const response = await fetch(new URL('/status', base), { signal: AbortSignal.timeout(5000) });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const status = await response.json();
+          if (!hasPmachineService(status?.services)) return;
+          if (candidates.has(base.hostname)) return;
+          candidates.set(base.hostname, {
+            nodeId: String(status.nodeName || base.hostname),
+            nodeName: String(status.nodeName || base.hostname),
+            ip: base.hostname,
+            port: Number(base.port || (base.protocol === 'https:' ? 443 : 80)),
+            status: 'available',
+            available: true,
+            details: {
+              ...status,
+              hardware: String(status.deviceRole || 'ESP32'),
+              runtime: 'esp32-pmachine'
+            }
+          });
+        } catch (error) {
+          console.warn(`[DISCOVERY] Configured PMachine ${baseUrl}: ${error.message}`);
+        }
+      }));
+      res.json(Array.from(candidates.values()));
+    } catch (error) {
+      console.error('[DISCOVERY] PMachine target lookup failed:', error);
+      res.status(500).json({ error: error.message });
+    }
   });
 
   app.post('/api/pmachine/announce', (req, res) => {

@@ -1,4 +1,4 @@
-// Generated from C:/dev/pulse-new-repo/virtualMachines/esp32/aggregator/grammar/Pascalish.g4 by ANTLR 4.13.2
+// Generated from grammar/Pascalish.g4 by ANTLR 4.13.2
 // jshint ignore: start
 import antlr4 from 'antlr4';
 
@@ -162,12 +162,6 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
-	// Visit a parse tree produced by PascalishParser#databaseDecl.
-	visitDatabaseDecl(ctx) {
-	  return this.visitChildren(ctx);
-	}
-
-
 	// Visit a parse tree produced by PascalishParser#queueDecl.
 	visitQueueDecl(ctx) {
 	  return this.visitChildren(ctx);
@@ -312,6 +306,42 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by PascalishParser#routerDecl.
+	visitRouterDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#routerHeaderProp.
+	visitRouterHeaderProp(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#verbList.
+	visitVerbList(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#outputDecl.
+	visitOutputDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#outputTypeMeta.
+	visitOutputTypeMeta(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#typeRefList.
+	visitTypeRefList(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by PascalishParser#mapperDecl.
 	visitMapperDecl(ctx) {
 	  return this.visitChildren(ctx);
@@ -374,6 +404,24 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by PascalishParser#serviceStmt.
 	visitServiceStmt(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#serviceRouteStmt.
+	visitServiceRouteStmt(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#serviceCaseStmt.
+	visitServiceCaseStmt(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#serviceCaseArm.
+	visitServiceCaseArm(ctx) {
 	  return this.visitChildren(ctx);
 	}
 
@@ -590,6 +638,12 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by PascalishParser#qualifiedPart.
 	visitQualifiedPart(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#fsmOperation.
+	visitFsmOperation(ctx) {
 	  return this.visitChildren(ctx);
 	}
 

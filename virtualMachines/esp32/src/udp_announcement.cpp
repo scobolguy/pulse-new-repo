@@ -55,9 +55,13 @@ bool sendNodeBeaconAnnouncement(
 
     String jsonMsg;
     serializeJson(announceDoc, jsonMsg);
-    udp.beginPacket("255.255.255.255", announcePort);
+    if (!udp.beginPacket("255.255.255.255", announcePort)) {
+        return false;
+    }
     udp.write((const uint8_t*)jsonMsg.c_str(), jsonMsg.length());
-    udp.endPacket();
+    if (!udp.endPacket()) {
+        return false;
+    }
 
     state.nodeBeaconLastSentAt = millis();
     state.nodeBeaconLastCapabilityHash = capabilityHash;

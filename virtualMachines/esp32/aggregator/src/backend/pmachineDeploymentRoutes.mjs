@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { compilePascalishProgramWithAntlr } from '../../scripts/compile-pascalish-program-antlr-to-pcode.mjs';
 import { compileWorkflowDSLWithAntlr } from '../../scripts/workflow-antlr-compiler.mjs';
-import { runPascalOnEsp32 } from '../../scripts/run-pascal-on-esp32-node.mjs';
+import { runPascalOnEsp32, runPcodeOnEsp32 } from '../../scripts/run-pascal-on-esp32-node.mjs';
 import { runSingleMessageForEvolution } from '../../../pmachines/javascript/index.mjs';
 import {
   createJavaScriptPmachineDebugSession,
@@ -69,6 +69,10 @@ export function registerPmachineDeploymentRoutes(app) {
     try {
       const body = req.body && typeof req.body === 'object' ? req.body : {};
       const source = String(body.source || '');
+      const pcodeText = String(body.pcodeText || body.pcode || '');
+      const suppliedProgramMap = body.programMap && typeof body.programMap === 'object' && !Array.isArray(body.programMap)
+        ? body.programMap
+        : null;
       const sourceFileName = String(body.sourceFileName || 'program.program.pas').trim() || 'program.program.pas';
       const runtime = String(body.runtime || 'js').trim().toLowerCase();
       const targetNodeId = String(body.targetNodeId || body.node || '').trim();
@@ -76,18 +80,34 @@ export function registerPmachineDeploymentRoutes(app) {
       const wflOverride = resolveQueueOverride(body.wflSource, sourceFileName, body.wflDeploymentId, body.wflResourceId);
       const inputQueue = String(wflOverride?.inputQueue || body.inputQueue || 'deploy-api.in').trim();
 
-      if (!source.trim()) return res.status(400).json({ error: 'source is required' });
+      if (!source.trim() && !pcodeText.trim()) return res.status(400).json({ error: 'source or pcodeText is required' });
+      if (pcodeText.trim() && !suppliedProgramMap) return res.status(400).json({ error: 'programMap is required with pcodeText' });
       if (!['js', 'esp32'].includes(runtime)) return res.status(400).json({ error: 'runtime must be js or esp32' });
       if (runtime === 'esp32' && !targetNodeId) return res.status(400).json({ error: 'targetNodeId is required for ESP32 runs' });
 
-      const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'pulse-api-source-'));
-      sourcePath = path.join(tempDirectory, path.basename(sourceFileName));
-      await fs.writeFile(sourcePath, source, 'utf8');
-      const compiled = compilePascalishProgramWithAntlr(source, { fileName: sourceFileName });
+      let compiled;
+      if (pcodeText.trim()) {
+        compiled = { pcodeText, programMap: suppliedProgramMap };
+      } else {
+        const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'pulse-api-source-'));
+        sourcePath = path.join(tempDirectory, path.basename(sourceFileName));
+        await fs.writeFile(sourcePath, source, 'utf8');
+        compiled = compilePascalishProgramWithAntlr(source, { fileName: sourceFileName });
+      }
       const debug = body.debug === true;
 
       if (runtime === 'esp32') {
-        const result = await runPascalOnEsp32({ source: sourcePath, node: targetNodeId, inputQueue, message });
+        const result = pcodeText.trim()
+          ? await runPcodeOnEsp32({
+            pcodeText,
+            programMap: suppliedProgramMap,
+            node: targetNodeId,
+            inputQueue,
+            message,
+            maxSteps: body.maxSteps,
+            sourceFileName
+          })
+          : await runPascalOnEsp32({ source: sourcePath, node: targetNodeId, inputQueue, message });
         return res.json({ status: 'ok', runtime, targetNodeId, inputQueue, wflOverride, debugFallback: debug, result });
       }
 

@@ -39,6 +39,17 @@ API symbol:
 
 API "symbol" BASE "http://host:port";
 
+Service deployment plan:
+
+```wfl
+DEPLOYMENT "payments" PROJECT "payments-project" TARGETS ("node-a", "node-b") BEGIN
+  SERVICE "mt103-to-pacs008" FILE "mt103.pcode" QUEUE "swift.mt103.inbound" -> "pacs.008.outbound" TARGETS ("node-a", "node-b") STARTUP TRUE;
+  REMOVE SERVICE "mt103-to-pacs008" FROM TARGETS ("node-a");
+END;
+```
+
+`SERVICE`, `PROGRAM`, and `DAEMON` items deploy to their listed nodes when the plan is executed. `REMOVE SERVICE` removes only that service instance from each listed node; instances on other targets remain deployed. Omitting a target from the backend DELETE API continues to remove the whole deployment.
+
 Workflow block:
 
 WORKFLOW "workflow-id" BEGIN

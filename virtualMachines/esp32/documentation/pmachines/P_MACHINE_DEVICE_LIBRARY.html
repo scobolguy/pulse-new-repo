@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>P‑Machine Device Library – Full Technical Description</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 2rem; line-height: 1.6; color: #222; }
+  h1, h2, h3 { color: #0b5fff; }
+  code { background: #f4f4f4; padding: 0.2rem 0.4rem; border-radius: 4px; }
+  pre { background: #f4f4f4; padding: 1rem; border-radius: 6px; overflow-x: auto; }
+  .section { margin-bottom: 2.5rem; }
+  ul { margin-left: 1.2rem; }
+</style>
+</head>
+<body>
+
+<h1>P‑Machine Device Library</h1>
+<p>
+  The P‑Machine Device Library is a modular, extensible hardware abstraction layer designed to support
+  a wide range of physical devices including switches, pushbuttons, encoders, relays, PWM outputs,
+  analog sensors, digital sensors, and more. It provides a unified interface for device interaction,
+  a common request/response protocol, and a clean binding mechanism into the P‑Machine runtime.
+</p>
+
+<div class="section">
+<h2>1. Architectural Overview</h2>
+<p>
+  The library is built around a universal device interface (<code>IDevice</code>) that all device types
+  implement. This ensures consistent behavior across device categories and allows the P‑Machine to
+  interact with all devices using a single request model.
+</p>
+
+<ul>
+  <li>Unified device lifecycle (init, tick, request handling)</li>
+  <li>Common request/response protocol</li>
+  <li>Event emission for asynchronous device changes</li>
+  <li>Device registry for dynamic binding into the P‑Machine</li>
+  <li>DSL integration for declarative device definitions</li>
+</ul>
+</div>
+
+<div class="section">
+<h2>2. Universal Device Interface</h2>
+<p>
+  All devices implement the <code>IDevice</code> interface. This interface defines the lifecycle,
+  request handling, metadata, and event emission capabilities required by the P‑Machine.
+</p>
+
+<pre><code>
+class IDevice {
+public:
+    virtual ~IDevice() {}
+
+    // Hardware initialization
+    virtual void init() = 0;
+
+    // Periodic polling, debouncing, smoothing, sampling
+    virtual void tick() = 0;
+
+    // Logical request handler
+    virtual bool handleRequest(const std::string& request,
+                               const PMsg& args,
+                               PMsg& response) = 0;
+
+    // Emit events back into the P‑Machine
+    virtual void emitEvent(const PMsg& event) = 0;
+
+    // Metadata
+    virtual const std::string& name() const = 0;
+    virtual const std::string& type() const = 0;
+};
+</code></pre>
+
+<p>
+  This interface is intentionally minimal but powerful enough to support all device categories.
+</p>
+</div>
+
+<div class="section">
+<h2>3. Device Lifecycle</h2>
+<p>The lifecycle consists of three phases:</p>
+
+<h3>Initialization (<code>init()</code>)</h3>
+<ul>
+  <li>Configures GPIO, ADC, I2C, SPI, PWM, or other hardware interfaces</li>
+  <li>Sets initial device state</li>
+  <li>Allocates buffers or internal structures</li>
+</ul>
+
+<h3>Ticking (<code>tick()</code>)</h3>
+<ul>
+  <li>Debounces switches</li>
+  <li>Reads sensors</li>
+  <li>Processes encoder deltas</li>
+  <li>Samples ADC values</li>
+  <li>Generates events when state changes</li>
+</ul>
+
+<h3>Request Handling (<code>handleRequest()</code>)</h3>
+<ul>
+  <li>Executes logical operations (e.g., <code>set</code>, <code>read</code>, <code>configure</code>)</li>
+  <li>Returns structured responses via <code>PMsg</code></li>
+</ul>
+</div>
+
+<div class="section">
+<h2>4. Common Request Library</h2>
+<p>
+  The request library provides a uniform mechanism for sending logical commands to devices.
+  The P‑Machine uses a <code>DeviceRequestRouter</code> to dispatch requests.
+</p>
+
+<pre><code>
+class DeviceRequestRouter {
+public:
+    bool dispatch(IDevice* device,
+                  const std::string& request,
+                  const PMsg& args,
+                  PMsg& response)
+    {
+        return device->handleRequest(request, args, response);
+    }
+};
+</code></pre>
+
+<p>
+  This abstraction allows the P‑Machine to remain device‑agnostic.
+</p>
+</div>
+
+<div class="section">
+<h2>5. Device Classes</h2>
+<p>
+  Each device type inherits from <code>IDevice</code> and implements its own hardware logic.
+</p>
+
+<h3>Switch Device (toggle or pushbutton)</h3>
+<pre><code>
+class SwitchDevice : public IDevice {
+public:
+    SwitchDevice(const std::string& name, int pin, int debounce_us);
+
+    void init() override;
+    void tick() override;
+
+    bool handleRequest(const std::string& request,
+                       const PMsg& args,
+                       PMsg& response) override;
+
+    void emitEvent(const PMsg& event) override;
+
+private:
+    std::string _name;
+    std::string _type = "switch";
+    int _pin;
+    int _debounce;
+    int _lastState;
+    uint32_t _lastEventTime;
+};
+</code></pre>
+
+<h3>Relay Device</h3>
+<pre><code>
+class RelayDevice : public IDevice {
+public:
+    RelayDevice(const std::string& name, int pin);
+
+    void init() override;
+    void tick() override {}
+
+    bool handleRequest(const std::string& request,
+                       const PMsg& args,
+                       PMsg& response) override;
+
+    void emitEvent(const PMsg& event) override;
+
+private:
+    std::string _name;
+    std::string _type = "relay";
+    int _pin;
+};
+</code></pre>
+
+<h3>PWM Output Device</h3>
+<pre><code>
+class PwmDevice : public IDevice {
+public:
+    PwmDevice(const std::string& name, int pin, int freq);
+
+    void init() override;
+    void tick() override {}
+
+    bool handleRequest(const std::string& request,
+                       const PMsg& args,
+                       PMsg& response) override;
+
+    void emitEvent(const PMsg& event) override;
+
+private:
+    std::string _name;
+    std::string _type = "pwm";
+    int _pin;
+    int _freq;
+};
+</code></pre>
+
+<h3>Temperature Sensor Device</h3>
+<pre><code>
+class TempSensorDevice : public IDevice {
+public:
+    TempSensorDevice(const std::string& name, int channel);
+
+    void init() override;
+    void tick() override;
+
+    bool handleRequest(const std::string& request,
+                       const PMsg& args,
+                       PMsg& response) override;
+
+    void emitEvent(const PMsg& event) override;
+
+private:
+    std::string _name;
+    std::string _type = "temperature";
+    int _channel;
+    float _lastValue;
+};
+</code></pre>
+</div>
+
+<div class="section">
+<h2>6. Binding Devices into the P‑Machine</h2>
+<p>
+  The P‑Machine maintains a registry of devices and provides methods for initialization,
+  ticking, and request dispatch.
+</p>
+
+<pre><code>
+class PMachine {
+public:
+    void registerDevice(IDevice* dev) {
+        devices.push_back(dev);
+    }
+
+    void initDevices() {
+        for (auto* d : devices) d->init();
+    }
+
+    void tickDevices() {
+        for (auto* d : devices) d->tick();
+    }
+
+    bool sendRequest(const std::string& deviceName,
+                     const std::string& request,
+                     const PMsg& args,
+                     PMsg& response)
+    {
+        for (auto* d : devices)
+            if (d->name() == deviceName)
+                return router.dispatch(d, request, args, response);
+        return false;
+    }
+
+private:
+    std::vector&lt;IDevice*&gt; devices;
+    DeviceRequestRouter router;
+};
+</code></pre>
+</div>
+
+<div class="section">
+<h2>7. DSL Integration</h2>
+<p>
+  Devices can be declared in the P‑Machine DSL using simple declarative syntax:
+</p>
+
+<pre><code>
+device switch front_door pin 14 debounce 20ms;
+device relay hall_light pin 5;
+device pwm fan pin 12 freq 1kHz;
+device temp temp_probe channel 3;
+</code></pre>
+
+<p>
+  The compiler generates corresponding C++ bindings:
+</p>
+
+<pre><code>
+pmachine.registerDevice(new SwitchDevice("front_door", 14, 20000));
+pmachine.registerDevice(new RelayDevice("hall_light", 5));
+pmachine.registerDevice(new PwmDevice("fan", 12, 1000));
+pmachine.registerDevice(new TempSensorDevice("temp_probe", 3));
+</code></pre>
+</div>
+
+<div class="section">
+<h2>8. Device Families and Macros</h2>
+<p>
+  Device families can be defined using macros or templates to reduce boilerplate and
+  support cluster‑aware placement and replication.
+</p>
+
+<pre><code>
+DEFINE_GPIO_SWITCH(front_door, pin=14, debounce=20ms)
+DEFINE_PWM_OUTPUT(fan, pin=12, freq=1kHz)
+DEFINE_ADC_SENSOR(temp_probe, channel=3, smoothing=4)
+</code></pre>
+</div>
+
+<div class="section">
+<h2>9. Summary</h2>
+<p>
+  The P‑Machine Device Library provides a robust, extensible foundation for hardware
+  abstraction. Its unified interface, common request model, event system, and DSL
+  integration make it suitable for complex distributed systems, cluster‑aware runtimes,
+  and scalable hardware deployments.
+</p>
+</div>
+
+</body>
+</html>

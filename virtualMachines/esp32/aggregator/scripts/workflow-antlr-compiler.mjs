@@ -495,6 +495,15 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
   }
 
   visitDeploymentItem(ctx) {
+    if (ctx.REMOVE()) {
+      const strings = ctx.quotedString() || [];
+      return {
+        action: 'remove',
+        kind: 'service',
+        id: parseQuoted(strings[0].getText()),
+        targets: this.visit(ctx.quotedList())
+      };
+    }
     const kind = ctx.SERVICE() ? 'service' : (ctx.PROGRAM() ? 'program' : 'daemon');
     const strings = ctx.quotedString() || [];
     const lifecycle = ctx.serviceLifecycleClause ? ctx.serviceLifecycleClause() : null;

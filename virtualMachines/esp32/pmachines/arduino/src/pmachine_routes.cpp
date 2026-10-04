@@ -1,6 +1,12 @@
 
 #include <Arduino.h>
 #include "pmachine_routes.h"
+
+extern bool pmachineInvokeFsm(
+    const pmachine::FsmCallRequest& request,
+    pmachine::FsmCallResult& result,
+    std::string& outError,
+    void* context);
 #include <ArduinoJson.h>
 #include <FS.h>
 #include <LittleFS.h>
@@ -11,6 +17,7 @@
 #include <utility>
 #include <cstring>
 #include <cstdio>
+#include <cctype>
 #if defined(ESP32)
 #include <mbedtls/md.h>
 #elif defined(ESP8266)
@@ -53,6 +60,7 @@ struct AsyncPcodeJob {
 constexpr size_t ASYNC_PCODE_JOB_LIMIT = 1;
 AsyncPcodeJob gAsyncPcodeJobs[ASYNC_PCODE_JOB_LIMIT];
 SemaphoreHandle_t gAsyncPcodeJobsMutex = nullptr;
+QueueHandle_t gAsyncPcodeJobsQueue = nullptr;
 TaskHandle_t gAsyncPcodeWorkerTask = nullptr;
 uint32_t gNextAsyncPcodeJobId = 1;
 
@@ -1476,6 +1484,7 @@ bool deserializeProgramMapForExec(const String& path, FederatedFileSystem* ffs, 
     filter["runtimeUnit"] = true;
     filter["serviceEndpoints"][0]["verb"] = true;
     filter["serviceEndpoints"][0]["path"] = true;
+    filter["serviceEndpoints"][0]["entryLabel"] = true;
     filter["serviceEndpoints"][0]["body"] = true;
     filter["serviceEndpoints"][0]["returnExpr"] = true;
     filter["serviceEndpoints"][0]["acceptsType"] = true;
@@ -1533,6 +1542,495 @@ bool readTextFromPath(const String& path, FederatedFileSystem* ffs, String& outT
     outText = f.readString();
     f.close();
     return true;
+}
+
+struct NamedServiceRegistration {
+    String serviceId;
+    String file;
+    String programMap;
+    size_t maxBytes = 65536;
+    bool enabled = true;
+    unsigned long registeredAtMs = 0;
+};
+
+constexpr const char* kNamedServiceRegistryPath = "/pmachine-services.json";
+constexpr size_t kNamedServiceRequestBodyLimit = 8192;
+
+std::map<std::string, NamedServiceRegistration> gNamedServiceRegistry;
+bool gNamedServiceRegistryLoaded = false;
+
+#if defined(ESP32)
+SemaphoreHandle_t gNamedServiceRegistryMutex = nullptr;
+SemaphoreHandle_t gNamedServiceExecutionMutex = nullptr;
+
+bool namedServiceRegistryLock(uint32_t timeoutMs = 2000) {
+    if (gNamedServiceRegistryMutex == nullptr) gNamedServiceRegistryMutex = xSemaphoreCreateMutex();
+    return gNamedServiceRegistryMutex != nullptr
+        && xSemaphoreTake(gNamedServiceRegistryMutex, pdMS_TO_TICKS(timeoutMs)) == pdTRUE;
+}
+
+void namedServiceRegistryUnlock() {
+    if (gNamedServiceRegistryMutex != nullptr) xSemaphoreGive(gNamedServiceRegistryMutex);
+}
+
+bool namedServiceExecutionLock(uint32_t timeoutMs = 0) {
+    if (gNamedServiceExecutionMutex == nullptr) gNamedServiceExecutionMutex = xSemaphoreCreateMutex();
+    return gNamedServiceExecutionMutex != nullptr
+        && xSemaphoreTake(gNamedServiceExecutionMutex, pdMS_TO_TICKS(timeoutMs)) == pdTRUE;
+}
+
+void namedServiceExecutionUnlock() {
+    if (gNamedServiceExecutionMutex != nullptr) xSemaphoreGive(gNamedServiceExecutionMutex);
+}
+#else
+bool namedServiceRegistryLock(uint32_t timeoutMs = 2000) {
+    (void)timeoutMs;
+    return true;
+}
+
+void namedServiceRegistryUnlock() {}
+
+bool namedServiceExecutionLock() { return true; }
+void namedServiceExecutionUnlock() {}
+#endif
+
+bool isValidNamedServiceId(const String& serviceId) {
+    if (serviceId.length() == 0 || serviceId.length() > 64) return false;
+    for (size_t i = 0; i < serviceId.length(); ++i) {
+        const unsigned char ch = static_cast<unsigned char>(serviceId[i]);
+        if (!std::isalnum(ch) && ch != '_' && ch != '-' && ch != '.') return false;
+    }
+    return true;
+}
+
+String namedServiceRegistryKey(String serviceId) {
+    serviceId.trim();
+    serviceId.toLowerCase();
+    return serviceId;
+}
+
+bool isValidNamedServiceArtifactPath(const String& filePath) {
+    return filePath.startsWith("/") && filePath.indexOf("..") < 0;
+}
+
+bool ensureNamedServiceRegistryLoaded() {
+    if (!ensureLittleFsReady() || !namedServiceRegistryLock()) return false;
+    if (gNamedServiceRegistryLoaded) {
+        namedServiceRegistryUnlock();
+        return true;
+    }
+
+    File file = LittleFS.open(kNamedServiceRegistryPath, "r");
+    if (!file) {
+        gNamedServiceRegistryLoaded = true;
+        namedServiceRegistryUnlock();
+        return true;
+    }
+    JsonDocument doc;
+    const DeserializationError error = deserializeJson(doc, file);
+    file.close();
+    if (error) {
+        namedServiceRegistryUnlock();
+        return false;
+    }
+
+    JsonArrayConst services = doc["services"].as<JsonArrayConst>();
+    for (JsonObjectConst item : services) {
+        NamedServiceRegistration registration;
+        registration.serviceId = String(item["serviceId"] | "");
+        registration.file = String(item["file"] | "");
+        registration.programMap = String(item["programMap"] | "");
+        registration.maxBytes = static_cast<size_t>(item["maxBytes"] | 65536UL);
+        registration.enabled = item["enabled"] | true;
+        registration.registeredAtMs = item["registeredAtMs"] | 0UL;
+        if (!isValidNamedServiceId(registration.serviceId)
+            || !isValidNamedServiceArtifactPath(registration.file)
+            || !isValidNamedServiceArtifactPath(registration.programMap)) continue;
+        const String key = namedServiceRegistryKey(registration.serviceId);
+        gNamedServiceRegistry[std::string(key.c_str())] = registration;
+    }
+    gNamedServiceRegistryLoaded = true;
+    namedServiceRegistryUnlock();
+    return true;
+}
+
+bool persistNamedServiceRegistry() {
+    if (!ensureLittleFsReady() || !namedServiceRegistryLock()) return false;
+    JsonDocument doc;
+    JsonArray services = doc["services"].to<JsonArray>();
+    for (const auto& pair : gNamedServiceRegistry) {
+        const NamedServiceRegistration& registration = pair.second;
+        JsonObject item = services.add<JsonObject>();
+        item["serviceId"] = registration.serviceId;
+        item["file"] = registration.file;
+        item["programMap"] = registration.programMap;
+        item["maxBytes"] = static_cast<unsigned long>(registration.maxBytes);
+        item["enabled"] = registration.enabled;
+        item["registeredAtMs"] = registration.registeredAtMs;
+    }
+    namedServiceRegistryUnlock();
+
+    File file = LittleFS.open(kNamedServiceRegistryPath, "w");
+    if (!file) return false;
+    const size_t written = serializeJson(doc, file);
+    file.close();
+    return written > 0;
+}
+
+bool getNamedServiceRegistration(const String& serviceId, NamedServiceRegistration& registration) {
+    if (!ensureNamedServiceRegistryLoaded() || !namedServiceRegistryLock()) return false;
+    const String key = namedServiceRegistryKey(serviceId);
+    const auto it = gNamedServiceRegistry.find(std::string(key.c_str()));
+    const bool found = it != gNamedServiceRegistry.end();
+    if (found) registration = it->second;
+    namedServiceRegistryUnlock();
+    return found;
+}
+
+void appendNamedServiceRequestBody(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+    if (total > kNamedServiceRequestBodyLimit) {
+        if (request->_tempObject != nullptr) {
+            delete reinterpret_cast<String*>(request->_tempObject);
+            request->_tempObject = nullptr;
+        }
+        request->send(413, "application/json", "{\"error\":\"service request body too large\"}");
+        return;
+    }
+    String* body = reinterpret_cast<String*>(request->_tempObject);
+    if (index == 0) {
+        if (body != nullptr) delete body;
+        body = new String();
+        if (body != nullptr) body->reserve(total);
+        request->_tempObject = body;
+    }
+    if (body == nullptr) {
+        request->send(500, "application/json", "{\"error\":\"unable to buffer service request\"}");
+        return;
+    }
+    body->concat(reinterpret_cast<const char*>(data), len);
+}
+
+String takeNamedServiceRequestBody(AsyncWebServerRequest* request) {
+    String* body = reinterpret_cast<String*>(request->_tempObject);
+    request->_tempObject = nullptr;
+    if (body == nullptr) return "";
+    String result = *body;
+    delete body;
+    return result;
+}
+
+String namedServiceHttpVerb(AsyncWebServerRequest* request) {
+    switch (request->method()) {
+        case HTTP_GET: return "GET";
+        case HTTP_POST: return "POST";
+        case HTTP_PUT: return "PUT";
+        case HTTP_DELETE: return "DELETE";
+        case HTTP_PATCH: return "PATCH";
+        default: return "";
+    }
+}
+
+bool executeNamedService(
+    pmachine::PMachine& machine,
+    FederatedFileSystem* ffs,
+    const NamedServiceRegistration& registration,
+    const String& requestMessage,
+    JsonDocument& responseDoc,
+    int& statusCode,
+    String& errorOut
+) {
+    String pcodeText;
+    if (!readTextFromPath(registration.file, ffs, pcodeText)) {
+        statusCode = 404;
+        errorOut = "registered service p-code file not found";
+        return false;
+    }
+    if (registration.maxBytes > 0 && static_cast<size_t>(pcodeText.length()) > registration.maxBytes) {
+        statusCode = 413;
+        errorOut = "registered service p-code file too large";
+        return false;
+    }
+
+    JsonDocument programMapDoc;
+    if (!deserializeProgramMapForExec(registration.programMap, ffs, programMapDoc)) {
+        statusCode = 404;
+        errorOut = "registered service program map not found";
+        return false;
+    }
+    if (!verifySignedPcode(pcodeText, programMapDoc, errorOut)) {
+        statusCode = 403;
+        return false;
+    }
+
+    JsonDocument requestDoc;
+    if (deserializeJson(requestDoc, requestMessage) || !requestDoc.is<JsonObject>()) {
+        statusCode = 400;
+        errorOut = "service request must be a JSON object";
+        return false;
+    }
+    const String requestedVerb = toUpperCopy(String(requestDoc["httpVerb"] | requestDoc["method"] | "POST"));
+    String entryLabel;
+    String responseType;
+    JsonArray endpoints = programMapDoc["serviceEndpoints"].as<JsonArray>();
+    for (JsonObject endpoint : endpoints) {
+        if (toUpperCopy(String(endpoint["verb"] | "")) == requestedVerb) {
+            entryLabel = String(endpoint["entryLabel"] | "");
+            responseType = String(endpoint["returnsType"] | "");
+            break;
+        }
+    }
+    const int startPc = findPcodeLabelIndex(pcodeText, entryLabel);
+    if (entryLabel.length() == 0 || startPc < 0) {
+        statusCode = 405;
+        errorOut = String("service does not implement HTTP ") + requestedVerb;
+        return false;
+    }
+
+    std::vector<pmachine::PInstruction> instructions = pmachine::loadTextPCode(std::string(pcodeText.c_str()));
+        if (!namedServiceExecutionLock()) {
+        statusCode = 503;
+            errorOut = "PMachine service executor is busy; retry request";
+        return false;
+    }
+    machine.clearRoutingDeliveries();
+    machine.setRoutingContext("", std::string(requestMessage.c_str()));
+    machine.run(instructions, startPc);
+    const auto flowState = machine.getFlowStateSnapshot();
+    namedServiceExecutionUnlock();
+    const auto fsmError = flowState.find("__fsm_error");
+    if (fsmError != flowState.end()) {
+        statusCode = 422;
+        errorOut = String("device operation failed: ") + fsmError->second.c_str();
+        return false;
+    }
+
+    responseDoc["ok"] = true;
+    responseDoc["runtime"] = "esp32-pmachine";
+    responseDoc["serviceId"] = registration.serviceId;
+    responseDoc["method"] = requestedVerb;
+    const auto response = flowState.find("__response");
+    const String responseValue = response == flowState.end() ? "" : String(response->second.c_str());
+    String normalizedResponseType = responseType;
+    normalizedResponseType.trim();
+    normalizedResponseType.toLowerCase();
+    if (normalizedResponseType == "integer" || normalizedResponseType == "int" || normalizedResponseType == "int32") {
+        char* end = nullptr;
+        const long numericResponse = strtol(responseValue.c_str(), &end, 10);
+        if (end != responseValue.c_str() && end != nullptr && *end == '\0') {
+            responseDoc["response"] = numericResponse;
+        } else {
+            responseDoc["response"] = responseValue;
+        }
+    } else {
+        responseDoc["response"] = responseValue;
+    }
+    responseDoc["deliveries"] = static_cast<uint32_t>(machine.getRoutingDeliveries().size());
+    statusCode = 200;
+    errorOut = "";
+    return true;
+}
+
+bool executeNamedDevice(
+    const String& deviceId,
+    const String& httpVerb,
+    const String& rawBody,
+    const JsonDocument& query,
+    FederatedFileSystem* ffs,
+    JsonDocument& responseDoc,
+    int& statusCode,
+    String& errorOut
+) {
+    const String devicePath = String("/devices/") + deviceId + ".json";
+    String metadataText;
+    if (!readTextFromPath(devicePath, ffs, metadataText)) {
+        statusCode = 404;
+        errorOut = "device is not registered";
+        return false;
+    }
+    JsonDocument metadata;
+    if (deserializeJson(metadata, metadataText) || !metadata.is<JsonObject>()) {
+        statusCode = 500;
+        errorOut = "device metadata is invalid";
+        return false;
+    }
+
+    const String registeredName = String(metadata["name"] | deviceId);
+    String deviceType = String(metadata["type"] | "");
+    if (deviceType == "device") deviceType = String(metadata["driver"] | "");
+    const int pin = metadata["pin"] | -1;
+    if (!isValidNamedServiceId(registeredName) || deviceType.length() == 0 || pin < 0) {
+        statusCode = 422;
+        errorOut = "device metadata requires name, supported type, and pin";
+        return false;
+    }
+
+    JsonDocument bodyDoc;
+    if (rawBody.length() > 0) {
+        const DeserializationError parseError = deserializeJson(bodyDoc, rawBody);
+        if (parseError || !bodyDoc.is<JsonObject>()) {
+            statusCode = 400;
+            errorOut = "device request body must be a JSON object";
+            return false;
+        }
+    }
+    String action = String(bodyDoc["action"] | query["action"] | "");
+    String member = String(bodyDoc["state"] | query["state"] | "power");
+    String value = String(bodyDoc["value"] | query["value"] | "");
+    action.trim();
+    member.trim();
+    value.trim();
+    action.toLowerCase();
+
+    bool useStateWrite = action == "set_output" || action.length() == 0;
+    if (useStateWrite) {
+        if (action == "set_output" && member == "power") member = "power";
+        if (value.length() == 0 && action.length() == 0) {
+            statusCode = 400;
+            errorOut = "device action or state value is required";
+            return false;
+        }
+        if (value.equalsIgnoreCase("1") || value.equalsIgnoreCase("high") || value.equalsIgnoreCase("true")) value = "on";
+        if (value.equalsIgnoreCase("0") || value.equalsIgnoreCase("low") || value.equalsIgnoreCase("false")) value = "off";
+    } else if (action == "on" || action == "turnon" || action == "raise") {
+        action = "turnOn";
+    } else if (action == "off" || action == "turnoff" || action == "lower") {
+        action = "turnOff";
+    }
+
+    if (!namedServiceExecutionLock()) {
+        statusCode = 503;
+        errorOut = "device executor is busy; retry request";
+        return false;
+    }
+    pmachine::FsmCallRequest openRequest;
+    openRequest.operation = "OPEN";
+    openRequest.kind = "device";
+    openRequest.name = registeredName.c_str();
+    openRequest.type = deviceType.c_str();
+    openRequest.pin = pin;
+    pmachine::FsmCallResult openResult;
+    std::string runtimeError;
+    if (!pmachineInvokeFsm(openRequest, openResult, runtimeError, nullptr)) {
+        namedServiceExecutionUnlock();
+        statusCode = runtimeError.find("already open") != std::string::npos ? 409 : 422;
+        errorOut = String(runtimeError.c_str());
+        return false;
+    }
+
+    pmachine::FsmCallRequest operationRequest;
+    operationRequest.operation = useStateWrite ? "SET" : "EVENT";
+    operationRequest.kind = "device";
+    operationRequest.handle = openResult.handle;
+    operationRequest.member = useStateWrite ? std::string(member.c_str()) : std::string(action.c_str());
+    operationRequest.value = std::string(value.c_str());
+    pmachine::FsmCallResult operationResult;
+    const bool operationOk = pmachineInvokeFsm(operationRequest, operationResult, runtimeError, nullptr);
+
+    pmachine::FsmCallRequest closeRequest;
+    closeRequest.operation = "CLOSE";
+    closeRequest.kind = "device";
+    closeRequest.handle = openResult.handle;
+    pmachine::FsmCallResult closeResult;
+    std::string closeError;
+    const bool closeOk = pmachineInvokeFsm(closeRequest, closeResult, closeError, nullptr);
+    namedServiceExecutionUnlock();
+    if (!operationOk || !closeOk) {
+        statusCode = 422;
+        errorOut = String(!operationOk ? runtimeError.c_str() : closeError.c_str());
+        return false;
+    }
+
+    responseDoc["ok"] = true;
+    responseDoc["deviceName"] = registeredName;
+    responseDoc["method"] = httpVerb;
+    responseDoc[useStateWrite ? "state" : "action"] = useStateWrite ? member : action;
+    responseDoc["value"] = useStateWrite ? value : String(operationResult.value.c_str());
+    statusCode = 200;
+    errorOut = "";
+    return true;
+}
+
+void handleNamedServiceRegistration(AsyncWebServerRequest* request, const String& body, FederatedFileSystem* ffs) {
+    JsonDocument bodyDoc;
+    if (deserializeJson(bodyDoc, body) || !bodyDoc.is<JsonObject>()) {
+        request->send(400, "application/json", "{\"ok\":false,\"error\":\"valid JSON registration body required\"}");
+        return;
+    }
+
+    String serviceId = String(bodyDoc["serviceId"] | bodyDoc["name"] | "");
+    String file = String(bodyDoc["file"] | bodyDoc["pcode"] | "");
+    String programMap = String(bodyDoc["programMap"] | "");
+    if (!isValidNamedServiceId(serviceId) || !isValidNamedServiceArtifactPath(file)
+        || !isValidNamedServiceArtifactPath(programMap)) {
+        request->send(400, "application/json", "{\"ok\":false,\"error\":\"serviceId, absolute file, and absolute programMap are required\"}");
+        return;
+    }
+
+    String pcodeText;
+    if (!readTextFromPath(file, ffs, pcodeText)) {
+        request->send(404, "application/json", "{\"ok\":false,\"error\":\"service p-code file not found\"}");
+        return;
+    }
+    const size_t maxBytes = static_cast<size_t>(bodyDoc["maxBytes"] | 65536UL);
+    if (maxBytes == 0 || static_cast<size_t>(pcodeText.length()) > maxBytes) {
+        request->send(413, "application/json", "{\"ok\":false,\"error\":\"service p-code file exceeds maxBytes\"}");
+        return;
+    }
+    JsonDocument programMapDoc;
+    if (!deserializeProgramMapForExec(programMap, ffs, programMapDoc)) {
+        request->send(404, "application/json", "{\"ok\":false,\"error\":\"service program map not found\"}");
+        return;
+    }
+    String signatureError;
+    if (!verifySignedPcode(pcodeText, programMapDoc, signatureError)) {
+        JsonDocument errorDoc;
+        errorDoc["ok"] = false;
+        errorDoc["error"] = signatureError;
+        String response;
+        serializeJson(errorDoc, response);
+        request->send(403, "application/json", response);
+        return;
+    }
+    bool hasExecutableEndpoint = false;
+    for (JsonObject endpoint : programMapDoc["serviceEndpoints"].as<JsonArray>()) {
+        const String entryLabel = String(endpoint["entryLabel"] | "");
+        if (entryLabel.length() > 0 && findPcodeLabelIndex(pcodeText, entryLabel) >= 0) {
+            hasExecutableEndpoint = true;
+            break;
+        }
+    }
+    if (!hasExecutableEndpoint) {
+        request->send(422, "application/json", "{\"ok\":false,\"error\":\"service has no executable endpoints\"}");
+        return;
+    }
+    if (!ensureNamedServiceRegistryLoaded() || !namedServiceRegistryLock()) {
+        request->send(503, "application/json", "{\"ok\":false,\"error\":\"service registry busy\"}");
+        return;
+    }
+
+    const String key = namedServiceRegistryKey(serviceId);
+    NamedServiceRegistration registration;
+    registration.serviceId = serviceId;
+    registration.file = file;
+    registration.programMap = programMap;
+    registration.maxBytes = maxBytes;
+    registration.enabled = bodyDoc["enabled"] | true;
+    registration.registeredAtMs = millis();
+    gNamedServiceRegistry[std::string(key.c_str())] = registration;
+    namedServiceRegistryUnlock();
+    if (!persistNamedServiceRegistry()) {
+        request->send(500, "application/json", "{\"ok\":false,\"error\":\"unable to persist service registration\"}");
+        return;
+    }
+
+    JsonDocument responseDoc;
+    responseDoc["ok"] = true;
+    responseDoc["serviceId"] = serviceId;
+    responseDoc["file"] = file;
+    responseDoc["programMap"] = programMap;
+    String response;
+    serializeJson(responseDoc, response);
+    request->send(200, "application/json", response);
 }
 
 bool loadMappingsArray(const String& mappingsFilePath, FederatedFileSystem* ffs, JsonDocument& doc, JsonArrayConst& mappingsOut) {
@@ -2653,6 +3151,7 @@ struct PMachineDebugSession {
     uint32_t lastUpdatedMs = 0;
     bool started = false;
     bool active = false;
+    std::atomic<bool> finished{false};
 };
 
 SemaphoreHandle_t gPmachineDebugSessionsMutex = nullptr;
@@ -2672,7 +3171,6 @@ void pMachineDebugSessionWorker(void* rawContext) {
     }
 
     session->active = true;
-    session->machine.setFFS(nullptr);
     session->machine.clearAllBreakpoints();
     for (uint16_t pc : session->breakpoints) {
         session->machine.setBreakpoint(pc);
@@ -2682,6 +3180,7 @@ void pMachineDebugSessionWorker(void* rawContext) {
     session->lastUpdatedMs = millis();
     session->active = false;
     session->taskHandle = nullptr;
+    session->finished.store(true);
     vTaskDelete(nullptr);
 }
 
@@ -3215,36 +3714,29 @@ void asyncPcodeWorkerTask(void* rawContext) {
 
     for (;;) {
         size_t jobIndex = ASYNC_PCODE_JOB_LIMIT;
-        if (gAsyncPcodeJobsMutex != nullptr &&
-            xSemaphoreTake(gAsyncPcodeJobsMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-            for (size_t i = 0; i < ASYNC_PCODE_JOB_LIMIT; ++i) {
-                if (gAsyncPcodeJobs[i].state == 1) {
-                    gAsyncPcodeJobs[i].state = 2;
-                    jobIndex = i;
-                    break;
-                }
-            }
-            xSemaphoreGive(gAsyncPcodeJobsMutex);
-        }
-
-        if (jobIndex == ASYNC_PCODE_JOB_LIMIT) {
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
-        }
+        if (gAsyncPcodeJobsQueue == nullptr ||
+            xQueueReceive(gAsyncPcodeJobsQueue, &jobIndex, portMAX_DELAY) != pdTRUE ||
+            jobIndex >= ASYNC_PCODE_JOB_LIMIT) continue;
 
         String file;
         String inputFile;
         String inputQueue;
         size_t maxBytes = 32768;
-        const uint32_t jobId = gAsyncPcodeJobs[jobIndex].id;
+        bool jobReady = false;
         if (gAsyncPcodeJobsMutex != nullptr &&
-            xSemaphoreTake(gAsyncPcodeJobsMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-            file = gAsyncPcodeJobs[jobIndex].file;
-            inputFile = gAsyncPcodeJobs[jobIndex].inputFile;
-            inputQueue = gAsyncPcodeJobs[jobIndex].inputQueue;
-            maxBytes = gAsyncPcodeJobs[jobIndex].maxBytes;
+            xSemaphoreTake(gAsyncPcodeJobsMutex, portMAX_DELAY) == pdTRUE) {
+            AsyncPcodeJob& job = gAsyncPcodeJobs[jobIndex];
+            if (job.state == 1) {
+                job.state = 2;
+                file = job.file;
+                inputFile = job.inputFile;
+                inputQueue = job.inputQueue;
+                maxBytes = job.maxBytes;
+                jobReady = true;
+            }
             xSemaphoreGive(gAsyncPcodeJobsMutex);
         }
+        if (!jobReady) continue;
 
         String message;
         PMachineFileExecutionResult result;
@@ -3260,7 +3752,7 @@ void asyncPcodeWorkerTask(void* rawContext) {
         vTaskDelay(pdMS_TO_TICKS(1));
 
         if (gAsyncPcodeJobsMutex != nullptr &&
-            xSemaphoreTake(gAsyncPcodeJobsMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+            xSemaphoreTake(gAsyncPcodeJobsMutex, portMAX_DELAY) == pdTRUE) {
             gAsyncPcodeJobs[jobIndex].statusCode = result.statusCode;
             gAsyncPcodeJobs[jobIndex].body = result.body;
             gAsyncPcodeJobs[jobIndex].state = 3;
@@ -3274,16 +3766,22 @@ void asyncPcodeWorkerTask(void* rawContext) {
     }
 }
 
-void startAsyncPcodeWorker(pmachine::PMachine& machine, FederatedFileSystem* ffs) {
-    if (gAsyncPcodeWorkerTask != nullptr) return;
+bool startAsyncPcodeWorker(pmachine::PMachine& machine, FederatedFileSystem* ffs) {
+    if (gAsyncPcodeWorkerTask != nullptr) {
+        return gAsyncPcodeJobsMutex != nullptr && gAsyncPcodeJobsQueue != nullptr;
+    }
     if (gAsyncPcodeJobsMutex == nullptr) {
         gAsyncPcodeJobsMutex = xSemaphoreCreateMutex();
     }
-    if (gAsyncPcodeJobsMutex == nullptr) return;
+    if (gAsyncPcodeJobsMutex == nullptr) return false;
+    if (gAsyncPcodeJobsQueue == nullptr) {
+        gAsyncPcodeJobsQueue = xQueueCreate(ASYNC_PCODE_JOB_LIMIT, sizeof(size_t));
+    }
+    if (gAsyncPcodeJobsQueue == nullptr) return false;
 
     static std::pair<pmachine::PMachine*, FederatedFileSystem*> context;
     context = { &machine, ffs };
-    xTaskCreatePinnedToCore(
+    const BaseType_t taskCreated = xTaskCreatePinnedToCore(
         asyncPcodeWorkerTask,
         "pmachineAsync",
         12288,
@@ -3292,14 +3790,23 @@ void startAsyncPcodeWorker(pmachine::PMachine& machine, FederatedFileSystem* ffs
         &gAsyncPcodeWorkerTask,
         1
     );
+    return taskCreated == pdPASS && gAsyncPcodeWorkerTask != nullptr;
 }
 #endif
 
-void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine, FederatedFileSystem* ffs) {
+void registerPMachineRoutes(
+	AsyncWebServer& server,
+	pmachine::PMachine& machine,
+	FederatedFileSystem* ffs,
+	pmachine::PMachine* asyncWorkerMachine
+) {
 #if defined(ESP32)
-    startAsyncPcodeWorker(machine, ffs);
+    const bool asyncWorkerReady = startAsyncPcodeWorker(
+        asyncWorkerMachine != nullptr ? *asyncWorkerMachine : machine,
+        ffs
+    );
 
-    server.on("/pmachine/execute_file_async", HTTP_POST, [&machine, ffs](AsyncWebServerRequest *request){
+    server.on("/pmachine/execute_file_async", HTTP_POST, [asyncWorkerReady](AsyncWebServerRequest *request){
         String file;
         String inputFile;
         String inputQueue;
@@ -3312,7 +3819,8 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         getRequestParam(request, "inputQueue", inputQueue);
         getRequestParam(request, "max", maxParam);
 
-        if (gAsyncPcodeJobsMutex == nullptr ||
+        if (!asyncWorkerReady || gAsyncPcodeWorkerTask == nullptr || gAsyncPcodeJobsMutex == nullptr ||
+            gAsyncPcodeJobsQueue == nullptr ||
             xSemaphoreTake(gAsyncPcodeJobsMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
             request->send(503, "text/plain", "Async pcode worker unavailable");
             return;
@@ -3340,6 +3848,13 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         selected->statusCode = 0;
         selected->body = "";
         const uint32_t jobId = selected->id;
+        const size_t jobIndex = static_cast<size_t>(selected - gAsyncPcodeJobs);
+        if (xQueueSend(gAsyncPcodeJobsQueue, &jobIndex, 0) != pdTRUE) {
+            selected->state = 0;
+            xSemaphoreGive(gAsyncPcodeJobsMutex);
+            request->send(503, "text/plain", "Async pcode worker queue unavailable");
+            return;
+        }
         xSemaphoreGive(gAsyncPcodeJobsMutex);
 
         String response = String("{\"jobId\":") + String(jobId) +
@@ -4452,6 +4967,7 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
 
     server.on("/pmachine/debug/session", HTTP_POST, [ffs](AsyncWebServerRequest *request){
         String file;
+        String programMap;
         String maxParam = "32768";
         String startPcParam = "0";
         String breakpointsParam = "";
@@ -4463,6 +4979,7 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         getRequestParam(request, "max", maxParam);
         getRequestParam(request, "startPc", startPcParam);
         getRequestParam(request, "breakpoints", breakpointsParam);
+        getRequestParam(request, "programMap", programMap);
 
         String text;
         if (!readTextFromPath(file, ffs, text)) {
@@ -4482,14 +4999,37 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
             return;
         }
 
+        std::vector<pmachine::MappingDef> mappingDefs;
+        std::map<std::string, std::vector<std::string>> procedureSignatures;
+        ProgramMapMetadata metadata;
+        if (programMap.length() > 0) {
+            JsonDocument programMapDoc;
+            if (!deserializeDocFromPath(programMap, ffs, programMapDoc)) {
+                request->send(400, "text/plain", "Unable to load debug program map");
+                return;
+            }
+            String mapError;
+            if (!verifySignedPcode(text, programMapDoc, mapError)
+                || !loadProgramMapMappingsFromDoc(programMapDoc, mappingDefs, &procedureSignatures, mapError, &metadata)) {
+                request->send(400, "text/plain", mapError);
+                return;
+            }
+        }
+
         if (gPmachineDebugSessionsMutex == nullptr) {
             gPmachineDebugSessionsMutex = xSemaphoreCreateMutex();
         }
 
         String sessionId = makePmachineDebugSessionId();
-        PMachineDebugSession session;
+        if (gPmachineDebugSessionsMutex == nullptr) {
+            request->send(503, "text/plain", "Unable to allocate debug session mutex");
+            return;
+        }
+        xSemaphoreTake(gPmachineDebugSessionsMutex, portMAX_DELAY);
+        PMachineDebugSession& session = gPmachineDebugSessions[sessionId];
         session.id = sessionId;
         session.file = file;
+        session.programMap = programMap;
         session.startPc = static_cast<uint16_t>(startPcParam.toInt());
         session.instructions = std::move(instructions);
         session.createdAtMs = millis();
@@ -4509,22 +5049,13 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
             }
         }
 
-        if (gPmachineDebugSessionsMutex != nullptr) {
-            xSemaphoreTake(gPmachineDebugSessionsMutex, portMAX_DELAY);
-            gPmachineDebugSessions.emplace(session.id, PMachineDebugSession());
-            gPmachineDebugSessions[session.id] = std::move(session);
-            xSemaphoreGive(gPmachineDebugSessionsMutex);
-        }
-
-        auto it = gPmachineDebugSessions.find(sessionId);
-        if (it == gPmachineDebugSessions.end()) {
-            request->send(500, "text/plain", "Unable to create session");
-            return;
-        }
-
-        PMachineDebugSession& stored = it->second;
+        PMachineDebugSession& stored = session;
         stored.taskHandle = nullptr;
         stored.machine.setFFS(ffs);
+        stored.machine.setMappings(mappingDefs);
+        stored.machine.setProcedureSignatures(procedureSignatures);
+        applyRuntimeAndResidencyPolicy(stored.machine, nullptr, programMap.length() > 0 ? &metadata : nullptr);
+        stored.machine.setFsmCallHook(pmachineInvokeFsm, nullptr);
         stored.machine.clearAllBreakpoints();
         for (uint16_t pc : stored.breakpoints) {
             stored.machine.setBreakpoint(pc);
@@ -4549,11 +5080,8 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
             );
         }
         if (created != pdPASS) {
-            if (gPmachineDebugSessionsMutex != nullptr) {
-                xSemaphoreTake(gPmachineDebugSessionsMutex, portMAX_DELAY);
-                gPmachineDebugSessions.erase(sessionId);
-                xSemaphoreGive(gPmachineDebugSessionsMutex);
-            }
+            gPmachineDebugSessions.erase(sessionId);
+            xSemaphoreGive(gPmachineDebugSessionsMutex);
             request->send(500, "text/plain", "Unable to start debug task");
             return;
         }
@@ -4565,6 +5093,7 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         doc["callDepth"] = 0;
         String body;
         serializeJson(doc, body);
+        xSemaphoreGive(gPmachineDebugSessionsMutex);
         request->send(200, "application/json", body);
     });
 
@@ -4600,6 +5129,28 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         for (const auto& pair : session.machine.getDebugLocals()) {
             locals[pair.first.c_str()] = pair.second;
         }
+        JsonArray fsms = doc["fsms"].to<JsonArray>();
+        for (const auto& fsm : session.machine.getFsmTableSnapshot()) {
+            JsonObject item = fsms.add<JsonObject>();
+            item["handle"] = fsm.handle;
+            item["kind"] = fsm.kind.c_str();
+            item["name"] = fsm.name.c_str();
+            item["type"] = fsm.type.c_str();
+            item["pin"] = fsm.pin;
+            if (fsm.kind == "device") {
+                JsonObject device = doc["devices"].add<JsonObject>();
+                device["handle"] = fsm.handle;
+                device["name"] = fsm.name.c_str();
+                device["type"] = fsm.type.c_str();
+                device["pin"] = fsm.pin;
+            }
+        }
+        JsonArray stdoutLines = doc["stdout"].to<JsonArray>();
+        if (debugStatus == 2 || debugStatus == 3) {
+            for (const auto& line : session.machine.getLastRunTextOutput()) {
+                stdoutLines.add(line.c_str());
+            }
+        }
         JsonArray breakpoints = doc["breakpoints"].to<JsonArray>();
         for (uint16_t pc : session.breakpoints) breakpoints.add(pc);
         String body;
@@ -4626,9 +5177,14 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         }
 
         it->second.machine.controlDebugRun(-1);
-        if (it->second.taskHandle != nullptr) {
-            vTaskDelete(it->second.taskHandle);
-            it->second.taskHandle = nullptr;
+        const unsigned long stopStartedAt = millis();
+        while (!it->second.finished.load() && millis() - stopStartedAt < 5000) {
+            vTaskDelay(1);
+        }
+        if (!it->second.finished.load()) {
+            if (gPmachineDebugSessionsMutex != nullptr) xSemaphoreGive(gPmachineDebugSessionsMutex);
+            request->send(503, "text/plain", "Debug task has not stopped; retry session deletion");
+            return;
         }
         gPmachineDebugSessions.erase(it);
         if (gPmachineDebugSessionsMutex != nullptr) xSemaphoreGive(gPmachineDebugSessionsMutex);
@@ -4812,6 +5368,162 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
         serializeJson(out, body);
         request->send(200, "application/json", body);
     });
+
+    server.on("/api/services/register", HTTP_POST,
+        [ffs](AsyncWebServerRequest* request) {
+            handleNamedServiceRegistration(request, takeNamedServiceRequestBody(request), ffs);
+        }, nullptr,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            appendNamedServiceRequestBody(request, data, len, index, total);
+        });
+
+    server.on("/api/services", HTTP_GET, [](AsyncWebServerRequest* request) {
+        if (!ensureNamedServiceRegistryLoaded() || !namedServiceRegistryLock()) {
+            request->send(503, "application/json", "{\"ok\":false,\"error\":\"service registry busy\"}");
+            return;
+        }
+        JsonDocument responseDoc;
+        responseDoc["ok"] = true;
+        JsonArray services = responseDoc["services"].to<JsonArray>();
+        for (const auto& pair : gNamedServiceRegistry) {
+            const NamedServiceRegistration& registration = pair.second;
+            JsonObject item = services.add<JsonObject>();
+            item["serviceId"] = registration.serviceId;
+            item["file"] = registration.file;
+            item["programMap"] = registration.programMap;
+            item["enabled"] = registration.enabled;
+        }
+        namedServiceRegistryUnlock();
+        String body;
+        serializeJson(responseDoc, body);
+        request->send(200, "application/json", body);
+    });
+
+    server.on("^\\/api\\/services\\/([A-Za-z0-9_.-]+)$", HTTP_DELETE, [](AsyncWebServerRequest* request) {
+        const String serviceId = request->pathArg(0);
+        if (!isValidNamedServiceId(serviceId)) {
+            request->send(400, "application/json", "{\"ok\":false,\"error\":\"invalid serviceId\"}");
+            return;
+        }
+        if (!ensureNamedServiceRegistryLoaded() || !namedServiceRegistryLock()) {
+            request->send(503, "application/json", "{\"ok\":false,\"error\":\"service registry busy\"}");
+            return;
+        }
+        const String key = namedServiceRegistryKey(serviceId);
+        const size_t removed = gNamedServiceRegistry.erase(std::string(key.c_str()));
+        namedServiceRegistryUnlock();
+        if (removed == 0) {
+            request->send(404, "application/json", "{\"ok\":false,\"error\":\"service not registered\"}");
+            return;
+        }
+        if (!persistNamedServiceRegistry()) {
+            request->send(500, "application/json", "{\"ok\":false,\"error\":\"unable to persist service registry\"}");
+            return;
+        }
+        request->send(200, "application/json", "{\"ok\":true,\"unregistered\":true}");
+    });
+
+    auto dispatchNamedService = [&machine, ffs](AsyncWebServerRequest* request, const String& rawBody) {
+        const String serviceId = request->pathArg(0);
+        if (!isValidNamedServiceId(serviceId)) {
+            request->send(400, "application/json", "{\"ok\":false,\"error\":\"invalid serviceId\"}");
+            return;
+        }
+        NamedServiceRegistration registration;
+        if (!getNamedServiceRegistration(serviceId, registration)) {
+            request->send(404, "application/json", "{\"ok\":false,\"error\":\"service not registered\"}");
+            return;
+        }
+        if (!registration.enabled) {
+            request->send(503, "application/json", "{\"ok\":false,\"error\":\"service is disabled\"}");
+            return;
+        }
+        const String httpVerb = namedServiceHttpVerb(request);
+        if (httpVerb.length() == 0) {
+            request->send(405, "application/json", "{\"ok\":false,\"error\":\"HTTP method is not supported\"}");
+            return;
+        }
+
+        JsonDocument serviceRequest;
+        if (rawBody.length() > 0) {
+            const DeserializationError parseError = deserializeJson(serviceRequest, rawBody);
+            if (parseError || !serviceRequest.is<JsonObject>()) {
+                serviceRequest.clear();
+                serviceRequest["src"] = rawBody;
+            }
+        }
+        if (rawBody.length() == 0 || serviceRequest.size() == 0) {
+            for (size_t index = 0; index < request->params(); ++index) {
+                const AsyncWebParameter* parameter = request->getParam(index);
+                if (parameter != nullptr) serviceRequest[parameter->name()] = parameter->value();
+            }
+        }
+        serviceRequest["httpVerb"] = httpVerb;
+        String serviceMessage;
+        serializeJson(serviceRequest, serviceMessage);
+
+        JsonDocument responseDoc;
+        int statusCode = 200;
+        String error;
+        if (!executeNamedService(machine, ffs, registration, serviceMessage, responseDoc, statusCode, error)) {
+            JsonDocument errorDoc;
+            errorDoc["ok"] = false;
+            errorDoc["serviceId"] = registration.serviceId;
+            errorDoc["error"] = error;
+            String body;
+            serializeJson(errorDoc, body);
+            request->send(statusCode, "application/json", body);
+            return;
+        }
+        String body;
+        serializeJson(responseDoc, body);
+        request->send(statusCode, "application/json", body);
+    };
+
+    server.on("^\\/api\\/service\\/([A-Za-z0-9_.-]+)$", HTTP_ANY,
+        [dispatchNamedService](AsyncWebServerRequest* request) {
+            dispatchNamedService(request, takeNamedServiceRequestBody(request));
+        }, nullptr,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            appendNamedServiceRequestBody(request, data, len, index, total);
+        });
+
+    auto dispatchNamedDevice = [ffs](AsyncWebServerRequest* request, const String& rawBody) {
+        const String deviceId = request->pathArg(0);
+        if (!isValidNamedServiceId(deviceId)) {
+            request->send(400, "application/json", "{\"ok\":false,\"error\":\"invalid device name\"}");
+            return;
+        }
+        JsonDocument query;
+        for (size_t index = 0; index < request->params(); ++index) {
+            const AsyncWebParameter* parameter = request->getParam(index);
+            if (parameter != nullptr) query[parameter->name()] = parameter->value();
+        }
+        JsonDocument responseDoc;
+        int statusCode = 200;
+        String error;
+        if (!executeNamedDevice(deviceId, namedServiceHttpVerb(request), rawBody, query, ffs, responseDoc, statusCode, error)) {
+            JsonDocument errorDoc;
+            errorDoc["ok"] = false;
+            errorDoc["deviceName"] = deviceId;
+            errorDoc["error"] = error;
+            String body;
+            serializeJson(errorDoc, body);
+            request->send(statusCode, "application/json", body);
+            return;
+        }
+        String body;
+        serializeJson(responseDoc, body);
+        request->send(statusCode, "application/json", body);
+    };
+
+    server.on("^\\/api\\/device\\/([A-Za-z0-9_.-]+)$", HTTP_ANY,
+        [dispatchNamedDevice](AsyncWebServerRequest* request) {
+            dispatchNamedDevice(request, takeNamedServiceRequestBody(request));
+        }, nullptr,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            appendNamedServiceRequestBody(request, data, len, index, total);
+        });
 
     // Execute pcode from a file path and return run outputs.
     server.on("/pmachine/execute_file", HTTP_POST, [&machine, ffs](AsyncWebServerRequest *request){
@@ -5753,4 +6465,3 @@ void registerPMachineRoutes(AsyncWebServer& server, pmachine::PMachine& machine,
 void invalidateRouterExecutionCache() {
     invalidateRouterExecutionCacheInternal();
 }
-

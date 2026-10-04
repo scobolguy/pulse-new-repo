@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A beginner-friendly guide to wiring a DHT11 to an ESP32, serving temperature and humidity as JSON, and reading it from another node.">
+  <title>DHT11 to ESP32: A Tiny Weather Server</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172a27;
+      --muted: #536661;
+      --paper: #f5f7f2;
+      --surface: #ffffff;
+      --green: #176b50;
+      --green-light: #dcefe5;
+      --orange: #c45b32;
+      --orange-light: #f8e7dc;
+      --line: #d8e1d9;
+      --code: #172622;
+      --code-text: #eaf4ec;
+      --mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+      --sans: "Aptos", "Segoe UI", sans-serif;
+      --display: "Georgia", "Times New Roman", serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: var(--sans);
+      font-size: 16px;
+      line-height: 1.65;
+    }
+    a { color: var(--green); text-underline-offset: 3px; }
+    .masthead { border-bottom: 1px solid var(--line); background: var(--surface); }
+    .masthead-inner, main, footer {
+      width: min(100% - 40px, 920px);
+      margin-inline: auto;
+    }
+    .masthead-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 58px;
+      gap: 18px;
+    }
+    .wordmark { color: var(--green); font-size: 13px; font-weight: 800; text-transform: uppercase; }
+    nav { display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; }
+    nav a { color: var(--muted); text-decoration: none; }
+    nav a:hover { color: var(--green); text-decoration: underline; }
+    .hero {
+      position: relative;
+      overflow: hidden;
+      padding: 64px 0 54px;
+      background: var(--green-light);
+      border-bottom: 1px solid #c6dfd0;
+    }
+    .hero::after {
+      position: absolute;
+      top: -105px;
+      right: max(-42px, calc((100vw - 1040px) / 2));
+      width: 245px;
+      height: 245px;
+      border: 1px solid #a9d0ba;
+      border-radius: 50%;
+      box-shadow: 0 0 0 25px rgba(255,255,255,.18), 0 0 0 50px rgba(255,255,255,.14);
+      content: "";
+    }
+    .hero-inner { position: relative; z-index: 1; width: min(100% - 40px, 920px); margin: auto; }
+    .eyebrow { margin: 0 0 10px; color: var(--green); font-size: 12px; font-weight: 800; text-transform: uppercase; }
+    h1, h2, h3 { line-height: 1.15; }
+    h1 { max-width: 720px; margin: 0; font-family: var(--display); font-size: clamp(38px, 8vw, 64px); font-weight: 500; }
+    .hero p:last-child { max-width: 650px; margin: 18px 0 0; color: #334c43; font-size: 18px; }
+    main { padding-top: 34px; padding-bottom: 56px; }
+    .quick-answer {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 20px;
+      padding: 18px 20px;
+      background: var(--surface);
+      border-left: 4px solid var(--orange);
+    }
+    .quick-answer p { margin: 0; }
+    .endpoint { padding: 7px 10px; background: var(--code); color: var(--code-text); font: 13px var(--mono); white-space: nowrap; }
+    section { padding-top: 42px; scroll-margin-top: 18px; }
+    h2 { margin: 0 0 15px; font-family: var(--display); font-size: 32px; font-weight: 500; }
+    h3 { margin: 25px 0 8px; font-size: 18px; }
+    p { margin: 10px 0; }
+    .muted { color: var(--muted); }
+    .steps { padding-left: 24px; }
+    .steps li { padding: 0 0 9px 5px; }
+    .wiring { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 18px; }
+    .wiring-panel { min-width: 0; padding: 18px; background: var(--surface); border: 1px solid var(--line); }
+    .wiring-panel h3 { margin: 0 0 8px; }
+    .pinout, pre {
+      overflow-x: auto;
+      margin: 12px 0;
+      padding: 16px;
+      background: var(--code);
+      color: var(--code-text);
+      font: 13px/1.55 var(--mono);
+      tab-size: 2;
+    }
+    .pinout { white-space: pre; }
+    .wire-list { margin: 0; padding-left: 20px; }
+    .wire-list li { padding: 3px 0; }
+    .callout { margin: 16px 0; padding: 14px 17px; background: var(--orange-light); border-left: 4px solid var(--orange); }
+    .callout p, .good-to-know p { margin: 0; }
+    .good-to-know { margin: 16px 0; padding: 14px 17px; background: var(--green-light); border-left: 4px solid var(--green); }
+    pre code { font: inherit; }
+    .number {
+      display: inline-grid;
+      place-items: center;
+      width: 27px;
+      height: 27px;
+      margin-right: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      color: white;
+      font-size: 13px;
+      font-weight: 800;
+      vertical-align: 2px;
+    }
+    .checklist { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 24px; padding: 0; list-style: none; }
+    .checklist li::before { color: var(--green); content: "[ ] "; font-family: var(--mono); }
+    footer { padding: 20px 0 34px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+    @media (max-width: 620px) {
+      .masthead-inner, main, footer, .hero-inner { width: min(100% - 28px, 920px); }
+      .masthead-inner { align-items: flex-start; flex-direction: column; justify-content: center; padding: 12px 0; }
+      nav { gap: 7px 14px; }
+      .hero { padding: 46px 0 38px; }
+      .hero::after { right: -150px; }
+      .hero p:last-child { font-size: 16px; }
+      .quick-answer { grid-template-columns: 1fr; gap: 10px; }
+      .endpoint { width: fit-content; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+      .wiring, .checklist { grid-template-columns: 1fr; }
+      section { padding-top: 34px; }
+      h2 { font-size: 28px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="wordmark">Small sensors, useful data</div>
+      <nav aria-label="On this page">
+        <a href="#parts">Parts</a>
+        <a href="#wiring">Wiring</a>
+        <a href="#server">Server</a>
+        <a href="#client">Another node</a>
+        <a href="#troubleshooting">Fixes</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="hero">
+    <div class="hero-inner">
+      <p class="eyebrow">Beginner project / about 30 minutes</p>
+      <h1>Make a DHT11 tell the network how it feels.</h1>
+      <p>Wire a temperature-and-humidity sensor to an ESP32, give it a tiny web server, then ask it for readings from a second node.</p>
+    </div>
+  </div>
+
+  <main>
+    <div class="quick-answer">
+      <p><strong>What you will build:</strong> one ESP32 reads the DHT11; another device asks for a JSON reading over your local Wi-Fi.</p>
+      <div class="endpoint">GET /api/climate</div>
+    </div>
+
+    <section id="parts">
+      <h2><span class="number">1</span>Gather the parts</h2>
+      <ul class="checklist">
+        <li>ESP32 development board</li>
+        <li>DHT11 temperature/humidity sensor</li>
+        <li>Jumper wires and USB cable</li>
+        <li>4.7k-10k resistor for a bare sensor</li>
+        <li>USB cable for the ESP32</li>
+        <li>PlatformIO installed for this project</li>
+      </ul>
+      <div class="good-to-know"><p><strong>What changes in the firmware?</strong> The DHT11 driver and HTTP endpoint live in <code>src/devices/dht11/</code>. PlatformIO builds that folder into the existing ESP32 firmware; <code>main.cpp</code> registers the route when the feature flag is enabled. You do not upload a separate Arduino sketch.</p></div>
+      <p>The ESP32 environment already declares the Adafruit DHT library and its Unified Sensor dependency. Wi-Fi remains managed by the existing firmware; do not put Wi-Fi passwords into compiler flags.</p>
+    </section>
+
+    <section id="wiring">
+      <h2><span class="number">2</span>Connect the sensor</h2>
+      <p>Turn the sensor so its front grille faces you. A bare, four-pin DHT11 is usually arranged like this. Some packaged modules have only three pins; follow the labels printed on the module.</p>
+      <div class="wiring">
+        <div class="wiring-panel">
+          <h3>Bare 4-pin DHT11</h3>
+          <div class="pinout" role="img" aria-label="DHT11 pin order, grille facing you: VCC, DATA, not connected, GND">Front grille toward you
+
+  +----------------+
+  |     DHT11      |
+  +----------------+
+    |   |   |   |
+   1   2   3   4
+  VCC DATA NC  GND</div>
+          <ol class="wire-list">
+            <li>DHT11 pin 1, VCC, to ESP32 <strong>3V3</strong>.</li>
+            <li>DHT11 pin 2, DATA, to ESP32 <strong>GPIO 4</strong>.</li>
+            <li>DHT11 pin 3, NC, leave it unconnected.</li>
+            <li>DHT11 pin 4, GND, to ESP32 <strong>GND</strong>.</li>
+          </ol>
+          <p>Add a 4.7k-10k resistor between VCC and DATA.</p>
+        </div>
+        <div class="wiring-panel">
+          <h3>3-pin sensor module</h3>
+          <p>Many modules already include the pull-up resistor. Use the printed pin labels; the physical order varies.</p>
+          <ol class="wire-list">
+            <li><strong>VCC</strong> to ESP32 3V3.</li>
+            <li><strong>OUT</strong> or <strong>S</strong> to GPIO 4.</li>
+            <li><strong>GND</strong> to ESP32 GND.</li>
+          </ol>
+          <div class="callout"><p><strong>Power note:</strong> use 3.3V with an ESP32. Do not let a 5V pull-up drive the ESP32 data pin. If using an Uno instead, check the exact sensor/module datasheet before powering it at 5V.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="server">
+      <h2><span class="number">3</span>Turn the ESP32 into a server</h2>
+      <p>This is the <strong>server node</strong>: the existing firmware runs as usual, with the DHT11 feature enabled in the active PlatformIO environment. For this repo, that environment is <code>esp32dev</code> in <code>platformio.ini</code>.</p>
+      <p>These settings enable the feature, select GPIO 4, set the URL path, and explicitly include the device module in the firmware build:</p>
+      <pre><code>[env:esp32dev]
+; Keep the existing board, framework, library dependencies, and flags.
+build_flags =
+  ${env.build_flags}
+  -std=gnu++17
+  -DENABLE_PMACHINE
+  -DPLATFORM_ESP
+  -DENABLE_HTTPS
+  -DENABLE_DHT11_HTTP_SERVER
+  -DDHT11_DATA_PIN=4
+  -DDHT11_HTTP_PATH=\\"/api/climate\\"
+
+build_src_filter = +&lt;*&gt; +&lt;devices/dht11/&gt; ...</code></pre>
+      <p>Do not replace the environment's existing <code>build_flags</code> or <code>build_src_filter</code>. Add the three DHT flags and the <code>+&lt;devices/dht11/&gt;</code> inclusion to the existing entries. The DHT library is already listed under this environment's <code>lib_deps</code>.</p>
+      <p>The implementation is intentionally small:</p>
+      <pre><code>src/devices/dht11/
+  Dht11HttpServer.h
+  Dht11HttpServer.cpp</code></pre>
+      <p><code>DHT11_DATA_PIN</code> and <code>DHT11_HTTP_PATH</code> are compile-time settings from PlatformIO. The module reads the sensor and returns JSON. The firmware's existing Wi-Fi setup provides network access; its HTTP server registers the module's route during startup.</p>
+      <ol class="steps">
+        <li>Wire DHT11 DATA to GPIO 4, then connect the ESP32 to USB.</li>
+        <li>Build the existing firmware with <code>platformio run -e esp32dev</code>.</li>
+        <li>Upload it with <code>platformio run -e esp32dev -t upload</code>.</li>
+        <li>Find the ESP32 IP from its normal startup/status output or your router's device list.</li>
+        <li>From a device on the same network, request <code>http://&lt;ESP32-IP&gt;/api/climate</code>.</li>
+      </ol>
+      <p>A successful response looks like this:</p>
+      <pre><code>{"valid":true,"temperatureC":23.0,"humidityPercent":48.0}</code></pre>
+      <p>The sensor node is now serving readings. The JSON names are <code>temperatureC</code> and <code>humidityPercent</code>.</p>
+      <div class="callout"><p>If the sensor cannot be read, the route returns HTTP 503 and <code>{"valid":false,"error":"sensor_read_failed"}</code>.</p></div>
+    </section>
+
+    <section id="client">
+      <h2><span class="number">4</span>Ask from another ESP32 node</h2>
+      <p>The client does not need the DHT11 driver. It only needs to call the server's HTTP endpoint. Replace the IP with the address of the sensor ESP32:</p>
+      <pre><code>curl http://192.168.1.50/api/climate</code></pre>
+      <p>A JavaScript node can make the same request and use the returned values:</p>
+      <pre><code>const response = await fetch("http://192.168.1.50/api/climate");
+if (!response.ok) throw new Error(`Sensor server returned ${response.status}`);
+
+const reading = await response.json();
+console.log(reading.temperatureC, reading.humidityPercent);</code></pre>
+      <p>A second ESP32 node can make the same GET with its HTTP client. Both boards must be on a network that allows devices to contact one another. The client can poll every few seconds; avoid requesting DHT11 readings faster than once every two seconds.</p>
+    </section>
+
+    <section id="troubleshooting">
+      <h2><span class="number">5</span>If it does not work</h2>
+      <h3>The server returns a sensor error</h3>
+      <p>Check VCC, GND, and DATA wiring. Confirm the data wire goes to GPIO 4 and the code says <code>DHT11</code>, not <code>DHT22</code>. Add the pull-up resistor if you have a bare four-pin sensor.</p>
+      <h3>The browser or client cannot reach the server</h3>
+      <p>Use the current server IP, put both nodes on the same network, and keep the full path <code>/api/climate</code> in the URL. The address is local to your network; this route does not expose the sensor to the public internet.</p>
+      <h3>Readings fail when requested quickly</h3>
+      <p>DHT11 is a slow sensor. Wait at least two seconds between readings. The client example waits five seconds.</p>
+    </section>
+
+    <section>
+      <h2>What is compiled</h2>
+      <p>The DHT11 HTTP module is part of the project's ESP32 firmware build, alongside PMachine. It adds an HTTP sensor endpoint; it does not add a new PMachine opcode or change PMachine programs. Enable it only in the PlatformIO environments that have the DHT11 physically connected.</p>
+    </section>
+  </main>
+
+  <footer>
+    <p>DHT11 + ESP32 project firmware example. Keep device configuration specific to the PlatformIO environment and avoid putting network secrets in build flags.</p>
+  </footer>
+</body>
+</html>

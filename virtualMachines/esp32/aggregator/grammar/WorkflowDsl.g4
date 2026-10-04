@@ -52,6 +52,7 @@ deploymentDecl
 
 deploymentItem
   : (SERVICE | PROGRAM | DAEMON) quotedString FILE quotedString QUEUE quotedString ARROW quotedString TARGETS quotedList STARTUP booleanLiteral serviceLifecycleClause? SEMICOLON
+  | REMOVE SERVICE quotedString FROM TARGETS quotedList SEMICOLON
   ;
 
 serviceLifecycleClause
@@ -279,6 +280,7 @@ INPUT: 'INPUT';
 OUTPUT: 'OUTPUT';
 CONNECT: 'CONNECT';
 FROM: 'FROM';
+REMOVE: 'REMOVE';
 LOCATION: 'LOCATION';
 PROJECTPLAN: 'PROJECTPLAN';
 MILESTONE: 'MILESTONE';

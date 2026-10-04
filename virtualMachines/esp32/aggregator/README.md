@@ -59,6 +59,28 @@ Main capabilities:
 
 The Aggregator backend is the source of truth for runtime clustering and topology behavior.
 
+### PMachine deployment discovery
+
+VS Code's Run on PMachine command reads `/api/pmachine/nodes`. Recent UDP
+announcements populate the live topology; `/status` and `/services/describe`
+are fetched independently with timeouts to discover PMachine capabilities.
+A stalled description request does not prevent a successful status response
+from making a node deployable.
+Target lookup also retries capability discovery for recent non-loopback nodes
+whose service list is missing or empty, with a three-second timeout per request.
+This allows an initial discovery timeout to recover without rebooting the board.
+
+Run only one backend instance that owns UDP port 4210. In particular, do not
+run both the legacy `PulseGateway` Windows service and `PulseAggregator`.
+A discovery bind conflict now fails startup rather than leaving an HTTP
+backend running with an empty discovery registry. The standalone discovery
+service also requires exclusive ownership of that port.
+
+For explicitly configured targets without UDP discovery, set
+`SERVICE_EDGE_BASE_URLS` to a comma-separated list of HTTP(S) device origins.
+These targets must respond to `/status` with a `pmachine` service; there is
+no hard-coded device-IP fallback.
+
 - Topology runtime implementation:
   - `src/backend/roles/topologyRuntimeRoutes.mjs`
 - Cluster state files:

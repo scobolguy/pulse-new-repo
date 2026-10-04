@@ -2,6 +2,7 @@ import dgram from 'dgram';
 import express from 'express';
 import cors from 'cors';
 import os from 'os';
+import { bindNodeDiscoverySocket, enrichDiscoveredNode } from './src/backend/modules/nodeDiscovery.mjs';
 import {
   normalizeDiscoveryNode,
   mergeDiscoveryNodes,
@@ -259,30 +260,7 @@ function scheduleNodeEnrichment(ip) {
   const last = nodeEnrichmentLastAttempt.get(key) || 0;
   if (now - last < 5000) return;
   nodeEnrichmentLastAttempt.set(key, now);
-  enrichNodeDetails(key).catch(() => {});
-}
-
-async function enrichNodeDetails(ip) {
-  try {
-    const servicesRes = await fetch(`http://${ip}:80/services/describe`, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
-    const statusRes = await fetch(`http://${ip}:80/status`, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
-    let serviceDetails = {};
-    let statusDetails = {};
-    if (statusRes.ok) {
-      statusDetails = await statusRes.json();
-    }
-    if (servicesRes.ok) {
-      serviceDetails = await servicesRes.json();
-    }
-    const details = { ...statusDetails, ...serviceDetails };
-    const node = discoveredNodes.get(ip);
-    if (node) {
-      node.details = details;
-      discoveredNodes.set(ip, node);
-    }
-  } catch {
-    // Ignore unreachable nodes.
-  }
+  void enrichDiscoveredNode({ ip: key, discoveredNodes, timeoutMs: PROBE_TIMEOUT_MS });
 }
 
 async function probeConfiguredService(entry) {
@@ -455,14 +433,13 @@ udpServer.on('message', (msg, rinfo) => {
   scheduleNodeEnrichment(ip);
 });
 
-udpServer.bind(UDP_PORT, () => {
-  try {
-    udpServer.setBroadcast(true);
-  } catch (error) {
-    console.warn(`[DISCOVERY] Could not enable broadcast mode: ${error.message}`);
-  }
+try {
+  await bindNodeDiscoverySocket(udpServer, UDP_PORT);
   console.log(`[DISCOVERY] Listening for node broadcasts on UDP ${UDP_PORT}`);
-});
+} catch (error) {
+  console.error(`[DISCOVERY] Startup failed on UDP ${UDP_PORT}: ${error.message}. Only one discovery listener may own this port.`);
+  process.exit(1);
+}
 
 if (PROBE_ENABLED && SEED_NODES.length > 0) {
   runEsp32DiscoveryProbe().catch(() => {});

@@ -7,7 +7,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Deque;
-import java.util.concurrent.CompletableFuture;
 
 public class PmachineRunner {
     private static final class Instruction {
@@ -25,19 +24,12 @@ public class PmachineRunner {
     private static final class Machine {
         final List<Instruction> program = new ArrayList<>();
         final Map<String, Integer> labels = new HashMap<>();
-        final Map<String, Object> vars = new HashMap<>();
-        final Deque<Object> stack = new ArrayDeque<>();
+        final Map<String, Integer> vars = new HashMap<>();
+        final Deque<Integer> stack = new ArrayDeque<>();
         final Deque<Integer> callStack = new ArrayDeque<>();
         final List<String> emittedQueues = new ArrayList<>();
-        final List<CompletableFuture<QueueBridge.Receipt>> pendingWrites = new ArrayList<>();
-        final QueueBridge queueBridge;
-        String currentMessage = "";
         int ip = 0;
         int steps = 0;
-
-        Machine(QueueBridge queueBridge) {
-            this.queueBridge = queueBridge;
-        }
 
         void run() {
             while (ip >= 0 && ip < program.size()) {
@@ -54,7 +46,7 @@ public class PmachineRunner {
                     ip += 1;
                     break;
                 case "PUSH_STR":
-                    stack.push(unquote(instr.operand));
+                    stack.push(0);
                     ip += 1;
                     break;
                 case "LOAD":
@@ -122,23 +114,11 @@ public class PmachineRunner {
                     ip = program.size();
                     break;
                 case "ROUTE_SET_MESSAGE":
-                    currentMessage = String.valueOf(popValue());
+                    stack.pop();
                     ip += 1;
                     break;
                 case "ROUTE_EMIT":
                     emittedQueues.add(instr.operand.replaceAll("^\"|\"$", ""));
-                    ip += 1;
-                    break;
-                case "QUEUE_WRITE_SYNC":
-                case "QUEUE_WRITE_ASYNC":
-                    String queue = unquote(instr.operand);
-                    QueueBridge.DeliveryMode mode = instr.op.equals("QUEUE_WRITE_SYNC")
-                        ? QueueBridge.DeliveryMode.SYNC
-                        : QueueBridge.DeliveryMode.ASYNC;
-                    CompletableFuture<QueueBridge.Receipt> write = queueBridge.write(queue, currentMessage, mode).toCompletableFuture();
-                    if (mode == QueueBridge.DeliveryMode.SYNC) write.join();
-                    else pendingWrites.add(write);
-                    emittedQueues.add(queue + ":" + mode.name().toLowerCase());
                     ip += 1;
                     break;
                 default:
@@ -155,17 +135,7 @@ public class PmachineRunner {
         }
 
         private int popStack() {
-            Object value = popValue();
-            return value instanceof Number ? ((Number) value).intValue() : 0;
-        }
-
-        private Object popValue() {
             return stack.isEmpty() ? 0 : stack.pop();
-        }
-
-        private String unquote(String value) {
-            if (value == null) return "";
-            return value.replaceAll("^[\"']|[\"']$", "");
         }
 
         @FunctionalInterface
@@ -182,12 +152,7 @@ public class PmachineRunner {
 
         Path pcodePath = Path.of(args[0]).toAbsolutePath();
         List<String> lines = Files.readAllLines(pcodePath);
-        List<String> queueWrites = new ArrayList<>();
-        QueueBridge bridge = (queue, payload, mode) -> {
-            queueWrites.add(queue + ":" + mode.name().toLowerCase() + ":" + payload);
-            return CompletableFuture.completedFuture(new QueueBridge.Receipt("java-local-" + queueWrites.size(), true));
-        };
-        Machine machine = new Machine(bridge);
+        Machine machine = new Machine();
 
         for (String rawLine : lines) {
             String line = rawLine.split("//", 2)[0].trim();
@@ -222,12 +187,10 @@ public class PmachineRunner {
         }
 
         machine.run();
-        CompletableFuture.allOf(machine.pendingWrites.toArray(new CompletableFuture[0])).join();
         System.out.println("steps=" + machine.steps);
         System.out.println("sum=" + machine.vars.getOrDefault("sum", 0));
         System.out.println("bonus=" + machine.vars.getOrDefault("bonus", 0));
         System.out.println("active=" + machine.vars.getOrDefault("active", 0));
         System.out.println("emittedQueues=" + machine.emittedQueues);
-        System.out.println("queueWrites=" + queueWrites);
     }
 }
