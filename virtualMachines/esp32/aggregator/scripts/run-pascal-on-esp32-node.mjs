@@ -114,8 +114,11 @@ function normalizeNodeName(v) {
 }
 
 async function resolveHost(requestedNode) {
+  if (/^(?:\d{1,3}(?:\.\d{1,3}){3}|localhost)(?::\d{1,5})?$/i.test(String(requestedNode || '').trim())) {
+    return String(requestedNode).trim();
+  }
   try {
-    const res = await fetch(NODE_REGISTRY_URL);
+    const res = await fetch(NODE_REGISTRY_URL, { signal: AbortSignal.timeout(3000) });
     if (!res.ok) return requestedNode;
     const nodes = await res.json();
     const entries = Array.isArray(nodes) ? nodes : [];
@@ -128,7 +131,7 @@ async function resolveHost(requestedNode) {
       for (const entry of entries) {
         const nodeName = normalizeNodeName(entry?.nodeName || entry?.details?.nodeName || '');
         const host = String(entry?.ip || '').trim();
-        if (!host || host === '127.0.0.1') continue;
+        if (!host || host === '127.0.0.1' || !nodeName) continue;
         if (pass === 'exact' && nodeName === wanted) return host;
         if (pass === 'tail' && nodeName === wantedTail) return host;
         if (pass === 'substr' && (nodeName.includes(wanted) || wanted.includes(nodeName))) return host;

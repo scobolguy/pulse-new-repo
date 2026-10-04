@@ -1,6 +1,16 @@
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as vscode from 'vscode';
+import { HanoiPanel, looksLikeHanoi } from './hanoiPanel.js';
+const DEFAULT_NODE_HOSTS = ['127.0.0.1:4111', '127.0.0.1:4112', '127.0.0.1:4113', '192.168.2.155'];
+function isRemoteRuntime(runtime) {
+    return runtime === 'esp32' || runtime === 'js-node';
+}
+function defaultTargetHost(runtime) {
+    return runtime === 'js-node' ? '127.0.0.1:4111' : '192.168.2.155';
+}
 function languageForFile(filePath) {
     switch (path.extname(filePath).toLowerCase()) {
         case '.cob':
@@ -64,6 +74,7 @@ class PulsePmachineAdapter {
     root;
     emittedOutputCount = 0;
     animate = false;
+    launchDone = Promise.resolve();
     animationDelayMs = 500;
     remoteEsp32 = false;
     remoteBaseUrl = '';
@@ -72,6 +83,7 @@ class PulsePmachineAdapter {
     debugApiHost = '';
     remoteSourceMap = {};
     remoteBreakpoints = [];
+    bridge = null;
     entryLine = 0;
     reachedEntry = false;
     terminated = false;
@@ -122,6 +134,23 @@ class PulsePmachineAdapter {
         if (event === 'terminated')
             this.terminated = true;
         this.send({ type: 'event', seq: 0, event, body });
+        if (event === 'stopped' || event === 'terminated')
+            this.sendPulseState(event === 'terminated' ? 'terminated' : 'paused');
+    }
+    // Custom events feed the Hanoi animation webview owned by the extension host.
+    sendPulseState(status) {
+        const location = this.state?.sourceLocation;
+        this.send({ type: 'event', seq: 0, event: 'pulseState', body: {
+                status,
+                line: Number(location?.sourceLine || 0),
+                sourceText: String(location?.sourceText || '').trim(),
+                globals: this.state?.globals || {},
+                locals: this.state?.locals || {},
+                callDepth: Number(this.state?.callDepth ?? this.state?.callStack?.length ?? 0),
+            } });
+    }
+    wantsRemoteDebugSession() {
+        return this.configuration.debugSession === true || this.configuration.animate === true;
     }
     async handleRequest(request) {
         switch (request.command) {
@@ -136,15 +165,18 @@ class PulsePmachineAdapter {
                 this.event('initialized');
                 return;
             case 'launch':
-                await this.launch(request.arguments || {});
+                this.launchDone = this.launch(request.arguments || {});
+                await this.launchDone;
                 this.respond(request);
                 return;
             case 'setBreakpoints':
                 await this.setBreakpoints(request, request.arguments || {});
                 return;
             case 'configurationDone':
+                // VS Code may send configurationDone before the launch request has finished compiling.
+                await this.launchDone;
                 this.respond(request);
-                if (this.remoteEsp32 && this.configuration.debugSession !== true) {
+                if (this.remoteEsp32 && !this.wantsRemoteDebugSession()) {
                     await this.runEsp32Source();
                     return;
                 }
@@ -153,7 +185,9 @@ class PulsePmachineAdapter {
                     void this.animateSource();
                 return;
             case 'threads':
-                this.respond(request, true, { threads: [{ id: this.threadId, name: this.remoteEsp32 ? 'ESP32 PMachine' : 'JS PMachine' }] });
+                this.respond(request, true, { threads: [{ id: this.threadId, name: this.remoteEsp32
+                                ? `${this.configuration.runtime === 'js-node' ? 'JS PMachine node' : 'ESP32 PMachine'} ${this.debugApiHost || this.configuration.targetHost || ''}`.trim()
+                                : 'JS PMachine' }] });
                 return;
             case 'stackTrace':
                 this.respond(request, true, { stackFrames: [this.stackFrame()] });
@@ -245,9 +279,15 @@ class PulsePmachineAdapter {
         this.runtime = { program, language, artifact };
         this.animate = configuration.animate === true;
         this.animationDelayMs = Math.max(50, Number(configuration.animationDelayMs) || 1000);
-        this.remoteEsp32 = configuration.runtime === 'esp32';
+        this.remoteEsp32 = isRemoteRuntime(configuration.runtime);
         this.entryLine = Number(configuration.breakpointLine) || findProgramEntryLine(source);
         this.event('output', { category: 'console', output: `Program entry at source line ${this.entryLine}.\n` });
+        this.send({ type: 'event', seq: 0, event: 'pulseLaunch', body: {
+                program,
+                isHanoi: looksLikeHanoi(source, program),
+                target: this.remoteEsp32 ? String(configuration.targetHost || defaultTargetHost(configuration.runtime)) : 'local JS PMachine',
+                showAnimation: configuration.showAnimation === true,
+            } });
         if (this.remoteEsp32) {
             this.remoteSourceMap = artifact.programMap?.sourceMap || {};
             this.event('process', { name: 'ESP32 PMachine', systemProcessId: process.pid, isLocalProcess: false, startMethod: 'launch' });
@@ -264,7 +304,7 @@ class PulsePmachineAdapter {
     }
     async startEsp32DebugSession() {
         const configuration = this.configuration;
-        const targetHost = String(configuration.targetHost || '192.168.2.155');
+        const targetHost = String(configuration.targetHost || defaultTargetHost(configuration.runtime));
         const fileserverUrl = String(configuration.fileserverUrl || 'http://192.168.2.11:4015').replace(/\/$/, '');
         const tag = `vscode-${Date.now().toString(36)}`;
         const pcodePath = `/vscode-${tag}.pcode`;
@@ -272,6 +312,10 @@ class PulsePmachineAdapter {
         this.debugApiHost = targetHost;
         if (this.debugApiUrl) {
             await this.startEsp32DebugSessionViaApi(targetHost, pcodePath);
+            return;
+        }
+        if (configuration.uploadMode !== 'shared') {
+            await this.startEsp32DebugSessionViaBridge(targetHost);
             return;
         }
         try {
@@ -342,7 +386,7 @@ class PulsePmachineAdapter {
     }
     async runEsp32Source() {
         const configuration = this.configuration;
-        const targetHost = String(configuration.targetHost || '192.168.2.155');
+        const targetHost = String(configuration.targetHost || defaultTargetHost(configuration.runtime));
         const fileserverUrl = String(configuration.fileserverUrl || 'http://192.168.2.11:4015').replace(/\/$/, '');
         const tag = `vscode-${Date.now().toString(36)}`;
         const pcodePath = `/vscode-${tag}.pcode`;
@@ -454,7 +498,57 @@ class PulsePmachineAdapter {
             this.event('terminated');
         }
     }
+    // Drives the device through the shared debug bridge in-process. The bridge
+    // supplies source-line stepping plus a shadow trace for stdout/call stack on
+    // firmware that does not report them, and works for ESP32 and JS nodes alike.
+    async startEsp32DebugSessionViaBridge(targetHost) {
+        try {
+            this.bridge = await import(pathToFileURL(path.join(this.root, 'aggregator', 'src', 'backend', 'modules', 'esp32PmachineDebugBridge.mjs')).href);
+            const pcode = this.runtime.artifact.pcodeText;
+            const breakpoints = this.remoteBreakpointAddresses();
+            const session = await this.bridge.startEsp32DebugSession({
+                host: targetHost,
+                pcode,
+                programMap: this.runtime.artifact.programMap,
+                startPc: pcodeLabelAddress(pcode, String(this.runtime.artifact.programMap?.entryLabel || 'MAIN')),
+                breakpoints,
+            });
+            this.remoteSessionId = String(session.sessionId || '');
+            if (!this.remoteSessionId)
+                throw new Error('pmachine returned no sessionId');
+            this.sessionId = this.remoteSessionId;
+            this.remoteBreakpoints = breakpoints;
+            this.event('output', { category: 'console', output: `Debug session ${this.remoteSessionId} on ${targetHost}.\n` });
+            this.state = await this.readEsp32State();
+            if (this.state.status === 'paused' && !this.state.sourceLocation?.sourceLine) {
+                await this.bridge.controlEsp32DebugSession({ host: targetHost, sessionId: this.remoteSessionId, action: 'line-step-in' });
+            }
+            await this.waitForEsp32Stop('entry');
+        }
+        catch (error) {
+            const details = error instanceof Error ? error.message : String(error);
+            this.event('output', { category: 'stderr', output: `PMachine on ${targetHost} failed: ${details}\n` });
+            this.event('terminated');
+        }
+    }
+    async bridgeRequest(endpoint, init) {
+        const method = String(init.method || 'GET').toUpperCase();
+        const url = new URL(endpoint, 'http://pmachine');
+        const target = { host: this.debugApiHost, sessionId: this.remoteSessionId };
+        if (method === 'DELETE')
+            return this.bridge.stopEsp32DebugSession(target);
+        const breakpointAction = url.pathname.match(/\/breakpoint\/(set|clear)$/)?.[1];
+        if (breakpointAction) {
+            return this.bridge.controlEsp32DebugSession({ ...target, action: `breakpoint-${breakpointAction}`, pc: Number(url.searchParams.get('pc')) });
+        }
+        const action = url.pathname.match(/\/pmachine\/debug\/session\/([a-z-]+)$/i)?.[1];
+        if (action)
+            return this.bridge.controlEsp32DebugSession({ ...target, action });
+        return this.bridge.readEsp32DebugSession(target);
+    }
     async remoteRequest(endpoint, init = {}) {
+        if (this.bridge)
+            return this.bridgeRequest(endpoint, init);
         if (this.debugApiUrl)
             return this.debugApiRequest(endpoint, init);
         const response = await fetch(`${this.remoteBaseUrl}${endpoint}`, { ...init, signal: AbortSignal.timeout(15000) });
@@ -570,6 +664,18 @@ class PulsePmachineAdapter {
         throw new Error('Timed out waiting for the ESP32 PMachine step.');
     }
     async stepEsp32(mode) {
+        if (this.bridge) {
+            await this.bridge.controlEsp32DebugSession({ host: this.debugApiHost, sessionId: this.remoteSessionId, action: `line-${mode}` });
+            this.state = await this.readEsp32State();
+            this.forwardOutput();
+            if (this.state.status === 'stopped') {
+                this.event('terminated');
+                return;
+            }
+            const reason = this.remoteBreakpoints.includes(Number(this.state.pc)) ? 'breakpoint' : 'step';
+            this.event('stopped', { reason, threadId: this.threadId });
+            return;
+        }
         const origin = this.sourceKey(this.state?.sourceLocation);
         const depth = Number(this.state?.callDepth || 0);
         if (mode === 'step-out' && depth > 0) {
@@ -795,6 +901,7 @@ class PulsePmachineAdapter {
     }
     emitProgramOutput(line) {
         this.event('output', { category: 'console', output: `${String(line)}\n` });
+        this.send({ type: 'event', seq: 0, event: 'pulseOutput', body: { line: String(line) } });
     }
     evaluate(request) {
         const name = String(request.arguments?.expression || '').trim();
@@ -814,6 +921,22 @@ class PulseDebugFactory {
     createDebugAdapterDescriptor(session) {
         return new vscode.DebugAdapterInlineImplementation(new PulsePmachineAdapter(session.configuration));
     }
+}
+function directNodeTargets() {
+    const configured = vscode.workspace.getConfiguration('pulse-pmachine').get('nodeHosts', DEFAULT_NODE_HOSTS);
+    return (Array.isArray(configured) ? configured : DEFAULT_NODE_HOSTS)
+        .map((host) => String(host || '').trim())
+        .filter(Boolean)
+        .map((host) => {
+        const javascript = /:\d+$/.test(host);
+        return {
+            key: `direct:${host}`,
+            label: `${javascript ? 'JS PMachine node' : 'ESP32 PMachine'} ${host}`,
+            description: 'direct HTTP',
+            runtime: javascript ? 'js' : 'esp32',
+            host,
+        };
+    });
 }
 function pcodeLanguage(document) {
     const languageId = document.languageId.toLowerCase();
@@ -878,10 +1001,10 @@ function backendUrl() {
         .trim()
         .replace(/\/$/, '');
 }
-async function loadPmachineTargets() {
+export async function loadPmachineTargets() {
     const targets = [{
             key: 'js',
-            label: 'JavaScript PMachine',
+            label: 'Local JavaScript PMachine',
             description: 'Local runtime',
             runtime: 'js',
         }];
@@ -892,6 +1015,13 @@ async function loadPmachineTargets() {
     const nodes = Array.isArray(payload) ? payload : Array.isArray(payload?.nodes) ? payload.nodes : [];
     for (const node of nodes) {
         const address = String(node?.ip || node?.address || '').trim();
+        const runtime = String(node?.details?.runtime || node?.runtime || '').trim().toLowerCase();
+        const hardware = String(node?.details?.hardware || node?.hardware || '').trim().toLowerCase();
+        const serviceName = String(node?.serviceName || '').trim().toLowerCase();
+        const nodeId = String(node?.nodeName || node?.nodeId || node?.id || address).trim();
+        const isJavaScript = runtime === 'js' || runtime.includes('js-pmachine') || runtime.includes('javascript')
+            || hardware.includes('javascript') || serviceName === 'js-pmachine'
+            || nodeId.toLowerCase().includes('js-pmachine');
         const services = node?.details?.services || node?.services || [];
         const hasPmachine = Array.isArray(services) && services.some((service) => {
             const name = typeof service === 'string' ? service : service?.name || service?.serviceName;
@@ -899,18 +1029,45 @@ async function loadPmachineTargets() {
         });
         if (!address || !hasPmachine)
             continue;
-        const nodeId = String(node?.nodeName || node?.nodeId || node?.id || address).trim();
+        const port = Number(node?.port);
         targets.push({
-            key: `esp32:${nodeId}`,
+            key: `${isJavaScript ? 'js' : 'esp32'}:${nodeId}`,
             label: String(node?.nodeName || node?.name || nodeId),
-            description: `${address} · ESP32 PMachine`,
-            runtime: 'esp32',
+            description: `${address} · ${isJavaScript ? 'JavaScript' : 'ESP32'} PMachine`,
+            runtime: isJavaScript ? 'js' : 'esp32',
             nodeId,
+            host: isJavaScript && port > 0 && !address.includes(':') ? `${address}:${port}` : address,
         });
     }
     return targets;
 }
-async function runCurrentFile(context, output, uri) {
+async function runOnLocalJsPmachine(document, pcodeText, programMap) {
+    const root = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath
+        || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+    const runtime = await import(pathToFileURL(path.join(root, 'pmachines', 'javascript', 'src', 'runtime.mjs')).href);
+    const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'pulse-vscode-run-'));
+    try {
+        const pcodePath = path.join(tempDirectory, 'program.pcode');
+        const mapPath = path.join(tempDirectory, 'program.map.json');
+        await fs.writeFile(pcodePath, pcodeText, 'utf8');
+        await fs.writeFile(mapPath, JSON.stringify(programMap || {}), 'utf8');
+        return await runtime.runSingleMessageForEvolution({
+            pcode: pcodePath,
+            programMap: mapPath,
+            inputQueue: 'vscode.pmachine',
+            message: '',
+            messageFile: null,
+            serviceId: '',
+            organismId: '',
+            generation: '0',
+            fitnessOut: '',
+        });
+    }
+    finally {
+        await fs.rm(tempDirectory, { recursive: true, force: true });
+    }
+}
+async function runCurrentFile(context, output, uri, hanoiPanel) {
     const activeEditor = vscode.window.activeTextEditor;
     const document = uri
         ? await vscode.workspace.openTextDocument(uri)
@@ -931,9 +1088,11 @@ async function runCurrentFile(context, output, uri) {
     }
     catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        output.appendLine(`Could not load ESP32 targets: ${detail}`);
-        targets = [{ key: 'js', label: 'JavaScript PMachine', description: 'Local runtime', runtime: 'js' }];
+        output.appendLine(`Could not load PMachine targets: ${detail}`);
+        targets = [{ key: 'js', label: 'Local JavaScript PMachine', description: 'Local runtime', runtime: 'js' }];
     }
+    const discoveredHosts = new Set(targets.map((item) => String(item.description || '').split(' ')[0]));
+    targets.push(...directNodeTargets().filter((item) => !discoveredHosts.has(String(item.host))));
     const lastTarget = context.globalState.get('lastPmachineRunTarget');
     const target = await vscode.window.showQuickPick(targets.map((item) => ({ ...item, picked: item.key === lastTarget })), { placeHolder: 'Choose a PMachine to run this program on', matchOnDescription: true });
     if (!target)
@@ -947,25 +1106,50 @@ async function runCurrentFile(context, output, uri) {
             title: `Running ${path.basename(document.fileName)} on ${target.label}`,
             cancellable: false,
         }, async () => {
-            const response = await fetch(`${backendUrl()}/api/pmachine/deploy-and-run`, {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({
+            const programMap = target.runtime === 'esp32' || target.host
+                ? Object.fromEntries(Object.entries(artifact.programMap).filter(([key]) => key !== 'sourceMap'))
+                : artifact.programMap;
+            let result;
+            if (target.host) {
+                const root = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath
+                    || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+                const runner = await import(pathToFileURL(path.join(root, 'aggregator', 'scripts', 'run-pascal-on-esp32-node.mjs')).href);
+                const payload = await runner.runPcodeOnEsp32({
                     pcodeText: artifact.pcodeText,
-                    programMap: artifact.programMap,
-                    sourceFileName: path.basename(document.fileName),
-                    sourceLanguage: pcodeLanguage(document),
-                    runtime: target.runtime,
-                    ...(target.nodeId ? { targetNodeId: target.nodeId } : {}),
+                    programMap,
+                    node: target.host,
                     inputQueue: 'vscode.pmachine',
                     message: '',
-                }),
-                signal: AbortSignal.timeout(120000),
-            });
-            const payload = await response.json().catch(() => ({}));
-            if (!response.ok)
-                throw new Error(payload?.error || `PMachine run failed (${response.status})`);
-            const result = payload?.result?.result || payload?.result || payload;
+                    sourceFileName: path.basename(document.fileName),
+                });
+                result = payload?.result || payload;
+            }
+            else if (target.key === 'js') {
+                result = await runOnLocalJsPmachine(document, artifact.pcodeText, programMap);
+            }
+            else {
+                const response = await fetch(`${backendUrl()}/api/pmachine/deploy-and-run`, {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({
+                        pcodeText: artifact.pcodeText,
+                        programMap,
+                        sourceFileName: path.basename(document.fileName),
+                        sourceLanguage: pcodeLanguage(document),
+                        runtime: target.runtime,
+                        ...(target.nodeId ? { targetNodeId: target.nodeId } : {}),
+                        inputQueue: 'vscode.pmachine',
+                        message: '',
+                    }),
+                    signal: AbortSignal.timeout(120000),
+                });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok)
+                    throw new Error(payload?.error || `PMachine run failed (${response.status})`);
+                result = payload?.result?.result || payload?.result || payload;
+            }
+            if (result?.error)
+                throw new Error(String(result.error));
             const stdout = Array.isArray(result?.stdout) ? result.stdout : [];
             output.appendLine('');
             if (stdout.length === 0)
@@ -974,8 +1158,16 @@ async function runCurrentFile(context, output, uri) {
                 for (const line of stdout)
                     output.appendLine(String(line));
             output.appendLine('');
-            output.appendLine(`Completed in ${target.label}.`);
+            const globals = result?.globals && typeof result.globals === 'object' ? result.globals : {};
+            if (Object.keys(globals).length > 0)
+                output.appendLine(`Globals: ${JSON.stringify(globals)}`);
+            output.appendLine(`Completed on ${target.label}${result?.stepCount ? ` (${result.stepCount} steps)` : ''}.`);
             output.show(true);
+            if (hanoiPanel && vscode.workspace.getConfiguration('pulse-pmachine').get('showAnimation', false)
+                && looksLikeHanoi(document.getText(), document.fileName)) {
+                hanoiPanel.show(`Run on ${target.label}`);
+                hanoiPanel.post({ type: 'run', lines: stdout.map(String), globals });
+            }
         });
     }
     catch (error) {
@@ -987,7 +1179,25 @@ async function runCurrentFile(context, output, uri) {
 }
 export function activate(context) {
     const output = vscode.window.createOutputChannel('Pulse PMachine');
-    context.subscriptions.push(output, vscode.debug.registerDebugAdapterDescriptorFactory('pulse-pmachine', new PulseDebugFactory(context.extensionUri)), vscode.commands.registerCommand('pulse-pmachine.runCurrentFile', (uri) => runCurrentFile(context, output, uri)), vscode.languages.registerCodeLensProvider([
+    const hanoiPanel = new HanoiPanel();
+    context.subscriptions.push(output, hanoiPanel, vscode.debug.registerDebugAdapterDescriptorFactory('pulse-pmachine', new PulseDebugFactory(context.extensionUri)), vscode.commands.registerCommand('pulse-pmachine.runCurrentFile', (uri) => runCurrentFile(context, output, uri, hanoiPanel)), vscode.commands.registerCommand('pulse-pmachine.showAnimation', () => hanoiPanel.show('Towers of Hanoi')), vscode.debug.onDidReceiveDebugSessionCustomEvent((event) => {
+        if (event.session.type !== 'pulse-pmachine')
+            return;
+        if (event.event === 'pulseLaunch') {
+            hanoiPanel.trackSession(event.session.id, event.body?.isHanoi === true && event.body?.showAnimation === true);
+            if (hanoiPanel.isTracking(event.session.id)) {
+                hanoiPanel.show(`Debugging on ${event.body?.target || 'PMachine'}`);
+                hanoiPanel.post({ type: 'reset', title: `Debugging on ${event.body?.target || 'PMachine'}` });
+            }
+            return;
+        }
+        if (!hanoiPanel.isTracking(event.session.id))
+            return;
+        if (event.event === 'pulseOutput')
+            hanoiPanel.post({ type: 'output', line: String(event.body?.line ?? '') });
+        if (event.event === 'pulseState')
+            hanoiPanel.post({ type: 'state', ...event.body });
+    }), vscode.languages.registerCodeLensProvider([
         { language: 'pascalish' },
         { language: 'pascal' },
         { language: 'vbish' },

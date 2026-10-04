@@ -20,10 +20,17 @@ const vscodeMock = `
     dispose() {}
   }
   export const Uri = { file: fsPath => ({ fsPath }) };
-  export const workspace = { getWorkspaceFolder: () => ({ uri: { fsPath: ${JSON.stringify(root)} } }) };
+  export const workspace = {
+    getWorkspaceFolder: () => ({ uri: { fsPath: ${JSON.stringify(root)} } }),
+    getConfiguration: () => ({ get: (_, fallback) => fallback }),
+  };
   export class DebugAdapterInlineImplementation { constructor(adapter) { this.implementation = adapter; } }
-  export const debug = { registerDebugAdapterDescriptorFactory: (_, factory) => { globalThis.pulseTestFactory = factory; return {}; } };
-  export const window = { createOutputChannel: () => ({ dispose() {} }) };
+  export const debug = {
+    registerDebugAdapterDescriptorFactory: (_, factory) => { globalThis.pulseTestFactory = factory; return {}; },
+    onDidReceiveDebugSessionCustomEvent: () => ({ dispose() {} }),
+  };
+  export const ViewColumn = { Beside: -2 };
+  export const window = { createOutputChannel: () => ({ dispose() {} }), createWebviewPanel: () => { throw new Error('webview not available in tests'); } };
   export const commands = { registerCommand: () => ({}) };
   export const languages = { registerCodeLensProvider: () => ({}) };
 `;
@@ -33,9 +40,38 @@ const hooks = registerHooks({
     return next(specifier, context);
   },
 });
-const { activate } = await import('../out/extension.js');
+const { activate, loadPmachineTargets } = await import('../out/extension.js');
 activate({ subscriptions: [], extensionUri: {} });
 hooks.deregister();
+
+test('run target picker includes discovered JavaScript PMachines as JavaScript targets', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json([
+    {
+      nodeName: 'magic-js-pmachine-03',
+      ip: '127.0.10.103',
+      details: { runtime: 'js-pmachine', hardware: 'PMachine JavaScript VM', services: ['PMachine'] },
+    },
+    { nodeName: 'js-hardware', ip: '192.168.2.10', details: { hardware: 'PMachine JavaScript VM', services: ['PMachine'] } },
+    { nodeName: 'js-service', ip: '192.168.2.11', serviceName: 'js-pmachine', services: ['PMachine'] },
+    { nodeName: 'ESP32-VM-1078', ip: '192.168.2.115', details: { services: [{ name: 'PMachine' }] } },
+    { nodeName: 'sensor', ip: '192.168.2.12', details: { services: ['DHT11'] } },
+  ]);
+  try {
+    const targets = await loadPmachineTargets();
+    assert.deepEqual(targets.map(({ runtime, nodeId }) => ({ runtime, nodeId })), [
+      { runtime: 'js', nodeId: undefined },
+      { runtime: 'js', nodeId: 'magic-js-pmachine-03' },
+      { runtime: 'js', nodeId: 'js-hardware' },
+      { runtime: 'js', nodeId: 'js-service' },
+      { runtime: 'esp32', nodeId: 'ESP32-VM-1078' },
+    ]);
+    assert.equal(targets[1].description, '127.0.10.103 · JavaScript PMachine');
+    assert.equal(targets[4].description, '192.168.2.115 · ESP32 PMachine');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 function adapter(configuration = {}) {
   const value = globalThis.pulseTestFactory.createDebugAdapterDescriptor({
@@ -204,19 +240,23 @@ test('DAP async failure does not send a second response for an acknowledged requ
   value.dispose();
 });
 
-test('live ESP32 Hanoi debugger via backend API', {
+// PMACHINE_TEST_HOST=192.168.2.155 (ESP32) or 127.0.0.1:4111 (JS node).
+// Set PMACHINE_TEST_DEBUG_API to drive the session through the backend instead of the in-process bridge.
+test('live remote PMachine Hanoi debugger', {
   skip: !process.env.PMACHINE_TEST_HOST,
   timeout: 180000,
 }, async () => {
+  const runtime = process.env.PMACHINE_TEST_RUNTIME || (process.env.PMACHINE_TEST_HOST.includes(':') ? 'js-node' : 'esp32');
   const { value, events } = adapter({
-    runtime: 'esp32',
+    runtime,
     debugSession: true,
     targetHost: process.env.PMACHINE_TEST_HOST,
-    debugApiUrl: 'http://127.0.0.1:4000',
+    ...(process.env.PMACHINE_TEST_DEBUG_API ? { debugApiUrl: process.env.PMACHINE_TEST_DEBUG_API } : {}),
   });
   let failed = false;
   try {
-    await value.launch({ program, runtime: 'esp32' });
+    await value.launch({ program, runtime });
+    assert.equal(events.find(event => event.event === 'pulseLaunch')?.body.isHanoi, true);
     await value.stopAtProgramEntry();
     assert.equal(value.state.status, 'paused');
     assert.equal(value.state.sourceLocation.sourceLine, 18);
@@ -238,6 +278,8 @@ test('live ESP32 Hanoi debugger via backend API', {
     validateMoves(value.state.stdout);
     assert.equal(events.filter(event => event.event === 'terminated').length, 1);
     assert.equal(events.filter(event => event.event === 'output' && event.body.output.startsWith('Move disk')).length, 31);
+    assert.equal(events.filter(event => event.event === 'pulseOutput' && event.body.line.startsWith('Move disk')).length, 31);
+    assert.ok(events.some(event => event.event === 'pulseState' && event.body.locals?.n === 4));
   } catch (error) {
     failed = true;
     throw error;
@@ -251,6 +293,25 @@ test('live ESP32 Hanoi debugger via backend API', {
       }
       value.remoteSessionId = value.sessionId = '';
     }
+    value.dispose();
+  }
+});
+
+test('live remote PMachine Hanoi animation runs to completion', {
+  skip: !process.env.PMACHINE_TEST_HOST,
+  timeout: 600000,
+}, async () => {
+  const runtime = process.env.PMACHINE_TEST_RUNTIME || (process.env.PMACHINE_TEST_HOST.includes(':') ? 'js-node' : 'esp32');
+  const { value, events } = adapter({ runtime, animate: true, animationDelayMs: 50, targetHost: process.env.PMACHINE_TEST_HOST });
+  try {
+    value.handleMessage({ type: 'request', seq: 1, command: 'launch', arguments: { program, runtime, animate: true, animationDelayMs: 50, targetHost: process.env.PMACHINE_TEST_HOST } });
+    value.handleMessage({ type: 'request', seq: 2, command: 'configurationDone' });
+    await wait(() => events.some(event => event.event === 'terminated'), 580000);
+    assert.equal(events.filter(event => event.event === 'terminated').length, 1);
+    assert.equal(events.filter(event => event.event === 'pulseOutput' && event.body.line.startsWith('Move disk')).length, 31);
+    const lines = new Set(events.filter(event => event.event === 'pulseState').map(event => event.body.line));
+    assert.ok(lines.has(8) && lines.has(18), `animation visited source lines ${[...lines]}`);
+  } finally {
     value.dispose();
   }
 });

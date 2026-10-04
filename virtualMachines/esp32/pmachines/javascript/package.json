@@ -8,7 +8,11 @@
     "./cli": "./run.mjs"
   },
   "bin": {
-    "pulse-js-pmachine": "./run.mjs"
+    "pulse-js-pmachine": "./run.mjs",
+    "pulse-js-pmachine-node": "./server.mjs"
+  },
+  "scripts": {
+    "node": "node server.mjs"
   },
   "dependencies": {
     "fast-xml-parser": "^5.8.0"

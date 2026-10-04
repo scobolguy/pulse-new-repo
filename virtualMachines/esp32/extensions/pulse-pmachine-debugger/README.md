@@ -4,7 +4,9 @@ This VS Code extension provides native Run and Debug support for Pulse PMachine 
 
 ## Run from the editor
 
-Open a Pascalish, VBish, WFL, or MAPL source file and select **Run on PMachine** above the source or from the editor title bar. Choose the local JavaScript PMachine or a discovered ESP32 PMachine; output appears in the `Pulse PMachine` Output channel. The editor sends compiled pcode and its program map to the Aggregator deployment API. Set `pulse-pmachine.backendUrl` if the Aggregator is not running at `http://127.0.0.1:4000`.
+Open a Pascalish, VBish, WFL, or MAPL source file and select **Run on PMachine** above the source or from the editor title bar. Choose the local JavaScript PMachine, a discovered JavaScript PMachine (for example, `magic-js-pmachine-01`), or a discovered ESP32 PMachine; output appears in the `Pulse PMachine` Output channel. The editor sends compiled pcode, its program map, and the selected node ID to the Aggregator deployment API. JavaScript PMachine nodes are virtual targets executed by the Aggregator's JavaScript runtime, not independently addressable ESP32 boards. Set `pulse-pmachine.backendUrl` if the Aggregator is not running at `http://127.0.0.1:4000`.
+
+JavaScript PMachine targets are kept separate from ESP32 upload targets in the picker. To run on the Hanoi board, choose the target whose description contains `192.168.2.115`. Run-to-completion ESP32 uploads omit the editor-only source map to reduce device memory usage; interactive debugging retains source mapping.
 
 The initial configuration debugs `artifactPrograms/towers-of-hanoi-program.pas` on the JavaScript PMachine and stops at the top-level program entry (`begin`, line 18) before executing it. Use the standard VS Code Continue, Step Over, Step In, Step Out, Pause, Stop, Call Stack, and Variables controls.
 

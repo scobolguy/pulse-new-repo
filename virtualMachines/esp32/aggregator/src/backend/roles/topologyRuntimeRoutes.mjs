@@ -3731,30 +3731,36 @@ export function registerTopologyRuntimeRoutes(app, deps) {
       const configuredEdgeBases = String(
         process.env.SERVICE_EDGE_BASE_URLS || process.env.SERVICE_EDGE_BASE_URL || ''
       ).split(',').map((value) => value.trim()).filter(Boolean);
-      await Promise.all(configuredEdgeBases.map(async (baseUrl) => {
+      const jsNodeBases = String(
+        process.env.JS_PMACHINE_BASE_URLS ?? 'http://127.0.0.1:4111,http://127.0.0.1:4112'
+      ).split(',').map((value) => value.trim()).filter(Boolean);
+      await Promise.all([...configuredEdgeBases, ...jsNodeBases].map(async (baseUrl) => {
         try {
           const base = new URL(baseUrl);
           if (!['http:', 'https:'].includes(base.protocol)) throw new Error('Expected an HTTP(S) URL');
-          const response = await fetch(new URL('/status', base), { signal: AbortSignal.timeout(5000) });
+          const response = await fetch(new URL('/status', base), { signal: AbortSignal.timeout(jsNodeBases.includes(baseUrl) ? 1500 : 5000) });
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const status = await response.json();
           if (!hasPmachineService(status?.services)) return;
-          if (candidates.has(base.hostname)) return;
-          candidates.set(base.hostname, {
-            nodeId: String(status.nodeName || base.hostname),
-            nodeName: String(status.nodeName || base.hostname),
+          const key = base.port ? `${base.hostname}:${base.port}` : base.hostname;
+          if (candidates.has(key)) return;
+          const isJsNode = status?.runtime === 'js-pmachine';
+          candidates.set(key, {
+            nodeId: String(status.nodeName || key),
+            nodeName: String(status.nodeName || key),
             ip: base.hostname,
+            host: key,
             port: Number(base.port || (base.protocol === 'https:' ? 443 : 80)),
             status: 'available',
             available: true,
             details: {
               ...status,
-              hardware: String(status.deviceRole || 'ESP32'),
-              runtime: 'esp32-pmachine'
+              hardware: isJsNode ? 'JavaScript' : String(status.deviceRole || 'ESP32'),
+              runtime: isJsNode ? 'js-pmachine' : 'esp32-pmachine'
             }
           });
         } catch (error) {
-          console.warn(`[DISCOVERY] Configured PMachine ${baseUrl}: ${error.message}`);
+          if (!jsNodeBases.includes(baseUrl)) console.warn(`[DISCOVERY] Configured PMachine ${baseUrl}: ${error.message}`);
         }
       }));
       res.json(Array.from(candidates.values()));

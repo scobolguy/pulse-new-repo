@@ -2,7 +2,7 @@
   "name": "pulse-pmachine-debugger",
   "displayName": "Pulse PMachine Debugger",
   "description": "Run and debug Pulse PMachine programs from VS Code.",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "publisher": "pulse",
   "icon": "media/pulse-icon.png",
   "files": [
@@ -27,22 +27,60 @@
     "onLanguage:wfl",
     "onLanguage:mapl",
     "onLanguage:cobolish",
-    "onLanguage:vbish"
+    "onCommand:pulse-pmachine.showAnimation"
   ],
   "main": "./out/extension.js",
   "type": "module",
   "contributes": {
     "languages": [
-      { "id": "pascalish", "aliases": ["Pascalish"], "extensions": [".pas"] },
-      { "id": "vbish", "aliases": ["VBish"], "extensions": [".bas", ".vb", ".vbs"] },
-      { "id": "wfl", "aliases": ["Work Flow Language"], "extensions": [".wfl"] },
-      { "id": "mapl", "aliases": ["MAPL"], "extensions": [".mapl"] }
+      {
+        "id": "pascalish",
+        "aliases": [
+          "Pascalish"
+        ],
+        "extensions": [
+          ".pas"
+        ]
+      },
+      {
+        "id": "vbish",
+        "aliases": [
+          "VBish"
+        ],
+        "extensions": [
+          ".bas",
+          ".vb",
+          ".vbs"
+        ]
+      },
+      {
+        "id": "wfl",
+        "aliases": [
+          "Work Flow Language"
+        ],
+        "extensions": [
+          ".wfl"
+        ]
+      },
+      {
+        "id": "mapl",
+        "aliases": [
+          "MAPL"
+        ],
+        "extensions": [
+          ".mapl"
+        ]
+      }
     ],
     "commands": [
       {
         "command": "pulse-pmachine.runCurrentFile",
         "title": "Run on PMachine",
         "icon": "$(play)"
+      },
+      {
+        "command": "pulse-pmachine.showAnimation",
+        "title": "Pulse PMachine: Show Hanoi Animation"
       }
     ],
     "menus": {
@@ -67,6 +105,24 @@
           "type": "string",
           "default": "http://127.0.0.1:4000",
           "description": "Aggregator backend URL used to discover PMachine targets and run programs."
+        },
+        "pulse-pmachine.nodeHosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "127.0.0.1:4111",
+            "127.0.0.1:4112",
+            "127.0.0.1:4113",
+            "192.168.2.155"
+          ],
+          "description": "PMachine node hosts offered by Run on PMachine. host:port entries are JS PMachine nodes; bare IPs are ESP32 boards."
+        },
+        "pulse-pmachine.showAnimation": {
+          "type": "boolean",
+          "default": false,
+          "description": "Open the Towers of Hanoi animation panel after Run on PMachine."
         }
       }
     },
@@ -76,6 +132,7 @@
         "label": "Pulse PMachine",
         "languages": [
           "pascalish",
+          "pascal",
           "cobolish",
           "vbish"
         ],
@@ -98,16 +155,20 @@
           },
           "runtime": {
             "type": "string",
-            "enum": ["js", "esp32"],
-            "description": "PMachine runtime target."
+            "enum": [
+              "js",
+              "js-node",
+              "esp32"
+            ],
+            "description": "js = in-process JS PMachine, js-node = standalone JS PMachine node (targetHost host:port), esp32 = ESP32 board (targetHost IP)."
           },
           "debugSession": {
             "type": "boolean",
-            "description": "Use a persistent interactive debug session on the ESP32."
+            "description": "Open an interactive debug session on the remote PMachine (implied by animate)."
           },
           "targetHost": {
             "type": "string",
-            "description": "ESP32 HTTP host when runtime is esp32."
+            "description": "PMachine node address: ESP32 IP (e.g. 192.168.2.155) or JS node host:port (e.g. 127.0.0.1:4111)."
           },
           "debugApiUrl": {
             "type": "string",
@@ -119,7 +180,10 @@
           },
           "uploadMode": {
             "type": "string",
-            "enum": ["direct", "shared"],
+            "enum": [
+              "direct",
+              "shared"
+            ],
             "description": "ESP32 artifact upload mode. Direct uploads use the board FFS API."
           },
           "inputQueue": {
@@ -133,18 +197,47 @@
           "maxSteps": {
             "type": "number",
             "description": "Maximum PMachine steps for a remote run."
+          },
+          "showAnimation": {
+            "type": "boolean",
+            "default": false,
+            "description": "Show the Towers of Hanoi animation panel while debugging Hanoi programs."
           }
         },
         "initialConfigurations": [
           {
             "type": "pulse-pmachine",
             "request": "launch",
-            "name": "Debug Hanoi on JS PMachine",
-            "program": "${workspaceFolder}/artifactPrograms/towers-of-hanoi-program.pas",
-            "animate": false,
-            "animationDelayMs": 1000
+            "name": "Debug Hanoi on JS PMachine node",
+            "runtime": "js-node",
+            "targetHost": "127.0.0.1:4111",
+            "debugSession": true,
+            "program": "${workspaceFolder}/artifactPrograms/towers-of-hanoi-program.pas"
+          },
+          {
+            "type": "pulse-pmachine",
+            "request": "launch",
+            "name": "Debug Hanoi on ESP32",
+            "runtime": "esp32",
+            "targetHost": "192.168.2.155",
+            "debugSession": true,
+            "program": "${workspaceFolder}/artifactPrograms/towers-of-hanoi-program.pas"
           }
         ]
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "pascalish"
+      },
+      {
+        "language": "pascal"
+      },
+      {
+        "language": "vbish"
+      },
+      {
+        "language": "cobolish"
       }
     ]
   },

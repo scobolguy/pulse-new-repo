@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { compilePascalishProgramWithAntlr } from '../../scripts/compile-pascalish-program-antlr-to-pcode.mjs';
 import { compileWorkflowDSLWithAntlr } from '../../scripts/workflow-antlr-compiler.mjs';
-import { runPascalOnEsp32, runPcodeOnEsp32 } from '../../scripts/run-pascal-on-esp32-node.mjs';
+import { runPcodeOnEsp32 } from '../../scripts/run-pascal-on-esp32-node.mjs';
 import { runSingleMessageForEvolution } from '../../../pmachines/javascript/index.mjs';
 import {
   createJavaScriptPmachineDebugSession,
@@ -16,6 +16,8 @@ import {
   startEsp32DebugSession,
   readEsp32DebugSession,
   controlEsp32DebugSession,
+  setEsp32SourceBreakpoints,
+  waitForEsp32DebugStop,
   stopEsp32DebugSession
 } from './modules/esp32PmachineDebugBridge.mjs';
 
@@ -95,19 +97,20 @@ export function registerPmachineDeploymentRoutes(app) {
         compiled = compilePascalishProgramWithAntlr(source, { fileName: sourceFileName });
       }
       const debug = body.debug === true;
+      const remoteJsNode = runtime === 'js' && /^[a-z0-9._-]+:\d{1,5}$/i.test(targetNodeId);
 
-      if (runtime === 'esp32') {
-        const result = pcodeText.trim()
-          ? await runPcodeOnEsp32({
-            pcodeText,
-            programMap: suppliedProgramMap,
-            node: targetNodeId,
-            inputQueue,
-            message,
-            maxSteps: body.maxSteps,
-            sourceFileName
-          })
-          : await runPascalOnEsp32({ source: sourcePath, node: targetNodeId, inputQueue, message });
+      if (runtime === 'esp32' || remoteJsNode) {
+        const remoteMap = { ...(suppliedProgramMap || compiled.programMap) };
+        delete remoteMap.sourceMap;
+        const result = await runPcodeOnEsp32({
+          pcodeText: compiled.pcodeText,
+          programMap: remoteMap,
+          node: targetNodeId,
+          inputQueue,
+          message,
+          maxSteps: body.maxSteps,
+          sourceFileName
+        });
         return res.json({ status: 'ok', runtime, targetNodeId, inputQueue, wflOverride, debugFallback: debug, result });
       }
 
@@ -177,20 +180,34 @@ export function registerPmachineDeploymentRoutes(app) {
       const sourceMap = programMap?.sourceMap && typeof programMap.sourceMap === 'object'
         ? programMap.sourceMap
         : {};
-      const sourcePcs = Object.entries(sourceMap)
-        .filter(([, entry]) => sourceLines.includes(Number(entry?.sourceLine)))
-        .map(([pc]) => Number(pc))
-        .filter((value) => Number.isInteger(value) && value >= 0);
       const session = await startEsp32DebugSession({
         host,
         pcode,
         pcodeFile: body.pcodeFile,
         programMap,
+        sourceMap,
         startPc: body.startPc,
-        breakpoints: [...new Set([...requestedPcs, ...sourcePcs])],
+        breakpoints: requestedPcs,
+        sourceBreakpoints: sourceLines,
         maxBytes: body.maxBytes
       });
-      return res.status(201).json({ status: 'ok', session, sourceMap });
+      const state = await waitForEsp32DebugStop({ host, sessionId: session.sessionId });
+      return res.status(201).json({ status: 'ok', session, state, sourceMap });
+    } catch (error) {
+      return res.status(400).json({ error: error?.message || String(error) });
+    }
+  });
+
+  app.put('/api/pmachine/debug/esp32/session/breakpoints', async (req, res) => {
+    try {
+      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const state = await setEsp32SourceBreakpoints({
+        host: body.host || body.ip,
+        sessionId: body.sessionId || body.id,
+        lines: body.sourceBreakpoints,
+        breakpoints: body.breakpoints
+      });
+      return res.json({ status: 'ok', state });
     } catch (error) {
       return res.status(400).json({ error: error?.message || String(error) });
     }

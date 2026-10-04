@@ -65,6 +65,7 @@
     "run:pcode:js": "node scripts/run-js-pmachine.mjs",
     "run:pascal:esp32": "node scripts/run-pascal-on-esp32-node.mjs",
     "test:pmachine:deploy": "node scripts/deploy-and-test-pmachine.mjs",
+    "test:pmachine:node-hanoi": "node scripts/test-pmachine-node-hanoi.mjs",
     "compile:workflow": "node scripts/compile-workflow-dsl.mjs --in data/workflow.wfl",
     "test:wfl:system:scoping": "node scripts/test-wfl-system-scoping.mjs",
     "test:pascalish:system:metadata": "node scripts/test-pascalish-system-metadata.mjs",
