@@ -348,7 +348,7 @@ serviceLocalDecl
     ;
 
 serviceEndpoint
-    : httpVerb stringValue endpointAccepts? endpointReturns? ';' block
+    : httpVerb stringValue endpointAccepts? endpointReturns? ';' blockStmt
     ;
 
 httpVerb
@@ -587,18 +587,6 @@ qualifiedName
 qualifiedPart
     : IDENT
     | httpVerb
-    | fsmOperation
-    ;
-
-fsmOperation
-    : 'open'
-    | 'read'
-    | 'write'
-    | 'action'
-    | 'close'
-    | 'set'
-    | 'event'
-    | 'observe'
     ;
 
 stringOrIdent

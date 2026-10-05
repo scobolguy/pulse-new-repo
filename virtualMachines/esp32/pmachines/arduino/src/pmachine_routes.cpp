@@ -1,6 +1,10 @@
 
 #include <Arduino.h>
 #include "pmachine_routes.h"
+#if defined(ESP32)
+#include "service_host.h"
+#include <AsyncJson.h>
+#endif
 
 extern bool pmachineInvokeFsm(
     const pmachine::FsmCallRequest& request,
@@ -1479,9 +1483,13 @@ bool deserializeDocFromPath(const String& path, FederatedFileSystem* ffs, JsonDo
 bool deserializeProgramMapForExec(const String& path, FederatedFileSystem* ffs, JsonDocument& doc) {
     JsonDocument filter;
     filter["signing"] = true;
+    filter["hostBindingsVersion"] = true;
+    filter["targets"] = true;
     filter["version"] = true;
     filter["serviceId"] = true;
     filter["runtimeUnit"] = true;
+    filter["hostTables"][0]["name"] = true;
+    filter["hostTables"][0]["capacity"] = true;
     filter["serviceEndpoints"][0]["verb"] = true;
     filter["serviceEndpoints"][0]["path"] = true;
     filter["serviceEndpoints"][0]["entryLabel"] = true;
@@ -3801,6 +3809,101 @@ void registerPMachineRoutes(
 	pmachine::PMachine* asyncWorkerMachine
 ) {
 #if defined(ESP32)
+    static pmachine::ServiceHost serviceHost;
+    server.on("/pmachine/service_host/install", HTTP_POST, [ffs](AsyncWebServerRequest* request) {
+        String serviceFile, serviceMap, daemonFile, daemonMap, collectorId, udpPort = "4210";
+        String ttl = "180000", heartbeat = "60000";
+        if (!getRequestParam(request, "serviceFile", serviceFile)
+            || !getRequestParam(request, "serviceMap", serviceMap)
+            || !getRequestParam(request, "daemonFile", daemonFile)
+            || !getRequestParam(request, "daemonMap", daemonMap)
+            || !getRequestParam(request, "collectorId", collectorId)) {
+            request->send(400, "text/plain", "Missing hosted service/daemon files or collectorId"); return;
+        }
+        getRequestParam(request, "udpPort", udpPort);
+        getRequestParam(request, "observationTtlMs", ttl);
+        getRequestParam(request, "announcementIntervalMs", heartbeat);
+        auto positiveInteger = [](const String& text, uint32_t max, uint32_t& result) {
+            if (!text.length() || text.length() > 9) return false;
+            uint32_t value = 0;
+            for (size_t i = 0; i < text.length(); ++i) {
+                if (text[i] < '0' || text[i] > '9') return false;
+                value = value * 10 + text[i] - '0';
+                if (value > max) return false;
+            }
+            result = value; return value > 0;
+        };
+        uint32_t portValue, ttlValue, heartbeatValue;
+        if (!positiveInteger(udpPort, 65535, portValue) || !positiveInteger(ttl, 180000, ttlValue)
+            || !positiveInteger(heartbeat, 180000, heartbeatValue) || ttlValue <= heartbeatValue) {
+            request->send(400, "text/plain", "Invalid UDP port or TTL/heartbeat interval"); return;
+        }
+        pmachine::ServiceHost::Unit service, daemon;
+        String error;
+        auto load = [&](const String& file, const String& mapPath, const char* kind, pmachine::ServiceHost::Unit& unit) {
+            String pcode;
+            JsonDocument map;
+            if (!readTextFromPath(file, ffs, pcode) || pcode.length() > 8192
+                || !deserializeProgramMapForExec(mapPath, ffs, map)) {
+                error = "Unable to load bounded hosted artifact"; return false;
+            }
+            if (!verifySignedPcode(pcode, map, error)) return false;
+            std::string validation;
+            if (!pmachine::ServiceHost::parseUnit(pcode.c_str(), map, kind, unit, validation)) {
+                error = validation.c_str(); return false;
+            }
+            return true;
+        };
+        if (!load(serviceFile, serviceMap, "service", service) || !load(daemonFile, daemonMap, "daemon", daemon)) {
+            Serial.printf("[SERVICE-HOST] Install rejected: %s\n", error.c_str());
+            request->send(400, "text/plain", error); return;
+        }
+        std::string installError;
+        if (!serviceHost.install(std::move(service), std::move(daemon), collectorId.c_str(),
+                                 portValue, ttlValue, heartbeatValue, installError)) {
+            Serial.printf("[SERVICE-HOST] Install failed: %s\n", installError.c_str());
+            request->send(503, "text/plain", installError.c_str()); return;
+        }
+        request->send(200, "application/json", "{\"running\":true,\"hostBindingsVersion\":1}");
+    });
+    server.on("/pmachine/service_host/status", HTTP_GET, [](AsyncWebServerRequest* request) {
+        const auto status = serviceHost.status();
+        request->send(status.find("\"busy\":true") == std::string::npos ? 200 : 503, "application/json", status.c_str());
+    });
+    server.on("/pmachine/service_host/stop", HTTP_POST, [](AsyncWebServerRequest* request) {
+        std::string error;
+        if (!serviceHost.stop(error)) { request->send(503, "text/plain", error.c_str()); return; }
+        request->send(200, "application/json", "{\"running\":false}");
+    });
+    auto serveHosted = [](AsyncWebServerRequest* request, const std::string& body) {
+        std::string response;
+        int status;
+        const std::string method = request->method() == HTTP_POST ? "POST" : "GET";
+        JsonDocument query;
+        query.to<JsonObject>();
+        for (size_t index = 0; index < request->params(); ++index) {
+            const AsyncWebParameter* parameter = request->getParam(index);
+            if (parameter != nullptr && !parameter->isPost())
+                query[parameter->name()] = parameter->value();
+        }
+        std::string queryJson;
+        serializeJson(query, queryJson);
+        const bool ok = serviceHost.dispatch(method, request->url().c_str(), body,
+            request->client()->remoteIP().toString().c_str(), queryJson, status, response);
+        request->send(status, ok ? "application/json" : "text/plain", response.c_str());
+    };
+    for (const char* path : {"/api/discovery/snapshot", "/health"})
+        server.on(path, HTTP_GET, [serveHosted](AsyncWebServerRequest* request) { serveHosted(request, ""); });
+    auto* announcementHandler = new AsyncCallbackJsonWebHandler("/api/pmachine/announce",
+        [serveHosted](AsyncWebServerRequest* request, JsonVariant& json) {
+            std::string body;
+            serializeJson(json, body);
+            serveHosted(request, body);
+        });
+    announcementHandler->setMethod(HTTP_POST);
+    announcementHandler->setMaxContentLength(2048);
+    server.addHandler(announcementHandler);
+
     const bool asyncWorkerReady = startAsyncPcodeWorker(
         asyncWorkerMachine != nullptr ? *asyncWorkerMachine : machine,
         ffs

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compilePascalishProgramWithAntlr } from './compile-pascalish-program-antlr-to-pcode.mjs';
 import { attachPcodeSignature } from './pcode-signing.mjs';
+import { compactServiceHostProgramMap } from '../../pmachines/shared/contracts/service-host-bindings.mjs';
 
 const NODE_REGISTRY_URL = process.env.NODE_REGISTRY_URL || 'http://127.0.0.1:4000/api/nodes';
 const CANDIDATES_DIR = path.resolve(process.cwd(), 'data', 'ollama-mentor-candidates');
@@ -66,6 +67,8 @@ export async function runPascalOnEsp32({ source = '', node = 'neptune.child1', i
 export async function runPcodeOnEsp32({
   pcodeText = '',
   programMap = {},
+  daemonPcodeText = '',
+  daemonProgramMap = null,
   node = 'neptune.child1',
   inputQueue = 'vscode.pmachine',
   message = '',
@@ -85,6 +88,62 @@ export async function runPcodeOnEsp32({
   const signedMapText = `${JSON.stringify(signedMap, null, 2)}\n`;
   const host = await resolveHost(node);
   const baseUrl = `http://${host}`;
+
+  if (signedMap.hostBindingsVersion === 1) {
+    if (signedMap.runtimeUnit?.kind !== 'service') {
+      throw new Error('Hosted direct execution requires a Pascalish service; daemon units must be installed with a service');
+    }
+    const daemon = daemonPcodeText && daemonProgramMap
+      ? { pcodeText: String(daemonPcodeText), programMap: daemonProgramMap }
+      : compilePascalishProgramWithAntlr(
+        "daemon 'vscode-idle' every 60000 ms; begin end.",
+        { fileName: 'vscode-idle-daemon.pas', hostServices: true },
+      );
+    if (!daemonProgramMap && daemonPcodeText) throw new Error('daemonProgramMap is required with daemonPcodeText');
+    if (daemonProgramMap && !daemonPcodeText) throw new Error('daemonPcodeText is required with daemonProgramMap');
+    if (daemon.programMap?.hostBindingsVersion !== 1 || daemon.programMap.runtimeUnit?.kind !== 'daemon') {
+      throw new Error('Hosted service daemon artifact is invalid');
+    }
+
+    const isJsNode = /:\d+$/.test(host);
+    const serviceMap = isJsNode ? signedMap : attachPcodeSignature(compactServiceHostProgramMap(signedMap), pcode);
+    const daemonMap = isJsNode
+      ? daemon.programMap
+      : compactServiceHostProgramMap(daemon.programMap);
+    const signedDaemonMap = attachPcodeSignature(daemonMap, daemon.pcodeText);
+    const signedDaemonMapText = `${JSON.stringify(signedDaemonMap, null, 2)}\n`;
+    const daemonPcodeFile = `/v${tag}-daemon.pcode`;
+    const daemonMapFile = `/v${tag}-daemon.json`;
+    await postForm(`${baseUrl}/ffs/upload`, { file: remotePcode, body: pcode }, 'upload hosted service pcode');
+    await postForm(`${baseUrl}/ffs/upload`, {
+      file: remoteMap, body: `${JSON.stringify(serviceMap, null, 2)}\n`,
+    }, 'upload hosted service map');
+    await postForm(`${baseUrl}/ffs/upload`, { file: daemonPcodeFile, body: daemon.pcodeText }, 'upload hosted daemon pcode');
+    await postForm(`${baseUrl}/ffs/upload`, { file: daemonMapFile, body: signedDaemonMapText }, 'upload hosted daemon map');
+
+    const udpPort = isJsNode ? '0' : '4210';
+    const rawInstall = await postForm(`${baseUrl}/pmachine/service_host/install`, {
+      serviceFile: remotePcode,
+      serviceMap: remoteMap,
+      daemonFile: daemonPcodeFile,
+      daemonMap: daemonMapFile,
+      collectorId: String(signedMap.runtimeUnit.id || path.basename(String(sourceFileName), path.extname(String(sourceFileName)))),
+      udpPort,
+      observationTtlMs: '180000',
+      announcementIntervalMs: String(daemon.programMap.runtimeUnit.refreshMs || 60000),
+    }, 'install hosted service');
+    let result;
+    try { result = JSON.parse(rawInstall); } catch { result = { raw: rawInstall }; }
+    if (result?.running !== true) throw new Error(`Hosted service did not start: ${rawInstall.slice(0, 240)}`);
+    return {
+      node,
+      host,
+      source: path.basename(String(sourceFileName || 'program.pas')),
+      pcodeLines: pcode.split('\n').length,
+      hosted: true,
+      result,
+    };
+  }
 
   await postForm(`${baseUrl}/ffs/upload`, { file: remotePcode, body: pcode }, 'upload pcode');
   await postForm(`${baseUrl}/ffs/upload`, { file: remoteMap, body: signedMapText }, 'upload map');
@@ -118,7 +177,7 @@ async function resolveHost(requestedNode) {
     return String(requestedNode).trim();
   }
   try {
-    const res = await fetch(NODE_REGISTRY_URL, { signal: AbortSignal.timeout(3000) });
+    const res = await fetch(NODE_REGISTRY_URL);
     if (!res.ok) return requestedNode;
     const nodes = await res.json();
     const entries = Array.isArray(nodes) ? nodes : [];
@@ -131,7 +190,7 @@ async function resolveHost(requestedNode) {
       for (const entry of entries) {
         const nodeName = normalizeNodeName(entry?.nodeName || entry?.details?.nodeName || '');
         const host = String(entry?.ip || '').trim();
-        if (!host || host === '127.0.0.1' || !nodeName) continue;
+        if (!host || host === '127.0.0.1') continue;
         if (pass === 'exact' && nodeName === wanted) return host;
         if (pass === 'tail' && nodeName === wantedTail) return host;
         if (pass === 'substr' && (nodeName.includes(wanted) || wanted.includes(nodeName))) return host;

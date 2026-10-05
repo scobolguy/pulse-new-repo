@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 const MonacoEditor = React.lazy(() => import('@monaco-editor/react'))
 import { initializePascalishLanguage } from './pascalishLanguage'
+import { buildPascalishLibrarianContracts } from './librarianSchemaContracts.js'
 
 // Compile errors arrive as one blob; split them into per-line diagnostics.
 // ANTLR reports 0-based columns, so shift to Monaco's 1-based columns.
@@ -59,6 +60,7 @@ export default function PascalishEditorPage() {
       .filter(Boolean)
       .sort((a, b) => a.localeCompare(b))
   }, [types])
+
   useEffect(() => {
     typeNamesRef.current = typeNames
   }, [typeNames])
@@ -75,37 +77,6 @@ export default function PascalishEditorPage() {
   useEffect(() => {
     let cancelled = false
 
-    function collectPathsFromSchemaNode(node, prefix = '', out = []) {
-      if (!node || typeof node !== 'object') return out
-      const rawName = String(node.name || '').trim()
-      const normalizedName = rawName && rawName !== 'root' ? rawName : ''
-      const nextPrefix = normalizedName
-        ? (prefix ? `${prefix}.${normalizedName}` : normalizedName)
-        : prefix
-      if (nextPrefix) out.push(nextPrefix)
-      for (const child of Array.isArray(node.children) ? node.children : []) {
-        collectPathsFromSchemaNode(child, nextPrefix, out)
-      }
-      return out
-    }
-
-    function buildTypeFieldMap(schemas) {
-      const map = {}
-      for (const schema of Array.isArray(schemas) ? schemas : []) {
-        const typeId = String(schema?.typeId || '').trim().toLowerCase()
-        if (!typeId) continue
-        if (!map[typeId]) map[typeId] = new Set()
-        for (const fieldPath of collectPathsFromSchemaNode(schema?.structure, '')) {
-          if (fieldPath) map[typeId].add(fieldPath)
-        }
-      }
-      const output = {}
-      for (const [typeId, setValues] of Object.entries(map)) {
-        output[typeId] = Array.from(setValues).sort((a, b) => a.localeCompare(b))
-      }
-      return output
-    }
-
     async function loadTypes() {
       try {
         const [typesResponse, schemasResponse] = await Promise.all([
@@ -121,7 +92,7 @@ export default function PascalishEditorPage() {
         }
         const nextTypes = Array.isArray(typePayload.types) ? typePayload.types : []
         const schemas = schemasResponse.ok && Array.isArray(schemaPayload.schemas) ? schemaPayload.schemas : []
-        typeFieldMapRef.current = buildTypeFieldMap(schemas)
+        typeFieldMapRef.current = buildPascalishLibrarianContracts(nextTypes, schemas).typeFieldMap
         setTypes(nextTypes)
         setStatus(`Loaded ${nextTypes.length} types and ${schemas.length} schemas.`)
       } catch (error) {
@@ -230,6 +201,7 @@ export default function PascalishEditorPage() {
           </div>
           <span style={{ fontSize: 12, opacity: 0.75 }}>{status}</span>
         </div>
+        <span style={{ fontSize: 11, opacity: 0.55 }}>F7 compile · Ctrl+F7 run · Shift+F7 debug</span>
       </div>
 
       {runError && (

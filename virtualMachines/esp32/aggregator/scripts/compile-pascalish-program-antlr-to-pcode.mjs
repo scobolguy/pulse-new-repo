@@ -8,6 +8,7 @@ import PascalishVisitor from '../grammar/generated-modern/PascalishVisitor.js';
 import { attachPcodeSignature } from './pcode-signing.mjs';
 import { compileConversionRuleToOps, emitMapperRoutinePcode } from './compile-mapping-rule.mjs';
 import { resolveLibrary } from './pascalish-library-registry.mjs';
+import { SERVICE_HOST_BINDINGS, SERVICE_HOST_BINDINGS_VERSION } from '../../pmachines/shared/contracts/service-host-bindings.mjs';
 
 const OPERATOR_METHOD_NAMES = {
   '+': 'op_add',
@@ -143,10 +144,11 @@ function qualifyLocalMapRefs(exprText, localMapperIds) {
 }
 
 class PascalishProgramAstBuilder extends PascalishVisitor {
-  constructor(sourceText = '', fileName = '') {
+  constructor(sourceText = '', fileName = '', hostServices = false) {
     super();
     this.sourceLines = sourceText.split(/\r?\n/);
     this.fileName = fileName;
+    this.hostServices = hostServices;
   }
 
   visit(ctx) {
@@ -188,7 +190,9 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
         if (value.syntheticRouter) ast.routers.push(value.syntheticRouter);
         for (const variable of value.unit?.globals || []) ast.variables.push(variable);
         for (const procedure of value.unit?.procedures || []) ast.procedures.push(procedure);
-        for (const mapper of value.unit?.mappers || []) ast.mappers.push(mapper);
+        if (value.type !== 'ServiceDecl') {
+          for (const mapper of value.unit?.mappers || []) ast.mappers.push(mapper);
+        }
         for (const router of value.unit?.routers || []) ast.routers.push(router);
         for (const typeDecl of value.unit?.types || []) ast.types.push(typeDecl);
         for (const classDecl of value.unit?.classes || []) ast.classes.push(classDecl);
@@ -467,6 +471,7 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
         statements: (body.statements || []).filter(item => item.type !== 'RouteMessage' && item.type !== 'ServiceCase')
       }
     };
+    if (this.hostServices) node.unit = unit;
 
     const caseStmt = (body.statements || []).find(item => item.type === 'ServiceCase');
     if (caseStmt && caseStmt.arms.length > 0) {
@@ -498,7 +503,7 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
       };
     }
 
-    if (endpoints.length > 0) {
+    if (endpoints.length > 0 && !this.hostServices) {
       node.syntheticRouter = {
         type: 'RouterDecl',
         id: `${serviceId}-http`,
@@ -551,14 +556,31 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
   }
 
   visitServiceEndpoint(ctx) {
-    const returnExpr = extractReturnExpr(originalText(ctx.blockStmt()));
-    return {
+    const bodyContext = ctx.block ? ctx.block() : ctx.blockStmt();
+    const returnExpr = extractReturnExpr(originalText(bodyContext));
+    const endpoint = {
       verb: text(ctx.httpVerb()).toUpperCase(),
       path: unquote(text(ctx.stringValue())),
       acceptsType: ctx.endpointAccepts() ? text(ctx.endpointAccepts().typeRef()) : '',
       returnsType: ctx.endpointReturns() ? text(ctx.endpointReturns().typeRef()) : '',
       returnExpr
     };
+    if (this.hostServices) {
+      const input = new antlr4.InputStream(originalText(bodyContext).replace(/[;.]\s*$/, ''));
+      const lexer = new PascalishLexer(input);
+      const errors = new CollectingErrorListener();
+      lexer.removeErrorListeners();
+      lexer.addErrorListener(errors);
+      const parser = new PascalishParser(new antlr4.CommonTokenStream(lexer));
+      parser.removeErrorListeners();
+      parser.addErrorListener(errors);
+      const block = parser.block();
+      if (errors.errors.length) throw new Error(`[PASCALISH-PROGRAM] Service handler parse failed:\n${errors.errors.join('\n')}`);
+      const previous = this.currentFunction;
+      this.currentFunction = `${endpoint.verb} ${endpoint.path}`;
+      try { endpoint.body = this.visit(block); } finally { this.currentFunction = previous; }
+    }
+    return endpoint;
   }
 
   visitServiceCaseStmt(ctx) {
@@ -1906,6 +1928,15 @@ class Codegen {
    * a method reaches `self` without the runtime having object references.
    */
   emitCall(name, args) {
+    const bindingName = String(name).toLowerCase();
+    if (this.ast.hostServices && bindingName.startsWith('host.')) {
+      const binding = SERVICE_HOST_BINDINGS[bindingName];
+      if (!binding) throw new Error(`[PASCALISH-PROGRAM] Unknown host binding: ${name}`);
+      if ((args || []).length !== binding.arity) throw new Error(`[PASCALISH-PROGRAM] ${name} requires ${binding.arity} arguments`);
+      this.emitArguments(null, args);
+      this.emit(`CALL_EXT ${bindingName} ${binding.arity}`);
+      return bindingName;
+    }
     const segments = String(name || '').trim().split('.').filter(Boolean);
     let leading = [];
     let resolved = this.normalizeProcedureName(name);
@@ -1972,7 +2003,8 @@ class Codegen {
   }
 
   isFunction(name) {
-    return this.functionReturnTypes.has(String(name || '').trim().toLowerCase());
+    const key = String(name || '').trim().toLowerCase();
+    return this.functionReturnTypes.has(key) || Boolean(this.ast.hostServices && SERVICE_HOST_BINDINGS[key]);
   }
 
   // Calls are emitted to a label eagerly, so an undeclared target only shows up as a
@@ -2044,6 +2076,9 @@ class Codegen {
     }
     if (expr.type === 'Unary') return this.staticKindOf(expr.expr);
     if (expr.type === 'CallExpr') {
+      if (this.ast.hostServices && SERVICE_HOST_BINDINGS[String(expr.name).toLowerCase()]) {
+        return SERVICE_HOST_BINDINGS[String(expr.name).toLowerCase()].result;
+      }
       return this.kindOfTypeRef(this.functionReturnTypes.get(this.resolveCallTarget(expr.name).toLowerCase()));
     }
     return 'integer';
@@ -2689,9 +2724,16 @@ class Codegen {
         ? 'service'
         : 'daemon';
 
-    const refreshMs = runtimeKind === 'daemon' && runtimeUnit.schedule?.expr?.type === 'NumberLiteral'
+    let refreshMs = runtimeKind === 'daemon' && runtimeUnit.schedule?.expr?.type === 'NumberLiteral'
       ? runtimeUnit.schedule.expr.value
       : null;
+    if (this.ast.hostServices && runtimeKind === 'daemon') {
+      const unit = runtimeUnit.schedule?.unit;
+      refreshMs = refreshMs == null ? null : refreshMs * (['s', 'second', 'seconds'].includes(unit) ? 1000 : unit === 'm' ? 60000 : 1);
+      if (!Number.isSafeInteger(refreshMs) || refreshMs < 10 || refreshMs > 180000) {
+        throw new Error('[PASCALISH-PROGRAM] Hosted daemon requires a constant schedule between 10 and 180000 ms');
+      }
+    }
 
     this.emit('# Auto-generated from ANTLR Pascalish grammar');
     this.emit('JMP MAIN');
@@ -2785,7 +2827,30 @@ class Codegen {
     for (const variable of this.ast.variables || []) {
       this.initVariable(variable);
     }
-    this.emitStatement(runtimeUnit.block);
+    if (this.ast.hostServices && runtimeKind === 'service') {
+      for (const endpoint of runtimeUnit.endpoints) {
+        const next = this.nextLabel('ENDPOINT_NEXT');
+        this.emit('CALL_EXT host.event_method 0');
+        this.emit(`PUSH_STR "${this.escapeString(endpoint.verb)}"`);
+        this.emit('STREQ');
+        this.emit(`JZ ${next}`);
+        this.emit('CALL_EXT host.event_path 0');
+        this.emit(`PUSH_STR "${this.escapeString(endpoint.path)}"`);
+        this.emit('STREQ');
+        this.emit(`JZ ${next}`);
+        this.emit(`CALL ${this.lookupProcedureLabel(endpoint.handlerName)} 0`);
+        this.emit('STORE __service_response');
+        this.emit('MAP_RETURN __service_response');
+        this.emit('HALT');
+        this.emit(`${next}:`);
+      }
+      this.emit('PUSH_INT 404');
+      this.emit('CALL_EXT host.http_status 1');
+      this.emit('STORE __discard');
+      this.emit('PUSH_STR "{\\"error\\":\\"Service endpoint not found\\"}"');
+      this.emit('STORE __service_response');
+      this.emit('MAP_RETURN __service_response');
+    } else this.emitStatement(runtimeUnit.block);
     this.emitRouters();
     if (this.sourceLocation) this.sourceLocation = { ...this.sourceLocation, sourceLine: this.sourceLocation.endLine };
     this.emit('HALT');
@@ -2937,7 +3002,8 @@ class Codegen {
           publishable: false
         },
         routers: this.ast.routers || [],
-        serviceEndpoints: runtimeUnit.endpoints || [],
+        serviceEndpoints: (runtimeUnit.endpoints || []).map(({ body, ...endpoint }) => endpoint),
+        ...(this.ast.hostServices ? { hostBindingsVersion: SERVICE_HOST_BINDINGS_VERSION, targets: ['js', 'esp32'] } : {}),
         globals: (() => {
           this.suppressAccessChecks = true;
           try {
@@ -2991,7 +3057,7 @@ function extractMapperImports(sourceText) {
   return { imports, stripped };
 }
 
-export function compilePascalishProgramWithAntlr(sourceText, { fileName = '' } = {}) {
+export function compilePascalishProgramWithAntlr(sourceText, { fileName = '', hostServices = false } = {}) {
   const { imports: mapperImports, stripped } = extractMapperImports(String(sourceText || ''));
 
   const input = new antlr4.InputStream(stripped);
@@ -3013,7 +3079,25 @@ export function compilePascalishProgramWithAntlr(sourceText, { fileName = '' } =
     throw new Error(`[PASCALISH-PROGRAM] Parse failed:\n${errors.join('\n')}`);
   }
 
-  const ast = new PascalishProgramAstBuilder(stripped, fileName).visit(tree);
+  const ast = new PascalishProgramAstBuilder(stripped, fileName, hostServices).visit(tree);
+  if (hostServices) {
+    if (!['ServiceDecl', 'DaemonDecl'].includes(ast.runtimeUnit?.type)
+      || (ast.runtimeUnit.type === 'ServiceDecl' && !ast.runtimeUnit.endpoints.length)) {
+      throw new Error('[PASCALISH-PROGRAM] Hosted execution requires a service with endpoints or a scheduled daemon');
+    }
+    ast.hostServices = true;
+    const keys = new Set();
+    for (const [index, endpoint] of (ast.runtimeUnit.endpoints || []).entries()) {
+      const key = `${endpoint.verb} ${endpoint.path}`;
+      if (keys.has(key)) throw new Error(`[PASCALISH-PROGRAM] Duplicate endpoint: ${key}`);
+      keys.add(key);
+      endpoint.handlerName = `__service_endpoint_${index}`;
+      ast.procedures.push({
+        type: 'SubprogramDecl', name: endpoint.handlerName, params: [], paramDecls: [], localDecls: [],
+        returnType: { type: 'TypeRef', kind: 'simple', id: 'string' }, body: endpoint.body
+      });
+    }
+  }
   const linkedLibraries = linkLibraries(ast);
   const result = new Codegen(ast).build();
 

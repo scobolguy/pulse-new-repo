@@ -1,5 +1,5 @@
 /**
- * Home Automation HTTP routes.
+ * Home Automation HTTP adapter.
  * Mounts all /api/home-automation/* endpoints onto the Express app.
  */
 

@@ -1,5 +1,5 @@
 /**
- * Shared utilities used across all home-automation drivers and the service.
+ * Shared utilities used across the Home Automation module.
  */
 import os from 'node:os';
 

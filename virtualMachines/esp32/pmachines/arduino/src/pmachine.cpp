@@ -1477,6 +1477,10 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
                     instr.value = argc;
                 }
                 instr.type = pmachine::OperandType::STRING;
+            } else {
+                std::istringstream operands(trimCopy(rest2));
+                operands >> instr.strOperand >> instr.value;
+                instr.type = pmachine::OperandType::STRING;
             }
         } else if (opcode == pmachine::OP_ADD || opcode == pmachine::OP_SUB || opcode == pmachine::OP_MUL || opcode == pmachine::OP_DIV) {
             instr.type = pmachine::OperandType::NONE;
@@ -1527,6 +1531,8 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
         size_t envDepth = 1;
     };
     std::vector<NameCallFrame> nameCallStack;
+    std::vector<std::map<std::string, Value>> hostedFrames(1);
+    const uint32_t hostedStartedAt = millis();
     nameCallStack.reserve(INITIAL_NAME_FRAME_CAPACITY);
     std::string currentOutputLine;
     std::vector<std::string>& outputLines = lastRunTextOutput;
@@ -1592,6 +1598,14 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
     };
 
     auto pushString = [&](const std::string& text) {
+        if (hostCallHook) {
+            size_t bytes = text.size();
+            for (const auto& item : stringPool) bytes += item.size();
+            if (text.size() > 8192 || bytes > 32768) {
+                gFlowState["__runtime_error"] = "hosted string storage capacity exceeded";
+                return;
+            }
+        }
         if (sp >= STACK_SIZE) {
             gFlowState["__runtime_error"] = "stack overflow";
             return;
@@ -1683,12 +1697,12 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             return false;
         }
         // Prevent runaway recursion from exhausting heap on ESP32.
-        if (nameFrames.size() >= MAX_NAME_FRAME_DEPTH) {
+        if (nameFrames.size() >= (hostCallHook ? 32 : MAX_NAME_FRAME_DEPTH)) {
             lastCallError = "max call depth exceeded";
             return false;
         }
 
-        std::vector<int> args;
+        std::vector<Value> args;
         args.reserve(static_cast<size_t>(argc > 0 ? argc : 0));
         for (int i = 0; i < argc && sp > 0; ++i) {
             args.push_back(stack[--sp]);
@@ -1696,6 +1710,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
         std::reverse(args.begin(), args.end());
 
         NameFrame frameVars;
+        std::map<std::string, Value> hostedVars;
         frameVars.reserve(static_cast<size_t>(argc > 0 ? argc : 0));
         auto sigIt = procedureParamsByLabel.find(lookupLabel);
         if (sigIt == procedureParamsByLabel.end()) {
@@ -1721,8 +1736,9 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
         if (sigIt != procedureParamsByLabel.end()) {
             const std::vector<std::string>& names = sigIt->second;
             for (size_t i = 0; i < names.size(); ++i) {
-                const int value = (i < args.size()) ? args[i] : 0;
+                const int value = (i < args.size()) ? static_cast<int>(args[i]) : 0;
                 frameVars.emplace_back(names[i], value);
+                if (hostCallHook && i < args.size()) hostedVars[names[i]] = args[i];
             }
         } else {
             // Canonical fallback for common recursive procedure shape.
@@ -1745,6 +1761,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
         frame.envDepth = nameFrames.size();
         nameCallStack.push_back(frame);
         nameFrames.emplace_back(std::move(frameVars));
+        if (hostCallHook) hostedFrames.push_back(std::move(hostedVars));
         pc = targetPc;
         return true;
     };
@@ -1758,6 +1775,12 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
     PMTRACE(Serial.println("[DEBUG] Executing pinstructions:"));
     int resumedPc = -1;
     while (pc < (int)instructions.size()) {
+        if (hostCallHook && gFlowState.count("__runtime_error")) break;
+        if (hostCallHook && (sp < 0 || sp > 256 || stringPool.size() > 512
+            || static_cast<uint32_t>(millis() - hostedStartedAt) >= 500)) {
+            gFlowState["__runtime_error"] = "hosted invocation resource limit exceeded";
+            break;
+        }
         this->pc = static_cast<uint16_t>(pc);
         if (debugRunStatus.load() != 0) {
             debugPc = static_cast<uint16_t>(pc);
@@ -1812,7 +1835,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             vTaskDelay(1);
         }
     #endif
-        if (steps > MAX_RUN_STEPS) {
+        if (steps > (hostCallHook ? 10000 : MAX_RUN_STEPS)) {
             lastRunStepLimitHit = true;
             break;
         }
@@ -2080,6 +2103,20 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
         }
         case OP_LOAD_NAME: {
             const std::string varName = instr.strOperand;
+            if (hostCallHook) {
+                Value value = 0;
+                for (auto frame = hostedFrames.rbegin(); frame != hostedFrames.rend(); ++frame) {
+                    auto found = frame->find(varName);
+                    if (found != frame->end()) { value = found->second; break; }
+                }
+                if (sp >= STACK_SIZE) {
+                    gFlowState["__runtime_error"] = "stack overflow";
+                    goto pmachineRunExit;
+                }
+                stack[sp++] = value;
+                ++pc;
+                continue;
+            }
             // Dispatch on binding presence, not value emptiness, so "" stays a string.
             auto strBinding = namedStringVariables.find(varName);
             if (strBinding != namedStringVariables.end()) {
@@ -2117,6 +2154,15 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             continue;
         }
         case OP_STORE_NAME: {
+            if (hostCallHook) {
+                if (sp <= 0 || hostedFrames.back().size() >= 128) {
+                    gFlowState["__runtime_error"] = "hosted variable capacity or stack underflow";
+                    goto pmachineRunExit;
+                }
+                hostedFrames.back()[instr.strOperand] = stack[--sp];
+                ++pc;
+                continue;
+            }
             // String stack wins, matching OP_PRINT precedence, so TRIM/FILE_READ results survive STORE.
             if (isStringAtDepth(1)) {
                 namedStringVariables[instr.strOperand] = popString();
@@ -2233,6 +2279,35 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
         }
         case OP_CALL_EXT: {
             const std::string symbol = trimCopy(instr.strOperand);
+            if (symbol.rfind("host.", 0) == 0) {
+                if (!hostCallHook || instr.value < 0 || instr.value > 4 || sp < instr.value) {
+                    gFlowState["__runtime_error"] = "unavailable host binding or invalid argument count";
+                    goto pmachineRunExit;
+                }
+                std::vector<HostValue> args;
+                for (int i = sp - instr.value; i < sp; ++i) {
+                    HostValue arg;
+                    if (stack[i].kind != ValueKind::StringRef && stack[i].kind != ValueKind::Integer) {
+                        gFlowState["__runtime_error"] = "unsupported host argument type";
+                        goto pmachineRunExit;
+                    }
+                    arg.isString = stack[i].isString();
+                    if (arg.isString) arg.text = stringAt(stack[i]);
+                    else arg.integer = stack[i].i;
+                    args.push_back(std::move(arg));
+                }
+                sp -= instr.value;
+                HostValue result;
+                std::string error;
+                if (!hostCallHook(symbol, args, result, error, hostCallContext)) {
+                    gFlowState["__runtime_error"] = error;
+                    goto pmachineRunExit;
+                }
+                if (result.isString) pushString(result.text);
+                else if (sp < STACK_SIZE) stack[sp++] = result.integer;
+                ++pc;
+                continue;
+            }
             if (symbol.empty()) {
                 gFlowState["__thunk_error"] = "empty external symbol";
                 goto pmachineRunExit;
@@ -2276,6 +2351,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             }
             NameCallFrame frame = nameCallStack.back();
             nameCallStack.pop_back();
+            if (hostCallHook && hostedFrames.size() > 1) hostedFrames.pop_back();
             while (nameFrames.size() > frame.envDepth) {
                 nameFrames.pop_back();
             }
@@ -2753,7 +2829,16 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             continue;
         }
         case OP_MAP_RETURN: {
-            gFlowState["__response"] = getNamedStringVariable(trimCopy(instr.strOperand));
+            const std::string name = trimCopy(instr.strOperand);
+            if (hostCallHook) {
+                for (auto frame = hostedFrames.rbegin(); frame != hostedFrames.rend(); ++frame) {
+                    auto found = frame->find(name);
+                    if (found != frame->end()) {
+                        gFlowState["__response"] = stringAt(found->second);
+                        break;
+                    }
+                }
+            } else gFlowState["__response"] = getNamedStringVariable(name);
             ++pc;
             continue;
         }

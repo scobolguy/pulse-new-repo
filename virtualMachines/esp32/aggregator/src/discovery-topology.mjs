@@ -1,4 +1,4 @@
-export const DISCOVERY_NODE_MAX_AGE_MS = 10 * 60 * 1000;
+export const DISCOVERY_NODE_MAX_AGE_MS = 3 * 60 * 1000;
 
 function normalizeUdpPort(value) {
   const asNumber = Number(value);
@@ -120,7 +120,18 @@ export function mergeDiscoveryNodes(nodes = []) {
 }
 
 export function isFreshDiscoveryNode(node, maxAgeMs = DISCOVERY_NODE_MAX_AGE_MS, now = Date.now()) {
-  return Number(node?.lastSeen || 0) > 0 && (now - Number(node.lastSeen)) <= maxAgeMs;
+  const lastAnnouncement = Number(node?.beacon?.seenAt ?? node?.lastSeen ?? 0);
+  return Number.isFinite(lastAnnouncement) && lastAnnouncement > 0
+    && now - lastAnnouncement < maxAgeMs;
+}
+
+export function pruneDiscoveryNodes(discoveredNodes, now = Date.now(), logger = console) {
+  for (const [key, node] of discoveredNodes) {
+    if (!isFreshDiscoveryNode(node, DISCOVERY_NODE_MAX_AGE_MS, now)) {
+      discoveredNodes.delete(key);
+      logger.log(`[TOPOLOGY] Removed inactive node: ${key}`);
+    }
+  }
 }
 
 export function isEsp32DiscoveryNode(node, maxAgeMs = DISCOVERY_NODE_MAX_AGE_MS, now = Date.now()) {

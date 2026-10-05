@@ -4,7 +4,7 @@
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { getLanDiscoveryTarget, normalizeId } from '../utils.mjs';
+import { getLanDiscoveryTarget, normalizeId } from '../../shared/utils.mjs';
 
 const execFileAsync = promisify(execFile);
 

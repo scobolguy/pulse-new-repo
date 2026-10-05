@@ -8,6 +8,10 @@ import { execFile } from 'node:child_process';
 import { allocateJob } from '../allocator/economicAllocator.mjs';
 import { attachPcodeSignature } from '../../../scripts/pcode-signing.mjs';
 import { enrichDiscoveredNode } from '../modules/nodeDiscovery.mjs';
+import { isFreshDiscoveryNode, pruneDiscoveryNodes } from '../../discovery-topology.mjs';
+import { registerNodeAnnouncementRoute } from '../modules/discoveryCollector.mjs';
+import { getInfrastructureCatalog } from '../modules/serviceRegistry.mjs';
+import { buildServicesDirectory } from '../modules/servicesDirectory.mjs';
 
 const NODE_RENAME_OVERRIDES_PATH = path.resolve(process.cwd(), 'data', 'node-rename-overrides.json');
 const NODE_TOPOLOGY_OVERRIDES_PATH = path.resolve(process.cwd(), 'data', 'node-topology-overrides.json');
@@ -744,6 +748,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     setNodeLifecycleState,
     deploymentIndexPath
   } = deps;
+  const discoveryProvider = deps.discoveryProvider || app.locals.discoveryProvider;
   let nodeRenameMap = {};
   let nodeRenameMapLoaded = false;
   let nodeTopologyMap = {};
@@ -1243,214 +1248,13 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     await ensureClusterRegistryLoaded();
     await ensureSiteRegistryLoaded();
     const now = Date.now();
-    const backendNode = {
-      ip: '127.0.0.1',
-      nodeName: 'Aggregator Backend',
-      lastSeen: now,
-      details: {
-        nodeName: 'Aggregator Backend',
-        hardware: 'Server',
-        services: [
-          { name: 'Message Broker', status: 'online', api: '/api/broker' },
-          { name: 'Router Service', status: 'online', api: '/api/router' },
-          { name: 'Queue Manager', status: 'online', api: '/api/queue' },
-          { name: 'File Server', status: 'online', api: '/api/fileserver' }
-        ],
-        status: 'ok',
-        version: '1.0.0'
-      }
-    };
-    const magicClusterNodes = [
-      {
-        kind: 'machineAvailability',
-        serviceName: 'js-pmachine',
-        nodeId: 'magic-js-pmachine-01',
-        nodeName: 'magic-js-pmachine-01',
-        ip: '127.0.10.101',
-        port: 4101,
-        status: 'available',
-        available: true,
-        draining: false,
-        lastSeen: now,
-        ts: now,
-        details: {
-          nodeName: 'magic-js-pmachine-01',
-          hardware: 'PMachine JavaScript VM',
-          runtime: 'js-pmachine',
-          clusterName: 'Magic Cluster',
-          services: ['PMachine Runtime', 'JavaScript VM']
-        }
-      },
-      {
-        kind: 'machineAvailability',
-        serviceName: 'js-pmachine',
-        nodeId: 'magic-js-pmachine-02',
-        nodeName: 'magic-js-pmachine-02',
-        ip: '127.0.10.102',
-        port: 4102,
-        status: 'available',
-        available: true,
-        draining: false,
-        lastSeen: now,
-        ts: now,
-        details: {
-          nodeName: 'magic-js-pmachine-02',
-          hardware: 'PMachine JavaScript VM',
-          runtime: 'js-pmachine',
-          clusterName: 'Magic Cluster',
-          services: ['PMachine Runtime', 'JavaScript VM']
-        }
-      },
-      {
-        kind: 'machineAvailability',
-        serviceName: 'js-pmachine',
-        nodeId: 'magic-js-pmachine-03',
-        nodeName: 'magic-js-pmachine-03',
-        ip: '127.0.10.103',
-        port: 4103,
-        status: 'available',
-        available: true,
-        draining: false,
-        lastSeen: now,
-        ts: now,
-        details: {
-          nodeName: 'magic-js-pmachine-03',
-          hardware: 'PMachine JavaScript VM',
-          runtime: 'js-pmachine',
-          clusterName: 'Magic Cluster',
-          services: ['PMachine Runtime', 'JavaScript VM']
-        }
-      }
-    ];
-
-    // Add Neptune parent node with proper nodeKey
-    const neptuneNode = {
-      id: 'Neptune',
-      nodeId: 'Neptune',
-      nodeName: 'Neptune',
-      ip: '172.18.0.1',
-      port: 8080,
-      kind: 'cluster-node',
-      hardware: 'Neptune Cluster',
-      status: 'available',
-      available: true,
-      lastSeen: now,
-      ts: now,
-      details: {
-        nodeName: 'Neptune',
-        hardware: 'Neptune Cluster',
-        services: ['Cluster Manager', 'Router'],
-        status: 'available'
-      },
-      topology: {
-        nodeKey: 'Neptune',
-        parentNodeId: null,
-        activeClusterId: 'default',
-        site: {
-          siteId: 'primary-site',
-          siteName: 'Primary Site',
-          siteCategory: 'internal',
-          siteMode: 'hot-warm'
-        }
-      }
-    };
-
-    // Add known ESP32 nodes with Neptune as parent
-    const esp32Nodes = [
-      {
-        id: 'child1',
-        nodeId: 'child1',
-        nodeName: 'child1',
-        ip: '192.168.2.157',
-        port: 80,
-        kind: 'esp32-device',
-        hardware: 'ESP32-CAM',
-        status: 'available',
-        available: true,
-        lastSeen: now,
-        ts: now,
-        details: {
-          nodeName: 'child1',
-          hardware: 'ESP32-CAM',
-          services: ['LEDPIN', 'RELAY', 'Camera'],
-          status: 'available'
-        },
-        topology: {
-          nodeKey: 'child1',
-          parentNodeId: 'Neptune',
-          activeClusterId: 'default',
-          site: {
-            siteId: 'primary-site',
-            siteName: 'Primary Site',
-            siteCategory: 'internal',
-            siteMode: 'hot-warm'
-          }
-        }
-      },
-      {
-        id: 'child2',
-        nodeId: 'child2',
-        nodeName: 'child2',
-        ip: '192.168.2.59',
-        port: 80,
-        kind: 'esp8266-device',
-        hardware: 'ESP8266',
-        status: 'available',
-        available: true,
-        lastSeen: now,
-        ts: now,
-        details: {
-          nodeName: 'child2',
-          hardware: 'ESP8266',
-          services: ['RELAY', 'Sensor'],
-          status: 'available'
-        },
-        topology: {
-          nodeKey: 'child2',
-          parentNodeId: 'Neptune',
-          activeClusterId: 'default',
-          site: {
-            siteId: 'primary-site',
-            siteName: 'Primary Site',
-            siteCategory: 'internal',
-            siteMode: 'hot-warm'
-          }
-        }
-      },
-      {
-        id: 'child3',
-        nodeId: 'child3',
-        nodeName: 'child3',
-        ip: '192.168.2.58',
-        port: 80,
-        kind: 'esp32-device',
-        hardware: 'ESP32',
-        status: 'available',
-        available: true,
-        lastSeen: now,
-        ts: now,
-        details: {
-          nodeName: 'child3',
-          hardware: 'ESP32',
-          services: ['GPIO', 'ADC', 'PWM'],
-          status: 'available'
-        },
-        topology: {
-          nodeKey: 'child3',
-          parentNodeId: 'Neptune',
-          activeClusterId: 'default',
-          site: {
-            siteId: 'primary-site',
-            siteName: 'Primary Site',
-            siteCategory: 'internal',
-            siteMode: 'hot-warm'
-          }
-        }
-      }
-    ];
-
-    const homeAutomationNodes = homeAutomationService?.getTopologyNodes?.() || [];
-    const allNodes = [backendNode, ...magicClusterNodes, neptuneNode, ...esp32Nodes, ...homeAutomationNodes, ...Array.from(discoveredNodes.values())];
+    discoveryProvider?.getNodes();
+    pruneDiscoveryNodes(discoveredNodes, now);
+    const homeAutomationNodes = (homeAutomationService?.getTopologyNodes?.() || [])
+      .filter((node) => node?.details?.deviceRole === 'home-automation-device'
+        && isFreshDiscoveryNode(node, undefined, now));
+    const allNodes = [...homeAutomationNodes, ...discoveredNodes.values()]
+      .filter((node) => node.raw !== 'active-probe' || node.beacon || node.discovery?.provider === 'remote');
     
     // Deduplicate nodes by nodeKey/nodeId/nodeName/ip
     const seenKeys = new Set();
@@ -2606,9 +2410,10 @@ export function registerTopologyRuntimeRoutes(app, deps) {
   }
 
   app.get('/api/discover-primary', async (req, res) => {
+    discoveryProvider?.getNodes();
     const now = Date.now();
     const nodes = Array.from(discoveredNodes.values())
-      .filter(n => n.details?.services?.some(s => s.name?.toLowerCase().includes('broker')) && now - n.lastSeen < 10 * 60 * 1000)
+      .filter(n => n.details?.services?.some(s => s.name?.toLowerCase().includes('broker')) && isFreshDiscoveryNode(n, undefined, now))
       .sort((a, b) => b.lastSeen - a.lastSeen);
     if (nodes.length > 0) {
       res.json({ url: `http://${nodes[0].ip}:4000`, ip: nodes[0].ip, node: nodes[0] });
@@ -2632,8 +2437,31 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     res.json({ services });
   });
 
+  app.locals.getCurrentNodesWithTopology = buildCurrentNodesWithTopology;
+
   app.get('/api/nodes', async (req, res) => {
     res.json(attachHierarchyPaths(await buildCurrentNodesWithTopology()));
+  });
+
+  app.get('/api/services', async (req, res) => {
+    try {
+      const directory = await buildServicesDirectory({
+        catalog: getInfrastructureCatalog(),
+        instances: Array.from(serviceInstanceRegistry.values()),
+        nodes: await buildCurrentNodesWithTopology(),
+        collectorUrls: (discoveryProvider?.getStatus()?.collectors || []).map((collector) => collector.url),
+        origin: `${req.protocol}://${req.get('host')}`
+      });
+      for (const error of directory.errors) console.warn(`[SERVICES] ${error.endpoint}: ${error.error}`);
+      res.json(directory);
+    } catch (error) {
+      console.error('[SERVICES] Directory failed:', error);
+      res.status(500).json({ status: 'error', error: error.message });
+    }
+  });
+
+  app.get('/api/discovery/status', (req, res) => {
+    res.json(discoveryProvider?.getStatus() || { mode: 'local', status: 'unmanaged' });
   });
 
   app.get('/api/sites', async (req, res) => {
@@ -3704,11 +3532,13 @@ export function registerTopologyRuntimeRoutes(app, deps) {
 
   app.get('/api/pmachine/nodes', async (req, res) => {
     try {
-      const missingCapabilities = Array.from(discoveredNodes.entries()).filter(([, node]) => {
+      pruneDiscoveryNodes(discoveredNodes);
+      discoveryProvider?.getNodes();
+      const missingCapabilities = discoveryProvider?.mode === 'remote' ? [] : Array.from(discoveredNodes.entries()).filter(([, node]) => {
         const ip = String(node?.ip || '').trim();
         const services = node?.details?.services;
         return ip && !ip.startsWith('127.') && ip !== '::1'
-          && Date.now() - Number(node.lastSeen || 0) <= 10 * 60 * 1000
+          && isFreshDiscoveryNode(node)
           && (!Array.isArray(services) || services.length === 0);
       });
       await Promise.all(missingCapabilities.map(([key]) => enrichDiscoveredNode({
@@ -3725,14 +3555,16 @@ export function registerTopologyRuntimeRoutes(app, deps) {
 
       for (const node of nodes) {
         const ip = String(node?.ip || '').trim();
-        if (ip && hasPmachineService(node?.details?.services)) candidates.set(ip, node);
+        if (ip && hasPmachineService(node?.details?.services)) {
+          candidates.set(`${ip}:${Number(node.port || node.httpPort || 80)}`, node);
+        }
       }
 
-      const configuredEdgeBases = String(
+      const configuredEdgeBases = discoveryProvider?.mode === 'remote' ? [] : String(
         process.env.SERVICE_EDGE_BASE_URLS || process.env.SERVICE_EDGE_BASE_URL || ''
       ).split(',').map((value) => value.trim()).filter(Boolean);
-      const jsNodeBases = String(
-        process.env.JS_PMACHINE_BASE_URLS ?? 'http://127.0.0.1:4111,http://127.0.0.1:4112'
+      const jsNodeBases = discoveryProvider?.mode === 'remote' ? [] : String(
+        process.env.JS_PMACHINE_BASE_URLS ?? 'http://127.0.0.1:4111,http://127.0.0.1:4112,http://127.0.0.1:4113'
       ).split(',').map((value) => value.trim()).filter(Boolean);
       await Promise.all([...configuredEdgeBases, ...jsNodeBases].map(async (baseUrl) => {
         try {
@@ -3742,7 +3574,8 @@ export function registerTopologyRuntimeRoutes(app, deps) {
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const status = await response.json();
           if (!hasPmachineService(status?.services)) return;
-          const key = base.port ? `${base.hostname}:${base.port}` : base.hostname;
+          const port = Number(base.port || (base.protocol === 'https:' ? 443 : 80));
+          const key = `${base.hostname}:${port}`;
           if (candidates.has(key)) return;
           const isJsNode = status?.runtime === 'js-pmachine';
           candidates.set(key, {
@@ -3750,7 +3583,8 @@ export function registerTopologyRuntimeRoutes(app, deps) {
             nodeName: String(status.nodeName || key),
             ip: base.hostname,
             host: key,
-            port: Number(base.port || (base.protocol === 'https:' ? 443 : 80)),
+            port,
+            lastSeen: Date.now(),
             status: 'available',
             available: true,
             details: {
@@ -3770,90 +3604,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     }
   });
 
-  app.post('/api/pmachine/announce', (req, res) => {
-    const body = req.body && typeof req.body === 'object' ? req.body : {};
-    const ip = String(body.ip || req.ip || '').replace('::ffff:', '').trim();
-    const nodeId = String(body.nodeId || body.nodeName || ip || '').trim();
-    if (!nodeId) {
-      return res.status(400).json({ error: 'nodeId (or nodeName/ip) is required' });
-    }
-
-    const now = Date.now();
-    const key = ip || nodeId;
-    const previous = discoveredNodes.get(key) || {};
-    const servicesList = Array.isArray(body.services) ? body.services : [];
-    const normalizedServices = servicesList
-      .map((svc) => {
-        if (!svc || typeof svc !== 'object') return null;
-        const name = String(svc.name || svc.serviceName || '').trim();
-        if (!name) return null;
-        return {
-          name,
-          endpoint: String(svc.endpoint || '/pmachine/service').trim(),
-          status: String(svc.status || 'up').trim().toLowerCase(),
-          metadata: svc.metadata && typeof svc.metadata === 'object' ? svc.metadata : {}
-        };
-      })
-      .filter(Boolean);
-
-    const nextNode = {
-      ...previous,
-      id: String(body.id || previous.id || key).trim(),
-      nodeId,
-      nodeName: String(body.nodeName || previous.nodeName || nodeId).trim(),
-      ip: ip || previous.ip || nodeId,
-      port: Number(body.port || previous.port || 80),
-      serviceName: 'pmachine',
-      kind: 'machineAvailability',
-      source: body.source || previous.source || 'pmachine-announce',
-      status: String(body.status || previous.status || 'available').trim(),
-      available: body.available !== false,
-      draining: Boolean(body.draining),
-      lastSeen: now,
-      ts: now,
-      availability: {
-        available: body.available !== false,
-        draining: Boolean(body.draining),
-        status: String(body.status || 'available')
-      },
-      details: {
-        ...(previous.details || {}),
-        hardware: String(body.hardware || previous?.details?.hardware || 'ESP32').trim(),
-        runtime: String(body.runtime || previous?.details?.runtime || 'pmachine').trim(),
-        services: normalizedServices,
-        capabilities: Array.isArray(body.capabilities) ? body.capabilities : (previous?.details?.capabilities || [])
-      },
-      raw: JSON.stringify(body)
-    };
-    discoveredNodes.set(key, nextNode);
-
-    for (const svc of normalizedServices) {
-      upsertServiceInstance({
-        serviceName: svc.name,
-        instanceId: `${svc.name}:${nodeId}:${nextNode.port}`,
-        nodeId,
-        ip: nextNode.ip,
-        port: nextNode.port,
-        status: svc.status || 'up',
-        metadata: {
-          ...(svc.metadata || {}),
-          route: svc.endpoint,
-          hardware: nextNode.details.hardware,
-          runtime: nextNode.details.runtime
-        }
-      });
-    }
-
-    res.json({
-      status: 'ok',
-      node: {
-        nodeId: nextNode.nodeId,
-        ip: nextNode.ip,
-        port: nextNode.port,
-        services: normalizedServices.map((svc) => svc.name)
-      }
-    });
-  });
+  registerNodeAnnouncementRoute(app, { discoveredNodes, discoveryProvider, upsertServiceInstance });
 
   app.get('/api/pmachine/services', (req, res) => {
     res.json({

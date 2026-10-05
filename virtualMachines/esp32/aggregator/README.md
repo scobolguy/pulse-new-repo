@@ -13,6 +13,17 @@ Use the terms below consistently across UI, NLI, and docs:
 - Flow: a larger pipeline that can include router stages, transformer stages, and other runtime logic.
 - Deployment: binds a runtime artifact or service instance to a node or cluster target.
 
+## Service Directory
+
+`GET /api/services` is the shared service directory used by both VS Code Services
+views. Its `{ status, services, errors }` response includes configured offerings,
+runtime instances, and named services from PMachine node `/api/services`
+registries. Node registries are queried for discovered PMachines, configured
+discovery collectors, and Pascalish offerings with configured HTTP endpoints.
+Services include their hosting node and invocation endpoint; `registered` is not
+a health assertion. Unreachable registries produce explicit `errors` and a
+`degraded` status while the remaining services remain visible.
+
 ## Project Build Tree Model
 
 Projects are recursive containers. Every project can contain subprojects, and each subproject can contain more subprojects.
@@ -69,6 +80,11 @@ from making a node deployable.
 Target lookup also retries capability discovery for recent non-loopback nodes
 whose service list is missing or empty, with a three-second timeout per request.
 This allows an initial discovery timeout to recover without rebooting the board.
+Nodes expire after three minutes without an announcement, including at the
+three-minute boundary. Cleanup runs every second and topology/target requests
+also prune expired entries immediately. UDP nodes use the last received beacon,
+not a later capability lookup, as their heartbeat. Demo Magic/Neptune/child
+nodes are not injected into the live topology.
 
 Run only one backend instance that owns UDP port 4210. In particular, do not
 run both the legacy `PulseGateway` Windows service and `PulseAggregator`.
@@ -80,6 +96,132 @@ For explicitly configured targets without UDP discovery, set
 `SERVICE_EDGE_BASE_URLS` to a comma-separated list of HTTP(S) device origins.
 These targets must respond to `/status` with a `pmachine` service; there is
 no hard-coded device-IP fallback.
+Local JS nodes on ports 4111, 4112 and 4113 are also checked via `/status`.
+Standalone JS nodes announce on startup and every minute through
+`/api/pmachine/announce`; nodes sharing an IP are tracked separately by port.
+The standalone discovery service uses the same three-minute expiry policy.
+
+### Splitting node discovery from the Aggregator
+
+Discovery and the management/deployment backend now have independent roles.
+`PULSE_DISCOVERY_MODE=local` is the default: the Aggregator owns its UDP listener,
+capability enrichment and configured device probes through a local provider.
+Do not run a standalone collector on the same host/UDP port in this mode.
+
+For a separate PC collector, start it from the Aggregator directory:
+
+```powershell
+$env:DISCOVERY_HTTP_PORT = '4300'
+$env:UDP_PORT = '4210'
+$env:PULSE_DISCOVERY_COLLECTOR_ID = 'collector-a'
+npm run dev:discovery
+```
+
+Alternatively, the JavaScript PMachine can host a Pascalish discovery **service**
+and a scheduled maintenance **daemon** implementing the same snapshot protocol.
+Run `npm run discovery` from `pmachines/javascript` with the same collector/port
+environment variables. See the
+[host lifecycle, limits and ESP32 porting notes](../pmachines/javascript/README.md#hosted-pascalish-service-and-daemon).
+This JS collector consumes advertised capabilities but does not perform the
+native collector's device enrichment probes.
+
+In the Aggregator's separate process/service environment, configure:
+
+```text
+PULSE_DISCOVERY_MODE=remote
+PULSE_DISCOVERY_COLLECTOR_URLS=http://collector-a:4300,http://collector-b:4300
+PULSE_DISCOVERY_POLL_INTERVAL_MS=5000
+PULSE_DISCOVERY_TIMEOUT_MS=3000
+```
+
+One collector is supported; two provide independent presence observations.
+Give each collector a unique stable ID. Collectors on different machines may
+both listen on UDP 4210. On one machine, use distinct HTTP and UDP ports and
+deliver announcements to each listener explicitly; broadcast to one port is
+not automatically duplicated to another. Avoid HTTP port collisions with
+Librarian or other configured services. These settings are independent of
+`MODULAR_BACKEND` and the broker/database/dictionary deployment choices.
+
+Remote mode does **not** create a local discovery socket, run ESP32 discovery
+probes, enrich device capabilities, or probe configured/local JS targets during
+target lookup. Collectors own capability discovery; the Aggregator consumes
+their cached live view. Browser presence and home-automation remain separate
+existing subsystems, not ESP32 collector responsibilities.
+
+`POST /api/pmachine/announce` on the Aggregator forwards announcements to all
+collectors. The response includes delivery results and `degraded: true` for
+partial delivery; total failure returns HTTP 503. Forwarding alone does not
+create live local presence: it must appear in a collector snapshot. Nodes may
+also announce directly to collectors. When a collector is remote, advertised
+node addresses must be reachable from the collector and the Aggregator:
+do not advertise `127.0.0.1` for a node on another machine. Use
+`JS_PMACHINE_ADVERTISE_HOST` for standalone JS nodes.
+
+`GET /api/discovery/status` on the Aggregator exposes mode, collector
+reachability, last success and errors. Collector failures are logged and shown
+as degraded/unavailable; they do not silently enable local discovery.
+Unexpired cached observations may remain visible during a collector outage,
+but never outlive their reported remaining lifetime. A healthy collector can
+keep the same node present with its own observations.
+
+#### Collector protocol v1
+
+Collectors implement `POST /api/pmachine/announce` and
+`GET /api/discovery/snapshot`. A snapshot is a full replacement of that
+collector's observations, not a patch. Collectors may split it into pages of up
+to five nodes; clients request later pages with the opaque `cursor` query value.
+Paged responses contain `continuation: "continue"` and `nextCursor` when more
+nodes remain, or `continuation: "end"` on the final page. Older collectors may
+continue returning all nodes in one response without these fields. The client
+combines all pages before replacing cached observations:
+
+```json
+{
+  "protocolVersion": 1,
+  "collectorId": "collector-a",
+  "bootId": "unique-per-start",
+  "sequence": 12,
+  "continuation": "end",
+  "nextCursor": "",
+  "nodes": [{
+    "nodeId": "board-01",
+    "ip": "192.168.2.115",
+    "port": 80,
+    "remainingTtlMs": 120000,
+    "details": { "hardware": "ESP32", "services": ["pmachine"] }
+  }]
+}
+```
+
+Node IDs are stable and distinct from IP/port; multiple nodes can share an IP.
+Each snapshot has an increasing sequence within a boot. Replayed/out-of-order
+snapshots, retired boots, duplicate IDs and invalid observations are rejected
+atomically after all pages are collected. A new boot replaces that collector's old snapshot. The PC collector
+does not export configured service health records or probe-only devices as
+announced presence. Its existing catalog API still exposes configured services.
+
+`remainingTtlMs` is between 0 and 180000 and decreases until a new announcement.
+Polling a snapshot must **not** renew its nodes. The Aggregator subtracts request
+time conservatively and expires cached observations using a monotonic timer;
+it does not trust collector wall-clock timestamps. Snapshots must not be cached.
+An ESP32 implementation can use rollover-safe local hardware timers and the
+same JSON contract, regardless of whether its policy is native or Pascalish.
+
+The persisted ESP32 registry remains inventory/capability metadata, not the
+authority for live topology. Loading it no longer resets old timestamps, and
+startup-configured nodes are not counted as new announcements.
+Remote flow placement and rollback resolve live PMachine nodes from the provider
+and topology view rather than falling back to saved inventory addresses.
+
+This is a presence/discovery split, **not** distributed configuration consensus:
+deployment ownership and topology configuration remain with the Aggregator.
+Collector endpoints use the existing trusted-network HTTP model; authentication,
+TLS, bounded ESP32 storage and firmware implementation are separate deployment
+work. Do not expose unauthenticated collector endpoints to an untrusted network.
+
+Validate with `npm run test:discovery:split`. Tests include dual-collector
+failure/expiry/recovery, replay and boot changes, announcement forwarding,
+local UDP ownership and an isolated standalone PC collector process.
 
 - Topology runtime implementation:
   - `src/backend/roles/topologyRuntimeRoutes.mjs`

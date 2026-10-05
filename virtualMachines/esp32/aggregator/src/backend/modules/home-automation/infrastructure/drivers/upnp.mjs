@@ -6,7 +6,7 @@
  */
 import dgram from 'node:dgram';
 import { XMLParser } from 'fast-xml-parser';
-import { normalizeId, getLanDiscoveryTarget } from '../utils.mjs';
+import { normalizeId, getLanDiscoveryTarget } from '../../shared/utils.mjs';
 
 const SSDP_MULTICAST_ADDRESS = '239.255.255.250';
 const SSDP_MULTICAST_PORT = 1900;

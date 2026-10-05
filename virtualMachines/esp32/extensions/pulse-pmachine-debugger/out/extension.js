@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as vscode from 'vscode';
 import { HanoiPanel, looksLikeHanoi } from './hanoiPanel.js';
+import { ServicesViewProvider, openServiceEndpoint } from './servicesView.js';
 const DEFAULT_NODE_HOSTS = ['127.0.0.1:4111', '127.0.0.1:4112', '127.0.0.1:4113', '192.168.2.155'];
 function isRemoteRuntime(runtime) {
     return runtime === 'esp32' || runtime === 'js-node';
@@ -951,7 +952,7 @@ function pcodeLanguage(document) {
         return 'mapl';
     return null;
 }
-async function compileDocumentToPcode(document) {
+async function compileDocumentToPcode(document, hostServices = false) {
     const language = pcodeLanguage(document);
     if (!language)
         throw new Error('This file is not a supported pcode language.');
@@ -964,7 +965,10 @@ async function compileDocumentToPcode(document) {
     const fileName = path.basename(document.fileName);
     if (language === 'pascalish') {
         const compiler = await import(pathToFileURL(path.join(scripts, 'compile-pascalish-program-antlr-to-pcode.mjs')).href);
-        return compiler.compilePascalishProgramWithAntlr(sourceText, { fileName });
+        return compiler.compilePascalishProgramWithAntlr(sourceText, {
+            fileName,
+            ...(hostServices ? { hostServices: true } : {}),
+        });
     }
     if (language === 'vbish') {
         const compiler = await import(pathToFileURL(path.join(scripts, 'compile-interoperable-language.mjs')).href);
@@ -995,6 +999,45 @@ async function compileDocumentToPcode(document) {
     const compiler = await import(pathToFileURL(path.join(scripts, 'compile-mapl-antlr-to-pcode.mjs')).href);
     const artifact = compiler.compileMaplWithAntlr(sourceText);
     return { pcodeText: artifact.pcodeText, programMap: artifact.programMap };
+}
+async function compileForTarget(document, target) {
+    if (!target.host || pcodeLanguage(document) !== 'pascalish')
+        return compileDocumentToPcode(document);
+    try {
+        return await compileDocumentToPcode(document, true);
+    }
+    catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        if (!detail.includes('Hosted compilation requires a service or daemon'))
+            throw error;
+        return compileDocumentToPcode(document);
+    }
+}
+async function compileHostedDaemonCompanion(document) {
+    const sourceName = path.basename(document.fileName).toLowerCase();
+    const daemonName = sourceName === 'discovery-collector-service.pas'
+        ? 'discovery-maintenance-daemon.pas'
+        : sourceName.endsWith('-service.pas')
+            ? sourceName.replace(/-service\.pas$/, '-daemon.pas')
+            : '';
+    if (!daemonName)
+        return null;
+    const daemonPath = path.join(path.dirname(document.fileName), daemonName);
+    let sourceText;
+    try {
+        sourceText = await fs.readFile(daemonPath, 'utf8');
+    }
+    catch (error) {
+        if (error.code === 'ENOENT')
+            return null;
+        throw error;
+    }
+    const root = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath
+        || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!root)
+        throw new Error('Open the project workspace before compiling a hosted daemon.');
+    const compiler = await import(pathToFileURL(path.join(root, 'aggregator', 'scripts', 'compile-pascalish-program-antlr-to-pcode.mjs')).href);
+    return compiler.compilePascalishProgramWithAntlr(sourceText, { fileName: daemonPath, hostServices: true });
 }
 function backendUrl() {
     return String(vscode.workspace.getConfiguration('pulse-pmachine').get('backendUrl', 'http://127.0.0.1:4000'))
@@ -1029,14 +1072,13 @@ export async function loadPmachineTargets() {
         });
         if (!address || !hasPmachine)
             continue;
-        const port = Number(node?.port);
         targets.push({
             key: `${isJavaScript ? 'js' : 'esp32'}:${nodeId}`,
             label: String(node?.nodeName || node?.name || nodeId),
             description: `${address} · ${isJavaScript ? 'JavaScript' : 'ESP32'} PMachine`,
             runtime: isJavaScript ? 'js' : 'esp32',
             nodeId,
-            host: isJavaScript && port > 0 && !address.includes(':') ? `${address}:${port}` : address,
+            host: isJavaScript ? undefined : address,
         });
     }
     return targets;
@@ -1100,7 +1142,7 @@ async function runCurrentFile(context, output, uri, hanoiPanel) {
     await context.globalState.update('lastPmachineRunTarget', target.key);
     output.appendLine(`Target: ${target.label}${target.description ? ` (${target.description})` : ''}`);
     try {
-        const artifact = await compileDocumentToPcode(document);
+        const artifact = await compileForTarget(document, target);
         await vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,
             title: `Running ${path.basename(document.fileName)} on ${target.label}`,
@@ -1114,15 +1156,29 @@ async function runCurrentFile(context, output, uri, hanoiPanel) {
                 const root = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath
                     || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
                 const runner = await import(pathToFileURL(path.join(root, 'aggregator', 'scripts', 'run-pascal-on-esp32-node.mjs')).href);
+                const daemon = artifact.programMap.hostBindingsVersion === 1
+                    ? await compileHostedDaemonCompanion(document)
+                    : null;
                 const payload = await runner.runPcodeOnEsp32({
                     pcodeText: artifact.pcodeText,
                     programMap,
+                    ...(daemon ? { daemonPcodeText: daemon.pcodeText, daemonProgramMap: daemon.programMap } : {}),
                     node: target.host,
                     inputQueue: 'vscode.pmachine',
                     message: '',
                     sourceFileName: path.basename(document.fileName),
                 });
                 result = payload?.result || payload;
+                if (payload?.hosted) {
+                    output.appendLine(`Hosted service installed at http://${target.host}.`);
+                    if (Number.isInteger(payload.result?.udpPort))
+                        output.appendLine(`Hosted UDP port: ${payload.result.udpPort}.`);
+                    const endpoints = Array.isArray(artifact.programMap.serviceEndpoints)
+                        ? artifact.programMap.serviceEndpoints.map((endpoint) => `${String(endpoint.verb || 'GET').toUpperCase()} ${endpoint.path}`)
+                        : [];
+                    for (const endpoint of endpoints)
+                        output.appendLine(`Service endpoint: http://${target.host}${endpoint.split(' ').slice(1).join(' ')}`);
+                }
             }
             else if (target.key === 'js') {
                 result = await runOnLocalJsPmachine(document, artifact.pcodeText, programMap);
@@ -1180,7 +1236,11 @@ async function runCurrentFile(context, output, uri, hanoiPanel) {
 export function activate(context) {
     const output = vscode.window.createOutputChannel('Pulse PMachine');
     const hanoiPanel = new HanoiPanel();
-    context.subscriptions.push(output, hanoiPanel, vscode.debug.registerDebugAdapterDescriptorFactory('pulse-pmachine', new PulseDebugFactory(context.extensionUri)), vscode.commands.registerCommand('pulse-pmachine.runCurrentFile', (uri) => runCurrentFile(context, output, uri, hanoiPanel)), vscode.commands.registerCommand('pulse-pmachine.showAnimation', () => hanoiPanel.show('Towers of Hanoi')), vscode.debug.onDidReceiveDebugSessionCustomEvent((event) => {
+    const services = new ServicesViewProvider(output);
+    context.subscriptions.push(output, hanoiPanel, services, vscode.window.registerTreeDataProvider('pulse-pmachine.services', services), vscode.commands.registerCommand('pulse-pmachine.refreshServices', () => services.refresh()), vscode.commands.registerCommand('pulse-pmachine.openServiceEndpoint', openServiceEndpoint), vscode.workspace.onDidChangeConfiguration(event => {
+        if (event.affectsConfiguration('pulse-pmachine.backendUrl'))
+            services.refresh();
+    }), vscode.debug.registerDebugAdapterDescriptorFactory('pulse-pmachine', new PulseDebugFactory(context.extensionUri)), vscode.commands.registerCommand('pulse-pmachine.runCurrentFile', (uri) => runCurrentFile(context, output, uri, hanoiPanel)), vscode.commands.registerCommand('pulse-pmachine.showAnimation', () => hanoiPanel.show('Towers of Hanoi')), vscode.debug.onDidReceiveDebugSessionCustomEvent((event) => {
         if (event.session.type !== 'pulse-pmachine')
             return;
         if (event.event === 'pulseLaunch') {

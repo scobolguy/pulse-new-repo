@@ -5,7 +5,7 @@
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { normalizeId } from '../utils.mjs';
+import { normalizeId } from '../../shared/utils.mjs';
 
 const execFileAsync = promisify(execFile);
 

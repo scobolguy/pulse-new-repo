@@ -4,8 +4,8 @@
  * Requires a one-time browser login — see GET /api/home-automation/alexa/auth-url.
  */
 import fs from 'node:fs/promises';
-import { createAlexaVacuumController } from '../../../../../alexa/shark_alexa.mjs';
-import { normalizeId } from '../utils.mjs';
+import { createAlexaVacuumController } from '../../../../../../alexa/shark_alexa.mjs';
+import { normalizeId } from '../../shared/utils.mjs';
 
 export function createAlexaDriver({ devices, cookiePath }) {
   let controller = null;

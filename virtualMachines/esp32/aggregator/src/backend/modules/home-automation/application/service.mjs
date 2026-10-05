@@ -6,17 +6,17 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { normalizeId, publicDevice, normalizeAction, normalizeVacuumAction } from './utils.mjs';
-import { createTpLinkDriver } from './drivers/tplink.mjs';
-import { createKasaDriver } from './drivers/kasa.mjs';
-import { createTuyaDriver } from './drivers/tuya.mjs';
-import { createBluetoothDriver } from './drivers/bluetooth.mjs';
-import { createSharkDriver } from './drivers/shark.mjs';
-import { createAlexaDriver } from './drivers/alexa.mjs';
-import { createUpnpDriver } from './drivers/upnp.mjs';
+import { normalizeId, publicDevice, normalizeAction, normalizeVacuumAction } from '../shared/utils.mjs';
+import { createTpLinkDriver } from '../infrastructure/drivers/tplink.mjs';
+import { createKasaDriver } from '../infrastructure/drivers/kasa.mjs';
+import { createTuyaDriver } from '../infrastructure/drivers/tuya.mjs';
+import { createBluetoothDriver } from '../infrastructure/drivers/bluetooth.mjs';
+import { createSharkDriver } from '../infrastructure/drivers/shark.mjs';
+import { createAlexaDriver } from '../infrastructure/drivers/alexa.mjs';
+import { createUpnpDriver } from '../infrastructure/drivers/upnp.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const AGGREGATOR_ROOT = path.resolve(__dirname, '../../../..'); // home-automation -> modules -> backend -> src -> aggregator
+const AGGREGATOR_ROOT = path.resolve(__dirname, '../../../../..'); // application -> home-automation -> modules -> backend -> src -> aggregator
 const WORKSPACE_ROOT = path.resolve(AGGREGATOR_ROOT, '..');    // aggregator -> esp32
 const ROOT_NODE_ID = 'home-automation';
 const DEFAULT_DISCOVERY_TIMEOUT_MS = 5000;

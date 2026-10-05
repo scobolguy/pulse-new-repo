@@ -20,6 +20,11 @@ function normalizeSitePayload(payload) {
   return []
 }
 
+function normalizeServiceOfferingPayload(payload) {
+  const offerings = payload?.catalog?.serviceOfferings ?? payload?.serviceOfferings
+  return Array.isArray(offerings) ? offerings : []
+}
+
 function inferProviderObjectKind(provider) {
   const providerId = String(provider?.id || '').trim().toLowerCase()
   if (['platform', 'topology', 'queue', 'broker', 'librarian', 'observability', 'iam'].includes(providerId)) {
@@ -67,6 +72,37 @@ function mapProviderToCatalogObject(provider) {
           http: action.http || null,
         }))
       : [],
+  })
+}
+
+function mapServiceOfferingToCatalogObject(offering) {
+  const id = String(offering?.id || '').trim()
+  if (!id) return null
+  const name = String(offering?.name || id).trim()
+  const provider = String(offering?.provider || '').trim()
+  const protocol = String(offering?.protocol || '').trim()
+  const endpoint = String(offering?.endpoint || '').trim()
+  const configurationRef = String(offering?.configurationRef || '').trim()
+  const location = String(offering?.serverRef || endpoint || provider).trim()
+  return createVisualObject({
+    id: `service-offering.${id}`,
+    name,
+    kind: 'service',
+    type: String(offering?.kind || 'service-offering').trim(),
+    source: 'seeded',
+    status: endpoint ? 'available' : 'configured',
+    location,
+    description: String(offering?.description || '').trim(),
+    usageNotes: endpoint
+      ? `Reuse the configured ${name} endpoint.`
+      : `Configure ${configurationRef || name} before deployment.`,
+    tags: ['service-offering', provider, protocol].filter(Boolean),
+    properties: [
+      { id: 'provider', label: 'Provider', valueType: 'string', value: provider, readOnly: true },
+      { id: 'protocol', label: 'Protocol', valueType: 'string', value: protocol, readOnly: true },
+      { id: 'endpoint', label: 'Endpoint', valueType: 'string', value: endpoint, readOnly: true },
+      { id: 'configurationRef', label: 'Configuration', valueType: 'string', value: configurationRef, readOnly: true },
+    ],
   })
 }
 
@@ -179,25 +215,30 @@ function applyCatalogOverrides(objects) {
 }
 
 export async function fetchCatalogSnapshot() {
-  const [nodesResult, providersResult, sitesResult] = await Promise.allSettled([
+  const [nodesResult, providersResult, sitesResult, infrastructureResult] = await Promise.allSettled([
     getJsonAsActor('/api/nodes', 'Node request failed'),
     getJsonAsActor('/api/platform/providers', 'Provider request failed'),
     getJsonAsActor('/api/sites', 'Site request failed'),
+    getJsonAsActor('/api/infrastructure/catalog', 'Infrastructure catalog request failed'),
   ])
 
   const nodes = nodesResult.status === 'fulfilled' ? normalizeNodePayload(nodesResult.value) : []
   const providers = providersResult.status === 'fulfilled' ? normalizeProviderPayload(providersResult.value) : []
   const sites = sitesResult.status === 'fulfilled' ? normalizeSitePayload(sitesResult.value) : []
+  const serviceOfferings = infrastructureResult.status === 'fulfilled'
+    ? normalizeServiceOfferingPayload(infrastructureResult.value)
+    : []
 
   const discoveredObjects = [
     ...nodes.flatMap(mapNodeToCatalogObjects),
     ...providers.map(mapProviderToCatalogObject),
     ...sites.map(mapSiteToCatalogObject).filter(Boolean),
+    ...serviceOfferings.map(mapServiceOfferingToCatalogObject).filter(Boolean),
   ]
 
   return {
     loadedAt: new Date().toISOString(),
-    errors: [nodesResult, providersResult, sitesResult]
+    errors: [nodesResult, providersResult, sitesResult, infrastructureResult]
       .filter((result) => result.status === 'rejected')
       .map((result) => String(result.reason?.message || result.reason || 'Unknown error')),
     objects: applyCatalogOverrides(dedupeCatalogObjects([...SEEDED_CATALOG_OBJECTS, ...discoveredObjects])),

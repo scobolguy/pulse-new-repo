@@ -8,6 +8,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { DISCOVERY_NODE_MAX_AGE_MS } from '../discovery-topology.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,7 +19,7 @@ export class NodeRegistry {
     this.manifests = new Map(); // nodeId -> full capability manifest
     this.persistPath = options.persistPath || path.join(__dirname, '../../data/esp32-nodes.json');
     this.autoSave = options.autoSave !== false;
-    this.nodeTimeout = options.nodeTimeout || 600000; // 10 minutes default
+    this.nodeTimeout = options.nodeTimeout || DISCOVERY_NODE_MAX_AGE_MS;
     this.onNodeRegistered = typeof options.onNodeRegistered === 'function'
       ? options.onNodeRegistered
       : null;
@@ -36,7 +37,7 @@ export class NodeRegistry {
         for (const node of parsed.nodes) {
           this.nodes.set(node.id, {
             ...node,
-            lastSeen: Date.now() // Reset last seen on startup
+            lastSeen: Number(node.lastSeen || 0)
           });
         }
         console.log(`[NodeRegistry] Loaded ${this.nodes.size} nodes from disk`);
@@ -83,7 +84,7 @@ export class NodeRegistry {
       capabilities,
       metadata,
       registeredAt: this.nodes.has(id) ? this.nodes.get(id).registeredAt : Date.now(),
-      lastSeen: Date.now()
+      lastSeen: nodeData.observed === false ? 0 : Date.now()
     };
 
     this.nodes.set(id, node);
@@ -234,7 +235,7 @@ export class NodeRegistry {
     const staleNodes = [];
 
     for (const [id, node] of this.nodes.entries()) {
-      if (now - node.lastSeen > this.nodeTimeout) {
+      if (node.lastSeen > 0 && now - node.lastSeen >= this.nodeTimeout) {
         staleNodes.push(id);
       }
     }

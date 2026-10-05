@@ -3,7 +3,7 @@
  * Handles upsert, discovery, configuration, and DPS invoke for tuya: devices.
  */
 import TuyAPI from 'tuyapi';
-import { normalizeId } from '../utils.mjs';
+import { normalizeId } from '../../shared/utils.mjs';
 
 export function createTuyaDriver({ devices, credentials, saveCredentials }) {
   function upsert(found) {

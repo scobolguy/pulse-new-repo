@@ -6,8 +6,12 @@ import http from 'node:http';
 import os from 'node:os';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { runSingleMessageForEvolution } from './index.mjs';
+import { normalizeDiscoveryAnnouncement } from './discovery-collector.mjs';
+import { createPascalishServiceHost } from './src/service-host.mjs';
+import { signPcodeText } from '../../aggregator/scripts/pcode-signing.mjs';
 import {
   createJavaScriptPmachineDebugSession,
   getJavaScriptPmachineDebugSession,
@@ -26,13 +30,17 @@ function parseCliArgs(argv) {
   const args = {
     port: Number(process.env.JS_PMACHINE_PORT || 4111),
     host: process.env.JS_PMACHINE_BIND || '0.0.0.0',
-    name: process.env.JS_PMACHINE_NAME || ''
+    name: process.env.JS_PMACHINE_NAME || '',
+    backendUrl: process.env.JS_PMACHINE_BACKEND_URL || 'http://127.0.0.1:4000',
+    advertiseHost: process.env.JS_PMACHINE_ADVERTISE_HOST || '127.0.0.1'
   };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (token === '--port') args.port = Number(argv[++index]);
     else if (token === '--host') args.host = String(argv[++index]);
     else if (token === '--name') args.name = String(argv[++index]);
+    else if (token === '--backend') args.backendUrl = String(argv[++index]);
+    else if (token === '--advertise-host') args.advertiseHost = String(argv[++index]);
   }
   if (!args.name) args.name = `js-pmachine-${args.port}`;
   return args;
@@ -61,16 +69,34 @@ async function readBody(req) {
 // Mirrors the firmware's getRequestParam: form body params win over query params.
 async function readParams(req, url) {
   const params = new Map(url.searchParams);
+  let rawBody = '';
   if (req.method === 'POST' || req.method === 'DELETE') {
-    const text = await readBody(req);
+    rawBody = await readBody(req);
     const contentType = String(req.headers['content-type'] || '');
-    if (text && contentType.includes('application/json')) {
-      for (const [key, value] of Object.entries(JSON.parse(text))) params.set(key, String(value));
-    } else if (text) {
-      for (const [key, value] of new URLSearchParams(text)) params.set(key, value);
+    if (rawBody && contentType.includes('application/json')) {
+      for (const [key, value] of Object.entries(JSON.parse(rawBody))) params.set(key, String(value));
+    } else if (rawBody) {
+      for (const [key, value] of new URLSearchParams(rawBody)) params.set(key, value);
     }
   }
-  return params;
+  return { params, rawBody };
+}
+
+function parseHostedMap(pcode, mapText, label) {
+  let map;
+  try { map = JSON.parse(mapText); } catch { throw Object.assign(new Error(`Invalid ${label} program map`), { status: 400 }); }
+  if (!map || typeof map !== 'object' || Array.isArray(map)) {
+    throw Object.assign(new Error(`Invalid ${label} program map`), { status: 400 });
+  }
+  const signature = map?.signing?.signature;
+  const expected = Buffer.from(signPcodeText(pcode), 'hex');
+  const actual = typeof signature === 'string' && /^[a-f0-9]{64}$/i.test(signature)
+    ? Buffer.from(signature, 'hex') : Buffer.alloc(0);
+  if (map.signing?.algorithm !== 'hmac-sha256'
+    || actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+    throw Object.assign(new Error(`Invalid ${label} pcode signature`), { status: 400 });
+  }
+  return map;
 }
 
 function debugStatus(state) {
@@ -97,10 +123,19 @@ function deviceDebugState(id) {
   };
 }
 
-export function createJsPmachineNodeServer({ name = 'js-pmachine', port = 4111 } = {}) {
+export function createJsPmachineNodeServer({
+  name = 'js-pmachine',
+  port = 4111,
+  backendUrl = '',
+  advertiseHost = '127.0.0.1',
+  announceIntervalMs = 60_000,
+  fetchImpl = fetch,
+  logger = console
+} = {}) {
   const files = new Map();
   const startedAt = Date.now();
   const stats = { runs: 0, debugSessions: 0 };
+  let hostedService = null;
 
   function readFfsFile(remotePath) {
     const value = files.get(String(remotePath || ''));
@@ -147,6 +182,69 @@ export function createJsPmachineNodeServer({ name = 'js-pmachine', port = 4111 }
     }
   }
 
+  async function installHostedService(params) {
+    if (hostedService?.getStatus().running) {
+      throw Object.assign(new Error('Stop the active hosted service before installing another'), { status: 409 });
+    }
+    const servicePcode = readFfsFile(params.get('serviceFile'));
+    const serviceMap = parseHostedMap(
+      servicePcode,
+      readFfsFile(params.get('serviceMap')),
+      'service',
+    );
+    if (serviceMap.hostBindingsVersion !== 1 || serviceMap.runtimeUnit?.kind !== 'service') {
+      throw Object.assign(new Error('Expected a hosted Pascalish service'), { status: 400 });
+    }
+
+    const daemonFile = String(params.get('daemonFile') || '');
+    const daemonMapFile = String(params.get('daemonMap') || '');
+    if (Boolean(daemonFile) !== Boolean(daemonMapFile)) {
+      throw Object.assign(new Error('Daemon pcode and map must be supplied together'), { status: 400 });
+    }
+    const daemons = [];
+    if (daemonFile) {
+      const daemonPcode = readFfsFile(daemonFile);
+      const daemonMap = parseHostedMap(daemonPcode, readFfsFile(daemonMapFile), 'daemon');
+      if (daemonMap.hostBindingsVersion !== 1 || daemonMap.runtimeUnit?.kind !== 'daemon') {
+        throw Object.assign(new Error('Expected a hosted daemon'), { status: 400 });
+      }
+      daemons.push({ pcodeText: daemonPcode, programMap: daemonMap });
+    }
+
+    const collectorId = String(params.get('collectorId') || serviceMap.runtimeUnit.id || name);
+    const udpPort = Number(params.get('udpPort') || 0);
+    const observationTtlMs = Number(params.get('observationTtlMs') || 180000);
+    if (!Number.isInteger(udpPort) || udpPort < 0 || udpPort > 65535) {
+      throw Object.assign(new Error('Invalid UDP port'), { status: 400 });
+    }
+    if (!Number.isInteger(observationTtlMs) || observationTtlMs < 1 || observationTtlMs > 180000) {
+      throw Object.assign(new Error('Invalid observation TTL'), { status: 400 });
+    }
+
+    if (hostedService) await hostedService.stop();
+    const nextHost = await createPascalishServiceHost({
+      compiled: { pcodeText: servicePcode, programMap: serviceMap },
+      daemons,
+      collectorId,
+      host: '0.0.0.0',
+      httpPort: null,
+      udpPort,
+      bindings: {
+        'host.announcement': normalizeDiscoveryAnnouncement,
+        'host.observation_ttl': () => observationTtlMs,
+      },
+      logger,
+    });
+    try {
+      await nextHost.start();
+    } catch (error) {
+      await nextHost.stop();
+      throw error;
+    }
+    hostedService = nextHost;
+    return hostedService.getStatus();
+  }
+
   function createDebugSession(params) {
     const pcodeText = readFfsFile(params.get('file'));
     const programMap = params.get('programMap') ? JSON.parse(readFfsFile(params.get('programMap'))) : {};
@@ -176,7 +274,7 @@ export function createJsPmachineNodeServer({ name = 'js-pmachine', port = 4111 }
       });
       return res.end();
     }
-    const params = await readParams(req, url);
+    const { params, rawBody } = await readParams(req, url);
 
     if (route === '/status' && req.method === 'GET') {
       return send(res, 200, {
@@ -184,7 +282,7 @@ export function createJsPmachineNodeServer({ name = 'js-pmachine', port = 4111 }
         runtime: 'js-pmachine',
         role: 'pmachine',
         services: ['pmachine'],
-        port,
+        port: server.address()?.port ?? port,
         uptimeMs: Date.now() - startedAt,
         files: files.size,
         ...stats
@@ -200,6 +298,22 @@ export function createJsPmachineNodeServer({ name = 'js-pmachine', port = 4111 }
 
     if (route === '/pmachine/execute_file' && req.method === 'POST') {
       return send(res, 200, await executeFile(params));
+    }
+
+    if (route === '/pmachine/service_host/install' && req.method === 'POST') {
+      return send(res, 200, await installHostedService(params));
+    }
+    if (route === '/pmachine/service_host/status' && req.method === 'GET') {
+      return send(res, 200, hostedService?.getStatus() || {
+        running: false, hostBindingsVersion: 1, runtime: 'pascalish-hosted',
+      });
+    }
+    if (route === '/pmachine/service_host/stop' && req.method === 'POST') {
+      if (hostedService) {
+        await hostedService.stop();
+        hostedService = null;
+      }
+      return send(res, 200, { running: false });
     }
 
     if (route === '/pmachine/debug/session') {
@@ -237,20 +351,78 @@ export function createJsPmachineNodeServer({ name = 'js-pmachine', port = 4111 }
       return send(res, 200, { sessionId: id, breakpoints: [...current] });
     }
 
+    if (hostedService?.getStatus().running) {
+      const result = await hostedService.dispatch({
+        transport: 'http',
+        method: req.method,
+        path: route,
+        body: rawBody,
+        peer: req.socket.remoteAddress?.replace('::ffff:', '') || '',
+        query: Object.fromEntries(url.searchParams),
+      });
+      return send(res, result.status, JSON.stringify(result.body), 'application/json');
+    }
     return send(res, 404, 'Not found');
   }
 
-  return http.createServer((req, res) => {
+  const server = http.createServer((req, res) => {
     handle(req, res).catch((error) => {
       if (!res.headersSent) send(res, error?.status || 500, error?.message || String(error));
     });
   });
+  server.once('close', () => {
+    const service = hostedService;
+    hostedService = null;
+    if (service) {
+      service.stop().catch(error => logger.error(`[js-pmachine] hosted service shutdown failed: ${error.message}`));
+    }
+  });
+  if (backendUrl) {
+    const announcementUrl = new URL('/api/pmachine/announce', backendUrl);
+    let timer;
+    let pending = false;
+    async function announce() {
+      if (pending || !server.listening) return;
+      pending = true;
+      try {
+        const response = await fetchImpl(announcementUrl, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          signal: AbortSignal.timeout(5000),
+          body: JSON.stringify({
+            nodeId: name,
+            nodeName: name,
+            ip: advertiseHost,
+            port: server.address().port,
+            hardware: 'PMachine JavaScript VM',
+            runtime: 'js-pmachine',
+            available: true,
+            source: 'js-pmachine-announce',
+            services: [{ name: 'pmachine', endpoint: '/pmachine/execute_file' }]
+          })
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+        await response.arrayBuffer();
+      } catch (error) {
+        logger.warn(`[js-pmachine] ${name} announcement to ${announcementUrl} failed: ${error.message}`);
+      } finally {
+        pending = false;
+      }
+    }
+    server.on('listening', () => {
+      void announce();
+      timer = setInterval(announce, announceIntervalMs);
+      timer.unref();
+    });
+    server.on('close', () => clearInterval(timer));
+  }
+  return server;
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   const args = parseCliArgs(process.argv.slice(2));
-  const server = createJsPmachineNodeServer({ name: args.name, port: args.port });
+  const server = createJsPmachineNodeServer(args);
   server.listen(args.port, args.host, () => {
-    console.log(`[js-pmachine] ${args.name} listening on http://${args.host}:${args.port}`);
+    console.log(`[js-pmachine] ${args.name} listening on http://${args.host}:${server.address().port}`);
   });
 }

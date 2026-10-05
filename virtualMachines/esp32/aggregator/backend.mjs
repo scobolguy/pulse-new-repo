@@ -89,10 +89,10 @@ import { createHomeAutomationService, registerHomeAutomationRoutes } from './src
 import { createJsPmachineDeploymentSupervisor } from './src/backend/modules/jsPmachineDeploymentSupervisor.mjs';
 import { createRouteManifestDependencyFactories } from './src/backend/modules/routeManifestDependencies.mjs';
 import { startBackendRuntime } from './src/backend/modules/startupBootstrap.mjs';
+import { createServiceProcessManager, registerServiceProcessRoutes } from './src/backend/modules/serviceProcessManager.mjs';
 import { createLifecycleHarnessPathApi } from './src/backend/modules/lifecycleHarnessPaths.mjs';
 import { createRuntimeDiagnosticsApi } from './src/backend/modules/runtimeDiagnosticsApi.mjs';
 import { createMachineAvailabilityPresenceApi } from './src/backend/modules/machineAvailabilityPresenceApi.mjs';
-import { bindNodeDiscoverySocket, enrichDiscoveredNode } from './src/backend/modules/nodeDiscovery.mjs';
 import { createLifecycleQueueMetricsApi } from './src/backend/modules/lifecycleQueueMetricsApi.mjs';
 import { createDatabaseRegistrySnapshotApi } from './src/backend/modules/databaseRegistrySnapshotApi.mjs';
 import { createAuthoritativeTimeService } from './src/backend/modules/authoritativeTimeService.mjs';
@@ -109,6 +109,7 @@ import {
   listServiceProviderActions
 } from './src/backend/providers/serviceProviderRegistry.mjs';
 import { compileQueueDslSpec, diffQueueConfigs, queueConfigMapFromWorkflowSymbols } from './src/backend/queueDslCompiler.mjs';
+import { migratePersistedQueueTypeIds as migrateQueueTypeConfigs } from './src/backend/queueTypeMigration.mjs';
 import { createSanctionsComplianceService } from './src/compliance/sanctionsService.mjs';
 import crypto from 'crypto';
 
@@ -127,7 +128,7 @@ import {
 import { initializeUdpLogFilter } from './src/backend/modules/udpLogFilter.mjs';
 import { createDebugLog, formatErrorDetails } from './src/backend/modules/debugLogger.mjs';
 import { createAuthoritativeTimeSyncMonitor } from './src/backend/modules/authoritativeTimeSyncMonitor.mjs';
-import { listServiceEntries, resolveEnvironmentName } from './src/backend/modules/serviceRegistry.mjs';
+import { getInfrastructureCatalog, listServiceEntries, resolveEnvironmentName } from './src/backend/modules/serviceRegistry.mjs';
 import { createSystemRegistry } from './src/backend/modules/systemRegistry.mjs';
 
 // ===== ESP32 NODE REGISTRY =====
@@ -207,6 +208,13 @@ function proxyRequest(method, path, req, res, targetUrl = BROKER_SERVICE_URL) {
 
 
 const HTTP_PORT = readEnvNumber('HTTP_PORT', readEnvNumber('PORT', 4000));
+const SERVICE_MANIFEST_PATH = path.join(__dirname, 'data', 'service-manifest.json');
+const serviceProcessManager = await createServiceProcessManager({
+  manifestPath: SERVICE_MANIFEST_PATH,
+  appRoot: __dirname,
+  spawn,
+  logger: console
+});
 // When set, Home Automation runs as its own process (home-automation-service.mjs) and the
 // gateway proxies /api/home-automation/* to it instead of running discovery in-process.
 const HOME_AUTOMATION_SERVICE_URL = readEnvString('HOME_AUTOMATION_SERVICE_URL', '').trim().replace(/\/$/, '');
@@ -401,10 +409,18 @@ app.get('/api/services/registry', (req, res) => {
       environment: entry.environment,
       description: entry.description || ''
     }));
-    res.json({ status: 'ok', environment: resolveEnvironmentName(req.query?.environment), services: entries });
+    res.json({ status: 'ok', environment: resolveEnvironmentName(req.query?.environment), services: entries, catalog: getInfrastructureCatalog() });
   } catch (error) {
     res.status(400).json({ status: 'error', error: error?.message || String(error) });
   }
+});
+
+app.get('/api/infrastructure/catalog', (req, res) => {
+  res.json({
+    status: 'ok',
+    environment: resolveEnvironmentName(req.query?.environment),
+    catalog: getInfrastructureCatalog()
+  });
 });
 
 await registerDevelopDocumentRoutes(app);
@@ -8281,7 +8297,6 @@ udpServer.on('message', (msg, rinfo) => {
           ...data
         }
       });
-      scheduleNodeEnrichment(ip);
       return;
     }
 
@@ -8320,6 +8335,7 @@ udpServer.on('message', (msg, rinfo) => {
         requestNodeDetails(rinfo.address, rinfo.port, data);
       }
       scheduleNodeEnrichment(ip);
+      syncDiscoveredEsp32NodeToRegistry(ip, data).catch(() => {});
       return;
     }
 
@@ -8374,13 +8390,14 @@ udpServer.on('message', (msg, rinfo) => {
   discoveredNodes.set(ip, node);
   scheduleNodeEnrichment(ip);
 });
-try {
-  await bindNodeDiscoverySocket(udpServer, UDP_PORT);
+udpServer.bind(UDP_PORT, () => {
+  try {
+    udpServer.setBroadcast(true);
+  } catch (error) {
+    console.warn(`[UDP] Could not enable broadcast mode: ${error.message}`);
+  }
   console.log(`[UDP] Listening for node broadcasts on port ${UDP_PORT}`);
-} catch (error) {
-  console.error(`[UDP] Discovery startup failed on port ${UDP_PORT}: ${error.message}. Stop the duplicate gateway/discovery instance before restarting.`);
-  process.exit(1);
-}
+});
 
 async function probeEsp32Node(node, visited = new Set()) {
   const host = String(node?.host || '').trim();
@@ -8489,7 +8506,49 @@ function scheduleNodeEnrichment(ip) {
   const last = nodeEnrichmentLastAttempt.get(key) || 0;
   if (now - last < 5000) return;
   nodeEnrichmentLastAttempt.set(key, now);
-  void enrichDiscoveredNode({ ip: key, discoveredNodes, fetchImpl: fetch, timeoutMs: ESP32_DISCOVERY_PROBE_TIMEOUT_MS });
+  enrichNodeDetails(key).catch(() => {});
+}
+
+async function syncDiscoveredEsp32NodeToRegistry(ip, beacon = {}) {
+  const registry = app.locals?.esp32NodeRegistry;
+  if (!registry) return;
+
+  const port = Number(beacon.httpPort || beacon.port || 80);
+  const response = await fetch(`http://${ip}:${port}/api/manifest`, {
+    signal: AbortSignal.timeout(5000)
+  });
+  if (!response.ok) return;
+
+  const manifest = await response.json();
+  if (!manifest || typeof manifest !== 'object' || !manifest.nodeId) return;
+
+  manifest.ip = ip;
+  manifest.port = port;
+  manifest.name = manifest.name || manifest.nodeName || beacon.nodeName || beacon.nodeId;
+  await registry.storeManifest(manifest);
+}
+
+async function enrichNodeDetails(ip) {
+  try {
+    const servicesRes = await fetch(`http://${ip}:80/services/describe`);
+    const statusRes = await fetch(`http://${ip}:80/status`);
+    let serviceDetails = {};
+    let statusDetails = {};
+    if (statusRes.ok) {
+      statusDetails = await statusRes.json();
+    }
+    if (servicesRes.ok) {
+      serviceDetails = await servicesRes.json();
+    }
+    const details = { ...statusDetails, ...serviceDetails };
+    const node = discoveredNodes.get(ip);
+    if (node) {
+      node.details = details;
+      discoveredNodes.set(ip, node);
+    }
+  } catch (e) {
+    // Ignore unreachable nodes
+  }
 }
 
 function getActiveQueueManagers() {
@@ -9856,6 +9915,7 @@ function registerRoutes(app) {
   registerPmachineDeploymentRoutes(app);
   registerFlowDeploymentRoutes(app, { runtimeRoot: RUNTIME_DATA_ROOT });
   registerDatabaseRoutes(app, { databaseManagers: databaseManagerInstances });
+  registerServiceProcessRoutes(app, { serviceProcessManager, requirePermission });
 
   registerOrchestrationRegistryRoutes(app, {
     HTTP_PORT,
@@ -9994,6 +10054,7 @@ function registerRoutes(app) {
       findApiCatalogEntry,
       resolvePermissionForApiRequest,
       routeRoleManifest: ROUTE_ROLE_MANIFEST,  // loaded from data/route-manifest.json at startup
+      serviceProcessManager,
       listServiceProviders,
       getServiceProvider,
       getServiceProviderAction,
@@ -10114,6 +10175,8 @@ function registerRoutes(app) {
       deploymentRegistry: ffsDeploymentRegistry
     }
   });
+  app.locals.ensurePmachinePublicDirectory = fileServer.ensureNodePublicDirectory;
+  app.locals.ensurePmachinePublicDirectories = fileServer.ensureNodePublicDirectories;
   debugLog('[DEBUG] File server routes registered');
   app.use('/api/fileserver', fileServer.router);
 
@@ -10140,7 +10203,20 @@ function registerRoutes(app) {
   });
 }
 
+async function migratePersistedQueueTypeIds() {
+  const librarianOrigin = readEnvString('LIBRARIAN_URL', `http://127.0.0.1:${DEFAULT_LIBRARIAN_PORT}`);
+  const response = await fetch(`${librarianOrigin}/api/librarian/data-types`, { method: 'GET' });
+  if (!response.ok) throw new Error(`Librarian returned ${response.status}`);
+
+  const payload = await response.json();
+  const migrated = await migrateQueueTypeConfigs(queueManagerInstances, payload.types || []);
+  if (migrated > 0) debugLog(`[TYPE-IDS] Migrated ${migrated} persisted queue configuration(s) to canonical IDs`);
+}
+
 try {
+  await migratePersistedQueueTypeIds().catch(error => {
+    console.warn(`[TYPE-IDS] Queue type migration unavailable: ${error.message}`);
+  });
   await getTransactionStateMssqlPool().catch(error => {
     console.warn(`[MESSAGE-SQL] SQL message ledger initialization unavailable: ${error.message}`);
   });

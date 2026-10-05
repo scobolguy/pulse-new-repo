@@ -234,26 +234,30 @@ function getServerItems() {
   }))
 }
 
-function getServiceItems() {
-  const registry = readServiceRegistry()
-  const offerings = [
-    ...(Array.isArray(registry?.serviceOfferings) ? registry.serviceOfferings : []),
-    ...(Array.isArray(registry?.dataStores) ? registry.dataStores : []),
-  ]
-  if (offerings.length === 0) {
-    return [new InfraItem('No service offerings configured', vscode.TreeItemCollapsibleState.None, {
+async function getServiceItems() {
+  try {
+    const payload = await requestJson(`${getCatalogStudioApiBase()}/api/services`, 15000)
+    if (!Array.isArray(payload.services)) throw new Error('Services response does not contain services')
+    const items = payload.services.map((service) => new InfraItem(service.name || service.serviceId || service.id, vscode.TreeItemCollapsibleState.None, {
+      kind: 'service-offering',
+      iconId: 'symbol-event',
+      description: [service.nodeId, service.status, service.endpoint].filter(Boolean).join(' · '),
+      tooltip: service.description || service.endpoint || '',
+    }))
+    for (const error of payload.errors || []) {
+      items.push(new InfraItem('Service registry unavailable', vscode.TreeItemCollapsibleState.None, {
+        kind: 'service-offering', iconId: 'warning', tooltip: `${error.endpoint}: ${error.error}`,
+      }))
+    }
+    return items.length ? items : [new InfraItem('No services registered', vscode.TreeItemCollapsibleState.None)]
+  } catch (error) {
+    vscode.window.showErrorMessage(`Pulse Services: ${error.message}`)
+    return [new InfraItem('Services unavailable - refresh to retry', vscode.TreeItemCollapsibleState.None, {
       kind: 'service-offering',
       iconId: 'warning',
-      description: 'aggregator/config/service-registry.json',
+      tooltip: error.message,
     })]
   }
-
-  return offerings.map((service) => new InfraItem(service.name || service.id || 'Unnamed service', vscode.TreeItemCollapsibleState.None, {
-    kind: service.kind === 'database' ? 'database-service' : 'service-offering',
-    iconId: service.kind === 'database' ? 'database' : 'symbol-event',
-    description: [service.provider, service.protocol, service.endpoint || 'remote or unbound'].filter(Boolean).join(' · '),
-    tooltip: service.description || '',
-  }))
 }
 
 function getVflDiagnosticEntries(text) {

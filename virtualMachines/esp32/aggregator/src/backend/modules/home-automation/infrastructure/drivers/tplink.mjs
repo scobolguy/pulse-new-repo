@@ -3,7 +3,7 @@
  * Handles upsert, discovery, and power-action invoke for tplink: devices.
  */
 import tpLinkSmartHome from 'tplink-smarthome-api';
-import { getLanDiscoveryTarget, normalizeId } from '../utils.mjs';
+import { getLanDiscoveryTarget, normalizeId } from '../../shared/utils.mjs';
 
 const { Client: TpLinkClient } = tpLinkSmartHome;
 

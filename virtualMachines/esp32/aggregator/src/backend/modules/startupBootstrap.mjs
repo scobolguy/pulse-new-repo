@@ -1,4 +1,5 @@
 import { startCompanionServiceSupervisor } from './companionServiceSupervisor.mjs';
+import { DISCOVERY_NODE_MAX_AGE_MS } from '../../discovery-topology.mjs';
 
 const DEFAULT_LIBRARIAN_PORT = 4300;
 const DEFAULT_MAPPER_PORT = 4200;
@@ -77,7 +78,7 @@ export async function startBackendRuntime(deps = {}) {
   const esp32NodeRegistry = createNodeRegistry({
     persistPath: pathJoin(RUNTIME_DATA_ROOT, 'esp32-nodes.json'),
     autoSave: true,
-    nodeTimeout: 600000,
+    nodeTimeout: DISCOVERY_NODE_MAX_AGE_MS,
     onNodeRegistered: async (node) => {
       if (typeof app.locals.ensurePmachinePublicDirectory === 'function') {
         await app.locals.ensurePmachinePublicDirectory(node.id);
@@ -111,6 +112,7 @@ export async function startBackendRuntime(deps = {}) {
     }
     
     await esp32NodeRegistry.registerNode({
+      observed: false,
       id: knownNode.id,
       type: 'esp32-device',
       name: knownNode.name,
@@ -165,6 +167,7 @@ export async function startBackendRuntime(deps = {}) {
     }
 
     await esp32NodeRegistry.registerNode({
+      observed: false,
       id,
       type: String(seed?.type || 'esp32-generic').trim() || 'esp32-generic',
       name: String(seed?.name || seed?.label || id).trim() || id,

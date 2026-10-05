@@ -12,7 +12,9 @@
     "pulse-js-pmachine-node": "./server.mjs"
   },
   "scripts": {
-    "node": "node server.mjs"
+    "node": "node server.mjs",
+    "discovery": "node discovery-collector.mjs",
+    "test:service-host": "node --test --test-timeout=30000 ../../testing/pmachines/pascalish-service-host.test.mjs"
   },
   "dependencies": {
     "fast-xml-parser": "^5.8.0"

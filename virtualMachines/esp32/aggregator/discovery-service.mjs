@@ -2,12 +2,15 @@ import dgram from 'dgram';
 import express from 'express';
 import cors from 'cors';
 import os from 'os';
+import { createDiscoverySnapshotSource, registerNodeAnnouncementRoute } from './src/backend/modules/discoveryCollector.mjs';
 import { bindNodeDiscoverySocket, enrichDiscoveredNode } from './src/backend/modules/nodeDiscovery.mjs';
 import {
   normalizeDiscoveryNode,
   mergeDiscoveryNodes,
   isLoopbackHost,
-  isEsp32DiscoveryNode
+  isEsp32DiscoveryNode,
+  DISCOVERY_NODE_MAX_AGE_MS,
+  pruneDiscoveryNodes
 } from './src/discovery-topology.mjs';
 import {
   getInfrastructureCatalog,
@@ -18,7 +21,7 @@ import {
 
 const HTTP_PORT = Number(process.env.DISCOVERY_HTTP_PORT || 4300);
 const UDP_PORT = Number(process.env.UDP_PORT || 4210);
-const NODE_TTL_MS = Math.max(60_000, Number(process.env.DISCOVERY_NODE_TTL_MS || 10 * 60 * 1000));
+const NODE_TTL_MS = DISCOVERY_NODE_MAX_AGE_MS;
 const PROBE_ENABLED = String(process.env.ESP32_DISCOVERY_PROBE_ENABLED || '1').trim().toLowerCase() !== '0' && String(process.env.ESP32_DISCOVERY_PROBE_ENABLED || '1').trim().toLowerCase() !== 'false';
 const PROBE_INTERVAL_MS = Math.max(5000, Number(process.env.ESP32_DISCOVERY_PROBE_INTERVAL_MS || 15000));
 const PROBE_TIMEOUT_MS = Math.max(300, Number(process.env.ESP32_DISCOVERY_PROBE_TIMEOUT_MS || 1500));
@@ -34,6 +37,9 @@ const udpServer = dgram.createSocket('udp4');
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
+const collectorId = String(process.env.PULSE_DISCOVERY_COLLECTOR_ID || `discovery-${os.hostname()}-${HTTP_PORT}`);
+const snapshot = createDiscoverySnapshotSource({ discoveredNodes, collectorId });
+registerNodeAnnouncementRoute(app, { discoveredNodes, upsertServiceInstance });
 
 async function refreshConfiguredServiceHealth() {
   const environment = resolveEnvironmentName();
@@ -362,6 +368,7 @@ udpServer.on('message', (msg, rinfo) => {
   let node = discoveredNodes.get(ip) || {};
   try {
     const data = JSON.parse(msg.toString());
+    if (data?.kind === 'nodeBeaconAck' || data?.kind === 'nodeDetailsRequest') return;
     if (data && (data.kind === 'queueManagerHeartbeat' || data.service === 'queue-manager')) {
       upsertRemoteQueueManager({
         managerId: data.managerId || `${ip}:${data.port || HTTP_PORT}:${data.name || 'qm'}`,
@@ -418,8 +425,24 @@ udpServer.on('message', (msg, rinfo) => {
       ...data,
       ip,
       lastSeen: now,
+      details: {
+        ...node.details,
+        ...(data.kind === 'nodeDetails' ? data : {}),
+        ...(Array.isArray(data.services) ? { services: data.services } : {})
+      },
+      ...(data.kind === 'nodeBeacon' || data.kind === 'machineAvailability'
+        ? { beacon: { kind: data.kind, seenAt: now } } : {}),
       raw: msg.toString()
     };
+    if (data.kind === 'nodeBeacon' || data.kind === 'machineAvailability') {
+      const ack = Buffer.from(JSON.stringify({
+        kind: 'nodeBeaconAck', nodeId: data.nodeId,
+        collectorId, ackedAt: now, requestDetails: Boolean(data.needsDetails || data.capabilitiesChanged)
+      }));
+      udpServer.send(ack, rinfo.port, ip, (error) => {
+        if (error) console.warn(`[DISCOVERY] Beacon acknowledgement to ${ip}: ${error.message}`);
+      });
+    }
   } catch {
     node = {
       ...node,
@@ -454,13 +477,8 @@ setInterval(() => {
 }, PROBE_INTERVAL_MS);
 
 setInterval(() => {
-  const now = Date.now();
-  for (const [key, node] of discoveredNodes.entries()) {
-    if (now - Number(node?.lastSeen || 0) > NODE_TTL_MS) {
-      discoveredNodes.delete(key);
-    }
-  }
-}, Math.max(5000, Math.min(NODE_TTL_MS, 60000)));
+  pruneDiscoveryNodes(discoveredNodes);
+}, 1000).unref();
 
 app.get('/health', (req, res) => {
   res.json({
@@ -468,11 +486,20 @@ app.get('/health', (req, res) => {
     service: 'node-discovery',
     udpPort: UDP_PORT,
     httpPort: HTTP_PORT,
-    nodes: discoveredNodes.size
+    nodes: discoveredNodes.size,
+    collectorId,
+    protocolVersion: 1,
+    roles: ['node-discovery']
   });
 });
 
+app.get('/api/discovery/snapshot', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(snapshot());
+});
+
 app.get('/api/nodes', (req, res) => {
+  pruneDiscoveryNodes(discoveredNodes);
   const nodes = mergeDiscoveryNodes(Array.from(discoveredNodes.values()));
   res.json({
     status: 'ok',
@@ -482,6 +509,7 @@ app.get('/api/nodes', (req, res) => {
 });
 
 app.get('/api/catalog', (req, res) => {
+  pruneDiscoveryNodes(discoveredNodes);
   res.json({
     status: 'ok',
     environment: resolveEnvironmentName(req.query?.environment),

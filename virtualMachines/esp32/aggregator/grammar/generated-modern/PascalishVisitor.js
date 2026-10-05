@@ -1,4 +1,4 @@
-// Generated from grammar/Pascalish.g4 by ANTLR 4.13.2
+// Generated from C:/dev/pulse-new-repo/virtualMachines/esp32/aggregator/grammar/Pascalish.g4 by ANTLR 4.13.2
 // jshint ignore: start
 import antlr4 from 'antlr4';
 
@@ -50,6 +50,12 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by PascalishParser#unitDecl.
 	visitUnitDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#hostTableDecl.
+	visitHostTableDecl(ctx) {
 	  return this.visitChildren(ctx);
 	}
 
@@ -638,12 +644,6 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by PascalishParser#qualifiedPart.
 	visitQualifiedPart(ctx) {
-	  return this.visitChildren(ctx);
-	}
-
-
-	// Visit a parse tree produced by PascalishParser#fsmOperation.
-	visitFsmOperation(ctx) {
 	  return this.visitChildren(ctx);
 	}
 

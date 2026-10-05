@@ -2,7 +2,7 @@
  * Bluetooth gateway driver (Melnor water controllers via ESP32 BLE proxy).
  * Read-only discovery — no invoke supported.
  */
-import { normalizeId } from '../utils.mjs';
+import { normalizeId } from '../../shared/utils.mjs';
 
 export function createBluetoothDriver({ devices, bluetoothGateways }) {
   function upsert(found, gatewayHost) {

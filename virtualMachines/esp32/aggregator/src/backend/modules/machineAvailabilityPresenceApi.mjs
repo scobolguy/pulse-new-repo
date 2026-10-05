@@ -3,6 +3,7 @@ export function createMachineAvailabilityPresenceApi(deps = {}) {
     machineAvailability,
     discoveredNodes,
     buildMachineAvailabilityAnnouncement,
+    announce,
     udpServer,
     UDP_PORT,
     getMachineAvailabilityBeaconIntervalMs,
@@ -22,6 +23,16 @@ export function createMachineAvailabilityPresenceApi(deps = {}) {
     machineAvailability.announceReason = reason;
     machineAvailability.capabilityHash = payload.capabilityHash;
     machineAvailability.lastBeaconAt = machineAvailability.advertisedAt;
+    if (announce) {
+      Promise.resolve().then(() => announce(payload)).catch((error) => {
+        console.warn(`[DISCOVERY] Availability announcement failed: ${error.message}`);
+        if (error.code === 'EACCES') {
+          machineAvailability.udpBroadcastBlocked = true;
+          stopMachineAvailabilityAnnouncer();
+        }
+      });
+      return;
+    }
     const message = Buffer.from(JSON.stringify(payload), 'utf-8');
     udpServer.send(message, 0, message.length, UDP_PORT, '255.255.255.255', (error) => {
       if (error) {

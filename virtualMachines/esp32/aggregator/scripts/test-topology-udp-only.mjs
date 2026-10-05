@@ -7,6 +7,12 @@ import { registerTopologyRuntimeRoutes } from '../src/backend/roles/topologyRunt
 
 const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pulse-topology-udp-'));
 const now = Date.now();
+const previousJsBases = process.env.JS_PMACHINE_BASE_URLS;
+const previousEdgeBases = process.env.SERVICE_EDGE_BASE_URLS;
+const previousEdgeBase = process.env.SERVICE_EDGE_BASE_URL;
+process.env.JS_PMACHINE_BASE_URLS = '';
+process.env.SERVICE_EDGE_BASE_URLS = '';
+process.env.SERVICE_EDGE_BASE_URL = '';
 const discoveredNodes = new Map([
   ['192.0.2.10', {
     ip: '192.0.2.10',
@@ -29,7 +35,7 @@ const discoveredNodes = new Map([
     nodeId: 'stale-device',
     nodeName: 'stale-device',
     lastSeen: now,
-    beacon: { kind: 'machineAvailability', seenAt: now - 11 * 60 * 1000 },
+    beacon: { kind: 'machineAvailability', seenAt: now - 3 * 60 * 1000 },
     details: { hardware: 'ESP32', services: [{ name: 'pmachine' }] }
   }]
 ]);
@@ -39,7 +45,7 @@ registerTopologyRuntimeRoutes(app, {
   homeAutomationService: {
     getTopologyNodes: () => [
       { nodeId: 'home-automation', details: { deviceRole: 'home-automation' } },
-      { nodeId: 'actually-discovered-switch', details: { deviceRole: 'home-automation-device' } }
+      { nodeId: 'actually-discovered-switch', lastSeen: now, details: { deviceRole: 'home-automation-device' } }
     ]
   },
   services: {},
@@ -58,6 +64,7 @@ try {
   const nodes = await response.json();
   assert.deepEqual(nodes.map((node) => node.nodeId).sort(), ['actually-discovered-switch', 'udp-real-device']);
   assert.equal(nodes.some((node) => ['child1', 'child2', 'child3', 'Neptune'].includes(node.nodeId)), false);
+  assert.equal(discoveredNodes.has('192.0.2.12'), false, 'Expired nodes are deleted from the registry');
   const targetsResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/pmachine/nodes`);
   assert.equal(targetsResponse.status, 200);
   const targets = await targetsResponse.json();
@@ -70,6 +77,14 @@ try {
   console.log('[topology-udp-only] PASS: topology contains only recent UDP-announced devices');
   console.log('[pmachine-targets] PASS: recent string/object PMachine services are deployable; stale and probe-only nodes are excluded');
 } finally {
+  for (const [key, value] of [
+    ['JS_PMACHINE_BASE_URLS', previousJsBases],
+    ['SERVICE_EDGE_BASE_URLS', previousEdgeBases],
+    ['SERVICE_EDGE_BASE_URL', previousEdgeBase]
+  ]) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   await fs.rm(tempDir, { recursive: true, force: true });
 }

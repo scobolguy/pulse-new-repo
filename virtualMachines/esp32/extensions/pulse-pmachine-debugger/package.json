@@ -2,13 +2,13 @@
   "name": "pulse-pmachine-debugger",
   "displayName": "Pulse PMachine Debugger",
   "description": "Run and debug Pulse PMachine programs from VS Code.",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "publisher": "pulse",
-  "icon": "media/pulse-icon.png",
+  "icon": "src/media/pulse-icon.png",
   "files": [
     "package.json",
     "README.md",
-    "media/pulse-icon.png",
+    "src/media/pulse-icon.png",
     "out/**"
   ],
   "engines": {
@@ -32,6 +32,14 @@
   "main": "./out/extension.js",
   "type": "module",
   "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "id": "pulse-pmachine.services",
+          "name": "Pulse Services"
+        }
+      ]
+    },
     "languages": [
       {
         "id": "pascalish",
@@ -81,9 +89,33 @@
       {
         "command": "pulse-pmachine.showAnimation",
         "title": "Pulse PMachine: Show Hanoi Animation"
+      },
+      {
+        "command": "pulse-pmachine.refreshServices",
+        "title": "Pulse Services: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "pulse-pmachine.openServiceEndpoint",
+        "title": "Pulse Services: Open Endpoint",
+        "icon": "$(link-external)"
       }
     ],
     "menus": {
+      "view/title": [
+        {
+          "command": "pulse-pmachine.refreshServices",
+          "when": "view == pulse-pmachine.services",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "pulse-pmachine.openServiceEndpoint",
+          "when": "view == pulse-pmachine.services && viewItem == pulseServiceEndpoint",
+          "group": "inline"
+        }
+      ],
       "editor/title": [
         {
           "command": "pulse-pmachine.runCurrentFile",

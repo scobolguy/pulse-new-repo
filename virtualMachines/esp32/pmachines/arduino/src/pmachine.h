@@ -477,6 +477,15 @@ using FsmCallHook = bool (*)(
 
 using TextOutputHook = void (*)(const std::string& line, void* context);
 
+struct HostValue {
+    bool isString = false;
+    int integer = 0;
+    std::string text;
+};
+
+using HostCallHook = bool (*)(const std::string&, const std::vector<HostValue>&,
+                             HostValue&, std::string&, void*);
+
 // Observable value of a named global after a run; mirrors the JS PMachine `globals` map.
 struct GlobalValue {
     bool isString = false;
@@ -635,6 +644,8 @@ public:
             textOutputContext = other.textOutputContext;
             serviceCallContext = other.serviceCallContext;
             fsmCallContext = other.fsmCallContext;
+            hostCallHook = other.hostCallHook;
+            hostCallContext = other.hostCallContext;
             fsmTable = std::move(other.fsmTable);
             namedStringVariables = std::move(other.namedStringVariables);
             namedRealVariables = std::move(other.namedRealVariables);
@@ -664,6 +675,8 @@ public:
             other.textOutputContext = nullptr;
             other.serviceCallContext = nullptr;
             other.fsmCallContext = nullptr;
+            other.hostCallHook = nullptr;
+            other.hostCallContext = nullptr;
             return *this;
         }
         return *this;
@@ -738,6 +751,10 @@ public:
     void* getFsmCallContext() const { return fsmCallContext; }
     std::vector<FsmHandleInfo> getFsmTableSnapshot() const;
     void setTextOutputHook(TextOutputHook hook, void* context = nullptr);
+    void setHostCallHook(HostCallHook hook, void* context = nullptr) {
+        hostCallHook = hook;
+        hostCallContext = context;
+    }
     void setThunkBinding(const std::string& symbol, int targetPc);
     bool clearThunkBinding(const std::string& symbol);
     void clearAllThunkBindings();
@@ -795,6 +812,8 @@ private:
     void* textOutputContext = nullptr;
     void* serviceCallContext = nullptr;
     void* fsmCallContext = nullptr;
+    HostCallHook hostCallHook = nullptr;
+    void* hostCallContext = nullptr;
     std::map<int, FsmHandleInfo> fsmTable;
     std::map<std::string, std::string> namedStringVariables;  // String-valued named variables (e.g., 'src')
     std::map<std::string, float> namedRealVariables;

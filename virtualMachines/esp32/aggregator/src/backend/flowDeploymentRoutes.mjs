@@ -61,6 +61,24 @@ export function registerFlowDeploymentRoutes(app, { runtimeRoot }) {
   const packageRoot = path.join(runtimeRoot, 'federated-ffs', 'packages');
   const deploymentIndexPath = path.join(runtimeRoot, 'federated-ffs', 'service-deployments.json');
 
+  async function getPlacementNodes() {
+    const provider = app.locals.discoveryProvider;
+    if (provider?.mode !== 'remote') return app.locals.esp32NodeRegistry?.getAllNodes?.() || [];
+    const nodes = app.locals.getCurrentNodesWithTopology
+      ? await app.locals.getCurrentNodesWithTopology()
+      : provider.getNodes();
+    return nodes.filter((node) => node.available !== false && node.availability?.available !== false
+      && !node.draining && !node.availability?.draining
+      && Array.isArray(node.details?.services) && node.details.services.some((service) =>
+        String(typeof service === 'string' ? service : service?.name || service?.serviceName || '')
+          .toLowerCase().includes('pmachine')));
+  }
+
+  async function findPlacementNode(nodeId) {
+    return (await getPlacementNodes()).find((node) =>
+      [node.nodeId, node.id, node.nodeName].some((id) => String(id || '') === nodeId)) || null;
+  }
+
   async function readIndex() {
     try {
       const parsed = JSON.parse(await fs.readFile(deploymentIndexPath, 'utf8'));
@@ -77,7 +95,7 @@ export function registerFlowDeploymentRoutes(app, { runtimeRoot }) {
 
   async function uploadToNode(node, packageDir, name) {
     if (!node?.ip) throw new Error('target node is not addressable');
-    const baseUrl = `http://${node.ip}:${Number(node.port || 80)}`.replace(':80', '');
+    const baseUrl = `http://${node.ip}:${Number(node.port || 80)}`;
     const remotePrefix = token(name, 'flow').slice(0, 8);
     const files = [
       [`/${remotePrefix}.pc`, await fs.readFile(path.join(packageDir, 'program.pcode'), 'utf8')],
@@ -93,7 +111,7 @@ export function registerFlowDeploymentRoutes(app, { runtimeRoot }) {
       const text = await response.text();
       if (!response.ok) throw new Error(`FFS upload ${file} failed (${response.status}): ${text.slice(0, 240)}`);
     }
-    return { nodeId: node.id, ip: node.ip, port: Number(node.port || 80), pcode: files[0][0], programMap: files[1][0] };
+    return { nodeId: node.nodeId || node.id, ip: node.ip, port: Number(node.port || 80), pcode: files[0][0], programMap: files[1][0] };
   }
 
   app.get('/api/deployments', async (_req, res) => {
@@ -124,7 +142,7 @@ export function registerFlowDeploymentRoutes(app, { runtimeRoot }) {
       let remote = null;
       const targetNodeId = String(current.targetNodeId || '').trim();
       if (targetNodeId) {
-        const node = req.app?.locals?.esp32NodeRegistry?.getNode?.(targetNodeId);
+        const node = await findPlacementNode(targetNodeId);
         if (!node) return res.status(404).json({ error: `target node not found: ${targetNodeId}` });
         const packageDir = path.join(packageRoot, token(previous.packageName, 'flow'), token(previous.packageVersion, '0.0.0'));
         remote = await uploadToNode(node, packageDir, previous.packageName);
@@ -223,21 +241,20 @@ export function registerFlowDeploymentRoutes(app, { runtimeRoot }) {
       else deployments.push(deployment);
       const nodeId = request.placement.node;
       let remote = null;
-      const registry = req.app?.locals?.esp32NodeRegistry;
       let selectedNode = null;
       if (nodeId === 'auto') {
-        const candidates = registry?.getAllNodes?.() || [];
+        const candidates = await getPlacementNodes();
         selectedNode = candidates.find((node) => {
           if (!node?.ip) return false;
           if (request.placement.cluster === 'auto') return true;
           return String(node?.topology?.activeClusterId || node?.metadata?.clusterId || '').trim() === request.placement.cluster;
         }) || null;
       } else {
-        selectedNode = registry?.getNode?.(nodeId) || null;
+        selectedNode = await findPlacementNode(nodeId);
         if (!selectedNode) return res.status(404).json({ error: `target node not found: ${nodeId}` });
       }
       if (selectedNode) {
-        deployment.targetNodeId = String(selectedNode.id || selectedNode.nodeId || '').trim() || null;
+        deployment.targetNodeId = String(selectedNode.nodeId || selectedNode.id || '').trim() || null;
         deployment.targetNodeIds = deployment.targetNodeId ? [deployment.targetNodeId] : ['*'];
         remote = await uploadToNode(selectedNode, packageDir, name);
         deployment.state = 'running';

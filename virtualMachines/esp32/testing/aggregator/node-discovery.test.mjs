@@ -2,9 +2,30 @@ import assert from 'node:assert/strict';
 import dgram from 'node:dgram';
 import { test } from 'node:test';
 import { bindNodeDiscoverySocket, enrichDiscoveredNode } from '../../aggregator/src/backend/modules/nodeDiscovery.mjs';
+import { DISCOVERY_NODE_MAX_AGE_MS, isFreshDiscoveryNode, pruneDiscoveryNodes } from '../../aggregator/src/discovery-topology.mjs';
 
 const ip = '192.0.2.115';
 const response = (payload) => ({ ok: true, json: async () => payload });
+
+test('discovery drops nodes exactly three minutes after the last announcement', () => {
+  assert.equal(DISCOVERY_NODE_MAX_AGE_MS, 180_000);
+  const now = 1_000_000;
+  const nodes = new Map([
+    ['fresh', { lastSeen: now - 179_999 }],
+    ['boundary', { lastSeen: now - 180_000 }],
+    ['stale-beacon', { lastSeen: now, beacon: { seenAt: now - 180_000 } }],
+    ['missing', {}],
+    ['invalid', { lastSeen: 'invalid' }]
+  ]);
+  const removed = [];
+  pruneDiscoveryNodes(nodes, now, { log: (message) => removed.push(message) });
+  assert.deepEqual([...nodes.keys()], ['fresh']);
+  assert.equal(removed.length, 4);
+  assert.equal(isFreshDiscoveryNode(nodes.get('fresh'), undefined, now), true);
+  nodes.set('boundary', { lastSeen: now });
+  pruneDiscoveryNodes(nodes, now, { log() {} });
+  assert.equal(nodes.has('boundary'), true, 'A new announcement restores an expired node');
+});
 
 test('status capabilities become visible while service description is still pending', async () => {
   const discoveredNodes = new Map([[ip, { httpPort: 8080, beacon: { seenAt: 123 }, details: { capabilityHash: 'original' } }]]);

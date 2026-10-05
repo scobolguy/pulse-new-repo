@@ -148,18 +148,6 @@ public class PascalishBaseListener implements PascalishListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void enterExportFlag(PascalishParser.ExportFlagContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitExportFlag(PascalishParser.ExportFlagContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
 	@Override public void enterParamSection(PascalishParser.ParamSectionContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -208,30 +196,6 @@ public class PascalishBaseListener implements PascalishListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void enterTypeBinding(PascalishParser.TypeBindingContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitTypeBinding(PascalishParser.TypeBindingContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterObjectPascalClassType(PascalishParser.ObjectPascalClassTypeContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitObjectPascalClassType(PascalishParser.ObjectPascalClassTypeContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
 	@Override public void enterClassDecl(PascalishParser.ClassDeclContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -251,30 +215,6 @@ public class PascalishBaseListener implements PascalishListener {
 	 * <p>The default implementation does nothing.</p>
 	 */
 	@Override public void exitClassInheritance(PascalishParser.ClassInheritanceContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterClassBodyItem(PascalishParser.ClassBodyItemContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitClassBodyItem(PascalishParser.ClassBodyItemContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterClassVisibility(PascalishParser.ClassVisibilityContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitClassVisibility(PascalishParser.ClassVisibilityContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
@@ -304,18 +244,6 @@ public class PascalishBaseListener implements PascalishListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void enterClassMethodKind(PascalishParser.ClassMethodKindContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitClassMethodKind(PascalishParser.ClassMethodKindContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
 	@Override public void enterClassMethodDecl(PascalishParser.ClassMethodDeclContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -323,42 +251,6 @@ public class PascalishBaseListener implements PascalishListener {
 	 * <p>The default implementation does nothing.</p>
 	 */
 	@Override public void exitClassMethodDecl(PascalishParser.ClassMethodDeclContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterMethodImplDecl(PascalishParser.MethodImplDeclContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitMethodImplDecl(PascalishParser.MethodImplDeclContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterClassOperatorDecl(PascalishParser.ClassOperatorDeclContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitClassOperatorDecl(PascalishParser.ClassOperatorDeclContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterOperatorTarget(PascalishParser.OperatorTargetContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitOperatorTarget(PascalishParser.OperatorTargetContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
@@ -448,126 +340,6 @@ public class PascalishBaseListener implements PascalishListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void enterDatabaseDecl(PascalishParser.DatabaseDeclContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitDatabaseDecl(PascalishParser.DatabaseDeclContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterDatabaseBinding(PascalishParser.DatabaseBindingContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitDatabaseBinding(PascalishParser.DatabaseBindingContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterTableDecl(PascalishParser.TableDeclContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitTableDecl(PascalishParser.TableDeclContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterTableBinding(PascalishParser.TableBindingContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitTableBinding(PascalishParser.TableBindingContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterColumnDecl(PascalishParser.ColumnDeclContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitColumnDecl(PascalishParser.ColumnDeclContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterSystemDecl(PascalishParser.SystemDeclContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitSystemDecl(PascalishParser.SystemDeclContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterSystemMember(PascalishParser.SystemMemberContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitSystemMember(PascalishParser.SystemMemberContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterSystemQueueDecl(PascalishParser.SystemQueueDeclContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitSystemQueueDecl(PascalishParser.SystemQueueDeclContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterSystemServiceDecl(PascalishParser.SystemServiceDeclContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitSystemServiceDecl(PascalishParser.SystemServiceDeclContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterSystemVisibilityClause(PascalishParser.SystemVisibilityClauseContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitSystemVisibilityClause(PascalishParser.SystemVisibilityClauseContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
 	@Override public void enterQueueType(PascalishParser.QueueTypeContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -616,18 +388,6 @@ public class PascalishBaseListener implements PascalishListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void enterEnumType(PascalishParser.EnumTypeContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitEnumType(PascalishParser.EnumTypeContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
 	@Override public void enterRecordField(PascalishParser.RecordFieldContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -647,18 +407,6 @@ public class PascalishBaseListener implements PascalishListener {
 	 * <p>The default implementation does nothing.</p>
 	 */
 	@Override public void exitTypeRef(PascalishParser.TypeRefContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterListType(PascalishParser.ListTypeContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitListType(PascalishParser.ListTypeContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
@@ -688,18 +436,6 @@ public class PascalishBaseListener implements PascalishListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void enterDecimalType(PascalishParser.DecimalTypeContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitDecimalType(PascalishParser.DecimalTypeContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
 	@Override public void enterUserType(PascalishParser.UserTypeContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -719,18 +455,6 @@ public class PascalishBaseListener implements PascalishListener {
 	 * <p>The default implementation does nothing.</p>
 	 */
 	@Override public void exitTypeName(PascalishParser.TypeNameContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterPascalIdentifier(PascalishParser.PascalIdentifierContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitPascalIdentifier(PascalishParser.PascalIdentifierContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
@@ -1240,18 +964,6 @@ public class PascalishBaseListener implements PascalishListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void enterRaiseStmt(PascalishParser.RaiseStmtContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitRaiseStmt(PascalishParser.RaiseStmtContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
 	@Override public void enterWithStmt(PascalishParser.WithStmtContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -1336,102 +1048,6 @@ public class PascalishBaseListener implements PascalishListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void enterInsertStmt(PascalishParser.InsertStmtContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitInsertStmt(PascalishParser.InsertStmtContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterSelectStmt(PascalishParser.SelectStmtContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitSelectStmt(PascalishParser.SelectStmtContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterSelectColumns(PascalishParser.SelectColumnsContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitSelectColumns(PascalishParser.SelectColumnsContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterUpdateStmt(PascalishParser.UpdateStmtContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitUpdateStmt(PascalishParser.UpdateStmtContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterColumnAssign(PascalishParser.ColumnAssignContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitColumnAssign(PascalishParser.ColumnAssignContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterDeleteStmt(PascalishParser.DeleteStmtContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitDeleteStmt(PascalishParser.DeleteStmtContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterWhereClause(PascalishParser.WhereClauseContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitWhereClause(PascalishParser.WhereClauseContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterCompareOp(PascalishParser.CompareOpContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitCompareOp(PascalishParser.CompareOpContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
 	@Override public void enterEnqueueStmt(PascalishParser.EnqueueStmtContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -1487,18 +1103,6 @@ public class PascalishBaseListener implements PascalishListener {
 	 * <p>The default implementation does nothing.</p>
 	 */
 	@Override public void exitPopStmt(PascalishParser.PopStmtContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterSendServiceStmt(PascalishParser.SendServiceStmtContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitSendServiceStmt(PascalishParser.SendServiceStmtContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
@@ -1655,18 +1259,6 @@ public class PascalishBaseListener implements PascalishListener {
 	 * <p>The default implementation does nothing.</p>
 	 */
 	@Override public void exitLvalue(PascalishParser.LvalueContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterLvalueSuffix(PascalishParser.LvalueSuffixContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitLvalueSuffix(PascalishParser.LvalueSuffixContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *

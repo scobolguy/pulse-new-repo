@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { XMLParser } from 'fast-xml-parser';
 import { loadOpcodeMap } from './opcodes.mjs';
+import { SERVICE_HOST_BINDINGS } from '../../shared/contracts/service-host-bindings.mjs';
 
 const XML_PARSER = new XMLParser({
   ignoreAttributes: false,
@@ -1440,6 +1441,8 @@ function parsePcode(text) {
       || mnemonic === 'MAP_RETURN'
     ) {
       instr.operand = parseBareOperand(rest);
+    } else if (mnemonic === 'CALL_EXT') {
+      instr.operand = parseCallOperand(rest);
     } else if (mnemonic === 'CALL') {
       instr.operand = parseCallOperand(rest);
       unresolved.push({ idx: instructions.length, label: instr.operand.label });
@@ -1496,6 +1499,10 @@ function assignVar(frame, name, value) {
 
 async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queueTypesByName = new Map(), isoTypeIds = new Set(), inputQueue, sourceMessage, runtimeContext = {}, debugHooks = {} }) {
   const stack = [];
+  const maxSteps = runtimeContext.maxSteps ?? MAX_RUN_STEPS;
+  if (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > MAX_RUN_STEPS) {
+    throw new Error(`maxSteps must be an integer between 1 and ${MAX_RUN_STEPS}`);
+  }
   let pc = 0;
   let currentMessage = sourceMessage;
   // Run-local output document for the pcode-routine mapper. SRC_GET reads from
@@ -1572,9 +1579,15 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
   let stepLimitHit = false;
   while (pc >= 0 && pc < instructions.length) {
     steps += 1;
-    if (steps > MAX_RUN_STEPS) {
+    if (steps > maxSteps) {
       stepLimitHit = true;
       break;
+    }
+    if (runtimeContext.signal?.aborted) throw new Error('PMachine execution cancelled');
+    if (runtimeContext.maxStack && stack.length > runtimeContext.maxStack) throw new Error('PMachine operand stack capacity exceeded');
+    if (runtimeContext.maxCallDepth && callStack.length > runtimeContext.maxCallDepth) throw new Error('PMachine call depth capacity exceeded');
+    if (runtimeContext.cooperative && steps % 256 === 0) {
+      await new Promise(resolve => setImmediate(resolve));
     }
     const instr = instructions[pc];
     const op = instr.mnemonic;
@@ -1598,6 +1611,29 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     }
     if (op === 'HALT') {
       break;
+    }
+    if (op === 'CALL_EXT') {
+      const name = String(instr.operand?.label || '').toLowerCase();
+      const binding = SERVICE_HOST_BINDINGS[name];
+      const argc = instr.operand?.argc;
+      if (!binding || argc !== binding.arity) throw new Error(`Invalid host binding call: ${name}`);
+      if (typeof runtimeContext.callHost !== 'function') throw new Error(`Host binding unavailable: ${name}`);
+      if (stack.length < argc) throw new Error(`Host binding stack underflow: ${name}`);
+      const args = argc ? stack.splice(stack.length - argc, argc) : [];
+      for (const [index, kind] of (binding.args || []).entries()) {
+        const value = args[index];
+        const valid = kind === 'string' ? typeof value === 'string'
+          : kind === 'integer' ? Number.isSafeInteger(value)
+            : typeof value === 'string' || Number.isSafeInteger(value);
+        if (!valid) throw new Error(`Invalid host argument ${index + 1} for ${name}: expected ${kind}`);
+      }
+      const value = await runtimeContext.callHost(name, args);
+      if (binding.result === 'string' ? typeof value !== 'string' : !Number.isSafeInteger(value)) {
+        throw new Error(`Invalid host result for ${name}: expected ${binding.result}`);
+      }
+      stack.push(value);
+      pc += 1;
+      continue;
     }
     if (op === 'JMP') {
       pc = instr.targetIndex >= 0 ? instr.targetIndex : instructions.length;

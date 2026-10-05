@@ -19,7 +19,7 @@
       "public": true,
       "autoStart": true,
       "portEnvVar": "DISCOVERY_HTTP_PORT",
-      "description": "Base discovery service and local service registry."
+      "description": "Standalone node discovery collector and service catalog. Provides discovery snapshot protocol v1 for PULSE_DISCOVERY_MODE=remote. Must not share its UDP bind with an Aggregator in local discovery mode."
     },
     "broker": {
       "name": "Pulse Broker",
@@ -112,6 +112,17 @@
       "serverRef": "local-workspace",
       "endpoint": "http://127.0.0.1:4300",
       "description": "Infrastructure and service catalog discovery capability."
+    },
+    {
+      "id": "service.pascalish-discovery-collector",
+      "name": "Pascalish Discovery Collector",
+      "kind": "discovery",
+      "provider": "pascalish",
+      "protocol": "http+udp",
+      "serverRef": null,
+      "endpoint": "http://192.168.2.115",
+      "configurationRef": "service.pascalish-discovery-collector",
+      "description": "Hosted Pascalish discovery service deployable to JavaScript PMachines and ESP32 PMachines."
     },
     {
       "id": "service.broker",
@@ -220,4 +231,3 @@
     "queueManager": { "serviceOfferingRef": "service.queue-manager", "serverRef": "local-workspace" }
   }
 }
-

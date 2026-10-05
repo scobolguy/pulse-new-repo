@@ -4,12 +4,16 @@ import { fileURLToPath } from 'node:url';
 import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import { compilePascalishProgramWithAntlr } from '../../../aggregator/scripts/compile-pascalish-program-antlr-to-pcode.mjs';
+import { runPcodeOnEsp32 } from '../../../aggregator/scripts/run-pascal-on-esp32-node.mjs';
+import { signPcodeText } from '../../../aggregator/scripts/pcode-signing.mjs';
 import { executeProgram, loadOpcodeMap, parsePcode, parseProgramMapMappings } from '../../../pmachines/javascript/index.mjs';
 import { startEsp32DebugSession, controlEsp32DebugSession } from '../../../aggregator/src/backend/modules/esp32PmachineDebugBridge.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const program = fileURLToPath(new URL('../../../artifactPrograms/towers-of-hanoi-program.pas', import.meta.url));
+const collectorProgram = fileURLToPath(new URL('../../../artifactPrograms/discovery-collector-service.pas', import.meta.url));
 const source = await readFile(program, 'utf8');
+const collectorSource = await readFile(collectorProgram, 'utf8');
 const artifact = compilePascalishProgramWithAntlr(source, { fileName: 'towers-of-hanoi-program.pas' });
 
 const vscodeMock = `
@@ -19,10 +23,17 @@ const vscodeMock = `
     fire(message) { for (const listener of this.listeners) listener(message); }
     dispose() {}
   }
-  export const Uri = { file: fsPath => ({ fsPath }) };
+  export const Uri = { file: fsPath => ({ fsPath }), parse: value => ({ toString: () => value }) };
+  export class TreeItem {
+    constructor(label, collapsibleState) { this.label = label; this.collapsibleState = collapsibleState; }
+  }
+  export const TreeItemCollapsibleState = { None: 0, Collapsed: 1, Expanded: 2 };
+  export class ThemeIcon { constructor(id) { this.id = id; } }
+  export const env = { openExternal: async () => true };
   export const workspace = {
     getWorkspaceFolder: () => ({ uri: { fsPath: ${JSON.stringify(root)} } }),
     getConfiguration: () => ({ get: (_, fallback) => fallback }),
+    onDidChangeConfiguration: handler => { globalThis.pulseTestConfigurationHandler = handler; return { dispose() {} }; },
   };
   export class DebugAdapterInlineImplementation { constructor(adapter) { this.implementation = adapter; } }
   export const debug = {
@@ -30,8 +41,18 @@ const vscodeMock = `
     onDidReceiveDebugSessionCustomEvent: () => ({ dispose() {} }),
   };
   export const ViewColumn = { Beside: -2 };
-  export const window = { createOutputChannel: () => ({ dispose() {} }), createWebviewPanel: () => { throw new Error('webview not available in tests'); } };
-  export const commands = { registerCommand: () => ({}) };
+  export const ProgressLocation = { Notification: 15 };
+  export const window = {
+    createOutputChannel: () => ({ dispose() {} }),
+    createWebviewPanel: () => { throw new Error('webview not available in tests'); },
+    registerTreeDataProvider: (id, provider) => { globalThis.pulseTestServicesProvider = provider; return { dispose() {} }; },
+  };
+  export const registeredCommands = new Map();
+  export const commands = { registerCommand: (name, handler) => {
+    registeredCommands.set(name, handler);
+    if (name === 'pulse-pmachine.runCurrentFile') globalThis.pulseTestRunCommand = handler;
+    return {};
+  } };
   export const languages = { registerCodeLensProvider: () => ({}) };
 `;
 const hooks = registerHooks({
@@ -41,8 +62,77 @@ const hooks = registerHooks({
   },
 });
 const { activate, loadPmachineTargets } = await import('../out/extension.js');
+const vscode = await import('vscode');
 activate({ subscriptions: [], extensionUri: {} });
 hooks.deregister();
+
+test('Services Explorer reads the services directory, endpoints, and configuration', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalOpenExternal = vscode.env.openExternal;
+  const opened = [];
+  globalThis.fetch = async url => {
+    assert.equal(url, 'http://127.0.0.1:4000/api/services');
+    return Response.json({ services: [
+      { id: 'collector', name: 'Pascalish Discovery Collector', provider: 'pascalish', protocol: 'http+udp', configurationRef: 'service.collector' },
+      { id: 'rabbit', name: 'RabbitMQ Broker', provider: 'rabbitmq', protocol: 'amqp', endpoint: null },
+      { id: 'gateway', name: 'Pulse Gateway', endpoint: 'http://127.0.0.1:4000' },
+    ] });
+  };
+  vscode.env.openExternal = async uri => { opened.push(uri.toString()); return true; };
+  try {
+    const provider = globalThis.pulseTestServicesProvider;
+    const items = await provider.getChildren();
+    assert.deepEqual(items.map(item => item.label), ['Pascalish Discovery Collector', 'Pulse Gateway', 'RabbitMQ Broker']);
+    assert.equal(items[0].contextValue, 'pulseServiceOffering');
+    assert.match(items[0].tooltip, /No endpoint configured/);
+    const collectorDetails = await provider.getChildren(items[0]);
+    assert.equal(collectorDetails[0].description, 'Not configured');
+    assert.equal(collectorDetails.at(-1).description, 'service.collector');
+    const gatewayDetails = await provider.getChildren(items[1]);
+    assert.equal(gatewayDetails[0].command.command, 'pulse-pmachine.openServiceEndpoint');
+    await vscode.registeredCommands.get('pulse-pmachine.openServiceEndpoint')(...gatewayDetails[0].command.arguments);
+    assert.deepEqual(opened, ['http://127.0.0.1:4000/']);
+    let refreshes = 0;
+    provider.onDidChangeTreeData(() => { refreshes += 1; });
+    vscode.registeredCommands.get('pulse-pmachine.refreshServices')();
+    globalThis.pulseTestConfigurationHandler({ affectsConfiguration: key => key === 'pulse-pmachine.backendUrl' });
+    assert.equal(refreshes, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+    vscode.env.openExternal = originalOpenExternal;
+  }
+});
+
+test('Services Explorer surfaces HTTP and malformed directory failures and recovers on refresh', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = { ...vscode.window };
+  const errors = [];
+  const output = [];
+  Object.assign(vscode.window, {
+    createOutputChannel: () => ({ dispose() {}, appendLine: line => output.push(line) }),
+    showErrorMessage: message => errors.push(message),
+  });
+  try {
+    activate({ subscriptions: [], extensionUri: {} });
+    const provider = globalThis.pulseTestServicesProvider;
+    for (const response of [new Response('offline', { status: 503 }), Response.json({ catalog: {} })]) {
+      globalThis.fetch = async () => response;
+      const items = await provider.getChildren();
+      assert.match(items[0].label, /Services unavailable/);
+    }
+    assert.equal(errors.length, 2);
+    assert.equal(output.length, 2);
+    assert.match(errors[0], /HTTP 503/);
+    assert.match(errors[1], /does not contain services/);
+    globalThis.fetch = async () => Response.json({ services: [] });
+    provider.refresh();
+    assert.equal((await provider.getChildren())[0].label, 'No services registered');
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const key of Object.keys(vscode.window)) delete vscode.window[key];
+    Object.assign(vscode.window, originalWindow);
+  }
+});
 
 test('run target picker includes discovered JavaScript PMachines as JavaScript targets', async () => {
   const originalFetch = globalThis.fetch;
@@ -50,6 +140,7 @@ test('run target picker includes discovered JavaScript PMachines as JavaScript t
     {
       nodeName: 'magic-js-pmachine-03',
       ip: '127.0.10.103',
+      port: 4103,
       details: { runtime: 'js-pmachine', hardware: 'PMachine JavaScript VM', services: ['PMachine'] },
     },
     { nodeName: 'js-hardware', ip: '192.168.2.10', details: { hardware: 'PMachine JavaScript VM', services: ['PMachine'] } },
@@ -68,6 +159,189 @@ test('run target picker includes discovered JavaScript PMachines as JavaScript t
     ]);
     assert.equal(targets[1].description, '127.0.10.103 · JavaScript PMachine');
     assert.equal(targets[4].description, '192.168.2.115 · ESP32 PMachine');
+    assert.ok(targets.slice(1, 4).every(target => target.host === undefined));
+    assert.equal(targets[4].host, '192.168.2.115');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('editor runs a discovered JavaScript target through the backend, not its registry address', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = { ...vscode.window };
+  const output = [];
+  const errors = [];
+  const requests = [];
+  Object.assign(vscode.window, {
+    activeTextEditor: { document: {
+      uri: { fsPath: program }, fileName: program, languageId: 'pascalish', getText: () => source,
+    } },
+    createOutputChannel: () => ({
+      clear() {}, appendLine: line => output.push(line), show() {}, dispose() {},
+    }),
+    showQuickPick: async targets => targets.find(target => target.nodeId === 'magic-js-pmachine-01'),
+    withProgress: async (_, task) => task(),
+    showErrorMessage: message => errors.push(message),
+  });
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url, options });
+    if (url.endsWith('/api/pmachine/nodes')) {
+      return Response.json([{
+        nodeName: 'magic-js-pmachine-01', ip: '127.0.10.101', port: 4101,
+        details: { runtime: 'js-pmachine', services: ['PMachine'] },
+      }]);
+    }
+    assert.equal(url, 'http://127.0.0.1:4000/api/pmachine/deploy-and-run');
+    return Response.json({ result: { stdout: ['Move disk 1 from 1 to 3'], stepCount: 802 } });
+  };
+  try {
+    activate({ subscriptions: [], extensionUri: {}, globalState: { get() {}, async update() {} } });
+    await globalThis.pulseTestRunCommand();
+    assert.deepEqual(errors, []);
+    assert.equal(requests.length, 2);
+    const body = JSON.parse(requests[1].options.body);
+    assert.equal(body.runtime, 'js');
+    assert.equal(body.targetNodeId, 'magic-js-pmachine-01');
+    assert.equal(body.pcodeText, artifact.pcodeText);
+    assert.equal(body.sourceFileName, 'towers-of-hanoi-program.pas');
+    assert.equal(body.inputQueue, 'vscode.pmachine');
+    const { generatedAt: sentAt, ...sentMap } = body.programMap;
+    const { generatedAt: compiledAt, ...compiledMap } = artifact.programMap;
+    assert.ok(sentAt);
+    assert.ok(compiledAt);
+    assert.deepEqual(sentMap, compiledMap);
+    assert.ok(output.includes('Move disk 1 from 1 to 3'));
+    assert.ok(output.includes('Completed on magic-js-pmachine-01 (802 steps).'));
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const key of Object.keys(vscode.window)) delete vscode.window[key];
+    Object.assign(vscode.window, originalWindow);
+  }
+});
+
+test('editor installs hosted Pascalish services and their companion daemon on direct HTTP targets', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = { ...vscode.window };
+  const output = [];
+  const errors = [];
+  const requests = [];
+  globalThis.fetch = async url => {
+    if (url === 'http://127.0.0.1:4000/api/pmachine/nodes') return Response.json([]);
+    requests.push(String(url));
+    if (String(url).endsWith('/pmachine/service_host/install')) {
+      return Response.json({ running: true, udpPort: 4210, collectorId: 'pascalish-discovery-collector' });
+    }
+    assert.ok(String(url).endsWith('/ffs/upload'));
+    return Response.json([]);
+  };
+  Object.assign(vscode.window, {
+    activeTextEditor: { document: {
+      uri: { fsPath: collectorProgram }, fileName: collectorProgram, languageId: 'pascalish', getText: () => collectorSource,
+    } },
+    createOutputChannel: () => ({
+      clear() {}, appendLine: line => output.push(line), show() {}, dispose() {},
+    }),
+    showQuickPick: async targets => targets.find(target => target.host === '127.0.0.1:4111'),
+    withProgress: async (_, task) => task(),
+    showErrorMessage: message => errors.push(message),
+  });
+  try {
+    activate({ subscriptions: [], extensionUri: {}, globalState: { get() {}, async update() {} } });
+    await globalThis.pulseTestRunCommand();
+    assert.deepEqual(errors, []);
+    assert.equal(requests.length, 5);
+    assert.deepEqual(requests.map(url => url.slice('http://127.0.0.1:4111'.length)), [
+      '/ffs/upload', '/ffs/upload', '/ffs/upload', '/ffs/upload', '/pmachine/service_host/install',
+    ]);
+    assert.ok(output.includes('Hosted service installed at http://127.0.0.1:4111.'));
+    assert.ok(output.includes('Hosted UDP port: 4210.'));
+    assert.ok(output.some(line => line.includes('Service endpoint: http://127.0.0.1:4111/health')));
+    const installBody = requests.at(-1);
+    assert.ok(installBody.endsWith('/pmachine/service_host/install'));
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const key of Object.keys(vscode.window)) delete vscode.window[key];
+    Object.assign(vscode.window, originalWindow);
+  }
+});
+
+test('remote run uploads signed compiled pcode and executes on the selected JS host and port', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  const result = { stdout: ['Towers of Hanoi'], globals: { diskCount: 5 }, stepCount: 802 };
+  const programMap = { ...artifact.programMap };
+  delete programMap.sourceMap;
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url, options });
+    return url.endsWith('/pmachine/execute_file') ? Response.json(result) : new Response('ok');
+  };
+  try {
+    const payload = await runPcodeOnEsp32({
+      pcodeText: artifact.pcodeText,
+      programMap,
+      node: '127.0.10.101:4101',
+      inputQueue: 'vscode.pmachine',
+      message: 'test message',
+      sourceFileName: 'towers-of-hanoi-program.pas',
+    });
+    assert.deepEqual(payload.result, result);
+    assert.equal(payload.host, '127.0.10.101:4101');
+    assert.equal(payload.source, 'towers-of-hanoi-program.pas');
+    assert.equal(payload.pcodeLines, artifact.pcodeText.split('\n').length);
+    assert.deepEqual(requests.map(({ url }) => url), [
+      'http://127.0.10.101:4101/ffs/upload',
+      'http://127.0.10.101:4101/ffs/upload',
+      'http://127.0.10.101:4101/pmachine/execute_file',
+    ]);
+    for (const { options } of requests) {
+      assert.equal(options.method, 'POST');
+      assert.equal(options.headers['content-type'], 'application/x-www-form-urlencoded');
+    }
+    const pcodeUpload = requests[0].options.body;
+    const mapUpload = requests[1].options.body;
+    assert.equal(pcodeUpload.get('body'), artifact.pcodeText);
+    const signedMap = JSON.parse(mapUpload.get('body'));
+    const { signing, ...uploadedMap } = signedMap;
+    assert.deepEqual(uploadedMap, programMap);
+    assert.equal(signing.signature, signPcodeText(artifact.pcodeText));
+    assert.deepEqual(Object.fromEntries(requests[2].options.body), {
+      file: pcodeUpload.get('file'),
+      programMap: mapUpload.get('file'),
+      runRouter: '0',
+      inputQueue: 'vscode.pmachine',
+      message: 'test message',
+      max: '200000',
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('remote run rejects missing pcode and invalid maps before contacting a node', async () => {
+  await assert.rejects(runPcodeOnEsp32(), /pcodeText is required/);
+  for (const programMap of [null, [], 'invalid']) {
+    await assert.rejects(runPcodeOnEsp32({ pcodeText: artifact.pcodeText, programMap }), /programMap must be an object/);
+  }
+});
+
+test('remote run surfaces upload and execution HTTP failures', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const failedRequest of [1, 2, 3]) {
+      let requests = 0;
+      globalThis.fetch = async () => {
+        requests += 1;
+        return requests === failedRequest
+          ? new Response('node unavailable', { status: 503 })
+          : new Response('ok');
+      };
+      const label = ['upload pcode', 'upload map', 'execute_file'][failedRequest - 1];
+      await assert.rejects(
+        runPcodeOnEsp32({ pcodeText: artifact.pcodeText, node: '127.0.10.101:4101' }),
+        new RegExp(`${label} failed \\(503\\): node unavailable`),
+      );
+      assert.equal(requests, failedRequest);
+    }
   } finally {
     globalThis.fetch = originalFetch;
   }
