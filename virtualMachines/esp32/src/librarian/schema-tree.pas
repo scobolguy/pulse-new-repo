@@ -1,6 +1,7 @@
 service 'pulse-data-librarian-schema-tree';
 use "JSON";
 use "JSONArrays";
+use "SchemaPaths";
 var request: JSONDocument;
     frames: JSONArray;
     fields: JSONArray;
@@ -33,34 +34,6 @@ function fieldText(value: string): string;
 begin
   if (value = 'null') or (value = 'false') or (value = '0') then return '';
   return host.json_to_text(value)
-end;
-
-function normalizePath(value: string): string;
-var parts: JSONArray;
-    normalized: string;
-    part: string;
-    index: integer;
-begin
-  value := host.text_trim(value);
-  if host.string_index(host.string_lower(value), 'root') = 0 then
-  begin
-    value := host.string_slice(value, 4, 1000000);
-    if host.string_index(value, '.') = 0 then value := host.string_slice(value, 1, 1000000)
-  end;
-  parts.load(host.text_split(value, '.'));
-  normalized := '';
-  index := 0;
-  while index < parts.count() do
-  begin
-    part := host.text_trim(host.json_to_text(parts.item(index)));
-    if part <> '' then
-    begin
-      if normalized <> '' then normalized := normalized + '.';
-      normalized := normalized + part
-    end;
-    index := index + 1
-  end;
-  return normalized
 end;
 
 function pathVisible(value: string): boolean;
@@ -102,7 +75,7 @@ begin
     position := 0;
     while position < childNodes.count() do
     begin
-      name := normalizePath(fieldText(childNodes.item(position)));
+      name := SchemaPath_Normalize(fieldText(childNodes.item(position)));
       if name <> '' then
       begin
         raw := host.text_hash(name);

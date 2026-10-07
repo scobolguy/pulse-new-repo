@@ -413,7 +413,7 @@ or schema-file/catalog multi-file transactions. ESP32 transport and chunking are
 Run `node --test testing\pmachines\librarian-catalog-store.test.mjs testing\pmachines\librarian-http-catalog.test.mjs`
 for CRUD, 24-way HTTP concurrency, snapshot retries, legacy-source races, no-write
 normalization failures and corruption/size-limit recovery. The historical parity script
-now checks 105 old/new HTTP comparisons, including canonical collisions, aliases, legacy
+now checks 127 old/new HTTP comparisons, including canonical collisions, aliases, legacy
 mapper duplicates/raw identities, patch semantics, error precedence and persisted formatting.
 
 ### Data type and mapper ruleset normalization
@@ -440,8 +440,38 @@ Run `node --test testing\pmachines\librarian-normalization.test.mjs` for direct 
 with the original normalization functions, including coercion edge cases, Unicode,
 canonical collisions, malformed rows, priorities beyond 32-bit integers and reverse-ordered
 1000-record catalogs. Historical HTTP/persisted-catalog parity remains a separate check.
-Subschema normalization, lifecycle date/status policy and non-XSD schema parsers still
-remain in Node; this milestone does not claim a fully Pascalish Librarian.
+Non-XSD schema parsers and schema-file/catalog orchestration still remain in Node;
+this milestone does not claim a fully Pascalish Librarian.
+
+### Subschema normalization and lifecycle policy
+
+The normalization service also owns subschema ID/label/parent normalization, field-path
+coercion/deduplication/locale sorting, required-field validation and catalog normalization.
+Every stored row is validated; an invalid row fails the catalog read rather than being
+silently dropped. Catalog order and optional `parentTypeId` omission remain unchanged.
+Normalization runs again after snapshot conflicts, before mutation commits.
+
+The reusable desktop [SchemaPaths library](../virtualMachines/esp32/aggregator/libraries/SchemaPaths/SchemaPaths.pas)
+provides `SchemaPath_Normalize`. Subschema normalization and schema-tree projection both
+use it, preserving the existing case-insensitive `root` prefix removal and trimmed,
+nonempty dot-segment semantics without separate walkers in Node.
+
+Lifecycle normalization and status selection run in Pascalish using generic desktop
+date primitives. Input coercion, UTC ISO formatting, invalid-date error precedence,
+strict reject-after ordering, `keepForDisplay !== false`, and scheduled-before-rejected
+status precedence retain historical behavior. Epoch-zero timestamps keep their original
+truthiness behavior. Date/budget failures propagate; validation errors remain HTTP 400
+and happen before writes. Physical and virtual schema listings share the same normalized
+lifecycle display. Listing requests invoke normalization sequentially, avoiding enqueueing
+an entire physical catalog beyond the bounded service queue.
+
+The desktop date adapter supplies OS/runtime date conversion and clock semantics only;
+it contains no Librarian validation or status policy. ESP32 image encoding rejects these
+desktop calls, with no change to transport chunking.
+Run `node --test --test-concurrency=1 testing\pmachines\librarian-normalization.test.mjs testing\pmachines\librarian-schema-tree.test.mjs testing\pmachines\librarian-http-catalog.test.mjs`
+for direct legacy comparisons, shared path behavior, date/status boundaries and no-write
+validation failures. Run the historical parity script separately to avoid competing
+CPU-heavy compilations against the VM's bounded wall-time execution budget.
 
 The HTTP integration test covers 24 simultaneous creates, competing duplicate IDs,
 partial updates of the same record, concurrent deletes and parent-schema rename.

@@ -261,6 +261,23 @@ try {
   await compare('lifecycle-invalid-order', 'POST', '/api/librarian/schema-lifecycle', {
     path: 'parity.json-schema', activeFrom: '2100-01-01', rejectAfter: '2020-01-01'
   }, 400);
+  for (const [name, payload, status] of [
+    ['invalid-precedence', { activeFrom: 'bad', rejectAfter: 'bad' }, 400],
+    ['invalid-reject', { activeFrom: false, rejectAfter: 'bad' }, 400],
+    ['equal-dates', { activeFrom: '2020-01-01', rejectAfter: '2020-01-01' }, 400],
+    ['invalid-object-date', { activeFrom: {} }, 400],
+    ['uncoercible-object-date', { activeFrom: { toString: 0 } }, 500],
+    ['false-dates', { activeFrom: 0, rejectAfter: false, keepForDisplay: false }, 200],
+    ['array-date', { activeFrom: [2020], rejectAfter: '2100-01-01' }, 200],
+    ['epoch-date', { activeFrom: '1970-01-01T00:00:00Z', keepForDisplay: 0 }, 200],
+    ['scheduled', { activeFrom: '2100-01-01' }, 200],
+    ['rejected', { rejectAfter: '2020-01-01', keepForDisplay: false }, 200],
+    ['timezone', { activeFrom: '2020-01-01T12:00:00+04:00', rejectAfter: '2100-01-01' }, 200],
+  ]) {
+    await compare(`lifecycle-${name}`, 'POST', '/api/librarian/schema-lifecycle',
+      { path: 'parity.json-schema', ...payload }, status);
+    await compare(`lifecycle-catalog-${name}`, 'GET', '/api/librarian/schemas', undefined, 200);
+  }
   await compare('lifecycle-update', 'POST', '/api/librarian/schema-lifecycle', {
     path: 'parity.json-schema', activeFrom: '2020-01-01', rejectAfter: '2100-01-01', keepForDisplay: true
   }, 200);

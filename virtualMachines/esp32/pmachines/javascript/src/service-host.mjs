@@ -13,6 +13,7 @@ import { createHostCacheStore } from './host-cache.mjs';
 import { createFilesystemBindings } from './filesystem-bindings.mjs';
 import { createJsonCollectionBindings } from './json-collection-bindings.mjs';
 import { createDesktopTextBindings } from './desktop-text-bindings.mjs';
+import { createDesktopDateBindings } from './desktop-date-bindings.mjs';
 import { createJsonValueBindings } from './json-value-bindings.mjs';
 import { createXmlBindings } from './xml-bindings.mjs';
 import { HOST_CAPABILITIES_VERSION, HOST_PROFILES, assertHostCapabilities } from '../../shared/contracts/host-capabilities.mjs';
@@ -238,6 +239,7 @@ export async function createPascalishServiceHost({
         'host.text_hash_utf8': value => createHash('sha256').update(value, 'utf8').digest('hex'),
         'host.text_split_whitespace': value => JSON.stringify(value.split(/[ \t\r\n]+/).filter(Boolean)),
         ...createDesktopTextBindings(),
+        ...createDesktopDateBindings(),
         'host.json_has': (json, key) => Object.hasOwn(objectJson(json), text(key, 'JSON key')) ? 1 : 0,
         'host.capabilities': () => JSON.stringify(capabilities),
         ...networkBindings,

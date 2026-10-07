@@ -1,6 +1,7 @@
 service 'pulse-data-librarian-normalization';
 use "JSON";
 use "JSONArrays";
+use "SchemaPaths";
 var request: JSONDocument;
     response: JSONDocument;
     records: JSONArray;
@@ -201,7 +202,7 @@ begin
   return host.string_replace(value, '^_+|_+$', 'g', '')
 end;
 
-function sortRulesets(value: string): string;
+function sortValues(value: string; rulesets: boolean): string;
 var handle: integer;
     count: integer;
     width: integer;
@@ -218,8 +219,9 @@ var handle: integer;
     merged: JSONArray;
     result: JSONArray;
 begin
-  handle := host.json_parse_value(value);
-  count := host.json_node_count(handle, 0);
+  handle := 0;
+  count := host.json_array_count(value);
+  if rulesets then handle := host.json_parse_value(value);
   order.load('[]');
   index := 0;
   while index < count do
@@ -246,14 +248,22 @@ begin
         if left >= middle then comparison := -1
         else if right < limit then
         begin
-          leftNode := host.json_node_item(handle, 0, host.json_integer('{"value":' + order.item(left) + '}', 'value'));
-          rightNode := host.json_node_item(handle, 0, host.json_integer('{"value":' + order.item(right) + '}', 'value'));
-          comparison := host.number_compare(
+          leftNode := host.json_integer('{"value":' + order.item(left) + '}', 'value');
+          rightNode := host.json_integer('{"value":' + order.item(right) + '}', 'value');
+          if rulesets then
+          begin
+            leftNode := host.json_node_item(handle, 0, leftNode);
+            rightNode := host.json_node_item(handle, 0, rightNode);
+            comparison := host.number_compare(
             host.json_node_value(handle, host.json_node_member(handle, leftNode, 'priority')),
             host.json_node_value(handle, host.json_node_member(handle, rightNode, 'priority')));
-          if comparison = 0 then comparison := 0 - host.string_compare(
+            if comparison = 0 then comparison := 0 - host.string_compare(
             host.json_to_text(host.json_node_value(handle, host.json_node_member(handle, leftNode, 'id'))),
             host.json_to_text(host.json_node_value(handle, host.json_node_member(handle, rightNode, 'id'))))
+          end
+          else comparison := 0 - host.string_compare(
+            host.json_to_text(host.json_array_get(value, leftNode)),
+            host.json_to_text(host.json_array_get(value, rightNode)))
         end;
         if comparison >= 0 then
         begin
@@ -275,10 +285,62 @@ begin
   index := 0;
   while index < count do
   begin
-    result.append(host.json_node_value(handle, host.json_node_item(
-      handle, 0, host.json_integer('{"value":' + order.item(index) + '}', 'value'))));
+    leftNode := host.json_integer('{"value":' + order.item(index) + '}', 'value');
+    if rulesets then result.append(host.json_node_value(handle, host.json_node_item(handle, 0, leftNode)))
+    else result.append(host.json_array_get(value, leftNode));
     index := index + 1
   end;
+  return result.serialize()
+end;
+
+function normalizeSubschema(value: string): string;
+var item: JSONDocument;
+    result: JSONDocument;
+    fields: JSONArray;
+    normalizedFields: JSONArray;
+    index: integer;
+    id: string;
+    label: string;
+    schemaPath: string;
+    typeId: string;
+    field: string;
+    fieldValue: string;
+begin
+  item.load('{}');
+  if (host.json_kind(value) = 'object') or (host.json_kind(value) = 'array') then item.load(host.json_object(value));
+  id := host.string_lower(host.text_trim(fieldText(item.serialize(), 'id')));
+  id := host.string_replace(id, '[^a-z0-9._-]+', 'g', '-');
+  id := host.string_replace(id, '^-+|-+$', 'g', '');
+  label := fieldText(item.serialize(), 'label');
+  if not truthy(fieldRaw(item.serialize(), 'label')) then label := id;
+  label := host.text_trim(label);
+  schemaPath := host.string_replace(host.text_trim(fieldText(item.serialize(), 'parentSchemaPath')), '\\', 'g', '/');
+  typeId := host.string_lower(host.text_trim(fieldText(item.serialize(), 'parentTypeId')));
+  fields.load('[]');
+  fieldValue := fieldRaw(item.serialize(), 'accessibleFields');
+  if host.json_kind(fieldValue) = 'array' then fields.load(fieldValue);
+  normalizedFields.load('[]');
+  index := 0;
+  while index < fields.count() do
+  begin
+    fieldValue := fields.item(index);
+    field := '';
+    if truthy(fieldValue) then field := host.json_to_text(fieldValue);
+    field := SchemaPath_Normalize(field);
+    normalizedFields.append(host.json_value(host.json_set('{}', 'value', field), 'value'));
+    index := index + 1
+  end;
+  normalizedFields.load(uniqueTexts(normalizedFields.serialize()));
+  if id = '' then return '{"error":"id is required"}';
+  if label = '' then return '{"error":"label is required"}';
+  if schemaPath = '' then return '{"error":"parentSchemaPath is required"}';
+  if normalizedFields.count() = 0 then return '{"error":"accessibleFields must include at least one field path"}';
+  result.load('{}');
+  result.setText('id', id);
+  result.setText('label', label);
+  result.setText('parentSchemaPath', schemaPath);
+  if typeId <> '' then result.setText('parentTypeId', typeId);
+  result.embed('accessibleFields', sortValues(normalizedFields.serialize(), false));
   return result.serialize()
 end;
 
@@ -314,6 +376,72 @@ begin
   return result.serialize()
 end;
 
+function normalizeLifecycle(value: string): string;
+var result: JSONDocument;
+    active: string;
+    rejected: string;
+    rawActive: string;
+    rawRejected: string;
+begin
+  if (host.json_kind(value) = 'object') or (host.json_kind(value) = 'array') then value := host.json_object(value)
+  else value := '{}';
+  rawActive := fieldRaw(value, 'activeFrom');
+  rawRejected := fieldRaw(value, 'rejectAfter');
+  active := 'null';
+  rejected := 'null';
+  if truthy(rawActive) then active := host.date_iso(rawActive);
+  if truthy(rawRejected) then rejected := host.date_iso(rawRejected);
+  if truthy(rawActive) and (active = 'null') then return '{"error":"activeFrom must be a valid date/time"}';
+  if truthy(rawRejected) and (rejected = 'null') then return '{"error":"rejectAfter must be a valid date/time"}';
+  if (active <> 'null') and (rejected <> 'null') then
+  begin
+    if host.number_compare(host.date_parse(rejected), host.date_parse(active)) <= 0 then
+      return '{"error":"rejectAfter must be later than activeFrom"}'
+  end;
+  result.load('{}');
+  result.embed('activeFrom', active);
+  result.embed('rejectAfter', rejected);
+  result.setBoolean('keepForDisplay', fieldRaw(value, 'keepForDisplay') <> 'false');
+  return result.serialize()
+end;
+
+function lifecycleDisplay(value: string; now: string): string;
+var result: JSONDocument;
+    active: string;
+    rejected: string;
+    activeTime: string;
+    rejectedTime: string;
+    status: string;
+begin
+  if (host.json_kind(value) = 'object') or (host.json_kind(value) = 'array') then value := host.json_object(value)
+  else value := '{}';
+  if now = 'null' then now := host.date_now();
+  host.number_compare(now, now);
+  active := fieldRaw(value, 'activeFrom');
+  rejected := fieldRaw(value, 'rejectAfter');
+  activeTime := 'null';
+  rejectedTime := 'null';
+  if truthy(active) then activeTime := host.date_parse(active);
+  if truthy(rejected) then rejectedTime := host.date_parse(rejected);
+  status := 'active';
+  if truthy(rejectedTime) then
+  begin
+    if host.number_compare(now, rejectedTime) >= 0 then status := 'rejected'
+  end;
+  if truthy(activeTime) then
+  begin
+    if host.number_compare(now, activeTime) < 0 then status := 'scheduled'
+  end;
+  if not truthy(active) then active := 'null';
+  if not truthy(rejected) then rejected := 'null';
+  result.load('{}');
+  result.embed('activeFrom', active);
+  result.embed('rejectAfter', rejected);
+  result.setBoolean('keepForDisplay', fieldRaw(value, 'keepForDisplay') <> 'false');
+  result.setText('status', status);
+  return result.serialize()
+end;
+
 post '/normalize';
 begin
   request.load(host.event_body());
@@ -321,6 +449,7 @@ begin
   response.load('{}');
   raw := request.value('value');
   if operation = 'type-record' then response.embed('value', normalizeType(raw))
+  else if operation = 'lifecycle-display' then response.embed('value', lifecycleDisplay(raw, fieldRaw(request.serialize(), 'now')))
   else if operation = 'ruleset-id' then response.setText('value', rulesetId(host.json_to_text(raw)))
   else if operation = 'create-type' then
   begin
@@ -338,15 +467,42 @@ begin
     currentRecord.embed('record', normalizeType(other.serialize()));
     response.embed('value', currentRecord.serialize())
   end
-  else if operation = 'ruleset' then
+  else if (operation = 'ruleset') or (operation = 'subschema') or (operation = 'lifecycle') then
   begin
-    currentRecord.load(normalizeRuleset(raw));
+    if operation = 'ruleset' then currentRecord.load(normalizeRuleset(raw))
+    else if operation = 'subschema' then currentRecord.load(normalizeSubschema(raw))
+    else currentRecord.load(normalizeLifecycle(raw));
     if host.json_has(currentRecord.serialize(), 'error') = 1 then
     begin
       host.http_status(400);
+      currentRecord.setBoolean('validation', true);
       return currentRecord.serialize()
     end;
     response.embed('value', currentRecord.serialize())
+  end
+  else if operation = 'subschema-catalog' then
+  begin
+    if host.json_kind(raw) <> 'array' then
+    begin
+      host.http_status(400);
+      return '{"error":"Subschema catalog must be a JSON array"}'
+    end;
+    catalogHandle := host.json_parse_value(raw);
+    total := host.json_node_count(catalogHandle, 0);
+    normalized.load('[]');
+    position := 0;
+    while position < total do
+    begin
+      currentRecord.load(normalizeSubschema(host.json_node_value(catalogHandle, host.json_node_item(catalogHandle, 0, position))));
+      if host.json_has(currentRecord.serialize(), 'error') = 1 then
+      begin
+        host.http_status(400);
+        return currentRecord.serialize()
+      end;
+      normalized.append(currentRecord.serialize());
+      position := position + 1
+    end;
+    response.embed('value', normalized.serialize())
   end
   else if operation = 'type-catalog' then
   begin
@@ -420,7 +576,7 @@ begin
       end;
       position := position + 1
     end;
-    response.embed('value', sortRulesets(normalized.serialize()));
+    response.embed('value', sortValues(normalized.serialize(), true));
     response.embed('warnings', warnings.serialize())
   end
   else host.raise_error('Unknown Librarian normalization operation');

@@ -12,19 +12,25 @@ export async function createPascalishLibrarianNormalization({ logger = console }
     desktopBudget: true, maxSteps: 10000000, maxExecutionMs: 10000, logger
   });
   await host.start();
-  async function normalize(operation, value) {
+  async function normalize(operation, value, now) {
     const result = await host.dispatch({
       transport: 'internal', method: 'POST', path: '/normalize',
-      body: JSON.stringify({ operation, value: value ?? null })
+      body: JSON.stringify({ operation, value: value ?? null, now })
     });
     if (result.status !== 200 || !result.body || !Object.hasOwn(result.body, 'value')) {
-      throw new Error(result.body?.error || 'Invalid Pascalish normalization response');
+      throw Object.assign(new Error(result.body?.error || 'Invalid Pascalish normalization response'), {
+        normalizationValidation: result.status === 400 && result.body?.validation === true
+      });
     }
     for (const warning of result.body.warnings || []) logger.warn(`[Librarian] ${warning}`);
     return result.body.value;
   }
   return {
     typeRecord: value => normalize('type-record', value),
+    subschema: value => normalize('subschema', value),
+    subschemaCatalog: value => normalize('subschema-catalog', value),
+    lifecycle: value => normalize('lifecycle', value),
+    lifecycleDisplay: (value, now) => normalize('lifecycle-display', value, now),
     createType: value => normalize('create-type', value),
     typeCatalog: value => normalize('type-catalog', value),
     ruleset: value => normalize('ruleset', value),

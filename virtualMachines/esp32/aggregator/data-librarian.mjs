@@ -401,34 +401,6 @@ async function extractStructureForFile(filePath, schemaType) {
   }
 }
 
-function normalizeSchemaFieldPath(value) {
-  return String(value || '')
-    .trim()
-    .replace(/^root\.?/i, '')
-    .split('.')
-    .map(part => part.trim())
-    .filter(Boolean)
-    .join('.');
-}
-
-function normalizeSubschemaDefinition(candidate) {
-  const source = candidate && typeof candidate === 'object' ? candidate : {};
-  const id = String(source.id || '').trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
-  const label = String(source.label || id).trim();
-  const parentSchemaPath = String(source.parentSchemaPath || '').trim().replace(/\\/g, '/');
-  const parentTypeId = String(source.parentTypeId || '').trim().toLowerCase();
-  const accessibleFields = Array.from(new Set(
-    (Array.isArray(source.accessibleFields) ? source.accessibleFields : [])
-      .map(normalizeSchemaFieldPath)
-      .filter(Boolean)
-  )).sort((a, b) => a.localeCompare(b));
-  if (!id) throw new Error('id is required');
-  if (!label) throw new Error('label is required');
-  if (!parentSchemaPath) throw new Error('parentSchemaPath is required');
-  if (accessibleFields.length === 0) throw new Error('accessibleFields must include at least one field path');
-  return { id, label, parentSchemaPath, ...(parentTypeId ? { parentTypeId } : {}), accessibleFields };
-}
-
 async function startSubschemaPolicyHost() {
   const policyPath = path.join(repoRoot, '..', 'src', 'librarian', 'subschema-policy.pas');
   const source = await fs.readFile(policyPath, 'utf-8');
@@ -518,16 +490,14 @@ async function findUnknownSubschemaFields(accessibleFields, availableFields) {
 async function loadSubschemas() {
   const parsed = await catalogStore.read('subschemas');
   if (parsed === undefined) return [];
-  if (!Array.isArray(parsed)) throw new Error('Subschema catalog must be a JSON array');
-  return parsed.map(normalizeSubschemaDefinition);
+  return normalization.subschemaCatalog(parsed);
 }
 
 async function mutateSubschemas(prepare) {
   for (let attempt = 0; attempt < 32; attempt += 1) {
     const stored = await catalogStore.read('subschemas');
     const expected = stored === undefined ? [] : stored;
-    if (!Array.isArray(expected)) throw new Error('Subschema catalog must be a JSON array');
-    const entries = expected.map(normalizeSubschemaDefinition);
+    const entries = await normalization.subschemaCatalog(expected);
     const { mutation, ...context } = await prepare(entries);
     try {
       const result = await catalogStore.mutateSubschemas({ ...mutation, expected, entries });
@@ -547,21 +517,6 @@ async function loadSchemaLifecycleByPath() {
 
 async function mutateSchemaLifecycle(operation, id, values = {}) {
   return catalogStore.mutateCatalog('schema-lifecycle', () => ({ operation, id, ...values }));
-}
-
-function sanitizeLifecycleDate(value) {
-  if (!value) return null;
-  const dt = new Date(value);
-  return Number.isNaN(dt.getTime()) ? null : dt.toISOString();
-}
-
-function computeLifecycleStatus(lifecycle) {
-  const now = Date.now();
-  const activeFromMs = lifecycle.activeFrom ? Date.parse(lifecycle.activeFrom) : null;
-  const rejectAfterMs = lifecycle.rejectAfter ? Date.parse(lifecycle.rejectAfter) : null;
-  if (activeFromMs && now < activeFromMs) return 'scheduled';
-  if (rejectAfterMs && now >= rejectAfterMs) return 'rejected';
-  return 'active';
 }
 
 const LIBRARIAN_LLM_ACTIONS = [
@@ -773,15 +728,14 @@ async function loadPhysicalSchemaCatalog() {
       size: file.size,
       mtime: file.mtime,
       structure,
-      lifecycle: {
-        activeFrom: lifecycle.activeFrom || null,
-        rejectAfter: lifecycle.rejectAfter || null,
-        keepForDisplay: lifecycle.keepForDisplay !== false,
-        status: computeLifecycleStatus(lifecycle),
-      },
+      lifecycle,
     };
   });
-  return (await Promise.all(schemas)).filter(Boolean);
+  const catalog = (await Promise.all(schemas)).filter(Boolean);
+  for (const schema of catalog) {
+    schema.lifecycle = await normalization.lifecycleDisplay(schema.lifecycle);
+  }
+  return catalog;
 }
 
 function subschemaCatalogEntry(parent, definition, projection) {
@@ -819,7 +773,7 @@ async function loadSubschemaCatalog(physicalSchemas) {
 }
 
 async function validateSubschemaDefinition(candidate) {
-  const definition = normalizeSubschemaDefinition(candidate);
+  const definition = await normalization.subschema(candidate);
   const physicalSchemas = await loadPhysicalSchemaCatalog();
   const parent = physicalSchemas.find(schema => schema.path === definition.parentSchemaPath);
   if (!parent) {
@@ -1231,35 +1185,16 @@ app.post('/api/librarian/schema-lifecycle', async (req, res) => {
       return res.status(404).json({ error: `Schema not found: ${schemaPath}` });
     }
 
-    const normalizedActiveFrom = sanitizeLifecycleDate(activeFrom);
-    const normalizedRejectAfter = sanitizeLifecycleDate(rejectAfter);
-    if (activeFrom && !normalizedActiveFrom) {
-      return res.status(400).json({ error: 'activeFrom must be a valid date/time' });
-    }
-    if (rejectAfter && !normalizedRejectAfter) {
-      return res.status(400).json({ error: 'rejectAfter must be a valid date/time' });
-    }
-    if (normalizedActiveFrom && normalizedRejectAfter && Date.parse(normalizedRejectAfter) <= Date.parse(normalizedActiveFrom)) {
-      return res.status(400).json({ error: 'rejectAfter must be later than activeFrom' });
-    }
-
-    const lifecycle = {
-      activeFrom: normalizedActiveFrom,
-      rejectAfter: normalizedRejectAfter,
-      keepForDisplay: keepForDisplay !== false,
-    };
+    const lifecycle = await normalization.lifecycle({ activeFrom, rejectAfter, keepForDisplay });
     const result = await mutateSchemaLifecycle('set', schemaPath, { record: lifecycle });
 
     res.json({
       status: 'updated',
       path: schemaPath,
-      lifecycle: {
-        ...result.record,
-        status: computeLifecycleStatus(result.record),
-      },
+      lifecycle: await normalization.lifecycleDisplay(result.record),
     });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.normalizationValidation ? 400 : 500).json({ error: e.message });
   }
 });
 

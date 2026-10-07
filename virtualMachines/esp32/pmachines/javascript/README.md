@@ -142,6 +142,15 @@ not untrusted request-supplied expressions.
 and returns -1, 0 or 1 without narrowing them to the VM's integer range.
 These generic primitives implement platform semantics, not Librarian normalization
 policy, and remain unavailable to ESP32 hosted images.
+The [desktop date adapter](src/desktop-date-bindings.mjs) provides
+`host.date_iso(serializedValue)` (serialized UTC ISO string or JSON null for an invalid
+date), `host.date_parse(serializedValue)` (serialized epoch milliseconds or JSON null)
+and `host.date_now()` (serialized current epoch milliseconds). Conversion follows
+JavaScript `new Date(value)` and `Date.parse(value)` semantics respectively; malformed
+JSON and non-string arguments fail explicitly rather than returning null.
+Returning serialized numbers preserves millisecond values beyond the VM integer range.
+These desktop-only platform primitives do not implement application validation,
+status selection or filesystem access.
 `host.text_split_whitespace(text)` returns a serialized array of tokens split on XML
 whitespace (space, tab, CR, LF). It does not treat other Unicode spacing characters as
 XML separators. `XMLDocument.hasAttribute` returns Boolean presence independently of

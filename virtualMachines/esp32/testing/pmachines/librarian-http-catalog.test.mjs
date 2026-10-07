@@ -203,6 +203,39 @@ test('catalog projection does not enqueue an entire large catalog beyond host ca
   }
 });
 
+test('lifecycle validation failures never mutate persisted catalogs and status applies to virtual schemas', async t => {
+  const { origin, catalogRoot } = await fixture(t);
+  await fs.writeFile(path.join(catalogRoot, 'schemas', 'lifecycle.json'), JSON.stringify({ A: 'value' }));
+  const post = async body => {
+    const response = await fetch(`${origin}/api/librarian/schema-lifecycle`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: 'lifecycle.json', ...body })
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  const saved = await post({ activeFrom: '2100-01-01', keepForDisplay: false });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.lifecycle.status, 'scheduled');
+  const file = path.join(catalogRoot, 'schema-lifecycle.json');
+  const previous = await fs.readFile(file, 'utf8');
+  for (const [candidate, message] of [
+    [{ activeFrom: 'bad', rejectAfter: 'bad' }, 'activeFrom must be a valid date/time'],
+    [{ rejectAfter: {} }, 'rejectAfter must be a valid date/time'],
+    [{ activeFrom: '2020-01-01', rejectAfter: '2020-01-01' }, 'rejectAfter must be later than activeFrom']
+  ]) {
+    assert.deepEqual(await post(candidate), { status: 400, body: { error: message } });
+    assert.equal(await fs.readFile(file, 'utf8'), previous);
+  }
+  await fs.writeFile(path.join(catalogRoot, 'subschemas.json'), JSON.stringify([{
+    id: 'virtual', parentSchemaPath: 'lifecycle.json', accessibleFields: ['A']
+  }]));
+  const listed = await fetch(`${origin}/api/librarian/schemas`);
+  assert.equal(listed.status, 200);
+  const catalog = await listed.json();
+  assert.equal(catalog.schemas.length, 2);
+  for (const schema of catalog.schemas) assert.deepEqual(schema.lifecycle, saved.body.lifecycle);
+});
+
 test('projection budget failures do not persist an unreturnable subschema definition', async t => {
   const { origin, catalogRoot } = await fixture(t);
   const properties = Object.fromEntries(['a', 'b', 'c'].map(value => [value.repeat(180000), { type: 'string' }]));
