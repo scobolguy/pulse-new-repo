@@ -103,6 +103,42 @@ test('HTTP catalog errors never silently reset persisted data; valid raw imports
   assert.deepEqual((await fs.readdir(catalogRoot)).filter(name => name.startsWith('.pulse-')), []);
 });
 
+test('HTTP XSD listing, UTF-16, subschema paths, malformed input and recovery use Pascalish parsing', async t => {
+  const { origin, catalogRoot } = await fixture(t);
+  const content = `<s:schema xmlns:s="http://www.w3.org/2001/XMLSchema"><s:element name="Document">
+    <s:annotation><s:documentation>Ignored nesting</s:documentation></s:annotation>
+    <s:complexType><s:sequence><s:element name='Id' type='s:string' minOccurs='0'/></s:sequence></s:complexType>
+  </s:element></s:schema>`;
+  const schemas = path.join(catalogRoot, 'schemas');
+  await Promise.all(Array.from({ length: 24 }, (_, index) =>
+    fs.writeFile(path.join(schemas, `fixture-${index}.xsd`), content)));
+  const file = path.join(schemas, 'utf16.xsd');
+  await fs.writeFile(file, Buffer.from(`\ufeff${content}`, 'utf16le'));
+  const list = await fetch(`${origin}/api/librarian/schemas`);
+  assert.equal(list.status, 200);
+  const listed = (await list.json()).schemas;
+  assert.equal(listed.length, 25);
+  const structure = listed.find(item => item.path === 'utf16.xsd').structure;
+  assert.equal(structure.children[0].children[0].children[0].children[0].name, 'Id');
+  assert.equal(structure.children[0].children[0].children[0].children[0].required, false);
+  const post = definition => fetch(`${origin}/api/librarian/subschemas`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(definition)
+  });
+  const valid = await post({ id: 'xsd-sub', parentSchemaPath: 'utf16.xsd', accessibleFields: ['Document.Id'] });
+  assert.equal(valid.status, 201, JSON.stringify(await valid.json()));
+  const invalid = await post({ id: 'bad-xsd-sub', parentSchemaPath: 'utf16.xsd', accessibleFields: ['Document.Missing'] });
+  assert.equal(invalid.status, 400);
+  await fs.writeFile(file, '<s:schema>');
+  const malformed = await fetch(`${origin}/api/librarian/schemas`);
+  assert.equal(malformed.status, 500);
+  assert.match((await malformed.json()).error, /Invalid XML|Unbound/);
+  await fs.writeFile(file, content);
+  const recovered = await fetch(`${origin}/api/librarian/schemas`);
+  assert.equal(recovered.status, 200);
+  const projected = (await recovered.json()).subschemas.find(item => item.name === 'xsd-sub').structure;
+  assert.ok(JSON.stringify(projected).includes('"Id"'));
+});
+
 test('concurrent HTTP subschema mutations preserve every success and enforce uniqueness', async t => {
   const { origin, catalogRoot } = await fixture(t);
   await fs.writeFile(path.join(catalogRoot, 'schemas', 'parent.json-schema'), JSON.stringify({

@@ -7,6 +7,7 @@ import { readEnvNumber } from './src/env-config.mjs';
 import { compilePascalishProgramWithAntlr } from './scripts/compile-pascalish-program-antlr-to-pcode.mjs';
 import { createPascalishServiceHost } from '../pmachines/javascript/src/service-host.mjs';
 import { createPascalishCatalogStore } from './src/librarian/catalog-store.mjs';
+import { createPascalishXsdParser } from './src/librarian/xsd-parser.mjs';
 
 const app = express();
 app.use(express.json());
@@ -37,6 +38,7 @@ const LEGACY_MAPPER_RULESETS_PATH = path.join(DATA_ROOT, 'mapper-rulesets.json')
 const LEGACY_DATA_TYPES_PATH = path.join(DATA_ROOT, 'data-types.json');
 let subschemaPolicyHost;
 let catalogStore;
+let xsdParser;
 
 async function pathExists(targetPath) {
   try {
@@ -337,81 +339,6 @@ function buildCopybookTree(content) {
   return root.children.length > 0 ? root : null;
 }
 
-function buildXsdTree(content) {
-  const root = { name: 'root', kind: 'branch', valueType: 'xsd', children: [] };
-  const stack = [root];
-  const simpleTypes = new Map();
-
-  const simpleTypeRegex = /<xs:simpleType\b[^>]*name="([^"]+)"[^>]*>([\s\S]*?)<\/xs:simpleType>/gi;
-  for (const simpleTypeMatch of String(content || '').matchAll(simpleTypeRegex)) {
-    const simpleTypeName = String(simpleTypeMatch[1] || '');
-    const simpleTypeBody = String(simpleTypeMatch[2] || '');
-    const enumValues = [];
-    for (const enumMatch of simpleTypeBody.matchAll(/<xs:enumeration\b[^>]*value="([^"]+)"/gi)) {
-      enumValues.push(String(enumMatch[1] || ''));
-    }
-    const baseType = simpleTypeBody.match(/<xs:restriction\b[^>]*base="([^"]+)"/i)?.[1] || null;
-    simpleTypes.set(simpleTypeName, {
-      enumValues,
-      isEnum: enumValues.length > 0,
-      baseType,
-    });
-  }
-
-  const tokens = String(content || '').match(/<\/?[^>]+>/g) || [];
-
-  for (const token of tokens) {
-    const closing = /^<\//.test(token);
-    const selfClosing = /\/>\s*$/.test(token);
-    const nameMatch = token.match(/^<\/?([a-zA-Z0-9:_-]+)\b([^>]*)\/?\s*>$/);
-    if (!nameMatch) continue;
-
-    const tagName = nameMatch[1].toLowerCase();
-    const attrs = nameMatch[2] || '';
-
-    if (closing) {
-      if (stack.length > 1) stack.pop();
-      continue;
-    }
-
-    if (tagName.endsWith('element')) {
-      const elementName = attrs.match(/\bname="([^"]+)"/i)?.[1] || 'element';
-      const typeName = attrs.match(/\btype="([^"]+)"/i)?.[1] || null;
-      const typeNoPrefix = typeName && typeName.includes(':') ? typeName.split(':').pop() : typeName;
-      const simpleTypeMeta = (typeNoPrefix && simpleTypes.get(typeNoPrefix)) || (typeName && simpleTypes.get(typeName)) || null;
-      const minOccursRaw = attrs.match(/\bminOccurs="([^"]+)"/i)?.[1] || null;
-      const minOccurs = minOccursRaw == null ? 1 : Number.parseInt(minOccursRaw, 10);
-      const required = Number.isNaN(minOccurs) ? true : minOccurs > 0;
-      const isLeaf = selfClosing || !!typeName;
-      const node = {
-        name: elementName,
-        kind: isLeaf ? 'leaf' : 'branch',
-        valueType: typeName || 'complex',
-        required,
-        ...(simpleTypeMeta?.isEnum ? { isEnum: true, enumValues: simpleTypeMeta.enumValues } : {}),
-        children: [],
-      };
-      stack[stack.length - 1].children.push(node);
-      if (!isLeaf) stack.push(node);
-      continue;
-    }
-
-    if (tagName.endsWith('sequence') || tagName.endsWith('choice') || tagName.endsWith('all') || tagName.endsWith('complextype')) {
-      const name = attrs.match(/\bname="([^"]+)"/i)?.[1] || tagName.split(':').pop();
-      const node = {
-        name,
-        kind: 'branch',
-        valueType: tagName.split(':').pop(),
-        children: [],
-      };
-      stack[stack.length - 1].children.push(node);
-      if (!selfClosing) stack.push(node);
-    }
-  }
-
-  return root.children.length > 0 ? root : null;
-}
-
 function decodeTextBuffer(buffer) {
   if (!buffer || buffer.length === 0) return '';
 
@@ -446,14 +373,15 @@ function decodeTextBuffer(buffer) {
 
 async function extractStructureForFile(filePath, schemaType) {
   const lowerType = String(schemaType || '').toLowerCase();
+  if (lowerType === 'xsd' || lowerType === 'xml') {
+    const content = decodeTextBuffer(await fs.readFile(filePath));
+    return xsdParser.parse(content);
+  }
   try {
     const fileBuffer = await fs.readFile(filePath);
     const content = decodeTextBuffer(fileBuffer);
     if (lowerType === 'copybook') {
       return buildCopybookTree(content);
-    }
-    if (lowerType === 'xsd' || lowerType === 'xml') {
-      return buildXsdTree(content);
     }
     if (lowerType !== 'json' && lowerType !== 'json-schema') {
       return null;
@@ -1647,6 +1575,7 @@ catalogStore = await createPascalishCatalogStore({
 });
 
 subschemaPolicyHost = await startSubschemaPolicyHost();
+xsdParser = await createPascalishXsdParser();
 
 app.listen(PORT, () => {
   console.log(`[Librarian] Service running on http://localhost:${PORT}`);

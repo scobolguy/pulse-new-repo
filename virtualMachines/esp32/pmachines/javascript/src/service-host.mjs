@@ -12,6 +12,7 @@ import { createBoundedTextBindings } from './bounded-text.mjs';
 import { createHostCacheStore } from './host-cache.mjs';
 import { createFilesystemBindings } from './filesystem-bindings.mjs';
 import { createJsonCollectionBindings } from './json-collection-bindings.mjs';
+import { createXmlBindings } from './xml-bindings.mjs';
 import { HOST_CAPABILITIES_VERSION, HOST_PROFILES, assertHostCapabilities } from '../../shared/contracts/host-capabilities.mjs';
 
 function failure(message, status = 400) {
@@ -40,7 +41,7 @@ export async function createPascalishServiceHost({
   maxEntries = 255, maxTables = 4, maxEvents = 16, maxBodyBytes = 4096,
   maxStorageBytes = 131072, maxResponseBytes = 262144, maxSteps = 100000, maxExecutionMs = 2000,
   maxTimers = 8, maxDaemonDatagramBytes = 1024, clock = () => Math.floor(performance.now()), logger = console,
-  onDaemonEvent = null, storageRoots = {}, maxFileBytes = 262144
+  onDaemonEvent = null, storageRoots = {}, maxFileBytes = 262144, desktopBudget = false
 }) {
   if (compiled?.programMap?.hostBindingsVersion !== SERVICE_HOST_BINDINGS_VERSION
     || compiled.programMap.runtimeUnit?.kind !== 'service') throw failure('Unsupported service host contract');
@@ -51,7 +52,8 @@ export async function createPascalishServiceHost({
   for (const [name, value] of Object.entries({ maxEntries, maxTables, maxEvents, maxBodyBytes, maxTimers, maxStorageBytes, maxResponseBytes, maxExecutionMs })) {
     integer(value, 1, 1000000, name);
   }
-  integer(maxSteps, 1, 200000, 'maxSteps');
+  if (typeof desktopBudget !== 'boolean') throw failure('Invalid desktopBudget');
+  integer(maxSteps, 1, desktopBudget ? 10000000 : 200000, 'maxSteps');
   integer(maxFileBytes, 1, 1000000, 'maxFileBytes');
   const instructions = parsePcode(compiled.pcodeText);
   const filesystem = await createFilesystemBindings(storageRoots, {
@@ -228,6 +230,8 @@ export async function createPascalishServiceHost({
       const handlers = {
         ...filesystem.handlers,
         ...createJsonCollectionBindings(),
+        ...createXmlBindings({ maxBytes: maxBodyBytes }),
+        'host.json_has': (json, key) => Object.hasOwn(objectJson(json), text(key, 'JSON key')) ? 1 : 0,
         'host.capabilities': () => JSON.stringify(capabilities),
         ...networkBindings,
         ...byteBindings,
@@ -345,7 +349,7 @@ export async function createPascalishServiceHost({
         instructions: unit?.instructions || instructions, mappingsById: unit?.mappingsById || mappingsById,
         opcodeMap, inputQueue: '', sourceMessage: event.body ?? '',
         runtimeContext: {
-          maxSteps, maxStack: 256, maxCallDepth: 32, cooperative: true, signal,
+          maxSteps, desktopBudget, maxStack: 256, maxCallDepth: 32, cooperative: true, signal,
           callHost: async (name, args) => {
             signal.throwIfAborted();
             const handler = handlers[name] || bindings[name];

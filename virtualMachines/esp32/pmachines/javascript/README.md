@@ -81,3 +81,40 @@ Run the storage contract and hosted-runtime tests from the ESP32 workspace:
 ```powershell
 node --test testing\pmachines\filesystem-bindings.test.mjs testing\pmachines\pascalish-service-host.test.mjs
 ```
+
+### Desktop XML bindings
+
+The invocation-scoped [XML adapter](src/xml-bindings.mjs) exposes
+`host.xml_parse(text)`, `host.xml_count(handle)`, `host.xml_local_name(handle, node)`,
+`host.xml_namespace(handle, node)`, `host.xml_attribute(handle, node, name)`,
+`host.xml_attribute_integer(handle, node, name, fallback)`,
+`host.xml_qname_local(handle, node, value)`, `host.xml_qname_namespace(handle, node, value)`,
+`host.xml_first_child(handle, node)`, `host.xml_next_sibling(handle, node)`,
+`host.xml_end(handle, node)` and `host.xml_text(handle, node)`.
+The Pascalish [XML library](../../aggregator/libraries/XML/XML.pas) wraps these
+as `XMLDocument`; XSD application policy stays in
+[Pascalish](../../src/librarian/xsd-parser.pas).
+`host.json_has(object, key)` additionally provides checked own-property existence.
+
+Parsing uses the aggregator's existing `fast-xml-parser` dependency, resolved through
+its package location; a standalone installation must retain that dependency/layout.
+Only predefined/numeric entities are permitted. DTDs and external/custom entities are
+disabled without resource access. Namespace scopes, expanded attribute uniqueness,
+single-root documents and XML character validity are checked. The parser's dangerous-name
+protection remains enabled. Malformed XML is an explicit 400 error; capacity failures are
+explicit errors, not empty documents.
+
+Indices are zero-based, no-child/no-sibling is -1, subtree end is exclusive,
+optional absent attributes are empty strings, and direct text includes CDATA.
+Handles expire at invocation end. Each invocation holds at most eight documents,
+20000 total element nodes, depth 64 and `maxBodyBytes` of source text.
+XML and `json_has` calls are desktop-only and refused by ESP32 image encoding.
+
+Trusted hosts can opt into `desktopBudget: true` to raise the accepted `maxSteps`
+ceiling from 200000 to 10000000. Neither the runtime's 200000-step default nor the
+service host's 100000-step default changes; time, stack, call-depth and byte limits
+remain enforced. This option does not expand ESP32 resources or network/chunking limits.
+
+```powershell
+node --test testing\pmachines\xml-xsd.test.mjs testing\pmachines\librarian-http-catalog.test.mjs
+```

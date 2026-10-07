@@ -30,6 +30,16 @@ export const SERVICE_HOST_INTERNAL_BINDINGS = Object.freeze(new Set([
 ]));
 
 export const SERVICE_HOST_BINDINGS = Object.freeze({
+  'host.xml_parse': { arity: 1, args: ['string'], result: 'integer', desktopOnly: true },
+  'host.xml_count': { arity: 1, args: ['integer'], result: 'integer', desktopOnly: true },
+  ...Object.fromEntries(['local_name', 'namespace', 'text'].map(name =>
+    [`host.xml_${name}`, { arity: 2, args: ['integer', 'integer'], result: 'string', desktopOnly: true }])),
+  ...Object.fromEntries(['first_child', 'next_sibling', 'end'].map(name =>
+    [`host.xml_${name}`, { arity: 2, args: ['integer', 'integer'], result: 'integer', desktopOnly: true }])),
+  ...Object.fromEntries(['attribute', 'qname_local', 'qname_namespace'].map(name =>
+    [`host.xml_${name}`, { arity: 3, args: ['integer', 'integer', 'string'], result: 'string', desktopOnly: true }])),
+  'host.xml_attribute_integer': { arity: 4, args: ['integer', 'integer', 'string', 'integer'], result: 'integer', desktopOnly: true },
+  'host.json_has': { arity: 2, args: ['string', 'string'], result: 'integer', desktopOnly: true },
   'host.capabilities': { arity: 0, result: 'string' },
   'host.fs_list': { arity: 4, args: ['string', 'string', 'string', 'integer'], result: 'string', capability: 'filesystem.read' },
   'host.fs_stat': { arity: 2, args: ['string', 'string'], result: 'string', capability: 'filesystem.read' },

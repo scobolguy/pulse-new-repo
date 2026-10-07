@@ -64,6 +64,7 @@ function normalizeRuntimeUnit(runtimeUnit, fallbackServiceId = 'default-router-s
 // Must match MAX_RUN_STEPS in src/pmachine.cpp: a program that trips the limit on one
 // runtime has to trip it identically on the other.
 const MAX_RUN_STEPS = 200000;
+const MAX_DESKTOP_RUN_STEPS = 10000000;
 
 function trimCopy(s) {
   return String(s || '').trim();
@@ -1501,8 +1502,9 @@ function assignVar(frame, name, value) {
 async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queueTypesByName = new Map(), isoTypeIds = new Set(), inputQueue, sourceMessage, runtimeContext = {}, debugHooks = {} }) {
   const stack = [];
   const maxSteps = runtimeContext.maxSteps ?? MAX_RUN_STEPS;
-  if (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > MAX_RUN_STEPS) {
-    throw new Error(`maxSteps must be an integer between 1 and ${MAX_RUN_STEPS}`);
+  const stepCeiling = runtimeContext.desktopBudget === true ? MAX_DESKTOP_RUN_STEPS : MAX_RUN_STEPS;
+  if (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > stepCeiling) {
+    throw new Error(`maxSteps must be an integer between 1 and ${stepCeiling}`);
   }
   let pc = 0;
   let currentMessage = sourceMessage;

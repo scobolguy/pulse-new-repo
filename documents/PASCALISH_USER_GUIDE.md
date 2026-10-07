@@ -97,7 +97,8 @@ generation rejects the new array calls explicitly; ESP32 transport/chunking is u
 
 ## Data Librarian Policy
 
-The Data Librarian keeps its HTTP API and schema parsing in Node.js. Subschema field-access
+The Data Librarian keeps its HTTP API and non-XSD schema parsing in Node.js. XSD structure
+extraction now runs in Pascalish, as described below. Subschema field-access
 validation runs as a hosted Pascalish policy in
 `virtualMachines/esp32/src/librarian/subschema-policy.pas`; it uses the `JSON` library while
 Node supplies the parent schema's flattened field paths. Catalog persistence now runs in a
@@ -111,6 +112,59 @@ validation, and errors. It also reports local HTTP timings as an indication of p
 overhead, not a production benchmark.
 Policy tokens preserve UTF-16 code units so distinct JavaScript field paths remain distinct,
 even when they contain unpaired surrogates.
+
+## XML Library and XSD Structure Extraction
+
+Desktop services can `use "XML"` for the
+[`XMLDocument` class](../virtualMachines/esp32/aggregator/libraries/XML/XML.pas).
+`load(text)` parses XML into a document handle. `count`, `localName`, `namespaceURI`,
+`attribute`, `attributeInteger(node, name, fallback)`, `qualifiedLocal`,
+`qualifiedNamespace`, `firstChild`, `nextSibling`, `subtreeEnd` and `textValue`
+provide checked navigation and namespace-aware access. Node indices are zero-based;
+missing children/siblings return -1, and `subtreeEnd` is an exclusive preorder index.
+Optional missing attributes return an empty string; integer attributes use the explicit
+fallback only when absent. Direct text includes decoded entities and CDATA, not descendant
+text. Handles are valid only for the current service invocation, not subsequent requests.
+
+XML tokenization and well-formedness checks use the existing `fast-xml-parser` host
+dependency; the Pascalish library wraps generic desktop bindings, not an XSD-specific
+JavaScript parser. DTDs, external/custom entities, unbound prefixes, invalid characters,
+duplicate expanded attributes and multiple roots are rejected. The host also retains
+the dependency's rejection of dangerous JavaScript property names. Documents are bounded
+by the service body-byte budget, 20000 aggregate element nodes, depth 64 and eight handles.
+These bindings are desktop-only; ESP32 compilation/image checks reject their use.
+
+[`xsd-parser.pas`](../virtualMachines/esp32/src/librarian/xsd-parser.pas) owns XSD
+namespace recognition, named simple-type enum collection and recursive construction of
+the existing Librarian tree shape. It handles `element`, `complexType`, `sequence`,
+`choice`, `all` and content/extension/restriction wrappers, including `minOccurs`
+optionality. QName matching uses namespace identity, independent of prefix spelling.
+Annotations/comments no longer corrupt the parent stack, single-quoted attributes and
+escaped text work, and foreign-namespace elements do not masquerade as XSD declarations.
+The [thin adapter](../virtualMachines/esp32/aggregator/src/librarian/xsd-parser.mjs)
+compiles and dispatches; Node retains schema-file discovery, encoding conversion and HTTP.
+The adapter caches serialized trees by source-content hash, bounded at 256 entries and
+8000000 bytes, and coalesces simultaneous identical requests. Callers receive independent
+trees, changed content is reparsed, and failures are never cached. This avoids rerunning
+the VM on every unchanged catalog read; first-time parsing of the full corpus is
+substantially slower than the old regex implementation (about 30 seconds locally).
+
+This is structure extraction, **not full XSD validation**. Named complex-type references,
+element references, simple-type inheritance, imports/includes and complete facets/cardinality
+semantics are not expanded or validated. It makes no network requests. Well-formed non-XSD
+XML and schemas without displayable nodes return null. Malformed XML/XSD attribute values
+fail explicitly rather than silently appearing as an unavailable structure.
+
+The internal XSD host opts into `desktopBudget: true`, allowing up to 10000000 instructions,
+with a 10000 ms execution deadline, 1000000-byte input/output limits and 256 admitted
+events. The JavaScript runtime's default ceiling remains 200000 instructions, the hosted
+service default remains 100000, and ESP32 budgets and chunked transport are unchanged.
+The larger desktop ceiling is bounded and granted by trusted host configuration, not P-code.
+
+Run `node --test testing\pmachines\xml-xsd.test.mjs testing\pmachines\librarian-http-catalog.test.mjs`
+from the ESP32 workspace. Tests cover XML contracts, corrected XSD behavior, original-parser
+parity on its correctly parsed subset, all 123 checked-in XSDs, concurrent admission,
+UTF-16 HTTP listings, subschema validation/projection, malformed input and recovery.
 
 ## Data Librarian Catalog Persistence
 
