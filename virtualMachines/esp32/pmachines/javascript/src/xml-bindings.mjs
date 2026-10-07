@@ -57,6 +57,7 @@ export function createXmlBindings({ maxBytes = 1000000, maxNodes = 20000, maxDep
       const parser = new XMLParser({
         preserveOrder: true, ignoreAttributes: false, attributeNamePrefix: '',
         parseTagValue: false, parseAttributeValue: false, trimValues: false,
+        htmlEntities: { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" },
         ignoreDeclaration: true, ignorePiTags: true, maxNestedTags: maxDepth
       });
       let ordered;
@@ -143,6 +144,10 @@ export function createXmlBindings({ maxBytes = 1000000, maxNodes = 20000, maxDep
       if (typeof name !== 'string') throw failure('Expected XML attribute name');
       const attributes = node(handle, index).attributes;
       return Object.hasOwn(attributes, name) ? attributes[name] : '';
+    },
+    'host.xml_has_attribute': (handle, index, name) => {
+      if (typeof name !== 'string') throw failure('Expected XML attribute name');
+      return Object.hasOwn(node(handle, index).attributes, name) ? 1 : 0;
     },
     'host.xml_attribute_integer': (handle, index, name, fallback) => {
       if (typeof name !== 'string' || !Number.isInteger(fallback) || fallback < 0 || fallback > 2147483647) {

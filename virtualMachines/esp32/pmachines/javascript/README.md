@@ -96,6 +96,7 @@ The invocation-scoped [XML adapter](src/xml-bindings.mjs) exposes
 `host.xml_namespace(handle, node)`, `host.xml_attribute(handle, node, name)`,
 `host.xml_attribute_integer(handle, node, name, fallback)`,
 `host.xml_qname_local(handle, node, value)`, `host.xml_qname_namespace(handle, node, value)`,
+`host.xml_has_attribute(handle, node, name)`,
 `host.xml_first_child(handle, node)`, `host.xml_next_sibling(handle, node)`,
 `host.xml_parent(handle, node)`, `host.xml_end(handle, node)` and `host.xml_text(handle, node)`.
 `host.xml_append_document(handle, donorHandle)` moves a donor's parsed forest into
@@ -108,6 +109,12 @@ as `XMLDocument`; XSD application policy stays in
 `host.json_has(object, key)` additionally provides checked own-property existence.
 `host.text_hash(text)` returns a SHA-256 hex digest of UTF-16LE code units, retaining
 lone-surrogate distinctions; it is a desktop-only generic content identity primitive.
+`host.text_split_whitespace(text)` returns a serialized array of tokens split on XML
+whitespace (space, tab, CR, LF). It does not treat other Unicode spacing characters as
+XML separators. `XMLDocument.hasAttribute` returns Boolean presence independently of
+the empty-string default of `attribute`. Numeric XML character references are decoded
+alongside the five predefined entities, without enabling HTML named entities or recursive
+decoding; CDATA remains literal.
 
 Parsing uses the aggregator's existing `fast-xml-parser` dependency, resolved through
 its package location; a standalone installation must retain that dependency/layout.
@@ -128,6 +135,11 @@ The constructor requires `schemaRoot`. Its dependency-aware `parseFile` cache ch
 all source hashes through the confined reader before reuse; `parse(content)` does
 not follow local links. See the [user guide](../../../../documents/PASCALISH_USER_GUIDE.md#xml-library-and-xsd-structure-extraction)
 for namespace adoption, graph limits and unsupported `xml:base`/redefine/override.
+The Pascalish simple-type resolver handles inherited restriction enums, inline simple
+types, list item metadata and finite unions. List items are not whole-list enums, and
+open/incomplete union members do not imply a finite enum set. See the guide's
+[simple-type semantics](../../../../documents/PASCALISH_USER_GUIDE.md#simple-type-inheritance-lists-and-unions)
+for lexical-only interpretation and recursion/work limits.
 
 Trusted hosts can opt into `desktopBudget: true` to raise the accepted `maxSteps`
 ceiling from 200000 to 10000000. Neither the runtime's 200000-step default nor the
@@ -135,5 +147,5 @@ service host's 100000-step default changes; time, stack, call-depth and byte lim
 remain enforced. This option does not expand ESP32 resources or network/chunking limits.
 
 ```powershell
-node --test testing\pmachines\xml-xsd.test.mjs testing\pmachines\xsd-references.test.mjs testing\pmachines\xsd-links.test.mjs testing\pmachines\librarian-http-catalog.test.mjs
+node --test testing\pmachines\xml-xsd.test.mjs testing\pmachines\xsd-references.test.mjs testing\pmachines\xsd-links.test.mjs testing\pmachines\xsd-simple-types.test.mjs testing\pmachines\librarian-http-catalog.test.mjs
 ```

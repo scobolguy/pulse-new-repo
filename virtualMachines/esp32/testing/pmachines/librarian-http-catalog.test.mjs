@@ -178,6 +178,26 @@ test('HTTP XSD listing, UTF-16, subschema paths, malformed input and recovery us
   assert.ok(changedSchemas.find(item => item.name === 'linked-xsd').availableFields.includes('Document.Changed'));
   const oldPath = await post({ id: 'old-linked-xsd', parentSchemaPath: 'utf16.xsd', accessibleFields: ['Document.Included'] });
   assert.equal(oldPath.status, 400);
+  await fs.writeFile(includedPath, `<s:schema xmlns:s="http://www.w3.org/2001/XMLSchema">
+    <s:complexType name="Record"><s:sequence>
+      <s:element name="Code" type="Alias"/>
+      <s:element name="Inline"><s:simpleType><s:restriction base="s:string"><s:enumeration value="INLINE"/></s:restriction></s:simpleType></s:element>
+      <s:element name="Codes" type="Codes"/>
+    </s:sequence></s:complexType>
+    <s:simpleType name="Alias"><s:restriction base="Code"/></s:simpleType>
+    <s:simpleType name="Code"><s:restriction base="s:string"><s:enumeration value="A"/><s:enumeration value="B"/></s:restriction></s:simpleType>
+    <s:simpleType name="Codes"><s:list itemType="Code"/></s:simpleType>
+  </s:schema>`);
+  const enums = await post({ id: 'enum-xsd', parentSchemaPath: 'utf16.xsd', accessibleFields: ['Document.Code', 'Document.Inline', 'Document.Codes'] });
+  assert.equal(enums.status, 201, JSON.stringify(await enums.json()));
+  const enumListing = await fetch(`${origin}/api/librarian/schemas`);
+  assert.equal(enumListing.status, 200);
+  const enumProjection = (await enumListing.json()).subschemas.find(item => item.name === 'enum-xsd').structure;
+  const fields = enumProjection.children[0].children[0].children;
+  assert.deepEqual(fields.find(node => node.name === 'Code').enumValues, ['A', 'B']);
+  assert.deepEqual(fields.find(node => node.name === 'Inline').enumValues, ['INLINE']);
+  assert.deepEqual(fields.find(node => node.name === 'Codes').simpleType.itemType.enumValues, ['A', 'B']);
+  assert.equal(fields.find(node => node.name === 'Codes').isEnum, undefined);
   await fs.writeFile(file, `<s:schema xmlns:s="http://www.w3.org/2001/XMLSchema">
     <s:include schemaLocation="../outside.xsd"/>
   </s:schema>`);

@@ -118,12 +118,14 @@ even when they contain unpaired surrogates.
 Desktop services can `use "XML"` for the
 [`XMLDocument` class](../virtualMachines/esp32/aggregator/libraries/XML/XML.pas).
 `load(text)` parses XML into a document handle. `count`, `localName`, `namespaceURI`,
-`attribute`, `attributeInteger(node, name, fallback)`, `qualifiedLocal`,
+`attribute`, `hasAttribute`, `attributeInteger(node, name, fallback)`, `qualifiedLocal`,
 `qualifiedNamespace`, `parentNode`, `firstChild`, `nextSibling`, `subtreeEnd` and `textValue`
 provide checked navigation and namespace-aware access. Node indices are zero-based;
 missing children/siblings return -1, and `subtreeEnd` is an exclusive preorder index.
 Optional missing attributes return an empty string; integer attributes use the explicit
-fallback only when absent. Direct text includes decoded entities and CDATA, not descendant
+fallback only when absent. `hasAttribute` distinguishes an explicitly empty value from
+a missing attribute (important for enumeration facets). Direct text includes decoded
+predefined/numeric entities and CDATA, not descendant
 text. Handles are valid only for the current service invocation, not subsequent requests.
 `appendDocument(donorHandle)` moves a parsed donor into the receiving document's forest,
 returns its new root index and invalidates the donor handle. Existing indices and each
@@ -211,8 +213,8 @@ fail explicitly. The UI and spoken summaries distinguish these branches from sca
 leaves. Subschema field paths include expanded descendants but cannot claim descendants
 beyond a recursion, unresolved-reference or truncation boundary.
 
-This is structure extraction, **not full XSD validation**. Simple-type inheritance,
-attribute/group references and complete facets/cardinality
+This is structure extraction, **not full XSD validation**. Attribute/group references
+and complete facets/cardinality
 semantics are not expanded or validated. Restrictions do not inherit all base particles.
 It makes no network requests. Well-formed non-XSD
 XML and schemas without displayable nodes return null. Malformed XML/XSD attribute values
@@ -232,6 +234,55 @@ exact admission limits, UI branch notices, subschema validation/projection, malf
 and recovery. Link tests also verify namespace mismatches, diamonds/cycles, chameleon
 schemas, exact graph limits, confined path denial, link denial and dependency-cache
 invalidation after same-size/same-mtime edits.
+
+### Simple-type inheritance, lists and unions
+
+Global simple types are indexed by namespace identity and resolved on use. Atomic
+restrictions without local `enumeration` facets inherit the base's enum strings;
+local enumeration facets replace the inherited set rather than concatenating it.
+Inline element `simpleType` declarations and inline restriction bases work through
+the same resolver, including chameleon includes, explicit imports and global element
+refs. Anonymous element types use `valueType: "simple"` and do not contribute extra
+field-path segments. Named types keep their declared `valueType`.
+
+`isEnum` and `enumValues` keep their existing output shape. Values are decoded XML
+lexical strings, including empty values and Unicode, deduplicated in declaration order.
+Only direct enumeration children of the restriction are considered: nested member/item
+facets are never mistakenly gathered as the enclosing type's enums.
+
+List and union elements additionally expose `simpleType` metadata:
+`{variety, finite, enumValues, itemType?, members?, containsList?}`.
+Lists preserve resolved item-type metadata but do not inherit item enums as whole-list
+enums: a list of `A` and `B` permits arbitrarily long sequences. A restriction can
+explicitly enumerate list values such as `"A B"` and `"B A"`. Built-in `NMTOKENS`,
+`IDREFS` and `ENTITIES` are recognized as lists. Lists of lists (including unions
+containing list members as a list's item type) fail explicitly.
+
+Unions combine whitespace-separated `memberTypes` and inline member declarations.
+A union exposes top-level enum values only when every member has a finite, complete
+enum set. An unrestricted builtin, list member or unresolved/cyclic/truncated member
+does not masquerade as a finite union. Such members retain their own metadata for
+inspection. Local restriction enums can still explicitly narrow an otherwise open
+union. The UI and accessibility labels describe list item enums and union membership
+separately from whole-value enum badges.
+
+Simple-type resolution follows at most eight definitions per path. Cycles and depth
+limits propagate the existing `recursive`/`truncated` markers, empty tree children and
+reference metadata; unavailable imports propagate `unresolved`. Missing loaded/local
+base types, conflicting derivation forms, missing facet values and invalid inline/type
+combinations are explicit errors. Successful complete resolutions are memoized within
+the invocation by definition and resolution depth. The hard resolution-work ceiling is
+10000 uncached definition visits, in addition to XML, instruction, time and byte budgets.
+
+These are **lexical metadata**, not value-space validation: numeric equivalents,
+whitespace facets, regex patterns, ranges, lengths and compatibility of explicit enum
+values with the base are not evaluated. Additional facets may narrow inherited enum
+candidates. Unused global definitions are not fully validated, and simple-content
+complex types do not yet inherit scalar enum metadata. This is not an XSD validator.
+
+Run `node --test testing\pmachines\xsd-simple-types.test.mjs testing\pmachines\librarian-http-catalog.test.mjs`
+for inherited/inline/list/union enums, linked definitions, cycles, exact depth limits,
+numeric entity decoding, invalid-shape recovery and HTTP projection checks.
 
 ## Data Librarian Catalog Persistence
 

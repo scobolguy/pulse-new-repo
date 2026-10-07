@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { isSchemaBranch, schemaNodeNotice } from './librarian/schema-tree.mjs';
+import { isSchemaBranch, schemaNodeNotice, schemaSimpleTypeSummary } from './librarian/schema-tree.mjs';
 
 const SECTION_STYLE = {
   border: '1px solid #ccc',
@@ -801,15 +801,17 @@ export default function DataLibrarian() {
     const children = Array.isArray(node.children) ? node.children : [];
     const enumValues = Array.isArray(node.enumValues) ? node.enumValues : [];
     const notice = schemaNodeNotice(node);
+    const simpleSummary = schemaSimpleTypeSummary(node);
     const branch = isSchemaBranch(node);
     return (
       <li key={`${keyPrefix}:${node.name}`} style={{ marginBottom: 2 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '1px 4px', flexWrap: 'wrap' }} aria-label={`${node.name}, ${branch ? 'branch' : 'leaf'}, ${node.valueType || 'unknown'}${notice ? `, ${notice}` : ''}${enumValues.length > 0 ? `, enum ${enumValues.join(', ')}` : ''}`}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '1px 4px', flexWrap: 'wrap' }} aria-label={`${node.name}, ${branch ? 'branch' : 'leaf'}, ${node.valueType || 'unknown'}${simpleSummary ? `, ${simpleSummary}` : ''}${notice ? `, ${notice}` : ''}${enumValues.length > 0 ? `, enum ${enumValues.join(', ')}` : ''}`}>
           <span style={{ width: 12, color: '#5a6b7b' }}>{children.length > 0 ? '▸' : '•'}</span>
           <span>{branch ? '🌿' : '🍃'}</span>
           <span style={{ fontSize: 12 }}>{node.name}</span>
           <span style={{ fontSize: 10, color: '#777' }}>{node.valueType || 'unknown'}</span>
           {notice && <span style={{ fontSize: 10, color: '#8a5a00' }}>{notice}</span>}
+          {simpleSummary && <span style={{ fontSize: 10, color: '#777' }}>{simpleSummary}</span>}
           {enumValues.length > 0 && (
             <span style={{ fontSize: 10, color: '#8a5a00' }}>enum: {enumValues.join(', ')}</span>
           )}

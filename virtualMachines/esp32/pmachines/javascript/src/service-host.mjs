@@ -232,6 +232,7 @@ export async function createPascalishServiceHost({
         ...createJsonCollectionBindings(),
         ...createXmlBindings({ maxBytes: maxBodyBytes }),
         'host.text_hash': value => createHash('sha256').update(value, 'utf16le').digest('hex'),
+        'host.text_split_whitespace': value => JSON.stringify(value.split(/[ \t\r\n]+/).filter(Boolean)),
         'host.json_has': (json, key) => Object.hasOwn(objectJson(json), text(key, 'JSON key')) ? 1 : 0,
         'host.capabilities': () => JSON.stringify(capabilities),
         ...networkBindings,

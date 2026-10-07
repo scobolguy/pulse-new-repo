@@ -33,6 +33,8 @@ export const SERVICE_HOST_BINDINGS = Object.freeze({
   'host.xml_parse': { arity: 1, args: ['string'], result: 'integer', desktopOnly: true },
   'host.xml_append_document': { arity: 2, args: ['integer', 'integer'], result: 'integer', desktopOnly: true },
   'host.xml_parent': { arity: 2, args: ['integer', 'integer'], result: 'integer', desktopOnly: true },
+  'host.xml_has_attribute': { arity: 3, args: ['integer', 'integer', 'string'], result: 'integer', desktopOnly: true },
+  'host.text_split_whitespace': { arity: 1, args: ['string'], result: 'string', desktopOnly: true },
   'host.text_hash': { arity: 1, args: ['string'], result: 'string', desktopOnly: true },
   'host.fs_resolve_relative': { arity: 3, args: ['string', 'string', 'string'], result: 'string', capability: 'filesystem.read' },
   'host.fs_read_text_auto': { arity: 2, args: ['string', 'string'], result: 'string', capability: 'filesystem.read' },

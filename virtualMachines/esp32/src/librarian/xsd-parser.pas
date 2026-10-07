@@ -13,6 +13,8 @@ var document: XMLDocument;
     loadedNamespaces: JSONDocument;
     importedNamespaces: JSONDocument;
     dependencies: JSONArray;
+    simpleCache: JSONDocument;
+    simpleOperations: integer;
 
 function contextKey(index: integer): string;
 begin return host.json_set('{}', 'node', index) end;
@@ -63,18 +65,17 @@ begin
   return document.namespaceURI(node) = 'http://www.w3.org/2001/XMLSchema'
 end;
 
-procedure collectSimpleTypes();
+procedure collectTypeDeclarations();
 var node: integer;
-    cursor: integer;
-    ending: integer;
     name: string;
-    values: JSONArray;
     namespace: string;
     key: string;
 begin
   simpleTypes.load('{}');
   complexTypes.load('{}');
   globalElements.load('{}');
+  simpleCache.load('{}');
+  simpleOperations := 0;
   node := 0;
   while node < document.count() do
   begin
@@ -115,42 +116,250 @@ begin
         if (host.json_has(simpleTypes.serialize(), key) = 1) or
            (host.json_has(complexTypes.serialize(), key) = 1) then
           host.raise_error('Duplicate XSD type: ' + name);
-        values.load('[]');
-        cursor := node + 1;
-        ending := document.subtreeEnd(node);
-        while cursor < ending do
-        begin
-          if isSchemaNode(cursor) and (document.localName(cursor) = 'enumeration') then
-            values.append(host.json_set('{}', 'value', document.attribute(cursor, 'value')));
-          cursor := cursor + 1
-        end;
-        simpleTypes.embed(key, values.serialize())
+        simpleTypes.setInteger(key, node)
       end
     end;
     node := node + 1
   end
 end;
 
-function enumValues(name: string): string;
-var values: JSONArray;
-    result: JSONArray;
-    item: JSONDocument;
-    position: integer;
-    total: integer;
+function schemaChild(parentNode: integer; tag: string): integer;
+var cursor: integer;
+    found: integer;
 begin
-  result.load('[]');
-  if host.json_has(simpleTypes.serialize(), name) = 1 then
+  found := -1;
+  cursor := document.firstChild(parentNode);
+  while cursor >= 0 do
   begin
-    values.load(simpleTypes.value(name));
-    position := 0;
-    total := values.count();
-    while position < total do
+    if isSchemaNode(cursor) and (document.localName(cursor) = tag) then
     begin
-      item.load(values.item(position));
-      result.append(item.value('value'));
+      if found >= 0 then host.raise_error('Duplicate XSD child: ' + tag);
+      found := cursor
+    end;
+    cursor := document.nextSibling(cursor)
+  end;
+  return found
+end;
+
+function simpleMetadata(contextNode: integer; qualifiedName: string; definition: integer;
+                        depth: integer; ancestors: string): string;
+var result: JSONDocument;
+    base: JSONDocument;
+    reference: JSONDocument;
+    active: JSONDocument;
+    seen: JSONDocument;
+    values: JSONArray;
+    members: JSONArray;
+    tokens: JSONArray;
+    member: JSONDocument;
+    item: JSONDocument;
+    key: string;
+    cacheKey: string;
+    namespace: string;
+    name: string;
+    baseName: string;
+    value: string;
+    cursor: integer;
+    inlineType: integer;
+    restriction: integer;
+    listNode: integer;
+    unionNode: integer;
+    position: integer;
+    entry: integer;
+    finite: boolean;
+    complete: boolean;
+begin
+  result.load('{}');
+  result.setText('variety', 'atomic');
+  result.setBoolean('finite', false);
+  result.embed('enumValues', '[]');
+  if qualifiedName <> '' then
+  begin
+    namespace := referenceNamespace(contextNode, qualifiedName);
+    name := document.qualifiedLocal(contextNode, qualifiedName);
+    reference.load('{}');
+    reference.setText('kind', 'simpleType');
+    reference.setText('name', name);
+    reference.setText('namespace', namespace);
+    if namespace = 'http://www.w3.org/2001/XMLSchema' then
+    begin
+      result.embed('typeReference', reference.serialize());
+      if (name = 'NMTOKENS') or (name = 'IDREFS') or (name = 'ENTITIES') then
+      begin
+        result.setText('variety', 'list');
+        base.load('{}');
+        base.setText('variety', 'atomic');
+        base.setBoolean('finite', false);
+        base.embed('enumValues', '[]');
+        if name = 'NMTOKENS' then reference.setText('name', 'NMTOKEN');
+        if name = 'IDREFS' then reference.setText('name', 'IDREF');
+        if name = 'ENTITIES' then reference.setText('name', 'ENTITY');
+        base.embed('typeReference', reference.serialize());
+        result.embed('itemType', base.serialize())
+      end;
+      return result.serialize()
+    end;
+    if not namespaceAvailable(contextNode, namespace) then
+    begin
+      result.setBoolean('unresolved', true);
+      result.embed('typeReference', reference.serialize());
+      return result.serialize()
+    end;
+    key := symbolKey(namespace, name);
+    if host.json_has(simpleTypes.serialize(), key) = 0 then
+      host.raise_error('Unresolved local XSD simple type: ' + qualifiedName);
+    definition := simpleTypes.intValue(key)
+  end;
+  if definition < 0 then host.raise_error('Missing XSD simple type definition');
+  key := contextKey(definition);
+  if host.json_has(ancestors, key) = 1 then
+  begin
+    result.setBoolean('recursive', true);
+    return result.serialize()
+  end;
+  if depth >= 8 then
+  begin
+    result.setBoolean('truncated', true);
+    result.setText('truncationReason', 'depth');
+    return result.serialize()
+  end;
+  cacheKey := host.json_set(key, 'depth', depth);
+  if host.json_has(simpleCache.serialize(), cacheKey) = 1 then return simpleCache.value(cacheKey);
+  simpleOperations := simpleOperations + 1;
+  if simpleOperations > 10000 then host.raise_error('XSD simple type resolution capacity exceeded');
+  active.load(ancestors);
+  active.setBoolean(key, true);
+  restriction := schemaChild(definition, 'restriction');
+  listNode := schemaChild(definition, 'list');
+  unionNode := schemaChild(definition, 'union');
+  entry := 0;
+  if restriction >= 0 then entry := entry + 1;
+  if listNode >= 0 then entry := entry + 1;
+  if unionNode >= 0 then entry := entry + 1;
+  if entry > 1 then host.raise_error('XSD simple type requires a single restriction, list or union');
+  if entry = 0 then host.raise_error('XSD simple type requires restriction, list or union');
+  if restriction >= 0 then
+  begin
+    baseName := document.attribute(restriction, 'base');
+    inlineType := schemaChild(restriction, 'simpleType');
+    if (baseName <> '') and (inlineType >= 0) then host.raise_error('XSD restriction cannot combine base and inline simpleType');
+    if (baseName = '') and (inlineType < 0) then host.raise_error('XSD restriction requires a base or inline simpleType');
+    base.load(simpleMetadata(restriction, baseName, inlineType, depth + 1, active.serialize()));
+    result.merge(base.serialize());
+    values.load('[]');
+    seen.load('{}');
+    cursor := document.firstChild(restriction);
+    while cursor >= 0 do
+    begin
+      if isSchemaNode(cursor) and (document.localName(cursor) = 'enumeration') then
+      begin
+        if not document.hasAttribute(cursor, 'value') then host.raise_error('XSD enumeration requires value');
+        value := document.attribute(cursor, 'value');
+        key := host.text_hash(value);
+        if host.json_has(seen.serialize(), key) = 0 then
+        begin
+          values.append(host.json_value(host.json_set('{}', 'value', value), 'value'));
+          seen.setBoolean(key, true)
+        end
+      end;
+      cursor := document.nextSibling(cursor)
+    end;
+    if values.count() > 0 then
+    begin
+      result.setBoolean('finite', true);
+      result.embed('enumValues', values.serialize())
+    end
+  end
+  else if listNode >= 0 then
+  begin
+    result.setText('variety', 'list');
+    baseName := document.attribute(listNode, 'itemType');
+    inlineType := schemaChild(listNode, 'simpleType');
+    if (baseName <> '') and (inlineType >= 0) then host.raise_error('XSD list cannot combine itemType and inline simpleType');
+    if (baseName = '') and (inlineType < 0) then host.raise_error('XSD list requires itemType or inline simpleType');
+    base.load(simpleMetadata(listNode, baseName, inlineType, depth + 1, active.serialize()));
+    if base.text('variety') = 'list' then host.raise_error('XSD list item cannot be a list type');
+    if host.json_has(base.serialize(), 'containsList') = 1 then
+      host.raise_error('XSD list item union cannot contain list types');
+    result.embed('itemType', base.serialize())
+  end
+  else if unionNode >= 0 then
+  begin
+    result.setText('variety', 'union');
+    members.load('[]');
+    tokens.load(host.text_split_whitespace(document.attribute(unionNode, 'memberTypes')));
+    position := 0;
+    while position < tokens.count() do
+    begin
+      item.load(host.json_embed('{}', 'value', tokens.item(position)));
+      members.append(simpleMetadata(unionNode, item.text('value'), -1, depth + 1, active.serialize()));
       position := position + 1
+    end;
+    cursor := document.firstChild(unionNode);
+    while cursor >= 0 do
+    begin
+      if isSchemaNode(cursor) and (document.localName(cursor) = 'simpleType') then
+        members.append(simpleMetadata(cursor, '', cursor, depth + 1, active.serialize()));
+      cursor := document.nextSibling(cursor)
+    end;
+    if members.count() = 0 then host.raise_error('XSD union requires member types');
+    result.embed('members', members.serialize());
+    finite := true;
+    complete := true;
+    values.load('[]');
+    seen.load('{}');
+    position := 0;
+    while position < members.count() do
+    begin
+      member.load(members.item(position));
+      if (member.text('variety') = 'list') or (host.json_has(member.serialize(), 'containsList') = 1) then
+        result.setBoolean('containsList', true);
+      if member.value('finite') <> 'true' then finite := false;
+      if host.json_has(member.serialize(), 'recursive') = 1 then
+      begin result.setBoolean('recursive', true); complete := false end;
+      if host.json_has(member.serialize(), 'unresolved') = 1 then
+      begin result.setBoolean('unresolved', true); complete := false end;
+      if host.json_has(member.serialize(), 'truncated') = 1 then
+      begin
+        result.setBoolean('truncated', true);
+        result.setText('truncationReason', member.text('truncationReason'));
+        complete := false
+      end;
+      tokens.load(member.value('enumValues'));
+      entry := 0;
+      while entry < tokens.count() do
+      begin
+        value := tokens.item(entry);
+        key := host.text_hash(value);
+        if host.json_has(seen.serialize(), key) = 0 then
+        begin
+          values.append(value);
+          seen.setBoolean(key, true)
+        end;
+        entry := entry + 1
+      end;
+      position := position + 1
+    end;
+    if finite and complete then
+    begin
+      result.setBoolean('finite', true);
+      result.embed('enumValues', values.serialize())
     end
   end;
+  if listNode >= 0 then
+  begin
+    if host.json_has(base.serialize(), 'recursive') = 1 then result.setBoolean('recursive', true);
+    if host.json_has(base.serialize(), 'unresolved') = 1 then result.setBoolean('unresolved', true);
+    if host.json_has(base.serialize(), 'truncated') = 1 then
+    begin
+      result.setBoolean('truncated', true);
+      result.setText('truncationReason', base.text('truncationReason'))
+    end
+  end;
+  if (host.json_has(result.serialize(), 'recursive') = 0) and
+     (host.json_has(result.serialize(), 'unresolved') = 0) and
+     (host.json_has(result.serialize(), 'truncated') = 0) then
+    simpleCache.embed(cacheKey, result.serialize());
   return result.serialize()
 end;
 
@@ -183,6 +392,9 @@ var cursor: integer;
     key: string;
     recursive: boolean;
     blocked: boolean;
+    simple: JSONDocument;
+    simpleDeclaration: integer;
+    simpleResolved: boolean;
 begin
   children.load('[]');
   cursor := document.firstChild(parentNode);
@@ -209,6 +421,8 @@ begin
         begin
           if (name <> '') or (typeName <> '') then
             host.raise_error('XSD element ref cannot also declare name or type');
+          if (schemaChild(cursor, 'simpleType') >= 0) or (schemaChild(cursor, 'complexType') >= 0) then
+            host.raise_error('XSD element ref cannot declare an inline type');
           reference.load('{}');
           reference.setText('kind', 'element');
           reference.setText('name', document.qualifiedLocal(cursor, referenceName));
@@ -236,12 +450,18 @@ begin
         node.setBoolean('required', document.attributeInteger(cursor, 'minOccurs', 1) > 0);
         values.load('[]');
         typeDeclaration := -1;
+        simpleDeclaration := -1;
+        simple.load('{}');
+        if (typeName <> '') and (declaration >= 0) then
+        begin
+          if (schemaChild(declaration, 'simpleType') >= 0) or (schemaChild(declaration, 'complexType') >= 0) then
+            host.raise_error('XSD element type cannot also declare an inline type')
+        end;
         if (typeName <> '') and (declaration >= 0) then
         begin
           if namespaceAvailable(declaration, referenceNamespace(declaration, typeName)) then
           begin
             key := symbolKey(referenceNamespace(declaration, typeName), document.qualifiedLocal(declaration, typeName));
-            values.load(enumValues(key));
             if host.json_has(complexTypes.serialize(), key) = 1 then
             begin
               typeDeclaration := complexTypes.intValue(key);
@@ -254,8 +474,9 @@ begin
               if host.json_has(active.serialize(), key) = 1 then recursive := true;
               active.setBoolean(key, true)
             end
-            else if host.json_has(simpleTypes.serialize(), key) = 0 then
-              host.raise_error('Unresolved local XSD type: ' + typeName)
+            else if host.json_has(simpleTypes.serialize(), key) = 1 then
+              simpleDeclaration := simpleTypes.intValue(key)
+            else host.raise_error('Unresolved local XSD type: ' + typeName)
           end
           else if referenceNamespace(declaration, typeName) <> 'http://www.w3.org/2001/XMLSchema' then
           begin
@@ -267,6 +488,61 @@ begin
             node.setBoolean('unresolved', true)
           end
         end;
+        if (typeName = '') and (declaration >= 0) then
+        begin
+          simpleDeclaration := schemaChild(declaration, 'simpleType');
+          if simpleDeclaration >= 0 then
+          begin
+            if schemaChild(declaration, 'complexType') >= 0 then
+              host.raise_error('XSD element cannot combine simpleType and complexType');
+            node.setText('valueType', 'simple')
+          end
+        end;
+        simpleResolved := false;
+        if simpleDeclaration >= 0 then
+        begin
+          simple.load(simpleMetadata(declaration, '', simpleDeclaration, 0, '{}'));
+          simpleResolved := true
+        end
+        else if (typeName <> '') and (declaration >= 0) then
+        begin
+          if referenceNamespace(declaration, typeName) = 'http://www.w3.org/2001/XMLSchema' then
+          begin
+            name := document.qualifiedLocal(declaration, typeName);
+            if (name = 'NMTOKENS') or (name = 'IDREFS') or (name = 'ENTITIES') then
+            begin
+              simple.load(simpleMetadata(declaration, typeName, -1, 0, '{}'));
+              simpleResolved := true
+            end
+          end
+        end;
+        if simpleResolved then
+        begin
+          values.load(simple.value('enumValues'));
+          if simple.text('variety') <> 'atomic' then node.embed('simpleType', simple.serialize());
+          if host.json_has(simple.serialize(), 'recursive') = 1 then node.setBoolean('recursive', true);
+          if host.json_has(simple.serialize(), 'unresolved') = 1 then
+          begin
+            node.setBoolean('unresolved', true);
+            if host.json_has(simple.serialize(), 'typeReference') = 1 then
+              node.embed('typeReference', simple.value('typeReference'))
+          end;
+          if host.json_has(simple.serialize(), 'truncated') = 1 then
+          begin
+            node.setBoolean('truncated', true);
+            node.setText('truncationReason', simple.text('truncationReason'))
+          end;
+          if (host.json_has(simple.serialize(), 'recursive') = 1) or
+             (host.json_has(simple.serialize(), 'truncated') = 1) then
+          begin
+            reference.load('{}');
+            reference.setText('kind', 'simpleType');
+            if typeName = '' then reference.setText('name', 'anonymous')
+            else reference.setText('name', document.qualifiedLocal(declaration, typeName));
+            reference.setText('namespace', contextNamespace(simpleDeclaration));
+            node.embed('typeReference', reference.serialize())
+          end
+        end;
         if values.count() > 0 then
         begin
           node.setBoolean('isEnum', true);
@@ -276,7 +552,7 @@ begin
         if recursive then node.setBoolean('recursive', true)
         else if blocked then
         begin
-          if (typeDeclaration >= 0) or ((typeName = '') and (declaration >= 0)) then
+          if (typeDeclaration >= 0) or ((typeName = '') and (declaration >= 0) and (simpleDeclaration < 0)) then
           begin
             node.setBoolean('truncated', true);
             if depth >= 8 then node.setText('truncationReason', 'depth')
@@ -285,9 +561,10 @@ begin
         end
         else if typeDeclaration >= 0 then
           nested.load(buildChildren(typeDeclaration, depth + 1, active.serialize()))
-        else if (typeName = '') and (declaration >= 0) then
+        else if (typeName = '') and (declaration >= 0) and (simpleDeclaration < 0) then
           nested.load(buildChildren(declaration, depth + 1, active.serialize()));
         if (nested.count() = 0) and (not recursive) and
+           (host.json_has(node.serialize(), 'recursive') = 0) and
            (host.json_has(node.serialize(), 'truncated') = 0) and
            (host.json_has(node.serialize(), 'unresolved') = 0) then node.setText('kind', 'leaf')
         else node.setText('kind', 'branch');
@@ -543,7 +820,7 @@ var schema: integer;
     position: integer;
 begin
   if (not isSchemaNode(0)) or (document.localName(0) <> 'schema') then return 'null';
-  collectSimpleTypes();
+  collectTypeDeclarations();
   expandedNodes := 0;
   children.load(buildChildren(0, 0, '{}'));
   schema := document.nextSibling(0);

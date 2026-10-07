@@ -23,6 +23,9 @@ class XMLDocument;
   function attribute(node: integer; name: string): string;
   begin return host.xml_attribute(self.handle, node, name) end;
 
+  function hasAttribute(node: integer; name: string): boolean;
+  begin return host.xml_has_attribute(self.handle, node, name) = 1 end;
+
   function attributeInteger(node: integer; name: string; fallback: integer): integer;
   begin return host.xml_attribute_integer(self.handle, node, name, fallback) end;
 
