@@ -1,7 +1,7 @@
 import http from 'node:http';
 import dgram from 'node:dgram';
 import net from 'node:net';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { executeProgram, parsePcode, parseProgramMapMappings } from './runtime.mjs';
 import { loadOpcodeMap } from './opcodes.mjs';
@@ -231,6 +231,7 @@ export async function createPascalishServiceHost({
         ...filesystem.handlers,
         ...createJsonCollectionBindings(),
         ...createXmlBindings({ maxBytes: maxBodyBytes }),
+        'host.text_hash': value => createHash('sha256').update(value, 'utf16le').digest('hex'),
         'host.json_has': (json, key) => Object.hasOwn(objectJson(json), text(key, 'JSON key')) ? 1 : 0,
         'host.capabilities': () => JSON.stringify(capabilities),
         ...networkBindings,

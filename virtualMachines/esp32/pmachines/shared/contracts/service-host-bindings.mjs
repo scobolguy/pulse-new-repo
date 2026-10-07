@@ -31,6 +31,11 @@ export const SERVICE_HOST_INTERNAL_BINDINGS = Object.freeze(new Set([
 
 export const SERVICE_HOST_BINDINGS = Object.freeze({
   'host.xml_parse': { arity: 1, args: ['string'], result: 'integer', desktopOnly: true },
+  'host.xml_append_document': { arity: 2, args: ['integer', 'integer'], result: 'integer', desktopOnly: true },
+  'host.xml_parent': { arity: 2, args: ['integer', 'integer'], result: 'integer', desktopOnly: true },
+  'host.text_hash': { arity: 1, args: ['string'], result: 'string', desktopOnly: true },
+  'host.fs_resolve_relative': { arity: 3, args: ['string', 'string', 'string'], result: 'string', capability: 'filesystem.read' },
+  'host.fs_read_text_auto': { arity: 2, args: ['string', 'string'], result: 'string', capability: 'filesystem.read' },
   'host.xml_count': { arity: 1, args: ['integer'], result: 'integer', desktopOnly: true },
   ...Object.fromEntries(['local_name', 'namespace', 'text'].map(name =>
     [`host.xml_${name}`, { arity: 2, args: ['integer', 'integer'], result: 'string', desktopOnly: true }])),

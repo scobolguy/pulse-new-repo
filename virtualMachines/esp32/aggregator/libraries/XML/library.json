@@ -1,7 +1,7 @@
 {
   "id": "XML",
-  "version": "1.0.0",
-  "description": "Desktop namespace-aware XML navigation with invocation-scoped document handles.",
+  "version": "1.1.0",
+  "description": "Desktop namespace-aware XML navigation and document forests with invocation-scoped handles.",
   "source": "XML.pas",
   "provides": { "types": ["XMLDocument"], "functions": [] }
 }

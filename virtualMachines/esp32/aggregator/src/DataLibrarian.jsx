@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { isSchemaBranch, schemaNodeNotice } from './librarian/schema-tree.mjs';
 
 const SECTION_STYLE = {
   border: '1px solid #ccc',
@@ -752,6 +753,7 @@ export default function DataLibrarian() {
 
     let branchCount = 0;
     let leafCount = 0;
+    let referenceCount = 0;
     const names = [];
 
     function visit(current, depth = 0) {
@@ -759,7 +761,8 @@ export default function DataLibrarian() {
       if (depth > 0) {
         names.push(current.name);
       }
-      if (children.length > 0) {
+      if (schemaNodeNotice(current)) referenceCount += 1;
+      if (isSchemaBranch(current)) {
         branchCount += 1;
         children.forEach(child => visit(child, depth + 1));
       } else if (depth > 0) {
@@ -769,7 +772,7 @@ export default function DataLibrarian() {
 
     visit(node, 0);
     const preview = names.slice(0, 8).join(', ');
-    return `Structure contains ${branchCount} branch${branchCount === 1 ? '' : 'es'} and ${leafCount} leaf${leafCount === 1 ? '' : 's'}. ${preview ? `Fields include ${preview}.` : ''}`.trim();
+    return `Structure contains ${branchCount} branch${branchCount === 1 ? '' : 'es'} and ${leafCount} leaf${leafCount === 1 ? '' : 's'}. ${referenceCount ? `${referenceCount} reference branches are not fully expanded. ` : ''}${preview ? `Fields include ${preview}.` : ''}`.trim();
   }
 
   function speakStructure(item) {
@@ -797,13 +800,16 @@ export default function DataLibrarian() {
     if (!node) return null;
     const children = Array.isArray(node.children) ? node.children : [];
     const enumValues = Array.isArray(node.enumValues) ? node.enumValues : [];
+    const notice = schemaNodeNotice(node);
+    const branch = isSchemaBranch(node);
     return (
       <li key={`${keyPrefix}:${node.name}`} style={{ marginBottom: 2 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '1px 4px', flexWrap: 'wrap' }} aria-label={`${node.name}, ${children.length > 0 ? 'branch' : 'leaf'}, ${node.valueType || 'unknown'}${enumValues.length > 0 ? `, enum ${enumValues.join(', ')}` : ''}`}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '1px 4px', flexWrap: 'wrap' }} aria-label={`${node.name}, ${branch ? 'branch' : 'leaf'}, ${node.valueType || 'unknown'}${notice ? `, ${notice}` : ''}${enumValues.length > 0 ? `, enum ${enumValues.join(', ')}` : ''}`}>
           <span style={{ width: 12, color: '#5a6b7b' }}>{children.length > 0 ? '▸' : '•'}</span>
-          <span>{children.length > 0 ? '🌿' : '🍃'}</span>
+          <span>{branch ? '🌿' : '🍃'}</span>
           <span style={{ fontSize: 12 }}>{node.name}</span>
           <span style={{ fontSize: 10, color: '#777' }}>{node.valueType || 'unknown'}</span>
+          {notice && <span style={{ fontSize: 10, color: '#8a5a00' }}>{notice}</span>}
           {enumValues.length > 0 && (
             <span style={{ fontSize: 10, color: '#8a5a00' }}>enum: {enumValues.join(', ')}</span>
           )}

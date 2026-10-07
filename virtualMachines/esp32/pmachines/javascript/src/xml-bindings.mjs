@@ -117,6 +117,26 @@ export function createXmlBindings({ maxBytes = 1000000, maxNodes = 20000, maxDep
       return nextHandle++;
     },
     'host.xml_count': handle => document(handle).length,
+    'host.xml_parent': (handle, index) => node(handle, index).parent,
+    'host.xml_append_document': (handle, donorHandle) => {
+      if (handle === donorHandle) throw failure('Cannot append an XML document to itself');
+      const entries = document(handle);
+      const donor = document(donorHandle);
+      const offset = entries.length;
+      const roots = entries.filter(entry => entry.parent < 0);
+      const lastRoot = roots.at(-1);
+      const appended = donor.map(entry => ({
+        ...entry,
+        parent: entry.parent < 0 ? -1 : entry.parent + offset,
+        firstChild: entry.firstChild < 0 ? -1 : entry.firstChild + offset,
+        nextSibling: entry.nextSibling < 0 ? -1 : entry.nextSibling + offset,
+        end: entry.end + offset
+      }));
+      entries.push(...appended);
+      lastRoot.nextSibling = offset;
+      documents.delete(donorHandle);
+      return offset;
+    },
     'host.xml_local_name': (handle, index) => node(handle, index).localName,
     'host.xml_namespace': (handle, index) => node(handle, index).namespaceURI,
     'host.xml_attribute': (handle, index, name) => {

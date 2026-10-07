@@ -84,7 +84,61 @@ export async function createFilesystemBindings(storageRoots = {}, { maxFileBytes
   function metadata(info, name) {
     return { name, kind: info.isDirectory() ? 'directory' : 'file', size: info.size, modifiedAt: info.mtime.toISOString() };
   }
+  async function readText(alias, relative, context, autoEncoding = false) {
+    checkSignal(context);
+    const { target, info } = await resolve(alias, relative);
+    if (!info.isFile()) throw failure('Storage path is not a file');
+    checkSignal(context);
+    const file = await fs.open(target, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
+    try {
+      const openedInfo = await file.stat();
+      checkInfo(openedInfo);
+      if (!openedInfo.isFile() || openedInfo.size > maxFileBytes) throw failure('File capacity exceeded', 413, 'EFBIG');
+      const bytes = Buffer.alloc(maxFileBytes + 1);
+      let size = 0;
+      while (size < bytes.length) {
+        checkSignal(context);
+        const { bytesRead } = await file.read(bytes, size, bytes.length - size, null);
+        if (!bytesRead) break;
+        size += bytesRead;
+      }
+      if (size > maxFileBytes) throw failure('File capacity exceeded', 413, 'EFBIG');
+      checkSignal(context);
+      let encoding = 'utf-8';
+      if (autoEncoding) {
+        if (bytes[0] === 0xff && bytes[1] === 0xfe) encoding = 'utf-16le';
+        else if (bytes[0] === 0xfe && bytes[1] === 0xff) encoding = 'utf-16be';
+        else {
+          const sample = bytes.subarray(0, Math.min(size, 512));
+          if (sample.length && sample.filter(byte => byte === 0).length > sample.length * 0.2) encoding = 'utf-16le';
+        }
+      }
+      return new TextDecoder(encoding, { fatal: true, ignoreBOM: !autoEncoding }).decode(bytes.subarray(0, size));
+    } finally { await file.close(); }
+  }
   const handlers = {
+    'host.fs_resolve_relative': async (alias, base, relative, context) => {
+      checkSignal(context);
+      grantFor(alias, false);
+      partsOf(base);
+      if (typeof relative !== 'string' || !relative || relative.length > 4096
+        || /[:%?#\\]/.test(relative) || relative.startsWith('/')) throw failure('Invalid relative storage reference');
+      const components = base.split(/[\\/]/).slice(0, -1);
+      for (const component of relative.split('/')) {
+        if (component === '.') continue;
+        if (component === '..') {
+          if (!components.length) throw failure('Storage reference escapes root', 403, 'EACCES');
+          components.pop();
+        } else {
+          partsOf(component);
+          components.push(component);
+        }
+      }
+      const resolved = components.join('/');
+      await resolve(alias, resolved);
+      return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+    },
+    'host.fs_read_text_auto': (alias, relative, context) => readText(alias, relative, context, true),
     'host.fs_exists': async (alias, relative, context) => {
       checkSignal(context);
       try {
@@ -127,29 +181,7 @@ export async function createFilesystemBindings(storageRoots = {}, { maxFileBytes
       if (Buffer.byteLength(result) > maxPageBytes) throw failure('Directory page capacity exceeded', 413, 'EFBIG');
       return result;
     },
-    'host.fs_read_text': async (alias, relative, context) => {
-      checkSignal(context);
-      const { target, info } = await resolve(alias, relative);
-      if (!info.isFile()) throw failure('Storage path is not a file');
-      checkSignal(context);
-      const file = await fs.open(target, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
-      try {
-        const openedInfo = await file.stat();
-        checkInfo(openedInfo);
-        if (!openedInfo.isFile() || openedInfo.size > maxFileBytes) throw failure('File capacity exceeded', 413, 'EFBIG');
-        const bytes = Buffer.alloc(maxFileBytes + 1);
-        let size = 0;
-        while (size < bytes.length) {
-          checkSignal(context);
-          const { bytesRead } = await file.read(bytes, size, bytes.length - size, null);
-          if (!bytesRead) break;
-          size += bytesRead;
-        }
-        if (size > maxFileBytes) throw failure('File capacity exceeded', 413, 'EFBIG');
-        checkSignal(context);
-        return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, size));
-      } finally { await file.close(); }
-    },
+    'host.fs_read_text': (alias, relative, context) => readText(alias, relative, context),
     'host.fs_write_text': async (alias, relative, value, context) => {
       checkSignal(context);
       if (typeof value !== 'string' || Buffer.byteLength(value) > maxFileBytes) {

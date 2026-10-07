@@ -374,8 +374,7 @@ function decodeTextBuffer(buffer) {
 async function extractStructureForFile(filePath, schemaType) {
   const lowerType = String(schemaType || '').toLowerCase();
   if (lowerType === 'xsd' || lowerType === 'xml') {
-    const content = decodeTextBuffer(await fs.readFile(filePath));
-    return xsdParser.parse(content);
+    return xsdParser.parseFile(path.relative(SCHEMA_ROOT, filePath).replace(/\\/g, '/'));
   }
   try {
     const fileBuffer = await fs.readFile(filePath);
@@ -1575,7 +1574,7 @@ catalogStore = await createPascalishCatalogStore({
 });
 
 subschemaPolicyHost = await startSubschemaPolicyHost();
-xsdParser = await createPascalishXsdParser();
+xsdParser = await createPascalishXsdParser({ schemaRoot: SCHEMA_ROOT });
 
 app.listen(PORT, () => {
   console.log(`[Librarian] Service running on http://localhost:${PORT}`);

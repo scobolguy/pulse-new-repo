@@ -137,6 +137,53 @@ test('HTTP XSD listing, UTF-16, subschema paths, malformed input and recovery us
   assert.equal(recovered.status, 200);
   const projected = (await recovered.json()).subschemas.find(item => item.name === 'xsd-sub').structure;
   assert.ok(JSON.stringify(projected).includes('"Id"'));
+  await fs.writeFile(file, `<s:schema xmlns:s="http://www.w3.org/2001/XMLSchema" xmlns:t="urn:test" targetNamespace="urn:test">
+    <s:element name="Document" type="t:Record"/>
+    <s:complexType name="Record"><s:sequence>
+      <s:element ref="t:Shared" minOccurs="0"/><s:element name="Next" type="t:Record" minOccurs="0"/>
+    </s:sequence></s:complexType>
+    <s:element name="Shared" type="t:SharedType"/>
+    <s:complexType name="SharedType"><s:sequence><s:element name="Id" type="s:string"/></s:sequence></s:complexType>
+  </s:schema>`);
+  const expanded = await post({ id: 'expanded-xsd', parentSchemaPath: 'utf16.xsd', accessibleFields: ['Document.Shared.Id'] });
+  assert.equal(expanded.status, 201, JSON.stringify(await expanded.json()));
+  const recursive = await post({ id: 'recursive-xsd', parentSchemaPath: 'utf16.xsd', accessibleFields: ['Document.Next'] });
+  assert.equal(recursive.status, 201, JSON.stringify(await recursive.json()));
+  const hidden = await post({ id: 'hidden-xsd', parentSchemaPath: 'utf16.xsd', accessibleFields: ['Document.Next.Shared.Id'] });
+  assert.equal(hidden.status, 400);
+  const expandedList = await fetch(`${origin}/api/librarian/schemas`);
+  assert.equal(expandedList.status, 200);
+  const projectedSchemas = (await expandedList.json()).subschemas;
+  const selected = projectedSchemas.find(item => item.name === 'expanded-xsd');
+  assert.ok(selected.availableFields.includes('Document.Shared.Id'));
+  assert.ok(JSON.stringify(selected.structure).includes('"Id"'));
+  assert.ok(!JSON.stringify(selected.structure).includes('"Next"'));
+  const recursiveTree = projectedSchemas.find(item => item.name === 'recursive-xsd').structure;
+  assert.ok(JSON.stringify(recursiveTree).includes('"recursive":true'));
+  await fs.mkdir(path.join(schemas, 'parts'));
+  await fs.writeFile(path.join(schemas, 'parts', 'types.xsd'), `<s:schema xmlns:s="http://www.w3.org/2001/XMLSchema">
+    <s:complexType name="Record"><s:sequence><s:element name="Included" type="s:string"/></s:sequence></s:complexType>
+  </s:schema>`);
+  await fs.writeFile(file, `<s:schema xmlns:s="http://www.w3.org/2001/XMLSchema" xmlns:t="urn:test" targetNamespace="urn:test">
+    <s:include schemaLocation="parts/types.xsd"/><s:element name="Document" type="t:Record"/>
+  </s:schema>`);
+  const linked = await post({ id: 'linked-xsd', parentSchemaPath: 'utf16.xsd', accessibleFields: ['Document.Included'] });
+  assert.equal(linked.status, 201, JSON.stringify(await linked.json()));
+  const includedPath = path.join(schemas, 'parts', 'types.xsd');
+  const original = await fs.readFile(includedPath, 'utf8');
+  await fs.writeFile(includedPath, original.replace('Included', 'Changed'));
+  const changedList = await fetch(`${origin}/api/librarian/schemas`);
+  assert.equal(changedList.status, 200);
+  const changedSchemas = (await changedList.json()).subschemas;
+  assert.ok(changedSchemas.find(item => item.name === 'linked-xsd').availableFields.includes('Document.Changed'));
+  const oldPath = await post({ id: 'old-linked-xsd', parentSchemaPath: 'utf16.xsd', accessibleFields: ['Document.Included'] });
+  assert.equal(oldPath.status, 400);
+  await fs.writeFile(file, `<s:schema xmlns:s="http://www.w3.org/2001/XMLSchema">
+    <s:include schemaLocation="../outside.xsd"/>
+  </s:schema>`);
+  const escaped = await fetch(`${origin}/api/librarian/schemas`);
+  assert.equal(escaped.status, 500);
+  assert.match((await escaped.json()).error, /escapes/);
 });
 
 test('concurrent HTTP subschema mutations preserve every success and enforce uniqueness', async t => {

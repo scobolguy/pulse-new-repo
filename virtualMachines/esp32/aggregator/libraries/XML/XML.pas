@@ -8,6 +8,12 @@ class XMLDocument;
   function count(): integer;
   begin return host.xml_count(self.handle) end;
 
+  function appendDocument(donor: integer): integer;
+  begin return host.xml_append_document(self.handle, donor) end;
+
+  function parentNode(node: integer): integer;
+  begin return host.xml_parent(self.handle, node) end;
+
   function localName(node: integer): string;
   begin return host.xml_local_name(self.handle, node) end;
 

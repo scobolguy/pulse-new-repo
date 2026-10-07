@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { test } from 'node:test';
 import vm from 'node:vm';
+import { fileURLToPath } from 'node:url';
 import { createXmlBindings } from '../../pmachines/javascript/src/xml-bindings.mjs';
 import { createPascalishXsdParser } from '../../aggregator/src/librarian/xsd-parser.mjs';
 import { compilePascalishProgramWithAntlr } from '../../aggregator/scripts/compile-pascalish-program-antlr-to-pcode.mjs';
@@ -18,7 +19,9 @@ const branch = (name, valueType, children) => ({ name, kind: 'branch', valueType
 const root = children => branch('root', 'xsd', children);
 const quiet = { warn() {}, error() {} };
 async function parser(t) {
-  const instance = await createPascalishXsdParser({ logger: quiet });
+  const instance = await createPascalishXsdParser({
+    logger: quiet, schemaRoot: fileURLToPath(new URL('../../aggregator/data/services/librarian/schemas/', import.meta.url))
+  });
   t.after(() => instance.stop());
   return instance;
 }
@@ -157,7 +160,8 @@ test('XSD enum metadata respects QName namespace identities and declaration orde
   </s:schema>`;
   assert.deepEqual(await instance.parse(content), root([
     { ...leaf('Code', 't:Code'), isEnum: true, enumValues: ['', 'A&B', '\u540d'] },
-    leaf('ForeignCode', 'f:Code')
+    { ...leaf('ForeignCode', 'f:Code'), kind: 'branch', unresolved: true,
+      typeReference: { kind: 'type', name: 'Code', namespace: 'urn:foreign' } }
   ]));
   await assert.rejects(instance.parse(schema('<xs:element name="A" minOccurs="bad"/>')), /integer attribute/);
   await assert.rejects(instance.parse('<broken>'), /Invalid XML/);
@@ -183,11 +187,11 @@ test('XSD content cache coalesces concurrent parses without sharing mutable tree
     await instance.parse(schema(`<xs:element name="Cache${index}" type="xs:string"/>`));
   }
   assert.equal(instance.getStatus().cachedEntries, 256);
-  for (let index = 0; index < 11; index++) {
+  for (let index = 0; index < 42; index++) {
     await instance.parse(schema(`<xs:element name="Large${index}${'x'.repeat(780000)}" type="xs:string"/>`));
   }
-  assert.equal(instance.getStatus().cachedEntries, 10);
-  assert.ok(instance.getStatus().cachedBytes <= 8000000);
+  assert.equal(instance.getStatus().cachedEntries, 41);
+  assert.ok(instance.getStatus().cachedBytes <= 32000000);
   await instance.stop();
   assert.equal(instance.getStatus().cachedBytes, 0);
   await assert.rejects(instance.parse(content), /stopped/);
@@ -219,6 +223,7 @@ test('all checked-in XSD schemas parse within desktop budgets with correct top-l
   const files = (await fs.readdir(directory)).filter(name => name.endsWith('.xsd'));
   assert.ok(files.length >= 100);
   const started = performance.now();
+  let cachedMs = 0;
   const results = await Promise.all(files.map(async name => {
     const buffer = await fs.readFile(new URL(name, directory));
     const encoding = buffer[0] === 0xff && buffer[1] === 0xfe ? 'utf-16le'
@@ -233,13 +238,17 @@ test('all checked-in XSD schemas parse within desktop budgets with correct top-l
         && ['element', 'complexType', 'sequence', 'choice', 'all'].includes(bindings['host.xml_local_name'](handle, cursor))) expected++;
       cursor = bindings['host.xml_next_sibling'](handle, cursor);
     }
-    const result = await instance.parse(content);
+    const result = await instance.parseFile(name);
     assert.equal(result?.children.length ?? 0, expected, name);
-    return content;
+    const warmStarted = performance.now();
+    assert.deepEqual(await instance.parseFile(name), result, name);
+    cachedMs += performance.now() - warmStarted;
+    return name;
   }));
   const coldMs = performance.now() - started;
-  const warmStarted = performance.now();
-  await Promise.all(results.map(content => instance.parse(content)));
-  const warmMs = performance.now() - warmStarted;
-  t.diagnostic(`Parsed ${results.length} real XSDs concurrently, including UTF-16: cold ${coldMs.toFixed(0)} ms; cached ${warmMs.toFixed(0)} ms.`);
+  assert.equal(instance.getStatus().cachedEntries, files.length, 'The bounded cache retains the complete expanded corpus');
+  const fullWarmStarted = performance.now();
+  await Promise.all(results.map(name => instance.parseFile(name)));
+  const fullWarmMs = performance.now() - fullWarmStarted;
+  t.diagnostic(`Parsed ${results.length} expanded XSDs including UTF-16: cold ${coldMs.toFixed(0)} ms; full cached reread ${fullWarmMs.toFixed(0)} ms; cache ${instance.getStatus().cachedBytes} bytes; immediate rereads ${cachedMs.toFixed(0)} ms.`);
 });

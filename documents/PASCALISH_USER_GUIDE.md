@@ -119,12 +119,16 @@ Desktop services can `use "XML"` for the
 [`XMLDocument` class](../virtualMachines/esp32/aggregator/libraries/XML/XML.pas).
 `load(text)` parses XML into a document handle. `count`, `localName`, `namespaceURI`,
 `attribute`, `attributeInteger(node, name, fallback)`, `qualifiedLocal`,
-`qualifiedNamespace`, `firstChild`, `nextSibling`, `subtreeEnd` and `textValue`
+`qualifiedNamespace`, `parentNode`, `firstChild`, `nextSibling`, `subtreeEnd` and `textValue`
 provide checked navigation and namespace-aware access. Node indices are zero-based;
 missing children/siblings return -1, and `subtreeEnd` is an exclusive preorder index.
 Optional missing attributes return an empty string; integer attributes use the explicit
 fallback only when absent. Direct text includes decoded entities and CDATA, not descendant
 text. Handles are valid only for the current service invocation, not subsequent requests.
+`appendDocument(donorHandle)` moves a parsed donor into the receiving document's forest,
+returns its new root index and invalidates the donor handle. Existing indices and each
+root's exclusive subtree end remain stable; roots are linked through `nextSibling`,
+and each root has parent -1. QName scopes are preserved, not rewritten by the receiver.
 
 XML tokenization and well-formedness checks use the existing `fast-xml-parser` host
 dependency; the Pascalish library wraps generic desktop bindings, not an XSD-specific
@@ -142,16 +146,75 @@ optionality. QName matching uses namespace identity, independent of prefix spell
 Annotations/comments no longer corrupt the parent stack, single-quoted attributes and
 escaped text work, and foreign-namespace elements do not masquerade as XSD declarations.
 The [thin adapter](../virtualMachines/esp32/aggregator/src/librarian/xsd-parser.mjs)
-compiles and dispatches; Node retains schema-file discovery, encoding conversion and HTTP.
+compiles and dispatches; Node retains schema-file discovery and HTTP. The constructor
+requires an explicit `schemaRoot`, granted read-only to the internal service.
 The adapter caches serialized trees by source-content hash, bounded at 256 entries and
-8000000 bytes, and coalesces simultaneous identical requests. Callers receive independent
-trees, changed content is reparsed, and failures are never cached. This avoids rerunning
-the VM on every unchanged catalog read; first-time parsing of the full corpus is
-substantially slower than the old regex implementation (about 30 seconds locally).
+32000000 bytes, and coalesces simultaneous identical requests. Callers receive independent
+trees, changed content is reparsed, and failures are never cached. File-backed parsing
+keys entries by confined entry path and rechecks every dependency's content hash before
+reuse (not just size/mtime); includes changing, disappearing or becoming links cannot
+hide behind cached trees. Hashes preserve UTF-16 code units. This avoids rerunning
+the VM on every unchanged catalog read. The byte limit was raised from 8000000 for
+expanded trees, and the corpus test verifies that all checked-in schemas fit together.
+Larger catalogs can still evict entries before the entry-count limit. First-time parsing
+of the expanded corpus is substantially slower than the old regex implementation:
+the dependency-aware file path measured about 184 seconds cold and 296 ms for the
+complete cached reread locally. Cache eviction requires reparsing.
 
-This is structure extraction, **not full XSD validation**. Named complex-type references,
-element references, simple-type inheritance, imports/includes and complete facets/cardinality
-semantics are not expanded or validated. It makes no network requests. Well-formed non-XSD
+Named global complex types and global element `ref` occurrences are expanded within
+the loaded schema graph. Resolution uses the QName's in-scope namespace and the schema's
+`targetNamespace`; an unprefixed QName does not implicitly acquire the target namespace.
+Forward declarations and namespace aliases work, occurrence `minOccurs` is preserved,
+and referenced declarations retain their own QName scope. Complex-content `extension`
+adds known base-type fields before its own fields. Standalone named declarations remain
+in the top-level catalog tree for compatibility. Included same-namespace declarations
+join that tree; imported declarations supply reference expansion but are not separate
+top-level display nodes.
+
+`parseFile(relativePath)` loads local `include` and `import` dependencies in Pascalish
+through the explicit `schemas` filesystem grant. `schemaLocation` is resolved relative
+to the referring file; `.` and `..` are allowed only while remaining inside the root.
+Absolute paths, URLs, UNC paths, backslashes, URI query/fragment/percent encodings,
+alternate streams, links/junctions and hardlinks are rejected. There is no network fetch
+or filesystem search by namespace. Missing explicit locations are errors; an `import`
+without a location does not trigger loading and leaves references unresolved unless
+that namespace was already loaded by another explicit import in the graph.
+Includes require the same target namespace or adopt it for a no-target-namespace
+chameleon schema. Imports require their declared namespace to match the target file,
+including explicit no-namespace imports. Import declarations must be present for
+foreign references to resolve; merely loading another namespace elsewhere is not enough.
+Graph diamonds/cycles are deduplicated by confined path plus effective namespace;
+a chameleon file can be instantiated in different namespaces. The graph is bounded at
+16 document instances, 1000000 aggregate decoded UTF-8 source bytes and 20000 element
+nodes, in addition to existing output/VM limits. Each physical read is also limited to
+1000000 bytes. UTF-8 and BOM-marked UTF-16 LE/BE are decoded strictly; the prior UTF-16 LE
+zero-byte heuristic remains for BOM-less files.
+
+`parse(content)` remains a single-document API: it does not load file dependencies.
+`parseFile` is the Librarian path. `xml:base`, `redefine` and `override` are explicitly
+unsupported in the linked graph, not silently treated as ordinary includes.
+Dependency reads are confined but are not a cross-file atomic snapshot; schema roots
+retain the operator-owned/no-untrusted-path-replacement assumption of the filesystem
+adapter. A modification during a parse can require the next request to refresh the graph.
+
+Expanded elements keep their declared `valueType` and gain `typeReference` metadata;
+element refs gain `reference`. Metadata identifies `{kind, name, namespace}`. Cycles are
+cut on the current ancestry path, not globally: sibling occurrences still expand
+independently. A cycle remains a branch with `recursive: true` and empty children.
+After traversal depth 8 or 1000 emitted nodes, further descendant expansion stops;
+siblings remain visible, so 1000 is an expansion-admission threshold, not a total output
+node cap. Such branches carry `truncated: true` and `truncationReason: "depth"` or
+`"nodes"`. Output bytes, VM instructions and execution time remain hard limits.
+Unloaded foreign-namespace references are retained with `unresolved: true`, not guessed by local
+name; missing same-namespace references and duplicate referenced global declarations
+fail explicitly. The UI and spoken summaries distinguish these branches from scalar
+leaves. Subschema field paths include expanded descendants but cannot claim descendants
+beyond a recursion, unresolved-reference or truncation boundary.
+
+This is structure extraction, **not full XSD validation**. Simple-type inheritance,
+attribute/group references and complete facets/cardinality
+semantics are not expanded or validated. Restrictions do not inherit all base particles.
+It makes no network requests. Well-formed non-XSD
 XML and schemas without displayable nodes return null. Malformed XML/XSD attribute values
 fail explicitly rather than silently appearing as an unavailable structure.
 
@@ -161,10 +224,14 @@ events. The JavaScript runtime's default ceiling remains 200000 instructions, th
 service default remains 100000, and ESP32 budgets and chunked transport are unchanged.
 The larger desktop ceiling is bounded and granted by trusted host configuration, not P-code.
 
-Run `node --test testing\pmachines\xml-xsd.test.mjs testing\pmachines\librarian-http-catalog.test.mjs`
+Run `node --test testing\pmachines\xml-xsd.test.mjs testing\pmachines\xsd-references.test.mjs testing\pmachines\xsd-links.test.mjs testing\pmachines\librarian-http-catalog.test.mjs`
 from the ESP32 workspace. Tests cover XML contracts, corrected XSD behavior, original-parser
 parity on its correctly parsed subset, all 123 checked-in XSDs, concurrent admission,
-UTF-16 HTTP listings, subschema validation/projection, malformed input and recovery.
+UTF-16 HTTP listings, named/reference expansion, inheritance, self/mutual recursion,
+exact admission limits, UI branch notices, subschema validation/projection, malformed input
+and recovery. Link tests also verify namespace mismatches, diamonds/cycles, chameleon
+schemas, exact graph limits, confined path denial, link denial and dependency-cache
+invalidation after same-size/same-mtime edits.
 
 ## Data Librarian Catalog Persistence
 
