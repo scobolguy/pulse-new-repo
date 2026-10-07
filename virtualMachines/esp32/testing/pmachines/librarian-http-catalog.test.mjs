@@ -35,7 +35,8 @@ async function fixture(t) {
     child.kill();
   }));
   const origin = `http://127.0.0.1:${port}`;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  const startupDeadline = Date.now() + 15000;
+  while (Date.now() < startupDeadline) {
     if (child.exitCode !== null) throw new Error(`Librarian startup failed: ${errors}`);
     try {
       const response = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(500) });
@@ -103,6 +104,125 @@ test('HTTP catalog errors never silently reset persisted data; valid raw imports
   assert.deepEqual((await fs.readdir(catalogRoot)).filter(name => name.startsWith('.pulse-')), []);
 });
 
+test('remaining catalog HTTP mutations preserve concurrent creates, merged updates, duplicates and lifecycles', async t => {
+  const { origin, catalogRoot } = await fixture(t);
+  const request = async (method, endpoint, body) => {
+    const response = await fetch(`${origin}/api/librarian/${endpoint}`, {
+      method, headers: { 'content-type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) })
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  const initialTypes = await request('GET', 'data-types');
+  assert.equal(initialTypes.status, 200);
+  const createTypes = await Promise.all(Array.from({ length: 24 }, (_, index) =>
+    request('POST', 'data-types', { id: `concurrent-${index}`, label: `Type ${index}` })));
+  for (const result of createTypes) assert.equal(result.status, 200, JSON.stringify(result.body));
+  const types = await request('GET', 'data-types');
+  assert.equal(types.body.types.length, 25);
+  for (let index = 0; index < 24; index += 1) assert.ok(types.body.types.some(type => type.id === `concurrent-${index}`));
+  const duplicateTypes = await Promise.all(Array.from({ length: 12 }, () =>
+    request('POST', 'data-types', { id: 'duplicate', label: 'Duplicate' })));
+  assert.equal(duplicateTypes.filter(result => result.status === 200).length, 1);
+  assert.equal(duplicateTypes.filter(result => result.status === 409).length, 11);
+  const typeUpdates = await Promise.all([
+    request('PATCH', 'data-types/concurrent-0', { label: 'Changed' }),
+    request('PATCH', 'data-types/concurrent-0', { isIso: true })
+  ]);
+  for (const result of typeUpdates) assert.equal(result.status, 200);
+  const updatedType = (await request('GET', 'data-types')).body.types.find(type => type.id === 'concurrent-0');
+  assert.equal(updatedType.label, 'Changed');
+  assert.equal(updatedType.isIso, true);
+  const typeRenames = await Promise.all(['concurrent-1', 'concurrent-2'].map(id =>
+    request('POST', `data-types/${id}/rename`, { newId: 'one-rename' })));
+  assert.deepEqual(typeRenames.map(result => result.status).sort(), [200, 409]);
+
+  const ruleset = index => ({ id: `RULE_${index}`, label: `Rule ${index}`, sourcePatterns: ['a.*'], targetPatterns: ['b.*'] });
+  const createRules = await Promise.all(Array.from({ length: 24 }, (_, index) =>
+    request('POST', 'mapper-rulesets', ruleset(index))));
+  for (const result of createRules) assert.equal(result.status, 200, JSON.stringify(result.body));
+  assert.equal((await request('GET', 'mapper-rulesets')).body.rulesets.length, 24);
+  const ruleUpdates = await Promise.all([
+    request('PUT', 'mapper-rulesets/RULE_0', { description: 'Concurrent description' }),
+    request('PUT', 'mapper-rulesets/RULE_0', { priority: 17 })
+  ]);
+  for (const result of ruleUpdates) assert.equal(result.status, 200);
+  const updatedRule = (await request('GET', 'mapper-rulesets')).body.rulesets.find(rule => rule.id === 'RULE_0');
+  assert.equal(updatedRule.description, 'Concurrent description');
+  assert.equal(updatedRule.priority, 17);
+  const duplicateRules = await Promise.all(Array.from({ length: 12 }, () =>
+    request('POST', 'mapper-rulesets', ruleset('DUPLICATE'))));
+  assert.equal(duplicateRules.filter(result => result.status === 200).length, 1);
+  assert.equal(duplicateRules.filter(result => result.status === 409).length, 11);
+  const ruleDeletes = await Promise.all(Array.from({ length: 24 }, (_, index) =>
+    request('DELETE', `mapper-rulesets/RULE_${index}`)));
+  for (const result of ruleDeletes) assert.equal(result.status, 200);
+  assert.deepEqual((await request('GET', 'mapper-rulesets')).body.rulesets.map(rule => rule.id), ['RULE_DUPLICATE']);
+
+  const paths = Array.from({ length: 24 }, (_, index) => `lifecycle-${index}.json`);
+  await Promise.all(paths.map(name => fs.writeFile(path.join(catalogRoot, 'schemas', name), '{}')));
+  const lifecycleResults = await Promise.all(paths.map(schemaPath => request('POST', 'schema-lifecycle', {
+    path: schemaPath, activeFrom: '2020-01-01', rejectAfter: '2100-01-01', keepForDisplay: false
+  })));
+  for (const result of lifecycleResults) assert.equal(result.status, 200, JSON.stringify(result.body));
+  const lifecycles = JSON.parse(await fs.readFile(path.join(catalogRoot, 'schema-lifecycle.json'), 'utf8'));
+  assert.deepEqual(Object.keys(lifecycles).sort(), [...paths].sort());
+  for (const lifecycle of Object.values(lifecycles)) {
+    assert.deepEqual(lifecycle, { activeFrom: '2020-01-01T00:00:00.000Z', rejectAfter: '2100-01-01T00:00:00.000Z', keepForDisplay: false });
+  }
+  const rename = await request('POST', 'schemas/rename', { path: paths[0], newName: 'renamed-lifecycle' });
+  assert.equal(rename.status, 200);
+  const remove = await request('DELETE', 'schemas', { path: paths[1] });
+  assert.equal(remove.status, 200);
+  const changed = JSON.parse(await fs.readFile(path.join(catalogRoot, 'schema-lifecycle.json'), 'utf8'));
+  assert.equal(Object.hasOwn(changed, paths[0]), false);
+  assert.equal(Object.hasOwn(changed, paths[1]), false);
+  assert.deepEqual(changed['renamed-lifecycle.json'], lifecycles[paths[0]]);
+  assert.equal(Object.keys(changed).length, 23);
+});
+
+test('catalog projection does not enqueue an entire large catalog beyond host capacity', async t => {
+  const { origin, catalogRoot } = await fixture(t);
+  const names = Array.from({ length: 9 }, (_, index) => `Field${index}`);
+  await fs.writeFile(path.join(catalogRoot, 'schemas', 'many.json'), JSON.stringify({
+    type: 'object', properties: Object.fromEntries(names.map(name => [name, { type: 'string' }]))
+  }));
+  const definitions = Array.from({ length: 300 }, (_, index) => ({
+    id: `sub-${index}`, label: `Sub ${index}`, parentSchemaPath: 'many.json',
+    accessibleFields: names.filter((name, bit) => ((index + 1) & (1 << bit)) !== 0)
+  }));
+  await fs.writeFile(path.join(catalogRoot, 'subschemas.json'), JSON.stringify(definitions));
+  const response = await fetch(`${origin}/api/librarian/subschemas`);
+  assert.equal(response.status, 200);
+  const { subschemas } = await response.json();
+  assert.equal(subschemas.length, 300);
+  for (let index = 0; index < definitions.length; index += 1) {
+    assert.equal(subschemas[index].name, definitions[index].id);
+    assert.deepEqual(subschemas[index].availableFields, names);
+    assert.deepEqual(subschemas[index].structure.children.map(node => node.name), definitions[index].accessibleFields);
+  }
+});
+
+test('projection budget failures do not persist an unreturnable subschema definition', async t => {
+  const { origin, catalogRoot } = await fixture(t);
+  const properties = Object.fromEntries(['a', 'b', 'c'].map(value => [value.repeat(180000), { type: 'string' }]));
+  const schema = { type: 'object', properties: { A: { type: 'object', properties } } };
+  await fs.writeFile(path.join(catalogRoot, 'schemas', 'large.json'), JSON.stringify(schema));
+  const fields = await fetch(`${origin}/api/librarian/schema-fields?path=large.json`);
+  assert.equal(fields.status, 200);
+  assert.equal((await fields.json()).availableFields.length, 4);
+  const create = await fetch(`${origin}/api/librarian/subschemas`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id: 'oversize', parentSchemaPath: 'large.json', accessibleFields: ['A'] })
+  });
+  assert.equal(create.status, 503);
+  assert.match((await create.json()).error, /capacity exceeded/i);
+  await assert.rejects(fs.stat(path.join(catalogRoot, 'subschemas.json')), error => error.code === 'ENOENT');
+  const list = await fetch(`${origin}/api/librarian/subschemas`);
+  assert.equal(list.status, 200);
+  assert.deepEqual((await list.json()).subschemas, []);
+});
+
 test('HTTP XSD listing, UTF-16, subschema paths, malformed input and recovery use Pascalish parsing', async t => {
   const { origin, catalogRoot } = await fixture(t);
   const content = `<s:schema xmlns:s="http://www.w3.org/2001/XMLSchema"><s:element name="Document">
@@ -121,6 +241,16 @@ test('HTTP XSD listing, UTF-16, subschema paths, malformed input and recovery us
   const structure = listed.find(item => item.path === 'utf16.xsd').structure;
   assert.equal(structure.children[0].children[0].children[0].children[0].name, 'Id');
   assert.equal(structure.children[0].children[0].children[0].children[0].required, false);
+  const fieldMetadata = await fetch(`${origin}/api/librarian/schema-fields?path=utf16.xsd`);
+  assert.equal(fieldMetadata.status, 200);
+  assert.deepEqual(await fieldMetadata.json(), { path: 'utf16.xsd', availableFields: ['Document', 'Document.Id'] });
+  assert.equal(Object.hasOwn(listed.find(item => item.path === 'utf16.xsd'), 'availableFields'), false);
+  for (const [query, status] of [['', 400], ['?path=missing.xsd', 404],
+    ['?path=..%2Foutside.xsd', 404], ['?path=utf16.xsd&path=other.xsd', 400]]) {
+    const response = await fetch(`${origin}/api/librarian/schema-fields${query}`);
+    assert.equal(response.status, status);
+    assert.equal(typeof (await response.json()).error, 'string');
+  }
   const post = definition => fetch(`${origin}/api/librarian/subschemas`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(definition)
   });
@@ -132,6 +262,9 @@ test('HTTP XSD listing, UTF-16, subschema paths, malformed input and recovery us
   const malformed = await fetch(`${origin}/api/librarian/schemas`);
   assert.equal(malformed.status, 500);
   assert.match((await malformed.json()).error, /Invalid XML|Unbound/);
+  const malformedFields = await fetch(`${origin}/api/librarian/schema-fields?path=utf16.xsd`);
+  assert.equal(malformedFields.status, 500);
+  assert.match((await malformedFields.json()).error, /Invalid XML|Unbound/);
   await fs.writeFile(file, content);
   const recovered = await fetch(`${origin}/api/librarian/schemas`);
   assert.equal(recovered.status, 200);
@@ -176,6 +309,11 @@ test('HTTP XSD listing, UTF-16, subschema paths, malformed input and recovery us
   assert.equal(changedList.status, 200);
   const changedSchemas = (await changedList.json()).subschemas;
   assert.ok(changedSchemas.find(item => item.name === 'linked-xsd').availableFields.includes('Document.Changed'));
+  const changedFields = await fetch(`${origin}/api/librarian/schema-fields?path=utf16.xsd`);
+  assert.equal(changedFields.status, 200);
+  const changedMetadata = await changedFields.json();
+  assert.ok(changedMetadata.availableFields.includes('Document.Changed'));
+  assert.ok(!changedMetadata.availableFields.includes('Document.Included'));
   const oldPath = await post({ id: 'old-linked-xsd', parentSchemaPath: 'utf16.xsd', accessibleFields: ['Document.Included'] });
   assert.equal(oldPath.status, 400);
   await fs.writeFile(includedPath, `<s:schema xmlns:s="http://www.w3.org/2001/XMLSchema">

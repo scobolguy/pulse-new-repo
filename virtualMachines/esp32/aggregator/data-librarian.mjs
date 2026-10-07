@@ -1,13 +1,14 @@
 import express from 'express';
 import fs from 'fs/promises';
 import path from 'path';
-import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 import { readEnvNumber } from './src/env-config.mjs';
 import { compilePascalishProgramWithAntlr } from './scripts/compile-pascalish-program-antlr-to-pcode.mjs';
 import { createPascalishServiceHost } from '../pmachines/javascript/src/service-host.mjs';
 import { createPascalishCatalogStore } from './src/librarian/catalog-store.mjs';
 import { createPascalishXsdParser } from './src/librarian/xsd-parser.mjs';
+import { createPascalishSchemaTreeService } from './src/librarian/schema-tree-service.mjs';
+import { createPascalishLibrarianNormalization } from './src/librarian/normalization.mjs';
 
 const app = express();
 app.use(express.json());
@@ -39,6 +40,8 @@ const LEGACY_DATA_TYPES_PATH = path.join(DATA_ROOT, 'data-types.json');
 let subschemaPolicyHost;
 let catalogStore;
 let xsdParser;
+let schemaTreeService;
+let normalization;
 
 async function pathExists(targetPath) {
   try {
@@ -398,10 +401,6 @@ async function extractStructureForFile(filePath, schemaType) {
   }
 }
 
-function isSchemaContainerNode(node) {
-  return ['sequence', 'choice', 'all', 'complextype'].includes(String(node?.valueType || '').toLowerCase());
-}
-
 function normalizeSchemaFieldPath(value) {
   return String(value || '')
     .trim()
@@ -410,47 +409,6 @@ function normalizeSchemaFieldPath(value) {
     .map(part => part.trim())
     .filter(Boolean)
     .join('.');
-}
-
-function collectSchemaFieldPaths(structure) {
-  const fields = [];
-  function visit(node, parentPath = '') {
-    if (!node || typeof node !== 'object') return;
-    const nodeName = String(node.name || '').trim();
-    const contributesPath = nodeName && nodeName !== 'root' && !isSchemaContainerNode(node);
-    const currentPath = contributesPath
-      ? (parentPath ? `${parentPath}.${nodeName}` : nodeName)
-      : parentPath;
-    if (contributesPath && !fields.includes(currentPath)) fields.push(currentPath);
-    for (const child of Array.isArray(node.children) ? node.children : []) {
-      visit(child, currentPath);
-    }
-  }
-  visit(structure);
-  return fields;
-}
-
-function filterSchemaStructure(structure, accessibleFields) {
-  const allowed = Array.from(new Set((accessibleFields || []).map(normalizeSchemaFieldPath).filter(Boolean)));
-  function visit(node, parentPath = '') {
-    if (!node || typeof node !== 'object') return null;
-    const nodeName = String(node.name || '').trim();
-    const contributesPath = nodeName && nodeName !== 'root' && !isSchemaContainerNode(node);
-    const currentPath = contributesPath
-      ? (parentPath ? `${parentPath}.${nodeName}` : nodeName)
-      : parentPath;
-    const pathIsVisible = !currentPath || allowed.some(field => (
-      field === currentPath
-      || field.startsWith(`${currentPath}.`)
-      || currentPath.startsWith(`${field}.`)
-    ));
-    if (!pathIsVisible) return null;
-    const children = (Array.isArray(node.children) ? node.children : [])
-      .map(child => visit(child, currentPath))
-      .filter(Boolean);
-    return { ...node, children };
-  }
-  return visit(structure);
 }
 
 function normalizeSubschemaDefinition(candidate) {
@@ -587,8 +545,8 @@ async function loadSchemaLifecycleByPath() {
   return parsed;
 }
 
-async function saveSchemaLifecycleByPath(lifecycleByPath) {
-  await catalogStore.write('schema-lifecycle', lifecycleByPath);
+async function mutateSchemaLifecycle(operation, id, values = {}) {
+  return catalogStore.mutateCatalog('schema-lifecycle', () => ({ operation, id, ...values }));
 }
 
 function sanitizeLifecycleDate(value) {
@@ -826,27 +784,34 @@ async function loadPhysicalSchemaCatalog() {
   return (await Promise.all(schemas)).filter(Boolean);
 }
 
-function projectSubschemaCatalog(physicalSchemas, definitions) {
+function subschemaCatalogEntry(parent, definition, projection) {
+  return {
+    name: definition.id,
+    label: definition.label,
+    type: 'subschema',
+    typeId: parent.typeId,
+    path: `subschemas/${definition.id}`,
+    parentSchemaPath: definition.parentSchemaPath,
+    accessibleFields: definition.accessibleFields,
+    availableFields: projection.availableFields,
+    size: Buffer.byteLength(JSON.stringify(definition)),
+    mtime: parent.mtime,
+    structure: projection.structure,
+    lifecycle: parent.lifecycle,
+    virtual: true,
+  };
+}
+
+async function projectSubschemaCatalog(physicalSchemas, definitions) {
   const parentByPath = new Map(physicalSchemas.map(schema => [schema.path, schema]));
-  return definitions.map(definition => {
+  const schemas = [];
+  for (const definition of definitions) {
     const parent = parentByPath.get(definition.parentSchemaPath);
-    if (!parent) return null;
-    return {
-      name: definition.id,
-      label: definition.label,
-      type: 'subschema',
-      typeId: parent.typeId,
-      path: `subschemas/${definition.id}`,
-      parentSchemaPath: definition.parentSchemaPath,
-      accessibleFields: definition.accessibleFields,
-      availableFields: collectSchemaFieldPaths(parent.structure),
-      size: Buffer.byteLength(JSON.stringify(definition)),
-      mtime: parent.mtime,
-      structure: filterSchemaStructure(parent.structure, definition.accessibleFields),
-      lifecycle: parent.lifecycle,
-      virtual: true,
-    };
-  }).filter(Boolean);
+    if (!parent) continue;
+    const projection = await schemaTreeService.project(parent.structure, definition.accessibleFields);
+    schemas.push(subschemaCatalogEntry(parent, definition, projection));
+  }
+  return schemas;
 }
 
 async function loadSubschemaCatalog(physicalSchemas) {
@@ -863,17 +828,18 @@ async function validateSubschemaDefinition(candidate) {
   if (!parent.structure) {
     throw new Error(`Parent schema structure is unavailable: ${definition.parentSchemaPath}`);
   }
-  const availableFields = new Set(collectSchemaFieldPaths(parent.structure));
+  const availableFields = await schemaTreeService.collect(parent.structure);
   const unknownFields = await findUnknownSubschemaFields(
     definition.accessibleFields,
-    [...availableFields],
+    availableFields,
   );
   if (unknownFields.length > 0) {
     throw new Error(`Fields are not present in parent schema: ${unknownFields.join(', ')}`);
   }
+  const projection = await schemaTreeService.project(parent.structure, definition.accessibleFields);
   return {
     definition: { ...definition, parentTypeId: String(parent.typeId || '').trim().toLowerCase() },
-    physicalSchemas
+    parent, projection
   };
 }
 
@@ -883,6 +849,20 @@ app.get('/api/librarian/schemas', async (req, res) => {
     const physicalSchemas = await loadPhysicalSchemaCatalog();
     const subschemas = await loadSubschemaCatalog(physicalSchemas);
     res.json({ schemas: [...physicalSchemas, ...subschemas], subschemas });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/librarian/schema-fields', async (req, res) => {
+  try {
+    const schemaPath = typeof req.query.path === 'string' ? req.query.path.trim().replace(/\\/g, '/') : '';
+    if (!schemaPath) return res.status(400).json({ error: 'path is required' });
+    const schema = (await loadPhysicalSchemaCatalog()).find(item => item.path === schemaPath);
+    if (!schema) return res.status(404).json({ error: 'Schema not found' });
+    if (!schema.structure) return res.status(422).json({ error: 'Schema structure is unavailable' });
+    const availableFields = await schemaTreeService.collect(schema.structure);
+    res.json({ path: schema.path, availableFields });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -900,11 +880,11 @@ app.get('/api/librarian/subschemas', async (req, res) => {
 
 app.post('/api/librarian/subschemas', async (req, res) => {
   try {
-    const { definition, physicalSchemas } = await validateSubschemaDefinition(req.body || {});
+    const { definition, parent, projection } = await validateSubschemaDefinition(req.body || {});
     const result = await mutateSubschemas(async () => ({
       mutation: { operation: 'create', id: definition.id, definition }
     }));
-    const subschema = projectSubschemaCatalog(physicalSchemas, [result.definition])[0];
+    const subschema = subschemaCatalogEntry(parent, result.definition, projection);
     res.status(201).json({ status: 'created', subschema });
   } catch (e) {
     res.status(e.status || 400).json({ error: e.message });
@@ -917,12 +897,12 @@ app.put('/api/librarian/subschemas/:id', async (req, res) => {
     const result = await mutateSubschemas(async entries => {
       const existing = entries.find(item => item.id === currentId);
       if (!existing) throw Object.assign(new Error('Subschema not found'), { status: 404 });
-      const { definition, physicalSchemas } = await validateSubschemaDefinition({
+      const { definition, parent, projection } = await validateSubschemaDefinition({
         ...existing, ...(req.body || {}), id: req.body?.id || currentId
       });
-      return { mutation: { operation: 'update', id: currentId, definition }, physicalSchemas };
+      return { mutation: { operation: 'update', id: currentId, definition }, parent, projection };
     });
-    const subschema = projectSubschemaCatalog(result.physicalSchemas, [result.definition])[0];
+    const subschema = subschemaCatalogEntry(result.parent, result.definition, result.projection);
     res.json({ status: 'updated', subschema });
   } catch (e) {
     res.status(e.status || 400).json({ error: e.message });
@@ -965,212 +945,38 @@ app.get('/api/librarian/schema/:type/:name', async (req, res) => {
 // --- Data Types Registry ---
 
 async function loadDataTypes() {
-  async function readTypesFromCatalog(legacy = false) {
-    const stored = legacy ? await catalogStore.readLegacyDataTypes() : await catalogStore.read('data-types');
-    if (stored !== undefined && !Array.isArray(stored)) throw new Error('Data type catalog must be a JSON array');
-    const list = stored ?? [];
-    const types = ensureUniqueCanonicalDataTypeIds(list
-      .map(normalizeDataTypeRecord)
-      .filter((item) => !!item));
-    return {
-      types,
-      needsPersist: JSON.stringify(list) !== JSON.stringify(types)
-    };
-  }
-
-  const primary = await readTypesFromCatalog();
-  if (primary.types.length > 0) {
-    if (primary.needsPersist) {
-      await saveDataTypes(primary.types);
-    }
-    return primary.types;
-  }
-
-  const legacy = await readTypesFromCatalog(true);
-  if (legacy.types.length > 0) {
-    // Backfill the new location so subsequent reads use the canonical path.
-    await saveDataTypes(legacy.types);
-    return legacy.types;
-  }
-
-  return [];
+  const result = await catalogStore.mutateCatalog('data-types',
+    async expected => ({ operation: 'replace', ...await dataTypeSnapshot(expected) }),
+    async plan => ({ entries: await normalizeDataTypeCatalog(plan.entries) }));
+  return result.entries;
 }
 
-async function saveDataTypes(types) {
-  const normalized = (Array.isArray(types) ? types : [])
-    .map(normalizeDataTypeRecord)
-    .filter((item) => !!item);
-  await catalogStore.write('data-types', ensureUniqueCanonicalDataTypeIds(normalized));
+function normalizeDataTypeCatalog(types) {
+  return normalization.typeCatalog(types);
 }
 
-const ISO_TYPE_PREFIXES = [
-  'pacs', 'camt', 'pain', 'head', 'remt',
-  'acmt', 'admi', 'auth', 'caaa', 'caam',
-  'cain', 'catm', 'catp', 'reda', 'secl',
-  'seev', 'semt', 'tsin'
-];
-
-function inferIsoTypeFromId(idValue) {
-  const id = String(idValue || '').trim().toLowerCase();
-  if (!id) return false;
-  return ISO_TYPE_PREFIXES.some((prefix) => id === prefix || id.startsWith(`${prefix}.`) || id.startsWith(`${prefix}-`));
+async function dataTypeSnapshot(expected) {
+  const entries = await normalizeDataTypeCatalog(expected);
+  if (entries.length > 0) return { entries };
+  const legacy = await catalogStore.readLegacyDataTypes();
+  const expectedLegacy = legacy === undefined ? [] : legacy;
+  return { entries: await normalizeDataTypeCatalog(expectedLegacy), expectedLegacy };
 }
 
-function slugifyDataTypeName(value) {
-  return String(value || '')
-    .trim()
-    .replace(/[^a-zA-Z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .toLowerCase();
-}
-
-function deriveCanonicalDataTypeId(logicalId, fallbackId = '') {
-  return `type:${slugifyDataTypeName(logicalId || fallbackId || 'unnamed') || 'unnamed'}`;
-}
-
-function ensureUniqueCanonicalDataTypeIds(types) {
-  const records = Array.isArray(types) ? types.map(item => ({ ...item })) : [];
-  const byCanonicalId = new Map();
-  for (const record of records) {
-    const canonicalId = String(record.canonicalId || '').trim().toLowerCase();
-    if (!canonicalId) continue;
-    const group = byCanonicalId.get(canonicalId) || [];
-    group.push(record);
-    byCanonicalId.set(canonicalId, group);
-  }
-
-  for (const [canonicalId, group] of byCanonicalId.entries()) {
-    if (group.length < 2) continue;
-    for (const record of group) {
-      const logicalId = String(record.logicalId || record.id || 'unnamed').trim().toLowerCase();
-      const suffix = createHash('sha256').update(logicalId).digest('hex').slice(0, 10);
-      const uniqueCanonicalId = `${canonicalId}-${suffix}`;
-      record.canonicalId = uniqueCanonicalId;
-      record.aliases = mergeUniqueAliases(record.aliases, canonicalId, uniqueCanonicalId);
-    }
-  }
-
-  return records;
-}
-
-function mergeUniqueAliases(existingAliases, ...values) {
-  const aliases = [];
-  for (const value of values) {
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        const alias = String(item || '').trim();
-        if (alias) aliases.push(alias);
-      }
-      continue;
-    }
-    const alias = String(value || '').trim();
-    if (alias) aliases.push(alias);
-  }
-
-  if (Array.isArray(existingAliases)) {
-    for (const item of existingAliases) {
-      const alias = String(item || '').trim();
-      if (alias) aliases.push(alias);
-    }
-  }
-
-  return Array.from(new Set(aliases.filter(Boolean)));
-}
-
-function ensureCanonicalDataTypeMetadata(candidate) {
-  if (!candidate || typeof candidate !== 'object') return null;
-
-  const logicalId = String(candidate.logicalId || candidate.id || '').trim().toLowerCase();
-  const id = String(candidate.id || logicalId || '').trim().toLowerCase();
-  const canonicalId = String(candidate.canonicalId || '').trim().toLowerCase();
-  const normalizedCanonicalId = canonicalId.startsWith('type:') ? canonicalId : deriveCanonicalDataTypeId(logicalId || id, id);
-
-  return {
-    ...candidate,
-    id,
-    logicalId: logicalId || id,
-    canonicalId: normalizedCanonicalId,
-    aliases: mergeUniqueAliases(
-      candidate.aliases,
-      logicalId || id,
-      id,
-      normalizedCanonicalId,
-      slugifyDataTypeName(logicalId || id),
-      canonicalId || normalizedCanonicalId,
-    ),
-  };
-}
-
-function normalizeDataTypeRecord(candidate) {
-  if (!candidate || typeof candidate !== 'object') return null;
-  const enriched = ensureCanonicalDataTypeMetadata(candidate);
-  if (!enriched) return null;
-
-  const id = String(enriched.id || '').trim().toLowerCase();
-  if (!id) return null;
-  const logicalId = String(enriched.logicalId || id).trim().toLowerCase();
-  const canonicalId = String(enriched.canonicalId || deriveCanonicalDataTypeId(logicalId, id)).trim().toLowerCase();
-  const label = String(enriched.label || logicalId || id).trim() || logicalId || id;
-  const builtin = enriched.builtin === true;
-  const isIso = typeof enriched.isIso === 'boolean' ? enriched.isIso : inferIsoTypeFromId(id);
-  const next = {
-    ...enriched,
-    id,
-    logicalId,
-    canonicalId,
-    label,
-    builtin,
-    isIso,
-    aliases: mergeUniqueAliases(enriched.aliases, logicalId, id, canonicalId),
-  };
-  return next;
-}
-
-function sanitizeMapperPattern(value) {
-  const raw = String(value || '').trim().toLowerCase();
-  return raw.replace(/\s+/g, '');
-}
-
-function sanitizeMapperPatternList(values) {
-  const list = Array.isArray(values) ? values : String(values || '').split(',');
-  const unique = new Set();
-  for (const value of list) {
-    const normalized = sanitizeMapperPattern(value);
-    if (!normalized) continue;
-    unique.add(normalized);
-  }
-  return Array.from(unique);
-}
-
-function normalizeMapperRulesetPayload(candidate, options = {}) {
-  const requireId = options.requireId !== false;
-  const requireLabel = options.requireLabel !== false;
-  const source = candidate && typeof candidate === 'object' ? candidate : {};
-
-  const idRaw = String(source.id || '').trim();
-  const id = idRaw.toUpperCase().replace(/[^A-Z0-9_]/g, '_').replace(/_{2,}/g, '_').replace(/^_+|_+$/g, '');
-  const label = String(source.label || '').trim();
-  const description = String(source.description || '').trim();
-  const sourcePatterns = sanitizeMapperPatternList(source.sourcePatterns);
-  const targetPatterns = sanitizeMapperPatternList(source.targetPatterns);
-  const recommended = source.recommended === true;
-  const priorityRaw = Number.parseInt(String(source.priority ?? '0'), 10);
-  const priority = Number.isFinite(priorityRaw) ? priorityRaw : 0;
-
-  if (requireId && !id) throw new Error('id is required');
-  if (requireLabel && !label) throw new Error('label is required');
-  if (sourcePatterns.length === 0) throw new Error('sourcePatterns must include at least one pattern');
-  if (targetPatterns.length === 0) throw new Error('targetPatterns must include at least one pattern');
-
-  return {
-    id,
-    label,
-    description,
-    sourcePatterns,
-    targetPatterns,
-    recommended,
-    priority,
-  };
+async function mutateDataTypes(mutation) {
+  await loadDataTypes();
+  return catalogStore.mutateCatalog('data-types',
+    async expected => ({ ...mutation, ...await dataTypeSnapshot(expected) }),
+    async plan => {
+      const entries = [...plan.entries];
+      const record = plan.record && (mutation.operation === 'update' || mutation.operation === 'rename')
+        ? await normalization.typeRecord(plan.record) : plan.record;
+      if (plan.record) entries[plan.index] = record;
+      return {
+        entries: await normalizeDataTypeCatalog(entries),
+        record: mutation.operation === 'rename' ? plan.record : record
+      };
+    });
 }
 
 async function loadStoredMapperRulesets() {
@@ -1180,28 +986,23 @@ async function loadStoredMapperRulesets() {
   return parsed;
 }
 
-async function saveStoredMapperRulesets(rulesets) {
-  await catalogStore.write('mapper-rulesets', rulesets);
+function normalizeStoredMapperRulesets(stored) {
+  return normalization.rulesetCatalog(stored);
 }
 
 async function loadMapperRulesets() {
-  const stored = await loadStoredMapperRulesets();
-  const byId = new Map();
+  return normalizeStoredMapperRulesets(await loadStoredMapperRulesets());
+}
 
-  for (const item of stored) {
-    try {
-      const normalized = normalizeMapperRulesetPayload(item);
-      byId.set(normalized.id, normalized);
-    } catch {
-      // Ignore malformed stored entries.
-    }
-  }
-
-  return Array.from(byId.values()).sort((a, b) => {
-    const priorityDelta = Number(b.priority || 0) - Number(a.priority || 0);
-    if (priorityDelta !== 0) return priorityDelta;
-    return String(a.id || '').localeCompare(String(b.id || ''));
-  });
+async function mutateMapperRulesets(mutation) {
+  return catalogStore.mutateCatalog('mapper-rulesets',
+    async entries => ({ ...mutation, entries, visible: await normalizeStoredMapperRulesets(entries) }),
+    async plan => {
+      const entries = [...plan.entries];
+      const record = plan.record ? await normalization.ruleset(plan.record) : undefined;
+      if (record) entries[plan.index] = record;
+      return { entries, record };
+    });
 }
 
 app.get('/api/librarian/data-types', async (req, res) => {
@@ -1217,22 +1018,11 @@ app.post('/api/librarian/data-types', async (req, res) => {
   try {
     const { id, label, isIso } = req.body || {};
     if (!id || !label) return res.status(400).json({ error: 'id and label are required' });
-    const cleanId = String(id).toLowerCase().replace(/[^a-z0-9-]/g, '-');
-    const types = await loadDataTypes();
-    if (types.some(t => t.id === cleanId)) {
-      return res.status(409).json({ error: `Type ${cleanId} already exists` });
-    }
-    const newType = normalizeDataTypeRecord({
-      id: cleanId,
-      label: String(label),
-      builtin: false,
-      isIso: typeof isIso === 'boolean' ? isIso : inferIsoTypeFromId(cleanId)
-    });
-    types.push(newType);
-    await saveDataTypes(types);
-    res.json({ status: 'created', type: newType });
+    const creation = await normalization.createType({ id, label, isIso });
+    const result = await mutateDataTypes({ operation: 'create', id: creation.id, record: creation.record });
+    res.json({ status: 'created', type: result.record });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.catalogDecision ? e.status : 500).json({ error: e.message });
   }
 });
 
@@ -1241,16 +1031,10 @@ app.delete('/api/librarian/data-types/:id', async (req, res) => {
     const id = String(req.params.id || '').trim().toLowerCase();
     if (!id) return res.status(400).json({ error: 'id is required' });
 
-    const types = await loadDataTypes();
-    const nextTypes = types.filter(type => String(type.id || '').toLowerCase() !== id);
-    if (nextTypes.length === types.length) {
-      return res.status(404).json({ error: 'Type not found' });
-    }
-
-    await saveDataTypes(nextTypes);
+    await mutateDataTypes({ operation: 'delete', id });
     res.json({ status: 'deleted', id });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.catalogDecision ? e.status : 500).json({ error: e.message });
   }
 });
 
@@ -1262,27 +1046,13 @@ app.post('/api/librarian/data-types/:id/rename', async (req, res) => {
     if (!currentId) return res.status(400).json({ error: 'id is required' });
     if (!nextId) return res.status(400).json({ error: 'newId is required' });
 
-    const types = await loadDataTypes();
-    const typeIndex = types.findIndex(type => String(type.id || '').toLowerCase() === currentId);
-    if (typeIndex < 0) {
-      return res.status(404).json({ error: 'Type not found' });
-    }
-    if (types.some(type => String(type.id || '').toLowerCase() === nextId && String(type.id || '').toLowerCase() !== currentId)) {
-      return res.status(409).json({ error: 'Type already exists' });
-    }
-
-    const currentType = types[typeIndex];
-    const updatedType = {
-      ...currentType,
-      id: nextId,
-      label: nextLabel || currentType.label || nextId,
-      isIso: typeof req.body?.isIso === 'boolean' ? req.body.isIso : currentType.isIso,
-    };
-    types[typeIndex] = normalizeDataTypeRecord(updatedType);
-    await saveDataTypes(types);
-    res.json({ status: 'renamed', type: updatedType });
+    const result = await mutateDataTypes({
+      operation: 'rename', id: currentId, nextId,
+      patch: { label: nextLabel, isIso: req.body?.isIso }
+    });
+    res.json({ status: 'renamed', type: result.record });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.catalogDecision ? e.status : 500).json({ error: e.message });
   }
 });
 
@@ -1291,21 +1061,11 @@ app.patch('/api/librarian/data-types/:id', async (req, res) => {
     const id = String(req.params.id || '').trim().toLowerCase();
     if (!id) return res.status(400).json({ error: 'id is required' });
 
-    const types = await loadDataTypes();
-    const typeIndex = types.findIndex(type => String(type.id || '').toLowerCase() === id);
-    if (typeIndex < 0) return res.status(404).json({ error: 'Type not found' });
-
-    const currentType = types[typeIndex];
-    const nextType = normalizeDataTypeRecord({
-      ...currentType,
-      label: req.body?.label ?? currentType.label,
-      isIso: typeof req.body?.isIso === 'boolean' ? req.body.isIso : currentType.isIso,
-    });
-    types[typeIndex] = nextType;
-    await saveDataTypes(types);
-    res.json({ status: 'updated', type: nextType });
+    const result = await mutateDataTypes({ operation: 'update', id,
+      patch: { label: req.body?.label, isIso: req.body?.isIso } });
+    res.json({ status: 'updated', type: result.record });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.catalogDecision ? e.status : 500).json({ error: e.message });
   }
 });
 
@@ -1320,19 +1080,11 @@ app.get('/api/librarian/mapper-rulesets', async (req, res) => {
 
 app.post('/api/librarian/mapper-rulesets', async (req, res) => {
   try {
-    const normalized = normalizeMapperRulesetPayload(req.body || {});
-    const existing = await loadMapperRulesets();
-    if (existing.some((item) => String(item.id || '') === normalized.id)) {
-      return res.status(409).json({ error: `Ruleset ${normalized.id} already exists` });
-    }
-
-    const stored = await loadStoredMapperRulesets();
-    stored.push(normalized);
-    await saveStoredMapperRulesets(stored);
-
-    res.json({ status: 'created', ruleset: normalized });
+    const normalized = await normalization.ruleset(req.body || {});
+    const result = await mutateMapperRulesets({ operation: 'create', id: normalized.id, record: normalized });
+    res.json({ status: 'created', ruleset: result.record });
   } catch (e) {
-    res.status(400).json({ error: e.message });
+    res.status(e.catalogDecision ? e.status : 400).json({ error: e.message });
   }
 });
 
@@ -1341,41 +1093,12 @@ app.put('/api/librarian/mapper-rulesets/:id', async (req, res) => {
     const id = String(req.params.id || '').trim().toUpperCase();
     if (!id) return res.status(400).json({ error: 'id is required' });
 
-    const allRulesets = await loadMapperRulesets();
-    const existing = allRulesets.find((item) => String(item.id || '') === id);
-    if (!existing) return res.status(404).json({ error: 'Ruleset not found' });
+    const requestedId = await normalization.rulesetId(req.body?.id || id);
 
-    const requestedId = String(req.body?.id || id).trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_').replace(/_{2,}/g, '_').replace(/^_+|_+$/g, '');
-    if (!requestedId) return res.status(400).json({ error: 'id is required' });
-
-    const normalized = normalizeMapperRulesetPayload({
-      ...(req.body || {}),
-      id: requestedId,
-      label: req.body?.label ?? existing.label,
-      description: req.body?.description ?? existing.description,
-      sourcePatterns: req.body?.sourcePatterns ?? existing.sourcePatterns,
-      targetPatterns: req.body?.targetPatterns ?? existing.targetPatterns,
-      recommended: req.body?.recommended ?? existing.recommended,
-      priority: req.body?.priority ?? existing.priority,
-    });
-
-    const duplicate = allRulesets.some((item) => String(item.id || '') === normalized.id && String(item.id || '') !== id);
-    if (duplicate) {
-      return res.status(409).json({ error: `Ruleset ${normalized.id} already exists` });
-    }
-
-    const stored = await loadStoredMapperRulesets();
-    const storedIndex = stored.findIndex((item) => String(item.id || '').trim().toUpperCase() === id);
-    if (storedIndex < 0) {
-      stored.push(normalized);
-    } else {
-      stored[storedIndex] = normalized;
-    }
-
-    await saveStoredMapperRulesets(stored);
-    res.json({ status: 'updated', ruleset: normalized });
+    const result = await mutateMapperRulesets({ operation: 'update', id, nextId: requestedId, patch: req.body || {} });
+    res.json({ status: 'updated', ruleset: result.record });
   } catch (e) {
-    res.status(400).json({ error: e.message });
+    res.status(e.catalogDecision ? e.status : 400).json({ error: e.message });
   }
 });
 
@@ -1384,20 +1107,10 @@ app.delete('/api/librarian/mapper-rulesets/:id', async (req, res) => {
     const id = String(req.params.id || '').trim().toUpperCase();
     if (!id) return res.status(400).json({ error: 'id is required' });
 
-    const allRulesets = await loadMapperRulesets();
-    const existing = allRulesets.find((item) => String(item.id || '') === id);
-    if (!existing) return res.status(404).json({ error: 'Ruleset not found' });
-
-    const stored = await loadStoredMapperRulesets();
-    const next = stored.filter((item) => String(item.id || '').trim().toUpperCase() !== id);
-    if (next.length === stored.length) {
-      return res.status(404).json({ error: 'Ruleset not found' });
-    }
-
-    await saveStoredMapperRulesets(next);
+    await mutateMapperRulesets({ operation: 'delete', id });
     res.json({ status: 'deleted', id });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.catalogDecision ? e.status : 500).json({ error: e.message });
   }
 });
 
@@ -1419,11 +1132,7 @@ app.delete('/api/librarian/schemas', async (req, res) => {
     }
 
     await fs.unlink(absPath);
-    const lifecycleByPath = await loadSchemaLifecycleByPath();
-    if (Object.prototype.hasOwnProperty.call(lifecycleByPath, relPath)) {
-      delete lifecycleByPath[relPath];
-      await saveSchemaLifecycleByPath(lifecycleByPath);
-    }
+    await mutateSchemaLifecycle('delete', relPath);
 
     res.json({ status: 'deleted', path: relPath });
   } catch (e) {
@@ -1457,13 +1166,8 @@ app.post('/api/librarian/schemas/rename', async (req, res) => {
     await fs.mkdir(path.dirname(nextAbsPath), { recursive: true });
     await fs.rename(currentAbsPath, nextAbsPath);
 
-    const lifecycleByPath = await loadSchemaLifecycleByPath();
     const nextRelPath = path.relative(SCHEMA_ROOT, nextAbsPath).replace(/\\/g, '/');
-    if (Object.prototype.hasOwnProperty.call(lifecycleByPath, currentPath)) {
-      lifecycleByPath[nextRelPath] = lifecycleByPath[currentPath];
-      delete lifecycleByPath[currentPath];
-      await saveSchemaLifecycleByPath(lifecycleByPath);
-    }
+    await mutateSchemaLifecycle('rename', currentPath, { nextId: nextRelPath });
 
     await mutateSubschemas(async () => ({
       mutation: { operation: 'rename-parent', previousPath: currentPath, nextPath: nextRelPath }
@@ -1539,21 +1243,19 @@ app.post('/api/librarian/schema-lifecycle', async (req, res) => {
       return res.status(400).json({ error: 'rejectAfter must be later than activeFrom' });
     }
 
-    const lifecycleByPath = await loadSchemaLifecycleByPath();
     const lifecycle = {
       activeFrom: normalizedActiveFrom,
       rejectAfter: normalizedRejectAfter,
       keepForDisplay: keepForDisplay !== false,
     };
-    lifecycleByPath[schemaPath] = lifecycle;
-    await saveSchemaLifecycleByPath(lifecycleByPath);
+    const result = await mutateSchemaLifecycle('set', schemaPath, { record: lifecycle });
 
     res.json({
       status: 'updated',
       path: schemaPath,
       lifecycle: {
-        ...lifecycle,
-        status: computeLifecycleStatus(lifecycle),
+        ...result.record,
+        status: computeLifecycleStatus(result.record),
       },
     });
   } catch (e) {
@@ -1575,6 +1277,8 @@ catalogStore = await createPascalishCatalogStore({
 
 subschemaPolicyHost = await startSubschemaPolicyHost();
 xsdParser = await createPascalishXsdParser({ schemaRoot: SCHEMA_ROOT });
+schemaTreeService = await createPascalishSchemaTreeService();
+normalization = await createPascalishLibrarianNormalization();
 
 app.listen(PORT, () => {
   console.log(`[Librarian] Service running on http://localhost:${PORT}`);

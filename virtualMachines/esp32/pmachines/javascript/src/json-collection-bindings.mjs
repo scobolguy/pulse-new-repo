@@ -19,6 +19,24 @@ function indexOf(value, entries) {
 
 export function createJsonCollectionBindings() {
   return {
+    'host.json_kind': value => {
+      const parsed = parse(value);
+      return parsed === null ? 'null' : Array.isArray(parsed) ? 'array' : typeof parsed;
+    },
+    'host.json_to_text': value => String(parse(value)),
+    'host.json_remove': (value, key) => {
+      const parsed = parse(value);
+      if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object' || typeof key !== 'string') {
+        throw failure('Expected JSON object and member name');
+      }
+      delete parsed[key];
+      return JSON.stringify(parsed);
+    },
+    'host.json_object': value => {
+      const parsed = parse(value);
+      if (parsed === null || typeof parsed !== 'object') throw failure('Expected a JSON object or array');
+      return JSON.stringify({ ...parsed });
+    },
     'host.json_array_count': value => array(value).length,
     'host.json_array_get': (value, index) => {
       const entries = array(value);

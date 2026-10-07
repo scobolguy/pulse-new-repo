@@ -101,7 +101,7 @@ The Data Librarian keeps its HTTP API and non-XSD schema parsing in Node.js. XSD
 extraction now runs in Pascalish, as described below. Subschema field-access
 validation runs as a hosted Pascalish policy in
 `virtualMachines/esp32/src/librarian/subschema-policy.pas`; it uses the `JSON` library while
-Node supplies the parent schema's flattened field paths. Catalog persistence now runs in a
+Pascalish collects the parent schema's flattened field paths. Catalog persistence now runs in a
 separate hosted Pascalish service, described below.
 The policy integration check is `npm run test:librarian:subschema-policy` from
 `virtualMachines/esp32/aggregator`.
@@ -112,6 +112,38 @@ validation, and errors. It also reports local HTTP timings as an indication of p
 overhead, not a production benchmark.
 Policy tokens preserve UTF-16 code units so distinct JavaScript field paths remain distinct,
 even when they contain unpaired surrogates.
+
+### Schema field paths and subschema projection
+
+[`schema-tree.pas`](../virtualMachines/esp32/src/librarian/schema-tree.pas) owns
+preorder field-path collection and ancestor/descendant subschema filtering. The
+[Node adapter](../virtualMachines/esp32/aggregator/src/librarian/schema-tree-service.mjs)
+only dispatches events and caches serialized results; Node retains catalog response
+wrappers, normalization and HTTP routing. JSON/XML/copybook trees use the same rules:
+unnamed nodes, `root` and XSD container types do not add path segments; named branches
+and leaves do. Paths are unique in first-occurrence order. Projection retains the entire
+node metadata and replaces only `children`; an inaccessible branch is omitted.
+Creation/update validates the projected result before catalog mutation and reuses that
+result with the committed definition, so a projection budget failure cannot first persist
+a definition that cannot be returned.
+
+Traversal uses invocation-local generic JSON value handles and an explicit JSON-array
+frame stack, not recursive VM calls or repeated full-subtree parsing. Tree depth does not
+consume the VM's call-depth budget. Desktop events/results remain bounded at
+1000000 bytes, with 10000000 instructions, 10 seconds and a 256-event queue. Capacity or
+execution failures are explicit; there is no truncated-success fallback. The adapter
+coalesces identical pending work and caches at most 256 entries/32 MB, keyed by UTF-16LE
+content identity; results are independent copies and tree edits cannot reuse stale paths.
+
+Physical-schema editors request `GET /api/librarian/schema-fields?path=...`, returning
+`{path, availableFields}`. Existing schema/catalog responses are unchanged. The UI shows
+loading/errors and disables saving until fields load; it no longer traverses a physical
+schema to construct its field options. Existing virtual schemas use their `availableFields`.
+The bounded/chunked ESP32 membership policy is unchanged; the tree service and generic
+Unicode text/JSON collection helpers are desktop-only.
+
+Run `node --test testing\pmachines\librarian-schema-tree.test.mjs testing\pmachines\librarian-http-catalog.test.mjs`
+from the ESP32 workspace for traversal parity, metadata, depth, concurrency and API tests.
 
 ## XML Library and XSD Structure Extraction
 
@@ -290,15 +322,17 @@ numeric entity decoding, invalid-shape recovery and HTTP projection checks.
 allowlisted filenames and filesystem reads/atomic writes for `subschemas`, `data-types`,
 `mapper-rulesets` and `schema-lifecycle`. Its `JSONDocument` envelopes validate JSON before
 writing. The [Node adapter](../virtualMachines/esp32/aggregator/src/librarian/catalog-store.mjs)
-only dispatches in-process events and serializes values; it does not implement a fallback
+dispatches in-process events, serializes values and coordinates bounded snapshot retries;
+it does not implement a fallback
 catalog writer. Catalog uploads use the same Pascalish writer and preserve supplied formatting.
 
 The desktop service receives a writable `catalog` root and read-only `legacy` root from
 trusted startup configuration. Only legacy `data-types.json` is exposed by that service.
 Directory creation and legacy-path migration remain Node startup responsibilities; schema
 files, schema parsing, normalization and HTTP routing remain Node responsibilities.
-Subschema mutations now run in Pascalish as described below; the other catalogs still
-have Node read/modify/write orchestration. This is not yet a fully Pascalish Librarian.
+All four catalogs now have Pascalish mutation policy as described below. Record
+normalization, mapper list ordering, date validation, lifecycle status calculation and
+HTTP routing remain in Node. This is not yet a fully Pascalish Librarian.
 
 Missing catalogs retain the existing empty defaults. Corrupt JSON, invalid UTF-8, incorrect
 catalog shapes, linked files and storage failures now surface as errors instead of being
@@ -310,8 +344,8 @@ The file budget defaults to 262144 bytes; configure `LIBRARIAN_CATALOG_MAX_BYTES
 local catalogs (1..1000000). Internal event/response envelopes are bounded at 1000000 bytes,
 so escaped write requests may reach that bound before the file budget. The local catalog
 host has a bounded 64-event queue, independent of ESP32 network chunking. Atomic writes
-protect individual file replacement. Subschema mutations additionally check their
-snapshots; the other catalogs and multi-file updates are not transactions.
+protect individual file replacement. Mutations of all four catalogs check their
+snapshots. Multi-file updates are not transactions.
 
 Run `node --test testing\pmachines\librarian-catalog-store.test.mjs` from the ESP32 workspace.
 The old/new parity script also checks all four persisted catalogs and their formatting.
@@ -340,6 +374,74 @@ another, including operations interleaved with catalog imports within the same s
 It is not a cross-process lock: external writers must not concurrently mutate the
 operator-owned storage, and physical schema rename/lifecycle changes are still separate
 operations rather than a multi-file transaction.
+
+### Data type, mapper ruleset and lifecycle CRUD
+
+The same Pascalish catalog service owns duplicate/not-found decisions, insertion,
+replacement, ID rename, deletion and partial-update merges for data types and mapper
+rulesets. Lifecycle updates, key deletion and schema-rename key moves also run there.
+Node no longer implements the catalog array/object mutations in the HTTP handlers.
+Legacy mapper records retain the existing raw-ID mutation rules and last-valid-record
+display semantics; malformed individual records are still excluded from the display,
+but their normalization failures are now logged instead of silently ignored.
+
+The internal `/catalogs/mutate` endpoint has plan and commit phases. A plan verifies the
+raw snapshot and computes the mutation in Pascalish without writing. The Node adapter
+invokes the Pascalish normalization service (including canonical-ID collisions and aliases), then
+submits the plan and normalized content. Commit rereads the catalog, verifies the
+snapshot, recomputes and checks the plan, checks the normalized shape/count and atomically
+writes in one serialized event. Lifecycle content must exactly match its plan. A concurrent
+mutation/import forces a fresh plan and remerge rather than overwriting the newer data.
+The adapter retries at most 32 times; real duplicates/not-found and exhausted conflicts
+remain explicit. Normalization failures happen before writing.
+
+Data type normalization repairs and legacy backfill use this same snapshot-checked
+operation. Backfill additionally rechecks the legacy source in both phases. Already
+normalized reads and empty fallback reads do not rewrite a file. Response records come
+from the committed plan/its normalization, not a racing catalog reread; rename responses
+retain the existing distinction between the response record and normalized stored aliases.
+
+Internal request/response/file budgets and the 64-event queue remain bounded. The trusted
+desktop catalog host allows at most 10000000 instructions/10 seconds; default VM and
+ESP32 budgets are unchanged. Array identity lookup uses invocation-local JSON handles,
+avoiding repeated parsing of the entire catalog for each record. Plan and
+commit envelopes contain multiple copies of catalog data, so the 1000000-byte event limit
+can be reached before the configured file limit. There is no fallback write or
+truncated-success result. This protects in-process mutations/imports, not external writers
+or schema-file/catalog multi-file transactions. ESP32 transport and chunking are unchanged.
+
+Run `node --test testing\pmachines\librarian-catalog-store.test.mjs testing\pmachines\librarian-http-catalog.test.mjs`
+for CRUD, 24-way HTTP concurrency, snapshot retries, legacy-source races, no-write
+normalization failures and corruption/size-limit recovery. The historical parity script
+now checks 105 old/new HTTP comparisons, including canonical collisions, aliases, legacy
+mapper duplicates/raw identities, patch semantics, error precedence and persisted formatting.
+
+### Data type and mapper ruleset normalization
+
+[normalization.pas](../virtualMachines/esp32/src/librarian/normalization.pas) owns data type
+record/catalog normalization, custom type creation, mapper ruleset IDs and payload
+validation, stored-record deduplication and priority/locale ordering. The
+[Node adapter](../virtualMachines/esp32/aggregator/src/librarian/normalization.mjs) compiles
+and invokes the service; it no longer implements this normalization policy.
+Canonical collisions retain the historical UTF-8 SHA-256 suffix, whereas alias and
+record identities use UTF-16 code units to preserve distinct unpaired surrogates.
+Extra type metadata, alias order, JavaScript coercion, persisted property order and
+validation-error precedence remain compatible with the original Node implementation.
+Invalid stored mapper rows produce explicit warnings and are excluded as before;
+host/budget failures propagate instead of being treated as invalid individual rows.
+
+Sorting uses iterative merge sort over invocation-local JSON handles, not recursive
+calls or quadratic insertion sort. Service requests and responses are bounded at
+1000000 bytes, with at most 256 pending events and 10000000 instructions/10 seconds
+per invocation. Oversized input/output or exhausted budgets fail explicitly, before
+catalog writes. These are desktop-only helpers; ESP32 transport and chunking are unchanged.
+
+Run `node --test testing\pmachines\librarian-normalization.test.mjs` for direct comparison
+with the original normalization functions, including coercion edge cases, Unicode,
+canonical collisions, malformed rows, priorities beyond 32-bit integers and reverse-ordered
+1000-record catalogs. Historical HTTP/persisted-catalog parity remains a separate check.
+Subschema normalization, lifecycle date/status policy and non-XSD schema parsers still
+remain in Node; this milestone does not claim a fully Pascalish Librarian.
 
 The HTTP integration test covers 24 simultaneous creates, competing duplicate IDs,
 partial updates of the same record, concurrent deletes and parent-schema rename.

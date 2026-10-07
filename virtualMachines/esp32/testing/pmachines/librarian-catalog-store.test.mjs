@@ -200,3 +200,181 @@ test('failed Pascalish mutation never replaces corrupt catalogs or exceeds file 
   assert.equal(await fs.readFile(target, 'utf8'), '[]');
   assert.deepEqual(await fs.readdir(root), ['subschemas.json']);
 });
+
+const typeRecord = id => ({ id, label: id, isIso: false, metadata: { keep: true } });
+const rulesetRecord = id => ({ id, label: id, description: '', sourcePatterns: ['a.*'],
+  targetPatterns: ['b.*'], recommended: false, priority: 0 });
+
+function mutate(store, catalog, mutation, normalize) {
+  return store.mutateCatalog(catalog, entries => ({
+    ...mutation, entries,
+    ...(catalog === 'mapper-rulesets' ? { visible: entries } : {})
+  }), normalize);
+}
+
+test('Pascalish owns remaining array CRUD decisions, patch merges, duplicates and rename responses', async t => {
+  const { store, root } = await fixture(t);
+  for (const [catalog, record] of [['data-types', typeRecord], ['mapper-rulesets', rulesetRecord]]) {
+    const first = catalog === 'data-types' ? 'first' : 'FIRST';
+    const second = catalog === 'data-types' ? 'second' : 'SECOND';
+    const nextId = catalog === 'data-types' ? 'renamed' : 'RENAMED';
+    await mutate(store, catalog, { operation: 'create', id: first, record: record(first) });
+    await mutate(store, catalog, { operation: 'create', id: second, record: record(second) });
+    await assert.rejects(mutate(store, catalog, { operation: 'create', id: first, record: record(first) }),
+      error => error.status === 409 && !error.retry);
+    await assert.rejects(mutate(store, catalog, { operation: 'update', id: 'missing', nextId: 'missing', patch: {} }),
+      error => error.status === 404 && !error.retry);
+    const edited = await mutate(store, catalog, { operation: 'update', id: first, nextId: first,
+      patch: { label: 'Updated', isIso: 'not a boolean', description: null, priority: 8 } });
+    const expectedEdit = { ...record(first), label: 'Updated', ...(catalog === 'mapper-rulesets' ? { priority: 8 } : {}) };
+    assert.deepEqual(edited.record, expectedEdit);
+    assert.deepEqual(await store.read(catalog), [expectedEdit, record(second)]);
+    await assert.rejects(mutate(store, catalog, { operation: 'rename', id: first, nextId: second, patch: { label: '' } }),
+      error => error.status === 409);
+    const renamed = await mutate(store, catalog, { operation: 'rename', id: first, nextId, patch: { label: '' } });
+    const expectedRename = { ...expectedEdit, id: nextId, ...(catalog === 'mapper-rulesets' ? { label: '' } : {}) };
+    assert.deepEqual(renamed.record, expectedRename);
+    await mutate(store, catalog, { operation: 'delete', id: second });
+    assert.deepEqual(await store.read(catalog), [expectedRename]);
+    assert.equal(await fs.readFile(path.join(root, `${catalog}.json`), 'utf8'), JSON.stringify([expectedRename], null, 2));
+    await assert.rejects(mutate(store, catalog, { operation: 'delete', id: second }), error => error.status === 404);
+  }
+});
+
+test('Pascalish lifecycle set, rename and delete preserve unrelated and prototype-named entries', async t => {
+  const { store, root } = await fixture(t);
+  const lifecycle = { activeFrom: null, rejectAfter: null, keepForDisplay: true };
+  const lifecycleMutation = (operation, id, values = {}) =>
+    store.mutateCatalog('schema-lifecycle', () => ({ operation, id, ...values }));
+  await lifecycleMutation('delete', 'missing');
+  await assert.rejects(fs.stat(path.join(root, 'schema-lifecycle.json')), error => error.code === 'ENOENT');
+  await lifecycleMutation('set', 'first.xsd', { record: lifecycle });
+  await lifecycleMutation('set', '__proto__', { record: { ...lifecycle, keepForDisplay: false } });
+  await lifecycleMutation('set', 'other.xsd', { record: lifecycle });
+  await lifecycleMutation('rename', 'first.xsd', { nextId: 'renamed.xsd' });
+  assert.deepEqual(await store.read('schema-lifecycle'), JSON.parse(JSON.stringify({
+    ['__proto__']: { ...lifecycle, keepForDisplay: false }, 'other.xsd': lifecycle, 'renamed.xsd': lifecycle
+  })));
+  await lifecycleMutation('delete', '__proto__');
+  assert.deepEqual(await store.read('schema-lifecycle'), { 'other.xsd': lifecycle, 'renamed.xsd': lifecycle });
+  const before = await fs.readFile(path.join(root, 'schema-lifecycle.json'), 'utf8');
+  await lifecycleMutation('rename', 'missing', { nextId: 'other.xsd' });
+  assert.equal(await fs.readFile(path.join(root, 'schema-lifecycle.json'), 'utf8'), before);
+});
+
+test('snapshot-checked plans retry concurrent imports, remerge patches, and never write on normalization failure', async t => {
+  const { store, root } = await fixture(t);
+  await store.write('data-types', [typeRecord('first')]);
+  let passes = 0;
+  const result = await mutate(store, 'data-types', { operation: 'update', id: 'first', patch: { label: 'Updated' } },
+    async plan => {
+      passes += 1;
+      if (passes === 1) await store.write('data-types', [{ ...typeRecord('first'), imported: true }]);
+      return { entries: plan.entries, record: plan.record };
+    });
+  assert.equal(passes, 2);
+  assert.deepEqual(result.record, { ...typeRecord('first'), imported: true, label: 'Updated' });
+  const before = await fs.readFile(path.join(root, 'data-types.json'), 'utf8');
+  await assert.rejects(mutate(store, 'data-types', { operation: 'update', id: 'first', patch: { label: 'Rejected' } },
+    () => { throw new Error('Normalization rejected'); }), /Normalization rejected/);
+  assert.equal(await fs.readFile(path.join(root, 'data-types.json'), 'utf8'), before);
+  await assert.rejects(mutate(store, 'data-types', { operation: 'update', id: 'first', patch: {} },
+    () => ({ entries: [] })), /normalized catalog count/);
+  assert.equal(await fs.readFile(path.join(root, 'data-types.json'), 'utf8'), before);
+});
+
+test('all remaining catalogs preserve every concurrent mutation and retry limits fail explicitly', async t => {
+  const { store } = await fixture(t);
+  for (const [catalog, record] of [['data-types', typeRecord], ['mapper-rulesets', rulesetRecord]]) {
+    const records = Array.from({ length: 12 }, (_, index) => record(`ID${index}`));
+    await Promise.all(records.map(record => mutate(store, catalog, { operation: 'create', id: record.id, record })));
+    assert.deepEqual((await store.read(catalog)).map(record => record.id).sort(), records.map(record => record.id).sort());
+  }
+  const lifecycle = { activeFrom: null, rejectAfter: null, keepForDisplay: true };
+  await Promise.all(Array.from({ length: 12 }, (_, index) => store.mutateCatalog('schema-lifecycle',
+    () => ({ operation: 'set', id: `${index}.xsd`, record: lifecycle }))));
+  assert.equal(Object.keys(await store.read('schema-lifecycle')).length, 12);
+  let attempts = 0;
+  await assert.rejects(store.mutateCatalog('schema-lifecycle', () => ({ operation: 'set', id: 'never', record: lifecycle }),
+    async plan => {
+      attempts += 1;
+      await store.write('schema-lifecycle', { ...await store.read('schema-lifecycle'), race: attempts });
+      return { entries: plan.entries };
+    }), error => error.status === 409 && error.retry);
+  assert.equal(attempts, 32);
+  assert.equal(Object.hasOwn(await store.read('schema-lifecycle'), 'never'), false);
+});
+
+test('legacy backfill retries if its read-only source changes before commit', async t => {
+  const { store, legacyRoot } = await fixture(t);
+  await fs.writeFile(path.join(legacyRoot, 'data-types.json'), JSON.stringify([typeRecord('legacy')]));
+  let passes = 0;
+  const result = await store.mutateCatalog('data-types', async () => {
+    const expectedLegacy = await store.readLegacyDataTypes();
+    return { operation: 'replace', entries: expectedLegacy, expectedLegacy };
+  }, async plan => {
+    passes += 1;
+    if (passes === 1) await fs.writeFile(path.join(legacyRoot, 'data-types.json'), JSON.stringify([typeRecord('changed')]));
+    return { entries: plan.entries };
+  });
+  assert.equal(passes, 2);
+  assert.deepEqual(result.entries, [typeRecord('changed')]);
+  assert.deepEqual(await store.read('data-types'), [typeRecord('changed')]);
+  await store.write('data-types', []);
+  passes = 0;
+  const created = await store.mutateCatalog('data-types', async () => {
+    const expectedLegacy = await store.readLegacyDataTypes();
+    return { operation: 'create', id: 'new', record: typeRecord('new'), entries: expectedLegacy, expectedLegacy };
+  }, async plan => {
+    passes += 1;
+    if (passes === 1) await fs.writeFile(path.join(legacyRoot, 'data-types.json'), JSON.stringify([typeRecord('latest')]));
+    return { entries: plan.entries, record: plan.record };
+  });
+  assert.equal(passes, 2);
+  assert.deepEqual(created.entries, [typeRecord('latest'), typeRecord('new')]);
+  assert.deepEqual(await store.read('data-types'), [typeRecord('latest'), typeRecord('new')]);
+});
+
+test('large catalog lookup fits desktop budgets and oversize commit envelopes never write', async t => {
+  const { store, root } = await fixture(t);
+  const records = Array.from({ length: 1000 }, (_, index) => ({
+    id: `record-${index}`, label: 'x'.repeat(120), isIso: false
+  }));
+  await store.write('data-types', records);
+  const updated = await mutate(store, 'data-types', {
+    operation: 'update', id: 'record-999', patch: { label: 'Changed' }
+  });
+  assert.equal(updated.entries.length, 1000);
+  assert.equal(updated.record.label, 'Changed');
+  assert.equal((await store.read('data-types'))[999].label, 'Changed');
+  const before = await fs.readFile(path.join(root, 'data-types.json'), 'utf8');
+  await assert.rejects(mutate(store, 'data-types', {
+    operation: 'update', id: 'record-999', patch: { label: 'x'.repeat(1000000) }
+  }), error => error.status === 413 && /body too large/i.test(error.message));
+  assert.equal(await fs.readFile(path.join(root, 'data-types.json'), 'utf8'), before);
+  assert.equal((await mutate(store, 'data-types', {
+    operation: 'update', id: 'record-999', patch: { label: 'Recovered' }
+  })).record.label, 'Recovered');
+});
+
+test('remaining mutation corruption, invalid operations and file limits never overwrite data', async t => {
+  const { store, root } = await fixture(t, { maxFileBytes: 64 });
+  for (const catalog of ['data-types', 'mapper-rulesets', 'schema-lifecycle']) {
+    const target = path.join(root, `${catalog}.json`);
+    await fs.writeFile(target, 'null');
+    await assert.rejects(store.mutateCatalog(catalog, entries => ({
+      operation: 'delete', id: 'first', entries, visible: entries
+    })));
+    assert.equal(await fs.readFile(target, 'utf8'), 'null');
+    await fs.writeFile(target, catalog === 'schema-lifecycle' ? '{}' : '[]');
+    await assert.rejects(store.mutateCatalog(catalog, entries => ({
+      operation: 'invalid', entries
+    })), error => error.status === 400);
+    const before = await fs.readFile(target, 'utf8');
+    await assert.rejects(store.mutateCatalog(catalog, entries => ({
+      operation: catalog === 'schema-lifecycle' ? 'set' : 'create',
+      id: 'first', entries, visible: entries, record: { id: 'first', label: 'x'.repeat(100) }
+    })), error => error.code === 'EFBIG');
+    assert.equal(await fs.readFile(target, 'utf8'), before);
+  }
+});

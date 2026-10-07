@@ -14,6 +14,7 @@ export async function createPascalishCatalogStore({
     compiled, collectorId: 'pulse-data-librarian-catalog-store',
     httpPort: null, udpPort: null, maxFileBytes, maxEvents: 64,
     maxBodyBytes: 1000000, maxResponseBytes: 1000000,
+    desktopBudget: true, maxSteps: 10000000, maxExecutionMs: 10000,
     storageRoots: {
       catalog: { path: root, readOnly: false },
       legacy: { path: legacyRoot }
@@ -27,7 +28,7 @@ export async function createPascalishCatalogStore({
     });
     if (result.status !== 200) {
       throw Object.assign(new Error(result.body?.error || `Pascalish catalog operation failed (${result.status})`), {
-        status: result.status, retry: result.body?.retry === true
+        status: result.status, retry: result.body?.retry === true, catalogDecision: true
       });
     }
     return result.body;
@@ -47,6 +48,29 @@ export async function createPascalishCatalogStore({
     const result = await dispatch('/write', { catalog, content });
     if (result?.stored !== true) throw new Error('Invalid Pascalish catalog write result');
   }
+  async function mutateCatalog(catalog, prepare, normalize = plan => ({ entries: plan.entries, record: plan.record })) {
+    for (let attempt = 0; attempt < 32; attempt += 1) {
+      const stored = await read('/read', { catalog });
+      const expected = stored === undefined ? (catalog === 'schema-lifecycle' ? {} : []) : stored;
+      const mutation = await prepare(expected);
+      const body = { ...mutation, catalog, expected, commit: 0 };
+      try {
+        const plan = await dispatch('/catalogs/mutate', body);
+        if (!plan || !Object.hasOwn(plan, 'entries') || typeof plan.writeNeeded !== 'boolean') {
+          throw new Error('Invalid Pascalish catalog mutation plan');
+        }
+        const normalized = await normalize(plan);
+        const content = JSON.stringify(normalized.entries, null, 2);
+        if (typeof content !== 'string') throw new Error('Catalog value must be JSON serializable');
+        const result = await dispatch('/catalogs/mutate', { ...body, commit: 1, plan, content });
+        if (result?.stored !== true) throw new Error('Invalid Pascalish catalog mutation result');
+        return { ...result, record: normalized.record };
+      } catch (error) {
+        if (!error.retry || attempt === 31) throw error;
+      }
+    }
+    throw new Error('Catalog mutation retry limit exceeded');
+  }
   return {
     read: catalog => read('/read', { catalog }),
     readLegacyDataTypes: () => read('/read-legacy-data-types', {}),
@@ -56,6 +80,7 @@ export async function createPascalishCatalogStore({
       await writeText(catalog, content);
     },
     writeText,
+    mutateCatalog,
     mutateSubschemas: async body => {
       const result = await dispatch('/subschemas/mutate', body);
       if (result?.stored !== true) throw new Error('Invalid Pascalish subschema mutation result');

@@ -107,8 +107,41 @@ The Pascalish [XML library](../../aggregator/libraries/XML/XML.pas) wraps these
 as `XMLDocument`; XSD application policy stays in
 [Pascalish](../../src/librarian/xsd-parser.pas).
 `host.json_has(object, key)` additionally provides checked own-property existence.
+Desktop collection helpers also expose `host.json_kind(serialized)` (including separate
+`array`/`null` kinds), `host.json_to_text(serialized)` (JavaScript-style string coercion),
+and `host.json_object(serialized)` (checked object/array own-property copying).
+`host.json_remove(serialized, key)` returns a checked object copy with only that own
+member removed; a missing key is a no-op, while non-object values and invalid names fail.
+The invocation-local [JSON value adapter](src/json-value-bindings.mjs) exposes
+`host.json_parse_value`, `host.json_node_kind`, `host.json_node_member`,
+`host.json_node_count`, `host.json_node_item` and `host.json_node_value`.
+A parsed value has root node 0; member lookup returns -1 for missing own properties,
+while invalid handles, indices and kinds fail explicitly. Child nodes are indexed lazily
+and reused, bounded at 8 handles/100000 accessed nodes per handle. Handles never escape
+an invocation and do not grant filesystem/network access. These generic navigation
+primitives keep schema policy in Pascalish without reparsing each subtree on each read.
+The [desktop text adapter](src/desktop-text-bindings.mjs) provides `host.text_trim`,
+`host.text_split` (serialized token array), `host.string_lower`, `host.string_upper`, `host.string_index`
+and `host.string_slice(text, start, end)` with UTF-16 code-unit semantics. Slice indices
+must be nonnegative integers with end >= start; indices beyond the end are clipped.
+These helpers are desktop-only and subject to service budgets. Existing portable
+`host.text_lower/index/slice` retain their strict 1024-byte ASCII bounds.
 `host.text_hash(text)` returns a SHA-256 hex digest of UTF-16LE code units, retaining
 lone-surrogate distinctions; it is a desktop-only generic content identity primitive.
+`host.text_hash_utf8(text)` provides the UTF-8 SHA-256 variant when compatibility with
+existing file/application hashes is required; lone surrogates are replaced during UTF-8
+encoding, unlike `host.text_hash`.
+`host.string_replace(text, pattern, flags, replacement)` applies a trusted program's
+regular expression. Patterns are limited to 256 code units and flags to unique `g`/`i`;
+invalid expressions/arguments fail explicitly. These patterns are application code,
+not untrusted request-supplied expressions.
+`host.string_compare(left, right)` returns the sign of the desktop locale comparison.
+`host.number_parse_integer(text)` returns a serialized JSON number using decimal
+`parseInt` semantics, with nonfinite/invalid results normalized to zero.
+`host.number_compare(leftJson, rightJson)` checks both serialized values are numbers
+and returns -1, 0 or 1 without narrowing them to the VM's integer range.
+These generic primitives implement platform semantics, not Librarian normalization
+policy, and remain unavailable to ESP32 hosted images.
 `host.text_split_whitespace(text)` returns a serialized array of tokens split on XML
 whitespace (space, tab, CR, LF). It does not treat other Unicode spacing characters as
 XML separators. `XMLDocument.hasAttribute` returns Boolean presence independently of

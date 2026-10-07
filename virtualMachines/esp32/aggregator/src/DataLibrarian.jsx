@@ -493,31 +493,37 @@ export default function DataLibrarian() {
     }
   }
 
-  function collectSubschemaFieldPaths(structure) {
-    const paths = [];
-    const containerTypes = new Set(['sequence', 'choice', 'all', 'complextype']);
-    function visit(node, parentPath = '') {
-      if (!node || typeof node !== 'object') return;
-      const name = String(node.name || '').trim();
-      const contributesPath = name && name !== 'root' && !containerTypes.has(String(node.valueType || '').toLowerCase());
-      const currentPath = contributesPath ? (parentPath ? `${parentPath}.${name}` : name) : parentPath;
-      if (contributesPath && !paths.includes(currentPath)) paths.push(currentPath);
-      for (const child of Array.isArray(node.children) ? node.children : []) visit(child, currentPath);
-    }
-    visit(structure);
-    return paths;
-  }
-
-  function openSubschemaEditor(schema) {
+  async function openSubschemaEditor(schema) {
     closeMenus();
     setSubschemaFieldSearch('');
+    const requestId = Symbol('schema-fields');
     setSubschemaEditor({
+      requestId,
       mode: schema.virtual ? 'edit' : 'create',
       schema,
       id: schema.virtual ? schema.name : '',
       label: schema.virtual ? (schema.label || schema.name) : '',
       selectedFields: schema.virtual ? [...(schema.accessibleFields || [])] : [],
+      availableFields: schema.virtual ? (schema.availableFields || []) : [],
+      loadingFields: !schema.virtual,
+      fieldError: '',
     });
+    if (schema.virtual) return;
+    try {
+      const response = await fetch(`/api/librarian/schema-fields?path=${encodeURIComponent(schema.path)}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      if (!Array.isArray(data.availableFields) || data.availableFields.some(field => typeof field !== 'string')) {
+        throw new Error('Invalid schema field metadata');
+      }
+      setSubschemaEditor(current => current?.requestId === requestId
+        ? { ...current, availableFields: data.availableFields, loadingFields: false }
+        : current);
+    } catch (error) {
+      setSubschemaEditor(current => current?.requestId === requestId
+        ? { ...current, loadingFields: false, fieldError: `Unable to load schema fields: ${error.message}` }
+        : current);
+    }
   }
 
   function toggleSubschemaField(fieldPath) {
@@ -531,7 +537,7 @@ export default function DataLibrarian() {
   }
 
   async function saveSubschema() {
-    if (!subschemaEditor) return;
+    if (!subschemaEditor || subschemaEditor.loadingFields || subschemaEditor.fieldError) return;
     const id = String(subschemaEditor.id || '').trim();
     const label = String(subschemaEditor.label || '').trim();
     const accessibleFields = subschemaEditor.selectedFields || [];
@@ -741,9 +747,7 @@ export default function DataLibrarian() {
 
   const subschemaFieldOptions = useMemo(() => {
     if (!subschemaEditor) return [];
-    const available = subschemaEditor.schema.virtual
-      ? (subschemaEditor.schema.availableFields || [])
-      : collectSubschemaFieldPaths(subschemaEditor.schema.structure);
+    const available = subschemaEditor.availableFields;
     const query = subschemaFieldSearch.trim().toLowerCase();
     return available.filter(field => !query || field.toLowerCase().includes(query));
   }, [subschemaEditor, subschemaFieldSearch]);
@@ -1297,23 +1301,25 @@ export default function DataLibrarian() {
                 <input value={subschemaFieldSearch} onChange={event => setSubschemaFieldSearch(event.target.value)} placeholder="Filter canonical paths" style={{ display: 'block', width: '100%' }} />
               </label>
               <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, alignItems: 'center', fontSize: 11 }}>
-                <button type="button" onClick={() => setSubschemaEditor(current => ({ ...current, selectedFields: Array.from(new Set([...(current.selectedFields || []), ...subschemaFieldOptions])).sort((a, b) => a.localeCompare(b)) }))}>Select visible</button>
+                <button type="button" disabled={subschemaEditor.loadingFields || !!subschemaEditor.fieldError} onClick={() => setSubschemaEditor(current => ({ ...current, selectedFields: Array.from(new Set([...(current.selectedFields || []), ...subschemaFieldOptions])).sort((a, b) => a.localeCompare(b)) }))}>Select visible</button>
                 <button type="button" onClick={() => setSubschemaEditor(current => ({ ...current, selectedFields: [] }))}>Clear</button>
                 <span style={{ color: '#64748b' }}>{subschemaEditor.selectedFields.length} selected</span>
               </div>
             </div>
             <div style={{ overflow: 'auto', padding: '8px 16px' }}>
+              {subschemaEditor.loadingFields && <div role="status" style={{ padding: 16 }}>Loading schema fields...</div>}
+              {subschemaEditor.fieldError && <div role="alert" style={{ padding: 16, color: '#b91c1c' }}>{subschemaEditor.fieldError}</div>}
               {subschemaFieldOptions.map(fieldPath => (
                 <label key={fieldPath} style={{ display: 'grid', gridTemplateColumns: '18px minmax(0, 1fr)', gap: 8, alignItems: 'start', padding: '5px 2px', borderBottom: '1px solid #f1f5f9', fontFamily: 'Consolas, monospace', fontSize: 11 }}>
                   <input type="checkbox" checked={subschemaEditor.selectedFields.includes(fieldPath)} onChange={() => toggleSubschemaField(fieldPath)} />
                   <span style={{ overflowWrap: 'anywhere' }}>{fieldPath}</span>
                 </label>
               ))}
-              {subschemaFieldOptions.length === 0 && <div style={{ padding: 16, color: '#64748b', fontSize: 12 }}>No matching fields.</div>}
+              {!subschemaEditor.loadingFields && !subschemaEditor.fieldError && subschemaFieldOptions.length === 0 && <div style={{ padding: 16, color: '#64748b', fontSize: 12 }}>No matching fields.</div>}
             </div>
             <div style={{ padding: '12px 16px', borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <button type="button" onClick={() => setSubschemaEditor(null)}>Cancel</button>
-              <button type="button" onClick={saveSubschema}>Save Subschema</button>
+              <button type="button" disabled={subschemaEditor.loadingFields || !!subschemaEditor.fieldError} onClick={saveSubschema}>Save Subschema</button>
             </div>
           </div>
         </div>

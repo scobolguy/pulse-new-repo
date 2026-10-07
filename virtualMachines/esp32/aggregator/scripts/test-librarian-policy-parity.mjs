@@ -205,11 +205,62 @@ try {
   await compare('type-update', 'PATCH', '/api/librarian/data-types/parity-type', { label: 'Updated' }, 200);
   await compare('type-rename', 'POST', '/api/librarian/data-types/parity-type/rename', { newId: 'parity-renamed' }, 200);
   await compare('type-delete', 'DELETE', '/api/librarian/data-types/parity-renamed', undefined, 200);
+  await compare('type-missing-create-input', 'POST', '/api/librarian/data-types', { id: 'missing-label' }, 400);
+  await compare('type-missing-update', 'PATCH', '/api/librarian/data-types/missing', { label: 'No' }, 404);
+  await compare('type-missing-rename', 'POST', '/api/librarian/data-types/missing/rename', { newId: 'new' }, 404);
+  await compare('type-empty-rename', 'POST', '/api/librarian/data-types/missing/rename', { newId: '' }, 400);
+  await compare('type-missing-delete', 'DELETE', '/api/librarian/data-types/missing', undefined, 404);
+  const typeFixtures = [null, 'ignored', { id: 'Invoice.Payment', label: ' \u540d ', canonicalId: 'type:invoice-payment',
+    aliases: ['legacy', 'legacy'], extra: { retained: true } },
+  { id: 'invoice-payment', label: 'Collision', canonicalId: 'type:invoice-payment', builtin: true }];
+  for (const root of roots) await fs.writeFile(path.join(root, 'services', 'librarian', 'data-types.json'), JSON.stringify(typeFixtures));
+  await compare('type-normalization-and-collisions', 'GET', '/api/librarian/data-types', undefined, 200);
+  await compare('type-duplicate', 'POST', '/api/librarian/data-types', { id: 'invoice-payment', label: 'Duplicate' }, 409);
+  await compare('type-rename-collision', 'POST', '/api/librarian/data-types/invoice.payment/rename', { newId: 'invoice-payment' }, 409);
+  await compare('type-update-null-label', 'PATCH', '/api/librarian/data-types/invoice.payment', { label: null, isIso: 'yes' }, 200);
+  await compare('type-update-empty-label', 'PATCH', '/api/librarian/data-types/invoice.payment', { label: '', isIso: true }, 200);
+  await compare('type-rename-keeps-metadata', 'POST', '/api/librarian/data-types/invoice.payment/rename', { newId: 'Named.Type', label: '  ', isIso: false }, 200);
+  await compare('type-update-object-label', 'PATCH', '/api/librarian/data-types/named.type', { label: { text: 'object' } }, 200);
+  await compare('type-normalized-list', 'GET', '/api/librarian/data-types', undefined, 200);
+  await compare('type-iso-inference', 'POST', '/api/librarian/data-types', { id: 'PACS.Type', label: 'ISO' }, 200);
   const ruleset = { id: 'PARITY_RULE', label: 'Parity', sourcePatterns: ['parity.*'], targetPatterns: ['target.*'] };
   await compare('ruleset-create', 'POST', '/api/librarian/mapper-rulesets', ruleset, 200);
   await compare('ruleset-update', 'PUT', '/api/librarian/mapper-rulesets/PARITY_RULE', { label: 'Updated' }, 200);
   await compare('ruleset-list', 'GET', '/api/librarian/mapper-rulesets', undefined, 200);
   await compare('ruleset-delete', 'DELETE', '/api/librarian/mapper-rulesets/PARITY_RULE', undefined, 200);
+  await compare('ruleset-missing', 'PUT', '/api/librarian/mapper-rulesets/MISSING', { id: '!!!' }, 404);
+  await compare('ruleset-invalid-patterns', 'POST', '/api/librarian/mapper-rulesets', { ...ruleset, sourcePatterns: [] }, 400);
+  const mapperFixtures = [
+    { ...ruleset, id: 'dup', label: 'First duplicate' },
+    { ...ruleset, id: 'DUP', label: 'Last duplicate', priority: 12, recommended: true },
+    { ...ruleset, id: 'a-b', label: 'Sanitized legacy identity' },
+    { id: 'BAD' }
+  ];
+  for (const root of roots) await fs.writeFile(path.join(root, 'services', 'librarian', 'mapper-rulesets.json'), JSON.stringify(mapperFixtures));
+  await compare('ruleset-legacy-list', 'GET', '/api/librarian/mapper-rulesets', undefined, 200);
+  await compare('ruleset-legacy-duplicate', 'POST', '/api/librarian/mapper-rulesets', { ...ruleset, id: 'dup' }, 409);
+  await compare('ruleset-legacy-delete-identity', 'DELETE', '/api/librarian/mapper-rulesets/A_B', undefined, 404);
+  await compare('ruleset-legacy-append-update', 'PUT', '/api/librarian/mapper-rulesets/A_B', { description: 'Added' }, 200);
+  await compare('ruleset-merge-last-visible', 'PUT', '/api/librarian/mapper-rulesets/DUP', {
+    label: null, description: null, recommended: null, priority: null, sourcePatterns: null, targetPatterns: null
+  }, 200);
+  await compare('ruleset-invalid-update-before-collision', 'PUT', '/api/librarian/mapper-rulesets/DUP', { id: 'A_B', sourcePatterns: [] }, 400);
+  await compare('ruleset-rename-collision', 'PUT', '/api/librarian/mapper-rulesets/DUP', { id: 'A_B' }, 409);
+  await compare('ruleset-update-normalization', 'PUT', '/api/librarian/mapper-rulesets/DUP', {
+    id: 'renamed-rule', label: ' \u540d ', sourcePatterns: [' A .* ', 'a.*', ' B.* '], targetPatterns: ' X.* ,x.*, Y.* ',
+    priority: '21suffix', recommended: false
+  }, 200);
+  await compare('ruleset-create-replaces-invalid-visibility', 'POST', '/api/librarian/mapper-rulesets', { ...ruleset, id: 'BAD' }, 200);
+  await compare('ruleset-delete-all-matching-raw-ids', 'DELETE', '/api/librarian/mapper-rulesets/BAD', undefined, 200);
+  await compare('ruleset-delete-renamed', 'DELETE', '/api/librarian/mapper-rulesets/RENAMED_RULE', undefined, 200);
+  await compare('ruleset-post-mutations', 'GET', '/api/librarian/mapper-rulesets', undefined, 200);
+  await compare('ruleset-delete-missing', 'DELETE', '/api/librarian/mapper-rulesets/MISSING', undefined, 404);
+  await compare('lifecycle-missing-path', 'POST', '/api/librarian/schema-lifecycle', { activeFrom: '2020-01-01' }, 400);
+  await compare('lifecycle-missing-schema', 'POST', '/api/librarian/schema-lifecycle', { path: 'missing' }, 404);
+  await compare('lifecycle-invalid-date', 'POST', '/api/librarian/schema-lifecycle', { path: 'parity.json-schema', activeFrom: 'invalid' }, 400);
+  await compare('lifecycle-invalid-order', 'POST', '/api/librarian/schema-lifecycle', {
+    path: 'parity.json-schema', activeFrom: '2100-01-01', rejectAfter: '2020-01-01'
+  }, 400);
   await compare('lifecycle-update', 'POST', '/api/librarian/schema-lifecycle', {
     path: 'parity.json-schema', activeFrom: '2020-01-01', rejectAfter: '2100-01-01', keepForDisplay: true
   }, 200);

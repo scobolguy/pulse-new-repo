@@ -6,6 +6,17 @@ import { createPascalishServiceHost } from '../../pmachines/javascript/src/servi
 import { encodeHostedImage } from '../../pmachines/shared/contracts/hosted-image.mjs';
 
 const bindings = createJsonCollectionBindings();
+test('JSON object removal checks types and removes only the requested own property', () => {
+  const value = '{"__proto__":{"safe":true},"name":"retained","nested":{"name":"retained"}}';
+  assert.deepEqual(JSON.parse(bindings['host.json_remove'](value, '__proto__')), {
+    name: 'retained', nested: { name: 'retained' }
+  });
+  assert.equal(bindings['host.json_remove']('{"a":1}', 'missing'), '{"a":1}');
+  for (const raw of ['null', '[]', 'true', '"text"', 'broken']) {
+    assert.throws(() => bindings['host.json_remove'](raw, 'a'));
+  }
+  assert.throws(() => bindings['host.json_remove']('{}', null), /member name/);
+});
 test('checked JSON arrays retain scalar types, nested objects, escaping and exact string identities', () => {
   const values = [null, true, 7, '\u540d\ud800', { nested: ['quote"', 'slash\\'] }];
   let raw = JSON.stringify(values);
