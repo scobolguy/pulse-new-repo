@@ -29,6 +29,14 @@ export function normalizeDiscoveryAnnouncement(json, peer) {
 }
 
 export async function createPascalishDiscoveryCollector(options = {}) {
+  return createDiscoveryCollector(options, 'discovery-maintenance-daemon', false);
+}
+
+export async function createPascalishPulseNodeCollector(options = {}) {
+  return createDiscoveryCollector(options, 'pulse-node-collector-daemon', true);
+}
+
+async function createDiscoveryCollector(options, daemonName, daemonOwnsUdp) {
   const {
     observationTtlMs = 180000,
     announcementIntervalMs = 60000,
@@ -39,13 +47,23 @@ export async function createPascalishDiscoveryCollector(options = {}) {
     || observationTtlMs <= announcementIntervalMs) {
     throw new Error('Observation TTL must be longer than the announcement interval and at most 180000 ms');
   }
-  const sourcePath = fileURLToPath(new URL('../../artifactPrograms/discovery-collector-service.pas', import.meta.url));
+  const sourcePath = fileURLToPath(new URL('../../src/discovery-collector-service.pas', import.meta.url));
   const source = await fs.readFile(sourcePath, 'utf8');
   const compiled = compilePascalishProgramWithAntlr(source, { fileName: sourcePath, hostServices: true });
-  const daemonPath = fileURLToPath(new URL('../../artifactPrograms/discovery-maintenance-daemon.pas', import.meta.url));
+  const tablesPath = new URL('../../src/discovery-collector-service.host-tables.json', import.meta.url);
+  const tableConfiguration = JSON.parse(await fs.readFile(tablesPath, 'utf8'));
+  if (!Array.isArray(tableConfiguration.tables)) throw new Error('Invalid discovery host table configuration');
+  compiled.programMap.hostTables = tableConfiguration.tables;
+  const daemonPath = fileURLToPath(new URL(`../../src/${daemonName}.pas`, import.meta.url));
   const daemon = compilePascalishProgramWithAntlr(await fs.readFile(daemonPath, 'utf8'), { fileName: daemonPath, hostServices: true });
+  const { udpPort = 4210, ...otherHostOptions } = hostOptions;
   return createPascalishServiceHost({
-    collectorId: 'pascalish-js-collector', ...hostOptions, compiled, daemons: [daemon],
+    collectorId: daemonOwnsUdp ? 'pulse-node-collector' : 'pascalish-js-collector',
+    ...otherHostOptions, compiled,
+    udpPort: daemonOwnsUdp ? null : udpPort,
+    daemons: daemonOwnsUdp
+      ? [{ compiled: daemon, udpPort, udpBindAddress: options.host ?? '127.0.0.1' }]
+      : [daemon],
     bindings: {
       'host.announcement': normalizeDiscoveryAnnouncement,
       'host.observation_ttl': () => observationTtlMs
