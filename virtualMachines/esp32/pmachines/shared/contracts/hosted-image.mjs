@@ -37,8 +37,12 @@ export function encodeHostedImage(pcodeText) {
       argc = operand.argc;
       text = operand.label;
       if (!Number.isInteger(argc) || argc < 0 || argc > 8) throw new Error('Invalid hosted image arity');
-      if (mnemonic === 'CALL_EXT' && SERVICE_HOST_BINDINGS[text]?.arity !== argc)
-        throw new Error('Invalid hosted image binding');
+      if (mnemonic === 'CALL_EXT') {
+        if (SERVICE_HOST_BINDINGS[text]?.arity !== argc) throw new Error('Invalid hosted image binding');
+        if (SERVICE_HOST_BINDINGS[text]?.capability || SERVICE_HOST_BINDINGS[text]?.desktopOnly || text === 'host.capabilities') {
+          throw new Error(`Desktop-only hosted image binding: ${text}`);
+        }
+      }
     } else if (['PUSH_STR', 'LOAD', 'LOAD_NAME', 'STORE', 'STORE_NAME', 'MAP_RETURN'].includes(mnemonic)) {
       text = operand;
     }

@@ -12,6 +12,7 @@ import {
   SERVICE_HOST_BINDINGS, SERVICE_HOST_BINDINGS_VERSION, SERVICE_HOST_INTERNAL_BINDINGS
 } from '../../pmachines/shared/contracts/service-host-bindings.mjs';
 import { DEVICE_BINDINGS, DEVICE_BINDINGS_VERSION } from '../../pmachines/shared/contracts/device-bindings.mjs';
+import { HOST_CAPABILITIES_VERSION } from '../../pmachines/shared/contracts/host-capabilities.mjs';
 
 const OPERATOR_METHOD_NAMES = {
   '+': 'op_add',
@@ -152,6 +153,7 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
     this.sourceLines = sourceText.split(/\r?\n/);
     this.fileName = fileName;
     this.hostServices = hostServices;
+    this.librarianImports = [];
   }
 
   visit(ctx) {
@@ -221,10 +223,12 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
       }
     }
 
+    ast.librarianImports = this.librarianImports;
     return ast;
   }
 
   visitDecl(ctx) {
+    if (ctx.importDecl()) return this.visit(ctx.importDecl());
     if (ctx.programDecl()) return this.visit(ctx.programDecl());
     if (ctx.serviceDecl()) return this.visit(ctx.serviceDecl());
     if (ctx.daemonDecl()) return this.visit(ctx.daemonDecl());
@@ -239,6 +243,16 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
     if (ctx.mapperDecl()) return this.visit(ctx.mapperDecl());
     if (ctx.libraryDecl()) return this.visit(ctx.libraryDecl());
     if (ctx.useDecl()) return this.visit(ctx.useDecl());
+    return null;
+  }
+
+  visitImportDecl(ctx) {
+    const items = ctx.librarianImportItems();
+    if (items) {
+      for (const item of items.importTarget()) {
+        this.librarianImports.push({ name: unquote(item.getText()) });
+      }
+    }
     return null;
   }
 
@@ -531,7 +545,8 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
     for (const element of ctx.serviceBodyElement() || []) {
       if (element.serviceLocalDecl && element.serviceLocalDecl()) {
         const decl = this.visit(element.serviceLocalDecl());
-        if (decl) localDecls.push(decl);
+        if (decl?.type === 'VarSection') localDecls.push(...decl.vars);
+        else if (decl) localDecls.push(...(Array.isArray(decl) ? decl : [decl]));
         continue;
       }
       if (element.serviceStmt && element.serviceStmt()) {
@@ -543,11 +558,7 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
   }
 
   visitServiceLocalDecl(ctx) {
-    if (ctx.mapperDecl()) return this.visit(ctx.mapperDecl());
-    if (ctx.typeDecl()) return this.visit(ctx.typeDecl());
-    if (ctx.libraryDecl()) return this.visit(ctx.libraryDecl());
-    if (ctx.varDecl()) return this.visit(ctx.varDecl());
-    return null;
+    return this.visit(ctx.unitDecl());
   }
 
   visitLibraryDecl(ctx) {
@@ -1061,6 +1072,7 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
   }
 
   visitUnitDecl(ctx) {
+    if (ctx.importDecl()) return this.visit(ctx.importDecl());
     if (ctx.varSection()) return this.visit(ctx.varSection());
     if (ctx.subprogramDecl()) return this.visit(ctx.subprogramDecl());
     if (ctx.typeDecl()) return this.visit(ctx.typeDecl());
@@ -3365,10 +3377,24 @@ export function compilePascalishProgramWithAntlr(sourceText, { fileName = '', ho
   const linkedLibraries = linkLibraries(ast);
   const result = new Codegen(ast).build();
 
+  if (hostServices) {
+    const calls = result.pcodeText.split(/\r?\n/)
+      .map(line => /^CALL_EXT\s+(\S+)/.exec(line)?.[1]);
+    const capabilities = [...new Set(calls
+      .map(name => SERVICE_HOST_BINDINGS[name]?.capability).filter(Boolean))].sort();
+    if (capabilities.length) {
+      result.programMap.hostCapabilitiesVersion = HOST_CAPABILITIES_VERSION;
+      result.programMap.requiredHostCapabilities = capabilities;
+      result.programMap.targets = ['js'];
+    }
+    if (calls.includes('host.capabilities')) result.programMap.targets = ['js'];
+    if (calls.some(name => SERVICE_HOST_BINDINGS[name]?.desktopOnly)) result.programMap.targets = ['js'];
+  }
   result.programMap.libraries = linkedLibraries;
   if (deviceBindings) result.programMap.deviceBindingsVersion = DEVICE_BINDINGS_VERSION;
   // Attach mapper imports to the program map
   result.programMap.mapperImports = mapperImports;
+  result.programMap.librarianImports = ast.librarianImports;
 
   return result;
 }

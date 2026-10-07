@@ -73,6 +73,7 @@
     "test:mapl:compiler": "node scripts/test-mapl-compiler.mjs",
     "test:librarian:subschemas": "node scripts/test-librarian-subschemas.mjs",
     "test:librarian:subschema-policy": "node scripts/test-librarian-subschema-policy.mjs",
+    "test:librarian:policy-parity": "node scripts/test-librarian-policy-parity.mjs",
     "test:librarian:device-descriptor": "node --test scripts/test-device-descriptor.mjs",
     "librarian:register-device-descriptor": "node scripts/register-device-descriptor.mjs",
     "test:nli:config": "node scripts/test-nli-config.mjs",

@@ -35,7 +35,8 @@ function parseCliArgs(argv) {
     backendUrl: process.env.JS_PMACHINE_BACKEND_URL || 'http://127.0.0.1:4000',
     advertiseHost: process.env.JS_PMACHINE_ADVERTISE_HOST || '127.0.0.1',
     udpAnnounceHost: process.env.JS_PMACHINE_UDP_ANNOUNCE_HOST || '127.255.255.255',
-    udpAnnouncePort: Number(process.env.JS_PMACHINE_UDP_ANNOUNCE_PORT ?? 4210)
+    udpAnnouncePort: Number(process.env.JS_PMACHINE_UDP_ANNOUNCE_PORT ?? 4210),
+    storageGrants: JSON.parse(process.env.JS_PMACHINE_STORAGE_GRANTS || '{}')
   };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -137,8 +138,12 @@ export function createJsPmachineNodeServer({
   udpAnnounceHost = '127.255.255.255',
   udpAnnouncePort = 0,
   fetchImpl = fetch,
-  logger = console
+  logger = console,
+  storageGrants = {}
 } = {}) {
+  if (!storageGrants || typeof storageGrants !== 'object' || Array.isArray(storageGrants)) {
+    throw new Error('Invalid service storage grants');
+  }
   if (!Number.isSafeInteger(udpAnnouncePort) || udpAnnouncePort < 0 || udpAnnouncePort > 65535) {
     throw new Error('UDP announcement port must be an integer from 0 to 65535');
   }
@@ -283,7 +288,6 @@ export function createJsPmachineNodeServer({
       throw Object.assign(new Error('Invalid observation TTL'), { status: 400 });
     }
 
-    if (!additional && hostedService) await hostedService.stop();
     const nextHost = await createPascalishServiceHost({
       compiled: { pcodeText: servicePcode, programMap: serviceMap },
       daemons,
@@ -292,12 +296,14 @@ export function createJsPmachineNodeServer({
       httpPort,
       udpPort: additional || sharedDaemons && !udpPort ? null : udpPort,
       networkPeers: params.has('networkPeers') ? JSON.parse(params.get('networkPeers')) : [],
+      storageRoots: Object.hasOwn(storageGrants, collectorId) ? storageGrants[collectorId] : {},
       bindings: {
         'host.announcement': normalizeDiscoveryAnnouncement,
         'host.observation_ttl': () => observationTtlMs,
       },
       logger,
     });
+    if (!additional && hostedService) await hostedService.stop();
     try {
       await nextHost.start();
     } catch (error) {

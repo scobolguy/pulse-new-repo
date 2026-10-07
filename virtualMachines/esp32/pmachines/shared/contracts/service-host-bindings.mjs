@@ -10,6 +10,10 @@ export function compactServiceHostProgramMap(map) {
     hostBindingsVersion: map.hostBindingsVersion,
     targets: map.targets,
     runtimeUnit: map.runtimeUnit,
+    ...(map.hostCapabilitiesVersion !== undefined ? { hostCapabilitiesVersion: map.hostCapabilitiesVersion } : {}),
+    ...(map.requiredHostCapabilities !== undefined ? {
+      requiredHostCapabilities: map.requiredHostCapabilities
+    } : {}),
     ...(Array.isArray(map.serviceEndpoints) ? {
       serviceEndpoints: map.serviceEndpoints.map(({ verb, path }) => ({ verb, path }))
     } : {}),
@@ -26,6 +30,15 @@ export const SERVICE_HOST_INTERNAL_BINDINGS = Object.freeze(new Set([
 ]));
 
 export const SERVICE_HOST_BINDINGS = Object.freeze({
+  'host.capabilities': { arity: 0, result: 'string' },
+  'host.fs_list': { arity: 4, args: ['string', 'string', 'string', 'integer'], result: 'string', capability: 'filesystem.read' },
+  'host.fs_stat': { arity: 2, args: ['string', 'string'], result: 'string', capability: 'filesystem.read' },
+  'host.fs_exists': { arity: 2, args: ['string', 'string'], result: 'integer', capability: 'filesystem.read' },
+  'host.fs_read_text': { arity: 2, args: ['string', 'string'], result: 'string', capability: 'filesystem.read' },
+  'host.fs_write_text': { arity: 3, args: ['string', 'string', 'string'], result: 'integer', capability: 'filesystem.write' },
+  'host.fs_mkdir': { arity: 2, args: ['string', 'string'], result: 'integer', capability: 'filesystem.write' },
+  'host.fs_rename': { arity: 3, args: ['string', 'string', 'string'], result: 'integer', capability: 'filesystem.write' },
+  'host.fs_delete': { arity: 2, args: ['string', 'string'], result: 'integer', capability: 'filesystem.write' },
   'host.clock': { arity: 0, result: 'integer' },
   'host.event_body': { arity: 0, result: 'string' },
   'host.event_bytes': { arity: 0, result: 'string' },
@@ -53,6 +66,12 @@ export const SERVICE_HOST_BINDINGS = Object.freeze({
   'host.json_set': { arity: 3, args: ['string', 'string', 'scalar'], result: 'string' },
   'host.json_embed': { arity: 3, args: ['string', 'string', 'string'], result: 'string' },
   'host.json_merge': { arity: 2, args: ['string', 'string'], result: 'string' },
+  'host.json_array_count': { arity: 1, args: ['string'], result: 'integer', desktopOnly: true },
+  'host.json_array_get': { arity: 2, args: ['string', 'integer'], result: 'string', desktopOnly: true },
+  'host.json_array_append': { arity: 2, args: ['string', 'string'], result: 'string', desktopOnly: true },
+  'host.json_array_set': { arity: 3, args: ['string', 'integer', 'string'], result: 'string', desktopOnly: true },
+  'host.json_array_remove': { arity: 2, args: ['string', 'integer'], result: 'string', desktopOnly: true },
+  'host.json_format': { arity: 2, args: ['string', 'integer'], result: 'string', desktopOnly: true },
   'host.json_append': { arity: 3, args: ['string', 'string', 'scalar'], result: 'string' },
   'host.raise_error': { arity: 1, args: ['string'], result: 'integer' },
   'host.table_get': { arity: 2, args: ['string', 'string'], result: 'string' },

@@ -10,6 +10,9 @@ import { createNetworkBindings } from './network-bindings.mjs';
 import { createByteBufferBindings } from './byte-buffer.mjs';
 import { createBoundedTextBindings } from './bounded-text.mjs';
 import { createHostCacheStore } from './host-cache.mjs';
+import { createFilesystemBindings } from './filesystem-bindings.mjs';
+import { createJsonCollectionBindings } from './json-collection-bindings.mjs';
+import { HOST_CAPABILITIES_VERSION, HOST_PROFILES, assertHostCapabilities } from '../../shared/contracts/host-capabilities.mjs';
 
 function failure(message, status = 400) {
   return Object.assign(new Error(message), { status });
@@ -37,7 +40,7 @@ export async function createPascalishServiceHost({
   maxEntries = 255, maxTables = 4, maxEvents = 16, maxBodyBytes = 4096,
   maxStorageBytes = 131072, maxResponseBytes = 262144, maxSteps = 100000, maxExecutionMs = 2000,
   maxTimers = 8, maxDaemonDatagramBytes = 1024, clock = () => Math.floor(performance.now()), logger = console,
-  onDaemonEvent = null
+  onDaemonEvent = null, storageRoots = {}, maxFileBytes = 262144
 }) {
   if (compiled?.programMap?.hostBindingsVersion !== SERVICE_HOST_BINDINGS_VERSION
     || compiled.programMap.runtimeUnit?.kind !== 'service') throw failure('Unsupported service host contract');
@@ -49,7 +52,19 @@ export async function createPascalishServiceHost({
     integer(value, 1, 1000000, name);
   }
   integer(maxSteps, 1, 200000, 'maxSteps');
+  integer(maxFileBytes, 1, 1000000, 'maxFileBytes');
   const instructions = parsePcode(compiled.pcodeText);
+  const filesystem = await createFilesystemBindings(storageRoots, {
+    maxFileBytes: Math.min(maxFileBytes, maxResponseBytes), maxPageBytes: maxResponseBytes
+  });
+  const capabilities = {
+    version: HOST_CAPABILITIES_VERSION,
+    ...HOST_PROFILES.js,
+    filesystem: filesystem.roots,
+    supported: filesystem.capabilities,
+    limits: { maxBodyBytes, maxResponseBytes, maxSteps, maxExecutionMs, ...filesystem.limits }
+  };
+  assertHostCapabilities(compiled.programMap, instructions, capabilities.supported);
   const mappingsById = parseProgramMapMappings(compiled.programMap);
   const opcodeMap = await loadOpcodeMap();
   const units = new Map();
@@ -74,6 +89,7 @@ export async function createPascalishServiceHost({
     if (multicastInterface !== '' && (net.isIP(multicastInterface) !== 4 || !multicastGroup)) throw failure('Invalid multicast interface');
     const map = daemon?.programMap;
     if (map?.hostBindingsVersion !== SERVICE_HOST_BINDINGS_VERSION || map.runtimeUnit?.kind !== 'daemon') throw failure('Expected a hosted daemon');
+    assertHostCapabilities(map, parsePcode(daemon.pcodeText), capabilities.supported);
     createHostCacheStore(map.hostCaches, { clock });
     for (const definition of map.hostCaches || []) {
       const serviceDefinition = compiled.programMap.hostCaches?.find(item => item.name === definition.name);
@@ -210,6 +226,9 @@ export async function createPascalishServiceHost({
         return value;
       };
       const handlers = {
+        ...filesystem.handlers,
+        ...createJsonCollectionBindings(),
+        'host.capabilities': () => JSON.stringify(capabilities),
         ...networkBindings,
         ...byteBindings,
         ...createBoundedTextBindings(),
@@ -469,7 +488,7 @@ export async function createPascalishServiceHost({
           const requestPath = requestUrl.pathname;
           if (req.method === 'GET' && requestPath === '/pmachine/service_host/status') {
             res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
-              .end(JSON.stringify({ running, collectorId, bootId,
+              .end(JSON.stringify({ running, collectorId, bootId, capabilities,
                 daemons: [...units.values()].map(unit => ({ id: unit.id, ...unit.stats })) }));
             return;
           }
@@ -544,7 +563,7 @@ export async function createPascalishServiceHost({
       enabled: running,
       daemons: [...units.keys()]
     }),
-    getStatus: () => ({ running, pending, timers: timers.size, daemons: units.size, storageBytes,
+    getStatus: () => ({ running, pending, timers: timers.size, daemons: units.size, storageBytes, capabilities,
       entries: [...tables.values()].reduce((count, entries) => count + entries.size, 0), bootId, collectorId,
       httpPort: server?.listening ? server.address().port : null,
       udpPort: running && udpBound ? socket.address().port : null,

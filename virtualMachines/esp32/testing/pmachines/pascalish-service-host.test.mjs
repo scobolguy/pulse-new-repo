@@ -148,11 +148,28 @@ begin end.`);
   assert.equal(compiled.ast.runtimeUnit.localVariables[0].dataType.id, 'payment');
   assert.throws(() => compilePascalishProgramWithAntlr(`service 'bad-import';
 import dataTypes, from data librarian;
-begin end.`), /non-empty item list/);
+begin end.`), /Parse failed/);
 
   const collectorSource = await fs.readFile(new URL('../../src/discovery-collector-service.pas', import.meta.url), 'utf8');
   const collector = compile(collectorSource);
-  assert.deepEqual(collector.programMap.librarianImports, [{ name: 'dataTypes' }, { name: 'schemas' }]);
+  assert.deepEqual(collector.programMap.librarianImports, []);
+});
+
+test('Data Librarian import metadata comes from parsed declarations across runtime units', () => {
+  for (const source of [
+    `program 'imports'; import "quoted.type", payment from data librarian; begin end.`,
+    `daemon 'imports' every 60000 ms; import "quoted.type", payment from data librarian; begin end.`,
+    `service 'imports'; begin import "quoted.type", payment from data librarian; end.`,
+    `import "quoted.type", payment from data librarian; program 'imports'; begin end.`
+  ]) {
+    const compiled = compilePascalishProgramWithAntlr(source);
+    assert.deepEqual(compiled.programMap.librarianImports, [{ name: 'quoted.type' }, { name: 'payment' }]);
+    assert.equal(compiled.programMap.librarianImportData, undefined);
+  }
+  const compiled = compile(`service 'no-imports';
+// import fake from data librarian;
+get '/'; begin return 'import fake from data librarian;' end end.`);
+  assert.deepEqual(compiled.programMap.librarianImports, []);
 });
 
 test('Pascalish compiles dotted record field reads and writes', async () => {
@@ -179,7 +196,10 @@ end.`);
 
 test('discovery collector compilation preserves imports without attaching runtime catalog data', async () => {
   const source = await fs.readFile(new URL('../../src/discovery-collector-service.pas', import.meta.url), 'utf8');
-  const compiled = compilePascalishProgramWithAntlr(source, { hostServices: true });
+  const compiled = compilePascalishProgramWithAntlr(source.replace(
+    "service 'pascalish-discovery-collector';",
+    "service 'pascalish-discovery-collector';\nimport dataTypes, schemas from data librarian;"
+  ), { hostServices: true });
   assert.deepEqual(compiled.programMap.librarianImports, [{ name: 'dataTypes' }, { name: 'schemas' }]);
   assert.equal(compiled.programMap.librarianImportData, undefined);
 });

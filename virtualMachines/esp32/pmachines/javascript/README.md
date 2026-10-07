@@ -13,3 +13,71 @@ Run the shared conformance suite from `aggregator` with `node scripts/test-pmach
 Pascalish supports fixed-point `decimal(precision, scale)` declarations, the `decimal(value)` conversion, and `ROUNDED` assignments. Bare `decimal` defaults to precision 18 and scale 0; `decimal(p)` defaults to scale 0. Precision must be a positive integer, and scale must be an integer from 0 through precision. Assignment fixes the receiving field's scale, truncating by default or rounding half-up away from zero with `ROUNDED`. Decimal literals retain their original digits rather than passing through floating point.
 
 Run the compiler-to-runtime decimal regression from `aggregator` with `node scripts/test-decimal-arithmetic.mjs`. After editing `aggregator/grammar/Pascalish.g4`, regenerate its JavaScript parser with the repository's ANTLR 4.13.2 tool before testing.
+
+## Desktop host capabilities and storage
+
+The hosted compiler and runtime share a versioned [capability contract](../shared/contracts/host-capabilities.mjs). The current desktop adapter provides `filesystem.read` and `filesystem.write`; ESP32 does not provide these desktop filesystem calls. Programs using them (or `host.capabilities`) target `js` only, and the ESP32 image encoder explicitly refuses them. Existing portable programs retain their targets, ABI and network limits. ESP32 transport chunking is unchanged.
+
+Hosted maps carry `hostCapabilitiesVersion: 1` and `requiredHostCapabilities` when filesystem calls occur. Installation checks both the map and actual P-code for the service and every daemon, so removing requirements from a map does not bypass the check. Missing grants and unknown capabilities reject installation before an existing service is stopped.
+
+Storage is default-deny. Supply trusted operator configuration, not paths from an HTTP request:
+
+```js
+const host = await createPascalishServiceHost({
+  compiled, collectorId: 'catalog',
+  storageRoots: {
+    catalog: { path: 'C:\\Pulse\\catalog', readOnly: false },
+    reference: { path: 'C:\\Pulse\\reference' } // read-only by default
+  }
+});
+```
+
+Roots must already exist and be real directories. The [deployment server](./server.mjs) accepts `storageGrants`, keyed by collector ID, or the equivalent JSON in `JS_PMACHINE_STORAGE_GRANTS`:
+
+```json
+{"catalog":{"catalog":{"path":"C:\\Pulse\\catalog","readOnly":false}}}
+```
+
+An installation request only selects the collector ID; it cannot supply or expand grants. Services and their daemons share that collector's roots. The existing stop-before-reinstall rule remains: attempting to replace a running primary service returns 409. Denied additional installations leave the primary service running. Status and `host.capabilities()` expose the desktop profile, granted capability IDs, root aliases/read-only flags and effective limits, never physical root paths.
+
+### Pascalish bindings
+
+All paths below are relative to a named root. Both slash separators are accepted. Successful mutations return integer `0`; failures throw and produce an explicit HTTP error when called from an HTTP handler.
+
+| Binding | Result |
+| --- | --- |
+| `host.capabilities()` | JSON capability/profile descriptor |
+| `host.fs_stat(root, path)` | JSON `{name, kind, size, modifiedAt}` |
+| `host.fs_exists(root, path)` | Integer `1` if present or `0` for ENOENT only; denied/invalid paths and missing roots remain errors |
+| `host.fs_list(root, path, cursor, limit)` | JSON `{entries: [{name, kind, size, modifiedAt}], nextCursor}` |
+| `host.fs_read_text(root, path)` | Strict UTF-8 text |
+| `host.fs_write_text(root, path, text)` | Atomic file replacement; parent must exist |
+| `host.fs_mkdir(root, path)` | Create a single directory, not recursively |
+| `host.fs_rename(root, source, destination)` | Rename within a root; destination must not exist |
+| `host.fs_delete(root, path)` | Delete a regular file only, never recursively |
+
+List/stat accept `''` or `'.'` for the root. Start listing with cursor `''`; pass `nextCursor` to continue until it is empty. Entries are sorted by JavaScript string order, with `kind` either `file` or `directory`, byte `size`, and ISO UTC `modifiedAt`. Pages are not a snapshot: directory changes between calls can change their contents. Limit is 1..1000; scans retain only the next bounded page in memory. Reduce the requested limit if the serialized page exceeds its byte budget.
+
+Default file and directory-page limits are 262144 bytes. `createPascalishServiceHost` accepts `maxFileBytes` and caps it at `maxResponseBytes`; directory pages use `maxResponseBytes`. Limits are reported by the descriptor. These are local desktop budgets, not an expansion of the existing 4096-byte network binding/HTTP intake defaults. Missing files return 404, denied access 403, existing rename destinations 409 and capacity overflow 413. Invalid paths/arguments and invalid UTF-8 never return success-shaped empty results.
+
+Paths reject traversal, absolute paths, Windows alternate streams/device names, links/junctions and regular-file hard links. Writes use exclusive sibling temporary files, sync and rename, with cleanup on failure. Operations observe host cancellation before starting OS mutations and writes check again before replacement; an already-submitted OS mutation cannot be rolled back by cancellation.
+
+**Ownership assumption:** roots must be operator-owned and must not be concurrently replaced by an untrusted external process. Portable Node path checks cannot close every check-to-I/O race; this is confined application storage, not a general-purpose OS sandbox. Atomic replacement is not a multi-file transaction or a guarantee of directory-metadata durability after power loss.
+
+This establishes the application/VM/platform boundary for a future native C/C++ adapter using the same binding semantics. It does not yet migrate all Librarian persistence to Pascalish or implement a native runtime.
+
+Desktop hosted services also provide checked `host.json_array_count(json)`,
+`host.json_array_get(json, index)`, `host.json_array_append(json, serializedItem)`,
+`host.json_array_set(json, index, serializedItem)`, `host.json_array_remove(json, index)`
+and `host.json_format(json, indent)`. Indices are zero-based; format indentation is 0..10.
+Array operations return serialized JSON except `count`, which returns an integer.
+The Pascalish `JSONArrays` library wraps these as `JSONArray`. These generic primitives
+do not implement catalog policy, require no storage grant, and do not exist on ESP32:
+compiler targets and image generation enforce that boundary. They reparse serialized
+values on each call, with output bounded by `maxResponseBytes`.
+
+Run the storage contract and hosted-runtime tests from the ESP32 workspace:
+
+```powershell
+node --test testing\pmachines\filesystem-bindings.test.mjs testing\pmachines\pascalish-service-host.test.mjs
+```
