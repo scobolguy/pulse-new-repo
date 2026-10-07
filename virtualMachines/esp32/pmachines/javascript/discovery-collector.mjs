@@ -56,13 +56,14 @@ async function createDiscoveryCollector(options, daemonName, daemonOwnsUdp) {
   compiled.programMap.hostTables = tableConfiguration.tables;
   const daemonPath = fileURLToPath(new URL(`../../src/${daemonName}.pas`, import.meta.url));
   const daemon = compilePascalishProgramWithAntlr(await fs.readFile(daemonPath, 'utf8'), { fileName: daemonPath, hostServices: true });
-  const { udpPort = 4210, ...otherHostOptions } = hostOptions;
+  const { udpPort = 4210, udpHost = options.host ?? '127.0.0.1', ...otherHostOptions } = hostOptions;
   return createPascalishServiceHost({
     collectorId: daemonOwnsUdp ? 'pulse-node-collector' : 'pascalish-js-collector',
     ...otherHostOptions, compiled,
     udpPort: daemonOwnsUdp ? null : udpPort,
     daemons: daemonOwnsUdp
-      ? [{ compiled: daemon, udpPort, udpBindAddress: options.host ?? '127.0.0.1' }]
+      // Shared so the collector can run beside the Network backend, which also listens on 4210.
+      ? [{ compiled: daemon, udpPort, udpShared: true, udpBindAddress: udpHost }]
       : [daemon],
     bindings: {
       'host.announcement': normalizeDiscoveryAnnouncement,

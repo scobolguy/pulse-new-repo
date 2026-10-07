@@ -63,15 +63,19 @@ export function registerFlowDeploymentRoutes(app, { runtimeRoot }) {
 
   async function getPlacementNodes() {
     const provider = app.locals.discoveryProvider;
-    if (provider?.mode !== 'remote') return app.locals.esp32NodeRegistry?.getAllNodes?.() || [];
+    const registryNodes = app.locals.esp32NodeRegistry?.getAllNodes?.() || [];
+    if (!['remote', 'hybrid'].includes(provider?.mode)) return registryNodes;
     const nodes = app.locals.getCurrentNodesWithTopology
       ? await app.locals.getCurrentNodesWithTopology()
       : provider.getNodes();
-    return nodes.filter((node) => node.available !== false && node.availability?.available !== false
+    const discovered = nodes.filter((node) => node.available !== false && node.availability?.available !== false
       && !node.draining && !node.availability?.draining
       && Array.isArray(node.details?.services) && node.details.services.some((service) =>
         String(typeof service === 'string' ? service : service?.name || service?.serviceName || '')
           .toLowerCase().includes('pmachine')));
+    if (provider.mode === 'remote') return discovered;
+    const registryIds = new Set(registryNodes.map((node) => String(node.nodeId || node.id || '')));
+    return [...registryNodes, ...discovered.filter((node) => !registryIds.has(String(node.nodeId || node.id || '')))];
   }
 
   async function findPlacementNode(nodeId) {

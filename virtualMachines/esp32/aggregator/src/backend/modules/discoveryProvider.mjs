@@ -11,7 +11,7 @@ function positiveInteger(value, fallback, name) {
 
 export function readDiscoveryProviderConfig(env = process.env) {
   const mode = String(env.PULSE_DISCOVERY_MODE || 'local').trim().toLowerCase();
-  if (!['local', 'remote'].includes(mode)) throw new Error('PULSE_DISCOVERY_MODE must be local or remote');
+  if (!['local', 'remote', 'hybrid'].includes(mode)) throw new Error('PULSE_DISCOVERY_MODE must be local, remote or hybrid');
   const collectorUrls = [...new Set(String(env.PULSE_DISCOVERY_COLLECTOR_URLS || '').split(',')
     .map((value) => value.trim()).filter(Boolean).map((value) => {
       const url = new URL(value);
@@ -20,7 +20,7 @@ export function readDiscoveryProviderConfig(env = process.env) {
       }
       return url.origin;
     }))];
-  if (mode === 'remote' && collectorUrls.length === 0) throw new Error('Remote discovery requires PULSE_DISCOVERY_COLLECTOR_URLS');
+  if (mode !== 'local' && collectorUrls.length === 0) throw new Error(`${mode === 'remote' ? 'Remote' : 'Hybrid'} discovery requires PULSE_DISCOVERY_COLLECTOR_URLS`);
   return {
     mode, collectorUrls,
     pollIntervalMs: positiveInteger(env.PULSE_DISCOVERY_POLL_INTERVAL_MS, 5000, 'PULSE_DISCOVERY_POLL_INTERVAL_MS'),
@@ -39,19 +39,70 @@ export function createDiscoveryProvider({
   localOptions = {},
   createLocalRuntime = createLocalDiscoveryRuntime
 }) {
+  const createLocal = () => createLocalRuntime({ ...localOptions, discoveredNodes, fetchImpl, logger });
+  const remoteOptions = { config, discoveredNodes, fetchImpl, now, wallNow, logger, onNodesChanged };
   if (config.mode === 'local') {
-    const runtime = createLocalRuntime({ ...localOptions, discoveredNodes, fetchImpl, logger });
+    const runtime = createLocal();
     return {
       mode: 'local',
       start: () => runtime.start(),
       stop: () => runtime.stop(),
       announce: (payload) => runtime.announce(payload),
+      broadcastBeacon: (payload) => runtime.announce(payload),
       getNodes: () => { pruneDiscoveryNodes(discoveredNodes); return [...discoveredNodes.values()]; },
       getStatus: () => ({ mode: 'local', ...runtime.getStatus() })
     };
   }
-  if (config.mode !== 'remote' || !config.collectorUrls?.length) throw new Error('Invalid discovery provider configuration');
+  if (!['remote', 'hybrid'].includes(config.mode) || !config.collectorUrls?.length) throw new Error('Invalid discovery provider configuration');
+  if (config.mode === 'remote') {
+    const remote = createRemoteDiscovery(remoteOptions);
+    return { ...remote, broadcastBeacon: async () => ({ skipped: true, reason: 'remote discovery has no local UDP intake' }) };
+  }
 
+  const runtime = createLocal();
+  const remote = createRemoteDiscovery({ ...remoteOptions, isShadowed: (node) => isHeardLocally(discoveredNodes, node) });
+  return {
+    mode: 'hybrid',
+    async start() {
+      await runtime.start();
+      try {
+        await remote.start();
+      } catch (error) {
+        await runtime.stop();
+        throw error;
+      }
+    },
+    async stop() { await Promise.all([runtime.stop(), remote.stop()]); },
+    refresh: () => remote.refresh(),
+    announce: (body) => remote.announce(body),
+    broadcastBeacon: (payload) => runtime.announce(payload),
+    getNodes() {
+      pruneDiscoveryNodes(discoveredNodes);
+      return remote.getNodes();
+    },
+    getStatus() {
+      const local = runtime.getStatus();
+      const { collectors, status: remoteStatus } = remote.getStatus();
+      const status = local.status === 'healthy' && remoteStatus === 'healthy' ? 'healthy'
+        : local.status === 'healthy' || remoteStatus !== 'unavailable' ? 'degraded' : 'unavailable';
+      return { mode: 'hybrid', running: local.running, status, local, collectors };
+    }
+  };
+}
+
+// In hybrid mode the backend's own UDP observation wins over a collector's copy of the same node.
+function isHeardLocally(discoveredNodes, remoteNode) {
+  const remoteId = String(remoteNode.nodeId || '').trim();
+  const remoteEndpoint = `${remoteNode.ip}:${Number(remoteNode.port || 80)}`;
+  for (const [key, node] of discoveredNodes) {
+    if (key.startsWith('collector:')) continue;
+    if (remoteId && (String(node.nodeId || '').trim() === remoteId || String(node.nodeName || '').trim() === remoteId)) return true;
+    if (`${node.ip || key}:${Number(node.port || node.httpPort || 80)}` === remoteEndpoint) return true;
+  }
+  return false;
+}
+
+function createRemoteDiscovery({ config, discoveredNodes, fetchImpl, now, wallNow, logger, onNodesChanged, isShadowed = () => false }) {
   const collectors = config.collectorUrls.map((url) => ({
     url, collectorId: null, bootId: null, sequence: -1, retiredBootIds: new Set(),
     observations: new Map(), reachable: false, lastSuccessAt: null, error: null
@@ -81,6 +132,10 @@ export function createDiscoveryProvider({
     ownedKeys.clear();
     const nodes = [];
     for (const [id, observation] of merged) {
+      if (isShadowed(observation.node)) {
+        merged.delete(id);
+        continue;
+      }
       const remaining = observation.deadline - timestamp;
       const node = {
         ...observation.node,

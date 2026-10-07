@@ -38,7 +38,9 @@ function harness(urls = ['http://collector-a', 'http://collector-b']) {
 
 test('local is the default and remote configuration fails explicitly when invalid', () => {
   assert.equal(readDiscoveryProviderConfig({}).mode, 'local');
-  assert.throws(() => readDiscoveryProviderConfig({ PULSE_DISCOVERY_MODE: 'hybrid' }), /local or remote/);
+  assert.throws(() => readDiscoveryProviderConfig({ PULSE_DISCOVERY_MODE: 'gossip' }), /local, remote or hybrid/);
+  assert.throws(() => readDiscoveryProviderConfig({ PULSE_DISCOVERY_MODE: 'hybrid' }), /Hybrid discovery requires/);
+  assert.equal(readDiscoveryProviderConfig({ PULSE_DISCOVERY_MODE: 'hybrid', PULSE_DISCOVERY_COLLECTOR_URLS: 'http://a' }).mode, 'hybrid');
   assert.throws(() => readDiscoveryProviderConfig({ PULSE_DISCOVERY_MODE: 'remote' }), /requires/);
   assert.throws(() => readDiscoveryProviderConfig({ PULSE_DISCOVERY_COLLECTOR_URLS: 'ftp://host' }), /HTTP/);
   assert.throws(() => readDiscoveryProviderConfig({ PULSE_DISCOVERY_COLLECTOR_URLS: 'http://user:password@host' }), /credentials/);
@@ -223,13 +225,15 @@ test('local runtime owns UDP receipt, acknowledgements and port-aware bounded en
   const sender = dgram.createSocket('udp4');
   try {
     await runtime.start();
-    const acknowledgement = new Promise((resolve) => sender.once('message', (message) => resolve(JSON.parse(message.toString()))));
+    const acknowledgement = new Promise((resolve) => sender.once('message', (message, info) => resolve({ ...JSON.parse(message.toString()), from: info.port })));
     const data = Buffer.from(JSON.stringify({ kind: 'nodeBeacon', nodeId: 'board', port: 8080, available: true }));
     sender.send(data, runtime.getStatus().udpPort, '127.0.0.1');
     const node = await announced;
     assert.equal(node.nodeId, 'board');
     assert.equal(node.beacon.kind, 'nodeBeacon');
-    assert.equal((await acknowledgement).kind, 'nodeBeaconAck');
+    const ack = await acknowledgement;
+    assert.equal(ack.kind, 'nodeBeaconAck');
+    assert.equal(ack.from, runtime.getStatus().replyPort, 'Replies leave from the private socket, not the shared port');
     assert.equal(requests.length, 2);
     assert.ok(requests.every((url) => url.startsWith('http://127.0.0.1:8080/')));
   } finally {
@@ -238,13 +242,78 @@ test('local runtime owns UDP receipt, acknowledgements and port-aware bounded en
   }
 });
 
-test('local discovery bind conflicts reject startup', async () => {
-  const first = createLocalDiscoveryRuntime({ discoveredNodes: new Map(), udpPort: 0, probeEnabled: false, logger });
+test('local discovery shares its UDP port and every listener hears broadcasts', async () => {
+  const heard = [[], []];
+  const fetchImpl = async () => new Response('{}');
+  const first = createLocalDiscoveryRuntime({ discoveredNodes: new Map(), udpPort: 0, probeEnabled: false, logger, fetchImpl, onNode: (node) => heard[0].push(node.nodeId) });
   await first.start();
-  const second = createLocalDiscoveryRuntime({ discoveredNodes: new Map(), udpPort: first.getStatus().udpPort, probeEnabled: false, logger });
+  const second = createLocalDiscoveryRuntime({ discoveredNodes: new Map(), udpPort: first.getStatus().udpPort, probeEnabled: false, logger, fetchImpl, onNode: (node) => heard[1].push(node.nodeId) });
   try {
-    await assert.rejects(second.start(), { code: 'EADDRINUSE' });
+    await second.start();
+    assert.equal(second.getStatus().udpPort, first.getStatus().udpPort);
+    assert.notEqual(first.getStatus().replyPort, second.getStatus().replyPort);
+    await first.announce({ kind: 'nodeBeacon', nodeId: 'board', available: true });
+    for (let attempt = 0; attempt < 50 && heard.some((ids) => ids.length === 0); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.deepEqual(heard, [['board'], ['board']]);
   } finally {
-    await first.stop();
+    await Promise.all([first.stop(), second.stop()]);
+  }
+});
+
+function hybridHarness() {
+  const discoveredNodes = new Map();
+  const beacons = [];
+  let localRunning = false;
+  let collector = snapshot('a', [observation('board'), { ...observation('js-1'), ip: '127.0.0.1', port: 4111 }]);
+  const provider = createDiscoveryProvider({
+    config: { mode: 'hybrid', collectorUrls: ['http://collector-a'], timeoutMs: 100, pollIntervalMs: 60000 },
+    discoveredNodes, logger,
+    createLocalRuntime: () => ({
+      start: async () => { localRunning = true; },
+      stop: async () => { localRunning = false; },
+      announce: async (payload) => { beacons.push(payload); },
+      getStatus: () => ({ running: localRunning, status: localRunning ? 'healthy' : 'unavailable', udpPort: 4210 })
+    }),
+    fetchImpl: async () => {
+      if (collector instanceof Error) throw collector;
+      return new Response(JSON.stringify(collector), { headers: { 'content-type': 'application/json' } });
+    }
+  });
+  return { provider, discoveredNodes, beacons, setCollector: (value) => { collector = value; } };
+}
+
+test('hybrid prefers locally heard nodes and adds collector-only nodes', async () => {
+  const h = hybridHarness();
+  h.discoveredNodes.set('192.0.2.10', { nodeId: 'board', ip: '192.0.2.10', lastSeen: Date.now(), beacon: { seenAt: Date.now() } });
+  await h.provider.start();
+  try {
+    const nodes = h.provider.getNodes();
+    assert.deepEqual(nodes.map((node) => node.nodeId).sort(), ['board', 'js-1']);
+    assert.equal(nodes.find((node) => node.nodeId === 'board').discovery, undefined, 'Local observation wins');
+    assert.equal(nodes.find((node) => node.nodeId === 'js-1').discovery.provider, 'remote');
+    const status = h.provider.getStatus();
+    assert.equal(status.mode, 'hybrid');
+    assert.equal(status.status, 'healthy');
+    assert.equal(status.local.udpPort, 4210);
+    await h.provider.broadcastBeacon({ kind: 'nodeBeacon', nodeId: 'aggregator' });
+    assert.equal(h.beacons.length, 1);
+  } finally {
+    await h.provider.stop();
+  }
+});
+
+test('hybrid keeps local discovery when collectors are unreachable', async () => {
+  const h = hybridHarness();
+  h.setCollector(new Error('offline'));
+  h.discoveredNodes.set('192.0.2.20', { nodeId: 'local-board', ip: '192.0.2.20', lastSeen: Date.now(), beacon: { seenAt: Date.now() } });
+  await h.provider.start();
+  try {
+    assert.deepEqual(h.provider.getNodes().map((node) => node.nodeId), ['local-board']);
+    assert.equal(h.provider.getStatus().status, 'degraded');
+    await assert.rejects(h.provider.announce({ nodeId: 'js-2', ip: '127.0.0.1', port: 4112 }), /No discovery collector/);
+  } finally {
+    await h.provider.stop();
   }
 });

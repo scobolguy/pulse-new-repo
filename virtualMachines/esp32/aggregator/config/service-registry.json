@@ -19,7 +19,7 @@
       "public": true,
       "autoStart": true,
       "portEnvVar": "DISCOVERY_HTTP_PORT",
-      "description": "Standalone node discovery collector and service catalog. Provides discovery snapshot protocol v1 for PULSE_DISCOVERY_MODE=remote. Must not share its UDP bind with an Aggregator in local discovery mode."
+      "description": "Standalone node discovery collector and service catalog. Provides discovery snapshot protocol v1 for PULSE_DISCOVERY_MODE=remote or hybrid. The Aggregator binds UDP 4210 with SO_REUSEADDR, so it can share that port with collector daemons that do the same."
     },
     "broker": {
       "name": "Pulse Broker",

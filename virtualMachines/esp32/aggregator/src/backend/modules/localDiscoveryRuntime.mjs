@@ -19,19 +19,22 @@ export function createLocalDiscoveryRuntime({
   probeTimeoutMs = 1500,
   fetchImpl = fetch,
   logger = console,
-  createSocket = () => dgram.createSocket('udp4')
+  createSocket = () => dgram.createSocket({ type: 'udp4', reuseAddr: true })
 }) {
   const enrichmentAttempts = new Map();
   let socket;
+  // Port 4210 is shared with collector daemons, so unicast replies to it may land elsewhere.
+  // Outgoing traffic uses a private ephemeral socket whose replies only this runtime receives.
+  let replySocket;
   let probeTimer;
   let cleanupTimer;
   let running = false;
   let probing = false;
 
   function send(host, port, payload) {
-    if (!socket || !running) throw new Error('Local discovery is not running');
+    if (!replySocket || !running) throw new Error('Local discovery is not running');
     const message = Buffer.from(JSON.stringify(payload));
-    return new Promise((resolve, reject) => socket.send(message, port, host, (error) => error ? reject(error) : resolve()));
+    return new Promise((resolve, reject) => replySocket.send(message, port, host, (error) => error ? reject(error) : resolve()));
   }
 
   function enrich(key) {
@@ -133,24 +136,43 @@ export function createLocalDiscoveryRuntime({
     }
   }
 
+  async function openSocket(port) {
+    const created = createSocket();
+    created.on('message', onMessage);
+    created.on('error', (error) => logger.error(`[DISCOVERY] UDP ${port}: ${error.message}`));
+    try {
+      await bindNodeDiscoverySocket(created, port);
+      return created;
+    } catch (error) {
+      await closeSocket(created);
+      throw error;
+    }
+  }
+
+  async function closeSocket(target) {
+    if (!target) return;
+    target.removeListener('message', onMessage);
+    await new Promise((resolve) => {
+      try { target.close(resolve); } catch (error) {
+        if (error.code !== 'ERR_SOCKET_DGRAM_NOT_RUNNING') logger.warn(`[DISCOVERY] Socket cleanup: ${error.message}`);
+        resolve();
+      }
+    });
+  }
+
   return {
     async start() {
       if (running) return;
-      socket = createSocket();
-      socket.on('message', onMessage);
-      socket.on('error', (error) => logger.error(`[DISCOVERY] UDP ${udpPort}: ${error.message}`));
+      socket = await openSocket(udpPort);
       try {
-        await bindNodeDiscoverySocket(socket, udpPort);
+        replySocket = await openSocket(0);
       } catch (error) {
-        socket.removeListener('message', onMessage);
-        try { socket.close(); } catch (closeError) {
-          if (closeError.code !== 'ERR_SOCKET_DGRAM_NOT_RUNNING') logger.warn(`[DISCOVERY] Socket cleanup: ${closeError.message}`);
-        }
+        await closeSocket(socket);
         socket = undefined;
         throw error;
       }
       running = true;
-      logger.log(`[DISCOVERY] Local UDP listener on ${socket.address().port}`);
+      logger.log(`[DISCOVERY] Shared UDP listener on ${socket.address().port}, replies from ${replySocket.address().port}`);
       cleanupTimer = setInterval(() => {
         pruneDiscoveryNodes(discoveredNodes);
         for (const key of enrichmentAttempts.keys()) if (!discoveredNodes.has(key)) enrichmentAttempts.delete(key);
@@ -166,12 +188,17 @@ export function createLocalDiscoveryRuntime({
       running = false;
       clearInterval(probeTimer);
       clearInterval(cleanupTimer);
-      if (socket) {
-        await new Promise((resolve) => socket.close(resolve));
-        socket = undefined;
-      }
+      await Promise.all([closeSocket(socket), closeSocket(replySocket)]);
+      socket = undefined;
+      replySocket = undefined;
     },
-    announce(payload) { return send('255.255.255.255', udpPort, payload); },
-    getStatus() { return { running, status: running ? 'healthy' : 'unavailable', udpPort: socket && running ? socket.address().port : udpPort }; }
+    announce(payload) { return send('255.255.255.255', socket && running ? socket.address().port : udpPort, payload); },
+    getStatus() {
+      return {
+        running, status: running ? 'healthy' : 'unavailable', shared: true,
+        udpPort: socket && running ? socket.address().port : udpPort,
+        replyPort: replySocket && running ? replySocket.address().port : null
+      };
+    }
   };
 }

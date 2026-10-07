@@ -67,12 +67,15 @@ export function recordNodeAnnouncement(discoveredNodes, announcement, now = Date
   return node;
 }
 
-export function registerNodeAnnouncementRoute(app, { discoveredNodes, discoveryProvider, upsertServiceInstance, logger = console }) {
+export function registerNodeAnnouncementRoute(app, {
+  discoveredNodes, discoveryProvider, getDiscoveryProvider = () => discoveryProvider, upsertServiceInstance, logger = console
+}) {
   app.post('/api/pmachine/announce', async (req, res) => {
     try {
       const announcement = normalizeNodeAnnouncement(req.body, req.ip);
-      if (discoveryProvider?.mode === 'remote') {
-        const result = await discoveryProvider.announce(announcement);
+      const provider = getDiscoveryProvider();
+      if (provider?.mode === 'remote') {
+        const result = await provider.announce(announcement);
         return res.json({ status: 'ok', node: announcement, delivery: result });
       }
       const node = recordNodeAnnouncement(discoveredNodes, announcement);
@@ -84,9 +87,14 @@ export function registerNodeAnnouncementRoute(app, { discoveredNodes, discoveryP
           metadata: { ...service.metadata, route: service.endpoint, hardware: node.details.hardware, runtime: node.details.runtime }
         });
       }
+      // Hybrid keeps the local record authoritative and mirrors the announcement to collectors best-effort.
+      const delivery = provider?.mode === 'hybrid'
+        ? await provider.announce(announcement).catch((error) => ({ degraded: true, error: error.message }))
+        : undefined;
       return res.json({
         status: 'ok',
-        node: { nodeId: node.nodeId, ip: node.ip, port: node.port, services: announcement.services.map((service) => service.name) }
+        node: { nodeId: node.nodeId, ip: node.ip, port: node.port, services: announcement.services.map((service) => service.name) },
+        ...(delivery ? { delivery } : {})
       });
     } catch (error) {
       logger.warn(`[DISCOVERY] Announcement rejected: ${error.message}`);

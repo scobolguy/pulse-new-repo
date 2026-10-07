@@ -748,7 +748,8 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     setNodeLifecycleState,
     deploymentIndexPath
   } = deps;
-  const discoveryProvider = deps.discoveryProvider || app.locals.discoveryProvider;
+  // Resolved lazily: the backend may create the provider after routes are registered.
+  const getDiscoveryProvider = () => deps.discoveryProvider || app.locals.discoveryProvider;
   let nodeRenameMap = {};
   let nodeRenameMapLoaded = false;
   let nodeTopologyMap = {};
@@ -1248,7 +1249,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     await ensureClusterRegistryLoaded();
     await ensureSiteRegistryLoaded();
     const now = Date.now();
-    discoveryProvider?.getNodes();
+    getDiscoveryProvider()?.getNodes();
     pruneDiscoveryNodes(discoveredNodes, now);
     const homeAutomationNodes = (homeAutomationService?.getTopologyNodes?.() || [])
       .filter((node) => node?.details?.deviceRole === 'home-automation-device'
@@ -2410,7 +2411,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
   }
 
   app.get('/api/discover-primary', async (req, res) => {
-    discoveryProvider?.getNodes();
+    getDiscoveryProvider()?.getNodes();
     const now = Date.now();
     const nodes = Array.from(discoveredNodes.values())
       .filter(n => n.details?.services?.some(s => s.name?.toLowerCase().includes('broker')) && isFreshDiscoveryNode(n, undefined, now))
@@ -2449,7 +2450,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
         catalog: getInfrastructureCatalog(),
         instances: Array.from(serviceInstanceRegistry.values()),
         nodes: await buildCurrentNodesWithTopology(),
-        collectorUrls: (discoveryProvider?.getStatus()?.collectors || []).map((collector) => collector.url),
+        collectorUrls: (getDiscoveryProvider()?.getStatus()?.collectors || []).map((collector) => collector.url),
         origin: `${req.protocol}://${req.get('host')}`
       });
       for (const error of directory.errors) console.warn(`[SERVICES] ${error.endpoint}: ${error.error}`);
@@ -2461,7 +2462,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
   });
 
   app.get('/api/discovery/status', (req, res) => {
-    res.json(discoveryProvider?.getStatus() || { mode: 'local', status: 'unmanaged' });
+    res.json(getDiscoveryProvider()?.getStatus() || { mode: 'local', status: 'unmanaged' });
   });
 
   app.get('/api/sites', async (req, res) => {
@@ -3533,8 +3534,9 @@ export function registerTopologyRuntimeRoutes(app, deps) {
   app.get('/api/pmachine/nodes', async (req, res) => {
     try {
       pruneDiscoveryNodes(discoveredNodes);
-      discoveryProvider?.getNodes();
-      const missingCapabilities = discoveryProvider?.mode === 'remote' ? [] : Array.from(discoveredNodes.entries()).filter(([, node]) => {
+      getDiscoveryProvider()?.getNodes();
+      const missingCapabilities = getDiscoveryProvider()?.mode === 'remote' ? [] : Array.from(discoveredNodes.entries()).filter(([key, node]) => {
+        if (key.startsWith('collector:')) return false;
         const ip = String(node?.ip || '').trim();
         const services = node?.details?.services;
         return ip && !ip.startsWith('127.') && ip !== '::1'
@@ -3560,10 +3562,10 @@ export function registerTopologyRuntimeRoutes(app, deps) {
         }
       }
 
-      const configuredEdgeBases = discoveryProvider?.mode === 'remote' ? [] : String(
+      const configuredEdgeBases = getDiscoveryProvider()?.mode === 'remote' ? [] : String(
         process.env.SERVICE_EDGE_BASE_URLS || process.env.SERVICE_EDGE_BASE_URL || ''
       ).split(',').map((value) => value.trim()).filter(Boolean);
-      const jsNodeBases = discoveryProvider?.mode === 'remote' ? [] : String(
+      const jsNodeBases = getDiscoveryProvider()?.mode === 'remote' ? [] : String(
         process.env.JS_PMACHINE_BASE_URLS ?? 'http://127.0.0.1:4111,http://127.0.0.1:4112,http://127.0.0.1:4113'
       ).split(',').map((value) => value.trim()).filter(Boolean);
       await Promise.all([...configuredEdgeBases, ...jsNodeBases].map(async (baseUrl) => {
@@ -3604,7 +3606,7 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     }
   });
 
-  registerNodeAnnouncementRoute(app, { discoveredNodes, discoveryProvider, upsertServiceInstance });
+  registerNodeAnnouncementRoute(app, { discoveredNodes, getDiscoveryProvider, upsertServiceInstance });
 
   app.get('/api/pmachine/services', (req, res) => {
     res.json({

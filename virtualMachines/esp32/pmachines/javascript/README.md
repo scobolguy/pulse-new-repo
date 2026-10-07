@@ -33,14 +33,20 @@ table capacity failures are surfaced by the host's daemon diagnostics.
 
 `createPascalishPulseNodeCollector` in [discovery-collector.mjs](./discovery-collector.mjs)
 constructs this service/daemon pair for the JavaScript p-machine, with UDP owned
-by the daemon rather than the service. The original
+by the daemon rather than the service. The daemon binds UDP with `udpShared`
+(`SO_REUSEADDR`), so it can run beside a Network backend that also listens on
+4210: both receive broadcast beacons. Pass `udpHost: '0.0.0.0'` to hear LAN
+broadcasts while keeping HTTP on `host`. The original
 `createPascalishDiscoveryCollector` keeps its existing behavior.
 
 The reporting contract is the paginated `/api/discovery/snapshot` endpoint.
 The existing Network backend can consume it through
-`PULSE_DISCOVERY_MODE=remote` and
+`PULSE_DISCOVERY_MODE=remote` (collectors only) or `PULSE_DISCOVERY_MODE=hybrid`
+(its own shared UDP listener plus collectors; locally heard nodes take
+precedence) and
 `PULSE_DISCOVERY_COLLECTOR_URLS=http://<collector-ip>:<http-port>`, then publish
 the merged nodes through `/api/nodes` to the Infrastructure **Network** view.
+`GET /api/discovery/status` reports the active mode and collector health.
 This is node discovery, not the device-only **Network (Distributed Cache)**.
 No running services, collector settings, or ESP32 deployment are changed here.
 
