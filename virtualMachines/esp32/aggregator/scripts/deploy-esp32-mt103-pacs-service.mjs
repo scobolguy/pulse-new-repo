@@ -9,10 +9,10 @@ const execFileAsync = promisify(execFile);
 const ESP32_HOST = process.env.ESP32_HOST || '192.168.2.157';
 const BASE_URL = `http://${ESP32_HOST}`;
 
-const LOCAL_PASCAL = path.resolve(process.cwd(), 'data', 'mt103-to-pacs.service.pas');
-const LOCAL_ROUTER_RULES = path.resolve(process.cwd(), '..', 'pcode', 'mt103-to-pacs.router-rules.json');
-const LOCAL_DATA_MAPPINGS = path.resolve(process.cwd(), '..', 'pcode', 'mt103-to-pacs.data-mappings.json');
-const LOCAL_ARTIFACT = path.resolve(process.cwd(), '..', 'pcode', 'mt103-to-pacs.artifact.json');
+const LOCAL_PASCAL = path.resolve(process.cwd(), '..', 'src', 'mt103-to-pacs.service.pas');
+const LOCAL_ROUTER_RULES = path.resolve(process.cwd(), '..', 'object', 'pcode', 'mt103-to-pacs.router-rules.json');
+const LOCAL_DATA_MAPPINGS = path.resolve(process.cwd(), '..', 'object', 'pcode', 'mt103-to-pacs.data-mappings.json');
+const LOCAL_ARTIFACT = path.resolve(process.cwd(), '..', 'object', 'pcode', 'mt103-to-pacs.artifact.json');
 const REMOTE_ROUTER_RULES = '/hrr.json';
 const REMOTE_DATA_MAPPINGS = '/hdm.json';
 

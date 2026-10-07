@@ -4,7 +4,7 @@ import { compileConversionRuleToOps } from './compile-mapping-rule.mjs';
 import { attachPcodeSignature } from './pcode-signing.mjs';
 
 const BASE = (process.env.ESP32_BASE_URL || `http://${process.env.ESP32_HOST || '192.168.2.155'}`).replace(/\/+$/, '');
-const SOURCE_PATH = new URL('../data/cbds/cobolish-demo/mt103-pacs008-load-test.cob', import.meta.url);
+const SOURCE_PATH = new URL('../../src/cbds/cobolish-demo/mt103-pacs008-load-test.cob', import.meta.url);
 const REMOTE_PCODE = '/cobload.pc';
 const REMOTE_MAP = '/cobload.map.json';
 const INPUT = [

@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import { PROGRAM_SOURCE_ROOT, PROGRAM_OBJECT_ROOT } from '../src/backend/modules/programLayout.mjs';
 
 function usage() {
-  console.error('Usage: node scripts/compile-transaction-lifecycle-dsl.mjs --in data/transaction-lifecycle.tsl');
+  console.error('Usage: node scripts/compile-transaction-lifecycle-dsl.mjs --in ../src/transaction-lifecycle.tsl');
 }
 
 function parseArgs(argv) {
-  const args = { inputPath: 'data/transaction-lifecycle.tsl' };
+  const args = { inputPath: path.join(PROGRAM_SOURCE_ROOT, 'transaction-lifecycle.tsl') };
   for (let i = 2; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--in' || a === '--input') {
@@ -824,7 +825,8 @@ function main() {
   const sourceText = fs.readFileSync(inputPath, 'utf-8');
   const compiled = compileLifecycle(sourceText);
 
-  const outDir = path.dirname(inputPath);
+  const outDir = path.join(PROGRAM_OBJECT_ROOT, 'pcode');
+  fs.mkdirSync(outDir, { recursive: true });
   const compiledPath = path.join(outDir, 'transaction-lifecycle-compiled.json');
   const dashboardPath = path.join(outDir, 'transaction-lifecycle-dashboard.json');
 

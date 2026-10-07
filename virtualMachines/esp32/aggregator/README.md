@@ -2,63 +2,6 @@
 
 Aggregator is a control plane and routing layer for distributed services.
 
-Pascalish, Cobolish, and VBish compile independently to portable PMachine p-code. WFL translates logical database and queue resources into deployment bindings; it is not an application-language intermediate representation. See `../documentation/compilers/LANGUAGE_DATABASE_QUEUE_RUNTIME.md`.
-
-## Terminology
-
-Use the terms below consistently across UI, NLI, and docs:
-
-- Router: consumes a message and emits one or more queue deliveries based on routing rules.
-- Transformer (Mapper): converts payload shape or content from one schema/form to another.
-- Flow: a larger pipeline that can include router stages, transformer stages, and other runtime logic.
-- Deployment: binds a runtime artifact or service instance to a node or cluster target.
-
-## Service Directory
-
-`GET /api/services` is the shared service directory used by both VS Code Services
-views. Its `{ status, services, errors }` response includes configured offerings,
-runtime instances, and named services from PMachine node `/api/services`
-registries. Node registries are queried for discovered PMachines, configured
-discovery collectors, and Pascalish offerings with configured HTTP endpoints.
-Services include their hosting node and invocation endpoint; `registered` is not
-a health assertion. Unreachable registries produce explicit `errors` and a
-`degraded` status while the remaining services remain visible.
-
-## Project Build Tree Model
-
-Projects are recursive containers. Every project can contain subprojects, and each subproject can contain more subprojects.
-
-- Root project: top-level delivery boundary (domain, ownership, release intent).
-- Subproject: independently buildable unit under a parent project.
-- Leaf subproject: lowest-level unit that emits deployable artifacts.
-
-Tree rules:
-
-- Each node in the tree has a unique id within its parent scope.
-- Each node records parent id (root uses null parent).
-- Build order is bottom-up by default: build leaves first, then parents.
-- Deployment targeting is inherited downward unless overridden at a child.
-- Contract compatibility is validated upward: child outputs must satisfy parent inputs.
-
-Recommended node shape:
-
-- id
-- parentId
-- kind (project | subproject)
-- name
-- children[]
-- flows[]
-- routerStages[]
-- transformerStages[]
-- artifacts[]
-- deploymentDefaults
-
-Operational behavior:
-
-- Local changes can be built at the nearest subtree root.
-- Promotion to higher environments can move recursively up the tree.
-- Health and readiness can be evaluated per subtree, then aggregated to parent status.
-
 Main capabilities:
 - Queue manager registry and routing
 - Service instance registry for any service type (for example webapi or broker)
@@ -69,159 +12,6 @@ Main capabilities:
 ## Current Source Of Truth
 
 The Aggregator backend is the source of truth for runtime clustering and topology behavior.
-
-### PMachine deployment discovery
-
-VS Code's Run on PMachine command reads `/api/pmachine/nodes`. Recent UDP
-announcements populate the live topology; `/status` and `/services/describe`
-are fetched independently with timeouts to discover PMachine capabilities.
-A stalled description request does not prevent a successful status response
-from making a node deployable.
-Target lookup also retries capability discovery for recent non-loopback nodes
-whose service list is missing or empty, with a three-second timeout per request.
-This allows an initial discovery timeout to recover without rebooting the board.
-Nodes expire after three minutes without an announcement, including at the
-three-minute boundary. Cleanup runs every second and topology/target requests
-also prune expired entries immediately. UDP nodes use the last received beacon,
-not a later capability lookup, as their heartbeat. Demo Magic/Neptune/child
-nodes are not injected into the live topology.
-
-Run only one backend instance that owns UDP port 4210. In particular, do not
-run both the legacy `PulseGateway` Windows service and `PulseAggregator`.
-A discovery bind conflict now fails startup rather than leaving an HTTP
-backend running with an empty discovery registry. The standalone discovery
-service also requires exclusive ownership of that port.
-
-For explicitly configured targets without UDP discovery, set
-`SERVICE_EDGE_BASE_URLS` to a comma-separated list of HTTP(S) device origins.
-These targets must respond to `/status` with a `pmachine` service; there is
-no hard-coded device-IP fallback.
-Local JS nodes on ports 4111, 4112 and 4113 are also checked via `/status`.
-Standalone JS nodes announce on startup and every minute through
-`/api/pmachine/announce`; nodes sharing an IP are tracked separately by port.
-The standalone discovery service uses the same three-minute expiry policy.
-
-### Splitting node discovery from the Aggregator
-
-Discovery and the management/deployment backend now have independent roles.
-`PULSE_DISCOVERY_MODE=local` is the default: the Aggregator owns its UDP listener,
-capability enrichment and configured device probes through a local provider.
-Do not run a standalone collector on the same host/UDP port in this mode.
-
-For a separate PC collector, start it from the Aggregator directory:
-
-```powershell
-$env:DISCOVERY_HTTP_PORT = '4300'
-$env:UDP_PORT = '4210'
-$env:PULSE_DISCOVERY_COLLECTOR_ID = 'collector-a'
-npm run dev:discovery
-```
-
-Alternatively, the JavaScript PMachine can host a Pascalish discovery **service**
-and a scheduled maintenance **daemon** implementing the same snapshot protocol.
-Run `npm run discovery` from `pmachines/javascript` with the same collector/port
-environment variables. See the
-[host lifecycle, limits and ESP32 porting notes](../pmachines/javascript/README.md#hosted-pascalish-service-and-daemon).
-This JS collector consumes advertised capabilities but does not perform the
-native collector's device enrichment probes.
-
-In the Aggregator's separate process/service environment, configure:
-
-```text
-PULSE_DISCOVERY_MODE=remote
-PULSE_DISCOVERY_COLLECTOR_URLS=http://collector-a:4300,http://collector-b:4300
-PULSE_DISCOVERY_POLL_INTERVAL_MS=5000
-PULSE_DISCOVERY_TIMEOUT_MS=3000
-```
-
-One collector is supported; two provide independent presence observations.
-Give each collector a unique stable ID. Collectors on different machines may
-both listen on UDP 4210. On one machine, use distinct HTTP and UDP ports and
-deliver announcements to each listener explicitly; broadcast to one port is
-not automatically duplicated to another. Avoid HTTP port collisions with
-Librarian or other configured services. These settings are independent of
-`MODULAR_BACKEND` and the broker/database/dictionary deployment choices.
-
-Remote mode does **not** create a local discovery socket, run ESP32 discovery
-probes, enrich device capabilities, or probe configured/local JS targets during
-target lookup. Collectors own capability discovery; the Aggregator consumes
-their cached live view. Browser presence and home-automation remain separate
-existing subsystems, not ESP32 collector responsibilities.
-
-`POST /api/pmachine/announce` on the Aggregator forwards announcements to all
-collectors. The response includes delivery results and `degraded: true` for
-partial delivery; total failure returns HTTP 503. Forwarding alone does not
-create live local presence: it must appear in a collector snapshot. Nodes may
-also announce directly to collectors. When a collector is remote, advertised
-node addresses must be reachable from the collector and the Aggregator:
-do not advertise `127.0.0.1` for a node on another machine. Use
-`JS_PMACHINE_ADVERTISE_HOST` for standalone JS nodes.
-
-`GET /api/discovery/status` on the Aggregator exposes mode, collector
-reachability, last success and errors. Collector failures are logged and shown
-as degraded/unavailable; they do not silently enable local discovery.
-Unexpired cached observations may remain visible during a collector outage,
-but never outlive their reported remaining lifetime. A healthy collector can
-keep the same node present with its own observations.
-
-#### Collector protocol v1
-
-Collectors implement `POST /api/pmachine/announce` and
-`GET /api/discovery/snapshot`. A snapshot is a full replacement of that
-collector's observations, not a patch. Collectors may split it into pages of up
-to five nodes; clients request later pages with the opaque `cursor` query value.
-Paged responses contain `continuation: "continue"` and `nextCursor` when more
-nodes remain, or `continuation: "end"` on the final page. Older collectors may
-continue returning all nodes in one response without these fields. The client
-combines all pages before replacing cached observations:
-
-```json
-{
-  "protocolVersion": 1,
-  "collectorId": "collector-a",
-  "bootId": "unique-per-start",
-  "sequence": 12,
-  "continuation": "end",
-  "nextCursor": "",
-  "nodes": [{
-    "nodeId": "board-01",
-    "ip": "192.168.2.115",
-    "port": 80,
-    "remainingTtlMs": 120000,
-    "details": { "hardware": "ESP32", "services": ["pmachine"] }
-  }]
-}
-```
-
-Node IDs are stable and distinct from IP/port; multiple nodes can share an IP.
-Each snapshot has an increasing sequence within a boot. Replayed/out-of-order
-snapshots, retired boots, duplicate IDs and invalid observations are rejected
-atomically after all pages are collected. A new boot replaces that collector's old snapshot. The PC collector
-does not export configured service health records or probe-only devices as
-announced presence. Its existing catalog API still exposes configured services.
-
-`remainingTtlMs` is between 0 and 180000 and decreases until a new announcement.
-Polling a snapshot must **not** renew its nodes. The Aggregator subtracts request
-time conservatively and expires cached observations using a monotonic timer;
-it does not trust collector wall-clock timestamps. Snapshots must not be cached.
-An ESP32 implementation can use rollover-safe local hardware timers and the
-same JSON contract, regardless of whether its policy is native or Pascalish.
-
-The persisted ESP32 registry remains inventory/capability metadata, not the
-authority for live topology. Loading it no longer resets old timestamps, and
-startup-configured nodes are not counted as new announcements.
-Remote flow placement and rollback resolve live PMachine nodes from the provider
-and topology view rather than falling back to saved inventory addresses.
-
-This is a presence/discovery split, **not** distributed configuration consensus:
-deployment ownership and topology configuration remain with the Aggregator.
-Collector endpoints use the existing trusted-network HTTP model; authentication,
-TLS, bounded ESP32 storage and firmware implementation are separate deployment
-work. Do not expose unauthenticated collector endpoints to an untrusted network.
-
-Validate with `npm run test:discovery:split`. Tests include dual-collector
-failure/expiry/recovery, replay and boot changes, announcement forwarding,
-local UDP ownership and an isolated standalone PC collector process.
 
 - Topology runtime implementation:
   - `src/backend/roles/topologyRuntimeRoutes.mjs`
@@ -251,41 +41,11 @@ Backend:
 node backend.mjs
 ```
 
-### Tapo / ONVIF cameras
-
-The NLI can discover ONVIF cameras, display their RTSP feeds, and control PTZ.
-For each Tapo camera, enable **Camera Account** under the camera's Advanced
-Settings in the Tapo app. RTSP port `554` and ONVIF port `2020` are not exposed
-until that account is enabled.
-
-Set the camera account on the backend in `.env.local`:
-
-```dotenv
-TAPO_CAMERA_USERNAME=your-camera-account-user
-TAPO_CAMERA_PASSWORD=your-camera-account-password
-TAPO_CAMERA_HOSTS=Kitchen@192.168.2.28,Driveway@192.168.2.29
-```
-
-`TAPO_CAMERA_HOSTS` is optional when WS-Discovery works. Explicit hosts make
-camera names stable and avoid multicast restrictions. Supported NLI examples:
-
-- `find Tapo cameras on the network`
-- `show network camera Kitchen`
-- `pan Kitchen camera left`
-- `tilt Driveway camera up`
-- `zoom in Kitchen camera`
-- `move Kitchen camera home`
-
 Librarian service for mapper and schema-driven UI flows:
 
 ```powershell
 npm run dev:librarian
 ```
-
-Set `LIBRARIAN_DATA_ROOT` to select the catalog directory. It defaults to the
-platform operational-data root when started directly, while `start-backend.bat`
-defaults it to `aggregator/data`. `PULSE_LIBRARIAN_DATA_ROOT` remains accepted
-for existing deployments.
 
 Backend with auxiliary child services enabled:
 
@@ -311,59 +71,6 @@ Frontend:
 
 ```powershell
 npm run dev
-```
-
-## Local NLI On The T490
-
-The MCP-backed NLI uses local Ollama and is configured in `data/nli-config.json`.
-Intent and slot routing remains deterministic in `data/agent-routes.json`; Ollama
-handles unmatched natural-language requests.
-
-The backend starts and supervises the local MCP companion on port `4011` by
-default. It adopts an already healthy MCP process, restarts an owned process
-after a crash, and recycles it after repeated health-check failures. Set
-`PULSE_MCP_AUTOSTART=false` only when MCP is managed by an external service.
-The check and restart timing can be changed with `PULSE_MCP_CHECK_INTERVAL_MS`
-and `PULSE_MCP_RESTART_DELAY_MS`.
-
-### Windows MCP Service
-
-To run MCP independently at boot, first add these values to `.env.local` so
-the backend and frontend do not launch competing MCP processes:
-
-```dotenv
-PULSE_MCP_AUTOSTART=false
-FRONTEND_FSM_MCP_AUTOSTART=false
-```
-
-Then install the auto-starting `PulseMcpService` from an elevated PowerShell:
-
-```powershell
-npm run service:mcp:install
-Invoke-RestMethod http://127.0.0.1:4011/health
-```
-
-The service uses the current Node executable, loads `.env.local` when present,
-and restarts after unexpected exits. Remove it from an elevated PowerShell with:
-
-```powershell
-npm run service:mcp:uninstall
-```
-
-The default `t490-fast` profile uses `phi3:latest`, a 1024-token context, an
-8-thread CPU setting, and a 64-token response limit. The model stays resident
-for 30 minutes to avoid repeated load latency. This is sized for the T490's
-16 GB RAM and CPU-only inference. The installed 23 GB `qwen3.6:latest` model is
-too large for this laptop.
-
-To select the slower, higher-quality installed model, change `activeProfile` to
-`t490-quality`. For a temporary override, set `NLI_PROFILE` or `OLLAMA_MODEL` in
-`.env.local`. Any Ollama model can be used; it does not have to be Phi-3.
-
-Run the configuration test with:
-
-```powershell
-npm run test:nli:config
 ```
 
 ## Startup (Backend First)
@@ -588,54 +295,6 @@ Then set browser-side gateway failover in `.env.local`:
 VITE_API_BASES=http://192.168.2.101:4100,http://192.168.2.102:4100
 ```
 
-## BOB Console HTTPS (Caddy)
-
-Caddy terminates HTTPS while Vite, the API, MCP, and ESP32 devices continue using private HTTP connections.
-
-```powershell
-winget install --id CaddyServer.Caddy -e
-npm run startup:fsm:ordered
-npm run edge:https
-```
-
-Open `https://localhost/bob-console.html`. Port 80 is not required; use the `https://` URL explicitly. On first use, trust Caddy's local certificate authority from an elevated terminal:
-
-```powershell
-npm run edge:https:trust
-```
-
-For LAN access, set the hostname before starting Caddy:
-
-```powershell
-$env:BOB_HTTPS_HOST = "neptune"
-npm run edge:https
-```
-
-Optional upstream overrides are `BOB_FRONTEND_UPSTREAM`, `BOB_API_UPSTREAM`, and `BOB_MCP_UPSTREAM`. ESP32 devices remain on the private HTTP API and do not require certificate changes.
-
-## Natural Language Command Interface
-
-The Query Page and `/api/ollama/ask` support deterministic natural language commands in addition to general-purpose Ollama queries.
-
-Commands handled without an LLM call:
-- `create queue <name>` — creates a queue in the active queue manager
-- `create gateway from queue <a> to queue <b>` — starts a bridge worker and persists Pascalish/pcode artifacts
-- `assign <dataTypeIds> to queue <name>` — assigns data types to a queue and persists artifact
-- `rename project <old> to <new>` — renames a project workspace directory
-- `rename subproject <old> to <new> in project <id>`
-- `deploy project <id> to node <nodeId>` — deploys project artifacts to a cluster node
-- Gateway/queue state queries — returns live dashboard of gateways and queue depths
-- Device control (LED/GPIO) — routes to known child ESP32 nodes directly
-
-Project workspace artifacts are written to `data/projects/<projectId>/`. See `QUERY_PAGE_GUIDE.md` for full documentation.
-
-## Service Provider Registry
-
-`src/backend/providers/serviceProviderRegistry.mjs` exposes ten named service providers for use in the workbench and API catalog:
-- broker, router, queue, lifecycle, observability, topology, librarian, mapper, platform, iam
-
-Providers are discoverable via `/api/service-providers` and `/api/service-providers/actions`.
-
 ## Data Hygiene Warning
 
 `aggregator/data/` is currently mixed-use. It contains:
@@ -644,10 +303,8 @@ Providers are discoverable via `/api/service-providers` and `/api/service-provid
 - generated compiler outputs
 - runtime registries and state files
 - queue message persistence and operational logs
-- Ollama mentor session output and escalation packets (`ollama-mentor-*`, `ollama-copilot-escalations/`)
-- project workspace artifacts (`projects/`)
 
-Do not assume every JSON or JSONL file under `data/` is canonical source. The cleanup plan that separates source, generated artifacts, and runtime output is documented in `../documentation/operations/REPOSITORY_HYGIENE_PLAN.md`.
+Do not assume every JSON or JSONL file under `data/` is canonical source. The cleanup plan that separates source, generated artifacts, and runtime output is documented in `../documents/REPOSITORY_HYGIENE_PLAN.md`.
 
 Behavior:
 - For `/api`, `/status`, and `/services`, the browser tries one gateway first.
@@ -681,9 +338,10 @@ States used by queue managers and generic service instances:
 ## API Reference
 
 For consolidated API docs and language guides, see:
-- `../../../documentation/api/README.md`
-- `../../../documentation/compilers/Language-Quick-Reference.md`
-- `../../../documentation/compilers/PASCALISH_WFL_MAPL_PCODE_DESIGN_SPEC.md`
+- `../../../documents/API_REFERENCE.md`
+- `../../../documents/PASCALISH_USER_GUIDE.md`
+- `../../../documents/COBOLISH_USER_GUIDE.md`
+- `../../../documents/WFL_USER_GUIDE.md`
 
 ### Queue Manager Registry
 

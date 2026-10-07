@@ -7,11 +7,11 @@
         "wflHash": "537f68122efdf2836be757262e12ef00547de1d2564320d69405321636ac6e8a"
       },
       "artifactPaths": {
-        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22\\swift_mt700_to_pacs.intent.json",
-        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22\\swift_mt700_to_pacs.manifest.json",
-        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22\\swift_mt700_to_pacs.mapl",
-        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22\\swift_mt700_to_pacs.pas",
-        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22\\swift_mt700_to_pacs.wfl"
+        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-object\\74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22\\swift_mt700_to_pacs.intent.json",
+        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-object\\74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22\\swift_mt700_to_pacs.manifest.json",
+        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\src\\mapper-authoring-object\\74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22\\swift_mt700_to_pacs.mapl",
+        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-object\\74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22\\swift_mt700_to_pacs.pas",
+        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\src\\mapper-authoring-object\\74ad152743287a64cca9dea59949e6ae6c4a4692bfdbae70895c69bd7f01bc22\\swift_mt700_to_pacs.wfl"
       },
       "createdAt": "2026-07-21T02:39:42.336Z",
       "deployed": true,
@@ -36,11 +36,11 @@
         "wflHash": "40f86b18de2f933385a7b201e6f4c27109391f7d97a39acdd2e1d52abce380af"
       },
       "artifactPaths": {
-        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace\\pacs_split_xml_test.intent.json",
-        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace\\pacs_split_xml_test.manifest.json",
-        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace\\pacs_split_xml_test.mapl",
-        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace\\pacs_split_xml_test.pas",
-        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace\\pacs_split_xml_test.wfl"
+        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-object\\94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace\\pacs_split_xml_test.intent.json",
+        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-object\\94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace\\pacs_split_xml_test.manifest.json",
+        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\src\\mapper-authoring-object\\94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace\\pacs_split_xml_test.mapl",
+        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-object\\94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace\\pacs_split_xml_test.pas",
+        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\src\\mapper-authoring-object\\94e9a61afccb20471166b3953d43d4b4253d46a59b1b4343ea863275e6cc6ace\\pacs_split_xml_test.wfl"
       },
       "createdAt": "2026-07-21T02:40:07.031Z",
       "deployed": true,
@@ -65,11 +65,11 @@
         "wflHash": "6b85b177f0f2b84ac910462344a414dd344c272fd7c436935e1ebd8aededcea7"
       },
       "artifactPaths": {
-        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\3977af8f7d4fdc7600ee7dc43e460b177e427371b47f5988a4a55fb0944ea5f7\\pacs_to_transaction_id.intent.json",
-        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\3977af8f7d4fdc7600ee7dc43e460b177e427371b47f5988a4a55fb0944ea5f7\\pacs_to_transaction_id.manifest.json",
-        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\3977af8f7d4fdc7600ee7dc43e460b177e427371b47f5988a4a55fb0944ea5f7\\pacs_to_transaction_id.mapl",
-        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\3977af8f7d4fdc7600ee7dc43e460b177e427371b47f5988a4a55fb0944ea5f7\\pacs_to_transaction_id.pas",
-        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\3977af8f7d4fdc7600ee7dc43e460b177e427371b47f5988a4a55fb0944ea5f7\\pacs_to_transaction_id.wfl"
+        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-object\\3977af8f7d4fdc7600ee7dc43e460b177e427371b47f5988a4a55fb0944ea5f7\\pacs_to_transaction_id.intent.json",
+        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-object\\3977af8f7d4fdc7600ee7dc43e460b177e427371b47f5988a4a55fb0944ea5f7\\pacs_to_transaction_id.manifest.json",
+        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\src\\mapper-authoring-object\\3977af8f7d4fdc7600ee7dc43e460b177e427371b47f5988a4a55fb0944ea5f7\\pacs_to_transaction_id.mapl",
+        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-object\\3977af8f7d4fdc7600ee7dc43e460b177e427371b47f5988a4a55fb0944ea5f7\\pacs_to_transaction_id.pas",
+        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\src\\mapper-authoring-object\\3977af8f7d4fdc7600ee7dc43e460b177e427371b47f5988a4a55fb0944ea5f7\\pacs_to_transaction_id.wfl"
       },
       "createdAt": "2026-07-21T02:56:14.434Z",
       "deployed": false,
@@ -94,11 +94,11 @@
         "wflHash": "7d9a7e1ce7c2fadf19b5ab448076759364aabe2a50d1dfc5aa78aeb6bac3ca6d"
       },
       "artifactPaths": {
-        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065\\pacs8_message_to_transaction.intent.json",
-        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065\\pacs8_message_to_transaction.manifest.json",
-        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065\\pacs8_message_to_transaction.mapl",
-        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065\\pacs8_message_to_transaction.pas",
-        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065\\pacs8_message_to_transaction.wfl"
+        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-object\\c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065\\pacs8_message_to_transaction.intent.json",
+        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-object\\c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065\\pacs8_message_to_transaction.manifest.json",
+        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\src\\mapper-authoring-object\\c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065\\pacs8_message_to_transaction.mapl",
+        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-object\\c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065\\pacs8_message_to_transaction.pas",
+        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\src\\mapper-authoring-object\\c20c52a31847c3c7c5bba3b207ca1a16031c08d9cd969888b17fb973602da065\\pacs8_message_to_transaction.wfl"
       },
       "createdAt": "2026-07-21T02:59:01.630Z",
       "deployed": true,
@@ -215,11 +215,11 @@
         "wflHash": "550191b1784e10dcb6b457c7be1026da68f365b41ea6606c4702f61c22acc966"
       },
       "artifactPaths": {
-        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b\\pacs008_canonical_to_payment_mt700_canonical.intent.json",
-        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b\\pacs008_canonical_to_payment_mt700_canonical.manifest.json",
-        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b\\pacs008_canonical_to_payment_mt700_canonical.mapl",
-        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b\\pacs008_canonical_to_payment_mt700_canonical.pas",
-        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b\\pacs008_canonical_to_payment_mt700_canonical.wfl"
+        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-object\\84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b\\pacs008_canonical_to_payment_mt700_canonical.intent.json",
+        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-object\\84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b\\pacs008_canonical_to_payment_mt700_canonical.manifest.json",
+        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\src\\mapper-authoring-object\\84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b\\pacs008_canonical_to_payment_mt700_canonical.mapl",
+        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-object\\84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b\\pacs008_canonical_to_payment_mt700_canonical.pas",
+        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\src\\mapper-authoring-object\\84e5ba4384131df23bf4082591c635315d72576dbf347a780057d26804ad789b\\pacs008_canonical_to_payment_mt700_canonical.wfl"
       },
       "createdAt": "2026-07-21T14:15:08.015Z",
       "deployed": true,
@@ -244,11 +244,11 @@
         "wflHash": "7ffaf85c683967a6b96d3998388094bb18344132017db1b5582f8815d4516da6"
       },
       "artifactPaths": {
-        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2\\decomposition_router.intent.json",
-        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2\\decomposition_router.manifest.json",
-        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2\\decomposition_router.mapl",
-        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2\\decomposition_router.pas",
-        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2\\decomposition_router.wfl"
+        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-object\\4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2\\decomposition_router.intent.json",
+        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-object\\4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2\\decomposition_router.manifest.json",
+        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\src\\mapper-authoring-object\\4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2\\decomposition_router.mapl",
+        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-object\\4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2\\decomposition_router.pas",
+        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\src\\mapper-authoring-object\\4769a38e84e53db89d1f2a6a074f97c60b4145596487cdd06f40be59a06a6da2\\decomposition_router.wfl"
       },
       "createdAt": "2026-07-21T14:15:35.604Z",
       "deployed": true,
@@ -273,13 +273,13 @@
         "wflHash": "5539edaa81dfcee9b21c9f1b7c9f6fe9bf595b2475e72dec4cebe951c0cd4a23"
       },
       "artifactPaths": {
-        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\6daaa4f2703c07c8db30e0bc7fe896131b5ac4f46cee205b59f36afb0d7a6ce9\\mt940_to_camt053.intent.json",
-        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\6daaa4f2703c07c8db30e0bc7fe896131b5ac4f46cee205b59f36afb0d7a6ce9\\mt940_to_camt053.manifest.json",
-        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\6daaa4f2703c07c8db30e0bc7fe896131b5ac4f46cee205b59f36afb0d7a6ce9\\mt940_to_camt053.mapl",
-        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\6daaa4f2703c07c8db30e0bc7fe896131b5ac4f46cee205b59f36afb0d7a6ce9\\mt940_to_camt053.pas",
-        "pcode": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\6daaa4f2703c07c8db30e0bc7fe896131b5ac4f46cee205b59f36afb0d7a6ce9\\mt940_to_camt053.pcode",
-        "programMap": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\6daaa4f2703c07c8db30e0bc7fe896131b5ac4f46cee205b59f36afb0d7a6ce9\\mt940_to_camt053.program.json",
-        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-artifacts\\6daaa4f2703c07c8db30e0bc7fe896131b5ac4f46cee205b59f36afb0d7a6ce9\\mt940_to_camt053.wfl"
+        "intent": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-object\\6daaa4f2703c07c8db30e0bc7fe896131b5ac4f46cee205b59f36afb0d7a6ce9\\mt940_to_camt053.intent.json",
+        "manifest": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-object\\6daaa4f2703c07c8db30e0bc7fe896131b5ac4f46cee205b59f36afb0d7a6ce9\\mt940_to_camt053.manifest.json",
+        "mapl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\src\\mapper-authoring-object\\6daaa4f2703c07c8db30e0bc7fe896131b5ac4f46cee205b59f36afb0d7a6ce9\\mt940_to_camt053.mapl",
+        "pascalish": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\aggregator\\data\\mapper-authoring-object\\6daaa4f2703c07c8db30e0bc7fe896131b5ac4f46cee205b59f36afb0d7a6ce9\\mt940_to_camt053.pas",
+        "pcode": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\object\\aggregator-pcode\\mapper-authoring-object\\6daaa4f2703c07c8db30e0bc7fe896131b5ac4f46cee205b59f36afb0d7a6ce9\\mt940_to_camt053.pcode",
+        "programMap": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\object\\aggregator-pcode\\mapper-authoring-object\\6daaa4f2703c07c8db30e0bc7fe896131b5ac4f46cee205b59f36afb0d7a6ce9\\mt940_to_camt053.program.json",
+        "wfl": "C:\\dev\\pulse-new-repo\\virtualMachines\\esp32\\src\\mapper-authoring-object\\6daaa4f2703c07c8db30e0bc7fe896131b5ac4f46cee205b59f36afb0d7a6ce9\\mt940_to_camt053.wfl"
       },
       "createdAt": "2026-08-02T22:29:38.414Z",
       "deployed": false,

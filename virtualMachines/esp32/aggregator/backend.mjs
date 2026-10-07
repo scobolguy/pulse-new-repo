@@ -8,8 +8,8 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('[UNHANDLED REJECTION]', reason?.stack || reason);
 });
 // Run with: node backend.mjs
+import dgram from 'dgram';
 import express from 'express';
-import fetch from 'node-fetch';
 import cors from 'cors';
 import os from 'os';
 import path from 'path';
@@ -93,7 +93,6 @@ import { createServiceProcessManager, registerServiceProcessRoutes } from './src
 import { createLifecycleHarnessPathApi } from './src/backend/modules/lifecycleHarnessPaths.mjs';
 import { createRuntimeDiagnosticsApi } from './src/backend/modules/runtimeDiagnosticsApi.mjs';
 import { createMachineAvailabilityPresenceApi } from './src/backend/modules/machineAvailabilityPresenceApi.mjs';
-import { createDiscoveryProvider } from './src/backend/modules/discoveryProvider.mjs';
 import { createLifecycleQueueMetricsApi } from './src/backend/modules/lifecycleQueueMetricsApi.mjs';
 import { createDatabaseRegistrySnapshotApi } from './src/backend/modules/databaseRegistrySnapshotApi.mjs';
 import { createAuthoritativeTimeService } from './src/backend/modules/authoritativeTimeService.mjs';
@@ -579,6 +578,7 @@ const brokerInstances = new Map();
 brokerInstances.set('primary', { instanceId: 'primary', active: true, quiesced: false });
 brokerInstances.set('secondary', { instanceId: 'secondary', active: false, quiesced: false });
 const discoveredNodes = new Map();
+const nodeEnrichmentLastAttempt = new Map();
 const queueManagerRegistry = new Map();
 const databaseManagerInstances = new Map([
   ['db-mssql', createDatabaseProvider('mssql', { connectionString: process.env.MSSQL_DATABASE_CONNECTION_STRING || process.env.FSM_MSSQL_CONNECTION_STRING || process.env.GROUP_MSSQL_CONNECTION_STRING || '' })],
@@ -8163,8 +8163,9 @@ function buildGatewayStreamPayload() {
   };
 }
 
-// --- Node Discovery ---
-// UDP 4210 is shared (SO_REUSEADDR) with Pascalish discovery daemons; see PULSE_DISCOVERY_MODE.
+// --- UDP Node Discovery ---
+const udpServer = dgram.createSocket('udp4');
+
 function getLocalAdvertiseIp() {
   const interfaces = os.networkInterfaces();
   for (const entries of Object.values(interfaces || {})) {
@@ -8195,63 +8196,41 @@ function buildMachineAvailabilityAnnouncement() {
   };
 }
 
-function buildMachineAvailabilityDetails() {
-  const ip = getLocalAdvertiseIp();
-  return {
+function sendUdpJsonMessage(targetHost, targetPort, payload, label = 'UDP') {
+  if (!targetHost || !targetPort) return;
+  const message = Buffer.from(JSON.stringify(payload), 'utf-8');
+  udpServer.send(message, 0, message.length, targetPort, targetHost, (error) => {
+    if (error) {
+      console.warn(`[${label}] Failed to send UDP message to ${targetHost}:${targetPort}: ${error.message}`);
+    }
+  });
+}
+
+function sendNodeBeaconAck(targetHost, targetPort, beaconPayload = {}) {
+  sendUdpJsonMessage(targetHost, targetPort, {
+    kind: 'nodeBeaconAck',
     nodeId: machineAvailability.nodeId,
-    ip,
-    httpPort: HTTP_PORT,
-    statusUrl: `http://${ip}:${HTTP_PORT}/status`,
-    servicesUrl: `http://${ip}:${HTTP_PORT}/services/describe`,
-    capabilityHash: machineAvailability.capabilityHash || getMachineAvailabilityCapabilityHash(),
-    beaconAcknowledged: machineAvailability.beaconAcknowledged
-  };
+    capabilityHash: machineAvailability.capabilityHash,
+    requestDetails: Boolean(beaconPayload?.capabilitiesChanged || beaconPayload?.needsDetails),
+    ackedAt: Date.now()
+  }, 'UDP-ACK');
+}
+
+function requestNodeDetails(targetHost, targetPort, beaconPayload = {}) {
+  sendUdpJsonMessage(targetHost, targetPort, {
+    kind: 'nodeDetailsRequest',
+    nodeId: machineAvailability.nodeId,
+    capabilityHash: machineAvailability.capabilityHash,
+    requestedFields: ['status', 'services', 'topology'],
+    reason: beaconPayload?.capabilitiesChanged ? 'capabilities-changed' : 'initial-discovery',
+    requestedAt: Date.now()
+  }, 'UDP-DETAILS');
 }
 
 function markBeaconAcknowledged() {
   machineAvailability.beaconAcknowledged = true;
   machineAvailability.beaconAckAt = new Date().toISOString();
-  machineAvailability.announceReason = 'acknowledged';
 }
-
-async function syncDiscoveredEsp32NodeToRegistry(node = {}) {
-  const registry = app.locals?.esp32NodeRegistry;
-  if (!registry || !node.ip) return;
-
-  const port = Number(node.httpPort || node.port || 80);
-  const response = await fetch(`http://${node.ip}:${port}/api/manifest`, {
-    signal: AbortSignal.timeout(5000)
-  });
-  if (!response.ok) return;
-
-  const manifest = await response.json();
-  if (!manifest || typeof manifest !== 'object' || !manifest.nodeId) return;
-
-  manifest.ip = node.ip;
-  manifest.port = port;
-  manifest.name = manifest.name || manifest.nodeName || node.nodeName || node.nodeId;
-  await registry.storeManifest(manifest);
-}
-
-const discoveryProvider = createDiscoveryProvider({
-  discoveredNodes,
-  localOptions: {
-    udpPort: UDP_PORT,
-    httpPort: HTTP_PORT,
-    nodeId: machineAvailability.nodeId,
-    getAnnouncement: buildMachineAvailabilityAnnouncement,
-    getDetails: buildMachineAvailabilityDetails,
-    onAcknowledged: markBeaconAcknowledged,
-    onNode: (node) => syncDiscoveredEsp32NodeToRegistry(node).catch(() => {}),
-    upsertRemoteQueueManager,
-    upsertServiceInstance,
-    probeEnabled: ESP32_DISCOVERY_PROBE_ENABLED,
-    probeNodes: ESP32_DISCOVERY_PROBE_NODES,
-    probeIntervalMs: ESP32_DISCOVERY_PROBE_INTERVAL_MS,
-    probeTimeoutMs: ESP32_DISCOVERY_PROBE_TIMEOUT_MS
-  }
-});
-app.locals.discoveryProvider = discoveryProvider;
 
 const {
   getMachineAvailabilityPayload,
@@ -8266,7 +8245,8 @@ const {
   machineAvailability,
   discoveredNodes,
   buildMachineAvailabilityAnnouncement,
-  announce: (payload) => discoveryProvider.broadcastBeacon(payload),
+  udpServer,
+  UDP_PORT,
   getMachineAvailabilityBeaconIntervalMs,
   machineWorkloadState,
   machineDrainDefaultTimeoutMs: MACHINE_DRAIN_DEFAULT_TIMEOUT_MS,
@@ -8274,17 +8254,219 @@ const {
   clearTimeoutFn: clearTimeout
 });
 
-try {
-  await discoveryProvider.start();
-  console.log(`[DISCOVERY] Provider started in ${discoveryProvider.mode} mode`);
-} catch (error) {
-  console.error(`[DISCOVERY] Provider failed to start (${discoveryProvider.mode}): ${error.message}`);
+udpServer.on('message', (msg, rinfo) => {
+  console.log(`[UDP] Packet from ${rinfo.address}:${rinfo.port} — ${msg.toString().slice(0, 120)}`);
+  const ip = rinfo.address;
+  const now = Date.now();
+  let node = discoveredNodes.get(ip) || {};
+  try {
+    const raw = msg.toString();
+    const data = JSON.parse(raw);
+
+    if (data && data.kind === 'nodeBeaconAck' && String(data.nodeId || '').trim() === machineAvailability.nodeId) {
+      markBeaconAcknowledged();
+      machineAvailability.announceReason = 'acknowledged';
+      console.log(`[UDP] Beacon acknowledged by ${rinfo.address}:${rinfo.port}`);
+      return;
+    }
+
+    if (data && (data.kind === 'nodeDetailsRequest')) {
+      sendUdpJsonMessage(rinfo.address, rinfo.port, {
+        kind: 'nodeDetails',
+        nodeId: machineAvailability.nodeId,
+        ip: getLocalAdvertiseIp(),
+        httpPort: HTTP_PORT,
+        statusUrl: `http://${getLocalAdvertiseIp()}:${HTTP_PORT}/status`,
+        servicesUrl: `http://${getLocalAdvertiseIp()}:${HTTP_PORT}/services/describe`,
+        capabilityHash: machineAvailability.capabilityHash || getMachineAvailabilityCapabilityHash(),
+        beaconAcknowledged: machineAvailability.beaconAcknowledged,
+        requestedAt: data.requestedAt || null
+      }, 'UDP-DETAILS');
+      return;
+    }
+
+    if (data && data.kind === 'nodeDetails') {
+      discoveredNodes.set(ip, {
+        ...node,
+        ip,
+        nodeName: data.nodeName || data.nodeId || node.nodeName || ip,
+        lastSeen: now,
+        raw,
+        details: {
+          ...(node.details || {}),
+          ...data
+        }
+      });
+      return;
+    }
+
+    if (data && (data.kind === 'nodeBeacon' || data.kind === 'machineAvailability')) {
+      const beaconKind = data.kind;
+      const capabilityHash = String(data.capabilityHash || '').trim();
+      const capabilitiesChanged = Boolean(data.capabilitiesChanged) || (capabilityHash && node?.details?.capabilityHash !== capabilityHash);
+      node = {
+        ...node,
+        ...data,
+        ip,
+        lastSeen: now,
+        raw,
+        availability: {
+          available: Boolean(data.available),
+          draining: Boolean(data.draining),
+          status: data.status || (data.available ? 'available' : 'unavailable')
+        },
+        beacon: {
+          kind: beaconKind,
+          ackRequired: Boolean(data.ackRequired),
+          needsDetails: Boolean(data.needsDetails),
+          capabilitiesChanged,
+          capabilityHash,
+          seenAt: now
+        },
+        details: {
+          ...(node.details || {}),
+          capabilityHash,
+          needsDetails: Boolean(data.needsDetails)
+        }
+      };
+      discoveredNodes.set(ip, node);
+      sendNodeBeaconAck(rinfo.address, rinfo.port, data);
+      if (data.needsDetails || capabilitiesChanged) {
+        requestNodeDetails(rinfo.address, rinfo.port, data);
+      }
+      scheduleNodeEnrichment(ip);
+      syncDiscoveredEsp32NodeToRegistry(ip, data).catch(() => {});
+      return;
+    }
+
+    if (data && (data.kind === 'queueManagerHeartbeat' || data.service === 'queue-manager')) {
+      upsertRemoteQueueManager({
+        managerId: data.managerId || `${ip}:${data.port || HTTP_PORT}:${data.name || 'qm'}`,
+        name: data.name || data.managerName,
+        nodeId: data.nodeId || ip,
+        ip,
+        port: data.port || data.httpPort || HTTP_PORT,
+        status: data.status || 'up',
+        queues: data.queues
+      });
+    }
+    if (data && data.serviceName) {
+      upsertServiceInstance({
+        serviceName: data.serviceName,
+        instanceId: data.instanceId,
+        nodeId: data.nodeId || ip,
+        ip,
+        port: data.port || data.httpPort || HTTP_PORT,
+        status: data.status || 'up',
+        metadata: data.metadata
+      });
+    }
+    const availability = data && data.kind === 'machineAvailability'
+      ? {
+          available: Boolean(data.available),
+          draining: Boolean(data.draining),
+          status: data.status || (data.available ? 'available' : 'unavailable')
+        }
+      : (node.availability || null);
+
+    node = {
+      ...node,
+      ...data,
+      ip,
+      lastSeen: now,
+      availability,
+      raw
+    };
+  } catch (e) {
+    // Not JSON, treat as plain text
+    node = {
+      ...node,
+      ip,
+      lastSeen: now,
+      raw: msg.toString(),
+      nodeName: msg.toString().substring(0, 32),
+    };
+  }
+  discoveredNodes.set(ip, node);
+  scheduleNodeEnrichment(ip);
+});
+udpServer.bind(UDP_PORT, () => {
+  try {
+    udpServer.setBroadcast(true);
+  } catch (error) {
+    console.warn(`[UDP] Could not enable broadcast mode: ${error.message}`);
+  }
+  console.log(`[UDP] Listening for node broadcasts on port ${UDP_PORT}`);
+});
+
+async function probeEsp32Node(node, visited = new Set()) {
+  const host = String(node?.host || '').trim();
+  const port = Number(node?.port) > 0 ? Number(node.port) : 80;
+  if (!host || visited.has(host)) return;
+  visited.add(host);
+
+  const statusUrl = `http://${host}:${port}/status`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ESP32_DISCOVERY_PROBE_TIMEOUT_MS);
+  try {
+    const statusRes = await fetch(statusUrl, { signal: controller.signal });
+    if (!statusRes.ok) return;
+    const statusPayload = await statusRes.json();
+    if (String(statusPayload?.hardware || '').toUpperCase() !== 'ESP32') return;
+
+    const ip = host;
+    const now = Date.now();
+    const previous = discoveredNodes.get(ip) || {};
+    discoveredNodes.set(ip, {
+      ...previous,
+      ip,
+      nodeName: statusPayload?.nodeName || previous.nodeName || ip,
+      lastSeen: now,
+      raw: previous.raw || 'active-probe',
+      details: {
+        ...(previous.details || {}),
+        ...statusPayload
+      }
+    });
+
+    const peers = Array.isArray(statusPayload?.discoveredNodes) ? statusPayload.discoveredNodes : [];
+    for (const peer of peers) {
+      const peerIp = String(peer?.ip || '').trim();
+      if (!peerIp || isLoopbackHost(peerIp)) continue;
+      await probeEsp32Node({ host: peerIp, port: 80 }, visited);
+    }
+  } catch {
+    // Ignore transient probe failures.
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function runEsp32DiscoveryProbe() {
+  if (!ESP32_DISCOVERY_PROBE_ENABLED) return;
+  const visited = new Set();
+  for (const node of ESP32_DISCOVERY_PROBE_NODES) {
+    await probeEsp32Node(node, visited);
+  }
+}
+
+if (ESP32_DISCOVERY_PROBE_ENABLED && ESP32_DISCOVERY_PROBE_NODES.length > 0) {
+  runEsp32DiscoveryProbe().catch(() => {});
+  setInterval(() => {
+    runEsp32DiscoveryProbe().catch(() => {});
+  }, ESP32_DISCOVERY_PROBE_INTERVAL_MS);
 }
 
 // --- Node Cleanup ---
-// Discovered nodes are pruned by the discovery provider.
 setInterval(() => {
   const now = Date.now();
+  for (const [ip, node] of discoveredNodes.entries()) {
+    if (now - node.lastSeen > 10 * 60 * 1000) { // 10 min timeout
+      discoveredNodes.delete(ip);
+      console.log(`[TOPOLOGY] Removed inactive node: ${ip}`);
+    }
+  }
+
   for (const [managerId, manager] of queueManagerRegistry.entries()) {
     if (manager.local) {
       manager.lastHeartbeat = now;
@@ -8314,6 +8496,60 @@ setInterval(() => {
     }
   }
 }, 60 * 1000);
+
+// --- Service Topology Enrichment ---
+import fetch from 'node-fetch';
+function scheduleNodeEnrichment(ip) {
+  const key = String(ip || '').trim();
+  if (!key) return;
+  const now = Date.now();
+  const last = nodeEnrichmentLastAttempt.get(key) || 0;
+  if (now - last < 5000) return;
+  nodeEnrichmentLastAttempt.set(key, now);
+  enrichNodeDetails(key).catch(() => {});
+}
+
+async function syncDiscoveredEsp32NodeToRegistry(ip, beacon = {}) {
+  const registry = app.locals?.esp32NodeRegistry;
+  if (!registry) return;
+
+  const port = Number(beacon.httpPort || beacon.port || 80);
+  const response = await fetch(`http://${ip}:${port}/api/manifest`, {
+    signal: AbortSignal.timeout(5000)
+  });
+  if (!response.ok) return;
+
+  const manifest = await response.json();
+  if (!manifest || typeof manifest !== 'object' || !manifest.nodeId) return;
+
+  manifest.ip = ip;
+  manifest.port = port;
+  manifest.name = manifest.name || manifest.nodeName || beacon.nodeName || beacon.nodeId;
+  await registry.storeManifest(manifest);
+}
+
+async function enrichNodeDetails(ip) {
+  try {
+    const servicesRes = await fetch(`http://${ip}:80/services/describe`);
+    const statusRes = await fetch(`http://${ip}:80/status`);
+    let serviceDetails = {};
+    let statusDetails = {};
+    if (statusRes.ok) {
+      statusDetails = await statusRes.json();
+    }
+    if (servicesRes.ok) {
+      serviceDetails = await servicesRes.json();
+    }
+    const details = { ...statusDetails, ...serviceDetails };
+    const node = discoveredNodes.get(ip);
+    if (node) {
+      node.details = details;
+      discoveredNodes.set(ip, node);
+    }
+  } catch (e) {
+    // Ignore unreachable nodes
+  }
+}
 
 function getActiveQueueManagers() {
   return queueManagers;

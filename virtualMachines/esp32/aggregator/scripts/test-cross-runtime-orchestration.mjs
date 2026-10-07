@@ -14,7 +14,7 @@ import { executeProgram, parsePcode } from './run-js-pmachine.mjs';
 import { loadOpcodeMap } from './pmachine-js-opcodes.mjs';
 import { attachPcodeSignature } from './pcode-signing.mjs';
 
-const PARENT_SOURCE = path.resolve(process.cwd(), 'data', 'esp32-dual-worker-orchestration.pas');
+const PARENT_SOURCE = path.resolve(process.cwd(), '..', 'src', 'esp32-dual-worker-orchestration.pas');
 const PARENT_PAYLOAD = '21';
 
 // Worker executed on the device: doubles the integer carried in the source message.

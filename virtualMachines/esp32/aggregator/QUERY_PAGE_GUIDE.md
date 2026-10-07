@@ -59,7 +59,7 @@ create gateway myBridge from queue q.alpha to queue q.beta in project tradecore 
 **What happens**:
 1. Input and output queues are created if they do not exist.
 2. A bridge worker is started at `/api/lifecycle/bridge-workers/start`.
-3. A Pascalish source (`.pas`), pcode text (`.pcode`), and program map (`.program.json`) are persisted under `data/projects/<projectId>/gateways/`.
+3. Pascalish source (`.pas`) is persisted under `../src/projects/<projectId>/gateways/`; pcode and the program map are generated under `../object/projects/<projectId>/gateways/`.
 
 **Response includes**: `workerId`, `inputQueue`, `outputQueue`, `inputQueueCreated`, `outputQueueCreated`, `projectId`, `subprojectPath`, `pascalishFile`, `pcodeFile`, `programMapFile`.
 
@@ -97,7 +97,7 @@ rename project <oldId> to <newId>
 rename project mytestgateway to myproductiongateway
 ```
 
-Renames the project directory under `data/projects/`.
+Renames the project directory under `../object/projects/`.
 
 ---
 
@@ -214,7 +214,7 @@ Slow queries (> 60 seconds) are logged to `logs/slow-queries.jsonl`.
 Gateway and queue-type-assignment artifacts are written to:
 
 ```
-aggregator/data/projects/<projectId>/
+object/projects/<projectId>/
   gateways/
     <workerId>.pas          # Pascalish source
     <workerId>.pcode        # pcode text (ESP32-compatible subset)
@@ -222,13 +222,13 @@ aggregator/data/projects/<projectId>/
   gateway-bridges.json      # index of all gateways in this project
   queue-type-assignments.json
 
-aggregator/data/projects/<projectId>/subprojects/<path>/
+object/projects/<projectId>/subprojects/<path>/
   gateways/
   gateway-bridges.json
   queue-type-assignments.json
 ```
 
-`data/projects/` is an operational runtime directory. It follows the same hygiene rules as other `aggregator/data/` subdirectories.
+`../object/projects/` contains generated deployment outputs. Pascalish sources live separately under `../src/projects/`; operational state remains under `aggregator/data/`.
 
 ---
 

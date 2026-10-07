@@ -357,6 +357,16 @@ public interface PascalishListener extends ParseTreeListener {
 	 */
 	void exitSimpleType(PascalishParser.SimpleTypeContext ctx);
 	/**
+	 * Enter a parse tree produced by {@link PascalishParser#decimalType}.
+	 * @param ctx the parse tree
+	 */
+	void enterDecimalType(PascalishParser.DecimalTypeContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link PascalishParser#decimalType}.
+	 * @param ctx the parse tree
+	 */
+	void exitDecimalType(PascalishParser.DecimalTypeContext ctx);
+	/**
 	 * Enter a parse tree produced by {@link PascalishParser#userType}.
 	 * @param ctx the parse tree
 	 */
@@ -486,6 +496,16 @@ public interface PascalishListener extends ParseTreeListener {
 	 * @param ctx the parse tree
 	 */
 	void exitImportDecl(PascalishParser.ImportDeclContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link PascalishParser#librarianImportItems}.
+	 * @param ctx the parse tree
+	 */
+	void enterLibrarianImportItems(PascalishParser.LibrarianImportItemsContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link PascalishParser#librarianImportItems}.
+	 * @param ctx the parse tree
+	 */
+	void exitLibrarianImportItems(PascalishParser.LibrarianImportItemsContext ctx);
 	/**
 	 * Enter a parse tree produced by {@link PascalishParser#importTarget}.
 	 * @param ctx the parse tree

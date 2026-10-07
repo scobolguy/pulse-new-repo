@@ -8,13 +8,7 @@
     "./cli": "./run.mjs"
   },
   "bin": {
-    "pulse-js-pmachine": "./run.mjs",
-    "pulse-js-pmachine-node": "./server.mjs"
-  },
-  "scripts": {
-    "node": "node server.mjs",
-    "discovery": "node discovery-collector.mjs",
-    "test:service-host": "node --test --test-timeout=30000 ../../testing/pmachines/pascalish-service-host.test.mjs"
+    "pulse-js-pmachine": "./run.mjs"
   },
   "dependencies": {
     "fast-xml-parser": "^5.8.0"

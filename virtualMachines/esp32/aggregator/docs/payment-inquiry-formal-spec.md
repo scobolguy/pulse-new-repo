@@ -103,9 +103,9 @@ Rules.
 
 ## 7. Reference Artifacts
 
-- Lifecycle reference: [aggregator/data/payment-inquiry-lifecycle.tsl](../data/payment-inquiry-lifecycle.tsl)
-- Workflow routing reference: [aggregator/data/payment-inquiry-policy.wfl](../data/payment-inquiry-policy.wfl)
-- Mapper reference: [aggregator/data/payment-inquiry-mapper.dsl](../data/payment-inquiry-mapper.dsl)
+- Lifecycle reference: [src/payment-inquiry-lifecycle.tsl](../data/payment-inquiry-lifecycle.tsl)
+- Workflow routing reference: [src/payment-inquiry-policy.wfl](../data/payment-inquiry-policy.wfl)
+- Mapper reference: [src/payment-inquiry-mapper.dsl](../data/payment-inquiry-mapper.dsl)
 - Existing runtime anchors: [aggregator/backend.mjs](../backend.mjs), [aggregator/src/backend/roles/lifecycleInquiryRoutes.mjs](../src/backend/roles/lifecycleInquiryRoutes.mjs)
 
 ## 8. Scenario Conformance Example

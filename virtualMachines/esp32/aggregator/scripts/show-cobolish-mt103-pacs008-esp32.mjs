@@ -3,7 +3,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve('.');
-const DEMO_DIR = path.join(ROOT, 'data', 'cbds', 'cobolish-demo');
+const DEMO_DIR = path.join(ROOT, '..', 'object', 'aggregator-pcode', 'cbds', 'cobolish-demo');
 const BASE = (process.env.ESP32_BASE_URL || `http://${process.env.ESP32_HOST || '192.168.2.155'}`).replace(/\/+$/, '');
 
 async function postForm(url, params) {
@@ -24,7 +24,7 @@ function section(title, body) {
 }
 
 export async function runCobolishMt103ToPacs008() {
-  const source = await fs.readFile(path.join(DEMO_DIR, 'cbds-converter.cob'), 'utf8');
+  const source = await fs.readFile(path.join(ROOT, '..', 'src', 'cbds', 'cobolish-demo', 'cbds-converter.cob'), 'utf8');
   const pcode = await fs.readFile(path.join(DEMO_DIR, 'cbds-converter.pcode'), 'utf8');
   const input = [
     'MT103',

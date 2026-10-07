@@ -1,9 +1,12 @@
 // Minimal, clean, and buildable header for pmachine
 #define PMTRACE(x)
 #pragma once
+#include "host_call_storage.h"
 #include <Arduino.h> // For String
 #include <map>
 #include <vector>
+#include <deque>
+#include <functional>
 #include <string>
 #include <cstdint>
 #include <atomic>
@@ -477,12 +480,6 @@ using FsmCallHook = bool (*)(
 
 using TextOutputHook = void (*)(const std::string& line, void* context);
 
-struct HostValue {
-    bool isString = false;
-    int integer = 0;
-    std::string text;
-};
-
 using HostCallHook = bool (*)(const std::string&, const std::vector<HostValue>&,
                              HostValue&, std::string&, void*);
 
@@ -708,6 +705,8 @@ public:
     void tickDaemonRefresh(uint32_t nowMs = 0);
     bool readPCodeByte(uint32_t virtualAddress, uint8_t& outByte);
     void run(const std::vector<PInstruction>& instructions, int startPc = 0);
+    void run(const std::deque<PInstruction>& instructions, int startPc = 0);
+    void runImage(size_t count, const std::function<PInstruction(size_t)>& instructionAt);
     void setRoutingContext(const std::string& inputQueue, const std::string& message);
     const std::string& getCurrentMessage() const;
     void setNamedStringVariable(const std::string& name, const std::string& value);
@@ -730,6 +729,9 @@ public:
     void clearBreakpoint(uint16_t pc);
     void clearAllBreakpoints();
     bool didLastRunHitStepLimit() const;
+    uint16_t getExecutionPc() const { return pc; }
+    const char* getAllocationStage() const { return allocationStage; }
+    size_t getAllocationBytes() const { return allocationBytes; }
     size_t getLastRunStepCount() const;
     const std::vector<std::string>& getLastRunTextOutput() const;
     const std::vector<std::string>& getLastRunTrace() const;
@@ -761,6 +763,9 @@ public:
     std::map<std::string, int> getThunkBindings() const;
     std::string getImageMemoryMapJson() const;
 private:
+    void runInstructions(size_t instructionCount,
+                         const std::function<PInstruction(size_t)>& instructionAt,
+                         int startPc);
     ::FederatedFileSystem *ffs = nullptr;
     PCodeMap pcodeMap;
     MemoryMap memoryMap;
@@ -771,6 +776,8 @@ private:
     std::vector<std::string> dynamicLibs;
     bool running = false;
     uint16_t pc = 0;
+    const char* allocationStage = "idle";
+    size_t allocationBytes = 0;
     std::atomic<int> debugRunStatus{0};
     std::atomic<int> debugAction{0};
     std::atomic<int> debugStepOutDepth{0};
@@ -837,5 +844,6 @@ public:
 // Standalone loader function
 typedef PInstruction PInstruction;
 std::vector<PInstruction> loadTextPCode(const std::string& text);
+std::deque<PInstruction> loadHostedTextPCode(const std::string& text);
 
 } // namespace pmachine

@@ -186,6 +186,7 @@ recordField
 
 typeRef
     : simpleType
+    | cacheType
     | recordType
     | queueType
     | stackType
@@ -194,6 +195,10 @@ typeRef
     | dynamicArrayType
     | userType
     | STRING
+    ;
+
+cacheType
+    : 'cache' 'of' typeRef
     ;
 
 genericTypeParams
@@ -205,6 +210,12 @@ simpleType
     | 'real'
     | 'boolean'
     | 'string'
+    | decimalType
+    ;
+
+// Precision counts all digits; scale counts digits after the decimal point.
+decimalType
+    : 'decimal' ('(' NUMBER (',' NUMBER)? ')')?
     ;
 
 userType
@@ -267,7 +278,15 @@ interopKind
     ;
 
 importDecl
-    : 'import' importTarget 'from' serviceProvider ';'
+    : 'import' librarianImportItems 'from' 'data' 'librarian' ';'
+    | 'import' importTarget 'from' serviceProvider ';'
+    ;
+
+// Data Librarian imports are declarations of available types, not linked
+// runtime libraries. Keep the imported names in the program map for resolution
+// by the caller.
+librarianImportItems
+    : importTarget (',' importTarget)*
     ;
 
 importTarget
@@ -408,6 +427,7 @@ pl0Block
 
 pl0Element
     : pl0Block
+    | httpVerb
     | '(' | ')' | '+' | '-' | '*' | '/'
     | '=' | '<' | '>'
     | '<=' | '>=' | '<>'
@@ -421,7 +441,7 @@ pl0Element
     | 'ms' | 's' | 'm'
     | 'on' | 'error' | 'fail' | 'transaction' | 'success'
     | 'backout' | 'try' | 'catch' | 'endtry'
-    | 'true' | 'false' | 'map'
+    | 'true' | 'false' | 'map' | 'and' | 'or'
     | NUMBER | STRING | IDENT
     ;
 
@@ -466,7 +486,7 @@ withStmt
     ;
 
 assignStmt
-    : lvalue ':=' expr
+    : lvalue ':=' expr 'rounded'?
     ;
 
 callStmt
@@ -645,7 +665,8 @@ primaryExpr
     | STRING
     | 'true'
     | 'false'
-    | qualifiedName '(' exprList? ')'
+    | qualifiedName '(' exprList? ')' ('.' IDENT)*
+    | simpleType '(' exprList? ')'
     | lvalue
     | '(' expr ')'
     ;

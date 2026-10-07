@@ -5,7 +5,7 @@ import { compileWorkflowDSL } from './compile-workflow-dsl.mjs';
 
 function parseArgs(argv) {
   const args = {
-    in: './data/workflow.wfl',
+    in: '../src/workflow.wfl',
     workflow: null,
     dryRun: false,
     context: '{}',

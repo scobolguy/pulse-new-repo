@@ -8,9 +8,9 @@ import { fileURLToPath } from 'node:url';
 const execFileAsync = promisify(execFile);
 const root = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const repositoryRoot = path.resolve(root, '..');
-const sourcePath = path.join(root, 'data', 'generic-mapper.pas');
-const pcodePath = path.join(repositoryRoot, 'artifacts', 'aggregator-pcode', 'generic-mapper-js-test.pcode');
-const programMapPath = path.join(repositoryRoot, 'artifacts', 'aggregator-pcode', 'generic-mapper-js-test.program.json');
+const sourcePath = path.resolve(root, '..', 'src', 'generic-mapper.pas');
+const pcodePath = path.join(repositoryRoot, 'object', 'aggregator-pcode', 'generic-mapper-js-test.pcode');
+const programMapPath = path.join(repositoryRoot, 'object', 'aggregator-pcode', 'generic-mapper-js-test.program.json');
 
 const input = {
   finEnvelope: {

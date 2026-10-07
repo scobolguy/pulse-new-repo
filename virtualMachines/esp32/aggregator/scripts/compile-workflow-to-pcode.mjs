@@ -6,10 +6,10 @@ import { buildPcodeSourceMap } from './pcode-source-map.mjs';
 
 function parseArgs(argv) {
   const args = {
-    in: './data/workflow.wfl',
+    in: '../src/workflow.wfl',
     workflow: null,
-    out: '../artifacts/pcode/workflow-router.pcode',
-    outMap: '../artifacts/pcode/workflow-router.program.json'
+    out: '../object/pcode/workflow-router.pcode',
+    outMap: '../object/pcode/workflow-router.program.json'
   };
 
   for (let i = 0; i < argv.length; i += 1) {

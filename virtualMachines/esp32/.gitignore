@@ -4,12 +4,6 @@
 .vscode/launch.json
 .vscode/ipch
 
-# Generated and operational output must not enter source packages.
-artifacts/generated/
-artifacts/work/
-runtime/*
-!runtime/README.md
-
 # Top-level scratch and experiment output
 evolution-generation-*.json
 load-test-*.log
@@ -44,15 +38,6 @@ aggregator/data/frontend-startup-fsm-status.json
 aggregator/data/frontend-startup-fsm-notes.jsonl
 aggregator/data/web-bootstrap-fsm-status.json
 aggregator/data/web-bootstrap-fsm-notes.jsonl
-
-# Encrypted credential store (key + ciphertext, never commit)
-aggregator/data/.credential-key
-aggregator/data/camera-credentials.json
-
-# Generated systemd units bake in this machine's absolute paths — regenerate
-# at deploy time via aggregator/scripts/linux/generate-systemd-units.mjs
-deploy/systemd/*.service
-
 aggregator/data/archive/
 aggregator/data/run-reports/
 aggregator/data/stress-reports/

@@ -1,6 +1,7 @@
 #include "DevicePin.h"
 #include "FederatedFileSystemRoutes.h"
 #include "pmachine_routes.h"
+#include "async_diagnostics.h"
 #include <vector>
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -231,6 +232,8 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
 
     // FFS: Upload file endpoint (raw body)
     auto uploadHandler = [&federatedFS](AsyncWebServerRequest *request){
+        PULSE_ASYNC_TRACE("FFS form upload handler request=%p bytes=%u", request,
+            static_cast<unsigned>(request->contentLength()));
         String file;
         if (request->hasParam("file", true)) {
             file = request->getParam("file", true)->value();
@@ -241,22 +244,81 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
             return;
         }
         if (!file.startsWith("/")) file = "/" + file;
-        String body;
+        const String* body = nullptr;
         if (request->hasParam("body", true)) {
-            body = request->getParam("body", true)->value();
+            body = &request->getParam("body", true)->value();
         } else if (request->hasParam("body")) {
-            body = request->getParam("body")->value();
+            body = &request->getParam("body")->value();
         } else {
             request->send(400, "text/plain", "Missing body param");
             return;
         }
-        std::vector<uint8_t> data(body.begin(), body.end());
-        FFSStatus st = federatedFS.write(file, data.data(), data.size());
+        FFSStatus st = federatedFS.write(file,
+            reinterpret_cast<const uint8_t*>(body->c_str()), body->length());
+        PULSE_ASYNC_TRACE("FFS form upload write request=%p file=%s bytes=%u status=%d",
+            request, file.c_str(), static_cast<unsigned>(body->length()), static_cast<int>(st));
         if (st == FFSStatus::OK) invalidateRouterExecutionCache();
         request->send(st == FFSStatus::OK ? 200 : 500, "text/plain", st == FFSStatus::OK ? "File uploaded" : "Failed to upload file");
     };
     server.on("/ffs/upload", HTTP_POST, uploadHandler);
     server.on("/ffs/upload", HTTP_GET, uploadHandler);
+
+    struct StreamUpload { int handle; size_t written; int status; uint32_t startedAt; };
+    server.on("/ffs/upload_stream", HTTP_POST,
+        [&federatedFS](AsyncWebServerRequest* request) {
+            auto* state = static_cast<StreamUpload*>(request->_tempObject);
+            int status = state ? state->status : 400;
+            if (state && state->handle) {
+                if (!federatedFS.closeFile(state->handle)) status = 500;
+                state->handle = 0;
+            }
+            if (state && state->written != request->contentLength() && status == 200) status = 400;
+            PULSE_ASYNC_TRACE("FFS stream response request=%p written=%u expected=%u status=%d elapsed=%lu",
+                request, static_cast<unsigned>(state ? state->written : 0),
+                static_cast<unsigned>(request->contentLength()), status,
+                static_cast<unsigned long>(state ? millis() - state->startedAt : 0));
+            if (status == 200) invalidateRouterExecutionCache();
+            else Serial.printf("[FFS] Streaming upload failed: HTTP %d\n", status);
+            request->send(status, "text/plain", status == 200 ? "File uploaded" : "Streaming upload failed");
+        }, nullptr,
+        [&federatedFS](AsyncWebServerRequest* request, uint8_t* data, size_t length, size_t index, size_t total) {
+            if (index == 0) {
+                // LittleFS writes and Wi-Fi stalls can exceed the server's 3-second default.
+                request->client()->setRxTimeout(60);
+                auto* state = static_cast<StreamUpload*>(calloc(1, sizeof(StreamUpload)));
+                request->_tempObject = state;
+                if (!state) return;
+                state->status = 200;
+                state->startedAt = millis();
+                if (!request->hasParam("file") || !total || total > 32768
+                    || request->contentType() != "application/octet-stream") state->status = 400;
+                else state->handle = federatedFS.openFile(request->getParam("file")->value(), "w");
+                if (!state->handle && state->status == 200) state->status = 500;
+                PULSE_ASYNC_TRACE("FFS stream begin request=%p total=%u handle=%d status=%d",
+                    request, static_cast<unsigned>(total), state->handle, state->status);
+                request->onDisconnect([request, &federatedFS]() {
+                    auto* state = static_cast<StreamUpload*>(request->_tempObject);
+                    PULSE_ASYNC_TRACE("FFS stream disconnect request=%p written=%u handle=%d elapsed=%lu",
+                        request, static_cast<unsigned>(state ? state->written : 0),
+                        state ? state->handle : 0,
+                        static_cast<unsigned long>(state ? millis() - state->startedAt : 0));
+                    if (state && state->handle) {
+                        federatedFS.closeFile(state->handle);
+                        state->handle = 0;
+                        Serial.println("[FFS] Streaming upload disconnected before completion");
+                    }
+                });
+            }
+            auto* state = static_cast<StreamUpload*>(request->_tempObject);
+            if (!state || state->status != 200) return;
+            PULSE_ASYNC_TRACE("FFS stream chunk request=%p index=%u length=%u written=%u",
+                request, static_cast<unsigned>(index), static_cast<unsigned>(length),
+                static_cast<unsigned>(state->written));
+            if (index != state->written || federatedFS.writeBytes(state->handle, data, length) != length) {
+                state->status = 500; return;
+            }
+            state->written += length;
+        });
 
     // FFS: Download file endpoint (GET or POST)
     auto getHandler = [&federatedFS](AsyncWebServerRequest *request){

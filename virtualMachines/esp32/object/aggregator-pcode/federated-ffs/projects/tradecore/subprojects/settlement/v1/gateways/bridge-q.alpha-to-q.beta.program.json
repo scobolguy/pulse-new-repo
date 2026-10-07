@@ -1,0 +1,16 @@
+{
+  "kind": "gateway-bridge-program",
+  "version": 1,
+  "targetRuntime": "esp32-pmachine",
+  "workerId": "bridge-q.alpha-to-q.beta",
+  "inputQueue": "q.alpha",
+  "outputQueue": "q.beta",
+  "instructionCount": 4,
+  "signing": {
+    "algorithm": "none",
+    "keyId": "none",
+    "signature": "unsigned-generated-artifact",
+    "signedAt": "2026-07-22T20:15:49.635Z",
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

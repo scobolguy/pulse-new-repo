@@ -502,7 +502,7 @@ Duplicate queue behavior:
 Execution behavior:
 1. Ensure input and output queues exist (create if needed).
 2. Start bridge worker via `POST /api/lifecycle/bridge-workers/start`.
-3. Persist Pascalish source (`.pas`), pcode (`.pcode`), and program map (`.program.json`) under `data/projects/<projectId>/gateways/`.
+3. Persist Pascalish source (`.pas`) under `src/projects/<projectId>/gateways/`; keep pcode (`.pcode`) and the program map (`.program.json`) under `data/projects/<projectId>/gateways/`.
 4. Update `gateway-bridges.json` index for the project/subproject.
 
 Queue type assignment behavior:
@@ -516,10 +516,10 @@ Project and subproject artifact model:
 - Subprojects are nested under the project and maintain their own artifact files.
 - Queue assignment index file: `aggregator/data/projects/<project>/[subprojects/<path>/]queue-type-assignments.json`
 - Gateway bridge index file: `aggregator/data/projects/<project>/[subprojects/<path>/]gateway-bridges.json`
-- Per-gateway artifacts include Pascalish and pcode files for ESP32 deployment:
-  - `gateways/<workerId>.pas`
-  - `gateways/<workerId>.pcode`
-  - `gateways/<workerId>.program.json`
+- Per-gateway artifacts are split by type for ESP32 deployment:
+  - `src/projects/<project>/[subprojects/<path>/]gateways/<workerId>.pas`
+  - `aggregator/data/projects/<project>/[subprojects/<path>/]gateways/<workerId>.pcode`
+  - `aggregator/data/projects/<project>/[subprojects/<path>/]gateways/<workerId>.program.json`
 
 Project lifecycle commands (Ollama deterministic actions):
 - Rename project: `rename project <oldProjectId> to <newProjectId>`

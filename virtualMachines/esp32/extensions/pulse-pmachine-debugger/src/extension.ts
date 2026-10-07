@@ -264,7 +264,7 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
   }
 
   private async launch(configuration: any): Promise<void> {
-    const program = path.resolve(this.root, String(configuration.program || 'artifactPrograms/towers-of-hanoi-program.pas'));
+    const program = path.resolve(this.root, String(configuration.program || 'src/towers-of-hanoi-program.pas'));
     let source = await (await import('node:fs/promises')).readFile(program, 'utf8');
     if (Number.isInteger(Number(configuration.esp32DiskCount))) {
       source = source.replace(/diskCount\s*:=\s*\d+/i, `diskCount := ${Number(configuration.esp32DiskCount)}`);
@@ -712,13 +712,23 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
   private async setBreakpoints(request: DebugProtocol.Request, argumentsValue: any): Promise<void> {
     const sourcePath = path.resolve(String(argumentsValue.source?.path || this.runtime?.program || ''));
     const requested = Array.isArray(argumentsValue.breakpoints) ? argumentsValue.breakpoints : [];
-    this.breakpoints.splice(0, this.breakpoints.length, ...requested.map((item: any) => ({
+    const remaining = this.breakpoints.filter(item => item.sourcePath !== sourcePath);
+    this.breakpoints.splice(0, this.breakpoints.length, ...remaining, ...requested.map((item: any) => ({
       line: Number(item.line),
       sourcePath,
     })).filter((item: Breakpoint) => Number.isInteger(item.line)));
     if (this.sessionId) await this.applyBreakpoints();
+    const resolved = this.state?.resolvedSourceBreakpoints || [];
     this.respond(request, true, {
-      breakpoints: this.breakpoints.map((item) => ({ verified: true, line: item.line })),
+      breakpoints: requested.map((item: any) => {
+        const match = resolved.find((entry: any) =>
+          entry.sourceLine === Number(item.line) && entry.sourceFile === path.basename(sourcePath));
+        return {
+          verified: this.remoteEsp32 || Boolean(match?.verified),
+          line: match?.line ?? Number(item.line),
+          ...(!this.remoteEsp32 && !match?.verified ? { message: 'No executable statement at or after this line.' } : {})
+        };
+      }),
     });
   }
 
@@ -735,15 +745,18 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
       this.remoteBreakpoints = desired;
       return;
     }
-    const sourceFile = path.basename(this.runtime.program);
-    const lines = this.breakpoints.map((item) => item.line);
-    if (!this.reachedEntry && this.entryLine > 0 && !lines.includes(this.entryLine)) lines.push(this.entryLine);
-    this.debug.setJavaScriptPmachineDebugBreakpoints(this.sessionId, []);
-    this.state = this.debug.setJavaScriptPmachineSourceBreakpoints(this.sessionId, lines.map((line) => ({
-      sourceFile,
+    const sourceBreakpoints = this.breakpoints.map(item => ({
+      sourceFile: path.basename(item.sourcePath),
+      sourceLanguage: languageForFile(item.sourcePath),
+      sourceLine: item.line
+    }));
+    if (!this.reachedEntry && this.entryLine > 0) sourceBreakpoints.push({
+      sourceFile: path.basename(this.runtime.program),
       sourceLanguage: this.runtime.language,
-      sourceLine: line,
-    })));
+      sourceLine: this.entryLine
+    });
+    this.debug.setJavaScriptPmachineDebugBreakpoints(this.sessionId, []);
+    this.state = this.debug.setJavaScriptPmachineSourceBreakpoints(this.sessionId, sourceBreakpoints);
   }
 
   // Start always halts on the program entry line so the standard debug buttons drive execution from there.
@@ -1220,15 +1233,22 @@ export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel('Pulse PMachine');
   const hanoiPanel = new HanoiPanel();
   const services = new ServicesViewProvider(output);
+  const servers = new ServicesViewProvider(output, 'servers');
   context.subscriptions.push(
     output,
     hanoiPanel,
     services,
+    servers,
     vscode.window.registerTreeDataProvider('pulse-pmachine.services', services),
+    vscode.window.registerTreeDataProvider('pulse-pmachine.servers', servers),
     vscode.commands.registerCommand('pulse-pmachine.refreshServices', () => services.refresh()),
+    vscode.commands.registerCommand('pulse-pmachine.refreshServers', () => servers.refresh()),
     vscode.commands.registerCommand('pulse-pmachine.openServiceEndpoint', openServiceEndpoint),
     vscode.workspace.onDidChangeConfiguration(event => {
-      if (event.affectsConfiguration('pulse-pmachine.backendUrl')) services.refresh();
+      if (event.affectsConfiguration('pulse-pmachine.backendUrl')) {
+        services.refresh();
+        servers.refresh();
+      }
     }),
     vscode.debug.registerDebugAdapterDescriptorFactory('pulse-pmachine', new PulseDebugFactory(context.extensionUri)),
     vscode.commands.registerCommand('pulse-pmachine.runCurrentFile', (uri?: vscode.Uri) => runCurrentFile(context, output, uri, hanoiPanel)),

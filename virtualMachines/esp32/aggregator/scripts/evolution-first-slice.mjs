@@ -9,7 +9,7 @@ const repoRoot = path.resolve(aggregatorRoot, '..');
 
 function parseArgs(argv) {
   const args = {
-    pcode: path.resolve(repoRoot, 'pcode', 'mt103-to-pacs.service.pcode'),
+    pcode: path.resolve(repoRoot, 'object', 'pcode', 'mt103-to-pacs.service.pcode'),
     programMap: path.resolve(repoRoot, 'pcode', 'mt103-to-pacs.service.program.json'),
     fitnessOut: path.resolve(repoRoot, 'data', 'evolution-fitness.jsonl'),
     selectorOut: path.resolve(repoRoot, 'data', 'evolution-selector.json'),

@@ -129,6 +129,7 @@ void FederatedFileSystem::ensureMountParentDirectory() const {
 // --- File handle/line I/O ---
 int FederatedFileSystem::openFile(const String &logicalName, const String &mode) {
     ResolvedPath resolved = resolvePath(logicalName);
+    if (resolved.remote || (resolved.readOnly && mode != "r")) return 0;
     String path = resolved.resolvedPath;
     File f;
 #if defined(ESP32)

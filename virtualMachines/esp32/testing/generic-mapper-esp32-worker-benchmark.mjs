@@ -11,7 +11,7 @@ const messageCount = Number(process.env.MESSAGE_COUNT || 100);
 const workerCounts = [1, 2];
 const maxInFlight = Number(process.env.MAX_IN_FLIGHT || 32);
 const aggregatorRoot = path.resolve(fileURLToPath(new URL('../aggregator', import.meta.url)));
-const sourcePath = path.join(aggregatorRoot, 'data', 'generic-mapper.pas');
+const sourcePath = path.resolve(aggregatorRoot, '..', 'src', 'generic-mapper.pas');
 const remotePcode = '/generic-mapper-bench.pcode';
 const remoteMap = '/generic-mapper-bench.map.json';
 

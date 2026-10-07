@@ -1,0 +1,15 @@
+{
+  "esp32Origin": "http://192.168.2.115",
+  "kasaCollectorId": "kasa-edge",
+  "kasaPeers": ["192.168.2.28", "192.168.2.29"],
+  "lanInterface": "",
+  "httpHost": "127.0.0.1",
+  "tuyaHttpPort": 4307,
+  "ssdpHttpPort": 4308,
+  "aggregationHttpPort": 4310,
+  "tuyaUdpPort": 6667,
+  "ssdpUdpPort": 1900,
+  "ssdpDescriptionPorts": [80, 9000],
+  "observationTtlMs": 180000,
+  "refreshMs": 60000
+}

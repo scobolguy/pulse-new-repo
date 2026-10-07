@@ -3,6 +3,7 @@ const fs = require('node:fs')
 const http = require('node:http')
 const https = require('node:https')
 const vscode = require('vscode')
+const { readDistributedNetwork } = require('./distributedNetwork')
 
 const VIEW_TYPE = 'pulseCatalogStudio.webview'
 const SIDEBAR_VIEW_TYPE = 'pulseCatalogStudio.sidebar'
@@ -110,7 +111,10 @@ const EDGE_TYPES = Object.freeze([
 // service-registry.json, so it's seeded here directly.
 const DEFAULT_DATABASE_INSTANCES = Object.freeze([
   {
+    id: 'database:PulseGovernance',
     name: 'PulseGovernance',
+    kind: 'database',
+    provider: 'mssql',
     engine: 'SQL Server',
     description: 'Ticketing/governance database (scripts/provision-ticketing-db.mjs)',
   },
@@ -160,7 +164,7 @@ function getNetworkApiBases() {
   return Array.from(new Set(candidates.map((candidate) => candidate.replace(/\/$/, ''))))
 }
 
-function requestJson(url, timeoutMs = 2000) {
+function requestJson(url, timeoutMs = 2000, includeErrorDetails = false) {
   return new Promise((resolve, reject) => {
     const target = new URL(url)
     const client = target.protocol === 'https:' ? https : http
@@ -170,7 +174,16 @@ function requestJson(url, timeoutMs = 2000) {
       response.on('data', (chunk) => { body += chunk })
       response.on('end', () => {
         if (response.statusCode < 200 || response.statusCode >= 300) {
-          reject(new Error(`HTTP ${response.statusCode}`))
+          let detail = ''
+          if (includeErrorDetails) {
+            try {
+              const payload = JSON.parse(body)
+              if (typeof payload?.error === 'string') detail = `: ${payload.error}`
+            } catch (error) {
+              detail = `: Invalid error response (${error.message})`
+            }
+          }
+          reject(new Error(`HTTP ${response.statusCode}${detail}`))
           return
         }
         try {
@@ -234,16 +247,130 @@ function getServerItems() {
   }))
 }
 
+function isMessageBroker(service) {
+  return service.kind === 'messaging'
+    || ['msmq', 'rabbitmq', 'kafka', 'ibmmq'].includes(String(service.provider || '').toLowerCase())
+}
+
+function isDatabase(service) {
+  return service.kind === 'database'
+    || ['mssql', 'sqlserver', 'postgresql', 'mysql', 'oracle', 'access'].includes(String(service.provider || '').toLowerCase())
+}
+
+function addDatabaseItems(databases, entries, configured = false) {
+  for (const database of entries) {
+    if (!isDatabase(database)) continue
+    const id = database.id || database.instanceId || database.serviceId || database.name
+    if (!id) continue
+    databases.set(configured ? `configured:${id}` : String(id), database)
+  }
+}
+
+async function getDatabaseItems() {
+  const databases = new Map()
+  addDatabaseItems(databases, DEFAULT_DATABASE_INSTANCES, true)
+  const registry = readServiceRegistry()
+  addDatabaseItems(databases, Array.isArray(registry?.dataStores) ? registry.dataStores : [], true)
+
+  try {
+    const payload = await requestJson(`${getCatalogStudioApiBase()}/api/services`, 15000)
+    if (!Array.isArray(payload.services) || !Array.isArray(payload.servers)) {
+      throw new Error('Services response does not contain services and servers')
+    }
+    const liveDatabases = [...payload.servers, ...payload.services]
+    addDatabaseItems(databases, liveDatabases)
+    for (const [key, database] of databases) {
+      if (!key.startsWith('configured:')) continue
+      const provider = String(database.provider || '').toLowerCase()
+      if (provider && liveDatabases.some(service =>
+        isDatabase(service) && String(service.provider || '').toLowerCase() === provider)) {
+        databases.delete(key)
+      }
+    }
+    if (!databases.size) return [new InfraItem('No databases configured', vscode.TreeItemCollapsibleState.None)]
+  } catch (error) {
+    vscode.window.showErrorMessage(`Pulse Databases: ${error.message}`)
+    if (!databases.size) return [new InfraItem('Databases unavailable - refresh to retry', vscode.TreeItemCollapsibleState.None, {
+      kind: 'database-instance', iconId: 'warning', tooltip: error.message,
+    })]
+    databases.set('status:api-unavailable', new InfraItem(
+      'Live database status unavailable - showing configured databases',
+      vscode.TreeItemCollapsibleState.None,
+      { kind: 'database-status', iconId: 'warning', tooltip: error.message },
+    ))
+  }
+  return [...databases.values()].map(database => database instanceof InfraItem ? database : new InfraItem(
+    database.name || database.serviceId || database.id, vscode.TreeItemCollapsibleState.None, {
+      kind: 'database-instance', iconId: 'database',
+      description: [database.engine || database.provider, database.nodeId, database.status, database.endpoint].filter(Boolean).join(' · '),
+      tooltip: database.description || database.endpoint || '',
+    },
+  ))
+}
+
+async function getMessageBrokerItems() {
+  const brokers = new Map()
+  const configured = readServiceRegistry()?.serviceOfferings
+  for (const service of Array.isArray(configured) ? configured : []) {
+    if (!isMessageBroker(service)) continue
+    const provider = String(service.provider || service.id || service.name).toLowerCase()
+    brokers.set(`configured:${provider}`, service)
+  }
+
+  try {
+    const payload = await requestJson(`${getCatalogStudioApiBase()}/api/services`, 15000)
+    if (!Array.isArray(payload.services)) throw new Error('Services response does not contain services')
+    for (const service of [...payload.services, ...(Array.isArray(payload.servers) ? payload.servers : [])]) {
+      if (!isMessageBroker(service)) continue
+      const provider = String(service.provider || '').toLowerCase()
+      if (provider) brokers.delete(`configured:${provider}`)
+      const id = service.id || service.instanceId || service.serviceId || service.name
+      if (id) brokers.set(String(id), service)
+    }
+    if (!brokers.size) return [new InfraItem('No message brokers configured', vscode.TreeItemCollapsibleState.None)]
+  } catch (error) {
+    vscode.window.showErrorMessage(`Pulse Message Brokers: ${error.message}`)
+    if (!brokers.size) return [new InfraItem('Message brokers unavailable - refresh to retry', vscode.TreeItemCollapsibleState.None, {
+      kind: 'message-broker-instance', iconId: 'warning', tooltip: error.message,
+    })]
+    brokers.set('status:api-unavailable', new InfraItem(
+      'Live broker status unavailable - showing configured brokers',
+      vscode.TreeItemCollapsibleState.None,
+      { kind: 'message-broker-status', iconId: 'warning', tooltip: error.message },
+    ))
+  }
+  return [...brokers.values()].map(service => service instanceof InfraItem ? service : new InfraItem(
+    service.name || service.serviceId || service.id, vscode.TreeItemCollapsibleState.None, {
+      kind: 'message-broker-instance', iconId: 'broadcast',
+      description: [service.nodeId, service.status, service.endpoint].filter(Boolean).join(' · '),
+      tooltip: service.description || service.endpoint || '',
+    },
+  ))
+}
+
 async function getServiceItems() {
   try {
     const payload = await requestJson(`${getCatalogStudioApiBase()}/api/services`, 15000)
     if (!Array.isArray(payload.services)) throw new Error('Services response does not contain services')
-    const items = payload.services.map((service) => new InfraItem(service.name || service.serviceId || service.id, vscode.TreeItemCollapsibleState.None, {
-      kind: 'service-offering',
-      iconId: 'symbol-event',
-      description: [service.nodeId, service.status, service.endpoint].filter(Boolean).join(' · '),
-      tooltip: service.description || service.endpoint || '',
-    }))
+    const services = payload.services.filter(service => !isMessageBroker(service) && !isDatabase(service))
+    const labelCounts = new Map()
+    for (const service of services) {
+      const label = service.name || service.serviceId || service.id
+      labelCounts.set(label, (labelCounts.get(label) || 0) + 1)
+    }
+    const items = services.map((service) => {
+      const name = service.name || service.serviceId || service.id
+      const instance = service.instanceId || service.endpoint || service.nodeId || service.id
+      const label = labelCounts.get(name) > 1 && instance ? `${name} (${instance})` : name
+      const item = new InfraItem(label, vscode.TreeItemCollapsibleState.None, {
+        kind: 'service-offering',
+        iconId: 'symbol-event',
+        description: [service.instanceId, service.nodeId, service.status, service.endpoint].filter(Boolean).join(' · '),
+        tooltip: [service.description, service.instanceId, service.nodeId, service.endpoint].filter(Boolean).join('\n'),
+      })
+      if (service.id) item.id = `service:${service.id}`
+      return item
+    })
     for (const error of payload.errors || []) {
       items.push(new InfraItem('Service registry unavailable', vscode.TreeItemCollapsibleState.None, {
         kind: 'service-offering', iconId: 'warning', tooltip: `${error.endpoint}: ${error.error}`,
@@ -1513,6 +1640,40 @@ async function getNetworkItems() {
   })]
 }
 
+async function getDistributedNetworkItems() {
+  const base = String(vscode.workspace.getConfiguration('pulse')
+    .get('catalogStudio.distributedCacheApiBase', 'http://127.0.0.1:4310')).trim()
+  try {
+    const snapshot = await readDistributedNetwork(base, async (url) => {
+      const payload = await requestJson(url, 2000, true)
+      if (payload?.error) throw new Error(String(payload.error))
+      return payload
+    })
+    const items = snapshot.records.map((record) => new InfraItem(
+      record.device.name, vscode.TreeItemCollapsibleState.None, {
+        kind: 'distributed-network-node',
+        iconId: 'circuit-board',
+        description: record.device.address,
+        tooltip: [record.key, record.device.protocol, record.device.deviceType,
+          snapshot.completeness ? '' : 'Cache reports incomplete source coverage'].filter(Boolean).join('\n'),
+      },
+    ))
+    if (!items.length) items.push(new InfraItem('No cached network devices', vscode.TreeItemCollapsibleState.None, {
+      kind: 'distributed-network-node', iconId: 'info', description: base,
+    }))
+    if (!snapshot.completeness) items.push(new InfraItem('Cache source coverage is incomplete', vscode.TreeItemCollapsibleState.None, {
+      kind: 'distributed-network-status', iconId: 'warning',
+      tooltip: 'Available cached devices are shown without filtering confidence or provisional status.',
+    }))
+    return items
+  } catch (error) {
+    return [new InfraItem('Distributed cache not reachable', vscode.TreeItemCollapsibleState.None, {
+      kind: 'distributed-network-status', iconId: 'debug-disconnect', description: base,
+      tooltip: String(error?.message || error),
+    })]
+  }
+}
+
 class PulseInfrastructureTreeProvider {
   constructor() {
     this._onDidChangeTreeData = new vscode.EventEmitter()
@@ -1533,13 +1694,14 @@ class PulseInfrastructureTreeProvider {
         new InfraItem('Servers', vscode.TreeItemCollapsibleState.Expanded, { kind: 'servers-category', iconId: 'server' }),
         new InfraItem('Services', vscode.TreeItemCollapsibleState.Expanded, { kind: 'services-category', iconId: 'symbol-namespace' }),
         new InfraItem('Network', vscode.TreeItemCollapsibleState.Expanded, { kind: 'network-category', iconId: 'globe' }),
+        new InfraItem('Network (Distributed Cache)', vscode.TreeItemCollapsibleState.Expanded, { kind: 'distributed-network-category', iconId: 'globe' }),
       ]
     }
     if (element.kind === 'servers-category') {
       return [
         new InfraItem('Hosting Nodes', vscode.TreeItemCollapsibleState.Expanded, { kind: 'hosting-nodes-category', iconId: 'server' }),
         new InfraItem('Message Brokers', vscode.TreeItemCollapsibleState.Expanded, { kind: 'message-brokers-category', iconId: 'broadcast' }),
-        new InfraItem('Databases', vscode.TreeItemCollapsibleState.Expanded, { kind: 'databases-category', iconId: 'database' }),
+        new InfraItem('Data Bases', vscode.TreeItemCollapsibleState.Expanded, { kind: 'databases-category', iconId: 'database' }),
       ]
     }
     if (element.kind === 'hosting-nodes-category') {
@@ -1556,6 +1718,9 @@ class PulseInfrastructureTreeProvider {
     }
     if (element.kind === 'network-category') {
       return getNetworkItems()
+    }
+    if (element.kind === 'distributed-network-category') {
+      return getDistributedNetworkItems()
     }
     return []
   }

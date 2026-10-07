@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { compileWorkflowDSLWithAntlr } from './workflow-antlr-compiler.mjs';
 import { applySolutionDeliveries } from '../src/backend/solutionRuntimeBindings.mjs';
 
-const source = fs.readFileSync(new URL('../data/odbc-database-assignment.wfl', import.meta.url), 'utf8');
+const source = fs.readFileSync(new URL('../../src/odbc-database-assignment.wfl', import.meta.url), 'utf8');
 const manifest = compileWorkflowDSLWithAntlr(source).bindings;
 assert.equal(manifest.bySymbol.SqlLedger.connectionRef, 'env:MSSQL_DATABASE_CONNECTION_STRING');
 assert.equal(manifest.bySymbol.Orders.deliveryMode, 'sync');

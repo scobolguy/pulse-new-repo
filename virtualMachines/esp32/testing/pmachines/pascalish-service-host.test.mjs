@@ -62,7 +62,7 @@ async function udpReply(socket, host, body) {
 }
 
 async function runEmitProof(target) {
-  const source = await fs.readFile(new URL('../../artifactPrograms/pascalish-emit-proof.pas', import.meta.url), 'utf8');
+  const source = await fs.readFile(new URL('../../src/pascalish-emit-proof.pas', import.meta.url), 'utf8');
   const compiled = compilePascalishProgramWithAntlr(source);
   for (const [file, body] of [['/proof.pcode', compiled.pcodeText], ['/proof.program.json', JSON.stringify(compiled.programMap)]]) {
     const upload = await fetch(`${target}/ffs/upload`, {
@@ -136,7 +136,7 @@ test('real HTTP service responds with protocol v1 and never renews observations 
 });
 
 test('Pascalish Data Librarian imports compile as a read-only import list', async () => {
-  const compiled = compile(`service 'import-test';
+  const compiled = compilePascalishProgramWithAntlr(`service 'import-test';
 import dataTypes, schemas, "pacs.008.001.08" from data librarian;
 var paymentMessage: payment;
 begin end.`);
@@ -145,12 +145,12 @@ begin end.`);
     { name: 'schemas' },
     { name: 'pacs.008.001.08' }
   ]);
-  assert.equal(compiled.programMap.localVariableDeclarations[0].dataType.id, 'payment');
-  assert.throws(() => compile(`service 'bad-import';
+  assert.equal(compiled.ast.runtimeUnit.localVariables[0].dataType.id, 'payment');
+  assert.throws(() => compilePascalishProgramWithAntlr(`service 'bad-import';
 import dataTypes, from data librarian;
 begin end.`), /non-empty item list/);
 
-  const collectorSource = await fs.readFile(new URL('../../artifactPrograms/discovery-collector-service.pas', import.meta.url), 'utf8');
+  const collectorSource = await fs.readFile(new URL('../../src/discovery-collector-service.pas', import.meta.url), 'utf8');
   const collector = compile(collectorSource);
   assert.deepEqual(collector.programMap.librarianImports, [{ name: 'dataTypes' }, { name: 'schemas' }]);
 });
@@ -163,8 +163,8 @@ begin
   paymentMessage.amount := 42;
   writeln(paymentMessage.amount);
 end.`);
-  assert.match(compiled.pcodeText, /REC_SET "paymentMessage" "amount"/);
-  assert.match(compiled.pcodeText, /REC_GET "paymentMessage" "amount"/);
+  assert.match(compiled.pcodeText, /STORE paymentMessage_amount/);
+  assert.match(compiled.pcodeText, /LOAD paymentMessage_amount/);
 
   const opcodeMap = await loadOpcodeMap();
   const result = await executeProgram({
@@ -178,7 +178,7 @@ end.`);
 });
 
 test('discovery collector compilation preserves imports without attaching runtime catalog data', async () => {
-  const source = await fs.readFile(new URL('../../artifactPrograms/discovery-collector-service.pas', import.meta.url), 'utf8');
+  const source = await fs.readFile(new URL('../../src/discovery-collector-service.pas', import.meta.url), 'utf8');
   const compiled = compilePascalishProgramWithAntlr(source, { hostServices: true });
   assert.deepEqual(compiled.programMap.librarianImports, [{ name: 'dataTypes' }, { name: 'schemas' }]);
   assert.equal(compiled.programMap.librarianImportData, undefined);
@@ -238,12 +238,12 @@ test('stable IDs retain same-IP nodes and entry overflow does not corrupt existi
   assert.deepEqual((await snapshot(host)).nodes.map(value => value.nodeId), ['one', 'two']);
 });
 
-test('Pascalish hosted table declarations are emitted and enforce per-table capacity', async t => {
+test('JSON host table declarations enforce per-table capacity', async t => {
   const compiled = compile(`service 'declared-table';
-    table nodes capacity 1;
     post '/first'; begin host.table_put('nodes', 'one', '{}', 1000); return '{}' end
     post '/second'; begin host.table_put('nodes', 'two', '{}', 1000); return '{}' end
     post '/other'; begin host.table_expire('other'); return '{}' end end.`);
+  compiled.programMap.hostTables = [{ name: 'nodes', capacity: 1 }];
   assert.deepEqual(compiled.programMap.hostTables, [{ name: 'nodes', capacity: 1 }]);
   const host = await genericHost(t, compiled);
   await host.dispatch(event('/first', '', 'POST'));
@@ -252,10 +252,10 @@ test('Pascalish hosted table declarations are emitted and enforce per-table capa
   assert.equal(host.getStatus().entries, 1);
 });
 
-test('Pascalish hosted table declarations accept capacity 255', async t => {
+test('JSON host table declarations accept capacity 255', async t => {
   const compiled = compile(`service 'wide-table';
-    table nodes capacity 255;
     post '/put'; begin host.table_put('nodes', 'one', '{}', 1000); return '{}' end end.`);
+  compiled.programMap.hostTables = [{ name: 'nodes', capacity: 255 }];
   assert.deepEqual(compiled.programMap.hostTables, [{ name: 'nodes', capacity: 255 }]);
   const host = await genericHost(t, compiled);
   await host.dispatch(event('/put', '', 'POST'));
@@ -264,14 +264,17 @@ test('Pascalish hosted table declarations accept capacity 255', async t => {
 
 test('hosted table snapshots page five entries with a stable continuation cursor', async t => {
   const compiled = compile(`service 'paged-table';
-    table nodes capacity 255;
     post '/put'; begin
       host.table_put('nodes', host.json_text(host.event_body(), 'nodeId'), host.event_body(), 10000);
       return '{}'
     end
     get '/page'; begin
       return host.table_snapshot('nodes', host.event_query('cursor'), 5)
+    end
+    get '/values'; begin
+      return host.table_snapshot_values('nodes', host.event_query('cursor'), 5)
     end end.`);
+  compiled.programMap.hostTables = [{ name: 'nodes', capacity: 255 }];
   const host = await genericHost(t, compiled);
   for (let index = 0; index < 12; index += 1) {
     const entry = node(`node-${String(index).padStart(2, '0')}`);
@@ -287,6 +290,15 @@ test('hosted table snapshots page five entries with a stable continuation cursor
   assert.equal(third.nodes.length, 2);
   assert.equal(third.continuation, 'end');
   assert.equal(new Set([...first.nodes, ...second.nodes, ...third.nodes].map(value => value.nodeId)).size, 12);
+  assert.ok(first.nodes.every(value => value.remainingTtlMs > 0));
+  for (const [cursor, expected] of [['', first], [first.nextCursor, second], [second.nextCursor, third]]) {
+    const values = (await host.dispatch({ ...event('/values'), query: { cursor } })).body;
+    assert.deepEqual(values, {
+      ...expected,
+      nodes: expected.nodes.map(({ remainingTtlMs, ...value }) => value)
+    });
+  }
+  await assert.rejects(host.dispatch({ ...event('/values'), query: { cursor: 'x'.repeat(257) } }), /cursor/);
 });
 
 test('storage and response byte budgets fail explicitly', async t => {
@@ -526,8 +538,8 @@ test('create real JS PMachine, discover it, upload/run the emit proof over HTTP,
 });
 
 test('direct JS PMachine installs and serves the hosted discovery collector', async t => {
-  const servicePath = fileURLToPath(new URL('../../artifactPrograms/discovery-collector-service.pas', import.meta.url));
-  const daemonPath = fileURLToPath(new URL('../../artifactPrograms/discovery-maintenance-daemon.pas', import.meta.url));
+  const servicePath = fileURLToPath(new URL('../../src/discovery-collector-service.pas', import.meta.url));
+  const daemonPath = fileURLToPath(new URL('../../src/discovery-maintenance-daemon.pas', import.meta.url));
   const compiled = compilePascalishProgramWithAntlr(await fs.readFile(servicePath, 'utf8'), {
     fileName: servicePath, hostServices: true,
   });

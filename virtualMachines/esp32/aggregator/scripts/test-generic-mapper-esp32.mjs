@@ -10,7 +10,7 @@ const baseUrl = `http://${host}`;
 const aggregatorRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const remotePcode = '/generic-mapper.pcode';
 const remoteMap = '/generic-mapper.map.json';
-const sourcePath = path.join(aggregatorRoot, 'data', 'generic-mapper.pas');
+const sourcePath = path.resolve(aggregatorRoot, '..', 'src', 'generic-mapper.pas');
 
 const input = {
   finEnvelope: {

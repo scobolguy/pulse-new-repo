@@ -1,0 +1,8 @@
+{
+  "tables": [
+    {
+      "name": "nodes",
+      "capacity": 255
+    }
+  ]
+}

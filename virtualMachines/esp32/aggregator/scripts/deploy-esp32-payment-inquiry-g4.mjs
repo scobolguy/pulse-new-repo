@@ -9,9 +9,9 @@ const execFileAsync = promisify(execFile);
 const ESP32_HOST = process.env.ESP32_HOST || '192.168.2.119';
 const BASE_URL = `http://${ESP32_HOST}`;
 
-const SOURCE_PASCAL = path.resolve(process.cwd(), 'data', 'process-flows', 'payment-inquiry.flow.g4.pas');
-const LOCAL_PCODE = path.resolve(process.cwd(), '..', 'pcode', 'payment-inquiry.flow.g4.pcode');
-const LOCAL_MAP = path.resolve(process.cwd(), '..', 'pcode', 'payment-inquiry.flow.g4.program.json');
+const SOURCE_PASCAL = path.resolve(process.cwd(), '..', 'src', 'process-flows', 'payment-inquiry.flow.g4.pas');
+const LOCAL_PCODE = path.resolve(process.cwd(), '..', 'object', 'pcode', 'payment-inquiry.flow.g4.pcode');
+const LOCAL_MAP = path.resolve(process.cwd(), '..', 'object', 'pcode', 'payment-inquiry.flow.g4.program.json');
 
 // Keep remote names short; long names were unreliable on some ESP32 uploads.
 const REMOTE_PCODE = '/piqg4.pcode';

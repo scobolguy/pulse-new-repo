@@ -37,6 +37,10 @@
         {
           "id": "pulse-pmachine.services",
           "name": "Pulse Services"
+        },
+        {
+          "id": "pulse-pmachine.servers",
+          "name": "Pulse Servers"
         }
       ]
     },
@@ -96,6 +100,11 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "pulse-pmachine.refreshServers",
+        "title": "Pulse Servers: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
         "command": "pulse-pmachine.openServiceEndpoint",
         "title": "Pulse Services: Open Endpoint",
         "icon": "$(link-external)"
@@ -107,12 +116,17 @@
           "command": "pulse-pmachine.refreshServices",
           "when": "view == pulse-pmachine.services",
           "group": "navigation"
+        },
+        {
+          "command": "pulse-pmachine.refreshServers",
+          "when": "view == pulse-pmachine.servers",
+          "group": "navigation"
         }
       ],
       "view/item/context": [
         {
           "command": "pulse-pmachine.openServiceEndpoint",
-          "when": "view == pulse-pmachine.services && viewItem == pulseServiceEndpoint",
+          "when": "(view == pulse-pmachine.services || view == pulse-pmachine.servers) && viewItem == pulseServiceEndpoint",
           "group": "inline"
         }
       ],
@@ -244,7 +258,7 @@
             "runtime": "js-node",
             "targetHost": "127.0.0.1:4111",
             "debugSession": true,
-            "program": "${workspaceFolder}/artifactPrograms/towers-of-hanoi-program.pas"
+            "program": "${workspaceFolder}/src/towers-of-hanoi-program.pas"
           },
           {
             "type": "pulse-pmachine",
@@ -253,7 +267,7 @@
             "runtime": "esp32",
             "targetHost": "192.168.2.155",
             "debugSession": true,
-            "program": "${workspaceFolder}/artifactPrograms/towers-of-hanoi-program.pas"
+            "program": "${workspaceFolder}/src/towers-of-hanoi-program.pas"
           }
         ]
       }

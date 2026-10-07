@@ -1,0 +1,248 @@
+{
+  "version": 1,
+  "compiledAt": "2026-10-05T17:12:35.001Z",
+  "transactionId": "mt103-payment-lifecycle",
+  "description": "MT103 to PACS, LYNX approval, correspondent send, then statement reconciliation",
+  "fsmTemplates": [],
+  "fsmInstances": [],
+  "subflows": [],
+  "initialState": "received_mt103",
+  "states": [
+    {
+      "name": "received_mt103",
+      "label": "Received MT103",
+      "queueName": "swift.mt103.parsed",
+      "subflow": null,
+      "initial": true,
+      "layer": 0
+    },
+    {
+      "name": "pacs_created",
+      "label": "PACS Created",
+      "queueName": "tx.pacs.created",
+      "subflow": null,
+      "initial": false,
+      "layer": 1
+    },
+    {
+      "name": "lynx_pending",
+      "label": "Pending LYNX Approval",
+      "queueName": "tx.lynx.pending",
+      "subflow": null,
+      "initial": false,
+      "layer": 2
+    },
+    {
+      "name": "lynx_approved",
+      "label": "LYNX Approved",
+      "queueName": "tx.lynx.approved",
+      "subflow": null,
+      "initial": false,
+      "layer": 3
+    },
+    {
+      "name": "sent_correspondent_unreconciled",
+      "label": "Sent (Unreconciled)",
+      "queueName": "tx.correspondent.unreconciled",
+      "subflow": null,
+      "initial": false,
+      "layer": 4
+    },
+    {
+      "name": "reconciled",
+      "label": "Delivered + Reconciled",
+      "queueName": "tx.reconciled",
+      "subflow": null,
+      "initial": false,
+      "layer": 5
+    },
+    {
+      "name": "rejected",
+      "label": "Rejected",
+      "queueName": "tx.rejected",
+      "subflow": null,
+      "initial": false,
+      "layer": 3
+    }
+  ],
+  "transitions": [
+    {
+      "from": "received_mt103",
+      "to": "pacs_created",
+      "event": "mapped_to_pacs",
+      "when": null,
+      "action": "MAP mt103-to-pacs"
+    },
+    {
+      "from": "pacs_created",
+      "to": "lynx_pending",
+      "event": "submitted_to_lynx",
+      "when": null,
+      "action": "ENQUEUE lynx.pacs009.outbound"
+    },
+    {
+      "from": "lynx_pending",
+      "to": "lynx_approved",
+      "event": "lynx_approved",
+      "when": "status = approved",
+      "action": null
+    },
+    {
+      "from": "lynx_pending",
+      "to": "rejected",
+      "event": "lynx_rejected",
+      "when": "status = rejected",
+      "action": null
+    },
+    {
+      "from": "lynx_approved",
+      "to": "sent_correspondent_unreconciled",
+      "event": "sent_to_correspondent",
+      "when": null,
+      "action": "ENQUEUE correspondent.pacs008.outbound"
+    },
+    {
+      "from": "sent_correspondent_unreconciled",
+      "to": "reconciled",
+      "event": "statement_matched",
+      "when": "statement_match = true",
+      "action": null
+    }
+  ],
+  "topology": {
+    "order": [
+      "received_mt103",
+      "pacs_created",
+      "lynx_pending",
+      "lynx_approved",
+      "rejected",
+      "sent_correspondent_unreconciled",
+      "reconciled"
+    ],
+    "layers": [
+      {
+        "index": 0,
+        "stateNames": [
+          "received_mt103"
+        ]
+      },
+      {
+        "index": 1,
+        "stateNames": [
+          "pacs_created"
+        ]
+      },
+      {
+        "index": 2,
+        "stateNames": [
+          "lynx_pending"
+        ]
+      },
+      {
+        "index": 3,
+        "stateNames": [
+          "lynx_approved",
+          "rejected"
+        ]
+      },
+      {
+        "index": 4,
+        "stateNames": [
+          "sent_correspondent_unreconciled"
+        ]
+      },
+      {
+        "index": 5,
+        "stateNames": [
+          "reconciled"
+        ]
+      }
+    ]
+  },
+  "dashboard": {
+    "layout": "left-to-right-topological",
+    "states": [
+      {
+        "stateName": "received_mt103",
+        "label": "Received MT103",
+        "queueName": "swift.mt103.parsed",
+        "subflow": null,
+        "layer": 0
+      },
+      {
+        "stateName": "pacs_created",
+        "label": "PACS Created",
+        "queueName": "tx.pacs.created",
+        "subflow": null,
+        "layer": 1
+      },
+      {
+        "stateName": "lynx_pending",
+        "label": "Pending LYNX Approval",
+        "queueName": "tx.lynx.pending",
+        "subflow": null,
+        "layer": 2
+      },
+      {
+        "stateName": "lynx_approved",
+        "label": "LYNX Approved",
+        "queueName": "tx.lynx.approved",
+        "subflow": null,
+        "layer": 3
+      },
+      {
+        "stateName": "sent_correspondent_unreconciled",
+        "label": "Sent (Unreconciled)",
+        "queueName": "tx.correspondent.unreconciled",
+        "subflow": null,
+        "layer": 4
+      },
+      {
+        "stateName": "reconciled",
+        "label": "Delivered + Reconciled",
+        "queueName": "tx.reconciled",
+        "subflow": null,
+        "layer": 5
+      },
+      {
+        "stateName": "rejected",
+        "label": "Rejected",
+        "queueName": "tx.rejected",
+        "subflow": null,
+        "layer": 3
+      }
+    ],
+    "edges": [
+      {
+        "from": "received_mt103",
+        "to": "pacs_created",
+        "event": "mapped_to_pacs"
+      },
+      {
+        "from": "pacs_created",
+        "to": "lynx_pending",
+        "event": "submitted_to_lynx"
+      },
+      {
+        "from": "lynx_pending",
+        "to": "lynx_approved",
+        "event": "lynx_approved"
+      },
+      {
+        "from": "lynx_pending",
+        "to": "rejected",
+        "event": "lynx_rejected"
+      },
+      {
+        "from": "lynx_approved",
+        "to": "sent_correspondent_unreconciled",
+        "event": "sent_to_correspondent"
+      },
+      {
+        "from": "sent_correspondent_unreconciled",
+        "to": "reconciled",
+        "event": "statement_matched"
+      }
+    ]
+  }
+}

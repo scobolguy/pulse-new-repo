@@ -23,7 +23,7 @@ async function runSource(sourceText) {
 
 // 1. Operators, conversions and toString on the showcase.
 {
-  const source = await fs.readFile(path.join(root, 'data', 'imaginary-showcase.pas'), 'utf8');
+  const source = await fs.readFile(path.resolve(root, '..', 'src', 'imaginary-showcase.pas'), 'utf8');
   const { compiled, result } = await runSource(source);
 
   assert.deepEqual(compiled.programMap.libraries, ['imaginary']);

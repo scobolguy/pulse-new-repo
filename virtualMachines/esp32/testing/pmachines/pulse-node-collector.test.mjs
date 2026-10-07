@@ -7,6 +7,7 @@ import { compilePascalishProgramWithAntlr } from '../../aggregator/scripts/compi
 import { encodeHostedImage } from '../../pmachines/shared/contracts/hosted-image.mjs';
 import { createPascalishPulseNodeCollector } from '../../pmachines/javascript/discovery-collector.mjs';
 import { createDiscoveryProvider } from '../../aggregator/src/backend/modules/discoveryProvider.mjs';
+import { createJsPmachineNodeServer } from '../../pmachines/javascript/server.mjs';
 
 const logger = { warn() {}, error() {}, log() {} };
 const beacon = (id, extras = {}) => ({
@@ -68,10 +69,26 @@ test('UDP observations merge stable identities, preserve details and expire with
   assert.equal(board.nodeName, 'Updated board');
   assert.equal(board.details.hardware, 'ESP32');
   assert.equal(board.remainingTtlMs, 180000);
+  const pulseDevices = await host.dispatch({
+    method: 'GET', path: '/api/devices/snapshot', query: {}
+  });
+  assert.equal(pulseDevices.status, 200);
+  assert.equal(pulseDevices.body.total, 3);
+  const pulseDevice = pulseDevices.body.records.find(record => record.key === 'board');
+  assert.deepEqual(pulseDevice.device, {
+    name: 'Updated board', protocol: 'pulse', address: '127.0.0.1', deviceType: 'pmachine'
+  });
   time += 179999;
   assert.ok((await snapshot()).nodes.every(node => node.remainingTtlMs === 1));
+  const almostExpired = await host.dispatch({
+    method: 'GET', path: '/api/devices/snapshot', query: {}
+  });
+  assert.ok(almostExpired.body.records.every(record => record.remainingTTLms === 1));
   time += 1;
   assert.deepEqual((await snapshot()).nodes, []);
+  assert.equal((await host.dispatch({
+    method: 'GET', path: '/api/devices/snapshot', query: {}
+  })).body.total, 0);
   assert.equal(host.getStatus().daemonDiagnostics[0].failures, 0);
 });
 
@@ -84,6 +101,52 @@ test('unrelated packets are ignored and malformed announcements surface daemon e
   assert.deepEqual((await snapshot()).nodes.map(node => node.nodeId), ['valid']);
   assert.equal(host.getStatus().daemonDiagnostics[0].failures, 2);
   assert.match(host.getStatus().daemonDiagnostics[0].lastError, /Invalid announcement nodeName/);
+});
+
+test('local JS PMachines reach the Pulse device cache without a backend or usual LAN', async t => {
+  let time = 1000;
+  const { host } = await start(t, { clock: () => time, udpHost: '0.0.0.0' });
+  const machines = [];
+  t.after(async () => {
+    await Promise.all(machines.filter(machine => machine.listening)
+      .map(machine => new Promise(resolve => machine.close(resolve))));
+  });
+  for (const name of ['local-js-1', 'local-js-2']) {
+    const machine = createJsPmachineNodeServer({
+      name, udpAnnouncePort: host.getStatus().daemonDiagnostics[0].udpPort,
+      announceIntervalMs: 25, logger
+    });
+    machines.push(machine);
+    await new Promise(resolve => machine.listen(0, '127.0.0.1', resolve));
+  }
+  const snapshot = async () => (await host.dispatch({
+    method: 'GET', path: '/api/devices/snapshot', query: {}
+  })).body;
+  const deadline = Date.now() + 5000;
+  while ((await snapshot()).total !== 2) {
+    if (Date.now() >= deadline) assert.fail('Both local JS PMachines must enter the distributed device cache');
+    await delay(10);
+  }
+  assert.deepEqual((await snapshot()).records.map(record => record.key).sort(), ['local-js-1', 'local-js-2']);
+  for (const record of (await snapshot()).records) {
+    assert.deepEqual(record.device, {
+      name: record.key, protocol: 'pulse', address: '127.0.0.1', deviceType: 'pmachine'
+    });
+  }
+  const before = host.getStatus().daemonDiagnostics[0].udpEvents;
+  time += 100000;
+  while (host.getStatus().daemonDiagnostics[0].udpEvents < before + 2) {
+    if (Date.now() >= deadline) assert.fail('Local UDP heartbeats must repeat');
+    await delay(10);
+  }
+  assert.ok((await snapshot()).records.every(record => record.remainingTTLms === 180000));
+  await Promise.all(machines.map(machine => new Promise(resolve => machine.close(resolve))));
+  await delay(50);
+  const stopped = host.getStatus().daemonDiagnostics[0].udpEvents;
+  await delay(75);
+  assert.equal(host.getStatus().daemonDiagnostics[0].udpEvents, stopped);
+  time += 180000;
+  assert.equal((await snapshot()).total, 0, 'Stopped JS PMachines expire rather than remaining falsely available');
 });
 
 test('Network discovery provider reads all snapshot pages and removes expired nodes', async t => {

@@ -167,13 +167,13 @@ Compile one workflow control block to PMachine p-code:
 node scripts/compile-workflow-to-pcode.mjs \
   --in data/workflow.wfl \
   --workflow pain2-routing \
-  --out ../artifacts/pcode/workflow-router.pcode \
-  --out-map ../artifacts/pcode/workflow-router.program.json
+  --out ../object/pcode/workflow-router.pcode \
+  --out-map ../object/pcode/workflow-router.program.json
 
 Run the generated workflow pcode in JS PMachine simulator:
 
 node scripts/run-js-pmachine.mjs \
-  --pcode ../artifacts/pcode/workflow-router.pcode \
-  --program-map ../artifacts/pcode/workflow-router.program.json \
+  --pcode ../object/pcode/workflow-router.pcode \
+  --program-map ../object/pcode/workflow-router.program.json \
   --input-queue queue.pain2.in \
   --message-file data/lynx-reply-pacs002.xml

@@ -1,5 +1,13 @@
 [
     {
+        "id": "device-descriptor",
+        "logicalId": "device-descriptor",
+        "canonicalId": "type:device-descriptor",
+        "label": "Vendor-neutral Device Descriptor",
+        "builtin": false,
+        "isIso": false
+    },
+    {
         "id": "camt",
         "label": "ISO 20022 - Cash Management (camt)",
         "builtin": false,

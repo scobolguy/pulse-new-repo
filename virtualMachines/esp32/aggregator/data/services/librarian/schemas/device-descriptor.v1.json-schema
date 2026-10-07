@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:pulse:device-descriptor:v1",
+  "title": "Vendor-neutral Device Descriptor",
+  "description": "Compact discovery result shared by device vendors. Relay state and vendor telemetry are separate from device identity.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["deviceName", "ipAddress", "deviceType"],
+  "properties": {
+    "deviceName": {
+      "type": "string",
+      "description": "Human-readable device name, such as Bedroom.",
+      "maxLength": 256
+    },
+    "ipAddress": {
+      "type": "string",
+      "format": "ipv4",
+      "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$"
+    },
+    "deviceType": {
+      "type": "string",
+      "enum": ["wallSwitch", "smartPlug", "unknown"],
+      "description": "Shared device category. Unrecognized device families are unknown."
+    }
+  },
+  "examples": [
+    {"deviceName": "Bedroom", "ipAddress": "192.168.2.28", "deviceType": "wallSwitch"},
+    {"deviceName": "Desk plug", "ipAddress": "192.168.2.30", "deviceType": "smartPlug"}
+  ]
+}

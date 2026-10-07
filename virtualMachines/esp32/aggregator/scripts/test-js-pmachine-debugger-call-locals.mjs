@@ -9,7 +9,7 @@ import {
   stopJavaScriptPmachineDebugSession
 } from '../src/backend/modules/javascriptPmachineDebugger.mjs';
 
-const source = await fs.readFile('../artifactPrograms/towers-of-hanoi-program.pas', 'utf8');
+const source = await fs.readFile(new URL('../../src/towers-of-hanoi-program.pas', import.meta.url), 'utf8');
 const compiled = compilePascalishProgramWithAntlr(source, {
   fileName: 'towers-of-hanoi-program.pas'
 });
@@ -37,11 +37,12 @@ while (Date.now() < deadline) {
 try {
   assert.equal(state.status, 'paused');
   assert.ok(state.callStack.length > 0, 'source breakpoint should pause after entering Hanoi');
+  assert.equal(state.sourceLocation.sourceLine, 12, 'else keyword relocates to the next executable statement');
   assert.deepEqual(state.locals, {
-    n: 4,
+    n: 5,
     fromPeg: 1,
-    toPeg: 2,
-    auxPeg: 3
+    toPeg: 3,
+    auxPeg: 2
   });
   console.log('PASS: source CALL breakpoint exposes Hanoi procedure locals');
 } finally {

@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { runPL0 } from './scripts/pl0-interpreter.mjs';
+import { PROGRAM_OBJECT_ROOT } from './src/backend/modules/programLayout.mjs';
 
 const OUTPUT_ASSIGN_RE = /^\s*output\s*:=\s*(.+?)\s*;?\s*$/i;
 
@@ -116,7 +117,7 @@ async function loadJsonOrDefault(filePath, defaultValue) {
 export function createRouterEngine({
   rulesPath,
   mappingsPath = './data/data-mappings.json',
-  compiledArtifactPath = './data/router-mapper-compiled.json',
+  compiledArtifactPath = path.join(PROGRAM_OBJECT_ROOT, 'pcode', 'router-mapper-compiled.json'),
   serviceId = 'default-router-service',
   publishToQueue,
   dequeueFromQueue,

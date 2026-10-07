@@ -47,6 +47,8 @@ fs.writeFileSync(path.join(librarianRoot, 'data-types.json'), JSON.stringify([
 ]));
 
 process.env.PULSE_RUNTIME_DATA_ROOT = runtimeRoot;
+process.env.PULSE_PROGRAM_SOURCE_ROOT = path.join(runtimeRoot, 'src');
+process.env.PULSE_PROGRAM_OBJECT_ROOT = path.join(runtimeRoot, 'object');
 process.env.PULSE_MAP_EXPORT_ROOT = path.join(runtimeRoot, 'maps');
 const { registerMapperRoutes } = await import(`../src/backend/mapperRoutes.mjs?test=${Date.now()}`);
 const app = express();

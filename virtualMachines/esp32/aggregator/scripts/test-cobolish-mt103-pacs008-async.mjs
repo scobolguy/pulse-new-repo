@@ -5,8 +5,8 @@ import { compileCobolishToPmachine } from './compile-interoperable-language.mjs'
 import { runSingleMessageForEvolution } from './run-js-pmachine.mjs';
 
 const ROOT = path.resolve('.');
-const DEMO_DIR = path.join(ROOT, 'data', 'cbds', 'cobolish-demo');
-const COBOLISH_PATH = path.join(DEMO_DIR, 'cbds-converter.cob');
+const DEMO_DIR = path.join(ROOT, '..', 'object', 'aggregator-pcode', 'cbds', 'cobolish-demo');
+const COBOLISH_PATH = path.join(ROOT, '..', 'src', 'cbds', 'cobolish-demo', 'cbds-converter.cob');
 const PCODE_PATH = path.join(DEMO_DIR, 'cbds-converter.async.pcode');
 const PROGRAM_MAP_PATH = path.join(DEMO_DIR, 'cbds-converter.async.program.json');
 const INPUT_PATH = path.join(DEMO_DIR, 'mt103-input.json');

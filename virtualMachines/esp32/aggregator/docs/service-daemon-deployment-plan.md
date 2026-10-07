@@ -13,7 +13,7 @@ A project owns source and generated assets in these folders:
   programs/       # one-shot or reusable PMachine programs
   services/       # resident request/route handlers
   daemons/        # resident scheduled/event-driven workers
-  artifacts/      # generated pcode, program maps, manifests, and package outputs
+  object/      # generated pcode, program maps, manifests, and package outputs
   deployment/     # deployment-plan.json and deployment-plan.md
 ```
 

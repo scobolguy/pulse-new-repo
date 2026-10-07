@@ -54,12 +54,6 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
-	// Visit a parse tree produced by PascalishParser#hostTableDecl.
-	visitHostTableDecl(ctx) {
-	  return this.visitChildren(ctx);
-	}
-
-
 	// Visit a parse tree produced by PascalishParser#varSection.
 	visitVarSection(ctx) {
 	  return this.visitChildren(ctx);
@@ -210,6 +204,12 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by PascalishParser#cacheType.
+	visitCacheType(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by PascalishParser#genericTypeParams.
 	visitGenericTypeParams(ctx) {
 	  return this.visitChildren(ctx);
@@ -218,6 +218,12 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by PascalishParser#simpleType.
 	visitSimpleType(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#decimalType.
+	visitDecimalType(ctx) {
 	  return this.visitChildren(ctx);
 	}
 
@@ -296,6 +302,12 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by PascalishParser#importDecl.
 	visitImportDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by PascalishParser#librarianImportItems.
+	visitLibrarianImportItems(ctx) {
 	  return this.visitChildren(ctx);
 	}
 

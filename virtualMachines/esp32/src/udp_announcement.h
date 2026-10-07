@@ -9,6 +9,9 @@ struct UdpAnnouncementState {
     String nodeBeaconLastCapabilityHash;
 };
 
+bool sendCheckedUdpPacket(WiFiUDP& udp, const IPAddress& destination, uint16_t port,
+                          const String& payload, const char* label);
+
 bool sendNodeBeaconAnnouncement(
     WiFiUDP& udp,
     uint16_t announcePort,

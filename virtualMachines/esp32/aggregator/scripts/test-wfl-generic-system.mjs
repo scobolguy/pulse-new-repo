@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import { compileWorkflowDSLWithAntlr } from './workflow-antlr-compiler.mjs';
 import { flattenGenericSystems, flattenGenericSystemConnections } from '../src/backend/genericSystem.mjs';
 
-const source = await fs.readFile(new URL('../data/generic-system.wfl', import.meta.url), 'utf8');
+const source = await fs.readFile(new URL('../../src/generic-system.wfl', import.meta.url), 'utf8');
 const compiled = compileWorkflowDSLWithAntlr(source);
 assert.equal(compiled.genericSystems.length, 1);
 const root = compiled.genericSystems[0];

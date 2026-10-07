@@ -20,7 +20,8 @@ const IGNORED_DIR_NAMES = new Set([
 
 const SOURCE_ROOTS = [
   path.resolve(process.cwd(), 'grammar'),
-  path.resolve(process.cwd(), 'data')
+  path.resolve(process.cwd(), 'data'),
+  path.resolve(process.cwd(), '..', 'src')
 ];
 
 const CHUNK_SIZE = 1400;

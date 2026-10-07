@@ -6,11 +6,16 @@
     "KILL_VITE_PROCESSES",
     "CHECK_BACKEND",
     "CHECK_MCP",
-    "START_FRONTEND"
+    "START_FRONTEND",
+    "WAIT_FRONTEND",
+    "START_FRONTEND",
+    "WAIT_FRONTEND",
+    "START_FRONTEND",
+    "WAIT_FRONTEND"
   ],
   "logs": [
     {
-      "at": "2026-09-14T14:41:27.318Z",
+      "at": "2026-10-07T15:01:41.047Z",
       "event": "workflow-start",
       "data": {
         "fsmId": "frontend-startup-fsm",
@@ -22,32 +27,42 @@
       }
     },
     {
-      "at": "2026-09-14T14:41:27.330Z",
+      "at": "2026-10-07T15:01:41.061Z",
       "event": "state",
       "data": {
         "state": "INIT"
       }
     },
     {
-      "at": "2026-09-14T14:41:28.709Z",
+      "at": "2026-10-07T15:01:43.640Z",
       "event": "subflow-complete",
       "data": {
         "state": "KILL_VITE_PROCESSES",
         "subflow": "kill-all-vite-processes",
         "pids": [
-          28368
+          20948,
+          7376,
+          30988
         ],
         "results": [
           {
-            "pid": 28368,
+            "pid": 20948,
+            "killed": true
+          },
+          {
+            "pid": 7376,
+            "killed": true
+          },
+          {
+            "pid": 30988,
             "killed": true
           }
         ],
-        "killedCount": 1
+        "killedCount": 3
       }
     },
     {
-      "at": "2026-09-14T14:41:28.902Z",
+      "at": "2026-10-07T15:01:43.831Z",
       "event": "state",
       "data": {
         "state": "CHECK_BACKEND",
@@ -56,7 +71,7 @@
       }
     },
     {
-      "at": "2026-09-14T14:41:28.924Z",
+      "at": "2026-10-07T15:01:43.861Z",
       "event": "state",
       "data": {
         "state": "CHECK_MCP",
@@ -65,20 +80,85 @@
       }
     },
     {
-      "at": "2026-09-14T14:41:32.343Z",
-      "event": "port-occupied",
+      "at": "2026-10-07T15:01:44.010Z",
+      "event": "frontend-started",
       "data": {
-        "state": "START_FRONTEND",
-        "port": 5173,
-        "occupiedBy": [
-          28368
-        ],
         "command": "node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173 --strictPort --force",
-        "alreadyReady": false
+        "pid": 25172,
+        "attempt": 1
       }
     },
     {
-      "at": "2026-09-14T14:41:32.386Z",
+      "at": "2026-10-07T15:02:14.364Z",
+      "event": "frontend-timeout",
+      "data": {
+        "frontendUrl": "http://127.0.0.1:5173/",
+        "timeoutMs": 30000,
+        "attempt": 1
+      }
+    },
+    {
+      "at": "2026-10-07T15:02:14.370Z",
+      "event": "retry-scheduled",
+      "data": {
+        "state": "WAIT_FRONTEND",
+        "nextState": "START_FRONTEND",
+        "reason": "frontend wait timeout",
+        "currentAttempt": 1,
+        "maxRetries": 2,
+        "retryBackoffMs": 2500
+      }
+    },
+    {
+      "at": "2026-10-07T15:02:16.942Z",
+      "event": "frontend-started",
+      "data": {
+        "command": "node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173 --strictPort --force",
+        "pid": 7304,
+        "attempt": 2
+      }
+    },
+    {
+      "at": "2026-10-07T15:02:47.298Z",
+      "event": "frontend-timeout",
+      "data": {
+        "frontendUrl": "http://127.0.0.1:5173/",
+        "timeoutMs": 30000,
+        "attempt": 2
+      }
+    },
+    {
+      "at": "2026-10-07T15:02:47.304Z",
+      "event": "retry-scheduled",
+      "data": {
+        "state": "WAIT_FRONTEND",
+        "nextState": "START_FRONTEND",
+        "reason": "frontend wait timeout",
+        "currentAttempt": 2,
+        "maxRetries": 2,
+        "retryBackoffMs": 2500
+      }
+    },
+    {
+      "at": "2026-10-07T15:02:49.894Z",
+      "event": "frontend-started",
+      "data": {
+        "command": "node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173 --strictPort --force",
+        "pid": 23344,
+        "attempt": 3
+      }
+    },
+    {
+      "at": "2026-10-07T15:03:20.271Z",
+      "event": "frontend-timeout",
+      "data": {
+        "frontendUrl": "http://127.0.0.1:5173/",
+        "timeoutMs": 30000,
+        "attempt": 3
+      }
+    },
+    {
+      "at": "2026-10-07T15:03:20.280Z",
       "event": "failed",
       "data": {
         "ok": false,
@@ -89,15 +169,20 @@
           "KILL_VITE_PROCESSES",
           "CHECK_BACKEND",
           "CHECK_MCP",
-          "START_FRONTEND"
+          "START_FRONTEND",
+          "WAIT_FRONTEND",
+          "START_FRONTEND",
+          "WAIT_FRONTEND",
+          "START_FRONTEND",
+          "WAIT_FRONTEND"
         ],
-        "error": "Port 5173 is already occupied before frontend launch",
+        "error": "Frontend startup FSM failed to reach READY state",
         "fsmId": "frontend-startup-fsm"
       }
     }
   ],
-  "updatedAt": "2026-09-14T14:41:32.395Z",
-  "error": "Port 5173 is already occupied before frontend launch",
+  "updatedAt": "2026-10-07T15:03:20.289Z",
+  "error": "Frontend startup FSM failed to reach READY state",
   "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
   "frontendUrl": "http://127.0.0.1:5173/",
   "fsmId": "frontend-startup-fsm",
@@ -107,13 +192,13 @@
       "required": true,
       "url": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
       "ok": true,
-      "checkedAt": "2026-09-14T14:41:28.918Z"
+      "checkedAt": "2026-10-07T15:01:43.853Z"
     },
     "mcp": {
       "required": true,
       "url": "http://127.0.0.1:4011/health",
       "ok": true,
-      "checkedAt": "2026-09-14T14:41:28.918Z"
+      "checkedAt": "2026-10-07T15:01:43.853Z"
     }
   },
   "mcpUrl": "http://127.0.0.1:4011/health",

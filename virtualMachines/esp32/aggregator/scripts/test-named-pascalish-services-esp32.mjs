@@ -5,8 +5,8 @@ import { attachPcodeSignature } from './pcode-signing.mjs';
 
 const baseUrl = (process.env.ESP32_SERVICE_BASE_URL || 'http://192.168.2.115').replace(/\/$/, '');
 const serviceDefinitions = [
-  { serviceId: 'blink10', sourcePath: new URL('../data/blink10.pas', import.meta.url) },
-  { serviceId: 'factorialService', sourcePath: new URL('../data/factorialService.pas', import.meta.url) }
+  { serviceId: 'blink10', sourcePath: new URL('../../src/blink10.pas', import.meta.url) },
+  { serviceId: 'factorialService', sourcePath: new URL('../../src/factorialService.pas', import.meta.url) }
 ];
 
 async function postForm(route, fields) {

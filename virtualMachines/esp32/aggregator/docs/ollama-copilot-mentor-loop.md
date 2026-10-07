@@ -59,7 +59,7 @@ Possible results:
 Ingest accepted Copilot/manual answer:
 
 ```bash
-node scripts/ingest-pascal-mentor-answer.mjs --packet data/ollama-copilot-escalations/<session>.packet.json --answer data/my-final-answer.pas
+node scripts/ingest-pascal-mentor-answer.mjs --packet data/ollama-copilot-escalations/<session>.packet.json --answer ../src/my-final-answer.pas
 ```
 
 ## Files
@@ -70,9 +70,9 @@ node scripts/ingest-pascal-mentor-answer.mjs --packet data/ollama-copilot-escala
   Accepted few-shot examples that improve future Ollama generations.
 - `data/ollama-mentor-sessions/<sessionId>.json`
   Session record. Contains `status`, `prompt`, `coachMode`, `topK`, `maxContextChars`, `numPredict`, `elapsedMs`, `reason`, and `escalationPacketPath` when escalated.
-- `data/ollama-mentor-candidates/<sessionId>.pas`
+- `../src/ollama-mentor-candidates/<sessionId>.pas`
   Raw Pascal candidate output from Ollama for the session, even if invalid or partial. Written when the candidate can be captured before timeout.
-- `data/ollama-mentor-results/<sessionId>.result.json`
+- `../object/ollama-mentor-results/<sessionId>.result.json`
   Detailed result including validation output, error list, repair flag, and the candidate text. Includes `coachMode`, corpus/golden counts used, and `numPredict`.
 - `data/ollama-copilot-escalations/<sessionId>.packet.json`
   Escalation packet written when `status: needs-copilot`. Contains all parameters needed to reproduce the session, the `candidatePath`, and instructions for the human resolver.
@@ -122,7 +122,7 @@ node scripts/ingest-pascal-mentor-answer.mjs --packet data/ollama-copilot-escala
     "dialect": null,
     "errors": ["pascalish-service: [PASCALISH-PROGRAM] Parse failed: ..."]
   },
-  "outputPath": "aggregator/data/ollama-mentor-candidates/<sessionId>.pas",
+  "outputPath": "../src/ollama-mentor-candidates/<sessionId>.pas",
   "candidate": "<raw pascal source>"
 }
 ```
@@ -136,7 +136,7 @@ node scripts/ingest-pascal-mentor-answer.mjs --packet data/ollama-copilot-escala
   "reason": "timeout",
   "prompt": "...",
   "model": "phi3:latest",
-  "candidatePath": "data/ollama-mentor-candidates/<sessionId>.pas",
+  "candidatePath": "../src/ollama-mentor-candidates/<sessionId>.pas",
   "candidateCaptured": true,
   "candidateBytes": 0,
   "instructions": [

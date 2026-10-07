@@ -38,7 +38,7 @@ async function request(path, values, expected = 200, json = false) {
 
 const previous = JSON.parse(await request('/pmachine/service_host/status'));
 assert.equal(previous.running, false, 'Stop the existing host explicitly before running this hardware test');
-const prefix = `/service-host-test-${Date.now()}`;
+const prefix = `/sh${Date.now().toString(36)}`;
 const udpPort = 44210;
 const files = [];
 const units = {};
@@ -54,9 +54,10 @@ let udpError;
 socket.on('error', error => { udpError = error; });
 try {
   for (const [kind, name] of [['service', 'discovery-collector-service'], ['daemon', 'discovery-maintenance-daemon']]) {
-    const source = await fs.readFile(new URL(`../../artifactPrograms/${name}.pas`, import.meta.url), 'utf8');
+    const source = await fs.readFile(new URL(`../../src/${name}.pas`, import.meta.url), 'utf8');
     const compiled = compilePascalishProgramWithAntlr(source, { hostServices: true });
-    units[kind] = { file: `${prefix}-${kind}.pcode`, map: `${prefix}-${kind}.program.json` };
+    const suffix = kind === 'service' ? 's' : 'd';
+    units[kind] = { file: `${prefix}-${suffix}.pcode`, map: `${prefix}-${suffix}.map.json` };
     for (const [file, body] of [
       [units[kind].file, compiled.pcodeText],
       [units[kind].map, JSON.stringify(attachPcodeSignature(compactServiceHostProgramMap(compiled.programMap), compiled.pcodeText))]
@@ -69,7 +70,7 @@ try {
     serviceFile: units.service.file, serviceMap: units.service.map,
     daemonFile: units.daemon.file, daemonMap: units.daemon.map,
     collectorId: 'esp32-hardware-proof', udpPort: String(udpPort),
-    observationTtlMs: '2000', announcementIntervalMs: '200'
+    observationTtlMs: '30000', announcementIntervalMs: '200'
   };
   await request('/pmachine/service_host/install', { ...parameters, observationTtlMs: '200' }, 400);
   const install = JSON.parse(await request('/pmachine/service_host/install', parameters));
@@ -124,6 +125,10 @@ try {
   assert.equal(pagedNodes.continuation, 'end');
   await request('/api/pmachine/announce', { nodeId: '' }, 400, true);
   await request('/api/pmachine/announce', { nodeId: 'large', padding: 'x'.repeat(3000) }, 413, true);
+  await request('/pmachine/service_host/stop', {});
+  installed = false;
+  await request('/pmachine/service_host/install', { ...parameters, observationTtlMs: '2000' });
+  installed = true;
   heartbeat = setInterval(() => socket.send(JSON.stringify(beacon), udpPort, origin.hostname), 200);
   await delay(2500);
   if (udpError) throw udpError;

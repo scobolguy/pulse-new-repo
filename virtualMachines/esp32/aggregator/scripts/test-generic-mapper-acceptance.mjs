@@ -6,7 +6,7 @@ const root = new URL('../', import.meta.url);
 const read = file => fs.readFile(new URL(file, root), 'utf8');
 const parseJson = async file => JSON.parse(await read(file));
 
-const workflow = compileWorkflowDSLWithAntlr(await read('data/generic-mapper.wfl'));
+const workflow = compileWorkflowDSLWithAntlr(await read('../src/generic-mapper.wfl'));
 const contract = await parseJson('libraries/generic-mapper-runtime/library.json');
 const map = await parseJson('data/cbds/cbds-mt103-to-pacs008.map.json');
 const outputProof = await parseJson('data/cbds/cbds-mt103-to-pacs008-output.json');

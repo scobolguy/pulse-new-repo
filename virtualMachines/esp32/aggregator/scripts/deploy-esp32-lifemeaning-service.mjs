@@ -9,9 +9,9 @@ const execFileAsync = promisify(execFile);
 const ESP32_HOST = process.env.ESP32_HOST || '192.168.2.119';
 const BASE_URL = `http://${ESP32_HOST}`;
 
-const LOCAL_PASCAL = path.resolve(process.cwd(), 'data', 'lifemeaning-service.pas');
-const LOCAL_ROUTER_RULES = path.resolve(process.cwd(), '..', 'pcode', 'lifemeaning-router-rules.generated.json');
-const LOCAL_DATA_MAPPINGS = path.resolve(process.cwd(), '..', 'pcode', 'lifemeaning-data-mappings.generated.json');
+const LOCAL_PASCAL = path.resolve(process.cwd(), '..', 'src', 'lifemeaning-service.pas');
+const LOCAL_ROUTER_RULES = path.resolve(process.cwd(), '..', 'object', 'pcode', 'lifemeaning-router-rules.generated.json');
+const LOCAL_DATA_MAPPINGS = path.resolve(process.cwd(), '..', 'object', 'pcode', 'lifemeaning-data-mappings.generated.json');
 const REMOTE_ROUTER_RULES = '/lmr.json';
 const REMOTE_DATA_MAPPINGS = '/lmm.json';
 
@@ -21,7 +21,7 @@ async function compilePascalish() {
     '--in', LOCAL_PASCAL,
     '--router-out', LOCAL_ROUTER_RULES,
     '--mapping-out', LOCAL_DATA_MAPPINGS,
-    '--artifact-out', path.resolve(process.cwd(), '..', 'pcode', 'lifemeaning-compiled.artifact.json')
+    '--artifact-out', path.resolve(process.cwd(), '..', 'object', 'pcode', 'lifemeaning-compiled.artifact.json')
   ], {
     cwd: process.cwd(),
     windowsHide: true,

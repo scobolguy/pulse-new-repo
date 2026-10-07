@@ -51,15 +51,15 @@ async function fetchJson(url, init, label) {
 async function compileAndRunPascalishSmoke() {
   await runNodeScript([
     'scripts/compile-pascal-to-pcode.mjs',
-    '--in', '../artifactPrograms/allocator-shadow-smoke.pas',
-    '--out', '../artifacts/pcode/allocator-shadow-smoke.pcode',
-    '--map-out', '../artifacts/pcode/allocator-shadow-smoke.program.json'
+    '--in', '../src/allocator-shadow-smoke.pas',
+    '--out', '../object/pcode/allocator-shadow-smoke.pcode',
+    '--map-out', '../object/pcode/allocator-shadow-smoke.program.json'
   ]);
 
   const runResult = await runNodeScript([
     'scripts/run-js-pmachine.mjs',
-    '--pcode', '../artifacts/pcode/allocator-shadow-smoke.pcode',
-    '--program-map', '../artifacts/pcode/allocator-shadow-smoke.program.json',
+    '--pcode', '../object/pcode/allocator-shadow-smoke.pcode',
+    '--program-map', '../object/pcode/allocator-shadow-smoke.program.json',
     '--input-queue', 'allocator.shadow.test.in',
     '--message', '{"test":"allocator-e2e"}'
   ]);

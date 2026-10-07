@@ -1,0 +1,1006 @@
+{
+  "version": 4,
+  "compiledAt": "2026-10-05T17:12:33.631Z",
+  "symbols": {
+    "queues": [
+      {
+        "symbol": "inboundSwift",
+        "queueName": "swift.inbound",
+        "managerId": null,
+        "dataTypeIds": [
+          "text-string"
+        ],
+        "dataTypeId": "text-string",
+        "deliveryMode": "async"
+      },
+      {
+        "symbol": "pacsOutbound",
+        "queueName": "pacs.outbound",
+        "managerId": null,
+        "dataTypeIds": [
+          "pacs",
+          "pacs-lynx"
+        ],
+        "dataTypeId": "pacs",
+        "deliveryMode": "async"
+      },
+      {
+        "symbol": "pain2RejectQueue",
+        "queueName": "pain2.reject",
+        "managerId": null,
+        "dataTypeIds": [
+          "pain2"
+        ],
+        "dataTypeId": "pain2",
+        "deliveryMode": "async"
+      },
+      {
+        "symbol": "pain2AcceptedQueue",
+        "queueName": "pain2.accepted",
+        "managerId": null,
+        "dataTypeIds": [
+          "pain2"
+        ],
+        "dataTypeId": "pain2",
+        "deliveryMode": "async"
+      },
+      {
+        "symbol": "cacheNodeARead",
+        "queueName": "cache.node-a.read",
+        "managerId": null,
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "dataTypeId": "cache-op",
+        "deliveryMode": "async"
+      },
+      {
+        "symbol": "cacheNodeAWrite",
+        "queueName": "cache.node-a.write",
+        "managerId": null,
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "dataTypeId": "cache-op",
+        "deliveryMode": "async"
+      },
+      {
+        "symbol": "cacheNodeBRead",
+        "queueName": "cache.node-b.read",
+        "managerId": null,
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "dataTypeId": "cache-op",
+        "deliveryMode": "async"
+      },
+      {
+        "symbol": "cacheNodeBWrite",
+        "queueName": "cache.node-b.write",
+        "managerId": null,
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "dataTypeId": "cache-op",
+        "deliveryMode": "async"
+      },
+      {
+        "symbol": "cacheNodeCRead",
+        "queueName": "cache.node-c.read",
+        "managerId": null,
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "dataTypeId": "cache-op",
+        "deliveryMode": "async"
+      },
+      {
+        "symbol": "cacheNodeCWrite",
+        "queueName": "cache.node-c.write",
+        "managerId": null,
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "dataTypeId": "cache-op",
+        "deliveryMode": "async"
+      },
+      {
+        "symbol": "cacheReplicationA",
+        "queueName": "cache.replication.node-a",
+        "managerId": null,
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "dataTypeId": "cache-op",
+        "deliveryMode": "async"
+      },
+      {
+        "symbol": "cacheReplicationB",
+        "queueName": "cache.replication.node-b",
+        "managerId": null,
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "dataTypeId": "cache-op",
+        "deliveryMode": "async"
+      },
+      {
+        "symbol": "cacheReplicationC",
+        "queueName": "cache.replication.node-c",
+        "managerId": null,
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "dataTypeId": "cache-op",
+        "deliveryMode": "async"
+      }
+    ],
+    "databases": [],
+    "services": [],
+    "systems": [],
+    "files": [
+      {
+        "symbol": "mtTemplate",
+        "path": "/services/templates/mt103.txt",
+        "managerId": null
+      }
+    ],
+    "apis": [
+      {
+        "symbol": "aggregator",
+        "baseUrl": "http://localhost:4000"
+      }
+    ]
+  },
+  "bindings": {
+    "version": 1,
+    "bindings": [
+      {
+        "kind": "queue",
+        "symbol": "inboundSwift",
+        "physicalName": "swift.inbound",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "text-string"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      {
+        "kind": "queue",
+        "symbol": "pacsOutbound",
+        "physicalName": "pacs.outbound",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "pacs",
+          "pacs-lynx"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      {
+        "kind": "queue",
+        "symbol": "pain2RejectQueue",
+        "physicalName": "pain2.reject",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "pain2"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      {
+        "kind": "queue",
+        "symbol": "pain2AcceptedQueue",
+        "physicalName": "pain2.accepted",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "pain2"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      {
+        "kind": "queue",
+        "symbol": "cacheNodeARead",
+        "physicalName": "cache.node-a.read",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      {
+        "kind": "queue",
+        "symbol": "cacheNodeAWrite",
+        "physicalName": "cache.node-a.write",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      {
+        "kind": "queue",
+        "symbol": "cacheNodeBRead",
+        "physicalName": "cache.node-b.read",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      {
+        "kind": "queue",
+        "symbol": "cacheNodeBWrite",
+        "physicalName": "cache.node-b.write",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      {
+        "kind": "queue",
+        "symbol": "cacheNodeCRead",
+        "physicalName": "cache.node-c.read",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      {
+        "kind": "queue",
+        "symbol": "cacheNodeCWrite",
+        "physicalName": "cache.node-c.write",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      {
+        "kind": "queue",
+        "symbol": "cacheReplicationA",
+        "physicalName": "cache.replication.node-a",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      {
+        "kind": "queue",
+        "symbol": "cacheReplicationB",
+        "physicalName": "cache.replication.node-b",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      {
+        "kind": "queue",
+        "symbol": "cacheReplicationC",
+        "physicalName": "cache.replication.node-c",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      {
+        "kind": "file",
+        "symbol": "mtTemplate",
+        "physicalName": "/services/templates/mt103.txt",
+        "managerId": null,
+        "provider": "ffs"
+      }
+    ],
+    "bySymbol": {
+      "inboundSwift": {
+        "kind": "queue",
+        "symbol": "inboundSwift",
+        "physicalName": "swift.inbound",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "text-string"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      "pacsOutbound": {
+        "kind": "queue",
+        "symbol": "pacsOutbound",
+        "physicalName": "pacs.outbound",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "pacs",
+          "pacs-lynx"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      "pain2RejectQueue": {
+        "kind": "queue",
+        "symbol": "pain2RejectQueue",
+        "physicalName": "pain2.reject",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "pain2"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      "pain2AcceptedQueue": {
+        "kind": "queue",
+        "symbol": "pain2AcceptedQueue",
+        "physicalName": "pain2.accepted",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "pain2"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      "cacheNodeARead": {
+        "kind": "queue",
+        "symbol": "cacheNodeARead",
+        "physicalName": "cache.node-a.read",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      "cacheNodeAWrite": {
+        "kind": "queue",
+        "symbol": "cacheNodeAWrite",
+        "physicalName": "cache.node-a.write",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      "cacheNodeBRead": {
+        "kind": "queue",
+        "symbol": "cacheNodeBRead",
+        "physicalName": "cache.node-b.read",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      "cacheNodeBWrite": {
+        "kind": "queue",
+        "symbol": "cacheNodeBWrite",
+        "physicalName": "cache.node-b.write",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      "cacheNodeCRead": {
+        "kind": "queue",
+        "symbol": "cacheNodeCRead",
+        "physicalName": "cache.node-c.read",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      "cacheNodeCWrite": {
+        "kind": "queue",
+        "symbol": "cacheNodeCWrite",
+        "physicalName": "cache.node-c.write",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      "cacheReplicationA": {
+        "kind": "queue",
+        "symbol": "cacheReplicationA",
+        "physicalName": "cache.replication.node-a",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      "cacheReplicationB": {
+        "kind": "queue",
+        "symbol": "cacheReplicationB",
+        "physicalName": "cache.replication.node-b",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      "cacheReplicationC": {
+        "kind": "queue",
+        "symbol": "cacheReplicationC",
+        "physicalName": "cache.replication.node-c",
+        "managerId": null,
+        "provider": "queue-manager",
+        "dataTypeIds": [
+          "cache-op"
+        ],
+        "visibility": "internal",
+        "systemId": null,
+        "deliveryMode": "async"
+      },
+      "mtTemplate": {
+        "kind": "file",
+        "symbol": "mtTemplate",
+        "physicalName": "/services/templates/mt103.txt",
+        "managerId": null,
+        "provider": "ffs"
+      }
+    },
+    "map": {
+      "inboundSwift": {
+        "kind": "queue",
+        "physicalName": "swift.inbound",
+        "managerId": null,
+        "provider": "queue-manager"
+      },
+      "pacsOutbound": {
+        "kind": "queue",
+        "physicalName": "pacs.outbound",
+        "managerId": null,
+        "provider": "queue-manager"
+      },
+      "pain2RejectQueue": {
+        "kind": "queue",
+        "physicalName": "pain2.reject",
+        "managerId": null,
+        "provider": "queue-manager"
+      },
+      "pain2AcceptedQueue": {
+        "kind": "queue",
+        "physicalName": "pain2.accepted",
+        "managerId": null,
+        "provider": "queue-manager"
+      },
+      "cacheNodeARead": {
+        "kind": "queue",
+        "physicalName": "cache.node-a.read",
+        "managerId": null,
+        "provider": "queue-manager"
+      },
+      "cacheNodeAWrite": {
+        "kind": "queue",
+        "physicalName": "cache.node-a.write",
+        "managerId": null,
+        "provider": "queue-manager"
+      },
+      "cacheNodeBRead": {
+        "kind": "queue",
+        "physicalName": "cache.node-b.read",
+        "managerId": null,
+        "provider": "queue-manager"
+      },
+      "cacheNodeBWrite": {
+        "kind": "queue",
+        "physicalName": "cache.node-b.write",
+        "managerId": null,
+        "provider": "queue-manager"
+      },
+      "cacheNodeCRead": {
+        "kind": "queue",
+        "physicalName": "cache.node-c.read",
+        "managerId": null,
+        "provider": "queue-manager"
+      },
+      "cacheNodeCWrite": {
+        "kind": "queue",
+        "physicalName": "cache.node-c.write",
+        "managerId": null,
+        "provider": "queue-manager"
+      },
+      "cacheReplicationA": {
+        "kind": "queue",
+        "physicalName": "cache.replication.node-a",
+        "managerId": null,
+        "provider": "queue-manager"
+      },
+      "cacheReplicationB": {
+        "kind": "queue",
+        "physicalName": "cache.replication.node-b",
+        "managerId": null,
+        "provider": "queue-manager"
+      },
+      "cacheReplicationC": {
+        "kind": "queue",
+        "physicalName": "cache.replication.node-c",
+        "managerId": null,
+        "provider": "queue-manager"
+      },
+      "mtTemplate": {
+        "kind": "file",
+        "physicalName": "/services/templates/mt103.txt",
+        "managerId": null,
+        "provider": "ffs"
+      }
+    }
+  },
+  "workflows": [
+    {
+      "id": "qa-ticket-lifecycle",
+      "steps": [
+        {
+          "id": "create-issue",
+          "action": "issue_create",
+          "title": "MT103 rejection on routing",
+          "description": "Routing rejects valid MT103 samples on edge path",
+          "priority": "high",
+          "assigneeUserId": "qa-lead",
+          "reporterType": "tester",
+          "outputStateKey": "issueId"
+        },
+        {
+          "id": "create-regression-case",
+          "action": "testcase_create",
+          "name": "MT103 edge route accepts valid message",
+          "testType": "regression",
+          "description": "Assert valid MT103 follows accepted route and state becomes accepted",
+          "outputStateKey": "testCaseId"
+        },
+        {
+          "id": "link-issue-to-test",
+          "action": "issue_link_testcase",
+          "issueStateKey": "issueId",
+          "testCaseStateKey": "testCaseId"
+        }
+      ]
+    },
+    {
+      "id": "qa-integration-plan",
+      "steps": [
+        {
+          "id": "create-integration-case",
+          "action": "testcase_create",
+          "name": "Queue manager import-export parity",
+          "testType": "integration",
+          "description": "Export from primary then import into secondary preserves envelope and payload",
+          "outputStateKey": "integrationCaseId"
+        },
+        {
+          "id": "create-plan",
+          "action": "testplan_create",
+          "name": "Integration smoke baseline",
+          "planType": "integration",
+          "description": "Core integration checks for queue, router, broker handoff",
+          "outputStateKey": "integrationPlanId"
+        },
+        {
+          "id": "add-case-to-plan",
+          "action": "testplan_add_testcase",
+          "testCaseStateKey": "integrationCaseId",
+          "planStateKey": "integrationPlanId"
+        }
+      ]
+    },
+    {
+      "id": "qa-acceptance-plan",
+      "steps": [
+        {
+          "id": "create-acceptance-case",
+          "action": "testcase_create",
+          "name": "Lifecycle dashboard happy path",
+          "testType": "acceptance",
+          "description": "Operator can run happy path and observe completion state",
+          "outputStateKey": "acceptanceCaseId"
+        },
+        {
+          "id": "create-plan",
+          "action": "testplan_create",
+          "name": "Acceptance release gate",
+          "planType": "acceptance",
+          "description": "Release readiness acceptance checks",
+          "outputStateKey": "acceptancePlanId"
+        },
+        {
+          "id": "add-case-to-plan",
+          "action": "testplan_add_testcase",
+          "testCaseStateKey": "acceptanceCaseId",
+          "planStateKey": "acceptancePlanId"
+        }
+      ]
+    },
+    {
+      "id": "qa-regression-plan",
+      "steps": [
+        {
+          "id": "create-regression-case",
+          "action": "testcase_create",
+          "name": "Topology dashboard PMachine visibility",
+          "testType": "regression",
+          "description": "PMachine nodes remain visible after backend restart",
+          "outputStateKey": "regressionCaseId"
+        },
+        {
+          "id": "create-plan",
+          "action": "testplan_create",
+          "name": "Regression nightly",
+          "planType": "regression",
+          "description": "Nightly regression coverage for core dashboards and flows",
+          "outputStateKey": "regressionPlanId"
+        },
+        {
+          "id": "add-case-to-plan",
+          "action": "testplan_add_testcase",
+          "testCaseStateKey": "regressionCaseId",
+          "planStateKey": "regressionPlanId"
+        }
+      ]
+    },
+    {
+      "id": "pm-release-project-deployment",
+      "steps": [
+        {
+          "id": "create-project",
+          "action": "project_create",
+          "name": "Unified Payments Refresh",
+          "description": "Program to modernize routing, mapping, and deployment operations",
+          "outputStateKey": "projectId"
+        },
+        {
+          "id": "create-release",
+          "action": "release_create",
+          "name": "2026.09",
+          "description": "September release bundle for payment platform enhancements",
+          "projectStateKey": "projectId",
+          "outputStateKey": "releaseId"
+        },
+        {
+          "id": "create-deployment-artifact",
+          "action": "deployment_artifact_create",
+          "name": "aggregator-router-image",
+          "artifactType": "container-image",
+          "location": "registry.internal/pulse/aggregator-router:2026.09.0",
+          "releaseStateKey": "releaseId",
+          "outputStateKey": "deploymentArtifactId"
+        }
+      ]
+    },
+    {
+      "id": "pm-project-plan-authoring",
+      "steps": [
+        {
+          "id": "create-project",
+          "action": "project_create",
+          "name": "Swift-to-ISO Migration",
+          "description": "Plan migration from MT flows to ISO-native flows",
+          "outputStateKey": "projectId"
+        },
+        {
+          "id": "create-project-plan",
+          "action": "projectplan_create",
+          "name": "Migration Execution Plan",
+          "description": "End-to-end project plan with milestones, tasks, synchpoints, deliverables, and resources",
+          "projectStateKey": "projectId",
+          "outputStateKey": "projectPlanId"
+        },
+        {
+          "id": "create-milestone",
+          "action": "milestone_create",
+          "name": "Design Freeze",
+          "description": "Lock architecture and interface contracts",
+          "dueDate": "2026-07-15",
+          "outputStateKey": "milestoneId"
+        },
+        {
+          "id": "create-task",
+          "action": "task_create",
+          "name": "Build routing rules",
+          "description": "Implement routing rule editor and policies",
+          "assigneeUserId": "project-manager",
+          "outputStateKey": "taskId"
+        },
+        {
+          "id": "create-synchpoint",
+          "action": "synchpoint_create",
+          "name": "Weekly Steering",
+          "description": "Cross-team decision and risk synchronization",
+          "outputStateKey": "synchpointId"
+        },
+        {
+          "id": "create-deliverable",
+          "action": "deliverable_create",
+          "name": "Operational Runbook",
+          "description": "Deployment and rollback runbook approved by operations",
+          "outputStateKey": "deliverableId"
+        },
+        {
+          "id": "create-resource",
+          "action": "resource_create",
+          "name": "QA Automation Team",
+          "resourceType": "team",
+          "description": "Automation engineers covering acceptance and regression",
+          "outputStateKey": "resourceId"
+        },
+        {
+          "id": "add-milestone",
+          "action": "projectplan_add_milestone",
+          "itemStateKey": "milestoneId",
+          "planStateKey": "projectPlanId"
+        },
+        {
+          "id": "add-task",
+          "action": "projectplan_add_task",
+          "itemStateKey": "taskId",
+          "planStateKey": "projectPlanId"
+        },
+        {
+          "id": "add-synchpoint",
+          "action": "projectplan_add_synchpoint",
+          "itemStateKey": "synchpointId",
+          "planStateKey": "projectPlanId"
+        },
+        {
+          "id": "add-deliverable",
+          "action": "projectplan_add_deliverable",
+          "itemStateKey": "deliverableId",
+          "planStateKey": "projectPlanId"
+        },
+        {
+          "id": "add-resource",
+          "action": "projectplan_add_resource",
+          "itemStateKey": "resourceId",
+          "planStateKey": "projectPlanId"
+        }
+      ]
+    },
+    {
+      "id": "cache-distributed-router",
+      "steps": [
+        {
+          "id": "check-aggregator",
+          "action": "check_api",
+          "apiSymbol": "aggregator",
+          "method": "GET",
+          "route": "/status",
+          "expectedStatus": 200,
+          "retries": 3,
+          "everyMs": 500
+        },
+        {
+          "id": "if-530",
+          "action": "if",
+          "condition": {
+            "field": "cache.operation",
+            "operator": "equals",
+            "value": "get"
+          },
+          "then": [
+            {
+              "id": "if-537",
+              "action": "if",
+              "condition": {
+                "field": "cache.targetNode",
+                "operator": "equals",
+                "value": "node-a"
+              },
+              "then": [
+                {
+                  "id": "route-get-node-a",
+                  "action": "route_queue",
+                  "queueRef": "cacheNodeARead"
+                }
+              ],
+              "else": [
+                {
+                  "id": "if-552",
+                  "action": "if",
+                  "condition": {
+                    "field": "cache.targetNode",
+                    "operator": "equals",
+                    "value": "node-b"
+                  },
+                  "then": [
+                    {
+                      "id": "route-get-node-b",
+                      "action": "route_queue",
+                      "queueRef": "cacheNodeBRead"
+                    }
+                  ],
+                  "else": [
+                    {
+                      "id": "route-get-node-c",
+                      "action": "route_queue",
+                      "queueRef": "cacheNodeCRead"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "else": [
+            {
+              "id": "if-583",
+              "action": "if",
+              "condition": {
+                "field": "cache.operation",
+                "operator": "equals",
+                "value": "put"
+              },
+              "then": [
+                {
+                  "id": "if-590",
+                  "action": "if",
+                  "condition": {
+                    "field": "cache.targetNode",
+                    "operator": "equals",
+                    "value": "node-a"
+                  },
+                  "then": [
+                    {
+                      "id": "route-put-node-a",
+                      "action": "route_queue",
+                      "queueRef": "cacheNodeAWrite"
+                    }
+                  ],
+                  "else": [
+                    {
+                      "id": "if-605",
+                      "action": "if",
+                      "condition": {
+                        "field": "cache.targetNode",
+                        "operator": "equals",
+                        "value": "node-b"
+                      },
+                      "then": [
+                        {
+                          "id": "route-put-node-b",
+                          "action": "route_queue",
+                          "queueRef": "cacheNodeBWrite"
+                        }
+                      ],
+                      "else": [
+                        {
+                          "id": "route-put-node-c",
+                          "action": "route_queue",
+                          "queueRef": "cacheNodeCWrite"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "replicate-to-node-a",
+                  "action": "route_queue",
+                  "queueRef": "cacheReplicationA"
+                },
+                {
+                  "id": "replicate-to-node-b",
+                  "action": "route_queue",
+                  "queueRef": "cacheReplicationB"
+                },
+                {
+                  "id": "replicate-to-node-c",
+                  "action": "route_queue",
+                  "queueRef": "cacheReplicationC"
+                }
+              ],
+              "else": [
+                {
+                  "id": "if-654",
+                  "action": "if",
+                  "condition": {
+                    "field": "cache.operation",
+                    "operator": "equals",
+                    "value": "invalidate"
+                  },
+                  "then": [
+                    {
+                      "id": "invalidate-node-a",
+                      "action": "route_queue",
+                      "queueRef": "cacheNodeAWrite"
+                    },
+                    {
+                      "id": "invalidate-node-b",
+                      "action": "route_queue",
+                      "queueRef": "cacheNodeBWrite"
+                    },
+                    {
+                      "id": "invalidate-node-c",
+                      "action": "route_queue",
+                      "queueRef": "cacheNodeCWrite"
+                    }
+                  ],
+                  "else": [
+                    {
+                      "id": "fallback-cache-read",
+                      "action": "route_queue",
+                      "queueRef": "cacheNodeARead"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "deployments": [],
+  "clusters": [],
+  "artifactDeployments": [],
+  "genericSystems": []
+}

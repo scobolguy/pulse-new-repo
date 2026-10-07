@@ -4,6 +4,8 @@ import path from 'path';
 import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 import { readEnvNumber } from './src/env-config.mjs';
+import { compilePascalishProgramWithAntlr } from './scripts/compile-pascalish-program-antlr-to-pcode.mjs';
+import { createPascalishServiceHost } from '../pmachines/javascript/src/service-host.mjs';
 
 const app = express();
 app.use(express.json());
@@ -33,6 +35,7 @@ const LEGACY_SCHEMA_ROOT = path.join(DATA_ROOT, 'schemas');
 const LEGACY_SCHEMA_LIFECYCLE_PATH = path.join(DATA_ROOT, 'schema-lifecycle.json');
 const LEGACY_MAPPER_RULESETS_PATH = path.join(DATA_ROOT, 'mapper-rulesets.json');
 const LEGACY_DATA_TYPES_PATH = path.join(DATA_ROOT, 'data-types.json');
+let subschemaPolicyHost;
 
 async function pathExists(targetPath) {
   try {
@@ -539,6 +542,91 @@ function normalizeSubschemaDefinition(candidate) {
   return { id, label, parentSchemaPath, ...(parentTypeId ? { parentTypeId } : {}), accessibleFields };
 }
 
+async function startSubschemaPolicyHost() {
+  const policyPath = path.join(repoRoot, '..', 'src', 'librarian', 'subschema-policy.pas');
+  const source = await fs.readFile(policyPath, 'utf-8');
+  const compiled = compilePascalishProgramWithAntlr(source, {
+    fileName: policyPath,
+    hostServices: true,
+  });
+  const host = await createPascalishServiceHost({
+    compiled,
+    collectorId: 'pulse-data-librarian-policy',
+    httpPort: null,
+    udpPort: null,
+    maxBodyBytes: 1000000,
+  });
+  await host.start();
+  return host;
+}
+
+async function pascalishPolicyCheck(path, body) {
+  if (!subschemaPolicyHost) throw new Error('Pascalish subschema policy is not initialized');
+  const result = await subschemaPolicyHost.dispatch({
+    transport: 'internal',
+    method: 'POST',
+    path,
+    body: JSON.stringify(body),
+  });
+  if (result.status !== 200 || typeof result.body?.valid !== 'boolean') {
+    throw new Error(`Pascalish subschema policy failed: ${JSON.stringify(result.body)}`);
+  }
+  return result.body.valid;
+}
+
+function encodePolicyField(field) {
+  return Buffer.from(field, 'utf-8').toString('base64');
+}
+
+function chunkPolicyFields(fields) {
+  const chunks = [];
+  const longFields = [];
+  let chunk = [];
+  for (const field of fields) {
+    const token = encodePolicyField(field);
+    if (Buffer.byteLength(JSON.stringify([token])) > 800) {
+      longFields.push(field);
+      continue;
+    }
+    const next = [...chunk, token];
+    if (Buffer.byteLength(JSON.stringify(next)) > 800 && chunk.length > 0) {
+      chunks.push(chunk);
+      chunk = [token];
+    } else {
+      chunk = next;
+    }
+  }
+  if (chunk.length > 0) chunks.push(chunk);
+  return { chunks, longFields };
+}
+
+async function findUnknownSubschemaFields(accessibleFields, availableFields) {
+  const { chunks, longFields } = chunkPolicyFields(availableFields);
+  const unknownFields = [];
+  for (const field of accessibleFields) {
+    const token = encodePolicyField(field);
+    let isAvailable = false;
+    if (Buffer.byteLength(JSON.stringify([token])) <= 800) {
+      for (const availableFieldsChunk of chunks) {
+        isAvailable = await pascalishPolicyCheck('/validate-field', {
+          fieldToken: token,
+          availableFields: availableFieldsChunk,
+        });
+        if (isAvailable) break;
+      }
+    }
+    if (!isAvailable) {
+      for (const longField of longFields) {
+        if (field.length !== longField.length) continue;
+        isAvailable = await pascalishPolicyCheck('/compare-field', { field, candidate: longField });
+        if (isAvailable) break;
+      }
+    }
+    if (!isAvailable) unknownFields.push(field);
+  }
+  return unknownFields;
+}
+
 async function loadSubschemas() {
   try {
     const parsed = JSON.parse(await fs.readFile(SUBSCHEMAS_PATH, 'utf-8'));
@@ -837,7 +925,10 @@ async function validateSubschemaDefinition(candidate) {
     throw new Error(`Parent schema structure is unavailable: ${definition.parentSchemaPath}`);
   }
   const availableFields = new Set(collectSchemaFieldPaths(parent.structure));
-  const unknownFields = definition.accessibleFields.filter(field => !availableFields.has(field));
+  const unknownFields = await findUnknownSubschemaFields(
+    definition.accessibleFields,
+    [...availableFields],
+  );
   if (unknownFields.length > 0) {
     throw new Error(`Fields are not present in parent schema: ${unknownFields.join(', ')}`);
   }
@@ -1559,6 +1650,8 @@ try {
 } catch (e) {
   console.warn(`[Librarian] Storage layout initialization warning: ${e.message}`);
 }
+
+subschemaPolicyHost = await startSubschemaPolicyHost();
 
 app.listen(PORT, () => {
   console.log(`[Librarian] Service running on http://localhost:${PORT}`);

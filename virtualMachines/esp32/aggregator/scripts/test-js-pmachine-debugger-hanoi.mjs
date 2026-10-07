@@ -4,7 +4,8 @@ import {
   createJavaScriptPmachineDebugSession,
   setJavaScriptPmachineSourceBreakpoints,
   continueJavaScriptPmachineDebugSession,
-  getJavaScriptPmachineDebugState
+  getJavaScriptPmachineDebugState,
+  stopJavaScriptPmachineDebugSession
 } from '../src/backend/modules/javascriptPmachineDebugger.mjs';
 import { compilePascalishProgramWithAntlr } from './compile-pascalish-program-antlr-to-pcode.mjs';
 
@@ -20,7 +21,7 @@ async function waitForState(sessionId, predicate, timeoutMs = 2000) {
 }
 
 const sourceFileName = 'towers-of-hanoi-program.pas';
-const source = await fs.readFile(new URL(`../../artifactPrograms/${sourceFileName}`, import.meta.url), 'utf8');
+const source = await fs.readFile(new URL(`../../src/${sourceFileName}`, import.meta.url), 'utf8');
 const compiled = compilePascalishProgramWithAntlr(source, { fileName: sourceFileName });
 const sourceMap = compiled.programMap?.sourceMap || {};
 assert.ok(Object.keys(sourceMap).length > 0, 'compiled program should include source map entries');
@@ -40,10 +41,15 @@ const withBreakpoint = setJavaScriptPmachineSourceBreakpoints(sessionId, [{
 }]);
 assert.ok(withBreakpoint.breakpoints.length > 0, 'source breakpoint should resolve to at least one PC');
 
-continueJavaScriptPmachineDebugSession(sessionId);
-const paused = await waitForState(sessionId, state => state?.status === 'paused' && state.sourceLocation?.sourceFile === sourceFileName && state.breakpoints?.length > 0, 3000);
-assert.equal(paused.sourceLocation.sourceFile, sourceFileName);
-assert.ok(paused.breakpoints.some(pc => pc >= 58 && pc <= 62), 'should resolve to a nearby Hanoi call instruction');
-assert.equal(paused.callStack.length, 1);
-assert.equal(paused.pc, 1);
-console.log('[js-pmachine-debugger-hanoi] PASS: source breakpoint resolves to the Hanoi call and pauses at procedure entry');
+try {
+  continueJavaScriptPmachineDebugSession(sessionId);
+  const paused = await waitForState(sessionId, state => state?.status === 'paused' && state.sourceLocation?.sourceFile === sourceFileName && state.breakpoints?.length > 0, 3000);
+  assert.equal(paused.sourceLocation.sourceFile, sourceFileName);
+  assert.equal(paused.sourceLocation.sourceLine, 21);
+  assert.equal(paused.callStack.length, 0, 'source call breakpoint stops before entering the procedure');
+  assert.ok(paused.breakpoints.includes(paused.pc));
+  assert.equal(paused.globals.diskCount, 5);
+  console.log('[js-pmachine-debugger-hanoi] PASS: source breakpoint pauses before the Hanoi call');
+} finally {
+  stopJavaScriptPmachineDebugSession(sessionId);
+}

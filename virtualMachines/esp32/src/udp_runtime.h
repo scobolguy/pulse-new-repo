@@ -7,6 +7,16 @@
 #include "NodeDiscovery.h"
 #include "udp_announcement.h"
 
+struct UdpIngressStats {
+    uint32_t received = 0;
+    uint32_t droppedOversized = 0;
+    uint32_t droppedLowMemory = 0;
+    uint32_t droppedIncomplete = 0;
+    uint32_t droppedAllocation = 0;
+};
+
+UdpIngressStats udpRuntimeGetIngressStats();
+
 struct UdpRuntimeContext {
     const char* nodeName = nullptr;
     const char* deviceRole = nullptr;
@@ -28,6 +38,8 @@ uint16_t udpRuntimeGetBoundParentPort();
 uint16_t udpRuntimeGetBoundSiblingPort();
 
 void udpRuntimeResetBeaconState();
+void udpRuntimeDeferBeacons();
+bool udpRuntimeCanSendBeacon();
 unsigned long udpRuntimeGetBeaconIntervalMs(unsigned long ackedIntervalMs, unsigned long unackedIntervalMs);
 bool udpRuntimeIsBeaconAcknowledged();
 unsigned long udpRuntimeGetBeaconLastSentAt();

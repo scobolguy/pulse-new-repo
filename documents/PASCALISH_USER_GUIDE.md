@@ -64,6 +64,33 @@ interop wfl "payment-workflow" as wf;
 interop cobolish "legacy-transform" as legacy;
 ```
 
+## JSON Library
+
+The built-in `JSON` Pascalish library provides a `JSONDocument` class for JSON objects in hosted services.
+Load serialized JSON with `load`, access required fields through `text`, `intValue`,
+`value`, `pathText`, and `pathInteger`, and update the document with `setText`,
+`setInteger`, `setBoolean`, `embed`, `merge`, and `appendText`. These helpers use the
+runtime's checked JSON implementation; malformed JSON, missing fields, and type mismatches
+are errors rather than silent defaults.
+
+```pascal
+use "JSON";
+var request: JSONDocument;
+
+request.load(host.event_body());
+request.setText('normalizedName', request.pathText('person.name'));
+return request.serialize()
+```
+
+## Data Librarian Policy
+
+The Data Librarian keeps its HTTP API and catalog storage in Node.js. Subschema field-access
+validation runs as a hosted Pascalish policy in
+`virtualMachines/esp32/src/librarian/subschema-policy.pas`; it uses the `JSON` library while
+Node supplies the parent schema's flattened field paths and persists catalog changes.
+The policy integration check is `npm run test:librarian:subschema-policy` from
+`virtualMachines/esp32/aggregator`.
+
 ## Best Practices
 
 - keep declarations clear and top-level

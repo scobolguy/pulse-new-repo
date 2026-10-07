@@ -136,7 +136,7 @@
       <article class="step">
         <h2>4) MT103 Inbound to Parsed</h2>
         <p>Rule <code>mt103-inbound-to-parsed</code>: <code>swift.mt103.inbound</code> -> <code>swift.mt103.parsed</code>.</p>
-        <p class="inline-path">Source: aggregator/data/router-mapper.dsl</p>
+        <p class="inline-path">Source: src/router-mapper.dsl</p>
       </article>
 
       <div class="arrow">FANOUT</div>
@@ -156,7 +156,7 @@
             Transform: <code>map("pacs-to-lynx", map("mt103-to-pacs", src))</code>
           </div>
         </div>
-        <p class="inline-path">Source: aggregator/data/router-mapper.dsl</p>
+        <p class="inline-path">Source: src/router-mapper.dsl</p>
       </article>
 
       <div class="arrow">FINAL</div>

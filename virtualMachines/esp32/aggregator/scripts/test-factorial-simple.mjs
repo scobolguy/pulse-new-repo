@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 async function loadOpcodeMap() {
-  const manifestPath = path.resolve(__dirname, '../../pmachines/shared/contracts/pcode-opcodes.manifest.json');
+  const manifestPath = path.resolve(__dirname, '../../pcode/pcode-opcodes.manifest.json');
   const manifestText = await fs.readFile(manifestPath, 'utf-8');
   const manifest = JSON.parse(manifestText);
   const map = new Map();

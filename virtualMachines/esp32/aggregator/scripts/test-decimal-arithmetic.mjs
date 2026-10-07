@@ -25,7 +25,7 @@ async function runSource(sourceText) {
 
 // 1. The showcase: scale from the receiving field, truncation vs ROUNDED, exactness.
 {
-  const source = await fs.readFile(path.join(root, 'data', 'decimal-showcase.pas'), 'utf8');
+  const source = await fs.readFile(path.resolve(root, '..', 'src', 'decimal-showcase.pas'), 'utf8');
   const { result } = await runSource(source);
   assert.deepEqual(result.stdout, [
     'gross     = 59.97',
@@ -169,4 +169,40 @@ async function runSource(sourceText) {
   assert.deepEqual(result.stdout, ['gross 59.97']);
 }
 
-console.log('[decimal-arithmetic] PASS: fixed-point scale, ROUNDED, width, exactness, calls, PICTURE, COBOLISH COMPUTE');
+// Syntax variants, aliases and existing Data Librarian imports remain compatible.
+{
+  const { compiled, result } = await runSource(`
+    PROGRAM DecimalSyntax;
+    IMPORT "Currency", Amount FROM DATA LIBRARIAN;
+    TYPE Money = DECIMAL(12, 2);
+    VAR whole: decimal; narrow: decimal(5); amount: Money; unrounded: integer;
+    BEGIN
+      whole := 12.99;
+      narrow := 3.99;
+      amount := DECIMAL(2.255) ROUNDED;
+      unrounded := 7;
+      whole := unrounded;
+      WRITELN(whole);
+      WRITELN(narrow);
+      WRITELN(amount)
+    END.
+  `);
+  assert.deepEqual(result.stdout, ['7', '3', '2.26']);
+  assert.equal(compiled.ast.runtimeUnit.block.statements[4].rounded, false);
+  assert.match(compiled.pcodeText, /PUSH_DEC 2255 3/);
+  assert.match(compiled.pcodeText, /DEC_QUANT 2 ROUNDED/);
+  assert.deepEqual(
+    compiled.programMap.variableDeclarations.slice(0, 2).map(item => [item.dataType.precision, item.dataType.scale]),
+    [[18, 0], [5, 0]]
+  );
+}
+
+for (const type of ['decimal(0, 0)', 'decimal(2, 3)', 'decimal(4.5, 2)', 'decimal(4, 1.5)']) {
+  assert.throws(
+    () => compilePascalishProgramWithAntlr(`program InvalidDecimal; var value: ${type}; begin end.`),
+    /Invalid decimal type/,
+    `${type} must not be silently truncated or accepted`
+  );
+}
+
+console.log('[decimal-arithmetic] PASS: fixed-point scale, ROUNDED, width, exactness, calls, PICTURE, COBOLISH COMPUTE, syntax and type validation');

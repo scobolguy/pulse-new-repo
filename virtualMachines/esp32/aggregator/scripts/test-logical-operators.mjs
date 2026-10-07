@@ -1,4 +1,4 @@
-import { compilePascalishProgramWithAntlr } from './compile-pascalish-program-antlr-to-pcode.mjs';
+import { compileStandardPascalWithAntlr } from './compile-standard-pascal-antlr-to-pcode.mjs';
 
 const src = `program TestLogical;
 var x, y : integer;
@@ -20,7 +20,7 @@ begin
 end.`;
 
 try {
-  const result = compilePascalishProgramWithAntlr(src);
+  const result = compileStandardPascalWithAntlr(src);
   console.log('=== PCODE ===');
   console.log(result.pcodeText);
 } catch(e) {

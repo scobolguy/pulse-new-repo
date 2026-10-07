@@ -722,10 +722,10 @@ export function compileWorkflowDSL(sourceText) {
 
 function parseArgs(argv) {
   const args = {
-    in: './data/workflow.wfl',
-    symbolsOut: './data/symbols.generated.json',
-    workflowOut: './data/workflows.generated.json',
-    artifactOut: './data/workflow-compiled.json'
+    in: '../src/workflow.wfl',
+    symbolsOut: '../object/pcode/symbols.generated.json',
+    workflowOut: '../object/pcode/workflows.generated.json',
+    artifactOut: '../object/pcode/workflow-compiled.json'
   };
 
   for (let i = 0; i < argv.length; i += 1) {

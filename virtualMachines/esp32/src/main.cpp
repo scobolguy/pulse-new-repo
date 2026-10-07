@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <ctype.h>
+#include "SensorService.h"
 #include "DevicePin.h"
 #include <map>
 #include <vector>
@@ -19,7 +20,6 @@ DeviceConfiguration deviceConfig;
 #endif
 #include <ESPAsyncWebServer.h>
 #include "https_service.h"
-#include "DeviceDriverTemplate.h"
 
 #include <ArduinoJson.h>
 #include "ConfigSchema.h"
@@ -39,13 +39,43 @@ DeviceConfiguration deviceConfig;
 #include "time_authority.h"
 #include "unique_id_service.h"
 
-#if defined(ENABLE_DHT11_HTTP_SERVER)
-#include "devices/dht11/Dht11HttpServer.h"
-#endif
-
 #ifdef ENABLE_PMACHINE
 #include "pmachine.h"
 #include "pmachine_routes.h"
+#include "DeviceDriverTemplate.h"
+
+bool pmachineInvokeFsm(
+    const pmachine::FsmCallRequest& request,
+    pmachine::FsmCallResult& result,
+    std::string& outError,
+    void* context
+) {
+    (void)context;
+    if (request.kind != "device") {
+        outError = "unsupported local FSM kind: " + request.kind;
+        return false;
+    }
+    DeviceRuntime& runtime = deviceRuntime();
+    if (request.operation == "OPEN") {
+        result.handle = runtime.open(request.name, request.type, request.pin, outError);
+        return result.handle > 0;
+    }
+    if (request.operation == "CLOSE") {
+        if (runtime.close(request.handle)) return true;
+        outError = "invalid device handle";
+        return false;
+    }
+    const char* driverOperation = nullptr;
+    if (request.operation == "OBSERVE") driverOperation = "read";
+    else if (request.operation == "SET") driverOperation = "write";
+    else if (request.operation == "EVENT") driverOperation = "action";
+    if (!driverOperation) {
+        outError = "unsupported local FSM operation: " + request.operation;
+        return false;
+    }
+    return runtime.operate(request.handle, driverOperation, request.member, request.value,
+                           result.value, outError);
+}
 #endif
 
 #ifdef ENABLE_CAMERA
@@ -91,231 +121,11 @@ NodeConfig nodeConfig;
 WifiConfig wifiConfig;
 ClusterConfig clusterConfig;
 FederatedFileSystem federatedFS;
-
-static void loadStartupDeploymentManifest() {
-    if (!federatedFS.openReadFile("/startup/deployments.json")) {
-        Serial.println("[BOOT] No startup deployment manifest found");
-        return;
-    }
-
-    std::vector<uint8_t> manifestBytes;
-    if (federatedFS.read("/startup/deployments.json", manifestBytes) != FFSStatus::OK || manifestBytes.empty()) {
-        Serial.println("[BOOT] Startup deployment manifest could not be read");
-        return;
-    }
-
-    JsonDocument manifest;
-    const DeserializationError error = deserializeJson(manifest, manifestBytes.data(), manifestBytes.size());
-    if (error) {
-        Serial.printf("[BOOT] Startup deployment manifest invalid: %s\n", error.c_str());
-        return;
-    }
-
-    const bool enabled = manifest["startup"]["enabled"] | false;
-    const JsonArray deployments = manifest["deployments"].as<JsonArray>();
-    Serial.printf("[BOOT] Startup deployment manifest loaded: enabled=%s deployments=%u\n",
-                  enabled ? "true" : "false",
-                  static_cast<unsigned>(deployments.size()));
-    for (JsonObject deployment : deployments) {
-        const char* serviceName = deployment["serviceName"] | "";
-        const char* packageName = deployment["packageName"] | "";
-        const char* runtimeState = deployment["runtimeState"] | deployment["state"] | "stopped";
-        Serial.printf("[BOOT] Startup deployment: service=%s package=%s state=%s\n",
-                      serviceName, packageName, runtimeState);
-    }
-}
-
-static bool httpInvokeServiceTransport(
-    const std::string& serviceId,
-    const std::string& endpoint,
-    const std::string& payload,
-    std::string& outResponse,
-    std::string& outError,
-    void* context
-) {
-    (void)context;
-    if (WiFi.status() != WL_CONNECTED) {
-        outError = "WiFi not connected";
-        return false;
-    }
-
-    HTTPClient http;
-    WiFiClient client;
-    String url = "http://192.168.2.155/api/services/";
-    url += serviceId.c_str();
-    if (!endpoint.empty()) {
-        if (endpoint[0] == '/') {
-            url += endpoint.c_str();
-        } else {
-            url += "/";
-            url += endpoint.c_str();
-        }
-    }
-
-    if (!http.begin(client, url.c_str())) {
-        outError = "failed to open HTTP client";
-        return false;
-    }
-
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("Accept", "application/json");
-
-    String requestBody = payload.empty() ? "{}" : String(payload.c_str());
-    const int status = http.POST(requestBody);
-    const String responseText = http.getString();
-    http.end();
-
-    if (status < 200 || status >= 300) {
-        outError = std::string("HTTP status ") + std::to_string(status);
-        if (responseText.length() > 0) {
-            outError += ": ";
-            outError += responseText.c_str();
-        }
-        return false;
-    }
-
-    outResponse = std::string(responseText.c_str());
-    return true;
-}
-
-bool pmachineInvokeFsm(
-    const pmachine::FsmCallRequest& request,
-    pmachine::FsmCallResult& result,
-    std::string& outError,
-    void* context
-) {
-    (void)context;
-    if (request.kind != "device") {
-        outError = "unsupported local FSM kind: " + request.kind;
-        return false;
-    }
-    DeviceRuntime& runtime = deviceRuntime();
-    if (request.operation == "OPEN") {
-        result.handle = runtime.open(request.name, request.type, request.pin, outError);
-        return result.handle > 0;
-    }
-    if (request.operation == "CLOSE") {
-        if (runtime.close(request.handle)) return true;
-        outError = "invalid device handle";
-        return false;
-    }
-    const char* driverOperation = nullptr;
-    if (request.operation == "OBSERVE") driverOperation = "read";
-    else if (request.operation == "SET") driverOperation = "write";
-    else if (request.operation == "EVENT") driverOperation = "action";
-    if (!driverOperation) {
-        outError = "unsupported local FSM operation: " + request.operation;
-        return false;
-    }
-    if (!runtime.operate(request.handle, driverOperation, request.member, request.value,
-                         result.value, outError)) {
-        return false;
-    }
-    return true;
-}
-
-static bool httpInvokeOrchestrationWait(
-    const std::vector<pmachine::OrchestrationSpawnRequest>& requests,
-    uint32_t timeoutMs,
-    std::vector<pmachine::OrchestrationTaskResult>& outResults,
-    std::string& outError,
-    void* context
-) {
-    (void)timeoutMs;
-    (void)context;
-    if (requests.empty()) {
-        outError = "no orchestration requests";
-        return false;
-    }
-
-    for (const auto& request : requests) {
-        pmachine::OrchestrationTaskResult result;
-        result.handleRef = request.handleRef;
-        result.subflowId = request.subflowId;
-        result.nodeId = request.nodeId;
-
-        std::string response;
-        std::string error;
-        const bool ok = httpInvokeServiceTransport(
-            request.subflowId,
-            "",
-            request.payloadRef,
-            response,
-            error,
-            nullptr
-        );
-
-        result.success = ok;
-        result.responseJson = response;
-        result.errorCode = ok ? "" : "transport_error";
-        result.errorMessage = error;
-        outResults.push_back(result);
-        if (!ok) {
-            outError = error;
-            return false;
-        }
-    }
-
-    return true;
-}
-
 bool ffsUp = false;
-
-#if defined(ENABLE_DISPLAY) && !defined(DISPLAY_NO_LVGL)
-bool displayStatusDashboardActive = false;
-unsigned long lastDisplayStatusUpdateMs = 0;
-
-void updateDisplayStatusDashboard(bool force = false) {
-    if (!displayStatusDashboardActive || !displayService.isInitialized()) return;
-
-    const unsigned long now = millis();
-    if (!force && now - lastDisplayStatusUpdateMs < 1000) return;
-    lastDisplayStatusUpdateMs = now;
-
-    const bool wifiConnected = WiFi.status() == WL_CONNECTED;
-    String transport = "Transport: offline";
-    if (wifiConnected) {
-        transport = "Transport: WiFi";
-    }
-#if defined(ESP32) && defined(ENABLE_BT_CONTROL_PLANE)
-    else if (bluetoothControlPlaneClientConnected()) {
-        transport = "Transport: BLE fallback";
-    }
-#endif
-
-    String address = "Address: unavailable";
-    if (wifiConnected) {
-        address = "IP: " + WiFi.localIP().toString();
-    } else {
-        const IPAddress apAddress = WiFi.softAPIP();
-        if (apAddress != IPAddress(0, 0, 0, 0)) {
-            address = "AP: " + apAddress.toString();
-        }
-    }
-
-    const unsigned long uptimeSeconds = now / 1000;
-    const unsigned long hours = uptimeSeconds / 3600;
-    const unsigned long minutes = (uptimeSeconds / 60) % 60;
-    const unsigned long seconds = uptimeSeconds % 60;
-
-    ddlRenderer.updateTextWidget("transportStatus", transport);
-    ddlRenderer.updateTextWidget("addressStatus", address);
-    ddlRenderer.updateTextWidget(
-        "uptimeStatus",
-        String("Uptime: ") + hours + "h " + minutes + "m " + seconds + "s"
-    );
-    ddlRenderer.updateTextWidget(
-        "heapStatus",
-        String("Free heap: ") + ESP.getFreeHeap() + " bytes"
-    );
-}
-#endif
 AsyncWebServer server(80);
 DevicePin* devicePin = nullptr;
 int devicePinNumber = 2;
-#ifdef RELAY_PIN
-int relayPinNumber = RELAY_PIN;
-#elif defined(ENABLE_CAMERA)
+#ifdef ENABLE_CAMERA
 // GPIO 5 is used by camera (Y2 data line), move relay to GPIO 12
 int relayPinNumber = 12;
 #else
@@ -422,14 +232,6 @@ bool doorbellButtonLastReading = false;
 bool doorbellButtonStablePressed = false;
 unsigned long doorbellButtonLastChangeMs = 0;
 unsigned long doorbellLastMotionCheckMs = 0;
-String doorbellDisplayStreamHost;
-uint16_t doorbellDisplayStreamPort = 80;
-unsigned long doorbellDisplayStreamIntervalMs = 500;
-unsigned long doorbellDisplayStreamLastFrameMs = 0;
-unsigned long doorbellDisplayStreamFramesSent = 0;
-unsigned long doorbellDisplayStreamFailures = 0;
-int doorbellDisplayStreamLastStatus = 0;
-constexpr unsigned long DOORBELL_DISPLAY_MIN_INTERVAL_MS = 334;
 #endif
 
 #if defined(ENABLE_DOORBELL_DISPLAY)
@@ -438,50 +240,8 @@ String doorbellLastSnapshotUrl;
 unsigned long doorbellLastAlertMs = 0;
 #endif
 
-#if defined(ESP32) && defined(ENABLE_DISPLAY)
-portMUX_TYPE doorbellFrameMux = portMUX_INITIALIZER_UNLOCKED;
-uint8_t* doorbellPendingFrame = nullptr;
-size_t doorbellPendingFrameLength = 0;
-unsigned long doorbellFramesQueued = 0;
-unsigned long doorbellFramesRendered = 0;
-unsigned long doorbellFramesDropped = 0;
-unsigned long doorbellFrameRenderFailures = 0;
-
-void queueDoorbellDisplayFrame(uint8_t* frame, size_t length) {
-    uint8_t* replacedFrame = nullptr;
-    portENTER_CRITICAL(&doorbellFrameMux);
-    replacedFrame = doorbellPendingFrame;
-    doorbellPendingFrame = frame;
-    doorbellPendingFrameLength = length;
-    doorbellFramesQueued++;
-    if (replacedFrame) doorbellFramesDropped++;
-    portEXIT_CRITICAL(&doorbellFrameMux);
-    if (replacedFrame) free(replacedFrame);
-}
-
-void pollDoorbellDisplayFrame() {
-    uint8_t* frame = nullptr;
-    size_t length = 0;
-    portENTER_CRITICAL(&doorbellFrameMux);
-    frame = doorbellPendingFrame;
-    length = doorbellPendingFrameLength;
-    doorbellPendingFrame = nullptr;
-    doorbellPendingFrameLength = 0;
-    portEXIT_CRITICAL(&doorbellFrameMux);
-
-    if (!frame) return;
-    if (displayService.showJpegFrame(frame, length, 0, 0)) {
-        doorbellFramesRendered++;
-    } else {
-        doorbellFrameRenderFailures++;
-    }
-    free(frame);
-}
-#endif
-
 #ifdef ENABLE_PMACHINE
 pmachine::PMachine pm;
-pmachine::PMachine pmAsyncWorker;
 #endif
 
 const char* firmwareVersion = "2026.06.06";
@@ -711,73 +471,6 @@ void pollDoorbellButton() {
         if (doorbellButtonStablePressed) {
             emitDoorbellAlert("doorbell");
         }
-    }
-}
-
-bool startDoorbellDisplayStream(const String& host, uint16_t port, unsigned long intervalMs) {
-    if (!cameraService.isInitialized() || host.length() == 0) return false;
-
-    intervalMs = max(intervalMs, DOORBELL_DISPLAY_MIN_INTERVAL_MS);
-
-    if (!cameraService.isStreaming() && !cameraService.startVideoStream(static_cast<int>(intervalMs))) {
-        return false;
-    }
-
-    doorbellDisplayStreamHost = host;
-    doorbellDisplayStreamPort = port;
-    doorbellDisplayStreamIntervalMs = intervalMs;
-    doorbellDisplayStreamLastFrameMs = 0;
-    doorbellDisplayStreamFramesSent = 0;
-    doorbellDisplayStreamFailures = 0;
-    doorbellDisplayStreamLastStatus = 0;
-    Serial.printf("[DOORBELL] Display stream started: %s:%u every %lums\n",
-                  host.c_str(), port, intervalMs);
-    return true;
-}
-
-void stopDoorbellDisplayStream() {
-    cameraService.stopVideoStream();
-    doorbellDisplayStreamHost = "";
-    doorbellDisplayStreamLastFrameMs = 0;
-    Serial.println("[DOORBELL] Display stream stopped");
-}
-
-void pollDoorbellDisplayStream() {
-    if (!cameraService.isStreaming() || doorbellDisplayStreamHost.length() == 0) return;
-
-    const unsigned long now = millis();
-    if (doorbellDisplayStreamLastFrameMs != 0
-        && now - doorbellDisplayStreamLastFrameMs < doorbellDisplayStreamIntervalMs) {
-        return;
-    }
-    doorbellDisplayStreamLastFrameMs = now;
-
-    uint8_t* jpeg = nullptr;
-    size_t jpegLength = 0;
-    if (!cameraService.captureToBuffer(&jpeg, &jpegLength)) {
-        doorbellDisplayStreamFailures++;
-        doorbellDisplayStreamLastStatus = -1;
-        return;
-    }
-
-    const String url = String("http://") + doorbellDisplayStreamHost + ":"
-        + String(doorbellDisplayStreamPort) + "/api/doorbell/frame";
-    HTTPClient http;
-    http.setTimeout(4000);
-    int status = -1;
-    if (http.begin(url)) {
-        http.addHeader("Content-Type", "image/jpeg");
-        status = http.POST(jpeg, jpegLength);
-        http.end();
-    }
-    free(jpeg);
-
-    doorbellDisplayStreamLastStatus = status;
-    if (status >= 200 && status < 300) {
-        doorbellDisplayStreamFramesSent++;
-    } else {
-        doorbellDisplayStreamFailures++;
-        Serial.printf("[DOORBELL] Display frame delivery failed: HTTP %d\n", status);
     }
 }
 #endif
@@ -1163,14 +856,8 @@ TaskHandle_t bonecrusherWorkerTaskHandle = nullptr;
 #endif
 
 bool isBonecrusherRole() {
-#ifdef DISABLE_BONECRUSHER
-    return false;
-#else
     const String role = String(deviceRole);
-    return role.equalsIgnoreCase("bonecrusher")
-        || role.equalsIgnoreCase("generalist")
-        || pm.getRuntimeUnit().kind == pmachine::RuntimeUnitKind::Daemon;
-#endif
+    return role.equalsIgnoreCase("bonecrusher") || role.equalsIgnoreCase("generalist");
 }
 
 String percentEncode(const String& in) {
@@ -1385,11 +1072,6 @@ void loadBonecrusherWorkerConfig() {
 }
 
 int httpPostJson(const String& url, const String& body, String& responseBody, uint16_t timeoutMs = 4000) {
-#if defined(ESP32) && defined(ENABLE_BT_CONTROL_PLANE)
-    if (WiFi.status() != WL_CONNECTED && !url.startsWith("http://127.0.0.1")) {
-        return bluetoothControlPlaneHttpPost(url, body, responseBody, timeoutMs);
-    }
-#endif
     HTTPClient http;
 #if defined(ARDUINO_ARCH_ESP8266)
     WiFiClient postJsonClient;
@@ -1402,13 +1084,6 @@ int httpPostJson(const String& url, const String& body, String& responseBody, ui
     const int code = http.POST(body);
     responseBody = (code > 0) ? http.getString() : "";
     http.end();
-#if defined(ESP32) && defined(ENABLE_BT_CONTROL_PLANE)
-    if (code <= 0
-        && !url.startsWith("http://127.0.0.1")
-        && bluetoothControlPlaneClientConnected()) {
-        return bluetoothControlPlaneHttpPost(url, body, responseBody, timeoutMs);
-    }
-#endif
     return code;
 }
 
@@ -1530,14 +1205,8 @@ bool processClaimWithLocalIngress(
 }
 
 void runBonecrusherWorkerIteration() {
-    const bool daemonRuntime = pm.getRuntimeUnit().kind == pmachine::RuntimeUnitKind::Daemon;
-    if ((!isBonecrusherRole() && !daemonRuntime) || (!bonecrusherConfig.enabled && !daemonRuntime)) return;
-    if (daemonRuntime) bonecrusherConfig.enabled = true;
-    if (WiFi.status() != WL_CONNECTED
-#if defined(ESP32) && defined(ENABLE_BT_CONTROL_PLANE)
-        && !bluetoothControlPlaneClientConnected()
-#endif
-    ) return;
+    if (!isBonecrusherRole() || !bonecrusherConfig.enabled) return;
+    if (WiFi.status() != WL_CONNECTED) return;
 
     const String qmBase = trimTrailingSlash(bonecrusherConfig.queueManagerUrl);
 
@@ -1644,11 +1313,7 @@ void runBonecrusherWorkerIteration() {
 
 void runEsp32GatewayWorkersIteration() {
     if (!isBonecrusherRole() || !esp32GatewayWorkersEnabled) return;
-    if (WiFi.status() != WL_CONNECTED
-#if defined(ESP32) && defined(ENABLE_BT_CONTROL_PLANE)
-        && !bluetoothControlPlaneClientConnected()
-#endif
-    ) return;
+    if (WiFi.status() != WL_CONNECTED) return;
     if (esp32GatewayWorkers.empty()) return;
 
     for (size_t i = 0; i < esp32GatewayWorkers.size(); ++i) {
@@ -1686,7 +1351,7 @@ void bonecrusherWorkerTask(void* param) {
 }
 
 void startBonecrusherWorkerTaskIfNeeded() {
-    if (!isBonecrusherRole() && pm.getRuntimeUnit().kind != pmachine::RuntimeUnitKind::Daemon) return;
+    if (!isBonecrusherRole()) return;
     if (bonecrusherWorkerTaskHandle != nullptr) return;
     constexpr uint32_t bonecrusherWorkerStackBytes = 12288;
     BaseType_t ok = xTaskCreatePinnedToCore(
@@ -1909,6 +1574,7 @@ void setupWebServer() {
             return;
         }
 
+        pinMode(relayPinNumber, OUTPUT);
         if (action.equalsIgnoreCase("toggle")) {
             relayStateOn = !relayStateOn;
         } else if (action.equalsIgnoreCase("turnOn")) {
@@ -1920,12 +1586,6 @@ void setupWebServer() {
             return;
         }
 
-        GpioPinSemaphore pinSemaphore(relayPinNumber);
-        if (!pinSemaphore.acquired()) {
-            request->send(503, "application/json", "{\"error\":\"relay GPIO pin is busy\"}");
-            return;
-        }
-        pinMode(relayPinNumber, OUTPUT);
         digitalWrite(relayPinNumber, relayStateOn ? HIGH : LOW);
 
         JsonDocument doc;
@@ -1963,6 +1623,9 @@ void setupWebServer() {
 
         Serial.printf("[LEDPIN] Received action=%s value=%s\n", action.c_str(), valueParam.c_str());
 
+        // Always configure the LED pin as output before any state change.
+        pinMode(ledPinNumber, OUTPUT);
+
         bool nextOn = false;
         if (action.equalsIgnoreCase("raise") || action.equalsIgnoreCase("turnOn") || action.equalsIgnoreCase("on")) {
             nextOn = true;
@@ -1983,12 +1646,6 @@ void setupWebServer() {
             return;
         }
 
-        GpioPinSemaphore pinSemaphore(ledPinNumber);
-        if (!pinSemaphore.acquired()) {
-            request->send(503, "application/json", "{\"error\":\"LED GPIO pin is busy\"}");
-            return;
-        }
-        pinMode(ledPinNumber, OUTPUT);
         digitalWrite(ledPinNumber, nextOn ? HIGH : LOW);
         Serial.printf("[LEDPIN] Pin %d set to %s\n", ledPinNumber, nextOn ? "HIGH" : "LOW");
 
@@ -2003,162 +1660,13 @@ void setupWebServer() {
         request->send(200, "application/json", json);
     };
 
-#if defined(ENABLE_DOORBELL_CAMERA)
-    server.on("/api/doorbell/display-stream/start", HTTP_POST, [](AsyncWebServerRequest *request) {
-        if (!request->hasParam("target")) {
-            request->send(400, "application/json", "{\"ok\":false,\"error\":\"target is required\"}");
-            return;
-        }
-
-        String target = request->getParam("target")->value();
-        target.trim();
-        const int requestedPort = request->hasParam("port")
-            ? request->getParam("port")->value().toInt()
-            : 80;
-        const unsigned long requestedInterval = request->hasParam("intervalMs")
-            ? request->getParam("intervalMs")->value().toInt()
-            : 500;
-        if (target.length() == 0 || requestedPort < 1 || requestedPort > 65535
-            || requestedInterval > 5000) {
-            request->send(400, "application/json", "{\"ok\":false,\"error\":\"invalid target, port, or intervalMs\"}");
-            return;
-        }
-
-        const bool started = startDoorbellDisplayStream(
-            target,
-            static_cast<uint16_t>(requestedPort),
-            requestedInterval);
-        String response = String("{\"ok\":") + (started ? "true" : "false")
-            + ",\"streaming\":" + (cameraService.isStreaming() ? "true" : "false")
-            + ",\"target\":\"" + doorbellDisplayStreamHost + "\""
-            + ",\"port\":" + String(doorbellDisplayStreamPort)
-            + ",\"intervalMs\":" + String(doorbellDisplayStreamIntervalMs) + "}";
-        request->send(started ? 200 : 503, "application/json", response);
-    });
-
-    server.on("/api/doorbell/display-stream/stop", HTTP_POST, [](AsyncWebServerRequest *request) {
-        stopDoorbellDisplayStream();
-        request->send(200, "application/json", "{\"ok\":true,\"streaming\":false}");
-    });
-
-    server.on("/api/doorbell/display-stream/status", HTTP_GET, [](AsyncWebServerRequest *request) {
-        JsonDocument doc;
-        doc["ok"] = true;
-        doc["streaming"] = cameraService.isStreaming() && doorbellDisplayStreamHost.length() > 0;
-        doc["target"] = doorbellDisplayStreamHost;
-        doc["port"] = doorbellDisplayStreamPort;
-        doc["intervalMs"] = static_cast<uint32_t>(doorbellDisplayStreamIntervalMs);
-        doc["framesSent"] = static_cast<uint32_t>(doorbellDisplayStreamFramesSent);
-        doc["failures"] = static_cast<uint32_t>(doorbellDisplayStreamFailures);
-        doc["lastStatus"] = doorbellDisplayStreamLastStatus;
-        String response;
-        serializeJson(doc, response);
-        request->send(200, "application/json", response);
-    });
-#endif
-
-#ifdef ENABLE_DISPLAY
-    server.on("/api/doorbell/frame/status", HTTP_GET, [](AsyncWebServerRequest *request) {
-        JsonDocument doc;
-        doc["ok"] = true;
-#if defined(ESP32)
-        portENTER_CRITICAL(&doorbellFrameMux);
-        doc["pending"] = doorbellPendingFrame != nullptr;
-        doc["queued"] = static_cast<uint32_t>(doorbellFramesQueued);
-        doc["rendered"] = static_cast<uint32_t>(doorbellFramesRendered);
-        doc["dropped"] = static_cast<uint32_t>(doorbellFramesDropped);
-        doc["renderFailures"] = static_cast<uint32_t>(doorbellFrameRenderFailures);
-        portEXIT_CRITICAL(&doorbellFrameMux);
-#endif
-        String response;
-        serializeJson(doc, response);
-        request->send(200, "application/json", response);
-    });
-
-    server.on("/api/doorbell/frame", HTTP_POST, [](AsyncWebServerRequest *request) {}, nullptr,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-            constexpr size_t kMaxFrameJpegBytes = 24 * 1024;
-            uint8_t *frame = reinterpret_cast<uint8_t *>(request->_tempObject);
-
-            if (index == 0) {
-                if (total == 0 || total > kMaxFrameJpegBytes) {
-                    request->send(413, "application/json", "{\"ok\":false,\"error\":\"frame is empty or too large\"}");
-                    return;
-                }
-                frame = static_cast<uint8_t *>(malloc(total));
-                request->_tempObject = frame;
-                if (!frame) {
-                    request->send(500, "application/json", "{\"ok\":false,\"error\":\"frame allocation failed\"}");
-                    return;
-                }
-            }
-
-            if (!frame || index + len > total) {
-                if (frame) free(frame);
-                request->_tempObject = nullptr;
-                request->send(400, "application/json", "{\"ok\":false,\"error\":\"invalid frame body\"}");
-                return;
-            }
-            memcpy(frame + index, data, len);
-            if ((index + len) < total) return;
-
-            request->_tempObject = nullptr;
-#if defined(ESP32)
-            queueDoorbellDisplayFrame(frame, total);
-            String response = String("{\"ok\":true,\"queued\":true,\"bytes\":")
-                + String(static_cast<unsigned long>(total)) + "}";
-            request->send(202, "application/json", response);
-#else
-            const bool shown = displayService.showJpegFrame(frame, total, 0, 0);
-            free(frame);
-            String response = String("{\"ok\":") + (shown ? "true" : "false")
-                + ",\"bytes\":" + String(static_cast<unsigned long>(total)) + "}";
-            request->send(shown ? 200 : 500, "application/json", response);
-#endif
-        });
-
-    server.on("/api/doorbell/ring", HTTP_POST, [](AsyncWebServerRequest *request) {}, nullptr,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-            constexpr size_t kMaxDoorbellJpegBytes = 96 * 1024;
-            constexpr const char *kDoorbellJpegPath = "/doorbell-current.jpg";
-
-            if (index == 0) {
-                if (total == 0 || total > kMaxDoorbellJpegBytes) {
-                    request->send(413, "application/json", "{\"ok\":false,\"error\":\"JPEG is empty or too large\"}");
-                    return;
-                }
-                request->_tempFile = LittleFS.open(kDoorbellJpegPath, "w");
-                if (!request->_tempFile) {
-                    request->send(500, "application/json", "{\"ok\":false,\"error\":\"unable to open JPEG file\"}");
-                    return;
-                }
-            }
-
-            if (!request->_tempFile || request->_tempFile.write(data, len) != len) {
-                if (request->_tempFile) request->_tempFile.close();
-                LittleFS.remove(kDoorbellJpegPath);
-                request->send(500, "application/json", "{\"ok\":false,\"error\":\"JPEG write failed\"}");
-                return;
-            }
-            if ((index + len) < total) return;
-
-            request->_tempFile.close();
-            const bool shown = displayService.showJpegFile(kDoorbellJpegPath, LittleFS);
-            String response = String("{\"ok\":") + (shown ? "true" : "false")
-                + ",\"bytes\":" + String(static_cast<unsigned long>(total)) + "}";
-            request->send(shown ? 200 : 500, "application/json", response);
-        });
-#endif
-
     server.on("/devices/ledpin/action", HTTP_POST, handleLedAction);
     server.on("/devices/LEDPIN/action", HTTP_POST, handleLedAction);
 
     // Self-describing services endpoint
     server.on("/services/describe", HTTP_GET, [](AsyncWebServerRequest *request){
         JsonDocument doc;
-        #if defined(ESP32) && defined(ENABLE_CAMERA)
-        doc["hardware"] = "ESP32-CAM";
-        #elif defined(ESP32)
+        #if defined(ESP32)
         doc["hardware"] = "ESP32";
         #elif defined(ESP8266)
         doc["hardware"] = "ESP8266";
@@ -2181,42 +1689,6 @@ void setupWebServer() {
         cluster["parentPort"] = nodeConfig.parentPort;
         cluster["siblingPort"] = nodeConfig.siblingPort;
         auto services = doc["services"].to<JsonArray>();
-
-    #ifdef ENABLE_CAMERA
-        auto camera = services.add<JsonObject>();
-        camera["name"] = "CameraService";
-        camera["description"] = "Captures JPEG images and provides camera streaming, configuration, and motion detection.";
-        camera["status"] = cameraService.isInitialized() ? "ready" : "down";
-        auto cameraCmds = camera["commands"].to<JsonArray>();
-        for (const char* command : {"capture", "status", "snapshot", "stream", "configure", "motion"}) {
-            auto cmd = cameraCmds.add<JsonObject>();
-            cmd["name"] = command;
-        }
-    #endif
-
-    #ifdef ENABLE_DOORBELL_CAMERA
-        auto doorbell = services.add<JsonObject>();
-        doorbell["name"] = "DoorbellService";
-        doorbell["description"] = "Emits doorbell and motion alerts and streams camera frames to a display node.";
-        doorbell["status"] = "ready";
-        auto doorbellCmds = doorbell["commands"].to<JsonArray>();
-        for (const char* command : {"ring", "startDisplayStream", "stopDisplayStream", "displayStreamStatus"}) {
-            auto cmd = doorbellCmds.add<JsonObject>();
-            cmd["name"] = command;
-        }
-    #endif
-
-    #ifdef ENABLE_DISPLAY
-        auto display = services.add<JsonObject>();
-        display["name"] = "DisplayService";
-        display["description"] = "Renders status information and JPEG frames on the attached display.";
-        display["status"] = displayService.isInitialized() ? "ready" : "down";
-        auto displayCmds = display["commands"].to<JsonArray>();
-        for (const char* command : {"status", "showJpeg", "clear"}) {
-            auto cmd = displayCmds.add<JsonObject>();
-            cmd["name"] = command;
-        }
-    #endif
 
         if (isSupervisorRole()) {
             auto supervisor = services.add<JsonObject>();
@@ -2530,7 +2002,6 @@ void setupWebServer() {
         #endif
 
         // Sensor Service (example, static)
-    #ifndef DISABLE_SENSOR_SERVICE
         auto sensor = services.add<JsonObject>();
         sensor["name"] = "SensorService";
         {
@@ -2566,7 +2037,6 @@ void setupWebServer() {
             else { docText = "Convert sensor result to JSON."; }
             cmd["description"] = docText;
         }
-#endif
 
 #ifdef ENABLE_TIME_AUTHORITY
         auto timeAuthority = services.add<JsonObject>();
@@ -2678,6 +2148,15 @@ void setupWebServer() {
         json += "\"lastSentAt\":" + String((unsigned long)udpRuntimeGetBeaconLastSentAt()) + ",";
         json += "\"lastAckAt\":" + String((unsigned long)udpRuntimeGetBeaconLastAckAt()) + ",";
         json += "\"capabilityHash\":\"" + computeNodeCapabilityHash() + "\"}" + ",";
+        const auto udpIngress = udpRuntimeGetIngressStats();
+        json += "\"udpIngress\":{";
+        json += "\"boundParentPort\":" + String((unsigned long)udpRuntimeGetBoundParentPort()) + ",";
+        json += "\"boundSiblingPort\":" + String((unsigned long)udpRuntimeGetBoundSiblingPort()) + ",";
+        json += "\"received\":" + String((unsigned long)udpIngress.received) + ",";
+        json += "\"droppedOversized\":" + String((unsigned long)udpIngress.droppedOversized) + ",";
+        json += "\"droppedLowMemory\":" + String((unsigned long)udpIngress.droppedLowMemory) + ",";
+        json += "\"droppedIncomplete\":" + String((unsigned long)udpIngress.droppedIncomplete) + ",";
+        json += "\"droppedAllocation\":" + String((unsigned long)udpIngress.droppedAllocation) + "},";
         if (isSupervisorRole()) {
             json += String("\"supervisorEnabled\":") + (supervisorEnabled ? "true" : "false") + ",";
             json += String("\"supervisorOverallHealthy\":") + (supervisorOverallHealthy() ? "true" : "false") + ",";
@@ -2727,22 +2206,6 @@ void setupWebServer() {
         firstService = false;
     #endif
         json += "]";
-        JsonDocument openDevicesDoc;
-        JsonArray openDevices = openDevicesDoc.to<JsonArray>();
-        for (const auto& device : deviceRuntime().openedDevices()) {
-            JsonObject item = openDevices.add<JsonObject>();
-            item["id"] = device.name.c_str();
-            item["kind"] = "device";
-            item["name"] = device.name.c_str();
-            item["type"] = device.type.c_str();
-            item["driver"] = device.driver.c_str();
-            item["pin"] = device.pin;
-            item["handle"] = device.handle;
-            item["nodeName"] = nodeName;
-        }
-        String openDevicesJson;
-        serializeJson(openDevices, openDevicesJson);
-        json += ",\"devices\":" + openDevicesJson;
         json += ",\"discoveredNodes\":[";
         bool first = true;
         size_t emittedNodes = 0;
@@ -2769,273 +2232,6 @@ void setupWebServer() {
 #endif
         json += "}";
         request->send(200, "application/json", json);
-    });
-
-    // GET /api/manifest — structured capability manifest for aggregator self-discovery
-    server.on("/api/manifest", HTTP_GET, [](AsyncWebServerRequest *request){
-        JsonDocument doc;
-
-        // Node identity
-        doc["nodeId"] = nodeName;
-        doc["nodeName"] = nodeName;
-        doc["role"] = deviceRole;
-        doc["version"] = firmwareVersion;
-        doc["firmwareBuildStamp"] = firmwareBuildStamp;
-        doc["manufacturer"] = "RichardLabs";
-        #if defined(ESP32) && defined(ENABLE_CAMERA)
-        doc["model"] = "ESP32-CAM";
-        #elif defined(ESP32)
-        doc["model"] = "ESP32";
-        #elif defined(ARDUINO_ARCH_ESP8266)
-        doc["model"] = "ESP8266";
-        #else
-        doc["model"] = "Unknown";
-        #endif
-        doc["ip"] = WiFi.localIP().toString();
-        doc["httpPort"] = 80;
-        doc["preferredTaskType"] = preferredTaskType;
-        doc["firmwareTrack"] = firmwareTrack;
-
-        // Devices: enumerate from /devices/*.json on LittleFS
-        JsonArray devices = doc["devices"].to<JsonArray>();
-        if (LittleFS.exists("/devices")) {
-            File devDir = LittleFS.open("/devices", "r");
-            File devEntry = devDir.openNextFile();
-            while (devEntry) {
-                if (!devEntry.isDirectory()) {
-                    String devFileName = String(devEntry.name());
-                    if (devFileName.startsWith("/devices/")) devFileName = devFileName.substring(9);
-                    if (devFileName.endsWith(".json")) {
-                        String devId = devFileName.substring(0, devFileName.length() - 5);
-                        String devJson = devEntry.readString();
-                        JsonDocument devDoc;
-                        JsonObject devObj = devices.add<JsonObject>();
-                        devObj["id"] = devId;
-                        if (!deserializeJson(devDoc, devJson)) {
-                            devObj["type"] = devDoc["type"] | "device";
-                            devObj["driver"] = devDoc["driver"] | "gpio";
-                            if (devDoc["pin"].is<int>()) devObj["pin"] = devDoc["pin"].as<int>();
-                            if (devDoc["actions"].is<JsonArray>()) {
-                                JsonArray caps = devObj["capabilities"].to<JsonArray>();
-                                for (JsonVariant action : devDoc["actions"].as<JsonArray>()) {
-                                    caps.add(action);
-                                }
-                            }
-                            if (devDoc["visibility"].is<const char*>()) {
-                                devObj["visibility"] = devDoc["visibility"].as<const char*>();
-                            }
-                        } else {
-                            devObj["type"] = "device";
-                            devObj["driver"] = "gpio";
-                        }
-                    }
-                }
-                devEntry.close();
-                devEntry = devDir.openNextFile();
-            }
-            devDir.close();
-        }
-
-        // Services: enumerate active firmware services
-        JsonArray services = doc["services"].to<JsonArray>();
-
-        if (ffsUp) {
-            JsonObject svc = services.add<JsonObject>();
-            svc["id"] = "ffs";
-            svc["type"] = "filesystem-service";
-            JsonArray eps = svc["endpoints"].to<JsonArray>();
-            JsonObject ep1 = eps.add<JsonObject>(); ep1["path"] = "/ffs/list"; ep1["method"] = "GET";
-            JsonObject ep2 = eps.add<JsonObject>(); ep2["path"] = "/ffs/read"; ep2["method"] = "GET";
-            JsonObject ep3 = eps.add<JsonObject>(); ep3["path"] = "/ffs/write"; ep3["method"] = "POST";
-        }
-
-#ifdef ENABLE_PMACHINE
-        {
-            JsonObject svc = services.add<JsonObject>();
-            svc["id"] = "pmachine";
-            svc["type"] = "vm-service";
-            JsonArray eps = svc["endpoints"].to<JsonArray>();
-            JsonObject ep1 = eps.add<JsonObject>(); ep1["path"] = "/pmachine/run"; ep1["method"] = "POST";
-            JsonObject ep2 = eps.add<JsonObject>(); ep2["path"] = "/pmachine/status"; ep2["method"] = "GET";
-            JsonObject ep3 = eps.add<JsonObject>(); ep3["path"] = "/pmachine/edge_ingress_stage"; ep3["method"] = "POST";
-        }
-#endif
-
-#ifdef ENABLE_CAMERA
-        {
-            JsonObject svc = services.add<JsonObject>();
-            svc["id"] = "camera";
-            svc["type"] = "camera-service";
-            JsonArray eps = svc["endpoints"].to<JsonArray>();
-            JsonObject ep1 = eps.add<JsonObject>(); ep1["path"] = "/api/camera/capture"; ep1["method"] = "GET"; ep1["returns"] = "jpeg";
-            JsonObject ep2 = eps.add<JsonObject>(); ep2["path"] = "/api/camera/status"; ep2["method"] = "GET"; ep2["returns"] = "json";
-        }
-#endif
-
-#ifdef ENABLE_BLUETOOTH_DEVICES
-        {
-            JsonObject svc = services.add<JsonObject>();
-            svc["id"] = "bluetooth";
-            svc["type"] = "bluetooth-service";
-            JsonArray eps = svc["endpoints"].to<JsonArray>();
-            JsonObject ep1 = eps.add<JsonObject>(); ep1["path"] = "/api/bluetooth/status"; ep1["method"] = "GET";
-            JsonObject ep2 = eps.add<JsonObject>(); ep2["path"] = "/api/bluetooth/control"; ep2["method"] = "POST";
-        }
-#endif
-
-#ifdef ENABLE_TIME_AUTHORITY
-        {
-            JsonObject svc = services.add<JsonObject>();
-            svc["id"] = "time-authority";
-            svc["type"] = "time-service";
-            JsonArray eps = svc["endpoints"].to<JsonArray>();
-            JsonObject ep1 = eps.add<JsonObject>(); ep1["path"] = "/time/authority"; ep1["method"] = "GET"; ep1["returns"] = "json";
-        }
-#endif
-
-        // Events the node can emit
-        JsonArray events = doc["events"].to<JsonArray>();
-        {
-            JsonObject ev1 = events.add<JsonObject>(); ev1["id"] = "nodeBeacon"; ev1["type"] = "udp-broadcast"; ev1["transport"] = "udp";
-        }
-#ifdef ENABLE_CAMERA
-        {
-            JsonObject ev2 = events.add<JsonObject>(); ev2["id"] = "motionDetected"; ev2["type"] = "object"; ev2["transport"] = "udp";
-        }
-#endif
-
-        // Control metadata: switch and sensor device maps
-        JsonObject control = doc["control"].to<JsonObject>();
-        JsonObject switchCtrl = control["switch"].to<JsonObject>();
-        JsonObject sensorCtrl = control["sensor"].to<JsonObject>();
-
-        if (LittleFS.exists("/devices")) {
-            File ctrlDir = LittleFS.open("/devices", "r");
-            File ctrlEntry = ctrlDir.openNextFile();
-            while (ctrlEntry) {
-                if (!ctrlEntry.isDirectory()) {
-                    String ctrlFileName = String(ctrlEntry.name());
-                    if (ctrlFileName.startsWith("/devices/")) ctrlFileName = ctrlFileName.substring(9);
-                    if (ctrlFileName.endsWith(".json")) {
-                        String ctrlId = ctrlFileName.substring(0, ctrlFileName.length() - 5);
-                        String ctrlJson = ctrlEntry.readString();
-                        JsonDocument ctrlDoc;
-                        if (!deserializeJson(ctrlDoc, ctrlJson)) {
-                            const String devType = ctrlDoc["type"] | "";
-                            if (devType == "switch" || devType == "relay" || devType == "actuator") {
-                                JsonObject swDev = switchCtrl[ctrlId].to<JsonObject>();
-                                if (ctrlDoc["actions"].is<JsonArray>()) {
-                                    JsonArray cmds = swDev["commands"].to<JsonArray>();
-                                    for (JsonVariant action : ctrlDoc["actions"].as<JsonArray>()) {
-                                        cmds.add(action);
-                                    }
-                                }
-                                swDev["api"] = String("/api/devices/") + ctrlId + "/<cmd>";
-                            } else if (devType == "sensor" || devType == "temperature-sensor" || devType == "humidity-sensor") {
-                                JsonObject snDev = sensorCtrl[ctrlId].to<JsonObject>();
-                                snDev["read"] = String("/api/devices/") + ctrlId + "/read";
-                            }
-                        }
-                    }
-                }
-                ctrlEntry.close();
-                ctrlEntry = ctrlDir.openNextFile();
-            }
-            ctrlDir.close();
-        }
-
-        String manifestJson;
-        serializeJson(doc, manifestJson);
-        request->send(200, "application/json", manifestJson);
-    });
-
-    server.on("/api/devices/discover", HTTP_GET, [](AsyncWebServerRequest *request){
-        String typeQuery;
-        if (request->hasParam("type", true)) {
-            typeQuery = request->getParam("type", true)->value();
-        } else if (request->hasParam("type")) {
-            typeQuery = request->getParam("type")->value();
-        }
-        typeQuery.trim();
-
-        JsonDocument doc;
-        JsonArray devices = doc["devices"].to<JsonArray>();
-        std::vector<DeviceCapabilityDescriptor> candidates = DeviceCapabilityRegistry::instance().all();
-        if (!typeQuery.isEmpty()) {
-            candidates = DeviceCapabilityRegistry::instance().findByType(typeQuery.c_str());
-        }
-
-        for (const auto& device : candidates) {
-            JsonObject item = devices.add<JsonObject>();
-            item["id"] = device.id.c_str();
-            item["type"] = device.deviceType.c_str();
-            item["driver"] = device.driverType.c_str();
-            if (!device.nodeId.empty()) {
-                item["nodeId"] = device.nodeId.c_str();
-            }
-            if (!device.nodeIp.empty()) {
-                item["nodeIp"] = device.nodeIp.c_str();
-            }
-            JsonArray states = item["states"].to<JsonArray>();
-            for (const auto& state : device.states) {
-                states.add(state.c_str());
-            }
-            JsonArray actions = item["actions"].to<JsonArray>();
-            for (const auto& action : device.actions) {
-                actions.add(action.c_str());
-            }
-            JsonObject meta = item["metadata"].to<JsonObject>();
-            for (const auto& pair : device.metadata) {
-                meta[pair.first.c_str()] = pair.second.c_str();
-            }
-        }
-
-        if (devices.size() == 0 && LittleFS.exists("/devices")) {
-            File devDir = LittleFS.open("/devices", "r");
-            File devEntry = devDir.openNextFile();
-            while (devEntry) {
-                if (!devEntry.isDirectory()) {
-                    String devFileName = String(devEntry.name());
-                    if (devFileName.startsWith("/devices/")) devFileName = devFileName.substring(9);
-                    if (devFileName.endsWith(".json")) {
-                        String devId = devFileName.substring(0, devFileName.length() - 5);
-                        String devJson = devEntry.readString();
-                        JsonDocument devDoc;
-                        if (!deserializeJson(devDoc, devJson)) {
-                            const String devType = devDoc["type"] | "device";
-                            if (!typeQuery.isEmpty() && !String(devType).equalsIgnoreCase(typeQuery)) {
-                                devEntry.close();
-                                devEntry = devDir.openNextFile();
-                                continue;
-                            }
-                            JsonObject item = devices.add<JsonObject>();
-                            item["id"] = devId.c_str();
-                            item["type"] = devType.c_str();
-                            item["driver"] = devDoc["driver"] | "gpio";
-                            if (devDoc["actions"].is<JsonArray>()) {
-                                JsonArray actions = item["actions"].to<JsonArray>();
-                                for (JsonVariant action : devDoc["actions"].as<JsonArray>()) {
-                                    actions.add(action.as<const char*>());
-                                }
-                            }
-                            JsonArray states = item["states"].to<JsonArray>();
-                            if (devDoc["states"].is<JsonArray>()) {
-                                for (JsonVariant state : devDoc["states"].as<JsonArray>()) {
-                                    states.add(state.as<const char*>());
-                                }
-                            }
-                        }
-                    }
-                }
-                devEntry.close();
-                devEntry = devDir.openNextFile();
-            }
-            devDir.close();
-        }
-
-        String payload;
-        serializeJson(doc, payload);
-        request->send(200, "application/json", payload);
     });
 
 #ifdef ENABLE_TIME_AUTHORITY
@@ -3451,12 +2647,8 @@ void setupWebServer() {
     #endif
 #ifdef ENABLE_PMACHINE
 #ifndef DISABLE_PMACHINE_ROUTES
-    registerPMachineRoutes(server, pm, &federatedFS, &pmAsyncWorker);
+    registerPMachineRoutes(server, pm, &federatedFS);
 #endif
-#endif
-#if defined(ENABLE_DHT11_HTTP_SERVER)
-    Dht11HttpServer::registerRoutes(server);
-    Serial.println("[DHT11] HTTP route registered");
 #endif
     server.onNotFound(notFound);
     
@@ -3503,7 +2695,6 @@ void setupWebServer() {
     registerHttpsTlsRoutes(server);
 #endif
 
-    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
     server.begin();
 }
 
@@ -3550,6 +2741,7 @@ void announcePresence() {
 #endif
 
 void announcePresence() {
+    if (!udpRuntimeCanSendBeacon()) return;
     if (!udpRuntimeEnsureReady(runtimeUdpParentPort, runtimeUdpSiblingPort)) {
         return;
     }
@@ -3715,25 +2907,19 @@ void ensureDocsTreeAndDefaults() {
 
 void setup() {
 
-    const bool gpioSemaphoresReady = initializeGpioPinSemaphores();
     Serial.begin(115200);
     delay(100);
     Serial.println("[BOOT] setup() starting...");
-    if (!gpioSemaphoresReady) Serial.println("[GPIO] Failed to initialize pin semaphores");
 
     // 1. Mount filesystem (SD or LittleFS)
 #if defined(ESP32)
     bool sdAvailable = false;
-#if !defined(DISABLE_SD)
     if (SD.begin()) {
         Serial.println("SD card detected and mounted");
         sdAvailable = true;
     } else {
         Serial.println("No SD card detected, falling back to LittleFS");
     }
-#else
-    Serial.println("SD disabled for this hardware profile; using LittleFS");
-#endif
     if (!sdAvailable) {
         if (!ensureLittleFsInitialized()) {
             Serial.println("LittleFS mount failed");
@@ -3777,8 +2963,6 @@ void setup() {
     WiFi.disconnect(true, true);
     delay(50);
 
-#if 0
-    // Old WiFi provisioning flow retained for reference.
     initializeWiFiProvisioning(nodeName.c_str());
     if (globalWiFiProvisioning) {
         globalWiFiProvisioning->eraseLegacyCredentialStores();
@@ -3826,26 +3010,6 @@ void setup() {
             Serial.printf("[WIFI-PROV] Failed to start provisioning AP: %s\n", apName.c_str());
         }
     }
-#endif
-
-    const char* fixedWifiSsid = "Home";
-    const char* fixedWifiPassword = "Brady123";
-    WiFi.begin(fixedWifiSsid, fixedWifiPassword);
-    udpRuntimeConfigureWifiCredentials(fixedWifiSsid, fixedWifiPassword);
-    int fixedWifiRetries = 0;
-    while (WiFi.status() != WL_CONNECTED && fixedWifiRetries < 20) {
-        delay(500);
-        Serial.print(".");
-        fixedWifiRetries++;
-    }
-
-    Serial.println();
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.print("[BOOT] WiFi connected: ");
-        Serial.println(WiFi.localIP());
-    } else {
-        Serial.println("[BOOT] WiFi connection failed for fixed Home network");
-    }
 
     // 3. Ensure /devices, /services, and /flows directories exist at root at boot
     File root = LittleFS.open("/", "r");
@@ -3878,18 +3042,13 @@ void setup() {
             File f = LittleFS.open("/devices/LEDPIN.json", "w");
             if (f) {
                 JsonDocument doc;
-                doc["type"] = "led";
-                doc["driver"] = "digital-output";
+                doc["type"] = "device";
                 doc["name"] = "LEDPIN";
                 doc["pin"] = 2;
-                doc["visibility"] = "public";
-                auto states = doc["states"].to<JsonArray>();
-                states.add("off");
-                states.add("on");
                 auto arr = doc["actions"].to<JsonArray>();
-                arr.add("turnOn");
-                arr.add("turnOff");
-                arr.add("toggle");
+                arr.add("set_output");
+                arr.add("raise");
+                arr.add("lower");
                 String json;
                 serializeJson(doc, json);
                 f.print(json);
@@ -3898,11 +3057,8 @@ void setup() {
             } else {
                 Serial.println("[LEDPIN] Failed to create /devices/LEDPIN.json!");
             }
-            GpioPinSemaphore ledSemaphore(2);
-            if (ledSemaphore.acquired()) {
-                pinMode(2, OUTPUT);
-                digitalWrite(2, LOW);
-            }
+            pinMode(2, OUTPUT);
+            digitalWrite(2, LOW);
             Serial.println("[LEDPIN] Pin 2 set as OUTPUT and LOW (LED off)");
 
             File relayFile = LittleFS.open("/devices/RELAY.json", "w");
@@ -3947,12 +3103,9 @@ void setup() {
                 Serial.println("[RELAY] Failed to create /devices/RELAY.json!");
             }
 
-            GpioPinSemaphore relaySemaphore(relayPinNumber);
+            pinMode(relayPinNumber, OUTPUT);
             relayStateOn = false;
-            if (relaySemaphore.acquired()) {
-                pinMode(relayPinNumber, OUTPUT);
-                digitalWrite(relayPinNumber, LOW);
-            }
+            digitalWrite(relayPinNumber, LOW);
             Serial.printf("[RELAY] Pin %d set as OUTPUT and LOW (relay off)\n", relayPinNumber);
         } else {
             Serial.println("[LEDPIN] /devices directory does NOT exist!");
@@ -4016,7 +3169,6 @@ void setup() {
     }
     udpRuntimeEnsureReady(runtimeUdpParentPort, runtimeUdpSiblingPort);
     udpRuntimeResetBeaconState();
-    announcePresence();
 
 #ifdef ENABLE_TIME_AUTHORITY
     timeAuthorityBegin(nodeName);
@@ -4052,18 +3204,9 @@ void setup() {
     }
 #endif
 
-    loadStartupDeploymentManifest();
-
 #ifdef ENABLE_PMACHINE
     pm.setFFS(&federatedFS);
-    pm.setServiceCallHook(httpInvokeServiceTransport, nullptr);
     pm.setFsmCallHook(pmachineInvokeFsm, nullptr);
-    pm.setOrchestrationWaitHook(httpInvokeOrchestrationWait, nullptr);
-    pmAsyncWorker.setFFS(&federatedFS);
-    pmAsyncWorker.setServiceCallHook(httpInvokeServiceTransport, nullptr);
-    pmAsyncWorker.setFsmCallHook(pmachineInvokeFsm, nullptr);
-    pmAsyncWorker.setOrchestrationWaitHook(httpInvokeOrchestrationWait, nullptr);
-    Serial.println("[PMACHINE] Service and orchestration transport hooks registered");
 #endif
 
 #ifdef ENABLE_CAMERA
@@ -4113,14 +3256,6 @@ void setup() {
     }
 #endif
 
-    // Reserve network server tasks before display and BLE fragment the CYD heap.
-    setupWebServer();
-#if defined(ENABLE_HTTPS) && (defined(ESP32) || defined(ESP8266))
-    if (startHttpsService()) {
-        announcePresence();
-    }
-#endif
-
 #ifdef ENABLE_DISPLAY
     Serial.println("[BOOT] Initializing display service...");
     if (displayService.begin()) {
@@ -4154,34 +3289,46 @@ void setup() {
                     Serial.println("[DDL] Failed to load DDL file");
                 }
             } else {
-                Serial.println("[DDL] No DDL file found, using embedded status dashboard");
-
-                String statusDashboardDDL = R"({
-                    "display": "NodeStatus",
+                Serial.println("[DDL] No DDL file found, using embedded touch test DDL");
+                
+                // Embedded touch test DDL - compact single card design
+                String touchTestDDL = R"({
+                    "display": "TouchTest",
                     "version": "1.0",
                     "layout": {
                         "type": "column",
                         "cards": [
                             {
-                                "id": "statusCard",
-                                "title": ")" + nodeName + R"(",
-                                "subtitle": "Pulse ESP32 node status",
-                                "content": [
-                                    {"id":"transportStatus","type":"text","label":"Transport: starting"},
-                                    {"id":"addressStatus","type":"text","label":"Address: starting"},
-                                    {"id":"uptimeStatus","type":"text","label":"Uptime: 0h 0m 0s"},
-                                    {"id":"heapStatus","type":"text","label":"Free heap: measuring"}
+                                "id": "touchCard",
+                                "title": "Touch Test - IP: )" + WiFi.localIP().toString() + R"(",
+                                "actions": [
+                                    {
+                                        "id": "btn1",
+                                        "type": "button",
+                                        "label": "Button 1",
+                                        "action": "test.button1"
+                                    },
+                                    {
+                                        "id": "btn2",
+                                        "type": "button",
+                                        "label": "Button 2",
+                                        "action": "test.button2"
+                                    },
+                                    {
+                                        "id": "btn3",
+                                        "type": "button",
+                                        "label": "Button 3",
+                                        "action": "test.button3"
+                                    }
                                 ]
                             }
                         ]
                     }
                 })";
-
-                if (ddlRenderer.parseDDL(statusDashboardDDL)) {
+                
+                if (ddlRenderer.parseDDL(touchTestDDL)) {
                     ddlRenderer.render();
-                    displayStatusDashboardActive = true;
-                    updateDisplayStatusDashboard(true);
-                    Serial.println("[DDL] Embedded status dashboard rendered successfully");
+                    Serial.println("[DDL] Embedded touch test DDL rendered successfully");
                 } else {
                     Serial.println("[DDL] Failed to parse embedded DDL");
                 }
@@ -4189,10 +3336,6 @@ void setup() {
         } else {
             Serial.println("[DDL] DDL renderer initialization failed");
         }
-#else
-        const String displayStatus = nodeName + "\n" + WiFi.localIP().toString() + "\nHTTPS: port 443";
-        displayService.showStatus("Pulse CYD", displayStatus.c_str(), COLOR_CYAN);
-        Serial.println("[DISPLAY] Lightweight HTTPS status screen rendered");
 #endif // DISPLAY_NO_LVGL
     } else {
         Serial.println("[DISPLAY] Display initialization failed");
@@ -4255,17 +3398,8 @@ void setup() {
 #endif
 
 #if defined(ESP32) && defined(ENABLE_BT_CONTROL_PLANE)
-#if defined(BT_CONTROL_PLANE_WIFI_FALLBACK_ONLY)
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("[BOOT] WiFi unavailable; initializing Bluetooth provisioning fallback...");
-        initializeBluetoothControlPlane(nodeName);
-    } else {
-        Serial.println("[BOOT] Bluetooth provisioning fallback on standby while WiFi is connected");
-    }
-#else
     Serial.println("[BOOT] Initializing Bluetooth control plane...");
     initializeBluetoothControlPlane(nodeName);
-#endif
 #endif
 
 #ifdef ENABLE_EVENT_SCHEDULER
@@ -4346,26 +3480,19 @@ void setup() {
     if (firstAdvertised) advertisedServices += "none";
     Serial.println(advertisedServices);
 
+    // 8. Web server for node name config (Async)
+    setupWebServer();
+#if defined(ENABLE_HTTPS) && (defined(ESP32) || defined(ESP8266))
+    startHttpsService();
+#endif
 #if defined(ESP32) && !defined(DISABLE_BONECRUSHER)
     startEsp32GatewayWorkerTaskIfNeeded();
 #endif
+    udpRuntimeDeferBeacons();
 }
 
 void loop() {
     serialProvisioningPoll();
-
-#if defined(ESP32) && !defined(DISABLE_BONECRUSHER)
-    if (pm.getRuntimeUnit().kind == pmachine::RuntimeUnitKind::Daemon) {
-        startBonecrusherWorkerTaskIfNeeded();
-    }
-#endif
-
-#if defined(ESP32) && defined(ENABLE_BT_CONTROL_PLANE) && defined(BT_CONTROL_PLANE_WIFI_FALLBACK_ONLY)
-    if (WiFi.status() != WL_CONNECTED && !globalBluetoothControlPlane) {
-        Serial.println("[BLE-CP] WiFi lost; starting Bluetooth provisioning fallback");
-        initializeBluetoothControlPlane(nodeName);
-    }
-#endif
 
     if (WiFi.status() != WL_CONNECTED && globalWiFiProvisioning) {
         const unsigned long now = millis();
@@ -4437,8 +3564,7 @@ void loop() {
 
 #if defined(ENABLE_DOORBELL_CAMERA)
     pollDoorbellButton();
-    pollDoorbellDisplayStream();
-    if (!cameraService.isStreaming() && millis() - doorbellLastMotionCheckMs > 500) {
+    if (millis() - doorbellLastMotionCheckMs > 500) {
         MotionEvent motionEvent;
         if (cameraService.checkMotion(motionEvent)) {
             Serial.printf("[DOORBELL] Person alert: %d blocks changed (%.1f%%)\n",
@@ -4446,10 +3572,6 @@ void loop() {
         }
         doorbellLastMotionCheckMs = millis();
     }
-#endif
-
-#if defined(ESP32) && defined(ENABLE_DISPLAY)
-    pollDoorbellDisplayFrame();
 #endif
 
     // Remove nodes not seen in last 10 minutes (600000 ms)
@@ -4467,7 +3589,7 @@ void loop() {
     const unsigned long beaconInterval = udpRuntimeGetBeaconIntervalMs(
         NODE_BEACON_ACKED_INTERVAL_MS,
         NODE_BEACON_UNACKED_INTERVAL_MS);
-    if (millis() - lastAnnounce > beaconInterval) {
+    if (udpRuntimeCanSendBeacon() && millis() - lastAnnounce > beaconInterval) {
         if (!isBonecrusherRole()) {
             announcePresence();
         }
@@ -4483,10 +3605,9 @@ void loop() {
 
     runSupervisorHealthChecks();
     
-#if defined(ENABLE_DISPLAY) && !defined(DISPLAY_NO_LVGL)
+#ifdef ENABLE_DISPLAY
     // Update LVGL (handles rendering and touch)
     displayService.update();
-    updateDisplayStatusDashboard();
 #endif
 
 #ifdef ENABLE_PRINTER_SCANNER
@@ -4498,4 +3619,3 @@ void loop() {
     // No need for server.handleClient() with AsyncWebServer
     // Add VM logic here
 }
-

@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { XMLParser } from 'fast-xml-parser';
 import { loadOpcodeMap } from './opcodes.mjs';
 import { SERVICE_HOST_BINDINGS } from '../../shared/contracts/service-host-bindings.mjs';
+import { DEVICE_BINDINGS } from '../../shared/contracts/device-bindings.mjs';
 
 const XML_PARSER = new XMLParser({
   ignoreAttributes: false,
@@ -1614,7 +1615,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     }
     if (op === 'CALL_EXT') {
       const name = String(instr.operand?.label || '').toLowerCase();
-      const binding = SERVICE_HOST_BINDINGS[name];
+      const binding = SERVICE_HOST_BINDINGS[name] || DEVICE_BINDINGS[name];
       const argc = instr.operand?.argc;
       if (!binding || argc !== binding.arity) throw new Error(`Invalid host binding call: ${name}`);
       if (typeof runtimeContext.callHost !== 'function') throw new Error(`Host binding unavailable: ${name}`);

@@ -7,7 +7,8 @@ import { compileConversionRuleToOps } from './compile-mapping-rule.mjs';
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve('.');
-const DEMO_DIR = path.join(ROOT, 'data', 'cbds', 'cobolish-demo');
+const DEMO_DIR = path.join(ROOT, '..', 'object', 'aggregator-pcode', 'cbds', 'cobolish-demo');
+const SOURCE_DIR = path.join(ROOT, '..', 'src', 'cbds', 'cobolish-demo');
 
 // The Cobolish service under test. It declares its librarian role, pulls a
 // shared library from the Data Librarian, defines the CBDS mapper inline in a
@@ -173,8 +174,9 @@ function section(title) {
 
 async function main() {
   await fs.mkdir(DEMO_DIR, { recursive: true });
+  await fs.mkdir(SOURCE_DIR, { recursive: true });
 
-  const cobolishPath = path.join(DEMO_DIR, 'cbds-converter.cob');
+  const cobolishPath = path.join(SOURCE_DIR, 'cbds-converter.cob');
   await fs.writeFile(cobolishPath, COBOLISH_SOURCE, 'utf-8');
 
   // Compile Cobolish -> portable Pascalish -> pcode + program map. The inline

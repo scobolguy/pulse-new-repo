@@ -13,6 +13,7 @@ public:
 
 private:
     bool ready_;
+    bool lastClientConnected_;
     String lineBuffer_;
 };
 
@@ -20,12 +21,5 @@ extern BluetoothControlPlane* globalBluetoothControlPlane;
 
 void initializeBluetoothControlPlane(const String& deviceName);
 void bluetoothControlPlaneLoop();
-bool bluetoothControlPlaneClientConnected();
-int bluetoothControlPlaneHttpPost(
-    const String& url,
-    const String& body,
-    String& responseBody,
-    uint16_t timeoutMs
-);
 
 #endif

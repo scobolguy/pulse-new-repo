@@ -8,7 +8,10 @@ import PascalishVisitor from '../grammar/generated-modern/PascalishVisitor.js';
 import { attachPcodeSignature } from './pcode-signing.mjs';
 import { compileConversionRuleToOps, emitMapperRoutinePcode } from './compile-mapping-rule.mjs';
 import { resolveLibrary } from './pascalish-library-registry.mjs';
-import { SERVICE_HOST_BINDINGS, SERVICE_HOST_BINDINGS_VERSION } from '../../pmachines/shared/contracts/service-host-bindings.mjs';
+import {
+  SERVICE_HOST_BINDINGS, SERVICE_HOST_BINDINGS_VERSION, SERVICE_HOST_INTERNAL_BINDINGS
+} from '../../pmachines/shared/contracts/service-host-bindings.mjs';
+import { DEVICE_BINDINGS, DEVICE_BINDINGS_VERSION } from '../../pmachines/shared/contracts/device-bindings.mjs';
 
 const OPERATOR_METHOD_NAMES = {
   '+': 'op_add',
@@ -227,9 +230,9 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
     if (ctx.daemonDecl()) return this.visit(ctx.daemonDecl());
     if (ctx.varDecl()) return this.visit(ctx.varDecl());
     if (ctx.typeDecl()) return this.visit(ctx.typeDecl());
-    if (ctx.systemDecl()) return this.visit(ctx.systemDecl());
-    if (ctx.databaseDecl()) return this.visit(ctx.databaseDecl());
-    if (ctx.tableDecl()) return this.visit(ctx.tableDecl());
+    if (ctx.systemDecl && ctx.systemDecl()) return this.visit(ctx.systemDecl());
+    if (ctx.databaseDecl && ctx.databaseDecl()) return this.visit(ctx.databaseDecl());
+    if (ctx.tableDecl && ctx.tableDecl()) return this.visit(ctx.tableDecl());
     if (ctx.classDecl()) return this.visit(ctx.classDecl());
     if (ctx && typeof ctx.methodImplDecl === 'function' && ctx.methodImplDecl()) return this.visit(ctx.methodImplDecl());
     if (ctx.routerDecl()) return this.visit(ctx.routerDecl());
@@ -675,6 +678,14 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
   }
 
   visitTypeDecl(ctx) {
+    if (!ctx.typeBinding) {
+      return {
+        type: 'TypeDecl',
+        name: ctx.IDENT().getText(),
+        genericParams: ctx.genericTypeParams() ? this.visit(ctx.genericTypeParams()) : [],
+        targetType: this.visit(ctx.typeRef())
+      };
+    }
     return (ctx.typeBinding() || []).map(binding => this.visit(binding));
   }
 
@@ -706,7 +717,8 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
     // section keyword or 'end'; members before the first section default to public.
     let currentVisibility = 'public';
     const members = [];
-    for (const item of ctx.classBodyItem() || []) {
+    const bodyItems = ctx.classBodyItem ? ctx.classBodyItem() : [];
+    for (const item of bodyItems || []) {
       if (item.classVisibility()) {
         currentVisibility = text(item.classVisibility()).toLowerCase();
         continue;
@@ -717,10 +729,19 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
         members.push(member);
       }
     }
+    if (!ctx.classBodyItem) {
+      for (const memberCtx of ctx.classMember() || []) {
+        const member = this.visit(memberCtx);
+        if (member) {
+          member.visibility = 'public';
+          members.push(member);
+        }
+      }
+    }
 
     return {
       type: 'ClassDecl',
-      name: ctx.pascalIdentifier().getText(),
+      name: (ctx.pascalIdentifier ? ctx.pascalIdentifier() : ctx.IDENT()).getText(),
       genericParams: ctx.genericTypeParams() ? this.visit(ctx.genericTypeParams()) : [],
       extendsType: ctx.classInheritance() ? this.visit(ctx.classInheritance()) : null,
       members
@@ -790,11 +811,11 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
   }
 
   visitClassMethodDecl(ctx) {
-    const name = ctx.pascalIdentifier() ? ctx.pascalIdentifier().getText() : '';
+    const name = (ctx.pascalIdentifier ? ctx.pascalIdentifier() : ctx.IDENT()).getText();
     const returnType = ctx.typeRef() ? this.visit(ctx.typeRef()) : null;
     const hasBody = Boolean(ctx.block());
     const localDecls = hasBody
-      ? (ctx.unitDecl() || [])
+      ? (ctx.unitDecl ? ctx.unitDecl() || [] : [])
         .map(item => this.visit(item))
         .filter(item => item?.type === 'VarSection')
         .flatMap(item => item.vars)
@@ -900,6 +921,7 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
       return { type: 'TypeRef', kind: 'quoted', id: unquote(ctx.STRING().getText()), genericArgs: [] };
     }
     if (ctx.simpleType()) return this.visit(ctx.simpleType());
+    if (ctx.cacheType()) return this.visit(ctx.cacheType());
     if (ctx.recordType()) return this.visit(ctx.recordType());
     if (ctx.enumType && ctx.enumType()) return this.visit(ctx.enumType());
     if (ctx.queueType()) return this.visit(ctx.queueType());
@@ -907,9 +929,13 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
     if (ctx.priorityQueueType()) return this.visit(ctx.priorityQueueType());
     if (ctx.fixedArrayType()) return this.visit(ctx.fixedArrayType());
     if (ctx.dynamicArrayType()) return this.visit(ctx.dynamicArrayType());
-    if (ctx.listType()) return this.visit(ctx.listType());
+    if (ctx.listType && ctx.listType()) return this.visit(ctx.listType());
     if (ctx.userType()) return this.visit(ctx.userType());
     return { type: 'TypeRef', kind: 'unknown', id: 'unknown', genericArgs: [] };
+  }
+
+  visitCacheType(ctx) {
+    return { type: 'TypeRef', kind: 'cache', elementType: this.visit(ctx.typeRef()), genericArgs: [] };
   }
 
   visitListType(ctx) {
@@ -929,13 +955,19 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
   visitSimpleType(ctx) {
     const decimalCtx = ctx.decimalType && ctx.decimalType();
     if (decimalCtx) {
-      const numbers = (decimalCtx.NUMBER() || []).map(token => Number.parseInt(token.getText(), 10));
+      const numbers = (decimalCtx.NUMBER() || []).map(token => Number(token.getText()));
+      const precision = numbers[0] ?? 18;
+      const scale = numbers[1] ?? 0;
+      if (!Number.isSafeInteger(precision) || precision <= 0
+        || !Number.isSafeInteger(scale) || scale < 0 || scale > precision) {
+        throw new Error('[PASCALISH-PROGRAM] Invalid decimal type: precision must be a positive integer and scale an integer between 0 and precision');
+      }
       return {
         type: 'TypeRef',
         kind: 'simple',
         id: 'decimal',
-        precision: Number.isFinite(numbers[0]) ? numbers[0] : 18,
-        scale: Number.isFinite(numbers[1]) ? numbers[1] : 0,
+        precision,
+        scale,
         genericArgs: []
       };
     }
@@ -1276,7 +1308,7 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
     return {
       type: 'Assign',
       target: this.visit(ctx.lvalue()),
-      rounded: text(ctx).toLowerCase().endsWith('rounded'),
+      rounded: String(ctx.stop.text).toLowerCase() === 'rounded',
       expr: this.visit(ctx.expr())
     };
   }
@@ -1416,7 +1448,8 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
       return {
         type: 'CallExpr',
         name: this.visit(ctx.qualifiedName()),
-        args: ctx.exprList() ? this.visit(ctx.exprList()) : []
+        args: ctx.exprList() ? this.visit(ctx.exprList()) : [],
+        fields: (ctx.IDENT ? ctx.IDENT() : []).map(node => node.getText())
       };
     }
     if (ctx.qualifiedName()) {
@@ -1526,10 +1559,15 @@ class Codegen {
     for (const variable of this.ast.variables || []) {
       this.variableTypes.set(String(variable.name).toLowerCase(), variable.dataType);
     }
+    const caches = (this.ast.variables || []).filter(variable => this.resolveTypeRef(variable.dataType)?.kind === 'cache');
+    if (caches.length && !this.ast.hostServices) throw new Error('Cache declarations require hosted unit variables');
+    if (caches.length > 2) throw new Error('Hosted units support at most two caches');
+    for (const variable of caches) this.cacheSchema(this.resolveTypeRef(variable.dataType).elementType);
 
     this.functionReturnTypes = new Map();
     for (const procedure of this.ast.procedures || []) {
       if (procedure.returnType) {
+        if (this.resolveTypeRef(procedure.returnType)?.kind === 'cache') throw new Error('Cache handles cannot be returned');
         this.functionReturnTypes.set(String(procedure.name).toLowerCase(), procedure.returnType);
       }
     }
@@ -1731,6 +1769,9 @@ class Codegen {
   }
 
   expandParamNames(paramDecls) {
+    if ((paramDecls || []).some(item => this.resolveTypeRef(item.dataType)?.kind === 'cache')) {
+      throw new Error('Cache handles cannot be passed as parameters');
+    }
     return (paramDecls || []).flatMap(item => this.storageLeaves(item.name, item.dataType));
   }
 
@@ -1750,6 +1791,12 @@ class Codegen {
    * result slots into fresh temporaries so a later call cannot clobber it.
    */
   materializeAggregate(expr, expectedType) {
+    const cache = expr?.type === 'CallExpr' && this.cacheCall(expr.name);
+    if (cache) {
+      if (cache.method !== 'get') throw new Error('Cache aggregate requires get(key)');
+      this.assertCacheType(this.cacheResultType(expr), expectedType);
+      return this.emitCacheGet(expr, cache);
+    }
     if (expr?.type === 'NewExpr' && expectedType?.kind === 'user') {
       const classDecl = this.classesByName.get(String(expectedType.id || '').toLowerCase());
       if (classDecl) {
@@ -1927,11 +1974,182 @@ class Codegen {
    * class-typed variable passes the receiver's fields as leading arguments, which is how
    * a method reaches `self` without the runtime having object references.
    */
+  cacheSchema(typeRef) {
+    const check = (type, depth = 0) => {
+      const resolved = this.resolveTypeRef(type);
+      if (depth > 32) throw new Error('Cache record type is recursive or too deeply nested');
+      if (resolved?.kind === 'record') {
+        for (const field of resolved.fields || []) check(field.dataType, depth + 1);
+      } else if (resolved?.kind !== 'simple' || !['integer', 'string', 'boolean'].includes(resolved.id?.toLowerCase())) {
+        throw new Error('Cache items support integer, string, boolean and records of these types');
+      }
+    };
+    check(typeRef);
+    const leaves = this.flattenLeaves('', typeRef);
+    if (!leaves.length || leaves.length > 32) throw new Error('Cache items require 1..32 scalar leaves');
+    const schema = leaves.map(({ path, dataType }) => {
+      if (dataType?.kind !== 'simple' || !['integer', 'string', 'boolean'].includes(dataType.id?.toLowerCase())) {
+        throw new Error('Cache items support integer, string, boolean and records of these types');
+      }
+      return { name: path.replace(/^\./, '') || '__value', type: dataType.id.toLowerCase() };
+    });
+    if (new Set(schema.map(field => field.name)).size !== schema.length) throw new Error('Duplicate cache item fields');
+    return schema;
+  }
+
+  cacheCall(name) {
+    const [receiver, method, ...rest] = String(name).split('.');
+    const type = this.resolveTypeRef(this.declaredTypeOf(receiver));
+    if (type?.kind !== 'cache') return null;
+    if (!this.ast.hostServices) throw new Error('Cache requires hosted service compilation');
+    if (rest.length || !['put', 'get', 'remove', 'next', 'count', 'snapshot'].includes(method?.toLowerCase())) {
+      throw new Error(`Unknown cache method: ${name}`);
+    }
+    if (!this.variableTypes.has(receiver.toLowerCase()) || this.scopeTypes?.has(receiver.toLowerCase())) {
+      throw new Error('Cache must be a hosted unit variable');
+    }
+    return { name: receiver.toLowerCase(), method: method.toLowerCase(), itemType: type.elementType };
+  }
+
+  expressionType(expr) {
+    if (expr?.type === 'Identifier') return this.declaredTypeOf(expr.name);
+    if (expr?.type === 'CallExpr') {
+      if (this.cacheCall(expr.name)) return this.cacheResultType(expr);
+      const binding = SERVICE_HOST_BINDINGS[String(expr.name).toLowerCase()]
+        || (this.ast.deviceBindings && DEVICE_BINDINGS[String(expr.name).toLowerCase()]);
+      return this.functionReturnTypes.get(this.resolveCallTarget(expr.name).toLowerCase())
+        || (binding ? { kind: 'simple', id: binding.result } : null);
+    }
+    const literals = { StringLiteral: 'string', NumberLiteral: 'integer', RealLiteral: 'real', BooleanLiteral: 'boolean' };
+    if (literals[expr?.type]) return { kind: 'simple', id: literals[expr.type] };
+    if (expr?.type === 'Unary') {
+      if (expr.op === 'not') return { kind: 'simple', id: 'boolean' };
+      const operand = this.resolveTypeRef(this.expressionType(expr.expr));
+      return ['integer', 'real'].includes(operand?.id) ? operand : null;
+    }
+    if (expr?.type === 'Binary') {
+      const left = this.expressionType(expr.left), right = this.expressionType(expr.right);
+      if (['=', '<>', '<', '<=', '>', '>=', 'and', 'or'].includes(expr.op)) return { kind: 'simple', id: 'boolean' };
+      if (left && right && left.id === right.id) return left;
+    }
+    return null;
+  }
+
+  assertCacheType(actual, expected) {
+    if (!actual || !expected || this.resolveTypeRef(actual)?.kind !== this.resolveTypeRef(expected)?.kind
+      || JSON.stringify(this.cacheSchema(actual)) !== JSON.stringify(this.cacheSchema(expected))) {
+      throw new Error('Cache item/result type mismatch');
+    }
+  }
+
+  cacheResultType(expr) {
+    const cache = this.cacheCall(expr.name);
+    if (['next', 'snapshot'].includes(cache.method)) return { kind: 'simple', id: 'string' };
+    if (cache.method !== 'get') return { kind: 'simple', id: 'integer' };
+    let type = cache.itemType;
+    for (const name of expr.fields || []) {
+      const resolved = this.resolveTypeRef(type);
+      const field = resolved?.kind === 'record' && resolved.fields.find(item => item.name.toLowerCase() === name.toLowerCase());
+      if (!field) throw new Error(`Unknown cache result field: ${name}`);
+      type = field.dataType;
+    }
+    return type;
+  }
+
+  validateCacheArgs(args, cache) {
+    const arity = cache.method === 'put' ? 3 : cache.method === 'count' ? 0 : cache.method === 'snapshot' ? 2 : 1;
+    if ((args || []).length !== arity) throw new Error(`Cache ${cache.method} requires ${arity} arguments`);
+    if (arity && this.resolveTypeRef(this.expressionType(args[0]))?.id !== 'string') {
+      throw new Error(cache.method === 'next' ? 'Cache cursor must be string' : 'Cache key must be string');
+    }
+    this.cacheSchema(cache.itemType);
+    if (cache.method === 'snapshot' && this.resolveTypeRef(this.expressionType(args[1]))?.id !== 'string') {
+      throw new Error('Cache snapshot revision must be string');
+    }
+    if (cache.method === 'put') {
+      this.assertCacheType(this.expressionType(args[1]), cache.itemType);
+      if (this.resolveTypeRef(this.expressionType(args[2]))?.id !== 'integer') throw new Error('Cache TTL must be integer milliseconds');
+    }
+  }
+
+  emitCacheGet(expr, cache) {
+    this.validateCacheArgs(expr.args, cache);
+    const json = this.nextTempPrefix();
+    this.emit(`PUSH_STR "${cache.name}"`);
+    this.emitExpr(expr.args[0]);
+    this.emit('CALL_EXT host.cache_get 2');
+    this.emit(`STORE ${json}`);
+    const prefix = this.nextTempPrefix();
+    const leaves = this.flattenLeaves(prefix, cache.itemType);
+    const schema = this.cacheSchema(cache.itemType);
+    leaves.forEach((leaf, index) => {
+      this.emit(`LOAD ${json}`);
+      this.emit(`PUSH_STR "${schema[index].name}"`);
+      this.emit(`CALL_EXT host.json_${schema[index].type === 'string' ? 'text' : 'integer'} 2`);
+      this.emit(`STORE ${this.normalizeStorageName(leaf.path)}`);
+    });
+    let fieldPath = prefix;
+    let type = cache.itemType;
+    for (const name of expr.fields || []) {
+      const field = this.resolveTypeRef(type).fields.find(item => item.name.toLowerCase() === name.toLowerCase());
+      fieldPath += `.${field.name}`;
+      type = field.dataType;
+    }
+    return this.storageLeaves(fieldPath, type);
+  }
+
+  emitCacheCall(name, args, cache) {
+    this.validateCacheArgs(args, cache);
+    if (cache.method === 'get') throw new Error('Cache get must be consumed as a typed value');
+    this.emit(`PUSH_STR "${cache.name}"`);
+    if (cache.method === 'count') {
+      this.emit('CALL_EXT host.cache_count 1');
+      return name;
+    }
+    this.emitExpr(args[0]);
+    if (cache.method === 'snapshot') this.emitExpr(args[1]);
+    if (cache.method === 'put') {
+      const json = this.nextTempPrefix();
+      const slots = this.isAggregateType(cache.itemType) ? this.materializeAggregate(args[1], cache.itemType) : null;
+      this.emit('PUSH_STR "{}"');
+      this.emit(`STORE ${json}`);
+      this.cacheSchema(cache.itemType).forEach((field, index) => {
+        this.emit(`LOAD ${json}`);
+        this.emit(`PUSH_STR "${field.name}"`);
+        if (slots) this.emit(`LOAD ${slots[index]}`); else this.emitExpr(args[1]);
+        this.emit('CALL_EXT host.json_set 3');
+        this.emit(`STORE ${json}`);
+      });
+      this.emit(`LOAD ${json}`);
+      this.emitExpr(args[2]);
+    }
+    this.emit(`CALL_EXT host.cache_${cache.method} ${cache.method === 'put' ? 4 : cache.method === 'snapshot' ? 3 : 2}`);
+    return name;
+  }
+
   emitCall(name, args) {
+    const cache = this.cacheCall(name);
+    if (cache) return this.emitCacheCall(name, args, cache);
     const bindingName = String(name).toLowerCase();
+    if (bindingName.startsWith('device.')) {
+      if (!this.ast.deviceBindings) throw new Error('[PASCALISH-PROGRAM] Device bindings require deviceBindings compilation');
+      const binding = DEVICE_BINDINGS[bindingName];
+      if (!binding) throw new Error(`[PASCALISH-PROGRAM] Unknown device binding: ${name}`);
+      if ((args || []).length !== binding.arity) throw new Error(`[PASCALISH-PROGRAM] ${name} requires ${binding.arity} arguments`);
+      for (let index = 0; index < binding.arity; index += 1) {
+        const actual = this.resolveTypeRef(this.expressionType(args[index]));
+        if (actual?.id !== binding.args[index]) throw new Error(`[PASCALISH-PROGRAM] ${name} argument ${index + 1} requires ${binding.args[index]}`);
+      }
+      this.emitArguments(null, args);
+      this.emit(`CALL_EXT ${bindingName} ${binding.arity}`);
+      return bindingName;
+    }
     if (this.ast.hostServices && bindingName.startsWith('host.')) {
       const binding = SERVICE_HOST_BINDINGS[bindingName];
       if (!binding) throw new Error(`[PASCALISH-PROGRAM] Unknown host binding: ${name}`);
+      if (SERVICE_HOST_INTERNAL_BINDINGS.has(bindingName)) {
+        throw new Error(`[PASCALISH-PROGRAM] ${name} is internal; use typed cache methods`);
+      }
       if ((args || []).length !== binding.arity) throw new Error(`[PASCALISH-PROGRAM] ${name} requires ${binding.arity} arguments`);
       this.emitArguments(null, args);
       this.emit(`CALL_EXT ${bindingName} ${binding.arity}`);
@@ -2004,7 +2222,9 @@ class Codegen {
 
   isFunction(name) {
     const key = String(name || '').trim().toLowerCase();
-    return this.functionReturnTypes.has(key) || Boolean(this.ast.hostServices && SERVICE_HOST_BINDINGS[key]);
+    if (this.cacheCall(name)) return true;
+    return this.functionReturnTypes.has(key) || Boolean(this.ast.hostServices && SERVICE_HOST_BINDINGS[key])
+      || Boolean(this.ast.deviceBindings && DEVICE_BINDINGS[key]);
   }
 
   // Calls are emitted to a label eagerly, so an undeclared target only shows up as a
@@ -2076,6 +2296,10 @@ class Codegen {
     }
     if (expr.type === 'Unary') return this.staticKindOf(expr.expr);
     if (expr.type === 'CallExpr') {
+      if (this.cacheCall(expr.name)) return this.kindOfTypeRef(this.cacheResultType(expr));
+      if (this.ast.deviceBindings && DEVICE_BINDINGS[String(expr.name).toLowerCase()]) {
+        return DEVICE_BINDINGS[String(expr.name).toLowerCase()].result;
+      }
       if (this.ast.hostServices && SERVICE_HOST_BINDINGS[String(expr.name).toLowerCase()]) {
         return SERVICE_HOST_BINDINGS[String(expr.name).toLowerCase()].result;
       }
@@ -2248,6 +2472,9 @@ class Codegen {
       return;
     }
     if (expr.type === 'Identifier') {
+      if (this.resolveTypeRef(this.declaredTypeOf(String(expr.name).split('.')[0]))?.kind === 'cache') {
+        throw new Error('Cache values require explicit keyed methods');
+      }
       const enumValue = this.lookupEnumValue(expr.name);
       if (enumValue) {
         this.emit(`PUSH_ENUM ${enumValue.typeName} ${enumValue.valueName}`);
@@ -2275,6 +2502,16 @@ class Codegen {
       }
     }
     if (expr.type === 'CallExpr') {
+      const cache = this.cacheCall(expr.name);
+      if (cache) {
+        if (cache.method === 'get') {
+          const type = this.cacheResultType(expr);
+          if (this.isAggregateType(type)) throw new Error('Assign cache get record to a typed variable or select a field');
+          const slots = this.emitCacheGet(expr, cache);
+          this.emit(`LOAD ${slots[0]}`);
+        } else this.emitCacheCall(expr.name, expr.args, cache);
+        return;
+      }
       if (String(expr.name || '').toLowerCase() === 'ord' && (expr.args || []).length === 1) {
         this.emitExpr(expr.args[0]);
         this.emit('ORD');
@@ -2365,6 +2602,10 @@ class Codegen {
         return;
       }
       const targetType = this.declaredTypeOf(stmt.target);
+      if (this.resolveTypeRef(targetType)?.kind === 'cache') throw new Error('Cache variables cannot be assigned; use keyed methods');
+      if (stmt.expr?.type === 'CallExpr' && this.cacheCall(stmt.expr.name)) {
+        this.assertCacheType(this.cacheResultType(stmt.expr), targetType);
+      }
       if (targetType && this.isAggregateType(targetType)) {
         const sources = this.materializeAggregate(stmt.expr, targetType);
         const targets = this.storageLeaves(stmt.target, targetType);
@@ -2677,6 +2918,14 @@ class Codegen {
   // flattened storage name, which must exist before any procedure assigns it.
   initStorage(path, typeRef) {
     const resolved = this.resolveTypeRef(typeRef);
+    if (resolved?.kind === 'cache') {
+      if (!this.ast.hostServices || !this.variableTypes.has(String(path).toLowerCase())
+        || this.scopeTypes?.has(String(path).toLowerCase())) {
+        throw new Error('Cache declarations require hosted unit variables');
+      }
+      this.cacheSchema(resolved.elementType);
+      return;
+    }
     if (resolved?.kind === 'record') {
       for (const field of resolved.fields || []) this.initStorage(`${path}.${field.name}`, field.dataType);
       return;
@@ -2709,6 +2958,7 @@ class Codegen {
   }
 
   storageNamesOf(path, typeRef) {
+    if (this.resolveTypeRef(typeRef)?.kind === 'cache') return [];
     return this.storageLeaves(path, typeRef);
   }
 
@@ -3003,7 +3253,12 @@ class Codegen {
         },
         routers: this.ast.routers || [],
         serviceEndpoints: (runtimeUnit.endpoints || []).map(({ body, ...endpoint }) => endpoint),
-        ...(this.ast.hostServices ? { hostBindingsVersion: SERVICE_HOST_BINDINGS_VERSION, targets: ['js', 'esp32'] } : {}),
+        ...(this.ast.hostServices ? {
+          hostBindingsVersion: SERVICE_HOST_BINDINGS_VERSION, targets: ['js', 'esp32'],
+          hostCaches: (this.ast.variables || []).filter(item => this.resolveTypeRef(item.dataType)?.kind === 'cache')
+            .map(item => ({ name: item.name.toLowerCase(), capacity: 50,
+              fields: this.cacheSchema(this.resolveTypeRef(item.dataType).elementType) }))
+        } : {}),
         globals: (() => {
           this.suppressAccessChecks = true;
           try {
@@ -3057,7 +3312,7 @@ function extractMapperImports(sourceText) {
   return { imports, stripped };
 }
 
-export function compilePascalishProgramWithAntlr(sourceText, { fileName = '', hostServices = false } = {}) {
+export function compilePascalishProgramWithAntlr(sourceText, { fileName = '', hostServices = false, deviceBindings = false } = {}) {
   const { imports: mapperImports, stripped } = extractMapperImports(String(sourceText || ''));
 
   const input = new antlr4.InputStream(stripped);
@@ -3080,6 +3335,15 @@ export function compilePascalishProgramWithAntlr(sourceText, { fileName = '', ho
   }
 
   const ast = new PascalishProgramAstBuilder(stripped, fileName, hostServices).visit(tree);
+  if (deviceBindings) {
+    if (hostServices || ast.runtimeUnit?.type !== 'ProgramDecl') {
+      throw new Error('[PASCALISH-PROGRAM] Device bindings require a standalone program');
+    }
+    ast.deviceBindings = true;
+  }
+  const containsCache = value => value && typeof value === 'object'
+    && (value.kind === 'cache' || Object.values(value).some(containsCache));
+  if (!hostServices && containsCache(ast)) throw new Error('Cache declarations require hosted unit variables');
   if (hostServices) {
     if (!['ServiceDecl', 'DaemonDecl'].includes(ast.runtimeUnit?.type)
       || (ast.runtimeUnit.type === 'ServiceDecl' && !ast.runtimeUnit.endpoints.length)) {
@@ -3102,6 +3366,7 @@ export function compilePascalishProgramWithAntlr(sourceText, { fileName = '', ho
   const result = new Codegen(ast).build();
 
   result.programMap.libraries = linkedLibraries;
+  if (deviceBindings) result.programMap.deviceBindingsVersion = DEVICE_BINDINGS_VERSION;
   // Attach mapper imports to the program map
   result.programMap.mapperImports = mapperImports;
 

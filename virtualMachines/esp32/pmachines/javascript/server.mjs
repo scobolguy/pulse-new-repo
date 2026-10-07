@@ -3,6 +3,7 @@
 // ESP32 firmware (/status, /ffs/upload, /pmachine/execute_file and
 // /pmachine/debug/session*) so backend run/debug bridges can target it by host.
 import http from 'node:http';
+import dgram from 'node:dgram';
 import os from 'node:os';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -32,7 +33,9 @@ function parseCliArgs(argv) {
     host: process.env.JS_PMACHINE_BIND || '0.0.0.0',
     name: process.env.JS_PMACHINE_NAME || '',
     backendUrl: process.env.JS_PMACHINE_BACKEND_URL || 'http://127.0.0.1:4000',
-    advertiseHost: process.env.JS_PMACHINE_ADVERTISE_HOST || '127.0.0.1'
+    advertiseHost: process.env.JS_PMACHINE_ADVERTISE_HOST || '127.0.0.1',
+    udpAnnounceHost: process.env.JS_PMACHINE_UDP_ANNOUNCE_HOST || '127.255.255.255',
+    udpAnnouncePort: Number(process.env.JS_PMACHINE_UDP_ANNOUNCE_PORT ?? 4210)
   };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -41,6 +44,8 @@ function parseCliArgs(argv) {
     else if (token === '--name') args.name = String(argv[++index]);
     else if (token === '--backend') args.backendUrl = String(argv[++index]);
     else if (token === '--advertise-host') args.advertiseHost = String(argv[++index]);
+    else if (token === '--udp-announce-host') args.udpAnnounceHost = String(argv[++index]);
+    else if (token === '--udp-announce-port') args.udpAnnouncePort = Number(argv[++index]);
   }
   if (!args.name) args.name = `js-pmachine-${args.port}`;
   return args;
@@ -129,13 +134,45 @@ export function createJsPmachineNodeServer({
   backendUrl = '',
   advertiseHost = '127.0.0.1',
   announceIntervalMs = 60_000,
+  udpAnnounceHost = '127.255.255.255',
+  udpAnnouncePort = 0,
   fetchImpl = fetch,
   logger = console
 } = {}) {
+  if (!Number.isSafeInteger(udpAnnouncePort) || udpAnnouncePort < 0 || udpAnnouncePort > 65535) {
+    throw new Error('UDP announcement port must be an integer from 0 to 65535');
+  }
+  if (!Number.isSafeInteger(announceIntervalMs) || announceIntervalMs < 1) {
+    throw new Error('Announcement interval must be a positive integer');
+  }
   const files = new Map();
   const startedAt = Date.now();
   const stats = { runs: 0, debugSessions: 0 };
   let hostedService = null;
+  const additionalHostedServices = new Map();
+
+  function serviceRegistrations() {
+    const origin = `http://${advertiseHost}:${server.address()?.port ?? port}`;
+    const services = [{
+      serviceId: 'pmachine', instanceId: `${name}:pmachine`, kind: 'runtime',
+      provider: 'javascript', enabled: true, endpoint: `${origin}/pmachine/execute_file`
+    }];
+    for (const host of [hostedService, ...additionalHostedServices.values()]) {
+      if (!host) continue;
+      const registration = host.getRegistration();
+      const status = host.getStatus();
+      const base = status.httpPort ? `http://127.0.0.1:${status.httpPort}` : origin;
+      services.push({ ...registration, provider: 'pascalish', endpoint: `${base}/` });
+      for (const daemon of registration.daemons) {
+        services.push({
+          serviceId: daemon, instanceId: `${registration.instanceId}:${daemon}`,
+          kind: 'daemon', provider: 'pascalish', enabled: registration.enabled,
+          endpoint: `${origin}/pmachine/service_host/status?collectorId=${encodeURIComponent(registration.instanceId)}`
+        });
+      }
+    }
+    return services;
+  }
 
   function readFfsFile(remotePath) {
     const value = files.get(String(remotePath || ''));
@@ -183,7 +220,8 @@ export function createJsPmachineNodeServer({
   }
 
   async function installHostedService(params) {
-    if (hostedService?.getStatus().running) {
+    const additional = params.get('additional') === 'true';
+    if (!additional && hostedService?.getStatus().running) {
       throw Object.assign(new Error('Stop the active hosted service before installing another'), { status: 409 });
     }
     const servicePcode = readFfsFile(params.get('serviceFile'));
@@ -202,7 +240,24 @@ export function createJsPmachineNodeServer({
       throw Object.assign(new Error('Daemon pcode and map must be supplied together'), { status: 400 });
     }
     const daemons = [];
-    if (daemonFile) {
+    const sharedDaemons = params.has('daemons');
+    if (sharedDaemons && daemonFile) throw Object.assign(new Error('Use daemons or legacy daemonFile, not both'), { status: 400 });
+    if (sharedDaemons) {
+      const json = params.get('daemons');
+      const entries = json.length <= 1024 ? JSON.parse(json) : null;
+      if (!Array.isArray(entries) || entries.length < 1 || entries.length > 3) {
+        throw Object.assign(new Error('Invalid daemons list (1..3 entries)'), { status: 400 });
+      }
+      for (const entry of entries) {
+        if (typeof entry?.file !== 'string' || typeof entry?.map !== 'string') {
+          throw Object.assign(new Error('Each daemon needs file and map'), { status: 400 });
+        }
+        const pcodeText = readFfsFile(entry.file);
+        const programMap = parseHostedMap(pcodeText, readFfsFile(entry.map), 'daemon');
+        daemons.push({ compiled: { pcodeText, programMap }, udpPort: entry.udpPort ?? null, udpShared: entry.udpShared ?? false,
+          multicastGroup: entry.multicastGroup ?? '', multicastInterface: entry.multicastInterface ?? '' });
+      }
+    } else if (daemonFile) {
       const daemonPcode = readFfsFile(daemonFile);
       const daemonMap = parseHostedMap(daemonPcode, readFfsFile(daemonMapFile), 'daemon');
       if (daemonMap.hostBindingsVersion !== 1 || daemonMap.runtimeUnit?.kind !== 'daemon') {
@@ -212,23 +267,31 @@ export function createJsPmachineNodeServer({
     }
 
     const collectorId = String(params.get('collectorId') || serviceMap.runtimeUnit.id || name);
+    if (additional && (hostedService?.getStatus().collectorId === collectorId || additionalHostedServices.has(collectorId))) {
+      throw Object.assign(new Error(`Hosted collector already installed: ${collectorId}`), { status: 409 });
+    }
     const udpPort = Number(params.get('udpPort') || 0);
     const observationTtlMs = Number(params.get('observationTtlMs') || 180000);
+    const httpPort = additional ? Number(params.get('httpPort')) : null;
     if (!Number.isInteger(udpPort) || udpPort < 0 || udpPort > 65535) {
       throw Object.assign(new Error('Invalid UDP port'), { status: 400 });
+    }
+    if (additional && (!Number.isInteger(httpPort) || httpPort < 0 || httpPort > 65535)) {
+      throw Object.assign(new Error('Invalid additional collector HTTP port'), { status: 400 });
     }
     if (!Number.isInteger(observationTtlMs) || observationTtlMs < 1 || observationTtlMs > 180000) {
       throw Object.assign(new Error('Invalid observation TTL'), { status: 400 });
     }
 
-    if (hostedService) await hostedService.stop();
+    if (!additional && hostedService) await hostedService.stop();
     const nextHost = await createPascalishServiceHost({
       compiled: { pcodeText: servicePcode, programMap: serviceMap },
       daemons,
       collectorId,
-      host: '0.0.0.0',
-      httpPort: null,
-      udpPort,
+      host: additional ? '127.0.0.1' : '0.0.0.0',
+      httpPort,
+      udpPort: additional || sharedDaemons && !udpPort ? null : udpPort,
+      networkPeers: params.has('networkPeers') ? JSON.parse(params.get('networkPeers')) : [],
       bindings: {
         'host.announcement': normalizeDiscoveryAnnouncement,
         'host.observation_ttl': () => observationTtlMs,
@@ -240,6 +303,10 @@ export function createJsPmachineNodeServer({
     } catch (error) {
       await nextHost.stop();
       throw error;
+    }
+    if (additional) {
+      additionalHostedServices.set(collectorId, nextHost);
+      return nextHost.getStatus();
     }
     hostedService = nextHost;
     return hostedService.getStatus();
@@ -276,12 +343,16 @@ export function createJsPmachineNodeServer({
     }
     const { params, rawBody } = await readParams(req, url);
 
+    if (route === '/api/services' && req.method === 'GET') {
+      return send(res, 200, { nodeId: name, services: serviceRegistrations() });
+    }
+
     if (route === '/status' && req.method === 'GET') {
       return send(res, 200, {
         nodeName: name,
         runtime: 'js-pmachine',
         role: 'pmachine',
-        services: ['pmachine'],
+        services: serviceRegistrations().map(service => service.serviceId),
         port: server.address()?.port ?? port,
         uptimeMs: Date.now() - startedAt,
         files: files.size,
@@ -304,12 +375,24 @@ export function createJsPmachineNodeServer({
       return send(res, 200, await installHostedService(params));
     }
     if (route === '/pmachine/service_host/status' && req.method === 'GET') {
+      const collectorId = params.get('collectorId');
+      if (collectorId) {
+        const selected = hostedService?.getStatus().collectorId === collectorId
+          ? hostedService : additionalHostedServices.get(collectorId);
+        if (!selected) return send(res, 404, { error: `Hosted collector not found: ${collectorId}` });
+        return send(res, 200, selected.getStatus());
+      }
       return send(res, 200, hostedService?.getStatus() || {
         running: false, hostBindingsVersion: 1, runtime: 'pascalish-hosted',
       });
     }
     if (route === '/pmachine/service_host/stop' && req.method === 'POST') {
-      if (hostedService) {
+      const collectorId = params.get('collectorId');
+      if (collectorId && additionalHostedServices.has(collectorId)) {
+        const selected = additionalHostedServices.get(collectorId);
+        await selected.stop();
+        additionalHostedServices.delete(collectorId);
+      } else if (hostedService && (!collectorId || hostedService.getStatus().collectorId === collectorId)) {
         await hostedService.stop();
         hostedService = null;
       }
@@ -376,30 +459,47 @@ export function createJsPmachineNodeServer({
     if (service) {
       service.stop().catch(error => logger.error(`[js-pmachine] hosted service shutdown failed: ${error.message}`));
     }
+    for (const [collectorId, additional] of additionalHostedServices) {
+      additionalHostedServices.delete(collectorId);
+      additional.stop().catch(error => logger.error(`[js-pmachine] ${collectorId} shutdown failed: ${error.message}`));
+    }
   });
-  if (backendUrl) {
-    const announcementUrl = new URL('/api/pmachine/announce', backendUrl);
+  if (backendUrl || udpAnnouncePort) {
+    const announcementUrl = backendUrl ? new URL('/api/pmachine/announce', backendUrl) : null;
     let timer;
     let pending = false;
+    let udpSocket;
+    let udpReady = false;
+    function announcement() {
+      return {
+        kind: 'nodeBeacon',
+        nodeId: name,
+        nodeName: name,
+        ip: advertiseHost,
+        port: server.address().port,
+        hardware: 'PMachine JavaScript VM',
+        runtime: 'js-pmachine',
+        available: true,
+        source: 'js-pmachine-announce',
+        services: [{ name: 'pmachine', endpoint: '/pmachine/execute_file' }]
+      };
+    }
+    function announceUdp() {
+      if (!udpReady || !server.listening) return;
+      udpSocket.send(Buffer.from(JSON.stringify(announcement())), udpAnnouncePort, udpAnnounceHost, error => {
+        if (error) logger.warn(`[js-pmachine] ${name} UDP announcement to ${udpAnnounceHost}:${udpAnnouncePort} failed: ${error.message}`);
+      });
+    }
     async function announce() {
-      if (pending || !server.listening) return;
+      announceUdp();
+      if (!announcementUrl || pending || !server.listening) return;
       pending = true;
       try {
         const response = await fetchImpl(announcementUrl, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           signal: AbortSignal.timeout(5000),
-          body: JSON.stringify({
-            nodeId: name,
-            nodeName: name,
-            ip: advertiseHost,
-            port: server.address().port,
-            hardware: 'PMachine JavaScript VM',
-            runtime: 'js-pmachine',
-            available: true,
-            source: 'js-pmachine-announce',
-            services: [{ name: 'pmachine', endpoint: '/pmachine/execute_file' }]
-          })
+          body: JSON.stringify(announcement())
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
         await response.arrayBuffer();
@@ -410,11 +510,32 @@ export function createJsPmachineNodeServer({
       }
     }
     server.on('listening', () => {
+      if (udpAnnouncePort) {
+        udpSocket = dgram.createSocket('udp4');
+        udpSocket.on('error', error => {
+          logger.warn(`[js-pmachine] ${name} UDP announcement socket failed: ${error.message}`);
+        });
+        udpSocket.bind(0, () => {
+          if (!server.listening) return;
+          try {
+            udpSocket.setBroadcast(true);
+            udpReady = true;
+            udpSocket.unref();
+            announceUdp();
+          } catch (error) {
+            logger.warn(`[js-pmachine] ${name} UDP announcement setup failed: ${error.message}`);
+          }
+        });
+      }
       void announce();
       timer = setInterval(announce, announceIntervalMs);
       timer.unref();
     });
-    server.on('close', () => clearInterval(timer));
+    server.on('close', () => {
+      clearInterval(timer);
+      udpReady = false;
+      if (udpSocket) udpSocket.close();
+    });
   }
   return server;
 }

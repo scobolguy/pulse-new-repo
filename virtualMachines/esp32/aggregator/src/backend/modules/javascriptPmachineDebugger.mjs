@@ -24,6 +24,7 @@ function createSessionState(session) {
     callStack: clone(session.snapshot?.callStack || []),
     breakpoints: [...session.breakpoints],
     sourceBreakpoints: clone(session.sourceBreakpoints),
+    resolvedSourceBreakpoints: clone(session.resolvedSourceBreakpoints),
     ready: Boolean(session.ready),
     error: session.error || null,
     result: session.result ? clone(session.result) : null
@@ -100,7 +101,9 @@ export function createJavaScriptPmachineDebugSession({ pcodeText, programMap = {
     running: false,
     stepBudget: 0,
     breakpoints: [],
+    instructionBreakpoints: [],
     sourceBreakpoints: [],
+    resolvedSourceBreakpoints: [],
     controlMode: null,
     controlDepth: 0,
     controlOriginPc: -1,
@@ -175,6 +178,7 @@ export function continueJavaScriptPmachineDebugSession(id) {
   const session = getJavaScriptPmachineDebugSession(id);
   if (!session) throw new Error('Debug session not found');
   session.running = true;
+  session.controlMode = null;
   session.stepBudget = 0;
   session.status = 'running';
   notify(session);
@@ -193,7 +197,8 @@ export function pauseJavaScriptPmachineDebugSession(id) {
 export function setJavaScriptPmachineDebugBreakpoints(id, breakpoints) {
   const session = getJavaScriptPmachineDebugSession(id);
   if (!session) throw new Error('Debug session not found');
-  session.breakpoints = [...new Set((Array.isArray(breakpoints) ? breakpoints : []).map(Number).filter(Number.isInteger))];
+  session.instructionBreakpoints = [...new Set((Array.isArray(breakpoints) ? breakpoints : []).map(Number).filter(pc => Number.isInteger(pc) && pc >= 0))];
+  session.breakpoints = [...session.instructionBreakpoints];
   return createSessionState(session);
 }
 
@@ -204,15 +209,29 @@ export function setJavaScriptPmachineSourceBreakpoints(id, sourceBreakpoints) {
     sourceFile: item?.sourceFile || null,
     sourceLanguage: item?.sourceLanguage || null,
     sourceLine: Number(item?.sourceLine)
-  })).filter(item => Number.isInteger(item.sourceLine));
-  const resolved = Object.entries(session.sourceMap || {})
-    .filter(([, location]) => session.sourceBreakpoints.some(item =>
-      item.sourceLine === Number(location?.sourceLine)
-      && (!item.sourceFile || item.sourceFile === location?.sourceFile)
-      && (!item.sourceLanguage || item.sourceLanguage === location?.sourceLanguage)
-    ))
-    .map(([pc]) => Number(pc));
-  session.breakpoints = [...new Set([...session.breakpoints, ...resolved])];
+  })).filter(item => Number.isInteger(item.sourceLine) && item.sourceLine > 0);
+  session.resolvedSourceBreakpoints = session.sourceBreakpoints.map(item => {
+    const candidates = Object.entries(session.sourceMap || {})
+      .filter(([pc, location]) =>
+        Number.isInteger(Number(pc)) && Number(pc) >= 0
+        && Number(location?.sourceLine) >= item.sourceLine
+        && (!item.sourceFile || item.sourceFile === location?.sourceFile)
+        && (!item.sourceLanguage || item.sourceLanguage === location?.sourceLanguage)
+      )
+      .sort(([leftPc, left], [rightPc, right]) =>
+        Number(left.sourceLine) - Number(right.sourceLine) || Number(leftPc) - Number(rightPc));
+    const match = candidates[0];
+    return {
+      ...item,
+      verified: Boolean(match),
+      line: match ? Number(match[1].sourceLine) : item.sourceLine,
+      pc: match ? Number(match[0]) : null
+    };
+  });
+  session.breakpoints = [...new Set([
+    ...session.instructionBreakpoints,
+    ...session.resolvedSourceBreakpoints.filter(item => item.verified).map(item => item.pc)
+  ])];
   return createSessionState(session);
 }
 

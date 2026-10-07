@@ -10,10 +10,10 @@ const ESP32_TARGET = process.env.ESP32_NODE_NAME || process.env.ESP32_HOST || 'n
 const NODE_REGISTRY_URL = process.env.NODE_REGISTRY_URL || 'http://127.0.0.1:4000/api/nodes';
 
 const SERVICE_ID = 'helloService';
-const LOCAL_PASCAL = path.resolve(process.cwd(), 'data', 'helloService.service.pas');
-const LOCAL_ROUTER_RULES = path.resolve(process.cwd(), '..', 'pcode', 'helloService.router-rules.json');
-const LOCAL_DATA_MAPPINGS = path.resolve(process.cwd(), '..', 'pcode', 'helloService.data-mappings.json');
-const LOCAL_ARTIFACT = path.resolve(process.cwd(), '..', 'pcode', 'helloService.artifact.json');
+const LOCAL_PASCAL = path.resolve(process.cwd(), '..', 'src', 'helloService.service.pas');
+const LOCAL_ROUTER_RULES = path.resolve(process.cwd(), '..', 'object', 'pcode', 'helloService.router-rules.json');
+const LOCAL_DATA_MAPPINGS = path.resolve(process.cwd(), '..', 'object', 'pcode', 'helloService.data-mappings.json');
+const LOCAL_ARTIFACT = path.resolve(process.cwd(), '..', 'object', 'pcode', 'helloService.artifact.json');
 const REMOTE_ROUTER_RULES = '/helloService.hrr.json';
 const REMOTE_DATA_MAPPINGS = '/helloService.hdm.json';
 

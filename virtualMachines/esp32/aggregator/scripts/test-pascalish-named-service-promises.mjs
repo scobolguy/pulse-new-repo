@@ -7,7 +7,7 @@ import { parsePcode, executeProgram } from './run-js-pmachine.mjs';
 
 const definitions = new Map();
 for (const serviceId of ['blink10', 'factorialService']) {
-  const source = await fs.readFile(new URL(`../data/${serviceId}.pas`, import.meta.url), 'utf8');
+  const source = await fs.readFile(new URL(`../../src/${serviceId}.pas`, import.meta.url), 'utf8');
   const compiled = compilePascalishProgramWithAntlr(source);
   const endpoint = compiled.programMap.serviceEndpoints.find((item) => item.verb === 'GET');
   assert.ok(endpoint?.entryLabel, `${serviceId} must have an executable GET endpoint`);

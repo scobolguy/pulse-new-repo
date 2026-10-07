@@ -1,10 +1,14 @@
 #include "udp_runtime.h"
+#include "udp_announcement.h"
+#include "udp_ingress_policy.h"
 
 #include <ArduinoJson.h>
+#include <atomic>
 #if defined(ARDUINO_ARCH_ESP8266)
 #include <ESP8266WiFi.h>
 #else
 #include <WiFi.h>
+#include <esp_heap_caps.h>
 #endif
 #if defined(ENABLE_HTTPS) && (defined(ESP32) || defined(ESP8266))
 #include "https_service.h"
@@ -24,7 +28,33 @@ bool nodeBeaconAcknowledged = false;
 unsigned long nodeBeaconLastSentAt = 0;
 unsigned long nodeBeaconLastAckAt = 0;
 String nodeBeaconLastCapabilityHash;
+constexpr uint32_t kBeaconWarmupMs = 5000;
+bool beaconWarmupArmed = false;
+bool beaconWarmupComplete = false;
+uint32_t beaconWarmupStartedAt = 0;
 constexpr size_t kMaxDiscoveredNodes = 32;
+char incomingPacket[udp_ingress::kMaxPacketBytes + 1];
+std::atomic<uint32_t> incomingReceived{0};
+std::atomic<uint32_t> droppedOversized{0};
+std::atomic<uint32_t> droppedLowMemory{0};
+std::atomic<uint32_t> droppedIncomplete{0};
+std::atomic<uint32_t> droppedAllocation{0};
+uint32_t lastDropLogAt = 0;
+bool dropLogged = false;
+
+void logIncomingDrop(const char* reason, int packetSize) {
+    const uint32_t now = millis();
+    if (dropLogged && static_cast<uint32_t>(now - lastDropLogAt) < 5000) return;
+    dropLogged = true;
+    lastDropLogAt = now;
+    Serial.printf("[UDP] Incoming drop reason=%s bytes=%d oversized=%lu lowMemory=%lu incomplete=%lu allocation=%lu heap=%lu\n",
+        reason, packetSize,
+        static_cast<unsigned long>(droppedOversized.load()),
+        static_cast<unsigned long>(droppedLowMemory.load()),
+        static_cast<unsigned long>(droppedIncomplete.load()),
+        static_cast<unsigned long>(droppedAllocation.load()),
+        static_cast<unsigned long>(ESP.getFreeHeap()));
+}
 
 bool bindUdpSocket(WiFiUDP& socket, bool& ready, uint16_t& boundPort, uint16_t nextPort, const char* label) {
     if (nextPort == 0) {
@@ -127,9 +157,7 @@ void sendNodeDetailsResponse(WiFiUDP& socket, const UdpRuntimeContext& context, 
 
     String json;
     serializeJson(doc, json);
-    socket.beginPacket(ip, port);
-    socket.write((const uint8_t*)json.c_str(), json.length());
-    socket.endPacket();
+    sendCheckedUdpPacket(socket, ip, port, json, "nodeDetails");
 }
 
 void processIncomingOnSocket(WiFiUDP& socket, const UdpRuntimeContext& context) {
@@ -138,18 +166,46 @@ void processIncomingOnSocket(WiFiUDP& socket, const UdpRuntimeContext& context) 
         return;
     }
 
-    String msg;
-    msg.reserve(packetSize + 1);
-    while (socket.available()) {
-        msg += static_cast<char>(socket.read());
+    ++incomingReceived;
+#if defined(ARDUINO_ARCH_ESP8266)
+    const uint32_t largestBlock = ESP.getMaxFreeBlockSize();
+#else
+    const uint32_t largestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+#endif
+    const auto decision = udp_ingress::decide(packetSize, ESP.getFreeHeap(), largestBlock);
+    if (decision != udp_ingress::Decision::accept) {
+        socket.flush();
+        if (decision == udp_ingress::Decision::oversized) {
+            ++droppedOversized;
+            logIncomingDrop("oversized", packetSize);
+        } else {
+            ++droppedLowMemory;
+            logIncomingDrop("low-memory", packetSize);
+        }
+        return;
     }
-
-    if (msg.length() == 0) {
+    const int bytesRead = socket.read(reinterpret_cast<uint8_t*>(incomingPacket), packetSize);
+    if (bytesRead != packetSize) {
+        socket.flush();
+        ++droppedIncomplete;
+        logIncomingDrop("incomplete", packetSize);
+        return;
+    }
+    incomingPacket[packetSize] = '\0';
+    const String msg(incomingPacket, static_cast<unsigned int>(packetSize));
+    if (msg.length() != static_cast<size_t>(packetSize)) {
+        ++droppedAllocation;
+        logIncomingDrop("allocation", packetSize);
         return;
     }
 
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, msg);
+    if (err == DeserializationError::NoMemory) {
+        ++droppedAllocation;
+        logIncomingDrop("json-allocation", packetSize);
+        return;
+    }
     if (!err && context.nodeName && context.computeNodeCapabilityHash) {
         const String kind = doc["kind"].as<String>();
 
@@ -202,9 +258,7 @@ void processIncomingOnSocket(WiFiUDP& socket, const UdpRuntimeContext& context) 
             ackDoc["ts"] = millis();
             String ackJson;
             serializeJson(ackDoc, ackJson);
-            socket.beginPacket(socket.remoteIP(), socket.remotePort());
-            socket.write((const uint8_t*)ackJson.c_str(), ackJson.length());
-            socket.endPacket();
+            sendCheckedUdpPacket(socket, socket.remoteIP(), socket.remotePort(), ackJson, "nodeBeaconAck");
 
             JsonDocument detailReqDoc;
             detailReqDoc["kind"] = "nodeDetailsRequest";
@@ -214,9 +268,7 @@ void processIncomingOnSocket(WiFiUDP& socket, const UdpRuntimeContext& context) 
             detailReqDoc["ts"] = millis();
             String detailReqJson;
             serializeJson(detailReqDoc, detailReqJson);
-            socket.beginPacket(socket.remoteIP(), socket.remotePort());
-            socket.write((const uint8_t*)detailReqJson.c_str(), detailReqJson.length());
-            socket.endPacket();
+            sendCheckedUdpPacket(socket, socket.remoteIP(), socket.remotePort(), detailReqJson, "nodeDetailsRequest");
 
             sendNodeDetailsResponse(socket, context, socket.remoteIP(), socket.remotePort(), context.computeNodeCapabilityHash(), senderFeatureChanged);
             return;
@@ -280,6 +332,16 @@ void processIncomingOnSocket(WiFiUDP& socket, const UdpRuntimeContext& context) 
 }
 }
 
+UdpIngressStats udpRuntimeGetIngressStats() {
+    UdpIngressStats stats;
+    stats.received = incomingReceived.load();
+    stats.droppedOversized = droppedOversized.load();
+    stats.droppedLowMemory = droppedLowMemory.load();
+    stats.droppedIncomplete = droppedIncomplete.load();
+    stats.droppedAllocation = droppedAllocation.load();
+    return stats;
+}
+
 void udpRuntimeConfigureWifiCredentials(const String& ssid, const String& password) {
     wifiSsid = ssid;
     wifiPassword = password;
@@ -305,6 +367,7 @@ bool udpRuntimeEnsureReady(uint16_t parentPort, uint16_t siblingPort) {
 void udpRuntimeMaintainConnectivity(uint16_t parentPort, uint16_t siblingPort, unsigned long wifiReconnectIntervalMs) {
     const wl_status_t status = WiFi.status();
     if (status == WL_CONNECTED) {
+        if (!beaconWarmupArmed) udpRuntimeDeferBeacons();
         if (!udpParentReady || (siblingPort > 0 && siblingPort != parentPort && !udpSiblingReady)) {
             udpRuntimeEnsureReady(parentPort, siblingPort);
         }
@@ -313,6 +376,8 @@ void udpRuntimeMaintainConnectivity(uint16_t parentPort, uint16_t siblingPort, u
 
     udpParentReady = false;
     udpSiblingReady = false;
+    beaconWarmupArmed = false;
+    beaconWarmupComplete = false;
 
     if (wifiSsid.isEmpty()) {
         return;
@@ -353,6 +418,25 @@ void udpRuntimeResetBeaconState() {
     nodeBeaconAcknowledged = false;
     nodeBeaconLastSentAt = 0;
     nodeBeaconLastAckAt = 0;
+}
+
+void udpRuntimeDeferBeacons() {
+    beaconWarmupStartedAt = millis();
+    beaconWarmupArmed = true;
+    beaconWarmupComplete = false;
+    Serial.printf("[UDP] Discovery beacon warm-up started at %lu; deferring sends for %lu ms\n",
+        static_cast<unsigned long>(beaconWarmupStartedAt), static_cast<unsigned long>(kBeaconWarmupMs));
+}
+
+bool udpRuntimeCanSendBeacon() {
+    if (WiFi.status() != WL_CONNECTED || !beaconWarmupArmed) return false;
+    if (!beaconWarmupComplete) {
+        if (static_cast<uint32_t>(millis() - beaconWarmupStartedAt) < kBeaconWarmupMs) return false;
+        beaconWarmupComplete = true;
+        Serial.printf("[UDP] Discovery beacon warm-up complete after %lu ms\n",
+            static_cast<unsigned long>(static_cast<uint32_t>(millis() - beaconWarmupStartedAt)));
+    }
+    return true;
 }
 
 unsigned long udpRuntimeGetBeaconIntervalMs(unsigned long ackedIntervalMs, unsigned long unackedIntervalMs) {

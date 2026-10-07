@@ -22,8 +22,15 @@ if (status.running || status.busy) throw new Error('Host already active; stop it
 const device = JSON.parse(await request('/status'));
 const files = {};
 for (const [kind, name] of [['service', 'discovery-collector-service'], ['daemon', 'discovery-maintenance-daemon']]) {
-  const source = await fs.readFile(new URL(`../../artifactPrograms/${name}.pas`, import.meta.url), 'utf8');
+  const source = await fs.readFile(new URL(`../../src/${name}.pas`, import.meta.url), 'utf8');
   const compiled = compilePascalishProgramWithAntlr(source, { hostServices: true });
+  if (kind === 'service') {
+    const tableConfiguration = JSON.parse(await fs.readFile(
+      new URL('../../src/discovery-collector-service.host-tables.json', import.meta.url), 'utf8'
+    ));
+    if (!Array.isArray(tableConfiguration.tables)) throw new Error('Invalid discovery host table configuration');
+    compiled.programMap.hostTables = tableConfiguration.tables;
+  }
   files[kind] = { file: `/${name}.pcode`, map: `/${name}.program.json` };
   await request('/ffs/upload', { file: files[kind].file, body: compiled.pcodeText });
   await request('/ffs/upload', { file: files[kind].map,

@@ -11,9 +11,9 @@ import fs from 'fs/promises';
 import { getPascalCompiler } from './compilerService.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const OPCODE_MANIFEST = path.resolve(__dirname, '../../../pmachines/shared/contracts/pcode-opcodes.manifest.json');
+const OPCODE_MANIFEST = path.resolve(__dirname, '../../../pcode/pcode-opcodes.manifest.json');
 const ANTLR_COMPILER_URL = pathToFileURL(path.resolve(__dirname, '../../scripts/compile-standard-pascal-antlr-to-pcode.mjs')).href;
-const PMACHINE_URL = pathToFileURL(path.resolve(__dirname, '../../../pmachines/javascript/index.mjs')).href;
+const PMACHINE_URL = pathToFileURL(path.resolve(__dirname, '../../scripts/run-js-pmachine.mjs')).href;
 
 const router = express.Router();
 

@@ -16,9 +16,9 @@ const HOST = (process.env.ESP32_HOST || '192.168.2.155').replace(/^https?:\/\//,
 const BASE = process.env.ESP32_BASE_URL || `http://${HOST}`;
 
 const DEMOS = [
-  { name: 'pascalish', dir: 'data/cbds/pascalish-demo', pcode: 'cbds-converter.pcode' },
-  { name: 'vbish', dir: 'data/cbds/vbish-demo', pcode: 'vbish-mt103-to-pacs008.pcode' },
-  { name: 'cobolish', dir: 'data/cbds/cobolish-demo', pcode: 'cbds-converter.pcode' }
+  { name: 'pascalish', dir: '../object/aggregator-pcode/cbds/pascalish-demo', pcode: 'cbds-converter.pcode' },
+  { name: 'vbish', dir: '../object/aggregator-pcode/cbds/vbish-demo', pcode: 'vbish-mt103-to-pacs008.pcode' },
+  { name: 'cobolish', dir: '../object/aggregator-pcode/cbds/cobolish-demo', pcode: 'cbds-converter.pcode' }
 ];
 
 async function postForm(url, params, label) {
@@ -137,7 +137,7 @@ async function main() {
   const passed = results.filter((r) => r.pass).length;
   console.log(`\n${passed}/${results.length} demos passed on the ESP32 with output identical to the JS PMachine`);
 
-  const outPath = path.join(ROOT, 'data', 'cbds', 'esp32-demo-results.json');
+  const outPath = path.join(ROOT, '..', 'object', 'aggregator-pcode', 'cbds', 'esp32-demo-results.json');
   await fs.writeFile(outPath, `${JSON.stringify({ target: BASE, ranAt: new Date().toISOString(), results: results.map(({ device, ...rest }) => rest) }, null, 2)}\n`, 'utf-8');
   console.log(`Results written to ${path.relative(ROOT, outPath)}`);
 

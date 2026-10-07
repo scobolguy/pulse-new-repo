@@ -7,8 +7,9 @@ import { compileConversionRuleToOps, emitMapperRoutinePcode } from './compile-ma
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve('.');
-const DEMO_DIR = path.join(ROOT, 'data', 'cbds', 'vbish-demo');
-const MAPPER_LIBRARY_PATH = path.resolve(ROOT, '..', 'pcode', 'cbds-router-mapper.program.json');
+const DEMO_DIR = path.join(ROOT, '..', 'object', 'aggregator-pcode', 'cbds', 'vbish-demo');
+const SOURCE_DIR = path.join(ROOT, '..', 'src', 'cbds', 'vbish-demo');
+const MAPPER_LIBRARY_PATH = path.resolve(ROOT, '..', 'object', 'pcode', 'cbds-router-mapper.program.json');
 
 // The VBish service under test. It declares its librarian role, pulls a shared
 // library from the Data Librarian, imports the CBDS mapper from the Mapping
@@ -137,9 +138,10 @@ function section(title) {
 
 async function main() {
   await fs.mkdir(DEMO_DIR, { recursive: true });
+  await fs.mkdir(SOURCE_DIR, { recursive: true });
 
   // 1. The VBish source under test.
-  const vbishPath = path.join(DEMO_DIR, 'vbish-mt103-to-pacs008.vbs');
+  const vbishPath = path.join(SOURCE_DIR, 'vbish-mt103-to-pacs008.vbs');
   await fs.writeFile(vbishPath, VBISH_SOURCE, 'utf-8');
 
   // 2. Compile VBish -> portable Pascalish -> pcode + program map.

@@ -1,0 +1,283 @@
+{
+  "version": 1,
+  "compiledAt": "2026-10-05T17:13:30.269Z",
+  "compilerPipeline": "pascalish-g4",
+  "serviceId": "hello",
+  "runtimeUnit": {
+    "kind": "program",
+    "id": "hello",
+    "refreshMs": null
+  },
+  "ast": {
+    "type": "CompilationUnit",
+    "runtimeUnit": {
+      "type": "ProgramDecl",
+      "name": "hello",
+      "unit": {
+        "globals": [],
+        "procedures": [],
+        "mappers": [],
+        "routers": [
+          {
+            "type": "RouterDecl",
+            "id": "hello-route",
+            "inputQueue": "hello.in",
+            "outputs": [
+              {
+                "queueName": "hello.out",
+                "outputType": "",
+                "whenRule": "output := 1;",
+                "transformRule": "output := 'hello, world';"
+              }
+            ],
+            "sourceLocation": {
+              "sourceFile": "",
+              "sourceLanguage": "pascalish",
+              "sourceLine": 3,
+              "sourceText": "router \"hello-route\" input \"hello.in\" description \"Simple hello service\" enabled true begin",
+              "endLine": 5
+            }
+          }
+        ],
+        "types": [],
+        "classes": [],
+        "methodImpls": [],
+        "libraries": [],
+        "librarianImports": []
+      },
+      "block": {
+        "type": "Block",
+        "statements": [],
+        "sourceLocation": {
+          "sourceFile": "",
+          "sourceLanguage": "pascalish",
+          "sourceLine": 7,
+          "sourceText": "begin",
+          "endLine": 8
+        }
+      },
+      "sourceLocation": {
+        "sourceFile": "",
+        "sourceLanguage": "pascalish",
+        "sourceLine": 1,
+        "sourceText": "program \"hello\";",
+        "endLine": 8
+      }
+    },
+    "variables": [],
+    "types": [],
+    "classes": [],
+    "methodImpls": [],
+    "procedures": [],
+    "mappers": [],
+    "routers": [
+      {
+        "type": "RouterDecl",
+        "id": "hello-route",
+        "inputQueue": "hello.in",
+        "outputs": [
+          {
+            "queueName": "hello.out",
+            "outputType": "",
+            "whenRule": "output := 1;",
+            "transformRule": "output := 'hello, world';"
+          }
+        ],
+        "sourceLocation": {
+          "sourceFile": "",
+          "sourceLanguage": "pascalish",
+          "sourceLine": 3,
+          "sourceText": "router \"hello-route\" input \"hello.in\" description \"Simple hello service\" enabled true begin",
+          "endLine": 5
+        }
+      }
+    ],
+    "libraries": [],
+    "librarianImports": [],
+    "systems": [],
+    "databases": [],
+    "tables": [],
+    "sourceLocation": {
+      "sourceFile": "",
+      "sourceLanguage": "pascalish",
+      "sourceLine": 1,
+      "sourceText": "program \"hello\";",
+      "endLine": 8
+    }
+  },
+  "roles": [],
+  "codeLibraries": [],
+  "uses": [],
+  "interoperability": [],
+  "variableDeclarations": [],
+  "routerRules": [
+    {
+      "id": "hello-route",
+      "name": "hello-route",
+      "serviceId": "hello",
+      "enabled": true,
+      "inputQueue": "hello.in",
+      "description": "",
+      "outputs": [
+        {
+          "queueName": "hello.out",
+          "whenRule": "output := 1;",
+          "transformRule": "output := 'hello, world';"
+        }
+      ],
+      "createdAt": "2026-10-05T17:13:30.269Z",
+      "updatedAt": "2026-10-05T17:13:30.269Z"
+    }
+  ],
+  "dataMappings": [],
+  "mapperImports": [],
+  "localResources": {
+    "serviceId": "hello",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "pcodeText": "# Auto-generated from ANTLR Pascalish grammar\nJMP MAIN\nMAIN:\nROUTE_MATCH_QUEUE \"hello.in\"\nJZ ROUTER_SKIP_1\nROUTE_EVAL_WHEN \"output := 1;\"\nJZ OUT_SKIP_2\nROUTE_TRANSFORM \"output := 'hello, world';\"\nROUTE_EMIT \"hello.out\"\nOUT_SKIP_2:\nROUTER_SKIP_1:\nHALT\n",
+  "programMap": {
+    "version": 1,
+    "generatedAt": "2026-10-05T17:13:30.267Z",
+    "serviceId": "hello",
+    "runtimeUnit": {
+      "kind": "program",
+      "id": "hello",
+      "refreshMs": null
+    },
+    "executionModel": "pascalish-program",
+    "sourceLanguage": "pascalish",
+    "sourceMap": {
+      "1": {
+        "sourceFile": "",
+        "sourceLanguage": "pascalish",
+        "sourceLine": 7,
+        "sourceText": "begin",
+        "endLine": 8
+      },
+      "2": {
+        "sourceFile": "",
+        "sourceLanguage": "pascalish",
+        "sourceLine": 7,
+        "sourceText": "begin",
+        "endLine": 8
+      },
+      "3": {
+        "sourceFile": "",
+        "sourceLanguage": "pascalish",
+        "sourceLine": 7,
+        "sourceText": "begin",
+        "endLine": 8
+      },
+      "4": {
+        "sourceFile": "",
+        "sourceLanguage": "pascalish",
+        "sourceLine": 7,
+        "sourceText": "begin",
+        "endLine": 8
+      },
+      "5": {
+        "sourceFile": "",
+        "sourceLanguage": "pascalish",
+        "sourceLine": 7,
+        "sourceText": "begin",
+        "endLine": 8
+      },
+      "6": {
+        "sourceFile": "",
+        "sourceLanguage": "pascalish",
+        "sourceLine": 7,
+        "sourceText": "begin",
+        "endLine": 8
+      },
+      "7": {
+        "sourceFile": "",
+        "sourceLanguage": "pascalish",
+        "sourceLine": 8,
+        "sourceText": "begin",
+        "endLine": 8
+      }
+    },
+    "symbols": {
+      "systems": [],
+      "queues": [],
+      "services": [],
+      "databases": [],
+      "tables": []
+    },
+    "typeRegistry": {},
+    "exportedFunctions": [],
+    "entries": [
+      {
+        "kind": "router",
+        "id": "hello-route",
+        "name": "hello-route",
+        "serviceId": "hello",
+        "inputQueue": "hello.in",
+        "description": "",
+        "enabled": true,
+        "outputs": [
+          {
+            "queueName": "hello.out",
+            "httpVerb": null,
+            "dataTypeIds": [],
+            "dataTypeId": null,
+            "whenRule": "output := 1;",
+            "transformRule": "output := 'hello, world';"
+          }
+        ]
+      }
+    ],
+    "localResources": {
+      "serviceId": "hello",
+      "mappers": [],
+      "types": [],
+      "libraries": [],
+      "variables": [],
+      "publishable": false
+    },
+    "routers": [
+      {
+        "type": "RouterDecl",
+        "id": "hello-route",
+        "inputQueue": "hello.in",
+        "outputs": [
+          {
+            "queueName": "hello.out",
+            "outputType": "",
+            "whenRule": "output := 1;",
+            "transformRule": "output := 'hello, world';"
+          }
+        ],
+        "sourceLocation": {
+          "sourceFile": "",
+          "sourceLanguage": "pascalish",
+          "sourceLine": 3,
+          "sourceText": "router \"hello-route\" input \"hello.in\" description \"Simple hello service\" enabled true begin",
+          "endLine": 5
+        }
+      }
+    ],
+    "serviceEndpoints": [],
+    "globals": [],
+    "variableDeclarations": [],
+    "enums": {},
+    "procedures": {},
+    "typeDeclarations": [],
+    "classDeclarations": [],
+    "entryLabel": "MAIN",
+    "libraries": [],
+    "mapperImports": []
+  },
+  "ir": {
+    "typeDeclarations": [],
+    "classDeclarations": [],
+    "methodProcedures": []
+  },
+  "typeDeclarations": [],
+  "classDeclarations": []
+}

@@ -242,9 +242,9 @@ export function compileMaplWithAntlr(sourceText) {
 
 function parseArgs(argv) {
   const args = {
-    in: './data/sample.mapl',
-    out: '../artifacts/pcode/mapl.pcode',
-    mapOut: '../artifacts/pcode/mapl.program.json'
+    in: '../src/sample.mapl',
+    out: '../object/pcode/mapl.pcode',
+    mapOut: '../object/pcode/mapl.program.json'
   };
 
   for (let index = 0; index < argv.length; index += 1) {

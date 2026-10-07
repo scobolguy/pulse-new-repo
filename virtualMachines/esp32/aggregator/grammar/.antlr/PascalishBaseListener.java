@@ -436,6 +436,18 @@ public class PascalishBaseListener implements PascalishListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
+	@Override public void enterDecimalType(PascalishParser.DecimalTypeContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitDecimalType(PascalishParser.DecimalTypeContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
 	@Override public void enterUserType(PascalishParser.UserTypeContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -587,6 +599,18 @@ public class PascalishBaseListener implements PascalishListener {
 	 * <p>The default implementation does nothing.</p>
 	 */
 	@Override public void exitImportDecl(PascalishParser.ImportDeclContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterLibrarianImportItems(PascalishParser.LibrarianImportItemsContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitLibrarianImportItems(PascalishParser.LibrarianImportItemsContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *

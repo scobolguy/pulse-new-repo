@@ -1,4 +1,6 @@
 #include "broker_client.h"
+#include "udp_announcement.h"
+#include "udp_runtime.h"
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #ifdef ESP8266
@@ -274,7 +276,7 @@ bool BrokerClient::isDeviceOnline(const char* deviceId) {
 }
 
 void BrokerClient::broadcastDiscovery() {
-    if (!discoveryRunning) return;
+    if (!discoveryRunning || !udpRuntimeCanSendBeacon()) return;
     
     // Create discovery message
     JsonDocument doc;
@@ -293,9 +295,7 @@ void BrokerClient::broadcastDiscovery() {
     serializeJson(doc, payload);
     
     // Broadcast via UDP
-    udpClient.beginPacket(IPAddress(255, 255, 255, 255), udpPort);
-    udpClient.write((const uint8_t*)payload.c_str(), payload.length());
-    udpClient.endPacket();
+    sendCheckedUdpPacket(udpClient, IPAddress(255, 255, 255, 255), udpPort, payload, "brokerDiscovery");
     
     lastDiscoveryBroadcast = millis();
 }

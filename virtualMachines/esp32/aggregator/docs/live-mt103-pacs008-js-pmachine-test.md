@@ -89,7 +89,7 @@ The map contains 20 MT103-to-PACS rules. Important mappings include:
 Source:
 
 ```text
-aggregator/data/mt103-pacs008-daemon.wfl
+src/mt103-pacs008-daemon.wfl
 ```
 
 The logical resources are bound to:

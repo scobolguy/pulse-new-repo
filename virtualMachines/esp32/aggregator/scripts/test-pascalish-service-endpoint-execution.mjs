@@ -6,7 +6,7 @@ import { parseProgramMapMappings } from '../../pmachines/javascript/src/runtime.
 import { compilePascalishProgramWithAntlr } from './compile-pascalish-program-antlr-to-pcode.mjs';
 import { parsePcode, executeProgram } from './run-js-pmachine.mjs';
 
-const source = await fs.readFile(new URL('../data/blink10.pas', import.meta.url), 'utf8');
+const source = await fs.readFile(new URL('../../src/blink10.pas', import.meta.url), 'utf8');
 const compiled = compilePascalishProgramWithAntlr(source);
 const endpoint = compiled.programMap.serviceEndpoints.find((item) => item.verb === 'GET');
 assert.ok(endpoint, 'GET endpoint should be present');

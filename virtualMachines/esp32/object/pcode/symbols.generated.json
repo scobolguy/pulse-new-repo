@@ -1,0 +1,151 @@
+{
+  "queues": [
+    {
+      "symbol": "inboundSwift",
+      "queueName": "swift.inbound",
+      "managerId": null,
+      "dataTypeIds": [
+        "text-string"
+      ],
+      "dataTypeId": "text-string",
+      "deliveryMode": "async"
+    },
+    {
+      "symbol": "pacsOutbound",
+      "queueName": "pacs.outbound",
+      "managerId": null,
+      "dataTypeIds": [
+        "pacs",
+        "pacs-lynx"
+      ],
+      "dataTypeId": "pacs",
+      "deliveryMode": "async"
+    },
+    {
+      "symbol": "pain2RejectQueue",
+      "queueName": "pain2.reject",
+      "managerId": null,
+      "dataTypeIds": [
+        "pain2"
+      ],
+      "dataTypeId": "pain2",
+      "deliveryMode": "async"
+    },
+    {
+      "symbol": "pain2AcceptedQueue",
+      "queueName": "pain2.accepted",
+      "managerId": null,
+      "dataTypeIds": [
+        "pain2"
+      ],
+      "dataTypeId": "pain2",
+      "deliveryMode": "async"
+    },
+    {
+      "symbol": "cacheNodeARead",
+      "queueName": "cache.node-a.read",
+      "managerId": null,
+      "dataTypeIds": [
+        "cache-op"
+      ],
+      "dataTypeId": "cache-op",
+      "deliveryMode": "async"
+    },
+    {
+      "symbol": "cacheNodeAWrite",
+      "queueName": "cache.node-a.write",
+      "managerId": null,
+      "dataTypeIds": [
+        "cache-op"
+      ],
+      "dataTypeId": "cache-op",
+      "deliveryMode": "async"
+    },
+    {
+      "symbol": "cacheNodeBRead",
+      "queueName": "cache.node-b.read",
+      "managerId": null,
+      "dataTypeIds": [
+        "cache-op"
+      ],
+      "dataTypeId": "cache-op",
+      "deliveryMode": "async"
+    },
+    {
+      "symbol": "cacheNodeBWrite",
+      "queueName": "cache.node-b.write",
+      "managerId": null,
+      "dataTypeIds": [
+        "cache-op"
+      ],
+      "dataTypeId": "cache-op",
+      "deliveryMode": "async"
+    },
+    {
+      "symbol": "cacheNodeCRead",
+      "queueName": "cache.node-c.read",
+      "managerId": null,
+      "dataTypeIds": [
+        "cache-op"
+      ],
+      "dataTypeId": "cache-op",
+      "deliveryMode": "async"
+    },
+    {
+      "symbol": "cacheNodeCWrite",
+      "queueName": "cache.node-c.write",
+      "managerId": null,
+      "dataTypeIds": [
+        "cache-op"
+      ],
+      "dataTypeId": "cache-op",
+      "deliveryMode": "async"
+    },
+    {
+      "symbol": "cacheReplicationA",
+      "queueName": "cache.replication.node-a",
+      "managerId": null,
+      "dataTypeIds": [
+        "cache-op"
+      ],
+      "dataTypeId": "cache-op",
+      "deliveryMode": "async"
+    },
+    {
+      "symbol": "cacheReplicationB",
+      "queueName": "cache.replication.node-b",
+      "managerId": null,
+      "dataTypeIds": [
+        "cache-op"
+      ],
+      "dataTypeId": "cache-op",
+      "deliveryMode": "async"
+    },
+    {
+      "symbol": "cacheReplicationC",
+      "queueName": "cache.replication.node-c",
+      "managerId": null,
+      "dataTypeIds": [
+        "cache-op"
+      ],
+      "dataTypeId": "cache-op",
+      "deliveryMode": "async"
+    }
+  ],
+  "databases": [],
+  "services": [],
+  "systems": [],
+  "files": [
+    {
+      "symbol": "mtTemplate",
+      "path": "/services/templates/mt103.txt",
+      "managerId": null
+    }
+  ],
+  "apis": [
+    {
+      "symbol": "aggregator",
+      "baseUrl": "http://localhost:4000"
+    }
+  ]
+}

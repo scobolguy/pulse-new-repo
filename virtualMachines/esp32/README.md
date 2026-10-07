@@ -4,23 +4,7 @@ This workspace contains three distinct surfaces that are currently developed tog
 
 - ESP32 firmware and runtime code in `src/`, `include/`, `libraries/`, and `scripts/`
 - The Aggregator control plane, UI, DSL tooling, and local orchestration in `aggregator/`
-- Design and handoff documentation in `documentation/` and this file
-
-## Modernization Direction
-
-The workspace is being migrated in verified slices toward explicit ownership boundaries:
-
-- `documentation/` for maintained documentation
-- `code/aggregator/` for the control plane and `code/firmware/` for board-specific firmware
-- `pmachines/arduino/`, `pmachines/javascript/`, and `pmachines/shared/` for reusable runtime implementations and their shared contract
-- `testing/` for executable tests, fixtures, harnesses, and golden outputs
-- `artifacts/` for generated outputs and `runtime/` for ignored local operational state
-
-The current paths remain authoritative until their corresponding migration slice passes its focused checks. See [documentation/README.md](documentation/README.md) for the destination map and [documentation/operations/REPOSITORY_HYGIENE_PLAN.md](documentation/operations/REPOSITORY_HYGIENE_PLAN.md) for the current data-classification rules.
-
-The repository quality gate is defined in `.github/workflows/quality.yml`. It runs offline layout, module-boundary, runtime-data, and JavaScript PMachine checks on Node.js 22, plus a PMachine-enabled `esp32dev` PlatformIO compile. Hardware and live-service tests remain opt-in.
-
-Editor conventions are defined in `.editorconfig`: two spaces for web/config files, four spaces for C++ and PowerShell, and CRLF for Windows batch files.
+- Design and handoff documentation in `documents/`, `RUNBOOK.md`, and this file
 
 ## Current Architecture
 
@@ -31,10 +15,6 @@ Editor conventions are defined in `.editorconfig`: two spaces for web/config fil
   - Broker on port `4001`
   - Queue manager on port `4100` with optional backup on `4101`
   - Frontend on port `5173`
-- Languages and bindings:
-  - Pascalish, Cobolish, and VBish compile independently to PMachine p-code
-  - WFL translates logical database and queue resources into deployment bindings
-  - See `documentation/compilers/LANGUAGE_DATABASE_QUEUE_RUNTIME.md`
 - Shared development model:
   - DSL source and reference payloads live under `aggregator/data/`
   - Compiled or generated outputs are produced into `pcode/` and `aggregator/data/`
@@ -73,14 +53,11 @@ Clustering is controlled by the Aggregator backend topology runtime routes, not 
 
 ## Documentation To Read First
 
-- `documentation/operations/RUNBOOK.md`
-- `documentation/guides/FLOW_BUILD_HANDOFF.md`
-- `documentation/operations/REPOSITORY_HYGIENE_PLAN.md`
+- `COMPLETION_SUMMARY.md`
+- `RUNBOOK.md`
+- `documents/FLOW_BUILD_HANDOFF.md`
+- `documents/REPOSITORY_HYGIENE_PLAN.md`
 - `aggregator/README.md`
-
-## Natural Language Command Interface
-
-The Aggregator backend exposes a natural language command interface via `/api/ollama/ask`. Deterministic commands (queue create, gateway bridge, project deploy, etc.) are resolved without LLM inference. See `aggregator/QUERY_PAGE_GUIDE.md` for the full command reference.
 
 ## Repository Hygiene: Current Reality
 
@@ -90,17 +67,10 @@ The workspace is mixing three file classes in the same directories:
 - Generated build artifacts and compiled outputs
 - Operational runtime state, logs, queue payloads, and experiment output
 
-That is the main repository hygiene problem to fix for handoff. The concrete cleanup plan is documented in `documentation/operations/REPOSITORY_HYGIENE_PLAN.md`.
-
-Additional operational directories that have grown since initial handoff:
-- `aggregator/data/projects/` — project workspace artifacts (gateway/queue assignments, Pascalish/pcode)
-- `aggregator/data/ollama-mentor-sessions/` — Ollama mentor loop session records
-- `aggregator/data/ollama-mentor-candidates/` — raw Pascal candidate files from Ollama
-- `aggregator/data/ollama-mentor-results/` — validation results
-- `aggregator/data/ollama-copilot-escalations/` — escalation packets for human review
+That is the main repository hygiene problem to fix for handoff. The concrete cleanup plan is documented in `documents/REPOSITORY_HYGIENE_PLAN.md`.
 
 ## Immediate Working Rules
 
-- Treat `src/`, `include/`, `scripts/`, `documentation/`, `aggregator/src/`, `aggregator/scripts/`, and `aggregator/tools/` as code and maintained documentation.
-- Treat JSONL logs, queue message stores, cluster registries, FSM status files, `tmp-*` paths, `evolution-generation-*.json`, `aggregator/data/projects/`, and `aggregator/data/ollama-mentor-*` as operational or generated artifacts unless explicitly promoted.
+- Treat `src/`, `include/`, `scripts/`, `documents/`, `aggregator/src/`, `aggregator/scripts/`, and `aggregator/tools/` as code and maintained documentation.
+- Treat JSONL logs, queue message stores, cluster registries, FSM status files, `tmp-*` paths, and `evolution-generation-*.json` as operational or generated artifacts unless explicitly promoted.
 - Treat `pcode/` as mixed-use today: it contains useful reference artifacts, but most `.pcode` and `.program.json` outputs are generated and should eventually move behind a cleaner artifact boundary.

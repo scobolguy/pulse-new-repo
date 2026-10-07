@@ -9,7 +9,7 @@ const host = process.env.ESP32_HOST || '192.168.2.155';
 const baseUrl = `http://${host}`;
 const count = Number(process.env.MESSAGE_COUNT || 100);
 const root = path.resolve(fileURLToPath(new URL('../aggregator', import.meta.url)));
-const sourcePath = path.join(root, 'data', 'generic-mapper.pas');
+const sourcePath = path.resolve(root, '..', 'src', 'generic-mapper.pas');
 const pcodeFile = '/generic-mapper-100.pcode';
 const mapFile = '/generic-mapper-100.map.json';
 

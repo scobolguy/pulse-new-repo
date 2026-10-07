@@ -9,8 +9,8 @@ const ROOT = path.resolve('.');
 const CBDS_DIR = path.join(ROOT, 'data', 'cbds');
 const OUT_DIR = path.join(CBDS_DIR, 'pcode-proof');
 
-const PCODE_PATH = path.join('..', 'pcode', 'cbds-router-mapper.pcode');
-const MAP_PATH = path.join('..', 'pcode', 'cbds-router-mapper.program.json');
+const PCODE_PATH = path.join('..', 'object', 'pcode', 'cbds-router-mapper.pcode');
+const MAP_PATH = path.join('..', 'object', 'pcode', 'cbds-router-mapper.program.json');
 
 function parseMt103ToObject(mtText) {
   const lines = String(mtText || '').split(/\r?\n/);

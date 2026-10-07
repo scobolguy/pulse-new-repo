@@ -7,7 +7,7 @@ import { XMLBuilder } from 'fast-xml-parser';
 import { runPL0 } from '../../scripts/pl0-interpreter.mjs';
 import { compileMaplWithAntlr } from '../../scripts/compile-mapl-antlr-to-pcode.mjs';
 import { attachPcodeSignature } from '../../scripts/pcode-signing.mjs';
-import { runSingleMessageForEvolution } from '../../scripts/run-js-pmachine.mjs';
+import { runSingleMessageForEvolution } from '../../../pmachines/javascript/index.mjs';
 import { ollamaGenerate } from './ollamaService.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -28,6 +28,7 @@ const mapperAuthoringRoot = path.join(runtimeRoot, 'mapper-authoring-artifacts')
 const mapperInventoryPath = path.join(runtimeRoot, 'mapper-authoring-inventory.json');
 const mapperDeploymentsPath = path.join(runtimeRoot, 'mapper-authoring-deployments.json');
 const librarianDataTypesPath = path.join(runtimeRoot, 'services', 'librarian', 'data-types.json');
+const repositoryMapsRoot = path.join(repoRoot, 'data', 'data-maps');
 
 const DETERMINISTIC_GENERATOR_VERSION = 'mapper-authoring-deterministic-v1';
 const TYPE_ALIAS_VERSION = 'type-alias-v1';
@@ -249,7 +250,8 @@ async function loadExternalMapDefinition(intent) {
   const fileName = `${String(intent.mapId || '').replaceAll('_', '-')}.map`;
   const candidates = Array.from(new Set([
     path.join(mapsRoot, fileName),
-    path.join(defaultMapsRoot, fileName)
+    path.join(defaultMapsRoot, fileName),
+    path.join(repositoryMapsRoot, fileName)
   ]));
   let lastError = null;
   const validateDefinition = (definition) => {
@@ -270,7 +272,7 @@ async function loadExternalMapDefinition(intent) {
     }
   }
 
-  for (const root of Array.from(new Set([mapsRoot, defaultMapsRoot]))) {
+  for (const root of Array.from(new Set([mapsRoot, defaultMapsRoot, repositoryMapsRoot]))) {
     try {
       const names = (await fs.readdir(root)).filter(name => name.endsWith('.map')).sort();
       for (const name of names) {
@@ -1154,11 +1156,19 @@ export function registerMapperRoutes(app) {
         req.body?.execution || {},
         false
       );
+      const generatedProgress = [];
       const generated = await generateDeterministicBundle({
         intent: classified.intent,
         execution: req.body?.execution || classified.intent?.execution || {},
         persist: true
-      }, (message) => emit({ type: 'progress', message }));
+      }, (message) => {
+        generatedProgress.push(message);
+        emit({ type: 'progress', message });
+      });
+
+      if (!generatedProgress.includes('Saving generated artifacts')) {
+        emit({ type: 'progress', message: 'Saving generated artifacts' });
+      }
 
       let exportedMaplPath = null;
       const requestedPath = requestedMaplExportPath(prompt, generated.normalizedIntent.mapId);

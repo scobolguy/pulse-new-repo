@@ -7,6 +7,47 @@
 #endif
 #include <ArduinoJson.h>
 #include "https_service.h"
+#include "async_diagnostics.h"
+#include <errno.h>
+#if defined(ESP32)
+#include <esp_heap_caps.h>
+#endif
+
+bool sendCheckedUdpPacket(WiFiUDP& udp, const IPAddress& destination, uint16_t port,
+                          const String& payload, const char* label) {
+    const uint32_t started = millis();
+    const char* phase = "begin";
+    errno = 0;
+    bool ok = udp.beginPacket(destination, port);
+    size_t written = 0;
+    if (ok) {
+        phase = "write";
+        written = udp.write(reinterpret_cast<const uint8_t*>(payload.c_str()), payload.length());
+        ok = written == payload.length();
+        if (ok) {
+            phase = "send";
+            ok = udp.endPacket();
+        }
+    }
+    const int socketError = errno;
+#if defined(ESP32)
+    const unsigned largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+#else
+    const unsigned largest = 0;
+#endif
+    if (!ok) {
+        Serial.printf("[UDP] %s failed phase=%s destination=%s:%u bytes=%u/%u errno=%d%s elapsed=%lu heap=%u largest=%u wifi=%d rssi=%d\n",
+            label, phase, destination.toString().c_str(), port, static_cast<unsigned>(written),
+            static_cast<unsigned>(payload.length()), socketError, socketError == ENOMEM ? " (ENOMEM)" : "",
+            static_cast<unsigned long>(millis() - started), ESP.getFreeHeap(), largest,
+            WiFi.status(), WiFi.RSSI());
+    } else {
+        PULSE_ASYNC_TRACE("UDP %s sent destination=%s:%u bytes=%u elapsed=%lu largest=%u",
+            label, destination.toString().c_str(), port, static_cast<unsigned>(written),
+            static_cast<unsigned long>(millis() - started), largest);
+    }
+    return ok;
+}
 
 bool sendNodeBeaconAnnouncement(
     WiFiUDP& udp,
@@ -54,14 +95,13 @@ bool sendNodeBeaconAnnouncement(
     announceDoc["ts"] = millis();
 
     String jsonMsg;
-    serializeJson(announceDoc, jsonMsg);
-    if (!udp.beginPacket("255.255.255.255", announcePort)) {
+    const size_t expected = measureJson(announceDoc);
+    if (announceDoc.overflowed() || serializeJson(announceDoc, jsonMsg) != expected) {
+        Serial.println("[UDP] nodeBeacon serialization failed");
         return false;
     }
-    udp.write((const uint8_t*)jsonMsg.c_str(), jsonMsg.length());
-    if (!udp.endPacket()) {
+    if (!sendCheckedUdpPacket(udp, IPAddress(255, 255, 255, 255), announcePort, jsonMsg, "nodeBeacon"))
         return false;
-    }
 
     state.nodeBeaconLastSentAt = millis();
     state.nodeBeaconLastCapabilityHash = capabilityHash;

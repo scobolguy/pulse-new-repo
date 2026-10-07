@@ -10,8 +10,8 @@ import { executeProgram, loadOpcodeMap, parsePcode, parseProgramMapMappings } fr
 import { startEsp32DebugSession, controlEsp32DebugSession } from '../../../aggregator/src/backend/modules/esp32PmachineDebugBridge.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
-const program = fileURLToPath(new URL('../../../artifactPrograms/towers-of-hanoi-program.pas', import.meta.url));
-const collectorProgram = fileURLToPath(new URL('../../../artifactPrograms/discovery-collector-service.pas', import.meta.url));
+const program = fileURLToPath(new URL('../../../src/towers-of-hanoi-program.pas', import.meta.url));
+const collectorProgram = fileURLToPath(new URL('../../../src/discovery-collector-service.pas', import.meta.url));
 const source = await readFile(program, 'utf8');
 const collectorSource = await readFile(collectorProgram, 'utf8');
 const artifact = compilePascalishProgramWithAntlr(source, { fileName: 'towers-of-hanoi-program.pas' });
@@ -45,7 +45,11 @@ const vscodeMock = `
   export const window = {
     createOutputChannel: () => ({ dispose() {} }),
     createWebviewPanel: () => { throw new Error('webview not available in tests'); },
-    registerTreeDataProvider: (id, provider) => { globalThis.pulseTestServicesProvider = provider; return { dispose() {} }; },
+    registerTreeDataProvider: (id, provider) => {
+      if (id === 'pulse-pmachine.services') globalThis.pulseTestServicesProvider = provider;
+      if (id === 'pulse-pmachine.servers') globalThis.pulseTestServersProvider = provider;
+      return { dispose() {} };
+    },
   };
   export const registeredCommands = new Map();
   export const commands = { registerCommand: (name, handler) => {
@@ -82,16 +86,17 @@ test('Services Explorer reads the services directory, endpoints, and configurati
   try {
     const provider = globalThis.pulseTestServicesProvider;
     const items = await provider.getChildren();
-    assert.deepEqual(items.map(item => item.label), ['Pascalish Discovery Collector', 'Pulse Gateway', 'RabbitMQ Broker']);
+    assert.deepEqual(items.map(item => item.label), ['Pascalish Discovery Collector', 'Pulse Gateway']);
     assert.equal(items[0].contextValue, 'pulseServiceOffering');
     assert.match(items[0].tooltip, /No endpoint configured/);
-    const collectorDetails = await provider.getChildren(items[0]);
-    assert.equal(collectorDetails[0].description, 'Not configured');
-    assert.equal(collectorDetails.at(-1).description, 'service.collector');
-    const gatewayDetails = await provider.getChildren(items[1]);
-    assert.equal(gatewayDetails[0].command.command, 'pulse-pmachine.openServiceEndpoint');
-    await vscode.registeredCommands.get('pulse-pmachine.openServiceEndpoint')(...gatewayDetails[0].command.arguments);
+    assert.equal(items[0].collapsibleState, vscode.TreeItemCollapsibleState.None);
+    assert.deepEqual(await provider.getChildren(items[0]), []);
+    assert.match(items[0].tooltip, /service.collector/);
+    assert.equal(items[1].command.command, 'pulse-pmachine.openServiceEndpoint');
+    await vscode.registeredCommands.get('pulse-pmachine.openServiceEndpoint')(...items[1].command.arguments);
     assert.deepEqual(opened, ['http://127.0.0.1:4000/']);
+    const servers = await globalThis.pulseTestServersProvider.getChildren();
+    assert.deepEqual(servers.map(item => item.label), ['RabbitMQ Broker']);
     let refreshes = 0;
     provider.onDidChangeTreeData(() => { refreshes += 1; });
     vscode.registeredCommands.get('pulse-pmachine.refreshServices')();
@@ -100,6 +105,33 @@ test('Services Explorer reads the services directory, endpoints, and configurati
   } finally {
     globalThis.fetch = originalFetch;
     vscode.env.openExternal = originalOpenExternal;
+  }
+});
+
+test('Services Explorer shows every occurrence of a service as a distinct instance leaf', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ services: [
+    { id: 'worker', serviceId: 'worker', name: 'Worker', instanceId: 'one', nodeId: 'node-a', endpoint: 'http://node-a:4111', status: 'running' },
+    { id: 'worker', serviceId: 'worker', name: 'Worker', instanceId: 'two', nodeId: 'node-b', endpoint: 'http://node-b:4112', status: 'running' },
+    { id: 'sql', name: 'MSSQL', provider: 'mssql', kind: 'database' }
+  ] });
+  try {
+    const provider = globalThis.pulseTestServicesProvider;
+    const groups = await provider.getChildren();
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0].label, 'Worker');
+    assert.equal(groups[0].collapsibleState, vscode.TreeItemCollapsibleState.Collapsed);
+    const instances = await provider.getChildren(groups[0]);
+    assert.deepEqual(instances.map(item => item.label), ['node-a / one', 'node-b / two']);
+    assert.notEqual(instances[0].id, instances[1].id);
+    for (const instance of instances) {
+      assert.equal(instance.collapsibleState, vscode.TreeItemCollapsibleState.None);
+      assert.equal(instance.contextValue, 'pulseServiceEndpoint');
+      assert.deepEqual(await provider.getChildren(instance), []);
+    }
+    assert.deepEqual((await globalThis.pulseTestServersProvider.getChildren()).map(item => item.label), ['MSSQL']);
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
 
@@ -429,6 +461,60 @@ test('JS source step-over executes a full call without entering recursive frames
     assert.equal(value.state.callStack.length, 0);
     assert.equal(value.state.sourceLocation.sourceLine, 22);
     validateMoves(value.state.stdout);
+  } finally {
+    value.dispose();
+  }
+});
+
+test('VS Code DAP requests resolve, replace and clear source breakpoints and expose recursive locals', async () => {
+  const { value, events } = adapter();
+  let seq = 0;
+  async function request(command, args = {}) {
+    const requestSeq = ++seq;
+    value.handleMessage({ type: 'request', seq: requestSeq, command, arguments: args });
+    await wait(() => events.some(message => message.type === 'response' && message.request_seq === requestSeq));
+    const response = events.find(message => message.type === 'response' && message.request_seq === requestSeq);
+    assert.equal(response.success, true, response.message);
+    return response.body;
+  }
+  async function control(command) {
+    const start = events.length;
+    await request(command, { threadId: 1 });
+    await wait(() => events.slice(start).some(message => ['stopped', 'terminated'].includes(message.event)));
+  }
+  try {
+    await request('initialize');
+    await request('launch', { program });
+    await control('configurationDone');
+    let frames = await request('stackTrace', { threadId: 1 });
+    assert.equal(frames.stackFrames[0].line, 18);
+    const relocated = await request('setBreakpoints', {
+      source: { path: program }, breakpoints: [{ line: 10 }]
+    });
+    assert.deepEqual(relocated.breakpoints, [{ verified: true, line: 12 }]);
+    await request('setBreakpoints', { source: { path: program }, breakpoints: [{ line: 8 }] });
+    await control('continue');
+    frames = await request('stackTrace', { threadId: 1 });
+    assert.equal(frames.stackFrames[0].line, 8);
+    const scopes = await request('scopes', { frameId: frames.stackFrames[0].id });
+    const localsScope = scopes.scopes.find(scope => scope.name === 'Locals');
+    const locals = await request('variables', { variablesReference: localsScope.variablesReference });
+    assert.deepEqual(Object.fromEntries(locals.variables.map(item => [item.name, JSON.parse(item.value)])), {
+      n: 5, fromPeg: 1, toPeg: 3, auxPeg: 2
+    });
+    assert.equal((await request('evaluate', { expression: 'n' })).result, '5');
+    await control('stepIn');
+    await control('stepOut');
+    assert.equal(value.state.callStack.length, 0);
+    const unresolved = await request('setBreakpoints', {
+      source: { path: program }, breakpoints: [{ line: 999 }]
+    });
+    assert.equal(unresolved.breakpoints[0].verified, false);
+    await request('setBreakpoints', { source: { path: program }, breakpoints: [] });
+    assert.deepEqual(value.state.breakpoints, []);
+    await control('continue');
+    validateMoves(value.state.result.stdout);
+    assert.equal(events.filter(message => message.event === 'terminated').length, 1);
   } finally {
     value.dispose();
   }

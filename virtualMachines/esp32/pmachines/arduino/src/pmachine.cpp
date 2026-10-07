@@ -1309,17 +1309,25 @@ static bool extractQuotedLiteral(const std::string& text, std::string& out) {
 }
 
 // Standalone loader function (inside pmachine namespace, fully qualified types)
-std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
-    std::vector<pmachine::PInstruction> instructions;
+static void reserveInstructions(std::vector<PInstruction>& instructions, size_t count) {
+    instructions.reserve(count);
+}
+
+static void reserveInstructions(std::deque<PInstruction>&, size_t) {}
+
+template <typename Instructions>
+static Instructions parseTextPCode(const std::string& text, bool hosted = false) {
+    Instructions instructions;
     std::map<std::string, size_t> labelToIndex;
     std::vector<std::pair<size_t, std::string>> unresolvedJumps;
     const size_t estimatedLineCount = 1 + static_cast<size_t>(
         std::count(text.begin(), text.end(), '\n')
     );
-    instructions.reserve(estimatedLineCount);
+    reserveInstructions(instructions, estimatedLineCount);
     unresolvedJumps.reserve(std::min(estimatedLineCount, static_cast<size_t>(64)));
     std::string line;
     size_t lineStart = 0;
+    try {
     while (lineStart <= text.size()) {
         const size_t lineEnd = text.find('\n', lineStart);
         const size_t lineLength = lineEnd == std::string::npos
@@ -1494,7 +1502,14 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
         } else if (opcode == pmachine::OP_PRINT_INT || opcode == pmachine::OP_PRINT_ENUM) {
             instr.type = pmachine::OperandType::NONE;
         }
-        instructions.push_back(instr);
+        instructions.push_back(std::move(instr));
+    }
+    } catch (const std::bad_alloc&) {
+#if defined(ESP32)
+        if (hosted) Serial.printf("[SERVICE-HOST] Loader failed after %u instructions; heap=%u\n",
+            static_cast<unsigned>(instructions.size()), ESP.getFreeHeap());
+#endif
+        throw;
     }
     // Resolve jump targets
     for (auto& pair : unresolvedJumps) {
@@ -1511,16 +1526,49 @@ std::vector<pmachine::PInstruction> loadTextPCode(const std::string& text) {
     return instructions;
 }
 
+std::vector<PInstruction> loadTextPCode(const std::string& text) {
+    return parseTextPCode<std::vector<PInstruction>>(text);
+}
+
+std::deque<PInstruction> loadHostedTextPCode(const std::string& text) {
+    return parseTextPCode<std::deque<PInstruction>>(text, true);
+}
+
 void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
+    runInstructions(instructions.size(), [&](size_t index) {
+        return instructions[index];
+    }, startPc);
+}
+
+void PMachine::run(const std::deque<PInstruction>& instructions, int startPc) {
+    runInstructions(instructions.size(), [&](size_t index) {
+        return instructions[index];
+    }, startPc);
+}
+
+void PMachine::runImage(size_t count, const std::function<PInstruction(size_t)>& instructionAt) {
+    runInstructions(count, instructionAt, 0);
+}
+
+void PMachine::runInstructions(size_t instructionCount,
+                              const std::function<PInstruction(size_t)>& instructionAt,
+                              int startPc) {
     auto& gFlowState = flowState;
     static const size_t MAX_RUN_STEPS = 200000;
+#if defined(PULSE_ESP8266_SENSOR)
+    static const int STACK_SIZE = 64;
+    static const size_t HOST_RUN_STEPS = 2000;
+#else
     static const int STACK_SIZE = 512;
+    static const size_t HOST_RUN_STEPS = 100000;
+#endif
     static const size_t MAX_NAME_FRAME_DEPTH = 128;
     static const size_t INITIAL_NAME_FRAME_CAPACITY = 8;
     static const size_t MAX_RETAINED_TRACE_ENTRIES = 128;
     Value stack[STACK_SIZE];
     // Backing store for StringRef values; freed wholesale when the run ends.
     std::vector<std::string> stringPool;
+    HostCallStorage hostCallStorage(hostCallHook != nullptr);
     using NameBinding = std::pair<std::string, int>;
     using NameFrame = std::vector<NameBinding>;
     std::vector<NameFrame> nameFrames;
@@ -1579,7 +1627,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
     // Declare variables before lambdas that use them
     int sp = 0;
     int bp = 0;
-    int pc = startPc >= 0 && startPc < static_cast<int>(instructions.size()) ? startPc : 0;
+    int pc = startPc >= 0 && startPc < static_cast<int>(instructionCount) ? startPc : 0;
 
     auto stringAt = [&](const Value& value) -> std::string {
         if (value.kind == ValueKind::StringRef) {
@@ -1598,16 +1646,105 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
     };
 
     auto pushString = [&](const std::string& text) {
+        if (sp >= STACK_SIZE) {
+            gFlowState["__runtime_error"] = "stack overflow";
+            return;
+        }
         if (hostCallHook) {
+            // Geometric growth for small strings; large strings round to 512 bytes so
+            // a growing response does not double into blocks the heap cannot supply.
+            size_t capacity = 32;
+            while (capacity < text.size() && capacity < 512) capacity *= 2;
+            if (capacity < text.size()) capacity = (text.size() + 511) / 512 * 512;
+            bool live[512] = {};
+            auto mark = [&](const Value& value) {
+                if (value.kind == ValueKind::StringRef && value.handle < 512)
+                    live[value.handle] = true;
+            };
+            for (int index = 0; index < sp; ++index) mark(stack[index]);
+            for (const auto& frame : hostedFrames)
+                for (const auto& item : frame) mark(item.second);
             size_t bytes = text.size();
-            for (const auto& item : stringPool) bytes += item.size();
+            size_t retained = 0;
+            size_t available = stringPool.size();
+            for (size_t index = 0; index < stringPool.size(); ++index) {
+                retained += stringPool[index].capacity();
+                if (live[index]) bytes += stringPool[index].size();
+                else if (available == stringPool.size()
+                    || (stringPool[index].capacity() >= text.size()
+                        && (stringPool[available].capacity() < text.size()
+                            || stringPool[index].capacity() < stringPool[available].capacity())))
+                    available = index;
+            }
             if (text.size() > 8192 || bytes > 32768) {
                 gFlowState["__runtime_error"] = "hosted string storage capacity exceeded";
                 return;
             }
-        }
-        if (sp >= STACK_SIZE) {
-            gFlowState["__runtime_error"] = "stack overflow";
+            // Dead buffers are kept for reuse, but large ones too small for this string are
+            // remnants of a growing value; freeing them lets the heap coalesce before allocating.
+            auto releaseDead = [&](size_t minimumCapacity, size_t belowCapacity) {
+                for (size_t index = 0; index < stringPool.size(); ++index) {
+                    if (live[index] || index == available) continue;
+                    const size_t held = stringPool[index].capacity();
+                    if (held < minimumCapacity || held >= belowCapacity) continue;
+                    retained -= held;
+                    std::string().swap(stringPool[index]);
+                    retained += stringPool[index].capacity();
+                }
+            };
+            if (available == stringPool.size() || stringPool[available].capacity() < text.size())
+                releaseDead(512, text.size());
+            auto reserveWithHeapRetry = [&](std::string& buffer) {
+                try { buffer.reserve(capacity); }
+                catch (const std::bad_alloc&) {
+                    releaseDead(0, static_cast<size_t>(-1));
+                    buffer.reserve(capacity);
+                }
+            };
+            if (available == stringPool.size()) {
+                if (stringPool.size() >= 512) {
+                    gFlowState["__runtime_error"] = "hosted string handle capacity exceeded";
+                    return;
+                }
+                if (retained + capacity > 32768) {
+                    gFlowState["__runtime_error"] = "hosted string storage capacity exceeded";
+                    return;
+                }
+                std::string buffer;
+                allocationStage = "string-pool-new-buffer";
+                allocationBytes = capacity + 1;
+                reserveWithHeapRetry(buffer);
+                buffer = text;
+                allocationStage = "string-pool-grow-handles";
+                allocationBytes = (stringPool.size() + 1) * sizeof(std::string);
+                stringPool.push_back(std::move(buffer));
+            } else {
+                const size_t extra = capacity > stringPool[available].capacity()
+                    ? capacity - stringPool[available].capacity() : 0;
+                for (size_t index = 0; retained + extra > 32768 && index < stringPool.size(); ++index) {
+                    if (!live[index] && index != available) {
+                        retained -= stringPool[index].capacity();
+                        std::string().swap(stringPool[index]);
+                        retained += stringPool[index].capacity();
+                    }
+                }
+                if (retained + extra > 32768) {
+                    gFlowState["__runtime_error"] = "hosted string storage capacity exceeded";
+                    return;
+                }
+                // Reuse dead buffers in cipher loops instead of allocating on
+                // every byte. Geometric capacity growth bounds allocation sizes.
+                if (stringPool[available].capacity() < capacity)
+                {
+                    allocationStage = "string-pool-reserve";
+                    allocationBytes = capacity + 1;
+                    reserveWithHeapRetry(stringPool[available]);
+                }
+                allocationStage = "string-pool-assign";
+                allocationBytes = text.size() + 1;
+                stringPool[available] = text;
+            }
+            stack[sp++] = Value::makeString(static_cast<uint16_t>(available));
             return;
         }
         stringPool.push_back(text);
@@ -1692,7 +1829,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
     std::string lastCallError;
     auto invokeCallFrame = [&](int targetPc, const std::string& lookupLabel, int argc) -> bool {
         lastCallError.clear();
-        if (targetPc < 0 || targetPc >= static_cast<int>(instructions.size())) {
+        if (targetPc < 0 || targetPc >= static_cast<int>(instructionCount)) {
             lastCallError = "invalid call target";
             return false;
         }
@@ -1714,7 +1851,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
         frameVars.reserve(static_cast<size_t>(argc > 0 ? argc : 0));
         auto sigIt = procedureParamsByLabel.find(lookupLabel);
         if (sigIt == procedureParamsByLabel.end()) {
-            const std::string targetLabel = instructions[targetPc].label;
+            const std::string targetLabel = instructionAt(targetPc).label;
             if (!targetLabel.empty()) {
                 sigIt = procedureParamsByLabel.find(targetLabel);
             }
@@ -1774,14 +1911,16 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
     this->pc = 0;
     PMTRACE(Serial.println("[DEBUG] Executing pinstructions:"));
     int resumedPc = -1;
-    while (pc < (int)instructions.size()) {
+    while (pc < (int)instructionCount) {
         if (hostCallHook && gFlowState.count("__runtime_error")) break;
-        if (hostCallHook && (sp < 0 || sp > 256 || stringPool.size() > 512
-            || static_cast<uint32_t>(millis() - hostedStartedAt) >= 500)) {
+        if (hostCallHook && (sp < 0 || sp > std::min(STACK_SIZE, 256) || stringPool.size() > 512
+            || static_cast<uint32_t>(millis() - hostedStartedAt) >= 8000)) {
             gFlowState["__runtime_error"] = "hosted invocation resource limit exceeded";
             break;
         }
         this->pc = static_cast<uint16_t>(pc);
+        allocationStage = "instruction-dispatch";
+        allocationBytes = 0;
         if (debugRunStatus.load() != 0) {
             debugPc = static_cast<uint16_t>(pc);
             if (debugAction.load() == 3 && debugStepOutDepth.load() > 0
@@ -1834,13 +1973,18 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
             esp_task_wdt_reset();
             vTaskDelay(1);
         }
+    #elif defined(ESP8266)
+        if ((steps & 31u) == 0u) yield();
     #endif
-        if (steps > (hostCallHook ? 10000 : MAX_RUN_STEPS)) {
+        if (steps > (hostCallHook ? HOST_RUN_STEPS : MAX_RUN_STEPS)) {
             lastRunStepLimitHit = true;
             break;
         }
-        const auto& instr = instructions[pc];
-        if (lastRunTrace.size() < MAX_RETAINED_TRACE_ENTRIES) {
+        allocationStage = "instruction-fetch";
+        const auto instr = instructionAt(pc);
+        allocationStage = "instruction-execute";
+        if ((!hostCallHook || debugRunStatus.load() != 0)
+            && lastRunTrace.size() < MAX_RETAINED_TRACE_ENTRIES) {
             lastRunTrace.push_back(
                 std::string("{\"pc\":") + std::to_string(pc)
                 + ",\"opcode\":" + std::to_string(instr.opcode)
@@ -2279,30 +2423,48 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
         }
         case OP_CALL_EXT: {
             const std::string symbol = trimCopy(instr.strOperand);
-            if (symbol.rfind("host.", 0) == 0) {
-                if (!hostCallHook || instr.value < 0 || instr.value > 4 || sp < instr.value) {
+            if (symbol.rfind("host.", 0) == 0 || symbol.rfind("device.", 0) == 0) {
+                if (!hostCallHook || instr.value < 0 || instr.value > 8 || sp < instr.value) {
                     gFlowState["__runtime_error"] = "unavailable host binding or invalid argument count";
                     goto pmachineRunExit;
                 }
-                std::vector<HostValue> args;
+                hostCallStorage.reset(static_cast<size_t>(instr.value));
+                auto& args = hostCallStorage.args;
                 for (int i = sp - instr.value; i < sp; ++i) {
-                    HostValue arg;
+                    auto& arg = args[static_cast<size_t>(i - (sp - instr.value))];
                     if (stack[i].kind != ValueKind::StringRef && stack[i].kind != ValueKind::Integer) {
                         gFlowState["__runtime_error"] = "unsupported host argument type";
                         goto pmachineRunExit;
                     }
                     arg.isString = stack[i].isString();
-                    if (arg.isString) arg.text = stringAt(stack[i]);
+                    if (arg.isString) {
+                        if (stack[i].handle >= stringPool.size()) {
+                            gFlowState["__runtime_error"] = "invalid hosted string handle";
+                            goto pmachineRunExit;
+                        }
+                        const auto& text = stringPool[stack[i].handle];
+                        size_t capacity = 32;
+                        while (capacity < text.size()) capacity *= 2;
+                        allocationStage = "host-argument-reserve";
+                        allocationBytes = capacity + 1;
+                        if (arg.text.capacity() < capacity) arg.text.reserve(capacity);
+                        allocationStage = "host-argument-copy";
+                        allocationBytes = text.size() + 1;
+                        arg.text = text;
+                    }
                     else arg.integer = stack[i].i;
-                    args.push_back(std::move(arg));
                 }
                 sp -= instr.value;
-                HostValue result;
-                std::string error;
+                auto& result = hostCallStorage.result;
+                auto& error = hostCallStorage.error;
+                allocationStage = "host-binding";
+                allocationBytes = 0;
                 if (!hostCallHook(symbol, args, result, error, hostCallContext)) {
                     gFlowState["__runtime_error"] = error;
                     goto pmachineRunExit;
                 }
+                allocationStage = "host-result";
+                allocationBytes = result.text.size() + 1;
                 if (result.isString) pushString(result.text);
                 else if (sp < STACK_SIZE) stack[sp++] = result.integer;
                 ++pc;
@@ -2326,7 +2488,7 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
                     resolveError = "thunk resolver not configured";
                 }
 
-                if (!resolved || targetPc < 0 || targetPc >= static_cast<int>(instructions.size())) {
+                if (!resolved || targetPc < 0 || targetPc >= static_cast<int>(instructionCount)) {
                     gFlowState["__thunk_error"] = resolveError.empty()
                         ? std::string("failed to resolve external symbol: ") + symbol
                         : resolveError;

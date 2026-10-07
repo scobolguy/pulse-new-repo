@@ -2,7 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { normalizePascalPrompt, detectCoachMode, runCoachSession } from './run-ollama-dsl-coach.mjs';
 import { runPascalOnEsp32 } from './run-pascal-on-esp32-node.mjs';
-import { compilePascalishProgramWithAntlr } from './compile-pascalish-program-antlr-to-pcode.mjs';
+import { compileStandardPascalWithAntlr } from './compile-standard-pascal-antlr-to-pcode.mjs';
 import { compileRouterMapperDSL } from './compile-pascal.mjs';
 
 const WORKDIR = process.cwd();
@@ -210,7 +210,7 @@ async function loadValidatedCandidateResult(filePath, coachMode) {
       };
     }
 
-    const compiled = compilePascalishProgramWithAntlr(candidateText);
+    const compiled = compileStandardPascalWithAntlr(candidateText);
     return {
       status: 'ok',
       source: 'candidate-file-after-timeout',

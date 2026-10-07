@@ -1,4 +1,4 @@
-import { compilePascalishProgramWithAntlr } from './compile-pascalish-program-antlr-to-pcode.mjs';
+import { compileStandardPascalWithAntlr } from './compile-standard-pascal-antlr-to-pcode.mjs';
 import { executeProgram } from './run-js-pmachine.mjs';
 import fs from 'fs/promises';
 import path from 'path';
@@ -18,7 +18,7 @@ async function loadOpcodeMap() {
 }
 
 const src = `program T; begin if 'hello' = 'hello' then writeln('eq') else writeln('neq') end.`;
-const r = compilePascalishProgramWithAntlr(src);
+const r = compileStandardPascalWithAntlr(src);
 console.log('PCODE:\n' + r.pcodeText);
 
 const pcodeText = r.pcodeText;

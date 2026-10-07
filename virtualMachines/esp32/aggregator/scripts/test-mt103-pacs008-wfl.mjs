@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { compileWorkflowDSLWithAntlr } from './workflow-antlr-compiler.mjs';
 
-const source = await fs.readFile(path.resolve('aggregator/data/mt103-pacs008-daemon.wfl'), 'utf8');
+const source = await fs.readFile(path.resolve('src/mt103-pacs008-daemon.wfl'), 'utf8');
 const compiled = compileWorkflowDSLWithAntlr(source);
 
 assert.equal(compiled.symbols.queues.find(item => item.symbol === 'incoming_mt103').managerId, 'qm-secondary');

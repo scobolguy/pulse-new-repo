@@ -35,7 +35,7 @@ function validateMoves(lines) {
   return { count: moves.length, solved: pegs[3].join(',') === '5,4,3,2,1' };
 }
 
-const source = await fs.readFile(path.resolve(here, '../../artifactPrograms/towers-of-hanoi-program.pas'), 'utf8');
+const source = await fs.readFile(path.resolve(here, '../../src/towers-of-hanoi-program.pas'), 'utf8');
 const compiled = compilePascalishProgramWithAntlr(source, { fileName: 'towers-of-hanoi-program.pas' });
 const programMap = { ...compiled.programMap };
 delete programMap.sourceMap;
