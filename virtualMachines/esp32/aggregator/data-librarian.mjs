@@ -8,6 +8,7 @@ import { createPascalishServiceHost } from '../pmachines/javascript/src/service-
 import { createPascalishCatalogStore } from './src/librarian/catalog-store.mjs';
 import { createPascalishXsdParser } from './src/librarian/xsd-parser.mjs';
 import { createPascalishSchemaTreeService } from './src/librarian/schema-tree-service.mjs';
+import { createPascalishSchemaStructureService } from './src/librarian/schema-structure-service.mjs';
 import { createPascalishLibrarianNormalization } from './src/librarian/normalization.mjs';
 
 const app = express();
@@ -41,6 +42,7 @@ let subschemaPolicyHost;
 let catalogStore;
 let xsdParser;
 let schemaTreeService;
+let schemaStructureService;
 let normalization;
 
 async function pathExists(targetPath) {
@@ -135,33 +137,6 @@ function inferTypeIdFromSchema(meta) {
   return String(meta?.name || '').trim().toLowerCase() || null;
 }
 
-function summarizeValueType(value) {
-  if (Array.isArray(value)) return 'array';
-  if (value === null) return 'null';
-  return typeof value;
-}
-
-function normalizeEnumValues(values) {
-  if (!Array.isArray(values)) return null;
-  return values.map((value) => {
-    const valueType = summarizeValueType(value);
-    if (valueType === 'string' || valueType === 'number' || valueType === 'boolean' || valueType === 'null') {
-      return value;
-    }
-    return JSON.stringify(value);
-  });
-}
-
-function inferJsonSchemaValueType(schemaNode) {
-  if (!schemaNode || typeof schemaNode !== 'object') return 'unknown';
-  if (Array.isArray(schemaNode.type)) return String(schemaNode.type[0] || 'unknown');
-  if (typeof schemaNode.type === 'string') return schemaNode.type;
-  if (Array.isArray(schemaNode.enum)) return 'enum';
-  if (schemaNode.properties && typeof schemaNode.properties === 'object') return 'object';
-  if (schemaNode.items) return 'array';
-  return 'unknown';
-}
-
 function inferSwiftFieldDefaults(fieldTag) {
   const tag = String(fieldTag || '').toUpperCase();
   const known = {
@@ -245,103 +220,6 @@ function enrichSwiftFieldMetadata(parsed) {
   visit(parsed);
 }
 
-function buildJsonSchemaTree(name, schemaNode) {
-  const valueType = inferJsonSchemaValueType(schemaNode);
-  const enumValues = normalizeEnumValues(schemaNode?.enum);
-  const node = {
-    name,
-    kind: valueType === 'object' || valueType === 'array' ? 'branch' : 'leaf',
-    valueType,
-    children: [],
-  };
-
-  if (enumValues && enumValues.length > 0) {
-    node.enumValues = enumValues;
-  }
-
-  if (valueType === 'object' && schemaNode?.properties && typeof schemaNode.properties === 'object') {
-    node.children = Object.entries(schemaNode.properties).map(([childName, childSchema]) => buildJsonSchemaTree(childName, childSchema));
-    return node;
-  }
-
-  if (valueType === 'array') {
-    if (Array.isArray(schemaNode?.items)) {
-      node.children = schemaNode.items.map((itemSchema, index) => buildJsonSchemaTree(`[${index}]`, itemSchema));
-    } else if (schemaNode?.items && typeof schemaNode.items === 'object') {
-      node.children = [buildJsonSchemaTree('[*]', schemaNode.items)];
-    }
-    return node;
-  }
-
-  return node;
-}
-
-function buildJsonValueTree(name, value) {
-  const nodeType = summarizeValueType(value);
-  if (nodeType === 'array') {
-    const enumValues = value.every((item) => {
-      const itemType = summarizeValueType(item);
-      return itemType !== 'object' && itemType !== 'array';
-    }) ? value : null;
-    const sample = value[0];
-    return {
-      name,
-      kind: 'branch',
-      valueType: 'array',
-      ...(enumValues ? { enumValues } : {}),
-      children: sample === undefined ? [] : [buildJsonValueTree('[0]', sample)],
-    };
-  }
-  if (nodeType === 'object') {
-    return {
-      name,
-      kind: 'branch',
-      valueType: 'object',
-      children: Object.entries(value).map(([childName, childValue]) => buildJsonValueTree(childName, childValue)),
-    };
-  }
-  return {
-    name,
-    kind: 'leaf',
-    valueType: nodeType,
-  };
-}
-
-function buildCopybookTree(content) {
-  const root = { name: 'root', kind: 'branch', valueType: 'copybook', children: [] };
-  const stack = [{ level: 0, node: root }];
-  const lines = String(content || '').split(/\r?\n/);
-
-  for (const rawLine of lines) {
-    const line = rawLine.replace(/\*.*$/, '').trim();
-    if (!line) continue;
-    const match = line.match(/^(\d{2})\s+([A-Z0-9-]+)\b(.*)$/i);
-    if (!match) continue;
-
-    const level = parseInt(match[1], 10);
-    const name = match[2].toLowerCase();
-    const rest = match[3] || '';
-    const hasPic = /\bPIC\b/i.test(rest);
-    const isBranch = !hasPic || /\bOCCURS\b|\bREDEFINES\b|\bDEPENDING\b|\bGROUP\b/i.test(rest);
-    const node = {
-      name,
-      kind: isBranch ? 'branch' : 'leaf',
-      valueType: hasPic ? (rest.match(/\bPIC\s+([^\.]+)/i)?.[1] || 'field') : 'group',
-      children: [],
-    };
-
-    while (stack.length > 1 && stack[stack.length - 1].level >= level) {
-      stack.pop();
-    }
-    stack[stack.length - 1].node.children.push(node);
-    if (isBranch) {
-      stack.push({ level, node });
-    }
-  }
-
-  return root.children.length > 0 ? root : null;
-}
-
 function decodeTextBuffer(buffer) {
   if (!buffer || buffer.length === 0) return '';
 
@@ -383,19 +261,19 @@ async function extractStructureForFile(filePath, schemaType) {
     const fileBuffer = await fs.readFile(filePath);
     const content = decodeTextBuffer(fileBuffer);
     if (lowerType === 'copybook') {
-      return buildCopybookTree(content);
+      return schemaStructureService.parseCopybook(content);
     }
     if (lowerType !== 'json' && lowerType !== 'json-schema') {
       return null;
     }
     const parsed = JSON.parse(content);
     enrichSwiftFieldMetadata(parsed);
-
-    if (parsed && typeof parsed === 'object' && (parsed.type === 'object' || parsed.properties || parsed.items || parsed.enum)) {
-      return buildJsonSchemaTree('root', parsed);
-    }
-
-    return buildJsonValueTree('root', parsed);
+    const isSchema = lowerType === 'json-schema'
+      || (parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        && (parsed.type === 'object' || parsed.properties || parsed.items || parsed.enum));
+    return isSchema
+      ? schemaStructureService.parseJsonSchema(JSON.stringify(parsed))
+      : schemaStructureService.parseJsonValue(JSON.stringify(parsed));
   } catch {
     return null;
   }
@@ -1213,6 +1091,7 @@ catalogStore = await createPascalishCatalogStore({
 subschemaPolicyHost = await startSubschemaPolicyHost();
 xsdParser = await createPascalishXsdParser({ schemaRoot: SCHEMA_ROOT });
 schemaTreeService = await createPascalishSchemaTreeService();
+schemaStructureService = await createPascalishSchemaStructureService();
 normalization = await createPascalishLibrarianNormalization();
 
 app.listen(PORT, () => {

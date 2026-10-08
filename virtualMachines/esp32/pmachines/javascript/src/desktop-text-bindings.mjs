@@ -6,6 +6,7 @@ export function createDesktopTextBindings() {
   return {
     'host.text_trim': value => text(value).trim(),
     'host.text_split': (value, separator) => JSON.stringify(text(value).split(text(separator))),
+    'host.text_split_lines': value => JSON.stringify(text(value).split(/\r?\n/)),
     'host.string_lower': value => text(value).toLowerCase(),
     'host.string_upper': value => text(value).toUpperCase(),
     'host.string_replace': (value, pattern, flags, replacement) => {

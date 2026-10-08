@@ -47,6 +47,24 @@ export function createJsonValueBindings({ maxHandles = 8, maxNodes = 100000 } = 
       if (!Array.isArray(value)) throw failure('Expected JSON array node');
       return value.length;
     },
+    'host.json_node_key': (handle, index, position) => {
+      const { value } = node(handle, index);
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+        throw failure('Expected JSON object node');
+      }
+      const keys = Object.keys(value);
+      if (!Number.isInteger(position) || position < 0 || position >= keys.length) {
+        throw failure('JSON object key index out of bounds');
+      }
+      return keys[position];
+    },
+    'host.json_node_object_count': (handle, index) => {
+      const { value } = node(handle, index);
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+        throw failure('Expected JSON object node');
+      }
+      return Object.keys(value).length;
+    },
     'host.json_node_item': (handle, index, position) => {
       const { value } = node(handle, index);
       if (!Array.isArray(value)) throw failure('Expected JSON array node');
