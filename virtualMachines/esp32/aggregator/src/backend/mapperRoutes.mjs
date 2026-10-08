@@ -9,6 +9,7 @@ import { compileMaplWithAntlr } from '../../scripts/compile-mapl-antlr-to-pcode.
 import { attachPcodeSignature } from '../../scripts/pcode-signing.mjs';
 import { runSingleMessageForEvolution } from '../../../pmachines/javascript/index.mjs';
 import { ollamaGenerate } from './ollamaService.mjs';
+import { createPascalishMapperExecution } from '../mapper/execution-policy.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const defaultRuntimeRoot = path.resolve(
@@ -35,6 +36,17 @@ const TYPE_ALIAS_VERSION = 'type-alias-v1';
 const TEMPLATE_VERSION = 'external-json-maps-v2';
 const INTENT_SCHEMA_VERSION = 'intent-schema-v1';
 let lastGeneratedMap = null;
+let mapperExecutionPromise;
+
+function mapperExecution() {
+  if (!mapperExecutionPromise) {
+    mapperExecutionPromise = createPascalishMapperExecution().catch(error => {
+      mapperExecutionPromise = undefined;
+      throw error;
+    });
+  }
+  return mapperExecutionPromise;
+}
 
 const TYPE_ALIASES = new Map([
   ['pacs8', 'pacs'],
@@ -902,25 +914,6 @@ async function readJsonFile(filePath, fallback = null) {
   }
 }
 
-function flattenStructure(node, prefix = '') {
-  if (!node || typeof node !== 'object') return [];
-  const children = Array.isArray(node.children) ? node.children : [];
-  const out = [];
-  for (const child of children) {
-    const name = String(child?.name || '').trim();
-    if (!name) continue;
-    const nextPath = prefix ? `${prefix}.${name}` : name;
-    out.push({
-      path: nextPath,
-      kind: String(child?.kind || 'leaf').toLowerCase() === 'branch' ? 'branch' : 'leaf',
-      valueType: String(child?.valueType || 'unknown').toLowerCase(),
-      required: child?.required === true,
-    });
-    out.push(...flattenStructure(child, nextPath));
-  }
-  return out;
-}
-
 function sortObject(value) {
   if (Array.isArray(value)) return value.map(sortObject);
   if (!value || typeof value !== 'object') return value;
@@ -932,8 +925,8 @@ function sortObject(value) {
   return out;
 }
 
-function structureSignature(structure) {
-  const flat = flattenStructure(structure);
+async function structureSignature(structure) {
+  const flat = await (await mapperExecution()).flattenStructure(structure);
   const normalized = flat
     .map((node) => ({
       path: node.path,
@@ -945,24 +938,12 @@ function structureSignature(structure) {
   return JSON.stringify(sortObject(normalized));
 }
 
-function nodeMapByPath(structure) {
+function nodeMapByPath(nodes) {
   const map = new Map();
-  for (const item of flattenStructure(structure)) {
+  for (const item of nodes) {
     map.set(String(item.path || ''), item);
   }
   return map;
-}
-
-function getByPath(source, dottedPath) {
-  const parts = String(dottedPath || '').split('.').map(part => part.trim()).filter(Boolean);
-  let cursor = source;
-  for (const part of parts) {
-    if (cursor == null || typeof cursor !== 'object' || !(part in cursor)) {
-      return undefined;
-    }
-    cursor = cursor[part];
-  }
-  return cursor;
 }
 
 function setByPath(target, dottedPath, value) {
@@ -977,77 +958,6 @@ function setByPath(target, dottedPath, value) {
     cursor = cursor[key];
   }
   cursor[parts[parts.length - 1]] = value;
-}
-
-function getRelativePath(fullPath, parentPath) {
-  const full = String(fullPath || '');
-  const parent = String(parentPath || '');
-  if (!parent) return full;
-  const prefix = `${parent}.`;
-  return full.startsWith(prefix) ? full.slice(prefix.length) : full;
-}
-
-function isShapeEquivalentNode(sourceNode, targetNode, sourceChildrenByParent, targetChildrenByParent) {
-  if (!sourceNode || !targetNode) return false;
-  const sourceChildren = sourceChildrenByParent.get(String(sourceNode.path || '')) || [];
-  const targetChildren = targetChildrenByParent.get(String(targetNode.path || '')) || [];
-  if (sourceChildren.length !== targetChildren.length) return false;
-
-  const sourceLeaf = sourceChildren.length === 0;
-  const targetLeaf = targetChildren.length === 0;
-  if (sourceLeaf !== targetLeaf) return false;
-  if (sourceLeaf && targetLeaf) {
-    const sourceType = String(sourceNode.valueType || 'unknown').toLowerCase();
-    const targetType = String(targetNode.valueType || 'unknown').toLowerCase();
-    return sourceType === targetType || sourceType === 'unknown' || targetType === 'unknown';
-  }
-
-  const sourceByName = new Map(sourceChildren.map((child) => [String(child.path || '').split('.').pop(), child]));
-  const targetByName = new Map(targetChildren.map((child) => [String(child.path || '').split('.').pop(), child]));
-  if (sourceByName.size !== targetByName.size) return false;
-
-  for (const [name, sourceChild] of sourceByName.entries()) {
-    const targetChild = targetByName.get(name);
-    if (!targetChild) return false;
-    if (!isShapeEquivalentNode(sourceChild, targetChild, sourceChildrenByParent, targetChildrenByParent)) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-function buildChildrenByParent(nodes) {
-  const map = new Map();
-  for (const node of nodes) {
-    const pathValue = String(node.path || '');
-    const idx = pathValue.lastIndexOf('.');
-    const parent = idx >= 0 ? pathValue.slice(0, idx) : '';
-    const list = map.get(parent) || [];
-    list.push(node);
-    map.set(parent, list);
-  }
-  return map;
-}
-
-function expandShapeMappings(sourceNode, targetNode, sourceChildrenByParent, targetChildrenByParent) {
-  const sourceChildren = sourceChildrenByParent.get(String(sourceNode.path || '')) || [];
-  const targetChildren = targetChildrenByParent.get(String(targetNode.path || '')) || [];
-  if (sourceChildren.length === 0 && targetChildren.length === 0) {
-    return [{ sourcePath: sourceNode.path, targetPath: targetNode.path, kind: 'leaf' }];
-  }
-
-  const out = [];
-  const sourceByName = new Map(sourceChildren.map((child) => [String(child.path || '').split('.').pop(), child]));
-  const targetByName = new Map(targetChildren.map((child) => [String(child.path || '').split('.').pop(), child]));
-
-  for (const [name, sourceChild] of sourceByName.entries()) {
-    const targetChild = targetByName.get(name);
-    if (!targetChild) continue;
-    out.push(...expandShapeMappings(sourceChild, targetChild, sourceChildrenByParent, targetChildrenByParent));
-  }
-
-  return out;
 }
 
 function buildSyntheticPayloadFromNodes(nodes) {
@@ -1590,11 +1500,11 @@ export function registerMapperRoutes(app) {
       if (req.body?.targetSchemaMtime) newMap.targetSchemaMtime = String(req.body.targetSchemaMtime);
       if (req.body?.sourceStructure && typeof req.body.sourceStructure === 'object') {
         newMap.sourceStructure = req.body.sourceStructure;
-        newMap.sourceShapeSignature = structureSignature(req.body.sourceStructure);
+        newMap.sourceShapeSignature = await structureSignature(req.body.sourceStructure);
       }
       if (req.body?.targetStructure && typeof req.body.targetStructure === 'object') {
         newMap.targetStructure = req.body.targetStructure;
-        newMap.targetShapeSignature = structureSignature(req.body.targetStructure);
+        newMap.targetShapeSignature = await structureSignature(req.body.targetStructure);
       }
       if (Array.isArray(req.body?.rules)) {
         newMap.rules = req.body.rules;
@@ -1628,11 +1538,11 @@ export function registerMapperRoutes(app) {
       if (req.body?.targetSchemaMtime) map.targetSchemaMtime = String(req.body.targetSchemaMtime);
       if (req.body?.sourceStructure && typeof req.body.sourceStructure === 'object') {
         map.sourceStructure = req.body.sourceStructure;
-        map.sourceShapeSignature = structureSignature(req.body.sourceStructure);
+        map.sourceShapeSignature = await structureSignature(req.body.sourceStructure);
       }
       if (req.body?.targetStructure && typeof req.body.targetStructure === 'object') {
         map.targetStructure = req.body.targetStructure;
-        map.targetShapeSignature = structureSignature(req.body.targetStructure);
+        map.targetShapeSignature = await structureSignature(req.body.targetStructure);
       }
       map.updatedAt = new Date().toISOString();
       await fs.writeFile(filePath, JSON.stringify(map, null, 2), 'utf-8');
@@ -1869,23 +1779,12 @@ export function registerMapperRoutes(app) {
         return res.status(409).json({ error: 'Map schema snapshot missing. Re-open map and save before using shape-aware mapping.' });
       }
 
-      const sourceNodes = flattenStructure(map.sourceStructure);
-      const targetNodes = flattenStructure(map.targetStructure);
-      const sourceByPath = nodeMapByPath(map.sourceStructure);
-      const targetByPath = nodeMapByPath(map.targetStructure);
-      const sourceChildrenByParent = buildChildrenByParent(sourceNodes);
-      const targetChildrenByParent = buildChildrenByParent(targetNodes);
-      const sourceNode = sourceByPath.get(String(sourcePath));
-      const targetNode = targetByPath.get(String(targetPath));
-
-      if (!sourceNode || !targetNode) {
-        return res.status(400).json({ error: 'Selected source/target paths were not found in schema snapshots.' });
-      }
-      if (!isShapeEquivalentNode(sourceNode, targetNode, sourceChildrenByParent, targetChildrenByParent)) {
-        return res.status(409).json({ error: 'Selected branches are not structurally equivalent.' });
-      }
-
-      const expanded = expandShapeMappings(sourceNode, targetNode, sourceChildrenByParent, targetChildrenByParent);
+      const execution = await mapperExecution();
+      const sourceNodes = await execution.flattenStructure(map.sourceStructure);
+      const targetNodes = await execution.flattenStructure(map.targetStructure);
+      const { mappings: expanded } = await execution.mapShape({
+        sourceNodes, targetNodes, sourcePath: String(sourcePath), targetPath: String(targetPath)
+      });
       const nextRules = Array.isArray(map.rules) ? [...map.rules] : [];
       const existingKeys = new Set(nextRules.map((rule) => {
         const normalized = normalizeRuleForRuntime(rule);
@@ -1918,7 +1817,7 @@ export function registerMapperRoutes(app) {
       if (e.code === 'ENOENT') {
         return res.status(404).json({ error: 'Map not found' });
       }
-      res.status(500).json({ error: e.message });
+      res.status(e.status || 500).json({ error: e.message });
     }
   });
 
@@ -1952,7 +1851,8 @@ export function registerMapperRoutes(app) {
         if (!testCase) {
           return res.status(404).json({ error: `Unknown test case: ${testCaseId}` });
         }
-        const sourceNodes = flattenStructure(map?.sourceStructure);
+        const execution = await mapperExecution();
+        const sourceNodes = await execution.flattenStructure(map?.sourceStructure);
         payload = buildSyntheticPayloadFromNodes(sourceNodes);
       }
 
@@ -1961,40 +1861,16 @@ export function registerMapperRoutes(app) {
       }
 
       const rules = (Array.isArray(map.rules) ? map.rules : []).map(normalizeRuleForRuntime);
-      const sourceByPath = nodeMapByPath(map?.sourceStructure || null);
-      const targetByPath = nodeMapByPath(map?.targetStructure || null);
-      const output = {};
-      const diagnostics = [];
-
-      for (const rule of rules) {
-        if (!rule.sourcePath || !rule.targetPath) continue;
-        const sourceValue = getByPath(payload, rule.sourcePath);
-        if (sourceValue === undefined) {
-          diagnostics.push({ level: 'warning', rule: `${rule.sourcePath} -> ${rule.targetPath}`, message: 'Source field not present in payload' });
-          continue;
-        }
-
-        let value = sourceValue;
-        if (rule.conversionRule) {
-          const vars = runPL0(rule.conversionRule, { src: sourceValue, output: sourceValue });
-          value = vars && Object.prototype.hasOwnProperty.call(vars, 'output') ? vars.output : sourceValue;
-          diagnostics.push({ level: 'info', rule: `${rule.sourcePath} -> ${rule.targetPath}`, message: 'Pascalish routine applied' });
-        } else {
-          const sourceNode = sourceByPath.get(rule.sourcePath);
-          const targetNode = targetByPath.get(rule.targetPath);
-          if (sourceNode && targetNode) {
-            const sourceType = String(sourceNode.valueType || 'unknown').toLowerCase();
-            const targetType = String(targetNode.valueType || 'unknown').toLowerCase();
-            if (sourceType !== targetType && sourceType !== 'unknown' && targetType !== 'unknown') {
-              return res.status(409).json({
-                error: `Non-standard move ${rule.sourcePath} -> ${rule.targetPath} requires a Pascalish routine.`
-              });
-            }
-          }
-        }
-
-        setByPath(output, rule.targetPath, value);
-      }
+      const execution = await mapperExecution();
+      const sourceNodes = await execution.flattenStructure(map?.sourceStructure || null);
+      const targetNodes = await execution.flattenStructure(map?.targetStructure || null);
+      const sourceByPath = nodeMapByPath(sourceNodes);
+      const targetByPath = nodeMapByPath(targetNodes);
+      const { output, diagnostics } = await execution.run({
+        payload, rules,
+        sourceTypes: Object.fromEntries([...sourceByPath].map(([key, node]) => [key, node.valueType])),
+        targetTypes: Object.fromEntries([...targetByPath].map(([key, node]) => [key, node.valueType]))
+      });
 
       res.json({
         mapId: map.id,
@@ -2006,7 +1882,7 @@ export function registerMapperRoutes(app) {
       if (e.code === 'ENOENT') {
         return res.status(404).json({ error: 'Map not found' });
       }
-      res.status(400).json({ error: e.message });
+      res.status(e.status || 400).json({ error: e.message });
     }
   });
 }
