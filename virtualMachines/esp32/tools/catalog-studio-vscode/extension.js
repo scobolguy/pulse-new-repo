@@ -164,6 +164,48 @@ function getNetworkApiBases() {
   return Array.from(new Set(candidates.map((candidate) => candidate.replace(/\/$/, ''))))
 }
 
+async function getLibrarianDataTypes() {
+  const errors = []
+  for (const base of getNetworkApiBases()) {
+    try {
+      const payload = await requestJson(`${base}/api/librarian/data-types`, 5000, true)
+      if (!Array.isArray(payload?.types)) {
+        throw new Error('Data Librarian response does not contain a types array')
+      }
+      return payload.types.map((type, index) => {
+        if (!type || typeof type !== 'object' || Array.isArray(type) || typeof type.id !== 'string' || !type.id.trim()) {
+          throw new Error(`Data Librarian returned an invalid data type at index ${index}`)
+        }
+        const id = type.id.trim()
+        return {
+          id,
+          label: typeof type.label === 'string' && type.label.trim() ? type.label.trim() : id,
+          isIso: type.isIso === true,
+        }
+      })
+    } catch (error) {
+      errors.push(`${base}: ${error.message || String(error)}`)
+    }
+  }
+  throw new Error(`Data Librarian types are unavailable. ${errors.join('; ')}`)
+}
+
+function registerDataTypeMessages(webview) {
+  webview.onDidReceiveMessage(async message => {
+    if (message?.type !== 'loadDataTypes') return
+    try {
+      const types = await getLibrarianDataTypes()
+      webview.postMessage({ type: 'dataTypesLoaded', requestId: message.requestId, types })
+    } catch (error) {
+      webview.postMessage({
+        type: 'dataTypesFailed',
+        requestId: message.requestId,
+        message: error.message || String(error),
+      })
+    }
+  })
+}
+
 function requestJson(url, timeoutMs = 2000, includeErrorDetails = false) {
   return new Promise((resolve, reject) => {
     const target = new URL(url)
@@ -435,8 +477,11 @@ function summarizeVfl(value) {
   }
 }
 
-function getCatalogStudioHostHtml(webview, extensionUri) {
-  const appUrl = getCatalogStudioUrl()
+function getCatalogStudioHostHtml(webview, extensionUri, route = '') {
+  const baseUrl = getCatalogStudioUrl()
+  const appUrl = route
+    ? new URL(route, baseUrl).toString()
+    : new URL('flow-designer?host=vscode', baseUrl).toString()
   const nonce = String(Date.now())
   const iconUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'catalog-studio.svg'))
 
@@ -456,7 +501,7 @@ function getCatalogStudioHostHtml(webview, extensionUri) {
           --accent: #0078d4;
         }
         html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: canvas; color: canvastext; font-family: 'Segoe UI', system-ui, sans-serif; }
-        .shell { display: grid; grid-template-rows: auto 1fr; width: 100%; height: 100%; }
+        .shell { display: grid; grid-template-rows: auto auto minmax(0, 1fr); width: 100%; height: 100%; }
         .toolbar {
           display: flex; align-items: center; justify-content: space-between; gap: 12px;
           padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--panel);
@@ -481,8 +526,19 @@ function getCatalogStudioHostHtml(webview, extensionUri) {
           border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
           background: color-mix(in srgb, var(--accent) 18%, transparent);
         }
+        .types-panel { display: flex; flex-direction: column; gap: 7px; min-width: 0; padding: 8px 14px; border-bottom: 1px solid var(--border); }
+        .types-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+        .types-heading button { padding: 3px 8px; font-size: 11px; text-transform: none; letter-spacing: normal; }
+        .types-status { font-size: 11px; color: var(--muted); }
+        .types-status.error { color: #d13438; }
+        .types-list { display: flex; flex-wrap: wrap; gap: 6px; max-height: 88px; overflow: auto; }
+        .type-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; border: 1px solid var(--border); border-radius: 999px; padding: 4px 8px; font-size: 11px; }
+        .type-chip-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .type-chip code { color: var(--muted); }
+        .type-chip-iso { color: var(--accent); font-weight: 600; }
+        .content { position: relative; min-height: 0; }
         iframe { width: 100%; height: 100%; border: 0; background: white; }
-        .fallback { display: none; padding: 18px; line-height: 1.5; }
+        .fallback { position: absolute; inset: 0; display: none; overflow: auto; padding: 18px; line-height: 1.5; background: canvas; }
         .fallback.visible { display: block; }
         .hidden { display: none; }
         code { font-family: Consolas, monospace; }
@@ -499,24 +555,38 @@ function getCatalogStudioHostHtml(webview, extensionUri) {
             </div>
           </div>
           <div class="actions">
-            <a href="${appUrl}" target="_blank" rel="noreferrer">Open in Browser</a>
             <button id="reloadFrame" class="primary" type="button">Reload</button>
           </div>
         </div>
-        <iframe id="catalogFrame" src="${appUrl}"></iframe>
-        <div id="fallback" class="fallback hidden">
-          <p><strong>Pulse Studio is not reachable yet.</strong></p>
-          <p>Start the frontend dev server in the workspace and reload this view.</p>
-          <p>Expected URL: <code>${appUrl}</code></p>
-          <p>Suggested command: <code>cd aggregator && npm run dev:raw</code></p>
+        <section class="types-panel" aria-labelledby="typesHeading">
+          <div class="types-heading">
+            <span id="typesHeading">Data Librarian Types</span>
+            <button id="refreshTypes" type="button">Refresh</button>
+          </div>
+          <div id="typesStatus" class="types-status" role="status" aria-live="polite">Loading data types...</div>
+          <div id="typesList" class="types-list hidden" aria-label="Registered data types"></div>
+        </section>
+        <div class="content">
+          <iframe id="catalogFrame" src="${appUrl}"></iframe>
+          <div id="fallback" class="fallback hidden">
+            <p><strong>Pulse Studio is not reachable yet.</strong></p>
+            <p>Start the frontend dev server in the workspace and reload this view.</p>
+            <p>Expected URL: <code>${appUrl}</code></p>
+            <p>Suggested command: <code>cd aggregator && npm run dev:raw</code></p>
+          </div>
         </div>
       </div>
       <script nonce="${nonce}">
+        const vscode = acquireVsCodeApi();
         const frame = document.getElementById('catalogFrame');
         const fallback = document.getElementById('fallback');
         const reloadButton = document.getElementById('reloadFrame');
+        const refreshTypesButton = document.getElementById('refreshTypes');
+        const typesStatus = document.getElementById('typesStatus');
+        const typesList = document.getElementById('typesList');
         const timeoutMs = 2500;
         let loadResolved = false;
+        let latestTypesRequest = 0;
 
         function showFallback() {
           if (loadResolved) return;
@@ -532,6 +602,58 @@ function getCatalogStudioHostHtml(webview, extensionUri) {
           frame.classList.remove('hidden');
         }
 
+        function loadDataTypes() {
+          const requestId = ++latestTypesRequest;
+          typesStatus.classList.remove('error');
+          typesStatus.textContent = 'Loading data types...';
+          typesList.replaceChildren();
+          typesList.classList.add('hidden');
+          vscode.postMessage({ type: 'loadDataTypes', requestId });
+        }
+
+        function renderDataTypes(types) {
+          typesList.replaceChildren();
+          for (const type of types) {
+            const chip = document.createElement('div');
+            chip.className = 'type-chip';
+            const label = document.createElement('span');
+            label.className = 'type-chip-label';
+            label.textContent = type.label;
+            chip.appendChild(label);
+            if (type.id !== type.label) {
+              const id = document.createElement('code');
+              id.textContent = type.id;
+              chip.appendChild(id);
+            }
+            if (type.isIso) {
+              const iso = document.createElement('span');
+              iso.className = 'type-chip-iso';
+              iso.textContent = 'ISO';
+              chip.appendChild(iso);
+            }
+            typesList.appendChild(chip);
+          }
+          typesStatus.classList.remove('error');
+          typesStatus.textContent = types.length
+            ? types.length + (types.length === 1 ? ' data type' : ' data types')
+            : 'No data types registered.';
+          typesList.classList.toggle('hidden', types.length === 0);
+        }
+
+        window.addEventListener('message', event => {
+          const message = event.data;
+          if (!message || message.requestId !== latestTypesRequest) return;
+          if (message.type === 'dataTypesLoaded') {
+            renderDataTypes(message.types);
+          } else if (message.type === 'dataTypesFailed') {
+            typesList.replaceChildren();
+            typesList.classList.add('hidden');
+            typesStatus.classList.add('error');
+            typesStatus.textContent = 'Unable to load Data Librarian types: ' + message.message;
+          }
+        });
+
+        refreshTypesButton.addEventListener('click', loadDataTypes);
         reloadButton.addEventListener('click', () => {
           loadResolved = false;
           frame.classList.remove('hidden');
@@ -543,13 +665,14 @@ function getCatalogStudioHostHtml(webview, extensionUri) {
 
         frame.addEventListener('load', hideFallback);
         window.setTimeout(showFallback, timeoutMs);
+        loadDataTypes();
       </script>
     </body>
   </html>`
 }
 
 function getVflEditorHtml(webview, extensionUri, document, parsed) {
-  const appUrl = getCatalogStudioUrl()
+  const appUrl = new URL('flow-designer?host=vscode', getCatalogStudioUrl()).toString()
   const apiBase = getCatalogStudioApiBase()
   const nonce = String(Date.now())
   const iconUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'catalog-studio.svg'))
@@ -697,7 +820,6 @@ function getVflEditorHtml(webview, extensionUri, document, parsed) {
           <div class="actions">
             <button id="insertTemplate" type="button">Reset Template</button>
             <button id="formatDocument" type="button">Format JSON</button>
-            <a href="${appUrl}" target="_blank" rel="noreferrer">Open Pulse Studio</a>
           </div>
         </div>
         <div class="main">
@@ -1487,20 +1609,6 @@ function getVflEditorHtml(webview, extensionUri, document, parsed) {
   </html>`
 }
 
-class CatalogStudioViewProvider {
-  constructor(extensionUri) {
-    this.extensionUri = extensionUri
-  }
-
-  resolveWebviewView(webviewView) {
-    webviewView.webview.options = {
-      enableScripts: true,
-      localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'media')],
-    }
-    webviewView.webview.html = getCatalogStudioHostHtml(webviewView.webview, this.extensionUri)
-  }
-}
-
 class VflEditorProvider {
   constructor(context, diagnostics) {
     this.context = context
@@ -1605,6 +1713,74 @@ class InfraItem extends vscode.TreeItem {
     if (options.description) this.description = options.description
     if (options.tooltip) this.tooltip = options.tooltip
     this.iconPath = new vscode.ThemeIcon(options.iconId || 'circle-outline')
+  }
+}
+
+class CatalogStudioTreeProvider {
+  constructor() {
+    this._onDidChangeTreeData = new vscode.EventEmitter()
+    this.onDidChangeTreeData = this._onDidChangeTreeData.event
+  }
+
+  refresh() {
+    this._onDidChangeTreeData.fire()
+  }
+
+  dispose() {
+    this._onDidChangeTreeData.dispose()
+  }
+
+  getTreeItem(element) {
+    return element
+  }
+
+  async getChildren(element) {
+    if (!element) {
+      const librarian = new InfraItem('Data Librarian', vscode.TreeItemCollapsibleState.Expanded, {
+        kind: 'data-librarian',
+        iconId: 'library',
+        tooltip: 'Registered Data Librarian data types',
+      })
+      librarian.id = 'data-librarian'
+      const dataMapper = new InfraItem('Data Mapper', vscode.TreeItemCollapsibleState.None, {
+        kind: 'data-mapper',
+        iconId: 'symbol-misc',
+        tooltip: 'Open Data Mapper',
+      })
+      dataMapper.id = 'data-mapper'
+      dataMapper.command = {
+        command: 'pulseCatalogStudio.openDataMapper',
+        title: 'Open Data Mapper',
+      }
+      return [librarian, dataMapper]
+    }
+    if (element.kind !== 'data-librarian') return []
+
+    try {
+      const types = await getLibrarianDataTypes()
+      if (types.length === 0) {
+        return [new InfraItem('No data types registered', vscode.TreeItemCollapsibleState.None, {
+          iconId: 'info',
+        })]
+      }
+      return types.map(type => {
+        const item = new InfraItem(type.label, vscode.TreeItemCollapsibleState.None, {
+          kind: 'data-type',
+          iconId: 'symbol-structure',
+          description: type.isIso ? `${type.id} (ISO)` : type.id === type.label ? '' : type.id,
+          tooltip: `${type.label}\nID: ${type.id}${type.isIso ? '\nISO data type' : ''}`,
+        })
+        item.id = `data-type:${type.id}`
+        return item
+      })
+    } catch (error) {
+      return [new InfraItem('Data Librarian unavailable', vscode.TreeItemCollapsibleState.None, {
+        kind: 'data-librarian-error',
+        iconId: 'error',
+        description: 'Use Refresh to retry',
+        tooltip: error.message || String(error),
+      })]
+    }
   }
 }
 
@@ -1726,10 +1902,10 @@ class PulseInfrastructureTreeProvider {
   }
 }
 
-function openCatalogStudioPanel(extensionUri) {
+function openCatalogStudioPanel(extensionUri, title = 'Pulse Studio', route = '') {
   const panel = vscode.window.createWebviewPanel(
     VIEW_TYPE,
-    'Pulse Studio',
+    title,
     vscode.ViewColumn.Active,
     {
       enableScripts: true,
@@ -1737,7 +1913,8 @@ function openCatalogStudioPanel(extensionUri) {
       localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'media')],
     },
   )
-  panel.webview.html = getCatalogStudioHostHtml(panel.webview, extensionUri)
+  registerDataTypeMessages(panel.webview)
+  panel.webview.html = getCatalogStudioHostHtml(panel.webview, extensionUri, route)
   return panel
 }
 
@@ -1771,15 +1948,24 @@ async function createNewVflDocument() {
 }
 
 function activate(context) {
-  const provider = new CatalogStudioViewProvider(context.extensionUri)
+  const provider = new CatalogStudioTreeProvider()
   const diagnostics = vscode.languages.createDiagnosticCollection('pulse-vfl')
   const infrastructureProvider = new PulseInfrastructureTreeProvider()
   context.subscriptions.push(
     diagnostics,
-    vscode.window.registerWebviewViewProvider(SIDEBAR_VIEW_TYPE, provider),
+    provider,
+    vscode.window.registerTreeDataProvider(SIDEBAR_VIEW_TYPE, provider),
     vscode.window.registerTreeDataProvider('pulseCatalogStudio.infrastructure', infrastructureProvider),
-    vscode.commands.registerCommand('pulseCatalogStudio.open', () => openCatalogStudioPanel(context.extensionUri)),
+    vscode.commands.registerCommand(
+      'pulseCatalogStudio.open',
+      () => openCatalogStudioPanel(context.extensionUri, 'Pulse Studio', 'flow-designer?host=vscode'),
+    ),
+    vscode.commands.registerCommand(
+      'pulseCatalogStudio.openDataMapper',
+      () => openCatalogStudioPanel(context.extensionUri, 'Data Mapper', 'data-mapper?host=vscode'),
+    ),
     vscode.commands.registerCommand('pulseCatalogStudio.newVfl', () => createNewVflDocument()),
+    vscode.commands.registerCommand('pulseCatalogStudio.refreshDataLibrarian', () => provider.refresh()),
     vscode.commands.registerCommand('pulseCatalogStudio.refreshInfrastructure', () => infrastructureProvider.refresh()),
     VflEditorProvider.register(context, diagnostics),
   )

@@ -194,11 +194,35 @@ test('Mapper run endpoint retains its HTTP response contract and status codes', 
     const app = express();
     app.use(express.json());
     registerMapperRoutes(app);
+    app.use((error, _req, res, _next) => {
+      res.status(error.status || 500).json({ error: error.message });
+    });
     server = http.createServer(app);
     await new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(0, '127.0.0.1', resolve);
     });
+
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    const healthResponse = await fetch(`${origin}/health`);
+    assert.equal(healthResponse.status, 200);
+    assert.deepEqual(await healthResponse.json(), { status: 'ok', service: 'data-mapper' });
+
+    const invalidCreateResponse = await fetch(`${origin}/api/mapper/maps`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    assert.equal(invalidCreateResponse.status, 400);
+    assert.deepEqual(await invalidCreateResponse.json(), { error: 'id and name are required' });
+
+    const invalidAuthoringResponse = await fetch(`${origin}/api/mapper/authoring/ollama-intent`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ prompt: '  ' })
+    });
+    assert.equal(invalidAuthoringResponse.status, 400);
+    assert.deepEqual(await invalidAuthoringResponse.json(), { error: 'prompt is required' });
 
       const createResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/mapper/maps`, {
         method: 'POST',

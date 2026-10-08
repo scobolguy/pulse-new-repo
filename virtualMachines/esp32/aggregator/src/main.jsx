@@ -1,31 +1,8 @@
-import { StrictMode, useEffect, useState } from 'react'
+import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
-import TopologyPage from './TopologyPage.jsx'
 import DataMapper from './DataMapper.jsx'
 import FlowDesignerPage from './FlowDesignerPage.jsx'
-import NetworkDevicesPage from './NetworkDevicesPage.jsx'
-import ProjectTreePage from './ProjectTreePage.jsx'
-import DeploymentPage from './DeploymentPage.jsx'
-import ProvisioningAgentPage from './ProvisioningAgentPage.jsx'
-import PascalishEditorPage from './PascalishEditorPage.jsx'
-import LanguageCompilerPage from './LanguageCompilerPage.jsx'
-import ManagersPage from './ManagersPage.jsx'
-
-const TOOL_ROUTES = [
-  { path: '/query', label: 'Query', shortLabel: 'Q', description: 'Ask BOB, submit files, and inspect operational results.' },
-  { path: '/projects', label: 'Projects', shortLabel: 'P', description: 'Browse project and subproject build trees and inspect flows per node.' },
-  { path: '/deployments', label: 'Deployments', shortLabel: 'D', description: 'Package projects, target nodes, and generate startup manifests.' },
-  { path: '/data-mapper', label: 'Data Mapper', shortLabel: 'M', description: 'Define and test transformations between message formats.' },
-  { path: '/flow-designer', label: 'Flow Designer', shortLabel: 'F', description: 'Compose typed processing flows and bind deployment targets.' },
-  { path: '/pascalish', label: 'Pascalish', shortLabel: 'Ps', description: 'Author and compile Pascalish programs with Monaco editor, Librarian type autocomplete, and F7 run shortcuts.' },
-  { path: '/cobolish', label: 'COBOLISH', shortLabel: 'Cb', description: 'Author COBOL-85 compatible programs, services, and daemons.' },
-  { path: '/vbish', label: 'VBish', shortLabel: 'Vb', description: 'Author VB-like programs, services, and daemons.' },
-  { path: '/topology', label: 'Topology', shortLabel: 'T', description: 'Inspect nodes, services, and runtime connectivity.' },
-  { path: '/managers', label: 'Managers', shortLabel: 'Mg', description: 'Inspect queue managers, database providers, and their deployed resources.' },
-  { path: '/bluetooth-devices', label: 'Bluetooth Devices', shortLabel: 'B', description: 'Inspect nearby BLE devices, inferred types, manufacturers, and signal strength.' },
-  { path: '/provisioning-agent', label: 'Provisioning Agent', shortLabel: 'A', description: 'Run fleet provisioning jobs with retry policy and job history.' },
-]
 
 const originalFetch = window.fetch.bind(window)
 const apiBaseUrls = String(import.meta.env.VITE_API_BASES || '')
@@ -102,136 +79,38 @@ window.fetch = async (input, init = {}) => {
   return response
 }
 
-function AppShell() {
-  const [currentPath, setCurrentPath] = useState(window.location.pathname)
-  const [currentSearch, setCurrentSearch] = useState(window.location.search)
+function renderEmbeddedPage() {
+  const params = new URLSearchParams(window.location.search)
+  const isVscodeWebview = params.get('host') === 'vscode'
+  const currentPath = window.location.pathname
 
-  useEffect(() => {
-    const handlePopState = () => {
-      setCurrentPath(window.location.pathname)
-      setCurrentSearch(window.location.search)
-    }
-    window.addEventListener('popstate', handlePopState)
-    return () => window.removeEventListener('popstate', handlePopState)
-  }, [])
-
-  const navigateTo = (path) => {
-    if (path === '/query') {
-      window.location.assign('/bob-console.html')
-      return
-    }
-    window.history.pushState(null, '', path)
-    setCurrentPath(path)
-    setCurrentSearch('')
+  if (isVscodeWebview && currentPath === '/data-mapper') {
+    return <DataMapper />
   }
 
-  // Default: redirect to BOB Console
-  if (currentPath === '/' || currentPath === '/index.html') {
-    window.location.replace('/bob-console.html')
-    return null
-  }
-
-  if (currentPath === '/query') {
-    window.location.replace('/bob-console.html')
-    return null
-  }
-
-  let currentPage = null
-  if (currentPath === '/topology') {
-    currentPage = <TopologyPage />
-  } else if (currentPath === '/managers') {
-    currentPage = <ManagersPage />
-  } else if (currentPath === '/bluetooth-devices') {
-    currentPage = <NetworkDevicesPage />
-  } else if (currentPath === '/projects') {
-    currentPage = <ProjectTreePage />
-  } else if (currentPath === '/deployments') {
-    currentPage = <DeploymentPage />
-  } else if (currentPath === '/data-mapper') {
-    currentPage = <DataMapper />
-  } else if (currentPath === '/flow-designer') {
-    const params = new URLSearchParams(currentSearch || '')
+  if (isVscodeWebview && currentPath === '/flow-designer') {
     const projectId = String(params.get('projectId') || 'default').trim() || 'default'
     const projectLabel = String(params.get('projectLabel') || projectId).trim() || projectId
     const subprojectPath = String(params.get('subproject') || '').trim()
-    currentPage = (
+    return (
       <FlowDesignerPage
         projectId={projectId}
         projectLabel={projectLabel}
         subprojectPath={subprojectPath}
       />
     )
-  } else if (currentPath === '/pascalish') {
-    currentPage = <PascalishEditorPage />
-  } else if (currentPath === '/cobolish') {
-    currentPage = <LanguageCompilerPage languageId="cobolish" />
-  } else if (currentPath === '/vbish') {
-    currentPage = <LanguageCompilerPage languageId="vbish" />
-  } else if (currentPath === '/provisioning-agent') {
-    currentPage = <ProvisioningAgentPage />
   }
 
-  const activeTool = TOOL_ROUTES.find(tool => tool.path === currentPath) || TOOL_ROUTES[0]
-
   return (
-    <div className="tool-workbench">
-      <header className="tool-workbench-titlebar">
-        <strong>PULSE Workbench</strong>
-        <span>{activeTool.label}</span>
-      </header>
-      <div className="tool-workbench-body">
-        <nav className="tool-activity-bar" aria-label="Workbench tools">
-          {TOOL_ROUTES.map(tool => (
-            <button
-              key={tool.path}
-              type="button"
-              className={currentPath === tool.path ? 'active' : ''}
-              onClick={() => navigateTo(tool.path)}
-              aria-label={tool.label}
-              title={tool.label}
-            >
-              {tool.shortLabel}
-            </button>
-          ))}
-        </nav>
-        <aside className="tool-explorer">
-          <div className="tool-explorer-heading">TOOLS</div>
-          {TOOL_ROUTES.map(tool => (
-            <button
-              key={tool.path}
-              type="button"
-              className={currentPath === tool.path ? 'active' : ''}
-              onClick={() => navigateTo(tool.path)}
-            >
-              {tool.label}
-            </button>
-          ))}
-        </aside>
-        <main className="tool-workbench-main">
-          <header className="tool-page-bar">
-            <div>
-              <h1>{activeTool.label}</h1>
-              <p>{activeTool.description}</p>
-            </div>
-            <span className="tool-page-context">LOCAL WORKSPACE</span>
-          </header>
-          <div className="tool-page-content">
-            {currentPage}
-          </div>
-        </main>
-      </div>
-      <footer className="tool-status-bar">
-        <span>PULSE</span>
-        <span>Connected</span>
-        <span className="tool-status-spacer" />
-        <span>Local runtime</span>
-      </footer>
-    </div>
+    <main>
+      <h1>Pulse Studio is available in VS Code</h1>
+      <p>Open this workspace in VS Code and use the Pulse Studio sidebar.</p>
+    </main>
   )
 }
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <AppShell />
+    {renderEmbeddedPage()}
   </StrictMode>,
 )

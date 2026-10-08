@@ -26,9 +26,31 @@ export async function createPascalishSchemaStructureService({ logger = console }
     return result.body;
   }
   return {
+    parseFilename: async filename => {
+      const result = await host.dispatch({
+        transport: 'internal', method: 'POST', path: '/schema-filename',
+        body: JSON.stringify({ filename })
+      });
+      if (result.status !== 200 || !result.body || typeof result.body !== 'object') {
+        throw Object.assign(new Error(result.body?.error || 'Invalid Pascalish schema filename result'), {
+          status: result.status
+        });
+      }
+      if (!result.body.matched) return null;
+      const metadata = { ...result.body };
+      delete metadata.matched;
+      return metadata;
+    },
     parseJsonValue: content => parse('/json-value', content),
     parseJsonSchema: content => parse('/json-schema', content),
     parseCopybook: content => parse('/copybook', content),
+    enrichSwiftFields: async content => {
+      const result = await parse('/enrich-swift', content);
+      if (typeof result.content !== 'string') {
+        throw new Error('Invalid Pascalish SWIFT metadata response');
+      }
+      return result.content;
+    },
     stop: () => host.stop(),
     getStatus: () => host.getStatus()
   };

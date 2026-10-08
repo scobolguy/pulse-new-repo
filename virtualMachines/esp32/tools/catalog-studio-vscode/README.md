@@ -1,5 +1,20 @@
 # Pulse Studio infrastructure network views
 
+The **Pulse Studio** view in VS Code's left-hand sidebar is a native tree with
+**Data Librarian** and **Data Mapper** as peer nodes. Data Librarian expands to
+show registered data types; Data Mapper opens the mapper page in a webview
+editor tab. Use the view's **Refresh** button or
+**Pulse: Refresh Data Librarian** to reload the list. It reads
+`/api/librarian/data-types` from `pulse.catalogStudio.apiBase` and falls back to
+the Data Librarian service at `http://127.0.0.1:4300`; loading failures are
+shown as an error row with details in its tooltip. An empty registry is shown
+explicitly. This sidebar does not require the frontend dev server.
+
+The standalone React workbench is no longer served as a browser UI. Vite remains
+the local host for the Flow Designer and Data Mapper pages embedded in VS Code
+webviews; those pages are loaded only on their `?host=vscode` routes. Use
+**Pulse: Open Pulse Studio** to open the Flow Designer webview.
+
 The Infrastructure tree retains its existing **Network** branch, backed by
 the Aggregator `/api/nodes` endpoint.
 

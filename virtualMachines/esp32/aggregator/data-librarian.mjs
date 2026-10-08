@@ -10,6 +10,17 @@ import { createPascalishXsdParser } from './src/librarian/xsd-parser.mjs';
 import { createPascalishSchemaTreeService } from './src/librarian/schema-tree-service.mjs';
 import { createPascalishSchemaStructureService } from './src/librarian/schema-structure-service.mjs';
 import { createPascalishLibrarianNormalization } from './src/librarian/normalization.mjs';
+import { createPascalishLibrarianMetadataRoutes } from './src/librarian/metadata-routes.mjs';
+import { createPascalishLibrarianSchemaFieldsRoutes } from './src/librarian/schema-fields-routes.mjs';
+import { createPascalishLibrarianSearchRoutes } from './src/librarian/search-routes.mjs';
+import { createPascalishLibrarianSchemaLookupRoutes } from './src/librarian/schema-lookup-routes.mjs';
+import { createPascalishLibrarianSchemaCatalogRoutes } from './src/librarian/schema-catalog-routes.mjs';
+import { createPascalishLibrarianFileDownloadRoutes } from './src/librarian/file-download-routes.mjs';
+import { createPascalishLibrarianSubschemaMutationRoutes } from './src/librarian/subschema-mutation-routes.mjs';
+import { createPascalishLibrarianDataTypeRoutes } from './src/librarian/data-type-routes.mjs';
+import { createPascalishLibrarianMapperRulesetRoutes } from './src/librarian/mapper-ruleset-routes.mjs';
+import { createPascalishLibrarianSchemaOperationRoutes } from './src/librarian/schema-operation-routes.mjs';
+import { createPascalishLibrarianUploadRoutes } from './src/librarian/upload-routes.mjs';
 
 const app = express();
 app.use(express.json());
@@ -44,6 +55,17 @@ let xsdParser;
 let schemaTreeService;
 let schemaStructureService;
 let normalization;
+let metadataRoutes;
+let schemaFieldsRoutes;
+let searchRoutes;
+let schemaLookupRoutes;
+let schemaCatalogRoutes;
+let fileDownloadRoutes;
+let subschemaMutationRoutes;
+let dataTypeRoutes;
+let mapperRulesetRoutes;
+let schemaOperationRoutes;
+let uploadRoutes;
 
 async function pathExists(targetPath) {
   try {
@@ -53,6 +75,13 @@ async function pathExists(targetPath) {
     if (error.code === 'ENOENT') return false;
     throw error;
   }
+}
+
+function isPathWithinRoot(rootPath, targetPath) {
+  const root = path.resolve(rootPath);
+  const relative = path.relative(root, path.resolve(targetPath));
+  return relative !== '' && relative !== '..'
+    && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
 async function migrateLegacyPath(legacyPath, nextPath) {
@@ -105,121 +134,6 @@ async function listFiles(dir, relBase = '', filter = null) {
   return results;
 }
 
-// Utility: Parse schema file name for metadata (type, name, version)
-function parseSchemaFilename(filename) {
-  // ISO 20022 format: pacs.002.001.12.xsd, pain.001.001.03.xsd, etc.
-  const iso20022Match = filename.match(/^([a-z]{3,4})\.(\d{3})\.(\d{3})\.(\d{2,3})\.xsd$/i);
-  if (iso20022Match) {
-    const area = iso20022Match[1].toLowerCase();
-    const msgCode = iso20022Match[2];
-    const ver1 = iso20022Match[3];
-    const ver2 = iso20022Match[4];
-    return {
-      name: `${area}.${msgCode}.${ver1}.${ver2}`,
-      version: parseInt(ver2, 10),
-      type: 'xsd',
-      area,
-    };
-  }
-  // Example: order.v1.xsd, customer.v2.avro, payment.json-schema, legacy.copybook
-  const match = filename.match(/^([\w-]+)(?:\.v(\d+))?\.(xsd|avro|json-schema|copybook|cpy|cbl|sql|proto|csv|xml|json)$/i);
-  if (!match) return null;
-  const rawType = match[3].toLowerCase();
-  return {
-    name: match[1],
-    version: match[2] ? parseInt(match[2], 10) : null,
-    type: (rawType === 'copybook' || rawType === 'cpy' || rawType === 'cbl') ? 'copybook' : rawType,
-  };
-}
-
-function inferTypeIdFromSchema(meta) {
-  if (meta?.area) return meta.area;
-  return String(meta?.name || '').trim().toLowerCase() || null;
-}
-
-function inferSwiftFieldDefaults(fieldTag) {
-  const tag = String(fieldTag || '').toUpperCase();
-  const known = {
-    '16R': { type: 'marker', format: '3!c' },
-    '16S': { type: 'marker', format: '3!c' },
-    '20': { type: 'string', format: '16x' },
-    '21': { type: 'string', format: '16x' },
-    '21R': { type: 'string', format: '16x' },
-    '22A': { type: 'code', format: '4!c' },
-    '22B': { type: 'code', format: '4!c' },
-    '22F': { type: 'code', format: '4!c[/30x]' },
-    '23': { type: 'code', format: '4!c' },
-    '23B': { type: 'code', format: '4!c' },
-    '26E': { type: 'number', format: '3n' },
-    '30': { type: 'date', format: '6!n (YYMMDD)' },
-    '31C': { type: 'date', format: '6!n (YYMMDD)' },
-    '31D': { type: 'composite', format: '6!n29x' },
-    '32A': { type: 'composite', format: '6!n3!a15d' },
-    '32B': { type: 'amount', format: '3!a15d' },
-    '33B': { type: 'amount', format: '3!a15d' },
-    '35B': { type: 'instrument', format: '4*35x' },
-    '36': { type: 'number', format: '15d' },
-    '40A': { type: 'code', format: '24x' },
-    '41A': { type: 'bic+code', format: '4!a2!a2!c[3!c]/1!a' },
-    '50': { type: 'party', format: '4*35x' },
-    '50A': { type: 'bic', format: '4!a2!a2!c[3!c]' },
-    '50F': { type: 'party', format: '4*35x' },
-    '50H': { type: 'party', format: '4*35x' },
-    '50K': { type: 'party', format: '/34x and 4*35x' },
-    '52A': { type: 'bic', format: '4!a2!a2!c[3!c]' },
-    '53A': { type: 'bic', format: '4!a2!a2!c[3!c]' },
-    '54A': { type: 'bic', format: '4!a2!a2!c[3!c]' },
-    '56A': { type: 'bic', format: '4!a2!a2!c[3!c]' },
-    '57A': { type: 'bic', format: '4!a2!a2!c[3!c]' },
-    '58A': { type: 'bic', format: '4!a2!a2!c[3!c]' },
-    '59': { type: 'party', format: '/34x and 4*35x' },
-    '59A': { type: 'bic', format: '4!a2!a2!c[3!c]' },
-    '70': { type: 'text', format: '4*35x' },
-    '70E': { type: 'text', format: '10*35x' },
-    '71A': { type: 'code', format: '3!a' },
-    '71B': { type: 'text', format: '6*35x' },
-    '71D': { type: 'text', format: '6*35x' },
-    '72': { type: 'text', format: '6*35x' },
-    '73': { type: 'text', format: '6*35x' },
-    '75': { type: 'text', format: '35*50x' },
-    '76': { type: 'text', format: '35*50x' },
-    '77B': { type: 'text', format: '3*35x' },
-    '77C': { type: 'text', format: '35*50x' },
-    '77J': { type: 'text', format: '20*35x' },
-    '79': { type: 'text', format: '35*50x' },
-    '97A': { type: 'account', format: '35x' },
-    '98A': { type: 'date', format: '8!n' },
-  };
-  if (known[tag]) return known[tag];
-  if (/^\d{2}[A-Z]$/.test(tag)) return { type: 'string', format: 'variable' };
-  if (/^\d{2}$/.test(tag)) return { type: 'string', format: 'variable' };
-  return { type: 'string', format: 'variable' };
-}
-
-function enrichSwiftFieldMetadata(parsed) {
-  if (!parsed || typeof parsed !== 'object') return;
-  const messageType = String(parsed.messageType || '').toUpperCase();
-  if (!/^MT\d{3}/.test(messageType)) return;
-
-  function visit(node) {
-    if (!node || typeof node !== 'object') return;
-    if (node.fields && typeof node.fields === 'object' && !Array.isArray(node.fields)) {
-      for (const [fieldTag, fieldDef] of Object.entries(node.fields)) {
-        if (!fieldDef || typeof fieldDef !== 'object' || Array.isArray(fieldDef)) continue;
-        const defaults = inferSwiftFieldDefaults(fieldTag);
-        if (!fieldDef.type) fieldDef.type = defaults.type;
-        if (!fieldDef.format) fieldDef.format = defaults.format;
-        if (!fieldDef.length) fieldDef.length = fieldDef.format || defaults.format;
-      }
-    }
-    for (const value of Object.values(node)) {
-      if (value && typeof value === 'object') visit(value);
-    }
-  }
-
-  visit(parsed);
-}
-
 function decodeTextBuffer(buffer) {
   if (!buffer || buffer.length === 0) return '';
 
@@ -267,13 +181,13 @@ async function extractStructureForFile(filePath, schemaType) {
       return null;
     }
     const parsed = JSON.parse(content);
-    enrichSwiftFieldMetadata(parsed);
+    const normalizedContent = JSON.stringify(parsed);
     const isSchema = lowerType === 'json-schema'
       || (parsed && typeof parsed === 'object' && !Array.isArray(parsed)
         && (parsed.type === 'object' || parsed.properties || parsed.items || parsed.enum));
     return isSchema
-      ? schemaStructureService.parseJsonSchema(JSON.stringify(parsed))
-      : schemaStructureService.parseJsonValue(JSON.stringify(parsed));
+      ? schemaStructureService.parseJsonSchema(normalizedContent)
+      : schemaStructureService.parseJsonValue(normalizedContent);
   } catch {
     return null;
   }
@@ -397,143 +311,29 @@ async function mutateSchemaLifecycle(operation, id, values = {}) {
   return catalogStore.mutateCatalog('schema-lifecycle', () => ({ operation, id, ...values }));
 }
 
-const LIBRARIAN_LLM_ACTIONS = [
-  {
-    id: 'listSchemas',
-    method: 'GET',
-    path: '/api/librarian/schemas',
-    description: 'Return schema catalog with inferred structure trees and lifecycle status.',
-    requestSchema: null,
-    responseShape: { schemas: [{ typeId: 'string', path: 'string', structure: 'tree', lifecycle: 'object' }] }
-  },
-  {
-    id: 'listSubschemas',
-    method: 'GET',
-    path: '/api/librarian/subschemas',
-    description: 'List field-restricted virtual schemas and their parent schema contracts.',
-    requestSchema: null,
-    responseShape: { subschemas: [{ id: 'string', parentSchemaPath: 'string', accessibleFields: 'string[]', structure: 'tree' }] }
-  },
-  {
-    id: 'createSubschema',
-    method: 'POST',
-    path: '/api/librarian/subschemas',
-    description: 'Create a virtual schema that exposes only selected canonical field paths from a parent schema.',
-    requestSchema: { id: 'string', label: 'string', parentSchemaPath: 'string', accessibleFields: 'string[]' },
-    responseShape: { status: 'created', subschema: 'object' }
-  },
-  {
-    id: 'listDataTypes',
-    method: 'GET',
-    path: '/api/librarian/data-types',
-    description: 'List managed data type IDs used by mapper contracts.',
-    requestSchema: null,
-    responseShape: { types: [{ id: 'string', label: 'string', builtin: 'boolean' }] }
-  },
-  {
-    id: 'createDataType',
-    method: 'POST',
-    path: '/api/librarian/data-types',
-    description: 'Create normalized custom data type entry.',
-    requestSchema: { id: 'string', label: 'string' },
-    responseShape: { status: 'created', type: 'object' }
-  },
-  {
-    id: 'uploadSchema',
-    method: 'POST',
-    path: '/api/librarian/upload/schemas',
-    description: 'Upload raw schema asset. Requires x-filename header and binary body.',
-    requestSchema: {
-      headers: { 'x-filename': 'string', 'content-type': 'mime-type' },
-      body: 'binary'
-    },
-    responseShape: { status: 'ok', filename: 'string', dest: 'schemas', size: 'number' }
-  },
-  {
-    id: 'setSchemaLifecycle',
-    method: 'POST',
-    path: '/api/librarian/schema-lifecycle',
-    description: 'Configure active/reject dates for schema selection policy.',
-    requestSchema: {
-      path: 'string',
-      activeFrom: 'iso-date?',
-      rejectAfter: 'iso-date?',
-      keepForDisplay: 'boolean?'
-    },
-    responseShape: { status: 'updated', lifecycle: 'object' }
-  },
-  {
-    id: 'searchFiles',
-    method: 'GET',
-    path: '/api/librarian/search?q=<query>&ext=<ext>',
-    description: 'Search cataloged files by name and extension.',
-    requestSchema: { query: { q: 'string?', ext: 'string?' } },
-    responseShape: { files: 'array' }
-  },
-  {
-    id: 'listMapperRulesets',
-    method: 'GET',
-    path: '/api/librarian/mapper-rulesets',
-    description: 'List mapper rulesets used to constrain source->destination map transforms.',
-    requestSchema: null,
-    responseShape: { rulesets: [{ id: 'string', sourcePatterns: 'string[]', targetPatterns: 'string[]' }] }
+app.use(async (req, res, next) => {
+  const requestPath = new URL(req.originalUrl, 'http://localhost').pathname;
+  if (requestPath !== '/health' && !requestPath.startsWith('/api/librarian/llm/')) {
+    return next();
   }
-];
-
-function librarianActionById(actionId) {
-  return LIBRARIAN_LLM_ACTIONS.find((action) => action.id === String(actionId || '').trim()) || null;
-}
-
-app.get('/api/librarian/llm/base', (req, res) => {
-  res.json({
-    service: 'data-librarian',
-    version: '1.0',
-    purpose: 'Schema and contract intelligence for map generation and validation.',
-    outputsForMapper: [
-      'sourceTypeId and targetTypeId',
-      'sourceSchemaPath and targetSchemaPath',
-      'sourceStructure and targetStructure snapshots',
-      'schema lifecycle status for safe selection'
-    ],
-    recommendedFlow: [
-      'Call /api/librarian/schemas and select active schemas',
-      'Extract typeId/path/structure for source and target contracts',
-      'Call mapper /api/mapper/llm/pcode-map-template',
-      'Create map via /api/mapper/maps and validate via /api/mapper/maps/:id/run'
-    ],
-    endpoints: {
-      capabilities: '/api/librarian/llm/base',
-      actions: '/api/librarian/llm/actions',
-      actionSchema: '/api/librarian/llm/actions/:id',
-      schemaCatalog: '/api/librarian/schemas',
-      subschemas: '/api/librarian/subschemas',
-      dataTypes: '/api/librarian/data-types',
-      mapperRulesets: '/api/librarian/mapper-rulesets'
-    }
-  });
-});
-
-app.get('/api/librarian/llm/actions', (req, res) => {
-  res.json({
-    service: 'data-librarian',
-    actionCount: LIBRARIAN_LLM_ACTIONS.length,
-    actions: LIBRARIAN_LLM_ACTIONS,
-  });
-});
-
-app.get('/api/librarian/llm/actions/:id', (req, res) => {
-  const action = librarianActionById(req.params.id);
-  if (!action) {
-    return res.status(404).json({ error: `Unknown librarian action: ${req.params.id}` });
+  try {
+    const result = await metadataRoutes.dispatch({ method: req.method, path: requestPath });
+    if (!result.matched) return next();
+    return res.status(result.status).json(result.body);
+  } catch (error) {
+    return res.status(error.status || 500).json({ error: error.message });
   }
-  res.json({ service: 'data-librarian', action });
 });
 
 // List all files
 app.get('/api/librarian/files', async (req, res) => {
   try {
     const files = await listFiles(LIBRARIAN_SERVICE_ROOT);
-    res.json({ files });
+    const result = await metadataRoutes.dispatch({
+      method: req.method, path: '/api/librarian/files', files
+    });
+    if (!result.matched) throw new Error('Pascalish metadata route did not match');
+    return res.status(result.status).json(result.body);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -541,12 +341,17 @@ app.get('/api/librarian/files', async (req, res) => {
 
 // Search files by name or extension
 app.get('/api/librarian/search', async (req, res) => {
-  const { q = '', ext = '' } = req.query;
   try {
-    let files = await listFiles(LIBRARIAN_SERVICE_ROOT);
-    if (q) files = files.filter(f => f.name.toLowerCase().includes(q.toLowerCase()));
-    if (ext) files = files.filter(f => f.ext === ext.replace(/^\./, ''));
-    res.json({ files });
+    const files = await listFiles(LIBRARIAN_SERVICE_ROOT);
+    const result = await searchRoutes.dispatch({
+      method: req.method,
+      path: '/api/librarian/search',
+      q: req.query.q ?? '',
+      ext: req.query.ext ?? '',
+      files
+    });
+    if (!result.matched) return res.status(result.status).json(result.body);
+    return res.status(result.status).json(result.body);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -555,61 +360,61 @@ app.get('/api/librarian/search', async (req, res) => {
 // Download a file — use app.use so the path after /file/ is captured in req.path
 app.use('/api/librarian/file', async (req, res) => {
   const relPath = req.path.replace(/^\//, '');
-  if (!relPath) return res.status(400).json({ error: 'No file path specified' });
-
   const candidates = [
     path.resolve(LIBRARIAN_SERVICE_ROOT, relPath),
     path.resolve(SCHEMA_ROOT, relPath),
   ];
-  const allowedRoots = [path.resolve(LIBRARIAN_SERVICE_ROOT), path.resolve(SCHEMA_ROOT)];
-
-  let absPath = null;
-  for (const candidate of candidates) {
-    if (!allowedRoots.some(root => candidate.startsWith(root))) continue;
+  const candidateRoots = [path.resolve(LIBRARIAN_SERVICE_ROOT), path.resolve(SCHEMA_ROOT)];
+  const existingCandidates = [];
+  for (const [index, candidate] of candidates.entries()) {
+    const relativePath = path.relative(candidateRoots[index], candidate);
+    if (relativePath === '' || relativePath === '..'
+      || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
+      existingCandidates.push(false);
+      continue;
+    }
     try {
       await fs.access(candidate);
-      absPath = candidate;
-      break;
+      existingCandidates.push(true);
     } catch {
-      // Try next candidate.
+      existingCandidates.push(false);
     }
   }
 
-  if (!absPath) {
-    return res.status(404).json({ error: 'File not found' });
-  }
-
-  try {
-    res.sendFile(absPath);
-  } catch (e) {
-    res.status(404).json({ error: 'File not found' });
-  }
+  const result = await fileDownloadRoutes.dispatch({
+    method: req.method,
+    path: new URL(req.originalUrl, 'http://localhost').pathname,
+    filePath: relPath,
+    candidateExists: existingCandidates
+  });
+  if (!result.matched) return res.status(404).json({ error: 'File not found' });
+  if (result.status !== 200) return res.status(result.status).json(result.body);
+  return res.sendFile(candidates[result.body.selectedIndex]);
 });
 
 
 async function loadPhysicalSchemaCatalog() {
   const files = await listFiles(SCHEMA_ROOT);
   const lifecycleByPath = await loadSchemaLifecycleByPath();
-  const schemas = files.map(async file => {
-    const meta = parseSchemaFilename(file.name);
-    if (!meta) return null;
+  const schemas = [];
+  for (const file of files) {
+    const meta = await schemaStructureService.parseFilename(file.name);
+    if (!meta) continue;
     const lifecycle = lifecycleByPath[file.path] || {
       activeFrom: null,
       rejectAfter: null,
       keepForDisplay: true,
     };
-    const structure = await extractStructureForFile(file.fullPath, meta.type);
-    return {
-      ...meta,
-      typeId: inferTypeIdFromSchema(meta),
-      path: file.path,
-      size: file.size,
-      mtime: file.mtime,
-      structure,
-      lifecycle,
-    };
-  });
-  const catalog = (await Promise.all(schemas)).filter(Boolean);
+    schemas.push({ file, meta, lifecycle });
+  }
+  const catalog = await Promise.all(schemas.map(async ({ file, meta, lifecycle }) => ({
+    ...meta,
+    path: file.path,
+    size: file.size,
+    mtime: file.mtime,
+    structure: await extractStructureForFile(file.fullPath, meta.type),
+    lifecycle,
+  })));
   for (const schema of catalog) {
     schema.lifecycle = await normalization.lifecycleDisplay(schema.lifecycle);
   }
@@ -680,7 +485,14 @@ app.get('/api/librarian/schemas', async (req, res) => {
   try {
     const physicalSchemas = await loadPhysicalSchemaCatalog();
     const subschemas = await loadSubschemaCatalog(physicalSchemas);
-    res.json({ schemas: [...physicalSchemas, ...subschemas], subschemas });
+    const result = await schemaCatalogRoutes.dispatch({
+      method: req.method,
+      path: '/api/librarian/schemas',
+      physicalSchemas,
+      subschemas
+    });
+    if (!result.matched) throw new Error('Pascalish Librarian schema-catalog route did not match');
+    res.status(result.status).json(result.body);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -688,13 +500,25 @@ app.get('/api/librarian/schemas', async (req, res) => {
 
 app.get('/api/librarian/schema-fields', async (req, res) => {
   try {
-    const schemaPath = typeof req.query.path === 'string' ? req.query.path.trim().replace(/\\/g, '/') : '';
-    if (!schemaPath) return res.status(400).json({ error: 'path is required' });
-    const schema = (await loadPhysicalSchemaCatalog()).find(item => item.path === schemaPath);
-    if (!schema) return res.status(404).json({ error: 'Schema not found' });
-    if (!schema.structure) return res.status(422).json({ error: 'Schema structure is unavailable' });
-    const availableFields = await schemaTreeService.collect(schema.structure);
-    res.json({ path: schema.path, availableFields });
+    const schemaPath = typeof req.query.path === 'string'
+      ? req.query.path.trim().replace(/\\/g, '/')
+      : '';
+    const schema = schemaPath
+      ? (await loadPhysicalSchemaCatalog()).find(item => item.path === schemaPath)
+      : null;
+    const availableFields = schema?.structure
+      ? await schemaTreeService.collect(schema.structure)
+      : [];
+    const result = await schemaFieldsRoutes.dispatch({
+      method: req.method,
+      path: '/api/librarian/schema-fields',
+      schemaPath,
+      found: Boolean(schema),
+      structureAvailable: Boolean(schema?.structure),
+      availableFields
+    });
+    if (!result.matched) throw new Error('Pascalish Librarian schema-field route did not match');
+    res.status(result.status).json(result.body);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -704,7 +528,13 @@ app.get('/api/librarian/subschemas', async (req, res) => {
   try {
     const physicalSchemas = await loadPhysicalSchemaCatalog();
     const subschemas = await loadSubschemaCatalog(physicalSchemas);
-    res.json({ subschemas });
+    const result = await schemaCatalogRoutes.dispatch({
+      method: req.method,
+      path: '/api/librarian/subschemas',
+      subschemas
+    });
+    if (!result.matched) throw new Error('Pascalish Librarian schema-catalog route did not match');
+    res.status(result.status).json(result.body);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -717,9 +547,23 @@ app.post('/api/librarian/subschemas', async (req, res) => {
       mutation: { operation: 'create', id: definition.id, definition }
     }));
     const subschema = subschemaCatalogEntry(parent, result.definition, projection);
-    res.status(201).json({ status: 'created', subschema });
+    const routeResult = await subschemaMutationRoutes.dispatch({
+      method: req.method,
+      path: '/api/librarian/subschemas',
+      id: definition.id,
+      subschema
+    });
+    if (!routeResult.matched) throw new Error('Pascalish Librarian subschema mutation route did not match');
+    return res.status(routeResult.status).json(routeResult.body);
   } catch (e) {
-    res.status(e.status || 400).json({ error: e.message });
+    const routeResult = await subschemaMutationRoutes.dispatch({
+      method: req.method,
+      path: '/api/librarian/subschemas',
+      error: e.message,
+      errorStatus: e.status || 400
+    });
+    if (!routeResult.matched) throw new Error('Pascalish Librarian subschema mutation route did not match');
+    return res.status(routeResult.status).json(routeResult.body);
   }
 });
 
@@ -735,9 +579,23 @@ app.put('/api/librarian/subschemas/:id', async (req, res) => {
       return { mutation: { operation: 'update', id: currentId, definition }, parent, projection };
     });
     const subschema = subschemaCatalogEntry(result.parent, result.definition, result.projection);
-    res.json({ status: 'updated', subschema });
+    const routeResult = await subschemaMutationRoutes.dispatch({
+      method: req.method,
+      path: '/api/librarian/subschemas/:id',
+      id: currentId,
+      subschema
+    });
+    if (!routeResult.matched) throw new Error('Pascalish Librarian subschema mutation route did not match');
+    return res.status(routeResult.status).json(routeResult.body);
   } catch (e) {
-    res.status(e.status || 400).json({ error: e.message });
+    const routeResult = await subschemaMutationRoutes.dispatch({
+      method: req.method,
+      path: '/api/librarian/subschemas/:id',
+      error: e.message,
+      errorStatus: e.status || 400
+    });
+    if (!routeResult.matched) throw new Error('Pascalish Librarian subschema mutation route did not match');
+    return res.status(routeResult.status).json(routeResult.body);
   }
 });
 
@@ -745,9 +603,22 @@ app.delete('/api/librarian/subschemas/:id', async (req, res) => {
   try {
     const id = String(req.params.id || '').trim().toLowerCase();
     await mutateSubschemas(async () => ({ mutation: { operation: 'delete', id } }));
-    res.json({ status: 'deleted', id });
+    const routeResult = await subschemaMutationRoutes.dispatch({
+      method: req.method,
+      path: '/api/librarian/subschemas/:id',
+      id
+    });
+    if (!routeResult.matched) throw new Error('Pascalish Librarian subschema mutation route did not match');
+    return res.status(routeResult.status).json(routeResult.body);
   } catch (e) {
-    res.status(e.status || 500).json({ error: e.message });
+    const routeResult = await subschemaMutationRoutes.dispatch({
+      method: req.method,
+      path: '/api/librarian/subschemas/:id',
+      error: e.message,
+      errorStatus: e.status || 500
+    });
+    if (!routeResult.matched) throw new Error('Pascalish Librarian subschema mutation route did not match');
+    return res.status(routeResult.status).json(routeResult.body);
   }
 });
 
@@ -756,19 +627,23 @@ app.get('/api/librarian/schema/:type/:name', async (req, res) => {
   const { type, name } = req.params;
   const version = req.query.version ? parseInt(req.query.version, 10) : null;
   try {
-    const files = await listFiles(SCHEMA_ROOT, '', (entry, relPath) => {
-      const meta = parseSchemaFilename(entry.name);
-      if (!meta) return false;
-      if (meta.type !== type.toLowerCase()) return false;
-      if (meta.name !== name) return false;
-      if (version && meta.version !== parseInt(version, 10)) return false;
-      return true;
+    const schemas = [];
+    for (const file of await listFiles(SCHEMA_ROOT)) {
+      const meta = await schemaStructureService.parseFilename(file.name);
+      if (!meta) continue;
+      schemas.push({ ...meta, fullPath: file.fullPath });
+    }
+    const result = await schemaLookupRoutes.dispatch({
+      method: req.method,
+      path: '/api/librarian/schema/:type/:name',
+      type,
+      name,
+      version: Number.isFinite(version) ? version : null,
+      schemas
     });
-    if (!files.length) return res.status(404).json({ error: 'Schema not found' });
-    // If multiple, pick highest version
-    files.sort((a, b) => (b.version || 0) - (a.version || 0));
-    const file = files[0];
-    res.sendFile(file.fullPath);
+    if (!result.matched) throw new Error('Pascalish Librarian schema-lookup route did not match');
+    if (result.status !== 200) return res.status(result.status).json(result.body);
+    return res.sendFile(schemas[result.body.selectedIndex].fullPath);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -840,161 +715,248 @@ async function mutateMapperRulesets(mutation) {
 app.get('/api/librarian/data-types', async (req, res) => {
   try {
     const types = await loadDataTypes();
-    res.json({ types });
+    const result = await dataTypeRoutes.dispatch({
+      method: req.method, path: '/api/librarian/data-types', types
+    });
+    if (!result.matched) throw new Error('Pascalish data-type route did not match');
+    return res.status(result.status).json(result.body);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
 app.post('/api/librarian/data-types', async (req, res) => {
+  const request = { ...req.body, method: req.method, path: '/api/librarian/data-types' };
   try {
+    const validation = await dataTypeRoutes.dispatch({ ...request, phase: 'validate' });
+    if (!validation.matched) throw new Error('Pascalish data-type route did not match');
+    if (validation.status !== 200) return res.status(validation.status).json(validation.body);
     const { id, label, isIso } = req.body || {};
-    if (!id || !label) return res.status(400).json({ error: 'id and label are required' });
     const creation = await normalization.createType({ id, label, isIso });
     const result = await mutateDataTypes({ operation: 'create', id: creation.id, record: creation.record });
-    res.json({ status: 'created', type: result.record });
+    const routeResult = await dataTypeRoutes.dispatch({ ...request, type: result.record });
+    return res.status(routeResult.status).json(routeResult.body);
   } catch (e) {
-    res.status(e.catalogDecision ? e.status : 500).json({ error: e.message });
+    const routeResult = await dataTypeRoutes.dispatch({
+      ...request, error: e.message, errorStatus: e.status || 500,
+      catalogDecision: e.catalogDecision ? 1 : 0
+    });
+    return res.status(routeResult.status).json(routeResult.body);
   }
 });
 
 app.delete('/api/librarian/data-types/:id', async (req, res) => {
+  const request = { method: req.method, path: '/api/librarian/data-types/:id', id: req.params.id };
   try {
     const id = String(req.params.id || '').trim().toLowerCase();
-    if (!id) return res.status(400).json({ error: 'id is required' });
-
+    const validation = await dataTypeRoutes.dispatch({ ...request, id, phase: 'validate' });
+    if (!validation.matched) throw new Error('Pascalish data-type route did not match');
+    if (validation.status !== 200) return res.status(validation.status).json(validation.body);
     await mutateDataTypes({ operation: 'delete', id });
-    res.json({ status: 'deleted', id });
+    const routeResult = await dataTypeRoutes.dispatch({ ...request, id });
+    return res.status(routeResult.status).json(routeResult.body);
   } catch (e) {
-    res.status(e.catalogDecision ? e.status : 500).json({ error: e.message });
+    const routeResult = await dataTypeRoutes.dispatch({
+      ...request, error: e.message, errorStatus: e.status || 500,
+      catalogDecision: e.catalogDecision ? 1 : 0
+    });
+    return res.status(routeResult.status).json(routeResult.body);
   }
 });
 
 app.post('/api/librarian/data-types/:id/rename', async (req, res) => {
+  const request = {
+    method: req.method, path: '/api/librarian/data-types/:id/rename',
+    id: req.params.id, newId: req.body?.newId
+  };
   try {
     const currentId = String(req.params.id || '').trim().toLowerCase();
     const nextId = String(req.body?.newId || '').trim().toLowerCase();
     const nextLabel = String(req.body?.label || '').trim();
-    if (!currentId) return res.status(400).json({ error: 'id is required' });
-    if (!nextId) return res.status(400).json({ error: 'newId is required' });
-
+    const validation = await dataTypeRoutes.dispatch({
+      ...request, id: currentId, newId: nextId, phase: 'validate'
+    });
+    if (!validation.matched) throw new Error('Pascalish data-type route did not match');
+    if (validation.status !== 200) return res.status(validation.status).json(validation.body);
     const result = await mutateDataTypes({
       operation: 'rename', id: currentId, nextId,
       patch: { label: nextLabel, isIso: req.body?.isIso }
     });
-    res.json({ status: 'renamed', type: result.record });
+    const routeResult = await dataTypeRoutes.dispatch({ ...request, type: result.record });
+    return res.status(routeResult.status).json(routeResult.body);
   } catch (e) {
-    res.status(e.catalogDecision ? e.status : 500).json({ error: e.message });
+    const routeResult = await dataTypeRoutes.dispatch({
+      ...request, error: e.message, errorStatus: e.status || 500,
+      catalogDecision: e.catalogDecision ? 1 : 0
+    });
+    return res.status(routeResult.status).json(routeResult.body);
   }
 });
 
 app.patch('/api/librarian/data-types/:id', async (req, res) => {
+  const request = { method: req.method, path: '/api/librarian/data-types/:id', id: req.params.id };
   try {
     const id = String(req.params.id || '').trim().toLowerCase();
-    if (!id) return res.status(400).json({ error: 'id is required' });
-
+    const validation = await dataTypeRoutes.dispatch({ ...request, id, phase: 'validate' });
+    if (!validation.matched) throw new Error('Pascalish data-type route did not match');
+    if (validation.status !== 200) return res.status(validation.status).json(validation.body);
     const result = await mutateDataTypes({ operation: 'update', id,
       patch: { label: req.body?.label, isIso: req.body?.isIso } });
-    res.json({ status: 'updated', type: result.record });
+    const routeResult = await dataTypeRoutes.dispatch({ ...request, type: result.record });
+    return res.status(routeResult.status).json(routeResult.body);
   } catch (e) {
-    res.status(e.catalogDecision ? e.status : 500).json({ error: e.message });
+    const routeResult = await dataTypeRoutes.dispatch({
+      ...request, error: e.message, errorStatus: e.status || 500,
+      catalogDecision: e.catalogDecision ? 1 : 0
+    });
+    return res.status(routeResult.status).json(routeResult.body);
   }
 });
 
 app.get('/api/librarian/mapper-rulesets', async (req, res) => {
   try {
     const rulesets = await loadMapperRulesets();
-    res.json({ rulesets });
+    const result = await mapperRulesetRoutes.dispatch({
+      method: req.method, path: '/api/librarian/mapper-rulesets', rulesets
+    });
+    if (!result.matched) throw new Error('Pascalish mapper-ruleset route did not match');
+    return res.status(result.status).json(result.body);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
 app.post('/api/librarian/mapper-rulesets', async (req, res) => {
+  const request = { method: req.method, path: '/api/librarian/mapper-rulesets' };
   try {
     const normalized = await normalization.ruleset(req.body || {});
     const result = await mutateMapperRulesets({ operation: 'create', id: normalized.id, record: normalized });
-    res.json({ status: 'created', ruleset: result.record });
+    const routeResult = await mapperRulesetRoutes.dispatch({ ...request, ruleset: result.record });
+    return res.status(routeResult.status).json(routeResult.body);
   } catch (e) {
-    res.status(e.catalogDecision ? e.status : 400).json({ error: e.message });
+    const routeResult = await mapperRulesetRoutes.dispatch({
+      ...request, error: e.message, errorStatus: e.status || 400,
+      catalogDecision: e.catalogDecision ? 1 : 0
+    });
+    return res.status(routeResult.status).json(routeResult.body);
   }
 });
 
 app.put('/api/librarian/mapper-rulesets/:id', async (req, res) => {
+  const request = {
+    method: req.method, path: '/api/librarian/mapper-rulesets/:id',
+    id: req.params.id
+  };
   try {
     const id = String(req.params.id || '').trim().toUpperCase();
-    if (!id) return res.status(400).json({ error: 'id is required' });
+    const validation = await mapperRulesetRoutes.dispatch({ ...request, id, phase: 'validate' });
+    if (!validation.matched) throw new Error('Pascalish mapper-ruleset route did not match');
+    if (validation.status !== 200) return res.status(validation.status).json(validation.body);
 
     const requestedId = await normalization.rulesetId(req.body?.id || id);
 
     const result = await mutateMapperRulesets({ operation: 'update', id, nextId: requestedId, patch: req.body || {} });
-    res.json({ status: 'updated', ruleset: result.record });
+    const routeResult = await mapperRulesetRoutes.dispatch({ ...request, id, ruleset: result.record });
+    return res.status(routeResult.status).json(routeResult.body);
   } catch (e) {
-    res.status(e.catalogDecision ? e.status : 400).json({ error: e.message });
+    const routeResult = await mapperRulesetRoutes.dispatch({
+      ...request, error: e.message, errorStatus: e.status || 400,
+      catalogDecision: e.catalogDecision ? 1 : 0
+    });
+    return res.status(routeResult.status).json(routeResult.body);
   }
 });
 
 app.delete('/api/librarian/mapper-rulesets/:id', async (req, res) => {
+  const request = {
+    method: req.method, path: '/api/librarian/mapper-rulesets/:id',
+    id: req.params.id
+  };
   try {
     const id = String(req.params.id || '').trim().toUpperCase();
-    if (!id) return res.status(400).json({ error: 'id is required' });
+    const validation = await mapperRulesetRoutes.dispatch({ ...request, id, phase: 'validate' });
+    if (!validation.matched) throw new Error('Pascalish mapper-ruleset route did not match');
+    if (validation.status !== 200) return res.status(validation.status).json(validation.body);
 
     await mutateMapperRulesets({ operation: 'delete', id });
-    res.json({ status: 'deleted', id });
+    const routeResult = await mapperRulesetRoutes.dispatch({ ...request, id });
+    return res.status(routeResult.status).json(routeResult.body);
   } catch (e) {
-    res.status(e.catalogDecision ? e.status : 500).json({ error: e.message });
+    const routeResult = await mapperRulesetRoutes.dispatch({
+      ...request, error: e.message, errorStatus: e.status || 500,
+      catalogDecision: e.catalogDecision ? 1 : 0
+    });
+    return res.status(routeResult.status).json(routeResult.body);
   }
 });
 
 app.delete('/api/librarian/schemas', async (req, res) => {
+  const routeRequest = {
+    method: req.method,
+    path: '/api/librarian/schemas',
+    schemaPath: String(req.body?.path || '').trim().replace(/\\/g, '/')
+  };
   try {
-    const relPath = String(req.body?.path || '').trim().replace(/\\/g, '/');
-    if (!relPath) return res.status(400).json({ error: 'path is required' });
-
-    const dependentSubschemas = (await loadSubschemas()).filter(item => item.parentSchemaPath === relPath);
-    if (dependentSubschemas.length > 0) {
-      return res.status(409).json({
-        error: `Schema is used by subschemas: ${dependentSubschemas.map(item => item.id).join(', ')}`
-      });
-    }
-
+    const relPath = routeRequest.schemaPath;
     const absPath = path.resolve(SCHEMA_ROOT, relPath);
-    if (!absPath.startsWith(path.resolve(SCHEMA_ROOT))) {
-      return res.status(403).json({ error: 'Access denied' });
+    let exists = true;
+    try { await fs.access(absPath); } catch (error) {
+      if (error.code === 'ENOENT') exists = false;
+      else throw error;
     }
-
+    const dependentIds = (await loadSubschemas())
+      .filter(item => item.parentSchemaPath === relPath).map(item => item.id);
+    const validation = await schemaOperationRoutes.dispatch({
+      ...routeRequest,
+      phase: 'validate',
+      safe: String(isPathWithinRoot(SCHEMA_ROOT, absPath)),
+      exists: String(exists),
+      hasDependents: String(dependentIds.length > 0),
+      dependentIds
+    });
+    if (!validation.matched) throw new Error('Pascalish schema-operation route did not match');
+    if (validation.status !== 200) return res.status(validation.status).json(validation.body);
     await fs.unlink(absPath);
     await mutateSchemaLifecycle('delete', relPath);
-
-    res.json({ status: 'deleted', path: relPath });
+    const result = await schemaOperationRoutes.dispatch(routeRequest);
+    return res.status(result.status).json(result.body);
   } catch (e) {
-    if (e.code === 'ENOENT') {
-      return res.status(404).json({ error: 'Schema not found' });
-    }
-    res.status(500).json({ error: e.message });
+    const result = await schemaOperationRoutes.dispatch({
+      ...routeRequest, error: e.message, notFound: e.code === 'ENOENT' ? 1 : 0
+    });
+    return res.status(result.status).json(result.body);
   }
 });
 
 app.post('/api/librarian/schemas/rename', async (req, res) => {
+  const routeRequest = {
+    method: req.method,
+    path: '/api/librarian/schemas/rename',
+    schemaPath: String(req.body?.path || '').trim().replace(/\\/g, '/'),
+    newName: String(req.body?.newName || '').trim()
+  };
   try {
-    const currentPath = String(req.body?.path || '').trim().replace(/\\/g, '/');
-    const newName = String(req.body?.newName || '').trim();
-    if (!currentPath) return res.status(400).json({ error: 'path is required' });
-    if (!newName) return res.status(400).json({ error: 'newName is required' });
-
+    const currentPath = routeRequest.schemaPath;
+    const newName = routeRequest.newName;
     const currentAbsPath = path.resolve(SCHEMA_ROOT, currentPath);
-    if (!currentAbsPath.startsWith(path.resolve(SCHEMA_ROOT))) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
-
     const currentDir = path.dirname(currentAbsPath);
     const currentExt = path.extname(currentAbsPath) || '.xsd';
     const nextFileName = newName.endsWith(currentExt) ? newName : `${newName}${currentExt}`;
     const nextAbsPath = path.resolve(currentDir, nextFileName);
-    if (!nextAbsPath.startsWith(path.resolve(SCHEMA_ROOT))) {
-      return res.status(403).json({ error: 'Access denied' });
+    let exists = true;
+    try { await fs.access(currentAbsPath); } catch (error) {
+      if (error.code === 'ENOENT') exists = false;
+      else throw error;
     }
-
+    const validation = await schemaOperationRoutes.dispatch({
+      ...routeRequest,
+      phase: 'validate',
+      safe: String(isPathWithinRoot(SCHEMA_ROOT, currentAbsPath)
+        && isPathWithinRoot(SCHEMA_ROOT, nextAbsPath)),
+      exists: String(exists)
+    });
+    if (!validation.matched) throw new Error('Pascalish schema-operation route did not match');
+    if (validation.status !== 200) return res.status(validation.status).json(validation.body);
     await fs.mkdir(path.dirname(nextAbsPath), { recursive: true });
     await fs.rename(currentAbsPath, nextAbsPath);
 
@@ -1004,13 +966,13 @@ app.post('/api/librarian/schemas/rename', async (req, res) => {
     await mutateSubschemas(async () => ({
       mutation: { operation: 'rename-parent', previousPath: currentPath, nextPath: nextRelPath }
     }));
-
-    res.json({ status: 'renamed', path: nextRelPath });
+    const result = await schemaOperationRoutes.dispatch({ ...routeRequest, nextPath: nextRelPath });
+    return res.status(result.status).json(result.body);
   } catch (e) {
-    if (e.code === 'ENOENT') {
-      return res.status(404).json({ error: 'Schema not found' });
-    }
-    res.status(500).json({ error: e.message });
+    const result = await schemaOperationRoutes.dispatch({
+      ...routeRequest, error: e.message, notFound: e.code === 'ENOENT' ? 1 : 0
+    });
+    return res.status(result.status).json(result.body);
   }
 });
 
@@ -1018,66 +980,77 @@ app.post('/api/librarian/schemas/rename', async (req, res) => {
 // :dest = 'schemas' (writes to SCHEMA_ROOT) or 'data' (writes to LIBRARIAN_SERVICE_ROOT)
 app.post('/api/librarian/upload/:dest', express.raw({ type: '*/*', limit: '50mb' }), async (req, res) => {
   const dest = req.params.dest;
-  if (dest !== 'schemas' && dest !== 'data') {
-    return res.status(400).json({ error: 'dest must be "schemas" or "data"' });
-  }
   const rawFilename = (req.get('x-filename') || '').trim();
-  if (!rawFilename) return res.status(400).json({ error: 'x-filename header is required' });
-  // Security: reject filenames with path separators or traversal sequences
-  if (/[/\\]/.test(rawFilename) || rawFilename.includes('..')) {
-    return res.status(400).json({ error: 'Invalid filename' });
-  }
   const targetDir = dest === 'schemas' ? SCHEMA_ROOT : LIBRARIAN_SERVICE_ROOT;
   const targetPath = path.join(targetDir, rawFilename);
-  // Final safety check: resolved path must stay inside targetDir
-  if (!path.resolve(targetPath).startsWith(path.resolve(targetDir))) {
-    return res.status(403).json({ error: 'Access denied' });
-  }
+  const routeRequest = {
+    method: req.method,
+    path: '/api/librarian/upload/:dest',
+    dest,
+    filename: rawFilename,
+    safe: isPathWithinRoot(targetDir, targetPath) ? 1 : 0,
+    size: req.body?.length || 0
+  };
+  const respond = async additional => {
+    const result = await uploadRoutes.dispatch({ ...routeRequest, ...additional });
+    if (!result.matched) throw new Error('Pascalish upload route did not match');
+    return res.status(result.status).json(result.body);
+  };
+  let filename;
+  let catalogName;
+  let isCatalogWrite = false;
+
+  const validation = await uploadRoutes.dispatch(routeRequest);
+  if (!validation.matched) return res.status(404).json({ error: 'Upload route not found' });
+  if (validation.status !== 200) return res.status(validation.status).json(validation.body);
   try {
-    const filename = process.platform === 'win32' ? rawFilename.toLowerCase().replace(/[ .]+$/, '') : rawFilename;
-    const catalogName = ['subschemas', 'schema-lifecycle', 'data-types', 'mapper-rulesets']
+    filename = process.platform === 'win32' ? rawFilename.toLowerCase().replace(/[ .]+$/, '') : rawFilename;
+    catalogName = ['subschemas', 'schema-lifecycle', 'data-types', 'mapper-rulesets']
       .find(name => filename === `${name}.json`);
-    if (dest === 'data' && catalogName) {
+    isCatalogWrite = dest === 'data' && Boolean(catalogName);
+    if (isCatalogWrite) {
       const content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(req.body);
       await catalogStore.writeText(catalogName, content);
     } else {
       await fs.mkdir(targetDir, { recursive: true });
       await fs.writeFile(targetPath, req.body);
     }
-    res.json({ status: 'ok', filename: rawFilename, dest, size: req.body.length });
+    return await respond({});
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return await respond({ error: e.message });
   }
 });
 
 app.post('/api/librarian/schema-lifecycle', async (req, res) => {
+  const routeRequest = {
+    method: req.method,
+    path: '/api/librarian/schema-lifecycle',
+    schemaPath: req.body?.path || ''
+  };
   try {
     const { path: schemaPath, activeFrom, rejectAfter, keepForDisplay } = req.body || {};
-    if (!schemaPath) {
-      return res.status(400).json({ error: 'path is required' });
-    }
-
     const files = await listFiles(SCHEMA_ROOT);
     const exists = files.some(file => file.path === schemaPath);
-    if (!exists) {
-      return res.status(404).json({ error: `Schema not found: ${schemaPath}` });
-    }
-
+    const validation = await schemaOperationRoutes.dispatch({
+      ...routeRequest, phase: 'validate', exists: String(exists)
+    });
+    if (!validation.matched) throw new Error('Pascalish schema-operation route did not match');
+    if (validation.status !== 200) return res.status(validation.status).json(validation.body);
     const lifecycle = await normalization.lifecycle({ activeFrom, rejectAfter, keepForDisplay });
     const result = await mutateSchemaLifecycle('set', schemaPath, { record: lifecycle });
-
-    res.json({
-      status: 'updated',
-      path: schemaPath,
-      lifecycle: await normalization.lifecycleDisplay(result.record),
+    const routeResult = await schemaOperationRoutes.dispatch({
+      ...routeRequest,
+      lifecycle: await normalization.lifecycleDisplay(result.record)
     });
+    return res.status(routeResult.status).json(routeResult.body);
   } catch (e) {
-    res.status(e.normalizationValidation ? 400 : 500).json({ error: e.message });
+    const routeResult = await schemaOperationRoutes.dispatch({
+      ...routeRequest,
+      error: e.message,
+      validation: e.normalizationValidation ? 1 : 0
+    });
+    return res.status(routeResult.status).json(routeResult.body);
   }
-});
-
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', service: 'data-librarian' });
 });
 
 const PORT = readEnvNumber('LIBRARIAN_PORT', 4300);
@@ -1093,6 +1066,17 @@ xsdParser = await createPascalishXsdParser({ schemaRoot: SCHEMA_ROOT });
 schemaTreeService = await createPascalishSchemaTreeService();
 schemaStructureService = await createPascalishSchemaStructureService();
 normalization = await createPascalishLibrarianNormalization();
+metadataRoutes = await createPascalishLibrarianMetadataRoutes();
+schemaFieldsRoutes = await createPascalishLibrarianSchemaFieldsRoutes();
+searchRoutes = await createPascalishLibrarianSearchRoutes();
+schemaLookupRoutes = await createPascalishLibrarianSchemaLookupRoutes();
+schemaCatalogRoutes = await createPascalishLibrarianSchemaCatalogRoutes();
+fileDownloadRoutes = await createPascalishLibrarianFileDownloadRoutes();
+subschemaMutationRoutes = await createPascalishLibrarianSubschemaMutationRoutes();
+dataTypeRoutes = await createPascalishLibrarianDataTypeRoutes();
+mapperRulesetRoutes = await createPascalishLibrarianMapperRulesetRoutes();
+schemaOperationRoutes = await createPascalishLibrarianSchemaOperationRoutes();
+uploadRoutes = await createPascalishLibrarianUploadRoutes();
 
 app.listen(PORT, () => {
   console.log(`[Librarian] Service running on http://localhost:${PORT}`);

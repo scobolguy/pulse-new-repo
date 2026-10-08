@@ -1,19 +1,14 @@
 {
-  "ok": true,
+  "ok": false,
   "service": "backend",
-  "state": "READY",
+  "state": "FAILED",
   "workflow": [
     "INIT",
-    "KILL_BACKEND_PROCESSES",
-    "SANITIZE_QUEUE_PERSISTENCE",
-    "CHECK_BACKEND",
-    "START_BACKEND",
-    "WAIT_BACKEND",
-    "READY"
+    "KILL_BACKEND_PROCESSES"
   ],
   "logs": [
     {
-      "at": "2026-10-07T14:57:31.647Z",
+      "at": "2026-10-08T13:34:18.903Z",
       "event": "workflow-start",
       "data": {
         "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
@@ -21,14 +16,14 @@
       }
     },
     {
-      "at": "2026-10-07T14:57:31.653Z",
+      "at": "2026-10-08T13:34:18.917Z",
       "event": "state",
       "data": {
         "state": "INIT"
       }
     },
     {
-      "at": "2026-10-07T14:57:31.659Z",
+      "at": "2026-10-08T13:34:19.020Z",
       "event": "state",
       "data": {
         "state": "KILL_BACKEND_PROCESSES",
@@ -37,96 +32,40 @@
       }
     },
     {
-      "at": "2026-10-07T14:57:31.700Z",
+      "at": "2026-10-08T13:34:22.813Z",
       "event": "subflow-complete",
       "data": {
         "subflow": "Kill all back end processes",
         "port": 4000,
-        "pids": [],
-        "results": [],
+        "pids": [
+          9528
+        ],
+        "results": [
+          {
+            "pid": 9528,
+            "killed": false,
+            "error": "Command failed: taskkill /PID 9528 /F /T\nERROR: The process with PID 900 (child process of PID 20132) could not be terminated.\r\nReason: The operation attempted is not supported.\r\r\nERROR: The process with PID 2816 (child process of PID 19996) could not be terminated.\r\nReason: Access is denied.\r\r\nERROR: The process with PID 4436 (child process of PID 17012) could not be terminated.\r\nReason: Access is denied.\r\r\nERROR: The process with PID 5140 (child process of PID 896) could not be terminated.\r\nReason: Access is denied.\r\r\nERROR: The process with PID 12716 (child process of PID 15808) could not be terminated.\r\nReason: Access is denied.\r\r\nERROR: The process with PID 20132 (child process of PID 9528) could not be terminated.\r\nReason: The operation attempted is not supported.\r\r\nERROR: The process with PID 19996 (child process of PID 9528) could not be terminated.\r\nReason: Access is denied.\r\r\nERROR: The process with PID 17012 (child process of PID 9528) could not be terminated.\r\nReason: Access is denied.\r\r\nERROR: The process with PID 896 (child process of PID 9528) could not be terminated.\r\nReason: Access is denied.\r\r\nERROR: The process with PID 15808 (child process of PID 9528) could not be terminated.\r\nReason: Access is denied.\r\r\nERROR: The process with PID 9528 (child process of PID 5340) could not be terminated.\r\nReason: Access is denied.\r\r\n"
+          }
+        ],
         "killedCount": 0
       }
     },
     {
-      "at": "2026-10-07T14:57:31.705Z",
-      "event": "state",
+      "at": "2026-10-08T13:34:22.827Z",
+      "event": "failed",
       "data": {
-        "state": "SANITIZE_QUEUE_PERSISTENCE",
-        "subflow": "Sanitize queue persistence files"
-      }
-    },
-    {
-      "at": "2026-10-07T14:57:32.614Z",
-      "event": "subflow-complete",
-      "data": {
-        "subflow": "Sanitize queue persistence files",
-        "queueManagers": 2,
-        "quarantinedMessageFiles": 0,
-        "quarantinedCounterFiles": 0,
-        "sanitizedOperationLogs": 0,
-        "skippedOperationLogs": 0,
-        "droppedOperationLines": 0,
-        "scannedMessageFiles": 500,
-        "capped": true,
-        "details": [
-          {
-            "queueManager": "qm-primary",
-            "quarantinedMessageFiles": 0,
-            "quarantinedCounterFiles": 0,
-            "sanitizedOperationLogs": 0,
-            "droppedOperationLines": 0
-          }
-        ]
-      }
-    },
-    {
-      "at": "2026-10-07T14:57:32.618Z",
-      "event": "state",
-      "data": {
-        "state": "CHECK_BACKEND",
-        "url": "http://127.0.0.1:4000/api/authz/me?userId=system-admin"
-      }
-    },
-    {
-      "at": "2026-10-07T14:57:32.720Z",
-      "event": "backend-started",
-      "data": {
-        "command": "node --env-file=.env.local backend.mjs",
-        "pid": 17544,
-        "attempt": 1
-      }
-    },
-    {
-      "at": "2026-10-07T14:57:32.727Z",
-      "event": "state",
-      "data": {
-        "state": "WAIT_BACKEND",
-        "url": "http://127.0.0.1:4000/api/authz/me?userId=system-admin",
-        "timeoutMs": 36000,
-        "attempt": 1
-      }
-    },
-    {
-      "at": "2026-10-07T14:57:55.468Z",
-      "event": "complete",
-      "data": {
-        "ok": true,
+        "ok": false,
         "service": "backend",
-        "state": "READY",
+        "state": "FAILED",
         "workflow": [
           "INIT",
-          "KILL_BACKEND_PROCESSES",
-          "SANITIZE_QUEUE_PERSISTENCE",
-          "CHECK_BACKEND",
-          "START_BACKEND",
-          "WAIT_BACKEND",
-          "READY"
+          "KILL_BACKEND_PROCESSES"
         ],
-        "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin"
+        "error": "Unable to stop existing backend process(es) on port 4000"
       }
     }
   ],
-  "updatedAt": "2026-10-07T14:57:55.474Z",
-  "error": null,
+  "updatedAt": "2026-10-08T13:34:22.834Z",
+  "error": "Unable to stop existing backend process(es) on port 4000",
   "backendUrl": "http://127.0.0.1:4000/api/authz/me?userId=system-admin"
 }

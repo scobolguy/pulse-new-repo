@@ -6,6 +6,8 @@ The canonical config manifest is [data/legacyswift-mt-manifest.json](data/legacy
 
 Layout and field metadata are owned by Data Librarian schemas under `data/schemas`. Map files should contain mapping rules only.
 
+At runtime, the Data Librarian's Pascalish schema-structure program recognizes schema filenames, builds JSON/JSON Schema/copybook trees, and supplies SWIFT field defaults. The JavaScript adapter retains the HTTP and filesystem boundary.
+
 ## Envelope
 All three message types use the standard FIN envelope:
 
@@ -144,4 +146,3 @@ For all three templates, keep target names consistent:
 - MT103+ = structured customer payment
 - MT202 = bank-to-bank transfer
 - MT202 COV = bank-to-bank cover transfer with originator and beneficiary detail
-

@@ -69,7 +69,12 @@ async function loadView(requestPayload) {
     TreeItem: class { constructor(label, collapsibleState) { this.label = label; this.collapsibleState = collapsibleState } },
     TreeItemCollapsibleState: { None: 0, Expanded: 2 },
     ThemeIcon: class { constructor(id) { this.id = id } },
-    EventEmitter: class { fire() {} },
+    EventEmitter: class {
+      constructor() { this.fireCount = 0; this.event = () => {} }
+      fire() { this.fireCount++ }
+      dispose() { this.disposed = true }
+    },
+    Uri: { joinPath: (_base, ...parts) => parts.join('/') },
     window: { showErrorMessage() {} },
     workspace: {
       workspaceFolders: [{ uri: { fsPath: path.resolve(fileURLToPath(new URL('../..', import.meta.url))) } }],
@@ -81,11 +86,168 @@ async function loadView(requestPayload) {
       ? { readDistributedNetwork } : require(name),
     module: { exports: {} }, URL, URLSearchParams, Buffer,
   })
-  vm.runInContext(`${source}\nmodule.exports.test = { PulseInfrastructureTreeProvider, getDistributedNetworkItems, getMessageBrokerItems };`, context)
+  vm.runInContext(`${source}\nmodule.exports.test = { activate, CatalogStudioTreeProvider, PulseInfrastructureTreeProvider, getDistributedNetworkItems, getMessageBrokerItems, getLibrarianDataTypes, registerDataTypeMessages, getCatalogStudioHostHtml, vscode };`, context)
   context.requestPayload = requestPayload
-  vm.runInContext('requestJson = async () => { if (requestPayload instanceof Error) throw requestPayload; return requestPayload; };', context)
+  vm.runInContext('requestJson = async (...args) => { if (requestPayload && requestPayload.name === "Error") throw requestPayload; if (typeof requestPayload === "function") return requestPayload(...args); return requestPayload; };', context)
   return context.module.exports.test
 }
+
+test('left-hand Pulse Studio tree shows Data Mapper beside Data Librarian and lists its data types', async () => {
+  const view = await loadView({ types: [
+    { id: 'pacs.008', label: 'PACS.008', isIso: true },
+    { id: 'device-descriptor', label: 'Device Descriptor', isIso: false },
+  ] })
+  const provider = new view.CatalogStudioTreeProvider()
+  const roots = await provider.getChildren()
+  assert.equal(roots.length, 2)
+  assert.equal(roots[0].label, 'Data Librarian')
+  assert.equal(roots[0].collapsibleState, 2)
+  assert.equal(roots[1].label, 'Data Mapper')
+  assert.equal(roots[1].collapsibleState, 0)
+  assert.equal(roots[1].command.command, 'pulseCatalogStudio.openDataMapper')
+  assert.equal(provider.getTreeItem(roots[0]), roots[0])
+  const children = await provider.getChildren(roots[0])
+  assert.deepEqual(Array.from(children, item => item.label), ['PACS.008', 'Device Descriptor'])
+  assert.deepEqual(Array.from(children, item => item.id), ['data-type:pacs.008', 'data-type:device-descriptor'])
+  assert.equal(children[0].description, 'pacs.008 (ISO)')
+  assert.equal(children[1].description, 'device-descriptor')
+  assert.equal(children[0].collapsibleState, 0)
+  assert.equal((await provider.getChildren(children[0])).length, 0)
+  assert.equal((await provider.getChildren(roots[1])).length, 0)
+  provider.refresh()
+  assert.equal(provider._onDidChangeTreeData.fireCount, 1)
+  provider.dispose()
+  assert.equal(provider._onDidChangeTreeData.disposed, true)
+})
+
+test('left-hand Data Librarian tree shows empty, unavailable and malformed registries explicitly', async () => {
+  for (const [payload, label, detail] of [
+    [{ types: [] }, 'No data types registered'],
+    [new Error('Librarian offline'), 'Data Librarian unavailable', /Librarian offline/],
+    [{ types: [{ label: 'Missing ID' }] }, 'Data Librarian unavailable', /invalid data type/],
+  ]) {
+    const view = await loadView(payload)
+    const provider = new view.CatalogStudioTreeProvider()
+    const [root] = await provider.getChildren()
+    const children = await provider.getChildren(root)
+    assert.equal(children.length, 1)
+    assert.equal(children[0].label, label)
+    if (detail) assert.match(children[0].tooltip, detail)
+  }
+})
+
+test('Pulse Studio sidebar contribution and activation both register a tree with a refresh command', async () => {
+  const manifest = JSON.parse(await fs.readFile(new URL('../../tools/catalog-studio-vscode/package.json', import.meta.url), 'utf8'))
+  const sidebar = manifest.contributes.views.pulseCatalogStudio.find(view => view.id === 'pulseCatalogStudio.sidebar')
+  assert.equal(sidebar.type, 'tree')
+  assert.ok(manifest.contributes.commands.some(command => command.command === 'pulseCatalogStudio.refreshDataLibrarian'))
+  assert.ok(manifest.contributes.menus['view/title'].some(menu =>
+    menu.command === 'pulseCatalogStudio.refreshDataLibrarian' && menu.when === 'view == pulseCatalogStudio.sidebar'))
+
+  const view = await loadView({ types: [] })
+  const registrations = new Map()
+  const commands = new Map()
+  view.vscode.languages = { createDiagnosticCollection: () => ({ dispose() {} }) }
+  view.vscode.window.registerTreeDataProvider = (id, provider) => {
+    registrations.set(id, provider)
+    return { dispose() {} }
+  }
+  view.vscode.window.registerCustomTextEditorProvider = () => ({ dispose() {} })
+  view.vscode.commands = { registerCommand: (id, handler) => {
+    commands.set(id, handler)
+    return { dispose() {} }
+  } }
+  const context = { extensionUri: '/extension', subscriptions: [] }
+  view.activate(context)
+  const provider = registrations.get(sidebar.id)
+  assert.ok(provider instanceof view.CatalogStudioTreeProvider)
+  assert.ok(registrations.has('pulseCatalogStudio.infrastructure'))
+  assert.ok(context.subscriptions.includes(provider))
+  commands.get('pulseCatalogStudio.refreshDataLibrarian')()
+  assert.equal(provider._onDidChangeTreeData.fireCount, 1)
+})
+
+test('Pulse Studio webviews use VS Code-only routes without browser links', async () => {
+  const view = await loadView({ types: [] })
+  const webview = {
+    cspSource: 'vscode-resource:',
+    asWebviewUri: value => value,
+  }
+  const flowDesignerHtml = view.getCatalogStudioHostHtml(webview, 'extension')
+  const dataMapperHtml = view.getCatalogStudioHostHtml(webview, 'extension', 'data-mapper?host=vscode')
+
+  assert.match(flowDesignerHtml, /src="http:\/\/localhost:5173\/flow-designer\?host=vscode"/)
+  assert.match(dataMapperHtml, /src="http:\/\/localhost:5173\/data-mapper\?host=vscode"/)
+  assert.doesNotMatch(flowDesignerHtml, /Open in Browser|Open Pulse Studio/)
+  assert.doesNotMatch(dataMapperHtml, /Open in Browser|Open Pulse Studio/)
+})
+
+test('Pulse Studio loads all Librarian data types through the configured API with a direct-service fallback', async () => {
+  const urls = []
+  const view = await loadView(async url => {
+    urls.push(url)
+    if (urls.length === 1) throw new Error('Aggregator unavailable')
+    return { types: [
+      { id: 'pacs.008', label: 'PACS.008', isIso: true },
+      { id: 'device-descriptor', label: 'Device Descriptor', isIso: false },
+    ] }
+  })
+  const types = await view.getLibrarianDataTypes()
+  assert.deepEqual(urls, [
+    'http://127.0.0.1:4000/api/librarian/data-types',
+    'http://127.0.0.1:4300/api/librarian/data-types',
+  ])
+  assert.deepEqual(JSON.parse(JSON.stringify(types)), [
+    { id: 'pacs.008', label: 'PACS.008', isIso: true },
+    { id: 'device-descriptor', label: 'Device Descriptor', isIso: false },
+  ])
+})
+
+test('Pulse Studio displays Librarian loading failures and rejects malformed records', async () => {
+  const failedView = await loadView(new Error('Librarian offline'))
+  await assert.rejects(failedView.getLibrarianDataTypes(), /Data Librarian types are unavailable.*Librarian offline/)
+  let receiveMessage
+  const responses = []
+  failedView.registerDataTypeMessages({
+    onDidReceiveMessage: handler => { receiveMessage = handler },
+    postMessage: message => { responses.push(message) },
+  })
+  await receiveMessage({ type: 'loadDataTypes', requestId: 8 })
+  assert.equal(responses[0].type, 'dataTypesFailed')
+  assert.equal(responses[0].requestId, 8)
+  assert.match(responses[0].message, /Librarian offline/)
+
+  const malformedView = await loadView({ types: [{ label: 'Missing ID' }] })
+  await assert.rejects(malformedView.getLibrarianDataTypes(), /invalid data type at index 0/)
+})
+
+test('Pulse Studio webview messages return loaded data types with their request ID', async () => {
+  const view = await loadView({ types: [{ id: 'example', label: 'Example', isIso: false }] })
+  let receiveMessage
+  const responses = []
+  view.registerDataTypeMessages({
+    onDidReceiveMessage: handler => { receiveMessage = handler },
+    postMessage: message => { responses.push(message) },
+  })
+  await receiveMessage({ type: 'loadDataTypes', requestId: 7 })
+  assert.deepEqual(JSON.parse(JSON.stringify(responses[0])), {
+    type: 'dataTypesLoaded',
+    requestId: 7,
+    types: [{ id: 'example', label: 'Example', isIso: false }],
+  })
+})
+
+test('Pulse Studio renders the Librarian data type list beneath its heading', async () => {
+  const view = await loadView({})
+  const html = view.getCatalogStudioHostHtml({
+    asWebviewUri: uri => uri,
+    cspSource: 'vscode-resource:',
+  }, '/extension')
+  assert.ok(html.indexOf('class="brand-title">Pulse Studio') < html.indexOf('Data Librarian Types'))
+  assert.match(html, /id="refreshTypes"/)
+  assert.match(html, /id="typesList"/)
+  assert.match(html, /aria-live="polite"/)
+})
 
 test('infrastructure keeps Network and adds cache sibling with names and IPs regardless of confidence', async () => {
   const view = await loadView(page([device('Bedroom'), device('Den', 'CONFLICTING')], 2, '', '1', false))

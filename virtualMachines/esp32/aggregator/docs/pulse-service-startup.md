@@ -1,22 +1,28 @@
 # Pulse Service Startup
 
-Pulse should run one always-on Windows service: `PulseAggregator`.
+Pulse should run one always-on Windows service: `PulseAggregator`. The backend supervises the Data Librarian and Data Mapper companion services by default so both are available whenever Pulse starts.
 
-That service is the gateway/supervisor only. It should not start broker, mapper, librarian, MCP, queue workers, or auxiliary services during Windows service boot. Those processes are started on demand through the gateway runtime service manager.
+The gateway remains lean: the Librarian and Mapper are the always-on child services. Broker, MCP, queue workers, and other auxiliary services remain on-demand through the gateway runtime service manager.
 
 ## Recommended Model
 
 - Keep `PulseAggregator` installed.
 - Reinstall or repair it with `scripts/windows/repair-pulse-service.ps1` after service-runner changes.
-- Start child services with `scripts/windows/start-pulse-stack.ps1` or `npm run pulse:stack:start`.
+- Start optional child services with `scripts/windows/start-pulse-stack.ps1` or `npm run pulse:stack:start`. The Librarian and Mapper are already started and supervised by the backend.
 - Check child services with `scripts/windows/status-pulse-stack.ps1` or `npm run pulse:stack:status`.
 - Stop child services with `scripts/windows/stop-pulse-stack.ps1` or `npm run pulse:stack:stop`.
 
+### Start backend services at user login
+
+For automatic startup without enabling the Windows service, create a shortcut to `start-pulse.bat` in the current user's Windows Startup folder and set its arguments to `--backends-only`. This mode launches the backend startup shell asynchronously, starts the gateway if needed, and ensures the broker, queue manager, Mapper, and Librarian are healthy. Startup logs are written to `data\logs\backend-startup.log`.
+
+This runs at user login (not before login). The regular `start-pulse.bat` invocation still starts the full application stack.
+
 ## Why
 
-The old big-bang startup path made the Windows service responsible for too many child processes at once. A failure in mapper, librarian, broker, MCP, SQL, or queue workers could make the whole service hard to restart or diagnose.
+The old big-bang startup path made the Windows service responsible for too many child processes at once. A failure in broker, MCP, SQL, or queue workers could make the whole service hard to restart or diagnose.
 
-The gateway-only service is smaller and more reliable. It binds port `4000`, exposes `/health`, and starts child processes only when requested or required.
+The gateway binds port `4000` and exposes `/health`. It supervises the Librarian on port `4300` and Mapper on port `4200`, checks their `/health` endpoints, and restarts them after failures. Other child processes start only when requested.
 
 ## Normal Recovery
 
@@ -44,6 +50,8 @@ If the gateway has not yet been repaired to allow localhost service-control requ
 - Queue manager: `4100`
 - Mapper: `4200`
 - Librarian: `4300`
+
+Set `PULSE_LIBRARIAN_AUTOSTART=false` or `PULSE_MAPPER_AUTOSTART=false` to opt out of either service in a development run. The Windows service runner explicitly enables both.
 
 ## Service Control API
 

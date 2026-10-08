@@ -24,6 +24,12 @@ if not exist "%AGGREGATOR_DIR%" (
 
 cd /d "%AGGREGATOR_DIR%"
 
+if /I "%~1"=="--backends-only" (
+  echo [pulse] Starting backend startup asynchronously...
+  start "" /min powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%AGGREGATOR_DIR%\scripts\windows\start-pulse-backends.ps1"
+  exit /b 0
+)
+
 where node >nul 2>nul
 if errorlevel 1 (
   echo [pulse] ERROR: Node.js is not installed or not on PATH.

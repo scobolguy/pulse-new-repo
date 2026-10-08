@@ -27,9 +27,9 @@ $env:PULSE_RUNTIME_DATA_ROOT = $DataRoot
 $env:PULSE_BACKEND_ROLE = $Role
 $env:PULSE_START_POLICY = 'lazy'
 
-# The Windows service should be the small, reliable gateway/supervisor only.
-# Child services are started on demand through /api/runtime/services or by start-pulse-stack.ps1.
-$env:BACKEND_AUX_SERVICES_AUTOSTART = '0'
+# Keep the gateway lean while always supervising the Librarian and Mapper.
+$env:PULSE_LIBRARIAN_AUTOSTART = '1'
+$env:PULSE_MAPPER_AUTOSTART = '1'
 $env:BACKEND_WORKER_AUTOSTART = '0'
 $env:PULSE_MCP_AUTOSTART = '0'
 $env:PULSE_SERVICE_CONTROL_LOCAL_BYPASS = '1'

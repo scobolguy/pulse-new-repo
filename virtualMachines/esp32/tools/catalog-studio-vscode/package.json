@@ -67,6 +67,15 @@
         "title": "Pulse: New Visual Flow Document"
       },
       {
+        "command": "pulseCatalogStudio.refreshDataLibrarian",
+        "title": "Pulse: Refresh Data Librarian",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "pulseCatalogStudio.openDataMapper",
+        "title": "Pulse: Open Data Mapper"
+      },
+      {
         "command": "pulseCatalogStudio.refreshInfrastructure",
         "title": "Pulse: Refresh Infrastructure Tree",
         "icon": "$(refresh)"
@@ -74,6 +83,11 @@
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "pulseCatalogStudio.refreshDataLibrarian",
+          "when": "view == pulseCatalogStudio.sidebar",
+          "group": "navigation"
+        },
         {
           "command": "pulseCatalogStudio.refreshInfrastructure",
           "when": "view == pulseCatalogStudio.infrastructure",
@@ -140,7 +154,8 @@
         },
         {
           "id": "pulseCatalogStudio.sidebar",
-          "name": "Pulse Studio"
+          "name": "Pulse Studio",
+          "type": "tree"
         }
       ]
     }

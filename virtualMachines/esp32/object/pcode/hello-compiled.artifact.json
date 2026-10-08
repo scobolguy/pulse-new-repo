@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "compiledAt": "2026-10-05T17:13:30.269Z",
+  "compiledAt": "2026-10-08T05:51:35.740Z",
   "compilerPipeline": "pascalish-g4",
   "serviceId": "hello",
   "runtimeUnit": {
@@ -42,8 +42,7 @@
         "types": [],
         "classes": [],
         "methodImpls": [],
-        "libraries": [],
-        "librarianImports": []
+        "libraries": []
       },
       "block": {
         "type": "Block",
@@ -93,10 +92,10 @@
       }
     ],
     "libraries": [],
-    "librarianImports": [],
     "systems": [],
     "databases": [],
     "tables": [],
+    "librarianImports": [],
     "sourceLocation": {
       "sourceFile": "",
       "sourceLanguage": "pascalish",
@@ -125,8 +124,8 @@
           "transformRule": "output := 'hello, world';"
         }
       ],
-      "createdAt": "2026-10-05T17:13:30.269Z",
-      "updatedAt": "2026-10-05T17:13:30.269Z"
+      "createdAt": "2026-10-08T05:51:35.741Z",
+      "updatedAt": "2026-10-08T05:51:35.741Z"
     }
   ],
   "dataMappings": [],
@@ -142,7 +141,7 @@
   "pcodeText": "# Auto-generated from ANTLR Pascalish grammar\nJMP MAIN\nMAIN:\nROUTE_MATCH_QUEUE \"hello.in\"\nJZ ROUTER_SKIP_1\nROUTE_EVAL_WHEN \"output := 1;\"\nJZ OUT_SKIP_2\nROUTE_TRANSFORM \"output := 'hello, world';\"\nROUTE_EMIT \"hello.out\"\nOUT_SKIP_2:\nROUTER_SKIP_1:\nHALT\n",
   "programMap": {
     "version": 1,
-    "generatedAt": "2026-10-05T17:13:30.267Z",
+    "generatedAt": "2026-10-08T05:51:35.738Z",
     "serviceId": "hello",
     "runtimeUnit": {
       "kind": "program",
@@ -271,7 +270,8 @@
     "classDeclarations": [],
     "entryLabel": "MAIN",
     "libraries": [],
-    "mapperImports": []
+    "mapperImports": [],
+    "librarianImports": []
   },
   "ir": {
     "typeDeclarations": [],

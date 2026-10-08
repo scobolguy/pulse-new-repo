@@ -49,6 +49,107 @@ async function fixture(t) {
   throw new Error(`Librarian startup timeout: ${errors}`);
 }
 
+test('metadata routes are dispatched by Pascalish while unrelated routes fall through', async t => {
+  const { origin } = await fixture(t);
+  const files = await fetch(`${origin}/api/librarian/files`);
+  assert.equal(files.status, 200);
+  assert.ok(Array.isArray((await files.json()).files));
+
+  const health = await fetch(`${origin}/health`);
+  assert.equal(health.status, 200);
+  assert.deepEqual(await health.json(), { status: 'ok', service: 'data-librarian' });
+
+  const base = await fetch(`${origin}/api/librarian/llm/base`);
+  assert.equal(base.status, 200);
+  assert.equal((await base.json()).service, 'data-librarian');
+
+  const listing = await fetch(`${origin}/api/librarian/llm/actions`);
+  assert.equal(listing.status, 200);
+  const result = await listing.json();
+  assert.equal(result.actionCount, result.actions.length);
+  assert.ok(result.actions.some(action => action.id === 'listSchemas'));
+
+  const action = await fetch(`${origin}/api/librarian/llm/actions/listSchemas`);
+  assert.equal(action.status, 200);
+  assert.equal((await action.json()).action.id, 'listSchemas');
+  const missing = await fetch(`${origin}/api/librarian/llm/actions/not-an-action`);
+  assert.equal(missing.status, 404);
+  assert.deepEqual(await missing.json(), { error: 'Unknown librarian action: not-an-action' });
+
+  const fallthrough = await fetch(`${origin}/not-a-librarian-route`);
+  assert.equal(fallthrough.status, 404);
+});
+
+test('Pascalish file search filters case-insensitive names and extensions across batches', async t => {
+  const { origin, root } = await fixture(t);
+  const searchRoot = path.join(root, 'services', 'librarian', 'search-fixture');
+  await fs.mkdir(searchRoot, { recursive: true });
+  const names = Array.from({ length: 129 }, (_, index) => `Record-${index}.json`);
+  names.push('Record-10.txt');
+  await Promise.all(names.map(name => fs.writeFile(path.join(searchRoot, name), 'fixture')));
+
+  const response = await fetch(`${origin}/api/librarian/search?q=RECORD-1&ext=.json`);
+  assert.equal(response.status, 200);
+  const { files } = await response.json();
+  const expected = names.filter(name => name.toLowerCase().includes('record-1') && name.endsWith('.json'))
+    .map(name => `search-fixture/${name}`);
+  assert.deepEqual(
+    files.filter(file => file.path.startsWith('search-fixture/')).map(file => file.path).sort(),
+    expected.sort()
+  );
+  assert.equal(files.some(file => file.path === 'search-fixture/Record-10.txt'), false);
+});
+
+test('Pascalish schema lookup selects the highest or requested version', async t => {
+  const { origin, catalogRoot } = await fixture(t);
+  const schemasRoot = path.join(catalogRoot, 'schemas');
+  await Promise.all([
+    fs.writeFile(path.join(schemasRoot, 'lookup.v1.json'), '{"selected":"v1"}'),
+    fs.writeFile(path.join(schemasRoot, 'lookup.v3.json'), '{"selected":"v3"}'),
+    fs.writeFile(path.join(schemasRoot, 'lookup.v2.json'), '{"selected":"v2"}')
+  ]);
+
+  const latest = await fetch(`${origin}/api/librarian/schema/json/lookup`);
+  assert.equal(latest.status, 200);
+  assert.deepEqual(await latest.json(), { selected: 'v3' });
+  const requested = await fetch(`${origin}/api/librarian/schema/json/lookup?version=1`);
+  assert.equal(requested.status, 200);
+  assert.deepEqual(await requested.json(), { selected: 'v1' });
+  const zeroVersion = await fetch(`${origin}/api/librarian/schema/json/lookup?version=0`);
+  assert.equal(zeroVersion.status, 200);
+  assert.deepEqual(await zeroVersion.json(), { selected: 'v3' });
+  const missing = await fetch(`${origin}/api/librarian/schema/json/lookup?version=9`);
+  assert.equal(missing.status, 404);
+  assert.deepEqual(await missing.json(), { error: 'Schema not found' });
+});
+
+test('Pascalish file-download route selects existing files and reports missing paths', async t => {
+  const { origin, catalogRoot } = await fixture(t);
+  const serviceFile = path.join(catalogRoot, 'download.txt');
+  const schemaFile = path.join(catalogRoot, 'schemas', 'download.json');
+  const outsideSchemaRoot = path.join(catalogRoot, 'outside-schema-root.txt');
+  await fs.writeFile(serviceFile, 'service-file');
+  await fs.writeFile(schemaFile, '{"schema":true}');
+  await fs.writeFile(outsideSchemaRoot, 'must-not-be-resolved-from-the-schema-root');
+
+  const serviceResponse = await fetch(`${origin}/api/librarian/file/download.txt`);
+  assert.equal(serviceResponse.status, 200);
+  assert.equal(await serviceResponse.text(), 'service-file');
+  const schemaResponse = await fetch(`${origin}/api/librarian/file/download.json`);
+  assert.equal(schemaResponse.status, 200);
+  assert.deepEqual(await schemaResponse.json(), { schema: true });
+
+  const missing = await fetch(`${origin}/api/librarian/file/missing.txt`);
+  assert.equal(missing.status, 404);
+  assert.deepEqual(await missing.json(), { error: 'File not found' });
+  const traversal = await fetch(`${origin}/api/librarian/file/%2e%2e%2foutside-schema-root.txt`);
+  assert.equal(traversal.status, 404);
+  assert.deepEqual(await traversal.json(), { error: 'File not found' });
+  const empty = await fetch(`${origin}/api/librarian/file`);
+  assert.equal(empty.status, 400);
+  assert.deepEqual(await empty.json(), { error: 'No file path specified' });
+});
+
 test('HTTP catalog errors never silently reset persisted data; valid raw imports use Pascalish storage', async t => {
   const { origin, root, catalogRoot, legacy } = await fixture(t);
   const get = endpoint => fetch(`${origin}${endpoint}`);

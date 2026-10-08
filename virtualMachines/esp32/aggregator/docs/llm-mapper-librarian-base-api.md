@@ -57,3 +57,4 @@ For direct same-type moves, conversion can be blank.
 
 - These endpoints are additive and do not change existing librarian/mapper APIs.
 - They can be accessed directly from service ports or through backend proxy routes under the same `/api/librarian/*` and `/api/mapper/*` paths.
+- Librarian HTTP route policy is being moved into small Pascalish modules; JavaScript retains transport, filesystem access, and file delivery.
