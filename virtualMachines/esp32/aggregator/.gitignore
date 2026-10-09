@@ -65,3 +65,7 @@ data/qm-secondary/operations.jsonl
 
 # Built UI assets
 public/assets/
+
+# Locally generated device credentials and their encryption key
+data/.credential-key
+data/camera-credentials.json
