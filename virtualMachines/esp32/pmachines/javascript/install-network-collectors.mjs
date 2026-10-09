@@ -3,13 +3,18 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { compilePascalishProgramWithAntlr } from '../../aggregator/scripts/compile-pascalish-program-antlr-to-pcode.mjs';
 import { attachPcodeSignature } from '../../aggregator/scripts/pcode-signing.mjs';
 
 const root = new URL('../../', import.meta.url);
-const configPath = new URL('config/federated-device-cache.json', root);
-const config = JSON.parse(await fs.readFile(configPath, 'utf8'));
-const origin = new URL(process.argv[2] || process.env.JS_PMACHINE_URL || 'http://127.0.0.1:4111');
+export async function installNetworkCollectors({
+  origin: target = 'http://127.0.0.1:4111',
+  config,
+  fetchImpl = fetch, logger = console
+} = {}) {
+config ??= JSON.parse(await fs.readFile(new URL('config/federated-device-cache.json', root), 'utf8'));
+const origin = new URL(target);
 if (!['http:', 'https:'].includes(origin.protocol) || origin.pathname !== '/' || origin.search || origin.hash) {
   throw new Error('JS PMachine URL must be an HTTP(S) origin');
 }
@@ -42,9 +47,10 @@ for (const [protocol, port] of Object.entries(udpPorts)) {
 if (udpPorts.tuya === udpPorts.ssdp) throw new Error('Tuya and SSDP UDP ports must be distinct');
 
 async function request(path, values) {
-  const response = await fetch(new URL(path, origin), values
-    ? { method: 'POST', body: new URLSearchParams(values) }
-    : undefined);
+  const response = await fetchImpl(new URL(path, origin), {
+    ...(values ? { method: 'POST', body: new URLSearchParams(values) } : {}),
+    signal: AbortSignal.timeout(30000)
+  });
   const text = await response.text();
   if (!response.ok) throw new Error(`${path}: HTTP ${response.status}: ${text}`);
   return text;
@@ -69,7 +75,6 @@ async function upload(id, unit) {
 const service = signed(await compileSource('device-cache-service.pas'));
 const installed = [];
 try {
-  const serviceFiles = await upload('device-cache-service', service);
   const definitions = [];
   const kasaPath = sourcePath('kasa-collector-daemon.pas');
   let kasaSource = await fs.readFile(kasaPath, 'utf8');
@@ -99,11 +104,14 @@ try {
   }
 
   for (const definition of definitions) {
-    const current = await fetch(new URL(`/pmachine/service_host/status?collectorId=${encodeURIComponent(definition.id)}`, origin));
+    const current = await fetchImpl(new URL(`/pmachine/service_host/status?collectorId=${encodeURIComponent(definition.id)}`, origin), {
+      signal: AbortSignal.timeout(5000)
+    });
     if (current.ok) throw new Error(`Collector ${definition.id} is already installed on this JS PMachine`);
     if (current.status !== 404) throw new Error(`Unable to inspect ${definition.id}: HTTP ${current.status}: ${await current.text()}`);
   }
 
+  const serviceFiles = await upload('device-cache-service', service);
   for (const definition of definitions) {
     const daemonFiles = await upload(definition.id, definition.daemon);
     const daemon = {
@@ -131,7 +139,7 @@ try {
       throw new Error(`Collector ${definition.id} did not start correctly`);
     }
     installed.push(definition.id);
-    console.log(`[${definition.id}] HTTP http://127.0.0.1:${status.httpPort}; UDP ${status.daemonDiagnostics[0].udpPort ?? 'not used'}`);
+    logger.log(`[${definition.id}] HTTP http://127.0.0.1:${status.httpPort}; UDP ${status.daemonDiagnostics[0].udpPort ?? 'not used'}`);
   }
 } catch (error) {
   const cleanupErrors = [];
@@ -144,4 +152,12 @@ try {
   }
   if (cleanupErrors.length) throw new Error(`${error.message}; cleanup failed: ${cleanupErrors.join('; ')}`, { cause: error });
   throw error;
+}
+return { origin: origin.href, collectorIds: installed };
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
+  await installNetworkCollectors({
+    origin: process.argv[2] || process.env.JS_PMACHINE_URL || 'http://127.0.0.1:4111'
+  });
 }

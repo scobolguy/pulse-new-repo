@@ -1,0 +1,94 @@
+{
+  "name": "Pascalish",
+  "scopeName": "source.pascalish",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "match": "\\b[0-9]+(?:\\.[0-9]+)?\\b",
+      "name": "constant.numeric.pascalish"
+    },
+    {
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b(?=\\s*\\()",
+      "name": "entity.name.function.pascalish"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "begin": "//",
+          "end": "$",
+          "name": "comment.line.double-slash.pascalish"
+        },
+        {
+          "begin": "\\{",
+          "end": "\\}",
+          "name": "comment.block.pascalish"
+        },
+        {
+          "begin": "\\(\\*",
+          "end": "\\*\\)",
+          "name": "comment.block.pascalish"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "begin": "'",
+          "end": "'",
+          "name": "string.quoted.single.pascalish",
+          "patterns": [
+            {
+              "match": "''",
+              "name": "constant.character.escape.pascalish"
+            }
+          ]
+        },
+        {
+          "begin": "\"",
+          "end": "\"",
+          "name": "string.quoted.double.pascalish"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "match": "\\b(?i:program|service|daemon|class|extends|type|var|const|procedure|function|constructor|destructor|begin|end|if|then|else|for|to|downto|while|do|repeat|until|case|of|return|break|continue|on|local|parent|child|sibling|alternate|refresh|every|queue|file|database|role|library|use|interop|router|mapper|import|from|librarian|map|route|enqueue|dequeue|emit|into|where|with|as|and|or|not|in|is|new|free)\\b",
+          "name": "keyword.control.pascalish"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "match": "\\b(?i:integer|int|real|float|boolean|bool|string|char|text|void|json|xml|message|stack|set|record)\\b",
+          "name": "storage.type.pascalish"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "match": "\\b(?i:true|false|nil|null)\\b",
+          "name": "constant.language.pascalish"
+        }
+      ]
+    }
+  }
+}

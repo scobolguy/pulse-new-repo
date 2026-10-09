@@ -108,7 +108,7 @@ test('Librarian schema catalog accepts zero-padded ISO versions and returns thei
     + '</xs:sequence></xs:complexType></xs:element></xs:schema>';
   await fs.writeFile(path.join(catalogRoot, 'schemas', 'camt.003.001.08.xsd'), xsd);
   await fs.writeFile(path.join(catalogRoot, 'schemas', 'invoice.v003.json'), '{"reference":"R1"}');
-  const response = await fetch(`${origin}/api/librarian/schemas`);
+  const response = await fetch(`${origin}/api/librarian/schemas?structure=full`);
   assert.equal(response.status, 200);
   const schemas = (await response.json()).schemas;
   const iso = schemas.find(schema => schema.path === 'camt.003.001.08.xsd');
@@ -149,13 +149,59 @@ test('physical schema catalogs larger than the host queue return every parsed st
   const { origin, catalogRoot } = await fixture(t);
   const names = Array.from({ length: 40 }, (_, index) => `physical-${index}.json`);
   await Promise.all(names.map(name => fs.writeFile(path.join(catalogRoot, 'schemas', name), '{"reference":"R1"}')));
-  const response = await fetch(`${origin}/api/librarian/schemas`);
+  const response = await fetch(`${origin}/api/librarian/schemas?structure=full`);
   assert.equal(response.status, 200);
   const schemas = (await response.json()).schemas;
   assert.equal(schemas.length, names.length);
   for (const schema of schemas) {
     assert.equal(schema.structure.children[0].name, 'reference', `${schema.path} must not silently lose its structure`);
   }
+});
+
+test('schema structures are parsed lazily, cached, revalidated and evictable', async t => {
+  const { origin, catalogRoot } = await fixture(t);
+  const schemas = path.join(catalogRoot, 'schemas');
+  await fs.writeFile(path.join(schemas, 'lazy-a.json'), '{"alpha":"A"}');
+  await fs.writeFile(path.join(schemas, 'lazy-b.json'), '{"beta":"B"}');
+  const status = async () => (await fetch(`${origin}/api/librarian/schema-cache`)).json();
+
+  const listed = await (await fetch(`${origin}/api/librarian/schemas`)).json();
+  assert.equal(listed.schemas.length, 2);
+  for (const schema of listed.schemas) {
+    assert.equal(schema.structure, null);
+    assert.equal(schema.structureLoaded, false);
+  }
+  assert.equal((await status()).parses, 0);
+
+  const single = await fetch(`${origin}/api/librarian/schema-structure?path=lazy-a.json`);
+  assert.equal(single.status, 200);
+  assert.equal((await single.json()).structure.children[0].name, 'alpha');
+  await fetch(`${origin}/api/librarian/schema-structure?path=lazy-a.json`);
+  let cache = await status();
+  assert.equal(cache.parses, 1);
+  assert.equal(cache.hits, 1);
+  assert.deepEqual(cache.cached.map(entry => entry.path), ['lazy-a.json']);
+
+  const relisted = (await (await fetch(`${origin}/api/librarian/schemas`)).json()).schemas;
+  assert.equal(relisted.find(item => item.path === 'lazy-a.json').structure.children[0].name, 'alpha');
+  assert.equal(relisted.find(item => item.path === 'lazy-a.json').structureLoaded, true);
+  assert.equal(relisted.find(item => item.path === 'lazy-b.json').structure, null);
+
+  await fs.writeFile(path.join(schemas, 'lazy-a.json'), '{"gamma":"changed"}');
+  const changed = await (await fetch(`${origin}/api/librarian/schema-structure?path=lazy-a.json`)).json();
+  assert.equal(changed.structure.children[0].name, 'gamma');
+  assert.equal((await status()).parses, 2);
+
+  const dropped = await fetch(`${origin}/api/librarian/schema-cache?path=lazy-a.json`, { method: 'DELETE' });
+  assert.deepEqual(await dropped.json(), { path: 'lazy-a.json', removed: 1 });
+  assert.equal((await status()).entries, 0);
+  await fetch(`${origin}/api/librarian/schema-structure?path=lazy-a.json&reparse=true`);
+  assert.equal((await status()).parses, 3);
+
+  for (const [query, code] of [['', 400], ['?path=missing.json', 404], ['?path=..%2Foutside.json', 404]]) {
+    assert.equal((await fetch(`${origin}/api/librarian/schema-structure${query}`)).status, code);
+  }
+  assert.equal((await fetch(`${origin}/api/librarian/schemas?structure=bogus`)).status, 400);
 });
 
 test('Pascalish file-download route selects existing files and reports missing paths', async t => {
@@ -403,7 +449,7 @@ test('HTTP XSD listing, UTF-16, subschema paths, malformed input and recovery us
     fs.writeFile(path.join(schemas, `fixture-${index}.xsd`), content)));
   const file = path.join(schemas, 'utf16.xsd');
   await fs.writeFile(file, Buffer.from(`\ufeff${content}`, 'utf16le'));
-  const list = await fetch(`${origin}/api/librarian/schemas`);
+  const list = await fetch(`${origin}/api/librarian/schemas?structure=full`);
   assert.equal(list.status, 200);
   const listed = (await list.json()).schemas;
   assert.equal(listed.length, 25);

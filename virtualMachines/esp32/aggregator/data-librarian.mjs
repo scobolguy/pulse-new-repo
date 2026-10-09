@@ -7,6 +7,7 @@ import { compilePascalishProgramWithAntlr } from './scripts/compile-pascalish-pr
 import { createPascalishServiceHost } from '../pmachines/javascript/src/service-host.mjs';
 import { createPascalishCatalogStore } from './src/librarian/~catalog-store.mjs';
 import { createPascalishXsdParser } from './src/librarian/~xsd-parser.mjs';
+import { createSchemaStructureCache } from './src/librarian/schema-structure-cache.mjs';
 import { createPascalishSchemaTreeService } from './src/librarian/schema-tree-service.mjs';
 import { createPascalishSchemaStructureService } from './src/librarian/schema-structure-service.mjs';
 import { createPascalishLibrarianNormalization } from './src/librarian/~normalization.mjs';
@@ -52,6 +53,7 @@ const LEGACY_DATA_TYPES_PATH = path.join(DATA_ROOT, 'data-types.json');
 let subschemaPolicyHost;
 let catalogStore;
 let xsdParser;
+let schemaStructureCache;
 let schemaTreeService;
 let schemaStructureService;
 let normalization;
@@ -91,6 +93,26 @@ async function migrateLegacyPath(legacyPath, nextPath) {
   await fs.rename(legacyPath, nextPath);
 }
 
+async function seedFromRepository() {
+  // An empty default operational root is seeded once from the tracked catalog; existing data is never
+  // overwritten. Explicit data roots (tests, other deployments) opt in with LIBRARIAN_SEED=true.
+  const seedRoot = path.join(repoRoot, 'data', 'services', 'librarian');
+  const explicitRoot = DATA_ROOT !== path.resolve(defaultOperationalDataRoot);
+  const seedSetting = String(process.env.LIBRARIAN_SEED || '').toLowerCase();
+  if (seedSetting === 'false' || (explicitRoot && seedSetting !== 'true')) return;
+  if (path.resolve(seedRoot) === path.resolve(LIBRARIAN_SERVICE_ROOT)) return;
+  const seedSchemas = path.join(seedRoot, 'schemas');
+  if (!(await pathExists(seedSchemas)) || (await fs.readdir(SCHEMA_ROOT)).length) return;
+  await fs.cp(seedSchemas, SCHEMA_ROOT, { recursive: true, errorOnExist: false, force: false });
+  for (const name of ['schema-lifecycle.json', 'mapper-rulesets.json', 'data-types.json']) {
+    const target = path.join(LIBRARIAN_SERVICE_ROOT, name);
+    if (!(await pathExists(target)) && (await pathExists(path.join(seedRoot, name)))) {
+      await fs.copyFile(path.join(seedRoot, name), target);
+    }
+  }
+  console.log(`[Librarian] Seeded ${SCHEMA_ROOT} from ${seedSchemas}`);
+}
+
 async function ensureLibrarianStorageLayout() {
   await fs.mkdir(LIBRARIAN_SERVICE_ROOT, { recursive: true });
 
@@ -100,6 +122,7 @@ async function ensureLibrarianStorageLayout() {
   await migrateLegacyPath(LEGACY_DATA_TYPES_PATH, DATA_TYPES_PATH);
 
   await fs.mkdir(SCHEMA_ROOT, { recursive: true });
+  await seedFromRepository();
 }
 
 // Utility: Recursively list files with metadata, with optional filter
@@ -211,14 +234,35 @@ async function startSubschemaPolicyHost() {
   return host;
 }
 
+// The Pascalish service host rejects events beyond its queue depth (16), so
+// concurrent requests are queued here instead of being rejected.
+const POLICY_HOST_MAX_IN_FLIGHT = 8;
+let policyHostInFlight = 0;
+const policyHostWaiters = [];
+
+async function withPolicyHostSlot(fn) {
+  if (policyHostInFlight >= POLICY_HOST_MAX_IN_FLIGHT) {
+    await new Promise((resolve) => policyHostWaiters.push(resolve));
+  } else {
+    policyHostInFlight++;
+  }
+  try {
+    return await fn();
+  } finally {
+    const next = policyHostWaiters.shift();
+    if (next) next();
+    else policyHostInFlight--;
+  }
+}
+
 async function pascalishPolicyCheck(path, body) {
   if (!subschemaPolicyHost) throw new Error('Pascalish subschema policy is not initialized');
-  const result = await subschemaPolicyHost.dispatch({
+  const result = await withPolicyHostSlot(() => subschemaPolicyHost.dispatch({
     transport: 'internal',
     method: 'POST',
     path,
     body: JSON.stringify(body),
-  });
+  }));
   if (result.status !== 200 || typeof result.body?.valid !== 'boolean') {
     throw new Error(`Pascalish subschema policy failed: ${JSON.stringify(result.body)}`);
   }
@@ -393,7 +437,29 @@ app.use('/api/librarian/file', async (req, res) => {
 });
 
 
-async function loadPhysicalSchemaCatalog() {
+function schemaStructureMode(value) {
+  const mode = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (!mode || mode === 'cached' || mode === 'lazy') return 'cached';
+  if (mode === 'full' || mode === 'all' || mode === 'true') return 'full';
+  if (mode === 'none' || mode === 'false') return 'none';
+  throw Object.assign(new Error('structure must be one of: cached, full, none'), { invalidStructureMode: true });
+}
+
+async function parseSchemaStructure(relPath, schemaType) {
+  const lowerType = String(schemaType || '').toLowerCase();
+  if (lowerType === 'xsd' || lowerType === 'xml') {
+    const { tree, dependencies } = await xsdParser.parseFileDetailed(relPath);
+    return { structure: tree, dependencies };
+  }
+  return { structure: await extractStructureForFile(path.join(SCHEMA_ROOT, relPath), schemaType) };
+}
+
+function schemaStructureFor(schema) {
+  return schemaStructureCache.get(schema.path, schema.type);
+}
+
+// mode 'cached' returns only already-parsed trees; 'full' parses (and caches) every schema.
+async function loadPhysicalSchemaCatalog({ structure: mode = 'cached' } = {}) {
   const files = await listFiles(SCHEMA_ROOT);
   const lifecycleByPath = await loadSchemaLifecycleByPath();
   const schemas = [];
@@ -407,19 +473,25 @@ async function loadPhysicalSchemaCatalog() {
     };
     schemas.push({ file, meta, lifecycle });
   }
-  const catalog = [];
-  // The structure host has a bounded event queue; do not submit a whole catalog at once.
-  for (let offset = 0; offset < schemas.length; offset += 8) {
-    const batch = await Promise.all(schemas.slice(offset, offset + 8).map(async ({ file, meta, lifecycle }) => ({
+  const catalog = await Promise.all(schemas.map(async ({ file, meta, lifecycle }) => {
+    let structure = null;
+    let structureLoaded = mode === 'full';
+    if (mode === 'full') structure = await schemaStructureCache.get(file.path, meta.type);
+    else if (mode === 'cached') {
+      const cached = await schemaStructureCache.peek(file.path, meta.type);
+      structureLoaded = cached !== undefined;
+      structure = cached ?? null;
+    }
+    return {
       ...meta,
       path: file.path,
       size: file.size,
       mtime: file.mtime,
-      structure: await extractStructureForFile(file.fullPath, meta.type),
+      structure,
+      structureLoaded,
       lifecycle,
-    })));
-    catalog.push(...batch);
-  }
+    };
+  }));
   for (const schema of catalog) {
     schema.lifecycle = await normalization.lifecycleDisplay(schema.lifecycle);
   }
@@ -450,7 +522,8 @@ async function projectSubschemaCatalog(physicalSchemas, definitions) {
   for (const definition of definitions) {
     const parent = parentByPath.get(definition.parentSchemaPath);
     if (!parent) continue;
-    const projection = await schemaTreeService.project(parent.structure, definition.accessibleFields);
+    const parentStructure = await schemaStructureFor(parent);
+    const projection = await schemaTreeService.project(parentStructure, definition.accessibleFields);
     schemas.push(subschemaCatalogEntry(parent, definition, projection));
   }
   return schemas;
@@ -462,11 +535,12 @@ async function loadSubschemaCatalog(physicalSchemas) {
 
 async function validateSubschemaDefinition(candidate) {
   const definition = await normalization.subschema(candidate);
-  const physicalSchemas = await loadPhysicalSchemaCatalog();
+  const physicalSchemas = await loadPhysicalSchemaCatalog({ structure: 'none' });
   const parent = physicalSchemas.find(schema => schema.path === definition.parentSchemaPath);
   if (!parent) {
     throw new Error(`Parent schema not found: ${definition.parentSchemaPath}`);
   }
+  parent.structure = await schemaStructureFor(parent);
   if (!parent.structure) {
     throw new Error(`Parent schema structure is unavailable: ${definition.parentSchemaPath}`);
   }
@@ -488,7 +562,7 @@ async function validateSubschemaDefinition(candidate) {
 // List physical schemas and their field-restricted virtual subschemas.
 app.get('/api/librarian/schemas', async (req, res) => {
   try {
-    const physicalSchemas = await loadPhysicalSchemaCatalog();
+    const physicalSchemas = await loadPhysicalSchemaCatalog({ structure: schemaStructureMode(req.query.structure) });
     const subschemas = await loadSubschemaCatalog(physicalSchemas);
     const result = await schemaCatalogRoutes.dispatch({
       method: req.method,
@@ -499,8 +573,48 @@ app.get('/api/librarian/schemas', async (req, res) => {
     if (!result.matched) throw new Error('Pascalish Librarian schema-catalog route did not match');
     res.status(result.status).json(result.body);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.invalidStructureMode ? 400 : 500).json({ error: e.message });
   }
+});
+
+function requestedSchemaPath(value) {
+  return typeof value === 'string' ? value.trim().replace(/\\/g, '/') : '';
+}
+
+async function findPhysicalSchema(schemaPath) {
+  if (!schemaPath) return null;
+  const absPath = path.resolve(SCHEMA_ROOT, schemaPath);
+  if (!isPathWithinRoot(SCHEMA_ROOT, absPath)) return null;
+  const file = (await listFiles(SCHEMA_ROOT)).find(item => item.path === schemaPath);
+  if (!file) return null;
+  const meta = await schemaStructureService.parseFilename(file.name);
+  return meta ? { ...meta, path: file.path, size: file.size, mtime: file.mtime } : null;
+}
+
+// Parse (or reuse) the field tree of a single schema on first use.
+app.get('/api/librarian/schema-structure', async (req, res) => {
+  try {
+    const schemaPath = requestedSchemaPath(req.query.path);
+    if (!schemaPath) return res.status(400).json({ error: 'path query parameter is required' });
+    const schema = await findPhysicalSchema(schemaPath);
+    if (!schema) return res.status(404).json({ error: `Schema not found: ${schemaPath}` });
+    if (req.query.reparse === 'true' || req.query.reparse === '1') schemaStructureCache.invalidate(schemaPath);
+    const structure = await schemaStructureFor(schema);
+    return res.json({ path: schema.path, type: schema.type, mtime: schema.mtime, structure });
+  } catch (e) {
+    return res.status(e.status === 404 ? 404 : 500).json({ error: e.message });
+  }
+});
+
+app.get('/api/librarian/schema-cache', (req, res) => {
+  res.json(schemaStructureCache.status());
+});
+
+// Drop one schema (and any schema that includes it) or the whole cache so it is reparsed on next use.
+app.delete('/api/librarian/schema-cache', (req, res) => {
+  const schemaPath = requestedSchemaPath(req.query.path ?? req.body?.path);
+  const removed = schemaStructureCache.invalidate(schemaPath || undefined);
+  res.json({ path: schemaPath || null, removed });
 });
 
 app.get('/api/librarian/schema-fields', async (req, res) => {
@@ -509,8 +623,9 @@ app.get('/api/librarian/schema-fields', async (req, res) => {
       ? req.query.path.trim().replace(/\\/g, '/')
       : '';
     const schema = schemaPath
-      ? (await loadPhysicalSchemaCatalog()).find(item => item.path === schemaPath)
+      ? (await loadPhysicalSchemaCatalog({ structure: 'none' })).find(item => item.path === schemaPath)
       : null;
+    if (schema) schema.structure = await schemaStructureFor(schema);
     const availableFields = schema?.structure
       ? await schemaTreeService.collect(schema.structure)
       : [];
@@ -531,7 +646,7 @@ app.get('/api/librarian/schema-fields', async (req, res) => {
 
 app.get('/api/librarian/subschemas', async (req, res) => {
   try {
-    const physicalSchemas = await loadPhysicalSchemaCatalog();
+    const physicalSchemas = await loadPhysicalSchemaCatalog({ structure: 'none' });
     const subschemas = await loadSubschemaCatalog(physicalSchemas);
     const result = await schemaCatalogRoutes.dispatch({
       method: req.method,
@@ -922,6 +1037,7 @@ app.delete('/api/librarian/schemas', async (req, res) => {
     if (!validation.matched) throw new Error('Pascalish schema-operation route did not match');
     if (validation.status !== 200) return res.status(validation.status).json(validation.body);
     await fs.unlink(absPath);
+    schemaStructureCache.invalidate(relPath);
     await mutateSchemaLifecycle('delete', relPath);
     const result = await schemaOperationRoutes.dispatch(routeRequest);
     return res.status(result.status).json(result.body);
@@ -966,6 +1082,8 @@ app.post('/api/librarian/schemas/rename', async (req, res) => {
     await fs.rename(currentAbsPath, nextAbsPath);
 
     const nextRelPath = path.relative(SCHEMA_ROOT, nextAbsPath).replace(/\\/g, '/');
+    schemaStructureCache.invalidate(currentPath);
+    schemaStructureCache.invalidate(nextRelPath);
     await mutateSchemaLifecycle('rename', currentPath, { nextId: nextRelPath });
 
     await mutateSubschemas(async () => ({
@@ -1019,6 +1137,9 @@ app.post('/api/librarian/upload/:dest', express.raw({ type: '*/*', limit: '50mb'
     } else {
       await fs.mkdir(targetDir, { recursive: true });
       await fs.writeFile(targetPath, req.body);
+      if (dest === 'schemas') {
+        schemaStructureCache.invalidate(path.relative(SCHEMA_ROOT, targetPath).replace(/\\/g, '/'));
+      }
     }
     return await respond({});
   } catch (e) {
@@ -1068,6 +1189,14 @@ catalogStore = await createPascalishCatalogStore({
 
 subschemaPolicyHost = await startSubschemaPolicyHost();
 xsdParser = await createPascalishXsdParser({ schemaRoot: SCHEMA_ROOT });
+schemaStructureCache = createSchemaStructureCache({
+  schemaRoot: SCHEMA_ROOT,
+  parse: parseSchemaStructure,
+  maxEntries: readEnvNumber('LIBRARIAN_STRUCTURE_CACHE_MAX_ENTRIES', 128),
+  maxBytes: readEnvNumber('LIBRARIAN_STRUCTURE_CACHE_MAX_BYTES', 64 * 1024 * 1024),
+  idleMs: readEnvNumber('LIBRARIAN_STRUCTURE_CACHE_IDLE_MS', 30 * 60 * 1000),
+  concurrency: readEnvNumber('LIBRARIAN_STRUCTURE_PARSE_CONCURRENCY', 4)
+});
 schemaTreeService = await createPascalishSchemaTreeService();
 schemaStructureService = await createPascalishSchemaStructureService();
 normalization = await createPascalishLibrarianNormalization();

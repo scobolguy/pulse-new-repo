@@ -32,6 +32,16 @@ nodes. The current backend can compile and persist deployment plans, but its
 deployment-record API does not install WFL service/daemon artifacts on an
 ESP32; **Deploy** therefore reports that limitation and makes no deployment.
 
+The **Deploy Network Cache to local JS PMachine** recipe is executable now.
+It starts a VS Code task using `pmachines/javascript/deploy-network-cache.mjs`:
+JS PMachine on `4111`, signed cache service with Kasa/Tuya/SSDP hosted daemons,
+plus the Pulse node collector service and daemon on shared UDP `4210`,
+and separate native aggregation on `4310`. The collector configuration comes
+from `config/federated-device-cache.json`. Existing listeners are never
+replaced, partial installs are rolled back, and errors appear in the terminal.
+Keep the task running; runtime installation is not persisted across process
+restarts. Stop the task before redeploying.
+
 **Node Inventory** queries each registered node's `/api/services` and
 `/pmachine/service_host/status` endpoints. Named-service registrations are
 shown separately from observed hosted contexts; a registration is not evidence
@@ -77,6 +87,9 @@ Run the focused tests from the project directory:
 node --test testing\aggregator\distributed-network-view.test.mjs
 ```
 
-The extension entry point requires `distributedNetwork.js`; include this file
-alongside `extension.js` when packaging or deploying the extension. Reload
-the VS Code window after updating an installed extension.
+This directory is the Pulse Studio source and development manifest. Its runtime
+module and resources are copied into the unified Pulse Studio & PMachine Debugger
+extension by `extensions/pulse-pmachine-debugger/scripts/sync-pulse-studio.mjs`.
+Build and package the installable extension from that directory with
+`npm run package`; do not install or distribute a separate Pulse Studio VSIX.
+Reload the VS Code window after updating the unified extension.

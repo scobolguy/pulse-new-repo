@@ -1,6 +1,10 @@
 import { JsonObject, MappingDocument, object, parseMapping, publicationPayload, samePublishedMapping } from './dataMapperModel.js';
 
-export type LibrarianSchema = JsonObject & { path: string; typeId?: string; name?: string; structure?: JsonObject | null; mtime?: string };
+export type LibrarianSchema = JsonObject & { path: string; typeId?: string; name?: string; structure?: JsonObject | null; structureLoaded?: boolean; mtime?: string };
+
+export function structurePending(schema: LibrarianSchema): boolean {
+  return !schema.structure && schema.structureLoaded === false;
+}
 export type MapSummary = { id: string; name: string };
 export type TestCase = { id: string; name: string };
 export type MappingResult = { mapId: string; input: JsonObject; output: JsonObject; diagnostics: JsonObject[] };
@@ -47,6 +51,24 @@ export class DataMapperBackend {
       }
       return schema as LibrarianSchema;
     });
+  }
+
+  // Schema lists are lazy; structures are parsed and cached by the Librarian on first request.
+  async schemaStructure(path: string, reparse = false): Promise<{ structure: JsonObject | null; mtime?: string }> {
+    const data = await this.request(`/api/librarian/schema-structure?path=${encodeURIComponent(path)}${reparse ? '&reparse=true' : ''}`,
+      'GET', undefined, 120000);
+    const structure = data.structure;
+    if (structure != null && (!object(structure) || !Array.isArray(structure.children))) {
+      throw new Error(`Librarian returned an invalid field structure for ${path}.`);
+    }
+    return { structure: (structure as JsonObject | null | undefined) ?? null,
+      ...(typeof data.mtime === 'string' ? { mtime: data.mtime } : {}) };
+  }
+
+  async schemaWithStructure(schema: LibrarianSchema): Promise<LibrarianSchema> {
+    if (!structurePending(schema)) return schema;
+    const loaded = await this.schemaStructure(schema.path);
+    return { ...schema, structure: loaded.structure, structureLoaded: true, ...(loaded.mtime ? { mtime: loaded.mtime } : {}) };
   }
 
   async maps(): Promise<MapSummary[]> {

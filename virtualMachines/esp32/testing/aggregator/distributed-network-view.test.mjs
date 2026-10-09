@@ -440,12 +440,14 @@ test('Deploy view lists workspace WFL documents and opens them on selection', as
   view.vscode.workspace.findFiles = async () => [uri]
   view.vscode.workspace.asRelativePath = () => 'deployments/deployment.wfl'
   const rows = await new view.WflDeployViewProvider().getChildren()
-  assert.equal(rows.length, 1)
-  assert.equal(rows[0].label, 'deployment.wfl')
-  assert.equal(rows[0].contextValue, 'wfl-deployment')
-  assert.equal(rows[0].resourceUri, uri)
-  assert.equal(rows[0].command.command, 'vscode.open')
-  assert.equal(rows[0].description, 'deployments/deployment.wfl')
+  assert.equal(rows.length, 2)
+  assert.equal(rows[0].contextValue, 'network-cache-deployment')
+  assert.equal(rows[0].command.command, 'pulseCatalogStudio.deployNetworkCache')
+  assert.equal(rows[1].label, 'deployment.wfl')
+  assert.equal(rows[1].contextValue, 'wfl-deployment')
+  assert.equal(rows[1].resourceUri, uri)
+  assert.equal(rows[1].command.command, 'vscode.open')
+  assert.equal(rows[1].description, 'deployments/deployment.wfl')
 })
 
 test('Node Inventory keeps named registrations distinct from observed hosted contexts and aggregates', async () => {

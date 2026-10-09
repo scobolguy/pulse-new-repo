@@ -134,8 +134,9 @@ export function createDeviceFederation({
     const keyPattern = device.protocol === 'pulse' ? /^[^\s]{1,256}$/ :
       device.protocol === 'kasa' ? /^kasa:(\d{1,3}\.){3}\d{1,3}$/ :
       device.protocol === 'tuya' ? /^tuya:[a-zA-Z0-9_-]{6,64}$/ :
-        /^ssdp:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-    if (!keyPattern.test(record.key) || (device.protocol === 'kasa' && record.key !== `kasa:${device.address}`)) fail('Invalid device key namespace');
+        /^ssdp:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|mediaroom:(\d{1,3}\.){3}\d{1,3})$/;
+    if (!keyPattern.test(record.key) || (device.protocol === 'kasa' && record.key !== `kasa:${device.address}`) ||
+        (record.key.startsWith('ssdp:mediaroom:') && record.key !== `ssdp:mediaroom:${device.address}`)) fail('Invalid device key namespace');
   }
   async function synchronize(state) {
     expire();

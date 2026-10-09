@@ -5,6 +5,8 @@ import { compilePascalishProgramWithAntlr } from '../../scripts/compile-pascalis
 import { createPascalishServiceHost } from '../../../pmachines/javascript/src/service-host.mjs';
 import { createFilesystemBindings } from '../../../pmachines/javascript/src/filesystem-bindings.mjs';
 
+const CACHE_VALIDATION_CONCURRENCY = 8;
+
 export async function createPascalishXsdParser({ logger = console, schemaRoot } = {}) {
   const storageRoots = { schemas: { path: schemaRoot, readOnly: true } };
   const reader = await createFilesystemBindings(storageRoots, { maxFileBytes: 1000000 });
@@ -24,7 +26,7 @@ export async function createPascalishXsdParser({ logger = console, schemaRoot } 
   let cacheBytes = 0;
   let stopped = false;
   const readAbort = new AbortController();
-  async function parseUncached(content, key, file = false) {
+  async function dispatchParse(content, file) {
     const result = await host.dispatch({ method: 'POST', path: file ? '/parse-file' : '/parse', transport: 'internal', body: content });
     if (result.status !== 200) throw new Error(`Pascalish XSD parsing failed (${result.status})`);
     const tree = file ? result.body?.tree : result.body;
@@ -34,6 +36,10 @@ export async function createPascalishXsdParser({ logger = console, schemaRoot } 
     }
     if (!Array.isArray(dependencies) || dependencies.some(item => typeof item.path !== 'string'
       || !/^[a-f0-9]{64}$/.test(item.hash))) throw new Error('Invalid Pascalish XSD dependency result');
+    return { tree, dependencies };
+  }
+  async function parseUncached(content, key, file = false) {
+    const { tree, dependencies } = await dispatchParse(content, file);
     const serialized = JSON.stringify(tree);
     const bytes = Buffer.byteLength(serialized) + (file ? Buffer.byteLength(JSON.stringify(dependencies)) : 0);
     if (!stopped) {
@@ -51,9 +57,12 @@ export async function createPascalishXsdParser({ logger = console, schemaRoot } 
     const cached = cache.get(key);
     if (cached) {
       let unchanged = true;
-      for (const dependency of cached.dependencies) {
-        const content = await reader.handlers['host.fs_read_text_auto']('schemas', dependency.path, { signal: readAbort.signal });
-        if (createHash('sha256').update(content, 'utf16le').digest('hex') !== dependency.hash) {
+      for (let start = 0; start < cached.dependencies.length; start += CACHE_VALIDATION_CONCURRENCY) {
+        const dependencies = cached.dependencies.slice(start, start + CACHE_VALIDATION_CONCURRENCY);
+        const contents = await Promise.all(dependencies.map(dependency =>
+          reader.handlers['host.fs_read_text_auto']('schemas', dependency.path, { signal: readAbort.signal })));
+        if (contents.some((content, index) =>
+          createHash('sha256').update(content, 'utf16le').digest('hex') !== dependencies[index].hash)) {
           unchanged = false;
           break;
         }
@@ -105,6 +114,14 @@ export async function createPascalishXsdParser({ logger = console, schemaRoot } 
         pending.set(key, work);
       }
       return JSON.parse(await pending.get(key));
+    },
+    // Uncached parse that reports every schema file the tree was built from; callers own caching.
+    parseFileDetailed: async relativePath => {
+      if (stopped) throw Object.assign(new Error('XSD parser is stopped'), { status: 503 });
+      if (typeof relativePath !== 'string') throw new Error('Expected schema-relative path');
+      relativePath = await reader.handlers['host.fs_resolve_relative']('schemas', 'root.xsd', relativePath, { signal: readAbort.signal });
+      const { tree, dependencies } = await dispatchParse(relativePath, true);
+      return { tree, dependencies: [...new Set(dependencies.map(item => item.path))] };
     },
     getStatus: () => ({
       cachedEntries: cache.size, cachedBytes: cacheBytes, pendingParses: pending.size, stopped

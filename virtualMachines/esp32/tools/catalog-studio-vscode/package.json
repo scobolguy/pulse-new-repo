@@ -62,6 +62,10 @@
     ],
     "commands": [
       {
+        "command": "pulseCatalogStudio.deployNetworkCache",
+        "title": "Pulse: Deploy Network Cache"
+      },
+      {
         "command": "pulseCatalogStudio.open",
         "title": "Pulse: Open Pulse Studio"
       },
@@ -156,6 +160,11 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "pulseCatalogStudio.deployNetworkCache",
+          "when": "view == pulseCatalogStudio.deploy && viewItem == network-cache-deployment",
+          "group": "1_manage"
+        },
         {
           "command": "pulseCatalogStudio.validateWflDeployment",
           "when": "view == pulseCatalogStudio.deploy && viewItem == wfl-deployment",

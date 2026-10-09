@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import Module from 'node:module';
 import { registerHooks } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { readFile } from 'node:fs/promises';
@@ -46,7 +47,8 @@ const vscodeMock = `
   export const ProgressLocation = { Notification: 15 };
   export const window = {
     registerCustomEditorProvider: () => ({ dispose() {} }),
-    createOutputChannel: () => ({ dispose() {} }),
+    registerCustomTextEditorProvider: () => ({ dispose() {} }),
+    createOutputChannel: () => ({ dispose() {}, appendLine() {} }),
     createWebviewPanel: () => { throw new Error('webview not available in tests'); },
     registerTreeDataProvider: (id, provider) => {
       if (id === 'pulse-pmachine.services') globalThis.pulseTestServicesProvider = provider;
@@ -61,7 +63,10 @@ const vscodeMock = `
     if (name === 'pulse-pmachine.runCurrentFile') globalThis.pulseTestRunCommand = handler;
     return {};
   } };
-  export const languages = { registerCodeLensProvider: () => ({}) };
+  export const languages = {
+    registerCodeLensProvider: () => ({}),
+    createDiagnosticCollection: () => ({ dispose() {}, set() {}, delete() {}, clear() {} }),
+  };
 `;
 const hooks = registerHooks({
   resolve(specifier, context, next) {
@@ -69,8 +74,14 @@ const hooks = registerHooks({
     return next(specifier, context);
   },
 });
-const { activate, loadPmachineTargets } = await import('../out/extension.js');
 const vscode = await import('vscode');
+const originalModuleLoad = Module._load;
+Module._load = function (specifier, parent, isMain) {
+  if (specifier === 'vscode') return vscode;
+  return originalModuleLoad.call(this, specifier, parent, isMain);
+};
+const { activate, loadPmachineTargets } = await import('../out/extension.js');
+Module._load = originalModuleLoad;
 activate({ subscriptions: [], extensionUri: {} });
 hooks.deregister();
 
@@ -136,6 +147,79 @@ test('Data Librarian has a dedicated contributed view and browses nested schema 
     Object.assign(vscode.workspace, originalWorkspace);
     Object.assign(vscode.window, originalWindow);
     vscode.commands.executeCommand = originalExecute;
+  }
+});
+
+test('the unified VSIX contributes and activates the Pulse Studio Deploy panel', async () => {
+  const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(manifest.version, '0.1.15');
+  assert.equal(manifest.displayName, 'Pulse Studio & PMachine Debugger');
+  assert.ok(manifest.contributes.viewsContainers.activitybar.some(item => item.id === 'pulseCatalogStudio'));
+  assert.ok(manifest.contributes.views.pulseCatalogStudio.some(item => item.id === 'pulseCatalogStudio.deploy'));
+  for (const command of [
+    'pulseCatalogStudio.refreshDeployView',
+    'pulseCatalogStudio.validateWflDeployment',
+    'pulseCatalogStudio.previewWflDeployment',
+    'pulseCatalogStudio.deployWflDeployment',
+    'pulseCatalogStudio.deployNetworkCache',
+  ]) {
+    assert.ok(manifest.contributes.commands.some(item => item.command === command));
+    assert.ok(vscode.registeredCommands.has(command));
+  }
+});
+
+test('Data Librarian loads lazily-parsed schema structures on expand and caches them until refresh', async () => {
+  const originalFetch = globalThis.fetch;
+  const urls = [];
+  const structure = { children: [{ name: 'Document', kind: 'branch', valueType: 'object', children: [
+    { name: 'Id', kind: 'leaf', valueType: 'string' },
+  ] }] };
+  globalThis.fetch = async url => {
+    urls.push(String(url));
+    if (String(url).endsWith('/api/librarian/schemas')) {
+      return Response.json({ schemas: [
+        { path: 'iso/pain.001.xsd', name: 'Pain', structure: null, structureLoaded: false, mtime: 'm1' },
+        { path: 'broken.xsd', name: 'Broken', structure: null, structureLoaded: false },
+      ] });
+    }
+    if (String(url).includes('broken.xsd')) return Response.json({ error: 'parse failed' }, { status: 500 });
+    return Response.json({ path: 'iso/pain.001.xsd', mtime: 'm2', structure });
+  };
+  try {
+    const provider = globalThis.pulseTestLibrarianProvider;
+    const schemas = await provider.getChildren();
+    assert.deepEqual(schemas.map(item => item.label), ['Broken', 'Pain']);
+    assert.equal(schemas[1].collapsibleState, vscode.TreeItemCollapsibleState.Collapsed);
+    assert.doesNotMatch(String(schemas[1].description), /no field structure/);
+    const fields = await provider.getChildren(schemas[1]);
+    assert.deepEqual(fields.map(item => item.label), ['Document']);
+    assert.equal((await provider.getChildren(fields[0]))[0].label, 'Document.Id');
+    await provider.getChildren(schemas[1]);
+    assert.deepEqual(urls.filter(url => url.includes('schema-structure')),
+      ['http://127.0.0.1:4000/api/librarian/schema-structure?path=iso%2Fpain.001.xsd']);
+    assert.match((await provider.getChildren(schemas[0]))[0].label, /Field structure unavailable/);
+    provider.refresh();
+    await provider.getChildren(schemas[1]);
+    assert.equal(urls.filter(url => url.includes('pain.001')).length, 2, 'refresh drops loaded structures');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Data Librarian falls back to the Librarian service when the backend is unreachable', async () => {
+  const originalFetch = globalThis.fetch;
+  const urls = [];
+  globalThis.fetch = async url => {
+    urls.push(url);
+    if (String(url).startsWith('http://127.0.0.1:4000')) throw new TypeError('fetch failed');
+    return Response.json({ schemas: [{ path: 'direct.json' }] });
+  };
+  try {
+    const items = await globalThis.pulseTestLibrarianProvider.getChildren();
+    assert.equal(items[0].label, 'direct.json');
+    assert.deepEqual(urls, ['http://127.0.0.1:4000/api/librarian/schemas', 'http://127.0.0.1:4300/api/librarian/schemas']);
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
 

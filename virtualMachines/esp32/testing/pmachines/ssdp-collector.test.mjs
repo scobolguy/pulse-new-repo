@@ -113,6 +113,22 @@ test('malformed notification frames fail explicitly without publishing or deleti
   assert.deepEqual(await names(host), [`SSDP ${uuid(1)}`]);
 });
 
+test('Mediaroom NOTIFY is cached per sender and other vendor frames are ignored', async t => {
+  const { host, send } = await start(t);
+  const mediaroom = nts => Buffer.from(`NOTIFY * HTTP/1.1\r\nHOST:239.255.255.250:1900\r\nNTS:${nts}\r\n`
+    + 'NT:urn:microsoft:mediaroom:remote:1\r\nx-mediaroom-device-id: *\r\n\r\n');
+  await send(mediaroom('ssdp:alive'));
+  await send(mediaroom('ssdp:alive'));
+  assert.deepEqual(await names(host), ['Mediaroom 127.0.0.1']);
+  const records = (await host.dispatch({ method: 'GET', path: '/api/devices/snapshot', query: {} })).body;
+  assert.match(JSON.stringify(records), /ssdp:mediaroom:127\.0\.0\.1/);
+  assert.match(JSON.stringify(records), /urn:microsoft:mediaroom:remote:1/);
+  await send(notification(uuid(2)).toString().replace(`UsN: uuid:${uuid(2)}::upnp:rootdevice`, 'USN: vendor-device'));
+  await send(mediaroom('ssdp:byebye'));
+  assert.equal(host.getStatus().daemonDiagnostics[0].failures, 0);
+  assert.deepEqual(await names(host), []);
+});
+
 test('50 UUIDs and their variants remain bounded and the oldest put is evicted', async t => {
   const { host, send } = await start(t);
   for (let index = 0; index < 50; index++) {

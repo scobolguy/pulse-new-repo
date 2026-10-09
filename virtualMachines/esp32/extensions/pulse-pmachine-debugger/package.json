@@ -1,18 +1,21 @@
 {
   "name": "pulse-pmachine-debugger",
-  "displayName": "Pulse PMachine Debugger",
-  "description": "Run and debug Pulse PMachine programs from VS Code.",
-  "version": "0.1.10",
+  "displayName": "Pulse Studio & PMachine Debugger",
+  "description": "Pulse Studio, Data Librarian, Data Mapper, deployment and node inventory panels, plus native PMachine Run and Debug support.",
+  "version": "0.1.15",
   "publisher": "pulse",
   "icon": "src/media/pulse-icon.png",
   "files": [
     "package.json",
     "README.md",
     "src/media/**",
+    "language-configuration.json",
+    "media/**",
+    "syntaxes/**",
     "out/**"
   ],
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.95.0"
   },
   "categories": [
     "Debuggers",
@@ -27,12 +30,44 @@
     "onLanguage:wfl",
     "onLanguage:mapl",
     "onLanguage:cobolish",
-    "onCommand:pulse-pmachine.showAnimation"
+    "onCommand:pulse-pmachine.showAnimation",
+    "onStartupFinished",
+    "onLanguage:vfl"
   ],
   "main": "./out/extension.js",
   "type": "module",
   "contributes": {
     "views": {
+      "pulseCatalogStudio": [
+        {
+          "id": "pulseCatalogStudio.infrastructure",
+          "name": "Infrastructure"
+        },
+        {
+          "id": "pulseCatalogStudio.sidebar",
+          "name": "Data Librarian",
+          "type": "tree",
+          "visibility": "visible"
+        },
+        {
+          "id": "pulseCatalogStudio.dataMapper",
+          "name": "Data Mapper",
+          "type": "tree",
+          "visibility": "visible"
+        },
+        {
+          "id": "pulseCatalogStudio.deploy",
+          "name": "Deploy",
+          "type": "tree",
+          "visibility": "visible"
+        },
+        {
+          "id": "pulseCatalogStudio.nodeInventory",
+          "name": "Node Inventory",
+          "type": "tree",
+          "visibility": "visible"
+        }
+      ],
       "explorer": [
         {
           "id": "pulse-pmachine.dataLibrarian",
@@ -52,10 +87,49 @@
       {
         "id": "pascalish",
         "aliases": [
-          "Pascalish"
+          "Pascalish",
+          "Pascalish DSL"
+        ],
+        "extensions": [
+          ".pash",
+          ".flow.pas",
+          ".service.pas",
+          ".program.pas",
+          ".daemon.pas"
+        ],
+        "configuration": "./language-configuration.json",
+        "firstLine": "^\\s*(program|service|daemon|class|mapper|router)\\b"
+      },
+      {
+        "id": "pascal",
+        "aliases": [
+          "Pascal",
+          "Standard Pascal"
         ],
         "extensions": [
           ".pas"
+        ],
+        "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "vfl",
+        "aliases": [
+          "Visual Flow Language",
+          "VFL"
+        ],
+        "extensions": [
+          ".vfl"
+        ],
+        "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "cobolish",
+        "aliases": [
+          "COBOLish"
+        ],
+        "extensions": [
+          ".cob",
+          ".cobol"
         ]
       },
       {
@@ -88,7 +162,92 @@
         ]
       }
     ],
+    "grammars": [
+      {
+        "language": "pascalish",
+        "scopeName": "source.pascalish",
+        "path": "./syntaxes/pascalish.tmLanguage.json"
+      },
+      {
+        "language": "pascal",
+        "scopeName": "source.pascal",
+        "path": "./syntaxes/pascal.tmLanguage.json"
+      }
+    ],
     "commands": [
+      {
+        "command": "pulseCatalogStudio.deployNetworkCache",
+        "title": "Pulse: Deploy Network Cache"
+      },
+      {
+        "command": "pulseCatalogStudio.open",
+        "title": "Pulse: Open Pulse Studio"
+      },
+      {
+        "command": "pulseCatalogStudio.newVfl",
+        "title": "Pulse: New Visual Flow Document"
+      },
+      {
+        "command": "pulseCatalogStudio.refreshDataLibrarian",
+        "title": "Pulse: Refresh Data Librarian",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "pulseCatalogStudio.openDataMapper",
+        "title": "Pulse: Open Data Mapper"
+      },
+      {
+        "command": "pulseCatalogStudio.refreshDataMapper",
+        "title": "Pulse: Refresh Data Mapper",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "pulseCatalogStudio.refreshInfrastructure",
+        "title": "Pulse: Refresh Infrastructure Tree",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "pulseCatalogStudio.refreshNodeInventory",
+        "title": "Pulse: Refresh Node Inventory",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "pulseCatalogStudio.refreshDeployView",
+        "title": "Pulse: Refresh Deploy View",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "pulseCatalogStudio.validateWflDeployment",
+        "title": "Pulse: Validate WFL Deployment"
+      },
+      {
+        "command": "pulseCatalogStudio.previewWflDeployment",
+        "title": "Pulse: Preview WFL Deployment"
+      },
+      {
+        "command": "pulseCatalogStudio.deployWflDeployment",
+        "title": "Pulse: Deploy WFL Deployment"
+      },
+      {
+        "command": "pulseCatalogStudio.inspectNode",
+        "title": "Pulse: Inspect Node"
+      },
+      {
+        "command": "pulseCatalogStudio.refreshNode",
+        "title": "Pulse: Refresh Node"
+      },
+      {
+        "command": "pulseCatalogStudio.unregisterNamedService",
+        "title": "Pulse: Unregister Named Service"
+      },
+      {
+        "command": "pulseCatalogStudio.stopHostedContext",
+        "title": "Pulse: Stop Hosted Context"
+      },
+      {
+        "command": "pulse-pmachine.startLocalServices",
+        "title": "Pulse: Start Local Backend, Librarian and Mapper"
+      },
       {
         "command": "pulse-pmachine.showDataLibrarian",
         "title": "Pulse Data Librarian: Browse Schemas"
@@ -146,18 +305,59 @@
     ],
     "customEditors": [
       {
+        "viewType": "pulseCatalogStudio.vflEditor",
+        "displayName": "Visual Flow Language Editor",
+        "selector": [
+          {
+            "filenamePattern": "*.vfl"
+          }
+        ],
+        "priority": "default"
+      },
+      {
         "viewType": "pulse-pmachine.dataMapper",
         "displayName": "Pulse Data Mapper",
         "selector": [
-          { "filenamePattern": "*.pulse-map.json" },
-          { "filenamePattern": "*.mapping.json" },
-          { "filenamePattern": "*.map" }
+          {
+            "filenamePattern": "*.pulse-map.json"
+          },
+          {
+            "filenamePattern": "*.mapping.json"
+          },
+          {
+            "filenamePattern": "*.map"
+          }
         ],
         "priority": "option"
       }
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "pulseCatalogStudio.refreshDataLibrarian",
+          "when": "view == pulseCatalogStudio.sidebar",
+          "group": "navigation"
+        },
+        {
+          "command": "pulseCatalogStudio.refreshInfrastructure",
+          "when": "view == pulseCatalogStudio.infrastructure",
+          "group": "navigation"
+        },
+        {
+          "command": "pulseCatalogStudio.refreshDataMapper",
+          "when": "view == pulseCatalogStudio.dataMapper",
+          "group": "navigation"
+        },
+        {
+          "command": "pulseCatalogStudio.refreshNodeInventory",
+          "when": "view == pulseCatalogStudio.nodeInventory",
+          "group": "navigation"
+        },
+        {
+          "command": "pulseCatalogStudio.refreshDeployView",
+          "when": "view == pulseCatalogStudio.deploy",
+          "group": "navigation"
+        },
         {
           "command": "pulse-pmachine.refreshLibrarian",
           "when": "view == pulse-pmachine.dataLibrarian",
@@ -176,6 +376,46 @@
       ],
       "view/item/context": [
         {
+          "command": "pulseCatalogStudio.deployNetworkCache",
+          "when": "view == pulseCatalogStudio.deploy && viewItem == network-cache-deployment",
+          "group": "1_manage"
+        },
+        {
+          "command": "pulseCatalogStudio.validateWflDeployment",
+          "when": "view == pulseCatalogStudio.deploy && viewItem == wfl-deployment",
+          "group": "1_manage"
+        },
+        {
+          "command": "pulseCatalogStudio.previewWflDeployment",
+          "when": "view == pulseCatalogStudio.deploy && viewItem == wfl-deployment",
+          "group": "1_manage"
+        },
+        {
+          "command": "pulseCatalogStudio.deployWflDeployment",
+          "when": "view == pulseCatalogStudio.deploy && viewItem == wfl-deployment",
+          "group": "1_manage"
+        },
+        {
+          "command": "pulseCatalogStudio.inspectNode",
+          "when": "view == pulseCatalogStudio.nodeInventory && viewItem == inventory-node",
+          "group": "1_manage"
+        },
+        {
+          "command": "pulseCatalogStudio.refreshNode",
+          "when": "view == pulseCatalogStudio.nodeInventory && viewItem == inventory-node",
+          "group": "1_manage"
+        },
+        {
+          "command": "pulseCatalogStudio.unregisterNamedService",
+          "when": "view == pulseCatalogStudio.nodeInventory && viewItem == inventory-registered-service",
+          "group": "1_manage"
+        },
+        {
+          "command": "pulseCatalogStudio.stopHostedContext",
+          "when": "view == pulseCatalogStudio.nodeInventory && (viewItem == inventory-hosted-context || viewItem == inventory-daemon)",
+          "group": "1_manage"
+        },
+        {
           "command": "pulse-pmachine.openLibrarianSchema",
           "when": "view == pulse-pmachine.dataLibrarian && viewItem == pulseLibrarianSchema",
           "group": "inline"
@@ -188,12 +428,23 @@
       ],
       "editor/title": [
         {
+          "command": "pulseCatalogStudio.newVfl",
+          "when": "editorLangId == vfl",
+          "group": "navigation@1"
+        },
+        {
           "command": "pulse-pmachine.runCurrentFile",
           "when": "editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl",
           "group": "navigation@1"
         }
       ],
       "commandPalette": [
+        {
+          "command": "pulseCatalogStudio.open"
+        },
+        {
+          "command": "pulseCatalogStudio.newVfl"
+        },
         {
           "command": "pulse-pmachine.runCurrentFile",
           "when": "editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl"
@@ -207,6 +458,21 @@
           "type": "string",
           "default": "http://127.0.0.1:4000",
           "description": "Aggregator backend URL used by Data Librarian, Data Mapper, service discovery, and PMachine programs."
+        },
+        "pulse-pmachine.autoStartLocalServices": {
+          "type": "boolean",
+          "default": true,
+          "description": "When backendUrl is on this machine, start the aggregator backend, Data Librarian (4300) and Data Mapper (4200) on activation if they are not running."
+        },
+        "pulse-pmachine.aggregatorPath": {
+          "type": "string",
+          "default": "",
+          "description": "Folder containing backend.mjs, data-librarian.mjs and data-mapper.mjs. Empty searches the workspace for aggregator or virtualMachines/esp32/aggregator."
+        },
+        "pulse-pmachine.nodePath": {
+          "type": "string",
+          "default": "node",
+          "description": "Node.js executable used to start local services."
         },
         "pulse-pmachine.nodeHosts": {
           "type": "array",
@@ -225,8 +491,47 @@
           "type": "boolean",
           "default": false,
           "description": "Open the Towers of Hanoi animation panel after Run on PMachine."
+        },
+        "pulse.catalogStudio.url": {
+          "type": "string",
+          "default": "http://localhost:5173/",
+          "description": "URL loaded inside the Pulse Studio webview. Point this to the running Vite or deployed frontend."
+        },
+        "pulse.catalogStudio.apiBase": {
+          "type": "string",
+          "default": "http://127.0.0.1:4000",
+          "description": "Base URL used for Studio VFL palette and topology data."
+        },
+        "pulse.catalogStudio.distributedCacheApiBase": {
+          "type": "string",
+          "default": "http://127.0.0.1:4310",
+          "description": "Distributed device cache URL for the Network infrastructure branch."
+        },
+        "pulse.catalogStudio.mapperApiBase": {
+          "type": "string",
+          "default": "http://127.0.0.1:4200",
+          "description": "Data Mapper service URL used by the Studio mapper sidebar."
+        },
+        "pulse.catalogStudio.defaultVflExtension": {
+          "type": "string",
+          "default": ".vfl",
+          "description": "Default extension for new VFL documents."
+        },
+        "pulse.catalogStudio.defaultFolder": {
+          "type": "string",
+          "default": "aggregator/data/visual-flows",
+          "description": "Workspace-relative folder for new VFL documents."
         }
       }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "pulseCatalogStudio",
+          "title": "Pulse Studio",
+          "icon": "media/catalog-studio.svg"
+        }
+      ]
     },
     "debuggers": [
       {
@@ -344,7 +649,7 @@
     ]
   },
   "scripts": {
-    "compile": "tsc -p ./",
+    "compile": "node scripts/sync-pulse-studio.mjs && tsc -p ./",
     "package": "npm run compile && vsce package --no-dependencies"
   },
   "devDependencies": {

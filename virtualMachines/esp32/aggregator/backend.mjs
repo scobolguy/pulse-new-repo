@@ -8164,7 +8164,7 @@ function buildGatewayStreamPayload() {
 }
 
 // --- UDP Node Discovery ---
-const udpServer = dgram.createSocket('udp4');
+const udpServer = dgram.createSocket({ type: 'udp4', reuseAddr: true });
 
 function getLocalAdvertiseIp() {
   const interfaces = os.networkInterfaces();

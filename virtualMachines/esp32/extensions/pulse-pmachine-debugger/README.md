@@ -1,6 +1,8 @@
-# Pulse PMachine Debugger
+# Pulse Studio & PMachine Debugger
 
-This VS Code extension provides native Run and Debug support for Pulse PMachine programs.
+This single VS Code extension packages Pulse Studio, Data Librarian, Data Mapper,
+Deploy, Node Inventory, and native Run and Debug support for PMachine programs.
+Install one `pulse-pmachine-debugger` VSIX to get these panels and commands.
 
 ## Data Librarian in Explorer
 
@@ -17,9 +19,39 @@ contact the backend. Empty catalogs and schemas without field structures are
 shown explicitly; connection or catalog failures appear in the view, a
 notification, and the `Pulse PMachine` output channel.
 
-This panel is included in extension version **0.1.10**. After installing the
+This panel is included in extension version **0.1.13**. After installing the
 updated VSIX, run **Developer: Reload Window**. If hidden, use **View: Open View**
 and select **Pulse Data Librarian**.
+
+## Pulse Studio panels
+
+The **Pulse Studio** activity-bar container includes Data Librarian, Data Mapper,
+Infrastructure, Deploy, and Node Inventory views, plus the VFL editor and
+**Pulse: Open Pulse Studio** command. The native PMachine Data Librarian and
+Data Mapper views remain available in Explorer alongside the Studio views.
+
+Deploy can validate and preview WFL deployment declarations. The current backend
+does not install WFL service or daemon artifacts onto ESP32 nodes, so choosing
+Deploy explicitly reports that no deployment occurred. Node Inventory separates
+registered services from observed hosted contexts and provides distinct,
+confirmed actions for unregistering a service and stopping a hosted context.
+
+Deploy also includes **Deploy Network Cache to local JS PMachine**. In a trusted
+ESP32 project workspace, select it to start a managed VS Code task that creates
+a local JS PMachine on `4111`, installs signed cache service contexts with the
+Kasa, Tuya and SSDP daemons on `4309`, `4307` and `4308`, and serves the native
+aggregation API on `4310`. It also installs the Pulse node discovery service and
+daemon on the primary context, listening on shared UDP `4210`. The Aggregator
+must use a shared discovery socket too; restart older running backends before
+installing this collector. It uses `config/federated-device-cache.json` for LAN
+interface and peer settings. Existing listeners/collector contexts are not
+replaced. The task terminal reports readiness or errors; keep it running to keep
+the deployment alive. A fresh process requires redeployment. Cache source
+coverage is reported independently; successful installation is not evidence
+that every device was discovered. WFL remains validation/preview only.
+
+Build and package all features together from this extension folder with
+`npm run package`; the resulting VSIX is the single installable extension.
 
 ## Data Mapper designer
 

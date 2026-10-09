@@ -1,4 +1,7 @@
 import { object, parseMapping, publicationPayload, samePublishedMapping } from './dataMapperModel.js';
+export function structurePending(schema) {
+    return !schema.structure && schema.structureLoaded === false;
+}
 export class MapperHttpError extends Error {
     status;
     constructor(status, message) {
@@ -50,6 +53,22 @@ export class DataMapperBackend {
             }
             return schema;
         });
+    }
+    // Schema lists are lazy; structures are parsed and cached by the Librarian on first request.
+    async schemaStructure(path, reparse = false) {
+        const data = await this.request(`/api/librarian/schema-structure?path=${encodeURIComponent(path)}${reparse ? '&reparse=true' : ''}`, 'GET', undefined, 120000);
+        const structure = data.structure;
+        if (structure != null && (!object(structure) || !Array.isArray(structure.children))) {
+            throw new Error(`Librarian returned an invalid field structure for ${path}.`);
+        }
+        return { structure: structure ?? null,
+            ...(typeof data.mtime === 'string' ? { mtime: data.mtime } : {}) };
+    }
+    async schemaWithStructure(schema) {
+        if (!structurePending(schema))
+            return schema;
+        const loaded = await this.schemaStructure(schema.path);
+        return { ...schema, structure: loaded.structure, structureLoaded: true, ...(loaded.mtime ? { mtime: loaded.mtime } : {}) };
     }
     async maps() {
         const data = await this.request('/api/mapper/maps');

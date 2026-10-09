@@ -40,6 +40,10 @@ export async function registerDeviceDescriptor(origin) {
   }
   const catalog = await request('/api/librarian/schemas');
   const registered = catalog.schemas.find(item => item.path === descriptorFilename);
+  if (registered) {
+    registered.structure = (await request(
+      `/api/librarian/schema-structure?path=${encodeURIComponent(descriptorFilename)}`)).structure;
+  }
   if (!registered || registered.typeId !== 'device-descriptor' || !registered.structure)
     throw new Error('Device descriptor was not exposed correctly in the Data Librarian catalog');
   return registered;

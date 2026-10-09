@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import * as vscode from 'vscode';
 import { applyMappingAction, emptyMapping, fieldsOf, object, parseMapping, prototypeMapping, publicationPayload, rulesOf } from './dataMapperModel.js';
-import { DataMapperBackend } from './dataMapperBackend.js';
+import { DataMapperBackend, structurePending } from './dataMapperBackend.js';
 const viewType = 'pulse-pmachine.dataMapper';
 export class DataMapperEditor {
     extensionUri;
@@ -127,22 +127,27 @@ Use Ctrl+S to save and VS Code Undo/Redo to edit history.</p>
                     await replace({ ...map, id, name: name.trim() }, version);
                 }
                 else if (message.type === 'schema' || message.type === 'refreshSchemas') {
-                    const schemas = await backend().schemas();
+                    const api = backend();
+                    const schemas = await api.schemas();
                     let next = map;
                     if (message.type === 'schema') {
                         if (message.side !== 'source' && message.side !== 'target')
                             throw new Error('Invalid schema side.');
-                        const choices = schemas.filter(schema => schema.structure);
+                        const choices = schemas.filter(schema => schema.structure || structurePending(schema));
                         if (!choices.length)
                             throw new Error('Librarian has no schemas with field structures.');
-                        const choice = await vscode.window.showQuickPick(choices.map(schema => ({
+                        const picked = await vscode.window.showQuickPick(choices.map(schema => ({
                             label: typeof schema.name === 'string' ? schema.name : schema.path,
                             description: typeof schema.typeId === 'string' ? schema.typeId : '',
                             detail: schema.path, schema,
                         })), { title: `Choose ${message.side} schema (${schemas.length - choices.length} schemas without field structures omitted)`,
                             matchOnDescription: true, matchOnDetail: true });
-                        if (!choice)
+                        if (!picked)
                             return;
+                        const chosen = await api.schemaWithStructure(picked.schema);
+                        if (!chosen.structure)
+                            throw new Error(`Schema ${chosen.path} has no field structure.`);
+                        const choice = { schema: chosen };
                         const side = message.side;
                         const clear = map[`${side}SchemaPath`] !== choice.schema.path && rulesOf(map).length > 0;
                         if (clear && !await confirmClear())
@@ -154,7 +159,8 @@ Use Ctrl+S to save and VS Code Undo/Redo to edit history.</p>
                     }
                     else {
                         for (const side of ['source', 'target']) {
-                            const schema = schemas.find(entry => entry.path === map[`${side}SchemaPath`]);
+                            const listed = schemas.find(entry => entry.path === map[`${side}SchemaPath`]);
+                            const schema = listed ? await api.schemaWithStructure(listed) : undefined;
                             if (!schema?.structure)
                                 throw new Error(`Selected ${side} schema is unavailable in Librarian.`);
                             next = { ...next, [`${side}Structure`]: schema.structure, [`${side}SchemaMtime`]: schema.mtime ?? '' };

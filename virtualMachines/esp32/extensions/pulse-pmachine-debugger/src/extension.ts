@@ -1,5 +1,6 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
+import { createRequire } from 'node:module';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as vscode from 'vscode';
@@ -8,6 +9,13 @@ import { HanoiPanel, looksLikeHanoi } from './hanoiPanel.js';
 import { ServicesViewProvider, openServiceEndpoint } from './servicesView.js';
 import { registerDataMapper } from './dataMapperEditor.js';
 import { DataLibrarianViewProvider, openLibrarianSchema } from './dataLibrarianView.js';
+import { ensureLocalServices } from './localServices.js';
+
+const require = createRequire(import.meta.url);
+const pulseStudio = require('./pulse-studio/extension.js') as {
+  activate(context: vscode.ExtensionContext, vscodeApi: typeof vscode): void;
+  deactivate?(): void;
+};
 
 const DEFAULT_NODE_HOSTS = ['127.0.0.1:4111', '127.0.0.1:4112', '127.0.0.1:4113', '192.168.2.155'];
 
@@ -1238,7 +1246,16 @@ export function activate(context: vscode.ExtensionContext): void {
   const servers = new ServicesViewProvider(output, 'servers');
   const librarian = new DataLibrarianViewProvider(output);
   registerDataMapper(context, output);
+  const startLocalServices = (explicit: boolean) =>
+    ensureLocalServices(output, path.join(context.globalStorageUri?.fsPath ?? os.tmpdir(), 'local-services'), explicit).then(started => {
+      if (!started) return;
+      services.refresh();
+      servers.refresh();
+      librarian.refresh();
+    });
+  void startLocalServices(false);
   context.subscriptions.push(
+    vscode.commands.registerCommand('pulse-pmachine.startLocalServices', () => startLocalServices(true)),
     output,
     hanoiPanel,
     services,
@@ -1248,10 +1265,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerTreeDataProvider('pulse-pmachine.servers', servers),
     vscode.window.registerTreeDataProvider('pulse-pmachine.dataLibrarian', librarian),
     vscode.commands.registerCommand('pulse-pmachine.refreshLibrarian', () => librarian.refresh()),
-    vscode.commands.registerCommand('pulse-pmachine.openLibrarianSchema', openLibrarianSchema),
+    vscode.commands.registerCommand('pulse-pmachine.openLibrarianSchema', (item?: Parameters<typeof openLibrarianSchema>[0]) => openLibrarianSchema(item, librarian)),
     vscode.commands.registerCommand('pulse-pmachine.showDataLibrarian', () =>
       vscode.commands.executeCommand('pulse-pmachine.dataLibrarian.focus')),
-    vscode.workspace.onDidGrantWorkspaceTrust(() => librarian.refresh()),
+    vscode.workspace.onDidGrantWorkspaceTrust(() => { librarian.refresh(); void startLocalServices(false); }),
     vscode.commands.registerCommand('pulse-pmachine.refreshServices', () => services.refresh()),
     vscode.commands.registerCommand('pulse-pmachine.refreshServers', () => servers.refresh()),
     vscode.commands.registerCommand('pulse-pmachine.openServiceEndpoint', openServiceEndpoint),
@@ -1296,6 +1313,9 @@ export function activate(context: vscode.ExtensionContext): void {
       },
     }),
   );
+  pulseStudio.activate(context, vscode);
 }
 
-export function deactivate(): void {}
+export function deactivate(): void {
+  pulseStudio.deactivate?.();
+}
