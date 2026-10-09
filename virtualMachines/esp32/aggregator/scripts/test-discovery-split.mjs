@@ -13,6 +13,20 @@ import { createDiscoverySnapshotSource, registerNodeAnnouncementRoute } from '..
 import { registerTopologyRuntimeRoutes } from '../src/backend/roles/topologyRuntimeRoutes.mjs';
 import { NodeRegistry } from '../src/esp32/nodeRegistry.mjs';
 import { registerFlowDeploymentRoutes } from '../src/backend/flowDeploymentRoutes.mjs';
+import { getEnvironment, getInfrastructureCatalog, getServiceHealthUrl } from '../src/backend/modules/serviceRegistry.mjs';
+
+test('default service registry keeps Librarian and Discovery on distinct, consistent ports', () => {
+  const { ports } = getEnvironment('default');
+  assert.equal(ports.librarian, 4300);
+  assert.equal(ports.discovery, 4301);
+  assert.equal(new Set(Object.values(ports)).size, Object.keys(ports).length);
+  const catalog = getInfrastructureCatalog();
+  for (const key of ['librarian', 'discovery']) {
+    const offering = catalog.serviceOfferings.find(entry => entry.id === `service.${key}`);
+    assert.equal(offering.endpoint, `http://127.0.0.1:${ports[key]}`);
+    assert.equal(getServiceHealthUrl(key, 'default'), `${offering.endpoint}/health`);
+  }
+});
 
 const logger = { log() {}, warn() {}, error() {} };
 async function listen(app) {

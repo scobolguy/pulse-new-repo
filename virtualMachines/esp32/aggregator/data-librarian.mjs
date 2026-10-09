@@ -5,11 +5,11 @@ import { fileURLToPath } from 'url';
 import { readEnvNumber } from './src/env-config.mjs';
 import { compilePascalishProgramWithAntlr } from './scripts/compile-pascalish-program-antlr-to-pcode.mjs';
 import { createPascalishServiceHost } from '../pmachines/javascript/src/service-host.mjs';
-import { createPascalishCatalogStore } from './src/librarian/catalog-store.mjs';
-import { createPascalishXsdParser } from './src/librarian/xsd-parser.mjs';
+import { createPascalishCatalogStore } from './src/librarian/~catalog-store.mjs';
+import { createPascalishXsdParser } from './src/librarian/~xsd-parser.mjs';
 import { createPascalishSchemaTreeService } from './src/librarian/schema-tree-service.mjs';
 import { createPascalishSchemaStructureService } from './src/librarian/schema-structure-service.mjs';
-import { createPascalishLibrarianNormalization } from './src/librarian/normalization.mjs';
+import { createPascalishLibrarianNormalization } from './src/librarian/~normalization.mjs';
 import { createPascalishLibrarianMetadataRoutes } from './src/librarian/metadata-routes.mjs';
 import { createPascalishLibrarianSchemaFieldsRoutes } from './src/librarian/schema-fields-routes.mjs';
 import { createPascalishLibrarianSearchRoutes } from './src/librarian/search-routes.mjs';
@@ -407,14 +407,19 @@ async function loadPhysicalSchemaCatalog() {
     };
     schemas.push({ file, meta, lifecycle });
   }
-  const catalog = await Promise.all(schemas.map(async ({ file, meta, lifecycle }) => ({
-    ...meta,
-    path: file.path,
-    size: file.size,
-    mtime: file.mtime,
-    structure: await extractStructureForFile(file.fullPath, meta.type),
-    lifecycle,
-  })));
+  const catalog = [];
+  // The structure host has a bounded event queue; do not submit a whole catalog at once.
+  for (let offset = 0; offset < schemas.length; offset += 8) {
+    const batch = await Promise.all(schemas.slice(offset, offset + 8).map(async ({ file, meta, lifecycle }) => ({
+      ...meta,
+      path: file.path,
+      size: file.size,
+      mtime: file.mtime,
+      structure: await extractStructureForFile(file.fullPath, meta.type),
+      lifecycle,
+    })));
+    catalog.push(...batch);
+  }
   for (const schema of catalog) {
     schema.lifecycle = await normalization.lifecycleDisplay(schema.lifecycle);
   }

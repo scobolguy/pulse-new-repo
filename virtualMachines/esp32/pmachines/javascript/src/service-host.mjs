@@ -42,7 +42,7 @@ function objectJson(value) {
 export async function createPascalishServiceHost({
   compiled, daemons = [], collectorId, bindings = {}, networkPeers = [], host = '127.0.0.1', httpPort = 4300, udpPort = 4210,
   maxEntries = 255, maxTables = 4, maxEvents = 16, maxBodyBytes = 4096,
-  maxStorageBytes = 131072, maxResponseBytes = 262144, maxSteps = 100000, maxExecutionMs = 2000,
+  maxStorageBytes = 131072, maxResponseBytes = 262144, maxSteps, maxExecutionMs,
   maxTimers = 8, maxDaemonDatagramBytes = 1024, clock = () => Math.floor(performance.now()), logger = console,
   onDaemonEvent = null, storageRoots = {}, maxFileBytes = 262144, desktopBudget = false
 }) {
@@ -52,11 +52,16 @@ export async function createPascalishServiceHost({
   if (httpPort !== null) integer(httpPort, 0, 65535, 'HTTP port');
   if (udpPort !== null) integer(udpPort, 0, 65535, 'UDP port');
   integer(maxDaemonDatagramBytes, 1, 4096, 'maxDaemonDatagramBytes');
-  for (const [name, value] of Object.entries({ maxEntries, maxTables, maxEvents, maxBodyBytes, maxTimers, maxStorageBytes, maxResponseBytes, maxExecutionMs })) {
+  for (const [name, value] of Object.entries({ maxEntries, maxTables, maxEvents, maxBodyBytes, maxTimers, maxStorageBytes, maxResponseBytes })) {
     integer(value, 1, 1000000, name);
   }
   if (typeof desktopBudget !== 'boolean') throw failure('Invalid desktopBudget');
-  integer(maxSteps, 1, desktopBudget ? 10000000 : 200000, 'maxSteps');
+  if (maxSteps === undefined) maxSteps = desktopBudget ? null : 100000;
+  if (maxExecutionMs === undefined) maxExecutionMs = desktopBudget ? null : 2000;
+  if (maxSteps === null && !desktopBudget) throw failure('Invalid maxSteps');
+  if (maxSteps !== null) integer(maxSteps, 1, desktopBudget ? Number.MAX_SAFE_INTEGER : 200000, 'maxSteps');
+  if (maxExecutionMs === null && !desktopBudget) throw failure('Invalid maxExecutionMs');
+  if (maxExecutionMs !== null) integer(maxExecutionMs, 1, 1000000, 'maxExecutionMs');
   integer(maxFileBytes, 1, 1000000, 'maxFileBytes');
   const instructions = parsePcode(compiled.pcodeText);
   const filesystem = await createFilesystemBindings(storageRoots, {
@@ -351,7 +356,9 @@ export async function createPascalishServiceHost({
       const cancelled = new Promise((resolve, reject) => { rejectCancelled = reject; });
       const onAbort = () => rejectCancelled(failure(signal.reason?.message || 'Service execution cancelled', 503));
       signal.addEventListener('abort', onAbort, { once: true });
-      const timeout = setTimeout(() => invocationAbort.abort(new Error('Service execution timeout')), maxExecutionMs);
+      const timeout = maxExecutionMs === null
+        ? null
+        : setTimeout(() => invocationAbort.abort(new Error('Service execution timeout')), maxExecutionMs);
       let result;
       try {
         result = await Promise.race([cancelled, executeProgram({
@@ -370,7 +377,7 @@ export async function createPascalishServiceHost({
           } }
         })]);
       } finally {
-        clearTimeout(timeout);
+        if (timeout !== null) clearTimeout(timeout);
         signal.removeEventListener('abort', onAbort);
       }
       if (result.stepLimitHit || result.error) throw failure(result.error || 'Service instruction limit exceeded', 500);
@@ -450,7 +457,7 @@ export async function createPascalishServiceHost({
     if (stopping) return stopping;
     closed = true;
     running = false;
-    executionAbort.abort();
+    executionAbort.abort(new Error('Service execution cancelled'));
     for (const timer of timers.values()) clearInterval(timer);
     timers.clear();
     for (const request of requests) request.destroy();

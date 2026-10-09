@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { isSchemaBranch, schemaNodeNotice, schemaSimpleTypeSummary } from './librarian/schema-tree.mjs';
+import { isSchemaBranch, schemaNodeNotice, schemaSimpleTypeSummary } from './librarian/~schema-tree.mjs';
 
 const SECTION_STYLE = {
   border: '1px solid #ccc',

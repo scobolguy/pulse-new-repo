@@ -50,9 +50,29 @@ If the gateway has not yet been repaired to allow localhost service-control requ
 - Queue manager: `4100`
 - Mapper: `4200`
 - Librarian: `4300`
+- Discovery (optional standalone collector): `4301`
+
+The default environment in `config/service-registry.json` uses these ports for service health checks and catalog endpoints. Override the standalone collector port with `DISCOVERY_HTTP_PORT`; keep collector URLs and the registry consistent with any override. The secondary environment retains Librarian on `4311` and Discovery on `4310`.
 
 Set `PULSE_LIBRARIAN_AUTOSTART=false` or `PULSE_MAPPER_AUTOSTART=false` to opt out of either service in a development run. The Windows service runner explicitly enables both.
 
 ## Service Control API
 
 The gateway exposes local service-control endpoints under `/api/runtime/services`. Localhost requests are allowed by default through `PULSE_SERVICE_CONTROL_LOCAL_BYPASS=1` in the Windows service runner. Remote requests still require normal authorization.
+
+## VS Code Service Directory and Schema Catalog
+
+VS Code's **Pulse Services** view uses the gateway's `GET /api/services` directory.
+It merges configured offerings (including Data Librarian and Data Mapper),
+runtime instances, discovered nodes, and configured discovery collectors.
+Unreachable node registries produce an explicit degraded status and error list;
+they do not hide configured services. Restart the gateway after changing its
+routes, then refresh the view.
+
+Use `GET /api/librarian/schemas` through the gateway (port `4000`) or Librarian
+(port `4300`) to verify schema availability; `/health` alone does not exercise
+catalog parsing. Numeric filename versions such as `camt.003.001.08.xsd` and
+`invoice.v003.json` are normalized by Pascalish policy. Physical schema parsing
+uses bounded batches, and catalog responses are assembled from bounded PMachine
+messages without dropping field trees. An individually oversized entry is an
+explicit capacity error rather than a truncated schema.

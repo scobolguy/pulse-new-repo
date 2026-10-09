@@ -1,7 +1,12 @@
+import { buildServicesDirectory } from '../modules/servicesDirectory.mjs';
+import { getInfrastructureCatalog } from '../modules/serviceRegistry.mjs';
+import { readDiscoveryProviderConfig } from '../modules/discoveryProvider.mjs';
+
 export function registerRuntimeRegistryRoutes(app, deps) {
   const {
     requirePermission,
     serviceInstanceRegistry,
+    discoveredNodes,
     getUiCardOverrides,
     setUiCardOverrides,
     hasPermission,
@@ -27,6 +32,22 @@ export function registerRuntimeRegistryRoutes(app, deps) {
     gatewayQuiesceState,
     normalizeGatewayRuntimeConfig
   } = deps;
+
+  app.get('/api/services', async (req, res) => {
+    try {
+      const directory = await buildServicesDirectory({
+        catalog: getInfrastructureCatalog(),
+        instances: Array.from(serviceInstanceRegistry.values()),
+        nodes: Array.from(discoveredNodes?.values() || []),
+        collectorUrls: readDiscoveryProviderConfig().collectorUrls,
+        origin: `${req.protocol}://${req.get('host')}`,
+      });
+      res.json(directory);
+    } catch (error) {
+      console.error('[Services] Directory failed:', error);
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
 
   function parseRuntimeInstanceId(rawInstanceId) {
     const text = String(rawInstanceId || '').trim();

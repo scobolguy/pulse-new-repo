@@ -7,6 +7,7 @@ const { readDistributedNetwork } = require('./distributedNetwork')
 
 const VIEW_TYPE = 'pulseCatalogStudio.webview'
 const SIDEBAR_VIEW_TYPE = 'pulseCatalogStudio.sidebar'
+const MAPPER_VIEW_TYPE = 'pulseCatalogStudio.dataMapper'
 const VFL_EDITOR_VIEW_TYPE = 'pulseCatalogStudio.vflEditor'
 
 const DEFAULT_VFL_TEMPLATE = Object.freeze({
@@ -160,13 +161,17 @@ function getNetworkApiBases() {
   if (/^http:\/\/localhost(?::|$)/i.test(configured)) {
     candidates.push(configured.replace(/^http:\/\/localhost/i, 'http://127.0.0.1'))
   }
-  candidates.push('http://127.0.0.1:4000', 'http://127.0.0.1:4300')
+  candidates.push('http://127.0.0.1:4000')
   return Array.from(new Set(candidates.map((candidate) => candidate.replace(/\/$/, ''))))
+}
+
+function getLibrarianApiBases() {
+  return Array.from(new Set([...getNetworkApiBases(), 'http://127.0.0.1:4300']))
 }
 
 async function getLibrarianDataTypes() {
   const errors = []
-  for (const base of getNetworkApiBases()) {
+  for (const base of getLibrarianApiBases()) {
     try {
       const payload = await requestJson(`${base}/api/librarian/data-types`, 5000, true)
       if (!Array.isArray(payload?.types)) {
@@ -206,11 +211,16 @@ function registerDataTypeMessages(webview) {
   })
 }
 
-function requestJson(url, timeoutMs = 2000, includeErrorDetails = false) {
+function requestJson(url, timeoutMs = 2000, includeErrorDetails = false, options = {}) {
   return new Promise((resolve, reject) => {
     const target = new URL(url)
     const client = target.protocol === 'https:' ? https : http
-    const request = client.get(target, { timeout: timeoutMs }, (response) => {
+    const payload = options.body === undefined ? undefined : JSON.stringify(options.body)
+    const request = client.request(target, {
+      method: options.method || 'GET',
+      timeout: timeoutMs,
+      headers: payload === undefined ? undefined : { 'content-type': 'application/json' },
+    }, (response) => {
       let body = ''
       response.setEncoding('utf8')
       response.on('data', (chunk) => { body += chunk })
@@ -237,6 +247,7 @@ function requestJson(url, timeoutMs = 2000, includeErrorDetails = false) {
     })
     request.on('timeout', () => request.destroy(new Error('Request timed out')))
     request.on('error', reject)
+    request.end(payload)
   })
 }
 
@@ -1735,26 +1746,7 @@ class CatalogStudioTreeProvider {
   }
 
   async getChildren(element) {
-    if (!element) {
-      const librarian = new InfraItem('Data Librarian', vscode.TreeItemCollapsibleState.Expanded, {
-        kind: 'data-librarian',
-        iconId: 'library',
-        tooltip: 'Registered Data Librarian data types',
-      })
-      librarian.id = 'data-librarian'
-      const dataMapper = new InfraItem('Data Mapper', vscode.TreeItemCollapsibleState.None, {
-        kind: 'data-mapper',
-        iconId: 'symbol-misc',
-        tooltip: 'Open Data Mapper',
-      })
-      dataMapper.id = 'data-mapper'
-      dataMapper.command = {
-        command: 'pulseCatalogStudio.openDataMapper',
-        title: 'Open Data Mapper',
-      }
-      return [librarian, dataMapper]
-    }
-    if (element.kind !== 'data-librarian') return []
+    if (element) return []
 
     try {
       const types = await getLibrarianDataTypes()
@@ -1782,6 +1774,374 @@ class CatalogStudioTreeProvider {
       })]
     }
   }
+}
+
+class DataMapperViewProvider extends CatalogStudioTreeProvider {
+  async getChildren(element) {
+    if (element && element.kind !== 'data-map') return []
+    const base = String(vscode.workspace.getConfiguration('pulse')
+      .get('catalogStudio.mapperApiBase', 'http://127.0.0.1:4200')).trim().replace(/\/+$/, '')
+    try {
+      if (!element) {
+        const payload = await requestJson(`${base}/api/mapper/maps`, 15000, true)
+        if (!Array.isArray(payload?.maps)) throw new Error('Data Mapper response does not contain a maps array')
+        if (!payload.maps.length) {
+          return [new InfraItem('No maps registered', vscode.TreeItemCollapsibleState.None, { iconId: 'info' })]
+        }
+        return payload.maps.map(map => {
+          if (!map || typeof map.id !== 'string' || !map.id.trim() || typeof map.name !== 'string') {
+            throw new Error('Data Mapper returned an invalid map')
+          }
+          const item = new InfraItem(map.name || map.id, vscode.TreeItemCollapsibleState.Expanded, {
+            kind: 'data-map', iconId: 'symbol-misc', description: map.id,
+            tooltip: map.description || map.name || map.id,
+          })
+          item.id = `data-map:${map.id}`
+          item.mapId = map.id
+          if (typeof map.fileName === 'string') {
+            item.command = {
+              command: 'pulseCatalogStudio.openMapFile',
+              title: 'Open Map in Data Mapper',
+              arguments: [map.fileName],
+            }
+          }
+          return item
+        })
+      }
+      const payload = await requestJson(`${base}/api/mapper/maps/${encodeURIComponent(element.mapId)}`, 15000, true)
+      const map = payload?.map
+      if (!map || !Array.isArray(map.rules)) throw new Error('Data Mapper returned an invalid map rules array')
+      const rows = []
+      for (const [label, value] of [['Source', map.sourceSchemaPath], ['Target', map.targetSchemaPath]]) {
+        if (typeof value === 'string' && value) {
+          rows.push(new InfraItem(`${label}: ${value}`, vscode.TreeItemCollapsibleState.None, {
+            iconId: 'symbol-structure', tooltip: value,
+          }))
+        }
+      }
+      map.rules.forEach((rule, index) => {
+        const source = rule?.sourcePath || rule?.from
+        const target = rule?.targetPath || rule?.to
+        if (typeof source !== 'string' || !source.trim() || typeof target !== 'string' || !target.trim()) {
+          throw new Error(`Data Mapper returned an invalid rule at index ${index}`)
+        }
+        const item = new InfraItem(`${source} -> ${target}`, vscode.TreeItemCollapsibleState.None, {
+          iconId: 'arrow-right', tooltip: `${source} -> ${target}${rule.conversionRule ? `\n${rule.conversionRule}` : ''}`,
+        })
+        item.id = `${element.id}:rule:${index}`
+        rows.push(item)
+      })
+      if (!map.rules.length) rows.push(new InfraItem('No field connections', vscode.TreeItemCollapsibleState.None, { iconId: 'info' }))
+      return rows
+    } catch (error) {
+      return [new InfraItem('Data Mapper unavailable', vscode.TreeItemCollapsibleState.None, {
+        iconId: 'error', description: 'Use Refresh to retry', tooltip: error.message || String(error),
+      })]
+    }
+  }
+}
+
+class WflDeployViewProvider extends CatalogStudioTreeProvider {
+  async getChildren(element) {
+    if (element) return []
+    if (!vscode.workspace.workspaceFolders?.length) {
+      return [new InfraItem('Open a workspace to browse WFL deployments', vscode.TreeItemCollapsibleState.None, {
+        iconId: 'info',
+      })]
+    }
+    try {
+      const files = await vscode.workspace.findFiles('**/*.wfl', '**/{node_modules,.git,dist,build}/**', 1000)
+      if (!files.length) {
+        return [new InfraItem('No WFL files found', vscode.TreeItemCollapsibleState.None, { iconId: 'info' })]
+      }
+      return files.map(uri => {
+        const relativePath = vscode.workspace.asRelativePath(uri)
+        const item = new InfraItem(path.basename(uri.fsPath), vscode.TreeItemCollapsibleState.None, {
+          kind: 'wfl-deployment',
+          iconId: 'rocket',
+          description: relativePath,
+          tooltip: relativePath,
+        })
+        item.resourceUri = uri
+        item.id = `wfl:${uri.fsPath}`
+        item.command = { command: 'vscode.open', title: 'Open WFL Deployment', arguments: [uri] }
+        return item
+      })
+    } catch (error) {
+      return [new InfraItem('WFL files unavailable', vscode.TreeItemCollapsibleState.None, {
+        iconId: 'error',
+        description: 'Use Refresh to retry',
+        tooltip: error.message || String(error),
+      })]
+    }
+  }
+}
+
+class NodeInventoryTreeProvider extends CatalogStudioTreeProvider {
+  constructor() {
+    super()
+    this.nodes = new Map()
+  }
+
+  async getChildren(element) {
+    if (element?.kind === 'inventory-node') return this.getNodeResources(element.node)
+    if (element?.kind === 'inventory-hosted-context') return this.getHostedContextChildren(element)
+    if (element) return []
+    try {
+      const payload = await requestJson(`${getCatalogStudioApiBase()}/api/nodes`, 5000, true)
+      if (!Array.isArray(payload?.nodes)) throw new Error('Node registry response does not contain a nodes array')
+      this.nodes.clear()
+      if (!payload.nodes.length) {
+        return [new InfraItem('No nodes registered', vscode.TreeItemCollapsibleState.None, { iconId: 'info' })]
+      }
+      return payload.nodes.map(node => {
+        const nodeId = String(node?.id || node?.nodeId || node?.nodeName || '').trim()
+        const address = String(node?.ip || node?.address || '').trim()
+        if (!nodeId) throw new Error('Node registry returned a node without an ID')
+        const normalized = { ...node, nodeId, address }
+        this.nodes.set(nodeId, normalized)
+        const item = new InfraItem(node.name || node.nodeName || nodeId, vscode.TreeItemCollapsibleState.Collapsed, {
+          kind: 'inventory-node',
+          iconId: 'circuit-board',
+          description: [address, node.port].filter(Boolean).join(':'),
+          tooltip: `Node: ${nodeId}${address ? `\nAddress: ${address}` : ''}${node.lastSeen ? `\nRegistry last seen: ${node.lastSeen}` : ''}`,
+        })
+        item.node = normalized
+        item.id = `inventory-node:${nodeId}`
+        return item
+      })
+    } catch (error) {
+      return [new InfraItem('Node inventory unavailable', vscode.TreeItemCollapsibleState.None, {
+        iconId: 'error',
+        description: 'Use Refresh to retry',
+        tooltip: error.message || String(error),
+      })]
+    }
+  }
+
+  async getNodeResources(node) {
+    const address = String(node?.address || '').trim()
+    const port = Number(node?.port) > 0 && Number(node.port) <= 65535 ? Number(node.port) : 80
+    if (!address) {
+      return [new InfraItem('Node has no reachable IP address', vscode.TreeItemCollapsibleState.None, {
+        iconId: 'warning',
+        tooltip: `Node ID: ${node.nodeId}`,
+      })]
+    }
+    const base = `http://${address}:${port}`
+    const [servicesResult, hostResult] = await Promise.allSettled([
+      requestJson(`${base}/api/services`, 5000, true),
+      requestJson(`${base}/pmachine/service_host/status`, 5000, true),
+    ])
+    const items = []
+    if (servicesResult.status === 'fulfilled') {
+      if (!Array.isArray(servicesResult.value?.services)) {
+        items.push(new InfraItem('Named-service registry returned invalid data', vscode.TreeItemCollapsibleState.None, {
+          iconId: 'warning',
+        }))
+      } else {
+        const services = servicesResult.value.services
+        if (!services.length) {
+          items.push(new InfraItem('No named services registered', vscode.TreeItemCollapsibleState.None, {
+            iconId: 'info',
+          }))
+        }
+        for (const service of services) {
+          const serviceId = String(service?.serviceId || '').trim()
+          if (!serviceId) continue
+          const item = new InfraItem(serviceId, vscode.TreeItemCollapsibleState.None, {
+            kind: 'inventory-registered-service',
+            iconId: service.enabled === false ? 'circle-slash' : 'symbol-event',
+            description: service.enabled === false ? 'registered · disabled' : 'registered',
+            tooltip: [
+              `Registration: ${serviceId}`,
+              service.file ? `File: ${service.file}` : '',
+              service.programMap ? `Program map: ${service.programMap}` : '',
+              'Registration does not prove that this service is currently executing.',
+            ].filter(Boolean).join('\n'),
+          })
+          item.node = node
+          item.serviceId = serviceId
+          item.address = address
+          item.port = port
+          items.push(item)
+        }
+      }
+    } else {
+      items.push(new InfraItem('Named-service registry unavailable', vscode.TreeItemCollapsibleState.None, {
+        iconId: 'warning',
+        tooltip: servicesResult.reason?.message || String(servicesResult.reason),
+      }))
+    }
+
+    if (hostResult.status === 'rejected') {
+      items.push(new InfraItem('Hosted runtime status unavailable', vscode.TreeItemCollapsibleState.None, {
+        iconId: 'warning',
+        tooltip: hostResult.reason?.message || String(hostResult.reason),
+      }))
+      return items
+    }
+    const status = hostResult.value
+    const contexts = Array.isArray(status?.services) ? status.services : []
+    if (!contexts.length) {
+      items.push(new InfraItem(status?.running === false ? 'Hosted runtime is not running' : 'No hosted contexts installed', vscode.TreeItemCollapsibleState.None, {
+        iconId: status?.running === false ? 'debug-disconnect' : 'info',
+        tooltip: 'This is separate from the named-service registry.',
+      }))
+      return items
+    }
+    for (const hosted of contexts) {
+      const collectorId = String(hosted?.collectorId || '').trim()
+      if (!collectorId) continue
+      const context = new InfraItem(`Hosted context: ${collectorId}`, vscode.TreeItemCollapsibleState.Expanded, {
+        kind: 'inventory-hosted-context',
+        iconId: 'server-process',
+        description: `${Array.isArray(hosted.daemons) ? hosted.daemons.length : 0} daemon diagnostics`,
+        tooltip: `Collector: ${collectorId}\nBoot: ${hosted.bootId || 'unknown'}`,
+      })
+      context.node = node
+      context.address = address
+      context.port = port
+      context.collectorId = collectorId
+      context.hostedStatus = hosted
+      items.push(context)
+    }
+    return items
+  }
+
+  getHostedContextChildren(context) {
+    const status = context.hostedStatus || {}
+    const entries = Number(status.entries)
+    const cacheEntries = Number(status.cacheEntries)
+    const cacheBytes = Number(status.cacheBytes)
+    const rows = [
+      new InfraItem(`Distributed table entries (aggregate): ${Number.isFinite(entries) ? entries : 'unknown'}`, vscode.TreeItemCollapsibleState.None, {
+        iconId: 'database',
+        tooltip: 'Firmware status reports the combined entry count; table names and per-table counts are not currently exposed.',
+      }),
+      new InfraItem(`Distributed cache entries: ${Number.isFinite(cacheEntries) ? cacheEntries : 'unknown'}`, vscode.TreeItemCollapsibleState.None, {
+        iconId: 'database',
+        description: Number.isFinite(cacheBytes) ? `${cacheBytes} bytes` : '',
+        tooltip: 'Firmware status reports aggregate cache counts and bytes; cache names are not currently exposed.',
+      }),
+    ]
+    const daemons = Array.isArray(status.daemons) ? status.daemons : []
+    if (!daemons.length) {
+      rows.push(new InfraItem('No daemon diagnostics reported', vscode.TreeItemCollapsibleState.None, { iconId: 'info' }))
+    }
+    daemons.forEach((daemon, index) => {
+      const label = `Daemon ${index + 1}`
+      const details = [
+        daemon.udpPort ? `UDP ${daemon.udpPort}` : '',
+        daemon.intervalMs ? `${daemon.intervalMs} ms interval` : '',
+        `runs ${daemon.timerRuns ?? 0}`,
+        `failures ${daemon.failures ?? 0}`,
+      ].filter(Boolean).join(' · ')
+      const item = new InfraItem(label, vscode.TreeItemCollapsibleState.None, {
+        kind: 'inventory-daemon',
+        iconId: 'debug',
+        description: details,
+        tooltip: [
+          daemon.lastError || details,
+          'Firmware reports daemon diagnostics by slot; daemon IDs and source filenames are not currently exposed.',
+        ].filter(Boolean).join('\n'),
+      })
+      item.node = context.node
+      item.address = context.address
+      item.port = context.port
+      item.collectorId = context.collectorId
+      item.daemonIndex = index
+      rows.push(item)
+    })
+    return rows
+  }
+
+  async inspectNode(item) {
+    const children = await this.getNodeResources(item.node)
+    const summary = children.map(child => `${child.label}${child.description ? ` — ${child.description}` : ''}`).join('\n')
+    await vscode.window.showInformationMessage(`${item.node.nodeId}\n${summary || 'No runtime resources reported.'}`)
+  }
+
+  async unregisterNamedService(item) {
+    const choice = await vscode.window.showWarningMessage(
+      `Unregister ${item.serviceId} from ${item.node.nodeId}? This removes its named-service registration; it does not stop a hosted context.`,
+      { modal: true },
+      'Unregister Service',
+    )
+    if (choice !== 'Unregister Service') return
+    const base = `http://${item.address}:${item.port}`
+    await requestJson(`${base}/api/services/${encodeURIComponent(item.serviceId)}`, 5000, true, { method: 'DELETE' })
+    await vscode.window.showInformationMessage(`Unregistered named service ${item.serviceId}.`)
+    this.refresh()
+  }
+
+  async stopHostedContext(item) {
+    const scope = item.kind === 'inventory-daemon'
+      ? `${item.label} and all resources in hosted context ${item.collectorId}`
+    : `hosted context ${item.collectorId} and its services, daemons, and transient table/cache state`
+    const choice = await vscode.window.showWarningMessage(
+      `Stop ${scope} on ${item.node.nodeId}? This is separate from unregistering named services.`,
+      { modal: true },
+      'Stop Hosted Context',
+    )
+    if (choice !== 'Stop Hosted Context') return
+    const base = `http://${item.address}:${item.port}`
+    const query = new URLSearchParams({ collectorId: item.collectorId })
+    await requestJson(`${base}/pmachine/service_host/stop?${query}`, 5000, true, { method: 'POST' })
+    await vscode.window.showInformationMessage(`Stopped hosted context ${item.collectorId}.`)
+    this.refresh()
+  }
+}
+
+async function readWflDeploymentSource(item) {
+  if (!item?.resourceUri) throw new Error('Select a WFL deployment file first.')
+  const bytes = await vscode.workspace.fs.readFile(item.resourceUri)
+  return Buffer.from(bytes).toString('utf8')
+}
+
+async function compileWflDeployment(item) {
+  const source = await readWflDeploymentSource(item)
+  const payload = await requestJson(`${getCatalogStudioApiBase()}/api/deployments/wfl/compile`, 15000, true, {
+    method: 'POST',
+    body: { source },
+  })
+  if (!Array.isArray(payload?.deployments) || payload.deployments.length === 0) {
+    throw new Error('WFL file contains no deployment declaration.')
+  }
+  return payload
+}
+
+async function validateWflDeployment(item) {
+  try {
+    const payload = await compileWflDeployment(item)
+    await vscode.window.showInformationMessage(`WFL valid: ${payload.deployments.length} deployment(s) found.`)
+  } catch (error) {
+    vscode.window.showErrorMessage(`WFL validation failed: ${error.message || String(error)}`)
+  }
+}
+
+async function previewWflDeployment(item) {
+  try {
+    const payload = await compileWflDeployment(item)
+    const nodePayload = await requestJson(`${getCatalogStudioApiBase()}/api/nodes`, 5000, true)
+    if (!Array.isArray(nodePayload?.nodes)) throw new Error('Node registry response does not contain a nodes array')
+    const available = new Set(nodePayload.nodes.flatMap(node => [node.id, node.nodeId, node.nodeName].filter(Boolean).map(String)))
+    const summaries = payload.deployments.map(deployment => {
+      const targets = Array.from(new Set((deployment.targets || []).map(String)))
+      const resources = Array.isArray(deployment.resources) ? deployment.resources : []
+      const missing = targets.filter(target => !available.has(target))
+      return `${deployment.id}: ${resources.length} resource(s); targets ${targets.join(', ') || '(none)'}${missing.length ? `; unmatched ${missing.join(', ')}` : ''}`
+    })
+    await vscode.window.showInformationMessage(summaries.join('\n'))
+  } catch (error) {
+    vscode.window.showErrorMessage(`WFL preview failed: ${error.message || String(error)}`)
+  }
+}
+
+async function explainWflDeploymentUnavailable() {
+  await vscode.window.showWarningMessage(
+    'The WFL compiler and preview are available, but the current backend deployment-record API does not install WFL service/daemon artifacts on ESP32 nodes. No deployment was made.',
+  )
 }
 
 async function getNetworkItems() {
@@ -1949,24 +2309,61 @@ async function createNewVflDocument() {
 
 function activate(context) {
   const provider = new CatalogStudioTreeProvider()
+  const mapperProvider = new DataMapperViewProvider()
+  const deployProvider = new WflDeployViewProvider()
+  const inventoryProvider = new NodeInventoryTreeProvider()
   const diagnostics = vscode.languages.createDiagnosticCollection('pulse-vfl')
   const infrastructureProvider = new PulseInfrastructureTreeProvider()
   context.subscriptions.push(
     diagnostics,
     provider,
+    mapperProvider,
+    deployProvider,
+    inventoryProvider,
     vscode.window.registerTreeDataProvider(SIDEBAR_VIEW_TYPE, provider),
+    vscode.window.registerTreeDataProvider(MAPPER_VIEW_TYPE, mapperProvider),
     vscode.window.registerTreeDataProvider('pulseCatalogStudio.infrastructure', infrastructureProvider),
+    vscode.window.registerTreeDataProvider('pulseCatalogStudio.deploy', deployProvider),
+    vscode.window.registerTreeDataProvider('pulseCatalogStudio.nodeInventory', inventoryProvider),
     vscode.commands.registerCommand(
       'pulseCatalogStudio.open',
       () => openCatalogStudioPanel(context.extensionUri, 'Pulse Studio', 'flow-designer?host=vscode'),
     ),
     vscode.commands.registerCommand(
       'pulseCatalogStudio.openDataMapper',
-      () => openCatalogStudioPanel(context.extensionUri, 'Data Mapper', 'data-mapper?host=vscode'),
+      () => vscode.commands.executeCommand(`${MAPPER_VIEW_TYPE}.focus`),
     ),
+    vscode.commands.registerCommand('pulseCatalogStudio.openMapFile', async (fileName) => {
+      if (typeof fileName !== 'string' || !/^[A-Za-z0-9_-]+\.map$/.test(fileName)) {
+        throw new Error('Data Mapper returned an invalid local map file name.')
+      }
+      const workspaceFolder = vscode.workspace.workspaceFolders?.[0]
+      if (!workspaceFolder) {
+        vscode.window.showErrorMessage('Open a workspace folder to open this map in the Data Mapper editor.')
+        return
+      }
+      const mapUri = vscode.Uri.joinPath(workspaceFolder.uri, 'aggregator', 'data', 'data-maps', fileName)
+      try {
+        await vscode.workspace.fs.stat(mapUri)
+      } catch (error) {
+        vscode.window.showErrorMessage(`Map file is not available in this workspace: ${fileName}`)
+        return
+      }
+      await vscode.commands.executeCommand('vscode.openWith', mapUri, 'pulse-pmachine.dataMapper')
+    }),
     vscode.commands.registerCommand('pulseCatalogStudio.newVfl', () => createNewVflDocument()),
     vscode.commands.registerCommand('pulseCatalogStudio.refreshDataLibrarian', () => provider.refresh()),
+    vscode.commands.registerCommand('pulseCatalogStudio.refreshDataMapper', () => mapperProvider.refresh()),
     vscode.commands.registerCommand('pulseCatalogStudio.refreshInfrastructure', () => infrastructureProvider.refresh()),
+    vscode.commands.registerCommand('pulseCatalogStudio.refreshDeployView', () => deployProvider.refresh()),
+    vscode.commands.registerCommand('pulseCatalogStudio.refreshNodeInventory', () => inventoryProvider.refresh()),
+    vscode.commands.registerCommand('pulseCatalogStudio.validateWflDeployment', validateWflDeployment),
+    vscode.commands.registerCommand('pulseCatalogStudio.previewWflDeployment', previewWflDeployment),
+    vscode.commands.registerCommand('pulseCatalogStudio.deployWflDeployment', explainWflDeploymentUnavailable),
+    vscode.commands.registerCommand('pulseCatalogStudio.inspectNode', item => inventoryProvider.inspectNode(item)),
+    vscode.commands.registerCommand('pulseCatalogStudio.refreshNode', () => inventoryProvider.refresh()),
+    vscode.commands.registerCommand('pulseCatalogStudio.unregisterNamedService', item => inventoryProvider.unregisterNamedService(item)),
+    vscode.commands.registerCommand('pulseCatalogStudio.stopHostedContext', item => inventoryProvider.stopHostedContext(item)),
     VflEditorProvider.register(context, diagnostics),
   )
 }

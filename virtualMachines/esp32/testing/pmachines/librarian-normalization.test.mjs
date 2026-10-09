@@ -3,7 +3,7 @@ import { after, before, test } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { runInNewContext } from 'node:vm';
-import { createPascalishLibrarianNormalization } from '../../aggregator/src/librarian/normalization.mjs';
+import { createPascalishLibrarianNormalization } from '../../aggregator/src/librarian/~normalization.mjs';
 import { createDesktopTextBindings } from '../../pmachines/javascript/src/desktop-text-bindings.mjs';
 import { createDesktopDateBindings } from '../../pmachines/javascript/src/desktop-date-bindings.mjs';
 import { compilePascalishProgramWithAntlr } from '../../aggregator/scripts/compile-pascalish-program-antlr-to-pcode.mjs';

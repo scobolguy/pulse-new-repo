@@ -12,7 +12,7 @@ export async function createPascalishMapperExecution({ logger = console } = {}) 
   const host = await createPascalishServiceHost({
     compiled, collectorId: 'pulse-data-mapper-execution',
     httpPort: null, udpPort: null, maxBodyBytes: 1000000, maxResponseBytes: 1000000,
-    maxEvents: 64, desktopBudget: true, maxSteps: 10000000, maxExecutionMs: 10000, logger
+    maxEvents: 64, desktopBudget: true, maxSteps: null, maxExecutionMs: null, logger
   });
   await host.start();
   async function dispatch(path, body) {

@@ -14,6 +14,17 @@ test('Pascalish schema filename policy preserves supported names and versions', 
       area: 'pacs',
       typeId: 'pacs'
     });
+    for (const [filename, version] of [
+      ['camt.003.001.08.xsd', 8], ['pacs.008.001.09.xsd', 9],
+      ['camt.010.001.00.xsd', 0], ['pain.001.001.001.xsd', 1],
+    ]) {
+      const metadata = await service.parseFilename(filename);
+      assert.equal(metadata.version, version);
+      assert.equal(metadata.name, filename.slice(0, -4), 'zero-padded filename identity is preserved');
+    }
+    assert.deepEqual(await service.parseFilename('order.v003.avro'), {
+      name: 'order', version: 3, type: 'avro', typeId: 'order',
+    });
     assert.deepEqual(await service.parseFilename('order.v3.avro'), {
       name: 'order',
       version: 3,

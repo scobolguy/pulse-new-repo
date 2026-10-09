@@ -1,5 +1,9 @@
 # Pascalish User Guide
 
+An `.mjs` adapter prefixed with `~` is retained for Node integration where the
+same-named Pascalish module owns the implementation policy. The tilde is part of
+the filename and all imports must use it.
+
 ## What Pascalish Is
 
 Pascalish is a Pascal-style DSL used in this repository for routing/mapper and interop-oriented orchestration.
@@ -179,7 +183,7 @@ the existing Librarian tree shape. It handles `element`, `complexType`, `sequenc
 optionality. QName matching uses namespace identity, independent of prefix spelling.
 Annotations/comments no longer corrupt the parent stack, single-quoted attributes and
 escaped text work, and foreign-namespace elements do not masquerade as XSD declarations.
-The [thin adapter](../virtualMachines/esp32/aggregator/src/librarian/xsd-parser.mjs)
+The [thin adapter](../virtualMachines/esp32/aggregator/src/librarian/~xsd-parser.mjs)
 compiles and dispatches; Node retains schema-file discovery and HTTP. The constructor
 requires an explicit `schemaRoot`, granted read-only to the internal service.
 The adapter caches serialized trees by source-content hash, bounded at 256 entries and
@@ -321,7 +325,7 @@ numeric entity decoding, invalid-shape recovery and HTTP projection checks.
 [`catalog-store.pas`](../virtualMachines/esp32/src/librarian/catalog-store.pas) owns the
 allowlisted filenames and filesystem reads/atomic writes for `subschemas`, `data-types`,
 `mapper-rulesets` and `schema-lifecycle`. Its `JSONDocument` envelopes validate JSON before
-writing. The [Node adapter](../virtualMachines/esp32/aggregator/src/librarian/catalog-store.mjs)
+writing. The [Node adapter](../virtualMachines/esp32/aggregator/src/librarian/~catalog-store.mjs)
 dispatches in-process events, serializes values and coordinates bounded snapshot retries;
 it does not implement a fallback
 catalog writer. Catalog uploads use the same Pascalish writer and preserve supplied formatting.
@@ -421,7 +425,7 @@ mapper duplicates/raw identities, patch semantics, error precedence and persiste
 [normalization.pas](../virtualMachines/esp32/src/librarian/normalization.pas) owns data type
 record/catalog normalization, custom type creation, mapper ruleset IDs and payload
 validation, stored-record deduplication and priority/locale ordering. The
-[Node adapter](../virtualMachines/esp32/aggregator/src/librarian/normalization.mjs) compiles
+[Node adapter](../virtualMachines/esp32/aggregator/src/librarian/~normalization.mjs) compiles
 and invokes the service; it no longer implements this normalization policy.
 Canonical collisions retain the historical UTF-8 SHA-256 suffix, whereas alias and
 record identities use UTF-16 code units to preserve distinct unpaired surrogates.

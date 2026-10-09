@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { createXmlBindings } from '../../pmachines/javascript/src/xml-bindings.mjs';
-import { createPascalishXsdParser } from '../../aggregator/src/librarian/xsd-parser.mjs';
+import { createPascalishXsdParser } from '../../aggregator/src/librarian/~xsd-parser.mjs';
 import { compilePascalishProgramWithAntlr } from '../../aggregator/scripts/compile-pascalish-program-antlr-to-pcode.mjs';
 import { encodeHostedImage } from '../../pmachines/shared/contracts/hosted-image.mjs';
 import { createPascalishServiceHost } from '../../pmachines/javascript/src/service-host.mjs';
@@ -197,7 +197,7 @@ test('XSD content cache coalesces concurrent parses without sharing mutable tree
   await assert.rejects(instance.parse(content), /stopped/);
 });
 
-test('explicit desktop execution budget preserves the default ceiling and remains bounded', async t => {
+test('explicit desktop execution budgets remain opt-in and finite when provided', async t => {
   const opcodeMap = await loadOpcodeMap();
   const run = context => executeProgram({
     instructions: parsePcode('HALT'), opcodeMap, mappingsById: new Map(), inputQueue: '', sourceMessage: '',
@@ -205,7 +205,7 @@ test('explicit desktop execution budget preserves the default ceiling and remain
   });
   await assert.rejects(run({ maxSteps: 200001 }), /maxSteps/);
   assert.equal((await run({ desktopBudget: true, maxSteps: 200001 })).stepLimitHit, false);
-  await assert.rejects(run({ desktopBudget: true, maxSteps: 10000001 }), /maxSteps/);
+  assert.equal((await run({ desktopBudget: true, maxSteps: 10000001 })).stepLimitHit, false);
   const compiled = compilePascalishProgramWithAntlr(`service 'desktop-budget'; var counter: integer;
 get '/count'; begin counter := 0; while counter < 30000 do counter := counter + 1; return counter end end.`,
   { hostServices: true });

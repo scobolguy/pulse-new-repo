@@ -2,13 +2,13 @@
   "name": "pulse-pmachine-debugger",
   "displayName": "Pulse PMachine Debugger",
   "description": "Run and debug Pulse PMachine programs from VS Code.",
-  "version": "0.1.8",
+  "version": "0.1.10",
   "publisher": "pulse",
   "icon": "src/media/pulse-icon.png",
   "files": [
     "package.json",
     "README.md",
-    "src/media/pulse-icon.png",
+    "src/media/**",
     "out/**"
   ],
   "engines": {
@@ -34,6 +34,10 @@
   "contributes": {
     "views": {
       "explorer": [
+        {
+          "id": "pulse-pmachine.dataLibrarian",
+          "name": "Pulse Data Librarian"
+        },
         {
           "id": "pulse-pmachine.services",
           "name": "Pulse Services"
@@ -86,6 +90,36 @@
     ],
     "commands": [
       {
+        "command": "pulse-pmachine.showDataLibrarian",
+        "title": "Pulse Data Librarian: Browse Schemas"
+      },
+      {
+        "command": "pulse-pmachine.refreshLibrarian",
+        "title": "Pulse Data Librarian: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "pulse-pmachine.openLibrarianSchema",
+        "title": "Pulse Data Librarian: Open Schema Details",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "pulse-pmachine.newDataMap",
+        "title": "Pulse Data Mapper: Create Prototype Map"
+      },
+      {
+        "command": "pulse-pmachine.openDataMap",
+        "title": "Pulse Data Mapper: Open Designer"
+      },
+      {
+        "command": "pulse-pmachine.createDataMap",
+        "title": "Pulse Data Mapper: Create Map"
+      },
+      {
+        "command": "pulse-pmachine.importDataMap",
+        "title": "Pulse Data Mapper: Import from Aggregator"
+      },
+      {
         "command": "pulse-pmachine.runCurrentFile",
         "title": "Run on PMachine",
         "icon": "$(play)"
@@ -110,8 +144,25 @@
         "icon": "$(link-external)"
       }
     ],
+    "customEditors": [
+      {
+        "viewType": "pulse-pmachine.dataMapper",
+        "displayName": "Pulse Data Mapper",
+        "selector": [
+          { "filenamePattern": "*.pulse-map.json" },
+          { "filenamePattern": "*.mapping.json" },
+          { "filenamePattern": "*.map" }
+        ],
+        "priority": "option"
+      }
+    ],
     "menus": {
       "view/title": [
+        {
+          "command": "pulse-pmachine.refreshLibrarian",
+          "when": "view == pulse-pmachine.dataLibrarian",
+          "group": "navigation"
+        },
         {
           "command": "pulse-pmachine.refreshServices",
           "when": "view == pulse-pmachine.services",
@@ -124,6 +175,11 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "pulse-pmachine.openLibrarianSchema",
+          "when": "view == pulse-pmachine.dataLibrarian && viewItem == pulseLibrarianSchema",
+          "group": "inline"
+        },
         {
           "command": "pulse-pmachine.openServiceEndpoint",
           "when": "(view == pulse-pmachine.services || view == pulse-pmachine.servers) && viewItem == pulseServiceEndpoint",
@@ -150,7 +206,7 @@
         "pulse-pmachine.backendUrl": {
           "type": "string",
           "default": "http://127.0.0.1:4000",
-          "description": "Aggregator backend URL used to discover PMachine targets and run programs."
+          "description": "Aggregator backend URL used by Data Librarian, Data Mapper, service discovery, and PMachine programs."
         },
         "pulse-pmachine.nodeHosts": {
           "type": "array",

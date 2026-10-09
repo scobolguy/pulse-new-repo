@@ -75,7 +75,7 @@
   "environments": {
     "default": {
       "servicePrefix": "Pulse",
-      "ports": { "gateway": 4000, "discovery": 4300, "broker": 4001, "homeAutomation": 4102, "mapper": 4200, "librarian": 4301, "queueManager": 4100 }
+      "ports": { "gateway": 4000, "discovery": 4301, "broker": 4001, "homeAutomation": 4102, "mapper": 4200, "librarian": 4300, "queueManager": 4100 }
     },
     "secondary": {
       "servicePrefix": "Pulse",
@@ -110,7 +110,7 @@
       "provider": "pulse-local",
       "protocol": "http",
       "serverRef": "local-workspace",
-      "endpoint": "http://127.0.0.1:4300",
+      "endpoint": "http://127.0.0.1:4301",
       "description": "Infrastructure and service catalog discovery capability."
     },
     {
@@ -161,7 +161,7 @@
       "provider": "pulse-local",
       "protocol": "http",
       "serverRef": "local-workspace",
-      "endpoint": "http://127.0.0.1:4301",
+      "endpoint": "http://127.0.0.1:4300",
       "description": "Schema and data contract catalog capability."
     },
     {

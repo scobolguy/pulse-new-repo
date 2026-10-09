@@ -12,6 +12,9 @@
     "Other"
   ],
   "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "languages": [
       {
@@ -76,9 +79,52 @@
         "title": "Pulse: Open Data Mapper"
       },
       {
+        "command": "pulseCatalogStudio.refreshDataMapper",
+        "title": "Pulse: Refresh Data Mapper",
+        "icon": "$(refresh)"
+      },
+      {
         "command": "pulseCatalogStudio.refreshInfrastructure",
         "title": "Pulse: Refresh Infrastructure Tree",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "pulseCatalogStudio.refreshNodeInventory",
+        "title": "Pulse: Refresh Node Inventory",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "pulseCatalogStudio.refreshDeployView",
+        "title": "Pulse: Refresh Deploy View",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "pulseCatalogStudio.validateWflDeployment",
+        "title": "Pulse: Validate WFL Deployment"
+      },
+      {
+        "command": "pulseCatalogStudio.previewWflDeployment",
+        "title": "Pulse: Preview WFL Deployment"
+      },
+      {
+        "command": "pulseCatalogStudio.deployWflDeployment",
+        "title": "Pulse: Deploy WFL Deployment"
+      },
+      {
+        "command": "pulseCatalogStudio.inspectNode",
+        "title": "Pulse: Inspect Node"
+      },
+      {
+        "command": "pulseCatalogStudio.refreshNode",
+        "title": "Pulse: Refresh Node"
+      },
+      {
+        "command": "pulseCatalogStudio.unregisterNamedService",
+        "title": "Pulse: Unregister Named Service"
+      },
+      {
+        "command": "pulseCatalogStudio.stopHostedContext",
+        "title": "Pulse: Stop Hosted Context"
       }
     ],
     "menus": {
@@ -92,6 +138,58 @@
           "command": "pulseCatalogStudio.refreshInfrastructure",
           "when": "view == pulseCatalogStudio.infrastructure",
           "group": "navigation"
+        },
+        {
+          "command": "pulseCatalogStudio.refreshDataMapper",
+          "when": "view == pulseCatalogStudio.dataMapper",
+          "group": "navigation"
+        },
+        {
+          "command": "pulseCatalogStudio.refreshNodeInventory",
+          "when": "view == pulseCatalogStudio.nodeInventory",
+          "group": "navigation"
+        },
+        {
+          "command": "pulseCatalogStudio.refreshDeployView",
+          "when": "view == pulseCatalogStudio.deploy",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "pulseCatalogStudio.validateWflDeployment",
+          "when": "view == pulseCatalogStudio.deploy && viewItem == wfl-deployment",
+          "group": "1_manage"
+        },
+        {
+          "command": "pulseCatalogStudio.previewWflDeployment",
+          "when": "view == pulseCatalogStudio.deploy && viewItem == wfl-deployment",
+          "group": "1_manage"
+        },
+        {
+          "command": "pulseCatalogStudio.deployWflDeployment",
+          "when": "view == pulseCatalogStudio.deploy && viewItem == wfl-deployment",
+          "group": "1_manage"
+        },
+        {
+          "command": "pulseCatalogStudio.inspectNode",
+          "when": "view == pulseCatalogStudio.nodeInventory && viewItem == inventory-node",
+          "group": "1_manage"
+        },
+        {
+          "command": "pulseCatalogStudio.refreshNode",
+          "when": "view == pulseCatalogStudio.nodeInventory && viewItem == inventory-node",
+          "group": "1_manage"
+        },
+        {
+          "command": "pulseCatalogStudio.unregisterNamedService",
+          "when": "view == pulseCatalogStudio.nodeInventory && viewItem == inventory-registered-service",
+          "group": "1_manage"
+        },
+        {
+          "command": "pulseCatalogStudio.stopHostedContext",
+          "when": "view == pulseCatalogStudio.nodeInventory && (viewItem == inventory-hosted-context || viewItem == inventory-daemon)",
+          "group": "1_manage"
         }
       ]
     },
@@ -125,6 +223,11 @@
           "default": "http://127.0.0.1:4310",
           "description": "Distributed device cache URL for the Network (Distributed Cache) infrastructure branch. All confidence levels are displayed."
         },
+        "pulse.catalogStudio.mapperApiBase": {
+          "type": "string",
+          "default": "http://127.0.0.1:4200",
+          "description": "Data Mapper service URL used by the native mapper sidebar."
+        },
         "pulse.catalogStudio.defaultVflExtension": {
           "type": "string",
           "default": ".vfl",
@@ -154,8 +257,27 @@
         },
         {
           "id": "pulseCatalogStudio.sidebar",
-          "name": "Pulse Studio",
-          "type": "tree"
+          "name": "Data Librarian",
+          "type": "tree",
+          "visibility": "visible"
+        },
+        {
+          "id": "pulseCatalogStudio.dataMapper",
+          "name": "Data Mapper",
+          "type": "tree",
+          "visibility": "visible"
+        },
+        {
+          "id": "pulseCatalogStudio.deploy",
+          "name": "Deploy",
+          "type": "tree",
+          "visibility": "visible"
+        },
+        {
+          "id": "pulseCatalogStudio.nodeInventory",
+          "name": "Node Inventory",
+          "type": "tree",
+          "visibility": "visible"
         }
       ]
     }

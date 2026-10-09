@@ -19,7 +19,7 @@ import {
   resolveEnvironmentName
 } from './src/backend/modules/serviceRegistry.mjs';
 
-const HTTP_PORT = Number(process.env.DISCOVERY_HTTP_PORT || 4300);
+const HTTP_PORT = Number(process.env.DISCOVERY_HTTP_PORT || 4301);
 const UDP_PORT = Number(process.env.UDP_PORT || 4210);
 const NODE_TTL_MS = DISCOVERY_NODE_MAX_AGE_MS;
 const PROBE_ENABLED = String(process.env.ESP32_DISCOVERY_PROBE_ENABLED || '1').trim().toLowerCase() !== '0' && String(process.env.ESP32_DISCOVERY_PROBE_ENABLED || '1').trim().toLowerCase() !== 'false';

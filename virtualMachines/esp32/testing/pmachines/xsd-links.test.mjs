@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { createPascalishXsdParser } from '../../aggregator/src/librarian/xsd-parser.mjs';
+import { createPascalishXsdParser } from '../../aggregator/src/librarian/~xsd-parser.mjs';
 import { createFilesystemBindings } from '../../pmachines/javascript/src/filesystem-bindings.mjs';
 import { createXmlBindings } from '../../pmachines/javascript/src/xml-bindings.mjs';
 

@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { createPascalishCatalogStore } from '../../aggregator/src/librarian/catalog-store.mjs';
+import { createPascalishCatalogStore } from '../../aggregator/src/librarian/~catalog-store.mjs';
 
 async function fixture(t, options = {}) {
   const legacyRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'pulse-catalog-store-'));

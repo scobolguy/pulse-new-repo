@@ -261,7 +261,7 @@ begin
       host.json_to_text(captures.item(1)) + '.' +
       host.json_to_text(captures.item(2)) + '.' +
       host.json_to_text(captures.item(3)));
-    metadata.embed('version', host.json_to_text(captures.item(3)));
+    metadata.embed('version', host.number_parse_integer(host.json_to_text(captures.item(3))));
     metadata.setText('type', 'xsd');
     metadata.setText('area', area);
     metadata.setText('typeId', area);
@@ -280,7 +280,7 @@ begin
     rawType := 'copybook';
   metadata.load('{"matched":true}');
   metadata.setText('name', name);
-  if version <> '' then metadata.embed('version', version)
+  if version <> '' then metadata.embed('version', host.number_parse_integer(version))
   else metadata.embed('version', 'null');
   metadata.setText('type', rawType);
   metadata.setText('typeId', host.string_lower(host.text_trim(name)));

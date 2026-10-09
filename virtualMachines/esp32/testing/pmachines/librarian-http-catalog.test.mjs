@@ -100,6 +100,28 @@ test('Pascalish file search filters case-insensitive names and extensions across
   assert.equal(files.some(file => file.path === 'search-fixture/Record-10.txt'), false);
 });
 
+test('Librarian schema catalog accepts zero-padded ISO versions and returns their field trees', async t => {
+  const { origin, catalogRoot } = await fixture(t);
+  const xsd = '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">'
+    + '<xs:element name="Document"><xs:complexType><xs:sequence>'
+    + '<xs:element name="Reference" type="xs:string"/>'
+    + '</xs:sequence></xs:complexType></xs:element></xs:schema>';
+  await fs.writeFile(path.join(catalogRoot, 'schemas', 'camt.003.001.08.xsd'), xsd);
+  await fs.writeFile(path.join(catalogRoot, 'schemas', 'invoice.v003.json'), '{"reference":"R1"}');
+  const response = await fetch(`${origin}/api/librarian/schemas`);
+  assert.equal(response.status, 200);
+  const schemas = (await response.json()).schemas;
+  const iso = schemas.find(schema => schema.path === 'camt.003.001.08.xsd');
+  assert.equal(iso.version, 8);
+  assert.equal(iso.typeId, 'camt');
+  assert.equal(iso.structure.children[0].name, 'Document');
+  const containsReference = node => node.name === 'Reference' || (node.children || []).some(containsReference);
+  assert.equal(containsReference(iso.structure), true);
+  const invoice = schemas.find(schema => schema.path === 'invoice.v003.json');
+  assert.equal(invoice.version, 3);
+  assert.equal(invoice.structure.children[0].name, 'reference');
+});
+
 test('Pascalish schema lookup selects the highest or requested version', async t => {
   const { origin, catalogRoot } = await fixture(t);
   const schemasRoot = path.join(catalogRoot, 'schemas');
@@ -121,6 +143,19 @@ test('Pascalish schema lookup selects the highest or requested version', async t
   const missing = await fetch(`${origin}/api/librarian/schema/json/lookup?version=9`);
   assert.equal(missing.status, 404);
   assert.deepEqual(await missing.json(), { error: 'Schema not found' });
+});
+
+test('physical schema catalogs larger than the host queue return every parsed structure', async t => {
+  const { origin, catalogRoot } = await fixture(t);
+  const names = Array.from({ length: 40 }, (_, index) => `physical-${index}.json`);
+  await Promise.all(names.map(name => fs.writeFile(path.join(catalogRoot, 'schemas', name), '{"reference":"R1"}')));
+  const response = await fetch(`${origin}/api/librarian/schemas`);
+  assert.equal(response.status, 200);
+  const schemas = (await response.json()).schemas;
+  assert.equal(schemas.length, names.length);
+  for (const schema of schemas) {
+    assert.equal(schema.structure.children[0].name, 'reference', `${schema.path} must not silently lose its structure`);
+  }
 });
 
 test('Pascalish file-download route selects existing files and reports missing paths', async t => {

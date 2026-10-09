@@ -14,7 +14,7 @@ export async function createPascalishCatalogStore({
     compiled, collectorId: 'pulse-data-librarian-catalog-store',
     httpPort: null, udpPort: null, maxFileBytes, maxEvents: 64,
     maxBodyBytes: 1000000, maxResponseBytes: 1000000,
-    desktopBudget: true, maxSteps: 10000000, maxExecutionMs: 10000,
+    desktopBudget: true, maxSteps: null, maxExecutionMs: null,
     storageRoots: {
       catalog: { path: root, readOnly: false },
       legacy: { path: legacyRoot }

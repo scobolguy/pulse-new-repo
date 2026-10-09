@@ -340,6 +340,23 @@ test('finite instruction budget stops a runaway handler and leaves service usabl
   assert.deepEqual((await host.dispatch(event('/ok'))).body, { status: 'ok' });
 });
 
+test('desktop execution defaults to unbounded and remains explicitly cancellable', async t => {
+  const compiled = compile(`service 'desktop-unbounded'; var counter: integer;
+    get '/count'; begin counter := 0; while counter < 30000 do counter := counter + 1; return counter end
+    get '/slow'; begin host.announcement('', ''); return '{}' end
+    get '/loop'; begin while true do begin end end end.`);
+  const host = await genericHost(t, compiled, {
+    desktopBudget: true,
+    bindings: { 'host.announcement': async () => { await delay(2100); return '{}'; } }
+  });
+  assert.equal((await host.dispatch(event('/count'))).body, 30000);
+  assert.deepEqual((await host.dispatch(event('/slow'))).body, {});
+  const execution = host.dispatch(event('/loop'));
+  await delay(10);
+  await host.stop();
+  await assert.rejects(execution, /execution cancelled/);
+});
+
 test('queue is bounded and queued observations retain ingress time', async t => {
   let time = 0;
   let release;

@@ -1,6 +1,6 @@
 # Data Mapper execution boundary
 
-`POST /api/mapper/maps/:id/run` delegates execution planning and output construction to the hosted Pascalish service in `src/mapper/execution-policy.pas`, through `src/mapper/execution-policy.mjs`.
+`POST /api/mapper/maps/:id/run` delegates execution planning and output construction to the hosted Pascalish service in `src/mapper/execution-policy.pas`, through `src/mapper/~execution-policy.mjs`.
 
 `POST /api/mapper/maps/:id/auto-shape-map` delegates selected-node structural compatibility checks and matching leaf-pair expansion to the same service.
 

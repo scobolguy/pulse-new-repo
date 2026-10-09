@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { createPascalishXsdParser } from '../../aggregator/src/librarian/xsd-parser.mjs';
-import { isSchemaBranch, schemaNodeNotice } from '../../aggregator/src/librarian/schema-tree.mjs';
+import { createPascalishXsdParser } from '../../aggregator/src/librarian/~xsd-parser.mjs';
+import { isSchemaBranch, schemaNodeNotice } from '../../aggregator/src/librarian/~schema-tree.mjs';
 
 const ns = 'http://www.w3.org/2001/XMLSchema';
 const schema = inner => `<s:schema xmlns:s="${ns}" xmlns:t="urn:test" xmlns:alias="urn:test" xmlns:f="urn:foreign" targetNamespace="urn:test">${inner}</s:schema>`;

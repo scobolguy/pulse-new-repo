@@ -11,7 +11,7 @@ export async function createPascalishLibrarianSchemaOperationRoutes({ logger = c
   const host = await createPascalishServiceHost({
     compiled, collectorId: 'pulse-data-librarian-http-schema-operations',
     httpPort: null, udpPort: null, maxBodyBytes: 1000000, maxResponseBytes: 1000000,
-    desktopBudget: true, maxSteps: 10000000, maxExecutionMs: 10000, logger
+    desktopBudget: true, maxSteps: null, maxExecutionMs: null, logger
   });
   await host.start();
   let dispatchQueue = Promise.resolve();

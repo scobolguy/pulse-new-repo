@@ -31,9 +31,11 @@ const vscodeMock = `
   export class ThemeIcon { constructor(id) { this.id = id; } }
   export const env = { openExternal: async () => true };
   export const workspace = {
+    isTrusted: true,
     getWorkspaceFolder: () => ({ uri: { fsPath: ${JSON.stringify(root)} } }),
     getConfiguration: () => ({ get: (_, fallback) => fallback }),
     onDidChangeConfiguration: handler => { globalThis.pulseTestConfigurationHandler = handler; return { dispose() {} }; },
+    onDidGrantWorkspaceTrust: handler => { globalThis.pulseTestTrustHandler = handler; return { dispose() {} }; },
   };
   export class DebugAdapterInlineImplementation { constructor(adapter) { this.implementation = adapter; } }
   export const debug = {
@@ -43,11 +45,13 @@ const vscodeMock = `
   export const ViewColumn = { Beside: -2 };
   export const ProgressLocation = { Notification: 15 };
   export const window = {
+    registerCustomEditorProvider: () => ({ dispose() {} }),
     createOutputChannel: () => ({ dispose() {} }),
     createWebviewPanel: () => { throw new Error('webview not available in tests'); },
     registerTreeDataProvider: (id, provider) => {
       if (id === 'pulse-pmachine.services') globalThis.pulseTestServicesProvider = provider;
       if (id === 'pulse-pmachine.servers') globalThis.pulseTestServersProvider = provider;
+      if (id === 'pulse-pmachine.dataLibrarian') globalThis.pulseTestLibrarianProvider = provider;
       return { dispose() {} };
     },
   };
@@ -69,6 +73,107 @@ const { activate, loadPmachineTargets } = await import('../out/extension.js');
 const vscode = await import('vscode');
 activate({ subscriptions: [], extensionUri: {} });
 hooks.deregister();
+
+test('Data Librarian has a dedicated contributed view and browses nested schema fields', async () => {
+  const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.ok(manifest.contributes.views.explorer.some(view => view.id === 'pulse-pmachine.dataLibrarian'));
+  for (const command of ['showDataLibrarian', 'refreshLibrarian', 'openLibrarianSchema']) {
+    assert.ok(manifest.contributes.commands.some(entry => entry.command === `pulse-pmachine.${command}`));
+    assert.ok(vscode.registeredCommands.has(`pulse-pmachine.${command}`));
+  }
+  const originalFetch = globalThis.fetch;
+  const originalWorkspace = { ...vscode.workspace };
+  const originalWindow = { ...vscode.window };
+  const originalExecute = vscode.commands.executeCommand;
+  let requests = 0;
+  let snapshot;
+  let focused;
+  const schema = { path: 'payments/payment.json', name: 'Payment', typeId: 'payment', structure: { children: [
+    { name: 'transfer', kind: 'branch', valueType: 'object', children: [
+      { name: 'amount', kind: 'leaf', valueType: 'decimal' },
+    ] },
+    { name: 'reference', kind: 'leaf', valueType: 'string' },
+  ] } };
+  globalThis.fetch = async url => {
+    requests++;
+    assert.equal(url, 'http://127.0.0.1:4000/api/librarian/schemas');
+    return Response.json({ schemas: [{ path: 'unparsed.xsd', name: 'Unparsed', structure: null }, schema] });
+  };
+  vscode.workspace.openTextDocument = async options => { snapshot = options; return { options }; };
+  vscode.window.showTextDocument = async document => assert.deepEqual(document.options, snapshot);
+  vscode.commands.executeCommand = async command => { focused = command; };
+  try {
+    const provider = globalThis.pulseTestLibrarianProvider;
+    const schemas = await provider.getChildren();
+    assert.deepEqual(schemas.map(item => item.label), ['Payment', 'Unparsed']);
+    assert.equal(schemas[0].description, 'payment');
+    assert.match(schemas[1].description, /no field structure/);
+    assert.deepEqual(await provider.getChildren(schemas[1]), []);
+    const fields = await provider.getChildren(schemas[0]);
+    assert.deepEqual(fields.map(item => item.label), ['transfer', 'reference']);
+    assert.equal(fields[0].collapsibleState, vscode.TreeItemCollapsibleState.Collapsed);
+    const nested = await provider.getChildren(fields[0]);
+    assert.equal(nested[0].label, 'transfer.amount');
+    assert.equal(nested[0].description, 'decimal');
+    assert.deepEqual(await provider.getChildren(nested[0]), []);
+    assert.equal(requests, 1, 'expanding fields uses the captured catalog, not additional requests');
+    await vscode.registeredCommands.get('pulse-pmachine.openLibrarianSchema')(nested[0]);
+    assert.equal(snapshot.language, 'json');
+    assert.deepEqual(JSON.parse(snapshot.content), schema);
+    await vscode.registeredCommands.get('pulse-pmachine.showDataLibrarian')();
+    assert.equal(focused, 'pulse-pmachine.dataLibrarian.focus');
+    let refreshes = 0;
+    provider.onDidChangeTreeData(() => { refreshes++; });
+    vscode.registeredCommands.get('pulse-pmachine.refreshLibrarian')();
+    globalThis.pulseTestConfigurationHandler({ affectsConfiguration: key => key === 'pulse-pmachine.backendUrl' });
+    globalThis.pulseTestTrustHandler();
+    assert.equal(refreshes, 3);
+    vscode.workspace.isTrusted = false;
+    assert.match((await provider.getChildren())[0].label, /Trust this workspace/);
+    assert.equal(requests, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    Object.assign(vscode.workspace, originalWorkspace);
+    Object.assign(vscode.window, originalWindow);
+    vscode.commands.executeCommand = originalExecute;
+  }
+});
+
+test('Data Librarian surfaces catalog errors, empty catalogs, and recovers on refresh', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = { ...vscode.window };
+  const errors = [];
+  const output = [];
+  Object.assign(vscode.window, {
+    createOutputChannel: () => ({ dispose() {}, appendLine: line => output.push(line) }),
+    showErrorMessage: message => errors.push(message),
+  });
+  activate({ subscriptions: [], extensionUri: {} });
+  try {
+    const provider = globalThis.pulseTestLibrarianProvider;
+    for (const response of [
+      () => Response.json({ error: 'Catalog unavailable' }, { status: 502 }),
+      () => Response.json({ schemas: {} }),
+      () => Response.json({ schemas: [{ path: 'broken', structure: { children: [{}] } }] }),
+    ]) {
+      globalThis.fetch = async () => response();
+      const items = await provider.getChildren();
+      assert.match(items[0].label, /unavailable - refresh/);
+      assert.ok(items[0].tooltip);
+    }
+    assert.equal(errors.length, 3);
+    assert.equal(output.length, 3);
+    globalThis.fetch = async () => Response.json({ schemas: [] });
+    provider.refresh();
+    assert.match((await provider.getChildren())[0].label, /No schemas registered/);
+    globalThis.fetch = async () => Response.json({ schemas: [{ path: 'recovered.json' }] });
+    provider.refresh();
+    assert.equal((await provider.getChildren())[0].label, 'recovered.json');
+  } finally {
+    globalThis.fetch = originalFetch;
+    Object.assign(vscode.window, originalWindow);
+  }
+});
 
 test('Services Explorer reads the services directory, endpoints, and configuration', async () => {
   const originalFetch = globalThis.fetch;

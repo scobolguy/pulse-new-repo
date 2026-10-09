@@ -3,9 +3,9 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { createPascalishXsdParser } from '../../aggregator/src/librarian/xsd-parser.mjs';
+import { createPascalishXsdParser } from '../../aggregator/src/librarian/~xsd-parser.mjs';
 import { createXmlBindings } from '../../pmachines/javascript/src/xml-bindings.mjs';
-import { schemaSimpleTypeSummary } from '../../aggregator/src/librarian/schema-tree.mjs';
+import { schemaSimpleTypeSummary } from '../../aggregator/src/librarian/~schema-tree.mjs';
 
 const ns = 'http://www.w3.org/2001/XMLSchema';
 const schema = (body, namespace = 'urn:test', declarations = '') =>

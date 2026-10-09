@@ -1138,6 +1138,10 @@ function createDefaultMap(id, name) {
 }
 
 export function registerMapperRoutes(app) {
+  app.get('/health', (_req, res) => {
+    res.json({ status: 'ok', service: 'data-mapper' });
+  });
+
   app.post('/api/mapper/authoring/ollama-intent-stream', async (req, res) => {
     res.status(200);
     res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');

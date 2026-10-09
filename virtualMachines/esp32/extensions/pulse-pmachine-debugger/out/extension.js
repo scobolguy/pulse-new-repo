@@ -5,6 +5,8 @@ import { pathToFileURL } from 'node:url';
 import * as vscode from 'vscode';
 import { HanoiPanel, looksLikeHanoi } from './hanoiPanel.js';
 import { ServicesViewProvider, openServiceEndpoint } from './servicesView.js';
+import { registerDataMapper } from './dataMapperEditor.js';
+import { DataLibrarianViewProvider, openLibrarianSchema } from './dataLibrarianView.js';
 const DEFAULT_NODE_HOSTS = ['127.0.0.1:4111', '127.0.0.1:4112', '127.0.0.1:4113', '192.168.2.155'];
 function isRemoteRuntime(runtime) {
     return runtime === 'esp32' || runtime === 'js-node';
@@ -1250,10 +1252,13 @@ export function activate(context) {
     const hanoiPanel = new HanoiPanel();
     const services = new ServicesViewProvider(output);
     const servers = new ServicesViewProvider(output, 'servers');
-    context.subscriptions.push(output, hanoiPanel, services, servers, vscode.window.registerTreeDataProvider('pulse-pmachine.services', services), vscode.window.registerTreeDataProvider('pulse-pmachine.servers', servers), vscode.commands.registerCommand('pulse-pmachine.refreshServices', () => services.refresh()), vscode.commands.registerCommand('pulse-pmachine.refreshServers', () => servers.refresh()), vscode.commands.registerCommand('pulse-pmachine.openServiceEndpoint', openServiceEndpoint), vscode.workspace.onDidChangeConfiguration(event => {
+    const librarian = new DataLibrarianViewProvider(output);
+    registerDataMapper(context, output);
+    context.subscriptions.push(output, hanoiPanel, services, servers, librarian, vscode.window.registerTreeDataProvider('pulse-pmachine.services', services), vscode.window.registerTreeDataProvider('pulse-pmachine.servers', servers), vscode.window.registerTreeDataProvider('pulse-pmachine.dataLibrarian', librarian), vscode.commands.registerCommand('pulse-pmachine.refreshLibrarian', () => librarian.refresh()), vscode.commands.registerCommand('pulse-pmachine.openLibrarianSchema', openLibrarianSchema), vscode.commands.registerCommand('pulse-pmachine.showDataLibrarian', () => vscode.commands.executeCommand('pulse-pmachine.dataLibrarian.focus')), vscode.workspace.onDidGrantWorkspaceTrust(() => librarian.refresh()), vscode.commands.registerCommand('pulse-pmachine.refreshServices', () => services.refresh()), vscode.commands.registerCommand('pulse-pmachine.refreshServers', () => servers.refresh()), vscode.commands.registerCommand('pulse-pmachine.openServiceEndpoint', openServiceEndpoint), vscode.workspace.onDidChangeConfiguration(event => {
         if (event.affectsConfiguration('pulse-pmachine.backendUrl')) {
             services.refresh();
             servers.refresh();
+            librarian.refresh();
         }
     }), vscode.debug.registerDebugAdapterDescriptorFactory('pulse-pmachine', new PulseDebugFactory(context.extensionUri)), vscode.commands.registerCommand('pulse-pmachine.runCurrentFile', (uri) => runCurrentFile(context, output, uri, hanoiPanel)), vscode.commands.registerCommand('pulse-pmachine.showAnimation', () => hanoiPanel.show('Towers of Hanoi')), vscode.debug.onDidReceiveDebugSessionCustomEvent((event) => {
         if (event.session.type !== 'pulse-pmachine')

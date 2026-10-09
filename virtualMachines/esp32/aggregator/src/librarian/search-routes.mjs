@@ -13,7 +13,7 @@ export async function createPascalishLibrarianSearchRoutes({ logger = console } 
   const host = await createPascalishServiceHost({
     compiled, collectorId: 'pulse-data-librarian-http-search',
     httpPort: null, udpPort: null, maxBodyBytes: 1000000, maxResponseBytes: 1000000,
-    desktopBudget: true, maxSteps: 10000000, maxExecutionMs: 10000, logger
+    desktopBudget: true, maxSteps: null, maxExecutionMs: null, logger
   });
   await host.start();
   return {

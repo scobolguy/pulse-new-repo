@@ -74,6 +74,12 @@ For the example above, the resulting `pinstructions` vector contains both string
 
 When `pm.run()` is called, each instruction is printed to the serial console along with the current stack state. The `PRINT` and `PRINT_INT` instructions output the value popped from the stack.
 
+## Desktop-hosted Pascalish services
+
+The JavaScript desktop service host can run with `desktopBudget: true`, which removes its default instruction-step and wall-clock execution limits. Hosts remain explicitly cancellable through `stop()`, and independent limits such as request size, response size, storage, and event-queue capacity still apply. A desktop host can opt back into finite step or time limits by supplying `maxSteps` or `maxExecutionMs`.
+
+This desktop behavior does not change the ESP32 firmware's bounded execution limit.
+
 ## Extending the Instruction Set
 To add new instructions, update the `Opcode` enum, extend the parser in `loadTextPCode`, and implement the new behavior in `run()`.
 

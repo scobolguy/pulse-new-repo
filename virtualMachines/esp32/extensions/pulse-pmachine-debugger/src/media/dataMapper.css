@@ -1,0 +1,40 @@
+:root { color-scheme: light dark; }
+body { margin: 0; padding: 24px; color: var(--vscode-editor-foreground, #dce6f0); background: var(--vscode-editor-background, #17202c); font: 13px var(--vscode-font-family, system-ui); }
+header, .actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+h1 { display: inline-block; font-size: 23px; margin: 0 0 0 10px; }
+h2 { font-size: 15px; margin: 0 0 12px; }
+.badge { color: var(--vscode-button-foreground, white); background: var(--vscode-button-background, #1670bd); padding: 4px 7px; border-radius: 4px; font-size: 10px; letter-spacing: 1px; }
+p { overflow-wrap: anywhere; }
+.hint, .fields > p, #name { color: var(--vscode-descriptionForeground, #a6b6c8); }
+#status { min-height: 20px; color: var(--vscode-descriptionForeground, #a6b6c8); }
+#status.error { color: var(--vscode-errorForeground, #ff9999); }
+main { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(180px, .8fr) minmax(200px, 1fr); min-width: 660px; gap: 16px; align-items: stretch; }
+.fields, .properties { padding: 18px; border: 1px solid var(--vscode-panel-border, #435269); border-radius: 8px; background: var(--vscode-sideBar-background, #202d3d); }
+.field { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; min-height: 44px; text-align: left; background: var(--vscode-editor-background, #17202c); color: inherit; border: 1px solid var(--vscode-panel-border, #435269); border-radius: 5px; }
+.field span { overflow-wrap: anywhere; }
+.field small { color: var(--vscode-descriptionForeground, #a6b6c8); white-space: nowrap; }
+.field[draggable="true"] { cursor: grab; }
+.field.selected, .field.over, .link.selected { outline: 2px solid var(--vscode-focusBorder, #55b5ff); }
+.field.mapped { border-color: var(--vscode-charts-green, #65c9a1); }
+button { font: inherit; cursor: pointer; padding: 8px 12px; border: 1px solid transparent; color: var(--vscode-button-foreground, white); background: var(--vscode-button-background, #1670bd); }
+button:focus-visible, textarea:focus-visible { outline: 2px solid var(--vscode-focusBorder, #55b5ff); }
+button:disabled { opacity: .5; cursor: default; }
+#connections { position: relative; min-height: 340px; }
+#wires { position: absolute; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+#wires path { fill: none; stroke: var(--vscode-charts-green, #65c9a1); stroke-width: 2; }
+#wires path.selected { stroke: var(--vscode-focusBorder, #55b5ff); stroke-width: 3; }
+#links { position: relative; display: flex; flex-direction: column; gap: 10px; padding-top: 72px; }
+.link { background: var(--vscode-editor-background, #17202c); color: inherit; border: 1px solid var(--vscode-panel-border, #435269); border-radius: 6px; overflow-wrap: anywhere; font-size: 12px; }
+.properties { margin-top: 24px; }
+label { display: block; margin: 14px 0 8px; color: var(--vscode-descriptionForeground, #a6b6c8); }
+textarea { box-sizing: border-box; width: 100%; padding: 10px; resize: vertical; border: 1px solid var(--vscode-input-border, #435269); background: var(--vscode-input-background, #17202c); color: var(--vscode-input-foreground, #dce6f0); font: 13px var(--vscode-editor-font-family, monospace); }
+.actions { justify-content: flex-start; margin-top: 12px; }
+.toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0; }
+.actions { flex-wrap: wrap; }
+.results { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.results > div { min-width: 0; }
+pre { padding: 14px; background: var(--vscode-editor-background, #17202c); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 440px; overflow: auto; }
+input, select { box-sizing: border-box; padding: 8px; color: var(--vscode-input-foreground, #dce6f0); background: var(--vscode-input-background, #17202c); border: 1px solid var(--vscode-input-border, #435269); font: inherit; }
+.fields input { width: 100%; margin-bottom: 12px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+@media (max-width: 800px) { .results { grid-template-columns: 1fr; } body { padding: 12px; } }

@@ -1,22 +1,46 @@
 # Pulse Studio infrastructure network views
 
-The **Pulse Studio** view in VS Code's left-hand sidebar is a native tree with
-**Data Librarian** and **Data Mapper** as peer nodes. Data Librarian expands to
-show registered data types; Data Mapper opens the mapper page in a webview
-editor tab. Use the view's **Refresh** button or
+The **Pulse Studio** sidebar has separate **Data Librarian** and **Data Mapper**
+views, both visible by default. The extension activates at startup. Data Librarian
+loads registered data types directly, without an expandable wrapper node;
+Data Mapper loads saved maps and automatically expanded field connections directly
+from port 4200, without clicking a command or opening an editor tab. VS Code preserves any view visibility
+or collapsed-state customizations you make. Use the librarian view's **Refresh** button or
 **Pulse: Refresh Data Librarian** to reload the list. It reads
 `/api/librarian/data-types` from `pulse.catalogStudio.apiBase` and falls back to
 the Data Librarian service at `http://127.0.0.1:4300`; loading failures are
 shown as an error row with details in its tooltip. An empty registry is shown
-explicitly. This sidebar does not require the frontend dev server.
+explicitly. Neither sidebar view requires the frontend dev server. Configure
+`pulse.catalogStudio.mapperApiBase` to change the mapper origin (default
+`http://127.0.0.1:4200`). Mapper errors appear in the tree with details in the
+tooltip. Use **Pulse: Refresh Data Mapper** to reload maps and field connections.
 
 The standalone React workbench is no longer served as a browser UI. Vite remains
-the local host for the Flow Designer and Data Mapper pages embedded in VS Code
-webviews; those pages are loaded only on their `?host=vscode` routes. Use
+the local host for the Flow Designer page embedded in a VS Code webview;
+that page is loaded only on its `?host=vscode` route. Use
 **Pulse: Open Pulse Studio** to open the Flow Designer webview.
+**Pulse: Open Data Mapper** focuses the native mapper sidebar. The sidebar
+is a mapping browser; editing remains available through the PMachine extension's
+native **Pulse Data Mapper: Open Designer** command.
 
 The Infrastructure tree retains its existing **Network** branch, backed by
 the Aggregator `/api/nodes` endpoint.
+
+**Deploy** lists workspace `.wfl` files. Right-click a file to validate it with
+the Aggregator WFL compiler or preview its declared targets against registered
+nodes. The current backend can compile and persist deployment plans, but its
+deployment-record API does not install WFL service/daemon artifacts on an
+ESP32; **Deploy** therefore reports that limitation and makes no deployment.
+
+**Node Inventory** queries each registered node's `/api/services` and
+`/pmachine/service_host/status` endpoints. Named-service registrations are
+shown separately from observed hosted contexts; a registration is not evidence
+that the service is executing. Hosted contexts show daemon diagnostics and the
+aggregate distributed-table/cache counts currently exposed by firmware. Table
+and cache names are not available in the firmware status response yet. Right-click
+a named service to unregister it, or a hosted context/daemon to stop its
+containing hosted context. Each action is separately confirmed; stopping a
+context can discard its transient runtime state.
 
 **Network (Distributed Cache)** is a separate sibling branch. It reads the
 distributed device cache's revision-fenced `/api/devices` pages, displaying

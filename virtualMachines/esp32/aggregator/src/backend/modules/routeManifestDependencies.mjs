@@ -334,6 +334,7 @@ export function createRouteManifestDependencyFactories(deps = {}) {
     runtimeRegistry: () => ({
       requirePermission,
       serviceInstanceRegistry,
+      discoveredNodes,
       getUiCardOverrides,
       setUiCardOverrides,
       hasPermission,

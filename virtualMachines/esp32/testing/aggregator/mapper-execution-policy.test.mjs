@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { runPL0 } from '../../aggregator/scripts/pl0-interpreter.mjs';
-import { createPascalishMapperExecution } from '../../aggregator/src/mapper/execution-policy.mjs';
+import { createPascalishMapperExecution } from '../../aggregator/src/mapper/~execution-policy.mjs';
 
 const requireAggregator = createRequire(new URL('../../aggregator/package.json', import.meta.url));
 const express = requireAggregator('express');

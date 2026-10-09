@@ -15,7 +15,7 @@ export async function createPascalishXsdParser({ logger = console, schemaRoot } 
   const host = await createPascalishServiceHost({
     compiled, collectorId: 'pulse-data-librarian-xsd-parser', httpPort: null, udpPort: null,
     maxBodyBytes: 1000000, maxResponseBytes: 1000000,
-    desktopBudget: true, maxSteps: 10000000, maxExecutionMs: 10000, maxEvents: 256,
+    desktopBudget: true, maxSteps: null, maxExecutionMs: null, maxEvents: 256,
     storageRoots, maxFileBytes: 1000000, logger
   });
   await host.start();

@@ -2,12 +2,105 @@
 
 This VS Code extension provides native Run and Debug support for Pulse PMachine programs.
 
+## Data Librarian in Explorer
+
+Run **Pulse Data Librarian: Browse Schemas** from the Command Palette, or expand
+**Pulse Data Librarian** in the Explorer sidebar. The dedicated view lists the
+Librarian catalog from `pulse-pmachine.backendUrl`; expand a schema to browse its
+fields, nested groups, and data types. Click a schema or field to open the schema's
+full metadata and structure as a JSON snapshot. Editing or saving that snapshot
+does not update the Librarian catalog.
+
+Use the view's refresh button after catalog changes. Backend URL changes and
+granting workspace trust also refresh the view. Untrusted workspaces do not
+contact the backend. Empty catalogs and schemas without field structures are
+shown explicitly; connection or catalog failures appear in the view, a
+notification, and the `Pulse PMachine` output channel.
+
+This panel is included in extension version **0.1.10**. After installing the
+updated VSIX, run **Developer: Reload Window**. If hidden, use **View: Open View**
+and select **Pulse Data Librarian**.
+
+## Data Mapper designer
+
+Run **Pulse Data Mapper: Create Prototype Map** from the Command Palette, choose
+a new `*.pulse-map.json` file, and the visual designer opens with sample payment
+schemas. Drag a source field onto a target field to connect them. Alternatively,
+select a source and click a target (also usable with keyboard Tab and Enter).
+Select a connection in the middle to edit its conversion rule or remove it.
+Use **Apply rule** to update the document, then the normal VS Code Save command.
+Edits participate in VS Code Undo/Redo and synchronize with JSON text edits.
+**Open JSON** opens the text editor beside the designer.
+
+To start with real schemas instead of the example, run **Pulse Data Mapper:
+Create Map**, then use **Map details** to set its ID and name.
+**Choose source schema** and **Choose target schema** load the Librarian catalog
+through `pulse-pmachine.backendUrl` (default `http://127.0.0.1:4000`).
+Schema selection embeds the structure, type ID, path and modification time in
+the local map, so it remains editable offline. Switching schemas asks before
+clearing connections. **Refresh selected schemas** reloads both structures
+without removing rules; publication reports any fields removed from the schema.
+The source and target search boxes filter large field lists.
+
+**Pulse Data Mapper: Import from Aggregator** (also on the designer toolbar)
+lists backend maps and saves the chosen map to a new local file. It never
+overwrites an existing local file. **Publish to Aggregator** confirms the
+destination and whether it will create or replace a backend map. Publication
+does not deploy to a PMachine. Save local metadata changes with Ctrl+S.
+Existing backend maps are reread after confirmation to detect intervening edits;
+the current backend API has no atomic conditional-write support.
+
+The **Test mapping** panel accepts a sample JSON object, or a backend test case
+if the sample input is blank. Test cases use the Aggregator's schema-generated
+sample data, not the stored test case's actual message. Run executes the exact
+published map through `/api/mapper/maps/:id/run` and displays its output and
+diagnostics, including missing-source warnings and conversion information.
+Local changes must be published first; running never publishes implicitly.
+Document or input changes mark previous output stale.
+
+Backend actions require a trusted workspace, have bounded HTTP timeouts, and
+report failures in the designer and `Pulse PMachine` output channel. No backend
+connection is required for offline editing. If Librarian reports a catalog error,
+schema selection cannot proceed until that backend problem is repaired;
+existing embedded schemas remain usable. The Librarian supports zero-padded
+ISO schema versions and batches large catalogs within PMachine transport limits.
+
+For an existing single-map JSON object, run **Pulse Data Mapper: Open Designer**
+with its text editor active, or use **Reopen Editor With > Pulse Data Mapper**
+for `*.pulse-map.json`, `*.mapping.json` or `*.map`. The designer preserves unknown local map
+and rule metadata and supports the existing `rules` or legacy `items` arrays.
+Embedded `sourceStructure` / `targetStructure` trees use `children`, `name`,
+`kind` (`leaf` or `branch`), and `valueType`, matching the Aggregator map format.
+Without embedded structures, only field paths already used by rules are shown.
+Collections such as `data-mappings.json` are not supported by this editor.
+Invalid JSON is reported and disables visual editing until repaired.
+
+Conversion rules support basic local validation (maximum 1000 characters,
+characters, balanced delimiters, and assignment/function/keyword presence).
+Full execution validation is performed by the existing Aggregator Pascalish
+routine interpreter. Unlike types require an explicit conversion routine.
+Branch-to-leaf links and duplicate links are rejected. Legacy `from` / `to` /
+`conversion` aliases are imported, and clearing an old conversion also clears
+the legacy value to prevent it reappearing at runtime.
+JSON is formatted when a visual edit is applied. This version does not add
+PMachine deployment or transformation-node graphs.
+
+Build with `npm run compile`, package with `npm run package`, install the VSIX
+using **Extensions: Install from VSIX**, then run **Developer: Reload Window**.
+Run `node --test test/dataMapper.test.mjs test/dataMapperBackend.test.mjs` after
+compiling for model, document and HTTP regression tests. To exercise real
+publish/update/run APIs in PowerShell, set
+`$env:PULSE_MAPPER_TEST_URL = 'http://127.0.0.1:4000'` before that test command.
+The live test creates a uniquely named temporary map and deletes it afterward.
+
 ## Services in Explorer
 
 Expand **Pulse Services** in the VS Code Explorer sidebar to browse the
 Aggregator `/api/services` directory, including configured offerings, runtime
 instances, and named Pascalish services registered on discovered PMachine nodes
-and configured discovery collectors. When a service has multiple instances,
+and configured discovery collectors. The directory includes **Pulse Data Librarian**
+and **Pulse Data Mapper** from the service registry. After updating the gateway,
+restart it and refresh the view to load the directory route. When a service has multiple instances,
 expand its service group to see each instance as a distinct leaf, identified by
 node/endpoint and instance ID. A single instance is shown directly as a leaf.
 Tooltips show the endpoint, provider, protocol, status, and configuration reference.
