@@ -8,12 +8,13 @@ var devices: cache of Device;
     index: integer;
 begin
   index := host.next_sequence();
-  if index <= 75 then
+  while index <= 75 do
   begin
     device.name := host.json_set('{"pad":"Device name padded to 32 bytes"}', 'i', index);
     device.protocol := 'test';
     device.address := '10.0.0.1';
     device.deviceType := 'unknown';
-    devices.put(host.json_set('{}', 'k', index), device, host.observation_ttl())
+    devices.put(host.json_set('{}', 'k', index), device, host.observation_ttl());
+    index := host.next_sequence()
   end
 end.

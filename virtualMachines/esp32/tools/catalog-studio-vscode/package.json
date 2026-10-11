@@ -13,7 +13,8 @@
   ],
   "main": "./extension.js",
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onCommand:pulseCatalogStudio.openFlowDesigner"
   ],
   "contributes": {
     "languages": [
@@ -72,6 +73,19 @@
       {
         "command": "pulseCatalogStudio.newVfl",
         "title": "Pulse: New Visual Flow Document"
+      },
+      {
+        "command": "pulseCatalogStudio.newWfl",
+        "title": "Pulse: New WFL Deployment"
+      },
+      {
+        "command": "pulseCatalogStudio.openWflEditor",
+        "title": "Pulse: Open WFL Deployment Editor"
+      },
+      {
+        "command": "pulseCatalogStudio.openFlowDesigner",
+        "title": "Pulse: Open in Flow Designer",
+        "icon": "$(type-hierarchy)"
       },
       {
         "command": "pulseCatalogStudio.refreshDataLibrarian",
@@ -204,6 +218,12 @@
     },
     "customEditors": [
       {
+        "viewType": "pulseCatalogStudio.wflDeploymentEditor",
+        "displayName": "WFL Configuration and Deployment",
+        "selector": [{ "filenamePattern": "*.wfl" }],
+        "priority": "option"
+      },
+      {
         "viewType": "pulseCatalogStudio.vflEditor",
         "displayName": "Visual Flow Language Editor",
         "selector": [
@@ -211,7 +231,23 @@
             "filenamePattern": "*.vfl"
           }
         ],
+        "workbench.editorAssociations": [
+          {
+            "viewType": "pulseCatalogStudio.vflEditor",
+            "filenamePattern": "*.vfl"
+          }
+        ],
         "priority": "default"
+      },
+      {
+        "viewType": "pulseCatalogStudio.wflFlowEditor",
+        "displayName": "WFL Flow Designer",
+        "selector": [
+          {
+            "filenamePattern": "*.wfl"
+          }
+        ],
+        "priority": "option"
       }
     ],
     "configuration": {
@@ -240,7 +276,7 @@
         "pulse.catalogStudio.defaultVflExtension": {
           "type": "string",
           "default": ".vfl",
-          "description": "Default file extension used for Visual Flow Language documents."
+          "description": "Default extension for new visual graphs. .vfl stores executable graphs separately from WFL deployment/configuration; .wfl preserves the embedded FLOW designer."
         },
         "pulse.catalogStudio.defaultFolder": {
           "type": "string",

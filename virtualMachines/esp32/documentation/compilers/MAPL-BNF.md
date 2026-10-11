@@ -12,10 +12,33 @@ MAPL (Mapping Language) is a domain-specific language for defining data transfor
 
 ### Map Declaration
 ```
-<map_decl> ::= 'map' <ident> 'from' <ident> 'to' <ident> ';' <map_body> 'end' ';'
+<map_decl> ::= 'map' <name_ref> 'from' <name_ref> 'to' <name_ref> ';' <map_directive>* <map_body> 'end' ';'
+
+<name_ref> ::= <ident> | <string>
+
+<map_directive> ::= '@' <ident> <directive_value> ';'
+
+<directive_value> ::= <string> | <number> | 'true' | 'false'
 
 <map_body> ::= <map_stmt>*
 ```
+
+The header names are the map ID, the source type ID and the target type ID.
+Names that are not plain identifiers (for example `'pay-to-transfer'`) are quoted.
+
+#### Directives
+Directives carry map metadata. They are not executable statements; the compiler
+emits them as the program map entry's `metadata` object. Recognized directives:
+
+| Directive | Meaning |
+|-----------|---------|
+| `@name 'text'` | Display name (defaults to the map ID) |
+| `@description 'text'` | Description |
+| `@enabled false` | Disable the map (enabled by default) |
+| `@sourceSchema 'path'` | Librarian schema path for the source structure |
+| `@targetSchema 'path'` | Librarian schema path for the target structure |
+
+Unknown directives are kept as metadata and preserved by the designer.
 
 ### Map Statements
 
@@ -28,7 +51,7 @@ MAPL (Mapping Language) is a domain-specific language for defining data transfor
              | <for_stmt>
              | <validate_stmt>
 
-<assign_stmt> ::= <field_path> ':=' <field_path> ';'
+<assign_stmt> ::= <field_path> ':=' <field_path> ('using' <string>)? ';'
 
 <assign_default_stmt> ::= <field_path> ':=' <field_path> 'default' <expr> ';'
 
@@ -56,10 +79,21 @@ MAPL (Mapping Language) is a domain-specific language for defining data transfor
 
 #### Field Path
 ```
-<field_path> ::= <ident> ('.' <ident>)*
+<field_path> ::= <ident> ('.' <path_segment>)*
+
+<path_segment> ::= <ident> | <string>
 ```
 
-This allows nested field access like `Person.Address.Street`.
+This allows nested field access like `Person.Address.Street`. Segments after the
+first may be quoted when a field name is not an identifier or is a keyword, for
+example `target.'first name' := source.'end';`.
+
+`using` attaches a Pascalish conversion routine to a direct assignment; inside
+the routine `src` is the source value and `output` receives the result:
+
+```
+target.amount := source.amount using 'output := round(src, 2);';
+```
 
 ### Expression Language
 
@@ -110,6 +144,20 @@ This allows nested field access like `Person.Address.Street`.
 ```
 
 ## Examples
+
+### Designer-authored Map
+The VS Code Data Mapper designer edits `.mapl` files directly (one map per file).
+Each visual connection is a top-level `target... := source...` assignment;
+other statements are preserved as written.
+```
+map 'pay-to-transfer' from payment to transfer;
+  @name 'Payment to transfer';
+  @sourceSchema 'schemas/payment.json';
+  @targetSchema 'schemas/transfer.json';
+  target.transfer.id := source.reference;
+  target.transfer.amount := source.amount using 'output := round(src, 2);';
+end;
+```
 
 ### Simple Field Mapping
 ```

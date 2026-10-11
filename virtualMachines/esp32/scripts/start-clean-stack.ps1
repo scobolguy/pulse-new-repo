@@ -1,6 +1,4 @@
 param(
-  [string]$BoneCrusherIp = '',
-  [string[]]$ProbeIps = @('192.168.2.115','192.168.2.116','192.168.2.117','192.168.2.118'),
   [string]$SupervisorIp = '',
   [switch]$RequireSupervisorGreen,
   [int]$SupervisorWaitSeconds = 30
@@ -34,26 +32,6 @@ function Stop-Listeners {
       Write-Output ("No listener on port {0}" -f $port)
     }
   }
-}
-
-function Resolve-BoneCrusherIp {
-  param([string]$PreferredIp, [string[]]$Candidates)
-
-  if ($PreferredIp) {
-    $Candidates = @($PreferredIp) + ($Candidates | Where-Object { $_ -ne $PreferredIp })
-  }
-
-  foreach ($ip in $Candidates) {
-    try {
-      $status = Invoke-RestMethod -Uri ("http://{0}/status" -f $ip) -TimeoutSec 4
-      if ("$($status.deviceRole)".ToLowerInvariant() -eq 'bonecrusher') {
-        return $ip
-      }
-    } catch {
-    }
-  }
-
-  return $null
 }
 
 function Wait-HttpReady {
@@ -141,19 +119,43 @@ function Wait-SupervisorGreen {
   throw ("Supervisor did not reach green state at {0} within {1}s" -f $SupervisorTargetIp, $TimeoutSeconds)
 }
 
-$resolvedBoneCrusherIp = Resolve-BoneCrusherIp -PreferredIp $BoneCrusherIp -Candidates $ProbeIps
-if (-not $resolvedBoneCrusherIp) {
-  throw 'Unable to find a reachable ESP32 reporting deviceRole=bonecrusher'
+function Get-DiscoveredNodes {
+  param([string]$BackendBaseUrl = 'http://127.0.0.1:4000')
+
+  $payload = Invoke-RestMethod -Uri ("{0}/api/nodes" -f $BackendBaseUrl) -TimeoutSec 4
+  if ($payload -is [System.Array]) { return $payload }
+  if ($payload.nodes -is [System.Array]) { return $payload.nodes }
+  throw 'Node registry response did not contain a node array'
 }
 
-Write-Output ("BoneCrusher board detected at {0}" -f $resolvedBoneCrusherIp)
+function Resolve-LiveBoneCrusherIp {
+  param(
+    [string]$BackendBaseUrl = 'http://127.0.0.1:4000',
+    [int]$TimeoutSeconds = 30
+  )
+
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  while ((Get-Date) -lt $deadline) {
+    foreach ($node in (Get-DiscoveredNodes -BackendBaseUrl $BackendBaseUrl)) {
+      $ip = [string]$node.ip
+      if (-not $ip -or [long]$node.lastSeen -le 0) { continue }
+      try {
+        $status = Invoke-RestMethod -Uri ("http://{0}/status" -f $ip) -TimeoutSec 2
+        if ("$($status.deviceRole)".ToLowerInvariant() -eq 'bonecrusher') {
+          return $ip
+        }
+      } catch {
+      }
+    }
+    Start-Sleep -Milliseconds 500
+  }
+
+  return $null
+}
+
 Stop-Listeners -Ports @(4000, 5173)
 
 $env:EDGE_ESP32_ENABLED = '1'
-$env:EDGE_ESP32_HOST = $resolvedBoneCrusherIp
-$env:EDGE_ESP32_PORT = '80'
-$env:EDGE_ESP32_BONECRUSHER_NODES = "$resolvedBoneCrusherIp:80"
-$env:EDGE_ESP32_NODES = "$resolvedBoneCrusherIp:80"
 $env:EDGE_ESP32_FORCED_EVOLUTION_RATE = '0'
 
 $backendOut = Join-Path $logRoot 'clean-start-backend.log'
@@ -179,15 +181,28 @@ if (-not $frontendOk) {
 $supervisorCheckEnabled = $RequireSupervisorGreen.IsPresent -or [bool]$SupervisorIp
 $supervisorCheckResult = $null
 if ($supervisorCheckEnabled) {
-  $supervisorTargetIp = if ($SupervisorIp) { $SupervisorIp } else { $resolvedBoneCrusherIp }
+  $supervisorTargetIp = $SupervisorIp
+  if (-not $supervisorTargetIp) {
+    $supervisorTargetIp = Resolve-LiveBoneCrusherIp -TimeoutSeconds $SupervisorWaitSeconds
+  }
+  if (-not $supervisorTargetIp) {
+    throw 'No live-discovered BoneCrusher node became available for the supervisor check'
+  }
   $supervisorCheckResult = Wait-SupervisorGreen -SupervisorTargetIp $supervisorTargetIp -TimeoutSeconds $SupervisorWaitSeconds
 }
 
-$boardStatus = Invoke-RestMethod -Uri ("http://{0}/status" -f $resolvedBoneCrusherIp) -TimeoutSec 4
+$liveNodes = Get-DiscoveredNodes
 [pscustomobject]@{
-  boneCrusherIp = $resolvedBoneCrusherIp
-  deviceRole = $boardStatus.deviceRole
-  firmwareVersion = $boardStatus.firmwareVersion
+  discoveredNodeCount = $liveNodes.Count
+  discoveredNodes = @($liveNodes | ForEach-Object {
+    [pscustomobject]@{
+      name = $_.name
+      nodeName = $_.nodeName
+      ip = $_.ip
+      port = $_.port
+      lastSeen = $_.lastSeen
+    }
+  })
   supervisorChecked = $supervisorCheckEnabled
   supervisorIp = if ($supervisorCheckResult) { $supervisorCheckResult.ip } else { $null }
   supervisorNodeId = if ($supervisorCheckResult) { $supervisorCheckResult.nodeId } else { $null }

@@ -6,7 +6,7 @@
 import { execFile, spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readEnvString, readEnvNumber } from '../../env-config.mjs';
+import { readEnvString } from '../../env-config.mjs';
 
 const AGGREGATOR_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -104,18 +104,9 @@ export function playWavOnHost(filePath, timeoutMs = 30000) {
   });
 }
 
-function resolveEsp32BluetoothAudioOrigin() {
-  const explicit = readEnvString('ESP32_BT_AUDIO_ORIGIN', '').trim();
-  if (explicit) {
-    return explicit.replace(/\/$/, '');
-  }
-  const host = readEnvString('EDGE_ESP32_HOST', '127.0.0.1').trim() || '127.0.0.1';
-  const port = Math.max(1, readEnvNumber('EDGE_ESP32_PORT', 80));
-  return `http://${host}:${port}`;
-}
-
 export async function forwardEsp32BluetoothTts({ text, voice = 'default', timeoutMs = 15000, origin = '' }) {
-  const base = String(origin || '').trim().replace(/\/$/, '') || resolveEsp32BluetoothAudioOrigin();
+  const base = String(origin || '').trim().replace(/\/$/, '');
+  if (!base) throw new Error('A live-discovered ESP32 audio service origin is required.');
   const params = new URLSearchParams();
   params.set('text', String(text || ''));
   params.set('voice', String(voice || 'default'));

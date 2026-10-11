@@ -1138,8 +1138,134 @@ function createDefaultMap(id, name) {
 }
 
 export function registerMapperRoutes(app) {
-  app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', service: 'data-mapper' });
+  app.post('/api/mapper/authoring/deploy-esp32', async (req, res) => {
+    try {
+      const mapl = String(req.body?.mapl || '');
+      const nodeId = String(req.body?.nodeId || '').trim();
+      if (!mapl.trim()) return res.status(400).json({ error: 'mapl is required' });
+      if (!nodeId) return res.status(400).json({ error: 'nodeId is required' });
+
+      const compiled = compileMaplWithAntlr(mapl);
+      if (compiled.ast.maps.length !== 1) {
+        return res.status(422).json({ error: 'Deploy one MAPL map per request' });
+      }
+      const unsupported = compiled.programMap.compatibility
+        .filter((map) => map.irOnly.length > 0);
+      if (unsupported.length > 0) {
+        return res.status(422).json({
+          error: 'MAPL contains constructs that are not executable by the ESP32 OP_MAP runtime',
+          compatibility: unsupported
+        });
+      }
+
+      const entryMap = compiled.ast.maps[0];
+      const mapSlug = toIdent(entryMap.id, 'mapper').toLowerCase().slice(0, 20);
+      const mapToken = `${mapSlug}-${sha256Hex(entryMap.id).slice(0, 8)}`;
+      const pcodePath = `/mapper-${mapToken}.pcode`;
+      const programMapPath = `/mapper-${mapToken}.map.json`;
+      const compactProgramMap = {
+        version: compiled.programMap.version,
+        serviceId: compiled.programMap.serviceId,
+        runtimeUnit: compiled.programMap.runtimeUnit,
+        executionModel: compiled.programMap.executionModel,
+        sourceLanguage: compiled.programMap.sourceLanguage,
+        globals: compiled.programMap.globals,
+        entryMapId: compiled.programMap.entryMapId,
+        entries: compiled.programMap.entries.map(({ kind, id, sourceTypeId, targetTypeId, items }) => ({
+          kind,
+          id,
+          sourceTypeId,
+          targetTypeId,
+          items
+        }))
+      };
+      const signedProgramMap = attachPcodeSignature(compactProgramMap, compiled.pcodeText);
+      const programMapText = `${JSON.stringify(signedProgramMap, null, 2)}\n`;
+      const smokeTest = req.body?.smokeTest;
+      if (smokeTest != null && (typeof smokeTest !== 'object' || Array.isArray(smokeTest)
+          || typeof smokeTest.message !== 'string' || !smokeTest.message.trim())) {
+        return res.status(400).json({
+          error: 'smokeTest.message must be a non-empty string when smokeTest is provided'
+        });
+      }
+
+      const backendBaseUrl = String(
+        process.env.PULSE_BACKEND_URL
+        || process.env.BACKEND_URL
+        || 'http://127.0.0.1:4000'
+      ).trim().replace(/\/+$/, '');
+      const deploymentBody = {
+        serviceName: `mapl_${mapToken}`,
+        packageName: `mapl_${mapToken}`,
+        packageVersion: signedProgramMap.signing.signature.slice(0, 16),
+        displayName: entryMap.id,
+        files: [
+          { path: pcodePath, content: compiled.pcodeText },
+          { path: programMapPath, content: programMapText }
+        ],
+        metadata: {
+          sourceLanguage: 'mapl',
+          mapId: entryMap.id,
+          sourceTypeId: entryMap.sourceTypeId,
+          targetTypeId: entryMap.targetTypeId,
+          maplHash: sha256Hex(mapl),
+          pcodeSignature: signedProgramMap.signing.signature
+        }
+      };
+      if (smokeTest) {
+        deploymentBody.program = {
+          file: pcodePath,
+          programMap: programMapPath,
+          inputQueue: String(smokeTest.inputQueue || '').trim() || 'mapper.smoke.in',
+          message: smokeTest.message,
+          fallbackPcodeText: compiled.pcodeText,
+          fallbackProgramMapText: programMapText
+        };
+      }
+
+      let response;
+      try {
+        response = await fetch(
+          `${backendBaseUrl}/api/nodes/${encodeURIComponent(nodeId)}/deploy`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(deploymentBody),
+            signal: AbortSignal.timeout(30000)
+          }
+        );
+      } catch (error) {
+        return res.status(502).json({
+          error: 'Could not reach the node deployment API',
+          details: error.message || String(error)
+        });
+      }
+      const responseText = await response.text();
+      let deployment;
+      try {
+        deployment = JSON.parse(responseText);
+      } catch {
+        deployment = { raw: responseText };
+      }
+      if (!response.ok) {
+        const status = response.status >= 500 ? 502 : response.status;
+        return res.status(status).json({
+          error: 'ESP32 MAPL deployment failed',
+          details: deployment?.error || responseText || `Backend returned ${response.status}`
+        });
+      }
+
+      return res.status(201).json({
+        ok: true,
+        nodeId,
+        mapId: entryMap.id,
+        compatibility: compiled.programMap.compatibility,
+        remote: { pcode: pcodePath, programMap: programMapPath },
+        deployment
+      });
+    } catch (error) {
+      return res.status(400).json({ error: error.message || String(error) });
+    }
   });
 
   app.post('/api/mapper/authoring/ollama-intent-stream', async (req, res) => {

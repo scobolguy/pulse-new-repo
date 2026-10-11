@@ -9,6 +9,10 @@ Main capabilities:
 - Service resolution and proxy to active instances only
 - Cluster, site, and node-topology management for JS and ESP32 nodes
 
+`GET /api/nodes` lists currently discovered nodes only. ESP32 boards must send a
+live UDP beacon or PMachine announcement; stale and probe-only entries are
+excluded, and no ESP32 addresses or sample nodes are seeded into the inventory.
+
 ## Current Source Of Truth
 
 The Aggregator backend is the source of truth for runtime clustering and topology behavior.
@@ -154,6 +158,38 @@ Invoke-RestMethod -Method Post -Uri http://<node-ip>/ffs/upload -ContentType 'ap
 Invoke-RestMethod -Method Post -Uri http://<node-ip>/ffs/upload -ContentType 'application/x-www-form-urlencoded' -Body @{ file = '/hdm.json'; body = $mappingsJson }
 ```
 
+### Deploy a MAPL map to a discovered ESP32
+
+The Mapper API can compile executable MAPL map definitions, sign a compact program
+map, and upload both artifacts to a node through the live node deployment route.
+Pass a node ID returned by `GET /api/nodes`; the backend resolves its current
+address and rejects nodes that are no longer discovered.
+
+```powershell
+$mapl = @'
+map NormalizeNode from Input to Output;
+  target.id := source.id;
+  target.name := upper(source.name);
+end;
+'@
+$body = @{
+  nodeId = '<discovered-node-id>'
+  mapl = $mapl
+  smokeTest = @{
+    inputQueue = 'mapper.smoke.in'
+    message = '{"id":"sample-1","name":"pulse node"}'
+  }
+} | ConvertTo-Json -Depth 8
+Invoke-RestMethod -Method Post -Uri http://localhost:4000/api/mapper/authoring/deploy-esp32 `
+  -ContentType 'application/json' -Body $body
+```
+
+The smoke test is optional, and each deployment request accepts one map. MAPL
+constructs that the ESP32 `OP_MAP` runtime does not execute (including defaults,
+conditionals, loops, and validation) are rejected with HTTP 422 rather than
+silently omitted. The supported compiler subset and deployment request are covered
+by `npm run test:mapl:esp32-deploy`.
+
 Notes:
 - OTA is removed from firmware and PlatformIO environments in this repository.
 - Use serial firmware upload plus FFS file upload for deployment.
@@ -169,11 +205,14 @@ Notes:
 
 If `edgeRole` is not provided, backend auto-selects role by message size.
 
-Environment variables for pool routing:
-- `EDGE_ESP32_BONECRUSHER_NODES=192.168.2.115:80,192.168.2.116:80`
-- `EDGE_ESP32_DRONE_NODES=192.168.2.117:80,192.168.2.118:80`
-- `EDGE_ESP32_NODES=...` (generic fallback pool)
-- `EDGE_ESP32_LARGE_MESSAGE_THRESHOLD_BYTES=8192`
+Edge routing selects from ESP32 boards discovered by live UDP beacons. A matching
+`deviceRole` is preferred when available; otherwise any recently discovered,
+available ESP32 may be selected. No static ESP32 host list or startup seed is
+used. If no live ESP32 has been discovered, edge routing fails explicitly
+instead of sending to a placeholder address.
+
+`EDGE_ESP32_LARGE_MESSAGE_THRESHOLD_BYTES` (default `8192`) controls automatic
+role selection.
 
 Forced evolution mode (optional):
 - `EDGE_ESP32_FORCED_EVOLUTION_RATE=0.05`

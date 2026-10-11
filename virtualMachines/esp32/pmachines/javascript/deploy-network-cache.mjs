@@ -4,17 +4,25 @@ import { createJsPmachineNodeServer } from './server.mjs';
 import { installNetworkCollectors } from './install-network-collectors.mjs';
 import { installPulseNodeCollector } from './install-pulse-node-collector.mjs';
 import { loadFederationConfig, startFederatedDeviceCache } from './federated-device-cache.mjs';
+import { createSsdpNames } from './src/ssdp-names.mjs';
 
-export async function deployNetworkCache({ logger = console } = {}) {
-  const config = await loadFederationConfig();
-  const origin = 'http://127.0.0.1:4111';
+export async function deployNetworkCache({ logger = console, replica = false } = {}) {
+  const baseConfig = await loadFederationConfig();
+  const config = replica ? { ...baseConfig, ...baseConfig.replica } : baseConfig;
+  if (replica && !baseConfig.replica) throw new Error('Second collector configuration is missing');
+  const port = replica ? config.pmachinePort : 4111;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid JS PMachine port');
+  const collectorSuffix = replica ? '-2' : '';
+  const ssdpNames = createSsdpNames({ logger, allowedPorts: config.ssdpDescriptionPorts ?? [80, 8200] });
+  const origin = `http://127.0.0.1:${port}`;
   const server = createJsPmachineNodeServer({
-    name: 'network-cache-js', port: 4111, host: '127.0.0.1', logger
+    name: `network-cache-js${collectorSuffix}`, port, logger, onDaemonEvent: ssdpNames.observe
   });
   let aggregation;
   let installed;
   let closing;
   async function close() {
+    ssdpNames.stop();
     const errors = [];
     if (aggregation) {
       try { await aggregation.stop(); } catch (error) { errors.push(error); }
@@ -38,14 +46,18 @@ export async function deployNetworkCache({ logger = console } = {}) {
   try {
     await new Promise((resolve, reject) => {
       server.once('error', reject);
-      server.listen(4111, '127.0.0.1', resolve);
+      server.listen(port, '127.0.0.1', resolve);
     });
     logger.log(`[DEPLOY] JS PMachine ${origin}; existing listeners are never replaced.`);
-    installed = await installNetworkCollectors({ origin, config, logger });
-    const pulse = await installPulseNodeCollector({ origin });
+    installed = await installNetworkCollectors({ origin, config, collectorSuffix, logger });
+    const pulse = await installPulseNodeCollector({ origin, collectorId: `pulse-node-collector${collectorSuffix}` });
     installed.collectorIds.push(pulse.collectorId);
     logger.log(`[DEPLOY] ${pulse.collectorId}: shared UDP 4210, primary service on ${origin}`);
-    aggregation = await startFederatedDeviceCache(config, logger, { collectors: false });
+    if (replica) {
+      logger.log(`[DEPLOY] Second collector set ready on ${origin}; aggregation remains owned by the first process.`);
+      return { stop };
+    }
+    aggregation = await startFederatedDeviceCache(config, logger, { collectors: false, resolveName: ssdpNames.resolve });
     const response = await fetch(`http://${config.httpHost}:${config.aggregationHttpPort}/api/devices`, {
       signal: AbortSignal.timeout(5000)
     });
@@ -63,7 +75,7 @@ export async function deployNetworkCache({ logger = console } = {}) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
-  const runtime = await deployNetworkCache();
+  const runtime = await deployNetworkCache({ replica: process.argv.includes('--replica') });
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.once(signal, () => {
       runtime.stop().catch(error => { console.error(error); process.exitCode = 1; });

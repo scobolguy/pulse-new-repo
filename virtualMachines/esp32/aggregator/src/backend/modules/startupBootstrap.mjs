@@ -16,7 +16,6 @@ export async function startBackendRuntime(deps = {}) {
     RUNTIME_DATA_ROOT,
     pathJoin,
     createNodeRegistryRoutes,
-    esp32SeedNodes = [],
     createPascalCompiler,
     pascalCompilerRoutes,
     express,
@@ -91,103 +90,6 @@ export async function startBackendRuntime(deps = {}) {
     await app.locals.ensurePmachinePublicDirectories(esp32NodeRegistry);
   }
   console.log(`[ESP32] Node Registry initialized with ${esp32NodeRegistry.getAllNodes().length} nodes`);
-
-  // Register known ESP32 nodes that aren't discovered via heartbeat
-  const knownEsp32Nodes = [
-    { id: 'child1', name: 'child1', ip: '192.168.2.157', port: 80, hardware: 'ESP32-CAM', parentNodeId: 'Neptune' },
-    { id: 'child2', name: 'child2', ip: '192.168.2.59', port: 80, hardware: 'ESP8266', parentNodeId: 'Neptune' },
-    { id: 'child3', name: 'child3', ip: '192.168.2.58', port: 80, hardware: 'ESP32', parentNodeId: 'Neptune' }
-  ];
-  
-  let knownNodesRegistered = 0;
-  for (const knownNode of knownEsp32Nodes) {
-    const existing = esp32NodeRegistry.getNode(knownNode.id);
-    if (existing) {
-      // Update parent if needed
-      if (existing.topology?.parentNodeId !== knownNode.parentNodeId) {
-        existing.topology = existing.topology || {};
-        existing.topology.parentNodeId = knownNode.parentNodeId;
-      }
-      continue;
-    }
-    
-    await esp32NodeRegistry.registerNode({
-      observed: false,
-      id: knownNode.id,
-      type: 'esp32-device',
-      name: knownNode.name,
-      ip: knownNode.ip,
-      port: knownNode.port,
-      capabilities: {
-        'device.control': true,
-        'led.control': true,
-        'relay.control': true
-      },
-      metadata: {
-        hardware: knownNode.hardware,
-        source: 'known-device',
-        discoveryMethod: 'manual'
-      },
-      topology: {
-        nodeKey: knownNode.id,
-        parentNodeId: knownNode.parentNodeId,
-        activeClusterId: 'default',
-        site: {
-          siteId: 'primary-site',
-          siteName: 'Primary Site',
-          siteCategory: 'internal',
-          siteMode: 'hot-warm'
-        }
-      }
-    });
-    knownNodesRegistered += 1;
-  }
-
-  if (knownNodesRegistered > 0) {
-    console.log(`[ESP32] Registered ${knownNodesRegistered} known ESP32 node(s) into the registry`);
-  }
-
-  const seedNodes = Array.isArray(esp32SeedNodes) ? esp32SeedNodes : [];
-  let seededNodes = 0;
-  for (const seed of seedNodes) {
-    const host = String(seed?.host || '').trim();
-    const port = Number(seed?.port || 0);
-    if (!host || !Number.isFinite(port) || port <= 0) {
-      continue;
-    }
-
-    const id = String(seed?.id || seed?.label || `${host}:${port}`).trim();
-    if (!id) {
-      continue;
-    }
-
-    const existing = esp32NodeRegistry.getNode(id);
-    if (existing && String(existing.ip || '').trim() === host && Number(existing.port || 0) === port) {
-      continue;
-    }
-
-    await esp32NodeRegistry.registerNode({
-      observed: false,
-      id,
-      type: String(seed?.type || 'esp32-generic').trim() || 'esp32-generic',
-      name: String(seed?.name || seed?.label || id).trim() || id,
-      ip: host,
-      port,
-      capabilities: seed?.capabilities && typeof seed.capabilities === 'object' ? seed.capabilities : {
-        'edge.ingress': '/pmachine/edge_ingress_stage'
-      },
-      metadata: {
-        hardware: String(seed?.hardware || 'ESP32').trim() || 'ESP32',
-        source: 'startup-seed',
-        ...(seed?.metadata && typeof seed.metadata === 'object' ? seed.metadata : {})
-      }
-    });
-    seededNodes += 1;
-  }
-
-  if (seededNodes > 0) {
-    console.log(`[ESP32] Seeded ${seededNodes} node(s) into the registry from edge configuration`);
-  }
 
   if (typeof app.locals.ensurePmachinePublicDirectories === 'function') {
     await app.locals.ensurePmachinePublicDirectories(esp32NodeRegistry);

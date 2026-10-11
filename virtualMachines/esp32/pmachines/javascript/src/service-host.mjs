@@ -10,6 +10,8 @@ import { createNetworkBindings } from './network-bindings.mjs';
 import { createByteBufferBindings } from './byte-buffer.mjs';
 import { createBoundedTextBindings } from './bounded-text.mjs';
 import { createHostCacheStore } from './host-cache.mjs';
+import { createReplicatedCache } from './replicated-cache.mjs';
+import { tableSchema } from './distributed-datastore.mjs';
 import { createFilesystemBindings } from './filesystem-bindings.mjs';
 import { createJsonCollectionBindings } from './json-collection-bindings.mjs';
 import { createDesktopTextBindings } from './desktop-text-bindings.mjs';
@@ -44,10 +46,13 @@ export async function createPascalishServiceHost({
   maxEntries = 255, maxTables = 4, maxEvents = 16, maxBodyBytes = 4096,
   maxStorageBytes = 131072, maxResponseBytes = 262144, maxSteps, maxExecutionMs,
   maxTimers = 8, maxDaemonDatagramBytes = 1024, clock = () => Math.floor(performance.now()), logger = console,
-  onDaemonEvent = null, storageRoots = {}, maxFileBytes = 262144, desktopBudget = false
+  onDaemonEvent = null, storageRoots = {}, maxFileBytes = 262144, desktopBudget = false,
+  distributedBindings = {}, bluetoothSourceFactory = null
 }) {
   if (compiled?.programMap?.hostBindingsVersion !== SERVICE_HOST_BINDINGS_VERSION
     || compiled.programMap.runtimeUnit?.kind !== 'service') throw failure('Unsupported service host contract');
+  if (!distributedBindings || typeof distributedBindings !== 'object' || Array.isArray(distributedBindings) ||
+      (bluetoothSourceFactory !== null && typeof bluetoothSourceFactory !== 'function')) throw failure('Invalid service resource deployment grants');
   text(collectorId, 'collectorId');
   if (httpPort !== null) integer(httpPort, 0, 65535, 'HTTP port');
   if (udpPort !== null) integer(udpPort, 0, 65535, 'UDP port');
@@ -71,7 +76,9 @@ export async function createPascalishServiceHost({
     version: HOST_CAPABILITIES_VERSION,
     ...HOST_PROFILES.js,
     filesystem: filesystem.roots,
-    supported: filesystem.capabilities,
+    supported: [...filesystem.capabilities,
+      ...(Object.keys(distributedBindings).length ? ['distributed-cache'] : []),
+      ...(bluetoothSourceFactory ? ['bluetooth.discovery'] : [])],
     limits: { maxBodyBytes, maxResponseBytes, maxSteps, maxExecutionMs, ...filesystem.limits }
   };
   assertHostCapabilities(compiled.programMap, instructions, capabilities.supported);
@@ -107,6 +114,7 @@ export async function createPascalishServiceHost({
       if (!serviceDefinition || schema(serviceDefinition.fields) !== schema(definition.fields)) {
         throw failure('Daemon cache declaration must match its service cache');
       }
+      if (serviceDefinition.backingTable !== definition.backingTable) throw failure('Daemon backing table must match service cache');
     }
     const id = text(map.runtimeUnit.id, 'daemon ID');
     const interval = integer(map.runtimeUnit.refreshMs, 10, 180000, 'daemon interval');
@@ -150,7 +158,27 @@ export async function createPascalishServiceHost({
   let udpBound = false;
   let lastClock = -1;
   let storageBytes = 0;
-  const cacheStore = createHostCacheStore(compiled.programMap.hostCaches, { clock: () => now() });
+  let bluetoothSource;
+  const cacheDefinitions = compiled.programMap.hostCaches || [];
+  createHostCacheStore(cacheDefinitions, { clock: () => now() });
+  const cacheStore = createHostCacheStore(cacheDefinitions.filter(definition => !definition.backingTable), { clock: () => now() });
+  const replicas = new Map();
+  const distributedDefinitions = new Map((compiled.programMap.distributedTables || []).map(definition => {
+    const schema = tableSchema(definition);
+    return [schema.name, schema];
+  }));
+  if (distributedDefinitions.size !== (compiled.programMap.distributedTables || []).length ||
+      distributedDefinitions.size > 16) throw failure('Duplicate or excessive distributed table declarations');
+  for (const definition of cacheDefinitions.filter(definition => definition.backingTable)) {
+    const table = distributedDefinitions.get(definition.backingTable);
+    if (!table || table.schemaId !== tableSchema({ name: definition.backingTable, fields: definition.fields }).schemaId ||
+        !Object.hasOwn(distributedBindings, definition.backingTable)) throw failure('Missing distributed table deployment binding or schema mismatch');
+  }
+  const replica = name => {
+    const value = replicas.get(name);
+    if (!value) throw failure('Undeclared replicated cache');
+    return value;
+  };
   function now() {
     const value = integer(clock(), 0, Number.MAX_SAFE_INTEGER, 'monotonic clock');
     if (value < lastClock) throw failure('Monotonic clock moved backwards', 500);
@@ -236,6 +264,14 @@ export async function createPascalishServiceHost({
         return value;
       };
       const handlers = {
+        'host.bluetooth_read': limit => {
+          if (!bluetoothSource) throw failure('Bluetooth discovery is not running', 503);
+          return bluetoothSource.read(limit);
+        },
+        'host.bluetooth_status': () => {
+          if (!bluetoothSource) throw failure('Bluetooth discovery is not running', 503);
+          return bluetoothSource.status();
+        },
         ...filesystem.handlers,
         ...createJsonCollectionBindings(),
         ...createJsonValueBindings(),
@@ -266,6 +302,13 @@ export async function createPascalishServiceHost({
         'host.cache_remove': (name, key) => cacheStore.remove(name, key),
         'host.cache_next': (name, cursor) => cacheStore.next(name, cursor, readAt),
         'host.cache_count': (name) => cacheStore.count(name, readAt),
+        'host.replica_get': (name, key) => replica(name).get(key),
+        'host.replica_put': (name, key, json) => replica(name).put(key, json),
+        'host.replica_remove': (name, key) => replica(name).remove(key),
+        'host.replica_contains': (name, key) => replica(name).contains(key),
+        'host.replica_next': (name, cursor) => replica(name).next(cursor),
+        'host.replica_count': name => replica(name).count(),
+        'host.replica_clearlocal': name => replica(name).clearLocal(),
         'host.cache_snapshot': (name, cursor, revision) => {
           const page = { ...cacheStore.snapshot(name, cursor, revision), collectorId, bootId };
           const json = JSON.stringify(page);
@@ -338,6 +381,15 @@ export async function createPascalishServiceHost({
           entries.set(key, { value, deadline, bytes });
           storageBytes = nextBytes;
           return 0;
+        },
+        'host.table_remove': (name, key) => {
+          text(key, 'table key');
+          const entries = table(name);
+          const entry = entries.get(key);
+          if (!entry) return 0;
+          entries.delete(key);
+          storageBytes -= entry.bytes;
+          return 1;
         },
         'host.table_expire': (name) => expire(table(name)),
         'host.table_snapshot': (name, cursor, limit) => tableSnapshot(name, cursor, limit, true),
@@ -473,6 +525,9 @@ export async function createPascalishServiceHost({
       await new Promise(resolve => server.close(resolve));
     }
     await tail;
+    if (bluetoothSource) await bluetoothSource.stop();
+    for (const replica of replicas.values()) await replica.stop();
+    replicas.clear();
     if (socket) await closeSocket(socket);
     for (const unit of units.values()) {
       if (unit.socket) await closeSocket(unit.socket);
@@ -491,6 +546,14 @@ export async function createPascalishServiceHost({
     try { await starting; } catch (error) { await stop(); throw error; }
   }
   async function startHost() {
+    if (bluetoothSourceFactory) bluetoothSource = await bluetoothSourceFactory({ logger });
+    for (const definition of cacheDefinitions.filter(definition => definition.backingTable)) {
+      const binding = distributedBindings[definition.backingTable];
+      replicas.set(definition.name, await createReplicatedCache({
+        definition, binding: { ...binding, replicaId: `${binding.replicaId}:${definition.name}` },
+        clock: () => now(), logger
+      }));
+    }
     running = true;
     if (httpPort !== null) {
       server = http.createServer(async (req, res) => {
@@ -509,7 +572,8 @@ export async function createPascalishServiceHost({
           if (req.method === 'GET' && requestPath === '/pmachine/service_host/status') {
             res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
               .end(JSON.stringify({ running, collectorId, bootId, capabilities,
-                daemons: [...units.values()].map(unit => ({ id: unit.id, ...unit.stats })) }));
+                daemons: [...units.values()].map(unit => ({ id: unit.id, ...unit.stats })),
+                replicas: [...replicas.values()].map(replica => replica.status()) }));
             return;
           }
           if (requestPath.startsWith('/events/')) throw failure('Internal service event', 404);
@@ -588,6 +652,7 @@ export async function createPascalishServiceHost({
       httpPort: server?.listening ? server.address().port : null,
       udpPort: running && udpBound ? socket.address().port : null,
       cache: cacheStore.stats(),
+      replicas: [...replicas.values()].map(replica => replica.status()),
       daemonDiagnostics: [...units.values()].map(unit => ({
         id: unit.id, intervalMs: unit.interval,
         udpPort: running && unit.socket ? unit.socket.address().port : null, udpShared: unit.udpShared,

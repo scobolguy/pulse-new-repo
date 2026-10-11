@@ -16,6 +16,7 @@ decl
     | serviceDecl
     | daemonDecl
     | typeDecl
+    | distributedTableDecl
     | classDecl
     | varDecl
     | queueDecl
@@ -82,7 +83,35 @@ varSection
     ;
 
 varLine
-    : identList ':' typeRef placement? varSource? ';'
+    : identList ':' typeRef extendable? placement? varSource? backingClause? ';'
+    ;
+
+extendable
+    : 'extendable'
+    ;
+
+distributedTableDecl
+    : distributedKeyword tableKeyword IDENT ':' 'map' '<' typeRef ',' typeRef '>' ';'
+    ;
+
+backingClause
+    : backedKeyword byKeyword IDENT
+    ;
+
+distributedKeyword
+    : {this._input.LT(1).text.toLowerCase() === 'distributed'}? IDENT
+    ;
+
+tableKeyword
+    : {this._input.LT(1).text.toLowerCase() === 'table'}? IDENT
+    ;
+
+backedKeyword
+    : {this._input.LT(1).text.toLowerCase() === 'backed'}? IDENT
+    ;
+
+byKeyword
+    : {this._input.LT(1).text.toLowerCase() === 'by'}? IDENT
     ;
 
 subprogramDecl
@@ -128,7 +157,7 @@ classFieldDecl
     ;
 
 classMethodDecl
-    : ('procedure' | 'function') IDENT genericTypeParams? '(' methodParamList? ')' (':' typeRef)? ';' block ';'
+    : ('procedure' | 'function') IDENT genericTypeParams? '(' methodParamList? ')' (':' typeRef)? ';' unitDecl* block ';'
     ;
 
 methodParamList
@@ -140,7 +169,7 @@ methodParamDecl
     ;
 
 varDecl
-    : 'var' IDENT ':' typeRef placement? varSource? ';'
+    : 'var' IDENT ':' typeRef extendable? placement? varSource? ';'
     ;
 
 varSource
@@ -199,6 +228,7 @@ typeRef
 
 cacheType
     : 'cache' 'of' typeRef
+    | 'cache' '<' typeRef ',' typeRef '>'
     ;
 
 genericTypeParams
@@ -428,7 +458,7 @@ pl0Block
 pl0Element
     : pl0Block
     | httpVerb
-    | '(' | ')' | '+' | '-' | '*' | '/'
+    | '(' | ')' | '[' | ']' | '+' | '-' | '*' | '/'
     | '=' | '<' | '>'
     | '<=' | '>=' | '<>'
     | ',' | ';' | '.' | ':=' | ':' | '||'
@@ -596,7 +626,7 @@ fileStmt
 // ============================================================
 
 lvalue
-    : IDENT ('.' IDENT)*
+    : IDENT ('.' IDENT)* ('[' expr ']')?
     ;
 
 qualifiedName

@@ -185,7 +185,6 @@ test('standalone PC collector implements snapshot and announcement contracts', {
       ...process.env,
       DISCOVERY_HTTP_PORT: String(port), UDP_PORT: String(udpPort),
       PULSE_DISCOVERY_COLLECTOR_ID: 'test-standalone-collector',
-      ESP32_DISCOVERY_PROBE_ENABLED: '0',
       ESP32_DISCOVERY_PROBE_TIMEOUT_MS: '300'
     },
     stdio: ['ignore', 'pipe', 'pipe']

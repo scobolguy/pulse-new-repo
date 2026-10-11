@@ -1,0 +1,3 @@
+WORKFLOW "forward" BEGIN
+  STEP "forward" ROUTE QUEUE "flow.output";
+END;

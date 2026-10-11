@@ -5,8 +5,18 @@ import antlr4 from 'antlr4';
 import MAPLLexer from '../grammar/generated-modern/MAPLLexer.js';
 import MAPLParser from '../grammar/generated-modern/MAPLParser.js';
 import MAPLVisitor from '../grammar/generated-modern/MAPLVisitor.js';
+import { compileConversionRuleToOps } from './compile-mapping-rule.mjs';
 import { dslDebug, dslError } from './dsl-debug.mjs';
 import { attachPcodeSignature } from './pcode-signing.mjs';
+
+const SUPPORTED_MAP_FUNCTIONS = new Set([
+  'trim',
+  'upper',
+  'yymmddtoiso',
+  'mtamounttodecimal',
+  'mtpartyname',
+  'mtchargebearertoiso'
+]);
 
 class CollectingErrorListener extends antlr4.error.ErrorListener {
   constructor() {
@@ -23,8 +33,55 @@ function text(node) {
   return node ? String(node.getText()) : '';
 }
 
+const QUOTED_PATH = /^[A-Za-z_]\w*(\.([A-Za-z_]\w*|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"))*$/;
+
+// Function arguments that are bare field paths are unquoted so they match designer paths.
+function pathText(node) {
+  const raw = text(node);
+  if (!QUOTED_PATH.test(raw)) return raw;
+  return (raw.match(/[A-Za-z_]\w*|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/g) || []).map(unquoteMaplString).join('.');
+}
+
 function quote(value) {
   return `"${String(value || '').replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
+}
+
+export const MAPL_KEYWORDS = new Set([
+  'map', 'from', 'to', 'end', 'default', 'using', 'if', 'then', 'else', 'for', 'each', 'as',
+  'validate', 'or', 'and', 'mod', 'not', 'true', 'false'
+]);
+
+export function unquoteMaplString(raw) {
+  const value = String(raw || '');
+  if (value.length < 2 || !(value[0] === '"' || value[0] === '\'')) return value;
+  return value.slice(1, -1).replace(/\\(.)/g, '$1');
+}
+
+export function quoteMaplString(value) {
+  return `'${String(value ?? '').replaceAll('\\', '\\\\').replaceAll('\'', '\\\'')}'`;
+}
+
+function isPlainMaplIdent(segment) {
+  return /^[A-Za-z_][A-Za-z_0-9]*$/.test(segment) && !MAPL_KEYWORDS.has(segment);
+}
+
+export function formatMaplName(name) {
+  const value = String(name ?? '');
+  return isPlainMaplIdent(value) ? value : quoteMaplString(value);
+}
+
+/** Render a dotted field path as MAPL; segments that are not plain identifiers are quoted. */
+export function formatMaplPath(fieldPath) {
+  const segments = String(fieldPath ?? '').split('.').filter(segment => segment.length > 0);
+  if (segments.length === 0) throw new Error('[MAPL] Empty field path');
+  if (!isPlainMaplIdent(segments[0])) throw new Error(`[MAPL] Field path must start with an identifier: ${fieldPath}`);
+  return segments.map((segment, index) => (index === 0 || isPlainMaplIdent(segment) ? segment : quoteMaplString(segment))).join('.');
+}
+
+function directiveValue(ctx) {
+  if (ctx.STRING()) return unquoteMaplString(ctx.STRING().getText());
+  if (ctx.NUMBER()) return Number(ctx.NUMBER().getText());
+  return ctx.getText() === 'true';
 }
 
 class MaplAstBuilder extends MAPLVisitor {
@@ -36,14 +93,23 @@ class MaplAstBuilder extends MAPLVisitor {
   }
 
   visitMapDecl(ctx) {
-    const identifiers = ctx.IDENT();
+    const names = ctx.nameRef().map(item => unquoteMaplString(item.getText()));
+    const directives = {};
+    for (const directive of ctx.mapDirective() || []) {
+      directives[directive.IDENT().getText()] = directiveValue(directive.directiveValue());
+    }
     return {
       type: 'MapDecl',
-      id: identifiers[0].getText(),
-      sourceTypeId: identifiers[1].getText(),
-      targetTypeId: identifiers[2].getText(),
+      id: names[0],
+      sourceTypeId: names[1],
+      targetTypeId: names[2],
+      directives,
       statements: this.visit(ctx.mapBody())
     };
+  }
+
+  visitFieldPath(ctx) {
+    return [ctx.IDENT().getText(), ...(ctx.pathSegment() || []).map(segment => unquoteMaplString(segment.getText()))].join('.');
   }
 
   visitMapBody(ctx) {
@@ -61,18 +127,20 @@ class MaplAstBuilder extends MAPLVisitor {
   }
 
   visitAssignStmt(ctx) {
-    return {
+    const statement = {
       type: 'Assign',
-      targetPath: text(ctx.fieldPath(0)),
-      sourcePath: text(ctx.fieldPath(1))
+      targetPath: this.visit(ctx.fieldPath(0)),
+      sourcePath: this.visit(ctx.fieldPath(1))
     };
+    if (ctx.STRING()) statement.conversionRule = unquoteMaplString(ctx.STRING().getText());
+    return statement;
   }
 
   visitAssignDefaultStmt(ctx) {
     return {
       type: 'AssignDefault',
-      targetPath: text(ctx.fieldPath(0)),
-      sourcePath: text(ctx.fieldPath(1)),
+      targetPath: this.visit(ctx.fieldPath(0)),
+      sourcePath: this.visit(ctx.fieldPath(1)),
       defaultExpression: text(ctx.expr())
     };
   }
@@ -81,7 +149,7 @@ class MaplAstBuilder extends MAPLVisitor {
     const call = this.visit(ctx.functionCall());
     return {
       type: 'FunctionAssign',
-      targetPath: text(ctx.fieldPath()),
+      targetPath: this.visit(ctx.fieldPath()),
       function: call
     };
   }
@@ -90,7 +158,7 @@ class MaplAstBuilder extends MAPLVisitor {
     return {
       type: 'FunctionCall',
       name: ctx.IDENT().getText(),
-      arguments: ctx.exprList() ? (ctx.exprList().expr() || []).map(expr => text(expr)) : []
+      arguments: ctx.exprList() ? (ctx.exprList().expr() || []).map(expr => pathText(expr)) : []
     };
   }
 
@@ -107,7 +175,7 @@ class MaplAstBuilder extends MAPLVisitor {
   visitForStmt(ctx) {
     return {
       type: 'ForEach',
-      sourcePath: text(ctx.fieldPath()),
+      sourcePath: this.visit(ctx.fieldPath()),
       variable: ctx.IDENT().getText(),
       statements: this.visit(ctx.mapBody())
     };
@@ -125,33 +193,37 @@ function lowerStaticItems(map) {
   const items = [];
   const irOnly = [];
 
+  const addItem = (sourcePath, targetPath, conversionRule) => {
+    items.push({
+      sourcePath,
+      targetPath,
+      conversionRule,
+      ops: compileConversionRuleToOps(conversionRule)
+    });
+  };
+
   for (const statement of map.statements) {
     if (statement.type === 'Assign') {
-      items.push({
-        sourcePath: statement.sourcePath,
-        targetPath: statement.targetPath,
-        conversionRule: 'OUTPUT := SRC;'
-      });
+      const conversionRule = statement.conversionRule || 'OUTPUT := SRC;';
+      if (!isSupportedConversionRule(conversionRule)) {
+        irOnly.push({ type: statement.type, reason: 'Conversion is not supported by the native MAPL runtime.' });
+        continue;
+      }
+      addItem(statement.sourcePath, statement.targetPath, conversionRule);
       continue;
     }
 
     if (statement.type === 'AssignDefault') {
-      items.push({
-        sourcePath: statement.sourcePath,
-        targetPath: statement.targetPath,
-        conversionRule: 'OUTPUT := SRC;',
-        defaultExpression: statement.defaultExpression
-      });
+      addItem(statement.sourcePath, statement.targetPath, 'OUTPUT := SRC;');
       irOnly.push({ type: statement.type, reason: 'Current OP_MAP runtime does not apply default expressions.' });
       continue;
     }
 
-    if (statement.type === 'FunctionAssign' && statement.function.arguments.length === 1) {
-      items.push({
-        sourcePath: statement.function.arguments[0],
-        targetPath: statement.targetPath,
-        conversionRule: `OUTPUT := ${statement.function.name}(SRC);`
-      });
+    if (statement.type === 'FunctionAssign'
+        && statement.function.arguments.length === 1
+        && SUPPORTED_MAP_FUNCTIONS.has(String(statement.function.name || '').toLowerCase())) {
+      const conversionRule = `OUTPUT := ${statement.function.name}(SRC);`;
+      addItem(statement.function.arguments[0], statement.targetPath, conversionRule);
       continue;
     }
 
@@ -159,6 +231,20 @@ function lowerStaticItems(map) {
   }
 
   return { items, irOnly };
+}
+
+function isSupportedConversionRule(ruleText) {
+  let expression = String(ruleText || '').trim()
+    .replace(/^output\s*(:=|=)\s*/i, '')
+    .replace(/;+\s*$/, '')
+    .trim();
+  if (expression.toUpperCase() === 'SRC') return true;
+  if ((expression.startsWith('"') && expression.endsWith('"'))
+      || (expression.startsWith("'") && expression.endsWith("'"))) return true;
+
+  const call = expression.match(/^([a-z_][a-z0-9_]*)\((.*)\)$/i);
+  if (!call || !SUPPORTED_MAP_FUNCTIONS.has(call[1].toLowerCase())) return false;
+  return isSupportedConversionRule(call[2]);
 }
 
 export function compileMaplWithAntlr(sourceText) {
@@ -198,6 +284,7 @@ export function compileMaplWithAntlr(sourceText) {
       id: map.id,
       sourceTypeId: map.sourceTypeId,
       targetTypeId: map.targetTypeId,
+      metadata: map.directives,
       items: lowered.items,
       maplIr: map.statements
     });

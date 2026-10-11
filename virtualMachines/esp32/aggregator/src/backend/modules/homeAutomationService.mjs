@@ -56,8 +56,7 @@ export function createHomeAutomationService({
   pythonPath = process.env.HOME_AUTOMATION_PYTHON || path.resolve(WORKSPACE_ROOT, '.venv', 'Scripts', 'python.exe'),
   kasaBridgePath = path.resolve(AGGREGATOR_ROOT, 'scripts', 'kasa_bridge.py'),
   sharkBridgePath = path.resolve(AGGREGATOR_ROOT, 'scripts', 'shark_bridge.py'),
-  bluetoothGateways = String(process.env.HOME_AUTOMATION_BLUETOOTH_GATEWAYS || '192.168.2.157')
-    .split(',').map((value) => value.trim()).filter(Boolean)
+  bluetoothGateways = []
 } = {}) {
   const devices = new Map();
   const tpLinkClient = new TpLinkClient();

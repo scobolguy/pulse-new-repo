@@ -20,16 +20,30 @@ export function compactServiceHostProgramMap(map) {
     procedures: Object.fromEntries(Object.entries(map.procedures || {}).map(([label, procedure]) =>
       [label, { params: procedure.params }])),
     ...(Array.isArray(map.hostTables) ? { hostTables: map.hostTables } : {}),
+    ...(Array.isArray(map.distributedTables) ? { distributedTables: map.distributedTables } : {}),
     ...(Array.isArray(map.hostCaches) ? { hostCaches: map.hostCaches } : {})
   };
 }
 
 // Typed `cache of T` methods lower to these; source code cannot call them directly.
 export const SERVICE_HOST_INTERNAL_BINDINGS = Object.freeze(new Set([
-  'host.cache_get', 'host.cache_put', 'host.cache_remove', 'host.cache_next', 'host.cache_count', 'host.cache_snapshot'
+  'host.cache_get', 'host.cache_put', 'host.cache_remove', 'host.cache_next', 'host.cache_count', 'host.cache_snapshot',
+  ...['get', 'put', 'remove', 'next', 'count', 'contains', 'clearlocal'].map(method => `host.replica_${method}`)
 ]));
 
 export const SERVICE_HOST_BINDINGS = Object.freeze({
+  'host.bluetooth_read': { arity: 1, args: ['integer'], result: 'string', capability: 'bluetooth.discovery', desktopOnly: true },
+  'host.bluetooth_status': { arity: 0, args: [], result: 'string', capability: 'bluetooth.discovery', desktopOnly: true },
+  ...Object.fromEntries([
+    ['get', ['string', 'string'], 'string'],
+    ['put', ['string', 'string', 'string'], 'integer'],
+    ['remove', ['string', 'string'], 'integer'],
+    ['contains', ['string', 'string'], 'integer'],
+    ['next', ['string', 'string'], 'string'],
+    ['count', ['string'], 'integer'],
+    ['clearlocal', ['string'], 'integer']
+  ].map(([method, args, result]) => [`host.replica_${method}`,
+    { arity: args.length, args, result, capability: 'distributed-cache', desktopOnly: true }])),
   'host.xml_parse': { arity: 1, args: ['string'], result: 'integer', desktopOnly: true },
   'host.xml_append_document': { arity: 2, args: ['integer', 'integer'], result: 'integer', desktopOnly: true },
   'host.xml_parent': { arity: 2, args: ['integer', 'integer'], result: 'integer', desktopOnly: true },
@@ -91,6 +105,7 @@ export const SERVICE_HOST_BINDINGS = Object.freeze({
   'host.event_method': { arity: 0, result: 'string' },
   'host.event_path': { arity: 0, result: 'string' },
   'host.event_query': { arity: 1, args: ['string'], result: 'string' },
+  'host.map_apply': { arity: 2, args: ['string', 'string'], result: 'string' },
   'host.text_header': { arity: 2, args: ['string', 'string'], result: 'string' },
   'host.text_lower': { arity: 1, args: ['string'], result: 'string' },
   'host.text_index': { arity: 2, args: ['string', 'string'], result: 'integer' },
@@ -119,6 +134,7 @@ export const SERVICE_HOST_BINDINGS = Object.freeze({
   'host.json_append': { arity: 3, args: ['string', 'string', 'scalar'], result: 'string' },
   'host.raise_error': { arity: 1, args: ['string'], result: 'integer' },
   'host.table_get': { arity: 2, args: ['string', 'string'], result: 'string' },
+  'host.table_remove': { arity: 2, args: ['string', 'string'], result: 'integer', desktopOnly: true },
   'host.cache_get': { arity: 2, args: ['string', 'string'], result: 'string' },
   'host.cache_put': { arity: 4, args: ['string', 'string', 'string', 'integer'], result: 'integer' },
   'host.cache_remove': { arity: 2, args: ['string', 'string'], result: 'integer' },

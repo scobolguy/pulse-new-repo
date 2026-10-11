@@ -22,7 +22,8 @@ export async function loadFederationConfig(path = new URL('../../config/federate
   if (new Set([config.tuyaHttpPort, config.ssdpHttpPort, config.aggregationHttpPort]).size !== 3 ||
       config.tuyaUdpPort === config.ssdpUdpPort || config.observationTtlMs !== 180000 ||
       !Number.isInteger(config.refreshMs) || config.refreshMs < 10000 || config.refreshMs > 60000 ||
-      !Array.isArray(config.kasaPeers) || config.kasaPeers.length !== 2 || config.kasaPeers.some(ip => net.isIP(ip) !== 4)) {
+      !Array.isArray(config.kasaPeers) || config.kasaPeers.length < 1 || config.kasaPeers.length > 8 ||
+      new Set(config.kasaPeers).size !== config.kasaPeers.length || config.kasaPeers.some(ip => net.isIP(ip) !== 4)) {
     throw new Error('Invalid bounded federation configuration');
   }
   if (config.ssdpDescriptionPorts !== undefined && (!Array.isArray(config.ssdpDescriptionPorts) ||
@@ -33,7 +34,7 @@ export async function loadFederationConfig(path = new URL('../../config/federate
   return { ...config, lanInterface: selected.address };
 }
 
-export async function startFederatedDeviceCache(config, logger = console, { collectors = true } = {}) {
+export async function startFederatedDeviceCache(config, logger = console, { collectors = true, resolveName } = {}) {
   const compile = async name => compilePascalishProgramWithAntlr(await fs.readFile(new URL(`../../src/${name}`, import.meta.url), 'utf8'), { hostServices: true });
   const service = collectors ? await compile('device-cache-service.pas') : null;
   const hosts = [];
@@ -55,7 +56,7 @@ export async function startFederatedDeviceCache(config, logger = console, { coll
       await host.start();
       logger.log(`[DEVICE-FEDERATION] ${protocol}-js: separate p-machine/cache/boot, HTTP ${config.httpHost}:${config[`${protocol}HttpPort`]}, passive UDP ${config[`${protocol}UdpPort`]}`);
     }
-    const federation = createDeviceFederation({ logger, resolveName: ssdpNames.resolve, sources: config.sources ?? [
+    const federation = createDeviceFederation({ logger, resolveName: resolveName ?? ssdpNames.resolve, sources: config.sources ?? [
       collectors
         ? { protocol: 'kasa', collectorId: config.kasaCollectorId, origin: config.esp32Origin }
         : { protocol: 'kasa', collectorId: 'kasa-js', origin: `http://${config.httpHost}:${config.kasaHttpPort}` },

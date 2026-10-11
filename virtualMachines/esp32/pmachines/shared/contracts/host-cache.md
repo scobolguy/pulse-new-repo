@@ -74,6 +74,218 @@ and unused daemon slots do not each allocate an unused deque node/map.
 There is no persistence, replication, distributed backing, multi-key transaction,
 or cache-handle assignment/passing.
 
+## Distributed tables and replicated caches
+
+**Status:** implemented for hosted JS PMachines with string keys and typed
+scalar/record values. The supplied adapter is an atomic file-backed authority;
+database-table and remote-service connectors are extension points, not supplied
+production adapters. Table declarations are separate global resources; this
+release exposes Pascalish operations through their backed caches, not direct
+`DeviceDirectory.get()` calls.
+The existing `cache of T` above remains unchanged. Device federation below
+aggregates independently collected observations; it is not an authoritative
+datastore and must not be silently converted into one.
+
+### Separate global resource and local generic cache
+
+The declaration shape is:
+
+```pascal
+type Device = record
+  name: string;
+  protocol: string;
+  address: string;
+  deviceType: string;
+end;
+
+distributed table DeviceDirectory: map<string, Device>;
+
+service 'device-reader';
+var devices: cache<string, Device> backed by DeviceDirectory;
+    device: Device;
+
+get '/example';
+begin
+  device := devices.get('kasa:192.168.2.28');
+  return device.name
+end
+end.
+```
+
+`DeviceDirectory` is a named top-level resource, outside any service, daemon,
+class or variable section. It defines the authoritative key/value schema, not a
+process-local variable or a copy of the datastore. Its identity is the qualified
+table name resolved by deployment, never just the local cache variable name.
+Units declaring/referencing the same backing resource must agree on its schema.
+
+`map<TKey, TValue>` specifies the table's typed mapping. `cache<TKey, TValue>`
+is a node/context-local resource with a backing-table reference and a deployed
+replica identity. The cache exposes map-like operations plus local residency
+and replication. Generics are resolved at compile time.
+The first implementation supports `string` keys and the existing hosted-cache
+scalar/record value types. Other key types must be rejected explicitly, not
+coerced to strings. Cache/table handles are not ordinary assignable records.
+
+The compiler records table declarations, schemas, cache bindings and required
+capabilities in signed program metadata. Deployment resolves the table name to
+a datastore adapter and registers replica identities/endpoints. The backing
+datastore may be a file, a database table, or a service exposing keyed data.
+The initial implementation can use a file-backed authority on a JS PMachine;
+a dedicated datastore service is one deployment choice, not a language requirement.
+File paths, table identifiers, endpoint URLs, credentials, node membership, memory
+capacity and transport retry policies are deployment concerns, not literals
+embedded in Pascalish application code. Unsupported targets must reject these
+capabilities before installation; no process-local fallback is permitted.
+
+### Operations and read-through behavior
+
+| Operation | Authority semantics (not direct Pascalish methods) | Backed local cache |
+|---|---|---|
+| `get(key)` | Read the authoritative value or raise `KeyNotFound`. | Return an unexpired resident value; on a miss, fetch the authoritative value, install it locally and enqueue distribution to the other registered replicas. |
+| `put(key, value)` | Commit a validated durable update and its replication work. | Write through to the table; install locally only after the authoritative commit is acknowledged. |
+| `remove(key)` | Commit a versioned deletion and its replication work; return whether a live value existed. | Perform the authoritative deletion, then remove the local resident value. |
+| `contains(key)` | A missing read raises `KeyNotFound`. | Check through the backing table on a local miss; not merely local residency. |
+| `count()` / `next(cursor)` | The internal synchronization protocol returns a full revision-fenced latest-state snapshot; public authoritative enumeration is not implemented. | Enumerate resident keys only; not a claim of full table coverage. |
+| `clearLocal()` | Not applicable. | Evict local values without deleting table data or sending distributed deletions. |
+
+Cache-wide authoritative deletion is not an implicit `clear()` operation.
+Administrative table clearing must be separately authorized and explicit.
+Resident inspection and replication health are runtime diagnostics, distinct
+from logical map membership.
+
+Only one backing fetch per table/key is active in a cache context at a time;
+concurrent misses share its result or error. A missing authoritative key raises
+`KeyNotFound`, not an empty/default record. Timeouts, unavailable storage,
+schema mismatches and replication failures remain distinguishable errors.
+No negative result is distributed as a fabricated value.
+
+A cache fill distributes the authoritative value's existing version; it is
+not a new table write and does not advance that version. If the key changes
+while a miss is being filled, newer observed state wins. A stale fill must not
+overwrite a newer value or deletion. Receiver application never rebroadcasts
+an update, preventing replication loops.
+
+### Authority, versions and asynchronous replication
+
+The logical table has one write authority, regardless of backing adapter.
+The authority serializes writes and
+durably commits the value/deletion, its monotonically increasing table revision,
+and replication outbox work before acknowledging success. A crash must not
+leave an acknowledged write without durable data or recoverable propagation.
+The initial implementation has one durable authority, not multi-writer
+consensus or automatic authority failover.
+
+The authority implements keyed reads, versioned writes/deletions, and fenced
+synchronization. Adapters implement asynchronous `load()`, `commit(state)` and
+`close()` for the complete authority snapshot. A file adapter provides atomic
+replacement after flushing file contents; a database
+adapter can use transactions; a service adapter must provide an equivalent
+commit/recovery contract. An arbitrary file or unversioned service is not
+automatically a valid replication authority. An adapter that cannot satisfy
+these guarantees is rejected explicitly. Direct edits outside the authority
+require a defined reconciliation/versioning mechanism before replicas can be
+declared synchronized.
+
+Replication is asynchronous: a successful write means **durable authoritative
+commit**, not acknowledgment from every cache replica. The writer may therefore
+read its acknowledged update immediately while another node briefly sees an
+older cached value. A bounded local TTL limits how long an unreachable replica
+can serve resident state; after expiry a backing-store outage produces an error.
+Ordinary cached reads provide eventual consistency, not cross-node linearizable
+reads or multi-key transactions.
+
+Each replication envelope includes table identity, schema identity, datastore
+generation, authoritative revision, key, and either a typed value or deletion
+tombstone. Replicas apply envelopes idempotently and never replace a newer
+key version with an older one. Deletion versions survive resident eviction so a
+delayed fill cannot resurrect a removed key. Generation changes require a
+resynchronization handshake; revisions from different generations are not
+numerically compared or trusted in arrival order.
+
+The authority retains latest values/tombstones, delivery revisions and replica
+acknowledgments durably, including fills requested by readers. Each replica
+polls a complete snapshot every second and retries failed synchronizations.
+This is recoverable latest-state propagation, not a durable log of every
+intermediate write or a push callback queue. Replica outages do not roll
+back committed writes. Delivery lag and failure are exposed explicitly through
+status/metrics, and retry work survives authority restarts. Slow/offline
+replicas always recover through a revision-fenced full snapshot. A replica
+acknowledges the previously applied revision on its next poll, never the newly
+received revision before successful application. Failed snapshot application
+rolls local residency and version guards back atomically.
+
+TTL is a residency/freshness policy, not datastore deletion. Resident reads,
+duplicate delivery and retries do not extend the same delivery's lifetime.
+A read-through miss creates a new durable delivery revision with a fresh
+residency TTL, without changing the value's authoritative version.
+Cross-node expiry uses an explicitly defined age/remaining-lifetime protocol,
+never a raw timestamp from another process's monotonic clock. Restarted
+replicas resynchronize rather than advertising lost RAM state as current.
+
+Capacity eviction is local and does not remove authoritative data. If an
+individual value cannot fit the declared replica schema/storage limits, that
+replica reports failure instead of acknowledging a retained copy. Retry queues,
+version guards and retained tombstones are bounded; exhaustion requires
+backpressure or explicit resynchronization, never silent success.
+
+### Deployment and limits
+
+The [example](../../../src/replicated-device-directory.pas) and
+[runner](../../javascript/deploy-replicated-cache.mjs) start one authority and
+two **separate-process** JS replicas:
+
+```powershell
+node pmachines\javascript\deploy-replicated-cache.mjs --file C:\PulseData\device-directory.json
+```
+
+Default ports are 4340 (authority), 4341 and 4342 (replicas). The runner generates
+an ephemeral deployment bearer token, uploads signed Pascalish p-code/maps and
+grants only the named collector access. Use `POST /directory/device?key=example`
+with JSON `{name, protocol, address}`, `GET` or `DELETE` the same route,
+`POST /directory/clear-local`, and `GET /directory/count` on either replica.
+The directory is independent of discovery/registry observations.
+
+For an independently managed node, `JS_PMACHINE_DISTRIBUTED_GRANTS` maps exact
+collector IDs to table-name bindings `{origin, token, replicaId}`. Transport is
+currently HTTP on literal loopback `127.0.0.1` only, with a token of at least
+32 characters. Remote/LAN replicas require a future authenticated transport.
+URLs/tokens cannot be supplied by an arbitrary service-install request.
+
+Defaults: 16 tables, 256 retained keys including tombstones per table,
+32 registered replicas, 2 MiB authority file, 50 resident entries and 16 KiB
+storage per local replica cache, and 60-second residency TTL (maximum 180s).
+Read-through requests time out after 5 seconds. Local byte-budget failures and
+version-guard/tombstone exhaustion fail explicitly; tombstones are not silently
+garbage-collected. A write that commits but fails local installation reports
+`CommittedLocalFailure`; callers must not interpret it as a rolled-back write.
+
+The file authority holds an exclusive `<file>.lock`. After a process crash,
+verify no authority is still running before manually removing that exact stale
+lock. Never steal a live lock or edit a live snapshot. File contents are flushed
+before atomic rename; directory metadata is not fsynced, so this is not a claim
+of universal power-loss durability. Normal stop/restart preserves generation,
+values, deletions and acknowledgment state.
+
+### Verified acceptance evidence
+
+The [replicated-table tests](../../../testing/pmachines/replicated-table.test.mjs)
+verify:
+
+1. Top-level table declarations and generic cache bindings compile to signed,
+   schema-checked metadata; invalid placement/types/bindings fail compilation.
+2. Two distinct JS PMachine replicas fill an absent resident key from the
+   configured backing adapter without using the backend registry as a substitute.
+3. Concurrent misses deduplicate; the fetched value reaches other replicas
+   under its original authoritative version.
+4. Writes and deletions persist across authority restart; duplicate/out-of-order
+   delivery and delayed fills cannot roll state backward or resurrect deletions.
+5. An offline replica does not block authoritative commits, and catches up
+   after reconnect/restart; status remains degraded until it is synchronized.
+6. Expiry and eviction cause read-through, not datastore deletion. Missing keys,
+   backing outages, invalid data and resource exhaustion fail explicitly.
+7. The legacy `cache of T` and observation-federation tests remain unchanged in
+   meaning. Separate processes on one PC do not prove physical fault isolation.
+
 ## Bounded enumeration
 
 ```pascal
@@ -297,7 +509,7 @@ The default collectors are `kasa-edge`, `tuya-js` and `ssdp-js`. An optional
 `sources` array overrides central membership with objects containing
 `collectorId`, `protocol` (`kasa`, `tuya`, `ssdp`) and a private IPv4 HTTP
 `origin`. It may include multiple independently configured same-protocol
-collectors, up to six. IDs and normalized origins must both be unique; neither
+collectors, up to eight. IDs and normalized origins must both be unique; neither
 an announcement nor a claimed response identity can create an extra voter.
 Configured origins are trusted LAN endpoints, **not cryptographically
 authenticated identities**.
@@ -373,8 +585,8 @@ queries read retained materialized evidence, never transparent remote reads.
 All pages include source health/errors/completeness; names alone are not a
 claim of complete discovery.
 
-Limits: 150 unique devices initially from three 50-entry caches; at most six
-configured sources/300 evidence records, 524288 serialized evidence bytes,
+Limits: 150 unique devices initially from three 50-entry caches; at most eight
+configured sources/400 evidence records, 524288 serialized evidence bytes,
 plus at most 50 last-observation deadline guards per source within that same
 byte budget (expired evidence cannot be revived by unchanged snapshot replay),
 25 two-record pages per source snapshot, three full-snapshot attempts, and

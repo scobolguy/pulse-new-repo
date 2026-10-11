@@ -128,6 +128,7 @@ const Binding bindings[] = {
     {"clock", "", false}, {"event_body", "", true}, {"event_bytes", "", true}, {"event_peer", "", true},
     {"event_port", "", false}, {"event_method", "", true}, {"event_path", "", true},
     {"event_query", "s", true},
+    {"map_apply", "ss", true},
     {"collector_id", "", true}, {"boot_id", "", true}, {"next_sequence", "", false},
     {"observation_ttl", "", false}, {"announcement", "ss", true},
     {"json_text", "ss", true}, {"json_value", "ss", true}, {"json_integer", "ss", false},
@@ -332,6 +333,7 @@ bool ServiceHost::validateUnit(const JsonDocument& map, const char* kind, Unit& 
             }
             break;
         case OP_PUSH_STR: case OP_PUSH_INT: case OP_LOAD_NAME: case OP_STORE_NAME:
+        case OP_MAP:
         case OP_RET: case OP_MAP_RETURN: case OP_HALT:
         case OP_STREQ: case OP_STRNEQ: case OP_EQ: case OP_NEQ: case OP_LT:
         case OP_LE: case OP_GT: case OP_GE: case OP_OR: case OP_AND: case OP_NOT:
@@ -614,6 +616,11 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
     else if (op == "event_body") result.text = body;
     else if (op == "event_bytes") {
         result.text = NetworkBindings::eventBytes(body);
+    }
+    else if (op == "map_apply") {
+        std::string mappingError;
+        if (!machine.applyMappingById(args[0].text, args[1].text, result.text, mappingError))
+            return fail(mappingError, error, 422);
     }
     else if (op == "event_peer") result.text = peer;
     else if (op == "event_port") result.integer = peerPort;
@@ -944,7 +951,9 @@ bool ServiceHost::execute(const Unit& unit, std::string& response) {
         return fail(lastError, response, 503);
     }
     try {
+        machine.setMappings(unit.mappings);
         machine.setProcedureSignatures(unit.signatures);
+        machine.setRoutingContext(current->collectorId, body);
         if (unit.image) machine.runImage(unit.image->size(), [&](size_t index) {
             PInstruction instruction;
             std::string error;

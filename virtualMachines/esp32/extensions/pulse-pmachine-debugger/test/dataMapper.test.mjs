@@ -52,7 +52,7 @@ test('legacy field aliases import, and cleared legacy conversions cannot reappea
 });
 
 test('publication rejects missing identity, unsafe IDs, missing schema fields and invalid conversions', () => {
-  assert.throws(() => publicationPayload(emptyMapping()), /id is required/);
+  assert.throws(() => publicationPayload({ ...emptyMapping(), id: '' }), /id is required/);
   assert.throws(() => publicationPayload({ ...prototypeMapping(), id: '../unsafe' }), /Map ID/);
   assert.throws(() => publicationPayload({ ...prototypeMapping(), rules: [{ sourcePath: 'removed', targetPath: 'transfer.id' }] }), /no longer/);
   assert.throws(() => publicationPayload({ ...prototypeMapping(), rules: [] }), /at least one/);
@@ -64,9 +64,10 @@ test('publication rejects missing identity, unsafe IDs, missing schema fields an
 
 const mock = `
 export const Uri = { joinPath: (base, ...parts) => ({ toString: () => base.toString() + '/' + parts.join('/') }) };
-export class Range { constructor(...args) { this.args = args; } }
+export class Range { constructor(start, end) { this.start = start; this.end = end; } }
 export class WorkspaceEdit {
-  replace(uri, range, text) { this.text = text; }
+  constructor() { this.splices = []; }
+  replace(uri, range, text) { this.splices.push({ start: range.start, end: range.end, text }); }
   createFile(uri, options) { this.createdUri = uri; this.options = options; }
   insert(uri, position, text) { this.text = text; }
 }
@@ -81,7 +82,11 @@ export const workspace = {
   async applyEdit(edit) {
     if (globalThis.mapperReject) return false;
     if (edit.createdUri) { globalThis.mapperCreated = edit; return true; }
-    globalThis.mapperDocument.text = edit.text;
+    let text = globalThis.mapperDocument.text;
+    for (const splice of [...edit.splices].sort((a, b) => b.start - a.start)) {
+      text = text.slice(0, splice.start) + splice.text + text.slice(splice.end);
+    }
+    globalThis.mapperDocument.text = text;
     globalThis.mapperDocument.version++;
     globalThis.mapperChanged({ document: globalThis.mapperDocument });
     return true;
@@ -107,9 +112,11 @@ const hooks = registerHooks({
   },
 });
 const { DataMapperEditor, registerDataMapper } = await import('../out/dataMapperEditor.js');
+const { mappingToMapl, maplToMapping } = await import('../out/maplDocument.js');
 hooks.deregister();
+const parseMapl = text => maplToMapping(text);
 
-test('custom editor synchronizes edits, rejects stale versions, reports invalid JSON and disposes listeners', async () => {
+test('custom editor splices MAPL edits, keeps comments, rejects stale versions, reports invalid MAPL and disposes listeners', async () => {
   const messages = [];
   let receive;
   let dispose;
@@ -122,9 +129,10 @@ test('custom editor synchronizes edits, rejects stale versions, reports invalid 
     },
     onDidDispose: handler => { dispose = handler; },
   };
+  const initial = mappingToMapl(prototypeMapping()).replace('end;', '  // keep this comment\n  if source.amount > 0 then target.transfer.status := source.status; end;\nend;');
   const document = {
     uri: { toString: () => 'test:map' }, version: 1, lineCount: 50,
-    text: JSON.stringify(prototypeMapping()), getText() { return this.text; },
+    text: initial, getText() { return this.text; }, positionAt: offset => offset,
   };
   globalThis.mapperDocument = document;
   new DataMapperEditor({ toString: () => 'http://localhost:43127' }, { appendLine() {} })
@@ -132,21 +140,26 @@ test('custom editor synchronizes edits, rejects stale versions, reports invalid 
   assert.match(panel.webview.html, /Content-Security-Policy/);
   assert.match(panel.webview.html, /dataMapper.js/);
   await receive({ type: 'ready' });
-  assert.equal(messages.findLast(message => message.type === 'state').rules.length, 1);
+  const first = messages.findLast(message => message.type === 'state');
+  assert.equal(first.rules.length, 1);
+  assert.equal(first.source.length, 6, 'built-in prototype structure supplies all source fields');
+  assert.equal(first.extras.length, 1);
   await receive({ type: 'edit', version: 1, action: { type: 'connect', sourcePath: 'amount', targetPath: 'transfer.instructedAmount' } });
-  assert.equal(parseMapping(document.text).rules.length, 2);
+  assert.equal(parseMapl(document.text).rules.length, 2);
+  assert.match(document.text, /\/\/ keep this comment\n  if source\.amount > 0 then .* end;\n  target\.transfer\.instructedAmount := source\.amount;\nend;\n$/);
+  assert.match(document.text, /if source\.amount > 0 then/);
   const afterConnect = document.text;
   await receive({ type: 'edit', version: 1, action: { type: 'remove', index: 0 } });
   assert.equal(messages.at(-1).type, 'error');
   assert.equal(messages.at(-1).actionError, true);
-  assert.equal(parseMapping(document.text).rules.length, 2);
+  assert.equal(parseMapl(document.text).rules.length, 2);
   globalThis.mapperReject = true;
   await receive({ type: 'edit', version: 2, action: { type: 'remove', index: 0 } });
   assert.match(messages.at(-1).message, /could not apply/);
   globalThis.mapperReject = false;
   await receive({ type: 'text' });
   assert.equal(globalThis.mapperCommand[0], 'vscode.openWith');
-  document.text = JSON.stringify(prototypeMapping());
+  document.text = initial;
   document.version++;
   globalThis.mapperChanged({ document });
   assert.equal(messages.at(-1).rules.length, 1);
@@ -154,7 +167,7 @@ test('custom editor synchronizes edits, rejects stale versions, reports invalid 
   document.version++;
   globalThis.mapperChanged({ document });
   assert.equal(messages.at(-1).rules.length, 2);
-  document.text = '{';
+  document.text = 'map broken';
   globalThis.mapperChanged({ document });
   assert.equal(messages.at(-1).type, 'error');
   assert.equal(messages.at(-1).actionError, false);
@@ -180,11 +193,14 @@ test('custom editor synchronizes edits, rejects stale versions, reports invalid 
     assert.equal(document.text, before, 'declining schema change must preserve the current mappings');
     globalThis.mapperDeclineClear = false;
     await receive({ type: 'schema', side: 'source', version: document.version });
-    const selected = parseMapping(document.text);
+    const selected = parseMapl(document.text);
+    assert.deepEqual(messages.findLast(message => message.type === 'state').source.map(field => field.path), ['newField']);
+    assert.match(document.text, /^map 'vscode-prototype' from new to 'prototype-transfer';/);
+    assert.match(document.text, /keep this comment/);
     assert.equal(selected.sourceSchemaPath, 'schemas/new.json');
     assert.equal(selected.rules.length, 0);
     await receive({ type: 'metadata', version: document.version });
-    assert.equal(parseMapping(document.text).id, 'edited-map');
+    assert.equal(parseMapl(document.text).id, 'edited-map');
     globalThis.fetch = async () => Response.json({ error: 'Invalid embedded JSON' }, { status: 500 });
     await receive({ type: 'schema', side: 'source', version: document.version });
     assert.equal(messages.at(-1).type, 'error');
@@ -196,7 +212,7 @@ test('custom editor synchronizes edits, rejects stale versions, reports invalid 
   assert.equal(globalThis.mapperChangeDisposed, true);
 });
 
-test('import command persists a backend map to a new local file and opens the designer', async () => {
+test('import command writes a backend map as a new MAPL file and opens the designer', async () => {
   globalThis.mapperRegistered = new Map();
   globalThis.mapperCancel = false;
   globalThis.mapperCreated = undefined;
@@ -212,7 +228,9 @@ test('import command persists a backend map to a new local file and opens the de
   try {
     await globalThis.mapperRegistered.get('pulse-pmachine.importDataMap')();
     assert.equal(globalThis.mapperError, undefined);
-    assert.deepEqual(parseMapping(globalThis.mapperCreated.text).vendorMetadata, { preserved: true });
+    const imported = parseMapl(globalThis.mapperCreated.text);
+    assert.equal(imported.id, 'import-test');
+    assert.deepEqual(rulesOf(imported).map(rule => [rule.sourcePath, rule.targetPath]), rulesOf(map).map(rule => [rule.sourcePath, rule.targetPath]));
     assert.deepEqual(globalThis.mapperCreated.options, { overwrite: false });
     assert.equal(globalThis.mapperCommand[0], 'vscode.openWith');
     assert.equal(globalThis.mapperCommand[2], 'pulse-pmachine.dataMapper');

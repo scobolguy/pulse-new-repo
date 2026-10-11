@@ -12,11 +12,7 @@ function parseQuoted(value) {
   if (s.length < 2) return null;
   const q = s[0];
   if ((q !== '"' && q !== '\'') || s[s.length - 1] !== q) return null;
-  return s.slice(1, -1)
-    .replace(/\\n/g, '\n')
-    .replace(/\\r/g, '\r')
-    .replace(/\\t/g, '\t')
-    .replace(/\\(["'\\])/g, '$1');
+  return s.slice(1, -1).replace(/\\(["'\\nrt])/g, (_, character) => ({ n: '\n', r: '\r', t: '\t' }[character] ?? character));
 }
 
 function validateSystemConformance(systems) {
@@ -45,6 +41,49 @@ function validateSystemConformance(systems) {
     }
   }
 }
+
+const FLOW_DIRECTIVE_TARGETS = {
+  name: ['metadata', 'name'],
+  description: ['metadata', 'description'],
+  createdby: ['metadata', 'createdBy'],
+  animation: ['animation', 'mode'],
+  animationtarget: ['animation', 'target'],
+  mermaidpreview: ['animation', 'useMermaidPreview']
+};
+
+function createFlowModel(flowId) {
+  return {
+    id: flowId,
+    schemaVersion: 1,
+    kind: 'visual-flow-language',
+    metadata: { name: flowId },
+    catalog: { seedObjects: [] },
+    animation: { mode: 'none', target: 'workflow', useMermaidPreview: true },
+    nodes: [],
+    edges: []
+  };
+}
+
+function applyFlowDirective(flow, key, value) {
+  const [section, field] = FLOW_DIRECTIVE_TARGETS[key.toLowerCase()] || ['metadata', key];
+  flow[section][field] = value;
+}
+
+function globToRegExp(pattern) {
+  const source = String(pattern).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+  return new RegExp(`^${source}$`, 's');
+}
+
+const STRING_COMPARATORS = {
+  '=': (left, right) => left === right,
+  EQUALS: (left, right) => left === right,
+  '<>': (left, right) => left !== right,
+  '!=': (left, right) => left !== right,
+  '<': (left, right) => left < right,
+  '<=': (left, right) => left <= right,
+  '>': (left, right) => left > right,
+  '>=': (left, right) => left >= right
+};
 
 function quoteDouble(value) {
   return `"${String(value || '').replace(/"/g, '\\"')}"`;
@@ -370,9 +409,150 @@ function flattenSystemMembers(system) {
 }
 
 class WorkflowAstBuilder extends WorkflowDslVisitor {
-  constructor(tokens) {
+  constructor(tokens, options = {}) {
     super();
     this.tokens = tokens;
+    this.externalEnvironment = String(options.environment || process.env.PULSE_ENVIRONMENT || '').trim() || null;
+    this.externalEnvironmentSource = String(options.environment || '').trim() ? 'option' : 'PULSE_ENVIRONMENT';
+    this.fileDefaultEnvironment = null;
+    this.environmentRead = false;
+    this.variables = new Map(Object.entries(options.variables || {}).map(([name, value]) => [name, String(value)]));
+    this.externalVariables = new Set(this.variables.keys());
+    this.processEnv = options.env || process.env;
+  }
+
+  get environment() {
+    this.environmentRead = true;
+    return this.externalEnvironment || this.fileDefaultEnvironment || resolveEnvironmentName();
+  }
+
+  get environmentSource() {
+    if (this.externalEnvironment) return this.externalEnvironmentSource;
+    return this.fileDefaultEnvironment ? 'file-default' : 'built-in-default';
+  }
+
+  str(raw) {
+    const value = parseQuoted(raw);
+    return value === null ? null : this.interpolate(value);
+  }
+
+  interpolate(value) {
+    return String(value).replace(/\$\$\{|\$\{\s*([A-Za-z_][A-Za-z0-9_-]*)\s*\}/g, (match, name) => {
+      if (match === '$${') return '${';
+      return this.lookupVariable(name);
+    });
+  }
+
+  lookupVariable(name) {
+    if (name === 'ENVIRONMENT') return this.environment;
+    if (!this.variables.has(name)) {
+      throw new Error(`Unknown WFL variable '${name}'. Declare it with LET ${name} = "...";`);
+    }
+    return this.variables.get(name);
+  }
+
+  collectItems(items, sink) {
+    for (const item of items || []) {
+      if (item.letDecl()) {
+        const decl = item.letDecl();
+        const name = decl.IDENT().getText();
+        const value = this.evalStringExpr(decl.stringExpr());
+        if (!this.externalVariables.has(name)) this.variables.set(name, value);
+        continue;
+      }
+      if (item.defaultEnvironmentDecl()) {
+        if (this.fileDefaultEnvironment !== null) throw new Error('DEFAULT ENVIRONMENT is declared more than once');
+        if (this.environmentRead) throw new Error('DEFAULT ENVIRONMENT must appear before ENVIRONMENT is used');
+        this.fileDefaultEnvironment = this.evalStringExpr(item.defaultEnvironmentDecl().stringExpr()).trim() || null;
+        continue;
+      }
+      if (item.configIfDecl()) {
+        this.collectItems(this.selectConfigBranch(item.configIfDecl()), sink);
+        continue;
+      }
+      sink(this.visit(item));
+    }
+  }
+
+  // Returns the item contexts of the first branch whose condition holds.
+  selectConfigBranch(ctx) {
+    const conditions = ctx.condition();
+    const branches = conditions.map(() => []);
+    const elseItems = [];
+    const markers = [...conditions.map(condition => condition.stop.tokenIndex)];
+    const elseToken = ctx.ELSE() ? ctx.ELSE().symbol.tokenIndex : Infinity;
+    for (const item of ctx.item() || []) {
+      const index = item.start.tokenIndex;
+      if (index > elseToken) {
+        elseItems.push(item);
+        continue;
+      }
+      let branch = 0;
+      while (branch + 1 < markers.length && index > markers[branch + 1]) branch += 1;
+      branches[branch].push(item);
+    }
+    for (let index = 0; index < conditions.length; index += 1) {
+      if (this.evalCondition(conditions[index])) return branches[index];
+    }
+    return elseItems;
+  }
+
+  evalCondition(ctx) {
+    return ctx.andCondition().some(andCtx => andCtx.notCondition().every(notCtx => this.evalNotCondition(notCtx)));
+  }
+
+  evalNotCondition(ctx) {
+    if (ctx.NOT()) return !this.evalNotCondition(ctx.notCondition());
+    return this.evalPrimaryCondition(ctx.primaryCondition());
+  }
+
+  evalPrimaryCondition(ctx) {
+    if (ctx.condition()) return this.evalCondition(ctx.condition());
+    if (ctx.booleanLiteral()) return Boolean(ctx.booleanLiteral().TRUE());
+    const operands = ctx.stringExpr().map(expr => this.evalStringExpr(expr));
+    const [left, ...rest] = operands;
+    const negate = Boolean(ctx.NOT());
+    let result;
+    if (ctx.compareOp()) {
+      result = STRING_COMPARATORS[ctx.compareOp().getText()](left, rest[0]);
+    } else if (ctx.IN()) {
+      result = rest.includes(left);
+    } else if (ctx.CONTAINS()) {
+      result = left.includes(rest[0]);
+    } else if (ctx.LIKE()) {
+      result = globToRegExp(rest[0]).test(left);
+    } else if (ctx.MATCHES()) {
+      let pattern;
+      try {
+        pattern = new RegExp(rest[0]);
+      } catch (error) {
+        throw new Error(`Invalid MATCHES pattern '${rest[0]}': ${error.message}`);
+      }
+      result = pattern.test(left);
+    } else if (ctx.STARTS()) {
+      result = left.startsWith(rest[0]);
+    } else {
+      result = left.endsWith(rest[0]);
+    }
+    return negate ? !result : result;
+  }
+
+  evalStringExpr(ctx) {
+    return ctx.stringAtom().map(atom => this.evalStringAtom(atom)).join('');
+  }
+
+  evalStringAtom(ctx) {
+    if (ctx.quotedString()) return this.str(ctx.quotedString().getText());
+    if (ctx.NUMBER()) return ctx.NUMBER().getText();
+    if (ctx.IDENT()) return this.lookupVariable(ctx.IDENT().getText());
+    if (ctx.ENVIRONMENT()) return this.environment;
+    const args = ctx.stringExpr().map(expr => this.evalStringExpr(expr));
+    if (ctx.LOWER()) return args[0].toLowerCase();
+    if (ctx.UPPER()) return args[0].toUpperCase();
+    const value = this.processEnv[args[0]];
+    if (value !== undefined) return String(value);
+    if (args.length > 1) return args[1];
+    throw new Error(`Environment variable '${args[0]}' is not set. Use ENV("${args[0]}", "fallback") to make it optional.`);
   }
 
   visitProgram(ctx) {
@@ -382,10 +562,10 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
     const clusters = [];
     const artifactDeployments = [];
     const genericSystems = [];
+    const flows = [];
 
-    for (const item of ctx.item() || []) {
-      const value = this.visit(item);
-      if (!value) continue;
+    this.collectItems(ctx.item(), (value) => {
+      if (!value) return;
       if (value.type === 'queue') symbols.queues.push(value.payload);
       if (value.type === 'database') symbols.databases.push(value.payload);
       if (value.type === 'service') symbols.services.push(value.payload);
@@ -405,9 +585,28 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
       if (value.type === 'cluster') clusters.push(value.payload);
       if (value.type === 'artifactDeployment') artifactDeployments.push(value.payload);
       if (value.type === 'genericSystem') genericSystems.push(value.payload);
-    }
+      if (value.type === 'flow') {
+        if (flows.some(flow => flow.id === value.payload.id)) {
+          throw new Error(`Duplicate FLOW '${value.payload.id}'`);
+        }
+        flows.push(value.payload);
+      }
+    });
 
-    return { symbols, workflows, deployments, clusters, artifactDeployments, genericSystems };
+    return {
+      symbols,
+      workflows,
+      deployments,
+      clusters,
+      artifactDeployments,
+      genericSystems,
+      flows,
+      configuration: {
+        environment: this.environment,
+        environmentSource: this.environmentSource,
+        variables: Object.fromEntries(this.variables)
+      }
+    };
   }
 
   
@@ -424,12 +623,96 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
     if (ctx.clusterCreateDecl()) return this.visit(ctx.clusterCreateDecl());
     if (ctx.artifactDeployDecl()) return this.visit(ctx.artifactDeployDecl());
     if (ctx.genericSystemDecl()) return this.visit(ctx.genericSystemDecl());
+    if (ctx.flowDecl()) return this.visit(ctx.flowDecl());
     return null;
+  }
+
+  visitFlowDecl(ctx) {
+    const flow = createFlowModel(this.str(ctx.quotedString().getText()));
+    const edgeKeys = new Set();
+    for (const member of ctx.flowMember() || []) {
+      if (member.flowDirective()) {
+        const directive = member.flowDirective();
+        applyFlowDirective(flow, directive.directiveKey().getText(), this.visitDirectiveValue(directive.directiveValue()));
+      } else if (member.flowSeedDecl()) {
+        const seed = this.str(member.flowSeedDecl().quotedString().getText());
+        if (!flow.catalog.seedObjects.includes(seed)) flow.catalog.seedObjects.push(seed);
+      } else if (member.flowNodeDecl()) {
+        const node = this.visitFlowNodeDecl(member.flowNodeDecl());
+        if (flow.nodes.some(existing => existing.id === node.id)) {
+          throw new Error(`FLOW '${flow.id}' declares NODE '${node.id}' more than once`);
+        }
+        flow.nodes.push(node);
+      } else if (member.flowLinkDecl()) {
+        const link = member.flowLinkDecl();
+        const strings = link.quotedString().map(item => this.str(item.getText()));
+        const edge = { id: `${strings[0]}->${strings[1]}:${strings[2]}`, from: strings[0], to: strings[1], type: strings[2], label: link.LABEL() ? strings[3] : strings[2] };
+        if (edgeKeys.has(edge.id)) {
+          throw new Error(`FLOW '${flow.id}' declares LINK '${edge.from}' TO '${edge.to}' VIA '${edge.type}' more than once`);
+        }
+        edgeKeys.add(edge.id);
+        flow.edges.push(edge);
+      }
+    }
+    const nodeIds = new Set(flow.nodes.map(node => node.id));
+    for (const edge of flow.edges) {
+      for (const endpoint of [edge.from, edge.to]) {
+        if (!nodeIds.has(endpoint)) {
+          throw new Error(`FLOW '${flow.id}' LINK references unknown NODE '${endpoint}'`);
+        }
+      }
+    }
+    return { type: 'flow', payload: flow };
+  }
+
+  visitDirectiveValue(ctx) {
+    if (ctx.quotedString()) return this.str(ctx.quotedString().getText());
+    if (ctx.signedNumber()) return this.visitSignedNumber(ctx.signedNumber());
+    return Boolean(ctx.booleanLiteral().TRUE());
+  }
+
+  visitSignedNumber(ctx) {
+    const magnitude = Number(ctx.NUMBER().getText());
+    return ctx.MINUS() ? -magnitude : magnitude;
+  }
+
+  visitFlowNodeDecl(ctx) {
+    const node = { id: this.str(ctx.quotedString().getText()) };
+    let transport = null;
+    for (const clause of ctx.flowNodeClause() || []) {
+      const strings = (clause.quotedString() || []).map(item => this.str(item.getText()));
+      if (clause.KIND()) node.kind = strings[0];
+      else if (clause.TYPE()) node.type = strings[0];
+      else if (clause.LABEL()) node.label = strings[0];
+      else if (clause.CATALOG()) node.sourceCatalogId = strings[0];
+      else if (clause.SOURCE()) node.paletteSource = strings[0];
+      else if (clause.AT()) {
+        node.x = this.visitSignedNumber(clause.signedNumber(0));
+        node.y = this.visitSignedNumber(clause.signedNumber(1));
+      } else if (clause.TARGET()) node.target = { ...(node.target || {}), nodeId: strings[0] };
+      else if (clause.IP()) node.target = { ...(node.target || {}), ip: strings[0] };
+      else if (clause.SERVICES()) node.target = { ...(node.target || {}), services: strings };
+      else if (clause.VIA()) transport = strings[0];
+    }
+    if (node.target) {
+      node.target = { nodeId: node.target.nodeId || '', ip: node.target.ip || '', services: node.target.services || [] };
+      if (transport) {
+        node.targetBinding = {
+          bindingType: 'topology-target',
+          preferredTransport: transport,
+          targetRef: node.target.nodeId,
+          serviceCandidates: node.target.services
+        };
+      }
+    } else if (transport) {
+      throw new Error(`NODE '${node.id}' uses VIA without a TARGET`);
+    }
+    return node;
   }
 
   visitGenericSystemDecl(ctx) {
     const raw = {
-      systemId: parseQuoted(ctx.quotedString().getText()),
+      systemId: this.str(ctx.quotedString().getText()),
       ports: [],
       systems: [],
       connections: []
@@ -440,17 +723,17 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
       } else if (member.genericSystemPortDecl()) {
         const port = member.genericSystemPortDecl();
         raw.ports.push({
-          symbol: parseQuoted(port.quotedString(0).getText()),
+          symbol: this.str(port.quotedString(0).getText()),
           direction: port.INPUT() ? 'input' : 'output',
-          dataTypeId: parseQuoted(port.quotedString(1).getText())
+          dataTypeId: this.str(port.quotedString(1).getText())
         });
       } else if (member.genericSystemConnectionDecl()) {
         const connection = member.genericSystemConnectionDecl();
         raw.connections.push({
-          symbol: parseQuoted(connection.quotedString(0).getText()),
-          source: parseQuoted(connection.quotedString(1).getText()),
-          target: parseQuoted(connection.quotedString(2).getText()),
-          dataTypeId: parseQuoted(connection.quotedString(3).getText())
+          symbol: this.str(connection.quotedString(0).getText()),
+          source: this.str(connection.quotedString(1).getText()),
+          target: this.str(connection.quotedString(2).getText()),
+          dataTypeId: this.str(connection.quotedString(3).getText())
         });
       }
     }
@@ -459,12 +742,12 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
 
   visitClusterCreateDecl(ctx) {
     const strings = ctx.quotedString() || [];
-    const clusterId = parseQuoted(strings[0].getText());
+    const clusterId = this.str(strings[0].getText());
     return {
       type: 'cluster',
       payload: {
         clusterId,
-        label: ctx.LABEL() ? parseQuoted(strings[1].getText()) : clusterId,
+        label: ctx.LABEL() ? this.str(strings[1].getText()) : clusterId,
         nodes: this.visit(ctx.quotedList())
       }
     };
@@ -475,9 +758,9 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
     return {
       type: 'artifactDeployment',
       payload: {
-        artifactId: parseQuoted(strings[0].getText()),
-        fileName: parseQuoted(strings[1].getText()),
-        clusterId: parseQuoted(strings[2].getText())
+        artifactId: this.str(strings[0].getText()),
+        fileName: this.str(strings[1].getText()),
+        clusterId: this.str(strings[2].getText())
       }
     };
   }
@@ -486,8 +769,8 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
     return {
       type: 'deployment',
       payload: {
-        id: parseQuoted(ctx.quotedString(0).getText()),
-        projectId: parseQuoted(ctx.quotedString(1).getText()),
+        id: this.str(ctx.quotedString(0).getText()),
+        projectId: this.str(ctx.quotedString(1).getText()),
         targets: this.visit(ctx.quotedList(0)),
         resources: (ctx.deploymentItem() || []).map((item) => this.visit(item))
       }
@@ -495,12 +778,21 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
   }
 
   visitDeploymentItem(ctx) {
+    if (ctx.FLOW()) {
+      return {
+        kind: 'flow',
+        id: this.str(ctx.quotedString(0).getText()),
+        fileName: this.str(ctx.quotedString(1).getText()),
+        targets: this.visit(ctx.quotedList()),
+        startup: Boolean(ctx.booleanLiteral()?.TRUE())
+      };
+    }
     if (ctx.REMOVE()) {
       const strings = ctx.quotedString() || [];
       return {
         action: 'remove',
         kind: 'service',
-        id: parseQuoted(strings[0].getText()),
+        id: this.str(strings[0].getText()),
         targets: this.visit(ctx.quotedList())
       };
     }
@@ -509,10 +801,10 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
     const lifecycle = ctx.serviceLifecycleClause ? ctx.serviceLifecycleClause() : null;
     return {
       kind,
-      id: parseQuoted(strings[0].getText()),
-      fileName: parseQuoted(strings[1].getText()),
-      inputQueue: parseQuoted(strings[2].getText()),
-      outputQueue: parseQuoted(strings[3].getText()),
+      id: this.str(strings[0].getText()),
+      fileName: this.str(strings[1].getText()),
+      inputQueue: this.str(strings[2].getText()),
+      outputQueue: this.str(strings[3].getText()),
       targets: this.visit(ctx.quotedList()),
       startup: Boolean(ctx.booleanLiteral()?.TRUE()),
       lifecycle: lifecycle ? {
@@ -527,13 +819,13 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
 
   visitQueueDecl(ctx) {
     const strings = ctx.quotedString() || [];
-    const symbol = parseQuoted(strings[0].getText());
-    const queueName = parseQuoted(strings[1].getText());
-    const managerId = ctx.MANAGER() ? parseQuoted(strings[2].getText()) : null;
+    const symbol = this.str(strings[0].getText());
+    const queueName = this.str(strings[1].getText());
+    const managerId = ctx.MANAGER() ? this.str(strings[2].getText()) : null;
     let dataTypeIds = [];
 
     if (ctx.TYPE()) {
-      dataTypeIds = [parseQuoted(strings[managerId ? 3 : 2].getText())];
+      dataTypeIds = [this.str(strings[managerId ? 3 : 2].getText())];
     } else if (ctx.TYPES()) {
       dataTypeIds = this.visit(ctx.quotedList());
     }
@@ -554,14 +846,14 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
   visitDatabaseDecl(ctx) {
     const strings = ctx.quotedString() || [];
     let index = 2;
-    const typeName = ctx.TYPE() ? parseQuoted(strings[index++].getText()) : null;
-    const managerId = ctx.MANAGER() ? parseQuoted(strings[index++].getText()) : null;
-    const connectionRef = ctx.CONNECTION() ? parseQuoted(strings[index++].getText()) : null;
+    const typeName = ctx.TYPE() ? this.str(strings[index++].getText()) : null;
+    const managerId = ctx.MANAGER() ? this.str(strings[index++].getText()) : null;
+    const connectionRef = ctx.CONNECTION() ? this.str(strings[index++].getText()) : null;
     return {
       type: 'database',
       payload: {
-        symbol: parseQuoted(strings[0].getText()),
-        databaseName: parseQuoted(strings[1].getText()),
+        symbol: this.str(strings[0].getText()),
+        databaseName: this.str(strings[1].getText()),
         typeName,
         managerId,
         connectionRef
@@ -570,7 +862,7 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
   }
 
   visitSystemTypeDecl(ctx) {
-    const systemName = parseQuoted(ctx.quotedString().getText());
+    const systemName = this.str(ctx.quotedString().getText());
     return {
       type: 'system',
       payload: {
@@ -593,9 +885,9 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
 
   buildSystemDecl(ctx, parentContext = {}) {
     const strings = ctx.quotedString() || [];
-    const systemId = parseQuoted(strings[0].getText());
-    const typeName = strings[1] ? parseQuoted(strings[1].getText()) : null;
-    const environmentName = resolveEnvironmentName();
+    const systemId = this.str(strings[0].getText());
+    const typeName = strings[1] ? this.str(strings[1].getText()) : null;
+    const environmentName = this.environment;
     const systemPath = [...(parentContext.systemPath || []), systemId];
     return {
       type: 'system',
@@ -631,17 +923,17 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
 
   visitSystemQueueDecl(ctx, context = {}) {
     const strings = ctx.quotedString() || [];
-    const symbol = parseQuoted(strings[0].getText());
+    const symbol = this.str(strings[0].getText());
     const hasRuntimeName = Boolean(ctx.ARROW());
-    const declaredName = hasRuntimeName ? parseQuoted(strings[1].getText()) : symbol;
+    const declaredName = hasRuntimeName ? this.str(strings[1].getText()) : symbol;
     const typeStrings = ctx.quotedString() || [];
     const typeStart = hasRuntimeName ? 2 : 1;
     const managerId = ctx.MANAGER()
-      ? parseQuoted(typeStrings[hasRuntimeName ? 2 : 1].getText())
+      ? this.str(typeStrings[hasRuntimeName ? 2 : 1].getText())
       : null;
     const typeOffset = hasRuntimeName ? (managerId ? 3 : 2) : (managerId ? 2 : 1);
     const dataTypeIds = (ctx.TYPE() || ctx.TYPES())
-      ? typeStrings.slice(typeOffset).map(item => parseQuoted(item.getText())).filter(Boolean)
+      ? typeStrings.slice(typeOffset).map(item => this.str(item.getText())).filter(Boolean)
       : [];
     const systemId = context.systemPath?.join('.') || context.systemId || null;
     return {
@@ -660,13 +952,13 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
 
   visitServiceDecl(ctx, context = {}) {
     const strings = ctx.quotedString() || [];
-    const serviceId = parseQuoted(strings[1].getText());
+    const serviceId = this.str(strings[1].getText());
     if (!listServiceKeys().includes(serviceId)) {
       throw new Error(`Unknown service '${serviceId}' in service registry`);
     }
     return {
       kind: 'service',
-      symbol: parseQuoted(strings[0].getText()),
+      symbol: this.str(strings[0].getText()),
       serviceId,
       systemId: context.systemPath?.join('.') || context.systemId || null,
       visibility: this.visitVisibility(ctx.visibilityClause())
@@ -674,7 +966,7 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
   }
 
   visitQuotedList(ctx) {
-    return (ctx.quotedString() || []).map(q => parseQuoted(q.getText())).filter(Boolean);
+    return (ctx.quotedString() || []).map(q => this.str(q.getText())).filter(Boolean);
   }
 
   visitFileDecl(ctx) {
@@ -682,9 +974,9 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
     return {
       type: 'file',
       payload: {
-        symbol: parseQuoted(strings[0].getText()),
-        path: parseQuoted(strings[1].getText()),
-        managerId: ctx.MANAGER() ? parseQuoted(strings[2].getText()) : null
+        symbol: this.str(strings[0].getText()),
+        path: this.str(strings[1].getText()),
+        managerId: ctx.MANAGER() ? this.str(strings[2].getText()) : null
       }
     };
   }
@@ -693,21 +985,21 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
     return {
       type: 'api',
       payload: {
-        symbol: parseQuoted(ctx.quotedString(0).getText()),
-        baseUrl: parseQuoted(ctx.quotedString(1).getText())
+        symbol: this.str(ctx.quotedString(0).getText()),
+        baseUrl: this.str(ctx.quotedString(1).getText())
       }
     };
   }
 
   visitWorkflowDecl(ctx) {
-    const id = parseQuoted(ctx.quotedString().getText());
+    const id = this.str(ctx.quotedString().getText());
     const steps = [];
     for (const stmt of ctx.workflowStmt() || []) {
       steps.push(this.visit(stmt));
     }
     return {
       type: 'workflow',
-      payload: { id, steps }
+      payload: { id, steps, sourceLine: ctx.start.line, endLine: ctx.stop?.line || ctx.start.line }
     };
   }
 
@@ -731,6 +1023,7 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
     return {
       id: `cobegin-${ctx.start.tokenIndex}`,
       action: 'cobegin',
+      sourceLine: ctx.start.line,
       mode,
       timeoutMs,
       backoutOnError,
@@ -739,7 +1032,7 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
   }
 
   visitSubflowDecl(ctx) {
-    const id = parseQuoted(ctx.quotedString().getText());
+    const id = this.str(ctx.quotedString().getText());
     const steps = [];
     for (const stmt of ctx.workflowStmt() || []) {
       steps.push(this.visit(stmt));
@@ -765,28 +1058,32 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
     return {
       id: `try-${ctx.start.tokenIndex}`,
       action: 'try',
+      sourceLine: ctx.start.line,
       body,
       onError
     };
   }
 
   visitStepStmt(ctx) {
-    const id = parseQuoted(ctx.quotedString().getText());
+    const id = this.str(ctx.quotedString().getText());
     const bodyCtx = ctx.stepBody();
     const start = bodyCtx.start.tokenIndex;
     const stop = bodyCtx.stop.tokenIndex;
-    const rawTokens = this.tokens.tokens.slice(start, stop + 1).map(t => t.text);
+    const rawTokens = this.tokens.tokens.slice(start, stop + 1)
+      .map(t => (t.type === WorkflowDslLexer.STRING && t.text.includes('${')
+        ? `"${this.str(t.text).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+        : t.text));
     let body = rawTokens.join(' ').replace(/\s+/g, ' ').trim();
     body = body.replace(/\s+([(),])/g, '$1').replace(/([()])\s+/g, '$1');
     const line = `STEP ${quoteDouble(id)} ${body};`;
-    return parseStepFromLine(line);
+    return { ...parseStepFromLine(line), sourceLine: ctx.start.line };
   }
 
   visitIfStmt(ctx) {
     const condition = {
-      field: parseQuoted(ctx.quotedString(0).getText()),
+      field: this.str(ctx.quotedString(0).getText()),
       operator: ctx.EQUALS() ? 'equals' : 'contains',
-      value: parseQuoted(ctx.quotedString(1).getText())
+      value: this.str(ctx.quotedString(1).getText())
     };
 
     const thenBranch = this.visit(ctx.branch(0));
@@ -795,6 +1092,7 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
     return {
       id: `if-${ctx.start.tokenIndex}`,
       action: 'if',
+      sourceLine: ctx.start.line,
       condition,
       then: thenBranch,
       else: elseBranch
@@ -813,7 +1111,7 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
   }
 }
 
-export function parseWorkflowDslWithAntlr(sourceText) {
+export function parseWorkflowDslWithAntlr(sourceText, options = {}) {
   const input = new antlr4.InputStream(sourceText);
   const lexer = new WorkflowDslLexer(input);
   const lexerErrors = new CollectingErrorListener();
@@ -834,17 +1132,23 @@ export function parseWorkflowDslWithAntlr(sourceText) {
     throw new Error(`[WORKFLOW-ANTLR] Parse failed:\n${errors.join('\n')}`);
   }
 
-  const builder = new WorkflowAstBuilder(tokens);
+  const builder = new WorkflowAstBuilder(tokens, options);
   const parsed = builder.visit(tree);
   validateSystemConformance(parsed.symbols.systems);
   return parsed;
 }
 
-export function compileWorkflowDSLWithAntlr(sourceText) {
+/**
+ * @param {string} sourceText
+ * @param {{ environment?: string, variables?: Record<string, string>, env?: Record<string, string|undefined> }} [options]
+ *   environment overrides PULSE_ENVIRONMENT and DEFAULT ENVIRONMENT; variables pre-seed LET values;
+ *   env replaces process.env for ENV("NAME").
+ */
+export function compileWorkflowDSLWithAntlr(sourceText, options = {}) {
   const text = String(sourceText || '');
   dslDebug('wfl', 'compile:start', { chars: text.length });
   try {
-    const parsed = parseWorkflowDslWithAntlr(text);
+    const parsed = parseWorkflowDslWithAntlr(text, options);
     const result = {
       version: 4,
       compiledAt: new Date().toISOString(),
@@ -854,7 +1158,9 @@ export function compileWorkflowDSLWithAntlr(sourceText) {
       deployments: parsed.deployments,
       clusters: parsed.clusters,
       artifactDeployments: parsed.artifactDeployments,
-      genericSystems: parsed.genericSystems
+      genericSystems: parsed.genericSystems,
+      flows: parsed.flows,
+      configuration: parsed.configuration
     };
     dslDebug('wfl', 'compile:complete', { workflows: result.workflows.length, deployments: result.deployments.length });
     return result;

@@ -192,8 +192,14 @@
       rule.sourcePath === previousRule.sourcePath && rule.targetPath === previousRule.targetPath) : -1;
     if (!state.source.some(field => field.path === sourcePath)) sourcePath = '';
     byId('name').textContent = `${state.name || 'Untitled mapping'}${state.id ? ` | ${state.id}` : ' | set a map ID before publishing'}`;
-    byId('source-schema').textContent = state.sourceSchema || 'Embedded source structure';
-    byId('target-schema').textContent = state.targetSchema || 'Embedded target structure';
+    const schemaLabel = side => {
+      const path = state[`${side}Schema`];
+      if (state[`${side}Inferred`]) return path ? `${path} (structure not loaded; fields inferred from MAPL)` : 'Fields inferred from MAPL';
+      return path || 'Built-in structure';
+    };
+    byId('source-schema').textContent = schemaLabel('source');
+    byId('target-schema').textContent = schemaLabel('target');
+    byId('extras').textContent = state.extras?.length ? state.extras.join('\n') : 'None.';
     renderFields('source');
     renderFields('target');
     byId('links').replaceChildren();

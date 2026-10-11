@@ -39,13 +39,17 @@ begin
     begin
       if shortLength(packet, 12) <> size - 16 then reject();
       if host.bytes_slice(packet, size - 4, 4) <> '0000aa55' then reject();
-      if host.bytes_slice(packet, 8, 4) <> '00000013' then reject();
+      if (host.bytes_slice(packet, 8, 4) <> '00000013') and
+         (host.bytes_slice(packet, 8, 4) <> '00000000') then reject();
       if host.bytes_crc32(host.bytes_slice(packet, 0, size - 8)) <>
          host.bytes_slice(packet, size - 8, 4) then reject();
       offset := 16;
       if host.bytes_slice(packet, 16, 4) = '00000000' then offset := 20;
-      plain := host.bytes_aes_ecb_decrypt(
-        host.bytes_slice(packet, offset, size - offset - 8), key)
+      if host.bytes_slice(packet, 8, 4) = '00000000' then
+        plain := host.bytes_slice(packet, offset, size - offset - 8)
+      else
+        plain := host.bytes_aes_ecb_decrypt(
+          host.bytes_slice(packet, offset, size - offset - 8), key)
     end
     else if host.bytes_slice(packet, 0, 4) = '00006699' then
     begin

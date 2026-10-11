@@ -716,8 +716,8 @@ export function parseWorkflowDSL(sourceText) {
   return { symbols, workflows };
 }
 
-export function compileWorkflowDSL(sourceText) {
-  return compileWorkflowDSLWithAntlr(sourceText);
+export function compileWorkflowDSL(sourceText, options = {}) {
+  return compileWorkflowDSLWithAntlr(sourceText, options);
 }
 
 function parseArgs(argv) {
@@ -725,7 +725,9 @@ function parseArgs(argv) {
     in: '../src/workflow.wfl',
     symbolsOut: '../object/pcode/symbols.generated.json',
     workflowOut: '../object/pcode/workflows.generated.json',
-    artifactOut: '../object/pcode/workflow-compiled.json'
+    artifactOut: '../object/pcode/workflow-compiled.json',
+    environment: undefined,
+    variables: {}
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -734,6 +736,11 @@ function parseArgs(argv) {
     if (token === '--symbols-out') args.symbolsOut = argv[i + 1];
     if (token === '--workflow-out') args.workflowOut = argv[i + 1];
     if (token === '--artifact-out') args.artifactOut = argv[i + 1];
+    if (token === '--environment') args.environment = argv[i + 1];
+    if (token === '--define') {
+      const [name, ...value] = String(argv[i + 1] || '').split('=');
+      args.variables[name] = value.join('=');
+    }
   }
 
   return args;
@@ -743,7 +750,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const inputPath = path.resolve(args.in);
   const sourceText = await fs.readFile(inputPath, 'utf-8');
-  const compiled = compileWorkflowDSL(sourceText);
+  const compiled = compileWorkflowDSL(sourceText, { environment: args.environment, variables: args.variables });
 
   const symbolsOutPath = path.resolve(args.symbolsOut);
   const workflowOutPath = path.resolve(args.workflowOut);

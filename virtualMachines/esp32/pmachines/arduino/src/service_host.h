@@ -21,6 +21,7 @@ public:
         std::unique_ptr<std::deque<PInstruction>> instructions;
         std::shared_ptr<HostedImage> image;
         std::map<std::string, std::vector<std::string>> signatures;
+        std::vector<MappingDef> mappings;
         std::map<std::string, uint8_t> tableCapacities;
         std::map<std::string, std::map<std::string, std::string>> cacheSchemas;
         bool hasTableDeclarations = false;

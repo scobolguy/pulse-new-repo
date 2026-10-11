@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "kind": "visual-flow-language",
+  "metadata": { "name": "Executable forwarding example" },
+  "nodes": [
+    { "id": "input", "kind": "queue", "queue": "payments.in", "label": "Payments in", "x": 30, "y": 60 },
+    { "id": "forwarder", "kind": "service", "label": "Forward payment", "execution": { "sourceFile": "forwarder.wfl" }, "x": 300, "y": 60 },
+    { "id": "output", "kind": "queue", "queue": "payments.out", "label": "Payments out", "x": 570, "y": 60 }
+  ],
+  "edges": [
+    { "id": "input-forward", "from": "input", "to": "forwarder", "type": "message-broker-call" },
+    { "id": "forward-output", "from": "forwarder", "to": "output", "type": "message-broker-call" }
+  ]
+}

@@ -1,0 +1,6 @@
+LET MAPPER_NODE_ID = "SET_AT_DEPLOY";
+LET MAPPER_MAP_FILE = "SET_AT_DEPLOY";
+
+DEPLOYMENT "data-mapper-udp" PROJECT "data-mapper" TARGETS ("${MAPPER_NODE_ID}") BEGIN
+  FLOW "udp-mapper" FILE "mapper-udp-daemon.vfl" TARGETS ("${MAPPER_NODE_ID}") STARTUP TRUE;
+END;

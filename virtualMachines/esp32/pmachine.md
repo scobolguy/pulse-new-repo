@@ -80,6 +80,17 @@ The JavaScript desktop service host can run with `desktopBudget: true`, which re
 
 This desktop behavior does not change the ESP32 firmware's bounded execution limit.
 
+## Extendable Pascalish variables
+
+Pascalish program variables may opt into extended RAM with the declaration attribute:
+
+```pascal
+var
+  workingSet: array[0..255] of integer extendable;
+```
+
+The compiler records marked variables and fixed-array element counts in the program map. On ESP32, PMachine tries PSRAM for their value storage and falls back to ordinary RAM if PSRAM is unavailable or an allocation cannot be made. Other PMachine data, including the execution stack and p-code image, remains in RAM; this feature does not page or spill data to storage. The attribute currently supports scalar values and fixed arrays of scalar values.
+
 ## Extending the Instruction Set
 To add new instructions, update the `Opcode` enum, extend the parser in `loadTextPCode`, and implement the new behavior in `run()`.
 

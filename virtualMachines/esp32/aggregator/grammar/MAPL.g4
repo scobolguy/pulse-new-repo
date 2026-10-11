@@ -5,7 +5,24 @@ mapUnit
     ;
 
 mapDecl
-    : 'map' IDENT 'from' IDENT 'to' IDENT ';' mapBody 'end' ';'
+    : 'map' nameRef 'from' nameRef 'to' nameRef ';' mapDirective* mapBody 'end' ';'
+    ;
+
+nameRef
+    : IDENT
+    | STRING
+    ;
+
+// Header metadata used by the Data Mapper designer, e.g. @sourceSchema 'schemas/pacs.008.xsd';
+mapDirective
+    : '@' IDENT directiveValue ';'
+    ;
+
+directiveValue
+    : STRING
+    | NUMBER
+    | 'true'
+    | 'false'
     ;
 
 mapBody
@@ -22,11 +39,17 @@ mapStmt
     ;
 
 fieldPath
-    : IDENT ('.' IDENT)*
+    : IDENT ('.' pathSegment)*
+    ;
+
+// Quoted segments carry field names that are not identifiers or are keywords, e.g. source.block4.'31C'
+pathSegment
+    : IDENT
+    | STRING
     ;
 
 assignStmt
-    : fieldPath ':=' fieldPath ';'
+    : fieldPath ':=' fieldPath ('using' STRING)? ';'
     ;
 
 assignDefaultStmt

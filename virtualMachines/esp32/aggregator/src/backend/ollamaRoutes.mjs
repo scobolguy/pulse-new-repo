@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import http from 'http';
 import { reloadOllamaContext, getOllamaWarmthStatus, ollamaGenerate } from './ollamaService.mjs';
-import { matchPascalExecuteRoute, matchPrecomputedRoute, detectQueryTypes } from './queryRouteLoader.mjs';
+import { matchPascalExecuteRoute, detectQueryTypes } from './queryRouteLoader.mjs';
 
 const SLOW_QUERY_THRESHOLD = 60000; // 60 seconds
 const SLOW_QUERY_LOG_FILE = path.resolve('./logs/slow-queries.jsonl');
@@ -92,38 +92,20 @@ const invalidateCachePatterns = (patterns) => {
 
 /**
  * Parse device name from query
- * Examples: "turn on the led on child1" -> "child1"
- *           "turn on neptune.child1 led" -> "child1"
+ * Matches a node name against the current live registry.
  */
-const parseDeviceName = (query) => {
+const parseDeviceName = (query, nodes) => {
   const lowerQuery = query.toLowerCase();
-  
-  // Look for device name patterns
-  // Pattern 1: "child1", "child2", "child3"
-  const childMatch = lowerQuery.match(/child[123]\b/);
-  if (childMatch) return childMatch[0];
-  
-  // Pattern 2: "neptune.child1"
-  const fullyQualified = lowerQuery.match(/neptune\.child[123]\b/);
-  if (fullyQualified) {
-    const parts = fullyQualified[0].split('.');
-    return parts[1]; // Return just "child1" from "neptune.child1"
-  }
-  
-  // Pattern 3: Named device: "aggregator", "neptune"
-  const namedDevice = lowerQuery.match(/\b(aggregator|neptune|pmachine)\b/);
-  if (namedDevice) return namedDevice[1];
-  
-  return null;
-};
-
-/**
- * Get device configuration
- */
-const getDeviceInfo = (deviceName) => {
-  if (!deviceName || !deviceConfig.devices) return null;
-  const device = deviceConfig.devices[deviceName.toLowerCase()];
-  return device || null;
+  const matchingNode = (Array.isArray(nodes) ? nodes : [])
+    .map((node) => ({
+      node,
+      names: [node?.nodeName, node?.nodeId, node?.id].filter(Boolean).map(String)
+    }))
+    .flatMap(({ node, names }) => names
+      .filter((name) => lowerQuery.includes(name.toLowerCase()))
+      .map((name) => ({ node, name })))
+    .sort((a, b) => b.name.length - a.name.length)[0];
+  return matchingNode?.name || null;
 };
 
 /**
@@ -138,15 +120,13 @@ const getLedPin = (deviceType) => {
 /**
  * Construct GPIO command for device control
  */
-const constructGpioCommand = (deviceName, pin, value) => {
-  const device = getDeviceInfo(deviceName);
-  if (!device) return null;
-  
+const constructGpioCommand = (deviceName, pin, value, device) => {
+  if (!device?.ip) return null;
   return {
     device: deviceName,
     ip: device.ip,
-    port: device.port || 80,
-    type: device.type,
+    port: device.details?.httpPort || device.port || 80,
+    type: device.details?.hardware || device.hardware || device.details?.deviceType,
     pin: pin,
     value: value, // 0 = OFF, 1 = ON
     endpoint: `/api/device/${deviceName}/gpio/${pin}/set`,
@@ -209,23 +189,25 @@ const sendGpioCommand = (command) => {
 /**
  * Detect if query is a device control request (turn on/off LED, toggle, etc.)
  */
-const isDeviceControlQuery = (query) => {
+const isDeviceControlQuery = (query, nodes) => {
   const lowerQuery = query.toLowerCase();
-  const hasDevice = /child1|child2|child3|neptune\.child\d/.test(lowerQuery);
-  const hasAction = /turn\s+(on|off)|toggle|switch|activate|deactivate|blink|pulse|set.*(?:led|light)/i.test(lowerQuery);
-  return hasDevice && hasAction;
+  return (Array.isArray(nodes) ? nodes : []).some((node) =>
+    [node?.nodeName, node?.nodeId, node?.id].some(
+      (name) => name && lowerQuery.includes(String(name).toLowerCase())
+    )
+  );
 };
 
 /**
  * Extract device and action from device control query
  */
-const parseDeviceControlQuery = (query) => {
+const parseDeviceControlQuery = (query, nodes) => {
   const lowerQuery = query.toLowerCase();
   
   // Extract device name
-  let device = parseDeviceName(query);
+  const device = parseDeviceName(query, nodes);
   
-  // Extract action - CHECK OFF FIRST to prevent matching "on" in "on child1"
+  // Check OFF first to avoid matching "on" inside "turn off".
   let action = null;
   if (/\boff\b|turn\s+off|switch\s+off|close|deactivate/.test(lowerQuery)) {
     action = 'off';
@@ -254,7 +236,11 @@ export function registerOllamaRoutes(app) {
         res.on('data', (chunk) => { data += chunk; });
         res.on('end', () => {
           try {
-            const nodes = JSON.parse(data);
+            const response = JSON.parse(data);
+            const nodes = Array.isArray(response) ? response : response?.nodes;
+            if (!Array.isArray(nodes)) {
+              throw new Error('Node registry response has an invalid format');
+            }
             console.log('[OLLAMA] Fetched nodes:', nodes.length ? `${nodes.length} nodes` : 'empty list');
             resolve(nodes);
           } catch (e) {
@@ -278,45 +264,37 @@ export function registerOllamaRoutes(app) {
   };
 
   /**
-   * Known ESP32 nodes - hard-coded mapping of node names to IPs
-   */
-  const knownNodes = {
-    'child1': { ip: '192.168.2.157', port: 80 },
-    'child2': { ip: '192.168.2.59', port: 80 },
-    'child3': { ip: '192.168.2.58', port: 80 }
-  };
-
-  /**
    * Control device on a node by making HTTP request directly to the device endpoint
    */
   const controlDeviceOnNode = async (nodeId, device, action) => {
     return new Promise((resolve) => {
       let nodeIp, nodePort;
-      
-      // Check if it's a known ESP32 node
-      const knownNode = knownNodes[nodeId.toLowerCase()];
-      if (knownNode) {
-        nodeIp = knownNode.ip;
-        nodePort = knownNode.port;
-        executeDeviceControl();
-        return;
-      }
-
-      // Otherwise, try to get from nodes endpoint
       const nodeReq = http.get('http://127.0.0.1:4000/api/nodes', { timeout: 5000 }, (res) => {
         let data = '';
         res.on('data', (chunk) => { data += chunk; });
         res.on('end', () => {
           try {
-            const nodes = JSON.parse(data);
-            const node = nodes.find(n => n.nodeName === nodeId || n.nodeId === nodeId);
+            const response = JSON.parse(data);
+            const nodes = Array.isArray(response) ? response : response?.nodes;
+            if (!Array.isArray(nodes)) {
+              resolve({ success: false, error: 'Node registry response has an invalid format' });
+              return;
+            }
+            const targetId = String(nodeId).toLowerCase();
+            const node = nodes.find((n) =>
+              [n.nodeName, n.nodeId, n.id].some((name) => String(name || '').toLowerCase() === targetId)
+            );
             if (!node) {
-              resolve({ success: false, error: `Node ${nodeId} not found in registry or known nodes` });
+              resolve({ success: false, error: `Node ${nodeId} not found in registry` });
               return;
             }
             
             nodeIp = node.ip;
-            nodePort = node.details?.httpPort || 80;
+            nodePort = node.details?.httpPort || node.port || 80;
+            if (!nodeIp) {
+              resolve({ success: false, error: `Node ${nodeId} has no registered IP address` });
+              return;
+            }
             executeDeviceControl();
           } catch (e) {
             resolve({ success: false, error: 'Failed to parse nodes' });
@@ -379,90 +357,6 @@ export function registerOllamaRoutes(app) {
     });
   };
 
-  // Helper to check for pre-computed answers in knowledge base
-  const checkPreComputedAnswer = (query) => {
-    const lowerQuery = query.toLowerCase();
-    
-    // Pre-computed answer triggers - specific patterns for informational queries only
-    if (/show.*tree|network.*topology|node.*hierarchy|structure.*node|how.*arranged|how.*organized/.test(lowerQuery)) {
-      return {
-        type: 'topology',
-        answer: `The network has 8 nodes arranged in a hierarchical structure:
-
-ROOT NODES (5 total):
-• Aggregator Backend (127.0.0.1)
-• Neptune (172.18.0.1) [Cluster Controller]
-• magic-js-pmachine-01 (127.0.10.101)
-• magic-js-pmachine-02 (127.0.10.102)
-• magic-js-pmachine-03 (127.0.10.103)
-
-CHILD NODES (3 total, under Neptune):
-• child1 (192.168.2.157) - ESP32-CAM
-• child2 (192.168.2.59) - ESP8266
-• child3 (192.168.2.58) - ESP32
-
-Tree Structure:
-Neptune (Cluster Controller)
-├─ child1 (ESP32-CAM)
-├─ child2 (ESP8266)
-└─ child3 (ESP32)
-
-Summary: 8 nodes total | 5 root nodes | 1 cluster controller | 3 child devices`
-      };
-    }
-    
-    if (/how many nodes|node count|total nodes|devices.*available|list.*nodes|all.*nodes|count.*device/.test(lowerQuery)) {
-      return {
-        type: 'quick',
-        answer: `Currently 8 nodes are registered and online:
-- 5 root nodes (no parent)
-- 1 cluster controller (Neptune)
-- 3 ESP32/ESP8266 child devices
-
-All nodes are communicating normally.`
-      };
-    }
-    
-    if (/list.*esp32|esp32.*list|list.*esp8266|what.*esp32|what.*devices|esp32.*devices|esp8266.*available/.test(lowerQuery)) {
-      return {
-        type: 'devices',
-        answer: `The network has 3 ESP microcontroller devices managed by Neptune:
-
-1. child1 (192.168.2.157)
-   Type: ESP32-CAM
-   Parent: Neptune
-
-2. child2 (192.168.2.59)
-   Type: ESP8266
-   Parent: Neptune
-
-3. child3 (192.168.2.58)
-   Type: ESP32
-   Parent: Neptune
-
-All child devices are online and operational.`
-      };
-    }
-    
-    if (/what.*neptune|neptune.*what|tell.*neptune|neptune.*info|who.*neptune|what.*cluster controller|cluster controller.*info/.test(lowerQuery)) {
-      return {
-        type: 'neptune',
-        answer: `Neptune (IP: 172.18.0.1) is the cluster controller for the network.
-
-KEY PROPERTIES:
-• Role: Cluster Controller
-• IP Address: 172.18.0.1
-• Children: 3 ESP32/ESP8266 devices (child1, child2, child3)
-• Hardware: Server
-• Status: Online
-
-Neptune manages device discovery and communication for all child nodes.`
-      };
-    }
-    
-    return null;
-  };
-
   // Streaming handler for SSE (Server-Sent Events)
   const streamingAskHandler = async (req, res) => {
     const queryStartTime = Date.now();
@@ -479,18 +373,6 @@ Neptune manages device discovery and communication for all child nodes.`
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
       res.setHeader('Access-Control-Allow-Origin', '*');
-
-      // Check for pre-computed answers first (from data/ollama-query-routes.json)
-      const precomputedType = await matchPrecomputedRoute(query);
-      if (precomputedType) {
-        const precomputed = checkPreComputedAnswer(query);
-        if (precomputed) {
-          console.log('[OLLAMA] Pre-computed answer for:', query);
-          res.write(`data: ${JSON.stringify({ chunk: precomputed.answer, final: true })}\n\n`);
-          res.end();
-          return;
-        }
-      }
 
       // Check cache
       const cacheKey = getCacheKey(query);
@@ -567,26 +449,12 @@ Neptune manages device discovery and communication for all child nodes.`
         }
       }
 
-      // Check for pre-computed answers first (from data/ollama-query-routes.json)
-      const precomputedType = await matchPrecomputedRoute(query);
-      if (precomputedType) {
-        const precomputed = checkPreComputedAnswer(query);
-        if (precomputed) {
-          console.log('[OLLAMA] Pre-computed answer for:', query.substring(0, 50));
-          return res.json({
-            success: true,
-            answer: precomputed.answer,
-            model: process.env.OLLAMA_MODEL || 'phi3:latest',
-            queryType: precomputed.type,
-            fromCache: 'precomputed'
-          });
-        }
-      }
-
       // Check for device control queries and route to device-control endpoint
-      if (isDeviceControlQuery(query)) {
+      const hasControlAction = /turn\s+(on|off)|toggle|switch|activate|deactivate|blink|pulse|set.*(?:led|light)/i.test(query);
+      const registeredNodes = hasControlAction ? await fetchNodeData() : [];
+      if (hasControlAction && isDeviceControlQuery(query, registeredNodes)) {
         console.log('[OLLAMA] Device control query detected:', query);
-        const { device, action } = parseDeviceControlQuery(query);
+        const { device, action } = parseDeviceControlQuery(query, registeredNodes);
         
         if (device && action) {
           console.log(`[OLLAMA] Routing to device-control: device=${device}, action=${action}`);
@@ -815,7 +683,7 @@ Neptune manages device discovery and communication for all child nodes.`
         finalQuery = `Parse this LED/light control request and respond with ONLY valid JSON (no other text):
 {
   "action": "on" or "off" or "toggle",
-  "node": "<node name like 'child1' or 'child2'>",
+  "node": "<node name from the live registry>",
   "device": "LEDPIN"
 }
 
@@ -855,7 +723,7 @@ User request: "${query}"`;
         finalQuery = `Parse this relay control request and respond with ONLY valid JSON (no other text):
 {
   "action": "ON" or "OFF" or "PULSE",
-  "node": "<node name or 'child2'>",
+  "node": "<node name from the live registry>",
   "pin": <pin number or 12>,
   "duration": null or <milliseconds>
 }
@@ -1039,6 +907,10 @@ User request: "${query}"`;
   const deviceControlHandler = async (req, res) => {
     try {
       const { device, action, deviceName, pin, value } = req.body || {};
+      const nodes = await fetchNodeData();
+      if (!nodes) {
+        return res.status(503).json({ error: 'Could not retrieve the live node registry' });
+      }
       
       // Support both high-level (device + action) and low-level (deviceName + pin + value) APIs
       let targetDevice, targetPin, targetValue;
@@ -1047,14 +919,7 @@ User request: "${query}"`;
         // High-level API: device + action
         targetDevice = device;
         targetValue = action.toLowerCase() === 'on' ? 1 : 0;
-        const deviceInfo = getDeviceInfo(targetDevice);
-        if (!deviceInfo) {
-          return res.status(404).json({
-            error: `Device '${targetDevice}' not found in configuration`,
-            availableDevices: Object.keys(deviceConfig.devices || {})
-          });
-        }
-        targetPin = deviceInfo.ledPin;
+        targetPin = pin;
       } else if (deviceName && pin !== undefined && value !== undefined) {
         // Low-level API: deviceName + pin + value
         targetDevice = deviceName;
@@ -1064,22 +929,36 @@ User request: "${query}"`;
         return res.status(400).json({
           error: 'Provide either (device + action) or (deviceName + pin + value)',
           examples: {
-            highlevel: { device: 'child1', action: 'on' },
-            lowlevel: { deviceName: 'child1', pin: 4, value: 1 }
+            highlevel: { device: '<registered-node-name>', action: 'on' },
+            lowlevel: { deviceName: '<registered-node-name>', pin: 4, value: 1 }
           }
         });
       }
       
-      const deviceInfo = getDeviceInfo(targetDevice);
+      const targetName = String(targetDevice).toLowerCase();
+      const deviceInfo = nodes.find((node) =>
+        [node?.nodeName, node?.nodeId, node?.id].some((name) => String(name || '').toLowerCase() === targetName)
+      );
       if (!deviceInfo) {
         return res.status(404).json({
-          error: `Device '${targetDevice}' not found`,
-          availableDevices: Object.keys(deviceConfig.devices || {})
+          error: `Node '${targetDevice}' not found in the live registry`,
+          availableNodes: nodes.map((node) => node.nodeName || node.nodeId || node.id).filter(Boolean)
         });
       }
+      if (targetPin === undefined || targetPin === null) {
+        const hardware = deviceInfo.details?.hardware || deviceInfo.hardware || deviceInfo.details?.deviceType;
+        targetPin = deviceInfo.details?.ledPin || getLedPin(hardware);
+      }
+      if (!deviceInfo.ip) {
+        return res.status(400).json({ error: `Node '${targetDevice}' has no registered IP address` });
+      }
+      if (!Number.isInteger(Number(targetPin))) {
+        return res.status(400).json({ error: `No LED pin is configured for node '${targetDevice}'` });
+      }
+      targetPin = Number(targetPin);
       
       // Construct the GPIO command
-      const gpioCmd = constructGpioCommand(targetDevice, targetPin, targetValue);
+      const gpioCmd = constructGpioCommand(targetDevice, targetPin, targetValue, deviceInfo);
       if (!gpioCmd) {
         return res.status(500).json({ error: 'Failed to construct GPIO command' });
       }
@@ -1094,7 +973,7 @@ User request: "${query}"`;
         return res.json({
           success: cmdResult.success,
           device: targetDevice,
-          deviceType: deviceInfo.type,
+          deviceType: deviceInfo.details?.hardware || deviceInfo.hardware || deviceInfo.details?.deviceType,
           pin: targetPin,
           value: targetValue,
           action: targetValue ? 'ON' : 'OFF',
@@ -1115,8 +994,8 @@ User request: "${query}"`;
           value: targetValue,
           error: commError.message,
           ip: deviceInfo.ip,
-          port: deviceInfo.port || 80,
-          message: `Could not reach ${targetDevice} at ${deviceInfo.ip}:${deviceInfo.port || 80}. Ensure device is online and accessible.`
+          port: deviceInfo.details?.httpPort || deviceInfo.port || 80,
+          message: `Could not reach ${targetDevice} at ${deviceInfo.ip}:${deviceInfo.details?.httpPort || deviceInfo.port || 80}. Ensure device is online and accessible.`
         });
       }
     } catch (e) {
@@ -1202,8 +1081,8 @@ User request: "${query}"`;
   /**
    * POST /api/ollama/device-control
    * Control ESP32/ESP8266 devices with automatic hardware mapping.
-   * High-level: { device: "child1", action: "on" }
-   * Low-level: { deviceName: "child1", pin: 4, value: 1 }
+   * High-level: { device: "<registered-node-name>", action: "on" }
+   * Low-level: { deviceName: "<registered-node-name>", pin: 4, value: 1 }
    */
   app.post('/api/ollama/device-control', deviceControlHandler);
   app.post('/api/openai/device-control', deviceControlHandler);

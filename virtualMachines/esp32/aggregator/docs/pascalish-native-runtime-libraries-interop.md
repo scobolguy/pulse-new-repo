@@ -20,6 +20,11 @@ DAEMON "router-daemon" REFRESH 2 S;
 
 ## Native Generics
 
+After changing `grammar/Pascalish.g4`, run `npm run antlr:generate` from
+`aggregator` before compiling or running compiler tests. The compiler imports
+`grammar/generated-modern`; source-only checkpoints must regenerate these
+parsers after checkout rather than relying on stale generated output.
+
 Generic types are now part of the grammar via `typeRef`:
 
 ```pascal
@@ -62,6 +67,38 @@ class repository<T>;
   items : array<integer> of T;
 end;
 ```
+
+Executable generic records and classes require the declared number of concrete
+type arguments. Each concrete class specialization shares method code across
+instances while retaining separate instance fields. Nested records and fixed
+arrays flatten into typed scalar leaves; incompatible argument, assignment, and
+return shapes fail compilation. Hosted method frames may not exceed the
+256-value operand stack capacity. Runtime array indexes are bounds checked:
+invalid reads and writes fail explicitly on JavaScript and Arduino rather than
+returning a default value or ignoring a write. Record-array leaves use an `{}`
+index placeholder in `ARR_GET`/`ARR_SET` storage operands.
+
+Nested method-call arguments are evaluated before loading the outer receiver's
+field frame to avoid stacking two large instances. Ordinary calls and method
+calls without nested calls retain direct operand emission, without unnecessary
+temporary stores/loads; signed embedded images retain their 512-instruction limit.
+
+Hosted distributed caches declare a top-level backing table:
+
+```pascal
+type Item = record name: string; count: integer; end;
+distributed table Directory: map<string, Item>;
+service 'directory-service';
+var items: cache<string, Item> backed by Directory;
+```
+
+Backing tables and caches require string keys and matching scalar/record item
+schemas. Backed caches lower to `host.replica_*` calls, carry `distributedTables`
+and `hostCaches[].backingTable` metadata, and require JavaScript plus the
+`distributed-cache` host capability. Local caches continue to use `cache of Item`
+and explicit TTL arguments. Bluetooth discovery bindings likewise restrict the
+artifact to JavaScript and declare `bluetooth.discovery`; capability grants are
+deployment-owned, not inferred permissions.
 
 ## Classes
 

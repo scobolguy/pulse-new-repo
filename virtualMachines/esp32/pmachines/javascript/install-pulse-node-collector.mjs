@@ -10,8 +10,10 @@ import { compilePascalishProgramWithAntlr } from '../../aggregator/scripts/compi
 import { attachPcodeSignature } from '../../aggregator/scripts/pcode-signing.mjs';
 
 export async function installPulseNodeCollector({
-  origin: target = 'http://127.0.0.1:4111', udpPort = 4210, fetchImpl = fetch
+  origin: target = 'http://127.0.0.1:4111', udpPort = 4210,
+  collectorId = 'pulse-node-collector', fetchImpl = fetch
 } = {}) {
+if (!/^[a-zA-Z0-9_.:-]{1,64}$/.test(collectorId)) throw new Error('Invalid Pulse collector identity');
 const origin = new URL(target);
 if (!['http:', 'https:'].includes(origin.protocol) || origin.pathname !== '/' || origin.search || origin.hash) {
   throw new Error('JS PMachine URL must be an HTTP(S) origin');
@@ -50,11 +52,11 @@ const status = JSON.parse(await request('/pmachine/service_host/install', {
   serviceFile: service.file,
   serviceMap: service.map,
   daemons: JSON.stringify([{ ...daemon, udpPort, udpShared: true }]),
-  collectorId: 'pulse-node-collector',
+  collectorId,
   observationTtlMs: '180000',
   udpPort: '0'
 }));
-if (status.collectorId !== 'pulse-node-collector' || status.running !== true) {
+if (status.collectorId !== collectorId || status.running !== true) {
   throw new Error('Pulse node collector did not start correctly');
 }
 return status;

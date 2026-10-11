@@ -2,7 +2,7 @@
   "name": "pulse-pmachine-debugger",
   "displayName": "Pulse Studio & PMachine Debugger",
   "description": "Pulse Studio, Data Librarian, Data Mapper, deployment and node inventory panels, plus native PMachine Run and Debug support.",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "publisher": "pulse",
   "icon": "src/media/pulse-icon.png",
   "files": [
@@ -188,6 +188,19 @@
         "title": "Pulse: New Visual Flow Document"
       },
       {
+        "command": "pulseCatalogStudio.newWfl",
+        "title": "Pulse: New WFL Deployment"
+      },
+      {
+        "command": "pulseCatalogStudio.openWflEditor",
+        "title": "Pulse: Open WFL Deployment Editor"
+      },
+      {
+        "command": "pulseCatalogStudio.openFlowDesigner",
+        "title": "Pulse: Open in Flow Designer",
+        "icon": "$(type-hierarchy)"
+      },
+      {
         "command": "pulseCatalogStudio.refreshDataLibrarian",
         "title": "Pulse: Refresh Data Librarian",
         "icon": "$(refresh)"
@@ -264,19 +277,19 @@
       },
       {
         "command": "pulse-pmachine.newDataMap",
-        "title": "Pulse Data Mapper: Create Prototype Map"
+        "title": "Pulse Data Mapper: Create Prototype MAPL Map"
       },
       {
         "command": "pulse-pmachine.openDataMap",
-        "title": "Pulse Data Mapper: Open Designer"
+        "title": "Pulse Data Mapper: Open MAPL in Designer"
       },
       {
         "command": "pulse-pmachine.createDataMap",
-        "title": "Pulse Data Mapper: Create Map"
+        "title": "Pulse Data Mapper: Create MAPL Map"
       },
       {
         "command": "pulse-pmachine.importDataMap",
-        "title": "Pulse Data Mapper: Import from Aggregator"
+        "title": "Pulse Data Mapper: Import from Aggregator as MAPL"
       },
       {
         "command": "pulse-pmachine.runCurrentFile",
@@ -305,6 +318,12 @@
     ],
     "customEditors": [
       {
+        "viewType": "pulseCatalogStudio.wflDeploymentEditor",
+        "displayName": "WFL Configuration and Deployment",
+        "selector": [{ "filenamePattern": "*.wfl" }],
+        "priority": "option"
+      },
+      {
         "viewType": "pulseCatalogStudio.vflEditor",
         "displayName": "Visual Flow Language Editor",
         "selector": [
@@ -312,23 +331,33 @@
             "filenamePattern": "*.vfl"
           }
         ],
+        "workbench.editorAssociations": [
+          {
+            "viewType": "pulseCatalogStudio.vflEditor",
+            "filenamePattern": "*.vfl"
+          }
+        ],
         "priority": "default"
+      },
+      {
+        "viewType": "pulseCatalogStudio.wflFlowEditor",
+        "displayName": "WFL Flow Designer",
+        "selector": [
+          {
+            "filenamePattern": "*.wfl"
+          }
+        ],
+        "priority": "option"
       },
       {
         "viewType": "pulse-pmachine.dataMapper",
         "displayName": "Pulse Data Mapper",
         "selector": [
           {
-            "filenamePattern": "*.pulse-map.json"
-          },
-          {
-            "filenamePattern": "*.mapping.json"
-          },
-          {
-            "filenamePattern": "*.map"
+            "filenamePattern": "*.mapl"
           }
         ],
-        "priority": "option"
+        "priority": "default"
       }
     ],
     "menus": {
@@ -428,8 +457,23 @@
       ],
       "editor/title": [
         {
+          "command": "pulseCatalogStudio.openFlowDesigner",
+          "when": "editorLangId == vfl",
+          "group": "navigation@1"
+        },
+        {
+          "command": "pulseCatalogStudio.openWflEditor",
+          "when": "editorLangId == wfl",
+          "group": "navigation@1"
+        },
+        {
           "command": "pulseCatalogStudio.newVfl",
           "when": "editorLangId == vfl",
+          "group": "navigation@1"
+        },
+        {
+          "command": "pulseCatalogStudio.openFlowDesigner",
+          "when": "editorLangId == wfl",
           "group": "navigation@1"
         },
         {
@@ -446,6 +490,10 @@
           "command": "pulseCatalogStudio.newVfl"
         },
         {
+          "command": "pulseCatalogStudio.openFlowDesigner",
+          "when": "editorLangId == wfl || editorLangId == vfl"
+        },
+        {
           "command": "pulse-pmachine.runCurrentFile",
           "when": "editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl"
         }
@@ -458,6 +506,19 @@
           "type": "string",
           "default": "http://127.0.0.1:4000",
           "description": "Aggregator backend URL used by Data Librarian, Data Mapper, service discovery, and PMachine programs."
+        },
+        "pulse-pmachine.wfl.environment": {
+          "type": "string",
+          "default": "",
+          "description": "Environment used when compiling WFL for Run on PMachine and debugging (e.g. dev, test, prod). Empty uses PULSE_ENVIRONMENT, then the file's DEFAULT ENVIRONMENT."
+        },
+        "pulse-pmachine.wfl.defines": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Name/value pairs that override WFL LET variables when compiling for Run on PMachine and debugging."
         },
         "pulse-pmachine.autoStartLocalServices": {
           "type": "boolean",
@@ -515,7 +576,7 @@
         "pulse.catalogStudio.defaultVflExtension": {
           "type": "string",
           "default": ".vfl",
-          "description": "Default extension for new VFL documents."
+          "description": "Default extension for new visual graphs. .vfl stores executable graphs separately from WFL deployment/configuration; .wfl preserves the embedded FLOW designer."
         },
         "pulse.catalogStudio.defaultFolder": {
           "type": "string",
@@ -541,12 +602,24 @@
           "pascalish",
           "pascal",
           "cobolish",
-          "vbish"
+          "vbish",
+          "wfl"
         ],
         "configurationAttributes": {
           "program": {
             "type": "string",
             "description": "Source program to execute."
+          },
+          "environment": {
+            "type": "string",
+            "description": "WFL only: environment name used for configuration IF/LET evaluation (overrides pulse-pmachine.wfl.environment, PULSE_ENVIRONMENT and DEFAULT ENVIRONMENT)."
+          },
+          "defines": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "WFL only: name/value pairs that override LET variables."
           },
           "breakpointLine": {
             "type": "number",
@@ -645,6 +718,9 @@
       },
       {
         "language": "cobolish"
+      },
+      {
+        "language": "wfl"
       }
     ]
   },

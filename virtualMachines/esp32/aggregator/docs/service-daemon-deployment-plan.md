@@ -89,7 +89,17 @@ Application source is compiled independently from Pascalish, Cobolish, or VBish 
 6. Schedule daemon refresh cycles using compiled runtime metadata.
 7. Treat programs as one-shot workloads and unload them after completion.
 
-The current ESP32 boot reader validates and reports the startup manifest. Runtime loading and daemon scheduling remain the next firmware execution phase and must not be described as complete until an end-to-end boot test proves them.
+The current ESP32 boot reader validates and reports the startup manifest, but does not restore hosted units after reboot. The online `POST /api/nodes/:nodeId/deploy` path can upload and immediately install a hosted service with shared-context UDP daemons; installations remain RAM-resident until reboot.
+
+The Data Mapper package in `../src/mapper-deployment/` uses this online path. From the `aggregator` directory, supply a MAPL file and a currently live-discovered node:
+
+```powershell
+npm run deploy:esp32:mapper:udp -- --node <discovered-node-id> --map-file <absolute-path-to-maps.mapl>
+```
+
+The script compiles and signs the hosted health service and MAPL-backed daemon, uploads all four artifacts, then calls `/pmachine/service_host/install`. The backend rechecks discovery freshness (three minutes), probes the hosted-runtime status endpoint before upload, and rejects stale/non-live targets. Set `PULSE_BACKEND_URL`, `PULSE_ESP32_HTTP_PORT`, `PCODE_SIGNING_KEY`, and `PCODE_SIGNING_KEY_ID` to match the running backend and firmware profile as needed. There is no static-IP fallback.
+
+The daemon listens on UDP port 4211 by default (`--udp-port` overrides it). Each datagram is JSON shaped as `{"mapId":"MapName","source":{...}}`; a successful reply is the mapped JSON value. The daemon scheduler continues for the installed firmware runtime lifetime and is not capped by the refresh interval; each VM invocation remains bounded by the firmware's instruction budget. Invalid JSON or unknown map IDs fail that daemon turn and do not return a success-shaped reply.
 
 ## APIs
 
@@ -115,6 +125,11 @@ The current ESP32 boot reader validates and reports the startup manifest. Runtim
 
 ### Startup Manifests
 
+`STARTUP FALSE` leaves a deployment stopped without checking or launching its
+artifacts. Paused deployments likewise remain paused. An explicit start or resume
+action changes `runtimeState` to `running` and can activate a deployment regardless
+of its startup preference.
+
 - `GET /api/deployments/startup-manifests`
 - `GET /api/nodes/:nodeId/startup-manifest`
 - `POST /api/deployments/startup-manifests`
@@ -127,6 +142,7 @@ The POST endpoint persists the backend manifest and, for an addressable ESP32, u
   - Uploads files to an addressable node.
   - Registers an optional deployment record.
   - May execute a supplied program.
+  - May install `hostedServiceInstall` after confirming a fresh live-discovery record and a responsive `/pmachine/service_host/status` endpoint. All referenced service/daemon p-code and program-map files must be included in `files`; daemon entries require explicit UDP ports.
 
 ## Execution Plan
 
@@ -158,6 +174,7 @@ The POST endpoint persists the backend manifest and, for an addressable ESP32, u
 - [x] Backend restores persisted JS PMachine deployment records and service instances on process start.
 - [ ] ESP32 boot loads referenced pcode/program maps for resident services.
 - [ ] ESP32 daemon scheduler restores refresh intervals.
+- [x] Online ESP32 installation starts a RAM-resident hosted service and explicitly port-bound UDP daemon after artifact upload.
 - [ ] Program one-shot lifecycle and automatic unload.
 - [ ] Health checks after deployment.
 - [x] Deployment records retain recent package history and expose rollback.
@@ -165,6 +182,8 @@ The POST endpoint persists the backend manifest and, for an addressable ESP32, u
 ### Phase 4: Verification and operations
 
 - [x] Parser test for valid service and daemon WFL deployment declarations.
+- [x] Hosted WFL MAPL UDP daemon package/runtime test, including multi-map selection and invalid-map failures.
+- [x] Node deployment API test using a board-compatible HTTP server, including live-discovery gating, preflight, upload, and hosted installation.
 - [ ] API tests for plan persistence and manifest generation.
 - [ ] Node upload tests using a temporary board-compatible HTTP server.
 - [ ] JS PMachine boot/restore integration test.
@@ -187,6 +206,8 @@ A service deployment is complete when:
 9. A program executes once and is released.
 10. Failure produces a visible result and does not silently report success.
 
-## Known Current Limitation
+## Known Current Limitations
 
-The control plane and manifest distribution are implemented. The remaining work is runtime consumption: a manifest currently reaches an ESP32 and is validated/logged at boot, but it does not yet automatically load and schedule every referenced service or daemon. That firmware/supervisor phase is the next implementation priority.
+- The control plane and manifest distribution are implemented. A manifest currently reaches an ESP32 and is validated/logged at boot, but it does not automatically load and schedule every referenced service or daemon.
+- Online hosted service installs run immediately but are RAM-resident; reboot restoration is not implemented.
+- The deployment API validates current discovery and runtime reachability, but its deployment route remains part of the existing backend API. Protect it with the deployment authorization policy used by the hosting environment.

@@ -20,6 +20,7 @@ export function registerMediaGatewayRoutes(app, deps = {}) {
     PIPER_MODEL_PATH,
     runPiperSynthesis,
     playWavOnHost,
+    getLiveEsp32BluetoothAudioOrigin,
     forwardEsp32BluetoothTts
   } = deps;
 
@@ -207,7 +208,6 @@ export function registerMediaGatewayRoutes(app, deps = {}) {
 
     const voice = String(body.voice || req.query?.voice || 'default').trim() || 'default';
     const mode = String(modeOverride || body.mode || req.query?.mode || 'local').trim().toLowerCase();
-    const esp32Origin = String(body.esp32Origin || req.query?.esp32Origin || '').trim();
     const rate = clampInteger(body.rate, -10, 10, 0);
     const volume = clampInteger(body.volume, 0, 100, 100);
     const playOnHost = body.playOnHost !== false;
@@ -257,7 +257,8 @@ export function registerMediaGatewayRoutes(app, deps = {}) {
 
     if (mode === 'esp32') {
       try {
-        const forwarded = await forwardEsp32BluetoothTts({ text, voice, origin: esp32Origin });
+        const origin = getLiveEsp32BluetoothAudioOrigin();
+        const forwarded = await forwardEsp32BluetoothTts({ text, voice, origin });
         return res.json({
           ok: true,
           mode: 'esp32',

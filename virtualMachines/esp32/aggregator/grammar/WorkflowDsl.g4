@@ -18,6 +18,131 @@ item
   | clusterCreateDecl
   | artifactDeployDecl
   | genericSystemDecl
+  | flowDecl
+  | letDecl
+  | defaultEnvironmentDecl
+  | configIfDecl
+  ;
+
+// Compile-time configuration. Items are evaluated top to bottom, so a LET or
+// DEFAULT ENVIRONMENT only affects the items that follow it.
+letDecl
+  : LET IDENT ASSIGN_EQ stringExpr SEMICOLON
+  ;
+
+defaultEnvironmentDecl
+  : DEFAULT ENVIRONMENT stringExpr SEMICOLON
+  ;
+
+configIfDecl
+  : IF condition THEN item* (ELSIF condition THEN item*)* (ELSE item*)? ENDIF SEMICOLON
+  ;
+
+condition
+  : andCondition (OR andCondition)*
+  ;
+
+andCondition
+  : notCondition (AND notCondition)*
+  ;
+
+notCondition
+  : NOT notCondition
+  | primaryCondition
+  ;
+
+primaryCondition
+  : LPAREN condition RPAREN
+  | booleanLiteral
+  | stringExpr compareOp stringExpr
+  | stringExpr NOT? IN LPAREN stringExpr (COMMA stringExpr)* RPAREN
+  | stringExpr NOT? (CONTAINS | LIKE | MATCHES) stringExpr
+  | stringExpr (STARTS | ENDS) WITH stringExpr
+  ;
+
+compareOp
+  : ASSIGN_EQ
+  | EQUALS
+  | NEQ
+  | LT
+  | LE
+  | GT
+  | GE
+  ;
+
+stringExpr
+  : stringAtom (AMP stringAtom)*
+  ;
+
+stringAtom
+  : quotedString
+  | NUMBER
+  | IDENT
+  | ENVIRONMENT
+  | ENV LPAREN stringExpr (COMMA stringExpr)? RPAREN
+  | (LOWER | UPPER) LPAREN stringExpr RPAREN
+  ;
+
+// Visual flow: the designer-editable graph of nodes and typed links.
+flowDecl
+  : FLOW quotedString BEGIN flowMember* END SEMICOLON
+  ;
+
+flowMember
+  : flowDirective
+  | flowSeedDecl
+  | flowNodeDecl
+  | flowLinkDecl
+  ;
+
+flowDirective
+  : AT_SIGN directiveKey directiveValue SEMICOLON
+  ;
+
+directiveKey
+  : IDENT
+  | DESCRIPTION
+  | TYPE
+  | LABEL
+  | MODE
+  | TARGET
+  | SOURCE
+  | KIND
+  ;
+
+directiveValue
+  : quotedString
+  | signedNumber
+  | booleanLiteral
+  ;
+
+flowSeedDecl
+  : SEED quotedString SEMICOLON
+  ;
+
+flowNodeDecl
+  : NODE quotedString flowNodeClause* SEMICOLON
+  ;
+
+flowNodeClause
+  : KIND quotedString
+  | TYPE quotedString
+  | LABEL quotedString
+  | CATALOG quotedString
+  | SOURCE quotedString
+  | AT signedNumber COMMA signedNumber
+  | TARGET quotedString
+  | IP quotedString
+  | SERVICES LPAREN (quotedString (COMMA quotedString)*)? RPAREN
+  | VIA quotedString
+  ;
+
+flowLinkDecl
+  : LINK quotedString TO quotedString VIA quotedString (LABEL quotedString)? SEMICOLON
+  ;
+
+signedNumber
+  : MINUS? NUMBER
   ;
 
 genericSystemDecl
@@ -52,6 +177,7 @@ deploymentDecl
 
 deploymentItem
   : (SERVICE | PROGRAM | DAEMON) quotedString FILE quotedString QUEUE quotedString ARROW quotedString TARGETS quotedList STARTUP booleanLiteral serviceLifecycleClause? SEMICOLON
+  | FLOW quotedString FILE quotedString TARGETS quotedList STARTUP booleanLiteral SEMICOLON
   | REMOVE SERVICE quotedString FROM TARGETS quotedList SEMICOLON
   ;
 
@@ -203,6 +329,33 @@ stepToken
   | TRY
   | CATCH
   | ENDTRY
+  | FLOW
+  | SEED
+  | NODE
+  | KIND
+  | CATALOG
+  | SOURCE
+  | AT
+  | TARGET
+  | IP
+  | SERVICES
+  | VIA
+  | LET
+  | DEFAULT
+  | ENVIRONMENT
+  | ENV
+  | ELSIF
+  | AND
+  | OR
+  | NOT
+  | IN
+  | LIKE
+  | MATCHES
+  | STARTS
+  | ENDS
+  | WITH
+  | LOWER
+  | UPPER
   ;
 
 ifStmt
@@ -320,8 +473,43 @@ TARGETS: 'TARGETS';
 STARTUP: 'STARTUP';
 TRUE: 'TRUE';
 FALSE: 'FALSE';
+FLOW: 'FLOW';
+SEED: 'SEED';
+NODE: 'NODE';
+KIND: 'KIND';
+CATALOG: 'CATALOG';
+SOURCE: 'SOURCE';
+AT: 'AT';
+TARGET: 'TARGET';
+IP: 'IP';
+SERVICES: 'SERVICES';
+VIA: 'VIA';
+LET: 'LET';
+DEFAULT: 'DEFAULT';
+ENVIRONMENT: 'ENVIRONMENT';
+ENV: 'ENV';
+ELSIF: 'ELSIF';
+AND: 'AND';
+OR: 'OR';
+NOT: 'NOT';
+IN: 'IN';
+LIKE: 'LIKE';
+MATCHES: 'MATCHES';
+STARTS: 'STARTS';
+ENDS: 'ENDS';
+WITH: 'WITH';
+LOWER: 'LOWER';
+UPPER: 'UPPER';
 
 ARROW: '->';
+NEQ: '<>' | '!=';
+LE: '<=';
+GE: '>=';
+LT: '<';
+GT: '>';
+AMP: '&';
+AT_SIGN: '@';
+MINUS: '-';
 ASSIGN_EQ: '=';
 LPAREN: '(';
 RPAREN: ')';

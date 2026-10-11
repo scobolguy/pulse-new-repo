@@ -12,6 +12,7 @@ import { pathToFileURL } from 'node:url';
 import { runSingleMessageForEvolution } from './index.mjs';
 import { normalizeDiscoveryAnnouncement } from './discovery-collector.mjs';
 import { createPascalishServiceHost } from './src/service-host.mjs';
+import { createWindowsBluetoothSource } from './src/bluetooth-source.mjs';
 import { signPcodeText } from '../../aggregator/scripts/pcode-signing.mjs';
 import {
   createJavaScriptPmachineDebugSession,
@@ -36,7 +37,9 @@ function parseCliArgs(argv) {
     advertiseHost: process.env.JS_PMACHINE_ADVERTISE_HOST || '127.0.0.1',
     udpAnnounceHost: process.env.JS_PMACHINE_UDP_ANNOUNCE_HOST || '127.255.255.255',
     udpAnnouncePort: Number(process.env.JS_PMACHINE_UDP_ANNOUNCE_PORT ?? 4210),
-    storageGrants: JSON.parse(process.env.JS_PMACHINE_STORAGE_GRANTS || '{}')
+    storageGrants: JSON.parse(process.env.JS_PMACHINE_STORAGE_GRANTS || '{}'),
+    distributedGrants: JSON.parse(process.env.JS_PMACHINE_DISTRIBUTED_GRANTS || '{}'),
+    bluetoothGrants: JSON.parse(process.env.JS_PMACHINE_BLUETOOTH_GRANTS || '[]')
   };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -139,11 +142,20 @@ export function createJsPmachineNodeServer({
   udpAnnouncePort = 0,
   fetchImpl = fetch,
   logger = console,
+  onDaemonEvent = null,
+  distributedGrants = {},
+  bluetoothGrants = [],
+  bluetoothSourceFactory = createWindowsBluetoothSource,
   storageGrants = {}
 } = {}) {
   if (!storageGrants || typeof storageGrants !== 'object' || Array.isArray(storageGrants)) {
     throw new Error('Invalid service storage grants');
   }
+  if (!distributedGrants || typeof distributedGrants !== 'object' || Array.isArray(distributedGrants)) {
+    throw new Error('Invalid distributed table deployment grants');
+  }
+  if (!Array.isArray(bluetoothGrants) || bluetoothGrants.some(id => typeof id !== 'string' || !id) ||
+      typeof bluetoothSourceFactory !== 'function') throw new Error('Invalid Bluetooth discovery deployment grants');
   if (!Number.isSafeInteger(udpAnnouncePort) || udpAnnouncePort < 0 || udpAnnouncePort > 65535) {
     throw new Error('UDP announcement port must be an integer from 0 to 65535');
   }
@@ -260,6 +272,7 @@ export function createJsPmachineNodeServer({
         const pcodeText = readFfsFile(entry.file);
         const programMap = parseHostedMap(pcodeText, readFfsFile(entry.map), 'daemon');
         daemons.push({ compiled: { pcodeText, programMap }, udpPort: entry.udpPort ?? null, udpShared: entry.udpShared ?? false,
+          udpBindAddress: entry.udpBindAddress ?? (additional ? '127.0.0.1' : '0.0.0.0'),
           multicastGroup: entry.multicastGroup ?? '', multicastInterface: entry.multicastInterface ?? '' });
       }
     } else if (daemonFile) {
@@ -297,11 +310,14 @@ export function createJsPmachineNodeServer({
       udpPort: additional || sharedDaemons && !udpPort ? null : udpPort,
       networkPeers: params.has('networkPeers') ? JSON.parse(params.get('networkPeers')) : [],
       storageRoots: Object.hasOwn(storageGrants, collectorId) ? storageGrants[collectorId] : {},
+      distributedBindings: Object.hasOwn(distributedGrants, collectorId) ? distributedGrants[collectorId] : {},
+      bluetoothSourceFactory: bluetoothGrants.includes(collectorId) ? bluetoothSourceFactory : null,
       bindings: {
         'host.announcement': normalizeDiscoveryAnnouncement,
         'host.observation_ttl': () => observationTtlMs,
       },
       logger,
+      onDaemonEvent,
     });
     if (!additional && hostedService) await hostedService.stop();
     try {

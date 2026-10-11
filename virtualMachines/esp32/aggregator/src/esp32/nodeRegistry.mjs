@@ -34,21 +34,38 @@ export class NodeRegistry {
       const parsed = JSON.parse(data);
       
       if (parsed.nodes && Array.isArray(parsed.nodes)) {
+        const manuallySeededNodeIds = new Set();
         for (const node of parsed.nodes) {
+          const source = String(node?.metadata?.source || '').trim();
+          if (['known-device', 'startup-seed'].includes(source) && Number(node?.lastSeen || 0) <= 0) {
+            manuallySeededNodeIds.add(node.id);
+            continue;
+          }
           this.nodes.set(node.id, {
             ...node,
             lastSeen: Number(node.lastSeen || 0)
           });
         }
+        if (manuallySeededNodeIds.size > 0) {
+          console.warn(`[NodeRegistry] Removed ${manuallySeededNodeIds.size} unobserved legacy node seed(s); nodes now require live discovery or registration`);
+        }
         console.log(`[NodeRegistry] Loaded ${this.nodes.size} nodes from disk`);
-      }
 
-      if (parsed.manifests && typeof parsed.manifests === 'object') {
+        if (parsed.manifests && typeof parsed.manifests === 'object') {
+          for (const [nodeId, manifest] of Object.entries(parsed.manifests)) {
+            if (!manuallySeededNodeIds.has(nodeId)) this.manifests.set(nodeId, manifest);
+          }
+        }
+
+        if (manuallySeededNodeIds.size > 0 && this.autoSave) {
+          await this.persist();
+        }
+      } else if (parsed.manifests && typeof parsed.manifests === 'object') {
         for (const [nodeId, manifest] of Object.entries(parsed.manifests)) {
           this.manifests.set(nodeId, manifest);
         }
-        console.log(`[NodeRegistry] Loaded ${this.manifests.size} manifests from disk`);
       }
+      if (this.manifests.size > 0) console.log(`[NodeRegistry] Loaded ${this.manifests.size} manifests from disk`);
     } catch (err) {
       if (err.code !== 'ENOENT') {
         console.error('[NodeRegistry] Error loading registry:', err);

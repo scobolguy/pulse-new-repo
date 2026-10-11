@@ -11,6 +11,8 @@ const studioExtension = await fs.readFile(path.join(studioRoot, 'extension.js'),
 await Promise.all([
   fs.writeFile(path.join(runtimeRoot, 'extension.js'), studioExtension),
   fs.copyFile(path.join(studioRoot, 'distributedNetwork.js'), path.join(runtimeRoot, 'distributedNetwork.js')),
+  fs.copyFile(path.join(studioRoot, 'wflFlowDocument.js'), path.join(runtimeRoot, 'wflFlowDocument.js')),
+  fs.copyFile(path.join(studioRoot, 'wflDeploymentEditor.js'), path.join(runtimeRoot, 'wflDeploymentEditor.js')),
   fs.copyFile(path.join(studioRoot, 'language-configuration.json'), path.join(extensionRoot, 'language-configuration.json')),
   fs.cp(path.join(studioRoot, 'media'), path.join(extensionRoot, 'media'), { recursive: true, force: true }),
   fs.cp(path.join(studioRoot, 'syntaxes'), path.join(extensionRoot, 'syntaxes'), { recursive: true, force: true }),

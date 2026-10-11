@@ -30,9 +30,10 @@ Infrastructure, Deploy, and Node Inventory views, plus the VFL editor and
 **Pulse: Open Pulse Studio** command. The native PMachine Data Librarian and
 Data Mapper views remain available in Explorer alongside the Studio views.
 
-Deploy can validate and preview WFL deployment declarations. The current backend
-does not install WFL service or daemon artifacts onto ESP32 nodes, so choosing
-Deploy explicitly reports that no deployment occurred. Node Inventory separates
+Deploy can validate and preview WFL deployment declarations. Choosing Deploy
+opens the separate WFL editor; its confirmed **Deploy to Backend JS** action
+builds referenced VFL source and submits workers to the backend-local supervisor.
+It does not install code on remote JS nodes or ESP32s. Node Inventory separates
 registered services from observed hosted contexts and provides distinct,
 confirmed actions for unregistering a service and stopping a hosted context.
 
@@ -48,82 +49,114 @@ interface and peer settings. Existing listeners/collector contexts are not
 replaced. The task terminal reports readiness or errors; keep it running to keep
 the deployment alive. A fresh process requires redeployment. Cache source
 coverage is reported independently; successful installation is not evidence
-that every device was discovered. WFL remains validation/preview only.
+that every device was discovered.
+
+## Separate VFL visual and WFL deployment editors
+
+Use **Pulse: New Visual Flow Document** to create a `.vfl` graph,
+or open an existing `.vfl` with **Pulse: Open in Flow Designer**. This custom
+editor runs entirely inside a VS Code editor tab; it does not need a browser
+or the frontend/Vite server. Its left **Palette** starts with **Process**:
+drag the rectangular symbol onto the canvas (or choose **Add Node**), move
+the box, and use **Link** followed by another node to connect them.
+Visual edits share the underlying document's Save and Undo/Redo.
+Process boxes use the existing executable `service` kind; assign a source
+file before building or deploying them. Existing catalog objects remain
+in a separate section below the component palette.
+
+Select a node
+and use **Executable Node** to assign its source file, kind and queue symbols.
+Pascalish, executable MAPL and WFL workflow sources compile to per-node pcode;
+message-broker links become real queue bindings and support fan-out.
+**Create WFL Deployment** creates a separate `.wfl` referencing that graph.
+
+Use **Pulse: Open WFL Deployment Editor** to edit deployment source, choose an
+environment/defines, open linked graphs, validate, preview, build or submit a
+confirmed backend-JS deployment. Preview writes nothing. Build saves artifacts
+under `.pulse-build`. The deployment path currently runs on the backend PC;
+remote placement/installation and whole-graph debugging are not implemented.
+Unsupported transports/steps report errors instead of running as no-ops.
+
+The optional embedded WFL Flow Designer remains available for existing files.
+See section 3.2.3, “Executable VFL graphs and separate WFL deployment editor,”
+in the Pascalish/WFL/MAPL/P-Code design spec, and the `src/visual-flow-example`
+folder for runnable source examples.
 
 Build and package all features together from this extension folder with
 `npm run package`; the resulting VSIX is the single installable extension.
 
 ## Data Mapper designer
 
-Run **Pulse Data Mapper: Create Prototype Map** from the Command Palette, choose
-a new `*.pulse-map.json` file, and the visual designer opens with sample payment
-schemas. Drag a source field onto a target field to connect them. Alternatively,
-select a source and click a target (also usable with keyboard Tab and Enter).
-Select a connection in the middle to edit its conversion rule or remove it.
-Use **Apply rule** to update the document, then the normal VS Code Save command.
-Edits participate in VS Code Undo/Redo and synchronize with JSON text edits.
-**Open JSON** opens the text editor beside the designer.
+The Data Mapper designer edits MAPL (`*.mapl`) source directly; MAPL is the only
+local map format. Opening a `.mapl` file shows the visual designer, and
+**Open MAPL text** opens the same document as text beside it. Both views edit
+one VS Code document, so they stay synchronized and share Undo/Redo and Save.
+A MAPL file holds exactly one `map ... end;` declaration (see
+`documentation/compilers/MAPL-BNF.md`).
 
-To start with real schemas instead of the example, run **Pulse Data Mapper:
-Create Map**, then use **Map details** to set its ID and name.
-**Choose source schema** and **Choose target schema** load the Librarian catalog
-through `pulse-pmachine.backendUrl` (default `http://127.0.0.1:4000`).
-Schema selection embeds the structure, type ID, path and modification time in
-the local map, so it remains editable offline. Switching schemas asks before
-clearing connections. **Refresh selected schemas** reloads both structures
-without removing rules; publication reports any fields removed from the schema.
-The source and target search boxes filter large field lists.
+Run **Pulse Data Mapper: Create Prototype MAPL Map** from the Command Palette and
+choose a new `*.mapl` file; the designer opens with sample payment fields. Drag a
+source field onto a target field to connect them, or select a source and click a
+target (also usable with keyboard Tab and Enter). Select a connection to edit
+its conversion rule or remove it, then use **Apply rule**.
 
-**Pulse Data Mapper: Import from Aggregator** (also on the designer toolbar)
-lists backend maps and saves the chosen map to a new local file. It never
-overwrites an existing local file. **Publish to Aggregator** confirms the
-destination and whether it will create or replace a backend map. Publication
-does not deploy to a PMachine. Save local metadata changes with Ctrl+S.
-Existing backend maps are reread after confirmation to detect intervening edits;
-the current backend API has no atomic conditional-write support.
+Each connection is a top-level MAPL assignment:
+
+```text
+target.transfer.id := source.reference;
+target.'first name' := source.'given name' using 'output := trim(src);';
+```
+
+Visual edits are applied as small text splices: comments, formatting, unknown
+directives and statements the designer does not model (conditions, loops,
+defaults, function calls, validations) keep their original text. Those
+statements are listed under **Other MAPL statements** and are edited in the
+MAPL text. New connections are inserted just before the closing `end;`.
+
+To start from real schemas, run **Pulse Data Mapper: Create MAPL Map**, then use
+**Map details** to set its ID (header name) and `@name`. **Choose source schema**
+and **Choose target schema** load the Librarian catalog through
+`pulse-pmachine.backendUrl` (default `http://127.0.0.1:4000`) and record the
+choice as `@sourceSchema` / `@targetSchema` directives plus the header type IDs.
+Field structures are not stored in the file: the designer loads them from the
+Librarian when the map opens or a schema is chosen. Offline, or for schemas that
+cannot be loaded, the field lists are inferred from the paths used in the MAPL
+rules and the schema label says so. Switching schemas asks before clearing
+connections. **Refresh selected schemas** reloads both structures.
+
+**Pulse Data Mapper: Import from Aggregator as MAPL** (also on the designer
+toolbar) lists backend maps and writes the chosen map to a new `.mapl` file. It
+never overwrites an existing file. **Publish to Aggregator** confirms the
+destination and whether it will create or replace a backend map; the MAPL file
+remains the source of truth and is not rewritten by publishing. Publication does
+not deploy to a PMachine. Existing backend maps are reread after confirmation
+to detect intervening edits; the backend API has no atomic conditional write.
 
 The **Test mapping** panel accepts a sample JSON object, or a backend test case
 if the sample input is blank. Test cases use the Aggregator's schema-generated
 sample data, not the stored test case's actual message. Run executes the exact
 published map through `/api/mapper/maps/:id/run` and displays its output and
-diagnostics, including missing-source warnings and conversion information.
-Local changes must be published first; running never publishes implicitly.
-Document or input changes mark previous output stale.
+diagnostics. Local changes must be published first; running never publishes
+implicitly. Document or input changes mark previous output stale.
 
 Backend actions require a trusted workspace, have bounded HTTP timeouts, and
-report failures in the designer and `Pulse PMachine` output channel. No backend
-connection is required for offline editing. If Librarian reports a catalog error,
-schema selection cannot proceed until that backend problem is repaired;
-existing embedded schemas remain usable. The Librarian supports zero-padded
-ISO schema versions and batches large catalogs within PMachine transport limits.
-
-For an existing single-map JSON object, run **Pulse Data Mapper: Open Designer**
-with its text editor active, or use **Reopen Editor With > Pulse Data Mapper**
-for `*.pulse-map.json`, `*.mapping.json` or `*.map`. The designer preserves unknown local map
-and rule metadata and supports the existing `rules` or legacy `items` arrays.
-Embedded `sourceStructure` / `targetStructure` trees use `children`, `name`,
-`kind` (`leaf` or `branch`), and `valueType`, matching the Aggregator map format.
-Without embedded structures, only field paths already used by rules are shown.
-Collections such as `data-mappings.json` are not supported by this editor.
-Invalid JSON is reported and disables visual editing until repaired.
+report failures in the designer and `Pulse PMachine` output channel. Invalid
+MAPL is reported and disables visual editing until it is repaired in the text.
 
 Conversion rules support basic local validation (maximum 1000 characters,
-characters, balanced delimiters, and assignment/function/keyword presence).
-Full execution validation is performed by the existing Aggregator Pascalish
-routine interpreter. Unlike types require an explicit conversion routine.
-Branch-to-leaf links and duplicate links are rejected. Legacy `from` / `to` /
-`conversion` aliases are imported, and clearing an old conversion also clears
-the legacy value to prevent it reappearing at runtime.
-JSON is formatted when a visual edit is applied. This version does not add
-PMachine deployment or transformation-node graphs.
+balanced delimiters, and assignment/function/keyword presence). Full execution
+validation is performed by the Aggregator's Pascalish routine interpreter.
+Unlike types require an explicit conversion routine. Branch-to-leaf links and
+duplicate links are rejected.
 
 Build with `npm run compile`, package with `npm run package`, install the VSIX
 using **Extensions: Install from VSIX**, then run **Developer: Reload Window**.
-Run `node --test test/dataMapper.test.mjs test/dataMapperBackend.test.mjs` after
-compiling for model, document and HTTP regression tests. To exercise real
-publish/update/run APIs in PowerShell, set
-`$env:PULSE_MAPPER_TEST_URL = 'http://127.0.0.1:4000'` before that test command.
-The live test creates a uniquely named temporary map and deletes it afterward.
+Run `node --test test/maplDocument.test.mjs test/dataMapper.test.mjs test/dataMapperBackend.test.mjs`
+after compiling for MAPL parsing/splicing (checked against the ANTLR compiler),
+model, designer and HTTP regression tests. To exercise real publish/update/run
+APIs in PowerShell, set `$env:PULSE_MAPPER_TEST_URL = 'http://127.0.0.1:4000'`
+before that test command. The live test creates a uniquely named temporary map
+and deletes it afterward.
 
 ## Services in Explorer
 

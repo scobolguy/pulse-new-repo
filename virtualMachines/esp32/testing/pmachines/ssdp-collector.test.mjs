@@ -201,13 +201,24 @@ test('JavaScript HTTP installer loads three signed daemons and rejects replaceme
   assert.equal(before.daemonDiagnostics.length, 3);
   const additional = await install({
     collectorId: 'additional-one', additional: 'true', httpPort: '0', udpPort: '0',
-    daemons: JSON.stringify([{ file: '/unit1.pcode', map: '/unit1.map.json' }])
+    daemons: JSON.stringify([{ file: '/unit1.pcode', map: '/unit1.map.json', udpPort: 0, udpBindAddress: '127.0.0.2' }])
   });
   const additionalText = await additional.text();
   assert.equal(additional.status, 200, additionalText);
   const additionalStatus = JSON.parse(additionalText);
   assert.equal(additionalStatus.collectorId, 'additional-one');
   assert.ok(Number.isInteger(additionalStatus.httpPort));
+  const intake = dgram.createSocket('udp4');
+  t.after(() => new Promise(resolve => intake.close(resolve)));
+  await new Promise((resolve, reject) => intake.send(Buffer.from('{}'),
+    additionalStatus.daemonDiagnostics[0].udpPort, '127.0.0.2', error => error ? reject(error) : resolve()));
+  let observed = 0;
+  for (let attempt = 0; attempt < 100 && !observed; attempt++) {
+    const status = await (await fetch(`${origin}/pmachine/service_host/status?collectorId=additional-one`)).json();
+    observed = status.daemonDiagnostics[0].udpEvents;
+    if (!observed) await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.equal(observed, 1, 'Installer preserves the requested UDP bind independently of the HTTP loopback host');
   const registry = await (await fetch(`${origin}/api/services`)).json();
   assert.equal(registry.nodeId, 'ssdp-installer-proof');
   assert.ok(registry.services.some(item => item.serviceId === 'pmachine' && item.kind === 'runtime'));

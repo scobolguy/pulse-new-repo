@@ -54,6 +54,13 @@ const tuyaKey = createHash('md5').update('yGAdlopoPVldABfn').digest();
 const crc = createNetworkBindings()['host.bytes_crc32'];
 function tuyaPacket(kind, id) {
   const json = Buffer.from(JSON.stringify({ gwId: id, ip: '192.168.2.99', version: '3.3' }));
+  if (kind === 'plain') {
+    const header = Buffer.alloc(20);
+    header.writeUInt32BE(0x55aa, 0);
+    header.writeUInt32BE(json.length + 12, 12);
+    const frame = Buffer.concat([header, json]);
+    return Buffer.concat([frame, Buffer.from(crc(frame.toString('hex')), 'hex'), Buffer.from('0000aa55', 'hex')]);
+  }
   if (kind === 'ecb') {
     const cipher = createCipheriv('aes-128-ecb', tuyaKey, null);
     const encrypted = Buffer.concat([cipher.update(json), cipher.final()]);
@@ -136,7 +143,9 @@ test('service returns every one of 50 cached names at the capacity boundary acro
     httpPort: null, udpPort: null, bindings: ttl, logger: silent });
   await host.start();
   t.after(() => host.stop());
-  await until(() => host.getStatus().daemonDiagnostics[0].timerRuns >= 80);
+  assert.equal(host.getStatus().daemonDiagnostics[0].failures, 0);
+  assert.equal(host.getStatus().daemonDiagnostics[0].timerRuns, 1,
+    'startup completes all 75 writes before the paged client reads the stable cache');
   const result = await names(host);
   assert.equal(result.status, 200);
   assert.equal(result.body.count, 50);
@@ -202,6 +211,22 @@ test('Kasa errors surface in diagnostics and keep the previous record until its 
   await until(() => /Program failure: Kasa get_sysinfo failed for 127\.0\.0\.2/.test(host.getStatus().daemonDiagnostics[0].lastError || ''));
   assert.deepEqual((await names(host)).body, { count: 1, names: ['Hall Light'] });
   assert.ok(host.getStatus().daemonDiagnostics[0].failures >= 2);
+});
+
+test('Tuya daemon decodes legacy plaintext UDP frames and rejects corrupt CRCs', async t => {
+  const host = await createPascalishServiceHost({ compiled: service, daemons: [{ compiled: tuya, udpPort: 0 }],
+    collectorId: 'tuya-plain', httpPort: null, udpPort: null, bindings: ttl, logger: silent });
+  await host.start();
+  t.after(() => host.stop());
+  const port = host.getStatus().daemonDiagnostics[0].udpPort;
+  const frame = tuyaPacket('plain', 'legacy-1829c1');
+  await sendUdp(t, port, frame);
+  await until(() => host.getStatus().daemonDiagnostics[0].udpEvents === 1);
+  assert.deepEqual((await names(host)).body, { count: 1, names: ['Tuya 1829c1'] });
+  frame[frame.length - 8] ^= 1;
+  await sendUdp(t, port, frame);
+  await until(() => host.getStatus().daemonDiagnostics[0].failures === 1);
+  assert.deepEqual((await names(host)).body, { count: 1, names: ['Tuya 1829c1'] });
 });
 
 test('Tuya daemon UDP intake rejects invalid frames visibly and drops oversized datagrams', async t => {

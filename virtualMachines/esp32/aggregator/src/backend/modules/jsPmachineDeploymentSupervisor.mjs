@@ -40,6 +40,11 @@ export function createJsPmachineDeploymentSupervisor({ runnerPath = path.resolve
   async function start(deployment) {
     const key = deploymentKey(deployment);
     if (processes.has(key)) return setState(deployment, { state: 'running', mode: 'poll', reused: true });
+    const requestedState = deployment?.runtimeState
+      || (deployment?.metadata?.startup === false ? 'stopped' : 'running');
+    if (requestedState !== 'running') {
+      return setState(deployment, { state: requestedState, mode: 'not-started' });
+    }
     const kind = normalizeKind(deployment?.workloadKind);
     const artifacts = await artifactPaths(deployment);
     if (!artifacts.ready) return setState(deployment, { state: 'pending-artifacts', mode: kind === 'program' ? 'one-shot' : 'poll', artifacts });

@@ -43,9 +43,64 @@ function languageForFile(filePath: string): string {
     case '.vb':
     case '.vbs':
       return 'vbish';
+    case '.wfl':
+      return 'wfl';
     default:
       return 'pascalish';
   }
+}
+
+type WflCompileOptions = { environment?: string; variables?: Record<string, string> };
+
+function normalizeWflDefines(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, String(item)]);
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
+function wflCompileOptions(scope?: vscode.Uri, overrides: { environment?: unknown; defines?: unknown } = {}): WflCompileOptions {
+  const settings = vscode.workspace.getConfiguration('pulse-pmachine', scope);
+  const environment = String(overrides.environment ?? settings.get<string>('wfl.environment', '') ?? '').trim();
+  const variables = {
+    ...(normalizeWflDefines(settings.get('wfl.defines')) || {}),
+    ...(normalizeWflDefines(overrides.defines) || {}),
+  };
+  return {
+    ...(environment ? { environment } : {}),
+    ...(Object.keys(variables).length ? { variables } : {}),
+  };
+}
+
+async function compileWflSource(root: string, sourceText: string, fileName: string, options: WflCompileOptions = {}) {
+  const scripts = path.join(root, 'aggregator', 'scripts');
+  const [dslCompiler, pcodeCompiler] = await Promise.all([
+    import(pathToFileURL(path.join(scripts, 'compile-workflow-dsl.mjs')).href),
+    import(pathToFileURL(path.join(scripts, 'compile-workflow-to-pcode.mjs')).href),
+  ]);
+  const workflowSet = dslCompiler.compileWorkflowDSL(sourceText, options);
+  const workflow = workflowSet.workflows?.[0];
+  if (!workflow) {
+    if (workflowSet.deployments?.length) {
+      throw new Error('This WFL file describes a deployment, not a single program. Use Pulse: Open WFL Deployment Editor to build/deploy its VFL nodes, or debug a node source file.');
+    }
+    throw new Error(workflowSet.flows?.length
+      ? 'This WFL file only has a FLOW block. Add a WORKFLOW block to run or debug it.'
+      : 'No workflow found to compile.');
+  }
+  const artifact = pcodeCompiler.compileWorkflowToPcode(workflowSet, workflow.id, { sourceText, fileName });
+  return {
+    environment: String(workflowSet.configuration?.environment || ''),
+    entryLine: Number(artifact.sourceMap?.['0']?.sourceLine) || Number(workflow.sourceLine) || 1,
+    pcodeText: artifact.pcodeText as string,
+    programMap: {
+      version: 1,
+      serviceId: `wfl-${workflow.id}`,
+      sourceLanguage: 'wfl',
+      runtimeUnit: { kind: 'program', id: workflow.id, refreshMs: null },
+      entries: [],
+      sourceMap: artifact.sourceMap || {},
+    } as Record<string, any>,
+  };
 }
 
 function findProgramEntryLine(source: string): number {
@@ -280,21 +335,33 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
       source = source.replace(/diskCount\s*:=\s*\d+/i, `diskCount := ${Number(configuration.esp32DiskCount)}`);
     }
     const language = languageForFile(program);
-    const compilerPath = pathToFileURL(path.join(this.root, 'aggregator', 'scripts', language === 'pascalish'
-      ? 'compile-pascalish-program-antlr-to-pcode.mjs'
-      : 'compile-interoperable-language.mjs')).href;
     const debuggerPath = pathToFileURL(path.join(this.root, 'aggregator', 'src', 'backend', 'modules', 'javascriptPmachineDebugger.mjs')).href;
-    const compiler = await import(compilerPath);
     this.debug = await import(debuggerPath);
-    const compile = language === 'pascalish'
-      ? compiler.compilePascalishProgramWithAntlr
-      : language === 'cobolish' ? compiler.compileCobolishToPmachine : compiler.compileVbishToPmachine;
-    const artifact = compile(source, { fileName: path.basename(program) });
+    let artifact: any;
+    let wflEntryLine = 0;
+    if (language === 'wfl') {
+      const wfl = await compileWflSource(this.root, source, path.basename(program), wflCompileOptions(vscode.Uri.file(program), {
+        environment: configuration.environment,
+        defines: configuration.defines,
+      }));
+      artifact = wfl;
+      wflEntryLine = wfl.entryLine;
+      this.event('output', { category: 'console', output: `WFL environment: ${wfl.environment}\n` });
+    } else {
+      const compilerPath = pathToFileURL(path.join(this.root, 'aggregator', 'scripts', language === 'pascalish'
+        ? 'compile-pascalish-program-antlr-to-pcode.mjs'
+        : 'compile-interoperable-language.mjs')).href;
+      const compiler = await import(compilerPath);
+      const compile = language === 'pascalish'
+        ? compiler.compilePascalishProgramWithAntlr
+        : language === 'cobolish' ? compiler.compileCobolishToPmachine : compiler.compileVbishToPmachine;
+      artifact = compile(source, { fileName: path.basename(program) });
+    }
     this.runtime = { program, language, artifact };
     this.animate = configuration.animate === true;
     this.animationDelayMs = Math.max(50, Number(configuration.animationDelayMs) || 1000);
     this.remoteEsp32 = isRemoteRuntime(configuration.runtime);
-    this.entryLine = Number(configuration.breakpointLine) || findProgramEntryLine(source);
+    this.entryLine = Number(configuration.breakpointLine) || wflEntryLine || findProgramEntryLine(source);
     this.event('output', { category: 'console', output: `Program entry at source line ${this.entryLine}.\n` });
     this.send({ type: 'event', seq: 0, event: 'pulseLaunch', body: {
       program,
@@ -990,25 +1057,8 @@ async function compileDocumentToPcode(document: vscode.TextDocument, hostService
   }
 
   if (language === 'wfl') {
-    const [dslCompiler, pcodeCompiler] = await Promise.all([
-      import(pathToFileURL(path.join(scripts, 'compile-workflow-dsl.mjs')).href),
-      import(pathToFileURL(path.join(scripts, 'compile-workflow-to-pcode.mjs')).href),
-    ]);
-    const workflowSet = dslCompiler.compileWorkflowDSL(sourceText);
-    const workflow = workflowSet.workflows?.[0];
-    if (!workflow) throw new Error('No workflow found to compile.');
-    const artifact = pcodeCompiler.compileWorkflowToPcode(workflowSet, workflow.id, { sourceText, fileName });
-    return {
-      pcodeText: artifact.pcodeText,
-      programMap: {
-        version: 1,
-        serviceId: `wfl-${workflow.id}`,
-        sourceLanguage: 'wfl',
-        runtimeUnit: { kind: 'program', id: workflow.id, refreshMs: null },
-        entries: [],
-        sourceMap: artifact.sourceMap || {},
-      },
-    };
+    const artifact = await compileWflSource(root, sourceText, fileName, wflCompileOptions(document.uri));
+    return { pcodeText: artifact.pcodeText, programMap: artifact.programMap };
   }
 
   const compiler = await import(pathToFileURL(path.join(scripts, 'compile-mapl-antlr-to-pcode.mjs')).href);

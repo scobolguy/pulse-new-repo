@@ -30,8 +30,6 @@ export function createHomeAutomationService({
   pythonPath = process.env.HOME_AUTOMATION_PYTHON || path.resolve(WORKSPACE_ROOT, '.venv', 'Scripts', 'python.exe'),
   kasaBridgePath = path.resolve(AGGREGATOR_ROOT, 'scripts', 'kasa_bridge.py'),
   sharkBridgePath = path.resolve(AGGREGATOR_ROOT, 'scripts', 'shark_bridge.py'),
-  bluetoothGateways = String(process.env.HOME_AUTOMATION_BLUETOOTH_GATEWAYS || '192.168.2.157')
-    .split(',').map((v) => v.trim()).filter(Boolean)
 } = {}) {
   const devices = new Map();
   let credentials = {};
@@ -58,7 +56,7 @@ export function createHomeAutomationService({
   const tplink    = createTpLinkDriver({ devices });
   const kasa      = createKasaDriver({ devices, pythonPath, kasaBridgePath });
   const tuya      = createTuyaDriver({ devices, credentials, saveCredentials });
-  const bluetooth = createBluetoothDriver({ devices, bluetoothGateways });
+  const bluetooth = createBluetoothDriver({ devices, backendPort });
   const shark     = createSharkDriver({ devices, credentials, saveCredentials, pythonPath, sharkBridgePath });
   const alexa     = createAlexaDriver({ devices, cookiePath: alexaCookiePath });
   const upnp      = createUpnpDriver({ devices, discoveryTimeoutMs });

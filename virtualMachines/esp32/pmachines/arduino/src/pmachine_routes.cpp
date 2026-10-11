@@ -604,6 +604,7 @@ struct ProgramMapMetadata {
     uint32_t runtimeRefreshMs = 0;
     bool hasCodeLibrarianRole = false;
     bool hasLibraryBindings = false;
+    std::vector<pmachine::ExtendableDeclaration> extendableDeclarations;
     JsonDocument raw;
 };
 
@@ -1012,6 +1013,11 @@ void applyRuntimeAndResidencyPolicy(
         std::string(runtimeId.c_str()),
         refreshMs
     );
+    machine.setExtendableDeclarations(
+        metadata != nullptr
+            ? metadata->extendableDeclarations
+            : std::vector<pmachine::ExtendableDeclaration>{}
+    );
 
     machine.clearEnumTypes();
     if (metadata != nullptr && metadata->raw["enums"].is<JsonObjectConst>()) {
@@ -1082,6 +1088,18 @@ void parseProgramMapMetadata(const JsonDocument& doc, ProgramMapMetadata& metada
 
     metadata.hasCodeLibrarianRole = jsonArrayContainsCodeLibrarian(doc["roles"]);
     metadata.hasLibraryBindings = jsonArrayHasAnyEntries(doc["codeLibraries"]) || jsonArrayHasAnyEntries(doc["uses"]);
+    metadata.extendableDeclarations.clear();
+    if (doc["extendableDeclarations"].is<JsonArrayConst>()) {
+        for (JsonObjectConst declaration : doc["extendableDeclarations"].as<JsonArrayConst>()) {
+            const String name = trimCopy(String(declaration["name"] | ""));
+            const uint32_t elementCount = declaration["elementCount"] | 1;
+            if (name.length() == 0 || elementCount == 0) continue;
+            pmachine::ExtendableDeclaration extendableDeclaration;
+            extendableDeclaration.name = name.c_str();
+            extendableDeclaration.elementCount = static_cast<size_t>(elementCount);
+            metadata.extendableDeclarations.push_back(std::move(extendableDeclaration));
+        }
+    }
 
     metadata.raw.clear();
     JsonObject raw = metadata.raw.to<JsonObject>();
@@ -1090,6 +1108,7 @@ void parseProgramMapMetadata(const JsonDocument& doc, ProgramMapMetadata& metada
     raw["runtimeRefreshMs"] = metadata.runtimeRefreshMs;
     raw["hasCodeLibrarianRole"] = metadata.hasCodeLibrarianRole;
     raw["hasLibraryBindings"] = metadata.hasLibraryBindings;
+    raw["extendableDeclarations"] = doc["extendableDeclarations"];
     if (doc["roles"].is<JsonArrayConst>()) raw["roles"] = doc["roles"];
     if (doc["codeLibraries"].is<JsonArrayConst>()) raw["codeLibraries"] = doc["codeLibraries"];
     if (doc["uses"].is<JsonArrayConst>()) raw["uses"] = doc["uses"];
@@ -1562,6 +1581,7 @@ bool deserializeProgramMapForExec(const String& path, FederatedFileSystem* ffs, 
     filter["globals"] = true;
     filter["procedures"] = true;
     filter["variableDeclarations"] = true;
+    filter["extendableDeclarations"] = true;
     filter["roles"] = true;
     filter["codeLibraries"] = true;
     filter["uses"] = true;
@@ -3939,15 +3959,19 @@ void registerPMachineRoutes(
                         PROFILE_PCODE_SIGNING_KEY, PROFILE_PCODE_SIGNING_KEY_ID, unit, validation)) {
                     error = ffs ? validation.c_str() : "FFS unavailable"; return false;
                 }
-                return true;
+            } else {
+                if (!readTextFromPath(file, ffs, pcode) || pcode.length() > 8192) {
+                    error = "Unable to load bounded hosted artifact"; return false;
+                }
+                if (!verifySignedPcode(pcode, map, error)) return false;
+                std::string validation;
+                if (!pmachine::ServiceHost::parseUnit(pcode.c_str(), map, kind, unit, validation)) {
+                    error = validation.c_str(); return false;
+                }
             }
-            if (!readTextFromPath(file, ffs, pcode) || pcode.length() > 8192) {
-                error = "Unable to load bounded hosted artifact"; return false;
-            }
-            if (!verifySignedPcode(pcode, map, error)) return false;
-            std::string validation;
-            if (!pmachine::ServiceHost::parseUnit(pcode.c_str(), map, kind, unit, validation)) {
-                error = validation.c_str(); return false;
+            String mappingError;
+            if (!loadProgramMapMappingsFromDoc(map, unit.mappings, nullptr, mappingError)) {
+                error = mappingError.c_str(); return false;
             }
             return true;
         };

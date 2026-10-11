@@ -6,6 +6,44 @@ This workspace contains three distinct surfaces that are currently developed tog
 - The Aggregator control plane, UI, DSL tooling, and local orchestration in `aggregator/`
 - Design and handoff documentation in `documents/`, `RUNBOOK.md`, and this file
 
+## Standalone ESP32-S3-N16R8 Firmware
+
+Use the `esp32_s3_n16r8` environment in [platformio.ini](platformio.ini) for a
+standalone ESP32-S3 development board with 16 MB flash and 8 MB octal PSRAM.
+This profile inherits the general-purpose firmware without enabling a display.
+The `esp32_jc4827e543` profile is for a display board, not a standalone N16R8 module.
+
+In PlatformIO Project Tasks, select `esp32_s3_n16r8` > General > Upload.
+Select the board's current serial port; it may change when entering download mode.
+The inherited `huge_app.csv` partition layout uses only part of the 16 MB flash.
+On first boot, missing saved configuration files or NVS namespaces can indicate
+unprovisioned settings. Repeated watchdog resets are not normal first-boot behavior.
+
+## Rebuilding Generated Files
+
+Source-only checkpoints do not include local parser output, extension output,
+VSIX packages, build caches, or runtime/device state. After checking out changes
+to the DSL grammars, regenerate the JavaScript parsers before running compiler
+tests or starting the Aggregator. This requires Java and the ANTLR 4.13.2 JAR at
+`aggregator/tools/antlr-4.13.2-complete.jar`.
+
+From this workspace directory, with the declared Node dependencies installed:
+
+```powershell
+Push-Location aggregator
+npm run antlr:generate
+Pop-Location
+Push-Location extensions\pulse-pmachine-debugger
+npm run compile
+Pop-Location
+```
+
+Use Python 3.12 for PlatformIO builds on this Windows development machine:
+
+```powershell
+py -3.12 -m platformio run -e esp32_s3_n16r8
+```
+
 ## Current Architecture
 
 - Firmware/runtime:

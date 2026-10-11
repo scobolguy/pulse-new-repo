@@ -11,16 +11,19 @@ const root = new URL('../../', import.meta.url);
 export async function installNetworkCollectors({
   origin: target = 'http://127.0.0.1:4111',
   config,
+  collectorSuffix = '',
   fetchImpl = fetch, logger = console
 } = {}) {
+if (!/^[a-zA-Z0-9_-]{0,24}$/.test(collectorSuffix)) throw new Error('Invalid collector suffix');
 config ??= JSON.parse(await fs.readFile(new URL('config/federated-device-cache.json', root), 'utf8'));
 const origin = new URL(target);
 if (!['http:', 'https:'].includes(origin.protocol) || origin.pathname !== '/' || origin.search || origin.hash) {
   throw new Error('JS PMachine URL must be an HTTP(S) origin');
 }
 const peers = config.kasaPeers;
-if (!Array.isArray(peers) || peers.length !== 2 || peers.some(ip => net.isIP(ip) !== 4)) {
-  throw new Error('Kasa configuration must contain two literal IPv4 peers');
+if (!Array.isArray(peers) || peers.length < 1 || peers.length > 8 ||
+    new Set(peers).size !== peers.length || peers.some(ip => net.isIP(ip) !== 4)) {
+  throw new Error('Kasa configuration must contain 1..8 distinct literal IPv4 peers');
 }
 const interfaces = Object.values(os.networkInterfaces()).flat().filter(item => item.family === 'IPv4' && !item.internal);
 const esp32 = new URL(config.esp32Origin);
@@ -37,6 +40,9 @@ const httpPorts = {
   ssdp: config.ssdpHttpPort
 };
 const udpPorts = { tuya: config.tuyaUdpPort, ssdp: config.ssdpUdpPort };
+const tuyaLegacyUdpPort = config.tuyaLegacyUdpPort ?? 6666;
+if (!Number.isInteger(tuyaLegacyUdpPort) || tuyaLegacyUdpPort < 1 || tuyaLegacyUdpPort > 65535 ||
+    Object.values(udpPorts).includes(tuyaLegacyUdpPort)) throw new Error('Invalid or duplicate legacy Tuya UDP port');
 for (const [protocol, port] of Object.entries(httpPorts)) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`Invalid ${protocol} HTTP port`);
 }
@@ -78,25 +84,29 @@ try {
   const definitions = [];
   const kasaPath = sourcePath('kasa-collector-daemon.pas');
   let kasaSource = await fs.readFile(kasaPath, 'utf8');
-  for (const [ip, placeholder] of peers.map((ip, index) => [ip, `192.168.2.${28 + index}`])) {
-    const marker = `'${placeholder}'`;
-    if (!kasaSource.includes(marker)) throw new Error(`Kasa daemon is missing peer placeholder ${placeholder}`);
-    kasaSource = kasaSource.replaceAll(marker, `'${ip}'`);
-  }
+  const selection = "address := '192.168.2.28';\n  if turn - (turn / 2) * 2 = 1 then address := '192.168.2.29';";
+  if (!kasaSource.includes(selection)) throw new Error('Kasa daemon is missing peer selection template');
+  kasaSource = kasaSource.replace(selection, [
+    `address := '${peers[0]}';`,
+    ...peers.slice(1).map((ip, index) =>
+      `  if turn - (turn / ${peers.length}) * ${peers.length} = ${index + 1} then address := '${ip}';`)
+  ].join('\n'));
+  // Keep every peer fresh within the 180-second observation TTL, even with eight peers.
+  kasaSource = kasaSource.replace('refresh 30000 ms', `refresh ${Math.min(30000, Math.floor(90000 / peers.length))} ms`);
   definitions.push({
-    id: 'kasa-js',
+    id: `kasa-js${collectorSuffix}`,
     port: httpPorts.kasa,
     networkPeers: JSON.stringify(peers.map(ip => ({ ip, port: 9999 }))),
     daemon: signed(await compileSource('kasa-collector-daemon.pas', kasaSource))
   });
   for (const protocol of ['tuya', 'ssdp']) {
     definitions.push({
-      id: `${protocol}-js`,
+      id: `${protocol}-js${collectorSuffix}`,
       port: httpPorts[protocol],
       daemon: signed(await compileSource(`${protocol}-collector-daemon.pas`)),
       udpPort: udpPorts[protocol],
+      udpShared: true,
       ...(protocol === 'ssdp' ? {
-        udpShared: true,
         multicastGroup: '239.255.255.250',
         multicastInterface: lanInterface
       } : {})
@@ -119,11 +129,20 @@ try {
       map: daemonFiles.map,
       ...(definition.udpPort ? {
         udpPort: definition.udpPort,
+        udpBindAddress: '0.0.0.0',
         ...(definition.udpShared ? { udpShared: true } : {}),
         ...(definition.multicastGroup ? { multicastGroup: definition.multicastGroup } : {}),
         ...(definition.multicastInterface ? { multicastInterface: definition.multicastInterface } : {})
       } : {})
     };
+    const daemons = [daemon];
+    if (definition.id === `tuya-js${collectorSuffix}`) {
+      const legacySource = (await fs.readFile(sourcePath('tuya-collector-daemon.pas'), 'utf8'))
+        .replace("daemon 'tuya-collector'", "daemon 'tuya-legacy-collector'");
+      const legacy = await upload('tuya-legacy-js', signed(await compileSource('tuya-collector-daemon.pas', legacySource)));
+      daemons.push({ file: legacy.file, map: legacy.map, udpPort: tuyaLegacyUdpPort,
+        udpBindAddress: '0.0.0.0', udpShared: true });
+    }
     const status = JSON.parse(await request('/pmachine/service_host/install', {
       serviceFile: serviceFiles.file,
       serviceMap: serviceFiles.map,
@@ -132,7 +151,7 @@ try {
       httpPort: String(definition.port),
       udpPort: '0',
       observationTtlMs: '180000',
-      daemons: JSON.stringify([daemon]),
+      daemons: JSON.stringify(daemons),
       ...(definition.networkPeers ? { networkPeers: definition.networkPeers } : {})
     }));
     if (status.collectorId !== definition.id || status.running !== true) {

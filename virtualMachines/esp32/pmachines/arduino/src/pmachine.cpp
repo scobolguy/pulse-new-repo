@@ -3,7 +3,11 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <cstring>
+#include <limits>
+#include <new>
 #include <set>
+#include <cstdlib>
 #if defined(ARDUINO)
 #include <Arduino.h>
 #endif
@@ -15,6 +19,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <esp_task_wdt.h>
+#include <esp_heap_caps.h>
 #endif
 
 namespace pmachine {
@@ -22,6 +27,134 @@ namespace pmachine {
 
 PMachine::PMachine() {
     init_handler_table();
+}
+
+PMachine::~PMachine() {
+    releaseExtendableStorage();
+}
+
+namespace {
+    std::string indexedArrayName(const std::string& base, int index) {
+        std::string name = base;
+        const size_t placeholder = name.find("{}");
+        if (placeholder == std::string::npos) return name + "_" + std::to_string(index);
+        name.replace(placeholder, 2, std::to_string(index));
+        return name;
+    }
+
+    void* allocateRam(size_t bytes, bool& usesPsram) {
+#if defined(ESP32) && !defined(PLATFORM_RPIB)
+        void* allocation = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (allocation != nullptr) {
+            usesPsram = true;
+            return allocation;
+        }
+#endif
+        usesPsram = false;
+        return std::malloc(bytes);
+    }
+
+    void freeRam(void* allocation, bool usesPsram) {
+        if (allocation == nullptr) return;
+#if defined(ESP32) && !defined(PLATFORM_RPIB)
+        if (usesPsram) {
+            heap_caps_free(allocation);
+            return;
+        }
+#else
+        (void)usesPsram;
+#endif
+        std::free(allocation);
+    }
+
+    std::string normalizeVariableName(const std::string& name) {
+        const size_t first = name.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos) return "";
+        const size_t last = name.find_last_not_of(" \t\r\n");
+        std::string normalized = name.substr(first, last - first + 1);
+        std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return normalized;
+    }
+}
+
+void PMachine::releaseExtendableStorage() {
+    for (auto& variable : extendableStorage) {
+        if (variable.slots != nullptr) {
+            for (size_t i = 0; i < variable.elementCount; ++i) {
+                freeRam(variable.slots[i].stringData, variable.slots[i].stringUsesPsram);
+                variable.slots[i].stringData = nullptr;
+                variable.slots[i].~ExtendableValueSlot();
+            }
+            freeRam(variable.slots, variable.usesPsram);
+            variable.slots = nullptr;
+            variable.elementCount = 0;
+        }
+    }
+    extendableStorage.clear();
+}
+
+void PMachine::setExtendableDeclarations(const std::vector<ExtendableDeclaration>& declarations) {
+    extendedAllocationError.clear();
+    bool unchanged = declarations.size() == extendableStorage.size();
+    if (unchanged) {
+        for (size_t i = 0; i < declarations.size(); ++i) {
+            if (normalizeVariableName(declarations[i].name) != normalizeVariableName(extendableStorage[i].name) ||
+                declarations[i].elementCount != extendableStorage[i].elementCount) {
+                unchanged = false;
+                break;
+            }
+        }
+    }
+    if (unchanged) return;
+
+    std::vector<ExtendableStorage> prepared;
+    prepared.reserve(declarations.size());
+
+    for (const auto& declaration : declarations) {
+        const std::string normalizedName = normalizeVariableName(declaration.name);
+        const size_t first = declaration.name.find_first_not_of(" \t\r\n");
+        const size_t last = declaration.name.find_last_not_of(" \t\r\n");
+        const std::string name = first == std::string::npos
+            ? std::string()
+            : declaration.name.substr(first, last - first + 1);
+        if (normalizedName.empty() || declaration.elementCount == 0 ||
+            declaration.elementCount > std::numeric_limits<size_t>::max() / sizeof(ExtendableValueSlot)) {
+            extendedAllocationError = "invalid extendable declaration";
+            break;
+        }
+
+        ExtendableStorage storage;
+        storage.name = name;
+        storage.elementCount = declaration.elementCount;
+        storage.slots = static_cast<ExtendableValueSlot*>(
+            allocateRam(storage.elementCount * sizeof(ExtendableValueSlot), storage.usesPsram));
+        if (storage.slots == nullptr) {
+            extendedAllocationError = std::string("unable to allocate extended-memory variable: ") + name;
+            break;
+        }
+
+        for (size_t i = 0; i < storage.elementCount; ++i) {
+            new (&storage.slots[i]) ExtendableValueSlot();
+        }
+        prepared.push_back(std::move(storage));
+    }
+
+    if (!extendedAllocationError.empty()) {
+        for (auto& variable : prepared) {
+            if (variable.slots == nullptr) continue;
+            for (size_t i = 0; i < variable.elementCount; ++i) {
+                freeRam(variable.slots[i].stringData, variable.slots[i].stringUsesPsram);
+                variable.slots[i].~ExtendableValueSlot();
+            }
+            freeRam(variable.slots, variable.usesPsram);
+        }
+        return;
+    }
+
+    releaseExtendableStorage();
+    extendableStorage = std::move(prepared);
 }
 // Handler implementations for core opcodes
 namespace {
@@ -935,6 +1068,10 @@ const MappingDef* PMachine::getMappingById(const std::string& mappingId) const {
     if (it == mappingDefs.end()) return nullptr;
     return &(it->second);
 }
+bool PMachine::applyMappingById(const std::string& mappingId, const std::string& sourcePayload,
+                                std::string& mappedPayload, std::string& error) const {
+    return runMappingById(*this, mappingId, sourcePayload, mappedPayload, error);
+}
 int PMachine::openFile(const String& logicalName, const String& mode) {
     return ffs == nullptr ? -1 : ffs->openFile(logicalName, mode);
 }
@@ -1116,6 +1253,8 @@ bool PMachine::unloadUnit() {
     namedStringVariables.clear();
     namedRealVariables.clear();
     namedEnumVariables.clear();
+    releaseExtendableStorage();
+    extendedAllocationError.clear();
     clearProcedureSignatures();
     std::string().swap(currentInputQueue);
     std::string().swap(currentMessage);
@@ -1795,6 +1934,15 @@ void PMachine::runInstructions(size_t instructionCount,
         return 0;
     };
 
+    auto hasNameBinding = [&](const std::string& key) -> bool {
+        for (auto it = nameFrames.rbegin(); it != nameFrames.rend(); ++it) {
+            for (auto binding = it->rbegin(); binding != it->rend(); ++binding) {
+                if (binding->first == key) return true;
+            }
+        }
+        return false;
+    };
+
     auto assignName = [&](const std::string& key, int value) {
         for (auto it = nameFrames.rbegin(); it != nameFrames.rend(); ++it) {
             for (auto binding = it->rbegin(); binding != it->rend(); ++binding) {
@@ -1806,6 +1954,71 @@ void PMachine::runInstructions(size_t instructionCount,
         }
         if (nameFrames.empty()) nameFrames.emplace_back();
         nameFrames.back().emplace_back(key, value);
+    };
+
+    auto extendedSlot = [&](const std::string& key, size_t explicitIndex = std::numeric_limits<size_t>::max())
+        -> ExtendableValueSlot* {
+        const std::string normalized = normalizeVariableName(key);
+        for (auto& variable : extendableStorage) {
+            if (normalizeVariableName(variable.name) == normalized &&
+                (explicitIndex == std::numeric_limits<size_t>::max() || explicitIndex < variable.elementCount)) {
+                return &variable.slots[
+                    explicitIndex == std::numeric_limits<size_t>::max() ? 0 : explicitIndex
+                ];
+            }
+        }
+        for (auto& variable : extendableStorage) {
+            const std::string variableName = normalizeVariableName(variable.name);
+            size_t index = std::numeric_limits<size_t>::max();
+            if (explicitIndex == std::numeric_limits<size_t>::max() &&
+                       normalized.size() > variableName.size() + 1 &&
+                       normalized.compare(0, variableName.size(), variableName) == 0 &&
+                       normalized[variableName.size()] == '_') {
+                const std::string suffix = normalized.substr(variableName.size() + 1);
+                char* end = nullptr;
+                const unsigned long parsed = std::strtoul(suffix.c_str(), &end, 10);
+                if (end != suffix.c_str() && end != nullptr && *end == '\0' &&
+                    parsed <= std::numeric_limits<size_t>::max()) {
+                    index = static_cast<size_t>(parsed);
+                }
+            } else continue;
+            if (index < variable.elementCount) return &variable.slots[index];
+        }
+        return nullptr;
+    };
+
+    auto storeExtendedString = [&](ExtendableValueSlot& slot, const std::string& text) -> bool {
+        bool usesPsram = false;
+        char* copy = static_cast<char*>(allocateRam(text.size() + 1, usesPsram));
+        if (copy == nullptr) return false;
+        if (!text.empty()) std::memcpy(copy, text.data(), text.size());
+        copy[text.size()] = '\0';
+        freeRam(slot.stringData, slot.stringUsesPsram);
+        slot.stringData = copy;
+        slot.stringLength = text.size();
+        slot.stringUsesPsram = usesPsram;
+        slot.value = Value::makeString(0);
+        return true;
+    };
+
+    auto storeExtendedValue = [&](ExtendableValueSlot& slot, const Value& value) -> bool {
+        if (value.isString()) return storeExtendedString(slot, stringAt(value));
+        freeRam(slot.stringData, slot.stringUsesPsram);
+        slot.stringData = nullptr;
+        slot.stringLength = 0;
+        slot.stringUsesPsram = false;
+        slot.value = value;
+        return true;
+    };
+
+    auto pushExtendedValue = [&](const ExtendableValueSlot& slot) {
+        if (slot.stringData != nullptr) {
+            pushString(std::string(slot.stringData, slot.stringLength));
+        } else if (sp < STACK_SIZE) {
+            stack[sp++] = slot.value;
+        } else {
+            gFlowState["__runtime_error"] = "stack overflow";
+        }
     };
 
     auto resolveIntToken = [&](const std::string& token) -> int {
@@ -1911,6 +2124,10 @@ void PMachine::runInstructions(size_t instructionCount,
     this->pc = 0;
     PMTRACE(Serial.println("[DEBUG] Executing pinstructions:"));
     int resumedPc = -1;
+    if (!extendedAllocationError.empty()) {
+        gFlowState["__runtime_error"] = extendedAllocationError;
+        goto pmachineRunExit;
+    }
     while (pc < (int)instructionCount) {
         if (hostCallHook && gFlowState.count("__runtime_error")) break;
         if (hostCallHook && (sp < 0 || sp > std::min(STACK_SIZE, 256) || stringPool.size() > 512
@@ -2249,9 +2466,17 @@ void PMachine::runInstructions(size_t instructionCount,
             const std::string varName = instr.strOperand;
             if (hostCallHook) {
                 Value value = 0;
+                bool foundValue = false;
                 for (auto frame = hostedFrames.rbegin(); frame != hostedFrames.rend(); ++frame) {
                     auto found = frame->find(varName);
-                    if (found != frame->end()) { value = found->second; break; }
+                    if (found != frame->end()) { value = found->second; foundValue = true; break; }
+                }
+                if (!foundValue) {
+                    if (ExtendableValueSlot* slot = extendedSlot(varName)) {
+                        pushExtendedValue(*slot);
+                        ++pc;
+                        continue;
+                    }
                 }
                 if (sp >= STACK_SIZE) {
                     gFlowState["__runtime_error"] = "stack overflow";
@@ -2260,6 +2485,13 @@ void PMachine::runInstructions(size_t instructionCount,
                 stack[sp++] = value;
                 ++pc;
                 continue;
+            }
+            if (!hasNameBinding(varName)) {
+                if (ExtendableValueSlot* slot = extendedSlot(varName)) {
+                    pushExtendedValue(*slot);
+                    ++pc;
+                    continue;
+                }
             }
             // Dispatch on binding presence, not value emptiness, so "" stays a string.
             auto strBinding = namedStringVariables.find(varName);
@@ -2299,6 +2531,17 @@ void PMachine::runInstructions(size_t instructionCount,
         }
         case OP_STORE_NAME: {
             if (hostCallHook) {
+                if (sp > 0 && !hostedFrames.back().count(instr.strOperand)) {
+                    if (ExtendableValueSlot* slot = extendedSlot(instr.strOperand)) {
+                        const Value value = stack[--sp];
+                        if (!storeExtendedValue(*slot, value)) {
+                            gFlowState["__runtime_error"] = std::string("unable to allocate extendable value: ") + instr.strOperand;
+                            goto pmachineRunExit;
+                        }
+                        ++pc;
+                        continue;
+                    }
+                }
                 if (sp <= 0 || hostedFrames.back().size() >= 128) {
                     gFlowState["__runtime_error"] = "hosted variable capacity or stack underflow";
                     goto pmachineRunExit;
@@ -2306,6 +2549,24 @@ void PMachine::runInstructions(size_t instructionCount,
                 hostedFrames.back()[instr.strOperand] = stack[--sp];
                 ++pc;
                 continue;
+            }
+            if (!hasNameBinding(instr.strOperand)) {
+                if (ExtendableValueSlot* slot = extendedSlot(instr.strOperand)) {
+                    if (sp <= 0) {
+                        gFlowState["__runtime_error"] = "stack underflow storing extendable variable";
+                        goto pmachineRunExit;
+                    }
+                    const Value value = stack[--sp];
+                    if (!storeExtendedValue(*slot, value)) {
+                        gFlowState["__runtime_error"] = std::string("unable to allocate extendable value: ") + instr.strOperand;
+                        goto pmachineRunExit;
+                    }
+                    namedStringVariables.erase(instr.strOperand);
+                    namedRealVariables.erase(instr.strOperand);
+                    namedEnumVariables.erase(instr.strOperand);
+                    ++pc;
+                    continue;
+                }
             }
             // String stack wins, matching OP_PRINT precedence, so TRIM/FILE_READ results survive STORE.
             if (isStringAtDepth(1)) {
@@ -2328,19 +2589,18 @@ void PMachine::runInstructions(size_t instructionCount,
             continue;
         }
         case OP_ARR_GET: {
-            // Index arrives zero-based (compiler already subtracted the array's low
-            // bound); out-of-range reads yield 0 and record __arr_error, mirroring the
-            // divide-by-zero / unknown-enum "safe default" convention elsewhere.
             if (sp < 1) { ++pc; continue; }
             int idx = stack[--sp];
             if (idx < 0 || idx >= instr.intOperand) {
-                gFlowState["__arr_error"] = std::string("index out of range: ") + instr.strOperand + "[" + std::to_string(idx) + "]";
-                if (sp >= STACK_SIZE) goto pmachineRunExit;
-                stack[sp++] = 0;
+                gFlowState["__runtime_error"] = std::string("index out of range: ") + instr.strOperand + "[" + std::to_string(idx) + "]";
+                goto pmachineRunExit;
+            }
+            const std::string varName = indexedArrayName(instr.strOperand, idx);
+            if (ExtendableValueSlot* slot = extendedSlot(instr.strOperand, static_cast<size_t>(idx))) {
+                pushExtendedValue(*slot);
                 ++pc;
                 continue;
             }
-            const std::string varName = instr.strOperand + "_" + std::to_string(idx);
             auto strBinding = namedStringVariables.find(varName);
             if (strBinding != namedStringVariables.end()) {
                 pushString(strBinding->second);
@@ -2369,10 +2629,21 @@ void PMachine::runInstructions(size_t instructionCount,
                 if (sp < 1) { ++pc; continue; }
                 int idx = stack[--sp];
                 if (idx < 0 || idx >= instr.intOperand) {
-                    gFlowState["__arr_error"] = std::string("index out of range: ") + instr.strOperand + "[" + std::to_string(idx) + "]";
-                    ++pc; continue;
+                    gFlowState["__runtime_error"] = std::string("index out of range: ") + instr.strOperand + "[" + std::to_string(idx) + "]";
+                    goto pmachineRunExit;
                 }
-                const std::string varName = instr.strOperand + "_" + std::to_string(idx);
+                const std::string varName = indexedArrayName(instr.strOperand, idx);
+                if (ExtendableValueSlot* slot = extendedSlot(instr.strOperand, static_cast<size_t>(idx))) {
+                    if (!storeExtendedString(*slot, value)) {
+                        gFlowState["__runtime_error"] = std::string("unable to allocate extendable array value: ") + instr.strOperand;
+                        goto pmachineRunExit;
+                    }
+                    namedStringVariables.erase(varName);
+                    namedRealVariables.erase(varName);
+                    namedEnumVariables.erase(varName);
+                    ++pc;
+                    continue;
+                }
                 namedStringVariables[varName] = value;
                 namedRealVariables.erase(varName);
             } else if (sp > 0 && stack[sp - 1].isReal()) {
@@ -2380,10 +2651,21 @@ void PMachine::runInstructions(size_t instructionCount,
                 if (sp < 1) { ++pc; continue; }
                 int idx = stack[--sp];
                 if (idx < 0 || idx >= instr.intOperand) {
-                    gFlowState["__arr_error"] = std::string("index out of range: ") + instr.strOperand + "[" + std::to_string(idx) + "]";
-                    ++pc; continue;
+                    gFlowState["__runtime_error"] = std::string("index out of range: ") + instr.strOperand + "[" + std::to_string(idx) + "]";
+                    goto pmachineRunExit;
                 }
-                const std::string varName = instr.strOperand + "_" + std::to_string(idx);
+                const std::string varName = indexedArrayName(instr.strOperand, idx);
+                if (ExtendableValueSlot* slot = extendedSlot(instr.strOperand, static_cast<size_t>(idx))) {
+                    if (!storeExtendedValue(*slot, Value::makeReal(value))) {
+                        gFlowState["__runtime_error"] = std::string("unable to allocate extendable array value: ") + instr.strOperand;
+                        goto pmachineRunExit;
+                    }
+                    namedStringVariables.erase(varName);
+                    namedRealVariables.erase(varName);
+                    namedEnumVariables.erase(varName);
+                    ++pc;
+                    continue;
+                }
                 namedRealVariables[varName] = value;
                 namedStringVariables.erase(varName);
                 namedEnumVariables.erase(varName);
@@ -2392,10 +2674,21 @@ void PMachine::runInstructions(size_t instructionCount,
                 if (sp < 1) { ++pc; continue; }
                 int idx = stack[--sp];
                 if (idx < 0 || idx >= instr.intOperand) {
-                    gFlowState["__arr_error"] = std::string("index out of range: ") + instr.strOperand + "[" + std::to_string(idx) + "]";
-                    ++pc; continue;
+                    gFlowState["__runtime_error"] = std::string("index out of range: ") + instr.strOperand + "[" + std::to_string(idx) + "]";
+                    goto pmachineRunExit;
                 }
-                const std::string varName = instr.strOperand + "_" + std::to_string(idx);
+                const std::string varName = indexedArrayName(instr.strOperand, idx);
+                if (ExtendableValueSlot* slot = extendedSlot(instr.strOperand, static_cast<size_t>(idx))) {
+                    if (!storeExtendedValue(*slot, value)) {
+                        gFlowState["__runtime_error"] = std::string("unable to allocate extendable array value: ") + instr.strOperand;
+                        goto pmachineRunExit;
+                    }
+                    namedStringVariables.erase(varName);
+                    namedRealVariables.erase(varName);
+                    namedEnumVariables.erase(varName);
+                    ++pc;
+                    continue;
+                }
                 namedEnumVariables[varName] = value;
                 namedStringVariables.erase(varName);
                 namedRealVariables.erase(varName);
@@ -2404,10 +2697,21 @@ void PMachine::runInstructions(size_t instructionCount,
                 if (sp < 1) { ++pc; continue; }
                 int idx = stack[--sp];
                 if (idx < 0 || idx >= instr.intOperand) {
-                    gFlowState["__arr_error"] = std::string("index out of range: ") + instr.strOperand + "[" + std::to_string(idx) + "]";
-                    ++pc; continue;
+                    gFlowState["__runtime_error"] = std::string("index out of range: ") + instr.strOperand + "[" + std::to_string(idx) + "]";
+                    goto pmachineRunExit;
                 }
-                const std::string varName = instr.strOperand + "_" + std::to_string(idx);
+                const std::string varName = indexedArrayName(instr.strOperand, idx);
+                if (ExtendableValueSlot* slot = extendedSlot(instr.strOperand, static_cast<size_t>(idx))) {
+                    if (!storeExtendedValue(*slot, Value(value))) {
+                        gFlowState["__runtime_error"] = std::string("unable to allocate extendable array value: ") + instr.strOperand;
+                        goto pmachineRunExit;
+                    }
+                    namedStringVariables.erase(varName);
+                    namedRealVariables.erase(varName);
+                    namedEnumVariables.erase(varName);
+                    ++pc;
+                    continue;
+                }
                 namedStringVariables.erase(varName);
                 assignName(varName, value);
             }
@@ -3351,6 +3655,29 @@ void PMachine::runInstructions(size_t instructionCount,
         value.intValue = entry.second.i;
         value.strValue = getEnumValueName(entry.second.handle, entry.second.i);
         lastRunGlobals[entry.first] = value;
+    }
+    for (const auto& variable : extendableStorage) {
+        for (size_t i = 0; i < variable.elementCount; ++i) {
+            const ExtendableValueSlot& slot = variable.slots[i];
+            const std::string name = variable.elementCount == 1
+                ? variable.name
+                : variable.name + "_" + std::to_string(i);
+            GlobalValue value;
+            if (slot.stringData != nullptr) {
+                value.isString = true;
+                value.strValue.assign(slot.stringData, slot.stringLength);
+            } else if (slot.value.isReal()) {
+                value.isReal = true;
+                value.realValue = slot.value.asReal();
+            } else if (slot.value.isEnum()) {
+                value.isEnum = true;
+                value.intValue = slot.value.i;
+                value.strValue = getEnumValueName(slot.value.handle, slot.value.i);
+            } else {
+                value.intValue = static_cast<int>(slot.value);
+            }
+            lastRunGlobals[name] = std::move(value);
+        }
     }
     for (const auto& record : records) {
         std::string json = "{";

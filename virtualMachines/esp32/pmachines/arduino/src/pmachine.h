@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <atomic>
 #include <algorithm>
+#include <cstdlib>
 #if defined(PLATFORM_RPIB)
 #include <ffs/FederatedFileSystem.h>
 #else
@@ -238,6 +239,25 @@ struct Value {
     }
 
     bool isEnum() const { return kind == ValueKind::EnumRef; }
+};
+
+struct ExtendableDeclaration {
+    std::string name;
+    size_t elementCount = 1;
+};
+
+struct ExtendableValueSlot {
+    Value value;
+    char* stringData = nullptr;
+    size_t stringLength = 0;
+    bool stringUsesPsram = false;
+};
+
+struct ExtendableStorage {
+    std::string name;
+    size_t elementCount = 0;
+    ExtendableValueSlot* slots = nullptr;
+    bool usesPsram = false;
 };
 
 
@@ -583,6 +603,7 @@ namespace pmachine {
 class PMachine {
 public:
     PMachine();
+    ~PMachine();
 
     PMachine(PMachine&& other) noexcept {
         *this = std::move(other);
@@ -590,6 +611,7 @@ public:
 
     PMachine& operator=(PMachine&& other) noexcept {
         if (this != &other) {
+            releaseExtendableStorage();
             ffs = other.ffs;
             pcodeMap = std::move(other.pcodeMap);
             memoryMap = std::move(other.memoryMap);
@@ -647,6 +669,8 @@ public:
             namedStringVariables = std::move(other.namedStringVariables);
             namedRealVariables = std::move(other.namedRealVariables);
             namedEnumVariables = std::move(other.namedEnumVariables);
+            extendableStorage = std::move(other.extendableStorage);
+            extendedAllocationError = std::move(other.extendedAllocationError);
             enumTypeNames = std::move(other.enumTypeNames);
             enumTypeValues = std::move(other.enumTypeValues);
             std::copy(std::begin(other.handler_table), std::end(other.handler_table), std::begin(handler_table));
@@ -674,12 +698,19 @@ public:
             other.fsmCallContext = nullptr;
             other.hostCallHook = nullptr;
             other.hostCallContext = nullptr;
+            for (auto& entry : other.extendableStorage) {
+                entry.slots = nullptr;
+                entry.elementCount = 0;
+            }
+            other.extendableStorage.clear();
             return *this;
         }
         return *this;
     }
 
     void setEnumManager(::EnumManager* mgr) { enumManager = mgr; }
+    void setExtendableDeclarations(const std::vector<ExtendableDeclaration>& declarations);
+    const std::string& getExtendedAllocationError() const { return extendedAllocationError; }
     int openFile(const String &logicalName, const String &mode);
     bool closeFile(int handle);
     bool readLine(int handle, String &outLine);
@@ -718,6 +749,8 @@ public:
     void setProcedureSignatures(const std::map<std::string, std::vector<std::string>>& signatures);
     void clearProcedureSignatures();
     const MappingDef* getMappingById(const std::string& mappingId) const;
+    bool applyMappingById(const std::string& mappingId, const std::string& sourcePayload,
+                          std::string& mappedPayload, std::string& error) const;
     void singleStep();
     void beginDebugRun();
     void controlDebugRun(int action);
@@ -825,6 +858,8 @@ private:
     std::map<std::string, std::string> namedStringVariables;  // String-valued named variables (e.g., 'src')
     std::map<std::string, float> namedRealVariables;
     std::map<std::string, Value> namedEnumVariables;
+    std::vector<ExtendableStorage> extendableStorage;
+    std::string extendedAllocationError;
     std::vector<std::string> enumTypeNames;
     std::vector<std::vector<std::string>> enumTypeValues;
 
@@ -834,6 +869,7 @@ private:
     void init_handler_table();
     int ensurePageResident(uint16_t vpage);
     int findLruVictimFrame() const;
+    void releaseExtendableStorage();
 public:
     // Register a native extension handler for an opcode
     void register_extension(uint8_t opcode, HandlerFunc func);

@@ -52,6 +52,22 @@ function toWhenRule(condition) {
 
 function emitStatements(steps, lines, labels, branchCounterRef) {
   for (const step of steps || []) {
+    const firstLine = lines.length;
+    try {
+      emitStatement(step, lines, labels, branchCounterRef);
+    } finally {
+      const sourceLines = branchCounterRef.sourceLines;
+      if (sourceLines && Number(step?.sourceLine) > 0) {
+        for (let i = firstLine; i < lines.length; i += 1) {
+          if (!sourceLines[i]) sourceLines[i] = Number(step.sourceLine);
+        }
+      }
+    }
+  }
+}
+
+function emitStatement(step, lines, labels, branchCounterRef) {
+  {
     if (step.action === 'try') {
       const tryId = branchCounterRef.value++;
       const catchLabel = `TRY_${tryId}_CATCH`;
@@ -70,7 +86,7 @@ function emitStatements(steps, lines, labels, branchCounterRef) {
         bodyCount: Array.isArray(step.body) ? step.body.length : 0,
         onErrorCount: Array.isArray(step.onError) ? step.onError.length : 0
       });
-      continue;
+      return;
     }
 
     if (step.action === 'cobegin') {
@@ -88,19 +104,19 @@ function emitStatements(steps, lines, labels, branchCounterRef) {
         labels.push({ type: 'cobegin_subflow', stepId: step.id, subflowId: subflow.id });
         emitStatements(subflow.steps || [], lines, labels, branchCounterRef);
       }
-      continue;
+      return;
     }
 
     if (step.action === 'route_queue') {
       labels.push({ type: 'route_queue', stepId: step.id, queueRef: step.queueRef });
       lines.push(`ROUTE_EMIT ${q(step.queueRef)}`);
-      continue;
+      return;
     }
 
     if (step.action === 'set_state') {
       labels.push({ type: 'set_state', stepId: step.id, key: step.key, value: step.value });
       lines.push(`ROUTE_SET_STATE ${q(`${step.key}=${step.value}`)}`);
-      continue;
+      return;
     }
 
     if (step.action === 'if') {
@@ -117,19 +133,19 @@ function emitStatements(steps, lines, labels, branchCounterRef) {
       lines.push(`${elseLabel}:`);
       emitStatements(step.else || [], lines, labels, branchCounterRef);
       lines.push(`${endLabel}:`);
-      continue;
+      return;
     }
 
     if (step.action === 'call_api') {
       labels.push({ type: 'call_api_ignored', stepId: step.id, route: step.route });
       lines.push('NOP');
-      continue;
+      return;
     }
 
     if (step.action === 'wait') {
       labels.push({ type: 'wait_ignored', stepId: step.id, durationMs: step.durationMs });
       lines.push('NOP');
-      continue;
+      return;
     }
 
     if (step.action === 'check_api') {
@@ -143,7 +159,7 @@ function emitStatements(steps, lines, labels, branchCounterRef) {
         everyMs: step.everyMs
       });
       lines.push('NOP');
-      continue;
+      return;
     }
 
     throw new Error(`Unsupported workflow step for pcode emit: ${step.action}`);
@@ -160,7 +176,7 @@ export function compileWorkflowToPcode(compiled, workflowId, options = {}) {
 
   const lines = [];
   const programMap = [];
-  const branchCounterRef = { value: 1 };
+  const branchCounterRef = { value: 1, sourceLines: [] };
 
   lines.push('# Auto-generated pcode from workflow DSL');
   lines.push(`# WORKFLOW ${workflowId}`);
@@ -168,6 +184,7 @@ export function compileWorkflowToPcode(compiled, workflowId, options = {}) {
   const emitted = [];
   emitStatements(workflow.steps || [], lines, emitted, branchCounterRef);
   lines.push('HALT');
+  if (Number(workflow.endLine) > 0) branchCounterRef.sourceLines[lines.length - 1] = Number(workflow.endLine);
 
   // Replace symbolic queue refs in ROUTE_EMIT with concrete queue names.
   for (let i = 0; i < lines.length; i += 1) {
@@ -180,12 +197,14 @@ export function compileWorkflowToPcode(compiled, workflowId, options = {}) {
   }
 
   let address = 0;
-  for (const line of lines) {
+  const sourceLineByAddress = [];
+  lines.forEach((line, index) => {
     const t = String(line || '').trim();
-    if (!t || t.startsWith('#') || t.endsWith(':')) continue;
+    if (!t || t.startsWith('#') || t.endsWith(':')) return;
     programMap.push({ address, text: t });
+    sourceLineByAddress.push(branchCounterRef.sourceLines[index] || 0);
     address += 1;
-  }
+  });
 
   return {
     workflowId,
@@ -197,7 +216,8 @@ export function compileWorkflowToPcode(compiled, workflowId, options = {}) {
       pcodeText: `${lines.join('\n')}\n`,
       sourceText: options.sourceText || '',
       sourceFile: options.fileName || null,
-      sourceLanguage: 'wfl'
+      sourceLanguage: 'wfl',
+      sourceLineByAddress: sourceLineByAddress.some(Boolean) ? sourceLineByAddress : null
     }),
     notes: emitted
   };

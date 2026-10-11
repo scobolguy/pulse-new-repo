@@ -1,0 +1,9 @@
+DEFAULT ENVIRONMENT "dev";
+LET deploymentTarget = "CHOOSE_NODE";
+
+QUEUE "payments.in" -> "${ENVIRONMENT}.payments.in";
+QUEUE "payments.out" -> "${ENVIRONMENT}.payments.out";
+
+DEPLOYMENT "payments" PROJECT "payments" TARGETS ("${deploymentTarget}") BEGIN
+  FLOW "forward" FILE "forward.vfl" TARGETS ("${deploymentTarget}") STARTUP TRUE;
+END;

@@ -43,7 +43,7 @@ export function boundedGet(url, { signal, timeoutMs = 5000, maxBytes = 2048 } = 
 export function createDeviceFederation({
   sources, clock: suppliedClock = monotonic, get = boundedGet, logger = console,
   sourceTimeoutMs = 30000, maxSyncAgeMs = 120000, wait = pause, random = Math.random,
-  maxSources = 6, maxDevices = 150, maxEvidenceBytes = 524288, resolveName = null
+  maxSources = 8, maxDevices = 150, maxEvidenceBytes = 524288, resolveName = null
 }) {
   let lastTime = -1;
   function clock() {
@@ -52,7 +52,7 @@ export function createDeviceFederation({
     lastTime = time;
     return time;
   }
-  if (!integer(maxSources, 1, 6) || !integer(maxDevices, 1, 150) ||
+  if (!integer(maxSources, 1, 8) || !integer(maxDevices, 1, 150) ||
       !integer(maxEvidenceBytes, 2048, 524288) || !integer(sourceTimeoutMs, 1, 120000) ||
       !integer(maxSyncAgeMs, 1, 3600000) || !Array.isArray(sources) ||
       sources.length < 1 || sources.length > maxSources ||
@@ -116,9 +116,11 @@ export function createDeviceFederation({
       ? response.daemonDiagnostics?.map(({ id, failures, lastError }) => ({ id, failures, lastError }))
       : null);
     if (response.collectorId !== state.config.collectorId || response.running !== true || !boundedText(response.bootId, 128) ||
-        !Array.isArray(daemons) || daemons.length !== 1 || daemons[0].id !== daemonId ||
-        !integer(daemons[0].failures, 0, Number.MAX_SAFE_INTEGER) ||
-        typeof daemons[0].lastError !== 'string') fail('Invalid collector health identity/schema');
+        !Array.isArray(daemons) || daemons.length < 1 || daemons.length > (state.config.protocol === 'tuya' ? 2 : 1) ||
+        daemons[0].id !== daemonId ||
+        (daemons.length === 2 && daemons[1].id !== 'tuya-legacy-collector') ||
+        daemons.some(daemon => !integer(daemon.failures, 0, Number.MAX_SAFE_INTEGER) ||
+          typeof daemon.lastError !== 'string')) fail('Invalid collector health identity/schema');
     return { ...response, daemons };
   }
   function validateRecord(state, record, page) {
@@ -200,7 +202,7 @@ export function createDeviceFederation({
           [key, { device: entry.device, observationSequence: entry.observationSequence, deadline: entry.deadline }]))), 0);
       if (bytes > maxEvidenceBytes) fail('Evidence storage byte limit exceeded');
       if (new Set(candidateStates.flatMap(entries => [...entries.keys()])).size > maxDevices) fail('Combined device capacity exceeded');
-      const error = after.daemons[0].lastError.slice(0, 160);
+      const error = after.daemons.map(daemon => daemon.lastError).filter(Boolean).join('; ').slice(0, 160);
       if (state.bootId && state.bootId !== completed.first.bootId) {
         state.retiredBootIds.push(state.bootId);
         if (state.retiredBootIds.length > 8) state.retiredBootIds.shift();

@@ -1,0 +1,24 @@
+{
+  "kind": "visual-flow-language",
+  "schemaVersion": 1,
+  "nodes": [
+    {
+      "id": "mapper-runtime",
+      "kind": "service",
+      "execution": {
+        "sourceFile": "mapper-runtime.pas",
+        "hosted": true
+      }
+    },
+    {
+      "id": "mapper-udp-daemon",
+      "kind": "daemon",
+      "execution": {
+        "sourceFile": "${MAPPER_MAP_FILE}",
+        "hostedUdpMapper": true,
+        "refreshMs": 60000
+      }
+    }
+  ],
+  "edges": []
+}

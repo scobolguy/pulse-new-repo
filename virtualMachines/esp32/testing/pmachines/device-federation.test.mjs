@@ -95,6 +95,22 @@ test('Pulse health uses daemon diagnostics when the status daemon field is a cou
   assert.equal(source.error, '');
 });
 
+test('eight configured sources corroborate matching records without duplicating devices', async () => {
+  const f = fixture(['kasa', 'tuya', 'ssdp', 'kasa', 'tuya', 'ssdp', 'kasa', 'tuya']);
+  for (let index = 0; index < 8; index++) f.put(index, 1, 'Same device');
+  await f.federation.refresh();
+  assert.equal(f.federation.metadata().sources.length, 8);
+  assert.equal(f.federation.metadata().completeness, true);
+  assert.equal(f.federation.metadata().evidenceCount, 8);
+  const records = walk(f.federation);
+  assert.equal(records.length, 3);
+  assert.ok(records.every(record => record.confidence === 'CORROBORATED'));
+  f.nodes[0].unavailable = true;
+  await f.federation.refresh();
+  assert.equal(f.federation.metadata().completeness, false);
+  assert.equal(walk(f.federation).length, 3);
+});
+
 test('three typed fifty-entry sources materialize every one of 150 devices across bounded pages', async () => {
   const f = fixture();
   for (let source = 0; source < 3; source++) for (let index = 1; index <= 50; index++) f.put(source, index);
@@ -103,6 +119,22 @@ test('three typed fifty-entry sources materialize every one of 150 devices acros
   assert.equal(walk(f.federation).length, 150);
   assert.equal(walk(f.federation, true).length, 150);
   assert.ok(walk(f.federation).every(record => record.confidence === 'PROVISIONAL'));
+});
+
+test('Tuya health covers both encrypted and legacy daemons without adding an extra voter', async () => {
+  const f = fixture(['tuya']);
+  f.put(0);
+  let error = '';
+  f.nodes[0].mutate = (body, url) => url.pathname.includes('/status')
+    ? { ...body, daemons: [...body.daemons, { id: 'tuya-legacy-collector', failures: error ? 1 : 0, lastError: error }] }
+    : body;
+  await f.federation.refresh();
+  assert.equal(f.federation.metadata().completeness, true);
+  assert.equal(walk(f.federation)[0].evidence.length, 1);
+  error = 'Legacy intake failed';
+  await f.federation.refresh();
+  assert.equal(f.federation.metadata().completeness, false);
+  assert.match(f.federation.metadata().sources[0].error, /Legacy intake failed/);
 });
 
 test('configured identities, not retry/process/boot identity, vote; meaningful disagreements conflict', async () => {
@@ -208,7 +240,7 @@ test('identity forgery, invalid namespaces, stale source ordering and limits rej
   await f.federation.refresh();
   assert.match(f.federation.metadata().sources[0].error, /Stale source revision/);
   assert.equal(f.federation.page().total, 1);
-  assert.throws(() => fixture(['kasa'], { maxSources: 7 }), /limits/);
+  assert.throws(() => fixture(['kasa'], { maxSources: 9 }), /limits/);
   assert.throws(() => createDeviceFederation({ sources: [
     { collectorId: 'a', protocol: 'kasa', origin: 'http://127.0.0.1:1' },
     { collectorId: 'b', protocol: 'kasa', origin: 'http://127.0.0.1:1' }

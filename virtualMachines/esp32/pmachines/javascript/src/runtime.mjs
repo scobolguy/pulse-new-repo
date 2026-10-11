@@ -64,6 +64,11 @@ function normalizeRuntimeUnit(runtimeUnit, fallbackServiceId = 'default-router-s
 // Must match MAX_RUN_STEPS in src/pmachine.cpp: a program that trips the limit on one
 // runtime has to trip it identically on the other.
 const MAX_RUN_STEPS = 200000;
+// Desktop-hosted services (createPascalishServiceHost with desktopBudget: true) are
+// explicitly allowed a much larger step budget than the ESP32 firmware; this must
+// match the desktopBudget cap enforced in service-host.mjs's integer(maxSteps, ...) check.
+const MAX_DESKTOP_RUN_STEPS = 10000000;
+
 function trimCopy(s) {
   return String(s || '').trim();
 }
@@ -1499,9 +1504,9 @@ function assignVar(frame, name, value) {
 
 async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queueTypesByName = new Map(), isoTypeIds = new Set(), inputQueue, sourceMessage, runtimeContext = {}, debugHooks = {} }) {
   const stack = [];
-  const stepLimit = runtimeContext.desktopBudget ? Infinity : MAX_RUN_STEPS;
+  const stepLimit = runtimeContext.desktopBudget ? MAX_DESKTOP_RUN_STEPS : MAX_RUN_STEPS;
   const maxSteps = runtimeContext.maxSteps ?? stepLimit;
-  if (maxSteps !== Infinity && (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > stepLimit)) {
+  if (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > stepLimit) {
     throw new Error(`maxSteps must be an integer between 1 and ${stepLimit}`);
   }
   let pc = 0;
@@ -1628,7 +1633,9 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
             : typeof value === 'string' || Number.isSafeInteger(value);
         if (!valid) throw new Error(`Invalid host argument ${index + 1} for ${name}: expected ${kind}`);
       }
-      const value = await runtimeContext.callHost(name, args);
+      const value = name === 'host.map_apply'
+        ? runMappingById(args[0], args[1], mappingsById)
+        : await runtimeContext.callHost(name, args);
       if (binding.result === 'string' ? typeof value !== 'string' : !Number.isSafeInteger(value)) {
         throw new Error(`Invalid host result for ${name}: expected ${binding.result}`);
       }
@@ -1681,16 +1688,12 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       continue;
     }
     if (op === 'ARR_GET') {
-      // Index arrives zero-based (the compiler already subtracted the array's
-      // low bound); out-of-range reads yield 0 and record `__arr_error`, the
-      // same "safe default" convention as divide-by-zero and unknown enums.
       const { base, length } = instr.operand || {};
-      const idx = Math.trunc(Number(stack.pop() || 0));
-      if (idx < 0 || idx >= length) {
-        state.__arr_error = `index out of range: ${base}[${idx}]`;
-        stack.push(0);
+      const idx = Number(stack.pop());
+      if (!Number.isInteger(idx) || idx < 0 || idx >= length) {
+        throw new Error(`index out of range: ${base}[${idx}]`);
       } else {
-        const varName = applyWithContext(`${base}_${idx}`, withContextStack);
+        const varName = applyWithContext(base.includes('{}') ? base.replace('{}', String(idx)) : `${base}_${idx}`, withContextStack);
         const value = resolveVar(currentFrame, varName);
         stack.push(isBoxed(value) || typeof value === 'string' ? value : Number(value || 0));
       }
@@ -1700,11 +1703,11 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     if (op === 'ARR_SET') {
       const { base, length } = instr.operand || {};
       const top = stack.pop();
-      const idx = Math.trunc(Number(stack.pop() || 0));
-      if (idx < 0 || idx >= length) {
-        state.__arr_error = `index out of range: ${base}[${idx}]`;
+      const idx = Number(stack.pop());
+      if (!Number.isInteger(idx) || idx < 0 || idx >= length) {
+        throw new Error(`index out of range: ${base}[${idx}]`);
       } else {
-        const varName = applyWithContext(`${base}_${idx}`, withContextStack);
+        const varName = applyWithContext(base.includes('{}') ? base.replace('{}', String(idx)) : `${base}_${idx}`, withContextStack);
         const stored = isBoxed(top) || typeof top === 'string' ? top : Number(top || 0);
         assignVar(currentFrame, varName, stored);
       }

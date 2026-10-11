@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { pathToFileURL } from 'url';
 import { compileWorkflowDSL } from './compile-workflow-dsl.mjs';
+import { buildVflDeployments, writeVflArtifacts } from './build-vfl-deployment.mjs';
 
 function parseArgs(argv) {
   const args = {
@@ -1212,14 +1213,32 @@ export async function executeWorkflow(compiled, workflowId, dryRun = false, cont
 }
 
 export async function executeDeploymentPlan(compiled, dryRun = true, context = {}) {
+  let flowBuild = null;
+  if (compiled.deployments?.some(plan => plan.resources?.some(resource => resource.kind === 'flow'))) {
+    flowBuild = await buildVflDeployments(compiled, { artifactRoot: context.artifactRoot || process.cwd() });
+    compiled = flowBuild.compiled;
+  }
   const serviceBaseUrl = String(context?.serviceBaseUrl || 'http://127.0.0.1:4000').replace(/\/+$/, '');
   const nodesResponse = await fetch(`${serviceBaseUrl}/api/nodes`);
+  if (!nodesResponse.ok) throw new Error(`Node discovery failed with HTTP ${nodesResponse.status}`);
   const nodesPayload = await nodesResponse.json();
   const nodes = Array.isArray(nodesPayload) ? nodesPayload : (nodesPayload.nodes || []);
   const clusters = [];
   const deployments = [];
   const removals = [];
   const artifactDeployments = [];
+  if (flowBuild && !dryRun) {
+    const available = new Set(nodes.flatMap(node => [node.nodeId, node.nodeName, node.id].filter(Boolean)));
+    for (const plan of compiled.deployments) {
+      for (const resource of plan.resources.filter(resource => resource.flowId)) {
+        for (const target of resource.targets) {
+          if (!available.has(target)) throw new Error(`FLOW '${resource.flowId}' NODE '${resource.nodeId}' target '${target}' is not registered`);
+        }
+      }
+    }
+    const artifactRoot = path.resolve(String(context.artifactRoot || process.cwd()));
+    await writeVflArtifacts(flowBuild.artifacts, artifactRoot);
+  }
 
   for (const cluster of compiled?.clusters || []) {
     const request = { clusterId: cluster.clusterId, label: cluster.label, nodes: cluster.nodes || [] };
@@ -1296,7 +1315,10 @@ export async function executeDeploymentPlan(compiled, dryRun = true, context = {
         body: JSON.stringify(request)
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(`Deployment ${resource.id} failed with HTTP ${response.status}`);
+      if (!response.ok) throw new Error(`Deployment ${resource.id} failed with HTTP ${response.status}: ${payload?.error || 'unknown error'}`);
+      if (resource.flowId && resource.startup && payload.runtime?.state !== 'running') {
+        throw new Error(`Deployment ${resource.id} was recorded but the backend did not start its JS worker (${payload.runtime?.state || 'no supervisor'}). Check deployment runtime status.`);
+      }
       deployments.push(payload);
     }
   }

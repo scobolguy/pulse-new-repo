@@ -50,6 +50,16 @@ export function createHostCacheStore(definitions = [], { clock, maxStorageBytes 
     }
   }
   return {
+    transaction(apply) {
+      const saved = [...caches.values()].map(cache => [cache, new Map(cache.entries)]);
+      const counters = { bytes, order, revision };
+      try { return apply(); }
+      catch (error) {
+        for (const [cache, entries] of saved) cache.entries = entries;
+        ({ bytes, order, revision } = counters);
+        throw error;
+      }
+    },
     snapshot(name, cursor = '', fence = '') {
       const cache = declared(name);
       if (typeof cursor !== 'string' || Buffer.byteLength(cursor) > 256 ||

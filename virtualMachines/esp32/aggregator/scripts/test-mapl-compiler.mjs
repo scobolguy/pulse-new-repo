@@ -3,8 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { compileMaplWithAntlr } from './compile-mapl-antlr-to-pcode.mjs';
+import { compileMaplWithAntlr, formatMaplName, formatMaplPath } from './compile-mapl-antlr-to-pcode.mjs';
+
+const aggregatorRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const source = `
 map CustomerToAccount from Customer to Account;
@@ -28,17 +31,48 @@ assert.equal(entry.items.length, 3);
 assert.deepEqual(entry.items[0], {
   sourcePath: 'customer.name',
   targetPath: 'account.name',
-  conversionRule: 'OUTPUT := SRC;'
+  conversionRule: 'OUTPUT := SRC;',
+  ops: ['SRC']
 });
 assert.equal(entry.items[1].conversionRule, 'OUTPUT := upper(SRC);');
+assert.deepEqual(entry.items[1].ops, ['SRC', 'UPPER']);
 assert.match(compiled.pcodeText, /OP_MAP SRC, "CustomerToAccount", mappedPayload/);
 assert.match(compiled.pcodeText, /MAP_RETURN mappedPayload/);
 assert.equal(compiled.programMap.compatibility[0].irOnly.length, 3);
 assert.throws(() => compileMaplWithAntlr('map broken'), /\[MAPL\] Parse failed/);
 
+const designed = compileMaplWithAntlr(`
+map 'mt940-to-camt' from 'swift-mt940' to camt;
+  @name 'MT940 to CAMT';
+  @enabled true;
+  @version 2;
+  target.Stmt.'end' := source.block4.'31C' using 'OUTPUT := upper(SRC);';
+  target.Stmt.Id := source.block4.'20';
+  target.Stmt.Ref := trim(source.block4."21");
+end;
+`).programMap.entries[0];
+assert.equal(designed.id, 'mt940-to-camt');
+assert.equal(designed.sourceTypeId, 'swift-mt940');
+assert.deepEqual(designed.metadata, { name: 'MT940 to CAMT', enabled: true, version: 2 });
+assert.deepEqual(designed.items, [
+  { sourcePath: 'source.block4.31C', targetPath: 'target.Stmt.end', conversionRule: 'OUTPUT := upper(SRC);', ops: ['SRC', 'UPPER'] },
+  { sourcePath: 'source.block4.20', targetPath: 'target.Stmt.Id', conversionRule: 'OUTPUT := SRC;', ops: ['SRC'] },
+  { sourcePath: 'source.block4.21', targetPath: 'target.Stmt.Ref', conversionRule: 'OUTPUT := trim(SRC);', ops: ['SRC', 'TRIM'] }
+]);
+assert.equal(formatMaplPath('source.block4.31C'), "source.block4.'31C'");
+assert.equal(formatMaplPath('target.Stmt.end'), "target.Stmt.'end'");
+assert.equal(formatMaplName('mt940-to-camt'), "'mt940-to-camt'");
+assert.equal(formatMaplName('Customer'), 'Customer');
+
 const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pulse-mapl-authoring-'));
 const librarianRoot = path.join(runtimeRoot, 'services', 'librarian');
+const runtimeMapsRoot = path.join(runtimeRoot, 'data-maps');
 fs.mkdirSync(librarianRoot, { recursive: true });
+fs.mkdirSync(runtimeMapsRoot, { recursive: true });
+fs.copyFileSync(
+  path.join(aggregatorRoot, 'data', 'data-maps', 'mt940-to-camt053.map'),
+  path.join(runtimeMapsRoot, 'mt940-to-camt053.map')
+);
 fs.writeFileSync(path.join(librarianRoot, 'data-types.json'), JSON.stringify([
   { id: 'swift-mt700', label: 'SWIFT FIN Message - MT700', kind: 'message', isIso: false },
   { id: 'pacs', label: 'ISO 20022 - PACS', kind: 'message', isIso: true },
@@ -93,9 +127,12 @@ try {
   assert.match(mt940.artifacts.mapl, /BkToCstmrStmt/);
   assert.doesNotMatch(mt940.artifacts.mapl, /FIToFICstmrCdtTrf/);
   assert.match(mt940.compiledMapl.pcodeText, /OP_MAP SRC, "mt940_to_camt053", mappedPayload/);
-  const externalMap = JSON.parse(fs.readFileSync(path.resolve('aggregator/data/data-maps/mt940-to-camt053.map'), 'utf8'));
+  const externalMap = JSON.parse(fs.readFileSync(
+    path.join(aggregatorRoot, 'data', 'data-maps', 'mt940-to-camt053.map'),
+    'utf8'
+  ));
   for (const rule of externalMap.rules) {
-    assert.ok(mt940.artifacts.mapl.includes(`${rule.targetPath} := ${rule.sourcePath};`));
+    assert.ok(mt940.artifacts.mapl.includes(`${formatMaplPath(rule.targetPath)} := ${formatMaplPath(rule.sourcePath)};`));
     assert.ok(mt940.artifacts.pascalish.includes(`MAP \"${rule.sourcePath.replace(/^source\./, '')}\" TO \"${rule.targetPath.replace(/^target\./, '')}\"`));
   }
 
@@ -110,12 +147,12 @@ try {
     '-}'
   ].join('\n');
   const runtimeResult = JSON.parse(execFileSync(process.execPath, [
-    path.resolve('aggregator/scripts/run-js-pmachine.mjs'),
+    path.join(aggregatorRoot, 'scripts', 'run-js-pmachine.mjs'),
     '--pcode', mt940.stored.pcode,
     '--program-map', mt940.stored.programMap,
     '--input-queue', 'swift.mt940.inbound',
     '--message', mt940Message
-  ], { encoding: 'utf8' }));
+  ], { cwd: aggregatorRoot, encoding: 'utf8' }));
   const mappedPayload = JSON.parse(runtimeResult.globals.mappedPayload);
   assert.deepEqual(runtimeResult.response, mappedPayload);
   const statement = mappedPayload.Document.BkToCstmrStmt.Stmt;

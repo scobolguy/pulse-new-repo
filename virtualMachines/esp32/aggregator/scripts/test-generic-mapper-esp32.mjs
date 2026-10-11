@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { compilePascalishProgramWithAntlr } from './compile-pascalish-program-antlr-to-pcode.mjs';
 import { attachPcodeSignature } from './pcode-signing.mjs';
 
-const host = process.env.ESP32_HOST || '192.168.2.155';
+const host = process.env.ESP32_HOST;
+if (!host) throw new Error('Set ESP32_HOST to the address of the ESP32 under test.');
 const baseUrl = `http://${host}`;
 const aggregatorRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const remotePcode = '/generic-mapper.pcode';

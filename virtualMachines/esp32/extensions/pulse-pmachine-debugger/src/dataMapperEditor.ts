@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import * as vscode from 'vscode';
-import { applyMappingAction, emptyMapping, fieldsOf, MappingDocument, object, parseMapping, prototypeMapping, publicationPayload, rulesOf } from './dataMapperModel.js';
+import { applyMappingAction, builtinStructures, emptyMapping, fieldsOf, MappingDocument, object, prototypeMapping, publicationPayload, rulesOf } from './dataMapperModel.js';
 import { DataMapperBackend, structurePending } from './dataMapperBackend.js';
+import { mappingToMapl, maplSplices, maplToMapping, SchemaStructures } from './maplDocument.js';
 
 const viewType = 'pulse-pmachine.dataMapper';
 
@@ -20,7 +21,7 @@ export class DataMapperEditor implements vscode.CustomTextEditorProvider {
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${panel.webview.cspSource}; script-src 'nonce-${nonce}';">
 <link rel="stylesheet" href="${style}"><title>Pulse Data Mapper</title></head>
 <body><header><div><span class="badge">DESIGNER</span><h1>Pulse Data Mapper</h1>
-<p id="name"></p></div><button id="text">Open JSON</button></header>
+<p id="name"></p></div><button id="text">Open MAPL text</button></header>
 <nav class="toolbar" aria-label="Mapping actions"><button id="metadata">Map details</button>
 <button id="source-pick">Choose source schema</button><button id="target-pick">Choose target schema</button>
 <button id="refresh-schemas">Refresh selected schemas</button><button id="import">Import backend map</button>
@@ -38,6 +39,10 @@ Use Ctrl+S to save and VS Code Undo/Redo to edit history.</p>
 <label for="conversion">Pascalish conversion rule (basic checks locally; execution validated by Aggregator)</label>
 <textarea id="conversion" rows="3" maxlength="1000" disabled placeholder="Example: output := trim(src);"></textarea>
 <div class="actions"><button id="apply" disabled>Apply rule</button><button id="remove" disabled>Remove connection</button></div>
+</section>
+<section class="properties"><h2>Other MAPL statements</h2>
+<p class="hint">Conditions, loops, defaults, function calls and validations are kept as written. Edit them in the MAPL text.</p>
+<pre id="extras">None.</pre>
 </section>
 <section class="properties"><h2>Test mapping</h2>
 <p class="hint">Runs the published map through the Aggregator. Publish local changes first. Nothing is deployed to a PMachine.</p>
@@ -64,15 +69,30 @@ Use Ctrl+S to save and VS Code Undo/Redo to edit history.</p>
       this.output.appendLine(`Data Mapper: ${detail}`);
       void panel.webview.postMessage({ type: 'error', message: detail, actionError });
     };
+    const structures: SchemaStructures = { ...builtinStructures() };
+    const current = (): MappingDocument => maplToMapping(document.getText(), structures);
     const update = (): void => {
       try {
-        const map = parseMapping(document.getText());
+        const map = current();
         void panel.webview.postMessage({ type: 'state', version: document.version, name: map.name,
           id: map.id,
           sourceSchema: map.sourceSchemaPath, targetSchema: map.targetSchemaPath,
-          source: fieldsOf(map, 'source'), target: fieldsOf(map, 'target'), rules: rulesOf(map) });
+          sourceInferred: map.sourceStructureInferred, targetInferred: map.targetStructureInferred,
+          source: fieldsOf(map, 'source'), target: fieldsOf(map, 'target'), rules: rulesOf(map),
+          extras: Array.isArray(map.extras) ? map.extras : [] });
       } catch (error) {
         report(error);
+      }
+    };
+    const loadStructures = async (reload: boolean): Promise<void> => {
+      const map = maplToMapping(document.getText());
+      const api = backend();
+      for (const side of ['source', 'target'] as const) {
+        const schemaPath = String(map[`${side}SchemaPath`] || '');
+        if (!schemaPath || (!reload && structures[schemaPath]?.structure) || builtinStructures()[schemaPath]) continue;
+        const loaded = await api.schemaStructure(schemaPath);
+        if (reload && !loaded.structure) throw new Error(`Selected ${side} schema is unavailable in Librarian.`);
+        structures[schemaPath] = loaded;
       }
     };
     const changed = vscode.workspace.onDidChangeTextDocument(event => {
@@ -82,9 +102,14 @@ Use Ctrl+S to save and VS Code Undo/Redo to edit history.</p>
       if (disposed || editing || document.version !== version) throw new Error('The document changed. Retry against the refreshed map.');
       editing = true;
       try {
-        const edit = new vscode.WorkspaceEdit();
-        edit.replace(document.uri, new vscode.Range(0, 0, document.lineCount, 0), `${JSON.stringify(map, null, 2)}\n`);
-        if (!await vscode.workspace.applyEdit(edit)) throw new Error('VS Code could not apply the mapping edit.');
+        const splices = maplSplices(document.getText(), map);
+        if (splices.length) {
+          const edit = new vscode.WorkspaceEdit();
+          for (const splice of splices) {
+            edit.replace(document.uri, new vscode.Range(document.positionAt(splice.start), document.positionAt(splice.end)), splice.text);
+          }
+          if (!await vscode.workspace.applyEdit(edit)) throw new Error('VS Code could not apply the mapping edit.');
+        }
       } finally { editing = false; }
       update();
     };
@@ -101,7 +126,7 @@ Use Ctrl+S to save and VS Code Undo/Redo to edit history.</p>
       const checkBackend = (): void => {
         if (disposed || revision !== backendRevision) throw new Error('Backend configuration changed. Retry against the current Aggregator.');
       };
-      const map = parseMapping(document.getText());
+      const map = current();
       operating = true;
       void panel.webview.postMessage({ type: 'busy', busy: true, message: 'Working…' });
       try {
@@ -113,43 +138,33 @@ Use Ctrl+S to save and VS Code Undo/Redo to edit history.</p>
             validateInput: value => value.trim() ? undefined : 'Enter a name.' });
           if (name === undefined) return;
           await replace({ ...map, id, name: name.trim() }, version);
-        } else if (message.type === 'schema' || message.type === 'refreshSchemas') {
+        } else if (message.type === 'schema') {
+          if (message.side !== 'source' && message.side !== 'target') throw new Error('Invalid schema side.');
           const api = backend();
           const schemas = await api.schemas();
-          let next = map;
-          if (message.type === 'schema') {
-            if (message.side !== 'source' && message.side !== 'target') throw new Error('Invalid schema side.');
-            const choices = schemas.filter(schema => schema.structure || structurePending(schema));
-            if (!choices.length) throw new Error('Librarian has no schemas with field structures.');
-            const picked = await vscode.window.showQuickPick(choices.map(schema => ({
-              label: typeof schema.name === 'string' ? schema.name : schema.path,
-              description: typeof schema.typeId === 'string' ? schema.typeId : '',
-              detail: schema.path, schema,
-            })), { title: `Choose ${message.side} schema (${schemas.length - choices.length} schemas without field structures omitted)`,
-              matchOnDescription: true, matchOnDetail: true });
-            if (!picked) return;
-            const chosen = await api.schemaWithStructure(picked.schema);
-            if (!chosen.structure) throw new Error(`Schema ${chosen.path} has no field structure.`);
-            const choice = { schema: chosen };
-            const side = message.side;
-            const clear = map[`${side}SchemaPath`] !== choice.schema.path && rulesOf(map).length > 0;
-            if (clear && !await confirmClear()) return;
-            next = { ...map, [`${side}SchemaPath`]: choice.schema.path,
-              [`${side}TypeId`]: String(choice.schema.typeId || choice.schema.path).toLowerCase(),
-              [`${side}Structure`]: choice.schema.structure, [`${side}SchemaMtime`]: choice.schema.mtime ?? '',
-              ...(clear ? { [map.rules ? 'rules' : 'items']: [] } : {}) };
-          } else {
-            for (const side of ['source', 'target'] as const) {
-              const listed = schemas.find(entry => entry.path === map[`${side}SchemaPath`]);
-              const schema = listed ? await api.schemaWithStructure(listed) : undefined;
-              if (!schema?.structure) throw new Error(`Selected ${side} schema is unavailable in Librarian.`);
-              next = { ...next, [`${side}Structure`]: schema.structure, [`${side}SchemaMtime`]: schema.mtime ?? '' };
-            }
-          }
-          fieldsOf(next, 'source');
-          fieldsOf(next, 'target');
+          const choices = schemas.filter(schema => schema.structure || structurePending(schema));
+          if (!choices.length) throw new Error('Librarian has no schemas with field structures.');
+          const picked = await vscode.window.showQuickPick(choices.map(schema => ({
+            label: typeof schema.name === 'string' ? schema.name : schema.path,
+            description: typeof schema.typeId === 'string' ? schema.typeId : '',
+            detail: schema.path, schema,
+          })), { title: `Choose ${message.side} schema (${schemas.length - choices.length} schemas without field structures omitted)`,
+            matchOnDescription: true, matchOnDetail: true });
+          if (!picked) return;
+          const chosen = await api.schemaWithStructure(picked.schema);
+          if (!chosen.structure) throw new Error(`Schema ${chosen.path} has no field structure.`);
+          const side = message.side;
+          const clear = map[`${side}SchemaPath`] !== chosen.path && rulesOf(map).length > 0;
+          if (clear && !await confirmClear()) return;
           checkBackend();
-          await replace(next, version);
+          structures[chosen.path] = { structure: chosen.structure, ...(chosen.mtime ? { mtime: chosen.mtime } : {}) };
+          await replace({ ...map, [`${side}SchemaPath`]: chosen.path,
+            [`${side}TypeId`]: String(chosen.typeId || chosen.path).toLowerCase(),
+            ...(clear ? { rules: [] } : {}) }, version);
+        } else if (message.type === 'refreshSchemas') {
+          await loadStructures(true);
+          checkBackend();
+          update();
         } else if (message.type === 'publish') {
           publicationPayload(map);
           const api = backend();
@@ -162,12 +177,8 @@ Use Ctrl+S to save and VS Code Undo/Redo to edit history.</p>
           checkBackend();
           if (disposed || document.version !== version) throw new Error('Document changed before publishing. Retry.');
           const saved = await api.publish(map, existing);
-          if (revision !== backendRevision) throw new Error(`The captured map was published to ${api.baseUrl}, but backend configuration changed. Import or publish to the current backend before running.`);
-          // Keep local-only metadata and the legacy items representation.
-          const { rules, ...metadata } = saved;
-          if (document.version !== version) throw new Error('The captured map was published, but the local document changed. Publish again before running.');
-          await replace({ ...map, ...metadata, [map.rules ? 'rules' : 'items']: rulesOf(saved) }, version);
-          void panel.webview.postMessage({ type: 'notice', message: `Published "${saved.id}" to ${api.baseUrl}. Save the local file with Ctrl+S.` });
+          checkBackend();
+          void panel.webview.postMessage({ type: 'notice', message: `Published "${saved.id}" to ${api.baseUrl}. The MAPL file is the source of truth; save it with Ctrl+S.` });
         } else if (message.type === 'testCases') {
           const testCases = await backend().testCases();
           checkBackend();
@@ -189,6 +200,10 @@ Use Ctrl+S to save and VS Code Undo/Redo to edit history.</p>
         if (message.type === 'ready') {
           update();
           void panel.webview.postMessage({ type: 'backend', url: vscode.workspace.getConfiguration('pulse-pmachine').get<string>('backendUrl', 'http://127.0.0.1:4000') });
+          if (vscode.workspace.isTrusted) {
+            loadStructures(false).then(() => { if (!disposed) update(); },
+              error => this.output.appendLine(`Data Mapper: schema structures unavailable (${error instanceof Error ? error.message : String(error)}); showing fields inferred from MAPL.`));
+          }
           return;
         }
         if (message.type === 'text') {
@@ -208,7 +223,7 @@ Use Ctrl+S to save and VS Code Undo/Redo to edit history.</p>
           update();
           throw new Error('The document changed. Please retry your edit against the refreshed map.');
         }
-        const map = applyMappingAction(parseMapping(document.getText()), message.action);
+        const map = applyMappingAction(current(), message.action);
         await replace(map, document.version);
       } catch (error) { report(error, true); }
     });
@@ -225,7 +240,7 @@ Use Ctrl+S to save and VS Code Undo/Redo to edit history.</p>
 export function registerDataMapper(context: vscode.ExtensionContext, output: vscode.OutputChannel): void {
   const open = async (uri?: vscode.Uri): Promise<void> => {
     const selected = uri ?? vscode.window.activeTextEditor?.document.uri
-      ?? (await vscode.window.showOpenDialog({ canSelectMany: false, filters: { 'Mapping JSON': ['json'] } }))?.[0];
+      ?? (await vscode.window.showOpenDialog({ canSelectMany: false, filters: { MAPL: ['mapl'] } }))?.[0];
     if (selected) await vscode.commands.executeCommand('vscode.openWith', selected, viewType);
   };
   const command = (run: (uri?: vscode.Uri) => Promise<void>) => async (uri?: vscode.Uri): Promise<void> => {
@@ -240,12 +255,12 @@ export function registerDataMapper(context: vscode.ExtensionContext, output: vsc
     const uri = await vscode.window.showSaveDialog({
       defaultUri: vscode.workspace.workspaceFolders?.[0]
         ? vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, fileName) : undefined,
-      filters: { 'Mapping JSON': ['json'] },
+      filters: { MAPL: ['mapl'] },
     });
     if (!uri) return;
     const edit = new vscode.WorkspaceEdit();
     edit.createFile(uri, { overwrite: false });
-    edit.insert(uri, new vscode.Position(0, 0), `${JSON.stringify(map, null, 2)}\n`);
+    edit.insert(uri, new vscode.Position(0, 0), mappingToMapl(map));
     if (!await vscode.workspace.applyEdit(edit)) throw new Error('Could not create the mapping file. Choose a new file name.');
     const document = await vscode.workspace.openTextDocument(uri);
     if (!await document.save()) throw new Error('Could not save the mapping file.');
@@ -257,10 +272,10 @@ export function registerDataMapper(context: vscode.ExtensionContext, output: vsc
     }),
     vscode.commands.registerCommand('pulse-pmachine.openDataMap', command(open)),
     vscode.commands.registerCommand('pulse-pmachine.newDataMap', command(async () => {
-      await createFile(prototypeMapping(), 'prototype.pulse-map.json');
+      await createFile(prototypeMapping(), 'prototype.mapl');
     })),
     vscode.commands.registerCommand('pulse-pmachine.createDataMap', command(async () => {
-      await createFile(emptyMapping(), 'new.pulse-map.json');
+      await createFile(emptyMapping(), 'new_mapping.mapl');
     })),
     vscode.commands.registerCommand('pulse-pmachine.importDataMap', command(async () => {
       if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace before using the Aggregator.');
@@ -273,7 +288,7 @@ export function registerDataMapper(context: vscode.ExtensionContext, output: vsc
       const map = await api.map(choice.id);
       fieldsOf(map, 'source');
       fieldsOf(map, 'target');
-      await createFile(map, `${choice.id.replace(/[^A-Za-z0-9_-]/g, '_')}.pulse-map.json`);
+      await createFile(map, `${choice.id.replace(/[^A-Za-z0-9_-]/g, '_')}.mapl`);
     })),
   );
 }

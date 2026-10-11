@@ -26,6 +26,10 @@ TOUCH_CS = 33
 
 ## Conditional Compilation
 
+Display-enabled PlatformIO environments require `bodmer/TFT_eSPI`,
+`bodmer/TJpg_Decoder` for JPEG rendering, and `lvgl/lvgl` unless
+`DISPLAY_NO_LVGL` is defined. These dependencies are declared in `platformio.ini`.
+
 The display module is conditionally compiled using the `ENABLE_DISPLAY` flag:
 
 ```cpp

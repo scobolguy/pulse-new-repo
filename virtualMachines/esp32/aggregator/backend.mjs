@@ -22,6 +22,7 @@ const WORKSPACE_ROOT = path.resolve(__dirname, '..');
 import { fileURLToPath } from 'url';
 import { createMessageBroker } from './src/broker.js';
 import { createQueueManagerProvider } from './src/broker/queueManagerProviders/index.mjs';
+import { DISCOVERY_NODE_MAX_AGE_MS } from './src/discovery-topology.mjs';
 import { createDatabaseProvider } from './src/backend/databaseProviders/index.mjs';
 import { registerDatabaseRoutes } from './src/backend/databaseRoutes.mjs';
 import { createFileServer } from './fileServer.js';
@@ -2452,7 +2453,6 @@ const BRIDGE_WORKER_MAX_BACKOFF_MULTIPLIER = Math.max(1.5, readEnvNumber('BRIDGE
 const WORKER_STARTUP_STAGGER_CAP_MS = Math.max(20, readEnvNumber('WORKER_STARTUP_STAGGER_CAP_MS', 180));
 const EDGE_ESP32_ENABLED = readEnvBoolean('EDGE_ESP32_ENABLED', ['1', 'true', 'yes'], false);
 const EDGE_ESP32_AUTO_INGEST = readEnvBoolean('EDGE_ESP32_AUTO_INGEST', ['1', 'true', 'yes'], true);
-const EDGE_ESP32_HOST = readEnvString('EDGE_ESP32_HOST', '127.0.0.1').trim() || '127.0.0.1';
 const EDGE_ESP32_PORT = Math.max(1, readEnvNumber('EDGE_ESP32_PORT', 80));
 const EDGE_ESP32_TIMEOUT_MS = Math.max(100, readEnvNumber('EDGE_ESP32_TIMEOUT_MS', 1200));
 const EDGE_ESP32_PATH = readEnvString('EDGE_ESP32_PATH', '/pmachine/edge_ingress_stage').trim() || '/pmachine/edge_ingress_stage';
@@ -2465,51 +2465,6 @@ const EDGE_ESP32_FORCED_EVOLUTION_RATE = Math.min(1, Math.max(0, readEnvNumber('
 const MAP_PLACEMENT_REGISTRY_PATH = path.join(RUNTIME_DATA_ROOT, 'map-placement-registry.json');
 const MAP_PLACEMENT_ASSIGNMENT_TTL_MS = Math.max(10 * 1000, readEnvNumber('MAP_PLACEMENT_ASSIGNMENT_TTL_MS', 60 * 1000));
 const MAP_PLACEMENT_REGISTRATION_TTL_MS = Math.max(30 * 1000, readEnvNumber('MAP_PLACEMENT_REGISTRATION_TTL_MS', 10 * 60 * 1000));
-
-function parseEdgeNodeList(rawList = '') {
-  return String(rawList || '')
-    .split(',')
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => {
-      let host = entry;
-      let port = EDGE_ESP32_PORT;
-      if (entry.startsWith('http://') || entry.startsWith('https://')) {
-        try {
-          const parsed = new URL(entry);
-          host = parsed.hostname;
-          port = Number(parsed.port) > 0 ? Number(parsed.port) : EDGE_ESP32_PORT;
-        } catch {
-          host = EDGE_ESP32_HOST;
-          port = EDGE_ESP32_PORT;
-        }
-      } else if (entry.includes(':')) {
-        const [hostPart, portPart] = entry.split(':');
-        host = String(hostPart || '').trim() || EDGE_ESP32_HOST;
-        const parsedPort = Number(String(portPart || '').trim());
-        port = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : EDGE_ESP32_PORT;
-      }
-      return {
-        host,
-        port,
-        label: `${host}:${port}`
-      };
-    });
-}
-
-const EDGE_ESP32_DEFAULT_NODE = {
-  host: EDGE_ESP32_HOST,
-  port: EDGE_ESP32_PORT,
-  label: `${EDGE_ESP32_HOST}:${EDGE_ESP32_PORT}`
-};
-const EDGE_ESP32_GENERAL_NODES = parseEdgeNodeList(readEnvString('EDGE_ESP32_NODES', ''));
-const EDGE_ESP32_BONECRUSHER_NODES = parseEdgeNodeList(readEnvString('EDGE_ESP32_BONECRUSHER_NODES', ''));
-const EDGE_ESP32_DRONE_NODES = parseEdgeNodeList(readEnvString('EDGE_ESP32_DRONE_NODES', ''));
-const EDGE_ESP32_FALLBACK_NODES = EDGE_ESP32_GENERAL_NODES.length > 0 ? EDGE_ESP32_GENERAL_NODES : [EDGE_ESP32_DEFAULT_NODE];
-const ESP32_DISCOVERY_PROBE_ENABLED = readEnvBoolean('ESP32_DISCOVERY_PROBE_ENABLED', ['1', 'true', 'yes'], true);
-const ESP32_DISCOVERY_PROBE_INTERVAL_MS = Math.max(5000, readEnvNumber('ESP32_DISCOVERY_PROBE_INTERVAL_MS', 15000));
-const ESP32_DISCOVERY_PROBE_TIMEOUT_MS = Math.max(300, readEnvNumber('ESP32_DISCOVERY_PROBE_TIMEOUT_MS', 1500));
-const ESP32_DISCOVERY_SEED_NODES = parseEdgeNodeList(readEnvString('ESP32_DISCOVERY_SEED_NODES', ''));
 const edgeNodeRoundRobinByRole = new Map();
 const mapPlacementState = {
   version: 1,
@@ -2707,10 +2662,12 @@ function chooseMapPlacement({ mapKey = '', sourceType = null, destinationType = 
   pruneMapPlacementRuntimeState(nowMs);
   const estimatedMessageBytes = estimateMessageSizeBytes(message);
   const role = normalizeEdgeRole(requestedRole);
+  const discoveredEsp32Hosts = new Set(getLiveDiscoveredEsp32Nodes(nowMs).map((node) => node.host));
 
   const candidates = entry.placements
     .filter((placement) => placement.enabled !== false)
     .filter((placement) => placement.healthy !== false)
+    .filter((placement) => placement.tier !== 'esp32' || discoveredEsp32Hosts.has(placement.host))
     .filter((placement) => (role ? placement.role === role : true))
     .filter((placement) => {
       if (!placement.maxMessageBytes || placement.maxMessageBytes <= 0) return true;
@@ -2803,50 +2760,6 @@ function getMapPlacementSummary() {
   };
 }
 
-function isLoopbackHost(host = '') {
-  const normalized = String(host || '').trim().toLowerCase();
-  return normalized === '' || normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '0.0.0.0';
-}
-
-function readPlatformIoUploadSeeds() {
-  const backendDir = path.dirname(fileURLToPath(import.meta.url));
-  const platformIoPath = path.join(backendDir, '..', 'platformio.ini');
-  const seeds = [];
-  try {
-    if (!fs.existsSync(platformIoPath)) return seeds;
-    const raw = fs.readFileSync(platformIoPath, 'utf-8');
-    const lines = String(raw || '').split(/\r?\n/);
-    for (const line of lines) {
-      const match = line.match(/^\s*upload_port\s*=\s*([^\s#;]+)\s*$/i);
-      if (!match) continue;
-      const host = String(match[1] || '').trim();
-      if (!host || isLoopbackHost(host)) continue;
-      seeds.push({ host, port: 80, label: `${host}:80` });
-    }
-  } catch {
-    // Ignore platformio.ini parse errors; UDP discovery remains primary.
-  }
-  return seeds;
-}
-
-const ESP32_DISCOVERY_PROBE_NODES = (() => {
-  const merged = [
-    ...EDGE_ESP32_GENERAL_NODES,
-    ...EDGE_ESP32_BONECRUSHER_NODES,
-    ...EDGE_ESP32_DRONE_NODES,
-    ...ESP32_DISCOVERY_SEED_NODES,
-    ...readPlatformIoUploadSeeds()
-  ];
-  const dedup = new Map();
-  for (const node of merged) {
-    const host = String(node?.host || '').trim();
-    const port = Number(node?.port) > 0 ? Number(node.port) : 80;
-    if (!host || isLoopbackHost(host)) continue;
-    dedup.set(`${host}:${port}`, { host, port, label: `${host}:${port}` });
-  }
-  return Array.from(dedup.values());
-})();
-
 function estimateMessageSizeBytes(message) {
   if (message == null) return 0;
   if (typeof message === 'string') return Buffer.byteLength(message, 'utf8');
@@ -2863,6 +2776,44 @@ function normalizeEdgeRole(role) {
   return null;
 }
 
+function getLiveDiscoveredEsp32Nodes(now = Date.now()) {
+  return Array.from(discoveredNodes.values()).filter((node) => {
+    const hardware = String(node?.details?.hardware || node?.hardware || '').trim();
+    const host = String(node?.ip || '').trim();
+    const lastSeen = Number(node?.lastSeen || 0);
+    return /^ESP32(?:[-\s]|$)/i.test(hardware)
+      && host
+      && host !== '127.0.0.1'
+      && host !== 'localhost'
+      && host !== '0.0.0.0'
+      && lastSeen > 0
+      && now - lastSeen <= DISCOVERY_NODE_MAX_AGE_MS
+      && node?.available !== false
+      && node?.draining !== true
+      && !['unavailable', 'draining'].includes(String(node?.status || '').toLowerCase());
+  }).map((node) => {
+    const host = String(node.ip).trim();
+    const port = Math.max(1, toFiniteNumber(node.httpPort || node.port, EDGE_ESP32_PORT));
+    return {
+      host,
+      port,
+      label: `${host}:${port}`,
+      nodeId: String(node.nodeId || node.nodeName || host).trim(),
+      deviceRole: normalizeEdgeRole(node.deviceRole || node.details?.deviceRole || node.details?.preferredTaskType),
+      services: Array.isArray(node.details?.services) ? node.details.services : []
+    };
+  });
+}
+
+function getLiveEsp32BluetoothAudioOrigin() {
+  const node = getLiveDiscoveredEsp32Nodes().find((candidate) => candidate.services.some((service) => {
+    const name = typeof service === 'string' ? service : service?.name;
+    return String(name || '').trim() === 'BluetoothAudioTtsService';
+  }));
+  if (!node) throw new Error('No live discovered ESP32 advertises BluetoothAudioTtsService.');
+  return `http://${node.host}:${node.port}`;
+}
+
 function chooseEdgeRole({ preferredRole = null, message = null } = {}) {
   const normalizedPreferredRole = normalizeEdgeRole(preferredRole);
   if (normalizedPreferredRole) return normalizedPreferredRole;
@@ -2877,27 +2828,27 @@ function chooseEdgeNode({ requestedRole = null, message = null } = {}) {
   let role = chooseEdgeRole({ preferredRole: requestedRole, message });
   let strategy = requestedRole ? 'explicit-role' : 'auto-role';
 
-  const canEvolve = EDGE_ESP32_BONECRUSHER_NODES.length > 0 && EDGE_ESP32_DRONE_NODES.length > 0;
-  if (canEvolve && EDGE_ESP32_FORCED_EVOLUTION_RATE > 0 && Math.random() < EDGE_ESP32_FORCED_EVOLUTION_RATE) {
+  if (EDGE_ESP32_FORCED_EVOLUTION_RATE > 0 && Math.random() < EDGE_ESP32_FORCED_EVOLUTION_RATE) {
     role = role === 'bonecrusher' ? 'drone' : 'bonecrusher';
     strategy = 'forced-evolution';
   }
 
-  let pool = role === 'bonecrusher' ? EDGE_ESP32_BONECRUSHER_NODES : EDGE_ESP32_DRONE_NODES;
+  const discovered = getLiveDiscoveredEsp32Nodes();
+  const roleMatches = discovered.filter((node) => node.deviceRole === role);
+  const pool = roleMatches.length ? roleMatches : discovered;
   if (!pool.length) {
-    pool = EDGE_ESP32_FALLBACK_NODES;
-    if (strategy === 'auto-role') strategy = 'fallback-pool';
+    throw new Error('No live ESP32 nodes have been discovered for edge routing.');
   }
 
   const rrKey = `${role}:${strategy}`;
   const currentIndex = edgeNodeRoundRobinByRole.get(rrKey) || 0;
-  const selected = pool[currentIndex % pool.length] || EDGE_ESP32_DEFAULT_NODE;
-  edgeNodeRoundRobinByRole.set(rrKey, (currentIndex + 1) % Math.max(pool.length, 1));
+  const selected = pool[currentIndex % pool.length];
+  edgeNodeRoundRobinByRole.set(rrKey, (currentIndex + 1) % pool.length);
 
   return {
     requestedRole: chooseEdgeRole({ preferredRole: requestedRole, message }),
     selectedRole: role,
-    strategy,
+    strategy: roleMatches.length ? strategy : `${strategy}:live-discovery-fallback`,
     estimatedMessageBytes: estimateMessageSizeBytes(message),
     node: selected
   };
@@ -2944,11 +2895,6 @@ const queueEnqueueLatencyTracker = {
 const edgeOffloadTracker = {
   enabled: EDGE_ESP32_ENABLED,
   configuredNode: 'dynamic',
-  configuredPools: {
-    bonecrusher: EDGE_ESP32_BONECRUSHER_NODES.map((n) => n.label),
-    drone: EDGE_ESP32_DRONE_NODES.map((n) => n.label),
-    fallback: EDGE_ESP32_FALLBACK_NODES.map((n) => n.label)
-  },
   attempted: 0,
   succeeded: 0,
   fallback: 0,
@@ -3252,7 +3198,10 @@ function getEdgeOffloadMetricsSummary() {
   return {
     enabled: edgeOffloadTracker.enabled,
     configuredNode: edgeOffloadTracker.configuredNode,
-    configuredPools: edgeOffloadTracker.configuredPools,
+    discoveredEsp32Nodes: Array.from(discoveredNodes.values())
+      .filter((node) => /^ESP32(?:[-\s]|$)/i.test(String(node?.details?.hardware || node?.hardware || '').trim()))
+      .map((node) => String(node.ip || '').trim())
+      .filter(Boolean),
     forcedEvolutionRate: EDGE_ESP32_FORCED_EVOLUTION_RATE,
     largeMessageThresholdBytes: EDGE_ESP32_LARGE_MESSAGE_THRESHOLD_BYTES,
     attempted: edgeOffloadTracker.attempted,
@@ -3456,7 +3405,7 @@ async function ingestWithEdgeFallback({
     const fallbackEnvelope = buildEdgeEnvelopeMeta({
       edgeProcessed: false,
       edgeFallback: false,
-      edgeNode: EDGE_ESP32_DEFAULT_NODE.label,
+      edgeNode: null,
       edgeLatencyMs: 0
     });
     const result = await enqueueToSingleQueue(message, fallbackEnvelope, 'single-queue-local');
@@ -8164,7 +8113,7 @@ function buildGatewayStreamPayload() {
 }
 
 // --- UDP Node Discovery ---
-const udpServer = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+const udpServer = dgram.createSocket('udp4');
 
 function getLocalAdvertiseIp() {
   const interfaces = os.networkInterfaces();
@@ -8398,64 +8347,6 @@ udpServer.bind(UDP_PORT, () => {
   }
   console.log(`[UDP] Listening for node broadcasts on port ${UDP_PORT}`);
 });
-
-async function probeEsp32Node(node, visited = new Set()) {
-  const host = String(node?.host || '').trim();
-  const port = Number(node?.port) > 0 ? Number(node.port) : 80;
-  if (!host || visited.has(host)) return;
-  visited.add(host);
-
-  const statusUrl = `http://${host}:${port}/status`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), ESP32_DISCOVERY_PROBE_TIMEOUT_MS);
-  try {
-    const statusRes = await fetch(statusUrl, { signal: controller.signal });
-    if (!statusRes.ok) return;
-    const statusPayload = await statusRes.json();
-    if (String(statusPayload?.hardware || '').toUpperCase() !== 'ESP32') return;
-
-    const ip = host;
-    const now = Date.now();
-    const previous = discoveredNodes.get(ip) || {};
-    discoveredNodes.set(ip, {
-      ...previous,
-      ip,
-      nodeName: statusPayload?.nodeName || previous.nodeName || ip,
-      lastSeen: now,
-      raw: previous.raw || 'active-probe',
-      details: {
-        ...(previous.details || {}),
-        ...statusPayload
-      }
-    });
-
-    const peers = Array.isArray(statusPayload?.discoveredNodes) ? statusPayload.discoveredNodes : [];
-    for (const peer of peers) {
-      const peerIp = String(peer?.ip || '').trim();
-      if (!peerIp || isLoopbackHost(peerIp)) continue;
-      await probeEsp32Node({ host: peerIp, port: 80 }, visited);
-    }
-  } catch {
-    // Ignore transient probe failures.
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function runEsp32DiscoveryProbe() {
-  if (!ESP32_DISCOVERY_PROBE_ENABLED) return;
-  const visited = new Set();
-  for (const node of ESP32_DISCOVERY_PROBE_NODES) {
-    await probeEsp32Node(node, visited);
-  }
-}
-
-if (ESP32_DISCOVERY_PROBE_ENABLED && ESP32_DISCOVERY_PROBE_NODES.length > 0) {
-  runEsp32DiscoveryProbe().catch(() => {});
-  setInterval(() => {
-    runEsp32DiscoveryProbe().catch(() => {});
-  }, ESP32_DISCOVERY_PROBE_INTERVAL_MS);
-}
 
 // --- Node Cleanup ---
 setInterval(() => {
@@ -9855,6 +9746,7 @@ function registerRoutes(app) {
     PIPER_MODEL_PATH,
     runPiperSynthesis,
     playWavOnHost,
+    getLiveEsp32BluetoothAudioOrigin,
     forwardEsp32BluetoothTts
   });
 
@@ -10231,12 +10123,6 @@ try {
     RUNTIME_DATA_ROOT,
     pathJoin: path.join,
     createNodeRegistryRoutes,
-    esp32SeedNodes: [
-      ...EDGE_ESP32_GENERAL_NODES,
-      ...EDGE_ESP32_BONECRUSHER_NODES,
-      ...EDGE_ESP32_DRONE_NODES,
-      ...ESP32_DISCOVERY_SEED_NODES
-    ],
     createPascalCompiler,
     pascalCompilerRoutes,
     express,

@@ -7,9 +7,6 @@ import { bindNodeDiscoverySocket, enrichDiscoveredNode } from './src/backend/mod
 import {
   normalizeDiscoveryNode,
   mergeDiscoveryNodes,
-  isLoopbackHost,
-  isEsp32DiscoveryNode,
-  DISCOVERY_NODE_MAX_AGE_MS,
   pruneDiscoveryNodes
 } from './src/discovery-topology.mjs';
 import {
@@ -21,15 +18,8 @@ import {
 
 const HTTP_PORT = Number(process.env.DISCOVERY_HTTP_PORT || 4301);
 const UDP_PORT = Number(process.env.UDP_PORT || 4210);
-const NODE_TTL_MS = DISCOVERY_NODE_MAX_AGE_MS;
-const PROBE_ENABLED = String(process.env.ESP32_DISCOVERY_PROBE_ENABLED || '1').trim().toLowerCase() !== '0' && String(process.env.ESP32_DISCOVERY_PROBE_ENABLED || '1').trim().toLowerCase() !== 'false';
 const PROBE_INTERVAL_MS = Math.max(5000, Number(process.env.ESP32_DISCOVERY_PROBE_INTERVAL_MS || 15000));
 const PROBE_TIMEOUT_MS = Math.max(300, Number(process.env.ESP32_DISCOVERY_PROBE_TIMEOUT_MS || 1500));
-const SEED_NODES = String(process.env.ESP32_DISCOVERY_SEED_NODES || '')
-  .split(',')
-  .map((value) => value.trim())
-  .filter(Boolean)
-  .map((value) => ({ host: value, port: 80 }));
 
 const discoveredNodes = new Map();
 const nodeEnrichmentLastAttempt = new Map();
@@ -312,56 +302,6 @@ async function refreshConfiguredServices() {
   await Promise.all(listServiceEntries(ENVIRONMENT).map((entry) => probeConfiguredService(entry)));
 }
 
-async function probeEsp32Node(node, visited = new Set()) {
-  const host = String(node?.host || '').trim();
-  const port = Number(node?.port) > 0 ? Number(node.port) : 80;
-  if (!host || visited.has(host) || isLoopbackHost(host)) return;
-  visited.add(host);
-
-  const statusUrl = `http://${host}:${port}/status`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-  try {
-    const statusRes = await fetch(statusUrl, { signal: controller.signal });
-    if (!statusRes.ok) return;
-    const statusPayload = await statusRes.json();
-    const ip = host;
-    const now = Date.now();
-    if (!isEsp32DiscoveryNode({ details: statusPayload, lastSeen: now }, NODE_TTL_MS, now)) return;
-    const previous = discoveredNodes.get(ip) || {};
-    const normalized = normalizeDiscoveryNode({
-      ...previous,
-      ip,
-      nodeName: statusPayload?.nodeName || previous.nodeName || ip,
-      lastSeen: now,
-      raw: previous.raw || 'active-probe',
-      details: {
-        ...(previous.details || {}),
-        ...statusPayload
-      }
-    });
-    discoveredNodes.set(ip, normalized);
-
-    const peers = Array.isArray(statusPayload?.discoveredNodes) ? statusPayload.discoveredNodes : [];
-    for (const peer of peers) {
-      const peerIp = String(peer?.ip || '').trim();
-      if (!peerIp || isLoopbackHost(peerIp)) continue;
-      await probeEsp32Node({ host: peerIp, port: 80 }, visited);
-    }
-  } catch {
-    // Ignore transient probe failures.
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function runEsp32DiscoveryProbe() {
-  const visited = new Set();
-  for (const node of SEED_NODES) {
-    await probeEsp32Node(node, visited);
-  }
-}
-
 udpServer.on('message', (msg, rinfo) => {
   const ip = rinfo.address;
   const now = Date.now();
@@ -462,13 +402,6 @@ try {
 } catch (error) {
   console.error(`[DISCOVERY] Startup failed on UDP ${UDP_PORT}: ${error.message}. Only one discovery listener may own this port.`);
   process.exit(1);
-}
-
-if (PROBE_ENABLED && SEED_NODES.length > 0) {
-  runEsp32DiscoveryProbe().catch(() => {});
-  setInterval(() => {
-    runEsp32DiscoveryProbe().catch(() => {});
-  }, PROBE_INTERVAL_MS);
 }
 
 refreshConfiguredServices().catch(() => {});
