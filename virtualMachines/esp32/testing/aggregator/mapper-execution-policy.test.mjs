@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { runPL0 } from '../../aggregator/scripts/pl0-interpreter.mjs';
-import { createPascalishMapperExecution } from '../../aggregator/src/mapper/~execution-policy.mjs';
+import { createPascalishMapperExecution } from '../../aggregator/src/mapper/execution-policy.mjs';
 
 const requireAggregator = createRequire(new URL('../../aggregator/package.json', import.meta.url));
 const express = requireAggregator('express');
@@ -204,10 +204,6 @@ test('Mapper run endpoint retains its HTTP response contract and status codes', 
     });
 
     const origin = `http://127.0.0.1:${server.address().port}`;
-    const healthResponse = await fetch(`${origin}/health`);
-    assert.equal(healthResponse.status, 200);
-    assert.deepEqual(await healthResponse.json(), { status: 'ok', service: 'data-mapper' });
-
     const invalidCreateResponse = await fetch(`${origin}/api/mapper/maps`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

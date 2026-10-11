@@ -2,6 +2,7 @@
   "version": 1,
   "description": "Route role manifest. Controls which backend route groups are registered at startup. Set 'enabled' to false to disable a group without touching code. Changes require a backend restart (this file is read once at boot, not hot-reloaded).",
   "routes": [
+    { "id": "issues",                   "registrar": "registerIssueRoutes",                   "dependencyKey": "issues",                   "enabled": true  },
     { "id": "lifecycle-inquiry",        "registrar": "registerLifecycleInquiryRoutes",        "dependencyKey": "lifecycleInquiry",        "enabled": true  },
     { "id": "lifecycle-nlp",            "registrar": "registerLifecycleNlpRoutes",            "dependencyKey": "lifecycleNlp",            "enabled": false },
     { "id": "lifecycle-worker-gateway", "registrar": "registerLifecycleWorkerGatewayRoutes",  "dependencyKey": "lifecycleWorkerGateway",  "enabled": true  },

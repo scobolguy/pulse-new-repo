@@ -18,6 +18,9 @@ const collectorSource = await readFile(collectorProgram, 'utf8');
 const artifact = compilePascalishProgramWithAntlr(source, { fileName: 'towers-of-hanoi-program.pas' });
 
 const vscodeMock = `
+  export class Disposable {
+    static from(...items) { return { dispose() { for (const item of items) item.dispose(); } }; }
+  }
   export class EventEmitter {
     listeners = [];
     event = listener => { this.listeners.push(listener); return { dispose() {} }; };
@@ -46,6 +49,7 @@ const vscodeMock = `
   export const ViewColumn = { Beside: -2 };
   export const ProgressLocation = { Notification: 15 };
   export const window = {
+    onDidChangeActiveTextEditor: () => ({ dispose() {} }),
     registerCustomEditorProvider: () => ({ dispose() {} }),
     registerCustomTextEditorProvider: () => ({ dispose() {} }),
     createOutputChannel: () => ({ dispose() {}, appendLine() {} }),
@@ -152,11 +156,12 @@ test('Data Librarian has a dedicated contributed view and browses nested schema 
 
 test('the unified VSIX contributes and activates the Pulse Studio Deploy panel', async () => {
   const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
-  assert.equal(manifest.version, '0.1.15');
+  assert.equal(manifest.version, '0.1.16');
   assert.equal(manifest.displayName, 'Pulse Studio & PMachine Debugger');
   assert.ok(manifest.contributes.viewsContainers.activitybar.some(item => item.id === 'pulseCatalogStudio'));
   assert.ok(manifest.contributes.views.pulseCatalogStudio.some(item => item.id === 'pulseCatalogStudio.deploy'));
   for (const command of [
+    'pulseCatalogStudio.openIssues',
     'pulseCatalogStudio.refreshDeployView',
     'pulseCatalogStudio.validateWflDeployment',
     'pulseCatalogStudio.previewWflDeployment',

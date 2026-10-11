@@ -9,6 +9,13 @@ Executable tests, test-only harnesses, fixtures, and golden outputs will be cons
 
 Tests must write transient output to `runtime/test-results/` or an operating-system temporary directory, never into source directories.
 
+The Librarian HTTP fixture allows up to 60 seconds for process startup, which
+compiles its Pascalish units. The parallel full suite has exceeded its previous
+15-second startup budget on Windows even though isolated startup passes. Each
+fixture reports its measured startup time and fails explicitly on child exit,
+spawn failure, or an unhealthy response. This is a test startup allowance, not
+a desktop VM execution limit; mutation request deadlines remain unchanged.
+
 Run `npm run test:aggregator:modules` to verify the existing Aggregator module families and its backend composition seams before or after a migration slice.
 
 Run `npm run test:pmachine:arduino-layout` to verify the current Arduino PMachine source inventory and PlatformIO exclusion contracts before its local-library migration.

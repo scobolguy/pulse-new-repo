@@ -2560,6 +2560,10 @@ function activate(context, vscodeApi) {
       () => openCatalogStudioPanel(context.extensionUri, 'Pulse Studio', 'flow-designer?host=vscode'),
     ),
     vscode.commands.registerCommand(
+      'pulseCatalogStudio.openIssues',
+      () => openCatalogStudioPanel(context.extensionUri, 'Pulse Issue Board', 'issues?host=vscode'),
+    ),
+    vscode.commands.registerCommand(
       'pulseCatalogStudio.openDataMapper',
       () => vscode.commands.executeCommand(`${MAPPER_VIEW_TYPE}.focus`),
     ),

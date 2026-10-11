@@ -65,7 +65,9 @@ test('revision retry attempts are bounded and empty cache is valid', async () =>
 async function loadView(requestPayload) {
   const file = new URL('../../tools/catalog-studio-vscode/extension.js', import.meta.url)
   const source = await fs.readFile(file, 'utf8')
+  const extensionRequire = createRequire(file)
   const vscode = {
+    Disposable: { from: (...items) => ({ dispose() { for (const item of items) item.dispose() } }) },
     TreeItem: class { constructor(label, collapsibleState) { this.label = label; this.collapsibleState = collapsibleState } },
     TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
     ThemeIcon: class { constructor(id) { this.id = id } },
@@ -76,6 +78,7 @@ async function loadView(requestPayload) {
     },
     Uri: { joinPath: (_base, ...parts) => parts.join('/') },
     window: {
+      onDidChangeActiveTextEditor: () => ({ dispose() {} }),
       showErrorMessage() {},
       async showInformationMessage() {},
       async showWarningMessage() {},
@@ -89,10 +92,10 @@ async function loadView(requestPayload) {
   }
   const context = vm.createContext({
     require: name => name === 'vscode' ? vscode : name === './distributedNetwork'
-      ? { readDistributedNetwork } : require(name),
+      ? { readDistributedNetwork } : extensionRequire(name),
     module: { exports: {} }, URL, URLSearchParams, Buffer,
   })
-  vm.runInContext(`${source}\nmodule.exports.test = { activate, CatalogStudioTreeProvider, DataMapperViewProvider, PulseInfrastructureTreeProvider, WflDeployViewProvider, NodeInventoryTreeProvider, validateWflDeployment, previewWflDeployment, explainWflDeploymentUnavailable, getDistributedNetworkItems, getNetworkItems, getMessageBrokerItems, getLibrarianDataTypes, registerDataTypeMessages, getCatalogStudioHostHtml, vscode };`, context)
+  vm.runInContext(`${source}\nmodule.exports.test = { activate, CatalogStudioTreeProvider, DataMapperViewProvider, PulseInfrastructureTreeProvider, WflDeployViewProvider, NodeInventoryTreeProvider, validateWflDeployment, previewWflDeployment, getDistributedNetworkItems, getNetworkItems, getMessageBrokerItems, getLibrarianDataTypes, registerDataTypeMessages, getCatalogStudioHostHtml, vscode };`, context)
   context.requestPayload = requestPayload
   vm.runInContext('requestJson = async (...args) => { if (requestPayload && requestPayload.name === "Error") throw requestPayload; if (typeof requestPayload === "function") return requestPayload(...args); return requestPayload; };', context)
   return context.module.exports.test
@@ -150,6 +153,7 @@ test('Pulse Studio activates at startup with visible native librarian and mapper
     assert.equal(view.visibility, 'visible')
   }
   assert.ok(manifest.contributes.commands.some(command => command.command === 'pulseCatalogStudio.refreshDataLibrarian'))
+  assert.ok(manifest.contributes.commands.some(command => command.command === 'pulseCatalogStudio.openIssues'))
   assert.equal(manifest.contributes.commands.filter(command => command.command === 'pulseCatalogStudio.refreshDataMapper').length, 1)
   assert.ok(manifest.contributes.menus['view/title'].some(menu =>
     menu.command === 'pulseCatalogStudio.refreshDataLibrarian' && menu.when === 'view == pulseCatalogStudio.sidebar'))
@@ -171,6 +175,7 @@ test('Pulse Studio activates at startup with visible native librarian and mapper
   } }
   const context = { extensionUri: '/extension', subscriptions: [] }
   view.activate(context)
+  assert.ok(commands.has('pulseCatalogStudio.openIssues'))
   const provider = registrations.get(sidebar.id)
   assert.ok(provider instanceof view.CatalogStudioTreeProvider)
   assert.ok(registrations.has('pulseCatalogStudio.infrastructure'))
@@ -526,7 +531,7 @@ test('Node Inventory unregister and stop actions are separately confirmed and ca
   assert.ok(prompts.every(prompt => prompt.options.modal === true))
 })
 
-test('WFL validate compiles, while Deploy reports that no device deployment occurred', async () => {
+test('WFL validate compiles, while Deploy opens the deployment editor without deploying', async () => {
   const calls = []
   const view = await loadView(async (url, _timeout, _details, options = {}) => {
     calls.push({ url, method: options.method || 'GET' })
@@ -537,12 +542,22 @@ test('WFL validate compiles, while Deploy reports that no device deployment occu
   view.vscode.window.showWarningMessage = async message => { messages.push(message) }
   view.vscode.workspace.fs = { readFile: async () => Buffer.from('DEPLOYMENT "board-deploy"') }
   const item = { resourceUri: { fsPath: 'deployment.wfl' } }
+  const commands = new Map()
+  const opened = []
+  view.vscode.languages = { createDiagnosticCollection: () => ({ dispose() {} }) }
+  view.vscode.window.registerTreeDataProvider = () => ({ dispose() {} })
+  view.vscode.window.registerCustomTextEditorProvider = () => ({ dispose() {} })
+  view.vscode.commands = {
+    registerCommand(id, handler) { commands.set(id, handler); return { dispose() {} } },
+    async executeCommand(...args) { opened.push(args) },
+  }
+  view.activate({ extensionUri: '/extension', subscriptions: [] })
   await view.validateWflDeployment(item)
-  await view.explainWflDeploymentUnavailable()
+  await commands.get('pulseCatalogStudio.deployWflDeployment')(item)
   assert.equal(calls.length, 1)
   assert.equal(calls[0].method, 'POST')
   assert.match(messages[0], /WFL valid/)
-  assert.match(messages[1], /No deployment was made/)
+  assert.deepEqual(opened, [['pulseCatalogStudio.openWflEditor', item.resourceUri]])
 })
 
 test('WFL preview matches declared targets against node registry IDs', async () => {

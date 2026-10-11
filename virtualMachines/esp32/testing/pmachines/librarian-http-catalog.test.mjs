@@ -28,6 +28,8 @@ async function fixture(t) {
     stdio: ['ignore', 'ignore', 'pipe']
   });
   let errors = '';
+  let spawnError;
+  child.once('error', error => { spawnError = error; });
   child.stderr.on('data', chunk => { errors += chunk; });
   t.after(() => new Promise(resolve => {
     if (child.exitCode !== null || child.signalCode !== null) return resolve();
@@ -35,18 +37,32 @@ async function fixture(t) {
     child.kill();
   }));
   const origin = `http://127.0.0.1:${port}`;
-  const startupDeadline = Date.now() + 15000;
+  const startedAt = Date.now();
+  // Startup compiles all Librarian units; full-suite CPU contention can exceed 15s.
+  const startupBudgetMs = 60000;
+  const startupDeadline = startedAt + startupBudgetMs;
+  let lastProbeError;
   while (Date.now() < startupDeadline) {
-    if (child.exitCode !== null) throw new Error(`Librarian startup failed: ${errors}`);
+    if (spawnError) throw spawnError;
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(`Librarian startup failed (exit ${child.exitCode}, signal ${child.signalCode}): ${errors}`);
+    }
+    let response;
     try {
-      const response = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(500) });
-      if (response.ok) return { root, origin, catalogRoot: path.join(root, 'services', 'librarian'), legacy };
-    } catch {
-      // Retry connection failures only during child startup.
+      response = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(500) });
+    } catch (error) {
+      if (error.name !== 'TimeoutError' && error.cause?.code !== 'ECONNREFUSED'
+        && error.cause?.code !== 'ECONNRESET') throw error;
+      lastProbeError = error;
+    }
+    if (response) {
+      if (!response.ok) throw new Error(`Librarian health failed (${response.status}): ${await response.text()}`);
+      t.diagnostic(`Librarian startup: ${Date.now() - startedAt} ms (budget ${startupBudgetMs} ms)`);
+      return { root, origin, catalogRoot: path.join(root, 'services', 'librarian'), legacy };
     }
     await delay(50);
   }
-  throw new Error(`Librarian startup timeout: ${errors}`);
+  throw new Error(`Librarian startup timeout after ${Date.now() - startedAt} ms: ${errors}`, { cause: lastProbeError });
 }
 
 test('metadata routes are dispatched by Pascalish while unrelated routes fall through', async t => {

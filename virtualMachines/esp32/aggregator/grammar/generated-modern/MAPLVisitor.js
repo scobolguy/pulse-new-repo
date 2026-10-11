@@ -18,6 +18,24 @@ export default class MAPLVisitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by MAPLParser#nameRef.
+	visitNameRef(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by MAPLParser#mapDirective.
+	visitMapDirective(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by MAPLParser#directiveValue.
+	visitDirectiveValue(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by MAPLParser#mapBody.
 	visitMapBody(ctx) {
 	  return this.visitChildren(ctx);
@@ -32,6 +50,12 @@ export default class MAPLVisitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by MAPLParser#fieldPath.
 	visitFieldPath(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by MAPLParser#pathSegment.
+	visitPathSegment(ctx) {
 	  return this.visitChildren(ctx);
 	}
 

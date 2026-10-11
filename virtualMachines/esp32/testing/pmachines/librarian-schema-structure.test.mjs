@@ -133,6 +133,19 @@ test('Pascalish schema structure service enriches SWIFT field metadata', async (
       messageType: 'AB103',
       fields: { '32A': {} }
     });
+    const nestedMessage = {
+      messageType: 'MT103',
+      fields: { '20': {} },
+      metadata: [{ nested: { values: [true, null, { label: 'preserved' }] } }],
+    };
+    const wrapper = { before: 'first', messages: [nestedMessage, nestedMessage], after: 'last' };
+    const enrichedMessage = {
+      ...nestedMessage,
+      fields: { '20': { type: 'string', format: '16x', length: '16x' } },
+    };
+    assert.deepEqual(JSON.parse(await service.enrichSwiftFields(JSON.stringify(wrapper))), {
+      ...wrapper, messages: [enrichedMessage, enrichedMessage],
+    });
   } finally {
     await service.stop();
   }

@@ -1,6 +1,7 @@
 export function createRouteManifestDependencyFactories(deps = {}) {
   const {
     requirePermission,
+    getSessionUserIdFromRequest,
     readTransactionLifecycleCompiled,
     getFsmEntityStateFromSql,
     getTransactionTrace,
@@ -154,6 +155,7 @@ export function createRouteManifestDependencyFactories(deps = {}) {
   } = deps;
 
   return {
+    issues: () => ({ getSessionUserIdFromRequest, resolveEffectiveAccessForUser, hasPermission }),
     lifecycleInquiry: () => ({
       requirePermission,
       readTransactionLifecycleCompiled,

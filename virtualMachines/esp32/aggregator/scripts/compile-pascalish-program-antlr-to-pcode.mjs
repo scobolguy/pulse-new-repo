@@ -551,11 +551,7 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
   }
 
   visitServiceLocalDecl(ctx) {
-    if (ctx.mapperDecl()) return this.visit(ctx.mapperDecl());
-    if (ctx.typeDecl()) return this.visit(ctx.typeDecl());
-    if (ctx.libraryDecl()) return this.visit(ctx.libraryDecl());
-    if (ctx.varDecl()) return this.visit(ctx.varDecl());
-    return null;
+    return this.visit(ctx.unitDecl());
   }
 
   visitLibraryDecl(ctx) {
@@ -2491,6 +2487,8 @@ class Codegen {
   }
 
   emit(line) {
+    const temporaryStore = /^STORE ((?:__tmp\d+|SELFWB_RET_\d+)\w*)$/.exec(line);
+    if (temporaryStore && this.procedureTemps) this.procedureTemps.add(temporaryStore[1]);
     if (line.trim() && !line.startsWith('#') && !line.endsWith(':')) {
       this.sourceMap ||= {};
       if (this.sourceLocation) this.sourceMap[String(this.instructionAddress || 0)] = { ...this.sourceLocation };
@@ -3154,6 +3152,7 @@ class Codegen {
         const fullName = `${classDecl.name}.${member.name}`;
         const label = this.registerProcedure(fullName);
         this.emit(`${label}:`);
+        this.procedureTemps = new Set();
         this.methodContext = {
           className: classDecl.name,
           fields: classState?.fields || new Set(),
@@ -3192,15 +3191,18 @@ class Codegen {
             ...(member.isStatic ? [] : this.expandParamNames(classState?.fieldDecls || [])),
             ...this.expandParamNames(member.parameters || [])
           ],
-          locals: (member.localDecls || []).flatMap(item => this.storageLeaves(item.name, item.dataType)),
+          locals: [...(member.localDecls || []).flatMap(item => this.storageLeaves(item.name, item.dataType)),
+            ...this.procedureTemps],
           genericParams: member.genericParams || []
         };
+        this.procedureTemps = null;
       }
     }
 
     for (const procedure of this.ast.procedures || []) {
       const label = this.registerProcedure(procedure.name);
       this.emit(`${label}:`);
+      this.procedureTemps = new Set();
       this.scopeTypes = new Map();
       for (const item of procedure.paramDecls || []) this.scopeTypes.set(item.name.toLowerCase(), item.dataType);
       for (const item of procedure.localDecls || []) this.scopeTypes.set(item.name.toLowerCase(), item.dataType);
@@ -3222,8 +3224,10 @@ class Codegen {
         name: procedure.name,
         returnType: procedure.returnType || null,
         params: this.expandParamNames(procedure.paramDecls || []),
-        locals: (procedure.localDecls || []).flatMap(item => this.storageLeaves(item.name, item.dataType))
+        locals: [...(procedure.localDecls || []).flatMap(item => this.storageLeaves(item.name, item.dataType)),
+          ...this.procedureTemps]
       };
+      this.procedureTemps = null;
     }
 
     this.emit('MAIN:');
@@ -3563,6 +3567,16 @@ export function compilePascalishProgramWithAntlr(sourceText, { fileName = '', ho
   const result = new Codegen(ast).build();
 
   result.programMap.libraries = linkedLibraries;
+  const librarianImports = [];
+  const collectImports = node => {
+    const items = node.librarianImportItems?.();
+    if (items) {
+      for (const target of items.importTarget()) librarianImports.push({ name: unquote(text(target)) });
+    }
+    for (const child of node.children || []) collectImports(child);
+  };
+  collectImports(tree);
+  result.programMap.librarianImports = librarianImports;
   if (deviceBindings) result.programMap.deviceBindingsVersion = DEVICE_BINDINGS_VERSION;
   // Attach mapper imports to the program map
   result.programMap.mapperImports = mapperImports;

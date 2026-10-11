@@ -3,6 +3,7 @@
 Aggregator is a control plane and routing layer for distributed services.
 
 Main capabilities:
+- [GitHub-backed issue tracking and Kanban board](docs/issue-board.md) at `/issues`
 - Queue manager registry and routing
 - Service instance registry for any service type (for example webapi or broker)
 - Node lifecycle controls (quiesce, drain, maintenance, return-service)

@@ -3,6 +3,10 @@
 ## Overview
 The pmachine is a portable pcode runtime for constrained embedded systems, designed for the ESP32/ESP8266 platform. It executes a simple stack-based instruction set, with pcode programs loaded from text files and parsed into an internal instruction vector (`pinstructions`).
 
+JavaScript execution with `desktopBudget: true` has no default instruction limit.
+An omitted or null `maxSteps` is unlimited; an explicitly supplied positive safe
+integer is enforced. Cooperative execution remains cancellable. Embedded-compatible
+execution retains its 200,000-step ceiling.
 
 ## Pcode Format
 Pcode files are plain text, one instruction per line. Supported instructions:
@@ -79,6 +83,14 @@ When `pm.run()` is called, each instruction is printed to the serial console alo
 The JavaScript desktop service host can run with `desktopBudget: true`, which removes its default instruction-step and wall-clock execution limits. Hosts remain explicitly cancellable through `stop()`, and independent limits such as request size, response size, storage, and event-queue capacity still apply. A desktop host can opt back into finite step or time limits by supplying `maxSteps` or `maxExecutionMs`.
 
 This desktop behavior does not change the ESP32 firmware's bounded execution limit.
+
+The compiler marks desktop filesystem and capability-introspection bindings as
+desktop-only; hosted images using them cannot be encoded for ESP32. Portable
+services continue to advertise both JavaScript and ESP32 targets.
+
+Program maps retain Data Librarian import names from parsed declarations, without
+embedding runtime catalog data. Procedure and method locals include generated
+argument temporaries so recursive calls cannot overwrite a caller's staged values.
 
 ## Extendable Pascalish variables
 

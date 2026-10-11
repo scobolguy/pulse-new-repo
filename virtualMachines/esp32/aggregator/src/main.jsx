@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import DataMapper from './DataMapper.jsx'
 import FlowDesignerPage from './FlowDesignerPage.jsx'
+import IssuesBoardPage from './IssuesBoardPage.jsx'
 
 const originalFetch = window.fetch.bind(window)
 const apiBaseUrls = String(import.meta.env.VITE_API_BASES || '')
@@ -84,6 +85,8 @@ function renderEmbeddedPage() {
   const isVscodeWebview = params.get('host') === 'vscode'
   const currentPath = window.location.pathname
 
+  if (currentPath === '/issues') return <IssuesBoardPage />
+
   if (isVscodeWebview && currentPath === '/data-mapper') {
     return <DataMapper />
   }
@@ -105,6 +108,7 @@ function renderEmbeddedPage() {
     <main>
       <h1>Pulse Studio is available in VS Code</h1>
       <p>Open this workspace in VS Code and use the Pulse Studio sidebar.</p>
+      <p><a href="/issues">Open the GitHub Issue Board</a></p>
     </main>
   )
 }

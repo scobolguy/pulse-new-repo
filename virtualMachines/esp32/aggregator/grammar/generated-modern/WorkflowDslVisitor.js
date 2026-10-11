@@ -1,4 +1,4 @@
-// Generated from grammar/WorkflowDsl.g4 by ANTLR 4.13.2
+// Generated from C:/dev/pulse-new-repo/virtualMachines/esp32/aggregator/grammar/WorkflowDsl.g4 by ANTLR 4.13.2
 // jshint ignore: start
 import antlr4 from 'antlr4';
 
@@ -14,6 +14,126 @@ export default class WorkflowDslVisitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by WorkflowDslParser#item.
 	visitItem(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#letDecl.
+	visitLetDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#defaultEnvironmentDecl.
+	visitDefaultEnvironmentDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#configIfDecl.
+	visitConfigIfDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#condition.
+	visitCondition(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#andCondition.
+	visitAndCondition(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#notCondition.
+	visitNotCondition(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#primaryCondition.
+	visitPrimaryCondition(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#compareOp.
+	visitCompareOp(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#stringExpr.
+	visitStringExpr(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#stringAtom.
+	visitStringAtom(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#flowDecl.
+	visitFlowDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#flowMember.
+	visitFlowMember(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#flowDirective.
+	visitFlowDirective(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#directiveKey.
+	visitDirectiveKey(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#directiveValue.
+	visitDirectiveValue(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#flowSeedDecl.
+	visitFlowSeedDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#flowNodeDecl.
+	visitFlowNodeDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#flowNodeClause.
+	visitFlowNodeClause(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#flowLinkDecl.
+	visitFlowLinkDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by WorkflowDslParser#signedNumber.
+	visitSignedNumber(ctx) {
 	  return this.visitChildren(ctx);
 	}
 

@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { createXmlBindings } from '../../pmachines/javascript/src/xml-bindings.mjs';
-import { createPascalishXsdParser } from '../../aggregator/src/librarian/~xsd-parser.mjs';
+import { createPascalishXsdParser } from '../../aggregator/src/librarian/xsd-parser.mjs';
 import { compilePascalishProgramWithAntlr } from '../../aggregator/scripts/compile-pascalish-program-antlr-to-pcode.mjs';
 import { encodeHostedImage } from '../../pmachines/shared/contracts/hosted-image.mjs';
 import { createPascalishServiceHost } from '../../pmachines/javascript/src/service-host.mjs';
@@ -206,6 +206,21 @@ test('explicit desktop execution budgets remain opt-in and finite when provided'
   await assert.rejects(run({ maxSteps: 200001 }), /maxSteps/);
   assert.equal((await run({ desktopBudget: true, maxSteps: 200001 })).stepLimitHit, false);
   assert.equal((await run({ desktopBudget: true, maxSteps: 10000001 })).stepLimitHit, false);
+  assert.equal((await run({ desktopBudget: true })).stepLimitHit, false);
+  assert.equal((await run({ desktopBudget: true, maxSteps: null })).stepLimitHit, false);
+  await assert.rejects(run({ desktopBudget: true, maxSteps: 0 }), /maxSteps/);
+  const limited = await executeProgram({
+    instructions: parsePcode('again:\nJMP again'), opcodeMap, mappingsById: new Map(),
+    inputQueue: '', sourceMessage: '', runtimeContext: { desktopBudget: true, maxSteps: 3 }
+  });
+  assert.equal(limited.stepLimitHit, true, 'explicit desktop budgets remain enforced');
+  const abort = new AbortController();
+  setImmediate(() => abort.abort());
+  await assert.rejects(executeProgram({
+    instructions: parsePcode('again:\nJMP again'), opcodeMap, mappingsById: new Map(),
+    inputQueue: '', sourceMessage: '',
+    runtimeContext: { desktopBudget: true, maxSteps: null, cooperative: true, signal: abort.signal }
+  }), /cancelled/);
   const compiled = compilePascalishProgramWithAntlr(`service 'desktop-budget'; var counter: integer;
 get '/count'; begin counter := 0; while counter < 30000 do counter := counter + 1; return counter end end.`,
   { hostServices: true });

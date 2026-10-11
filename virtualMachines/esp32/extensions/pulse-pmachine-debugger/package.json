@@ -176,6 +176,10 @@
     ],
     "commands": [
       {
+        "command": "pulseCatalogStudio.openIssues",
+        "title": "Pulse: Open Issue Board"
+      },
+      {
         "command": "pulseCatalogStudio.deployNetworkCache",
         "title": "Pulse: Deploy Network Cache"
       },

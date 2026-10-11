@@ -3,69 +3,78 @@
 import antlr4 from 'antlr4';
 import MAPLVisitor from './MAPLVisitor.js';
 
-const serializedATN = [4,1,40,209,2,0,7,0,2,1,7,1,2,2,7,2,2,3,7,3,2,4,7,
+const serializedATN = [4,1,42,238,2,0,7,0,2,1,7,1,2,2,7,2,2,3,7,3,2,4,7,
 4,2,5,7,5,2,6,7,6,2,7,7,7,2,8,7,8,2,9,7,9,2,10,7,10,2,11,7,11,2,12,7,12,
 2,13,7,13,2,14,7,14,2,15,7,15,2,16,7,16,2,17,7,17,2,18,7,18,2,19,7,19,2,
-20,7,20,2,21,7,21,1,0,5,0,46,8,0,10,0,12,0,49,9,0,1,0,1,0,1,1,1,1,1,1,1,
-1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,5,2,65,8,2,10,2,12,2,68,9,2,1,3,1,3,1,
-3,1,3,1,3,1,3,3,3,76,8,3,1,4,1,4,1,4,5,4,81,8,4,10,4,12,4,84,9,4,1,5,1,5,
-1,5,1,5,1,5,1,6,1,6,1,6,1,6,1,6,1,6,1,6,1,7,1,7,1,7,1,7,1,7,1,8,1,8,1,8,
-3,8,106,8,8,1,8,1,8,1,9,1,9,1,9,1,9,1,9,1,9,3,9,116,8,9,1,9,1,9,1,9,1,10,
-1,10,1,10,1,10,1,10,1,10,1,10,1,10,1,10,1,11,1,11,1,11,1,11,1,12,1,12,1,
-12,5,12,137,8,12,10,12,12,12,140,9,12,1,13,1,13,1,14,1,14,1,14,5,14,147,
-8,14,10,14,12,14,150,9,14,1,15,1,15,1,15,5,15,155,8,15,10,15,12,15,158,9,
-15,1,16,1,16,1,16,5,16,163,8,16,10,16,12,16,166,9,16,1,17,1,17,1,17,5,17,
-171,8,17,10,17,12,17,174,9,17,1,18,1,18,1,18,5,18,179,8,18,10,18,12,18,182,
-9,18,1,19,1,19,1,19,5,19,187,8,19,10,19,12,19,190,9,19,1,20,1,20,1,20,3,
-20,195,8,20,1,21,1,21,1,21,1,21,1,21,1,21,1,21,1,21,1,21,1,21,3,21,207,8,
-21,1,21,0,0,22,0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,
-42,0,5,1,0,21,22,1,0,23,26,1,0,27,28,1,0,29,31,2,0,28,28,32,32,210,0,47,
-1,0,0,0,2,52,1,0,0,0,4,66,1,0,0,0,6,75,1,0,0,0,8,77,1,0,0,0,10,85,1,0,0,
-0,12,90,1,0,0,0,14,97,1,0,0,0,16,102,1,0,0,0,18,109,1,0,0,0,20,120,1,0,0,
-0,22,129,1,0,0,0,24,133,1,0,0,0,26,141,1,0,0,0,28,143,1,0,0,0,30,151,1,0,
-0,0,32,159,1,0,0,0,34,167,1,0,0,0,36,175,1,0,0,0,38,183,1,0,0,0,40,194,1,
-0,0,0,42,206,1,0,0,0,44,46,3,2,1,0,45,44,1,0,0,0,46,49,1,0,0,0,47,45,1,0,
-0,0,47,48,1,0,0,0,48,50,1,0,0,0,49,47,1,0,0,0,50,51,5,0,0,1,51,1,1,0,0,0,
-52,53,5,1,0,0,53,54,5,35,0,0,54,55,5,2,0,0,55,56,5,35,0,0,56,57,5,3,0,0,
-57,58,5,35,0,0,58,59,5,4,0,0,59,60,3,4,2,0,60,61,5,5,0,0,61,62,5,4,0,0,62,
-3,1,0,0,0,63,65,3,6,3,0,64,63,1,0,0,0,65,68,1,0,0,0,66,64,1,0,0,0,66,67,
-1,0,0,0,67,5,1,0,0,0,68,66,1,0,0,0,69,76,3,10,5,0,70,76,3,12,6,0,71,76,3,
-14,7,0,72,76,3,18,9,0,73,76,3,20,10,0,74,76,3,22,11,0,75,69,1,0,0,0,75,70,
-1,0,0,0,75,71,1,0,0,0,75,72,1,0,0,0,75,73,1,0,0,0,75,74,1,0,0,0,76,7,1,0,
-0,0,77,82,5,35,0,0,78,79,5,6,0,0,79,81,5,35,0,0,80,78,1,0,0,0,81,84,1,0,
-0,0,82,80,1,0,0,0,82,83,1,0,0,0,83,9,1,0,0,0,84,82,1,0,0,0,85,86,3,8,4,0,
-86,87,5,7,0,0,87,88,3,8,4,0,88,89,5,4,0,0,89,11,1,0,0,0,90,91,3,8,4,0,91,
-92,5,7,0,0,92,93,3,8,4,0,93,94,5,8,0,0,94,95,3,26,13,0,95,96,5,4,0,0,96,
-13,1,0,0,0,97,98,3,8,4,0,98,99,5,7,0,0,99,100,3,16,8,0,100,101,5,4,0,0,101,
-15,1,0,0,0,102,103,5,35,0,0,103,105,5,9,0,0,104,106,3,24,12,0,105,104,1,
-0,0,0,105,106,1,0,0,0,106,107,1,0,0,0,107,108,5,10,0,0,108,17,1,0,0,0,109,
-110,5,11,0,0,110,111,3,26,13,0,111,112,5,12,0,0,112,115,3,4,2,0,113,114,
-5,13,0,0,114,116,3,4,2,0,115,113,1,0,0,0,115,116,1,0,0,0,116,117,1,0,0,0,
-117,118,5,5,0,0,118,119,5,4,0,0,119,19,1,0,0,0,120,121,5,14,0,0,121,122,
-5,15,0,0,122,123,3,8,4,0,123,124,5,16,0,0,124,125,5,35,0,0,125,126,3,4,2,
-0,126,127,5,5,0,0,127,128,5,4,0,0,128,21,1,0,0,0,129,130,5,17,0,0,130,131,
-3,26,13,0,131,132,5,4,0,0,132,23,1,0,0,0,133,138,3,26,13,0,134,135,5,18,
-0,0,135,137,3,26,13,0,136,134,1,0,0,0,137,140,1,0,0,0,138,136,1,0,0,0,138,
-139,1,0,0,0,139,25,1,0,0,0,140,138,1,0,0,0,141,142,3,28,14,0,142,27,1,0,
-0,0,143,148,3,30,15,0,144,145,5,19,0,0,145,147,3,30,15,0,146,144,1,0,0,0,
-147,150,1,0,0,0,148,146,1,0,0,0,148,149,1,0,0,0,149,29,1,0,0,0,150,148,1,
-0,0,0,151,156,3,32,16,0,152,153,5,20,0,0,153,155,3,32,16,0,154,152,1,0,0,
-0,155,158,1,0,0,0,156,154,1,0,0,0,156,157,1,0,0,0,157,31,1,0,0,0,158,156,
-1,0,0,0,159,164,3,34,17,0,160,161,7,0,0,0,161,163,3,34,17,0,162,160,1,0,
-0,0,163,166,1,0,0,0,164,162,1,0,0,0,164,165,1,0,0,0,165,33,1,0,0,0,166,164,
-1,0,0,0,167,172,3,36,18,0,168,169,7,1,0,0,169,171,3,36,18,0,170,168,1,0,
-0,0,171,174,1,0,0,0,172,170,1,0,0,0,172,173,1,0,0,0,173,35,1,0,0,0,174,172,
-1,0,0,0,175,180,3,38,19,0,176,177,7,2,0,0,177,179,3,38,19,0,178,176,1,0,
-0,0,179,182,1,0,0,0,180,178,1,0,0,0,180,181,1,0,0,0,181,37,1,0,0,0,182,180,
-1,0,0,0,183,188,3,40,20,0,184,185,7,3,0,0,185,187,3,40,20,0,186,184,1,0,
-0,0,187,190,1,0,0,0,188,186,1,0,0,0,188,189,1,0,0,0,189,39,1,0,0,0,190,188,
-1,0,0,0,191,192,7,4,0,0,192,195,3,40,20,0,193,195,3,42,21,0,194,191,1,0,
-0,0,194,193,1,0,0,0,195,41,1,0,0,0,196,207,5,36,0,0,197,207,5,37,0,0,198,
-207,5,33,0,0,199,207,5,34,0,0,200,207,3,16,8,0,201,207,3,8,4,0,202,203,5,
-9,0,0,203,204,3,26,13,0,204,205,5,10,0,0,205,207,1,0,0,0,206,196,1,0,0,0,
-206,197,1,0,0,0,206,198,1,0,0,0,206,199,1,0,0,0,206,200,1,0,0,0,206,201,
-1,0,0,0,206,202,1,0,0,0,207,43,1,0,0,0,15,47,66,75,82,105,115,138,148,156,
-164,172,180,188,194,206];
+20,7,20,2,21,7,21,2,22,7,22,2,23,7,23,2,24,7,24,2,25,7,25,1,0,5,0,54,8,0,
+10,0,12,0,57,9,0,1,0,1,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,5,1,69,8,1,10,1,
+12,1,72,9,1,1,1,1,1,1,1,1,1,1,2,1,2,1,3,1,3,1,3,1,3,1,3,1,4,1,4,1,5,5,5,
+88,8,5,10,5,12,5,91,9,5,1,6,1,6,1,6,1,6,1,6,1,6,3,6,99,8,6,1,7,1,7,1,7,5,
+7,104,8,7,10,7,12,7,107,9,7,1,8,1,8,1,9,1,9,1,9,1,9,1,9,3,9,116,8,9,1,9,
+1,9,1,10,1,10,1,10,1,10,1,10,1,10,1,10,1,11,1,11,1,11,1,11,1,11,1,12,1,12,
+1,12,3,12,135,8,12,1,12,1,12,1,13,1,13,1,13,1,13,1,13,1,13,3,13,145,8,13,
+1,13,1,13,1,13,1,14,1,14,1,14,1,14,1,14,1,14,1,14,1,14,1,14,1,15,1,15,1,
+15,1,15,1,16,1,16,1,16,5,16,166,8,16,10,16,12,16,169,9,16,1,17,1,17,1,18,
+1,18,1,18,5,18,176,8,18,10,18,12,18,179,9,18,1,19,1,19,1,19,5,19,184,8,19,
+10,19,12,19,187,9,19,1,20,1,20,1,20,5,20,192,8,20,10,20,12,20,195,9,20,1,
+21,1,21,1,21,5,21,200,8,21,10,21,12,21,203,9,21,1,22,1,22,1,22,5,22,208,
+8,22,10,22,12,22,211,9,22,1,23,1,23,1,23,5,23,216,8,23,10,23,12,23,219,9,
+23,1,24,1,24,1,24,3,24,224,8,24,1,25,1,25,1,25,1,25,1,25,1,25,1,25,1,25,
+1,25,1,25,3,25,236,8,25,1,25,0,0,26,0,2,4,6,8,10,12,14,16,18,20,22,24,26,
+28,30,32,34,36,38,40,42,44,46,48,50,0,7,2,0,37,37,39,39,2,0,7,8,38,39,1,
+0,25,26,1,0,27,30,1,0,31,32,1,0,33,35,2,0,32,32,36,36,237,0,55,1,0,0,0,2,
+60,1,0,0,0,4,77,1,0,0,0,6,79,1,0,0,0,8,84,1,0,0,0,10,89,1,0,0,0,12,98,1,
+0,0,0,14,100,1,0,0,0,16,108,1,0,0,0,18,110,1,0,0,0,20,119,1,0,0,0,22,126,
+1,0,0,0,24,131,1,0,0,0,26,138,1,0,0,0,28,149,1,0,0,0,30,158,1,0,0,0,32,162,
+1,0,0,0,34,170,1,0,0,0,36,172,1,0,0,0,38,180,1,0,0,0,40,188,1,0,0,0,42,196,
+1,0,0,0,44,204,1,0,0,0,46,212,1,0,0,0,48,223,1,0,0,0,50,235,1,0,0,0,52,54,
+3,2,1,0,53,52,1,0,0,0,54,57,1,0,0,0,55,53,1,0,0,0,55,56,1,0,0,0,56,58,1,
+0,0,0,57,55,1,0,0,0,58,59,5,0,0,1,59,1,1,0,0,0,60,61,5,1,0,0,61,62,3,4,2,
+0,62,63,5,2,0,0,63,64,3,4,2,0,64,65,5,3,0,0,65,66,3,4,2,0,66,70,5,4,0,0,
+67,69,3,6,3,0,68,67,1,0,0,0,69,72,1,0,0,0,70,68,1,0,0,0,70,71,1,0,0,0,71,
+73,1,0,0,0,72,70,1,0,0,0,73,74,3,10,5,0,74,75,5,5,0,0,75,76,5,4,0,0,76,3,
+1,0,0,0,77,78,7,0,0,0,78,5,1,0,0,0,79,80,5,6,0,0,80,81,5,37,0,0,81,82,3,
+8,4,0,82,83,5,4,0,0,83,7,1,0,0,0,84,85,7,1,0,0,85,9,1,0,0,0,86,88,3,12,6,
+0,87,86,1,0,0,0,88,91,1,0,0,0,89,87,1,0,0,0,89,90,1,0,0,0,90,11,1,0,0,0,
+91,89,1,0,0,0,92,99,3,18,9,0,93,99,3,20,10,0,94,99,3,22,11,0,95,99,3,26,
+13,0,96,99,3,28,14,0,97,99,3,30,15,0,98,92,1,0,0,0,98,93,1,0,0,0,98,94,1,
+0,0,0,98,95,1,0,0,0,98,96,1,0,0,0,98,97,1,0,0,0,99,13,1,0,0,0,100,105,5,
+37,0,0,101,102,5,9,0,0,102,104,3,16,8,0,103,101,1,0,0,0,104,107,1,0,0,0,
+105,103,1,0,0,0,105,106,1,0,0,0,106,15,1,0,0,0,107,105,1,0,0,0,108,109,7,
+0,0,0,109,17,1,0,0,0,110,111,3,14,7,0,111,112,5,10,0,0,112,115,3,14,7,0,
+113,114,5,11,0,0,114,116,5,39,0,0,115,113,1,0,0,0,115,116,1,0,0,0,116,117,
+1,0,0,0,117,118,5,4,0,0,118,19,1,0,0,0,119,120,3,14,7,0,120,121,5,10,0,0,
+121,122,3,14,7,0,122,123,5,12,0,0,123,124,3,34,17,0,124,125,5,4,0,0,125,
+21,1,0,0,0,126,127,3,14,7,0,127,128,5,10,0,0,128,129,3,24,12,0,129,130,5,
+4,0,0,130,23,1,0,0,0,131,132,5,37,0,0,132,134,5,13,0,0,133,135,3,32,16,0,
+134,133,1,0,0,0,134,135,1,0,0,0,135,136,1,0,0,0,136,137,5,14,0,0,137,25,
+1,0,0,0,138,139,5,15,0,0,139,140,3,34,17,0,140,141,5,16,0,0,141,144,3,10,
+5,0,142,143,5,17,0,0,143,145,3,10,5,0,144,142,1,0,0,0,144,145,1,0,0,0,145,
+146,1,0,0,0,146,147,5,5,0,0,147,148,5,4,0,0,148,27,1,0,0,0,149,150,5,18,
+0,0,150,151,5,19,0,0,151,152,3,14,7,0,152,153,5,20,0,0,153,154,5,37,0,0,
+154,155,3,10,5,0,155,156,5,5,0,0,156,157,5,4,0,0,157,29,1,0,0,0,158,159,
+5,21,0,0,159,160,3,34,17,0,160,161,5,4,0,0,161,31,1,0,0,0,162,167,3,34,17,
+0,163,164,5,22,0,0,164,166,3,34,17,0,165,163,1,0,0,0,166,169,1,0,0,0,167,
+165,1,0,0,0,167,168,1,0,0,0,168,33,1,0,0,0,169,167,1,0,0,0,170,171,3,36,
+18,0,171,35,1,0,0,0,172,177,3,38,19,0,173,174,5,23,0,0,174,176,3,38,19,0,
+175,173,1,0,0,0,176,179,1,0,0,0,177,175,1,0,0,0,177,178,1,0,0,0,178,37,1,
+0,0,0,179,177,1,0,0,0,180,185,3,40,20,0,181,182,5,24,0,0,182,184,3,40,20,
+0,183,181,1,0,0,0,184,187,1,0,0,0,185,183,1,0,0,0,185,186,1,0,0,0,186,39,
+1,0,0,0,187,185,1,0,0,0,188,193,3,42,21,0,189,190,7,2,0,0,190,192,3,42,21,
+0,191,189,1,0,0,0,192,195,1,0,0,0,193,191,1,0,0,0,193,194,1,0,0,0,194,41,
+1,0,0,0,195,193,1,0,0,0,196,201,3,44,22,0,197,198,7,3,0,0,198,200,3,44,22,
+0,199,197,1,0,0,0,200,203,1,0,0,0,201,199,1,0,0,0,201,202,1,0,0,0,202,43,
+1,0,0,0,203,201,1,0,0,0,204,209,3,46,23,0,205,206,7,4,0,0,206,208,3,46,23,
+0,207,205,1,0,0,0,208,211,1,0,0,0,209,207,1,0,0,0,209,210,1,0,0,0,210,45,
+1,0,0,0,211,209,1,0,0,0,212,217,3,48,24,0,213,214,7,5,0,0,214,216,3,48,24,
+0,215,213,1,0,0,0,216,219,1,0,0,0,217,215,1,0,0,0,217,218,1,0,0,0,218,47,
+1,0,0,0,219,217,1,0,0,0,220,221,7,6,0,0,221,224,3,48,24,0,222,224,3,50,25,
+0,223,220,1,0,0,0,223,222,1,0,0,0,224,49,1,0,0,0,225,236,5,38,0,0,226,236,
+5,39,0,0,227,236,5,7,0,0,228,236,5,8,0,0,229,236,3,24,12,0,230,236,3,14,
+7,0,231,232,5,13,0,0,232,233,3,34,17,0,233,234,5,14,0,0,234,236,1,0,0,0,
+235,225,1,0,0,0,235,226,1,0,0,0,235,227,1,0,0,0,235,228,1,0,0,0,235,229,
+1,0,0,0,235,230,1,0,0,0,235,231,1,0,0,0,236,51,1,0,0,0,17,55,70,89,98,105,
+115,134,144,167,177,185,193,201,209,217,223,235];
 
 
 const atn = new antlr4.atn.ATNDeserializer().deserialize(serializedATN);
@@ -78,24 +87,27 @@ export default class MAPLParser extends antlr4.Parser {
 
     static grammarFileName = "MAPL.g4";
     static literalNames = [ null, "'map'", "'from'", "'to'", "';'", "'end'", 
-                            "'.'", "':='", "'default'", "'('", "')'", "'if'", 
-                            "'then'", "'else'", "'for'", "'each'", "'as'", 
-                            "'validate'", "','", "'or'", "'and'", "'='", 
-                            "'<>'", "'<'", "'<='", "'>'", "'>='", "'+'", 
-                            "'-'", "'*'", "'/'", "'mod'", "'not'", "'true'", 
-                            "'false'" ];
+                            "'@'", "'true'", "'false'", "'.'", "':='", "'using'", 
+                            "'default'", "'('", "')'", "'if'", "'then'", 
+                            "'else'", "'for'", "'each'", "'as'", "'validate'", 
+                            "','", "'or'", "'and'", "'='", "'<>'", "'<'", 
+                            "'<='", "'>'", "'>='", "'+'", "'-'", "'*'", 
+                            "'/'", "'mod'", "'not'" ];
     static symbolicNames = [ null, null, null, null, null, null, null, null, 
                              null, null, null, null, null, null, null, null, 
                              null, null, null, null, null, null, null, null, 
                              null, null, null, null, null, null, null, null, 
-                             null, null, null, "IDENT", "NUMBER", "STRING", 
-                             "LINE_COMMENT", "BLOCK_COMMENT", "WS" ];
-    static ruleNames = [ "mapUnit", "mapDecl", "mapBody", "mapStmt", "fieldPath", 
-                         "assignStmt", "assignDefaultStmt", "functionAssignStmt", 
-                         "functionCall", "ifStmt", "forStmt", "validateStmt", 
-                         "exprList", "expr", "logicalOrExpr", "logicalAndExpr", 
-                         "equalityExpr", "relationalExpr", "additiveExpr", 
-                         "multiplicativeExpr", "unaryExpr", "primaryExpr" ];
+                             null, null, null, null, null, "IDENT", "NUMBER", 
+                             "STRING", "LINE_COMMENT", "BLOCK_COMMENT", 
+                             "WS" ];
+    static ruleNames = [ "mapUnit", "mapDecl", "nameRef", "mapDirective", 
+                         "directiveValue", "mapBody", "mapStmt", "fieldPath", 
+                         "pathSegment", "assignStmt", "assignDefaultStmt", 
+                         "functionAssignStmt", "functionCall", "ifStmt", 
+                         "forStmt", "validateStmt", "exprList", "expr", 
+                         "logicalOrExpr", "logicalAndExpr", "equalityExpr", 
+                         "relationalExpr", "additiveExpr", "multiplicativeExpr", 
+                         "unaryExpr", "primaryExpr" ];
 
     constructor(input) {
         super(input);
@@ -113,17 +125,17 @@ export default class MAPLParser extends antlr4.Parser {
 	    var _la = 0;
 	    try {
 	        this.enterOuterAlt(localctx, 1);
-	        this.state = 47;
+	        this.state = 55;
 	        this._errHandler.sync(this);
 	        _la = this._input.LA(1);
 	        while(_la===1) {
-	            this.state = 44;
+	            this.state = 52;
 	            this.mapDecl();
-	            this.state = 49;
+	            this.state = 57;
 	            this._errHandler.sync(this);
 	            _la = this._input.LA(1);
 	        }
-	        this.state = 50;
+	        this.state = 58;
 	        this.match(MAPLParser.EOF);
 	    } catch (re) {
 	    	if(re instanceof antlr4.error.RecognitionException) {
@@ -144,28 +156,130 @@ export default class MAPLParser extends antlr4.Parser {
 	mapDecl() {
 	    let localctx = new MapDeclContext(this, this._ctx, this.state);
 	    this.enterRule(localctx, 2, MAPLParser.RULE_mapDecl);
+	    var _la = 0;
 	    try {
 	        this.enterOuterAlt(localctx, 1);
-	        this.state = 52;
-	        this.match(MAPLParser.T__0);
-	        this.state = 53;
-	        this.match(MAPLParser.IDENT);
-	        this.state = 54;
-	        this.match(MAPLParser.T__1);
-	        this.state = 55;
-	        this.match(MAPLParser.IDENT);
-	        this.state = 56;
-	        this.match(MAPLParser.T__2);
-	        this.state = 57;
-	        this.match(MAPLParser.IDENT);
-	        this.state = 58;
-	        this.match(MAPLParser.T__3);
-	        this.state = 59;
-	        this.mapBody();
 	        this.state = 60;
-	        this.match(MAPLParser.T__4);
+	        this.match(MAPLParser.T__0);
 	        this.state = 61;
+	        this.nameRef();
+	        this.state = 62;
+	        this.match(MAPLParser.T__1);
+	        this.state = 63;
+	        this.nameRef();
+	        this.state = 64;
+	        this.match(MAPLParser.T__2);
+	        this.state = 65;
+	        this.nameRef();
+	        this.state = 66;
 	        this.match(MAPLParser.T__3);
+	        this.state = 70;
+	        this._errHandler.sync(this);
+	        _la = this._input.LA(1);
+	        while(_la===6) {
+	            this.state = 67;
+	            this.mapDirective();
+	            this.state = 72;
+	            this._errHandler.sync(this);
+	            _la = this._input.LA(1);
+	        }
+	        this.state = 73;
+	        this.mapBody();
+	        this.state = 74;
+	        this.match(MAPLParser.T__4);
+	        this.state = 75;
+	        this.match(MAPLParser.T__3);
+	    } catch (re) {
+	    	if(re instanceof antlr4.error.RecognitionException) {
+		        localctx.exception = re;
+		        this._errHandler.reportError(this, re);
+		        this._errHandler.recover(this, re);
+		    } else {
+		    	throw re;
+		    }
+	    } finally {
+	        this.exitRule();
+	    }
+	    return localctx;
+	}
+
+
+
+	nameRef() {
+	    let localctx = new NameRefContext(this, this._ctx, this.state);
+	    this.enterRule(localctx, 4, MAPLParser.RULE_nameRef);
+	    var _la = 0;
+	    try {
+	        this.enterOuterAlt(localctx, 1);
+	        this.state = 77;
+	        _la = this._input.LA(1);
+	        if(!(_la===37 || _la===39)) {
+	        this._errHandler.recoverInline(this);
+	        }
+	        else {
+	        	this._errHandler.reportMatch(this);
+	            this.consume();
+	        }
+	    } catch (re) {
+	    	if(re instanceof antlr4.error.RecognitionException) {
+		        localctx.exception = re;
+		        this._errHandler.reportError(this, re);
+		        this._errHandler.recover(this, re);
+		    } else {
+		    	throw re;
+		    }
+	    } finally {
+	        this.exitRule();
+	    }
+	    return localctx;
+	}
+
+
+
+	mapDirective() {
+	    let localctx = new MapDirectiveContext(this, this._ctx, this.state);
+	    this.enterRule(localctx, 6, MAPLParser.RULE_mapDirective);
+	    try {
+	        this.enterOuterAlt(localctx, 1);
+	        this.state = 79;
+	        this.match(MAPLParser.T__5);
+	        this.state = 80;
+	        this.match(MAPLParser.IDENT);
+	        this.state = 81;
+	        this.directiveValue();
+	        this.state = 82;
+	        this.match(MAPLParser.T__3);
+	    } catch (re) {
+	    	if(re instanceof antlr4.error.RecognitionException) {
+		        localctx.exception = re;
+		        this._errHandler.reportError(this, re);
+		        this._errHandler.recover(this, re);
+		    } else {
+		    	throw re;
+		    }
+	    } finally {
+	        this.exitRule();
+	    }
+	    return localctx;
+	}
+
+
+
+	directiveValue() {
+	    let localctx = new DirectiveValueContext(this, this._ctx, this.state);
+	    this.enterRule(localctx, 8, MAPLParser.RULE_directiveValue);
+	    var _la = 0;
+	    try {
+	        this.enterOuterAlt(localctx, 1);
+	        this.state = 84;
+	        _la = this._input.LA(1);
+	        if(!(_la===7 || _la===8 || _la===38 || _la===39)) {
+	        this._errHandler.recoverInline(this);
+	        }
+	        else {
+	        	this._errHandler.reportMatch(this);
+	            this.consume();
+	        }
 	    } catch (re) {
 	    	if(re instanceof antlr4.error.RecognitionException) {
 		        localctx.exception = re;
@@ -184,17 +298,17 @@ export default class MAPLParser extends antlr4.Parser {
 
 	mapBody() {
 	    let localctx = new MapBodyContext(this, this._ctx, this.state);
-	    this.enterRule(localctx, 4, MAPLParser.RULE_mapBody);
+	    this.enterRule(localctx, 10, MAPLParser.RULE_mapBody);
 	    var _la = 0;
 	    try {
 	        this.enterOuterAlt(localctx, 1);
-	        this.state = 66;
+	        this.state = 89;
 	        this._errHandler.sync(this);
 	        _la = this._input.LA(1);
-	        while(((((_la - 11)) & ~0x1f) === 0 && ((1 << (_la - 11)) & 16777289) !== 0)) {
-	            this.state = 63;
+	        while(((((_la - 15)) & ~0x1f) === 0 && ((1 << (_la - 15)) & 4194377) !== 0)) {
+	            this.state = 86;
 	            this.mapStmt();
-	            this.state = 68;
+	            this.state = 91;
 	            this._errHandler.sync(this);
 	            _la = this._input.LA(1);
 	        }
@@ -216,45 +330,45 @@ export default class MAPLParser extends antlr4.Parser {
 
 	mapStmt() {
 	    let localctx = new MapStmtContext(this, this._ctx, this.state);
-	    this.enterRule(localctx, 6, MAPLParser.RULE_mapStmt);
+	    this.enterRule(localctx, 12, MAPLParser.RULE_mapStmt);
 	    try {
-	        this.state = 75;
+	        this.state = 98;
 	        this._errHandler.sync(this);
-	        var la_ = this._interp.adaptivePredict(this._input,2,this._ctx);
+	        var la_ = this._interp.adaptivePredict(this._input,3,this._ctx);
 	        switch(la_) {
 	        case 1:
 	            this.enterOuterAlt(localctx, 1);
-	            this.state = 69;
+	            this.state = 92;
 	            this.assignStmt();
 	            break;
 
 	        case 2:
 	            this.enterOuterAlt(localctx, 2);
-	            this.state = 70;
+	            this.state = 93;
 	            this.assignDefaultStmt();
 	            break;
 
 	        case 3:
 	            this.enterOuterAlt(localctx, 3);
-	            this.state = 71;
+	            this.state = 94;
 	            this.functionAssignStmt();
 	            break;
 
 	        case 4:
 	            this.enterOuterAlt(localctx, 4);
-	            this.state = 72;
+	            this.state = 95;
 	            this.ifStmt();
 	            break;
 
 	        case 5:
 	            this.enterOuterAlt(localctx, 5);
-	            this.state = 73;
+	            this.state = 96;
 	            this.forStmt();
 	            break;
 
 	        case 6:
 	            this.enterOuterAlt(localctx, 6);
-	            this.state = 74;
+	            this.state = 97;
 	            this.validateStmt();
 	            break;
 
@@ -277,21 +391,21 @@ export default class MAPLParser extends antlr4.Parser {
 
 	fieldPath() {
 	    let localctx = new FieldPathContext(this, this._ctx, this.state);
-	    this.enterRule(localctx, 8, MAPLParser.RULE_fieldPath);
+	    this.enterRule(localctx, 14, MAPLParser.RULE_fieldPath);
 	    var _la = 0;
 	    try {
 	        this.enterOuterAlt(localctx, 1);
-	        this.state = 77;
+	        this.state = 100;
 	        this.match(MAPLParser.IDENT);
-	        this.state = 82;
+	        this.state = 105;
 	        this._errHandler.sync(this);
 	        _la = this._input.LA(1);
-	        while(_la===6) {
-	            this.state = 78;
-	            this.match(MAPLParser.T__5);
-	            this.state = 79;
-	            this.match(MAPLParser.IDENT);
-	            this.state = 84;
+	        while(_la===9) {
+	            this.state = 101;
+	            this.match(MAPLParser.T__8);
+	            this.state = 102;
+	            this.pathSegment();
+	            this.state = 107;
 	            this._errHandler.sync(this);
 	            _la = this._input.LA(1);
 	        }
@@ -311,18 +425,60 @@ export default class MAPLParser extends antlr4.Parser {
 
 
 
-	assignStmt() {
-	    let localctx = new AssignStmtContext(this, this._ctx, this.state);
-	    this.enterRule(localctx, 10, MAPLParser.RULE_assignStmt);
+	pathSegment() {
+	    let localctx = new PathSegmentContext(this, this._ctx, this.state);
+	    this.enterRule(localctx, 16, MAPLParser.RULE_pathSegment);
+	    var _la = 0;
 	    try {
 	        this.enterOuterAlt(localctx, 1);
-	        this.state = 85;
+	        this.state = 108;
+	        _la = this._input.LA(1);
+	        if(!(_la===37 || _la===39)) {
+	        this._errHandler.recoverInline(this);
+	        }
+	        else {
+	        	this._errHandler.reportMatch(this);
+	            this.consume();
+	        }
+	    } catch (re) {
+	    	if(re instanceof antlr4.error.RecognitionException) {
+		        localctx.exception = re;
+		        this._errHandler.reportError(this, re);
+		        this._errHandler.recover(this, re);
+		    } else {
+		    	throw re;
+		    }
+	    } finally {
+	        this.exitRule();
+	    }
+	    return localctx;
+	}
+
+
+
+	assignStmt() {
+	    let localctx = new AssignStmtContext(this, this._ctx, this.state);
+	    this.enterRule(localctx, 18, MAPLParser.RULE_assignStmt);
+	    var _la = 0;
+	    try {
+	        this.enterOuterAlt(localctx, 1);
+	        this.state = 110;
 	        this.fieldPath();
-	        this.state = 86;
-	        this.match(MAPLParser.T__6);
-	        this.state = 87;
+	        this.state = 111;
+	        this.match(MAPLParser.T__9);
+	        this.state = 112;
 	        this.fieldPath();
-	        this.state = 88;
+	        this.state = 115;
+	        this._errHandler.sync(this);
+	        _la = this._input.LA(1);
+	        if(_la===11) {
+	            this.state = 113;
+	            this.match(MAPLParser.T__10);
+	            this.state = 114;
+	            this.match(MAPLParser.STRING);
+	        }
+
+	        this.state = 117;
 	        this.match(MAPLParser.T__3);
 	    } catch (re) {
 	    	if(re instanceof antlr4.error.RecognitionException) {
@@ -342,20 +498,20 @@ export default class MAPLParser extends antlr4.Parser {
 
 	assignDefaultStmt() {
 	    let localctx = new AssignDefaultStmtContext(this, this._ctx, this.state);
-	    this.enterRule(localctx, 12, MAPLParser.RULE_assignDefaultStmt);
+	    this.enterRule(localctx, 20, MAPLParser.RULE_assignDefaultStmt);
 	    try {
 	        this.enterOuterAlt(localctx, 1);
-	        this.state = 90;
+	        this.state = 119;
 	        this.fieldPath();
-	        this.state = 91;
-	        this.match(MAPLParser.T__6);
-	        this.state = 92;
+	        this.state = 120;
+	        this.match(MAPLParser.T__9);
+	        this.state = 121;
 	        this.fieldPath();
-	        this.state = 93;
-	        this.match(MAPLParser.T__7);
-	        this.state = 94;
+	        this.state = 122;
+	        this.match(MAPLParser.T__11);
+	        this.state = 123;
 	        this.expr();
-	        this.state = 95;
+	        this.state = 124;
 	        this.match(MAPLParser.T__3);
 	    } catch (re) {
 	    	if(re instanceof antlr4.error.RecognitionException) {
@@ -375,16 +531,16 @@ export default class MAPLParser extends antlr4.Parser {
 
 	functionAssignStmt() {
 	    let localctx = new FunctionAssignStmtContext(this, this._ctx, this.state);
-	    this.enterRule(localctx, 14, MAPLParser.RULE_functionAssignStmt);
+	    this.enterRule(localctx, 22, MAPLParser.RULE_functionAssignStmt);
 	    try {
 	        this.enterOuterAlt(localctx, 1);
-	        this.state = 97;
+	        this.state = 126;
 	        this.fieldPath();
-	        this.state = 98;
-	        this.match(MAPLParser.T__6);
-	        this.state = 99;
+	        this.state = 127;
+	        this.match(MAPLParser.T__9);
+	        this.state = 128;
 	        this.functionCall();
-	        this.state = 100;
+	        this.state = 129;
 	        this.match(MAPLParser.T__3);
 	    } catch (re) {
 	    	if(re instanceof antlr4.error.RecognitionException) {
@@ -404,24 +560,24 @@ export default class MAPLParser extends antlr4.Parser {
 
 	functionCall() {
 	    let localctx = new FunctionCallContext(this, this._ctx, this.state);
-	    this.enterRule(localctx, 16, MAPLParser.RULE_functionCall);
+	    this.enterRule(localctx, 24, MAPLParser.RULE_functionCall);
 	    var _la = 0;
 	    try {
 	        this.enterOuterAlt(localctx, 1);
-	        this.state = 102;
+	        this.state = 131;
 	        this.match(MAPLParser.IDENT);
-	        this.state = 103;
-	        this.match(MAPLParser.T__8);
-	        this.state = 105;
+	        this.state = 132;
+	        this.match(MAPLParser.T__12);
+	        this.state = 134;
 	        this._errHandler.sync(this);
 	        _la = this._input.LA(1);
-	        if(((((_la - 9)) & ~0x1f) === 0 && ((1 << (_la - 9)) & 529006593) !== 0)) {
-	            this.state = 104;
+	        if((((_la) & ~0x1f) === 0 && ((1 << _la) & 8576) !== 0) || ((((_la - 32)) & ~0x1f) === 0 && ((1 << (_la - 32)) & 241) !== 0)) {
+	            this.state = 133;
 	            this.exprList();
 	        }
 
-	        this.state = 107;
-	        this.match(MAPLParser.T__9);
+	        this.state = 136;
+	        this.match(MAPLParser.T__13);
 	    } catch (re) {
 	    	if(re instanceof antlr4.error.RecognitionException) {
 		        localctx.exception = re;
@@ -440,31 +596,31 @@ export default class MAPLParser extends antlr4.Parser {
 
 	ifStmt() {
 	    let localctx = new IfStmtContext(this, this._ctx, this.state);
-	    this.enterRule(localctx, 18, MAPLParser.RULE_ifStmt);
+	    this.enterRule(localctx, 26, MAPLParser.RULE_ifStmt);
 	    var _la = 0;
 	    try {
 	        this.enterOuterAlt(localctx, 1);
-	        this.state = 109;
-	        this.match(MAPLParser.T__10);
-	        this.state = 110;
+	        this.state = 138;
+	        this.match(MAPLParser.T__14);
+	        this.state = 139;
 	        this.expr();
-	        this.state = 111;
-	        this.match(MAPLParser.T__11);
-	        this.state = 112;
+	        this.state = 140;
+	        this.match(MAPLParser.T__15);
+	        this.state = 141;
 	        this.mapBody();
-	        this.state = 115;
+	        this.state = 144;
 	        this._errHandler.sync(this);
 	        _la = this._input.LA(1);
-	        if(_la===13) {
-	            this.state = 113;
-	            this.match(MAPLParser.T__12);
-	            this.state = 114;
+	        if(_la===17) {
+	            this.state = 142;
+	            this.match(MAPLParser.T__16);
+	            this.state = 143;
 	            this.mapBody();
 	        }
 
-	        this.state = 117;
+	        this.state = 146;
 	        this.match(MAPLParser.T__4);
-	        this.state = 118;
+	        this.state = 147;
 	        this.match(MAPLParser.T__3);
 	    } catch (re) {
 	    	if(re instanceof antlr4.error.RecognitionException) {
@@ -484,24 +640,24 @@ export default class MAPLParser extends antlr4.Parser {
 
 	forStmt() {
 	    let localctx = new ForStmtContext(this, this._ctx, this.state);
-	    this.enterRule(localctx, 20, MAPLParser.RULE_forStmt);
+	    this.enterRule(localctx, 28, MAPLParser.RULE_forStmt);
 	    try {
 	        this.enterOuterAlt(localctx, 1);
-	        this.state = 120;
-	        this.match(MAPLParser.T__13);
-	        this.state = 121;
-	        this.match(MAPLParser.T__14);
-	        this.state = 122;
+	        this.state = 149;
+	        this.match(MAPLParser.T__17);
+	        this.state = 150;
+	        this.match(MAPLParser.T__18);
+	        this.state = 151;
 	        this.fieldPath();
-	        this.state = 123;
-	        this.match(MAPLParser.T__15);
-	        this.state = 124;
+	        this.state = 152;
+	        this.match(MAPLParser.T__19);
+	        this.state = 153;
 	        this.match(MAPLParser.IDENT);
-	        this.state = 125;
+	        this.state = 154;
 	        this.mapBody();
-	        this.state = 126;
+	        this.state = 155;
 	        this.match(MAPLParser.T__4);
-	        this.state = 127;
+	        this.state = 156;
 	        this.match(MAPLParser.T__3);
 	    } catch (re) {
 	    	if(re instanceof antlr4.error.RecognitionException) {
@@ -521,14 +677,14 @@ export default class MAPLParser extends antlr4.Parser {
 
 	validateStmt() {
 	    let localctx = new ValidateStmtContext(this, this._ctx, this.state);
-	    this.enterRule(localctx, 22, MAPLParser.RULE_validateStmt);
+	    this.enterRule(localctx, 30, MAPLParser.RULE_validateStmt);
 	    try {
 	        this.enterOuterAlt(localctx, 1);
-	        this.state = 129;
-	        this.match(MAPLParser.T__16);
-	        this.state = 130;
+	        this.state = 158;
+	        this.match(MAPLParser.T__20);
+	        this.state = 159;
 	        this.expr();
-	        this.state = 131;
+	        this.state = 160;
 	        this.match(MAPLParser.T__3);
 	    } catch (re) {
 	    	if(re instanceof antlr4.error.RecognitionException) {
@@ -548,21 +704,21 @@ export default class MAPLParser extends antlr4.Parser {
 
 	exprList() {
 	    let localctx = new ExprListContext(this, this._ctx, this.state);
-	    this.enterRule(localctx, 24, MAPLParser.RULE_exprList);
+	    this.enterRule(localctx, 32, MAPLParser.RULE_exprList);
 	    var _la = 0;
 	    try {
 	        this.enterOuterAlt(localctx, 1);
-	        this.state = 133;
+	        this.state = 162;
 	        this.expr();
-	        this.state = 138;
+	        this.state = 167;
 	        this._errHandler.sync(this);
 	        _la = this._input.LA(1);
-	        while(_la===18) {
-	            this.state = 134;
-	            this.match(MAPLParser.T__17);
-	            this.state = 135;
+	        while(_la===22) {
+	            this.state = 163;
+	            this.match(MAPLParser.T__21);
+	            this.state = 164;
 	            this.expr();
-	            this.state = 140;
+	            this.state = 169;
 	            this._errHandler.sync(this);
 	            _la = this._input.LA(1);
 	        }
@@ -584,10 +740,10 @@ export default class MAPLParser extends antlr4.Parser {
 
 	expr() {
 	    let localctx = new ExprContext(this, this._ctx, this.state);
-	    this.enterRule(localctx, 26, MAPLParser.RULE_expr);
+	    this.enterRule(localctx, 34, MAPLParser.RULE_expr);
 	    try {
 	        this.enterOuterAlt(localctx, 1);
-	        this.state = 141;
+	        this.state = 170;
 	        this.logicalOrExpr();
 	    } catch (re) {
 	    	if(re instanceof antlr4.error.RecognitionException) {
@@ -607,21 +763,21 @@ export default class MAPLParser extends antlr4.Parser {
 
 	logicalOrExpr() {
 	    let localctx = new LogicalOrExprContext(this, this._ctx, this.state);
-	    this.enterRule(localctx, 28, MAPLParser.RULE_logicalOrExpr);
+	    this.enterRule(localctx, 36, MAPLParser.RULE_logicalOrExpr);
 	    var _la = 0;
 	    try {
 	        this.enterOuterAlt(localctx, 1);
-	        this.state = 143;
+	        this.state = 172;
 	        this.logicalAndExpr();
-	        this.state = 148;
+	        this.state = 177;
 	        this._errHandler.sync(this);
 	        _la = this._input.LA(1);
-	        while(_la===19) {
-	            this.state = 144;
-	            this.match(MAPLParser.T__18);
-	            this.state = 145;
+	        while(_la===23) {
+	            this.state = 173;
+	            this.match(MAPLParser.T__22);
+	            this.state = 174;
 	            this.logicalAndExpr();
-	            this.state = 150;
+	            this.state = 179;
 	            this._errHandler.sync(this);
 	            _la = this._input.LA(1);
 	        }
@@ -643,21 +799,21 @@ export default class MAPLParser extends antlr4.Parser {
 
 	logicalAndExpr() {
 	    let localctx = new LogicalAndExprContext(this, this._ctx, this.state);
-	    this.enterRule(localctx, 30, MAPLParser.RULE_logicalAndExpr);
+	    this.enterRule(localctx, 38, MAPLParser.RULE_logicalAndExpr);
 	    var _la = 0;
 	    try {
 	        this.enterOuterAlt(localctx, 1);
-	        this.state = 151;
+	        this.state = 180;
 	        this.equalityExpr();
-	        this.state = 156;
+	        this.state = 185;
 	        this._errHandler.sync(this);
 	        _la = this._input.LA(1);
-	        while(_la===20) {
-	            this.state = 152;
-	            this.match(MAPLParser.T__19);
-	            this.state = 153;
+	        while(_la===24) {
+	            this.state = 181;
+	            this.match(MAPLParser.T__23);
+	            this.state = 182;
 	            this.equalityExpr();
-	            this.state = 158;
+	            this.state = 187;
 	            this._errHandler.sync(this);
 	            _la = this._input.LA(1);
 	        }
@@ -679,28 +835,28 @@ export default class MAPLParser extends antlr4.Parser {
 
 	equalityExpr() {
 	    let localctx = new EqualityExprContext(this, this._ctx, this.state);
-	    this.enterRule(localctx, 32, MAPLParser.RULE_equalityExpr);
+	    this.enterRule(localctx, 40, MAPLParser.RULE_equalityExpr);
 	    var _la = 0;
 	    try {
 	        this.enterOuterAlt(localctx, 1);
-	        this.state = 159;
+	        this.state = 188;
 	        this.relationalExpr();
-	        this.state = 164;
+	        this.state = 193;
 	        this._errHandler.sync(this);
 	        _la = this._input.LA(1);
-	        while(_la===21 || _la===22) {
-	            this.state = 160;
+	        while(_la===25 || _la===26) {
+	            this.state = 189;
 	            _la = this._input.LA(1);
-	            if(!(_la===21 || _la===22)) {
+	            if(!(_la===25 || _la===26)) {
 	            this._errHandler.recoverInline(this);
 	            }
 	            else {
 	            	this._errHandler.reportMatch(this);
 	                this.consume();
 	            }
-	            this.state = 161;
+	            this.state = 190;
 	            this.relationalExpr();
-	            this.state = 166;
+	            this.state = 195;
 	            this._errHandler.sync(this);
 	            _la = this._input.LA(1);
 	        }
@@ -722,28 +878,28 @@ export default class MAPLParser extends antlr4.Parser {
 
 	relationalExpr() {
 	    let localctx = new RelationalExprContext(this, this._ctx, this.state);
-	    this.enterRule(localctx, 34, MAPLParser.RULE_relationalExpr);
+	    this.enterRule(localctx, 42, MAPLParser.RULE_relationalExpr);
 	    var _la = 0;
 	    try {
 	        this.enterOuterAlt(localctx, 1);
-	        this.state = 167;
+	        this.state = 196;
 	        this.additiveExpr();
-	        this.state = 172;
+	        this.state = 201;
 	        this._errHandler.sync(this);
 	        _la = this._input.LA(1);
-	        while((((_la) & ~0x1f) === 0 && ((1 << _la) & 125829120) !== 0)) {
-	            this.state = 168;
+	        while((((_la) & ~0x1f) === 0 && ((1 << _la) & 2013265920) !== 0)) {
+	            this.state = 197;
 	            _la = this._input.LA(1);
-	            if(!((((_la) & ~0x1f) === 0 && ((1 << _la) & 125829120) !== 0))) {
+	            if(!((((_la) & ~0x1f) === 0 && ((1 << _la) & 2013265920) !== 0))) {
 	            this._errHandler.recoverInline(this);
 	            }
 	            else {
 	            	this._errHandler.reportMatch(this);
 	                this.consume();
 	            }
-	            this.state = 169;
+	            this.state = 198;
 	            this.additiveExpr();
-	            this.state = 174;
+	            this.state = 203;
 	            this._errHandler.sync(this);
 	            _la = this._input.LA(1);
 	        }
@@ -765,28 +921,28 @@ export default class MAPLParser extends antlr4.Parser {
 
 	additiveExpr() {
 	    let localctx = new AdditiveExprContext(this, this._ctx, this.state);
-	    this.enterRule(localctx, 36, MAPLParser.RULE_additiveExpr);
+	    this.enterRule(localctx, 44, MAPLParser.RULE_additiveExpr);
 	    var _la = 0;
 	    try {
 	        this.enterOuterAlt(localctx, 1);
-	        this.state = 175;
+	        this.state = 204;
 	        this.multiplicativeExpr();
-	        this.state = 180;
+	        this.state = 209;
 	        this._errHandler.sync(this);
 	        _la = this._input.LA(1);
-	        while(_la===27 || _la===28) {
-	            this.state = 176;
+	        while(_la===31 || _la===32) {
+	            this.state = 205;
 	            _la = this._input.LA(1);
-	            if(!(_la===27 || _la===28)) {
+	            if(!(_la===31 || _la===32)) {
 	            this._errHandler.recoverInline(this);
 	            }
 	            else {
 	            	this._errHandler.reportMatch(this);
 	                this.consume();
 	            }
-	            this.state = 177;
+	            this.state = 206;
 	            this.multiplicativeExpr();
-	            this.state = 182;
+	            this.state = 211;
 	            this._errHandler.sync(this);
 	            _la = this._input.LA(1);
 	        }
@@ -808,28 +964,28 @@ export default class MAPLParser extends antlr4.Parser {
 
 	multiplicativeExpr() {
 	    let localctx = new MultiplicativeExprContext(this, this._ctx, this.state);
-	    this.enterRule(localctx, 38, MAPLParser.RULE_multiplicativeExpr);
+	    this.enterRule(localctx, 46, MAPLParser.RULE_multiplicativeExpr);
 	    var _la = 0;
 	    try {
 	        this.enterOuterAlt(localctx, 1);
-	        this.state = 183;
+	        this.state = 212;
 	        this.unaryExpr();
-	        this.state = 188;
+	        this.state = 217;
 	        this._errHandler.sync(this);
 	        _la = this._input.LA(1);
-	        while((((_la) & ~0x1f) === 0 && ((1 << _la) & 3758096384) !== 0)) {
-	            this.state = 184;
+	        while(((((_la - 33)) & ~0x1f) === 0 && ((1 << (_la - 33)) & 7) !== 0)) {
+	            this.state = 213;
 	            _la = this._input.LA(1);
-	            if(!((((_la) & ~0x1f) === 0 && ((1 << _la) & 3758096384) !== 0))) {
+	            if(!(((((_la - 33)) & ~0x1f) === 0 && ((1 << (_la - 33)) & 7) !== 0))) {
 	            this._errHandler.recoverInline(this);
 	            }
 	            else {
 	            	this._errHandler.reportMatch(this);
 	                this.consume();
 	            }
-	            this.state = 185;
+	            this.state = 214;
 	            this.unaryExpr();
-	            this.state = 190;
+	            this.state = 219;
 	            this._errHandler.sync(this);
 	            _la = this._input.LA(1);
 	        }
@@ -851,35 +1007,35 @@ export default class MAPLParser extends antlr4.Parser {
 
 	unaryExpr() {
 	    let localctx = new UnaryExprContext(this, this._ctx, this.state);
-	    this.enterRule(localctx, 40, MAPLParser.RULE_unaryExpr);
+	    this.enterRule(localctx, 48, MAPLParser.RULE_unaryExpr);
 	    var _la = 0;
 	    try {
-	        this.state = 194;
+	        this.state = 223;
 	        this._errHandler.sync(this);
 	        switch(this._input.LA(1)) {
-	        case 28:
 	        case 32:
+	        case 36:
 	            this.enterOuterAlt(localctx, 1);
-	            this.state = 191;
+	            this.state = 220;
 	            _la = this._input.LA(1);
-	            if(!(_la===28 || _la===32)) {
+	            if(!(_la===32 || _la===36)) {
 	            this._errHandler.recoverInline(this);
 	            }
 	            else {
 	            	this._errHandler.reportMatch(this);
 	                this.consume();
 	            }
-	            this.state = 192;
+	            this.state = 221;
 	            this.unaryExpr();
 	            break;
-	        case 9:
-	        case 33:
-	        case 34:
-	        case 35:
-	        case 36:
+	        case 7:
+	        case 8:
+	        case 13:
 	        case 37:
+	        case 38:
+	        case 39:
 	            this.enterOuterAlt(localctx, 2);
-	            this.state = 193;
+	            this.state = 222;
 	            this.primaryExpr();
 	            break;
 	        default:
@@ -903,56 +1059,56 @@ export default class MAPLParser extends antlr4.Parser {
 
 	primaryExpr() {
 	    let localctx = new PrimaryExprContext(this, this._ctx, this.state);
-	    this.enterRule(localctx, 42, MAPLParser.RULE_primaryExpr);
+	    this.enterRule(localctx, 50, MAPLParser.RULE_primaryExpr);
 	    try {
-	        this.state = 206;
+	        this.state = 235;
 	        this._errHandler.sync(this);
-	        var la_ = this._interp.adaptivePredict(this._input,14,this._ctx);
+	        var la_ = this._interp.adaptivePredict(this._input,16,this._ctx);
 	        switch(la_) {
 	        case 1:
 	            this.enterOuterAlt(localctx, 1);
-	            this.state = 196;
+	            this.state = 225;
 	            this.match(MAPLParser.NUMBER);
 	            break;
 
 	        case 2:
 	            this.enterOuterAlt(localctx, 2);
-	            this.state = 197;
+	            this.state = 226;
 	            this.match(MAPLParser.STRING);
 	            break;
 
 	        case 3:
 	            this.enterOuterAlt(localctx, 3);
-	            this.state = 198;
-	            this.match(MAPLParser.T__32);
+	            this.state = 227;
+	            this.match(MAPLParser.T__6);
 	            break;
 
 	        case 4:
 	            this.enterOuterAlt(localctx, 4);
-	            this.state = 199;
-	            this.match(MAPLParser.T__33);
+	            this.state = 228;
+	            this.match(MAPLParser.T__7);
 	            break;
 
 	        case 5:
 	            this.enterOuterAlt(localctx, 5);
-	            this.state = 200;
+	            this.state = 229;
 	            this.functionCall();
 	            break;
 
 	        case 6:
 	            this.enterOuterAlt(localctx, 6);
-	            this.state = 201;
+	            this.state = 230;
 	            this.fieldPath();
 	            break;
 
 	        case 7:
 	            this.enterOuterAlt(localctx, 7);
-	            this.state = 202;
-	            this.match(MAPLParser.T__8);
-	            this.state = 203;
+	            this.state = 231;
+	            this.match(MAPLParser.T__12);
+	            this.state = 232;
 	            this.expr();
-	            this.state = 204;
-	            this.match(MAPLParser.T__9);
+	            this.state = 233;
+	            this.match(MAPLParser.T__13);
 	            break;
 
 	        }
@@ -1008,35 +1164,41 @@ MAPLParser.T__30 = 31;
 MAPLParser.T__31 = 32;
 MAPLParser.T__32 = 33;
 MAPLParser.T__33 = 34;
-MAPLParser.IDENT = 35;
-MAPLParser.NUMBER = 36;
-MAPLParser.STRING = 37;
-MAPLParser.LINE_COMMENT = 38;
-MAPLParser.BLOCK_COMMENT = 39;
-MAPLParser.WS = 40;
+MAPLParser.T__34 = 35;
+MAPLParser.T__35 = 36;
+MAPLParser.IDENT = 37;
+MAPLParser.NUMBER = 38;
+MAPLParser.STRING = 39;
+MAPLParser.LINE_COMMENT = 40;
+MAPLParser.BLOCK_COMMENT = 41;
+MAPLParser.WS = 42;
 
 MAPLParser.RULE_mapUnit = 0;
 MAPLParser.RULE_mapDecl = 1;
-MAPLParser.RULE_mapBody = 2;
-MAPLParser.RULE_mapStmt = 3;
-MAPLParser.RULE_fieldPath = 4;
-MAPLParser.RULE_assignStmt = 5;
-MAPLParser.RULE_assignDefaultStmt = 6;
-MAPLParser.RULE_functionAssignStmt = 7;
-MAPLParser.RULE_functionCall = 8;
-MAPLParser.RULE_ifStmt = 9;
-MAPLParser.RULE_forStmt = 10;
-MAPLParser.RULE_validateStmt = 11;
-MAPLParser.RULE_exprList = 12;
-MAPLParser.RULE_expr = 13;
-MAPLParser.RULE_logicalOrExpr = 14;
-MAPLParser.RULE_logicalAndExpr = 15;
-MAPLParser.RULE_equalityExpr = 16;
-MAPLParser.RULE_relationalExpr = 17;
-MAPLParser.RULE_additiveExpr = 18;
-MAPLParser.RULE_multiplicativeExpr = 19;
-MAPLParser.RULE_unaryExpr = 20;
-MAPLParser.RULE_primaryExpr = 21;
+MAPLParser.RULE_nameRef = 2;
+MAPLParser.RULE_mapDirective = 3;
+MAPLParser.RULE_directiveValue = 4;
+MAPLParser.RULE_mapBody = 5;
+MAPLParser.RULE_mapStmt = 6;
+MAPLParser.RULE_fieldPath = 7;
+MAPLParser.RULE_pathSegment = 8;
+MAPLParser.RULE_assignStmt = 9;
+MAPLParser.RULE_assignDefaultStmt = 10;
+MAPLParser.RULE_functionAssignStmt = 11;
+MAPLParser.RULE_functionCall = 12;
+MAPLParser.RULE_ifStmt = 13;
+MAPLParser.RULE_forStmt = 14;
+MAPLParser.RULE_validateStmt = 15;
+MAPLParser.RULE_exprList = 16;
+MAPLParser.RULE_expr = 17;
+MAPLParser.RULE_logicalOrExpr = 18;
+MAPLParser.RULE_logicalAndExpr = 19;
+MAPLParser.RULE_equalityExpr = 20;
+MAPLParser.RULE_relationalExpr = 21;
+MAPLParser.RULE_additiveExpr = 22;
+MAPLParser.RULE_multiplicativeExpr = 23;
+MAPLParser.RULE_unaryExpr = 24;
+MAPLParser.RULE_primaryExpr = 25;
 
 class MapUnitContext extends antlr4.ParserRuleContext {
 
@@ -1094,25 +1256,140 @@ class MapDeclContext extends antlr4.ParserRuleContext {
         this.ruleIndex = MAPLParser.RULE_mapDecl;
     }
 
-	IDENT = function(i) {
-		if(i===undefined) {
-			i = null;
-		}
+	nameRef = function(i) {
+	    if(i===undefined) {
+	        i = null;
+	    }
 	    if(i===null) {
-	        return this.getTokens(MAPLParser.IDENT);
+	        return this.getTypedRuleContexts(NameRefContext);
 	    } else {
-	        return this.getToken(MAPLParser.IDENT, i);
+	        return this.getTypedRuleContext(NameRefContext,i);
 	    }
 	};
-
 
 	mapBody() {
 	    return this.getTypedRuleContext(MapBodyContext,0);
 	};
 
+	mapDirective = function(i) {
+	    if(i===undefined) {
+	        i = null;
+	    }
+	    if(i===null) {
+	        return this.getTypedRuleContexts(MapDirectiveContext);
+	    } else {
+	        return this.getTypedRuleContext(MapDirectiveContext,i);
+	    }
+	};
+
 	accept(visitor) {
 	    if ( visitor instanceof MAPLVisitor ) {
 	        return visitor.visitMapDecl(this);
+	    } else {
+	        return visitor.visitChildren(this);
+	    }
+	}
+
+
+}
+
+
+
+class NameRefContext extends antlr4.ParserRuleContext {
+
+    constructor(parser, parent, invokingState) {
+        if(parent===undefined) {
+            parent = null;
+        }
+        if(invokingState===undefined || invokingState===null) {
+            invokingState = -1;
+        }
+        super(parent, invokingState);
+        this.parser = parser;
+        this.ruleIndex = MAPLParser.RULE_nameRef;
+    }
+
+	IDENT() {
+	    return this.getToken(MAPLParser.IDENT, 0);
+	};
+
+	STRING() {
+	    return this.getToken(MAPLParser.STRING, 0);
+	};
+
+	accept(visitor) {
+	    if ( visitor instanceof MAPLVisitor ) {
+	        return visitor.visitNameRef(this);
+	    } else {
+	        return visitor.visitChildren(this);
+	    }
+	}
+
+
+}
+
+
+
+class MapDirectiveContext extends antlr4.ParserRuleContext {
+
+    constructor(parser, parent, invokingState) {
+        if(parent===undefined) {
+            parent = null;
+        }
+        if(invokingState===undefined || invokingState===null) {
+            invokingState = -1;
+        }
+        super(parent, invokingState);
+        this.parser = parser;
+        this.ruleIndex = MAPLParser.RULE_mapDirective;
+    }
+
+	IDENT() {
+	    return this.getToken(MAPLParser.IDENT, 0);
+	};
+
+	directiveValue() {
+	    return this.getTypedRuleContext(DirectiveValueContext,0);
+	};
+
+	accept(visitor) {
+	    if ( visitor instanceof MAPLVisitor ) {
+	        return visitor.visitMapDirective(this);
+	    } else {
+	        return visitor.visitChildren(this);
+	    }
+	}
+
+
+}
+
+
+
+class DirectiveValueContext extends antlr4.ParserRuleContext {
+
+    constructor(parser, parent, invokingState) {
+        if(parent===undefined) {
+            parent = null;
+        }
+        if(invokingState===undefined || invokingState===null) {
+            invokingState = -1;
+        }
+        super(parent, invokingState);
+        this.parser = parser;
+        this.ruleIndex = MAPLParser.RULE_directiveValue;
+    }
+
+	STRING() {
+	    return this.getToken(MAPLParser.STRING, 0);
+	};
+
+	NUMBER() {
+	    return this.getToken(MAPLParser.NUMBER, 0);
+	};
+
+	accept(visitor) {
+	    if ( visitor instanceof MAPLVisitor ) {
+	        return visitor.visitDirectiveValue(this);
 	    } else {
 	        return visitor.visitChildren(this);
 	    }
@@ -1226,21 +1503,59 @@ class FieldPathContext extends antlr4.ParserRuleContext {
         this.ruleIndex = MAPLParser.RULE_fieldPath;
     }
 
-	IDENT = function(i) {
-		if(i===undefined) {
-			i = null;
-		}
-	    if(i===null) {
-	        return this.getTokens(MAPLParser.IDENT);
-	    } else {
-	        return this.getToken(MAPLParser.IDENT, i);
-	    }
+	IDENT() {
+	    return this.getToken(MAPLParser.IDENT, 0);
 	};
 
+	pathSegment = function(i) {
+	    if(i===undefined) {
+	        i = null;
+	    }
+	    if(i===null) {
+	        return this.getTypedRuleContexts(PathSegmentContext);
+	    } else {
+	        return this.getTypedRuleContext(PathSegmentContext,i);
+	    }
+	};
 
 	accept(visitor) {
 	    if ( visitor instanceof MAPLVisitor ) {
 	        return visitor.visitFieldPath(this);
+	    } else {
+	        return visitor.visitChildren(this);
+	    }
+	}
+
+
+}
+
+
+
+class PathSegmentContext extends antlr4.ParserRuleContext {
+
+    constructor(parser, parent, invokingState) {
+        if(parent===undefined) {
+            parent = null;
+        }
+        if(invokingState===undefined || invokingState===null) {
+            invokingState = -1;
+        }
+        super(parent, invokingState);
+        this.parser = parser;
+        this.ruleIndex = MAPLParser.RULE_pathSegment;
+    }
+
+	IDENT() {
+	    return this.getToken(MAPLParser.IDENT, 0);
+	};
+
+	STRING() {
+	    return this.getToken(MAPLParser.STRING, 0);
+	};
+
+	accept(visitor) {
+	    if ( visitor instanceof MAPLVisitor ) {
+	        return visitor.visitPathSegment(this);
 	    } else {
 	        return visitor.visitChildren(this);
 	    }
@@ -1274,6 +1589,10 @@ class AssignStmtContext extends antlr4.ParserRuleContext {
 	    } else {
 	        return this.getTypedRuleContext(FieldPathContext,i);
 	    }
+	};
+
+	STRING() {
+	    return this.getToken(MAPLParser.STRING, 0);
 	};
 
 	accept(visitor) {
@@ -1895,9 +2214,13 @@ class PrimaryExprContext extends antlr4.ParserRuleContext {
 
 MAPLParser.MapUnitContext = MapUnitContext; 
 MAPLParser.MapDeclContext = MapDeclContext; 
+MAPLParser.NameRefContext = NameRefContext; 
+MAPLParser.MapDirectiveContext = MapDirectiveContext; 
+MAPLParser.DirectiveValueContext = DirectiveValueContext; 
 MAPLParser.MapBodyContext = MapBodyContext; 
 MAPLParser.MapStmtContext = MapStmtContext; 
 MAPLParser.FieldPathContext = FieldPathContext; 
+MAPLParser.PathSegmentContext = PathSegmentContext; 
 MAPLParser.AssignStmtContext = AssignStmtContext; 
 MAPLParser.AssignDefaultStmtContext = AssignDefaultStmtContext; 
 MAPLParser.FunctionAssignStmtContext = FunctionAssignStmtContext; 

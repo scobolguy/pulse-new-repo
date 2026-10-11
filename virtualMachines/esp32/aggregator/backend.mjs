@@ -101,6 +101,7 @@ import { createBusinessCalendarService } from './src/backend/modules/businessCal
 import { createTemporalQueryService } from './src/backend/modules/temporalQueryService.mjs';
 import { createRequestPolicyApi } from './src/backend/security/requestPolicy.mjs';
 import { loadRouteManifest, registerRoutesFromManifest } from './src/backend/routeManifestLoader.mjs';
+import { registerIssueRoutes } from './src/backend/issueRoutes.mjs';
 import { enumerateApiCatalog, enumerateDiscoveredNodeApiCatalog, findApiCatalogEntry } from './src/backend/apiCatalog.mjs';
 import {
   listServiceProviders,
@@ -9868,10 +9869,12 @@ function registerRoutes(app) {
       registerRuntimeRegistryRoutes,
       registerRouterLifecycleControlRoutes,
       registerHelloServiceRoutes,
+      registerIssueRoutes,
       registerProvisioningAgentRoutes
     },
     dependencyFactories: createRouteManifestDependencyFactories({
       requirePermission,
+      getSessionUserIdFromRequest,
       readTransactionLifecycleCompiled,
       getFsmEntityStateFromSql,
       getTransactionTrace,

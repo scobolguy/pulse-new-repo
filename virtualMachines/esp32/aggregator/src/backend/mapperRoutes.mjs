@@ -9,6 +9,7 @@ import { compileMaplWithAntlr } from '../../scripts/compile-mapl-antlr-to-pcode.
 import { attachPcodeSignature } from '../../scripts/pcode-signing.mjs';
 import { runSingleMessageForEvolution } from '../../../pmachines/javascript/index.mjs';
 import { ollamaGenerate } from './ollamaService.mjs';
+import { PROGRAM_SOURCE_ROOT, PROGRAM_OBJECT_ROOT } from './modules/programLayout.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const defaultRuntimeRoot = path.resolve(
@@ -24,7 +25,6 @@ const runtimeRoot = path.resolve(
 const mapsRoot = path.join(runtimeRoot, 'data-maps');
 const defaultMapsRoot = path.join(defaultRuntimeRoot, 'data-maps');
 const issueTestStorePath = path.join(runtimeRoot, 'issue-test-system.json');
-const mapperAuthoringRoot = path.join(runtimeRoot, 'mapper-authoring-artifacts');
 const mapperInventoryPath = path.join(runtimeRoot, 'mapper-authoring-inventory.json');
 const mapperDeploymentsPath = path.join(runtimeRoot, 'mapper-authoring-deployments.json');
 const librarianDataTypesPath = path.join(runtimeRoot, 'services', 'librarian', 'data-types.json');
@@ -396,18 +396,19 @@ async function buildDeterministicArtifacts(normalizedIntent) {
 }
 
 async function persistDeterministicArtifacts(normalizedIntent, artifacts, compiledMapl, manifest) {
-  const scopeDir = path.join(mapperAuthoringRoot, manifest.intentHash);
-  await fs.mkdir(scopeDir, { recursive: true });
+  const sourceDir = path.join(PROGRAM_SOURCE_ROOT, 'mapper-authoring', manifest.intentHash);
+  const objectDir = path.join(PROGRAM_OBJECT_ROOT, 'mapper-authoring', manifest.intentHash);
+  await Promise.all([sourceDir, objectDir].map(directory => fs.mkdir(directory, { recursive: true })));
 
   const mapId = toIdent(normalizedIntent.mapId, 'deterministic_mapper').toLowerCase();
   const paths = {
-    intent: path.join(scopeDir, `${mapId}.intent.json`),
-    mapl: path.join(scopeDir, `${mapId}.mapl`),
-    pcode: path.join(scopeDir, `${mapId}.pcode`),
-    programMap: path.join(scopeDir, `${mapId}.program.json`),
-    pascalish: path.join(scopeDir, `${mapId}.pas`),
-    wfl: path.join(scopeDir, `${mapId}.wfl`),
-    manifest: path.join(scopeDir, `${mapId}.manifest.json`)
+    intent: path.join(objectDir, `${mapId}.intent.json`),
+    mapl: path.join(sourceDir, `${mapId}.mapl`),
+    pcode: path.join(objectDir, `${mapId}.pcode`),
+    programMap: path.join(objectDir, `${mapId}.program.json`),
+    pascalish: path.join(sourceDir, `${mapId}.pas`),
+    wfl: path.join(sourceDir, `${mapId}.wfl`),
+    manifest: path.join(objectDir, `${mapId}.manifest.json`)
   };
 
   await fs.writeFile(paths.intent, stableStringify(normalizedIntent), 'utf-8');
