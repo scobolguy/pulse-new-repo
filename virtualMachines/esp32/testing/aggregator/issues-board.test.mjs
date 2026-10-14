@@ -102,7 +102,7 @@ test('missing configuration, rate limits, malformed lists, transport and write f
   await assert.rejects(client.move(1, 'done', toBoardIssue(issue()).version), error => error.code === 'GITHUB_REQUEST_FAILED');
 });
 
-test('HTTP routes require real sessions, deny unauthorized writes and validate inputs', async t => {
+test('HTTP reads allow anonymous viewing while writes still require real authorized sessions', async t => {
   const app = express();
   app.use(express.json());
   let writes = 0;
@@ -118,9 +118,20 @@ test('HTTP routes require real sessions, deny unauthorized writes and validate i
   await new Promise(resolve => server.once('listening', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const url = `http://127.0.0.1:${server.address().port}/api/issues`;
-  assert.equal((await fetch(url, { headers: { 'x-user-id': 'system-admin' } })).status, 401);
+  const anonymous = await fetch(url);
+  assert.equal(anonymous.status, 200);
+  assert.equal(anonymous.headers.get('cache-control'), 'no-store');
+  assert.deepEqual(await anonymous.json(), { repository: 'scobolguy/pulse-new-repo', issues: [], canManage: false });
+  assert.equal((await fetch(url, { headers: { 'x-user-id': 'system-admin' } })).status, 200);
   assert.equal((await fetch(url, { headers: { authorization: 'Bearer test-session' } })).status, 200);
   assert.equal((await fetch(url, { method: 'POST', headers: { authorization: 'Bearer test-session', 'Content-Type': 'application/json' }, body: '{"title":"No"}' })).status, 403);
+  for (const headers of [{}, { 'x-user-id': 'SystemAdmin' }, { authorization: 'Bearer expired' }]) {
+    const options = { headers: { ...headers, 'Content-Type': 'application/json' } };
+    assert.equal((await fetch(url, { ...options, method: 'POST', body: '{"title":"No"}' })).status, 401);
+    assert.equal((await fetch(`${url}/1/status`, {
+      ...options, method: 'PATCH', body: '{"status":"done","version":"old"}',
+    })).status, 401);
+  }
   assert.equal(writes, 0);
 });
 

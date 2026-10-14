@@ -21,6 +21,7 @@ async function request(url, method = 'GET', body) {
 
 export default function IssuesBoardPage() {
   const [issues, setIssues] = useState(null)
+  const [canManage, setCanManage] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
@@ -50,7 +51,10 @@ export default function IssuesBoardPage() {
   const refresh = useCallback(() => perform(async () => {
     const result = await request('/api/issues')
     if (!Array.isArray(result.issues)) throw new Error('The backend returned an invalid issue list.')
-    if (mounted.current) setIssues(result.issues)
+    if (mounted.current) {
+      setIssues(result.issues)
+      setCanManage(result.canManage === true)
+    }
   }), [perform])
 
   useEffect(() => {
@@ -98,7 +102,10 @@ export default function IssuesBoardPage() {
       if (mounted.current) setPassword('')
       const board = await request('/api/issues')
       if (!Array.isArray(board.issues)) throw new Error('The backend returned an invalid issue list.')
-      if (mounted.current) setIssues(board.issues)
+      if (mounted.current) {
+        setIssues(board.issues)
+        setCanManage(board.canManage === true)
+      }
     })
   }
 
@@ -110,25 +117,26 @@ export default function IssuesBoardPage() {
         <button type="button" onClick={refresh} disabled={busy}>Refresh issues</button>
       </header>
       <details>
-        <summary>Sign in to Pulse / change account</summary>
+        <summary>Sign in to create or change issues / change account</summary>
         <form onSubmit={signIn} className="issues-form">
           <label>User ID<input autoComplete="username" required value={userId} onChange={event => setUserId(event.target.value)} /></label>
           <label>Password<input type="password" autoComplete="current-password" required value={password} onChange={event => setPassword(event.target.value)} /></label>
           <button disabled={busy}>Sign in</button>
         </form>
       </details>
+      {!canManage && <p>Viewing does not require sign-in. Sign in with issue-management permission to create or change issues.</p>}
       {error && <p role="alert" className="issues-error">{error} {issues && 'Displayed cards may be stale; refresh before retrying.'}</p>}
       <p role="status" aria-live="polite">{busy ? 'Contacting GitHub...' : notice}</p>
       {issues !== null && <>
-        <details>
+        {canManage && <details>
           <summary>Create a GitHub issue</summary>
           <form onSubmit={create} className="issues-form">
             <label>Title<input required maxLength={256} value={title} onChange={event => setTitle(event.target.value)} /></label>
             <label>Description<textarea maxLength={65536} rows={5} value={body} onChange={event => setBody(event.target.value)} placeholder="Observed behavior, reproduction, expected result, and acceptance checks" /></label>
             <button disabled={busy || !title.trim()}>Create issue</button>
           </form>
-        </details>
-        {issues.length === 0 && <p>No GitHub issues yet. Create the first issue above.</p>}
+        </details>}
+        {issues.length === 0 && <p>No GitHub issues yet.{canManage && ' Create the first issue above.'}</p>}
         <div className="issues-columns" aria-label="Kanban board">
           {columns.map(([status, label]) => {
             const cards = issues.filter(issue => issue.status === status)
@@ -140,11 +148,11 @@ export default function IssuesBoardPage() {
                 <p>{issue.labels.join(', ') || 'No labels'}</p>
                 <p>Assignees: {issue.assignees.join(', ') || 'Unassigned'}</p>
                 <label>Status for issue #{issue.number}
-                  <select aria-label={`Status for issue #${issue.number}`} disabled={busy} value={issue.status} onChange={event => move(issue, event.target.value)}>
+                  <select aria-label={`Status for issue #${issue.number}`} disabled={busy || !canManage} value={issue.status} onChange={event => move(issue, event.target.value)}>
                     {columns.map(([value, text]) => <option key={value} value={value}>{text}</option>)}
                   </select>
                 </label>
-                {issue.conflict && <button disabled={busy} onClick={() => move(issue, issue.status)}>Confirm this status</button>}
+                {issue.conflict && canManage && <button disabled={busy} onClick={() => move(issue, issue.status)}>Confirm this status</button>}
               </article>)}
               {cards.length === 0 && <p>No issues in {label}.</p>}
             </section>

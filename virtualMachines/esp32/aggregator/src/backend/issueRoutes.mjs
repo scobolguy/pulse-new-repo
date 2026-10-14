@@ -9,7 +9,7 @@ export function registerIssueRoutes(app, {
 }) {
   const authorize = permission => (req, res, next) => {
     const userId = getSessionUserIdFromRequest(req);
-    if (!userId) return res.status(401).json({ code: 'SESSION_REQUIRED', error: 'Sign in to Pulse to access GitHub issues.' });
+    if (!userId) return res.status(401).json({ code: 'SESSION_REQUIRED', error: 'Sign in to Pulse to create or change GitHub issues.' });
     const access = resolveEffectiveAccessForUser(userId);
     if (!access.user || access.user.enabled === false || access.toxicRoleViolations?.length || !hasPermission(access.permissions, permission)) {
       return res.status(403).json({ code: 'ISSUES_ACCESS_DENIED', error: 'Your Pulse account does not have permission for this action.' });
@@ -28,9 +28,13 @@ export function registerIssueRoutes(app, {
       });
     }
   };
-  app.get('/api/issues', authorize('governance.read'), handle(async (_req, res) => {
+  app.get('/api/issues', handle(async (req, res) => {
+    const userId = getSessionUserIdFromRequest(req);
+    const access = userId ? resolveEffectiveAccessForUser(userId) : null;
+    const canManage = Boolean(access?.user && access.user.enabled !== false
+      && !access.toxicRoleViolations?.length && hasPermission(access.permissions, 'governance.manage'));
     res.setHeader('Cache-Control', 'no-store');
-    res.json({ repository: ISSUE_REPOSITORY, issues: await client.list() });
+    res.json({ repository: ISSUE_REPOSITORY, issues: await client.list(), canManage });
   }));
   app.post('/api/issues', authorize('governance.manage'), handle(async (req, res) => {
     const { title, body = '' } = req.body || {};

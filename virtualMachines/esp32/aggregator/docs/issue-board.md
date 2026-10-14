@@ -13,12 +13,16 @@ write** access. Supply it privately as the backend environment variable
 `VITE_*` variable. The token is used only by the backend against GitHub's API.
 Repository labels are created when first needed; the credential must permit this.
 
-Sign in with an existing Pulse user ID and password using the board's sign-in
-form. It uses the existing Pulse session-token storage, not GitHub credentials.
-Use HTTPS for remote access. Board reads require `governance.read`, and creation
-and moves require `governance.manage`, reusing existing governance permissions.
-Unlike development endpoints, these routes require a valid Pulse session and
-resolve permissions without header-supplied user or group identities.
+Viewing the board does not require a Pulse user ID or password. Anyone who can
+reach the Aggregator can read the repository issue list through its backend
+GitHub credential, including private issues if that credential can read them.
+The GitHub token is never returned to the browser.
+
+Creation and moves still require a valid Pulse session and `governance.manage`.
+Sign in using the board's optional sign-in form to enable those controls. It uses
+existing Pulse session-token storage, not GitHub credentials. Write permissions
+are resolved without header-supplied user or group identities. Use HTTPS for
+remote access.
 
 Missing configuration, invalid sessions, denied access, upstream failures, and
 rate limits appear as errors, never as an empty successful board. All GitHub
