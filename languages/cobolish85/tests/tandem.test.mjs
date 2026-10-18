@@ -114,11 +114,18 @@ const badFileSource = [
   'INPUT-OUTPUT SECTION.',
   'FILE-CONTROL.',
   'SELECT CUSTOMER-FILE ASSIGN TO "data/customers.dat" ORGANIZATION IS SEQUENTIAL.',
+  'DATA DIVISION.',
+  'FILE SECTION.',
+  'FD CUSTOMER-FILE.',
+  '01 CUSTOMER-RECORD PIC X(80).',
+  'WORKING-STORAGE SECTION.',
+  '01 CUSTOMER-ID PIC X(8).',
   'PROCEDURE DIVISION.',
   'OPEN INPUT CUSTOMER-FILE.',
+  'START CUSTOMER-FILE KEY IS >= CUSTOMER-ID.',
   'STOP RUN.'
 ].join('\n');
-traceCompileError(import.meta.url, compileTandemCobol85ToPcode, badFileSource, /not ORGANIZATION INDEXED/);
-assert.throws(() => compileTandemCobol85ToPcode(badFileSource), /not ORGANIZATION INDEXED/);
+traceCompileError(import.meta.url, compileTandemCobol85ToPcode, badFileSource, /START is not valid for sequential files/);
+assert.throws(() => compileTandemCobol85ToPcode(badFileSource), /START is not valid for sequential files/);
 
 console.log('[tandem-cobol85-compiler] PASS');

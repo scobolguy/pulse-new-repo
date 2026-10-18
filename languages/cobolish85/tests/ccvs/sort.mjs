@@ -255,5 +255,28 @@ EMIT-PARA.
             NOT AT END STRING S-TAG DELIMITED BY SIZE INTO SEEN WITH POINTER PTR
         END-RETURN
     END-PERFORM.`
+  })),
+
+  st('ST-RETURN-NOT-AT-END-01', ['ST107A', 'ST108A', 'ST109A'], 'RETURN permits NOT AT END without an AT END phrase and executes it only for an available record', k => ({
+    environment: `INPUT-OUTPUT SECTION.
+FILE-CONTROL.
+${sortSelect('SORT-FILE', 'st-return-not-at-end.srt')}`,
+    fileSection: 'SD SORT-FILE.\n01 SORT-REC PIC 99.',
+    ws: '01 RESULT-ITEM PIC 99 VALUE 0.\n01 HITS PIC 9 VALUE 0.',
+    proc: `SORT SORT-FILE ASCENDING KEY SORT-REC
+    INPUT PROCEDURE LOAD-ONE
+    OUTPUT PROCEDURE TAKE-TWO
+${k('available-only', 'RESULT-ITEM = 21 AND HITS = 1')}`,
+    paragraphs: `LOAD-ONE.
+    MOVE 21 TO SORT-REC
+    RELEASE SORT-REC.
+TAKE-TWO.
+    PERFORM 2 TIMES
+        RETURN SORT-FILE
+            NOT AT END
+                ADD SORT-REC TO RESULT-ITEM
+                ADD 1 TO HITS
+        END-RETURN
+    END-PERFORM.`
   }))
 ];

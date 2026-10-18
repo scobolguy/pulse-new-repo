@@ -1,6 +1,6 @@
 // CCVS-guided coverage suite. The cases in tests/ccvs/ are modelled on the NIST CCVS85
-// modules NC, SQ, RL, IX, ST, IC, SM, IF, SG and DB. Each is a self-checking COBOL 85
-// program; cases that use features the compiler does not yet implement are expected to fail.
+// language modules. Executable cases must pass real output checks; external-environment
+// cases have separately labelled syntax-only tests, not execution passes.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -16,16 +16,8 @@ import { createDesktopIntrinsicBindings } from '../../../virtualMachines/esp32/p
 import { createIsamBindings } from '../../../virtualMachines/esp32/pmachines/javascript/src/isam-bindings.mjs';
 import { createFilesystemService } from '../../../virtualMachines/esp32/aggregator/filesystem-service.mjs';
 import { createFilesystemServiceClient } from '../../../virtualMachines/esp32/aggregator/src/librarian/filesystem-service-client.mjs';
-import { ncCases } from './ccvs/nucleus.mjs';
-import { fileCases } from './ccvs/files.mjs';
-import { sortCases } from './ccvs/sort.mjs';
-import { icCases } from './ccvs/ic.mjs';
-import { smCases } from './ccvs/sm.mjs';
-import { functionCases } from './ccvs/functions.mjs';
-import { segmentationDebugCases } from './ccvs/segmentation-debug.mjs';
+import { ccvsCases, ccvsModules, executableCases } from './ccvs/catalog.mjs';
 
-const cases = [...ncCases, ...fileCases, ...sortCases, ...icCases, ...smCases, ...functionCases, ...segmentationDebugCases];
-const modules = ['NC', 'SQ', 'RL', 'IX', 'ST', 'IC', 'SM', 'IF', 'SG', 'DB'];
 let filesystemService;
 let filesystemClient;
 let dataRoot;
@@ -48,12 +40,21 @@ after(async () => {
 });
 
 test('CCVS coverage catalog is well formed', () => {
-  assert.equal(new Set(cases.map(entry => entry.id)).size, cases.length, 'case ids are unique');
-  for (const module of modules) {
-    assert.ok(cases.some(entry => entry.module === module), `module ${module} has cases`);
+  assert.equal(new Set(ccvsCases.map(entry => entry.id)).size, ccvsCases.length, 'case ids are unique');
+  for (const module of ccvsModules) {
+    assert.ok(ccvsCases.some(entry => entry.module === module), `module ${module} has cases`);
   }
-  for (const entry of cases) {
-    assert.ok(entry.expected.length > 0, `${entry.id} has expected output`);
+  for (const entry of ccvsCases) {
+    assert.ok(ccvsModules.includes(entry.module), `${entry.id} belongs to a known corpus module`);
+    assert.ok(['execution', 'syntax'].includes(entry.validation), `${entry.id} declares its validation tier`);
+    assert.ok(entry.source.length > 0, `${entry.id} has source`);
+    if (entry.validation === 'execution') {
+      assert.ok(entry.expected.length > 0, `${entry.id} has expected output`);
+      assert.deepEqual(entry.requires, [], `${entry.id} is self-contained`);
+    } else {
+      assert.deepEqual(entry.expected, [], `${entry.id} does not claim executable output validation`);
+      assert.ok(entry.requires.length > 0, `${entry.id} documents its external execution requirements`);
+    }
     assert.ok(entry.ccvs.length > 0, `${entry.id} cites CCVS programs`);
   }
 });
@@ -76,7 +77,7 @@ function createBindings(caseId) {
   };
 }
 
-for (const entry of cases) {
+for (const entry of executableCases) {
   test(`${entry.id} — ${entry.description}`, async () => {
     traceProgram(import.meta.url, entry.source, {
       category: entry.module,

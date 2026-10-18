@@ -21,6 +21,10 @@ export function parsePicture(picture) {
   let fractionDigits = 0;
   let seenDecimalPoint = false;
   let alphanumeric = 0;
+  const trailingIntegerScale = !raw.includes('V') && /P(?:\(\d+\))?$/.test(raw)
+    ? [...raw.matchAll(/P(?:\((\d+)\))?/g)].reduce((count, item) => count + Number(item[1] || 1), 0)
+    : 0;
+  let integerScaleRemaining = trailingIntegerScale;
 
   PICTURE_TERM.lastIndex = 0;
   let match;
@@ -31,6 +35,8 @@ export function parsePicture(picture) {
       signed = true;
     } else if (symbol === 'V') {
       seenDecimalPoint = true;
+    } else if (symbol === 'P' && !seenDecimalPoint && integerScaleRemaining > 0) {
+      integerScaleRemaining -= count;
     } else if (symbol === '9' || symbol === 'Z' || symbol === 'P') {
       if (seenDecimalPoint) fractionDigits += count;
       else integerDigits += count;
@@ -45,12 +51,13 @@ export function parsePicture(picture) {
   }
   if (integerDigits === 0 && fractionDigits === 0) return null;
 
-  const precision = integerDigits + fractionDigits;
+  const precision = integerDigits + fractionDigits + trailingIntegerScale;
   return {
     kind: 'decimal',
     signed,
     precision,
     scale: fractionDigits,
+    scalingPower: trailingIntegerScale,
     pascalishType: `decimal(${precision}, ${fractionDigits})`
   };
 }

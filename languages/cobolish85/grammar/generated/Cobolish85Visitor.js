@@ -48,6 +48,12 @@ export default class Cobolish85Visitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by Cobolish85Parser#dateCompiledEntry.
+	visitDateCompiledEntry(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by Cobolish85Parser#programAttributes.
 	visitProgramAttributes(ctx) {
 	  return this.visitChildren(ctx);
@@ -176,6 +182,12 @@ export default class Cobolish85Visitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by Cobolish85Parser#ioControlEntry.
 	visitIoControlEntry(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#multipleFileTapeItem.
+	visitMultipleFileTapeItem(ctx) {
 	  return this.visitChildren(ctx);
 	}
 
@@ -324,6 +336,12 @@ export default class Cobolish85Visitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by Cobolish85Parser#communicationSection.
+	visitCommunicationSection(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by Cobolish85Parser#screenSection.
 	visitScreenSection(ctx) {
 	  return this.visitChildren(ctx);
@@ -338,6 +356,36 @@ export default class Cobolish85Visitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by Cobolish85Parser#reportDescriptionEntry.
 	visitReportDescriptionEntry(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#reportDescriptionClause.
+	visitReportDescriptionClause(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#reportGroupDescriptionEntry.
+	visitReportGroupDescriptionEntry(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#reportGroupClause.
+	visitReportGroupClause(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#communicationDescriptionEntry.
+	visitCommunicationDescriptionEntry(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#communicationClause.
+	visitCommunicationClause(ctx) {
 	  return this.visitChildren(ctx);
 	}
 
@@ -434,6 +482,12 @@ export default class Cobolish85Visitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by Cobolish85Parser#valueOfClause.
 	visitValueOfClause(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#reportFileClause.
+	visitReportFileClause(ctx) {
 	  return this.visitChildren(ctx);
 	}
 
@@ -764,6 +818,48 @@ export default class Cobolish85Visitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by Cobolish85Parser#acceptStatement.
 	visitAcceptStatement(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#enableStatement.
+	visitEnableStatement(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#disableStatement.
+	visitDisableStatement(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#sendStatement.
+	visitSendStatement(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#receiveStatement.
+	visitReceiveStatement(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#purgeStatement.
+	visitPurgeStatement(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#suppressStatement.
+	visitSuppressStatement(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#reportStatement.
+	visitReportStatement(ctx) {
 	  return this.visitChildren(ctx);
 	}
 

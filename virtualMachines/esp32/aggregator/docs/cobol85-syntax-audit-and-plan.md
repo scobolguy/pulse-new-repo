@@ -5,6 +5,27 @@ program is accepted by the lexer/parser. Constructs that are recognized but not
 yet executable are rejected by the compiler with an explicit diagnostic. The
 original audit tables remain the pre-fix baseline.
 
+## Semantic phase: SORT/MERGE
+
+All seven ST execution cases now pass. Generated P-code implements stable
+bottom-up SORT, ordered-run MERGE, multiple mixed-direction keys, exact
+numeric display-key comparisons, custom ALPHABET collation, USING/GIVING,
+INPUT/OUTPUT PROCEDURE ranges, RELEASE FROM, and RETURN INTO with EOF dispatch.
+Additional regressions cover empty and repeated sorts, 64-record ordering
+within the instruction limit, large fractional keys, collation equivalences,
+multiple input/output files, unordered MERGE inputs, and file/phase errors.
+
+The implementation uses in-memory fixed-record buffers and existing text and
+file bindings, with no new VM opcodes. It currently requires a single
+fixed-length SD record and fixed-length sequential USING/GIVING files; it does
+not spill work records to disk. Native ESP32 support remains part of the
+deferred PMachine port. See the compiler guide's
+[SORT/MERGE section](tandem-cobol85-compiler.md#sort-and-merge).
+
+The current default suite passes 278/287 tests; the nine failures are all in
+inter-program communication. The CCVS execution suite passes 105/114 checks,
+including the catalog check. Earlier milestone counts below are historical.
+
 ## Semantic phase: P-code ISAM foundation
 
 The first semantic batch replaces the JavaScript ISAM engine in the runtime

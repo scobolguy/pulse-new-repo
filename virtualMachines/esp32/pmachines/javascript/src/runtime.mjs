@@ -103,8 +103,21 @@ class PDecimal {
   }
 }
 
+class PReference {
+  constructor(frame, name, offset = null, length = null) {
+    this.frame = frame;
+    this.name = name;
+    this.offset = offset;
+    this.length = length;
+  }
+}
+
 function isDecimal(value) {
   return value instanceof PDecimal;
+}
+
+function isReference(value) {
+  return value instanceof PReference;
 }
 
 // Values that must survive a store, load or call boundary without numeric coercion.
@@ -171,11 +184,93 @@ function formatDecimal(value) {
   return `${negative ? '-' : ''}${whole}${fraction}`;
 }
 
-function formatCobolDisplay(value, precision, scale) {
+function formatCobolDisplay(value, precision, scale, signMode = '') {
   const decimal = rescaleDecimal(value, scale);
   const negative = decimal.unscaled < 0n;
   const digits = (negative ? -decimal.unscaled : decimal.unscaled).toString().padStart(precision, '0');
+  if (signMode === 'LEADING_SEPARATE') return `${negative ? '-' : '+'}${digits}`;
+  if (signMode === 'TRAILING_SEPARATE') return `${digits}${negative ? '-' : '+'}`;
   return `${negative ? '-' : ''}${digits}`;
+}
+
+function formatCobolEdited(value, rawMask, decimalComma = false, blankWhenZero = false) {
+  const mask = String(rawMask || '');
+  const decimalAt = mask.lastIndexOf(decimalComma ? ',' : '.');
+  const scale = decimalAt < 0 ? 0 : [...mask.slice(decimalAt + 1)].filter(character => '9Z*'.includes(character)).length;
+  const integerEnd = decimalAt < 0 ? mask.length : decimalAt;
+  const lastRequiredDigit = mask.lastIndexOf('9', integerEnd - 1);
+  const floatingSymbols = new Set([...mask.slice(0, integerEnd)].filter(character => '$+-'.includes(character))
+    .filter(character => [...mask.slice(0, integerEnd)].filter(candidate => candidate === character).length > 1));
+  const integerPositions = [...mask.slice(0, integerEnd)]
+    .map((character, index) => '9Z*'.includes(character)
+      || (floatingSymbols.has(character) && index < lastRequiredDigit) ? index : -1)
+    .filter(index => index >= 0);
+  const fractionPositions = decimalAt < 0 ? [] : [...mask.slice(decimalAt + 1)]
+    .map((character, index) => '9Z*'.includes(character) ? decimalAt + 1 + index : -1)
+    .filter(index => index >= 0);
+  const decimal = rescaleDecimal(toDecimal(value), scale);
+  const negative = decimal.unscaled < 0n;
+  const absolute = (negative ? -decimal.unscaled : decimal.unscaled).toString().padStart(integerPositions.length + scale, '0');
+  const integerDigits = absolute.slice(0, absolute.length - scale || undefined).padStart(integerPositions.length, '0');
+  const fractionDigits = scale ? absolute.slice(-scale).padStart(scale, '0') : '';
+  const isZero = decimal.unscaled === 0n;
+  if (blankWhenZero && isZero) return ' '.repeat(mask.length);
+
+  const output = [...mask];
+  let significant = false;
+  for (let slot = 0; slot < integerPositions.length; slot += 1) {
+    const position = integerPositions[slot];
+    const digit = integerDigits[slot] || '0';
+    const marker = mask[position];
+    if (digit !== '0') significant = true;
+    output[position] = marker === '9' || significant ? digit : marker === '*' ? '*' : ' ';
+  }
+  for (let index = 0; index < fractionPositions.length; index += 1) {
+    const position = fractionPositions[index];
+    const marker = mask[position];
+    const digit = fractionDigits[index] || '0';
+    output[position] = marker === 'Z' && digit === '0' ? ' ' : marker === '*' && isZero ? '*' : digit;
+  }
+
+  const firstDigit = integerPositions.findIndex((_position, index) => integerDigits[index] !== '0');
+  const firstPosition = firstDigit < 0 ? integerPositions.at(-1) : integerPositions[firstDigit];
+  const currencies = [];
+  const signs = [];
+  for (let position = 0; position < mask.length; position += 1) {
+    if (mask[position] === '$') currencies.push(position);
+    if (mask[position] === '+' || mask[position] === '-') signs.push(position);
+    if (mask[position] === (decimalComma ? '.' : ',')) {
+      const precedingDigits = integerPositions.filter(index => index < position);
+      if (precedingDigits.every(index => !/[1-9]/.test(output[index]))) {
+        output[position] = ' ';
+      }
+    }
+    if (position === decimalAt && isZero && !mask.includes('*')) output[position] = ' ';
+  }
+  for (let position = 0; position < mask.length; position += 1) {
+    if (mask[position] === 'B') output[position] = ' ';
+  }
+  for (const positions of [currencies, signs]) {
+    const floating = positions.filter(position => position < (firstPosition ?? mask.length));
+    if (floating.length) {
+      for (const position of floating) output[position] = ' ';
+      const selected = floating.at(-1);
+      output[selected] = positions === currencies ? '$' : negative ? '-' : ' ';
+    }
+  }
+  for (const marker of ['CR', 'DB']) {
+    const position = mask.lastIndexOf(marker);
+    if (position >= 0) {
+      output[position] = negative ? marker[0] : ' ';
+      output[position + 1] = negative ? marker[1] : ' ';
+    }
+  }
+  for (const position of signs) {
+    if (position >= (firstPosition ?? mask.length)) {
+      output[position] = mask[position] === '+' ? (negative ? '-' : '+') : (negative ? '-' : ' ');
+    }
+  }
+  return output.join('');
 }
 
 // Digits required to hold the value, for COBOL ON SIZE ERROR checks.
@@ -1450,7 +1545,16 @@ function parsePcode(text) {
       const parts = trimCopy(rest).split(/\s+/).filter(Boolean);
       instr.operand = {
         precision: Number.parseInt(parts[0] || '0', 10),
-        scale: Number.parseInt(parts[1] || '0', 10)
+        scale: Number.parseInt(parts[1] || '0', 10),
+        signMode: String(parts[2] || '').toUpperCase()
+      };
+    } else if (mnemonic === 'DEC_EDIT') {
+      const match = trimCopy(rest).match(/^("(?:\\.|[^"])*")\s+([01])\s+([01])$/);
+      if (!match) throw new Error(`Invalid DEC_EDIT operand: ${rest}`);
+      instr.operand = {
+        mask: JSON.parse(match[1]),
+        decimalComma: match[2] === '1',
+        blankWhenZero: match[3] === '1'
       };
     } else if (mnemonic === 'DEC_FITS') {
       instr.operand = Number.parseInt(trimCopy(rest), 10);
@@ -1466,6 +1570,7 @@ function parsePcode(text) {
       || mnemonic === 'LOAD_NAME'
       || mnemonic === 'STORE_NAME'
       || mnemonic === 'MAP_RETURN'
+      || mnemonic === 'PUSH_REF'
     ) {
       instr.operand = parseBareOperand(rest);
     } else if (mnemonic === 'CALL_EXT') {
@@ -1506,7 +1611,18 @@ function applyWithContext(name, withContextStack) {
 function resolveVar(frame, name) {
   let cursor = frame;
   while (cursor) {
-    if (Object.prototype.hasOwnProperty.call(cursor.vars, name)) return cursor.vars[name];
+    if (Object.prototype.hasOwnProperty.call(cursor.vars, name)) {
+      const value = cursor.vars[name];
+      if (isReference(value)) {
+        const resolved = resolveVar(value.frame, value.name);
+        if (value.offset !== null) {
+          return String(resolved ?? '').padEnd(value.offset + value.length, ' ')
+            .slice(value.offset, value.offset + value.length);
+        }
+        return resolved;
+      }
+      return value;
+    }
     cursor = cursor.parent;
   }
   return 0;
@@ -1516,6 +1632,19 @@ function assignVar(frame, name, value) {
   let cursor = frame;
   while (cursor) {
     if (Object.prototype.hasOwnProperty.call(cursor.vars, name)) {
+      const existing = cursor.vars[name];
+      if (isReference(existing)) {
+        if (existing.offset !== null) {
+          const base = String(resolveVar(existing.frame, existing.name) ?? '')
+            .padEnd(existing.offset + existing.length, ' ');
+          const replacement = String(value ?? '').padEnd(existing.length, ' ').slice(0, existing.length);
+          const updated = `${base.slice(0, existing.offset)}${replacement}${base.slice(existing.offset + existing.length)}`;
+          assignVar(existing.frame, existing.name, updated);
+          return;
+        }
+        assignVar(existing.frame, existing.name, value);
+        return;
+      }
       cursor.vars[name] = value;
       return;
     }
@@ -1702,6 +1831,17 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       pc += 1;
       continue;
     }
+    if (op === 'PUSH_REF') {
+      const rawOperand = String(instr.operand || '');
+      const slice = /^(.+)@(\d+):(\d+)$/.exec(rawOperand);
+      const varName = applyWithContext(slice ? slice[1] : rawOperand, withContextStack);
+      let owner = currentFrame;
+      while (owner && !Object.prototype.hasOwnProperty.call(owner.vars, varName)) owner = owner.parent;
+      if (!owner) throw new Error(`P-code reference target not found: ${varName}`);
+      stack.push(new PReference(owner, varName, slice ? Number(slice[2]) : null, slice ? Number(slice[3]) : null));
+      pc += 1;
+      continue;
+    }
     if (op === 'LOAD' || op === 'LOAD_NAME') {
       const rawName = String(instr.operand || '');
       // Apply with-context prefix to bare (non-dotted, non-reserved) names.
@@ -1828,7 +1968,15 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     }
     if (op === 'DEC_DISPLAY') {
       const spec = instr.operand || { precision: 0, scale: 0 };
-      stack.push(formatCobolDisplay(toDecimal(stack.pop()), Number(spec.precision) || 0, Number(spec.scale) || 0));
+      stack.push(formatCobolDisplay(
+        toDecimal(stack.pop()), Number(spec.precision) || 0, Number(spec.scale) || 0, String(spec.signMode || '')
+      ));
+      pc += 1;
+      continue;
+    }
+    if (op === 'DEC_EDIT') {
+      const spec = instr.operand || { mask: '', decimalComma: false, blankWhenZero: false };
+      stack.push(formatCobolEdited(stack.pop(), spec.mask, spec.decimalComma, spec.blankWhenZero));
       pc += 1;
       continue;
     }
@@ -2038,19 +2186,20 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     }
     if (op === 'CALL') {
       const call = instr.operand || { label: '', argc: 0 };
+      if (instr.targetIndex < 0) throw new Error(`P-code procedure not found: ${call.label}`);
       const proc = proceduresByLabel[call.label] || { params: [], locals: [] };
       const args = [];
       for (let i = 0; i < Number(call.argc || 0); i += 1) {
         // Boxed values must survive the call boundary intact.
         const raw = stack.pop();
-        args.push(isBoxed(raw) ? raw : Number(raw || 0));
+        args.push(isBoxed(raw) || isReference(raw) ? raw : Number(raw || 0));
       }
       args.reverse();
 
       const vars = {};
       for (let i = 0; i < (proc.params || []).length; i += 1) {
         const value = args[i];
-        vars[String(proc.params[i])] = isBoxed(value) ? value : Number(value || 0);
+        vars[String(proc.params[i])] = isBoxed(value) || isReference(value) ? value : Number(value || 0);
       }
       for (const localName of (proc.locals || [])) {
         if (!Object.prototype.hasOwnProperty.call(vars, localName)) vars[String(localName)] = 0;

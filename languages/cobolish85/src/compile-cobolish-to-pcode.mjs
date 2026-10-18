@@ -88,6 +88,33 @@ function literalStringValue(ctx, length) {
   return null;
 }
 
+function editedPictureInfo(picture) {
+  const raw = String(picture || '').trim().toUpperCase().replace(/\s+/g, '')
+    .replace(/^(?:PICTURE|PIC)(?:IS)?/, '');
+  const expanded = raw.replace(/([A-Z0-9$*+\-.,/])\((\d+)\)/g, (_match, symbol, count) =>
+    symbol.repeat(Number(count)));
+  if (!/[^SVXAP9]/.test(expanded)) return null;
+  const tokens = expanded.match(/CR|DB|[9Z*+$\-.,/B0]/g) || [];
+  if (tokens.join('') !== expanded) {
+    throw new Error(`[COBOLISH] Unsupported edited PICTURE ${raw}`);
+  }
+  return { mask: expanded.replace(/[SV]/g, ''), length: expanded.replace(/[SV]/g, '').length };
+}
+
+function reportClauseWords(ctx) {
+  const words = [];
+  for (let index = 0; index < (ctx?.getChildCount?.() || 0); index += 1) {
+    const child = ctx.getChild(index);
+    words.push(child.symbol ? child.getText().toUpperCase() : child);
+  }
+  return words;
+}
+
+function editedPictureScale(mask, decimalPointComma) {
+  const point = mask.indexOf(decimalPointComma ? ',' : '.');
+  return point < 0 ? 0 : (mask.slice(point + 1).match(/[9Z*]/g) || []).length;
+}
+
 /**
  * Walks a Cobolish parse tree and emits pcode. Numeric data items are compiled as
  * fixed-point decimals whose scale comes from their PICTURE, so arithmetic follows
@@ -103,13 +130,19 @@ class CobolishCodegen extends Cobolish85Visitor {
     this.fields = new Map();
     this.dataParents = new Map();
     this.dataNameKeys = new Map();
+    this.programs = [];
+    this.currentProgram = null;
+    this.externalDataNames = new Map();
     this.rawGroupStates = new Map();
     this.odoDependentGroups = new Map();
     this.paragraphs = new Map();
     this.sections = new Map();
+    this.procedureDisplayNames = new Map();
     this.sizeErrorDepth = 0;
     this.files = new Map();
     this.filesByRecord = new Map();
+    this.reports = new Map();
+    this.reportDeclaratives = new Map();
     this.fileDeclaratives = new Map();
     this.declarativeParagraphs = new Set();
     this.declarativeSections = new Set();
@@ -124,7 +157,100 @@ class CobolishCodegen extends Cobolish85Visitor {
     this.currentSegment = 0;
     this.sentenceEnd = null;
     this.runtimeLibraries = new Set();
+    this.debuggingMode = false;
+    this.debugHooks = new Map();
+    this.userClasses = new Map();
+    this.symbolicCharacters = new Map();
+    this.alphabets = new Map();
+    this.decimalPointComma = false;
     this.whenCompiled = cobolDateTime(new Date());
+  }
+
+  collectPrograms(tree) {
+    const addProgram = (node, parent = null) => {
+      const sourceId = node.identificationDivision()?.programIdClause()?.programName()?.getText()
+        ?.replace(/^['"]|['"]$/g, '') || `PROGRAM-${this.programs.length + 1}`;
+      const key = storageName(sourceId);
+      if (this.programs.some(program => program.key === key)) {
+        throw new Error(`[COBOLISH] Duplicate PROGRAM-ID ${sourceId}`);
+      }
+      const attributes = text(node.identificationDivision()?.programIdClause()?.programAttributes()).toUpperCase();
+      const program = {
+        node,
+        parent,
+        sourceId,
+        key,
+        prefix: this.programs.length ? `${key}_` : '',
+        root: this.programs.length === 0,
+        common: attributes.includes('COMMON'),
+        initial: attributes.includes('INITIAL'),
+        dataNames: new Map(),
+        conditions: new Map(),
+        dataFields: [],
+        linkageNames: [],
+        linkageFields: [],
+        paragraphs: [],
+        procedureNames: new Map(),
+        procedureDivision: node.procedureDivision(),
+        entryLabel: null
+      };
+      this.programs.push(program);
+      for (const nested of node.nestedProgram() || []) addProgram(nested.programUnit(), program);
+    };
+
+    const root = tree.programUnit?.();
+    if (root) addProgram(root);
+    for (const additional of tree.additionalProgram?.() || []) addProgram(additional.programUnit());
+    if (!this.programs.length) throw new Error('[COBOLISH] Compilation unit has no program');
+  }
+
+  registerProgramDataName(program, sourceName, key) {
+    const names = program.dataNames.get(sourceName) || [];
+    if (!names.includes(key)) names.push(key);
+    program.dataNames.set(sourceName, names);
+    const allNames = this.dataNameKeys.get(sourceName) || [];
+    if (!allNames.includes(key)) allNames.push(key);
+    this.dataNameKeys.set(sourceName, allNames);
+  }
+
+  resolveProgramDataName(program, sourceName, qualifiers = []) {
+    const matches = keys => {
+      if (!qualifiers.length) return keys;
+      return keys.filter(key => {
+        const path = this.fieldOf(key)?.path || [];
+        let position = 1;
+        for (const qualifier of qualifiers) {
+          position = path.indexOf(qualifier, position);
+          if (position < 0) return false;
+          position += 1;
+        }
+        return true;
+      });
+    };
+    const local = matches(program?.dataNames.get(sourceName) || []);
+    if (local.length === 1) return local[0];
+    if (local.length > 1) throw new Error(`[COBOLISH] Data item ${sourceName} requires qualification`);
+
+    for (let ancestor = program?.parent; ancestor; ancestor = ancestor.parent) {
+      const visible = matches(ancestor.dataNames.get(sourceName) || [])
+        .filter(key => this.isGlobalDataName(key));
+      if (visible.length === 1) return visible[0];
+      if (visible.length > 1) throw new Error(`[COBOLISH] Data item ${sourceName} requires qualification`);
+    }
+
+    const external = matches(this.externalDataNames.get(sourceName) || []);
+    if (external.length === 1) return external[0];
+    if (external.length > 1) throw new Error(`[COBOLISH] Data item ${sourceName} requires qualification`);
+    return null;
+  }
+
+  isGlobalDataName(name) {
+    let current = name;
+    while (current) {
+      if (this.fieldOf(current)?.isGlobal) return true;
+      current = this.dataParents.get(current);
+    }
+    return false;
   }
 
   emit(line) {
@@ -139,6 +265,29 @@ class CobolishCodegen extends Cobolish85Visitor {
 
   fieldOf(name) {
     return this.fields.get(storageName(name)) || null;
+  }
+
+  dataStorageSlots(name) {
+    const field = this.fieldOf(name);
+    if (!field || field.redefinesBase) {
+      throw new Error(`[COBOLISH] Cannot pass ${name} by reference with its current storage layout`);
+    }
+    if (field.kind === 'group') return field.children.flatMap(child => this.dataStorageSlots(child));
+    const count = (field.dimensions || []).reduce((total, size) => total * size, 1);
+    return Array.from({ length: count }, (_value, index) => ({
+      name: field.dimensions?.length ? `${name}_${index}` : name,
+      field
+    }));
+  }
+
+  compatibleReferenceSlot(left, right) {
+    if (left.kind !== right.kind) return false;
+    if (left.kind === 'string') return left.length === right.length;
+    return left.precision === right.precision
+      && left.scale === right.scale
+      && left.signed === right.signed
+      && left.separateSign === right.separateSign
+      && left.signPosition === right.signPosition;
   }
 
   correspondingFields(sourceReference, targetReference) {
@@ -191,6 +340,8 @@ class CobolishCodegen extends Cobolish85Visitor {
     const name = storageName(reference.IDENTIFIER().getText());
     const qualifiers = asArray(reference.qualifier?.())
       .map(qualifier => storageName(qualifier.IDENTIFIER().getText()));
+    const scoped = this.resolveProgramDataName(this.currentProgram, name, qualifiers);
+    if (scoped) return scoped;
     if (qualifiers.length) {
       const matches = (this.dataNameKeys.get(name) || []).filter(key => {
         const path = this.fieldOf(key)?.path || [];
@@ -205,6 +356,9 @@ class CobolishCodegen extends Cobolish85Visitor {
       if (matches.length === 1) return matches[0];
       if (matches.length > 1) throw new Error(`[COBOLISH] Data item ${name} remains ambiguous after qualification`);
       throw new Error(`[COBOLISH] Data item ${name} is not qualified by ${qualifiers.join(' OF ')}`);
+    }
+    if (this.currentProgram && this.dataNameKeys.has(name)) {
+      throw new Error(`[COBOLISH] Undeclared data item ${name} in program ${this.currentProgram.sourceId}`);
     }
     const candidates = this.dataNameKeys.get(name) || [];
     if (candidates.length > 1) throw new Error(`[COBOLISH] Data item ${name} requires qualification`);
@@ -227,6 +381,9 @@ class CobolishCodegen extends Cobolish85Visitor {
       parent = this.dataParents.get(parent);
     }
     for (const group of this.odoDependentGroups.get(name) || []) this.rawGroupStates.delete(group);
+    for (const [group, field] of this.fields) {
+      if (field.renamesChildren?.includes(name)) this.rawGroupStates.delete(group);
+    }
   }
 
   fieldOffsetWithin(recordName, fieldName) {
@@ -237,7 +394,7 @@ class CobolishCodegen extends Cobolish85Visitor {
       const parent = this.dataParents.get(child);
       const parentField = parent && this.fieldOf(parent);
       if (!parentField || parentField.kind !== 'group') {
-        throw new Error(`[COBOLISH] Alternate key ${fieldName} is not contained in record ${recordName}`);
+        throw new Error(`[COBOLISH] Data item ${fieldName} is not contained in record ${recordName}`);
       }
       for (const sibling of parentField.children) {
         if (sibling === child) break;
@@ -252,42 +409,93 @@ class CobolishCodegen extends Cobolish85Visitor {
 
   collectDataItems(tree) {
     const entries = [];
-    const walk = node => {
-      if (!node) return;
-      if (node.constructor?.name === 'DataDescriptionEntryContext') entries.push(node);
-      for (let index = 0; index < (node.getChildCount?.() || 0); index += 1) walk(node.getChild(index));
-    };
-    walk(tree);
+    for (const program of this.programs) {
+      const walk = (node, section = '') => {
+        if (!node) return;
+        const kind = node.constructor?.name;
+        if (kind === 'NestedProgramContext') return;
+        if (kind === 'DataDescriptionEntryContext') {
+          entries.push({ entry: node, program, section });
+          return;
+        }
+        const childSection = kind === 'WorkingStorageSectionContext' ? 'WORKING'
+          : kind === 'LocalStorageSectionContext' ? 'LOCAL'
+            : kind === 'LinkageSectionContext' ? 'LINKAGE' : section;
+        for (let index = 0; index < (node.getChildCount?.() || 0); index += 1) {
+          walk(node.getChild(index), childSection);
+        }
+      };
+      walk(program.node);
+    }
 
-    const parents = [];
-    for (const entry of entries) {
+    let activeProgram = null;
+    let parents = [];
+    for (const { entry, program, section } of entries) {
+      if (activeProgram !== program) {
+        activeProgram = program;
+        parents = [];
+      }
+      this.currentProgram = program;
       const name = storageName(entry.IDENTIFIER()?.getText());
       if (!name) continue;
       const level = Number(text(entry.fileLevelNumber()));
-      if (level === 66) throw new Error(`[COBOLISH] Level-66 RENAMES entry ${name} is recognized but not yet implemented`);
+      if (level === 66) {
+        const parent = [...parents].reverse().find(item => this.fieldOf(item.name)?.kind === 'group');
+        const renames = entry.dataClause().map(clause => clause.renamesClause?.()).find(Boolean);
+        if (!parent || !renames) throw new Error(`[COBOLISH] RENAMES ${name} must follow data items in a containing group`);
+        const identifiers = renames.IDENTIFIER().map(identifier => storageName(identifier.getText()));
+        const children = this.fieldOf(parent.name).children;
+        const first = children.findIndex(child => this.fieldOf(child).sourceName === identifiers[0]);
+        const last = children.findIndex(child => this.fieldOf(child).sourceName === (identifiers[1] || identifiers[0]));
+        if (first < 0 || last < first) throw new Error(`[COBOLISH] RENAMES ${name} must name an ordered range of siblings`);
+        const renamedChildren = children.slice(first, last + 1);
+        const renamedFields = renamedChildren.map(child => this.fieldOf(child));
+        if (renamedFields.some(field => field.dimensions.length)) {
+          throw new Error(`[COBOLISH] RENAMES ${name} cannot include table items`);
+        }
+        const key = `${program.prefix}${name}`;
+        const length = renamedFields.reduce((total, field) => total + this.fieldLength(field), 0);
+        this.fields.set(key, {
+          kind: 'group', length, children: renamedChildren, dimensions: [], dependingOn: null,
+          redefinesName: null, indexNames: [], sortKeys: null, sortDescending: false,
+          justified: false, sourceName: name, path: [name, ...(parent.path || [])],
+          renamesChildren: renamedChildren
+        });
+        this.registerProgramDataName(program, name, key);
+        continue;
+      }
       if (level === 88) {
-        this.collectConditionName(name, entry, parents.at(-1));
+        this.collectConditionName(name, entry, parents.at(-1), program);
         continue;
       }
       while (parents.length && parents.at(-1).level >= level) parents.pop();
       if (level === 77) parents.length = 0;
       let picture = null;
+      let editedPicture = null;
+      let blankWhenZero = false;
       let occurs = null;
       let dependingOn = null;
       let redefinesName = null;
       let justified = false;
+      let signPosition = null;
+      let separateSign = false;
       let indexUsage = false;
       let initial = null;
       let sortKeys = null;
       let sortDescending = false;
+      const external = Boolean(parents.at(-1)?.external
+        || (entry.dataClause() || []).some(clause => clause.externalClause?.()));
+      const isGlobal = (entry.dataClause() || []).some(clause => clause.globalClause?.());
       for (const clause of entry.dataClause() || []) {
         const pictureCtx = clause.pictureClause && clause.pictureClause();
         if (pictureCtx) {
           const symbols = text(pictureCtx).toUpperCase().replace(/\s+/g, '').replace(/^(?:PICTURE|PIC)(?:IS)?/, '').replace(/\(\d+\)/g, '');
-          if (/[^SVXAZP9]/.test(symbols)) {
-            throw new Error(`[COBOLISH] Edited PICTURE ${symbols} for ${name} is recognized but not yet implemented`);
-          }
-          picture = parsePicture(text(pictureCtx));
+          editedPicture = editedPictureInfo(text(pictureCtx));
+          if (editedPicture) {
+            picture = { kind: 'string', length: editedPicture.length, signed: false, pascalishType: 'string' };
+          } else if (/[^SVXAZP9]/.test(symbols)) {
+            throw new Error(`[COBOLISH] Unsupported PICTURE ${symbols} for ${name}`);
+          } else picture = parsePicture(text(pictureCtx));
         }
         if (clause.VALUE?.()) initial = clause.literal();
         if (clause.REDEFINES?.()) redefinesName = storageName(clause.IDENTIFIER().getText());
@@ -303,15 +511,23 @@ class CobolishCodegen extends Cobolish85Visitor {
           if (clause.IDENTIFIER?.()) dependingOn = storageName(clause.IDENTIFIER().getText());
         }
         if (clause.JUSTIFIED?.()) justified = true;
+        if (clause.BLANK?.()) blankWhenZero = true;
+        if (clause.SIGN?.()) {
+          const signClause = text(clause).toUpperCase().replace(/[^A-Z]/g, '');
+          signPosition = signClause.includes('TRAILING') ? 'TRAILING' : 'LEADING';
+          separateSign = signClause.includes('SEPARATE');
+        }
       }
       const parent = parents.at(-1);
       const path = [name, ...(parent?.path || [])];
-      let key = name;
-      if (this.fields.has(key)) {
-        const prefix = parent?.name || 'DATA';
-        key = `${prefix}_${name}`;
+      let key = external
+        ? (this.externalDataNames.get(name)?.[0] || `__EXTERNAL_${name}`)
+        : `${program.prefix}${name}`;
+      if (this.fields.has(key) && !external) {
+        const keyPrefix = parent?.name || `${program.prefix || 'DATA'}DATA`;
+        key = `${keyPrefix}_${name}`;
         let suffix = 2;
-        while (this.fields.has(key)) key = `${prefix}_${name}_${suffix++}`;
+        while (this.fields.has(key)) key = `${keyPrefix}_${name}_${suffix++}`;
       }
       const dimensions = [...(parent?.dimensions || []), ...(occurs === null ? [] : [occurs])];
       const field = {
@@ -320,7 +536,10 @@ class CobolishCodegen extends Cobolish85Visitor {
           : { kind: 'group', length: 0 })),
         children: [], dimensions, dependingOn, redefinesName, indexNames: [],
         sortKeys, sortDescending,
-        justified, sourceName: name, path
+        justified, signPosition, separateSign, editedPicture: editedPicture?.mask,
+        blankWhenZero, sourceName: name, path, programKey: program.key,
+        isGlobal, isExternal: external, isLinkage: section === 'LINKAGE',
+        storageSection: section
       };
       if (initial && field.kind === 'decimal') {
         const raw = text(initial);
@@ -338,27 +557,35 @@ class CobolishCodegen extends Cobolish85Visitor {
           throw new Error(`[COBOLISH] VALUE for ${name} does not fit its alphanumeric PICTURE`);
         }
       };
-      this.fields.set(key, field);
-      const sameNameKeys = this.dataNameKeys.get(name) || [];
-      sameNameKeys.push(key);
-      this.dataNameKeys.set(name, sameNameKeys);
+      if (!this.fields.has(key)) this.fields.set(key, field);
+      this.registerProgramDataName(program, name, key);
+      program.dataFields.push(key);
+      if (field.isLinkage && level === 1) program.linkageNames.push(name);
+      if (external) {
+        const keys = this.externalDataNames.get(name) || [];
+        if (!keys.includes(key)) keys.push(key);
+        this.externalDataNames.set(name, keys);
+      }
       if (initial) this.initialValues.set(key, initial);
       for (const clause of entry.dataClause() || []) {
         if (clause.INDEXED?.()) {
           for (const index of clause.identifierList().IDENTIFIER()) {
-            const indexName = storageName(index.getText());
-            if (this.fields.has(indexName)) throw new Error(`[COBOLISH] Duplicate index-name ${indexName}`);
-            this.fields.set(indexName, { kind: 'decimal', signed: false, precision: 10, scale: 0, dimensions: [] });
+            const sourceIndexName = storageName(index.getText());
+            const indexName = `${program.prefix}${sourceIndexName}`;
+            if (this.fields.has(indexName)) throw new Error(`[COBOLISH] Duplicate index-name ${sourceIndexName}`);
+            this.fields.set(indexName, { kind: 'decimal', signed: false, precision: 10, scale: 0, dimensions: [], programKey: program.key });
+            this.registerProgramDataName(program, sourceIndexName, indexName);
             field.indexNames.push(indexName);
           }
         }
       }
       if (parent) {
-        this.fields.get(parent.name).children.push(key);
+        if (!this.fields.get(parent.name).children.includes(key)) this.fields.get(parent.name).children.push(key);
         this.dataParents.set(key, parent.name);
       }
-      parents.push({ name: key, level, dimensions, path });
+      parents.push({ name: key, level, dimensions, path, external });
     }
+    this.currentProgram = null;
     for (const [name, field] of [...this.fields].reverse()) {
       if (field.kind === 'group') {
         field.length = field.children.reduce((length, child) => {
@@ -367,13 +594,20 @@ class CobolishCodegen extends Cobolish85Visitor {
           return length + this.fieldLength(item) * repetitions;
         }, 0);
         if (this.initialValues.has(name)) {
-          throw new Error(`[COBOLISH] Group VALUE initialization is not yet implemented: ${name}`);
+          const value = literalStringValue(this.initialValues.get(name), field.length);
+          if (value === null || value.length > field.length) {
+            throw new Error(`[COBOLISH] Group VALUE for ${name} must be a nonnumeric literal or figurative constant that fits the group`);
+          }
+          if (field.dimensions.length || field.redefinesName || field.renamesChildren) {
+            throw new Error(`[COBOLISH] Group VALUE for ${name} cannot apply to a table, REDEFINES, or RENAMES item`);
+          }
         }
       }
     }
     for (const [name, field] of this.fields) {
       if (!field.dependingOn) continue;
-      const controllers = this.dataNameKeys.get(field.dependingOn) || [];
+      const program = this.programs.find(item => item.key === field.programKey);
+      const controllers = program?.dataNames.get(field.dependingOn) || this.dataNameKeys.get(field.dependingOn) || [];
       if (controllers.length > 1) {
         throw new Error(`[COBOLISH] OCCURS DEPENDING ON item ${field.dependingOn} requires qualification`);
       }
@@ -388,7 +622,8 @@ class CobolishCodegen extends Cobolish85Visitor {
     }
     for (const [name, field] of this.fields) {
       if (!field.redefinesName) continue;
-      const bases = this.dataNameKeys.get(field.redefinesName) || [];
+      const program = this.programs.find(item => item.key === field.programKey);
+      const bases = program?.dataNames.get(field.redefinesName) || this.dataNameKeys.get(field.redefinesName) || [];
       if (bases.length !== 1) {
         throw new Error(`[COBOLISH] REDEFINES target ${field.redefinesName} must resolve to one data item`);
       }
@@ -418,13 +653,97 @@ class CobolishCodegen extends Cobolish85Visitor {
   }
 
   fieldLength(field) {
-    return field.kind === 'decimal' ? field.precision : field.length;
+    return field.kind === 'decimal' ? field.precision + (field.separateSign ? 1 : 0) : field.length;
   }
 
   // A level-88 entry names values of the item it follows (manual ch. 7, condition-name entry).
-  collectConditionName(name, entry, parent) {
+  collectSpecialNames(tree) {
+    this.decimalPointComma = /DECIMAL-POINTISCOMMA/i.test(text(tree).toUpperCase());
+    const visit = node => {
+      if (!node) return;
+      if (node.constructor?.name === 'ClassClauseContext') {
+        const name = storageName(asArray(node.IDENTIFIER?.())[0]?.getText());
+        const characters = new Set();
+        for (const entry of node.classEntry?.() || []) {
+          const values = asArray(entry.literal?.()).map(value => unquote(text(value)));
+          if (values.length === 1) {
+            for (const character of values[0]) characters.add(character);
+          } else if (values.length === 2 && [...values[0]].length === 1 && [...values[1]].length === 1) {
+            const start = values[0].codePointAt(0);
+            const end = values[1].codePointAt(0);
+            for (let code = start; code <= end; code += 1) characters.add(String.fromCodePoint(code));
+          } else {
+            throw new Error(`[COBOLISH] CLASS ${name} requires single-character literals or ranges`);
+          }
+        }
+        this.userClasses.set(name, [...characters].join(''));
+      } else if (node.constructor?.name === 'SymbolicClauseContext') {
+        const names = asArray(node.IDENTIFIER?.()).map(identifier => storageName(identifier.getText()));
+        const values = asArray(node.cobolNumber?.()).map(value => Number(text(value)));
+        if (names.length !== values.length) throw new Error('[COBOLISH] SYMBOLIC CHARACTERS requires one ordinal per name');
+        names.forEach((name, index) => {
+          const ordinal = values[index];
+          if (!Number.isSafeInteger(ordinal) || ordinal < 1 || ordinal > 256) {
+            throw new Error(`[COBOLISH] SYMBOLIC CHARACTER ${name} has an invalid ordinal`);
+          }
+          this.symbolicCharacters.set(name, String.fromCharCode(ordinal - 1));
+        });
+      } else if (node.constructor?.name === 'AlphabetClauseContext') {
+        const identifiers = asArray(node.IDENTIFIER?.());
+        const name = storageName(identifiers[0]?.getText());
+        const native = Array.from({ length: 256 }, (_value, index) => String.fromCharCode(index));
+        const ranks = new Map();
+        let rank = 0;
+        const add = characters => {
+          for (const character of characters) {
+            if (character.charCodeAt(0) > 255 || ranks.has(character)) {
+              throw new Error(`[COBOLISH] ALPHABET ${name} contains an invalid or repeated character`);
+            }
+            ranks.set(character, rank);
+          }
+          rank += 1;
+        };
+        const literalCharacters = literal => {
+          if (literal.stringLiteral?.()) return unquote(text(literal));
+          const ordinal = Number(text(literal));
+          if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > 256) {
+            throw new Error(`[COBOLISH] ALPHABET ${name} requires characters or ordinals from 1 to 256`);
+          }
+          return String.fromCharCode(ordinal - 1);
+        };
+        const entries = asArray(node.alphabetEntry?.());
+        const predefined = text(identifiers[1]).toUpperCase();
+        if (!entries.length && !['NATIVE', 'STANDARD-1', 'STANDARD-2'].includes(predefined)) {
+          throw new Error(`[COBOLISH] Unsupported predefined ALPHABET ${predefined}`);
+        }
+        for (const entry of entries) {
+          const values = asArray(entry.literal()).map(literalCharacters);
+          if (entry.THRU?.() || entry.THROUGH?.()) {
+            if (values.some(value => value.length !== 1)) {
+              throw new Error(`[COBOLISH] ALPHABET ${name} range endpoints must be single characters`);
+            }
+            const first = values[0].charCodeAt(0);
+            const last = values[1].charCodeAt(0);
+            const step = first <= last ? 1 : -1;
+            for (let code = first; code !== last + step; code += step) add(String.fromCharCode(code));
+          } else if (entry.ALSO?.().length) {
+            add(values.join(''));
+          } else {
+            for (const character of values[0]) add(character);
+          }
+        }
+        for (const character of native) if (!ranks.has(character)) add(character);
+        this.alphabets.set(name, native.map(character => String(ranks.get(character)).padStart(3, '0')).join(''));
+      }
+      for (let index = 0; index < (node.getChildCount?.() || 0); index += 1) visit(node.getChild(index));
+    };
+    visit(tree);
+  }
+
+  collectConditionName(name, entry, parent, program = this.currentProgram) {
     if (!parent) throw new Error(`[COBOLISH] Level-88 condition-name ${name} has no conditional variable`);
-    if (this.fields.has(name) || this.conditions.has(name)) throw new Error(`[COBOLISH] Duplicate data name ${name}`);
+    const conditionKey = `${program?.prefix || ''}${name}`;
+    if (program?.dataNames.has(name) || this.conditions.has(conditionKey)) throw new Error(`[COBOLISH] Duplicate data name ${name}`);
     const values = [];
     for (const clause of entry.dataClause() || []) {
       const list = clause.conditionValueClause?.();
@@ -440,15 +759,21 @@ class CobolishCodegen extends Cobolish85Visitor {
       }
     }
     if (!values.length) throw new Error(`[COBOLISH] Level-88 condition-name ${name} requires a VALUE clause`);
-    this.conditions.set(name, { parent: parent.name, values });
+    this.conditions.set(conditionKey, { parent: parent.name, values });
+    program.conditions?.set(name, conditionKey);
+  }
+
+  conditionForName(name) {
+    const key = this.currentProgram?.conditions?.get(name) || name;
+    return this.conditions.get(key) || null;
   }
 
   conditionNameReference(expression) {
     const terms = expression.term();
     if (terms.length !== 1 || terms[0].factor().length !== 1) return null;
     const reference = terms[0].factor(0).dataReference?.();
-    if (!reference || reference.COLON?.()) return null;
-    const condition = this.conditions.get(storageName(reference.IDENTIFIER().getText()));
+    if (!reference || this.isReferenceModified(reference)) return null;
+    const condition = this.conditionForName(storageName(reference.IDENTIFIER().getText()));
     return condition ? { reference, condition } : null;
   }
 
@@ -527,28 +852,28 @@ class CobolishCodegen extends Cobolish85Visitor {
   emitReference(reference) {
     const name = this.resolveDataName(reference);
     const field = this.fieldOf(name);
-    if (!field) throw new Error(`[COBOLISH] Undeclared data item ${name}`);
-    if (field.redefinesBase) {
-      if (reference.COLON?.()) {
-        throw new Error('[COBOLISH] Reference modification on a redefined item is not yet implemented');
-      }
-      return this.emitRedefinedValue(reference, name, field);
+    if (!field && !reference.expression().length && !reference.COLON?.() && this.symbolicCharacters.has(name)) {
+      this.emit(`PUSH_STR ${JSON.stringify(this.symbolicCharacters.get(name))}`);
+      return;
     }
-    if (reference.COLON?.()) {
-      if (field.kind !== 'string') throw new Error('[COBOLISH] Reference modification currently requires an alphanumeric item');
-      this.emit(`LOAD ${name}`);
+    if (!field) throw new Error(`[COBOLISH] Undeclared data item ${name}`);
+    const modification = this.referenceModification(reference);
+    if (modification) {
+      this.emitItemText(reference, name, field, modification.subscripted);
       const start = this.nextHiddenField();
-      this.emitExpression(reference.expression(0));
+      this.emitExpression(modification.start);
       this.emit('PUSH_INT 1');
       this.emit('SUB');
       this.emit(`STORE ${start}`);
       this.emitSlice(() => this.emit(`LOAD ${start}`), () => {
-        if (reference.expression(1)) {
+        if (modification.length) {
           this.emit(`LOAD ${start}`);
-          this.emitExpression(reference.expression(1));
+          this.emitExpression(modification.length);
           this.emit('ADD');
-        } else this.emit(`PUSH_INT ${field.length}`);
+        } else this.emit(`PUSH_INT ${this.fieldLength(field)}`);
       });
+    } else if (field.redefinesBase) {
+      return this.emitRedefinedValue(reference, name, field);
     } else if (reference.expression().length) {
       this.emitIndex(reference);
       this.emit(`ARR_GET ${name} ${field.dimensions.reduce((a, b) => a * b, 1)}`);
@@ -556,9 +881,41 @@ class CobolishCodegen extends Cobolish85Visitor {
   }
 
   emitRedefinedValue(reference, name, field) {
+    this.emitRedefinedText(reference, field);
+    if (field.kind === 'decimal') {
+      this.runtimeLibraries.add('math');
+      this.emit('CALL PROC_COBOL_RT_NUMVAL 1');
+    }
+  }
+
+  displaySignMode(field) {
+    return field.separateSign ? ` ${field.signPosition}_SEPARATE` : '';
+  }
+
+  // Byte-layout views require each DISPLAY numeric to occupy exactly its PICTURE width.
+  assertFixedDisplayWidth(field, name) {
+    if (field?.kind === 'decimal' && field.signed && !field.separateSign) {
+      throw new Error(`[COBOLISH] ${name} uses an embedded sign; byte-layout access requires SIGN SEPARATE or an unsigned item`);
+    }
+  }
+
+  referenceModification(reference) {
+    if (reference?.COLON?.()) {
+      return { start: reference.expression(0), length: reference.expression(1) || null, subscripted: false };
+    }
+    const modifier = reference?.referenceModifier?.();
+    if (modifier) return { start: modifier.expression(0), length: modifier.expression(1) || null, subscripted: true };
+    return null;
+  }
+
+  isReferenceModified(reference) {
+    return Boolean(this.referenceModification(reference));
+  }
+
+  emitRedefinedOffset(reference, field) {
     const subscripts = reference?.expression?.() || [];
     if (subscripts.length !== field.dimensions.length) {
-      throw new Error(`[COBOLISH] ${name} requires ${field.dimensions.length} subscripts`);
+      throw new Error(`[COBOLISH] ${field.sourceName} requires ${field.dimensions.length} subscripts`);
     }
     const offset = this.nextHiddenField();
     this.emit(`PUSH_INT ${field.redefinesOffset}`);
@@ -571,16 +928,103 @@ class CobolishCodegen extends Cobolish85Visitor {
       this.emit('ADD');
     }
     this.emit(`STORE ${offset}`);
-    this.emit(`LOAD ${field.redefinesBase}`);
+    return offset;
+  }
+
+  emitBaseText(baseName) {
+    const baseField = this.fieldOf(baseName);
+    this.emitNamedReference(baseName);
+    if (baseField?.kind === 'decimal') {
+      this.emit(`DEC_DISPLAY ${baseField.precision} ${baseField.scale}${this.displaySignMode(baseField)}`);
+    }
+  }
+
+  emitRedefinedText(reference, field) {
+    const offset = this.emitRedefinedOffset(reference, field);
+    this.emitBaseText(field.redefinesBase);
     this.emitSlice(() => this.emit(`LOAD ${offset}`), () => {
       this.emit(`LOAD ${offset}`);
       this.emit(`PUSH_INT ${this.fieldLength(field)}`);
       this.emit('ADD');
     });
-    if (field.kind === 'decimal') {
-      this.runtimeLibraries.add('math');
-      this.emit('CALL PROC_COBOL_RT_NUMVAL 1');
+  }
+
+  // Pops the item's full DISPLAY text and splices it into the redefined base storage.
+  storeRedefinedText(reference, field) {
+    const baseName = field.redefinesBase;
+    const baseField = this.fieldOf(baseName);
+    this.assertFixedDisplayWidth(baseField, baseName);
+    const value = this.nextHiddenField();
+    this.emit(`STORE ${value}`);
+    const offset = this.emitRedefinedOffset(reference, field);
+    const baseText = this.nextHiddenField();
+    this.emitBaseText(baseName);
+    this.emit(`STORE ${baseText}`);
+    this.emit(`LOAD ${baseText}`);
+    this.emitSlice(() => this.emit('PUSH_INT 0'), () => this.emit(`LOAD ${offset}`));
+    this.emit(`LOAD ${value}`);
+    this.emit('CONCAT');
+    this.emit(`LOAD ${baseText}`);
+    this.emitSlice(() => {
+      this.emit(`LOAD ${offset}`);
+      this.emit(`PUSH_INT ${this.fieldLength(field)}`);
+      this.emit('ADD');
+    }, () => this.emit(`PUSH_INT ${this.fieldLength(baseField)}`));
+    this.emit('CONCAT');
+    this.storeItemText(null, baseName, baseField, false);
+  }
+
+  // Pushes an item's current DISPLAY text, as used by reference modification.
+  emitItemText(reference, name, field, subscripted) {
+    if (field.redefinesBase) {
+      this.emitRedefinedText(subscripted ? reference : null, field);
+      return;
     }
+    if (subscripted) {
+      if (field.kind === 'group') throw new Error(`[COBOLISH] Reference modification of subscripted group ${name} is not supported`);
+      this.emitIndex(reference, name);
+      this.emit(`ARR_GET ${name} ${field.dimensions.reduce((a, b) => a * b, 1)}`);
+    } else this.emitNamedReference(name);
+    if (field.kind === 'decimal') {
+      this.emit(`DEC_DISPLAY ${field.precision} ${field.scale}${this.displaySignMode(field)}`);
+    }
+  }
+
+  // Pops full-width DISPLAY text and stores it in the item's own representation.
+  storeItemText(reference, name, field, subscripted) {
+    this.assertFixedDisplayWidth(field, name);
+    if (field.redefinesBase) {
+      this.storeRedefinedText(subscripted ? reference : null, field);
+    } else if (field.kind === 'group') {
+      if (subscripted) throw new Error(`[COBOLISH] Reference modification of subscripted group ${name} is not supported`);
+      this.storeNamedReference(name);
+    } else if (subscripted) {
+      const value = this.nextHiddenField();
+      this.emit(`STORE ${value}`);
+      this.emitIndex(reference, name);
+      this.emit(`LOAD ${value}`);
+      this.emitDisplayReceiverConversion(field);
+      this.emit(`ARR_SET ${name} ${field.dimensions.reduce((a, b) => a * b, 1)}`);
+      this.invalidateRawGroups(name);
+    } else {
+      this.emitDisplayReceiverConversion(field);
+      this.emit(`STORE ${name}`);
+      this.invalidateRawGroups(name);
+    }
+  }
+
+  // Pops a value, converts it to the redefining item's PICTURE, and writes its bytes into the base.
+  storeRedefined(reference, field, rounded) {
+    this.assertFixedDisplayWidth(field, field.sourceName);
+    if (field.kind === 'decimal') {
+      this.emitReceiverConversion(field, rounded);
+      this.emit(`DEC_DISPLAY ${field.precision} ${field.scale}${this.displaySignMode(field)}`);
+    } else if (field.kind === 'string') {
+      this.emitReceiverConversion(field, rounded);
+    } else {
+      this.emitReceiverConversion({ kind: 'string', length: field.length }, false);
+    }
+    this.storeRedefinedText(reference, field);
   }
 
   emitNamedReference(name) {
@@ -613,10 +1057,7 @@ class CobolishCodegen extends Cobolish85Visitor {
           }
           this.emit(`LOAD ${item.dimensions.length ? `${childName}_${index}` : childName}`);
           if (item.kind === 'decimal') {
-            this.emit(`DEC_DISPLAY ${item.precision} ${item.scale}`);
-            if (item.signed || item.scale) {
-              throw new Error('[COBOLISH] Group MOVE requires unsigned integral display items');
-            }
+            this.emit(`DEC_DISPLAY ${item.precision} ${item.scale}${item.separateSign ? ` ${item.signPosition}_SEPARATE` : ''}`);
           }
           this.emit('CONCAT');
           if (skip) this.emit(`${skip}:`);
@@ -630,27 +1071,30 @@ class CobolishCodegen extends Cobolish85Visitor {
     const name = this.resolveDataName(reference);
     const field = this.fieldOf(name);
     if (!field) throw new Error(`[COBOLISH] Undeclared data item ${name}`);
-    if (field.redefinesBase) throw new Error(`[COBOLISH] Writing redefined item ${name} is not yet implemented`);
-    if (reference.COLON?.()) {
-      if (field.kind !== 'string') throw new Error('[COBOLISH] Reference modification currently requires an alphanumeric item');
+    const modification = this.referenceModification(reference);
+    if (modification) {
+      const length = this.fieldLength(field);
       const value = this.nextHiddenField();
       const start = this.nextHiddenField();
       const end = this.nextHiddenField();
+      const current = this.nextHiddenField();
       this.emit(`STORE ${value}`);
-      this.emitExpression(reference.expression(0));
+      this.emitExpression(modification.start);
       this.emit('PUSH_INT 1');
       this.emit('SUB');
       this.emit(`STORE ${start}`);
-      if (reference.expression(1)) {
+      if (modification.length) {
         this.emit(`LOAD ${start}`);
-        this.emitExpression(reference.expression(1));
+        this.emitExpression(modification.length);
         this.emit('ADD');
-      } else this.emit(`PUSH_INT ${field.length}`);
+      } else this.emit(`PUSH_INT ${length}`);
       this.emit(`STORE ${end}`);
-      this.emit(`LOAD ${name}`);
+      this.emitItemText(reference, name, field, modification.subscripted);
+      this.emit(`STORE ${current}`);
+      this.emit(`LOAD ${current}`);
       this.emitSlice(() => this.emit('PUSH_INT 0'), () => this.emit(`LOAD ${start}`));
       this.emit(`LOAD ${value}`);
-      this.emit(`PUSH_STR ${JSON.stringify(' '.repeat(field.length))}`);
+      this.emit(`PUSH_STR ${JSON.stringify(' '.repeat(length))}`);
       this.emit('CONCAT');
       this.emitSlice(() => this.emit('PUSH_INT 0'), () => {
         this.emit(`LOAD ${end}`);
@@ -658,11 +1102,12 @@ class CobolishCodegen extends Cobolish85Visitor {
         this.emit('SUB');
       });
       this.emit('CONCAT');
-      this.emit(`LOAD ${name}`);
-      this.emitSlice(() => this.emit(`LOAD ${end}`), () => this.emit(`PUSH_INT ${field.length}`));
+      this.emit(`LOAD ${current}`);
+      this.emitSlice(() => this.emit(`LOAD ${end}`), () => this.emit(`PUSH_INT ${length}`));
       this.emit('CONCAT');
-      this.emit(`STORE ${name}`);
-      this.invalidateRawGroups(name);
+      this.storeItemText(reference, name, field, modification.subscripted);
+    } else if (field.redefinesBase) {
+      this.storeRedefined(reference, field, rounded);
     } else if (reference.expression().length) {
       const value = this.nextHiddenField();
       this.emit(`STORE ${value}`);
@@ -677,7 +1122,7 @@ class CobolishCodegen extends Cobolish85Visitor {
   storeNamedReference(name, rounded = false) {
     const field = this.fieldOf(name);
     if (!field) throw new Error(`[COBOLISH] Undeclared data item ${name}`);
-    if (field.redefinesBase) throw new Error(`[COBOLISH] Writing redefined item ${name} is not yet implemented`);
+    if (field.redefinesBase) return this.storeRedefined(null, field, rounded);
     if (field.dimensions.length) throw new Error(`[COBOLISH] Table ${name} requires subscripts`);
     if (field.kind === 'group') {
       const value = this.nextHiddenField();
@@ -707,7 +1152,7 @@ class CobolishCodegen extends Cobolish85Visitor {
             this.emit(`PUSH_INT ${length}`);
             this.emit('ADD');
           });
-          this.emitReceiverConversion(item, false);
+          this.emitDisplayReceiverConversion(item);
           this.emit(`STORE ${item.dimensions.length ? `${childName}_${index}` : childName}`);
           this.emit(`LOAD ${offset}`);
           this.emit(`PUSH_INT ${length}`);
@@ -727,12 +1172,17 @@ class CobolishCodegen extends Cobolish85Visitor {
   collectFileMetadata(tree) {
     const selects = [];
     const descriptions = new Map();
+    const reportDescriptions = new Map();
     const walk = node => {
       if (!node) return;
       if (node.constructor?.name === 'FileControlClauseContext') selects.push(node);
       if (node.constructor?.name === 'FileDescriptionEntryContext') {
         const name = storageName(node.IDENTIFIER()?.getText());
         if (name) descriptions.set(name, node);
+      }
+      if (node.constructor?.name === 'ReportDescriptionEntryContext') {
+        const name = storageName(node.IDENTIFIER()?.getText());
+        if (name) reportDescriptions.set(name, node);
       }
       for (let index = 0; index < (node.getChildCount?.() || 0); index += 1) walk(node.getChild(index));
     };
@@ -751,13 +1201,22 @@ class CobolishCodegen extends Cobolish85Visitor {
       const root = pathParts.length > 1 ? pathParts.shift() : 'data';
       const relativePath = pathParts.join('/');
       const description = descriptions.get(name);
+      let ownerNode = description;
+      while (ownerNode && ownerNode.constructor?.name !== 'ProgramUnitContext') ownerNode = ownerNode.parentCtx;
+      const ownerProgram = this.programs.find(program => program.node === ownerNode) || this.programs[0];
+      const resolveFileDataName = sourceName => this.resolveProgramDataName(ownerProgram, storageName(sourceName))
+        || storageName(sourceName);
       const records = description?.dataDescriptionEntry?.() || [];
       const recordEntries = records.filter(entry => text(entry.fileLevelNumber?.()) === '01');
       const recordEntry = recordEntries[0] || records[0] || null;
-      const recordName = storageName(recordEntry?.IDENTIFIER()?.getText());
-      const indexedKeyName = storageName(recordKey?.IDENTIFIER?.()?.getText());
-      const relativeKeyName = storageName(relativeKey?.IDENTIFIER?.()?.getText());
-      const statusName = storageName(fileStatus?.IDENTIFIER?.()?.getText());
+      const reportFileClause = (description?.fileDescClause?.() || [])
+        .find(clause => clause.reportFileClause?.())?.reportFileClause?.();
+      const reportName = storageName(reportFileClause?.IDENTIFIER()?.getText());
+      const reportRecordName = reportName ? `__COBOL_REPORT_RECORD_${name}` : null;
+      const recordName = resolveFileDataName(recordEntry?.IDENTIFIER()?.getText()) || reportRecordName;
+      const indexedKeyName = resolveFileDataName(recordKey?.IDENTIFIER?.()?.getText());
+      const relativeKeyName = resolveFileDataName(relativeKey?.IDENTIFIER?.()?.getText());
+      const statusName = resolveFileDataName(fileStatus?.IDENTIFIER?.()?.getText());
       const organizationText = text(organization).toUpperCase();
       const organizationKind = organizationText.includes('INDEXED')
         ? 'INDEXED' : organizationText.includes('RELATIVE') ? 'RELATIVE' : 'SEQUENTIAL';
@@ -781,7 +1240,7 @@ class CobolishCodegen extends Cobolish85Visitor {
       const alternateKeys = clauses.filter(clause => clause.alternateKeyClause?.())
         .map(clause => {
           const alternate = clause.alternateKeyClause();
-          const alternateName = storageName(alternate.IDENTIFIER().getText());
+        const alternateName = resolveFileDataName(alternate.IDENTIFIER().getText());
           const field = this.fieldOf(alternateName);
           if (!field || field.dimensions.length || field.kind === 'group') {
             throw new Error(`[COBOLISH] ALTERNATE RECORD KEY ${alternateName} must be an elementary, non-table record item`);
@@ -804,7 +1263,8 @@ class CobolishCodegen extends Cobolish85Visitor {
           : organizationKind === 'RELATIVE' ? relativeKeyName : '__COBOL_SEQUENTIAL_KEY__',
         relativeKeyName,
         optional: Boolean(select.optionalFileClause?.()),
-        recordNames: recordEntries.map(entry => storageName(entry.IDENTIFIER()?.getText())),
+        recordNames: recordEntries.map(entry => resolveFileDataName(entry.IDENTIFIER()?.getText()))
+          .concat(reportRecordName ? [reportRecordName] : []),
         recordVarying: recordVaryingClause ? {
           minimum: varyingSizes[0] ? Number(text(varyingSizes[0])) : null,
           maximum: varyingSizes.at(-1) ? Number(text(varyingSizes.at(-1))) : null,
@@ -814,6 +1274,8 @@ class CobolishCodegen extends Cobolish85Visitor {
         alternateKeys,
         statusName,
         recordName,
+        reportName,
+        sortDescription: Boolean(description?.SD?.()),
         handleName: `__ISAM_HANDLE_${name}`,
         currentKeyName: `__FILE_CURRENT_KEY_${name}`,
         sequenceCounterName: `__FILE_SEQUENCE_${name}`,
@@ -821,9 +1283,31 @@ class CobolishCodegen extends Cobolish85Visitor {
       };
       this.files.set(name, file);
       for (const record of file.recordNames) this.filesByRecord.set(record, file);
+      if (reportRecordName) {
+        this.fields.set(reportRecordName, { kind: 'string', length: 132, dimensions: [] });
+      }
       this.fields.set(file.handleName, { kind: 'decimal', precision: 10, scale: 0 });
       this.fields.set(file.currentKeyName, { kind: 'string', length: 256 });
       this.fields.set(file.sequenceCounterName, { kind: 'decimal', precision: 10, scale: 0 });
+      if (file.sortDescription) {
+        file.sortState = {
+          buffer: this.nextHiddenStringField(0),
+          size: this.nextHiddenField(),
+          cursor: this.nextHiddenField(),
+          phase: this.nextHiddenField()
+        };
+        this.fields.set('SORT_RETURN', { kind: 'decimal', precision: 2, scale: 0, dimensions: [] });
+      }
+      if (reportName) {
+        const reportDescription = reportDescriptions.get(reportName);
+        if (!reportDescription) {
+          throw new Error(`[COBOLISH] Report ${reportName} referenced by file ${name} has no RD description`);
+        }
+        this.fields.set('LINE_COUNTER', { kind: 'decimal', precision: 10, scale: 0, dimensions: [] });
+        this.fields.set('PAGE_COUNTER', { kind: 'decimal', precision: 10, scale: 0, dimensions: [] });
+        this.fields.set('__COBOL_RW_SUPPRESS', { kind: 'decimal', precision: 1, scale: 0, dimensions: [] });
+        this.reports.set(reportName, this.collectReportMetadata(reportDescription, file, ownerProgram));
+      }
       if (linage) {
         this.fields.set(file.linageCounterName, { kind: 'decimal', precision: 10, scale: 0, dimensions: [] });
         this.fields.set('LINAGE_COUNTER', { kind: 'decimal', precision: 10, scale: 0, dimensions: [] });
@@ -836,6 +1320,253 @@ class CobolishCodegen extends Cobolish85Visitor {
         file.recordVarying.dependingOn = candidates[0];
       }
     }
+  }
+
+  collectReportMetadata(description, file, ownerProgram) {
+    const reportName = storageName(description.IDENTIFIER()?.getText());
+    const clauses = asArray(description.reportDescriptionClause?.());
+    const limits = clauses.find(clause => clause.LIMIT?.() || clause.LIMITS?.());
+    const limitValues = asArray(limits?.cobolNumber?.()).map(value => Number(text(value)));
+    let valueIndex = 0;
+    const pageLimit = limitValues[valueIndex++] || 60;
+    const headingLine = limits?.HEADING?.() ? limitValues[valueIndex++] : null;
+    const firstDetail = limits?.FIRST?.() ? limitValues[valueIndex++] : 1;
+    const lastDetail = limits?.LAST?.() ? limitValues[valueIndex++] : pageLimit;
+    const footingLine = limits?.FOOTING?.() ? limitValues[valueIndex] : null;
+
+    const controls = [{ sourceName: 'FINAL', key: null }];
+    let hasFinal = false;
+    const controlClause = clauses.find(clause => clause.CONTROL?.() || clause.CONTROLS?.());
+    for (const word of reportClauseWords(controlClause).slice(1)) {
+      if (typeof word !== 'string' || ['IS', 'ARE', ','].includes(word)) continue;
+      if (word === 'FINAL') {
+        if (controls.length > 1 || hasFinal) throw new Error(`[COBOLISH] FINAL must be the first control of report ${reportName}`);
+        hasFinal = true;
+        continue;
+      }
+      const sourceName = storageName(word);
+      const key = this.resolveProgramDataName(ownerProgram, sourceName);
+      if (!key) throw new Error(`[COBOLISH] Control ${sourceName} of report ${reportName} is not a data item`);
+      const field = this.fieldOf(key);
+      if (field.dimensions?.length) throw new Error(`[COBOLISH] Control ${sourceName} must not be a table`);
+      this.hiddenFieldId += 1;
+      const saved = `__COBOL_RW_CTL_${this.hiddenFieldId}`;
+      this.fields.set(saved, field.kind === 'decimal'
+        ? { kind: 'decimal', precision: 18, scale: field.scale, signed: true, dimensions: [] }
+        : { kind: 'string', length: this.fieldLength(field), dimensions: [] });
+      controls.push({ sourceName, key, decimal: field.kind === 'decimal', saved });
+    }
+    const controlLevel = (name, groupName) => {
+      if (!name || name === 'FINAL') return 0;
+      const level = controls.findIndex(control => control.sourceName === storageName(name));
+      if (level < 1) throw new Error(`[COBOLISH] Report group ${groupName} names ${name}, which is not a control of ${reportName}`);
+      return level;
+    };
+
+    const stateField = () => this.nextHiddenField();
+    const report = {
+      name: reportName,
+      file,
+      program: ownerProgram,
+      pageLimit,
+      headingLine,
+      firstDetail,
+      lastDetail,
+      footingLine,
+      controls,
+      groups: [],
+      counters: [],
+      started: stateField(),
+      groupIndicate: stateField(),
+      nextPage: stateField()
+    };
+
+    let currentGroup = null;
+    let currentLine = null;
+    const typeNames = {
+      RH: 'REPORT_HEADING', PH: 'PAGE_HEADING', CH: 'CONTROL_HEADING', DE: 'DETAIL',
+      CF: 'CONTROL_FOOTING', PF: 'PAGE_FOOTING', RF: 'REPORT_FOOTING', DETAIL: 'DETAIL'
+    };
+    for (const entry of description.reportGroupDescriptionEntry?.() || []) {
+      const entryLevel = Number(text(entry.fileLevelNumber?.()));
+      const entryName = entry.IDENTIFIER?.() ? storageName(entry.IDENTIFIER().getText()) : null;
+      const groupClauses = entry.reportGroupClause?.() || [];
+      const typeClause = groupClauses.find(clause => clause.TYPE?.());
+      if (typeClause) {
+        if (entryLevel !== 1) throw new Error(`[COBOLISH] TYPE clause must appear on a level 01 report group in ${reportName}`);
+        const words = reportClauseWords(typeClause).filter(word => word !== 'TYPE' && word !== 'IS');
+        let type;
+        let controlName = null;
+        if (['REPORT', 'PAGE', 'CONTROL'].includes(words[0])) {
+          type = `${words[0]}_${words[1]}`;
+          controlName = words[2] || null;
+        } else {
+          type = typeNames[words[0]];
+          controlName = words[1] || null;
+        }
+        if (!type) throw new Error(`[COBOLISH] Unsupported report group TYPE ${words.join(' ')}`);
+        const isControl = type === 'CONTROL_HEADING' || type === 'CONTROL_FOOTING';
+        if (isControl && !controlName) {
+          throw new Error(`[COBOLISH] ${type.replace('_', ' ')} group ${entryName || ''} requires a control name`);
+        }
+        if (!isControl && controlName) throw new Error(`[COBOLISH] Unexpected control name in TYPE ${words.join(' ')}`);
+        if (controlName === 'FINAL' && !hasFinal) throw new Error(`[COBOLISH] Report ${reportName} does not declare CONTROL FINAL`);
+        currentGroup = {
+          name: entryName,
+          type,
+          level: isControl ? controlLevel(controlName, entryName) : null,
+          lines: [],
+          nextGroup: null,
+          counters: []
+        };
+        if (currentGroup.name && report.groups.some(group => group.name === currentGroup.name)) {
+          throw new Error(`[COBOLISH] Duplicate report group ${currentGroup.name} in ${reportName}`);
+        }
+        report.groups.push(currentGroup);
+        currentLine = null;
+      } else if (entryLevel === 1) {
+        throw new Error(`[COBOLISH] Report group ${entryName || ''} in ${reportName} requires a TYPE clause`);
+      }
+      if (!currentGroup) continue;
+
+      const item = {
+        name: entryName, column: null, picture: null, edited: null, source: null, value: null, sum: null,
+        groupIndicate: false, justified: false, blankWhenZero: false
+      };
+      let lineSpec = null;
+      for (const clause of groupClauses) {
+        const words = reportClauseWords(clause);
+        const number = asArray(clause.cobolNumber?.())[0];
+        if (words[0] === 'LINE') {
+          lineSpec = words.includes('NEXT')
+            ? { absolute: null, relative: 1, nextPage: true }
+            : words.includes('PLUS')
+              ? { absolute: null, relative: Number(text(number)), nextPage: false }
+              : { absolute: Number(text(number)), relative: 0, nextPage: false };
+        } else if (words[0] === 'NEXT') {
+          if (entryLevel !== 1) throw new Error(`[COBOLISH] NEXT GROUP must appear on the report group entry ${currentGroup.name || ''}`);
+          currentGroup.nextGroup = words.includes('PAGE')
+            ? { kind: 'page' }
+            : { kind: words.includes('PLUS') ? 'plus' : 'absolute', value: Number(text(number)) };
+        } else if (words[0] === 'SUM') {
+          item.sum ||= { operands: [], upon: [], reset: null };
+          item.sum.operands.push(...asArray(clause.dataReference?.()));
+          let mode = null;
+          for (const word of words) {
+            if (word === 'UPON' || word === 'RESET') mode = word;
+            else if (typeof word === 'string' && !['ON', ','].includes(word)) {
+              if (mode === 'UPON') item.sum.upon.push(storageName(word));
+              else if (mode === 'RESET') item.sum.reset = word;
+            }
+          }
+        } else if (words[0] === 'GROUP') {
+          item.groupIndicate = true;
+        } else if (words[0] === 'JUSTIFIED') {
+          item.justified = true;
+        } else if (words[0] === 'BLANK') {
+          item.blankWhenZero = true;
+        } else if (words[0] === 'COLUMN') {
+          item.column = Number(text(number)) || 1;
+        } else if (clause.pictureClause?.()) {
+          item.edited = editedPictureInfo(text(clause.pictureClause()));
+          item.picture = item.edited
+            ? { kind: 'string', length: item.edited.length }
+            : parsePicture(text(clause.pictureClause()));
+        } else if (words[0] === 'SOURCE') {
+          item.source = asArray(clause.dataReference())[0];
+        } else if (words[0] === 'VALUE') {
+          item.value = clause.literal();
+        }
+      }
+
+      if (lineSpec) {
+        if (currentLine && !currentLine.items.length) Object.assign(currentLine, lineSpec);
+        else {
+          currentLine = { ...lineSpec, items: [] };
+          currentGroup.lines.push(currentLine);
+        }
+      }
+      if (item.sum) {
+        if (currentGroup.type !== 'CONTROL_FOOTING') {
+          throw new Error(`[COBOLISH] SUM clause is only supported in CONTROL FOOTING groups (${reportName})`);
+        }
+        if (!item.picture || item.picture.kind === 'group') {
+          throw new Error(`[COBOLISH] SUM item ${item.name || ''} in ${reportName} requires a numeric PICTURE`);
+        }
+        const scale = item.edited ? editedPictureScale(item.edited.mask, this.decimalPointComma) : item.picture.scale || 0;
+        let key;
+        if (item.name && item.name !== 'FILLER') {
+          key = `${ownerProgram.prefix}${item.name}`;
+          if (this.fields.has(key)) throw new Error(`[COBOLISH] SUM counter ${item.name} duplicates a data name`);
+          this.registerProgramDataName(ownerProgram, item.name, key);
+        } else {
+          this.hiddenFieldId += 1;
+          key = `__COBOL_RW_SUM_${this.hiddenFieldId}`;
+        }
+        this.fields.set(key, {
+          kind: 'decimal', precision: 18, scale, signed: true, dimensions: [], children: [],
+          sourceName: item.name, path: [item.name || key], programKey: ownerProgram.key
+        });
+        const counter = {
+          key,
+          sourceName: item.name,
+          group: currentGroup,
+          level: currentGroup.level,
+          operands: item.sum.operands,
+          upon: item.sum.upon,
+          resetLevel: item.sum.reset ? controlLevel(item.sum.reset, currentGroup.name) : currentGroup.level,
+          rollFrom: []
+        };
+        if (counter.resetLevel > counter.level) {
+          throw new Error(`[COBOLISH] RESET ON for ${item.name || 'SUM counter'} must name a higher control level`);
+        }
+        currentGroup.counters.push(counter);
+        report.counters.push(counter);
+        item.counter = key;
+      }
+      const printable = item.column !== null && (item.value || item.source || item.counter);
+      if (item.column !== null && !printable) {
+        throw new Error(`[COBOLISH] Report item in ${currentGroup.name || reportName} requires SOURCE, VALUE or SUM`);
+      }
+      if (printable) {
+        if (!item.picture) throw new Error(`[COBOLISH] Report item in ${currentGroup.name || reportName} requires a PICTURE`);
+        if (item.groupIndicate && currentGroup.type !== 'DETAIL') {
+          throw new Error('[COBOLISH] GROUP INDICATE is only allowed in DETAIL report groups');
+        }
+        if (!currentLine) {
+          currentLine = { absolute: null, relative: 1, nextPage: false, items: [] };
+          currentGroup.lines.push(currentLine);
+        }
+        currentLine.items.push(item);
+      }
+    }
+
+    for (const counter of report.counters) {
+      counter.dataOperands = [];
+      for (const operand of counter.operands) {
+        const operandName = storageName(operand.IDENTIFIER().getText());
+        const source = report.counters.find(candidate => candidate.sourceName === operandName);
+        if (source) {
+          if (source.level < counter.level || (source.level === counter.level && source.group === counter.group)) {
+            throw new Error(`[COBOLISH] SUM counter ${operandName} can only be rolled forward to a higher control level`);
+          }
+          source.rollFrom.push(counter);
+        } else counter.dataOperands.push(operand);
+      }
+      for (const name of counter.upon) {
+        if (!report.groups.some(group => group.type === 'DETAIL' && group.name === name)) {
+          throw new Error(`[COBOLISH] SUM UPON ${name} does not name a detail group of ${reportName}`);
+        }
+      }
+    }
+    for (const group of report.groups) {
+      if ((group.type === 'CONTROL_HEADING' || group.type === 'CONTROL_FOOTING')
+        && report.groups.some(other => other !== group && other.type === group.type && other.level === group.level)) {
+        throw new Error(`[COBOLISH] Report ${reportName} has more than one ${group.type.replace('_', ' ')} for one control`);
+      }
+      for (const line of group.lines) line.items.sort((left, right) => left.column - right.column);
+    }
+    return report;
   }
 
   collectDeclaratives(tree) {
@@ -855,7 +1586,22 @@ class CobolishCodegen extends Cobolish85Visitor {
           this.declarativeProcedureNodes.push(paragraph);
         }
         const use = node.useStatement?.();
-        if (use && !/DEBUGGING/i.test(text(use))) {
+        if (use && /DEBUGGING/i.test(text(use))) {
+          const targets = asArray(use.debugTarget?.());
+          for (const target of targets) {
+            const targetName = storageName(target.paragraphName?.()?.getText?.() || '');
+            const debugParagraph = storageName(paragraphs[0]?.paragraphName?.()?.getText?.() || sectionName);
+            if (target.ALL?.()) this.debugHooks.set('*', debugParagraph);
+            else if (targetName) this.debugHooks.set(targetName, debugParagraph);
+          }
+        } else if (use && use.REPORTING?.()) {
+          if (!paragraphs.length) throw new Error('[COBOLISH] USE BEFORE REPORTING requires a paragraph');
+          const groupName = storageName(use.IDENTIFIER().getText());
+          if (this.reportDeclaratives.has(groupName)) {
+            throw new Error(`[COBOLISH] Multiple USE BEFORE REPORTING procedures are assigned to ${groupName}`);
+          }
+          this.reportDeclaratives.set(groupName, target);
+        } else if (use) {
           const files = asArray(use.identifierList?.()?.IDENTIFIER?.())
             .map(identifier => storageName(identifier.getText()));
           if (!paragraphs.length) {
@@ -878,6 +1624,20 @@ class CobolishCodegen extends Cobolish85Visitor {
       }
     };
     visit(tree);
+    this.debuggingMode = String(tree.getText?.() || '').toUpperCase().includes('WITHDEBUGGINGMODE');
+    if (this.debugHooks.size) {
+      this.fields.set('DEBUG_NAME', { kind: 'string', length: 30, signed: false, pascalishType: 'string', dimensions: [] });
+      this.fields.set('DEBUG_CONTENTS', { kind: 'string', length: 30, signed: false, pascalishType: 'string', dimensions: [] });
+      this.initialValues.set('DEBUG_NAME', { getText: () => 'SPACES' });
+      this.initialValues.set('DEBUG_CONTENTS', { getText: () => 'SPACES' });
+      this.dataNameKeys.set('DEBUG_NAME', ['DEBUG_NAME']);
+      this.dataNameKeys.set('DEBUG_CONTENTS', ['DEBUG_CONTENTS']);
+    }
+    for (const groupName of this.reportDeclaratives.keys()) {
+      if (![...this.reports.values()].some(report => report.groups.some(group => group.name === groupName))) {
+        throw new Error(`[COBOLISH] USE BEFORE REPORTING references unknown report group ${groupName}`);
+      }
+    }
     for (const name of this.fileDeclaratives.keys()) {
       const file = this.files.get(name);
       if (!file) throw new Error(`[COBOLISH] Declarative error procedure references unknown file ${name}`);
@@ -920,6 +1680,18 @@ class CobolishCodegen extends Cobolish85Visitor {
     if (file.organization === 'RELATIVE') return `__RELATIVE__:${file.relativeKeyName}`;
     if (file.organization === 'SEQUENTIAL') return '__SEQUENTIAL__';
     return file.keyName;
+  }
+
+  emitDeclarativeCall(target) {
+    const exitFlag = `__COBOL_PEXIT_${target.last}`;
+    const savedExitFlag = this.nextHiddenField();
+    this.emit(`LOAD ${exitFlag}`);
+    this.emit(`STORE ${savedExitFlag}`);
+    this.emit('PUSH_INT 1');
+    this.emit(`STORE ${exitFlag}`);
+    this.emit(`CALL PARA_${target.first} 0`);
+    this.emit(`LOAD ${savedExitFlag}`);
+    this.emit(`STORE ${exitFlag}`);
   }
 
   emitFileKey(file, rewrite = false) {
@@ -988,15 +1760,7 @@ class CobolishCodegen extends Cobolish85Visitor {
     this.emit(`JZ ${end}`);
     this.emit('PUSH_INT 1');
     this.emit(`STORE ${file.declarativeActiveName}`);
-    const exitFlag = `__COBOL_PEXIT_${target.last}`;
-    const savedExitFlag = this.nextHiddenField();
-    this.emit(`LOAD ${exitFlag}`);
-    this.emit(`STORE ${savedExitFlag}`);
-    this.emit('PUSH_INT 1');
-    this.emit(`STORE ${exitFlag}`);
-    this.emit(`CALL PARA_${target.first} 0`);
-    this.emit(`LOAD ${savedExitFlag}`);
-    this.emit(`STORE ${exitFlag}`);
+    this.emitDeclarativeCall(target);
     this.emit('PUSH_INT 0');
     this.emit(`STORE ${file.declarativeActiveName}`);
     this.emit(`${end}:`);
@@ -1209,74 +1973,88 @@ class CobolishCodegen extends Cobolish85Visitor {
       if (kind !== 'OpenFileItemContext') continue;
       if (child.REVERSED()) throw new Error('[COBOLISH] OPEN REVERSED is recognized but not yet implemented');
       const file = this.fileOf(child.IDENTIFIER().getText());
-      const backendKeyName = this.fileBackendKeyName(file);
-      const backendMode = file.optional ? `${mode}-OPTIONAL` : mode;
-      const savedHandleName = this.nextHiddenField();
-      const openSuccessLabel = this.nextLabel('ISAM_OPEN_SUCCESS');
-      const openEndLabel = this.nextLabel('ISAM_OPEN_END');
-      this.emit(`LOAD ${file.handleName}`);
-      this.emit(`STORE ${savedHandleName}`);
-      this.emit(`PUSH_STR ${JSON.stringify(file.root)}`);
-      this.emit(`PUSH_STR ${JSON.stringify(file.path)}`);
-      this.emit(`PUSH_STR ${JSON.stringify(backendKeyName)}`);
-      this.emit(`PUSH_STR ${JSON.stringify(backendMode)}`);
-      this.emit('CALL_EXT host.isam_open 4');
-      this.emit(`STORE ${file.handleName}`);
-      this.emit(`LOAD ${file.handleName}`);
-      this.emit('CALL_EXT host.isam_status 1');
-      this.emit('PUSH_STR "41"');
-      this.emit('EQ');
-      this.emit(`JZ ${openSuccessLabel}`);
-      this.emit(`LOAD ${file.handleName}`);
-      this.emit('CALL_EXT host.isam_close 1');
-      this.emit(`STORE ${this.nextHiddenField()}`);
-      this.emit(`LOAD ${savedHandleName}`);
-      this.emit(`STORE ${file.handleName}`);
-      if (file.statusName) {
-        this.emit('PUSH_STR "41"');
-        this.emit(`STORE ${file.statusName}`);
-      }
-      this.emitFileDeclarativeHandler(file, file.statusName, '41');
-      this.emit(`JMP ${openEndLabel}`);
-      this.emit(`${openSuccessLabel}:`);
-      this.emitFileStatus(file);
-      this.emit('PUSH_INT 0');
-      this.emit(`STORE ${file.sequenceCounterName}`);
-      this.emit(`PUSH_STR ""`);
-      this.emit(`STORE ${file.currentKeyName}`);
-      if (file.linage) {
-        this.emit('PUSH_INT 1');
-        this.emit(`STORE ${file.linageCounterName}`);
-        this.emit('PUSH_INT 1');
-        this.emit('STORE LINAGE_COUNTER');
-      }
-      if (file.organization === 'SEQUENTIAL'
-        || (file.organization === 'RELATIVE' && file.access === 'SEQUENTIAL')) {
-        if (mode === 'EXTEND' || mode === 'I-O') {
-          this.emit(`LOAD ${file.handleName}`);
-          this.emit('CALL_EXT host.isam_count 1');
-          this.emit(`STORE ${file.sequenceCounterName}`);
-        }
-      }
-      this.emit(`${openEndLabel}:`);
+      if (file.sortDescription) throw new Error(`[COBOLISH] OPEN is not valid for SD file ${file.name}`);
+      this.emitOpenFile(file, mode);
     }
+  }
+
+  emitOpenFile(file, mode) {
+    const backendKeyName = this.fileBackendKeyName(file);
+    const backendMode = file.optional ? `${mode}-OPTIONAL` : mode;
+    const savedHandleName = this.nextHiddenField();
+    const openSuccessLabel = this.nextLabel('ISAM_OPEN_SUCCESS');
+    const openEndLabel = this.nextLabel('ISAM_OPEN_END');
+    this.emit(`LOAD ${file.handleName}`);
+    this.emit(`STORE ${savedHandleName}`);
+    this.emit(`PUSH_STR ${JSON.stringify(file.root)}`);
+    this.emit(`PUSH_STR ${JSON.stringify(file.path)}`);
+    this.emit(`PUSH_STR ${JSON.stringify(backendKeyName)}`);
+    this.emit(`PUSH_STR ${JSON.stringify(backendMode)}`);
+    this.emit('CALL_EXT host.isam_open 4');
+    this.emit(`STORE ${file.handleName}`);
+    const openStatus = this.nextHiddenStringField(2);
+    this.emit(`LOAD ${file.handleName}`);
+    this.emit('CALL_EXT host.isam_status 1');
+    this.emit(`STORE ${openStatus}`);
+    this.emit(`LOAD ${openStatus}`);
+    this.emit('PUSH_STR "41"');
+    this.emit('EQ');
+    this.emit(`JZ ${openSuccessLabel}`);
+    this.emit(`LOAD ${file.handleName}`);
+    this.emit('CALL_EXT host.isam_close 1');
+    this.emit(`STORE ${this.nextHiddenField()}`);
+    this.emit(`LOAD ${savedHandleName}`);
+    this.emit(`STORE ${file.handleName}`);
+    if (file.statusName) {
+      this.emit('PUSH_STR "41"');
+      this.emit(`STORE ${file.statusName}`);
+    }
+    this.emitFileDeclarativeHandler(file, file.statusName, '41');
+    this.emit(`JMP ${openEndLabel}`);
+    this.emit(`${openSuccessLabel}:`);
+    this.emitFileStatus(file);
+    this.emit('PUSH_INT 0');
+    this.emit(`STORE ${file.sequenceCounterName}`);
+    this.emit('PUSH_STR ""');
+    this.emit(`STORE ${file.currentKeyName}`);
+    if (file.linage) {
+      this.emit('PUSH_INT 1');
+      this.emit(`STORE ${file.linageCounterName}`);
+      this.emit('PUSH_INT 1');
+      this.emit('STORE LINAGE_COUNTER');
+    }
+    if ((file.organization === 'SEQUENTIAL'
+      || (file.organization === 'RELATIVE' && file.access === 'SEQUENTIAL'))
+      && (mode === 'EXTEND' || mode === 'I-O')) {
+      this.emit(`LOAD ${file.handleName}`);
+      this.emit('CALL_EXT host.isam_count 1');
+      this.emit(`STORE ${file.sequenceCounterName}`);
+    }
+    this.emit(`${openEndLabel}:`);
+    return openStatus;
   }
 
   emitClose(ctx) {
     for (const item of ctx.closeFileItem() || []) {
       if (item.REEL() || item.UNIT()) throw new Error('[COBOLISH] CLOSE REEL/UNIT is recognized but not yet implemented');
       const file = this.fileOf(item.IDENTIFIER().getText());
-      this.emit(`LOAD ${file.handleName}`);
-      this.emit(`CALL_EXT host.isam_close${item.LOCK() ? '_lock' : ''} 1`);
-      const statusName = file.statusName || this.nextHiddenStringField(2);
-      this.emit('DEC_DISPLAY 2 0');
-      this.emit(`STORE ${statusName}`);
-      this.emitFileDeclarativeHandler(file, statusName);
-      this.emit('PUSH_INT 0');
-      this.emit(`STORE ${file.handleName}`);
-      this.emit('PUSH_STR ""');
-      this.emit(`STORE ${file.currentKeyName}`);
+      if (file.sortDescription) throw new Error(`[COBOLISH] CLOSE is not valid for SD file ${file.name}`);
+      this.emitCloseFile(file, Boolean(item.LOCK()));
     }
+  }
+
+  emitCloseFile(file, locked = false) {
+    this.emit(`LOAD ${file.handleName}`);
+    this.emit(`CALL_EXT host.isam_close${locked ? '_lock' : ''} 1`);
+    const statusName = file.statusName || this.nextHiddenStringField(2);
+    this.emit('DEC_DISPLAY 2 0');
+    this.emit(`STORE ${statusName}`);
+    this.emitFileDeclarativeHandler(file, statusName);
+    this.emit('PUSH_INT 0');
+    this.emit(`STORE ${file.handleName}`);
+    this.emit('PUSH_STR ""');
+    this.emit(`STORE ${file.currentKeyName}`);
+    return statusName;
   }
 
   nextHiddenField() {
@@ -1293,8 +2071,564 @@ class CobolishCodegen extends Cobolish85Visitor {
     return name;
   }
 
+  sortFileOf(name) {
+    const file = this.fileOf(name);
+    if (!file.sortDescription || file.recordVarying || file.recordNames.length !== 1) {
+      throw new Error(`[COBOLISH] SORT/MERGE requires a single fixed-length SD record for ${name}`);
+    }
+    if (this.fieldLength(this.fieldOf(file.recordName)) < 1) {
+      throw new Error(`[COBOLISH] SD record ${file.recordName} must have a positive length`);
+    }
+    const validateLayout = name => {
+      const field = this.fieldOf(name);
+      if (field.kind === 'decimal' && field.signed && !field.separateSign) {
+        throw new Error(`[COBOLISH] Signed SD item ${name} requires SIGN LEADING/TRAILING SEPARATE; embedded sign storage is not yet implemented`);
+      }
+      for (const child of field.children || []) validateLayout(child);
+    };
+    validateLayout(file.recordName);
+    return file;
+  }
+
+  emitSort(ctx, merge = false) {
+    const identifiers = asArray(ctx.IDENTIFIER());
+    const file = this.sortFileOf(text(identifiers[0]));
+    const state = file.sortState;
+    const width = this.fieldLength(this.fieldOf(file.recordName));
+    const collatingName = storageName(text(ctx.collatingSequencePhrase?.()?.IDENTIFIER()));
+    const collating = collatingName ? this.alphabets.get(collatingName) : null;
+    if (collatingName && !collating) throw new Error(`[COBOLISH] Unknown ALPHABET ${collatingName}`);
+    const keys = ctx.sortKeyClause().flatMap(clause => clause.dataReference().map(reference => {
+      const name = this.resolveDataName(reference);
+      const field = this.fieldOf(name);
+      if (!field || field.kind === 'group' || field.dimensions.length ||       reference.expression().length || this.isReferenceModified(reference)) {
+        throw new Error(`[COBOLISH] SORT/MERGE key ${name} must be an elementary, unsubscripted SD item`);
+      }
+      return {
+        field, offset: this.fieldOffsetWithin(file.recordName, name),
+        length: this.fieldLength(field), descending: Boolean(clause.DESCENDING()), collating
+      };
+    }));
+    const input = merge ? null : ctx.sortInput();
+    const inputs = merge ? identifiers.slice(1) : asArray(input.IDENTIFIER?.());
+    const output = ctx.sortOutput();
+    const validateFile = identifier => {
+      const external = this.fileOf(text(identifier));
+      if (external.sortDescription || external.organization !== 'SEQUENTIAL' || external.recordVarying) {
+        throw new Error(`[COBOLISH] SORT/MERGE USING/GIVING requires a fixed-length sequential FD file: ${external.name}`);
+      }
+      return external;
+    };
+    const inputFiles = inputs.map(validateFile);
+    const outputFiles = asArray(output.IDENTIFIER?.()).map(validateFile);
+    const done = this.nextLabel('SORT_DONE');
+    const busy = this.nextLabel('SORT_BUSY');
+    const exit = this.nextLabel('SORT_EXIT');
+    this.emit(`LOAD ${state.phase}`);
+    this.emit('PUSH_INT 0');
+    this.emit('EQ');
+    this.emit(`JZ ${busy}`);
+    this.emit('PUSH_INT 0');
+    this.emit('STORE SORT_RETURN');
+    this.emit('PUSH_STR ""');
+    this.emit(`STORE ${state.buffer}`);
+    this.emit('PUSH_INT 0');
+    this.emit(`STORE ${state.size}`);
+    this.emit('PUSH_INT 0');
+    this.emit(`STORE ${state.cursor}`);
+    this.emit('PUSH_INT 1');
+    this.emit(`STORE ${state.phase}`);
+
+    const mergeInput = merge ? this.nextHiddenStringField(0) : null;
+    const mergeSize = merge ? this.nextHiddenField() : null;
+    const merged = merge ? this.nextHiddenStringField(0) : null;
+    for (const external of inputFiles) {
+      if (merge) {
+        this.emit('PUSH_STR ""');
+        this.emit(`STORE ${mergeInput}`);
+        this.emit('PUSH_INT 0');
+        this.emit(`STORE ${mergeSize}`);
+      }
+      this.emitSortReadFile(external, merge ? mergeInput : state.buffer, merge ? mergeSize : state.size, width, done, merge ? keys : null);
+      if (merge) {
+        this.emitMergeBuffers(state.buffer, mergeInput, merged, width, keys);
+        this.emit(`LOAD ${merged}`);
+        this.emit(`STORE ${state.buffer}`);
+        this.emit(`LOAD ${state.size}`);
+        this.emit(`LOAD ${mergeSize}`);
+        this.emit('ADD');
+        this.emit(`STORE ${state.size}`);
+      }
+    }
+    if (input?.procedureRange()) {
+      const names = input.procedureRange().paragraphName().map(name => storageName(text(name)));
+      this.emitProcedureRange(names[0], names.at(-1));
+    }
+    this.emit('LOAD SORT_RETURN');
+    this.emit('PUSH_INT 0');
+    this.emit('EQ');
+    this.emit(`JZ ${done}`);
+    if (!merge) this.emitSortOrder(state, width, keys);
+    this.emit('PUSH_INT 2');
+    this.emit(`STORE ${state.phase}`);
+    for (const external of outputFiles) this.emitSortWriteFile(external, state, width, done);
+    if (output.procedureRange()) {
+      const names = output.procedureRange().paragraphName().map(name => storageName(text(name)));
+      this.emitProcedureRange(names[0], names.at(-1));
+    }
+    this.emit(`${done}:`);
+    for (const buffer of [state.buffer, mergeInput, merged].filter(Boolean)) {
+      this.emit('PUSH_STR ""');
+      this.emit(`STORE ${buffer}`);
+    }
+    this.emit('PUSH_INT 0');
+    this.emit(`STORE ${state.phase}`);
+    this.emit(`JMP ${exit}`);
+    this.emit(`${busy}:`);
+    this.emit('PUSH_INT 16');
+    this.emit('STORE SORT_RETURN');
+    this.emit(`${exit}:`);
+  }
+
+  emitSortOpenFile(file, mode, errorExit) {
+    const status = this.emitOpenFile(file, mode);
+    const opened = this.nextLabel('SORT_OPENED');
+    for (const accepted of mode === 'INPUT' ? ['00', '05'] : ['00']) {
+      this.emit(`LOAD ${status}`);
+      this.emit(`PUSH_STR "${accepted}"`);
+      this.emit('STREQ');
+      this.emit('NOT');
+      this.emit(`JZ ${opened}`);
+    }
+    const alreadyOpen = this.nextLabel('SORT_ALREADY_OPEN');
+    this.emit(`LOAD ${status}`);
+    this.emit('PUSH_STR "41"');
+    this.emit('STREQ');
+    this.emit('NOT');
+    this.emit(`JZ ${alreadyOpen}`);
+    this.emitCloseFile(file);
+    this.emit(`${alreadyOpen}:`);
+    this.emit('PUSH_INT 16');
+    this.emit('STORE SORT_RETURN');
+    this.emit(`JMP ${errorExit}`);
+    this.emit(`${opened}:`);
+  }
+
+  emitSortReadFile(file, buffer, size, width, errorExit, orderedKeys = null) {
+    this.emitSortOpenFile(file, 'INPUT', errorExit);
+    const loop = this.nextLabel('SORT_READ');
+    const close = this.nextLabel('SORT_READ_CLOSE');
+    const valid = this.nextLabel('SORT_READ_VALID');
+    const failed = this.nextLabel('SORT_READ_FAILED');
+    const record = this.nextHiddenStringField(width);
+    const status = this.nextHiddenStringField(2);
+    const previous = orderedKeys ? this.nextHiddenStringField(width) : null;
+    const hasPrevious = orderedKeys ? this.nextHiddenField() : null;
+    if (orderedKeys) {
+      this.emit('PUSH_INT 0');
+      this.emit(`STORE ${hasPrevious}`);
+    }
+    this.emit(`${loop}:`);
+    this.emit(`LOAD ${file.handleName}`);
+    this.emit('CALL_EXT host.isam_read_next 1');
+    this.emit(`STORE ${record}`);
+    this.emitFileStatus(file);
+    this.emit(`LOAD ${file.handleName}`);
+    this.emit('CALL_EXT host.isam_status 1');
+    this.emit(`STORE ${status}`);
+    this.emit(`LOAD ${status}`);
+    this.emit('PUSH_STR "10"');
+    this.emit('STREQ');
+    this.emit('NOT');
+    this.emit(`JZ ${close}`);
+    this.emit(`LOAD ${status}`);
+    this.emit('PUSH_STR "00"');
+    this.emit('STREQ');
+    this.emit('NOT');
+    this.emit(`JZ ${valid}`);
+    this.emit(`${failed}:`);
+    this.emit('PUSH_INT 16');
+    this.emit('STORE SORT_RETURN');
+    this.emit(`JMP ${close}`);
+    this.emit(`${valid}:`);
+    this.emit(`LOAD ${record}`);
+    this.emitReceiverConversion({ kind: 'string', length: width }, false);
+    this.emit(`STORE ${record}`);
+    if (orderedKeys) {
+      const first = this.nextLabel('MERGE_FIRST_RECORD');
+      this.emit(`LOAD ${hasPrevious}`);
+      this.emit(`JZ ${first}`);
+      this.emitSortComparison(previous, record, orderedKeys);
+      this.emit('PUSH_INT 0');
+      this.emit('LE');
+      this.emit(`JZ ${failed}`);
+      this.emit(`${first}:`);
+      this.emit(`LOAD ${record}`);
+      this.emit(`STORE ${previous}`);
+      this.emit('PUSH_INT 1');
+      this.emit(`STORE ${hasPrevious}`);
+    }
+    this.emit(`LOAD ${buffer}`);
+    this.emit(`LOAD ${record}`);
+    this.emit('CONCAT');
+    this.emit(`STORE ${buffer}`);
+    this.emit(`LOAD ${size}`);
+    this.emit(`PUSH_INT ${width}`);
+    this.emit('ADD');
+    this.emit(`STORE ${size}`);
+    this.emit(`JMP ${loop}`);
+    this.emit(`${close}:`);
+    this.emitSortCloseFile(file, errorExit);
+  }
+
+  emitSortCloseFile(file, errorExit) {
+    const status = this.emitCloseFile(file);
+    const closed = this.nextLabel('SORT_CLOSED');
+    this.emit(`LOAD ${status}`);
+    this.emit('PUSH_STR "00"');
+    this.emit('STREQ');
+    this.emit('NOT');
+    this.emit(`JZ ${closed}`);
+    this.emit('PUSH_INT 16');
+    this.emit('STORE SORT_RETURN');
+    this.emit(`${closed}:`);
+    this.emit('LOAD SORT_RETURN');
+    this.emit('PUSH_INT 0');
+    this.emit('EQ');
+    this.emit(`JZ ${errorExit}`);
+  }
+
+  emitSortWriteFile(file, state, width, errorExit) {
+    this.emitSortOpenFile(file, 'OUTPUT', errorExit);
+    const loop = this.nextLabel('SORT_WRITE');
+    const close = this.nextLabel('SORT_WRITE_CLOSE');
+    this.emit('PUSH_INT 0');
+    this.emit(`STORE ${state.cursor}`);
+    this.emit(`${loop}:`);
+    this.emit(`LOAD ${state.cursor}`);
+    this.emit(`LOAD ${state.size}`);
+    this.emit('LT');
+    this.emit(`JZ ${close}`);
+    this.emitSortNextRecord(state, width);
+    this.storeNamedReference(file.recordName);
+    this.emitWriteFileRecord(file, file.recordName);
+    this.emit(`LOAD ${file.handleName}`);
+    this.emit('CALL_EXT host.isam_status 1');
+    this.emit('PUSH_STR "00"');
+    this.emit('STREQ');
+    this.emit('NOT');
+    this.emit(`JZ ${loop}`);
+    this.emit('PUSH_INT 16');
+    this.emit('STORE SORT_RETURN');
+    this.emit(`${close}:`);
+    this.emitSortCloseFile(file, errorExit);
+  }
+
+  emitSortNextRecord(state, width) {
+    this.emit(`LOAD ${state.buffer}`);
+    this.emitSlice(() => this.emit(`LOAD ${state.cursor}`), () => {
+      this.emit(`LOAD ${state.cursor}`);
+      this.emit(`PUSH_INT ${width}`);
+      this.emit('ADD');
+    });
+    this.emit(`LOAD ${state.cursor}`);
+    this.emit(`PUSH_INT ${width}`);
+    this.emit('ADD');
+    this.emit(`STORE ${state.cursor}`);
+  }
+
+  emitRelease(ctx) {
+    const sourceName = storageName(text(ctx.IDENTIFIER()));
+    const name = this.resolveProgramDataName(this.currentProgram, sourceName) || sourceName;
+    const file = this.filesByRecord.get(name);
+    if (!file?.sortDescription) throw new Error(`[COBOLISH] RELEASE ${name} requires an SD record`);
+    this.sortFileOf(file.name);
+    const state = file.sortState;
+    const valid = this.nextLabel('RELEASE_VALID');
+    const end = this.nextLabel('RELEASE_END');
+    this.emit(`LOAD ${state.phase}`);
+    this.emit('PUSH_INT 1');
+    this.emit('EQ');
+    this.emit('NOT');
+    this.emit(`JZ ${valid}`);
+    this.emit('PUSH_INT 16');
+    this.emit('STORE SORT_RETURN');
+    this.emit(`JMP ${end}`);
+    this.emit(`${valid}:`);
+    if (ctx.dataReference()) {
+      this.emitReference(ctx.dataReference());
+      this.storeNamedReference(name);
+    }
+    const width = this.fieldLength(this.fieldOf(name));
+    this.emit(`LOAD ${state.buffer}`);
+    this.emitNamedReference(name);
+    this.emitReceiverConversion({ kind: 'string', length: width }, false);
+    this.emit('CONCAT');
+    this.emit(`STORE ${state.buffer}`);
+    this.emit(`LOAD ${state.size}`);
+    this.emit(`PUSH_INT ${width}`);
+    this.emit('ADD');
+    this.emit(`STORE ${state.size}`);
+    this.emit(`${end}:`);
+  }
+
+  emitReturn(ctx) {
+    const file = this.sortFileOf(text(ctx.IDENTIFIER()));
+    const state = file.sortState;
+    const atEnd = this.nextLabel('RETURN_AT_END');
+    const valid = this.nextLabel('RETURN_VALID');
+    const end = this.nextLabel('RETURN_END');
+    this.emit(`LOAD ${state.phase}`);
+    this.emit('PUSH_INT 2');
+    this.emit('EQ');
+    this.emit('NOT');
+    this.emit(`JZ ${valid}`);
+    this.emit('PUSH_INT 16');
+    this.emit('STORE SORT_RETURN');
+    this.emit(`JMP ${atEnd}`);
+    this.emit(`${valid}:`);
+    this.emit(`LOAD ${state.cursor}`);
+    this.emit(`LOAD ${state.size}`);
+    this.emit('LT');
+    this.emit(`JZ ${atEnd}`);
+    this.emitSortNextRecord(state, this.fieldLength(this.fieldOf(file.recordName)));
+    this.storeNamedReference(file.recordName);
+    if (ctx.dataReference()) {
+      this.emitNamedReference(file.recordName);
+      this.storeReference(ctx.dataReference());
+    }
+    const sentences = [[], []];
+    let branch = 0;
+    for (const child of ctx.children || []) {
+      if (text(child).toUpperCase() === 'NOT') branch = 1;
+      if (child.constructor?.name === 'SentenceContext') sentences[branch].push(child);
+    }
+    for (const sentence of sentences[1]) this.visitSentenceNode(sentence);
+    this.emit(`JMP ${end}`);
+    this.emit(`${atEnd}:`);
+    for (const sentence of sentences[0]) this.visitSentenceNode(sentence);
+    this.emit(`${end}:`);
+  }
+
+  emitSortKey(record, key) {
+    this.emit(`LOAD ${record}`);
+    this.emitSlice(() => this.emit(`PUSH_INT ${key.offset}`), () => this.emit(`PUSH_INT ${key.offset + key.length}`));
+    if (key.field.kind === 'decimal') {
+      // All records have the same key scale, so their exact display integers have the same ordering.
+      this.emitDisplayReceiverConversion({ ...key.field, scale: 0 });
+    } else if (key.collating) {
+      const value = this.nextHiddenStringField(key.length);
+      const result = this.nextHiddenStringField(key.length * 3);
+      const index = this.nextHiddenField();
+      const ordinal = this.nextHiddenField();
+      const loop = this.nextLabel('SORT_COLLATE');
+      const end = this.nextLabel('SORT_COLLATE_END');
+      this.emit(`STORE ${value}`);
+      this.emit('PUSH_STR ""');
+      this.emit(`STORE ${result}`);
+      this.emit('PUSH_INT 0');
+      this.emit(`STORE ${index}`);
+      this.emit(`${loop}:`);
+      this.emit(`LOAD ${index}`);
+      this.emit(`PUSH_INT ${key.length}`);
+      this.emit('LT');
+      this.emit(`JZ ${end}`);
+      this.emit(`PUSH_STR ${JSON.stringify(Array.from({ length: 256 }, (_value, code) => String.fromCharCode(code)).join(''))}`);
+      this.emit(`LOAD ${value}`);
+      this.emitSlice(() => this.emit(`LOAD ${index}`), () => {
+        this.emit(`LOAD ${index}`);
+        this.emit('PUSH_INT 1');
+        this.emit('ADD');
+      });
+      this.emit('CALL_EXT host.string_index 2');
+      this.emit('PUSH_INT 3');
+      this.emit('MUL');
+      this.emit(`STORE ${ordinal}`);
+      this.emit(`LOAD ${result}`);
+      this.emit(`PUSH_STR ${JSON.stringify(key.collating)}`);
+      this.emitSlice(() => this.emit(`LOAD ${ordinal}`), () => {
+        this.emit(`LOAD ${ordinal}`);
+        this.emit('PUSH_INT 3');
+        this.emit('ADD');
+      });
+      this.emit('CONCAT');
+      this.emit(`STORE ${result}`);
+      this.emit(`LOAD ${index}`);
+      this.emit('PUSH_INT 1');
+      this.emit('ADD');
+      this.emit(`STORE ${index}`);
+      this.emit(`JMP ${loop}`);
+      this.emit(`${end}:`);
+      this.emit(`LOAD ${result}`);
+    }
+  }
+
+  emitSortComparison(left, right, keys) {
+    const end = this.nextLabel('SORT_COMPARE_END');
+    for (const key of keys) {
+      const a = this.nextHiddenField();
+      const b = this.nextHiddenField();
+      const next = this.nextLabel('SORT_COMPARE_NEXT');
+      const greater = this.nextLabel('SORT_COMPARE_GREATER');
+      this.emitSortKey(left, key);
+      this.emit(`STORE ${a}`);
+      this.emitSortKey(right, key);
+      this.emit(`STORE ${b}`);
+      this.emit(`LOAD ${a}`);
+      this.emit(`LOAD ${b}`);
+      this.emit('LT');
+      this.emit(`JZ ${greater}`);
+      this.emit(`PUSH_INT ${key.descending ? 1 : -1}`);
+      this.emit(`JMP ${end}`);
+      this.emit(`${greater}:`);
+      this.emit(`LOAD ${a}`);
+      this.emit(`LOAD ${b}`);
+      this.emit('GT');
+      this.emit(`JZ ${next}`);
+      this.emit(`PUSH_INT ${key.descending ? -1 : 1}`);
+      this.emit(`JMP ${end}`);
+      this.emit(`${next}:`);
+    }
+    this.emit('PUSH_INT 0');
+    this.emit(`${end}:`);
+  }
+
+  emitMergeBuffers(left, right, result, width, keys) {
+    const positions = [this.nextHiddenField(), this.nextHiddenField()];
+    const lengths = [this.nextHiddenField(), this.nextHiddenField()];
+    const records = [this.nextHiddenStringField(width), this.nextHiddenStringField(width)];
+    const loop = this.nextLabel('SORT_MERGE');
+    const tail = [this.nextLabel('SORT_MERGE_RIGHT_TAIL'), this.nextLabel('SORT_MERGE_LEFT_TAIL')];
+    const takeRight = this.nextLabel('SORT_MERGE_TAKE_RIGHT');
+    const end = this.nextLabel('SORT_MERGE_END');
+    this.emit('PUSH_STR ""');
+    this.emit(`STORE ${result}`);
+    [left, right].forEach((buffer, index) => {
+      this.emit(`LOAD ${buffer}`);
+      this.emit('CALL_EXT host.string_length 1');
+      this.emit(`STORE ${lengths[index]}`);
+      this.emit('PUSH_INT 0');
+      this.emit(`STORE ${positions[index]}`);
+    });
+    this.emit(`${loop}:`);
+    [left, right].forEach((buffer, index) => {
+      this.emit(`LOAD ${positions[index]}`);
+      this.emit(`LOAD ${lengths[index]}`);
+      this.emit('LT');
+      this.emit(`JZ ${tail[index]}`);
+      this.emit(`LOAD ${buffer}`);
+      this.emitSlice(() => this.emit(`LOAD ${positions[index]}`), () => {
+        this.emit(`LOAD ${positions[index]}`);
+        this.emit(`PUSH_INT ${width}`);
+        this.emit('ADD');
+      });
+      this.emit(`STORE ${records[index]}`);
+    });
+    this.emitSortComparison(records[0], records[1], keys);
+    this.emit('PUSH_INT 0');
+    this.emit('LE');
+    this.emit(`JZ ${takeRight}`);
+    const append = index => {
+      this.emit(`LOAD ${result}`);
+      this.emit(`LOAD ${records[index]}`);
+      this.emit('CONCAT');
+      this.emit(`STORE ${result}`);
+      this.emit(`LOAD ${positions[index]}`);
+      this.emit(`PUSH_INT ${width}`);
+      this.emit('ADD');
+      this.emit(`STORE ${positions[index]}`);
+      this.emit(`JMP ${loop}`);
+    };
+    append(0);
+    this.emit(`${takeRight}:`);
+    append(1);
+    [right, left].forEach((buffer, index) => {
+      const remaining = 1 - index;
+      this.emit(`${tail[index]}:`);
+      this.emit(`LOAD ${result}`);
+      this.emit(`LOAD ${buffer}`);
+      this.emitSlice(() => this.emit(`LOAD ${positions[remaining]}`), () => this.emit(`LOAD ${lengths[remaining]}`));
+      this.emit('CONCAT');
+      this.emit(`STORE ${result}`);
+      this.emit(`JMP ${end}`);
+    });
+    this.emit(`${end}:`);
+  }
+
+  emitSortOrder(state, width, keys) {
+    const run = this.nextHiddenField();
+    const offset = this.nextHiddenField();
+    const destination = this.nextHiddenStringField(0);
+    const left = this.nextHiddenStringField(0);
+    const right = this.nextHiddenStringField(0);
+    const merged = this.nextHiddenStringField(0);
+    const pass = this.nextLabel('SORT_PASS');
+    const pair = this.nextLabel('SORT_PAIR');
+    const nextPass = this.nextLabel('SORT_NEXT_PASS');
+    const end = this.nextLabel('SORT_ORDER_END');
+    this.emit(`PUSH_INT ${width}`);
+    this.emit(`STORE ${run}`);
+    this.emit(`${pass}:`);
+    this.emit(`LOAD ${run}`);
+    this.emit(`LOAD ${state.size}`);
+    this.emit('LT');
+    this.emit(`JZ ${end}`);
+    this.emit('PUSH_STR ""');
+    this.emit(`STORE ${destination}`);
+    this.emit('PUSH_INT 0');
+    this.emit(`STORE ${offset}`);
+    this.emit(`${pair}:`);
+    this.emit(`LOAD ${offset}`);
+    this.emit(`LOAD ${state.size}`);
+    this.emit('LT');
+    this.emit(`JZ ${nextPass}`);
+    [left, right].forEach((buffer, index) => {
+      this.emit(`LOAD ${state.buffer}`);
+      this.emitSlice(() => {
+        this.emit(`LOAD ${offset}`);
+        this.emit(`LOAD ${run}`);
+        this.emit(`PUSH_INT ${index}`);
+        this.emit('MUL');
+        this.emit('ADD');
+      }, () => {
+        this.emit(`LOAD ${offset}`);
+        this.emit(`LOAD ${run}`);
+        this.emit(`PUSH_INT ${index + 1}`);
+        this.emit('MUL');
+        this.emit('ADD');
+      });
+      this.emit(`STORE ${buffer}`);
+    });
+    this.emitMergeBuffers(left, right, merged, width, keys);
+    this.emit(`LOAD ${destination}`);
+    this.emit(`LOAD ${merged}`);
+    this.emit('CONCAT');
+    this.emit(`STORE ${destination}`);
+    this.emit(`LOAD ${offset}`);
+    this.emit(`LOAD ${run}`);
+    this.emit('PUSH_INT 2');
+    this.emit('MUL');
+    this.emit('ADD');
+    this.emit(`STORE ${offset}`);
+    this.emit(`JMP ${pair}`);
+    this.emit(`${nextPass}:`);
+    this.emit(`LOAD ${destination}`);
+    this.emit(`STORE ${state.buffer}`);
+    this.emit(`LOAD ${run}`);
+    this.emit('PUSH_INT 2');
+    this.emit('MUL');
+    this.emit(`STORE ${run}`);
+    this.emit(`JMP ${pass}`);
+    this.emit(`${end}:`);
+    for (const buffer of [destination, left, right, merged]) {
+      this.emit('PUSH_STR ""');
+      this.emit(`STORE ${buffer}`);
+    }
+  }
+
   emitRead(ctx) {
     const file = this.fileOf(ctx.IDENTIFIER()?.getText());
+    if (file.sortDescription) throw new Error(`[COBOLISH] READ is not valid for SD file ${file.name}; use RETURN`);
     const clauses = ctx.readClause() || [];
     const keyClause = clauses.find(clause => /^KEY/i.test(text(clause)));
     const intoClause = clauses.find(clause => clause.INTO?.());
@@ -1377,13 +2711,16 @@ class CobolishCodegen extends Cobolish85Visitor {
 
   emitWrite(ctx, rewrite = false) {
     const ids = asArray(ctx.IDENTIFIER?.());
-    const recordName = storageName(ids[0]?.getText());
+    const sourceRecordName = storageName(ids[0]?.getText());
+    const recordName = this.resolveProgramDataName(this.currentProgram, sourceRecordName) || sourceRecordName;
     const file = this.filesByRecord.get(recordName);
     if (!file) throw new Error(`[COBOLISH] ${rewrite ? 'REWRITE' : 'WRITE'} ${recordName} is not a declared file record`);
+    if (file.sortDescription) throw new Error(`[COBOLISH] ${rewrite ? 'REWRITE' : 'WRITE'} is not valid for SD record ${recordName}; use RELEASE`);
     const clauses = (rewrite ? [] : ctx.writeClause?.() || []);
     const fromClause = clauses.find(clause => clause.FROM?.());
     const rewriteSource = rewrite && ctx.FROM?.() ? ids[1]?.getText() : null;
-    const recordSource = storageName(fromClause?.IDENTIFIER?.()?.getText() || rewriteSource || recordName);
+    const sourceName = storageName(fromClause?.IDENTIFIER?.()?.getText() || rewriteSource || sourceRecordName);
+    const recordSource = this.resolveProgramDataName(this.currentProgram, sourceName) || sourceName;
     if (!this.fieldOf(recordSource)) throw new Error(`[COBOLISH] File record ${recordSource} is not declared`);
     const advances = clauses.flatMap(clause => {
       const nested = clause.writeAdvancingClause?.();
@@ -1399,22 +2736,7 @@ class CobolishCodegen extends Cobolish85Visitor {
       this.emitNamedReference(recordSource);
       this.storeNamedReference(recordName);
     }
-    this.emit(`LOAD ${file.handleName}`);
-    this.emitFileKey(file, rewrite);
-    this.emitNamedReference(recordName);
-    if (file.recordVarying) {
-      if (!file.recordVarying.dependingOn) {
-        throw new Error(`[COBOLISH] RECORD VARYING for ${file.name} requires DEPENDING ON`);
-      }
-      this.emitSlice(
-        () => this.emit('PUSH_INT 0'),
-        () => this.emit(`LOAD ${file.recordVarying.dependingOn}`)
-      );
-    }
-    this.emit(`CALL_EXT host.isam_${rewrite ? 'rewrite' : 'write'} 3`);
-    this.emit(`STORE ${this.nextHiddenField()}`);
-    this.emitFileStatus(file);
-
+    this.emitWriteFileRecord(file, recordName, rewrite);
     if (file.linage || advances.some(item => !item.before) || endOfPageClauses.length) {
       this.emitAfterSuccessfulWrite(file, () => {
         if (file.linage) this.emitLinageAdvance(file, '1', false, endOfPageClauses);
@@ -1431,8 +2753,27 @@ class CobolishCodegen extends Cobolish85Visitor {
     }
   }
 
+  emitWriteFileRecord(file, recordName, rewrite = false) {
+    this.emit(`LOAD ${file.handleName}`);
+    this.emitFileKey(file, rewrite);
+    this.emitNamedReference(recordName);
+    if (file.recordVarying) {
+      if (!file.recordVarying.dependingOn) {
+        throw new Error(`[COBOLISH] RECORD VARYING for ${file.name} requires DEPENDING ON`);
+      }
+      this.emitSlice(
+        () => this.emit('PUSH_INT 0'),
+        () => this.emit(`LOAD ${file.recordVarying.dependingOn}`)
+      );
+    }
+    this.emit(`CALL_EXT host.isam_${rewrite ? 'rewrite' : 'write'} 3`);
+    this.emit(`STORE ${this.nextHiddenField()}`);
+    this.emitFileStatus(file);
+  }
+
   emitStart(ctx) {
     const file = this.fileOf(ctx.IDENTIFIER()?.getText());
+    if (file.sortDescription) throw new Error(`[COBOLISH] START is not valid for SD file ${file.name}`);
     if (file.organization === 'SEQUENTIAL') throw new Error('[COBOLISH] START is not valid for sequential files');
     const clause = (ctx.startClause() || [])[0];
     const keyToken = clause?.IDENTIFIER?.();
@@ -1452,6 +2793,7 @@ class CobolishCodegen extends Cobolish85Visitor {
 
   emitDelete(ctx) {
     const file = this.fileOf(ctx.IDENTIFIER()?.getText());
+    if (file.sortDescription) throw new Error(`[COBOLISH] DELETE is not valid for SD file ${file.name}`);
     if (file.organization === 'SEQUENTIAL') throw new Error('[COBOLISH] DELETE is not valid for sequential files');
     this.emit(`LOAD ${file.handleName}`);
     this.emitFileKey(file, true);
@@ -1892,9 +3234,7 @@ class CobolishCodegen extends Cobolish85Visitor {
   }
 
   emitClassCondition(ctx) {
-    if (ctx.IDENTIFIER?.()) {
-      throw new Error(`[COBOLISH] User-defined class ${text(ctx.IDENTIFIER())} requires SPECIAL-NAMES`);
-    }
+    const className = ctx.IDENTIFIER?.() ? storageName(text(ctx.IDENTIFIER())) : null;
     const expression = ctx.expression();
     const kind = text(ctx.classKind()).toUpperCase().replace(/-/g, '_');
     const reference = expression.term().length === 1 && expression.term(0).factor().length === 1
@@ -1912,13 +3252,13 @@ class CobolishCodegen extends Cobolish85Visitor {
       const loop = this.nextLabel('CLASS_CHECK');
       const next = this.nextLabel('CLASS_NEXT');
       const end = this.nextLabel('CLASS_END');
-      const allowed = {
+      const allowed = className ? this.userClasses.get(className) : {
         NUMERIC: '0123456789',
         ALPHABETIC: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz ',
         ALPHABETIC_UPPER: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ ',
         ALPHABETIC_LOWER: 'abcdefghijklmnopqrstuvwxyz '
       }[kind];
-      if (!allowed) throw new Error(`[COBOLISH] Unsupported class condition ${kind}`);
+      if (!allowed) throw new Error(`[COBOLISH] Unknown or unsupported class condition ${className || kind}`);
       this.emitReference(reference);
       this.emit(`STORE ${value}`);
       this.emit('PUSH_INT 0');
@@ -2046,6 +3386,7 @@ class CobolishCodegen extends Cobolish85Visitor {
   storeInto(name, rounded) {
     const target = storageName(name);
     const field = this.fieldOf(target);
+    if (field?.redefinesBase) return this.storeRedefined(null, field, rounded);
     this.invalidateRawGroups(target);
     if (field) this.emitReceiverConversion(field, rounded);
     this.emit(`STORE ${target}`);
@@ -2080,12 +3421,43 @@ class CobolishCodegen extends Cobolish85Visitor {
     this.emit(`LOAD ${length}`);
   }
 
+  emitDisplayReceiverConversion(field) {
+    if (field.kind === 'decimal') {
+      if (field.separateSign && field.signPosition === 'TRAILING') {
+        const value = this.nextHiddenStringField(this.fieldLength(field));
+        this.emit(`STORE ${value}`);
+        this.emit(`LOAD ${value}`);
+        this.emitSlice(() => this.emit(`PUSH_INT ${field.precision}`),
+          () => this.emit(`PUSH_INT ${field.precision + 1}`));
+        this.emit(`LOAD ${value}`);
+        this.emitSlice(() => this.emit('PUSH_INT 0'), () => this.emit(`PUSH_INT ${field.precision}`));
+        this.emit('CONCAT');
+      }
+      this.emit('DEC_QUANT 0');
+      if (field.scale) {
+        this.emit(`PUSH_DEC 1${'0'.repeat(field.scale)} 0`);
+        this.emit('DIV');
+      }
+    }
+    this.emitReceiverConversion(field, false);
+  }
+
   emitReceiverConversion(field, rounded) {
     if (field.kind === 'decimal') {
       this.emit(`DEC_QUANT ${field.scale}${rounded ? ' ROUNDED' : ''}`);
       const value = this.nextHiddenField();
       const quotient = this.nextHiddenField();
       this.emit(`STORE ${value}`);
+      if (field.scalingPower > 0) {
+        const factor = `1${'0'.repeat(field.scalingPower)}`;
+        this.emit(`LOAD ${value}`);
+        this.emit(`PUSH_DEC ${factor} 0`);
+        this.emit('DIV');
+        this.emit('DEC_QUANT 0');
+        this.emit(`PUSH_DEC ${factor} 0`);
+        this.emit('MUL');
+        this.emit(`STORE ${value}`);
+      }
       this.emit(`LOAD ${value}`);
       this.emit(`PUSH_DEC 1${'0'.repeat(field.precision)} ${field.scale}`);
       this.emit('DIV');
@@ -2187,6 +3559,390 @@ class CobolishCodegen extends Cobolish85Visitor {
     }
   }
 
+  emitReportStatement(ctx) {
+    const identifiers = asArray(ctx.IDENTIFIER?.()).map(item => storageName(text(item)));
+    if (ctx.INITIATE?.()) {
+      for (const name of identifiers) {
+        const report = this.reports.get(name);
+        if (!report) throw new Error(`[COBOLISH] INITIATE references unknown report ${name}`);
+        this.emit('PUSH_INT 0');
+        this.emit('STORE LINE_COUNTER');
+        this.emit('PUSH_INT 1');
+        this.emit('STORE PAGE_COUNTER');
+        for (const state of [report.started, report.groupIndicate, report.nextPage]) {
+          this.emit('PUSH_INT 0');
+          this.emit(`STORE ${state}`);
+        }
+        for (const counter of report.counters) this.emitReportCounterReset(counter);
+      }
+      return;
+    }
+    if (ctx.TERMINATE?.()) {
+      for (const name of identifiers) {
+        const report = this.reports.get(name);
+        if (!report) throw new Error(`[COBOLISH] TERMINATE references unknown report ${name}`);
+        const end = this.nextLabel('REPORT_TERMINATE_END');
+        this.emitReportFlagTest(report.started);
+        this.emit(`JZ ${end}`);
+        this.emitReportControlSwap(report, () => this.emitReportFootings(report, 0));
+        this.emitReportGroups(report, 'PAGE_FOOTING');
+        this.emitReportGroups(report, 'REPORT_FOOTING');
+        this.emit('PUSH_INT 0');
+        this.emit(`STORE ${report.started}`);
+        this.emit(`${end}:`);
+      }
+      return;
+    }
+
+    const name = identifiers[0];
+    let report = this.reports.get(name);
+    let detail = null;
+    if (!report) {
+      const matches = [...this.reports.values()].filter(candidate =>
+        candidate.groups.some(group => group.name === name && group.type === 'DETAIL'));
+      if (matches.length !== 1) {
+        throw new Error(`[COBOLISH] GENERATE requires a report or one uniquely defined detail report group, got ${name}`);
+      }
+      report = matches[0];
+      detail = report.groups.find(group => group.name === name && group.type === 'DETAIL');
+    }
+    const breaks = this.nextLabel('REPORT_CONTROLS');
+    const body = this.nextLabel('REPORT_DETAIL');
+    this.emitReportFlagTest(report.started);
+    this.emit(`JZ ${breaks}_FIRST`);
+    const levels = report.controls.length - 1;
+    for (let level = 1; level <= levels; level += 1) {
+      this.emitReportControlChanged(report.controls[level]);
+      this.emit(`JZ ${breaks}_${level}`);
+    }
+    this.emit(`JMP ${body}`);
+    for (let level = 1; level <= levels; level += 1) {
+      this.emit(`${breaks}_${level}:`);
+      this.emitReportControlSwap(report, () => this.emitReportFootings(report, level));
+      this.emitReportHeadings(report, level);
+      this.emit(`JMP ${body}`);
+    }
+    this.emit(`${breaks}_FIRST:`);
+    this.emitReportGroups(report, 'REPORT_HEADING');
+    const headingGroup = report.groups.find(group => group.type === 'REPORT_HEADING');
+    if (headingGroup?.nextGroup?.kind === 'page') {
+      const samePage = this.nextLabel('REPORT_HEADING_PAGE');
+      this.emitReportFlagTest(report.nextPage);
+      this.emit(`JZ ${samePage}`);
+      this.emit('PUSH_INT 0');
+      this.emit(`STORE ${report.nextPage}`);
+      this.emit('LOAD PAGE_COUNTER');
+      this.emit('PUSH_INT 1');
+      this.emit('ADD');
+      this.emit('STORE PAGE_COUNTER');
+      this.emit('PUSH_INT 0');
+      this.emit('STORE LINE_COUNTER');
+      this.emit(`${samePage}:`);
+    }
+    this.emitReportGroups(report, 'PAGE_HEADING');
+    this.emit('PUSH_INT 1');
+    this.emit(`STORE ${report.started}`);
+    this.emitReportHeadings(report, 0);
+    this.emit(`${body}:`);
+    for (const counter of report.counters) {
+      if (!counter.dataOperands.length) continue;
+      if (counter.upon.length && (!detail || !counter.upon.includes(detail.name))) continue;
+      for (const operand of counter.dataOperands) {
+        this.emit(`LOAD ${counter.key}`);
+        this.emitReference(operand);
+        this.emit('ADD');
+        this.emit(`STORE ${counter.key}`);
+      }
+    }
+    if (detail) {
+      this.emitReportGroup(report, detail);
+      this.emit('PUSH_INT 0');
+      this.emit(`STORE ${report.groupIndicate}`);
+    }
+  }
+
+  emitReportFlagTest(flag) {
+    this.emit(`LOAD ${flag}`);
+    this.emit('PUSH_INT 0');
+    this.emit('NEQ');
+  }
+
+  emitReportControlChanged(control) {
+    this.emitNamedReference(control.key);
+    this.emit(`LOAD ${control.saved}`);
+    this.emit(control.decimal ? 'EQ' : 'STREQ');
+  }
+
+  emitReportControlSwap(report, body) {
+    const current = report.controls.slice(1).map(control => {
+      const value = control.decimal ? this.nextHiddenField() : this.nextHiddenStringField(0);
+      if (control.decimal) this.fields.set(value, { ...this.fields.get(control.saved) });
+      this.emitNamedReference(control.key);
+      this.emit(`STORE ${value}`);
+      this.emit(`LOAD ${control.saved}`);
+      this.storeNamedReference(control.key);
+      return value;
+    });
+    body();
+    report.controls.slice(1).forEach((control, index) => {
+      this.emit(`LOAD ${current[index]}`);
+      this.storeNamedReference(control.key);
+    });
+  }
+
+  emitReportFootings(report, lowest) {
+    for (let level = report.controls.length - 1; level >= lowest; level -= 1) {
+      const footing = report.groups.find(group => group.type === 'CONTROL_FOOTING' && group.level === level);
+      if (footing) {
+        this.emitReportGroup(report, footing);
+        for (const counter of footing.counters) {
+          for (const target of counter.rollFrom) {
+            this.emit(`LOAD ${target.key}`);
+            this.emit(`LOAD ${counter.key}`);
+            this.emit('ADD');
+            this.emit(`STORE ${target.key}`);
+          }
+        }
+      }
+      for (const counter of report.counters) {
+        if (counter.resetLevel === level) this.emitReportCounterReset(counter);
+      }
+    }
+  }
+
+  emitReportHeadings(report, highest) {
+    for (let level = highest; level < report.controls.length; level += 1) {
+      const heading = report.groups.find(group => group.type === 'CONTROL_HEADING' && group.level === level);
+      if (heading) this.emitReportGroup(report, heading);
+    }
+    for (const control of report.controls.slice(1)) {
+      this.emitNamedReference(control.key);
+      this.emit(`STORE ${control.saved}`);
+    }
+    this.emit('PUSH_INT 1');
+    this.emit(`STORE ${report.groupIndicate}`);
+  }
+
+  emitReportCounterReset(counter) {
+    this.emit(`PUSH_DEC 0 ${this.fieldOf(counter.key).scale}`);
+    this.emit(`STORE ${counter.key}`);
+  }
+
+  emitReportGroups(report, type) {
+    for (const group of report.groups) {
+      if (group.type === type) this.emitReportGroup(report, group);
+    }
+  }
+
+  isReportBodyGroup(group) {
+    return ['CONTROL_HEADING', 'DETAIL', 'CONTROL_FOOTING'].includes(group.type);
+  }
+
+  emitReportMaxLine(base) {
+    const done = this.nextLabel('REPORT_LINE_BASE');
+    const low = this.nextLabel('REPORT_LINE_LOW');
+    this.emit('LOAD LINE_COUNTER');
+    this.emit(`PUSH_INT ${base}`);
+    this.emit('LT');
+    this.emit(`JZ ${low}`);
+    this.emit(`PUSH_INT ${base}`);
+    this.emit(`JMP ${done}`);
+    this.emit(`${low}:`);
+    this.emit('LOAD LINE_COUNTER');
+    this.emit(`${done}:`);
+  }
+
+  emitReportPageAdvance(report) {
+    this.emitReportGroups(report, 'PAGE_FOOTING');
+    this.emit('LOAD PAGE_COUNTER');
+    this.emit('PUSH_INT 1');
+    this.emit('ADD');
+    this.emit('STORE PAGE_COUNTER');
+    this.emit('PUSH_INT 0');
+    this.emit('STORE LINE_COUNTER');
+    this.emitReportGroups(report, 'PAGE_HEADING');
+    this.emit('PUSH_INT 1');
+    this.emit(`STORE ${report.groupIndicate}`);
+  }
+
+  emitReportFit(report, group) {
+    const first = group.lines[0];
+    if (!first) return;
+    const limit = group.type === 'CONTROL_FOOTING' ? report.footingLine ?? report.lastDetail : report.lastDetail;
+    const advance = this.nextLabel('REPORT_ADVANCE');
+    const fits = this.nextLabel('REPORT_FITS');
+    this.emitReportFlagTest(report.nextPage);
+    this.emit(`JZ ${advance}_TEST`);
+    this.emit('PUSH_INT 0');
+    this.emit(`STORE ${report.nextPage}`);
+    this.emit(`JMP ${advance}`);
+    this.emit(`${advance}_TEST:`);
+    if (first.nextPage) {
+      this.emit('LOAD LINE_COUNTER');
+      this.emit(`PUSH_INT ${report.firstDetail - 1}`);
+      this.emit('GT');
+      this.emit(`JZ ${fits}`);
+      this.emit(`JMP ${advance}`);
+    } else if (first.absolute !== null) {
+      this.emit('LOAD LINE_COUNTER');
+      this.emit(`PUSH_INT ${first.absolute}`);
+      this.emit('LT');
+      this.emit(`JZ ${advance}`);
+      this.emit(`JMP ${fits}`);
+    } else {
+      let total = 0;
+      for (const line of group.lines) {
+        if (line.absolute !== null) break;
+        total += line.relative;
+      }
+      this.emitReportMaxLine(report.firstDetail - 1);
+      this.emit(`PUSH_INT ${total}`);
+      this.emit('ADD');
+      this.emit(`PUSH_INT ${limit}`);
+      this.emit('GT');
+      this.emit(`JZ ${fits}`);
+      this.emit(`JMP ${advance}`);
+    }
+    this.emit(`${advance}:`);
+    this.emitReportPageAdvance(report);
+    this.emit(`${fits}:`);
+  }
+
+  emitReportGroup(report, group) {
+    const skip = this.nextLabel('REPORT_SUPPRESSED');
+    const declarative = group.name ? this.reportDeclaratives.get(group.name) : null;
+    if (declarative) {
+      declarative.used = true;
+      this.emit('PUSH_INT 0');
+      this.emit('STORE __COBOL_RW_SUPPRESS');
+      this.emitDeclarativeCall(declarative);
+      this.emit('LOAD __COBOL_RW_SUPPRESS');
+      this.emit('PUSH_INT 0');
+      this.emit('EQ');
+      this.emit(`JZ ${skip}`);
+    }
+    const body = this.isReportBodyGroup(group);
+    if (body) this.emitReportFit(report, group);
+    for (const line of group.lines) {
+      if (line.absolute !== null) {
+        this.emit(`PUSH_INT ${line.absolute}`);
+      } else if (body) {
+        this.emitReportMaxLine(report.firstDetail - 1);
+        this.emit(`PUSH_INT ${line.relative}`);
+        this.emit('ADD');
+      } else {
+        this.emit('LOAD LINE_COUNTER');
+        this.emit(`PUSH_INT ${line.relative}`);
+        this.emit('ADD');
+      }
+      this.emit('STORE LINE_COUNTER');
+      this.emitReportLine(report, group, line);
+    }
+    const next = group.nextGroup;
+    if (next?.kind === 'page') {
+      this.emit('PUSH_INT 1');
+      this.emit(`STORE ${report.nextPage}`);
+    } else if (next?.kind === 'plus') {
+      this.emit('LOAD LINE_COUNTER');
+      this.emit(`PUSH_INT ${next.value}`);
+      this.emit('ADD');
+      this.emit('STORE LINE_COUNTER');
+    } else if (next?.kind === 'absolute') {
+      this.emit(`PUSH_INT ${next.value}`);
+      this.emit('STORE LINE_COUNTER');
+    }
+    this.emit(`${skip}:`);
+  }
+
+  emitReportLine(report, group, line) {
+    const record = this.nextHiddenStringField(132);
+    this.emit('PUSH_STR ""');
+    this.emit(`STORE ${record}`);
+    let cursor = 1;
+
+    for (const item of line.items) {
+      if (item.column < cursor) {
+        throw new Error(`[COBOLISH] Report items overlap at column ${item.column} in ${group.name || report.name}`);
+      }
+      if (item.column > cursor) {
+        this.emit(`LOAD ${record}`);
+        this.emit(`PUSH_STR ${JSON.stringify(' '.repeat(item.column - cursor))}`);
+        this.emit('CONCAT');
+        this.emit(`STORE ${record}`);
+        cursor = item.column;
+      }
+      const picture = item.picture;
+      const width = picture.kind === 'decimal' ? picture.precision + (picture.separateSign ? 1 : 0) : picture.length;
+      const value = this.nextHiddenStringField(width);
+      const indicated = item.groupIndicate ? this.nextLabel('REPORT_INDICATED') : null;
+      const stored = item.groupIndicate ? this.nextLabel('REPORT_ITEM') : null;
+      if (indicated) {
+        this.emitReportFlagTest(report.groupIndicate);
+        this.emit(`JZ ${indicated}`);
+      }
+      let numeric;
+      if (item.counter) {
+        this.emit(`LOAD ${item.counter}`);
+        numeric = true;
+      } else if (item.value) {
+        this.emitLiteral(item.value);
+        numeric = !item.value.stringLiteral?.() && /^[+-]?(?:\d|\.\d)/.test(text(item.value));
+      } else {
+        const sourceName = item.source.IDENTIFIER().getText().toUpperCase();
+        this.emitReference(item.source);
+        numeric = ['LINE-COUNTER', 'PAGE-COUNTER'].includes(sourceName)
+          || (!this.isReferenceModified(item.source) && this.fieldOf(this.resolveDataName(item.source))?.kind === 'decimal');
+      }
+      if (item.edited && numeric) {
+        this.emit(`DEC_EDIT ${JSON.stringify(item.edited.mask)} ${this.decimalPointComma ? 1 : 0} ${item.blankWhenZero ? 1 : 0}`);
+      } else if (picture.kind === 'decimal' && numeric && item.blankWhenZero) {
+        const zero = this.nextLabel('REPORT_BLANK_ZERO');
+        const shown = this.nextLabel('REPORT_SHOWN');
+        const number = this.nextHiddenField();
+        this.fields.set(number, { kind: 'decimal', precision: 18, scale: picture.scale, signed: true, dimensions: [] });
+        this.emit(`STORE ${number}`);
+        this.emit(`LOAD ${number}`);
+        this.emit('PUSH_INT 0');
+        this.emit('EQ');
+        this.emit(`JZ ${zero}`);
+        this.emit(`PUSH_STR ${JSON.stringify(' '.repeat(width))}`);
+        this.emit(`JMP ${shown}`);
+        this.emit(`${zero}:`);
+        this.emit(`LOAD ${number}`);
+        this.emit(`DEC_DISPLAY ${picture.precision} ${picture.scale}`);
+        this.emit(`${shown}:`);
+      } else if (picture.kind === 'decimal') {
+        if (!numeric) {
+          this.runtimeLibraries.add('math');
+          this.emit('CALL PROC_COBOL_RT_NUMVAL 1');
+        }
+        this.emit(`DEC_DISPLAY ${picture.precision} ${picture.scale}`);
+      } else {
+        if (numeric) this.emit('DEC_STR');
+        this.emitReceiverConversion({ kind: 'string', length: width, justified: item.justified }, false);
+      }
+      if (indicated) {
+        this.emit(`JMP ${stored}`);
+        this.emit(`${indicated}:`);
+        this.emit(`PUSH_STR ${JSON.stringify(' '.repeat(width))}`);
+        this.emit(`${stored}:`);
+      }
+      this.emit(`STORE ${value}`);
+      this.emit(`LOAD ${record}`);
+      this.emit(`LOAD ${value}`);
+      this.emit('CONCAT');
+      this.emit(`STORE ${record}`);
+      cursor += width;
+    }
+
+    this.emit(`LOAD ${report.file.handleName}`);
+    this.emitFileKey(report.file);
+    this.emit(`LOAD ${record}`);
+    this.emit('CALL_EXT host.isam_write 3');
+    this.emit(`STORE ${this.nextHiddenField()}`);
+    this.emitFileStatus(report.file);
+  }
+
   emitStatement(ctx) {
     if (ctx.moveCorrespondingStatement?.()) return this.emitMoveCorresponding(ctx.moveCorrespondingStatement());
     if (ctx.moveStatement && ctx.moveStatement()) return this.emitMove(ctx.moveStatement());
@@ -2220,6 +3976,18 @@ class CobolishCodegen extends Cobolish85Visitor {
     if (ctx.unstringStatement?.()) return this.emitUnstring(ctx.unstringStatement());
     if (ctx.inspectStatement?.()) return this.emitInspect(ctx.inspectStatement());
     if (ctx.initializeStatement?.()) return this.emitInitialize(ctx.initializeStatement());
+    if (ctx.cancelStatement?.()) return this.emitCancel(ctx.cancelStatement());
+    if (ctx.sortStatement?.()) return this.emitSort(ctx.sortStatement());
+    if (ctx.mergeStatement?.()) return this.emitSort(ctx.mergeStatement(), true);
+    if (ctx.releaseStatement?.()) return this.emitRelease(ctx.releaseStatement());
+    if (ctx.returnStatement?.()) return this.emitReturn(ctx.returnStatement());
+    if (ctx.reportStatement?.()) return this.emitReportStatement(ctx.reportStatement());
+    if (ctx.suppressStatement?.()) {
+      if (!this.reports.size) throw new Error('[COBOLISH] SUPPRESS PRINTING requires a report');
+      this.emit('PUSH_INT 1');
+      this.emit('STORE __COBOL_RW_SUPPRESS');
+      return;
+    }
     if (ctx.copyStatement && ctx.copyStatement()) {
       throw new Error('[COBOLISH] COPY requires copybook expansion before compilation');
     }
@@ -2227,7 +3995,7 @@ class CobolishCodegen extends Cobolish85Visitor {
       throw new Error('[COBOLISH] EXEC blocks require a configured preprocessor');
     }
     if (ctx.exitStatement?.()) {
-      if (ctx.exitStatement().PROGRAM()) throw new Error('[COBOLISH] EXIT PROGRAM is recognized but not yet implemented');
+      if (ctx.exitStatement().PROGRAM()) return this.emit('RET');
       return undefined;
     }
     // Pulse interop declarations are resolved from metadata, not emitted inline.
@@ -2236,8 +4004,9 @@ class CobolishCodegen extends Cobolish85Visitor {
   }
 
   procedureLabel(name) {
-    if (!this.paragraphs.has(name)) throw new Error(`[COBOLISH] Undefined procedure name ${name}`);
-    return `PARA_${name}`;
+    const key = this.currentProgram?.procedureNames.get(storageName(name)) || storageName(name);
+    if (!this.paragraphs.has(key)) throw new Error(`[COBOLISH] Undefined procedure name ${name}`);
+    return `PARA_${key}`;
   }
 
   // Entering an independent segment (50-99) from another segment restores its ALTERed GO TOs.
@@ -2251,9 +4020,28 @@ class CobolishCodegen extends Cobolish85Visitor {
     }
   }
 
+  emitDebugEntry(name) {
+    if (!this.debuggingMode) return;
+    const debugParagraph = this.debugHooks.get(name) || this.debugHooks.get('*');
+    if (!debugParagraph) return;
+    const displayName = this.procedureDisplayNames?.get(name) || name.replaceAll('_', '-');
+    this.emit(`PUSH_STR ${JSON.stringify(displayName)}`);
+    this.emitReceiverConversion(this.fieldOf('DEBUG_NAME'), false);
+    this.emit('STORE DEBUG_NAME');
+    this.emit('PUSH_STR "PERFORM LOOP"');
+    this.emitReceiverConversion(this.fieldOf('DEBUG_CONTENTS'), false);
+    this.emit('STORE DEBUG_CONTENTS');
+    this.emit('PUSH_INT 1');
+    this.emit(`STORE __COBOL_PEXIT_${debugParagraph}`);
+    this.emit(`CALL PARA_${debugParagraph} 0`);
+    this.emit('PUSH_INT 0');
+    this.emit(`STORE __COBOL_PEXIT_${debugParagraph}`);
+  }
+
   emitJumpTo(name) {
+    const key = this.currentProgram?.procedureNames.get(storageName(name)) || storageName(name);
     const label = this.procedureLabel(name);
-    this.emitSegmentEntry(name);
+    this.emitSegmentEntry(key);
     this.emit(`JMP ${label}`);
   }
 
@@ -2347,7 +4135,7 @@ class CobolishCodegen extends Cobolish85Visitor {
     const setTrue = /^TRUE$/i.test(text(source));
     if (setTrue && !set.UP() && !set.DOWN()) {
       for (const target of set.dataReference()) {
-        const condition = this.conditions.get(storageName(target.IDENTIFIER().getText()));
+        const condition = this.conditionForName(storageName(target.IDENTIFIER().getText()));
         if (!condition) throw new Error('[COBOLISH] SET ... TO TRUE requires a condition-name');
         this.emitSetConditionTrue(target, condition);
       }
@@ -2369,8 +4157,11 @@ class CobolishCodegen extends Cobolish85Visitor {
   }
 
   emitCall(ctx) {
-    const target = text(ctx.callTarget()).replace(/^['"]|['"]$/g, '').toUpperCase();
-    const parameters = (ctx.callUsingClause()?.callUsingItem() || []).map(item => item.callParameter());
+    const targetNode = ctx.callTarget();
+    const targetText = text(targetNode);
+    const target = targetText.replace(/^['"]|['"]$/g, '').toUpperCase();
+    const callItems = ctx.callUsingClause()?.callUsingItem() || [];
+    const parameters = callItems.map(item => item.callParameter());
     if (target === 'QUEUE-WRITE-SYNC' || target === 'QUEUE-WRITE-ASYNC') {
       if (parameters.length !== 2) throw new Error(`[COBOLISH] ${target} requires a queue symbol and message`);
       const queue = text(parameters[0]).replace(/^['"]|['"]$/g, '');
@@ -2382,8 +4173,7 @@ class CobolishCodegen extends Cobolish85Visitor {
       return;
     }
     if (!['DB-INSERT', 'DB-SELECT', 'DB-UPDATE', 'DB-DELETE'].includes(target)) {
-      this.emit(`CALL ${storageName(target)} 0`);
-      return;
+      return this.emitCobolProgramCall(ctx, target, targetNode, callItems);
     }
 
     const staticValue = (parameter, label) => {
@@ -2438,6 +4228,218 @@ class CobolishCodegen extends Cobolish85Visitor {
     this.emit(`DB_DELETE ${quoted(database)},${quoted(table)},${quoted(whereColumn)},${quoted(whereOperator)}`);
   }
 
+  emitProgramStateReset(program, sections = ['WORKING', 'LOCAL']) {
+    const resetFields = [...new Set(program.dataFields)]
+      .filter(name => {
+        const field = this.fieldOf(name);
+        return field && !field.isExternal && !field.isLinkage
+          && sections.includes(field.storageSection)
+          && field.kind !== 'group';
+      });
+    for (const name of resetFields) {
+      const field = this.fieldOf(name);
+      const count = (field.dimensions || []).reduce((total, size) => total * size, 1);
+      for (let index = 0; index < count; index += 1) {
+        const initial = this.initialValues.get(name);
+        if (initial && field.kind === 'string') {
+          this.emit(`PUSH_STR ${JSON.stringify(literalStringValue(initial, field.length).padEnd(field.length))}`);
+        } else if (initial) {
+          this.emitLiteral(initial);
+          this.emit(`DEC_QUANT ${field.scale}`);
+        } else if (field.kind === 'decimal') this.emit(`PUSH_DEC 0 ${field.scale}`);
+        else this.emit(`PUSH_STR ${JSON.stringify(' '.repeat(field.length))}`);
+        this.emit(`STORE ${field.dimensions?.length ? `${name}_${index}` : name}`);
+      }
+    }
+    this.emitGroupInitialValues([...new Set(program.dataFields)].filter(name => {
+      const field = this.fieldOf(name);
+      return field && !field.isExternal && !field.isLinkage && sections.includes(field.storageSection);
+    }));
+  }
+
+  emitGroupInitialValues(names) {
+    for (const name of names) {
+      const field = this.fieldOf(name);
+      if (field?.kind !== 'group' || !this.initialValues.has(name)) continue;
+      this.emit(`PUSH_STR ${JSON.stringify(literalStringValue(this.initialValues.get(name), field.length).padEnd(field.length))}`);
+      this.storeNamedReference(name);
+    }
+  }
+
+  emitProgramInvocation(program, callItems) {
+    this.emitProgramStateReset(program, program.initial ? ['WORKING', 'LOCAL'] : ['LOCAL']);
+    if (program.linkageNames.length !== callItems.length) {
+      throw new Error(`[COBOLISH] CALL ${program.sourceId} supplies ${callItems.length} arguments; expected ${program.linkageNames.length}`);
+    }
+    const byReferenceActuals = [];
+    let passingMode = 'REFERENCE';
+    for (let index = 0; index < program.linkageNames.length; index += 1) {
+      const linkageName = program.linkageNames[index];
+      const linkageKey = this.resolveProgramDataName(program, linkageName);
+      const formalSlots = this.dataStorageSlots(linkageKey);
+      const item = callItems[index];
+      const parameter = item.callParameter();
+      const identifier = parameter.IDENTIFIER?.();
+      const itemMode = text(item.callPassingMode?.()).toUpperCase();
+      if (itemMode) passingMode = itemMode;
+      const mode = passingMode;
+      if (!identifier) {
+        if (formalSlots.length !== 1) {
+          throw new Error(`[COBOLISH] CALL literal argument for ${linkageName} must match one elementary LINKAGE item`);
+        }
+        if (mode === 'REFERENCE') {
+          throw new Error('[COBOLISH] A literal cannot be passed BY REFERENCE');
+        }
+        this.emitLiteral(parameter.literal());
+        this.emitReceiverConversion(formalSlots[0].field, false);
+        continue;
+      }
+      const callerName = this.resolveProgramDataName(this.currentProgram, storageName(identifier.getText()));
+      if (!callerName) throw new Error(`[COBOLISH] Undeclared CALL argument ${identifier.getText()}`);
+      const actualSlots = this.dataStorageSlots(callerName);
+      if (actualSlots.length !== formalSlots.length) {
+        const actualField = this.fieldOf(callerName);
+        const actualLength = actualField ? this.fieldLength(actualField) : 0;
+        const formalLength = this.fieldLength(this.fieldOf(linkageKey));
+        if (mode === 'REFERENCE' && actualSlots.length === 1
+          && actualSlots[0].field.kind === 'string'
+          && formalSlots.every(slot => slot.field.kind === 'string')
+          && actualLength === formalLength) {
+          let offset = 0;
+          for (const slot of formalSlots) {
+            const length = this.fieldLength(slot.field);
+            this.emit(`PUSH_REF ${actualSlots[0].name}@${offset}:${length}`);
+            offset += length;
+          }
+          byReferenceActuals.push(callerName);
+          continue;
+        }
+        throw new Error(`[COBOLISH] CALL argument ${identifier.getText()} does not match LINKAGE layout ${linkageName}`);
+      }
+      if (mode === 'REFERENCE') {
+        for (let slot = 0; slot < actualSlots.length; slot += 1) {
+          if (!this.compatibleReferenceSlot(actualSlots[slot].field, formalSlots[slot].field)) {
+            throw new Error(`[COBOLISH] CALL argument ${identifier.getText()} has an incompatible BY REFERENCE layout for ${linkageName}`);
+          }
+          this.emit(`PUSH_REF ${actualSlots[slot].name}`);
+        }
+        byReferenceActuals.push(callerName);
+      } else {
+        for (let slot = 0; slot < actualSlots.length; slot += 1) {
+          this.emit(`LOAD ${actualSlots[slot].name}`);
+          this.emitReceiverConversion(formalSlots[slot].field, false);
+        }
+      }
+    }
+    this.emit(`CALL ${program.entryLabel} ${program.linkageFields.length}`);
+    for (const name of new Set(byReferenceActuals)) {
+      if (this.fieldOf(name)?.kind === 'group') this.rawGroupStates.delete(name);
+      this.invalidateRawGroups(name);
+    }
+  }
+
+  isProgramVisible(program) {
+    return !program.parent
+      || program.parent === this.currentProgram
+      || (program.common && program.parent === this.currentProgram?.parent);
+  }
+
+  emitCobolProgramCall(ctx, target, targetNode, callItems) {
+    const onException = asArray(ctx.callOnExceptionClause?.()?.sentence?.());
+    const onOverflow = asArray(ctx.callOverflowClause?.()?.sentence?.());
+    const notOnException = asArray(ctx.callNotOnExceptionClause?.()?.sentence?.());
+    const exceptionSentences = [...onException, ...onOverflow];
+    const knownProgram = this.programs.find(program =>
+      program.key === storageName(target) && this.isProgramVisible(program));
+    const dynamic = Boolean(targetNode.IDENTIFIER?.());
+    const success = this.nextHiddenField();
+    const end = this.nextLabel('CALL_END');
+    this.emit('PUSH_INT 0');
+    this.emit(`STORE ${success}`);
+
+    if (dynamic) {
+      const targetName = this.resolveProgramDataName(this.currentProgram, storageName(target));
+      if (!targetName) throw new Error(`[COBOLISH] Undeclared CALL target ${target}`);
+      const targetValue = this.nextHiddenField();
+      this.emitNamedReference(targetName);
+      this.emit('TRIM');
+      this.emit('UPPER');
+      this.emit(`STORE ${targetValue}`);
+      for (const program of this.programs.filter(item => this.isProgramVisible(item))) {
+        const next = this.nextLabel('CALL_NEXT');
+        this.emit(`LOAD ${targetValue}`);
+        this.emit(`PUSH_STR ${JSON.stringify(program.sourceId)}`);
+        this.emit('STREQ');
+        this.emit(`JZ ${next}`);
+        if (program.linkageNames.length === callItems.length) {
+          this.emitProgramInvocation(program, callItems);
+          this.emit('PUSH_INT 1');
+          this.emit(`STORE ${success}`);
+          this.emit(`JMP ${end}`);
+        } else {
+          this.emit(`JMP ${end}`);
+        }
+        this.emit(`${next}:`);
+      }
+    } else if (knownProgram) {
+      this.emitProgramInvocation(knownProgram, callItems);
+      this.emit('PUSH_INT 1');
+      this.emit(`STORE ${success}`);
+    } else if (!exceptionSentences.length && !notOnException.length) {
+      this.emit(`CALL PARA_${storageName(target)} 0`);
+      return;
+    }
+
+    if (exceptionSentences.length || notOnException.length) {
+      const failed = this.nextLabel('CALL_EXCEPTION');
+      this.emit(`LOAD ${success}`);
+      this.emit(`JZ ${failed}`);
+      for (const sentence of notOnException) this.visitSentenceNode(sentence);
+      this.emit(`JMP ${end}`);
+      this.emit(`${failed}:`);
+      for (const sentence of exceptionSentences) this.visitSentenceNode(sentence);
+      if (!exceptionSentences.length) this.emit('CALL PARA___COBOL_MISSING_PROGRAM 0');
+    } else if (dynamic) {
+      const missing = this.nextLabel('CALL_MISSING');
+      this.emit(`LOAD ${success}`);
+      this.emit(`JZ ${missing}`);
+      this.emit(`JMP ${end}`);
+      this.emit(`${missing}:`);
+      this.emit('CALL PARA___COBOL_MISSING_PROGRAM 0');
+    }
+    this.emit(`${end}:`);
+  }
+
+  emitCancel(ctx) {
+    const names = (ctx.STRING_LITERAL?.() || []).map(item => unquote(text(item)).toUpperCase());
+    for (const name of names) {
+      const program = this.programs.find(item => item.key === storageName(name));
+      if (program && !program.initial) this.emitProgramStateReset(program, ['WORKING']);
+    }
+    for (const identifier of ctx.IDENTIFIER?.() || []) {
+      const name = storageName(identifier.getText());
+      const targetName = this.resolveProgramDataName(this.currentProgram, name);
+      const targetField = targetName ? this.fieldOf(targetName) : null;
+      if (!targetField || targetField.kind !== 'string') {
+        throw new Error(`[COBOLISH] CANCEL identifier ${name} must name an alphanumeric program-name item`);
+      }
+      const targetValue = this.nextHiddenStringField(targetField.length);
+      this.emitNamedReference(targetName);
+      this.emit('TRIM');
+      this.emit('UPPER');
+      this.emit(`STORE ${targetValue}`);
+      for (const program of this.programs.filter(item => this.isProgramVisible(item) && !item.initial)) {
+        const next = this.nextLabel('CANCEL_NEXT');
+        this.emit(`LOAD ${targetValue}`);
+        this.emit(`PUSH_STR ${JSON.stringify(program.sourceId.toUpperCase())}`);
+        this.emit('STREQ');
+        this.emit(`JZ ${next}`);
+        this.emitProgramStateReset(program, ['WORKING']);
+        this.emit(`${next}:`);
+      }
+    }
+  }
+
   emitMove(ctx) {
     const source = ctx.moveSource();
     const literal = source.literal?.();
@@ -2463,6 +4465,9 @@ class CobolishCodegen extends Cobolish85Visitor {
     const sourceField = sourceReference
       ? this.fieldOf(this.resolveDataName(sourceReference))
       : null;
+    const sourceLiteral = source.literal?.();
+    const numericSource = sourceField?.kind === 'decimal'
+      || Boolean(sourceLiteral && /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/i.test(text(sourceLiteral)));
     const value = this.nextHiddenField();
     if (source.intrinsicFunction?.()) this.emitIntrinsicFunction(source.intrinsicFunction());
     else if (source.literal?.()) this.emitLiteral(source.literal());
@@ -2471,9 +4476,9 @@ class CobolishCodegen extends Cobolish85Visitor {
     for (const target of ctx.receivingList().dataReference()) {
       const name = this.resolveDataName(target);
       const field = this.fieldOf(name);
-      const constant = source.literal?.() && field?.kind === 'string'
+      const constant = source.literal?.() && field?.kind === 'string' && !field.redefinesBase
         ? literalStringValue(source.literal(), field.length) : null;
-      if (constant !== null && !target.expression().length) {
+      if (constant !== null && !target.expression().length && !this.isReferenceModified(target)) {
         const aligned = field.justified
           ? constant.padStart(field.length).slice(-field.length)
           : constant.padEnd(field.length).slice(0, field.length);
@@ -2481,7 +4486,14 @@ class CobolishCodegen extends Cobolish85Visitor {
         this.emit(`STORE ${name}`);
       } else {
         this.emit(`LOAD ${value}`);
-        if (field?.kind === 'string' && sourceField?.kind === 'decimal' && !sourceReference.COLON?.()) {
+        const targetModified = this.isReferenceModified(target);
+        if (field?.editedPicture && numericSource && !this.isReferenceModified(sourceReference) && !targetModified) {
+          this.emit(`DEC_EDIT ${JSON.stringify(field.editedPicture)} ${this.decimalPointComma ? 1 : 0} ${field.blankWhenZero ? 1 : 0}`);
+        } else if (sourceField?.editedPicture && field?.kind === 'decimal' && !targetModified) {
+          this.runtimeLibraries.add('math');
+          this.emit('CALL PROC_COBOL_RT_NUMVAL_C 1');
+        } else if ((field?.kind === 'string' || targetModified) && sourceField?.kind === 'decimal'
+          && !this.isReferenceModified(sourceReference)) {
           this.emit(`DEC_DISPLAY ${sourceField.precision} ${sourceField.scale}`);
         }
         this.storeReference(target);
@@ -2812,7 +4824,7 @@ class CobolishCodegen extends Cobolish85Visitor {
     const target = receiver.dataReference();
     const rounded = Boolean(receiver.ROUNDED());
     if (phrases.onError || phrases.notOnError) {
-      if (target.expression().length || target.COLON?.()) {
+      if (target.expression().length || this.isReferenceModified(target)) {
         throw new Error('[COBOLISH] Subscripted ON SIZE ERROR receiver is not yet implemented');
       }
       this.emitSizeGuardedStore(target.IDENTIFIER().getText(), rounded, phrases.onError, phrases.notOnError);
@@ -3115,8 +5127,13 @@ class CobolishCodegen extends Cobolish85Visitor {
   emitWhenCondition(ctx, subject) {
     const expressions = ctx.expression() || [];
     if (expressions.length === 2) {
-      this.emitExpression(expressions[0]);
-      this.emitExpression(expressions[1]);
+      const lengths = expressions.map(expression => this.alphanumericLength(expression));
+      const knownLengths = lengths.filter(length => length !== null);
+      const width = knownLengths.length ? Math.max(...knownLengths) : null;
+      for (const expression of expressions) {
+        this.emitExpression(expression, width);
+        if (width !== null) this.emitReceiverConversion({ kind: 'string', length: width }, false);
+      }
       this.emit(comparisonOpcode(ctx.comparator()));
       if (/^FALSE$/i.test(text(subject))) this.emit('NOT');
       return;
@@ -3147,11 +5164,29 @@ class CobolishCodegen extends Cobolish85Visitor {
       return;
     }
     // A bare value is compared against the EVALUATE subject.
-    this.emitEvaluateSubject(subject);
-    if (ctx.literal()) this.emitLiteral(ctx.literal());
-    else if (ctx.booleanLiteral()) this.emit(`PUSH_INT ${/^TRUE$/i.test(text(ctx.booleanLiteral())) ? 1 : 0}`);
-    else if (ctx.IDENTIFIER()) this.emit(`LOAD ${storageName(ctx.IDENTIFIER().getText())}`);
-    else this.emitExpression(range.expression(0));
+    const subjectLength = subject.expression() ? this.alphanumericLength(subject.expression()) : null;
+    const literalLength = ctx.literal()?.stringLiteral()
+      ? unquote(text(ctx.literal())).length : null;
+    const identifierName = ctx.IDENTIFIER()
+      ? this.resolveProgramDataName(this.currentProgram, storageName(ctx.IDENTIFIER().getText()))
+        || storageName(ctx.IDENTIFIER().getText())
+      : null;
+    const identifierField = identifierName ? this.fieldOf(identifierName) : null;
+    const valueLength = literalLength ?? (identifierField?.kind === 'string' ? identifierField.length : null);
+    const knownLengths = [subjectLength, valueLength].filter(length => length !== null);
+    const width = knownLengths.length ? Math.max(...knownLengths) : null;
+    if (subject.expression()) {
+      this.emitExpression(subject.expression(), width);
+      if (width !== null) this.emitReceiverConversion({ kind: 'string', length: width }, false);
+    } else this.emitEvaluateSubject(subject);
+    if (ctx.literal()) {
+      this.emitLiteral(ctx.literal(), width);
+      if (width !== null) this.emitReceiverConversion({ kind: 'string', length: width }, false);
+    } else if (ctx.booleanLiteral()) this.emit(`PUSH_INT ${/^TRUE$/i.test(text(ctx.booleanLiteral())) ? 1 : 0}`);
+    else if (identifierName) {
+      this.emitNamedReference(identifierName);
+      if (width !== null) this.emitReceiverConversion({ kind: 'string', length: width }, false);
+    } else this.emitExpression(range.expression(0));
     this.emit('EQ');
     if (range?.NOT()) this.emit('NOT');
   }
@@ -3166,7 +5201,10 @@ class CobolishCodegen extends Cobolish85Visitor {
     const varying = sources.find(source => source.VARYING());
     const testAfter = Boolean(sources.find(source => source.performTest?.())?.performTest().AFTER());
     if (afters.length && testAfter) throw new Error('[COBOLISH] PERFORM WITH TEST AFTER VARYING ... AFTER is recognized but not yet implemented');
-    const variable = varying ? storageName(varying.IDENTIFIER().getText()) : null;
+    const variable = varying
+      ? (this.resolveProgramDataName(this.currentProgram, storageName(varying.IDENTIFIER().getText()))
+        || storageName(varying.IDENTIFIER().getText()))
+      : null;
     const count = times ? this.nextHiddenField() : null;
     if (afters.length) return this.emitPerformVaryingAfter(ctx, [varying, ...afters]);
     if (varying) {
@@ -3219,10 +5257,16 @@ class CobolishCodegen extends Cobolish85Visitor {
       for (const sentence of inline.sentence()) this.visitSentenceNode(sentence);
       return;
     }
-    const names = [...this.paragraphs.keys()];
     const first = storageName(text(ctx.performTarget()));
     const range = (ctx.performClause() || []).find(clause => clause.THRU() || clause.THROUGH());
     const endTarget = range ? storageName(text(range.paragraphName())) : first;
+    this.emitProcedureRange(first, endTarget);
+  }
+
+  emitProcedureRange(first, endTarget = first) {
+    first = this.currentProgram?.procedureNames.get(storageName(first)) || storageName(first);
+    endTarget = this.currentProgram?.procedureNames.get(storageName(endTarget)) || storageName(endTarget);
+    const names = [...this.paragraphs.keys()];
     const last = this.sections.get(endTarget) || endTarget;
     const from = names.indexOf(first);
     const to = names.indexOf(last);
@@ -3284,7 +5328,7 @@ class CobolishCodegen extends Cobolish85Visitor {
         const reference = item.dataReference();
         this.emitReference(reference);
         const field = this.fieldOf(this.resolveDataName(reference));
-        if (field.kind === 'decimal' && !reference.COLON?.()) {
+        if (field.kind === 'decimal' && !this.isReferenceModified(reference)) {
           this.emit(`DEC_DISPLAY ${field.precision} ${field.scale}`);
         }
       }
@@ -3361,7 +5405,7 @@ class CobolishCodegen extends Cobolish85Visitor {
     const target = ctx.dataReference();
     const name = this.resolveDataName(target);
     const field = this.fieldOf(name);
-    if (!field || field.kind !== 'string' || target.expression().length || target.COLON?.()) {
+    if (!field || field.kind !== 'string' || target.expression().length || this.isReferenceModified(target)) {
       throw new Error('[COBOLISH] INSPECT currently requires an unsubscripted alphanumeric item');
     }
     const source = this.nextHiddenField();
@@ -3697,6 +5741,8 @@ class CobolishCodegen extends Cobolish85Visitor {
   }
 
   build(tree) {
+    this.collectPrograms(tree);
+    this.collectSpecialNames(tree);
     this.collectDataItems(tree);
     this.collectFileMetadata(tree);
     this.collectDeclaratives(tree);
@@ -3704,48 +5750,75 @@ class CobolishCodegen extends Cobolish85Visitor {
 
     const paragraphs = [];
     const topLevel = [];
-    const walk = node => {
-      if (!node) return;
-      const kind = node.constructor?.name;
-      if (kind === 'DeclarativesContext') return;
-      if (kind === 'ParagraphContext') {
-        if (this.declarativeParagraphs.has(storageName(text(node.paragraphName())))) return;
-        paragraphs.push(node);
-        return;
-      }
-      if (kind === 'ProcedureSectionContext') {
-        const name = storageName(text(node.IDENTIFIER()));
-        if (this.declarativeSections.has(name)) return;
-        const segment = node.segmentNumber() ? Number(text(node.segmentNumber())) : 0;
-        paragraphs.push(node);
-        this.segments.set(name, segment);
-        for (const paragraph of node.paragraph()) {
-          paragraphs.push(paragraph);
-          this.segments.set(storageName(text(paragraph.paragraphName())), segment);
+    for (const program of this.programs) {
+      this.currentProgram = program;
+      const division = program.procedureDivision;
+      topLevel.push({ node: division, program });
+      const walk = node => {
+        if (!node) return;
+        const kind = node.constructor?.name;
+        if (kind === 'DeclarativesContext') return;
+        if (kind === 'ParagraphContext') {
+          const sourceName = storageName(text(node.paragraphName()));
+          if (this.declarativeParagraphs.has(sourceName)) return;
+          const name = `${program.prefix}${sourceName}`;
+          program.procedureNames.set(sourceName, name);
+          program.paragraphs.push(name);
+          paragraphs.push({ node, program, name });
+          return;
         }
-        const last = node.paragraph().at(-1);
-        this.sections.set(name, last ? storageName(text(last.paragraphName())) : name);
-        return;
-      }
-      if (kind === 'ProcedureDivisionContext') {
-        topLevel.push(node);
-        for (let index = 0; index < node.getChildCount(); index += 1) {
+        if (kind === 'ProcedureSectionContext') {
+          const sourceName = storageName(text(node.IDENTIFIER()));
+          const name = `${program.prefix}${sourceName}`;
+          if (this.declarativeSections.has(sourceName)) return;
+          const segment = node.segmentNumber() ? Number(text(node.segmentNumber())) : 0;
+          paragraphs.push({ node, program, name });
+          program.procedureNames.set(sourceName, name);
+          program.paragraphs.push(name);
+          this.segments.set(name, segment);
+          for (const paragraph of node.paragraph()) {
+            const paragraphSourceName = storageName(text(paragraph.paragraphName()));
+            const paragraphName = `${program.prefix}${paragraphSourceName}`;
+            program.procedureNames.set(paragraphSourceName, paragraphName);
+            program.paragraphs.push(paragraphName);
+            paragraphs.push({ node: paragraph, program, name: paragraphName });
+            this.segments.set(paragraphName, segment);
+          }
+          const last = node.paragraph().at(-1);
+          this.sections.set(name, last ? `${program.prefix}${storageName(text(last.paragraphName()))}` : name);
+          return;
+        }
+        for (let index = 0; index < (node.getChildCount?.() || 0); index += 1) {
           const child = node.getChild(index);
           if (child.constructor?.name !== 'SentenceContext') walk(child);
         }
-        return;
-      }
-      for (let index = 0; index < (node.getChildCount?.() || 0); index += 1) walk(node.getChild(index));
-    };
-    walk(tree);
-    const procedureName = node => storageName(text(node.paragraphName ? node.paragraphName() : node.IDENTIFIER()));
+      };
+      walk(division);
+    }
+    this.currentProgram = null;
+    const procedureName = item => item.name
+      || storageName(text(item.paragraphName ? item.paragraphName() : item.IDENTIFIER()));
     const regularParagraphs = paragraphs;
     const allParagraphs = [...regularParagraphs, ...this.declarativeProcedureNodes];
     for (const paragraph of allParagraphs) {
-      const name = procedureName(paragraph);
+      const name = paragraph.name || procedureName(paragraph);
       if (this.paragraphs.has(name)) throw new Error(`[COBOLISH] Duplicate procedure name ${name}`);
-      this.paragraphs.set(name, paragraph);
+      this.paragraphs.set(name, paragraph.node || paragraph);
+      this.procedureDisplayNames.set(name, text((paragraph.node || paragraph).paragraphName
+        ? (paragraph.node || paragraph).paragraphName() : (paragraph.node || paragraph).IDENTIFIER()));
       this.controlFields.push(`__COBOL_PEXIT_${name}`);
+    }
+    for (const program of this.programs) {
+      program.entryLabel = `COBOL_PROGRAM_${program.key}`;
+      const using = program.procedureDivision.procedureUsingClause?.()?.procedureParameterList?.()?.procedureParameter?.() || [];
+      program.linkageNames = using.map(parameter => storageName(text(parameter)));
+      for (const name of program.linkageNames) {
+        const key = this.resolveProgramDataName(program, name);
+        if (!key || !this.fieldOf(key)?.isLinkage) {
+          throw new Error(`[COBOLISH] PROCEDURE DIVISION USING for ${program.sourceId} names undeclared LINKAGE data ${name}`);
+        }
+        program.linkageFields.push(...this.dataStorageSlots(key).map(slot => slot.name));
+      }
     }
     this.collectAlters(tree);
 
@@ -3755,20 +5828,40 @@ class CobolishCodegen extends Cobolish85Visitor {
     // Procedures are laid out in source order so control falls through and GO TO is a jump;
     // PERFORM CALLs the first procedure and RETs at the armed end of its range.
     const procedures = {};
-    for (const paragraph of regularParagraphs) {
-      const name = procedureName(paragraph);
-      const label = `PARA_${name}`;
-      const next = this.nextLabel('PARA_FALL');
-      this.currentParagraph = name;
-      this.currentSegment = this.segments.get(name) ?? 0;
-      this.emit(`${label}:`);
-      this.emitSentences(paragraph);
-      this.emit(`LOAD __COBOL_PEXIT_${name}`);
-      this.emit(`JZ ${next}`);
-      this.emit('RET');
-      this.emit(`${next}:`);
-      procedures[label] = { name: label, params: [], locals: [] };
+    for (const program of this.programs) {
+      this.currentProgram = program;
+      const programParagraphs = regularParagraphs.filter(paragraph => paragraph.program === program);
+      for (const paragraph of programParagraphs) {
+        const name = procedureName(paragraph);
+        const label = `PARA_${name}`;
+        const next = this.nextLabel('PARA_FALL');
+        this.currentParagraph = name;
+        this.currentSegment = this.segments.get(name) ?? 0;
+        this.emit(`${label}:`);
+        this.emitDebugEntry(name);
+        this.emitSentences(paragraph.node);
+        this.emit(`LOAD __COBOL_PEXIT_${name}`);
+        this.emit(`JZ ${next}`);
+        this.emit('RET');
+        this.emit(`${next}:`);
+        procedures[label] = { name: label, params: [], locals: [] };
+      }
+      if (programParagraphs.length) this.emit(program.root ? 'HALT' : 'RET');
     }
+    for (const program of this.programs) {
+      this.currentProgram = program;
+      this.currentParagraph = null;
+      this.emit(`${program.entryLabel}:`);
+      this.emitSentences(program.procedureDivision);
+      if (program.paragraphs.length) this.emit(`CALL PARA_${program.paragraphs[0]} 0`);
+      this.emit('RET');
+      procedures[program.entryLabel] = {
+        name: program.entryLabel,
+        params: program.linkageFields,
+        locals: []
+      };
+    }
+    this.currentProgram = null;
     if (this.declarativeProcedureNodes.length) {
       const afterDeclaratives = this.nextLabel('AFTER_DECLARATIVES');
       this.emit(`JMP ${afterDeclaratives}`);
@@ -3798,7 +5891,7 @@ class CobolishCodegen extends Cobolish85Visitor {
       this.emit(`STORE ${name}`);
     }
     for (const [name, field] of [...this.fields]) {
-      if (field.kind === 'group') continue;
+      if (field.kind === 'group' || field.redefinesBase) continue;
       const count = (field.dimensions || []).reduce((a, b) => a * b, 1);
       for (let index = 0; index < count; index += 1) {
         const initial = this.initialValues.get(name);
@@ -3814,13 +5907,21 @@ class CobolishCodegen extends Cobolish85Visitor {
         this.emit(`STORE ${field.dimensions?.length ? `${name}_${index}` : name}`);
       }
     }
+    this.emitGroupInitialValues([...this.fields.keys()]);
     for (const file of this.files.values()) {
       this.emit('PUSH_INT 0');
       this.emit(`STORE ${file.handleName}`);
     }
-    for (const division of topLevel) this.emitSentences(division);
-    if (regularParagraphs.length) this.emit(`JMP PARA_${procedureName(regularParagraphs[0])}`);
+    const rootDivision = topLevel.find(item => item.program.root);
+    if (rootDivision) {
+      this.currentProgram = rootDivision.program;
+      this.emitSentences(rootDivision.node);
+    }
+    const rootProgram = this.programs[0];
+    this.currentProgram = rootProgram;
+    if (rootProgram.paragraphs.length) this.emit(`JMP PARA_${rootProgram.paragraphs[0]}`);
     else this.emit('HALT');
+    this.currentProgram = null;
 
     return {
       pcodeText: `${this.lines.join('\n')}\n`,

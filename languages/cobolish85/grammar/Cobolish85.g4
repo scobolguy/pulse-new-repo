@@ -26,11 +26,15 @@ preProcedureContent
   ;
 
 identificationDivision
-  : IDENTIFICATION DIVISION DOT programIdClause? cobolishMetaClause* 
+  : IDENTIFICATION DIVISION DOT programIdClause? (dateCompiledEntry | cobolishMetaClause)*
   ;
 
 programIdClause
   : PROGRAM_ID DOT programName programAttributes? DOT?
+  ;
+
+dateCompiledEntry
+  : DATE_COMPILED DOT?
   ;
 
 programAttributes
@@ -130,6 +134,11 @@ ioControlParagraph
 
 ioControlEntry
   : SAME (RECORD | SORT | SORT_MERGE)? AREA? FOR? IDENTIFIER+
+  | MULTIPLE FILE TAPE CONTAINS? multipleFileTapeItem+
+  ;
+
+multipleFileTapeItem
+  : IDENTIFIER POSITION cobolNumber
   ;
 
 fileControlClause
@@ -184,7 +193,7 @@ fileStatusClause
   ;
 
 dataDivision
-  : DATA DIVISION DOT fileSection? workingStorageSection? mappingSection? linkageSection? localStorageSection? reportSection? screenSection?
+  : DATA DIVISION DOT fileSection? workingStorageSection? communicationSection? mappingSection? linkageSection? localStorageSection? reportSection? screenSection?
   ;
 
 fileSection
@@ -243,6 +252,10 @@ reportSection
   : REPORT SECTION DOT reportDescriptionEntry*
   ;
 
+communicationSection
+  : COMMUNICATION SECTION DOT communicationDescriptionEntry*
+  ;
+
 screenSection
   : SCREEN SECTION DOT screenDescriptionEntry*
   ;
@@ -253,7 +266,48 @@ fileDescriptionEntry
   ;
 
 reportDescriptionEntry
-  : fileLevelNumber IDENTIFIER reportClause* DOT?
+  : RD IDENTIFIER reportDescriptionClause* DOT reportGroupDescriptionEntry*
+  ;
+
+reportDescriptionClause
+  : (CONTROL IS? | CONTROLS ARE?) (FINAL | IDENTIFIER) (COMMA? (FINAL | IDENTIFIER))*
+  | PAGE (LIMIT | LIMITS) (IS | ARE)? cobolNumber LINES?
+      (HEADING cobolNumber)? (FIRST DETAIL cobolNumber)? (LAST DETAIL cobolNumber)?
+      (FOOTING cobolNumber)?
+  ;
+
+reportGroupDescriptionEntry
+  : fileLevelNumber IDENTIFIER? reportGroupClause* DOT?
+  ;
+
+reportGroupClause
+  : TYPE IS? (REPORT (HEADING | FOOTING) | PAGE (HEADING | FOOTING) | CONTROL (HEADING | FOOTING) (FINAL | IDENTIFIER)?
+      | DETAIL | IDENTIFIER (FINAL | IDENTIFIER)?)
+  | LINE IDENTIFIER? IS? (PLUS_WORD? cobolNumber | NEXT PAGE)
+  | NEXT GROUP IS? (PLUS_WORD? cobolNumber | NEXT PAGE)
+  | SUM dataReference (COMMA? dataReference)* (UPON IDENTIFIER (COMMA? IDENTIFIER)*)? (RESET ON? (FINAL | IDENTIFIER))?
+  | GROUP INDICATE?
+  | (USAGE IS?)? DISPLAY
+  | JUSTIFIED RIGHT?
+  | BLANK WHEN? ZERO
+  | COLUMN (IDENTIFIER IS?)? cobolNumber
+  | pictureClause
+  | VALUE IS? literal
+  | SOURCE IS? dataReference
+  ;
+
+communicationDescriptionEntry
+  : IDENTIFIER IDENTIFIER communicationClause* DOT dataDescriptionEntry*
+  ;
+
+communicationClause
+  : FOR (INPUT | OUTPUT | INITIAL INPUT)
+  | SYMBOLIC (QUEUE | SOURCE | DESTINATION | IDENTIFIER) IS? IDENTIFIER
+  | MESSAGE IDENTIFIER IS? IDENTIFIER
+  | TEXT IDENTIFIER IS? IDENTIFIER
+  | (END | STATUS | ERROR | DESTINATION | MESSAGE) KEY IS? IDENTIFIER
+  | (MESSAGE | DESTINATION) COUNT IS? IDENTIFIER
+  | DESTINATION TABLE OCCURS cobolNumber TIMES? (INDEXED BY identifierList)?
   ;
 
 screenDescriptionEntry
@@ -339,6 +393,7 @@ fileDescClause
   | recordVaryingClause
   | linageClause
   | valueOfClause
+  | reportFileClause
   | codeSetClause
   | externalClause
   | globalClause
@@ -358,7 +413,11 @@ linageValue
   ;
 
 valueOfClause
-  : VALUE OF (IDENTIFIER IS? (literal | IDENTIFIER))+
+  : VALUE OF ((IDENTIFICATION | IDENTIFIER) IS? (literal | IDENTIFIER))+
+  ;
+
+reportFileClause
+  : REPORT IS? IDENTIFIER
   ;
 
 codeSetClause
@@ -419,6 +478,7 @@ declarativeSection
 useStatement
   : USE GLOBAL? AFTER STANDARD? (EXCEPTION | ERROR) PROCEDURE ON? (identifierList | INPUT | OUTPUT | I_O | EXTEND)
   | USE FOR? DEBUGGING ON? debugTarget+
+  | USE GLOBAL? BEFORE REPORTING IDENTIFIER
   ;
 
 debugTarget
@@ -458,6 +518,9 @@ paragraph
 
 paragraphName
   : IDENTIFIER
+  | NUMBER
+  | LEVEL_NUMBER
+  | LEVEL_77
   | SECTION
   | IDENTIFIER IDENTIFIER
   ;
@@ -495,6 +558,13 @@ statement
   | stopRunStatement
   | interopStatement
   | sendServiceStatement
+  | enableStatement
+  | disableStatement
+  | sendStatement
+  | receiveStatement
+  | purgeStatement
+  | reportStatement
+  | suppressStatement
   | copyStatement
   | execStatement
   | continueStatement
@@ -675,6 +745,39 @@ displayNoAdvancingClause
 
 acceptStatement
   : ACCEPT receivingList (FROM IDENTIFIER)?
+  | ACCEPT IDENTIFIER MESSAGE COUNT
+  ;
+
+enableStatement
+  : ENABLE (INPUT | OUTPUT) TERMINAL? IDENTIFIER WITH KEY IDENTIFIER
+  ;
+
+disableStatement
+  : DISABLE (INPUT | OUTPUT) TERMINAL? IDENTIFIER WITH KEY IDENTIFIER
+  ;
+
+sendStatement
+  : SEND IDENTIFIER (FROM dataReference)? (WITH? (EMI | ESI | EGI | CINT | dataReference))?
+      (REPLACING LINE)?
+  ;
+
+receiveStatement
+  : RECEIVE IDENTIFIER (MESSAGE | SEGMENT) (INTO dataReference)?
+      (NO DATA sentence* | WITH DATA sentence*)* END_RECEIVE?
+  ;
+
+purgeStatement
+  : PURGE IDENTIFIER
+  ;
+
+suppressStatement
+  : SUPPRESS PRINTING?
+  ;
+
+reportStatement
+  : INITIATE IDENTIFIER+
+  | GENERATE IDENTIFIER
+  | TERMINATE IDENTIFIER+
   ;
 
 openStatement
@@ -999,7 +1102,8 @@ releaseStatement
   ;
 
 returnStatement
-  : RETURN IDENTIFIER RECORD? (INTO dataReference)? AT? END sentence* (NOT AT? END sentence*)? END_RETURN?
+  : RETURN IDENTIFIER RECORD? (INTO dataReference)?
+      (AT? END sentence*)? (NOT AT? END sentence*)? END_RETURN?
   ;
 
 condition
@@ -1079,6 +1183,7 @@ intrinsicFunction
 
 functionName
   : IDENTIFIER
+  | SUM
   | RANDOM
   ;
 
@@ -1278,7 +1383,9 @@ SD: 'SD';
 LINKAGE: 'LINKAGE';
 LOCAL_STORAGE: 'LOCAL-STORAGE';
 REPORT: 'REPORT';
+RD: 'RD';
 SCREEN: 'SCREEN';
+COMMUNICATION: 'COMMUNICATION';
 SPECIAL_NAMES: 'SPECIAL-NAMES';
 SOURCE_COMPUTER: 'SOURCE-COMPUTER';
 OBJECT_COMPUTER: 'OBJECT-COMPUTER';
@@ -1432,6 +1539,44 @@ PAGE: 'PAGE';
 HEADING: 'HEADING';
 FOOTING: 'FOOTING';
 CONTROL: 'CONTROL';
+CONTROLS: 'CONTROLS';
+FINAL: 'FINAL';
+SUM: 'SUM';
+GROUP: 'GROUP';
+INDICATE: 'INDICATE';
+RESET: 'RESET';
+SUPPRESS: 'SUPPRESS';
+PRINTING: 'PRINTING';
+REPORTING: 'REPORTING';
+INITIATE: 'INITIATE';
+GENERATE: 'GENERATE';
+TERMINATE: 'TERMINATE';
+LIMIT: 'LIMIT';
+LIMITS: 'LIMITS';
+DETAIL: 'DETAIL';
+LAST: 'LAST';
+MESSAGE: 'MESSAGE';
+DESTINATION: 'DESTINATION';
+QUEUE: 'QUEUE';
+TABLE: 'TABLE';
+TEXT: 'TEXT';
+SOURCE: 'SOURCE';
+ENABLE: 'ENABLE';
+DISABLE: 'DISABLE';
+TERMINAL: 'TERMINAL';
+RECEIVE: 'RECEIVE';
+SEGMENT: 'SEGMENT';
+END_RECEIVE: 'END-RECEIVE';
+PURGE: 'PURGE';
+EMI: 'EMI';
+ESI: 'ESI';
+EGI: 'EGI';
+CINT: 'CINT';
+POSITION: 'POSITION';
+MULTIPLE: 'MULTIPLE';
+TAPE: 'TAPE';
+PLUS_WORD: 'PLUS';
+DATE_COMPILED: 'DATE-COMPILED';
 TRUE: 'TRUE';
 FALSE: 'FALSE';
 SPACE: 'SPACE';

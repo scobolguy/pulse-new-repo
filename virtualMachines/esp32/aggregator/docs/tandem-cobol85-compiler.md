@@ -22,8 +22,11 @@ descending `SEARCH ALL`, reference modification, `STRING` and multi-delimiter
 `PERFORM`/`THRU` ranges, plus indexed, sequential, and relative-file `OPEN`,
 keyed or sequential `READ`,
 `WRITE`, `REWRITE`, `START`, `DELETE`, and `CLOSE`. Read access to data items
-that `REDEFINES` an alphanumeric item uses the shared byte layout; writes through
-a redefining view remain unsupported. Indexed files use `SELECT ... ASSIGN TO
+that `REDEFINES` another item uses the shared byte layout, and writes through a
+redefining view (including subscripted redefinitions and numeric overlays)
+splice its DISPLAY bytes back into the redefined item. Byte-layout writes
+reject signed numeric items whose sign is embedded rather than `SIGN
+SEPARATE`. Indexed files use `SELECT ... ASSIGN TO
 "root/path"` with a primary `RECORD KEY`, an optional `FILE STATUS`, and an `FD`
 record. Sequential files receive generated, zero-padded record keys; relative
 files use their numeric `RELATIVE KEY` as the ordered record key. Both
@@ -37,21 +40,43 @@ ADVANCING, and CLOSE WITH LOCK. File-specific `USE AFTER STANDARD ERROR
 PROCEDURE` handlers run after the file status is updated and are excluded from
 ordinary procedure fall-through. These behaviors are covered by the SQ/RL/IX
 CCVS cases; declarative dispatch is not yet a complete implementation of every
-COBOL-85 USE form. `USE FOR DEBUGGING` remains explicitly unsupported. Printer
+COBOL-85 USE form. The DB catalog also checks `USE FOR DEBUGGING` on procedures
+with debugging mode enabled and disabled. Printer
 advancement is represented by sequential control records; physical printer
-rendering is outside this runtime.
+rendering is outside this runtime. The tested Report Writer subset supports
+`FD REPORT`, `RD` with `PAGE LIMIT`/`HEADING`/`FIRST DETAIL`/`LAST DETAIL`/
+`FOOTING` and `CONTROL[S]` (including `FINAL`), report groups of every `TYPE`
+(RH, PH, CH, DE, CF, PF, RF, long or abbreviated), multi-line groups with
+absolute or `PLUS` lines and `LINE NEXT PAGE`, `NEXT GROUP`, `SOURCE`/`VALUE`,
+edited pictures, `GROUP INDICATE`, `JUSTIFIED`, `BLANK WHEN ZERO`, `INITIATE`,
+`GENERATE` of a detail group or of the report name (summary reporting),
+`TERMINATE`, control-break processing (footings see the previous control
+values), `SUM` counters with `UPON`, `RESET ON` and rolling forward, and
+`USE BEFORE REPORTING` declaratives with `SUPPRESS PRINTING`. `SUM` is accepted
+only in control footings, and crossfooting within one group is rejected.
+`LINE-COUNTER` and `PAGE-COUNTER` are shared by all reports in a run unit, and
+blank lines between printed lines are represented by the counters rather than
+by empty records.
 `COPY` and `REPLACE` are expanded by
 `src/cobol-text-preprocessor.mjs` before parsing (copybook text is passed as
 `options.copybooks`); `EXEC` blocks still produce an explicit compilation
-error. Group `VALUE` initialization and reference modification of numeric
-storage also remain unsupported.
+error. Group `VALUE` initialization (nonnumeric literals and figurative
+constants on non-table groups) is restored at program start and by `INITIAL`/
+`CANCEL`. Reference modification can read and write numeric, group and
+redefined items, including the subscript-then-modifier form `X(i)(s:l)`;
+numeric items are modified through their DISPLAY representation.
 
-The grammar accepts the manual's full statement and clause formats. Constructs
-that parse but have no code generation yet are rejected with
+The grammar covers the forms exercised by the regression suites, not every
+manual or optional ANSI COBOL-85 module format. The tested Report Writer and
+obsolete-feature forms have executable coverage or syntax-only classification;
+Communications runtime behavior and additional optional-module forms remain
+outside the configured environment. Constructs that parse but have no code
+generation yet should be rejected with
 `[COBOLISH] <feature> is recognized but not yet implemented` by
 `src/unsupported-features.mjs` or by code generation itself. They are never
 silently dropped. A period ends the sentence and closes every open statement
-scope.
+scope. The coverage suites also detect constructs that are accepted but produce
+incorrect behavior; parser acceptance alone does not establish implementation.
 
 ## Manual-based regression tests
 
@@ -74,7 +99,8 @@ space-separated subscripts, configuration-paragraph periods, `WITH DEBUGGING
 MODE`, section headers and section ranges, and normal whitespace between
 `END PROGRAM`. `SEGMENT-LIMIT` is checked for integer values 1 through 49 and
 otherwise ignored, as specified by manual 6-7. Section segment numbers must be
-integers 0 through 99. Segment-specific `ALTER` state remains unimplemented.
+integers 0 through 99. The SG catalog checks independent-segment `ALTER` reset
+and fixed-segment state retention.
 Existing compact comma-separated subscripts remain accepted for compatibility.
 
 To measure parser progress separately from code generation and execution:
@@ -84,11 +110,13 @@ npm --prefix languages\cobolish85 run test:syntax
 ```
 
 This runs the 13 syntax-foundation regressions and a parse-only assertion for
-each of the 113 CCVS-inspired programs. All 126 currently pass; a syntax pass is
-not an execution pass. Each parse-only case is preprocessed with its copybooks.
-The parser-only cases are opt-in and are not duplicated in the default test
-run or default report; pass `tests/ccvs-syntax.mjs` explicitly to the report
-command to report them.
+each of the 139 CCVS-inspired scenarios: **152 checks, 152 pass, 0 fail**.
+A syntax pass is not an execution pass. Each case is
+preprocessed with its copybooks. The default run includes only the nine
+external-environment syntax cases; parser checks for the 130 executable
+scenarios are opt-in, not duplicated in the default run or report. Pass
+`tests/ccvs-syntax.mjs` explicitly to the report command to report all syntax
+checks.
 
 The fixtures use standard COBOL source forms: arithmetic statements may span
 lines without a continuation indicator in free-form input; elementary table
@@ -101,20 +129,147 @@ The fixed-format CCVS adapter remains responsible for card-column continuation.
 `tests/ccvs-coverage-suite.mjs` runs self-checking programs modelled on the
 NIST CCVS85 modules NC (nucleus), SQ (sequential I-O), RL (relative I-O),
 IX (indexed I-O), ST (SORT/MERGE), IC (inter-program communication), SM (COPY
-and REPLACE), IF (intrinsic functions), SG (segmentation) and DB (debugging).
-The cases live in `tests/ccvs/`; each one lists the CCVS programs it was
-modelled on and displays a `PASS` line for every check, so its expected output
-is exactly those lines in order. Expected values are derived from the COBOL 85
-rules, not from another compiler.
+and REPLACE), IF (intrinsic functions), SG (segmentation), DB (debugging),
+RW (Report Writer), and OB (obsolete features). Communications (CM), tape
+metadata/positioning, and operator STOP have separately labelled syntax-only
+checks in `tests/ccvs-external-syntax.test.mjs`.
+`tests/ccvs/catalog.mjs` is the shared catalog used by both execution and syntax
+suites. Its integrity check requires all 13 corpus language modules, unique
+case IDs, source references, and an explicit execution/syntax classification.
+Executable cases display a `PASS` line for every check; their expected output
+is exactly those lines in order. Expected values are independently authored
+from COBOL rules, not copied from another compiler's actual output.
 
 The suite is part of `npm test` on purpose: cases that need features the
 compiler does not implement yet fail rather than being skipped. Run it alone
-with `npm --prefix languages\cobolish85 run test:ccvs`. File cases use an
-in-memory file system and assign files to `"data/<name>"`. SM cases pass
+with `npm --prefix languages\cobolish85 run test:ccvs`; this also includes the
+external-environment syntax checks. File cases use the real local filesystem
+service with an isolated temporary data root and assign files to
+`"data/<name>"`. SM cases pass
 library text to the compiler as `options.copybooks` (`{ NAME: text }`, or
 `{ "LIBRARY/NAME": text }` for `COPY ... OF library`). DB cases are written in
 reference format and converted with the fixed-format adapter, with debugging
 lines enabled when `WITH DEBUGGING MODE` is present.
+
+### Expanded module inventory and baseline
+
+The pinned original corpus has the following main-program inventory. Support
+units, copybooks, data, and the EXEC harness are not additional language
+modules. The RW/CM/OB scenarios cite all 20 main-program IDs in those formerly
+omitted modules; this is a source cross-reference, **not** a claim that those
+20 original programs have been executed or certified. CM and RW are optional
+ANSI modules; their inclusion here does not imply that every facility appears
+in the HP dialect manual.
+
+| Module | Original main programs | Guided execution pass / fail | Guided syntax-only pass / fail |
+| --- | ---: | ---: | ---: |
+| NC | 95 | 42 / 0 | - |
+| SQ | 84 | 15 / 0 | - |
+| RL | 26 | 5 / 0 | - |
+| IX | 29 | 9 / 0 | - |
+| ST | 25 | 8 / 0 | - |
+| IC | 25 | 13 / 0 | - |
+| SM | 13 | 7 / 0 | - |
+| IF | 45 | 11 / 0 | - |
+| SG | 13 | 3 / 0 | - |
+| DB | 15 | 5 / 0 | - |
+| RW | 6 | 9 / 0 | - |
+| CM | 9 | - | 6 / 0 |
+| OB | 5 | 5 / 0 | 3 / 0 |
+| **Total** | **390** | **132 / 0** | **9 / 0** |
+
+There are **141 guided scenarios: 132 execution and nine syntax-only**.
+The full default run is **331 tests: 331 pass, 0 fail, none skipped**. This
+adds two Report Writer scenarios, nine data-layout tests
+(`tests/data-layout.test.mjs`) and five Report Writer compile tests
+(`tests/report-writer.test.mjs`) to the earlier 315. The expanded
+suite includes executable Report Writer page/counter/output checks and the
+previously failing IC, OB, and ST cases. It does not certify every original
+CCVS85 program or every optional-module feature.
+
+Current coverage limits:
+
+| Area | Current validation | Remaining limitation |
+| --- | --- | --- |
+| RW | Nine executable cases cover FD REPORT/RD descriptions, INITIATE/GENERATE/TERMINATE, SOURCE/VALUE and columns, line/page counters, page limits, headings/footings, clause ordering, control breaks with CH/CF and FINAL, SUM subtotals with rolling forward, GROUP INDICATE, RH/RF, multi-line groups, NEXT GROUP NEXT PAGE, USE BEFORE REPORTING with SUPPRESS PRINTING and GENERATE report-name. Generated records are read back and checked line by line. | LINE-COUNTER/PAGE-COUNTER are shared across reports; SUM crossfooting and the original RW corpus programs are not executed. |
+| CM | Six syntax-only cases parse COMMUNICATION SECTION/CD descriptions, queue metadata, ENABLE/DISABLE, ACCEPT count, RECEIVE message/segment, SEND indicators/destination tables and PURGE. | Runtime status/delivery behavior requires a configured message-control system; syntax acceptance is not an execution pass. |
+| OB | Five executable cases pass, including numeric paragraph names, DATE-COMPILED and SORT in a called program. Three syntax-only cases parse STOP literal and tape label/positioning forms. | Operator suspension and tape volume/position semantics require their respective runtime devices. |
+| IC | All 13 executable cases pass, including BY CONTENT mode inheritance, byte-layout aliases, identifier CANCEL and dynamic signature selection. | Broader calling conventions and external program-loading scenarios need separate coverage. |
+| ST | All eight executable cases pass, including RETURN with NOT AT END and no AT END phrase. | No currently failing case in this catalog. |
+
+STOP literal syntax currently passes, but operator suspension/continuation is
+not implemented or counted as an execution pass. CM needs configured queues,
+terminals and access keys; the harness does not invent successful MCS
+delivery. Tape syntax acceptance will not establish volume/position behavior.
+Original inspection/flagging tests remain distinct from automated execution;
+the RW clause-order scenarios exercise legal source forms, not compiler
+standards-flagging diagnostics.
+
+These additions cover the omitted corpus sections, not every combination in
+the standard. The native-runtime/library backlog below is not covered by this
+CCVS catalog.
+
+## SORT and MERGE
+
+`SORT` supports multiple `USING` and `GIVING` files, or `INPUT PROCEDURE` and
+`OUTPUT PROCEDURE` paragraph/section ranges, including `THRU`. `RELEASE` accepts
+`FROM`; `RETURN` supports `INTO`, `AT END`, and `NOT AT END`. An exhausted
+`RETURN` preserves both the SD record and the `INTO` receiver.
+
+SORT uses stable bottom-up merging, preserving release/file order for equal
+keys, including `WITH DUPLICATES IN ORDER`. Keys may mix ascending and
+descending order. Numeric display keys are compared as exact fixed-point
+values, including leading/trailing separate signs. Alphanumeric keys use
+native character order unless `COLLATING SEQUENCE` names an `ALPHABET`;
+custom alphabets support character/ordinal entries, ascending or descending
+`THRU` ranges, and `ALSO` equivalences.
+
+`MERGE` combines the ordered input-file runs with the same key comparison.
+It checks each input run's order and reports `SORT-RETURN = 16` for an
+unordered run. Successful operations leave `SORT-RETURN = 0`; automatic
+file-operation errors, invalid RELEASE/RETURN phases, and recursive use of
+the same SD file report `16`. File failures prevent subsequent output
+processing. Filesystem transport exceptions still propagate rather than
+being converted to a successful empty result. An unsuccessful automatic OPEN
+does not close a file already owned by the calling program.
+
+This implementation requires one fixed-length SD record and fixed-length,
+sequential FD files for USING/GIVING. Signed numeric SD items require
+`SIGN LEADING/TRAILING SEPARATE`; embedded sign storage is not implemented.
+Other unsupported layouts are rejected explicitly.
+Work records live in P-code string buffers, not an external disk-spill sorter;
+available runtime memory and the PMachine instruction limit bound the dataset.
+The existing filesystem image/record limits still apply to USING/GIVING.
+The sort algorithm, buffering, and procedure dispatch are generated P-code:
+there are no new JavaScript-only SORT/MERGE opcodes or host bindings. Running
+them on native ESP32 hardware still depends on the deferred decimal, string,
+and filesystem support listed below.
+
+All seven ST CCVS cases and the additional edge/failure tests in
+[`sort-merge.test.mjs`](../../../../languages/cobolish85/tests/sort-merge.test.mjs)
+exercise compilation and execution, not just parser acceptance.
+
+## Inter-program communication
+
+Programs in one compilation unit, including nested and additional programs,
+have separate data and procedure namespaces. A COBOL `CALL` can invoke an
+included program by literal name or by an identifier holding its name.
+`PROCEDURE DIVISION USING` parameters bind in declaration order; BY REFERENCE
+uses live aliases to the caller's storage, including repeated arguments that
+refer to the same item; alphanumeric storage can also be viewed through
+different caller/LINKAGE field boundaries; BY CONTENT and BY VALUE receive
+independent values. Linkage items may be groups and tables when their
+elementary storage layouts match. A called program's WORKING-STORAGE persists
+between calls, `INITIAL` resets it on entry, and `CANCEL` resets it. LOCAL-STORAGE
+is reset on every call. `GLOBAL` items are visible to contained programs, and
+`EXTERNAL` items with matching names share storage. Calls to unavailable programs take the
+`ON EXCEPTION` or `ON OVERFLOW` branch when provided; otherwise the JavaScript
+PMachine reports a runtime error.
+
+The current implementation resolves calls only to programs included in the
+same compilation unit. Recursive entry is not yet supported because
+WORKING-STORAGE has one persistent instance per program. These behaviors are
+covered by the IC CCVS cases and `inter-program.test.mjs`.
 
 ## Test report
 
@@ -262,16 +417,14 @@ open-file ownership guarantees to shared filesystem-server primitives first.
 The generic linker supports library globals and initialization, but that alone
 is not a substitute for those storage guarantees.
 
-Current validation: 225 of 274 default tests pass; 64 of the 113 executable
-CCVS-guided programs pass (the suite also includes its catalog check). The
-remaining 49 default test failures are still real conformance gaps, not
-expected-pass substitutions.
+Before the module expansion, all 289 default tests passed, including 113
+executable CCVS-guided programs and the catalog check. The expanded baseline
+and its genuine outstanding failures are listed above.
 
-Passing these tests does not establish full manual compatibility. Sequential
-and relative I/O, additional statement execution,
-and Tandem NonStop system intrinsics still need implementation and independent
-conformance tests. Pulse-specific service and metadata clauses are extensions,
-not syntax defined by the HP manual.
+Passing these tests does not establish full manual compatibility. Broader
+statement/clause combinations and Tandem NonStop system intrinsics still need
+implementation and independent conformance tests. Pulse-specific service and
+metadata clauses are extensions, not syntax defined by the HP manual.
 
 ## ESP32 PMachine port backlog
 
@@ -285,11 +438,12 @@ opcodes or P-code libraries; anything that cannot must be added here.
 |---|---|---|---|
 | `PUSH_DEC`, `DEC_CONV`, `DEC_QUANT`, `DEC_STR`, `DEC_FITS` | Opcodes (manifest `targets: ["js"]`) | Fixed-point `PICTURE` arithmetic, ROUNDED, ON SIZE ERROR | JS uses BigInt. COBOL-85 needs 18 digits (fits `int64_t`); the JS division intermediate uses scale 20, so ESP32 needs 128-bit or a bounded intermediate scale. |
 | `DEC_DISPLAY precision scale` | Opcode `0x75` (`targets: ["js"]`) | Numeric DISPLAY and group serialization: zero-padded to PICTURE width, implied point omitted | Straightforward once a decimal value representation exists. |
+| COBOL `CALL` program lookup and state | `CALL` plus generated P-code and `PUSH_REF` | Included program entry dispatch, live BY REFERENCE aliases (including alphanumeric byte-slice views), `INITIAL`, `CANCEL`, and explicit missing-target errors | The native runtime needs reference values dereferenced by variable loads/stores and array access, including the `name@offset:length` alias operand; preserve program state and report unresolved procedure labels. |
 | `CONCAT` | Opcode `0x6B` (`targets: ["js"]`) | DISPLAY lists, group MOVE | Header defines it but the manifest/compat check disagree (`check-pcode-compat.mjs` reports it). |
 | P-code quoted-string escape decoding | Runtime parser | LOW-VALUE NUL bytes and escaped COBOL text constants | The JS parser now decodes JSON escapes; verify C++ parity in the later PMachine batch. |
-| `host.string_*` text bindings, including `host.string_length` | Host ABI | Reference modification, STRING, UNSTRING, intrinsic text functions, group MOVE, class tests, INSPECT | Need native implementations or a P-code text library. |
+| `host.string_*` text bindings, including `host.string_length` | Host ABI | Reference modification, STRING, UNSTRING, intrinsic text functions, group MOVE, class tests, INSPECT, SORT/MERGE buffers and collation | Need native implementations or a P-code text library. |
 | `host.math_*` numeric bindings | Host ABI | Transcendental and numeric intrinsic functions | Needs native math bindings and a decimal-result ABI. |
-| `host.isam_*` and `host.fs_*` | Host ABI | Indexed files via `libraries/isam/isam.pas` | ISAM logic is already P-code; ESP32 needs the filesystem bindings (local flash or remote filesystem server). |
+| `host.isam_*` and `host.fs_*` | Host ABI | Indexed/sequential/relative files and SORT/MERGE USING/GIVING via `libraries/isam/isam.pas` | ISAM logic is already P-code; ESP32 needs the filesystem bindings (local flash or remote filesystem server). |
 
 Programs requiring host bindings are tagged `targets: ["js"]` in their program
 map. Run `node scripts/check-pcode-compat.mjs` from `aggregator` after porting;

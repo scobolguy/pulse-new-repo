@@ -25,6 +25,8 @@ export function ccvsCase(module, id, ccvs, description, build) {
     format: parts.format ?? 'free',
     copybooks: parts.copybooks ?? null,
     input: parts.input ?? '',
+    validation: parts.validation ?? 'execution',
+    requires: parts.requires ?? [],
     expected: parts.expected ?? labels.map(label => `${id} ${label}: PASS`)
   };
 }
@@ -33,11 +35,14 @@ function assemble(id, parts) {
   return [
     'IDENTIFICATION DIVISION.',
     `PROGRAM-ID. ${id}.`,
+    parts.identification ?? null,
     parts.environment ? `ENVIRONMENT DIVISION.\n${parts.environment}` : null,
     'DATA DIVISION.',
     parts.fileSection ? `FILE SECTION.\n${parts.fileSection}` : null,
     'WORKING-STORAGE SECTION.',
     parts.ws ?? '',
+    parts.communicationSection ? `COMMUNICATION SECTION.\n${parts.communicationSection}` : null,
+    parts.reportSection ? `REPORT SECTION.\n${parts.reportSection}` : null,
     'PROCEDURE DIVISION.',
     'MAIN-LINE.',
     parts.proc ?? '',

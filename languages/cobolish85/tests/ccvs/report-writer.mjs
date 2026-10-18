@@ -1,0 +1,293 @@
+import { ccvsCase } from './builder.mjs';
+
+const rw = (id, ccvs, description, build) => ccvsCase('RW', id, ccvs, description, build);
+const reportFile = path => ({
+  environment: `INPUT-OUTPUT SECTION.
+FILE-CONTROL.
+SELECT REPORT-FILE ASSIGN TO "data/${path}" ORGANIZATION IS SEQUENTIAL.
+SELECT VERIFY-FILE ASSIGN TO "data/${path}" ORGANIZATION IS SEQUENTIAL.`,
+  fileSection: `FD REPORT-FILE REPORT IS SALES-REPORT.
+FD VERIFY-FILE.
+01 PRINT-LINE PIC X(7).`
+});
+const detail = `01 DETAIL-ROW TYPE IS DETAIL.
+   03 LINE NUMBER IS PLUS 1 COLUMN NUMBER IS 1
+      PIC X(3) VALUE "INV".
+   03 COLUMN NUMBER IS 5 PIC 999 SOURCE IS AMOUNT.`;
+
+function pagedReport(k, withFooting) {
+  return {
+    ...reportFile(withFooting ? 'rw-footing.prn' : 'rw-heading.prn'),
+    ws: `01 EOF-SW PIC 9 VALUE 0.
+01 H1 PIC 99 VALUE 0.
+01 H2 PIC 99 VALUE 0.
+01 F1 PIC 99 VALUE 0.
+01 F2 PIC 99 VALUE 0.
+01 D1 PIC 99 VALUE 0.
+01 D2 PIC 99 VALUE 0.`,
+    reportSection: `RD SALES-REPORT
+    PAGE LIMITS ARE 30 LINES HEADING 1
+    FIRST DETAIL 6 LAST DETAIL 25${withFooting ? ' FOOTING 29' : ''}.
+01 PAGE-HEAD TYPE IS PAGE HEADING LINE NUMBER IS 1.
+   03 COLUMN 1 PIC X(4) VALUE "HEAD".
+   03 COLUMN 6 PIC 9 SOURCE PAGE-COUNTER.
+01 DETAIL-ROW TYPE DE LINE NUMBER PLUS 1.
+   03 COLUMN 1 PIC X(4) VALUE "DATA".
+   03 COLUMN 6 PIC 9 SOURCE PAGE-COUNTER.
+${withFooting ? `01 PAGE-FOOT TYPE IS PAGE FOOTING LINE NUMBER IS 30.
+   03 COLUMN 1 PIC X(4) VALUE "FOOT".
+   03 COLUMN 6 PIC 9 SOURCE PAGE-COUNTER.` : ''}`,
+    proc: `OPEN OUTPUT REPORT-FILE
+INITIATE SALES-REPORT
+GENERATE DETAIL-ROW
+${k('first-detail', 'LINE-COUNTER = 6 AND PAGE-COUNTER = 1')}
+PERFORM 19 TIMES
+    GENERATE DETAIL-ROW
+END-PERFORM
+${k('last-detail', 'LINE-COUNTER = 25 AND PAGE-COUNTER = 1')}
+GENERATE DETAIL-ROW
+${k('page-advance', 'LINE-COUNTER = 6 AND PAGE-COUNTER = 2')}
+TERMINATE SALES-REPORT
+CLOSE REPORT-FILE
+OPEN INPUT VERIFY-FILE
+PERFORM UNTIL EOF-SW = 1
+    READ VERIFY-FILE
+        AT END MOVE 1 TO EOF-SW
+        NOT AT END
+            EVALUATE PRINT-LINE
+                WHEN "HEAD 1" ADD 1 TO H1
+                WHEN "HEAD 2" ADD 1 TO H2
+                WHEN "FOOT 1" ADD 1 TO F1
+                WHEN "FOOT 2" ADD 1 TO F2
+                WHEN "DATA 1" ADD 1 TO D1
+                WHEN "DATA 2" ADD 1 TO D2
+            END-EVALUATE
+    END-READ
+END-PERFORM
+CLOSE VERIFY-FILE
+${k('page-headings', 'H1 = 1 AND H2 = 1')}
+${k('detail-output', 'D1 = 20 AND D2 = 1')}
+${withFooting ? k('footings-on-advance-and-terminate', 'F1 = 1 AND F2 = 1') : ''}`
+  };
+}
+
+const wideReportFile = (path, report) => ({
+  environment: `INPUT-OUTPUT SECTION.
+FILE-CONTROL.
+SELECT REPORT-FILE ASSIGN TO "data/${path}" ORGANIZATION IS SEQUENTIAL.
+SELECT VERIFY-FILE ASSIGN TO "data/${path}" ORGANIZATION IS SEQUENTIAL.`,
+  fileSection: `FD REPORT-FILE REPORT IS ${report}.
+FD VERIFY-FILE.
+01 PRINT-LINE PIC X(20).`
+});
+const capturedLines = `01 EOF-SW PIC 9 VALUE 0.
+01 LINE-COUNT PIC 99 VALUE 0.
+01 CAPTURED.
+   03 OUT-LINE PIC X(20) OCCURS 20.`;
+const captureReport = `OPEN INPUT VERIFY-FILE
+PERFORM UNTIL EOF-SW = 1
+    READ VERIFY-FILE
+        AT END MOVE 1 TO EOF-SW
+        NOT AT END
+            ADD 1 TO LINE-COUNT
+            MOVE PRINT-LINE TO OUT-LINE (LINE-COUNT)
+    END-READ
+END-PERFORM
+CLOSE VERIFY-FILE`;
+const expectLines = lines => lines.map((line, index) => `OUT-LINE (${index + 1}) = "${line}"`).join('\n    AND ');
+
+export const reportWriterCases = [
+  rw('RW-INITIATE-01', ['RW101A', 'RW102A'], 'INITIATE initializes LINE-COUNTER to zero and PAGE-COUNTER to one; re-initiation resets them', k => ({
+    ...reportFile('rw-init.prn'),
+    ws: '01 AMOUNT PIC 999 VALUE 12.',
+    reportSection: `RD SALES-REPORT PAGE LIMIT IS 20 LINES.\n${detail}`,
+    proc: `OPEN OUTPUT REPORT-FILE
+INITIATE SALES-REPORT
+${k('initial-counters', 'LINE-COUNTER = 0 AND PAGE-COUNTER = 1')}
+GENERATE DETAIL-ROW
+${k('first-generate', 'LINE-COUNTER = 1 AND PAGE-COUNTER = 1')}
+TERMINATE SALES-REPORT
+INITIATE SALES-REPORT
+${k('reinit-counters', 'LINE-COUNTER = 0 AND PAGE-COUNTER = 1')}
+TERMINATE SALES-REPORT
+CLOSE REPORT-FILE`
+  })),
+
+  rw('RW-SOURCE-VALUE-01', ['RW101A', 'RW102A'], 'GENERATE combines VALUE, live SOURCE data, picture formatting and absolute columns in the report file', k => ({
+    ...reportFile('rw-source.prn'),
+    ws: `01 AMOUNT PIC 999 VALUE 12.
+01 EOF-SW PIC 9 VALUE 0.
+01 FIRST-HITS PIC 99 VALUE 0.
+01 SECOND-HITS PIC 99 VALUE 0.`,
+    reportSection: `RD SALES-REPORT PAGE LIMIT 20 FIRST DETAIL 1 LAST DETAIL 20.\n${detail}`,
+    proc: `OPEN OUTPUT REPORT-FILE
+INITIATE SALES-REPORT
+GENERATE DETAIL-ROW
+MOVE 345 TO AMOUNT
+GENERATE DETAIL-ROW
+TERMINATE SALES-REPORT
+CLOSE REPORT-FILE
+OPEN INPUT VERIFY-FILE
+PERFORM UNTIL EOF-SW = 1
+    READ VERIFY-FILE
+        AT END MOVE 1 TO EOF-SW
+        NOT AT END
+            IF PRINT-LINE = "INV 012" ADD 1 TO FIRST-HITS END-IF
+            IF PRINT-LINE = "INV 345" ADD 1 TO SECOND-HITS END-IF
+    END-READ
+END-PERFORM
+CLOSE VERIFY-FILE
+${k('source-value-column-picture', 'FIRST-HITS = 1 AND SECOND-HITS = 1')}`
+  })),
+
+  rw('RW-PAGE-LIMIT-01', ['RW101A', 'RW102A'], 'A full 20-line detail page advances only when the next detail is generated', k => ({
+    ...reportFile('rw-limit.prn'),
+    ws: '01 AMOUNT PIC 999 VALUE 1.',
+    reportSection: `RD SALES-REPORT PAGE LIMIT 20 FIRST DETAIL 1 LAST DETAIL 20.\n${detail}`,
+    proc: `OPEN OUTPUT REPORT-FILE
+INITIATE SALES-REPORT
+PERFORM 20 TIMES
+    GENERATE DETAIL-ROW
+END-PERFORM
+${k('full-page', 'LINE-COUNTER = 20 AND PAGE-COUNTER = 1')}
+GENERATE DETAIL-ROW
+${k('next-page', 'LINE-COUNTER = 1 AND PAGE-COUNTER = 2')}
+TERMINATE SALES-REPORT
+CLOSE REPORT-FILE`
+  })),
+
+  rw('RW-PAGE-HEADING-01', ['RW103A'], 'PAGE HEADING, FIRST/LAST DETAIL, page advance and generated heading/detail records', k => pagedReport(k, false)),
+  rw('RW-PAGE-FOOTING-01', ['RW104A'], 'PAGE FOOTING is emitted on page advance and TERMINATE, with the correct page number', k => pagedReport(k, true)),
+
+  ...['column-first', 'line-first'].map((order, index) =>
+    rw(`RW-CLAUSE-ORDER-0${index + 1}`, [index === 0 ? 'RW301M' : 'RW302M'],
+      'Report elementary entries accept LINE/COLUMN/SOURCE clause ordering without changing generated data', k => ({
+        ...reportFile(`rw-order-${index}.prn`),
+        ws: '01 AMOUNT PIC 999 VALUE 42.\n01 HITS PIC 99 VALUE 0.\n01 EOF-SW PIC 9 VALUE 0.',
+        reportSection: `RD SALES-REPORT.
+01 DETAIL-ROW TYPE IS DETAIL.
+   02 PIC 999 SOURCE IS AMOUNT
+      ${order === 'column-first'
+    ? 'COLUMN NUMBER IS 1 LINE NUMBER IS PLUS 1'
+    : 'LINE NUMBER IS PLUS 1 COLUMN NUMBER IS 1'}.`,
+        proc: `OPEN OUTPUT REPORT-FILE
+INITIATE SALES-REPORT
+GENERATE DETAIL-ROW
+TERMINATE SALES-REPORT
+CLOSE REPORT-FILE
+OPEN INPUT VERIFY-FILE
+PERFORM UNTIL EOF-SW = 1
+    READ VERIFY-FILE
+        AT END MOVE 1 TO EOF-SW
+        NOT AT END
+            IF PRINT-LINE = "042" ADD 1 TO HITS END-IF
+    END-READ
+END-PERFORM
+CLOSE VERIFY-FILE
+${k('generated-source', 'HITS = 1')}`
+      }))),
+
+  rw('RW-CONTROL-BREAK-01', ['RW107A', 'RW108A'], 'CONTROL FINAL and data control breaks with CH/CF, SUM subtotals, rolling forward, GROUP INDICATE and REPORT HEADING/FOOTING', k => {
+    const file = wideReportFile('rw-control.prn', 'SALES-REPORT');
+    return {
+      ...file,
+      ws: `01 REGION PIC XX.
+01 AMOUNT PIC 999.
+${capturedLines}`,
+      reportSection: `RD SALES-REPORT
+    CONTROLS ARE FINAL REGION
+    PAGE LIMIT 60 LINES FIRST DETAIL 1.
+01 TYPE IS REPORT HEADING LINE 1.
+   03 COLUMN 1 PIC X(5) VALUE "START".
+01 TYPE CH REGION LINE PLUS 1.
+   03 COLUMN 1 PIC X(3) VALUE "RG:".
+   03 COLUMN 4 PIC XX SOURCE REGION.
+01 SALE-LINE TYPE DETAIL LINE PLUS 1.
+   03 COLUMN 1 PIC XX SOURCE REGION GROUP INDICATE.
+   03 COLUMN 4 PIC ZZ9 SOURCE AMOUNT.
+01 REGION-FOOT TYPE CONTROL FOOTING REGION LINE PLUS 1.
+   03 COLUMN 1 PIC XX SOURCE REGION.
+   03 REGION-TOTAL COLUMN 4 PIC ZZZ9 SUM AMOUNT.
+01 TYPE CF FINAL LINE PLUS 1.
+   03 COLUMN 1 PIC X(3) VALUE "TOT".
+   03 GRAND-TOTAL COLUMN 4 PIC ZZZ9 SUM REGION-TOTAL.
+01 TYPE RF LINE PLUS 1.
+   03 COLUMN 1 PIC X(3) VALUE "END".`,
+      proc: `OPEN OUTPUT REPORT-FILE
+INITIATE SALES-REPORT
+MOVE "AA" TO REGION MOVE 10 TO AMOUNT GENERATE SALE-LINE
+MOVE 20 TO AMOUNT GENERATE SALE-LINE
+${k('counter-accumulates', 'REGION-TOTAL = 30 AND GRAND-TOTAL = 0')}
+MOVE "BB" TO REGION MOVE 5 TO AMOUNT GENERATE SALE-LINE
+${k('counter-reset-and-rolled', 'REGION-TOTAL = 5 AND GRAND-TOTAL = 30')}
+${k('control-value-restored', 'REGION = "BB"')}
+TERMINATE SALES-REPORT
+CLOSE REPORT-FILE
+${captureReport}
+${k('line-count', 'LINE-COUNT = 10')}
+${k('report-lines', expectLines(['START', 'RG:AA', 'AA  10', '    20', 'AA   30',
+  'RG:BB', 'BB   5', 'BB    5', 'TOT  35', 'END']))}`
+    };
+  }),
+
+  rw('RW-DECLARATIVES-01', ['RW109A', 'RW110A'], 'USE BEFORE REPORTING with SUPPRESS PRINTING, NEXT GROUP NEXT PAGE, multi-line groups and GENERATE report-name summary reporting', k => {
+    const file = wideReportFile('rw-declare.prn', 'KEY-REPORT');
+    return {
+      source: `IDENTIFICATION DIVISION.
+PROGRAM-ID. RW-DECLARATIVES-01.
+ENVIRONMENT DIVISION.
+${file.environment}
+DATA DIVISION.
+FILE SECTION.
+${file.fileSection}
+WORKING-STORAGE SECTION.
+01 KEY-A PIC X.
+01 AMOUNT PIC 999.
+01 SUPPRESSED PIC 9 VALUE 0.
+${capturedLines}
+REPORT SECTION.
+RD KEY-REPORT
+    CONTROL IS KEY-A
+    PAGE LIMIT 20 HEADING 1 FIRST DETAIL 3 LAST DETAIL 15.
+01 TYPE PH LINE 1.
+   03 COLUMN 1 PIC X(4) VALUE "PAGE".
+   03 COLUMN 6 PIC 9 SOURCE PAGE-COUNTER.
+01 KEY-DETAIL TYPE DE LINE PLUS 1.
+   03 COLUMN 1 PIC 999 SOURCE AMOUNT.
+01 KEY-FOOT TYPE CF KEY-A NEXT GROUP NEXT PAGE.
+   02 LINE PLUS 1.
+      03 COLUMN 1 PIC X SOURCE KEY-A.
+      03 KEY-TOTAL COLUMN 3 PIC 999 SUM AMOUNT.
+   02 LINE PLUS 1.
+      03 COLUMN 1 PIC X(4) VALUE "----".
+PROCEDURE DIVISION.
+DECLARATIVES.
+KEY-FOOT-USE SECTION.
+    USE BEFORE REPORTING KEY-FOOT.
+KEY-FOOT-PARA.
+    IF KEY-A = "S"
+        ADD 1 TO SUPPRESSED
+        SUPPRESS PRINTING
+    END-IF.
+END DECLARATIVES.
+MAIN SECTION.
+MAIN-LINE.
+OPEN OUTPUT REPORT-FILE
+INITIATE KEY-REPORT
+MOVE "A" TO KEY-A MOVE 1 TO AMOUNT GENERATE KEY-DETAIL
+MOVE 2 TO AMOUNT GENERATE KEY-DETAIL
+MOVE "S" TO KEY-A MOVE 4 TO AMOUNT GENERATE KEY-DETAIL
+${k('next-group-next-page', 'PAGE-COUNTER = 2 AND LINE-COUNTER = 3')}
+MOVE "B" TO KEY-A MOVE 7 TO AMOUNT GENERATE KEY-REPORT
+${k('suppressed-footing-resets', 'SUPPRESSED = 1 AND KEY-TOTAL = 7 AND LINE-COUNTER = 3')}
+MOVE 8 TO AMOUNT GENERATE KEY-DETAIL
+TERMINATE KEY-REPORT
+CLOSE REPORT-FILE
+${captureReport}
+${k('line-count', 'LINE-COUNT = 10')}
+${k('report-lines', expectLines(['PAGE 1', '001', '002', 'A 003', '----',
+  'PAGE 2', '004', '008', 'B 015', '----']))}
+STOP RUN.`
+    };
+  })
+];
