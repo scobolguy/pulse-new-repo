@@ -50,6 +50,7 @@ async function runSession(session) {
       mappingsById: parseProgramMapMappings(session.programMap),
       inputQueue: session.inputQueue,
       sourceMessage: session.sourceMessage,
+      runtimeContext: session.runtimeContext,
       debugHooks: {
         beforeInstruction: async snapshot => {
           session.snapshot = snapshot;
@@ -82,11 +83,14 @@ async function runSession(session) {
       session.status = 'error';
     }
   } finally {
+    session.runtimeContext?.dispose?.();
     notify(session);
   }
 }
 
-export function createJavaScriptPmachineDebugSession({ pcodeText, programMap = {}, sourceMap = {}, inputQueue = 'debug.in', sourceMessage = '' }) {
+export function createJavaScriptPmachineDebugSession({
+  pcodeText, programMap = {}, sourceMap = {}, inputQueue = 'debug.in', sourceMessage = '', runtimeContext = {}
+}) {
   if (!String(pcodeText || '').trim()) throw new Error('pcodeText is required');
   const id = `jsdbg-${crypto.randomUUID()}`;
   const firstInstruction = parsePcode(String(pcodeText))[0] || null;
@@ -97,6 +101,7 @@ export function createJavaScriptPmachineDebugSession({ pcodeText, programMap = {
     sourceMap: sourceMap && Object.keys(sourceMap).length > 0 ? sourceMap : (programMap?.sourceMap || {}),
     inputQueue,
     sourceMessage,
+    runtimeContext,
     status: 'paused',
     running: false,
     stepBudget: 0,
@@ -248,7 +253,12 @@ export function inspectJavaScriptPmachineVariable(id, name) {
       : Object.prototype.hasOwnProperty.call(runtimeState, variableName) ? 'runtime' : null;
   if (!scope) throw new Error(`Variable not found: ${variableName}`);
   const value = scope === 'local' ? locals[variableName] : scope === 'global' ? globals[variableName] : runtimeState[variableName];
-  return { name: variableName, scope, value: clone(value), serialized: JSON.stringify(value) };
+  return {
+    name: variableName,
+    scope,
+    value: clone(value),
+    serialized: JSON.stringify(value, (_key, item) => typeof item === 'bigint' ? item.toString() : item)
+  };
 }
 
 export function stopJavaScriptPmachineDebugSession(id) {

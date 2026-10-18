@@ -1,0 +1,236 @@
+import { ccvsCase, fixedFormat, areaB } from './builder.mjs';
+
+const sg = (id, ccvs, description, build) => ccvsCase('SG', id, ccvs, description, build);
+const db = (id, ccvs, description, build) => ccvsCase('DB', id, ccvs, description, build);
+
+// Marks every line of a block as a debugging line (D in the indicator area).
+const debugLines = block => block.split('\n').map(line => `D ${line}`).join('\n');
+
+// The same procedure body is used with and without WITH DEBUGGING MODE; only the
+// SOURCE-COMPUTER paragraph differs, so the expected results show the switch's effect.
+const debugDeclarativeProgram = (id, debugging, k) => fixedFormat(`IDENTIFICATION DIVISION.
+PROGRAM-ID. ${id}.
+ENVIRONMENT DIVISION.
+CONFIGURATION SECTION.
+SOURCE-COMPUTER. CCVS-COMPUTER${debugging ? ' WITH DEBUGGING MODE' : ''}.
+DATA DIVISION.
+WORKING-STORAGE SECTION.
+01 HITS PIC 99 VALUE 0.
+01 SAVED-NAME PIC X(30) VALUE SPACES.
+01 SAVED-CONTENTS PIC X(30) VALUE SPACES.
+PROCEDURE DIVISION.
+DECLARATIVES.
+DBG-SECTION SECTION.
+    USE FOR DEBUGGING ON TARGET-PARA.
+DBG-PARA.
+    ADD 1 TO HITS
+    MOVE DEBUG-NAME TO SAVED-NAME
+    MOVE DEBUG-CONTENTS TO SAVED-CONTENTS.
+END DECLARATIVES.
+MAIN-SECTION SECTION.
+MAIN-LINE.
+    PERFORM TARGET-PARA
+    PERFORM TARGET-PARA
+${areaB(debugging
+    ? `${k('declarative-ran', 'HITS = 2')}
+${k('debug-name', 'SAVED-NAME = "TARGET-PARA"')}
+${k('debug-contents', 'SAVED-CONTENTS = "PERFORM LOOP"')}`
+    : `${k('declarative-inactive', 'HITS = 0')}
+${k('debug-name-untouched', 'SAVED-NAME = SPACES')}`)}
+    STOP RUN.
+TARGET-PARA.
+    CONTINUE.`);
+
+export const segmentationDebugCases = [
+  // ---------------------------------------------------------------- SG
+  sg('SG-INDEPENDENT-01', ['SG101A', 'SG102A', 'SG103A'], 'An independent segment (50-99) is entered in its initial state; ALTER in a fixed segment persists', k => ({
+    source: `IDENTIFICATION DIVISION.
+PROGRAM-ID. SG-INDEPENDENT-01.
+ENVIRONMENT DIVISION.
+CONFIGURATION SECTION.
+SOURCE-COMPUTER. CCVS-COMPUTER.
+OBJECT-COMPUTER. CCVS-COMPUTER.
+DATA DIVISION.
+WORKING-STORAGE SECTION.
+01 I-TRAIL PIC X(4) VALUE SPACES.
+01 I-PTR PIC 9 VALUE 1.
+01 F-TRAIL PIC X(4) VALUE SPACES.
+01 F-PTR PIC 9 VALUE 1.
+PROCEDURE DIVISION.
+CONTROL-SECTION SECTION 00.
+MAIN-LINE.
+    PERFORM IND-SECTION
+    PERFORM IND-SECTION
+${k('independent-reset', 'I-TRAIL = "AA"')}
+    PERFORM FIX-SECTION
+    PERFORM FIX-SECTION
+${k('fixed-retains-alter', 'F-TRAIL = "AB"')}
+    STOP RUN.
+FIX-SECTION SECTION 05.
+FIX-START.
+    GO TO FIX-A.
+FIX-A.
+    STRING "A" DELIMITED BY SIZE INTO F-TRAIL WITH POINTER F-PTR
+    ALTER FIX-START TO PROCEED TO FIX-B
+    GO TO FIX-END.
+FIX-B.
+    STRING "B" DELIMITED BY SIZE INTO F-TRAIL WITH POINTER F-PTR.
+FIX-END.
+    EXIT.
+IND-SECTION SECTION 60.
+IND-START.
+    GO TO IND-A.
+IND-A.
+    STRING "A" DELIMITED BY SIZE INTO I-TRAIL WITH POINTER I-PTR
+    ALTER IND-START TO PROCEED TO IND-B
+    GO TO IND-END.
+IND-B.
+    STRING "B" DELIMITED BY SIZE INTO I-TRAIL WITH POINTER I-PTR.
+IND-END.
+    EXIT.`
+  })),
+
+  sg('SG-SEGMENT-LIMIT-01', ['SG104A', 'SG105A'], 'SEGMENT-LIMIT makes segments 10-49 overlayable fixed segments that still keep their last-used state', k => ({
+    source: `IDENTIFICATION DIVISION.
+PROGRAM-ID. SG-SEGMENT-LIMIT-01.
+ENVIRONMENT DIVISION.
+CONFIGURATION SECTION.
+SOURCE-COMPUTER. CCVS-COMPUTER.
+OBJECT-COMPUTER. CCVS-COMPUTER SEGMENT-LIMIT IS 10.
+DATA DIVISION.
+WORKING-STORAGE SECTION.
+01 TRAIL PIC X(4) VALUE SPACES.
+01 PTR PIC 9 VALUE 1.
+PROCEDURE DIVISION.
+CONTROL-SECTION SECTION 0.
+MAIN-LINE.
+    PERFORM OVERLAY-SECTION
+    PERFORM OTHER-OVERLAY
+    PERFORM OVERLAY-SECTION
+${k('overlayable-last-used-state', 'TRAIL = "AXB"')}
+    STOP RUN.
+OVERLAY-SECTION SECTION 30.
+OV-START.
+    GO TO OV-A.
+OV-A.
+    STRING "A" DELIMITED BY SIZE INTO TRAIL WITH POINTER PTR
+    ALTER OV-START TO PROCEED TO OV-B
+    GO TO OV-END.
+OV-B.
+    STRING "B" DELIMITED BY SIZE INTO TRAIL WITH POINTER PTR.
+OV-END.
+    EXIT.
+OTHER-OVERLAY SECTION 31.
+OTHER-PARA.
+    STRING "X" DELIMITED BY SIZE INTO TRAIL WITH POINTER PTR.`
+  })),
+
+  sg('SG-ORDER-01', ['SG106A', 'SG107A'], 'Sections with the same segment number need not be contiguous; control falls through in source order', k => ({
+    source: `IDENTIFICATION DIVISION.
+PROGRAM-ID. SG-ORDER-01.
+DATA DIVISION.
+WORKING-STORAGE SECTION.
+01 TRAIL PIC X(6) VALUE SPACES.
+01 PTR PIC 9 VALUE 1.
+PROCEDURE DIVISION.
+FIRST-SECTION SECTION 55.
+P1.
+    STRING "1" DELIMITED BY SIZE INTO TRAIL WITH POINTER PTR.
+SECOND-SECTION SECTION 10.
+P2.
+    STRING "2" DELIMITED BY SIZE INTO TRAIL WITH POINTER PTR.
+THIRD-SECTION SECTION 55.
+P3.
+    STRING "3" DELIMITED BY SIZE INTO TRAIL WITH POINTER PTR.
+FINAL-SECTION SECTION 0.
+P4.
+${k('source-order', 'TRAIL = "123"')}
+    STOP RUN.`
+  })),
+
+  // ---------------------------------------------------------------- DB
+  db('DB-LINES-ON-01', ['DB101A', 'DB201A'], 'Debugging lines (D in column 7) are compiled when WITH DEBUGGING MODE is specified', k => ({
+    format: 'fixed',
+    source: fixedFormat(`IDENTIFICATION DIVISION.
+PROGRAM-ID. DB-LINES-ON-01.
+ENVIRONMENT DIVISION.
+CONFIGURATION SECTION.
+SOURCE-COMPUTER. CCVS-COMPUTER WITH DEBUGGING MODE.
+DATA DIVISION.
+WORKING-STORAGE SECTION.
+01 N PIC 99 VALUE 0.
+D 01 DEBUG-ONLY PIC X(3) VALUE "DBG".
+PROCEDURE DIVISION.
+MAIN-LINE.
+D       ADD 1 TO N
+D       MOVE "ON " TO DEBUG-ONLY
+        ADD 10 TO N
+${areaB(k('debug-statements', 'N = 11'))}
+${debugLines(areaB(k('debug-data', 'DEBUG-ONLY = "ON "')))}
+    STOP RUN.`)
+  })),
+
+  db('DB-LINES-OFF-01', ['DB102A', 'DB202A'], 'Without WITH DEBUGGING MODE, debugging lines are treated as comments', k => ({
+    format: 'fixed',
+    source: fixedFormat(`IDENTIFICATION DIVISION.
+PROGRAM-ID. DB-LINES-OFF-01.
+ENVIRONMENT DIVISION.
+CONFIGURATION SECTION.
+SOURCE-COMPUTER. CCVS-COMPUTER.
+DATA DIVISION.
+WORKING-STORAGE SECTION.
+01 N PIC 99 VALUE 0.
+PROCEDURE DIVISION.
+MAIN-LINE.
+D       ADD 1 TO N
+D       DISPLAY "DEBUG LINE EXECUTED"
+        ADD 10 TO N
+${areaB(k('debug-lines-ignored', 'N = 10'))}
+    STOP RUN.`)
+  })),
+
+  db('DB-USE-ON-01', ['DB103A', 'DB104A', 'DB105A'], 'USE FOR DEBUGGING ON a paragraph sets DEBUG-NAME and DEBUG-CONTENTS ("PERFORM LOOP") when debugging mode is on', k => ({
+    format: 'fixed',
+    source: debugDeclarativeProgram('DB-USE-ON-01', true, k)
+  })),
+
+  db('DB-USE-OFF-01', ['DB106A', 'DB203A'], 'The same USE FOR DEBUGGING declarative is inactive when WITH DEBUGGING MODE is absent', k => ({
+    format: 'fixed',
+    source: debugDeclarativeProgram('DB-USE-OFF-01', false, k)
+  })),
+
+  db('DB-ALL-PROCEDURES-01', ['DB107A', 'DB108A'], 'USE FOR DEBUGGING ON ALL PROCEDURES runs before every procedure executed', k => ({
+    format: 'fixed',
+    source: fixedFormat(`IDENTIFICATION DIVISION.
+PROGRAM-ID. DB-ALL-PROCEDURES-01.
+ENVIRONMENT DIVISION.
+CONFIGURATION SECTION.
+SOURCE-COMPUTER. CCVS-COMPUTER WITH DEBUGGING MODE.
+DATA DIVISION.
+WORKING-STORAGE SECTION.
+01 ONE-HITS PIC 99 VALUE 0.
+01 TWO-HITS PIC 99 VALUE 0.
+01 ALL-HITS PIC 99 VALUE 0.
+PROCEDURE DIVISION.
+DECLARATIVES.
+DBG-SECTION SECTION.
+    USE FOR DEBUGGING ON ALL PROCEDURES.
+DBG-PARA.
+    ADD 1 TO ALL-HITS
+    IF DEBUG-NAME = "P-ONE" ADD 1 TO ONE-HITS END-IF
+    IF DEBUG-NAME = "P-TWO" ADD 1 TO TWO-HITS END-IF.
+END DECLARATIVES.
+MAIN-SECTION SECTION.
+MAIN-LINE.
+    PERFORM P-ONE
+    PERFORM P-TWO
+    PERFORM P-ONE
+${areaB(k('per-procedure', 'ONE-HITS = 2 AND TWO-HITS = 1'))}
+${areaB(k('all-procedures', 'ALL-HITS NOT < 3'))}
+    STOP RUN.
+P-ONE.
+    CONTINUE.
+P-TWO.
+    CONTINUE.`)
+  }))
+];

@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { execFile } from 'child_process';
+import { generateCobolishParser } from '../../../../languages/cobolish85/scripts/generate-parser.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -51,7 +52,7 @@ async function main() {
   await generateForGrammar('Pascalish.g4');
   await generateForGrammar('MAPL.g4');
   await generateForGrammar('WorkflowDsl.g4');
-  await generateForGrammar('Cobolish85.g4');
+  await generateCobolishParser();
   await generateForGrammar('Vbish.g4');
   console.log('[ANTLR] Generated modern JS parsers into grammar/generated-modern');
 }

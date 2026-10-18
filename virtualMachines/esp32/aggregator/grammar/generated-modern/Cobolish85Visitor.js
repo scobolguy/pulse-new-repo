@@ -78,6 +78,12 @@ export default class Cobolish85Visitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by Cobolish85Parser#selectClause.
+	visitSelectClause(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by Cobolish85Parser#fileSource.
 	visitFileSource(ctx) {
 	  return this.visitChildren(ctx);
@@ -518,6 +524,12 @@ export default class Cobolish85Visitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by Cobolish85Parser#writeClause.
 	visitWriteClause(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by Cobolish85Parser#rewriteStatement.
+	visitRewriteStatement(ctx) {
 	  return this.visitChildren(ctx);
 	}
 

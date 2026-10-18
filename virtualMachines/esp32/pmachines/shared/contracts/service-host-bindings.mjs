@@ -86,6 +86,30 @@ export const SERVICE_HOST_BINDINGS = Object.freeze({
   'host.date_parse': { arity: 1, args: ['string'], result: 'string', desktopOnly: true },
   'host.date_now': { arity: 0, args: [], result: 'string', desktopOnly: true },
   'host.json_remove': { arity: 2, args: ['string', 'string'], result: 'string', desktopOnly: true },
+  'host.string_length': { arity: 1, args: ['string'], result: 'integer', desktopOnly: true },
+  'host.cobol_char': { arity: 1, args: ['number'], result: 'string', desktopOnly: true },
+  'host.cobol_ord': { arity: 1, args: ['string'], result: 'integer', desktopOnly: true },
+  'host.date_current': { arity: 0, args: [], result: 'string', desktopOnly: true },
+  'host.date_accept': { arity: 1, args: ['string'], result: 'string', desktopOnly: true },
+  ...Object.fromEntries([
+    'acos', 'asin', 'atan', 'cos', 'sin', 'tan', 'log', 'log10', 'sqrt',
+    'factorial', 'floor', 'trunc'
+  ].map(name => [`host.math_${name}`, { arity: 1, args: ['number'], result: 'decimal', desktopOnly: true }])),
+  ...Object.fromEntries(['mod', 'rem'].map(name =>
+    [`host.math_${name}`, { arity: 2, args: ['number', 'number'], result: 'decimal', desktopOnly: true }])),
+  ...Object.fromEntries([
+    'mean', 'median', 'midrange', 'range', 'sum', 'variance', 'standard_deviation',
+    'numval', 'numval_c', 'present_value'
+  ].map(name => [`host.math_${name}`, { arity: 1, args: ['string'], result: 'decimal', desktopOnly: true }])),
+  'host.math_numval_c_currency': { arity: 2, args: ['string', 'string'], result: 'decimal', desktopOnly: true },
+  ...Object.fromEntries(['ord_max', 'ord_min'].map(name =>
+    [`host.math_${name}`, { arity: 1, args: ['string'], result: 'integer', desktopOnly: true }])),
+  ...Object.fromEntries([
+    'integer_of_date', 'date_of_integer', 'integer_of_day', 'day_of_integer'
+  ].map(name => [`host.math_${name}`, { arity: 1, args: ['number'], result: 'integer', desktopOnly: true }])),
+  'host.math_annuity': { arity: 2, args: ['number', 'number'], result: 'decimal', desktopOnly: true },
+  'host.math_random': { arity: 0, args: [], result: 'decimal', desktopOnly: true },
+  'host.math_random_seeded': { arity: 1, args: ['number'], result: 'decimal', desktopOnly: true },
   'host.string_index': { arity: 2, args: ['string', 'string'], result: 'integer', desktopOnly: true },
   'host.string_slice': { arity: 3, args: ['string', 'integer', 'integer'], result: 'string', desktopOnly: true },
   'host.capabilities': { arity: 0, result: 'string', desktopOnly: true },
@@ -106,6 +130,19 @@ export const SERVICE_HOST_BINDINGS = Object.freeze({
   'host.event_path': { arity: 0, result: 'string' },
   'host.event_query': { arity: 1, args: ['string'], result: 'string' },
   'host.map_apply': { arity: 2, args: ['string', 'string'], result: 'string' },
+  'host.isam_open': { arity: 4, args: ['string', 'string', 'string', 'string'], result: 'integer', capability: 'filesystem.read', desktopOnly: true },
+  'host.isam_read': { arity: 2, args: ['integer', 'string'], result: 'string', capability: 'filesystem.read', desktopOnly: true },
+  'host.isam_read_alt': { arity: 3, args: ['integer', 'string', 'string'], result: 'string', capability: 'filesystem.read', desktopOnly: true },
+  'host.isam_read_next': { arity: 1, args: ['integer'], result: 'string', capability: 'filesystem.read', desktopOnly: true },
+  'host.isam_current_key': { arity: 1, args: ['integer'], result: 'string', capability: 'filesystem.read', desktopOnly: true },
+  'host.isam_count': { arity: 1, args: ['integer'], result: 'integer', capability: 'filesystem.read', desktopOnly: true },
+  'host.isam_start': { arity: 3, args: ['integer', 'string', 'string'], result: 'integer', capability: 'filesystem.read', desktopOnly: true },
+  'host.isam_write': { arity: 3, args: ['integer', 'string', 'string'], result: 'integer', capability: 'filesystem.write', desktopOnly: true },
+  'host.isam_rewrite': { arity: 3, args: ['integer', 'string', 'string'], result: 'integer', capability: 'filesystem.write', desktopOnly: true },
+  'host.isam_delete': { arity: 2, args: ['integer', 'string'], result: 'integer', capability: 'filesystem.write', desktopOnly: true },
+  'host.isam_status': { arity: 1, args: ['integer'], result: 'string', capability: 'filesystem.read', desktopOnly: true },
+  'host.isam_close': { arity: 1, args: ['integer'], result: 'integer', capability: 'filesystem.read', desktopOnly: true },
+  'host.isam_close_lock': { arity: 1, args: ['integer'], result: 'integer', capability: 'filesystem.read', desktopOnly: true },
   'host.text_header': { arity: 2, args: ['string', 'string'], result: 'string' },
   'host.text_lower': { arity: 1, args: ['string'], result: 'string' },
   'host.text_index': { arity: 2, args: ['string', 'string'], result: 'integer' },

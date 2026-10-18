@@ -1,14 +1,18 @@
 import assert from 'node:assert/strict';
 import Module from 'node:module';
 import { registerHooks } from 'node:module';
+import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as fs from 'node:fs/promises';
 import { readFile } from 'node:fs/promises';
+import * as os from 'node:os';
 import { test } from 'node:test';
 import { compilePascalishProgramWithAntlr } from '../../../aggregator/scripts/compile-pascalish-program-antlr-to-pcode.mjs';
 import { runPcodeOnEsp32 } from '../../../aggregator/scripts/run-pascal-on-esp32-node.mjs';
 import { signPcodeText } from '../../../aggregator/scripts/pcode-signing.mjs';
 import { executeProgram, loadOpcodeMap, parsePcode, parseProgramMapMappings } from '../../../pmachines/javascript/index.mjs';
 import { startEsp32DebugSession, controlEsp32DebugSession } from '../../../aggregator/src/backend/modules/esp32PmachineDebugBridge.mjs';
+import { inspectJavaScriptPmachineVariable } from '../../../aggregator/src/backend/modules/javascriptPmachineDebugger.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const program = fileURLToPath(new URL('../../../src/towers-of-hanoi-program.pas', import.meta.url));
@@ -711,6 +715,102 @@ test('VS Code DAP requests resolve, replace and clear source breakpoints and exp
     assert.equal(events.filter(message => message.event === 'terminated').length, 1);
   } finally {
     value.dispose();
+  }
+});
+
+test('COBOL debugger maps fixed-format statements for local and remote debug, binds hosts, and formats variables', async () => {
+  const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'pulse-cobol-debug-'));
+  const sourcePath = path.join(temporaryDirectory, 'debugger.cob');
+  const storageDirectory = path.join(temporaryDirectory, 'cobol-data');
+  const sourceLines = [
+    'IDENTIFICATION DIVISION.',
+    'PROGRAM-ID. DBGTEST.',
+    'ENVIRONMENT DIVISION.',
+    'INPUT-OUTPUT SECTION.',
+    'FILE-CONTROL.',
+    'SELECT F ASSIGN TO "data/debugger.dat"',
+    '    ORGANIZATION IS SEQUENTIAL',
+    '    FILE STATUS IS FS.',
+    'DATA DIVISION.',
+    'FILE SECTION.',
+    'FD F.',
+    '01 REC PIC X(10).',
+    'WORKING-STORAGE SECTION.',
+    '01 N PIC 99 VALUE 0.',
+    '01 S PIC XX VALUE "AB".',
+    '01 FS PIC XX.',
+    'PROCEDURE DIVISION.',
+    'MAIN-LINE.',
+    'OPEN OUTPUT F',
+    'MOVE "REC-1" TO REC',
+    'WRITE REC',
+    'CLOSE F',
+    'OPEN INPUT F',
+    'READ F AT END DISPLAY "EOF" NOT AT END DISPLAY REC END-READ',
+    'CLOSE F',
+    'ADD 1 TO N',
+    'ADD 2 TO N',
+    'IF S = "AB" DISPLAY "EQ" END-IF',
+    'DISPLAY FUNCTION CURRENT-DATE',
+    'DISPLAY N',
+    'COMPUTE N = FUNCTION NUMVAL("7")',
+    'STOP RUN.',
+  ];
+  const source = sourceLines.map((line, index) => `${String((index + 1) * 100).padStart(6, '0')} ${line}`).join('\n');
+  await fs.writeFile(sourcePath, source, 'utf8');
+  const remoteAdapter = adapter({ program: sourcePath, runtime: 'esp32' }).value;
+  try {
+    await remoteAdapter.launch({ program: sourcePath, runtime: 'esp32' });
+    await remoteAdapter.setBreakpoints(
+      { seq: 1, command: 'setBreakpoints' },
+      { source: { path: sourcePath }, breakpoints: [{ line: 27 }] },
+    );
+    const [remoteBreakpointPc] = remoteAdapter.remoteBreakpointAddresses();
+    assert.equal(remoteAdapter.remoteSourceMap[String(remoteBreakpointPc)].sourceLine, 27);
+  } finally {
+    remoteAdapter.dispose();
+  }
+  const { value, events } = adapter({ program: sourcePath, cobolDataDirectory: storageDirectory });
+  let requestSequence = 1;
+  async function request(command, args = {}) {
+    const seq = ++requestSequence;
+    value.handleMessage({ type: 'request', seq, command, arguments: args });
+    await wait(() => events.some(message => message.type === 'response' && message.request_seq === seq));
+    const response = events.find(message => message.type === 'response' && message.request_seq === seq);
+    assert.equal(response.success, true, response.message);
+    return response.body;
+  }
+  try {
+    await value.launch({ program: sourcePath, cobolDataDirectory: storageDirectory });
+    await value.stopAtProgramEntry();
+    await value.setBreakpoints(
+      { seq: 1, command: 'setBreakpoints' },
+      { source: { path: sourcePath }, breakpoints: [{ line: 27 }] },
+    );
+    assert.equal(value.state.resolvedSourceBreakpoints[0].line, 27);
+    await value.resumeUntilPause('continue');
+    assert.equal(value.state.status, 'paused');
+    assert.equal(value.state.sourceLocation.sourceLine, 27);
+    assert.equal(value.state.globals.N.unscaled, 1n);
+    const inspected = inspectJavaScriptPmachineVariable(value.sessionId, 'N');
+    assert.equal(JSON.parse(inspected.serialized).unscaled, '1');
+    const globals = await request('variables', { variablesReference: 1 });
+    const values = Object.fromEntries(globals.variables.map(variable => [variable.name, variable.value]));
+    assert.equal(values.N, '01');
+    assert.equal(values.S, '"AB"');
+    assert.equal(Object.keys(values).some(name => name.startsWith('__')), false);
+    assert.equal((await request('evaluate', { expression: 'N' })).result, '01');
+    await value.resumeUntilPause('continue');
+    assert.equal(value.state.status, 'completed');
+    assert.ok(value.state.result.stdout.some(line => line.startsWith('REC-1')));
+    assert.ok(value.state.result.stdout.includes('EQ'));
+    assert.ok(value.state.result.stdout.some(line => /^\d{16}[+-]\d{4}$/.test(line)));
+    assert.ok(value.state.result.stdout.includes('03'));
+    assert.equal(value.state.globals.N.unscaled, 7n);
+    await fs.access(path.join(storageDirectory, 'debugger.dat'));
+  } finally {
+    value.dispose();
+    await fs.rm(temporaryDirectory, { recursive: true, force: true });
   }
 });
 

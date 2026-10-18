@@ -139,6 +139,62 @@ function pcodeLabelAddress(pcodeText: string, label: string): number {
   return 0;
 }
 
+function debugValue(value: any, field: any = null): string {
+  if (value && typeof value === 'object' && 'unscaled' in value && 'scale' in value) {
+    const unscaled = BigInt(value.unscaled);
+    const scale = Number(value.scale);
+    const precision = Number(field?.precision);
+    const negative = unscaled < 0n;
+    const digits = (negative ? -unscaled : unscaled).toString().padStart(scale + 1, '0');
+    const integerWidth = Number.isInteger(precision) ? Math.max(1, precision - scale) : 1;
+    const whole = digits.slice(0, digits.length - scale || undefined).padStart(integerWidth, '0');
+    const fraction = scale ? `.${digits.slice(-scale)}` : '';
+    return `${negative ? '-' : ''}${whole}${fraction}`;
+  }
+  if (typeof value === 'bigint') return value.toString();
+  return JSON.stringify(value, (_key, item) => typeof item === 'bigint' ? item.toString() : item) ?? String(value);
+}
+
+async function cobolRuntimeContext(root: string, configuredDataDirectory?: unknown) {
+  const dataDirectory = configuredDataDirectory
+    ? path.resolve(root, String(configuredDataDirectory))
+    : path.join(root, '.pulse-debug', 'cobol-data');
+  await fs.mkdir(dataDirectory, { recursive: true });
+  const dataDirectoryInfo = await fs.lstat(dataDirectory);
+  if (!dataDirectoryInfo.isDirectory() || dataDirectoryInfo.isSymbolicLink()) {
+    throw new Error(`COBOL debugger storage must be a real directory: ${dataDirectory}`);
+  }
+  const javascript = path.join(root, 'pmachines', 'javascript', 'src');
+  const [textBindings, dateBindings, intrinsicBindings, filesystemModule, isamModule] = await Promise.all([
+    import(pathToFileURL(path.join(javascript, 'desktop-text-bindings.mjs')).href),
+    import(pathToFileURL(path.join(javascript, 'desktop-date-bindings.mjs')).href),
+    import(pathToFileURL(path.join(javascript, 'desktop-intrinsic-bindings.mjs')).href),
+    import(pathToFileURL(path.join(javascript, 'filesystem-bindings.mjs')).href),
+    import(pathToFileURL(path.join(javascript, 'isam-bindings.mjs')).href),
+  ]);
+  const filesystem = await filesystemModule.createFilesystemBindings({
+    data: { path: dataDirectory, readOnly: false },
+  });
+  const isamBindings = isamModule.createIsamBindings(filesystem.handlers);
+  const bindings = {
+    ...textBindings.createDesktopTextBindings(),
+    ...dateBindings.createDesktopDateBindings(),
+    ...intrinsicBindings.createDesktopIntrinsicBindings(),
+    ...filesystem.handlers,
+    ...isamBindings,
+  };
+  return {
+    callHost(name: string, args: unknown[]) {
+      const handler = bindings[name];
+      if (typeof handler !== 'function') throw new Error(`COBOL debugger host binding unavailable: ${name}`);
+      return handler(...args);
+    },
+    dispose() {
+      isamBindings.dispose();
+    },
+  };
+}
+
 class PulsePmachineAdapter implements vscode.DebugAdapter {
   private readonly messages = new vscode.EventEmitter<DebugProtocol.ProtocolMessage>();
   readonly onDidSendMessage = this.messages.event;
@@ -347,6 +403,18 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
       artifact = wfl;
       wflEntryLine = wfl.entryLine;
       this.event('output', { category: 'console', output: `WFL environment: ${wfl.environment}\n` });
+    } else if (language === 'cobolish') {
+      const format = String(configuration.cobolSourceFormat || 'auto').toLowerCase();
+      if (!['auto', 'fixed', 'free'].includes(format)) {
+        throw new Error(`Unsupported COBOL source format '${format}'; use auto, fixed, or free.`);
+      }
+      const fixedFormat = await import(pathToFileURL(path.join(this.root, '..', '..', 'languages', 'cobolish85', 'src', 'fixed-format.mjs')).href);
+      if (format === 'fixed' || (format === 'auto' && fixedFormat.isFixedCobolFormat(source))) {
+        source = fixedFormat.fixedToFree(source, { debug: /WITH\s+DEBUGGING\s+MODE/i.test(source) });
+      }
+      const compilerPath = pathToFileURL(path.join(this.root, 'aggregator', 'scripts', 'compile-tandem-cobol85-to-pcode.mjs')).href;
+      const compiler = await import(compilerPath);
+      artifact = compiler.compileTandemCobol85ToPcode(source, { fileName: path.basename(program) });
     } else {
       const compilerPath = pathToFileURL(path.join(this.root, 'aggregator', 'scripts', language === 'pascalish'
         ? 'compile-pascalish-program-antlr-to-pcode.mjs'
@@ -354,7 +422,7 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
       const compiler = await import(compilerPath);
       const compile = language === 'pascalish'
         ? compiler.compilePascalishProgramWithAntlr
-        : language === 'cobolish' ? compiler.compileCobolishToPmachine : compiler.compileVbishToPmachine;
+        : compiler.compileVbishToPmachine;
       artifact = compile(source, { fileName: path.basename(program) });
     }
     this.runtime = { program, language, artifact };
@@ -374,10 +442,14 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
       this.event('process', { name: 'ESP32 PMachine', systemProcessId: process.pid, isLocalProcess: false, startMethod: 'launch' });
       return;
     }
+    const runtimeContext = language === 'cobolish'
+      ? await cobolRuntimeContext(this.root, configuration.cobolDataDirectory)
+      : undefined;
     this.state = this.debug.createJavaScriptPmachineDebugSession({
       pcodeText: artifact.pcodeText,
       programMap: artifact.programMap,
       sourceMap: artifact.programMap?.sourceMap || {},
+      ...(runtimeContext ? { runtimeContext } : {}),
     });
     this.sessionId = this.state.id;
     await this.applyBreakpoints();
@@ -824,12 +896,12 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
     }
     const sourceBreakpoints = this.breakpoints.map(item => ({
       sourceFile: path.basename(item.sourcePath),
-      sourceLanguage: languageForFile(item.sourcePath),
+      sourceLanguage: languageForFile(item.sourcePath) === 'cobolish' ? 'tandem-cobol85' : languageForFile(item.sourcePath),
       sourceLine: item.line
     }));
     if (!this.reachedEntry && this.entryLine > 0) sourceBreakpoints.push({
       sourceFile: path.basename(this.runtime.program),
-      sourceLanguage: this.runtime.language,
+      sourceLanguage: this.runtime.language === 'cobolish' ? 'tandem-cobol85' : this.runtime.language,
       sourceLine: this.entryLine
     });
     this.debug.setJavaScriptPmachineDebugBreakpoints(this.sessionId, []);
@@ -934,7 +1006,10 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
   private reportVariables(): void {
     const location = this.state?.sourceLocation;
     const values = { ...(this.state?.globals || {}), ...(this.state?.locals || {}) };
-    const rendered = Object.entries(values).map(([name, value]) => `${name}=${JSON.stringify(value)}`).join(', ');
+    const fields = this.runtime?.artifact?.programMap?.fields || {};
+    const rendered = Object.entries(values)
+      .filter(([name]) => this.runtime?.language !== 'cobolish' || !name.startsWith('__'))
+      .map(([name, value]) => `${name}=${debugValue(value, fields[name])}`).join(', ');
     this.event('output', {
       category: 'console',
       output: `line ${Number(location?.sourceLine || 0)}: ${String(location?.sourceText || '').trim()}${rendered ? `  | ${rendered}` : ''}\n`,
@@ -959,7 +1034,10 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
 
   private variables(reference: number): DebugProtocol.Variable[] {
     const values = reference === 1 ? this.state?.globals : this.state?.locals;
-    return Object.entries(values || {}).map(([name, value]) => ({ name, value: JSON.stringify(value), variablesReference: 0 }));
+    const fields = this.runtime?.artifact?.programMap?.fields || {};
+    return Object.entries(values || {})
+      .filter(([name]) => this.runtime?.language !== 'cobolish' || !name.startsWith('__'))
+      .map(([name, value]) => ({ name, value: debugValue(value, fields[name]), variablesReference: 0 }));
   }
 
   private forwardOutput(completedOutput: unknown[] = []): void {
@@ -982,7 +1060,8 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
       this.respond(request, false, undefined, `Unknown PMachine variable '${name}'.`);
       return;
     }
-    this.respond(request, true, { result: JSON.stringify(values[name]), variablesReference: 0 });
+    const fields = this.runtime?.artifact?.programMap?.fields || {};
+    this.respond(request, true, { result: debugValue(values[name], fields[name]), variablesReference: 0 });
   }
 }
 

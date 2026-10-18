@@ -614,6 +614,19 @@
             "type": "string",
             "description": "Source program to execute."
           },
+          "cobolSourceFormat": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "fixed",
+              "free"
+            ],
+            "description": "COBOL source format. Auto recognizes numbered fixed-format cards; use fixed for unnumbered fixed-format source."
+          },
+          "cobolDataDirectory": {
+            "type": "string",
+            "description": "Local COBOL debugger ISAM/filesystem storage directory. Defaults to .pulse-debug/cobol-data in the workspace."
+          },
           "environment": {
             "type": "string",
             "description": "WFL only: environment name used for configuration IF/LET evaluation (overrides pulse-pmachine.wfl.environment, PULSE_ENVIRONMENT and DEFAULT ENVIRONMENT)."

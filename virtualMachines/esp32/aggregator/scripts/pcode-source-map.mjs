@@ -21,9 +21,11 @@ export function buildPcodeSourceMap({ pcodeText, sourceText, sourceFile = null, 
     const exactLine = Array.isArray(sourceLineByAddress) ? Number(sourceLineByAddress[address]) : 0;
     const source = exactLine > 0
       ? { sourceLine: exactLine, sourceText: String(allLines[exactLine - 1] || '').trim() }
-      : sourceLines[instructions.length <= 1
-        ? 0
-        : Math.min(sourceLines.length - 1, Math.floor((address * sourceLines.length) / instructions.length))] || fallback;
+      : Array.isArray(sourceLineByAddress)
+        ? { sourceLine: 0, sourceText: '' }
+        : sourceLines[instructions.length <= 1
+          ? 0
+          : Math.min(sourceLines.length - 1, Math.floor((address * sourceLines.length) / instructions.length))] || fallback;
     sourceMap[String(address)] = {
       sourceFile,
       sourceLanguage,

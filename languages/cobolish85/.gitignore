@@ -1,0 +1,4 @@
+node_modules/
+validation/cache/
+validation/runs/
+reports/

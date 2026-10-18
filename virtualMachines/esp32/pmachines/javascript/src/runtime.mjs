@@ -142,6 +142,20 @@ function decimalFromString(text) {
   return new PDecimal(BigInt(`${match[1] === '-' ? '-' : ''}${digits || '0'}`), fraction.length);
 }
 
+function decimalFromNumber(value) {
+  const match = /^([+-]?)(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/i.exec(String(value));
+  if (!match) throw new Error('Cannot convert host number to P-code decimal');
+  const fraction = match[3] || '';
+  const exponent = Number(match[4] || 0);
+  const digits = `${match[2]}${fraction}`;
+  const decimalPosition = match[2].length + exponent;
+  const whole = decimalPosition <= 0 ? '0' : digits.slice(0, decimalPosition).padEnd(decimalPosition, '0');
+  const decimal = decimalPosition <= 0
+    ? `${'0'.repeat(-decimalPosition)}${digits}`
+    : digits.slice(decimalPosition);
+  return decimalFromString(`${match[1]}${whole}${decimal ? `.${decimal}` : ''}`);
+}
+
 function toDecimal(value, scaleHint = 0) {
   if (isDecimal(value)) return value;
   if (typeof value === 'string') return decimalFromString(value);
@@ -155,6 +169,13 @@ function formatDecimal(value) {
   const whole = digits.slice(0, digits.length - value.scale) || '0';
   const fraction = value.scale > 0 ? `.${digits.slice(digits.length - value.scale)}` : '';
   return `${negative ? '-' : ''}${whole}${fraction}`;
+}
+
+function formatCobolDisplay(value, precision, scale) {
+  const decimal = rescaleDecimal(value, scale);
+  const negative = decimal.unscaled < 0n;
+  const digits = (negative ? -decimal.unscaled : decimal.unscaled).toString().padStart(precision, '0');
+  return `${negative ? '-' : ''}${digits}`;
 }
 
 // Digits required to hold the value, for COBOL ON SIZE ERROR checks.
@@ -1157,20 +1178,19 @@ function runMappingById(mappingId, sourcePayload, mappingsById) {
 function parseQuotedOperand(text) {
   const first = text.indexOf('"');
   if (first < 0) return '';
-  let i = first + 1;
-  let out = '';
-  while (i < text.length) {
-    const ch = text[i];
-    if (ch === '\\' && i + 1 < text.length) {
-      out += text[i + 1];
-      i += 2;
+  let escaped = false;
+  for (let i = first + 1; i < text.length; i += 1) {
+    if (escaped) {
+      escaped = false;
       continue;
     }
-    if (ch === '"') return out;
-    out += ch;
-    i += 1;
+    if (text[i] === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (text[i] === '"') return JSON.parse(text.slice(first, i + 1));
   }
-  return out;
+  throw new Error('Unterminated P-code string operand');
 }
 
 function parseBareOperand(text) {
@@ -1426,6 +1446,12 @@ function parsePcode(text) {
         scale: Number.parseInt(parts[0] || '0', 10),
         rounded: String(parts[1] || '').toUpperCase() === 'ROUNDED'
       };
+    } else if (mnemonic === 'DEC_DISPLAY') {
+      const parts = trimCopy(rest).split(/\s+/).filter(Boolean);
+      instr.operand = {
+        precision: Number.parseInt(parts[0] || '0', 10),
+        scale: Number.parseInt(parts[1] || '0', 10)
+      };
     } else if (mnemonic === 'DEC_FITS') {
       instr.operand = Number.parseInt(trimCopy(rest), 10);
     } else if (mnemonic === 'PUSH_ENUM') {
@@ -1626,16 +1652,32 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
         const value = args[index];
         const valid = kind === 'string' ? typeof value === 'string'
           : kind === 'integer' ? Number.isSafeInteger(value)
+            : kind === 'number' ? Number.isFinite(numberOf(value))
             : typeof value === 'string' || Number.isSafeInteger(value);
         if (!valid) throw new Error(`Invalid host argument ${index + 1} for ${name}: expected ${kind}`);
       }
+      const hostArgs = args.map((value, index) =>
+        binding.args?.[index] === 'number' ? numberOf(value) : value);
       const value = name === 'host.map_apply'
-        ? runMappingById(args[0], args[1], mappingsById)
-        : await runtimeContext.callHost(name, args);
-      if (binding.result === 'string' ? typeof value !== 'string' : !Number.isSafeInteger(value)) {
-        throw new Error(`Invalid host result for ${name}: expected ${binding.result}`);
+        ? runMappingById(hostArgs[0], hostArgs[1], mappingsById)
+        : await runtimeContext.callHost(name, hostArgs);
+      if (binding.result === 'string') {
+        if (typeof value !== 'string') throw new Error(`Invalid host result for ${name}: expected string`);
+        stack.push(value);
+      } else if (binding.result === 'number') {
+        if (typeof value !== 'number' || !Number.isFinite(value)) {
+          throw new Error(`Invalid host result for ${name}: expected finite number`);
+        }
+        stack.push(new PReal(value));
+      } else if (binding.result === 'decimal') {
+        if (typeof value !== 'number' || !Number.isFinite(value)) {
+          throw new Error(`Invalid host result for ${name}: expected finite number`);
+        }
+        stack.push(decimalFromNumber(value));
+      } else {
+        if (!Number.isSafeInteger(value)) throw new Error(`Invalid host result for ${name}: expected integer`);
+        stack.push(value);
       }
-      stack.push(value);
       pc += 1;
       continue;
     }
@@ -1781,6 +1823,12 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     }
     if (op === 'DEC_STR') {
       stack.push(formatDecimal(toDecimal(stack.pop())));
+      pc += 1;
+      continue;
+    }
+    if (op === 'DEC_DISPLAY') {
+      const spec = instr.operand || { precision: 0, scale: 0 };
+      stack.push(formatCobolDisplay(toDecimal(stack.pop()), Number(spec.precision) || 0, Number(spec.scale) || 0));
       pc += 1;
       continue;
     }
@@ -2831,12 +2879,15 @@ async function executeSingleMessage(args, { printOutput = true } = {}) {
 
 export async function executeProgram(options) {
   const debugLogger = typeof options?.debugLogger === 'function' ? options.debugLogger : dslDebug;
+  const executionOptions = options?.programMap && !options?.mappingsById
+    ? { ...options, mappingsById: parseProgramMapMappings(options.programMap) }
+    : options;
   debugLogger('pmachine', 'execute:start', {
     instructionCount: Array.isArray(options?.instructions) ? options.instructions.length : 0,
     inputQueue: options?.inputQueue || null
   });
   try {
-    const result = await executeProgramImpl(options);
+    const result = await executeProgramImpl(executionOptions);
     debugLogger('pmachine', 'execute:complete', { stepCount: result?.stepCount ?? null, error: result?.error || null });
     return result;
   } catch (error) {

@@ -9,6 +9,7 @@ export function createDesktopTextBindings() {
     'host.text_split_lines': value => JSON.stringify(text(value).split(/\r?\n/)),
     'host.string_lower': value => text(value).toLowerCase(),
     'host.string_upper': value => text(value).toUpperCase(),
+    'host.string_length': value => text(value).length,
     'host.string_replace': (value, pattern, flags, replacement) => {
       text(value); text(pattern); text(flags); text(replacement);
       if (pattern.length > 256 || !/^[gi]*$/.test(flags) || new Set(flags).size !== flags.length) {

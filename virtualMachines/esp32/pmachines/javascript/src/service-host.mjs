@@ -14,6 +14,8 @@ import { createReplicatedCache } from './replicated-cache.mjs';
 import { tableSchema } from './distributed-datastore.mjs';
 import { createFilesystemBindings } from './filesystem-bindings.mjs';
 import { createJsonCollectionBindings } from './json-collection-bindings.mjs';
+import { createIsamBindings } from './isam-bindings.mjs';
+import { createJsonObjectBindings } from './json-object-bindings.mjs';
 import { createDesktopTextBindings } from './desktop-text-bindings.mjs';
 import { createDesktopDateBindings } from './desktop-date-bindings.mjs';
 import { createJsonValueBindings } from './json-value-bindings.mjs';
@@ -47,7 +49,7 @@ export async function createPascalishServiceHost({
   maxStorageBytes = 131072, maxResponseBytes = 262144, maxSteps, maxExecutionMs,
   maxTimers = 8, maxDaemonDatagramBytes = 1024, clock = () => Math.floor(performance.now()), logger = console,
   onDaemonEvent = null, storageRoots = {}, maxFileBytes = 262144, desktopBudget = false,
-  distributedBindings = {}, bluetoothSourceFactory = null
+  distributedBindings = {}, bluetoothSourceFactory = null, filesystemBindingOverrides = {}
 }) {
   if (compiled?.programMap?.hostBindingsVersion !== SERVICE_HOST_BINDINGS_VERSION
     || compiled.programMap.runtimeUnit?.kind !== 'service') throw failure('Unsupported service host contract');
@@ -64,6 +66,12 @@ export async function createPascalishServiceHost({
   if (maxSteps === undefined) maxSteps = desktopBudget ? null : 100000;
   if (maxExecutionMs === undefined) maxExecutionMs = desktopBudget ? null : 2000;
   if (maxSteps === null && !desktopBudget) throw failure('Invalid maxSteps');
+  if (!filesystemBindingOverrides || typeof filesystemBindingOverrides !== 'object' || Array.isArray(filesystemBindingOverrides) ||
+      Object.entries(filesystemBindingOverrides).some(([name, handler]) =>
+        !['host.fs_read_text', 'host.fs_read_text_auto', 'host.fs_write_text', 'host.fs_exists',
+          'host.fs_resolve_relative'].includes(name) || typeof handler !== 'function')) {
+    throw failure('Invalid filesystem binding overrides');
+  }
   if (maxSteps !== null) integer(maxSteps, 1, desktopBudget ? Number.MAX_SAFE_INTEGER : 200000, 'maxSteps');
   if (maxExecutionMs === null && !desktopBudget) throw failure('Invalid maxExecutionMs');
   if (maxExecutionMs !== null) integer(maxExecutionMs, 1, 1000000, 'maxExecutionMs');
@@ -72,11 +80,15 @@ export async function createPascalishServiceHost({
   const filesystem = await createFilesystemBindings(storageRoots, {
     maxFileBytes: Math.min(maxFileBytes, maxResponseBytes), maxPageBytes: maxResponseBytes
   });
+  const isamBindings = createIsamBindings({ ...filesystem.handlers, ...filesystemBindingOverrides });
   const capabilities = {
     version: HOST_CAPABILITIES_VERSION,
     ...HOST_PROFILES.js,
     filesystem: filesystem.roots,
     supported: [...filesystem.capabilities,
+      ...(typeof filesystemBindingOverrides['host.fs_read_text'] === 'function'
+        && typeof filesystemBindingOverrides['host.fs_exists'] === 'function' ? ['filesystem.read'] : []),
+      ...(typeof filesystemBindingOverrides['host.fs_write_text'] === 'function' ? ['filesystem.write'] : []),
       ...(Object.keys(distributedBindings).length ? ['distributed-cache'] : []),
       ...(bluetoothSourceFactory ? ['bluetooth.discovery'] : [])],
     limits: { maxBodyBytes, maxResponseBytes, maxSteps, maxExecutionMs, ...filesystem.limits }
@@ -273,6 +285,8 @@ export async function createPascalishServiceHost({
           return bluetoothSource.status();
         },
         ...filesystem.handlers,
+        ...isamBindings,
+        ...filesystemBindingOverrides,
         ...createJsonCollectionBindings(),
         ...createJsonValueBindings(),
         ...createXmlBindings({ maxBytes: maxBodyBytes }),
@@ -337,28 +351,7 @@ export async function createPascalishServiceHost({
         'host.collector_id': () => collectorId,
         'host.boot_id': () => bootId,
         'host.next_sequence': () => integer(++sequence, 1, Number.MAX_SAFE_INTEGER, 'sequence'),
-        'host.json_text': (json, key) => {
-          const value = objectJson(json)[text(key, 'JSON key')];
-          if (typeof value !== 'string') throw failure(`Expected string field: ${key}`);
-          return value;
-        },
-        'host.json_value': (json, key) => {
-          const object = objectJson(json);
-          text(key, 'JSON key');
-          if (!Object.hasOwn(object, key)) throw failure(`Missing JSON field: ${key}`);
-          return JSON.stringify(object[key]);
-        },
-        'host.json_integer': (json, key) => {
-          const value = objectJson(json)[text(key, 'JSON key')];
-          return integer(value, -2147483648, 2147483647, `integer field: ${key}`);
-        },
-        'host.json_set': (json, key, value) => JSON.stringify({ ...objectJson(json), [text(key, 'JSON key')]: value }),
-        'host.json_embed': (json, key, value) => {
-          let parsed;
-          try { parsed = JSON.parse(value); } catch { throw failure('Invalid embedded JSON'); }
-          return JSON.stringify({ ...objectJson(json), [text(key, 'JSON key')]: parsed });
-        },
-        'host.json_merge': (previous, next) => JSON.stringify({ ...objectJson(previous), ...objectJson(next) }),
+        ...createJsonObjectBindings(),
         'host.table_get': (name, key) => {
           text(key, 'table key');
           const entry = table(name).get(key);
@@ -526,6 +519,7 @@ export async function createPascalishServiceHost({
     }
     await tail;
     if (bluetoothSource) await bluetoothSource.stop();
+    isamBindings.dispose();
     for (const replica of replicas.values()) await replica.stop();
     replicas.clear();
     if (socket) await closeSocket(socket);

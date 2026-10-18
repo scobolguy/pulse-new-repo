@@ -1,0 +1,27 @@
+{
+  "name": "@pulse/cobolish85",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "exports": {
+    ".": "./src/compile-cobolish-to-pcode.mjs",
+    "./tandem": "./src/compile-tandem-cobol85-to-pcode.mjs",
+    "./metadata": "./src/cobolish-antlr-compiler.mjs",
+    "./picture": "./src/cobol-picture.mjs"
+  },
+  "scripts": {
+    "compile": "node src/compile-tandem-cobol85-to-pcode.mjs",
+    "antlr:generate": "node scripts/generate-parser.mjs",
+    "test": "node --test tests/*.test.mjs tests/nucleus-suite.mjs tests/ccvs-coverage-suite.mjs",
+    "test:nucleus": "node --test tests/nucleus-suite.mjs",
+    "test:ccvs": "node --test tests/ccvs-coverage-suite.mjs",
+    "test:syntax": "node --test tests/syntax-foundations.test.mjs tests/ccvs-syntax.mjs",
+    "report": "node scripts/generate-test-report.mjs",
+    "validate:ccvs": "node validation/run.mjs",
+    "validate:examples": "node validation/examples.mjs",
+    "issues:ccvs": "node validation/github-issues.mjs"
+  },
+  "dependencies": { "antlr4": "^4.13.2" },
+  "devDependencies": { "pdfjs-dist": "5.4.530" }
+}
