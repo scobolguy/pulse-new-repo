@@ -21,7 +21,11 @@ public:
         : host(host), serve(std::move(serve)) {}
     bool canHandle(AsyncWebServerRequest* request) override {
         if (request->method() != HTTP_GET && request->method() != HTTP_POST) return false;
-        return host.handles(request->method() == HTTP_GET ? "GET" : "POST", request->url().c_str());
+        if (!host.handles(request->method() == HTTP_GET ? "GET" : "POST", request->url().c_str())) return false;
+        // AsyncWebServer discards unregistered headers after selecting a handler.
+        request->addInterestingHeader("x-pulse-transaction-id");
+        request->addInterestingHeader("x-pulse-ingress-aggregator-id");
+        return true;
     }
     void handleBody(AsyncWebServerRequest* request, uint8_t* data, size_t len,
                     size_t index, size_t total) override {
@@ -730,6 +734,15 @@ void addRunOutputsToJson(
     pressure["riskLevel"] = status.memoryPressureLevel.c_str();
     pressure["stackHeapCollisionRisk"] = status.stackHeapCollisionRisk;
 
+    const auto extendedStorage = machine.getExtendableStorageDiagnostics();
+    JsonObject extended = out["extendedStorage"].to<JsonObject>();
+    extended["declarationCount"] = extendedStorage.declarationCount;
+    extended["elementCount"] = extendedStorage.elementCount;
+    extended["allocatedBytes"] = extendedStorage.allocatedBytes;
+    extended["psramBytes"] = extendedStorage.psramBytes;
+    extended["heapBytes"] = extendedStorage.heapBytes;
+    extended["globalsSnapshotOmittedElements"] = extendedStorage.globalsSnapshotOmittedElements;
+
     JsonArray stdoutLines = out["stdout"].to<JsonArray>();
     for (const auto& line : machine.getLastRunTextOutput()) {
         stdoutLines.add(line.c_str());
@@ -760,8 +773,11 @@ void addRunOutputsToJson(
             flow[kv.first.c_str()] = kv.second.c_str();
         }
     }
+    auto runtimeIt = flowState.find("__runtime_error");
     auto thunkIt = flowState.find("__thunk_error");
-    if (thunkIt != flowState.end()) {
+    if (runtimeIt != flowState.end()) {
+        out["runtimeError"] = runtimeIt->second.c_str();
+    } else if (thunkIt != flowState.end()) {
         out["runtimeError"] = thunkIt->second.c_str();
     } else {
         auto orchIt = flowState.find("__orch_error");
@@ -1560,10 +1576,12 @@ bool deserializeProgramMapForExec(const String& path, FederatedFileSystem* ffs, 
     filter["signing"] = true;
     filter["hostBindingsVersion"] = true;
     filter["hostImageFormat"] = true;
+    filter["hostImageProfile"] = true;
     filter["targets"] = true;
     filter["version"] = true;
     filter["serviceId"] = true;
     filter["runtimeUnit"] = true;
+    filter["serviceLifecycle"] = true;
     filter["hostTables"][0]["name"] = true;
     filter["hostTables"][0]["capacity"] = true;
     filter["hostCaches"][0]["name"] = true;
@@ -3893,6 +3911,25 @@ bool startAsyncPcodeWorker(pmachine::PMachine& machine, FederatedFileSystem* ffs
 }
 #endif
 
+#if defined(ESP32)
+namespace {
+pmachine::ServiceHost& hostedServiceHost() {
+    static pmachine::ServiceHost host;
+    return host;
+}
+}
+#endif
+
+bool startPMachineLanDiscovery(FederatedFileSystem& ffs, uint16_t udpPort,
+                              const std::string& nodeId, uint16_t httpPort, std::string& error) {
+#if defined(ESP32)
+    return hostedServiceHost().startDiscovery(ffs, udpPort, nodeId, httpPort, error);
+#else
+    error = "Hosted LAN discovery requires ESP32";
+    return false;
+#endif
+}
+
 void registerPMachineRoutes(
 	AsyncWebServer& server,
 	pmachine::PMachine& machine,
@@ -3900,10 +3937,17 @@ void registerPMachineRoutes(
 	pmachine::PMachine* asyncWorkerMachine
 ) {
 #if defined(ESP32)
-    static pmachine::ServiceHost serviceHost;
+    static pmachine::ServiceHost& serviceHost = hostedServiceHost();
     server.on("/pmachine/service_host/install", HTTP_POST, [ffs](AsyncWebServerRequest* request) {
         String serviceFile, serviceMap, daemonFile, daemonMap, collectorId, udpPort = "4210", daemonsJson;
         String ttl = "180000", heartbeat = "60000";
+        String lifecycleJson, ownerAggregatorId, reportTargetJson, reportTargetsJson, bindingsJson;
+        const bool hasLifecycle = getRequestParam(request, "serviceLifecycle", lifecycleJson);
+        const bool hasOwner = getRequestParam(request, "ownerAggregatorId", ownerAggregatorId);
+        const bool hasReportTarget = getRequestParam(request, "reportTarget", reportTargetJson);
+        const bool hasReportTargets = getRequestParam(request, "reportTargets", reportTargetsJson);
+        const bool hasBindings = getRequestParam(request, "bindings", bindingsJson);
+        const bool hasLifecycleMetadata = hasLifecycle || hasOwner || hasReportTarget || hasReportTargets || hasBindings;
         // Shared-context mode: "daemons" is a JSON array of 1..2 {file,map,udpPort?} entries
         // sharing the service context/cache; it excludes daemonFile/daemonMap and allows udpPort=0.
         const bool sharedDaemons = getRequestParam(request, "daemons", daemonsJson);
@@ -4013,6 +4057,95 @@ void registerPMachineRoutes(
             Serial.printf("[SERVICE-HOST] Install rejected: %s\n", error.c_str());
             request->send(400, "text/plain", error); return;
         }
+        pmachine::ServiceHost::LifecycleMetadata lifecycle;
+        if (hasLifecycleMetadata) {
+            JsonDocument declaration, bindingDoc, targetDoc;
+            bool invalidDeclaration = !hasLifecycle || !hasOwner
+                || lifecycleJson.length() > 4096 || ownerAggregatorId.length() > 128;
+            if (!invalidDeclaration)
+                invalidDeclaration = deserializeJson(declaration, lifecycleJson) != DeserializationError::Ok;
+            if (!invalidDeclaration) {
+                JsonVariantConst version = declaration["version"];
+                JsonVariantConst requires = declaration["requires"];
+                invalidDeclaration = !declaration.is<JsonObjectConst>()
+                    || !version.is<int>() || version.as<int>() != 1
+                    || !requires.is<JsonArrayConst>() || requires.size() > 8;
+            }
+            if (invalidDeclaration) {
+                request->send(400, "text/plain", "Incomplete or invalid hosted lifecycle install metadata"); return;
+            }
+            lifecycle.configured = true;
+            lifecycle.ownerAggregatorId = ownerAggregatorId.c_str();
+            for (JsonVariantConst required : declaration["requires"].as<JsonArrayConst>()) {
+                if (!required.is<const char*>()) {
+                    request->send(400, "text/plain", "Lifecycle requirements must be text"); return;
+                }
+                lifecycle.requires.emplace_back(required.as<const char*>());
+            }
+            if (hasBindings) {
+                if (bindingsJson.length() > 4096 || deserializeJson(bindingDoc, bindingsJson)
+                    || !bindingDoc.is<JsonObjectConst>()) {
+                    request->send(400, "text/plain", "Invalid explicit lifecycle dependency bindings"); return;
+                }
+            } else if (declaration["bindings"].is<JsonObjectConst>()) {
+                bindingDoc.set(declaration["bindings"]);
+            } else if (!lifecycle.requires.empty()) {
+                request->send(400, "text/plain", "Lifecycle requirements need explicit dependency bindings"); return;
+            }
+            for (JsonPairConst pair : bindingDoc.as<JsonObjectConst>()) {
+                const char* key = pair.key().c_str();
+                JsonObjectConst value = pair.value().as<JsonObjectConst>();
+                if (!key || !value || !value["instanceId"].is<const char*>()
+                    || !value["endpoint"].is<const char*>()
+                    || !value["readinessUrl"].is<const char*>()) {
+                    request->send(400, "text/plain", "Each dependency binding requires instanceId, endpoint and readinessUrl"); return;
+                }
+                pmachine::ServiceHost::DependencyBinding binding;
+                binding.instanceId = value["instanceId"].as<const char*>();
+                binding.endpoint = value["endpoint"].as<const char*>();
+                binding.readinessUrl = value["readinessUrl"].as<const char*>();
+                lifecycle.bindings.emplace(key, std::move(binding));
+            }
+            auto appendTarget = [&](JsonVariantConst value, bool allowOwnerDefault) {
+                const char* endpoint = value.is<const char*>() ? value.as<const char*>()
+                    : value["endpoint"].is<const char*>() ? value["endpoint"].as<const char*>()
+                    : value["url"].is<const char*>() ? value["url"].as<const char*>() : nullptr;
+                const char* aggregatorId = value.is<JsonObjectConst>()
+                    && value["aggregatorId"].is<const char*>()
+                    ? value["aggregatorId"].as<const char*>() : nullptr;
+                if (!endpoint || lifecycle.reportTargets.size() >= 4
+                    || (!aggregatorId && !allowOwnerDefault)) return false;
+                pmachine::ServiceHost::AggregatorTarget target;
+                target.aggregatorId = aggregatorId ? aggregatorId : ownerAggregatorId.c_str();
+                target.endpoint = endpoint;
+                if (value.is<JsonObjectConst>() && !value["bearerToken"].isNull()) {
+                    if (!value["bearerToken"].is<const char*>()) return false;
+                    target.bearerToken = value["bearerToken"].as<const char*>();
+                }
+                lifecycle.reportTargets.push_back(std::move(target));
+                return true;
+            };
+            if (hasReportTargets) {
+                if (reportTargetsJson.length() > 2048 || deserializeJson(targetDoc, reportTargetsJson)
+                    || !targetDoc.is<JsonArrayConst>() || targetDoc.size() < 1 || targetDoc.size() > 4) {
+                    request->send(400, "text/plain", "Invalid aggregator reportTargets array"); return;
+                }
+                for (JsonVariantConst target : targetDoc.as<JsonArrayConst>())
+                    if (!appendTarget(target, targetDoc.size() == 1)) {
+                    request->send(400, "text/plain", "Each reportTargets entry needs aggregatorId and endpoint/url; a single target may use the explicit owner ID"); return;
+                }
+            } else if (hasReportTarget && (reportTargetJson.startsWith("{") || reportTargetJson.startsWith("["))) {
+                if (reportTargetJson.length() > 1024 || deserializeJson(targetDoc, reportTargetJson)
+                    || !appendTarget(targetDoc.as<JsonVariantConst>(), true)) {
+                    request->send(400, "text/plain", "Invalid aggregator report target"); return;
+                }
+            } else if (hasReportTarget) {
+                pmachine::ServiceHost::AggregatorTarget target;
+                target.aggregatorId = ownerAggregatorId.c_str();
+                target.endpoint = reportTargetJson.c_str();
+                lifecycle.reportTargets.push_back(std::move(target));
+            }
+        }
         std::string installError;
         JsonDocument networkPeers;
         String peerJson;
@@ -4023,9 +4156,11 @@ void registerPMachineRoutes(
         }
         const bool installed = sharedDaemons
             ? serviceHost.install(std::move(service), std::move(daemonSpecs), collectorId.c_str(),
-                                  portValue, ttlValue, heartbeatValue, installError, networkPeers.as<JsonVariantConst>())
+                                  portValue, ttlValue, heartbeatValue, installError,
+                                  networkPeers.as<JsonVariantConst>(), std::move(lifecycle))
             : serviceHost.install(std::move(service), std::move(daemon), collectorId.c_str(),
-                                  portValue, ttlValue, heartbeatValue, installError, networkPeers.as<JsonVariantConst>());
+                                  portValue, ttlValue, heartbeatValue, installError,
+                                  networkPeers.as<JsonVariantConst>(), std::move(lifecycle));
         if (!installed) {
             Serial.printf("[SERVICE-HOST] Install failed: %s\n", installError.c_str());
             const int code = installError.find("Duplicate") != std::string::npos
@@ -4076,8 +4211,19 @@ void registerPMachineRoutes(
         }
         std::string queryJson;
         serializeJson(query, queryJson);
+        std::string transactionId;
+        if (request->hasHeader("x-pulse-transaction-id")) {
+            const AsyncWebHeader* header = request->getHeader("x-pulse-transaction-id");
+            if (header && header->value().length() <= 64) transactionId = header->value().c_str();
+        }
+        std::string ingressAggregatorId;
+        if (request->hasHeader("x-pulse-ingress-aggregator-id")) {
+            const AsyncWebHeader* header = request->getHeader("x-pulse-ingress-aggregator-id");
+            if (header && header->value().length() <= 128) ingressAggregatorId = header->value().c_str();
+        }
         const auto event = serviceHost.enqueue(method, request->url().c_str(), body,
-            request->client()->remoteIP().toString().c_str(), queryJson, status, response);
+            request->client()->remoteIP().toString().c_str(), queryJson, status, response,
+            transactionId, ingressAggregatorId);
         if (!event) {
             Serial.printf("[SERVICE-HOST] HTTP ingress rejected: %s\n", response.c_str());
             request->send(status, "text/plain", response.c_str()); return;

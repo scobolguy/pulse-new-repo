@@ -1,4 +1,7 @@
 import { object, parseMapping, publicationPayload, samePublishedMapping } from './dataMapperModel.js';
+import { LogicalServiceTransactions } from './logicalServiceTransactions.js';
+const LIBRARIAN_SERVICE_ID = 'pulse-data-librarian';
+const MAPPER_SERVICE_ID = 'pulse-data-mapper';
 export function structurePending(schema) {
     return !schema.structure && schema.structureLoaded === false;
 }
@@ -10,32 +13,20 @@ export class MapperHttpError extends Error {
     }
 }
 export class DataMapperBackend {
-    signal;
     baseUrl;
+    transactions;
     constructor(baseUrl, signal) {
-        this.signal = signal;
-        const url = new URL(baseUrl);
-        if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
-            throw new Error('pulse-pmachine.backendUrl must be an HTTP/HTTPS base URL without credentials, query or fragment.');
-        }
-        this.baseUrl = url.toString().replace(/\/+$/, '');
+        this.transactions = new LogicalServiceTransactions(baseUrl, signal);
+        this.baseUrl = this.transactions.baseUrl;
     }
-    async request(route, method = 'GET', body, timeout = 30000) {
-        const signals = [AbortSignal.timeout(timeout)];
-        if (this.signal)
-            signals.push(this.signal);
-        const response = await fetch(`${this.baseUrl}${route}`, {
-            method, redirect: 'error', signal: AbortSignal.any(signals),
-            ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+    async request(serviceId, route, method = 'GET', body) {
+        const response = await this.transactions.request(serviceId, {
+            method,
+            path: route,
+            ...(body === undefined ? {} : { body }),
         });
-        let data;
-        try {
-            data = await response.json();
-        }
-        catch {
-            throw new MapperHttpError(response.status, `${method} ${route}: expected JSON (HTTP ${response.status}).`);
-        }
-        if (!response.ok) {
+        const data = response.body;
+        if (response.status < 200 || response.status >= 300) {
             throw new MapperHttpError(response.status, `${method} ${route}: ${object(data) && typeof data.error === 'string' ? data.error : `HTTP ${response.status}`}`);
         }
         if (!object(data))
@@ -43,7 +34,7 @@ export class DataMapperBackend {
         return data;
     }
     async schemas() {
-        const data = await this.request('/api/librarian/schemas');
+        const data = await this.request(LIBRARIAN_SERVICE_ID, '/api/librarian/schemas');
         if (!Array.isArray(data.schemas))
             throw new Error('Librarian returned an invalid schemas list.');
         return data.schemas.map((schema) => {
@@ -56,7 +47,7 @@ export class DataMapperBackend {
     }
     // Schema lists are lazy; structures are parsed and cached by the Librarian on first request.
     async schemaStructure(path, reparse = false) {
-        const data = await this.request(`/api/librarian/schema-structure?path=${encodeURIComponent(path)}${reparse ? '&reparse=true' : ''}`, 'GET', undefined, 120000);
+        const data = await this.request(LIBRARIAN_SERVICE_ID, `/api/librarian/schema-structure?path=${encodeURIComponent(path)}${reparse ? '&reparse=true' : ''}`);
         const structure = data.structure;
         if (structure != null && (!object(structure) || !Array.isArray(structure.children))) {
             throw new Error(`Librarian returned an invalid field structure for ${path}.`);
@@ -71,11 +62,11 @@ export class DataMapperBackend {
         return { ...schema, structure: loaded.structure, structureLoaded: true, ...(loaded.mtime ? { mtime: loaded.mtime } : {}) };
     }
     async maps() {
-        const data = await this.request('/api/mapper/maps');
+        const data = await this.request(MAPPER_SERVICE_ID, '/api/mapper/maps');
         return this.namedList(data.maps, 'maps');
     }
     async testCases() {
-        const data = await this.request('/api/mapper/test-cases');
+        const data = await this.request(MAPPER_SERVICE_ID, '/api/mapper/test-cases');
         return this.namedList(data.testCases, 'test cases');
     }
     namedList(value, label) {
@@ -89,7 +80,7 @@ export class DataMapperBackend {
         });
     }
     async map(id) {
-        const data = await this.request(`/api/mapper/maps/${encodeURIComponent(id)}`);
+        const data = await this.request(MAPPER_SERVICE_ID, `/api/mapper/maps/${encodeURIComponent(id)}`);
         return parseMapping(JSON.stringify(data.map));
     }
     async existingMap(id) {
@@ -111,12 +102,12 @@ export class DataMapperBackend {
                 throw new Error('The backend map changed during confirmation. Refresh and publish again.');
             }
         }
-        const data = await this.request(existing ? `/api/mapper/maps/${encodeURIComponent(String(map.id))}` : '/api/mapper/maps', existing ? 'PUT' : 'POST', payload);
+        const data = await this.request(MAPPER_SERVICE_ID, existing ? `/api/mapper/maps/${encodeURIComponent(String(map.id))}` : '/api/mapper/maps', existing ? 'PUT' : 'POST', payload);
         let saved = parseMapping(JSON.stringify(data.map));
         // POST creates a default map and does not accept submaps; preserve them with the supported PUT.
         if (!existing && Array.isArray(payload.submaps) && payload.submaps.length) {
             try {
-                const updated = await this.request(`/api/mapper/maps/${encodeURIComponent(String(saved.id))}`, 'PUT', payload);
+                const updated = await this.request(MAPPER_SERVICE_ID, `/api/mapper/maps/${encodeURIComponent(String(saved.id))}`, 'PUT', payload);
                 saved = parseMapping(JSON.stringify(updated.map));
             }
             catch (error) {
@@ -138,7 +129,7 @@ export class DataMapperBackend {
         const saved = await this.map(String(map.id));
         if (!samePublishedMapping(map, saved))
             throw new Error('Local changes are not published. Publish this map before running it.');
-        const data = await this.request(`/api/mapper/maps/${encodeURIComponent(String(map.id))}/run`, 'POST', input, 120000);
+        const data = await this.request(MAPPER_SERVICE_ID, `/api/mapper/maps/${encodeURIComponent(String(map.id))}/run`, 'POST', input);
         if (typeof data.mapId !== 'string' || !object(data.input) || !object(data.output)
             || !Array.isArray(data.diagnostics) || !data.diagnostics.every(object)) {
             throw new Error('Aggregator returned an invalid mapping run result.');

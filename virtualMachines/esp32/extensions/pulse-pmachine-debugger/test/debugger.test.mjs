@@ -21,6 +21,48 @@ const source = await readFile(program, 'utf8');
 const collectorSource = await readFile(collectorProgram, 'utf8');
 const artifact = compilePascalishProgramWithAntlr(source, { fileName: 'towers-of-hanoi-program.pas' });
 
+function mockLogicalServiceFetch(handler) {
+  let nextTransactionId = 1;
+  const transactions = new Map();
+  return async (url, options = {}) => {
+    const target = new URL(String(url));
+    if (target.pathname.startsWith('/api/runtime/services/') && options.method === 'POST') {
+      const request = JSON.parse(options.body);
+      const transactionId = `mock-${nextTransactionId++}`;
+      const response = await handler(new URL(request.path, `${target.origin}/`).toString(), {
+        method: request.method,
+        body: request.body,
+      });
+      if (!(response instanceof Response)) throw new Error('Logical service mock must return a Response.');
+      let responseBody;
+      try { responseBody = await response.json(); }
+      catch { responseBody = null; }
+      transactions.set(transactionId, {
+        serviceId: target.pathname.split('/')[4],
+        status: response.status,
+        body: responseBody,
+      });
+      return Response.json({
+        transactionId,
+        status: 'allocated',
+        statusUrl: `/api/runtime/transactions/${transactionId}`,
+      }, { status: 202 });
+    }
+    if (target.pathname.startsWith('/api/runtime/transactions/')) {
+      const transactionId = target.pathname.split('/').pop();
+      const transaction = transactions.get(transactionId);
+      if (!transaction) return Response.json({ error: 'Unknown transaction' }, { status: 404 });
+      return Response.json({
+        transactionId,
+        serviceId: transaction.serviceId,
+        status: 'completed',
+        result: { status: transaction.status, body: transaction.body },
+      });
+    }
+    return handler(String(url), options);
+  };
+}
+
 const vscodeMock = `
   export class Disposable {
     static from(...items) { return { dispose() { for (const item of items) item.dispose(); } }; }
@@ -56,6 +98,19 @@ const vscodeMock = `
     onDidChangeActiveTextEditor: () => ({ dispose() {} }),
     registerCustomEditorProvider: () => ({ dispose() {} }),
     registerCustomTextEditorProvider: () => ({ dispose() {} }),
+    createTreeView: (id, options) => {
+      if (id === 'pulseCatalogStudio.sidebar' || id === 'pulse-pmachine.dataLibrarian') {
+        globalThis.pulseTestLibrarianProvider = options.treeDataProvider;
+      }
+      if (id === 'pulseCatalogStudio.esp32Librarian') {
+        globalThis.pulseTestEsp32LibrarianProvider = options.treeDataProvider;
+      }
+      return {
+        dispose() {},
+        onDidChangeSelection: () => ({ dispose() {} }),
+        reveal: async () => {},
+      };
+    },
     createOutputChannel: () => ({ dispose() {}, appendLine() {} }),
     createWebviewPanel: () => { throw new Error('webview not available in tests'); },
     registerTreeDataProvider: (id, provider) => {
@@ -90,8 +145,56 @@ Module._load = function (specifier, parent, isMain) {
 };
 const { activate, loadPmachineTargets } = await import('../out/extension.js');
 Module._load = originalModuleLoad;
+let activationRequests = 0;
+const originalFetchAtActivation = globalThis.fetch;
+globalThis.fetch = async () => {
+  activationRequests++;
+  return Response.json({});
+};
 activate({ subscriptions: [], extensionUri: {} });
+await new Promise(resolve => setImmediate(resolve));
+globalThis.fetch = originalFetchAtActivation;
 hooks.deregister();
+
+test('activation and workspace trust do not start local services', async () => {
+  const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  const studioManifest = JSON.parse(await readFile(new URL('../../../tools/catalog-studio-vscode/package.json', import.meta.url), 'utf8'));
+  assert.equal(activationRequests, 0, 'activation makes no startup health checks');
+  assert.equal(vscode.registeredCommands.has('pulse-pmachine.startLocalServices'), false);
+  assert.equal(manifest.activationEvents.includes('onStartupFinished'), false);
+  assert.equal(studioManifest.activationEvents.includes('onStartupFinished'), false);
+  const properties = manifest.contributes.configuration.properties;
+  for (const setting of [
+    'pulse-pmachine.autoStartLocalServices', 'pulse-pmachine.aggregatorPath', 'pulse-pmachine.nodePath',
+    'pulse-pmachine.esp32LibrarianUrl',
+  ]) assert.equal(Object.hasOwn(properties, setting), false);
+  await assert.rejects(readFile(new URL('../src/localServices.ts', import.meta.url)), { code: 'ENOENT' });
+  await assert.rejects(readFile(new URL('../out/localServices.js', import.meta.url)), { code: 'ENOENT' });
+
+  let trustRequests = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    trustRequests++;
+    return Response.json({});
+  };
+  try {
+    globalThis.pulseTestTrustHandler();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(trustRequests, 0, 'granting workspace trust makes no startup health checks');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('bundled Pulse Studio client uses only its configured API and has no local Librarian fallback', async () => {
+  const source = await readFile(new URL('../../../tools/catalog-studio-vscode/extension.js', import.meta.url), 'utf8');
+  const bundled = await readFile(new URL('../out/pulse-studio/extension.js', import.meta.url), 'utf8');
+  for (const code of [source, bundled]) {
+    assert.doesNotMatch(code, /127\.0\.0\.1:4300/);
+    assert.doesNotMatch(code, /candidates\.push\(['"]http:\/\/127\.0\.0\.1:4000/);
+    assert.match(code, /return \[getCatalogStudioApiBase\(\)\]/);
+  }
+});
 
 test('Data Librarian has a dedicated contributed view and browses nested schema fields', async () => {
   const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
@@ -113,11 +216,11 @@ test('Data Librarian has a dedicated contributed view and browses nested schema 
     ] },
     { name: 'reference', kind: 'leaf', valueType: 'string' },
   ] } };
-  globalThis.fetch = async url => {
+  globalThis.fetch = mockLogicalServiceFetch(async url => {
     requests++;
     assert.equal(url, 'http://127.0.0.1:4000/api/librarian/schemas');
     return Response.json({ schemas: [{ path: 'unparsed.xsd', name: 'Unparsed', structure: null }, schema] });
-  };
+  });
   vscode.workspace.openTextDocument = async options => { snapshot = options; return { options }; };
   vscode.window.showTextDocument = async document => assert.deepEqual(document.options, snapshot);
   vscode.commands.executeCommand = async command => { focused = command; };
@@ -160,7 +263,7 @@ test('Data Librarian has a dedicated contributed view and browses nested schema 
 
 test('the unified VSIX contributes and activates the Pulse Studio Deploy panel', async () => {
   const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
-  assert.equal(manifest.version, '0.1.16');
+  assert.equal(manifest.version, '0.1.17');
   assert.equal(manifest.displayName, 'Pulse Studio & PMachine Debugger');
   assert.ok(manifest.contributes.viewsContainers.activitybar.some(item => item.id === 'pulseCatalogStudio'));
   assert.ok(manifest.contributes.views.pulseCatalogStudio.some(item => item.id === 'pulseCatalogStudio.deploy'));
@@ -183,7 +286,7 @@ test('Data Librarian loads lazily-parsed schema structures on expand and caches 
   const structure = { children: [{ name: 'Document', kind: 'branch', valueType: 'object', children: [
     { name: 'Id', kind: 'leaf', valueType: 'string' },
   ] }] };
-  globalThis.fetch = async url => {
+  globalThis.fetch = mockLogicalServiceFetch(async url => {
     urls.push(String(url));
     if (String(url).endsWith('/api/librarian/schemas')) {
       return Response.json({ schemas: [
@@ -193,7 +296,7 @@ test('Data Librarian loads lazily-parsed schema structures on expand and caches 
     }
     if (String(url).includes('broken.xsd')) return Response.json({ error: 'parse failed' }, { status: 500 });
     return Response.json({ path: 'iso/pain.001.xsd', mtime: 'm2', structure });
-  };
+  });
   try {
     const provider = globalThis.pulseTestLibrarianProvider;
     const schemas = await provider.getChildren();
@@ -215,19 +318,104 @@ test('Data Librarian loads lazily-parsed schema structures on expand and caches 
   }
 });
 
-test('Data Librarian falls back to the Librarian service when the backend is unreachable', async () => {
+test('Data Librarian reports a backend failure without trying a local Librarian', async () => {
   const originalFetch = globalThis.fetch;
+  const originalShowErrorMessage = vscode.window.showErrorMessage;
+  const errors = [];
   const urls = [];
-  globalThis.fetch = async url => {
-    urls.push(url);
-    if (String(url).startsWith('http://127.0.0.1:4000')) throw new TypeError('fetch failed');
-    return Response.json({ schemas: [{ path: 'direct.json' }] });
-  };
+  vscode.window.showErrorMessage = message => errors.push(message);
+  globalThis.fetch = mockLogicalServiceFetch(async url => {
+    urls.push(String(url));
+    throw new TypeError('fetch failed');
+  });
   try {
     const items = await globalThis.pulseTestLibrarianProvider.getChildren();
-    assert.equal(items[0].label, 'direct.json');
-    assert.deepEqual(urls, ['http://127.0.0.1:4000/api/librarian/schemas', 'http://127.0.0.1:4300/api/librarian/schemas']);
+    assert.match(items[0].label, /Data Librarian unavailable/);
+    assert.deepEqual(urls, ['http://127.0.0.1:4000/api/librarian/schemas']);
+    assert.deepEqual(errors, ['Pulse Data Librarian: fetch failed']);
   } finally {
+    globalThis.fetch = originalFetch;
+    vscode.window.showErrorMessage = originalShowErrorMessage;
+  }
+});
+
+test('ESP32 catalog uses logical-service transactions through configured backend and surfaces failures', async () => {
+  const { Esp32LibrarianViewProvider } = await import('../out/esp32LibrarianView.js');
+  const originalFetch = globalThis.fetch;
+  const originalShowErrorMessage = vscode.window.showErrorMessage;
+  const requests = [];
+  const errors = [];
+  globalThis.fetch = async (url, options = {}) => {
+    const target = new URL(String(url));
+    requests.push({ target, method: options.method ?? 'GET', body: options.body && JSON.parse(options.body) });
+    if (target.pathname === '/api/runtime/services/pulse-librarian-s3-readonly/transactions') {
+      return Response.json({
+        transactionId: 'track-1',
+        status: 'held',
+        statusUrl: '/api/runtime/transactions/track-1',
+      }, { status: 202 });
+    }
+    assert.equal(target.pathname, '/api/runtime/transactions/track-1');
+    return Response.json({
+      transactionId: 'track-1',
+      serviceId: 'pulse-librarian-s3-readonly',
+      status: 'failed',
+      reason: 'service unavailable',
+    });
+  };
+  vscode.window.showErrorMessage = message => errors.push(message);
+  const provider = new Esp32LibrarianViewProvider({ appendLine() {} });
+  try {
+    const [service] = await provider.getChildren();
+    const items = await provider.getChildren(service);
+    assert.match(items[0].label, /unavailable/);
+    assert.deepEqual(requests.map(request => [request.target.origin, request.target.pathname, request.method]), [
+      ['http://127.0.0.1:4000', '/api/runtime/services/pulse-librarian-s3-readonly/transactions', 'POST'],
+      ['http://127.0.0.1:4000', '/api/runtime/transactions/track-1', 'GET'],
+    ]);
+    assert.deepEqual(requests[0].body, {
+      method: 'POST',
+      path: '/api/librarian/schemas/page',
+      body: { path: '', cursor: '', limit: 8 },
+    });
+    assert.deepEqual(errors, ['ESP32 Data Librarian: Transaction track-1 failed: service unavailable']);
+  } finally {
+    provider.dispose();
+    globalThis.fetch = originalFetch;
+    vscode.window.showErrorMessage = originalShowErrorMessage;
+  }
+});
+
+test('ESP32 read-only files open metadata without requesting desktop parsing', async () => {
+  const { Esp32LibrarianViewProvider } = await import('../out/esp32LibrarianView.js');
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    const target = new URL(String(url));
+    requests.push(target.pathname);
+    if (options.method === 'POST') {
+      assert.equal(target.pathname, '/api/runtime/services/pulse-librarian-s3-readonly/transactions');
+      return Response.json({ transactionId: 'track-2', status: 'allocated',
+        statusUrl: '/api/runtime/transactions/track-2' }, { status: 202 });
+    }
+    assert.equal(target.pathname, '/api/runtime/transactions/track-2');
+    return Response.json({ transactionId: 'track-2', serviceId: 'pulse-librarian-s3-readonly',
+      status: 'completed', result: { status: 200, body: { status: 200, body: JSON.stringify({
+        entries: [{ name: 'sample.xsd', kind: 'file', size: 100 }], nextCursor: '',
+      }) } } });
+  };
+  const provider = new Esp32LibrarianViewProvider({ appendLine() {} });
+  try {
+    const [service] = await provider.getChildren();
+    const [file] = await provider.getChildren(service);
+    assert.equal(file.label, 'sample.xsd');
+    assert.equal(file.collapsibleState, vscode.TreeItemCollapsibleState.None);
+    assert.equal(file.command.command, 'pulse-pmachine.openEsp32LibrarianSchema');
+    assert.match(file.tooltip, /Native field parsing is not available/);
+    assert.deepEqual(await provider.getChildren(file), []);
+    assert.equal(requests.length, 2);
+  } finally {
+    provider.dispose();
     globalThis.fetch = originalFetch;
   }
 });
@@ -249,17 +437,17 @@ test('Data Librarian surfaces catalog errors, empty catalogs, and recovers on re
       () => Response.json({ schemas: {} }),
       () => Response.json({ schemas: [{ path: 'broken', structure: { children: [{}] } }] }),
     ]) {
-      globalThis.fetch = async () => response();
+      globalThis.fetch = mockLogicalServiceFetch(async () => response());
       const items = await provider.getChildren();
       assert.match(items[0].label, /unavailable - refresh/);
       assert.ok(items[0].tooltip);
     }
     assert.equal(errors.length, 3);
     assert.equal(output.length, 3);
-    globalThis.fetch = async () => Response.json({ schemas: [] });
+    globalThis.fetch = mockLogicalServiceFetch(async () => Response.json({ schemas: [] }));
     provider.refresh();
     assert.match((await provider.getChildren())[0].label, /No schemas registered/);
-    globalThis.fetch = async () => Response.json({ schemas: [{ path: 'recovered.json' }] });
+    globalThis.fetch = mockLogicalServiceFetch(async () => Response.json({ schemas: [{ path: 'recovered.json' }] }));
     provider.refresh();
     assert.equal((await provider.getChildren())[0].label, 'recovered.json');
   } finally {

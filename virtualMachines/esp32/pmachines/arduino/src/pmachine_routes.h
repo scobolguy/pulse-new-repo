@@ -24,4 +24,6 @@ void registerPMachineRoutes(
 	FederatedFileSystem* ffs = nullptr,
 	pmachine::PMachine* asyncWorkerMachine = nullptr
 );
+bool startPMachineLanDiscovery(FederatedFileSystem& ffs, uint16_t udpPort,
+                              const std::string& nodeId, uint16_t httpPort, std::string& error);
 void invalidateRouterExecutionCache();

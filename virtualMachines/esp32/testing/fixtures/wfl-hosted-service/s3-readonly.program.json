@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "serviceId": "pulse-librarian-s3-readonly",
+  "serviceLifecycle": {
+    "version": 1,
+    "requires": [
+      "pulse-filesystem"
+    ]
+  }
+}

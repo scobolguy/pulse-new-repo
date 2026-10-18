@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "compiledAt": "2026-10-08T05:51:35.740Z",
+  "compiledAt": "2026-10-11T21:02:28.683Z",
   "compilerPipeline": "pascalish-g4",
   "serviceId": "hello",
   "runtimeUnit": {
@@ -95,7 +95,6 @@
     "systems": [],
     "databases": [],
     "tables": [],
-    "librarianImports": [],
     "sourceLocation": {
       "sourceFile": "",
       "sourceLanguage": "pascalish",
@@ -124,8 +123,8 @@
           "transformRule": "output := 'hello, world';"
         }
       ],
-      "createdAt": "2026-10-08T05:51:35.741Z",
-      "updatedAt": "2026-10-08T05:51:35.741Z"
+      "createdAt": "2026-10-11T21:02:28.686Z",
+      "updatedAt": "2026-10-11T21:02:28.686Z"
     }
   ],
   "dataMappings": [],
@@ -141,7 +140,7 @@
   "pcodeText": "# Auto-generated from ANTLR Pascalish grammar\nJMP MAIN\nMAIN:\nROUTE_MATCH_QUEUE \"hello.in\"\nJZ ROUTER_SKIP_1\nROUTE_EVAL_WHEN \"output := 1;\"\nJZ OUT_SKIP_2\nROUTE_TRANSFORM \"output := 'hello, world';\"\nROUTE_EMIT \"hello.out\"\nOUT_SKIP_2:\nROUTER_SKIP_1:\nHALT\n",
   "programMap": {
     "version": 1,
-    "generatedAt": "2026-10-08T05:51:35.738Z",
+    "generatedAt": "2026-10-11T21:02:28.680Z",
     "serviceId": "hello",
     "runtimeUnit": {
       "kind": "program",
@@ -264,14 +263,15 @@
     "serviceEndpoints": [],
     "globals": [],
     "variableDeclarations": [],
+    "extendableDeclarations": [],
     "enums": {},
     "procedures": {},
     "typeDeclarations": [],
     "classDeclarations": [],
     "entryLabel": "MAIN",
     "libraries": [],
-    "mapperImports": [],
-    "librarianImports": []
+    "librarianImports": [],
+    "mapperImports": []
   },
   "ir": {
     "typeDeclarations": [],

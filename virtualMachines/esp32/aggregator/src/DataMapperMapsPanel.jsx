@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { fetchServiceResponse as fetch } from './service-lifecycle/browser-transport.mjs';
 
 export function DataMapperMapsPanel({ onOpenMap }) {
   const [maps, setMaps] = useState([]);

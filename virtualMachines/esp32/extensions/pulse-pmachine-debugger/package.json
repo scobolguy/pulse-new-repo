@@ -2,7 +2,7 @@
   "name": "pulse-pmachine-debugger",
   "displayName": "Pulse Studio & PMachine Debugger",
   "description": "Pulse Studio, Data Librarian, Data Mapper, deployment and node inventory panels, plus native PMachine Run and Debug support.",
-  "version": "0.1.16",
+  "version": "0.1.18",
   "publisher": "pulse",
   "icon": "src/media/pulse-icon.png",
   "files": [
@@ -29,9 +29,9 @@
     "onLanguage:vbish",
     "onLanguage:wfl",
     "onLanguage:mapl",
+    "onLanguage:pulse-pcode",
     "onLanguage:cobolish",
     "onCommand:pulse-pmachine.showAnimation",
-    "onStartupFinished",
     "onLanguage:vfl"
   ],
   "main": "./out/extension.js",
@@ -46,6 +46,12 @@
         {
           "id": "pulseCatalogStudio.sidebar",
           "name": "Data Librarian",
+          "type": "tree",
+          "visibility": "visible"
+        },
+        {
+          "id": "pulseCatalogStudio.esp32Librarian",
+          "name": "Data Librarian (ESP32)",
           "type": "tree",
           "visibility": "visible"
         },
@@ -160,6 +166,15 @@
         "extensions": [
           ".mapl"
         ]
+      },
+      {
+        "id": "pulse-pcode",
+        "aliases": [
+          "PMachine P-code"
+        ],
+        "extensions": [
+          ".pcode"
+        ]
       }
     ],
     "grammars": [
@@ -172,6 +187,11 @@
         "language": "pascal",
         "scopeName": "source.pascal",
         "path": "./syntaxes/pascal.tmLanguage.json"
+      },
+      {
+        "language": "pulse-pcode",
+        "scopeName": "source.pulse-pcode",
+        "path": "./syntaxes/pcode.tmLanguage.json"
       }
     ],
     "commands": [
@@ -262,12 +282,17 @@
         "title": "Pulse: Stop Hosted Context"
       },
       {
-        "command": "pulse-pmachine.startLocalServices",
-        "title": "Pulse: Start Local Backend, Librarian and Mapper"
-      },
-      {
         "command": "pulse-pmachine.showDataLibrarian",
         "title": "Pulse Data Librarian: Browse Schemas"
+      },
+      {
+        "command": "pulse-pmachine.refreshEsp32Librarian",
+        "title": "Pulse: Refresh ESP32 Data Librarian",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "pulse-pmachine.openEsp32LibrarianSchema",
+        "title": "Pulse: Open ESP32 Schema Metadata"
       },
       {
         "command": "pulse-pmachine.refreshLibrarian",
@@ -392,6 +417,11 @@
           "group": "navigation"
         },
         {
+          "command": "pulse-pmachine.refreshEsp32Librarian",
+          "when": "view == pulseCatalogStudio.esp32Librarian",
+          "group": "navigation"
+        },
+        {
           "command": "pulse-pmachine.refreshLibrarian",
           "when": "view == pulse-pmachine.dataLibrarian",
           "group": "navigation"
@@ -454,6 +484,16 @@
           "group": "inline"
         },
         {
+          "command": "pulse-pmachine.openLibrarianSchema",
+          "when": "(view == pulseCatalogStudio.sidebar || view == pulse-pmachine.dataLibrarian) && viewItem == pulseLibrarianSchema",
+          "group": "1_open"
+        },
+        {
+          "command": "pulse-pmachine.openEsp32LibrarianSchema",
+          "when": "view == pulseCatalogStudio.esp32Librarian && viewItem == pulseEsp32LibrarianSchema",
+          "group": "1_open"
+        },
+        {
           "command": "pulse-pmachine.openServiceEndpoint",
           "when": "(view == pulse-pmachine.services || view == pulse-pmachine.servers) && viewItem == pulseServiceEndpoint",
           "group": "inline"
@@ -482,7 +522,7 @@
         },
         {
           "command": "pulse-pmachine.runCurrentFile",
-          "when": "editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl",
+          "when": "editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode",
           "group": "navigation@1"
         }
       ],
@@ -499,7 +539,7 @@
         },
         {
           "command": "pulse-pmachine.runCurrentFile",
-          "when": "editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl"
+          "when": "editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode"
         }
       ]
     },
@@ -516,6 +556,11 @@
           "default": "",
           "description": "Environment used when compiling WFL for Run on PMachine and debugging (e.g. dev, test, prod). Empty uses PULSE_ENVIRONMENT, then the file's DEFAULT ENVIRONMENT."
         },
+        "pulse-pmachine.nativeInterpreterPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional path to pulse_native_service_host.exe. Empty builds the C++ interpreter into .pulse-build/native-pmachine when the first P-code debug session starts."
+        },
         "pulse-pmachine.wfl.defines": {
           "type": "object",
           "additionalProperties": {
@@ -523,21 +568,6 @@
           },
           "default": {},
           "description": "Name/value pairs that override WFL LET variables when compiling for Run on PMachine and debugging."
-        },
-        "pulse-pmachine.autoStartLocalServices": {
-          "type": "boolean",
-          "default": true,
-          "description": "When backendUrl is on this machine, start the aggregator backend, Data Librarian (4300) and Data Mapper (4200) on activation if they are not running."
-        },
-        "pulse-pmachine.aggregatorPath": {
-          "type": "string",
-          "default": "",
-          "description": "Folder containing backend.mjs, data-librarian.mjs and data-mapper.mjs. Empty searches the workspace for aggregator or virtualMachines/esp32/aggregator."
-        },
-        "pulse-pmachine.nodePath": {
-          "type": "string",
-          "default": "node",
-          "description": "Node.js executable used to start local services."
         },
         "pulse-pmachine.nodeHosts": {
           "type": "array",
@@ -607,12 +637,13 @@
           "pascal",
           "cobolish",
           "vbish",
-          "wfl"
+          "wfl",
+          "pulse-pcode"
         ],
         "configurationAttributes": {
           "program": {
             "type": "string",
-            "description": "Source program to execute."
+            "description": "Source file or compiled .pcode file to execute."
           },
           "cobolSourceFormat": {
             "type": "string",
@@ -626,6 +657,26 @@
           "cobolDataDirectory": {
             "type": "string",
             "description": "Local COBOL debugger ISAM/filesystem storage directory. Defaults to .pulse-debug/cobol-data in the workspace."
+          },
+          "programMap": {
+            "type": "string",
+            "description": "P-code program-map sidecar. Defaults to the matching .program.json file beside the .pcode file."
+          },
+          "requestMethod": {
+            "type": "string",
+            "description": "HTTP method used to invoke a native hosted-service P-code artifact; defaults to the first service endpoint."
+          },
+          "requestPath": {
+            "type": "string",
+            "description": "HTTP path used to invoke a native hosted-service P-code artifact; defaults to the first service endpoint."
+          },
+          "requestBody": {
+            "type": "string",
+            "description": "Request body passed to the native hosted-service P-code artifact."
+          },
+          "nativeInterpreterPath": {
+            "type": "string",
+            "description": "Optional path to pulse_native_service_host.exe."
           },
           "environment": {
             "type": "string",
@@ -655,9 +706,10 @@
             "enum": [
               "js",
               "js-node",
-              "esp32"
+              "esp32",
+              "native"
             ],
-            "description": "js = in-process JS PMachine, js-node = standalone JS PMachine node (targetHost host:port), esp32 = ESP32 board (targetHost IP)."
+            "description": "js = in-process JS PMachine, js-node = standalone JS PMachine node (targetHost host:port), esp32 = ESP32 board (targetHost IP), native = local C++ interpreter for .pcode."
           },
           "debugSession": {
             "type": "boolean",
@@ -719,6 +771,13 @@
             "targetHost": "192.168.2.155",
             "debugSession": true,
             "program": "${workspaceFolder}/src/towers-of-hanoi-program.pas"
+          },
+          {
+            "type": "pulse-pmachine",
+            "request": "launch",
+            "name": "Debug native P-code file",
+            "runtime": "native",
+            "program": "${file}"
           }
         ]
       }
@@ -738,6 +797,9 @@
       },
       {
         "language": "wfl"
+      },
+      {
+        "language": "pulse-pcode"
       }
     ]
   },

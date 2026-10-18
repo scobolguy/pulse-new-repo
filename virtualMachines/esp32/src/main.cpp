@@ -3482,6 +3482,13 @@ void setup() {
 
     // 8. Web server for node name config (Async)
     setupWebServer();
+#if defined(ESP32) && defined(ENABLE_PMACHINE) && !defined(DISABLE_PMACHINE_ROUTES)
+    if (ffsUp) {
+        std::string discoveryError;
+        if (!startPMachineLanDiscovery(federatedFS, runtimeUdpParentPort, nodeName.c_str(), 80, discoveryError))
+            Serial.printf("[LAN-DISCOVERY] Bootstrap unavailable: %s\n", discoveryError.c_str());
+    }
+#endif
 #if defined(ENABLE_HTTPS) && (defined(ESP32) || defined(ESP8266))
     startHttpsService();
 #endif

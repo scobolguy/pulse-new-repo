@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { createServiceLifecycleRuntime, readServiceLifecycleConfig, describeBoundHttpListener } from '../../../aggregator/src/service-lifecycle-runtime.mjs';
 import dgram from 'node:dgram';
 import net from 'node:net';
 import { createHash, randomUUID } from 'node:crypto';
@@ -13,8 +14,8 @@ import { createHostCacheStore } from './host-cache.mjs';
 import { createReplicatedCache } from './replicated-cache.mjs';
 import { tableSchema } from './distributed-datastore.mjs';
 import { createFilesystemBindings } from './filesystem-bindings.mjs';
-import { createJsonCollectionBindings } from './json-collection-bindings.mjs';
 import { createIsamBindings } from './isam-bindings.mjs';
+import { createJsonCollectionBindings } from './json-collection-bindings.mjs';
 import { createJsonObjectBindings } from './json-object-bindings.mjs';
 import { createDesktopTextBindings } from './desktop-text-bindings.mjs';
 import { createDesktopDateBindings } from './desktop-date-bindings.mjs';
@@ -43,19 +44,44 @@ function objectJson(value) {
   return parsed;
 }
 
+function writeJsonResponse(response, status, value) {
+  const body = JSON.stringify(value);
+  response.writeHead(status, {
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-store',
+    'Content-Length': Buffer.byteLength(body)
+  }).end(body);
+}
+
 export async function createPascalishServiceHost({
-  compiled, daemons = [], collectorId, bindings = {}, networkPeers = [], host = '127.0.0.1', httpPort = 4300, udpPort = 4210,
+  compiled, daemons = [], collectorId, bindings = {}, networkPeers = [], httpAllowedPeers = [],
+  host = '127.0.0.1', httpPort = 4300, udpPort = 4210, sharedHttpListener = null,
   maxEntries = 255, maxTables = 4, maxEvents = 16, maxBodyBytes = 4096,
   maxStorageBytes = 131072, maxResponseBytes = 262144, maxSteps, maxExecutionMs,
   maxTimers = 8, maxDaemonDatagramBytes = 1024, clock = () => Math.floor(performance.now()), logger = console,
   onDaemonEvent = null, storageRoots = {}, maxFileBytes = 262144, desktopBudget = false,
-  distributedBindings = {}, bluetoothSourceFactory = null, filesystemBindingOverrides = {}
+  distributedBindings = {}, bluetoothSourceFactory = null, filesystemBindingOverrides = {},
+  lifecycle = undefined, infrastructureProbe = null
 }) {
   if (compiled?.programMap?.hostBindingsVersion !== SERVICE_HOST_BINDINGS_VERSION
     || compiled.programMap.runtimeUnit?.kind !== 'service') throw failure('Unsupported service host contract');
   if (!distributedBindings || typeof distributedBindings !== 'object' || Array.isArray(distributedBindings) ||
       (bluetoothSourceFactory !== null && typeof bluetoothSourceFactory !== 'function')) throw failure('Invalid service resource deployment grants');
+  if (!filesystemBindingOverrides || typeof filesystemBindingOverrides !== 'object' || Array.isArray(filesystemBindingOverrides) ||
+      Object.entries(filesystemBindingOverrides).some(([name, handler]) =>
+        !['host.fs_read_text', 'host.fs_read_text_auto', 'host.fs_write_text', 'host.fs_exists',
+          'host.fs_resolve_relative'].includes(name) || typeof handler !== 'function')) {
+    throw failure('Invalid filesystem binding overrides');
+  }
   text(collectorId, 'collectorId');
+  if (infrastructureProbe !== null && typeof infrastructureProbe !== 'function') {
+    throw failure('Invalid infrastructure probe primitive');
+  }
+  if (!Array.isArray(httpAllowedPeers) || httpAllowedPeers.some(peer => net.isIP(peer) === 0)) {
+    throw failure('HTTP allowed peers must be literal IP addresses');
+  }
+  const allowedHttpPeers = new Set(httpAllowedPeers);
+  if (httpAllowedPeers.length && net.isIP(host) === 0) throw failure('HTTP peer filtering requires a literal bind address');
   if (httpPort !== null) integer(httpPort, 0, 65535, 'HTTP port');
   if (udpPort !== null) integer(udpPort, 0, 65535, 'UDP port');
   integer(maxDaemonDatagramBytes, 1, 4096, 'maxDaemonDatagramBytes');
@@ -66,17 +92,26 @@ export async function createPascalishServiceHost({
   if (maxSteps === undefined) maxSteps = desktopBudget ? null : 100000;
   if (maxExecutionMs === undefined) maxExecutionMs = desktopBudget ? null : 2000;
   if (maxSteps === null && !desktopBudget) throw failure('Invalid maxSteps');
-  if (!filesystemBindingOverrides || typeof filesystemBindingOverrides !== 'object' || Array.isArray(filesystemBindingOverrides) ||
-      Object.entries(filesystemBindingOverrides).some(([name, handler]) =>
-        !['host.fs_read_text', 'host.fs_read_text_auto', 'host.fs_write_text', 'host.fs_exists',
-          'host.fs_resolve_relative'].includes(name) || typeof handler !== 'function')) {
-    throw failure('Invalid filesystem binding overrides');
-  }
   if (maxSteps !== null) integer(maxSteps, 1, desktopBudget ? Number.MAX_SAFE_INTEGER : 200000, 'maxSteps');
   if (maxExecutionMs === null && !desktopBudget) throw failure('Invalid maxExecutionMs');
   if (maxExecutionMs !== null) integer(maxExecutionMs, 1, 1000000, 'maxExecutionMs');
   integer(maxFileBytes, 1, 1000000, 'maxFileBytes');
   const instructions = parsePcode(compiled.pcodeText);
+  const declaredLifecycle = compiled.programMap.serviceLifecycle;
+  const configuredLifecycle = lifecycle?.metadata ?? declaredLifecycle;
+  const lifecycleMetadata = lifecycle === false || !configuredLifecycle ? null : {
+    ...configuredLifecycle,
+    requires: [...new Set([...(declaredLifecycle?.requires || []), ...(configuredLifecycle.requires || [])])],
+  };
+  const lifecycleConfig = lifecycle === false || (!lifecycle && (!lifecycleMetadata || httpPort === null))
+    ? null : readServiceLifecycleConfig({
+      serviceId: lifecycle?.serviceId || compiled.programMap.serviceId || compiled.programMap.runtimeUnit.id || collectorId,
+      requires: lifecycleMetadata?.requires || [],
+      metadata: lifecycleMetadata,
+      env: lifecycle?.env ?? process.env,
+      external: lifecycle?.external === true,
+    });
+  let lifecycleRuntime;
   const filesystem = await createFilesystemBindings(storageRoots, {
     maxFileBytes: Math.min(maxFileBytes, maxResponseBytes), maxPageBytes: maxResponseBytes
   });
@@ -90,7 +125,9 @@ export async function createPascalishServiceHost({
         && typeof filesystemBindingOverrides['host.fs_exists'] === 'function' ? ['filesystem.read'] : []),
       ...(typeof filesystemBindingOverrides['host.fs_write_text'] === 'function' ? ['filesystem.write'] : []),
       ...(Object.keys(distributedBindings).length ? ['distributed-cache'] : []),
-      ...(bluetoothSourceFactory ? ['bluetooth.discovery'] : [])],
+      ...(bluetoothSourceFactory ? ['bluetooth.discovery'] : []),
+      ...(infrastructureProbe ? ['infrastructure.readiness'] : []),
+      ...(networkPeers.length ? ['filesystem.remote'] : [])],
     limits: { maxBodyBytes, maxResponseBytes, maxSteps, maxExecutionMs, ...filesystem.limits }
   };
   assertHostCapabilities(compiled.programMap, instructions, capabilities.supported);
@@ -137,7 +174,7 @@ export async function createPascalishServiceHost({
       stats: { timerRuns: 0, udpEvents: 0, failures: 0, droppedDatagrams: 0, shedDatagrams: 0, lastError: '' }
     });
   }
-  const bootId = randomUUID();
+  const bootId = lifecycleConfig?.bootId || randomUUID();
   const networkBindings = createNetworkBindings(networkPeers);
   const tables = new Map();
   const declaredHostTables = compiled.programMap.hostTables;
@@ -259,6 +296,16 @@ export async function createPascalishServiceHost({
     pending += 1;
     const work = tail.then(async () => {
       if (closed) throw failure('Service is stopped', 503);
+      if (lifecycleRuntime && ['http', 'udp'].includes(event.transport)) {
+        if (event.transport === 'http' && event.method === 'GET' && event.path === '/ready') {
+          const readiness = lifecycleRuntime.getReadiness();
+          return { status: readiness.ready ? 200 : 503, body: readiness };
+        }
+        const decision = await lifecycleRuntime.gate(event.path);
+        if (!decision.allowed) return { status: decision.status, body: {
+          error: 'Service dependencies are not ready', ...lifecycleRuntime.getReadiness(),
+        } };
+      }
       let status = 200;
       // Cache reads are pinned to the invocation start so next/get/count see one snapshot.
       const readAt = now();
@@ -276,6 +323,10 @@ export async function createPascalishServiceHost({
         return value;
       };
       const handlers = {
+        'host.infrastructure_probe': async () => {
+          if (!infrastructureProbe) throw failure('Infrastructure probe is not configured', 503);
+          return infrastructureProbe();
+        },
         'host.bluetooth_read': limit => {
           if (!bluetoothSource) throw failure('Bluetooth discovery is not running', 503);
           return bluetoothSource.read(limit);
@@ -510,6 +561,7 @@ export async function createPascalishServiceHost({
     return stopping;
   }
   async function finishStop() {
+    if (lifecycleRuntime) await lifecycleRuntime.stop();
     if (starting) {
       try { await starting; } catch (error) { logError(error); }
     }
@@ -518,8 +570,8 @@ export async function createPascalishServiceHost({
       await new Promise(resolve => server.close(resolve));
     }
     await tail;
-    if (bluetoothSource) await bluetoothSource.stop();
     isamBindings.dispose();
+    if (bluetoothSource) await bluetoothSource.stop();
     for (const replica of replicas.values()) await replica.stop();
     replicas.clear();
     if (socket) await closeSocket(socket);
@@ -554,6 +606,10 @@ export async function createPascalishServiceHost({
         requests.add(req);
         try {
           if (requests.size > maxEvents) throw failure('HTTP request capacity exceeded', 503);
+          const peer = req.socket.remoteAddress?.replace('::ffff:', '') || '';
+          if (allowedHttpPeers.size && !allowedHttpPeers.has(peer)) {
+            throw failure('HTTP peer is not allowed', 403, 'EACCES');
+          }
           let size = 0;
           const chunks = [];
           for await (const chunk of req) {
@@ -563,24 +619,35 @@ export async function createPascalishServiceHost({
           }
           const requestUrl = new URL(req.url, 'http://localhost');
           const requestPath = requestUrl.pathname;
+          if (lifecycleRuntime && req.method === 'GET' && requestPath === '/ready') {
+            const readiness = lifecycleRuntime.getReadiness();
+            writeJsonResponse(res, readiness.ready ? 200 : 503, readiness);
+            return;
+          }
           if (req.method === 'GET' && requestPath === '/pmachine/service_host/status') {
-            res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
-              .end(JSON.stringify({ running, collectorId, bootId, capabilities,
-                daemons: [...units.values()].map(unit => ({ id: unit.id, ...unit.stats })),
-                replicas: [...replicas.values()].map(replica => replica.status()) }));
+            writeJsonResponse(res, 200, { running, collectorId, bootId, capabilities,
+              ...(lifecycleConfig ? {
+                serviceLifecycle: {
+                  version: lifecycleConfig.version, requires: lifecycleConfig.requires,
+                  bindings: lifecycleConfig.bindings,
+                },
+                readiness: lifecycleRuntime?.getReadiness(),
+              } : {}),
+              daemons: [...units.values()].map(unit => ({ id: unit.id, ...unit.stats })),
+              replicas: [...replicas.values()].map(replica => replica.status()) });
             return;
           }
           if (requestPath.startsWith('/events/')) throw failure('Internal service event', 404);
           const query = Object.fromEntries(requestUrl.searchParams);
           const result = await dispatch({
             transport: 'http', method: req.method, path: requestPath,
-            body: Buffer.concat(chunks).toString('utf8'), peer: req.socket.remoteAddress?.replace('::ffff:', '') || '',
+            body: Buffer.concat(chunks).toString('utf8'), peer,
             query
           });
-          if (!res.destroyed) res.writeHead(result.status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify(result.body));
+          if (!res.destroyed) writeJsonResponse(res, result.status, result.body);
         } catch (error) {
           logError(error);
-          if (!res.destroyed) res.writeHead(error.status || 500, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: error.message }));
+          if (!res.destroyed) writeJsonResponse(res, error.status || 500, { error: error.message });
         } finally { requests.delete(req); }
       });
       server.requestTimeout = 10000;
@@ -609,6 +676,28 @@ export async function createPascalishServiceHost({
       });
       if (closed) throw failure('Service stopped during startup', 503);
       server.on('error', error => logger.error(`[SERVICE] HTTP: ${error.message}`));
+    }
+    if (lifecycleConfig) {
+      lifecycleRuntime = await createServiceLifecycleRuntime({
+        config: lifecycleConfig, logger,
+        intrinsicProbe: lifecycle?.intrinsicProbe || null,
+        usefulOperations: lifecycle?.usefulOperations || {},
+      });
+      const bound = server?.listening ? server.address() : sharedHttpListener?.();
+      if (!bound) throw failure('Lifecycle reporting requires a bound HTTP listener', 503);
+      const listener = describeBoundHttpListener(bound, lifecycleConfig);
+      const listeners = [listener];
+      if (udpBound && socket) {
+        const boundUdp = socket.address();
+        listeners.push({ protocol: 'udp', host: listener.host, port: boundUdp.port });
+      }
+      for (const unit of units.values()) {
+        if (unit.socket) {
+          const boundUdp = unit.socket.address();
+          listeners.push({ protocol: 'udp', host: listener.host, port: boundUdp.port });
+        }
+      }
+      await lifecycleRuntime.start(listener.endpoint, listeners);
     }
   }
   async function bindServiceSocket() {
@@ -642,6 +731,13 @@ export async function createPascalishServiceHost({
       daemons: [...units.keys()]
     }),
     getStatus: () => ({ running, pending, timers: timers.size, daemons: units.size, storageBytes, capabilities,
+      ...(lifecycleConfig ? {
+        serviceLifecycle: {
+          version: lifecycleConfig.version, requires: lifecycleConfig.requires,
+          bindings: lifecycleConfig.bindings,
+        },
+        readiness: lifecycleRuntime?.getReadiness(),
+      } : {}),
       entries: [...tables.values()].reduce((count, entries) => count + entries.size, 0), bootId, collectorId,
       httpPort: server?.listening ? server.address().port : null,
       udpPort: running && udpBound ? socket.address().port : null,

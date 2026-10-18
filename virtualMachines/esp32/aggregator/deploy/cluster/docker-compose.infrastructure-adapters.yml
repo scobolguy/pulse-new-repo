@@ -1,0 +1,28 @@
+name: pulse-infrastructure-adapters
+
+services:
+  sql-server-adapter:
+    profiles: ["database"]
+    build:
+      context: ../../..
+      dockerfile: aggregator/deploy/cluster/Dockerfile.infrastructure-adapter
+    image: pulse/infrastructure-adapter:local
+    network_mode: host
+    env_file:
+      - ${SQL_ADAPTER_ENV_FILE:-./sql-adapter.env}
+    environment:
+      PULSE_INFRASTRUCTURE_PROVIDER: database
+    restart: unless-stopped
+
+  rabbitmq-adapter:
+    profiles: ["rabbitmq"]
+    build:
+      context: ../../..
+      dockerfile: aggregator/deploy/cluster/Dockerfile.infrastructure-adapter
+    image: pulse/infrastructure-adapter:local
+    network_mode: host
+    env_file:
+      - ${RABBITMQ_ADAPTER_ENV_FILE:-./rabbitmq-adapter.env}
+    environment:
+      PULSE_INFRASTRUCTURE_PROVIDER: rabbitmq
+    restart: unless-stopped

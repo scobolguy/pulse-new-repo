@@ -22,32 +22,7 @@
       "description": "32-bit dual-core microcontroller with camera"
     }
   },
-  "devices": {
-    "child1": {
-      "type": "ESP32-CAM",
-      "ip": "192.168.2.157",
-      "port": 80,
-      "ledPin": 2,
-      "parent": "Neptune",
-      "description": "Front-facing camera module"
-    },
-    "child2": {
-      "type": "ESP8266",
-      "ip": "192.168.2.59",
-      "port": 80,
-      "ledPin": 2,
-      "parent": "Neptune",
-      "description": "WiFi-only microcontroller"
-    },
-    "child3": {
-      "type": "ESP32",
-      "ip": "192.168.2.58",
-      "port": 80,
-      "ledPin": 2,
-      "parent": "Neptune",
-      "description": "Standard dual-core microcontroller"
-    }
-  },
+  "devices": {},
   "commands": {
     "gpio_set": {
       "endpoint": "/api/device/{device}/gpio/{pin}/set",

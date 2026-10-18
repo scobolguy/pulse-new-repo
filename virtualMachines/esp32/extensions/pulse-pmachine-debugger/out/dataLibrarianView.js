@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import { DataMapperBackend, structurePending } from './dataMapperBackend.js';
 import { fieldsOf } from './dataMapperModel.js';
-const DIRECT_LIBRARIAN_URL = 'http://127.0.0.1:4300';
 export class LibrarianItem extends vscode.TreeItem {
     schema;
     fields;
@@ -23,7 +22,6 @@ export class LibrarianItem extends vscode.TreeItem {
         this.tooltip = field ? `${field.path}\n${field.valueType}` : `${schema.name || schema.path}\n${schema.path}`;
         this.iconPath = new vscode.ThemeIcon(field ? (children ? 'symbol-object' : 'symbol-field') : 'symbol-structure');
         this.contextValue = 'pulseLibrarianSchema';
-        this.command = { command: 'pulse-pmachine.openLibrarianSchema', title: 'Open Schema Details', arguments: [this] };
     }
 }
 export class DataLibrarianViewProvider {
@@ -79,19 +77,8 @@ export class DataLibrarianViewProvider {
         if (!vscode.workspace.isTrusted)
             return [new LibrarianItem('Trust this workspace to browse Librarian schemas')];
         try {
-            let base = vscode.workspace.getConfiguration('pulse-pmachine').get('backendUrl', 'http://127.0.0.1:4000');
-            let schemas;
-            try {
-                schemas = await new DataMapperBackend(base).schemas();
-            }
-            catch (error) {
-                // Fall back to the Librarian itself only when the backend proxy is unreachable.
-                if (!(error instanceof TypeError) && error?.name !== 'TimeoutError')
-                    throw error;
-                this.output.appendLine(`Data Librarian: ${base} unreachable; trying ${DIRECT_LIBRARIAN_URL}`);
-                base = DIRECT_LIBRARIAN_URL;
-                schemas = await new DataMapperBackend(DIRECT_LIBRARIAN_URL).schemas();
-            }
+            const base = vscode.workspace.getConfiguration('pulse-pmachine').get('backendUrl', 'http://127.0.0.1:4000');
+            const schemas = await new DataMapperBackend(base).schemas();
             return schemas.length
                 ? schemas.sort((left, right) => (left.name || left.path).localeCompare(right.name || right.path))
                     .map(schema => {

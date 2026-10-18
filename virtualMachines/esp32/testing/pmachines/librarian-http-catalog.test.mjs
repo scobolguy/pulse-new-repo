@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import net from 'node:net';
@@ -7,10 +8,16 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { createFilesystemService } from '../../aggregator/filesystem-service.mjs';
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'pulse-librarian-http-catalog-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const filesystemService = await createFilesystemService({
+    dataRoot: root, host: '127.0.0.1', httpPort: 0, httpAllowedPeers: ['127.0.0.1']
+  });
+  const filesystemServiceUrl = `http://127.0.0.1:${filesystemService.getStatus().httpPort}`;
+  t.after(() => filesystemService.stop());
   const legacy = [{ id: 'legacy-type', label: 'Legacy', builtin: false, isIso: false }];
   await fs.writeFile(path.join(root, 'data-types.json'), JSON.stringify(legacy));
   const listener = net.createServer();
@@ -24,7 +31,13 @@ async function fixture(t) {
   const entry = fileURLToPath(new URL('../../aggregator/data-librarian.mjs', import.meta.url));
   const child = spawn(process.execPath, [entry], {
     cwd: path.dirname(entry),
-    env: { ...process.env, LIBRARIAN_DATA_ROOT: root, LIBRARIAN_PORT: String(port), LIBRARIAN_CATALOG_MAX_BYTES: '262144' },
+    env: {
+      ...process.env,
+      LIBRARIAN_DATA_ROOT: root,
+      LIBRARIAN_PORT: String(port),
+      LIBRARIAN_CATALOG_MAX_BYTES: '262144',
+      LIBRARIAN_FILESYSTEM_SERVICE_URL: filesystemServiceUrl
+    },
     stdio: ['ignore', 'ignore', 'pipe']
   });
   let errors = '';
@@ -49,20 +62,24 @@ async function fixture(t) {
     }
     let response;
     try {
-      response = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(500) });
+      response = await fetch(`${origin}/ready`, { signal: AbortSignal.timeout(500) });
     } catch (error) {
       if (error.name !== 'TimeoutError' && error.cause?.code !== 'ECONNREFUSED'
         && error.cause?.code !== 'ECONNRESET') throw error;
       lastProbeError = error;
     }
     if (response) {
-      if (!response.ok) throw new Error(`Librarian health failed (${response.status}): ${await response.text()}`);
-      t.diagnostic(`Librarian startup: ${Date.now() - startedAt} ms (budget ${startupBudgetMs} ms)`);
-      return { root, origin, catalogRoot: path.join(root, 'services', 'librarian'), legacy };
+      if (response.ok) {
+        t.diagnostic(`Librarian ready: ${Date.now() - startedAt} ms (budget ${startupBudgetMs} ms)`);
+        return { root, origin, catalogRoot: path.join(root, 'services', 'librarian'), legacy };
+      }
+      const body = await response.text();
+      if (response.status !== 503) throw new Error(`Librarian readiness failed (${response.status}): ${body}`);
+      lastProbeError = new Error(`Librarian is not yet ready: ${body}`);
     }
     await delay(50);
   }
-  throw new Error(`Librarian startup timeout after ${Date.now() - startedAt} ms: ${errors}`, { cause: lastProbeError });
+  throw new Error(`Librarian readiness timeout after ${Date.now() - startedAt} ms: ${errors}`, { cause: lastProbeError });
 }
 
 test('metadata routes are dispatched by Pascalish while unrelated routes fall through', async t => {
@@ -136,6 +153,75 @@ test('Librarian schema catalog accepts zero-padded ISO versions and returns thei
   const invoice = schemas.find(schema => schema.path === 'invoice.v003.json');
   assert.equal(invoice.version, 3);
   assert.equal(invoice.structure.children[0].name, 'reference');
+});
+
+test('XSD uploads persist predigested trees and invalidate them when source or schema path changes', async t => {
+  const { origin, catalogRoot } = await fixture(t);
+  const schemaPath = 'predigested.xsd';
+  const schemaFile = path.join(catalogRoot, 'schemas', schemaPath);
+  const artifactRoot = path.join(catalogRoot, 'predigested-xsd');
+  const upload = content => fetch(`${origin}/api/librarian/upload/schemas`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/octet-stream', 'x-filename': schemaPath },
+    body: content
+  });
+  const initial = '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">'
+    + '<xs:element name="Original" type="xs:string"/></xs:schema>';
+  const updated = '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">'
+    + '<xs:element name="Updated" type="xs:string"/></xs:schema>';
+  const containsName = (node, name) => node.name === name || (node.children || [])
+    .some(child => containsName(child, name));
+
+  assert.equal((await upload(initial)).status, 200);
+  assert.equal(await fs.readFile(schemaFile, 'utf8'), initial);
+  let artifactFiles = await fs.readdir(artifactRoot);
+  assert.equal(artifactFiles.length, 1);
+  const artifactFile = path.join(artifactRoot, artifactFiles[0]);
+  let artifact = JSON.parse(await fs.readFile(artifactFile, 'utf8'));
+  assert.equal(artifact.format, 'pulse-predigested-xsd');
+  assert.equal(artifact.version, 1);
+  assert.equal(artifact.schemaPath, schemaPath);
+  assert.equal(artifact.dependencies[0].path, schemaPath);
+  assert.equal(artifact.dependencies[0].hash,
+    createHash('sha256').update(initial, 'utf16le').digest('hex'));
+  assert.equal(containsName(artifact.tree, 'Original'), true);
+  const originalArtifact = structuredClone(artifact);
+  artifact.tree = { name: 'root', children: [{ name: 'Predigested', children: [] }] };
+  await fs.writeFile(artifactFile, JSON.stringify(artifact));
+
+  let response = await fetch(`${origin}/api/librarian/schemas?structure=full`);
+  assert.equal(response.status, 200);
+  let schemas = (await response.json()).schemas;
+  assert.equal(containsName(schemas.find(schema => schema.path === schemaPath).structure, 'Predigested'), true);
+  await fs.writeFile(artifactFile, JSON.stringify(originalArtifact));
+  artifact = originalArtifact;
+
+  assert.equal((await upload('<broken')).status, 500);
+  assert.equal(await fs.readFile(schemaFile, 'utf8'), initial);
+  assert.deepEqual(JSON.parse(await fs.readFile(artifactFile, 'utf8')), artifact);
+
+  await fs.writeFile(schemaFile, updated);
+  response = await fetch(`${origin}/api/librarian/schemas?structure=full`);
+  assert.equal(response.status, 200);
+  schemas = (await response.json()).schemas;
+  assert.equal(containsName(schemas.find(schema => schema.path === schemaPath).structure, 'Updated'), true);
+  artifact = JSON.parse(await fs.readFile(artifactFile, 'utf8'));
+  assert.equal(artifact.dependencies[0].hash,
+    createHash('sha256').update(updated, 'utf16le').digest('hex'));
+
+  response = await fetch(`${origin}/api/librarian/schemas/rename`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path: schemaPath, newName: 'renamed' })
+  });
+  assert.equal(response.status, 200, await response.text());
+  assert.deepEqual(await fs.readdir(artifactRoot), []);
+
+  response = await fetch(`${origin}/api/librarian/schemas`, {
+    method: 'DELETE', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path: 'renamed.xsd' })
+  });
+  assert.equal(response.status, 200, await response.text());
+  assert.deepEqual(await fs.readdir(artifactRoot), []);
 });
 
 test('Pascalish schema lookup selects the highest or requested version', async t => {
@@ -220,6 +306,57 @@ test('schema structures are parsed lazily, cached, revalidated and evictable', a
   assert.equal((await fetch(`${origin}/api/librarian/schemas?structure=bogus`)).status, 400);
 });
 
+test('tree browsing publishes bounded pages and metadata catalogs omit physical and virtual trees', async t => {
+  const { origin, catalogRoot } = await fixture(t);
+  const schemaFile = path.join(catalogRoot, 'schemas', 'paged.json');
+  await fs.writeFile(schemaFile, JSON.stringify({
+    Branch: { First: 'A', Second: 'B' },
+    ...Object.fromEntries(Array.from({ length: 50 }, (_, index) => [`Field${index}`, index])),
+  }));
+  const subschema = await fetch(`${origin}/api/librarian/subschemas`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id: 'paged-view', label: 'Paged view', parentSchemaPath: 'paged.json', accessibleFields: ['Branch.First'] }),
+  });
+  assert.equal(subschema.status, 200, await subschema.text());
+  const catalog = await (await fetch(`${origin}/api/librarian/schemas?structure=none`)).json();
+  assert.equal(catalog.schemas.length, 2);
+  for (const schema of catalog.schemas) {
+    assert.equal(schema.structure, null);
+    assert.equal(schema.structureLoaded, false);
+    assert.match(schema.structureKey, /^[a-f0-9]{64}$/);
+  }
+  async function page(pathValue, query = '') {
+    const response = await fetch(`${origin}/api/librarian/schema-tree/page?path=${encodeURIComponent(pathValue)}${query}`);
+    const text = await response.text();
+    assert.equal(response.status, 200, text);
+    assert.ok(Buffer.byteLength(text) <= 1500);
+    return JSON.parse(text);
+  }
+  const root = await page('paged.json');
+  assert.equal(root.node.childCount, 51);
+  assert.ok(root.nextCursor);
+  const firstBranch = root.items.find(item => item.name === 'Branch');
+  assert.ok(firstBranch);
+  assert.equal(Object.hasOwn(firstBranch, 'children'), false);
+  const branch = await page('paged.json', `&nodeId=${firstBranch.nodeId}&revision=${root.revision}`);
+  assert.deepEqual(branch.items.map(item => item.name), ['First', 'Second']);
+  const manifestFile = path.join(catalogRoot, 'schema-pages', root.schemaKey, 'current.json');
+  const before = await fs.readFile(manifestFile, 'utf8');
+  await page('paged.json');
+  assert.equal(await fs.readFile(manifestFile, 'utf8'), before);
+  const virtual = await page('subschemas/paged-view');
+  const virtualBranch = await page('subschemas/paged-view', `&nodeId=${virtual.items[0].nodeId}&revision=${virtual.revision}`);
+  assert.deepEqual(virtualBranch.items.map(item => item.name), ['First']);
+  await fs.writeFile(schemaFile, '{"Changed":true}');
+  const stale = await fetch(`${origin}/api/librarian/schema-tree/page?path=paged.json&revision=${root.revision}`);
+  assert.equal(stale.status, 409);
+  const changed = await page('paged.json');
+  assert.notEqual(changed.revision, root.revision);
+  assert.deepEqual(changed.items.map(item => item.name), ['Changed']);
+  const invalid = await fetch(`${origin}/api/librarian/schema-tree/page?path=paged.json&nodeId=..%2Foutside`);
+  assert.equal(invalid.status, 400);
+});
+
 test('Pascalish file-download route selects existing files and reports missing paths', async t => {
   const { origin, catalogRoot } = await fixture(t);
   const serviceFile = path.join(catalogRoot, 'download.txt');
@@ -235,6 +372,16 @@ test('Pascalish file-download route selects existing files and reports missing p
   const schemaResponse = await fetch(`${origin}/api/librarian/file/download.json`);
   assert.equal(schemaResponse.status, 200);
   assert.deepEqual(await schemaResponse.json(), { schema: true });
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+    const response = await fetch(`${origin}/api/librarian/file/download.txt`, { method });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), 'service-file');
+  }
+  const head = await fetch(`${origin}/api/librarian/file/download.txt`, { method: 'HEAD' });
+  assert.equal(head.status, 200);
+  assert.equal(await head.text(), '');
+  const queryOnly = await fetch(`${origin}/api/librarian/file?path=download.txt`);
+  assert.equal(queryOnly.status, 400);
 
   const missing = await fetch(`${origin}/api/librarian/file/missing.txt`);
   assert.equal(missing.status, 404);

@@ -96,7 +96,7 @@ export function applyMappingAction(map, input) {
     return { ...map, [key]: rules };
 }
 export function emptyMapping() {
-    return { id: '', name: 'New mapping', description: '', rules: [], submaps: [] };
+    return { id: 'new_mapping', name: 'New mapping', description: '', sourceTypeId: 'source', targetTypeId: 'target', rules: [], submaps: [] };
 }
 export function publicationPayload(map) {
     for (const key of ['id', 'name', 'sourceTypeId', 'targetTypeId', 'sourceSchemaPath', 'targetSchemaPath']) {
@@ -148,7 +148,8 @@ export function publicationPayload(map) {
         sourceTypeId: String(map.sourceTypeId).toLowerCase(), targetTypeId: String(map.targetTypeId).toLowerCase(),
         sourceSchemaPath: map.sourceSchemaPath, targetSchemaPath: map.targetSchemaPath,
         sourceSchemaMtime: map.sourceSchemaMtime ?? '', targetSchemaMtime: map.targetSchemaMtime ?? '',
-        sourceStructure: map.sourceStructure ?? null, targetStructure: map.targetStructure ?? null,
+        sourceStructure: map.sourceStructureInferred ? null : map.sourceStructure ?? null,
+        targetStructure: map.targetStructureInferred ? null : map.targetStructure ?? null,
         rules, submaps: map.submaps ?? [],
     };
 }
@@ -183,30 +184,39 @@ export function validateConversionRule(text) {
         throw new Error('Conversion rule needs an assignment, function call, or Pascalish keyword.');
     }
 }
+/** Compare what a map means, ignoring cached schema structures, timestamps and backend-only fields. */
 export function samePublishedMapping(left, right) {
-    function canonical(value) {
-        if (Array.isArray(value))
-            return value.map(canonical);
-        if (!object(value))
-            return value;
-        return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]));
-    }
-    return JSON.stringify(canonical(publicationPayload(left))) === JSON.stringify(canonical(publicationPayload(right)));
+    const projection = (map) => JSON.stringify({
+        id: String(map.id ?? ''), name: String(map.name ?? ''), description: String(map.description ?? ''),
+        sourceTypeId: String(map.sourceTypeId ?? '').toLowerCase(), targetTypeId: String(map.targetTypeId ?? '').toLowerCase(),
+        sourceSchemaPath: String(map.sourceSchemaPath ?? ''), targetSchemaPath: String(map.targetSchemaPath ?? ''),
+        rules: rulesOf(map).map(rule => [rule.sourcePath, rule.targetPath, rule.conversionRule ?? '']),
+    });
+    publicationPayload(left);
+    return projection(left) === projection(right);
+}
+const prototypeLeaf = (name, valueType = 'string') => ({ name, kind: 'leaf', valueType });
+/** Structures for the built-in prototype schemas, which are not stored in the Librarian. */
+export function builtinStructures() {
+    return {
+        'prototype/payment': { structure: { children: [
+                    prototypeLeaf('reference'), prototypeLeaf('senderName'), prototypeLeaf('account'),
+                    prototypeLeaf('amount', 'decimal'), prototypeLeaf('currency'), prototypeLeaf('valueDate', 'date'),
+                ] } },
+        'prototype/transfer': { structure: { children: [{ name: 'transfer', kind: 'branch', valueType: 'object', children: [
+                            prototypeLeaf('id'), prototypeLeaf('debtorName'), prototypeLeaf('debtorAccount'),
+                            prototypeLeaf('instructedAmount', 'decimal'), prototypeLeaf('currency'), prototypeLeaf('settlementDate', 'date'),
+                        ] }] } },
+    };
 }
 export function prototypeMapping() {
-    const leaf = (name, valueType = 'string') => ({ name, kind: 'leaf', valueType });
+    const structures = builtinStructures();
     return {
         id: 'vscode-prototype', name: 'Payment mapping prototype', enabled: true,
         sourceTypeId: 'prototype-payment', targetTypeId: 'prototype-transfer',
         sourceSchemaPath: 'prototype/payment', targetSchemaPath: 'prototype/transfer',
-        sourceStructure: { children: [
-                leaf('reference'), leaf('senderName'), leaf('account'),
-                leaf('amount', 'decimal'), leaf('currency'), leaf('valueDate', 'date'),
-            ] },
-        targetStructure: { children: [{ name: 'transfer', kind: 'branch', valueType: 'object', children: [
-                        leaf('id'), leaf('debtorName'), leaf('debtorAccount'),
-                        leaf('instructedAmount', 'decimal'), leaf('currency'), leaf('settlementDate', 'date'),
-                    ] }] },
+        sourceStructure: structures['prototype/payment'].structure,
+        targetStructure: structures['prototype/transfer'].structure,
         rules: [{ sourcePath: 'reference', targetPath: 'transfer.id', kind: 'leaf',
                 sourceValueType: 'string', targetValueType: 'string', conversionRule: '' }],
     };

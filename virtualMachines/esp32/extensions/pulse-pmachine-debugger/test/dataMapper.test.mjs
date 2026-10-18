@@ -116,6 +116,41 @@ const { mappingToMapl, maplToMapping } = await import('../out/maplDocument.js');
 hooks.deregister();
 const parseMapl = text => maplToMapping(text);
 
+function mockLogicalServiceFetch(handler) {
+  let transactionNumber = 0;
+  const results = new Map();
+  return async (url, options = {}) => {
+    const target = new URL(String(url));
+    if (target.pathname.startsWith('/api/runtime/services/') && options.method === 'POST') {
+      const request = JSON.parse(options.body);
+      const transactionId = `map-test-${++transactionNumber}`;
+      const response = await handler(new URL(request.path, `${target.origin}/`).toString(), request);
+      let body;
+      try { body = await response.json(); }
+      catch { body = null; }
+      results.set(transactionId, {
+        serviceId: target.pathname.split('/')[4],
+        status: response.status,
+        body,
+      });
+      return Response.json({
+        transactionId, status: 'allocated', statusUrl: `/api/runtime/transactions/${transactionId}`,
+      }, { status: 202 });
+    }
+    if (target.pathname.startsWith('/api/runtime/transactions/')) {
+      const transactionId = target.pathname.split('/').pop();
+      const result = results.get(transactionId);
+      return Response.json({
+        transactionId,
+        serviceId: result.serviceId,
+        status: 'completed',
+        result: { status: result.status, body: result.body },
+      });
+    }
+    return handler(String(url), options);
+  };
+}
+
 test('custom editor splices MAPL edits, keeps comments, rejects stale versions, reports invalid MAPL and disposes listeners', async () => {
   const messages = [];
   let receive;
@@ -176,12 +211,12 @@ test('custom editor splices MAPL edits, keeps comments, rejects stale versions, 
   globalThis.mapperChanged({ document });
   assert.equal(messages.at(-1).type, 'state');
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async url => {
+  globalThis.fetch = mockLogicalServiceFetch(async url => {
     assert.equal(url, 'http://127.0.0.1:4000/api/librarian/schemas');
     return Response.json({ schemas: [{ path: 'schemas/new.json', typeId: 'new', name: 'New schema', structure: {
       children: [{ name: 'newField', kind: 'leaf', valueType: 'string' }],
     } }] });
-  };
+  });
   try {
     globalThis.mapperCancel = true;
     const before = document.text;
@@ -201,7 +236,7 @@ test('custom editor splices MAPL edits, keeps comments, rejects stale versions, 
     assert.equal(selected.rules.length, 0);
     await receive({ type: 'metadata', version: document.version });
     assert.equal(parseMapl(document.text).id, 'edited-map');
-    globalThis.fetch = async () => Response.json({ error: 'Invalid embedded JSON' }, { status: 500 });
+    globalThis.fetch = mockLogicalServiceFetch(async () => Response.json({ error: 'Invalid embedded JSON' }, { status: 500 }));
     await receive({ type: 'schema', side: 'source', version: document.version });
     assert.equal(messages.at(-1).type, 'error');
     assert.match(messages.at(-1).message, /Invalid embedded JSON/);
@@ -220,11 +255,11 @@ test('import command writes a backend map as a new MAPL file and opens the desig
   registerDataMapper({ subscriptions: [], extensionUri: { toString: () => 'test:extension' } }, { appendLine() {} });
   const originalFetch = globalThis.fetch;
   const map = { ...prototypeMapping(), id: 'import-test', vendorMetadata: { preserved: true } };
-  globalThis.fetch = async url => {
+  globalThis.fetch = mockLogicalServiceFetch(async url => {
     if (url.endsWith('/api/mapper/maps')) return Response.json({ maps: [{ id: map.id, name: map.name }] });
     assert.equal(url, 'http://127.0.0.1:4000/api/mapper/maps/import-test');
     return Response.json({ map });
-  };
+  });
   try {
     await globalThis.mapperRegistered.get('pulse-pmachine.importDataMap')();
     assert.equal(globalThis.mapperError, undefined);

@@ -36,6 +36,12 @@ export default class PascalishVisitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by PascalishParser#serviceRequirementDecl.
+	visitServiceRequirementDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by PascalishParser#daemonDecl.
 	visitDaemonDecl(ctx) {
 	  return this.visitChildren(ctx);

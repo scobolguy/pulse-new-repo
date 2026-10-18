@@ -8,6 +8,7 @@ var request: JSONDocument;
     allSchemas: JSONArray;
     routePath: string;
     routeMethod: string;
+    structureMode: string;
     position: integer;
 
 function envelope(matched: boolean; status: integer; body: string): string;
@@ -18,6 +19,29 @@ begin
   responseDoc.embed('body', body);
   return responseDoc.serialize()
 end;
+
+post '/structure-mode';
+begin
+  request.load(host.event_body());
+  structureMode := '';
+  if host.json_has(request.serialize(), 'value') = 1 then
+    if host.json_kind(request.value('value')) = 'string' then
+      structureMode := host.string_lower(host.text_trim(request.text('value')));
+  if (structureMode = '') or (structureMode = 'cached') or (structureMode = 'lazy') then
+    structureMode := 'cached'
+  else if (structureMode = 'full') or (structureMode = 'all') or (structureMode = 'true') then
+    structureMode := 'full'
+  else if (structureMode = 'none') or (structureMode = 'false') then
+    structureMode := 'none'
+  else
+  begin
+    host.http_status(400);
+    return '{"error":"structure must be one of: cached, full, none"}'
+  end;
+  responseDoc.load('{}');
+  responseDoc.setText('mode', structureMode);
+  return responseDoc.serialize()
+end
 
 post '/dispatch';
 begin

@@ -84,6 +84,7 @@ const STRING_COMPARATORS = {
   '>': (left, right) => left > right,
   '>=': (left, right) => left >= right
 };
+const SERVICE_ID_ALIASES = new Set(['filesystem', 'librarian', 'mapper']);
 
 function quoteDouble(value) {
   return `"${String(value || '').replace(/"/g, '\\"')}"`;
@@ -778,6 +779,9 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
   }
 
   visitDeploymentItem(ctx) {
+    if (ctx.hostedServiceDeploymentItem()) {
+      return this.visitHostedServiceDeploymentItem(ctx.hostedServiceDeploymentItem());
+    }
     if (ctx.FLOW()) {
       return {
         kind: 'flow',
@@ -814,6 +818,90 @@ class WorkflowAstBuilder extends WorkflowDslVisitor {
         idleTimeout: Number(lifecycle.NUMBER(2)?.getText() || 0),
         idleTimeoutUnit: lifecycle.TIME_UNIT()?.getText()?.toLowerCase() || 's'
       } : null
+    };
+  }
+
+  visitHostedServiceDeploymentItem(ctx) {
+    const strings = ctx.quotedString() || [];
+    const lists = ctx.quotedList() || [];
+    const id = this.str(strings[0].getText());
+    const ownerAggregatorId = this.str(strings[2].getText());
+    const reportTarget = this.str(strings[3].getText());
+    const requires = lists.length > 1 ? this.visit(lists[1]) : [];
+    const bindings = {};
+    const requiredIds = new Set();
+
+    if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(id) || SERVICE_ID_ALIASES.has(id)) {
+      throw new Error(`HOSTED SERVICE has invalid canonical service id '${id}'`);
+    }
+    if (!this.str(strings[1].getText()).trim()) {
+      throw new Error(`HOSTED SERVICE '${id}' requires a non-empty file name`);
+    }
+    if (!ownerAggregatorId.trim() || ownerAggregatorId !== ownerAggregatorId.trim()) {
+      throw new Error(`HOSTED SERVICE '${id}' requires a non-empty OWNER aggregator id`);
+    }
+    if (!reportTarget) {
+      throw new Error(`HOSTED SERVICE '${id}' requires a non-empty REPORT target`);
+    }
+    let reportUrl;
+    try { reportUrl = reportTarget === reportTarget.trim() ? new URL(reportTarget) : null; } catch { reportUrl = null; }
+    if (!reportUrl || !['http:', 'https:'].includes(reportUrl.protocol) || !reportUrl.hostname) {
+      throw new Error(`HOSTED SERVICE '${id}' needs an explicit absolute HTTP(S) REPORT target`);
+    }
+
+    for (const requiredServiceId of requires) {
+      if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(requiredServiceId)
+        || SERVICE_ID_ALIASES.has(requiredServiceId)) {
+        throw new Error(`HOSTED SERVICE '${id}' has invalid required service id '${requiredServiceId}'`);
+      }
+      if (requiredServiceId === id) {
+        throw new Error(`HOSTED SERVICE '${id}' cannot require itself`);
+      }
+      if (requiredIds.has(requiredServiceId)) {
+        throw new Error(`HOSTED SERVICE '${id}' requires '${requiredServiceId}' more than once`);
+      }
+      requiredIds.add(requiredServiceId);
+    }
+
+    for (const binding of ctx.requirementBinding() || []) {
+      const bindingStrings = binding.quotedString() || [];
+      const [serviceId, instanceId, endpoint, readinessUrl] = bindingStrings.map(item => this.str(item.getText()));
+      if (!serviceId || !instanceId || !endpoint || !readinessUrl) {
+        throw new Error(`HOSTED SERVICE '${id}' has an incomplete requirement binding`);
+      }
+      if (instanceId !== instanceId.trim()) {
+        throw new Error(`HOSTED SERVICE '${id}' requirement '${serviceId}' needs a non-empty instance id`);
+      }
+      if (!requires.includes(serviceId)) {
+        throw new Error(`HOSTED SERVICE '${id}' binds undeclared requirement '${serviceId}'`);
+      }
+      if (Object.hasOwn(bindings, serviceId)) {
+        throw new Error(`HOSTED SERVICE '${id}' binds requirement '${serviceId}' more than once`);
+      }
+      for (const [name, value] of [['endpoint', endpoint], ['readiness URL', readinessUrl]]) {
+        let url;
+        try { url = value === value.trim() ? new URL(value) : null; } catch { url = null; }
+        if (!url || !['http:', 'https:'].includes(url.protocol) || !url.hostname) {
+          throw new Error(`HOSTED SERVICE '${id}' requirement '${serviceId}' needs an explicit absolute HTTP(S) ${name}`);
+        }
+      }
+      bindings[serviceId] = { instanceId, endpoint, readinessUrl };
+    }
+
+    const missingBindings = requires.filter(requiredServiceId => !Object.hasOwn(bindings, requiredServiceId));
+    if (missingBindings.length) {
+      throw new Error(`HOSTED SERVICE '${id}' is missing explicit bindings for ${missingBindings.join(', ')}`);
+    }
+
+    return {
+      kind: 'hosted-service',
+      id,
+      fileName: this.str(strings[1].getText()),
+      targets: this.visit(lists[0]),
+      startup: Boolean(ctx.booleanLiteral()?.TRUE()),
+      ownerAggregatorId,
+      reportTarget: { endpoint: reportTarget },
+      serviceLifecycle: { version: 1, requires, bindings }
     };
   }
 

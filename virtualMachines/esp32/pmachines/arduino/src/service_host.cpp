@@ -3,6 +3,7 @@
 #include "async_diagnostics.h"
 #if defined(ESP32)
 #include <WiFi.h>
+#include <WiFiClient.h>
 #include <lwip/sockets.h>
 #include <fcntl.h>
 #include <esp_timer.h>
@@ -10,10 +11,155 @@
 #include <esp_heap_caps.h>
 #include <limits>
 #include <new>
+#include <set>
 #include <stdexcept>
 
 namespace pmachine {
 namespace {
+constexpr size_t BODY_LIMIT = 2048, RESPONSE_LIMIT = 20480, STORAGE_LIMIT = 16384;
+constexpr uint32_t REPORT_INTERVAL_MS = 10000;
+constexpr uint32_t OUTBOUND_TIMEOUT_MS = 1200;
+constexpr size_t OUTBOUND_RESPONSE_LIMIT = 2048;
+
+struct HttpTarget {
+    std::string host, path, origin;
+    uint16_t port = 0;
+};
+
+bool parseHttpTarget(const std::string& url, HttpTarget& target) {
+    if (url.rfind("http://", 0) != 0 || url.size() > 512) return false;
+    const size_t authorityStart = 7;
+    const size_t pathStart = url.find('/', authorityStart);
+    if (pathStart == std::string::npos || pathStart == authorityStart) return false;
+    const std::string authority = url.substr(authorityStart, pathStart - authorityStart);
+    if (authority.find_first_of("@?#\\") != std::string::npos) return false;
+    const size_t colon = authority.rfind(':');
+    if (colon == std::string::npos || colon == 0 || colon + 1 == authority.size()) return false;
+    target.host = authority.substr(0, colon);
+    unsigned long port = 0;
+    for (size_t index = colon + 1; index < authority.size(); ++index) {
+        const char ch = authority[index];
+        if (ch < '0' || ch > '9') return false;
+        if (port > 6553) return false;
+        port = port * 10 + static_cast<unsigned long>(ch - '0');
+        if (port > 65535) return false;
+    }
+    if (!port) return false;
+    for (char ch : target.host)
+        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+            || (ch >= '0' && ch <= '9') || ch == '.' || ch == '-')) return false;
+    target.port = static_cast<uint16_t>(port);
+    target.path = url.substr(pathStart);
+    if (target.path.find_first_of("?#\\ \r\n") != std::string::npos) return false;
+    target.origin = "http://" + authority;
+    return true;
+}
+
+bool readHttpLine(WiFiClient& client, std::string& line, uint32_t deadline, size_t limit) {
+    line.clear();
+    while (static_cast<int32_t>(millis() - deadline) < 0) {
+        while (client.available()) {
+            const int value = client.read();
+            if (value < 0) break;
+            if (value == '\n') {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                return true;
+            }
+            if (line.size() >= limit) return false;
+            line.push_back(static_cast<char>(value));
+        }
+        if (!client.connected() && !client.available()) return false;
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    return false;
+}
+
+bool httpExchange(const std::string& url, const char* method, const std::string& body,
+                  const std::string& parentTransactionId, size_t responseLimit,
+                  int& status, std::string& responseBody, const std::string& bearerToken = "") {
+    HttpTarget target;
+    if (!parseHttpTarget(url, target) || body.size() > BODY_LIMIT) return false;
+    WiFiClient client;
+    client.setTimeout(250);
+    const uint32_t started = millis();
+    if (!client.connect(target.host.c_str(), target.port, OUTBOUND_TIMEOUT_MS)) return false;
+    const uint32_t deadline = started + OUTBOUND_TIMEOUT_MS;
+    std::string request = std::string(method) + " " + target.path
+        + " HTTP/1.1\r\nHost: " + target.host + ":" + std::to_string(target.port)
+        + "\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: "
+        + std::to_string(body.size()) + "\r\n";
+    if (!parentTransactionId.empty())
+        request += "x-pulse-parent-transaction-id: " + parentTransactionId + "\r\n";
+    if (!bearerToken.empty())
+        request += "Authorization: Bearer " + bearerToken + "\r\n";
+    request += "\r\n";
+    request += body;
+    if (request.size() > BODY_LIMIT + 1024
+        || client.write(reinterpret_cast<const uint8_t*>(request.data()), request.size()) != request.size()) {
+        client.stop();
+        return false;
+    }
+    std::string line;
+    if (!readHttpLine(client, line, deadline, 128) || line.rfind("HTTP/1.", 0) != 0
+        || line.size() < 12 || line[8] != ' ' || line[9] < '1' || line[9] > '5'
+        || line[10] < '0' || line[10] > '9' || line[11] < '0' || line[11] > '9') {
+        client.stop();
+        return false;
+    }
+    status = (line[9] - '0') * 100 + (line[10] - '0') * 10 + (line[11] - '0');
+    size_t responseLength = 0, headerBytes = 0;
+    bool hasLength = false, headersDone = false;
+    while (readHttpLine(client, line, deadline, 256)) {
+        headerBytes += line.size() + 2;
+        if (headerBytes > 1024) { client.stop(); return false; }
+        if (line.empty()) { headersDone = true; break; }
+        const size_t colon = line.find(':');
+        if (colon == std::string::npos) { client.stop(); return false; }
+        std::string name = line.substr(0, colon), value = line.substr(colon + 1);
+        for (char& ch : name) if (ch >= 'A' && ch <= 'Z') ch += 'a' - 'A';
+        while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) value.erase(value.begin());
+        if (name == "content-length") {
+            if (value.empty()) { client.stop(); return false; }
+            responseLength = 0;
+            for (char ch : value) {
+                if (ch < '0' || ch > '9') { client.stop(); return false; }
+                responseLength = responseLength * 10 + static_cast<size_t>(ch - '0');
+                if (responseLength > responseLimit) { client.stop(); return false; }
+            }
+            hasLength = true;
+        } else if (name == "transfer-encoding") {
+            client.stop();
+            return false;
+        }
+    }
+    if (!hasLength || !headersDone) { client.stop(); return false; }
+    responseBody.clear();
+    responseBody.reserve(responseLength);
+    while (responseBody.size() < responseLength && static_cast<int32_t>(millis() - deadline) < 0) {
+        while (client.available() && responseBody.size() < responseLength) {
+            const int value = client.read();
+            if (value < 0) break;
+            responseBody.push_back(static_cast<char>(value));
+        }
+        if (!client.connected() && !client.available()) break;
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    client.stop();
+    return responseBody.size() == responseLength;
+}
+
+bool validTransactionId(const std::string& value) {
+    if (value.size() != 36) return false;
+    for (size_t index = 0; index < value.size(); ++index) {
+        const char ch = value[index];
+        if (index == 8 || index == 13 || index == 18 || index == 23) {
+            if (ch != '-') return false;
+        } else if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f')
+                     || (ch >= 'A' && ch <= 'F'))) return false;
+    }
+    return true;
+}
+
 class OwnedDaemonUdp : public WiFiUDP {
 public:
     bool beginOwned(uint16_t port, const std::string& group) {
@@ -100,7 +246,6 @@ private:
     sockaddr_in receivedPeer{}, sendPeer{};
     bool joined = false, packetStarted = false, sent = false;
 };
-constexpr size_t BODY_LIMIT = 2048, RESPONSE_LIMIT = 20480, STORAGE_LIMIT = 16384;
 // Daemon datagrams above this size are dropped; below the heap floor they are shed.
 constexpr size_t DAEMON_DATAGRAM_LIMIT = 1024, DAEMON_UDP_HEAP_FLOOR = 8192;
 // Two installed contexts, up to four images each, with six image leases total;
@@ -132,6 +277,10 @@ const Binding bindings[] = {
     {"collector_id", "", true}, {"boot_id", "", true}, {"next_sequence", "", false},
     {"observation_ttl", "", false}, {"announcement", "ss", true},
     {"json_text", "ss", true}, {"json_value", "ss", true}, {"json_integer", "ss", false},
+    {"json_kind", "s", true}, {"json_array_count", "s", false},
+    {"json_has", "ss", false}, {"json_format", "si", true},
+    {"json_array_get", "si", true}, {"json_array_append", "ss", true},
+    {"json_array_set", "sis", true}, {"json_array_remove", "si", true},
     {"json_path_text", "ss", true}, {"json_path_integer", "ss", false},
     {"buffer_json_path_text", "is", true}, {"buffer_json_path_integer", "is", false},
     {"text_header", "ss", true}, {"text_lower", "s", true},
@@ -155,7 +304,8 @@ const Binding bindings[] = {
     {"buffer_hex", "i", true}, {"buffer_text", "i", true}, {"buffer_release", "i", false},
     {"byte_xor", "ii", false}, {"tcp_exchange", "sisiii", true},
     {"tcp_exchange_buffer", "sisiii", false},
-    {"udp_exchange", "sisii", true}
+    {"udp_exchange", "sisii", true}, {"filesystem_post", "sissi", true},
+    {"service_submit", "sss", true}
 };
 const Binding* binding(const std::string& symbol) {
     if (symbol.rfind("host.", 0) != 0) return nullptr;
@@ -288,6 +438,23 @@ bool ServiceHost::validateUnit(const JsonDocument& map, const char* kind, Unit& 
     if (map["hostBindingsVersion"] != 1 || std::string(map["runtimeUnit"]["kind"] | "") != kind) {
         error = "Unsupported hosted image metadata"; return false;
     }
+    if (std::string(kind) == "service" && !map["serviceLifecycle"].isNull()) {
+        const JsonVariantConst lifecycle = map["serviceLifecycle"];
+        if (!lifecycle.is<JsonObjectConst>() || lifecycle["version"] != 1
+            || !lifecycle["requires"].is<JsonArrayConst>() || lifecycle["requires"].size() > 8) {
+            error = "Invalid native service lifecycle declaration"; return false;
+        }
+        for (JsonVariantConst item : lifecycle["requires"].as<JsonArrayConst>()) {
+            if (!item.is<const char*>()) { error = "Native service requirement must be text"; return false; }
+            const std::string required = item.as<const char*>();
+            if (!identifier(required) || required.size() > 128
+                || std::find(out.requiredServices.begin(), out.requiredServices.end(), required)
+                    != out.requiredServices.end()) {
+                error = "Invalid or duplicate native service requirement"; return false;
+            }
+            out.requiredServices.push_back(required);
+        }
+    }
     bool target = false;
     for (JsonVariantConst item : map["targets"].as<JsonArrayConst>())
         if (std::string(item.as<const char*>() ? item.as<const char*>() : "") == "esp32") target = true;
@@ -300,7 +467,7 @@ bool ServiceHost::validateUnit(const JsonDocument& map, const char* kind, Unit& 
             const std::string verb = endpoint["verb"] | "";
             const std::string path = endpoint["path"] | "";
             if ((verb != "GET" && verb != "POST") || path.size() > 256
-                || (path != "/health" && path != "/events/udp" && path.rfind("/api/", 0) != 0)) {
+                || (!out.internalPolicy && path != "/health" && path != "/events/udp" && path.rfind("/api/", 0) != 0)) {
                 error = "Hosted endpoints require GET/POST and /api/ paths, /health or /events/udp"; return false;
             }
             const auto route = std::make_pair(verb, path);
@@ -322,6 +489,7 @@ bool ServiceHost::validateUnit(const JsonDocument& map, const char* kind, Unit& 
             if (!spec || instruction.value != static_cast<int>(strlen(spec->args))) {
                 error = "Unknown hosted binding or invalid arity"; return false;
             }
+            if (std::string(spec->name) == "service_submit") out.requiresAggregatorTransaction = true;
             break;
         }
         case OP_CALL_LABEL:
@@ -335,7 +503,7 @@ bool ServiceHost::validateUnit(const JsonDocument& map, const char* kind, Unit& 
         case OP_PUSH_STR: case OP_PUSH_INT: case OP_LOAD_NAME: case OP_STORE_NAME:
         case OP_MAP:
         case OP_RET: case OP_MAP_RETURN: case OP_HALT:
-        case OP_STREQ: case OP_STRNEQ: case OP_EQ: case OP_NEQ: case OP_LT:
+        case OP_CONCAT: case OP_STREQ: case OP_STRNEQ: case OP_EQ: case OP_NEQ: case OP_LT:
         case OP_LE: case OP_GT: case OP_GE: case OP_OR: case OP_AND: case OP_NOT:
         case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_NOP:
             break;
@@ -419,22 +587,87 @@ bool ServiceHost::prepare(std::string& error) {
 
 bool ServiceHost::install(Unit newService, Unit newDaemon, const std::string& id, uint16_t port,
                           uint32_t newTtl, uint32_t heartbeat, std::string& error,
-                          JsonVariantConst networkPeers) {
+                          JsonVariantConst networkPeers, LifecycleMetadata lifecycle) {
     if (!port) { error = "Valid collector UDP port required"; return false; }
     std::vector<DaemonSpec> daemons(1);
     daemons[0].unit = std::move(newDaemon);
-    return install(std::move(newService), std::move(daemons), id, port, newTtl, heartbeat, error, networkPeers);
+    return install(std::move(newService), std::move(daemons), id, port, newTtl, heartbeat,
+                   error, networkPeers, std::move(lifecycle));
 }
 
 bool ServiceHost::install(Unit newService, std::vector<DaemonSpec> newDaemons, const std::string& id, uint16_t port,
                           uint32_t newTtl, uint32_t heartbeat, std::string& error,
-                          JsonVariantConst networkPeers) {
+                          JsonVariantConst networkPeers, LifecycleMetadata lifecycle) {
     if (!identifier(id) || !heartbeat || newTtl <= heartbeat || newTtl > 180000) {
         error = "TTL must exceed heartbeat interval, with maximum 180000 ms; valid collector ID required";
         return false;
     }
     if (newDaemons.empty() || newDaemons.size() > DAEMON_LIMIT) {
         error = "Hosted daemon count must be 1..3"; return false;
+    }
+    if (newService.requiredServices.size() != lifecycle.requires.size()
+        || lifecycle.bindings.size() != lifecycle.requires.size()) {
+        if (!newService.requiredServices.empty() || lifecycle.configured) {
+            error = "Native lifecycle requirements and bindings must exactly match the compiled service declaration";
+            return false;
+        }
+    }
+    for (const auto& required : newService.requiredServices) {
+        if (std::find(lifecycle.requires.begin(), lifecycle.requires.end(), required) == lifecycle.requires.end()) {
+            error = "Native lifecycle metadata omits a compiled service requirement"; return false;
+        }
+    }
+    if (lifecycle.configured) {
+        if (!identifier(lifecycle.ownerAggregatorId)
+            || (lifecycle.reportTargets.empty() && !discovery) || lifecycle.reportTargets.size() > 4) {
+            error = "Native lifecycle install requires explicit owner and discovery or 1..4 explicit aggregator report targets";
+            return false;
+        }
+        bool ownerTargetFound = false;
+        std::set<std::string> aggregatorIds;
+        for (const auto& target : lifecycle.reportTargets) {
+            if (!target.bearerToken.empty()
+                && (target.bearerToken.size() < 32 || target.bearerToken.size() > 256
+                    || !std::all_of(target.bearerToken.begin(), target.bearerToken.end(), [](char ch) {
+                        return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                            || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-';
+                    }))) {
+                error = "Aggregator bearer token must be 32..256 base64url characters";
+                return false;
+            }
+            HttpTarget parsed;
+            constexpr char reportPath[] = "/api/runtime/instances/report";
+            if (!identifier(target.aggregatorId) || target.aggregatorId.size() > 128
+                || !aggregatorIds.insert(target.aggregatorId).second
+                || !parseHttpTarget(target.endpoint, parsed) || parsed.path.size() < sizeof(reportPath) - 1
+                || parsed.path.compare(parsed.path.size() - (sizeof(reportPath) - 1),
+                    sizeof(reportPath) - 1, reportPath) != 0) {
+                error = "Each aggregator report target needs a unique ID and explicit HTTP report URL with port";
+                return false;
+            }
+            ownerTargetFound = ownerTargetFound || target.aggregatorId == lifecycle.ownerAggregatorId;
+        }
+        if (!lifecycle.reportTargets.empty() && !ownerTargetFound) {
+            error = "Explicit ownerAggregatorId must match a configured report target";
+            return false;
+        }
+        for (const auto& required : lifecycle.requires) {
+            const auto found = lifecycle.bindings.find(required);
+            if (found == lifecycle.bindings.end() || !identifier(found->second.instanceId)
+                || found->second.instanceId.size() > 128) {
+                error = "Each native service requirement needs an explicit instance binding";
+                return false;
+            }
+            HttpTarget endpoint, readiness;
+            if (!parseHttpTarget(found->second.endpoint, endpoint)
+                || !parseHttpTarget(found->second.readinessUrl, readiness)) {
+                error = "Native dependency bindings require explicit HTTP endpoints and ports";
+                return false;
+            }
+        }
+    } else if (!newService.requiredServices.empty() || newService.requiresAggregatorTransaction) {
+        error = "Compiled native service requirements or transaction bindings require aggregator reporting metadata";
+        return false;
     }
     std::vector<uint16_t> ports;
     if (port) ports.push_back(port);
@@ -460,6 +693,13 @@ bool ServiceHost::install(Unit newService, std::vector<DaemonSpec> newDaemons, c
     }
     if (!task && !prepare(error)) return false;
     if (!mutex || xSemaphoreTake(mutex, 0) != pdTRUE) { error = "Service host busy or unavailable"; return false; }
+    if (lifecycle.configured && !reportTask
+        && xTaskCreatePinnedToCore(reporter, "pascalish-report", 8192, this, 1, &reportTask, 1) != pdPASS) {
+        reportTask = nullptr;
+        xSemaphoreGive(mutex);
+        error = "Cannot reserve bounded lifecycle reporter task stack";
+        return false;
+    }
     bool ok = false;
     try {
         auto slot = std::find(services.begin(), services.end(), nullptr);
@@ -523,6 +763,16 @@ bool ServiceHost::install(Unit newService, std::vector<DaemonSpec> newDaemons, c
                     else {
                         context->service = std::move(newService);
                         context->collectorId = id;
+                        context->lifecycle = std::move(lifecycle);
+                        const std::string localIp = WiFi.localIP().toString().c_str();
+                        context->endpoint = "http://" + localIp + ":80";
+                        for (const auto& endpoint : context->service.endpoints) {
+                            if (endpoint.first == "GET" && endpoint.second.size() >= 7
+                                && endpoint.second.compare(endpoint.second.size() - 7, 7, "/health") == 0) {
+                                context->healthPath = endpoint.second;
+                                break;
+                            }
+                        }
                         char nonce[32];
                         snprintf(nonce, sizeof(nonce), "%08lx-%08lx", static_cast<unsigned long>(esp_random()),
                                  static_cast<unsigned long>(esp_random()));
@@ -609,8 +859,84 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
     result.isString = spec->text;
     currentBinding = spec->name;
     const std::string op = spec->name;
-    if (op.rfind("bytes_", 0) == 0 || (op.rfind("buffer_", 0) == 0 && op.rfind("buffer_json_", 0) != 0)
-        || op == "byte_xor" || op == "tcp_exchange" || op == "tcp_exchange_buffer" || op == "udp_exchange") {
+    if (op == "service_submit") {
+        if (!current->lifecycle.configured)
+            return fail("Logical service submission requires explicit aggregator install metadata", error, 503);
+        const std::string& serviceId = args[0].text;
+        const std::string& route = args[1].text;
+        const std::string& bodyText = args[2].text;
+        const auto binding = current->lifecycle.bindings.find(serviceId);
+        if (binding == current->lifecycle.bindings.end()
+            || std::find(current->lifecycle.requires.begin(), current->lifecycle.requires.end(), serviceId)
+                == current->lifecycle.requires.end()) {
+            return fail("Logical service is not an explicitly bound requirement", error, 403);
+        }
+        if (!identifier(serviceId) || serviceId.size() > 128 || route.size() < 2 || route.size() > 128
+            || route[0] != '/' || route[1] == '/' || route.find("..") != std::string::npos
+            || route.find_first_of("?#\\ \r\n") != std::string::npos || bodyText.size() > 1024) {
+            return fail("Invalid logical service POST bounds", error, 400);
+        }
+        for (char ch : serviceId)
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' || ch == '.'))
+                return fail("Invalid logical service id", error, 400);
+        for (char ch : route)
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                || (ch >= '0' && ch <= '9') || ch == '/' || ch == '_' || ch == '-'))
+                return fail("Invalid logical service route", error, 400);
+        JsonDocument request, requestBody, response, continuation;
+        if (deserializeJson(requestBody, bodyText) || !requestBody.is<JsonObjectConst>())
+            return fail("Logical service POST body must be a JSON object", error, 400);
+        request["method"] = "POST";
+        request["path"] = route;
+        request["body"].set(requestBody.as<JsonVariantConst>());
+        std::string transactionRequest;
+        const size_t measured = measureJson(request);
+        if (measured > BODY_LIMIT) return fail("Logical transaction request exceeds capacity", error, 413);
+        transactionRequest.reserve(measured);
+        serializeJson(request, transactionRequest);
+        if (ingressAggregatorId.empty() || !identifier(ingressAggregatorId))
+            return fail("Logical service submission requires x-pulse-ingress-aggregator-id", error, 400);
+        const auto targets = reportTargetsFor(*current);
+        const auto aggregatorTarget = std::find_if(targets.begin(),
+            targets.end(), [&](const AggregatorTarget& target) {
+                return target.aggregatorId == ingressAggregatorId;
+            });
+        if (aggregatorTarget == targets.end())
+            return fail("Ingress aggregator ID has no explicitly configured target", error, 403);
+        HttpTarget aggregator;
+        if (!parseHttpTarget(aggregatorTarget->endpoint, aggregator))
+            return fail("Configured ingress aggregator target is invalid", error, 503);
+        constexpr char reportPath[] = "/api/runtime/instances/report";
+        const std::string prefix = aggregator.path.substr(0, aggregator.path.size() - (sizeof(reportPath) - 1));
+        const std::string transactionUrl = aggregator.origin + prefix
+            + "/api/runtime/services/" + serviceId + "/transactions";
+        const std::string parentId = parentTransactionId;
+        if (parentId.empty() || !validTransactionId(parentId))
+            return fail("Logical service submission requires a valid incoming parent transaction id", error, 400);
+        int status = 0;
+        std::string responseText;
+        if (!httpExchange(transactionUrl, "POST", transactionRequest, parentId, 512, status, responseText,
+            aggregatorTarget->bearerToken))
+            return fail("Aggregator logical transaction transport failed", error, 503);
+        if (status == 401 || status == 403)
+            return fail("Aggregator rejected logical transaction authentication (HTTP " + std::to_string(status) + ")", error, 502);
+        if (status != 202 || deserializeJson(response, responseText)
+            || !response["transactionId"].is<const char*>()) {
+            return fail("Aggregator did not accept a logical transaction", error, 502);
+        }
+        const std::string transactionId = response["transactionId"].as<const char*>();
+        if (!validTransactionId(transactionId)) return fail("Aggregator returned an invalid transaction id", error, 502);
+        continuation["pulseContinuation"]["transactionId"] = transactionId;
+        continuation["pulseContinuation"]["serviceId"] = serviceId;
+        const size_t outputSize = measureJson(continuation);
+        result.text.reserve(outputSize);
+        serializeJson(continuation, result.text);
+        responseStatus = 202;
+    }
+    else if (op.rfind("bytes_", 0) == 0 || (op.rfind("buffer_", 0) == 0 && op.rfind("buffer_json_", 0) != 0)
+        || op == "byte_xor" || op == "tcp_exchange" || op == "tcp_exchange_buffer"
+        || op == "udp_exchange" || op == "filesystem_post") {
         if (!network.invoke(op, args, result, error)) return fail(error, error, 502);
     }
     else if (op == "event_body") result.text = body;
@@ -763,6 +1089,74 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
             if (!value.is<int32_t>()) return fail("Expected integer field", error);
             result.integer = value.as<int32_t>();
         }
+    } else if (op == "json_format") {
+        JsonDocument doc;
+        if (!parseJson(args[0].text, doc)) return fail("Invalid JSON value", error);
+        if (args[1].integer < 0 || args[1].integer > 10)
+            return fail("Invalid JSON indentation", error);
+        if (!args[1].integer) {
+            if (serialize(doc, result.text) != SerializeResult::ok)
+                return fail("JSON formatting failed", error, 503);
+        } else {
+            const size_t size = measureJsonPretty(doc);
+            if (size > RESPONSE_LIMIT || doc.overflowed()) return fail("JSON formatting capacity exceeded", error, 413);
+            std::string formatted;
+            formatted.reserve(size);
+            if (serializeJsonPretty(doc, formatted) != size) return fail("JSON formatting allocation failed", error, 503);
+            size_t offset = 0;
+            while (offset < formatted.size()) {
+                size_t spaces = 0;
+                while (offset < formatted.size() && formatted[offset] == ' ') { ++spaces; ++offset; }
+                const size_t indentation = spaces / 2 * static_cast<size_t>(args[1].integer);
+                if (indentation > RESPONSE_LIMIT - result.text.size()) return fail("JSON formatting capacity exceeded", error, 413);
+                result.text.append(indentation, ' ');
+                while (offset < formatted.size() && formatted[offset] != '\n') {
+                    if (formatted[offset] != '\r') {
+                        if (result.text.size() == RESPONSE_LIMIT) return fail("JSON formatting capacity exceeded", error, 413);
+                        result.text.push_back(formatted[offset]);
+                    }
+                    ++offset;
+                }
+                if (offset < formatted.size()) {
+                    if (result.text.size() == RESPONSE_LIMIT) return fail("JSON formatting capacity exceeded", error, 413);
+                    result.text.push_back('\n'); ++offset;
+                }
+            }
+        }
+    } else if (op == "json_kind" || op.rfind("json_array_", 0) == 0) {
+        JsonDocument doc;
+        if (!parseJson(args[0].text, doc)) return fail("Invalid JSON value", error);
+        if (op == "json_kind") {
+            const auto value = doc.as<JsonVariantConst>();
+            result.text = value.isNull() ? "null" : value.is<JsonObjectConst>() ? "object"
+                : value.is<JsonArrayConst>() ? "array" : value.is<const char*>() ? "string"
+                : value.is<bool>() ? "boolean" : "number";
+            return true;
+        }
+        if (!doc.is<JsonArray>()) return fail("Expected JSON array", error);
+        auto array = doc.as<JsonArray>();
+        if (array.size() > 128) return fail("JSON array capacity exceeded", error, 413);
+        if (op == "json_array_count") { result.integer = array.size(); return true; }
+        if (op != "json_array_append"
+            && (args[1].integer < 0 || static_cast<size_t>(args[1].integer) >= array.size()))
+            return fail("JSON array index out of bounds", error);
+        if (op == "json_array_get") {
+            if (serializeValue(array[args[1].integer], doc.overflowed(), result.text) != SerializeResult::ok)
+                return fail("JSON array serialization failed", error, 503);
+            return true;
+        }
+        if (op == "json_array_remove") array.remove(args[1].integer);
+        else {
+            JsonDocument value;
+            const auto& text = args[op == "json_array_append" ? 1 : 2].text;
+            if (!parseJson(text, value)) return fail("Invalid JSON array value", error);
+            if (op == "json_array_append") {
+                if (array.size() == 128) return fail("JSON array capacity exceeded", error, 413);
+                if (!array.add(value.as<JsonVariantConst>())) return fail("JSON array allocation failed", error, 503);
+            } else array[args[1].integer].set(value.as<JsonVariantConst>());
+        }
+        if (serialize(doc, result.text) != SerializeResult::ok)
+            return fail("JSON array serialization failed", error, 503);
     } else if (op.rfind("json_", 0) == 0) {
         JsonDocument doc;
         if (!object(args[0].text, doc)) return fail("Expected JSON object", error);
@@ -772,7 +1166,10 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
             for (JsonPairConst pair : next.as<JsonObjectConst>()) doc[pair.key().c_str()].set(pair.value());
         } else {
             if (!identifier(args[1].text)) return fail("Invalid JSON key", error);
-            if (op == "json_value") {
+            if (op == "json_has") {
+                result.integer = doc.as<JsonObjectConst>().containsKey(args[1].text.c_str());
+                return true;
+            } else if (op == "json_value") {
                 if (!doc.as<JsonObjectConst>().containsKey(args[1].text.c_str()))
                     return fail("Missing JSON field", error);
                 const auto serialized = serializeValue(doc[args[1].text], doc.overflowed(), result.text);
@@ -993,7 +1390,8 @@ bool ServiceHost::execute(const Unit& unit, std::string& response) {
 
 std::shared_ptr<ServiceHost::HttpEvent> ServiceHost::enqueue(
         const std::string& newMethod, const std::string& newPath, const std::string& newBody,
-        const std::string& newPeer, const std::string& newQuery, int& statusCode, std::string& error) {
+        const std::string& newPeer, const std::string& newQuery, int& statusCode, std::string& error,
+        const std::string& newTransactionId, const std::string& newIngressAggregatorId) {
     statusCode = 503;
     if (newBody.size() > BODY_LIMIT || newQuery.size() > BODY_LIMIT
         || newPath.size() > 256 || newPeer.size() > 64 || newMethod.size() > 8) {
@@ -1007,7 +1405,8 @@ std::shared_ptr<ServiceHost::HttpEvent> ServiceHost::enqueue(
     else {
         std::shared_ptr<Context> owner;
         for (const auto& candidate : services) if (candidate) {
-            if (candidate->service.endpoints.empty()
+            if ((candidate->lifecycle.configured && newMethod == "GET" && newPath == "/ready")
+                || candidate->service.endpoints.empty()
                 || std::find(candidate->service.endpoints.begin(), candidate->service.endpoints.end(),
                     std::make_pair(newMethod, newPath)) != candidate->service.endpoints.end()) {
                 owner = candidate; break;
@@ -1031,6 +1430,8 @@ std::shared_ptr<ServiceHost::HttpEvent> ServiceHost::enqueue(
                 event->owner = owner;
                 event->method = newMethod; event->path = newPath; event->body = newBody;
                 event->peer = newPeer; event->query = newQuery;
+                event->transactionId = newTransactionId;
+                event->ingressAggregatorId = newIngressAggregatorId;
                 event->observedAt = now(); event->deadline = event->observedAt + 12000;
                 event->order = ++nextHttpOrder;
                 *slot = event;
@@ -1050,6 +1451,9 @@ bool ServiceHost::handles(const std::string& method, const std::string& path) {
     if (!ingressMutex || xSemaphoreTake(ingressMutex, pdMS_TO_TICKS(20)) != pdTRUE) return false;
     bool found = false;
     for (const auto& context : services) if (context) {
+        if (context->lifecycle.configured && method == "GET" && path == "/ready") {
+            found = true; break;
+        }
         const auto& endpoints = context->service.endpoints;
         if (std::find(endpoints.begin(), endpoints.end(), std::make_pair(method, path)) != endpoints.end()) {
             found = true; break;
@@ -1092,6 +1496,7 @@ void ServiceHost::executeHttpEvent(const std::shared_ptr<HttpEvent>& event) {
     current = event->owner;
     if (!current || !current->installed) {
         event->status = 503; event->errorText = "Hosted service stopped";
+        parentTransactionId.clear(); ingressAggregatorId.clear();
         event->owner.reset();
         event->ready.store(true); return;
     }
@@ -1112,9 +1517,19 @@ void ServiceHost::executeHttpEvent(const std::shared_ptr<HttpEvent>& event) {
             method = std::move(event->method); path = std::move(event->path);
             body = std::move(event->body); peer = std::move(event->peer);
             query = std::move(event->query);
+            parentTransactionId = std::move(event->transactionId);
+            ingressAggregatorId = std::move(event->ingressAggregatorId);
             peerPort = 0; observedAt = event->observedAt; eventUdp = nullptr;
             ++current->httpInvocations;
-            event->ok = execute(current->service, event->response);
+            if (path == "/ready" && method == "GET" && current->lifecycle.configured) {
+                const bool readinessFresh = current->cachedReadinessAt
+                    && now() - current->cachedReadinessAt < 30000;
+                event->response = readinessFresh
+                    ? current->cachedReadiness : "{\"ready\":false,\"blockedBy\":[]}";
+                responseStatus = readinessFresh
+                    && current->cachedReadiness.find("\"ready\":true") != std::string::npos ? 200 : 503;
+                event->ok = true;
+            } else event->ok = execute(current->service, event->response);
             event->status = responseStatus;
         }
     } catch (const std::bad_alloc&) {
@@ -1134,6 +1549,7 @@ void ServiceHost::executeHttpEvent(const std::shared_ptr<HttpEvent>& event) {
         static_cast<unsigned>(jsonMetrics.inputBytes), static_cast<unsigned>(jsonMetrics.outputBytes),
         static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)),
         static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+    parentTransactionId.clear();
     event->owner.reset();
     event->ready.store(true);
     PULSE_ASYNC_TRACE("HTTP worker ready event=%llu status=%d bytes=%u elapsed=%lu",
@@ -1237,10 +1653,162 @@ bool ServiceHost::backgroundTurn(Context& context) {
     return false;
 }
 
+void ServiceHost::reporter(void* opaque) {
+    auto& host = *static_cast<ServiceHost*>(opaque);
+    struct Snapshot {
+        std::string serviceId, instanceId, nodeId, bootId, owner, endpoint, healthPath;
+        std::vector<AggregatorTarget> targets;
+        std::vector<std::string> requires;
+        std::map<std::string, DependencyBinding> bindings;
+        std::vector<uint16_t> udpListeners;
+        uint32_t sequence = 0, ttl = 30000;
+    };
+    for (;;) {
+        std::vector<Snapshot> pending;
+        const uint64_t timestamp = now();
+        if (host.mutex && xSemaphoreTake(host.mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+            try {
+                for (const auto& context : host.services) {
+                    if (!context || !context->lifecycle.configured || timestamp < context->nextReportAt) continue;
+                    if (context->sequence >= INT32_MAX) {
+                        context->lastError = "Lifecycle report sequence exhausted; reinstall required";
+                        continue;
+                    }
+                    context->nextReportAt = timestamp + REPORT_INTERVAL_MS;
+                    Snapshot item;
+                    item.serviceId = context->collectorId;
+                    item.nodeId = WiFi.localIP().toString().c_str();
+                    item.instanceId = item.serviceId + "@" + item.nodeId;
+                    item.bootId = context->bootId;
+                    item.owner = context->lifecycle.ownerAggregatorId;
+                    item.endpoint = host.discoveryEndpoint.empty()
+                        ? "http://" + item.nodeId + ":80" : host.discoveryEndpoint;
+                    item.healthPath = context->healthPath;
+                    item.targets = host.reportTargetsFor(*context);
+                    item.requires = context->lifecycle.requires;
+                    item.bindings = context->lifecycle.bindings;
+                    if (context->udpPort) item.udpListeners.push_back(context->udpPort);
+                    for (size_t index = 0; index < context->daemonCount; ++index)
+                        if (context->daemons[index].udpPort)
+                            item.udpListeners.push_back(context->daemons[index].udpPort);
+                    item.sequence = ++context->sequence;
+                    pending.push_back(std::move(item));
+                }
+            } catch (const std::bad_alloc&) {
+                Serial.println("[SERVICE-HOST] Lifecycle snapshot allocation failed");
+            }
+            xSemaphoreGive(host.mutex);
+        }
+
+        for (auto& item : pending) {
+            JsonDocument dependencies;
+            JsonDocument readiness;
+            JsonArray blockers = readiness["blockedBy"].to<JsonArray>();
+            for (const auto& required : item.requires) {
+                const auto& binding = item.bindings.at(required);
+                auto dependency = dependencies[required].to<JsonObject>();
+                dependency["instanceId"] = binding.instanceId;
+                dependency["endpoint"] = binding.endpoint;
+                dependency["readinessUrl"] = binding.readinessUrl;
+            }
+            int healthStatus = 0;
+            std::string healthBody;
+            const bool ready = !item.healthPath.empty()
+                && httpExchange(item.endpoint + item.healthPath, "GET", "", "",
+                    OUTBOUND_RESPONSE_LIMIT, healthStatus, healthBody)
+                && healthStatus >= 200 && healthStatus < 300;
+            if (!ready) {
+                auto blocker = blockers.add<JsonObject>();
+                blocker["serviceId"] = item.serviceId;
+                blocker["instanceId"] = item.instanceId;
+                blocker["reason"] = item.healthPath.empty() ? "local-health-route-missing" : "local-health-failed";
+            }
+            readiness["ready"] = ready;
+
+            JsonDocument report;
+            report["version"] = 1;
+            report["serviceId"] = item.serviceId;
+            report["instanceId"] = item.instanceId;
+            report["nodeId"] = item.nodeId;
+            report["bootId"] = item.bootId;
+            report["sequence"] = item.sequence;
+            report["ownerAggregatorId"] = item.owner;
+            report["endpoint"] = item.endpoint;
+            report["ttlMs"] = item.ttl;
+            report["readiness"].set(readiness.as<JsonVariantConst>());
+            report["dependencies"].set(dependencies.as<JsonVariantConst>());
+            auto listeners = report["listeners"].to<JsonArray>();
+            auto listener = listeners.add<JsonObject>();
+            listener["protocol"] = "http";
+            listener["host"] = item.nodeId;
+            listener["port"] = 80;
+            for (const uint16_t udpPort : item.udpListeners) {
+                auto udpListener = listeners.add<JsonObject>();
+                udpListener["protocol"] = "udp";
+                udpListener["host"] = item.nodeId;
+                udpListener["port"] = udpPort;
+            }
+            std::string reportBody;
+            const size_t reportSize = measureJson(report);
+            bool ownerAcknowledged = false;
+            std::string ownerReadiness = "{\"ready\":false,\"blockedBy\":[]}";
+            if (reportSize <= BODY_LIMIT) {
+                reportBody.reserve(reportSize);
+                serializeJson(report, reportBody);
+                for (const auto& target : item.targets) {
+                    int status = 0;
+                    std::string response;
+                    const bool posted = httpExchange(target.endpoint, "POST", reportBody, "",
+                        OUTBOUND_RESPONSE_LIMIT, status, response, target.bearerToken) && status >= 200 && status < 300;
+                    if (target.aggregatorId == item.owner) {
+                        JsonDocument acknowledgement;
+                        if (posted && !deserializeJson(acknowledgement, response)
+                            && acknowledgement["readiness"].is<JsonObjectConst>()
+                            && acknowledgement["readiness"]["ready"].is<bool>()
+                            && acknowledgement["readiness"]["blockedBy"].is<JsonArrayConst>()) {
+                            ownerReadiness.clear();
+                            ownerReadiness.reserve(measureJson(acknowledgement["readiness"]));
+                            serializeJson(acknowledgement["readiness"], ownerReadiness);
+                            ownerAcknowledged = true;
+                        }
+                    }
+                    if (!posted && target.aggregatorId == item.owner) {
+                        if (host.mutex && xSemaphoreTake(host.mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+                            for (const auto& context : host.services) if (context
+                                && context->collectorId == item.serviceId && context->bootId == item.bootId) {
+                                context->lastError = status
+                                    ? "Lifecycle report rejected (HTTP " + std::to_string(status) + ")"
+                                    : "Lifecycle report transport failed";
+                                break;
+                            }
+                            xSemaphoreGive(host.mutex);
+                        }
+                    }
+                }
+            }
+            if (host.mutex && xSemaphoreTake(host.mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+                for (const auto& context : host.services) if (context
+                    && context->collectorId == item.serviceId && context->bootId == item.bootId) {
+                    context->cachedReadiness = ownerAcknowledged
+                        ? ownerReadiness : "{\"ready\":false,\"blockedBy\":[]}";
+                    context->cachedReadinessAt = ownerAcknowledged ? now() : 0;
+                    if (ownerAcknowledged && context->lastError.rfind("Lifecycle report ", 0) == 0)
+                        context->lastError.clear();
+                    break;
+                }
+                xSemaphoreGive(host.mutex);
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
+
 void ServiceHost::worker(void* context) {
     auto& host = *static_cast<ServiceHost*>(context);
     for (;;) {
         if (xSemaphoreTake(host.mutex, 0) == pdTRUE) {
+            try { host.discoveryTurn(); }
+            catch (const std::bad_alloc&) { host.hostError = "LAN discovery allocation failed"; }
             if (host.active) {
                 try {
                     const auto event = host.takeHttpEvent();
@@ -1266,6 +1834,20 @@ void ServiceHost::worker(void* context) {
     }
 }
 
+std::string ServiceHost::readiness(const std::string& id) {
+    if (!mutex || xSemaphoreTake(mutex, pdMS_TO_TICKS(20)) != pdTRUE)
+        return "{\"ready\":false,\"blockedBy\":[],\"error\":\"Service host busy\"}";
+    std::string result = "{\"ready\":false,\"blockedBy\":[]}";
+    for (const auto& context : services) if (context && (id.empty() || context->collectorId == id)
+        && context->lifecycle.configured) {
+        result = context->cachedReadinessAt && now() - context->cachedReadinessAt < 30000
+            ? context->cachedReadiness : "{\"ready\":false,\"blockedBy\":[]}";
+        break;
+    }
+    xSemaphoreGive(mutex);
+    return result;
+}
+
 std::string ServiceHost::status(const std::string& id) {
     if (!mutex) return "{\"running\":false,\"hostBindingsVersion\":1}";
     if (xSemaphoreTake(mutex, 0) != pdTRUE)
@@ -1278,6 +1860,20 @@ std::string ServiceHost::status(const std::string& id) {
     doc["httpEventCapacity"] = HTTP_EVENT_LIMIT;
     doc["serviceCapacity"] = SERVICE_LIMIT;
     doc["workerTaskCount"] = task ? 1 : 0;
+    auto profiles = doc["hostImageProfiles"].to<JsonArray>();
+    profiles.add("bounded"); profiles.add("extended");
+    auto lan = doc["lanDiscovery"].to<JsonObject>();
+    lan["policyLoaded"] = bool(discovery);
+    lan["socketReady"] = discoverySocketReady;
+    lan["udpPort"] = discoveryPort;
+    lan["targetCount"] = learnedReportTargets.size();
+    lan["endpoint"] = discoveryEndpoint;
+    if (discovery) {
+        lan["instructionStorage"] = "ffs-paged";
+        lan["imageProfile"] = "extended";
+        lan["instructionCount"] = discovery->service.image->size();
+        lan["lastError"] = discovery->lastError;
+    }
     size_t pending = 0;
     if (ingressMutex) {
         xSemaphoreTake(ingressMutex, portMAX_DELAY);
@@ -1318,6 +1914,10 @@ std::string ServiceHost::status(const std::string& id) {
             doc["observationTtlMs"] = selected->ttl;
             doc["daemonIntervalMs"] = selected->daemons[0].unit.interval;
             doc["lastError"] = selected->lastError;
+            doc["ownerAggregatorId"] = selected->lifecycle.ownerAggregatorId;
+            doc["reportTargets"] = reportTargetsFor(*selected).size();
+            doc["reportSequence"] = selected->sequence;
+            doc["readiness"] = selected->cachedReadiness;
             daemonDiagnostics(doc["daemons"].to<JsonArray>(), *selected);
             doc["cacheEntries"] = selected->caches->entries();
             doc["cacheBytes"] = selected->caches->storageBytes();

@@ -15,6 +15,19 @@ export async function createPascalishLibrarianSchemaCatalogRoutes({ logger = con
   });
   await host.start();
   return {
+    async structureMode(value) {
+      const response = await host.dispatch({
+        transport: 'internal', method: 'POST', path: '/structure-mode',
+        body: JSON.stringify({ value }),
+      });
+      if (response.status !== 200) {
+        throw Object.assign(new Error(response.body?.error || 'Pascalish structure-mode request failed'), {
+          status: response.status, invalidStructureMode: response.status === 400,
+        });
+      }
+      if (typeof response.body?.mode !== 'string') throw new Error('Invalid Pascalish structure-mode result');
+      return response.body.mode;
+    },
     async dispatch({ method, path, physicalSchemas = [], subschemas = [] }) {
       if (method.toUpperCase() !== 'GET' || !['/api/librarian/schemas', '/api/librarian/subschemas'].includes(path)) {
         return dispatchBatch({ method, path, physicalSchemas: [], subschemas: [] });

@@ -34,6 +34,18 @@ PMachine::~PMachine() {
 }
 
 namespace {
+    constexpr size_t MAX_EXTENDED_GLOBAL_SNAPSHOT_ELEMENTS = 256;
+
+    template <typename T>
+    bool compareOperands(int opcode, T lhs, T rhs) {
+        if (opcode == OP_EQ) return lhs == rhs;
+        if (opcode == OP_NEQ) return lhs != rhs;
+        if (opcode == OP_LT) return lhs < rhs;
+        if (opcode == OP_LE) return lhs <= rhs;
+        if (opcode == OP_GT) return lhs > rhs;
+        return lhs >= rhs;
+    }
+
     std::string indexedArrayName(const std::string& base, int index) {
         std::string name = base;
         const size_t placeholder = name.find("{}");
@@ -156,6 +168,40 @@ void PMachine::setExtendableDeclarations(const std::vector<ExtendableDeclaration
     releaseExtendableStorage();
     extendableStorage = std::move(prepared);
 }
+
+ExtendableStorageDiagnostics PMachine::getExtendableStorageDiagnostics() const {
+    ExtendableStorageDiagnostics diagnostics;
+    const auto addSaturated = [](size_t& total, size_t bytes) {
+        total = bytes > std::numeric_limits<size_t>::max() - total
+            ? std::numeric_limits<size_t>::max()
+            : total + bytes;
+    };
+    const auto addAllocation = [&](size_t bytes, bool usesPsram) {
+        addSaturated(diagnostics.allocatedBytes, bytes);
+        addSaturated(usesPsram ? diagnostics.psramBytes : diagnostics.heapBytes, bytes);
+    };
+
+    for (const auto& storage : extendableStorage) {
+        if (storage.slots == nullptr) continue;
+        ++diagnostics.declarationCount;
+        addSaturated(diagnostics.elementCount, storage.elementCount);
+        if (storage.elementCount > MAX_EXTENDED_GLOBAL_SNAPSHOT_ELEMENTS) {
+            addSaturated(diagnostics.globalsSnapshotOmittedElements, storage.elementCount);
+        }
+        addAllocation(storage.elementCount * sizeof(ExtendableValueSlot), storage.usesPsram);
+        for (size_t index = 0; index < storage.elementCount; ++index) {
+            const auto& slot = storage.slots[index];
+            if (slot.stringData != nullptr) {
+                const size_t stringBytes = slot.stringLength == std::numeric_limits<size_t>::max()
+                    ? slot.stringLength
+                    : slot.stringLength + 1;
+                addAllocation(stringBytes, slot.stringUsesPsram);
+            }
+        }
+    }
+    return diagnostics;
+}
+
 // Handler implementations for core opcodes
 namespace {
     std::string trimCopy(const std::string& in) {
@@ -2386,16 +2432,9 @@ void PMachine::runInstructions(size_t instructionCount,
                 const Value rhsValue = stack[--sp];
                 const Value lhsValue = stack[sp - 1];
                 const bool asReal = rhsValue.isReal() || lhsValue.isReal();
-                const float rhs = asReal ? rhsValue.asReal() : static_cast<float>(static_cast<int>(rhsValue));
-                const float lhs = asReal ? lhsValue.asReal() : static_cast<float>(static_cast<int>(lhsValue));
-                int truth = 0;
-                if (instr.opcode == OP_EQ) truth = (lhs == rhs) ? 1 : 0;
-                if (instr.opcode == OP_NEQ) truth = (lhs != rhs) ? 1 : 0;
-                if (instr.opcode == OP_LT) truth = (lhs < rhs) ? 1 : 0;
-                if (instr.opcode == OP_LE) truth = (lhs <= rhs) ? 1 : 0;
-                if (instr.opcode == OP_GT) truth = (lhs > rhs) ? 1 : 0;
-                if (instr.opcode == OP_GE) truth = (lhs >= rhs) ? 1 : 0;
-                stack[sp - 1] = truth;
+                // Integer deadlines must not lose precision through a float conversion.
+                stack[sp - 1] = asReal ? compareOperands(instr.opcode, lhsValue.asReal(), rhsValue.asReal())
+                    : compareOperands(instr.opcode, static_cast<int>(lhsValue), static_cast<int>(rhsValue));
             }
             ++pc;
             continue;
@@ -2447,6 +2486,22 @@ void PMachine::runInstructions(size_t instructionCount,
             if (sp >= 1) {
                 stack[sp - 1] = (stack[sp - 1] == 0) ? 1 : 0;
             }
+            ++pc;
+            continue;
+        }
+        case OP_CONCAT: {
+            if (!isStringAtDepth(1) || !isStringAtDepth(2)) {
+                gFlowState["__runtime_error"] = "CONCAT requires two strings";
+                goto pmachineRunExit;
+            }
+            const std::string rhs = popString();
+            std::string lhs = popString();
+            if (hostCallHook && (lhs.size() > 8192 || rhs.size() > 8192 - lhs.size())) {
+                gFlowState["__runtime_error"] = "hosted concatenation capacity exceeded";
+                goto pmachineRunExit;
+            }
+            lhs += rhs;
+            pushString(lhs);
             ++pc;
             continue;
         }
@@ -3657,6 +3712,7 @@ void PMachine::runInstructions(size_t instructionCount,
         lastRunGlobals[entry.first] = value;
     }
     for (const auto& variable : extendableStorage) {
+        if (variable.elementCount > MAX_EXTENDED_GLOBAL_SNAPSHOT_ELEMENTS) continue;
         for (size_t i = 0; i < variable.elementCount; ++i) {
             const ExtendableValueSlot& slot = variable.slots[i];
             const std::string name = variable.elementCount == 1

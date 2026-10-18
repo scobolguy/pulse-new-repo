@@ -51,6 +51,17 @@ Run from an elevated PowerShell session:
 
 ## Notes
 
+- `start-pulse-stack.ps1` requests startup from the owning aggregator's runtime
+  API. It no longer starts guessed local service processes as a fallback.
+- `stop-pulse-stack.ps1` requests owner-controlled cascade shutdown. It does not
+  kill arbitrary processes found on expected service ports.
+- Filesystem, Librarian, Mapper and MCP use the shared Pascalish supervisor,
+  rather than independent companion watchdogs. VS Code never bootstraps them.
+- A running network instance can be explicitly bound as external in the service
+  manifest. An observer reports it but does not launch or replace it.
+- See [logical routing and readiness](../../README.md#service-lifecycle-and-logical-routing)
+  for actual-listener reports, durable held requests and the deployment graph.
+
 - Install always uses NSSM with log files under `aggregator\logs`.
 - If you previously created a broken service entry without NSSM, remove it first:
 

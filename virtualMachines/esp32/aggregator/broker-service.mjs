@@ -12,6 +12,7 @@
 import express from 'express';
 import cors from 'cors';
 import { createMessageBroker } from './src/broker.js';
+import { readServiceLifecycleConfig, createServiceLifecycleRuntime, describeBoundHttpListener, installServiceLifecycleMiddleware } from './src/service-lifecycle-runtime.mjs';
 import {
   readEnvString,
   readEnvSecret,
@@ -19,7 +20,10 @@ import {
   normalizeBrokerProvider
 } from './src/env-config.mjs';
 
-const BROKER_PORT = readEnvNumber('BROKER_PORT', 4001);
+const BROKER_PORT = Number(readEnvString('BROKER_PORT', '4001'));
+if (!Number.isInteger(BROKER_PORT) || BROKER_PORT < 0 || BROKER_PORT > 65535) {
+  throw new Error('BROKER_PORT must be an integer between 0 and 65535');
+}
 const BROKER_PROVIDER = normalizeBrokerProvider(readEnvString('BROKER_PROVIDER', 'legacy')) || 'legacy';
 const BROKER_RABBITMQ_URL = readEnvString('RABBITMQ_URL', 'amqp://localhost');
 const BROKER_RABBITMQ_EXCHANGE = readEnvString('RABBITMQ_EXCHANGE', 'pulse-broker');
@@ -45,6 +49,9 @@ const app = express();
 app.set('trust proxy', true);
 app.use(cors());
 app.use(express.json());
+const lifecycleConfig = readServiceLifecycleConfig({ serviceId: 'pulse-broker' });
+const lifecycle = await createServiceLifecycleRuntime({ config: lifecycleConfig });
+installServiceLifecycleMiddleware(app, lifecycle);
 
 // Global broker state
 let brokerRuntimeConfig = {
@@ -216,8 +223,25 @@ app.post('/broker/publish', async (req, res) => {
 });
 
 // Start the service
-app.listen(BROKER_PORT, () => {
+const httpServer = app.listen(BROKER_PORT, async () => {
+  try {
+    const listener = describeBoundHttpListener(httpServer.address(), lifecycleConfig);
+    await lifecycle.start(listener.endpoint, [listener]);
+  } catch (error) {
+    console.error('[BROKER SERVICE] Lifecycle initialization failed:', error.message);
+    await lifecycle.stop();
+    httpServer.close();
+    process.exitCode = 1;
+    return;
+  }
   console.log(`[BROKER SERVICE] Starting on port ${BROKER_PORT}`);
   console.log(`[BROKER SERVICE] Provider: ${brokerRuntimeConfig.provider}`);
   console.log(`[BROKER SERVICE] Ready to accept requests`);
+});
+httpServer.once('close', () => {
+  void lifecycle.stop().catch(error => console.error('[BROKER SERVICE] Lifecycle shutdown failed:', error.message));
+});
+for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, async () => {
+  await lifecycle.stop();
+  httpServer.close();
 });

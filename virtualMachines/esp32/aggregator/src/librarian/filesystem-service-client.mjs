@@ -2,7 +2,7 @@ function failure(message, status = 502, code = 'EFILESYSTEM') {
   return Object.assign(new Error(message), { status, code });
 }
 
-export function createFilesystemServiceClient(baseUrl, { timeoutMs = 10000 } = {}) {
+export function createFilesystemServiceClient(baseUrl, { timeoutMs = 10000, env = process.env } = {}) {
   if (typeof baseUrl !== 'string' || !/^https?:\/\/[^/]+\/?$/i.test(baseUrl)) {
     throw failure('Invalid filesystem service URL', 500, 'EINVAL');
   }
@@ -10,8 +10,25 @@ export function createFilesystemServiceClient(baseUrl, { timeoutMs = 10000 } = {
     throw failure('Invalid filesystem service timeout', 500, 'EINVAL');
   }
   const origin = baseUrl.replace(/\/+$/, '');
+  const logicalTransport = env.PULSE_SERVICE_BINDINGS !== undefined
+    ? createLogicalServiceTransport({
+      serviceId: 'pulse-filesystem', aggregatorUrls: JSON.parse(env.PULSE_AGGREGATOR_URLS || '[]'),
+      token: env.PULSE_RUNTIME_REPORT_TOKEN || '',
+    })
+    : null;
 
   async function post(route, payload, context) {
+    if (logicalTransport) {
+      const response = await logicalTransport.request({ method: 'POST', path: route, body: payload }, context);
+      if (response.status < 200 || response.status >= 300) {
+        throw failure(response.body?.error || `Filesystem service returned HTTP ${response.status}`, response.status,
+          response.status === 404 ? 'ENOENT' : response.status === 403 ? 'EACCES' : 'EFILESYSTEM');
+      }
+      if (!response.body || typeof response.body !== 'object' || Array.isArray(response.body)) {
+        throw failure('Filesystem service transaction returned invalid JSON');
+      }
+      return response.body;
+    }
     let response;
     try {
       response = await fetch(`${origin}${route}`, {
@@ -79,7 +96,7 @@ export function createFilesystemServiceClient(baseUrl, { timeoutMs = 10000 } = {
   }
 
   return {
-    stop: () => {},
+    stop: () => logicalTransport?.stop(),
     readText,
     readTextAuto,
     writeText,
@@ -95,3 +112,4 @@ export function createFilesystemServiceClient(baseUrl, { timeoutMs = 10000 } = {
     }
   };
 }
+import { createLogicalServiceTransport } from '../service-lifecycle/transaction-transport.mjs';

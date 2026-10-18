@@ -22,6 +22,55 @@ Run `npm run test:pmachine:arduino-layout` to verify the current Arduino PMachin
 
 The standalone Arduino scheduler and dynamic-library test sources live in `testing/pmachines/`; production PlatformIO profiles continue to exclude their former source filenames until the local-library migration removes those legacy filters.
 
+## ESP32 PSRAM extended-table proof
+
+Build and upload the `esp32_s3_n16r8` PlatformIO environment, connect the board
+to the network, then run this opt-in hardware proof from the ESP32 workspace:
+
+```powershell
+py -3.12 -m platformio run -e esp32_s3_n16r8 -t upload
+node testing\pmachines\verify-esp32-psram-extended-table.mjs http://<board-address>
+```
+
+The proof uploads a signed P-code program and map, allocates a 32,768-element
+extendable integer table, writes and reads the first, middle, and last entries,
+and requires every reported table-allocation byte to be in PSRAM. Large tables
+are excluded from the response's globals snapshot so their values are not
+duplicated into internal heap; the response reports the omitted element count.
+Uploaded probe files are removed afterward. Use `--elements <count>` to choose
+a different allocation size (1,024 through 1,000,000 elements). Execution
+responses include `extendedStorage` counters for declarations, elements,
+allocated bytes, PSRAM bytes, internal-heap bytes, and omitted snapshot values.
+
+## ESP32 read-only Data Librarian profile
+
+The constrained S3 profile exposes `/api/librarian/health`,
+`/api/librarian/filesystem/health`, `/api/librarian/catalogs`,
+`/api/librarian/catalog/page`, and `/api/librarian/schemas/page`. Catalog entries are paged in groups of at most four; schema directory pages are limited to eight entries. The profile
+does not implement the full desktop Librarian API, catalog writes, or embedded
+XSD parsing. Its proxied endpoints return an envelope with the Filesystem
+Service HTTP `status` and JSON response text in `body`.
+
+The Filesystem Service defaults to binding on all IPv4 interfaces at port 4302,
+but only accepts loopback and the configured S3 address (`192.168.2.90` by
+default). It shares the desktop Librarian's operational data root. Verify that
+the board's current address is still `192.168.2.90` before deployment.
+
+Build and flash the updated firmware over COM4, start the Filesystem Service,
+then install the hosted profile over the board's HTTP management endpoint:
+
+```powershell
+py -3.12 -m platformio run -e esp32_s3_n16r8 -t upload --upload-port COM4
+npm --prefix aggregator run dev:filesystem
+npm --prefix aggregator run deploy:esp32:librarian:readonly
+```
+
+The deploy script installs a peer allowlist containing only the desktop
+Filesystem Service IPv4 address and port. Set `ESP32_NODE_NAME`,
+`LIBRARIAN_FILESYSTEM_HOST`, and `FILESYSTEM_PORT` only when the device or
+service network configuration differs from the defaults. Check the device
+health and browse a small page before treating the deployment as available.
+
 Run `npm run test:pmachine:javascript` for the offline JavaScript PMachine compatibility, opcode, negative-path, canonical-type, debugger, and deployment-supervisor suite.
 
 Run `npm run test:pmachine:javascript-package` to verify the public JavaScript PMachine package exports.

@@ -30,6 +30,7 @@ $env:PULSE_START_POLICY = 'lazy'
 # Keep the gateway lean while always supervising the Librarian and Mapper.
 $env:PULSE_LIBRARIAN_AUTOSTART = '1'
 $env:PULSE_MAPPER_AUTOSTART = '1'
+$env:PULSE_FILESYSTEM_AUTOSTART = '1'
 $env:BACKEND_WORKER_AUTOSTART = '0'
 $env:PULSE_MCP_AUTOSTART = '0'
 $env:PULSE_SERVICE_CONTROL_LOCAL_BYPASS = '1'

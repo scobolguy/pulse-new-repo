@@ -107,6 +107,66 @@ public interface PascalishListener extends ParseTreeListener {
 	 */
 	void exitVarLine(PascalishParser.VarLineContext ctx);
 	/**
+	 * Enter a parse tree produced by {@link PascalishParser#distributedTableDecl}.
+	 * @param ctx the parse tree
+	 */
+	void enterDistributedTableDecl(PascalishParser.DistributedTableDeclContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link PascalishParser#distributedTableDecl}.
+	 * @param ctx the parse tree
+	 */
+	void exitDistributedTableDecl(PascalishParser.DistributedTableDeclContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link PascalishParser#backingClause}.
+	 * @param ctx the parse tree
+	 */
+	void enterBackingClause(PascalishParser.BackingClauseContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link PascalishParser#backingClause}.
+	 * @param ctx the parse tree
+	 */
+	void exitBackingClause(PascalishParser.BackingClauseContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link PascalishParser#distributedKeyword}.
+	 * @param ctx the parse tree
+	 */
+	void enterDistributedKeyword(PascalishParser.DistributedKeywordContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link PascalishParser#distributedKeyword}.
+	 * @param ctx the parse tree
+	 */
+	void exitDistributedKeyword(PascalishParser.DistributedKeywordContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link PascalishParser#tableKeyword}.
+	 * @param ctx the parse tree
+	 */
+	void enterTableKeyword(PascalishParser.TableKeywordContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link PascalishParser#tableKeyword}.
+	 * @param ctx the parse tree
+	 */
+	void exitTableKeyword(PascalishParser.TableKeywordContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link PascalishParser#backedKeyword}.
+	 * @param ctx the parse tree
+	 */
+	void enterBackedKeyword(PascalishParser.BackedKeywordContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link PascalishParser#backedKeyword}.
+	 * @param ctx the parse tree
+	 */
+	void exitBackedKeyword(PascalishParser.BackedKeywordContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link PascalishParser#byKeyword}.
+	 * @param ctx the parse tree
+	 */
+	void enterByKeyword(PascalishParser.ByKeywordContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link PascalishParser#byKeyword}.
+	 * @param ctx the parse tree
+	 */
+	void exitByKeyword(PascalishParser.ByKeywordContext ctx);
+	/**
 	 * Enter a parse tree produced by {@link PascalishParser#subprogramDecl}.
 	 * @param ctx the parse tree
 	 */
@@ -336,6 +396,16 @@ public interface PascalishListener extends ParseTreeListener {
 	 * @param ctx the parse tree
 	 */
 	void exitTypeRef(PascalishParser.TypeRefContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link PascalishParser#cacheType}.
+	 * @param ctx the parse tree
+	 */
+	void enterCacheType(PascalishParser.CacheTypeContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link PascalishParser#cacheType}.
+	 * @param ctx the parse tree
+	 */
+	void exitCacheType(PascalishParser.CacheTypeContext ctx);
 	/**
 	 * Enter a parse tree produced by {@link PascalishParser#genericTypeParams}.
 	 * @param ctx the parse tree

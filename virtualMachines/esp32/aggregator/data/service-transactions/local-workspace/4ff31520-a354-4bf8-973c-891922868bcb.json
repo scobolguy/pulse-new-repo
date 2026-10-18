@@ -1,0 +1,1 @@
+{"transactionId":"4ff31520-a354-4bf8-973c-891922868bcb","serviceId":"pulse-data-librarian","request":{"method":"GET","path":"/api/librarian/readiness-probe"},"responseLimit":1000000,"status":"held","createdAt":"2026-10-16T16:09:44.023Z","updatedAt":"2026-10-16T16:42:37.550Z","ok":true,"reason":"Allocation deferred: Service execution timeout"}

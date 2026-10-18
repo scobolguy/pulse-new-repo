@@ -30,6 +30,7 @@ const OPERATOR_METHOD_NAMES = {
 const BINARY_OPERATOR_METHODS = OPERATOR_METHOD_NAMES;
 
 const CREDENTIAL_PATTERN = /(^|[;\s])(password|pwd|user\s*id|uid|account[_\s]*key|apikey|api[_\s]*key)\s*=/i;
+const SERVICE_ID_ALIASES = new Set(['filesystem', 'librarian', 'mapper']);
 
 class CollectingErrorListener extends antlr4.error.ErrorListener {
   constructor() {
@@ -415,6 +416,22 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
   visitServiceDecl(ctx) {
     const nameNode = ctx.stringOrIdent ? ctx.stringOrIdent() : null;
     const serviceId = nameNode ? unquote(text(nameNode)) : '';
+    const requirements = (ctx.serviceRequirementDecl ? ctx.serviceRequirementDecl() : [])
+      .map(declaration => unquote(text(declaration.STRING())));
+    const seenRequirements = new Set();
+    for (const requiredServiceId of requirements) {
+      if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(requiredServiceId)
+        || SERVICE_ID_ALIASES.has(requiredServiceId)) {
+        throw new Error(`[PASCALISH-PROGRAM] Invalid required service id '${requiredServiceId}' in service '${serviceId}'`);
+      }
+      if (requiredServiceId === serviceId) {
+        throw new Error(`[PASCALISH-PROGRAM] Service '${serviceId}' cannot require itself`);
+      }
+      if (seenRequirements.has(requiredServiceId)) {
+        throw new Error(`[PASCALISH-PROGRAM] Service '${serviceId}' requires '${requiredServiceId}' more than once`);
+      }
+      seenRequirements.add(requiredServiceId);
+    }
 
     const localDecls = [];
     const unit = collectUnitDecls(ctx, this);
@@ -456,6 +473,7 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
     const node = {
       type: 'ServiceDecl',
       name: serviceId,
+      requires: requirements,
       endpoints,
       localMappers,
       localTypes,
@@ -3394,6 +3412,12 @@ class Codegen {
           id: runtimeUnit.name,
           refreshMs
         },
+        ...(runtimeKind === 'service' && (runtimeUnit.requires || []).length ? {
+          serviceLifecycle: {
+            version: 1,
+            requires: [...runtimeUnit.requires]
+          }
+        } : {}),
         executionModel: `pascalish-${runtimeKind}`,
         sourceLanguage: 'pascalish',
         sourceMap: this.sourceMap || {},
@@ -3427,7 +3451,10 @@ class Codegen {
             ...(this.distributedTables.length ? ['distributed-cache'] : [])
           ])].sort(),
           targets: this.distributedTables.length || this.lines.some(line =>
-            line.startsWith('CALL_EXT ') && SERVICE_HOST_BINDINGS[line.split(' ')[1]]?.desktopOnly) ? ['js'] : ['js', 'esp32'],
+            line.startsWith('CALL_EXT ') && SERVICE_HOST_BINDINGS[line.split(' ')[1]]?.desktopOnly) ? ['js']
+            : this.lines.some(line =>
+              line.startsWith('CALL_EXT ') && SERVICE_HOST_BINDINGS[line.split(' ')[1]]?.nativeOnly) ? ['esp32']
+              : ['js', 'esp32'],
           distributedTables: this.distributedTables,
           hostCaches: (this.ast.variables || []).filter(item => this.resolveTypeRef(item.dataType)?.kind === 'cache')
             .map(item => ({ name: item.name.toLowerCase(), capacity: 50,
@@ -3513,7 +3540,54 @@ function extractMapperImports(sourceText) {
   return { imports, stripped };
 }
 
-export function compilePascalishProgramWithAntlr(sourceText, { fileName = '', hostServices = false, deviceBindings = false } = {}) {
+const NATIVE_SERVICE_OPCODES = new Set([
+  'ADD', 'AND', 'CALL', 'CALL_EXT', 'CONCAT', 'EQ', 'GE', 'GT', 'HALT', 'JMP', 'JZ',
+  'LE', 'LOAD', 'LT', 'MAP_RETURN', 'MUL', 'NEQ', 'NOP', 'NOT', 'OR', 'PUSH_INT', 'PUSH_STR',
+  'RET', 'STORE', 'STREQ', 'STRNEQ', 'SUB'
+]);
+const NATIVE_SERVICE_BINDINGS = new Set([
+  'host.event_body', 'host.event_method', 'host.event_path', 'host.event_peer', 'host.event_port',
+  'host.http_status', 'host.json_kind', 'host.json_to_text', 'host.json_array_count',
+  'host.json_array_get', 'host.json_array_append', 'host.json_array_set', 'host.json_array_remove',
+  'host.json_value', 'host.json_text', 'host.json_integer', 'host.json_has', 'host.json_remove',
+  'host.json_set', 'host.json_embed', 'host.json_merge', 'host.json_format', 'host.json_object',
+  'host.json_append', 'host.text_trim', 'host.string_lower', 'host.string_upper', 'host.string_index',
+  'host.json_path_text', 'host.json_path_integer', 'host.json_parse_value', 'host.json_node_kind',
+  'host.json_node_member', 'host.json_node_count', 'host.json_node_item', 'host.json_node_key',
+  'host.json_node_object_count', 'host.json_node_value', 'host.text_index', 'host.string_slice',
+  'host.string_replace', 'host.text_split', 'host.text_split_lines', 'host.text_split_whitespace',
+  'host.number_parse_integer', 'host.raise_error', 'host.text_hash', 'host.text_hash_utf8',
+  'host.number_compare', 'host.string_compare', 'host.date_iso', 'host.date_parse', 'host.date_now',
+  'host.fs_read_text', 'host.fs_read_text_auto', 'host.fs_write_text', 'host.fs_exists',
+  'host.fs_resolve_relative', 'host.service_submit',
+  'host.bytes_from_text', 'host.bytes_text', 'host.bytes_length', 'host.bytes_get', 'host.bytes_join'
+]);
+
+function advertiseNativeTarget(pcodeText, programMap) {
+  if (programMap.runtimeUnit?.kind !== 'service' || programMap.hostBindingsVersion !== SERVICE_HOST_BINDINGS_VERSION) {
+    throw new Error('The native host target currently supports hosted HTTP services only');
+  }
+
+  for (const line of pcodeText.split(/\r?\n/)) {
+    const instruction = line.trim().split(/\s+/, 1)[0];
+    if (!instruction || instruction.endsWith(':') || instruction.startsWith('#')) continue;
+    if (!NATIVE_SERVICE_OPCODES.has(instruction)) {
+      throw new Error(`Native host does not support opcode ${instruction}`);
+    }
+    if (instruction === 'CALL_EXT') {
+      const binding = line.trim().split(/\s+/)[1]?.toLowerCase();
+      if (!NATIVE_SERVICE_BINDINGS.has(binding)) {
+        throw new Error(`Native host does not support binding ${binding || '(missing)'}`);
+      }
+    }
+  }
+
+  programMap.targets = [...new Set([...(programMap.targets || []), 'native'])];
+}
+
+export function compilePascalishProgramWithAntlr(sourceText, {
+  fileName = '', hostServices = false, deviceBindings = false, nativeTarget = false
+} = {}) {
   const { imports: mapperImports, stripped } = extractMapperImports(String(sourceText || ''));
 
   const input = new antlr4.InputStream(stripped);
@@ -3565,6 +3639,10 @@ export function compilePascalishProgramWithAntlr(sourceText, { fileName = '', ho
   }
   const linkedLibraries = linkLibraries(ast);
   const result = new Codegen(ast).build();
+  if (nativeTarget) {
+    if (!hostServices) throw new Error('The native target requires hosted service compilation');
+    advertiseNativeTarget(result.pcodeText, result.programMap);
+  }
 
   result.programMap.libraries = linkedLibraries;
   const librarianImports = [];
@@ -3686,7 +3764,9 @@ function parseArgs(argv) {
   const args = {
     in: './data/hello-world.pas',
     out: '../pcode/pascalish-program.pcode',
-    mapOut: '../pcode/pascalish-program.program.json'
+    mapOut: '../pcode/pascalish-program.program.json',
+    hostServices: false,
+    nativeTarget: false
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -3694,6 +3774,11 @@ function parseArgs(argv) {
     if (token === '--in') args.in = argv[index + 1];
     if (token === '--out') args.out = argv[index + 1];
     if (token === '--map-out') args.mapOut = argv[index + 1];
+    if (token === '--host-services') args.hostServices = true;
+    if (token === '--native-target') {
+      args.hostServices = true;
+      args.nativeTarget = true;
+    }
   }
 
   return args;
@@ -3706,7 +3791,10 @@ async function main() {
   const mapOutPath = path.resolve(args.mapOut);
 
   const source = await fs.readFile(inPath, 'utf-8');
-  const compiled = compilePascalishProgramWithAntlr(source);
+  const compiled = compilePascalishProgramWithAntlr(source, {
+    hostServices: args.hostServices,
+    nativeTarget: args.nativeTarget
+  });
   const signedProgramMap = attachPcodeSignature(compiled.programMap, compiled.pcodeText);
 
   await fs.mkdir(path.dirname(outPath), { recursive: true });

@@ -4,11 +4,21 @@ const http = require('node:http')
 const https = require('node:https')
 let vscode = require('vscode')
 const { readDistributedNetwork } = require('./distributedNetwork')
+const wflFlowDocument = require('./wflFlowDocument')
+
+function isWflDocument(document) {
+  return /\.wfl$/i.test(String(document?.fileName || document?.uri?.fsPath || document?.fsPath || ''))
+}
 
 const VIEW_TYPE = 'pulseCatalogStudio.webview'
 const SIDEBAR_VIEW_TYPE = 'pulseCatalogStudio.sidebar'
 const MAPPER_VIEW_TYPE = 'pulseCatalogStudio.dataMapper'
 const VFL_EDITOR_VIEW_TYPE = 'pulseCatalogStudio.vflEditor'
+const WFL_FLOW_EDITOR_VIEW_TYPE = 'pulseCatalogStudio.wflFlowEditor'
+
+function flowEditorViewType(uri) {
+  return isWflDocument(uri) ? WFL_FLOW_EDITOR_VIEW_TYPE : VFL_EDITOR_VIEW_TYPE
+}
 
 const DEFAULT_VFL_TEMPLATE = Object.freeze({
   schemaVersion: 1,
@@ -33,6 +43,17 @@ const DEFAULT_VFL_TEMPLATE = Object.freeze({
   nodes: [],
   edges: [],
 })
+
+const FLOW_COMPONENTS = Object.freeze([
+  {
+    id: 'process',
+    label: 'Process',
+    kind: 'service',
+    type: 'process',
+    source: 'builtin',
+    description: 'Drag a process box onto the canvas. Assign its source file in Executable Node when ready to run it.',
+  },
+])
 
 const DEFAULT_PALETTE_OBJECTS = Object.freeze([
   {
@@ -156,17 +177,11 @@ function getCatalogStudioApiBase() {
 }
 
 function getNetworkApiBases() {
-  const configured = getCatalogStudioApiBase()
-  const candidates = [configured]
-  if (/^http:\/\/localhost(?::|$)/i.test(configured)) {
-    candidates.push(configured.replace(/^http:\/\/localhost/i, 'http://127.0.0.1'))
-  }
-  candidates.push('http://127.0.0.1:4000')
-  return Array.from(new Set(candidates.map((candidate) => candidate.replace(/\/$/, ''))))
+  return [getCatalogStudioApiBase()]
 }
 
 function getLibrarianApiBases() {
-  return Array.from(new Set([...getNetworkApiBases(), 'http://127.0.0.1:4300']))
+  return getNetworkApiBases()
 }
 
 async function getLibrarianDataTypes() {
@@ -682,7 +697,8 @@ function getCatalogStudioHostHtml(webview, extensionUri, route = '') {
   </html>`
 }
 
-function getVflEditorHtml(webview, extensionUri, document, parsed) {
+function getVflEditorHtml(webview, extensionUri, document, parsed, options = {}) {
+  const isWfl = Boolean(options.isWfl)
   const appUrl = new URL('flow-designer?host=vscode', getCatalogStudioUrl()).toString()
   const apiBase = getCatalogStudioApiBase()
   const nonce = String(Date.now())
@@ -766,6 +782,7 @@ function getVflEditorHtml(webview, extensionUri, document, parsed) {
           padding: 10px; cursor: pointer; user-select: none;
         }
         .workflow-node.selected { border-color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent), var(--shadow); }
+        .workflow-node.process { border-radius: 0; }
         .workflow-node-head { display: flex; justify-content: space-between; gap: 8px; }
         .workflow-node-label { font-size: 13px; font-weight: 700; }
         .workflow-node-kind { font-size: 10px; text-transform: uppercase; color: var(--muted); }
@@ -796,6 +813,8 @@ function getVflEditorHtml(webview, extensionUri, document, parsed) {
         .catalog-list { display: flex; flex-direction: column; gap: 8px; }
         .catalog-item { border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: color-mix(in srgb, canvas 98%, transparent); }
         .catalog-item.dragging { opacity: 0.55; }
+        .catalog-item[draggable="true"] { cursor: grab; }
+        .process-symbol { width: 64px; height: 28px; border: 2px solid var(--accent); margin-bottom: 10px; }
         .catalog-item-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
         .catalog-item-label { font-size: 13px; font-weight: 700; }
         .catalog-item-kind { font-size: 10px; text-transform: uppercase; color: var(--muted); }
@@ -812,8 +831,10 @@ function getVflEditorHtml(webview, extensionUri, document, parsed) {
         .status.error { color: var(--danger); }
         code { font-family: Consolas, 'Courier New', monospace; font-size: 12px; }
         @media (max-width: 1080px) {
-          .main { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; }
-          .leftbar { border-right: 0; border-bottom: 1px solid var(--border); }
+          .main { grid-template-columns: 200px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 0.5fr); }
+          .leftbar { grid-column: 1; grid-row: 1 / 3; }
+          .editor-wrap { grid-column: 2; grid-row: 1; grid-template-rows: minmax(0, 1fr) minmax(60px, 0.3fr) auto; }
+          .sidebar { grid-column: 2; grid-row: 2; }
           .sidebar { border-left: 0; border-top: 1px solid var(--border); border-bottom: 0; }
         }
       </style>
@@ -830,13 +851,22 @@ function getVflEditorHtml(webview, extensionUri, document, parsed) {
           </div>
           <div class="actions">
             <button id="insertTemplate" type="button">Reset Template</button>
-            <button id="formatDocument" type="button">Format JSON</button>
+            <button id="formatDocument" type="button">${isWfl ? 'Format Model' : 'Format JSON'}</button>
+            ${isWfl ? '<button id="openText" type="button">Open WFL Text</button>' : ''}
+            ${!isWfl ? '<button id="createDeployment" type="button">Create WFL Deployment</button>' : ''}
           </div>
         </div>
         <div class="main">
           <div class="leftbar">
             <div class="section">
               <h3>Palette</h3>
+              <div class="section-body">
+                <div class="section-note">Drag a Process onto the canvas, or use Add Node. Move boxes and use Link to connect them.</div>
+                <div id="componentList" class="catalog-list">${FLOW_COMPONENTS.map(item => `<div class="catalog-item" aria-label="${escapeHtml(item.label)} component"><div class="process-symbol" aria-hidden="true"></div><div class="catalog-item-head"><div class="catalog-item-label">${escapeHtml(item.label)}</div><div class="catalog-item-kind">component</div></div><div class="catalog-item-description">${escapeHtml(item.description)}</div></div>`).join('')}</div>
+              </div>
+            </div>
+            <div class="section">
+              <h3>Catalog Objects</h3>
               <div class="section-body">
                 <div class="section-note">Seeded permanent objects appear immediately. The editor then asks the aggregator what additional services, maps, queues, and providers exist.</div>
                 <div id="paletteList" class="catalog-list"></div>
@@ -854,7 +884,7 @@ function getVflEditorHtml(webview, extensionUri, document, parsed) {
             <div class="canvas-wrap">
               <div class="canvas-toolbar">
                 <span>Current Workflow</span>
-                <span id="canvasHint">Drag seeded or discovered items from the RHS onto the workflow surface.</span>
+                <span id="canvasHint">Drag Process from the left palette onto the canvas.</span>
                 <span>
                   <label for="edgeTypeSelect">Edge Type</label>
                   <select id="edgeTypeSelect">
@@ -870,16 +900,31 @@ function getVflEditorHtml(webview, extensionUri, document, parsed) {
               </div>
               <div class="workflow-footer">
                 <span id="selectedNodeLabel">No workflow node selected.</span>
-                <span>Middle pane is the current workflow. RHS is for palette and topology.</span>
+                <span>Palette on the left. Node properties and deployment targets on the right.</span>
               </div>
             </div>
             <textarea id="editor" spellcheck="false">${initialText}</textarea>
             <div class="footer">
               <div id="status" class="status ${parsed.valid ? 'ok' : 'error'}">${parsed.valid ? 'VFL structure valid' : 'Fix JSON or schema issues before saving'}</div>
-              <div>Changes apply directly to the underlying <code>.vfl</code> document.</div>
+              <div>${isWfl ? 'Changes are written to the <code>FLOW</code> block of the underlying <code>.wfl</code> document; the rest of the file is left untouched.' : 'Changes apply directly to the underlying <code>.vfl</code> document.'}</div>
             </div>
           </div>
           <div class="sidebar">
+            ${!isWfl ? `<div class="section">
+              <h3>Executable Node</h3>
+              <div class="section-body">
+                <div class="section-note">Select a node. Source paths are relative to this VFL file. Source code uses flow.input and flow.output queue symbols.</div>
+                <label>Kind <select id="nodeKind"><option>service</option><option>program</option><option>daemon</option><option>map</option><option>queue</option></select></label><br>
+                <label>Source file <input id="nodeSource" placeholder="worker.pas, mapper.mapl or steps.wfl"></label><br>
+                <label>Workflow id <input id="nodeWorkflow" placeholder="For multi-workflow WFL sources"></label><br>
+                <label>Queue name / WFL symbol <input id="nodeQueue" placeholder="For queue nodes"></label><br>
+                <label>Input symbol <input id="nodeInputSymbol" placeholder="flow.input"></label><br>
+                <label>Output symbol <input id="nodeOutputSymbol" placeholder="flow.output"></label><br>
+                <button id="applyNode" type="button">Apply Node Properties</button>
+                <button id="openNodeSource" type="button">Open Source</button>
+                <h4>Outgoing message links</h4><div id="nodeLinks"></div>
+              </div>
+            </div>` : ''}
             <div class="section">
               <h3>Summary</h3>
               <div class="section-body">
@@ -918,8 +963,10 @@ function getVflEditorHtml(webview, extensionUri, document, parsed) {
       </div>
       <script nonce="${nonce}">
         const vscode = acquireVsCodeApi();
+        const escapeHtml = ${escapeHtml.toString()};
         const apiBase = ${JSON.stringify(apiBase)};
         const seededPalette = ${JSON.stringify(DEFAULT_PALETTE_OBJECTS)};
+        const flowComponents = ${JSON.stringify(FLOW_COMPONENTS)};
         const defaultTemplate = ${JSON.stringify(DEFAULT_VFL_TEMPLATE)};
         const editor = document.getElementById('editor');
         const formatButton = document.getElementById('formatDocument');
@@ -932,6 +979,7 @@ function getVflEditorHtml(webview, extensionUri, document, parsed) {
         const diagnostics = document.getElementById('diagnostics');
         const status = document.getElementById('status');
         const paletteList = document.getElementById('paletteList');
+        const componentList = document.getElementById('componentList');
         const edgeTypeList = document.getElementById('edgeTypeList');
         const topologyList = document.getElementById('topologyList');
         const workflowCanvas = document.getElementById('workflowCanvas');
@@ -1098,8 +1146,10 @@ function getVflEditorHtml(webview, extensionUri, document, parsed) {
             vscode.postMessage({ type: 'showError', message: 'Fix the VFL document before inserting palette items or topology targets.' });
             return;
           }
-          const nextValue = mutator(parsed) || parsed;
-          const nextText = JSON.stringify(nextValue, null, 2) + '\n';
+          let nextValue;
+          try { nextValue = mutator(parsed) || parsed; }
+          catch (error) { vscode.postMessage({ type: 'showError', message: error.message || String(error) }); return; }
+          const nextText = JSON.stringify(nextValue, null, 2) + '\\n';
           editor.value = nextText;
           renderDiagnostics(nextText);
           renderWorkflowFromDocument(nextValue);
@@ -1138,12 +1188,12 @@ function getVflEditorHtml(webview, extensionUri, document, parsed) {
               kind: item.kind || 'service',
               type: item.type || '',
               label: item.label || item.name || item.id,
-              sourceCatalogId: item.id || '',
+              ...(item.source === 'builtin' ? {} : { sourceCatalogId: item.id || '' }),
               paletteSource: item.source || 'seeded',
               x: pos.x,
               y: pos.y,
             });
-            if (item.id) {
+            if (item.id && item.source !== 'builtin') {
               if (!value.catalog || typeof value.catalog !== 'object' || Array.isArray(value.catalog)) {
                 value.catalog = {};
               }
@@ -1273,20 +1323,20 @@ function getVflEditorHtml(webview, extensionUri, document, parsed) {
           });
         }
 
-        function renderPalette(items) {
-          paletteList.innerHTML = '';
+        function renderPalette(items, list = paletteList) {
+          list.innerHTML = '';
           if (!Array.isArray(items) || items.length === 0) {
-            paletteList.innerHTML = '<div class="section-note">No palette items are available.</div>';
+            list.innerHTML = '<div class="section-note">No palette items are available.</div>';
             return;
           }
           for (const item of items) {
             const card = document.createElement('div');
             card.className = 'catalog-item';
             card.draggable = true;
-            card.innerHTML = '<div class="catalog-item-head"><div class="catalog-item-label">' + escapeHtml(item.label || item.name || item.id) + '</div><div class="catalog-item-kind">' + escapeHtml((item.kind || 'item') + ' · ' + (item.source || 'seeded')) + '</div></div><div class="catalog-item-description">' + escapeHtml(item.description || 'No description available.') + '</div><div class="catalog-item-actions"><button type="button">Add Node</button><button type="button">Seed Flow</button></div>';
+            card.innerHTML = (item.type === 'process' ? '<div class="process-symbol" aria-hidden="true"></div>' : '') + '<div class="catalog-item-head"><div class="catalog-item-label">' + escapeHtml(item.label || item.name || item.id) + '</div><div class="catalog-item-kind">' + escapeHtml(item.source === 'builtin' ? 'component' : (item.kind || 'item') + ' · ' + (item.source || 'seeded')) + '</div></div><div class="catalog-item-description">' + escapeHtml(item.description || 'No description available.') + '</div><div class="catalog-item-actions"><button type="button">Add Node</button>' + (item.source === 'builtin' ? '' : '<button type="button">Seed Flow</button>') + '</div>';
             const buttons = card.querySelectorAll('button');
             buttons[0].addEventListener('click', () => insertPaletteNode(item));
-            buttons[1].addEventListener('click', () => upsertSeedObject(item.id));
+            if (buttons[1]) buttons[1].addEventListener('click', () => upsertSeedObject(item.id));
             card.addEventListener('dragstart', (event) => {
               card.classList.add('dragging');
               event.dataTransfer.setData('application/vnd.pulse.palette+json', JSON.stringify({ kind: 'palette', item }));
@@ -1295,7 +1345,7 @@ function getVflEditorHtml(webview, extensionUri, document, parsed) {
             card.addEventListener('dragend', () => {
               card.classList.remove('dragging');
             });
-            paletteList.appendChild(card);
+            list.appendChild(card);
           }
         }
 
@@ -1403,6 +1453,39 @@ function getVflEditorHtml(webview, extensionUri, document, parsed) {
         }
 
         function updateSelectedWorkflowLabel(node) {
+          const kind = document.getElementById('nodeKind');
+          if (kind) {
+            kind.value = node?.kind || 'service';
+            document.getElementById('nodeSource').value = node?.execution?.sourceFile || '';
+            document.getElementById('nodeWorkflow').value = node?.execution?.workflowId || '';
+            document.getElementById('nodeQueue').value = node?.queue || '';
+            document.getElementById('nodeInputSymbol').value = node?.execution?.inputSymbol || '';
+            document.getElementById('nodeOutputSymbol').value = node?.execution?.outputSymbol || '';
+            document.getElementById('applyNode').disabled = !node;
+            const links = document.getElementById('nodeLinks');
+            links.replaceChildren();
+            const value = safeParseEditorValue();
+            for (const [index, edge] of (value?.edges || []).entries()) {
+              if (!node || edge.from !== node.id) continue;
+              const row = document.createElement('div');
+              const label = document.createElement('label');
+              label.textContent = edge.to + ' (' + edge.type + ') ';
+              const input = document.createElement('input');
+              input.value = edge.queue || '';
+              input.placeholder = 'Queue symbol (empty = automatic)';
+              input.onchange = () => commitStructuredUpdate(value => {
+                if (input.value.trim()) value.edges[index].queue = input.value.trim();
+                else delete value.edges[index].queue;
+                return value;
+              });
+              const remove = document.createElement('button');
+              remove.textContent = 'Remove';
+              remove.onclick = () => commitStructuredUpdate(value => { value.edges.splice(index, 1); return value; });
+              label.appendChild(input);
+              row.append(label, remove);
+              links.appendChild(row);
+            }
+          }
           if (!node) {
             selectedNodeLabel.textContent = 'No workflow node selected.';
             return;
@@ -1463,6 +1546,7 @@ function getVflEditorHtml(webview, extensionUri, document, parsed) {
           for (const node of nodes) {
             const element = document.createElement('div');
             element.className = 'workflow-node' + (node.id === selectedWorkflowNodeId ? ' selected' : '');
+            if (node.type === 'process') element.classList.add('process');
             const x = Number.isFinite(node.x) ? node.x : 32;
             const y = Number.isFinite(node.y) ? node.y : 32;
             element.style.left = x + 'px';
@@ -1577,7 +1661,7 @@ function getVflEditorHtml(webview, extensionUri, document, parsed) {
         formatButton.addEventListener('click', () => {
           try {
             const parsed = JSON.parse(editor.value || '{}');
-            const pretty = JSON.stringify(parsed, null, 2) + '\n';
+            const pretty = JSON.stringify(parsed, null, 2) + '\\n';
             editor.value = pretty;
             renderDiagnostics(pretty);
             renderWorkflowFromDocument(parsed);
@@ -1589,6 +1673,39 @@ function getVflEditorHtml(webview, extensionUri, document, parsed) {
 
         templateButton.addEventListener('click', () => {
           vscode.postMessage({ type: 'resetTemplate' });
+        });
+
+        const openTextButton = document.getElementById('openText');
+        if (openTextButton) {
+          openTextButton.addEventListener('click', () => {
+            vscode.postMessage({ type: 'openText' });
+          });
+        }
+
+        const createDeploymentButton = document.getElementById('createDeployment');
+        if (createDeploymentButton) createDeploymentButton.onclick = () => vscode.postMessage({ type: 'createDeployment' });
+        const applyNodeButton = document.getElementById('applyNode');
+        const openNodeSourceButton = document.getElementById('openNodeSource');
+        if (openNodeSourceButton) openNodeSourceButton.onclick = () => vscode.postMessage({ type: 'openNodeSource', nodeId: selectedWorkflowNodeId });
+        if (applyNodeButton) applyNodeButton.onclick = () => commitStructuredUpdate(value => {
+          const node = value.nodes.find(item => item.id === selectedWorkflowNodeId);
+          if (!node) throw new Error('Select a node first.');
+          node.kind = document.getElementById('nodeKind').value;
+          const sourceFile = document.getElementById('nodeSource').value.trim();
+          if (node.kind === 'queue') {
+            node.queue = document.getElementById('nodeQueue').value.trim();
+            delete node.execution;
+          } else {
+            if (!sourceFile) throw new Error('An executable node needs a source file.');
+            delete node.queue;
+            node.execution = { ...(node.execution || {}), sourceFile };
+            for (const [field, id] of [['workflowId', 'nodeWorkflow'], ['inputSymbol', 'nodeInputSymbol'], ['outputSymbol', 'nodeOutputSymbol']]) {
+              const text = document.getElementById(id).value.trim();
+              if (text) node.execution[field] = text;
+              else delete node.execution[field];
+            }
+          }
+          return value;
         });
 
         edgeTypeSelect.addEventListener('change', () => {
@@ -1614,6 +1731,7 @@ function getVflEditorHtml(webview, extensionUri, document, parsed) {
         renderDiagnostics(editor.value);
         renderWorkflowFromDocument(safeParseEditorValue() || defaultTemplate);
         renderEdgeTypes();
+        renderPalette(flowComponents, componentList);
         hydratePaletteAndTopology();
       </script>
     </body>
@@ -1628,12 +1746,16 @@ class VflEditorProvider {
 
   static register(context, diagnostics) {
     const provider = new VflEditorProvider(context, diagnostics)
-    return vscode.window.registerCustomTextEditorProvider(VFL_EDITOR_VIEW_TYPE, provider, {
+    const options = {
       webviewOptions: {
         retainContextWhenHidden: true,
       },
       supportsMultipleEditorsPerDocument: false,
-    })
+    }
+    return vscode.Disposable.from(
+      vscode.window.registerCustomTextEditorProvider(VFL_EDITOR_VIEW_TYPE, provider, options),
+      vscode.window.registerCustomTextEditorProvider(WFL_FLOW_EDITOR_VIEW_TYPE, provider, options),
+    )
   }
 
   async resolveCustomTextEditor(document, webviewPanel) {
@@ -1645,7 +1767,9 @@ class VflEditorProvider {
     let suppressUpdates = 0
 
     const updateDiagnostics = () => {
-      const entries = getVflDiagnosticEntries(document.getText())
+      const entries = isWflDocument(document)
+        ? wflFlowDocument.parseWflFlowDocument(document.getText()).diagnostics.map(entry => ({ message: entry.message, offset: entry.offset || 0 }))
+        : getVflDiagnosticEntries(document.getText())
       const documentDiagnostics = entries.map((entry) => {
         const offset = Math.max(0, Math.min(entry.offset, document.getText().length))
         const start = document.positionAt(offset)
@@ -1661,9 +1785,38 @@ class VflEditorProvider {
       this.diagnostics.set(document.uri, documentDiagnostics)
     }
 
+    const isWfl = isWflDocument(document)
+    const flowOptions = { defaultFlowId: wflFlowDocument.flowIdFromFileName(document.fileName) }
+
+    // For .wfl documents the webview edits the FLOW model as JSON; the host maps it back to WFL text.
+    const getViewText = () => {
+      if (!isWfl) return document.getText()
+      const parsed = wflFlowDocument.parseWflFlowDocument(document.getText(), flowOptions)
+      if (!parsed.flowValid) {
+        return `// The FLOW block in this WFL file has errors. Fix them in the text editor.\n${parsed.diagnostics.map(entry => `// ${entry.message}`).join('\n')}\n`
+      }
+      return `${JSON.stringify(parsed.flow, null, 2)}\n`
+    }
+
     const render = () => {
-      const parsed = parseVflText(document.getText())
-      webviewPanel.webview.html = getVflEditorHtml(webviewPanel.webview, this.context.extensionUri, document, parsed)
+      const parsed = parseVflText(getViewText())
+      webviewPanel.webview.html = getVflEditorHtml(webviewPanel.webview, this.context.extensionUri, document, parsed, { isWfl })
+    }
+
+    const applyFlowModel = async (model) => {
+      const text = document.getText()
+      const edits = wflFlowDocument.computeFlowEdits(text, model, flowOptions)
+      if (!edits.length) return
+      const edit = new vscode.WorkspaceEdit()
+      for (const entry of edits) {
+        edit.replace(document.uri, new vscode.Range(document.positionAt(entry.start), document.positionAt(entry.end)), entry.text)
+      }
+      suppressUpdates += 1
+      try {
+        await vscode.workspace.applyEdit(edit)
+      } finally {
+        suppressUpdates = Math.max(0, suppressUpdates - 1)
+      }
     }
 
     const replaceDocumentText = async (nextText) => {
@@ -1687,7 +1840,7 @@ class VflEditorProvider {
       if (suppressUpdates > 0) {
         return
       }
-      webviewPanel.webview.postMessage({ type: 'replaceDocument', text: event.document.getText() })
+      webviewPanel.webview.postMessage({ type: 'replaceDocument', text: getViewText() })
     })
 
     webviewPanel.onDidDispose(() => {
@@ -1696,14 +1849,46 @@ class VflEditorProvider {
     })
 
     webviewPanel.webview.onDidReceiveMessage(async (message) => {
-      if (message?.type === 'updateDocument' && typeof message.text === 'string') {
-        await replaceDocumentText(message.text)
-        return
-      }
-      if (message?.type === 'resetTemplate') {
-        const nextText = getDefaultVflText()
-        await replaceDocumentText(nextText)
-        webviewPanel.webview.postMessage({ type: 'replaceDocument', text: nextText })
+      try {
+        if (message?.type === 'updateDocument' && typeof message.text === 'string') {
+          if (!isWfl) {
+            await replaceDocumentText(message.text)
+            return
+          }
+          const parsed = parseVflText(message.text)
+          if (parsed.valid) await applyFlowModel(parsed.value)
+          return
+        }
+        if (message?.type === 'resetTemplate') {
+          if (isWfl) {
+            await applyFlowModel(JSON.parse(JSON.stringify(DEFAULT_VFL_TEMPLATE)))
+          } else {
+            await replaceDocumentText(getDefaultVflText())
+          }
+          webviewPanel.webview.postMessage({ type: 'replaceDocument', text: getViewText() })
+          return
+        }
+        if (message?.type === 'openText') {
+          await vscode.commands.executeCommand('vscode.openWith', document.uri, 'default', vscode.ViewColumn.Beside)
+          return
+        }
+        if (message?.type === 'createDeployment' && !isWfl) {
+          if (!await document.save()) throw new Error('Save the VFL document before creating a deployment.')
+          await vscode.commands.executeCommand('pulseCatalogStudio.newWfl', document.uri)
+          return
+        }
+        if (message?.type === 'openNodeSource' && !isWfl) {
+          const model = parseVflText(document.getText())
+          if (!model.valid) throw new Error('Fix the VFL document before opening source.')
+          const node = model.value.nodes.find(node => node.id === message.nodeId)
+          const fileName = node?.execution?.sourceFile
+          if (!fileName) throw new Error('Apply a source file to the selected node first.')
+          if (fileName.includes('${')) throw new Error('This source path depends on WFL variables. Compile the deployment to resolve it.')
+          await vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(path.resolve(path.dirname(document.fileName), fileName)), 'default', vscode.ViewColumn.Beside)
+          return
+        }
+      } catch (error) {
+        vscode.window.showErrorMessage(String(error?.message || error))
         return
       }
       if (message?.type === 'showError' && message.message) {
@@ -1929,12 +2114,13 @@ class NodeInventoryTreeProvider extends CatalogStudioTreeProvider {
     if (element) return []
     try {
       const payload = await requestJson(`${getCatalogStudioApiBase()}/api/nodes`, 5000, true)
-      if (!Array.isArray(payload?.nodes)) throw new Error('Node registry response does not contain a nodes array')
+      const nodes = Array.isArray(payload) ? payload : payload?.nodes
+      if (!Array.isArray(nodes)) throw new Error('Node registry response is not an array or does not contain a nodes array')
       this.nodes.clear()
-      if (!payload.nodes.length) {
+      if (!nodes.length) {
         return [new InfraItem('No nodes registered', vscode.TreeItemCollapsibleState.None, { iconId: 'info' })]
       }
-      return payload.nodes.map(node => {
+      return nodes.map(node => {
         const nodeId = String(node?.id || node?.nodeId || node?.nodeName || '').trim()
         const address = String(node?.ip || node?.address || '').trim()
         if (!nodeId) throw new Error('Node registry returned a node without an ID')
@@ -2178,12 +2364,6 @@ async function previewWflDeployment(item) {
   }
 }
 
-async function explainWflDeploymentUnavailable() {
-  await vscode.window.showWarningMessage(
-    'The WFL compiler and preview are available, but the current backend deployment-record API does not install WFL service/daemon artifacts on ESP32 nodes. No deployment was made.',
-  )
-}
-
 async function getNetworkItems() {
   const errors = []
   for (const base of getNetworkApiBases()) {
@@ -2341,10 +2521,13 @@ async function createNewVflDocument() {
 
   const parentUri = vscode.Uri.file(path.dirname(targetUri.fsPath))
   await vscode.workspace.fs.createDirectory(parentUri)
-  await vscode.workspace.fs.writeFile(targetUri, Buffer.from(getDefaultVflText(), 'utf8'))
+  const initialText = isWflDocument(targetUri)
+    ? wflFlowDocument.createDefaultWflText(wflFlowDocument.flowIdFromFileName(targetUri.fsPath), DEFAULT_VFL_TEMPLATE)
+    : getDefaultVflText()
+  await vscode.workspace.fs.writeFile(targetUri, Buffer.from(initialText, 'utf8'))
 
   const document = await vscode.workspace.openTextDocument(targetUri)
-  await vscode.commands.executeCommand('vscode.openWith', document.uri, VFL_EDITOR_VIEW_TYPE)
+  await vscode.commands.executeCommand('vscode.openWith', document.uri, flowEditorViewType(document.uri))
 }
 
 function activate(context, vscodeApi) {
@@ -2371,6 +2554,10 @@ function activate(context, vscodeApi) {
       () => openCatalogStudioPanel(context.extensionUri, 'Pulse Studio', 'flow-designer?host=vscode'),
     ),
     vscode.commands.registerCommand(
+      'pulseCatalogStudio.openIssues',
+      () => openCatalogStudioPanel(context.extensionUri, 'Pulse Issue Board', 'issues?host=vscode'),
+    ),
+    vscode.commands.registerCommand(
       'pulseCatalogStudio.openDataMapper',
       () => vscode.commands.executeCommand(`${MAPPER_VIEW_TYPE}.focus`),
     ),
@@ -2393,6 +2580,14 @@ function activate(context, vscodeApi) {
       await vscode.commands.executeCommand('vscode.openWith', mapUri, 'pulse-pmachine.dataMapper')
     }),
     vscode.commands.registerCommand('pulseCatalogStudio.newVfl', () => createNewVflDocument()),
+    vscode.commands.registerCommand('pulseCatalogStudio.openFlowDesigner', async (uri) => {
+      const target = uri instanceof vscode.Uri ? uri : vscode.window.activeTextEditor?.document?.uri
+      if (!target) {
+        vscode.window.showErrorMessage('Open a .wfl or .vfl file to edit it in the Flow Designer.')
+        return
+      }
+      await vscode.commands.executeCommand('vscode.openWith', target, flowEditorViewType(target))
+    }),
     vscode.commands.registerCommand('pulseCatalogStudio.refreshDataLibrarian', () => provider.refresh()),
     vscode.commands.registerCommand('pulseCatalogStudio.refreshDataMapper', () => mapperProvider.refresh()),
     vscode.commands.registerCommand('pulseCatalogStudio.refreshInfrastructure', () => infrastructureProvider.refresh()),
@@ -2400,13 +2595,29 @@ function activate(context, vscodeApi) {
     vscode.commands.registerCommand('pulseCatalogStudio.refreshNodeInventory', () => inventoryProvider.refresh()),
     vscode.commands.registerCommand('pulseCatalogStudio.validateWflDeployment', validateWflDeployment),
     vscode.commands.registerCommand('pulseCatalogStudio.previewWflDeployment', previewWflDeployment),
-    vscode.commands.registerCommand('pulseCatalogStudio.deployWflDeployment', explainWflDeploymentUnavailable),
+    vscode.commands.registerCommand('pulseCatalogStudio.deployWflDeployment', item => vscode.commands.executeCommand('pulseCatalogStudio.openWflEditor', item?.resourceUri)),
     vscode.commands.registerCommand('pulseCatalogStudio.deployNetworkCache', () => deployNetworkCache(context)),
     vscode.commands.registerCommand('pulseCatalogStudio.inspectNode', item => inventoryProvider.inspectNode(item)),
     vscode.commands.registerCommand('pulseCatalogStudio.refreshNode', () => inventoryProvider.refresh()),
     vscode.commands.registerCommand('pulseCatalogStudio.unregisterNamedService', item => inventoryProvider.unregisterNamedService(item)),
     vscode.commands.registerCommand('pulseCatalogStudio.stopHostedContext', item => inventoryProvider.stopHostedContext(item)),
     VflEditorProvider.register(context, diagnostics),
+    require('./wflDeploymentEditor').register(vscode, context),
+  )
+  let openingVflUri = null
+  const openActiveVflInDesigner = (editor = vscode.window.activeTextEditor) => {
+    const document = editor?.document
+    if (!document || path.extname(document.fileName).toLowerCase() !== '.vfl'
+      || openingVflUri === document.uri.toString()) return
+    openingVflUri = document.uri.toString()
+    void vscode.commands.executeCommand('vscode.openWith', document.uri, VFL_EDITOR_VIEW_TYPE)
+      .catch(error => vscode.window.showErrorMessage(`Could not open the VFL visual editor: ${error.message || String(error)}`))
+      .finally(() => {
+        if (openingVflUri === document.uri.toString()) openingVflUri = null
+      })
+  }
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor(openActiveVflInDesigner),
   )
 }
 

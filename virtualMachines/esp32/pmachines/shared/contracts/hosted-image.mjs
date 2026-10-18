@@ -10,12 +10,19 @@ export const HOSTED_IMAGE_OPCODES = Object.freeze({
   CALL: 0x1a, RET: 0x1b, EQ: 0x1c, NEQ: 0x1d, LT: 0x1e,
   LE: 0x1f, GT: 0x20, GE: 0x21, CALL_EXT: 0x29,
   OR: 0x4b, AND: 0x4c, NOT: 0x4d, STREQ: 0x4e, STRNEQ: 0x4f,
-  MAP_RETURN: 0x50, HALT: 0xff
+  MAP_RETURN: 0x50, CONCAT: 0x56, HALT: 0xff
 });
 
-export function encodeHostedImage(pcodeText) {
+export const HOSTED_IMAGE_PROFILES = Object.freeze({
+  bounded: Object.freeze({ instructions: 512, bytes: 32768 }),
+  extended: Object.freeze({ instructions: 4096, bytes: 131072 }),
+});
+
+export function encodeHostedImage(pcodeText, { profile = 'bounded' } = {}) {
+  const limits = HOSTED_IMAGE_PROFILES[profile];
+  if (!limits) throw new Error('Unknown hosted image profile');
   const instructions = parsePcode(pcodeText);
-  if (!instructions.length || instructions.length > 512) throw new Error('Hosted image instruction capacity exceeded');
+  if (!instructions.length || instructions.length > limits.instructions) throw new Error('Hosted image instruction capacity exceeded');
   const constants = [];
   const offsets = new Map();
   let constantBytes = 0;
@@ -64,6 +71,6 @@ export function encodeHostedImage(pcodeText) {
   });
   const image = `PHI1${instructions.length.toString(16).padStart(8, '0')}${constantBytes.toString(16).padStart(8, '0')}`
     + records.join('') + Buffer.concat(constants).toString('hex');
-  if (image.length > 32768) throw new Error('Hosted image file capacity exceeded');
+  if (image.length > limits.bytes) throw new Error('Hosted image file capacity exceeded');
   return image;
 }

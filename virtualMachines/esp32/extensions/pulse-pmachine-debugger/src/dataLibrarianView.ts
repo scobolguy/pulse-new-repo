@@ -2,8 +2,6 @@ import * as vscode from 'vscode';
 import { DataMapperBackend, LibrarianSchema, structurePending } from './dataMapperBackend.js';
 import { Field, fieldsOf } from './dataMapperModel.js';
 
-const DIRECT_LIBRARIAN_URL = 'http://127.0.0.1:4300';
-
 export class LibrarianItem extends vscode.TreeItem {
   constructor(label: string, readonly schema?: LibrarianSchema, readonly fields: Field[] = [], readonly field?: Field,
     readonly baseUrl?: string) {
@@ -17,7 +15,6 @@ export class LibrarianItem extends vscode.TreeItem {
     this.tooltip = field ? `${field.path}\n${field.valueType}` : `${schema.name || schema.path}\n${schema.path}`;
     this.iconPath = new vscode.ThemeIcon(field ? (children ? 'symbol-object' : 'symbol-field') : 'symbol-structure');
     this.contextValue = 'pulseLibrarianSchema';
-    this.command = { command: 'pulse-pmachine.openLibrarianSchema', title: 'Open Schema Details', arguments: [this] };
   }
 }
 
@@ -69,16 +66,8 @@ export class DataLibrarianViewProvider implements vscode.TreeDataProvider<Librar
     }
     if (!vscode.workspace.isTrusted) return [new LibrarianItem('Trust this workspace to browse Librarian schemas')];
     try {
-      let base = vscode.workspace.getConfiguration('pulse-pmachine').get<string>('backendUrl', 'http://127.0.0.1:4000');
-      let schemas: LibrarianSchema[];
-      try { schemas = await new DataMapperBackend(base).schemas(); }
-      catch (error) {
-        // Fall back to the Librarian itself only when the backend proxy is unreachable.
-        if (!(error instanceof TypeError) && (error as Error)?.name !== 'TimeoutError') throw error;
-        this.output.appendLine(`Data Librarian: ${base} unreachable; trying ${DIRECT_LIBRARIAN_URL}`);
-        base = DIRECT_LIBRARIAN_URL;
-        schemas = await new DataMapperBackend(DIRECT_LIBRARIAN_URL).schemas();
-      }
+      const base = vscode.workspace.getConfiguration('pulse-pmachine').get<string>('backendUrl', 'http://127.0.0.1:4000');
+      const schemas: LibrarianSchema[] = await new DataMapperBackend(base).schemas();
       return schemas.length
         ? schemas.sort((left, right) => (left.name || left.path).localeCompare(right.name || right.path))
           .map(schema => {

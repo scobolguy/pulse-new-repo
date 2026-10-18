@@ -1,8 +1,4 @@
-import { startCompanionServiceSupervisor } from './companionServiceSupervisor.mjs';
 import { DISCOVERY_NODE_MAX_AGE_MS } from '../../discovery-topology.mjs';
-
-const DEFAULT_LIBRARIAN_PORT = 4300;
-const DEFAULT_MAPPER_PORT = 4200;
 
 export async function startBackendRuntime(deps = {}) {
   const {
@@ -10,7 +6,6 @@ export async function startBackendRuntime(deps = {}) {
     app,
     HTTP_PORT,
     queueManagerInstances,
-    registerMapperRoutes,
     registerRoutes,
     createNodeRegistry,
     RUNTIME_DATA_ROOT,
@@ -49,18 +44,23 @@ export async function startBackendRuntime(deps = {}) {
     gatewayModeState,
     startFedGateway,
     BACKEND_AUX_SERVICES_AUTOSTART,
+    PULSE_FILESYSTEM_AUTOSTART,
     PULSE_MCP_AUTOSTART,
+    serviceProcessManager,
     spawn,
     librarianScriptPath,
     mapperScriptPath,
-    mcpScriptPath
+    filesystemScriptPath,
+    mcpScriptPath,
+    shutdownServiceRuntime = async () => {}
   } = deps;
 
   debugLog('[DEBUG] Starting backend server...');
   console.log('[STARTUP] Binding HTTP listener...');
-  app.listen(HTTP_PORT, '0.0.0.0', () => {
+  const httpServer = app.listen(HTTP_PORT, '0.0.0.0', () => {
     console.log(`Aggregator backend running on http://0.0.0.0:${HTTP_PORT} (LAN accessible)`);
   });
+  app.locals.httpServer = httpServer;
 
   console.log('[STARTUP] Registering queue manager sync callbacks...');
   for (const [managerId, qm] of queueManagerInstances) {
@@ -70,7 +70,6 @@ export async function startBackendRuntime(deps = {}) {
   }
 
   console.log('[STARTUP] Registering API routes...');
-  registerMapperRoutes(app);
   registerRoutes(app);
 
   console.log('[STARTUP] Initializing ESP32 Node Registry...');
@@ -233,64 +232,30 @@ export async function startBackendRuntime(deps = {}) {
     console.log('[AUTOSTART] Worker and gateway autostart is disabled (BACKEND_WORKER_AUTOSTART=false).');
   }
 
-  if (PULSE_MCP_AUTOSTART) {
-    const mcpHealthUrl = process.env.PULSE_MCP_HEALTH_URL || 'http://127.0.0.1:4011/health';
-    const mcpCheckIntervalMs = Math.max(1000, Number(process.env.PULSE_MCP_CHECK_INTERVAL_MS || 5000));
-    const mcpRestartDelayMs = Math.max(500, Number(process.env.PULSE_MCP_RESTART_DELAY_MS || 2000));
-    const mcpSupervisor = await startCompanionServiceSupervisor({
-      name: 'MCP',
-      scriptPath: mcpScriptPath,
-      healthUrl: mcpHealthUrl,
-      spawn,
-      checkIntervalMs: mcpCheckIntervalMs,
-      restartDelayMs: mcpRestartDelayMs,
-    });
-    const stopMcp = () => mcpSupervisor.stop();
-
-    process.once('exit', stopMcp);
-    process.once('SIGINT', () => {
-      stopMcp();
-      process.exit();
-    });
-    process.once('SIGTERM', () => {
-      stopMcp();
-      process.exit();
-    });
-    console.log(`[MCP] Companion supervisor enabled (health=${mcpHealthUrl}, interval=${mcpCheckIntervalMs}ms)`);
-  } else {
-    console.log('[MCP] Companion autostart is disabled (PULSE_MCP_AUTOSTART=false).');
-  }
-
-  if (BACKEND_AUX_SERVICES_AUTOSTART) {
-    const librarianPort = Number(process.env.LIBRARIAN_PORT || DEFAULT_LIBRARIAN_PORT);
-    const mapperPort = Number(process.env.MAPPER_PORT || DEFAULT_MAPPER_PORT);
-
-    const librarianSupervisor = await startCompanionServiceSupervisor({
-      name: 'Librarian',
-      scriptPath: librarianScriptPath,
-      healthUrl: `http://127.0.0.1:${librarianPort}/health`,
-      spawn,
-    });
-
-    const mapperSupervisor = await startCompanionServiceSupervisor({
-      name: 'Mapper',
-      scriptPath: mapperScriptPath,
-      healthUrl: `http://127.0.0.1:${mapperPort}/health`,
-      spawn,
-    });
-
-    const stopAux = () => {
-      librarianSupervisor.stop();
-      mapperSupervisor.stop();
-    };
-
-    process.once('exit', stopAux);
-    process.once('SIGINT', () => { stopAux(); process.exit(); });
-    process.once('SIGTERM', () => { stopAux(); process.exit(); });
-
-    console.log(`[Librarian] Companion supervisor enabled (health=http://127.0.0.1:${librarianPort}/health)`);
-    console.log(`[Mapper] Companion supervisor enabled (health=http://127.0.0.1:${mapperPort}/health)`);
-  } else {
-    console.log('[AUTOSTART] Auxiliary child services are disabled (BACKEND_AUX_SERVICES_AUTOSTART=false).');
-  }
+  const enabled = (name, fallback) => process.env[name] === undefined ? fallback
+    : ['1', 'true', 'yes'].includes(String(process.env[name]).toLowerCase());
+  const desiredServices = [
+    ...(PULSE_FILESYSTEM_AUTOSTART ? ['filesystem'] : []),
+    ...(enabled('PULSE_LIBRARIAN_AUTOSTART', BACKEND_AUX_SERVICES_AUTOSTART) ? ['librarian'] : []),
+    ...(enabled('PULSE_MAPPER_AUTOSTART', BACKEND_AUX_SERVICES_AUTOSTART) ? ['mapper'] : []),
+    ...(PULSE_MCP_AUTOSTART ? ['mcp'] : []),
+  ];
+  await serviceProcessManager.supervise(desiredServices);
+  let shuttingDown = false;
+  const stopServices = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    httpServer.close();
+    try {
+      await serviceProcessManager.shutdown();
+      await shutdownServiceRuntime();
+      process.exit(0);
+    } catch (error) {
+      console.error('[SERVICE] Shutdown failed:', error.message);
+      process.exit(1);
+    }
+  };
+  process.once('SIGINT', stopServices);
+  process.once('SIGTERM', stopServices);
+  console.log(`[SERVICE] Pascalish dependency supervision enabled: ${desiredServices.join(', ') || '(none)'}`);
 }

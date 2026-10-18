@@ -49,3 +49,33 @@ test('announcement failures are reported explicitly', async () => {
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+  test('port-only JS node startup uses discovery and actual bound listener facts without a backend URL', async () => {
+    let announced;
+    const announcement = new Promise(resolve => { announced = resolve; });
+    let stopped = false;
+    const server = createJsPmachineNodeServer({
+      name: 'automatic-node', udpAnnouncePort: 54321,
+      discoveryFactory: async options => {
+        assert.equal(options.port, 54321);
+        assert.equal(options.nodeId, 'automatic-node');
+        assert.equal(options.metadata.runtime, 'js-pmachine');
+        return {
+          start: async () => options.onTargets([{ aggregatorId: 'owner' }]),
+          advertise: async listeners => announced(listeners),
+          getSettings: () => ({ announcementIntervalMs: 10000 }),
+          stop: async () => { stopped = true; },
+        };
+      },
+    });
+    await new Promise(resolve => server.listen(0, '0.0.0.0', resolve));
+    try {
+      const listeners = await announcement;
+      assert.equal(listeners[0].port, server.address().port);
+      assert.equal(listeners[0].host, '0.0.0.0');
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+    }
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(stopped, true);
+  });

@@ -3,9 +3,21 @@ import fs from 'fs/promises';
 import path from 'path';
 import { readEnvNumber } from './src/env-config.mjs';
 import { registerMapperRoutes } from './src/backend/mapperRoutes.mjs';
+import {
+  createServiceLifecycleRuntime, readServiceLifecycleConfig, installServiceLifecycleMiddleware, describeBoundHttpListener,
+} from './src/service-lifecycle-runtime.mjs';
 
 const app = express();
 app.use(express.json());
+const lifecycle = await createServiceLifecycleRuntime({
+  config: readServiceLifecycleConfig({
+    serviceId: 'pulse-data-mapper', requires: ['pulse-data-librarian'],
+  }),
+  usefulOperations: {
+    'pulse-data-librarian': { path: '/api/librarian/readiness-probe' },
+  },
+});
+installServiceLifecycleMiddleware(app, lifecycle);
 registerMapperRoutes(app);
 
 const DATA_ROOT = path.resolve('./data');
@@ -412,7 +424,25 @@ app.delete('/api/mapper/mappings/:id', async (req, res) => {
   }
 });
 
-const PORT = readEnvNumber('MAPPER_PORT', 4200);
-app.listen(PORT, () => {
-  console.log(`[Mapper] Service running on http://localhost:${PORT}`);
+const PORT = process.env.MAPPER_PORT === '0' ? 0 : readEnvNumber('MAPPER_PORT', 4200);
+const server = app.listen(PORT, async error => {
+  try {
+    if (error) throw error;
+    const address = server.address();
+    const listener = describeBoundHttpListener(address, lifecycle.config);
+    await lifecycle.start(listener.endpoint, [listener]);
+    console.log(`[Mapper] Service running on http://localhost:${server.address().port}`);
+  } catch (error) {
+    console.error('[Mapper] Lifecycle startup failed', error);
+    await lifecycle.stop();
+    server.close();
+    process.exitCode = 1;
+  }
 });
+const stop = async () => {
+  await lifecycle.stop();
+  server.closeAllConnections();
+  server.close();
+};
+process.once('SIGINT', stop);
+process.once('SIGTERM', stop);

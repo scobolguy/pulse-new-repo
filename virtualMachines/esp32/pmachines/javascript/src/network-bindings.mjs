@@ -30,6 +30,27 @@ export function createNetworkBindings(networkPeers = []) {
     if (!payload.length) throw new Error('Empty network request');
     return payload;
   }
+  async function filesystemPost(ip, port, route, body, timeout, { signal }) {
+    if (!peers.has(`${ip}:${port}`)) throw new Error('Network peer is not allowed');
+    boundedInteger(port, 1, 65535, 'filesystem peer port');
+    boundedInteger(timeout, 1, 2000, 'filesystem request timeout');
+    if (net.isIP(ip) !== 4 || typeof route !== 'string' ||
+        !/^\/[A-Za-z0-9/_-]{1,127}$/.test(route) || route.includes('..')) {
+      throw new Error('Invalid filesystem service route');
+    }
+    if (typeof body !== 'string' || Buffer.byteLength(body) > 1024) {
+      throw new Error('Filesystem request body capacity exceeded');
+    }
+    const response = await fetch(`http://${ip}:${port}${route}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', connection: 'close' },
+      body,
+      signal: AbortSignal.any([signal, AbortSignal.timeout(timeout)])
+    });
+    const responseBody = await response.text();
+    if (Buffer.byteLength(responseBody) > 2048) throw new Error('Filesystem response capacity exceeded');
+    return JSON.stringify({ status: response.status, body: responseBody });
+  }
   return {
     'host.bytes_crc32': hex => {
       let crc = 0xffffffff;
@@ -81,6 +102,7 @@ export function createNetworkBindings(networkPeers = []) {
     },
     'host.byte_xor': (left, right) =>
       boundedInteger(left, 0, 255, 'byte') ^ boundedInteger(right, 0, 255, 'byte'),
+    'host.filesystem_post': filesystemPost,
     'host.tcp_exchange': (ip, port, hex, prefixBytes, timeout, maxBytes, { signal, loadBytes }) => {
       const payload = validate(ip, port, hex, timeout, maxBytes);
       boundedInteger(prefixBytes, 1, 4, 'frame prefix size');

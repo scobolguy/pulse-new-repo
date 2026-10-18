@@ -4,6 +4,7 @@ import fetch from 'node-fetch';
 import path from 'path';
 import QueueManager from './src/broker/QueueManager.mjs';
 import { readEnvBoolean, readEnvString } from './src/env-config.mjs';
+import { readServiceLifecycleConfig, createServiceLifecycleRuntime, describeBoundHttpListener, installServiceLifecycleMiddleware } from './src/service-lifecycle-runtime.mjs';
 
 function getArg(name, fallback) {
   const prefix = `--${name}=`;
@@ -24,7 +25,7 @@ function getLocalIp() {
   return '127.0.0.1';
 }
 
-const aggregatorUrl = getArg('aggregator', 'http://localhost:4000');
+const aggregatorUrl = getArg('aggregator', '');
 const port = Number(getArg('port', '4100'));
 const host = getArg('host', '0.0.0.0');
 const advertiseIp = getArg('advertise-ip', getLocalIp());
@@ -42,6 +43,18 @@ const persistPath = queuePersistenceEnabled
 const app = express();
 const queueManager = new QueueManager(managerName, persistPath);
 app.use(express.json());
+const lifecycleConfig = readServiceLifecycleConfig({
+  serviceId: 'pulse-queue-manager', env: {
+    ...process.env,
+    PULSE_NODE_ID: nodeId,
+    ...(getArg('advertise-ip', '') ? { PULSE_SERVICE_ADVERTISE_HOST: advertiseIp } : {}),
+    ...(aggregatorUrl ? { PULSE_AGGREGATOR_URLS: JSON.stringify([aggregatorUrl]) } : {}),
+  },
+});
+const lifecycle = await createServiceLifecycleRuntime({ config: lifecycleConfig });
+installServiceLifecycleMiddleware(app, lifecycle);
+let listeningPort = port;
+const timers = [];
 
 function getQueueNames() {
   return Object.keys(queueManager.queues || {});
@@ -53,22 +66,28 @@ async function sendHeartbeat() {
     name: managerName,
     nodeId,
     ip: advertiseIp,
-    port,
+    port: listeningPort,
     status: 'up',
     queues: getQueueNames(),
     persistence: queueManager.getPersistenceStatus(),
   };
 
-  const response = await fetch(`${aggregatorUrl}/api/registry/heartbeat`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Heartbeat failed (${response.status}): ${text}`);
-  }
+  const targets = lifecycleConfig.autoDiscovery
+    ? lifecycle.getDiscoveryTargets()
+    : lifecycle.getReportUrls().map(endpoint => ({ endpoint, localAddress: advertiseIp }));
+  if (!targets.length) throw new Error('No aggregator discovered for queue-manager heartbeat');
+  await Promise.all(targets.map(async target => {
+    const response = await fetch(`${target.endpoint}/api/registry/heartbeat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      signal: AbortSignal.timeout(5000),
+      body: JSON.stringify({ ...body, ip: target.localAddress }),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Heartbeat failed (${response.status}): ${text}`);
+    }
+  }));
 }
 
 app.get('/health', (req, res) => {
@@ -78,7 +97,7 @@ app.get('/health', (req, res) => {
     managerName,
     nodeId,
     ip: advertiseIp,
-    port,
+    port: listeningPort,
     queues: getQueueNames(),
     persistence: queueManager.getPersistenceStatus(),
   });
@@ -278,9 +297,20 @@ app.get('/config', (req, res) => {
   res.json(queueManager.getAllQueueConfigs());
 });
 
-app.listen(port, host, () => {
-  console.log(`[QM] ${managerId} listening on http://${host}:${port}`);
-  console.log(`[QM] advertising ${advertiseIp}:${port} to ${aggregatorUrl}`);
+const httpServer = app.listen(port, host, async () => {
+  try {
+    const listener = describeBoundHttpListener(httpServer.address(), lifecycleConfig);
+    listeningPort = listener.port;
+    await lifecycle.start(listener.endpoint, [listener]);
+  } catch (error) {
+    console.error('[QM] Lifecycle initialization failed:', error.message);
+    await lifecycle.stop();
+    httpServer.close();
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`[QM] ${managerId} listening on http://${host}:${listeningPort}`);
+  console.log(`[QM] advertising ${advertiseIp}:${listeningPort} via ${aggregatorUrl || `UDP discovery port ${lifecycleConfig.discoveryPort}`}`);
   
   // Register callback to notify aggregator of config changes
   queueManager.onConfigChange((operation) => {
@@ -290,10 +320,10 @@ app.listen(port, host, () => {
   });
   
   sendHeartbeat().catch(err => console.error('[QM] initial heartbeat failed:', err.message));
-  setInterval(() => {
+  timers.push(setInterval(() => {
     sendHeartbeat().catch(err => console.error('[QM] heartbeat failed:', err.message));
-  }, heartbeatMs);
-  setInterval(() => {
+  }, heartbeatMs));
+  timers.push(setInterval(() => {
     try {
       const requeued = queueManager.reapExpiredClaims();
       if (requeued > 0) {
@@ -302,8 +332,8 @@ app.listen(port, host, () => {
     } catch (err) {
       console.error('[QM] reap expired claims failed:', err.message);
     }
-  }, Math.max(250, claimReapMs));
-  setInterval(() => {
+  }, Math.max(250, claimReapMs)));
+  timers.push(setInterval(() => {
     try {
       const removed = queueManager.sweepStalePersistedMessages();
       if (removed > 0) {
@@ -312,5 +342,14 @@ app.listen(port, host, () => {
     } catch (err) {
       console.error('[QM] hourly stale-file sweep failed:', err.message);
     }
-  }, 60 * 60 * 1000);
+  }, 60 * 60 * 1000));
+});
+httpServer.once('close', () => {
+  timers.forEach(clearInterval);
+  void lifecycle.stop().catch(error => console.error('[QM] Lifecycle shutdown failed:', error.message));
+});
+for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, async () => {
+  timers.forEach(clearInterval);
+  await lifecycle.stop();
+  httpServer.close();
 });

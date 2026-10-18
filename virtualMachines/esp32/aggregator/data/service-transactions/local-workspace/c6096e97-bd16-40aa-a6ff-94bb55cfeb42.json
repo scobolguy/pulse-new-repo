@@ -1,0 +1,1 @@
+{"transactionId":"c6096e97-bd16-40aa-a6ff-94bb55cfeb42","serviceId":"pulse-data-librarian","request":{"method":"GET","path":"/api/librarian/readiness-probe"},"responseLimit":1000000,"status":"held","createdAt":"2026-10-16T15:36:53.294Z","updatedAt":"2026-10-16T15:38:42.324Z","ok":true,"reason":"No fresh ready dependency chain with an announced HTTP listener"}

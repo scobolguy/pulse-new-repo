@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { isSchemaBranch, schemaNodeNotice, schemaSimpleTypeSummary } from './librarian/~schema-tree.mjs';
+import { fetchServiceResponse as fetch } from './service-lifecycle/browser-transport.mjs';
+import LazySchemaTree from './librarian/LazySchemaTree.jsx';
+import { createSchemaBranchCache } from './librarian/schema-branch-cache.mjs';
+import { isSchemaBranch, schemaNodeNotice } from './librarian/schema-tree.mjs';
 
 const SECTION_STYLE = {
   border: '1px solid #ccc',
@@ -22,6 +25,15 @@ export default function DataLibrarian() {
   const [contextMenu, setContextMenu] = useState(null);
   const [subschemaEditor, setSubschemaEditor] = useState(null);
   const [subschemaFieldSearch, setSubschemaFieldSearch] = useState('');
+  const branchCache = useMemo(() => createSchemaBranchCache(async ({ path, nodeId, revision, cursor, signal }) => {
+    const query = new URLSearchParams({ path, nodeId, cursor: cursor || '0' });
+    if (revision) query.set('revision', revision);
+    const response = await fetch(`/api/librarian/schema-tree/page?${query}`, { signal });
+    const page = await response.json();
+    if (!response.ok) throw new Error(page.error || `HTTP ${response.status}`);
+    return page;
+  }), []);
+  useEffect(() => () => branchCache.clear(), [branchCache]);
 
   function toLocalDateTimeInput(value) {
     if (!value) return '';
@@ -35,7 +47,7 @@ export default function DataLibrarian() {
     try {
       const [typesRes, schemasRes, rulesetsRes] = await Promise.all([
         fetch('/api/librarian/data-types'),
-        fetch('/api/librarian/schemas'),
+        fetch('/api/librarian/schemas?structure=none'),
         fetch('/api/librarian/mapper-rulesets'),
       ]);
       if (typesRes.ok) {
@@ -779,54 +791,28 @@ export default function DataLibrarian() {
     return `Structure contains ${branchCount} branch${branchCount === 1 ? '' : 'es'} and ${leafCount} leaf${leafCount === 1 ? '' : 's'}. ${referenceCount ? `${referenceCount} reference branches are not fully expanded. ` : ''}${preview ? `Fields include ${preview}.` : ''}`.trim();
   }
 
-  function speakStructure(item) {
-    const structure = item?.structure;
-    if (!structure) {
-      setMsg(`No structure available to speak for ${item?.name || 'this format'}.`);
-      return;
-    }
+  async function speakStructure(item) {
     if (typeof window === 'undefined' || !window.speechSynthesis || typeof window.SpeechSynthesisUtterance !== 'function') {
       setMsg('Speech synthesis is not available in this browser.');
       return;
     }
 
-    const summary = summarizeStructure(structure);
-    const utterance = new window.SpeechSynthesisUtterance(`${item.name}. ${summary}`);
-    utterance.rate = 0.96;
-    utterance.pitch = 1;
-    utterance.lang = 'en-US';
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utterance);
-    setMsg(`Speaking summary for ${item.name}.`);
-  }
-
-  function renderStructureNode(node, keyPrefix = 'node') {
-    if (!node) return null;
-    const children = Array.isArray(node.children) ? node.children : [];
-    const enumValues = Array.isArray(node.enumValues) ? node.enumValues : [];
-    const notice = schemaNodeNotice(node);
-    const simpleSummary = schemaSimpleTypeSummary(node);
-    const branch = isSchemaBranch(node);
-    return (
-      <li key={`${keyPrefix}:${node.name}`} style={{ marginBottom: 2 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '1px 4px', flexWrap: 'wrap' }} aria-label={`${node.name}, ${branch ? 'branch' : 'leaf'}, ${node.valueType || 'unknown'}${simpleSummary ? `, ${simpleSummary}` : ''}${notice ? `, ${notice}` : ''}${enumValues.length > 0 ? `, enum ${enumValues.join(', ')}` : ''}`}>
-          <span style={{ width: 12, color: '#5a6b7b' }}>{children.length > 0 ? '▸' : '•'}</span>
-          <span>{branch ? '🌿' : '🍃'}</span>
-          <span style={{ fontSize: 12 }}>{node.name}</span>
-          <span style={{ fontSize: 10, color: '#777' }}>{node.valueType || 'unknown'}</span>
-          {notice && <span style={{ fontSize: 10, color: '#8a5a00' }}>{notice}</span>}
-          {simpleSummary && <span style={{ fontSize: 10, color: '#777' }}>{simpleSummary}</span>}
-          {enumValues.length > 0 && (
-            <span style={{ fontSize: 10, color: '#8a5a00' }}>enum: {enumValues.join(', ')}</span>
-          )}
-        </div>
-        {children.length > 0 && (
-          <ul style={{ listStyle: 'none', paddingLeft: 20, marginTop: 2 }}>
-            {children.map((child, index) => renderStructureNode(child, `${keyPrefix}:${node.name}:${index}`))}
-          </ul>
-        )}
-      </li>
-    );
+    try {
+      const response = await fetch(`/api/librarian/schema-structure?path=${encodeURIComponent(item.path)}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      if (!data.structure) throw new Error('Structure is unavailable for this format');
+      const summary = summarizeStructure(data.structure);
+      const utterance = new window.SpeechSynthesisUtterance(`${item.name}. ${summary}`);
+      utterance.rate = 0.96;
+      utterance.pitch = 1;
+      utterance.lang = 'en-US';
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(utterance);
+      setMsg(`Speaking summary for ${item.name}.`);
+    } catch (error) {
+      setMsg(`Unable to speak schema summary: ${error.message}`);
+    }
   }
 
   return (
@@ -1073,8 +1059,7 @@ export default function DataLibrarian() {
                                         Parent schema: <code>{format.parentSchemaPath}</code>
                                       </div>
                                     )}
-                                    {format.structure && (
-                                      <div>
+                                    <div>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                                           <div style={{ fontSize: 12, color: '#444' }}>Message Structure</div>
                                           <button type="button" onClick={() => speakStructure(format)} style={{ fontSize: 11 }}>
@@ -1084,14 +1069,8 @@ export default function DataLibrarian() {
                                             {format.virtual ? 'Edit Subschema' : 'New Subschema'}
                                           </button>
                                         </div>
-                                        <ul style={{ listStyle: 'none', paddingLeft: 0, margin: 0 }}>
-                                          {renderStructureNode(format.structure, format.path)}
-                                        </ul>
-                                      </div>
-                                    )}
-                                    {!format.structure && (
-                                      <div style={{ fontSize: 12, color: '#777' }}>Structure preview unavailable for this format type.</div>
-                                    )}
+                                        <LazySchemaTree key={`${format.path}:${format.mtime}:${JSON.stringify(format.accessibleFields || [])}`} schema={format} cache={branchCache} />
+                                    </div>
                                     {!format.virtual && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8 }}>
                                       <label style={{ fontSize: 12, color: '#444' }}>
                                         Active From
@@ -1164,20 +1143,24 @@ export default function DataLibrarian() {
                   {untypedSchemas.map(schema => (
                     <li key={`untyped:${schema.path}`} style={{ marginBottom: 4, paddingLeft: 6 }}>
                       <div
+                        onClick={() => setItemExpanded(prev => ({ ...prev, [schema.path]: !prev[schema.path] }))}
                         onContextMenu={e => openContextMenu(e, 'schema', schema)}
                         style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '2px 4px', borderRadius: 4, cursor: 'context-menu' }}
                       >
-                        <span style={{ width: 12, color: '#5a6b7b' }}>•</span>
+                        <span style={{ width: 12, color: '#5a6b7b' }}>{itemExpanded[schema.path] ? '▾' : '▸'}</span>
                         <span>{schema.type === 'copybook' ? '📘' : '📄'}</span>
                         <span style={{ fontWeight: 600, fontSize: 12 }}>{schema.name}</span>
                         <span style={{ fontSize: 11, color: '#777' }}>{schema.type}</span>
                         <span style={{ fontSize: 10, color: '#555' }}>v{schema.version ?? '-'}</span>
                         <span style={{ fontSize: 10, color: '#555' }}>{schema.size} B</span>
                         <span style={{ fontSize: 10, color: '#777' }}>typeId: {schema.typeId || schema.name}</span>
-                        <button type="button" onClick={() => createTypeFromSchema(schema)} style={{ fontSize: 11 }}>
+                        <button type="button" onClick={event => { event.stopPropagation(); createTypeFromSchema(schema); }} style={{ fontSize: 11 }}>
                           Create Type
                         </button>
                       </div>
+                      {itemExpanded[schema.path] && (
+                        <LazySchemaTree key={`${schema.path}:${schema.mtime}`} schema={schema} cache={branchCache} />
+                      )}
                     </li>
                   ))}
                   {untypedSchemas.length === 0 && <li style={{ fontSize: 12, color: '#888' }}>No untyped schemas.</li>}

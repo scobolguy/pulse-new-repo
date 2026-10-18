@@ -7,7 +7,7 @@ import dgram from 'node:dgram';
 import os from 'node:os';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { runSingleMessageForEvolution } from './index.mjs';
 import { normalizeDiscoveryAnnouncement } from './discovery-collector.mjs';
@@ -33,10 +33,10 @@ function parseCliArgs(argv) {
     port: Number(process.env.JS_PMACHINE_PORT || 4111),
     host: process.env.JS_PMACHINE_BIND || '0.0.0.0',
     name: process.env.JS_PMACHINE_NAME || '',
-    backendUrl: process.env.JS_PMACHINE_BACKEND_URL || 'http://127.0.0.1:4000',
+    backendUrl: process.env.JS_PMACHINE_BACKEND_URL || '',
     advertiseHost: process.env.JS_PMACHINE_ADVERTISE_HOST || '127.0.0.1',
-    udpAnnounceHost: process.env.JS_PMACHINE_UDP_ANNOUNCE_HOST || '127.255.255.255',
-    udpAnnouncePort: Number(process.env.JS_PMACHINE_UDP_ANNOUNCE_PORT ?? 4210),
+    udpAnnounceHost: process.env.JS_PMACHINE_UDP_ANNOUNCE_HOST || '',
+    udpAnnouncePort: Number(process.env.JS_PMACHINE_UDP_ANNOUNCE_PORT ?? process.env.UDP_PORT ?? 4210),
     storageGrants: JSON.parse(process.env.JS_PMACHINE_STORAGE_GRANTS || '{}'),
     distributedGrants: JSON.parse(process.env.JS_PMACHINE_DISTRIBUTED_GRANTS || '{}'),
     bluetoothGrants: JSON.parse(process.env.JS_PMACHINE_BLUETOOTH_GRANTS || '[]')
@@ -83,7 +83,10 @@ async function readParams(req, url) {
     rawBody = await readBody(req);
     const contentType = String(req.headers['content-type'] || '');
     if (rawBody && contentType.includes('application/json')) {
-      for (const [key, value] of Object.entries(JSON.parse(rawBody))) params.set(key, String(value));
+      for (const [key, value] of Object.entries(JSON.parse(rawBody))) {
+        params.set(key, ['serviceLifecycle', 'reportTarget'].includes(key) && value !== null && typeof value === 'object'
+          ? JSON.stringify(value) : String(value));
+      }
     } else if (rawBody) {
       for (const [key, value] of new URLSearchParams(rawBody)) params.set(key, value);
     }
@@ -138,7 +141,7 @@ export function createJsPmachineNodeServer({
   backendUrl = '',
   advertiseHost = '127.0.0.1',
   announceIntervalMs = 60_000,
-  udpAnnounceHost = '127.255.255.255',
+  udpAnnounceHost = '',
   udpAnnouncePort = 0,
   fetchImpl = fetch,
   logger = console,
@@ -146,7 +149,11 @@ export function createJsPmachineNodeServer({
   distributedGrants = {},
   bluetoothGrants = [],
   bluetoothSourceFactory = createWindowsBluetoothSource,
-  storageGrants = {}
+  storageGrants = {},
+  discoveryFactory = async options => {
+    const { createLanDiscovery } = await import('../../aggregator/src/service-lifecycle/lan-discovery.mjs');
+    return createLanDiscovery(options);
+  }
 } = {}) {
   if (!storageGrants || typeof storageGrants !== 'object' || Array.isArray(storageGrants)) {
     throw new Error('Invalid service storage grants');
@@ -301,12 +308,38 @@ export function createJsPmachineNodeServer({
       throw Object.assign(new Error('Invalid observation TTL'), { status: 400 });
     }
 
+    let lifecycle;
+    if (params.has('serviceLifecycle') || params.has('ownerAggregatorId') || params.has('reportTarget')) {
+      const configured = params.has('serviceLifecycle') ? JSON.parse(params.get('serviceLifecycle')) : {};
+      const reporting = params.has('reportTarget') ? JSON.parse(params.get('reportTarget')) : null;
+      if (!configured || typeof configured !== 'object' || Array.isArray(configured)
+        || (configured.requires !== undefined && (!Array.isArray(configured.requires)
+          || configured.requires.some(id => typeof id !== 'string' || !id)))
+        || !params.get('ownerAggregatorId') || typeof reporting?.endpoint !== 'string') {
+        throw Object.assign(new Error('Hosted lifecycle requires explicit owner, report target and valid requirements'), { status: 400 });
+      }
+      const requirements = serviceMap.serviceLifecycle?.requires || [];
+      lifecycle = {
+        metadata: { ...configured, version: configured.version ?? 1,
+          requires: [...new Set([...requirements, ...(configured.requires || [])])] },
+        env: {
+          ...process.env,
+          PULSE_NODE_ID: name,
+          PULSE_SERVICE_INSTANCE_ID: params.get('instanceId') || `${collectorId}:${name}`,
+          PULSE_OWNER_AGGREGATOR_ID: params.get('ownerAggregatorId') || '',
+          PULSE_SERVICE_BINDINGS: JSON.stringify(configured.bindings || {}),
+          PULSE_AGGREGATOR_URLS: JSON.stringify(reporting ? [reporting.endpoint] : []),
+        },
+      };
+    }
     const nextHost = await createPascalishServiceHost({
       compiled: { pcodeText: servicePcode, programMap: serviceMap },
       daemons,
       collectorId,
       host: additional ? '127.0.0.1' : '0.0.0.0',
       httpPort,
+      lifecycle,
+      sharedHttpListener: () => server.address(),
       udpPort: additional || sharedDaemons && !udpPort ? null : udpPort,
       networkPeers: params.has('networkPeers') ? JSON.parse(params.get('networkPeers')) : [],
       storageRoots: Object.hasOwn(storageGrants, collectorId) ? storageGrants[collectorId] : {},
@@ -486,7 +519,45 @@ export function createJsPmachineNodeServer({
       additional.stop().catch(error => logger.error(`[js-pmachine] ${collectorId} shutdown failed: ${error.message}`));
     }
   });
-  if (backendUrl || udpAnnouncePort) {
+  if (!backendUrl && udpAnnouncePort && !udpAnnounceHost) {
+    let discovery;
+    let timer;
+    let stopped = false;
+    let starting;
+    server.on('listening', () => {
+      starting = (async () => {
+        const listeners = () => {
+          const address = server.address();
+          if (!address || typeof address !== 'object') throw new Error('Node HTTP listener is not bound');
+          return [{ protocol: 'http', host: address.address, port: address.port }];
+        };
+        discovery = await discoveryFactory({
+          nodeId: name, bootId: randomUUID(), port: udpAnnouncePort, logger,
+          metadata: {
+            hardware: 'PMachine JavaScript VM', runtime: 'js-pmachine',
+            services: [{ name: 'pmachine', endpoint: '/pmachine/execute_file' }],
+          },
+          onTargets: async () => {
+            if (!stopped) await discovery.advertise(listeners());
+          },
+        });
+        if (stopped) { await discovery.stop(); return; }
+        await discovery.start();
+        if (stopped) { await discovery.stop(); return; }
+        timer = setInterval(() => {
+          if (!stopped) void discovery.advertise(listeners()).catch(error =>
+            logger.warn(`[js-pmachine] Discovery announcement failed: ${error.message}`));
+        }, discovery.getSettings().announcementIntervalMs);
+        timer.unref();
+      })().catch(error => logger.error(`[js-pmachine] Discovery startup failed: ${error.message}`));
+    });
+    server.on('close', () => {
+      stopped = true;
+      clearInterval(timer);
+      void Promise.resolve(starting).then(() => discovery?.stop()).catch(error =>
+        logger.error(`[js-pmachine] Discovery shutdown failed: ${error.message}`));
+    });
+  } else if (backendUrl || udpAnnouncePort) {
     const announcementUrl = backendUrl ? new URL('/api/pmachine/announce', backendUrl) : null;
     let timer;
     let pending = false;
@@ -508,7 +579,7 @@ export function createJsPmachineNodeServer({
     }
     function announceUdp() {
       if (!udpReady || !server.listening) return;
-      udpSocket.send(Buffer.from(JSON.stringify(announcement())), udpAnnouncePort, udpAnnounceHost, error => {
+      udpSocket.send(Buffer.from(JSON.stringify(announcement())), udpAnnouncePort, udpAnnounceHost || '127.255.255.255', error => {
         if (error) logger.warn(`[js-pmachine] ${name} UDP announcement to ${udpAnnounceHost}:${udpAnnouncePort} failed: ${error.message}`);
       });
     }

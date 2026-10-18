@@ -51,6 +51,16 @@
       "portEnvVar": "MAPPER_PORT",
       "description": "Typed data transformation and mapping service."
     },
+    "filesystem": {
+      "name": "Pulse Filesystem",
+      "entry": "filesystem-service.mjs",
+      "defaultHost": "127.0.0.1",
+      "healthPath": "/health",
+      "public": false,
+      "autoStart": true,
+      "portEnvVar": "FILESYSTEM_PORT",
+      "description": "Root-confined storage API used by the Data Librarian."
+    },
     "librarian": {
       "name": "Pulse Data Librarian",
       "entry": "data-librarian.mjs",
@@ -75,11 +85,11 @@
   "environments": {
     "default": {
       "servicePrefix": "Pulse",
-      "ports": { "gateway": 4000, "discovery": 4301, "broker": 4001, "homeAutomation": 4102, "mapper": 4200, "librarian": 4300, "queueManager": 4100 }
+      "ports": { "gateway": 4000, "discovery": 4301, "broker": 4001, "homeAutomation": 4102, "mapper": 4200, "librarian": 4300, "filesystem": 4302, "queueManager": 4100 }
     },
     "secondary": {
       "servicePrefix": "Pulse",
-      "ports": { "gateway": 4010, "discovery": 4310, "broker": 4011, "homeAutomation": 4112, "mapper": 4210, "librarian": 4311, "queueManager": 4110 }
+      "ports": { "gateway": 4010, "discovery": 4310, "broker": 4011, "homeAutomation": 4112, "mapper": 4210, "librarian": 4311, "filesystem": 4312, "queueManager": 4110 }
     }
   },
   "servers": [
@@ -112,17 +122,6 @@
       "serverRef": "local-workspace",
       "endpoint": "http://127.0.0.1:4301",
       "description": "Infrastructure and service catalog discovery capability."
-    },
-    {
-      "id": "service.pascalish-discovery-collector",
-      "name": "Pascalish Discovery Collector",
-      "kind": "discovery",
-      "provider": "pascalish",
-      "protocol": "http+udp",
-      "serverRef": null,
-      "endpoint": "http://192.168.2.115",
-      "configurationRef": "service.pascalish-discovery-collector",
-      "description": "Hosted Pascalish discovery service deployable to JavaScript PMachines and ESP32 PMachines."
     },
     {
       "id": "service.broker",
@@ -163,6 +162,16 @@
       "serverRef": "local-workspace",
       "endpoint": "http://127.0.0.1:4300",
       "description": "Schema and data contract catalog capability."
+    },
+    {
+      "id": "service.filesystem",
+      "name": "Pulse Filesystem",
+      "kind": "storage",
+      "provider": "pulse-local",
+      "protocol": "http",
+      "serverRef": "local-workspace",
+      "endpoint": "http://127.0.0.1:4302",
+      "description": "Root-confined operational storage API."
     },
     {
       "id": "service.queue-manager",
@@ -228,6 +237,7 @@
     "homeAutomation": { "serviceOfferingRef": "service.home-automation", "serverRef": "local-workspace" },
     "mapper": { "serviceOfferingRef": "service.mapper", "serverRef": "local-workspace" },
     "librarian": { "serviceOfferingRef": "service.librarian", "serverRef": "local-workspace" },
+    "filesystem": { "serviceOfferingRef": "service.filesystem", "serverRef": "local-workspace" },
     "queueManager": { "serviceOfferingRef": "service.queue-manager", "serverRef": "local-workspace" }
   }
 }

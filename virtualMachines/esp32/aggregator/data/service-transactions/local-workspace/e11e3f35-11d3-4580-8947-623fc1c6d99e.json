@@ -1,0 +1,1 @@
+{"transactionId":"e11e3f35-11d3-4580-8947-623fc1c6d99e","serviceId":"pulse-data-librarian","request":{"method":"GET","path":"/api/librarian/readiness-probe"},"responseLimit":1000000,"status":"held","createdAt":"2026-10-17T06:00:21.808Z","updatedAt":"2026-10-17T06:00:21.808Z","ok":true}

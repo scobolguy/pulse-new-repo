@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compilePascalishProgramWithAntlr } from './compile-pascalish-program-antlr-to-pcode.mjs';
@@ -73,12 +74,26 @@ export async function runPcodeOnEsp32({
   inputQueue = 'vscode.pmachine',
   message = '',
   maxSteps = 200000,
-  sourceFileName = 'program.pcode'
+  sourceFileName = 'program.pcode',
+  networkPeers = [],
+  ownerAggregatorId = '',
+  reportTarget = null,
+  reportTargets = null,
+  serviceLifecycle = null,
+  bindings = null
 } = {}) {
   const pcode = String(pcodeText || '');
   if (!pcode.trim()) throw new Error('pcodeText is required');
   if (!programMap || typeof programMap !== 'object' || Array.isArray(programMap)) {
     throw new Error('programMap must be an object');
+  }
+  if (!Array.isArray(networkPeers) || networkPeers.length > 8 ||
+      networkPeers.some(peer => net.isIP(peer?.ip) !== 4 ||
+        !Number.isSafeInteger(peer.port) || peer.port < 1 || peer.port > 65535)) {
+    throw new Error('networkPeers must be an array of at most eight literal IPv4 address/port pairs');
+  }
+  if (programMap.requiredHostCapabilities?.includes('filesystem.remote') && !networkPeers.length) {
+    throw new Error('The service requires filesystem.remote; provide its allowlisted Filesystem Service peer');
   }
 
   const tag = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -106,6 +121,35 @@ export async function runPcodeOnEsp32({
     }
 
     const isJsNode = /:\d+$/.test(host);
+    if (!isJsNode && signedMap.serviceLifecycle?.requires?.length) {
+      const lifecycle = serviceLifecycle;
+      const lifecycleBindings = bindings || lifecycle?.bindings;
+      const targets = Array.isArray(reportTargets) ? reportTargets
+        : reportTarget == null ? [] : [reportTarget];
+      const targetIds = targets.map(target => {
+        const id = target && typeof target === 'object' ? target.aggregatorId : null;
+        return typeof id === 'string' ? id : targets.length === 1 ? ownerAggregatorId : '';
+      });
+      const targetEndpointsValid = targets.length > 0 && targets.length <= 4
+        && targets.every(target => {
+          const endpoint = typeof target === 'string' ? target
+            : target?.endpoint || target?.url;
+          return typeof endpoint === 'string' && endpoint.length > 0
+            && (target?.bearerToken === undefined || (typeof target.bearerToken === 'string'
+              && /^[A-Za-z0-9_-]{32,256}$/.test(target.bearerToken)));
+        });
+      const targetIdsValid = targetIds.every(id => /^[A-Za-z0-9_.-]{1,128}$/.test(id))
+        && new Set(targetIds).size === targetIds.length
+        && targetIds.includes(ownerAggregatorId);
+      if (!ownerAggregatorId || !lifecycle || lifecycle.version !== 1
+        || !Array.isArray(lifecycle.requires)
+        || lifecycle.requires.length !== signedMap.serviceLifecycle.requires.length
+        || lifecycle.requires.some((required, index) => required !== signedMap.serviceLifecycle.requires[index])
+        || !lifecycleBindings || typeof lifecycleBindings !== 'object'
+        || !targetEndpointsValid || !targetIdsValid) {
+        throw new Error('Native lifecycle install requires an explicit owner target, uniquely identified report targets, requirements and bindings');
+      }
+    }
     const serviceMap = isJsNode ? signedMap : attachPcodeSignature(compactServiceHostProgramMap(signedMap), pcode);
     const daemonMap = isJsNode
       ? daemon.programMap
@@ -122,7 +166,7 @@ export async function runPcodeOnEsp32({
     await postForm(`${baseUrl}/ffs/upload`, { file: daemonMapFile, body: signedDaemonMapText }, 'upload hosted daemon map');
 
     const udpPort = isJsNode ? '0' : '4210';
-    const rawInstall = await postForm(`${baseUrl}/pmachine/service_host/install`, {
+    const installFields = {
       serviceFile: remotePcode,
       serviceMap: remoteMap,
       daemonFile: daemonPcodeFile,
@@ -131,7 +175,16 @@ export async function runPcodeOnEsp32({
       udpPort,
       observationTtlMs: '180000',
       announcementIntervalMs: String(daemon.programMap.runtimeUnit.refreshMs || 60000),
-    }, 'install hosted service');
+      networkPeers: JSON.stringify(networkPeers),
+      ...(!isJsNode && serviceLifecycle ? {
+        ownerAggregatorId,
+        serviceLifecycle: JSON.stringify(serviceLifecycle),
+        ...(bindings && !serviceLifecycle.bindings ? { bindings: JSON.stringify(bindings) } : {}),
+        ...(reportTargets ? { reportTargets: JSON.stringify(reportTargets) }
+          : { reportTarget: typeof reportTarget === 'string' ? reportTarget : JSON.stringify(reportTarget) }),
+      } : {})
+    };
+    const rawInstall = await postForm(`${baseUrl}/pmachine/service_host/install`, installFields, 'install hosted service');
     let result;
     try { result = JSON.parse(rawInstall); } catch { result = { raw: rawInstall }; }
     if (result?.running !== true) throw new Error(`Hosted service did not start: ${rawInstall.slice(0, 240)}`);

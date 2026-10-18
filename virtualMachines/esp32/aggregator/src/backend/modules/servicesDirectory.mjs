@@ -21,7 +21,10 @@ export async function buildServicesDirectory({
     add({
       id: `instance:${instance.instanceId}`, instanceId: instance.instanceId, serviceId, name: serviceId,
       nodeId: instance.nodeId, ip: instance.ip, status: instance.status,
-      endpoint: base ? new URL(instance.metadata?.route || '/', base).href : '',
+      endpoint: instance.endpoint || (base ? new URL(instance.metadata?.route || '/', base).href : ''),
+      readiness: instance.readiness, dependencies: instance.dependencies,
+      reporting: instance.reporting, lastReportAt: instance.lastReportAt, expiresAt: instance.expiresAt,
+      ownerAggregatorId: instance.ownerAggregatorId,
       provider: 'runtime', protocol: 'http', source: 'runtime'
     });
   }

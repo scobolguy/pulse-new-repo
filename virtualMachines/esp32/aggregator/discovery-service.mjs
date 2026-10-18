@@ -308,6 +308,7 @@ udpServer.on('message', (msg, rinfo) => {
   let node = discoveredNodes.get(ip) || {};
   try {
     const data = JSON.parse(msg.toString());
+    if (data?.kind === 'pulseDiscoveryRequest' || data?.kind === 'pulseDiscoveryReply') return;
     if (data?.kind === 'nodeBeaconAck' || data?.kind === 'nodeDetailsRequest') return;
     if (data && (data.kind === 'queueManagerHeartbeat' || data.service === 'queue-manager')) {
       upsertRemoteQueueManager({

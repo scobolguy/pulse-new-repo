@@ -2,10 +2,14 @@ import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { compilePascalishProgramWithAntlr } from '../../scripts/compile-pascalish-program-antlr-to-pcode.mjs';
 import { createPascalishServiceHost } from '../../../pmachines/javascript/src/service-host.mjs';
+import { createFilesystemServiceClient } from './filesystem-service-client.mjs';
 
 export async function createPascalishCatalogStore({
-  root, legacyRoot, maxFileBytes = 262144, logger = console
+  root, legacyRoot, maxFileBytes = 262144, logger = console, filesystemServiceUrl = ''
 }) {
+  const filesystemClient = filesystemServiceUrl
+    ? createFilesystemServiceClient(filesystemServiceUrl)
+    : null;
   const sourcePath = fileURLToPath(new URL('../../../src/librarian/catalog-store.pas', import.meta.url));
   const compiled = compilePascalishProgramWithAntlr(await fs.readFile(sourcePath, 'utf8'), {
     fileName: sourcePath, hostServices: true
@@ -15,6 +19,7 @@ export async function createPascalishCatalogStore({
     httpPort: null, udpPort: null, maxFileBytes, maxEvents: 64,
     maxBodyBytes: 1000000, maxResponseBytes: 1000000,
     desktopBudget: true, maxSteps: null, maxExecutionMs: null,
+    filesystemBindingOverrides: filesystemClient?.bindings,
     storageRoots: {
       catalog: { path: root, readOnly: false },
       legacy: { path: legacyRoot }

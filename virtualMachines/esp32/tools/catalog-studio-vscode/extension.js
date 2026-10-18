@@ -177,17 +177,11 @@ function getCatalogStudioApiBase() {
 }
 
 function getNetworkApiBases() {
-  const configured = getCatalogStudioApiBase()
-  const candidates = [configured]
-  if (/^http:\/\/localhost(?::|$)/i.test(configured)) {
-    candidates.push(configured.replace(/^http:\/\/localhost/i, 'http://127.0.0.1'))
-  }
-  candidates.push('http://127.0.0.1:4000')
-  return Array.from(new Set(candidates.map((candidate) => candidate.replace(/\/$/, ''))))
+  return [getCatalogStudioApiBase()]
 }
 
 function getLibrarianApiBases() {
-  return Array.from(new Set([...getNetworkApiBases(), 'http://127.0.0.1:4300']))
+  return getNetworkApiBases()
 }
 
 async function getLibrarianDataTypes() {
@@ -2625,7 +2619,6 @@ function activate(context, vscodeApi) {
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(openActiveVflInDesigner),
   )
-  openActiveVflInDesigner()
 }
 
 function deactivate() {}

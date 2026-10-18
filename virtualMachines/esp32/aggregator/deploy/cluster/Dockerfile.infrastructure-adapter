@@ -1,0 +1,16 @@
+FROM node:22-bookworm-slim
+
+WORKDIR /app
+COPY aggregator/package*.json ./aggregator/
+RUN cd aggregator && npm ci --omit=dev
+COPY aggregator/scripts ./aggregator/scripts
+COPY aggregator/grammar ./aggregator/grammar
+COPY aggregator/libraries ./aggregator/libraries
+COPY aggregator/src ./aggregator/src
+COPY aggregator/infrastructure-adapter.mjs ./aggregator/infrastructure-adapter.mjs
+COPY pmachines/javascript ./pmachines/javascript
+COPY pmachines/shared ./pmachines/shared
+COPY src/service-lifecycle ./src/service-lifecycle
+
+ENV NODE_ENV=production
+CMD ["node", "aggregator/infrastructure-adapter.mjs"]

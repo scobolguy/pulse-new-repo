@@ -3,10 +3,10 @@ import react from '@vitejs/plugin-react'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { readServiceLifecycleConfig, createServiceLifecycleRuntime, describeBoundHttpListener } from './src/service-lifecycle-runtime.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const apiProxyTarget = process.env.VITE_API_PROXY_TARGET || 'http://localhost:4000'
-const mcpProxyTarget = process.env.VITE_MCP_PROXY_TARGET || 'http://localhost:4011'
 const runtimeDataRoot = process.env.PULSE_RUNTIME_DATA_ROOT || process.env.PULSE_QUEUE_DATA_ROOT || 'C:/pulse-data/esp32/aggregator-data'
 const viteCacheDir = process.env.VITE_CACHE_DIR || path.join(runtimeDataRoot, 'vite-cache')
 const bobConsolePath = path.resolve(__dirname, 'public/bob-console.html')
@@ -40,9 +40,40 @@ const bobConsolePlugin = {
   },
 }
 
+const lifecyclePlugin = {
+  name: 'pulse-frontend-lifecycle',
+  async configureServer(server) {
+    const config = readServiceLifecycleConfig({ serviceId: 'pulse-frontend' })
+    const runtime = await createServiceLifecycleRuntime({ config })
+    server.middlewares.use((req, res, next) => {
+      const pathname = new URL(req.url || '/', 'http://localhost').pathname
+      if (!['/health', '/ready'].includes(pathname)) return next()
+      const readiness = runtime.getReadiness()
+      res.statusCode = pathname === '/health' || readiness.ready ? 200 : 503
+      res.setHeader('content-type', 'application/json')
+      res.end(JSON.stringify(pathname === '/health'
+        ? { serviceId: config.serviceId, instanceId: config.instanceId, alive: true } : readiness))
+    })
+    server.httpServer.once('listening', async () => {
+      try {
+        const listener = describeBoundHttpListener(server.httpServer.address(), config)
+        await runtime.start(listener.endpoint, [listener])
+      } catch (error) {
+        console.error('[FRONTEND] Lifecycle initialization failed:', error.message)
+        await runtime.stop()
+        await server.close()
+        process.exitCode = 1
+      }
+    })
+    server.httpServer.once('close', () => {
+      void runtime.stop().catch(error => console.error('[FRONTEND] Lifecycle shutdown failed:', error.message))
+    })
+  },
+}
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [bobConsolePlugin, react()],
+  plugins: [lifecyclePlugin, bobConsolePlugin, react()],
   publicDir: path.resolve(__dirname, '../../../documents'),
   cacheDir: viteCacheDir,
   optimizeDeps: {
@@ -68,9 +99,9 @@ export default defineConfig({
         },
       },
       '/mcp-query': {
-        target: mcpProxyTarget,
+        target: apiProxyTarget,
         changeOrigin: true,
-        rewrite: () => '/query',
+        rewrite: () => '/api/mcp/query',
       },
       '/status': {
         target: apiProxyTarget,
@@ -87,9 +118,9 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/mcp-query': {
-        target: mcpProxyTarget,
+        target: apiProxyTarget,
         changeOrigin: true,
-        rewrite: () => '/query',
+        rewrite: () => '/api/mcp/query',
       },
       '/api': {
         target: apiProxyTarget,

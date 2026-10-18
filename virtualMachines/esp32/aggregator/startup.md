@@ -2,6 +2,18 @@
 
 This document defines the canonical startup order and readiness validation for backend and frontend services.
 
+The commands here bootstrap the aggregator and frontend listeners. They are
+operator commands, not VS Code activation hooks. Once the aggregator is available,
+its Pascalish supervisor owns requested service startup, dependency readiness,
+recovery and reverse-order shutdown; consumer requests do not launch services.
+See [service lifecycle and logical routing](README.md#service-lifecycle-and-logical-routing).
+The previous per-service companion watchdogs are not used for Filesystem,
+Librarian, Mapper or MCP.
+The supervised frontend launches Vite through Node directly, avoiding Windows
+`npm.cmd` shell-launch failures.
+Pascalish allows 120 seconds for frontend cold dependency builds; other services
+retain the normal startup deadline.
+
 ## One-command ordered startup
 
 Run from `virtualMachines/esp32/aggregator`:

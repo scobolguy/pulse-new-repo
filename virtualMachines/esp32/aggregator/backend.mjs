@@ -77,7 +77,6 @@ import { registerFlowDeploymentRoutes } from './src/backend/flowDeploymentRoutes
 import { registerProjectWorkspaceRoutes } from './src/backend/projectWorkspaceRoutes.mjs';
 import { registerTransformerServiceRoutes } from './src/backend/transformerServiceRoutes.mjs';
 import { registerStartupFsmRoutes } from './src/backend/startupFsmRoutes.mjs';
-import { registerMapperRoutes } from './src/backend/mapperRoutes.mjs';
 import { registerOllamaRoutes } from './src/backend/ollamaRoutes.mjs';
 import { registerUserProvisioningRoutes } from './src/backend/modules/userProvisioningRoutes.mjs';
 import { registerDeveloperGovernanceRoutes } from './src/backend/modules/developerGovernanceRoutes.mjs';
@@ -90,7 +89,12 @@ import { createHomeAutomationService, registerHomeAutomationRoutes } from './src
 import { createJsPmachineDeploymentSupervisor } from './src/backend/modules/jsPmachineDeploymentSupervisor.mjs';
 import { createRouteManifestDependencyFactories } from './src/backend/modules/routeManifestDependencies.mjs';
 import { startBackendRuntime } from './src/backend/modules/startupBootstrap.mjs';
+import { attachDiscoveryResponder, boundHttpDiscoveryListeners } from './src/service-lifecycle/lan-discovery.mjs';
 import { createServiceProcessManager, registerServiceProcessRoutes } from './src/backend/modules/serviceProcessManager.mjs';
+import { loadRuntimeMachineAuth } from './src/backend/security/runtimeMachineAuth.mjs';
+import { createInfrastructureReadiness, registerInfrastructureReadinessRoutes } from './src/backend/modules/infrastructureReadiness.mjs';
+import { createServiceTransactions, forwardServiceRequest } from './src/backend/modules/serviceTransactions.mjs';
+import { createServiceInstanceReports } from './src/backend/modules/serviceInstanceReports.mjs';
 import { createLifecycleHarnessPathApi } from './src/backend/modules/lifecycleHarnessPaths.mjs';
 import { createRuntimeDiagnosticsApi } from './src/backend/modules/runtimeDiagnosticsApi.mjs';
 import { createMachineAvailabilityPresenceApi } from './src/backend/modules/machineAvailabilityPresenceApi.mjs';
@@ -130,7 +134,7 @@ import {
 import { initializeUdpLogFilter } from './src/backend/modules/udpLogFilter.mjs';
 import { createDebugLog, formatErrorDetails } from './src/backend/modules/debugLogger.mjs';
 import { createAuthoritativeTimeSyncMonitor } from './src/backend/modules/authoritativeTimeSyncMonitor.mjs';
-import { getInfrastructureCatalog, listServiceEntries, resolveEnvironmentName } from './src/backend/modules/serviceRegistry.mjs';
+import { getInfrastructureCatalog, getServiceEntry, listServiceEntries, resolveEnvironmentName } from './src/backend/modules/serviceRegistry.mjs';
 import { createSystemRegistry } from './src/backend/modules/systemRegistry.mjs';
 
 // ===== ESP32 NODE REGISTRY =====
@@ -209,14 +213,8 @@ function proxyRequest(method, path, req, res, targetUrl = BROKER_SERVICE_URL) {
 }
 
 
-const HTTP_PORT = readEnvNumber('HTTP_PORT', readEnvNumber('PORT', 4000));
+const HTTP_PORT = readEnvNumber('HTTP_PORT', readEnvNumber('PORT', getServiceEntry('gateway').port));
 const SERVICE_MANIFEST_PATH = path.join(__dirname, 'data', 'service-manifest.json');
-const serviceProcessManager = await createServiceProcessManager({
-  manifestPath: SERVICE_MANIFEST_PATH,
-  appRoot: __dirname,
-  spawn,
-  logger: console
-});
 // When set, Home Automation runs as its own process (home-automation-service.mjs) and the
 // gateway proxies /api/home-automation/* to it instead of running discovery in-process.
 const HOME_AUTOMATION_SERVICE_URL = readEnvString('HOME_AUTOMATION_SERVICE_URL', '').trim().replace(/\/$/, '');
@@ -257,6 +255,24 @@ const PULSE_QUEUE_DATA_ROOT = PULSE_QUEUE_PERSISTENCE
   ? path.resolve(readEnvString('PULSE_QUEUE_DATA_ROOT', DEFAULT_QUEUE_DATA_ROOT))
   : null;
 const RUNTIME_DATA_ROOT = path.resolve(readEnvString('PULSE_RUNTIME_DATA_ROOT', PULSE_QUEUE_DATA_ROOT || DEFAULT_QUEUE_DATA_ROOT));
+const lifecycleOwnerId = process.env.PULSE_AGGREGATOR_ID
+  || `local-workspace${resolveEnvironmentName() === 'default' ? '' : `:${resolveEnvironmentName()}`}`;
+const lifecycleReportTargets = process.env.PULSE_AGGREGATOR_URLS
+  ? JSON.parse(process.env.PULSE_AGGREGATOR_URLS) : [`http://127.0.0.1:${HTTP_PORT}`];
+if (!Array.isArray(lifecycleReportTargets) || lifecycleReportTargets.length === 0
+  || lifecycleReportTargets.some(target => typeof target !== 'string' || !/^https?:\/\//.test(target))) {
+  throw new Error('PULSE_AGGREGATOR_URLS must be a nonempty JSON array of aggregator HTTP URLs');
+}
+const serviceProcessManager = await createServiceProcessManager({
+  manifestPath: SERVICE_MANIFEST_PATH, appRoot: __dirname, spawn, logger: console,
+  ownerAggregatorId: lifecycleOwnerId, aggregatorUrls: lifecycleReportTargets,
+  infrastructureConfig: { brokerProvider: BROKER_PROVIDER },
+  serviceOverrides: Object.fromEntries(['database', 'rabbitmq'].map(id => [id, {
+    healthUrl: `http://127.0.0.1:${HTTP_PORT}/api/runtime/infrastructure/${id}/ready`,
+    readinessUrl: `http://127.0.0.1:${HTTP_PORT}/api/runtime/infrastructure/${id}/ready`,
+  }])),
+  statePath: path.join(RUNTIME_DATA_ROOT, 'service-lifecycle', `${encodeURIComponent(lifecycleOwnerId)}.json`),
+});
 const EVOLUTION_DATA_ROOT = path.resolve(
   readEnvString('PULSE_EVOLUTION_DATA_ROOT', path.join(RUNTIME_DATA_ROOT, 'evolution'))
 );
@@ -592,6 +608,36 @@ const queueRoutes = new Map();
 const MANAGER_ACTIVE_STATES = new Set(['up', 'degraded']);
 const MANAGER_SYNC_STATES = new Set(['syncing', 'sync-failed']);
 const serviceInstanceRegistry = new Map();
+const localServiceBootId = crypto.randomUUID();
+const localServiceReportSequences = new Map();
+const serviceInstanceReports = await createServiceInstanceReports({ registry: serviceInstanceRegistry });
+const serviceTransactions = await createServiceTransactions({
+  aggregatorId: lifecycleOwnerId,
+  storageRoot: path.join(RUNTIME_DATA_ROOT, 'service-transactions', encodeURIComponent(lifecycleOwnerId)),
+  instances: async () => {
+    await serviceInstanceReports.expire();
+    return [...serviceInstanceRegistry.values()];
+  },
+});
+const runtimeMachineAuth = await loadRuntimeMachineAuth({
+  filePath: process.env.PULSE_RUNTIME_MACHINE_CREDENTIALS_PATH
+    || path.join(RUNTIME_DATA_ROOT, 'runtime-machine-credentials.json'),
+  required: !!process.env.PULSE_RUNTIME_MACHINE_CREDENTIALS_PATH,
+  ownerAggregatorId: lifecycleOwnerId,
+  serviceTransactions,
+});
+registerInfrastructureReadinessRoutes(app, {
+  ownerAggregatorId: lifecycleOwnerId,
+  probes: createInfrastructureReadiness({
+    sqlConnectionString: () => process.env.MSSQL_DATABASE_CONNECTION_STRING || FSM_MSSQL_CONNECTION_STRING,
+    sqlDriver: process.env.MSSQL_DRIVER,
+    rabbitUrl: () => BROKER_RABBITMQ_URL,
+  }),
+});
+const reportExpiryTimer = setInterval(() => {
+  serviceInstanceReports.expire().catch(error => console.error('[SERVICE-REPORT] Expiry failed:', error.message));
+}, 5000);
+reportExpiryTimer.unref();
 const ffsDeploymentRegistry = new Map();
 const jsPmachineDeploymentSupervisor = createJsPmachineDeploymentSupervisor();
 const federatedFfsRoot = path.join(RUNTIME_DATA_ROOT, 'federated-ffs');
@@ -2447,6 +2493,7 @@ const LIFECYCLE_HEARTBEAT_CHECK_INTERVAL_MS = readEnvNumber('LIFECYCLE_HEARTBEAT
 const LIFECYCLE_HEARTBEAT_ENABLED = readEnvBoolean('LIFECYCLE_HEARTBEAT_ENABLED', ['1', 'true', 'yes'], true);
 const BACKEND_WORKER_AUTOSTART = readEnvBoolean('BACKEND_WORKER_AUTOSTART', ['1', 'true', 'yes'], false);
 const BACKEND_AUX_SERVICES_AUTOSTART = readEnvBoolean('BACKEND_AUX_SERVICES_AUTOSTART', ['1', 'true', 'yes'], false);
+const PULSE_FILESYSTEM_AUTOSTART = readEnvBoolean('PULSE_FILESYSTEM_AUTOSTART', ['1', 'true', 'yes'], true);
 const PULSE_MCP_AUTOSTART = readEnvBoolean('PULSE_MCP_AUTOSTART', ['1', 'true', 'yes'], true);
 const ROUTER_WORKER_MAX_BACKOFF_MULTIPLIER = Math.max(1.5, readEnvNumber('ROUTER_WORKER_MAX_BACKOFF_MULTIPLIER', 3.5));
 const LIFECYCLE_WORKER_MAX_BACKOFF_MULTIPLIER = Math.max(1.5, readEnvNumber('LIFECYCLE_WORKER_MAX_BACKOFF_MULTIPLIER', 4.5));
@@ -5159,6 +5206,7 @@ function upsertServiceInstance({ serviceName, instanceId, nodeId, ip, port, stat
   if (!serviceName) return;
   const effectiveInstanceId = instanceId || `${serviceName}:${nodeId || ip || 'unknown'}:${port || ''}`;
   const prev = serviceInstanceRegistry.get(effectiveInstanceId) || {};
+  if (prev.version === 1 && prev.bootId) return;
   const effectiveNodeId = normalizeNodeId(nodeId || ip || prev.nodeId);
   const nextStatus = status || prev.status || 'up';
   serviceInstanceRegistry.set(effectiveInstanceId, {
@@ -5174,9 +5222,11 @@ function upsertServiceInstance({ serviceName, instanceId, nodeId, ip, port, stat
   });
 }
 
-function registerLocalServiceHeartbeats() {
+async function registerLocalServiceHeartbeats() {
   const localNodeId = os.hostname() || '127.0.0.1';
-  const localIp = '127.0.0.1';
+  const address = app.locals.httpServer?.address();
+  if (!address || typeof address === 'string') return;
+  const localIp = process.env.PULSE_SERVICE_ADVERTISE_HOST || '127.0.0.1';
 
   const localServices = [
     {
@@ -5202,14 +5252,29 @@ function registerLocalServiceHeartbeats() {
   ];
 
   for (const svc of localServices) {
-    upsertServiceInstance({
-      serviceName: svc.serviceName,
+    const sequence = (localServiceReportSequences.get(svc.instanceId) || 0) + 1;
+    localServiceReportSequences.set(svc.instanceId, sequence);
+    await serviceInstanceReports.report({
+      version: 1, serviceId: svc.serviceName,
       instanceId: svc.instanceId,
       nodeId: localNodeId,
-      ip: localIp,
-      port: HTTP_PORT,
-      status: 'up',
-      metadata: svc.metadata
+      bootId: localServiceBootId, sequence, ownerAggregatorId: lifecycleOwnerId,
+      endpoint: `http://${localIp}:${address.port}`,
+      readiness: { ready: true, blockedBy: [] }, dependencies: {}, ttlMs: 30000,
+      listeners: [{ protocol: 'http', host: localIp, port: address.port }],
+    });
+  }
+  for (const id of ['database', 'rabbitmq']) {
+    const service = await serviceProcessManager.getService(id);
+    const instanceId = `${id}:${lifecycleOwnerId}`;
+    const sequence = (localServiceReportSequences.get(instanceId) || 0) + 1;
+    localServiceReportSequences.set(instanceId, sequence);
+    await serviceInstanceReports.report({
+      version: 1, serviceId: id === 'database' ? 'pulse-database' : 'pulse-rabbitmq',
+      instanceId, nodeId: localNodeId, bootId: localServiceBootId, sequence,
+      ownerAggregatorId: lifecycleOwnerId, endpoint: service.readinessUrl,
+      readiness: { ready: service.readiness.ready, blockedBy: service.readiness.blockedBy },
+      dependencies: {}, ttlMs: 30000, listeners: [],
     });
   }
 }
@@ -8204,6 +8269,11 @@ const {
   clearTimeoutFn: clearTimeout
 });
 
+const lanDiscoveryResponder = await attachDiscoveryResponder({
+  socket: udpServer, aggregatorId: lifecycleOwnerId,
+  getListeners: () => boundHttpDiscoveryListeners(app.locals.httpServer?.address()),
+});
+
 udpServer.on('message', (msg, rinfo) => {
   console.log(`[UDP] Packet from ${rinfo.address}:${rinfo.port} — ${msg.toString().slice(0, 120)}`);
   const ip = rinfo.address;
@@ -8212,6 +8282,7 @@ udpServer.on('message', (msg, rinfo) => {
   try {
     const raw = msg.toString();
     const data = JSON.parse(raw);
+    if (data?.kind === 'pulseDiscoveryRequest' || data?.kind === 'pulseDiscoveryReply') return;
 
     if (data && data.kind === 'nodeBeaconAck' && String(data.nodeId || '').trim() === machineAvailability.nodeId) {
       markBeaconAcknowledged();
@@ -8382,6 +8453,7 @@ setInterval(() => {
   }
 
   for (const [instanceId, instance] of serviceInstanceRegistry.entries()) {
+    if (instance.version === 1 && instance.bootId) continue;
     if (MANAGER_ACTIVE_STATES.has(instance.status) && now - (instance.lastHeartbeat || 0) > 30 * 1000) {
       instance.status = 'down';
       serviceInstanceRegistry.set(instanceId, instance);
@@ -9808,7 +9880,15 @@ function registerRoutes(app) {
   registerPmachineDeploymentRoutes(app);
   registerFlowDeploymentRoutes(app, { runtimeRoot: RUNTIME_DATA_ROOT });
   registerDatabaseRoutes(app, { databaseManagers: databaseManagerInstances });
-  registerServiceProcessRoutes(app, { serviceProcessManager, requirePermission });
+  registerServiceProcessRoutes(app, { serviceProcessManager, serviceInstanceReports, serviceInstanceRegistry, serviceTransactions, requirePermission, runtimeMachineAuth });
+  app.post('/api/mcp/query', express.raw({ type: '*/*', limit: '12mb' }), async (req, res) => {
+    await forwardServiceRequest(serviceTransactions, 'pulse-local-mcp', {
+      method: 'POST', path: '/query',
+      headers: { 'content-type': req.get('content-type') || 'application/json' },
+      ...(Buffer.isBuffer(req.body)
+        ? { body: req.body.toString('base64'), bodyEncoding: 'base64' } : { body: req.body }),
+    }, res);
+  });
 
   registerOrchestrationRegistryRoutes(app, {
     HTTP_PORT,
@@ -9950,6 +10030,7 @@ function registerRoutes(app) {
       resolvePermissionForApiRequest,
       routeRoleManifest: ROUTE_ROLE_MANIFEST,  // loaded from data/route-manifest.json at startup
       serviceProcessManager,
+      serviceTransactions,
       listServiceProviders,
       getServiceProvider,
       getServiceProviderAction,
@@ -9963,7 +10044,6 @@ function registerRoutes(app) {
       compileQueueDslSpec,
       diffQueueConfigs,
       queueConfigMapFromWorkflowSymbols,
-      resolveLibrarianOrigin,
       IS_PRODUCTION_ENV,
       ALLOW_TEMP_QUEUES_IN_PRODUCTION,
       machineWorkloadState,
@@ -10034,21 +10114,12 @@ function registerRoutes(app) {
       validateWorkerConfigUpdate,
       applyWorkerConfigUpdate,
       routerWorkers,
-      resolveMapperOrigin
     })
   });
 
   debugLog('[DEBUG] Registering routes...');
 
   // Queue configuration synchronization endpoints for distributed config management
-
-  function resolveLibrarianOrigin() {
-    return readEnvString('LIBRARIAN_URL', `http://127.0.0.1:${DEFAULT_LIBRARIAN_PORT}`);
-  }
-
-  function resolveMapperOrigin() {
-    return readEnvString('MAPPER_URL', 'http://127.0.0.1:4200');
-  }
 
   // TEST ENDPOINT (dev/debug only)
   if (DEBUG_BACKEND) {
@@ -10075,8 +10146,12 @@ function registerRoutes(app) {
   debugLog('[DEBUG] File server routes registered');
   app.use('/api/fileserver', fileServer.router);
 
-  registerLocalServiceHeartbeats();
-  setInterval(registerLocalServiceHeartbeats, 10000);
+  const reportLocalServices = () => registerLocalServiceHeartbeats()
+    .catch(error => console.error('[SERVICE-REPORT] Local reporting failed:', error.message));
+  reportLocalServices();
+  const localServiceHeartbeatTimer = setInterval(reportLocalServices, 10000);
+  localServiceHeartbeatTimer.unref();
+  app.locals.localServiceHeartbeatTimer = localServiceHeartbeatTimer;
   setInterval(updateVirtualNodes, 3000);
   authoritativeTimeSyncMonitor.start();
   startLifecycleHeartbeatMonitor();
@@ -10099,28 +10174,28 @@ function registerRoutes(app) {
 }
 
 async function migratePersistedQueueTypeIds() {
-  const librarianOrigin = readEnvString('LIBRARIAN_URL', `http://127.0.0.1:${DEFAULT_LIBRARIAN_PORT}`);
-  const response = await fetch(`${librarianOrigin}/api/librarian/data-types`, { method: 'GET' });
-  if (!response.ok) throw new Error(`Librarian returned ${response.status}`);
+  const response = await serviceTransactions.request('pulse-data-librarian', {
+    method: 'GET', path: '/api/librarian/data-types',
+  });
+  if (response.status < 200 || response.status >= 300) throw new Error(`Librarian returned ${response.status}`);
 
-  const payload = await response.json();
+  const payload = response.body;
   const migrated = await migrateQueueTypeConfigs(queueManagerInstances, payload.types || []);
   if (migrated > 0) debugLog(`[TYPE-IDS] Migrated ${migrated} persisted queue configuration(s) to canonical IDs`);
 }
 
 try {
-  await migratePersistedQueueTypeIds().catch(error => {
-    console.warn(`[TYPE-IDS] Queue type migration unavailable: ${error.message}`);
-  });
   await getTransactionStateMssqlPool().catch(error => {
     console.warn(`[MESSAGE-SQL] SQL message ledger initialization unavailable: ${error.message}`);
+  });
+  void migratePersistedQueueTypeIds().catch(error => {
+    console.warn(`[TYPE-IDS] Queue type migration unavailable: ${error.message}`);
   });
   await startBackendRuntime({
     debugLog,
     app,
     HTTP_PORT,
     queueManagerInstances,
-    registerMapperRoutes,
     registerRoutes,
     createNodeRegistry,
     RUNTIME_DATA_ROOT,
@@ -10159,10 +10234,20 @@ try {
     gatewayModeState,
     startFedGateway,
     BACKEND_AUX_SERVICES_AUTOSTART,
+    PULSE_FILESYSTEM_AUTOSTART,
     PULSE_MCP_AUTOSTART,
+    serviceProcessManager,
+    shutdownServiceRuntime: async () => {
+      await lanDiscoveryResponder.stop();
+      clearInterval(reportExpiryTimer);
+      clearInterval(app.locals.localServiceHeartbeatTimer);
+      await serviceTransactions.stop();
+      await serviceInstanceReports.stop();
+    },
     spawn,
     librarianScriptPath: fileURLToPath(new URL('./data-librarian.mjs', import.meta.url)),
     mapperScriptPath: fileURLToPath(new URL('./data-mapper.mjs', import.meta.url)),
+    filesystemScriptPath: fileURLToPath(new URL('./filesystem-service.mjs', import.meta.url)),
     mcpScriptPath: fileURLToPath(new URL('./src/mcp/pulseMcpServer.mjs', import.meta.url))
   });
   for (const [localIndex, qm] of queueManagers.entries()) {

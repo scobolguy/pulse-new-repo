@@ -50,6 +50,75 @@ END;
 
 `SERVICE`, `PROGRAM`, and `DAEMON` items deploy to their listed nodes when the plan is executed. `REMOVE SERVICE` removes only that service instance from each listed node; instances on other targets remain deployed. Omitting a target from the backend DELETE API continues to remove the whole deployment.
 
+Hosted desired service:
+
+```wfl
+DEPLOYMENT "core-services" PROJECT "core-services" TARGETS ("node-a") BEGIN
+  HOSTED SERVICE "pulse-librarian-s3-readonly" FILE "s3-readonly.pcode"
+    TARGETS ("node-a") STARTUP TRUE
+    OWNER "aggregator-west" REPORT TO "https://aggregator.example/services/report"
+    REQUIRES ("pulse-filesystem")
+    BINDINGS ("pulse-filesystem" INSTANCE "filesystem-a"
+      ENDPOINT "https://filesystem.example/api"
+      READINESS "https://filesystem.example/health");
+END;
+```
+
+`HOSTED SERVICE` is an explicit desired deployment resource and does not need
+queue bindings. Its normalized compiler output has this shape:
+
+```json
+{
+  "kind": "hosted-service",
+  "id": "pulse-librarian-s3-readonly",
+  "fileName": "s3-readonly.pcode",
+  "targets": ["node-a"],
+  "startup": true,
+  "ownerAggregatorId": "aggregator-west",
+  "reportTarget": { "endpoint": "https://aggregator.example/services/report" },
+  "serviceLifecycle": {
+    "version": 1,
+    "requires": ["pulse-filesystem"],
+    "bindings": {
+      "pulse-filesystem": {
+        "instanceId": "filesystem-a",
+        "endpoint": "https://filesystem.example/api",
+        "readinessUrl": "https://filesystem.example/health"
+      }
+    }
+  }
+}
+```
+
+Every requirement must have exactly one binding. Service ids are canonical
+source service ids (for example `pulse-filesystem`), not the runtime aliases
+`filesystem`, `librarian`, or `mapper`. The instance, endpoint, readiness URL,
+owner, and report endpoint are all explicit; compilation never selects an
+instance or supplies a localhost fallback. External instances can be bound
+explicitly. These instance, endpoint, and readiness fields are operator-owned
+deployment bindings/constraints only: they are not consumer-facing service
+identities or addresses. `REQUIRES` contains only logical canonical service
+ids. Runtime reports publish actual bound listener details after sockets bind;
+configured endpoints must not be presented as observed listeners or used to
+invent a port. Business clients address a logical service through the
+aggregator transaction API, not a selected instance:
+`POST /api/runtime/services/{serviceId}/transactions`. The aggregator returns
+a tracking response and routes to a ready instance or durably holds the
+transaction. Endpoint and readiness/report targets must be explicit absolute
+HTTP(S) URLs; no default or automatic localhost endpoint is inferred. Existing
+queue-based `SERVICE`, `PROGRAM`, and `DAEMON` declarations keep their original
+normalized shape.
+
+When `executeDeploymentPlan` installs a hosted resource, it reads the compiled
+program map and verifies every compiler-declared `serviceLifecycle.requires`
+id is present in the WFL requirement list and has a concrete binding. It
+persists the WFL lifecycle bindings, compiled intrinsic requirements, owner,
+and report target as deployment metadata for runtime restoration. Live install
+requests are sent only when the caller explicitly supplies the same
+`ownerAggregatorId` declared by the resource; dry runs do not perform installs.
+This adapter validates and transports desired state only. Readiness, dependency
+evaluation, and transaction-routing policy remain in Pascalish services.
+
 Workflow block:
 
 WORKFLOW "workflow-id" BEGIN
@@ -78,6 +147,13 @@ END;
 <file> ::= { <symbol_decl> | <workflow_decl> }
 
 <symbol_decl> ::= <queue_decl> | <database_decl> | <file_decl> | <api_decl>
+
+<hosted_service_deployment_item> ::= 'HOSTED' 'SERVICE' <qstring> 'FILE' <qstring>
+  'TARGETS' '(' <qstring_list> ')' 'STARTUP' <boolean>
+  'OWNER' <qstring> 'REPORT' 'TO' <qstring>
+  [ 'REQUIRES' '(' <qstring_list> ')' ]
+  [ 'BINDINGS' '(' <requirement_binding> { ',' <requirement_binding> } ')' ] ';'
+<requirement_binding> ::= <qstring> 'INSTANCE' <qstring> 'ENDPOINT' <qstring> 'READINESS' <qstring>
 
 <queue_decl> ::= 'QUEUE' <qstring> '->' <qstring> [ 'MANAGER' <qstring> ] [ 'TYPE' <qstring> | 'TYPES' '(' <qstring_list> ')' ] [ 'MODE' ( 'SYNC' | 'ASYNC' ) ] ';'
 <database_decl> ::= 'DATABASE' <qstring> '->' <qstring> [ 'TYPE' <qstring> ] [ 'MANAGER' <qstring> ] [ 'CONNECTION' <qstring> ] ';'

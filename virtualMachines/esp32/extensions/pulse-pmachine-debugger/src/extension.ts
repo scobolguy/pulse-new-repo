@@ -1,7 +1,9 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
+import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import * as path from 'node:path';
+import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import * as vscode from 'vscode';
 import { DebugProtocol } from '@vscode/debugprotocol';
@@ -9,7 +11,7 @@ import { HanoiPanel, looksLikeHanoi } from './hanoiPanel.js';
 import { ServicesViewProvider, openServiceEndpoint } from './servicesView.js';
 import { registerDataMapper } from './dataMapperEditor.js';
 import { DataLibrarianViewProvider, openLibrarianSchema } from './dataLibrarianView.js';
-import { ensureLocalServices } from './localServices.js';
+import { Esp32LibrarianViewProvider, openEsp32LibrarianSchema } from './esp32LibrarianView.js';
 
 const require = createRequire(import.meta.url);
 const pulseStudio = require('./pulse-studio/extension.js') as {
@@ -221,6 +223,12 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
   private reachedEntry = false;
   private terminated = false;
   private readonly pendingRequests = new Set<number>();
+  private nativePcode = false;
+  private nativeChild: any = null;
+  private nativeEvents: any[] = [];
+  private nativeWaiters: Array<{ resolve: (event: any) => void; reject: (error: Error) => void }> = [];
+  private nativeLineNumbers = new Set<number>();
+  private nativeStarted = false;
 
   constructor(private readonly configuration: any) {
     this.root = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(configuration.program || ''))?.uri.fsPath
@@ -229,7 +237,9 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
   }
 
   dispose(): void {
-    if (this.remoteSessionId) {
+    if (this.nativeChild && this.nativeChild.exitCode === null && this.nativeChild.signalCode === null) {
+      this.nativeChild.kill();
+    } else if (this.remoteSessionId) {
       void this.remoteRequest(`/pmachine/debug/session?id=${encodeURIComponent(this.remoteSessionId)}`, { method: 'DELETE' }).catch(() => undefined);
     } else if (this.sessionId && this.debug) {
       this.debug.stopJavaScriptPmachineDebugSession(this.sessionId);
@@ -293,6 +303,7 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
         this.respond(request, true, {
           supportsConfigurationDoneRequest: true,
           supportsStepOver: true,
+          supportsPauseRequest: path.extname(String(this.configuration.program || '')).toLowerCase() !== '.pcode',
           supportsTerminateRequest: true,
           supportsEvaluateForHovers: true,
           supportsDelayedStackTraceLoading: false,
@@ -311,6 +322,10 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
         // VS Code may send configurationDone before the launch request has finished compiling.
         await this.launchDone;
         this.respond(request);
+        if (this.nativePcode) {
+          await this.startNativePcodeRequest();
+          return;
+        }
         if (this.remoteEsp32 && !this.wantsRemoteDebugSession()) {
           await this.runEsp32Source();
           return;
@@ -319,18 +334,24 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
         if (this.animate) void this.animateSource();
         return;
       case 'threads':
-        this.respond(request, true, { threads: [{ id: this.threadId, name: this.remoteEsp32
+        this.respond(request, true, { threads: [{ id: this.threadId, name: this.nativePcode
+          ? 'Native C++ PMachine'
+          : this.remoteEsp32
           ? `${this.configuration.runtime === 'js-node' ? 'JS PMachine node' : 'ESP32 PMachine'} ${this.debugApiHost || this.configuration.targetHost || ''}`.trim()
           : 'JS PMachine' }] });
         return;
       case 'stackTrace':
-        this.respond(request, true, { stackFrames: [this.stackFrame()] });
+        this.respond(request, true, { stackFrames: this.nativePcode
+          ? this.nativeStackFrames() : [this.stackFrame()] });
         return;
       case 'scopes':
-        this.respond(request, true, { scopes: [
-          { name: 'Globals', variablesReference: 1, expensive: false },
-          { name: 'Locals', variablesReference: 2, expensive: false },
-        ] });
+        {
+          const frameId = Math.max(0, Number(request.arguments?.frameId || 1) - 1);
+          this.respond(request, true, { scopes: [
+            { name: 'Globals', variablesReference: 1, expensive: false },
+            { name: 'Locals', variablesReference: this.nativePcode ? 100 + frameId : 2, expensive: false },
+          ] });
+        }
         return;
       case 'variables':
         this.respond(request, true, { variables: this.variables(request.arguments?.variablesReference) });
@@ -340,25 +361,33 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
         return;
       case 'continue':
         this.respond(request);
-        if (this.remoteEsp32) await this.continueEsp32();
+        if (this.nativePcode) await this.resumeNativePcode('continue');
+        else if (this.remoteEsp32) await this.continueEsp32();
         else await this.resumeUntilPause('continue');
         return;
       case 'next':
         this.respond(request);
-        if (this.remoteEsp32) await this.stepEsp32('step-over');
+        if (this.nativePcode) await this.resumeNativePcode('step');
+        else if (this.remoteEsp32) await this.stepEsp32('step-over');
         else await this.stepToNextSource('step-over');
         return;
       case 'stepIn':
         this.respond(request);
-        if (this.remoteEsp32) await this.stepEsp32('step-in');
+        if (this.nativePcode) await this.resumeNativePcode('step');
+        else if (this.remoteEsp32) await this.stepEsp32('step-in');
         else await this.stepToNextSource('step-in');
         return;
       case 'stepOut':
         this.respond(request);
-        if (this.remoteEsp32) await this.stepEsp32('step-out');
+        if (this.nativePcode) await this.stepOutNativePcode();
+        else if (this.remoteEsp32) await this.stepEsp32('step-out');
         else await this.stepToNextSource('step-out');
         return;
       case 'pause':
+        if (this.nativePcode) {
+          this.respond(request, false, undefined, 'Pause while running is not supported by the native interpreter; use a breakpoint or terminate.');
+          return;
+        }
         this.respond(request);
         if (this.remoteEsp32) {
           await this.remoteRequest(`/pmachine/debug/session/pause?id=${encodeURIComponent(this.remoteSessionId)}`, { method: 'POST' });
@@ -370,7 +399,15 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
         return;
       case 'disconnect':
       case 'terminate':
-        if (this.remoteSessionId) {
+        if (this.nativePcode) {
+          if (this.nativeStarted && this.nativeChild?.exitCode === null && this.nativeChild?.signalCode === null) {
+            this.sendNativeCommand({ command: 'terminate' });
+            const ended = await this.nextNativeEvent();
+            if (ended.event === 'terminated') this.event('terminated');
+          } else if (this.nativeChild && this.nativeChild.exitCode === null && this.nativeChild.signalCode === null) {
+            this.nativeChild.kill();
+          }
+        } else if (this.remoteSessionId) {
           await this.remoteRequest(`/pmachine/debug/session?id=${encodeURIComponent(this.remoteSessionId)}`, { method: 'DELETE' });
           this.remoteSessionId = '';
         } else if (this.sessionId && this.debug) {
@@ -386,6 +423,10 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
 
   private async launch(configuration: any): Promise<void> {
     const program = path.resolve(this.root, String(configuration.program || 'src/towers-of-hanoi-program.pas'));
+    if (path.extname(program).toLowerCase() === '.pcode') {
+      await this.launchNativePcode(program, configuration);
+      return;
+    }
     let source = await (await import('node:fs/promises')).readFile(program, 'utf8');
     if (Number.isInteger(Number(configuration.esp32DiskCount))) {
       source = source.replace(/diskCount\s*:=\s*\d+/i, `diskCount := ${Number(configuration.esp32DiskCount)}`);
@@ -403,27 +444,29 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
       artifact = wfl;
       wflEntryLine = wfl.entryLine;
       this.event('output', { category: 'console', output: `WFL environment: ${wfl.environment}\n` });
-    } else if (language === 'cobolish') {
-      const format = String(configuration.cobolSourceFormat || 'auto').toLowerCase();
-      if (!['auto', 'fixed', 'free'].includes(format)) {
-        throw new Error(`Unsupported COBOL source format '${format}'; use auto, fixed, or free.`);
-      }
-      const fixedFormat = await import(pathToFileURL(path.join(this.root, '..', '..', 'languages', 'cobolish85', 'src', 'fixed-format.mjs')).href);
-      if (format === 'fixed' || (format === 'auto' && fixedFormat.isFixedCobolFormat(source))) {
-        source = fixedFormat.fixedToFree(source, { debug: /WITH\s+DEBUGGING\s+MODE/i.test(source) });
-      }
-      const compilerPath = pathToFileURL(path.join(this.root, 'aggregator', 'scripts', 'compile-tandem-cobol85-to-pcode.mjs')).href;
-      const compiler = await import(compilerPath);
-      artifact = compiler.compileTandemCobol85ToPcode(source, { fileName: path.basename(program) });
     } else {
-      const compilerPath = pathToFileURL(path.join(this.root, 'aggregator', 'scripts', language === 'pascalish'
-        ? 'compile-pascalish-program-antlr-to-pcode.mjs'
-        : 'compile-interoperable-language.mjs')).href;
-      const compiler = await import(compilerPath);
-      const compile = language === 'pascalish'
-        ? compiler.compilePascalishProgramWithAntlr
-        : compiler.compileVbishToPmachine;
-      artifact = compile(source, { fileName: path.basename(program) });
+      if (language === 'cobolish') {
+        const format = String(configuration.cobolSourceFormat || 'auto').toLowerCase();
+        if (!['auto', 'fixed', 'free'].includes(format)) {
+          throw new Error(`Unsupported COBOL source format '${format}'; use auto, fixed, or free.`);
+        }
+        const fixedFormat = await import(pathToFileURL(path.join(this.root, '..', '..', 'languages', 'cobolish85', 'src', 'fixed-format.mjs')).href);
+        if (format === 'fixed' || (format === 'auto' && fixedFormat.isFixedCobolFormat(source))) {
+          source = fixedFormat.fixedToFree(source, { debug: /WITH\s+DEBUGGING\s+MODE/i.test(source) });
+        }
+        const compilerPath = pathToFileURL(path.join(this.root, 'aggregator', 'scripts', 'compile-tandem-cobol85-to-pcode.mjs')).href;
+        const compiler = await import(compilerPath);
+        artifact = compiler.compileTandemCobol85ToPcode(source, { fileName: path.basename(program) });
+      } else {
+        const compilerPath = pathToFileURL(path.join(this.root, 'aggregator', 'scripts', language === 'pascalish'
+          ? 'compile-pascalish-program-antlr-to-pcode.mjs'
+          : 'compile-interoperable-language.mjs')).href;
+        const compiler = await import(compilerPath);
+        const compile = language === 'pascalish'
+          ? compiler.compilePascalishProgramWithAntlr
+          : compiler.compileVbishToPmachine;
+        artifact = compile(source, { fileName: path.basename(program) });
+      }
     }
     this.runtime = { program, language, artifact };
     this.animate = configuration.animate === true;
@@ -454,6 +497,271 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
     this.sessionId = this.state.id;
     await this.applyBreakpoints();
     this.event('process', { name: 'Pulse JS PMachine', systemProcessId: process.pid, isLocalProcess: true, startMethod: 'launch' });
+  }
+
+  private async launchNativePcode(program: string, configuration: any): Promise<void> {
+    const configuredMap = String(configuration.programMap || '').trim();
+    const stem = program.slice(0, -path.extname(program).length);
+    const mapCandidates = configuredMap
+      ? [path.isAbsolute(configuredMap) ? configuredMap : path.resolve(path.dirname(program), configuredMap)]
+      : [`${stem}.program.json`, `${program}.map.json`];
+    let programMapPath = '';
+    let programMap: Record<string, any> | null = null;
+    for (const candidate of mapCandidates) {
+      try {
+        const text = await fs.readFile(candidate, 'utf8');
+        programMap = JSON.parse(text) as Record<string, any>;
+        programMapPath = candidate;
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
+    if (!programMap || !programMapPath) {
+      throw new Error(`No program map found beside ${path.basename(program)}. Expected ${path.basename(stem)}.program.json; set programMap in the launch configuration to override.`);
+    }
+    if (!Array.isArray(programMap.targets) || !programMap.targets.includes('native')
+      || programMap.runtimeUnit?.kind !== 'service') {
+      throw new Error('The C++ PMachine debugger requires a native-target hosted-service P-code file and its matching program map.');
+    }
+    const pcodeText = await fs.readFile(program, 'utf8');
+    this.nativeLineNumbers = new Set(pcodeText.split(/\r?\n/)
+      .map((line, index) => ({ line: line.trim(), number: index + 1 }))
+      .filter(item => item.line && !item.line.startsWith('#') && !item.line.endsWith(':'))
+      .map(item => item.number));
+    this.runtime = {
+      program,
+      language: 'pulse-pcode',
+      artifact: { pcodeText, programMap, programMapPath },
+    };
+    const executable = await this.resolveNativeInterpreter(configuration);
+    const maxSteps = Number(configuration.maxSteps) > 0 ? Math.trunc(Number(configuration.maxSteps)) : 2000000;
+    this.nativeChild = spawn(executable, [
+      '--debug', '--pcode', program, '--program-map', programMapPath, '--max-steps', String(maxSteps),
+    ], { cwd: this.root, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    this.nativeChild.stdout.setEncoding('utf8');
+    this.nativeChild.stderr.setEncoding('utf8');
+    let stdoutBuffer = '';
+    this.nativeChild.stdout.on('data', (chunk: string) => {
+      stdoutBuffer += chunk;
+      for (;;) {
+        const newline = stdoutBuffer.indexOf('\n');
+        if (newline < 0) break;
+        const line = stdoutBuffer.slice(0, newline).trim();
+        stdoutBuffer = stdoutBuffer.slice(newline + 1);
+        if (!line) continue;
+        try {
+          this.pushNativeEvent(JSON.parse(line));
+        } catch (error) {
+          this.pushNativeEvent({ event: 'error', message: `Invalid native debugger event: ${String(error)}` });
+        }
+      }
+    });
+    this.nativeChild.stderr.on('data', (chunk: string) => {
+      this.event('output', { category: 'stderr', output: String(chunk) });
+    });
+    this.nativeChild.once('error', (error: Error) => {
+      this.pushNativeEvent({ event: 'error', message: `Unable to start the C++ PMachine: ${error.message}` });
+    });
+    this.nativeChild.once('close', (code: number | null, signal: string | null) => {
+      if (!this.terminated && code !== 0) {
+        this.pushNativeEvent({ event: 'error', message: `C++ PMachine exited (${code ?? signal ?? 'unknown'}).` });
+      }
+    });
+    this.nativePcode = true;
+    this.event('output', { category: 'console', output: `Native C++ PMachine loaded ${path.basename(program)} with ${path.basename(programMapPath)}.\n` });
+    this.event('process', { name: 'Native C++ PMachine', systemProcessId: this.nativeChild.pid, isLocalProcess: true, startMethod: 'launch' });
+  }
+
+  private async resolveNativeInterpreter(configuration: any): Promise<string> {
+    const configured = String(configuration.nativeInterpreterPath
+      || vscode.workspace.getConfiguration('pulse-pmachine').get<string>('nativeInterpreterPath', '')).trim();
+    if (configured) {
+      const executable = path.resolve(this.root, configured);
+      await fs.access(executable);
+      return executable;
+    }
+
+    const sourceDirectory = path.join(this.root, 'pmachines', 'native');
+    const buildDirectory = path.join(this.root, '.pulse-build', 'native-pmachine');
+    const executableName = process.platform === 'win32'
+      ? 'pulse_native_service_host.exe' : 'pulse_native_service_host';
+    const executableCandidates = [
+      path.join(buildDirectory, executableName),
+      path.join(buildDirectory, 'Debug', executableName),
+      path.join(buildDirectory, 'Release', executableName),
+    ];
+    for (const candidate of executableCandidates) {
+      try {
+        await fs.access(candidate);
+        return candidate;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
+    this.event('output', { category: 'console', output: 'Building the native C++ PMachine (first launch only)...\n' });
+    await this.runNativeBuild('cmake', ['-S', sourceDirectory, '-B', buildDirectory]);
+    await this.runNativeBuild('cmake', [
+      '--build', buildDirectory, '--config', 'Debug', '--target', 'pulse_native_service_host',
+    ]);
+    for (const candidate of executableCandidates) {
+      try {
+        await fs.access(candidate);
+        return candidate;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
+    throw new Error(`CMake completed but did not produce ${executableName}.`);
+  }
+
+  private runNativeBuild(command: string, args: string[]): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(command, args, { cwd: this.root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      let output = '';
+      const append = (chunk: string) => {
+        output += chunk;
+        this.event('output', { category: 'console', output: chunk });
+      };
+      child.stdout.setEncoding('utf8').on('data', append);
+      child.stderr.setEncoding('utf8').on('data', append);
+      child.once('error', reject);
+      child.once('close', (code: number | null) => {
+        if (code === 0) resolve();
+        else reject(new Error(`${command} ${args.join(' ')} failed (${code}):\n${output}`));
+      });
+    });
+  }
+
+  private pushNativeEvent(event: any): void {
+    const waiter = this.nativeWaiters.shift();
+    if (waiter) waiter.resolve(event);
+    else this.nativeEvents.push(event);
+  }
+
+  private nextNativeEvent(): Promise<any> {
+    if (this.nativeEvents.length) return Promise.resolve(this.nativeEvents.shift());
+    return new Promise((resolve, reject) => this.nativeWaiters.push({ resolve, reject }));
+  }
+
+  private sendNativeCommand(command: Record<string, unknown>): void {
+    if (!this.nativeChild || this.nativeChild.exitCode !== null || this.nativeChild.signalCode !== null) {
+      throw new Error('The native C++ PMachine process is not running.');
+    }
+    this.nativeChild.stdin.write(`${JSON.stringify(command)}\n`);
+  }
+
+  private async startNativePcodeRequest(): Promise<void> {
+    const endpoints = this.runtime?.artifact?.programMap?.serviceEndpoints || [];
+    const endpoint = endpoints[0] || {};
+    const method = String(this.configuration.requestMethod || endpoint.verb || 'GET').toUpperCase();
+    const requestPath = String(this.configuration.requestPath || endpoint.path || '/');
+    const body = String(this.configuration.requestBody ?? '');
+    const breakpoints = this.breakpoints
+      .filter(item => item.sourcePath === this.runtime.program && this.nativeLineNumbers.has(item.line))
+      .map(item => item.line);
+    this.nativeStarted = true;
+    this.sendNativeCommand({ command: 'start', method, path: requestPath, body, breakpoints });
+    await this.waitForNativeStop('entry');
+  }
+
+  private async waitForNativeStop(fallbackReason: 'entry' | 'breakpoint' | 'step'): Promise<void> {
+    for (;;) {
+      const item = await this.nextNativeEvent();
+      if (item.event === 'breakpointsSet') continue;
+      if (item.event === 'error') throw new Error(String(item.message || 'Native debugger failed.'));
+      if (item.event === 'stopped') {
+        this.state = {
+          status: 'paused',
+          pc: Number(item.pc),
+          callDepth: Number(item.callDepth || 0),
+          sourceLocation: {
+            sourceFile: this.runtime.program,
+            sourceLine: Number(item.line || 1),
+            sourceText: String(item.instruction || ''),
+          },
+          globals: item.globals || {},
+          locals: item.locals || {},
+          frames: Array.isArray(item.frames) ? item.frames : [],
+        };
+        this.event('stopped', {
+          reason: item.reason === 'breakpoint' ? 'breakpoint' : fallbackReason,
+          threadId: this.threadId,
+        });
+        return;
+      }
+      if (item.event === 'terminated') {
+        if (item.body !== undefined) {
+          this.event('output', {
+            category: Number(item.status) >= 400 ? 'stderr' : 'console',
+            output: `HTTP ${Number(item.status)} ${String(item.body)}\n`,
+          });
+        }
+        this.event('terminated');
+        return;
+      }
+      throw new Error(`Unexpected native debugger event: ${String(item.event)}`);
+    }
+  }
+
+  private async resumeNativePcode(command: 'continue' | 'step'): Promise<void> {
+    this.sendNativeCommand({ command });
+    await this.waitForNativeStop(command === 'step' ? 'step' : 'breakpoint');
+  }
+
+  private async stepOutNativePcode(): Promise<void> {
+    const depth = Number(this.state?.callDepth || 0);
+    if (depth === 0) {
+      await this.resumeNativePcode('step');
+      return;
+    }
+    for (let count = 0; count < 100000; count += 1) {
+      this.sendNativeCommand({ command: 'step' });
+      const prior = this.state;
+      const item = await this.nextNativeEvent();
+      if (item.event === 'terminated') {
+        this.event('terminated');
+        return;
+      }
+      if (item.event !== 'stopped') throw new Error(String(item.message || 'Native step-out failed.'));
+      this.applyNativeState(item);
+      if (Number(this.state.callDepth) < depth) {
+        this.event('stopped', { reason: 'step', threadId: this.threadId });
+        return;
+      }
+      if (this.state.pc === prior?.pc && Number(this.state.callDepth) === depth) {
+        throw new Error('Native PMachine did not advance while stepping out.');
+      }
+    }
+    throw new Error('Native PMachine step-out exceeded its instruction limit.');
+  }
+
+  private applyNativeState(item: any): void {
+    this.state = {
+      status: 'paused',
+      pc: Number(item.pc),
+      callDepth: Number(item.callDepth || 0),
+      sourceLocation: {
+        sourceFile: this.runtime.program,
+        sourceLine: Number(item.line || 1),
+        sourceText: String(item.instruction || ''),
+      },
+      globals: item.globals || {},
+      locals: item.locals || {},
+      frames: Array.isArray(item.frames) ? item.frames : [],
+    };
+  }
+
+  private nativeStackFrames(): DebugProtocol.StackFrame[] {
+    const frames = this.state?.frames || [];
+    if (!frames.length) return [this.stackFrame()];
+    return frames.map((frame: any, index: number) => ({
+      id: index + 1,
+      name: String(frame.name || (index === 0 ? 'P-code' : 'Caller')),
+      line: Math.max(1, Number(frame.line || this.state?.sourceLocation?.sourceLine || 1)),
+      column: 1,
+      source: { name: path.basename(this.runtime.program), path: this.runtime.program },
+    }));
   }
 
   private async startEsp32DebugSession(): Promise<void> {
@@ -866,6 +1174,29 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
       line: Number(item.line),
       sourcePath,
     })).filter((item: Breakpoint) => Number.isInteger(item.line)));
+    if (this.nativePcode && sourcePath === this.runtime?.program) {
+      const resolved = requested.map((item: any) => {
+        const line = Number(item.line);
+        const verified = Number.isInteger(line) && this.nativeLineNumbers.has(line);
+        return {
+          verified,
+          line,
+          ...(!verified ? { message: 'No executable P-code instruction on this line.' } : {}),
+        };
+      });
+      if (this.nativeStarted && !this.terminated) {
+        this.sendNativeCommand({
+          command: 'breakpoints',
+          breakpoints: resolved.filter((item: any) => item.verified).map((item: any) => item.line),
+        });
+        const acknowledgement = await this.nextNativeEvent();
+        if (acknowledgement.event !== 'breakpointsSet') {
+          throw new Error(String(acknowledgement.message || 'Native debugger did not accept breakpoints.'));
+        }
+      }
+      this.respond(request, true, { breakpoints: resolved });
+      return;
+    }
     if (this.sessionId) await this.applyBreakpoints();
     const resolved = this.state?.resolvedSourceBreakpoints || [];
     this.respond(request, true, {
@@ -1033,7 +1364,10 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
   }
 
   private variables(reference: number): DebugProtocol.Variable[] {
-    const values = reference === 1 ? this.state?.globals : this.state?.locals;
+    const values = reference === 1 ? this.state?.globals
+      : this.nativePcode && reference >= 100
+        ? this.state?.frames?.[reference - 100]?.locals
+        : this.state?.locals;
     const fields = this.runtime?.artifact?.programMap?.fields || {};
     return Object.entries(values || {})
       .filter(([name]) => this.runtime?.language !== 'cobolish' || !name.startsWith('__'))
@@ -1258,6 +1592,18 @@ async function runCurrentFile(context: vscode.ExtensionContext, output: vscode.O
     void vscode.window.showWarningMessage('Open a Pascalish program before running it.');
     return;
   }
+  if (path.extname(document.fileName).toLowerCase() === '.pcode') {
+    const folder = vscode.workspace.getWorkspaceFolder(document.uri);
+    const started = await vscode.debug.startDebugging(folder, {
+      type: 'pulse-pmachine',
+      request: 'launch',
+      name: `Debug ${path.basename(document.fileName)} in native C++ PMachine`,
+      runtime: 'native',
+      program: document.fileName,
+    });
+    if (!started) throw new Error('VS Code did not start the native P-code debug session.');
+    return;
+  }
   if (!pcodeLanguage(document)) {
     void vscode.window.showWarningMessage('Run on PMachine supports Pascalish, VBish, WFL, and MAPL programs.');
     return;
@@ -1374,30 +1720,43 @@ export function activate(context: vscode.ExtensionContext): void {
   const services = new ServicesViewProvider(output);
   const servers = new ServicesViewProvider(output, 'servers');
   const librarian = new DataLibrarianViewProvider(output);
+  const esp32Librarian = new Esp32LibrarianViewProvider(output);
+  const createAutoExpandingTreeView = <T extends vscode.TreeItem>(
+    viewId: string, provider: vscode.TreeDataProvider<T>
+  ): vscode.TreeView<T> => {
+    const treeView = vscode.window.createTreeView(viewId, { treeDataProvider: provider });
+    context.subscriptions.push(
+      treeView,
+      treeView.onDidChangeSelection(event => {
+        const item = event.selection[0];
+        if (item?.collapsibleState !== vscode.TreeItemCollapsibleState.Collapsed) return;
+        void treeView.reveal(item, { expand: true, focus: false, select: false }).then(undefined, error => {
+          output.appendLine(`Unable to expand ${viewId} item: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      })
+    );
+    return treeView;
+  };
   registerDataMapper(context, output);
-  const startLocalServices = (explicit: boolean) =>
-    ensureLocalServices(output, path.join(context.globalStorageUri?.fsPath ?? os.tmpdir(), 'local-services'), explicit).then(started => {
-      if (!started) return;
-      services.refresh();
-      servers.refresh();
-      librarian.refresh();
-    });
-  void startLocalServices(false);
   context.subscriptions.push(
-    vscode.commands.registerCommand('pulse-pmachine.startLocalServices', () => startLocalServices(true)),
     output,
     hanoiPanel,
     services,
     servers,
     librarian,
+    esp32Librarian,
+    createAutoExpandingTreeView('pulseCatalogStudio.sidebar', librarian),
+    createAutoExpandingTreeView('pulseCatalogStudio.esp32Librarian', esp32Librarian),
+    vscode.commands.registerCommand('pulse-pmachine.refreshEsp32Librarian', () => esp32Librarian.refresh()),
+    vscode.commands.registerCommand('pulse-pmachine.openEsp32LibrarianSchema', (item?: Parameters<typeof openEsp32LibrarianSchema>[0]) => openEsp32LibrarianSchema(item)),
     vscode.window.registerTreeDataProvider('pulse-pmachine.services', services),
     vscode.window.registerTreeDataProvider('pulse-pmachine.servers', servers),
-    vscode.window.registerTreeDataProvider('pulse-pmachine.dataLibrarian', librarian),
+    createAutoExpandingTreeView('pulse-pmachine.dataLibrarian', librarian),
     vscode.commands.registerCommand('pulse-pmachine.refreshLibrarian', () => librarian.refresh()),
     vscode.commands.registerCommand('pulse-pmachine.openLibrarianSchema', (item?: Parameters<typeof openLibrarianSchema>[0]) => openLibrarianSchema(item, librarian)),
     vscode.commands.registerCommand('pulse-pmachine.showDataLibrarian', () =>
       vscode.commands.executeCommand('pulse-pmachine.dataLibrarian.focus')),
-    vscode.workspace.onDidGrantWorkspaceTrust(() => { librarian.refresh(); void startLocalServices(false); }),
+    vscode.workspace.onDidGrantWorkspaceTrust(() => { librarian.refresh(); esp32Librarian.refresh(); }),
     vscode.commands.registerCommand('pulse-pmachine.refreshServices', () => services.refresh()),
     vscode.commands.registerCommand('pulse-pmachine.refreshServers', () => servers.refresh()),
     vscode.commands.registerCommand('pulse-pmachine.openServiceEndpoint', openServiceEndpoint),
@@ -1406,6 +1765,7 @@ export function activate(context: vscode.ExtensionContext): void {
         services.refresh();
         servers.refresh();
         librarian.refresh();
+        esp32Librarian.refresh();
       }
     }),
     vscode.debug.registerDebugAdapterDescriptorFactory('pulse-pmachine', new PulseDebugFactory(context.extensionUri)),

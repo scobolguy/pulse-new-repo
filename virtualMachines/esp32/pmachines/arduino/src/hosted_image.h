@@ -17,7 +17,7 @@ public:
     size_t size() const { return count; }
     size_t cacheHits = 0, pageReads = 0;
 private:
-    static constexpr size_t PAGE_BYTES = 512, CACHE_PAGES = 4, MAX_PAGES = 64;
+    static constexpr size_t PAGE_BYTES = 512, CACHE_PAGES = 4, MAX_PAGES = 256;
     struct Page {
         std::array<uint8_t, PAGE_BYTES> bytes{};
         HostedImage* owner = nullptr;

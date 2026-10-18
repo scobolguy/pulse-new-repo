@@ -28,7 +28,10 @@ Pascalish is a Pascal-based language with extensions for services, daemons, plac
 
 #### Service Declaration
 ```
-<service_decl> ::= 'service' <ident> <placement>? ';'? <block> '.'
+<service_decl> ::= 'service' <string_or_identifier> <placement>? ';'?
+                   { <service_requirement> } { <unit_decl> } <service_body>
+<service_requirement> ::= 'requires' 'service' <quoted_canonical_service_id> ';'
+<quoted_canonical_service_id> ::= <quoted_lowercase_hyphenated_service_id>
 ```
 
 #### Daemon Declaration

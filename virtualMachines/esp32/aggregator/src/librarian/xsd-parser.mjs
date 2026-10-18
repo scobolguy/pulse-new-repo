@@ -1,15 +1,28 @@
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compilePascalishProgramWithAntlr } from '../../scripts/compile-pascalish-program-antlr-to-pcode.mjs';
 import { createPascalishServiceHost } from '../../../pmachines/javascript/src/service-host.mjs';
 import { createFilesystemBindings } from '../../../pmachines/javascript/src/filesystem-bindings.mjs';
+import { createFilesystemServiceClient } from './filesystem-service-client.mjs';
+import { createPredigestedXsdStore } from './predigested-xsd-store.mjs';
 
 const CACHE_VALIDATION_CONCURRENCY = 8;
 
-export async function createPascalishXsdParser({ logger = console, schemaRoot } = {}) {
+export async function createPascalishXsdParser({
+  logger = console, schemaRoot, filesystemServiceUrl = '', predigestedRoot = ''
+} = {}) {
+  const filesystemClient = filesystemServiceUrl
+    ? createFilesystemServiceClient(filesystemServiceUrl)
+    : null;
   const storageRoots = { schemas: { path: schemaRoot, readOnly: true } };
-  const reader = await createFilesystemBindings(storageRoots, { maxFileBytes: 1000000 });
+  const reader = filesystemClient
+    ? { handlers: filesystemClient.bindings }
+    : await createFilesystemBindings(storageRoots, { maxFileBytes: 1000000 });
+  const predigestedStore = predigestedRoot
+    ? createPredigestedXsdStore(path.resolve(predigestedRoot))
+    : null;
   const sourcePath = fileURLToPath(new URL('../../../src/librarian/xsd-parser.pas', import.meta.url));
   const compiled = compilePascalishProgramWithAntlr(await fs.readFile(sourcePath, 'utf8'), {
     fileName: sourcePath, hostServices: true
@@ -18,7 +31,8 @@ export async function createPascalishXsdParser({ logger = console, schemaRoot } 
     compiled, collectorId: 'pulse-data-librarian-xsd-parser', httpPort: null, udpPort: null,
     maxBodyBytes: 1000000, maxResponseBytes: 1000000,
     desktopBudget: true, maxSteps: null, maxExecutionMs: null, maxEvents: 256,
-    storageRoots, maxFileBytes: 1000000, logger
+    storageRoots, maxFileBytes: 1000000, logger,
+    filesystemBindingOverrides: filesystemClient?.bindings
   });
   await host.start();
   const cache = new Map();
@@ -37,6 +51,32 @@ export async function createPascalishXsdParser({ logger = console, schemaRoot } 
     if (!Array.isArray(dependencies) || dependencies.some(item => typeof item.path !== 'string'
       || !/^[a-f0-9]{64}$/.test(item.hash))) throw new Error('Invalid Pascalish XSD dependency result');
     return { tree, dependencies };
+  }
+  async function currentPredigested(relativePath) {
+    if (!predigestedStore) return null;
+    const artifact = await predigestedStore.read(relativePath);
+    if (!artifact) return null;
+    for (let start = 0; start < artifact.dependencies.length; start += CACHE_VALIDATION_CONCURRENCY) {
+      const dependencies = artifact.dependencies.slice(start, start + CACHE_VALIDATION_CONCURRENCY);
+      const contents = await Promise.all(dependencies.map(dependency =>
+        reader.handlers['host.fs_read_text_auto']('schemas', dependency.path, { signal: readAbort.signal })));
+      if (contents.some((content, index) =>
+        createHash('sha256').update(content, 'utf16le').digest('hex') !== dependencies[index].hash)) {
+        return null;
+      }
+    }
+    readAbort.signal.throwIfAborted();
+    return artifact;
+  }
+  async function predigestFile(sourcePath, schemaPath) {
+    if (!predigestedStore) throw new Error('Predigested XSD storage is not configured');
+    const { tree, dependencies } = await dispatchParse(sourcePath, true);
+    const storedDependencies = dependencies.map(item => ({
+      path: item.path === sourcePath ? schemaPath : item.path,
+      hash: item.hash
+    }));
+    await predigestedStore.write(schemaPath, { tree, dependencies: storedDependencies });
+    return { tree, dependencies: storedDependencies };
   }
   async function parseUncached(content, key, file = false) {
     const { tree, dependencies } = await dispatchParse(content, file);
@@ -120,9 +160,16 @@ export async function createPascalishXsdParser({ logger = console, schemaRoot } 
       if (stopped) throw Object.assign(new Error('XSD parser is stopped'), { status: 503 });
       if (typeof relativePath !== 'string') throw new Error('Expected schema-relative path');
       relativePath = await reader.handlers['host.fs_resolve_relative']('schemas', 'root.xsd', relativePath, { signal: readAbort.signal });
+      const artifact = await currentPredigested(relativePath);
+      if (artifact) {
+        return { tree: artifact.tree, dependencies: artifact.dependencies.map(item => item.path) };
+      }
       const { tree, dependencies } = await dispatchParse(relativePath, true);
+      if (predigestedStore) await predigestedStore.write(relativePath, { tree, dependencies });
       return { tree, dependencies: [...new Set(dependencies.map(item => item.path))] };
     },
+    predigestFile,
+    removePredigested: relativePath => predigestedStore?.remove(relativePath) ?? false,
     getStatus: () => ({
       cachedEntries: cache.size, cachedBytes: cacheBytes, pendingParses: pending.size, stopped
     }),

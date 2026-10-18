@@ -2,6 +2,24 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createPascalishLibrarianSchemaCatalogRoutes } from '../../aggregator/src/librarian/schema-catalog-routes.mjs';
 
+test('Pascalish owns structure-mode normalization and preserves desktop query semantics', async t => {
+  const service = await createPascalishLibrarianSchemaCatalogRoutes({ logger: { warn() {}, error() {} } });
+  t.after(() => service.stop());
+  for (const [value, expected] of [
+    [undefined, 'cached'], [null, 'cached'], [true, 'cached'], [1, 'cached'],
+    [[], 'cached'], [{ mode: 'full' }, 'cached'], ['', 'cached'],
+    ['cached', 'cached'], [' LAZY ', 'cached'], ['\u00a0FULL\u2028', 'full'],
+    ['all', 'full'], ['true', 'full'], ['none', 'none'], [' FALSE ', 'none'],
+  ]) {
+    assert.equal(await service.structureMode(value), expected);
+  }
+  for (const value of ['invalid', 'full,cached', 'yes']) {
+    await assert.rejects(service.structureMode(value), error =>
+      error.invalidStructureMode === true && error.status === 400
+        && error.message === 'structure must be one of: cached, full, none');
+  }
+});
+
 test('Pascalish schema-catalog transport batches multi-megabyte catalogs without changing order or virtual duplication', async t => {
   const service = await createPascalishLibrarianSchemaCatalogRoutes({ logger: { warn() {}, error() {} } });
   t.after(() => service.stop());

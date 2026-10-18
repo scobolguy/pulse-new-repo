@@ -3,7 +3,10 @@ import { SERVICE_HOST_BINDINGS } from './service-host-bindings.mjs';
 export const HOST_CAPABILITIES_VERSION = 1;
 export const HOST_PROFILES = Object.freeze({
   js: Object.freeze({ profile: 'desktop', runtime: 'javascript', filesystem: true }),
-  esp32: Object.freeze({ profile: 'embedded', runtime: 'esp32', filesystem: false })
+  esp32: Object.freeze({
+    profile: 'embedded', runtime: 'esp32', filesystem: false,
+    capabilities: Object.freeze(['service.transaction'])
+  })
 });
 
 export function requiredHostCapabilities(instructions) {

@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { registerAlexaRoute } from './pulseAlexaSkill.mjs';
 import { callPulseMcp } from './pulseMcpClient.mjs';
+import { readServiceLifecycleConfig, createServiceLifecycleRuntime, describeBoundHttpListener, installServiceLifecycleMiddleware } from '../service-lifecycle-runtime.mjs';
 
 const MCP_HOST = process.env.PULSE_MCP_HOST || '127.0.0.1';
 const MCP_PORT = Number(process.env.PULSE_MCP_PORT || 4011);
@@ -117,8 +118,9 @@ export function createPulseMcpServer() {
   return server;
 }
 
-export function createPulseMcpApp() {
+export function createPulseMcpApp({ lifecycle = null } = {}) {
   const app = express();
+  if (lifecycle) installServiceLifecycleMiddleware(app, lifecycle);
 
   registerAlexaRoute(app);
 
@@ -175,11 +177,25 @@ export function createPulseMcpApp() {
 }
 
 export function startPulseMcpService({ host = MCP_HOST, port = MCP_PORT } = {}) {
-  const app = createPulseMcpApp();
-  const httpServer = app.listen(port, host, () => {
+  const config = readServiceLifecycleConfig({ serviceId: 'pulse-local-mcp' });
+  const lifecycle = createServiceLifecycleRuntime({ config });
+  const app = createPulseMcpApp({ lifecycle });
+  const httpServer = app.listen(port, host, async () => {
+    try {
+      const listener = describeBoundHttpListener(httpServer.address(), config);
+      await (await lifecycle).start(listener.endpoint, [listener]);
+    } catch (error) {
+      console.error('[MCP] Lifecycle initialization failed:', error.message);
+      httpServer.close();
+      process.exitCode = 1;
+      return;
+    }
     const address = httpServer.address();
     const listeningPort = typeof address === 'object' && address ? address.port : port;
     console.log(`[MCP] Pulse local MCP listening at http://${host}:${listeningPort}/mcp`);
+  });
+  httpServer.once('close', () => {
+    void lifecycle.then(runtime => runtime.stop()).catch(error => console.error('[MCP] Lifecycle shutdown failed:', error.message));
   });
   return httpServer;
 }

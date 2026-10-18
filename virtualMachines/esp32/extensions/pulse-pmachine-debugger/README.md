@@ -8,10 +8,10 @@ Install one `pulse-pmachine-debugger` VSIX to get these panels and commands.
 
 Run **Pulse Data Librarian: Browse Schemas** from the Command Palette, or expand
 **Pulse Data Librarian** in the Explorer sidebar. The dedicated view lists the
-Librarian catalog from `pulse-pmachine.backendUrl`; expand a schema to browse its
-fields, nested groups, and data types. Click a schema or field to open the schema's
-full metadata and structure as a JSON snapshot. Editing or saving that snapshot
-does not update the Librarian catalog.
+Librarian catalog from `pulse-pmachine.backendUrl`; select a schema or field group
+to expand it and lazy-load its fields and nested groups. Use the item's context
+menu to open the schema's full metadata and structure as a JSON snapshot. Editing
+or saving that snapshot does not update the Librarian catalog.
 
 Use the view's refresh button after catalog changes. Backend URL changes and
 granting workspace trust also refresh the view. Untrusted workspaces do not
@@ -23,7 +23,32 @@ This panel is included in extension version **0.1.13**. After installing the
 updated VSIX, run **Developer: Reload Window**. If hidden, use **View: Open View**
 and select **Pulse Data Librarian**.
 
+The extension is a network client only: it does not start the Aggregator,
+Data Librarian, or Data Mapper when the extension activates or workspace trust
+is granted. Manage those services separately and configure
+`pulse-pmachine.backendUrl` for the Aggregator. If it is unavailable, the views
+report the connection error instead of trying a separate local Librarian.
+
 ## Pulse Studio panels
+
+**Data Librarian (ESP32)** appears immediately below **Data Librarian** in Pulse
+Studio. Expand `pulse-librarian-s3-readonly` to browse its read-only schema
+directory, including all pages and nested directories. Listing requests are
+sent through `pulse-pmachine.backendUrl` to the Aggregator's logical-service
+transaction route; the client polls the returned transaction status for up to
+30 seconds and reports the tracking ID if the transaction remains pending.
+Refresh reloads the listing. Clicking a file opens its metadata as a JSON
+snapshot. Files are not expandable in the read-only profile, and this view does
+not request field parsing from a desktop Librarian.
+The ESP32 profile itself does not expose schema contents or field structures.
+Use the item's context menu to open its metadata snapshot. Network access
+requires workspace trust.
+
+Version **0.1.18** includes aggregator-only ESP32 catalog routing. After installing
+the updated VSIX, run **Developer: Reload Window**. The board must run firmware
+with `host.service_submit` and have the Pascalish read-only service installed
+with an explicit owner, report target and Filesystem binding. Board health alone
+does not establish Librarian readiness.
 
 The **Pulse Studio** activity-bar container includes Data Librarian, Data Mapper,
 Infrastructure, Deploy, and Node Inventory views, plus the VFL editor and
@@ -118,6 +143,9 @@ To start from real schemas, run **Pulse Data Mapper: Create MAPL Map**, then use
 and **Choose target schema** load the Librarian catalog through
 `pulse-pmachine.backendUrl` (default `http://127.0.0.1:4000`) and record the
 choice as `@sourceSchema` / `@targetSchema` directives plus the header type IDs.
+Librarian and Mapper requests are sent to their logical service IDs through the
+Aggregator transaction API; held work is polled for up to 30 seconds and
+uncertain work is reported rather than replayed.
 Field structures are not stored in the file: the designer loads them from the
 Librarian when the map opens or a schema is chosen. Offline, or for schemas that
 cannot be loaded, the field lists are inferred from the paths used in the MAPL
@@ -184,6 +212,30 @@ Open a Pascalish, VBish, WFL, or MAPL source file and select **Run on PMachine**
 
 JavaScript PMachine targets are kept separate from ESP32 upload targets in the picker. To run on the Hanoi board, choose the target whose description contains `192.168.2.115`. Run-to-completion ESP32 uploads omit the editor-only source map to reduce device memory usage; interactive debugging retains source mapping.
 
+## Debug compiled P-code with the native C++ PMachine
+
+Open a native-target hosted-service `.pcode` file and press **F5**, choose
+**Debug native P-code file**, or run **Pulse: Run on PMachine**. The first debug
+launch builds the C++ interpreter into `.pulse-build/native-pmachine`; CMake and
+a working Windows C++ toolchain must be installed. Set
+`pulse-pmachine.nativeInterpreterPath` to an existing executable to use a
+prebuilt interpreter instead.
+
+The matching program map is required. By default, `service.pcode` loads
+`service.program.json` beside it; set `programMap` in `launch.json` to select a
+different map. The map must declare the `native` target and a hosted HTTP
+service. The debug request uses the first declared endpoint; `requestMethod`,
+`requestPath`, and `requestBody` can override it. The interpreter supports only
+its documented native opcode and host-binding subset and rejects incompatible
+artifacts explicitly.
+
+The standard VS Code Debug view supports P-code instruction breakpoints,
+Continue, Step In/Over/Out, current and caller frames, Globals, Locals, and
+simple variable-name evaluation. P-code line numbers are physical lines in the
+`.pcode` file. A host binding executes atomically, and Pause while execution is
+running is not available; use a breakpoint or Stop. This mode runs one service
+request in the interpreter and does not start a long-lived HTTP server.
+
 The initial configuration debugs `src/towers-of-hanoi-program.pas` on the JavaScript PMachine and stops at the top-level program entry (`begin`, line 18) before executing it. Use the standard VS Code Continue, Step Over, Step In, Step Out, Pause, Stop, Call Stack, and Variables controls.
 
 Local `.cob` and `.cobol` debug sessions compile as Tandem COBOL-85, recognize numbered fixed-format cards automatically, and honor `cobolSourceFormat: "fixed"` or `"free"` when detection is not suitable. Local COBOL sessions provide the desktop text, date and intrinsic host functions plus filesystem-backed ISAM storage. By default, file assignments under the COBOL `data` grant persist in `.pulse-debug/cobol-data`; set `cobolDataDirectory` to choose another directory. Breakpoints map to source statements, and COBOL numeric variables display using their PICTURE width and scale.
@@ -194,7 +246,7 @@ Enable `animate` to step through source statements every second and print the cu
 
 ## Debugger regression tests
 
-From this extension directory, run `npm run compile` followed by `node --test test/debugger.test.mjs`. Tests cover three legal five-disk Hanoi executions (802 instructions each), JS source entry and recursive locals, source stepping, signed map transport, remote breakpoint edits, DAP error responses, and the editor's shared remote runner export, host/port transport, input validation, and HTTP failures. To include the live board test through the backend API in PowerShell, set `$env:PMACHINE_TEST_HOST = '192.168.2.115'` before running the tests. The live test creates and deletes its own debug session.
+From this extension directory, run `npm run compile` followed by `node --test test/debugger.test.mjs`. The workspace test `node --test testing/pmachines/native-service-host.test.mjs` builds the Windows C++ host and verifies Node/native HTTP parity plus P-code breakpoints, stepping, local values, and request completion. Extension tests cover three legal five-disk Hanoi executions (802 instructions each), JS source entry and recursive locals, fixed-format COBOL stepping, host calls and sequential-file storage, source stepping, signed map transport, remote breakpoint edits, DAP error responses, and the editor's shared remote runner export, host/port transport, input validation, and HTTP failures. To include the live board test through the backend API in PowerShell, set `$env:PMACHINE_TEST_HOST = '192.168.2.115'` before running the tests. The live test creates and deletes its own debug session.
 
 The adapter keeps language handling separate from runtime control. Pascalish uses `.pas`, Cobolish uses `.cob` or `.cobol`, and VBish uses `.bas`, `.vb`, or `.vbs`; all three compile through the shared source-map contract.
 

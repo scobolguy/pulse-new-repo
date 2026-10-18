@@ -8,18 +8,20 @@ export function registerQueueConfigRoutes(app, deps) {
     diffQueueConfigs,
     queueConfigMapFromWorkflowSymbols,
     systemRegistry,
-    resolveLibrarianOrigin,
+    serviceTransactions,
     IS_PRODUCTION_ENV,
     ALLOW_TEMP_QUEUES_IN_PRODUCTION
   } = deps;
 
   async function getAllowedDataTypeIds() {
     try {
-      const response = await fetch(`${resolveLibrarianOrigin()}/api/librarian/data-types`, { method: 'GET' });
-      if (!response.ok) {
+      const response = await serviceTransactions.request('pulse-data-librarian', {
+        method: 'GET', path: '/api/librarian/data-types',
+      });
+      if (response.status < 200 || response.status >= 300) {
         throw new Error(`Librarian returned ${response.status}`);
       }
-      const payload = await response.json();
+      const payload = response.body;
       const ids = new Map();
       for (const item of payload.types || []) {
         const canonicalId = String(item.canonicalId || item.id || item.logicalId || '').trim().toLowerCase();
@@ -31,8 +33,9 @@ export function registerQueueConfigRoutes(app, deps) {
       }
       ids.set('text-string', 'text-string');
       return ids;
-    } catch {
-      return new Map([['text-string', 'text-string']]);
+    } catch (error) {
+      console.error('[QUEUE-CONFIG] Data type service unavailable:', error.message);
+      throw error;
     }
   }
 

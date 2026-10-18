@@ -136,6 +136,78 @@ public class PascalishBaseListener implements PascalishListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
+	@Override public void enterDistributedTableDecl(PascalishParser.DistributedTableDeclContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitDistributedTableDecl(PascalishParser.DistributedTableDeclContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterBackingClause(PascalishParser.BackingClauseContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitBackingClause(PascalishParser.BackingClauseContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterDistributedKeyword(PascalishParser.DistributedKeywordContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitDistributedKeyword(PascalishParser.DistributedKeywordContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterTableKeyword(PascalishParser.TableKeywordContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitTableKeyword(PascalishParser.TableKeywordContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterBackedKeyword(PascalishParser.BackedKeywordContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitBackedKeyword(PascalishParser.BackedKeywordContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterByKeyword(PascalishParser.ByKeywordContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitByKeyword(PascalishParser.ByKeywordContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
 	@Override public void enterSubprogramDecl(PascalishParser.SubprogramDeclContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -407,6 +479,18 @@ public class PascalishBaseListener implements PascalishListener {
 	 * <p>The default implementation does nothing.</p>
 	 */
 	@Override public void exitTypeRef(PascalishParser.TypeRefContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterCacheType(PascalishParser.CacheTypeContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitCacheType(PascalishParser.CacheTypeContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *

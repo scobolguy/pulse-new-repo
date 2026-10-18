@@ -188,6 +188,143 @@ bool NetworkBindings::invoke(const std::string& op, const std::vector<HostValue>
         if (args[0].text.size() > BYTE_LIMIT) return fail("Text byte limit exceeded");
         result.text = encode(args[0].text); return true;
     }
+    if (op == "filesystem_post") {
+        const int port = args[1].integer, timeout = args[4].integer;
+        const auto& ip = args[0].text;
+        const auto& route = args[2].text;
+        const auto& body = args[3].text;
+        bool permitted = false;
+        for (const auto& peer : allowed)
+            if (peer.first == ip && peer.second == port) permitted = true;
+        if (!permitted) return fail("Network peer is not allowed");
+        if (port < 1 || port > 65535 || timeout < 1 || timeout > 2000
+            || route.empty() || route.size() > 128 || route[0] != '/'
+            || route.find("..") != std::string::npos || body.size() > 1024)
+            return fail("Invalid filesystem request bounds");
+        for (char ch : route) {
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                || (ch >= '0' && ch <= '9') || ch == '/' || ch == '_' || ch == '-'))
+                return fail("Invalid filesystem service route");
+        }
+        IPAddress address;
+        if (!address.fromString(ip.c_str())) return fail("Invalid network address");
+        const uint32_t started = millis();
+        last = Exchange{};
+        last.tcp = true; last.port = static_cast<uint16_t>(port);
+        last.budgetMs = static_cast<uint32_t>(timeout);
+        last.requestBytes = body.size();
+        snprintf(last.ip.data(), last.ip.size(), "%s", ip.c_str());
+        ++exchanges;
+        auto finish = [&](bool ok, const char* message) {
+            last.ok = ok; last.error = message; last.elapsedMs = millis() - started;
+            last.wifiStatus = WiFi.status(); last.rssi = WiFi.RSSI();
+            if (!ok) ++failures;
+            return ok ? true : fail(message);
+        };
+        WiFiClient client;
+        last.phase = "connect";
+        const bool connected = client.connect(address, static_cast<uint16_t>(port), timeout);
+        last.connectMs = millis() - started;
+        if (!connected) return finish(false, "Filesystem service connect failed");
+        std::string request;
+        request.reserve(body.size() + route.size() + 256);
+        request = "POST " + route + " HTTP/1.1\r\nHost: " + ip
+            + "\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: "
+            + std::to_string(body.size()) + "\r\n\r\n" + body;
+        last.phase = "write";
+        last.writtenBytes = client.write(reinterpret_cast<const uint8_t*>(request.data()), request.size());
+        last.writeMs = millis() - started - last.connectMs;
+        if (last.writtenBytes != request.size()) {
+            client.stop(); return finish(false, "Incomplete filesystem request write");
+        }
+        auto readLine = [&](std::string& line, size_t maximum) {
+            line.clear();
+            while (millis() - started < static_cast<uint32_t>(timeout)) {
+                while (client.available()) {
+                    const int value = client.read();
+                    if (value < 0) break;
+                    if (value == '\n') {
+                        if (!line.empty() && line.back() == '\r') line.pop_back();
+                        return true;
+                    }
+                    if (line.size() >= maximum) return false;
+                    line.push_back(static_cast<char>(value));
+                }
+                if (!client.connected() && !client.available()) return false;
+                delay(1);
+            }
+            return false;
+        };
+        last.phase = "headers";
+        std::string line;
+        if (!readLine(line, 128) || line.rfind("HTTP/1.", 0) != 0 || line.size() < 12
+            || line[8] != ' ' || line[9] < '1' || line[9] > '5'
+            || line[10] < '0' || line[10] > '9' || line[11] < '0' || line[11] > '9') {
+            client.stop(); return finish(false, "Invalid filesystem service status line");
+        }
+        const int status = (line[9] - '0') * 100 + (line[10] - '0') * 10 + (line[11] - '0');
+        size_t responseLength = 0, headerBytes = 0;
+        bool hasLength = false;
+        while (readLine(line, 256)) {
+            headerBytes += line.size() + 2;
+            if (headerBytes > 1024) {
+                client.stop(); return finish(false, "Filesystem response headers exceed limit");
+            }
+            if (line.empty()) break;
+            const size_t colon = line.find(':');
+            if (colon == std::string::npos) {
+                client.stop(); return finish(false, "Invalid filesystem response header");
+            }
+            std::string name = line.substr(0, colon), value = line.substr(colon + 1);
+            for (char& ch : name) if (ch >= 'A' && ch <= 'Z') ch += 'a' - 'A';
+            while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) value.erase(value.begin());
+            if (name == "content-length") {
+                if (value.empty() || value.size() > 5) {
+                    client.stop(); return finish(false, "Invalid filesystem response length");
+                }
+                size_t parsed = 0;
+                for (char ch : value) {
+                    if (ch < '0' || ch > '9') {
+                        client.stop(); return finish(false, "Invalid filesystem response length");
+                    }
+                    parsed = parsed * 10 + static_cast<size_t>(ch - '0');
+                }
+                if (parsed > 2048) {
+                    client.stop(); return finish(false, "Filesystem response exceeds limit");
+                }
+                responseLength = parsed; hasLength = true;
+            } else if (name == "transfer-encoding" && value != "identity") {
+                client.stop(); return finish(false, "Chunked filesystem responses are not supported");
+            }
+        }
+        if (!line.empty() || !hasLength) {
+            client.stop(); return finish(false, "Incomplete filesystem response headers");
+        }
+        last.phase = "body";
+        std::string responseBody;
+        responseBody.reserve(responseLength);
+        if (responseLength) last.firstByteMs = millis() - started;
+        while (responseBody.size() < responseLength
+            && millis() - started < static_cast<uint32_t>(timeout)) {
+            while (client.available() && responseBody.size() < responseLength) {
+                const int value = client.read();
+                if (value < 0) break;
+                responseBody.push_back(static_cast<char>(value));
+            }
+            if (responseBody.size() < responseLength && !client.connected() && !client.available()) break;
+            if (responseBody.size() < responseLength) delay(1);
+        }
+        last.receivedBytes = responseBody.size();
+        client.stop();
+        if (responseBody.size() != responseLength)
+            return finish(false, "Incomplete filesystem response body");
+        JsonDocument envelope;
+        envelope["status"] = status;
+        envelope["body"] = responseBody;
+        serializeJson(envelope, result.text);
+        last.phase = "complete";
+        return finish(true, "");
+    }
     if (op.rfind("bytes_", 0) == 0) {
         const auto& hex = args[0].text;
         if (!validHex(hex)) return fail("Invalid or oversized hex bytes");

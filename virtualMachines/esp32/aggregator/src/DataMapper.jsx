@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { fetchServiceResponse as fetch } from './service-lifecycle/browser-transport.mjs';
 
 const LazyDataMapperEditor = lazy(() => import('./archived-old-app/DataMapperEditor.jsx'));
 

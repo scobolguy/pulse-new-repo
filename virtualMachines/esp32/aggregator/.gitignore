@@ -69,3 +69,5 @@ public/assets/
 # Locally generated device credentials and their encryption key
 data/.credential-key
 data/camera-credentials.json
+deploy/cluster/sql-adapter.env
+deploy/cluster/rabbitmq-adapter.env

@@ -152,6 +152,7 @@ enum Opcode : uint8_t {
     OP_STREQ = 0x4E,             // Pop two strings, push 1 if equal else 0
     OP_STRNEQ = 0x4F,            // Pop two strings, push 1 if not equal else 0
     OP_MAP_RETURN = 0x50,
+    OP_CONCAT = 0x56,            // Concatenate two strings
     OP_DB_INSERT = 0x51,         // Pop one value per column, emit a row to the database sink
     OP_DB_SELECT = 0x53,         // Read one row through the host reader, push column values
     OP_DB_UPDATE = 0x54,         // Pop predicate and column values, emit an update to the sink
@@ -258,6 +259,15 @@ struct ExtendableStorage {
     size_t elementCount = 0;
     ExtendableValueSlot* slots = nullptr;
     bool usesPsram = false;
+};
+
+struct ExtendableStorageDiagnostics {
+    size_t declarationCount = 0;
+    size_t elementCount = 0;
+    size_t allocatedBytes = 0;
+    size_t psramBytes = 0;
+    size_t heapBytes = 0;
+    size_t globalsSnapshotOmittedElements = 0;
 };
 
 
@@ -389,6 +399,7 @@ struct ExtendableStorage {
         if (mnemonic == "AND") return OP_AND;
         if (mnemonic == "NOT") return OP_NOT;
         if (mnemonic == "STREQ") return OP_STREQ;
+        if (mnemonic == "CONCAT") return OP_CONCAT;
         if (mnemonic == "STRNEQ") return OP_STRNEQ;
         if (mnemonic == "HALT") return OP_HALT;
         if (mnemonic == "NOP") return OP_NOP;
@@ -711,6 +722,7 @@ public:
     void setEnumManager(::EnumManager* mgr) { enumManager = mgr; }
     void setExtendableDeclarations(const std::vector<ExtendableDeclaration>& declarations);
     const std::string& getExtendedAllocationError() const { return extendedAllocationError; }
+    ExtendableStorageDiagnostics getExtendableStorageDiagnostics() const;
     int openFile(const String &logicalName, const String &mode);
     bool closeFile(int handle);
     bool readLine(int handle, String &outLine);

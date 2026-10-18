@@ -176,9 +176,20 @@ deploymentDecl
   ;
 
 deploymentItem
-  : (SERVICE | PROGRAM | DAEMON) quotedString FILE quotedString QUEUE quotedString ARROW quotedString TARGETS quotedList STARTUP booleanLiteral serviceLifecycleClause? SEMICOLON
+  : hostedServiceDeploymentItem
+  | (SERVICE | PROGRAM | DAEMON) quotedString FILE quotedString QUEUE quotedString ARROW quotedString TARGETS quotedList STARTUP booleanLiteral serviceLifecycleClause? SEMICOLON
   | FLOW quotedString FILE quotedString TARGETS quotedList STARTUP booleanLiteral SEMICOLON
   | REMOVE SERVICE quotedString FROM TARGETS quotedList SEMICOLON
+  ;
+
+hostedServiceDeploymentItem
+  : HOSTED SERVICE quotedString FILE quotedString TARGETS quotedList STARTUP booleanLiteral
+    OWNER quotedString REPORT TO quotedString (REQUIRES quotedList)?
+    (BINDINGS LPAREN requirementBinding (COMMA requirementBinding)* RPAREN)? SEMICOLON
+  ;
+
+requirementBinding
+  : quotedString INSTANCE quotedString ENDPOINT quotedString READINESS quotedString
   ;
 
 serviceLifecycleClause
@@ -464,6 +475,14 @@ ENDIF: 'ENDIF';
 SERVICE: 'SERVICE';
 PROGRAM: 'PROGRAM';
 DAEMON: 'DAEMON';
+HOSTED: 'HOSTED';
+REQUIRES: 'REQUIRES';
+BINDINGS: 'BINDINGS';
+INSTANCE: 'INSTANCE';
+ENDPOINT: 'ENDPOINT';
+READINESS: 'READINESS';
+OWNER: 'OWNER';
+REPORT: 'REPORT';
 PERSISTENT: 'PERSISTENT';
 MIN_INSTANCES: 'MIN_INSTANCES';
 MAX_INSTANCES: 'MAX_INSTANCES';

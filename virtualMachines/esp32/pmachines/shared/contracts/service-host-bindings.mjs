@@ -14,6 +14,12 @@ export function compactServiceHostProgramMap(map) {
     ...(map.requiredHostCapabilities !== undefined ? {
       requiredHostCapabilities: map.requiredHostCapabilities
     } : {}),
+    ...(map.serviceLifecycle !== undefined ? {
+      serviceLifecycle: {
+        version: map.serviceLifecycle.version,
+        requires: [...map.serviceLifecycle.requires]
+      }
+    } : {}),
     ...(Array.isArray(map.serviceEndpoints) ? {
       serviceEndpoints: map.serviceEndpoints.map(({ verb, path }) => ({ verb, path }))
     } : {}),
@@ -32,6 +38,9 @@ export const SERVICE_HOST_INTERNAL_BINDINGS = Object.freeze(new Set([
 ]));
 
 export const SERVICE_HOST_BINDINGS = Object.freeze({
+  'host.infrastructure_probe': {
+    arity: 0, args: [], result: 'string', capability: 'infrastructure.readiness', desktopOnly: true,
+  },
   'host.bluetooth_read': { arity: 1, args: ['integer'], result: 'string', capability: 'bluetooth.discovery', desktopOnly: true },
   'host.bluetooth_status': { arity: 0, args: [], result: 'string', capability: 'bluetooth.discovery', desktopOnly: true },
   ...Object.fromEntries([
@@ -60,8 +69,8 @@ export const SERVICE_HOST_BINDINGS = Object.freeze({
   ...Object.fromEntries(['attribute', 'qname_local', 'qname_namespace'].map(name =>
     [`host.xml_${name}`, { arity: 3, args: ['integer', 'integer', 'string'], result: 'string', desktopOnly: true }])),
   'host.xml_attribute_integer': { arity: 4, args: ['integer', 'integer', 'string', 'integer'], result: 'integer', desktopOnly: true },
-  'host.json_has': { arity: 2, args: ['string', 'string'], result: 'integer', desktopOnly: true },
-  'host.json_kind': { arity: 1, args: ['string'], result: 'string', desktopOnly: true },
+  'host.json_has': { arity: 2, args: ['string', 'string'], result: 'integer' },
+  'host.json_kind': { arity: 1, args: ['string'], result: 'string' },
   'host.json_parse_value': { arity: 1, args: ['string'], result: 'integer', desktopOnly: true },
   'host.json_node_kind': { arity: 2, args: ['integer', 'integer'], result: 'string', desktopOnly: true },
   'host.json_node_member': { arity: 3, args: ['integer', 'integer', 'string'], result: 'integer', desktopOnly: true },
@@ -77,15 +86,6 @@ export const SERVICE_HOST_BINDINGS = Object.freeze({
   'host.text_split_lines': { arity: 1, args: ['string'], result: 'string', desktopOnly: true },
   'host.string_lower': { arity: 1, args: ['string'], result: 'string', desktopOnly: true },
   'host.string_upper': { arity: 1, args: ['string'], result: 'string', desktopOnly: true },
-  'host.string_replace': { arity: 4, args: ['string', 'string', 'string', 'string'], result: 'string', desktopOnly: true },
-  'host.string_compare': { arity: 2, args: ['string', 'string'], result: 'integer', desktopOnly: true },
-  'host.number_parse_integer': { arity: 1, args: ['string'], result: 'string', desktopOnly: true },
-  'host.number_compare': { arity: 2, args: ['string', 'string'], result: 'integer', desktopOnly: true },
-  'host.text_hash_utf8': { arity: 1, args: ['string'], result: 'string', desktopOnly: true },
-  'host.date_iso': { arity: 1, args: ['string'], result: 'string', desktopOnly: true },
-  'host.date_parse': { arity: 1, args: ['string'], result: 'string', desktopOnly: true },
-  'host.date_now': { arity: 0, args: [], result: 'string', desktopOnly: true },
-  'host.json_remove': { arity: 2, args: ['string', 'string'], result: 'string', desktopOnly: true },
   'host.string_length': { arity: 1, args: ['string'], result: 'integer', desktopOnly: true },
   'host.cobol_char': { arity: 1, args: ['number'], result: 'string', desktopOnly: true },
   'host.cobol_ord': { arity: 1, args: ['string'], result: 'integer', desktopOnly: true },
@@ -110,6 +110,15 @@ export const SERVICE_HOST_BINDINGS = Object.freeze({
   'host.math_annuity': { arity: 2, args: ['number', 'number'], result: 'decimal', desktopOnly: true },
   'host.math_random': { arity: 0, args: [], result: 'decimal', desktopOnly: true },
   'host.math_random_seeded': { arity: 1, args: ['number'], result: 'decimal', desktopOnly: true },
+  'host.string_replace': { arity: 4, args: ['string', 'string', 'string', 'string'], result: 'string', desktopOnly: true },
+  'host.string_compare': { arity: 2, args: ['string', 'string'], result: 'integer', desktopOnly: true },
+  'host.number_parse_integer': { arity: 1, args: ['string'], result: 'string', desktopOnly: true },
+  'host.number_compare': { arity: 2, args: ['string', 'string'], result: 'integer', desktopOnly: true },
+  'host.text_hash_utf8': { arity: 1, args: ['string'], result: 'string', desktopOnly: true },
+  'host.date_iso': { arity: 1, args: ['string'], result: 'string', desktopOnly: true },
+  'host.date_parse': { arity: 1, args: ['string'], result: 'string', desktopOnly: true },
+  'host.date_now': { arity: 0, args: [], result: 'string', desktopOnly: true },
+  'host.json_remove': { arity: 2, args: ['string', 'string'], result: 'string', desktopOnly: true },
   'host.string_index': { arity: 2, args: ['string', 'string'], result: 'integer', desktopOnly: true },
   'host.string_slice': { arity: 3, args: ['string', 'integer', 'integer'], result: 'string', desktopOnly: true },
   'host.capabilities': { arity: 0, result: 'string', desktopOnly: true },
@@ -121,15 +130,6 @@ export const SERVICE_HOST_BINDINGS = Object.freeze({
   'host.fs_mkdir': { arity: 2, args: ['string', 'string'], result: 'integer', capability: 'filesystem.write', desktopOnly: true },
   'host.fs_rename': { arity: 3, args: ['string', 'string', 'string'], result: 'integer', capability: 'filesystem.write', desktopOnly: true },
   'host.fs_delete': { arity: 2, args: ['string', 'string'], result: 'integer', capability: 'filesystem.write', desktopOnly: true },
-  'host.clock': { arity: 0, result: 'integer' },
-  'host.event_body': { arity: 0, result: 'string' },
-  'host.event_bytes': { arity: 0, result: 'string' },
-  'host.event_peer': { arity: 0, result: 'string' },
-  'host.event_port': { arity: 0, result: 'integer' },
-  'host.event_method': { arity: 0, result: 'string' },
-  'host.event_path': { arity: 0, result: 'string' },
-  'host.event_query': { arity: 1, args: ['string'], result: 'string' },
-  'host.map_apply': { arity: 2, args: ['string', 'string'], result: 'string' },
   'host.isam_open': { arity: 4, args: ['string', 'string', 'string', 'string'], result: 'integer', capability: 'filesystem.read', desktopOnly: true },
   'host.isam_read': { arity: 2, args: ['integer', 'string'], result: 'string', capability: 'filesystem.read', desktopOnly: true },
   'host.isam_read_alt': { arity: 3, args: ['integer', 'string', 'string'], result: 'string', capability: 'filesystem.read', desktopOnly: true },
@@ -143,6 +143,15 @@ export const SERVICE_HOST_BINDINGS = Object.freeze({
   'host.isam_status': { arity: 1, args: ['integer'], result: 'string', capability: 'filesystem.read', desktopOnly: true },
   'host.isam_close': { arity: 1, args: ['integer'], result: 'integer', capability: 'filesystem.read', desktopOnly: true },
   'host.isam_close_lock': { arity: 1, args: ['integer'], result: 'integer', capability: 'filesystem.read', desktopOnly: true },
+  'host.clock': { arity: 0, result: 'integer' },
+  'host.event_body': { arity: 0, result: 'string' },
+  'host.event_bytes': { arity: 0, result: 'string' },
+  'host.event_peer': { arity: 0, result: 'string' },
+  'host.event_port': { arity: 0, result: 'integer' },
+  'host.event_method': { arity: 0, result: 'string' },
+  'host.event_path': { arity: 0, result: 'string' },
+  'host.event_query': { arity: 1, args: ['string'], result: 'string' },
+  'host.map_apply': { arity: 2, args: ['string', 'string'], result: 'string' },
   'host.text_header': { arity: 2, args: ['string', 'string'], result: 'string' },
   'host.text_lower': { arity: 1, args: ['string'], result: 'string' },
   'host.text_index': { arity: 2, args: ['string', 'string'], result: 'integer' },
@@ -162,12 +171,12 @@ export const SERVICE_HOST_BINDINGS = Object.freeze({
   'host.json_set': { arity: 3, args: ['string', 'string', 'scalar'], result: 'string' },
   'host.json_embed': { arity: 3, args: ['string', 'string', 'string'], result: 'string' },
   'host.json_merge': { arity: 2, args: ['string', 'string'], result: 'string' },
-  'host.json_array_count': { arity: 1, args: ['string'], result: 'integer', desktopOnly: true },
-  'host.json_array_get': { arity: 2, args: ['string', 'integer'], result: 'string', desktopOnly: true },
-  'host.json_array_append': { arity: 2, args: ['string', 'string'], result: 'string', desktopOnly: true },
-  'host.json_array_set': { arity: 3, args: ['string', 'integer', 'string'], result: 'string', desktopOnly: true },
-  'host.json_array_remove': { arity: 2, args: ['string', 'integer'], result: 'string', desktopOnly: true },
-  'host.json_format': { arity: 2, args: ['string', 'integer'], result: 'string', desktopOnly: true },
+  'host.json_array_count': { arity: 1, args: ['string'], result: 'integer' },
+  'host.json_array_get': { arity: 2, args: ['string', 'integer'], result: 'string' },
+  'host.json_array_append': { arity: 2, args: ['string', 'string'], result: 'string' },
+  'host.json_array_set': { arity: 3, args: ['string', 'integer', 'string'], result: 'string' },
+  'host.json_array_remove': { arity: 2, args: ['string', 'integer'], result: 'string' },
+  'host.json_format': { arity: 2, args: ['string', 'integer'], result: 'string' },
   'host.json_append': { arity: 3, args: ['string', 'string', 'scalar'], result: 'string' },
   'host.raise_error': { arity: 1, args: ['string'], result: 'integer' },
   'host.table_get': { arity: 2, args: ['string', 'string'], result: 'string' },
@@ -205,5 +214,13 @@ export const SERVICE_HOST_BINDINGS = Object.freeze({
   'host.buffer_release': { arity: 1, args: ['integer'], result: 'integer' },
   'host.tcp_exchange': { arity: 6, args: ['string', 'integer', 'string', 'integer', 'integer', 'integer'], result: 'string' },
   'host.tcp_exchange_buffer': { arity: 6, args: ['string', 'integer', 'string', 'integer', 'integer', 'integer'], result: 'integer' },
-  'host.udp_exchange': { arity: 5, args: ['string', 'integer', 'string', 'integer', 'integer'], result: 'string' }
+  'host.udp_exchange': { arity: 5, args: ['string', 'integer', 'string', 'integer', 'integer'], result: 'string' },
+  'host.filesystem_post': {
+    arity: 5, args: ['string', 'integer', 'string', 'string', 'integer'],
+    result: 'string', capability: 'filesystem.remote'
+  },
+  'host.service_submit': {
+    arity: 3, args: ['string', 'string', 'string'],
+    result: 'string', capability: 'service.transaction', nativeOnly: true
+  }
 });

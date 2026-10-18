@@ -44,7 +44,11 @@ programDecl
     ;
 
 serviceDecl
-    : 'service' stringOrIdent placement? ';'? unitDecl* (serviceBody | serviceEndpoint* 'end')? unitEnd
+    : 'service' stringOrIdent placement? ';'? serviceRequirementDecl* unitDecl* (serviceBody | serviceEndpoint* 'end')? unitEnd
+    ;
+
+serviceRequirementDecl
+    : 'requires' 'service' STRING ';'
     ;
 
 daemonDecl

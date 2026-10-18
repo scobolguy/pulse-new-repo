@@ -14,6 +14,192 @@ Main capabilities:
 live UDP beacon or PMachine announcement; stale and probe-only entries are
 excluded, and no ESP32 addresses or sample nodes are seeded into the inventory.
 
+## Port-only LAN discovery
+
+Standalone lifecycle-aware services without `PULSE_AGGREGATOR_URLS` broadcast a
+version-1 discovery request on `UDP_PORT` (default `4210`). The aggregator replies
+with its identity and actual bound HTTP listener ports. Correlated replies must
+advertise a LAN address matching their packet source; wildcard and loopback
+addresses are not remote endpoints. No HTTP port scan or localhost fallback is
+used. Discovery validation, jitter, scheduling and expiry live in
+[`discovery.pas`](../src/service-lifecycle/discovery.pas); the host supplies socket
+I/O and interface/listener facts.
+
+The JavaScript node CLI uses this bootstrap by default. Its explicit `--backend`,
+`--udp-announce-host`, and corresponding environment settings remain legacy
+overrides. `JS_PMACHINE_UDP_ANNOUNCE_PORT=0` disables its announcements. Queue
+managers without `--aggregator` use discovered targets for their heartbeats.
+Lifecycle services use actual listener addresses on each discovered LAN, so a
+wildcard bind does not require a manual advertised IP in this mode. An explicitly
+loopback-bound service is deliberately not advertised as remotely reachable.
+
+Discovery targets expire after 30 seconds without a correlated response. Nodes
+still expire under the existing inventory freshness policy, and service readiness
+still requires fresh lifecycle reports. Nodes report to every discovered
+aggregator; discovery does not choose a deployment owner or replace dependency
+bindings. `PULSE_OWNER_AGGREGATOR_ID` remains deployment intent, not a discovered
+address. Without it, a node can appear in discovery but lifecycle reporting emits
+an explicit missing-owner error rather than claiming allocation readiness.
+Existing report permissions and bearer-token requirements are unchanged.
+
+### Prebuilt SQL Server and RabbitMQ
+
+Bundle [`infrastructure-adapter.mjs`](./infrastructure-adapter.mjs) beside an
+existing provider. Its readiness program is
+[`infrastructure-adapter.pas`](../src/service-lifecycle/infrastructure-adapter.pas).
+The adapter discovers aggregators using the UDP port and reports a separate
+external instance. SQL checks are read-only; AMQP checks open and close an
+authenticated channel without publishing or declaring queues. Provider failures
+are explicit, credentials are not advertised, and the adapter never starts or
+stops the provider.
+
+Local deployment configuration supplies:
+
+- `PULSE_INFRASTRUCTURE_PROVIDER=database` or `rabbitmq`
+- Stable `PULSE_SERVICE_INSTANCE_ID` and `PULSE_OWNER_AGGREGATOR_ID`
+- `FSM_MSSQL_CONNECTION_STRING` (optional `FSM_MSSQL_DRIVER=msnodesqlv8`) or
+  `RABBITMQ_URL`, including credentials only in private deployment configuration
+- `UDP_PORT` when the aggregator does not use `4210`
+
+The adapter HTTP port defaults to an ephemeral bound port. It reports a readiness
+endpoint, but no fabricated provider listener ports or allocatable HTTP work
+listener. Pulse broker/database-facing services remain the application-facing
+interfaces; this is not automatic credential distribution or transparent native
+SQL/AMQP connection configuration.
+
+[`docker-compose.infrastructure-adapters.yml`](./deploy/cluster/docker-compose.infrastructure-adapters.yml)
+bundles either companion using the `database` and `rabbitmq` profiles. Supply
+private `sql-adapter.env` / `rabbitmq-adapter.env` files beside the compose file
+(or set `SQL_ADAPTER_ENV_FILE` / `RABBITMQ_ADAPTER_ENV_FILE`). Do not commit these
+files. Host networking is intentional: ordinary Docker bridge networking does
+not carry LAN broadcasts. This packaging does not deploy the provider itself.
+On Windows, the same adapter entry point can run beside the existing provider
+with environment variables from the service's private deployment configuration.
+
+Broadcast discovery requires a LAN-visible IPv4 interface and allowed UDP
+traffic. It does not traverse routed subnets, NAT, AP client isolation or
+broadcast-blocking firewalls. No router/firewall settings are changed. New
+discovery authorization and trust enrollment are deferred.
+
+### Discovery verification
+
+From the ESP32 project directory, run the focused policy, transport, adapter and
+compatibility tests:
+
+```powershell
+node --test --test-concurrency=1 testing\aggregator\lan-discovery.test.mjs testing\pmachines\javascript-node-announcement.test.mjs testing\aggregator\node-discovery.test.mjs testing\aggregator\infrastructure-readiness.test.mjs
+```
+
+The opt-in socket test uses actual local IPv4 broadcast and an ephemeral HTTP
+listener; it does not change firewall settings or contact SQL Server/RabbitMQ:
+
+```powershell
+$env:PULSE_TEST_LAN_DISCOVERY = '1'
+node --test testing\aggregator\lan-discovery-network.test.mjs
+Remove-Item Env:\PULSE_TEST_LAN_DISCOVERY
+```
+
+This proves the local host's broadcast/reply plumbing, not reachability between
+two physical hosts. Separately verify discovery across the deployment LAN and
+provider readiness with the deployment's private credentials before rollout.
+Each aggregator must have a distinct identity; discovery does not assign one.
+
+## Service lifecycle and logical routing
+
+VS Code is a client, not a service launcher. Opening a workspace does not start
+services, and missing network services do not trigger a localhost fallback.
+
+Policy lives in Pascalish under [`src/service-lifecycle`](../src/service-lifecycle):
+dependency order, readiness, ownership, recovery, report acceptance and expiry,
+allocation, and transaction transitions. JavaScript and native hosts provide
+process, socket, HTTP and durable storage primitives.
+
+- Pascalish services declare intrinsic requirements with
+  `requires service 'pulse-filesystem';`. WFL `HOSTED SERVICE` resources bind those
+  requirements to explicit instances and declare an owner and report target.
+  Existing queue-based WFL resources keep their original meaning.
+- Only the configured owner manages a deployment. Observer aggregators do not
+  replace external instances or take ownership automatically.
+- Core startup follows Filesystem -> Data Librarian -> Data Mapper. A live
+  dependent stays running and reporting, but not-ready, while a prerequisite is
+  unavailable. A readiness timeout does not kill an otherwise live child.
+- Explicit start/stop requests and configured startup intent use one supervisor.
+  Desired intent survives owner restarts. Stopping an in-use prerequisite requires
+  explicit cascade, which stops dependents first.
+- Instances POST version-1 reports to `/api/runtime/instances/report`. Reports
+  identify service, instance, node, boot incarnation, monotonically increasing
+  sequence, owner, readiness and dependency bindings, and announce actual bound
+  `listeners: [{protocol, host, port}]`. Endpoint hints never supply missing ports.
+  Reports expire after 30 seconds; unobserved, stale or blocked instances are not
+  allocated. Legacy discovery records remain diagnostics, not allocation evidence.
+
+Configure deployment identity and bindings with
+`PULSE_OWNER_AGGREGATOR_ID`, `PULSE_SERVICE_INSTANCE_ID`, and
+`PULSE_SERVICE_BINDINGS` (JSON object). `PULSE_AGGREGATOR_URLS` (JSON array) is an
+optional explicit endpoint override, not required for LAN bootstrap.
+Use `PULSE_SERVICE_ADVERTISE_HOST` when a wildcard listener uses an explicit
+remote aggregator override. Remote reporting requires the
+normal runtime permissions; `PULSE_RUNTIME_REPORT_TOKEN` supplies bearer
+authentication. Local runtime bypass can be disabled with
+`PULSE_SERVICE_CONTROL_LOCAL_BYPASS=false`.
+
+Consumers request a **logical service**, not an instance or port:
+
+```text
+POST /api/runtime/services/pulse-data-librarian/transactions
+{"method":"GET","path":"/api/librarian/catalogs"}
+```
+
+The aggregator durably accepts work and returns HTTP 202 with `transactionId`,
+`status` and `statusUrl`. Poll `/api/runtime/transactions/<transactionId>` for
+`held`, `allocated`, `waiting-child`, `completed`, or `uncertain`. Completion has
+`result: {status, body}`. Clients time out after 30 seconds without deleting or
+replaying durable work. Ambiguous delivery remains uncertain for reconciliation;
+it is **never automatically replayed**.
+
+Native continuation replies identify a downstream transaction rather than keeping
+an ESP32 worker occupied. The aggregator persists the parent-child relationship,
+validates the declared dependency, and completes the original response when the
+child completes. Restarting the aggregator does not resend the parent.
+Native installs identify reporting targets as `{aggregatorId, endpoint}` records.
+Only the target matching the explicit owner supplies readiness. Dispatch carries
+`x-pulse-ingress-aggregator-id` alongside the parent transaction ID; continuation
+submission uses that configured target so parent and child share the same durable
+store. Missing or unknown ingress identities fail explicitly.
+
+Existing Librarian upload and Mapper proxy URLs use the same allocator. Ready
+requests preserve binary upload bytes and NDJSON streaming; unavailable requests
+return HTTP 202 tracking information instead of contacting a guessed endpoint.
+The Librarian and Mapper browser views poll held work using Pascalish-provided
+decisions, preserve tracking IDs on failure, and never resubmit the original
+request. Immediate responses retain live streaming and binary bodies.
+Pascalish bounds dispatch at 15 seconds, or 180 seconds for Mapper and MCP work
+to accommodate long-running queries and streams. Ordinary JSON requests are bounded at 64 KiB,
+ordinary results at 1 MB, uploads at approximately 50 MB, and proxy results at
+50 MB. A failed or oversized dispatched response is uncertain, not retried.
+Durable storage is currently capped at 10,000 records; there is no automatic
+deletion or operator replay API. Reconciliation and retention remain explicit
+operational work.
+
+Open `/public/service-deployment.html` on the aggregator for the live dependency
+graph, including external SQL Server and RabbitMQ observations. SQL readiness
+uses `SELECT 1` against the configured database; RabbitMQ readiness opens and
+closes an authenticated AMQP channel without declaring queues or publishing.
+External infrastructure is never launched or stopped by the process supervisor.
+Its headless reports do not invent listener ports or accept logical HTTP work.
+The Pascalish policy binds a RabbitMQ-backed Pulse Broker to RabbitMQ; legacy
+brokers are not falsely gated on RabbitMQ. Other consumers must explicitly declare
+their database requirements in the deployment manifest.
+
+The live dependency
+graph. It shows owned processes, reported instances, bound prerequisites,
+readiness, stale observations, transitions and instance details, including actual
+listeners. It works without VS Code and refreshes every five seconds. The graph
+is read-only and does not deploy services.
+
+Source changes do not install an extension, restart a running aggregator, or
+flash an ESP32. Those are separate, explicitly authorized rollout operations.
+
 ## Current Source Of Truth
 
 The Aggregator backend is the source of truth for runtime clustering and topology behavior.

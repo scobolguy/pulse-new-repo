@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pulse - Live deployment and readiness</title>
+  <style>
+    :root { color-scheme: dark; font: 15px system-ui, sans-serif; background:#101824; color:#e5edf6; }
+    body { margin:0; padding:24px; }
+    h1 { margin:0 0 8px; font-size:24px; }
+    header { display:flex; gap:20px; justify-content:space-between; flex-wrap:wrap; }
+    a { color:#83caff; }
+    button { font:inherit; color:inherit; background:#213047; border:1px solid #526580; border-radius:6px; padding:8px 12px; cursor:pointer; }
+    #status { padding:12px; background:#1c2b40; border-radius:8px; }
+    #status.error { border:2px solid #f4a661; }
+    .workspace { display:grid; grid-template-columns:minmax(0, 2fr) minmax(280px, 1fr); gap:20px; }
+    #graph { position:relative; min-height:250px; overflow:auto; }
+    #nodes { position:relative; display:grid; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:48px 24px; padding:20px; }
+    .node { text-align:left; min-height:110px; border-left:6px solid #8494a8; background:#1b293c; z-index:1; overflow-wrap:anywhere; }
+    .node.ready { border-color:#67d19b; }
+    .node.blocked, .node.not-ready { border-color:#f6c66c; }
+    .node.stale, .node.failed, .node.unobserved { border-color:#ef929a; }
+    .node strong, .node span { display:block; margin:4px 0; }
+    .node small { color:#b7c8dc; }
+    svg { position:absolute; top:0; left:0; pointer-events:none; }
+    #detail { white-space:pre-wrap; overflow-wrap:anywhere; max-height:70vh; overflow:auto; background:#172337; padding:16px; border-radius:8px; }
+    #events { max-height:180px; overflow:auto; }
+    .legend { color:#b7c8dc; }
+    @media (max-width:850px) { .workspace { grid-template-columns:1fr; } }
+    @media (prefers-reduced-motion: no-preference) { .node { transition:border-color .3s; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div><h1>Live deployment and readiness</h1><p>Read-only lifecycle observations. Arrows point from prerequisites to dependents.</p></div>
+    <nav><a href="/public/bob-console.html">Pulse console</a> <button id="refresh">Refresh</button> <button id="pause">Pause updates</button></nav>
+  </header>
+  <p id="status" role="status" aria-live="polite">Connecting to aggregator...</p>
+  <p class="legend">Ready / Blocked / Not-ready / Stopped / Stale / Unobserved - click an instance for bindings, owner, and readiness details.</p>
+  <div class="workspace">
+    <section id="graph" aria-label="Service dependency graph"><svg aria-hidden="true"></svg><div id="nodes"></div></section>
+    <aside><h2>Instance detail</h2><pre id="detail">Select a module or instance.</pre></aside>
+  </div>
+  <h2>Observed transitions</h2><ol id="events"></ol>
+  <script type="module">
+    import { deploymentGraph } from './service-deployment-model.mjs';
+    const status = document.querySelector('#status');
+    const nodes = document.querySelector('#nodes');
+    const svg = document.querySelector('svg');
+    const events = document.querySelector('#events');
+    const detail = document.querySelector('#detail');
+    const prior = new Map();
+    let current = [];
+    let paused = false;
+    let pending = false;
+    let lastSuccess = '';
+    let selected = '';
+    function drawEdges() {
+      svg.replaceChildren();
+      const parent = document.querySelector('#graph');
+      svg.setAttribute('width', parent.scrollWidth);
+      svg.setAttribute('height', parent.scrollHeight);
+      const buttons = new Map([...nodes.children].map(button => [button.dataset.id, button]));
+      for (const node of current) for (const dependency of node.dependencies) {
+        const source = buttons.get(dependency), target = buttons.get(node.id);
+        if (!source || !target) continue;
+        const origin = parent.getBoundingClientRect();
+        const a = source.getBoundingClientRect(), b = target.getBoundingClientRect();
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        const x1 = a.right - origin.left + parent.scrollLeft;
+        const y1 = a.top + a.height / 2 - origin.top + parent.scrollTop;
+        const x2 = b.left - origin.left + parent.scrollLeft;
+        const y2 = b.top + b.height / 2 - origin.top + parent.scrollTop;
+        line.setAttribute('d', `M${x1},${y1} L${x2},${y2} M${x2 - 7},${y2 - 4} L${x2},${y2} L${x2 - 7},${y2 + 4}`);
+        line.setAttribute('stroke', '#8aa3c2');
+        line.setAttribute('fill', 'none');
+        line.setAttribute('stroke-width', '2');
+        svg.append(line);
+      }
+    }
+    function render(payload) {
+      current = deploymentGraph(payload);
+      nodes.replaceChildren();
+      nodes.style.gridTemplateColumns = `repeat(${Math.max(1, ...current.map(node => node.level + 1))}, minmax(210px, 1fr))`;
+      const rows = new Map();
+      for (const node of current) {
+        const before = prior.get(node.id);
+        if (before && before !== node.state) {
+          const event = document.createElement('li');
+          event.textContent = `${new Date().toLocaleTimeString()} - ${node.label}: ${before} -> ${node.state}`;
+          events.prepend(event);
+          while (events.children.length > 50) events.lastElementChild.remove();
+        }
+        prior.set(node.id, node.state);
+        const button = document.createElement('button');
+        button.className = `node ${node.state}`;
+        button.style.gridColumn = node.level + 1;
+        rows.set(node.level, (rows.get(node.level) || 0) + 1);
+        button.style.gridRow = rows.get(node.level);
+        button.dataset.id = node.id;
+        const label = document.createElement('strong'); label.textContent = node.label;
+        const state = document.createElement('span'); state.textContent = node.state;
+        const identity = document.createElement('small'); identity.textContent = node.id;
+        button.append(label, state, identity);
+        button.addEventListener('click', () => { selected = node.id; detail.textContent = JSON.stringify(node.detail, null, 2); });
+        nodes.append(button);
+        if (selected === node.id) detail.textContent = JSON.stringify(node.detail, null, 2);
+      }
+      if (!current.length) nodes.textContent = 'No lifecycle instances observed.';
+      requestAnimationFrame(drawEdges);
+    }
+    async function refresh() {
+      if (pending) return;
+      pending = true;
+      try {
+        const response = await fetch('/api/runtime/lifecycle', { signal:AbortSignal.timeout(10000), cache:'no-store' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        render(payload);
+        lastSuccess = payload.observedAt;
+        status.className = '';
+        status.textContent = `${paused ? 'Updates paused. ' : 'Live - updates every 5 seconds. '}Last observation: ${lastSuccess}`;
+      } catch (error) {
+        status.className = 'error';
+        status.textContent = `Connection/observation error: ${error.message}. Displayed states are stale. Last successful observation: ${lastSuccess || 'none'}`;
+      } finally { pending = false; }
+    }
+    document.querySelector('#refresh').addEventListener('click', refresh);
+    document.querySelector('#pause').addEventListener('click', event => {
+      paused = !paused; event.target.textContent = paused ? 'Resume updates' : 'Pause updates';
+      status.textContent = paused ? `Updates paused. Last observation: ${lastSuccess || 'none'}` : 'Resuming updates...';
+      if (!paused) void refresh();
+    });
+    new ResizeObserver(drawEdges).observe(nodes);
+    await refresh();
+    setInterval(() => { if (!paused && !document.hidden) void refresh(); }, 5000);
+  </script>
+</body>
+</html>

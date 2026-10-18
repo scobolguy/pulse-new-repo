@@ -85,7 +85,7 @@ export function createRouteManifestDependencyFactories(deps = {}) {
     compileQueueDslSpec,
     diffQueueConfigs,
     queueConfigMapFromWorkflowSymbols,
-    resolveLibrarianOrigin,
+    serviceTransactions,
     serviceProcessManager,
     IS_PRODUCTION_ENV,
     ALLOW_TEMP_QUEUES_IN_PRODUCTION,
@@ -150,8 +150,7 @@ export function createRouteManifestDependencyFactories(deps = {}) {
     getWorkerDefaults,
     validateWorkerConfigUpdate,
     applyWorkerConfigUpdate,
-    routerWorkers,
-    resolveMapperOrigin
+    routerWorkers
   } = deps;
 
   return {
@@ -285,7 +284,7 @@ export function createRouteManifestDependencyFactories(deps = {}) {
       diffQueueConfigs,
       queueConfigMapFromWorkflowSymbols,
       systemRegistry,
-      resolveLibrarianOrigin,
+      serviceTransactions,
       IS_PRODUCTION_ENV,
       ALLOW_TEMP_QUEUES_IN_PRODUCTION
     }),
@@ -327,10 +326,10 @@ export function createRouteManifestDependencyFactories(deps = {}) {
     }),
     librarianProxy: () => ({
       express,
-      resolveLibrarianOrigin
+      serviceTransactions
     }),
     mapperProxy: () => ({
-      resolveMapperOrigin
+      serviceTransactions
     }),
     helloService: () => ({}),
     runtimeRegistry: () => ({

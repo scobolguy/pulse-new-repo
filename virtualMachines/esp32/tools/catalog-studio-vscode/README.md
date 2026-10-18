@@ -1,16 +1,17 @@
 # Pulse Studio infrastructure network views
 
 The **Pulse Studio** sidebar has separate **Data Librarian** and **Data Mapper**
-views, both visible by default. The extension activates at startup. Data Librarian
-loads registered data types directly, without an expandable wrapper node;
+views, both visible by default. Data Librarian loads registered data types
+directly, without an expandable wrapper node;
 Data Mapper loads saved maps and automatically expanded field connections directly
 from port 4200, without clicking a command or opening an editor tab. VS Code preserves any view visibility
 or collapsed-state customizations you make. Use the librarian view's **Refresh** button or
 **Pulse: Refresh Data Librarian** to reload the list. It reads
-`/api/librarian/data-types` from `pulse.catalogStudio.apiBase` and falls back to
-the Data Librarian service at `http://127.0.0.1:4300`; loading failures are
-shown as an error row with details in its tooltip. An empty registry is shown
-explicitly. Neither sidebar view requires the frontend dev server. Configure
+`/api/librarian/data-types` from `pulse.catalogStudio.apiBase`. The extension is
+a network client only: it does not start local services or try a second
+localhost endpoint when the configured Aggregator is unavailable. Loading
+failures are shown as an error row with details in its tooltip. An empty
+registry is shown explicitly. Neither sidebar view requires the frontend dev server. Configure
 `pulse.catalogStudio.mapperApiBase` to change the mapper origin (default
 `http://127.0.0.1:4200`). Mapper errors appear in the tree with details in the
 tooltip. Use **Pulse: Refresh Data Mapper** to reload maps and field connections.

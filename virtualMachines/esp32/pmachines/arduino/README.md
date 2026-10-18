@@ -178,6 +178,105 @@ The Data Librarian contract is
 [`device-descriptor.v1.json-schema`](../../aggregator/data/services/librarian/schemas/device-descriptor.v1.json-schema),
 type ID `device-descriptor`, canonical ID `type:device-descriptor`. It requires
 the three fields, accepts literal IPv4 addresses and rejects extra properties.
+
+## Aggregator-owned lifecycle transport
+
+Native hosted services whose compiled map declares `serviceLifecycle` require
+explicit install metadata: `ownerAggregatorId` and a `serviceLifecycle` object containing the exact compiled
+`requires` list and explicit dependency `bindings`. A binding contains
+`instanceId`, `endpoint`, and `readinessUrl`; the host never discovers or
+guesses a dependency port. The configured aggregator report URL must use plain
+HTTP with an explicit port and end in
+`/api/runtime/instances/report`. HTTPS is intentionally rejected by this
+bounded firmware transport.
+`reportTarget`/`reportTargets` are optional when the signed LAN policy is loaded.
+An explicit target list must still contain the explicit owner. Discovered targets
+never choose or replace that owner or any dependency instance binding.
+
+Each `reportTargets` entry must contain `aggregatorId` and `endpoint` (or
+`url`); a single `reportTarget` URL is explicitly associated with
+`ownerAggregatorId`. Multi-target URL-only lists are rejected because native
+code cannot safely infer which ingress aggregator owns a transaction. The
+configured owner target alone acknowledges readiness, regardless of its
+position in the target list.
+
+For logical submissions, the parent HTTP ingress must forward the exact
+`x-pulse-ingress-aggregator-id` header with the configured aggregator ID, in
+addition to `x-pulse-transaction-id`. Native resolves that ID only against
+the explicit overrides plus fresh Pascalish-discovered targets and submits to
+that matching endpoint; missing or
+unknown IDs fail closed. This ensures child transactions reach the same
+aggregator transaction store as their parent, without guessing an address.
+The parent must add this header centrally; requests lacking it can still
+serve non-continuation routes but cannot call `service_submit`.
+
+The host reports each installed lifecycle service with a per-install boot ID,
+monotonic sequence, actual ESP32 HTTP listener (`WiFi.localIP():80`), any
+service/daemon UDP listeners that were successfully bound, owner, dependency
+bindings, and local `/health` observation every 10 seconds. Reports
+and the bounded health probe run on a separate FreeRTOS task, not the hosted
+Pascalish worker. The configured owner aggregator acknowledges each report with
+its Pascalish-derived transitive readiness; `GET /ready` returns that decision
+and fails closed if the owner acknowledgement is missing or older than 30
+seconds. Dependency-chain decisions remain aggregator-hosted.
+
+### Zero-knowledge firmware bootstrap
+
+After the actual HTTP server starts, ESP32 firmware starts the shared
+`src\service-lifecycle\discovery.pas` policy using only the configured UDP parent
+port and existing node identity. No aggregator address, HTTP port, owner election,
+or prior HTTP artifact upload is needed. The generated signed PHI1 policy is
+embedded in firmware flash, streamed to a signature-specific FFS file in 512-byte
+writes on first boot, verified with the existing profile signing key, and executed
+by the existing single Pascalish worker. Its private endpoints are not installed
+as public HTTP routes. Bootstrap failure is logged and does not silently substitute
+native discovery decisions.
+
+The native adapter owns an ephemeral UDP socket, broadcasts policy-produced
+requests/beacons to the configured parent port, and feeds received datagrams and
+their actual source address to `/accept`. `/targets` handles expiry; `/poll` and
+`/request` handle retry decisions/correlation. `/advertise` produces the node
+endpoint from the HTTP listener that has actually started. The clock is the
+64-bit ESP monotonic clock modulo the policy's `clockPeriodMs`; retry starts with
+the `-1` sentinel and wrapped policy deadlines are never compared in C++.
+Datagrams are capped at 4096 bytes and four per turn, with the existing 32 KB free
+heap/8 KB largest-block admission floors. Discovery keeps its own image lease,
+preserving all six installed-service image slots and the shared four-page cache.
+
+Reports fan out to every fresh discovered aggregator. Explicit target URL/token
+overrides take precedence for the same aggregator ID. Logical continuations
+remain pinned to `x-pulse-ingress-aggregator-id`, and only the explicit owner may
+acknowledge readiness. HTTPS-only aggregators remain unsupported by the existing
+native HTTP transport; discovery records the actual endpoint without downgrading
+TLS or inventing another port.
+
+Regenerate the committed bootstrap after shared policy/compiler changes:
+
+```powershell
+node pmachines\arduino\compile-lan-discovery.mjs --native-probe
+node --test testing\pmachines\esp32-lan-discovery-image.test.mjs testing\pmachines\esp32-hosted-lifecycle-support.test.mjs
+cmake -S pmachines\native -B .pio\native-discovery-probe\build -G Ninja
+cmake --build .pio\native-discovery-probe\build --target pulse_native_discovery_probe -j 1
+.\.pio\native-discovery-probe\build\pulse_native_discovery_probe.exe .pio\native-discovery-probe\policy.pcode .pio\native-discovery-probe\policy.map.json
+pio run -e esp32dev -j 1
+```
+
+For a customized firmware signing profile, regenerate with matching
+`PCODE_SIGNING_KEY`/`PCODE_SIGNING_KEY_ID`; only the signature and key ID, never
+the key, enter the generated header. `lanDiscovery` in service-host status exposes
+policy load/socket state, instruction count, actual endpoint and learned-target
+count. Compilation/direct-native tests are not flashed-ESP32 or two-host LAN proof.
+
+Pascalish native services may call
+`host.service_submit(serviceId, path, bodyText): string`. It accepts a POST to
+an explicitly required/bound logical service and submits through the explicitly
+configured ingress aggregator target. It forwards the incoming
+`x-pulse-transaction-id` as `x-pulse-parent-transaction-id`. Accepted submissions
+return HTTP 202 and exactly
+`{"pulseContinuation":{"transactionId":"<uuid>","serviceId":"<service-id>"}}`;
+the aggregator owns durable waiting and final child-result resolution. Requests
+are bounded to a JSON object body of 1024 bytes and an absolute safe path. This
+primitive is ESP32-only; it does not add desktop lifecycle policy to firmware.
 Register it in an existing operational Librarian without overwriting a
 different v1 contract (run from the ESP32 project directory):
 
@@ -226,14 +325,22 @@ maximum. This streams directly to local FFS storage rather than buffering
 large form values. Interrupted uploads may leave an incomplete file, which
 cannot pass the signed-image install checks.
 The worker's 16 KB stack is reserved before artifact
-loading. Four small service/daemon image control objects are statically reserved
-for the two-service ceiling. Each preallocates four separate 512-byte FFS cache
-pages at image load, plus only the hashes required by its file (maximum 64 pages),
+loading. Six small service/daemon image control objects are statically reserved
+for the two-service ceiling. All images share four 512-byte FFS cache
+pages, plus only the hashes required by each file (maximum 64 pages for the
+default `bounded` profile, 256 for explicit `hostImageProfile: "extended"`),
 not a fully decoded instruction array or one large contiguous image-cache block.
 A shared-ownership lease returns a slot after a failed installation or stop,
 closing its file, invalidating the old cache and releasing page/hash allocations.
 Instruction reads do not grow the cache. Ownership, metadata, constant decoding
 and runtime JSON allocations still remain.
+The bounded profile remains 512 instructions/32768 encoded bytes. The extended
+profile is 4096 instructions/131072 encoded bytes, with the same 2048-byte constant,
+eight-argument, invocation-time, string-pool, and heap limits. Legacy text loading
+remains 8192 bytes/512 instructions; it is not extended. `encodeHostedImage`
+requires `{ profile: 'extended' }` to produce a larger image. The existing external
+`/ffs/upload_stream` endpoint retains its 32768-byte cap; the larger built-in
+bootstrap uses local streamed FFS writes instead.
 The `esp32dev` build uses 32-slot ArduinoJson pools instead of the 128-slot default,
 reducing each contiguous pool allocation without changing JSON field/value limits.
 This applies consistently to the entire profile to preserve ArduinoJson ABI

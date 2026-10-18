@@ -43,6 +43,7 @@ function Get-DirectStackStatus {
     Get-DirectServiceStatus -Id 'queue-manager-primary' -Port 4100 -HealthUrl 'http://127.0.0.1:4100/health'
     Get-DirectServiceStatus -Id 'mapper' -Port 4200 -HealthUrl 'http://127.0.0.1:4200/health'
     Get-DirectServiceStatus -Id 'librarian' -Port 4300 -HealthUrl 'http://127.0.0.1:4300/health'
+    Get-DirectServiceStatus -Id 'filesystem' -Port 4302 -HealthUrl 'http://127.0.0.1:4302/health'
   )
 }
 

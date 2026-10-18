@@ -4,6 +4,7 @@
 #include <mbedtls/md.h>
 #include <mbedtls/sha256.h>
 #include <cstring>
+#include <esp_heap_caps.h>
 
 namespace pmachine {
 namespace {
@@ -33,10 +34,19 @@ bool HostedImage::open(FederatedFileSystem& ffs, const String& path, const JsonD
                        const char* key, const char* keyId, std::string& error) {
     file = ffs.openReadFile(path);
     fileBytes = file ? file.size() : 0;
-    if (fileBytes < 20 || fileBytes > PAGE_BYTES * MAX_PAGES) {
+    const std::string profile = map["hostImageProfile"] | "bounded";
+    const bool extended = profile == "extended";
+    if ((!extended && profile != "bounded") || fileBytes < 20
+        || fileBytes > (extended ? PAGE_BYTES * MAX_PAGES : 32768)) {
         error = "Invalid hosted image file size"; return false;
     }
-    hashes.resize((fileBytes + PAGE_BYTES - 1) / PAGE_BYTES);
+    const size_t pages = (fileBytes + PAGE_BYTES - 1) / PAGE_BYTES;
+    const size_t hashBytes = pages * sizeof(hashes[0]);
+    if (ESP.getFreeHeap() < hashBytes + 32768
+        || heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < hashBytes + 4096) {
+        error = "Insufficient heap for authenticated hosted image pages"; return false;
+    }
+    hashes.resize(pages);
     const auto signing = map["signing"];
     if (std::string(signing["algorithm"] | "") != "hmac-sha256"
         || std::string(signing["keyId"] | "") != keyId
@@ -67,7 +77,7 @@ bool HostedImage::open(FederatedFileSystem& ffs, const String& path, const JsonD
     uint32_t instructionCount, constants;
     if (!readBytes(0, magic, 4, error) || memcmp(magic, "PHI1", 4)
         || !hex(4, 8, instructionCount, error) || !hex(12, 8, constants, error)
-        || instructionCount < 1 || instructionCount > 512
+        || instructionCount < 1 || instructionCount > (extended ? 4096 : 512)
         || constants > (PAGE_BYTES * MAX_PAGES - 20) / 2
         || fileBytes != 20 + instructionCount * 24 + constants * 2) {
         error = "Invalid hosted image header"; return false;

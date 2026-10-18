@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { pathToFileURL } from 'url';
+import { createHostedDeploymentPolicy } from './hosted-deployment-policy.mjs';
 import { compileWorkflowDSL } from './compile-workflow-dsl.mjs';
 import { buildVflDeployments, writeVflArtifacts } from './build-vfl-deployment.mjs';
 
@@ -1218,8 +1219,9 @@ export async function executeDeploymentPlan(compiled, dryRun = true, context = {
     flowBuild = await buildVflDeployments(compiled, { artifactRoot: context.artifactRoot || process.cwd() });
     compiled = flowBuild.compiled;
   }
+  const fetchImpl = context.fetchImpl || fetch;
   const serviceBaseUrl = String(context?.serviceBaseUrl || 'http://127.0.0.1:4000').replace(/\/+$/, '');
-  const nodesResponse = await fetch(`${serviceBaseUrl}/api/nodes`);
+  const nodesResponse = await fetchImpl(`${serviceBaseUrl}/api/nodes`);
   if (!nodesResponse.ok) throw new Error(`Node discovery failed with HTTP ${nodesResponse.status}`);
   const nodesPayload = await nodesResponse.json();
   const nodes = Array.isArray(nodesPayload) ? nodesPayload : (nodesPayload.nodes || []);
@@ -1246,7 +1248,7 @@ export async function executeDeploymentPlan(compiled, dryRun = true, context = {
       clusters.push({ request, matchedNodes: nodes.filter(node => request.nodes.includes(node.nodeId || node.nodeName || node.id)) });
       continue;
     }
-    const response = await fetch(`${serviceBaseUrl}/api/clusters`, {
+    const response = await fetchImpl(`${serviceBaseUrl}/api/clusters`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(request)
@@ -1266,7 +1268,7 @@ export async function executeDeploymentPlan(compiled, dryRun = true, context = {
             continue;
           }
           const url = `${serviceBaseUrl}/api/pmachine/deployments/${encodeURIComponent(resource.id)}?targetNodeId=${encodeURIComponent(targetNodeId)}`;
-          const response = await fetch(url, { method: 'DELETE' });
+          const response = await fetchImpl(url, { method: 'DELETE' });
           const payload = await response.json();
           if (!response.ok) throw new Error(`Removal of service ${resource.id} from ${targetNodeId} failed with HTTP ${response.status}: ${payload?.error || 'unknown error'}`);
           removals.push(payload);
@@ -1278,6 +1280,39 @@ export async function executeDeploymentPlan(compiled, dryRun = true, context = {
       const artifactRoot = path.resolve(String(context?.artifactRoot || process.cwd()));
       const pcodePath = path.resolve(artifactRoot, resource.fileName);
       const programMapPath = path.resolve(artifactRoot, String(resource.programMapFile || resource.fileName.replace(/\.pcode$/i, '.program.json')));
+      let hostedIntent = null;
+      if (resource.kind === 'hosted-service') {
+        let programMap;
+        try {
+          programMap = JSON.parse(await fs.readFile(programMapPath, 'utf8'));
+        } catch (error) {
+          throw new Error(`HOSTED SERVICE '${resource.id}' requires a readable compiled program map at ${programMapPath}: ${error.message}`);
+        }
+        const desiredMetadata = {
+          ownerAggregatorId: resource.ownerAggregatorId,
+          reportTarget: resource.reportTarget,
+          serviceLifecycle: resource.serviceLifecycle
+        };
+        const policy = await createHostedDeploymentPolicy({ logger: context.logger || console });
+        try {
+          hostedIntent = await policy.validate({
+            compiledProgramMap: programMap,
+            intent: {
+              serviceId: resource.id,
+              ownerAggregatorId: resource.ownerAggregatorId,
+              callerOwnerAggregatorId: context.ownerAggregatorId || '',
+              serviceLifecycle: resource.serviceLifecycle,
+              lifecycleVersion: resource.serviceLifecycle?.version,
+              requires: resource.serviceLifecycle?.requires,
+              bindings: resource.serviceLifecycle?.bindings,
+              deploymentMetadata: desiredMetadata
+            },
+            installAction: !dryRun
+          });
+        } finally {
+          await policy.stop();
+        }
+      }
       const request = {
         serviceName: resource.id,
         packageName: resource.fileName,
@@ -1292,7 +1327,12 @@ export async function executeDeploymentPlan(compiled, dryRun = true, context = {
           pcodePath,
           programMapPath,
           backendUrl: serviceBaseUrl,
-          source: 'wfl'
+          source: 'wfl',
+          ...(hostedIntent ? {
+            ownerAggregatorId: resource.ownerAggregatorId,
+            reportTarget: structuredClone(resource.reportTarget),
+            serviceLifecycle: hostedIntent
+          } : {})
         }
       };
 
@@ -1309,7 +1349,7 @@ export async function executeDeploymentPlan(compiled, dryRun = true, context = {
         }
       }
 
-      const response = await fetch(`${serviceBaseUrl}/api/pmachine/deployments`, {
+      const response = await fetchImpl(`${serviceBaseUrl}/api/pmachine/deployments`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(request)
@@ -1339,7 +1379,7 @@ export async function executeDeploymentPlan(compiled, dryRun = true, context = {
       artifactDeployments.push({ clusterId: artifact.clusterId, request, sourcePath });
       continue;
     }
-    const response = await fetch(`${serviceBaseUrl}/api/clusters/${encodeURIComponent(artifact.clusterId)}/deploy`, {
+    const response = await fetchImpl(`${serviceBaseUrl}/api/clusters/${encodeURIComponent(artifact.clusterId)}/deploy`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(request)

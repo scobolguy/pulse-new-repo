@@ -1,11 +1,33 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createJsonCollectionBindings } from '../../pmachines/javascript/src/json-collection-bindings.mjs';
+import { createJsonObjectBindings } from '../../pmachines/javascript/src/json-object-bindings.mjs';
 import { compilePascalishProgramWithAntlr } from '../../aggregator/scripts/compile-pascalish-program-antlr-to-pcode.mjs';
 import { createPascalishServiceHost } from '../../pmachines/javascript/src/service-host.mjs';
 import { encodeHostedImage } from '../../pmachines/shared/contracts/hosted-image.mjs';
 
 const bindings = createJsonCollectionBindings();
+test('shared JSONDocument primitives preserve types and reject missing or invalid fields', () => {
+  const object = createJsonObjectBindings();
+  let raw = object['host.json_merge']('{"text":"value","count":1}', '{"count":2}');
+  assert.equal(object['host.json_text'](raw, 'text'), 'value');
+  assert.equal(object['host.json_integer'](raw, 'count'), 2);
+  assert.equal(object['host.json_value'](raw, 'text'), '"value"');
+  raw = object['host.json_set'](raw, 'count', 3);
+  raw = object['host.json_embed'](raw, 'nested', '[true,null]');
+  assert.deepEqual(JSON.parse(raw), { text: 'value', count: 3, nested: [true, null] });
+  for (const value of ['null', '[]', 'broken']) {
+    assert.throws(() => object['host.json_merge'](value, '{}'));
+  }
+  assert.throws(() => object['host.json_text'](raw, 'count'), /Expected string/);
+  assert.throws(() => object['host.json_value'](raw, 'missing'), /Missing JSON field/);
+  assert.throws(() => object['host.json_set'](raw, '', 1), /Invalid JSON key/);
+  assert.throws(() => object['host.json_embed'](raw, 'nested', 'broken'), /Invalid embedded JSON/);
+  for (const value of [1.5, '1', -2147483649, 2147483648]) {
+    assert.throws(() => object['host.json_integer'](JSON.stringify({ value }), 'value'), /Invalid integer/);
+  }
+});
+
 test('JSON object removal checks types and removes only the requested own property', () => {
   const value = '{"__proto__":{"safe":true},"name":"retained","nested":{"name":"retained"}}';
   assert.deepEqual(JSON.parse(bindings['host.json_remove'](value, '__proto__')), {
@@ -48,7 +70,7 @@ test('invalid JSON, non-arrays and out-of-range indices never silently coerce or
   assert.equal(bindings['host.json_format']('null', 0), 'null');
 });
 
-test('JSONArray class executes in Pascalish and does not change existing JSONDocument portability', async t => {
+test('JSONArray class executes in Pascalish with native bindings and preserves JSONDocument portability', async t => {
   const compile = source => compilePascalishProgramWithAntlr(source, { hostServices: true });
   const compiled = compile(`service 'arrays'; use "JSONArrays"; var values: JSONArray;
 post '/'; begin
@@ -59,8 +81,8 @@ post '/'; begin
   if values.count() <> 2 then host.raise_error('Unexpected array length');
   return values.formatted(2)
 end end.`);
-  assert.deepEqual(compiled.programMap.targets, ['js']);
-  assert.throws(() => encodeHostedImage(compiled.pcodeText), /Desktop-only/);
+  assert.deepEqual(compiled.programMap.targets, ['js', 'esp32']);
+  assert.doesNotThrow(() => encodeHostedImage(compiled.pcodeText, { profile: 'extended' }));
   const host = await createPascalishServiceHost({
     compiled, collectorId: 'arrays', httpPort: null, udpPort: null, logger: { warn() {} }
   });
