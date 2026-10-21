@@ -2,9 +2,10 @@
 //
 // The JS PMachine (pmachines/javascript/src/runtime.mjs) is the reference: values, decimal
 // arithmetic, dynamic scope, BY REFERENCE slices, edited/display formatting and the
-// host bindings COBOL programs use (text, intrinsic math, dates and ISAM files) are
-// reproduced here exactly. The engine has no Arduino dependencies so it can be built and
-// verified on a desktop against the JS runtime.
+// host bindings COBOL programs use (text, intrinsic math and dates) are reproduced here
+// exactly. ISAM files stay with the desktop file manager and are reached through the host.
+// The engine has no Arduino dependencies so it can be built and verified on a desktop
+// against the JS runtime.
 #pragma once
 
 #include <cstddef>
@@ -19,25 +20,6 @@ namespace cobolvm {
 
 // True when the P-code text was produced by the COBOL compiler or uses COBOL-only opcodes.
 bool isCobolPcode(const std::string& text);
-
-// Backing store for ISAM file images. Paths are relative to a granted root alias.
-class IsamStorage {
-public:
-    virtual ~IsamStorage() = default;
-    virtual bool exists(const std::string& root, const std::string& path) = 0;
-    virtual bool readText(const std::string& root, const std::string& path, std::string& out, std::string& error) = 0;
-    virtual bool writeText(const std::string& root, const std::string& path, const std::string& text, std::string& error) = 0;
-};
-
-class MemoryIsamStorage : public IsamStorage {
-public:
-    bool exists(const std::string& root, const std::string& path) override;
-    bool readText(const std::string& root, const std::string& path, std::string& out, std::string& error) override;
-    bool writeText(const std::string& root, const std::string& path, const std::string& text, std::string& error) override;
-    void clear() { files.clear(); }
-private:
-    std::map<std::string, std::string> files;
-};
 
 // Argument or result of a host binding the engine does not implement itself.
 struct HostArg {
@@ -64,9 +46,10 @@ struct RunOptions {
     // Called every `yieldInterval` steps so a device can feed its watchdog.
     std::function<void()> onYield;
     size_t yieldInterval = 1024;
-    // ISAM file images; a per-run in-memory store is used when null.
-    IsamStorage* storage = nullptr;
-    // Host bindings outside the built-in set.
+    // Copy the final global frame into RunResult::globals.
+    bool collectGlobals = true;
+    // Delegated host bindings (host.isam_*: the ISAM file manager runs on the desktop).
+    // Arguments are already checked against the binding contract.
     std::function<bool(const std::string& name, const std::vector<HostArg>& args, HostArg& result, std::string& error)> hostFallback;
     // Uniform [0, 1) source for FUNCTION RANDOM without a seed.
     std::function<double()> random;

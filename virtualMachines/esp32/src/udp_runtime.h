@@ -27,6 +27,8 @@ struct UdpRuntimeContext {
     std::map<String, DiscoveredNode>* discoveredNodeTable = nullptr;
     String (*computeNodeCapabilityHash)() = nullptr;
     void (*onAlertMessage)(const String& payload, IPAddress sourceIp, uint16_t sourcePort) = nullptr;
+    // Invoked when an aggregator acknowledges this node's beacon and advertises its HTTP port.
+    void (*onAggregatorAck)(const char* aggregatorId, IPAddress sourceIp, uint16_t httpPort) = nullptr;
 };
 
 void udpRuntimeConfigureWifiCredentials(const String& ssid, const String& password);

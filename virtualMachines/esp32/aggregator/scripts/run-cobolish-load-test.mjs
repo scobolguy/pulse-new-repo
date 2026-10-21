@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import { compileCobolishToPmachine } from './compile-interoperable-language.mjs';
 import { compileConversionRuleToOps } from './compile-mapping-rule.mjs';
 import { attachPcodeSignature } from './pcode-signing.mjs';
+import { toRuntimeProgramMap, uploadFfsFile } from './esp32-runtime-artifacts.mjs';
 
 const BASE = (process.env.ESP32_BASE_URL || `http://${process.env.ESP32_HOST || '192.168.2.155'}`).replace(/\/+$/, '');
 const SOURCE_PATH = new URL('../../src/cbds/cobolish-demo/mt103-pacs008-load-test.cob', import.meta.url);
@@ -22,13 +23,7 @@ const INPUT = [
 ].join('\n');
 
 async function upload(file, body) {
-  const response = await fetch(`${BASE}/ffs/upload`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ file, body }),
-    signal: AbortSignal.timeout(30000)
-  });
-  if (!response.ok) throw new Error(`upload ${file} failed (${response.status}): ${await response.text()}`);
+  await uploadFfsFile(BASE, file, body);
 }
 
 async function execute() {
@@ -59,7 +54,7 @@ for (const entry of programMap.entries || []) {
   }
 }
 const pcode = artifact.pcodeText.endsWith('\n') ? artifact.pcodeText : `${artifact.pcodeText}\n`;
-const signedMap = attachPcodeSignature(programMap, pcode);
+const signedMap = attachPcodeSignature(toRuntimeProgramMap(programMap), pcode);
 await upload(REMOTE_PCODE, pcode);
 await upload(REMOTE_MAP, JSON.stringify(signedMap));
 

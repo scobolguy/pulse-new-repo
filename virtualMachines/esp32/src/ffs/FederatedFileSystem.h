@@ -82,6 +82,8 @@ public:
     FFSStatus write(const String &logicalName, const uint8_t *data, size_t len);
     FFSStatus read(const String &logicalName, std::vector<uint8_t> &outData);
     File openReadFile(const String &logicalName);
+    // Truncates and opens for seekable read/write (used for p-machine heap swap).
+    File openRandomAccessFile(const String &logicalName);
     FFSStatus remove(const String &logicalName);
     FFSStatus listFiles(std::vector<String> &outNames);
 

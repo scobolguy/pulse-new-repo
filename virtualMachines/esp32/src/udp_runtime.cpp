@@ -32,7 +32,6 @@ constexpr uint32_t kBeaconWarmupMs = 5000;
 bool beaconWarmupArmed = false;
 bool beaconWarmupComplete = false;
 uint32_t beaconWarmupStartedAt = 0;
-constexpr size_t kMaxDiscoveredNodes = 32;
 char incomingPacket[udp_ingress::kMaxPacketBytes + 1];
 std::atomic<uint32_t> incomingReceived{0};
 std::atomic<uint32_t> droppedOversized{0};
@@ -82,39 +81,6 @@ bool bindUdpSocket(WiFiUDP& socket, bool& ready, uint16_t& boundPort, uint16_t n
 
     boundPort = nextPort;
     return true;
-}
-
-void upsertDiscoveredNode(std::map<String, DiscoveredNode>* table, const String& id, const String& ip) {
-    if (table == nullptr || id.length() == 0 || ip.length() == 0) {
-        return;
-    }
-
-    const unsigned long now = millis();
-    auto existing = table->find(id);
-    if (existing != table->end()) {
-        existing->second.mac = id;
-        existing->second.ip = ip;
-        existing->second.lastSeen = now;
-        return;
-    }
-
-    if (table->size() >= kMaxDiscoveredNodes) {
-        auto oldest = table->begin();
-        for (auto it = table->begin(); it != table->end(); ++it) {
-            if (it->second.lastSeen < oldest->second.lastSeen) {
-                oldest = it;
-            }
-        }
-        if (oldest != table->end()) {
-            table->erase(oldest);
-        }
-    }
-
-    DiscoveredNode node;
-    node.mac = id;
-    node.ip = ip;
-    node.lastSeen = now;
-    (*table)[id] = node;
 }
 
 void sendNodeDetailsResponse(WiFiUDP& socket, const UdpRuntimeContext& context, IPAddress ip, uint16_t port, const String& capabilityHash, bool capabilityChanged) {
@@ -222,6 +188,11 @@ void processIncomingOnSocket(WiFiUDP& socket, const UdpRuntimeContext& context) 
             nodeBeaconAcknowledged = true;
             nodeBeaconLastAckAt = millis();
             nodeBeaconLastSentAt = millis();
+            const int32_t httpPort = doc["httpPort"] | 0;
+            if (context.onAggregatorAck && doc["nodeId"].is<const char*>() && httpPort > 0 && httpPort <= 65535) {
+                context.onAggregatorAck(doc["nodeId"].as<const char*>(), socket.remoteIP(),
+                                        static_cast<uint16_t>(httpPort));
+            }
             return;
         }
 
@@ -233,101 +204,7 @@ void processIncomingOnSocket(WiFiUDP& socket, const UdpRuntimeContext& context) 
             return;
         }
 
-        if (kind.equalsIgnoreCase("nodeBeacon") || kind.equalsIgnoreCase("machineAvailability")) {
-            String senderNodeId = doc["nodeId"].as<String>();
-            if (senderNodeId.length() == 0) {
-                senderNodeId = doc["nodeName"].as<String>();
-            }
-            const String senderIp = doc["ip"].as<String>().length() > 0 ? doc["ip"].as<String>() : socket.remoteIP().toString();
-            const bool senderFeatureChanged = doc["capabilitiesChanged"].as<bool>() || doc["featureChanged"].as<bool>() || doc["needsDetails"].as<bool>();
-
-            if (senderNodeId.length() > 0 && senderNodeId.equalsIgnoreCase(context.nodeName)) {
-                return;
-            }
-
-            if (context.discoveredNodeTable && senderNodeId.length() > 0 && senderIp.length() > 0) {
-                upsertDiscoveredNode(context.discoveredNodeTable, senderNodeId, senderIp);
-            }
-
-            JsonDocument ackDoc;
-            ackDoc["kind"] = "nodeBeaconAck";
-            ackDoc["nodeId"] = context.nodeName;
-            ackDoc["nodeName"] = context.nodeName;
-            ackDoc["capabilityHash"] = context.computeNodeCapabilityHash();
-            ackDoc["requestDetails"] = true;
-            ackDoc["ts"] = millis();
-            String ackJson;
-            serializeJson(ackDoc, ackJson);
-            sendCheckedUdpPacket(socket, socket.remoteIP(), socket.remotePort(), ackJson, "nodeBeaconAck");
-
-            JsonDocument detailReqDoc;
-            detailReqDoc["kind"] = "nodeDetailsRequest";
-            detailReqDoc["nodeId"] = context.nodeName;
-            detailReqDoc["capabilityHash"] = context.computeNodeCapabilityHash();
-            detailReqDoc["requestReason"] = senderFeatureChanged ? "feature-changed" : "discovery";
-            detailReqDoc["ts"] = millis();
-            String detailReqJson;
-            serializeJson(detailReqDoc, detailReqJson);
-            sendCheckedUdpPacket(socket, socket.remoteIP(), socket.remotePort(), detailReqJson, "nodeDetailsRequest");
-
-            sendNodeDetailsResponse(socket, context, socket.remoteIP(), socket.remotePort(), context.computeNodeCapabilityHash(), senderFeatureChanged);
-            return;
-        }
-    }
-
-    String parsedId;
-    String parsedIp;
-    String parsedNodeId;
-
-    int macStart = msg.indexOf(": ");
-    int ipStart = msg.indexOf("IP: ");
-    if (macStart != -1 && ipStart != -1) {
-        parsedId = msg.substring(macStart + 2, ipStart - 1);
-        parsedIp = msg.substring(ipStart + 4);
-        parsedId.trim();
-        parsedIp.trim();
-    }
-
-    if (parsedIp.length() == 0 && msg.startsWith("{")) {
-        DeserializationError jsonErr = deserializeJson(doc, msg);
-        if (!jsonErr) {
-            String ipValue = doc["ip"].as<String>();
-            String macValue = doc["mac"].as<String>();
-            String nodeIdValue = doc["nodeId"].as<String>();
-            if (nodeIdValue.length() == 0) {
-                nodeIdValue = doc["nodeName"].as<String>();
-            }
-
-            if (ipValue.length() > 0) {
-                parsedIp = ipValue;
-            }
-            if (nodeIdValue.length() > 0) {
-                parsedNodeId = nodeIdValue;
-            }
-            if (macValue.length() > 0) {
-                parsedId = macValue;
-            } else if (parsedNodeId.length() > 0) {
-                parsedId = String("node:") + parsedNodeId;
-            }
-            parsedIp.trim();
-            parsedId.trim();
-            parsedNodeId.trim();
-        }
-    }
-
-    if (parsedId.length() > 0 && parsedIp.length() > 0 && context.nodeName && context.discoveredNodeTable) {
-        String myMac = WiFi.macAddress();
-        myMac.trim();
-        String myIp = WiFi.localIP().toString();
-        myIp.trim();
-
-        if (parsedId.equalsIgnoreCase(myMac)
-            || parsedIp.equals(myIp)
-            || (parsedNodeId.length() > 0 && parsedNodeId.equalsIgnoreCase(context.nodeName))) {
-            return;
-        }
-
-        upsertDiscoveredNode(context.discoveredNodeTable, parsedId, parsedIp);
+        // Sibling tracking is the aggregators' job; other nodes' beacons are ignored.
     }
 }
 }

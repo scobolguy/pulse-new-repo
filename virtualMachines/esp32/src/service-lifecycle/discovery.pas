@@ -11,6 +11,14 @@ var resultList: JSONArray;
 var listeners: JSONArray;
 var index: integer;
 var endpoint: string;
+var advertisedNode: string;
+var localAddress: string;
+var listenerHost: string;
+var listenerProtocol: string;
+var selectedProtocol: string;
+var selectedPort: integer;
+var listenerCount: integer;
+var jitter: integer;
 
 function joinText(left: string; right: string): string;
 begin
@@ -19,17 +27,19 @@ end;
 
 function failure(message: string): string;
 begin
-  responseDoc.load('{}');
-  responseDoc.setBoolean('ok', false);
+  { Fixed JSON literals need no parse/serialize validation round trip. }
+  responseDoc.raw := '{"ok":false}';
   responseDoc.setText('error', message);
   return responseDoc.serialize()
 end;
 
 function validText(document: JSONDocument; name: string): boolean;
+var value: string;
 begin
   if host.json_kind(document.value(name)) <> 'string' then return false;
-  if document.text(name) = '' then return false;
-  return host.bytes_length(host.bytes_from_text(document.text(name))) <= 128
+  value := document.text(name);
+  if value = '' then return false;
+  return host.bytes_length(host.bytes_from_text(value)) <= 128
 end;
 
 function lanAddress(address: string): boolean;
@@ -39,14 +49,16 @@ var digit: integer;
 var octet: integer;
 var count: integer;
 var digits: integer;
+var length: integer;
 begin
   bytes := host.bytes_from_text(address);
-  if (host.bytes_length(bytes) < 7) or (host.bytes_length(bytes) > 15) then return false;
+  length := host.bytes_length(bytes);
+  if (length < 7) or (length > 15) then return false;
   offset := 0;
   octet := 0;
   count := 0;
   digits := 0;
-  while offset < host.bytes_length(bytes) do
+  while offset < length do
   begin
     digit := host.bytes_get(bytes, offset);
     if digit = 46 then
@@ -71,10 +83,14 @@ begin
 end;
 
 function validPort(document: JSONDocument): boolean;
+var encoded: string;
+var port: integer;
 begin
-  if host.json_kind(document.value('port')) <> 'number' then return false;
-  if host.text_index(document.value('port'), '.') >= 0 then return false;
-  return (document.intValue('port') > 0) and (document.intValue('port') <= 65535)
+  encoded := document.value('port');
+  if host.json_kind(encoded) <> 'number' then return false;
+  if host.text_index(encoded, '.') >= 0 then return false;
+  port := document.intValue('port');
+  return (port > 0) and (port <= 65535)
 end;
 
 { Hosts supply a modulo-2^30 monotonic clock so deadlines fit signed JSON integers. }
@@ -98,10 +114,10 @@ end
 post '/poll';
 begin
   request.load(host.event_body());
-  responseDoc.load('{"ok":true}');
-  responseDoc.setBoolean('send', (request.intValue('nextAt') < 0) or
-    not beforeDeadline(request.intValue('nowMs'), request.intValue('nextAt')));
-  return responseDoc.serialize()
+  if (request.intValue('nextAt') < 0) or
+    not beforeDeadline(request.intValue('nowMs'), request.intValue('nextAt')) then
+    return '{"ok":true,"send":true}';
+  return '{"ok":true,"send":false}'
 end
 
 post '/interfaces';
@@ -109,7 +125,7 @@ begin
   request.load(host.event_body());
   items.load(request.value('interfaces'));
   if items.count() > 128 then return failure('Interface capacity exceeded');
-  resultList.load('[]');
+  resultList.raw := '[]';
   index := 0;
   while index < items.count() do
   begin
@@ -118,7 +134,7 @@ begin
       resultList.append(item.serialize());
     index := index + 1
   end;
-  responseDoc.load('{"ok":true}');
+  responseDoc.raw := '{"ok":true}';
   responseDoc.embed('interfaces', resultList.serialize());
   return responseDoc.serialize()
 end
@@ -129,15 +145,16 @@ begin
   if not validText(request, 'requestId') then return failure('Missing discovery requestId');
   if not validText(request, 'nodeId') then return failure('Missing discovery nodeId');
   if not validText(request, 'bootId') then return failure('Missing discovery bootId');
-  if (request.intValue('jitterMs') < 0) or (request.intValue('jitterMs') > 1000) then
+  jitter := request.intValue('jitterMs');
+  if (jitter < 0) or (jitter > 1000) then
     return failure('Invalid discovery jitter');
-  messageDoc.load('{"kind":"pulseDiscoveryRequest","version":1}');
+  messageDoc.raw := '{"kind":"pulseDiscoveryRequest","version":1}';
   messageDoc.setText('requestId', request.text('requestId'));
   messageDoc.setText('nodeId', request.text('nodeId'));
   messageDoc.setText('bootId', request.text('bootId'));
-  responseDoc.load('{"ok":true}');
+  responseDoc.raw := '{"ok":true}';
   responseDoc.embed('packet', messageDoc.serialize());
-  responseDoc.setInteger('nextAt', deadlineAfter(request.intValue('nowMs'), 5000 + request.intValue('jitterMs')));
+  responseDoc.setInteger('nextAt', deadlineAfter(request.intValue('nowMs'), 5000 + jitter));
   return responseDoc.serialize()
 end
 
@@ -154,7 +171,7 @@ begin
     return failure('Missing aggregator identity');
   items.load(request.value('listeners'));
   if items.count() > 16 then return failure('Listener capacity exceeded');
-  resultList.load('[]');
+  resultList.raw := '[]';
   index := 0;
   while index < items.count() do
   begin
@@ -164,14 +181,13 @@ begin
     index := index + 1
   end;
   if resultList.count() = 0 then return failure('No reachable bound aggregator listener');
-  responseDoc.load('{"kind":"pulseDiscoveryReply","version":1}');
-  responseDoc.setText('requestId', messageDoc.text('requestId'));
-  responseDoc.setText('aggregatorId', request.text('aggregatorId'));
-  responseDoc.setText('bootId', request.text('bootId'));
-  responseDoc.embed('listeners', resultList.serialize());
-  messageDoc.load(responseDoc.serialize());
-  responseDoc.load('{"ok":true}');
-  responseDoc.embed('packet', messageDoc.serialize());
+  candidate.raw := '{"kind":"pulseDiscoveryReply","version":1}';
+  candidate.setText('requestId', messageDoc.text('requestId'));
+  candidate.setText('aggregatorId', request.text('aggregatorId'));
+  candidate.setText('bootId', request.text('bootId'));
+  candidate.embed('listeners', resultList.serialize());
+  responseDoc.raw := '{"ok":true}';
+  responseDoc.embed('packet', candidate.serialize());
   return responseDoc.serialize()
 end
 
@@ -207,7 +223,7 @@ begin
   if endpoint = '' then return failure('Reply has no listener matching its source address');
   items.load(request.value('targets'));
   if items.count() > 16 then return failure('Aggregator capacity exceeded');
-  resultList.load('[]');
+  resultList.raw := '[]';
   index := 0;
   while index < items.count() do
   begin
@@ -217,7 +233,7 @@ begin
     index := index + 1
   end;
   if resultList.count() >= 16 then return failure('Aggregator capacity exceeded');
-  candidate.load('{}');
+  candidate.raw := '{}';
   candidate.setText('aggregatorId', messageDoc.text('aggregatorId'));
   candidate.setText('bootId', messageDoc.text('bootId'));
   candidate.setText('endpoint', endpoint);
@@ -225,7 +241,7 @@ begin
   candidate.setText('peer', request.text('peer'));
   candidate.setInteger('expiresAt', deadlineAfter(request.intValue('nowMs'), 30000));
   resultList.append(candidate.serialize());
-  responseDoc.load('{"ok":true}');
+  responseDoc.raw := '{"ok":true}';
   responseDoc.embed('targets', resultList.serialize());
   responseDoc.setBoolean('changed', true);
   return responseDoc.serialize()
@@ -236,7 +252,7 @@ begin
   request.load(host.event_body());
   items.load(request.value('targets'));
   if items.count() > 16 then return failure('Aggregator capacity exceeded');
-  resultList.load('[]');
+  resultList.raw := '[]';
   index := 0;
   while index < items.count() do
   begin
@@ -244,7 +260,7 @@ begin
     if beforeDeadline(request.intValue('nowMs'), item.intValue('expiresAt')) then resultList.append(item.serialize());
     index := index + 1
   end;
-  responseDoc.load('{"ok":true}');
+  responseDoc.raw := '{"ok":true}';
   responseDoc.embed('targets', resultList.serialize());
   responseDoc.setBoolean('changed', resultList.count() <> items.count());
   return responseDoc.serialize()
@@ -254,40 +270,49 @@ post '/advertise';
 begin
   request.load(host.event_body());
   if not validText(request, 'nodeId') then return failure('Missing node identity');
-  if not lanAddress(request.text('localAddress')) then return failure('No reachable node address');
+  advertisedNode := request.text('nodeId');
+  localAddress := request.text('localAddress');
+  if not lanAddress(localAddress) then return failure('No reachable node address');
   items.load(request.value('listeners'));
-  resultList.load('[]');
+  listenerCount := items.count();
+  resultList.raw := '[]';
   endpoint := '';
   index := 0;
-  while index < items.count() do
+  while index < listenerCount do
   begin
     item.load(items.item(index));
     if not validPort(item) then return failure('Invalid bound listener port');
-    if (item.text('host') = '0.0.0.0') or (item.text('host') = '::') then
-      item.setText('host', request.text('localAddress'));
-    if item.text('host') = request.text('localAddress') then
+    listenerHost := item.text('host');
+    if (listenerHost = '0.0.0.0') or (listenerHost = '::') then
+    begin
+      listenerHost := localAddress;
+      item.setText('host', listenerHost)
+    end;
+    if listenerHost = localAddress then
     begin
       resultList.append(item.serialize());
-      if (item.text('protocol') = 'http') or (item.text('protocol') = 'https') then
+      listenerProtocol := item.text('protocol');
+      if (listenerProtocol = 'http') or (listenerProtocol = 'https') then
       begin
         if endpoint <> '' then return failure('Ambiguous node HTTP listener');
-        endpoint := joinText(item.text('protocol'), '://');
-        endpoint := joinText(endpoint, item.text('host'));
+        endpoint := joinText(listenerProtocol, '://');
+        endpoint := joinText(endpoint, listenerHost);
         endpoint := joinText(endpoint, ':');
         endpoint := joinText(endpoint, item.value('port'));
-        responseDoc.load(item.serialize())
+        selectedPort := item.intValue('port');
+        selectedProtocol := listenerProtocol
       end
     end;
     index := index + 1
   end;
   if endpoint = '' then return failure('No reachable bound node HTTP listener');
-  messageDoc.load('{"kind":"nodeBeacon","status":"here","available":true}');
-  messageDoc.setText('nodeId', request.text('nodeId'));
-  messageDoc.setText('nodeName', request.text('nodeId'));
-  messageDoc.setText('ip', request.text('localAddress'));
-  messageDoc.setInteger('httpPort', responseDoc.intValue('port'));
-  messageDoc.setInteger('port', responseDoc.intValue('port'));
-  messageDoc.setText('protocol', responseDoc.text('protocol'));
+  messageDoc.raw := '{"kind":"nodeBeacon","status":"here","available":true}';
+  messageDoc.setText('nodeId', advertisedNode);
+  messageDoc.setText('nodeName', advertisedNode);
+  messageDoc.setText('ip', localAddress);
+  messageDoc.setInteger('httpPort', selectedPort);
+  messageDoc.setInteger('port', selectedPort);
+  messageDoc.setText('protocol', selectedProtocol);
   if host.json_has(request.serialize(), 'metadata') = 1 then
   begin
     item.load(request.value('metadata'));
@@ -295,7 +320,7 @@ begin
     if host.json_has(item.serialize(), 'runtime') = 1 then messageDoc.setText('runtime', item.text('runtime'));
     if host.json_has(item.serialize(), 'services') = 1 then messageDoc.embed('services', item.value('services'))
   end;
-  responseDoc.load('{"ok":true}');
+  responseDoc.raw := '{"ok":true}';
   responseDoc.embed('packet', messageDoc.serialize());
   responseDoc.setText('endpoint', endpoint);
   responseDoc.embed('listeners', resultList.serialize());
@@ -322,7 +347,7 @@ begin
     index := index + 1
   end;
   if endpoint = '' then return failure('Deployment owner is not discovered');
-  responseDoc.load('{"ok":true}');
+  responseDoc.raw := '{"ok":true}';
   responseDoc.setText('endpoint', endpoint);
   return responseDoc.serialize()
 end

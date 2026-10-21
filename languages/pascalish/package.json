@@ -1,0 +1,22 @@
+{
+  "name": "@pulse/pascalish",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "exports": {
+    ".": "./src/compile-pascalish-program-antlr-to-pcode.mjs",
+    "./router-mapper": "./src/compile-pascal.mjs",
+    "./libraries": "./src/pascalish-library-registry.mjs"
+  },
+  "scripts": {
+    "compile": "node src/compile-pascalish-program-antlr-to-pcode.mjs",
+    "pascalishc": "node src/pascalishc-antlr-gateway.mjs",
+    "antlr:generate": "node scripts/generate-parser.mjs",
+    "test": "node --test tests/*.mjs",
+    "validate": "node validation/run.mjs",
+    "validate:iso7185": "node validation/run.mjs --suite iso7185",
+    "validate:smoke": "node validation/run.mjs --suite smoke"
+  },
+  "dependencies": { "antlr4": "^4.13.2" }
+}

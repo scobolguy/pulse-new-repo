@@ -3,9 +3,11 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <new>
+#include <memory>
 #include <set>
 #include <cstdlib>
 #if defined(ARDUINO)
@@ -13,6 +15,8 @@
 #endif
 #include <ArduinoJson.h>
 #include "pmachine.h"
+#include "managed_objects.h"
+#include "cobol_vm.h"
 #include "StringPool.h"
 #include "GpioPinSemaphore.h"
 #if defined(ESP32)
@@ -997,9 +1001,19 @@ void PMachine::clearMappings() {
 }
 void PMachine::setProcedureSignatures(const std::map<std::string, std::vector<std::string>>& signatures) {
     procedureParamsByLabel.clear();
+    cobolLocalsByLabel.clear();
+    cobolGlobals.clear();
     for (const auto& entry : signatures) {
         const std::string rawLabel = trimCopy(entry.first);
         if (rawLabel.empty()) continue;
+        if (rawLabel == "@globals") {
+            cobolGlobals = entry.second;
+            continue;
+        }
+        if (rawLabel.rfind("@locals:", 0) == 0) {
+            cobolLocalsByLabel[rawLabel.substr(8)] = entry.second;
+            continue;
+        }
 
         procedureParamsByLabel[rawLabel] = entry.second;
 
@@ -1013,6 +1027,8 @@ void PMachine::setProcedureSignatures(const std::map<std::string, std::vector<st
 }
 void PMachine::clearProcedureSignatures() {
     procedureParamsByLabel.clear();
+    cobolLocalsByLabel.clear();
+    cobolGlobals.clear();
 }
 void PMachine::setOrchestrationWaitHook(OrchestrationWaitHook hook, void* context) {
     orchestrationWaitHook = hook;
@@ -1503,6 +1519,14 @@ static void reserveInstructions(std::deque<PInstruction>&, size_t) {}
 template <typename Instructions>
 static Instructions parseTextPCode(const std::string& text, bool hosted = false) {
     Instructions instructions;
+    if (cobolvm::isCobolPcode(text)) {
+        PInstruction program;
+        program.opcode = OP_COBOL_PROGRAM;
+        program.type = OperandType::STRING;
+        program.strOperand = text;
+        instructions.push_back(std::move(program));
+        return instructions;
+    }
     std::map<std::string, size_t> labelToIndex;
     std::vector<std::pair<size_t, std::string>> unresolvedJumps;
     const size_t estimatedLineCount = 1 + static_cast<size_t>(
@@ -1725,19 +1749,29 @@ void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
     }, startPc);
 }
 
-void PMachine::run(const std::deque<PInstruction>& instructions, int startPc) {
+void PMachine::run(const std::deque<PInstruction>& instructions, int startPc,
+                   HostExecutionStorage* storage) {
     runInstructions(instructions.size(), [&](size_t index) {
         return instructions[index];
-    }, startPc);
+    }, startPc, storage);
 }
 
-void PMachine::runImage(size_t count, const std::function<PInstruction(size_t)>& instructionAt) {
-    runInstructions(count, instructionAt, 0);
+void PMachine::runImage(size_t count, const std::function<PInstruction(size_t)>& instructionAt,
+                       HostExecutionStorage* storage) {
+    runInstructions(count, instructionAt, 0, storage);
 }
 
 void PMachine::runInstructions(size_t instructionCount,
                               const std::function<PInstruction(size_t)>& instructionAt,
-                              int startPc) {
+                              int startPc, HostExecutionStorage* storage) {
+    hostedStorageError = nullptr;
+    if (instructionCount == 1) {
+        const PInstruction first = instructionAt(0);
+        if (first.opcode == OP_COBOL_PROGRAM) {
+            runCobolProgram(first.strOperand);
+            return;
+        }
+    }
     auto& gFlowState = flowState;
     static const size_t MAX_RUN_STEPS = 200000;
 #if defined(PULSE_ESP8266_SENSOR)
@@ -1751,22 +1785,52 @@ void PMachine::runInstructions(size_t instructionCount,
     static const size_t INITIAL_NAME_FRAME_CAPACITY = 8;
     static const size_t MAX_RETAINED_TRACE_ENTRIES = 128;
     Value stack[STACK_SIZE];
-    // Backing store for StringRef values; freed wholesale when the run ends.
-    std::vector<std::string> stringPool;
-    HostCallStorage hostCallStorage(hostCallHook != nullptr);
-    using NameBinding = std::pair<std::string, int>;
+    std::vector<std::string> localStringPool;
+    std::unique_ptr<HostExecutionStorage> localExecutionStorage;
+    if (hostCallHook && !storage) {
+        localExecutionStorage.reset(new (std::nothrow) HostExecutionStorage);
+        bool ready = false;
+        if (localExecutionStorage) {
+            try { ready = localExecutionStorage->prepare(); }
+            catch (const std::bad_alloc&) { ready = false; }
+        }
+        if (!ready) {
+            hostedStorageError = "cannot reserve hosted execution storage";
+            flowState.clear();
+            lastRunStepCount = 0;
+            lastRunStepLimitHit = false;
+            lastRunGlobals.clear();
+            lastRunTextOutput.clear();
+            lastRunTrace.clear();
+            running = false;
+            this->pc = static_cast<uint16_t>(std::max(0, startPc));
+            if (debugRunStatus.load() != 0) debugRunStatus.store(3);
+            if (runtimeUnit.kind == RuntimeUnitKind::Program) unloadUnit();
+            return;
+        }
+        storage = localExecutionStorage.get();
+    }
+    HostCallStorage localHostCallStorage(hostCallHook != nullptr && !storage);
+    if (storage) storage->reset();
+    HostedFrameStorage* hostedFrames = storage ? &storage->frames : nullptr;
+    ManagedStringHeap* hostedStrings = storage && storage->strings.attached() ? &storage->strings : nullptr;
+    if (storage && !hostedStrings) hostedStorageError = "hosted string arena is not reserved";
+    auto& stringPool = localStringPool;
+    auto& hostCallStorage = storage ? storage->calls : localHostCallStorage;
+    using NameBinding = std::pair<std::string, Value>;
     using NameFrame = std::vector<NameBinding>;
     std::vector<NameFrame> nameFrames;
-    nameFrames.reserve(INITIAL_NAME_FRAME_CAPACITY);
-    nameFrames.emplace_back();
+    if (!hostCallHook) {
+        nameFrames.reserve(INITIAL_NAME_FRAME_CAPACITY);
+        nameFrames.emplace_back();
+    }
     struct NameCallFrame {
         int returnPc = 0;
         size_t envDepth = 1;
     };
     std::vector<NameCallFrame> nameCallStack;
-    std::vector<std::map<std::string, Value>> hostedFrames(1);
     const uint32_t hostedStartedAt = millis();
-    nameCallStack.reserve(INITIAL_NAME_FRAME_CAPACITY);
+    if (!hostCallHook) nameCallStack.reserve(INITIAL_NAME_FRAME_CAPACITY);
     std::string currentOutputLine;
     std::vector<std::string>& outputLines = lastRunTextOutput;
     // Reclaim the previous run's result capacity here; the results themselves must
@@ -1800,6 +1864,12 @@ void PMachine::runInstructions(size_t instructionCount,
     std::map<std::string, IntCollection> stacks;
     std::map<std::string, IntCollection> priorityQueues;
     std::map<std::string, std::map<std::string, Value>> records;
+    struct ObjectStorage {
+        uint8_t arena[8192];
+        ManagedObjects<> objects;
+        ObjectStorage() { objects.attach(arena, sizeof(arena)); }
+    };
+    std::unique_ptr<ObjectStorage> objectStorage;
     // Pascal sets: ordered, duplicate-free ordinal members.
     std::map<std::string, std::set<int>> sets;
     std::map<int, bool> tasks;
@@ -1816,6 +1886,14 @@ void PMachine::runInstructions(size_t instructionCount,
 
     auto stringAt = [&](const Value& value) -> std::string {
         if (value.kind == ValueKind::StringRef) {
+            if (hostedStrings) {
+                const char* data = hostedStrings->data(value.handle);
+                if (!data) {
+                    if (hostedStrings->valid(value.handle)) hostedStorageError = hostedStrings->error();
+                    return std::string();
+                }
+                return std::string(data, hostedStrings->size(value.handle));
+            }
             return value.handle < stringPool.size() ? stringPool[value.handle] : std::string();
         }
         if (value.kind == ValueKind::EnumRef) {
@@ -1835,101 +1913,41 @@ void PMachine::runInstructions(size_t instructionCount,
             gFlowState["__runtime_error"] = "stack overflow";
             return;
         }
-        if (hostCallHook) {
-            // Geometric growth for small strings; large strings round to 512 bytes so
-            // a growing response does not double into blocks the heap cannot supply.
-            size_t capacity = 32;
-            while (capacity < text.size() && capacity < 512) capacity *= 2;
-            if (capacity < text.size()) capacity = (text.size() + 511) / 512 * 512;
-            bool live[512] = {};
-            auto mark = [&](const Value& value) {
-                if (value.kind == ValueKind::StringRef && value.handle < 512)
-                    live[value.handle] = true;
-            };
-            for (int index = 0; index < sp; ++index) mark(stack[index]);
-            for (const auto& frame : hostedFrames)
-                for (const auto& item : frame) mark(item.second);
-            size_t bytes = text.size();
-            size_t retained = 0;
-            size_t available = stringPool.size();
-            for (size_t index = 0; index < stringPool.size(); ++index) {
-                retained += stringPool[index].capacity();
-                if (live[index]) bytes += stringPool[index].size();
-                else if (available == stringPool.size()
-                    || (stringPool[index].capacity() >= text.size()
-                        && (stringPool[available].capacity() < text.size()
-                            || stringPool[index].capacity() < stringPool[available].capacity())))
-                    available = index;
-            }
-            if (text.size() > 8192 || bytes > 32768) {
-                gFlowState["__runtime_error"] = "hosted string storage capacity exceeded";
+        if (hostedStrings) {
+            if (text.size() > 8192) {
+                hostedStorageError = "hosted string storage capacity exceeded";
                 return;
             }
-            // Dead buffers are kept for reuse, but large ones too small for this string are
-            // remnants of a growing value; freeing them lets the heap coalesce before allocating.
-            auto releaseDead = [&](size_t minimumCapacity, size_t belowCapacity) {
-                for (size_t index = 0; index < stringPool.size(); ++index) {
-                    if (live[index] || index == available) continue;
-                    const size_t held = stringPool[index].capacity();
-                    if (held < minimumCapacity || held >= belowCapacity) continue;
-                    retained -= held;
-                    std::string().swap(stringPool[index]);
-                    retained += stringPool[index].capacity();
-                }
+            // Strings live in the fixed managed arena. Unreachable handles are swept every
+            // N allocations or when the arena tail is short; the heap then compacts and,
+            // as a last resort, evicts cold blocks to PSRAM or the FFS swap file.
+            auto& heap = *hostedStrings;
+            auto collect = [&]() {
+                bool live[ManagedStringHeap::HANDLE_CAPACITY] = {};
+                auto mark = [&](const Value& value) {
+                    if (value.kind == ValueKind::StringRef && value.handle < ManagedStringHeap::HANDLE_CAPACITY)
+                        live[value.handle] = true;
+                };
+                for (int index = 0; index < sp; ++index) mark(stack[index]);
+                hostedFrames->forEachValue(mark);
+                if (objectStorage) objectStorage->objects.forEachValue(mark);
+                for (const auto& record : records)
+                    for (const auto& field : record.second) mark(field.second);
+                heap.sweep([&](uint16_t handle) { return live[handle]; });
             };
-            if (available == stringPool.size() || stringPool[available].capacity() < text.size())
-                releaseDead(512, text.size());
-            auto reserveWithHeapRetry = [&](std::string& buffer) {
-                try { buffer.reserve(capacity); }
-                catch (const std::bad_alloc&) {
-                    releaseDead(0, static_cast<size_t>(-1));
-                    buffer.reserve(capacity);
-                }
-            };
-            if (available == stringPool.size()) {
-                if (stringPool.size() >= 512) {
-                    gFlowState["__runtime_error"] = "hosted string handle capacity exceeded";
-                    return;
-                }
-                if (retained + capacity > 32768) {
-                    gFlowState["__runtime_error"] = "hosted string storage capacity exceeded";
-                    return;
-                }
-                std::string buffer;
-                allocationStage = "string-pool-new-buffer";
-                allocationBytes = capacity + 1;
-                reserveWithHeapRetry(buffer);
-                buffer = text;
-                allocationStage = "string-pool-grow-handles";
-                allocationBytes = (stringPool.size() + 1) * sizeof(std::string);
-                stringPool.push_back(std::move(buffer));
-            } else {
-                const size_t extra = capacity > stringPool[available].capacity()
-                    ? capacity - stringPool[available].capacity() : 0;
-                for (size_t index = 0; retained + extra > 32768 && index < stringPool.size(); ++index) {
-                    if (!live[index] && index != available) {
-                        retained -= stringPool[index].capacity();
-                        std::string().swap(stringPool[index]);
-                        retained += stringPool[index].capacity();
-                    }
-                }
-                if (retained + extra > 32768) {
-                    gFlowState["__runtime_error"] = "hosted string storage capacity exceeded";
-                    return;
-                }
-                // Reuse dead buffers in cipher loops instead of allocating on
-                // every byte. Geometric capacity growth bounds allocation sizes.
-                if (stringPool[available].capacity() < capacity)
-                {
-                    allocationStage = "string-pool-reserve";
-                    allocationBytes = capacity + 1;
-                    reserveWithHeapRetry(stringPool[available]);
-                }
-                allocationStage = "string-pool-assign";
-                allocationBytes = text.size() + 1;
-                stringPool[available] = text;
+            if (heap.collectDue() || heap.tailFreeBytes() < text.size() + ManagedStringHeap::ALIGNMENT) collect();
+            allocationStage = "managed-string-store";
+            allocationBytes = text.size();
+            uint16_t handle = heap.store(text.data(), text.size());
+            if (handle == ManagedStringHeap::INVALID) {
+                collect();
+                handle = heap.store(text.data(), text.size());
             }
-            stack[sp++] = Value::makeString(static_cast<uint16_t>(available));
+            if (handle == ManagedStringHeap::INVALID) {
+                hostedStorageError = heap.error() ? heap.error() : "hosted string storage capacity exceeded";
+                return;
+            }
+            stack[sp++] = Value::makeString(handle);
             return;
         }
         stringPool.push_back(text);
@@ -1971,7 +1989,7 @@ void PMachine::runInstructions(size_t instructionCount,
         return std::to_string(value.i);
     };
 
-    auto resolveName = [&](const std::string& key) -> int {
+    auto resolveName = [&](const std::string& key) -> Value {
         for (auto it = nameFrames.rbegin(); it != nameFrames.rend(); ++it) {
             for (auto binding = it->rbegin(); binding != it->rend(); ++binding) {
                 if (binding->first == key) return binding->second;
@@ -1989,7 +2007,14 @@ void PMachine::runInstructions(size_t instructionCount,
         return false;
     };
 
-    auto assignName = [&](const std::string& key, int value) {
+    auto hasLocalNameBinding = [&](const std::string& key) -> bool {
+        for (size_t index = nameFrames.size(); index > 1; --index)
+            for (const auto& binding : nameFrames[index - 1])
+                if (binding.first == key) return true;
+        return false;
+    };
+
+    auto assignName = [&](const std::string& key, Value value) {
         for (auto it = nameFrames.rbegin(); it != nameFrames.rend(); ++it) {
             for (auto binding = it->rbegin(); binding != it->rend(); ++binding) {
                 if (binding->first == key) {
@@ -2093,21 +2118,11 @@ void PMachine::runInstructions(size_t instructionCount,
             return false;
         }
         // Prevent runaway recursion from exhausting heap on ESP32.
-        if (nameFrames.size() >= (hostCallHook ? 32 : MAX_NAME_FRAME_DEPTH)) {
+        if (!hostCallHook && nameFrames.size() >= MAX_NAME_FRAME_DEPTH) {
             lastCallError = "max call depth exceeded";
             return false;
         }
 
-        std::vector<Value> args;
-        args.reserve(static_cast<size_t>(argc > 0 ? argc : 0));
-        for (int i = 0; i < argc && sp > 0; ++i) {
-            args.push_back(stack[--sp]);
-        }
-        std::reverse(args.begin(), args.end());
-
-        NameFrame frameVars;
-        std::map<std::string, Value> hostedVars;
-        frameVars.reserve(static_cast<size_t>(argc > 0 ? argc : 0));
         auto sigIt = procedureParamsByLabel.find(lookupLabel);
         if (sigIt == procedureParamsByLabel.end()) {
             const std::string targetLabel = instructionAt(targetPc).label;
@@ -2129,12 +2144,62 @@ void PMachine::runInstructions(size_t instructionCount,
                 }
             }
         }
+        auto localsIt = cobolLocalsByLabel.find(lookupLabel);
+        if (localsIt == cobolLocalsByLabel.end() && sigIt != procedureParamsByLabel.end())
+            localsIt = cobolLocalsByLabel.find(sigIt->first);
+        if (localsIt == cobolLocalsByLabel.end())
+            localsIt = cobolLocalsByLabel.find(instructionAt(targetPc).label);
+        if (hostCallHook) {
+            allocationStage = "hosted-call-frame";
+            allocationBytes = 0;
+            if (argc < 0 || argc > sp) {
+                hostedStorageError = "hosted call argument stack underflow";
+                return false;
+            }
+            hostedStorageError = hostedFrames->push(pc + 1);
+            if (hostedStorageError) return false;
+            const size_t count = static_cast<size_t>(argc);
+            static const char* const fallback[] = {"p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7"};
+            static const char* const hanoi[] = {"n", "fromPeg", "toPeg", "auxPeg"};
+            const size_t namedCount = sigIt != procedureParamsByLabel.end()
+                ? std::min(count, sigIt->second.size()) : std::min(count, count >= 4 ? size_t(4) : size_t(8));
+            for (size_t index = 0; index < namedCount; ++index) {
+                const char* name = sigIt != procedureParamsByLabel.end()
+                    ? sigIt->second[index].c_str() : (count >= 4 ? hanoi[index] : fallback[index]);
+                hostedStorageError = hostedFrames->store(name, stack[sp - argc + static_cast<int>(index)]);
+                if (hostedStorageError) {
+                    int unusedReturnPc = 0;
+                    hostedFrames->pop(unusedReturnPc);
+                    return false;
+                }
+            }
+            if (localsIt != cobolLocalsByLabel.end()) {
+                for (const auto& name : localsIt->second) {
+                    if (hostedFrames->containsLocal(name.c_str())) continue;
+                    hostedStorageError = hostedFrames->store(name.c_str(), Value(0));
+                    if (hostedStorageError) {
+                        int unusedReturnPc = 0;
+                        hostedFrames->pop(unusedReturnPc);
+                        return false;
+                    }
+                }
+            }
+            sp -= argc;
+            pc = targetPc;
+            return true;
+        }
+
+        std::vector<Value> args;
+        args.reserve(static_cast<size_t>(argc > 0 ? argc : 0));
+        for (int i = 0; i < argc && sp > 0; ++i) args.push_back(stack[--sp]);
+        std::reverse(args.begin(), args.end());
+        NameFrame frameVars;
+        frameVars.reserve(static_cast<size_t>(argc > 0 ? argc : 0));
         if (sigIt != procedureParamsByLabel.end()) {
             const std::vector<std::string>& names = sigIt->second;
             for (size_t i = 0; i < names.size(); ++i) {
-                const int value = (i < args.size()) ? static_cast<int>(args[i]) : 0;
+                const Value value = (i < args.size()) ? args[i] : Value(0);
                 frameVars.emplace_back(names[i], value);
-                if (hostCallHook && i < args.size()) hostedVars[names[i]] = args[i];
             }
         } else {
             // Canonical fallback for common recursive procedure shape.
@@ -2152,16 +2217,44 @@ void PMachine::runInstructions(size_t instructionCount,
             }
         }
 
+        if (localsIt != cobolLocalsByLabel.end()) {
+            for (const auto& name : localsIt->second) {
+                bool exists = false;
+                for (const auto& binding : frameVars) if (binding.first == name) exists = true;
+                if (!exists) frameVars.emplace_back(name, Value(0));
+            }
+        }
         NameCallFrame frame;
         frame.returnPc = pc + 1;
         frame.envDepth = nameFrames.size();
         nameCallStack.push_back(frame);
         nameFrames.emplace_back(std::move(frameVars));
-        if (hostCallHook) hostedFrames.push_back(std::move(hostedVars));
         pc = targetPc;
         return true;
     };
 
+    auto reconcileObjects = [&]() -> bool {
+        if (!objectStorage) return true;
+        auto& objects = objectStorage->objects;
+        objects.beginRoots();
+        for (int index = 0; index < sp; ++index)
+            if (!objects.root(stack[index])) return false;
+        bool valid = true;
+        if (hostedFrames) hostedFrames->forEachValue([&](const Value& value) { if (!objects.root(value)) valid = false; });
+        for (size_t frame = 0; frame < nameFrames.size(); ++frame)
+            for (const auto& binding : nameFrames[frame]) {
+                if (frame == 0 && (namedStringVariables.count(binding.first) ||
+                    namedRealVariables.count(binding.first) || namedEnumVariables.count(binding.first))) continue;
+                if (!objects.root(binding.second)) valid = false;
+            }
+        for (const auto& record : records)
+            for (const auto& field : record.second)
+                if (!objects.root(field.second)) valid = false;
+        for (const auto& variable : extendableStorage)
+            for (size_t index = 0; index < variable.elementCount; ++index)
+                if (!objects.root(variable.slots[index].value)) valid = false;
+        return valid && objects.reconcile();
+    };
     size_t steps = 0;
     gFlowState.clear();
     lastRunStepLimitHit = false;
@@ -2174,9 +2267,20 @@ void PMachine::runInstructions(size_t instructionCount,
         gFlowState["__runtime_error"] = extendedAllocationError;
         goto pmachineRunExit;
     }
+    for (const auto& name : cobolGlobals) {
+        if (extendedSlot(name)) continue;
+        if (hostedFrames) {
+            hostedStorageError = hostedFrames->store(name.c_str(), Value(0));
+            if (hostedStorageError) goto pmachineRunExit;
+        } else assignName(name, Value(0));
+    }
     while (pc < (int)instructionCount) {
-        if (hostCallHook && gFlowState.count("__runtime_error")) break;
-        if (hostCallHook && (sp < 0 || sp > std::min(STACK_SIZE, 256) || stringPool.size() > 512
+        if (!reconcileObjects()) {
+            gFlowState["__runtime_error"] = objectStorage->objects.error();
+            break;
+        }
+        if (hostCallHook && (hostedStorageError || gFlowState.count("__runtime_error"))) break;
+        if (hostCallHook && (sp < 0 || sp > std::min(STACK_SIZE, 256)
             || static_cast<uint32_t>(millis() - hostedStartedAt) >= 8000)) {
             gFlowState["__runtime_error"] = "hosted invocation resource limit exceeded";
             break;
@@ -2185,9 +2289,11 @@ void PMachine::runInstructions(size_t instructionCount,
         allocationStage = "instruction-dispatch";
         allocationBytes = 0;
         if (debugRunStatus.load() != 0) {
+            const int callDepth = hostCallHook ? static_cast<int>(hostedFrames->depth() - 1)
+                                               : static_cast<int>(nameCallStack.size());
             debugPc = static_cast<uint16_t>(pc);
             if (debugAction.load() == 3 && debugStepOutDepth.load() > 0
-                && static_cast<int>(nameCallStack.size()) < debugStepOutDepth.load()) {
+                && callDepth < debugStepOutDepth.load()) {
                 debugAction.store(0);
                 debugStepOutDepth.store(0);
             }
@@ -2197,9 +2303,18 @@ void PMachine::runInstructions(size_t instructionCount,
             if (debugAction.load() == 0) {
                 debugGlobals.clear();
                 debugLocals.clear();
-                for (const auto& binding : nameFrames.front()) debugGlobals[binding.first] = binding.second;
-                for (const auto& binding : nameFrames.back()) debugLocals[binding.first] = binding.second;
-                debugCallDepth = static_cast<int>(nameCallStack.size());
+                if (hostCallHook) {
+                    hostedFrames->forEachBinding(0, [&](const char* name, const Value& value) {
+                        debugGlobals[name] = static_cast<int>(value);
+                    });
+                    hostedFrames->forEachBinding(hostedFrames->depth() - 1, [&](const char* name, const Value& value) {
+                        debugLocals[name] = static_cast<int>(value);
+                    });
+                } else {
+                    for (const auto& binding : nameFrames.front()) debugGlobals[binding.first] = binding.second;
+                    for (const auto& binding : nameFrames.back()) debugLocals[binding.first] = binding.second;
+                }
+                debugCallDepth = callDepth;
                 debugPc = static_cast<uint16_t>(pc);
                 debugRunStatus.store(2);
                 while (debugAction.load() == 0) {
@@ -2212,7 +2327,7 @@ void PMachine::runInstructions(size_t instructionCount,
             }
             const int action = debugAction.load();
             if (action == 3) {
-                const int currentDepth = static_cast<int>(nameCallStack.size());
+                const int currentDepth = callDepth;
                 if (debugStepOutDepth.load() == 0) debugStepOutDepth.store(currentDepth);
                 if (currentDepth < debugStepOutDepth.load()) {
                     debugAction.store(0);
@@ -2431,6 +2546,16 @@ void PMachine::runInstructions(size_t instructionCount,
             if (sp >= 2) {
                 const Value rhsValue = stack[--sp];
                 const Value lhsValue = stack[sp - 1];
+                if (lhsValue.isObject() || rhsValue.isObject()) {
+                    if (instr.opcode != OP_EQ && instr.opcode != OP_NEQ) {
+                        gFlowState["__runtime_error"] = "objects only support equality comparisons";
+                        goto pmachineRunExit;
+                    }
+                    const bool equal = lhsValue.isObject() && rhsValue.isObject() && lhsValue.handle == rhsValue.handle;
+                    stack[sp - 1] = (instr.opcode == OP_EQ ? equal : !equal) ? 1 : 0;
+                    ++pc;
+                    continue;
+                }
                 const bool asReal = rhsValue.isReal() || lhsValue.isReal();
                 // Integer deadlines must not lose precision through a float conversion.
                 stack[sp - 1] = asReal ? compareOperands(instr.opcode, lhsValue.asReal(), rhsValue.asReal())
@@ -2522,9 +2647,9 @@ void PMachine::runInstructions(size_t instructionCount,
             if (hostCallHook) {
                 Value value = 0;
                 bool foundValue = false;
-                for (auto frame = hostedFrames.rbegin(); frame != hostedFrames.rend(); ++frame) {
-                    auto found = frame->find(varName);
-                    if (found != frame->end()) { value = found->second; foundValue = true; break; }
+                if (const Value* found = hostedFrames->find(varName.c_str())) {
+                    value = *found;
+                    foundValue = true;
                 }
                 if (!foundValue) {
                     if (ExtendableValueSlot* slot = extendedSlot(varName)) {
@@ -2547,6 +2672,12 @@ void PMachine::runInstructions(size_t instructionCount,
                     ++pc;
                     continue;
                 }
+            }
+            if (hasLocalNameBinding(varName)) {
+                if (sp >= STACK_SIZE) { gFlowState["__runtime_error"] = "stack overflow"; goto pmachineRunExit; }
+                stack[sp++] = resolveName(varName);
+                ++pc;
+                continue;
             }
             // Dispatch on binding presence, not value emptiness, so "" stays a string.
             auto strBinding = namedStringVariables.find(varName);
@@ -2586,7 +2717,7 @@ void PMachine::runInstructions(size_t instructionCount,
         }
         case OP_STORE_NAME: {
             if (hostCallHook) {
-                if (sp > 0 && !hostedFrames.back().count(instr.strOperand)) {
+                if (sp > 0 && !hostedFrames->containsLocal(instr.strOperand.c_str())) {
                     if (ExtendableValueSlot* slot = extendedSlot(instr.strOperand)) {
                         const Value value = stack[--sp];
                         if (!storeExtendedValue(*slot, value)) {
@@ -2597,11 +2728,17 @@ void PMachine::runInstructions(size_t instructionCount,
                         continue;
                     }
                 }
-                if (sp <= 0 || hostedFrames.back().size() >= 128) {
-                    gFlowState["__runtime_error"] = "hosted variable capacity or stack underflow";
+                if (sp <= 0) {
+                    hostedStorageError = "hosted variable stack underflow";
                     goto pmachineRunExit;
                 }
-                hostedFrames.back()[instr.strOperand] = stack[--sp];
+                allocationStage = "hosted-variable-store";
+                allocationBytes = 0;
+                if (const Value* found = hostedFrames->find(instr.strOperand.c_str()))
+                    *const_cast<Value*>(found) = stack[sp - 1];
+                else hostedStorageError = hostedFrames->store(instr.strOperand.c_str(), stack[sp - 1]);
+                if (hostedStorageError) goto pmachineRunExit;
+                --sp;
                 ++pc;
                 continue;
             }
@@ -2623,21 +2760,13 @@ void PMachine::runInstructions(size_t instructionCount,
                     continue;
                 }
             }
-            // String stack wins, matching OP_PRINT precedence, so TRIM/FILE_READ results survive STORE.
-            if (isStringAtDepth(1)) {
-                namedStringVariables[instr.strOperand] = popString();
-                namedRealVariables.erase(instr.strOperand);
-            } else if (sp > 0 && stack[sp - 1].isReal()) {
-                namedRealVariables[instr.strOperand] = stack[--sp].asReal();
-                namedStringVariables.erase(instr.strOperand);
-                namedEnumVariables.erase(instr.strOperand);
-            } else if (sp > 0 && stack[sp - 1].isEnum()) {
-                namedEnumVariables[instr.strOperand] = stack[--sp];
-                namedStringVariables.erase(instr.strOperand);
-                namedRealVariables.erase(instr.strOperand);
-            } else if (sp > 0) {
-                int value = stack[--sp];
-                namedStringVariables.erase(instr.strOperand);
+            if (sp > 0) {
+                const Value value = stack[--sp];
+                if (!hasLocalNameBinding(instr.strOperand)) {
+                    namedStringVariables.erase(instr.strOperand);
+                    namedRealVariables.erase(instr.strOperand);
+                    namedEnumVariables.erase(instr.strOperand);
+                }
                 assignName(instr.strOperand, value);
             }
             ++pc;
@@ -2748,7 +2877,7 @@ void PMachine::runInstructions(size_t instructionCount,
                 namedStringVariables.erase(varName);
                 namedRealVariables.erase(varName);
             } else if (sp > 0) {
-                int value = stack[--sp];
+                Value value = stack[--sp];
                 if (sp < 1) { ++pc; continue; }
                 int idx = stack[--sp];
                 if (idx < 0 || idx >= instr.intOperand) {
@@ -2768,6 +2897,8 @@ void PMachine::runInstructions(size_t instructionCount,
                     continue;
                 }
                 namedStringVariables.erase(varName);
+                namedRealVariables.erase(varName);
+                namedEnumVariables.erase(varName);
                 assignName(varName, value);
             }
             ++pc;
@@ -2775,6 +2906,7 @@ void PMachine::runInstructions(size_t instructionCount,
         }
         case OP_CALL_LABEL: {
             if (!invokeCallFrame(instr.intOperand, instr.label, instr.value)) {
+                if (hostedStorageError) goto pmachineRunExit;
                 gFlowState["__thunk_error"] = lastCallError.empty() ? "invalid local call target" : lastCallError;
                 goto pmachineRunExit;
             }
@@ -2782,6 +2914,52 @@ void PMachine::runInstructions(size_t instructionCount,
         }
         case OP_CALL_EXT: {
             const std::string symbol = trimCopy(instr.strOperand);
+            if (symbol.rfind("object.", 0) == 0) {
+                const int argc = symbol == "object.new" || symbol == "object.length" ? 1
+                    : symbol == "object.get" || symbol == "object.resize" ? 2
+                    : symbol == "object.set" ? 3 : -1;
+                const char* error = nullptr;
+                if (argc < 0 || instr.value != argc) error = "invalid object binding argument count";
+                else if (sp < argc) error = "object binding stack underflow";
+                else if (sp - argc >= STACK_SIZE) error = "stack overflow";
+                if (error) { gFlowState["__runtime_error"] = error; goto pmachineRunExit; }
+                if (!objectStorage) {
+                    objectStorage.reset(new (std::nothrow) ObjectStorage);
+                    if (!objectStorage) {
+                        gFlowState["__runtime_error"] = "cannot reserve managed object storage";
+                        goto pmachineRunExit;
+                    }
+                }
+                auto& objects = objectStorage->objects;
+                const Value* args = stack + sp - argc;
+                Value result;
+                bool ok = false;
+                if (symbol == "object.new" || symbol == "object.resize") {
+                    const Value count = args[argc - 1];
+                    if (count.kind != ValueKind::Integer || count.i < 0 || count.i > 64)
+                        error = "object field count must be an integer between 0 and 64";
+                    else ok = symbol == "object.new" ? objects.create(static_cast<size_t>(count.i), result)
+                        : objects.resize(args[0], static_cast<size_t>(count.i), result);
+                } else if (symbol == "object.length") {
+                    size_t count = 0;
+                    ok = objects.length(args[0], count);
+                    result = static_cast<int>(count);
+                } else if (args[1].kind != ValueKind::Integer || args[1].i < 0) {
+                    error = "object field index must be a nonnegative integer";
+                } else if (symbol == "object.get") {
+                    ok = objects.get(args[0], static_cast<size_t>(args[1].i), result);
+                } else {
+                    ok = objects.set(args[0], static_cast<size_t>(args[1].i), args[2]);
+                }
+                if (error || !ok) {
+                    gFlowState["__runtime_error"] = error ? error : objects.error();
+                    goto pmachineRunExit;
+                }
+                sp -= argc;
+                stack[sp++] = result;
+                ++pc;
+                continue;
+            }
             if (symbol.rfind("host.", 0) == 0 || symbol.rfind("device.", 0) == 0) {
                 if (!hostCallHook || instr.value < 0 || instr.value > 8 || sp < instr.value) {
                     gFlowState["__runtime_error"] = "unavailable host binding or invalid argument count";
@@ -2797,19 +2975,28 @@ void PMachine::runInstructions(size_t instructionCount,
                     }
                     arg.isString = stack[i].isString();
                     if (arg.isString) {
-                        if (stack[i].handle >= stringPool.size()) {
-                            gFlowState["__runtime_error"] = "invalid hosted string handle";
+                        const char* textData = nullptr;
+                        size_t textSize = 0;
+                        if (hostedStrings) {
+                            textData = hostedStrings->data(stack[i].handle);
+                            textSize = hostedStrings->size(stack[i].handle);
+                        } else if (stack[i].handle < stringPool.size()) {
+                            textData = stringPool[stack[i].handle].data();
+                            textSize = stringPool[stack[i].handle].size();
+                        }
+                        if (!textData) {
+                            hostedStorageError = hostedStrings && hostedStrings->error()
+                                ? hostedStrings->error() : "invalid hosted string handle";
                             goto pmachineRunExit;
                         }
-                        const auto& text = stringPool[stack[i].handle];
                         size_t capacity = 32;
-                        while (capacity < text.size()) capacity *= 2;
+                        while (capacity < textSize) capacity *= 2;
                         allocationStage = "host-argument-reserve";
                         allocationBytes = capacity + 1;
                         if (arg.text.capacity() < capacity) arg.text.reserve(capacity);
                         allocationStage = "host-argument-copy";
-                        allocationBytes = text.size() + 1;
-                        arg.text = text;
+                        allocationBytes = textSize + 1;
+                        arg.text.assign(textData, textSize);
                     }
                     else arg.integer = stack[i].i;
                 }
@@ -2857,6 +3044,7 @@ void PMachine::runInstructions(size_t instructionCount,
             }
 
             if (!invokeCallFrame(targetPc, symbol, instr.value)) {
+                if (hostedStorageError) goto pmachineRunExit;
                 if (lastCallError.empty()) {
                     gFlowState["__thunk_error"] = std::string("invalid resolved thunk target for symbol: ") + symbol;
                 } else {
@@ -2867,14 +3055,15 @@ void PMachine::runInstructions(size_t instructionCount,
             continue;
         }
         case OP_RET: {
-            if (nameCallStack.empty()) {
-                goto pmachineRunExit;
-            }
-            NameCallFrame frame = nameCallStack.back();
-            nameCallStack.pop_back();
-            if (hostCallHook && hostedFrames.size() > 1) hostedFrames.pop_back();
-            while (nameFrames.size() > frame.envDepth) {
-                nameFrames.pop_back();
+            int returnPc = 0;
+            if (hostCallHook) {
+                if (!hostedFrames->pop(returnPc)) goto pmachineRunExit;
+            } else {
+                if (nameCallStack.empty()) goto pmachineRunExit;
+                NameCallFrame frame = nameCallStack.back();
+                nameCallStack.pop_back();
+                returnPc = frame.returnPc;
+                while (nameFrames.size() > frame.envDepth) nameFrames.pop_back();
             }
             // If this RET returns from a mapper routine, commit the accumulated
             // output document as the new current message.
@@ -2885,7 +3074,7 @@ void PMachine::runInstructions(size_t instructionCount,
                 mapOutputDoc.clear();
                 mapOutputActive = false;
             }
-            pc = frame.returnPc;
+            pc = returnPc;
             continue;
         }
         case OP_PRINT: {
@@ -3352,13 +3541,8 @@ void PMachine::runInstructions(size_t instructionCount,
         case OP_MAP_RETURN: {
             const std::string name = trimCopy(instr.strOperand);
             if (hostCallHook) {
-                for (auto frame = hostedFrames.rbegin(); frame != hostedFrames.rend(); ++frame) {
-                    auto found = frame->find(name);
-                    if (found != frame->end()) {
-                        gFlowState["__response"] = stringAt(found->second);
-                        break;
-                    }
-                }
+                if (const Value* found = hostedFrames->find(name.c_str()))
+                    gFlowState["__response"] = stringAt(*found);
             } else gFlowState["__response"] = getNamedStringVariable(name);
             ++pc;
             continue;
@@ -3679,8 +3863,18 @@ void PMachine::runInstructions(size_t instructionCount,
     }
     }
     pmachineRunExit:
+        if (!reconcileObjects() && !gFlowState.count("__runtime_error"))
+            gFlowState["__runtime_error"] = objectStorage->objects.error();
+        // Invocation handles cannot persist in extended globals after this arena dies.
+        for (auto& variable : extendableStorage)
+            for (size_t index = 0; index < variable.elementCount; ++index)
+                if (variable.slots[index].value.isObject()) variable.slots[index].value = 0;
         this->pc = static_cast<uint16_t>(std::max(0, pc));
     running = false;
+    if (hostedStorageError) {
+        lastRunGlobals.clear();
+        goto pmachineRunComplete;
+    }
     if (!currentOutputLine.empty()) {
         emitOutputLine(currentOutputLine);
     }
@@ -3689,6 +3883,12 @@ void PMachine::runInstructions(size_t instructionCount,
         for (const auto& binding : nameFrames.front()) {
             GlobalValue value;
             value.intValue = binding.second;
+            if (binding.second.isString()) { value.isString = true; value.strValue = stringAt(binding.second); }
+            if (binding.second.isReal()) { value.isReal = true; value.realValue = binding.second.r; }
+            if (binding.second.isEnum()) {
+                value.isEnum = true;
+                value.strValue = getEnumValueName(binding.second.handle, binding.second.i);
+            }
             lastRunGlobals[binding.first] = value;
         }
     }
@@ -3763,6 +3963,7 @@ void PMachine::runInstructions(size_t instructionCount,
         value.strValue = json;
         lastRunGlobals[setEntry.first] = value;
     }
+    pmachineRunComplete:
     lastRunStepCount = steps;
     running = false;
     if (debugRunStatus.load() != 0) debugRunStatus.store(3);
@@ -3770,6 +3971,91 @@ void PMachine::runInstructions(size_t instructionCount,
         unloadUnit();
     }
     PMTRACE(Serial.println("[DEBUG] Execution finished."));
+}
+
+void PMachine::runCobolProgram(const std::string& pcodeText) {
+    flowState.clear();
+    decltype(lastRunTextOutput)().swap(lastRunTextOutput);
+    decltype(lastRunTrace)().swap(lastRunTrace);
+    lastRunGlobals.clear();
+    lastRunStepLimitHit = false;
+    lastRunStepCount = 0;
+    running = true;
+    this->pc = 0;
+
+    std::map<std::string, cobolvm::ProcedureInfo> procedures;
+    for (const auto& entry : procedureParamsByLabel) procedures[entry.first].params = entry.second;
+    for (const auto& entry : cobolLocalsByLabel) procedures[entry.first].locals = entry.second;
+
+    cobolvm::RunOptions options;
+    options.procedures = &procedures;
+    options.globals = &cobolGlobals;
+    options.hasSourceMessage = !currentMessage.empty();
+    options.sourceMessage = currentMessage;
+    options.onLine = [this](const std::string& line) {
+        if (textOutputHook) {
+            textOutputHook(line, textOutputContext);
+        } else {
+            lastRunTextOutput.push_back(line);
+        }
+    };
+#if defined(ESP32)
+    options.onYield = [] {
+        esp_task_wdt_reset();
+        vTaskDelay(1);
+    };
+    options.random = [] { return static_cast<double>(esp_random()) / 4294967296.0; };
+#endif
+    if (hostCallHook) {
+        options.hostFallback = [this](const std::string& name, const std::vector<cobolvm::HostArg>& args,
+                                      cobolvm::HostArg& result, std::string& error) {
+            std::vector<HostValue> hostArgs;
+            hostArgs.reserve(args.size());
+            for (const auto& arg : args) {
+                HostValue value;
+                value.isString = arg.isString;
+                if (arg.isString) value.text = arg.text;
+                else value.integer = static_cast<int>(arg.number);
+                hostArgs.push_back(std::move(value));
+            }
+            HostValue hostResult;
+            if (!hostCallHook(name, hostArgs, hostResult, error, hostCallContext)) return false;
+            result.isString = hostResult.isString;
+            result.text = hostResult.text;
+            result.number = hostResult.integer;
+            return true;
+        };
+    }
+
+    allocationStage = "cobol-program";
+    cobolvm::RunResult result = cobolvm::runText(pcodeText, options);
+    for (auto& line : result.lines) lastRunTextOutput.push_back(std::move(line));
+    if (result.hasError) flowState["__runtime_error"] = result.error;
+    lastRunStepLimitHit = result.stepLimitHit;
+    lastRunStepCount = result.steps;
+    for (auto& entry : result.globals) {
+        GlobalValue value;
+        const cobolvm::GlobalOut& out = entry.second;
+        if (out.kind == cobolvm::GlobalOut::String) {
+            value.isString = true;
+            value.strValue = out.text;
+        } else if (out.kind == cobolvm::GlobalOut::Number && std::isfinite(out.number)
+                   && out.number == std::floor(out.number)
+                   && out.number >= std::numeric_limits<int>::min()
+                   && out.number <= std::numeric_limits<int>::max()) {
+            value.intValue = static_cast<int>(out.number);
+        } else {
+            value.isReal = true;
+            value.realValue = static_cast<float>(out.number);
+        }
+        lastRunGlobals[entry.first] = std::move(value);
+    }
+    allocationStage = "idle";
+    running = false;
+    if (debugRunStatus.load() != 0) debugRunStatus.store(3);
+    if (runtimeUnit.kind == RuntimeUnitKind::Program) {
+        unloadUnit();
+    }
 }
 
 bool PMachine::didLastRunHitStepLimit() const {
@@ -3799,7 +4085,19 @@ void PMachine::loadDebugInstructions(const std::vector<PInstruction>& instructio
 bool PMachine::hasDebugInstructions() const { return debugLoaded; }
 uint16_t PMachine::getDebugPc() const { return debugPc; }
 
-std::map<std::string, std::string> PMachine::getFlowStateSnapshot() const { return flowState; }
+std::map<std::string, std::string> PMachine::getFlowStateSnapshot() const {
+    auto state = flowState;
+    if (hostedStorageError) state["__runtime_error"] = hostedStorageError;
+    return state;
+}
+
+bool PMachine::takeFlowStateValue(const std::string& key, std::string& out) {
+    const auto found = flowState.find(key);
+    if (found == flowState.end()) return false;
+    out = std::move(found->second);
+    flowState.erase(found);
+    return true;
+}
 
 std::map<std::string, GlobalValue> PMachine::getGlobalsSnapshot() const {
     return lastRunGlobals;

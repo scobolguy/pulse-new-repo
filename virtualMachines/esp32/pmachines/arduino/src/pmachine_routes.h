@@ -1,4 +1,5 @@
 #pragma once
+#include <ArduinoJson.h>
 #include <ESPAsyncWebServer.h>
 #include "pmachine.h"
 #include "ffs/FederatedFileSystem.h"
@@ -24,6 +25,12 @@ void registerPMachineRoutes(
 	FederatedFileSystem* ffs = nullptr,
 	pmachine::PMachine* asyncWorkerMachine = nullptr
 );
-bool startPMachineLanDiscovery(FederatedFileSystem& ffs, uint16_t udpPort,
-                              const std::string& nodeId, uint16_t httpPort, std::string& error);
+// Gives the hosted service host its FFS for string-arena swap; nothing is reserved until a
+// service is installed.
+void configurePMachineHostedStorage(FederatedFileSystem& ffs);
+// Called from the firmware beacon path when an aggregator acknowledges this node.
+void pmachineLearnAggregator(const char* aggregatorId, const char* address, uint16_t httpPort);
+#if defined(ESP32)
+void collectPMachineDiagnostics(JsonObject doc);
+#endif
 void invalidateRouterExecutionCache();

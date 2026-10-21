@@ -9,6 +9,7 @@
 #include "network_bindings.h"
 #include "hosted_image.h"
 #include "host_cache.h"
+#include "reusable_json_allocator.h"
 #include <memory>
 #include <array>
 #include <atomic>
@@ -77,20 +78,49 @@ public:
                                       const std::string& transactionId = "",
                                       const std::string& ingressAggregatorId = "");
     std::string status(const std::string& id = "");
+    void diagnostics(JsonObject doc);
     std::string readiness(const std::string& id = "");
     bool handles(const std::string& method, const std::string& path);
     static bool parseUnit(const std::string& pcode, const JsonDocument& map,
                           const char* kind, Unit& unit, std::string& error);
     bool prepare(std::string& error);
-    bool startDiscovery(FederatedFileSystem& ffs, uint16_t udpPort, const std::string& nodeId,
-                        uint16_t httpPort, std::string& error);
+    // FFS that backs the string-arena swap file once the host is first prepared. No allocation.
+    void setStorage(FederatedFileSystem& ffs);
+    // Records the aggregator that acknowledged this node's beacon as the lifecycle report target.
+    void learnAggregator(const char* aggregatorId, const char* address, uint16_t httpPort);
     static bool loadImage(FederatedFileSystem& ffs, const String& path, const JsonDocument& map,
                           const char* kind, const char* key, const char* keyId,
                           Unit& unit, std::string& error);
+    // Foreground VM runs share the small heap with the hosted worker. Holding the host
+    // mutex keeps the worker idle so both never allocate at once. Returns false only if
+    // the worker stayed busy for waitMs; call resumeWorker() after a successful pause.
+    bool pauseWorker(uint32_t waitMs);
+    void resumeWorker();
 private:
+    bool workerPaused = false;
+    // Set when a worker pass hit bad_alloc; the worker then backs off so the heap can recover.
+    bool allocationFailed = false;
     struct Entry { std::string json; uint64_t deadline; };
     using Table = std::map<std::string, Entry>;
+    // Random-access FFS file that receives managed string blocks evicted from the arena.
+    class FfsSwapFile {
+    public:
+        explicit FfsSwapFile(FederatedFileSystem& fileSystem) : ffs(fileSystem) {}
+        bool writeAt(size_t offset, const uint8_t* data, size_t size);
+        bool readAt(size_t offset, uint8_t* data, size_t size);
+        const char* name() const { return "ffs"; }
+    private:
+        bool open();
+        FederatedFileSystem& ffs;
+        File file;
+    };
+    void configureStringSwap(FederatedFileSystem* ffs);
     PMachine machine;
+    HostExecutionStorage executionStorage;
+    std::unique_ptr<FfsSwapFile> stringSwapFile;
+    std::unique_ptr<ManagedHeapBacking> stringSwap;
+    char jsonOutputBuffer[1024];
+    ReusableJsonAllocator<4096> jsonAllocator;
     NetworkBindings network;
     SemaphoreHandle_t mutex = nullptr;
     SemaphoreHandle_t ingressMutex = nullptr;
@@ -149,23 +179,13 @@ private:
     std::shared_ptr<Context> current;
     size_t nextBackgroundService = 0;
     std::string hostError;
-    std::shared_ptr<Context> discovery;
-    WiFiUDP discoveryUdp;
-    uint16_t discoveryPort = 0;
-    uint16_t discoveryHttpPort = 0;
-    bool discoverySocketReady = false;
-    std::string discoveryRequestId, discoveryTargets = "[]", discoveryAddress, discoveryEndpoint;
-    std::vector<AggregatorTarget> learnedReportTargets;
-    int32_t discoveryNextAt = -1;
-    uint64_t discoveryPollAt = 0;
-    uint64_t discoveryAdvertiseAt = 0;
-    uint32_t discoveryPollMs = 1000, discoveryJitterMs = 1000;
-    uint32_t discoveryAdvertiseMs = 10000;
-    uint32_t discoveryClockPeriodMs = 1073741824;
-    size_t discoveryPacketLimit = 4096;
-    bool discoveryCall(const char* route, const JsonDocument& request, JsonDocument& response);
-    bool publishDiscoveryTargets(JsonVariantConst targets);
-    void discoveryTurn();
+    FederatedFileSystem* swapFileSystem = nullptr;
+    // The aggregator that last acknowledged this node's beacon; see learnAggregator(). Fixed
+    // buffers under a spinlock so learning works before the host is prepared and never allocates.
+    struct LearnedAggregator { char id[129] = ""; char endpoint[96] = ""; };
+    LearnedAggregator learnedAggregator;
+    mutable portMUX_TYPE learnedLock = portMUX_INITIALIZER_UNLOCKED;
+    LearnedAggregator learnedAggregatorSnapshot() const;
     std::vector<AggregatorTarget> reportTargetsFor(const Context& context) const;
     const char* currentBinding = "";
     enum class SerializeResult { ok, tooLarge, noMemory };

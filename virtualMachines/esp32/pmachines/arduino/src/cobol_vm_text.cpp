@@ -687,6 +687,7 @@ const Json* Json::get(const std::string& key) const {
 
 namespace {
 struct JsonParser {
+    explicit JsonParser(const std::string& source) : text(source) {}
     const std::string& text;
     size_t pos = 0;
     int depth = 0;

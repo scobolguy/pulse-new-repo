@@ -533,7 +533,7 @@ entry point must use equivalent source processing with correct source maps.
 
 | Programs | Current post-parse blocker | Planned owner |
 |---|---|---|
-| NC-COMPARE-01 | HIGH/LOW-VALUE comparison expansion and P-code string escape decoding | Fixed in the JS compiler/runtime; ESP32 parser parity remains in the port backlog |
+| NC-COMPARE-01 | HIGH/LOW-VALUE comparison expansion and P-code string escape decoding | Fixed in the JS compiler/runtime and the native ESP32 COBOL engine |
 | NC-ODO-01 | Nested-group receiving MOVE explicitly unsupported | Storage layout and variable group length |
 | NC-LIMITS-01 | END-ADD parsed as a name, then "undeclared" | Arithmetic grammar/scope first; precision tests afterward |
 | SQ-WRITE-READ-01, SQ-NOT-AT-END-01, SQ-INTO-FROM-01, SQ-REWRITE-01, SQ-EXTEND-01, SQ-STATUS-4X-01, SQ-REWRITE-43-01, SQ-ODO-RECORD-01 | Sequential organization explicitly rejected | Sequential file execution |

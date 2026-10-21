@@ -1,0 +1,14 @@
+[
+  { "name": "core_literals", "file": "core/core_literals.pas" },
+  { "name": "core_control_flow", "file": "core/core_control_flow.pas" },
+  { "name": "core_records", "file": "core/core_records.pas" },
+  { "name": "core_classes", "file": "core/core_classes.pas" },
+  { "name": "gen_box_class", "file": "generics/gen_box_class.pas" },
+  { "name": "gen_box_record", "file": "generics/gen_box_record.pas" },
+  { "name": "gen_list_basic", "file": "generics/gen_list_basic.pas" },
+  { "name": "gen_constraints", "file": "generics/gen_constraints.pas" },
+  { "name": "gen_methods", "file": "generics/gen_methods.pas" },
+  { "name": "neg_gen_arity", "file": "negative/neg_gen_arity.pas", "diagnostic": "generic.*(arity|argument.*count|parameter.*count|number|requires [0-9]+ type arguments)|wrong number.*(argument|parameter)" },
+  { "name": "neg_gen_constraints", "file": "negative/neg_gen_constraints.pas", "diagnostic": "(generic|type).*constraint|must be a class|not a class" },
+  { "name": "neg_gen_specialization", "file": "negative/neg_gen_specialization.pas", "diagnostic": "(generic|type).*(missing.*argument|requires.*argument|specializ)|missing.*type argument" }
+]

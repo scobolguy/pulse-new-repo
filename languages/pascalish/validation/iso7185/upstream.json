@@ -1,0 +1,22 @@
+{
+  "repository": "https://git.code.sf.net/p/pascalp5/code",
+  "revision": "f730c1c03de861dfcf1a88c7b320268c3a456bcc",
+  "rights": "Author explicitly dedicates PAT to the public domain at https://www.standardpascal.org/p5.html",
+  "files": [
+    {
+      "upstream": "standard_tests/iso7185pat.pas",
+      "local": "iso7185pat.pas",
+      "sha256": "908b696f9c5d8e38e2272375f58ca28fc2ed3aa3dda7d8678bcccd4c53bfbd52"
+    },
+    {
+      "upstream": "standard_tests/iso7185pat.inp",
+      "local": "iso7185pat.inp",
+      "sha256": "2ad35c5681cf1696d1ab7c4e9b039987bc097ddd27eb90a6e2de9f0e0453a8a5"
+    },
+    {
+      "upstream": "gpc/bit32/standard_tests/iso7185pat.cmp",
+      "local": "iso7185pat.reference.txt",
+      "sha256": "cba6cb8e45c8ceac11e46fd7a6f7a4b0da5ea4fca1cd14babfa0e8089c0fc553"
+    }
+  ]
+}

@@ -206,8 +206,8 @@ the RW clause-order scenarios exercise legal source forms, not compiler
 standards-flagging diagnostics.
 
 These additions cover the omitted corpus sections, not every combination in
-the standard. The native-runtime/library backlog below is not covered by this
-CCVS catalog.
+the standard. The native ESP32 engine below is checked against this catalog's
+JavaScript output.
 
 ## SORT and MERGE
 
@@ -242,8 +242,8 @@ available runtime memory and the PMachine instruction limit bound the dataset.
 The existing filesystem image/record limits still apply to USING/GIVING.
 The sort algorithm, buffering, and procedure dispatch are generated P-code:
 there are no new JavaScript-only SORT/MERGE opcodes or host bindings. Running
-them on native ESP32 hardware still depends on the deferred decimal, string,
-and filesystem support listed below.
+them on native ESP32 hardware uses the COBOL engine below; USING/GIVING files
+are delegated to the desktop file manager.
 
 All seven ST CCVS cases and the additional edge/failure tests in
 [`sort-merge.test.mjs`](../../../../languages/cobolish85/tests/sort-merge.test.mjs)
@@ -426,26 +426,36 @@ statement/clause combinations and Tandem NonStop system intrinsics still need
 implementation and independent conformance tests. Pulse-specific service and
 metadata clauses are extensions, not syntax defined by the HP manual.
 
-## ESP32 PMachine port backlog
+## ESP32 PMachine COBOL engine
 
 COBOL semantics are implemented and tested on the JavaScript PMachine first.
-The ESP32 PMachine (`pmachines/arduino/src/pmachine.cpp`) is updated later in
-one batch. Until then, compiled COBOL programs that use the items below run
-only on the JavaScript PMachine. New runtime semantics should prefer shared
-opcodes or P-code libraries; anything that cannot must be added here.
+The ESP32 PMachine runs the same P-code on a native engine, `cobolvm`
+(`pmachines/arduino/src/cobol_vm*.cpp`), that reproduces `runtime.mjs`:
 
-| Item | Kind | Used for | ESP32 notes |
-|---|---|---|---|
-| `PUSH_DEC`, `DEC_CONV`, `DEC_QUANT`, `DEC_STR`, `DEC_FITS` | Opcodes (manifest `targets: ["js"]`) | Fixed-point `PICTURE` arithmetic, ROUNDED, ON SIZE ERROR | JS uses BigInt. COBOL-85 needs 18 digits (fits `int64_t`); the JS division intermediate uses scale 20, so ESP32 needs 128-bit or a bounded intermediate scale. |
-| `DEC_DISPLAY precision scale` | Opcode `0x75` (`targets: ["js"]`) | Numeric DISPLAY and group serialization: zero-padded to PICTURE width, implied point omitted | Straightforward once a decimal value representation exists. |
-| COBOL `CALL` program lookup and state | `CALL` plus generated P-code and `PUSH_REF` | Included program entry dispatch, live BY REFERENCE aliases (including alphanumeric byte-slice views), `INITIAL`, `CANCEL`, and explicit missing-target errors | The native runtime needs reference values dereferenced by variable loads/stores and array access, including the `name@offset:length` alias operand; preserve program state and report unresolved procedure labels. |
-| `CONCAT` | Opcode `0x6B` (`targets: ["js"]`) | DISPLAY lists, group MOVE | Header defines it but the manifest/compat check disagree (`check-pcode-compat.mjs` reports it). |
-| P-code quoted-string escape decoding | Runtime parser | LOW-VALUE NUL bytes and escaped COBOL text constants | The JS parser now decodes JSON escapes; verify C++ parity in the later PMachine batch. |
-| `host.string_*` text bindings, including `host.string_length` | Host ABI | Reference modification, STRING, UNSTRING, intrinsic text functions, group MOVE, class tests, INSPECT, SORT/MERGE buffers and collation | Need native implementations or a P-code text library. |
-| `host.math_*` numeric bindings | Host ABI | Transcendental and numeric intrinsic functions | Needs native math bindings and a decimal-result ABI. |
-| `host.isam_*` and `host.fs_*` | Host ABI | Indexed/sequential/relative files and SORT/MERGE USING/GIVING via `libraries/isam/isam.pas` | ISAM logic is already P-code; ESP32 needs the filesystem bindings (local flash or remote filesystem server). |
+- `PUSH_DEC`/`DEC_*` arbitrary-precision decimal arithmetic (the scale-20
+  division intermediate, ROUNDED, ON SIZE ERROR) and `DEC_DISPLAY`.
+- `PUSH_REF` BY REFERENCE aliases (including `name@offset:length` byte
+  slices), dynamically scoped `CALL` frames, and program-map params/locals.
+- The `host.string_*`, `host.math_*` and date bindings, implemented natively.
+- Quoted-string escape decoding (LOW-VALUE NUL bytes).
 
-Programs requiring host bindings are tagged `targets: ["js"]` in their program
-map. Run `node scripts/check-pcode-compat.mjs` from `aggregator` after porting;
-it currently fails on pre-existing manifest gaps (`OP_FSM`, `OP_GPIO_WRITE`,
-`OP_DELAY_MS`, `OP_CONCAT`).
+`parseTextPCode` recognises COBOL P-code (compiler header or COBOL-only
+opcodes) and returns one `OP_COBOL_PROGRAM` (`0xFD`) instruction, which
+`runInstructions` hands to the engine. That marker is native-only and is
+deliberately not in the shared opcode manifest. Program maps pass COBOL
+`globals` and procedure `locals` to the machine as `@globals` and
+`@locals:LABEL` signature entries. Output, `__runtime_error`, the step count
+and limit (200000), and globals are reported through the normal run results.
+
+ISAM is not implemented on the device: the ISAM file manager runs on the
+desktop. `host.isam_*` and `host.fs_*` calls are checked against the
+binding contract and then delegated to the machine's host-call hook; without
+one they fail with `Host binding unavailable`.
+
+Parity is checked by exporting every executable CCVS case that needs no file
+host (89 of 132) with its JavaScript output, then running the P-code through
+`cobolvm` built with desktop g++; all outputs match line for line.
+
+`node scripts/check-pcode-compat.mjs` (from `aggregator`) still reports the
+pre-existing manifest gaps `OP_FSM`, `OP_GPIO_WRITE`, `OP_DELAY_MS` and
+`OP_CONCAT`.

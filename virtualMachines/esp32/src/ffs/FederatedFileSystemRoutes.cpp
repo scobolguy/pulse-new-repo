@@ -3,10 +3,14 @@
 #include "pmachine_routes.h"
 #include "async_diagnostics.h"
 #include <vector>
+#include <new>
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #if defined(ESP32)
 #include <SD.h>
+#include <WiFi.h>
+#include <esp_heap_caps.h>
+#include <esp_system.h>
 #endif
 #include <LittleFS.h>
 
@@ -65,6 +69,51 @@ void appendFlowBundle(JsonArray bundles, const String& bundleName) {
 } // namespace
 
 void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS) {
+
+#if defined(ESP32)
+    server.on("/ffs/diagnostics", HTTP_POST, [&federatedFS](AsyncWebServerRequest* request) {
+        try {
+            const uint32_t freeHeap = ESP.getFreeHeap();
+            const uint32_t largestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+            JsonDocument doc;
+            doc["uptimeMs"] = millis();
+            doc["resetReason"] = static_cast<int>(esp_reset_reason());
+            doc["freeHeapBytes"] = freeHeap;
+            doc["minFreeHeapBytes"] = ESP.getMinFreeHeap();
+            doc["largestFreeBlockBytes"] = largestBlock;
+            auto wifi = doc["wifi"].to<JsonObject>();
+            const bool connected = WiFi.status() == WL_CONNECTED;
+            wifi["status"] = static_cast<int>(WiFi.status());
+            wifi["connected"] = connected;
+            wifi["mode"] = static_cast<int>(WiFi.getMode());
+            wifi["ip"] = WiFi.localIP().toString();
+            wifi["apIp"] = WiFi.softAPIP().toString();
+            if (connected) wifi["rssi"] = WiFi.RSSI();
+#if defined(ENABLE_PMACHINE)
+            collectPMachineDiagnostics(doc["hostedRuntime"].to<JsonObject>());
+#endif
+            char snapshot[2048];
+            const size_t expected = measureJson(doc);
+            if (doc.overflowed() || expected >= sizeof(snapshot)
+                || serializeJson(doc, snapshot, sizeof(snapshot)) != expected) {
+                Serial.println("[FFS] Diagnostic snapshot allocation or size failure");
+                request->send(503, "text/plain", "Diagnostic snapshot unavailable");
+                return;
+            }
+            const FFSStatus result = federatedFS.write("/diagnostics.json",
+                reinterpret_cast<const uint8_t*>(snapshot), expected);
+            if (result != FFSStatus::OK) {
+                Serial.printf("[FFS] Diagnostic snapshot write failed: %d\n", static_cast<int>(result));
+                request->send(500, "text/plain", "Diagnostic snapshot write failed");
+                return;
+            }
+            request->send(200, "application/json", snapshot);
+        } catch (const std::bad_alloc&) {
+            Serial.println("[FFS] Diagnostic snapshot allocation failed");
+            request->send(503, "text/plain", "Diagnostic snapshot unavailable");
+        }
+    });
+#endif
 
             // FFS: List all device definitions
             server.on("/ffs/devices", HTTP_GET, [](AsyncWebServerRequest *request){

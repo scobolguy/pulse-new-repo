@@ -19,6 +19,59 @@ DeviceConfiguration deviceConfig;
 #include <ESPmDNS.h>
 #endif
 #include <ESPAsyncWebServer.h>
+#if defined(ESP32)
+#include <esp_heap_caps.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <cstring>
+#include <new>
+
+// The prebuilt ESP-IDF config has a 0-byte C++ emergency exception pool, so a
+// std::bad_alloc raised on an exhausted heap cannot allocate its own exception object
+// and the chip aborts instead of reaching the catch. This replacement operator new keeps
+// a small reserve and releases it just before throwing, so the throw always succeeds.
+namespace {
+constexpr size_t EXCEPTION_RESERVE_BYTES = 512;
+void* gExceptionReserve = nullptr;
+
+void refillExceptionReserve() {
+    if (__atomic_load_n(&gExceptionReserve, __ATOMIC_ACQUIRE)) return;
+    void* block = malloc(EXCEPTION_RESERVE_BYTES);
+    void* expected = nullptr;
+    if (block && !__atomic_compare_exchange_n(&gExceptionReserve, &expected, block, false,
+            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) free(block);
+}
+
+// AsyncTCP/AsyncWebServer (async_tcp) and lwIP (tiT) were written for a new that returns
+// null and have no handlers, so a throw there aborts. Heap spikes on this board come from
+// the hosted worker, which fails fast and frees within milliseconds, so those network
+// tasks briefly wait for memory instead of throwing.
+bool waitsForHeap() {
+    if (xPortInIsrContext() || xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) return false;
+    const char* name = pcTaskGetTaskName(nullptr);
+    return name && (!strcmp(name, "async_tcp") || !strcmp(name, "tiT"));
+}
+}  // namespace
+
+void* operator new(size_t size) {
+    if (!size) size = 1;
+    void* block = malloc(size);
+    if (!block && waitsForHeap()) {
+        for (int attempt = 0; attempt < 20 && !block; ++attempt) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            block = malloc(size);
+        }
+    }
+    if (block) {
+        refillExceptionReserve();
+        return block;
+    }
+    free(__atomic_exchange_n(&gExceptionReserve, nullptr, __ATOMIC_ACQ_REL));
+    throw std::bad_alloc();
+}
+
+void* operator new[](size_t size) { return operator new(size); }
+#endif
 #include "https_service.h"
 
 #include <ArduinoJson.h>
@@ -1417,9 +1470,33 @@ void notFound(AsyncWebServerRequest *request) {
     request->send(404, "text/plain", "Not found");
 }
 
+// AsyncWebServer buffers urlencoded bodies char-by-char and then copies them several
+// times; on a fragmented heap that silently empties the value or crashes in memmove.
+// Registered first, this trivial handler claims oversized form posts so the body is
+// skipped unparsed and the client gets 413 (use /ffs/upload_stream for large files).
+class OversizedFormGuard : public AsyncWebHandler {
+public:
+    bool canHandle(AsyncWebServerRequest* request) override {
+        if (!request->contentType().startsWith("application/x-www-form-urlencoded")) return false;
+        const size_t bytes = request->contentLength();
+        if (bytes > 16384) return true;
+#if defined(ESP32)
+        return bytes * 4 > heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+#else
+        return false;
+#endif
+    }
+    void handleRequest(AsyncWebServerRequest* request) override {
+        Serial.printf("[HTTP] Rejected %u-byte form body for %s\n",
+            static_cast<unsigned>(request->contentLength()), request->url().c_str());
+        request->send(413, "text/plain", "Form body too large for device heap; use /ffs/upload_stream");
+    }
+};
+
 // ...existing code...
 
 void setupWebServer() {
+            server.addHandler(new OversizedFormGuard());
             // Service broker endpoint: aggregator can notify this node when a service is assigned or released
             server.on("/service-broker/announce", HTTP_POST, [](AsyncWebServerRequest *request){
                 if (!request->hasParam("service", true) || !request->hasParam("busy", true)) {
@@ -2702,6 +2779,7 @@ void setupWebServer() {
 #define ANNOUNCE_INTERVAL 10000 // ms
 #define WIFI_RECONNECT_INTERVAL 5000 // ms
 constexpr unsigned long WIFI_FAILOVER_INTERVAL_MS = 15000;
+constexpr uint8_t WIFI_FAILURES_BEFORE_PROVISIONING = 10;
 
 constexpr uint16_t DEFAULT_UDP_PARENT_PORT = 4210;
 constexpr uint16_t DEFAULT_UDP_SIBLING_PORT = 4211;
@@ -2713,6 +2791,29 @@ unsigned long lastTopologySyncMs = 0;
 
 unsigned long lastAnnounce = 0;
 unsigned long lastWifiFailoverAttemptMs = 0;
+uint8_t consecutiveWifiConnectFailures = 0;
+bool wifiProvisioningModeActive = false;
+
+bool startWifiProvisioningAccessPoint() {
+    String ssidBase = nodeName.length() ? nodeName : String("ESP32");
+    ssidBase.replace(" ", "-");
+    String apName = String("Pulse-") + ssidBase + "-Provision";
+    if (apName.length() > 31) {
+        apName = apName.substring(0, 31);
+    }
+
+    WiFi.mode(WIFI_AP_STA);
+    if (!WiFi.softAP(apName.c_str())) {
+        Serial.printf("[WIFI-PROV] Failed to start provisioning AP: %s\n", apName.c_str());
+        return false;
+    }
+
+    wifiProvisioningModeActive = true;
+    udpRuntimeConfigureWifiCredentials("", "");
+    Serial.printf("[WIFI-PROV] Provisioning AP started: %s\n", apName.c_str());
+    Serial.printf("[WIFI-PROV] AP IP: %s\n", WiFi.softAPIP().toString().c_str());
+    return true;
+}
 
 #if 0 // UDP announcement and discovery disabled
 #define ANNOUNCE_PORT 4210
@@ -2995,20 +3096,7 @@ void setup() {
         Serial.println(WiFi.localIP());
     } else {
         Serial.println("[BOOT] WiFi connection failed (no usable provisioned profile)");
-        String ssidBase = nodeName.length() ? nodeName : String("ESP32");
-        ssidBase.replace(" ", "-");
-        String apName = String("Pulse-") + ssidBase + "-Provision";
-        if (apName.length() > 31) {
-            apName = apName.substring(0, 31);
-        }
-        WiFi.mode(WIFI_AP_STA);
-        const bool apStarted = WiFi.softAP(apName.c_str());
-        if (apStarted) {
-            Serial.printf("[WIFI-PROV] Provisioning AP started: %s\n", apName.c_str());
-            Serial.printf("[WIFI-PROV] AP IP: %s\n", WiFi.softAPIP().toString().c_str());
-        } else {
-            Serial.printf("[WIFI-PROV] Failed to start provisioning AP: %s\n", apName.c_str());
-        }
+        startWifiProvisioningAccessPoint();
     }
 
     // 3. Ensure /devices, /services, and /flows directories exist at root at boot
@@ -3483,11 +3571,7 @@ void setup() {
     // 8. Web server for node name config (Async)
     setupWebServer();
 #if defined(ESP32) && defined(ENABLE_PMACHINE) && !defined(DISABLE_PMACHINE_ROUTES)
-    if (ffsUp) {
-        std::string discoveryError;
-        if (!startPMachineLanDiscovery(federatedFS, runtimeUdpParentPort, nodeName.c_str(), 80, discoveryError))
-            Serial.printf("[LAN-DISCOVERY] Bootstrap unavailable: %s\n", discoveryError.c_str());
-    }
+    if (ffsUp) configurePMachineHostedStorage(federatedFS);
 #endif
 #if defined(ENABLE_HTTPS) && (defined(ESP32) || defined(ESP8266))
     startHttpsService();
@@ -3501,14 +3585,28 @@ void setup() {
 void loop() {
     serialProvisioningPoll();
 
-    if (WiFi.status() != WL_CONNECTED && globalWiFiProvisioning) {
+    if (WiFi.status() == WL_CONNECTED) {
+        consecutiveWifiConnectFailures = 0;
+    } else if (!wifiProvisioningModeActive && globalWiFiProvisioning) {
         const unsigned long now = millis();
         if (now - lastWifiFailoverAttemptMs >= WIFI_FAILOVER_INTERVAL_MS) {
             lastWifiFailoverAttemptMs = now;
             if (globalWiFiProvisioning->connectWiFi(nullptr, 10)) {
+                consecutiveWifiConnectFailures = 0;
                 const WiFiCredentials& active = globalWiFiProvisioning->getCurrentCredentials();
                 udpRuntimeConfigureWifiCredentials(active.ssid, active.password);
                 startOrRefreshMdns(nodeName);
+            } else {
+                ++consecutiveWifiConnectFailures;
+                Serial.printf("[WIFI] Reconnect failed (%u/%u)\n",
+                              static_cast<unsigned>(consecutiveWifiConnectFailures),
+                              static_cast<unsigned>(WIFI_FAILURES_BEFORE_PROVISIONING));
+                if (consecutiveWifiConnectFailures >= WIFI_FAILURES_BEFORE_PROVISIONING) {
+                    Serial.println("[WIFI] Ten reconnect failures; returning to provisioning mode");
+                    if (!startWifiProvisioningAccessPoint()) {
+                        consecutiveWifiConnectFailures = 0;
+                    }
+                }
             }
         }
     }
@@ -3564,6 +3662,13 @@ void loop() {
     udpContext.computeNodeCapabilityHash = computeNodeCapabilityHash;
 #if defined(ENABLE_DOORBELL_DISPLAY)
     udpContext.onAlertMessage = handleDoorbellAlertPacket;
+#endif
+#if defined(ESP32) && defined(ENABLE_PMACHINE) && !defined(DISABLE_PMACHINE_ROUTES)
+    udpContext.onAggregatorAck = [](const char* aggregatorId, IPAddress sourceIp, uint16_t httpPort) {
+        char address[16];
+        snprintf(address, sizeof(address), "%u.%u.%u.%u", sourceIp[0], sourceIp[1], sourceIp[2], sourceIp[3]);
+        pmachineLearnAggregator(aggregatorId, address, httpPort);
+    };
 #endif
     udpRuntimeProcessIncoming(udpContext, runtimeUdpParentPort, runtimeUdpSiblingPort);
         /* UDP announcement disabled */

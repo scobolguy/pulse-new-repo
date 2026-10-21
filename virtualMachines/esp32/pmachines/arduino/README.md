@@ -189,7 +189,7 @@ guesses a dependency port. The configured aggregator report URL must use plain
 HTTP with an explicit port and end in
 `/api/runtime/instances/report`. HTTPS is intentionally rejected by this
 bounded firmware transport.
-`reportTarget`/`reportTargets` are optional when the signed LAN policy is loaded.
+`reportTarget`/`reportTargets` are optional; the beacon-acknowledging aggregator is learned at runtime.
 An explicit target list must still contain the explicit owner. Discovered targets
 never choose or replace that owner or any dependency instance binding.
 
@@ -203,7 +203,7 @@ position in the target list.
 For logical submissions, the parent HTTP ingress must forward the exact
 `x-pulse-ingress-aggregator-id` header with the configured aggregator ID, in
 addition to `x-pulse-transaction-id`. Native resolves that ID only against
-the explicit overrides plus fresh Pascalish-discovered targets and submits to
+the explicit overrides plus the beacon-learned aggregator and submits to
 that matching endpoint; missing or
 unknown IDs fail closed. This ensures child transactions reach the same
 aggregator transaction store as their parent, without guessing an address.
@@ -220,53 +220,27 @@ its Pascalish-derived transitive readiness; `GET /ready` returns that decision
 and fails closed if the owner acknowledgement is missing or older than 30
 seconds. Dependency-chain decisions remain aggregator-hosted.
 
-### Zero-knowledge firmware bootstrap
+### Zero-knowledge aggregator learning
 
-After the actual HTTP server starts, ESP32 firmware starts the shared
-`src\service-lifecycle\discovery.pas` policy using only the configured UDP parent
-port and existing node identity. No aggregator address, HTTP port, owner election,
-or prior HTTP artifact upload is needed. The generated signed PHI1 policy is
-embedded in firmware flash, streamed to a signature-specific FFS file in 512-byte
-writes on first boot, verified with the existing profile signing key, and executed
-by the existing single Pascalish worker. Its private endpoints are not installed
-as public HTTP routes. Bootstrap failure is logged and does not silently substitute
-native discovery decisions.
+The node runs no aggregator discovery of its own and keeps no table of other nodes;
+both are aggregator responsibilities. The firmware sends its `nodeBeacon` and answers
+`nodeDetailsRequest`. When an aggregator replies with `nodeBeaconAck`
+carrying its `nodeId` and `httpPort`, the node records
+`http://<ack source IP>:<httpPort>/api/runtime/instances/report` as its single
+learned report target for that aggregator ID. Later acks refresh it without
+allocating unless the ID or address changes. Beacons from other nodes are ignored.
+No aggregator address, HTTP port, owner election or uploaded artifact is needed.
 
-The native adapter owns an ephemeral UDP socket, broadcasts policy-produced
-requests/beacons to the configured parent port, and feeds received datagrams and
-their actual source address to `/accept`. `/targets` handles expiry; `/poll` and
-`/request` handle retry decisions/correlation. `/advertise` produces the node
-endpoint from the HTTP listener that has actually started. The clock is the
-64-bit ESP monotonic clock modulo the policy's `clockPeriodMs`; retry starts with
-the `-1` sentinel and wrapped policy deadlines are never compared in C++.
-Datagrams are capped at 4096 bytes and four per turn, with the existing 32 KB free
-heap/8 KB largest-block admission floors. Discovery keeps its own image lease,
-preserving all six installed-service image slots and the shared four-page cache.
+The hosted service host reserves nothing at boot. Its string arena, FFS swap file
+and 16 KB worker stack are created when the first service is installed.
 
-Reports fan out to every fresh discovered aggregator. Explicit target URL/token
-overrides take precedence for the same aggregator ID. Logical continuations
+Reports go to the explicit targets plus the learned aggregator. Explicit target
+URL/token overrides take precedence for the same aggregator ID. Logical continuations
 remain pinned to `x-pulse-ingress-aggregator-id`, and only the explicit owner may
 acknowledge readiness. HTTPS-only aggregators remain unsupported by the existing
-native HTTP transport; discovery records the actual endpoint without downgrading
-TLS or inventing another port.
-
-Regenerate the committed bootstrap after shared policy/compiler changes:
-
-```powershell
-node pmachines\arduino\compile-lan-discovery.mjs --native-probe
-node --test testing\pmachines\esp32-lan-discovery-image.test.mjs testing\pmachines\esp32-hosted-lifecycle-support.test.mjs
-cmake -S pmachines\native -B .pio\native-discovery-probe\build -G Ninja
-cmake --build .pio\native-discovery-probe\build --target pulse_native_discovery_probe -j 1
-.\.pio\native-discovery-probe\build\pulse_native_discovery_probe.exe .pio\native-discovery-probe\policy.pcode .pio\native-discovery-probe\policy.map.json
-pio run -e esp32dev -j 1
-```
-
-For a customized firmware signing profile, regenerate with matching
-`PCODE_SIGNING_KEY`/`PCODE_SIGNING_KEY_ID`; only the signature and key ID, never
-the key, enter the generated header. `lanDiscovery` in service-host status exposes
-policy load/socket state, instruction count, actual endpoint and learned-target
-count. Compilation/direct-native tests are not flashed-ESP32 or two-host LAN proof.
-
+native HTTP transport. `lanDiscovery` in service-host status reports
+`policy: "beacon-ack"`, the learned target count and, in diagnostics, the learned
+aggregator ID and endpoint.
 Pascalish native services may call
 `host.service_submit(serviceId, path, bodyText): string`. It accepts a POST to
 an explicitly required/bound logical service and submits through the explicitly

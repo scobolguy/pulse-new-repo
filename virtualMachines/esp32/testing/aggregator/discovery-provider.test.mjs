@@ -215,7 +215,7 @@ test('local runtime owns UDP receipt, acknowledgements and port-aware bounded en
   const nodes = new Map();
   const requests = [];
   const runtime = createLocalDiscoveryRuntime({
-    discoveredNodes: nodes, udpPort: 0, nodeId: 'aggregator', probeEnabled: false, logger,
+    discoveredNodes: nodes, udpPort: 0, httpPort: 7123, nodeId: 'aggregator', probeEnabled: false, logger,
     onNode: received,
     fetchImpl: async (url) => {
       requests.push(url);
@@ -233,6 +233,8 @@ test('local runtime owns UDP receipt, acknowledgements and port-aware bounded en
     assert.equal(node.beacon.kind, 'nodeBeacon');
     const ack = await acknowledgement;
     assert.equal(ack.kind, 'nodeBeaconAck');
+    assert.equal(ack.nodeId, 'aggregator');
+    assert.equal(ack.httpPort, 7123, 'Nodes learn the actual lifecycle-report port from the acknowledgement');
     assert.equal(ack.from, runtime.getStatus().replyPort, 'Replies leave from the private socket, not the shared port');
     assert.equal(requests.length, 2);
     assert.ok(requests.every((url) => url.startsWith('http://127.0.0.1:8080/')));

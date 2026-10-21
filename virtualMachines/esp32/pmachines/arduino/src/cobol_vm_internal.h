@@ -3,7 +3,6 @@
 
 #include "cobol_vm.h"
 
-#include <set>
 #include <stdexcept>
 
 namespace cobolvm {
@@ -63,63 +62,8 @@ struct Json {
 bool parseJson(const std::string& latin1, Json& out);
 std::string jsonQuote(const std::string& latin1);
 
-// COBOL indexed/sequential/relative files; a C++ port of libraries/isam/isam.pas and the
-// pcode-isam.mjs adapter.
-class IsamFiles {
-public:
-    explicit IsamFiles(IsamStorage& storage) : storage(storage) {}
-    int open(const std::string& root, const std::string& path, const std::string& keyName, const std::string& mode);
-    std::string read(int handle, const std::string& key);
-    std::string readAlternate(int handle, const std::string& alternateName, const std::string& key);
-    std::string readNext(int handle);
-    std::string currentKey(int handle);
-    int count(int handle);
-    int start(int handle, const std::string& key, const std::string& comparison);
-    int write(int handle, const std::string& key, const std::string& record);
-    int rewrite(int handle, const std::string& key, const std::string& record);
-    int remove(int handle, const std::string& key);
-    int close(int handle, bool lock);
-    std::string status(int handle);
-
-private:
-    struct AlternateKey {
-        std::string name;
-        int offset = 0;
-        int length = 1;
-        bool duplicates = false;
-    };
-    using Row = std::pair<std::string, std::string>;
-    struct Handle {
-        int id = 0;
-        std::string root, path, keyName, mode, organization, access, lastWriteKey, cursor, status;
-        std::vector<AlternateKey> alternateKeys;
-        bool available = false, positioned = false, pending = false, eof = false, isVirtual = false;
-        std::vector<Row> records;
-    };
-    struct Outcome {
-        std::string status = "00";
-        std::string record;
-    };
-
-    Handle* find(int handle);
-    std::string identity(const std::string& root, const std::string& path) const;
-    void loadImage(Handle& file, std::vector<Row>& rows);
-    bool persist(Handle& file, const std::vector<Row>& rows, std::string& status);
-    Outcome operate(const std::string& operation, int handle, const std::string& key,
-                    const std::string& record, const std::string& extra);
-    void operateOn(Handle& file, const std::string& operation, const std::string& key,
-                   const std::string& record, const std::string& extra, Outcome& outcome);
-
-    IsamStorage& storage;
-    int next = 1;
-    std::vector<Handle> handles;
-    std::map<int, std::string> statuses;
-    std::set<std::string> openFiles;
-    std::set<std::string> lockedFiles;
-};
-
-// Host bindings implemented by the engine, mirroring the service-host-bindings contract
-// together with the desktop text, intrinsic, date and ISAM implementations.
+// Host bindings known to the engine, mirroring the service-host-bindings contract. Text,
+// intrinsic and date bindings run in the engine; delegated ones (ISAM) go to the host.
 enum class ArgKind : uint8_t { String, Integer, Number };
 enum class ResultKind : uint8_t { String, Integer, Decimal, Number };
 struct BindingSpec {
@@ -134,11 +78,11 @@ struct BindingValue {
     std::string text;  // Latin-1
 };
 struct BindingContext {
-    IsamFiles& isam;
     const std::function<double()>& random;
 };
 int findBinding(const std::string& lowerName);  // -1 when the engine has no implementation
 const BindingSpec& bindingSpec(int id);
+bool isDelegatedBinding(int id);
 BindingValue callBinding(int id, const std::vector<BindingValue>& args, BindingContext& context);
 
 }  // namespace detail

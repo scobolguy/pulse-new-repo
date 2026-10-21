@@ -1,6 +1,6 @@
-// Built-in host bindings for COBOL P-code: text, intrinsic math, dates and ISAM files.
-// Behaviour follows desktop-text-bindings.mjs, desktop-intrinsic-bindings.mjs and
-// libraries/isam/pcode-isam.mjs.
+// Built-in host bindings for COBOL P-code: text, intrinsic math and dates, following
+// desktop-text-bindings.mjs and desktop-intrinsic-bindings.mjs. ISAM files are owned by the
+// desktop file manager, so host.isam_* calls are only type-checked here and then delegated.
 #include "cobol_vm_internal.h"
 
 #include <algorithm>
@@ -404,8 +404,6 @@ double ordinalOfExtreme(const std::vector<double>& values, bool maximum) {
     return 0;
 }
 
-int handleOf(const BindingValue& value) { return static_cast<int>(value.number); }
-
 }  // namespace
 
 int findBinding(const std::string& lowerName) {
@@ -416,6 +414,8 @@ int findBinding(const std::string& lowerName) {
 }
 
 const BindingSpec& bindingSpec(int id) { return BINDINGS[id]; }
+
+bool isDelegatedBinding(int id) { return id >= B_ISAM_OPEN && id < B_COUNT; }
 
 BindingValue callBinding(int id, const std::vector<BindingValue>& args, BindingContext& context) {
     const std::string name = BINDINGS[id].name;
@@ -507,19 +507,6 @@ BindingValue callBinding(int id, const std::vector<BindingValue>& args, BindingC
         }
         case B_RANDOM: return numberResult(context.random ? context.random() : std::rand() / (RAND_MAX + 1.0));
         case B_RANDOM_SEEDED: return numberResult(seededRandom(number(0)));
-        case B_ISAM_OPEN: return numberResult(context.isam.open(text(0), text(1), text(2), text(3)));
-        case B_ISAM_READ: return textResult(context.isam.read(handleOf(args[0]), text(1)));
-        case B_ISAM_READ_ALT: return textResult(context.isam.readAlternate(handleOf(args[0]), text(1), text(2)));
-        case B_ISAM_READ_NEXT: return textResult(context.isam.readNext(handleOf(args[0])));
-        case B_ISAM_CURRENT_KEY: return textResult(context.isam.currentKey(handleOf(args[0])));
-        case B_ISAM_COUNT: return numberResult(context.isam.count(handleOf(args[0])));
-        case B_ISAM_START: return numberResult(context.isam.start(handleOf(args[0]), text(1), text(2)));
-        case B_ISAM_WRITE: return numberResult(context.isam.write(handleOf(args[0]), text(1), text(2)));
-        case B_ISAM_REWRITE: return numberResult(context.isam.rewrite(handleOf(args[0]), text(1), text(2)));
-        case B_ISAM_DELETE: return numberResult(context.isam.remove(handleOf(args[0]), text(1)));
-        case B_ISAM_STATUS: return textResult(context.isam.status(handleOf(args[0])));
-        case B_ISAM_CLOSE: return numberResult(context.isam.close(handleOf(args[0]), false));
-        case B_ISAM_CLOSE_LOCK: return numberResult(context.isam.close(handleOf(args[0]), true));
         default: fail("Invalid host binding call: " + name);
     }
 }

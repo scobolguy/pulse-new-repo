@@ -94,6 +94,36 @@ extern bool pmachineInvokeFsm(
 
 namespace {
 
+// Streams a JsonDocument straight into the TCP send window, one window-sized slice per
+// callback, instead of serializing to a String and letting send() copy it again. Those
+// two contiguous copies fail on a fragmented heap and the client sees an empty reply.
+class StreamedJsonResponse : public AsyncAbstractResponse {
+    JsonDocument document;
+public:
+    StreamedJsonResponse(int status, JsonDocument&& source) : document(std::move(source)) {
+        _code = status;
+        _contentType = "application/json";
+        _contentLength = measureJson(document);
+    }
+    bool _sourceValid() const override { return _contentLength > 0; }
+    size_t _fillBuffer(uint8_t* data, size_t len) override {
+        const size_t remaining = _contentLength - _sentLength;
+        const size_t slice = len < remaining ? len : remaining;
+        ChunkPrint destination(data, _sentLength, slice);
+        serializeJson(document, destination);
+        return slice;
+    }
+};
+
+void sendStreamedJson(AsyncWebServerRequest* request, int status, JsonDocument& out) {
+    auto* response = new (std::nothrow) StreamedJsonResponse(status, std::move(out));
+    if (!response) {
+        request->send(503, "text/plain", "Response allocation failed");
+        return;
+    }
+    request->send(response);
+}
+
 struct EdgeIngressConfig {
     size_t workerCount = 2;
     size_t queueLength = 64;
@@ -2632,7 +2662,20 @@ bool loadProgramMapMappingsFromDoc(
                     }
                 }
                 (*procedureSignaturesOut)[std::string(label)] = params;
+                // COBOL runtime libraries may declare locals; carried as a sentinel entry.
+                std::vector<std::string> locals;
+                for (JsonVariantConst local : procedure["locals"].as<JsonArrayConst>()) {
+                    if (local.is<const char*>()) locals.push_back(std::string(local.as<const char*>()));
+                }
+                if (!locals.empty()) (*procedureSignaturesOut)[std::string("@locals:") + label] = locals;
             }
+        }
+        if (doc.is<JsonObjectConst>() && doc["globals"].is<JsonArrayConst>()) {
+            std::vector<std::string> globals;
+            for (JsonVariantConst global : doc["globals"].as<JsonArrayConst>()) {
+                if (global.is<const char*>()) globals.push_back(std::string(global.as<const char*>()));
+            }
+            (*procedureSignaturesOut)["@globals"] = globals;
         }
     }
 
@@ -3918,15 +3961,25 @@ pmachine::ServiceHost& hostedServiceHost() {
     return host;
 }
 }
+
+void collectPMachineDiagnostics(JsonObject doc) {
+    hostedServiceHost().diagnostics(doc);
+}
 #endif
 
-bool startPMachineLanDiscovery(FederatedFileSystem& ffs, uint16_t udpPort,
-                              const std::string& nodeId, uint16_t httpPort, std::string& error) {
+void configurePMachineHostedStorage(FederatedFileSystem& ffs) {
 #if defined(ESP32)
-    return hostedServiceHost().startDiscovery(ffs, udpPort, nodeId, httpPort, error);
+    hostedServiceHost().setStorage(ffs);
 #else
-    error = "Hosted LAN discovery requires ESP32";
-    return false;
+    (void)ffs;
+#endif
+}
+
+void pmachineLearnAggregator(const char* aggregatorId, const char* address, uint16_t httpPort) {
+#if defined(ESP32)
+    hostedServiceHost().learnAggregator(aggregatorId, address, httpPort);
+#else
+    (void)aggregatorId; (void)address; (void)httpPort;
 #endif
 }
 
@@ -5990,6 +6043,18 @@ void registerPMachineRoutes(
 
     // Execute pcode from a file path and return run outputs.
     server.on("/pmachine/execute_file", HTTP_POST, [&machine, ffs](AsyncWebServerRequest *request){
+        // Runs on the AsyncTCP task, which has no outer handler: an escaping bad_alloc aborts.
+        try {
+#if defined(ESP32)
+        struct HostedWorkerPause {
+            bool held = hostedServiceHost().pauseWorker(2000);
+            ~HostedWorkerPause() { if (held) hostedServiceHost().resumeWorker(); }
+        } workerPause;
+        if (!workerPause.held) {
+            request->send(503, "text/plain", "Hosted runtime busy; retry shortly");
+            return;
+        }
+#endif
         String file;
         String maxParam = "32768";
         String inputQueue;
@@ -6126,9 +6191,11 @@ void registerPMachineRoutes(
         out["binaryBytes"] = static_cast<uint32_t>(binary.size());
         out["thunkBindingsApplied"] = static_cast<uint32_t>(thunkBindingsApplied);
 
-        String response;
-        serializeJson(out, response);
-        request->send(200, "application/json", response);
+        sendStreamedJson(request, 200, out);
+        } catch (const std::bad_alloc&) {
+            Serial.printf("[PMACHINE] execute_file allocation failed; heap=%u\n", static_cast<unsigned>(ESP.getFreeHeap()));
+            request->send(503, "text/plain", "Device heap exhausted; retry shortly");
+        }
     });
 
     // Execute pcode from an arbitrary payload message (JSON or plain text).
@@ -6223,9 +6290,7 @@ void registerPMachineRoutes(
         out["binaryBytes"] = static_cast<uint32_t>(binary.size());
         out["thunkBindingsApplied"] = static_cast<uint32_t>(thunkBindingsApplied);
 
-        String response;
-        serializeJson(out, response);
-        request->send(200, "application/json", response);
+        sendStreamedJson(request, 200, out);
     });
 
     // Execute pcode from a JSON request body with optional inline program map text/object.

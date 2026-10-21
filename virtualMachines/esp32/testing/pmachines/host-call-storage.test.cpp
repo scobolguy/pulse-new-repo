@@ -45,4 +45,28 @@ int main() {
     for (const auto& arg : storage.args) {
         assert(!arg.isString && arg.integer == 0 && arg.text.empty());
     }
+
+    pmachine::HostExecutionStorage execution;
+    assert(execution.prepare());
+    assert(execution.strings.attached());
+    assert(execution.strings.arenaBytes() == pmachine::HostExecutionStorage::STRING_ARENA_BYTES);
+    assert(execution.calls.result.text.capacity() >= 1024);
+    const std::string text(512, 'x');
+    const size_t preparedAllocations = allocations;
+    for (size_t invocation = 0; invocation < 100; ++invocation) {
+        execution.reset();
+        assert(execution.calls.result.text.empty());
+        assert(execution.strings.usedBytes() == 0);
+        for (size_t index = 0; index < 16; ++index)
+            assert(execution.strings.store(text.data(), text.size()) != pmachine::ManagedStringHeap::INVALID);
+        execution.calls.result.text.assign(295, 'j');
+        execution.calls.reset(0);
+        assert(execution.calls.result.text.capacity() >= 1024);
+        execution.calls.result.text.assign(1024, 'r');
+    }
+    assert(allocations == preparedAllocations);
+    execution.reset();
+    assert(execution.strings.getStats().liveHandles == 0);
+    assert(execution.prepare());
+    assert(allocations == preparedAllocations);
 }

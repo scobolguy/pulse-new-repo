@@ -1,5 +1,6 @@
 #include "service_host.h"
 #include "bounded_text.h"
+#include "buffered_json.h"
 #include "async_diagnostics.h"
 #if defined(ESP32)
 #include <WiFi.h>
@@ -20,6 +21,21 @@ constexpr size_t BODY_LIMIT = 2048, RESPONSE_LIMIT = 20480, STORAGE_LIMIT = 1638
 constexpr uint32_t REPORT_INTERVAL_MS = 10000;
 constexpr uint32_t OUTBOUND_TIMEOUT_MS = 1200;
 constexpr size_t OUTBOUND_RESPONSE_LIMIT = 2048;
+
+// ESP-IDF ships a 0-byte C++ emergency exception pool, so a second bad_alloc raised while
+// the heap is exhausted aborts the chip. Error text is therefore truncated to the string's
+// existing capacity unless the heap can clearly satisfy a larger copy.
+void assignErrorText(std::string& target, const char* text) {
+    const size_t length = strlen(text);
+    const size_t fitting = std::min(length, target.capacity());
+    if (length > target.capacity()
+        && heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < length + 1024) {
+        target.assign(text, fitting);
+        return;
+    }
+    try { target.assign(text, length); }
+    catch (const std::bad_alloc&) { target.assign(text, fitting); }
+}
 
 struct HttpTarget {
     std::string host, path, origin;
@@ -327,7 +343,12 @@ bool ServiceHost::parseJson(const std::string& json, JsonDocument& doc) {
     jsonNoMemory = error == DeserializationError::NoMemory;
     const uint32_t elapsed = micros() - started;
     ++jsonMetrics.parses; jsonMetrics.inputBytes += json.size(); jsonMetrics.parseUs += elapsed;
-    if (error) ++jsonMetrics.parseFailures;
+    if (error) {
+        ++jsonMetrics.parseFailures;
+        Serial.printf("[SERVICE-HOST] JSON parse failed binding=%s bytes=%u error=%s overflow=%d heap=%u largest=%u\n",
+            currentBinding, static_cast<unsigned>(json.size()), error.c_str(), doc.overflowed(),
+            ESP.getFreeHeap(), static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
+    }
     PULSE_ASYNC_TRACE("JSON parse binding=%s bytes=%u elapsedUs=%lu error=%s overflow=%d largest=%u",
         currentBinding, static_cast<unsigned>(json.size()), static_cast<unsigned long>(elapsed),
         error.c_str(), doc.overflowed(), static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
@@ -362,8 +383,7 @@ ServiceHost::SerializeResult ServiceHost::serializeValue(JsonVariantConst value,
     if (result == SerializeResult::ok) {
         out.clear();
         try {
-            out.reserve(size);
-            written = serializeJson(value, out);
+            written = serializeBufferedJson(value, size, jsonOutputBuffer, out);
             if (written != size) result = SerializeResult::noMemory;
         } catch (const std::bad_alloc&) {
             result = SerializeResult::noMemory;
@@ -371,7 +391,13 @@ ServiceHost::SerializeResult ServiceHost::serializeValue(JsonVariantConst value,
     }
     const uint32_t writeUs = micros() - writeStarted;
     jsonMetrics.writeUs += writeUs; jsonMetrics.outputBytes += written;
-    if (result != SerializeResult::ok) ++jsonMetrics.serializationFailures;
+    if (result != SerializeResult::ok) {
+        ++jsonMetrics.serializationFailures;
+        Serial.printf("[SERVICE-HOST] JSON serialize failed binding=%s expected=%u written=%u reason=%s overflow=%d heap=%u largest=%u\n",
+            currentBinding, static_cast<unsigned>(size), static_cast<unsigned>(written),
+            result == SerializeResult::tooLarge ? "response-limit" : "no-memory", overflowed,
+            ESP.getFreeHeap(), static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
+    }
     PULSE_ASYNC_TRACE("JSON serialize binding=%s expected=%u written=%u measureUs=%lu writeUs=%lu capacity=%u->%u result=%d overflow=%d largest=%u",
         currentBinding, static_cast<unsigned>(size), static_cast<unsigned>(written),
         static_cast<unsigned long>(measureUs), static_cast<unsigned long>(writeUs),
@@ -562,6 +588,61 @@ bool ServiceHost::validateUnit(const JsonDocument& map, const char* kind, Unit& 
     return true;
 }
 
+namespace {
+const char* const STRING_SWAP_PATH = "/pmachine-swap.bin";
+const size_t FFS_STRING_SWAP_BUDGET = 32768;
+const size_t PSRAM_STRING_SWAP_BUDGET = 262144;
+void* psramAllocate(size_t size) { return heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); }
+void psramFree(void* block) { heap_caps_free(block); }
+}
+
+bool ServiceHost::FfsSwapFile::open() {
+    if (file) return true;
+    // Opening allocates VFS state; refuse rather than abort when the heap is nearly gone.
+    if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < 4096) return false;
+    try { file = ffs.openRandomAccessFile(STRING_SWAP_PATH); }
+    catch (const std::bad_alloc&) { return false; }
+    return static_cast<bool>(file);
+}
+
+bool ServiceHost::FfsSwapFile::writeAt(size_t offset, const uint8_t* data, size_t size) {
+    return open() && file.seek(offset) && file.write(data, size) == size;
+}
+
+bool ServiceHost::FfsSwapFile::readAt(size_t offset, uint8_t* data, size_t size) {
+    return open() && file.seek(offset) && file.read(data, size) == size;
+}
+
+// PSRAM is preferred when present; otherwise evicted blocks spill to a bounded FFS file.
+void ServiceHost::configureStringSwap(FederatedFileSystem* ffs) {
+    if (stringSwap) return;
+    if (psramFound()) {
+        stringSwap.reset(new (std::nothrow) BlockSwapBacking<ManagedStringHeap::HANDLE_CAPACITY>(
+            psramAllocate, psramFree, PSRAM_STRING_SWAP_BUDGET, "psram"));
+    } else if (ffs) {
+        stringSwapFile.reset(new (std::nothrow) FfsSwapFile(*ffs));
+        if (stringSwapFile)
+            stringSwap.reset(new (std::nothrow) FileSwapBacking<FfsSwapFile, ManagedStringHeap::HANDLE_CAPACITY>(
+                *stringSwapFile, FFS_STRING_SWAP_BUDGET));
+    }
+    executionStorage.strings.setBacking(stringSwap.get());
+    if (stringSwap) Serial.printf("[SERVICE-HOST] String arena %u bytes; swap backing=%s\n",
+        static_cast<unsigned>(executionStorage.strings.arenaBytes()), stringSwap->name());
+}
+
+bool ServiceHost::pauseWorker(uint32_t waitMs) {
+    if (!mutex) return true;
+    if (xSemaphoreTake(mutex, pdMS_TO_TICKS(waitMs)) != pdTRUE) return false;
+    workerPaused = true;
+    return true;
+}
+
+void ServiceHost::resumeWorker() {
+    if (!workerPaused) return;
+    workerPaused = false;
+    xSemaphoreGive(mutex);
+}
+
 bool ServiceHost::prepare(std::string& error) {
     if (!mutex) mutex = xSemaphoreCreateMutex();
     if (!ingressMutex) ingressMutex = xSemaphoreCreateMutex();
@@ -574,8 +655,12 @@ bool ServiceHost::prepare(std::string& error) {
     else {
         try {
             hostError.reserve(256);
+            if (!task && !executionStorage.prepare()) {
+                error = "Cannot reserve service host string arena"; ok = false;
+            }
+            if (ok && !task) configureStringSwap(swapFileSystem);
         } catch (const std::bad_alloc&) {
-            error = "Cannot reserve service host diagnostics"; ok = false;
+            assignErrorText(error, "Cannot reserve service host execution buffers"); ok = false;
         }
         if (ok && !task && xTaskCreate(worker, "pascalish-host", 16384, this, 1, &task) != pdPASS) {
             error = "Cannot reserve service host worker stack"; ok = false;
@@ -618,9 +703,9 @@ bool ServiceHost::install(Unit newService, std::vector<DaemonSpec> newDaemons, c
         }
     }
     if (lifecycle.configured) {
-        if (!identifier(lifecycle.ownerAggregatorId)
-            || (lifecycle.reportTargets.empty() && !discovery) || lifecycle.reportTargets.size() > 4) {
-            error = "Native lifecycle install requires explicit owner and discovery or 1..4 explicit aggregator report targets";
+        // Empty report targets are allowed: the beacon-acknowledging aggregator is learned at runtime.
+        if (!identifier(lifecycle.ownerAggregatorId) || lifecycle.reportTargets.size() > 4) {
+            error = "Native lifecycle install requires explicit owner and at most 4 explicit aggregator report targets";
             return false;
         }
         bool ownerTargetFound = false;
@@ -788,7 +873,7 @@ bool ServiceHost::install(Unit newService, std::vector<DaemonSpec> newDaemons, c
                 }
             }
         }
-    } catch (const std::bad_alloc&) { error = "Hosted service installation allocation failed"; }
+    } catch (const std::bad_alloc&) { assignErrorText(error, "Hosted service installation allocation failed"); }
     xSemaphoreGive(mutex);
     return ok;
 }
@@ -858,6 +943,7 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
     }
     result.isString = spec->text;
     currentBinding = spec->name;
+    jsonAllocator.reset();
     const std::string op = spec->name;
     if (op == "service_submit") {
         if (!current->lifecycle.configured)
@@ -884,7 +970,8 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
             if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
                 || (ch >= '0' && ch <= '9') || ch == '/' || ch == '_' || ch == '-'))
                 return fail("Invalid logical service route", error, 400);
-        JsonDocument request, requestBody, response, continuation;
+        JsonDocument request(&jsonAllocator), requestBody(&jsonAllocator),
+            response(&jsonAllocator), continuation(&jsonAllocator);
         if (deserializeJson(requestBody, bodyText) || !requestBody.is<JsonObjectConst>())
             return fail("Logical service POST body must be a JSON object", error, 400);
         request["method"] = "POST";
@@ -954,7 +1041,7 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
     else if (op == "raise_error") return fail("Program failure: " + args[0].text, error, 500);
     else if (op == "event_path") result.text = path;
     else if (op == "event_query") {
-        JsonDocument queryDoc;
+        JsonDocument queryDoc(&jsonAllocator);
         if (!object(query, queryDoc)) return fail("Invalid event query", error, 500);
         result.text = queryDoc[args[0].text] | "";
     }
@@ -977,7 +1064,7 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
             || udp.write(reinterpret_cast<const uint8_t*>(args[0].text.data()), args[0].text.size()) != args[0].text.size()
             || !udp.endPacket()) return fail("UDP reply failed", error, 503);
     } else if (op == "announcement") {
-        JsonDocument input, output;
+        JsonDocument input(&jsonAllocator), output(&jsonAllocator);
         if (args[0].text.size() > BODY_LIMIT || !object(args[0].text, input))
             return fail("Invalid announcement JSON", error);
         const std::string kind = input["kind"] | "";
@@ -1066,7 +1153,7 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
             if (end == std::string::npos) break;
             start = end + 1;
         }
-        JsonDocument filter, doc;
+        JsonDocument filter(&jsonAllocator), doc(&jsonAllocator);
         JsonObject node = filter.to<JsonObject>();
         for (size_t index = 0; index + 1 < count; ++index)
             node = node[parts[index]].to<JsonObject>();
@@ -1075,6 +1162,9 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
         ++jsonMetrics.parses; jsonMetrics.inputBytes += inputBytes;
         if (parsed || filter.overflowed()) {
             ++jsonMetrics.parseFailures;
+            Serial.printf("[SERVICE-HOST] JSON path parse failed binding=%s bytes=%u error=%s filterOverflow=%d heap=%u largest=%u\n",
+                currentBinding, static_cast<unsigned>(inputBytes), parsed.c_str(), filter.overflowed(),
+                ESP.getFreeHeap(), static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
             return fail("JSON path parse failed", error, parsed == DeserializationError::NoMemory ? 503 : 400);
         }
         JsonVariantConst value = doc.as<JsonVariantConst>();
@@ -1084,13 +1174,13 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
         }
         if (op == "json_path_text" || op == "buffer_json_path_text") {
             if (!value.is<const char*>()) return fail("Expected string field", error);
-            result.text = value.as<std::string>();
+            result.text.assign(value.as<const char*>());
         } else {
             if (!value.is<int32_t>()) return fail("Expected integer field", error);
             result.integer = value.as<int32_t>();
         }
     } else if (op == "json_format") {
-        JsonDocument doc;
+        JsonDocument doc(&jsonAllocator);
         if (!parseJson(args[0].text, doc)) return fail("Invalid JSON value", error);
         if (args[1].integer < 0 || args[1].integer > 10)
             return fail("Invalid JSON indentation", error);
@@ -1124,7 +1214,7 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
             }
         }
     } else if (op == "json_kind" || op.rfind("json_array_", 0) == 0) {
-        JsonDocument doc;
+        JsonDocument doc(&jsonAllocator);
         if (!parseJson(args[0].text, doc)) return fail("Invalid JSON value", error);
         if (op == "json_kind") {
             const auto value = doc.as<JsonVariantConst>();
@@ -1147,7 +1237,7 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
         }
         if (op == "json_array_remove") array.remove(args[1].integer);
         else {
-            JsonDocument value;
+            JsonDocument value(&jsonAllocator);
             const auto& text = args[op == "json_array_append" ? 1 : 2].text;
             if (!parseJson(text, value)) return fail("Invalid JSON array value", error);
             if (op == "json_array_append") {
@@ -1158,10 +1248,10 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
         if (serialize(doc, result.text) != SerializeResult::ok)
             return fail("JSON array serialization failed", error, 503);
     } else if (op.rfind("json_", 0) == 0) {
-        JsonDocument doc;
+        JsonDocument doc(&jsonAllocator);
         if (!object(args[0].text, doc)) return fail("Expected JSON object", error);
         if (op == "json_merge") {
-            JsonDocument next;
+            JsonDocument next(&jsonAllocator);
             if (!object(args[1].text, next)) return fail("Expected merge object", error);
             for (JsonPairConst pair : next.as<JsonObjectConst>()) doc[pair.key().c_str()].set(pair.value());
         } else {
@@ -1183,7 +1273,7 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
                 return true;
             } else if (op == "json_text") {
                 if (!doc[args[1].text].is<const char*>()) return fail("Expected string field", error);
-                result.text = doc[args[1].text].as<std::string>();
+                result.text.assign(doc[args[1].text].as<const char*>());
                 return true;
             } else if (op == "json_set") {
                 if (args[2].isString) doc[args[1].text] = args[2].text;
@@ -1197,7 +1287,7 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
                 const bool added = args[2].isString ? array.add(args[2].text) : array.add(args[2].integer);
                 if (!added) return fail("JSON append allocation failed", error, 503);
             } else {
-                JsonDocument value;
+                JsonDocument value(&jsonAllocator);
                 if (!parseJson(args[2].text, value)) return fail("Invalid embedded JSON", error);
                 doc[args[1].text].set(value.as<JsonVariantConst>());
             }
@@ -1215,13 +1305,13 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
             const auto timestamp = now();
             if (!current->caches->snapshot(args[0].text, args[1].text, args[2].text, timestamp, page, snapshotError))
                 return fail(snapshotError, error, 409);
-            JsonDocument doc;
+            JsonDocument doc(&jsonAllocator);
             doc["version"] = 1; doc["collectorId"] = current->collectorId; doc["bootId"] = current->bootId;
             doc["revision"] = std::to_string(page.revision); doc["sequence"] = page.revision;
             doc["sampledAtMs"] = timestamp; doc["total"] = page.total; doc["nextCursor"] = page.nextCursor;
             auto records = doc["records"].to<JsonArray>();
             for (const auto& entry : page.records) {
-                JsonDocument device;
+                JsonDocument device(&jsonAllocator);
                 if (!object(entry.json, device)) return fail("Invalid cached snapshot record", error);
                 auto record = records.add<JsonObject>();
                 record["key"] = entry.key; record["device"] = device.as<JsonObjectConst>();
@@ -1253,7 +1343,7 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
             result.integer = current->caches->remove(args[0].text, args[1].text, timestamp) ? 1 : 0;
         } else {
             const auto ttlMs = args[3].integer;
-            JsonDocument value;
+            JsonDocument value(&jsonAllocator);
             if (ttlMs < 1 || ttlMs > 2147483647 || args[2].text.size() > BODY_LIMIT
                 || !object(args[2].text, value)) return fail("Invalid cache item or TTL", error);
             const auto objectValue = value.as<JsonObjectConst>();
@@ -1280,7 +1370,7 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
         else if (op == "table_snapshot" || op == "table_snapshot_values") {
             if (args[1].text.size() > 256 || args[2].integer < 1 || args[2].integer > 5)
                 return fail("Invalid table snapshot cursor or limit", error);
-            JsonDocument snapshot;
+            JsonDocument snapshot(&jsonAllocator);
             auto array = snapshot["nodes"].to<JsonArray>();
             const auto timestamp = now();
             std::string nextCursor;
@@ -1292,7 +1382,7 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
                     hasMore = true;
                     break;
                 }
-                JsonDocument value;
+                JsonDocument value(&jsonAllocator);
                 if (!object(entry->second.json, value)) return fail("Stored observation is invalid", error, 500);
                 if (op == "table_snapshot") value["remainingTtlMs"] = entry->second.deadline - timestamp;
                 array.add(value.as<JsonObjectConst>());
@@ -1311,7 +1401,7 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
                 result.text = found != table.end() && found->second.deadline > now() ? found->second.json : "{}";
             } else {
                 const auto lifetime = args[3].integer;
-                JsonDocument value;
+                JsonDocument value(&jsonAllocator);
                 if (args[2].text.size() > BODY_LIMIT || !object(args[2].text, value)
                     || lifetime < 1 || lifetime > 180000) return fail("Invalid observation or TTL", error);
                 expire(table);
@@ -1347,6 +1437,8 @@ bool ServiceHost::execute(const Unit& unit, std::string& response) {
         Serial.printf("[SERVICE-HOST] %s\n", lastError.c_str());
         return fail(lastError, response, 503);
     }
+    // Filled inside the handlers without allocating; copied once the exception is released.
+    char executionError[112] = "";
     try {
         machine.setMappings(unit.mappings);
         machine.setProcedureSignatures(unit.signatures);
@@ -1356,21 +1448,33 @@ bool ServiceHost::execute(const Unit& unit, std::string& response) {
             std::string error;
             if (!unit.image->read(index, instruction, error)) throw std::runtime_error(error);
             return instruction;
-        });
-        else if (unit.instructions) machine.run(*unit.instructions);
+        }, &executionStorage);
+        else if (unit.instructions) machine.run(*unit.instructions, 0, &executionStorage);
         else throw std::runtime_error("Hosted unit has no instruction source");
     } catch (const std::bad_alloc&) {
-        lastError = "Hosted execution allocation failed at pc " + std::to_string(machine.getExecutionPc());
-        Serial.printf("[SERVICE-HOST] %s; stage=%s requestedBytes=%u binding=%s heap=%u largest=%u\n", lastError.c_str(),
+        allocationFailed = true;
+        snprintf(executionError, sizeof(executionError), "Hosted execution allocation failed at pc %u",
+            static_cast<unsigned>(machine.getExecutionPc()));
+        Serial.printf("[SERVICE-HOST] %s; stage=%s requestedBytes=%u binding=%s heap=%u largest=%u\n", executionError,
             machine.getAllocationStage(), static_cast<unsigned>(machine.getAllocationBytes()), currentBinding,
             ESP.getFreeHeap(), static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
-        return fail(lastError, response, 503);
     } catch (const std::runtime_error& error) {
-        lastError = error.what();
-        Serial.printf("[SERVICE-HOST] %s\n", lastError.c_str());
+        snprintf(executionError, sizeof(executionError), "%s", error.what());
+        Serial.printf("[SERVICE-HOST] %s\n", executionError);
+    }
+    if (executionError[0]) {
+        assignErrorText(lastError, executionError);
+        assignErrorText(response, jsonNoMemory ? "Hosted JSON allocation failed" : executionError);
+        responseStatus = 503;
+        return false;
+    }
+    if (const char* error = machine.getHostedStorageError()) {
+        Serial.printf("[SERVICE-HOST] %s at pc %u; stage=%s\n", error,
+                      machine.getExecutionPc(), machine.getAllocationStage());
+        lastError = error;
         return fail(lastError, response, 503);
     }
-    auto state = machine.getFlowStateSnapshot();
+    const auto& state = machine.getFlowState();
     for (const auto& item : state) if (item.first != "__response" && item.first.find("error") != std::string::npos) {
         lastError = item.second; response = item.second;
         if (responseStatus < 400) responseStatus = 500;
@@ -1381,9 +1485,7 @@ bool ServiceHost::execute(const Unit& unit, std::string& response) {
         lastError = "Hosted instruction budget exceeded"; response = lastError; responseStatus = 503;
         Serial.println("[SERVICE-HOST] Instruction budget exceeded"); return false;
     }
-    const auto found = state.find("__response");
-    if (found == state.end()) response = "{}";
-    else response = std::move(found->second);
+    if (!machine.takeFlowStateValue("__response", response)) response = "{}";
     if (response.size() > RESPONSE_LIMIT) return fail("Hosted response too large", response, 503);
     return true;
 }
@@ -1436,7 +1538,7 @@ std::shared_ptr<ServiceHost::HttpEvent> ServiceHost::enqueue(
                 event->order = ++nextHttpOrder;
                 *slot = event;
             } catch (const std::bad_alloc&) {
-                event.reset(); error = "Hosted event allocation failed";
+                event.reset(); assignErrorText(error, "Hosted event allocation failed");
             }
         }
     }
@@ -1681,8 +1783,7 @@ void ServiceHost::reporter(void* opaque) {
                     item.instanceId = item.serviceId + "@" + item.nodeId;
                     item.bootId = context->bootId;
                     item.owner = context->lifecycle.ownerAggregatorId;
-                    item.endpoint = host.discoveryEndpoint.empty()
-                        ? "http://" + item.nodeId + ":80" : host.discoveryEndpoint;
+                    item.endpoint = "http://" + item.nodeId + ":80";
                     item.healthPath = context->healthPath;
                     item.targets = host.reportTargetsFor(*context);
                     item.requires = context->lifecycle.requires;
@@ -1806,9 +1907,9 @@ void ServiceHost::reporter(void* opaque) {
 void ServiceHost::worker(void* context) {
     auto& host = *static_cast<ServiceHost*>(context);
     for (;;) {
+        bool backOff = false;
         if (xSemaphoreTake(host.mutex, 0) == pdTRUE) {
-            try { host.discoveryTurn(); }
-            catch (const std::bad_alloc&) { host.hostError = "LAN discovery allocation failed"; }
+            host.allocationFailed = false;
             if (host.active) {
                 try {
                     const auto event = host.takeHttpEvent();
@@ -1823,14 +1924,18 @@ void ServiceHost::worker(void* context) {
                         break;
                     }
                 } catch (const std::bad_alloc&) {
-                    if (host.current) host.current->lastError = "Worker event allocation failed";
-                    else host.hostError = "Worker event allocation failed";
+                    host.allocationFailed = true;
+                    if (host.current) assignErrorText(host.current->lastError, "Worker event allocation failed");
+                    else assignErrorText(host.hostError, "Worker event allocation failed");
                     Serial.println("[SERVICE-HOST] Worker event allocation failed");
                 }
             }
+            backOff = host.allocationFailed;
             xSemaphoreGive(host.mutex);
         }
-        vTaskDelay(pdMS_TO_TICKS(10));
+        // Retrying immediately after bad_alloc keeps the heap fragmented and starves the
+        // network stack and execute_file of both memory and the host mutex.
+        vTaskDelay(pdMS_TO_TICKS(backOff ? 2000 : 10));
     }
 }
 
@@ -1848,6 +1953,71 @@ std::string ServiceHost::readiness(const std::string& id) {
     return result;
 }
 
+void ServiceHost::diagnostics(JsonObject doc) {
+    doc["running"] = active.load();
+    {
+        // Learned before (and independently of) host preparation, so report it unconditionally.
+        const LearnedAggregator learned = learnedAggregatorSnapshot();
+        auto lan = doc["lanDiscovery"].to<JsonObject>();
+        lan["policy"] = "beacon-ack";
+        lan["targetCount"] = learned.id[0] ? 1 : 0;
+        if (learned.id[0]) {
+            lan["aggregatorId"] = static_cast<const char*>(learned.id);
+            lan["endpoint"] = static_cast<const char*>(learned.endpoint);
+        }
+    }
+    if (!mutex) {
+        doc["initialized"] = false;
+        return;
+    }
+    doc["initialized"] = true;
+    if (xSemaphoreTake(mutex, 0) != pdTRUE) {
+        doc["busy"] = true;
+        return;
+    }
+    SemaphoreRelease release{mutex};
+    doc["busy"] = false;
+    doc["lastError"] = hostError.substr(0, 128);
+    if (task) doc["workerStackHighWaterBytes"] = uxTaskGetStackHighWaterMark(task);
+    auto json = doc["lastInvocationJson"].to<JsonObject>();
+    json["parses"] = jsonMetrics.parses;
+    json["parseFailures"] = jsonMetrics.parseFailures;
+    json["parseUs"] = jsonMetrics.parseUs;
+    json["serializations"] = jsonMetrics.serializations;
+    json["serializationFailures"] = jsonMetrics.serializationFailures;
+    json["writeUs"] = jsonMetrics.writeUs;
+    auto variables = doc["lastInvocationVariables"].to<JsonObject>();
+    variables["peakSlots"] = executionStorage.frames.slotHighWater();
+    variables["peakNameBytes"] = executionStorage.frames.nameHighWater();
+    variables["peakDepth"] = executionStorage.frames.depthHighWater();
+    const auto& heap = executionStorage.strings;
+    const auto& heapStats = heap.getStats();
+    auto strings = doc["lastInvocationStrings"].to<JsonObject>();
+    strings["arenaBytes"] = heap.arenaBytes();
+    strings["usedBytes"] = heap.usedBytes();
+    strings["liveHandles"] = heapStats.liveHandles;
+    strings["liveBytes"] = heapStats.liveBytes;
+    strings["peakHandles"] = heapStats.peakHandles;
+    strings["peakBytes"] = heapStats.peakBytes;
+    strings["allocations"] = heapStats.allocations;
+    strings["compactions"] = heapStats.compactions;
+    strings["swapOuts"] = heapStats.swapOuts;
+    strings["swapIns"] = heapStats.swapIns;
+    strings["failures"] = heapStats.failures;
+    strings["swapBacking"] = heap.getBacking() ? heap.getBacking()->name() : "none";
+    auto list = doc["services"].to<JsonArray>();
+    for (const auto& context : services) if (context) {
+        auto item = list.add<JsonObject>();
+        item["collectorId"] = context->collectorId.substr(0, 64);
+        item["lastError"] = context->lastError.substr(0, 128);
+        item["httpInvocations"] = context->httpInvocations;
+        item["udpInvocations"] = context->udpInvocations;
+        item["daemonInvocations"] = context->daemonInvocations;
+        item["cacheEntries"] = context->caches->entries();
+        item["cacheBytes"] = context->caches->storageBytes();
+    }
+}
+
 std::string ServiceHost::status(const std::string& id) {
     if (!mutex) return "{\"running\":false,\"hostBindingsVersion\":1}";
     if (xSemaphoreTake(mutex, 0) != pdTRUE)
@@ -1863,16 +2033,12 @@ std::string ServiceHost::status(const std::string& id) {
     auto profiles = doc["hostImageProfiles"].to<JsonArray>();
     profiles.add("bounded"); profiles.add("extended");
     auto lan = doc["lanDiscovery"].to<JsonObject>();
-    lan["policyLoaded"] = bool(discovery);
-    lan["socketReady"] = discoverySocketReady;
-    lan["udpPort"] = discoveryPort;
-    lan["targetCount"] = learnedReportTargets.size();
-    lan["endpoint"] = discoveryEndpoint;
-    if (discovery) {
-        lan["instructionStorage"] = "ffs-paged";
-        lan["imageProfile"] = "extended";
-        lan["instructionCount"] = discovery->service.image->size();
-        lan["lastError"] = discovery->lastError;
+    lan["policy"] = "beacon-ack";
+    const LearnedAggregator learned = learnedAggregatorSnapshot();
+    lan["targetCount"] = learned.id[0] ? 1 : 0;
+    if (learned.id[0]) {
+        lan["aggregatorId"] = static_cast<const char*>(learned.id);
+        lan["endpoint"] = static_cast<const char*>(learned.endpoint);
     }
     size_t pending = 0;
     if (ingressMutex) {

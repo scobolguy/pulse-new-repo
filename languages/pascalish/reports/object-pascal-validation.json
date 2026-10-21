@@ -1,0 +1,411 @@
+{
+  "suite": "object-pascal",
+  "startedAt": "2026-10-20T23:55:14.577Z",
+  "hardware": "not-run (no --esp32 URL supplied)",
+  "cases": [
+    {
+      "name": "core_literals",
+      "kind": "positive",
+      "compiler": {
+        "accepted": true
+      },
+      "desktop": {
+        "status": "pass",
+        "result": {
+          "deliveries": [],
+          "state": {},
+          "stdout": [
+            "TEST core_literals: OK"
+          ],
+          "globals": {
+            "I": 42,
+            "R": 350,
+            "B": 1,
+            "C": "A",
+            "S": "Hello",
+            "src": "",
+            "__tmp1": 0
+          },
+          "stepCount": 52,
+          "stepLimitHit": false,
+          "orchestration": null,
+          "response": null,
+          "error": null,
+          "managedObjects": {
+            "liveHandles": 0,
+            "liveBytes": 0,
+            "peakHandles": 0,
+            "peakBytes": 0,
+            "allocations": 0,
+            "compactions": 0,
+            "failures": 0
+          }
+        }
+      },
+      "status": "pass"
+    },
+    {
+      "name": "core_control_flow",
+      "kind": "positive",
+      "compiler": {
+        "accepted": true
+      },
+      "desktop": {
+        "status": "pass",
+        "result": {
+          "deliveries": [],
+          "state": {},
+          "stdout": [
+            "TEST core_control_flow: OK"
+          ],
+          "globals": {
+            "I": 3,
+            "Sum": 55,
+            "src": ""
+          },
+          "stepCount": 236,
+          "stepLimitHit": false,
+          "orchestration": null,
+          "response": null,
+          "error": null,
+          "managedObjects": {
+            "liveHandles": 0,
+            "liveBytes": 0,
+            "peakHandles": 0,
+            "peakBytes": 0,
+            "allocations": 0,
+            "compactions": 0,
+            "failures": 0
+          }
+        }
+      },
+      "status": "pass"
+    },
+    {
+      "name": "core_records",
+      "kind": "positive",
+      "compiler": {
+        "accepted": true
+      },
+      "desktop": {
+        "status": "pass",
+        "result": {
+          "deliveries": [],
+          "state": {},
+          "stdout": [
+            "TEST core_records: OK"
+          ],
+          "globals": {
+            "P_X": 10,
+            "P_Y": 20,
+            "src": ""
+          },
+          "stepCount": 22,
+          "stepLimitHit": false,
+          "orchestration": null,
+          "response": null,
+          "error": null,
+          "managedObjects": {
+            "liveHandles": 0,
+            "liveBytes": 0,
+            "peakHandles": 0,
+            "peakBytes": 0,
+            "allocations": 0,
+            "compactions": 0,
+            "failures": 0
+          }
+        }
+      },
+      "status": "pass"
+    },
+    {
+      "name": "core_classes",
+      "kind": "positive",
+      "compiler": {
+        "accepted": true
+      },
+      "desktop": {
+        "status": "pass",
+        "result": {
+          "deliveries": [],
+          "state": {},
+          "stdout": [
+            "TEST core_classes: OK"
+          ],
+          "globals": {
+            "C": 0,
+            "src": "",
+            "__tmp3": 0,
+            "__discard": 0,
+            "__tmp4": 0,
+            "__tmp5": 0,
+            "__tmp6": 0
+          },
+          "stepCount": 81,
+          "stepLimitHit": false,
+          "orchestration": null,
+          "response": null,
+          "error": null,
+          "managedObjects": {
+            "liveHandles": 0,
+            "liveBytes": 0,
+            "peakHandles": 1,
+            "peakBytes": 8,
+            "allocations": 1,
+            "compactions": 0,
+            "failures": 0
+          }
+        }
+      },
+      "status": "pass"
+    },
+    {
+      "name": "gen_box_class",
+      "kind": "positive",
+      "compiler": {
+        "accepted": true
+      },
+      "desktop": {
+        "status": "pass",
+        "result": {
+          "deliveries": [],
+          "state": {},
+          "stdout": [
+            "TEST gen_box_class: OK"
+          ],
+          "globals": {
+            "IntBox": 0,
+            "StrBox": 0,
+            "src": "",
+            "__tmp7": 0,
+            "__discard": 0,
+            "__tmp8": 0,
+            "__tmp9": 0,
+            "__tmp10": 0,
+            "__tmp11": 0,
+            "__tmp12": 0,
+            "__tmp13": 0,
+            "__tmp14": 0
+          },
+          "stepCount": 170,
+          "stepLimitHit": false,
+          "orchestration": null,
+          "response": null,
+          "error": null,
+          "managedObjects": {
+            "liveHandles": 0,
+            "liveBytes": 0,
+            "peakHandles": 2,
+            "peakBytes": 16,
+            "allocations": 2,
+            "compactions": 0,
+            "failures": 0
+          }
+        }
+      },
+      "status": "pass"
+    },
+    {
+      "name": "gen_box_record",
+      "kind": "positive",
+      "compiler": {
+        "accepted": true
+      },
+      "desktop": {
+        "status": "pass",
+        "result": {
+          "deliveries": [],
+          "state": {},
+          "stdout": [
+            "TEST gen_box_record: OK"
+          ],
+          "globals": {
+            "RInt_FValue": 21,
+            "RStr_FValue": "Generics",
+            "src": "",
+            "PROC_TBOXREC_GENERIC_1_CREATE__ret_FValue": 7,
+            "PROC_TBOXREC_GENERIC_2_CREATE__ret_FValue": "Gen",
+            "__tmp5_0": 7,
+            "__tmp6_0": "Gen",
+            "SELFWB_RET_1": 7,
+            "SELFWB_RET_2": "Gen",
+            "SELFWB_RET_5": 21,
+            "SELFWB_RET_6": "Generics"
+          },
+          "stepCount": 124,
+          "stepLimitHit": false,
+          "orchestration": null,
+          "response": null,
+          "error": null,
+          "managedObjects": {
+            "liveHandles": 0,
+            "liveBytes": 0,
+            "peakHandles": 0,
+            "peakBytes": 0,
+            "allocations": 0,
+            "compactions": 0,
+            "failures": 0
+          }
+        }
+      },
+      "status": "pass"
+    },
+    {
+      "name": "gen_list_basic",
+      "kind": "positive",
+      "compiler": {
+        "accepted": true
+      },
+      "desktop": {
+        "status": "pass",
+        "result": {
+          "deliveries": [],
+          "state": {},
+          "stdout": [
+            "TEST gen_list_basic: OK"
+          ],
+          "globals": {
+            "IntList": 0,
+            "I": 5,
+            "Sum": 15,
+            "src": "",
+            "__tmp4": 0,
+            "__discard": 0,
+            "__tmp5": 0,
+            "__tmp6": 0,
+            "__tmp7": 0,
+            "__tmp8": 0
+          },
+          "stepCount": 557,
+          "stepLimitHit": false,
+          "orchestration": null,
+          "response": null,
+          "error": null,
+          "managedObjects": {
+            "liveHandles": 0,
+            "liveBytes": 0,
+            "peakHandles": 3,
+            "peakBytes": 80,
+            "allocations": 6,
+            "compactions": 0,
+            "failures": 0
+          }
+        }
+      },
+      "status": "pass"
+    },
+    {
+      "name": "gen_constraints",
+      "kind": "positive",
+      "compiler": {
+        "accepted": true
+      },
+      "desktop": {
+        "status": "pass",
+        "result": {
+          "deliveries": [],
+          "state": {},
+          "stdout": [
+            "TEST gen_constraints: OK"
+          ],
+          "globals": {
+            "Obj": 0,
+            "Box": 0,
+            "src": "",
+            "__tmp5": 0,
+            "__discard": 0,
+            "__tmp6": 0,
+            "__tmp8": 0,
+            "__tmp7": 0
+          },
+          "stepCount": 98,
+          "stepLimitHit": false,
+          "orchestration": null,
+          "response": null,
+          "error": null,
+          "managedObjects": {
+            "liveHandles": 0,
+            "liveBytes": 0,
+            "peakHandles": 2,
+            "peakBytes": 16,
+            "allocations": 2,
+            "compactions": 0,
+            "failures": 0
+          }
+        }
+      },
+      "status": "pass"
+    },
+    {
+      "name": "gen_methods",
+      "kind": "positive",
+      "compiler": {
+        "accepted": true
+      },
+      "desktop": {
+        "status": "pass",
+        "result": {
+          "deliveries": [],
+          "state": {},
+          "stdout": [
+            "TEST gen_methods: OK"
+          ],
+          "globals": {
+            "I1": 2,
+            "I2": 1,
+            "S1": "Right",
+            "S2": "Left",
+            "src": "",
+            "SELFWB_RET_3": 1,
+            "SELFWB_RET_6": 1
+          },
+          "stepCount": 94,
+          "stepLimitHit": false,
+          "orchestration": null,
+          "response": null,
+          "error": null,
+          "managedObjects": {
+            "liveHandles": 0,
+            "liveBytes": 0,
+            "peakHandles": 0,
+            "peakBytes": 0,
+            "allocations": 0,
+            "compactions": 0,
+            "failures": 0
+          }
+        }
+      },
+      "status": "pass"
+    },
+    {
+      "name": "neg_gen_arity",
+      "kind": "negative",
+      "compiler": {
+        "error": "Generic TBox requires 1 type arguments; received 2"
+      },
+      "status": "pass"
+    },
+    {
+      "name": "neg_gen_constraints",
+      "kind": "negative",
+      "compiler": {
+        "error": "Generic TRefBox type argument 1 violates class constraint"
+      },
+      "status": "pass"
+    },
+    {
+      "name": "neg_gen_specialization",
+      "kind": "negative",
+      "compiler": {
+        "error": "Generic TBox requires 1 type arguments; received 0"
+      },
+      "status": "pass"
+    }
+  ],
+  "finishedAt": "2026-10-20T23:55:20.320Z",
+  "counts": {
+    "pass": 12,
+    "fail": 0,
+    "blocked": 0
+  }
+}

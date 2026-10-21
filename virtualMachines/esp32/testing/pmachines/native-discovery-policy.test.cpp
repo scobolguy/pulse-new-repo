@@ -36,6 +36,12 @@ int main(int argc, char** argv) {
         .find("\"targets\":[]") != std::string::npos);
     assert(dispatch("/advertise", R"({"nodeId":"native","localAddress":"192.168.4.3","listeners":[{"protocol":"http","host":"0.0.0.0","port":8080}]})")
         .find("\"endpoint\":\"http://192.168.4.3:8080\"") != std::string::npos);
+    const auto escaped = dispatch("/advertise",
+        R"({"nodeId":"node\"\\","localAddress":"192.168.4.3","listeners":[{"protocol":"https","host":"::","port":8443}],"metadata":{"hardware":"board\"","runtime":"native","services":["pmachine"],"ignored":"not-advertised"}})");
+    assert(escaped.find("\"nodeId\":\"node\\\"\\\\\"") != std::string::npos);
+    assert(escaped.find("\"endpoint\":\"https://192.168.4.3:8443\"") != std::string::npos);
+    assert(escaped.find("\"hardware\":\"board\\\"\"") != std::string::npos);
+    assert(escaped.find("not-advertised") == std::string::npos);
     std::string invalid = reply;
     invalid.replace(invalid.find("\"requestId\":\"nonce\""), 19, "\"requestId\":\"wrong\"");
     assert(dispatch("/accept", invalid).find("\"ok\":false") != std::string::npos);

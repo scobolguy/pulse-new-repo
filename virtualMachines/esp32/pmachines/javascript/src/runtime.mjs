@@ -6,6 +6,8 @@ import { XMLParser } from 'fast-xml-parser';
 import { loadOpcodeMap } from './opcodes.mjs';
 import { SERVICE_HOST_BINDINGS } from '../../shared/contracts/service-host-bindings.mjs';
 import { DEVICE_BINDINGS } from '../../shared/contracts/device-bindings.mjs';
+import { PMachineMemory, managedStorage } from './memory.mjs';
+import { ManagedObjects, ObjectRef } from './managed-objects.mjs';
 
 const XML_PARSER = new XMLParser({
   ignoreAttributes: false,
@@ -122,7 +124,7 @@ function isReference(value) {
 
 // Values that must survive a store, load or call boundary without numeric coercion.
 function isBoxed(value) {
-  return typeof value === 'string' || isReal(value) || isEnum(value) || isDecimal(value);
+  return typeof value === 'string' || isReal(value) || isEnum(value) || isDecimal(value) || value instanceof ObjectRef;
 }
 
 const TEN = 10n;
@@ -1654,7 +1656,20 @@ function assignVar(frame, name, value) {
 }
 
 async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queueTypesByName = new Map(), isoTypeIds = new Set(), inputQueue, sourceMessage, runtimeContext = {}, debugHooks = {} }) {
-  const stack = [];
+  if (runtimeContext.memoryManager !== undefined && runtimeContext.memoryLimitBytes !== undefined) {
+    throw new TypeError('Configure memoryManager or memoryLimitBytes, not both');
+  }
+  const memory = runtimeContext.memoryManager
+    ?? (runtimeContext.memoryLimitBytes !== undefined
+      ? new PMachineMemory({ limitBytes: runtimeContext.memoryLimitBytes }) : null);
+  if (memory !== null && !(memory instanceof PMachineMemory)) {
+    throw new TypeError('memoryManager must be a PMachineMemory');
+  }
+  const invocationScope = memory?.createScope('invocation') ?? null;
+  const storage = (scope, target) => memory ? managedStorage(memory, scope, target) : target;
+  const objects = new ManagedObjects(memory, invocationScope);
+  try {
+  const stack = storage(invocationScope, []);
   const stepLimit = runtimeContext.desktopBudget ? Number.MAX_SAFE_INTEGER : MAX_RUN_STEPS;
   const maxSteps = runtimeContext.maxSteps ?? (runtimeContext.desktopBudget ? null : stepLimit);
   if (maxSteps !== null && (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > stepLimit)) {
@@ -1683,8 +1698,9 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
   const proceduresByLabel = mappingsById?.__proceduresByLabel || {};
   const enumTypes = mappingsById?.__enums || {};
   const globalFrame = {
-    vars: Object.fromEntries(programGlobals.map(name => [name, 0])),
-    parent: null
+    vars: storage(invocationScope, Object.fromEntries(programGlobals.map(name => [name, 0]))),
+    parent: null,
+    memoryScope: invocationScope,
   };
   
   // Inject 'src' variable with sourceMessage if provided
@@ -1734,7 +1750,24 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
 
   let steps = 0;
   let stepLimitHit = false;
+  function reconcileObjects() {
+    if (!objects.stats.liveHandles) return;
+    const roots = [...stack];
+    const frames = new Set([globalFrame, currentFrame, ...callStack.map(call => call.frame)]);
+    const visited = new Set();
+    for (const frame of frames) {
+      for (let cursor = frame; cursor; cursor = cursor.parent) {
+        if (visited.has(cursor)) break;
+        visited.add(cursor);
+        // Resolve by-reference parameters as values, without retaining dead frames.
+        for (const name of Object.keys(cursor.vars)) roots.push(resolveVar(cursor, name));
+      }
+    }
+    for (const record of records.values()) roots.push(...record.values());
+    objects.reconcile(roots);
+  }
   while (pc >= 0 && pc < instructions.length) {
+    reconcileObjects();
     steps += 1;
     if (maxSteps !== null && steps > maxSteps) {
       stepLimitHit = true;
@@ -1771,6 +1804,22 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     }
     if (op === 'CALL_EXT') {
       const name = String(instr.operand?.label || '').toLowerCase();
+      if (name.startsWith('object.')) {
+        const arity = { 'object.new': 1, 'object.get': 2, 'object.set': 3,
+          'object.length': 1, 'object.resize': 2 }[name];
+        const argc = instr.operand?.argc;
+        if (arity === undefined || argc !== arity) throw new Error(`Invalid object binding call: ${name}`);
+        if (stack.length < argc) throw new Error(`Object binding stack underflow: ${name}`);
+        const args = stack.splice(stack.length - argc, argc);
+        const value = name === 'object.new' ? objects.create(args[0])
+          : name === 'object.get' ? objects.get(args[0], args[1])
+            : name === 'object.set' ? objects.set(args[0], args[1], args[2])
+              : name === 'object.length' ? objects.length(args[0])
+                : objects.resize(args[0], args[1]);
+        stack.push(value);
+        pc += 1;
+        continue;
+      }
       const binding = SERVICE_HOST_BINDINGS[name] || DEVICE_BINDINGS[name];
       const argc = instr.operand?.argc;
       if (!binding || argc !== binding.arity) throw new Error(`Invalid host binding call: ${name}`);
@@ -2086,6 +2135,12 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     if (op === 'EQ' || op === 'NEQ' || op === 'LT' || op === 'LE' || op === 'GT' || op === 'GE') {
       const rawB = stack.pop();
       const rawA = stack.pop();
+      if (rawA instanceof ObjectRef || rawB instanceof ObjectRef) {
+        if (op !== 'EQ' && op !== 'NEQ') throw new TypeError('objects only support equality comparisons');
+        stack.push((op === 'EQ' ? rawA === rawB : rawA !== rawB) ? 1 : 0);
+        pc += 1;
+        continue;
+      }
       // Decimals compare exactly; two strings compare lexicographically; else numeric.
       let a;
       let b;
@@ -2206,13 +2261,15 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       }
 
       callStack.push({ returnPc: pc + 1, frame: currentFrame });
-      currentFrame = { vars, parent: currentFrame };
+      const memoryScope = memory?.createScope('procedure', currentFrame.memoryScope) ?? null;
+      currentFrame = { vars: storage(memoryScope, vars), parent: currentFrame, memoryScope };
       pc = instr.targetIndex >= 0 ? instr.targetIndex : instructions.length;
       continue;
     }
     if (op === 'RET') {
       const frame = callStack.pop();
       if (!frame) break;
+      if (memory) memory.closeScope(currentFrame.memoryScope);
       currentFrame = frame.frame;
       // If this RET returns from a mapper routine, commit the accumulated output
       // document as the new current message.
@@ -2262,7 +2319,8 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       if (typeof target !== 'number') throw new Error(`Mapper routine not found: ${label}`);
       // Fresh output doc for this mapper invocation.
       callStack.push({ returnPc: pc + 1, frame: currentFrame });
-      currentFrame = { vars: {}, parent: currentFrame };
+      const memoryScope = memory?.createScope('procedure', currentFrame.memoryScope) ?? null;
+      currentFrame = { vars: storage(memoryScope, {}), parent: currentFrame, memoryScope };
       mapOutput = {};
       pc = target;
       continue;
@@ -2844,8 +2902,15 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     pc += 1;
   }
 
+  reconcileObjects();
   if (currentLine.length > 0) stdout.push(currentLine);
-  return { deliveries, state, stdout, globals: exportGlobals(globalFrame.vars, records, sets), stepCount: steps, stepLimitHit, orchestration: state.__orchestration || null, response: state.__response ?? null, error: state.__orch_error || null };
+  return { deliveries, state, stdout, globals: exportGlobals(globalFrame.vars, records, sets), stepCount: steps, stepLimitHit, orchestration: state.__orchestration || null, response: state.__response ?? null, error: state.__orch_error || null,
+    managedObjects: objects.stats,
+    ...(memory ? { memory: memory.diagnostics() } : {}) };
+  } finally {
+    objects.reset();
+    if (memory) memory.closeScope(invocationScope);
+  }
 }
 
 async function readMessage(args) {

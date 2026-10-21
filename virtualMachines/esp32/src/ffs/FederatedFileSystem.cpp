@@ -296,6 +296,20 @@ File FederatedFileSystem::openReadFile(const String &logicalName) {
 #endif
 }
 
+File FederatedFileSystem::openRandomAccessFile(const String &logicalName) {
+    ResolvedPath resolved = resolvePath(logicalName);
+    if (resolved.remote || resolved.readOnly) return File();
+#if defined(ESP32)
+    if (resolved.resolvedPath.startsWith("/sd/")) {
+        return SD.open(resolved.resolvedPath.substring(3), "w+");
+    }
+    if (resolved.resolvedPath.startsWith("sd/")) {
+        return SD.open(resolved.resolvedPath.substring(3), "w+");
+    }
+#endif
+    return LittleFS.open(resolved.resolvedPath, "w+");
+}
+
 FFSStatus FederatedFileSystem::remove(const String &logicalName) {
     ResolvedPath resolved = resolvePath(logicalName);
     if (resolved.remote || resolved.readOnly) {

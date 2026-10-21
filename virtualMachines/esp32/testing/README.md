@@ -75,4 +75,32 @@ Run `npm run test:pmachine:javascript` for the offline JavaScript PMachine compa
 
 Run `npm run test:pmachine:javascript-package` to verify the public JavaScript PMachine package exports.
 
+### Managed reference objects (offline)
+
+```powershell
+node --test testing\pmachines\managed-objects.test.mjs testing\pmachines\memory-management.test.mjs testing\pmachines\hosted-frame-storage.test.mjs
+```
+
+The hosted-storage runner builds four standalone C++11 tests with `g++`, including
+`managed-objects.test.cpp`, then denies system allocations during object operations.
+Generated executables live under `runtime/test-results/` and are removed afterward.
+These tests cover the native arena/ownership primitives, not the complete Arduino
+VM or hardware. The JavaScript tests execute hand-written bytecode independently
+of the Pascalish compiler and exercise calls, aliases, local shadowing, legacy
+record roots, strings, reclamation, allocation failure, and cleanup on errors.
+
+Both runtimes intercept `CALL_EXT object.new 1`, `object.get 2`, `object.set 3`,
+`object.length 1`, and `object.resize 2` before host dispatch. Each object has at
+most 64 zero-initialized typed fields; each invocation has at most 128 live
+objects and 8192 arena bytes (8 bytes per field, with a one-field minimum for
+empty objects). Integer zero is nil: length accepts it and returns zero; resize
+accepts it as an empty source; get/set reject nil. Resize returns a new buffer
+with a copied prefix and leaves existing aliases unchanged. Cyclic assignments
+are rejected explicitly. Roots and owned edges are counted at instruction
+boundaries; dead nodes cascade-release without timers. Compaction runs only
+with holes, on contiguous allocation pressure or after 64 allocation attempts.
+Object handles are invocation-private and never valid across runs. JavaScript
+results expose pre-teardown `managedObjects` counters; even when globals still
+contain handles, the invocation heap is freed in `finally`.
+
 Run `npm run test:runtime-data-policy` to verify launchers and backend defaults keep operational data outside source-controlled directories.

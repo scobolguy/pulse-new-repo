@@ -22,7 +22,6 @@ const WORKSPACE_ROOT = path.resolve(__dirname, '..');
 import { fileURLToPath } from 'url';
 import { createMessageBroker } from './src/broker.js';
 import { createQueueManagerProvider } from './src/broker/queueManagerProviders/index.mjs';
-import { DISCOVERY_NODE_MAX_AGE_MS } from './src/discovery-topology.mjs';
 import { createDatabaseProvider } from './src/backend/databaseProviders/index.mjs';
 import { registerDatabaseRoutes } from './src/backend/databaseRoutes.mjs';
 import { createFileServer } from './fileServer.js';
@@ -77,6 +76,7 @@ import { registerFlowDeploymentRoutes } from './src/backend/flowDeploymentRoutes
 import { registerProjectWorkspaceRoutes } from './src/backend/projectWorkspaceRoutes.mjs';
 import { registerTransformerServiceRoutes } from './src/backend/transformerServiceRoutes.mjs';
 import { registerStartupFsmRoutes } from './src/backend/startupFsmRoutes.mjs';
+import { registerMapperRoutes } from './src/backend/mapperRoutes.mjs';
 import { registerOllamaRoutes } from './src/backend/ollamaRoutes.mjs';
 import { registerUserProvisioningRoutes } from './src/backend/modules/userProvisioningRoutes.mjs';
 import { registerDeveloperGovernanceRoutes } from './src/backend/modules/developerGovernanceRoutes.mjs';
@@ -89,12 +89,7 @@ import { createHomeAutomationService, registerHomeAutomationRoutes } from './src
 import { createJsPmachineDeploymentSupervisor } from './src/backend/modules/jsPmachineDeploymentSupervisor.mjs';
 import { createRouteManifestDependencyFactories } from './src/backend/modules/routeManifestDependencies.mjs';
 import { startBackendRuntime } from './src/backend/modules/startupBootstrap.mjs';
-import { attachDiscoveryResponder, boundHttpDiscoveryListeners } from './src/service-lifecycle/lan-discovery.mjs';
 import { createServiceProcessManager, registerServiceProcessRoutes } from './src/backend/modules/serviceProcessManager.mjs';
-import { loadRuntimeMachineAuth } from './src/backend/security/runtimeMachineAuth.mjs';
-import { createInfrastructureReadiness, registerInfrastructureReadinessRoutes } from './src/backend/modules/infrastructureReadiness.mjs';
-import { createServiceTransactions, forwardServiceRequest } from './src/backend/modules/serviceTransactions.mjs';
-import { createServiceInstanceReports } from './src/backend/modules/serviceInstanceReports.mjs';
 import { createLifecycleHarnessPathApi } from './src/backend/modules/lifecycleHarnessPaths.mjs';
 import { createRuntimeDiagnosticsApi } from './src/backend/modules/runtimeDiagnosticsApi.mjs';
 import { createMachineAvailabilityPresenceApi } from './src/backend/modules/machineAvailabilityPresenceApi.mjs';
@@ -105,7 +100,6 @@ import { createBusinessCalendarService } from './src/backend/modules/businessCal
 import { createTemporalQueryService } from './src/backend/modules/temporalQueryService.mjs';
 import { createRequestPolicyApi } from './src/backend/security/requestPolicy.mjs';
 import { loadRouteManifest, registerRoutesFromManifest } from './src/backend/routeManifestLoader.mjs';
-import { registerIssueRoutes } from './src/backend/issueRoutes.mjs';
 import { enumerateApiCatalog, enumerateDiscoveredNodeApiCatalog, findApiCatalogEntry } from './src/backend/apiCatalog.mjs';
 import {
   listServiceProviders,
@@ -134,7 +128,7 @@ import {
 import { initializeUdpLogFilter } from './src/backend/modules/udpLogFilter.mjs';
 import { createDebugLog, formatErrorDetails } from './src/backend/modules/debugLogger.mjs';
 import { createAuthoritativeTimeSyncMonitor } from './src/backend/modules/authoritativeTimeSyncMonitor.mjs';
-import { getInfrastructureCatalog, getServiceEntry, listServiceEntries, resolveEnvironmentName } from './src/backend/modules/serviceRegistry.mjs';
+import { getInfrastructureCatalog, listServiceEntries, resolveEnvironmentName } from './src/backend/modules/serviceRegistry.mjs';
 import { createSystemRegistry } from './src/backend/modules/systemRegistry.mjs';
 
 // ===== ESP32 NODE REGISTRY =====
@@ -213,8 +207,14 @@ function proxyRequest(method, path, req, res, targetUrl = BROKER_SERVICE_URL) {
 }
 
 
-const HTTP_PORT = readEnvNumber('HTTP_PORT', readEnvNumber('PORT', getServiceEntry('gateway').port));
+const HTTP_PORT = readEnvNumber('HTTP_PORT', readEnvNumber('PORT', 4000));
 const SERVICE_MANIFEST_PATH = path.join(__dirname, 'data', 'service-manifest.json');
+const serviceProcessManager = await createServiceProcessManager({
+  manifestPath: SERVICE_MANIFEST_PATH,
+  appRoot: __dirname,
+  spawn,
+  logger: console
+});
 // When set, Home Automation runs as its own process (home-automation-service.mjs) and the
 // gateway proxies /api/home-automation/* to it instead of running discovery in-process.
 const HOME_AUTOMATION_SERVICE_URL = readEnvString('HOME_AUTOMATION_SERVICE_URL', '').trim().replace(/\/$/, '');
@@ -255,24 +255,6 @@ const PULSE_QUEUE_DATA_ROOT = PULSE_QUEUE_PERSISTENCE
   ? path.resolve(readEnvString('PULSE_QUEUE_DATA_ROOT', DEFAULT_QUEUE_DATA_ROOT))
   : null;
 const RUNTIME_DATA_ROOT = path.resolve(readEnvString('PULSE_RUNTIME_DATA_ROOT', PULSE_QUEUE_DATA_ROOT || DEFAULT_QUEUE_DATA_ROOT));
-const lifecycleOwnerId = process.env.PULSE_AGGREGATOR_ID
-  || `local-workspace${resolveEnvironmentName() === 'default' ? '' : `:${resolveEnvironmentName()}`}`;
-const lifecycleReportTargets = process.env.PULSE_AGGREGATOR_URLS
-  ? JSON.parse(process.env.PULSE_AGGREGATOR_URLS) : [`http://127.0.0.1:${HTTP_PORT}`];
-if (!Array.isArray(lifecycleReportTargets) || lifecycleReportTargets.length === 0
-  || lifecycleReportTargets.some(target => typeof target !== 'string' || !/^https?:\/\//.test(target))) {
-  throw new Error('PULSE_AGGREGATOR_URLS must be a nonempty JSON array of aggregator HTTP URLs');
-}
-const serviceProcessManager = await createServiceProcessManager({
-  manifestPath: SERVICE_MANIFEST_PATH, appRoot: __dirname, spawn, logger: console,
-  ownerAggregatorId: lifecycleOwnerId, aggregatorUrls: lifecycleReportTargets,
-  infrastructureConfig: { brokerProvider: BROKER_PROVIDER },
-  serviceOverrides: Object.fromEntries(['database', 'rabbitmq'].map(id => [id, {
-    healthUrl: `http://127.0.0.1:${HTTP_PORT}/api/runtime/infrastructure/${id}/ready`,
-    readinessUrl: `http://127.0.0.1:${HTTP_PORT}/api/runtime/infrastructure/${id}/ready`,
-  }])),
-  statePath: path.join(RUNTIME_DATA_ROOT, 'service-lifecycle', `${encodeURIComponent(lifecycleOwnerId)}.json`),
-});
 const EVOLUTION_DATA_ROOT = path.resolve(
   readEnvString('PULSE_EVOLUTION_DATA_ROOT', path.join(RUNTIME_DATA_ROOT, 'evolution'))
 );
@@ -608,36 +590,6 @@ const queueRoutes = new Map();
 const MANAGER_ACTIVE_STATES = new Set(['up', 'degraded']);
 const MANAGER_SYNC_STATES = new Set(['syncing', 'sync-failed']);
 const serviceInstanceRegistry = new Map();
-const localServiceBootId = crypto.randomUUID();
-const localServiceReportSequences = new Map();
-const serviceInstanceReports = await createServiceInstanceReports({ registry: serviceInstanceRegistry });
-const serviceTransactions = await createServiceTransactions({
-  aggregatorId: lifecycleOwnerId,
-  storageRoot: path.join(RUNTIME_DATA_ROOT, 'service-transactions', encodeURIComponent(lifecycleOwnerId)),
-  instances: async () => {
-    await serviceInstanceReports.expire();
-    return [...serviceInstanceRegistry.values()];
-  },
-});
-const runtimeMachineAuth = await loadRuntimeMachineAuth({
-  filePath: process.env.PULSE_RUNTIME_MACHINE_CREDENTIALS_PATH
-    || path.join(RUNTIME_DATA_ROOT, 'runtime-machine-credentials.json'),
-  required: !!process.env.PULSE_RUNTIME_MACHINE_CREDENTIALS_PATH,
-  ownerAggregatorId: lifecycleOwnerId,
-  serviceTransactions,
-});
-registerInfrastructureReadinessRoutes(app, {
-  ownerAggregatorId: lifecycleOwnerId,
-  probes: createInfrastructureReadiness({
-    sqlConnectionString: () => process.env.MSSQL_DATABASE_CONNECTION_STRING || FSM_MSSQL_CONNECTION_STRING,
-    sqlDriver: process.env.MSSQL_DRIVER,
-    rabbitUrl: () => BROKER_RABBITMQ_URL,
-  }),
-});
-const reportExpiryTimer = setInterval(() => {
-  serviceInstanceReports.expire().catch(error => console.error('[SERVICE-REPORT] Expiry failed:', error.message));
-}, 5000);
-reportExpiryTimer.unref();
 const ffsDeploymentRegistry = new Map();
 const jsPmachineDeploymentSupervisor = createJsPmachineDeploymentSupervisor();
 const federatedFfsRoot = path.join(RUNTIME_DATA_ROOT, 'federated-ffs');
@@ -2493,7 +2445,6 @@ const LIFECYCLE_HEARTBEAT_CHECK_INTERVAL_MS = readEnvNumber('LIFECYCLE_HEARTBEAT
 const LIFECYCLE_HEARTBEAT_ENABLED = readEnvBoolean('LIFECYCLE_HEARTBEAT_ENABLED', ['1', 'true', 'yes'], true);
 const BACKEND_WORKER_AUTOSTART = readEnvBoolean('BACKEND_WORKER_AUTOSTART', ['1', 'true', 'yes'], false);
 const BACKEND_AUX_SERVICES_AUTOSTART = readEnvBoolean('BACKEND_AUX_SERVICES_AUTOSTART', ['1', 'true', 'yes'], false);
-const PULSE_FILESYSTEM_AUTOSTART = readEnvBoolean('PULSE_FILESYSTEM_AUTOSTART', ['1', 'true', 'yes'], true);
 const PULSE_MCP_AUTOSTART = readEnvBoolean('PULSE_MCP_AUTOSTART', ['1', 'true', 'yes'], true);
 const ROUTER_WORKER_MAX_BACKOFF_MULTIPLIER = Math.max(1.5, readEnvNumber('ROUTER_WORKER_MAX_BACKOFF_MULTIPLIER', 3.5));
 const LIFECYCLE_WORKER_MAX_BACKOFF_MULTIPLIER = Math.max(1.5, readEnvNumber('LIFECYCLE_WORKER_MAX_BACKOFF_MULTIPLIER', 4.5));
@@ -2501,6 +2452,7 @@ const BRIDGE_WORKER_MAX_BACKOFF_MULTIPLIER = Math.max(1.5, readEnvNumber('BRIDGE
 const WORKER_STARTUP_STAGGER_CAP_MS = Math.max(20, readEnvNumber('WORKER_STARTUP_STAGGER_CAP_MS', 180));
 const EDGE_ESP32_ENABLED = readEnvBoolean('EDGE_ESP32_ENABLED', ['1', 'true', 'yes'], false);
 const EDGE_ESP32_AUTO_INGEST = readEnvBoolean('EDGE_ESP32_AUTO_INGEST', ['1', 'true', 'yes'], true);
+const EDGE_ESP32_HOST = readEnvString('EDGE_ESP32_HOST', '127.0.0.1').trim() || '127.0.0.1';
 const EDGE_ESP32_PORT = Math.max(1, readEnvNumber('EDGE_ESP32_PORT', 80));
 const EDGE_ESP32_TIMEOUT_MS = Math.max(100, readEnvNumber('EDGE_ESP32_TIMEOUT_MS', 1200));
 const EDGE_ESP32_PATH = readEnvString('EDGE_ESP32_PATH', '/pmachine/edge_ingress_stage').trim() || '/pmachine/edge_ingress_stage';
@@ -2513,6 +2465,51 @@ const EDGE_ESP32_FORCED_EVOLUTION_RATE = Math.min(1, Math.max(0, readEnvNumber('
 const MAP_PLACEMENT_REGISTRY_PATH = path.join(RUNTIME_DATA_ROOT, 'map-placement-registry.json');
 const MAP_PLACEMENT_ASSIGNMENT_TTL_MS = Math.max(10 * 1000, readEnvNumber('MAP_PLACEMENT_ASSIGNMENT_TTL_MS', 60 * 1000));
 const MAP_PLACEMENT_REGISTRATION_TTL_MS = Math.max(30 * 1000, readEnvNumber('MAP_PLACEMENT_REGISTRATION_TTL_MS', 10 * 60 * 1000));
+
+function parseEdgeNodeList(rawList = '') {
+  return String(rawList || '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      let host = entry;
+      let port = EDGE_ESP32_PORT;
+      if (entry.startsWith('http://') || entry.startsWith('https://')) {
+        try {
+          const parsed = new URL(entry);
+          host = parsed.hostname;
+          port = Number(parsed.port) > 0 ? Number(parsed.port) : EDGE_ESP32_PORT;
+        } catch {
+          host = EDGE_ESP32_HOST;
+          port = EDGE_ESP32_PORT;
+        }
+      } else if (entry.includes(':')) {
+        const [hostPart, portPart] = entry.split(':');
+        host = String(hostPart || '').trim() || EDGE_ESP32_HOST;
+        const parsedPort = Number(String(portPart || '').trim());
+        port = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : EDGE_ESP32_PORT;
+      }
+      return {
+        host,
+        port,
+        label: `${host}:${port}`
+      };
+    });
+}
+
+const EDGE_ESP32_DEFAULT_NODE = {
+  host: EDGE_ESP32_HOST,
+  port: EDGE_ESP32_PORT,
+  label: `${EDGE_ESP32_HOST}:${EDGE_ESP32_PORT}`
+};
+const EDGE_ESP32_GENERAL_NODES = parseEdgeNodeList(readEnvString('EDGE_ESP32_NODES', ''));
+const EDGE_ESP32_BONECRUSHER_NODES = parseEdgeNodeList(readEnvString('EDGE_ESP32_BONECRUSHER_NODES', ''));
+const EDGE_ESP32_DRONE_NODES = parseEdgeNodeList(readEnvString('EDGE_ESP32_DRONE_NODES', ''));
+const EDGE_ESP32_FALLBACK_NODES = EDGE_ESP32_GENERAL_NODES.length > 0 ? EDGE_ESP32_GENERAL_NODES : [EDGE_ESP32_DEFAULT_NODE];
+const ESP32_DISCOVERY_PROBE_ENABLED = readEnvBoolean('ESP32_DISCOVERY_PROBE_ENABLED', ['1', 'true', 'yes'], true);
+const ESP32_DISCOVERY_PROBE_INTERVAL_MS = Math.max(5000, readEnvNumber('ESP32_DISCOVERY_PROBE_INTERVAL_MS', 15000));
+const ESP32_DISCOVERY_PROBE_TIMEOUT_MS = Math.max(300, readEnvNumber('ESP32_DISCOVERY_PROBE_TIMEOUT_MS', 1500));
+const ESP32_DISCOVERY_SEED_NODES = parseEdgeNodeList(readEnvString('ESP32_DISCOVERY_SEED_NODES', ''));
 const edgeNodeRoundRobinByRole = new Map();
 const mapPlacementState = {
   version: 1,
@@ -2710,12 +2707,10 @@ function chooseMapPlacement({ mapKey = '', sourceType = null, destinationType = 
   pruneMapPlacementRuntimeState(nowMs);
   const estimatedMessageBytes = estimateMessageSizeBytes(message);
   const role = normalizeEdgeRole(requestedRole);
-  const discoveredEsp32Hosts = new Set(getLiveDiscoveredEsp32Nodes(nowMs).map((node) => node.host));
 
   const candidates = entry.placements
     .filter((placement) => placement.enabled !== false)
     .filter((placement) => placement.healthy !== false)
-    .filter((placement) => placement.tier !== 'esp32' || discoveredEsp32Hosts.has(placement.host))
     .filter((placement) => (role ? placement.role === role : true))
     .filter((placement) => {
       if (!placement.maxMessageBytes || placement.maxMessageBytes <= 0) return true;
@@ -2808,6 +2803,50 @@ function getMapPlacementSummary() {
   };
 }
 
+function isLoopbackHost(host = '') {
+  const normalized = String(host || '').trim().toLowerCase();
+  return normalized === '' || normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '0.0.0.0';
+}
+
+function readPlatformIoUploadSeeds() {
+  const backendDir = path.dirname(fileURLToPath(import.meta.url));
+  const platformIoPath = path.join(backendDir, '..', 'platformio.ini');
+  const seeds = [];
+  try {
+    if (!fs.existsSync(platformIoPath)) return seeds;
+    const raw = fs.readFileSync(platformIoPath, 'utf-8');
+    const lines = String(raw || '').split(/\r?\n/);
+    for (const line of lines) {
+      const match = line.match(/^\s*upload_port\s*=\s*([^\s#;]+)\s*$/i);
+      if (!match) continue;
+      const host = String(match[1] || '').trim();
+      if (!host || isLoopbackHost(host)) continue;
+      seeds.push({ host, port: 80, label: `${host}:80` });
+    }
+  } catch {
+    // Ignore platformio.ini parse errors; UDP discovery remains primary.
+  }
+  return seeds;
+}
+
+const ESP32_DISCOVERY_PROBE_NODES = (() => {
+  const merged = [
+    ...EDGE_ESP32_GENERAL_NODES,
+    ...EDGE_ESP32_BONECRUSHER_NODES,
+    ...EDGE_ESP32_DRONE_NODES,
+    ...ESP32_DISCOVERY_SEED_NODES,
+    ...readPlatformIoUploadSeeds()
+  ];
+  const dedup = new Map();
+  for (const node of merged) {
+    const host = String(node?.host || '').trim();
+    const port = Number(node?.port) > 0 ? Number(node.port) : 80;
+    if (!host || isLoopbackHost(host)) continue;
+    dedup.set(`${host}:${port}`, { host, port, label: `${host}:${port}` });
+  }
+  return Array.from(dedup.values());
+})();
+
 function estimateMessageSizeBytes(message) {
   if (message == null) return 0;
   if (typeof message === 'string') return Buffer.byteLength(message, 'utf8');
@@ -2824,44 +2863,6 @@ function normalizeEdgeRole(role) {
   return null;
 }
 
-function getLiveDiscoveredEsp32Nodes(now = Date.now()) {
-  return Array.from(discoveredNodes.values()).filter((node) => {
-    const hardware = String(node?.details?.hardware || node?.hardware || '').trim();
-    const host = String(node?.ip || '').trim();
-    const lastSeen = Number(node?.lastSeen || 0);
-    return /^ESP32(?:[-\s]|$)/i.test(hardware)
-      && host
-      && host !== '127.0.0.1'
-      && host !== 'localhost'
-      && host !== '0.0.0.0'
-      && lastSeen > 0
-      && now - lastSeen <= DISCOVERY_NODE_MAX_AGE_MS
-      && node?.available !== false
-      && node?.draining !== true
-      && !['unavailable', 'draining'].includes(String(node?.status || '').toLowerCase());
-  }).map((node) => {
-    const host = String(node.ip).trim();
-    const port = Math.max(1, toFiniteNumber(node.httpPort || node.port, EDGE_ESP32_PORT));
-    return {
-      host,
-      port,
-      label: `${host}:${port}`,
-      nodeId: String(node.nodeId || node.nodeName || host).trim(),
-      deviceRole: normalizeEdgeRole(node.deviceRole || node.details?.deviceRole || node.details?.preferredTaskType),
-      services: Array.isArray(node.details?.services) ? node.details.services : []
-    };
-  });
-}
-
-function getLiveEsp32BluetoothAudioOrigin() {
-  const node = getLiveDiscoveredEsp32Nodes().find((candidate) => candidate.services.some((service) => {
-    const name = typeof service === 'string' ? service : service?.name;
-    return String(name || '').trim() === 'BluetoothAudioTtsService';
-  }));
-  if (!node) throw new Error('No live discovered ESP32 advertises BluetoothAudioTtsService.');
-  return `http://${node.host}:${node.port}`;
-}
-
 function chooseEdgeRole({ preferredRole = null, message = null } = {}) {
   const normalizedPreferredRole = normalizeEdgeRole(preferredRole);
   if (normalizedPreferredRole) return normalizedPreferredRole;
@@ -2876,27 +2877,27 @@ function chooseEdgeNode({ requestedRole = null, message = null } = {}) {
   let role = chooseEdgeRole({ preferredRole: requestedRole, message });
   let strategy = requestedRole ? 'explicit-role' : 'auto-role';
 
-  if (EDGE_ESP32_FORCED_EVOLUTION_RATE > 0 && Math.random() < EDGE_ESP32_FORCED_EVOLUTION_RATE) {
+  const canEvolve = EDGE_ESP32_BONECRUSHER_NODES.length > 0 && EDGE_ESP32_DRONE_NODES.length > 0;
+  if (canEvolve && EDGE_ESP32_FORCED_EVOLUTION_RATE > 0 && Math.random() < EDGE_ESP32_FORCED_EVOLUTION_RATE) {
     role = role === 'bonecrusher' ? 'drone' : 'bonecrusher';
     strategy = 'forced-evolution';
   }
 
-  const discovered = getLiveDiscoveredEsp32Nodes();
-  const roleMatches = discovered.filter((node) => node.deviceRole === role);
-  const pool = roleMatches.length ? roleMatches : discovered;
+  let pool = role === 'bonecrusher' ? EDGE_ESP32_BONECRUSHER_NODES : EDGE_ESP32_DRONE_NODES;
   if (!pool.length) {
-    throw new Error('No live ESP32 nodes have been discovered for edge routing.');
+    pool = EDGE_ESP32_FALLBACK_NODES;
+    if (strategy === 'auto-role') strategy = 'fallback-pool';
   }
 
   const rrKey = `${role}:${strategy}`;
   const currentIndex = edgeNodeRoundRobinByRole.get(rrKey) || 0;
-  const selected = pool[currentIndex % pool.length];
-  edgeNodeRoundRobinByRole.set(rrKey, (currentIndex + 1) % pool.length);
+  const selected = pool[currentIndex % pool.length] || EDGE_ESP32_DEFAULT_NODE;
+  edgeNodeRoundRobinByRole.set(rrKey, (currentIndex + 1) % Math.max(pool.length, 1));
 
   return {
     requestedRole: chooseEdgeRole({ preferredRole: requestedRole, message }),
     selectedRole: role,
-    strategy: roleMatches.length ? strategy : `${strategy}:live-discovery-fallback`,
+    strategy,
     estimatedMessageBytes: estimateMessageSizeBytes(message),
     node: selected
   };
@@ -2943,6 +2944,11 @@ const queueEnqueueLatencyTracker = {
 const edgeOffloadTracker = {
   enabled: EDGE_ESP32_ENABLED,
   configuredNode: 'dynamic',
+  configuredPools: {
+    bonecrusher: EDGE_ESP32_BONECRUSHER_NODES.map((n) => n.label),
+    drone: EDGE_ESP32_DRONE_NODES.map((n) => n.label),
+    fallback: EDGE_ESP32_FALLBACK_NODES.map((n) => n.label)
+  },
   attempted: 0,
   succeeded: 0,
   fallback: 0,
@@ -3246,10 +3252,7 @@ function getEdgeOffloadMetricsSummary() {
   return {
     enabled: edgeOffloadTracker.enabled,
     configuredNode: edgeOffloadTracker.configuredNode,
-    discoveredEsp32Nodes: Array.from(discoveredNodes.values())
-      .filter((node) => /^ESP32(?:[-\s]|$)/i.test(String(node?.details?.hardware || node?.hardware || '').trim()))
-      .map((node) => String(node.ip || '').trim())
-      .filter(Boolean),
+    configuredPools: edgeOffloadTracker.configuredPools,
     forcedEvolutionRate: EDGE_ESP32_FORCED_EVOLUTION_RATE,
     largeMessageThresholdBytes: EDGE_ESP32_LARGE_MESSAGE_THRESHOLD_BYTES,
     attempted: edgeOffloadTracker.attempted,
@@ -3453,7 +3456,7 @@ async function ingestWithEdgeFallback({
     const fallbackEnvelope = buildEdgeEnvelopeMeta({
       edgeProcessed: false,
       edgeFallback: false,
-      edgeNode: null,
+      edgeNode: EDGE_ESP32_DEFAULT_NODE.label,
       edgeLatencyMs: 0
     });
     const result = await enqueueToSingleQueue(message, fallbackEnvelope, 'single-queue-local');
@@ -5206,7 +5209,6 @@ function upsertServiceInstance({ serviceName, instanceId, nodeId, ip, port, stat
   if (!serviceName) return;
   const effectiveInstanceId = instanceId || `${serviceName}:${nodeId || ip || 'unknown'}:${port || ''}`;
   const prev = serviceInstanceRegistry.get(effectiveInstanceId) || {};
-  if (prev.version === 1 && prev.bootId) return;
   const effectiveNodeId = normalizeNodeId(nodeId || ip || prev.nodeId);
   const nextStatus = status || prev.status || 'up';
   serviceInstanceRegistry.set(effectiveInstanceId, {
@@ -5222,11 +5224,9 @@ function upsertServiceInstance({ serviceName, instanceId, nodeId, ip, port, stat
   });
 }
 
-async function registerLocalServiceHeartbeats() {
+function registerLocalServiceHeartbeats() {
   const localNodeId = os.hostname() || '127.0.0.1';
-  const address = app.locals.httpServer?.address();
-  if (!address || typeof address === 'string') return;
-  const localIp = process.env.PULSE_SERVICE_ADVERTISE_HOST || '127.0.0.1';
+  const localIp = '127.0.0.1';
 
   const localServices = [
     {
@@ -5252,29 +5252,14 @@ async function registerLocalServiceHeartbeats() {
   ];
 
   for (const svc of localServices) {
-    const sequence = (localServiceReportSequences.get(svc.instanceId) || 0) + 1;
-    localServiceReportSequences.set(svc.instanceId, sequence);
-    await serviceInstanceReports.report({
-      version: 1, serviceId: svc.serviceName,
+    upsertServiceInstance({
+      serviceName: svc.serviceName,
       instanceId: svc.instanceId,
       nodeId: localNodeId,
-      bootId: localServiceBootId, sequence, ownerAggregatorId: lifecycleOwnerId,
-      endpoint: `http://${localIp}:${address.port}`,
-      readiness: { ready: true, blockedBy: [] }, dependencies: {}, ttlMs: 30000,
-      listeners: [{ protocol: 'http', host: localIp, port: address.port }],
-    });
-  }
-  for (const id of ['database', 'rabbitmq']) {
-    const service = await serviceProcessManager.getService(id);
-    const instanceId = `${id}:${lifecycleOwnerId}`;
-    const sequence = (localServiceReportSequences.get(instanceId) || 0) + 1;
-    localServiceReportSequences.set(instanceId, sequence);
-    await serviceInstanceReports.report({
-      version: 1, serviceId: id === 'database' ? 'pulse-database' : 'pulse-rabbitmq',
-      instanceId, nodeId: localNodeId, bootId: localServiceBootId, sequence,
-      ownerAggregatorId: lifecycleOwnerId, endpoint: service.readinessUrl,
-      readiness: { ready: service.readiness.ready, blockedBy: service.readiness.blockedBy },
-      dependencies: {}, ttlMs: 30000, listeners: [],
+      ip: localIp,
+      port: HTTP_PORT,
+      status: 'up',
+      metadata: svc.metadata
     });
   }
 }
@@ -8269,11 +8254,6 @@ const {
   clearTimeoutFn: clearTimeout
 });
 
-const lanDiscoveryResponder = await attachDiscoveryResponder({
-  socket: udpServer, aggregatorId: lifecycleOwnerId,
-  getListeners: () => boundHttpDiscoveryListeners(app.locals.httpServer?.address()),
-});
-
 udpServer.on('message', (msg, rinfo) => {
   console.log(`[UDP] Packet from ${rinfo.address}:${rinfo.port} — ${msg.toString().slice(0, 120)}`);
   const ip = rinfo.address;
@@ -8282,7 +8262,6 @@ udpServer.on('message', (msg, rinfo) => {
   try {
     const raw = msg.toString();
     const data = JSON.parse(raw);
-    if (data?.kind === 'pulseDiscoveryRequest' || data?.kind === 'pulseDiscoveryReply') return;
 
     if (data && data.kind === 'nodeBeaconAck' && String(data.nodeId || '').trim() === machineAvailability.nodeId) {
       markBeaconAcknowledged();
@@ -8420,6 +8399,64 @@ udpServer.bind(UDP_PORT, () => {
   console.log(`[UDP] Listening for node broadcasts on port ${UDP_PORT}`);
 });
 
+async function probeEsp32Node(node, visited = new Set()) {
+  const host = String(node?.host || '').trim();
+  const port = Number(node?.port) > 0 ? Number(node.port) : 80;
+  if (!host || visited.has(host)) return;
+  visited.add(host);
+
+  const statusUrl = `http://${host}:${port}/status`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ESP32_DISCOVERY_PROBE_TIMEOUT_MS);
+  try {
+    const statusRes = await fetch(statusUrl, { signal: controller.signal });
+    if (!statusRes.ok) return;
+    const statusPayload = await statusRes.json();
+    if (String(statusPayload?.hardware || '').toUpperCase() !== 'ESP32') return;
+
+    const ip = host;
+    const now = Date.now();
+    const previous = discoveredNodes.get(ip) || {};
+    discoveredNodes.set(ip, {
+      ...previous,
+      ip,
+      nodeName: statusPayload?.nodeName || previous.nodeName || ip,
+      lastSeen: now,
+      raw: previous.raw || 'active-probe',
+      details: {
+        ...(previous.details || {}),
+        ...statusPayload
+      }
+    });
+
+    const peers = Array.isArray(statusPayload?.discoveredNodes) ? statusPayload.discoveredNodes : [];
+    for (const peer of peers) {
+      const peerIp = String(peer?.ip || '').trim();
+      if (!peerIp || isLoopbackHost(peerIp)) continue;
+      await probeEsp32Node({ host: peerIp, port: 80 }, visited);
+    }
+  } catch {
+    // Ignore transient probe failures.
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function runEsp32DiscoveryProbe() {
+  if (!ESP32_DISCOVERY_PROBE_ENABLED) return;
+  const visited = new Set();
+  for (const node of ESP32_DISCOVERY_PROBE_NODES) {
+    await probeEsp32Node(node, visited);
+  }
+}
+
+if (ESP32_DISCOVERY_PROBE_ENABLED && ESP32_DISCOVERY_PROBE_NODES.length > 0) {
+  runEsp32DiscoveryProbe().catch(() => {});
+  setInterval(() => {
+    runEsp32DiscoveryProbe().catch(() => {});
+  }, ESP32_DISCOVERY_PROBE_INTERVAL_MS);
+}
+
 // --- Node Cleanup ---
 setInterval(() => {
   const now = Date.now();
@@ -8453,7 +8490,6 @@ setInterval(() => {
   }
 
   for (const [instanceId, instance] of serviceInstanceRegistry.entries()) {
-    if (instance.version === 1 && instance.bootId) continue;
     if (MANAGER_ACTIVE_STATES.has(instance.status) && now - (instance.lastHeartbeat || 0) > 30 * 1000) {
       instance.status = 'down';
       serviceInstanceRegistry.set(instanceId, instance);
@@ -9819,7 +9855,6 @@ function registerRoutes(app) {
     PIPER_MODEL_PATH,
     runPiperSynthesis,
     playWavOnHost,
-    getLiveEsp32BluetoothAudioOrigin,
     forwardEsp32BluetoothTts
   });
 
@@ -9880,15 +9915,7 @@ function registerRoutes(app) {
   registerPmachineDeploymentRoutes(app);
   registerFlowDeploymentRoutes(app, { runtimeRoot: RUNTIME_DATA_ROOT });
   registerDatabaseRoutes(app, { databaseManagers: databaseManagerInstances });
-  registerServiceProcessRoutes(app, { serviceProcessManager, serviceInstanceReports, serviceInstanceRegistry, serviceTransactions, requirePermission, runtimeMachineAuth });
-  app.post('/api/mcp/query', express.raw({ type: '*/*', limit: '12mb' }), async (req, res) => {
-    await forwardServiceRequest(serviceTransactions, 'pulse-local-mcp', {
-      method: 'POST', path: '/query',
-      headers: { 'content-type': req.get('content-type') || 'application/json' },
-      ...(Buffer.isBuffer(req.body)
-        ? { body: req.body.toString('base64'), bodyEncoding: 'base64' } : { body: req.body }),
-    }, res);
-  });
+  registerServiceProcessRoutes(app, { serviceProcessManager, requirePermission });
 
   registerOrchestrationRegistryRoutes(app, {
     HTTP_PORT,
@@ -9949,12 +9976,10 @@ function registerRoutes(app) {
       registerRuntimeRegistryRoutes,
       registerRouterLifecycleControlRoutes,
       registerHelloServiceRoutes,
-      registerIssueRoutes,
       registerProvisioningAgentRoutes
     },
     dependencyFactories: createRouteManifestDependencyFactories({
       requirePermission,
-      getSessionUserIdFromRequest,
       readTransactionLifecycleCompiled,
       getFsmEntityStateFromSql,
       getTransactionTrace,
@@ -10030,7 +10055,6 @@ function registerRoutes(app) {
       resolvePermissionForApiRequest,
       routeRoleManifest: ROUTE_ROLE_MANIFEST,  // loaded from data/route-manifest.json at startup
       serviceProcessManager,
-      serviceTransactions,
       listServiceProviders,
       getServiceProvider,
       getServiceProviderAction,
@@ -10044,6 +10068,7 @@ function registerRoutes(app) {
       compileQueueDslSpec,
       diffQueueConfigs,
       queueConfigMapFromWorkflowSymbols,
+      resolveLibrarianOrigin,
       IS_PRODUCTION_ENV,
       ALLOW_TEMP_QUEUES_IN_PRODUCTION,
       machineWorkloadState,
@@ -10114,12 +10139,21 @@ function registerRoutes(app) {
       validateWorkerConfigUpdate,
       applyWorkerConfigUpdate,
       routerWorkers,
+      resolveMapperOrigin
     })
   });
 
   debugLog('[DEBUG] Registering routes...');
 
   // Queue configuration synchronization endpoints for distributed config management
+
+  function resolveLibrarianOrigin() {
+    return readEnvString('LIBRARIAN_URL', `http://127.0.0.1:${DEFAULT_LIBRARIAN_PORT}`);
+  }
+
+  function resolveMapperOrigin() {
+    return readEnvString('MAPPER_URL', 'http://127.0.0.1:4200');
+  }
 
   // TEST ENDPOINT (dev/debug only)
   if (DEBUG_BACKEND) {
@@ -10146,12 +10180,8 @@ function registerRoutes(app) {
   debugLog('[DEBUG] File server routes registered');
   app.use('/api/fileserver', fileServer.router);
 
-  const reportLocalServices = () => registerLocalServiceHeartbeats()
-    .catch(error => console.error('[SERVICE-REPORT] Local reporting failed:', error.message));
-  reportLocalServices();
-  const localServiceHeartbeatTimer = setInterval(reportLocalServices, 10000);
-  localServiceHeartbeatTimer.unref();
-  app.locals.localServiceHeartbeatTimer = localServiceHeartbeatTimer;
+  registerLocalServiceHeartbeats();
+  setInterval(registerLocalServiceHeartbeats, 10000);
   setInterval(updateVirtualNodes, 3000);
   authoritativeTimeSyncMonitor.start();
   startLifecycleHeartbeatMonitor();
@@ -10174,33 +10204,39 @@ function registerRoutes(app) {
 }
 
 async function migratePersistedQueueTypeIds() {
-  const response = await serviceTransactions.request('pulse-data-librarian', {
-    method: 'GET', path: '/api/librarian/data-types',
-  });
-  if (response.status < 200 || response.status >= 300) throw new Error(`Librarian returned ${response.status}`);
+  const librarianOrigin = readEnvString('LIBRARIAN_URL', `http://127.0.0.1:${DEFAULT_LIBRARIAN_PORT}`);
+  const response = await fetch(`${librarianOrigin}/api/librarian/data-types`, { method: 'GET' });
+  if (!response.ok) throw new Error(`Librarian returned ${response.status}`);
 
-  const payload = response.body;
+  const payload = await response.json();
   const migrated = await migrateQueueTypeConfigs(queueManagerInstances, payload.types || []);
   if (migrated > 0) debugLog(`[TYPE-IDS] Migrated ${migrated} persisted queue configuration(s) to canonical IDs`);
 }
 
 try {
+  await migratePersistedQueueTypeIds().catch(error => {
+    console.warn(`[TYPE-IDS] Queue type migration unavailable: ${error.message}`);
+  });
   await getTransactionStateMssqlPool().catch(error => {
     console.warn(`[MESSAGE-SQL] SQL message ledger initialization unavailable: ${error.message}`);
-  });
-  void migratePersistedQueueTypeIds().catch(error => {
-    console.warn(`[TYPE-IDS] Queue type migration unavailable: ${error.message}`);
   });
   await startBackendRuntime({
     debugLog,
     app,
     HTTP_PORT,
     queueManagerInstances,
+    registerMapperRoutes,
     registerRoutes,
     createNodeRegistry,
     RUNTIME_DATA_ROOT,
     pathJoin: path.join,
     createNodeRegistryRoutes,
+    esp32SeedNodes: [
+      ...EDGE_ESP32_GENERAL_NODES,
+      ...EDGE_ESP32_BONECRUSHER_NODES,
+      ...EDGE_ESP32_DRONE_NODES,
+      ...ESP32_DISCOVERY_SEED_NODES
+    ],
     createPascalCompiler,
     pascalCompilerRoutes,
     express,
@@ -10234,20 +10270,10 @@ try {
     gatewayModeState,
     startFedGateway,
     BACKEND_AUX_SERVICES_AUTOSTART,
-    PULSE_FILESYSTEM_AUTOSTART,
     PULSE_MCP_AUTOSTART,
-    serviceProcessManager,
-    shutdownServiceRuntime: async () => {
-      await lanDiscoveryResponder.stop();
-      clearInterval(reportExpiryTimer);
-      clearInterval(app.locals.localServiceHeartbeatTimer);
-      await serviceTransactions.stop();
-      await serviceInstanceReports.stop();
-    },
     spawn,
     librarianScriptPath: fileURLToPath(new URL('./data-librarian.mjs', import.meta.url)),
     mapperScriptPath: fileURLToPath(new URL('./data-mapper.mjs', import.meta.url)),
-    filesystemScriptPath: fileURLToPath(new URL('./filesystem-service.mjs', import.meta.url)),
     mcpScriptPath: fileURLToPath(new URL('./src/mcp/pulseMcpServer.mjs', import.meta.url))
   });
   for (const [localIndex, qm] of queueManagers.entries()) {

@@ -92,9 +92,15 @@ async function main() {
     let antlrCode = 0;
 
     for (const grammar of grammarFiles) {
+      const grammarPath = grammar === 'Pascalish.g4'
+        ? path.resolve(root, '../../../languages/pascalish/grammar', grammar)
+        : path.join(root, 'grammar', grammar);
+      const grammarOutput = grammar === 'Pascalish.g4'
+        ? path.resolve(root, '../../../languages/pascalish/grammar/generated-test')
+        : generatedOut;
       const one = await runCommand(
         `ANTLR generate ${grammar}`,
-        `java -jar "${antlrJar}" -Dlanguage=JavaScript -visitor -no-listener -o "${generatedOut}" "${path.join(root, 'grammar', grammar)}"`
+        `java -jar "${antlrJar}" -Dlanguage=JavaScript -visitor -no-listener -o "${grammarOutput}" "${grammarPath}"`
       );
       if (one.code !== 0) {
         antlrCode = one.code;

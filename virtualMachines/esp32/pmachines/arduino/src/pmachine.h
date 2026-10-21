@@ -180,68 +180,6 @@ enum Opcode : uint8_t {
 
     enum class OperandType { NONE, INT, STRING };
 
-// Tagged runtime value. The implicit int conversions keep integer-only opcode
-// handlers source-compatible while typed opcodes inspect `kind` directly.
-// Strings (and later records/sets/arrays) are pool handles so Value stays 8 bytes.
-enum class ValueKind : uint8_t {
-    Integer = 0,
-    Real = 1,
-    Boolean = 2,
-    StringRef = 3,
-    EnumRef = 4
-};
-
-struct Value {
-    ValueKind kind = ValueKind::Integer;
-    uint8_t flags = 0;
-    uint16_t handle = 0;
-    union {
-        int32_t i;
-        float r;
-    };
-
-    Value() : i(0) {}
-    Value(int v) : kind(ValueKind::Integer), i(v) {}
-
-    operator int() const {
-        if (kind == ValueKind::Real) return static_cast<int32_t>(r);
-        return i;
-    }
-
-    bool isString() const { return kind == ValueKind::StringRef; }
-
-    static Value makeString(uint16_t poolHandle) {
-        Value v;
-        v.kind = ValueKind::StringRef;
-        v.handle = poolHandle;
-        v.i = 0;
-        return v;
-    }
-
-    static Value makeReal(float value) {
-        Value v;
-        v.kind = ValueKind::Real;
-        v.r = value;
-        return v;
-    }
-
-    bool isReal() const { return kind == ValueKind::Real; }
-
-    float asReal() const {
-        return kind == ValueKind::Real ? r : static_cast<float>(i);
-    }
-
-    static Value makeEnum(uint16_t typeIndex, int ordinal) {
-        Value v;
-        v.kind = ValueKind::EnumRef;
-        v.handle = typeIndex;
-        v.i = ordinal;
-        return v;
-    }
-
-    bool isEnum() const { return kind == ValueKind::EnumRef; }
-};
-
 struct ExtendableDeclaration {
     std::string name;
     size_t elementCount = 1;
@@ -405,6 +343,10 @@ struct ExtendableStorageDiagnostics {
         if (mnemonic == "NOP") return OP_NOP;
         return 0xFE;
     }
+
+// Not part of the shared opcode manifest: the parser emits one instruction carrying a
+// whole Tandem COBOL-85 program, which runInstructions hands to the cobolvm engine.
+constexpr uint8_t OP_COBOL_PROGRAM = 0xFD;
 
 struct RouteDelivery {
     std::string queueName;
@@ -646,6 +588,8 @@ public:
             routingDeliveries = std::move(other.routingDeliveries);
             mappingDefs = std::move(other.mappingDefs);
             procedureParamsByLabel = std::move(other.procedureParamsByLabel);
+            cobolLocalsByLabel = std::move(other.cobolLocalsByLabel);
+            cobolGlobals = std::move(other.cobolGlobals);
             enumManager = other.enumManager;
             lastRunStepLimitHit = other.lastRunStepLimitHit;
             lastRunStepCount = other.lastRunStepCount;
@@ -748,8 +692,10 @@ public:
     void tickDaemonRefresh(uint32_t nowMs = 0);
     bool readPCodeByte(uint32_t virtualAddress, uint8_t& outByte);
     void run(const std::vector<PInstruction>& instructions, int startPc = 0);
-    void run(const std::deque<PInstruction>& instructions, int startPc = 0);
-    void runImage(size_t count, const std::function<PInstruction(size_t)>& instructionAt);
+    void run(const std::deque<PInstruction>& instructions, int startPc = 0,
+             HostExecutionStorage* storage = nullptr);
+    void runImage(size_t count, const std::function<PInstruction(size_t)>& instructionAt,
+                  HostExecutionStorage* storage = nullptr);
     void setRoutingContext(const std::string& inputQueue, const std::string& message);
     const std::string& getCurrentMessage() const;
     void setNamedStringVariable(const std::string& name, const std::string& value);
@@ -777,6 +723,7 @@ public:
     uint16_t getExecutionPc() const { return pc; }
     const char* getAllocationStage() const { return allocationStage; }
     size_t getAllocationBytes() const { return allocationBytes; }
+    const char* getHostedStorageError() const { return hostedStorageError; }
     size_t getLastRunStepCount() const;
     const std::vector<std::string>& getLastRunTextOutput() const;
     const std::vector<std::string>& getLastRunTrace() const;
@@ -784,6 +731,8 @@ public:
     bool hasDebugInstructions() const;
     uint16_t getDebugPc() const;
     std::map<std::string, std::string> getFlowStateSnapshot() const;
+    const std::map<std::string, std::string>& getFlowState() const { return flowState; }
+    bool takeFlowStateValue(const std::string& key, std::string& out);
     std::map<std::string, GlobalValue> getGlobalsSnapshot() const;
     uint16_t registerEnumType(const std::string& typeName, const std::vector<std::string>& values);
     uint16_t getEnumTypeIndex(const std::string& typeName) const;
@@ -810,7 +759,9 @@ public:
 private:
     void runInstructions(size_t instructionCount,
                          const std::function<PInstruction(size_t)>& instructionAt,
-                         int startPc);
+                         int startPc, HostExecutionStorage* storage = nullptr);
+    // Runs Tandem COBOL-85 P-code (OP_COBOL_PROGRAM) on the native decimal engine.
+    void runCobolProgram(const std::string& pcodeText);
     ::FederatedFileSystem *ffs = nullptr;
     PCodeMap pcodeMap;
     MemoryMap memoryMap;
@@ -823,6 +774,7 @@ private:
     uint16_t pc = 0;
     const char* allocationStage = "idle";
     size_t allocationBytes = 0;
+    const char* hostedStorageError = nullptr;
     std::atomic<int> debugRunStatus{0};
     std::atomic<int> debugAction{0};
     std::atomic<int> debugStepOutDepth{0};
@@ -836,6 +788,9 @@ private:
     std::vector<RouteDelivery> routingDeliveries;
     std::map<std::string, MappingDef> mappingDefs;
     std::map<std::string, std::vector<std::string>> procedureParamsByLabel;
+    // COBOL program-map extras, passed as "@locals:LABEL" / "@globals" signature entries.
+    std::map<std::string, std::vector<std::string>> cobolLocalsByLabel;
+    std::vector<std::string> cobolGlobals;
     ::EnumManager* enumManager = nullptr;
     bool lastRunStepLimitHit = false;
     size_t lastRunStepCount = 0;

@@ -1,0 +1,50 @@
+{
+  "suite": "smoke",
+  "startedAt": "2026-10-20T23:55:20.438Z",
+  "hardware": "not-run (no --esp32 URL supplied)",
+  "cases": [
+    {
+      "name": "arithmetic",
+      "kind": "positive",
+      "compiler": {
+        "accepted": true
+      },
+      "desktop": {
+        "status": "pass",
+        "result": {
+          "deliveries": [],
+          "state": {},
+          "stdout": [
+            "TEST arithmetic: OK"
+          ],
+          "globals": {
+            "I": 11,
+            "Sum": 55,
+            "src": ""
+          },
+          "stepCount": 152,
+          "stepLimitHit": false,
+          "orchestration": null,
+          "response": null,
+          "error": null,
+          "managedObjects": {
+            "liveHandles": 0,
+            "liveBytes": 0,
+            "peakHandles": 0,
+            "peakBytes": 0,
+            "allocations": 0,
+            "compactions": 0,
+            "failures": 0
+          }
+        }
+      },
+      "status": "pass"
+    }
+  ],
+  "finishedAt": "2026-10-20T23:55:20.767Z",
+  "counts": {
+    "pass": 1,
+    "fail": 0,
+    "blocked": 0
+  }
+}
