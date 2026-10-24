@@ -438,6 +438,26 @@ export function initializePascalishLanguage(monaco, typeNamesRef, typeFieldMapRe
     monaco.languages.register({ id: 'pascalish' });
     monaco.languages.register({ id: 'cobolish' });
     monaco.languages.register({ id: 'vbish' });
+    monaco.languages.register({ id: 'mnf', extensions: ['.ftn'] });
+    monaco.languages.setMonarchTokensProvider('mnf', {
+      ignoreCase: true,
+      keywords: ['program', 'integer', 'real', 'do', 'continue', 'print', 'stop', 'end', 'go', 'to'],
+      tokenizer: {
+        root: [
+          [/^[Cc*!].*$/, 'comment'],
+          [/^([ 0-9]{5})([^ 0])/, ['number', 'keyword']],
+          [/'(?:''|[^'])*'|"(?:""|[^"])*"/, 'string'],
+          [/[A-Za-z][A-Za-z0-9]*/, { cases: { '@keywords': 'keyword', '@default': 'identifier' } }],
+          [/(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?/, 'number'],
+          [/\*\*|[-+*/=]/, 'operator'],
+          [/[(),]/, 'delimiter']
+        ]
+      }
+    });
+    monaco.languages.setLanguageConfiguration('mnf', {
+      brackets: [['(', ')']],
+      autoClosingPairs: [{ open: '(', close: ')' }, { open: "'", close: "'" }, { open: '"', close: '"' }]
+    });
 
     monaco.languages.setMonarchTokensProvider('pascalish', {
       ignoreCase: true,

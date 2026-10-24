@@ -20,6 +20,7 @@ DeviceConfiguration deviceConfig;
 #endif
 #include <ESPAsyncWebServer.h>
 #if defined(ESP32)
+#include <Preferences.h>
 #include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -66,6 +67,9 @@ void* operator new(size_t size) {
         refillExceptionReserve();
         return block;
     }
+    Serial.printf("[MEMORY] Native allocation failed: requested=%u free=%u largest=%u\n",
+        static_cast<unsigned>(size), static_cast<unsigned>(ESP.getFreeHeap()),
+        static_cast<unsigned>(ESP.getMaxAllocHeap()));
     free(__atomic_exchange_n(&gExceptionReserve, nullptr, __ATOMIC_ACQ_REL));
     throw std::bad_alloc();
 }
@@ -175,6 +179,9 @@ WifiConfig wifiConfig;
 ClusterConfig clusterConfig;
 FederatedFileSystem federatedFS;
 bool ffsUp = false;
+String ffsRemoteCandidate;
+String ffsRemoteConfigured;
+unsigned long ffsLastRemoteProbe = 0;
 AsyncWebServer server(80);
 DevicePin* devicePin = nullptr;
 int devicePinNumber = 2;
@@ -2721,6 +2728,52 @@ void setupWebServer() {
 
     #ifndef DISABLE_FFS_ROUTES
     registerFFSRoutes(server, federatedFS);
+#if defined(ESP32)
+    server.on("/ffs/remote", HTTP_GET, [](AsyncWebServerRequest* request) {
+        JsonDocument doc;
+        doc["configuredUrl"] = ffsRemoteConfigured;
+        doc["candidateUrl"] = ffsRemoteCandidate;
+        doc["available"] = ffsUp;
+        String body;
+        serializeJson(doc, body);
+        request->send(200, "application/json", body);
+    });
+    server.on("/ffs/remote", HTTP_POST, [](AsyncWebServerRequest* request) {
+        if (!request->hasParam("host", true) || !request->hasParam("port", true)) {
+            request->send(400, "text/plain", "IPv4 host and port form parameters are required");
+            return;
+        }
+        String host = request->getParam("host", true)->value();
+        String portText = request->getParam("port", true)->value();
+        host.trim();
+        portText.trim();
+        IPAddress ip;
+        bool validPort = portText.length() > 0 && portText.length() <= 5;
+        for (size_t i = 0; i < portText.length(); ++i) {
+            if (!isdigit(static_cast<unsigned char>(portText[i]))) validPort = false;
+        }
+        long port = portText.toInt();
+        if (!ip.fromString(host) || !validPort || port < 1 || port > 65535) {
+            request->send(400, "text/plain", "Invalid IPv4 host or port");
+            return;
+        }
+        String url = String("http://") + ip.toString() + ":" + String(port);
+        Preferences preferences;
+        if (!preferences.begin("pulse-ffs", false)) {
+            Serial.println("[FFS] Unable to open direct remote storage configuration");
+            request->send(500, "text/plain", "Unable to open remote FFS configuration");
+            return;
+        }
+        bool saved = preferences.putString("url", url) == url.length();
+        preferences.end();
+        if (!saved) {
+            Serial.println("[FFS] Unable to persist direct remote storage configuration");
+            request->send(500, "text/plain", "Unable to save remote FFS configuration");
+            return;
+        }
+        request->send(200, "application/json", "{\"saved\":true,\"restartRequired\":true}");
+    });
+#endif
     #endif
 #ifdef ENABLE_PMACHINE
 #ifndef DISABLE_PMACHINE_ROUTES
@@ -3012,14 +3065,14 @@ void setup() {
     delay(100);
     Serial.println("[BOOT] setup() starting...");
 
-    // 1. Mount filesystem (SD or LittleFS)
+    // 1. Probe SD. Legacy device configuration still has its own local storage.
 #if defined(ESP32)
     bool sdAvailable = false;
     if (SD.begin()) {
         Serial.println("SD card detected and mounted");
         sdAvailable = true;
     } else {
-        Serial.println("No SD card detected, falling back to LittleFS");
+        Serial.println("No SD card detected; FFS will look for remote storage");
     }
     if (!sdAvailable) {
         if (!ensureLittleFsInitialized()) {
@@ -3266,8 +3319,16 @@ void setup() {
     uniqueIdBegin(nodeName);
 #endif
 
-    // 7. Initialize FederatedFileSystem with SD if available, else LittleFS
+    // Prefer SD; an explicit remote endpoint takes precedence over discovery.
 #if defined(ESP32)
+    {
+        Preferences preferences;
+        if (preferences.begin("pulse-ffs", false)) {
+            ffsRemoteConfigured = preferences.getString("url", "");
+            preferences.end();
+            ffsRemoteCandidate = ffsRemoteConfigured;
+        } else Serial.println("[FFS] Unable to load direct remote storage configuration");
+    }
     if (sdAvailable) {
         ffsUp = federatedFS.begin(FFSBackend::SD, SD);
         if (ffsUp) {
@@ -3275,22 +3336,9 @@ void setup() {
         } else {
             Serial.println("FederatedFileSystem failed to initialize SD");
         }
-    } else {
-        ffsUp = federatedFS.begin(FFSBackend::LittleFS, LittleFS);
-        if (ffsUp) {
-            Serial.println("FederatedFileSystem is UP (LittleFS backend)");
-        } else {
-            Serial.println("FederatedFileSystem failed to initialize LittleFS");
-        }
-    }
-#else
-    ffsUp = federatedFS.begin(FFSBackend::LittleFS, LittleFS);
-    if (ffsUp) {
-        Serial.println("FederatedFileSystem is UP (LittleFS backend)");
-    } else {
-        Serial.println("FederatedFileSystem failed to initialize LittleFS");
     }
 #endif
+    if (!ffsUp) Serial.println("[FFS] No local SD storage; searching for remote FFS (no LittleFS fallback)");
 
 #ifdef ENABLE_PMACHINE
     pm.setFFS(&federatedFS);
@@ -3663,14 +3711,38 @@ void loop() {
 #if defined(ENABLE_DOORBELL_DISPLAY)
     udpContext.onAlertMessage = handleDoorbellAlertPacket;
 #endif
-#if defined(ESP32) && defined(ENABLE_PMACHINE) && !defined(DISABLE_PMACHINE_ROUTES)
+#if defined(ESP32)
     udpContext.onAggregatorAck = [](const char* aggregatorId, IPAddress sourceIp, uint16_t httpPort) {
         char address[16];
         snprintf(address, sizeof(address), "%u.%u.%u.%u", sourceIp[0], sourceIp[1], sourceIp[2], sourceIp[3]);
+#if defined(ENABLE_PMACHINE) && !defined(DISABLE_PMACHINE_ROUTES)
         pmachineLearnAggregator(aggregatorId, address, httpPort);
+#endif
+        if (!ffsUp && ffsRemoteConfigured.isEmpty()) {
+            ffsRemoteCandidate = String("http://") + address + ":" + String(httpPort) + "/api/fileserver";
+        }
     };
 #endif
     udpRuntimeProcessIncoming(udpContext, runtimeUdpParentPort, runtimeUdpSiblingPort);
+#if defined(ESP32)
+    if (!ffsUp && ffsRemoteCandidate.length()
+        && static_cast<unsigned long>(millis() - ffsLastRemoteProbe) >= 15000) {
+        ffsLastRemoteProbe = millis();
+        String storageNode = nodeName;
+        storageNode.toLowerCase();
+        for (size_t i = 0; i < storageNode.length(); ++i) {
+            char c = storageNode[i];
+            if (!isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_' && c != '.') storageNode.setCharAt(i, '-');
+        }
+        ffsUp = federatedFS.beginRemote(ffsRemoteCandidate, "/nodes/" + storageNode + "/public");
+        if (ffsUp) {
+            Serial.printf("[FFS] Remote storage ready: %s\n", ffsRemoteCandidate.c_str());
+#if defined(ENABLE_PMACHINE) && !defined(DISABLE_PMACHINE_ROUTES)
+            configurePMachineHostedStorage(federatedFS);
+#endif
+        } else Serial.println("[FFS] Remote storage unavailable; retrying discovery");
+    }
+#endif
         /* UDP announcement disabled */
         // processIncomingUDP();
 

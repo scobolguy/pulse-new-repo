@@ -4,6 +4,118 @@ This single VS Code extension packages Pulse Studio, Data Librarian, Data Mapper
 Deploy, Node Inventory, and native Run and Debug support for PMachine programs.
 Install one `pulse-pmachine-debugger` VSIX to get these panels and commands.
 
+## Language editors (0.1.19)
+
+Use **Pulse: New Language Document** in the Command Palette to choose a starter
+with the correct language mode, then save it with the listed extension. Existing
+source files are recognized automatically. Every mode includes syntax coloring,
+comment/bracket configuration and appropriate string handling; MNF also retains
+its fixed-form column layout.
+
+| Language | Files | Editor/execution |
+| --- | --- | --- |
+| Pascal / Pascalish | `.pas`, `.pash`, `.flow.pas`, `.service.pas`, `.program.pas`, `.daemon.pas` | Text editor, compile/run and source debugging |
+| COBOLish 85 | `.cob`, `.cobol` | Fixed/free-form highlighting, compile/run and source debugging |
+| VBish | `.bas`, `.vb`, `.vbs` | Text editor, compile/run and source debugging |
+| C# subset | `.cs` | Text editor, generic static methods, JS-only compile/run and source debugging |
+| Minnesota FORTRAN | `.ftn` | Fixed-form editor, compile/run and source debugging |
+| WFL | `.wfl` | Text editor and existing workflow/deployment designers |
+| MAPL | `.mapl` | Text editor and existing Data Mapper designer; mapping compilation |
+| VFL | `.vfl` | JSON text coloring and existing visual graph editor |
+| P-code | `.pcode` | Instruction coloring; native hosted-service debugging with a matching map |
+
+These are Pulse language editors, not full language servers. Syntax coloring
+does not mean every highlighted construct is supported by a compiler. This
+release does not add Roslyn/IntelliSense, automatic completion, full C#/VB.NET
+compatibility, or new runtime targets. C# targets JavaScript only; generic
+classes and collections remain unsupported. MAPL/VFL are mapping/graph
+documents, not scalar console programs; do not assume source-level mapping
+debugger support. Raw p-code starter text can be run through the JS CLI, but
+native F5 requires the hosted-service artifact/map described below.
+
+If another extension also owns `.cs`, `.vb` or `.pas`, select the desired mode
+from VS Code's language picker. Existing VFL/MAPL custom editors remain intact;
+use **Reopen Editor With... > Text Editor** for source text.
+
+Open either the repository root or its ESP32 workspace. Canonical source under
+`languages` resolves the same compiler/runtime checkout in either layout.
+Compilers and runtimes are loaded from that checkout; the VSIX is not a
+standalone compiler distribution. Network librarian/mapper panels still need
+their separately managed backend.
+
+For C# validation and the precise subset, see the
+[compiler guide](../../../../languages/csharp/README.md) and
+[original validation suite](../../../../languages/csharp/validation/README.md).
+No C#/MNF hardware certification is implied by desktop editor tests.
+
+### Build, package and install
+
+From this extension directory:
+
+```powershell
+npm ci
+npm test
+npm run package
+```
+
+The package command builds TypeScript, copies the existing Studio assets and
+creates `pulse-pmachine-debugger-0.1.22.vsix`. In VS Code, run
+**Extensions: Install from VSIX...**, select that file, then
+**Developer: Reload Window**. Packaging does not publish or install it.
+
+Editor tests use the real TextMate/Oniguruma tokenizer, compile executable
+starters and run them on the JS p-machine. They also check repository-root
+resolution and C# generic source stepping through the VS Code debug adapter.
+The broader debugger suite currently exposes a pre-existing COBOL ISAM
+`nil object dereference` at `host.isam_open`; that failure also reproduces with
+the unchanged JS runtime and is not treated as a passing check.
+
+## Minnesota FORTRAN starter
+
+`.ftn` files use the MNF language, with fixed-form column rulers (5, 6, 72, 80),
+syntax highlighting, space indentation and no automatic wrapping/indentation.
+Use **Run on PMachine** or a `pulse-pmachine` debug launch with the `.ftn` file.
+The compiler currently supports a bounded scalar/DO/PRINT subset; see the
+[MNF guide](../../../../languages/mnf/README.md) for supported syntax and limits.
+Compilation uses the workspace's compiler, and execution uses the shared
+p-machine rather than a separate FORTRAN interpreter.
+
+### Connecting by IP address
+
+**Run on PMachine** and **Debug on PMachine** always use the active VS Code
+text-editor tab, captured when the command is clicked. They save unsaved edits
+before compiling; cancelling or failing to save prevents launch. They ignore
+inactive file arguments and do not fall back to a sample program. With no active
+source editor, they show a message and launch nothing. Explicit F5 launch
+configurations with an explicit program still debug that configured program.
+
+Use **Pulse PMachine: Select Default Node** to choose local JavaScript, a
+discovered node, **Enter IP address...** for an ESP32, or **Enter JavaScript node
+IP address...** for a remote JS runtime (include its HTTP port). Run and Debug
+share this default. It persists across window reloads until you select another
+node or run **Pulse PMachine: Reset Default Node**. With no saved default, the
+next Run or Debug prompts for one; cancelling launches nothing. A saved direct
+address or local JS target does not contact the aggregator.
+
+Choose **Enter IP address...** to connect directly to an
+ESP32 that is not listed by aggregator discovery. Enter an IPv4 address such as
+`192.168.2.90`, optionally with an HTTP port (`192.168.2.90:80`). Discovered
+targets remain in the selection picker; no hardcoded hosts are added. If
+discovery is unavailable, a warning explains that local and direct IP selection
+still work.
+
+The workspace Run and Debug list contains **Debug Active File on Default
+PMachine** instead of the sample Hanoi and PlatformIO entries. This entry and
+the dynamic active-file entry use the saved node, compile the active file and
+start an interactive debug session. With no active source editor, they show a
+message and do not start a program. Raw `.pcode` files retain their native
+interpreter path. Direct debugging
+still requires the board's debug-session API and available file storage; entering
+an IP does not remove those firmware requirements.
+Remote FFS counts as available storage; no local SD card is required.
+After updating the extension, run **Developer: Reload Window** to load the new
+command implementation.
+
 ## Data Librarian in Explorer
 
 Run **Pulse Data Librarian: Browse Schemas** from the Command Palette, or expand
@@ -208,7 +320,7 @@ failures are reported in the view, a notification, and the `Pulse PMachine` outp
 
 ## Run from the editor
 
-Open a Pascalish, VBish, WFL, or MAPL source file and select **Run on PMachine** above the source or from the editor title bar. Choose the local JavaScript PMachine, a discovered JavaScript PMachine (for example, `magic-js-pmachine-01`), or a discovered ESP32 PMachine; output appears in the `Pulse PMachine` Output channel. Discovered JavaScript targets run through the Aggregator deployment API using their node ID; their registry addresses are not device API endpoints. Configured direct host:port JavaScript nodes and ESP32 boards use the shared `runPcodeOnEsp32` runner in `aggregator/scripts/run-pascal-on-esp32-node.mjs` to upload compiled pcode and its signed program map via `/ffs/upload`, then run via `/pmachine/execute_file`. The local JavaScript option runs in-process. Set `pulse-pmachine.backendUrl` if the Aggregator is not running at `http://127.0.0.1:4000`.
+Open a Pascalish, COBOLish, VBish, C#, MNF, WFL, or MAPL source file and select **Run on PMachine** above the source or from the editor title bar. Choose the local JavaScript PMachine, a discovered JavaScript PMachine (for example, `magic-js-pmachine-01`), or a discovered ESP32 PMachine; output appears in the `Pulse PMachine` Output channel. Discovered JavaScript targets run through the Aggregator deployment API using their node ID; their registry addresses are not device API endpoints. Configured direct host:port JavaScript nodes and ESP32 boards use the shared `runPcodeOnEsp32` runner in `aggregator/scripts/run-pascal-on-esp32-node.mjs` to upload compiled pcode and its signed program map via `/ffs/upload`, then run via `/pmachine/execute_file`. The local JavaScript option runs in-process. Set `pulse-pmachine.backendUrl` if the Aggregator is not running at `http://127.0.0.1:4000`.
 
 JavaScript PMachine targets are kept separate from ESP32 upload targets in the picker. To run on the Hanoi board, choose the target whose description contains `192.168.2.115`. Run-to-completion ESP32 uploads omit the editor-only source map to reduce device memory usage; interactive debugging retains source mapping.
 

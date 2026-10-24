@@ -1,0 +1,15 @@
+{
+  "name": "MAPL",
+  "scopeName": "source.mapl",
+  "patterns": [
+    { "name": "comment.line.mapl", "match": "//.*$" },
+    { "name": "comment.block.mapl", "begin": "/\\*", "end": "\\*/" },
+    { "name": "string.quoted.double.mapl", "begin": "\"", "end": "\"", "patterns": [{ "name": "constant.character.escape.mapl", "match": "\\\\." }] },
+    { "name": "string.quoted.single.mapl", "begin": "'", "end": "'", "patterns": [{ "name": "constant.character.escape.mapl", "match": "\\\\." }] },
+    { "name": "keyword.control.mapl", "match": "(?i)\\b(?:map|from|to|end|if|then|else|validate|default|using|and|or|not)\\b" },
+    { "name": "support.function.mapl", "match": "(?i)\\b(?:upper|lower|trim|concat|substring|replace|length)\\b" },
+    { "name": "constant.language.mapl", "match": "(?i)\\b(?:true|false|null)\\b" },
+    { "name": "entity.other.attribute-name.mapl", "match": "@[A-Za-z_][A-Za-z0-9_]*" },
+    { "name": "constant.numeric.mapl", "match": "\\b\\d+(?:\\.\\d+)?\\b" }
+  ]
+}

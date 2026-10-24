@@ -3,8 +3,21 @@ const MonacoEditor = React.lazy(() => import('@monaco-editor/react'))
 import { initializePascalishLanguage } from './pascalishLanguage'
 import { useLanguageStepper } from './useLanguageStepper'
 import StepDebugPanel from './components/StepDebugPanel'
+import { MNF_STARTER, getDocumentTypeById } from './documentRegistry'
 
 const LANGUAGE_CONFIG = {
+  csharp: {
+    label: 'C# (ECMA-334 subset)',
+    fileName: 'program.cs',
+    monacoLanguage: 'csharp',
+    source: getDocumentTypeById('csharp').starterContent
+  },
+  mnf: {
+    label: 'Minnesota FORTRAN (MNF)',
+    fileName: 'program.ftn',
+    monacoLanguage: 'mnf',
+    source: MNF_STARTER
+  },
   cobolish: {
     label: 'COBOLISH',
     fileName: 'program.cob',
@@ -94,9 +107,11 @@ export default function LanguageCompilerPage({ languageId }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <button type="button" onClick={() => compile()} disabled={busy}>Compile</button>
         <button type="button" onClick={() => compile('compile-run')} disabled={busy}>Compile &amp; Run</button>
-        <button type="button" onClick={handleSingleStep} disabled={busy}>Single Step</button>
+        {!['mnf', 'csharp'].includes(languageId) && <button type="button" onClick={handleSingleStep} disabled={busy}>Single Step</button>}
         <span style={{ fontSize: 12, opacity: 0.75 }}>{status}</span>
       </div>
+      {languageId === 'mnf' && <div style={{ fontSize: 12 }}>Fixed form: labels 1-5 | continuation 6 | statements 7-72 | sequence field 73-80. Use spaces, not tabs.</div>}
+      {languageId === 'csharp' && <div style={{ fontSize: 12 }}>ECMA-334 subset: int, bool, string, control flow, static methods and generic methods. JavaScript p-machine target.</div>}
       {error && <div style={{ padding: '8px 10px', borderRadius: 6, background: 'rgba(239,68,68,0.12)', color: '#fca5a5', fontSize: 12 }}>{error}</div>}
       {runResult && (
         <div data-testid="language-runtime-output" style={{ height: 150, minHeight: 150, border: '1px solid rgba(148,163,184,0.25)', borderRadius: 6, overflow: 'hidden' }}>
@@ -111,7 +126,7 @@ export default function LanguageCompilerPage({ languageId }) {
           </React.Suspense>
         </div>
       )}
-      <StepDebugPanel
+      {!['mnf', 'csharp'].includes(languageId) && <StepDebugPanel
         stepTabs={stepTabs}
         activeStepTab={activeStepTab}
         onSelectTab={selectStepTab}
@@ -119,7 +134,7 @@ export default function LanguageCompilerPage({ languageId }) {
         debugState={debugState}
         tabListLabel={`${config.label} execution tabs`}
         testIdPrefix={languageId}
-      />
+      />}
       <div style={{ flex: 1, minHeight: 320, height: '60vh', border: '1px solid rgba(148,163,184,0.25)', borderRadius: 6, overflow: 'hidden' }}>
         <React.Suspense fallback={<div style={{ padding: 20, opacity: 0.6 }}>Loading editor...</div>}>
           <MonacoEditor
@@ -140,7 +155,11 @@ export default function LanguageCompilerPage({ languageId }) {
               editorInitializedRef.current = true
             }}
             beforeMount={(monaco) => initializePascalishLanguage(monaco)}
-            options={{ minimap: { enabled: false }, fontSize: 13, wordWrap: 'on', automaticLayout: true }}
+            options={{
+              minimap: { enabled: false }, fontSize: 13, automaticLayout: true,
+              wordWrap: languageId === 'mnf' ? 'off' : 'on',
+              ...(languageId === 'mnf' ? { rulers: [5, 6, 72, 80], insertSpaces: true, tabSize: 6, autoIndent: 'none' } : {})
+            }}
           />
         </React.Suspense>
       </div>

@@ -85,19 +85,20 @@ async function main() {
     results.push({ label: 'ANTLR smoke generation (Pascalish/WFL/MAPL)', code: 2 });
     console.error('[simple-smoke] ANTLR jar missing, skipping grammar generation smoke');
   } else {
-    const generatedOut = path.join(root, 'grammar', 'generated-test');
-    fs.mkdirSync(generatedOut, { recursive: true });
-
-    const grammarFiles = ['Pascalish.g4', 'WFL.g4', 'MAPL.g4'];
+    const grammarFiles = [
+      ['pascalish', 'Pascalish.g4'],
+      ['wfl', 'WorkflowDsl.g4'],
+      ['wfl', 'WFL.g4'],
+      ['mapl', 'MAPL.g4'],
+      ['vbish', 'Vbish.g4']
+    ];
     let antlrCode = 0;
 
-    for (const grammar of grammarFiles) {
-      const grammarPath = grammar === 'Pascalish.g4'
-        ? path.resolve(root, '../../../languages/pascalish/grammar', grammar)
-        : path.join(root, 'grammar', grammar);
-      const grammarOutput = grammar === 'Pascalish.g4'
-        ? path.resolve(root, '../../../languages/pascalish/grammar/generated-test')
-        : generatedOut;
+    for (const [language, grammar] of grammarFiles) {
+      const grammarDir = path.resolve(root, '../../../languages', language, 'grammar');
+      const grammarPath = path.join(grammarDir, grammar);
+      const grammarOutput = path.join(grammarDir, 'generated-test');
+      fs.mkdirSync(grammarOutput, { recursive: true });
       const one = await runCommand(
         `ANTLR generate ${grammar}`,
         `java -jar "${antlrJar}" -Dlanguage=JavaScript -visitor -no-listener -o "${grammarOutput}" "${grammarPath}"`

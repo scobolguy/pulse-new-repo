@@ -643,6 +643,25 @@ void ServiceHost::resumeWorker() {
     xSemaphoreGive(mutex);
 }
 
+bool ServiceHost::reserveExecutionStorage(std::string& error) {
+    if (!mutex) mutex = xSemaphoreCreateMutex();
+    if (!mutex || xSemaphoreTake(mutex, 0) != pdTRUE) {
+        error = "Service host busy or unavailable";
+        return false;
+    }
+    bool ready = false;
+    try {
+        ready = executionStorage.prepare();
+        if (ready && !stringSwap) configureStringSwap(swapFileSystem);
+        if (!ready) error = "Cannot reserve managed execution arenas";
+    } catch (const std::bad_alloc&) {
+        ready = false;
+        error = "Cannot reserve managed execution buffers";
+    }
+    xSemaphoreGive(mutex);
+    return ready;
+}
+
 bool ServiceHost::prepare(std::string& error) {
     if (!mutex) mutex = xSemaphoreCreateMutex();
     if (!ingressMutex) ingressMutex = xSemaphoreCreateMutex();

@@ -47,17 +47,28 @@ export async function runPascalOnEsp32({ source = '', node = 'neptune.child1', i
   const host = await resolveHost(node);
   const baseUrl = `http://${host}`;
 
-  await postForm(`${baseUrl}/ffs/upload`, { file: REMOTE_PCODE, body: pcodeText }, 'upload pcode');
-  await postForm(`${baseUrl}/ffs/upload`, { file: REMOTE_MAP, body: signedMapText }, 'upload map');
-
-  const rawResult = await postForm(`${baseUrl}/pmachine/execute_file`, {
-    file: REMOTE_PCODE,
-    programMap: REMOTE_MAP,
-    runRouter: '0',
-    inputQueue,
-    message,
-    max: '65536'
-  }, 'execute_file');
+  let rawResult = '';
+  try {
+    await postForm(`${baseUrl}/ffs/upload`, { file: REMOTE_PCODE, body: pcodeText }, 'upload pcode');
+    await postForm(`${baseUrl}/ffs/upload`, { file: REMOTE_MAP, body: signedMapText }, 'upload map');
+    rawResult = await postForm(`${baseUrl}/pmachine/execute_file`, {
+      file: REMOTE_PCODE,
+      programMap: REMOTE_MAP,
+      runRouter: '0',
+      inputQueue,
+      message,
+      max: '65536'
+    }, 'execute_file');
+  } catch (error) {
+    if (!isFfsUnavailable(error)) throw error;
+    rawResult = await executeInlineJson(baseUrl, {
+      pcodeText,
+      programMapText: signedMapText,
+      inputQueue,
+      message,
+      maxSteps: 65536,
+    });
+  }
 
   let result;
   try { result = JSON.parse(rawResult); } catch { result = { raw: rawResult }; }
@@ -198,17 +209,28 @@ export async function runPcodeOnEsp32({
     };
   }
 
-  await postForm(`${baseUrl}/ffs/upload`, { file: remotePcode, body: pcode }, 'upload pcode');
-  await postForm(`${baseUrl}/ffs/upload`, { file: remoteMap, body: signedMapText }, 'upload map');
-
-  const rawResult = await postForm(`${baseUrl}/pmachine/execute_file`, {
-    file: remotePcode,
-    programMap: remoteMap,
-    runRouter: '0',
-    inputQueue,
-    message,
-    max: String(Math.max(1, Number(maxSteps) || 200000))
-  }, 'execute_file');
+  let rawResult = '';
+  try {
+    await postForm(`${baseUrl}/ffs/upload`, { file: remotePcode, body: pcode }, 'upload pcode');
+    await postForm(`${baseUrl}/ffs/upload`, { file: remoteMap, body: signedMapText }, 'upload map');
+    rawResult = await postForm(`${baseUrl}/pmachine/execute_file`, {
+      file: remotePcode,
+      programMap: remoteMap,
+      runRouter: '0',
+      inputQueue,
+      message,
+      max: String(Math.max(1, Number(maxSteps) || 200000))
+    }, 'execute_file');
+  } catch (error) {
+    if (!isFfsUnavailable(error)) throw error;
+    rawResult = await executeInlineJson(baseUrl, {
+      pcodeText: pcode,
+      programMapText: signedMapText,
+      inputQueue,
+      message,
+      maxSteps: Math.max(1, Number(maxSteps) || 200000),
+    });
+  }
 
   let result;
   try { result = JSON.parse(rawResult); } catch { result = { raw: rawResult }; }
@@ -266,6 +288,37 @@ async function postForm(url, params, label) {
   if (!res.ok) {
     throw new Error(`${label} failed (${res.status}): ${text.slice(0, 240)}`);
   }
+  return text;
+}
+
+function isFfsUnavailable(error) {
+  const message = String(error?.message || '');
+  return message.includes('upload pcode failed (503)')
+    || message.includes('upload map failed (503)')
+    || message.includes('FFS storage unavailable');
+}
+
+async function executeInlineJson(baseUrl, {
+  pcodeText,
+  programMapText,
+  inputQueue,
+  message,
+  maxSteps,
+}) {
+  const response = await fetch(`${baseUrl}/pmachine/execute_json`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      pcode: String(pcodeText || ''),
+      programMapText: String(programMapText || ''),
+      runRouter: false,
+      inputQueue: String(inputQueue || ''),
+      message: String(message || ''),
+      max: Math.max(1, Number(maxSteps) || 200000),
+    }),
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`execute_json failed (${response.status}): ${text.slice(0, 240)}`);
   return text;
 }
 

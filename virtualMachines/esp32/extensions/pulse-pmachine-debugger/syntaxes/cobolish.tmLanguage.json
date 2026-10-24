@@ -1,0 +1,12 @@
+{
+  "name": "COBOLish 85",
+  "scopeName": "source.cobolish",
+  "patterns": [
+    { "name": "comment.line.fixed.cobolish", "match": "^.{6}[*/].*$" },
+    { "name": "comment.line.free.cobolish", "match": "\\*>.*$" },
+    { "name": "string.quoted.double.cobolish", "begin": "\"", "end": "\"", "patterns": [{ "name": "constant.character.escape.cobolish", "match": "\"\"" }] },
+    { "name": "string.quoted.single.cobolish", "begin": "'", "end": "'", "patterns": [{ "name": "constant.character.escape.cobolish", "match": "''" }] },
+    { "name": "keyword.control.cobolish", "match": "(?i)(?<![\\w-])(?:IDENTIFICATION|ENVIRONMENT|DATA|PROCEDURE|DIVISION|PROGRAM-ID|WORKING-STORAGE|LOCAL-STORAGE|LINKAGE|SECTION|PIC|PICTURE|VALUE|USAGE|COMP|COMP-3|DISPLAY|ACCEPT|MOVE|TO|FROM|INTO|ADD|SUBTRACT|MULTIPLY|DIVIDE|COMPUTE|PERFORM|UNTIL|VARYING|TIMES|THRU|THROUGH|IF|ELSE|END-IF|END-PERFORM|EVALUATE|WHEN|OTHER|END-EVALUATE|CALL|USING|GOBACK|STOP|RUN|EXIT|CONTINUE|INITIALIZE|OCCURS|REDEFINES|REPLACING|COPY|END|END-PROGRAM|PULSE|SERVICE|DAEMON|INTEROP|ON|LOCAL|SET|TRUE|FALSE|AND|OR|NOT|IS|EQUAL|GREATER|LESS|THAN|BY|GIVING|OPEN|CLOSE|READ|WRITE|REWRITE|DELETE|FILE|SELECT|ASSIGN)(?![\\w-])" },
+    { "name": "constant.numeric.cobolish", "match": "(?<![\\w-])\\d+(?:\\.\\d+)?(?![\\w-])" }
+  ]
+}

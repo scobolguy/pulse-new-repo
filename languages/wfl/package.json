@@ -1,0 +1,21 @@
+{
+  "name": "@pulse/wfl",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "exports": {
+    ".": "./src/compile-workflow-dsl.mjs",
+    "./pcode": "./src/compile-workflow-to-pcode.mjs",
+    "./antlr": "./src/workflow-antlr-compiler.mjs",
+    "./interpreter": "./src/interpret-workflow.mjs"
+  },
+  "scripts": {
+    "compile": "node src/compile-workflow-dsl.mjs",
+    "compile:pcode": "node src/compile-workflow-to-pcode.mjs",
+    "interpret": "node src/interpret-workflow.mjs",
+    "antlr:generate": "node scripts/generate-parser.mjs",
+    "test": "node --test tests/*.mjs"
+  },
+  "dependencies": { "antlr4": "^4.13.2" }
+}

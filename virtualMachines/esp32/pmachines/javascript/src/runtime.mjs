@@ -8,6 +8,7 @@ import { SERVICE_HOST_BINDINGS } from '../../shared/contracts/service-host-bindi
 import { DEVICE_BINDINGS } from '../../shared/contracts/device-bindings.mjs';
 import { PMachineMemory, managedStorage } from './memory.mjs';
 import { ManagedObjects, ObjectRef } from './managed-objects.mjs';
+import { SYSTEM_LIBRARY, executeSystemIntrinsic } from '../../../../../languages/dotnet/system-library.mjs';
 
 const XML_PARSER = new XMLParser({
   ignoreAttributes: false,
@@ -790,6 +791,7 @@ function parseProgramMapMappings(programMap) {
     });
   }
   mappingsById.__globals = Array.isArray(programMap?.globals) ? programMap.globals : [];
+  mappingsById.__extendable = Array.isArray(programMap?.extendableDeclarations) ? programMap.extendableDeclarations : [];
   mappingsById.__proceduresByLabel = programMap?.procedures || {};
   mappingsById.__enums = programMap?.enums || {};
   return mappingsById;
@@ -1610,6 +1612,40 @@ function applyWithContext(name, withContextStack) {
   return `${withContextStack[withContextStack.length - 1]}.${name}`;
 }
 
+// Text files for FOPEN/FREADLN/FWRITELN/FCLOSE: an optional host file system
+// ({ readText(name) -> string|null, writeText(name, text) }) or an in-memory map
+// (runtimeContext.files) that survives close/reopen within and across runs.
+function textFileStore(runtimeContext) {
+  const fileSystem = runtimeContext.fileSystem;
+  if (fileSystem && typeof fileSystem.readText === 'function') {
+    return {
+      async read(name) {
+        const text = await fileSystem.readText(name);
+        return text === null || text === undefined ? null : String(text);
+      },
+      async write(name, text) { await fileSystem.writeText(name, text); },
+    };
+  }
+  if (!(runtimeContext.files instanceof Map)) runtimeContext.files = new Map(Object.entries(runtimeContext.files || {}));
+  const files = runtimeContext.files;
+  return {
+    async read(name) { return files.has(name) ? String(files.get(name)) : null; },
+    async write(name, text) { files.set(name, text); },
+  };
+}
+
+function splitTextRecords(text) {
+  const rows = String(text).split(/\r?\n/);
+  if (rows.length > 0 && rows[rows.length - 1] === '') rows.pop();
+  return rows;
+}
+
+function consoleInputLines(stdin) {
+  if (Array.isArray(stdin)) return stdin.map(line => String(line));
+  if (stdin === undefined || stdin === null) return [];
+  return splitTextRecords(stdin);
+}
+
 function resolveVar(frame, name) {
   let cursor = frame;
   while (cursor) {
@@ -1695,10 +1731,14 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
   }
 
   const programGlobals = Array.isArray(mappingsById?.__globals) ? mappingsById.__globals : [];
+  // Extendable declarations are program-wide storage (as on the native p-machine): bind each slot globally.
+  const extendableNames = (Array.isArray(mappingsById?.__extendable) ? mappingsById.__extendable : [])
+    .flatMap(({ name, elementCount }) => Array.from({ length: Math.max(1, Number(elementCount) || 1) },
+      (_, index) => `${name}_${index}`).concat(name));
   const proceduresByLabel = mappingsById?.__proceduresByLabel || {};
   const enumTypes = mappingsById?.__enums || {};
   const globalFrame = {
-    vars: storage(invocationScope, Object.fromEntries(programGlobals.map(name => [name, 0]))),
+    vars: storage(invocationScope, Object.fromEntries([...extendableNames, ...programGlobals].map(name => [name, 0]))),
     parent: null,
     memoryScope: invocationScope,
   };
@@ -1715,6 +1755,8 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
   const stacks = new Map();
   const pqueues = new Map();
   const fileHandles = new Map();
+  const textFiles = textFileStore(runtimeContext);
+  const consoleInput = { lines: consoleInputLines(runtimeContext.stdin), cursor: 0 };
   const records = new Map();
   const sets = new Map();
   const schemaHandles = new Map();
@@ -1804,6 +1846,14 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     }
     if (op === 'CALL_EXT') {
       const name = String(instr.operand?.label || '').toLowerCase();
+      if (Object.hasOwn(SYSTEM_LIBRARY.intrinsics, name)) {
+        const argc = instr.operand?.argc;
+        if (argc !== SYSTEM_LIBRARY.intrinsics[name].arity || stack.length < argc)
+          throw new Error(`Invalid System intrinsic call: ${name}`);
+        stack.push(executeSystemIntrinsic(name, stack.splice(stack.length - argc, argc)));
+        pc += 1;
+        continue;
+      }
       if (name.startsWith('object.')) {
         const arity = { 'object.new': 1, 'object.get': 2, 'object.set': 3,
           'object.length': 1, 'object.resize': 2 }[name];
@@ -2176,6 +2226,93 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       pc += 1;
       continue;
     }
+    // Generic string and numeric primitives shared with the ESP32 runtime so
+    // language runtime libraries can be written in p-code.
+    if (op === 'STRLEN') {
+      stack.push(asStringValue(stack.pop()).length);
+      pc += 1;
+      continue;
+    }
+    if (op === 'SUBSTR') {
+      const count = Math.trunc(numberOf(stack.pop()));
+      const start = Math.trunc(numberOf(stack.pop()));
+      const text = asStringValue(stack.pop());
+      const from = Math.max(0, Math.min(text.length, start));
+      stack.push(count <= 0 ? '' : text.slice(from, Math.min(text.length, from + count)));
+      pc += 1;
+      continue;
+    }
+    if (op === 'CHR') {
+      stack.push(String.fromCharCode(Math.trunc(numberOf(stack.pop())) & 0xFF));
+      pc += 1;
+      continue;
+    }
+    if (op === 'ASC') {
+      const text = asStringValue(stack.pop());
+      stack.push(text.length > 0 ? text.charCodeAt(0) & 0xFF : 0);
+      pc += 1;
+      continue;
+    }
+    if (op === 'TRUNC') {
+      const truncated = Math.trunc(numberOf(stack.pop()));
+      stack.push(Number.isFinite(truncated) ? (truncated | 0) : 0);
+      pc += 1;
+      continue;
+    }
+    if (op === 'TO_REAL') {
+      stack.push(new PReal(numberOf(stack.pop())));
+      pc += 1;
+      continue;
+    }
+    if (op === 'FOPEN') {
+      const mode = asStringValue(stack.pop()).toLowerCase();
+      const name = asStringValue(stack.pop()).trim();
+      let handle = 0;
+      if (name && (mode === 'r' || mode === 'w' || mode === 'a')) {
+        const existing = mode === 'w' ? null : await textFiles.read(name);
+        if (mode !== 'r' || existing !== null) {
+          const rows = existing === null ? [] : splitTextRecords(existing);
+          handle = nextFileHandle;
+          nextFileHandle += 1;
+          fileHandles.set(handle, { fileId: name, mode, cursor: 0, rows, textFile: true });
+        }
+      }
+      stack.push(handle);
+      pc += 1;
+      continue;
+    }
+    if (op === 'FREADLN') {
+      const file = fileHandles.get(Math.trunc(numberOf(stack.pop())));
+      const available = Boolean(file?.textFile && file.mode === 'r' && file.cursor < file.rows.length);
+      stack.push(available ? file.rows[file.cursor++] : '');
+      stack.push(available ? 1 : 0);
+      pc += 1;
+      continue;
+    }
+    if (op === 'FWRITELN') {
+      const line = asStringValue(stack.pop());
+      const file = fileHandles.get(Math.trunc(numberOf(stack.pop())));
+      if (file?.textFile && file.mode !== 'r') file.rows.push(line);
+      pc += 1;
+      continue;
+    }
+    if (op === 'FCLOSE') {
+      const handle = Math.trunc(numberOf(stack.pop()));
+      const file = fileHandles.get(handle);
+      if (file?.textFile) {
+        fileHandles.delete(handle);
+        if (file.mode !== 'r') await textFiles.write(file.fileId, file.rows.map(row => `${row}\n`).join(''));
+      }
+      pc += 1;
+      continue;
+    }
+    if (op === 'READLN') {
+      const available = consoleInput.cursor < consoleInput.lines.length;
+      stack.push(available ? consoleInput.lines[consoleInput.cursor++] : '');
+      stack.push(available ? 1 : 0);
+      pc += 1;
+      continue;
+    }
     if (op === 'YYMMDD_TO_ISO') {
       stack.push(yyMmDdToIso(asStringValue(stack.pop())));
       pc += 1;
@@ -2247,14 +2384,14 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       for (let i = 0; i < Number(call.argc || 0); i += 1) {
         // Boxed values must survive the call boundary intact.
         const raw = stack.pop();
-        args.push(isBoxed(raw) || isReference(raw) ? raw : Number(raw || 0));
+        args.push(isBoxed(raw) || isReference(raw) || typeof raw === 'string' ? raw : Number(raw || 0));
       }
       args.reverse();
 
       const vars = {};
       for (let i = 0; i < (proc.params || []).length; i += 1) {
         const value = args[i];
-        vars[String(proc.params[i])] = isBoxed(value) || isReference(value) ? value : Number(value || 0);
+        vars[String(proc.params[i])] = isBoxed(value) || isReference(value) || typeof value === 'string' ? value : Number(value || 0);
       }
       for (const localName of (proc.locals || [])) {
         if (!Object.prototype.hasOwnProperty.call(vars, localName)) vars[String(localName)] = 0;

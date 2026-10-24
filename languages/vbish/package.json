@@ -1,0 +1,16 @@
+{
+  "name": "@pulse/vbish",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "exports": {
+    ".": "./src/compile-vbish-to-pcode.mjs",
+    "./antlr": "./src/vbish-antlr-compiler.mjs"
+  },
+  "scripts": {
+    "antlr:generate": "node scripts/generate-parser.mjs",
+    "test": "node --test tests/*.mjs"
+  },
+  "dependencies": { "antlr4": "^4.13.2" }
+}

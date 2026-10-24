@@ -41,7 +41,7 @@
       "patterns": [
         {
           "name": "keyword.control.pulse-pcode",
-          "match": "\\b(ADD|AND|CALL_EXT|CALL|CONCAT|EQ|GE|GT|HALT|JMP|JZ|LE|LOAD|LT|MAP_RETURN|MUL|NEQ|NOP|NOT|OR|PUSH_INT|PUSH_STR|RET|STORE|STREQ|STRNEQ|SUB)\\b"
+          "match": "^\\s*[A-Z][A-Z0-9_]*(?=\\s|$)"
         }
       ]
     },

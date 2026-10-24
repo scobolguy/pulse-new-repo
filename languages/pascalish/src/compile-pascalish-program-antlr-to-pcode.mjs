@@ -777,6 +777,8 @@ class PascalishProgramAstBuilder extends PascalishVisitor {
       name: (ctx.pascalIdentifier ? ctx.pascalIdentifier() : ctx.IDENT()).getText(),
       genericParams: ctx.genericTypeParams() ? this.visit(ctx.genericTypeParams()) : [],
       extendsType: ctx.classInheritance() ? this.visit(ctx.classInheritance()) : null,
+      // Legacy `class X; ... end;` variables are usable without an explicit Create.
+      autoInstance: true,
       members
     };
   }
@@ -2373,18 +2375,7 @@ class Codegen {
     }
     const managed = this.managedMethod(name);
     if (managed?.method?.isConstructor || managed?.implicitConstructor) {
-      const fields = this.classInfo.get(managed.owner.name).fieldDecls;
-      this.emit(`PUSH_INT ${fields.length}`);
-      this.emit('CALL_EXT object.new 1');
-      const instance = this.nextTempPrefix();
-      this.emit(`STORE ${instance}`);
-      fields.forEach((field, index) => {
-        this.emit(`LOAD ${instance}`);
-        this.emit(`PUSH_INT ${index}`);
-        this.emit(this.kindOfTypeRef(field.dataType) === 'string' ? 'PUSH_STR ""' : 'PUSH_INT 0');
-        this.emit('CALL_EXT object.set 3');
-        this.emit('STORE __discard');
-      });
+      const instance = this.emitObjectAllocation(this.classInfo.get(managed.owner.name).fieldDecls);
       if (managed.method) {
         if (args.length !== managed.method.parameters.length) throw new Error('Constructor argument count mismatch');
         if (managed.owner.genericSpecialization) {
@@ -2823,9 +2814,11 @@ class Codegen {
         this.emit('CALL_EXT object.get 2');
         return;
       }
-      const managed = this.managedMethod(expr.name);
-      if (managed?.method || managed?.implicitConstructor
-        || this.functionReturnTypes.has(this.resolveCallTarget(expr.name).toLowerCase())) {
+      // Parameters and locals shadow same-named methods (e.g. `load(value)` in a class with `value()`).
+      const scopedVariable = !String(expr.name).includes('.') && this.scopeTypes?.has(String(expr.name).toLowerCase());
+      const managed = scopedVariable ? null : this.managedMethod(expr.name);
+      if (!scopedVariable && (managed?.method || managed?.implicitConstructor
+        || this.functionReturnTypes.has(this.resolveCallTarget(expr.name).toLowerCase()))) {
         this.emitCall(expr.name, []);
         return;
       }
@@ -3343,6 +3336,21 @@ class Codegen {
     this.emit(`STORE ${name}`);
   }
 
+  emitObjectAllocation(fields) {
+    this.emit(`PUSH_INT ${fields.length}`);
+    this.emit('CALL_EXT object.new 1');
+    const instance = this.nextTempPrefix();
+    this.emit(`STORE ${instance}`);
+    fields.forEach((field, index) => {
+      this.emit(`LOAD ${instance}`);
+      this.emit(`PUSH_INT ${index}`);
+      this.emit(this.kindOfTypeRef(field.dataType) === 'string' ? 'PUSH_STR ""' : 'PUSH_INT 0');
+      this.emit('CALL_EXT object.set 3');
+      this.emit('STORE __discard');
+    });
+    return instance;
+  }
+
   initVariable(variable) {
     this.suppressAccessChecks = true;
     try {
@@ -3374,6 +3382,12 @@ class Codegen {
       return;
     }
     const storageName = this.normalizeStorageName(path);
+    if (resolved?.kind === 'object' && this.classesByName.get(String(resolved.id).toLowerCase())?.autoInstance) {
+      const instance = this.emitObjectAllocation(resolved.fields || []);
+      this.emit(`LOAD ${instance}`);
+      this.emit(`STORE ${storageName}`);
+      return;
+    }
     if (resolved?.kind === 'enum' && (resolved.values || []).length > 0) {
       const owner = this.enumValueOwners.get(String(resolved.values[0]).toLowerCase());
       if (owner) {

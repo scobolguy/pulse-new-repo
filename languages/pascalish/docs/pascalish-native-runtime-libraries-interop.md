@@ -2,6 +2,43 @@
 
 This repository now supports native lifecycle/runtime declarations, generic type references, code librarian role governance, and language interop declarations directly in the Pascalish grammar.
 
+## ESP32 Validation
+
+From `languages/pascalish`, run:
+
+```powershell
+node validation\run.mjs --suite smoke --esp32 http://192.168.2.63
+node validation\run.mjs --esp32 http://192.168.2.63
+```
+
+Use the device's current address. The runner writes separate hardware reports to
+`reports/*-esp32-validation.json`. Positive cases require exact stdout with no
+runtime error or instruction-limit failure. The three negative generic cases
+are compiler checks on the desktop, not device executions.
+
+Device filenames use short hashes to fit LittleFS's 32-character component
+limit. Uploaded maps exclude compiler class/type declaration trees, while full
+debugger maps remain on the desktop. Positive programs run as authenticated,
+read-only PHI1 instruction images through FFS, with pages fetched on demand
+instead of allocating a complete instruction array.
+
+On 2026-10-21, all nine positive Object Pascal cases passed on ESP32-PICO-D4,
+along with the three desktop negative compiler cases (12/12 overall). An earlier
+ten-cycle run passed 90/90 hardware executions. The 12-case regression passed
+again after deploying managed COBOL variable storage, and freshly compiled COBOL
+hello-world passed 25/25 device executions on that firmware. These results do
+not establish that native heap fragmentation is eliminated.
+
+The full ISO 7185 PAT fixture remains blocked at compilation by unsupported
+syntax, including pointers; it has not executed on the ESP32.
+
+Native COBOL global and procedure-local values use managed handles. On ESP32,
+each invocation exclusively reuses the pre-reserved 8 KB object arena with up to
+256 handles; exhaustion is an explicit runtime error. Interpreter bookkeeping,
+operand values and temporary strings still use native allocations, and the
+handle table is kept off the HTTP task stack. This preserves the current
+name/value and reference-slice semantics, not a physical COBOL record-layout ABI.
+
 ## Native Runtime Units
 
 Use exactly one runtime declaration at top-level:

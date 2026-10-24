@@ -10,6 +10,7 @@
 namespace pmachine {
 class HostedImage {
 public:
+    ~HostedImage() { reset(); }
     bool open(FederatedFileSystem& ffs, const String& path, const JsonDocument& map,
               const char* key, const char* keyId, std::string& error);
     bool read(size_t index, PInstruction& instruction, std::string& error);

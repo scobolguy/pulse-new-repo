@@ -1,0 +1,4 @@
+QUEUE "incoming" -> "payments.in";
+WORKFLOW "route-payments" BEGIN
+  STEP "route" ROUTE QUEUE "incoming";
+END;

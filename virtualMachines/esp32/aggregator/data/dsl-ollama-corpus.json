@@ -1811,7 +1811,7 @@
     },
     {
       "id": "dsl-chunk-14",
-      "path": "aggregator/grammar/MAPL.g4",
+      "path": "../../languages/mapl/grammar/MAPL.g4",
       "lineStart": 1,
       "lineEnd": 90,
       "tokenCount": 88,
@@ -1909,7 +1909,7 @@
     },
     {
       "id": "dsl-chunk-15",
-      "path": "aggregator/grammar/MAPL.g4",
+      "path": "../../languages/mapl/grammar/MAPL.g4",
       "lineStart": 81,
       "lineEnd": 127,
       "tokenCount": 44,
@@ -3054,7 +3054,7 @@
     },
     {
       "id": "dsl-chunk-27",
-      "path": "aggregator/grammar/Vbish.g4",
+      "path": "../../languages/vbish/grammar/Vbish.g4",
       "lineStart": 1,
       "lineEnd": 75,
       "tokenCount": 107,
@@ -3171,7 +3171,7 @@
     },
     {
       "id": "dsl-chunk-28",
-      "path": "aggregator/grammar/Vbish.g4",
+      "path": "../../languages/vbish/grammar/Vbish.g4",
       "lineStart": 68,
       "lineEnd": 132,
       "tokenCount": 107,
@@ -3288,7 +3288,7 @@
     },
     {
       "id": "dsl-chunk-29",
-      "path": "aggregator/grammar/Vbish.g4",
+      "path": "../../languages/vbish/grammar/Vbish.g4",
       "lineStart": 122,
       "lineEnd": 210,
       "tokenCount": 119,
@@ -3417,7 +3417,7 @@
     },
     {
       "id": "dsl-chunk-30",
-      "path": "aggregator/grammar/Vbish.g4",
+      "path": "../../languages/vbish/grammar/Vbish.g4",
       "lineStart": 197,
       "lineEnd": 281,
       "tokenCount": 152,
@@ -3579,7 +3579,7 @@
     },
     {
       "id": "dsl-chunk-31",
-      "path": "aggregator/grammar/Vbish.g4",
+      "path": "../../languages/vbish/grammar/Vbish.g4",
       "lineStart": 269,
       "lineEnd": 306,
       "tokenCount": 73,
@@ -3662,7 +3662,7 @@
     },
     {
       "id": "dsl-chunk-32",
-      "path": "aggregator/grammar/WFL.g4",
+      "path": "../../languages/wfl/grammar/WFL.g4",
       "lineStart": 1,
       "lineEnd": 86,
       "tokenCount": 100,
@@ -3772,7 +3772,7 @@
     },
     {
       "id": "dsl-chunk-33",
-      "path": "aggregator/grammar/WFL.g4",
+      "path": "../../languages/wfl/grammar/WFL.g4",
       "lineStart": 73,
       "lineEnd": 143,
       "tokenCount": 61,
@@ -3843,7 +3843,7 @@
     },
     {
       "id": "dsl-chunk-34",
-      "path": "aggregator/grammar/WorkflowDsl.g4",
+      "path": "../../languages/wfl/grammar/WorkflowDsl.g4",
       "lineStart": 1,
       "lineEnd": 59,
       "tokenCount": 106,
@@ -3959,7 +3959,7 @@
     },
     {
       "id": "dsl-chunk-35",
-      "path": "aggregator/grammar/WorkflowDsl.g4",
+      "path": "../../languages/wfl/grammar/WorkflowDsl.g4",
       "lineStart": 54,
       "lineEnd": 109,
       "tokenCount": 115,
@@ -4084,7 +4084,7 @@
     },
     {
       "id": "dsl-chunk-36",
-      "path": "aggregator/grammar/WorkflowDsl.g4",
+      "path": "../../languages/wfl/grammar/WorkflowDsl.g4",
       "lineStart": 98,
       "lineEnd": 198,
       "tokenCount": 120,
@@ -4214,7 +4214,7 @@
     },
     {
       "id": "dsl-chunk-37",
-      "path": "aggregator/grammar/WorkflowDsl.g4",
+      "path": "../../languages/wfl/grammar/WorkflowDsl.g4",
       "lineStart": 184,
       "lineEnd": 270,
       "tokenCount": 142,
@@ -4366,7 +4366,7 @@
     },
     {
       "id": "dsl-chunk-38",
-      "path": "aggregator/grammar/WorkflowDsl.g4",
+      "path": "../../languages/wfl/grammar/WorkflowDsl.g4",
       "lineStart": 260,
       "lineEnd": 333,
       "tokenCount": 138,
@@ -4514,7 +4514,7 @@
     },
     {
       "id": "dsl-chunk-39",
-      "path": "aggregator/grammar/WorkflowDsl.g4",
+      "path": "../../languages/wfl/grammar/WorkflowDsl.g4",
       "lineStart": 321,
       "lineEnd": 343,
       "tokenCount": 41,

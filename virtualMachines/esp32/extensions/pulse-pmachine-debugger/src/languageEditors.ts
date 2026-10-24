@@ -1,0 +1,20 @@
+export const LANGUAGE_EDITORS = [
+  { id: 'pascal', label: 'Pascal / Pascalish', extension: '.pas',
+    content: "program Hello;\nbegin\n  writeln('Hello from Pascalish');\nend.\n" },
+  { id: 'cobolish', label: 'COBOLish 85', extension: '.cob',
+    content: 'IDENTIFICATION DIVISION.\nPROGRAM-ID. HELLO.\nPROCEDURE DIVISION.\n    DISPLAY "Hello from COBOLish".\n    STOP RUN.\n' },
+  { id: 'vbish', label: 'VBish', extension: '.vbs',
+    content: 'Program "hello"\nSub Main()\n  Print "Hello from VBish"\nEnd Sub\n' },
+  { id: 'csharp', label: 'C# (ECMA-334 subset)', extension: '.cs',
+    content: 'using System;\nclass Program\n{\n    static T Identity<T>(T value) { return value; }\n    static void Main()\n    {\n        Console.WriteLine(Identity("Hello from C#"));\n    }\n}\n' },
+  { id: 'mnf', label: 'Minnesota FORTRAN', extension: '.ftn',
+    content: "      PROGRAM HELLO\n      PRINT, 'Hello from MNF'\n      END\n" },
+  { id: 'wfl', label: 'WFL Workflow / Deployment', extension: '.wfl',
+    content: 'QUEUE "incoming" -> "payments.in";\nWORKFLOW "routing" BEGIN\n  STEP "route" ROUTE QUEUE "incoming";\nEND;\n' },
+  { id: 'mapl', label: 'MAPL Data Mapping', extension: '.mapl',
+    content: 'map CustomerToAccount from Customer to Account;\n  account.name := customer.name;\nend;\n' },
+  { id: 'vfl', label: 'VFL Visual Flow (JSON text)', extension: '.vfl',
+    content: '{\n  "schemaVersion": 1,\n  "kind": "visual-flow-language",\n  "metadata": { "name": "New Visual Flow" },\n  "catalog": { "seedObjects": [] },\n  "animation": { "mode": "none", "target": "workflow", "useMermaidPreview": true },\n  "nodes": [],\n  "edges": []\n}\n' },
+  { id: 'pulse-pcode', label: 'PMachine P-code', extension: '.pcode',
+    content: 'PUSH_STR "Hello from the p-machine"\nPRINT\nPRINT_NL\nHALT\n' }
+];

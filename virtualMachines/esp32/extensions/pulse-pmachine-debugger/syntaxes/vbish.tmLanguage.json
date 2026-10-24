@@ -1,0 +1,13 @@
+{
+  "name": "VBish",
+  "scopeName": "source.vbish",
+  "patterns": [
+    { "name": "comment.line.apostrophe.vbish", "match": "'.*$" },
+    { "name": "string.quoted.double.vbish", "begin": "\"", "end": "\"", "patterns": [{ "name": "constant.character.escape.vbish", "match": "\"\"|\\\\." }] },
+    { "name": "keyword.control.vbish", "match": "(?i)\\b(?:Program|Service|Daemon|Sub|Function|End|Dim|As|If|Then|Else|ElseIf|For|To|Step|Next|While|Loop|Do|Return|Exit|Print|Display|Option|Explicit|Import|Imports|Interop|Library|Use|System|Type|Begin|Queue|Database|On|Local|Public|Private|Static|And|Or|Not|New|Of|Class|Inherits|Implements)\\b" },
+    { "name": "storage.type.vbish", "match": "(?i)\\b(?:Integer|String|Boolean|Single|Double|Decimal|Object)\\b" },
+    { "name": "constant.language.vbish", "match": "(?i)\\b(?:True|False|Nothing)\\b" },
+    { "name": "support.function.vbish", "match": "(?i)\\b(?:DbInsert|DbSelect|DbUpdate|DbDelete|QueueWriteSync|QueueWriteAsync)\\b" },
+    { "name": "constant.numeric.vbish", "match": "\\b\\d+(?:\\.\\d+)?\\b" }
+  ]
+}

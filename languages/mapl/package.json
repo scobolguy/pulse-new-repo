@@ -1,0 +1,14 @@
+{
+  "name": "@pulse/mapl",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "exports": { ".": "./src/compile-mapl-antlr-to-pcode.mjs" },
+  "scripts": {
+    "compile": "node src/compile-mapl-antlr-to-pcode.mjs",
+    "antlr:generate": "node scripts/generate-parser.mjs",
+    "test": "node --test tests/*.mjs"
+  },
+  "dependencies": { "antlr4": "^4.13.2" }
+}

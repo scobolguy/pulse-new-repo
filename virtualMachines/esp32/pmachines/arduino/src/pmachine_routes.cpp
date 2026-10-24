@@ -898,7 +898,8 @@ void appendShortString(std::vector<uint8_t>& out, const std::string& s) {
     }
 }
 
-std::vector<uint8_t> assembleInstructionsToBinary(const std::vector<pmachine::PInstruction>& instructions) {
+template <typename Instructions>
+std::vector<uint8_t> assembleInstructionsToBinary(const Instructions& instructions) {
     std::vector<uint8_t> out;
     out.reserve(instructions.size() * 16);
 
@@ -3991,6 +3992,9 @@ void registerPMachineRoutes(
 ) {
 #if defined(ESP32)
     static pmachine::ServiceHost& serviceHost = hostedServiceHost();
+    std::string storageError;
+    if (!serviceHost.reserveExecutionStorage(storageError))
+        Serial.printf("[PMACHINE] Execution storage unavailable: %s\n", storageError.c_str());
     server.on("/pmachine/service_host/install", HTTP_POST, [ffs](AsyncWebServerRequest* request) {
         String serviceFile, serviceMap, daemonFile, daemonMap, collectorId, udpPort = "4210", daemonsJson;
         String ttl = "180000", heartbeat = "60000";
@@ -6044,6 +6048,8 @@ void registerPMachineRoutes(
     // Execute pcode from a file path and return run outputs.
     server.on("/pmachine/execute_file", HTTP_POST, [&machine, ffs](AsyncWebServerRequest *request){
         // Runs on the AsyncTCP task, which has no outer handler: an escaping bad_alloc aborts.
+        const char* allocationStage = "request";
+        pmachine::HostExecutionStorage* executionStorage = nullptr;
         try {
 #if defined(ESP32)
         struct HostedWorkerPause {
@@ -6052,6 +6058,11 @@ void registerPMachineRoutes(
         } workerPause;
         if (!workerPause.held) {
             request->send(503, "text/plain", "Hosted runtime busy; retry shortly");
+            return;
+        }
+        executionStorage = hostedServiceHost().pausedExecutionStorage();
+        if (!executionStorage) {
+            request->send(503, "text/plain", "Managed execution storage unavailable");
             return;
         }
 #endif
@@ -6083,7 +6094,14 @@ void registerPMachineRoutes(
         }
 
         String text;
-        if (!readTextFromPath(file, ffs, text)) {
+        allocationStage = "read-pcode";
+        machine.clearRunResults();
+        bool pagedImage = false;
+#if defined(ESP32)
+        pagedImage = file.endsWith(".phi");
+        std::unique_ptr<pmachine::HostedImage> image;
+#endif
+        if (!pagedImage && !readTextFromPath(file, ffs, text)) {
             request->send(404, "text/plain", "File not found or read error");
             return;
         }
@@ -6094,8 +6112,13 @@ void registerPMachineRoutes(
             return;
         }
 
-        std::vector<pmachine::PInstruction> instructions = pmachine::loadTextPCode(std::string(text.c_str()));
-        std::vector<uint8_t> binary = assembleInstructionsToBinary(instructions);
+        // Reuse the segmented loader so larger programs need no contiguous instruction array.
+        allocationStage = "parse-pcode";
+        std::deque<pmachine::PInstruction> instructions;
+        if (!pagedImage) instructions = pmachine::loadHostedTextPCode(std::string(text.c_str()));
+        allocationStage = "assemble-pcode";
+        std::vector<uint8_t> binary;
+        if (!pagedImage) binary = assembleInstructionsToBinary(instructions);
         const bool runRouter = parseBooleanText(runRouterParam, false);
         size_t thunkBindingsApplied = 0;
 
@@ -6104,17 +6127,29 @@ void registerPMachineRoutes(
         ProgramMapMetadata metadata;
         bool hasProgramMap = false;
         if (programMap.length() > 0) {
+            allocationStage = "read-map";
             JsonDocument programMapDoc;
-            if (!deserializeProgramMapForExec(programMap, ffs, programMapDoc)) {
+            if (!deserializeProgramMapForExec(programMap, ffs, programMapDoc, true)) {
                 request->send(404, "text/plain", "Unable to load program map file");
                 return;
             }
             String verifyError;
-            if (!verifySignedPcode(text, programMapDoc, verifyError)) {
+            if (pagedImage) {
+#if defined(ESP32)
+                image.reset(new pmachine::HostedImage);
+                std::string imageError;
+                if (!ffs || !image->open(*ffs, file, programMapDoc,
+                        PROFILE_PCODE_SIGNING_KEY, PROFILE_PCODE_SIGNING_KEY_ID, imageError)) {
+                    request->send(403, "text/plain", ffs ? imageError.c_str() : "FFS unavailable");
+                    return;
+                }
+#endif
+            } else if (!verifySignedPcode(text, programMapDoc, verifyError)) {
                 request->send(403, "text/plain", verifyError);
                 return;
             }
             String mappingError;
+            allocationStage = "load-map";
             if (!loadProgramMapMappingsFromDoc(programMapDoc, mappingDefs, &procedureSignatures, mappingError, &metadata)) {
                 request->send(404, "text/plain", mappingError);
                 return;
@@ -6123,6 +6158,7 @@ void registerPMachineRoutes(
         }
 
         // Mappings are program data, not router-only state, so OP_MAP resolves in both modes.
+        allocationStage = "apply-policy";
         applyRuntimeAndResidencyPolicy(machine, &policy, hasProgramMap ? &metadata : nullptr);
         machine.setMappings(mappingDefs);
         if (hasProgramMap || runRouter) {
@@ -6135,6 +6171,9 @@ void registerPMachineRoutes(
         }
 
         const size_t programLimit = max > 0 ? max : binary.size();
+        allocationStage = "load-program";
+        procedureSignatures.clear();
+        text = String();
         machine.loadProgram(std::move(binary), std::string(file.c_str()), programLimit);
 
         machine.clearRoutingDeliveries();
@@ -6155,8 +6194,30 @@ void registerPMachineRoutes(
             }
         }
         machine.setRoutingContext(std::string(executionQueue.c_str()), std::string(executionMessage.c_str()));
-        machine.run(instructions);
+        allocationStage = "run";
+        struct TracePolicy {
+            pmachine::PMachine& machine;
+            bool previous;
+            ~TracePolicy() { machine.traceEnabled = previous; }
+        } tracePolicy{machine, machine.traceEnabled};
+        String traceParam;
+        machine.traceEnabled = getRequestParam(request, "trace", traceParam)
+            && parseBooleanText(traceParam, false);
+        size_t instructionCount = instructions.size();
+#if defined(ESP32)
+        if (image) {
+            instructionCount = image->size();
+            machine.runImage(instructionCount, [&](size_t index) {
+                pmachine::PInstruction instruction;
+                std::string error;
+                if (!image->read(index, instruction, error)) throw std::runtime_error(error);
+                return instruction;
+            }, executionStorage);
+        } else
+#endif
+        machine.run(instructions, 0, executionStorage);
 
+        allocationStage = "serialize-result";
         JsonDocument out;
         addRunOutputsToJson(out, machine, "file", inputQueue, message);
         String isoOutputType;
@@ -6187,14 +6248,19 @@ void registerPMachineRoutes(
         out["file"] = file;
         out["programMap"] = programMap;
         out["runRouter"] = runRouter;
-        out["instructionCount"] = static_cast<uint32_t>(instructions.size());
+        out["instructionCount"] = static_cast<uint32_t>(instructionCount);
         out["binaryBytes"] = static_cast<uint32_t>(binary.size());
         out["thunkBindingsApplied"] = static_cast<uint32_t>(thunkBindingsApplied);
 
         sendStreamedJson(request, 200, out);
         } catch (const std::bad_alloc&) {
-            Serial.printf("[PMACHINE] execute_file allocation failed; heap=%u\n", static_cast<unsigned>(ESP.getFreeHeap()));
+            Serial.printf("[PMACHINE] execute_file allocation failed at %s; heap=%u largest=%u\n",
+                allocationStage, static_cast<unsigned>(ESP.getFreeHeap()),
+                static_cast<unsigned>(ESP.getMaxAllocHeap()));
             request->send(503, "text/plain", "Device heap exhausted; retry shortly");
+        } catch (const std::runtime_error& error) {
+            Serial.printf("[PMACHINE] execute_file failed at %s: %s\n", allocationStage, error.what());
+            request->send(422, "text/plain", error.what());
         }
     });
 

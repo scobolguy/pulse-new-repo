@@ -70,6 +70,7 @@ import { registerRuntimeRegistryRoutes } from './src/backend/roles/runtimeRegist
 import { registerRouterLifecycleControlRoutes } from './src/backend/roles/routerLifecycleControlRoutes.mjs';
 import { registerHelloServiceRoutes } from './src/backend/roles/helloServiceRoutes.mjs';
 import { registerProvisioningAgentRoutes } from './src/backend/roles/provisioningAgentRoutes.mjs';
+import { registerIssueRoutes } from './src/backend/issueRoutes.mjs';
 import { registerDevelopDocumentRoutes } from './src/backend/developDocumentRoutes.mjs';
 import { registerPmachineDeploymentRoutes } from './src/backend/pmachineDeploymentRoutes.mjs';
 import { registerFlowDeploymentRoutes } from './src/backend/flowDeploymentRoutes.mjs';
@@ -9957,6 +9958,7 @@ function registerRoutes(app) {
     app,
     manifest: ROUTE_ROLE_MANIFEST,
     registrars: {
+      registerIssueRoutes,
       registerLifecycleInquiryRoutes,
       registerLifecycleWorkerGatewayRoutes,
       registerQueueBrokerOpsRoutes,

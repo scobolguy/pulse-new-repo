@@ -96,6 +96,10 @@ public:
     // the worker stayed busy for waitMs; call resumeWorker() after a successful pause.
     bool pauseWorker(uint32_t waitMs);
     void resumeWorker();
+    bool reserveExecutionStorage(std::string& error);
+    HostExecutionStorage* pausedExecutionStorage() {
+        return workerPaused && executionStorage.ready() ? &executionStorage : nullptr;
+    }
 private:
     bool workerPaused = false;
     // Set when a worker pass hit bad_alloc; the worker then backs off so the heap can recover.

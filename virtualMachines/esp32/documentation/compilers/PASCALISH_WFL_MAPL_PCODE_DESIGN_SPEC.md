@@ -165,7 +165,7 @@ The implemented database and queue contract is documented in [LANGUAGE_DATABASE_
 
 ### 3.2.1 WFL environment configuration (implemented)
 
-The implemented grammar is `aggregator/grammar/WorkflowDsl.g4`. A WFL file assigns
+The implemented grammar is [`languages/wfl/grammar/WorkflowDsl.g4`](../../../../languages/wfl/grammar/WorkflowDsl.g4). A WFL file assigns
 global names (queues, files, databases, APIs, services). Those assignments can be
 computed per environment at compile time, so the same file moves from dev to test to
 prod by changing only the selected environment.

@@ -90,11 +90,15 @@ const vscodeMock = `
   export class DebugAdapterInlineImplementation { constructor(adapter) { this.implementation = adapter; } }
   export const debug = {
     registerDebugAdapterDescriptorFactory: (_, factory) => { globalThis.pulseTestFactory = factory; return {}; },
+    registerDebugConfigurationProvider: (_, provider) => { globalThis.pulseTestConfigProvider = provider; return {}; },
+    startDebugging: async (folder, configuration) => { (globalThis.pulseTestStartedDebug ??= []).push(configuration); return true; },
     onDidReceiveDebugSessionCustomEvent: () => ({ dispose() {} }),
   };
+  export const DebugConfigurationProviderTriggerKind = { Initial: 1, Dynamic: 2 };
   export const ViewColumn = { Beside: -2 };
   export const ProgressLocation = { Notification: 15 };
   export const window = {
+    showQuickPick: async targets => targets[0],
     onDidChangeActiveTextEditor: () => ({ dispose() {} }),
     registerCustomEditorProvider: () => ({ dispose() {} }),
     registerCustomTextEditorProvider: () => ({ dispose() {} }),
@@ -143,7 +147,7 @@ Module._load = function (specifier, parent, isMain) {
   if (specifier === 'vscode') return vscode;
   return originalModuleLoad.call(this, specifier, parent, isMain);
 };
-const { activate, loadPmachineTargets } = await import('../out/extension.js');
+const { activate, loadPmachineTargets, selectPmachineTarget } = await import('../out/extension.js');
 Module._load = originalModuleLoad;
 let activationRequests = 0;
 const originalFetchAtActivation = globalThis.fetch;
@@ -263,7 +267,7 @@ test('Data Librarian has a dedicated contributed view and browses nested schema 
 
 test('the unified VSIX contributes and activates the Pulse Studio Deploy panel', async () => {
   const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
-  assert.equal(manifest.version, '0.1.17');
+  assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
   assert.equal(manifest.displayName, 'Pulse Studio & PMachine Debugger');
   assert.ok(manifest.contributes.viewsContainers.activitybar.some(item => item.id === 'pulseCatalogStudio'));
   assert.ok(manifest.contributes.views.pulseCatalogStudio.some(item => item.id === 'pulseCatalogStudio.deploy'));
@@ -552,6 +556,35 @@ test('Services Explorer surfaces HTTP and malformed directory failures and recov
   }
 });
 
+test('manual IP target picker validates addresses and ports and supports cancellation', async () => {
+  const originalPick = vscode.window.showQuickPick;
+  const originalInput = vscode.window.showInputBox;
+  try {
+    vscode.window.showQuickPick = async targets => targets.find(target => target.key === 'manual-ip');
+    vscode.window.showInputBox = async options => {
+      for (const valid of ['192.168.2.90', ' 192.168.2.90:8080 ', '127.0.0.1:65535']) {
+        assert.equal(options.validateInput(valid), undefined, valid);
+      }
+      for (const invalid of ['', '256.1.1.1', 'example.com', 'http://192.168.2.90', '192.168.2.90:',
+        '192.168.2.90:0', '192.168.2.90:65536', '192.168.2.90:abc', '192.168.2.90:80:90']) {
+        assert.equal(typeof options.validateInput(invalid), 'string', invalid);
+      }
+      return ' 192.168.2.90:8080 ';
+    };
+    const target = await selectPmachineTarget([], 'run');
+    assert.equal(target.host, '192.168.2.90:8080');
+    assert.equal(target.runtime, 'esp32');
+    vscode.window.showInputBox = async () => undefined;
+    assert.equal(await selectPmachineTarget([], 'debug'), undefined);
+    vscode.window.showQuickPick = async () => undefined;
+    vscode.window.showInputBox = async () => assert.fail('Cancelled picker must not prompt for an IP');
+    assert.equal(await selectPmachineTarget([], 'run'), undefined);
+  } finally {
+    vscode.window.showQuickPick = originalPick;
+    vscode.window.showInputBox = originalInput;
+  }
+});
+
 test('run target picker includes discovered JavaScript PMachines as JavaScript targets', async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => Response.json([
@@ -637,7 +670,46 @@ test('editor runs a discovered JavaScript target through the backend, not its re
   }
 });
 
-test('editor installs hosted Pascalish services and their companion daemon on direct HTTP targets', async () => {
+test('editor runs local C# and COBOL with desktop host bindings from a repository-root workspace', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = { ...vscode.window };
+  const originalFolder = vscode.workspace.getWorkspaceFolder;
+  const output = [], errors = [];
+  const cases = [
+    ['csharp', 'hello.cs', 'using System; class P { static T Id<T>(T x) { return x; } static void Main() { Console.WriteLine(Id("C# editor run")); } }', 'C# editor run'],
+    ['cobolish', 'hello.cob', 'IDENTIFICATION DIVISION.\nPROGRAM-ID. HELLO.\nPROCEDURE DIVISION.\nDISPLAY FUNCTION UPPER-CASE("cobol editor run").\nSTOP RUN.', 'COBOL EDITOR RUN'],
+  ];
+  vscode.workspace.getWorkspaceFolder = () => ({ uri: { fsPath: path.resolve(root, '..', '..') } });
+  globalThis.fetch = async url => {
+    assert.equal(url, 'http://127.0.0.1:4000/api/pmachine/nodes');
+    return Response.json([]);
+  };
+  Object.assign(vscode.window, {
+    createOutputChannel: () => ({ clear() {}, appendLine: line => output.push(line), show() {}, dispose() {} }),
+    showQuickPick: async targets => targets.find(target => target.key === 'js'),
+    withProgress: async (_, task) => task(),
+    showErrorMessage: message => errors.push(message),
+  });
+  try {
+    activate({ subscriptions: [], extensionUri: {}, globalState: { get() {}, async update() {} } });
+    for (const [languageId, name, content, expected] of cases) {
+      const fileName = path.resolve(root, '..', '..', 'languages', languageId, 'examples', name);
+      vscode.window.activeTextEditor = { document: {
+        uri: { fsPath: fileName }, fileName, languageId, getText: () => content,
+      } };
+      await globalThis.pulseTestRunCommand();
+      assert.deepEqual(errors, []);
+      assert.ok(output.includes(expected), output.join('\n'));
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    vscode.workspace.getWorkspaceFolder = originalFolder;
+    for (const key of Object.keys(vscode.window)) delete vscode.window[key];
+    Object.assign(vscode.window, originalWindow);
+  }
+});
+
+test('editor installs hosted Pascalish services and their companion daemon on manually entered HTTP targets', async () => {
   const originalFetch = globalThis.fetch;
   const originalWindow = { ...vscode.window };
   const output = [];
@@ -659,7 +731,8 @@ test('editor installs hosted Pascalish services and their companion daemon on di
     createOutputChannel: () => ({
       clear() {}, appendLine: line => output.push(line), show() {}, dispose() {},
     }),
-    showQuickPick: async targets => targets.find(target => target.host === '127.0.0.1:4111'),
+    showQuickPick: async targets => targets.find(target => target.key === 'manual-ip'),
+    showInputBox: async () => '127.0.0.1:4111',
     withProgress: async (_, task) => task(),
     showErrorMessage: message => errors.push(message),
   });
@@ -806,6 +879,332 @@ test('Hanoi compilation and three JS executions preserve all 31 legal moves', as
     assert.equal(result.stepLimitHit, false);
     assert.equal(result.error, null);
     validateMoves(result.stdout);
+  }
+});
+
+test('C# generic source debugging resolves repository-root workspaces and steps out of a specialization', async () => {
+  const sourcePath = path.resolve(root, '..', '..', 'languages', 'csharp', 'examples', 'generics.cs');
+  const getFolder = vscode.workspace.getWorkspaceFolder;
+  vscode.workspace.getWorkspaceFolder = () => ({ uri: { fsPath: path.resolve(root, '..', '..') } });
+  const { value } = adapter({ program: sourcePath });
+  try {
+    await value.launch({ program: sourcePath, runtime: 'js' });
+    assert.equal(value.root, path.resolve(root));
+    await value.stopAtProgramEntry();
+    await value.setBreakpoints({ seq: 1, command: 'setBreakpoints' }, {
+      source: { path: sourcePath }, breakpoints: [{ line: 7 }],
+    });
+    assert.ok(value.state.resolvedSourceBreakpoints.every(item => item.verified));
+    await value.resumeUntilPause('continue');
+    assert.equal(value.state.sourceLocation.sourceLine, 7);
+    assert.ok(Object.values(value.state.locals).includes(1));
+    const depth = value.state.callStack.length;
+    await value.setBreakpoints({ seq: 2, command: 'setBreakpoints' }, {
+      source: { path: sourcePath }, breakpoints: [],
+    });
+    await value.stepToNextSource('step-out');
+    assert.ok(value.state.callStack.length < depth);
+    await value.resumeUntilPause('continue');
+    assert.equal(value.state.status, 'completed', value.state.error);
+    assert.deepEqual(value.state.result.stdout, ['SUM = 55', 'Hello from C#', 'Generic', 'True']);
+  } finally {
+    value.dispose();
+    vscode.workspace.getWorkspaceFolder = getFolder;
+  }
+  const remote = adapter({ program: sourcePath }).value;
+  try {
+    await assert.rejects(remote.launch({ program: sourcePath, runtime: 'esp32' }), /JavaScript PMachine only/);
+  } finally {
+    remote.dispose();
+  }
+});
+
+test('F5 and the Debug button debug the active MNF file instead of the Hanoi default', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json([]);
+  const sourcePath = path.resolve(root, '..', '..', 'languages', 'mnf', 'examples', 'nostalgia.ftn');
+  const document = { fileName: sourcePath, languageId: 'mnf', uri: { fsPath: sourcePath }, isDirty: false };
+  vscode.window.activeTextEditor = { document };
+  try {
+    const provider = globalThis.pulseTestConfigProvider;
+    const resolved = await provider.resolveDebugConfiguration(undefined, {});
+    assert.equal(resolved.type, 'pulse-pmachine');
+    assert.equal(resolved.program, sourcePath);
+    assert.equal(resolved.runtime, 'js');
+    const missingProgram = provider.resolveDebugConfiguration(undefined, { type: 'pulse-pmachine', request: 'launch', name: 'x' });
+    assert.equal(missingProgram.program, sourcePath);
+    assert.equal(provider.provideDebugConfigurations()[0].program, sourcePath);
+    globalThis.pulseTestStartedDebug = [];
+    await vscode.registeredCommands.get('pulse-pmachine.debugCurrentFile')();
+    assert.equal(globalThis.pulseTestStartedDebug[0].program, sourcePath);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete vscode.window.activeTextEditor;
+  }
+});
+
+test('Debug Current File passes a manually entered IP to the ESP32 debug adapter', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json([]);
+  const originalPick = vscode.window.showQuickPick;
+  const originalInput = vscode.window.showInputBox;
+  const originalEditor = vscode.window.activeTextEditor;
+  const sourcePath = path.resolve(root, '..', '..', 'languages', 'mnf', 'examples', 'nostalgia.ftn');
+  vscode.window.activeTextEditor = {
+    document: { fileName: sourcePath, languageId: 'mnf', uri: { fsPath: sourcePath }, isDirty: false },
+  };
+  try {
+    vscode.window.showQuickPick = async targets => targets.find(target => target.key === 'manual-ip');
+    vscode.window.showInputBox = async () => '192.168.2.90';
+    globalThis.pulseTestStartedDebug = [];
+    await vscode.registeredCommands.get('pulse-pmachine.debugCurrentFile')();
+    assert.equal(globalThis.pulseTestStartedDebug[0].program, sourcePath);
+    assert.equal(globalThis.pulseTestStartedDebug[0].runtime, 'esp32');
+    assert.equal(globalThis.pulseTestStartedDebug[0].targetHost, '192.168.2.90');
+    assert.equal(globalThis.pulseTestStartedDebug[0].debugSession, true);
+    vscode.window.showInputBox = async () => undefined;
+    await vscode.registeredCommands.get('pulse-pmachine.debugCurrentFile')();
+    assert.equal(globalThis.pulseTestStartedDebug.length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    vscode.window.showQuickPick = originalPick;
+    vscode.window.showInputBox = originalInput;
+    vscode.window.activeTextEditor = originalEditor;
+  }
+});
+
+test('Debug on PMachine uses the active tab instead of a stale Hanoi argument and preserves it during target selection', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json([]);
+  const originalWindow = { ...vscode.window };
+  const originalOpen = vscode.workspace.openTextDocument;
+  const sourcePath = path.resolve(root, '..', '..', 'languages', 'mnf', 'examples', 'nostalgia.ftn');
+  let saved = false;
+  const document = {
+    fileName: sourcePath, languageId: 'mnf', uri: { fsPath: sourcePath }, isDirty: true,
+    save: async () => { saved = true; return true; },
+  };
+  try {
+    vscode.window.activeTextEditor = { document };
+    vscode.workspace.openTextDocument = async () => assert.fail('Must not open the stale file argument');
+    vscode.window.showQuickPick = async targets => {
+      assert.equal(saved, true);
+      vscode.window.activeTextEditor = { document: { fileName: program } };
+      return targets.find(target => target.key === 'manual-ip');
+    };
+    vscode.window.showInputBox = async () => '192.168.2.90';
+    globalThis.pulseTestStartedDebug = [];
+    await vscode.registeredCommands.get('pulse-pmachine.debugCurrentFile')({ fsPath: program });
+    const configuration = globalThis.pulseTestStartedDebug[0];
+    assert.equal(configuration.program, sourcePath);
+    assert.equal(configuration.runtime, 'esp32');
+    assert.equal(configuration.targetHost, '192.168.2.90');
+    assert.equal(configuration.debugSession, true);
+    const { value, events } = adapter(configuration);
+    try {
+      await value.launch(configuration);
+      assert.equal(value.runtime.program, sourcePath);
+      assert.equal(value.runtime.language, 'mnf');
+      assert.equal(value.wantsRemoteDebugSession(), true);
+      assert.equal(events.find(event => event.event === 'pulseLaunch').body.isHanoi, false);
+    } finally {
+      globalThis.fetch = originalFetch;
+      value.dispose();
+    }
+    vscode.window.activeTextEditor = { document: { ...document, save: async () => false } };
+    const errors = [];
+    vscode.window.showErrorMessage = message => errors.push(message);
+    await vscode.registeredCommands.get('pulse-pmachine.debugCurrentFile')();
+    assert.equal(globalThis.pulseTestStartedDebug.length, 1);
+    assert.deepEqual(errors, ['Save the active program before debugging it.']);
+  } finally {
+    vscode.workspace.openTextDocument = originalOpen;
+    for (const key of Object.keys(vscode.window)) delete vscode.window[key];
+    Object.assign(vscode.window, originalWindow);
+  }
+});
+
+test('debug adapter rejects a missing program instead of falling back to Hanoi', async () => {
+  const { value } = adapter({});
+  try {
+    await assert.rejects(value.launch({ runtime: 'js' }), /no program was supplied/);
+  } finally {
+    value.dispose();
+  }
+});
+
+test('Run on PMachine executes the active MNF tab and both commands reject a missing active editor', async () => {
+  const originalWindow = { ...vscode.window };
+  const originalFetch = globalThis.fetch;
+  const originalOpen = vscode.workspace.openTextDocument;
+  const sourcePath = path.resolve(root, '..', '..', 'languages', 'mnf', 'examples', 'nostalgia.ftn');
+  const content = await readFile(sourcePath, 'utf8');
+  const output = [], warnings = [];
+  let saved = false;
+  try {
+    vscode.workspace.openTextDocument = async () => assert.fail('A command must not open an inactive file');
+    globalThis.fetch = async url => {
+      assert.equal(url, 'http://127.0.0.1:4000/api/pmachine/nodes');
+      return Response.json([]);
+    };
+    Object.assign(vscode.window, {
+      activeTextEditor: { document: {
+        fileName: sourcePath, languageId: 'mnf', uri: { fsPath: sourcePath }, isDirty: true,
+        getText: () => content, save: async () => { saved = true; return true; },
+      } },
+      createOutputChannel: () => ({ clear() {}, appendLine: line => output.push(line), show() {}, dispose() {} }),
+      showQuickPick: async targets => { assert.equal(saved, true); return targets.find(target => target.key === 'js'); },
+      withProgress: async (_, task) => task(),
+      showWarningMessage: message => warnings.push(message),
+      showErrorMessage: message => assert.fail(message),
+    });
+    activate({ subscriptions: [], extensionUri: {}, globalState: { get() {}, async update() {} } });
+    await vscode.registeredCommands.get('pulse-pmachine.runCurrentFile')({ fsPath: program });
+    assert.ok(output.includes(`Program: ${sourcePath}`));
+    assert.ok(output.includes('SUM = 6'), output.join('\n'));
+    delete vscode.window.activeTextEditor;
+    vscode.window.showQuickPick = async () => assert.fail('No editor must not prompt for a target');
+    globalThis.pulseTestStartedDebug = [];
+    await vscode.registeredCommands.get('pulse-pmachine.runCurrentFile')({ fsPath: program });
+    await vscode.registeredCommands.get('pulse-pmachine.debugCurrentFile')({ fsPath: program });
+    assert.equal(globalThis.pulseTestStartedDebug.length, 0);
+    assert.deepEqual(warnings, [
+      'Open a Pulse language source file before running it.',
+      'Open a Pulse language source file before debugging it.',
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    vscode.workspace.openTextDocument = originalOpen;
+    for (const key of Object.keys(vscode.window)) delete vscode.window[key];
+    Object.assign(vscode.window, originalWindow);
+  }
+});
+
+test('default PMachine persists across Run, Debug and activation until changed or reset', async () => {
+  const originalWindow = { ...vscode.window };
+  const originalFetch = globalThis.fetch;
+  const state = new Map();
+  const context = {
+    subscriptions: [], extensionUri: {},
+    globalState: { get: key => state.get(key), update: async (key, value) => {
+      if (value === undefined) state.delete(key); else state.set(key, value);
+    } },
+  };
+  const sourcePath = path.resolve(root, '..', '..', 'languages', 'mnf', 'examples', 'nostalgia.ftn');
+  const content = await readFile(sourcePath, 'utf8');
+  let lookups = 0;
+  const warnings = [], output = [];
+  globalThis.fetch = async () => { lookups++; throw new Error('fetch failed'); };
+  Object.assign(vscode.window, {
+    activeTextEditor: { document: {
+      fileName: sourcePath, languageId: 'mnf', uri: { fsPath: sourcePath }, getText: () => content,
+    } },
+    createOutputChannel: () => ({ clear() {}, show() {}, dispose() {}, appendLine: line => output.push(line) }),
+    showWarningMessage: message => warnings.push(message),
+    showInformationMessage() {},
+    showErrorMessage: message => assert.fail(message),
+    showQuickPick: async targets => targets.find(target => target.key === 'manual-ip'),
+    showInputBox: async () => '192.168.2.90',
+    withProgress: async (_, task) => task(),
+  });
+  try {
+    activate(context);
+    await vscode.registeredCommands.get('pulse-pmachine.selectDefaultNode')();
+    assert.equal(state.get('defaultPmachineTarget').host, '192.168.2.90');
+    assert.ok(warnings[0].includes('Local JavaScript or enter an IP'));
+    const afterSelection = lookups;
+    activate(context);
+    vscode.window.showQuickPick = async () => assert.fail('Saved default must not prompt again');
+    globalThis.pulseTestStartedDebug = [];
+    await vscode.registeredCommands.get('pulse-pmachine.debugCurrentFile')();
+    assert.equal(globalThis.pulseTestStartedDebug[0].targetHost, '192.168.2.90');
+    const resolved = await globalThis.pulseTestConfigProvider.resolveDebugConfiguration(undefined, { activeFile: true });
+    assert.equal(resolved.program, sourcePath);
+    assert.equal(resolved.targetHost, '192.168.2.90');
+    assert.equal(resolved.debugSession, true);
+    assert.equal(lookups, afterSelection);
+    globalThis.fetch = async () => Response.json([]);
+    vscode.window.showQuickPick = async targets => targets.find(target => target.key === 'manual-js-ip');
+    vscode.window.showInputBox = async () => '127.0.0.1:4111';
+    await vscode.registeredCommands.get('pulse-pmachine.selectDefaultNode')();
+    await vscode.registeredCommands.get('pulse-pmachine.debugCurrentFile')();
+    assert.equal(globalThis.pulseTestStartedDebug.at(-1).runtime, 'js-node');
+    assert.equal(globalThis.pulseTestStartedDebug.at(-1).targetHost, '127.0.0.1:4111');
+    vscode.window.showQuickPick = async targets => targets.find(target => target.key === 'js');
+    await vscode.registeredCommands.get('pulse-pmachine.selectDefaultNode')();
+    vscode.window.showQuickPick = async () => assert.fail('Run must reuse the saved local JS default');
+    await vscode.registeredCommands.get('pulse-pmachine.runCurrentFile')();
+    assert.ok(output.includes('SUM = 6'), output.join('\n'));
+    await vscode.registeredCommands.get('pulse-pmachine.debugCurrentFile')();
+    assert.equal(globalThis.pulseTestStartedDebug.at(-1).runtime, 'js');
+    await vscode.registeredCommands.get('pulse-pmachine.resetDefaultNode')();
+    assert.equal(state.has('defaultPmachineTarget'), false);
+    vscode.window.showQuickPick = async () => undefined;
+    assert.equal(await globalThis.pulseTestConfigProvider.resolveDebugConfiguration(undefined, { activeFile: true }), undefined);
+    delete vscode.window.activeTextEditor;
+    assert.deepEqual(globalThis.pulseTestConfigProvider.provideDebugConfigurations(), []);
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const key of Object.keys(vscode.window)) delete vscode.window[key];
+    Object.assign(vscode.window, originalWindow);
+    activate({ subscriptions: [], extensionUri: {} });
+  }
+});
+
+test('MNF FORTRAN source debugging stops on breakpoints, exposes variables and completes', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'pulse-mnf-debug-'));
+  const sourcePath = path.join(directory, 'nostalgia.ftn');
+  await fs.writeFile(sourcePath, [
+    'C     Minnesota FORTRAN debugger fixture.', '      PROGRAM NOSTALGIA', '      INTEGER I,ISUM', '      ISUM=0',
+    '      DO 100 I=1,10', '      ISUM=ISUM+I', '  100 CONTINUE', "      PRINT, 'SUM = ',ISUM", '      END', '',
+  ].join('\n'));
+  const getFolder = vscode.workspace.getWorkspaceFolder;
+  vscode.workspace.getWorkspaceFolder = () => ({ uri: { fsPath: path.resolve(root, '..', '..') } });
+  const { value } = adapter({ program: sourcePath });
+  try {
+    await value.launch({ program: sourcePath, runtime: 'js' });
+    assert.equal(value.root, path.resolve(root));
+    assert.equal(value.entryLine, 4);
+    await value.stopAtProgramEntry();
+    assert.equal(value.state.sourceLocation.sourceLine, 4);
+    await value.setBreakpoints({ seq: 1, command: 'setBreakpoints' }, {
+      source: { path: sourcePath }, breakpoints: [{ line: 6 }],
+    });
+    assert.ok(value.state.resolvedSourceBreakpoints.every(item => item.verified));
+    await value.resumeUntilPause('continue');
+    assert.equal(value.state.sourceLocation.sourceLine, 6);
+    await value.resumeUntilPause('continue');
+    assert.equal(value.state.sourceLocation.sourceLine, 6);
+    assert.equal(value.state.globals.I, 2);
+    assert.equal(value.state.globals.ISUM, 1);
+    await value.setBreakpoints({ seq: 2, command: 'setBreakpoints' }, { source: { path: sourcePath }, breakpoints: [] });
+    await value.resumeUntilPause('continue');
+    assert.equal(value.state.status, 'completed', value.state.error);
+    assert.deepEqual(value.state.result.stdout, ['SUM = 55']);
+  } finally {
+    value.dispose();
+    vscode.workspace.getWorkspaceFolder = getFolder;
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('new-language command opens the selected starter with its explicit language mode', async () => {
+  const originalPick = vscode.window.showQuickPick;
+  const originalOpen = vscode.workspace.openTextDocument;
+  const originalShow = vscode.window.showTextDocument;
+  let opened, shown;
+  vscode.window.showQuickPick = async choices => choices.find(item => item.editor.id === 'csharp');
+  vscode.workspace.openTextDocument = async options => { opened = options; return options; };
+  vscode.window.showTextDocument = async document => { shown = document; };
+  try {
+    await vscode.registeredCommands.get('pulse-pmachine.newLanguageDocument')();
+    assert.equal(opened.language, 'csharp');
+    assert.match(opened.content, /Identity<T>/);
+    assert.equal(shown, opened);
+  } finally {
+    vscode.window.showQuickPick = originalPick;
+    vscode.workspace.openTextDocument = originalOpen;
+    vscode.window.showTextDocument = originalShow;
   }
 });
 
@@ -977,7 +1376,7 @@ test('COBOL debugger maps fixed-format statements for local and remote debug, bi
     );
     assert.equal(value.state.resolvedSourceBreakpoints[0].line, 27);
     await value.resumeUntilPause('continue');
-    assert.equal(value.state.status, 'paused');
+    assert.equal(value.state.status, 'paused', JSON.stringify(value.state, (_, item) => typeof item === 'bigint' ? String(item) : item));
     assert.equal(value.state.sourceLocation.sourceLine, 27);
     assert.equal(value.state.globals.N.unscaled, 1n);
     const inspected = inspectJavaScriptPmachineVariable(value.sessionId, 'N');

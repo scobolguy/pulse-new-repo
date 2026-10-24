@@ -1,0 +1,509 @@
+import antlr4 from 'antlr4';
+import VbishLexer from '../grammar/generated/VbishLexer.js';
+import VbishParser from '../grammar/generated/VbishParser.js';
+import VbishVisitor from '../grammar/generated/VbishVisitor.js';
+
+class CollectingErrorListener extends antlr4.error.ErrorListener {
+  constructor() {
+    super();
+    this.errors = [];
+  }
+
+  syntaxError(_recognizer, _symbol, line, column, message) {
+    this.errors.push(`line ${line}:${column} ${message}`);
+  }
+}
+
+function collectMatches(source, expression, map) {
+  return Array.from(String(source || '').matchAll(expression), map);
+}
+
+function text(ctx) {
+  return ctx ? String(ctx.getText()) : '';
+}
+
+function unquote(value) {
+  const raw = String(value == null ? '' : value);
+  if (raw.length >= 2) {
+    const first = raw[0];
+    const last = raw[raw.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) return raw.slice(1, -1);
+  }
+  return raw;
+}
+
+export class VbishToPascalishVisitor extends VbishVisitor {
+  constructor(metadata = {}) {
+    super();
+    this.metadata = metadata;
+    this.globals = new Map();
+    this.mainStatements = [];
+    this.procedures = [];
+    this.functions = [];
+    this.routers = [];
+    this.systems = [];
+    this.databases = [];
+  }
+
+  visitCompilationUnit(ctx) {
+    for (const systemCtx of ctx.systemDecl?.() || []) {
+      this.systems.push(this.visitSystemDecl(systemCtx));
+    }
+    for (const databaseCtx of ctx.databaseDecl?.() || []) {
+      this.databases.push({
+        symbol: unquote(text(databaseCtx.stringOrIdentifier())),
+        typeName: text(databaseCtx.typeName())
+      });
+    }
+    for (const routeCtx of ctx.routeDecl() || []) {
+      const parts = routeCtx.stringOrIdentifier() || [];
+      const fromQueue = unquote(text(parts[0]));
+      const toQueue = unquote(text(parts[1]));
+      const mapperId = unquote(text(parts[2]));
+      if (fromQueue && toQueue && mapperId) {
+        this.routers.push({ fromQueue, toQueue, mapperId });
+      }
+    }
+    for (const topDecl of ctx.topLevelDecl() || []) {
+      if (topDecl.variableDecl && topDecl.variableDecl()) {
+        const v = topDecl.variableDecl();
+        const id = text(v.IDENTIFIER());
+        const type = v.typeName() ? text(v.typeName()).toLowerCase() : 'integer';
+        this.globals.set(id, type);
+        if (v.expression && v.expression()) {
+          const expr = this.visit(v.expression());
+          this.mainStatements.push(`${id} := ${expr};`);
+        }
+      } else if (topDecl.subDecl && topDecl.subDecl()) {
+        this.visitSubDecl(topDecl.subDecl());
+      } else if (topDecl.functionDecl && topDecl.functionDecl()) {
+        this.visitFunctionDecl(topDecl.functionDecl());
+      }
+    }
+    return this;
+  }
+
+  visitSystemDecl(ctx, parentPath = []) {
+    const names = (ctx.stringOrIdentifier?.() || []).map(item => unquote(text(item)));
+    const raw = text(ctx).toUpperCase();
+    const abstract = raw.startsWith('SYSTEMTYPE');
+    const systemId = names[0] || '';
+    const systemPath = [...parentPath, systemId];
+    const scopedSystemId = systemPath.join('.');
+    const typeName = abstract ? null : (names[1] || null);
+    const visibility = text(ctx.systemVisibilityClause?.()).toUpperCase().includes('EXPOSED') ? 'exposed' : 'internal';
+    const members = (ctx.systemMember?.() || []).map(member => {
+      if (member.systemDecl?.()) {
+        return this.visitSystemDecl(member.systemDecl(), systemPath);
+      }
+      if (member.systemQueueDecl?.()) {
+        const queueContext = member.systemQueueDecl();
+        const values = (queueContext.stringOrIdentifier?.() || []).map(item => unquote(text(item)));
+        const hasAlias = Boolean(queueContext.ARROW?.());
+        const dataTypeId = hasAlias ? values[2] : values[1];
+        return {
+          kind: 'queue',
+          symbol: values[0],
+          queueName: `${scopedSystemId}.${hasAlias ? (values[1] || values[0]) : values[0]}`,
+          dataTypeId: dataTypeId || null,
+          dataTypeIds: dataTypeId ? [dataTypeId] : [],
+          visibility: text(queueContext.systemVisibilityClause?.()).toUpperCase().includes('EXPOSED') ? 'exposed' : 'internal'
+        };
+      }
+      const serviceContext = member.systemServiceDecl?.();
+      if (!serviceContext) return null;
+      const values = (serviceContext.stringOrIdentifier?.() || []).map(item => unquote(text(item)));
+      const hasAlias = Boolean(serviceContext.ARROW?.());
+      return {
+        kind: 'service',
+        symbol: values[0],
+        serviceId: hasAlias ? (values[1] || values[0]) : values[0],
+        visibility: text(serviceContext.systemVisibilityClause?.()).toUpperCase().includes('EXPOSED') ? 'exposed' : 'internal'
+      };
+    }).filter(Boolean);
+    return { kind: 'system', name: systemId, systemId: scopedSystemId, systemPath, typeName, abstract, visibility, members };
+  }
+
+  visitSubDecl(ctx) {
+    const name = text(ctx.IDENTIFIER());
+    const isMain = name.toLowerCase() === 'main';
+    const localVars = new Map();
+    const stmts = [];
+
+    for (const stmtCtx of ctx.statement() || []) {
+      if (stmtCtx.variableDecl && stmtCtx.variableDecl()) {
+        const v = stmtCtx.variableDecl();
+        const id = text(v.IDENTIFIER());
+        const type = v.typeName() ? text(v.typeName()).toLowerCase() : 'integer';
+        if (isMain) {
+          this.globals.set(id, type);
+        } else {
+          localVars.set(id, type);
+        }
+        if (v.expression && v.expression()) {
+          const expr = this.visit(v.expression());
+          if (isMain) {
+            this.mainStatements.push(`${id} := ${expr};`);
+          } else {
+            stmts.push(`${id} := ${expr};`);
+          }
+        }
+      } else {
+        const s = this.visitStatement(stmtCtx);
+        if (s) {
+          if (isMain) {
+            this.mainStatements.push(s);
+          } else {
+            stmts.push(s);
+          }
+        }
+      }
+    }
+
+    if (!isMain) {
+      const params = this.visitParameterList(ctx.parameterList());
+      this.procedures.push({
+        name,
+        params,
+        localVars,
+        body: stmts
+      });
+    }
+  }
+
+  visitFunctionDecl(ctx) {
+    const name = text(ctx.IDENTIFIER());
+    const returnType = ctx.typeName() ? text(ctx.typeName()).toLowerCase() : 'integer';
+    const params = this.visitParameterList(ctx.parameterList());
+    const localVars = new Map();
+    const stmts = [];
+
+    for (const stmtCtx of ctx.statement() || []) {
+      if (stmtCtx.variableDecl && stmtCtx.variableDecl()) {
+        const v = stmtCtx.variableDecl();
+        const id = text(v.IDENTIFIER());
+        const type = v.typeName() ? text(v.typeName()).toLowerCase() : 'integer';
+        localVars.set(id, type);
+        if (v.expression && v.expression()) {
+          const expr = this.visit(v.expression());
+          stmts.push(`${id} := ${expr};`);
+        }
+      } else {
+        const s = this.visitStatement(stmtCtx, name);
+        if (s) stmts.push(s);
+      }
+    }
+
+    this.functions.push({
+      name,
+      returnType,
+      params,
+      localVars,
+      body: stmts
+    });
+  }
+
+  visitParameterList(ctx) {
+    if (!ctx) return [];
+    const params = [];
+    for (const p of ctx.parameter() || []) {
+      const name = text(p.expression ? p.expression() : p.IDENTIFIER());
+      const type = p.typeName() ? text(p.typeName()).toLowerCase() : 'integer';
+      params.push({ name, type });
+    }
+    return params;
+  }
+
+  visitStatement(ctx, currentFnName = null) {
+    if (!ctx) return '';
+    if (ctx.variableDecl && ctx.variableDecl()) {
+      const v = ctx.variableDecl();
+      const id = text(v.IDENTIFIER());
+      if (v.expression && v.expression()) {
+        return `${id} := ${this.visit(v.expression())};`;
+      }
+      return '';
+    }
+    if (ctx.assignment && ctx.assignment()) {
+      const a = ctx.assignment();
+      const id = text(a.IDENTIFIER());
+      const expr = this.visit(a.expression());
+      return `${id} := ${expr};`;
+    }
+    if (ctx.printStatement && ctx.printStatement()) {
+      const p = ctx.printStatement();
+      const exprs = (p.expression() || []).map(e => this.visit(e));
+      return `writeln(${exprs.join(', ')});`;
+    }
+    if (ctx.ifStatement && ctx.ifStatement()) {
+      const ifCtx = ctx.ifStatement();
+      const cond = this.visit(ifCtx.expression());
+      const thenStmts = (ifCtx.statement() || []).map(s => this.visitStatement(s, currentFnName)).filter(Boolean);
+      return `if ${cond} then\nbegin\n  ${thenStmts.join('\n  ')}\nend;`;
+    }
+    if (ctx.forStatement && ctx.forStatement()) {
+      const forCtx = ctx.forStatement();
+      const id = text(forCtx.IDENTIFIER(0));
+      const start = this.visit(forCtx.expression(0));
+      const end = this.visit(forCtx.expression(1));
+      const bodyStmts = (forCtx.statement() || []).map(s => this.visitStatement(s, currentFnName)).filter(Boolean);
+      return `for ${id} := ${start} to ${end} do\nbegin\n  ${bodyStmts.join('\n  ')}\nend;`;
+    }
+    if (ctx.whileStatement && ctx.whileStatement()) {
+      const whileCtx = ctx.whileStatement();
+      const cond = this.visit(whileCtx.expression());
+      const bodyStmts = (whileCtx.statement() || []).map(s => this.visitStatement(s, currentFnName)).filter(Boolean);
+      return `while ${cond} do\nbegin\n  ${bodyStmts.join('\n  ')}\nend;`;
+    }
+    if (ctx.callStatement && ctx.callStatement()) {
+      const c = ctx.callStatement();
+      const name = text(c.IDENTIFIER());
+      const params = c.parameterList() ? (c.parameterList().parameter() || []).map(p => this.visit(p.expression ? p.expression() : p)) : [];
+      return `${name}(${params.join(', ')});`;
+    }
+    if (ctx.returnStatement && ctx.returnStatement()) {
+      const r = ctx.returnStatement();
+      if (r.expression && r.expression() && currentFnName) {
+        return `${currentFnName} := ${this.visit(r.expression())};`;
+      }
+      return '';
+    }
+    return '';
+  }
+
+  visitExpression(ctx) {
+    if (!ctx) return '';
+    return this.visitLogicalOr(ctx.logicalOr ? ctx.logicalOr() : ctx);
+  }
+
+  visitLogicalOr(ctx) {
+    if (!ctx) return '';
+    const ands = ctx.logicalAnd ? ctx.logicalAnd() : [];
+    if (ands.length === 0) return this.visitChildren(ctx) || text(ctx);
+    return ands.map(a => this.visitLogicalAnd(a)).join(' or ');
+  }
+
+  visitLogicalAnd(ctx) {
+    if (!ctx) return '';
+    const eqs = ctx.equality ? ctx.equality() : [];
+    if (eqs.length === 0) return this.visitChildren(ctx) || text(ctx);
+    return eqs.map(e => this.visitEquality(e)).join(' and ');
+  }
+
+  visitEquality(ctx) {
+    if (!ctx) return '';
+    const rels = ctx.relational ? ctx.relational() : [];
+    if (rels.length === 0) return this.visitChildren(ctx) || text(ctx);
+    return rels.map(r => this.visitRelational(r)).join(' = ');
+  }
+
+  visitRelational(ctx) {
+    if (!ctx) return '';
+    const adds = ctx.additive ? ctx.additive() : [];
+    if (adds.length === 0) return this.visitChildren(ctx) || text(ctx);
+    return adds.map(a => this.visitAdditive(a)).join(' ');
+  }
+
+  visitAdditive(ctx) {
+    if (!ctx) return '';
+    const mults = ctx.multiplicative ? ctx.multiplicative() : [];
+    if (mults.length === 0) return this.visitChildren(ctx) || text(ctx);
+    return mults.map(m => this.visitMultiplicative(m)).join(' + ');
+  }
+
+  visitMultiplicative(ctx) {
+    if (!ctx) return '';
+    const prims = ctx.primary ? ctx.primary() : [];
+    if (prims.length === 0) return this.visitChildren(ctx) || text(ctx);
+    return prims.map(p => this.visitPrimary(p)).join(' * ');
+  }
+
+  visitPrimary(ctx) {
+    if (!ctx) return '';
+    if (ctx.STRING_LITERAL && ctx.STRING_LITERAL()) {
+      const s = unquote(ctx.STRING_LITERAL().getText());
+      return `'${s.replace(/'/g, "''")}'`;
+    }
+    if (ctx.NUMBER && ctx.NUMBER()) {
+      return ctx.NUMBER().getText();
+    }
+    if (ctx.TRUE && ctx.TRUE()) return 'true';
+    if (ctx.FALSE && ctx.FALSE()) return 'false';
+    if (ctx.IDENTIFIER && ctx.IDENTIFIER()) {
+      const id = ctx.IDENTIFIER().getText();
+      if (ctx.parameterList && ctx.parameterList()) {
+        const params = (ctx.parameterList().parameter() || []).map(p => this.visit(p.expression ? p.expression() : p));
+        return `${id}(${params.join(', ')})`;
+      }
+      return id;
+    }
+    if (ctx.expression && ctx.expression()) {
+      return `(${this.visit(ctx.expression())})`;
+    }
+    return text(ctx);
+  }
+
+  toPascalishSource(runtimeUnit, interopDecls = []) {
+    const lines = [];
+    const kind = runtimeUnit?.kind || 'program';
+    const id = runtimeUnit?.id || 'vbish-program';
+    const placement = runtimeUnit?.placement ? ` on ${runtimeUnit.placement}` : '';
+    const refresh = runtimeUnit?.refresh ? runtimeUnit.refresh : '';
+
+    lines.push(`${kind} "${id}"${placement}${refresh};`);
+
+    for (const system of this.systems) {
+      const header = system.abstract
+        ? `system type "${system.name}"`
+        : `system "${system.name}"${system.typeName ? ` of type "${system.typeName}"` : ''}`;
+      lines.push(`${header} begin`);
+      for (const member of system.members || []) {
+        const visibility = member.visibility === 'exposed' ? ' visibility exposed' : '';
+        if (member.kind === 'queue') {
+          lines.push(`  queue "${member.symbol}" -> "${member.queueName}" type "${member.dataTypeId || 'text-string'}"${visibility};`);
+        } else {
+          lines.push(`  service "${member.symbol}" -> "${member.serviceId}"${visibility};`);
+        }
+      }
+      lines.push('end;');
+    }
+
+    const meta = this.metadata || {};
+    if (meta.role) lines.push(`role ${String(meta.role).toLowerCase()};`);
+    for (const lib of meta.libraries || []) {
+      const libSource = String(lib.source || 'librarian').toLowerCase();
+      lines.push(`library "${lib.id}" from ${libSource};`);
+    }
+    for (const use of meta.uses || []) {
+      lines.push(`use "${use.id}"${use.alias ? ` as ${use.alias}` : ''};`);
+    }
+    for (const mapper of meta.mapperImports || []) {
+      lines.push(`import mapper "${mapper.id}" from mapper;`);
+    }
+
+    for (const item of interopDecls) {
+      lines.push(`interop ${item.kind.toLowerCase()} "${item.target}";`);
+    }
+
+    for (const database of this.databases) {
+      lines.push(`database ${database.symbol} type ${database.typeName};`);
+    }
+
+    for (const route of this.routers) {
+      lines.push(`router "${route.mapperId}-route" input "${route.fromQueue}" begin`);
+      lines.push(`  output "${route.toQueue}" when "output := 1;" transform "output := map('${route.mapperId}', src);";`);
+      lines.push('end;');
+    }
+
+    if (this.globals.size > 0) {
+      lines.push('var');
+      for (const [name, type] of this.globals.entries()) {
+        lines.push(`  ${name} : ${type};`);
+      }
+    }
+
+    for (const proc of this.procedures) {
+      const paramList = proc.params.map(p => `${p.name} : ${p.type}`).join('; ');
+      lines.push(`procedure ${proc.name}(${paramList});`);
+      if (proc.localVars.size > 0) {
+        lines.push('var');
+        for (const [name, type] of proc.localVars.entries()) {
+          lines.push(`  ${name} : ${type};`);
+        }
+      }
+      lines.push('begin');
+      for (const s of proc.body) lines.push(`  ${s}`);
+      lines.push('end;');
+    }
+
+    for (const fn of this.functions) {
+      const paramList = fn.params.map(p => `${p.name} : ${p.type}`).join('; ');
+      lines.push(`function ${fn.name}(${paramList}) : ${fn.returnType};`);
+      if (fn.localVars.size > 0) {
+        lines.push('var');
+        for (const [name, type] of fn.localVars.entries()) {
+          lines.push(`  ${name} : ${type};`);
+        }
+      }
+      lines.push('begin');
+      for (const s of fn.body) lines.push(`  ${s}`);
+      lines.push('end;');
+    }
+
+    lines.push('begin');
+    for (const s of this.mainStatements) {
+      lines.push(`  ${s}`);
+    }
+    lines.push('end.');
+
+    return lines.join('\n');
+  }
+}
+
+export function compileVbishWithAntlr(sourceText, options = {}) {
+  const source = String(sourceText || '');
+  const lexer = new VbishLexer(new antlr4.InputStream(source));
+  const lexerErrors = new CollectingErrorListener();
+  lexer.removeErrorListeners();
+  lexer.addErrorListener(lexerErrors);
+  const parser = new VbishParser(new antlr4.CommonTokenStream(lexer));
+  const parserErrors = new CollectingErrorListener();
+  parser.removeErrorListeners();
+  parser.addErrorListener(parserErrors);
+  const tree = parser.compilationUnit();
+
+  const syntaxErrors = [...lexerErrors.errors, ...parserErrors.errors];
+  const runtimeMatch = /^\s*(?:PULSE\s+)?(SERVICE|DAEMON|PROGRAM)\s+(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_-]*))(?:\s+ON\s+(LOCAL|PARENT|CHILD|SIBLING|ALTERNATE))?(?:\s+EVERY\s+(\d+)\s*(MS|S|M|SECOND|SECONDS)?)?/im.exec(source);
+  const interop = collectMatches(source, /\bINTEROP\s+(WFL|WORKFLOW|PASCALISH|COBOLISH|VBISH)\s+"([^"]+)"(?:\s+AS\s+([A-Za-z_][A-Za-z0-9_-]*))?/gi, (match) => ({
+    kind: String(match[1]).toUpperCase(), target: String(match[2]), alias: String(match[3] || '').trim() || null
+  }));
+  const members = collectMatches(source, /\b(?:SUB|FUNCTION)\s+([A-Za-z_][A-Za-z0-9_-]*)/gi, (match) => String(match[1]));
+  const variables = collectMatches(source, /\bDIM\s+([A-Za-z_][A-Za-z0-9_-]*)/gi, (match) => String(match[1]));
+  const databases = collectMatches(source, /\bDATABASE\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))\s+TYPE\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))/gi, (match) => ({
+    symbol: String(match[1] || match[2] || match[3] || '').trim(),
+    typeName: String(match[4] || match[5] || match[6] || '').trim()
+  })).filter((item) => item.symbol && item.typeName);
+  const role = (source.match(/\bROLE\s+([A-Za-z_][A-Za-z0-9_-]*)/i) || [])[1] || null;
+  const libraries = collectMatches(source, /\bLIBRARY\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))\s+FROM\s+(?:LIBRARIAN|"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))/gi, (match) => ({
+    id: String(match[1] || match[2] || match[3] || '').trim(),
+    source: String(match[4] || match[5] || match[6] || 'librarian').trim() || 'librarian'
+  })).filter((x) => x.id);
+  const uses = collectMatches(source, /\bUSE\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))(?:\s+AS\s+([A-Za-z_][A-Za-z0-9_-]*))?/gi, (match) => ({
+    id: String(match[1] || match[2] || match[3] || '').trim(),
+    alias: String(match[4] || '').trim() || null
+  })).filter((x) => x.id);
+  const mapperImports = collectMatches(source, /\bIMPORT\s+MAPPER\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))\s+FROM\s+(?:MAPPER|LIBRARIAN|"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))/gi, (match) => ({
+    id: String(match[1] || match[2] || match[3] || '').trim(),
+    source: String(match[4] || match[5] || match[6] || 'mapper').trim() || 'mapper'
+  })).filter((x) => x.id);
+
+  let pascalishSource = '';
+  let visitor = null;
+  if (syntaxErrors.length === 0) {
+    try {
+      visitor = new VbishToPascalishVisitor({ role, libraries, uses, mapperImports });
+      visitor.visitCompilationUnit(tree);
+      const runtimeUnit = runtimeMatch ? {
+        kind: runtimeMatch[1].toLowerCase(),
+        id: runtimeMatch[2] || runtimeMatch[3],
+        placement: String(runtimeMatch[4] || 'LOCAL').toLowerCase(),
+        interval: Number(runtimeMatch[5] || 0),
+        unit: String(runtimeMatch[6] || 'MS').toLowerCase()
+      } : { kind: 'program', id: 'vbish-program', placement: 'local' };
+      pascalishSource = visitor.toPascalishSource(runtimeUnit, interop);
+    } catch {
+      // fallback
+    }
+  }
+
+  return {
+    language: 'vbish', version: 1, compiledAt: new Date().toISOString(), fileName: options.fileName || null,
+    valid: syntaxErrors.length === 0, syntaxErrors, syntaxErrorCount: syntaxErrors.length,
+    runtime: runtimeMatch ? { kind: runtimeMatch[1].toLowerCase(), id: runtimeMatch[2] || runtimeMatch[3], placement: String(runtimeMatch[4] || 'LOCAL').toLowerCase(), interval: Number(runtimeMatch[5] || 0), unit: String(runtimeMatch[6] || 'MS').toLowerCase() } : null,
+    role,
+    libraries,
+    uses,
+    mapperImports,
+    interop, members, variables, databases: visitor?.databases?.length ? visitor.databases : databases, systems: visitor?.systems || [], source, pascalishSource
+  };
+}

@@ -1143,6 +1143,9 @@ bool PMachine::closeFile(int handle) {
 bool PMachine::readLine(int handle, String& outLine) {
     return ffs != nullptr && ffs->readLine(handle, outLine);
 }
+bool PMachine::readRecord(int handle, String& outLine) {
+    return ffs != nullptr && ffs->readRecord(handle, outLine);
+}
 bool PMachine::writeLine(int handle, const String& line) {
     return ffs != nullptr && ffs->writeLine(handle, line);
 }
@@ -1570,7 +1573,7 @@ static Instructions parseTextPCode(const std::string& text, bool hosted = false)
         const bool hasLabelToken = colon != std::string::npos
             && colon > 0
             && (firstWhitespace == std::string::npos || colon < firstWhitespace)
-            && isalpha(static_cast<unsigned char>(line[0]))
+            && (isalpha(static_cast<unsigned char>(line[0])) || line[0] == '_')
             && std::all_of(
                 line.begin(),
                 line.begin() + colon,
@@ -1765,13 +1768,6 @@ void PMachine::runInstructions(size_t instructionCount,
                               const std::function<PInstruction(size_t)>& instructionAt,
                               int startPc, HostExecutionStorage* storage) {
     hostedStorageError = nullptr;
-    if (instructionCount == 1) {
-        const PInstruction first = instructionAt(0);
-        if (first.opcode == OP_COBOL_PROGRAM) {
-            runCobolProgram(first.strOperand);
-            return;
-        }
-    }
     auto& gFlowState = flowState;
     static const size_t MAX_RUN_STEPS = 200000;
 #if defined(PULSE_ESP8266_SENSOR)
@@ -1785,13 +1781,11 @@ void PMachine::runInstructions(size_t instructionCount,
     static const size_t INITIAL_NAME_FRAME_CAPACITY = 8;
     static const size_t MAX_RETAINED_TRACE_ENTRIES = 128;
     Value stack[STACK_SIZE];
-    std::vector<std::string> localStringPool;
-    std::unique_ptr<HostExecutionStorage> localExecutionStorage;
-    if (hostCallHook && !storage) {
-        localExecutionStorage.reset(new (std::nothrow) HostExecutionStorage);
+    if (!storage) {
+        if (!executionStorage) executionStorage.reset(new (std::nothrow) HostExecutionStorage);
         bool ready = false;
-        if (localExecutionStorage) {
-            try { ready = localExecutionStorage->prepare(); }
+        if (executionStorage) {
+            try { ready = executionStorage->prepare(); }
             catch (const std::bad_alloc&) { ready = false; }
         }
         if (!ready) {
@@ -1808,15 +1802,33 @@ void PMachine::runInstructions(size_t instructionCount,
             if (runtimeUnit.kind == RuntimeUnitKind::Program) unloadUnit();
             return;
         }
-        storage = localExecutionStorage.get();
+        storage = executionStorage.get();
     }
-    HostCallStorage localHostCallStorage(hostCallHook != nullptr && !storage);
-    if (storage) storage->reset();
-    HostedFrameStorage* hostedFrames = storage ? &storage->frames : nullptr;
-    ManagedStringHeap* hostedStrings = storage && storage->strings.attached() ? &storage->strings : nullptr;
-    if (storage && !hostedStrings) hostedStorageError = "hosted string arena is not reserved";
-    auto& stringPool = localStringPool;
-    auto& hostCallStorage = storage ? storage->calls : localHostCallStorage;
+    if (!storage->acquire()) {
+        hostedStorageError = "execution storage busy or unavailable";
+        lastRunGlobals.clear();
+        lastRunTextOutput.clear();
+        lastRunTrace.clear();
+        lastRunStepCount = 0;
+        lastRunStepLimitHit = false;
+        running = false;
+        return;
+    }
+    struct StorageLease {
+        HostExecutionStorage& storage;
+        ~StorageLease() { storage.release(); }
+    } storageLease{*storage};
+    storage->reset();
+    if (instructionCount == 1) {
+        const PInstruction first = instructionAt(0);
+        if (first.opcode == OP_COBOL_PROGRAM) {
+            runCobolProgram(first.strOperand, *storage);
+            return;
+        }
+    }
+    HostedFrameStorage* hostedFrames = hostCallHook ? &storage->frames : nullptr;
+    ManagedStringHeap* hostedStrings = &storage->strings;
+    auto& hostCallStorage = storage->calls;
     using NameBinding = std::pair<std::string, Value>;
     using NameFrame = std::vector<NameBinding>;
     std::vector<NameFrame> nameFrames;
@@ -1857,6 +1869,8 @@ void PMachine::runInstructions(size_t instructionCount,
     };
     struct FileSession {
         int ffsHandle = -1;
+        bool textFile = false;
+        bool writable = false;
         size_t cursor = 0;
         std::vector<std::string> rows;
     };
@@ -1864,12 +1878,7 @@ void PMachine::runInstructions(size_t instructionCount,
     std::map<std::string, IntCollection> stacks;
     std::map<std::string, IntCollection> priorityQueues;
     std::map<std::string, std::map<std::string, Value>> records;
-    struct ObjectStorage {
-        uint8_t arena[8192];
-        ManagedObjects<> objects;
-        ObjectStorage() { objects.attach(arena, sizeof(arena)); }
-    };
-    std::unique_ptr<ObjectStorage> objectStorage;
+    auto* objectStorage = storage;
     // Pascal sets: ordered, duplicate-free ordinal members.
     std::map<std::string, std::set<int>> sets;
     std::map<int, bool> tasks;
@@ -1889,12 +1898,11 @@ void PMachine::runInstructions(size_t instructionCount,
             if (hostedStrings) {
                 const char* data = hostedStrings->data(value.handle);
                 if (!data) {
-                    if (hostedStrings->valid(value.handle)) hostedStorageError = hostedStrings->error();
+                    hostedStorageError = hostedStrings->error() ? hostedStrings->error() : "invalid managed string handle";
                     return std::string();
                 }
                 return std::string(data, hostedStrings->size(value.handle));
             }
-            return value.handle < stringPool.size() ? stringPool[value.handle] : std::string();
         }
         if (value.kind == ValueKind::EnumRef) {
             return getEnumValueName(value.handle, value.i);
@@ -1929,7 +1937,12 @@ void PMachine::runInstructions(size_t instructionCount,
                         live[value.handle] = true;
                 };
                 for (int index = 0; index < sp; ++index) mark(stack[index]);
-                hostedFrames->forEachValue(mark);
+                if (hostedFrames) hostedFrames->forEachValue(mark);
+                for (const auto& frame : nameFrames)
+                    for (const auto& binding : frame) mark(binding.second);
+                for (const auto& variable : extendableStorage)
+                    for (size_t index = 0; index < variable.elementCount; ++index)
+                        mark(variable.slots[index].value);
                 if (objectStorage) objectStorage->objects.forEachValue(mark);
                 for (const auto& record : records)
                     for (const auto& field : record.second) mark(field.second);
@@ -1950,8 +1963,6 @@ void PMachine::runInstructions(size_t instructionCount,
             stack[sp++] = Value::makeString(handle);
             return;
         }
-        stringPool.push_back(text);
-        stack[sp++] = Value::makeString(static_cast<uint16_t>(stringPool.size() - 1));
     };
 
     // depth 1 is the top of stack, 2 the value beneath it.
@@ -2279,7 +2290,7 @@ void PMachine::runInstructions(size_t instructionCount,
             gFlowState["__runtime_error"] = objectStorage->objects.error();
             break;
         }
-        if (hostCallHook && (hostedStorageError || gFlowState.count("__runtime_error"))) break;
+        if (hostedStorageError || gFlowState.count("__runtime_error")) break;
         if (hostCallHook && (sp < 0 || sp > std::min(STACK_SIZE, 256)
             || static_cast<uint32_t>(millis() - hostedStartedAt) >= 8000)) {
             gFlowState["__runtime_error"] = "hosted invocation resource limit exceeded";
@@ -2361,7 +2372,7 @@ void PMachine::runInstructions(size_t instructionCount,
         allocationStage = "instruction-fetch";
         const auto instr = instructionAt(pc);
         allocationStage = "instruction-execute";
-        if ((!hostCallHook || debugRunStatus.load() != 0)
+        if (((!hostCallHook && traceEnabled) || debugRunStatus.load() != 0)
             && lastRunTrace.size() < MAX_RETAINED_TRACE_ENTRIES) {
             lastRunTrace.push_back(
                 std::string("{\"pc\":") + std::to_string(pc)
@@ -2809,7 +2820,7 @@ void PMachine::runInstructions(size_t instructionCount,
             // Value is on top of stack, the zero-based index just below it; mirrors
             // OP_STORE_NAME's per-kind branching, then resolves the computed slot name.
             if (isStringAtDepth(1)) {
-                std::string value = popString();
+                Value value = stack[--sp];
                 if (sp < 1) { ++pc; continue; }
                 int idx = stack[--sp];
                 if (idx < 0 || idx >= instr.intOperand) {
@@ -2818,7 +2829,7 @@ void PMachine::runInstructions(size_t instructionCount,
                 }
                 const std::string varName = indexedArrayName(instr.strOperand, idx);
                 if (ExtendableValueSlot* slot = extendedSlot(instr.strOperand, static_cast<size_t>(idx))) {
-                    if (!storeExtendedString(*slot, value)) {
+                    if (!storeExtendedValue(*slot, value)) {
                         gFlowState["__runtime_error"] = std::string("unable to allocate extendable array value: ") + instr.strOperand;
                         goto pmachineRunExit;
                     }
@@ -2828,8 +2839,10 @@ void PMachine::runInstructions(size_t instructionCount,
                     ++pc;
                     continue;
                 }
-                namedStringVariables[varName] = value;
+                assignName(varName, value);
+                namedStringVariables.erase(varName);
                 namedRealVariables.erase(varName);
+                namedEnumVariables.erase(varName);
             } else if (sp > 0 && stack[sp - 1].isReal()) {
                 float value = stack[--sp].asReal();
                 if (sp < 1) { ++pc; continue; }
@@ -2923,13 +2936,6 @@ void PMachine::runInstructions(size_t instructionCount,
                 else if (sp < argc) error = "object binding stack underflow";
                 else if (sp - argc >= STACK_SIZE) error = "stack overflow";
                 if (error) { gFlowState["__runtime_error"] = error; goto pmachineRunExit; }
-                if (!objectStorage) {
-                    objectStorage.reset(new (std::nothrow) ObjectStorage);
-                    if (!objectStorage) {
-                        gFlowState["__runtime_error"] = "cannot reserve managed object storage";
-                        goto pmachineRunExit;
-                    }
-                }
                 auto& objects = objectStorage->objects;
                 const Value* args = stack + sp - argc;
                 Value result;
@@ -2980,9 +2986,6 @@ void PMachine::runInstructions(size_t instructionCount,
                         if (hostedStrings) {
                             textData = hostedStrings->data(stack[i].handle);
                             textSize = hostedStrings->size(stack[i].handle);
-                        } else if (stack[i].handle < stringPool.size()) {
-                            textData = stringPool[stack[i].handle].data();
-                            textSize = stringPool[stack[i].handle].size();
                         }
                         if (!textData) {
                             hostedStorageError = hostedStrings && hostedStrings->error()
@@ -3116,6 +3119,104 @@ void PMachine::runInstructions(size_t instructionCount,
                 const Value top = stack[--sp];
                 stack[sp++] = top.isEnum() ? top.i : static_cast<int>(top);
             }
+            ++pc;
+            continue;
+        }
+        // Generic string and numeric primitives shared with the JavaScript runtime so
+        // language runtime libraries can be written in p-code.
+        case OP_STRLEN: {
+            const std::string text = popString();
+            if (sp < STACK_SIZE) stack[sp++] = static_cast<int>(text.size());
+            ++pc;
+            continue;
+        }
+        case OP_SUBSTR: {
+            const int count = sp > 0 ? static_cast<int>(stack[--sp].asReal()) : 0;
+            const int start = sp > 0 ? static_cast<int>(stack[--sp].asReal()) : 0;
+            const std::string text = popString();
+            const size_t from = static_cast<size_t>(start < 0 ? 0 : (start > static_cast<int>(text.size()) ? static_cast<int>(text.size()) : start));
+            pushString(count <= 0 ? std::string() : text.substr(from, static_cast<size_t>(count)));
+            ++pc;
+            continue;
+        }
+        case OP_CHR: {
+            const int code = sp > 0 ? static_cast<int>(stack[--sp].asReal()) : 0;
+            pushString(std::string(1, static_cast<char>(code & 0xFF)));
+            ++pc;
+            continue;
+        }
+        case OP_ASC: {
+            const std::string text = popString();
+            if (sp < STACK_SIZE) stack[sp++] = text.empty() ? 0 : static_cast<int>(static_cast<unsigned char>(text[0]));
+            ++pc;
+            continue;
+        }
+        case OP_TRUNC: {
+            if (sp > 0) {
+                const Value top = stack[sp - 1];
+                stack[sp - 1] = top.isReal() ? static_cast<int>(top.asReal()) : static_cast<int>(top);
+            }
+            ++pc;
+            continue;
+        }
+        case OP_TO_REAL: {
+            if (sp > 0) stack[sp - 1] = Value::makeReal(stack[sp - 1].asReal());
+            ++pc;
+            continue;
+        }
+        case OP_FOPEN: {
+            std::string mode = popString();
+            const std::string name = trimCopy(popString());
+            int handle = 0;
+            if (!name.empty() && (mode == "r" || mode == "w" || mode == "a")) {
+                const int ffsHandle = openFile(String(name.c_str()), String(mode.c_str()));
+                if (ffsHandle > 0) {
+                    FileSession session;
+                    session.ffsHandle = ffsHandle;
+                    session.textFile = true;
+                    session.writable = mode != "r";
+                    handle = nextFileHandle++;
+                    files[handle] = session;
+                }
+            }
+            if (sp < STACK_SIZE) stack[sp++] = handle;
+            ++pc;
+            continue;
+        }
+        case OP_FREADLN: {
+            const int handle = sp > 0 ? static_cast<int>(stack[--sp]) : 0;
+            auto file = files.find(handle);
+            String line;
+            const bool available = file != files.end() && file->second.textFile && !file->second.writable
+                && readRecord(file->second.ffsHandle, line);
+            pushString(available ? std::string(line.c_str()) : std::string());
+            if (sp < STACK_SIZE) stack[sp++] = available ? 1 : 0;
+            ++pc;
+            continue;
+        }
+        case OP_FWRITELN: {
+            const std::string line = popString();
+            const int handle = sp > 0 ? static_cast<int>(stack[--sp]) : 0;
+            auto file = files.find(handle);
+            if (file != files.end() && file->second.textFile && file->second.writable)
+                writeLine(file->second.ffsHandle, String(line.c_str()));
+            ++pc;
+            continue;
+        }
+        case OP_FCLOSE: {
+            const int handle = sp > 0 ? static_cast<int>(stack[--sp]) : 0;
+            auto file = files.find(handle);
+            if (file != files.end() && file->second.textFile) {
+                closeFile(file->second.ffsHandle);
+                files.erase(file);
+            }
+            ++pc;
+            continue;
+        }
+        case OP_READLN: {
+            // The device has no interactive console input; reads report end of file.
+            pushString(std::string());
+            if (sp < STACK_SIZE) stack[sp++] = 0;
             ++pc;
             continue;
         }
@@ -3857,7 +3958,9 @@ void PMachine::runInstructions(size_t instructionCount,
                 goto pmachineRunExit;
             }
         } else {
-            gFlowState["__runtime_error"] = std::string("unsupported opcode 0x") + std::to_string(instr.opcode);
+            char opcodeHex[8];
+            snprintf(opcodeHex, sizeof(opcodeHex), "%02X", static_cast<unsigned>(instr.opcode));
+            gFlowState["__runtime_error"] = std::string("unsupported opcode 0x") + opcodeHex;
             goto pmachineRunExit;
         }
     }
@@ -3868,7 +3971,8 @@ void PMachine::runInstructions(size_t instructionCount,
         // Invocation handles cannot persist in extended globals after this arena dies.
         for (auto& variable : extendableStorage)
             for (size_t index = 0; index < variable.elementCount; ++index)
-                if (variable.slots[index].value.isObject()) variable.slots[index].value = 0;
+                if (variable.slots[index].value.isObject() || variable.slots[index].value.isString())
+                    variable.slots[index].value = 0;
         this->pc = static_cast<uint16_t>(std::max(0, pc));
     running = false;
     if (hostedStorageError) {
@@ -3973,7 +4077,7 @@ void PMachine::runInstructions(size_t instructionCount,
     PMTRACE(Serial.println("[DEBUG] Execution finished."));
 }
 
-void PMachine::runCobolProgram(const std::string& pcodeText) {
+void PMachine::runCobolProgram(const std::string& pcodeText, HostExecutionStorage& storage) {
     flowState.clear();
     decltype(lastRunTextOutput)().swap(lastRunTextOutput);
     decltype(lastRunTrace)().swap(lastRunTrace);
@@ -3988,6 +4092,8 @@ void PMachine::runCobolProgram(const std::string& pcodeText) {
     for (const auto& entry : cobolLocalsByLabel) procedures[entry.first].locals = entry.second;
 
     cobolvm::RunOptions options;
+    options.variableArena = storage.objectArenaData();
+    options.variableArenaBytes = HostExecutionStorage::OBJECT_ARENA_BYTES;
     options.procedures = &procedures;
     options.globals = &cobolGlobals;
     options.hasSourceMessage = !currentMessage.empty();

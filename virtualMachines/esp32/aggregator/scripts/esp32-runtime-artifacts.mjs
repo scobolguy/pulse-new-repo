@@ -5,12 +5,20 @@
 // subset, and the signature covers the raw pcode text only, so stripping is safe.
 
 export const DEBUG_ONLY_PROGRAM_MAP_KEYS = Object.freeze([
-  'sourceMap', 'symbols', 'fields', 'files', 'generatedAt'
+  'sourceMap', 'symbols', 'fields', 'files', 'generatedAt',
+  'classDeclarations', 'typeDeclarations'
 ]);
 
 export function toRuntimeProgramMap(programMap) {
   const runtime = { ...(programMap || {}) };
   for (const key of DEBUG_ONLY_PROGRAM_MAP_KEYS) delete runtime[key];
+  if (runtime.procedures && !Array.isArray(runtime.procedures)) {
+    runtime.procedures = Object.fromEntries(Object.entries(runtime.procedures).map(([label, procedure]) =>
+      [label, {
+        params: procedure.params || [],
+        ...(procedure.locals ? { locals: procedure.locals } : {})
+      }]));
+  }
   if (Array.isArray(runtime.entries)) {
     // The device executes compiled `ops`; it discards `conversionRule` text when ops exist.
     runtime.entries = runtime.entries.map((entry) => (!Array.isArray(entry?.items) ? entry : {

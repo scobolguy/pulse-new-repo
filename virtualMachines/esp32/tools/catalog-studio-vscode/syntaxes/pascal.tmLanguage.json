@@ -32,7 +32,7 @@
       "patterns": [
         {
           "name": "keyword.control.pascal",
-          "match": "\\b(?:and|array|asm|begin|case|const|constructor|destructor|div|do|downto|else|end|except|exports|file|finalization|finally|for|function|goto|if|implementation|in|inherited|initialization|inline|interface|label|library|mod|nil|not|object|of|operator|or|otherwise|packed|procedure|program|property|raise|record|repeat|requires|set|shl|shr|specialize|then|threadvar|to|try|type|unit|until|uses|var|while|with|xor)\\b"
+          "match": "(?i)\\b(?:and|array|asm|begin|case|const|constructor|destructor|div|do|downto|else|end|except|exports|file|finalization|finally|for|function|goto|if|implementation|in|inherited|initialization|inline|interface|label|library|mod|nil|not|object|of|operator|or|otherwise|packed|procedure|program|property|raise|record|repeat|requires|set|shl|shr|specialize|then|threadvar|to|try|type|unit|until|uses|var|while|with|xor)\\b"
         }
       ]
     },
@@ -40,13 +40,13 @@
       "patterns": [
         {
           "name": "support.type.pascal",
-          "match": "\\b(?:ansistring|boolean|byte|cardinal|char|currency|double|extended|int64|integer|longint|longword|real|shortint|single|string|text|uint64|unicodeString|variant|word)\\b"
+          "match": "(?i)\\b(?:ansistring|boolean|byte|cardinal|char|currency|double|extended|int64|integer|longint|longword|real|shortint|single|string|text|uint64|unicodeString|variant|word)\\b"
         }
       ]
     },
     "constants": {
       "patterns": [
-        { "name": "constant.language.pascal", "match": "\\b(?:false|true)\\b" }
+        { "name": "constant.language.pascal", "match": "(?i)\\b(?:false|true)\\b" }
       ]
     },
     "operators": {

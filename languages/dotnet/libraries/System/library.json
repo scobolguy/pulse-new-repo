@@ -1,0 +1,15 @@
+{
+  "id": "System",
+  "version": "0.1.0",
+  "languages": ["csharp", "vbish"],
+  "types": ["int", "bool", "string", "void"],
+  "members": [
+    { "name": "System.Console.Write", "parameters": ["int|bool|string"], "result": "void" },
+    { "name": "System.Console.WriteLine", "parameters": ["int|bool|string"], "result": "void" },
+    { "name": "System.Console.WriteLine", "parameters": [], "result": "void" }
+  ],
+  "intrinsics": {
+    "system.int32.divide": { "arity": 2, "result": "int", "targets": ["js"] },
+    "system.int32.remainder": { "arity": 2, "result": "int", "targets": ["js"] }
+  }
+}

@@ -20,6 +20,8 @@ const IGNORED_DIR_NAMES = new Set([
 
 const SOURCE_ROOTS = [
   path.resolve(process.cwd(), 'grammar'),
+  ...['vbish', 'mapl', 'wfl'].map(language =>
+    path.resolve(process.cwd(), '../../../languages', language, 'grammar')),
   path.resolve(process.cwd(), 'data'),
   path.resolve(process.cwd(), '..', 'src')
 ];

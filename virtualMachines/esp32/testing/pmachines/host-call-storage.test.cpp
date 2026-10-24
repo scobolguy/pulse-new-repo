@@ -49,12 +49,25 @@ int main() {
     pmachine::HostExecutionStorage execution;
     assert(execution.prepare());
     assert(execution.strings.attached());
+    assert(execution.objects.attached());
+    assert(execution.acquire());
+    assert(!execution.acquire());
+    execution.release();
     assert(execution.strings.arenaBytes() == pmachine::HostExecutionStorage::STRING_ARENA_BYTES);
     assert(execution.calls.result.text.capacity() >= 1024);
     const std::string text(512, 'x');
     const size_t preparedAllocations = allocations;
     for (size_t invocation = 0; invocation < 100; ++invocation) {
         execution.reset();
+        pmachine::Value object;
+        assert(execution.objects.create(1, object));
+        const uint16_t string = execution.strings.store("object-string", 13);
+        assert(string != pmachine::ManagedStringHeap::INVALID);
+        assert(execution.objects.set(object, 0, pmachine::Value::makeString(string)));
+        assert(execution.objects.root(object));
+        assert(execution.objects.reconcile());
+        execution.reset();
+        assert(execution.objects.stats().liveHandles == 0);
         assert(execution.calls.result.text.empty());
         assert(execution.strings.usedBytes() == 0);
         for (size_t index = 0; index < 16; ++index)

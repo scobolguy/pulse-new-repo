@@ -1,6 +1,7 @@
 // COBOL P-code parser and interpreter. Semantics follow parsePcode and executeProgramImpl in
 // pmachines/javascript/src/runtime.mjs for every instruction the COBOL compiler emits.
 #include "cobol_vm_internal.h"
+#include "managed_heap.h"
 
 #include <climits>
 #include <cmath>
@@ -547,15 +548,67 @@ private:
     struct Frame {
         uint32_t serial = 0;
         int returnPc = 0;
-        std::vector<std::pair<int, Value>> vars;
+        std::vector<std::pair<int, uint16_t>> vars;
     };
 
     const Program& program;
     const RunOptions& options;
     RunResult& result;
     std::vector<Value> stack;
-    std::vector<Value> globals;
-    std::vector<uint8_t> globalPresent;
+    std::vector<uint16_t> globals;
+    pmachine::ManagedHeap<256> variables;
+    std::unique_ptr<uint8_t[]> ownedArena;
+    struct StoredValue {
+        Kind kind;
+        bool negative;
+        int32_t scale;
+        double number;
+        int32_t frame, name, offset, length;
+        uint32_t serial;
+    };
+    Value readVariable(uint16_t handle) {
+        const char* bytes = variables.data(handle);
+        if (!bytes || variables.size(handle) < sizeof(StoredValue)) fail("Invalid managed COBOL variable");
+        StoredValue stored;
+        std::memcpy(&stored, bytes, sizeof(stored));
+        Value value;
+        value.kind = stored.kind;
+        value.negative = stored.negative;
+        value.scale = stored.scale;
+        value.number = stored.number;
+        value.frame = stored.frame;
+        value.name = stored.name;
+        value.offset = stored.offset;
+        value.length = stored.length;
+        value.serial = stored.serial;
+        value.text.assign(bytes + sizeof(stored), variables.size(handle) - sizeof(stored));
+        return value;
+    }
+    void writeVariable(uint16_t& handle, const Value& value) {
+        const size_t bytes = sizeof(StoredValue) + value.text.size();
+        uint16_t next = handle;
+        // Reuse the existing handle when the payload shape has not changed.
+        if (!variables.valid(handle) || variables.size(handle) != bytes) {
+            if (!variables.allocate(bytes, next))
+                fail(std::string("COBOL managed variable storage: ") + variables.error());
+        }
+        StoredValue stored{};
+        stored.kind = value.kind;
+        stored.negative = value.negative;
+        stored.scale = value.scale;
+        stored.number = value.number;
+        stored.frame = value.frame;
+        stored.name = value.name;
+        stored.offset = value.offset;
+        stored.length = value.length;
+        stored.serial = value.serial;
+        char* target = const_cast<char*>(variables.data(next));
+        if (!target) fail("Unable to access managed COBOL variable");
+        std::memcpy(target, &stored, sizeof(stored));
+        if (!value.text.empty()) std::memcpy(target + sizeof(stored), value.text.data(), value.text.size());
+        if (next != handle && variables.valid(handle)) variables.release(handle);
+        handle = next;
+    }
     std::vector<Frame> frames;
     uint32_t nextSerial = 1;
     std::vector<std::string> dynamicNames;
@@ -609,9 +662,9 @@ private:
 
     void push(Value value) { stack.push_back(std::move(value)); }
 
-    Value* slotIn(int frameIndex, int name) {
+    uint16_t* slotIn(int frameIndex, int name) {
         if (frameIndex == 0) {
-            if (name < static_cast<int>(globalPresent.size()) && globalPresent[name]) return &globals[name];
+            if (name >= 0 && name < static_cast<int>(globals.size()) && variables.valid(globals[name])) return &globals[name];
             return nullptr;
         }
         for (auto& entry : frames[frameIndex - 1].vars) {
@@ -620,9 +673,9 @@ private:
         return nullptr;
     }
 
-    Value* findVar(int frameIndex, int name, int& owner) {
+    uint16_t* findVar(int frameIndex, int name, int& owner) {
         for (int index = frameIndex; index >= 0; --index) {
-            if (Value* slot = slotIn(index, name)) {
+            if (uint16_t* slot = slotIn(index, name)) {
                 owner = index;
                 return slot;
             }
@@ -639,10 +692,10 @@ private:
     Value resolveVar(int frameIndex, int name, int depth = 0) {
         if (depth > 256) fail("P-code reference chain is too deep");
         int owner = 0;
-        Value* slot = findVar(frameIndex, name, owner);
+        uint16_t* slot = findVar(frameIndex, name, owner);
         if (!slot) return numValue(0);
-        if (slot->kind != K_REF) return *slot;
-        const Value ref = *slot;
+        const Value ref = readVariable(*slot);
+        if (ref.kind != K_REF) return ref;
         checkReference(ref);
         Value resolved = resolveVar(ref.frame, ref.name, depth + 1);
         if (ref.offset < 0) return resolved;
@@ -654,19 +707,18 @@ private:
 
     void setGlobal(int name, Value value) {
         if (name >= static_cast<int>(globals.size())) {
-            globals.resize(name + 1);
-            globalPresent.resize(name + 1, 0);
+            globals.resize(name + 1, static_cast<uint16_t>(pmachine::ManagedHeap<256>::INVALID));
         }
-        globals[name] = std::move(value);
-        globalPresent[name] = 1;
+        writeVariable(globals[name], value);
     }
 
     void assignVar(int frameIndex, int name, Value value, int depth = 0) {
         if (depth > 256) fail("P-code reference chain is too deep");
         int owner = 0;
-        Value* slot = findVar(frameIndex, name, owner);
-        if (slot && slot->kind == K_REF) {
-            const Value ref = *slot;
+        uint16_t* slot = findVar(frameIndex, name, owner);
+        const Value existing = slot ? readVariable(*slot) : Value();
+        if (slot && existing.kind == K_REF) {
+            const Value ref = existing;
             checkReference(ref);
             if (ref.offset >= 0) {
                 std::string base = jsString(resolveVar(ref.frame, ref.name, depth + 1));
@@ -684,13 +736,15 @@ private:
             return;
         }
         if (slot) {
-            *slot = std::move(value);
+            writeVariable(*slot, value);
             return;
         }
         if (frameIndex == 0) {
             setGlobal(name, std::move(value));
         } else {
-            frames[frameIndex - 1].vars.emplace_back(name, std::move(value));
+            auto& entries = frames[frameIndex - 1].vars;
+            entries.emplace_back(name, static_cast<uint16_t>(pmachine::ManagedHeap<256>::INVALID));
+            writeVariable(entries.back().second, value);
         }
     }
 
@@ -870,8 +924,8 @@ void Machine::compare(Op op) {
 
 void Machine::exportGlobals() {
     for (size_t name = 0; name < globals.size(); ++name) {
-        if (!globalPresent[name]) continue;
-        const Value& value = globals[name];
+        if (!variables.valid(globals[name])) continue;
+        const Value value = readVariable(globals[name]);
         GlobalOut out;
         switch (value.kind) {
             case K_STR:
@@ -900,8 +954,15 @@ void Machine::exportGlobals() {
 void Machine::run() {
     const std::vector<Instr>& code = program.code;
     const int count = static_cast<int>(code.size());
-    globals.assign(program.names.size(), Value());
-    globalPresent.assign(program.names.size(), 0);
+    if (options.variableArena) {
+        if (!options.variableArenaBytes) fail("COBOL managed variable arena has zero capacity");
+        variables.attach(options.variableArena, options.variableArenaBytes);
+    } else {
+        const size_t bytes = options.variableArenaBytes ? options.variableArenaBytes : 32768;
+        ownedArena.reset(new uint8_t[bytes]);
+        variables.attach(ownedArena.get(), bytes);
+    }
+    globals.assign(program.names.size(), static_cast<uint16_t>(pmachine::ManagedHeap<256>::INVALID));
     if (options.globals) {
         for (const std::string& name : *options.globals) setGlobal(nameId(utf8ToLatin1(name)), numValue(0));
     }
@@ -1086,16 +1147,22 @@ void Machine::run() {
                     bool replaced = false;
                     for (auto& entry : frame.vars) {
                         if (entry.first == name) {
-                            entry.second = value;
+                            writeVariable(entry.second, value);
                             replaced = true;
                         }
                     }
-                    if (!replaced) frame.vars.emplace_back(name, std::move(value));
+                    if (!replaced) {
+                        frame.vars.emplace_back(name, static_cast<uint16_t>(pmachine::ManagedHeap<256>::INVALID));
+                        writeVariable(frame.vars.back().second, value);
+                    }
                 }
                 for (const int name : signature.locals) {
                     bool present = false;
                     for (const auto& entry : frame.vars) present = present || entry.first == name;
-                    if (!present) frame.vars.emplace_back(name, numValue(0));
+                    if (!present) {
+                        frame.vars.emplace_back(name, static_cast<uint16_t>(pmachine::ManagedHeap<256>::INVALID));
+                        writeVariable(frame.vars.back().second, numValue(0));
+                    }
                 }
                 frames.push_back(std::move(frame));
                 pc = instr.a;
@@ -1107,6 +1174,7 @@ void Machine::run() {
                     continue;
                 }
                 pc = frames.back().returnPc;
+                for (const auto& entry : frames.back().vars) variables.release(entry.second);
                 frames.pop_back();
                 continue;
             case O_PRINT:
@@ -1139,8 +1207,9 @@ RunResult CompiledProgram::run(const RunOptions& options) const {
         return result;
     }
     try {
-        Machine machine(*program, options, result);
-        machine.run();
+        // Keep the managed handle table off the ESP32 HTTP task's small stack.
+        std::unique_ptr<Machine> machine(new Machine(*program, options, result));
+        machine->run();
     } catch (const VmError& failure) {
         result.hasError = true;
         result.error = failure.what();

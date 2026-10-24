@@ -9,8 +9,14 @@ export const HOSTED_IMAGE_OPCODES = Object.freeze({
   LOAD: 0x18, LOAD_NAME: 0x18, STORE: 0x19, STORE_NAME: 0x19,
   CALL: 0x1a, RET: 0x1b, EQ: 0x1c, NEQ: 0x1d, LT: 0x1e,
   LE: 0x1f, GT: 0x20, GE: 0x21, CALL_EXT: 0x29,
+  PRINT: 0x22, PRINT_NL: 0x23, PUSH_REAL: 0x57,
   OR: 0x4b, AND: 0x4c, NOT: 0x4d, STREQ: 0x4e, STRNEQ: 0x4f,
   MAP_RETURN: 0x50, CONCAT: 0x56, HALT: 0xff
+});
+
+const OBJECT_BINDINGS = Object.freeze({
+  'object.new': 1, 'object.get': 2, 'object.set': 3,
+  'object.length': 1, 'object.resize': 2
 });
 
 export const HOSTED_IMAGE_PROFILES = Object.freeze({
@@ -45,13 +51,14 @@ export function encodeHostedImage(pcodeText, { profile = 'bounded' } = {}) {
       text = operand.label;
       if (!Number.isInteger(argc) || argc < 0 || argc > 8) throw new Error('Invalid hosted image arity');
       if (mnemonic === 'CALL_EXT') {
-        if (SERVICE_HOST_BINDINGS[text]?.arity !== argc) throw new Error('Invalid hosted image binding');
+        if ((OBJECT_BINDINGS[text] ?? SERVICE_HOST_BINDINGS[text]?.arity) !== argc)
+          throw new Error('Invalid hosted image binding');
         if (SERVICE_HOST_BINDINGS[text]?.capability || SERVICE_HOST_BINDINGS[text]?.desktopOnly || text === 'host.capabilities') {
           throw new Error(`Desktop-only hosted image binding: ${text}`);
         }
       }
-    } else if (['PUSH_STR', 'LOAD', 'LOAD_NAME', 'STORE', 'STORE_NAME', 'MAP_RETURN'].includes(mnemonic)) {
-      text = operand;
+    } else if (['PUSH_STR', 'PUSH_REAL', 'LOAD', 'LOAD_NAME', 'STORE', 'STORE_NAME', 'MAP_RETURN'].includes(mnemonic)) {
+      text = String(operand);
     }
     const bytes = Buffer.from(text, 'utf8');
     if (bytes.includes(0)) throw new Error('NUL in hosted image constant');

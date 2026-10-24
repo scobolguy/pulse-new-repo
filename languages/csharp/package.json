@@ -1,0 +1,14 @@
+{
+  "name": "@pulse/csharp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "exports": { ".": "./src/compile-csharp-to-pcode.mjs" },
+  "scripts": {
+    "compile": "node src/compile-csharp-to-pcode.mjs",
+    "test": "node --test tests/*.mjs",
+    "validate": "node validation/run.mjs",
+    "validate:generics": "node validation/run.mjs --suite generics"
+  }
+}

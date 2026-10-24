@@ -1,0 +1,14 @@
+{
+  "name": "WFL",
+  "scopeName": "source.wfl",
+  "patterns": [
+    { "name": "comment.line.wfl", "match": "(?://|--|#).*$" },
+    { "name": "comment.block.wfl", "begin": "/\\*", "end": "\\*/" },
+    { "name": "string.quoted.double.wfl", "begin": "\"", "end": "\"", "patterns": [{ "name": "constant.character.escape.wfl", "match": "\\\\." }] },
+    { "name": "string.quoted.single.wfl", "begin": "'", "end": "'", "patterns": [{ "name": "constant.character.escape.wfl", "match": "\\\\." }] },
+    { "name": "keyword.control.wfl", "match": "(?i)\\b(?:WORKFLOW|STEP|BEGIN|END|QUEUE|FILE|DATABASE|API|BASE|TYPE|TYPES|MODE|SYNC|ASYNC|MANAGER|CONNECTION|DEPLOYMENT|PROJECT|TARGETS|SERVICE|DAEMON|PROGRAM|HOSTED|STARTUP|OWNER|REPORT|REQUIRES|BINDINGS|INSTANCE|ENDPOINT|READINESS|REMOVE|FROM|CALL|ROUTE|TO|WAIT|COBEGIN|COEND|FLOW|NODE|LINK|KIND|LABEL|CATALOG|SOURCE|AT|TARGET|IP|SERVICES|VIA|SEED|SYSTEM|OF|VISIBILITY|EXPOSED|INTERNAL|LET|DEFAULT|ENVIRONMENT|IF|THEN|ELSE|ENDIF|CLUSTER|CREATE|DEPLOY|EVICT|BIND|DESCRIPTION)\\b" },
+    { "name": "constant.language.wfl", "match": "(?i)\\b(?:TRUE|FALSE)\\b" },
+    { "name": "entity.other.attribute-name.wfl", "match": "@[A-Za-z_][A-Za-z0-9_]*" },
+    { "name": "constant.numeric.wfl", "match": "\\b\\d+(?:\\.\\d+)?\\b" }
+  ]
+}

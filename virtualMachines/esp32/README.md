@@ -22,6 +22,37 @@ If WiFi disconnects after startup, the firmware retries saved profiles every 15
 seconds and returns to the `Pulse-<node-name>-Provision` access point after ten
 failed reconnect attempts.
 
+### Direct remote FFS (without the Aggregator)
+
+Run the existing file-service router standalone on a LAN host:
+
+```powershell
+Set-Location aggregator
+$env:FFS_ROOT = 'C:\pulse-data\esp32\ffs-root'
+$env:FFS_PORT = '4015'
+node scripts\start-file-server.mjs
+```
+
+Allow the board to reach that TCP port. This is an unauthenticated HTTP service
+for a trusted development LAN; do not expose it to the Internet.
+Configure the board using form parameters, then restart it:
+
+```powershell
+curl.exe --fail -X POST http://192.168.2.90/ffs/remote -d "host=192.168.2.11&port=4015"
+curl.exe --fail -X POST http://192.168.2.90/node/restart
+```
+
+The endpoint is saved in NVS and takes effect after restart. SD still takes
+priority; otherwise the board retries the direct endpoint every 15 seconds
+without requiring aggregator discovery. Its files are isolated under
+`nodes/<lowercase-node-name>/public` within `FFS_ROOT`. An explicitly configured
+endpoint is not replaced by aggregator acknowledgements.
+GET `/ffs/remote` reports the configured and candidate URLs and storage
+availability. POST `/ffs/diagnostics` reports `storageBackend: "remote"` once
+connected. Existing `/ffs/upload` and p-machine file/debug APIs then use remote
+FFS transparently; execution remains on the board. Only the endpoint setting is
+stored locally, not program files.
+
 ### ESP32 diagnostic snapshots
 
 Per-operation `[ASYNC]` serial tracing is disabled by default in `esp32dev` and

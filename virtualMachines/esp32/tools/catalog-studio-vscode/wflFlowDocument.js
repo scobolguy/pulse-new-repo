@@ -1,7 +1,7 @@
 'use strict'
 
 // Reads and edits the FLOW block of a WFL document for the Visual Flow designer.
-// Mirrors the flowDecl rules in aggregator/grammar/WorkflowDsl.g4; everything
+// Mirrors the flowDecl rules in languages/wfl/grammar/WorkflowDsl.g4; everything
 // outside the edited FLOW block is preserved byte-for-byte.
 
 const DEFAULT_ANIMATION = Object.freeze({ mode: 'none', target: 'workflow', useMermaidPreview: true })

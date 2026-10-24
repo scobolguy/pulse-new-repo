@@ -1,0 +1,10 @@
+{
+  "name": "Visual Flow Language",
+  "scopeName": "source.vfl",
+  "patterns": [
+    { "name": "support.type.property-name.vfl", "match": "\"(?:[^\"\\\\]|\\\\.)*\"(?=\\s*:)" },
+    { "name": "string.quoted.double.vfl", "begin": "\"", "end": "\"", "patterns": [{ "name": "constant.character.escape.vfl", "match": "\\\\." }] },
+    { "name": "constant.language.vfl", "match": "\\b(?:true|false|null)\\b" },
+    { "name": "constant.numeric.vfl", "match": "-?\\b\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b" }
+  ]
+}

@@ -12,9 +12,15 @@
 #include <esp_heap_caps.h>
 #include <esp_system.h>
 #endif
-#include <LittleFS.h>
 
 namespace {
+
+bool requireStorage(FederatedFileSystem& storage, AsyncWebServerRequest* request) {
+    if (storage.available()) return true;
+    Serial.println("[FFS] Request rejected: no SD or remote storage available");
+    request->send(503, "text/plain", "FFS storage unavailable: no SD or remote filesystem");
+    return false;
+}
 
 bool parseBoolLike(String value, bool defaultValue = false) {
     value.trim();
@@ -49,21 +55,20 @@ String getParamValue(AsyncWebServerRequest* request, const char* name) {
     return String();
 }
 
-bool readLittleFsFile(const String& path, String& out) {
-    if (!LittleFS.exists(path)) return false;
-    File f = LittleFS.open(path, "r");
+bool readFfsFile(FederatedFileSystem& storage, const String& path, String& out) {
+    File f = storage.openReadFile(path);
     if (!f) return false;
     out = f.readString();
     f.close();
     return true;
 }
 
-void appendFlowBundle(JsonArray bundles, const String& bundleName) {
+void appendFlowBundle(FederatedFileSystem& storage, JsonArray bundles, const String& bundleName) {
     JsonObject obj = bundles.add<JsonObject>();
     obj["name"] = bundleName;
     obj["path"] = String("/flows/") + bundleName;
     obj["manifestPath"] = String("/flows/") + bundleName + "/manifest.json";
-    obj["hasManifest"] = LittleFS.exists(obj["manifestPath"].as<String>());
+    obj["hasManifest"] = bool(storage.openReadFile(obj["manifestPath"].as<String>()));
 }
 
 } // namespace
@@ -81,6 +86,9 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
             doc["freeHeapBytes"] = freeHeap;
             doc["minFreeHeapBytes"] = ESP.getMinFreeHeap();
             doc["largestFreeBlockBytes"] = largestBlock;
+            doc["storageBackend"] = federatedFS.backend() == FFSBackend::SD ? "sd"
+                : federatedFS.backend() == FFSBackend::Remote ? "remote" : "unavailable";
+            doc["snapshotPersistenceAvailable"] = federatedFS.available();
             auto wifi = doc["wifi"].to<JsonObject>();
             const bool connected = WiFi.status() == WL_CONNECTED;
             wifi["status"] = static_cast<int>(WiFi.status());
@@ -100,6 +108,10 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
                 request->send(503, "text/plain", "Diagnostic snapshot unavailable");
                 return;
             }
+            if (!federatedFS.available()) {
+                request->send(200, "application/json", snapshot);
+                return;
+            }
             const FFSStatus result = federatedFS.write("/diagnostics.json",
                 reinterpret_cast<const uint8_t*>(snapshot), expected);
             if (result != FFSStatus::OK) {
@@ -116,10 +128,11 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
 #endif
 
             // FFS: List all device definitions
-            server.on("/ffs/devices", HTTP_GET, [](AsyncWebServerRequest *request){
+            server.on("/ffs/devices", HTTP_GET, [&federatedFS](AsyncWebServerRequest *request){
+                if (!requireStorage(federatedFS, request)) return;
                 String json = "[";
-                if (LittleFS.exists("/devices")) {
-                    File dir = LittleFS.open("/devices", "r");
+                {
+                    File dir = federatedFS.openDirectory("/devices");
                     bool first = true;
                     File entry = dir.openNextFile();
                     while (entry) {
@@ -135,10 +148,11 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
             });
 
             // FFS: List all service definitions
-            server.on("/ffs/services", HTTP_GET, [](AsyncWebServerRequest *request){
+            server.on("/ffs/services", HTTP_GET, [&federatedFS](AsyncWebServerRequest *request){
+                if (!requireStorage(federatedFS, request)) return;
                 String json = "[";
-                if (LittleFS.exists("/services")) {
-                    File dir = LittleFS.open("/services", "r");
+                {
+                    File dir = federatedFS.openDirectory("/services");
                     bool first = true;
                     File entry = dir.openNextFile();
                     while (entry) {
@@ -168,6 +182,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
 
         // Federated file chunk endpoint: /ffs/chunk?file=...&chunk=...&size=...
         server.on("/ffs/chunk", HTTP_GET, [&federatedFS](AsyncWebServerRequest *request){
+            if (!requireStorage(federatedFS, request)) return;
             if (!request->hasParam("file") || !request->hasParam("chunk")) {
                 request->send(400, "text/plain", "Missing file or chunk param");
                 return;
@@ -206,6 +221,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
         });
     // FFS: Create directory endpoint
     auto mkdirHandler = [&federatedFS](AsyncWebServerRequest *request){
+        if (!requireStorage(federatedFS, request)) return;
         String dir;
         if (request->hasParam("dir", true)) {
             dir = request->getParam("dir", true)->value();
@@ -216,17 +232,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
             return;
         }
         if (!dir.startsWith("/")) dir = "/" + dir;
-        bool ok = false;
-#if defined(ESP32)
-        if (dir.startsWith("sd/")) {
-            String sdPath = dir.substring(3);
-            ok = SD.mkdir(sdPath);
-        } else {
-            ok = LittleFS.mkdir(dir);
-        }
-#else
-        ok = LittleFS.mkdir(dir);
-#endif
+        bool ok = federatedFS.mkdir(dir);
         request->send(ok ? 200 : 500, "text/plain", ok ? "Directory created" : "Failed to create directory");
     };
     server.on("/ffs/mkdir", HTTP_POST, mkdirHandler);
@@ -234,6 +240,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
 
     // FFS: Remove directory endpoint
     auto rmdirHandler = [&federatedFS](AsyncWebServerRequest *request){
+        if (!requireStorage(federatedFS, request)) return;
         String dir;
         if (request->hasParam("dir", true)) {
             dir = request->getParam("dir", true)->value();
@@ -244,17 +251,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
             return;
         }
         if (!dir.startsWith("/")) dir = "/" + dir;
-        bool ok = false;
-#if defined(ESP32)
-        if (dir.startsWith("sd/")) {
-            String sdPath = dir.substring(3);
-            ok = SD.rmdir(sdPath);
-        } else {
-            ok = LittleFS.rmdir(dir);
-        }
-#else
-        ok = LittleFS.rmdir(dir);
-#endif
+        bool ok = federatedFS.rmdir(dir);
         request->send(ok ? 200 : 500, "text/plain", ok ? "Directory removed" : "Failed to remove directory");
     };
     server.on("/ffs/rmdir", HTTP_POST, rmdirHandler);
@@ -262,6 +259,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
 
     // FFS: Delete file endpoint
     auto deleteHandler = [&federatedFS](AsyncWebServerRequest *request){
+        if (!requireStorage(federatedFS, request)) return;
         String file;
         if (request->hasParam("file", true)) {
             file = request->getParam("file", true)->value();
@@ -281,6 +279,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
 
     // FFS: Upload file endpoint (raw body)
     auto uploadHandler = [&federatedFS](AsyncWebServerRequest *request){
+        if (!requireStorage(federatedFS, request)) return;
         PULSE_ASYNC_TRACE("FFS form upload handler request=%p bytes=%u", request,
             static_cast<unsigned>(request->contentLength()));
         String file;
@@ -315,6 +314,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
     struct StreamUpload { int handle; size_t written; int status; uint32_t startedAt; };
     server.on("/ffs/upload_stream", HTTP_POST,
         [&federatedFS](AsyncWebServerRequest* request) {
+            if (!requireStorage(federatedFS, request)) return;
             auto* state = static_cast<StreamUpload*>(request->_tempObject);
             int status = state ? state->status : 400;
             if (state && state->handle) {
@@ -332,12 +332,13 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
         }, nullptr,
         [&federatedFS](AsyncWebServerRequest* request, uint8_t* data, size_t length, size_t index, size_t total) {
             if (index == 0) {
-                // LittleFS writes and Wi-Fi stalls can exceed the server's 3-second default.
+                // Storage writes and Wi-Fi stalls can exceed the server's 3-second default.
                 request->client()->setRxTimeout(60);
                 auto* state = static_cast<StreamUpload*>(calloc(1, sizeof(StreamUpload)));
                 request->_tempObject = state;
                 if (!state) return;
                 state->status = 200;
+                if (!federatedFS.available()) state->status = 503;
                 state->startedAt = millis();
                 if (!request->hasParam("file") || !total || total > 32768
                     || request->contentType() != "application/octet-stream") state->status = 400;
@@ -371,6 +372,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
 
     // FFS: Download file endpoint (GET or POST)
     auto getHandler = [&federatedFS](AsyncWebServerRequest *request){
+        if (!requireStorage(federatedFS, request)) return;
         String file;
         if (request->hasParam("file", true)) {
             file = request->getParam("file", true)->value();
@@ -396,6 +398,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
 
     // FFS: List files endpoint
     server.on("/ffs/list", HTTP_GET, [&federatedFS](AsyncWebServerRequest *request){
+        if (!requireStorage(federatedFS, request)) return;
         std::vector<String> files;
         if (federatedFS.listFiles(files) != FFSStatus::OK) {
             request->send(500, "application/json", "[]");
@@ -409,10 +412,11 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
         }
 
         // Add /devices directory and its children
-        if (LittleFS.exists("/devices")) {
+        File devices = federatedFS.openDirectory("/devices");
+        if (devices) {
             if (!files.empty()) json += ",";
             json += "{\"type\":\"directory\",\"name\":\"devices\",\"children\":[";
-            File dir = LittleFS.open("/devices", "r");
+            File dir = devices;
             bool first = true;
             File entry = dir.openNextFile();
             while (entry) {
@@ -427,7 +431,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
             json += "]}";
         }
         // Add /services directory and its children
-        if (LittleFS.exists("/services")) {
+        if (federatedFS.openDirectory("/services")) {
             json += ",{";
             json += "\"type\":\"directory\",\"name\":\"services\",\"children\":[]}";
         }
@@ -435,11 +439,12 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
         request->send(200, "application/json", json);
     });
 
-        server.on("/ffs/flows", HTTP_GET, [](AsyncWebServerRequest *request){
+        server.on("/ffs/flows", HTTP_GET, [&federatedFS](AsyncWebServerRequest *request){
+            if (!requireStorage(federatedFS, request)) return;
             JsonDocument doc;
             JsonArray bundles = doc["flows"].to<JsonArray>();
-            if (LittleFS.exists("/flows")) {
-                File root = LittleFS.open("/flows", "r");
+            {
+                File root = federatedFS.openDirectory("/flows");
                 if (root && root.isDirectory()) {
                     File entry = root.openNextFile();
                     while (entry) {
@@ -449,7 +454,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
                                 name = name.substring(7);
                             }
                             if (name.length() > 0) {
-                                appendFlowBundle(bundles, name);
+                                appendFlowBundle(federatedFS, bundles, name);
                             }
                         }
                         entry = root.openNextFile();
@@ -462,7 +467,8 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
             request->send(200, "application/json", response);
         });
 
-        server.on("/ffs/flows/manifest", HTTP_GET, [](AsyncWebServerRequest *request){
+        server.on("/ffs/flows/manifest", HTTP_GET, [&federatedFS](AsyncWebServerRequest *request){
+            if (!requireStorage(federatedFS, request)) return;
             String bundle = getParamValue(request, "bundle");
             if (bundle.length() == 0) {
                 request->send(400, "text/plain", "Missing bundle param");
@@ -472,14 +478,15 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
             if (bundle.startsWith("/")) bundle.remove(0, 1);
             String manifestPath = String("/flows/") + bundle + "/manifest.json";
             String manifest;
-            if (!readLittleFsFile(manifestPath, manifest)) {
+            if (!readFfsFile(federatedFS, manifestPath, manifest)) {
                 request->send(404, "text/plain", "Manifest not found");
                 return;
             }
             request->send(200, "application/json", manifest);
         });
 
-        server.on("/ffs/flows/file", HTTP_GET, [](AsyncWebServerRequest *request){
+        server.on("/ffs/flows/file", HTTP_GET, [&federatedFS](AsyncWebServerRequest *request){
+            if (!requireStorage(federatedFS, request)) return;
             String bundle = getParamValue(request, "bundle");
             String fileName = getParamValue(request, "file");
             if (bundle.length() == 0 || fileName.length() == 0) {
@@ -492,14 +499,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
             if (fileName.startsWith("/")) fileName.remove(0, 1);
             String path = String("/flows/") + bundle + "/" + fileName;
             std::vector<uint8_t> data;
-            if (LittleFS.exists(path)) {
-                File f = LittleFS.open(path, "r");
-                if (f) {
-                    while (f.available()) data.push_back(static_cast<uint8_t>(f.read()));
-                    f.close();
-                }
-            }
-            if (data.empty()) {
+            if (federatedFS.read(path, data) != FFSStatus::OK) {
                 request->send(404, "text/plain", "Flow file not found");
                 return;
             }

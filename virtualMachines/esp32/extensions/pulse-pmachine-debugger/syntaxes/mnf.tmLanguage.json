@@ -1,0 +1,15 @@
+{
+  "name": "Minnesota FORTRAN",
+  "scopeName": "source.mnf",
+  "patterns": [
+    { "name": "comment.line.mnf", "match": "^[Cc*!].*$" },
+    { "name": "comment.line.sequence.mnf", "match": "(?<=^.{72}).*$" },
+    { "name": "entity.name.label.mnf", "match": "^[ 0-9]{5}" },
+    { "name": "keyword.control.continuation.mnf", "match": "(?<=^.{5})[^ 0]" },
+    { "name": "string.quoted.single.mnf", "match": "'(?:''|[^'])*'" },
+    { "name": "string.quoted.double.mnf", "match": "\"(?:\"\"|[^\"])*\"" },
+    { "name": "keyword.control.mnf", "match": "(?i)\\b(PROGRAM|INTEGER|REAL|DO|CONTINUE|PRINT|STOP|END|GO|TO)\\b" },
+    { "name": "constant.numeric.mnf", "match": "(?i)(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:E[+-]?\\d+)?" },
+    { "name": "keyword.operator.mnf", "match": "\\*\\*|[-+*/=]" }
+  ]
+}

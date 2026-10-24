@@ -1,6 +1,6 @@
 // FederatedFileSystem.h
 // ESP32 Federated File System (FFS) core interface
-// Supports SD (SD_MMC/SD) and LittleFS backends
+// Supports local SD and discovered remote FFS storage.
 // C++11, Arduino compatible
 
 #ifndef FEDERATED_FILE_SYSTEM_H
@@ -9,11 +9,13 @@
 #include <Arduino.h>
 #include <FS.h>
 #include <vector>
+#include <memory>
 
 // FFS storage backend type
 enum class FFSBackend {
+    Unavailable,
     SD,
-    LittleFS
+    Remote
 };
 
 // FFS status codes
@@ -71,10 +73,18 @@ class FederatedFileSystem {
 public:
     FederatedFileSystem();
     bool begin(FFSBackend backend, fs::FS &fs, const String &basePath = "/");
+    bool beginRemote(const String& baseUrl, const String& root);
+    bool available() const { return _fs != nullptr; }
+    FFSBackend backend() const { return _backend; }
+    File openDirectory(const String& path);
+    bool mkdir(const String& path);
+    bool rmdir(const String& path);
     // File handle/line I/O
     int openFile(const String &logicalName, const String &mode);
     bool closeFile(int handle);
     bool readLine(int handle, String &outLine);
+    // Reads one record, keeping blanks; false only at end of file.
+    bool readRecord(int handle, String &outLine);
     bool writeLine(int handle, const String &line);
     size_t writeBytes(int handle, const uint8_t *data, size_t len);
 
@@ -128,6 +138,7 @@ private:
 
     FFSBackend _backend;
     fs::FS *_fs;
+    std::unique_ptr<fs::FS> _remoteFs;
     String _basePath;
     bool _inTransaction;
     int _nextHandle = 1;

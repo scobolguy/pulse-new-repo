@@ -3,6 +3,8 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { createHash } from 'node:crypto';
+import { encodeHostedImage } from '../../../virtualMachines/esp32/pmachines/shared/contracts/hosted-image.mjs';
 import { checkOutput, checkNegative } from './evaluate.mjs';
 import { attachPcodeSignature } from '../../../virtualMachines/esp32/aggregator/scripts/pcode-signing.mjs';
 import { toRuntimeProgramMap, uploadFfsFile } from '../../../virtualMachines/esp32/aggregator/scripts/esp32-runtime-artifacts.mjs';
@@ -13,13 +15,16 @@ const run = promisify(execFile);
 export async function onDevice(base, prefix, expected, name) {
   const pcode = await fs.readFile(prefix + '.pcode', 'utf8');
   const map = JSON.parse(await fs.readFile(prefix + '.program.json', 'utf8'));
-  const runtimeMap = attachPcodeSignature(toRuntimeProgramMap(map), pcode);
-  const remote = `/validation-${name}`;
-  await uploadFfsFile(base, remote + '.pc', pcode);
+  const image = encodeHostedImage(pcode);
+  const runtimeMap = attachPcodeSignature({
+    ...toRuntimeProgramMap(map), hostImageFormat: 'PHI1'
+  }, image);
+  const remote = `/pv-${createHash('sha256').update(name).digest('hex').slice(0, 16)}`;
+  await uploadFfsFile(base, remote + '.phi', image);
   await uploadFfsFile(base, remote + '.map.json', JSON.stringify(runtimeMap));
   const response = await fetch(base + '/pmachine/execute_file', {
     method: 'POST',
-    body: new URLSearchParams({ file: remote + '.pc', programMap: remote + '.map.json', max: '200000' }),
+    body: new URLSearchParams({ file: remote + '.phi', programMap: remote + '.map.json', max: '200000' }),
     signal: AbortSignal.timeout(30000)
   });
   const body = await response.text();
@@ -97,6 +102,12 @@ export async function runValidation(argv = process.argv.slice(2)) {
           }
           if (entry.esp32.status !== 'pass') entry.status = 'fail';
         }
+      }
+      if (entry.esp32) {
+        for (const line of entry.esp32.result?.stdout || [])
+          console.log(`[ESP32 ${test.name}] ${line}`);
+        if (entry.esp32.status !== 'pass')
+          console.error(`[ESP32 ${test.name}] ${entry.esp32.reason || 'Execution failed'}`);
       }
     } catch (error) {
       entry.status = 'fail';

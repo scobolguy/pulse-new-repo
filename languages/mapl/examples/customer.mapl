@@ -1,0 +1,4 @@
+map CustomerToAccount from Customer to Account;
+  account.name := customer.name;
+  account.code := upper(customer.code);
+end;

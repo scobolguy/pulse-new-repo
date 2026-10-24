@@ -1,11 +1,9 @@
 // FederatedFileSystem.cpp
 #include "FederatedFileSystem.h"
 #include <ArduinoJson.h>
+#include "RemoteFileSystem.h"
 #if defined(ESP32)
 #include <SD.h>
-#include <LittleFS.h>
-#elif defined(ESP8266)
-#include <LittleFS.h>
 #endif
 
 namespace {
@@ -73,38 +71,21 @@ FederatedFileSystem::ResolvedPath FederatedFileSystem::resolvePath(const String 
 }
 
 FFSStatus FederatedFileSystem::readLocalFile(const String &path, std::vector<uint8_t> &outData) const {
-    File f;
-#if defined(ESP32)
-    if (path.startsWith("/sd/")) {
-        f = SD.open(path.substring(3), FILE_READ);
-    } else if (path.startsWith("sd/")) {
-        f = SD.open(path.substring(3), FILE_READ);
-    } else {
-        f = LittleFS.open(path, FILE_READ);
-    }
-#else
-    f = LittleFS.open(path, "r");
-#endif
+    if (!_fs) return FFSStatus::ERR_IO;
+    File f = _fs->open(path, "r");
     if (!f) return FFSStatus::ERR_NOT_FOUND;
     outData.clear();
-    while (f.available()) outData.push_back(static_cast<uint8_t>(f.read()));
+    const size_t bytes = f.size();
+    outData.resize(bytes);
+    const size_t received = bytes ? f.read(outData.data(), bytes) : 0;
     f.close();
+    if (received != bytes) { outData.clear(); return FFSStatus::ERR_IO; }
     return FFSStatus::OK;
 }
 
 FFSStatus FederatedFileSystem::writeLocalFile(const String &path, const uint8_t *data, size_t len) {
-    File f;
-#if defined(ESP32)
-    if (path.startsWith("/sd/")) {
-        f = SD.open(path.substring(3), FILE_WRITE);
-    } else if (path.startsWith("sd/")) {
-        f = SD.open(path.substring(3), FILE_WRITE);
-    } else {
-        f = LittleFS.open(path, FILE_WRITE);
-    }
-#else
-    f = LittleFS.open(path, "w");
-#endif
+    if (!_fs) return FFSStatus::ERR_IO;
+    File f = _fs->open(path, "w");
     if (!f) return FFSStatus::ERR_IO;
     size_t written = f.write(data, len);
     f.close();
@@ -112,18 +93,12 @@ FFSStatus FederatedFileSystem::writeLocalFile(const String &path, const uint8_t 
 }
 
 bool FederatedFileSystem::removeLocalFile(const String &path) const {
-#if defined(ESP32)
-    if (path.startsWith("/sd/")) return SD.remove(path.substring(3));
-    if (path.startsWith("sd/")) return SD.remove(path.substring(3));
-    return LittleFS.remove(path);
-#else
-    return LittleFS.remove(path);
-#endif
+    return _fs && _fs->remove(path);
 }
 
 void FederatedFileSystem::ensureMountParentDirectory() const {
-    if (!LittleFS.exists("/ffs")) {
-        LittleFS.mkdir("/ffs");
+    if (_fs && !_fs->exists("/ffs")) {
+        _fs->mkdir("/ffs");
     }
 }
 // --- File handle/line I/O ---
@@ -131,17 +106,8 @@ int FederatedFileSystem::openFile(const String &logicalName, const String &mode)
     ResolvedPath resolved = resolvePath(logicalName);
     if (resolved.remote || (resolved.readOnly && mode != "r")) return 0;
     String path = resolved.resolvedPath;
-    File f;
-#if defined(ESP32)
-    if (path.startsWith("sd/")) {
-        String sdPath = path.substring(3);
-        f = SD.open(sdPath, mode.c_str());
-    } else {
-        f = LittleFS.open(path, mode.c_str());
-    }
-#else
-    f = LittleFS.open(path, mode.c_str());
-#endif
+    if (!_fs) return 0;
+    File f = _fs->open(path, mode.c_str());
     if (!f) return 0;
     int handle = _nextHandle++;
     _openFiles[handle] = {f, mode};
@@ -165,6 +131,14 @@ bool FederatedFileSystem::readLine(int handle, String &outLine) {
     return outLine.length() > 0;
 }
 
+bool FederatedFileSystem::readRecord(int handle, String &outLine) {
+    auto it = _openFiles.find(handle);
+    if (it == _openFiles.end() || !it->second.file.available()) return false;
+    outLine = it->second.file.readStringUntil('\n');
+    if (outLine.endsWith("\r")) outLine.remove(outLine.length() - 1);
+    return true;
+}
+
 bool FederatedFileSystem::writeLine(int handle, const String &line) {
     auto it = _openFiles.find(handle);
     if (it == _openFiles.end()) return false;
@@ -179,13 +153,12 @@ size_t FederatedFileSystem::writeBytes(int handle, const uint8_t *data, size_t l
 }
 // FederatedFileSystem.cpp
 // ESP32 Federated File System (FFS) core implementation
-// Supports SD (SD_MMC/SD) and LittleFS backends
+// Supports SD and remote FFS backends.
 // C++11, Arduino compatible
 
 #include "FederatedFileSystem.h"
 
 #include <vector>
-#include <LittleFS.h>
 #if __has_include(<SD.h>)
 #include <SD.h>
 #endif
@@ -197,23 +170,56 @@ size_t FederatedFileSystem::writeBytes(int handle, const uint8_t *data, size_t l
 #include <WiFiClient.h>
 #endif
 
-FederatedFileSystem::FederatedFileSystem() : _backend(FFSBackend::LittleFS), _fs(nullptr), _basePath("/"), _inTransaction(false) {}
+FederatedFileSystem::FederatedFileSystem() : _backend(FFSBackend::Unavailable), _fs(nullptr), _basePath("/"), _inTransaction(false) {}
 
 bool FederatedFileSystem::begin(FFSBackend backend, fs::FS &fs, const String &basePath) {
+    if (backend != FFSBackend::SD) return false;
+#if defined(SD_H) || defined(ARDUINO_ARCH_ESP32)
+    if (!SD.begin()) return false;
+#else
+    return false;
+#endif
     _backend = backend;
     _fs = &fs;
     _basePath = basePath;
-    // Mount the selected backend if needed
-    if (_backend == FFSBackend::LittleFS) {
-        if (!LittleFS.begin()) return false;
+    if (reloadMountPoints() != FFSStatus::OK) {
+        Serial.println("[FFS] SD mount table could not be loaded");
+        _fs = nullptr;
+        _backend = FFSBackend::Unavailable;
+        return false;
     }
-#if defined(SD_H) || defined(ARDUINO_ARCH_ESP32)
-    if (_backend == FFSBackend::SD) {
-        if (!SD.begin()) return false;
-    }
-#endif
-    reloadMountPoints();
     return true;
+}
+
+bool FederatedFileSystem::beginRemote(const String& baseUrl, const String& root) {
+    if (_fs) return _backend == FFSBackend::Remote;
+    std::unique_ptr<RemoteFileSystem> remote(new RemoteFileSystem(baseUrl, root));
+    if (!remote->begin()) return false;
+    _remoteFs = std::move(remote);
+    _fs = _remoteFs.get();
+    _backend = FFSBackend::Remote;
+    if (reloadMountPoints() != FFSStatus::OK) {
+        Serial.println("[FFS] Remote mount table could not be loaded");
+        _fs = nullptr;
+        _remoteFs.reset();
+        _backend = FFSBackend::Unavailable;
+        return false;
+    }
+    return true;
+}
+
+File FederatedFileSystem::openDirectory(const String& path) {
+    return openReadFile(path);
+}
+
+bool FederatedFileSystem::mkdir(const String& path) {
+    const auto resolved = resolvePath(path);
+    return _fs && !resolved.remote && !resolved.readOnly && _fs->mkdir(resolved.resolvedPath);
+}
+
+bool FederatedFileSystem::rmdir(const String& path) {
+    const auto resolved = resolvePath(path);
+    return _fs && !resolved.remote && !resolved.readOnly && _fs->rmdir(resolved.resolvedPath);
 }
 
 FFSStatus FederatedFileSystem::write(const String &logicalName, const uint8_t *data, size_t len) {
@@ -282,32 +288,14 @@ FFSStatus FederatedFileSystem::read(const String &logicalName, std::vector<uint8
 
 File FederatedFileSystem::openReadFile(const String &logicalName) {
     ResolvedPath resolved = resolvePath(logicalName);
-    if (resolved.remote) return File();
-#if defined(ESP32)
-    if (resolved.resolvedPath.startsWith("/sd/")) {
-        return SD.open(resolved.resolvedPath.substring(3), FILE_READ);
-    }
-    if (resolved.resolvedPath.startsWith("sd/")) {
-        return SD.open(resolved.resolvedPath.substring(3), FILE_READ);
-    }
-    return LittleFS.open(resolved.resolvedPath, FILE_READ);
-#else
-    return LittleFS.open(resolved.resolvedPath, "r");
-#endif
+    if (resolved.remote || !_fs) return File();
+    return _fs->open(resolved.resolvedPath, "r");
 }
 
 File FederatedFileSystem::openRandomAccessFile(const String &logicalName) {
     ResolvedPath resolved = resolvePath(logicalName);
-    if (resolved.remote || resolved.readOnly) return File();
-#if defined(ESP32)
-    if (resolved.resolvedPath.startsWith("/sd/")) {
-        return SD.open(resolved.resolvedPath.substring(3), "w+");
-    }
-    if (resolved.resolvedPath.startsWith("sd/")) {
-        return SD.open(resolved.resolvedPath.substring(3), "w+");
-    }
-#endif
-    return LittleFS.open(resolved.resolvedPath, "w+");
+    if (resolved.remote || resolved.readOnly || !_fs) return File();
+    return _fs->open(resolved.resolvedPath, "w+");
 }
 
 FFSStatus FederatedFileSystem::remove(const String &logicalName) {
@@ -315,47 +303,18 @@ FFSStatus FederatedFileSystem::remove(const String &logicalName) {
     if (resolved.remote || resolved.readOnly) {
         return FFSStatus::ERR_UNSUPPORTED;
     }
-    bool exists = false;
-    bool removed = false;
-#if defined(ESP32)
-    if (resolved.resolvedPath.startsWith("sd/")) {
-        String sdPath = resolved.resolvedPath.substring(3);
-        exists = SD.exists(sdPath);
-        if (exists) removed = SD.remove(sdPath);
-    } else {
-        exists = LittleFS.exists(resolved.resolvedPath);
-        if (exists) removed = LittleFS.remove(resolved.resolvedPath);
-    }
-#else
-    exists = LittleFS.exists(resolved.resolvedPath);
-    if (exists) removed = LittleFS.remove(resolved.resolvedPath);
-#endif
-    if (!exists) return FFSStatus::ERR_NOT_FOUND;
-    return removed ? FFSStatus::OK : FFSStatus::ERR_IO;
+    if (!_fs) return FFSStatus::ERR_IO;
+    if (!_fs->exists(resolved.resolvedPath)) return FFSStatus::ERR_NOT_FOUND;
+    return _fs->remove(resolved.resolvedPath) ? FFSStatus::OK : FFSStatus::ERR_IO;
 }
 
 FFSStatus FederatedFileSystem::listFiles(std::vector<String> &outNames) {
     outNames.clear();
-#if defined(ESP32)
-    // List SD files under "sd/"
-    File sdRoot = SD.open("/");
-    if (sdRoot && sdRoot.isDirectory()) {
-        File file = sdRoot.openNextFile();
-        while (file) {
-            outNames.push_back(String("sd/") + String(file.name()));
-            file = sdRoot.openNextFile();
-        }
-        sdRoot.close();
-    }
-#endif
-    // List LittleFS files at root
-#if defined(ESP8266)
-    File lfsRoot = LittleFS.open("/", "r");
-#else
-    File lfsRoot = LittleFS.open("/");
-#endif
-    if (lfsRoot && lfsRoot.isDirectory()) {
-        File file = lfsRoot.openNextFile();
+    if (!_fs) return FFSStatus::ERR_IO;
+    File root = _fs->open("/", "r");
+    if (!root || !root.isDirectory()) return FFSStatus::ERR_IO;
+    {
+        File file = root.openNextFile();
         while (file) {
             String name = String(file.name());
             if (file.isDirectory()) {
@@ -364,9 +323,9 @@ FFSStatus FederatedFileSystem::listFiles(std::vector<String> &outNames) {
             } else {
                 outNames.push_back(name);
             }
-            file = lfsRoot.openNextFile();
+            file = root.openNextFile();
         }
-        lfsRoot.close();
+        root.close();
     }
 
     for (const auto& mount : _mounts) {
@@ -472,13 +431,7 @@ FFSStatus FederatedFileSystem::fetchFileFromPeer(const String &logicalName, cons
             return FFSStatus::ERR_IO;
         }
 
-        File f;
-        if (path.startsWith("sd/")) {
-            String sdPath = path.substring(3);
-            f = SD.open(sdPath, FILE_APPEND);
-        } else {
-            f = LittleFS.open(path, FILE_APPEND);
-        }
+        File f = _fs ? _fs->open(path, "a") : File();
         if (!f) {
             http.end();
             return FFSStatus::ERR_IO;
@@ -521,7 +474,7 @@ FFSStatus FederatedFileSystem::fetchFileFromPeer(const String &logicalName, cons
             return FFSStatus::ERR_IO;
         }
 
-        File f = LittleFS.open(path, "a");
+        File f = _fs ? _fs->open(path, "a") : File();
         if (!f) {
             http.end();
             return FFSStatus::ERR_IO;
@@ -582,7 +535,7 @@ FFSStatus FederatedFileSystem::fetchFileFromPeer(const String &logicalName, cons
         ensureMountParentDirectory();
         // Use append+read so the file is created on first boot without noisy
         // missing-file logs from the VFS layer.
-        File f = LittleFS.open(MOUNT_TABLE_PATH, "a+");
+        File f = _fs ? _fs->open(MOUNT_TABLE_PATH, "a+") : File();
         if (!f) return FFSStatus::ERR_IO;
 
         if (f.size() == 0) {
@@ -633,7 +586,7 @@ FFSStatus FederatedFileSystem::fetchFileFromPeer(const String &logicalName, cons
 
         String out;
         serializeJsonPretty(doc, out);
-        File f = LittleFS.open(MOUNT_TABLE_PATH, "w");
+        File f = _fs ? _fs->open(MOUNT_TABLE_PATH, "w") : File();
         if (!f) return FFSStatus::ERR_IO;
         size_t written = f.print(out);
         f.close();

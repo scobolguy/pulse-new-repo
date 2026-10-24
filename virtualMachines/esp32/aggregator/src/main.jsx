@@ -4,6 +4,7 @@ import './index.css'
 import DataMapper from './DataMapper.jsx'
 import FlowDesignerPage from './FlowDesignerPage.jsx'
 import IssuesBoardPage from './IssuesBoardPage.jsx'
+import LanguageCompilerPage from './LanguageCompilerPage.jsx'
 
 const originalFetch = window.fetch.bind(window)
 const apiBaseUrls = String(import.meta.env.VITE_API_BASES || '')
@@ -86,6 +87,8 @@ function renderEmbeddedPage() {
   const currentPath = window.location.pathname
 
   if (currentPath === '/issues') return <IssuesBoardPage />
+  if (currentPath === '/mnf') return <LanguageCompilerPage languageId="mnf" />
+  if (currentPath === '/csharp') return <LanguageCompilerPage languageId="csharp" />
 
   if (isVscodeWebview && currentPath === '/data-mapper') {
     return <DataMapper />
@@ -109,6 +112,8 @@ function renderEmbeddedPage() {
       <h1>Pulse Studio is available in VS Code</h1>
       <p>Open this workspace in VS Code and use the Pulse Studio sidebar.</p>
       <p><a href="/issues">Open the GitHub Issue Board</a></p>
+      <p><a href="/mnf">Open the Minnesota FORTRAN editor</a></p>
+      <p><a href="/csharp">Open the C# editor</a></p>
     </main>
   )
 }

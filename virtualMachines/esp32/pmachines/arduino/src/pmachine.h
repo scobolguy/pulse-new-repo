@@ -12,6 +12,7 @@
 #include <atomic>
 #include <algorithm>
 #include <cstdlib>
+#include <memory>
 #if defined(PLATFORM_RPIB)
 #include <ffs/FederatedFileSystem.h>
 #else
@@ -175,6 +176,17 @@ enum Opcode : uint8_t {
     OP_ARR_SET = 0x72,           // Pop value then zero-based index, store into base_<index>
     OP_QUEUE_WRITE_SYNC = 0x73,  // Write current message and wait for broker acknowledgement
     OP_QUEUE_WRITE_ASYNC = 0x74, // Dispatch current message without blocking the program
+    OP_STRLEN = 0x78,            // Pop string, push its length
+    OP_SUBSTR = 0x79,            // Pop count, zero-based start and string; push the clamped substring
+    OP_CHR = 0x7A,               // Pop character code, push a one-character string
+    OP_ASC = 0x7B,               // Pop string, push the code of its first character (0 if empty)
+    OP_TRUNC = 0x7C,             // Pop number, push it truncated toward zero as an integer
+    OP_TO_REAL = 0x7D,           // Pop number, push it as a real
+    OP_FOPEN = 0x7E,             // Pop mode ("r", "w", "a") and file name; push a handle (0 on failure)
+    OP_FREADLN = 0x7F,           // Pop handle; push the next text record and 1, or "" and 0 at end of file
+    OP_FWRITELN = 0x80,          // Pop text and handle; append the text as a record
+    OP_FCLOSE = 0x81,            // Pop handle and close it
+    OP_READLN = 0x82,            // Push the next console input line and 1, or "" and 0 at end of input
     OP_HALT = 0xFF      // HALT
 };
 
@@ -235,6 +247,17 @@ struct ExtendableStorageDiagnostics {
         if (mnemonic == "PUSH_REAL") return OP_PUSH_REAL;
         if (mnemonic == "RDIV") return OP_RDIV;
         if (mnemonic == "ORD") return OP_ORD;
+        if (mnemonic == "STRLEN") return OP_STRLEN;
+        if (mnemonic == "SUBSTR") return OP_SUBSTR;
+        if (mnemonic == "CHR") return OP_CHR;
+        if (mnemonic == "ASC") return OP_ASC;
+        if (mnemonic == "TRUNC") return OP_TRUNC;
+        if (mnemonic == "TO_REAL") return OP_TO_REAL;
+        if (mnemonic == "FOPEN") return OP_FOPEN;
+        if (mnemonic == "FREADLN") return OP_FREADLN;
+        if (mnemonic == "FWRITELN") return OP_FWRITELN;
+        if (mnemonic == "FCLOSE") return OP_FCLOSE;
+        if (mnemonic == "READLN") return OP_READLN;
         if (mnemonic == "REC_NEW") return OP_REC_NEW;
         if (mnemonic == "REC_SET") return OP_REC_SET;
         if (mnemonic == "REC_GET") return OP_REC_GET;
@@ -557,6 +580,12 @@ class PMachine {
 public:
     PMachine();
     ~PMachine();
+    bool traceEnabled = true;
+    void clearRunResults() {
+        decltype(lastRunTextOutput)().swap(lastRunTextOutput);
+        decltype(lastRunTrace)().swap(lastRunTrace);
+        lastRunGlobals.clear();
+    }
 
     PMachine(PMachine&& other) noexcept {
         *this = std::move(other);
@@ -565,6 +594,7 @@ public:
     PMachine& operator=(PMachine&& other) noexcept {
         if (this != &other) {
             releaseExtendableStorage();
+            executionStorage = std::move(other.executionStorage);
             ffs = other.ffs;
             pcodeMap = std::move(other.pcodeMap);
             memoryMap = std::move(other.memoryMap);
@@ -670,6 +700,7 @@ public:
     int openFile(const String &logicalName, const String &mode);
     bool closeFile(int handle);
     bool readLine(int handle, String &outLine);
+    bool readRecord(int handle, String &outLine);
     bool writeLine(int handle, const String &line);
     void setFFS(::FederatedFileSystem *ffsPtr) { ffs = ffsPtr; }
     const PCodeMap& getPCodeMap() const;
@@ -757,11 +788,12 @@ public:
     std::map<std::string, int> getThunkBindings() const;
     std::string getImageMemoryMapJson() const;
 private:
+    std::unique_ptr<HostExecutionStorage> executionStorage;
     void runInstructions(size_t instructionCount,
                          const std::function<PInstruction(size_t)>& instructionAt,
                          int startPc, HostExecutionStorage* storage = nullptr);
     // Runs Tandem COBOL-85 P-code (OP_COBOL_PROGRAM) on the native decimal engine.
-    void runCobolProgram(const std::string& pcodeText);
+    void runCobolProgram(const std::string& pcodeText, HostExecutionStorage& storage);
     ::FederatedFileSystem *ffs = nullptr;
     PCodeMap pcodeMap;
     MemoryMap memoryMap;

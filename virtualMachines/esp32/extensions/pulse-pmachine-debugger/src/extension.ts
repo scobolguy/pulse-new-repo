@@ -1,5 +1,6 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
+import { isIP } from 'node:net';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import * as path from 'node:path';
@@ -12,14 +13,14 @@ import { ServicesViewProvider, openServiceEndpoint } from './servicesView.js';
 import { registerDataMapper } from './dataMapperEditor.js';
 import { DataLibrarianViewProvider, openLibrarianSchema } from './dataLibrarianView.js';
 import { Esp32LibrarianViewProvider, openEsp32LibrarianSchema } from './esp32LibrarianView.js';
+import { findPmachineRoot } from './runtimeRoot.js';
+import { LANGUAGE_EDITORS } from './languageEditors.js';
 
 const require = createRequire(import.meta.url);
 const pulseStudio = require('./pulse-studio/extension.js') as {
   activate(context: vscode.ExtensionContext, vscodeApi: typeof vscode): void;
   deactivate?(): void;
 };
-
-const DEFAULT_NODE_HOSTS = ['127.0.0.1:4111', '127.0.0.1:4112', '127.0.0.1:4113', '192.168.2.155'];
 
 function isRemoteRuntime(runtime: unknown): boolean {
   return runtime === 'esp32' || runtime === 'js-node';
@@ -38,6 +39,10 @@ type Breakpoint = {
 
 function languageForFile(filePath: string): string {
   switch (path.extname(filePath).toLowerCase()) {
+    case '.cs':
+      return 'csharp';
+    case '.ftn':
+      return 'mnf';
     case '.cob':
     case '.cobol':
       return 'cobolish';
@@ -47,12 +52,26 @@ function languageForFile(filePath: string): string {
       return 'vbish';
     case '.wfl':
       return 'wfl';
+    case '.mapl':
+      return 'mapl';
     default:
       return 'pascalish';
   }
 }
 
 type WflCompileOptions = { environment?: string; variables?: Record<string, string> };
+
+async function compileCobolSource(root: string, source: string, fileName: string, format = 'auto'): Promise<CompiledPcodeArtifact> {
+  if (!['auto', 'fixed', 'free'].includes(format)) {
+    throw new Error(`Unsupported COBOL source format '${format}'; use auto, fixed, or free.`);
+  }
+  const fixedFormat = await import(pathToFileURL(path.join(root, '..', '..', 'languages', 'cobolish85', 'src', 'fixed-format.mjs')).href);
+  if (format === 'fixed' || (format === 'auto' && fixedFormat.isFixedCobolFormat(source))) {
+    source = fixedFormat.fixedToFree(source, { debug: /WITH\s+DEBUGGING\s+MODE/i.test(source) });
+  }
+  const compiler = await import(pathToFileURL(path.join(root, 'aggregator', 'scripts', 'compile-tandem-cobol85-to-pcode.mjs')).href);
+  return compiler.compileTandemCobol85ToPcode(source, { fileName });
+}
 
 function normalizeWflDefines(value: unknown): Record<string, string> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
@@ -422,7 +441,9 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
   }
 
   private async launch(configuration: any): Promise<void> {
-    const program = path.resolve(this.root, String(configuration.program || 'src/towers-of-hanoi-program.pas'));
+    const configuredProgram = String(configuration.program || '').trim();
+    if (!configuredProgram) throw new Error('Select a source file to debug; no program was supplied.');
+    const program = path.resolve(this.root, configuredProgram);
     if (path.extname(program).toLowerCase() === '.pcode') {
       await this.launchNativePcode(program, configuration);
       return;
@@ -432,6 +453,10 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
       source = source.replace(/diskCount\s*:=\s*\d+/i, `diskCount := ${Number(configuration.esp32DiskCount)}`);
     }
     const language = languageForFile(program);
+    if (language === 'csharp' && !['js', 'js-node', undefined].includes(configuration.runtime)) {
+      throw new Error('C# currently targets the JavaScript PMachine only.');
+    }
+    this.root = await findPmachineRoot(program, this.root);
     const debuggerPath = pathToFileURL(path.join(this.root, 'aggregator', 'src', 'backend', 'modules', 'javascriptPmachineDebugger.mjs')).href;
     this.debug = await import(debuggerPath);
     let artifact: any;
@@ -445,18 +470,20 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
       wflEntryLine = wfl.entryLine;
       this.event('output', { category: 'console', output: `WFL environment: ${wfl.environment}\n` });
     } else {
-      if (language === 'cobolish') {
+      if (language === 'csharp') {
+        const compiler = await import(pathToFileURL(path.join(this.root, 'aggregator', 'scripts', 'compile-csharp-to-pcode.mjs')).href);
+        artifact = compiler.compileCsharpToPcode(source, { fileName: path.basename(program) });
+        wflEntryLine = Number(artifact.programMap.sourceMap?.[0]?.sourceLine) || 1;
+      } else if (language === 'mnf') {
+        const compiler = await import(pathToFileURL(path.join(this.root, 'aggregator', 'scripts', 'compile-mnf-to-pcode.mjs')).href);
+        artifact = compiler.compileMnfToPcode(source, { fileName: path.basename(program) });
+        wflEntryLine = Number(artifact.programMap.sourceMap?.[0]?.sourceLine) || 1;
+      } else if (language === 'cobolish') {
         const format = String(configuration.cobolSourceFormat || 'auto').toLowerCase();
-        if (!['auto', 'fixed', 'free'].includes(format)) {
-          throw new Error(`Unsupported COBOL source format '${format}'; use auto, fixed, or free.`);
-        }
-        const fixedFormat = await import(pathToFileURL(path.join(this.root, '..', '..', 'languages', 'cobolish85', 'src', 'fixed-format.mjs')).href);
-        if (format === 'fixed' || (format === 'auto' && fixedFormat.isFixedCobolFormat(source))) {
-          source = fixedFormat.fixedToFree(source, { debug: /WITH\s+DEBUGGING\s+MODE/i.test(source) });
-        }
-        const compilerPath = pathToFileURL(path.join(this.root, 'aggregator', 'scripts', 'compile-tandem-cobol85-to-pcode.mjs')).href;
-        const compiler = await import(compilerPath);
-        artifact = compiler.compileTandemCobol85ToPcode(source, { fileName: path.basename(program) });
+        artifact = await compileCobolSource(this.root, source, path.basename(program), format);
+      } else if (language === 'mapl') {
+        const compiler = await import(pathToFileURL(path.join(this.root, 'aggregator', 'scripts', 'compile-mapl-antlr-to-pcode.mjs')).href);
+        artifact = compiler.compileMaplWithAntlr(source);
       } else {
         const compilerPath = pathToFileURL(path.join(this.root, 'aggregator', 'scripts', language === 'pascalish'
           ? 'compile-pascalish-program-antlr-to-pcode.mjs'
@@ -1412,23 +1439,29 @@ type PmachineRunTarget = vscode.QuickPickItem & {
   runtime: 'js' | 'esp32';
   nodeId?: string;
   host?: string;
+  debugHost?: string;
 };
 
-function directNodeTargets(): PmachineRunTarget[] {
-  const configured = vscode.workspace.getConfiguration('pulse-pmachine').get<string[]>('nodeHosts', DEFAULT_NODE_HOSTS);
-  return (Array.isArray(configured) ? configured : DEFAULT_NODE_HOSTS)
-    .map((host) => String(host || '').trim())
-    .filter(Boolean)
-    .map((host) => {
-      const javascript = /:\d+$/.test(host);
-      return {
-        key: `direct:${host}`,
-        label: `${javascript ? 'JS PMachine node' : 'ESP32 PMachine'} ${host}`,
-        description: 'direct HTTP',
-        runtime: javascript ? 'js' : 'esp32',
-        host,
-      } as PmachineRunTarget;
-    });
+let targetState: vscode.Memento | undefined;
+const defaultTargetKey = 'defaultPmachineTarget';
+
+async function chooseDefaultPmachine(output?: vscode.OutputChannel): Promise<PmachineRunTarget | undefined> {
+  let targets: PmachineRunTarget[];
+  try {
+    targets = await loadPmachineTargets();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    output?.appendLine(`Aggregator discovery unavailable (${detail}). Local JS and direct IP targets are still available.`);
+    void vscode.window.showWarningMessage(`Aggregator discovery unavailable: ${detail}. You can still select Local JavaScript or enter an IP address.`);
+    targets = [{ key: 'js', label: 'Local JavaScript PMachine', runtime: 'js' }];
+  }
+  const target = await selectPmachineTarget(targets, 'run');
+  if (target) await targetState?.update(defaultTargetKey, target);
+  return target;
+}
+
+async function defaultPmachine(output?: vscode.OutputChannel): Promise<PmachineRunTarget | undefined> {
+  return targetState?.get<PmachineRunTarget>(defaultTargetKey) || await chooseDefaultPmachine(output);
 }
 
 type CompiledPcodeArtifact = {
@@ -1436,9 +1469,12 @@ type CompiledPcodeArtifact = {
   programMap: Record<string, any>;
 };
 
-function pcodeLanguage(document: vscode.TextDocument): 'pascalish' | 'vbish' | 'wfl' | 'mapl' | null {
+function pcodeLanguage(document: vscode.TextDocument): 'pascalish' | 'vbish' | 'wfl' | 'mapl' | 'mnf' | 'csharp' | 'cobolish' | null {
   const languageId = document.languageId.toLowerCase();
   const extension = path.extname(document.fileName).toLowerCase();
+  if (languageId === 'csharp' || extension === '.cs') return 'csharp';
+  if (languageId === 'cobolish' || ['.cob', '.cobol'].includes(extension)) return 'cobolish';
+  if (languageId === 'mnf' || extension === '.ftn') return 'mnf';
   if (['pascalish', 'pascal'].includes(languageId) || extension === '.pas') return 'pascalish';
   if (languageId === 'vbish' || ['.bas', '.vb', '.vbs'].includes(extension)) return 'vbish';
   if (languageId === 'wfl' || extension === '.wfl') return 'wfl';
@@ -1452,9 +1488,22 @@ async function compileDocumentToPcode(document: vscode.TextDocument, hostService
   const root = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath
     || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!root) throw new Error('Open the project workspace before compiling a DSL program.');
-  const scripts = path.join(root, 'aggregator', 'scripts');
+  const runtimeRoot = await findPmachineRoot(document.fileName, root);
+  const scripts = path.join(runtimeRoot, 'aggregator', 'scripts');
   const sourceText = document.getText();
   const fileName = path.basename(document.fileName);
+
+  if (language === 'csharp') {
+    const compiler = await import(pathToFileURL(path.join(scripts, 'compile-csharp-to-pcode.mjs')).href);
+    return compiler.compileCsharpToPcode(sourceText, { fileName });
+  }
+
+  if (language === 'cobolish') return compileCobolSource(runtimeRoot, sourceText, fileName);
+
+  if (language === 'mnf') {
+    const compiler = await import(pathToFileURL(path.join(scripts, 'compile-mnf-to-pcode.mjs')).href);
+    return compiler.compileMnfToPcode(sourceText, { fileName });
+  }
 
   if (language === 'pascalish') {
     const compiler = await import(pathToFileURL(path.join(scripts, 'compile-pascalish-program-antlr-to-pcode.mjs')).href);
@@ -1470,7 +1519,7 @@ async function compileDocumentToPcode(document: vscode.TextDocument, hostService
   }
 
   if (language === 'wfl') {
-    const artifact = await compileWflSource(root, sourceText, fileName, wflCompileOptions(document.uri));
+    const artifact = await compileWflSource(runtimeRoot, sourceText, fileName, wflCompileOptions(document.uri));
     return { pcodeText: artifact.pcodeText, programMap: artifact.programMap };
   }
 
@@ -1480,6 +1529,9 @@ async function compileDocumentToPcode(document: vscode.TextDocument, hostService
 }
 
 async function compileForTarget(document: vscode.TextDocument, target: PmachineRunTarget): Promise<CompiledPcodeArtifact> {
+  if (pcodeLanguage(document) === 'csharp' && !['js', 'js-node'].includes(target.runtime)) {
+    throw new Error('C# currently targets the JavaScript PMachine only.');
+  }
   if (!target.host || pcodeLanguage(document) !== 'pascalish') return compileDocumentToPcode(document);
   try {
     return await compileDocumentToPcode(document, true);
@@ -1509,7 +1561,8 @@ async function compileHostedDaemonCompanion(document: vscode.TextDocument): Prom
   const root = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath
     || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!root) throw new Error('Open the project workspace before compiling a hosted daemon.');
-  const compiler = await import(pathToFileURL(path.join(root, 'aggregator', 'scripts', 'compile-pascalish-program-antlr-to-pcode.mjs')).href);
+  const runtimeRoot = await findPmachineRoot(daemonPath, root);
+  const compiler = await import(pathToFileURL(path.join(runtimeRoot, 'aggregator', 'scripts', 'compile-pascalish-program-antlr-to-pcode.mjs')).href);
   return compiler.compilePascalishProgramWithAntlr(sourceText, { fileName: daemonPath, hostServices: true });
 }
 
@@ -1517,6 +1570,39 @@ function backendUrl(): string {
   return String(vscode.workspace.getConfiguration('pulse-pmachine').get('backendUrl', 'http://127.0.0.1:4000'))
     .trim()
     .replace(/\/$/, '');
+}
+
+export async function selectPmachineTarget(
+  targets: PmachineRunTarget[],
+  action: 'run' | 'debug',
+  lastTarget?: string,
+): Promise<PmachineRunTarget | undefined> {
+  const manualKey = 'manual-ip';
+  const selected = await vscode.window.showQuickPick(
+    [
+      ...targets,
+      { key: manualKey, label: 'Enter IP address...', description: 'Connect directly to an ESP32 PMachine', runtime: 'esp32' as const },
+      { key: 'manual-js-ip', label: 'Enter JavaScript node IP address...', description: 'Connect directly to a remote JS PMachine', runtime: 'js' as const },
+    ].map(item => ({ ...item, picked: item.key === lastTarget })),
+    { placeHolder: `Choose a PMachine to ${action} this program on`, matchOnDescription: true },
+  );
+  if (!selected || ![manualKey, 'manual-js-ip'].includes(selected.key)) return selected;
+  const address = await vscode.window.showInputBox({
+    title: `${selected.runtime === 'js' ? 'JavaScript' : 'ESP32'} PMachine IP address`,
+    prompt: 'Enter an IPv4 address, optionally followed by an HTTP port (for example, 192.168.2.90:80).',
+    ignoreFocusOut: true,
+    validateInput: value => {
+      const [ip, port, ...extra] = value.trim().split(':');
+      if (isIP(ip) !== 4 || extra.length || (port !== undefined
+        && (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535))) {
+        return 'Enter a valid IPv4 address and, optionally, a port from 1 to 65535.';
+      }
+      return undefined;
+    },
+  });
+  if (address === undefined) return undefined;
+  const host = address.trim();
+  return { key: `manual:${selected.runtime}:${host}`, label: `${selected.runtime === 'js' ? 'JavaScript' : 'ESP32'} PMachine ${host}`, description: 'Direct HTTP', runtime: selected.runtime, host };
 }
 
 export async function loadPmachineTargets(): Promise<PmachineRunTarget[]> {
@@ -1552,15 +1638,29 @@ export async function loadPmachineTargets(): Promise<PmachineRunTarget[]> {
       runtime: isJavaScript ? 'js' : 'esp32',
       nodeId,
       host: isJavaScript ? undefined : address,
+      debugHost: isJavaScript ? `${address}${node.port ? `:${node.port}` : ''}` : address,
     });
   }
   return targets;
 }
 
 async function runOnLocalJsPmachine(document: vscode.TextDocument, pcodeText: string, programMap: Record<string, any>): Promise<any> {
-  const root = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath
+  const workspaceRoot = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath
     || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
-  const runtime = await import(pathToFileURL(path.join(root, 'pmachines', 'javascript', 'src', 'runtime.mjs')).href);
+  const root = await findPmachineRoot(document.fileName, workspaceRoot);
+  const runtime = await import(pathToFileURL(path.join(root, 'pmachines', 'javascript', 'index.mjs')).href);
+  if (pcodeLanguage(document) === 'cobolish') {
+    const runtimeContext = await cobolRuntimeContext(root);
+    try {
+      return await runtime.executeProgram({
+        instructions: runtime.parsePcode(pcodeText), opcodeMap: await runtime.loadOpcodeMap(),
+        mappingsById: runtime.parseProgramMapMappings(programMap), queueTypesByName: new Map(),
+        isoTypeIds: new Set(), sourceMessage: '', inputQueue: 'vscode.pmachine', runtimeContext,
+      });
+    } finally {
+      runtimeContext.dispose();
+    }
+  }
   const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'pulse-vscode-run-'));
   try {
     const pcodePath = path.join(tempDirectory, 'program.pcode');
@@ -1583,13 +1683,90 @@ async function runOnLocalJsPmachine(document: vscode.TextDocument, pcodeText: st
   }
 }
 
-async function runCurrentFile(context: vscode.ExtensionContext, output: vscode.OutputChannel, uri?: vscode.Uri, hanoiPanel?: HanoiPanel): Promise<void> {
+function debuggableDocument(document?: vscode.TextDocument): document is vscode.TextDocument {
+  return !!document && (!!pcodeLanguage(document) || path.extname(document.fileName).toLowerCase() === '.pcode');
+}
+
+function currentFileDebugConfiguration(document: vscode.TextDocument): vscode.DebugConfiguration {
+  const native = path.extname(document.fileName).toLowerCase() === '.pcode';
+  return {
+    type: 'pulse-pmachine',
+    request: 'launch',
+    name: `Debug ${path.basename(document.fileName)}${native ? ' in native C++ PMachine' : ' on JS PMachine'}`,
+    runtime: native ? 'native' : 'js',
+    program: document.fileName,
+  };
+}
+
+export class PulseDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
+  provideDebugConfigurations(): vscode.DebugConfiguration[] {
+    const document = vscode.window.activeTextEditor?.document;
+    if (!debuggableDocument(document)) return [];
+    return [{ type: 'pulse-pmachine', request: 'launch', name: `Debug ${path.basename(document.fileName)}`, program: document.fileName, activeFile: true }];
+  }
+
+  resolveDebugConfiguration(_folder: vscode.WorkspaceFolder | undefined, configuration: vscode.DebugConfiguration): vscode.ProviderResult<vscode.DebugConfiguration> {
+    const document = vscode.window.activeTextEditor?.document;
+    if (configuration.activeFile) return activeFileDebugConfiguration();
+    if (!configuration.type && !configuration.request && !configuration.name) {
+      if (!debuggableDocument(document)) {
+        void vscode.window.showWarningMessage('Open a Pulse language source file before debugging it.');
+        return undefined;
+      }
+      return activeFileDebugConfiguration();
+    }
+    if (configuration.type === 'pulse-pmachine' && !configuration.program) {
+      if (!debuggableDocument(document)) {
+        void vscode.window.showWarningMessage('The Pulse PMachine debug configuration needs a program, or an open Pulse source file.');
+        return undefined;
+      }
+      configuration.program = document.fileName;
+      configuration.runtime ??= path.extname(document.fileName).toLowerCase() === '.pcode' ? 'native' : 'js';
+    }
+    return configuration;
+  }
+}
+
+async function activeFileDebugConfiguration(): Promise<vscode.DebugConfiguration | undefined> {
+  const document = vscode.window.activeTextEditor?.document;
+  if (!debuggableDocument(document)) {
+    void vscode.window.showWarningMessage('Open a Pulse language source file before debugging it.');
+    return;
+  }
+  if (document.isDirty && !await document.save()) {
+    void vscode.window.showErrorMessage('Save the active program before debugging it.');
+    return;
+  }
+  const configuration = currentFileDebugConfiguration(document);
+  configuration.debugSession = true;
+  if (configuration.runtime !== 'native') {
+    const target = await defaultPmachine();
+    if (!target) return;
+    const host = target.host || target.debugHost;
+    configuration.runtime = target.runtime === 'js' && host ? 'js-node' : target.runtime;
+    if (host) configuration.targetHost = host;
+    configuration.name = `Debug ${path.basename(document.fileName)} on ${target.label}`;
+  }
+  return configuration;
+}
+
+async function debugCurrentFile(): Promise<void> {
+  const configuration = await activeFileDebugConfiguration();
+  if (!configuration) return;
+  const started = await vscode.debug.startDebugging(vscode.workspace.getWorkspaceFolder(vscode.Uri.file(configuration.program)),
+    configuration);
+  if (!started) void vscode.window.showErrorMessage(`VS Code did not start debugging ${path.basename(configuration.program)}.`);
+}
+
+async function runCurrentFile(context: vscode.ExtensionContext, output: vscode.OutputChannel, hanoiPanel?: HanoiPanel): Promise<void> {
   const activeEditor = vscode.window.activeTextEditor;
-  const document = uri
-    ? await vscode.workspace.openTextDocument(uri)
-    : activeEditor?.document;
+  const document = activeEditor?.document;
   if (!document) {
-    void vscode.window.showWarningMessage('Open a Pascalish program before running it.');
+    void vscode.window.showWarningMessage('Open a Pulse language source file before running it.');
+    return;
+  }
+  if (document.isDirty && !await document.save()) {
+    void vscode.window.showErrorMessage('Save the active program before running it.');
     return;
   }
   if (path.extname(document.fileName).toLowerCase() === '.pcode') {
@@ -1605,31 +1782,15 @@ async function runCurrentFile(context: vscode.ExtensionContext, output: vscode.O
     return;
   }
   if (!pcodeLanguage(document)) {
-    void vscode.window.showWarningMessage('Run on PMachine supports Pascalish, VBish, WFL, and MAPL programs.');
+    void vscode.window.showWarningMessage('Run on PMachine supports Pascalish, COBOLish, VBish, C#, MNF FORTRAN, WFL, and MAPL sources.');
     return;
   }
 
   output.clear();
   output.appendLine(`Program: ${document.fileName}`);
 
-  let targets: PmachineRunTarget[];
-  try {
-    targets = await loadPmachineTargets();
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    output.appendLine(`Could not load PMachine targets: ${detail}`);
-    targets = [{ key: 'js', label: 'Local JavaScript PMachine', description: 'Local runtime', runtime: 'js' }];
-  }
-  const discoveredHosts = new Set(targets.map((item) => String(item.description || '').split(' ')[0]));
-  targets.push(...directNodeTargets().filter((item) => !discoveredHosts.has(String(item.host))));
-
-  const lastTarget = context.globalState.get<string>('lastPmachineRunTarget');
-  const target = await vscode.window.showQuickPick(
-    targets.map((item) => ({ ...item, picked: item.key === lastTarget })),
-    { placeHolder: 'Choose a PMachine to run this program on', matchOnDescription: true },
-  );
+  const target = await defaultPmachine(output);
   if (!target) return;
-  await context.globalState.update('lastPmachineRunTarget', target.key);
 
   output.appendLine(`Target: ${target.label}${target.description ? ` (${target.description})` : ''}`);
   try {
@@ -1644,8 +1805,9 @@ async function runCurrentFile(context: vscode.ExtensionContext, output: vscode.O
         : artifact.programMap;
       let result: any;
       if (target.host) {
-        const root = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath
+        const workspaceRoot = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath
           || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+        const root = await findPmachineRoot(document.fileName, workspaceRoot);
         const runner = await import(pathToFileURL(path.join(root, 'aggregator', 'scripts', 'run-pascal-on-esp32-node.mjs')).href);
         const daemon = artifact.programMap.hostBindingsVersion === 1
           ? await compileHostedDaemonCompanion(document)
@@ -1715,6 +1877,7 @@ async function runCurrentFile(context: vscode.ExtensionContext, output: vscode.O
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  targetState = context.globalState;
   const output = vscode.window.createOutputChannel('Pulse PMachine');
   const hanoiPanel = new HanoiPanel();
   const services = new ServicesViewProvider(output);
@@ -1769,7 +1932,26 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
     vscode.debug.registerDebugAdapterDescriptorFactory('pulse-pmachine', new PulseDebugFactory(context.extensionUri)),
-    vscode.commands.registerCommand('pulse-pmachine.runCurrentFile', (uri?: vscode.Uri) => runCurrentFile(context, output, uri, hanoiPanel)),
+    vscode.debug.registerDebugConfigurationProvider('pulse-pmachine', new PulseDebugConfigurationProvider()),
+    vscode.debug.registerDebugConfigurationProvider('pulse-pmachine', new PulseDebugConfigurationProvider(),
+      vscode.DebugConfigurationProviderTriggerKind.Dynamic),
+    vscode.commands.registerCommand('pulse-pmachine.debugCurrentFile', () => debugCurrentFile()),
+    vscode.commands.registerCommand('pulse-pmachine.selectDefaultNode', () => chooseDefaultPmachine(output)),
+    vscode.commands.registerCommand('pulse-pmachine.resetDefaultNode', async () => {
+      await targetState?.update(defaultTargetKey, undefined);
+      void vscode.window.showInformationMessage('Default PMachine cleared. Run or Debug will ask you to select a node.');
+    }),
+    vscode.commands.registerCommand('pulse-pmachine.newLanguageDocument', async () => {
+      const selected = await vscode.window.showQuickPick(LANGUAGE_EDITORS.map(editor => ({
+        label: editor.label, description: editor.extension, editor,
+      })), { placeHolder: 'Choose a Pulse language editor' });
+      if (!selected) return;
+      const document = await vscode.workspace.openTextDocument({
+        language: selected.editor.id, content: selected.editor.content,
+      });
+      await vscode.window.showTextDocument(document);
+    }),
+    vscode.commands.registerCommand('pulse-pmachine.runCurrentFile', () => runCurrentFile(context, output, hanoiPanel)),
     vscode.commands.registerCommand('pulse-pmachine.showAnimation', () => hanoiPanel.show('Towers of Hanoi')),
     vscode.debug.onDidReceiveDebugSessionCustomEvent((event) => {
       if (event.session.type !== 'pulse-pmachine') return;
@@ -1789,6 +1971,9 @@ export function activate(context: vscode.ExtensionContext): void {
       { language: 'pascalish' },
       { language: 'pascal' },
       { language: 'vbish' },
+      { language: 'mnf' },
+      { language: 'csharp' },
+      { language: 'cobolish' },
       { language: 'wfl' },
       { language: 'mapl' },
     ], {

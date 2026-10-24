@@ -1,8 +1,13 @@
 {
   "name": "pulse-pmachine-debugger",
   "displayName": "Pulse Studio & PMachine Debugger",
-  "description": "Pulse Studio, Data Librarian, Data Mapper, deployment and node inventory panels, plus native PMachine Run and Debug support.",
-  "version": "0.1.18",
+  "description": "Editors for Pascalish, COBOLish, VBish, C#, MNF FORTRAN, WFL, MAPL and VFL, with Pulse Studio and PMachine Run/Debug.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/scobolguy/pulse-new-repo.git",
+    "directory": "virtualMachines/esp32/extensions/pulse-pmachine-debugger"
+  },
+  "version": "0.1.22",
   "publisher": "pulse",
   "icon": "src/media/pulse-icon.png",
   "files": [
@@ -10,6 +15,8 @@
     "README.md",
     "src/media/**",
     "language-configuration.json",
+    "mnf-language-configuration.json",
+    "*-language-configuration.json",
     "media/**",
     "syntaxes/**",
     "out/**"
@@ -24,9 +31,12 @@
   "activationEvents": [
     "onDebug",
     "onCommand:pulse-pmachine.runCurrentFile",
+    "onCommand:pulse-pmachine.debugCurrentFile",
     "onLanguage:pascalish",
     "onLanguage:pascal",
     "onLanguage:vbish",
+    "onLanguage:mnf",
+    "onLanguage:csharp",
     "onLanguage:wfl",
     "onLanguage:mapl",
     "onLanguage:pulse-pcode",
@@ -91,6 +101,17 @@
     },
     "languages": [
       {
+        "id": "mnf",
+        "aliases": [
+          "Minnesota FORTRAN",
+          "MNF"
+        ],
+        "extensions": [
+          ".ftn"
+        ],
+        "configuration": "./mnf-language-configuration.json"
+      },
+      {
         "id": "pascalish",
         "aliases": [
           "Pascalish",
@@ -103,7 +124,7 @@
           ".program.pas",
           ".daemon.pas"
         ],
-        "configuration": "./language-configuration.json",
+        "configuration": "./pascal-language-configuration.json",
         "firstLine": "^\\s*(program|service|daemon|class|mapper|router)\\b"
       },
       {
@@ -115,7 +136,7 @@
         "extensions": [
           ".pas"
         ],
-        "configuration": "./language-configuration.json"
+        "configuration": "./pascal-language-configuration.json"
       },
       {
         "id": "vfl",
@@ -129,6 +150,17 @@
         "configuration": "./language-configuration.json"
       },
       {
+        "id": "csharp",
+        "aliases": [
+          "C#",
+          "CSharp"
+        ],
+        "extensions": [
+          ".cs"
+        ],
+        "configuration": "./csharp-language-configuration.json"
+      },
+      {
         "id": "cobolish",
         "aliases": [
           "COBOLish"
@@ -136,7 +168,8 @@
         "extensions": [
           ".cob",
           ".cobol"
-        ]
+        ],
+        "configuration": "./cobolish-language-configuration.json"
       },
       {
         "id": "vbish",
@@ -147,7 +180,8 @@
           ".bas",
           ".vb",
           ".vbs"
-        ]
+        ],
+        "configuration": "./vbish-language-configuration.json"
       },
       {
         "id": "wfl",
@@ -156,7 +190,8 @@
         ],
         "extensions": [
           ".wfl"
-        ]
+        ],
+        "configuration": "./dsl-language-configuration.json"
       },
       {
         "id": "mapl",
@@ -165,7 +200,8 @@
         ],
         "extensions": [
           ".mapl"
-        ]
+        ],
+        "configuration": "./dsl-language-configuration.json"
       },
       {
         "id": "pulse-pcode",
@@ -174,10 +210,46 @@
         ],
         "extensions": [
           ".pcode"
-        ]
+        ],
+        "configuration": "./pcode-language-configuration.json"
       }
     ],
     "grammars": [
+      {
+        "language": "csharp",
+        "scopeName": "source.cs",
+        "path": "./syntaxes/csharp.tmLanguage.json"
+      },
+      {
+        "language": "cobolish",
+        "scopeName": "source.cobolish",
+        "path": "./syntaxes/cobolish.tmLanguage.json"
+      },
+      {
+        "language": "vbish",
+        "scopeName": "source.vbish",
+        "path": "./syntaxes/vbish.tmLanguage.json"
+      },
+      {
+        "language": "wfl",
+        "scopeName": "source.wfl",
+        "path": "./syntaxes/wfl.tmLanguage.json"
+      },
+      {
+        "language": "mapl",
+        "scopeName": "source.mapl",
+        "path": "./syntaxes/mapl.tmLanguage.json"
+      },
+      {
+        "language": "vfl",
+        "scopeName": "source.vfl",
+        "path": "./syntaxes/vfl.tmLanguage.json"
+      },
+      {
+        "language": "mnf",
+        "scopeName": "source.mnf",
+        "path": "./syntaxes/mnf.tmLanguage.json"
+      },
       {
         "language": "pascalish",
         "scopeName": "source.pascalish",
@@ -195,6 +267,10 @@
       }
     ],
     "commands": [
+      {
+        "command": "pulse-pmachine.newLanguageDocument",
+        "title": "Pulse: New Language Document"
+      },
       {
         "command": "pulseCatalogStudio.openIssues",
         "title": "Pulse: Open Issue Board"
@@ -326,6 +402,19 @@
         "icon": "$(play)"
       },
       {
+        "command": "pulse-pmachine.debugCurrentFile",
+        "title": "Debug on PMachine",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "pulse-pmachine.selectDefaultNode",
+        "title": "Pulse PMachine: Select Default Node"
+      },
+      {
+        "command": "pulse-pmachine.resetDefaultNode",
+        "title": "Pulse PMachine: Reset Default Node"
+      },
+      {
         "command": "pulse-pmachine.showAnimation",
         "title": "Pulse PMachine: Show Hanoi Animation"
       },
@@ -349,7 +438,11 @@
       {
         "viewType": "pulseCatalogStudio.wflDeploymentEditor",
         "displayName": "WFL Configuration and Deployment",
-        "selector": [{ "filenamePattern": "*.wfl" }],
+        "selector": [
+          {
+            "filenamePattern": "*.wfl"
+          }
+        ],
         "priority": "option"
       },
       {
@@ -522,8 +615,13 @@
         },
         {
           "command": "pulse-pmachine.runCurrentFile",
-          "when": "editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode",
+          "when": "editorLangId == csharp || editorLangId == cobolish || editorLangId == mnf || editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode",
           "group": "navigation@1"
+        },
+        {
+          "command": "pulse-pmachine.debugCurrentFile",
+          "when": "editorLangId == csharp || editorLangId == cobolish || editorLangId == mnf || editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode",
+          "group": "navigation@2"
         }
       ],
       "commandPalette": [
@@ -539,7 +637,11 @@
         },
         {
           "command": "pulse-pmachine.runCurrentFile",
-          "when": "editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode"
+          "when": "editorLangId == csharp || editorLangId == cobolish || editorLangId == mnf || editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode"
+        },
+        {
+          "command": "pulse-pmachine.debugCurrentFile",
+          "when": "editorLangId == csharp || editorLangId == cobolish || editorLangId == mnf || editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode"
         }
       ]
     },
@@ -637,10 +739,16 @@
           "pascal",
           "cobolish",
           "vbish",
+          "mnf",
+          "csharp",
           "wfl",
           "pulse-pcode"
         ],
         "configurationAttributes": {
+          "activeFile": {
+            "type": "boolean",
+            "description": "Debug the active editor file using the saved default PMachine node."
+          },
           "program": {
             "type": "string",
             "description": "Source file or compiled .pcode file to execute."
@@ -757,32 +865,19 @@
           {
             "type": "pulse-pmachine",
             "request": "launch",
-            "name": "Debug Hanoi on JS PMachine node",
-            "runtime": "js-node",
-            "targetHost": "127.0.0.1:4111",
-            "debugSession": true,
-            "program": "${workspaceFolder}/src/towers-of-hanoi-program.pas"
-          },
-          {
-            "type": "pulse-pmachine",
-            "request": "launch",
-            "name": "Debug Hanoi on ESP32",
-            "runtime": "esp32",
-            "targetHost": "192.168.2.155",
-            "debugSession": true,
-            "program": "${workspaceFolder}/src/towers-of-hanoi-program.pas"
-          },
-          {
-            "type": "pulse-pmachine",
-            "request": "launch",
-            "name": "Debug native P-code file",
-            "runtime": "native",
-            "program": "${file}"
+            "name": "Debug Active File on Default PMachine",
+            "activeFile": true
           }
         ]
       }
     ],
     "breakpoints": [
+      {
+        "language": "csharp"
+      },
+      {
+        "language": "mnf"
+      },
       {
         "language": "pascalish"
       },
@@ -801,10 +896,56 @@
       {
         "language": "pulse-pcode"
       }
-    ]
+    ],
+    "configurationDefaults": {
+      "[csharp]": {
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true
+      },
+      "[cobolish]": {
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true,
+        "editor.wordWrap": "off",
+        "editor.rulers": [
+          6,
+          7,
+          72
+        ]
+      },
+      "[vbish]": {
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true
+      },
+      "[wfl]": {
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true
+      },
+      "[mapl]": {
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true
+      },
+      "[vfl]": {
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true
+      },
+      "[mnf]": {
+        "editor.rulers": [
+          5,
+          6,
+          72,
+          80
+        ],
+        "editor.wordWrap": "off",
+        "editor.insertSpaces": true,
+        "editor.detectIndentation": false,
+        "editor.tabSize": 6,
+        "editor.autoIndent": "none"
+      }
+    }
   },
   "scripts": {
     "compile": "node scripts/sync-pulse-studio.mjs && tsc -p ./",
+    "test": "npm run compile && node --test test/*.test.mjs test/*.test.cjs",
     "package": "npm run compile && vsce package --no-dependencies"
   },
   "devDependencies": {
@@ -812,6 +953,8 @@
     "@types/vscode": "^1.85.0",
     "@vscode/debugprotocol": "^1.68.0",
     "@vscode/vsce": "^4.0.0",
+    "vscode-textmate": "^9.2.0",
+    "vscode-oniguruma": "^2.0.1",
     "typescript": "^5.7.0"
   }
 }

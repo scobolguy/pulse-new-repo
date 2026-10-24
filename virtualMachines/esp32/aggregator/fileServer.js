@@ -150,6 +150,90 @@ export function createFileServer({ ffsConfig = {}, webdavConfig = {}, federatedC
   }
 
 
+  router.get('/ffs/storage', (_req, res) => {
+    res.json({ protocol: 'ffs-seek-v1' });
+  });
+
+  router.get('/ffs/stat', async (req, res) => {
+    try {
+      if (typeof req.query.path !== 'string') return res.status(400).json({ error: 'Missing path' });
+      const stat = await fs.stat(resolveFFSPath(req.query.path));
+      res.json({ size: stat.size, directory: stat.isDirectory(), updatedAt: Math.floor(stat.mtimeMs / 1000) });
+    } catch (error) {
+      res.status(error.code === 'ENOENT' ? 404 : 500).json({ error: error.message });
+    }
+  });
+
+  router.get('/ffs/io', async (req, res) => {
+    let file;
+    try {
+      const offset = Number(req.query.offset);
+      const length = Number(req.query.length);
+      if (typeof req.query.path !== 'string' || !Number.isSafeInteger(offset) || offset < 0
+          || !Number.isSafeInteger(length) || length < 1 || length > 1024)
+        return res.status(400).json({ error: 'Invalid path, offset or length' });
+      file = await fs.open(resolveFFSPath(req.query.path), 'r');
+      const data = Buffer.alloc(length);
+      const { bytesRead } = await file.read(data, 0, length, offset);
+      res.type('application/octet-stream').send(data.subarray(0, bytesRead));
+    } catch (error) {
+      res.status(error.code === 'ENOENT' ? 404 : 500).json({ error: error.message });
+    } finally {
+      if (file) await file.close();
+    }
+  });
+
+  router.post('/ffs/io', express.raw({ type: 'application/octet-stream', limit: '1kb' }), async (req, res) => {
+    let file;
+    try {
+      const offset = Number(req.query.offset);
+      // Arduino HTTPClient omits Content-Length for empty create/truncate requests.
+      const body = req.body === undefined && !req.headers['transfer-encoding']
+        && (!req.headers['content-length'] || req.headers['content-length'] === '0')
+        ? Buffer.alloc(0) : req.body;
+      if (typeof req.query.path !== 'string' || !Number.isSafeInteger(offset) || offset < 0
+          || !Buffer.isBuffer(body) || body.length > 1024
+          || (req.query.truncate !== undefined && !['true', 'false'].includes(req.query.truncate)))
+        return res.status(400).json({ error: 'Invalid path, offset or body' });
+      const target = resolveFFSPath(req.query.path);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      // a+ would ignore the supplied offset. Create exclusively, then reopen for positioned writes.
+      if (req.query.truncate === 'true') file = await fs.open(target, 'w+');
+      else {
+        try { file = await fs.open(target, 'r+'); }
+        catch (error) {
+          if (error.code !== 'ENOENT') throw error;
+          file = await fs.open(target, 'wx+');
+        }
+      }
+      let written = 0;
+      while (written < body.length) {
+        const result = await file.write(body, written, body.length - written, offset + written);
+        if (!result.bytesWritten) throw new Error('FFS write made no progress');
+        written += result.bytesWritten;
+      }
+      await file.sync();
+      res.json({ written });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    } finally {
+      if (file) await file.close();
+    }
+  });
+
+  router.post('/ffs/rmdir', async (req, res) => {
+    try {
+      if (typeof req.body.path !== 'string' || !req.body.path)
+        return res.status(400).json({ error: 'Missing path' });
+      const target = resolveFFSPath(req.body.path);
+      if (target === path.resolve(ffsRoot)) return res.status(400).json({ error: 'Cannot remove FFS root' });
+      await fs.rmdir(target);
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // List directory contents (FFS)
   router.get('/ffs/list', async (req, res) => {
     try {

@@ -188,7 +188,48 @@ export const WORKFLOW_KEYWORDS = [
   'FROM'
 ];
 
+export const MNF_STARTER = [
+  '      PROGRAM NOSTALGIA',
+  '      INTEGER I,ISUM',
+  '      ISUM=0',
+  '      DO 100 I=1,10',
+  '      ISUM=ISUM+I',
+  '  100 CONTINUE',
+  "      PRINT, 'SUM = ',ISUM",
+  '      END'
+].join('\n');
+
 export const DOCUMENT_TYPES = [
+  {
+    id: 'csharp',
+    label: 'C# (ECMA-334 subset)',
+    extension: '.cs',
+    editorId: 'csharp',
+    editorLabel: 'C# Editor',
+    monacoLanguage: 'csharp',
+    starterContent: [
+      'using System;',
+      '',
+      'class Program',
+      '{',
+      '    static T Identity<T>(T value) { return value; }',
+      '',
+      '    static void Main()',
+      '    {',
+      '        Console.WriteLine(Identity("Hello from C#"));',
+      '    }',
+      '}'
+    ].join('\n')
+  },
+  {
+    id: 'mnf',
+    label: 'Minnesota FORTRAN (MNF)',
+    extension: '.ftn',
+    editorId: 'mnf',
+    editorLabel: 'MNF Editor',
+    monacoLanguage: 'mnf',
+    starterContent: MNF_STARTER
+  },
   {
     id: 'pascalish',
     label: 'Pascalish',

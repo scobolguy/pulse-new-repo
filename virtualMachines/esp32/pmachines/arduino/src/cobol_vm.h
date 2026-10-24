@@ -34,6 +34,9 @@ struct ProcedureInfo {
 };
 
 struct RunOptions {
+    // Optional caller-owned managed arena, exclusive to this invocation.
+    uint8_t* variableArena = nullptr;
+    size_t variableArenaBytes = 0;
     const std::map<std::string, ProcedureInfo>* procedures = nullptr;
     const std::vector<std::string>* globals = nullptr;
     bool hasSourceMessage = false;
