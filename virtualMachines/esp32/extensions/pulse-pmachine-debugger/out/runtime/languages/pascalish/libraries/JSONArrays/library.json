@@ -1,0 +1,10 @@
+{
+  "id": "JSONArrays",
+  "version": "1.0.0",
+  "description": "Desktop Pascalish JSON array operations backed by checked hosted-runtime primitives.",
+  "source": "JSONArrays.pas",
+  "provides": {
+    "types": ["JSONArray"],
+    "functions": []
+  }
+}

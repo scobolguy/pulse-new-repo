@@ -1,5 +1,5 @@
 export const LANGUAGE_EDITORS = [
-  { id: 'pascal', label: 'Pascal / Pascalish', extension: '.pas',
+  { id: 'pascalish', label: 'Pascalish', extension: '.pas',
     content: "program Hello;\nbegin\n  writeln('Hello from Pascalish');\nend.\n" },
   { id: 'cobolish', label: 'COBOLish 85', extension: '.cob',
     content: 'IDENTIFICATION DIVISION.\nPROGRAM-ID. HELLO.\nPROCEDURE DIVISION.\n    DISPLAY "Hello from COBOLish".\n    STOP RUN.\n' },
@@ -7,7 +7,7 @@ export const LANGUAGE_EDITORS = [
     content: 'Program "hello"\nSub Main()\n  Print "Hello from VBish"\nEnd Sub\n' },
   { id: 'csharp', label: 'C# (ECMA-334 subset)', extension: '.cs',
     content: 'using System;\nclass Program\n{\n    static T Identity<T>(T value) { return value; }\n    static void Main()\n    {\n        Console.WriteLine(Identity("Hello from C#"));\n    }\n}\n' },
-  { id: 'mnf', label: 'Minnesota FORTRAN', extension: '.ftn',
+  { id: 'fortranish', label: 'Fortranish (Minnesota FORTRAN)', extension: '.ftn',
     content: "      PROGRAM HELLO\n      PRINT, 'Hello from MNF'\n      END\n" },
   { id: 'wfl', label: 'WFL Workflow / Deployment', extension: '.wfl',
     content: 'QUEUE "incoming" -> "payments.in";\nWORKFLOW "routing" BEGIN\n  STEP "route" ROUTE QUEUE "incoming";\nEND;\n' },

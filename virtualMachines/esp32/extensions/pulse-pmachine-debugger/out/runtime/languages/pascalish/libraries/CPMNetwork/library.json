@@ -1,0 +1,10 @@
+{
+  "id": "CPMNetwork",
+  "version": "1.0.0",
+  "description": "Typed Pascalish activity-on-node CPM networks with expanded nested subnetworks.",
+  "source": "CPMNetwork.pas",
+  "provides": {
+    "types": ["CPMNetwork<T>", "CPMNode<T>"],
+    "functions": []
+  }
+}

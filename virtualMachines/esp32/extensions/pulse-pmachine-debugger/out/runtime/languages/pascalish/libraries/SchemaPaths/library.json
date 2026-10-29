@@ -1,0 +1,10 @@
+{
+  "id": "SchemaPaths",
+  "version": "1.0.0",
+  "description": "Desktop Pascalish canonical schema field-path normalization.",
+  "source": "SchemaPaths.pas",
+  "provides": {
+    "types": [],
+    "functions": ["SchemaPath_Normalize"]
+  }
+}

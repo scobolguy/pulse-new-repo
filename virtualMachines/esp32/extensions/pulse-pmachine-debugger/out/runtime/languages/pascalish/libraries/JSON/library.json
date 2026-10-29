@@ -1,0 +1,12 @@
+{
+  "id": "JSON",
+  "version": "1.0.0",
+  "description": "Pascalish JSON document helpers backed by the checked hosted-runtime JSON primitives.",
+  "source": "JSON.pas",
+  "provides": {
+    "types": ["JSONDocument"],
+    "functions": [
+      "JSON_ContainsEncodedToken"
+    ]
+  }
+}

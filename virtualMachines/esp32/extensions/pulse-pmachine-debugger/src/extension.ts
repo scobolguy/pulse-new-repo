@@ -176,10 +176,10 @@ function debugValue(value: any, field: any = null): string {
   return JSON.stringify(value, (_key, item) => typeof item === 'bigint' ? item.toString() : item) ?? String(value);
 }
 
-async function cobolRuntimeContext(root: string, configuredDataDirectory?: unknown) {
+async function cobolRuntimeContext(root: string, projectDirectory: string, configuredDataDirectory?: unknown) {
   const dataDirectory = configuredDataDirectory
-    ? path.resolve(root, String(configuredDataDirectory))
-    : path.join(root, '.pulse-debug', 'cobol-data');
+    ? path.resolve(projectDirectory, String(configuredDataDirectory))
+    : path.join(projectDirectory, '.pulse-debug', 'cobol-data');
   await fs.mkdir(dataDirectory, { recursive: true });
   const dataDirectoryInfo = await fs.lstat(dataDirectory);
   if (!dataDirectoryInfo.isDirectory() || dataDirectoryInfo.isSymbolicLink()) {
@@ -252,7 +252,7 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
   constructor(private readonly configuration: any) {
     this.root = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(configuration.program || ''))?.uri.fsPath
       || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-      || process.cwd();
+      || (configuration.program && path.isAbsolute(configuration.program) ? path.dirname(configuration.program) : process.cwd());
   }
 
   dispose(): void {
@@ -456,7 +456,8 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
     if (language === 'csharp' && !['js', 'js-node', undefined].includes(configuration.runtime)) {
       throw new Error('C# currently targets the JavaScript PMachine only.');
     }
-    this.root = await findPmachineRoot(program, this.root);
+    const projectDirectory = this.root;
+    this.root = await findPmachineRoot(program, projectDirectory);
     const debuggerPath = pathToFileURL(path.join(this.root, 'aggregator', 'src', 'backend', 'modules', 'javascriptPmachineDebugger.mjs')).href;
     this.debug = await import(debuggerPath);
     let artifact: any;
@@ -513,7 +514,7 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
       return;
     }
     const runtimeContext = language === 'cobolish'
-      ? await cobolRuntimeContext(this.root, configuration.cobolDataDirectory)
+      ? await cobolRuntimeContext(this.root, projectDirectory, configuration.cobolDataDirectory)
       : undefined;
     this.state = this.debug.createJavaScriptPmachineDebugSession({
       pcodeText: artifact.pcodeText,
@@ -1474,7 +1475,7 @@ function pcodeLanguage(document: vscode.TextDocument): 'pascalish' | 'vbish' | '
   const extension = path.extname(document.fileName).toLowerCase();
   if (languageId === 'csharp' || extension === '.cs') return 'csharp';
   if (languageId === 'cobolish' || ['.cob', '.cobol'].includes(extension)) return 'cobolish';
-  if (languageId === 'mnf' || extension === '.ftn') return 'mnf';
+  if (['fortranish', 'mnf'].includes(languageId) || extension === '.ftn') return 'mnf';
   if (['pascalish', 'pascal'].includes(languageId) || extension === '.pas') return 'pascalish';
   if (languageId === 'vbish' || ['.bas', '.vb', '.vbs'].includes(extension)) return 'vbish';
   if (languageId === 'wfl' || extension === '.wfl') return 'wfl';
@@ -1487,7 +1488,6 @@ async function compileDocumentToPcode(document: vscode.TextDocument, hostService
   if (!language) throw new Error('This file is not a supported pcode language.');
   const root = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath
     || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (!root) throw new Error('Open the project workspace before compiling a DSL program.');
   const runtimeRoot = await findPmachineRoot(document.fileName, root);
   const scripts = path.join(runtimeRoot, 'aggregator', 'scripts');
   const sourceText = document.getText();
@@ -1560,7 +1560,6 @@ async function compileHostedDaemonCompanion(document: vscode.TextDocument): Prom
   }
   const root = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath
     || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (!root) throw new Error('Open the project workspace before compiling a hosted daemon.');
   const runtimeRoot = await findPmachineRoot(daemonPath, root);
   const compiler = await import(pathToFileURL(path.join(runtimeRoot, 'aggregator', 'scripts', 'compile-pascalish-program-antlr-to-pcode.mjs')).href);
   return compiler.compilePascalishProgramWithAntlr(sourceText, { fileName: daemonPath, hostServices: true });
@@ -1650,7 +1649,7 @@ async function runOnLocalJsPmachine(document: vscode.TextDocument, pcodeText: st
   const root = await findPmachineRoot(document.fileName, workspaceRoot);
   const runtime = await import(pathToFileURL(path.join(root, 'pmachines', 'javascript', 'index.mjs')).href);
   if (pcodeLanguage(document) === 'cobolish') {
-    const runtimeContext = await cobolRuntimeContext(root);
+    const runtimeContext = await cobolRuntimeContext(root, workspaceRoot || path.dirname(document.fileName));
     try {
       return await runtime.executeProgram({
         instructions: runtime.parsePcode(pcodeText), opcodeMap: await runtime.loadOpcodeMap(),
@@ -1972,6 +1971,7 @@ export function activate(context: vscode.ExtensionContext): void {
       { language: 'pascal' },
       { language: 'vbish' },
       { language: 'mnf' },
+      { language: 'fortranish' },
       { language: 'csharp' },
       { language: 'cobolish' },
       { language: 'wfl' },

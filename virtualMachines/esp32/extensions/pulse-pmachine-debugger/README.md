@@ -18,7 +18,7 @@ its fixed-form column layout.
 | COBOLish 85 | `.cob`, `.cobol` | Fixed/free-form highlighting, compile/run and source debugging |
 | VBish | `.bas`, `.vb`, `.vbs` | Text editor, compile/run and source debugging |
 | C# subset | `.cs` | Text editor, generic static methods, JS-only compile/run and source debugging |
-| Minnesota FORTRAN | `.ftn` | Fixed-form editor, compile/run and source debugging |
+| Fortranish (Minnesota FORTRAN) | `.ftn` | Fixed-form editor, compile/run and source debugging |
 | WFL | `.wfl` | Text editor and existing workflow/deployment designers |
 | MAPL | `.mapl` | Text editor and existing Data Mapper designer; mapping compilation |
 | VFL | `.vfl` | JSON text coloring and existing visual graph editor |
@@ -37,11 +37,16 @@ If another extension also owns `.cs`, `.vb` or `.pas`, select the desired mode
 from VS Code's language picker. Existing VFL/MAPL custom editors remain intact;
 use **Reopen Editor With... > Text Editor** for source text.
 
-Open either the repository root or its ESP32 workspace. Canonical source under
-`languages` resolves the same compiler/runtime checkout in either layout.
-Compilers and runtimes are loaded from that checkout; the VSIX is not a
-standalone compiler distribution. Network librarian/mapper panels still need
-their separately managed backend.
+File associations route `.pas` to **Pascalish**, `.ftn` to **Fortranish** and
+`.cob`/`.cobol` to **COBOLish**. Fortranish uses the existing MNF FORTRAN compiler.
+The older `pascal` and `mnf` language IDs remain supported for saved settings.
+
+The VSIX includes the language compilers, generated parsers, runtime libraries
+and JavaScript p-machine. Open any project folder (or a saved source file), then
+use **Run on PMachine** or **Debug on PMachine**. No Pulse repository checkout,
+Node.js installation or project-local npm install is needed for these commands.
+When working in a Pulse checkout, its compiler/runtime is still preferred.
+Network librarian/mapper panels still need their separately managed backend.
 
 For C# validation and the precise subset, see the
 [compiler guide](../../../../languages/csharp/README.md) and
@@ -55,30 +60,32 @@ From this extension directory:
 ```powershell
 npm ci
 npm test
-npm run package
+npm run test:package
 ```
 
-The package command builds TypeScript, copies the existing Studio assets and
-creates `pulse-pmachine-debugger-0.1.22.vsix`. In VS Code, run
+The package command builds TypeScript, copies the Studio assets and compiler/runtime
+dependency closure, includes production npm dependencies, and creates
+`pulse-pmachine-debugger-0.1.23.vsix`. In VS Code, run
 **Extensions: Install from VSIX...**, select that file, then
 **Developer: Reload Window**. Packaging does not publish or install it.
 
 Editor tests use the real TextMate/Oniguruma tokenizer, compile executable
 starters and run them on the JS p-machine. They also check repository-root
 resolution and C# generic source stepping through the VS Code debug adapter.
-The broader debugger suite currently exposes a pre-existing COBOL ISAM
-`nil object dereference` at `host.isam_open`; that failure also reproduces with
-the unchanged JS runtime and is not treated as a passing check.
+`test:package` also builds and extracts the actual VSIX into a temporary directory
+outside the checkout. It checks bundled compilers/libraries, JS execution,
+debugging and signed direct-node upload/execution against a mock HTTP node.
+It does not certify physical ESP32 hardware.
 
 ## Minnesota FORTRAN starter
 
-`.ftn` files use the MNF language, with fixed-form column rulers (5, 6, 72, 80),
+`.ftn` files use the Fortranish mode, with fixed-form column rulers (5, 6, 72, 80),
 syntax highlighting, space indentation and no automatic wrapping/indentation.
 Use **Run on PMachine** or a `pulse-pmachine` debug launch with the `.ftn` file.
 The compiler currently supports a bounded scalar/DO/PRINT subset; see the
 [MNF guide](../../../../languages/mnf/README.md) for supported syntax and limits.
-Compilation uses the workspace's compiler, and execution uses the shared
-p-machine rather than a separate FORTRAN interpreter.
+Compilation uses the bundled compiler (or the workspace checkout when present),
+and execution uses the shared p-machine rather than a separate FORTRAN interpreter.
 
 ### Connecting by IP address
 
@@ -113,6 +120,12 @@ interpreter path. Direct debugging
 still requires the board's debug-session API and available file storage; entering
 an IP does not remove those firmware requirements.
 Remote FFS counts as available storage; no local SD card is required.
+The same bundled compilers produce p-code for local JS, remote JS and ESP32
+targets. Direct-IP Run uploads the program and map to the node; no local
+Aggregator is needed. The node must run compatible Pulse firmware/runtime and
+support the program's instructions and host capabilities. Desktop tests do not
+certify every language feature on hardware. Local COBOL data is stored under
+the project's `.pulse-debug/cobol-data`, not inside the installed extension.
 After updating the extension, run **Developer: Reload Window** to load the new
 command implementation.
 

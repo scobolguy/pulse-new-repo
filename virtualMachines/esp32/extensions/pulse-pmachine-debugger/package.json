@@ -7,7 +7,7 @@
     "url": "https://github.com/scobolguy/pulse-new-repo.git",
     "directory": "virtualMachines/esp32/extensions/pulse-pmachine-debugger"
   },
-  "version": "0.1.22",
+  "version": "0.1.23",
   "publisher": "pulse",
   "icon": "src/media/pulse-icon.png",
   "files": [
@@ -19,7 +19,8 @@
     "*-language-configuration.json",
     "media/**",
     "syntaxes/**",
-    "out/**"
+    "out/**",
+    "node_modules/**"
   ],
   "engines": {
     "vscode": "^1.95.0"
@@ -36,6 +37,7 @@
     "onLanguage:pascal",
     "onLanguage:vbish",
     "onLanguage:mnf",
+    "onLanguage:fortranish",
     "onLanguage:csharp",
     "onLanguage:wfl",
     "onLanguage:mapl",
@@ -101,13 +103,21 @@
     },
     "languages": [
       {
-        "id": "mnf",
+        "id": "fortranish",
         "aliases": [
+          "Fortranish",
           "Minnesota FORTRAN",
           "MNF"
         ],
         "extensions": [
           ".ftn"
+        ],
+        "configuration": "./mnf-language-configuration.json"
+      },
+      {
+        "id": "mnf",
+        "aliases": [
+          "MNF (legacy mode)"
         ],
         "configuration": "./mnf-language-configuration.json"
       },
@@ -118,6 +128,7 @@
           "Pascalish DSL"
         ],
         "extensions": [
+          ".pas",
           ".pash",
           ".flow.pas",
           ".service.pas",
@@ -132,9 +143,6 @@
         "aliases": [
           "Pascal",
           "Standard Pascal"
-        ],
-        "extensions": [
-          ".pas"
         ],
         "configuration": "./pascal-language-configuration.json"
       },
@@ -244,6 +252,11 @@
         "language": "vfl",
         "scopeName": "source.vfl",
         "path": "./syntaxes/vfl.tmLanguage.json"
+      },
+      {
+        "language": "fortranish",
+        "scopeName": "source.mnf",
+        "path": "./syntaxes/mnf.tmLanguage.json"
       },
       {
         "language": "mnf",
@@ -615,12 +628,12 @@
         },
         {
           "command": "pulse-pmachine.runCurrentFile",
-          "when": "editorLangId == csharp || editorLangId == cobolish || editorLangId == mnf || editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode",
+          "when": "editorLangId == csharp || editorLangId == cobolish || editorLangId == fortranish || editorLangId == mnf || editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode",
           "group": "navigation@1"
         },
         {
           "command": "pulse-pmachine.debugCurrentFile",
-          "when": "editorLangId == csharp || editorLangId == cobolish || editorLangId == mnf || editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode",
+          "when": "editorLangId == csharp || editorLangId == cobolish || editorLangId == fortranish || editorLangId == mnf || editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode",
           "group": "navigation@2"
         }
       ],
@@ -637,11 +650,11 @@
         },
         {
           "command": "pulse-pmachine.runCurrentFile",
-          "when": "editorLangId == csharp || editorLangId == cobolish || editorLangId == mnf || editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode"
+          "when": "editorLangId == csharp || editorLangId == cobolish || editorLangId == fortranish || editorLangId == mnf || editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode"
         },
         {
           "command": "pulse-pmachine.debugCurrentFile",
-          "when": "editorLangId == csharp || editorLangId == cobolish || editorLangId == mnf || editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode"
+          "when": "editorLangId == csharp || editorLangId == cobolish || editorLangId == fortranish || editorLangId == mnf || editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode"
         }
       ]
     },
@@ -740,6 +753,7 @@
           "cobolish",
           "vbish",
           "mnf",
+          "fortranish",
           "csharp",
           "wfl",
           "pulse-pcode"
@@ -879,6 +893,9 @@
         "language": "mnf"
       },
       {
+        "language": "fortranish"
+      },
+      {
         "language": "pascalish"
       },
       {
@@ -928,7 +945,7 @@
         "editor.tabSize": 2,
         "editor.insertSpaces": true
       },
-      "[mnf]": {
+      "[fortranish][mnf]": {
         "editor.rulers": [
           5,
           6,
@@ -944,9 +961,14 @@
     }
   },
   "scripts": {
-    "compile": "node scripts/sync-pulse-studio.mjs && tsc -p ./",
+    "compile": "node scripts/sync-pulse-studio.mjs && node scripts/sync-runtime.mjs && tsc -p ./",
     "test": "npm run compile && node --test test/*.test.mjs test/*.test.cjs",
-    "package": "npm run compile && vsce package --no-dependencies"
+    "test:package": "npm run package && node --test test/packaged/*.test.mjs",
+    "package": "npm run compile && vsce package"
+  },
+  "dependencies": {
+    "antlr4": "^4.13.2",
+    "fast-xml-parser": "^5.8.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -38,8 +38,8 @@ const registry = new textmate.Registry({
   }
 });
 
-test('all ten language modes declare real configurations, grammars, run menus and starters', async () => {
-  const ids = ['pascal', 'pascalish', 'cobolish', 'vbish', 'csharp', 'mnf', 'wfl', 'mapl', 'vfl', 'pulse-pcode'];
+test('all language modes declare real configurations, grammars, run menus and starters', async () => {
+  const ids = ['pascal', 'pascalish', 'cobolish', 'vbish', 'csharp', 'fortranish', 'mnf', 'wfl', 'mapl', 'vfl', 'pulse-pcode'];
   assert.deepEqual(manifest.contributes.languages.map(item => item.id).sort(), ids.sort());
   assert.ok(manifest.contributes.commands.some(item => item.command === 'pulse-pmachine.newLanguageDocument'));
   for (const language of manifest.contributes.languages) {
@@ -51,11 +51,21 @@ test('all ten language modes declare real configurations, grammars, run menus an
     const grammar = manifest.contributes.grammars.find(item => item.language === language.id);
     assert.ok(grammar, language.id);
     assert.equal(JSON.parse(await fs.readFile(path.join(extension, grammar.path), 'utf8')).scopeName, grammar.scopeName);
-    assert.ok(LANGUAGE_EDITORS.some(item => item.id === language.id || language.id === 'pascalish' && item.id === 'pascal'));
+    const starterId = { pascal: 'pascalish', mnf: 'fortranish' }[language.id] || language.id;
+    assert.ok(LANGUAGE_EDITORS.some(item => item.id === starterId));
   }
   for (const menu of ['editor/title', 'commandPalette']) {
     const run = manifest.contributes.menus[menu].find(item => item.command === 'pulse-pmachine.runCurrentFile');
     for (const language of ids.filter(id => id !== 'vfl')) assert.ok(run.when.includes(`editorLangId == ${language}`), language);
+  }
+});
+
+test('source extensions select their compiler-backed Pulse language modes', () => {
+  for (const [extension, id] of [['.pas', 'pascalish'], ['.ftn', 'fortranish'], ['.cob', 'cobolish']]) {
+    assert.deepEqual(manifest.contributes.languages.filter(language => language.extensions?.includes(extension)).map(language => language.id), [id]);
+    assert.ok(manifest.contributes.debuggers[0].languages.includes(id));
+    assert.ok(manifest.contributes.breakpoints.some(item => item.language === id));
+    assert.equal(LANGUAGE_EDITORS.find(item => item.extension === extension).id, id);
   }
 });
 
@@ -66,6 +76,7 @@ const samples = [
   ['vbish', 'sUb', "' Sub", '"Sub"'],
   ['csharp', 'class', '// class', '"class"'],
   ['mnf', '      PROGRAM HELLO', 'C     PROGRAM HELLO', "      PRINT, 'PROGRAM'"],
+  ['fortranish', '      PROGRAM HELLO', 'C     PROGRAM HELLO', "      PRINT, 'PROGRAM'"],
   ['wfl', 'WORKFLOW', '// WORKFLOW', '"WORKFLOW"'],
   ['mapl', 'map', '// map', '"map"'],
   ['pulse-pcode', 'PRINT_NL', '# PRINT_NL', 'PUSH_STR "PRINT_NL"']
@@ -124,15 +135,15 @@ test('runtime checkout resolution supports canonical languages, repository/ESP32
   }
   assert.equal(await findPmachineRoot(path.join(temporary, 'Untitled-1'), repository), runtimeRoot);
   assert.equal(await findPmachineRoot(path.join(runtimeRoot, 'src', 'hello.pas')), runtimeRoot);
-  await assert.rejects(findPmachineRoot(path.join(temporary, 'missing.cs')), /Cannot find the Pulse compiler\/runtime checkout/);
+  assert.equal(await findPmachineRoot(path.join(temporary, 'hello.cs')), path.join(extension, 'out', 'runtime', 'virtualMachines', 'esp32'));
 });
 
 const compilers = {
-  pascal: compilePascalishProgramWithAntlr,
+  pascalish: compilePascalishProgramWithAntlr,
   cobolish: compileTandemCobol85ToPcode,
   vbish: compileVbishToPmachine,
   csharp: compileCsharpToPcode,
-  mnf: compileMnfToPcode
+  fortranish: compileMnfToPcode
 };
 for (const starter of LANGUAGE_EDITORS.filter(item => compilers[item.id] || item.id === 'pulse-pcode')) {
   test(`${starter.id}: new-document starter compiles and executes on the actual JavaScript p-machine`, async () => {
@@ -148,8 +159,8 @@ for (const starter of LANGUAGE_EDITORS.filter(item => compilers[item.id] || item
       runtimeContext: { maxSteps: 10000, maxCallDepth: 32 }
     });
     assert.deepEqual(result.stdout, [{
-      pascal: 'Hello from Pascalish', cobolish: 'Hello from COBOLish', vbish: 'Hello from VBish',
-      csharp: 'Hello from C#', mnf: 'Hello from MNF', 'pulse-pcode': 'Hello from the p-machine'
+      pascalish: 'Hello from Pascalish', cobolish: 'Hello from COBOLish', vbish: 'Hello from VBish',
+      csharp: 'Hello from C#', fortranish: 'Hello from MNF', 'pulse-pcode': 'Hello from the p-machine'
     }[starter.id]]);
     assert.ok(!result.error);
     assert.equal(result.stepLimitHit, false);

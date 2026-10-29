@@ -1,0 +1,27 @@
+{
+  "id": "imaginary",
+  "version": "1.0.0",
+  "description": "Complex numbers built from pairs of reals. Defined entirely in Pascalish; no runtime or grammar support required.",
+  "source": "imaginary.pas",
+  "provides": {
+    "types": ["Complex"],
+    "functions": [
+      "CpxSqrtR",
+      "CpxNormSq",
+      "CpxAbs",
+      "CpxAddRe",
+      "CpxAddIm",
+      "CpxSubRe",
+      "CpxSubIm",
+      "CpxMulRe",
+      "CpxMulIm",
+      "CpxDivRe",
+      "CpxDivIm",
+      "CpxNegRe",
+      "CpxNegIm",
+      "CpxConjRe",
+      "CpxConjIm"
+    ],
+    "procedures": ["CpxWrite"]
+  }
+}

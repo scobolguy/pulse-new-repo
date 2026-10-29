@@ -1,5 +1,18 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const bundledRoot = path.resolve(fileURLToPath(new URL('./runtime/virtualMachines/esp32/', import.meta.url)));
+
+async function hasRuntime(root: string): Promise<boolean> {
+  try {
+    return (await fs.stat(path.join(root, 'aggregator', 'scripts', 'run-js-pmachine.mjs'))).isFile();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+    return false;
+  }
+}
 
 export async function findPmachineRoot(filePath: string, workspacePath?: string): Promise<string> {
   const visited = new Set<string>();
@@ -8,18 +21,13 @@ export async function findPmachineRoot(filePath: string, workspacePath?: string)
     while (!visited.has(directory)) {
       visited.add(directory);
       for (const candidate of [directory, path.join(directory, 'virtualMachines', 'esp32')]) {
-        try {
-          const stat = await fs.stat(path.join(candidate, 'aggregator', 'scripts', 'run-js-pmachine.mjs'));
-          if (stat.isFile()) return candidate;
-        } catch (error) {
-          const code = (error as NodeJS.ErrnoException).code;
-          if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
-        }
+        if (await hasRuntime(candidate)) return candidate;
       }
       const parent = path.dirname(directory);
       if (parent === directory) break;
       directory = parent;
     }
   }
-  throw new Error('Cannot find the Pulse compiler/runtime checkout. Open the Pulse repository or its ESP32 workspace.');
+  if (await hasRuntime(bundledRoot)) return bundledRoot;
+  throw new Error('The Pulse compiler/runtime is missing. Reinstall the Pulse Studio & PMachine Debugger VSIX.');
 }

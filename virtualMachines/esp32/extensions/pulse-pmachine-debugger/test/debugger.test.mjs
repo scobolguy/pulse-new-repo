@@ -709,6 +709,63 @@ test('editor runs local C# and COBOL with desktop host bindings from a repositor
   }
 });
 
+test('ordinary saved .pas, .ftn and .cob files run and debug using the bundled runtime without a workspace', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'pulse-standalone-editor-'));
+  const originalFetch = globalThis.fetch;
+  const originalWindow = { ...vscode.window };
+  const originalWorkspace = { ...vscode.workspace };
+  const output = [], errors = [];
+  const cases = [
+    ['pascalish', 'hello.pas', "program Hello; begin writeln('Standalone Pascalish'); end.", 'Standalone Pascalish'],
+    ['fortranish', 'hello.ftn', "      PROGRAM HELLO\n      PRINT, 'Standalone Fortranish'\n      END\n", 'Standalone Fortranish'],
+    ['cobolish', 'hello.cob', 'IDENTIFICATION DIVISION.\nPROGRAM-ID. HELLO.\nPROCEDURE DIVISION.\nDISPLAY FUNCTION UPPER-CASE("standalone cobolish").\nSTOP RUN.', 'STANDALONE COBOLISH'],
+  ];
+  vscode.workspace.getWorkspaceFolder = () => undefined;
+  vscode.workspace.workspaceFolders = undefined;
+  globalThis.fetch = async url => { throw new Error(`Local run must not contact ${url}`); };
+  Object.assign(vscode.window, {
+    createOutputChannel: () => ({ clear() {}, appendLine: line => output.push(line), show() {}, dispose() {} }),
+    withProgress: async (_, task) => task(),
+    showErrorMessage: message => errors.push(message),
+  });
+  try {
+    activate({
+      subscriptions: [], extensionUri: {},
+      globalState: { get: () => ({ key: 'js', label: 'Local JavaScript PMachine', runtime: 'js' }), async update() {} },
+    });
+    for (const [languageId, name, content, expected] of cases) {
+      const fileName = path.join(directory, name);
+      await fs.writeFile(fileName, content);
+      vscode.window.activeTextEditor = { document: {
+        uri: { fsPath: fileName }, fileName, languageId, getText: () => content,
+      } };
+      await globalThis.pulseTestRunCommand();
+      assert.deepEqual(errors, []);
+      assert.ok(output.includes(expected), output.join('\n'));
+      const { value } = adapter({ program: fileName });
+      try {
+        await value.launch({ program: fileName, runtime: 'js' });
+        assert.ok(value.root.includes(path.join('out', 'runtime', 'virtualMachines', 'esp32')));
+        await value.stopAtProgramEntry();
+        if (value.state.status !== 'completed') await value.resumeUntilPause('continue');
+        assert.equal(value.state.status, 'completed', value.state.error);
+        assert.deepEqual(value.state.stdout, [expected]);
+      } finally {
+        value.dispose();
+      }
+    }
+    assert.ok((await fs.stat(path.join(directory, '.pulse-debug', 'cobol-data'))).isDirectory());
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const key of Object.keys(vscode.window)) delete vscode.window[key];
+    Object.assign(vscode.window, originalWindow);
+    for (const key of Object.keys(vscode.workspace)) delete vscode.workspace[key];
+    Object.assign(vscode.workspace, originalWorkspace);
+    activate({ subscriptions: [], extensionUri: {} });
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('editor installs hosted Pascalish services and their companion daemon on manually entered HTTP targets', async () => {
   const originalFetch = globalThis.fetch;
   const originalWindow = { ...vscode.window };

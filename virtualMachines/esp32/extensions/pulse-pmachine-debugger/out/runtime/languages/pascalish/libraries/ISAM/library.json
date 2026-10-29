@@ -1,0 +1,10 @@
+{
+  "id": "ISAM",
+  "version": "1.0.0",
+  "description": "Shared Pascalish keyed-file runtime facade for Tandem-style indexed file access.",
+  "source": "ISAM.pas",
+  "provides": {
+    "types": ["ISAMFile"],
+    "functions": []
+  }
+}

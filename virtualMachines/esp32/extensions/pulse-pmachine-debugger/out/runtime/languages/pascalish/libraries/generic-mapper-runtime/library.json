@@ -1,0 +1,56 @@
+{
+  "id": "generic-mapper-runtime",
+  "version": "1.0.0",
+  "description": "Debugger-visible runtime contract for GenericMapper queue, persistence, and explicit MT103-to-PACS008 operations.",
+  "source": "generic-mapper-runtime.pas",
+  "provides": {
+    "types": ["RuntimeQueueHandle", "RuntimeDataStoreHandle"],
+    "functions": [
+      "RuntimeQueueDequeue",
+      "RuntimeMapMt103ToPacs008"
+    ],
+    "procedures": [
+      "RuntimeQueueEnqueue",
+      "RuntimePersistInput"
+    ]
+  },
+  "runtime": {
+    "operations": {
+      "RuntimeQueueDequeue": {
+        "kind": "queue-dequeue",
+        "debugFrame": "Queue.Dequeue",
+        "receiver": "queueHandle",
+        "returns": "swift-mt103",
+        "backends": ["memory", "external"]
+      },
+      "RuntimeQueueEnqueue": {
+        "kind": "queue-enqueue",
+        "debugFrame": "Queue.Enqueue",
+        "receiver": "queueHandle",
+        "value": "pacs",
+        "backends": ["memory", "external"]
+      },
+      "RuntimePersistInput": {
+        "kind": "data-store-insert",
+        "debugFrame": "GenericMapper.PersistInput",
+        "store": "generic_mapper_store",
+        "value": "swift-mt103"
+      },
+      "RuntimeMapMt103ToPacs008": {
+        "kind": "explicit-map",
+        "debugFrame": "Mapper.Transform",
+        "mapperId": "cbds-mt103-to-pacs008",
+        "sourceTypeId": "swift-mt103",
+        "targetTypeId": "pacs",
+        "explicit": true,
+        "fieldPaths": [
+          "finEnvelope.block4.fields.20 -> Document.FIToFICstmrCdtTrf.GrpHdr.MsgId",
+          "finEnvelope.block4.fields.21 -> Document.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId",
+          "finEnvelope.block4.fields.32A -> Document.FIToFICstmrCdtTrf.CdtTrfTxInf.IntrBkSttlmAmt",
+          "finEnvelope.block4.fields.50K -> Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Dbtr.Nm",
+          "finEnvelope.block4.fields.59 -> Document.FIToFICstmrCdtTrf.CdtTrfTxInf.Cdtr.Nm"
+        ]
+      }
+    }
+  }
+}
