@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildVflDeployments } from './build-vfl-deployment.mjs';
-import { compileWorkflowDSL } from './compile-workflow-dsl.mjs';
+import { compileWorkflowDSL } from '../../../../languages/wfl/src/compile-workflow-dsl.mjs';
 import { attachPcodeSignature } from './pcode-signing.mjs';
 
 function required(value, label) {

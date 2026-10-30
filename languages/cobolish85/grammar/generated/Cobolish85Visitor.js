@@ -618,6 +618,12 @@ export default class Cobolish85Visitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by Cobolish85Parser#pulseServerStatement.
+	visitPulseServerStatement(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by Cobolish85Parser#moveStatement.
 	visitMoveStatement(ctx) {
 	  return this.visitChildren(ctx);

@@ -3,6 +3,27 @@
 #include <cstring>
 
 namespace pmachine {
+inline bool cobolTextBounds(const std::string& input, std::string& error) {
+    if (input.size() <= 4096) {
+        bool ascii = true;
+        for (unsigned char ch : input) if (ch > 127) { ascii = false; break; }
+        if (ascii) return true;
+    }
+    error = "Invalid COBOL text bounds"; return false;
+}
+inline bool cobolText(const std::string& input, int width, std::string& output, std::string& error) {
+    if (!cobolTextBounds(input, error)) return false;
+    if (width < 1 || width > 4096) { error = "Invalid COBOL text bounds"; return false; }
+    output = input.substr(0, width);
+    output.resize(width, ' ');
+    return true;
+}
+inline bool cobolUnpad(const std::string& input, std::string& output, std::string& error) {
+    if (!cobolTextBounds(input, error)) return false;
+    const auto last = input.find_last_not_of(' ');
+    output = last == std::string::npos ? "" : input.substr(0, last + 1);
+    return true;
+}
 inline char asciiLower(char ch) { return ch >= 'A' && ch <= 'Z' ? ch + ('a' - 'A') : ch; }
 inline bool headerText(const std::string& input, const std::string& requested,
                        std::string& output, std::string& error) {

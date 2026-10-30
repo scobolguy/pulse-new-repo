@@ -6,9 +6,12 @@ import { XMLParser } from 'fast-xml-parser';
 import { loadOpcodeMap } from './opcodes.mjs';
 import { SERVICE_HOST_BINDINGS } from '../../shared/contracts/service-host-bindings.mjs';
 import { DEVICE_BINDINGS } from '../../shared/contracts/device-bindings.mjs';
+import { REQUESTER_BINDINGS } from '../../shared/contracts/requester-bindings.mjs';
 import { PMachineMemory, managedStorage } from './memory.mjs';
 import { ManagedObjects, ObjectRef } from './managed-objects.mjs';
 import { SYSTEM_LIBRARY, executeSystemIntrinsic } from '../../../../../languages/dotnet/system-library.mjs';
+import { createFortranState, executeFortranIntrinsic } from '../../../../../languages/mnf/runtime/fortran-library.mjs';
+import { isFortranIoIntrinsic, executeFortranIoIntrinsic } from '../../../../../languages/mnf/runtime/fortran-io.mjs';
 
 const XML_PARSER = new XMLParser({
   ignoreAttributes: false,
@@ -77,6 +80,13 @@ function trimCopy(s) {
 class PReal {
   constructor(value) {
     this.v = Math.fround(Number(value) || 0);
+  }
+}
+
+class PDouble extends PReal {
+  constructor(value) {
+    super(0);
+    this.v = Number(value);
   }
 }
 
@@ -1624,6 +1634,10 @@ function textFileStore(runtimeContext) {
         return text === null || text === undefined ? null : String(text);
       },
       async write(name, text) { await fileSystem.writeText(name, text); },
+      async delete(name) {
+        if (typeof fileSystem.deleteFile !== 'function') throw new Error('Host file system does not support DELETE');
+        await fileSystem.deleteFile(name);
+      },
     };
   }
   if (!(runtimeContext.files instanceof Map)) runtimeContext.files = new Map(Object.entries(runtimeContext.files || {}));
@@ -1631,6 +1645,7 @@ function textFileStore(runtimeContext) {
   return {
     async read(name) { return files.has(name) ? String(files.get(name)) : null; },
     async write(name, text) { files.set(name, text); },
+    async delete(name) { files.delete(name); },
   };
 }
 
@@ -1719,6 +1734,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
   const deliveries = [];
   const state = {};
   const stdout = [];
+  const fortranState = createFortranState();
   let currentLine = '';
 
   // Label -> instruction index, for ROUTE_MAP_RUN dispatching into a mapper
@@ -1846,6 +1862,24 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     }
     if (op === 'CALL_EXT') {
       const name = String(instr.operand?.label || '').toLowerCase();
+      if (name.startsWith('fortran.')) {
+        const argc = instr.operand?.argc;
+        if (!Number.isSafeInteger(argc) || argc < 0 || stack.length < argc)
+          throw new Error(`Invalid FORTRAN intrinsic call: ${name}`);
+        const args = argc ? stack.splice(stack.length - argc, argc) : [];
+        const values = args.map(value => isReal(value)
+          ? { real: value.v, ...(value instanceof PDouble ? { double: true } : {}) } : value);
+        const io = { emit: record => stdout.push(record), files: textFiles, stdin: consoleInput.lines.join('\n') };
+        const result = isFortranIoIntrinsic(name)
+          ? await executeFortranIoIntrinsic(name, values, fortranState, io)
+          : executeFortranIntrinsic(name, values, fortranState, io);
+        const box = value => value && typeof value === 'object' && 'real' in value
+          ? value.double ? new PDouble(value.real) : new PReal(value.real) : value;
+        if (result.values) stack.push(...result.values.map(box));
+        else if (result.push) stack.push(box(result.value));
+        pc += 1;
+        continue;
+      }
       if (Object.hasOwn(SYSTEM_LIBRARY.intrinsics, name)) {
         const argc = instr.operand?.argc;
         if (argc !== SYSTEM_LIBRARY.intrinsics[name].arity || stack.length < argc)
@@ -1870,7 +1904,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
         pc += 1;
         continue;
       }
-      const binding = SERVICE_HOST_BINDINGS[name] || DEVICE_BINDINGS[name];
+      const binding = SERVICE_HOST_BINDINGS[name] || DEVICE_BINDINGS[name] || REQUESTER_BINDINGS[name];
       const argc = instr.operand?.argc;
       if (!binding || argc !== binding.arity) throw new Error(`Invalid host binding call: ${name}`);
       if (typeof runtimeContext.callHost !== 'function') throw new Error(`Host binding unavailable: ${name}`);
@@ -2023,7 +2057,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
         if (op === 'SUB') out = a - b;
         if (op === 'MUL') out = a * b;
         if (op === 'DIV') out = b === 0 ? 0 : a / b;
-        stack.push(new PReal(out));
+        stack.push(rawA instanceof PDouble || rawB instanceof PDouble ? new PDouble(out) : new PReal(out));
         pc += 1;
         continue;
       }
@@ -2088,9 +2122,10 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       continue;
     }
     if (op === 'RDIV') {
-      const divisor = numberOf(stack.pop());
-      const dividend = numberOf(stack.pop());
-      stack.push(new PReal(divisor === 0 ? 0 : dividend / divisor));
+      const rawB = stack.pop(), rawA = stack.pop();
+      const divisor = numberOf(rawB), dividend = numberOf(rawA);
+      const value = divisor === 0 ? 0 : dividend / divisor;
+      stack.push(rawA instanceof PDouble || rawB instanceof PDouble ? new PDouble(value) : new PReal(value));
       pc += 1;
       continue;
     }

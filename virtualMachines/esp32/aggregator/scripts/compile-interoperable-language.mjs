@@ -1,8 +1,8 @@
 import { compileRouterMapperDSL } from './compile-pascal.mjs';
 import { compileCobolishWithAntlr } from './cobolish-antlr-compiler.mjs';
-import { compileVbishWithAntlr } from './vbish-antlr-compiler.mjs';
+import { compileVbishWithAntlr } from '../../../../languages/vbish/src/vbish-antlr-compiler.mjs';
 import { compileCobolishToPcode } from './compile-cobolish-to-pcode.mjs';
-import { compileVbishToPcode } from './compile-vbish-to-pcode.mjs';
+import { compileVbishToPcode } from '../../../../languages/vbish/src/compile-vbish-to-pcode.mjs';
 import { emitMapperRoutinePcode } from './compile-mapping-rule.mjs';
 import { dslDebug, dslError } from './dsl-debug.mjs';
 

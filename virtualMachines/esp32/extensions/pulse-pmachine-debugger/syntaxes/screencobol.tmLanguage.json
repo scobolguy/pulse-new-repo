@@ -1,0 +1,10 @@
+{
+  "scopeName": "source.screencobol",
+  "patterns": [
+    { "name": "comment.line.screencobol", "match": "\\*>.*$" },
+    { "name": "string.quoted.double.screencobol", "begin": "\"", "end": "\"", "patterns": [{ "match": "\"\"" }] },
+    { "name": "string.quoted.single.screencobol", "begin": "'", "end": "'", "patterns": [{ "match": "''" }] },
+    { "name": "keyword.control.screencobol", "match": "(?i)\\b(?:IDENTIFICATION|DIVISION|PROGRAM-ID|DATA|WORKING-STORAGE|SECTION|SCREEN|PIC|X|VALUE|SIZE|AT|USING|FROM|TO|PROCEDURE|DISPLAY|BASE|ACCEPT|MOVE|SEND|REPLY|CODE|YIELDS|STOP|RUN|FILLER)\\b" },
+    { "name": "constant.numeric.screencobol", "match": "\\b[0-9]+\\b" }
+  ]
+}

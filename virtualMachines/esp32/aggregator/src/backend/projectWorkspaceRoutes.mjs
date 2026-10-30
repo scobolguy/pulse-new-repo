@@ -2,7 +2,7 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { compileWorkflowDSLWithAntlr } from '../../scripts/workflow-antlr-compiler.mjs';
+import { compileWorkflowDSLWithAntlr } from '../../../../../languages/wfl/src/workflow-antlr-compiler.mjs';
 import { executeWorkflow, executeDeploymentPlan } from '../../scripts/interpret-workflow.mjs';
 
 const DEFAULT_PROJECTS_ROOT = path.join(os.homedir(), 'Documents', 'Pulse');

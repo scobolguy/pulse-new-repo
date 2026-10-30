@@ -25,6 +25,7 @@ aggregator services. Mapper API and deployment integration tests remain under
 `virtualMachines/esp32/aggregator/scripts`. This is a repository-local package,
 not a standalone published compiler.
 
-Legacy aggregator compiler imports and CLI invocations forward here. CLI paths
+Aggregator callers import the compiler here directly; the old aggregator compiler
+and generated-parser entrypoints have been removed. CLI paths
 remain relative to the caller's working directory; pass explicit paths when
 running outside the aggregator. No mapping semantics changed.

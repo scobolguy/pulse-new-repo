@@ -26,7 +26,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compilePascalishProgramWithAntlr } from './compile-pascalish-program-antlr-to-pcode.mjs';
-import { compileWorkflowDSLWithAntlr } from './workflow-antlr-compiler.mjs';
+import { compileWorkflowDSLWithAntlr } from '../../../../languages/wfl/src/workflow-antlr-compiler.mjs';
 import { runPascalOnEsp32 } from './run-pascal-on-esp32-node.mjs';
 import { runSingleMessageForEvolution } from '../../pmachines/javascript/index.mjs';
 import {

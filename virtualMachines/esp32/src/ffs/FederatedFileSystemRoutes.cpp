@@ -340,7 +340,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
                 state->status = 200;
                 if (!federatedFS.available()) state->status = 503;
                 state->startedAt = millis();
-                if (!request->hasParam("file") || !total || total > 32768
+                if (!request->hasParam("file") || !total || total > 131072
                     || request->contentType() != "application/octet-stream") state->status = 400;
                 else state->handle = federatedFS.openFile(request->getParam("file")->value(), "w");
                 if (!state->handle && state->status == 200) state->status = 500;

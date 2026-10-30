@@ -5,6 +5,12 @@ import { compilePascalishProgramWithAntlr } from '../../../virtualMachines/esp32
 const compiledLibraries = new Map();
 
 const LIBRARY_SOURCES = {
+  inventory: {
+    id: 'CobolRuntimeInventory',
+    file: new URL('../runtime/cobol-runtime-inventory.pas', import.meta.url),
+    exports: { PROC_COBOL_RT_INVENTORY: 'COBOL_RT_INVENTORY' },
+    hostServices: true
+  },
   core: {
     id: 'CobolRuntimeCore',
     file: new URL('../runtime/cobol-runtime-core.pas', import.meta.url),

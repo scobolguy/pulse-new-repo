@@ -86,5 +86,5 @@ test('unsupported syntax and invalid structures fail explicitly', () => {
     ['     +I=1\n      END', /Continuation requires/],
     ['\tI=1\n      END', /Tabs/],
     [fixed(['END', 'I=1']), /after END/]
-  ]) assert.throws(() => compileMnfToPcode(source), message);
+  ]) assert.throws(() => compileMnfToPcode(source, { standard: 'starter' }), message);
 });

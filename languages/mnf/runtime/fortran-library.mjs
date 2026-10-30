@@ -15,12 +15,12 @@ const fail = message => {
 };
 const isReal = value => value !== null && typeof value === 'object' && 'real' in value;
 const num = value => (isReal(value) ? value.real : Number(value));
-const real = value => ({ real: Math.fround(value) });
+const real = (value, double = false) => double ? { real: Number(value), double: true } : { real: Math.fround(value) };
 const int32 = value => {
   if (!Number.isFinite(value)) fail('INTEGER conversion of a non-finite value');
   return Math.trunc(value) | 0;
 };
-const keep = (template, value) => (isReal(template) ? real(value) : int32(value));
+const keep = (template, value) => (isReal(template) ? real(value, template.double) : int32(value));
 
 export function createFortranState() {
   return { items: null };
@@ -47,30 +47,39 @@ function checkSubstring(value, first, last) {
 
 const significant = value => Number(Math.fround(value).toPrecision(7));
 
-function listReal(value) {
-  const x = significant(value);
-  if (x === 0) return '0.000000';
+function listReal(value, double = false) {
+  const x = double ? Number(value) : significant(value);
+  if (x === 0) return '0.';
   const magnitude = Math.floor(Math.log10(Math.abs(x)));
-  if (magnitude >= -1 && magnitude < 7) return x.toFixed(6 - magnitude);
-  const [mantissa, exponent] = x.toExponential(6).toUpperCase().split('E');
+  if (magnitude >= -1 && magnitude < (double ? 16 : 7)) {
+    const text = String(x);
+    return text.includes('.') ? text.replace(/^(-?)0\./, '$1.') : `${text}.`;
+  }
+  const [mantissa, exponent] = x.toExponential().toUpperCase().split('E');
   const power = Number(exponent);
   return `${mantissa}E${power < 0 ? '-' : '+'}${String(Math.abs(power)).padStart(2, '0')}`;
 }
 
 function listItem({ value, tag }) {
+  if (tag === 'Z') return `(${listReal(num(value[0]))},${listReal(num(value[1]))})`;
   if (tag === 'C') return String(value);
   if (tag === 'L') return value ? 'T' : 'F';
-  if (tag === 'R' || tag === 'D') return listReal(num(value));
+  if (tag === 'R' || tag === 'D') return listReal(num(value), tag === 'D');
   return String(num(value));
 }
 
 function listDirected(items) {
   let record = ' ';
+  const result = [];
   items.forEach((item, index) => {
-    if (index > 0 && !(item.tag === 'C' && items[index - 1].tag === 'C')) record += ' ';
-    record += listItem(item);
+    const separator = index > 0 && !(item.tag === 'C' && items[index - 1].tag === 'C') ? ' ' : '';
+    const text = separator + listItem(item);
+    for (const character of text) {
+      if (record.length === 79) { result.push(record); record = ' '; }
+      record += character;
+    }
   });
-  return [record];
+  return [...result, record];
 }
 
 const stars = width => '*'.repeat(width);
@@ -88,6 +97,7 @@ function editInteger(value, { w, m }, mode) {
     digits = digits.padStart(m, '0');
     if (m === 0 && v === 0) digits = '';
   }
+  if (!digits) return ' '.repeat(w);
   const sign = v < 0 ? '-' : mode.plus ? '+' : '';
   const text = sign + digits;
   return text.length > w ? stars(w) : text.padStart(w, ' ');
@@ -168,7 +178,7 @@ function editItem(descriptor, item, state) {
 
 const DATA_EDITS = new Set(['I', 'F', 'E', 'D', 'G', 'L', 'A']);
 
-function* walk(list) {
+export function* walk(list) {
   for (const item of list) {
     if (item.t === 'group') for (let i = 0; i < item.r; i += 1) yield* walk(item.items);
     else if (DATA_EDITS.has(item.t)) for (let i = 0; i < (item.r ?? 1); i += 1) yield item;
@@ -195,7 +205,7 @@ export function formatRecords(spec, items) {
     length = 0;
   };
   const lastGroup = [...spec].reverse().find(item => item.t === 'group');
-  const reversion = lastGroup ? [lastGroup] : spec;
+  const reversion = lastGroup ? spec.slice(spec.indexOf(lastGroup)) : spec;
   let pass = spec, next = 0;
   for (;;) {
     let consumed = false;
@@ -240,7 +250,7 @@ export function formatRecords(spec, items) {
 
 const runtimeFormats = new Map();
 
-function resolveFormat(format) {
+export function resolveFormat(format) {
   const text = String(format);
   if (text === '*') return null;
   if (text.startsWith('#')) return JSON.parse(text.slice(1));
@@ -270,9 +280,10 @@ function resolveFormat(format) {
   return spec;
 }
 
-function render(format, items) {
+export function render(format, items) {
   const spec = resolveFormat(format);
-  return spec === null ? listDirected(items) : formatRecords(spec, items);
+  return spec === null ? listDirected(items) : formatRecords(spec, items.flatMap(item =>
+    item.tag === 'Z' ? item.value.map(value => ({ value, tag: 'R' })) : [item]));
 }
 
 // ---------------------------------------------------------------- intrinsic functions
@@ -300,17 +311,54 @@ function realPower(base, exponent) {
   if (isReal(exponent)) {
     if (base.real === undefined ? num(base) < 0 : base.real < 0) fail('Negative REAL base raised to a REAL power');
     if (num(base) === 0 && num(exponent) <= 0) fail('Zero raised to a non-positive power');
-    return real(num(base) ** num(exponent));
+    return real(num(base) ** num(exponent), base.double || exponent.double);
   }
   if (num(base) === 0 && exponent <= 0) fail('Zero raised to a non-positive power');
-  return real(num(base) ** exponent);
+  return real(num(base) ** exponent, base.double);
 }
 
+const complex = (re, im) => ({ values: [real(re), real(im)], push: false });
+const multiplyComplex = ([a, b], [c, d]) => [a * c - b * d, a * d + b * c];
+const logComplex = (a, b) => {
+  if (a === 0 && b === 0) fail('LOG of zero COMPLEX argument');
+  return [Math.log(Math.hypot(a, b)), Math.atan2(b, a)];
+};
+const expComplex = (a, b) => [Math.exp(a) * Math.cos(b), Math.exp(a) * Math.sin(b)];
+const COMPLEX_FUNCTIONS = {
+  cdiv: (a, b, c, d) => {
+    const denominator = c * c + d * d;
+    if (!denominator) fail('COMPLEX division by zero');
+    return [(a * c + b * d) / denominator, (b * c - a * d) / denominator];
+  },
+  csqrt: (a, b) => {
+    const r = Math.hypot(a, b);
+    return [Math.sqrt((r + a) / 2), (b < 0 ? -1 : 1) * Math.sqrt((r - a) / 2)];
+  },
+  cexp: expComplex,
+  clog: logComplex,
+  csin: (a, b) => [Math.sin(a) * Math.cosh(b), Math.cos(a) * Math.sinh(b)],
+  ccos: (a, b) => [Math.cos(a) * Math.cosh(b), -Math.sin(a) * Math.sinh(b)],
+  cpow: (a, b, c, d) => expComplex(...multiplyComplex(logComplex(a, b), [c, d])),
+  cpowi: (a, b, n) => {
+    if (!Number.isInteger(n)) fail('COMPLEX integer exponent must be INTEGER');
+    let result = [1, 0], factor = [a, b], power = Math.abs(n);
+    while (power > 0) {
+      if (power % 2) result = multiplyComplex(result, factor);
+      factor = multiplyComplex(factor, factor);
+      power = Math.floor(power / 2);
+    }
+    return n < 0 ? COMPLEX_FUNCTIONS.cdiv(1, 0, ...result) : result;
+  },
+};
+
 const FUNCTIONS = {
+  badprocedure: id => fail(`Invalid procedure argument ${num(id)}`),
+  double: x => real(num(x), true),
+  cabs: (a, b) => real(Math.hypot(num(a), num(b))),
   int: x => int32(num(x)),
   nint: x => int32(Math.sign(num(x)) * Math.floor(Math.abs(num(x)) + 0.5)),
-  anint: x => real(Math.sign(num(x)) * Math.floor(Math.abs(num(x)) + 0.5)),
-  aint: x => real(Math.trunc(num(x))),
+  anint: x => keep(x, Math.sign(num(x)) * Math.floor(Math.abs(num(x)) + 0.5)),
+  aint: x => keep(x, Math.trunc(num(x))),
   abs: x => keep(x, Math.abs(num(x))),
   mod: (a, b) => {
     if (num(b) === 0) fail('MOD with a zero second argument');
@@ -322,12 +370,12 @@ const FUNCTIONS = {
   min: (...values) => values.reduce((best, value) => (num(value) < num(best) ? value : best)),
   atan2: (y, x) => {
     if (num(x) === 0 && num(y) === 0) fail('ATAN2 with both arguments zero');
-    return real(Math.atan2(num(y), num(x)));
+    return real(Math.atan2(num(y), num(x)), y.double || x.double);
   },
-  math: (name, x) => {
+  math: (x, name) => {
     const op = MATH[String(name)];
     if (!op) fail(`Unknown intrinsic ${name}`);
-    return real(op(num(x)));
+    return real(op(num(x)), x.double);
   },
   ipow: (a, b) => integerPower(num(a), num(b)),
   pow: (a, b) => realPower(a, b),
@@ -368,7 +416,20 @@ const FUNCTIONS = {
 // Returns { push, value } so statement-like calls can leave the stack untouched.
 export function executeFortranIntrinsic(name, args, state, io) {
   const op = name.slice('fortran.'.length);
+  const arity = { begin: 0, item: 2, complexitem: 2, print: 1, format: 1, outputunit: 1 };
+  const expected = arity[op] ?? (Object.hasOwn(FUNCTIONS, op) ? FUNCTIONS[op].length
+    : Object.hasOwn(COMPLEX_FUNCTIONS, op) ? COMPLEX_FUNCTIONS[op].length : undefined);
+  if (expected === undefined) fail(`Unknown FORTRAN library routine ${name}`);
+  if ((op === 'max' || op === 'min') ? args.length < 2 : args.length !== expected)
+    fail(`Invalid argument count for ${name}: ${args.length}`);
   switch (op) {
+    case 'complexitem':
+      if (!state.items) fail('Output item outside a WRITE statement');
+      state.items.push({ tag: 'Z', value: args });
+      return { push: false };
+    case 'outputunit':
+      if (num(args[0]) !== 6) fail(`External output unit ${num(args[0])} is not implemented; use preconnected unit 6`);
+      return { push: false };
     case 'begin':
       state.items = [];
       return { push: false };
@@ -387,6 +448,7 @@ export function executeFortranIntrinsic(name, args, state, io) {
       return { push: true, value: records[0] ?? '' };
     }
     default: {
+      if (Object.hasOwn(COMPLEX_FUNCTIONS, op)) return complex(...COMPLEX_FUNCTIONS[op](...args.map(num)));
       const fn = FUNCTIONS[op];
       if (!fn) fail(`Unknown FORTRAN library routine ${name}`);
       return { push: true, value: fn(...args) };

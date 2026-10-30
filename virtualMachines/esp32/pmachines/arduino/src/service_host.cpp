@@ -301,6 +301,7 @@ const Binding bindings[] = {
     {"buffer_json_path_text", "is", true}, {"buffer_json_path_integer", "is", false},
     {"text_header", "ss", true}, {"text_lower", "s", true},
     {"text_index", "ss", false}, {"text_slice", "sii", true},
+    {"cobol_text", "si", true}, {"cobol_unpad", "s", true},
     {"json_set", "ssv", true}, {"json_embed", "sss", true},
     {"json_merge", "ss", true}, {"json_append", "ssv", true}, {"raise_error", "s", false},
     {"table_get", "ss", true}, {"table_put", "sssi", false},
@@ -527,6 +528,7 @@ bool ServiceHost::validateUnit(const JsonDocument& map, const char* kind, Unit& 
             }
             break;
         case OP_PUSH_STR: case OP_PUSH_INT: case OP_LOAD_NAME: case OP_STORE_NAME:
+        case OP_PRINT: case OP_PRINT_NL:
         case OP_MAP:
         case OP_RET: case OP_MAP_RETURN: case OP_HALT:
         case OP_CONCAT: case OP_STREQ: case OP_STRNEQ: case OP_EQ: case OP_NEQ: case OP_LT:
@@ -578,6 +580,31 @@ bool ServiceHost::validateUnit(const JsonDocument& map, const char* kind, Unit& 
         for (JsonVariantConst param : pair.value()["params"].as<JsonArrayConst>()) {
             if (!param.is<const char*>() || params.size() >= 8) { error = "Invalid hosted signature"; return false; }
             params.emplace_back(param.as<const char*>());
+        }
+        if (!pair.value()["locals"].isNull()) {
+            if (!pair.value()["locals"].is<JsonArrayConst>() || pair.value()["locals"].size() > 256) {
+                error = "Invalid hosted local declarations"; return false;
+            }
+            auto& locals = out.signatures[std::string("@locals:") + pair.key().c_str()];
+            for (JsonVariantConst local : pair.value()["locals"].as<JsonArrayConst>()) {
+                if (!local.is<const char*>() || !strlen(local.as<const char*>())
+                    || strlen(local.as<const char*>()) > 128) {
+                    error = "Invalid hosted local name"; return false;
+                }
+                locals.emplace_back(local.as<const char*>());
+            }
+        }
+    }
+    if (!map["globals"].isNull()) {
+        if (!map["globals"].is<JsonArrayConst>() || map["globals"].size() > 256) {
+            error = "Invalid hosted global declarations"; return false;
+        }
+        for (JsonVariantConst global : map["globals"].as<JsonArrayConst>()) {
+            if (!global.is<const char*>() || !strlen(global.as<const char*>())
+                || strlen(global.as<const char*>()) > 128) {
+                error = "Invalid hosted global name"; return false;
+            }
+            out.signatures["@globals"].emplace_back(global.as<const char*>());
         }
     }
     if (std::string(kind) == "daemon") {
@@ -1134,6 +1161,11 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
         if (serialized != SerializeResult::ok)
             return fail("Announcement serialization failed", error,
                         serialized == SerializeResult::tooLarge ? 413 : 503);
+    } else if (op == "cobol_text" || op == "cobol_unpad") {
+        const bool ok = op == "cobol_text"
+            ? cobolText(args[0].text, args[1].integer, result.text, error)
+            : cobolUnpad(args[0].text, result.text, error);
+        if (!ok) return fail("Invalid COBOL text bounds", error);
     } else if (op.rfind("text_", 0) == 0) {
         const auto& text = args[0].text;
         if (text.size() > 1024) return fail("Invalid ASCII text bounds", error);
@@ -2049,6 +2081,9 @@ std::string ServiceHost::status(const std::string& id) {
     doc["httpEventCapacity"] = HTTP_EVENT_LIMIT;
     doc["serviceCapacity"] = SERVICE_LIMIT;
     doc["workerTaskCount"] = task ? 1 : 0;
+    doc["hostImageResident"] = true;
+    doc["hostProcedureLocals"] = true;
+    doc["hostCobolText"] = true;
     auto profiles = doc["hostImageProfiles"].to<JsonArray>();
     profiles.add("bounded"); profiles.add("extended");
     auto lan = doc["lanDiscovery"].to<JsonObject>();
@@ -2148,7 +2183,10 @@ void ServiceHost::daemonDiagnostics(JsonArray list, const Context& context) {
         item["droppedDatagrams"] = daemon.droppedDatagrams;
         item["shedDatagrams"] = daemon.shedDatagrams;
         item["lastError"] = daemon.lastError;
-        if (daemon.unit.image) item["instructionCount"] = daemon.unit.image->size();
+        if (daemon.unit.image) {
+            item["instructionCount"] = daemon.unit.image->size();
+            item["instructionStorage"] = daemon.unit.image->isResident() ? "psram-resident" : "ffs-paged";
+        }
     }
 }
 
@@ -2169,7 +2207,7 @@ void ServiceHost::describe(JsonObject doc, const Context& context, bool details)
     for (const auto& table : tables) count += table.second.size();
     doc["entries"] = count;
     if (service.image) {
-        doc["instructionStorage"] = "ffs-paged";
+        doc["instructionStorage"] = service.image->isResident() ? "psram-resident" : "ffs-paged";
         doc["instructionCount"] = service.image->size();
         doc["instructionPageReads"] = service.image->pageReads;
         doc["instructionCacheHits"] = service.image->cacheHits;

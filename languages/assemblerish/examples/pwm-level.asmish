@@ -1,0 +1,10 @@
+HANDLER status_led
+TARGET "/api/devices/status-led"
+TRIGGER TIMER 1000
+
+PWMOUT led PIN 21 CHANNEL 0 HZ 1000 BITS 10 INITIAL 0
+
+SET DUTY 512
+PWM led DUTY
+EVENT led_level 1 DUTY 0
+END

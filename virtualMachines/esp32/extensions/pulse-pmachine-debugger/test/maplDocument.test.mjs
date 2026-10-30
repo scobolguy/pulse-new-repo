@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { applyMappingAction, prototypeMapping, rulesOf } from '../out/dataMapperModel.js';
 import { applySplices, formatPath, mappingToMapl, maplSplices, maplToMapping, parseMapl } from '../out/maplDocument.js';
-import { compileMaplWithAntlr } from '../../../aggregator/scripts/compile-mapl-antlr-to-pcode.mjs';
+import { compileMaplWithAntlr } from '../../../../../languages/mapl/src/compile-mapl-antlr-to-pcode.mjs';
 
 const sample = `// Payments to transfers
 map 'pay-to-xfer' from payment to transfer;

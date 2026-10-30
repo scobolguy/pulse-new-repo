@@ -1,0 +1,12 @@
+{
+  "name": "@pulse/screencobol",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/compiler.mjs",
+  "scripts": {
+    "antlr:generate": "node scripts/generate-parser.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": { "antlr4": "^4.13.2" }
+}

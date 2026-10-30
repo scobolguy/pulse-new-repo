@@ -22,6 +22,7 @@ import { createDesktopDateBindings } from './desktop-date-bindings.mjs';
 import { createJsonValueBindings } from './json-value-bindings.mjs';
 import { createXmlBindings } from './xml-bindings.mjs';
 import { HOST_CAPABILITIES_VERSION, HOST_PROFILES, assertHostCapabilities } from '../../shared/contracts/host-capabilities.mjs';
+import { createInventoryClient } from './inventory-client.mjs';
 
 function failure(message, status = 400) {
   return Object.assign(new Error(message), { status });
@@ -61,7 +62,7 @@ export async function createPascalishServiceHost({
   maxTimers = 8, maxDaemonDatagramBytes = 1024, clock = () => Math.floor(performance.now()), logger = console,
   onDaemonEvent = null, storageRoots = {}, maxFileBytes = 262144, desktopBudget = false,
   distributedBindings = {}, bluetoothSourceFactory = null, filesystemBindingOverrides = {},
-  lifecycle = undefined, infrastructureProbe = null
+  lifecycle = undefined, infrastructureProbe = null, inventoryGrant = null
 }) {
   if (compiled?.programMap?.hostBindingsVersion !== SERVICE_HOST_BINDINGS_VERSION
     || compiled.programMap.runtimeUnit?.kind !== 'service') throw failure('Unsupported service host contract');
@@ -116,6 +117,7 @@ export async function createPascalishServiceHost({
     maxFileBytes: Math.min(maxFileBytes, maxResponseBytes), maxPageBytes: maxResponseBytes
   });
   const isamBindings = createIsamBindings({ ...filesystem.handlers, ...filesystemBindingOverrides });
+  const inventoryApply = inventoryGrant === null ? null : createInventoryClient(inventoryGrant);
   const capabilities = {
     version: HOST_CAPABILITIES_VERSION,
     ...HOST_PROFILES.js,
@@ -125,6 +127,7 @@ export async function createPascalishServiceHost({
         && typeof filesystemBindingOverrides['host.fs_exists'] === 'function' ? ['filesystem.read'] : []),
       ...(typeof filesystemBindingOverrides['host.fs_write_text'] === 'function' ? ['filesystem.write'] : []),
       ...(Object.keys(distributedBindings).length ? ['distributed-cache'] : []),
+      ...(inventoryApply ? ['inventory.transaction'] : []),
       ...(bluetoothSourceFactory ? ['bluetooth.discovery'] : []),
       ...(infrastructureProbe ? ['infrastructure.readiness'] : []),
       ...(networkPeers.length ? ['filesystem.remote'] : [])],
@@ -323,6 +326,10 @@ export async function createPascalishServiceHost({
         return value;
       };
       const handlers = {
+        'host.inventory_apply': (...args) => {
+          if (!inventoryApply) throw failure('Inventory transaction authority is not granted', 403);
+          return inventoryApply(...args);
+        },
         'host.infrastructure_probe': async () => {
           if (!infrastructureProbe) throw failure('Infrastructure probe is not configured', 503);
           return infrastructureProbe();
@@ -730,7 +737,8 @@ export async function createPascalishServiceHost({
       enabled: running,
       daemons: [...units.keys()]
     }),
-    getStatus: () => ({ running, pending, timers: timers.size, daemons: units.size, storageBytes, capabilities,
+    getStatus: () => ({ running, hostBindingsVersion: SERVICE_HOST_BINDINGS_VERSION,
+      pending, timers: timers.size, daemons: units.size, storageBytes, capabilities,
       ...(lifecycleConfig ? {
         serviceLifecycle: {
           version: lifecycleConfig.version, requires: lifecycleConfig.requires,

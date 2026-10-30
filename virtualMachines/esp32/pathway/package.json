@@ -1,0 +1,20 @@
+{
+  "name": "@pulse/pathway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/controller.mjs",
+    "./requester": "./src/requester.mjs",
+    "./http": "./src/http-server.mjs",
+    "./inventory": "./src/inventory-authority.mjs",
+    "./inventory-mssql": "./src/inventory-mssql.mjs",
+    "./stock-gateway": "./src/stock-gateway.mjs",
+    "./node-adapter": "./src/node-adapter.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "demo": "node demo.mjs",
+    "demo:inventory": "node demo.mjs --inventory"
+  }
+}

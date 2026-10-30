@@ -7,5 +7,5 @@
     "includeDir": "src",
     "srcDir": "src"
   },
-  "dependencies": ["SD", "ArduinoJson"]
+  "dependencies": ["SD", "ArduinoJson", "DHT sensor library"]
 }

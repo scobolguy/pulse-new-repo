@@ -29,7 +29,9 @@ artifact integration remains in `aggregator/scripts/compile-interoperable-langua
 the JavaScript runtime remains in its current location pending runtime consolidation.
 This is a repository-local package, not a standalone published compiler.
 
-Legacy aggregator compiler imports and regression script entrypoints forward here.
+Aggregator integrations import the compiler here directly. The old aggregator
+compiler and generated-parser entrypoints have been removed; legacy regression
+script entrypoints still forward to the language tests.
 No VBish syntax or runtime semantics were changed by this relocation.
 
 The compiler records the same versioned

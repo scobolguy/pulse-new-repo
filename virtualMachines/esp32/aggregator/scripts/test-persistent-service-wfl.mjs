@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { compileWorkflowDSLWithAntlr } from './workflow-antlr-compiler.mjs';
+import { compileWorkflowDSLWithAntlr } from '../../../../languages/wfl/src/workflow-antlr-compiler.mjs';
 
 const source = `
 DEPLOYMENT "conversion-deploy" PROJECT "payments" TARGETS ("js-node-01") BEGIN

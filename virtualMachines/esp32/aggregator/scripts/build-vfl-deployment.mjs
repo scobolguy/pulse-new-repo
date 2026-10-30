@@ -1,10 +1,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { compileWorkflowDSL } from './compile-workflow-dsl.mjs';
-import { compileWorkflowToPcode } from './compile-workflow-to-pcode.mjs';
+import { compileWorkflowDSL } from '../../../../languages/wfl/src/compile-workflow-dsl.mjs';
+import { compileWorkflowToPcode } from '../../../../languages/wfl/src/compile-workflow-to-pcode.mjs';
 import { compilePascalishProgramWithAntlr } from './compile-pascalish-program-antlr-to-pcode.mjs';
-import { compileMaplWithAntlr } from './compile-mapl-antlr-to-pcode.mjs';
+import { compileMaplWithAntlr } from '../../../../languages/mapl/src/compile-mapl-antlr-to-pcode.mjs';
 
 function required(value, label) {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} is required`);

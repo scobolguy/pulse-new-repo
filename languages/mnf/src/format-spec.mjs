@@ -132,10 +132,10 @@ export function hollerithToApostrophe(text, fail = () => {}) {
   let canStart = true;
   while (i < text.length) {
     const c = text[i];
-    if (c === "'") {
-      const end = /^'(?:[^']|'')*'/.exec(text.slice(i));
+    if (c === "'" || c === '"') {
+      const end = (c === "'" ? /^'(?:[^']|'')*'/ : /^"(?:[^"]|"")*"/).exec(text.slice(i));
       if (!end) return out + text.slice(i);
-      out += end[0];
+      out += c === "'" ? end[0] : `'${end[0].slice(1, -1).replaceAll('""', '"').replaceAll("'", "''")}'`;
       i += end[0].length;
       canStart = false;
       continue;

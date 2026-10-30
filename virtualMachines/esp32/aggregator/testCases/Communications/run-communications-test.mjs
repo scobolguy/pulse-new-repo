@@ -6,7 +6,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { callMapperAsync, callMapperSync } from './javascript-client.mjs';
-import { compileWorkflowDSLWithAntlr } from '../../scripts/workflow-antlr-compiler.mjs';
+import { compileWorkflowDSLWithAntlr } from '../../../../../languages/wfl/src/workflow-antlr-compiler.mjs';
 import { compileCobolishToPmachine, compileVbishToPmachine } from '../../scripts/compile-interoperable-language.mjs';
 import { compilePascalishProgramWithAntlr } from '../../scripts/compile-pascalish-program-antlr-to-pcode.mjs';
 

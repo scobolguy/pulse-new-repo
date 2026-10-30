@@ -7,7 +7,7 @@ Source file extension:
 
 Compiler:
 - [Canonical compiler](../src/compile-workflow-dsl.mjs)
-- Compatibility entrypoint: `virtualMachines/esp32/aggregator/scripts/compile-workflow-dsl.mjs`
+- Aggregator integrations import this canonical compiler directly.
 
 The commands and data paths below assume the working directory is
 `virtualMachines/esp32/aggregator`. See [the package README](../README.md) for
@@ -206,7 +206,7 @@ npm run interpret:workflow
 
 Or with custom paths:
 
-node scripts/compile-workflow-dsl.mjs \
+node ../../../languages/wfl/src/compile-workflow-dsl.mjs \
   --in data/workflow.wfl \
   --symbols-out data/symbols.generated.json \
   --workflow-out data/workflows.generated.json \
@@ -245,7 +245,7 @@ Workflow control steps may still be lowered to p-code for legacy execution. Reso
 
 Compile one workflow control block to PMachine p-code:
 
-node scripts/compile-workflow-to-pcode.mjs \
+node ../../../languages/wfl/src/compile-workflow-to-pcode.mjs \
   --in data/workflow.wfl \
   --workflow pain2-routing \
   --out ../object/pcode/workflow-router.pcode \

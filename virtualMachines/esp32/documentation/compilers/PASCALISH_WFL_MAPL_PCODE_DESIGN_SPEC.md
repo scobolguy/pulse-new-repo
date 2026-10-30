@@ -235,8 +235,8 @@ ENDIF;
 ```
 
 ```text
-node aggregator/scripts/compile-workflow-dsl.mjs --in estate.wfl --environment test
-node aggregator/scripts/compile-workflow-dsl.mjs --in estate.wfl --environment prod --define region=us
+node ../../languages/wfl/src/compile-workflow-dsl.mjs --in estate.wfl --environment test
+node ../../languages/wfl/src/compile-workflow-dsl.mjs --in estate.wfl --environment prod --define region=us
 ```
 
 ### 3.2.2 WFL `FLOW` block (visual designer)

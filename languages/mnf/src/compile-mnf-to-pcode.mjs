@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { parseFortran } from './parse.mjs';
+import { generateFortranPcode } from './codegen.mjs';
 
 export const MNF_STARTER = [
   '      PROGRAM NOSTALGIA',
@@ -66,7 +68,7 @@ function tokenize(text, line) {
   return tokens;
 }
 
-export function compileMnfToPcode(source, { fileName = 'program.ftn' } = {}) {
+export function compileMnfStarterToPcode(source, { fileName = 'program.ftn' } = {}) {
   const statements = readFixedForm(source);
   const code = [], sourceMap = {}, types = new Map(), loops = [], labels = new Set(), targets = [];
   let sourceLine = 1, serial = 0, programId = path.basename(fileName, path.extname(fileName));
@@ -263,11 +265,24 @@ export function compileMnfToPcode(source, { fileName = 'program.ftn' } = {}) {
   };
 }
 
+export function compileMnfToPcode(source, { fileName = 'program.ftn', standard = 'auto' } = {}) {
+  if (!['auto', 'starter', 'fortran77'].includes(standard)) throw new Error(`Unknown FORTRAN standard: ${standard}`);
+  if (standard === 'starter') return compileMnfStarterToPcode(source, { fileName });
+  if (standard === 'auto') {
+    try {
+      return compileMnfStarterToPcode(source, { fileName });
+    } catch (error) {
+      if (!(error instanceof Error) || !/^MNF line \d+:/.test(error.message)) throw error;
+    }
+  }
+  return generateFortranPcode(parseFortran(source, { fileName }).units, { fileName, sourceText: String(source) });
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
-    const [input, output] = process.argv.slice(2);
-    if (!input || !output) throw new Error('Usage: node compile-mnf-to-pcode.mjs input.ftn output.pcode');
-    const artifact = compileMnfToPcode(await fs.readFile(input, 'utf8'), { fileName: path.basename(input) });
+    const [input, output, standard = 'auto'] = process.argv.slice(2);
+    if (!input || !output) throw new Error('Usage: node compile-mnf-to-pcode.mjs input.ftn output.pcode [auto|starter|fortran77]');
+    const artifact = compileMnfToPcode(await fs.readFile(input, 'utf8'), { fileName: path.basename(input), standard });
     await fs.writeFile(output, artifact.pcodeText);
     await fs.writeFile(output.replace(/(?:\.pcode)?$/, '.program.json'), JSON.stringify(artifact.programMap, null, 2) + '\n');
     console.log(`Compiled ${input} -> ${output}`);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import { compileWorkflowDSLWithAntlr } from './workflow-antlr-compiler.mjs';
+import { compileWorkflowDSLWithAntlr } from '../../../../languages/wfl/src/workflow-antlr-compiler.mjs';
 
 const root = new URL('../', import.meta.url);
 const read = file => fs.readFile(new URL(file, root), 'utf8');

@@ -718,6 +718,7 @@ test('ordinary saved .pas, .ftn and .cob files run and debug using the bundled r
   const cases = [
     ['pascalish', 'hello.pas', "program Hello; begin writeln('Standalone Pascalish'); end.", 'Standalone Pascalish'],
     ['fortranish', 'hello.ftn', "      PROGRAM HELLO\n      PRINT, 'Standalone Fortranish'\n      END\n", 'Standalone Fortranish'],
+    ['fortranish', 'extended.ftn', '      INTEGER A(2)\n      DATA A(2)/42/\n      WRITE(*,10) A(2)\n   10 FORMAT("Standalone F77=",I2)\n      END\n', 'Standalone F77=42'],
     ['cobolish', 'hello.cob', 'IDENTIFICATION DIVISION.\nPROGRAM-ID. HELLO.\nPROCEDURE DIVISION.\nDISPLAY FUNCTION UPPER-CASE("standalone cobolish").\nSTOP RUN.', 'STANDALONE COBOLISH'],
   ];
   vscode.workspace.getWorkspaceFolder = () => undefined;
@@ -750,6 +751,15 @@ test('ordinary saved .pas, .ftn and .cob files run and debug using the bundled r
         if (value.state.status !== 'completed') await value.resumeUntilPause('continue');
         assert.equal(value.state.status, 'completed', value.state.error);
         assert.deepEqual(value.state.stdout, [expected]);
+        if (name === 'extended.ftn') {
+          const remote = adapter({ program: fileName }).value;
+          try {
+            await assert.rejects(() => remote.launch({ program: fileName, runtime: 'esp32' }),
+              /Extended FORTRAN 77.*JavaScript/);
+          } finally {
+            remote.dispose();
+          }
+        }
       } finally {
         value.dispose();
       }

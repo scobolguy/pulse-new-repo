@@ -16,10 +16,14 @@
 #include <ArduinoJson.h>
 #include "pmachine.h"
 #include "managed_objects.h"
+#include "fortran_runtime.h"
+#include "fortran_format.h"
 #include "cobol_vm.h"
 #include "StringPool.h"
 #include "GpioPinSemaphore.h"
 #if defined(ESP32)
+#include <LittleFS.h>
+#include "SerialConsoleLease.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <esp_task_wdt.h>
@@ -1746,27 +1750,27 @@ std::deque<PInstruction> loadHostedTextPCode(const std::string& text) {
     return parseTextPCode<std::deque<PInstruction>>(text, true);
 }
 
-void PMachine::run(const std::vector<PInstruction>& instructions, int startPc) {
+void PMachine::run(const std::vector<PInstruction>& instructions, int startPc, const std::string& stdinText, bool uartInput) {
     runInstructions(instructions.size(), [&](size_t index) {
         return instructions[index];
-    }, startPc);
+    }, startPc, nullptr, stdinText, uartInput);
 }
 
 void PMachine::run(const std::deque<PInstruction>& instructions, int startPc,
-                   HostExecutionStorage* storage) {
+                   HostExecutionStorage* storage, const std::string& stdinText, bool uartInput) {
     runInstructions(instructions.size(), [&](size_t index) {
         return instructions[index];
-    }, startPc, storage);
+    }, startPc, storage, stdinText, uartInput);
 }
 
 void PMachine::runImage(size_t count, const std::function<PInstruction(size_t)>& instructionAt,
-                       HostExecutionStorage* storage) {
-    runInstructions(count, instructionAt, 0, storage);
+                       HostExecutionStorage* storage, const std::string& stdinText, bool uartInput) {
+    runInstructions(count, instructionAt, 0, storage, stdinText, uartInput);
 }
 
 void PMachine::runInstructions(size_t instructionCount,
                               const std::function<PInstruction(size_t)>& instructionAt,
-                              int startPc, HostExecutionStorage* storage) {
+                              int startPc, HostExecutionStorage* storage, const std::string& stdinText, bool uartInput) {
     hostedStorageError = nullptr;
     auto& gFlowState = flowState;
     static const size_t MAX_RUN_STEPS = 200000;
@@ -1780,7 +1784,6 @@ void PMachine::runInstructions(size_t instructionCount,
     static const size_t MAX_NAME_FRAME_DEPTH = 128;
     static const size_t INITIAL_NAME_FRAME_CAPACITY = 8;
     static const size_t MAX_RETAINED_TRACE_ENTRIES = 128;
-    Value stack[STACK_SIZE];
     if (!storage) {
         if (!executionStorage) executionStorage.reset(new (std::nothrow) HostExecutionStorage);
         bool ready = false;
@@ -1818,6 +1821,19 @@ void PMachine::runInstructions(size_t instructionCount,
         HostExecutionStorage& storage;
         ~StorageLease() { storage.release(); }
     } storageLease{*storage};
+    // Binary64 Values made this array too large for HTTP task stacks during file I/O.
+    std::unique_ptr<Value[]> operandStack(new (std::nothrow) Value[STACK_SIZE]);
+    Value* stack = operandStack.get();
+    if (!stack) {
+        hostedStorageError = "cannot reserve operand stack";
+        lastRunGlobals.clear();
+        lastRunTextOutput.clear();
+        lastRunTrace.clear();
+        lastRunStepCount = 0;
+        lastRunStepLimitHit = false;
+        running = false;
+        return;
+    }
     storage->reset();
     if (instructionCount == 1) {
         const PInstruction first = instructionAt(0);
@@ -1844,12 +1860,121 @@ void PMachine::runInstructions(size_t instructionCount,
     const uint32_t hostedStartedAt = millis();
     if (!hostCallHook) nameCallStack.reserve(INITIAL_NAME_FRAME_CAPACITY);
     std::string currentOutputLine;
+    FortranFileHost fortranFiles;
+#if defined(ESP32)
+    SerialConsoleLease uartLease;
+#endif
+    static bool skipLineFeed = false;
+    if (uartInput) {
+        fortranFiles.consoleRead = [&](std::string& row, std::string& error) {
+#if defined(ESP32)
+            if (!uartLease.acquire()) {
+                error = "FORTRAN runtime error: UART input is busy"; return 1;
+            }
+            Serial.print("? ");
+            row.clear();
+            const uint32_t started = millis();
+            bool overflow = false;
+            while (millis() - started < 30000) {
+                if (Serial.available()) {
+                    const int byte = Serial.read();
+                    if (skipLineFeed) {
+                        skipLineFeed = false;
+                        if (byte == '\n') continue;
+                    }
+                    if (byte == 4 && row.empty()) {
+                        error = "FORTRAN runtime error: End of file"; return -1;
+                    }
+                    if (byte == '\r' || byte == '\n') {
+                        skipLineFeed = byte == '\r';
+                        Serial.println();
+                        if (overflow) { error = "FORTRAN runtime error: UART input record capacity exceeded"; return 1; }
+                        return 0;
+                    }
+                    if (byte == 8 || byte == 127) {
+                        if (!row.empty() && !overflow) { row.pop_back(); Serial.print("\b \b"); }
+                    } else if (byte >= 0) {
+                        if (row.size() < FORTRAN_RECORD_LIMIT && !overflow) {
+                            row += static_cast<char>(byte);
+                            Serial.write(static_cast<uint8_t>(byte));
+                        } else overflow = true;
+                    }
+                } else {
+                    if (esp_task_wdt_status(nullptr) == ESP_OK) esp_task_wdt_reset();
+                    delay(1);
+                }
+            }
+            Serial.println();
+            error = "FORTRAN runtime error: UART input timed out after 30 seconds";
+            return 1;
+#else
+            error = "FORTRAN runtime error: UART input is unavailable";
+            return 1;
+#endif
+        };
+    }
+    const auto fortranPath = [](const std::string& name, std::string& out, std::string& error) {
+        if (!FortranFiles::validName(name)) { error = "FORTRAN runtime error: invalid external filename"; return false; }
+        out = "/fortran/" + name;
+        return true;
+    };
+    fortranFiles.read = [&, fortranPath](const std::string& name, std::string& text, bool& exists, std::string& error) {
+        std::string path;
+        if (!fortranPath(name, path, error)) return false;
+#if defined(ESP32)
+        exists = LittleFS.exists(path.c_str());
+        if (!exists) { text.clear(); return true; }
+        File file = LittleFS.open(path.c_str(), "r");
+        if (!file || file.isDirectory() || file.size() > FORTRAN_TRANSFER_LIMIT) {
+            error = "FORTRAN runtime error: local file read unavailable or capacity exceeded"; return false;
+        }
+        text.resize(file.size());
+        const size_t received = text.empty() ? 0 : file.read(reinterpret_cast<uint8_t*>(&text[0]), text.size());
+        file.close();
+        if (received == text.size()) return true;
+#endif
+        error = "FORTRAN runtime error: external file read failed";
+        return false;
+    };
+    fortranFiles.write = [&, fortranPath](const std::string& name, const std::string& text, std::string& error) {
+        std::string path;
+        if (!fortranPath(name, path, error)) return false;
+        if (text.size() > FORTRAN_TRANSFER_LIMIT) { error = "FORTRAN runtime error: file capacity exceeded"; return false; }
+#if defined(ESP32)
+        if (!LittleFS.exists("/fortran") && !LittleFS.mkdir("/fortran")) {
+            error = "FORTRAN runtime error: cannot create local file directory"; return false;
+        }
+        const std::string temporary = "/fortran/." + name + ".tmp";
+        File file = LittleFS.open(temporary.c_str(), "w");
+        if (!file) { error = "FORTRAN runtime error: cannot open temporary file"; return false; }
+        const size_t written = text.empty() ? 0 : file.write(reinterpret_cast<const uint8_t*>(text.data()), text.size());
+        file.flush();
+        file.close();
+        if (written == text.size() && LittleFS.rename(temporary.c_str(), path.c_str())) return true;
+        LittleFS.remove(temporary.c_str());
+#endif
+        error = "FORTRAN runtime error: atomic external file write failed";
+        return false;
+    };
+    fortranFiles.remove = [&, fortranPath](const std::string& name, std::string& error) {
+        std::string path;
+        if (!fortranPath(name, path, error)) return false;
+#if defined(ESP32)
+        if (LittleFS.remove(path.c_str())) return true;
+#endif
+        error = "FORTRAN runtime error: external file delete failed";
+        return false;
+    };
+    FortranFormatRuntime fortranRuntime(hostedStrings, std::move(fortranFiles), stdinText);
     std::vector<std::string>& outputLines = lastRunTextOutput;
     // Reclaim the previous run's result capacity here; the results themselves must
     // outlive run() so callers can read them.
     decltype(lastRunTextOutput)().swap(lastRunTextOutput);
     decltype(lastRunTrace)().swap(lastRunTrace);
     auto emitOutputLine = [&](const std::string& line) {
+#if defined(ESP32)
+        if (uartInput) Serial.println(line.c_str());
+#endif
         if (textOutputHook) {
             textOutputHook(line, textOutputContext);
         } else {
@@ -1907,10 +2032,10 @@ void PMachine::runInstructions(size_t instructionCount,
         if (value.kind == ValueKind::EnumRef) {
             return getEnumValueName(value.handle, value.i);
         }
-        if (value.kind == ValueKind::Real) {
+        if (value.isReal()) {
             // Pascal-style scientific form; 7 significant digits matches float precision.
             char buf[32] = {0};
-            snprintf(buf, sizeof(buf), "%.6E", static_cast<double>(value.r));
+            snprintf(buf, sizeof(buf), value.isDouble() ? "%.16E" : "%.6E", value.asReal());
             return std::string(buf);
         }
         return std::to_string(value.i);
@@ -1944,6 +2069,7 @@ void PMachine::runInstructions(size_t instructionCount,
                     for (size_t index = 0; index < variable.elementCount; ++index)
                         mark(variable.slots[index].value);
                 if (objectStorage) objectStorage->objects.forEachValue(mark);
+                fortranRuntime.forEachRoot(mark);
                 for (const auto& record : records)
                     for (const auto& field : record.second) mark(field.second);
                 heap.sweep([&](uint16_t handle) { return live[handle]; });
@@ -1992,9 +2118,9 @@ void PMachine::runInstructions(size_t instructionCount,
         if (value.kind == ValueKind::StringRef || value.kind == ValueKind::EnumRef) {
             return jsonQuote(stringAt(value));
         }
-        if (value.kind == ValueKind::Real) {
+        if (value.isReal()) {
             char buf[32] = {0};
-            snprintf(buf, sizeof(buf), "%.6E", static_cast<double>(value.r));
+            snprintf(buf, sizeof(buf), value.isDouble() ? "%.17g" : "%.6E", value.asReal());
             return std::string(buf);
         }
         return std::to_string(value.i);
@@ -2497,8 +2623,9 @@ void PMachine::runInstructions(size_t instructionCount,
             if (sp >= 2) {
                 const Value rhs = stack[--sp];
                 const Value lhs = stack[sp - 1];
-                const float divisor = rhs.asReal();
-                stack[sp - 1] = Value::makeReal(divisor == 0.0f ? 0.0f : lhs.asReal() / divisor);
+                const double divisor = rhs.asReal();
+                const double result = divisor == 0.0 ? 0.0 : lhs.asReal() / divisor;
+                stack[sp - 1] = lhs.isDouble() || rhs.isDouble() ? Value::makeDouble(result) : Value::makeReal(result);
             }
             ++pc;
             continue;
@@ -2512,14 +2639,14 @@ void PMachine::runInstructions(size_t instructionCount,
                 const Value lhsValue = stack[sp - 1];
                 // Either operand being real promotes the whole expression, Pascal-style.
                 if (rhsValue.isReal() || lhsValue.isReal()) {
-                    const float lhs = lhsValue.asReal();
-                    const float rhs = rhsValue.asReal();
-                    float out = 0.0f;
+                    const double lhs = lhsValue.asReal();
+                    const double rhs = rhsValue.asReal();
+                    double out = 0.0;
                     if (instr.opcode == OP_ADD) out = lhs + rhs;
                     if (instr.opcode == OP_SUB) out = lhs - rhs;
                     if (instr.opcode == OP_MUL) out = lhs * rhs;
-                    if (instr.opcode == OP_DIV) out = (rhs == 0.0f) ? 0.0f : static_cast<float>(static_cast<int32_t>(lhs / rhs));
-                    stack[sp - 1] = Value::makeReal(out);
+                    if (instr.opcode == OP_DIV) out = (rhs == 0.0) ? 0.0 : static_cast<int32_t>(lhs / rhs);
+                    stack[sp - 1] = lhsValue.isDouble() || rhsValue.isDouble() ? Value::makeDouble(out) : Value::makeReal(out);
                 } else {
                     const int rhs = rhsValue;
                     const int lhs = lhsValue;
@@ -2699,7 +2826,7 @@ void PMachine::runInstructions(size_t instructionCount,
                     gFlowState["__runtime_error"] = "stack overflow";
                     goto pmachineRunExit;
                 }
-                stack[sp++] = Value::makeReal(namedRealVariables[varName]);
+                stack[sp++] = namedRealVariables[varName];
             } else if (namedEnumVariables.count(varName) > 0) {
                 if (sp >= STACK_SIZE) {
                     gFlowState["__runtime_error"] = "stack overflow";
@@ -2801,7 +2928,7 @@ void PMachine::runInstructions(size_t instructionCount,
                 pushString(strBinding->second);
             } else if (namedRealVariables.count(varName) > 0) {
                 if (sp >= STACK_SIZE) { gFlowState["__runtime_error"] = "stack overflow"; goto pmachineRunExit; }
-                stack[sp++] = Value::makeReal(namedRealVariables[varName]);
+                stack[sp++] = namedRealVariables[varName];
             } else if (namedEnumVariables.count(varName) > 0) {
                 if (sp >= STACK_SIZE) { gFlowState["__runtime_error"] = "stack overflow"; goto pmachineRunExit; }
                 stack[sp++] = namedEnumVariables[varName];
@@ -2844,7 +2971,7 @@ void PMachine::runInstructions(size_t instructionCount,
                 namedRealVariables.erase(varName);
                 namedEnumVariables.erase(varName);
             } else if (sp > 0 && stack[sp - 1].isReal()) {
-                float value = stack[--sp].asReal();
+                const Value value = stack[--sp];
                 if (sp < 1) { ++pc; continue; }
                 int idx = stack[--sp];
                 if (idx < 0 || idx >= instr.intOperand) {
@@ -2853,7 +2980,7 @@ void PMachine::runInstructions(size_t instructionCount,
                 }
                 const std::string varName = indexedArrayName(instr.strOperand, idx);
                 if (ExtendableValueSlot* slot = extendedSlot(instr.strOperand, static_cast<size_t>(idx))) {
-                    if (!storeExtendedValue(*slot, Value::makeReal(value))) {
+                    if (!storeExtendedValue(*slot, value)) {
                         gFlowState["__runtime_error"] = std::string("unable to allocate extendable array value: ") + instr.strOperand;
                         goto pmachineRunExit;
                     }
@@ -2927,6 +3054,35 @@ void PMachine::runInstructions(size_t instructionCount,
         }
         case OP_CALL_EXT: {
             const std::string symbol = trimCopy(instr.strOperand);
+            if (symbol.rfind("fortran.", 0) == 0) {
+                if (instr.value < 0 || instr.value > STACK_SIZE || sp < instr.value) {
+                    gFlowState["__runtime_error"] = "invalid FORTRAN argument count or stack underflow";
+                    goto pmachineRunExit;
+                }
+                std::vector<FortranScalar> args, results;
+                args.reserve(static_cast<size_t>(instr.value));
+                for (int index = sp - instr.value; index < sp; ++index)
+                    args.emplace_back(stack[index].isString()
+                        ? FortranScalar::fromManagedString(stack[index], stringAt(stack[index])) : FortranScalar(stack[index]));
+                std::string error;
+                std::vector<std::string> emitted;
+                if (!fortranRuntime.execute(symbol, args, results, emitted, error)) {
+                    gFlowState["__runtime_error"] = error;
+                    goto pmachineRunExit;
+                }
+                sp -= instr.value;
+                if (results.size() > static_cast<size_t>(STACK_SIZE - sp)) {
+                    gFlowState["__runtime_error"] = "FORTRAN result stack overflow";
+                    goto pmachineRunExit;
+                }
+                for (const auto& result : results) {
+                    if (result.isString()) pushString(result.text);
+                    else stack[sp++] = result.value;
+                }
+                for (const auto& line : emitted) emitOutputLine(line);
+                ++pc;
+                continue;
+            }
             if (symbol.rfind("object.", 0) == 0) {
                 const int argc = symbol == "object.new" || symbol == "object.length" ? 1
                     : symbol == "object.get" || symbol == "object.resize" ? 2
@@ -3688,7 +3844,7 @@ void PMachine::runInstructions(size_t instructionCount,
                     if (valid) {
                         const Value value = stack[--sp];
                         call.value = value.isString() ? stringAt(value)
-                            : (value.isReal() ? std::to_string(value.r) : std::to_string(static_cast<int>(value)));
+                            : (value.isReal() ? std::to_string(value.asReal()) : std::to_string(static_cast<int>(value)));
                     }
                 } else if ((call.operation == "OBSERVE" || call.operation == "EVENT") && args.size() != 2) {
                     valid = false;
@@ -3938,7 +4094,7 @@ void PMachine::runInstructions(size_t instructionCount,
                 if (namedString != namedStringVariables.end()) {
                     gFlowState["__response"] = namedString->second;
                 } else if (namedReal != namedRealVariables.end()) {
-                    gFlowState["__response"] = std::to_string(namedReal->second);
+                    gFlowState["__response"] = std::to_string(namedReal->second.asReal());
                 } else if (namedEnum != namedEnumVariables.end()) {
                     gFlowState["__response"] = stringAt(namedEnum->second);
                 } else {
@@ -3986,9 +4142,13 @@ void PMachine::runInstructions(size_t instructionCount,
     if (!nameFrames.empty()) {
         for (const auto& binding : nameFrames.front()) {
             GlobalValue value;
-            value.intValue = binding.second;
+            value.intValue = binding.second.isReal() ? 0 : static_cast<int>(binding.second);
             if (binding.second.isString()) { value.isString = true; value.strValue = stringAt(binding.second); }
-            if (binding.second.isReal()) { value.isReal = true; value.realValue = binding.second.r; }
+            if (binding.second.isReal()) {
+                value.isReal = true;
+                value.isDouble = binding.second.isDouble();
+                value.realValue = binding.second.asReal();
+            }
             if (binding.second.isEnum()) {
                 value.isEnum = true;
                 value.strValue = getEnumValueName(binding.second.handle, binding.second.i);
@@ -4005,7 +4165,8 @@ void PMachine::runInstructions(size_t instructionCount,
     for (const auto& entry : namedRealVariables) {
         GlobalValue value;
         value.isReal = true;
-        value.realValue = entry.second;
+        value.isDouble = entry.second.isDouble();
+        value.realValue = entry.second.asReal();
         lastRunGlobals[entry.first] = value;
     }
     for (const auto& entry : namedEnumVariables) {
@@ -4028,6 +4189,7 @@ void PMachine::runInstructions(size_t instructionCount,
                 value.strValue.assign(slot.stringData, slot.stringLength);
             } else if (slot.value.isReal()) {
                 value.isReal = true;
+                value.isDouble = slot.value.isDouble();
                 value.realValue = slot.value.asReal();
             } else if (slot.value.isEnum()) {
                 value.isEnum = true;

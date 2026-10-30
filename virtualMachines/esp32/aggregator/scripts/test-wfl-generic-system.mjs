@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import { compileWorkflowDSLWithAntlr } from './workflow-antlr-compiler.mjs';
+import { compileWorkflowDSLWithAntlr } from '../../../../languages/wfl/src/workflow-antlr-compiler.mjs';
 import { flattenGenericSystems, flattenGenericSystemConnections } from '../src/backend/genericSystem.mjs';
 
 const source = await fs.readFile(new URL('../../src/generic-system.wfl', import.meta.url), 'utf8');

@@ -1,0 +1,11 @@
+HANDLER toggle_switch
+TARGET "/api/devices/toggle"
+TRIGGER EDGE switch CHANGE DEBOUNCE 25
+
+INPUT switch PIN 5 PULLDOWN
+RELAY lamp PIN 17 ACTIVE HIGH INITIAL 0
+
+READ LEVEL switch
+WRITE lamp LEVEL
+EVENT toggle 1 LEVEL 0
+END

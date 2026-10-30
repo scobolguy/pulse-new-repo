@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { compileWorkflowDSLWithAntlr } from '../../aggregator/scripts/workflow-antlr-compiler.mjs';
+import { compileWorkflowDSLWithAntlr } from '../../../../languages/wfl/src/workflow-antlr-compiler.mjs';
 
 const compile = item => compileWorkflowDSLWithAntlr(`
 DEPLOYMENT "lifecycle" PROJECT "core-services" TARGETS ("node-a") BEGIN

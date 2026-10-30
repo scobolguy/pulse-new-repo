@@ -226,16 +226,26 @@ export function setJavaScriptPmachineSourceBreakpoints(id, sourceBreakpoints) {
       .sort(([leftPc, left], [rightPc, right]) =>
         Number(left.sourceLine) - Number(right.sourceLine) || Number(leftPc) - Number(rightPc));
     const match = candidates[0];
+    const pcs = match ? candidates
+      .filter(([, location]) => Number(location.sourceLine) === Number(match[1].sourceLine))
+      .filter(([pc, location]) => {
+        const previous = session.sourceMap[String(Number(pc) - 1)];
+        return !previous || previous.sourceFile !== location.sourceFile
+          || previous.sourceLanguage !== location.sourceLanguage
+          || Number(previous.sourceLine) !== Number(location.sourceLine);
+      })
+      .map(([pc]) => Number(pc)) : [];
     return {
       ...item,
       verified: Boolean(match),
       line: match ? Number(match[1].sourceLine) : item.sourceLine,
-      pc: match ? Number(match[0]) : null
+      pc: match ? Number(match[0]) : null,
+      pcs
     };
   });
   session.breakpoints = [...new Set([
     ...session.instructionBreakpoints,
-    ...session.resolvedSourceBreakpoints.filter(item => item.verified).map(item => item.pc)
+    ...session.resolvedSourceBreakpoints.filter(item => item.verified).flatMap(item => item.pcs)
   ])];
   return createSessionState(session);
 }

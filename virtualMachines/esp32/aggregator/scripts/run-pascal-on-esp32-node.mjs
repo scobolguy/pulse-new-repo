@@ -98,6 +98,9 @@ export async function runPcodeOnEsp32({
   if (!programMap || typeof programMap !== 'object' || Array.isArray(programMap)) {
     throw new Error('programMap must be an object');
   }
+  if (programMap.requiredRuntimeLibraries?.includes('fortran77')) {
+    throw new Error('Extended FORTRAN 77 currently requires the JavaScript PMachine; ESP32 firmware does not provide its runtime library.');
+  }
   if (!Array.isArray(networkPeers) || networkPeers.length > 8 ||
       networkPeers.some(peer => net.isIP(peer?.ip) !== 4 ||
         !Number.isSafeInteger(peer.port) || peer.port < 1 || peer.port > 65535)) {

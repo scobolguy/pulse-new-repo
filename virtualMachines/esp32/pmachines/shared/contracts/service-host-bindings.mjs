@@ -10,6 +10,7 @@ export function compactServiceHostProgramMap(map) {
     hostBindingsVersion: map.hostBindingsVersion,
     targets: map.targets,
     runtimeUnit: map.runtimeUnit,
+    ...(map.inventoryRequestIdRequired === true ? { inventoryRequestIdRequired: true } : {}),
     ...(map.hostCapabilitiesVersion !== undefined ? { hostCapabilitiesVersion: map.hostCapabilitiesVersion } : {}),
     ...(map.requiredHostCapabilities !== undefined ? {
       requiredHostCapabilities: map.requiredHostCapabilities
@@ -24,7 +25,9 @@ export function compactServiceHostProgramMap(map) {
       serviceEndpoints: map.serviceEndpoints.map(({ verb, path }) => ({ verb, path }))
     } : {}),
     procedures: Object.fromEntries(Object.entries(map.procedures || {}).map(([label, procedure]) =>
-      [label, { params: procedure.params }])),
+      [label, { params: procedure.params,
+        ...(procedure.locals?.length ? { locals: procedure.locals } : {}) }])),
+    ...(map.globals?.length ? { globals: map.globals } : {}),
     ...(Array.isArray(map.hostTables) ? { hostTables: map.hostTables } : {}),
     ...(Array.isArray(map.distributedTables) ? { distributedTables: map.distributedTables } : {}),
     ...(Array.isArray(map.hostCaches) ? { hostCaches: map.hostCaches } : {})
@@ -38,6 +41,12 @@ export const SERVICE_HOST_INTERNAL_BINDINGS = Object.freeze(new Set([
 ]));
 
 export const SERVICE_HOST_BINDINGS = Object.freeze({
+  'host.cobol_text': { arity: 2, args: ['string', 'integer'], result: 'string' },
+  'host.cobol_unpad': { arity: 1, args: ['string'], result: 'string' },
+  'host.inventory_apply': {
+    arity: 2, args: ['string', 'string'], result: 'string',
+    capability: 'inventory.transaction', desktopOnly: true,
+  },
   'host.infrastructure_probe': {
     arity: 0, args: [], result: 'string', capability: 'infrastructure.readiness', desktopOnly: true,
   },

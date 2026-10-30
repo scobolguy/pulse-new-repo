@@ -5,7 +5,7 @@ import { createHash } from 'crypto';
 import XLSX from 'xlsx';
 import { XMLBuilder } from 'fast-xml-parser';
 import { runPL0 } from '../../scripts/pl0-interpreter.mjs';
-import { compileMaplWithAntlr } from '../../scripts/compile-mapl-antlr-to-pcode.mjs';
+import { compileMaplWithAntlr } from '../../../../../languages/mapl/src/compile-mapl-antlr-to-pcode.mjs';
 import { attachPcodeSignature } from '../../scripts/pcode-signing.mjs';
 import { runSingleMessageForEvolution } from '../../../pmachines/javascript/index.mjs';
 import { ollamaGenerate } from './ollamaService.mjs';

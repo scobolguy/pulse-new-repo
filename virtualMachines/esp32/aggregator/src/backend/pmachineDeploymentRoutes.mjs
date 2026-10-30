@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { compilePascalishProgramWithAntlr } from '../../scripts/compile-pascalish-program-antlr-to-pcode.mjs';
-import { compileWorkflowDSLWithAntlr } from '../../scripts/workflow-antlr-compiler.mjs';
+import { compileWorkflowDSLWithAntlr } from '../../../../../languages/wfl/src/workflow-antlr-compiler.mjs';
 import { runPcodeOnEsp32 } from '../../scripts/run-pascal-on-esp32-node.mjs';
 import { runSingleMessageForEvolution } from '../../../pmachines/javascript/index.mjs';
 import {

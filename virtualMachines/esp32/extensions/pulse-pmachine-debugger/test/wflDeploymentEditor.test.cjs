@@ -225,7 +225,7 @@ test('new WFL template compiles and preserves a separately stored VFL path', asy
     commands: { executeCommand: async (...args) => { opened = args } }
   }
   await editor.createWflDocument(vscode, { fsPath: graph })
-  const compiler = await import(pathToFileURL(path.join(root, 'aggregator', 'scripts', 'compile-workflow-dsl.mjs')).href)
+  const compiler = await import(pathToFileURL(path.join(root, '..', '..', 'languages', 'wfl', 'src', 'compile-workflow-dsl.mjs')).href)
   const compiled = compiler.compileWorkflowDSL(written, { variables: { deploymentTarget: 'node-1' } })
   assert.equal(compiled.deployments[0].resources[0].fileName, path.relative(root, graph))
   assert.deepEqual(compiled.deployments[0].resources[0].targets, ['node-1'])

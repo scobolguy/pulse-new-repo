@@ -4,6 +4,15 @@ export function createBoundedTextBindings() {
     return value;
   };
   return {
+    'host.cobol_text': (value, width) => {
+      if (typeof value !== 'string' || Buffer.byteLength(value) > 4096 || /[^\x00-\x7f]/.test(value)
+        || !Number.isInteger(width) || width < 1 || width > 4096) throw new Error('Invalid COBOL text bounds');
+      return value.slice(0, width).padEnd(width);
+    },
+    'host.cobol_unpad': value => {
+      if (typeof value !== 'string' || Buffer.byteLength(value) > 4096 || /[^\x00-\x7f]/.test(value)) throw new Error('Invalid COBOL text bounds');
+      return value.replace(/ +$/, '');
+    },
     'host.text_lower': value => bounded(value).replace(/[A-Z]/g, ch => ch.toLowerCase()),
     'host.text_index': (value, needle) => bounded(value).indexOf(bounded(needle)),
     'host.text_slice': (value, start, count) => {

@@ -1,5 +1,5 @@
 // FORTRAN 77 code generator (ANSI X3.9-1978): walks the AST built by parse.mjs and
-// emits Pulse p-code that runs unchanged on the JavaScript and ESP32 p-machines.
+// emits Pulse p-code using the JavaScript p-machine's FORTRAN runtime library.
 //
 // Storage model (static, FORTRAN 77 has no recursion):
 // - Variables that are never aliased live in named globals (scalars) or named
@@ -139,6 +139,7 @@ export class Program {
     this.libraryGenerated = new Set();
     this.usesIo = false;
     this.symbols = [];
+    this.frameRegs = new Set();
   }
 
   emit(text) {
@@ -191,6 +192,31 @@ export class Program {
   procId(target) {
     if (!this.procIds.has(target.label)) this.procIds.set(target.label, { id: this.procIds.size + 1, target });
     return this.procIds.get(target.label).id;
+  }
+
+  wrapperFor(name) {
+    if (this.wrappers.has(name)) return this.wrappers.get(name);
+    const spec = INTRINSICS[name];
+    const type = ['LEN', 'INDEX'].includes(name) ? 'character'
+      : ['ICHAR'].includes(name) ? 'character'
+        : /^(IABS|ISIGN|IDIM|MOD)$/.test(name) ? 'integer'
+          : name === 'AIMAG' || name === 'CONJG' || name.startsWith('C') ? 'complex'
+            : name.startsWith('D') && name !== 'DPROD' ? 'double' : 'real';
+    const argc = ['INDEX', 'DPROD'].includes(name) || /^(D?ATAN2|[AID]?MOD|[ID]?SIGN|[ID]?DIM)$/.test(name) ? 2 : 1;
+    const pos = { line: 1, column: 7 };
+    const params = Array.from({ length: argc }, (_, index) => ({ name: `A${index}`, pos }));
+    const unit = new Unit(this, { kind: 'function', name, params, pos, body: [], end: { label: '', pos } }, { wrapper: name });
+    unit.analyze();
+    for (const param of params) {
+      const sym = unit.symbols.get(param.name);
+      sym.type = type; sym.len = type === 'character' ? '*' : null;
+      unit.homeOf(sym);
+    }
+    unit.resultSym.type = spec.res === 'arg' ? type : spec.res;
+    if (name === 'ABS') unit.resultSym.type = 'real';
+    const target = { label: unit.entryLabel, unit, entry: unit.mainEntry, intrinsic: name };
+    this.wrappers.set(name, target);
+    return target;
   }
 
   requireLibrary(name) {
@@ -381,6 +407,9 @@ export class Unit {
     this.defineLabel(ast.end.label, ast.end);
     this.resolveDeclarations();
     this.scanUsage();
+    for (const sym of this.symbols.values()) {
+      if (sym.kind === 'var') this.symType(sym);
+    }
   }
 
   addDummy(entry, param) {
@@ -1191,7 +1220,11 @@ export class Unit {
   emitConst(c) {
     switch (c.t) {
       case 'integer': this.emit(pushInt(c.v)); break;
-      case 'real': case 'double': this.emit(pushReal(c.v)); break;
+      case 'real': this.emit(pushReal(c.v)); break;
+      case 'double':
+        this.emit(pushStr(String(c.v)));
+        this.emit('CALL_EXT fortran.double 1');
+        break;
       case 'logical': this.emit(pushInt(c.v ? 1 : 0)); break;
       case 'character': this.emit(pushStr(c.v)); break;
       default:
@@ -1208,6 +1241,7 @@ export class Unit {
     if (from.t === 'complex') {
       this.emit('STORE_NAME _X');
       if (to === 'integer') this.emit('TRUNC');
+      else if (to === 'double') this.emit('CALL_EXT fortran.double 1');
       return;
     }
     if (to === 'complex') {
@@ -1215,7 +1249,9 @@ export class Unit {
       this.emit(pushReal(0));
       return;
     }
-    if (to === 'integer') this.emit('TRUNC');
+    if (to === 'double') this.emit('CALL_EXT fortran.double 1');
+    else if (from.t === 'double' && to === 'real') this.emit('TO_REAL');
+    else if (to === 'integer') this.emit('TRUNC');
     else if (from.t === 'integer') this.emit('TO_REAL');
   }
 
@@ -1262,6 +1298,8 @@ export class Unit {
   assignValue(sym, loc, valueGen, pos) {
     const target = this.symValueType(sym);
     this.storeSym(sym, loc, target, () => {
+      const overlay = target.t === 'character' && this.homeOf(sym).kind === 'dummy';
+      if (overlay) this.loadLoc(loc);
       const type = valueGen();
       if (target.t === 'character') {
         if (type.t !== 'character') this.fail(pos, `Cannot assign ${TYPE_NAMES[type.t]} to CHARACTER`);
@@ -1270,6 +1308,7 @@ export class Unit {
           this.emit('STRLEN');
           this.callLibraryRaw('FPAD', 2, pos);
         } else this.fitChar(type.len, target.len);
+        if (overlay) this.emit('CALL_EXT fortran.overlay 2');
         return;
       }
       if ((target.t === 'logical') !== (type.t === 'logical'))
@@ -1428,8 +1467,8 @@ export class Unit {
       this.complexArithmetic(e.op, e.pos);
       return T('complex');
     }
-    this.gen(e.left);
-    this.gen(e.right);
+    this.genAs(e.left, t);
+    this.genAs(e.right, t);
     if (e.op === '/') this.emit(t === 'integer' ? 'DIV' : 'RDIV');
     else this.emit(e.op === '+' ? 'ADD' : e.op === '-' ? 'SUB' : 'MUL');
     return T(t);
@@ -1746,8 +1785,8 @@ export class Unit {
       }
       case 'dprod':
         need(2); numeric();
-        this.genAs(args[0], 'real');
-        this.genAs(args[1], 'real');
+        this.genAs(args[0], 'double');
+        this.genAs(args[1], 'double');
         this.emit('MUL');
         return T('double');
       case 'max':
@@ -1830,12 +1869,26 @@ export class Unit {
 
   // Calls a runtime-library procedure whose by-value arguments are already on the stack.
   callLibraryRaw(name, argc, pos) {
-    const found = this.program.libraryEntry(name, !this.dry);
-    if (!found) this.fail(pos, `Runtime library routine ${name} is not available`);
-    if (found.entry.params.length !== argc) throw new Error(`internal: ${name} expects ${found.entry.params.length} argument(s)`);
-    this.emit(`CALL ${found.entry.label} ${argc}`);
-    if (found.unit.kind !== 'function') return null;
-    return this.loadResult(found.unit, found.entry.name);
+    const routines = {
+      FPAD: ['pad', 'character'], FCMP: ['ccmp', 'integer'], FINDEX: ['index', 'integer'],
+      FAINT: ['aint', 'real'], FANINT: ['anint', 'real'], FNINT: ['nint', 'integer'],
+      FRMOD: ['mod', 'real'], FIPOW: ['ipow', 'integer'], FRPOWI: ['pow', 'real'], FRPOW: ['pow', 'real'],
+      FATAN2: ['atan2', 'real'],
+      FCABS: ['cabs', 'real'], FCDIV: ['cdiv', 'complex'],
+      FCSQRT: ['csqrt', 'complex'], FCEXP: ['cexp', 'complex'],
+      FCLOG: ['clog', 'complex'], FCSIN: ['csin', 'complex'], FCCOS: ['ccos', 'complex'],
+      FCPOWI: ['cpowi', 'complex'], FCPOWZ: ['cpow', 'complex'],
+    };
+    const math = /^F(SQRT|EXP|LOG|LOG10|SIN|COS|TAN|ASIN|ACOS|ATAN|SINH|COSH|TANH)$/.exec(name);
+    if (math) {
+      this.emit(pushStr(math[1].toLowerCase()));
+      this.emit(`CALL_EXT fortran.math ${argc + 1}`);
+      return T('real');
+    }
+    const routine = routines[name];
+    if (!routine) this.fail(pos, `Runtime library routine ${name} is not implemented`);
+    this.emit(`CALL_EXT fortran.${routine[0]} ${argc}`);
+    return T(routine[1]);
   }
 
   libraryRoutine(name, args, pos) {
@@ -2014,5 +2067,542 @@ export class Unit {
     if (!found) this.fail(arg.pos, `Undefined external procedure ${arg.name}`);
     this.emit(pushInt(this.program.procId({ label: found.entry.label, unit: found.unit, entry: found.entry })));
   }
-// @@END@@
+  initialize() {
+    for (const sym of this.symbols.values()) {
+      if (sym.kind !== 'var' || sym.dummy) continue;
+      const count = sym.dims ? sym.dimInfo.count : 1;
+      if (!Number.isInteger(count)) this.fail(sym.pos, 'Adjustable local arrays are not supported');
+      const value = sym.type === 'character' ? { t: 'character', v: blanks(sym.len) }
+        : sym.type === 'complex' ? { t: 'complex', v: { re: 0, im: 0 } }
+          : { t: sym.type, v: 0 };
+      for (let index = 0; index < count; index++) {
+        this.storeSym(sym, this.baseLoc(sym, I(index * this.homeCells(sym))), T(sym.type),
+          () => this.emitConst(value));
+      }
+    }
+  }
+
+  initializeData() {
+    const objects = list => list.flatMap(object => {
+      if (object.k === 'implied') {
+        const start = this.constInt(object.start, 'DATA implied DO start');
+        const end = this.constInt(object.end, 'DATA implied DO limit');
+        const step = object.step ? this.constInt(object.step, 'DATA implied DO step') : 1;
+        if (!step) this.fail(object.pos, 'DATA implied DO step is zero');
+        const result = [], saved = this.constScope;
+        this.constScope = new Map(saved);
+        for (let value = start; step > 0 ? value <= end : value >= end; value += step) {
+          if (result.length > 100000) this.fail(object.pos, 'DATA implied DO exceeds storage limit');
+          this.constScope.set(object.variable, { t: 'integer', v: value });
+          result.push(...objects(object.objects));
+        }
+        this.constScope = saved;
+        return result;
+      }
+      const sym = this.getVar(object.name, object.pos);
+      let args = object.args, substring = object.substring;
+      if (!sym.dims && args?.length === 1 && args[0].k === 'section') {
+        substring = args[0];
+        args = null;
+      }
+      if (substring) {
+        if (sym.type !== 'character') this.fail(object.pos, 'DATA substring must be CHARACTER');
+        substring = {
+          ...substring, from: I(substring.from ? this.constInt(substring.from, 'DATA substring bound') : 1),
+          to: I(substring.to ? this.constInt(substring.to, 'DATA substring bound') : sym.len),
+        };
+        if (substring.from.value < 1 || substring.to.value < substring.from.value || substring.to.value > sym.len)
+          this.fail(object.pos, 'DATA substring bounds are outside the character variable');
+      }
+      if (sym.dims && !args) {
+        return Array.from({ length: sym.dimInfo.count }, (_, index) =>
+          ({ sym, loc: this.baseLoc(sym, I(index * this.homeCells(sym))) }));
+      }
+      const offset = args ? this.constElementIndex(sym,
+        args.map(arg => this.constInt(arg, 'DATA subscript')), object.pos) * this.homeCells(sym) : 0;
+      return [{ sym, loc: this.baseLoc(sym, I(offset)), substring }];
+    });
+    for (const statement of this.dataStmts) {
+      for (const set of statement.sets) {
+        const targets = objects(set.objects);
+        const values = set.values.flatMap(item => {
+          const count = item.repeat ? this.constInt(item.repeat, 'DATA repetition count') : 1;
+          if (count < 1 || count > 100000) this.fail(item.pos, 'Invalid DATA repetition count');
+          return Array.from({ length: count }, () => this.cval(item.value));
+        });
+        if (targets.length !== values.length) this.fail(set.pos, 'DATA objects and values have different lengths');
+        targets.forEach(({ sym, loc, substring }, index) => {
+          const value = convertConst(values[index], sym.type, message => this.fail(set.pos, message));
+          if (substring) {
+            this.storeSubstring(sym, loc, substring, () => this.emitConst(value), set.pos);
+            return;
+          }
+          if (sym.type === 'character') value.v = padTo(value.v, sym.len);
+          this.storeSym(sym, loc, T(sym.type), () => this.emitConst(value));
+        });
+      }
+    }
+  }
+
+  outputItem(item, legacy) {
+    if (item.k === 'implied') {
+      this.loop(item, () => item.items.forEach(value => this.outputItem(value, legacy)));
+      return;
+    }
+    const sym = item.k === 'ref' && !item.args ? this.symbols.get(item.name) : null;
+    if (sym?.dims) {
+      if (!Number.isInteger(sym.dimInfo.count)) this.fail(item.pos, 'Whole-array output requires constant array bounds');
+      for (let index = 0; index < sym.dimInfo.count; index++) {
+        const type = this.loadSym(sym, this.baseLoc(sym, I(index * this.homeCells(sym))));
+        this.outputValue(type, legacy);
+      }
+      return;
+    }
+    this.outputValue(this.gen(item), legacy);
+  }
+
+  outputValue(type, legacy) {
+    if (type.t === 'complex') {
+      if (legacy) this.fail(this.program.loc, 'COMPLEX requires formatted or list-directed output');
+      this.emit('CALL_EXT fortran.complexitem 2');
+      return;
+    }
+    if (legacy) this.emit('PRINT');
+    else {
+      this.emit(pushStr({ integer: 'I', real: 'R', double: 'D', logical: 'L', character: 'C' }[type.t]));
+      this.emit('CALL_EXT fortran.item 2');
+    }
+  }
+
+  loop(statement, body) {
+    const sym = this.getVar(statement.variable, statement.pos);
+    if (!isNumeric(sym.type) || sym.type === 'complex') this.fail(statement.pos, 'DO variable must be numeric');
+    const start = this.dtemp(), end = this.dtemp(), step = this.dtemp(), count = this.dtemp();
+    this.genAs(statement.start, sym.type); this.emit(`STORE_NAME ${start}`);
+    this.genAs(statement.end, sym.type); this.emit(`STORE_NAME ${end}`);
+    if (statement.step) this.genAs(statement.step, sym.type);
+    else this.emit(sym.type === 'integer' ? pushInt(1) : pushReal(1));
+    this.emit(`STORE_NAME ${step}`);
+    this.emit(`LOAD_NAME ${start}`); this.emit(`LOAD_NAME ${end}`); this.emit(`LOAD_NAME ${step}`);
+    this.emit('CALL_EXT fortran.docount 3'); this.emit(`STORE_NAME ${count}`);
+    this.storeLoc(this.baseLoc(sym), () => this.emit(`LOAD_NAME ${start}`));
+    const head = this.gl(), done = this.gl();
+    this.place(head); this.emit(`LOAD_NAME ${count}`); this.emit(`JZ ${done}`);
+    body();
+    this.storeLoc(this.baseLoc(sym), () => {
+      this.loadSym(sym, this.baseLoc(sym)); this.emit(`LOAD_NAME ${step}`); this.emit('ADD');
+    });
+    this.emit(`LOAD_NAME ${count}`); this.emit(pushInt(1)); this.emit('SUB'); this.emit(`STORE_NAME ${count}`);
+    this.emit(`JMP ${head}`); this.place(done);
+  }
+
+  output(statement) {
+    if (statement.kind === 'print' && statement.legacy) {
+      statement.items.forEach(item => this.outputItem(item, true)); this.emit('PRINT_NL'); return;
+    }
+    const control = this.ioControls(statement, false);
+    this.emit('CALL_EXT fortran.begin 0');
+    statement.items.forEach(item => this.outputItem(item, false));
+    this.emit('CALL_EXT fortran.write 0');
+    const internal = control.get('UNIT');
+    if (internal && !internal.star && this.ioType(internal.expr).t === 'character') {
+      const done = this.gl();
+      this.emit('CALL_EXT fortran.iostatus 0'); this.emit(pushInt(0)); this.emit('EQ'); this.emit(`JZ ${done}`);
+      const { sym, loc, whole, substring } = this.designator(internal.expr);
+      const count = whole ? sym.dimInfo.count : 1;
+      if (!Number.isInteger(count)) this.fail(internal.pos, 'Internal file requires constant record count');
+      for (let index = 0; index < count; index++) {
+        const target = whole ? this.baseLoc(sym, I(index * this.homeCells(sym))) : loc;
+        const value = () => {
+          this.emit(pushInt(index)); this.emit('CALL_EXT fortran.internalrecord 1'); return T('character');
+        };
+        if (substring) this.storeSubstring(sym, target, substring, value, internal.pos);
+        else this.assignValue(sym, target, value, internal.pos);
+      }
+      this.place(done);
+    }
+    this.ioFinish(control);
+  }
+
+  ioText(expr, separator = '') {
+    const sym = expr.k === 'ref' && !expr.args ? this.symbols.get(expr.name) : null;
+    if (!sym?.dims) return this.gen(expr);
+    if (sym.type !== 'character' || !Number.isInteger(sym.dimInfo.count))
+      this.fail(expr.pos, 'A character file or format array requires constant bounds');
+    this.emit(pushStr(''));
+    for (let index = 0; index < sym.dimInfo.count; index++) {
+      if (index && separator) { this.emit(pushStr(separator)); this.emit('CONCAT'); }
+      this.loadSym(sym, this.baseLoc(sym, I(index * this.homeCells(sym)))); this.emit('CONCAT');
+    }
+    return T('character');
+  }
+
+  ioType(expr) {
+    const sym = expr.k === 'ref' && !expr.args ? this.symbols.get(expr.name) : null;
+    return sym?.dims ? this.symValueType(sym) : this.infer(expr);
+  }
+
+  ioControls(statement, input) {
+    const items = statement.kind === 'print'
+      ? [{ key: 'UNIT', star: true, pos: statement.pos }, { key: 'FMT', ...statement.format }]
+      : statement.control;
+    const control = new Map();
+    this.emit('CALL_EXT fortran.iobegin 0');
+    for (const [index, item] of items.entries()) {
+      const key = item.key || ['UNIT', 'FMT'][index];
+      if (!key || control.has(key)) this.fail(item.pos, `Invalid or duplicate I/O control ${key}`);
+      control.set(key, item);
+      if (statement.verb === 'INQUIRE' && !['UNIT', 'FILE', 'IOSTAT', 'ERR'].includes(key)) continue;
+      if (!['UNIT', 'FMT', 'REC', 'IOSTAT', 'ERR', 'END', 'FILE', 'STATUS', 'ACCESS', 'FORM', 'RECL', 'BLANK'].includes(key))
+        this.fail(item.pos, `Unknown I/O control ${key}`);
+      if (['IOSTAT', 'ERR', 'END'].includes(key)) {
+        this.emit(pushStr(key)); this.emit(pushInt(1));
+      } else if (key === 'UNIT' && !item.star && this.ioType(item.expr).t === 'character') {
+        this.emit(pushStr('INTERNAL')); this.ioText(item.expr, '\n');
+        this.emit('CALL_EXT fortran.iocontrol 2');
+        const sym = item.expr.k === 'ref' && !item.expr.args ? this.symbols.get(item.expr.name) : null;
+        this.emit(pushStr('RECORDS')); this.emit(pushInt(sym?.dims ? sym.dimInfo.count : 1));
+        this.emit('CALL_EXT fortran.iocontrol 2');
+        this.emit(pushStr('RECL'));
+        const type = this.ioType(item.expr);
+        if (typeof type.len === 'number') this.emit(pushInt(type.len));
+        else { this.gen(item.expr); this.emit('STRLEN'); }
+      } else {
+        this.emit(pushStr(key));
+        if (item.star) {
+          if (key === 'UNIT') this.emit(pushInt(input ? 5 : 6));
+          else if (key === 'FMT') this.emit(pushStr('*'));
+          else this.fail(item.pos, `An asterisk is not valid for ${key}`);
+        } else if (key === 'FMT') this.ioFormat(item);
+        else this.gen(item.expr);
+      }
+      this.emit('CALL_EXT fortran.iocontrol 2');
+    }
+    if (!control.has('UNIT') && !(statement.verb === 'INQUIRE' && control.has('FILE')))
+      this.fail(statement.pos, 'I/O statement requires UNIT');
+    return control;
+  }
+
+  ioFormat(item) {
+    const label = this.tryConst(item.expr);
+    if (label?.t === 'integer') {
+      const spec = this.formats.get(String(label.v));
+      if (!spec) this.fail(item.pos, `Undefined FORMAT label ${label.v}`);
+      this.emit(pushStr(spec));
+    } else if (this.ioType(item.expr).t === 'integer') {
+      const value = this.temp(), done = this.gl();
+      this.gen(item.expr); this.emit(`STORE_NAME ${value}`);
+      for (const [label, spec] of this.formats) {
+        const next = this.gl();
+        this.emit(`LOAD_NAME ${value}`); this.emit(pushInt(Number(label))); this.emit('EQ'); this.emit(`JZ ${next}`);
+        this.emit(pushStr(spec)); this.emit(`JMP ${done}`); this.place(next);
+      }
+      this.emit(pushStr('INVALID FORMAT LABEL')); this.place(done);
+    } else {
+      const type = this.ioText(item.expr);
+      if (type.t !== 'character') this.fail(item.pos, 'FORMAT must be a label or CHARACTER expression');
+    }
+  }
+
+  ioFinish(control) {
+    const status = control.get('IOSTAT');
+    if (status) {
+      const { sym, loc, whole, substring } = this.designator(status.expr);
+      if (sym.type !== 'integer' || whole || substring) this.fail(status.pos, 'IOSTAT must be an INTEGER variable');
+      this.storeLoc(loc, () => this.emit('CALL_EXT fortran.iostatus 0'));
+    }
+    for (const key of ['END', 'ERR']) {
+      const item = control.get(key);
+      if (!item) continue;
+      const label = this.constInt(item.expr, `${key} label`);
+      this.labelRefs.push({ label: String(label), pos: item.pos });
+      this.emit('CALL_EXT fortran.iostatus 0'); this.emit(pushInt(0)); this.emit(key === 'END' ? 'LT' : 'GT');
+      const next = this.gl();
+      this.emit(`JZ ${next}`); this.emit(`JMP ${this.stmtLabel(String(label))}`); this.place(next);
+    }
+  }
+
+  inputItem(item) {
+    if (item.k === 'implied') {
+      this.loop(item, () => item.items.forEach(value => this.inputItem(value)));
+      return;
+    }
+    const { sym, loc, whole, substring } = this.designator(item);
+    const count = whole ? sym.dimInfo.count : 1;
+    if (!Number.isInteger(count)) this.fail(item.pos, 'Whole-array READ requires constant bounds');
+    for (let index = 0; index < count; index++) {
+      const target = whole ? this.baseLoc(sym, I(index * this.homeCells(sym))) : loc;
+      let length = sym.type === 'character' ? sym.len : 0;
+      if (substring) {
+        const from = substring.from ? this.constInt(substring.from, 'Input substring bound') : 1;
+        const to = substring.to ? this.constInt(substring.to, 'Input substring bound') : sym.len;
+        length = to - from + 1;
+      }
+      if (typeof length !== 'number') this.fail(item.pos, 'READ character length must be known');
+      this.emit(pushStr({ integer: 'I', real: 'R', double: 'D', logical: 'L', character: 'C', complex: 'Z' }[sym.type]));
+      this.emit(pushInt(length)); this.emit('CALL_EXT fortran.readvalue 2');
+      const first = this.temp(), second = sym.type === 'complex' ? this.temp() : null, skip = this.gl();
+      if (second) this.emit(`STORE_NAME ${second}`);
+      this.emit(`STORE_NAME ${first}`);
+      this.emit('CALL_EXT fortran.readpresent 0'); this.emit(`JZ ${skip}`);
+      const value = () => {
+        this.emit(`LOAD_NAME ${first}`);
+        if (second) this.emit(`LOAD_NAME ${second}`);
+        return T(sym.type, length);
+      };
+      if (substring) this.storeSubstring(sym, target, substring, value, item.pos);
+      else this.storeSym(sym, target, T(sym.type), value);
+      this.place(skip);
+    }
+  }
+
+  input(statement) {
+    const control = this.ioControls(statement, true);
+    this.emit('CALL_EXT fortran.readbegin 0');
+    statement.items.forEach(item => this.inputItem(item));
+    this.emit('CALL_EXT fortran.readend 0');
+    this.ioFinish(control);
+  }
+
+  auxiliaryIo(statement) {
+    const control = this.ioControls(statement, false);
+    this.emit(`CALL_EXT fortran.${statement.verb.toLowerCase()} 0`);
+    const done = this.gl();
+    if (statement.verb === 'INQUIRE') {
+      this.emit('CALL_EXT fortran.iostatus 0'); this.emit(pushInt(0)); this.emit('EQ'); this.emit(`JZ ${done}`);
+    }
+    if (statement.verb === 'INQUIRE') for (const [key, item] of control) {
+      if (['UNIT', 'FILE', 'IOSTAT', 'ERR'].includes(key)) continue;
+      const { sym, loc, whole, substring } = this.designator(item.expr);
+      if (whole || substring) this.fail(item.pos, 'INQUIRE requires scalar output variables');
+      const type = ['EXIST', 'OPENED', 'NAMED'].includes(key) ? 'logical'
+        : ['NUMBER', 'RECL', 'NEXTREC'].includes(key) ? 'integer' : 'character';
+      this.assignValue(sym, loc, () => {
+        this.emit(pushStr(key)); this.emit('CALL_EXT fortran.inquiry 1'); return T(type);
+      }, item.pos);
+    }
+    this.place(done);
+    this.ioFinish(control);
+  }
+
+  generateStatements(list) {
+    for (let index = 0; index < list.length; index++) {
+      const statement = list[index];
+      this.program.loc = statement.pos;
+      this.tempCount = 0;
+      if (statement.label) this.place(this.stmtLabel(statement.label));
+      if (statement.kind === 'entry') this.place(`${statement.entry.label}_BODY`);
+      if (SPEC_KINDS.has(statement.kind) || statement.isStatementFunction) continue;
+      if (statement.kind === 'do') {
+        let terminal = index + 1;
+        while (terminal < list.length && list[terminal].label !== statement.target.label) terminal++;
+        if (terminal === list.length) this.fail(statement.pos, `Unterminated DO targeting ${statement.target.label}`);
+        this.loop(statement, () => this.generateStatements(list.slice(index + 1, terminal + 1)));
+        index = terminal;
+        continue;
+      }
+      if (statement.kind === 'if') {
+        const done = this.gl();
+        for (const branch of statement.branches) {
+          const next = this.gl();
+          this.genLogical(branch.cond); this.emit(`JZ ${next}`);
+          this.generateStatements(branch.body); this.emit(`JMP ${done}`); this.place(next);
+        }
+        if (statement.elseBranch) this.generateStatements(statement.elseBranch.body);
+        this.place(done);
+        if (statement.end.label) this.place(this.stmtLabel(statement.end.label));
+        continue;
+      }
+      switch (statement.kind) {
+        case 'assignment': this.assignTo(statement.target, statement.value, statement.pos); break;
+        case 'continue': break;
+        case 'stop': this.emit('HALT'); break;
+        case 'pause': this.fail(statement.pos, 'Interactive PAUSE is not supported'); break;
+        case 'print': case 'write': this.output(statement); break;
+        case 'read': this.input(statement); break;
+        case 'auxIo': this.auxiliaryIo(statement); break;
+        case 'goto':
+          this.labelRefs.push(statement.target);
+          this.emit(`JMP ${this.stmtLabel(statement.target.label)}`);
+          break;
+        case 'logicalIf': {
+          const done = this.gl();
+          this.genLogical(statement.cond); this.emit(`JZ ${done}`);
+          this.generateStatements([statement.statement]); this.place(done);
+          break;
+        }
+        case 'arithmeticIf': {
+          const value = this.temp(), nonnegative = this.gl();
+          const type = this.gen(statement.expr);
+          if (!isNumeric(type.t) || type.t === 'complex') this.fail(statement.pos, 'Arithmetic IF requires a real or integer expression');
+          this.emit(`STORE_NAME ${value}`);
+          this.emit(`LOAD_NAME ${value}`); this.emit(pushInt(0)); this.emit('LT'); this.emit(`JZ ${nonnegative}`);
+          this.emit(`JMP ${this.stmtLabel(statement.targets[0].label)}`); this.place(nonnegative);
+          this.emit(`LOAD_NAME ${value}`); this.emit(pushInt(0)); this.emit('NEQ');
+          this.emit(`JZ ${this.stmtLabel(statement.targets[1].label)}`);
+          this.emit(`JMP ${this.stmtLabel(statement.targets[2].label)}`);
+          this.labelRefs.push(...statement.targets);
+          break;
+        }
+        case 'computedGoto': case 'assignedGoto': {
+          const value = this.temp();
+          if (statement.kind === 'computedGoto') this.genAs(statement.expr, 'integer');
+          else this.loadSym(this.getVar(statement.name, statement.pos), this.baseLoc(this.getVar(statement.name, statement.pos)));
+          this.emit(`STORE_NAME ${value}`);
+          const targets = statement.targets.length ? statement.targets
+            : [...this.assignTargets].map(label => ({ label, pos: statement.pos }));
+          targets.forEach((target, targetIndex) => {
+            this.emit(`LOAD_NAME ${value}`);
+            this.emit(pushInt(statement.kind === 'computedGoto' ? targetIndex + 1 : Number(target.label)));
+            this.emit('NEQ'); this.emit(`JZ ${this.stmtLabel(target.label)}`);
+          });
+          this.labelRefs.push(...targets);
+          break;
+        }
+        case 'assignLabel': {
+          const sym = this.getVar(statement.name, statement.pos);
+          this.storeLoc(this.baseLoc(sym), () => this.emit(pushInt(Number(statement.target.label))));
+          break;
+        }
+        case 'call': this.callUser(statement.name, statement.args, statement.pos, false); break;
+        case 'return':
+          if (this.kind === 'program') this.fail(statement.pos, 'RETURN is not allowed in a main program');
+          if (statement.expr) { this.genAs(statement.expr, 'integer'); this.emit('STORE_NAME _ALTRET'); }
+          else { this.emit(pushInt(0)); this.emit('STORE_NAME _ALTRET'); }
+          this.emit('RET');
+          break;
+        default: this.fail(statement.pos, `Statement ${statement.kind} is not implemented in the FORTRAN 77 p-code backend`);
+      }
+
+    }
+  }
+
+  initializeBounds(params = null) {
+    for (const sym of this.symbols.values()) {
+      if (!sym.dummy || !sym.dims || sym.dimInfo.constant || (params && !params.has(sym.name))) continue;
+      const stride = this.dtemp();
+      this.emit(pushInt(1)); this.emit(`STORE_NAME ${stride}`);
+      sym.dimInfo.dims.forEach((dim, index) => {
+        const bound = value => {
+          if (value.c !== undefined) this.emit(pushInt(value.c));
+          else this.genAs(value.expr, 'integer');
+        };
+        bound(dim.lower); this.emit(`STORE_NAME ${this.dimReg(sym, index, 'L')}`);
+        this.emit(`LOAD_NAME ${stride}`); this.emit(`STORE_NAME ${this.dimReg(sym, index, 'S')}`);
+        if (dim.upper) {
+          bound(dim.upper); this.emit(`LOAD_NAME ${this.dimReg(sym, index, 'L')}`); this.emit('SUB');
+          this.emit(pushInt(1)); this.emit('ADD');
+          this.emit(`LOAD_NAME ${stride}`); this.emit('MUL'); this.emit(`STORE_NAME ${stride}`);
+        }
+      });
+    }
+  }
+}
+
+function homeLoc(home) {
+  if (home.kind === 'name' || home.kind === 'value') return { k: 'reg', name: home.reg };
+  if (home.kind === 'mem') return { k: 'cell', base: MEMORY, len: MEMCAP, idx: I(home.addr) };
+  if (home.kind === 'arr') return { k: 'cell', base: home.base, len: home.len, idx: I(0) };
+  throw new Error('Unsupported function result storage');
+}
+
+function homeLoadCode(home, type) {
+  const loc = homeLoc(home);
+  if (loc.k === 'reg') return [`LOAD_NAME ${loc.name}`];
+  const result = [pushInt(home.kind === 'arr' ? 0 : home.addr), `ARR_GET ${loc.base} ${loc.len}`];
+  if (type === 'complex') result.push(pushInt(home.kind === 'arr' ? 1 : home.addr + 1), `ARR_GET ${loc.base} ${loc.len}`);
+  return result;
+}
+
+export function generateFortranPcode(ast, { fileName = 'program.ftn', sourceText = '' } = {}) {
+  const program = new Program();
+  const units = ast.map(node => new Unit(program, node, { fileName }));
+  for (const unit of units) { unit.analyze(); program.addUnit(unit); }
+  const main = units.find(unit => unit.kind === 'program');
+  if (!main) throw new FortranError(fileName, 1, 1, 'An executable program requires a main program');
+  for (const unit of units) { program.registerEntries(unit); unit.planStorage(); }
+  for (const unit of units) for (const sym of unit.symbols.values()) {
+    if (sym.kind === 'var') unit.homeOf(sym);
+  }
+  program.section = 'init';
+  for (const unit of units) unit.initialize();
+  for (const unit of units) unit.initializeData();
+  program.section = 'main';
+  for (const unit of [main, ...units.filter(unit => unit !== main && unit.kind !== 'blockdata')]) {
+    for (const entry of [unit.mainEntry, ...unit.entries]) {
+      program.procedures[entry.label] = {
+        name: unit.name, params: entry.params.map(name => `${unit.prefix}${name}`), locals: [],
+      };
+      unit.place(entry.label);
+      unit.initializeBounds(new Set(entry.params));
+      unit.emit(`JMP ${entry.label}_BODY`);
+    }
+    unit.place(`${unit.entryLabel}_BODY`);
+    unit.generateStatements(unit.ast.body);
+    if (unit.ast.end.label) unit.place(unit.stmtLabel(unit.ast.end.label));
+    unit.emit(unit.kind === 'program' ? 'HALT' : 'RET');
+    for (const target of unit.labelRefs) {
+      if (!unit.labels.has(target.label)) unit.fail(target.pos, `Undefined label ${target.label}`);
+    }
+  }
+  for (const target of program.wrappers.values()) {
+    const { unit, entry, intrinsic } = target;
+    program.procedures[entry.label] = { name: intrinsic, params: entry.params.map(name => `${unit.prefix}${name}`), locals: [] };
+    unit.place(entry.label);
+    const args = entry.params.map(name => ({ k: 'ref', name, pos: unit.ast.pos }));
+    unit.assignValue(unit.resultSym, homeLoc(unit.homeOf(unit.resultSym)),
+      () => unit.genIntrinsic(intrinsic, args, unit.ast.pos), unit.ast.pos);
+    unit.emit('RET');
+  }
+  const expanded = [];
+  for (const row of program.sections.main) {
+    if (!row.dispatch) { expanded.push(row); continue; }
+    const { unit, reg, argc, type, pos } = row.dispatch;
+    const saved = program.sections.main;
+    program.sections.main = [];
+    program.loc = row.loc;
+    const done = unit.gl();
+    for (const { id, target } of program.procIds.values()) {
+      if (target.entry.params.length !== argc || Boolean(type) !== (target.unit.kind === 'function')) continue;
+      const next = unit.gl();
+      unit.emit(`LOAD_NAME ${reg}`); unit.emit(pushInt(id)); unit.emit('EQ'); unit.emit(`JZ ${next}`);
+      unit.emit(`CALL ${target.label} ${argc}`);
+      if (type) unit.convert(unit.loadResult(target.unit, target.entry.name), type.t, pos);
+      unit.emit(`JMP ${done}`); unit.place(next);
+    }
+    unit.emit(`LOAD_NAME ${reg}`); unit.emit('CALL_EXT fortran.badprocedure 1');
+    unit.place(done);
+    expanded.push(...program.sections.main);
+    program.sections.main = saved;
+  }
+  const rows = [...program.sections.init, ...expanded];
+  const lines = rows.map(row => row.text.replaceAll(MEMCAP, String(Math.max(1, program.memory))));
+  const labels = new Set();
+  for (const line of lines.filter(line => line.endsWith(':'))) {
+    if (labels.has(line)) throw new FortranError(fileName, 1, 1, `Duplicate generated label ${line}`);
+    labels.add(line);
+  }
+  const sourceMap = {}, sourceLines = sourceText.split(/\r?\n/);
+  let pc = 0;
+  for (const row of rows) {
+    if (row.text.endsWith(':')) continue;
+    const line = row.loc?.line || 0;
+    sourceMap[pc++] = { sourceFile: fileName, sourceLanguage: 'mnf', sourceLine: line,
+      sourceText: line ? sourceLines[line - 1] || '' : '' };
+  }
+  for (const line of lines) {
+    const match = /^(?:LOAD_NAME|STORE_NAME) (.+)$/.exec(line);
+    if (match && !program.frameRegs.has(match[1])) program.globals.add(match[1]);
+  }
+  program.arrays.set(MEMORY, Math.max(1, program.memory));
+  const runtimeUnit = { kind: 'program', id: main.name, refreshMs: null };
+  return {
+    language: 'mnf', programId: main.name, runtimeUnit, compiledAt: new Date().toISOString(),
+    pcodeText: `${lines.join('\n')}\n`,
+    programMap: { version: 1, sourceLanguage: 'mnf', standard: 'fortran77', targets: ['js'],
+      runtimeUnit, globals: [...program.globals], procedures: program.procedures, entries: [], sourceMap,
+      extendableDeclarations: [...program.arrays].map(([name, elementCount]) => ({ name, elementCount })),
+      requiredRuntimeLibraries: ['fortran77'],
+    },
+  };
 }

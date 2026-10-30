@@ -532,7 +532,8 @@ sentence
   ;
 
 statement
-  : moveStatement
+  : pulseServerStatement
+  | moveStatement
   | setStatement
   | performStatement
   | callStatement
@@ -582,6 +583,12 @@ statement
   | mergeStatement
   | releaseStatement
   | returnStatement
+  ;
+
+pulseServerStatement
+  : PULSE RECEIVE INTO dataReference
+  | PULSE SEND dataReference (AS IDENTIFIER)?
+  | PULSE INVENTORY dataReference INTO dataReference
   ;
 
 moveStatement
@@ -1393,6 +1400,7 @@ DEBUGGING: 'DEBUGGING';
 SEGMENT_LIMIT: 'SEGMENT-LIMIT';
 LIBRARIAN: 'LIBRARIAN';
 PULSE: 'PULSE';
+INVENTORY: 'INVENTORY';
 SERVICE: 'SERVICE';
 SEND: 'SEND';
 DAEMON: 'DAEMON';

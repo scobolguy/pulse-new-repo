@@ -7,6 +7,7 @@
     "test:editorconfig": "node ./testing/editorconfig.test.mjs",
     "test:aggregator:modules": "node ./testing/aggregator/module-boundaries.test.mjs",
     "test:pmachine:arduino-layout": "node ./testing/pmachines/arduino-layout.test.mjs",
+    "test:pmachine:fortran": "node --test ./testing/pmachines/fortran-runtime.test.mjs",
     "test:pmachine:javascript": "node ./testing/pmachines/run-javascript-suite.mjs",
     "test:pmachine:javascript-package": "node ./testing/pmachines/javascript-package.test.mjs",
     "test:runtime-data-policy": "node ./testing/runtime-data-policy.test.mjs",

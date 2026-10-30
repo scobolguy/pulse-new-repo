@@ -5,9 +5,10 @@ import { preprocessCobolText } from './cobol-text-preprocessor.mjs';
 import { assertSupportedFeatures } from './unsupported-features.mjs';
 import { buildPcodeSourceMap } from '../../../virtualMachines/esp32/aggregator/scripts/pcode-source-map.mjs';
 import { linkPcodeLibraries } from '../../../virtualMachines/esp32/pmachines/shared/pcode-library-linker.mjs';
-import { SERVICE_HOST_BINDINGS_VERSION } from '../../../virtualMachines/esp32/pmachines/shared/contracts/service-host-bindings.mjs';
+import { SERVICE_HOST_BINDINGS, SERVICE_HOST_INTERNAL_BINDINGS, SERVICE_HOST_BINDINGS_VERSION } from '../../../virtualMachines/esp32/pmachines/shared/contracts/service-host-bindings.mjs';
 import { HOST_CAPABILITIES_VERSION, requiredHostCapabilities } from '../../../virtualMachines/esp32/pmachines/shared/contracts/host-capabilities.mjs';
 import { getCobolRuntimeLibrary } from './cobol-runtime-libraries.mjs';
+import { encodeHostedImage } from '../../../virtualMachines/esp32/pmachines/shared/contracts/hosted-image.mjs';
 
 function text(ctx) {
   return ctx ? ctx.getText() : '';
@@ -121,8 +122,19 @@ function editedPictureScale(mask, decimalPointComma) {
  * COBOL rules: the receiving field decides truncation, and ROUNDED is half-up.
  */
 class CobolishCodegen extends Cobolish85Visitor {
-  constructor() {
+  constructor({ hostServices = false, inventoryGateway = null, nativeTarget = false } = {}) {
     super();
+    this.hostServices = hostServices;
+    this.nativeTarget = nativeTarget;
+    if (nativeTarget && !hostServices) throw new Error('[COBOLISH] nativeTarget requires hosted compilation');
+    if (inventoryGateway && (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(inventoryGateway.address) ||
+        inventoryGateway.address.split('.').some(part => Number(part) > 255) ||
+        !Number.isInteger(inventoryGateway.port) || inventoryGateway.port < 1 || inventoryGateway.port > 65535)) {
+      throw new Error('[COBOLISH] Invalid inventory gateway IPv4 address or port');
+    }
+    this.inventoryGateway = inventoryGateway;
+    this.serverReceivers = new Set();
+    this.serverSenders = new Set();
     this.lines = [];
     this.sourceLines = [];
     this.currentSourceLine = 0;
@@ -254,6 +266,20 @@ class CobolishCodegen extends Cobolish85Visitor {
   }
 
   emit(line) {
+    if (this.nativeTarget) {
+      const integer = /^PUSH_DEC (-?\d+) 0$/.exec(line);
+      if (integer) {
+        const value = Number(integer[1]);
+        if (!Number.isInteger(value) || value < -2147483648 || value > 2147483647) {
+          throw new Error('[COBOLISH] Native integer literal exceeds signed 32-bit bounds');
+        }
+        line = `PUSH_INT ${value}`;
+      } else if (line === 'DEC_QUANT 0') return;
+      else if (/^(PUSH_DEC|DEC_)/.test(line)) {
+        throw new Error(`[COBOLISH] Native integer profile does not support ${line}`);
+      }
+      if (line === 'CALL_EXT host.string_index 2') line = 'CALL_EXT host.text_index 2';
+    }
     this.lines.push(line);
     this.sourceLines.push(this.currentSourceLine);
   }
@@ -480,6 +506,7 @@ class CobolishCodegen extends Cobolish85Visitor {
       let signPosition = null;
       let separateSign = false;
       let indexUsage = false;
+      let nativeBinary = false;
       let initial = null;
       let sortKeys = null;
       let sortDescending = false;
@@ -504,6 +531,7 @@ class CobolishCodegen extends Cobolish85Visitor {
           sortDescending = Boolean(clause.occursKeyClause().DESCENDING());
         }
         if (clause.usageClause?.() && /^INDEX$/i.test(text(clause.usageClause()))) indexUsage = true;
+        if (clause.COMP_5?.() || /^COMP-5$/i.test(text(clause.usageClause?.()))) nativeBinary = true;
         if (clause.OCCURS?.()) {
           const bounds = clause.cobolNumber();
           occurs = Number(text(bounds.at(-1)));
@@ -538,9 +566,14 @@ class CobolishCodegen extends Cobolish85Visitor {
         sortKeys, sortDescending,
         justified, signPosition, separateSign, editedPicture: editedPicture?.mask,
         blankWhenZero, sourceName: name, path, programKey: program.key,
+        ...(nativeBinary ? { nativeBinary: true } : {}),
         isGlobal, isExternal: external, isLinkage: section === 'LINKAGE',
         storageSection: section
       };
+      if (this.nativeTarget && field.kind === 'decimal'
+        && (!nativeBinary || field.scale !== 0 || field.precision < 5 || field.precision > 9 || !field.signed)) {
+        throw new Error(`[COBOLISH] Native numeric item ${name} requires PIC S9(5..9) COMP-5 (signed 32-bit)`);
+      }
       if (initial && field.kind === 'decimal') {
         const raw = text(initial);
         const [whole, fraction = ''] = raw.replace(/^[+-]/, '').split('.');
@@ -822,6 +855,17 @@ class CobolishCodegen extends Cobolish85Visitor {
   }
 
   emitSlice(start, end) {
+    if (this.nativeTarget) {
+      const first = this.nextHiddenField();
+      start();
+      this.emit(`STORE ${first}`);
+      this.emit(`LOAD ${first}`);
+      end();
+      this.emit(`LOAD ${first}`);
+      this.emit('SUB');
+      this.emit('CALL_EXT host.text_slice 3');
+      return;
+    }
     start();
     this.emit('DEC_STR');
     this.emit('PARSE_INT');
@@ -2060,14 +2104,16 @@ class CobolishCodegen extends Cobolish85Visitor {
   nextHiddenField() {
     this.hiddenFieldId += 1;
     const name = `__COBOL_TMP_${this.hiddenFieldId}`;
-    this.fields.set(name, { kind: 'decimal', precision: 10, scale: 0 });
+    this.fields.set(name, { kind: 'decimal', precision: 10, scale: 0,
+      ...(this.nativeTarget && this.currentParagraph ? { nativeLocalProcedure: `PARA_${this.currentParagraph}` } : {}) });
     return name;
   }
 
   nextHiddenStringField(length) {
     this.hiddenFieldId += 1;
     const name = `__COBOL_TMP_${this.hiddenFieldId}`;
-    this.fields.set(name, { kind: 'string', length });
+    this.fields.set(name, { kind: 'string', length,
+      ...(this.nativeTarget && this.currentParagraph ? { nativeLocalProcedure: `PARA_${this.currentParagraph}` } : {}) });
     return name;
   }
 
@@ -3198,6 +3244,9 @@ class CobolishCodegen extends Cobolish85Visitor {
       this.emitFactor(factors[index], stringLength);
       const operator = text(ctx.getChild((2 * index) - 1)).toUpperCase();
       if (operator !== '*' && operator !== '/') throw new Error(`[COBOLISH] Unsupported operator ${operator}`);
+      if (this.nativeTarget && operator === '/' && ctx !== this.nativeDivisionTerm) {
+        throw new Error('[COBOLISH] Native division requires a standalone COMPUTE quotient = integer / integer');
+      }
       this.emit(operator === '*' ? 'MUL' : 'DIV');
     }
   }
@@ -3393,6 +3442,11 @@ class CobolishCodegen extends Cobolish85Visitor {
   }
 
   emitTextLength() {
+    if (this.nativeTarget) {
+      this.emit('CALL_EXT host.bytes_from_text 1');
+      this.emit('CALL_EXT host.bytes_length 1');
+      return;
+    }
     const value = this.nextHiddenField();
     const length = this.nextHiddenField();
     const loop = this.nextLabel('TEXT_LENGTH');
@@ -3443,6 +3497,16 @@ class CobolishCodegen extends Cobolish85Visitor {
   }
 
   emitReceiverConversion(field, rounded) {
+    if (this.nativeTarget && field.kind === 'decimal') {
+      if (!field.nativeBinary || rounded) throw new Error('[COBOLISH] Native numeric receivers require COMP-5 without ROUNDED');
+      return;
+    }
+    if (this.nativeTarget && field.kind === 'string') {
+      if (field.justified) throw new Error('[COBOLISH] Native alphanumeric receivers do not support JUSTIFIED');
+      this.emit(`PUSH_INT ${field.length}`);
+      this.emit('CALL_EXT host.cobol_text 2');
+      return;
+    }
     if (field.kind === 'decimal') {
       this.emit(`DEC_QUANT ${field.scale}${rounded ? ' ROUNDED' : ''}`);
       const value = this.nextHiddenField();
@@ -3483,6 +3547,14 @@ class CobolishCodegen extends Cobolish85Visitor {
         this.emit(`LOAD ${value}`);
       }
     } else if (field.kind === 'string') {
+      if (this.hostServices && !field.justified) {
+        this.emit(`PUSH_STR ${JSON.stringify(' '.repeat(field.length))}`);
+        this.emit('CONCAT');
+        this.emit('PUSH_INT 0');
+        this.emit(`PUSH_INT ${field.length}`);
+        this.emit('CALL_EXT host.text_slice 3');
+        return;
+      }
       if (!field.justified) {
         this.emit(`PUSH_STR ${JSON.stringify(' '.repeat(field.length))}`);
         this.emit('CONCAT');
@@ -3944,6 +4016,91 @@ class CobolishCodegen extends Cobolish85Visitor {
   }
 
   emitStatement(ctx) {
+    if (ctx.pulseServerStatement?.()) {
+      if (!this.hostServices) throw new Error('[COBOLISH] PULSE RECEIVE/SEND requires hostServices');
+      const statement = ctx.pulseServerStatement();
+      const references = asArray(statement.dataReference());
+      const reference = references[0];
+      const field = this.fieldOf(this.resolveDataName(reference));
+      if (!field || field.kind !== 'string' || field.dimensions.length || reference.expression().length) {
+        throw new Error('[COBOLISH] PULSE RECEIVE/SEND requires an elementary alphanumeric item');
+      }
+      if (statement.INVENTORY()) {
+        const target = references[1];
+        const targetField = this.fieldOf(this.resolveDataName(target));
+        if (!targetField || targetField.kind !== 'string' || targetField.dimensions.length ||
+            target.expression().length || targetField.length < 96 || field.length > 128) {
+          throw new Error('[COBOLISH] PULSE INVENTORY needs a command of at most 128 characters and an alphanumeric reply of at least 96');
+        }
+        if (this.inventoryGateway) {
+          this.runtimeLibraries.add('inventory');
+          this.emitReference(reference);
+          this.emit(`PUSH_STR ${JSON.stringify(this.inventoryGateway.address)}`);
+          this.emit(`PUSH_INT ${this.inventoryGateway.port}`);
+          this.emit('CALL PROC_COBOL_RT_INVENTORY 3');
+          this.emit('STORE __inventory_response');
+          this.emit('LOAD __inventory_response');
+          this.emit('PUSH_STR "status"');
+          this.emit('CALL_EXT host.json_integer 2');
+          this.emit('PUSH_INT 200');
+          this.emit('EQ');
+          const success = this.nextLabel('INVENTORY_OK');
+          const failure = this.nextLabel('INVENTORY_ERROR');
+          this.emit(`JZ ${failure}`);
+          this.emit(`JMP ${success}`);
+          this.emit(`${failure}:`);
+          this.emit('LOAD __inventory_response');
+          this.emit('PUSH_STR "status"');
+          this.emit('CALL_EXT host.json_integer 2');
+          this.emit('CALL_EXT host.http_status 1');
+          this.emit('STORE __inventory_status');
+          this.emit('MAP_RETURN __inventory_response');
+          this.emit('HALT');
+          this.emit(`${success}:`);
+          this.emit('LOAD __inventory_response');
+          this.emit('PUSH_STR "reply"');
+          this.emit('CALL_EXT host.json_text 2');
+        } else {
+          this.emitReference(reference);
+          this.emit('CALL_EXT host.event_body 0');
+          this.emit('PUSH_STR "requestId"');
+          this.emit('CALL_EXT host.json_text 2');
+          this.emit('CALL_EXT host.inventory_apply 2');
+        }
+        this.storeReference(target);
+      } else if (statement.RECEIVE()) {
+        this.serverReceivers.add(this.resolveDataName(reference));
+        this.emit('CALL_EXT host.event_body 0');
+        this.emit('PUSH_STR "data"');
+        this.emit('CALL_EXT host.json_text 2');
+        this.storeReference(reference);
+      } else {
+        this.serverSenders.add(this.resolveDataName(reference));
+        if (statement.AS()) {
+          if (text(statement.IDENTIFIER()).toUpperCase() !== 'JSON') throw new Error('[COBOLISH] PULSE SEND AS requires JSON');
+          this.emitReference(reference);
+          this.emit('CALL_EXT host.cobol_unpad 1');
+          this.emit('STORE __pathway_reply');
+          this.emit('LOAD __pathway_reply');
+          this.emit('CALL_EXT host.json_kind 1');
+          this.emit(`STORE ${this.nextHiddenField()}`);
+          this.emit('MAP_RETURN __pathway_reply');
+          this.emit('HALT');
+          return;
+        }
+        this.emit('PUSH_STR "{}"');
+        this.emit('PUSH_STR "data"');
+        this.emitReference(reference);
+        this.emit('CALL_EXT host.json_set 3');
+        this.emit('PUSH_STR "code"');
+        this.emit('PUSH_INT 0');
+        this.emit('CALL_EXT host.json_set 3');
+        this.emit('STORE __pathway_reply');
+        this.emit('MAP_RETURN __pathway_reply');
+        this.emit('HALT');
+      }
+      return;
+    }
     if (ctx.moveCorrespondingStatement?.()) return this.emitMoveCorresponding(ctx.moveCorrespondingStatement());
     if (ctx.moveStatement && ctx.moveStatement()) return this.emitMove(ctx.moveStatement());
     if (ctx.setStatement?.()) return this.emitSet(ctx.setStatement());
@@ -4156,12 +4313,57 @@ class CobolishCodegen extends Cobolish85Visitor {
     }
   }
 
+  emitHostCall(ctx, target, items) {
+    const binding = SERVICE_HOST_BINDINGS[target];
+    if (!this.hostServices || !binding || SERVICE_HOST_INTERNAL_BINDINGS.has(target) || binding.desktopOnly || binding.result === 'decimal'
+      || (binding.args || []).some(kind => !['integer', 'string', 'scalar'].includes(kind))) {
+      throw new Error(`[COBOLISH] Unsupported portable host CALL ${target}`);
+    }
+    if (items.length !== binding.arity || ctx.callOnExceptionClause() || ctx.callOverflowClause() || ctx.callNotOnExceptionClause()) {
+      throw new Error(`[COBOLISH] ${target} requires ${binding.arity} arguments and no exception phrases`);
+    }
+    for (const [index, item] of items.entries()) {
+      if (item.callPassingMode?.() && !/^(?:CONTENT|VALUE)$/i.test(text(item.callPassingMode()))) {
+        throw new Error('[COBOLISH] Host CALL arguments are passed BY CONTENT or BY VALUE');
+      }
+      const parameter = item.callParameter();
+      const reference = parameter.IDENTIFIER();
+      const name = reference && this.resolveProgramDataName(this.currentProgram, storageName(text(reference)));
+      const field = name && this.fieldOf(name);
+      const literal = parameter.literal?.();
+      const kind = field?.kind === 'string' || literal?.stringLiteral?.() ? 'string'
+        : field?.kind === 'decimal' || (literal && /^(?:[+-]?\d+|ZERO|ZEROES|ZEROS)$/i.test(text(literal))) ? 'integer' : null;
+      if (!kind || (binding.args[index] !== 'scalar' && binding.args[index] !== kind)
+        || (field && (field.dimensions.length || (kind === 'integer' && field.scale !== 0)))) {
+        throw new Error(`[COBOLISH] ${target} argument ${index + 1} requires ${binding.args[index]}`);
+      }
+      if (reference) this.emitNamedReference(name);
+      else this.emitLiteral(literal);
+      if (kind === 'string' && field) this.emit('CALL_EXT host.cobol_unpad 1');
+      if (kind === 'integer' && !this.nativeTarget) {
+        this.emit('DEC_STR');
+        this.emit('PARSE_INT');
+      }
+    }
+    const giving = ctx.callGivingClause()?.IDENTIFIER();
+    const receiver = giving && this.resolveProgramDataName(this.currentProgram, storageName(text(giving)));
+    const field = receiver && this.fieldOf(receiver);
+    if (giving && (!field || field.dimensions.length || field.kind !== (binding.result === 'string' ? 'string' : 'decimal')
+      || (field.kind === 'decimal' && field.scale !== 0))) {
+      throw new Error(`[COBOLISH] ${target} RETURNING requires an elementary ${binding.result} receiver`);
+    }
+    this.emit(`CALL_EXT ${target} ${binding.arity}`);
+    if (receiver) this.storeInto(receiver, false);
+    else this.emit(`STORE ${this.nextHiddenField()}`);
+  }
+
   emitCall(ctx) {
     const targetNode = ctx.callTarget();
     const targetText = text(targetNode);
     const target = targetText.replace(/^['"]|['"]$/g, '').toUpperCase();
     const callItems = ctx.callUsingClause()?.callUsingItem() || [];
     const parameters = callItems.map(item => item.callParameter());
+    if (/^host\./i.test(unquote(targetText))) return this.emitHostCall(ctx, unquote(targetText).toLowerCase(), callItems);
     if (target === 'QUEUE-WRITE-SYNC' || target === 'QUEUE-WRITE-ASYNC') {
       if (parameters.length !== 2) throw new Error(`[COBOLISH] ${target} requires a queue symbol and message`);
       const queue = text(parameters[0]).replace(/^['"]|['"]$/g, '');
@@ -4175,7 +4377,6 @@ class CobolishCodegen extends Cobolish85Visitor {
     if (!['DB-INSERT', 'DB-SELECT', 'DB-UPDATE', 'DB-DELETE'].includes(target)) {
       return this.emitCobolProgramCall(ctx, target, targetNode, callItems);
     }
-
     const staticValue = (parameter, label) => {
       const raw = text(parameter).trim();
       if (!raw) throw new Error(`[COBOLISH] ${target} ${label} is required`);
@@ -4242,12 +4443,16 @@ class CobolishCodegen extends Cobolish85Visitor {
       for (let index = 0; index < count; index += 1) {
         const initial = this.initialValues.get(name);
         if (initial && field.kind === 'string') {
-          this.emit(`PUSH_STR ${JSON.stringify(literalStringValue(initial, field.length).padEnd(field.length))}`);
+          this.emit(`PUSH_STR ${JSON.stringify(this.nativeTarget ? literalStringValue(initial, field.length) : literalStringValue(initial, field.length).padEnd(field.length))}`);
+          if (this.nativeTarget) this.emitReceiverConversion(field, false);
         } else if (initial) {
           this.emitLiteral(initial);
           this.emit(`DEC_QUANT ${field.scale}`);
         } else if (field.kind === 'decimal') this.emit(`PUSH_DEC 0 ${field.scale}`);
-        else this.emit(`PUSH_STR ${JSON.stringify(' '.repeat(field.length))}`);
+        else {
+          this.emit(`PUSH_STR ${JSON.stringify(this.nativeTarget ? '' : ' '.repeat(field.length))}`);
+          if (this.nativeTarget) this.emitReceiverConversion(field, false);
+        }
         this.emit(`STORE ${field.dimensions?.length ? `${name}_${index}` : name}`);
       }
     }
@@ -4809,10 +5014,13 @@ class CobolishCodegen extends Cobolish85Visitor {
   emitCompute(ctx) {
     const phrases = this.sizeErrorPhrases(ctx);
     const receivers = ctx.arithmeticReceivers().arithmeticReceiver();
+    const terms = ctx.expression().term();
+    this.nativeDivisionTerm = this.nativeTarget && terms.length === 1 && terms[0].factor().length === 2 ? terms[0] : null;
     for (const receiver of receivers) {
       this.emitExpression(ctx.expression());
       this.storeArithmeticResult(receiver, phrases);
     }
+    this.nativeDivisionTerm = null;
   }
 
   sizeErrorPhrases(ctx) {
@@ -5891,19 +6099,23 @@ class CobolishCodegen extends Cobolish85Visitor {
       this.emit(`STORE ${name}`);
     }
     for (const [name, field] of [...this.fields]) {
-      if (field.kind === 'group' || field.redefinesBase) continue;
+      if (field.kind === 'group' || field.redefinesBase || field.nativeLocalProcedure) continue;
       const count = (field.dimensions || []).reduce((a, b) => a * b, 1);
       for (let index = 0; index < count; index += 1) {
         const initial = this.initialValues.get(name);
         if (initial) {
           if (field.kind === 'string') {
-            this.emit(`PUSH_STR ${JSON.stringify(literalStringValue(initial, field.length).padEnd(field.length))}`);
+            this.emit(`PUSH_STR ${JSON.stringify(this.nativeTarget ? literalStringValue(initial, field.length) : literalStringValue(initial, field.length).padEnd(field.length))}`);
+            if (this.nativeTarget) this.emitReceiverConversion(field, false);
           } else {
             this.emitLiteral(initial);
             this.emit(`DEC_QUANT ${field.scale}`);
           }
         } else if (field.kind === 'decimal') this.emit(`PUSH_DEC 0 ${field.scale}`);
-        else this.emit(`PUSH_STR ${JSON.stringify(' '.repeat(field.length))}`);
+        else {
+          this.emit(`PUSH_STR ${JSON.stringify(this.nativeTarget ? '' : ' '.repeat(field.length))}`);
+          if (this.nativeTarget) this.emitReceiverConversion(field, false);
+        }
         this.emit(`STORE ${field.dimensions?.length ? `${name}_${index}` : name}`);
       }
     }
@@ -5923,9 +6135,14 @@ class CobolishCodegen extends Cobolish85Visitor {
     else this.emit('HALT');
     this.currentProgram = null;
 
+    if (this.nativeTarget) {
+      for (const [label, procedure] of Object.entries(procedures)) {
+        procedure.locals = [...this.fields].filter(([, field]) => field.nativeLocalProcedure === label).map(([name]) => name);
+      }
+    }
     return {
       pcodeText: `${this.lines.join('\n')}\n`,
-      globals: [...this.fields.keys(), ...this.controlFields],
+      globals: [...[...this.fields].filter(([, field]) => !field.nativeLocalProcedure).map(([name]) => name), ...this.controlFields],
       fields: Object.fromEntries(this.fields),
       files: Object.fromEntries(this.files),
       symbols,
@@ -5941,21 +6158,39 @@ class CobolishCodegen extends Cobolish85Visitor {
 }
 
 export function compileCobolishToPcode(sourceText, options = {}) {
-  const { tree, errors } = parseCobolishWithAntlr(preprocessCobolText(sourceText, { copybooks: options.copybooks }));
+  const codegen = new CobolishCodegen(options);
+  const copybooks = { ...options.copybooks };
+  if (codegen.inventoryGateway) {
+    copybooks['PULSE-INVENTORY-CONFIG'] = `01 GATEWAY-ADDRESS PIC X(15) VALUE "${codegen.inventoryGateway.address}".
+01 GATEWAY-PORT PIC S9(9) COMP-5 VALUE ${codegen.inventoryGateway.port}.`;
+  }
+  const { tree, errors } = parseCobolishWithAntlr(preprocessCobolText(sourceText, { copybooks }));
   if (errors.length > 0) {
     throw new Error(`[COBOLISH] Parse failed:\n${errors.join('\n')}`);
   }
   assertSupportedFeatures(tree);
 
-  const codegen = new CobolishCodegen();
   const built = codegen.build(tree);
   const hostBindings = built.pcodeText.split(/\r?\n/)
     .filter(line => line.startsWith('CALL_EXT '))
     .map(line => ({ mnemonic: 'CALL_EXT', operand: { label: line.split(/\s+/)[1] } }));
   const runtimeMatch = String(sourceText || '').match(/\bPULSE\s+(SERVICE|DAEMON|PROGRAM)\s+("[^"]+"|'[^']+'|[A-Za-z_][A-Za-z0-9_-]*)/i);
-  const runtimeUnit = runtimeMatch
+  let runtimeUnit = runtimeMatch
     ? { kind: runtimeMatch[1].toLowerCase(), id: unquote(runtimeMatch[2]), placement: 'local' }
     : null;
+  const hosted = options.hostServices === true;
+  if (hosted) {
+    const declaration = tree.programUnit().cobolishRuntimeClause();
+    runtimeUnit = declaration
+      ? { kind: declaration.SERVICE() ? 'service' : 'other', id: unquote(declaration.programName().getText()), placement: 'local' }
+      : null;
+    if (codegen.serverReceivers.size !== 1 || codegen.serverSenders.size !== 1) {
+      throw new Error('[COBOLISH] Hosted server requires one PULSE RECEIVE record and one PULSE SEND record');
+    }
+  }
+  if (hosted && (runtimeUnit?.kind !== 'service' || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(runtimeUnit.id))) {
+    throw new Error('[COBOLISH] Hosted server requires PULSE SERVICE with a simple service name');
+  }
 
   const program = {
     pcodeText: built.pcodeText,
@@ -5963,14 +6198,16 @@ export function compileCobolishToPcode(sourceText, options = {}) {
       version: 1,
       generatedAt: new Date().toISOString(),
       sourceLanguage: 'cobolish',
-      executionModel: 'cobolish-program',
+      executionModel: hosted ? 'cobolish-hosted-server' : 'cobolish-program',
       ...(runtimeUnit ? { runtimeUnit } : {}),
-      ...(hostBindings.length ? {
+      ...(hostBindings.length || hosted ? {
         hostBindingsVersion: SERVICE_HOST_BINDINGS_VERSION,
         hostCapabilitiesVersion: HOST_CAPABILITIES_VERSION,
         requiredHostCapabilities: requiredHostCapabilities(hostBindings),
-        targets: ['js']
+        targets: hosted && !hostBindings.some(binding => binding.operand.label === 'host.inventory_apply') ? ['js', 'esp32'] : ['js']
       } : {}),
+      ...(hosted ? { serviceEndpoints: [{ verb: 'POST', path: `/api/pathway/${runtimeUnit.id}` }] } : {}),
+      ...(codegen.inventoryGateway ? { inventoryRequestIdRequired: true } : {}),
       globals: built.globals,
       fields: built.fields,
       files: built.files,
@@ -5987,5 +6224,13 @@ export function compileCobolishToPcode(sourceText, options = {}) {
     }
   };
   const runtimeLibraries = [...codegen.runtimeLibraries].map(getCobolRuntimeLibrary);
-  return linkPcodeLibraries(program, [...(options.pcodeLibraries || []), ...runtimeLibraries]);
+  const linked = linkPcodeLibraries(program, [...(options.pcodeLibraries || []), ...runtimeLibraries]);
+  if (options.nativeTarget) {
+    if (linked.programMap.globals.length > 128) throw new Error('[COBOLISH] Native root frame capacity exceeded (128)');
+    if (Object.values(linked.programMap.procedures).some(procedure => procedure.locals?.length > 128)) {
+      throw new Error('[COBOLISH] Native procedure frame capacity exceeded (128)');
+    }
+    encodeHostedImage(linked.pcodeText, { profile: 'extended' });
+  }
+  return linked;
 }

@@ -1,4 +1,4 @@
-import { compileWorkflowDSLWithAntlr } from './workflow-antlr-compiler.mjs';
+import { compileWorkflowDSLWithAntlr } from '../../../../languages/wfl/src/workflow-antlr-compiler.mjs';
 
 const source = [
   'DEPLOYMENT "demo" PROJECT "payments" TARGETS ("magic-js-pmachine-01") BEGIN',

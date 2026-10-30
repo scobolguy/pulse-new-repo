@@ -18,22 +18,27 @@ const modules = [
   ['wfl', 'interpret-workflow.mjs']
 ];
 
-test('legacy compiler exports are the canonical implementations', async () => {
+test('language compilers load canonically and remaining legacy exports forward correctly', async () => {
   for (const [language, file] of modules) {
     const canonical = await import(new URL(`../../../../languages/${language}/src/${file}`, import.meta.url));
+    if (file !== 'interpret-workflow.mjs') {
+      assert.ok(Object.keys(canonical).length > 0, file);
+      assert.ok(!fs.existsSync(path.join(aggregator, 'scripts', file)), file);
+      continue;
+    }
     const legacy = await import(new URL(file, import.meta.url));
     assert.deepEqual(Object.keys(legacy), Object.keys(canonical), file);
     for (const key of Object.keys(canonical)) assert.equal(legacy[key], canonical[key], `${file}: ${key}`);
   }
 });
 
-test('legacy generated-parser imports forward to canonical parsers', async () => {
+test('VBish/MAPL/WFL parsers load only from languages', async () => {
   for (const [language, grammar] of [['vbish', 'Vbish'], ['mapl', 'MAPL'], ['wfl', 'WorkflowDsl']]) {
     for (const suffix of ['Lexer', 'Parser', 'Visitor']) {
       const file = `${grammar}${suffix}.js`;
       const canonical = await import(new URL(`../../../../languages/${language}/grammar/generated/${file}`, import.meta.url));
-      const legacy = await import(new URL(`../grammar/generated-modern/${file}`, import.meta.url));
-      assert.equal(legacy.default, canonical.default, file);
+      assert.equal(typeof canonical.default, 'function', file);
+      assert.ok(!fs.existsSync(path.join(aggregator, 'grammar', 'generated-modern', file)), file);
     }
   }
 });
@@ -62,11 +67,11 @@ function run(language, file, legacy, args, cwd) {
   return execFileSync(process.execPath, [script, ...args], { cwd, encoding: 'utf8', timeout: 30000 });
 }
 
-test('MAPL legacy and canonical CLIs emit identical p-code and entries', t => {
+test('MAPL canonical CLI emits p-code and entries', t => {
   const cwd = temporaryDirectory(t);
   const input = path.join(repository, 'languages', 'mapl', 'examples', 'customer.mapl');
   const results = [];
-  for (const legacy of [false, true]) {
+  for (const legacy of [false]) {
     for (const file of ['map.pcode', 'map.json']) fs.rmSync(path.join(cwd, file), { force: true });
     run('mapl', 'compile-mapl-antlr-to-pcode.mjs', legacy,
       ['--in', input, '--out', 'map.pcode', '--map-out', 'map.json'], cwd);
@@ -77,14 +82,13 @@ test('MAPL legacy and canonical CLIs emit identical p-code and entries', t => {
   }
   assert.match(results[0].pcode, /CustomerToAccount/);
   assert.equal(results[0].entries.length, 1);
-  assert.deepEqual(results[1], results[0]);
 });
 
-test('WFL DSL legacy and canonical CLIs emit the same workflow', t => {
+test('WFL canonical DSL CLI emits workflows and symbols', t => {
   const cwd = temporaryDirectory(t);
   const input = path.join(repository, 'languages', 'wfl', 'examples', 'routing.wfl');
   const results = [];
-  for (const legacy of [false, true]) {
+  for (const legacy of [false]) {
     for (const file of ['symbols.json', 'workflows.json', 'workflow.json']) {
       fs.rmSync(path.join(cwd, file), { force: true });
     }
@@ -100,14 +104,13 @@ test('WFL DSL legacy and canonical CLIs emit the same workflow', t => {
     results.push({ symbols, workflows });
   }
   assert.equal(results[0].workflows[0].id, 'route-payments');
-  assert.deepEqual(results[1], results[0]);
 });
 
-test('WFL p-code legacy and canonical CLIs emit identical programs', t => {
+test('WFL canonical p-code CLI emits matching programs and maps', t => {
   const cwd = temporaryDirectory(t);
   const input = path.join(repository, 'languages', 'wfl', 'examples', 'routing.wfl');
   const results = [];
-  for (const legacy of [false, true]) {
+  for (const legacy of [false]) {
     for (const file of ['workflow.pcode', 'workflow.json']) fs.rmSync(path.join(cwd, file), { force: true });
     run('wfl', 'compile-workflow-to-pcode.mjs', legacy,
       ['--in', input, '--workflow', 'route-payments', '--out', 'workflow.pcode', '--out-map', 'workflow.json'], cwd);
@@ -118,7 +121,6 @@ test('WFL p-code legacy and canonical CLIs emit identical programs', t => {
     results.push(pcode);
   }
   assert.ok(results[0].length > 0);
-  assert.equal(results[1], results[0]);
 });
 
 test('WFL interpreter preserves working-directory-relative data defaults', t => {
@@ -143,7 +145,7 @@ test('compiler CLI defaults remain relative to the caller, not the relocated mod
     path.join(source, 'sample.mapl'));
   fs.copyFileSync(path.join(repository, 'languages', 'wfl', 'examples', 'routing.wfl'),
     path.join(source, 'workflow.wfl'));
-  for (const legacy of [false, true]) {
+  for (const legacy of [false]) {
     for (const file of ['mapl.pcode', 'mapl.program.json', 'symbols.generated.json',
       'workflows.generated.json', 'workflow-compiled.json', 'workflow-router.pcode', 'workflow-router.program.json']) {
       fs.rmSync(path.join(output, file), { force: true });
@@ -166,21 +168,32 @@ test('compiler CLI defaults remain relative to the caller, not the relocated mod
   }
 });
 
-test('legacy CLIs report failures with a nonzero exit status', t => {
+test('canonical CLIs and remaining interpreter compatibility report failures with a nonzero exit status', t => {
   const cwd = temporaryDirectory(t);
   for (const [language, file] of modules.filter(([, file]) =>
     ['compile-mapl-antlr-to-pcode.mjs', 'compile-workflow-dsl.mjs',
       'compile-workflow-to-pcode.mjs', 'interpret-workflow.mjs'].includes(file))) {
-    for (const legacy of [false, true]) {
+    for (const legacy of file === 'interpret-workflow.mjs' ? [false, true] : [false]) {
       const script = legacy
         ? path.join(aggregator, 'scripts', file)
         : path.join(repository, 'languages', language, 'src', file);
       const result = spawnSync(process.execPath, [script, '--in', 'missing-source'], {
         cwd, encoding: 'utf8', timeout: 30000
       });
+
       assert.ifError(result.error);
       assert.equal(result.status, 1, file);
       assert.match(result.stderr, /Failed:.*ENOENT/, file);
     }
+  }
+});
+
+test('aggregator has no VBish, MAPL or WFL grammar artifacts', () => {
+  const grammar = path.join(aggregator, 'grammar');
+  for (const directory of ['.antlr', 'generated-modern', 'generated-test']) {
+    const root = path.join(grammar, directory);
+    if (!fs.existsSync(root)) continue;
+    const entries = fs.readdirSync(root, { recursive: true });
+    assert.ok(!entries.some(entry => /^(Vbish|MAPL|WFL|WorkflowDsl)/.test(path.basename(entry))), directory);
   }
 });

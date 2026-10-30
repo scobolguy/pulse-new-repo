@@ -12,6 +12,7 @@ import { pathToFileURL } from 'node:url';
 import { runSingleMessageForEvolution } from './index.mjs';
 import { normalizeDiscoveryAnnouncement } from './discovery-collector.mjs';
 import { createPascalishServiceHost } from './src/service-host.mjs';
+import { createInventoryClient } from './src/inventory-client.mjs';
 import { createWindowsBluetoothSource } from './src/bluetooth-source.mjs';
 import { signPcodeText } from '../../aggregator/scripts/pcode-signing.mjs';
 import {
@@ -147,6 +148,7 @@ export function createJsPmachineNodeServer({
   logger = console,
   onDaemonEvent = null,
   distributedGrants = {},
+  inventoryGrants = {},
   bluetoothGrants = [],
   bluetoothSourceFactory = createWindowsBluetoothSource,
   storageGrants = {},
@@ -160,6 +162,13 @@ export function createJsPmachineNodeServer({
   }
   if (!distributedGrants || typeof distributedGrants !== 'object' || Array.isArray(distributedGrants)) {
     throw new Error('Invalid distributed table deployment grants');
+  }
+  if (!inventoryGrants || typeof inventoryGrants !== 'object' || Array.isArray(inventoryGrants)) {
+    throw new Error('Invalid inventory deployment grants');
+  }
+  for (const [serviceId, grant] of Object.entries(inventoryGrants)) {
+    if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(serviceId)) throw new Error('Invalid inventory service grant name');
+    createInventoryClient(grant);
   }
   if (!Array.isArray(bluetoothGrants) || bluetoothGrants.some(id => typeof id !== 'string' || !id) ||
       typeof bluetoothSourceFactory !== 'function') throw new Error('Invalid Bluetooth discovery deployment grants');
@@ -334,6 +343,7 @@ export function createJsPmachineNodeServer({
     }
     const nextHost = await createPascalishServiceHost({
       compiled: { pcodeText: servicePcode, programMap: serviceMap },
+      inventoryGrant: Object.hasOwn(inventoryGrants, serviceMap.runtimeUnit.id) ? inventoryGrants[serviceMap.runtimeUnit.id] : null,
       daemons,
       collectorId,
       host: additional ? '127.0.0.1' : '0.0.0.0',
@@ -407,6 +417,7 @@ export function createJsPmachineNodeServer({
         nodeName: name,
         runtime: 'js-pmachine',
         role: 'pmachine',
+        serviceCapabilities: Object.fromEntries(Object.keys(inventoryGrants).map(id => [id, ['inventory.transaction']])),
         services: serviceRegistrations().map(service => service.serviceId),
         port: server.address()?.port ?? port,
         uptimeMs: Date.now() - startedAt,

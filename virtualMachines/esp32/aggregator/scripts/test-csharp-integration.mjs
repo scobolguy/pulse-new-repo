@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 import express from 'express';
 import { compileCsharpToPcode } from '../../../../languages/csharp/src/compile-csharp-to-pcode.mjs';
 import { compileCsharpToPcode as legacy } from './compile-csharp-to-pcode.mjs';
-import { compileVbishToPcode } from './compile-vbish-to-pcode.mjs';
+import { compileVbishToPcode } from '../../../../languages/vbish/src/compile-vbish-to-pcode.mjs';
 import { SYSTEM_LIBRARY } from '../../../../languages/dotnet/system-library.mjs';
 import { getDocumentTypeByFileName, createNewDocumentFileName } from '../src/documentRegistry.js';
 import { executeProgram, loadOpcodeMap, parsePcode } from '../../pmachines/javascript/index.mjs';

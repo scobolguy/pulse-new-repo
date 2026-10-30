@@ -7,7 +7,7 @@ import express from 'express';
 import QueueManager from '../src/broker/QueueManager.mjs';
 import { createJsPmachineDeploymentSupervisor } from '../src/backend/modules/jsPmachineDeploymentSupervisor.mjs';
 import { registerTopologyRuntimeRoutes } from '../src/backend/roles/topologyRuntimeRoutes.mjs';
-import { compileWorkflowDSLWithAntlr } from './workflow-antlr-compiler.mjs';
+import { compileWorkflowDSLWithAntlr } from '../../../../languages/wfl/src/workflow-antlr-compiler.mjs';
 import { executeDeploymentPlan } from './interpret-workflow.mjs';
 
 const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pulse-service-promise-'));

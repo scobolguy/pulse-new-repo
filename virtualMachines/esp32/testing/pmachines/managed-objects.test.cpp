@@ -20,13 +20,13 @@ void operator delete[](void* pointer, size_t) noexcept { std::free(pointer); }
 using namespace pmachine;
 
 int main() {
-    static uint8_t arena[8192];
+    static uint8_t arena[16 * 64 * sizeof(Value)];
     static ManagedObjects<> objects;
     static HostedFrameStorage frames;
     objects.attach(arena, sizeof(arena));
     denyAllocations = true;
     Value a, b, value, grown;
-    assert(sizeof(Value) == 8);
+    assert(sizeof(Value) <= 16);
     assert(objects.create(3, a) && objects.create(1, b));
     assert(objects.get(a, 0, value) && value.kind == ValueKind::Integer && value.i == 0);
     assert(objects.set(a, 0, b));
@@ -79,11 +79,11 @@ int main() {
         assert(objects.create(64, roots[index]));
         assert(objects.set(roots[index], 63, Value(static_cast<int>(index + 100))));
     }
-    assert(objects.stats().liveBytes == 8192 && !objects.create(1, value));
+    assert(objects.stats().liveBytes == sizeof(arena) && !objects.create(1, value));
     assert(objects.stats().compactions == 0);
     objects.beginRoots();
     for (size_t index = 1; index < 16; index += 2) assert(objects.root(roots[index]));
-    assert(objects.reconcile() && objects.stats().liveBytes == 4096);
+    assert(objects.reconcile() && objects.stats().liveBytes == sizeof(arena) / 2);
     assert(objects.create(64, grown) && objects.stats().compactions == 1);
     for (size_t index = 1; index < 16; index += 2)
         assert(objects.get(roots[index], 63, value) && value.i == static_cast<int>(index + 100));

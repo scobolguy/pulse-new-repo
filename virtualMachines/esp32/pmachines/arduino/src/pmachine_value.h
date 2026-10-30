@@ -11,7 +11,8 @@ enum class ValueKind : uint8_t {
     Boolean = 2,
     StringRef = 3,
     EnumRef = 4,
-    ObjectRef = 5
+    ObjectRef = 5,
+    Double = 6
 };
 
 struct Value {
@@ -21,6 +22,7 @@ struct Value {
     union {
         int32_t i;
         float r;
+        double d;
     };
 
     Value() : i(0) {}
@@ -28,6 +30,7 @@ struct Value {
 
     operator int() const {
         if (kind == ValueKind::Real) return static_cast<int32_t>(r);
+        if (kind == ValueKind::Double) return static_cast<int32_t>(d);
         return i;
     }
 
@@ -48,10 +51,18 @@ struct Value {
         return v;
     }
 
-    bool isReal() const { return kind == ValueKind::Real; }
+    static Value makeDouble(double value) {
+        Value v;
+        v.kind = ValueKind::Double;
+        v.d = value;
+        return v;
+    }
 
-    float asReal() const {
-        return kind == ValueKind::Real ? r : static_cast<float>(i);
+    bool isDouble() const { return kind == ValueKind::Double; }
+    bool isReal() const { return kind == ValueKind::Real || isDouble(); }
+
+    double asReal() const {
+        return isDouble() ? d : kind == ValueKind::Real ? static_cast<double>(r) : static_cast<double>(i);
     }
 
     static Value makeEnum(uint16_t typeIndex, int ordinal) {

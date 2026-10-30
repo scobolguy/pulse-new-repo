@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { compilePascalishProgramWithAntlr } from './compile-pascalish-program-antlr-to-pcode.mjs';
 import { compileCobolishWithAntlr } from './cobolish-antlr-compiler.mjs';
-import { compileVbishWithAntlr } from './vbish-antlr-compiler.mjs';
-import { compileWorkflowDSLWithAntlr } from './workflow-antlr-compiler.mjs';
+import { compileVbishWithAntlr } from '../../../../languages/vbish/src/vbish-antlr-compiler.mjs';
+import { compileWorkflowDSLWithAntlr } from '../../../../languages/wfl/src/workflow-antlr-compiler.mjs';
 
 const pascal = compilePascalishProgramWithAntlr([
   'type PaymentRecord = record',

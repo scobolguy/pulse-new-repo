@@ -3,6 +3,7 @@
 #include "pmachine_routes.h"
 #if defined(ESP32)
 #include "service_host.h"
+#include "assemblerish_hal.h"
 #include "hosted_http_response.h"
 #include <new>
 #include <AsyncJson.h>
@@ -62,6 +63,56 @@ public:
         serve(request, std::string(body->text(), body->received));
     }
 };
+
+class AssemblerishInstallWebHandler : public AsyncWebHandler {
+    std::function<void(AsyncWebServerRequest*, JsonDocument&)> install;
+    struct Body {
+        size_t received, total;
+        bool invalid;
+        char* text() { return reinterpret_cast<char*>(this + 1); }
+    };
+public:
+    explicit AssemblerishInstallWebHandler(
+        std::function<void(AsyncWebServerRequest*, JsonDocument&)> callback)
+        : install(std::move(callback)) {}
+    bool canHandle(AsyncWebServerRequest* request) override {
+        return request->method() == HTTP_POST && request->url() == "/pmachine/assemblerish";
+    }
+    void handleBody(AsyncWebServerRequest* request, uint8_t* data, size_t len,
+                    size_t index, size_t total) override {
+        if (total > 49152) return;
+        if (!request->_tempObject && index == 0) {
+            request->_tempObject = calloc(1, sizeof(Body) + total + 1);
+            if (request->_tempObject) static_cast<Body*>(request->_tempObject)->total = total;
+        }
+        auto* body = static_cast<Body*>(request->_tempObject);
+        if (!body) return;
+        if (body->total != total || index != body->received || index > total || len > total - index) {
+            body->invalid = true;
+            return;
+        }
+        memcpy(body->text() + index, data, len);
+        body->received += len;
+    }
+    void handleRequest(AsyncWebServerRequest* request) override {
+        if (request->contentLength() > 49152) { request->send(413, "text/plain", "Handler body too large"); return; }
+        auto* body = static_cast<Body*>(request->_tempObject);
+        if (!body) { request->send(503, "text/plain", "Handler body allocation failed"); return; }
+        if (body->invalid || body->received != body->total) {
+            request->send(400, "text/plain", "Incomplete handler body"); return;
+        }
+        JsonDocument json;
+        if (!request->contentType().equalsIgnoreCase("application/json") ||
+            deserializeJson(json, body->text(), body->received) || !json.is<JsonObject>()) {
+            request->send(400, "text/plain", "Handler requires a JSON object"); return;
+        }
+        try { install(request, json); }
+        catch (const std::bad_alloc&) {
+            Serial.println("[ASSEMBLERISH] Installation allocation failed");
+            request->send(503, "text/plain", "Handler allocation failed");
+        }
+    }
+};
 #endif
 
 extern bool pmachineInvokeFsm(
@@ -80,6 +131,7 @@ extern bool pmachineInvokeFsm(
 #include <cstring>
 #include <cstdio>
 #include <cctype>
+#include <atomic>
 #if defined(ESP32)
 #include <mbedtls/md.h>
 #elif defined(ESP8266)
@@ -90,6 +142,7 @@ extern bool pmachineInvokeFsm(
 #include <freertos/task.h>
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
+#include <esp_task_wdt.h>
 #endif
 
 namespace {
@@ -123,6 +176,189 @@ void sendStreamedJson(AsyncWebServerRequest* request, int status, JsonDocument& 
     }
     request->send(response);
 }
+
+class RecordOutputResponse : public Print {
+    File file;
+    String path;
+    uint8_t buffer[512];
+    size_t pending = 0;
+    size_t total = 0;
+    bool failed = false;
+    bool first = true;
+    bool skipOpeningBrace = false;
+    size_t contentLength = 0;
+    static constexpr size_t limit = 2 * 1024 * 1024;
+    void drain() {
+        if (!failed && pending && file.write(buffer, pending) != pending) failed = true;
+        pending = 0;
+    }
+public:
+    std::atomic<bool> ready{false};
+    bool complete = false;
+    RecordOutputResponse() {
+        static uint32_t sequence = 0;
+        do {
+            path = "/.pmachine-output-" + String(++sequence) + ".json";
+        } while (LittleFS.exists(path));
+        file = LittleFS.open(path, "w");
+        failed = !file;
+        if (!failed) print("{\"stdout\":[");
+    }
+    ~RecordOutputResponse() override {
+        if (file) file.close();
+        if (!path.isEmpty() && LittleFS.exists(path) && !LittleFS.remove(path))
+            Serial.println("[PMACHINE] Unable to remove output spool");
+    }
+    using Print::write;
+    size_t write(uint8_t byte) override { return write(&byte, 1); }
+    size_t write(const uint8_t* data, size_t size) override {
+        if (skipOpeningBrace && size) {
+            skipOpeningBrace = false;
+            if (*data != '{') { failed = true; return 0; }
+            return 1 + write(data + 1, size - 1);
+        }
+        if (failed || size > limit - total) { failed = true; return 0; }
+        const size_t requested = size;
+        while (size && !failed) {
+            const size_t count = std::min(size, sizeof(buffer) - pending);
+            memcpy(buffer + pending, data, count);
+            pending += count;
+            total += count;
+            data += count;
+            size -= count;
+            if (pending == sizeof(buffer)) drain();
+        }
+        return requested - size;
+    }
+    bool valid() const { return !failed; }
+    static void record(const std::string& line, void* context) {
+        auto& sink = *static_cast<RecordOutputResponse*>(context);
+        if (!sink.valid()) return;
+        if (!sink.first) sink.print(',');
+        sink.first = false;
+        JsonDocument record;
+        record.set(line.c_str());
+        if (record.overflowed()) { sink.failed = true; return; }
+        serializeJson(record, sink);
+        sink.drain();
+        sink.file.flush();
+    }
+    bool finish(JsonDocument& metadata) {
+        if (metadata.overflowed() || failed) return false;
+        metadata.remove("stdout");
+        print("],");
+        skipOpeningBrace = true;
+        serializeJson(metadata, *this);
+        drain();
+        file.flush();
+        if (failed) return false;
+        contentLength = file.size();
+        file.close();
+        file = LittleFS.open(path, "r");
+        return file && file.size() == contentLength;
+    }
+    size_t read(uint8_t* data, size_t len) {
+        const size_t count = file.read(data, len);
+        if (!count && file.position() < contentLength)
+            Serial.println("[PMACHINE] Output spool read failed");
+        return count;
+    }
+    size_t size() const { return contentLength; }
+};
+
+class DeferredRecordResponse : public AsyncAbstractResponse {
+    std::shared_ptr<RecordOutputResponse> spool;
+    bool started = false;
+    static constexpr const char* failure = "{\"error\":\"Unable to persist execution output\"}";
+public:
+    explicit DeferredRecordResponse(std::shared_ptr<RecordOutputResponse> spool) : spool(std::move(spool)) {
+        _contentType = "application/json";
+    }
+    bool _sourceValid() const override { return true; }
+    void _respond(AsyncWebServerRequest* request) override { _ack(request, 0, 0); }
+    size_t _ack(AsyncWebServerRequest* request, size_t len, uint32_t time) override {
+        if (!started) {
+            if (!spool->ready.load()) return 0;
+            started = true;
+            _code = spool->complete ? 200 : 507;
+            _contentLength = spool->complete ? spool->size() : strlen(failure);
+            AsyncAbstractResponse::_respond(request);
+            return 0;
+        }
+        return AsyncAbstractResponse::_ack(request, len, time);
+    }
+    size_t _fillBuffer(uint8_t* data, size_t len) override {
+        if (spool->complete) return spool->read(data, len);
+        const size_t count = std::min(len, _contentLength - _sentLength);
+        memcpy(data, failure + _sentLength, count);
+        return count;
+    }
+};
+
+std::atomic<bool> inlineExecutionBusy{false};
+#if defined(ESP32)
+struct HostedInstallResult {
+    std::atomic<bool> ready{false};
+    int status = 503;
+    String mime, body;
+    void finish(int code, const char* type, const String& text) {
+        status = code; mime = type; body = text;
+        ready.store(true);
+    }
+};
+
+class DeferredHostedInstallResponse : public AsyncAbstractResponse {
+    std::shared_ptr<HostedInstallResult> result;
+    bool started = false;
+public:
+    explicit DeferredHostedInstallResponse(std::shared_ptr<HostedInstallResult> result)
+        : result(std::move(result)) {}
+    bool _sourceValid() const override { return true; }
+    void _respond(AsyncWebServerRequest* request) override { _ack(request, 0, 0); }
+    size_t _ack(AsyncWebServerRequest* request, size_t len, uint32_t time) override {
+        if (!started) {
+            if (!result->ready.load()) return 0;
+            started = true;
+            _code = result->status;
+            _contentType = result->mime;
+            _contentLength = result->body.length();
+            AsyncAbstractResponse::_respond(request);
+            return 0;
+        }
+        return AsyncAbstractResponse::_ack(request, len, time);
+    }
+    size_t _fillBuffer(uint8_t* data, size_t len) override {
+        const size_t count = std::min(len, _contentLength - _sentLength);
+        memcpy(data, result->body.c_str() + _sentLength, count);
+        return count;
+    }
+};
+
+std::atomic<bool> hostedInstallBusy{false};
+QueueHandle_t inlineExecutionQueue = nullptr;
+
+bool ensureInlineExecutionWorker() {
+    if (inlineExecutionQueue) return true;
+    auto queue = xQueueCreate(1, sizeof(std::function<void()>*));
+    if (!queue) return false;
+    if (xTaskCreate([](void* context) {
+            const auto queue = static_cast<QueueHandle_t>(context);
+            for (;;) {
+                std::function<void()>* work = nullptr;
+                if (xQueueReceive(queue, &work, portMAX_DELAY) != pdTRUE) continue;
+                esp_task_wdt_add(nullptr);
+                (*work)();
+                delete work;
+                esp_task_wdt_delete(nullptr);
+            }
+        }, "inline_pmachine", 16384, queue, 1, nullptr) != pdPASS) {
+        vQueueDelete(queue);
+        return false;
+    }
+    inlineExecutionQueue = queue;
+    return true;
+}
+#endif
 
 struct EdgeIngressConfig {
     size_t workerCount = 2;
@@ -783,9 +1019,8 @@ void addRunOutputsToJson(
         if (entry.second.isString) {
             globals[entry.first.c_str()] = entry.second.strValue.c_str();
         } else if (entry.second.isReal) {
-            // 7 significant digits: the observable precision contract shared with the JS runtime.
             char realBuf[32] = {0};
-            snprintf(realBuf, sizeof(realBuf), "%.6E", static_cast<double>(entry.second.realValue));
+            snprintf(realBuf, sizeof(realBuf), entry.second.isDouble ? "%.17g" : "%.6E", entry.second.realValue);
             globals[entry.first.c_str()] = serialized(realBuf);
         } else if (entry.second.isEnum) {
             globals[entry.first.c_str()] = entry.second.strValue.c_str();
@@ -1608,6 +1843,7 @@ bool deserializeProgramMapForExec(const String& path, FederatedFileSystem* ffs, 
     filter["hostBindingsVersion"] = true;
     filter["hostImageFormat"] = true;
     filter["hostImageProfile"] = true;
+    filter["hostImageResident"] = true;
     filter["targets"] = true;
     filter["version"] = true;
     filter["serviceId"] = true;
@@ -3186,9 +3422,8 @@ EdgeIngressExecutionResult executeEdgeIngressStage(
         if (entry.second.isString) {
             globals[entry.first.c_str()] = entry.second.strValue.c_str();
         } else if (entry.second.isReal) {
-            // 7 significant digits: the observable precision contract shared with the JS runtime.
             char realBuf[32] = {0};
-            snprintf(realBuf, sizeof(realBuf), "%.6E", static_cast<double>(entry.second.realValue));
+            snprintf(realBuf, sizeof(realBuf), entry.second.isDouble ? "%.17g" : "%.6E", entry.second.realValue);
             globals[entry.first.c_str()] = serialized(realBuf);
         } else if (entry.second.isEnum) {
             globals[entry.first.c_str()] = entry.second.strValue.c_str();
@@ -3303,6 +3538,8 @@ struct PMachineDebugSession {
     String id;
     String file;
     String programMap;
+    std::string stdinText;
+    bool uartInput = false;
     uint16_t startPc = 0;
     std::vector<uint16_t> breakpoints;
     std::vector<pmachine::PInstruction> instructions;
@@ -3337,7 +3574,7 @@ void pMachineDebugSessionWorker(void* rawContext) {
         session->machine.setBreakpoint(pc);
     }
     session->machine.beginDebugRun();
-    session->machine.run(session->instructions, static_cast<int>(session->startPc));
+    session->machine.run(session->instructions, static_cast<int>(session->startPc), session->stdinText, session->uartInput);
     session->lastUpdatedMs = millis();
     session->active = false;
     session->taskHandle = nullptr;
@@ -3992,6 +4229,43 @@ void registerPMachineRoutes(
 ) {
 #if defined(ESP32)
     static pmachine::ServiceHost& serviceHost = hostedServiceHost();
+    server.addHandler(new AssemblerishInstallWebHandler(
+        [](AsyncWebServerRequest* request, JsonDocument& body) {
+            if (!body["pcode"].is<const char*>() || !body["programMapText"].is<const char*>() ||
+                !body["allowedPins"].is<JsonArrayConst>()) {
+                request->send(400, "text/plain", "pcode, programMapText and allowedPins are required"); return;
+            }
+            String pcode = body["pcode"].as<const char*>();
+            JsonDocument map;
+            if (pcode.length() > 16384 || deserializeJson(map, body["programMapText"].as<const char*>()) ||
+                std::string(map["sourceLanguage"] | "") != "assemblerish" ||
+                !map["assemblerish"].is<JsonObjectConst>()) {
+                request->send(400, "text/plain", "Invalid assemblerish artifact"); return;
+            }
+            String signatureError;
+            if (!verifySignedPcode(pcode, map, signatureError)) {
+                request->send(403, "text/plain", signatureError); return;
+            }
+            std::string error;
+            if (!pmachine::installAssemblerish(pcode.c_str(), map["assemblerish"].as<JsonObjectConst>(),
+                    body["allowedPins"].as<JsonArrayConst>(), serviceHost, error)) {
+                Serial.printf("[ASSEMBLERISH] Installation rejected: %s\n", error.c_str());
+                request->send(409, "text/plain", error.c_str()); return;
+            }
+            request->send(201, "application/json", "{\"ok\":true,\"installed\":true}");
+        }));
+    server.on("/pmachine/assemblerish", HTTP_GET, [](AsyncWebServerRequest* request) {
+        JsonDocument out;
+        pmachine::assemblerishStatus(out.to<JsonObject>());
+        String text;
+        serializeJson(out, text);
+        request->send(200, "application/json", text);
+    });
+    server.on("/pmachine/assemblerish", HTTP_DELETE, [](AsyncWebServerRequest* request) {
+        std::string error;
+        if (!pmachine::stopAssemblerish(error)) { request->send(409, "text/plain", error.c_str()); return; }
+        request->send(200, "application/json", "{\"ok\":true,\"installed\":false}");
+    });
     std::string storageError;
     if (!serviceHost.reserveExecutionStorage(storageError))
         Serial.printf("[PMACHINE] Execution storage unavailable: %s\n", storageError.c_str());
@@ -4037,11 +4311,25 @@ void registerPMachineRoutes(
             || !positiveInteger(heartbeat, 180000, heartbeatValue) || ttlValue <= heartbeatValue) {
             request->send(400, "text/plain", "Invalid UDP port or TTL/heartbeat interval"); return;
         }
+        String peerJson;
+        const bool hasPeers = getRequestParam(request, "networkPeers", peerJson);
+        if (hostedInstallBusy.exchange(true)) {
+            request->send(409, "text/plain", "Hosted installation is already in progress"); return;
+        }
+        std::shared_ptr<HostedInstallResult> completion;
+        DeferredHostedInstallResponse* response = nullptr;
+        std::function<void()>* work = nullptr;
+        try {
+            completion = std::make_shared<HostedInstallResult>();
+            if (!completion->body.reserve(2048) || !completion->mime.reserve(32)) throw std::bad_alloc();
+            response = new DeferredHostedInstallResponse(completion);
+            work = new std::function<void()>([=]() {
+            try {
         pmachine::ServiceHost::Unit service, daemon;
         String error;
         std::string prepareError;
         if (!serviceHost.prepare(prepareError)) {
-            request->send(prepareError.find("capacity exceeded") != std::string::npos ? 409 : 503,
+            completion->finish(prepareError.find("capacity exceeded") != std::string::npos ? 409 : 503,
                 "text/plain", prepareError.c_str()); return;
         }
         auto load = [&](const String& file, const String& mapPath, const char* kind, pmachine::ServiceHost::Unit& unit) {
@@ -4082,12 +4370,12 @@ void registerPMachineRoutes(
             if (daemonsJson.length() > 1024 || deserializeJson(daemonList, daemonsJson)
                 || !daemonList.is<JsonArray>() || daemonList.size() < 1
                 || daemonList.size() > pmachine::ServiceHost::DAEMON_LIMIT) {
-                request->send(400, "text/plain", "Invalid daemons list (1..3 entries)"); return;
+                completion->finish(400, "text/plain", "Invalid daemons list (1..3 entries)"); return;
             }
             for (JsonObjectConst entry : daemonList.as<JsonArrayConst>()) {
                 const uint32_t daemonPort = entry["udpPort"] | 0u;
                 if (!entry["file"].is<const char*>() || !entry["map"].is<const char*>() || daemonPort > 65535) {
-                    request->send(400, "text/plain", "Each daemon needs file, map and optional udpPort"); return;
+                    completion->finish(400, "text/plain", "Each daemon needs file, map and optional udpPort"); return;
                 }
                 pmachine::ServiceHost::DaemonSpec spec;
                 spec.udpPort = static_cast<uint16_t>(daemonPort);
@@ -4097,14 +4385,14 @@ void registerPMachineRoutes(
                         ? entry["multicastGroup"].as<const char*>() : "";
                     if (!daemonPort || !group.fromString(literal) || String(literal) != group.toString() ||
                         group[0] < 224 || group[0] > 239) {
-                        request->send(400, "text/plain", "Invalid daemon multicastGroup or missing UDP port"); return;
+                        completion->finish(400, "text/plain", "Invalid daemon multicastGroup or missing UDP port"); return;
                     }
                     spec.multicastGroup = literal;
                 }
                 if (!load(String(entry["file"].as<const char*>()), String(entry["map"].as<const char*>()),
                           "daemon", spec.unit)) {
                     Serial.printf("[SERVICE-HOST] Install rejected: %s\n", error.c_str());
-                    request->send(400, "text/plain", error); return;
+                    completion->finish(400, "text/plain", error); return;
                 }
                 daemonSpecs.push_back(std::move(spec));
             }
@@ -4112,7 +4400,7 @@ void registerPMachineRoutes(
         if (!load(serviceFile, serviceMap, "service", service)
             || (!sharedDaemons && !load(daemonFile, daemonMap, "daemon", daemon))) {
             Serial.printf("[SERVICE-HOST] Install rejected: %s\n", error.c_str());
-            request->send(400, "text/plain", error); return;
+            completion->finish(400, "text/plain", error); return;
         }
         pmachine::ServiceHost::LifecycleMetadata lifecycle;
         if (hasLifecycleMetadata) {
@@ -4129,25 +4417,25 @@ void registerPMachineRoutes(
                     || !requires.is<JsonArrayConst>() || requires.size() > 8;
             }
             if (invalidDeclaration) {
-                request->send(400, "text/plain", "Incomplete or invalid hosted lifecycle install metadata"); return;
+                completion->finish(400, "text/plain", "Incomplete or invalid hosted lifecycle install metadata"); return;
             }
             lifecycle.configured = true;
             lifecycle.ownerAggregatorId = ownerAggregatorId.c_str();
             for (JsonVariantConst required : declaration["requires"].as<JsonArrayConst>()) {
                 if (!required.is<const char*>()) {
-                    request->send(400, "text/plain", "Lifecycle requirements must be text"); return;
+                    completion->finish(400, "text/plain", "Lifecycle requirements must be text"); return;
                 }
                 lifecycle.requires.emplace_back(required.as<const char*>());
             }
             if (hasBindings) {
                 if (bindingsJson.length() > 4096 || deserializeJson(bindingDoc, bindingsJson)
                     || !bindingDoc.is<JsonObjectConst>()) {
-                    request->send(400, "text/plain", "Invalid explicit lifecycle dependency bindings"); return;
+                    completion->finish(400, "text/plain", "Invalid explicit lifecycle dependency bindings"); return;
                 }
             } else if (declaration["bindings"].is<JsonObjectConst>()) {
                 bindingDoc.set(declaration["bindings"]);
             } else if (!lifecycle.requires.empty()) {
-                request->send(400, "text/plain", "Lifecycle requirements need explicit dependency bindings"); return;
+                completion->finish(400, "text/plain", "Lifecycle requirements need explicit dependency bindings"); return;
             }
             for (JsonPairConst pair : bindingDoc.as<JsonObjectConst>()) {
                 const char* key = pair.key().c_str();
@@ -4155,7 +4443,7 @@ void registerPMachineRoutes(
                 if (!key || !value || !value["instanceId"].is<const char*>()
                     || !value["endpoint"].is<const char*>()
                     || !value["readinessUrl"].is<const char*>()) {
-                    request->send(400, "text/plain", "Each dependency binding requires instanceId, endpoint and readinessUrl"); return;
+                    completion->finish(400, "text/plain", "Each dependency binding requires instanceId, endpoint and readinessUrl"); return;
                 }
                 pmachine::ServiceHost::DependencyBinding binding;
                 binding.instanceId = value["instanceId"].as<const char*>();
@@ -4185,16 +4473,16 @@ void registerPMachineRoutes(
             if (hasReportTargets) {
                 if (reportTargetsJson.length() > 2048 || deserializeJson(targetDoc, reportTargetsJson)
                     || !targetDoc.is<JsonArrayConst>() || targetDoc.size() < 1 || targetDoc.size() > 4) {
-                    request->send(400, "text/plain", "Invalid aggregator reportTargets array"); return;
+                    completion->finish(400, "text/plain", "Invalid aggregator reportTargets array"); return;
                 }
                 for (JsonVariantConst target : targetDoc.as<JsonArrayConst>())
                     if (!appendTarget(target, targetDoc.size() == 1)) {
-                    request->send(400, "text/plain", "Each reportTargets entry needs aggregatorId and endpoint/url; a single target may use the explicit owner ID"); return;
+                    completion->finish(400, "text/plain", "Each reportTargets entry needs aggregatorId and endpoint/url; a single target may use the explicit owner ID"); return;
                 }
             } else if (hasReportTarget && (reportTargetJson.startsWith("{") || reportTargetJson.startsWith("["))) {
                 if (reportTargetJson.length() > 1024 || deserializeJson(targetDoc, reportTargetJson)
                     || !appendTarget(targetDoc.as<JsonVariantConst>(), true)) {
-                    request->send(400, "text/plain", "Invalid aggregator report target"); return;
+                    completion->finish(400, "text/plain", "Invalid aggregator report target"); return;
                 }
             } else if (hasReportTarget) {
                 pmachine::ServiceHost::AggregatorTarget target;
@@ -4205,11 +4493,10 @@ void registerPMachineRoutes(
         }
         std::string installError;
         JsonDocument networkPeers;
-        String peerJson;
-        if (getRequestParam(request, "networkPeers", peerJson)
+        if (hasPeers
             && (peerJson.length() > 1024 || deserializeJson(networkPeers, peerJson)
                 || !networkPeers.is<JsonArray>())) {
-            request->send(400, "text/plain", "Invalid network peer allowlist"); return;
+            completion->finish(400, "text/plain", "Invalid network peer allowlist"); return;
         }
         const bool installed = sharedDaemons
             ? serviceHost.install(std::move(service), std::move(daemonSpecs), collectorId.c_str(),
@@ -4222,9 +4509,33 @@ void registerPMachineRoutes(
             Serial.printf("[SERVICE-HOST] Install failed: %s\n", installError.c_str());
             const int code = installError.find("Duplicate") != std::string::npos
                 || installError.find("capacity exceeded") != std::string::npos ? 409 : 503;
-            request->send(code, "text/plain", installError.c_str()); return;
+            completion->finish(code, "text/plain", installError.c_str()); return;
         }
-        request->send(200, "application/json", "{\"running\":true,\"hostBindingsVersion\":1}");
+        completion->finish(200, "application/json", "{\"running\":true,\"hostBindingsVersion\":1}");
+            } catch (const std::bad_alloc&) {
+                Serial.println("[SERVICE-HOST] Installation allocation failed");
+                completion->finish(503, "text/plain", "Hosted installation allocation failed");
+            }
+            });
+        } catch (const std::bad_alloc&) {
+            delete work;
+            delete response;
+            hostedInstallBusy.store(false);
+            request->send(503, "text/plain", "Cannot allocate hosted installation job"); return;
+        }
+        if (xTaskCreate([](void* context) {
+                auto* work = static_cast<std::function<void()>*>(context);
+                (*work)();
+                delete work;
+                hostedInstallBusy.store(false);
+                vTaskDelete(nullptr);
+            }, "hosted-install", 16384, work, 1, nullptr) != pdPASS) {
+            delete work;
+            delete response;
+            hostedInstallBusy.store(false);
+            request->send(503, "text/plain", "Cannot start hosted installation worker"); return;
+        }
+        request->send(response);
     });
     server.on("/pmachine/service_host/status", HTTP_GET, [](AsyncWebServerRequest* request) {
         String id;
@@ -5550,6 +5861,12 @@ void registerPMachineRoutes(
         session.id = sessionId;
         session.file = file;
         session.programMap = programMap;
+        String stdinText;
+        getRequestParam(request, "stdin", stdinText);
+        session.stdinText.assign(stdinText.c_str(), stdinText.length());
+        String uartInput;
+        getRequestParam(request, "uartInput", uartInput);
+        session.uartInput = parseBooleanText(uartInput, false);
         session.startPc = static_cast<uint16_t>(startPcParam.toInt());
         session.instructions = std::move(instructions);
         session.createdAtMs = millis();
@@ -6204,6 +6521,11 @@ void registerPMachineRoutes(
         machine.traceEnabled = getRequestParam(request, "trace", traceParam)
             && parseBooleanText(traceParam, false);
         size_t instructionCount = instructions.size();
+        String stdinText;
+        getRequestParam(request, "stdin", stdinText);
+        String uartInput;
+        getRequestParam(request, "uartInput", uartInput);
+        const bool useUart = parseBooleanText(uartInput, false);
 #if defined(ESP32)
         if (image) {
             instructionCount = image->size();
@@ -6212,10 +6534,10 @@ void registerPMachineRoutes(
                 std::string error;
                 if (!image->read(index, instruction, error)) throw std::runtime_error(error);
                 return instruction;
-            }, executionStorage);
+            }, executionStorage, std::string(stdinText.c_str(), stdinText.length()), useUart);
         } else
 #endif
-        machine.run(instructions, 0, executionStorage);
+        machine.run(instructions, 0, executionStorage, std::string(stdinText.c_str(), stdinText.length()), useUart);
 
         allocationStage = "serialize-result";
         JsonDocument out;
@@ -6346,7 +6668,11 @@ void registerPMachineRoutes(
 
         machine.clearRoutingDeliveries();
         machine.setRoutingContext(std::string(inputQueue.c_str()), std::string(message.c_str()));
-        machine.run(instructions);
+        String stdinText;
+        getRequestParam(request, "stdin", stdinText);
+        String uartInput;
+        getRequestParam(request, "uartInput", uartInput);
+        machine.run(instructions, 0, std::string(stdinText.c_str(), stdinText.length()), parseBooleanText(uartInput, false));
 
         JsonDocument out;
         addRunOutputsToJson(out, machine, "message", inputQueue, message);
@@ -6383,9 +6709,26 @@ void registerPMachineRoutes(
             delete bodyBuffer;
             request->_tempObject = nullptr;
             if (error || !bodyDoc.is<JsonObject>()) {
-                request->send(400, "application/json", "{\"error\":\"Invalid JSON body\"}");
+                const String detail = error ? String(error.c_str()) : String("Expected object");
+                request->send(error == DeserializationError::NoMemory ? 503 : 400, "application/json",
+                    String("{\"error\":\"Invalid JSON body: ") + detail + "\"}");
                 return;
             }
+
+            if (inlineExecutionBusy.exchange(true)) {
+                request->send(409, "application/json", "{\"error\":\"Inline execution is busy\"}");
+                return;
+            }
+            struct ExecutionLease {
+                bool transferred = false;
+                ~ExecutionLease() { if (!transferred) inlineExecutionBusy.store(false); }
+            } executionLease;
+#if defined(ESP32)
+            if (!ensureInlineExecutionWorker()) {
+                request->send(503, "application/json", "{\"error\":\"Unable to start execution worker\"}");
+                return;
+            }
+#endif
 
             String pcode = bodyDoc["pcode"].as<String>();
             if (pcode.length() == 0) {
@@ -6394,6 +6737,17 @@ void registerPMachineRoutes(
             }
 
             String inputQueue = bodyDoc["inputQueue"].as<String>();
+            if (!bodyDoc["stdin"].isNull() && !bodyDoc["stdin"].is<const char*>()) {
+                request->send(400, "application/json", "{\"error\":\"stdin must be a string\"}");
+                return;
+            }
+            String stdinText;
+            if (!bodyDoc["stdin"].isNull()) stdinText = bodyDoc["stdin"].as<String>();
+            if (!bodyDoc["uartInput"].isNull() && !bodyDoc["uartInput"].is<bool>()) {
+                request->send(400, "application/json", "{\"error\":\"uartInput must be a boolean\"}");
+                return;
+            }
+            const bool uartInput = bodyDoc["uartInput"] | false;
             String message = bodyDoc["message"].as<String>();
             String maxParam = bodyDoc["max"].is<unsigned long>() ? String(bodyDoc["max"].as<unsigned long>()) : String("32768");
             bool runRouter = bodyDoc["runRouter"].is<bool>() ? bodyDoc["runRouter"].as<bool>() : false;
@@ -6505,20 +6859,71 @@ void registerPMachineRoutes(
             machine.loadProgram(std::move(binary), "payload://json", programLimit);
             machine.clearRoutingDeliveries();
             machine.setRoutingContext(std::string(inputQueue.c_str()), std::string(message.c_str()));
-            machine.run(instructions);
+            bodyDoc.clear();
+            pcode = String();
+            programMapText = String();
+            decltype(mappingDefs)().swap(mappingDefs);
+            decltype(procedureSignatures)().swap(procedureSignatures);
+            metadata = ProgramMapMetadata{};
+            const size_t instructionCount = instructions.size();
+            std::shared_ptr<RecordOutputResponse> response(new (std::nothrow) RecordOutputResponse);
+            if (!response || !response->valid()) {
+                request->send(507, "application/json", "{\"error\":\"Unable to create execution output spool\"}");
+                return;
+            }
+            auto work = new (std::nothrow) std::function<void()>(
+                [response, &machine, instructions = std::move(instructions), stdinText = std::move(stdinText),
+                 uartInput, inputQueue = std::move(inputQueue), message = std::move(message),
+                 programMapPath = std::move(programMapPath), runRouter, instructionCount,
+                 thunkBindingsApplied, hasProgramMap]() mutable {
+            {
+                struct OutputPolicy {
+                    pmachine::PMachine& machine;
+                    pmachine::TextOutputHook previous;
+                    void* context;
+                    ~OutputPolicy() { machine.setTextOutputHook(previous, context); }
+                } outputPolicy{machine, machine.getTextOutputHook(), machine.getTextOutputContext()};
+                machine.setTextOutputHook(RecordOutputResponse::record, response.get());
+                machine.run(instructions, 0, std::string(stdinText.c_str(), stdinText.length()), uartInput);
+            }
+            decltype(instructions)().swap(instructions);
 
             JsonDocument out;
             addRunOutputsToJson(out, machine, "json", inputQueue, message);
             out["runRouter"] = runRouter;
-            out["instructionCount"] = static_cast<uint32_t>(instructions.size());
-            out["binaryBytes"] = static_cast<uint32_t>(binary.size());
+            out["instructionCount"] = static_cast<uint32_t>(instructionCount);
+            out["binaryBytes"] = 0;
             out["thunkBindingsApplied"] = static_cast<uint32_t>(thunkBindingsApplied);
             out["hasInlineProgramMap"] = hasProgramMap;
             out["programMapPath"] = programMapPath;
 
-            String response;
-            serializeJson(out, response);
-            request->send(200, "application/json", response);
+            response->complete = response->finish(out);
+            response->ready.store(true);
+            inlineExecutionBusy.store(false);
+            });
+            if (!work) {
+                request->send(503, "application/json", "{\"error\":\"Unable to allocate execution worker\"}");
+                return;
+            }
+            auto* httpResponse = new (std::nothrow) DeferredRecordResponse(response);
+            if (!httpResponse) {
+                delete work;
+                request->send(503, "application/json", "{\"error\":\"Unable to allocate execution response\"}");
+                return;
+            }
+#if defined(ESP32)
+            if (xQueueSend(inlineExecutionQueue, &work, 0) != pdTRUE) {
+                delete work;
+                delete httpResponse;
+                request->send(503, "application/json", "{\"error\":\"Unable to start execution worker\"}");
+                return;
+            }
+#else
+            (*work)();
+            delete work;
+#endif
+            executionLease.transferred = true;
+            request->send(httpResponse);
         }
     );
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { compileSolutionDsl } from './compile-solution-dsl.mjs';
-import { compileWorkflowDSLWithAntlr } from './workflow-antlr-compiler.mjs';
+import { compileWorkflowDSLWithAntlr } from '../../../../languages/wfl/src/workflow-antlr-compiler.mjs';
 import { buildDeploymentBindingManifest } from '../src/backend/deploymentBindingManifest.mjs';
 import { applySolutionDeliveries } from '../src/backend/solutionRuntimeBindings.mjs';
 import { createDatabaseProvider } from '../src/backend/databaseProviders/index.mjs';

@@ -26,6 +26,7 @@ void HostedImage::reset() {
         xSemaphoreGive(cache.mutex);
     }
     file.close();
+    resident.reset();
     fileBytes = count = poolBytes = cacheHits = pageReads = 0;
     std::vector<std::array<uint8_t, 32>>().swap(hashes);
 }
@@ -47,6 +48,10 @@ bool HostedImage::open(FederatedFileSystem& ffs, const String& path, const JsonD
         error = "Insufficient heap for authenticated hosted image pages"; return false;
     }
     hashes.resize(pages);
+    if (map["hostImageResident"] == true) {
+        resident.reset(static_cast<uint8_t*>(heap_caps_malloc(fileBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)));
+        if (!resident) { error = "Insufficient PSRAM for resident hosted image"; return false; }
+    }
     const auto signing = map["signing"];
     if (std::string(signing["algorithm"] | "") != "hmac-sha256"
         || std::string(signing["keyId"] | "") != keyId
@@ -64,6 +69,7 @@ bool HostedImage::open(FederatedFileSystem& ffs, const String& path, const JsonD
         ok = file.read(buffer.data(), length) == length
             && mbedtls_md_hmac_update(&context, buffer.data(), length) == 0
             && mbedtls_sha256_ret(buffer.data(), length, hashes[offset / PAGE_BYTES].data(), 0) == 0;
+        if (ok && resident) memcpy(resident.get() + offset, buffer.data(), length);
     }
     uint8_t digest[32];
     ok = ok && mbedtls_md_hmac_finish(&context, digest) == 0;
@@ -83,12 +89,18 @@ bool HostedImage::open(FederatedFileSystem& ffs, const String& path, const JsonD
         error = "Invalid hosted image header"; return false;
     }
     count = instructionCount; poolBytes = constants;
+    if (resident) file.close();
     return true;
 }
 
 bool HostedImage::readBytes(size_t offset, uint8_t* target, size_t length, std::string& error) {
     if (offset > fileBytes || length > fileBytes - offset) {
         error = "Hosted image read out of bounds"; return false;
+    }
+    if (resident) {
+        memcpy(target, resident.get() + offset, length);
+        ++cacheHits;
+        return true;
     }
     auto& cache = sharedCache();
     if (!cache.mutex || xSemaphoreTake(cache.mutex, portMAX_DELAY) != pdTRUE) {

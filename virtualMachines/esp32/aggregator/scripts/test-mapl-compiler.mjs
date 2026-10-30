@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { compileMaplWithAntlr, formatMaplName, formatMaplPath } from './compile-mapl-antlr-to-pcode.mjs';
+import { compileMaplWithAntlr, formatMaplName, formatMaplPath } from '../../../../languages/mapl/src/compile-mapl-antlr-to-pcode.mjs';
 
 const aggregatorRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 

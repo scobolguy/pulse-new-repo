@@ -17,6 +17,8 @@ import { compileTandemCobol85ToPcode } from '../../../aggregator/scripts/compile
 import { compileMaplWithAntlr } from '../../../../../languages/mapl/src/compile-mapl-antlr-to-pcode.mjs';
 import { compileWorkflowDSL } from '../../../../../languages/wfl/src/compile-workflow-dsl.mjs';
 import { compileWorkflowToPcode } from '../../../../../languages/wfl/src/compile-workflow-to-pcode.mjs';
+import { compileAssemblerishToPcode } from '../../../../../languages/assemblerish/src/compile-assemblerish-to-pcode.mjs';
+import { compileScreenCobol } from '../../../../../languages/screencobol/src/compiler.mjs';
 import { executeProgram, loadOpcodeMap, parsePcode } from '../../../pmachines/javascript/index.mjs';
 
 const extension = fileURLToPath(new URL('../', import.meta.url));
@@ -39,7 +41,7 @@ const registry = new textmate.Registry({
 });
 
 test('all language modes declare real configurations, grammars, run menus and starters', async () => {
-  const ids = ['pascal', 'pascalish', 'cobolish', 'vbish', 'csharp', 'fortranish', 'mnf', 'wfl', 'mapl', 'vfl', 'pulse-pcode'];
+  const ids = ['screencobol', 'assemblerish', 'pascal', 'pascalish', 'cobolish', 'vbish', 'csharp', 'fortranish', 'mnf', 'wfl', 'mapl', 'vfl', 'pulse-pcode'];
   assert.deepEqual(manifest.contributes.languages.map(item => item.id).sort(), ids.sort());
   assert.ok(manifest.contributes.commands.some(item => item.command === 'pulse-pmachine.newLanguageDocument'));
   for (const language of manifest.contributes.languages) {
@@ -56,7 +58,9 @@ test('all language modes declare real configurations, grammars, run menus and st
   }
   for (const menu of ['editor/title', 'commandPalette']) {
     const run = manifest.contributes.menus[menu].find(item => item.command === 'pulse-pmachine.runCurrentFile');
-    for (const language of ids.filter(id => id !== 'vfl')) assert.ok(run.when.includes(`editorLangId == ${language}`), language);
+    for (const language of ids.filter(id => !['vfl', 'assemblerish', 'screencobol'].includes(id))) assert.ok(run.when.includes(`editorLangId == ${language}`), language);
+    const hardware = manifest.contributes.menus[menu].find(item => item.command === 'pulse-pmachine.compileHardwareHandler');
+    assert.equal(hardware.when, 'editorLangId == assemblerish');
   }
 });
 
@@ -70,6 +74,8 @@ test('source extensions select their compiler-backed Pulse language modes', () =
 });
 
 const samples = [
+  ['screencobol', 'SEND', '*> SEND', '"SEND"'],
+  ['assemblerish', 'HANDLER', '# HANDLER', '"HANDLER"'],
   ['pascal', 'BEGIN', '// BEGIN', "'BEGIN'"],
   ['pascalish', 'BEGIN', '// BEGIN', "'BEGIN'"],
   ['cobolish', 'DISPLAY', '      * DISPLAY', '"DISPLAY"'],
@@ -81,6 +87,14 @@ const samples = [
   ['mapl', 'map', '// map', '"map"'],
   ['pulse-pcode', 'PRINT_NL', '# PRINT_NL', 'PUSH_STR "PRINT_NL"']
 ];
+test('SCREEN COBOL starter compiles and has a dedicated compile command', () => {
+  const starter = LANGUAGE_EDITORS.find(item => item.id === 'screencobol');
+  assert.ok(compileScreenCobol(starter.content).programMap.screenCobol);
+  for (const menu of ['editor/title', 'commandPalette']) {
+    assert.ok(manifest.contributes.menus[menu].some(item =>
+      item.command === 'pulse-pmachine.compileScreenRequester' && item.when === 'editorLangId == screencobol'));
+  }
+});
 for (const [id, keyword, comment, string] of samples) {
   test(`${id}: real TextMate tokenizer distinguishes keywords, comments and strings`, async () => {
     const scope = manifest.contributes.grammars.find(item => item.language === id).scopeName;
@@ -177,4 +191,28 @@ test('MAPL and WFL starters compile, and VFL starter is a graph rather than exec
   assert.equal(vfl.kind, 'visual-flow-language');
   assert.ok(Array.isArray(vfl.nodes));
   assert.ok(Array.isArray(vfl.edges));
+});
+
+test('Assemblerish starter executes through typed HAL bindings and emits the final event', async () => {
+  const starter = LANGUAGE_EDITORS.find(item => item.id === 'assemblerish');
+  const artifact = compileAssemblerishToPcode(starter.content, { fileName: `button${starter.extension}` });
+  const calls = [];
+  const result = await executeProgram({
+    instructions: parsePcode(artifact.pcodeText), opcodeMap: await loadOpcodeMap(),
+    mappingsById: new Map(), queueTypesByName: new Map(), isoTypeIds: new Set(), sourceMessage: '',
+    runtimeContext: {
+      callHost(name, args) {
+        calls.push([name, args]);
+        if (name === 'device.hal_read') { assert.deepEqual(args, ['button']); return 0; }
+        if (name === 'device.hal_event') return 1;
+        throw new Error(`Unexpected HAL operation ${name}`);
+      },
+    },
+  });
+  assert.ok(!result.error, result.error);
+  assert.equal(result.stepLimitHit, false);
+  assert.deepEqual(calls, [
+    ['device.hal_read', ['button']],
+    ['device.hal_event', ['/api/devices/button', 'pressed', 1, 0, 0]],
+  ]);
 });

@@ -483,10 +483,11 @@ using HostCallHook = bool (*)(const std::string&, const std::vector<HostValue>&,
 struct GlobalValue {
     bool isString = false;
     bool isReal = false;
+    bool isDouble = false;
     bool isEnum = false;
     bool isJson = false;      // strValue already holds a serialised JSON fragment
     int intValue = 0;
-    float realValue = 0.0f;
+    double realValue = 0.0;
     std::string strValue;
 };
 
@@ -722,11 +723,12 @@ public:
     void touchResidentAsset(const std::string& domain, const std::string& id);
     void tickDaemonRefresh(uint32_t nowMs = 0);
     bool readPCodeByte(uint32_t virtualAddress, uint8_t& outByte);
-    void run(const std::vector<PInstruction>& instructions, int startPc = 0);
+    void run(const std::vector<PInstruction>& instructions, int startPc = 0,
+             const std::string& stdinText = {}, bool uartInput = false);
     void run(const std::deque<PInstruction>& instructions, int startPc = 0,
-             HostExecutionStorage* storage = nullptr);
+             HostExecutionStorage* storage = nullptr, const std::string& stdinText = {}, bool uartInput = false);
     void runImage(size_t count, const std::function<PInstruction(size_t)>& instructionAt,
-                  HostExecutionStorage* storage = nullptr);
+                  HostExecutionStorage* storage = nullptr, const std::string& stdinText = {}, bool uartInput = false);
     void setRoutingContext(const std::string& inputQueue, const std::string& message);
     const std::string& getCurrentMessage() const;
     void setNamedStringVariable(const std::string& name, const std::string& value);
@@ -778,6 +780,8 @@ public:
     void* getFsmCallContext() const { return fsmCallContext; }
     std::vector<FsmHandleInfo> getFsmTableSnapshot() const;
     void setTextOutputHook(TextOutputHook hook, void* context = nullptr);
+    TextOutputHook getTextOutputHook() const { return textOutputHook; }
+    void* getTextOutputContext() const { return textOutputContext; }
     void setHostCallHook(HostCallHook hook, void* context = nullptr) {
         hostCallHook = hook;
         hostCallContext = context;
@@ -791,7 +795,7 @@ private:
     std::unique_ptr<HostExecutionStorage> executionStorage;
     void runInstructions(size_t instructionCount,
                          const std::function<PInstruction(size_t)>& instructionAt,
-                         int startPc, HostExecutionStorage* storage = nullptr);
+                         int startPc, HostExecutionStorage* storage = nullptr, const std::string& stdinText = {}, bool uartInput = false);
     // Runs Tandem COBOL-85 P-code (OP_COBOL_PROGRAM) on the native decimal engine.
     void runCobolProgram(const std::string& pcodeText, HostExecutionStorage& storage);
     ::FederatedFileSystem *ffs = nullptr;
@@ -855,7 +859,7 @@ private:
     void* hostCallContext = nullptr;
     std::map<int, FsmHandleInfo> fsmTable;
     std::map<std::string, std::string> namedStringVariables;  // String-valued named variables (e.g., 'src')
-    std::map<std::string, float> namedRealVariables;
+    std::map<std::string, Value> namedRealVariables;
     std::map<std::string, Value> namedEnumVariables;
     std::vector<ExtendableStorage> extendableStorage;
     std::string extendedAllocationError;

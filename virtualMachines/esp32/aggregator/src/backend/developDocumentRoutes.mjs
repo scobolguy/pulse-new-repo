@@ -6,7 +6,8 @@ import { compileRouterMapperDSL } from '../../scripts/compile-pascal.mjs';
 import { compileCobolishToPmachine, compileVbishToPmachine } from '../../scripts/compile-interoperable-language.mjs';
 import { compileMnfToPcode } from '../../scripts/compile-mnf-to-pcode.mjs';
 import { compileCsharpToPcode } from '../../scripts/compile-csharp-to-pcode.mjs';
-import { executeProgram, loadOpcodeMap, parsePcode } from '../../../pmachines/javascript/index.mjs';
+import { executeProgram, loadOpcodeMap, parsePcode, parseProgramMapMappings } from '../../../pmachines/javascript/index.mjs';
+import { createFortranRuntimeContext } from '../../../pmachines/javascript/src/fortran-context.mjs';
 import { validatePascalishSubschemaMappings } from '../librarianSchemaContracts.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -23,20 +24,19 @@ const runtimeRoot = path.resolve(
 const workspaceRoot = path.join(runtimeRoot, 'develop-documents');
 const librarianSubschemasPath = path.join(runtimeRoot, 'services', 'librarian', 'subschemas.json');
 
-async function runCompiledPmachineArtifact(compiled, sourceMessage = '') {
+async function runCompiledPmachineArtifact(compiled, sourceMessage = '', stdin = '') {
   const programMap = compiled.programMap || {};
-  const mappingsById = new Map();
-  mappingsById.__globals = Array.isArray(programMap.globals) ? programMap.globals : [];
-  mappingsById.__proceduresByLabel = programMap.procedures || {};
   const result = await executeProgram({
     instructions: parsePcode(compiled.pcodeText),
     opcodeMap: await loadOpcodeMap(),
-    mappingsById,
+    mappingsById: parseProgramMapMappings(programMap),
     queueTypesByName: new Map(),
     isoTypeIds: new Set(),
     inputQueue: `${compiled.runtimeUnit?.id || 'language'}.run`,
     sourceMessage,
-    runtimeContext: {}
+    runtimeContext: programMap.requiredRuntimeLibraries?.includes('fortran77')
+      ? await createFortranRuntimeContext({ dataDirectory: path.join(runtimeRoot, 'fortran-data'), stdin })
+      : {}
   });
   return {
     stdout: result?.stdout || [],
@@ -339,7 +339,7 @@ export async function registerDevelopDocumentRoutes(app) {
         }
         deployed = true;
         if (languageId !== 'pascalish' && mode === 'compile-run') {
-          run = await runCompiledPmachineArtifact(compiled, String(req.body?.message ?? ''));
+          run = await runCompiledPmachineArtifact(compiled, String(req.body?.message ?? ''), String(req.body?.stdin ?? ''));
         }
       }
 

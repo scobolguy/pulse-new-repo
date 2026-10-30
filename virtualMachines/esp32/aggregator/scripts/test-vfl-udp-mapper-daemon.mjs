@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { buildVflDeployments } from './build-vfl-deployment.mjs';
-import { compileWorkflowDSL } from './compile-workflow-dsl.mjs';
+import { compileWorkflowDSL } from '../../../../languages/wfl/src/compile-workflow-dsl.mjs';
 import { deploy as deployWflMapper } from './deploy-wfl-udp-mapper.mjs';
 import { createPascalishServiceHost } from '../../pmachines/javascript/src/service-host.mjs';
 

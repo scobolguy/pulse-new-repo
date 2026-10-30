@@ -1,0 +1,15 @@
+{
+  "name": "@pulse/language-assemblerish",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./compile.mjs",
+    "./compiler": "./src/compiler.mjs",
+    "./compile-assemblerish-to-pcode": "./src/compile-assemblerish-to-pcode.mjs",
+    "./simulator": "./src/simulator.mjs"
+  },
+  "scripts": {
+    "compile": "node compile.mjs",
+    "test": "node --test test/*.test.mjs"
+  }
+}

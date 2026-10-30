@@ -3,6 +3,7 @@
 #include "pmachine.h"
 #include <ArduinoJson.h>
 #include <array>
+#include <cstdlib>
 #include <memory>
 #include <vector>
 #include <freertos/semphr.h>
@@ -16,6 +17,7 @@ public:
     bool read(size_t index, PInstruction& instruction, std::string& error);
     void reset();
     size_t size() const { return count; }
+    bool isResident() const { return resident != nullptr; }
     size_t cacheHits = 0, pageReads = 0;
 private:
     static constexpr size_t PAGE_BYTES = 512, CACHE_PAGES = 4, MAX_PAGES = 256;
@@ -35,6 +37,7 @@ private:
     };
     static SharedCache& sharedCache();
     File file;
+    std::unique_ptr<uint8_t, void(*)(void*)> resident{nullptr, std::free};
     std::vector<std::array<uint8_t, 32>> hashes;
     size_t fileBytes = 0, count = 0, poolBytes = 0;
     bool readBytes(size_t offset, uint8_t* target, size_t length, std::string& error);

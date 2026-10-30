@@ -23,6 +23,7 @@ its fixed-form column layout.
 | MAPL | `.mapl` | Text editor and existing Data Mapper designer; mapping compilation |
 | VFL | `.vfl` | JSON text coloring and existing visual graph editor |
 | P-code | `.pcode` | Instruction coloring; native hosted-service debugging with a matching map |
+| Assemblerish | `.asmish` | Hardware-handler editor and dedicated compile command; explicit HAL deployment |
 
 These are Pulse language editors, not full language servers. Syntax coloring
 does not mean every highlighted construct is supported by a compiler. This
@@ -48,6 +49,27 @@ Node.js installation or project-local npm install is needed for these commands.
 When working in a Pulse checkout, its compiler/runtime is still preferred.
 Network librarian/mapper panels still need their separately managed backend.
 
+The bundled runtime also includes the hosted-service API and bounded COBOL text
+bindings. COBOLish server callers can compile with `hostServices: true` and
+`nativeTarget: true`, then run the same artifact on a granted JS service host or
+deploy it to ESP32. See the [native COBOLish guide](../../../../languages/cobolish85/README.md#native-cobolish-server-code)
+for typed host calls, integer/frame limits and JSON replies. This is a hosted
+server API, not an automatic database grant or a new console Run/F5 path.
+
+### Assemblerish hardware handlers
+
+Use **Pulse: New Language Document > Assemblerish Hardware Handler**, then
+**Pulse: Compile Assemblerish Handler**. The compiler is included in the VSIX;
+it writes ordinary p-code plus a `.map.json` sidecar. Compilation does not
+install a routine or grant ownership of any pin.
+The bundled runtime also includes the Assemblerish CLI, mock HAL, tutorial and
+examples under `out/runtime/languages/assemblerish`.
+
+Assemblerish is not a console program: generic Run/F5 is not its deployment
+path. Use the [HAL tutorial](../../../../languages/assemblerish/HAL-TUTORIAL.md)
+for JS mock-HAL execution, signed ESP32 deployment with explicit pin grants,
+and pushbutton, toggle-switch, relay/PWM and DHT11 examples.
+
 For C# validation and the precise subset, see the
 [compiler guide](../../../../languages/csharp/README.md) and
 [original validation suite](../../../../languages/csharp/validation/README.md).
@@ -72,20 +94,35 @@ dependency closure, includes production npm dependencies, and creates
 Editor tests use the real TextMate/Oniguruma tokenizer, compile executable
 starters and run them on the JS p-machine. They also check repository-root
 resolution and C# generic source stepping through the VS Code debug adapter.
+Local JS source breakpoints cover each distinct generated code block for a
+statement, including COBOL statements emitted in both a routine and the main body.
 `test:package` also builds and extracts the actual VSIX into a temporary directory
 outside the checkout. It checks bundled compilers/libraries, JS execution,
 debugging and signed direct-node upload/execution against a mock HTTP node.
 It does not certify physical ESP32 hardware.
 
-## Minnesota FORTRAN starter
+## Minnesota FORTRAN
 
 `.ftn` files use the Fortranish mode, with fixed-form column rulers (5, 6, 72, 80),
 syntax highlighting, space indentation and no automatic wrapping/indentation.
 Use **Run on PMachine** or a `pulse-pmachine` debug launch with the `.ftn` file.
-The compiler currently supports a bounded scalar/DO/PRINT subset; see the
+The compiler preserves the scalar/DO/PRINT starter subset and automatically
+selects an experimental FORTRAN 77 backend for extended programs (arrays,
+DATA, subprograms, IF, formatted output). Extended programs currently require
+the **JavaScript PMachine**: ESP32/native Run and Debug are rejected explicitly.
+Starter programs retain their existing shared-opcode ESP32 path. See the
 [MNF guide](../../../../languages/mnf/README.md) for supported syntax and limits.
 Compilation uses the bundled compiler (or the workspace checkout when present),
 and execution uses the shared p-machine rather than a separate FORTRAN interpreter.
+
+The JS backend also handles complex/double-precision arithmetic, ENTRY and
+procedure arguments, formatted/list-directed READ, internal files and
+sequential/direct files. All 180 supplied FCVS programs match their reference
+output on JS; that is not ESP32 certification. Local file storage is confined to
+`.pulse-debug/fortran-data` beside the source. Set `pulse-pmachine.fortranInput`
+(newline-separated records) or `pulse-pmachine.fortranInputFile` (relative to
+the source) for console input. Debug configurations can override these with
+`stdin`, `fortranInputFile`, and `fortranDataDirectory`.
 
 ### Connecting by IP address
 
@@ -376,3 +413,11 @@ From this extension directory, run `npm run compile` followed by `node --test te
 The adapter keeps language handling separate from runtime control. Pascalish uses `.pas`, Cobolish uses `.cob` or `.cobol`, and VBish uses `.bas`, `.vb`, or `.vbs`; all three compile through the shared source-map contract.
 
 Local JavaScript source breakpoints stop before a statement executes. Breakpoints on blank lines or non-executable keywords relocate to the next mapped statement in that source file; the adapter reports the resolved line to VS Code. Lines beyond the last mapped statement are unverified. Editing or clearing source breakpoints replaces the previous set for that file. A breakpoint on a procedure call stops in the caller; Step In enters the procedure and exposes its parameters in Locals.
+# SCREEN COBOL requesters
+
+The `.scob` language mode provides SCREEN COBOL highlighting, a starter, and
+**Pulse: Compile SCREEN COBOL Requester**. The formal parser and compiler are
+bundled with the extension. Requesters use the Pathway screen/server-class
+host, rather than ordinary console Run/Debug. See the repository's
+[Pathway demo](../../pathway/README.md) for running the browser screen and
+COBOLish server replicas independently of the aggregator.

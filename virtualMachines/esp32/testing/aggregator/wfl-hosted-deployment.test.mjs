@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import test from 'node:test';
-import { compileWorkflowDSLWithAntlr } from '../../aggregator/scripts/workflow-antlr-compiler.mjs';
+import { compileWorkflowDSLWithAntlr } from '../../../../languages/wfl/src/workflow-antlr-compiler.mjs';
 import { executeDeploymentPlan } from '../../aggregator/scripts/interpret-workflow.mjs';
 
 const artifactRoot = path.resolve('.');

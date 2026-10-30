@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { compileWorkflowDSLWithAntlr } from './workflow-antlr-compiler.mjs';
+import { compileWorkflowDSLWithAntlr } from '../../../../languages/wfl/src/workflow-antlr-compiler.mjs';
 import { applySolutionDeliveries } from '../src/backend/solutionRuntimeBindings.mjs';
 
 const source = fs.readFileSync(new URL('../../src/odbc-database-assignment.wfl', import.meta.url), 'utf8');

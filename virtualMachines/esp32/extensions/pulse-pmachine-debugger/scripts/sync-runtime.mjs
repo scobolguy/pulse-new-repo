@@ -17,20 +17,25 @@ const pending = [
     'compile-tandem-cobol85-to-pcode.mjs',
     'compile-pascalish-program-antlr-to-pcode.mjs',
     'compile-interoperable-language.mjs',
-    'compile-mapl-antlr-to-pcode.mjs',
-    'compile-workflow-dsl.mjs',
-    'compile-workflow-to-pcode.mjs',
     'run-js-pmachine.mjs',
     'run-pascal-on-esp32-node.mjs',
   ].map(name => path.join(scripts, name)),
+  path.join('languages', 'mapl', 'src', 'compile-mapl-antlr-to-pcode.mjs'),
+  path.join('languages', 'wfl', 'src', 'compile-workflow-dsl.mjs'),
+  path.join('languages', 'wfl', 'src', 'compile-workflow-to-pcode.mjs'),
   path.join(esp32, 'aggregator', 'src', 'backend', 'modules', 'javascriptPmachineDebugger.mjs'),
   path.join(esp32, 'aggregator', 'src', 'backend', 'modules', 'esp32PmachineDebugBridge.mjs'),
   path.join(esp32, 'pmachines', 'javascript', 'index.mjs'),
   ...[
     'desktop-text-bindings.mjs', 'desktop-date-bindings.mjs', 'desktop-intrinsic-bindings.mjs',
-    'filesystem-bindings.mjs', 'isam-bindings.mjs',
+    'filesystem-bindings.mjs', 'isam-bindings.mjs', 'fortran-context.mjs', 'service-host.mjs',
   ].map(name => path.join(esp32, 'pmachines', 'javascript', 'src', name)),
   path.join('languages', 'cobolish85', 'src', 'fixed-format.mjs'),
+  path.join('languages', 'assemblerish', 'src', 'compile-assemblerish-to-pcode.mjs'),
+  path.join('languages', 'assemblerish', 'compile.mjs'),
+  path.join('languages', 'assemblerish', 'deploy.mjs'),
+  path.join('languages', 'assemblerish', 'install-timer-dot.mjs'),
+  path.join('languages', 'screencobol', 'src', 'compiler.mjs'),
 ];
 const copied = new Set();
 
@@ -84,6 +89,10 @@ for (const relative of [
   path.join('languages', 'pascalish', 'libraries'),
   path.join('languages', 'cobolish85', 'runtime'),
   path.join('languages', 'dotnet', 'libraries'),
+  path.join('languages', 'assemblerish', 'README.md'),
+  path.join('languages', 'assemblerish', 'HAL-TUTORIAL.md'),
+  path.join('languages', 'assemblerish', 'examples'),
+  path.join('languages', 'screencobol', 'README.md'),
 ]) await copy(relative);
 
 console.log(`Packaged ${copied.size} compiler/runtime modules and their libraries.`);

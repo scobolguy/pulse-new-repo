@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pulse Pathway requester</title>
+  <style>
+    body { background:#101610; color:#b9ffb9; font:16px monospace; padding:24px; }
+    #screen { position:relative; border:1px solid #618061; margin:16px 0; overflow:auto; }
+    .field { position:absolute; white-space:pre; height:1.5em; line-height:1.5em; }
+    input { font:inherit; color:inherit; background:#1b2c1b; border:0; padding:0; }
+    button { font:inherit; padding:8px; }
+    #message { white-space:pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Pulse Pathway</h1>
+  <form id="requester">
+    <div id="screen" aria-label="SCREEN COBOL requester"></div>
+    <button id="send" type="submit">Send request (Enter)</button>
+    <button id="new-request" type="button">Start new request</button>
+  </form>
+  <p id="message" role="status">Connecting...</p>
+  <p id="request-id"></p>
+  <pre id="status"></pre>
+  <script type="module" src="/screen.mjs"></script>
+</body>
+</html>

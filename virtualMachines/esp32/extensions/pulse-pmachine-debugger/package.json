@@ -43,6 +43,8 @@
     "onLanguage:mapl",
     "onLanguage:pulse-pcode",
     "onLanguage:cobolish",
+    "onLanguage:assemblerish",
+    "onLanguage:screencobol",
     "onCommand:pulse-pmachine.showAnimation",
     "onLanguage:vfl"
   ],
@@ -102,6 +104,18 @@
       ]
     },
     "languages": [
+      {
+        "id": "screencobol",
+        "aliases": ["SCREEN COBOL"],
+        "extensions": [".scob"],
+        "configuration": "./screencobol-language-configuration.json"
+      },
+      {
+        "id": "assemblerish",
+        "aliases": ["Assemblerish"],
+        "extensions": [".asmish"],
+        "configuration": "./assemblerish-language-configuration.json"
+      },
       {
         "id": "fortranish",
         "aliases": [
@@ -224,6 +238,16 @@
     ],
     "grammars": [
       {
+        "language": "screencobol",
+        "scopeName": "source.screencobol",
+        "path": "./syntaxes/screencobol.tmLanguage.json"
+      },
+      {
+        "language": "assemblerish",
+        "scopeName": "source.assemblerish",
+        "path": "./syntaxes/assemblerish.tmLanguage.json"
+      },
+      {
         "language": "csharp",
         "scopeName": "source.cs",
         "path": "./syntaxes/csharp.tmLanguage.json"
@@ -280,6 +304,14 @@
       }
     ],
     "commands": [
+      {
+        "command": "pulse-pmachine.compileScreenRequester",
+        "title": "Pulse: Compile SCREEN COBOL Requester"
+      },
+      {
+        "command": "pulse-pmachine.compileHardwareHandler",
+        "title": "Pulse: Compile Assemblerish Handler"
+      },
       {
         "command": "pulse-pmachine.newLanguageDocument",
         "title": "Pulse: New Language Document"
@@ -607,6 +639,16 @@
       ],
       "editor/title": [
         {
+          "command": "pulse-pmachine.compileScreenRequester",
+          "when": "editorLangId == screencobol",
+          "group": "navigation@1"
+        },
+        {
+          "command": "pulse-pmachine.compileHardwareHandler",
+          "when": "editorLangId == assemblerish",
+          "group": "navigation@1"
+        },
+        {
           "command": "pulseCatalogStudio.openFlowDesigner",
           "when": "editorLangId == vfl",
           "group": "navigation@1"
@@ -639,6 +681,14 @@
       ],
       "commandPalette": [
         {
+          "command": "pulse-pmachine.compileScreenRequester",
+          "when": "editorLangId == screencobol"
+        },
+        {
+          "command": "pulse-pmachine.compileHardwareHandler",
+          "when": "editorLangId == assemblerish"
+        },
+        {
           "command": "pulseCatalogStudio.open"
         },
         {
@@ -665,6 +715,16 @@
           "type": "string",
           "default": "http://127.0.0.1:4000",
           "description": "Aggregator backend URL used by Data Librarian, Data Mapper, service discovery, and PMachine programs."
+        },
+        "pulse-pmachine.fortranInput": {
+          "type": "string",
+          "default": "",
+          "description": "Console input records for local FORTRAN Run/Debug. Separate records with newlines; ignored when fortranInputFile is set."
+        },
+        "pulse-pmachine.fortranInputFile": {
+          "type": "string",
+          "default": "",
+          "description": "UTF-8 console input file for local FORTRAN Run/Debug, relative to the source file's directory."
         },
         "pulse-pmachine.wfl.environment": {
           "type": "string",
@@ -814,6 +874,18 @@
           "breakpointLine": {
             "type": "number",
             "description": "Initial source breakpoint line."
+          },
+          "stdin": {
+            "type": "string",
+            "description": "Local FORTRAN console input records, separated by newlines. Overrides pulse-pmachine.fortranInput."
+          },
+          "fortranInputFile": {
+            "type": "string",
+            "description": "Local FORTRAN UTF-8 input file, relative to the source file's directory. Takes precedence over stdin."
+          },
+          "fortranDataDirectory": {
+            "type": "string",
+            "description": "Local FORTRAN file-storage root, relative to the source file. Defaults to .pulse-debug/fortran-data; OPEN file names must stay within it."
           },
           "animate": {
             "type": "boolean",

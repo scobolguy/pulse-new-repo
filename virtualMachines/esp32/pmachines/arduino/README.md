@@ -20,6 +20,217 @@ The `esp32dev` profile enables this runtime and discovers it through `lib_extra_
 
 Bluetooth control-plane support is disabled in `esp32dev` to leave heap available for the HTTP routes and hosted services. Serial provisioning remains available. Firmware uploads also write the partition table: preserving filesystem contents requires matching the layout already installed on the board.
 
+## Assemblerish hardware handlers
+
+[Assemblerish](../../../../languages/assemblerish/README.md) compiles bounded,
+straight-line routines to the existing p-code and `device.hal_*` ABI.
+[The HAL tutorial](../../../../languages/assemblerish/HAL-TUTORIAL.md) describes
+pushbuttons, toggle switches, relays, PWM and DHT11 samples.
+ESP32 execution is opt-in: install a hosted POST device handler first, then
+POST `/pmachine/assemblerish` with signed `pcode`, `programMapText` and explicit
+`allowedPins`. GET the same route for status; DELETE stops the routine.
+Only one volatile handler is supported. Reboot does not reinstall it.
+
+The GPIO ISR only queues a timestamp into a 16-entry FreeRTOS queue. A dedicated
+task performs stable-state debounce or coalesced timer dispatch, runs a private
+PMachine, and queues its final event to the local ServiceHost. The event outbox
+has capacity one per invocation. Handler delivery has a two-second deadline;
+no network loopback or interpreter execution occurs inside the ISR.
+Signed p-code is additionally checked for bounded instructions, initialized
+registers, typed arguments, named-device grants and exactly one terminal EVENT.
+
+S3 flash/PSRAM, USB, console and strapping pins are rejected even when allowed.
+Classic ESP32 flash/console/strapping pins and detected PSRAM pins are rejected;
+GPIO34-39 require external pulls. Pin grants are an operator assertion of
+exclusive ownership, not automatic discovery of other firmware's pin use.
+PWM channel/timer ownership must also be exclusive. Channels 0/1, 2/3, 4/5
+and 6/7 share timers, so paired channels must use identical frequency and
+resolution. This HAL uses Arduino-ESP32 2.x LEDC APIs.
+
+Runtime or delivery failures fault the handler, detach its interrupt, set relays
+inactive and PWM to zero. A failed DHT11 sample still emits `valid=0`, with zero
+measurements, rather than a false successful reading. Inspect `faulted`,
+`lastError`, `failures` and `droppedTriggers`; delete and reinstall to recover.
+Deletion detaches interrupts, turns outputs off, releases PWM pins, changes
+pins to floating inputs and releases handler/driver objects. The single worker,
+queue and reserved VM storage remain allocated for reuse. External pull
+resistors must keep relay drivers inactive while pins float or the board boots.
+Do not install output examples on unverified wiring.
+
+Native debounce/clock-wrap tests and JS mock-HAL tests do not certify physical
+sensor timing, wiring or output polarity.
+The opt-in [pin-free hardware smoke test](../../testing/pmachines/verify-esp32-assemblerish.mjs)
+also verifies signed admission, rejected ungranted pins, straight-line
+execution and more than 20 local ServiceHost event deliveries with ingress-slot
+reclamation. Run it with `PULSE_ESP32_TEST_URL` only after FFS is ready and no
+other ServiceHost or Assemblerish handler is running.
+
+## FORTRAN runtime port status
+
+The shared VM preserves binary64 values in arithmetic, named/extendable arrays,
+procedure frames, objects and global snapshots, while ordinary REAL values still
+round to binary32. `CALL_EXT fortran.*` dispatches numeric, complex and CHARACTER
+intrinsics through [fortran_runtime.cpp](src/fortran_runtime.cpp). Unknown routines,
+invalid arities and domain errors fail explicitly.
+
+FORMAT lives in the RTL, not in new VM opcodes.
+[fortran_format.cpp](src/fortran_format.cpp) parses runtime/compiler-generated
+FORMAT strings and handles I/F/E/D/G/L/A edits, repeated/nested groups,
+Hollerith/quoted literals, scale/sign/blank modes, positioning, slash/colon,
+format reversion, complex output, and list-directed output. Its formatted input
+reader handles field widths, implicit decimals/exponents and character/logical
+conversion. The existing `fortran.*` ABI connects these facilities to console
+unit 6 and internal CHARACTER scalar/array READ/WRITE, including IOSTAT/ERR/END.
+
+External-file I/O is implemented by [fortran_files.cpp](src/fortran_files.cpp).
+OPEN/CLOSE/INQUIRE, sequential/direct formatted and typed unformatted READ/WRITE,
+REWIND/BACKSPACE/ENDFILE, REC/RECL, OLD/NEW/UNKNOWN/SCRATCH, KEEP/DELETE and
+IOSTAT/ERR/END use the same RTL ABI. List-directed file input supports repeats,
+null items, slash termination, quoted CHARACTER and COMPLEX values.
+
+Console `READ(*,...)` and `READ(5,...)` consume preconnected formatted unit 5.
+Pass a `stdin` string in `/pmachine/execute_json`, or a `stdin` request parameter
+to `/pmachine/execute_file`, `/pmachine/execute_message` and
+`/pmachine/debug/session`. For example, `"stdin": "42\n73\n"` supplies two input
+records. The native `PMachine::run`/`runImage` APIs accept a final `stdinText`
+argument. Input is separate from the routing `message`, never opens `fort.5` on
+disk, and defaults to empty on each invocation.
+
+For interactive serial input, explicitly enable `"uartInput": true` in
+`/pmachine/execute_json` (or `uartInput=true` on the same file/message/debug
+request routes). Native `run`/`runImage` APIs accept a final `uartInput` boolean,
+defaulting to false. In this mode, exhausted supplied `stdin` prompts for each
+additional record on the board's `Serial` console at its configured baud rate
+(115200 on ESP32-S3). The prompt is `? `; input is echoed, CR/LF/CRLF end a
+record, and Backspace/Delete edit the current line. Ctrl-D at the start of a
+record signals EOF. Program output is mirrored to Serial and retained in normal
+run results. Boot/service diagnostics may also appear on this console.
+
+Each requested UART record has a fixed 30-second deadline. Timeout and record
+overflow are positive IOSTAT/ERR errors; Ctrl-D is negative IOSTAT/END. Unhandled
+errors stop execution. The wait yields to the scheduler and services a subscribed
+task watchdog. Only one invocation may own the UART reader at a time; competing
+readers report an explicit busy error. Normal stdin invocations never poll UART.
+The serial provisioning reader shares this ownership guard and pauses while a
+FORTRAN invocation owns the console; ownership is released on success or error.
+UART reads can block an execute request, so clients need a timeout longer than
+30 seconds per anticipated record; debug sessions run on their own worker task.
+Close other serial monitors before using the opt-in automated UART test.
+
+Formatted and list-directed READ share the file reader, including CRLF records,
+format reversion, typed/complex values, nulls, repeats, slash termination and
+IOSTAT/ERR/END. Multiple READ statements advance the same invocation-local
+cursor; REWIND/BACKSPACE work on that input. Missing/exhausted input is EOF
+(negative IOSTAT), malformed input is a positive I/O error, and unhandled errors
+stop execution. Console records share the resident/record limits below.
+
+Persistent files are node-local, confined to `/fortran/` on the already-mounted
+LittleFS, independently of SD/remote FFS discovery. Remote FFS is not used: its
+current backend cannot rename temporary files into place. FILE accepts a basename
+of at most 96 bytes, containing letters/digits/underscores/hyphens/dots and
+optional leading blanks. Leading blanks are significant; trailing CHARACTER
+padding is removed, matching the JS RTL. Names still exclude leading dots,
+`..` and directory separators. Writes validate a candidate record set, flush a
+private temporary file and rename it over the old file before committing unit
+state. SCRATCH files stay invocation-local in memory.
+
+There are at most 16 open units, 1024 records per file and 32768 bytes of aggregate
+resident record data plus record/unit bookkeeping. Serialized files are also
+bounded to 65536 bytes, and records to 8192 bytes. Direct unformatted RECL counts
+logical data bytes (INTEGER/REAL/LOGICAL 4, DOUBLE/COMPLEX 8, CHARACTER length),
+not the persistence encoding's size. Limits and storage failures are explicit.
+Formatted files use newline-separated text. Unformatted files use the versioned
+`PULSE-FORTRAN-ESP32-1` tagged-text envelope; this is not the JS JSON envelope or
+a native compiler binary format. Cross-runtime unformatted-file interchange is
+not supported.
+
+Retained FORMAT strings live in the invocation's managed string heap. The RTL
+keeps a handle (not a second persistent `std::string` copy), and marks that handle
+as a GC root until the next I/O statement replaces/releases it. Compaction and
+heap backing-store eviction therefore preserve active formats. Parsing/rendering
+uses only transient owned text; no arena pointer survives an allocation or VM
+safe point. Managed heap exhaustion and invalid handles produce runtime errors.
+
+The RTL bounds each record/format string to 8192 bytes, each transfer's record
+payload to 65536 bytes, output items and records to 1024, expanded descriptors to
+4096, and nested format groups to 16. Capacity, descriptor/type and input errors
+are explicit; handled I/O errors set status and skip the failed READ item or
+internal WRITE destination.
+No output is emitted until the whole formatted transfer has been validated.
+
+This is still a **partial port**, not complete FORTRAN execution on ESP32.
+The complete supplied corpus has not been certified on hardware. Extended compiler
+artifacts remain JS-only and
+extension/deployment guards remain enabled. Do not remove those guards based
+on RTL unit tests or a successful firmware build. ESP32 double-precision
+accuracy certification is not a requirement for this port.
+
+Binary64 enlarges a `Value` (up to 16 bytes, depending on target alignment).
+Managed field and extendable allocations use `sizeof(Value)`; a fixed byte
+budget therefore holds fewer values than the old binary32-only layout.
+The operand stack is heap-allocated with explicit allocation failure reporting;
+it must not consume the HTTP task's call stack during filesystem operations.
+The host C++ tests exercise actual firmware intrinsic/storage code and compare
+formatted output against the JS RTL using distinct supplied-corpus FORMAT
+specifications plus focused edit/rounding/reversion cases:
+
+```powershell
+npm run test:pmachine:fortran
+pio run -e esp32_s3_n16r8
+```
+
+These are not physical-device corpus tests. Do not flash a board without checking
+its existing partition layout and receiving authorization.
+
+For an explicitly selected board already running this firmware, the opt-in live
+smoke test executes signed programs through `/pmachine/execute_json` without
+disabling the normal extended-FORTRAN deployment guard:
+
+```powershell
+$env:PULSE_FORTRAN_TEST_NODE = 'http://192.168.2.90'
+node --test .\testing\pmachines\fortran-device.test.mjs
+```
+
+For the physical UART test, Python with `pyserial` must be available. The test
+opens the selected port without asserting DTR/RTS, responds to prompts, checks
+line editing/multiline input/EOF, and waits for a real 30-second timeout:
+
+```powershell
+$env:PULSE_FORTRAN_TEST_UART = 'COM4'
+node --test .\testing\pmachines\fortran-uart-device.test.mjs
+```
+
+Run device tests sequentially, not concurrently against the same node.
+
+The signed inline `/pmachine/execute_json` route spools completed console output
+records to a private LittleFS response file instead of retaining the whole
+console output in RAM. A fixed 512-byte buffer is drained and the file flushed
+at every record boundary. The HTTP response reads the completed file in bounded
+chunks, retaining the existing JSON `stdout` array and metadata fields.
+The response owns and deletes its temporary file on completion or disconnect.
+The complete JSON spool is limited to 2 MiB; creation, capacity and persistence
+failures return HTTP 507 rather than a successful partial result.
+Other execution routes and external-file caching are unchanged by this experiment.
+
+The `esp32dev` configuration (also inherited by `esp32_s3_n16r8`) pins
+`ESP32Async/AsyncTCP` and excludes the older `Async TCP` transitive dependency.
+The older implementation can block the TCP/IP task while enqueueing a poll
+event during a long synchronous execution callback. Sending the execution
+response then deadlocks against that task and eventually trips the watchdog.
+Do not resolve this by increasing queue sizes or disabling the watchdog.
+
+It compares compiled FORMAT/internal I/O and external sequential/direct I/O
+against JS, including console formatted/list-directed input, EOF/error recovery,
+invocation input isolation, and typed unformatted persistence across independent VM
+invocations, INQUIRE/DELETE, positioning, list input and handled errors. It creates
+uniquely named files and deletes only those files in cleanup. It also tests
+unhandled errors and verifies that a retained managed FORMAT survives 400
+temporary string allocations. It changes the VM's current program; run it only
+on a board authorized for testing. It is not full device corpus certification.
+The ESP32-S3 N16R8 smoke run verified LittleFS replacement writes and typed
+unformatted persistence across independent VM invocations; it did not test
+SD/remote storage or certify the complete corpus.
+
 ## Pascalish legacy Kasa service
 
 The protocol implementation is [kasa-legacy-service.pas](../../src/kasa-legacy-service.pas).

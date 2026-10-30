@@ -30,7 +30,8 @@ hosted deployment policy and VFL deployment integration remain in the aggregator
 Consequently this is a repository-local package, not an independent distribution.
 Application-level integration tests remain in the aggregator.
 
-Legacy aggregator imports and CLI entrypoints forward here, including the workflow
-interpreter. CLI inputs, output paths and runtime data defaults remain relative to
+Aggregator callers import the compilers here directly; the old aggregator compiler
+and generated-parser entrypoints have been removed. The aggregator workflow
+interpreter entrypoint still forwards here. CLI inputs, output paths and runtime data defaults remain relative to
 the caller's working directory. Pass explicit paths outside the aggregator.
 No workflow or deployment behavior was intentionally changed.

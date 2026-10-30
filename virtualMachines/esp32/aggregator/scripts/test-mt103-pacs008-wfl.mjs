@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { compileWorkflowDSLWithAntlr } from './workflow-antlr-compiler.mjs';
+import { compileWorkflowDSLWithAntlr } from '../../../../languages/wfl/src/workflow-antlr-compiler.mjs';
 
 const source = await fs.readFile(path.resolve('src/mt103-pacs008-daemon.wfl'), 'utf8');
 const compiled = compileWorkflowDSLWithAntlr(source);

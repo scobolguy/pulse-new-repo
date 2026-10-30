@@ -1,0 +1,39 @@
+{
+  "database": {
+    "provider": "mssql",
+    "driver": "msnodesqlv8",
+    "connectionString": "Driver={ODBC Driver 17 for SQL Server};Server=.\\SQLEXPRESS;Database=PathwayDemo;Trusted_Connection=Yes;",
+    "connectionStringEnvironment": "MSSQL_DATABASE_CONNECTION_STRING",
+    "maxRequests": 10000
+  },
+  "stockGateway": {
+    "host": "127.0.0.1",
+    "address": "127.0.0.1",
+    "port": 4325,
+    "allowedClients": ["127.0.0.1"]
+  },
+  "inventoryGateway": {
+    "host": "127.0.0.1",
+    "address": "127.0.0.1",
+    "port": 4326,
+    "allowedClients": ["127.0.0.1"]
+  },
+  "esp32": {
+    "origin": "http://192.168.2.90",
+    "collectorId": "pathway-stock",
+    "preferForStock": false,
+    "inventoryCollectorId": "pathway-inventory",
+    "preferForInventory": false
+  },
+  "controller": {
+    "stateFile": "..\\pathway\\.state\\inventory-cobol-v4-controller.json",
+    "allowedHosts": ["127.0.0.1"],
+    "udpPort": 4323,
+    "replicas": 2
+  },
+  "requester": {
+    "host": "127.0.0.1",
+    "port": 4322,
+    "stockPort": 4324
+  }
+}

@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { compileWorkflowDSL } from '../../aggregator/scripts/compile-workflow-dsl.mjs';
+import { compileWorkflowDSL } from '../../../../languages/wfl/src/compile-workflow-dsl.mjs';
 import { buildVflDeployments, planVflGraph } from '../../aggregator/scripts/build-vfl-deployment.mjs';
 import { runSingleMessageForEvolution } from '../../pmachines/javascript/src/runtime.mjs';
 import { executeDeploymentPlan } from '../../aggregator/scripts/interpret-workflow.mjs';

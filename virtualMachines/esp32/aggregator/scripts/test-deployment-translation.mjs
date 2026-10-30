@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { compileWorkflowDSLWithAntlr } from './workflow-antlr-compiler.mjs';
+import { compileWorkflowDSLWithAntlr } from '../../../../languages/wfl/src/workflow-antlr-compiler.mjs';
 import { resolveDeploymentBinding, translateDeploymentSymbol } from '../src/backend/deploymentBindingManifest.mjs';
 
 const compiled = compileWorkflowDSLWithAntlr([

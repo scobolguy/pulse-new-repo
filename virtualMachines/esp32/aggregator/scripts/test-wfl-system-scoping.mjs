@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { compileWorkflowDSL } from './compile-workflow-dsl.mjs';
+import { compileWorkflowDSL } from '../../../../languages/wfl/src/compile-workflow-dsl.mjs';
 import { queueConfigMapFromWorkflowSymbols } from '../src/backend/queueDslCompiler.mjs';
 
 const source = [

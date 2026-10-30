@@ -1,0 +1,18 @@
+{
+  "name": "Assemblerish",
+  "scopeName": "source.assemblerish",
+  "patterns": [
+    { "name": "comment.line.number-sign.assemblerish", "match": "[#;].*$" },
+    {
+      "name": "string.quoted.double.assemblerish",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [{ "name": "constant.character.escape.assemblerish", "match": "\\\\." }]
+    },
+    {
+      "name": "keyword.control.assemblerish",
+      "match": "(?i)\\b(HEADER|HANDLER|TARGET|TRIGGER|EDGE|TIMER|DEBOUNCE|INPUT|PIN|PULLUP|PULLDOWN|FLOATING|RELAY|ACTIVE|HIGH|LOW|INITIAL|PWMOUT|CHANNEL|HZ|BITS|DHT11|SET|READ|NOT|WRITE|PWM|DHT|EVENT|END|RISING|FALLING|CHANGE)\\b"
+    },
+    { "name": "constant.numeric.assemblerish", "match": "\\b[0-9]+\\b" }
+  ]
+}

@@ -2,6 +2,15 @@
 #include <cassert>
 int main() {
     std::string output, error;
+    assert(pmachine::cobolText("abc", 5, output, error) && output == "abc  ");
+    assert(pmachine::cobolText("abcdef", 3, output, error) && output == "abc");
+    assert(pmachine::cobolText("", 4096, output, error) && output.size() == 4096);
+    assert(!pmachine::cobolText("", 4097, output, error));
+    assert(!pmachine::cobolText("", 0, output, error));
+    assert(!pmachine::cobolText(std::string(4097, 'x'), 5, output, error));
+    assert(!pmachine::cobolText("\xc3\xa9", 5, output, error));
+    assert(pmachine::cobolUnpad("  abc\n  ", output, error) && output == "  abc\n");
+    assert(pmachine::cobolUnpad("   ", output, error) && output.empty());
     const std::string frame = "NOTIFY * HTTP/1.1\r\nhOsT: 239.255.255.250:1900\r\nUSN: uuid:test\r\n\r\n";
     assert(pmachine::headerText(frame, "", output, error) && output == "NOTIFY * HTTP/1.1");
     assert(pmachine::headerText(frame, "HOST", output, error) && output == "239.255.255.250:1900");
