@@ -79,6 +79,7 @@ const vscodeMock = `
   }
   export const TreeItemCollapsibleState = { None: 0, Collapsed: 1, Expanded: 2 };
   export class ThemeIcon { constructor(id) { this.id = id; } }
+  export class ThemeColor { constructor(id) { this.id = id; } }
   export const env = { openExternal: async () => true };
   export const workspace = {
     isTrusted: true,
@@ -103,6 +104,7 @@ const vscodeMock = `
     registerCustomEditorProvider: () => ({ dispose() {} }),
     registerCustomTextEditorProvider: () => ({ dispose() {} }),
     createTreeView: (id, options) => {
+      if (id === 'pulseCatalogStudio.swarm') globalThis.pulseTestSwarmProvider = options.treeDataProvider;
       if (id === 'pulseCatalogStudio.sidebar' || id === 'pulse-pmachine.dataLibrarian') {
         globalThis.pulseTestLibrarianProvider = options.treeDataProvider;
       }
@@ -112,6 +114,7 @@ const vscodeMock = `
       return {
         dispose() {},
         onDidChangeSelection: () => ({ dispose() {} }),
+        onDidChangeVisibility: () => ({ dispose() {} }),
         reveal: async () => {},
       };
     },
@@ -460,6 +463,41 @@ test('Data Librarian surfaces catalog errors, empty catalogs, and recovers on re
   }
 });
 
+test('Swarm sidebar renders available execution nodes, refreshes and exposes discovery failures', async () => {
+  const originalFetch = globalThis.fetch;
+  const provider = globalThis.pulseTestSwarmProvider;
+  let refreshed = 0;
+  const listener = provider.onDidChangeTreeData(() => refreshed++);
+  try {
+    globalThis.fetch = async url => {
+      assert.equal(url, 'http://127.0.0.1:4000/api/pmachine/nodes');
+      return Response.json([
+        { nodeId: 'vm', nodeName: 'Worker', ip: '192.0.2.1', available: true, draining: false,
+          details: { runtime: 'js-pmachine', services: ['PMachine'] } },
+        { nodeId: 'busy', ip: '192.0.2.2', available: true, draining: true, services: ['PMachine'] },
+      ]);
+    };
+    const items = await provider.getChildren();
+    assert.equal(items.length, 1);
+    assert.equal(items[0].label, 'Worker');
+    assert.equal(items[0].id, 'swarm:vm');
+    assert.equal(items[0].description, '192.0.2.1 / js-pmachine');
+    assert.equal(items[0].collapsibleState, vscode.TreeItemCollapsibleState.None);
+    assert.deepEqual(await provider.getChildren(items[0]), []);
+    vscode.registeredCommands.get('pulse-pmachine.refreshSwarm')();
+    assert.equal(refreshed, 1);
+    globalThis.fetch = async () => Response.json([]);
+    assert.equal((await provider.getChildren())[0].label, 'No available p-code nodes');
+    globalThis.fetch = async () => { throw new Error('Aggregator offline'); };
+    const failed = (await provider.getChildren())[0];
+    assert.equal(failed.label, 'Swarm unavailable - refresh to retry');
+    assert.match(failed.tooltip, /Aggregator offline/);
+  } finally {
+    listener.dispose();
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('Services Explorer reads the services directory, endpoints, and configuration', async () => {
   const originalFetch = globalThis.fetch;
   const originalOpenExternal = vscode.env.openExternal;
@@ -670,13 +708,14 @@ test('editor runs a discovered JavaScript target through the backend, not its re
   }
 });
 
-test('editor runs local C# and COBOL with desktop host bindings from a repository-root workspace', async () => {
+test('editor runs local Kotlin, C# and COBOL from a repository-root workspace', async () => {
   const originalFetch = globalThis.fetch;
   const originalWindow = { ...vscode.window };
   const originalFolder = vscode.workspace.getWorkspaceFolder;
   const output = [], errors = [];
   const cases = [
     ['csharp', 'hello.cs', 'using System; class P { static T Id<T>(T x) { return x; } static void Main() { Console.WriteLine(Id("C# editor run")); } }', 'C# editor run'],
+    ['kotlin', 'hello.kt', 'fun <T> id(x: T): T { return x }\nfun main() { println(id("Kotlin editor run")) }', 'Kotlin editor run'],
     ['cobolish', 'hello.cob', 'IDENTIFICATION DIVISION.\nPROGRAM-ID. HELLO.\nPROCEDURE DIVISION.\nDISPLAY FUNCTION UPPER-CASE("cobol editor run").\nSTOP RUN.', 'COBOL EDITOR RUN'],
   ];
   vscode.workspace.getWorkspaceFolder = () => ({ uri: { fsPath: path.resolve(root, '..', '..') } });
@@ -946,6 +985,44 @@ test('Hanoi compilation and three JS executions preserve all 31 legal moves', as
     assert.equal(result.stepLimitHit, false);
     assert.equal(result.error, null);
     validateMoves(result.stdout);
+  }
+});
+
+test('Kotlin demo debugs on JS and compiles for the selected remote target', async () => {
+  const sourcePath = path.resolve(root, '..', '..', 'languages', 'kotlin', 'examples', 'pulse-demo.kt');
+  for (const runtime of ['js', 'js-node', 'esp32']) {
+    const { value } = adapter({ program: sourcePath });
+    try {
+      await value.launch({ program: sourcePath, runtime });
+      assert.equal(value.runtime.artifact.programMap.target, runtime === 'esp32' ? 'esp32' : 'js');
+      if (runtime === 'js') {
+        await value.stopAtProgramEntry();
+        await value.setBreakpoints({ seq: 1, command: 'setBreakpoints' }, {
+          source: { path: sourcePath }, breakpoints: [{ line: 6 }],
+        });
+        assert.ok(value.state.resolvedSourceBreakpoints.some(item => item.verified));
+        await value.resumeUntilPause('continue');
+        assert.equal(value.state.sourceLocation.sourceLine, 6);
+        await value.setBreakpoints({ seq: 2, command: 'setBreakpoints' }, {
+          source: { path: sourcePath }, breakpoints: [],
+        });
+        await value.resumeUntilPause('continue');
+        assert.equal(value.state.status, 'completed', value.state.error);
+        assert.deepEqual(value.state.result.stdout, ['Hello from Kotlin']);
+      }
+    } finally {
+      value.dispose();
+    }
+  }
+});
+
+test('Kotlin service cannot be launched as a console program', async () => {
+  const sourcePath = path.resolve(root, '..', '..', 'languages', 'kotlin', 'examples', 'http-service.kt');
+  const { value } = adapter({ program: sourcePath });
+  try {
+    await assert.rejects(value.launch({ program: sourcePath, runtime: 'js' }), /require a service host/);
+  } finally {
+    value.dispose();
   }
 });
 

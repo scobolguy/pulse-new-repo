@@ -1,3 +1,8 @@
+import { EXTENDED_CASES } from './extended-cases.mjs';
+import { OVERLOAD_CASES } from './overload-cases.mjs';
+import { NUMERIC_CASES } from './numeric-cases.mjs';
+import { INTEGER_CASES } from './integer-cases.mjs';
+
 const program = body => `using System;\nclass Program {\n  static void Main() {\n${body}\n  }\n}\n`;
 const positive = (id, clause, body, stdout) => ({
   id, clause, suite: 'core', kind: 'positive', source: program(body), stdout
@@ -125,16 +130,31 @@ export const CASES = [
   ].map(([id, body, diagnostic]) => ({
     id, clause: '12.10.3; 12.10.4', suite: 'runtime', kind: 'runtime-error', source: program(body), diagnostic, errorName: 'RangeError'
   })),
-  unsupported('CS-UNSUPPORTED-001', '8.3.7', program('double n = 1.5;'), 'Supported types|Unsupported'),
+  unsupported('CS-UNSUPPORTED-001', '8.3.7', program('double n = 1.5;'), 'found "double"'),
   unsupported('CS-UNSUPPORTED-002', '17', program('int[] values = new int[3];'), 'Expected an identifier'),
   unsupported('CS-UNSUPPORTED-003', '15', 'class Box<T> {} class P { static void Main() {} }', "Expected '\\{'"),
   unsupported('CS-UNSUPPORTED-004', '15.2.5', 'class P { static T F<T>(T x) where T : class { return x; } static void Main() {} }', "Expected '\\{'"),
-  unsupported('CS-UNSUPPORTED-005', '15.6.1', 'class P { static int F(int x) { return x; } static string F(string x) { return x; } static void Main() {} }', 'overloading'),
-  unsupported('CS-UNSUPPORTED-006', '13.11', program('try {} catch {}'), 'Unsupported'),
-  unsupported('CS-UNSUPPORTED-007', '13.9.5', program('foreach (int n in values) {}'), 'Unsupported'),
-  unsupported('CS-UNSUPPORTED-008', '15.5', 'class P { static int value; static void Main() {} }', "Expected '\\('"),
-  unsupported('CS-UNSUPPORTED-009', '12.8.9', program('int n = int.Parse("1");'), 'Unsupported'),
-  unsupported('CS-UNSUPPORTED-010', '12.8.19', program('int n = 1; Console.WriteLine(checked(n + 1));'), 'Unsupported'),
+  {
+    id: 'CS-UNSUPPORTED-005', clause: '15.6.1', suite: 'overloads', kind: 'positive',
+    source: 'class P { static int F(int x) { return x; } static string F(string x) { return x; } static void Main() { System.Console.WriteLine(F(7)); System.Console.WriteLine(F("s")); } }',
+    stdout: ['7', 's']
+  },
+  unsupported('CS-UNSUPPORTED-006', '13.11', program('try {} catch {}'), 'found "try"'),
+  unsupported('CS-UNSUPPORTED-007', '13.9.5', program('foreach (int n in values) {}'), 'found "foreach"'),
+  unsupported('CS-UNSUPPORTED-008', '15.5', 'class P { static int value; static void Main() {} }', 'found ";"'),
+  unsupported('CS-UNSUPPORTED-009', '12.8.9', program('int n = int.Parse("1");'), 'found "int"'),
+  {
+    ...positive('CS-UNSUPPORTED-010', '12.8.19', 'int n = 1; Console.WriteLine(checked(n + 1));', ['2']),
+    feature: 'numeric', suite: 'numeric'
+  },
+  {
+    ...negative('CS-UNSUPPORTED-020', '10.3; 12.9.7', 'int n = (int)true;', "Unsupported explicit conversion from 'bool' to 'int'"),
+    feature: 'numeric', suite: 'numeric'
+  },
   unsupported('CS-UNSUPPORTED-011', '6.5', '#define FEATURE\nclass P { static void Main() {} }', 'Unsupported character'),
-  unsupported('CS-UNSUPPORTED-012', '8.2.4; 15.11', 'class P { public P() {} static void Main() {} }', 'Only static methods')
+  unsupported('CS-UNSUPPORTED-012', '8.2.4; 15.11', 'class P { public P() {} static void Main() {} }', 'Only static methods'),
+  ...EXTENDED_CASES,
+  ...OVERLOAD_CASES,
+  ...NUMERIC_CASES,
+  ...INTEGER_CASES
 ];

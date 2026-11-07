@@ -3,7 +3,7 @@ grammar Vbish;
 options { caseInsensitive = true; }
 
 compilationUnit
-  : optionExplicit? runtimeDecl? (interopDecl | roleDecl | libraryDecl | useDecl | importDecl | routeDecl | systemDecl | databaseDecl | topLevelDecl)* EOF
+  : optionExplicit? runtimeDecl? (interopDecl | roleDecl | libraryDecl | useDecl | importDecl | routeDecl | systemDecl | databaseDecl | endpointDecl | topLevelDecl)* EOF
   ;
 
 optionExplicit
@@ -73,6 +73,10 @@ systemDecl
 
 databaseDecl
   : DATABASE stringOrIdentifier TYPE typeName
+  ;
+
+endpointDecl
+  : ENDPOINT stringOrIdentifier stringOrIdentifier (HANDLER stringOrIdentifier)?
   ;
 
 systemMember
@@ -203,7 +207,7 @@ mulOp
   ;
 
 relOp
-  : (EQ | NE | LT | GT | LTE | GTE) primary
+  : (ASSIGN | NE | LT | GT | LTE | GTE) primary
   ;
 
 typeName
@@ -213,6 +217,124 @@ typeName
 stringOrIdentifier
   : STRING_LITERAL | IDENTIFIER
   ;
+
+// The VB11 profile retains separators and uses the same generated lexer/parser.
+vbCompilationUnit
+  : vbEol* (vbOption vbEol)* (vbImport vbEol)* (vbModule | vbProcedure vbEol*)+ EOF
+  ;
+
+vbOption : OPTION (EXPLICIT | STRICT | INFER) (ON | OFF);
+vbImport : IMPORTS vbQualifiedName;
+vbModule
+  : (PUBLIC | FRIEND)? MODULE vbIdentifier vbEol
+    (vbEol | vbProcedure vbEol)*
+    END MODULE vbEol*
+  ;
+vbProcedure
+  : (PUBLIC | PRIVATE | FRIEND)? SHARED?
+    (SUB vbIdentifier vbTypeParameters? vbParameters vbEol vbBlock END SUB
+    | FUNCTION vbIdentifier vbTypeParameters? vbParameters AS vbType vbEol vbBlock END FUNCTION)
+  ;
+vbTypeParameters : LPAREN OF vbIdentifier (COMMA vbIdentifier)* RPAREN;
+vbTypeArguments : LPAREN OF vbType (COMMA vbType)* RPAREN;
+vbParameters : LPAREN (vbParameter (COMMA vbParameter)*)? RPAREN;
+vbParameter : (BYVAL | BYREF)? vbIdentifier AS vbType;
+vbType : INTEGER | SBYTE | BYTE | SHORT | USHORT | BOOLEAN | STRING | DOUBLE | LONG | OBJECT | vbIdentifier;
+vbBlock : (vbEol | vbStatement vbEol)*;
+vbStatement
+  : DIM vbVariable (COMMA vbVariable)*
+  | vbIdentifier (ASSIGN | PLUS_ASSIGN | MINUS_ASSIGN | MUL_ASSIGN | CONCAT_ASSIGN) vbExpression
+  | vbIf
+  | vbFor
+  | vbWhile
+  | vbDo
+  | RETURN vbExpression?
+  | EXIT (FOR | WHILE | DO | SUB | FUNCTION)
+  | CONTINUE (FOR | WHILE | DO)
+  | (PRINT | DISPLAY) (vbExpression (COMMA vbExpression)*)?
+  | CALL? vbQualifiedName vbTypeArguments? vbArguments
+  ;
+vbVariable : vbIdentifier (AS vbType)? (ASSIGN vbExpression)?;
+vbIf
+  : IF vbExpression THEN vbEol vbBlock
+    (ELSEIF vbExpression THEN vbEol vbBlock)*
+    (ELSE vbEol vbBlock)? END IF
+  ;
+vbFor
+  : FOR vbIdentifier (AS vbType)? ASSIGN vbExpression TO vbExpression (STEP vbExpression)?
+    vbEol vbBlock NEXT vbIdentifier?
+  ;
+vbWhile : WHILE vbExpression vbEol vbBlock END WHILE;
+vbDo : DO ((WHILE | UNTIL) vbExpression)? vbEol vbBlock LOOP ((WHILE | UNTIL) vbExpression)?;
+vbExpression : vbOr;
+vbOr : vbXor ((OR | ORELSE) vbXor)*;
+vbXor : vbAnd (XOR vbAnd)*;
+vbAnd : vbNot ((AND | ANDALSO) vbNot)*;
+vbNot : NOT vbNot | vbComparison;
+vbComparison : vbConcat ((ASSIGN | NE | LT | GT | LTE | GTE) vbConcat)*;
+vbConcat : vbAdd (AMPERSAND vbAdd)*;
+vbAdd : vbMod ((PLUS | MINUS) vbMod)*;
+vbMod : vbIntegerDivision (MOD vbIntegerDivision)*;
+vbIntegerDivision : vbMultiply (INTEGER_DIV vbMultiply)*;
+vbMultiply : vbUnary ((MUL | DIV) vbUnary)*;
+vbUnary : (PLUS | MINUS) vbUnary | vbPrimary;
+vbPrimary
+  : STRING_LITERAL | NUMBER | TRUE | FALSE | NOTHING
+  | (CINT | CSBYTE | CBYTE | CSHORT | CUSHORT | CBOOL | CSTR) LPAREN vbExpression RPAREN
+  | vbQualifiedName (vbTypeArguments? vbArguments)?
+  | LPAREN vbExpression RPAREN
+  ;
+vbArguments : LPAREN (vbExpression (COMMA vbExpression)*)? RPAREN;
+vbQualifiedName : vbIdentifier (DOT vbIdentifier)*;
+vbIdentifier
+  : IDENTIFIER | SYSTEM | M | S | MS | SECOND | SECONDS | LOCAL | PARENT
+  | CHILD | SIBLING | ALTERNATE | SERVICE | DAEMON | PROGRAM | ROLE | LIBRARY
+  | LIBRARIAN | MAPPER | ROUTE | QUEUE | VISIBILITY | EXPOSED | INTERNAL
+  | PULSE | VBISH | PASCALISH | COBOLISH | WFL | WORKFLOW | CODE_LIBRARIAN
+  ;
+vbEol : (NEWLINE | COLON)+;
+
+MODULE: {this.standardMode}? 'MODULE';
+CINT: {this.standardMode}? 'CINT';
+CSBYTE: {this.standardMode}? 'CSBYTE';
+CBYTE: {this.standardMode}? 'CBYTE';
+CSHORT: {this.standardMode}? 'CSHORT';
+CUSHORT: {this.standardMode}? 'CUSHORT';
+SBYTE: {this.standardMode}? 'SBYTE';
+BYTE: {this.standardMode}? 'BYTE';
+SHORT: {this.standardMode}? 'SHORT';
+USHORT: {this.standardMode}? 'USHORT';
+CBOOL: {this.standardMode}? 'CBOOL';
+CSTR: {this.standardMode}? 'CSTR';
+PUBLIC: {this.standardMode}? 'PUBLIC';
+PRIVATE: {this.standardMode}? 'PRIVATE';
+FRIEND: {this.standardMode}? 'FRIEND';
+SHARED: {this.standardMode}? 'SHARED';
+IMPORTS: {this.standardMode}? 'IMPORTS';
+STRICT: {this.standardMode}? 'STRICT';
+INFER: {this.standardMode}? 'INFER';
+OFF: {this.standardMode}? 'OFF';
+BYVAL: {this.standardMode}? 'BYVAL';
+BYREF: {this.standardMode}? 'BYREF';
+LONG: {this.standardMode}? 'LONG';
+OBJECT: {this.standardMode}? 'OBJECT';
+ELSEIF: {this.standardMode}? 'ELSEIF';
+DO: {this.standardMode}? 'DO';
+LOOP: {this.standardMode}? 'LOOP';
+UNTIL: {this.standardMode}? 'UNTIL';
+EXIT: {this.standardMode}? 'EXIT';
+CONTINUE: {this.standardMode}? 'CONTINUE';
+CALL: {this.standardMode}? 'CALL';
+NOTHING: {this.standardMode}? 'NOTHING';
+MOD: {this.standardMode}? 'MOD';
+XOR: {this.standardMode}? 'XOR';
+PLUS_ASSIGN: '+=';
+MINUS_ASSIGN: '-=';
+MUL_ASSIGN: '*=';
+CONCAT_ASSIGN: '&=';
+INTEGER_DIV: '\\';
+DOT: '.';
+COLON: ':';
 
 PULSE: 'PULSE';
 SERVICE: 'SERVICE';
@@ -246,6 +368,8 @@ ROUTE: 'ROUTE';
 SYSTEM: 'SYSTEM';
 TYPE: 'TYPE';
 DATABASE: 'DATABASE';
+ENDPOINT: 'ENDPOINT';
+HANDLER: 'HANDLER';
 OF: 'OF';
 QUEUE: 'QUEUE';
 VISIBILITY: 'VISIBILITY';
@@ -300,7 +424,15 @@ GT: '>';
 LTE: '<=';
 GTE: '>=';
 NUMBER: [0-9]+ ('.' [0-9]+)?;
-STRING_LITERAL: '"' (~["\\\r\n] | '\\' .)* '"';
-IDENTIFIER: [A-Z_] [A-Z0-9_-]*;
+STRING_LITERAL
+  : {this.standardMode}? '"' ('""' | ~["\r\n])* '"'
+  | {!this.standardMode}? '"' (~["\\\r\n] | '\\' .)* '"'
+  ;
+IDENTIFIER
+  : {this.standardMode}? ([A-Z_] [A-Z0-9_]* | '[' [A-Z_] [A-Z0-9_]* ']')
+  | {!this.standardMode}? [A-Z_] [A-Z0-9_-]*
+  ;
+LINE_CONTINUATION: {this.standardMode}? [ \t]+ '_' [ \t]* '\r'? '\n' -> skip;
 COMMENT: '\'' ~[\r\n]* -> skip;
-WS: [ \t\r\n]+ -> skip;
+NEWLINE: ('\r\n' | '\r' | '\n') {if (!this.standardMode) this.skip();};
+WS: [ \t]+ -> skip;

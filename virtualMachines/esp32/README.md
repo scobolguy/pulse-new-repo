@@ -16,11 +16,23 @@ The `esp32_jc4827e543` profile is for a display board, not a standalone N16R8 mo
 In PlatformIO Project Tasks, select `esp32_s3_n16r8` > General > Upload.
 Select the board's current serial port; it may change when entering download mode.
 The inherited `huge_app.csv` partition layout uses only part of the 16 MB flash.
+For a standalone S3 with 8 MB flash and 8 MB octal PSRAM, use
+`esp32_s3_n8r8` instead. It inherits the same firmware and partition layout but
+sets both build and upload flash sizes to 8 MB. Its upload and monitor port is
+COM9; `esp32_s3_n16r8` uses COM4. Neither profile erases saved configuration
+as part of a normal firmware upload.
 On first boot, missing saved configuration files or NVS namespaces can indicate
 unprovisioned settings. Repeated watchdog resets are not normal first-boot behavior.
 If WiFi disconnects after startup, the firmware retries saved profiles every 15
 seconds and returns to the `Pulse-<node-name>-Provision` access point after ten
 failed reconnect attempts.
+
+For pmachine-only S3 nodes, use `esp32_s3_pmachine_n16r8` (COM4) or
+`esp32_s3_pmachine_n8r8` (COM9). These profiles retain the VM, FFS, networking,
+and generic GPIO/analog drivers, but exclude legacy SensorService and Bluetooth
+sources and sensor-library dependencies. DHT drivers and SensorService advertising
+are disabled even when sensor libraries remain cached. The original profiles
+are unchanged for nodes that still use those peripherals.
 
 ### Direct remote FFS (without the Aggregator)
 
@@ -52,6 +64,37 @@ availability. POST `/ffs/diagnostics` reports `storageBackend: "remote"` once
 connected. Existing `/ffs/upload` and p-machine file/debug APIs then use remote
 FFS transparently; execution remains on the board. Only the endpoint setting is
 stored locally, not program files.
+
+The seekable remote FFS protocol also supports `POST /ffs/replace` with JSON
+`source` and `destination` paths. It syncs the temporary source file and renames
+it over the destination; the two files must be distinct and in the same directory.
+The firmware exposes this as `FederatedFileSystem::replace`. A failed temporary
+write must not be committed. This supplies a checkpoint-storage primitive, not
+VM suspension or restart recovery. Rename atomicity does not guarantee directory
+durability after host power loss.
+
+### Durable continuations (hosted context switching)
+
+A hosted program that submits a logical service transaction with
+`host.service_submit` can call `host.await_reply` with the returned
+`pulseContinuation` transaction id (or the raw submit result). The service host
+checkpoints the full execution state to `/.pmachine/<jobId>.state`, answers the
+HTTP invocation with `202 {"pulseSuspension": ...}`, and releases the worker so
+other hosted programs run while the reply is pending. The worker polls
+`GET /api/runtime/transactions/<id>` on the ingress aggregator and resumes the
+checkpoint with the reply once the transaction completes.
+
+Checkpoints are complete and portable: they carry the VM state plus the
+collector id, transaction token, parent/ingress ids, the entire HTTP event
+context, and a unit fingerprint, so any swarm member running the same
+deployment can resume them. Job identifiers embed the creating device's factory
+MAC plus 64 random bits and are therefore unique anywhere in the network. Before
+resuming, a member claims the checkpoint by atomically renaming it with
+`FederatedFileSystem::replace`; a failed claim means another member won, so two
+contexts with the same identifier can never run. Resumption is at-most-once:
+claimed checkpoints are not retried after a failure. Replies larger than 4 KB
+and checkpoints larger than 20 KB are rejected; a node tracks at most four
+pending jobs.
 
 ### ESP32 diagnostic snapshots
 

@@ -1,0 +1,401 @@
+{
+  "version": 1,
+  "hostBindingsVersion": 1,
+  "targets": [
+    "js",
+    "esp32"
+  ],
+  "runtimeUnit": {
+    "kind": "service",
+    "id": "inventory-service",
+    "placement": "local"
+  },
+  "inventoryRequestIdRequired": true,
+  "hostCapabilitiesVersion": 1,
+  "requiredHostCapabilities": [],
+  "serviceEndpoints": [
+    {
+      "verb": "POST",
+      "path": "/api/pathway/inventory-service"
+    }
+  ],
+  "procedures": {
+    "PARA_COMMAND_PARSING": {
+      "params": []
+    },
+    "PARA_PARSE_COMMAND": {
+      "params": [],
+      "locals": [
+        "__COBOL_TMP_1",
+        "__COBOL_TMP_2",
+        "__COBOL_TMP_3",
+        "__COBOL_TMP_4",
+        "__COBOL_TMP_5",
+        "__COBOL_TMP_6",
+        "__COBOL_TMP_7",
+        "__COBOL_TMP_8",
+        "__COBOL_TMP_9",
+        "__COBOL_TMP_10",
+        "__COBOL_TMP_11",
+        "__COBOL_TMP_12",
+        "__COBOL_TMP_13",
+        "__COBOL_TMP_14",
+        "__COBOL_TMP_15",
+        "__COBOL_TMP_16",
+        "__COBOL_TMP_17",
+        "__COBOL_TMP_18",
+        "__COBOL_TMP_19",
+        "__COBOL_TMP_20",
+        "__COBOL_TMP_21",
+        "__COBOL_TMP_22",
+        "__COBOL_TMP_23",
+        "__COBOL_TMP_24",
+        "__COBOL_TMP_25",
+        "__COBOL_TMP_26",
+        "__COBOL_TMP_27",
+        "__COBOL_TMP_28",
+        "__COBOL_TMP_29",
+        "__COBOL_TMP_30",
+        "__COBOL_TMP_31",
+        "__COBOL_TMP_32",
+        "__COBOL_TMP_33",
+        "__COBOL_TMP_34",
+        "__COBOL_TMP_35",
+        "__COBOL_TMP_36",
+        "__COBOL_TMP_37",
+        "__COBOL_TMP_38",
+        "__COBOL_TMP_39",
+        "__COBOL_TMP_40",
+        "__COBOL_TMP_41",
+        "__COBOL_TMP_42",
+        "__COBOL_TMP_43",
+        "__COBOL_TMP_44",
+        "__COBOL_TMP_45",
+        "__COBOL_TMP_46",
+        "__COBOL_TMP_47",
+        "__COBOL_TMP_48",
+        "__COBOL_TMP_49",
+        "__COBOL_TMP_50",
+        "__COBOL_TMP_51",
+        "__COBOL_TMP_52",
+        "__COBOL_TMP_53",
+        "__COBOL_TMP_54",
+        "__COBOL_TMP_55",
+        "__COBOL_TMP_56",
+        "__COBOL_TMP_57",
+        "__COBOL_TMP_58",
+        "__COBOL_TMP_59",
+        "__COBOL_TMP_60",
+        "__COBOL_TMP_61",
+        "__COBOL_TMP_62",
+        "__COBOL_TMP_63",
+        "__COBOL_TMP_64",
+        "__COBOL_TMP_65",
+        "__COBOL_TMP_66",
+        "__COBOL_TMP_67",
+        "__COBOL_TMP_68"
+      ]
+    },
+    "PARA_VALIDATE_KEY": {
+      "params": [],
+      "locals": [
+        "__COBOL_TMP_69",
+        "__COBOL_TMP_70",
+        "__COBOL_TMP_71"
+      ]
+    },
+    "PARA_VALIDATE_RESERVATION": {
+      "params": [],
+      "locals": [
+        "__COBOL_TMP_72",
+        "__COBOL_TMP_73",
+        "__COBOL_TMP_74",
+        "__COBOL_TMP_75",
+        "__COBOL_TMP_76",
+        "__COBOL_TMP_77",
+        "__COBOL_TMP_78"
+      ]
+    },
+    "PARA_COMMAND_DISPATCH": {
+      "params": []
+    },
+    "PARA_DISPATCH_COMMAND": {
+      "params": [],
+      "locals": [
+        "__COBOL_TMP_79",
+        "__COBOL_TMP_80",
+        "__COBOL_TMP_81",
+        "__COBOL_TMP_82"
+      ]
+    },
+    "PARA_READ_INVENTORY": {
+      "params": [],
+      "locals": [
+        "__COBOL_TMP_83",
+        "__COBOL_TMP_84"
+      ]
+    },
+    "PARA_LOAD_SNAPSHOT": {
+      "params": [],
+      "locals": [
+        "__COBOL_TMP_85"
+      ]
+    },
+    "PARA_COMMIT_INVENTORY": {
+      "params": [],
+      "locals": [
+        "__COBOL_TMP_86",
+        "__COBOL_TMP_87"
+      ]
+    },
+    "PARA_APPLY_STOCK_RULES": {
+      "params": [],
+      "locals": [
+        "__COBOL_TMP_88",
+        "__COBOL_TMP_89",
+        "__COBOL_TMP_90",
+        "__COBOL_TMP_91",
+        "__COBOL_TMP_92",
+        "__COBOL_TMP_93",
+        "__COBOL_TMP_94",
+        "__COBOL_TMP_95",
+        "__COBOL_TMP_96",
+        "__COBOL_TMP_97",
+        "__COBOL_TMP_98",
+        "__COBOL_TMP_99",
+        "__COBOL_TMP_100",
+        "__COBOL_TMP_101",
+        "__COBOL_TMP_102",
+        "__COBOL_TMP_103",
+        "__COBOL_TMP_104",
+        "__COBOL_TMP_105",
+        "__COBOL_TMP_106",
+        "__COBOL_TMP_107",
+        "__COBOL_TMP_108",
+        "__COBOL_TMP_109",
+        "__COBOL_TMP_110",
+        "__COBOL_TMP_111",
+        "__COBOL_TMP_112",
+        "__COBOL_TMP_113",
+        "__COBOL_TMP_114",
+        "__COBOL_TMP_115",
+        "__COBOL_TMP_116",
+        "__COBOL_TMP_117",
+        "__COBOL_TMP_118",
+        "__COBOL_TMP_119",
+        "__COBOL_TMP_120",
+        "__COBOL_TMP_121",
+        "__COBOL_TMP_122",
+        "__COBOL_TMP_123",
+        "__COBOL_TMP_124",
+        "__COBOL_TMP_125",
+        "__COBOL_TMP_126",
+        "__COBOL_TMP_127",
+        "__COBOL_TMP_128",
+        "__COBOL_TMP_129",
+        "__COBOL_TMP_130",
+        "__COBOL_TMP_131",
+        "__COBOL_TMP_132",
+        "__COBOL_TMP_133",
+        "__COBOL_TMP_134",
+        "__COBOL_TMP_135",
+        "__COBOL_TMP_136",
+        "__COBOL_TMP_137",
+        "__COBOL_TMP_138",
+        "__COBOL_TMP_139",
+        "__COBOL_TMP_140",
+        "__COBOL_TMP_141",
+        "__COBOL_TMP_142",
+        "__COBOL_TMP_143",
+        "__COBOL_TMP_144",
+        "__COBOL_TMP_145",
+        "__COBOL_TMP_146",
+        "__COBOL_TMP_147",
+        "__COBOL_TMP_148",
+        "__COBOL_TMP_149",
+        "__COBOL_TMP_150",
+        "__COBOL_TMP_151",
+        "__COBOL_TMP_152",
+        "__COBOL_TMP_153",
+        "__COBOL_TMP_154",
+        "__COBOL_TMP_155",
+        "__COBOL_TMP_156",
+        "__COBOL_TMP_157",
+        "__COBOL_TMP_158",
+        "__COBOL_TMP_159",
+        "__COBOL_TMP_160",
+        "__COBOL_TMP_161",
+        "__COBOL_TMP_162",
+        "__COBOL_TMP_163",
+        "__COBOL_TMP_164",
+        "__COBOL_TMP_165",
+        "__COBOL_TMP_166",
+        "__COBOL_TMP_167",
+        "__COBOL_TMP_168",
+        "__COBOL_TMP_169",
+        "__COBOL_TMP_170",
+        "__COBOL_TMP_171"
+      ]
+    },
+    "PARA_RELEASE_STOCK": {
+      "params": [],
+      "locals": [
+        "__COBOL_TMP_172",
+        "__COBOL_TMP_173",
+        "__COBOL_TMP_174",
+        "__COBOL_TMP_175",
+        "__COBOL_TMP_176",
+        "__COBOL_TMP_177",
+        "__COBOL_TMP_178",
+        "__COBOL_TMP_179",
+        "__COBOL_TMP_180",
+        "__COBOL_TMP_181",
+        "__COBOL_TMP_182",
+        "__COBOL_TMP_183",
+        "__COBOL_TMP_184",
+        "__COBOL_TMP_185",
+        "__COBOL_TMP_186",
+        "__COBOL_TMP_187",
+        "__COBOL_TMP_188",
+        "__COBOL_TMP_189",
+        "__COBOL_TMP_190",
+        "__COBOL_TMP_191",
+        "__COBOL_TMP_192",
+        "__COBOL_TMP_193",
+        "__COBOL_TMP_194",
+        "__COBOL_TMP_195",
+        "__COBOL_TMP_196",
+        "__COBOL_TMP_197",
+        "__COBOL_TMP_198",
+        "__COBOL_TMP_199",
+        "__COBOL_TMP_200",
+        "__COBOL_TMP_201",
+        "__COBOL_TMP_202",
+        "__COBOL_TMP_203",
+        "__COBOL_TMP_204",
+        "__COBOL_TMP_205",
+        "__COBOL_TMP_206",
+        "__COBOL_TMP_207",
+        "__COBOL_TMP_208",
+        "__COBOL_TMP_209",
+        "__COBOL_TMP_210",
+        "__COBOL_TMP_211"
+      ]
+    },
+    "PARA_EXCHANGE_DATABASE": {
+      "params": []
+    },
+    "PARA_REPLY_HANDLING": {
+      "params": []
+    },
+    "PARA_CHECK_RESPONSE": {
+      "params": [],
+      "locals": [
+        "__COBOL_TMP_212",
+        "__COBOL_TMP_213"
+      ]
+    },
+    "PARA_FINISH_REPLY": {
+      "params": [],
+      "locals": [
+        "__COBOL_TMP_214"
+      ]
+    },
+    "PARA_FAIL_REQUEST": {
+      "params": [],
+      "locals": [
+        "__COBOL_TMP_215",
+        "__COBOL_TMP_216"
+      ]
+    },
+    "PARA_SEND_RESPONSE": {
+      "params": [],
+      "locals": [
+        "__COBOL_TMP_217"
+      ]
+    },
+    "PARA_FORMAT_NUMBER": {
+      "params": []
+    },
+    "COBOL_PROGRAM_INVENTORY_SERVER": {
+      "params": []
+    }
+  },
+  "globals": [
+    "GATEWAY_ADDRESS",
+    "GATEWAY_PORT",
+    "REQUEST_TEXT",
+    "REPLY_TEXT",
+    "RESPONSE_TEXT",
+    "EVENT_TEXT",
+    "QUERY_TEXT",
+    "SNAPSHOT_TEXT",
+    "CANONICAL_TEXT",
+    "NORMALIZED_BYTES",
+    "RESERVATION_WORD",
+    "COMMAND_BYTES",
+    "CHECK_BYTES",
+    "QUERY_BYTES",
+    "FRAME_BYTES",
+    "REQUEST_ID",
+    "INVENTORY_TOKEN",
+    "OPERATION_TEXT",
+    "ITEM_TEXT",
+    "RESERVATION_TEXT",
+    "RESERVATION_SKU",
+    "SKU_TEXT",
+    "AMOUNT_TEXT",
+    "KEY_TEXT",
+    "NUMBER_JSON",
+    "NUMBER_TEXT",
+    "AVAILABLE_TEXT",
+    "RESERVED_TEXT",
+    "QUANTITY_TEXT",
+    "ERROR_TEXT",
+    "BYTE_COUNT",
+    "WORD_COUNT",
+    "COMMAND_POINTER",
+    "BYTE_INDEX",
+    "KEY_INDEX",
+    "KEY_LENGTH",
+    "KEY_VALID",
+    "CHARACTER_CODE",
+    "AMOUNT_VALUE",
+    "AVAILABLE_VALUE",
+    "TOTAL_VALUE",
+    "SAVED_QUANTITY",
+    "RELEASED_VALUE",
+    "WRITE_ROW",
+    "NUMBER_VALUE",
+    "FRAME_LENGTH",
+    "FRAME_HIGH",
+    "FRAME_LOW",
+    "BUFFER_HANDLE",
+    "STATUS_CODE",
+    "HAS_REPLY",
+    "__COBOL_TMP_218",
+    "__COBOL_TMP_219",
+    "__COBOL_TMP_220",
+    "__COBOL_TMP_221",
+    "__COBOL_TMP_222",
+    "__COBOL_TMP_223",
+    "__COBOL_PEXIT_COMMAND_PARSING",
+    "__COBOL_PEXIT_PARSE_COMMAND",
+    "__COBOL_PEXIT_VALIDATE_KEY",
+    "__COBOL_PEXIT_VALIDATE_RESERVATION",
+    "__COBOL_PEXIT_COMMAND_DISPATCH",
+    "__COBOL_PEXIT_DISPATCH_COMMAND",
+    "__COBOL_PEXIT_READ_INVENTORY",
+    "__COBOL_PEXIT_LOAD_SNAPSHOT",
+    "__COBOL_PEXIT_COMMIT_INVENTORY",
+    "__COBOL_PEXIT_APPLY_STOCK_RULES",
+    "__COBOL_PEXIT_RELEASE_STOCK",
+    "__COBOL_PEXIT_EXCHANGE_DATABASE",
+    "__COBOL_PEXIT_REPLY_HANDLING",
+    "__COBOL_PEXIT_CHECK_RESPONSE",
+    "__COBOL_PEXIT_FINISH_REPLY",
+    "__COBOL_PEXIT_FAIL_REQUEST",
+    "__COBOL_PEXIT_SEND_RESPONSE",
+    "__COBOL_PEXIT_FORMAT_NUMBER"
+  ]
+}

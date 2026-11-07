@@ -10,6 +10,7 @@ import * as vscode from 'vscode';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import { HanoiPanel, looksLikeHanoi } from './hanoiPanel.js';
 import { ServicesViewProvider, openServiceEndpoint } from './servicesView.js';
+import { SwarmViewProvider } from './swarmView.js';
 import { registerDataMapper } from './dataMapperEditor.js';
 import { DataLibrarianViewProvider, openLibrarianSchema } from './dataLibrarianView.js';
 import { Esp32LibrarianViewProvider, openEsp32LibrarianSchema } from './esp32LibrarianView.js';
@@ -39,6 +40,8 @@ type Breakpoint = {
 
 function languageForFile(filePath: string): string {
   switch (path.extname(filePath).toLowerCase()) {
+    case '.kt':
+      return 'kotlin';
     case '.cs':
       return 'csharp';
     case '.ftn':
@@ -485,7 +488,12 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
       wflEntryLine = wfl.entryLine;
       this.event('output', { category: 'console', output: `WFL environment: ${wfl.environment}\n` });
     } else {
-      if (language === 'csharp') {
+      if (language === 'kotlin') {
+        artifact = await compileKotlinSource(this.root, source, path.basename(program),
+          configuration.runtime === 'esp32' ? 'esp32' : 'js');
+        rejectKotlinServiceForRun(artifact);
+        wflEntryLine = Number(artifact.programMap.sourceMap?.[0]?.sourceLine) || 1;
+      } else if (language === 'csharp') {
         const compiler = await import(pathToFileURL(path.join(this.root, 'aggregator', 'scripts', 'compile-csharp-to-pcode.mjs')).href);
         artifact = compiler.compileCsharpToPcode(source, { fileName: path.basename(program) });
         wflEntryLine = Number(artifact.programMap.sourceMap?.[0]?.sourceLine) || 1;
@@ -1489,9 +1497,10 @@ type CompiledPcodeArtifact = {
   programMap: Record<string, any>;
 };
 
-function pcodeLanguage(document: vscode.TextDocument): 'pascalish' | 'vbish' | 'wfl' | 'mapl' | 'mnf' | 'csharp' | 'cobolish' | null {
+function pcodeLanguage(document: vscode.TextDocument): 'pascalish' | 'vbish' | 'wfl' | 'mapl' | 'mnf' | 'csharp' | 'kotlin' | 'cobolish' | null {
   const languageId = document.languageId.toLowerCase();
   const extension = path.extname(document.fileName).toLowerCase();
+  if (languageId === 'kotlin' || extension === '.kt') return 'kotlin';
   if (languageId === 'csharp' || extension === '.cs') return 'csharp';
   if (languageId === 'cobolish' || ['.cob', '.cobol'].includes(extension)) return 'cobolish';
   if (['fortranish', 'mnf'].includes(languageId) || extension === '.ftn') return 'mnf';
@@ -1502,7 +1511,18 @@ function pcodeLanguage(document: vscode.TextDocument): 'pascalish' | 'vbish' | '
   return null;
 }
 
-async function compileDocumentToPcode(document: vscode.TextDocument, hostServices = false): Promise<CompiledPcodeArtifact> {
+async function compileKotlinSource(root: string, source: string, fileName: string, target: 'js' | 'esp32'): Promise<CompiledPcodeArtifact> {
+  const compiler = await import(pathToFileURL(path.join(root, '..', '..', 'languages', 'kotlin', 'src', 'compile-kotlin-to-pcode.mjs')).href);
+  return compiler.compileKotlinToPcode(source, { fileName, target });
+}
+
+function rejectKotlinServiceForRun(artifact: CompiledPcodeArtifact): void {
+  if (artifact.programMap.hostBindingsVersion) {
+    throw new Error('Kotlin hosted services require a service host; Run and Debug support Kotlin console programs only.');
+  }
+}
+
+async function compileDocumentToPcode(document: vscode.TextDocument, hostServices = false, target: 'js' | 'esp32' = 'js'): Promise<CompiledPcodeArtifact> {
   const language = pcodeLanguage(document);
   if (!language) throw new Error('This file is not a supported pcode language.');
   const root = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath
@@ -1511,6 +1531,12 @@ async function compileDocumentToPcode(document: vscode.TextDocument, hostService
   const scripts = path.join(runtimeRoot, 'aggregator', 'scripts');
   const sourceText = document.getText();
   const fileName = path.basename(document.fileName);
+
+  if (language === 'kotlin') {
+    const artifact = await compileKotlinSource(runtimeRoot, sourceText, fileName, target);
+    rejectKotlinServiceForRun(artifact);
+    return artifact;
+  }
 
   if (language === 'csharp') {
     const compiler = await import(pathToFileURL(path.join(scripts, 'compile-csharp-to-pcode.mjs')).href);
@@ -1552,7 +1578,7 @@ async function compileForTarget(document: vscode.TextDocument, target: PmachineR
     throw new Error('C# currently targets the JavaScript PMachine only.');
   }
   if (!target.host || pcodeLanguage(document) !== 'pascalish') {
-    const artifact = await compileDocumentToPcode(document);
+    const artifact = await compileDocumentToPcode(document, false, target.runtime === 'esp32' ? 'esp32' : 'js');
     if (artifact.programMap.requiredRuntimeLibraries?.includes('fortran77')
       && !['js', 'js-node'].includes(target.runtime)) {
       throw new Error('Extended FORTRAN 77 currently requires the JavaScript PMachine; ESP32/native runtimes are not supported.');
@@ -1819,7 +1845,7 @@ async function runCurrentFile(context: vscode.ExtensionContext, output: vscode.O
     return;
   }
   if (!pcodeLanguage(document)) {
-    void vscode.window.showWarningMessage('Run on PMachine supports Pascalish, COBOLish, VBish, C#, MNF FORTRAN, WFL, and MAPL sources.');
+    void vscode.window.showWarningMessage('Run on PMachine supports Kotlin, Pascalish, COBOLish, VBish, C#, MNF FORTRAN, WFL, and MAPL sources.');
     return;
   }
 
@@ -1919,6 +1945,10 @@ export function activate(context: vscode.ExtensionContext): void {
   const hanoiPanel = new HanoiPanel();
   const services = new ServicesViewProvider(output);
   const servers = new ServicesViewProvider(output, 'servers');
+  const swarm = new SwarmViewProvider(output);
+  const swarmTree = vscode.window.createTreeView('pulseCatalogStudio.swarm', { treeDataProvider: swarm });
+  const swarmRefresh = setInterval(() => { if (swarmTree.visible) swarm.refresh(); }, 15000);
+  swarmRefresh.unref();
   const librarian = new DataLibrarianViewProvider(output);
   const esp32Librarian = new Esp32LibrarianViewProvider(output);
   const createAutoExpandingTreeView = <T extends vscode.TreeItem>(
@@ -1943,6 +1973,11 @@ export function activate(context: vscode.ExtensionContext): void {
     hanoiPanel,
     services,
     servers,
+    swarm,
+    swarmTree,
+    { dispose: () => clearInterval(swarmRefresh) },
+    swarmTree.onDidChangeVisibility(event => { if (event.visible) swarm.refresh(); }),
+    vscode.commands.registerCommand('pulse-pmachine.refreshSwarm', () => swarm.refresh()),
     librarian,
     esp32Librarian,
     createAutoExpandingTreeView('pulseCatalogStudio.sidebar', librarian),
@@ -1964,6 +1999,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (event.affectsConfiguration('pulse-pmachine.backendUrl')) {
         services.refresh();
         servers.refresh();
+        swarm.refresh();
         librarian.refresh();
         esp32Librarian.refresh();
       }
@@ -2068,6 +2104,7 @@ export function activate(context: vscode.ExtensionContext): void {
       { language: 'mnf' },
       { language: 'fortranish' },
       { language: 'csharp' },
+      { language: 'kotlin' },
       { language: 'cobolish' },
       { language: 'wfl' },
       { language: 'mapl' },

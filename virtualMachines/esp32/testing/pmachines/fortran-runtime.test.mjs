@@ -75,6 +75,7 @@ test('Arduino FORTRAN RTL numeric, FORMAT input/output and bounded storage agree
   const directory = await mkdtemp(path.join(os.tmpdir(), 'pulse-fortran-cpp-'));
   try {
     for (const [name, sources] of [
+      ['system', ['testing/pmachines/system-runtime.test.cpp', 'pmachines/arduino/src/system_runtime.cpp']],
       ['fortran', ['testing/pmachines/fortran-runtime.test.cpp', 'pmachines/arduino/src/fortran_runtime.cpp']],
       ['objects', ['testing/pmachines/managed-objects.test.cpp']],
       ['format', ['testing/pmachines/fortran-format.test.cpp', 'pmachines/arduino/src/fortran_format.cpp', 'pmachines/arduino/src/fortran_files.cpp', 'pmachines/arduino/src/fortran_runtime.cpp']],

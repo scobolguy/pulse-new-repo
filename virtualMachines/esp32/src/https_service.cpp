@@ -7,6 +7,7 @@
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+#include <atomic>
 
 namespace {
 
@@ -31,6 +32,7 @@ const uint8_t kMaxAuthFailures = 5;
 String gBootstrapToken;
 unsigned long gAuthLockUntilMs = 0;
 uint8_t gAuthFailureCount = 0;
+std::atomic<bool> gTlsRestartRequested{false};
 
 String makeSessionId() {
     const uint32_t r = esp_random();
@@ -209,6 +211,45 @@ void handleJsonBody(
 
 } // namespace
 
+bool rotateTlsBootstrapToken(String& token, String& error) {
+    loadTlsState();
+    if (gTlsState.enrollmentState != "bootstrap" || hasPersistentTlsPair()) {
+        error = "Token rotation requires an unenrolled device with no active enrollment";
+        return false;
+    }
+    ensureTlsDir();
+    const String replacement = generateBootstrapToken();
+    const char* temporaryPath = "/tls/bootstrap.token.new";
+    if (!writeTextFile(temporaryPath, replacement + "\n")
+        || !LittleFS.rename(temporaryPath, kTlsBootstrapTokenPath)) {
+        LittleFS.remove(temporaryPath);
+        error = "Failed to persist replacement bootstrap token";
+        return false;
+    }
+    gBootstrapToken = replacement;
+    gAuthFailureCount = 0;
+    gAuthLockUntilMs = 0;
+    token = replacement;
+    return true;
+}
+
+void pollTlsEnrollment() {
+    if (gTlsRestartRequested.exchange(false)) {
+        stopHttpsService();
+        if (!startHttpsService()) {
+            Serial.println("[TLS] Enrollment activation failed; certificate remains pending");
+            return;
+        }
+    }
+    if (gTlsState.enrollmentState == "pending" && hasPersistentTlsPair()
+        && isHttpsRunning() && !isHttpsUsingBundledPair()) {
+        gTlsState.enrollmentState = "enrolled";
+        gTlsState.sessionId = "";
+        gTlsState.sessionExpiresAtMs = 0;
+        saveTlsState();
+    }
+}
+
 void registerHttpsTlsRoutes(AsyncWebServer& srv) {
     loadTlsState();
     loadOrCreateBootstrapToken();
@@ -344,23 +385,23 @@ void registerHttpsTlsRoutes(AsyncWebServer& srv) {
                         return;
                     }
 
-                    stopHttpsService();
-                    const bool httpsOk = startHttpsService();
-
                     gTlsState.mtlsRequired = requireMtls;
-                    gTlsState.enrollmentState = "enrolled";
+                    gTlsState.enrollmentState = "pending";
                     gTlsState.sessionId = "";
                     gTlsState.sessionExpiresAtMs = 0;
                     saveTlsState();
 
                     JsonDocument out;
                     out["installed"] = true;
-                    out["httpsRunning"] = httpsOk;
+                    out["httpsRunning"] = isHttpsRunning();
                     out["bundledFallback"] = isHttpsUsingBundledPair();
                     out["enrollmentState"] = gTlsState.enrollmentState;
+                    out["restartPending"] = true;
                     String response;
                     serializeJson(out, response);
-                    request->send(httpsOk ? 200 : 202, "application/json", response);
+                    // Restart only after the loopback proxy has received the response.
+                    request->onDisconnect([] { gTlsRestartRequested.store(true); });
+                    request->send(202, "application/json", response);
                 }
             );
         }

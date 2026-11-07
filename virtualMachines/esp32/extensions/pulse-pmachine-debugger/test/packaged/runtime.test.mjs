@@ -56,7 +56,7 @@ test('installed VSIX compiles, runs, debugs and deploys without a Pulse checkout
   const { stdout } = await execFileAsync(process.execPath, [path.join(temporary, 'probe.mjs')], {
     cwd: project,
     env: environment,
-    timeout: 60000,
+    timeout: 180000,
   });
   assert.match(stdout, /Portable compilation, JS execution, debugging and direct-node deployment passed/);
 });

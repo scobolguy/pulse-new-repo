@@ -215,9 +215,15 @@ export function linkPcodeLibraries(program, libraries = []) {
     for (const [externalName, label] of publicLabels) {
       const procedure = library.programMap.procedures[label];
       const parameters = procedure.params || [];
-      snippets.push(`${externalName}:`);
-      for (const parameter of parameters) snippets.push(`LOAD ${parameter}`);
-      snippets.push(`CALL ${localLabels.get(label)} ${parameters.length}`, 'RET');
+      const wrapperAddress = linkedInstructionCount + countInstructions(snippets.join('\n'));
+      const sourceIndex = libraryLines.findIndex(line => line.trim() === `${label}:`);
+      const sourceLocation = library.programMap.sourceMap?.[executableAddressAt(libraryLines, sourceIndex)];
+      const wrapper = [...parameters.map(parameter => `LOAD ${parameter}`),
+        `CALL ${localLabels.get(label)} ${parameters.length}`, 'RET'];
+      if (sourceLocation) wrapper.forEach((instruction, index) => {
+        addedSourceMap[String(wrapperAddress + index)] = { ...sourceLocation, instruction };
+      });
+      snippets.push(`${externalName}:`, ...wrapper);
       addedProcedures[externalName] = {
         name: externalName, returnType: procedure.returnType || null, params: parameters, locals: []
       };

@@ -13,6 +13,7 @@
 #include <memory>
 #include <array>
 #include <atomic>
+#include <set>
 
 namespace pmachine {
 
@@ -63,7 +64,7 @@ public:
                  LifecycleMetadata lifecycle = {});
     bool stop(std::string& error, const std::string& id = "");
     struct HttpEvent {
-        std::string method, path, body, peer, query, response;
+        std::string method, path, body, peer, query, headers, response;
         std::string transactionId, ingressAggregatorId;
         uint64_t observedAt = 0, deadline = 0, order = 0;
         int status = 200;
@@ -76,7 +77,8 @@ public:
                                       const std::string& body, const std::string& peer,
                                       const std::string& query, int& status, std::string& error,
                                       const std::string& transactionId = "",
-                                      const std::string& ingressAggregatorId = "");
+                                      const std::string& ingressAggregatorId = "",
+                                      const std::string& headers = "{}");
     std::string status(const std::string& id = "");
     void diagnostics(JsonObject doc);
     std::string readiness(const std::string& id = "");
@@ -86,6 +88,7 @@ public:
     bool prepare(std::string& error);
     // FFS that backs the string-arena swap file once the host is first prepared. No allocation.
     void setStorage(FederatedFileSystem& ffs);
+    bool startRecovery(std::string& error) { return prepare(error); }
     // Records the aggregator that acknowledged this node's beacon as the lifecycle report target.
     void learnAggregator(const char* aggregatorId, const char* address, uint16_t httpPort);
     static bool loadImage(FederatedFileSystem& ffs, const String& path, const JsonDocument& map,
@@ -135,7 +138,7 @@ private:
     TaskHandle_t reportTask = nullptr;
     std::atomic<bool> active{false};
     uint64_t observedAt = 0;
-    std::string method, path, body, peer, query;
+    std::string method, path, body, peer, query, headers;
     uint16_t peerPort = 0;
     std::string parentTransactionId, ingressAggregatorId;
     WiFiUDP* eventUdp = nullptr;
@@ -201,7 +204,21 @@ private:
     static void reporter(void* context);
     static bool call(const std::string&, const std::vector<HostValue>&, HostValue&, std::string&, void*);
     bool invoke(const std::string&, const std::vector<HostValue>&, HostValue&, std::string&);
-    bool execute(const Unit&, std::string& response);
+    bool execute(const Unit&, std::string& response, const JsonDocument* saved = nullptr,
+                 const std::string* reply = nullptr);
+    bool durableUnit(const Unit&, std::string& error) const;
+    bool saveContinuation(const Unit&, const std::string&, JsonDocument&, std::string&);
+    bool writeContinuation(const std::string&, const JsonDocument&, std::string&);
+    bool readContinuation(const std::string&, JsonDocument&, std::string&);
+    bool initializeContinuations(std::string&);
+    void pollContinuations();
+    bool checkpointKey(std::string&);
+    std::string continuationKey, durableJobId;
+    std::vector<std::string> durableJobs;
+    std::set<std::string> finishedJobs;
+    bool continuationsInitialized = false;
+    uint64_t nextContinuationPoll = 0;
+    size_t nextContinuationJob = 0;
     bool fail(const std::string& error, std::string& out, int status = 400);
     size_t expire(Table&);
     static bool validateUnit(const JsonDocument& map, const char* kind, Unit& unit, std::string& error);

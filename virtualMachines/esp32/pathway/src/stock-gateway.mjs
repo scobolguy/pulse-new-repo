@@ -3,9 +3,10 @@ import { timingSafeEqual } from 'node:crypto';
 
 export async function createStockGateway({ store, host = '127.0.0.1', port = 0,
   allowedClients = ['127.0.0.1'], logger = console, transactionToken = null } = {}) {
-  if (!store || typeof store.stock !== 'function' || net.isIP(host) !== 4 ||
-      !Array.isArray(allowedClients) || !allowedClients.length ||
-      allowedClients.some(ip => net.isIP(ip) !== 4) ||
+  const anyLanClient = allowedClients.includes('*');
+  if (!Array.isArray(allowedClients) || !allowedClients.length ||
+      allowedClients.some(ip => ip !== '*' && net.isIP(ip) !== 4) ||
+      net.isIP(host) !== 4 || !store || typeof store.stock !== 'function' ||
       !Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid stock gateway configuration');
   if (transactionToken !== null && (typeof transactionToken !== 'string' ||
       transactionToken.length < 32 || transactionToken.length > 128 || typeof store.exchange !== 'function')) {
@@ -13,9 +14,12 @@ export async function createStockGateway({ store, host = '127.0.0.1', port = 0,
   }
   const maxRequest = transactionToken === null ? 128 : 2048;
   const allowed = new Set(allowedClients);
+  // "*" admits any private-LAN or loopback IPv4 client, so any ESP32 node may connect.
+  const isLanClient = ip => /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip ?? '');
   const sockets = new Set();
   const server = net.createServer(socket => {
-    if (!allowed.has(socket.remoteAddress?.replace(/^::ffff:/, '')) || sockets.size >= 16) {
+    const remote = socket.remoteAddress?.replace(/^::ffff:/, '');
+    if (!(allowed.has(remote) || (anyLanClient && isLanClient(remote))) || sockets.size >= 16) {
       logger.warn('[STOCK] Rejected ungranted client or excess gateway connection');
       socket.destroy();
       return;

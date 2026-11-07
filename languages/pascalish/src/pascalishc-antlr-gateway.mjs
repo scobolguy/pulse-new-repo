@@ -7,7 +7,8 @@ function parseArgs(argv) {
   const args = {
     input: null,
     out: null,
-    mapOut: null
+    mapOut: null,
+    executionDagOut: null
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -31,10 +32,15 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+    if (token === '--execution-dag-out') {
+      args.executionDagOut = argv[index + 1];
+      index += 1;
+      continue;
+    }
   }
 
   if (!args.input) {
-    throw new Error('Usage: pascalishc <input.pas> -o <output.pcode> [--map-out <output.program.json>]');
+    throw new Error('Usage: pascalishc <input.pas> -o <output.pcode> [--map-out <output.program.json>] [--execution-dag-out <output.execution-dag.json>]');
   }
 
   if (!args.out) {
@@ -53,19 +59,29 @@ export async function runCli() {
   const inputPath = path.resolve(args.input);
   const outPath = path.resolve(args.out);
   const mapOutPath = path.resolve(args.mapOut);
+  const executionDagOutPath = args.executionDagOut ? path.resolve(args.executionDagOut) : null;
 
   const sourceText = await fs.readFile(inputPath, 'utf-8');
-  const compiled = compilePascalishProgramWithAntlr(sourceText);
+  const compiled = compilePascalishProgramWithAntlr(sourceText, {
+    includeExecutionDag: Boolean(executionDagOutPath)
+  });
 
   await fs.mkdir(path.dirname(outPath), { recursive: true });
   await fs.mkdir(path.dirname(mapOutPath), { recursive: true });
+  if (executionDagOutPath) await fs.mkdir(path.dirname(executionDagOutPath), { recursive: true });
 
   await fs.writeFile(outPath, compiled.pcodeText, 'utf-8');
   await fs.writeFile(mapOutPath, `${JSON.stringify(compiled.programMap, null, 2)}\n`, 'utf-8');
+  if (executionDagOutPath) {
+    await fs.writeFile(executionDagOutPath, `${JSON.stringify(compiled.executionDag, null, 2)}\n`, 'utf-8');
+  }
 
   console.log(`[pascalishc-antlr] Input: ${path.relative(process.cwd(), inputPath)}`);
   console.log(`[pascalishc-antlr] Output (.pcode): ${path.relative(process.cwd(), outPath)}`);
   console.log(`[pascalishc-antlr] Output (program map): ${path.relative(process.cwd(), mapOutPath)}`);
+  if (executionDagOutPath) {
+    console.log(`[pascalishc-antlr] Output (execution DAG): ${path.relative(process.cwd(), executionDagOutPath)}`);
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -20,6 +20,7 @@ const compilers = {
   fortranish: (await load(`${scripts}compile-mnf-to-pcode.mjs`)).compileMnfToPcode,
   cobolish: (await load(`${scripts}compile-tandem-cobol85-to-pcode.mjs`)).compileTandemCobol85ToPcode,
   csharp: (await load(`${scripts}compile-csharp-to-pcode.mjs`)).compileCsharpToPcode,
+  kotlin: (await load('../../languages/kotlin/src/compile-kotlin-to-pcode.mjs')).compileKotlinToPcode,
   vbish: (await load(`${scripts}compile-interoperable-language.mjs`)).compileVbishToPmachine,
 };
 const artifacts = new Map();
@@ -114,7 +115,7 @@ for (const starter of LANGUAGE_EDITORS.filter(item => compilers[item.id])) {
     pcode, programMap, inputQueue: 'vscode.pmachine', message: '',
   });
   assert.deepEqual(result.stdout, [`Hello from ${{
-    pascalish: 'Pascalish', fortranish: 'MNF', cobolish: 'COBOLish', csharp: 'C#', vbish: 'VBish',
+    pascalish: 'Pascalish', fortranish: 'MNF', cobolish: 'COBOLish', csharp: 'C#', kotlin: 'Kotlin', vbish: 'VBish',
   }[starter.id]}`]);
   assert.equal(result.stepLimitHit, false);
   assert.ok(!result.error, result.error);

@@ -59,6 +59,15 @@ PROCEDURE DIVISION.
     CALL "host.json_set" USING JSON-TEXT "data" INPUT-TEXT
         RETURNING JSON-TEXT
     PULSE SEND JSON-TEXT AS JSON.`;
+test('explicit fixed source format preserves native code and supports blank sequence areas', () => {
+  const fixed = nativeSource.split('\n').map(line => `       ${line}`).join('\n');
+  const options = { hostServices: true, nativeTarget: true };
+  const free = compileCobolishToPcode(nativeSource, options);
+  const compiled = compileCobolishToPcode(fixed, { ...options, sourceFormat: 'fixed' });
+  assert.equal(compiled.pcodeText, free.pcodeText);
+  assert.equal(compileCobolishToPcode(nativeSource, { ...options, sourceFormat: 'free' }).pcodeText, free.pcodeText);
+  assert.throws(() => compileCobolishToPcode(nativeSource, { ...options, sourceFormat: 'invalid' }), /sourceFormat must be fixed or free/);
+});
 test('native integer storage, typed host calls and JSON replies need no Pascalish library', async () => {
   const compiled = compileCobolishToPcode(nativeSource, { hostServices: true, nativeTarget: true });
   assert.doesNotMatch(compiled.pcodeText, /PUSH_DEC|DEC_|PROC_COBOL_RT_/);

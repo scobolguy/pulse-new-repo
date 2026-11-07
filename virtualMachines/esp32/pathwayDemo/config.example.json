@@ -19,11 +19,12 @@
     "allowedClients": ["127.0.0.1"]
   },
   "esp32": {
-    "origin": "http://192.168.2.90",
+    "origin": "any",
+    "nodesUrl": "http://127.0.0.1:4000/api/nodes",
     "collectorId": "pathway-stock",
-    "preferForStock": false,
+    "preferForStock": true,
     "inventoryCollectorId": "pathway-inventory",
-    "preferForInventory": false
+    "preferForInventory": true
   },
   "controller": {
     "stateFile": "..\\pathway\\.state\\inventory-cobol-v4-controller.json",

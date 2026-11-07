@@ -1,0 +1,29 @@
+PUSH_STR "INQUIRE WIDGET                                                  "
+STORE REQUEST-TEXT
+PUSH_STR "                                                                                                "
+STORE REPLY-TEXT
+PUSH_STR "REQUEST-TEXT"
+LOAD REQUEST-TEXT
+CALL_EXT screen.display 2
+STORE __discard
+PUSH_STR "REPLY-TEXT"
+LOAD REPLY-TEXT
+CALL_EXT screen.display 2
+STORE __discard
+PUSH_STR "REQUEST-TEXT"
+CALL_EXT screen.accept 1
+STORE REQUEST-TEXT
+PUSH_STR "inventory-service"
+LOAD REQUEST-TEXT
+PUSH_INT 0
+CALL_EXT pathway.send 3
+STORE REPLY-TEXT
+PUSH_STR "REQUEST-TEXT"
+LOAD REQUEST-TEXT
+CALL_EXT screen.display 2
+STORE __discard
+PUSH_STR "REPLY-TEXT"
+LOAD REPLY-TEXT
+CALL_EXT screen.display 2
+STORE __discard
+HALT

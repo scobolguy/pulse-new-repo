@@ -1,7 +1,13 @@
-import { executeProgram, parsePcode } from '../../pmachines/javascript/src/runtime.mjs';
+import { parsePcode } from '../../pmachines/javascript/src/runtime.mjs';
 import { createHash } from 'node:crypto';
+import { PMachineScheduler } from '../../pmachines/javascript/index.mjs';
 
-export async function runRequester(artifact, values, send, { requestId } = {}) {
+const requesterScheduler = new PMachineScheduler();
+
+export async function runRequester(artifact, values, send, {
+  requestId, scheduler = requesterScheduler, signal, callService
+} = {}) {
+  if (!(scheduler instanceof PMachineScheduler)) throw new TypeError('Invalid requester scheduler');
   if (requestId !== undefined && (typeof requestId !== 'string' || !/^[A-Za-z0-9_-]{16,96}$/.test(requestId))) {
     throw new Error('Invalid requester request ID');
   }
@@ -19,25 +25,32 @@ export async function runRequester(artifact, values, send, { requestId } = {}) {
     }
     return value.padEnd(field.width);
   };
-  const result = await executeProgram({
+  const result = await scheduler.execute({
     instructions: parsePcode(artifact.pcodeText), programMap: artifact.programMap, sourceMessage: '',
     runtimeContext: {
-      maxSteps: 10000, maxStack: 256,
-      async callHost(name, args) {
+      maxSteps: 10000, maxStack: 256, signal,
+      callHost(name, args) {
         if (name === 'screen.accept') return fit(args[0], values[args[0]] ?? description.fields[args[0]].value);
         if (name === 'screen.display') { output[args[0]] = fit(args[0], args[1]); return 0; }
         if (name === 'pathway.send') {
           const callId = requestId === undefined ? undefined : createHash('sha256')
             .update(`${requestId}:${sendIndex++}:${args[0]}`).digest('hex');
-          const reply = await send(args[0], args[1], { requestId: callId });
-          if (reply.code !== args[2]) throw new Error(`Unexpected reply code ${reply.code}`);
-          if (typeof reply.data !== 'string') throw new Error('Server reply must contain a text record');
-          return reply.data;
+          return Promise.resolve(send(args[0], args[1], {
+            requestId: callId, ...(signal ? { signal } : {}),
+          })).then(reply => {
+            if (reply.code !== args[2]) throw new Error(`Unexpected reply code ${reply.code}`);
+            if (typeof reply.data !== 'string') throw new Error('Server reply must contain a text record');
+            return reply.data;
+          });
+        }
+        if (name === 'service.call') {
+          if (typeof callService !== 'function') throw new Error('Service reference binding is unavailable');
+          return callService(args[0], args[1], args[2], { signal, requestId });
         }
         throw new Error(`Unsupported requester binding ${name}`);
       },
     },
-  });
+  }, { name: artifact.programMap.runtimeUnit?.id || 'screen-cobol-requester' });
   if (result.error || result.stepLimitHit) throw new Error(result.error || 'Requester instruction budget exceeded');
   return { values: output, screen: description.initialScreen };
 }

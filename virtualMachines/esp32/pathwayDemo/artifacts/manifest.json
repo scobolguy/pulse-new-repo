@@ -1,0 +1,52 @@
+[
+  {
+    "name": "inventory-server",
+    "targets": [
+      "js",
+      "esp32"
+    ],
+    "nativeImage": true,
+    "profile": "extended"
+  },
+  {
+    "name": "inventory-native-server",
+    "targets": [
+      "js",
+      "esp32"
+    ],
+    "nativeImage": true,
+    "profile": "extended"
+  },
+  {
+    "name": "inventory-requester",
+    "targets": [
+      "js"
+    ],
+    "nativeImage": false
+  },
+  {
+    "name": "stock-service",
+    "targets": [
+      "js",
+      "esp32"
+    ],
+    "nativeImage": true,
+    "profile": "bounded"
+  },
+  {
+    "name": "stock-requester",
+    "targets": [
+      "js"
+    ],
+    "nativeImage": false
+  },
+  {
+    "name": "maintenance-daemon",
+    "targets": [
+      "js",
+      "esp32"
+    ],
+    "nativeImage": true,
+    "profile": "bounded"
+  }
+]

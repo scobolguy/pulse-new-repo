@@ -87,6 +87,7 @@ void registerFFSRoutes(AsyncWebServer& server, FederatedFileSystem& federatedFS)
             doc["minFreeHeapBytes"] = ESP.getMinFreeHeap();
             doc["largestFreeBlockBytes"] = largestBlock;
             doc["storageBackend"] = federatedFS.backend() == FFSBackend::SD ? "sd"
+                : federatedFS.backend() == FFSBackend::Flash ? "flash"
                 : federatedFS.backend() == FFSBackend::Remote ? "remote" : "unavailable";
             doc["snapshotPersistenceAvailable"] = federatedFS.available();
             auto wifi = doc["wifi"].to<JsonObject>();

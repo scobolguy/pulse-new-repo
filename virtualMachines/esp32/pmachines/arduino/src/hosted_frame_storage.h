@@ -17,6 +17,7 @@ public:
         usedSlots = usedNames = 0;
         frameDepth = 1;
         frames[0] = Frame{};
+        frames[0].identity = ++nextIdentity;
         peakSlots = peakNames = 0;
         peakDepth = 1;
     }
@@ -63,6 +64,7 @@ public:
         frame.slotStart = usedSlots;
         frame.nameStart = usedNames;
         frame.returnPc = returnPc;
+        frame.identity = ++nextIdentity;
         if (frameDepth > peakDepth) peakDepth = frameDepth;
         return nullptr;
     }
@@ -90,6 +92,16 @@ public:
     }
 
     size_t depth() const { return frameDepth; }
+    uint64_t identity(size_t frame) const { return frame < frameDepth ? frames[frame].identity : 0; }
+    const Value* findInFrame(size_t frame, const char* name) const {
+        if (frame >= frameDepth) return nullptr;
+        const size_t end = frame + 1 < frameDepth ? frames[frame + 1].slotStart : usedSlots;
+        for (size_t index = end; index > frames[frame].slotStart; --index)
+            if (std::strcmp(names.data() + slots[index - 1].nameOffset, name) == 0)
+                return &slots[index - 1].value;
+        return nullptr;
+    }
+    int returnAddress(size_t frame) const { return frames.at(frame).returnPc; }
     size_t size() const { return usedSlots; }
     size_t nameBytes() const { return usedNames; }
     size_t slotHighWater() const { return peakSlots; }
@@ -107,6 +119,7 @@ private:
         size_t slotStart = 0;
         size_t nameStart = 0;
         int returnPc = 0;
+        uint64_t identity = 0;
     };
 
     size_t localSlot(const char* name) const {
@@ -123,6 +136,7 @@ private:
     std::array<Frame, DepthCapacity> frames;
     size_t usedSlots = 0, usedNames = 0, frameDepth = 1;
     size_t peakSlots = 0, peakNames = 0, peakDepth = 1;
+    uint64_t nextIdentity = 0;
 };
 
 using HostedFrameStorage = BoundedHostedFrames<>;

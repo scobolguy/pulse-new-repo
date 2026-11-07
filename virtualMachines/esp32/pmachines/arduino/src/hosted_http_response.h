@@ -13,6 +13,7 @@ public:
     }
     bool _sourceValid() const override { return true; }
     void _respond(AsyncWebServerRequest* request) override {
+        headOnly = request->method() == HTTP_HEAD;
         head = _assembleHead(request->version());
         if (head.length() != _headLength || !head.length()) {
             Serial.println("[SERVICE-HOST] Hosted response header allocation failed");
@@ -37,7 +38,7 @@ public:
                 break;
             }
             if (sendingHead && headOffset == head.length()) {
-                _state = RESPONSE_CONTENT;
+                _state = headOnly ? RESPONSE_WAIT_ACK : RESPONSE_CONTENT;
                 continue;
             }
             size_t available = sendingHead ? head.length() - headOffset : 0;
@@ -74,6 +75,7 @@ private:
     String head;
     size_t headOffset = 0;
     bool writeBlocked = false;
+    bool headOnly = false;
 };
 
 class HostedStatusResponse : public HostedBoundedResponse {

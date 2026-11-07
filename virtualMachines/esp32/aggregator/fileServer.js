@@ -234,6 +234,33 @@ export function createFileServer({ ffsConfig = {}, webdavConfig = {}, federatedC
     }
   });
 
+  router.post('/ffs/replace', async (req, res) => {
+    let file;
+    try {
+      if (typeof req.body?.source !== 'string' || !req.body.source
+          || typeof req.body?.destination !== 'string' || !req.body.destination) {
+        return res.status(400).json({ error: 'Missing source or destination' });
+      }
+      const source = resolveFFSPath(req.body.source);
+      const destination = resolveFFSPath(req.body.destination);
+      if (source === destination || path.dirname(source) !== path.dirname(destination)
+          || source === path.resolve(ffsRoot) || destination === path.resolve(ffsRoot)) {
+        return res.status(400).json({ error: 'Atomic replacement requires distinct files in the same directory' });
+      }
+      file = await fs.open(source, 'r+');
+      if (!(await file.stat()).isFile()) return res.status(400).json({ error: 'Source must be a regular file' });
+      await file.sync();
+      await file.close();
+      file = null;
+      await fs.rename(source, destination);
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(error.code === 'ENOENT' ? 404 : 500).json({ error: error.message });
+    } finally {
+      if (file) await file.close();
+    }
+  });
+
   // List directory contents (FFS)
   router.get('/ffs/list', async (req, res) => {
     try {

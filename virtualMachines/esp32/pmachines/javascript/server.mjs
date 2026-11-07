@@ -9,7 +9,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { timingSafeEqual, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-import { runSingleMessageForEvolution } from './index.mjs';
+import { PMachineScheduler, runSingleMessageForEvolution } from './index.mjs';
 import { normalizeDiscoveryAnnouncement } from './discovery-collector.mjs';
 import { createPascalishServiceHost } from './src/service-host.mjs';
 import { createInventoryClient } from './src/inventory-client.mjs';
@@ -146,6 +146,7 @@ export function createJsPmachineNodeServer({
   udpAnnouncePort = 0,
   fetchImpl = fetch,
   logger = console,
+  scheduler = null,
   onDaemonEvent = null,
   distributedGrants = {},
   inventoryGrants = {},
@@ -157,6 +158,7 @@ export function createJsPmachineNodeServer({
     return createLanDiscovery(options);
   }
 } = {}) {
+  if (scheduler !== null && !(scheduler instanceof PMachineScheduler)) throw new TypeError('Invalid pmachine scheduler');
   if (!storageGrants || typeof storageGrants !== 'object' || Array.isArray(storageGrants)) {
     throw new Error('Invalid service storage grants');
   }
@@ -195,7 +197,12 @@ export function createJsPmachineNodeServer({
       const registration = host.getRegistration();
       const status = host.getStatus();
       const base = status.httpPort ? `http://127.0.0.1:${status.httpPort}` : origin;
-      services.push({ ...registration, provider: 'pascalish', endpoint: `${base}/` });
+      services.push({
+        ...registration,
+        provider: 'pascalish',
+        endpoint: `${base}/`,
+        capabilities: status.serviceCapabilities
+      });
       for (const daemon of registration.daemons) {
         services.push({
           serviceId: daemon, instanceId: `${registration.instanceId}:${daemon}`,
@@ -232,7 +239,7 @@ export function createJsPmachineNodeServer({
         organismId: '',
         generation: '0',
         fitnessOut: ''
-      });
+      }, { scheduler });
       stats.runs += 1;
       return {
         ok: !result.error,
@@ -361,6 +368,7 @@ export function createJsPmachineNodeServer({
       },
       logger,
       onDaemonEvent,
+      scheduler,
     });
     if (!additional && hostedService) await hostedService.stop();
     try {

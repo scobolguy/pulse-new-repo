@@ -52,12 +52,17 @@ static const char* statusStr(int code) {
     switch (code) {
         case 200: return "200 OK";
         case 201: return "201 Created";
+        case 202: return "202 Accepted";
         case 204: return "204 No Content";
         case 400: return "400 Bad Request";
         case 401: return "401 Unauthorized";
         case 403: return "403 Forbidden";
         case 404: return "404 Not Found";
         case 409: return "409 Conflict";
+        case 410: return "410 Gone";
+        case 413: return "413 Content Too Large";
+        case 422: return "422 Unprocessable Content";
+        case 429: return "429 Too Many Requests";
         case 503: return "503 Service Unavailable";
         default:  return "500 Internal Server Error";
     }

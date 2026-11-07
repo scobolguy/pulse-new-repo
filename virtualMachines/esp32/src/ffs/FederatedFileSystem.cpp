@@ -173,17 +173,19 @@ size_t FederatedFileSystem::writeBytes(int handle, const uint8_t *data, size_t l
 FederatedFileSystem::FederatedFileSystem() : _backend(FFSBackend::Unavailable), _fs(nullptr), _basePath("/"), _inTransaction(false) {}
 
 bool FederatedFileSystem::begin(FFSBackend backend, fs::FS &fs, const String &basePath) {
-    if (backend != FFSBackend::SD) return false;
+    if (backend != FFSBackend::SD && backend != FFSBackend::Flash) return false;
+    if (backend == FFSBackend::SD) {
 #if defined(SD_H) || defined(ARDUINO_ARCH_ESP32)
-    if (!SD.begin()) return false;
+        if (!SD.begin()) return false;
 #else
-    return false;
+        return false;
 #endif
+    }
     _backend = backend;
     _fs = &fs;
     _basePath = basePath;
     if (reloadMountPoints() != FFSStatus::OK) {
-        Serial.println("[FFS] SD mount table could not be loaded");
+        Serial.println("[FFS] Local mount table could not be loaded");
         _fs = nullptr;
         _backend = FFSBackend::Unavailable;
         return false;
@@ -231,6 +233,19 @@ FFSStatus FederatedFileSystem::write(const String &logicalName, const uint8_t *d
         return FFSStatus::ERR_UNSUPPORTED;
     }
     return writeLocalFile(resolved.resolvedPath, data, len);
+}
+
+FFSStatus FederatedFileSystem::replace(const String& temporaryName, const String& logicalName) {
+    if (!_fs) return FFSStatus::ERR_IO;
+    const ResolvedPath source = resolvePath(temporaryName), destination = resolvePath(logicalName);
+    if (source.remote || destination.remote || source.readOnly || destination.readOnly)
+        return FFSStatus::ERR_UNSUPPORTED;
+    const String sourcePath = source.resolvedPath, destinationPath = destination.resolvedPath;
+    if (sourcePath == destinationPath || sourcePath == "/" || destinationPath == "/"
+        || sourcePath.substring(0, sourcePath.lastIndexOf('/'))
+            != destinationPath.substring(0, destinationPath.lastIndexOf('/')))
+        return FFSStatus::ERR_INVALID_ARG;
+    return _fs->rename(sourcePath, destinationPath) ? FFSStatus::OK : FFSStatus::ERR_IO;
 }
 
 FFSStatus FederatedFileSystem::read(const String &logicalName, std::vector<uint8_t> &outData) {

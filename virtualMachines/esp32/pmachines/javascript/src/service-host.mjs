@@ -5,6 +5,7 @@ import net from 'node:net';
 import { createHash, randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { executeProgram, parsePcode, parseProgramMapMappings } from './runtime.mjs';
+import { PMachineScheduler } from './scheduler.mjs';
 import { loadOpcodeMap } from './opcodes.mjs';
 import { SERVICE_HOST_BINDINGS_VERSION } from '../../shared/contracts/service-host-bindings.mjs';
 import { createNetworkBindings } from './network-bindings.mjs';
@@ -62,8 +63,9 @@ export async function createPascalishServiceHost({
   maxTimers = 8, maxDaemonDatagramBytes = 1024, clock = () => Math.floor(performance.now()), logger = console,
   onDaemonEvent = null, storageRoots = {}, maxFileBytes = 262144, desktopBudget = false,
   distributedBindings = {}, bluetoothSourceFactory = null, filesystemBindingOverrides = {},
-  lifecycle = undefined, infrastructureProbe = null, inventoryGrant = null
+  lifecycle = undefined, infrastructureProbe = null, inventoryGrant = null, scheduler = null
 }) {
+  if (scheduler !== null && !(scheduler instanceof PMachineScheduler)) throw failure('Invalid pmachine scheduler');
   if (compiled?.programMap?.hostBindingsVersion !== SERVICE_HOST_BINDINGS_VERSION
     || compiled.programMap.runtimeUnit?.kind !== 'service') throw failure('Unsupported service host contract');
   if (!distributedBindings || typeof distributedBindings !== 'object' || Array.isArray(distributedBindings) ||
@@ -201,6 +203,7 @@ export async function createPascalishServiceHost({
   let sequence = 0;
   let pending = 0;
   let tail = Promise.resolve();
+  const invocations = new Set();
   let running = false;
   let closed = false;
   let starting;
@@ -221,6 +224,31 @@ export async function createPascalishServiceHost({
   }));
   if (distributedDefinitions.size !== (compiled.programMap.distributedTables || []).length ||
       distributedDefinitions.size > 16) throw failure('Duplicate or excessive distributed table declarations');
+  const getServiceCapabilities = () => ({
+    serviceId: compiled.programMap.serviceId || compiled.programMap.runtimeUnit.id,
+    version: compiled.programMap.serviceVersion || compiled.programMap.version || 1,
+    sourceLanguage: compiled.programMap.sourceLanguage || compiled.sourceLanguage || 'unknown',
+    runtime: { kind: 'pmachine', target: 'javascript', contractVersion: SERVICE_HOST_BINDINGS_VERSION },
+    endpoints: (compiled.programMap.serviceEndpoints || []).map(endpoint => ({ ...endpoint })),
+    lifecycle: lifecycleConfig ? {
+      version: lifecycleConfig.version,
+      requires: [...lifecycleConfig.requires],
+      bindings: lifecycleConfig.bindings
+    } : null,
+    tasks: {
+      model: scheduler ? 'logical-task' : 'serial-invocation',
+      maxConcurrent: scheduler?.slots ?? 1,
+      supportsCancellation: true,
+      supportsJoin: false
+    },
+    hostCapabilitiesVersion: capabilities.version,
+    requiredHostCapabilities: compiled.programMap.requiredHostCapabilities || [],
+    limits: { maxEvents, maxBodyBytes, maxResponseBytes, maxSteps, maxExecutionMs },
+    ...(compiled.programMap.capabilities?.provider
+      ? { provider: compiled.programMap.capabilities.provider } : {}),
+    ...(compiled.programMap.capabilities?.pathway
+      ? { pathway: compiled.programMap.capabilities.pathway } : {})
+  });
   for (const definition of cacheDefinitions.filter(definition => definition.backingTable)) {
     const table = distributedDefinitions.get(definition.backingTable);
     if (!table || table.schemaId !== tableSchema({ name: definition.backingTable, fields: definition.fields }).schemaId ||
@@ -297,7 +325,7 @@ export async function createPascalishServiceHost({
       text(event.path, 'event path');
     } catch (error) { return Promise.reject(error); }
     pending += 1;
-    const work = tail.then(async () => {
+    const work = (scheduler ? Promise.resolve() : tail).then(async () => {
       if (closed) throw failure('Service is stopped', 503);
       if (lifecycleRuntime && ['http', 'udp'].includes(event.transport)) {
         if (event.transport === 'http' && event.method === 'GET' && event.path === '/ready') {
@@ -310,6 +338,19 @@ export async function createPascalishServiceHost({
         } };
       }
       let status = 200;
+      const endpoints = compiled.programMap.serviceEndpoints || [];
+      const routeExternalRequest = event.transport === 'http' || !unit;
+      const endpoint = routeExternalRequest && endpoints.length
+        ? endpoints.find(candidate => candidate.verb === event.method && candidate.path === event.path)
+        : null;
+      if (routeExternalRequest && endpoints.length && !endpoint) {
+        return { status: 404, body: { error: 'Service endpoint not found' } };
+      }
+      const startLabel = endpoint?.entryLabel || endpoint?.handler;
+      if (startLabel && !unit?.instructions?.__labels?.has(startLabel) &&
+          !instructions.__labels?.has(startLabel)) {
+        throw failure(`Service endpoint entry label not found: ${startLabel}`, 500);
+      }
       // Cache reads are pinned to the invocation start so next/get/count see one snapshot.
       const readAt = now();
       const byteBindings = createByteBufferBindings((...args) => jsonPath(...args));
@@ -406,6 +447,10 @@ export async function createPascalishServiceHost({
           text(name, 'query parameter name');
           return event.query?.[name] ?? '';
         },
+        'host.event_header': (name) => {
+          text(name, 'header name');
+          return event.headers?.[name.toLowerCase()] ?? '';
+        },
         'host.collector_id': () => collectorId,
         'host.boot_id': () => bootId,
         'host.next_sequence': () => integer(++sequence, 1, Number.MAX_SAFE_INTEGER, 'sequence'),
@@ -459,16 +504,21 @@ export async function createPascalishServiceHost({
       const cancelled = new Promise((resolve, reject) => { rejectCancelled = reject; });
       const onAbort = () => rejectCancelled(failure(signal.reason?.message || 'Service execution cancelled', 503));
       signal.addEventListener('abort', onAbort, { once: true });
-      const timeout = maxExecutionMs === null
+      const timeout = maxExecutionMs === null || scheduler
         ? null
         : setTimeout(() => invocationAbort.abort(new Error('Service execution timeout')), maxExecutionMs);
       let result;
       try {
-        result = await Promise.race([cancelled, executeProgram({
+        const execute = scheduler
+          ? options => scheduler.execute(options, { name: `${collectorId}:${unit?.id || event.path}` })
+          : executeProgram;
+        result = await Promise.race([cancelled, execute({
         instructions: unit?.instructions || instructions, mappingsById: unit?.mappingsById || mappingsById,
         opcodeMap, inputQueue: '', sourceMessage: event.body ?? '',
         runtimeContext: {
           maxSteps, desktopBudget, maxStack: 256, maxCallDepth: 32, cooperative: true, signal,
+          ...(startLabel ? { startLabel } : {}),
+          ...(scheduler ? { maxExecutionMs } : {}),
           callHost: async (name, args) => {
             signal.throwIfAborted();
             const handler = handlers[name] || bindings[name];
@@ -488,6 +538,9 @@ export async function createPascalishServiceHost({
       return { status, body: result.response };
     }).finally(() => { pending -= 1; });
     tail = work.catch(logError);
+    const settled = tail;
+    invocations.add(settled);
+    settled.then(() => invocations.delete(settled));
     return work;
   }
   function logError(error) { logger.warn(`[SERVICE] Event rejected: ${error.message}`); }
@@ -576,7 +629,7 @@ export async function createPascalishServiceHost({
       server.closeAllConnections();
       await new Promise(resolve => server.close(resolve));
     }
-    await tail;
+    await Promise.all([...invocations]);
     isamBindings.dispose();
     if (bluetoothSource) await bluetoothSource.stop();
     for (const replica of replicas.values()) await replica.stop();
@@ -633,6 +686,11 @@ export async function createPascalishServiceHost({
           }
           if (req.method === 'GET' && requestPath === '/pmachine/service_host/status') {
             writeJsonResponse(res, 200, { running, collectorId, bootId, capabilities,
+              serviceCapabilities: {
+                ...getServiceCapabilities(),
+                state: running ? 'running' : closed ? 'stopped' : 'created',
+                ready: lifecycleRuntime ? lifecycleRuntime.getReadiness().ready : running
+              },
               ...(lifecycleConfig ? {
                 serviceLifecycle: {
                   version: lifecycleConfig.version, requires: lifecycleConfig.requires,
@@ -644,12 +702,20 @@ export async function createPascalishServiceHost({
               replicas: [...replicas.values()].map(replica => replica.status()) });
             return;
           }
+          if (req.method === 'GET' && requestPath === '/pmachine/service_host/capabilities') {
+            writeJsonResponse(res, 200, {
+              ...getServiceCapabilities(),
+              state: running ? 'running' : closed ? 'stopped' : 'created',
+              ready: lifecycleRuntime ? lifecycleRuntime.getReadiness().ready : running
+            });
+            return;
+          }
           if (requestPath.startsWith('/events/')) throw failure('Internal service event', 404);
           const query = Object.fromEntries(requestUrl.searchParams);
           const result = await dispatch({
             transport: 'http', method: req.method, path: requestPath,
             body: Buffer.concat(chunks).toString('utf8'), peer,
-            query
+            query, headers: req.headers
           });
           if (!res.destroyed) writeJsonResponse(res, result.status, result.body);
         } catch (error) {
@@ -737,8 +803,15 @@ export async function createPascalishServiceHost({
       enabled: running,
       daemons: [...units.keys()]
     }),
+    getServiceCapabilities,
     getStatus: () => ({ running, hostBindingsVersion: SERVICE_HOST_BINDINGS_VERSION,
+      serviceCapabilities: {
+        ...getServiceCapabilities(),
+        state: running ? 'running' : closed ? 'stopped' : 'created',
+        ready: lifecycleRuntime ? lifecycleRuntime.getReadiness().ready : running
+      },
       pending, timers: timers.size, daemons: units.size, storageBytes, capabilities,
+      ...(scheduler ? { pmachine: scheduler.getStatus() } : {}),
       ...(lifecycleConfig ? {
         serviceLifecycle: {
           version: lifecycleConfig.version, requires: lifecycleConfig.requires,

@@ -43,3 +43,45 @@ test('node learns its report aggregator from beacon acks and runs no discovery o
   assert.doesNotMatch(main, /startPMachineLanDiscovery/);
   assert.match(aggregatorAck, /kind: 'nodeBeaconAck', nodeId, httpPort/);
 });
+
+test('DAG workers advertise capabilities and beacon regardless of generalist role', async () => {
+  const [main, announcement] = await Promise.all([
+    read('../../src/main.cpp'),
+    read('../../src/udp_announcement.cpp'),
+  ]);
+  assert.match(main, /#if defined\(ESP32\) && defined\(ENABLE_PMACHINE\) && !defined\(DISABLE_PMACHINE_ROUTES\)\s+announcePresence\(\);/);
+  assert.match(announcement, /announceDoc\["available"\] = true/);
+  assert.match(announcement, /announceDoc\["draining"\] = false/);
+  assert.match(announcement, /capabilities\.add\("pascalish-dag-v1"\)/);
+  assert.match(announcement, /dagWorker\["maxConcurrentTasks"\] = 1/);
+});
+
+test('TLS bootstrap rotation is physical-serial-only and refuses active or completed enrollment', async () => {
+  const [commands, tls] = await Promise.all([
+    read('../../src/control_plane_commands.cpp'),
+    read('../../src/https_service.cpp'),
+  ]);
+  assert.match(commands, /line == "TLS_BOOTSTRAP_ROTATE"[\s\S]*?if \(&io != &Serial\)/);
+  assert.match(tls, /gTlsState\.enrollmentState != "bootstrap" \|\| hasPersistentTlsPair\(\)/);
+  assert.match(tls, /LittleFS\.rename\(temporaryPath, kTlsBootstrapTokenPath\)/);
+  assert.match(tls, /request->onDisconnect\(\[\] \{ gTlsRestartRequested\.store\(true\); \}\)/);
+  assert.match(tls, /request->send\(202, "application\/json", response\)/);
+});
+
+test('HTTPS proxy preserves enrollment and bounded DAG error statuses', async () => {
+  const proxy = await read('../../src/https_core.cpp');
+  for (const code of [202, 413, 422, 429]) {
+    assert.match(proxy, new RegExp(`case ${code}: return "${code} `));
+  }
+});
+
+test('topology persists on a fresh filesystem and saved UDP ports are applied at boot', async () => {
+  const [config, main] = await Promise.all([
+    read('../../src/NodeConfig.cpp'),
+    read('../../src/main.cpp'),
+  ]);
+  assert.match(config, /!LittleFS\.exists\("\/ffs"\) && !LittleFS\.mkdir\("\/ffs"\)/);
+  assert.match(config, /written != expected/);
+  assert.match(main, /if \(!saveNodeConfig\(nodeConfig\)\) \{\s+request->send\(500, "application\/json", "\{\\"error\\":\\"failed_to_persist_topology/);
+  assert.match(main, /if \(nodeConfigLoaded\) \{\s+runtimeUdpParentPort = nodeConfig\.parentPort;\s+runtimeUdpSiblingPort = nodeConfig\.siblingPort;/);
+});

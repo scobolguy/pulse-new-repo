@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "generatedAt": "2026-11-02T06:35:17.546Z",
+  "serviceId": "pulse-echo-demo",
+  "runtimeUnit": {
+    "kind": "service",
+    "id": "pulse-echo-demo",
+    "refreshMs": null
+  },
+  "serviceLifecycle": {
+    "version": 1,
+    "requires": [
+      "pulse-echo"
+    ]
+  },
+  "executionModel": "pascalish-service",
+  "sourceLanguage": "pascalish",
+  "sourceMap": {},
+  "symbols": {
+    "systems": [],
+    "queues": [],
+    "services": [],
+    "databases": [],
+    "tables": []
+  },
+  "typeRegistry": {},
+  "exportedFunctions": [],
+  "entries": [
+    {
+      "kind": "router",
+      "id": "pulse-echo-demo-http",
+      "name": "pulse-echo-demo-http",
+      "serviceId": "pulse-echo-demo",
+      "inputQueue": "pulse-echo-demo.in",
+      "description": "",
+      "enabled": true,
+      "outputs": [
+        {
+          "queueName": "pulse-echo-demo.out",
+          "httpVerb": "GET",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;",
+          "transformRule": "output := '';"
+        },
+        {
+          "queueName": "pulse-echo-demo.out",
+          "httpVerb": "POST",
+          "dataTypeIds": [],
+          "dataTypeId": null,
+          "whenRule": "IF upper(httpVerb) = 'POST' THEN output := 1 ELSE output := 0;",
+          "transformRule": "output := '';"
+        }
+      ]
+    }
+  ],
+  "localResources": {
+    "serviceId": "pulse-echo-demo",
+    "mappers": [],
+    "types": [],
+    "libraries": [],
+    "variables": [],
+    "publishable": false
+  },
+  "routers": [
+    {
+      "type": "RouterDecl",
+      "id": "pulse-echo-demo-http",
+      "inputQueue": "pulse-echo-demo.in",
+      "serviceId": "pulse-echo-demo",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "outputs": [
+        {
+          "queueName": "pulse-echo-demo.out",
+          "httpVerb": "GET",
+          "whenRule": "IF upper(httpVerb) = 'GET' THEN output := 1 ELSE output := 0;",
+          "transformRule": "output := '';"
+        },
+        {
+          "queueName": "pulse-echo-demo.out",
+          "httpVerb": "POST",
+          "whenRule": "IF upper(httpVerb) = 'POST' THEN output := 1 ELSE output := 0;",
+          "transformRule": "output := '';"
+        }
+      ]
+    }
+  ],
+  "serviceEndpoints": [
+    {
+      "verb": "GET",
+      "path": "/run",
+      "acceptsType": "",
+      "returnsType": "",
+      "returnExpr": ""
+    },
+    {
+      "verb": "POST",
+      "path": "/run",
+      "acceptsType": "",
+      "returnsType": "",
+      "returnExpr": ""
+    }
+  ],
+  "globals": [],
+  "variableDeclarations": [],
+  "extendableDeclarations": [],
+  "enums": {},
+  "procedures": {},
+  "typeDeclarations": [],
+  "classDeclarations": [],
+  "entryLabel": "MAIN",
+  "libraries": [],
+  "librarianImports": [],
+  "mapperImports": [],
+  "signing": {
+    "algorithm": "hmac-sha256",
+    "keyId": "profile-default",
+    "signature": "c7eafa1f287fcec0357df4d7c3b622573f05b9d4981da26c2d1853a7379eaeef",
+    "signedAt": "2026-11-02T06:35:17.892Z",
+    "pcodeLength": 480,
+    "canonicalForm": "raw-pcode-text-v1"
+  }
+}

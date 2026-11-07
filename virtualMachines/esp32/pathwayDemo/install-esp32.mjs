@@ -7,12 +7,14 @@ import { attachPcodeSignature } from '../aggregator/scripts/pcode-signing.mjs';
 import { uploadFfsFile } from '../aggregator/scripts/esp32-runtime-artifacts.mjs';
 import { nodeRequest } from '../pathway/src/node-adapter.mjs';
 
-export async function installStockService(config, { inventory = false } = {}) {
-  const { origin } = config.esp32;
-  const collectorId = inventory ? config.esp32.inventoryCollectorId : config.esp32.collectorId;
-  if (!/^https?:\/\/[^/]+$/.test(origin) || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(collectorId)) {
-    throw new Error('Invalid ESP32 origin or collector ID');
-  }
+async function liveEspOrigins(config) {
+  const url = config.esp32.nodesUrl ?? 'http://127.0.0.1:4000/api/nodes';
+  const nodes = JSON.parse(await nodeRequest(new URL(url).origin, new URL(url).pathname, { timeoutMs: 10000 }));
+  return nodes.filter(node => node.ip && node.available !== false && node.draining !== true)
+    .map(node => `http://${node.ip}${node.httpPort && node.httpPort !== 80 ? `:${node.httpPort}` : ''}`);
+}
+
+async function checkNode(origin, collectorId, inventory) {
   const status = JSON.parse(await nodeRequest(origin, '/pmachine/service_host/status', { timeoutMs: 10000 }));
   if (status.busy) throw new Error('ESP32 hosted worker is busy; no changes made');
   if (status.hostImageResident !== true || status.hostProcedureLocals !== true) {
@@ -28,6 +30,23 @@ export async function installStockService(config, { inventory = false } = {}) {
   if (services.length >= (status.serviceCapacity ?? 1)) {
     throw new Error('ESP32 has no free hosted-service slot; existing services were not changed');
   }
+}
+
+export async function installStockService(config, { inventory = false } = {}) {
+  const collectorId = inventory ? config.esp32.inventoryCollectorId : config.esp32.collectorId;
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(collectorId)) throw new Error('Invalid collector ID');
+  // esp32.origin pins one node; "any" (the default) uses any live, suitable ESP32 node.
+  const pinned = config.esp32.origin && config.esp32.origin !== 'any' ? [config.esp32.origin] : null;
+  const candidates = pinned ?? await liveEspOrigins(config);
+  let origin;
+  const failures = [];
+  for (const candidate of candidates) {
+    if (!/^https?:\/\/[^/]+$/.test(candidate)) throw new Error('Invalid ESP32 origin');
+    try { await checkNode(candidate, collectorId, inventory); origin = candidate; break; }
+    catch (error) { failures.push(`${candidate}: ${error.message}`); }
+  }
+  if (!origin) throw new Error(`No live ESP32 node can host the service; no changes made. ${failures.join('; ')}`);
+  console.log(`Installing on ${origin}`);
   const artifacts = await buildArtifacts(config);
   const uploads = [];
   for (const [label, artifact] of [['service', artifacts[inventory ? 'inventory-native-server' : 'stock-service']], ['daemon', artifacts['maintenance-daemon']]]) {

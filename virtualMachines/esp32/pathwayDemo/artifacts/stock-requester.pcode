@@ -1,0 +1,29 @@
+PUSH_STR "WIDGET          "
+STORE ITEM-NAME
+PUSH_STR "                                                                                                "
+STORE STOCK-REPLY
+PUSH_STR "ITEM-NAME"
+LOAD ITEM-NAME
+CALL_EXT screen.display 2
+STORE __discard
+PUSH_STR "STOCK-REPLY"
+LOAD STOCK-REPLY
+CALL_EXT screen.display 2
+STORE __discard
+PUSH_STR "ITEM-NAME"
+CALL_EXT screen.accept 1
+STORE ITEM-NAME
+PUSH_STR "inventory-stock"
+LOAD ITEM-NAME
+PUSH_INT 0
+CALL_EXT pathway.send 3
+STORE STOCK-REPLY
+PUSH_STR "ITEM-NAME"
+LOAD ITEM-NAME
+CALL_EXT screen.display 2
+STORE __discard
+PUSH_STR "STOCK-REPLY"
+LOAD STOCK-REPLY
+CALL_EXT screen.display 2
+STORE __discard
+HALT

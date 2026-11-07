@@ -187,9 +187,13 @@ public:
         JsonDocument doc;
         return jsonRequest(base + "/ffs/stat?path=" + encode(root + path), doc);
     }
-    bool rename(const char*, const char*) override {
-        Serial.println("[FFS] Remote rename is unsupported");
-        return false;
+    bool rename(const char* source, const char* destination) override {
+        JsonDocument body, response;
+        body["source"] = root + source;
+        body["destination"] = root + destination;
+        String encoded;
+        serializeJson(body, encoded);
+        return jsonRequest(base + "/ffs/replace", response, encoded.c_str());
     }
     bool remove(const char* path) override {
         if (String(path) == "/") return false;

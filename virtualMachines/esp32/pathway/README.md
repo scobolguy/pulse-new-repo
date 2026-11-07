@@ -54,6 +54,17 @@ artifact with screen input/output bindings and an injected server-class
 sender. `createPathwayHttpServer()` supplies the small browser host.
 There is deliberately no unauthenticated remote deployment/configuration API.
 
+Requesters now run as virtual programs on a shared
+[JavaScript pmachine scheduler](../pmachines/javascript/README.md#virtual-program-scheduling).
+An asynchronous `SEND` parks the requesting program and frees its execution
+slot for other work; the correlated reply resumes it without repeating `SEND`.
+`runRequester(..., { scheduler, signal })` and
+`createPathwayHttpServer(..., { scheduler })` accept an explicit shared
+`PMachineScheduler`. The HTTP `/api/status` response includes its `pmachine`
+diagnostics. Default requesters use one slot with at most 64 live contexts.
+Suspended state currently remains in memory; persistent FFS checkpoints and
+restart recovery are not implemented.
+
 ## Durable inventory requester/server
 
 Inventory uses **Microsoft SQL Server only**, with the aggregator's installed
@@ -88,12 +99,25 @@ entirely in formally parsed COBOLish. Its entry point is:
 
 ```cobol
 PROCEDURE DIVISION.
-    PERFORM HANDLE-REQUEST
+    PERFORM PARSE-COMMAND
+    PERFORM DISPATCH-COMMAND
+    PERFORM FINISH-REPLY
     STOP RUN.
 ```
 
-Its paragraphs receive the command, tokenize and validate it, apply inventory
-rules, format the reply and exchange bounded authenticated row snapshots/writes.
+`COMMAND-PARSING` receives, tokenizes and validates the command.
+It validates printable ASCII and normalizes case before using
+`UNSTRING ... DELIMITED BY ALL SPACE`, `WITH POINTER`, `TALLYING`, and
+`ON OVERFLOW` to split at most four words. Raw argument fields retain full
+length until validation, so long identifiers cannot be silently truncated.
+Reply text is assembled with `STRING`; JSON stays on the typed JSON bindings
+so quoting and escaping remain correct.
+`COMMAND-DISPATCH` reads the ledger/snapshot, applies inventory rules and commits
+bounded authenticated row writes. `REPLY-HANDLING` returns saved replies and
+errors; it also contains the shared number-formatting helper.
+The source uses standard fixed-format Areas A/B and column-7 literal
+continuations, with no source text past column 72. Both inventory builds
+explicitly compile with `sourceFormat: 'fixed'`.
 There is no Pascalish business library or `host.inventory_apply` in this build.
 Native execution and JS recovery use identical P-code.
 The COBOLish server extracts the stable request ID from the incoming JSON envelope.

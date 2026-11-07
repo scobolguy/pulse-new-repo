@@ -1,0 +1,9 @@
+# Auto-generated from ANTLR Pascalish grammar
+JMP MAIN
+MAIN:
+PUSH_STR "nodes"
+CALL_EXT host.table_expire 1
+STORE __discard
+PUSH_INT 0
+STORE __discard
+HALT

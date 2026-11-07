@@ -2,7 +2,9 @@
 #include "assemblerish_hal.h"
 #include "assemblerish_trigger.h"
 #include <Arduino.h>
+#if !defined(PULSE_LEAN_PMACHINE)
 #include <DHT.h>
+#endif
 #include <driver/gpio.h>
 #include <esp_task_wdt.h>
 #include <freertos/queue.h>
@@ -17,7 +19,9 @@ struct Device {
     std::string name, kind, pull;
     int pin = -1, channel = 0, hz = 1000, bits = 8, initial = 0;
     bool activeLow = false;
+#if !defined(PULSE_LEAN_PMACHINE)
     std::unique_ptr<DHT> sensor;
+#endif
 };
 struct Handler {
     std::string id, target, triggerDevice, edge;
@@ -116,6 +120,9 @@ class HardwareHandlers {
             ledcWrite(item->channel, args[1].integer);
             result.integer = 1;
         } else if (name == "device.hal_dht_read" && item->kind == "dht11") {
+#if defined(PULSE_LEAN_PMACHINE)
+            return invalid("DHT11 is disabled in this firmware profile");
+#else
             if (sampleAttempted) return invalid("DHT11 already sampled in this invocation");
             sampleAttempted = true;
             const float t = item->sensor->readTemperature(), h = item->sensor->readHumidity();
@@ -124,6 +131,7 @@ class HardwareHandlers {
             humidity = sampled ? static_cast<int>(std::lround(h * 100)) : 0;
             result.integer = sampled ? 1 : 0;
             if (!sampled) Serial.println("[ASSEMBLERISH] DHT11 sample failed; event valid=0");
+#endif
         } else return invalid("HAL operation is not permitted for this device");
         return true;
     }
@@ -259,7 +267,10 @@ public:
                 }
                 ledcAttachPin(item.pin, item.channel);
                 ledcWrite(item.channel, item.initial);
-            } else item.sensor->begin();
+            }
+#if !defined(PULSE_LEAN_PMACHINE)
+            else item.sensor->begin();
+#endif
         }
         if (!ok) release();
         else {
@@ -382,10 +393,14 @@ bool installAssemblerish(const std::string& pcode, JsonObjectConst config, JsonA
                 pwmTimers[item.channel / 2] = timing;
             }
         } else if (item.kind == "dht11") {
+#if defined(PULSE_LEAN_PMACHINE)
+            return fail("DHT11 is disabled in this firmware profile");
+#else
             if (dht || !GPIO_IS_VALID_OUTPUT_GPIO(item.pin)) return fail("Only one output-capable DHT11 pin is supported");
             dht = true;
             item.sensor.reset(new (std::nothrow) DHT(item.pin, DHT11));
             if (!item.sensor) return fail("Unable to allocate DHT11 driver");
+#endif
         } else return fail("Unknown device kind");
         next->devices.push_back(std::move(item));
     }

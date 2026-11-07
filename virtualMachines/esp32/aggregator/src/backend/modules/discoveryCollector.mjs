@@ -58,7 +58,10 @@ export function recordNodeAnnouncement(discoveredNodes, announcement, now = Date
       hardware: String(announcement.hardware || previous.details?.hardware || 'ESP32'),
       runtime: String(announcement.runtime || previous.details?.runtime || 'pmachine'),
       services: announcement.services,
-      capabilities: Array.isArray(announcement.capabilities) ? announcement.capabilities : previous.details?.capabilities || []
+      capabilities: Array.isArray(announcement.capabilities)
+        ? announcement.capabilities
+        : previous.details?.capabilities || [],
+      dagWorker: announcement.dagWorker || announcement.details?.dagWorker || previous.details?.dagWorker || null
     },
     raw: JSON.stringify(announcement)
   };

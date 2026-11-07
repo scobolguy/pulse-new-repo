@@ -77,6 +77,15 @@ bool sendNodeBeaconAnnouncement(
     announceDoc["beaconState"] = state.nodeBeaconAcknowledged ? "steady" : "rapid";
     announceDoc["ip"] = localIp;
     announceDoc["status"] = "here";
+    announceDoc["available"] = true;
+    announceDoc["draining"] = false;
+#if defined(ESP32) && defined(ENABLE_PMACHINE) && !defined(DISABLE_PMACHINE_ROUTES)
+    JsonArray capabilities = announceDoc["capabilities"].to<JsonArray>();
+    capabilities.add("pascalish-dag-v1");
+    JsonObject dagWorker = announceDoc["dagWorker"].to<JsonObject>();
+    dagWorker["protocol"] = "pascalish-dag-v1";
+    dagWorker["maxConcurrentTasks"] = 1;
+#endif
     announceDoc["deviceRole"] = deviceRole;
     announceDoc["firmwareBuildStamp"] = firmwareBuildStamp;
     announceDoc["httpPort"] = 80;

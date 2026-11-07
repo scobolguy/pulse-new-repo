@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "hostBindingsVersion": 1,
+  "targets": [
+    "js",
+    "esp32"
+  ],
+  "runtimeUnit": {
+    "kind": "service",
+    "id": "inventory-stock",
+    "refreshMs": null
+  },
+  "hostCapabilitiesVersion": 1,
+  "requiredHostCapabilities": [],
+  "serviceEndpoints": [
+    {
+      "verb": "POST",
+      "path": "/api/pathway/inventory-stock"
+    },
+    {
+      "verb": "POST",
+      "path": "/api/inventory/stock"
+    }
+  ],
+  "procedures": {
+    "PROC_STOCK": {
+      "params": [
+        "item"
+      ],
+      "locals": [
+        "requestBytes",
+        "response",
+        "result",
+        "Result",
+        "__tmp1",
+        "__tmp2",
+        "__tmp3"
+      ]
+    },
+    "PROC_PATHWAYSTOCK": {
+      "params": [],
+      "locals": [
+        "result",
+        "Result",
+        "__tmp4",
+        "__tmp5",
+        "__tmp6"
+      ]
+    },
+    "PROC_APISTOCK": {
+      "params": [],
+      "locals": [
+        "Result",
+        "__tmp7",
+        "__tmp8"
+      ]
+    },
+    "PROC__SERVICE_ENDPOINT_0": {
+      "params": [],
+      "locals": [
+        "Result",
+        "__tmp9",
+        "__tmp10"
+      ]
+    },
+    "PROC__SERVICE_ENDPOINT_1": {
+      "params": [],
+      "locals": [
+        "Result",
+        "__tmp11",
+        "__tmp12"
+      ]
+    }
+  },
+  "distributedTables": [],
+  "hostCaches": []
+}

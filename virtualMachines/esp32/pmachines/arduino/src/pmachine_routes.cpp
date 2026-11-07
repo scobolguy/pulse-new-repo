@@ -7,6 +7,87 @@
 #include "hosted_http_response.h"
 #include <new>
 #include <AsyncJson.h>
+#include <atomic>
+#include <cstring>
+#include <strings.h>
+
+namespace {
+
+std::atomic_flag dagWorkerBusy = ATOMIC_FLAG_INIT;
+
+int32_t dagWrapInt32(int64_t value) {
+    int64_t wrapped = value % 4294967296LL;
+    if (wrapped < 0) wrapped += 4294967296LL;
+    if (wrapped >= 2147483648LL) wrapped -= 4294967296LL;
+    return static_cast<int32_t>(wrapped);
+}
+
+bool evaluateDagExpression(
+        JsonVariantConst expression, JsonObjectConst inputs, uint8_t depth,
+        uint16_t& budget, int32_t& result, String& error) {
+    if (!expression.is<JsonObjectConst>() || depth > 16 || budget >= 64) {
+        error = "DAG expression exceeds supported structure";
+        return false;
+    }
+    ++budget;
+    const char* type = expression["type"] | "";
+    if (strcmp(type, "NumberLiteral") == 0) {
+        if (!expression["value"].is<int>()) { error = "Invalid integer literal"; return false; }
+        result = expression["value"].as<int>();
+        return true;
+    }
+    if (strcmp(type, "BooleanLiteral") == 0) {
+        if (!expression["value"].is<bool>()) { error = "Invalid Boolean literal"; return false; }
+        result = expression["value"].as<bool>() ? 1 : 0;
+        return true;
+    }
+    if (strcmp(type, "Identifier") == 0) {
+        const char* name = expression["name"] | "";
+        if (!*name || strlen(name) > 64) { error = "Invalid DAG input name"; return false; }
+        for (JsonPairConst item : inputs) {
+            if (strcasecmp(item.key().c_str(), name) != 0) continue;
+            if (!item.value().is<int>()) { error = "DAG inputs must be integers"; return false; }
+            result = item.value().as<int>();
+            return true;
+        }
+        error = "Missing DAG input";
+        return false;
+    }
+    if (strcmp(type, "Unary") == 0) {
+        int32_t operand = 0;
+        if (!evaluateDagExpression(expression["expr"], inputs, depth + 1, budget, operand, error)) return false;
+        const char* op = expression["op"] | "";
+        if (strcmp(op, "-") == 0) result = dagWrapInt32(-static_cast<int64_t>(operand));
+        else if (strcasecmp(op, "not") == 0) result = operand == 0 ? 1 : 0;
+        else { error = "Unsupported DAG unary operator"; return false; }
+        return true;
+    }
+    if (strcmp(type, "Binary") == 0) {
+        int32_t left = 0, right = 0;
+        if (!evaluateDagExpression(expression["left"], inputs, depth + 1, budget, left, error)
+            || !evaluateDagExpression(expression["right"], inputs, depth + 1, budget, right, error)) return false;
+        const char* op = expression["op"] | "";
+        if (strcmp(op, "+") == 0) result = dagWrapInt32(static_cast<int64_t>(left) + right);
+        else if (strcmp(op, "-") == 0) result = dagWrapInt32(static_cast<int64_t>(left) - right);
+        else if (strcmp(op, "*") == 0) result = dagWrapInt32(static_cast<int64_t>(left) * right);
+        else if (strcmp(op, "/") == 0) result = right == 0 ? 0
+            : dagWrapInt32(static_cast<int64_t>(left) / right);
+        else if (strcmp(op, "=") == 0) result = left == right ? 1 : 0;
+        else if (strcmp(op, "<>") == 0) result = left != right ? 1 : 0;
+        else if (strcmp(op, "<") == 0) result = left < right ? 1 : 0;
+        else if (strcmp(op, "<=") == 0) result = left <= right ? 1 : 0;
+        else if (strcmp(op, ">") == 0) result = left > right ? 1 : 0;
+        else if (strcmp(op, ">=") == 0) result = left >= right ? 1 : 0;
+        else if (strcasecmp(op, "and") == 0) result = left != 0 && right != 0 ? 1 : 0;
+        else if (strcasecmp(op, "or") == 0) result = left != 0 || right != 0 ? 1 : 0;
+        else { error = "Unsupported DAG binary operator"; return false; }
+        return true;
+    }
+    error = "Unsupported DAG expression type";
+    return false;
+}
+
+} // namespace
 
 class HostedServiceWebHandler : public AsyncWebHandler {
     pmachine::ServiceHost& host;
@@ -17,15 +98,26 @@ class HostedServiceWebHandler : public AsyncWebHandler {
         char* text() { return reinterpret_cast<char*>(this + 1); }
     };
 public:
+    static const char* methodName(WebRequestMethodComposite method) {
+        switch (method) {
+        case HTTP_GET: return "GET";
+        case HTTP_POST: return "POST";
+        case HTTP_PUT: return "PUT";
+        case HTTP_PATCH: return "PATCH";
+        case HTTP_DELETE: return "DELETE";
+        case HTTP_HEAD: return "HEAD";
+        case HTTP_OPTIONS: return "OPTIONS";
+        default: return nullptr;
+        }
+    }
     HostedServiceWebHandler(pmachine::ServiceHost& host,
         std::function<void(AsyncWebServerRequest*, const std::string&)> serve)
         : host(host), serve(std::move(serve)) {}
     bool canHandle(AsyncWebServerRequest* request) override {
-        if (request->method() != HTTP_GET && request->method() != HTTP_POST) return false;
-        if (!host.handles(request->method() == HTTP_GET ? "GET" : "POST", request->url().c_str())) return false;
+        const char* method = methodName(request->method());
+        if (!method || !host.handles(method, request->url().c_str())) return false;
         // AsyncWebServer discards unregistered headers after selecting a handler.
-        request->addInterestingHeader("x-pulse-transaction-id");
-        request->addInterestingHeader("x-pulse-ingress-aggregator-id");
+        request->addInterestingHeader("ANY");
         return true;
     }
     void handleBody(AsyncWebServerRequest* request, uint8_t* data, size_t len,
@@ -44,7 +136,8 @@ public:
         body->received += len;
     }
     void handleRequest(AsyncWebServerRequest* request) override {
-        if (request->method() == HTTP_GET) { serve(request, ""); return; }
+        if (request->method() == HTTP_GET
+            || (request->method() != HTTP_POST && request->contentLength() == 0)) { serve(request, ""); return; }
         if (request->contentLength() > 2048) { request->send(413, "text/plain", "Hosted body too large"); return; }
         auto* body = static_cast<Body*>(request->_tempObject);
         if (!body) {
@@ -517,7 +610,10 @@ bool computeHmacSha256Hex(const String& key, const String& text, String& outHex)
 #if defined(ESP32)
     unsigned char digest[32] = {0};
     const mbedtls_md_info_t* mdInfo = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-    if (mdInfo == nullptr) return false;
+    if (mdInfo == nullptr) {
+        Serial.println("[PMACHINE] HMAC-SHA256 implementation is unavailable");
+        return false;
+    }
     int rc = mbedtls_md_hmac(
         mdInfo,
         reinterpret_cast<const unsigned char*>(key.c_str()),
@@ -526,7 +622,10 @@ bool computeHmacSha256Hex(const String& key, const String& text, String& outHex)
         text.length(),
         digest
     );
-    if (rc != 0) return false;
+    if (rc != 0) {
+        Serial.printf("[PMACHINE] HMAC-SHA256 failed: rc=%d freeHeap=%u\n", rc, ESP.getFreeHeap());
+        return false;
+    }
 
     char hexBuf[65];
     for (size_t i = 0; i < 32; ++i) {
@@ -560,7 +659,7 @@ bool computeHmacSha256Hex(const String& key, const String& text, String& outHex)
 #endif
 }
 
-bool verifySignedPcode(const String& pcodeText, const JsonDocument& programMapDoc, String& errorOut) {
+bool verifySignedPcode(const String& pcodeText, JsonVariantConst programMapDoc, String& errorOut) {
     if (!programMapDoc.is<JsonObjectConst>()) {
         errorOut = "Program map must be a JSON object";
         return false;
@@ -939,7 +1038,7 @@ int findPcodeLabelIndex(const String& pcodeText, const String& wantedLabel) {
 }
 
 bool loadProgramMapMappingsFromDoc(
-    const JsonDocument& doc,
+    JsonVariantConst doc,
     std::vector<pmachine::MappingDef>& mappingsOut,
     std::map<std::string, std::vector<std::string>>* procedureSignaturesOut,
     String& errorOut,
@@ -1050,6 +1149,7 @@ void addRunOutputsToJson(
             out["runtimeError"] = orchIt->second.c_str();
         }
     }
+    out["ok"] = !machine.didLastRunHitStepLimit() && !out["runtimeError"].is<const char*>();
 
     const auto& routed = machine.getRoutingDeliveries();
     JsonArray deliveries = out["deliveries"].to<JsonArray>();
@@ -1349,7 +1449,7 @@ bool jsonArrayHasAnyEntries(JsonVariantConst variant) {
     return !arr.isNull() && arr.size() > 0;
 }
 
-void parseProgramMapMetadata(const JsonDocument& doc, ProgramMapMetadata& metadata) {
+void parseProgramMapMetadata(JsonVariantConst doc, ProgramMapMetadata& metadata) {
     metadata.runtimeKind = "service";
     metadata.runtimeId = "aggregator-router-service";
     metadata.runtimeRefreshMs = 0;
@@ -2226,7 +2326,15 @@ bool executeNamedDevice(
 ) {
     const String devicePath = String("/devices/") + deviceId + ".json";
     String metadataText;
-    if (!readTextFromPath(devicePath, ffs, metadataText)) {
+    bool metadataFound = false;
+    if (ensureLittleFsReady()) {
+        File localMetadata = LittleFS.open(devicePath, "r");
+        if (localMetadata) {
+            metadataText = localMetadata.readString();
+            metadataFound = true;
+        }
+    }
+    if (!metadataFound && !readTextFromPath(devicePath, ffs, metadataText)) {
         statusCode = 404;
         errorOut = "device is not registered";
         return false;
@@ -2259,13 +2367,26 @@ bool executeNamedDevice(
     }
     String action = String(bodyDoc["action"] | query["action"] | "");
     String member = String(bodyDoc["state"] | query["state"] | "power");
-    String value = String(bodyDoc["value"] | query["value"] | "");
+    const JsonVariantConst rawValue = bodyDoc["value"].isNull()
+        ? query["value"] : bodyDoc["value"].as<JsonVariantConst>();
+    if (rawValue.is<JsonObjectConst>() || rawValue.is<JsonArrayConst>()) {
+        statusCode = 400;
+        errorOut = "device value must be a scalar";
+        return false;
+    }
+    String value = rawValue.isNull() ? String("") : rawValue.as<String>();
     action.trim();
     member.trim();
-    value.trim();
+    if (member == "power") value.trim();
     action.toLowerCase();
 
-    bool useStateWrite = action == "set_output" || action.length() == 0;
+    const bool useStateRead = httpVerb == "GET";
+    if (useStateRead && (action.length() > 0 || value.length() > 0)) {
+        statusCode = 400;
+        errorOut = "GET reads state; use POST to change the device";
+        return false;
+    }
+    bool useStateWrite = !useStateRead && (action == "set_output" || action.length() == 0);
     if (useStateWrite) {
         if (action == "set_output" && member == "power") member = "power";
         if (value.length() == 0 && action.length() == 0) {
@@ -2273,8 +2394,10 @@ bool executeNamedDevice(
             errorOut = "device action or state value is required";
             return false;
         }
-        if (value.equalsIgnoreCase("1") || value.equalsIgnoreCase("high") || value.equalsIgnoreCase("true")) value = "on";
-        if (value.equalsIgnoreCase("0") || value.equalsIgnoreCase("low") || value.equalsIgnoreCase("false")) value = "off";
+        if (member == "power") {
+            if (value.equalsIgnoreCase("1") || value.equalsIgnoreCase("high") || value.equalsIgnoreCase("true")) value = "on";
+            if (value.equalsIgnoreCase("0") || value.equalsIgnoreCase("low") || value.equalsIgnoreCase("false")) value = "off";
+        }
     } else if (action == "on" || action == "turnon" || action == "raise") {
         action = "turnOn";
     } else if (action == "off" || action == "turnoff" || action == "lower") {
@@ -2302,10 +2425,10 @@ bool executeNamedDevice(
     }
 
     pmachine::FsmCallRequest operationRequest;
-    operationRequest.operation = useStateWrite ? "SET" : "EVENT";
+    operationRequest.operation = useStateRead ? "OBSERVE" : (useStateWrite ? "SET" : "EVENT");
     operationRequest.kind = "device";
     operationRequest.handle = openResult.handle;
-    operationRequest.member = useStateWrite ? std::string(member.c_str()) : std::string(action.c_str());
+    operationRequest.member = (useStateWrite || useStateRead) ? std::string(member.c_str()) : std::string(action.c_str());
     operationRequest.value = std::string(value.c_str());
     pmachine::FsmCallResult operationResult;
     const bool operationOk = pmachineInvokeFsm(operationRequest, operationResult, runtimeError, nullptr);
@@ -2327,8 +2450,8 @@ bool executeNamedDevice(
     responseDoc["ok"] = true;
     responseDoc["deviceName"] = registeredName;
     responseDoc["method"] = httpVerb;
-    responseDoc[useStateWrite ? "state" : "action"] = useStateWrite ? member : action;
-    responseDoc["value"] = useStateWrite ? value : String(operationResult.value.c_str());
+    responseDoc[(useStateWrite || useStateRead) ? "state" : "action"] = (useStateWrite || useStateRead) ? member : action;
+    responseDoc["value"] = String(operationResult.value.c_str());
     statusCode = 200;
     errorOut = "";
     return true;
@@ -2869,7 +2992,7 @@ bool loadProgramMapMappings(
 }
 
 bool loadProgramMapMappingsFromDoc(
-    const JsonDocument& doc,
+    JsonVariantConst doc,
     std::vector<pmachine::MappingDef>& mappingsOut,
     std::map<std::string, std::vector<std::string>>* procedureSignaturesOut,
     String& errorOut,
@@ -2918,7 +3041,7 @@ bool loadProgramMapMappingsFromDoc(
 
     mappingsOut.clear();
     JsonArrayConst entries;
-    // Const documents yield const variants, so the Const type checks are required here.
+    // Read-only map views require Const type checks.
     if (doc.is<JsonArrayConst>()) {
         entries = doc.as<JsonArrayConst>();
     } else if (doc.is<JsonObjectConst>() && doc["entries"].is<JsonArrayConst>()) {
@@ -4569,7 +4692,9 @@ void registerPMachineRoutes(
     auto serveHosted = [](AsyncWebServerRequest* request, const std::string& body) {
         std::string response;
         int status;
-        const std::string method = request->method() == HTTP_POST ? "POST" : "GET";
+        const char* methodName = HostedServiceWebHandler::methodName(request->method());
+        if (!methodName) { request->send(405, "text/plain", "Unsupported HTTP method"); return; }
+        const std::string method = methodName;
         JsonDocument query;
         query.to<JsonObject>();
         for (size_t index = 0; index < request->params(); ++index) {
@@ -4579,6 +4704,21 @@ void registerPMachineRoutes(
         }
         std::string queryJson;
         serializeJson(query, queryJson);
+        JsonDocument headers;
+        headers.to<JsonObject>();
+        if (request->headers() > 32) { request->send(413, "text/plain", "Too many hosted request headers"); return; }
+        for (size_t index = 0; index < request->headers(); ++index) {
+            const AsyncWebHeader* header = request->getHeader(index);
+            if (!header) continue;
+            String name = header->name();
+            name.toLowerCase();
+            headers[name] = header->value();
+        }
+        std::string headersJson;
+        serializeJson(headers, headersJson);
+        if (headers.overflowed() || headersJson.size() > 2048) {
+            request->send(413, "text/plain", "Hosted request headers too large"); return;
+        }
         std::string transactionId;
         if (request->hasHeader("x-pulse-transaction-id")) {
             const AsyncWebHeader* header = request->getHeader("x-pulse-transaction-id");
@@ -4591,7 +4731,7 @@ void registerPMachineRoutes(
         }
         const auto event = serviceHost.enqueue(method, request->url().c_str(), body,
             request->client()->remoteIP().toString().c_str(), queryJson, status, response,
-            transactionId, ingressAggregatorId);
+            transactionId, ingressAggregatorId, headersJson);
         if (!event) {
             Serial.printf("[SERVICE-HOST] HTTP ingress rejected: %s\n", response.c_str());
             request->send(status, "text/plain", response.c_str()); return;
@@ -4631,6 +4771,55 @@ void registerPMachineRoutes(
     kasaActionHandler->setMaxContentLength(2048);
     server.addHandler(kasaActionHandler);
     server.addHandler(new HostedServiceWebHandler(serviceHost, serveHosted));
+
+    auto* dagWorkerHandler = new AsyncCallbackJsonWebHandler("/pmachine/dag/execute",
+        [](AsyncWebServerRequest* request, JsonVariant& json) {
+            if (!json.is<JsonObject>()) {
+                request->send(400, "application/json", "{\"error\":\"DAG task must be a JSON object\"}");
+                return;
+            }
+            JsonObjectConst body = json.as<JsonObjectConst>();
+            const char* taskId = body["taskId"] | "";
+            JsonObjectConst expression = body["expression"].as<JsonObjectConst>();
+            JsonObjectConst inputs = body["inputs"].as<JsonObjectConst>();
+            JsonArrayConst effects = body["effects"].as<JsonArrayConst>();
+            if (!body["version"].is<int>() || body["version"].as<int>() != 1
+                || !*taskId || strlen(taskId) > 64
+                || strcmp(body["effect"] | "", "pure") != 0
+                || !effects || effects.size() != 0 || !expression || !inputs
+                || inputs.size() > 16) {
+                request->send(400, "application/json", "{\"error\":\"Unsupported or unsafe DAG task\"}");
+                return;
+            }
+            if (dagWorkerBusy.test_and_set(std::memory_order_acquire)) {
+                request->send(503, "application/json", "{\"error\":\"DAG worker is busy\"}");
+                return;
+            }
+            struct BusyGuard {
+                ~BusyGuard() { dagWorkerBusy.clear(std::memory_order_release); }
+            } busyGuard;
+
+            uint16_t budget = 0;
+            int32_t value = 0;
+            String error;
+            if (!evaluateDagExpression(expression, inputs, 0, budget, value, error)) {
+                JsonDocument response;
+                response["error"] = error;
+                String text;
+                serializeJson(response, text);
+                request->send(422, "application/json", text);
+                return;
+            }
+            JsonDocument response;
+            response["taskId"] = taskId;
+            response["value"] = value;
+            String text;
+            serializeJson(response, text);
+            request->send(200, "application/json", text);
+        });
+    dagWorkerHandler->setMethod(HTTP_POST);
+    dagWorkerHandler->setMaxContentLength(2048);
+    server.addHandler(dagWorkerHandler);
 
     const bool asyncWorkerReady = startAsyncPcodeWorker(
         asyncWorkerMachine != nullptr ? *asyncWorkerMachine : machine,
@@ -6789,8 +6978,7 @@ void registerPMachineRoutes(
 
             if (bodyDoc["programMap"].is<JsonObject>() || bodyDoc["programMap"].is<JsonArray>()) {
                 String mappingError;
-                JsonDocument inlineMap;
-                inlineMap.set(bodyDoc["programMap"]);
+                const JsonVariantConst inlineMap = bodyDoc["programMap"].as<JsonVariantConst>();
                 String verifyError;
                 if (!verifySignedPcode(pcode, inlineMap, verifyError)) {
                     String response = String("{\"error\":\"") + verifyError + "\"}";
@@ -6871,10 +7059,25 @@ void registerPMachineRoutes(
                 request->send(507, "application/json", "{\"error\":\"Unable to create execution output spool\"}");
                 return;
             }
+            struct ExecutionInputs {
+                std::vector<pmachine::PInstruction> instructions;
+                String stdinText;
+                String inputQueue;
+                String message;
+                String programMapPath;
+            };
+            std::shared_ptr<ExecutionInputs> executionInputs(new (std::nothrow) ExecutionInputs);
+            if (!executionInputs) {
+                request->send(507, "application/json", "{\"error\":\"Unable to create execution input\"}");
+                return;
+            }
+            executionInputs->instructions = std::move(instructions);
+            executionInputs->stdinText = std::move(stdinText);
+            executionInputs->inputQueue = std::move(inputQueue);
+            executionInputs->message = std::move(message);
+            executionInputs->programMapPath = std::move(programMapPath);
             auto work = new (std::nothrow) std::function<void()>(
-                [response, &machine, instructions = std::move(instructions), stdinText = std::move(stdinText),
-                 uartInput, inputQueue = std::move(inputQueue), message = std::move(message),
-                 programMapPath = std::move(programMapPath), runRouter, instructionCount,
+                [response, &machine, executionInputs, uartInput, runRouter, instructionCount,
                  thunkBindingsApplied, hasProgramMap]() mutable {
             {
                 struct OutputPolicy {
@@ -6884,18 +7087,19 @@ void registerPMachineRoutes(
                     ~OutputPolicy() { machine.setTextOutputHook(previous, context); }
                 } outputPolicy{machine, machine.getTextOutputHook(), machine.getTextOutputContext()};
                 machine.setTextOutputHook(RecordOutputResponse::record, response.get());
-                machine.run(instructions, 0, std::string(stdinText.c_str(), stdinText.length()), uartInput);
+                machine.run(executionInputs->instructions, 0,
+                    std::string(executionInputs->stdinText.c_str(), executionInputs->stdinText.length()), uartInput);
             }
-            decltype(instructions)().swap(instructions);
+            decltype(executionInputs->instructions)().swap(executionInputs->instructions);
 
             JsonDocument out;
-            addRunOutputsToJson(out, machine, "json", inputQueue, message);
+            addRunOutputsToJson(out, machine, "json", executionInputs->inputQueue, executionInputs->message);
             out["runRouter"] = runRouter;
             out["instructionCount"] = static_cast<uint32_t>(instructionCount);
             out["binaryBytes"] = 0;
             out["thunkBindingsApplied"] = static_cast<uint32_t>(thunkBindingsApplied);
             out["hasInlineProgramMap"] = hasProgramMap;
-            out["programMapPath"] = programMapPath;
+            out["programMapPath"] = executionInputs->programMapPath;
 
             response->complete = response->finish(out);
             response->ready.store(true);

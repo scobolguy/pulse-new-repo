@@ -9,6 +9,7 @@ import { attachPcodeSignature } from '../../../virtualMachines/esp32/aggregator/
 import { compileConversionRuleToOps, emitMapperRoutinePcode } from '../../../virtualMachines/esp32/aggregator/scripts/compile-mapping-rule.mjs';
 import { resolveLibrary } from './pascalish-library-registry.mjs';
 import { specializeGenerics } from './specialize-generics.mjs';
+import { buildExecutionDag } from './execution-dag.mjs';
 import {
   SERVICE_HOST_BINDINGS, SERVICE_HOST_BINDINGS_VERSION, SERVICE_HOST_INTERNAL_BINDINGS
 } from '../../../virtualMachines/esp32/pmachines/shared/contracts/service-host-bindings.mjs';
@@ -3848,7 +3849,7 @@ const NATIVE_SERVICE_BINDINGS = new Set([
   'host.number_parse_integer', 'host.raise_error', 'host.text_hash', 'host.text_hash_utf8',
   'host.number_compare', 'host.string_compare', 'host.date_iso', 'host.date_parse', 'host.date_now',
   'host.fs_read_text', 'host.fs_read_text_auto', 'host.fs_write_text', 'host.fs_exists',
-  'host.fs_resolve_relative', 'host.service_submit',
+  'host.fs_resolve_relative', 'host.service_submit', 'host.await_reply',
   'host.bytes_from_text', 'host.bytes_text', 'host.bytes_length', 'host.bytes_get', 'host.bytes_join'
 ]);
 
@@ -3875,7 +3876,8 @@ function advertiseNativeTarget(pcodeText, programMap) {
 }
 
 export function compilePascalishProgramWithAntlr(sourceText, {
-  fileName = '', hostServices = false, deviceBindings = false, nativeTarget = false
+  fileName = '', hostServices = false, deviceBindings = false, nativeTarget = false,
+  includeExecutionDag = false
 } = {}) {
   const { imports: mapperImports, stripped } = extractMapperImports(String(sourceText || ''));
 
@@ -3927,7 +3929,17 @@ export function compilePascalishProgramWithAntlr(sourceText, {
     }
   }
   const linkedLibraries = linkLibraries(ast);
+  if (includeExecutionDag && !['ProgramDecl', 'DaemonDecl'].includes(ast.runtimeUnit?.type)) {
+    throw new Error('[PASCALISH-PROGRAM] Execution DAG metadata currently supports standalone programs and daemons only');
+  }
   const result = new Codegen(ast).build();
+  if (includeExecutionDag) {
+    const declarations = [
+      ...(ast.variables || []),
+      ...(ast.runtimeUnit?.block?.localDecls || [])
+    ];
+    result.executionDag = buildExecutionDag(ast.runtimeUnit?.block, declarations);
+  }
   if (nativeTarget) {
     if (!hostServices) throw new Error('The native target requires hosted service compilation');
     advertiseNativeTarget(result.pcodeText, result.programMap);
@@ -4058,6 +4070,7 @@ function parseArgs(argv) {
     in: './data/hello-world.pas',
     out: '../pcode/pascalish-program.pcode',
     mapOut: '../pcode/pascalish-program.program.json',
+    executionDagOut: null,
     hostServices: false,
     nativeTarget: false
   };
@@ -4067,6 +4080,7 @@ function parseArgs(argv) {
     if (token === '--in') args.in = argv[index + 1];
     if (token === '--out') args.out = argv[index + 1];
     if (token === '--map-out') args.mapOut = argv[index + 1];
+    if (token === '--execution-dag-out') args.executionDagOut = argv[index + 1];
     if (token === '--host-services') args.hostServices = true;
     if (token === '--native-target') {
       args.hostServices = true;
@@ -4082,23 +4096,32 @@ export async function runCli() {
   const inPath = path.resolve(args.in);
   const outPath = path.resolve(args.out);
   const mapOutPath = path.resolve(args.mapOut);
+  const executionDagOutPath = args.executionDagOut ? path.resolve(args.executionDagOut) : null;
 
   const source = await fs.readFile(inPath, 'utf-8');
   const compiled = compilePascalishProgramWithAntlr(source, {
     hostServices: args.hostServices,
-    nativeTarget: args.nativeTarget
+    nativeTarget: args.nativeTarget,
+    includeExecutionDag: Boolean(executionDagOutPath)
   });
   const signedProgramMap = attachPcodeSignature(compiled.programMap, compiled.pcodeText);
 
   await fs.mkdir(path.dirname(outPath), { recursive: true });
   await fs.mkdir(path.dirname(mapOutPath), { recursive: true });
+  if (executionDagOutPath) await fs.mkdir(path.dirname(executionDagOutPath), { recursive: true });
 
   await fs.writeFile(outPath, compiled.pcodeText, 'utf-8');
   await fs.writeFile(mapOutPath, `${JSON.stringify(signedProgramMap, null, 2)}\n`, 'utf-8');
+  if (executionDagOutPath) {
+    await fs.writeFile(executionDagOutPath, `${JSON.stringify(compiled.executionDag, null, 2)}\n`, 'utf-8');
+  }
 
   console.log(`[PASCALISH-PROGRAM] Input: ${path.relative(process.cwd(), inPath)}`);
   console.log(`[PASCALISH-PROGRAM] Output (.pcode): ${path.relative(process.cwd(), outPath)}`);
   console.log(`[PASCALISH-PROGRAM] Output (program map): ${path.relative(process.cwd(), mapOutPath)}`);
+  if (executionDagOutPath) {
+    console.log(`[PASCALISH-PROGRAM] Output (execution DAG): ${path.relative(process.cwd(), executionDagOutPath)}`);
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

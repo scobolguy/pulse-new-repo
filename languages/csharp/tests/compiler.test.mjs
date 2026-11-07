@@ -2,9 +2,58 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs/promises';
 import { compileCsharpToPcode } from '../src/compile-csharp-to-pcode.mjs';
+import { parseCsharp } from '../src/parser.mjs';
 import { executeProgram, loadOpcodeMap, parsePcode } from '../../../virtualMachines/esp32/pmachines/javascript/index.mjs';
 
 const wrap = body => `using System; class Program { static void Main() { ${body} } }`;
+
+test('modern service syntax parses sealed classes, constructors and async Task methods', () => {
+  const program = parseCsharp(`using System;
+sealed class TemperatureService {
+  TemperatureService(ILogger logger) { }
+  [HttpGet("/temperature")]
+  async Task<int> GetTemperatureAsync(CancellationToken cancellationToken) { return 42; }
+}`);
+  assert.equal(program.classes[0].modifiers.has('sealed'), true);
+  assert.equal(program.classes[0].constructors.length, 1);
+  assert.equal(program.classes[0].methods[0].async, true);
+  assert.equal(program.classes[0].methods[0].returnType.name, 'Task');
+  assert.equal(program.classes[0].methods[0].returnType.typeArguments[0].name, 'int');
+  assert.equal(program.classes[0].methods[0].params[0].type.name, 'CancellationToken');
+  assert.equal(program.classes[0].methods[0].attributes[0].name, 'HttpGet');
+  assert.equal(program.classes[0].methods[0].attributes[0].arguments[0].value, '/temperature');
+});
+
+test('modern C# service compiles to the hosted contract and handler entry label', async () => {
+  const source = `using System;
+sealed class TemperatureService {
+  TemperatureService(ILogger logger) { }
+  [HttpGet("/temperature")]
+  async Task<int> GetTemperatureAsync(CancellationToken cancellationToken) { return 42; }
+}`;
+  const artifact = compileCsharpToPcode(source, { fileName: 'TemperatureService.cs', target: 'esp32' });
+  const endpoint = artifact.programMap.serviceEndpoints[0];
+  assert.deepEqual(artifact.programMap.runtimeUnit, {
+    kind: 'service', id: 'TemperatureService', refreshMs: null
+  });
+  assert.deepEqual(artifact.programMap.targets, ['js', 'esp32']);
+  assert.equal(artifact.programMap.hostBindingsVersion, 1);
+  assert.equal(endpoint.entryLabel, artifact.programMap.procedures[endpoint.entryLabel].label);
+  assert.equal(artifact.programMap.capabilities.provider, 'dotnet');
+  assert.deepEqual(artifact.programMap.capabilities.pathway, {
+    discoverable: true, replacement: true
+  });
+  assert.equal(artifact.programMap.capabilities.endpoints[0].invocation, 'service-reference');
+  const mappingsById = new Map();
+  mappingsById.__globals = artifact.programMap.globals;
+  mappingsById.__proceduresByLabel = artifact.programMap.procedures;
+  const result = await executeProgram({
+    instructions: parsePcode(artifact.pcodeText), opcodeMap: await loadOpcodeMap(), mappingsById,
+    queueTypesByName: new Map(), isoTypeIds: new Set(), inputQueue: 'csharp.service',
+    sourceMessage: '', runtimeContext: { startLabel: endpoint.entryLabel, maxSteps: 10000 }
+  });
+  assert.equal(result.error ?? null, null);
+});
 async function run(source, options = {}) {
   const artifact = compileCsharpToPcode(source, { fileName: 'test.cs', ...options });
   const mappingsById = new Map();
@@ -187,7 +236,31 @@ test('division errors are real runtime faults, never zero or wrapped success res
   await assert.rejects(run(wrap('int x = 0; Console.WriteLine(1 / x);')), /System.DivideByZeroException/);
   await assert.rejects(run(wrap('int x = 0; Console.WriteLine(1 % x);')), /System.DivideByZeroException/);
   await assert.rejects(run(wrap('int x = -2147483648, y = -1; Console.WriteLine(x / y);')), /System.OverflowException/);
-  assert.deepEqual((await run(wrap('int x = -2147483648, y = -1; Console.WriteLine(x % y);'))).result.stdout, ['0']);
+  await assert.rejects(run(wrap('int x = -2147483648, y = -1; Console.WriteLine(x % y);')), /System.OverflowException/);
+});
+
+test('ANTLR distinguishes generic calls from comparisons without changing precedence', async () => {
+  const { result } = await run(`class P {
+    static T Id<T>(T x) { return x; }
+    static void Main() {
+      int a = 1, b = 2, c = 3;
+      System.Console.WriteLine(a < b && b < c);
+      System.Console.WriteLine(Id<int>(a) < Id(b));
+      System.Console.WriteLine(Id(Id<int>(3)) + 4 * 5);
+    }
+  }`);
+  assert.deepEqual(result.stdout, ['True', 'True', '23']);
+});
+
+test('ANTLR rejects recovered syntax and preserves lexical error locations', () => {
+  for (const [source, pattern] of [
+    ['class P {\nstatic void Main() {\nint x = ;\n}\n}', /invalid\.cs:3:9:.*found ";"/],
+    ['class P {\nstatic void Main() {\nint x = 1\n}\n}', /invalid\.cs:4:1:.*Expected ';'/],
+    ['class P {\nstatic void Main() {\nstring x = "bad\n";\n}\n}', /invalid\.cs:3:12: Newline in regular string literal/],
+    ['class P {\nstatic void Main() {\n/* missing', /invalid\.cs:3:1: Unterminated block comment/]
+  ]) {
+    assert.throws(() => compileCsharpToPcode(source, { fileName: 'invalid.cs' }), pattern);
+  }
 });
 
 const invalid = [
@@ -214,9 +287,9 @@ const invalid = [
   [wrap('int n = 2147483648;'), /Int32 range/],
   [wrap('int n = 2147483647 + 1;'), /Constant Int32 expression overflows/],
   [wrap('int n = 1 / 0;'), /Constant division by zero/],
-  [wrap('double n = 1;'), /static|Supported|Unsupported|expression/],
+  [wrap('double n = 1;'), /found "double"/],
   [wrap('int[] n;'), /identifier/],
-  [wrap('int n = new Thing();'), /Unsupported/],
+  [wrap('int n = new Thing();'), /found "new"/],
   [wrap('int n = 1; n + 1;'), /permitted as statements/],
   [wrap('if (true) int x = 1;'), /requires a block/],
   [wrap('/* unterminated'), /Unterminated block comment/],
@@ -233,7 +306,7 @@ const invalid = [
   ['class P { static T Id<T>(T x) { return x; } static void Main() { Id<int>(); } }', /requires 1 argument/],
   ['class P { static T Id<T>(T x) where T : class { return x; } static void Main() {} }', /Expected/],
   ['class Box<T> {}', /Expected/],
-  ['class P { static void Main() {} static void Main(int n) {} }', /overloading/],
+  ['class P { static void Main() {} static int Main() { return 1; } }', /Duplicate method signature/],
   ['class A { static int F() { return 1; } } class P { static void Main() { A.F(); } }', /inaccessible/]
 ];
 for (const [index, [source, pattern]] of invalid.entries()) {

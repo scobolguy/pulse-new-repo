@@ -6,11 +6,13 @@
   "engines": { "node": ">=22" },
   "exports": {
     ".": "./src/compile-vbish-to-pcode.mjs",
-    "./antlr": "./src/vbish-antlr-compiler.mjs"
+    "./antlr": "./src/vbish-antlr-compiler.mjs",
+    "./vb11": "./src/compile-vb11.mjs"
   },
   "scripts": {
     "antlr:generate": "node scripts/generate-parser.mjs",
-    "test": "node --test tests/*.mjs"
+    "test": "node --test tests/*.mjs",
+    "validate": "node validation/run.mjs"
   },
   "dependencies": { "antlr4": "^4.13.2" }
 }

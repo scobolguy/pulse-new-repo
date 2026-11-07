@@ -1,0 +1,297 @@
+import path from 'node:path';
+import { fail } from './source-diagnostics.mjs';
+import { analyze } from './scalar-semantics.mjs';
+import { SYSTEM_LIBRARY } from './system-library.mjs';
+import { isInteger } from './integer-types.mjs';
+
+export function compileScalarToPcode(program, source, {
+  fileName, sourceLanguage, checkedArithmetic = false, imports = [], target = 'js', service = null
+} = {}) {
+  if (!['js', 'esp32'].includes(target)) throw new TypeError(`Unsupported scalar target '${target}'`);
+  const { methods, entry } = analyze(program, { imports, checkedArithmetic, service });
+  const sourceLines = source.split(/\r?\n/);
+  const lines = [], sourceMap = {}, procedures = {}, instances = new Map(), pending = [];
+  let address = 0, labelSerial = 0, context;
+  const fresh = prefix => `CS_${prefix}_${labelSerial++}`;
+  const emit = (instruction, token) => {
+    lines.push(instruction);
+    if (!instruction.endsWith(':')) {
+      sourceMap[address++] = {
+        sourceFile: fileName, sourceLanguage, sourceLine: token.line,
+        sourceColumn: token.column, sourceText: sourceLines[token.line - 1] || '', instruction
+      };
+    }
+  };
+  function instantiate(method, typeArgs) {
+    if (method.external) return { label: method.external };
+    const identity = `${method.signature}<${typeArgs.join(',')}>`;
+    if (instances.has(identity)) return instances.get(identity);
+    if (instances.size >= 128) fail(method.token, 'Generic/method specialization capacity exceeded (128 procedures)');
+    const label = fresh('METHOD');
+    const bindings = new Map(method.typeParams.map((param, index) => [param.value, typeArgs[index]]));
+    const instance = { method, typeArgs, bindings, label };
+    instances.set(identity, instance);
+    pending.push(instance);
+    return instance;
+  }
+  const concrete = type => context.bindings.get(type) || type;
+  function temporary() {
+    const slot = `CS_TMP${context.temporary++}`;
+    context.metadata.locals.push(slot);
+    return slot;
+  }
+  function asString(node) {
+    expression(node);
+    const type = concrete(node.valueType);
+    if (type === 'bool') {
+      const no = fresh('BOOL_FALSE'), end = fresh('BOOL_END');
+      const [trueText, falseText] = sourceLanguage === 'kotlin' ? ['true', 'false'] : ['True', 'False'];
+      emit(`JZ ${no}`, node.token);
+      emit(`PUSH_STR ${JSON.stringify(trueText)}`, node.token); emit(`JMP ${end}`, node.token);
+      emit(`${no}:`, node.token); emit(`PUSH_STR ${JSON.stringify(falseText)}`, node.token); emit(`${end}:`, node.token);
+    } else if (isInteger(type)) {
+      emit('CALL_EXT system.int32.tostring 1', node.token);
+    }
+  }
+  function integerConversion(type, checked, token) {
+    if (type === 'int') return;
+    emit(`PUSH_STR ${JSON.stringify(type)}`, token);
+    emit(`PUSH_INT ${Number(checked)}`, token);
+    emit('CALL_EXT system.integer.convert 3', token);
+  }
+  function operation(op, leftType, rightType, token, checked = checkedArithmetic) {
+    if (op === '/' || op === '%') {
+      emit(`CALL_EXT system.int32.${op === '/' ? 'divide' : 'remainder'} 2`, token);
+      return;
+    }
+    if (op === 'concat' || op === '+' && (leftType === 'string' || rightType === 'string')) {
+      emit('CONCAT', token);
+      return;
+    }
+    if (checked && isInteger(leftType) && ['+', '-', '*'].includes(op)) {
+      emit(`CALL_EXT system.int32.${{ '+': 'add', '-': 'subtract', '*': 'multiply' }[op]} 2`, token);
+      return;
+    }
+    const opcode = {
+      '+': 'ADD', '-': 'SUB', '*': 'MUL', '==': leftType === 'string' ? 'STREQ' : 'EQ',
+      '!=': leftType === 'string' ? 'STRNEQ' : 'NEQ', '<': 'LT', '<=': 'LE', '>': 'GT', '>=': 'GE',
+      and: 'AND', or: 'OR', xor: 'NEQ'
+    }[op];
+    if (!opcode) throw new Error(`C# internal error: unhandled operator '${op}'`);
+    emit(opcode, token);
+  }
+  function expression(node) {
+    const token = node.token;
+    if (Object.hasOwn(node, 'constant')) {
+      emit(node.valueType === 'string' ? `PUSH_STR ${JSON.stringify(node.constant)}`
+        : `PUSH_INT ${node.valueType === 'bool' ? Number(node.constant) : node.constant}`, token);
+      return;
+    }
+    switch (node.kind) {
+      case 'name': emit(`LOAD_NAME ${node.variable.slot}`, token); break;
+      case 'overflow': expression(node.value); break;
+      case 'convert':
+        if (node.conversion === 'scalar-to-string') asString(node.value);
+        else {
+          expression(node.value);
+          if (node.conversion === 'integer') integerConversion(node.targetType, node.checkedArithmetic, token);
+          else if (node.conversion === 'boolean-to-integer') {
+            emit(`PUSH_INT ${node.targetType === 'byte' ? 255 : node.targetType === 'ushort' ? 65535 : -1}`, token);
+            emit('MUL', token);
+          } else if (node.conversion === 'integer-to-boolean') {
+            emit('PUSH_INT 0', token); emit('NEQ', token);
+          }
+        }
+        break;
+      case 'unary':
+        if (node.op === '-') emit('PUSH_INT 0', token);
+        expression(node.value);
+        if (node.op === '-') {
+          operation('-', 'int', 'int', token, node.checkedArithmetic);
+          integerConversion(node.valueType, node.checkedArithmetic, token);
+        }
+        if (node.op === '!') emit('NOT', token);
+        break;
+      case 'binary':
+        if (node.op === '&&' || node.op === '||') {
+          const alternative = fresh('LOGICAL'), end = fresh('LOGICAL_END');
+          expression(node.left);
+          if (node.op === '||') emit('NOT', token);
+          emit(`JZ ${alternative}`, token);
+          expression(node.right); emit(`JMP ${end}`, token);
+          emit(`${alternative}:`, token); emit(`PUSH_INT ${node.op === '||' ? 1 : 0}`, token);
+          emit(`${end}:`, token);
+        } else {
+          const string = node.op === 'concat' || node.op === '+' && node.valueType === 'string';
+          if (string) { asString(node.left); asString(node.right); }
+          else { expression(node.left); expression(node.right); }
+          const numeric = node.operationType;
+          operation(node.op, numeric || concrete(node.left.valueType), numeric || concrete(node.right.valueType), token, node.checkedArithmetic);
+          if (numeric && node.valueType !== 'bool') integerConversion(numeric, node.checkedArithmetic, token);
+        }
+        break;
+      case 'assign': {
+        if (node.op !== '=') emit(`LOAD_NAME ${node.left.variable.slot}`, token);
+        if (node.op === '+=' && node.valueType === 'string') asString(node.right);
+        else expression(node.right);
+        if (node.op !== '=') {
+          operation(node.op[0], node.operationType || concrete(node.left.valueType),
+            node.operationType || concrete(node.right.valueType), token, node.checkedArithmetic);
+          if (node.assignmentConversion) integerConversion(node.assignmentConversion, node.checkedArithmetic, token);
+        }
+        emit(`STORE_NAME ${node.left.variable.slot}`, token);
+        emit(`LOAD_NAME ${node.left.variable.slot}`, token);
+        break;
+      }
+      case 'increment': {
+        const slot = node.value.variable.slot, previous = node.prefix ? null : temporary();
+        if (previous) { emit(`LOAD_NAME ${slot}`, token); emit(`STORE_NAME ${previous}`, token); }
+        emit(`LOAD_NAME ${slot}`, token); emit('PUSH_INT 1', token);
+        operation(node.op === '++' ? '+' : '-', 'int', 'int', token, node.checkedArithmetic);
+        integerConversion(node.valueType, node.checkedArithmetic, token);
+        emit(`STORE_NAME ${slot}`, token);
+        emit(`LOAD_NAME ${previous || slot}`, token);
+        break;
+      }
+      case 'conditional': {
+        const no = fresh('CONDITIONAL'), end = fresh('CONDITIONAL_END');
+        expression(node.condition); emit(`JZ ${no}`, token);
+        expression(node.yes); emit(`JMP ${end}`, token);
+        emit(`${no}:`, token); expression(node.no); emit(`${end}:`, token);
+        break;
+      }
+      case 'call':
+        if (node.consoleName) {
+          if (node.args.length) {
+            if (concrete(node.args[0].valueType) === 'bool') asString(node.args[0]); else expression(node.args[0]);
+            emit('PRINT', token);
+          }
+          if (node.consoleName.endsWith('WriteLine')) emit('PRINT_NL', token);
+        } else {
+          node.args.forEach(expression);
+          const instance = instantiate(node.method, node.genericTypes.map(concrete));
+          const opcode = node.method.external?.startsWith('host.') ? 'CALL_EXT' : 'CALL';
+          emit(`${opcode} ${instance.label} ${node.args.length}`, token);
+        }
+        break;
+      default: throw new Error(`C# internal error: unhandled expression '${node.kind}'`);
+    }
+  }
+  function discard(node) {
+    expression(node);
+    if (node.valueType !== 'void') emit(`STORE_NAME ${temporary()}`, node.token);
+  }
+  function statement(node) {
+    const token = node.token;
+    switch (node.kind) {
+      case 'empty': break;
+      case 'overflow': statement(node.body); break;
+      case 'block': node.statements.forEach(statement); break;
+      case 'declarations': node.declarations.forEach(statement); break;
+      case 'declare':
+        for (const item of node.declarations) {
+          if (item.value) { expression(item.value); emit(`STORE_NAME ${item.variable.slot}`, item.token); }
+        }
+        break;
+      case 'expressions': node.values.forEach(discard); break;
+      case 'return':
+        if (node.value) expression(node.value);
+        emit('RET', token);
+        break;
+      case 'if': {
+        const no = fresh('ELSE'), end = fresh('IF_END');
+        expression(node.condition); emit(`JZ ${no}`, token);
+        statement(node.then); emit(`JMP ${end}`, token); emit(`${no}:`, token);
+        if (node.otherwise) statement(node.otherwise);
+        emit(`${end}:`, token);
+        break;
+      }
+      case 'for': case 'while': case 'do': {
+        const start = fresh('LOOP'), next = fresh('CONTINUE'), end = fresh('LOOP_END');
+        if (node.init) statement(node.init);
+        context.loops.push({ next, end });
+        emit(`${start}:`, token);
+        if (node.kind !== 'do' && node.condition) {
+          expression(node.condition); emit(`JZ ${end}`, token);
+        }
+        statement(node.body); emit(`${next}:`, token);
+        if (node.increment) node.increment.forEach(discard);
+        if (node.kind === 'do') { expression(node.condition); emit(`JZ ${end}`, token); }
+        emit(`JMP ${start}`, token); emit(`${end}:`, token);
+        context.loops.pop();
+        break;
+      }
+      case 'break': emit(`JMP ${context.loops.at(-1).end}`, token); break;
+      case 'continue': emit(`JMP ${context.loops.at(-1).next}`, token); break;
+      default: throw new Error(`C# internal error: unhandled statement '${node.kind}'`);
+    }
+  }
+  const main = instantiate(entry, []);
+  emit('JMP MAIN', entry.token);
+  // Validate all templates before instantiation; otherwise specialization could
+  // accidentally make illegal generic operations (such as T + T) appear legal.
+  for (const method of methods.values()) if (!method.typeParams.length) instantiate(method, []);
+  for (let index = 0; index < pending.length; index++) {
+    const instance = pending[index], { method, bindings, label } = instance;
+    const metadata = {
+      label,
+      name: method.key, signature: method.signature, params: method.params.map(param => param.variable.slot),
+      locals: method.locals.map(local => local.slot),
+      parameterTypes: method.params.map(param => bindings.get(param.type.name) || param.type.name),
+      returnType: bindings.get(method.returnType.name) || method.returnType.name,
+      visibility: method.modifiers.has('public') ? 'public' : method.modifiers.has('internal') ? 'internal' : 'private',
+      typeArguments: instance.typeArgs,
+      variables: [...method.params.map(param => param.variable), ...method.locals]
+        .map(variable => ({ ...variable, type: bindings.get(variable.type) || variable.type }))
+    };
+    procedures[label] = metadata;
+    context = { bindings, metadata, temporary: 0, loops: [] };
+    emit(`${label}:`, method.token);
+    statement(method.body);
+    emit('RET', method.token);
+  }
+  emit('MAIN:', entry.token);
+  if (service?.dispatchEndpoints) {
+    for (const endpoint of service.dispatchEndpoints) {
+      const method = [...methods.values()].find(item => item.name === endpoint.handler);
+      const next = fresh('ENDPOINT_NEXT');
+      emit('CALL_EXT host.event_method 0', method.token);
+      emit(`PUSH_STR ${JSON.stringify(endpoint.verb)}`, method.token);
+      emit('STREQ', method.token); emit(`JZ ${next}`, method.token);
+      emit('CALL_EXT host.event_path 0', method.token);
+      emit(`PUSH_STR ${JSON.stringify(endpoint.path)}`, method.token);
+      emit('STREQ', method.token); emit(`JZ ${next}`, method.token);
+      emit(`CALL ${instantiate(method, []).label} 0`, method.token);
+      emit('STORE_NAME __service_response', method.token);
+      emit('MAP_RETURN __service_response', method.token);
+      emit('HALT', method.token); emit(`${next}:`, method.token);
+    }
+    emit('PUSH_INT 404', entry.token);
+    emit('CALL_EXT host.http_status 1', entry.token);
+    emit('STORE_NAME __service_discard', entry.token);
+    emit('PUSH_STR "{\\"error\\":\\"Service endpoint not found\\"}"', entry.token);
+    emit('STORE_NAME __service_response', entry.token);
+    emit('MAP_RETURN __service_response', entry.token);
+  } else {
+    emit(`CALL ${main.label} 0`, entry.token);
+    if (entry.returnType.name === 'int') emit('STORE_NAME CS_EXIT_CODE', entry.token);
+  }
+  emit('HALT', entry.token);
+  const programId = path.basename(fileName, path.extname(fileName));
+  const runtimeUnit = service
+    ? { kind: 'service', id: service.id, refreshMs: null }
+    : { kind: 'program', id: programId, refreshMs: null };
+  return {
+    language: sourceLanguage, sourceLanguage, programId, runtimeUnit,
+    compilerPipeline: `${sourceLanguage}-to-pcode`, compiledAt: new Date().toISOString(),
+    pcodeText: lines.join('\n') + '\n',
+    programMap: {
+      version: 1, sourceLanguage, runtimeUnit, entryLabel: 'MAIN',
+      globals: service?.dispatchEndpoints ? ['__service_response', '__service_discard']
+        : entry.returnType.name === 'int' ? ['CS_EXIT_CODE'] : [], procedures, entries: [], sourceMap,
+      libraries: [{ id: SYSTEM_LIBRARY.id, version: SYSTEM_LIBRARY.version }],
+      target, targets: service ? ['js', 'esp32'] : [target], abi: { id: 'pulse.scalar', version: 1 },
+      ...(service ? service.contract : {})
+    }
+  };
+}

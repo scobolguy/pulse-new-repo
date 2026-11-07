@@ -1,3 +1,25 @@
+export function formatServiceDescription(service) {
+  const capabilities = service?.capabilities;
+  if (!capabilities || typeof capabilities !== 'object' || Array.isArray(capabilities)) return null;
+  return {
+    serviceId: service.serviceId || capabilities.serviceId || service.name || service.id,
+    version: capabilities.version,
+    sourceLanguage: capabilities.sourceLanguage,
+    runtime: capabilities.runtime,
+    endpoints: Array.isArray(capabilities.endpoints) ? capabilities.endpoints : [],
+    lifecycle: capabilities.lifecycle || null,
+    tasks: capabilities.tasks || null,
+    hostCapabilitiesVersion: capabilities.hostCapabilitiesVersion,
+    requiredHostCapabilities: Array.isArray(capabilities.requiredHostCapabilities)
+      ? capabilities.requiredHostCapabilities : [],
+    limits: capabilities.limits || {},
+    ...(capabilities.provider || service.provider ? { provider: capabilities.provider || service.provider } : {}),
+    ...(capabilities.pathway ? { pathway: capabilities.pathway } : {}),
+    state: service.status || capabilities.state || 'unknown',
+    ready: service.readiness?.ready ?? capabilities.ready ?? null
+  };
+}
+
 export async function buildServicesDirectory({
   catalog, instances = [], nodes = [], collectorUrls = [], origin, fetchImpl = fetch
 }) {
@@ -79,13 +101,15 @@ export async function buildServicesDirectory({
               services.delete(id);
             }
           }
-          add({
+          const registered = {
             ...registration, id: `${base}:${serviceId}${instanceKey ? `:${instanceKey}` : ''}`, serviceId, name: serviceId,
             nodeId: node.nodeId || node.nodeName || payload.nodeId || new URL(base).hostname,
             ip: new URL(base).hostname, provider: registration.provider || 'pascalish', protocol: registration.protocol || 'http',
             endpoint,
             source: 'node-registry', status: registration.enabled === false ? 'disabled' : 'registered'
-          });
+          };
+          registered.description = formatServiceDescription(registered);
+          add(registered);
         }
       } catch (error) {
         errors.push({ endpoint: `${base}/api/services`, error: error.message });

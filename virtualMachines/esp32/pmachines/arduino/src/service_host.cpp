@@ -288,7 +288,7 @@ struct SemaphoreRelease {
 const Binding bindings[] = {
     {"clock", "", false}, {"event_body", "", true}, {"event_bytes", "", true}, {"event_peer", "", true},
     {"event_port", "", false}, {"event_method", "", true}, {"event_path", "", true},
-    {"event_query", "s", true},
+    {"event_query", "s", true}, {"event_header", "s", true},
     {"map_apply", "ss", true},
     {"collector_id", "", true}, {"boot_id", "", true}, {"next_sequence", "", false},
     {"observation_ttl", "", false}, {"announcement", "ss", true},
@@ -322,7 +322,7 @@ const Binding bindings[] = {
     {"byte_xor", "ii", false}, {"tcp_exchange", "sisiii", true},
     {"tcp_exchange_buffer", "sisiii", false},
     {"udp_exchange", "sisii", true}, {"filesystem_post", "sissi", true},
-    {"service_submit", "sss", true}
+    {"service_submit", "sss", true}, {"await_reply", "s", true}
 };
 const Binding* binding(const std::string& symbol) {
     if (symbol.rfind("host.", 0) != 0) return nullptr;
@@ -493,9 +493,10 @@ bool ServiceHost::validateUnit(const JsonDocument& map, const char* kind, Unit& 
         for (JsonVariantConst endpoint : map["serviceEndpoints"].as<JsonArrayConst>()) {
             const std::string verb = endpoint["verb"] | "";
             const std::string path = endpoint["path"] | "";
-            if ((verb != "GET" && verb != "POST") || path.size() > 256
+            if ((verb != "GET" && verb != "POST" && verb != "PUT" && verb != "PATCH"
+                    && verb != "DELETE" && verb != "HEAD" && verb != "OPTIONS") || path.size() > 256
                 || (!out.internalPolicy && path != "/health" && path != "/events/udp" && path.rfind("/api/", 0) != 0)) {
-                error = "Hosted endpoints require GET/POST and /api/ paths, /health or /events/udp"; return false;
+                error = "Hosted endpoints require a supported HTTP method and /api/ paths, /health or /events/udp"; return false;
             }
             const auto route = std::make_pair(verb, path);
             if (std::find(out.endpoints.begin(), out.endpoints.end(), route) != out.endpoints.end()) {
@@ -1090,6 +1091,12 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
         JsonDocument queryDoc(&jsonAllocator);
         if (!object(query, queryDoc)) return fail("Invalid event query", error, 500);
         result.text = queryDoc[args[0].text] | "";
+    } else if (op == "event_header") {
+        JsonDocument headersDoc(&jsonAllocator);
+        if (!object(headers, headersDoc)) return fail("Invalid event headers", error, 500);
+        std::string name = args[0].text;
+        for (char& ch : name) if (ch >= 'A' && ch <= 'Z') ch += 'a' - 'A';
+        result.text = headersDoc[name] | "";
     }
     else if (op == "collector_id") result.text = collectorId;
     else if (op == "boot_id") result.text = bootId;
@@ -1135,12 +1142,29 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
         output["status"] = status;
         auto availability = output["availability"].to<JsonObject>();
         availability["available"] = available; availability["draining"] = draining; availability["status"] = status;
+        auto capabilities = output["capabilities"].to<JsonArray>();
+        bool advertisesDagWorker = false;
+        if (input["capabilities"].is<JsonArrayConst>()) {
+            for (JsonVariantConst capability : input["capabilities"].as<JsonArrayConst>()) {
+                capabilities.add(capability);
+                if (capability.is<const char*>()
+                    && strcmp(capability.as<const char*>(), "pascalish-dag-v1") == 0) {
+                    advertisesDagWorker = true;
+                }
+            }
+        }
+        if (!advertisesDagWorker) capabilities.add("pascalish-dag-v1");
+        auto dagWorker = output["dagWorker"].to<JsonObject>();
+        dagWorker["protocol"] = "pascalish-dag-v1";
+        dagWorker["maxConcurrentTasks"] = 1;
         if (kind != "nodeBeacon" || input["services"].is<JsonArray>() || !input["runtime"].isNull()
             || !input["hardware"].isNull() || !input["capabilities"].isNull()) {
             JsonObject details = output["details"].to<JsonObject>();
             details["nodeName"] = name;
             details["runtime"] = input["runtime"] | "pmachine";
             details["hardware"] = input["hardware"] | "ESP32";
+            details["capabilities"] = output["capabilities"];
+            details["dagWorker"] = output["dagWorker"];
             auto services = details["services"].to<JsonArray>();
             for (JsonVariantConst advertised : input["services"].as<JsonArrayConst>()) {
                 const std::string name = advertised.is<const char*>() ? advertised.as<std::string>()
@@ -1154,8 +1178,6 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
                     service["metadata"] = advertised["metadata"];
                 else service["metadata"].to<JsonObject>();
             }
-            if (input["capabilities"].is<JsonArrayConst>()) details["capabilities"] = input["capabilities"];
-            else details["capabilities"].to<JsonArray>();
         }
         const auto serialized = serialize(output, result.text);
         if (serialized != SerializeResult::ok)
@@ -1471,8 +1493,22 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
     return true;
 }
 
-bool ServiceHost::execute(const Unit& unit, std::string& response) {
+bool ServiceHost::execute(const Unit& unit, std::string& response,
+                          const JsonDocument* saved, const std::string* reply) {
     auto& lastError = current->lastError;
+    std::string checkpointError;
+    if (!durableUnit(unit, checkpointError)) {
+        lastError = checkpointError;
+        Serial.printf("[SERVICE-HOST] %s\n", checkpointError.c_str());
+        return fail(checkpointError, response, 503);
+    }
+    machine.setContinuation([&](const std::string& token, JsonDocument& state, std::string& error) {
+        return saveContinuation(unit, token, state, error);
+    }, saved, reply);
+    struct ContinuationReset {
+        PMachine& machine;
+        ~ContinuationReset() { machine.setContinuation({}); }
+    } continuationReset{machine};
     network.select(current->network);
     network.resetBuffers();
     struct BufferReset {
@@ -1536,6 +1572,15 @@ bool ServiceHost::execute(const Unit& unit, std::string& response) {
         lastError = "Hosted instruction budget exceeded"; response = lastError; responseStatus = 503;
         Serial.println("[SERVICE-HOST] Instruction budget exceeded"); return false;
     }
+    if (machine.didLastRunSuspend()) {
+        JsonDocument accepted;
+        accepted["pulseSuspension"]["id"] = durableJobId;
+        accepted["pulseSuspension"]["stateFile"] = "/.pmachine/" + durableJobId + ".state";
+        response.clear();
+        serializeJson(accepted, response);
+        responseStatus = 202;
+        return true;
+    }
     if (!machine.takeFlowStateValue("__response", response)) response = "{}";
     if (response.size() > RESPONSE_LIMIT) return fail("Hosted response too large", response, 503);
     return true;
@@ -1544,9 +1589,10 @@ bool ServiceHost::execute(const Unit& unit, std::string& response) {
 std::shared_ptr<ServiceHost::HttpEvent> ServiceHost::enqueue(
         const std::string& newMethod, const std::string& newPath, const std::string& newBody,
         const std::string& newPeer, const std::string& newQuery, int& statusCode, std::string& error,
-        const std::string& newTransactionId, const std::string& newIngressAggregatorId) {
+        const std::string& newTransactionId, const std::string& newIngressAggregatorId,
+        const std::string& newHeaders) {
     statusCode = 503;
-    if (newBody.size() > BODY_LIMIT || newQuery.size() > BODY_LIMIT
+    if (newBody.size() > BODY_LIMIT || newQuery.size() > BODY_LIMIT || newHeaders.size() > BODY_LIMIT
         || newPath.size() > 256 || newPeer.size() > 64 || newMethod.size() > 8) {
         statusCode = 413; error = "Hosted event capacity exceeded"; return nullptr;
     }
@@ -1582,7 +1628,7 @@ std::shared_ptr<ServiceHost::HttpEvent> ServiceHost::enqueue(
                 event = std::make_shared<HttpEvent>();
                 event->owner = owner;
                 event->method = newMethod; event->path = newPath; event->body = newBody;
-                event->peer = newPeer; event->query = newQuery;
+                event->peer = newPeer; event->query = newQuery; event->headers = newHeaders;
                 event->transactionId = newTransactionId;
                 event->ingressAggregatorId = newIngressAggregatorId;
                 event->observedAt = now(); event->deadline = event->observedAt + 12000;
@@ -1646,6 +1692,7 @@ void ServiceHost::stopHttpEvents(const std::string& id) {
 }
 
 void ServiceHost::executeHttpEvent(const std::shared_ptr<HttpEvent>& event) {
+    durableJobId.clear();
     current = event->owner;
     if (!current || !current->installed) {
         event->status = 503; event->errorText = "Hosted service stopped";
@@ -1670,6 +1717,7 @@ void ServiceHost::executeHttpEvent(const std::shared_ptr<HttpEvent>& event) {
             method = std::move(event->method); path = std::move(event->path);
             body = std::move(event->body); peer = std::move(event->peer);
             query = std::move(event->query);
+            headers = std::move(event->headers);
             parentTransactionId = std::move(event->transactionId);
             ingressAggregatorId = std::move(event->ingressAggregatorId);
             peerPort = 0; observedAt = event->observedAt; eventUdp = nullptr;
@@ -1703,6 +1751,7 @@ void ServiceHost::executeHttpEvent(const std::shared_ptr<HttpEvent>& event) {
         static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)),
         static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
     parentTransactionId.clear();
+    durableJobId.clear();
     event->owner.reset();
     event->ready.store(true);
     PULSE_ASYNC_TRACE("HTTP worker ready event=%llu status=%d bytes=%u elapsed=%lu",
@@ -1731,7 +1780,7 @@ bool ServiceHost::pollUdpEvent() {
         return false;
     }
     method = "POST"; path = "/events/udp"; body = std::move(payload);
-    peer = address.c_str(); query = "{}";
+    peer = address.c_str(); query = "{}"; headers = "{}";
     peerPort = port; observedAt = now(); eventUdp = &udp;
     std::string response;
     ++current->udpInvocations;
@@ -1768,7 +1817,7 @@ bool ServiceHost::runDaemon(Daemon& daemon) {
                 const auto address = daemon.udp->remoteIP().toString();
                 method = "UDP"; path = "/daemon/udp";
                 body.assign(reinterpret_cast<const char*>(payload.data()), size);
-                peer = address.c_str(); query = "{}"; peerPort = daemon.udp->remotePort();
+                peer = address.c_str(); query = "{}"; headers = "{}"; peerPort = daemon.udp->remotePort();
                 eventUdp = daemon.udp.get();
                 ++daemon.udpEvents;
                 udpEvent = true;
@@ -1777,7 +1826,7 @@ bool ServiceHost::runDaemon(Daemon& daemon) {
     }
     if (!udpEvent) {
         if (now() < daemon.nextTick) return false;
-        method = "TIMER"; path = "/daemon"; body.clear(); peer.clear(); query = "{}";
+        method = "TIMER"; path = "/daemon"; body.clear(); peer.clear(); query = "{}"; headers = "{}";
         peerPort = 0; eventUdp = nullptr;
         ++daemon.timerRuns; ++current->daemonInvocations;
         daemon.nextTick = now() + daemon.unit.interval;
@@ -1961,6 +2010,12 @@ void ServiceHost::worker(void* context) {
         bool backOff = false;
         if (xSemaphoreTake(host.mutex, 0) == pdTRUE) {
             host.allocationFailed = false;
+            try { host.pollContinuations(); }
+            catch (const std::bad_alloc&) {
+                host.allocationFailed = true;
+                assignErrorText(host.hostError, "Checkpoint recovery allocation failed");
+                Serial.println("[SERVICE-HOST] Checkpoint recovery allocation failed");
+            }
             if (host.active) {
                 try {
                     const auto event = host.takeHttpEvent();
@@ -2230,6 +2285,374 @@ void ServiceHost::describe(JsonObject doc, const Context& context, bool details)
     json["writeUs"] = lastHttpJsonMetrics.writeUs;
     json["inputBytes"] = lastHttpJsonMetrics.inputBytes;
     json["outputBytes"] = lastHttpJsonMetrics.outputBytes;
+}
+
+// ---- Durable continuations --------------------------------------------------
+// host.await_reply checkpoints a hosted program to FFS and releases the worker,
+// so other programs run while the aggregator reply is pending. A checkpoint is
+// complete: it carries the VM state plus the full invocation context, so any
+// swarm member with the same deployment can rebuild the context and resume it.
+// Job identifiers embed the creating device's factory MAC plus 64 random bits,
+// so they never collide anywhere in the network, and FederatedFileSystem::replace
+// provides the atomic rename used both to commit a checkpoint and to claim one
+// for resumption, guaranteeing two members never resume the same state.
+
+namespace {
+constexpr const char* CONTINUATION_DIR = "/.pmachine";
+constexpr const char* CONTINUATION_STATE_SUFFIX = ".state";
+constexpr const char* CONTINUATION_CLAIM_SUFFIX = ".claim";
+constexpr uint32_t CONTINUATION_POLL_INTERVAL_MS = 2500;
+constexpr size_t DURABLE_JOB_LIMIT = 4;
+constexpr size_t CONTINUATION_NAME_LIMIT = 64;
+constexpr size_t CONTINUATION_REPLY_LIMIT = 4096;
+
+bool continuationJobName(const std::string& name) {
+    if (name.size() < 5 || name.size() > CONTINUATION_NAME_LIMIT || name.rfind("job-", 0) != 0)
+        return false;
+    for (char ch : name)
+        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+              || (ch >= '0' && ch <= '9') || ch == '-')) return false;
+    return true;
+}
+
+std::string deviceIdentity() {
+    char text[13];
+    const uint64_t mac = ESP.getEfuseMac();
+    snprintf(text, sizeof(text), "%04x%08x",
+             static_cast<unsigned>((mac >> 32) & 0xffff), static_cast<unsigned>(mac & 0xffffffff));
+    return text;
+}
+
+std::string continuationStatePath(const std::string& jobId) {
+    return std::string(CONTINUATION_DIR) + "/" + jobId + CONTINUATION_STATE_SUFFIX;
+}
+
+std::string continuationClaimPath(const std::string& jobId, const std::string& claimant) {
+    return std::string(CONTINUATION_DIR) + "/" + jobId + "." + claimant + CONTINUATION_CLAIM_SUFFIX;
+}
+}  // namespace
+
+bool ServiceHost::checkpointKey(std::string& key) {
+    if (continuationKey.empty()) continuationKey = deviceIdentity();
+    char suffix[18];
+    snprintf(suffix, sizeof(suffix), "%08x%08x",
+             static_cast<unsigned>(esp_random()), static_cast<unsigned>(esp_random()));
+    key = "job-" + continuationKey + "-" + suffix;
+    return continuationJobName(key);
+}
+
+bool ServiceHost::durableUnit(const Unit& unit, std::string& error) const {
+    if (!unit.image && !unit.instructions) {
+        error = "Hosted unit has no instruction source";
+        return false;
+    }
+    return true;
+}
+
+bool ServiceHost::writeContinuation(const std::string& jobId, const JsonDocument& state,
+                                    std::string& error) {
+    if (!swapFileSystem || !swapFileSystem->available()) {
+        error = "Durable suspension requires FFS checkpoint storage";
+        return false;
+    }
+    std::string text;
+    const auto serialized = serialize(state, text);
+    if (serialized != SerializeResult::ok) {
+        error = serialized == SerializeResult::tooLarge
+            ? "Execution checkpoint exceeds the storage limit"
+            : "Execution checkpoint serialization failed";
+        return false;
+    }
+    const std::string path = continuationStatePath(jobId);
+    const String temporary((path + ".new").c_str());
+    if (swapFileSystem->write(temporary, reinterpret_cast<const uint8_t*>(text.data()),
+                              text.size()) != FFSStatus::OK) {
+        error = "Checkpoint write failed";
+        return false;
+    }
+    if (swapFileSystem->replace(temporary, String(path.c_str())) != FFSStatus::OK) {
+        swapFileSystem->remove(temporary);
+        error = "Checkpoint commit failed";
+        return false;
+    }
+    return true;
+}
+
+bool ServiceHost::readContinuation(const std::string& jobId, JsonDocument& state,
+                                   std::string& error) {
+    if (!swapFileSystem || !swapFileSystem->available()) {
+        error = "Checkpoint storage unavailable";
+        return false;
+    }
+    std::vector<uint8_t> data;
+    if (swapFileSystem->read(String(continuationStatePath(jobId).c_str()), data) != FFSStatus::OK) {
+        error = "Checkpoint read failed";
+        return false;
+    }
+    if (data.size() > RESPONSE_LIMIT || deserializeJson(state, data.data(), data.size())
+        || !state.is<JsonObjectConst>()) {
+        error = "Checkpoint content is invalid";
+        return false;
+    }
+    return true;
+}
+
+bool ServiceHost::initializeContinuations(std::string& error) {
+    if (continuationsInitialized) return true;
+    if (!swapFileSystem || !swapFileSystem->available()) {
+        error = "Durable suspension requires FFS checkpoint storage";
+        return false;
+    }
+    if (continuationKey.empty()) continuationKey = deviceIdentity();
+    swapFileSystem->mkdir(CONTINUATION_DIR);  // An existing directory is fine.
+    const auto endsWith = [](const std::string& text, const char* suffix) {
+        const size_t length = strlen(suffix);
+        return text.size() > length && text.compare(text.size() - length, length, suffix) == 0;
+    };
+    std::vector<std::string> stale;
+    File directory = swapFileSystem->openDirectory(CONTINUATION_DIR);
+    if (directory) {
+        for (File entry = directory.openNextFile(); entry; entry = directory.openNextFile()) {
+            if (entry.isDirectory()) continue;
+            std::string name = entry.name();
+            const size_t separator = name.find_last_of('/');
+            if (separator != std::string::npos) name.erase(0, separator + 1);
+            if (endsWith(name, ".new")) { stale.push_back(name); continue; }
+            if (endsWith(name, CONTINUATION_CLAIM_SUFFIX)) {
+                // A claim that never completed is not retried (at-most-once).
+                // Only this device's own stale claims are removed.
+                if (name.find("." + continuationKey + CONTINUATION_CLAIM_SUFFIX) != std::string::npos)
+                    stale.push_back(name);
+                continue;
+            }
+            if (!endsWith(name, CONTINUATION_STATE_SUFFIX)) continue;
+            const std::string jobId = name.substr(0, name.size() - strlen(CONTINUATION_STATE_SUFFIX));
+            if (!continuationJobName(jobId) || durableJobs.size() >= DURABLE_JOB_LIMIT) continue;
+            if (std::find(durableJobs.begin(), durableJobs.end(), jobId) == durableJobs.end())
+                durableJobs.push_back(jobId);
+        }
+    }
+    for (const auto& name : stale) {
+        swapFileSystem->remove(String((std::string(CONTINUATION_DIR) + "/" + name).c_str()));
+        Serial.printf("[SERVICE-HOST] Removed stale checkpoint artifact %s\n", name.c_str());
+    }
+    if (!durableJobs.empty())
+        Serial.printf("[SERVICE-HOST] Tracking %u durable continuation job(s)\n",
+                      static_cast<unsigned>(durableJobs.size()));
+    continuationsInitialized = true;
+    return true;
+}
+
+bool ServiceHost::saveContinuation(const Unit& unit, const std::string& token,
+                                   JsonDocument& state, std::string& error) {
+    if (!current || &unit != &current->service) {
+        error = "Durable suspension is limited to hosted HTTP service invocations";
+        return false;
+    }
+    std::string transactionId = token;
+    if (!validTransactionId(transactionId)) {
+        // The program may pass the raw service_submit result straight through.
+        JsonDocument parsed;
+        transactionId.clear();
+        if (token.size() <= BODY_LIMIT && !deserializeJson(parsed, token)) {
+            JsonVariantConst continuation = parsed["pulseContinuation"].isNull()
+                ? parsed.as<JsonVariantConst>()
+                : parsed["pulseContinuation"].as<JsonVariantConst>();
+            transactionId = continuation["transactionId"] | "";
+        }
+        if (!validTransactionId(transactionId)) {
+            error = "await_reply requires a pulseContinuation transaction id";
+            return false;
+        }
+    }
+    if (!initializeContinuations(error)) return false;
+    if (durableJobs.size() >= DURABLE_JOB_LIMIT) {
+        error = "Durable suspension capacity exceeded";
+        return false;
+    }
+    std::string jobId;
+    if (!checkpointKey(jobId)) {
+        error = "Cannot allocate a durable job id";
+        return false;
+    }
+    // The checkpoint is complete: any swarm member with this collector installed
+    // can rebuild the entire invocation context and resume the program.
+    JsonObject host = state["host"].to<JsonObject>();
+    host["job"] = jobId;
+    host["collector"] = current->collectorId;
+    host["token"] = transactionId;
+    host["parent"] = parentTransactionId;
+    host["ingress"] = ingressAggregatorId;
+    host["method"] = method;
+    host["path"] = path;
+    host["query"] = query;
+    host["headers"] = headers;
+    host["peer"] = peer;
+    host["body"] = body;
+    host["instructions"] = unit.image ? unit.image->size()
+        : (unit.instructions ? unit.instructions->size() : 0);
+    if (state.overflowed()) {
+        error = "Execution checkpoint exceeds memory";
+        return false;
+    }
+    durableJobs.push_back(jobId);
+    if (!writeContinuation(jobId, state, error)) {
+        durableJobs.pop_back();
+        return false;
+    }
+    durableJobId = jobId;
+    Serial.printf("[SERVICE-HOST] Suspended job %s awaiting transaction %s\n",
+                  jobId.c_str(), transactionId.c_str());
+    return true;
+}
+
+void ServiceHost::pollContinuations() {
+    if (continuationsInitialized && durableJobs.empty() && finishedJobs.empty()) return;
+    const uint64_t timestamp = now();
+    if (timestamp < nextContinuationPoll) return;
+    nextContinuationPoll = timestamp + CONTINUATION_POLL_INTERVAL_MS;
+    if (!continuationsInitialized) {
+        std::string initError;
+        if (!swapFileSystem || !swapFileSystem->available()
+            || !initializeContinuations(initError)) return;
+    }
+    if (!finishedJobs.empty()) {
+        for (auto job = durableJobs.begin(); job != durableJobs.end();) {
+            if (finishedJobs.count(*job)) {
+                swapFileSystem->remove(String(continuationStatePath(*job).c_str()));
+                swapFileSystem->remove(String(continuationClaimPath(*job, continuationKey).c_str()));
+                job = durableJobs.erase(job);
+            } else ++job;
+        }
+        finishedJobs.clear();
+        nextContinuationJob = 0;
+    }
+    if (durableJobs.empty() || !active.load()) return;
+    if (nextContinuationJob >= durableJobs.size()) nextContinuationJob = 0;
+    const std::string jobId = durableJobs[nextContinuationJob];
+    nextContinuationJob = (nextContinuationJob + 1) % durableJobs.size();
+
+    JsonDocument saved;
+    std::string error;
+    if (!readContinuation(jobId, saved, error)) {
+        // Another swarm member may have claimed the checkpoint already.
+        Serial.printf("[SERVICE-HOST] Releasing continuation %s: %s\n", jobId.c_str(), error.c_str());
+        finishedJobs.insert(jobId);
+        return;
+    }
+    JsonObjectConst host = saved["host"].as<JsonObjectConst>();
+    const std::string storedJob = host["job"] | "";
+    const std::string collector = host["collector"] | "";
+    const std::string token = host["token"] | "";
+    if (storedJob != jobId || collector.empty() || !validTransactionId(token)) {
+        Serial.printf("[SERVICE-HOST] Dropping continuation %s: invalid checkpoint metadata\n",
+                      jobId.c_str());
+        finishedJobs.insert(jobId);
+        return;
+    }
+    std::shared_ptr<Context> owner;
+    for (const auto& candidate : services)
+        if (candidate && candidate->installed && candidate->collectorId == collector) owner = candidate;
+    if (!owner) return;  // Not deployed here (yet); another swarm member may resume it.
+    const size_t instructions = owner->service.image ? owner->service.image->size()
+        : (owner->service.instructions ? owner->service.instructions->size() : 0);
+    if (host["instructions"].as<size_t>() != instructions) {
+        Serial.printf("[SERVICE-HOST] Dropping continuation %s: deployed unit does not match its checkpoint\n",
+                      jobId.c_str());
+        finishedJobs.insert(jobId);
+        return;
+    }
+    const auto targets = reportTargetsFor(*owner);
+    const std::string ingress = host["ingress"] | "";
+    auto target = targets.cbegin();
+    for (auto candidate = targets.cbegin(); candidate != targets.cend(); ++candidate)
+        if (candidate->aggregatorId == ingress) { target = candidate; break; }
+    constexpr char reportPath[] = "/api/runtime/instances/report";
+    constexpr size_t reportPathLength = sizeof(reportPath) - 1;
+    HttpTarget aggregator;
+    if (target == targets.cend() || !parseHttpTarget(target->endpoint, aggregator)
+        || aggregator.path.size() < reportPathLength
+        || aggregator.path.compare(aggregator.path.size() - reportPathLength,
+                                   reportPathLength, reportPath) != 0) {
+        return;  // No usable aggregator target yet; keep the job pending.
+    }
+    const std::string url = aggregator.origin
+        + aggregator.path.substr(0, aggregator.path.size() - reportPathLength)
+        + "/api/runtime/transactions/" + token;
+    int status = 0;
+    std::string responseText;
+    if (!httpExchange(url, "GET", "", "", CONTINUATION_REPLY_LIMIT, status, responseText,
+                      target->bearerToken)) return;
+    if (status == 401 || status == 403 || status == 404) {
+        Serial.printf("[SERVICE-HOST] Dropping continuation %s: transaction lookup HTTP %d\n",
+                      jobId.c_str(), status);
+        finishedJobs.insert(jobId);
+        return;
+    }
+    if (status != 200) return;
+    std::string reply, transactionStatus;
+    {
+        JsonDocument transaction;
+        if (deserializeJson(transaction, responseText) || !transaction.is<JsonObjectConst>()) return;
+        transactionStatus = transaction["status"] | "";
+        JsonVariantConst replyBody = transaction["result"]["body"];
+        if (replyBody.is<const char*>()) reply = replyBody.as<const char*>();
+        else if (!replyBody.isNull()) serializeJson(replyBody, reply);
+    }
+    if (transactionStatus == "uncertain") {
+        Serial.printf("[SERVICE-HOST] Dropping continuation %s: transaction is uncertain\n",
+                      jobId.c_str());
+        finishedJobs.insert(jobId);
+        return;
+    }
+    if (transactionStatus != "completed") return;  // Reply still pending.
+    if (reply.size() > BODY_LIMIT) {
+        Serial.printf("[SERVICE-HOST] Dropping continuation %s: reply exceeds capacity\n",
+                      jobId.c_str());
+        finishedJobs.insert(jobId);
+        return;
+    }
+    // Claim the checkpoint with an atomic rename before executing so no other
+    // swarm member can resume the same state.
+    if (swapFileSystem->replace(String(continuationStatePath(jobId).c_str()),
+                                String(continuationClaimPath(jobId, continuationKey).c_str()))
+        != FFSStatus::OK) {
+        Serial.printf("[SERVICE-HOST] Continuation %s was claimed elsewhere\n", jobId.c_str());
+        finishedJobs.insert(jobId);
+        return;
+    }
+    // Rebuild the complete invocation context captured at suspension.
+    current = owner;
+    method = host["method"] | "POST";
+    path = host["path"] | "";
+    query = host["query"] | "";
+    headers = host["headers"] | "{}";
+    peer = host["peer"] | "";
+    body = host["body"] | "";
+    parentTransactionId = host["parent"] | "";
+    ingressAggregatorId = ingress;
+    peerPort = 0;
+    eventUdp = nullptr;
+    observedAt = timestamp;
+    durableJobId.clear();
+    // At-most-once: the claimed job is finished even if the resume fails below.
+    finishedJobs.insert(jobId);
+    std::string response;
+    const bool ok = execute(owner->service, response, &saved, &reply);
+    if (machine.didLastRunSuspend())
+        Serial.printf("[SERVICE-HOST] Resumed job %s suspended again as %s\n",
+                      jobId.c_str(), durableJobId.c_str());
+    else
+        Serial.printf("[SERVICE-HOST] Resumed job %s: ok=%d status=%d responseBytes=%u\n",
+                      jobId.c_str(), ok, responseStatus, static_cast<unsigned>(response.size()));
+    parentTransactionId.clear();
+    ingressAggregatorId.clear();
+    durableJobId.clear();
+    body.clear();
+    query.clear();
+    headers.clear();
+    path.clear();
+    peer.clear();
 }
 } // namespace pmachine
 #endif

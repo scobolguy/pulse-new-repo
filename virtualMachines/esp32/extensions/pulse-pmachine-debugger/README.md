@@ -4,6 +4,20 @@ This single VS Code extension packages Pulse Studio, Data Librarian, Data Mapper
 Deploy, Node Inventory, and native Run and Debug support for PMachine programs.
 Install one `pulse-pmachine-debugger` VSIX to get these panels and commands.
 
+## Swarm
+
+The **Swarm** expandable section in the left-hand Pulse sidebar lists discovered
+nodes that advertise a PMachine service, are explicitly available and are not
+draining. Each entry shows its address and runtime. It uses the configured
+`pulse-pmachine.backendUrl` Aggregator's `/api/pmachine/nodes` inventory, rather
+than treating every network device as an execution target.
+
+The list refreshes every 15 seconds while visible, when reopened, and through
+the section's refresh button (**Pulse Swarm: Refresh**). Discovery errors appear
+in the section and the **Pulse PMachine** output channel. This is a node
+inventory, not a guarantee that every listed runtime supports every language
+artifact; existing Run/Debug target capability checks still apply.
+
 ## Language editors (0.1.19)
 
 Use **Pulse: New Language Document** in the Command Palette to choose a starter
@@ -18,6 +32,7 @@ its fixed-form column layout.
 | COBOLish 85 | `.cob`, `.cobol` | Fixed/free-form highlighting, compile/run and source debugging |
 | VBish | `.bas`, `.vb`, `.vbs` | Text editor, compile/run and source debugging |
 | C# subset | `.cs` | Text editor, generic static methods, JS-only compile/run and source debugging |
+| Kotlin subset | `.kt` | Text editor, scalar generic functions, JS/ESP32 compile/run and source debugging |
 | Fortranish (Minnesota FORTRAN) | `.ftn` | Fixed-form editor, compile/run and source debugging |
 | WFL | `.wfl` | Text editor and existing workflow/deployment designers |
 | MAPL | `.mapl` | Text editor and existing Data Mapper designer; mapping compilation |
@@ -33,6 +48,11 @@ classes and collections remain unsupported. MAPL/VFL are mapping/graph
 documents, not scalar console programs; do not assume source-level mapping
 debugger support. Raw p-code starter text can be run through the JS CLI, but
 native F5 requires the hosted-service artifact/map described below.
+Kotlin hosted services require a service host and are rejected by the generic
+Run/Debug commands. Kotlin supports a limited language subset, not full Kotlin;
+see the [Kotlin compiler guide](../../../../languages/kotlin/README.md).
+The [Kotlin demo](../../../../languages/kotlin/examples/pulse-demo.kt) can be
+opened in the editor and run on the local JavaScript PMachine.
 
 If another extension also owns `.cs`, `.vb` or `.pas`, select the desired mode
 from VS Code's language picker. Existing VFL/MAPL custom editors remain intact;
@@ -87,7 +107,7 @@ npm run test:package
 
 The package command builds TypeScript, copies the Studio assets and compiler/runtime
 dependency closure, includes production npm dependencies, and creates
-`pulse-pmachine-debugger-0.1.23.vsix`. In VS Code, run
+`pulse-pmachine-debugger-0.1.24.vsix`. In VS Code, run
 **Extensions: Install from VSIX...**, select that file, then
 **Developer: Reload Window**. Packaging does not publish or install it.
 

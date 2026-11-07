@@ -221,6 +221,10 @@ export function compileCobolishToPmachine(sourceText, options = {}) {
 
 export function compileVbishToPmachine(sourceText, options = {}) {
   dslDebug('vbish', 'compile:start', { fileName: options.fileName || null, chars: String(sourceText || '').length });
+  if (options.profile === 'vb11') {
+    const result = compileVbishToPcode(sourceText, options);
+    return { ...result, interoperability: [], source: String(sourceText) };
+  }
   let native;
   try { native = compileVbishWithAntlr(sourceText, options); } catch (error) { throw dslError('vbish', 'antlr', error); }
   if (!native.valid) throw dslError('vbish', 'parse', new Error(native.syntaxErrors.join('\n')));

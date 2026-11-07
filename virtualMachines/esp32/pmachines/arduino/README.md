@@ -14,6 +14,69 @@ The library implementation lives in `src/`:
 
 Standalone scheduler and dynamic-library C++ tests are already consolidated under `../../testing/pmachines/`.
 
+## Generic COBOL migration
+
+The generic interpreter supports exact decimal literals (`PUSH_DEC unscaled scale`),
+conversion, quantization (`DEC_QUANT scale ROUNDED`), display/edited formatting,
+digit-width checks, arithmetic and comparisons. Decimal payloads use the managed
+string arena and remain GC roots even though their values are tagged `DecimalRef`.
+Checkpoints serialize their text, not invocation-local heap handles.
+
+`PUSH_REF name` and `PUSH_REF name@offset:length` support whole-variable and
+zero-based character-slice aliases. Reference targets carry frame identities so
+returning from a procedure and reusing its frame cannot revive an expired alias.
+The reference table is bounded to 256 handles and 4096 name bytes. Continuations
+save target descriptors and rebind them to restored frames.
+
+Compiler-generated COBOL still uses the specialized interpreter while generic
+execution is being qualified. Do not remove that fallback based on build success
+alone. Headerless regression programs must report more than one instruction to
+prove the generic dispatch was exercised.
+
+From the ESP32 directory:
+
+```powershell
+node --test testing\pmachines\managed-references.test.mjs testing\pmachines\generic-decimal-device.test.mjs
+$env:PULSE_COBOL_TEST_NODE = 'http://192.168.2.83'
+node --test testing\pmachines\generic-decimal-device.test.mjs
+```
+
+The hardware test requires an idle, explicitly selected board running the current
+firmware; it executes signed programs without installing persistent artifacts.
+
+The native [System RTL](src/system_runtime.cpp) supplies the shared C#/VB
+Int32 arithmetic, small-integer conversion and explicit integer-to-string
+intrinsics through `CALL_EXT system.*`. Invalid arguments and arithmetic faults
+stop execution with an explicit runtime diagnostic. Execution API responses
+report `ok: false` on runtime errors and instruction-limit exhaustion.
+The opt-in [C#/VB hardware test](../../testing/pmachines/dotnet-device.test.mjs)
+uses `PULSE_DOTNET_TEST_NODE` and requires an idle board with updated firmware;
+it does not touch GPIOs or install persistent programs.
+
+The shared device runtime supports `ws2812` (alias `rgb-led`) through an
+Arduino-ESP32 2.x RMT transmitter. Its `color` state accepts `#RRGGBB`;
+`intensity` accepts decimal 0..255 and linearly scales RGB channels.
+Color and intensity are retained while off. Defaults are green at 32/255.
+The `power` state and
+`turnOn`/`turnOff`/`toggle` actions match other device drivers. It is not a
+plain GPIO HIGH/LOW LED. [The C#/VB device adapter](../../../../languages/dotnet/README.md#esp32-named-device-library)
+uses existing FSM instructions; its opt-in GPIO48 test is
+[board-led.test.mjs](../../testing/pmachines/board-led.test.mjs).
+GPIO coordination initializes before network services start and sizes its
+mutex table from the SoC's GPIO count. The S3 output check supports GPIO48,
+rejects invalid/input-only pins and excludes flash/PSRAM GPIO26-37; the
+classic ESP32 output allowlist is unchanged.
+The `esp32_s3_waveshare_pmachine_n16r8` profile explicitly registers the onboard
+GPIO48 LED as public `BoardLed`, discovers it through `/services/describe`, and
+enables the named-device HTTP routes. Handles are exclusive and settings survive
+close/reopen. Other board profiles do not assume an RGB LED pin.
+Custom device definitions are preserved; conflicting `BoardLed` metadata logs
+an error instead of being overwritten. The old hard-coded GPIO2 LED and relay
+routes/boot writes have been removed; only matching legacy demo metadata is retired.
+Inline JSON execution verifies and reads the request's program-map view rather
+than duplicating its full debug map, preserving heap for signature hashing and
+execution. Signature verification remains mandatory.
+
 Run `npm run test:pmachine:arduino-layout` before and after that migration slice.
 
 The `esp32dev` profile enables this runtime and discovers it through `lib_extra_dirs = pmachines`. Build it with `pio run -e esp32dev`; upload firmware only after a successful build. Do not upload a filesystem image when preserving the board's existing configuration and programs.

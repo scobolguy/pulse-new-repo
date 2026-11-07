@@ -10,6 +10,7 @@ import oniguruma from 'vscode-oniguruma';
 import { LANGUAGE_EDITORS } from '../out/languageEditors.js';
 import { findPmachineRoot } from '../out/runtimeRoot.js';
 import { compileCsharpToPcode } from '../../../../../languages/csharp/src/compile-csharp-to-pcode.mjs';
+import { compileKotlinToPcode } from '../../../../../languages/kotlin/src/compile-kotlin-to-pcode.mjs';
 import { compileMnfToPcode } from '../../../../../languages/mnf/src/compile-mnf-to-pcode.mjs';
 import { compileVbishToPmachine } from '../../../aggregator/scripts/compile-interoperable-language.mjs';
 import { compilePascalishProgramWithAntlr } from '../../../../../languages/pascalish/src/compile-pascalish-program-antlr-to-pcode.mjs';
@@ -41,7 +42,7 @@ const registry = new textmate.Registry({
 });
 
 test('all language modes declare real configurations, grammars, run menus and starters', async () => {
-  const ids = ['screencobol', 'assemblerish', 'pascal', 'pascalish', 'cobolish', 'vbish', 'csharp', 'fortranish', 'mnf', 'wfl', 'mapl', 'vfl', 'pulse-pcode'];
+  const ids = ['screencobol', 'assemblerish', 'pascal', 'pascalish', 'cobolish', 'vbish', 'csharp', 'kotlin', 'fortranish', 'mnf', 'wfl', 'mapl', 'vfl', 'pulse-pcode'];
   assert.deepEqual(manifest.contributes.languages.map(item => item.id).sort(), ids.sort());
   assert.ok(manifest.contributes.commands.some(item => item.command === 'pulse-pmachine.newLanguageDocument'));
   for (const language of manifest.contributes.languages) {
@@ -65,7 +66,7 @@ test('all language modes declare real configurations, grammars, run menus and st
 });
 
 test('source extensions select their compiler-backed Pulse language modes', () => {
-  for (const [extension, id] of [['.pas', 'pascalish'], ['.ftn', 'fortranish'], ['.cob', 'cobolish']]) {
+  for (const [extension, id] of [['.pas', 'pascalish'], ['.ftn', 'fortranish'], ['.cob', 'cobolish'], ['.kt', 'kotlin']]) {
     assert.deepEqual(manifest.contributes.languages.filter(language => language.extensions?.includes(extension)).map(language => language.id), [id]);
     assert.ok(manifest.contributes.debuggers[0].languages.includes(id));
     assert.ok(manifest.contributes.breakpoints.some(item => item.language === id));
@@ -81,6 +82,7 @@ const samples = [
   ['cobolish', 'DISPLAY', '      * DISPLAY', '"DISPLAY"'],
   ['vbish', 'sUb', "' Sub", '"Sub"'],
   ['csharp', 'class', '// class', '"class"'],
+  ['kotlin', 'fun', '// fun', '"fun"'],
   ['mnf', '      PROGRAM HELLO', 'C     PROGRAM HELLO', "      PRINT, 'PROGRAM'"],
   ['fortranish', '      PROGRAM HELLO', 'C     PROGRAM HELLO', "      PRINT, 'PROGRAM'"],
   ['wfl', 'WORKFLOW', '// WORKFLOW', '"WORKFLOW"'],
@@ -157,6 +159,7 @@ const compilers = {
   cobolish: compileTandemCobol85ToPcode,
   vbish: compileVbishToPmachine,
   csharp: compileCsharpToPcode,
+  kotlin: compileKotlinToPcode,
   fortranish: compileMnfToPcode
 };
 for (const starter of LANGUAGE_EDITORS.filter(item => compilers[item.id] || item.id === 'pulse-pcode')) {
@@ -174,7 +177,7 @@ for (const starter of LANGUAGE_EDITORS.filter(item => compilers[item.id] || item
     });
     assert.deepEqual(result.stdout, [{
       pascalish: 'Hello from Pascalish', cobolish: 'Hello from COBOLish', vbish: 'Hello from VBish',
-      csharp: 'Hello from C#', fortranish: 'Hello from MNF', 'pulse-pcode': 'Hello from the p-machine'
+      csharp: 'Hello from C#', kotlin: 'Hello from Kotlin', fortranish: 'Hello from MNF', 'pulse-pcode': 'Hello from the p-machine'
     }[starter.id]]);
     assert.ok(!result.error);
     assert.equal(result.stepLimitHit, false);

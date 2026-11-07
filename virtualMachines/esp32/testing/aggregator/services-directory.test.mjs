@@ -1,6 +1,36 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildServicesDirectory } from '../../aggregator/src/backend/modules/servicesDirectory.mjs';
+import { buildServicesDirectory, formatServiceDescription } from '../../aggregator/src/backend/modules/servicesDirectory.mjs';
+
+test('service bus formats instance capabilities into a canonical description', () => {
+  assert.deepEqual(formatServiceDescription({
+    serviceId: 'temperature',
+    status: 'registered',
+    capabilities: {
+      serviceId: 'temperature',
+      version: 1,
+      sourceLanguage: 'csharp',
+      runtime: { kind: 'pmachine', target: 'javascript', contractVersion: 1 },
+      endpoints: [{ verb: 'GET', path: '/temperature' }],
+      tasks: { model: 'logical-task', maxConcurrent: 2 },
+      requiredHostCapabilities: ['sensor.read'],
+      limits: { maxEvents: 16 }
+    }
+  }), {
+    serviceId: 'temperature',
+    version: 1,
+    sourceLanguage: 'csharp',
+    runtime: { kind: 'pmachine', target: 'javascript', contractVersion: 1 },
+    endpoints: [{ verb: 'GET', path: '/temperature' }],
+    lifecycle: null,
+    tasks: { model: 'logical-task', maxConcurrent: 2 },
+    hostCapabilitiesVersion: undefined,
+    requiredHostCapabilities: ['sensor.read'],
+    limits: { maxEvents: 16 },
+    state: 'registered',
+    ready: null
+  });
+});
 
 test('directory includes catalog, runtime, and all named services from node registries', async () => {
   const requests = [];

@@ -60,3 +60,72 @@ Run the focused tests from the ESP32 workspace:
 ```powershell
 node --test testing\pmachines\memory-management.test.mjs
 ```
+
+## Virtual program scheduling
+
+The package exports `PMachineScheduler`. A scheduler has a bounded number of
+execution slots and a separate bound on live virtual programs:
+
+```js
+import { PMachineScheduler, parsePcode } from './index.mjs';
+
+const scheduler = new PMachineScheduler({ slots: 1, maxContexts: 64, quantum: 256 });
+const result = await scheduler.execute({
+  instructions: parsePcode(pcodeText),
+  programMap,
+  opcodeMap,
+  runtimeContext: { callHost, signal },
+}, { name: 'requester' });
+```
+
+An asynchronous host call releases its slot while awaiting its result. Other
+ready programs can use that same slot. The waiting program retains its PC,
+operand stack, procedure frames, variables, and resources in its own in-memory
+continuation. A reply or host failure reacquires a slot before continuation;
+the host call is not executed again. Instruction quanta also let ready programs
+share slots during CPU-bound execution. This is cooperative scheduling within
+JavaScript, not OS-thread preemption.
+
+Host calls, filesystem operations, FORTRAN I/O, database reads, service calls,
+orchestration waits, and debugger waits participate in suspension. Synchronous
+bindings do not suspend. `getStatus()` exposes running/ready/waiting programs,
+the parked PC and wait reason, available slots, and suspension/resumption counts.
+Admission fails explicitly at `maxContexts`, including programs awaiting replies.
+An abort releases the program's slot and managed invocation storage, even if its
+host promise never settles; adapters must honor the signal to cancel external
+work. Late settlement cannot resume an aborted program.
+
+Pass the same `scheduler` to `createPascalishServiceHost`,
+`createJsPmachineNodeServer`, or `runSingleMessageForEvolution(args, { scheduler })`
+to share slots across hosted and file executions. Hosted scheduling is opt-in:
+without a scheduler, services keep their existing serial event execution and
+wall-clock timeout. With a scheduler, invocations may interleave at asynchronous
+bindings, and `maxExecutionMs` limits slot-occupied execution time, excluding
+waiting/ready time. Shared-state bindings must tolerate that interleaving.
+Instruction limits remain unchanged. The runtime cannot interrupt a synchronous
+host adapter; it checks the active-time budget when control returns.
+
+SCREEN COBOL requesters use a shared scheduler by default. Their host can supply
+one explicitly to share its execution slots with other kinds of programs.
+
+The proof uses the existing QueueManager broker in one child process and a
+separate responder process that delays its reply for **30,000 ms**. A compiled
+SCREEN COBOL requester sends the query, releases the sole slot, and resumes
+without re-sending. A different compiled COBOL program completes on that same
+slot before the reply arrives:
+
+```powershell
+node --test testing\pmachines\virtual-scheduler.test.mjs testing\pmachines\virtual-broker-delay.test.mjs
+```
+
+### FFS persistence is a subsequent phase
+
+Current swap-out is **in memory only**: it frees an execution slot, not the
+retained program's V8 memory, and does not survive interpreter restart.
+Promises and closure-based continuations are not serializable FFS checkpoints.
+Persistent swap-out requires an explicit, versioned execution-state format for
+program identity, PC, operand/call stacks, variables, managed values, resource
+ownership, and the pending broker receive/correlation ID. Recovery must restore
+that state and wait for the existing query's reply, never replay the send.
+Durable broker reply retention and checkpoint/acknowledgment ordering are also
+required; the current test deliberately uses isolated, nonpersistent queues.

@@ -1,4 +1,5 @@
 #pragma once
+#include <Arduino.h>
 // Forward-declare AsyncWebServer to avoid pulling in ESPAsyncWebServer.h here.
 // Both ESPAsyncWebServer.h and esp_https_server.h define HTTP_GET/POST/DELETE
 // etc. as enum values and will conflict if included in the same translation unit.
@@ -15,5 +16,9 @@ void stopHttpsService();
 bool isHttpsRunning();
 bool isHttpsUsingBundledPair();
 void registerHttpsTlsRoutes(AsyncWebServer& srv);
+#if defined(ESP32)
+bool rotateTlsBootstrapToken(String& token, String& error);
+void pollTlsEnrollment();
+#endif
 
 #endif // ENABLE_HTTPS && (ESP32 || ESP8266)

@@ -2,6 +2,7 @@
 #define PMTRACE(x)
 #pragma once
 #include "host_call_storage.h"
+#include <ArduinoJson.h>
 #include <Arduino.h> // For String
 #include <map>
 #include <vector>
@@ -187,6 +188,14 @@ enum Opcode : uint8_t {
     OP_FWRITELN = 0x80,          // Pop text and handle; append the text as a record
     OP_FCLOSE = 0x81,            // Pop handle and close it
     OP_READLN = 0x82,            // Push the next console input line and 1, or "" and 0 at end of input
+    OP_PUSH_DEC = 0x83,          // Push a managed fixed-point decimal literal
+    OP_DEC_STR = 0x84,           // Convert a managed fixed-point decimal to text
+    OP_DEC_CONV = 0x85,          // Convert the top value to an exact decimal
+    OP_DEC_QUANT = 0x86,         // Rescale the top decimal; operand is target scale
+    OP_DEC_DISPLAY = 0x87,       // COBOL display formatting
+    OP_DEC_EDIT = 0x88,          // COBOL edited formatting
+    OP_DEC_FITS = 0x89,          // Test decimal digit width
+    OP_PUSH_REF = 0x8A,          // Reference a live variable or a character slice
     OP_HALT = 0xFF      // HALT
 };
 
@@ -245,6 +254,14 @@ struct ExtendableStorageDiagnostics {
         if (mnemonic == "JZ") return OP_JZ;
         if (mnemonic == "PUSH_INT") return OP_PUSH_INT;
         if (mnemonic == "PUSH_REAL") return OP_PUSH_REAL;
+        if (mnemonic == "PUSH_DEC") return OP_PUSH_DEC;
+        if (mnemonic == "DEC_STR") return OP_DEC_STR;
+        if (mnemonic == "DEC_CONV") return OP_DEC_CONV;
+        if (mnemonic == "DEC_QUANT") return OP_DEC_QUANT;
+        if (mnemonic == "DEC_DISPLAY") return OP_DEC_DISPLAY;
+        if (mnemonic == "DEC_EDIT") return OP_DEC_EDIT;
+        if (mnemonic == "DEC_FITS") return OP_DEC_FITS;
+        if (mnemonic == "PUSH_REF") return OP_PUSH_REF;
         if (mnemonic == "RDIV") return OP_RDIV;
         if (mnemonic == "ORD") return OP_ORD;
         if (mnemonic == "STRLEN") return OP_STRLEN;
@@ -786,12 +803,24 @@ public:
         hostCallHook = hook;
         hostCallContext = context;
     }
+    using SuspendHook = std::function<bool(const std::string&, JsonDocument&, std::string&)>;
+    void setContinuation(SuspendHook suspend, const JsonDocument* saved = nullptr,
+                         const std::string* reply = nullptr) {
+        suspendHook = std::move(suspend);
+        savedContinuation = saved;
+        continuationReply = reply;
+    }
+    bool didLastRunSuspend() const { return lastRunSuspended; }
     void setThunkBinding(const std::string& symbol, int targetPc);
     bool clearThunkBinding(const std::string& symbol);
     void clearAllThunkBindings();
     std::map<std::string, int> getThunkBindings() const;
     std::string getImageMemoryMapJson() const;
 private:
+    SuspendHook suspendHook;
+    const JsonDocument* savedContinuation = nullptr;
+    const std::string* continuationReply = nullptr;
+    bool lastRunSuspended = false;
     std::unique_ptr<HostExecutionStorage> executionStorage;
     void runInstructions(size_t instructionCount,
                          const std::function<PInstruction(size_t)>& instructionAt,

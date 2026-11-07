@@ -9,6 +9,7 @@ import { SERVICE_HOST_BINDINGS, SERVICE_HOST_INTERNAL_BINDINGS, SERVICE_HOST_BIN
 import { HOST_CAPABILITIES_VERSION, requiredHostCapabilities } from '../../../virtualMachines/esp32/pmachines/shared/contracts/host-capabilities.mjs';
 import { getCobolRuntimeLibrary } from './cobol-runtime-libraries.mjs';
 import { encodeHostedImage } from '../../../virtualMachines/esp32/pmachines/shared/contracts/hosted-image.mjs';
+import { fixedToFree } from './fixed-format.mjs';
 
 function text(ctx) {
   return ctx ? ctx.getText() : '';
@@ -6158,13 +6159,17 @@ class CobolishCodegen extends Cobolish85Visitor {
 }
 
 export function compileCobolishToPcode(sourceText, options = {}) {
+  if (options.sourceFormat !== undefined && !['fixed', 'free'].includes(options.sourceFormat)) {
+    throw new Error('[COBOLISH] sourceFormat must be fixed or free');
+  }
+  const parsedSource = options.sourceFormat === 'fixed' ? fixedToFree(sourceText) : sourceText;
   const codegen = new CobolishCodegen(options);
   const copybooks = { ...options.copybooks };
   if (codegen.inventoryGateway) {
     copybooks['PULSE-INVENTORY-CONFIG'] = `01 GATEWAY-ADDRESS PIC X(15) VALUE "${codegen.inventoryGateway.address}".
 01 GATEWAY-PORT PIC S9(9) COMP-5 VALUE ${codegen.inventoryGateway.port}.`;
   }
-  const { tree, errors } = parseCobolishWithAntlr(preprocessCobolText(sourceText, { copybooks }));
+  const { tree, errors } = parseCobolishWithAntlr(preprocessCobolText(parsedSource, { copybooks }));
   if (errors.length > 0) {
     throw new Error(`[COBOLISH] Parse failed:\n${errors.join('\n')}`);
   }

@@ -10,6 +10,7 @@ import { attachPcodeSignature } from '../../../scripts/pcode-signing.mjs';
 import { enrichDiscoveredNode } from '../modules/nodeDiscovery.mjs';
 import { isFreshDiscoveryNode, pruneDiscoveryNodes } from '../../discovery-topology.mjs';
 import { registerNodeAnnouncementRoute } from '../modules/discoveryCollector.mjs';
+import { createEsp32DagScheduler } from '../../../../../../languages/pascalish/src/esp32-dag-swarm.mjs';
 
 const NODE_RENAME_OVERRIDES_PATH = path.resolve(process.cwd(), 'data', 'node-rename-overrides.json');
 const NODE_TOPOLOGY_OVERRIDES_PATH = path.resolve(process.cwd(), 'data', 'node-topology-overrides.json');
@@ -746,6 +747,10 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     setNodeLifecycleState,
     deploymentIndexPath
   } = deps;
+  const dagScheduler = createEsp32DagScheduler({
+    getNodes: () => Array.from(discoveredNodes.values()),
+    isFreshNode: (node, now) => isFreshDiscoveryNode(node, undefined, now)
+  });
   let nodeRenameMap = {};
   let nodeRenameMapLoaded = false;
   let nodeTopologyMap = {};
@@ -3565,6 +3570,20 @@ export function registerTopologyRuntimeRoutes(app, deps) {
     } catch (error) {
       console.error('[DISCOVERY] PMachine target lookup failed:', error);
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/pmachine/dag/execute', async (req, res) => {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return res.status(400).json({ error: 'Request body must be a JSON object' });
+    }
+    try {
+      const initialState = Object.hasOwn(body, 'initialState') ? body.initialState : {};
+      const result = await dagScheduler.execute(body.dag, initialState);
+      return res.json(result);
+    } catch (error) {
+      return res.status(Number(error?.status || 500)).json({ error: error?.message || 'DAG execution failed' });
     }
   });
 

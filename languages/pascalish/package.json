@@ -6,6 +6,8 @@
   "engines": { "node": ">=22" },
   "exports": {
     ".": "./src/compile-pascalish-program-antlr-to-pcode.mjs",
+    "./execution-dag": "./src/execution-dag.mjs",
+    "./esp32-dag-swarm": "./src/esp32-dag-swarm.mjs",
     "./router-mapper": "./src/compile-pascal.mjs",
     "./libraries": "./src/pascalish-library-registry.mjs"
   },

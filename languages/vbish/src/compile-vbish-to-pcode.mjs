@@ -1,6 +1,17 @@
 import { compileVbishWithAntlr } from './vbish-antlr-compiler.mjs';
 import { buildPcodeSourceMap } from '../../../virtualMachines/esp32/aggregator/scripts/pcode-source-map.mjs';
 import { SYSTEM_LIBRARY } from '../../dotnet/system-library.mjs';
+import { compileVb11ToPcode } from './compile-vb11.mjs';
+import { SERVICE_HOST_BINDINGS_VERSION } from '../../../virtualMachines/esp32/pmachines/shared/contracts/service-host-bindings.mjs';
+import { createDotnetServiceContract } from '../../dotnet/service-contract.mjs';
+import { HOST_CAPABILITIES_VERSION } from '../../../virtualMachines/esp32/pmachines/shared/contracts/host-capabilities.mjs';
+
+function collectMatches(source, pattern, map) {
+  const values = [];
+  let match;
+  while ((match = pattern.exec(source)) !== null) values.push(map(match));
+  return values;
+}
 
 function storageName(value) {
   return String(value || '').trim().toUpperCase().replace(/-/g, '_');
@@ -209,20 +220,45 @@ class VbishCodegen {
 }
 
 export function compileVbishToPcode(sourceText, options = {}) {
+  if (options.profile === 'vb11') return compileVb11ToPcode(sourceText, options);
+  if (options.profile && options.profile !== 'pulse') throw new Error(`[VBISH] Unknown language profile '${options.profile}'`);
   const native = compileVbishWithAntlr(sourceText, options);
   if (!native.valid) throw new Error(`[VBISH] Parse failed:\n${native.syntaxErrors.join('\n')}`);
   const built = new VbishCodegen().build(sourceText);
   const runtime = native.runtime || { kind: 'program', id: options.fileName?.replace(/\.[^.]+$/, '') || 'vbish-program', placement: 'local' };
+  const endpointDeclarations = collectMatches(sourceText, /\bENDPOINT\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))(?:\s+HANDLER\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*)))?/gi,
+    match => ({
+      verb: String(match[1] || match[2] || match[3] || '').toUpperCase(),
+      path: String(match[4] || match[5] || match[6] || ''),
+      ...(match[7] || match[8] || match[9] ? { handler: String(match[7] || match[8] || match[9]) } : {})
+    }));
+  if (endpointDeclarations.some(endpoint => !['GET', 'POST'].includes(endpoint.verb)
+      || !endpoint.path.startsWith('/') || endpoint.path.length > 256)) {
+    throw new Error('[VBISH] Service endpoints require GET or POST and an absolute path of 256 characters or fewer');
+  }
+  if (endpointDeclarations.length && runtime.kind !== 'service') {
+    throw new Error('[VBISH] ENDPOINT declarations require a SERVICE runtime');
+  }
+  const declaredProcedures = new Set(collectMatches(sourceText,
+    /^\s*(?:SUB|FUNCTION)\s+([A-Za-z_][A-Za-z0-9_-]*)/gim,
+    match => match[1].toUpperCase()));
+  for (const endpoint of endpointDeclarations) {
+    if (endpoint.handler && !declaredProcedures.has(endpoint.handler.toUpperCase())) {
+      throw new Error(`[VBISH] Service endpoint handler not found: ${endpoint.handler}`);
+    }
+  }
   const concreteSystems = (native.systems || []).filter(system => !system.abstract);
   const flattenMembers = (system) => (system.members || []).flatMap(member =>
     member.kind === 'system' ? flattenMembers(member) : [{ ...member, systemId: system.systemId }]
   );
   const systemMembers = concreteSystems.flatMap(flattenMembers);
+  const hosted = ['service', 'daemon'].includes(runtime.kind);
+  const runtimeUnit = { kind: runtime.kind, id: runtime.id, refreshMs: runtime.interval || null };
   return {
     language: 'vbish',
     sourceLanguage: 'vbish',
     compilerPipeline: 'vbish-to-pcode',
-    runtimeUnit: { kind: runtime.kind, id: runtime.id, refreshMs: runtime.interval || null },
+    runtimeUnit,
     native,
     pcodeText: built.pcodeText,
     programMap: {
@@ -230,6 +266,7 @@ export function compileVbishToPcode(sourceText, options = {}) {
       generatedAt: new Date().toISOString(),
       sourceLanguage: 'vbish',
       executionModel: 'vbish-program',
+      runtimeUnit,
       libraries: [{ id: SYSTEM_LIBRARY.id, version: SYSTEM_LIBRARY.version }],
       globals: built.globals,
       sourceMap: buildPcodeSourceMap({
@@ -245,6 +282,12 @@ export function compileVbishToPcode(sourceText, options = {}) {
         services: systemMembers.filter(member => member.kind === 'service')
       },
       entryLabel: 'MAIN'
+      ,
+      ...(hosted ? {
+        ...createDotnetServiceContract({ id: runtime.id, endpoints: endpointDeclarations }),
+        hostBindingsVersion: SERVICE_HOST_BINDINGS_VERSION,
+        hostCapabilitiesVersion: HOST_CAPABILITIES_VERSION
+      } : {})
     }
   };
 }

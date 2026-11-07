@@ -1,6 +1,7 @@
 import http from 'node:http';
 import fs from 'node:fs/promises';
 import { runRequester } from './requester.mjs';
+import { PMachineScheduler } from '../../pmachines/javascript/index.mjs';
 
 async function readJson(request) {
   const chunks = [];
@@ -14,7 +15,10 @@ async function readJson(request) {
   catch { throw Object.assign(new Error('Invalid JSON request'), { status: 400 }); }
 }
 
-export async function createPathwayHttpServer(controller, requester, { host = '127.0.0.1', port = 4320 } = {}) {
+export async function createPathwayHttpServer(controller, requester, {
+  host = '127.0.0.1', port = 4320, scheduler = new PMachineScheduler(),
+} = {}) {
+  if (!(scheduler instanceof PMachineScheduler)) throw new TypeError('Invalid requester scheduler');
   const files = new Map(await Promise.all([
     ['/', 'index.html', 'text/html'], ['/screen.mjs', 'screen.mjs', 'text/javascript'],
     ['/request-recovery.mjs', 'request-recovery.mjs', 'text/javascript'],
@@ -39,12 +43,14 @@ export async function createPathwayHttpServer(controller, requester, { host = '1
         return response.end(file.body);
       }
       if (request.method === 'GET' && url.pathname === '/api/screen') return reply(response, 200, requester.programMap.screenCobol);
-      if (request.method === 'GET' && url.pathname === '/api/status') return reply(response, 200, controller.snapshot());
+      if (request.method === 'GET' && url.pathname === '/api/status') {
+        return reply(response, 200, { ...controller.snapshot(), pmachine: scheduler.getStatus() });
+      }
       if (request.method === 'POST' && url.pathname === '/api/requester') {
         const body = await readJson(request);
         if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Expected requester object');
         const result = await runRequester(requester, body.values,
-          (name, record, options) => controller.send(name, record, options), { requestId: body.requestId });
+          (name, record, options) => controller.send(name, record, options), { requestId: body.requestId, scheduler });
         return reply(response, 200, { ...result, ...(body.requestId ? { requestId: body.requestId } : {}) });
       }
       return reply(response, 404, { error: 'Not found' });

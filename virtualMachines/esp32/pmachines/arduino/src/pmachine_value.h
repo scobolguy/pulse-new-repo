@@ -12,7 +12,9 @@ enum class ValueKind : uint8_t {
     StringRef = 3,
     EnumRef = 4,
     ObjectRef = 5,
-    Double = 6
+    Double = 6,
+    DecimalRef = 7,
+    Reference = 8
 };
 
 struct Value {
@@ -36,6 +38,9 @@ struct Value {
 
     bool isString() const { return kind == ValueKind::StringRef; }
 
+    bool isDecimal() const { return kind == ValueKind::DecimalRef; }
+    bool isReference() const { return kind == ValueKind::Reference; }
+
     static Value makeString(uint16_t poolHandle) {
         Value v;
         v.kind = ValueKind::StringRef;
@@ -55,6 +60,24 @@ struct Value {
         Value v;
         v.kind = ValueKind::Double;
         v.d = value;
+        return v;
+    }
+
+    static Value makeDecimal(uint16_t decimalHandle, uint8_t decimalFlags = 0) {
+        Value v;
+        v.kind = ValueKind::DecimalRef;
+        v.handle = decimalHandle;
+        v.flags = decimalFlags;
+        v.i = 0;
+        return v;
+    }
+
+    static Value makeReference(uint16_t referenceHandle, uint8_t referenceFlags = 0) {
+        Value v;
+        v.kind = ValueKind::Reference;
+        v.handle = referenceHandle;
+        v.flags = referenceFlags;
+        v.i = 0;
         return v;
     }
 

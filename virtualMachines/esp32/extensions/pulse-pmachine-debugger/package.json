@@ -1,13 +1,13 @@
 {
   "name": "pulse-pmachine-debugger",
   "displayName": "Pulse Studio & PMachine Debugger",
-  "description": "Editors for Pascalish, COBOLish, VBish, C#, MNF FORTRAN, WFL, MAPL and VFL, with Pulse Studio and PMachine Run/Debug.",
+  "description": "Editors for Kotlin, Pascalish, COBOLish, VBish, C#, MNF FORTRAN, WFL, MAPL and VFL, with Pulse Studio and PMachine Run/Debug.",
   "repository": {
     "type": "git",
     "url": "https://github.com/scobolguy/pulse-new-repo.git",
     "directory": "virtualMachines/esp32/extensions/pulse-pmachine-debugger"
   },
-  "version": "0.1.23",
+  "version": "0.1.24",
   "publisher": "pulse",
   "icon": "src/media/pulse-icon.png",
   "files": [
@@ -39,6 +39,7 @@
     "onLanguage:mnf",
     "onLanguage:fortranish",
     "onLanguage:csharp",
+    "onLanguage:kotlin",
     "onLanguage:wfl",
     "onLanguage:mapl",
     "onLanguage:pulse-pcode",
@@ -53,6 +54,12 @@
   "contributes": {
     "views": {
       "pulseCatalogStudio": [
+        {
+          "id": "pulseCatalogStudio.swarm",
+          "name": "Swarm",
+          "type": "tree",
+          "visibility": "visible"
+        },
         {
           "id": "pulseCatalogStudio.infrastructure",
           "name": "Infrastructure"
@@ -183,6 +190,12 @@
         "configuration": "./csharp-language-configuration.json"
       },
       {
+        "id": "kotlin",
+        "aliases": ["Kotlin"],
+        "extensions": [".kt"],
+        "configuration": "./kotlin-language-configuration.json"
+      },
+      {
         "id": "cobolish",
         "aliases": [
           "COBOLish"
@@ -251,6 +264,11 @@
         "language": "csharp",
         "scopeName": "source.cs",
         "path": "./syntaxes/csharp.tmLanguage.json"
+      },
+      {
+        "language": "kotlin",
+        "scopeName": "source.kotlin",
+        "path": "./syntaxes/kotlin.tmLanguage.json"
       },
       {
         "language": "cobolish",
@@ -474,6 +492,11 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "pulse-pmachine.refreshSwarm",
+        "title": "Pulse Swarm: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
         "command": "pulse-pmachine.openServiceEndpoint",
         "title": "Pulse Services: Open Endpoint",
         "icon": "$(link-external)"
@@ -529,6 +552,11 @@
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "pulse-pmachine.refreshSwarm",
+          "when": "view == pulseCatalogStudio.swarm",
+          "group": "navigation"
+        },
         {
           "command": "pulseCatalogStudio.refreshDataLibrarian",
           "when": "view == pulseCatalogStudio.sidebar",
@@ -670,12 +698,12 @@
         },
         {
           "command": "pulse-pmachine.runCurrentFile",
-          "when": "editorLangId == csharp || editorLangId == cobolish || editorLangId == fortranish || editorLangId == mnf || editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode",
+          "when": "editorLangId == kotlin || editorLangId == csharp || editorLangId == cobolish || editorLangId == fortranish || editorLangId == mnf || editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode",
           "group": "navigation@1"
         },
         {
           "command": "pulse-pmachine.debugCurrentFile",
-          "when": "editorLangId == csharp || editorLangId == cobolish || editorLangId == fortranish || editorLangId == mnf || editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode",
+          "when": "editorLangId == kotlin || editorLangId == csharp || editorLangId == cobolish || editorLangId == fortranish || editorLangId == mnf || editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode",
           "group": "navigation@2"
         }
       ],
@@ -700,11 +728,11 @@
         },
         {
           "command": "pulse-pmachine.runCurrentFile",
-          "when": "editorLangId == csharp || editorLangId == cobolish || editorLangId == fortranish || editorLangId == mnf || editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode"
+          "when": "editorLangId == kotlin || editorLangId == csharp || editorLangId == cobolish || editorLangId == fortranish || editorLangId == mnf || editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode"
         },
         {
           "command": "pulse-pmachine.debugCurrentFile",
-          "when": "editorLangId == csharp || editorLangId == cobolish || editorLangId == fortranish || editorLangId == mnf || editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode"
+          "when": "editorLangId == kotlin || editorLangId == csharp || editorLangId == cobolish || editorLangId == fortranish || editorLangId == mnf || editorLangId == pascalish || editorLangId == pascal || editorLangId == vbish || editorLangId == wfl || editorLangId == mapl || editorLangId == pulse-pcode"
         }
       ]
     },
@@ -815,6 +843,7 @@
           "mnf",
           "fortranish",
           "csharp",
+          "kotlin",
           "wfl",
           "pulse-pcode"
         ],
@@ -959,6 +988,9 @@
     ],
     "breakpoints": [
       {
+        "language": "kotlin"
+      },
+      {
         "language": "csharp"
       },
       {
@@ -987,6 +1019,10 @@
       }
     ],
     "configurationDefaults": {
+      "[kotlin]": {
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true
+      },
       "[csharp]": {
         "editor.tabSize": 4,
         "editor.insertSpaces": true

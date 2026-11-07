@@ -1,7 +1,10 @@
 #include <Arduino.h>
 #include <ctype.h>
+#if !defined(PULSE_LEAN_PMACHINE)
 #include "SensorService.h"
+#endif
 #include "DevicePin.h"
+#include "GpioPinSemaphore.h"
 #include <map>
 #include <vector>
 std::map<int, DevicePin*> devicePins;
@@ -183,15 +186,6 @@ String ffsRemoteCandidate;
 String ffsRemoteConfigured;
 unsigned long ffsLastRemoteProbe = 0;
 AsyncWebServer server(80);
-DevicePin* devicePin = nullptr;
-int devicePinNumber = 2;
-#ifdef ENABLE_CAMERA
-// GPIO 5 is used by camera (Y2 data line), move relay to GPIO 12
-int relayPinNumber = 12;
-#else
-int relayPinNumber = 5;
-#endif
-bool relayStateOn = false;
 std::map<String, bool> serviceBusyMap;
 
 namespace {
@@ -1592,7 +1586,10 @@ void setupWebServer() {
             if (v >= 1024 && v <= 65535) nodeConfig.siblingPort = static_cast<uint16_t>(v);
         }
 
-        saveNodeConfig(nodeConfig);
+        if (!saveNodeConfig(nodeConfig)) {
+            request->send(500, "application/json", "{\"error\":\"failed_to_persist_topology\"}");
+            return;
+        }
 
         runtimeUdpParentPort = nodeConfig.parentPort;
         runtimeUdpSiblingPort = nodeConfig.siblingPort;
@@ -1643,109 +1640,6 @@ void setupWebServer() {
         delay(delayMs);
         ESP.restart();
     });
-
-    // Relay device actions: toggle, turnOn, turnOff.
-    server.on("/devices/relay/action", HTTP_POST, [](AsyncWebServerRequest *request){
-        String action;
-        if (request->hasParam("action", true)) {
-            action = request->getParam("action", true)->value();
-        } else if (request->hasParam("action")) {
-            action = request->getParam("action")->value();
-        }
-        action.trim();
-        if (action.length() == 0) {
-            request->send(400, "application/json", "{\"error\":\"action is required\"}");
-            return;
-        }
-
-        pinMode(relayPinNumber, OUTPUT);
-        if (action.equalsIgnoreCase("toggle")) {
-            relayStateOn = !relayStateOn;
-        } else if (action.equalsIgnoreCase("turnOn")) {
-            relayStateOn = true;
-        } else if (action.equalsIgnoreCase("turnOff")) {
-            relayStateOn = false;
-        } else {
-            request->send(400, "application/json", "{\"error\":\"unsupported relay action\"}");
-            return;
-        }
-
-        digitalWrite(relayPinNumber, relayStateOn ? HIGH : LOW);
-
-        JsonDocument doc;
-        doc["status"] = "ok";
-        doc["device"] = "RELAY";
-        doc["action"] = action;
-        doc["pin"] = relayPinNumber;
-        doc["state"] = relayStateOn ? "on" : "off";
-        String json;
-        serializeJson(doc, json);
-        request->send(200, "application/json", json);
-    });
-
-    auto handleLedAction = [](AsyncWebServerRequest *request){
-        String action;
-        if (request->hasParam("action", true)) {
-            action = request->getParam("action", true)->value();
-        } else if (request->hasParam("action")) {
-            action = request->getParam("action")->value();
-        }
-        action.trim();
-        if (action.length() == 0) {
-            request->send(400, "application/json", "{\"error\":\"action is required\"}");
-            return;
-        }
-
-        const int ledPinNumber = 2;
-        String valueParam;
-        if (request->hasParam("value", true)) {
-            valueParam = request->getParam("value", true)->value();
-        } else if (request->hasParam("value")) {
-            valueParam = request->getParam("value")->value();
-        }
-        valueParam.trim();
-
-        Serial.printf("[LEDPIN] Received action=%s value=%s\n", action.c_str(), valueParam.c_str());
-
-        // Always configure the LED pin as output before any state change.
-        pinMode(ledPinNumber, OUTPUT);
-
-        bool nextOn = false;
-        if (action.equalsIgnoreCase("raise") || action.equalsIgnoreCase("turnOn") || action.equalsIgnoreCase("on")) {
-            nextOn = true;
-        } else if (action.equalsIgnoreCase("lower") || action.equalsIgnoreCase("turnOff") || action.equalsIgnoreCase("off")) {
-            nextOn = false;
-        } else if (action.equalsIgnoreCase("set_output")) {
-            const String lowered = valueParam;
-            if (lowered.equalsIgnoreCase("1") || lowered.equalsIgnoreCase("high") || lowered.equalsIgnoreCase("on") || lowered.equalsIgnoreCase("true")) {
-                nextOn = true;
-            } else if (lowered.equalsIgnoreCase("0") || lowered.equalsIgnoreCase("low") || lowered.equalsIgnoreCase("off") || lowered.equalsIgnoreCase("false")) {
-                nextOn = false;
-            } else {
-                request->send(400, "application/json", "{\"error\":\"set_output requires value=0|1|low|high|off|on|false|true\"}");
-                return;
-            }
-        } else {
-            request->send(400, "application/json", "{\"error\":\"unsupported LED action\"}");
-            return;
-        }
-
-        digitalWrite(ledPinNumber, nextOn ? HIGH : LOW);
-        Serial.printf("[LEDPIN] Pin %d set to %s\n", ledPinNumber, nextOn ? "HIGH" : "LOW");
-
-        JsonDocument doc;
-        doc["status"] = "ok";
-        doc["device"] = "LEDPIN";
-        doc["action"] = action;
-        doc["pin"] = ledPinNumber;
-        doc["state"] = nextOn ? "on" : "off";
-        String json;
-        serializeJson(doc, json);
-        request->send(200, "application/json", json);
-    };
-
-    server.on("/devices/ledpin/action", HTTP_POST, handleLedAction);
-    server.on("/devices/LEDPIN/action", HTTP_POST, handleLedAction);
 
     // Self-describing services endpoint
     server.on("/services/describe", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -1830,6 +1724,11 @@ void setupWebServer() {
                     docText = String("Device: ") + devName;
                 }
                 devObj["description"] = docText;
+                if (!err) {
+                    for (const char* field : {"driver", "pin", "endpoint", "states", "capabilities"}) {
+                        if (!devDoc[field].isNull()) devObj[field].set(devDoc[field]);
+                    }
+                }
                 // Optionally, add device actions/commands if present in JSON
                 if (!err && devDoc["actions"].is<JsonArray>()) {
                     JsonArray actions = devObj["actions"].to<JsonArray>();
@@ -2085,6 +1984,7 @@ void setupWebServer() {
         #endif
         #endif
 
+#if !defined(PULSE_LEAN_PMACHINE)
         // Sensor Service (example, static)
         auto sensor = services.add<JsonObject>();
         sensor["name"] = "SensorService";
@@ -2121,6 +2021,8 @@ void setupWebServer() {
             else { docText = "Convert sensor result to JSON."; }
             cmd["description"] = docText;
         }
+
+#endif
 
 #ifdef ENABLE_TIME_AUTHORITY
         auto timeAuthority = services.add<JsonObject>();
@@ -2172,7 +2074,6 @@ void setupWebServer() {
         request->send(200, "application/json", json);
     });
 
-    // GET /sensor/read?pin=4&type=DHT22&unit=C
     server.on("/status", HTTP_GET, [](AsyncWebServerRequest *request){
         const uint32_t freeHeap = ESP.getFreeHeap();
         if (freeHeap < 70000) {
@@ -3021,6 +2922,102 @@ void writeDefaultDocIfMissing(const char* path, const char* content) {
     file.close();
 }
 
+#if defined(ENABLE_PMACHINE) && defined(PULSE_BOARD_RGB_LED_PIN)
+bool registerBoardLed() {
+    const char* path = "/devices/BoardLed.json";
+    JsonDocument metadata;
+    const bool exists = LittleFS.exists(path);
+    if (exists) {
+        File file = LittleFS.open(path, "r");
+        if (!file || deserializeJson(metadata, file)) {
+            Serial.println("[DEVICE] Cannot read existing BoardLed metadata");
+            return false;
+        }
+        if (String(metadata["name"] | "") != "BoardLed" ||
+            String(metadata["type"] | "") != "device" ||
+            String(metadata["driver"] | "") != "ws2812" ||
+            (metadata["pin"] | -1) != PULSE_BOARD_RGB_LED_PIN) {
+            Serial.println("[DEVICE] Preserving conflicting BoardLed metadata; not claiming its GPIO");
+            return false;
+        }
+    } else {
+        metadata["name"] = "BoardLed";
+        metadata["type"] = "device";
+        metadata["driver"] = "ws2812";
+        metadata["pin"] = PULSE_BOARD_RGB_LED_PIN;
+        metadata["visibility"] = "public";
+        metadata["endpoint"] = "/api/device/BoardLed";
+        auto states = metadata["states"].to<JsonArray>();
+        for (const char* state : {"power", "color", "intensity"}) states.add(state);
+        auto actions = metadata["actions"].to<JsonArray>();
+        for (const char* action : {"turnOn", "turnOff", "toggle"}) actions.add(action);
+        auto capabilities = metadata["capabilities"].to<JsonObject>();
+        capabilities["colorFormat"] = "#RRGGBB";
+        capabilities["intensityMin"] = 0;
+        capabilities["intensityMax"] = 255;
+        String text;
+        serializeJson(metadata, text);
+        const char* temporaryPath = "/devices/BoardLed.json.tmp";
+        File file = LittleFS.open(temporaryPath, "w");
+        if (!file || file.print(text) != text.length()) {
+            Serial.println("[DEVICE] Cannot write BoardLed metadata");
+            return false;
+        }
+        file.close();
+        if (!LittleFS.rename(temporaryPath, path)) {
+            Serial.println("[DEVICE] Cannot publish BoardLed metadata");
+            return false;
+        }
+    }
+
+    std::string error;
+    if (!deviceRuntime().registerPersistent("BoardLed", "ws2812", PULSE_BOARD_RGB_LED_PIN, error)) {
+        Serial.printf("[DEVICE] BoardLed initialization failed: %s\n", error.c_str());
+        return false;
+    }
+    writeDefaultDocIfMissing("/devices/docs/BoardLed.txt",
+        "Waveshare ESP32-S3 onboard RGB LED. GET /api/device/BoardLed?state=power|color|intensity. "
+        "POST JSON {state:color,value:#RRGGBB}, {state:intensity,value:0..255}, "
+        "or {state:power,value:on|off}. Color and intensity are retained while off.");
+
+    // Remove only the exact old firmware demo shapes, never custom driver definitions.
+    for (const char* name : {"LEDPIN", "RELAY"}) {
+        const String legacyPath = String("/devices/") + name + ".json";
+        File file = LittleFS.open(legacyPath, "r");
+        if (!file) continue;
+        JsonDocument legacy;
+        const auto parseError = deserializeJson(legacy, file);
+        file.close();
+        if (parseError || String(legacy["type"] | "") != "device" ||
+            String(legacy["name"] | "") != name || !legacy["driver"].isNull()) continue;
+        const bool led = String(name) == "LEDPIN";
+        const int pin = legacy["pin"] | -1;
+        const JsonArray actions = legacy["actions"].as<JsonArray>();
+        String relayFsm;
+        if (!led) serializeJson(legacy["fsm"], relayFsm);
+        const char* oldRelayFsm =
+            "{\"initialState\":\"off\",\"states\":[\"off\",\"on\"],\"transitions\":["
+            "{\"from\":\"off\",\"action\":\"turnOn\",\"to\":\"on\"},"
+            "{\"from\":\"on\",\"action\":\"turnOff\",\"to\":\"off\"},"
+            "{\"from\":\"off\",\"action\":\"toggle\",\"to\":\"on\"},"
+            "{\"from\":\"on\",\"action\":\"toggle\",\"to\":\"off\"}]}";
+        const bool matches = actions.size() == 3 &&
+            String(actions[0] | "") == (led ? "set_output" : "toggle") &&
+            String(actions[1] | "") == (led ? "raise" : "turnOn") &&
+            String(actions[2] | "") == (led ? "lower" : "turnOff") &&
+            (led ? (pin == 2 && legacy.size() == 4) :
+                ((pin == 5 || pin == 12) && legacy.size() == 6 &&
+                 String(legacy["visibility"] | "") == "private" && relayFsm == oldRelayFsm));
+        if (matches && !LittleFS.remove(legacyPath)) {
+            Serial.printf("[DEVICE] Failed to remove retired demo metadata: %s\n", legacyPath.c_str());
+            return false;
+        }
+    }
+    Serial.printf("[DEVICE] BoardLed registered on GPIO%d with RGB and intensity controls\n", PULSE_BOARD_RGB_LED_PIN);
+    return true;
+}
+#endif
+
 void ensureDocsTreeAndDefaults() {
     if (!LittleFS.exists("/services/docs")) {
         LittleFS.mkdir("/services/docs");
@@ -3028,16 +3025,6 @@ void ensureDocsTreeAndDefaults() {
     if (!LittleFS.exists("/devices/docs")) {
         LittleFS.mkdir("/devices/docs");
     }
-
-    writeDefaultDocIfMissing("/devices/docs/LEDPIN.txt", "Device: LEDPIN");
-    writeDefaultDocIfMissing("/devices/docs/LEDPIN_set_output.txt", "Action: set_output");
-    writeDefaultDocIfMissing("/devices/docs/LEDPIN_raise.txt", "Action: raise");
-    writeDefaultDocIfMissing("/devices/docs/LEDPIN_lower.txt", "Action: lower");
-    writeDefaultDocIfMissing("/devices/docs/RELAY.txt", "Device: RELAY (pin-controlled relay)");
-    writeDefaultDocIfMissing("/devices/docs/RELAY_toggle.txt", "Action: toggle");
-    writeDefaultDocIfMissing("/devices/docs/RELAY_turnOn.txt", "Action: turnOn");
-    writeDefaultDocIfMissing("/devices/docs/RELAY_turnOff.txt", "Action: turnOff");
-    writeDefaultDocIfMissing("/devices/docs/RELAY_fsm.txt", "FSM: off --turnOn--> on, on --turnOff--> off, off|on --toggle--> toggled state");
 
     writeDefaultDocIfMissing("/services/docs/ffs.txt", "Federated File System: provides distributed file storage and access.");
     writeDefaultDocIfMissing("/services/docs/ffs_listFiles.txt", "List all files in the file system.");
@@ -3054,9 +3041,11 @@ void ensureDocsTreeAndDefaults() {
     writeDefaultDocIfMissing("/services/docs/pmachine_clearBreakpoint.txt", "Clear a breakpoint at a given address.");
     writeDefaultDocIfMissing("/services/docs/pmachine_getStatus.txt", "Get the current status of the VM.");
 
+#if !defined(PULSE_LEAN_PMACHINE)
     writeDefaultDocIfMissing("/services/docs/sensor.txt", "Provides access to connected sensors (e.g., DHT22, BME280).");
     writeDefaultDocIfMissing("/services/docs/sensor_readSensor.txt", "Read values from a sensor.");
     writeDefaultDocIfMissing("/services/docs/sensor_resultToJson.txt", "Convert sensor result to JSON.");
+#endif
 }
 
 void setup() {
@@ -3064,6 +3053,10 @@ void setup() {
     Serial.begin(115200);
     delay(100);
     Serial.println("[BOOT] setup() starting...");
+    if (!initializeGpioPinSemaphores()) {
+        Serial.println("[BOOT] GPIO coordination initialization failed");
+        while (1) delay(1000);
+    }
 
     // 1. Probe SD. Legacy device configuration still has its own local storage.
 #if defined(ESP32)
@@ -3175,88 +3168,15 @@ void setup() {
     if (!foundFlows) LittleFS.mkdir("/flows");
     ensureDocsTreeAndDefaults();
 
-    // 4. LEDPIN device creation after WiFi connection and directory creation
-    Serial.println("[DEBUG] Checking WiFi status for LEDPIN device creation...");
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("[LEDPIN] Creating /devices/LEDPIN.json after WiFi connection...");
-        if (LittleFS.exists("/devices")) {
-            File f = LittleFS.open("/devices/LEDPIN.json", "w");
-            if (f) {
-                JsonDocument doc;
-                doc["type"] = "device";
-                doc["name"] = "LEDPIN";
-                doc["pin"] = 2;
-                auto arr = doc["actions"].to<JsonArray>();
-                arr.add("set_output");
-                arr.add("raise");
-                arr.add("lower");
-                String json;
-                serializeJson(doc, json);
-                f.print(json);
-                f.close();
-                Serial.println("[LEDPIN] /devices/LEDPIN.json created.");
-            } else {
-                Serial.println("[LEDPIN] Failed to create /devices/LEDPIN.json!");
-            }
-            pinMode(2, OUTPUT);
-            digitalWrite(2, LOW);
-            Serial.println("[LEDPIN] Pin 2 set as OUTPUT and LOW (LED off)");
-
-            File relayFile = LittleFS.open("/devices/RELAY.json", "w");
-            if (relayFile) {
-                JsonDocument relayDoc;
-                relayDoc["type"] = "device";
-                relayDoc["name"] = "RELAY";
-                relayDoc["pin"] = relayPinNumber;
-                relayDoc["visibility"] = "private";
-                auto relayActions = relayDoc["actions"].to<JsonArray>();
-                relayActions.add("toggle");
-                relayActions.add("turnOn");
-                relayActions.add("turnOff");
-                auto relayFsm = relayDoc["fsm"].to<JsonObject>();
-                relayFsm["initialState"] = "off";
-                auto relayStates = relayFsm["states"].to<JsonArray>();
-                relayStates.add("off");
-                relayStates.add("on");
-                auto relayTransitions = relayFsm["transitions"].to<JsonArray>();
-                JsonObject t1 = relayTransitions.add<JsonObject>();
-                t1["from"] = "off";
-                t1["action"] = "turnOn";
-                t1["to"] = "on";
-                JsonObject t2 = relayTransitions.add<JsonObject>();
-                t2["from"] = "on";
-                t2["action"] = "turnOff";
-                t2["to"] = "off";
-                JsonObject t3 = relayTransitions.add<JsonObject>();
-                t3["from"] = "off";
-                t3["action"] = "toggle";
-                t3["to"] = "on";
-                JsonObject t4 = relayTransitions.add<JsonObject>();
-                t4["from"] = "on";
-                t4["action"] = "toggle";
-                t4["to"] = "off";
-                String relayJson;
-                serializeJson(relayDoc, relayJson);
-                relayFile.print(relayJson);
-                relayFile.close();
-                Serial.println("[RELAY] /devices/RELAY.json created.");
-            } else {
-                Serial.println("[RELAY] Failed to create /devices/RELAY.json!");
-            }
-
-            pinMode(relayPinNumber, OUTPUT);
-            relayStateOn = false;
-            digitalWrite(relayPinNumber, LOW);
-            Serial.printf("[RELAY] Pin %d set as OUTPUT and LOW (relay off)\n", relayPinNumber);
-        } else {
-            Serial.println("[LEDPIN] /devices directory does NOT exist!");
-        }
-    } else {
-        Serial.println("[LEDPIN] WiFi not connected, skipping LEDPIN device creation!");
+#if defined(ENABLE_PMACHINE) && defined(PULSE_BOARD_RGB_LED_PIN)
+    if (!registerBoardLed()) {
+        Serial.println("[DEVICE] BoardLed registration failed; check device metadata and GPIO configuration");
     }
+#endif
 
     // 5. Load node config from /ffs/.NodeConfig.json if present
-    if (loadNodeConfig(nodeConfig) && nodeConfig.nodeName.length()) {
+    const bool nodeConfigLoaded = loadNodeConfig(nodeConfig);
+    if (nodeConfigLoaded && nodeConfig.nodeName.length()) {
         nodeName = nodeConfig.nodeName;
     } else {
         bool loadedStoredName = false;
@@ -3280,6 +3200,11 @@ void setup() {
             nodeName += "-";
             nodeName += macSuffix;
         }
+    }
+
+    if (nodeConfigLoaded) {
+        runtimeUdpParentPort = nodeConfig.parentPort;
+        runtimeUdpSiblingPort = nodeConfig.siblingPort;
     }
 
     #ifndef DISABLE_BONECRUSHER
@@ -3338,7 +3263,15 @@ void setup() {
         }
     }
 #endif
-    if (!ffsUp) Serial.println("[FFS] No local SD storage; searching for remote FFS (no LittleFS fallback)");
+    if (!ffsUp) {
+        if (LittleFS.begin()) {
+            ffsUp = federatedFS.begin(FFSBackend::Flash, LittleFS);
+            if (ffsUp) Serial.println("FederatedFileSystem is UP (LittleFS flash backend)");
+            else Serial.println("FederatedFileSystem failed to initialize LittleFS backend");
+        } else {
+            Serial.println("[FFS] LittleFS mount failed; searching for remote FFS");
+        }
+    }
 
 #ifdef ENABLE_PMACHINE
     pm.setFFS(&federatedFS);
@@ -3632,6 +3565,9 @@ void setup() {
 
 void loop() {
     serialProvisioningPoll();
+#if defined(ENABLE_HTTPS) && defined(ESP32)
+    pollTlsEnrollment();
+#endif
 
     if (WiFi.status() == WL_CONNECTED) {
         consecutiveWifiConnectFailures = 0;
@@ -3774,9 +3710,13 @@ void loop() {
         NODE_BEACON_ACKED_INTERVAL_MS,
         NODE_BEACON_UNACKED_INTERVAL_MS);
     if (udpRuntimeCanSendBeacon() && millis() - lastAnnounce > beaconInterval) {
+#if defined(ESP32) && defined(ENABLE_PMACHINE) && !defined(DISABLE_PMACHINE_ROUTES)
+        announcePresence();
+#else
         if (!isBonecrusherRole()) {
             announcePresence();
         }
+#endif
         lastAnnounce = millis();
     }
 

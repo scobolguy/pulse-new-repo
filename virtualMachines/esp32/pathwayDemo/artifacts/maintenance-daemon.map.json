@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "hostBindingsVersion": 1,
+  "targets": [
+    "js",
+    "esp32"
+  ],
+  "runtimeUnit": {
+    "kind": "daemon",
+    "id": "pathway-maintenance",
+    "refreshMs": 60000
+  },
+  "hostCapabilitiesVersion": 1,
+  "requiredHostCapabilities": [],
+  "serviceEndpoints": [],
+  "procedures": {},
+  "distributedTables": [],
+  "hostCaches": []
+}

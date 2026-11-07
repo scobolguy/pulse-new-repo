@@ -1,0 +1,193 @@
+# Auto-generated from ANTLR Pascalish grammar
+JMP MAIN
+PROC_STOCK:
+PUSH_STR ""
+STORE requestBytes
+PUSH_STR ""
+STORE response
+PUSH_STR ""
+STORE result
+PUSH_STR ""
+STORE Result
+PUSH_STR "{}"
+PUSH_STR "item"
+LOAD item
+CALL_EXT host.json_set 3
+CALL_EXT host.bytes_from_text 1
+STORE requestBytes
+PUSH_STR "192.168.2.11"
+PUSH_INT 4325
+PUSH_STR "000000"
+LOAD requestBytes
+CALL_EXT host.bytes_length 1
+CALL_EXT host.bytes_append 2
+LOAD requestBytes
+CALL_EXT host.bytes_join 2
+PUSH_INT 4
+PUSH_INT 1500
+PUSH_INT 512
+CALL_EXT host.tcp_exchange 6
+STORE response
+LOAD response
+PUSH_INT 4
+LOAD response
+CALL_EXT host.bytes_length 1
+PUSH_INT 4
+SUB
+CALL_EXT host.bytes_slice 3
+CALL_EXT host.bytes_text 1
+STORE response
+LOAD response
+PUSH_STR "status"
+CALL_EXT host.json_integer 2
+PUSH_INT 200
+NEQ
+JZ ELSE_1
+LOAD response
+PUSH_STR "status"
+CALL_EXT host.json_integer 2
+CALL_EXT host.http_status 1
+STORE __discard
+PUSH_INT 0
+STORE __discard
+PUSH_STR "{}"
+PUSH_STR "error"
+LOAD response
+PUSH_STR "error"
+CALL_EXT host.json_text 2
+CALL_EXT host.json_set 3
+STORE __tmp1
+LOAD __tmp1
+RET
+JMP ENDIF_2
+ELSE_1:
+ENDIF_2:
+PUSH_STR "{}"
+PUSH_STR "inStock"
+LOAD response
+PUSH_STR "inStock"
+CALL_EXT host.json_integer 2
+CALL_EXT host.json_set 3
+STORE result
+LOAD result
+PUSH_STR "committed"
+LOAD response
+PUSH_STR "committed"
+CALL_EXT host.json_integer 2
+CALL_EXT host.json_set 3
+STORE __tmp2
+LOAD __tmp2
+RET
+LOAD Result
+STORE __tmp3
+LOAD __tmp3
+RET
+RET
+PROC_PATHWAYSTOCK:
+PUSH_STR ""
+STORE result
+PUSH_STR ""
+STORE Result
+CALL_EXT host.event_body 0
+PUSH_STR "data"
+CALL_EXT host.json_text 2
+CALL PROC_STOCK 1
+STORE result
+LOAD result
+PUSH_STR "error"
+CALL_EXT host.json_has 2
+PUSH_INT 0
+NEQ
+JZ ELSE_3
+LOAD result
+STORE __tmp4
+LOAD __tmp4
+RET
+JMP ENDIF_4
+ELSE_3:
+ENDIF_4:
+PUSH_STR "{\"code\":0}"
+PUSH_STR "data"
+LOAD result
+CALL_EXT host.json_set 3
+STORE __tmp5
+LOAD __tmp5
+RET
+LOAD Result
+STORE __tmp6
+LOAD __tmp6
+RET
+RET
+PROC_APISTOCK:
+PUSH_STR ""
+STORE Result
+CALL_EXT host.event_body 0
+PUSH_STR "item"
+CALL_EXT host.json_text 2
+CALL PROC_STOCK 1
+STORE __tmp7
+LOAD __tmp7
+RET
+LOAD Result
+STORE __tmp8
+LOAD __tmp8
+RET
+RET
+PROC__SERVICE_ENDPOINT_0:
+PUSH_STR ""
+STORE Result
+CALL PROC_PATHWAYSTOCK 0
+STORE __tmp9
+LOAD __tmp9
+RET
+LOAD Result
+STORE __tmp10
+LOAD __tmp10
+RET
+RET
+PROC__SERVICE_ENDPOINT_1:
+PUSH_STR ""
+STORE Result
+CALL PROC_APISTOCK 0
+STORE __tmp11
+LOAD __tmp11
+RET
+LOAD Result
+STORE __tmp12
+LOAD __tmp12
+RET
+RET
+MAIN:
+CALL_EXT host.event_method 0
+PUSH_STR "POST"
+STREQ
+JZ ENDPOINT_NEXT_5
+CALL_EXT host.event_path 0
+PUSH_STR "/api/pathway/inventory-stock"
+STREQ
+JZ ENDPOINT_NEXT_5
+CALL PROC__SERVICE_ENDPOINT_0 0
+STORE __service_response
+MAP_RETURN __service_response
+HALT
+ENDPOINT_NEXT_5:
+CALL_EXT host.event_method 0
+PUSH_STR "POST"
+STREQ
+JZ ENDPOINT_NEXT_6
+CALL_EXT host.event_path 0
+PUSH_STR "/api/inventory/stock"
+STREQ
+JZ ENDPOINT_NEXT_6
+CALL PROC__SERVICE_ENDPOINT_1 0
+STORE __service_response
+MAP_RETURN __service_response
+HALT
+ENDPOINT_NEXT_6:
+PUSH_INT 404
+CALL_EXT host.http_status 1
+STORE __discard
+PUSH_STR "{\"error\":\"Service endpoint not found\"}"
+STORE __service_response
+MAP_RETURN __service_response
+HALT

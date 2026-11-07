@@ -16,9 +16,13 @@
 #include <ArduinoJson.h>
 #include "pmachine.h"
 #include "managed_objects.h"
+#include "checkpoint_scalar.h"
 #include "fortran_runtime.h"
+#include "system_runtime.h"
 #include "fortran_format.h"
 #include "cobol_vm.h"
+#include "cobol_vm_internal.h"
+#include "managed_references.h"
 #include "StringPool.h"
 #include "GpioPinSemaphore.h"
 #if defined(ESP32)
@@ -1499,19 +1503,24 @@ static bool extractQuotedLiteral(const std::string& text, std::string& out) {
     const size_t open = text.find('"');
     if (open == std::string::npos) return false;
 
-    out.clear();
+    bool escaped = false;
     for (size_t i = open + 1; i < text.size(); ++i) {
         const char c = text[i];
-        if (c == '\\' && (i + 1) < text.size()) {
-            const char next = text[i + 1];
-            if (next == '"' || next == '\\') {
-                out.push_back(next);
-                ++i;
-                continue;
-            }
+        if (escaped) {
+            escaped = false;
+            continue;
         }
-        if (c == '"') return true;
-        out.push_back(c);
+        if (c == '\\') {
+            escaped = true;
+            continue;
+        }
+        if (c == '"') {
+            JsonDocument literal;
+            if (deserializeJson(literal, text.substr(open, i - open + 1)) ||
+                !literal.is<const char*>()) return false;
+            out = literal.as<std::string>();
+            return true;
+        }
     }
     return false;
 }
@@ -1620,9 +1629,12 @@ static Instructions parseTextPCode(const std::string& text, bool hosted = false)
             lss >> value;
             instr.intOperand = value;
             instr.type = pmachine::OperandType::INT;
-        } else if (opcode == pmachine::OP_PUSH_REAL) {
+        } else if (opcode == pmachine::OP_PUSH_REAL || opcode == pmachine::OP_PUSH_DEC ||
+                   opcode == pmachine::OP_DEC_QUANT || opcode == pmachine::OP_DEC_DISPLAY ||
+                   opcode == pmachine::OP_DEC_EDIT || opcode == pmachine::OP_DEC_FITS) {
             std::string rest2;
             std::getline(lss, rest2);
+            std::string literal;
             instr.strOperand = trimCopy(rest2);
             instr.type = pmachine::OperandType::STRING;
         } else if (opcode == pmachine::OP_PUSH_ENUM) {
@@ -1651,7 +1663,7 @@ static Instructions parseTextPCode(const std::string& text, bool hosted = false)
             lss >> targetLabel;
             instr.label = targetLabel;
             unresolvedJumps.push_back({instructions.size(), targetLabel});
-        } else if (opcode == pmachine::OP_LOAD_NAME || opcode == pmachine::OP_STORE_NAME ||
+        } else if (opcode == pmachine::OP_LOAD_NAME || opcode == pmachine::OP_STORE_NAME || opcode == pmachine::OP_PUSH_REF ||
                    opcode == pmachine::OP_MAP_RETURN) {
             std::string name;
             lss >> name;
@@ -1772,6 +1784,7 @@ void PMachine::runInstructions(size_t instructionCount,
                               const std::function<PInstruction(size_t)>& instructionAt,
                               int startPc, HostExecutionStorage* storage, const std::string& stdinText, bool uartInput) {
     hostedStorageError = nullptr;
+    lastRunSuspended = false;
     auto& gFlowState = flowState;
     static const size_t MAX_RUN_STEPS = 200000;
 #if defined(PULSE_ESP8266_SENSOR)
@@ -1848,6 +1861,16 @@ void PMachine::runInstructions(size_t instructionCount,
     using NameBinding = std::pair<std::string, Value>;
     using NameFrame = std::vector<NameBinding>;
     std::vector<NameFrame> nameFrames;
+    std::vector<uint64_t> nameFrameIdentities(1, 1);
+    uint64_t nextNameFrameIdentity = 1;
+    std::unique_ptr<ManagedReferences> references(new ManagedReferences);
+    const std::function<double()> intrinsicRandom = []() -> double {
+#if defined(ESP32)
+        return static_cast<double>(esp_random()) / 4294967296.0;
+#else
+        return static_cast<double>(std::rand()) / (RAND_MAX + 1.0);
+#endif
+    };
     if (!hostCallHook) {
         nameFrames.reserve(INITIAL_NAME_FRAME_CAPACITY);
         nameFrames.emplace_back();
@@ -2019,7 +2042,7 @@ void PMachine::runInstructions(size_t instructionCount,
     int pc = startPc >= 0 && startPc < static_cast<int>(instructionCount) ? startPc : 0;
 
     auto stringAt = [&](const Value& value) -> std::string {
-        if (value.kind == ValueKind::StringRef) {
+        if (value.kind == ValueKind::StringRef || value.kind == ValueKind::DecimalRef) {
             if (hostedStrings) {
                 const char* data = hostedStrings->data(value.handle);
                 if (!data) {
@@ -2058,7 +2081,7 @@ void PMachine::runInstructions(size_t instructionCount,
             auto collect = [&]() {
                 bool live[ManagedStringHeap::HANDLE_CAPACITY] = {};
                 auto mark = [&](const Value& value) {
-                    if (value.kind == ValueKind::StringRef && value.handle < ManagedStringHeap::HANDLE_CAPACITY)
+                    if ((value.isString() || value.isDecimal()) && value.handle < ManagedStringHeap::HANDLE_CAPACITY)
                         live[value.handle] = true;
                 };
                 for (int index = 0; index < sp; ++index) mark(stack[index]);
@@ -2089,6 +2112,25 @@ void PMachine::runInstructions(size_t instructionCount,
             stack[sp++] = Value::makeString(handle);
             return;
         }
+    };
+
+    auto valueAsDecimalText = [&](const Value& value) -> std::string {
+        if (value.kind == ValueKind::StringRef || value.kind == ValueKind::DecimalRef)
+            return stringAt(value);
+        if (value.isReal()) {
+            char buffer[48] = {0};
+            snprintf(buffer, sizeof(buffer), "%.6f", value.asReal());
+            return std::string(buffer);
+        }
+        return std::to_string(value.i);
+    };
+
+    auto pushDecimalText = [&](const std::string& text) -> bool {
+        const int stackBefore = sp;
+        pushString(text);
+        if (sp == stackBefore) return false;
+        stack[sp - 1].kind = ValueKind::DecimalRef;
+        return true;
     };
 
     // depth 1 is the top of stack, 2 the value beneath it.
@@ -2126,10 +2168,72 @@ void PMachine::runInstructions(size_t instructionCount,
         return std::to_string(value.i);
     };
 
+    auto frameIdentity = [&](size_t frame) -> uint64_t {
+        return hostedFrames ? hostedFrames->identity(frame)
+            : frame < nameFrames.size() ? nameFrameIdentities[frame] : 0;
+    };
+    auto bindingInFrame = [&](size_t frame, const std::string& name) -> Value* {
+        if (hostedFrames) return const_cast<Value*>(hostedFrames->findInFrame(frame, name.c_str()));
+        if (frame < nameFrames.size())
+            for (auto& binding : nameFrames[frame])
+                if (binding.first == name) return &binding.second;
+        return nullptr;
+    };
+    auto referenceTarget = [&](Value reference) -> Value* {
+        const auto* entry = references->get(reference);
+        if (!entry) cobolvm::detail::fail("invalid variable reference handle");
+        if (frameIdentity(entry->frame) != entry->identity)
+            cobolvm::detail::fail("P-code reference outlived its frame: " + entry->name);
+        Value* target = bindingInFrame(entry->frame, entry->name);
+        if (!target) cobolvm::detail::fail("P-code reference target not found: " + entry->name);
+        return target;
+    };
+    std::function<Value(Value, size_t)> dereference;
+    dereference = [&](Value value, size_t depth) -> Value {
+        if (!value.isReference()) return value;
+        if (depth >= ManagedReferences::CAPACITY) cobolvm::detail::fail("P-code reference chain is too deep");
+        const auto* entry = references->get(value);
+        const Value target = dereference(*referenceTarget(value), depth + 1);
+        if (entry->offset < 0) return target;
+        const std::string text = cobolvm::detail::utf8ToLatin1(stringAt(target));
+        const size_t start = std::min(text.size(), static_cast<size_t>(entry->offset));
+        const int before = sp;
+        pushString(cobolvm::detail::latin1ToUtf8(text.substr(start, static_cast<size_t>(entry->length))));
+        if (sp == before) cobolvm::detail::fail("unable to allocate reference slice");
+        return stack[--sp];
+    };
+    std::function<void(Value, Value, size_t)> assignReference;
+    assignReference = [&](Value reference, Value value, size_t depth) {
+        if (depth >= ManagedReferences::CAPACITY) cobolvm::detail::fail("P-code reference chain is too deep");
+        const auto* entry = references->get(reference);
+        Value* target = referenceTarget(reference);
+        if (entry->offset < 0) {
+            if (target->isReference()) assignReference(*target, value, depth + 1);
+            else *target = value;
+            return;
+        }
+        const Value original = dereference(*target, depth + 1);
+        std::string text = cobolvm::detail::utf8ToLatin1(stringAt(original));
+        const size_t offset = static_cast<size_t>(entry->offset);
+        const size_t length = static_cast<size_t>(entry->length);
+        if (offset > 8192 || length > 8192 - offset)
+            cobolvm::detail::fail("reference slice exceeds string capacity");
+        if (text.size() < offset + length) text.resize(offset + length, ' ');
+        std::string replacement = cobolvm::detail::utf8ToLatin1(stringAt(value)).substr(0, length);
+        replacement.resize(length, ' ');
+        text.replace(offset, length, replacement);
+        const int before = sp;
+        pushString(cobolvm::detail::latin1ToUtf8(text));
+        if (sp == before) cobolvm::detail::fail("unable to allocate reference assignment");
+        const Value result = stack[--sp];
+        if (target->isReference()) assignReference(*target, result, depth + 1);
+        else *target = result;
+    };
+
     auto resolveName = [&](const std::string& key) -> Value {
         for (auto it = nameFrames.rbegin(); it != nameFrames.rend(); ++it) {
             for (auto binding = it->rbegin(); binding != it->rend(); ++binding) {
-                if (binding->first == key) return binding->second;
+                if (binding->first == key) return dereference(binding->second, 0);
             }
         }
         return 0;
@@ -2155,7 +2259,8 @@ void PMachine::runInstructions(size_t instructionCount,
         for (auto it = nameFrames.rbegin(); it != nameFrames.rend(); ++it) {
             for (auto binding = it->rbegin(); binding != it->rend(); ++binding) {
                 if (binding->first == key) {
-                    binding->second = value;
+                    if (binding->second.isReference()) assignReference(binding->second, value, 0);
+                    else binding->second = value;
                     return;
                 }
             }
@@ -2210,7 +2315,11 @@ void PMachine::runInstructions(size_t instructionCount,
     };
 
     auto storeExtendedValue = [&](ExtendableValueSlot& slot, const Value& value) -> bool {
-        if (value.isString()) return storeExtendedString(slot, stringAt(value));
+        if (value.isString() || value.isDecimal()) {
+            if (!storeExtendedString(slot, stringAt(value))) return false;
+            slot.value.kind = value.kind;
+            return true;
+        }
         freeRam(slot.stringData, slot.stringUsesPsram);
         slot.stringData = nullptr;
         slot.stringLength = 0;
@@ -2221,7 +2330,9 @@ void PMachine::runInstructions(size_t instructionCount,
 
     auto pushExtendedValue = [&](const ExtendableValueSlot& slot) {
         if (slot.stringData != nullptr) {
+            const int before = sp;
             pushString(std::string(slot.stringData, slot.stringLength));
+            if (sp > before) stack[sp - 1].kind = slot.value.kind;
         } else if (sp < STACK_SIZE) {
             stack[sp++] = slot.value;
         } else {
@@ -2366,6 +2477,7 @@ void PMachine::runInstructions(size_t instructionCount,
         frame.envDepth = nameFrames.size();
         nameCallStack.push_back(frame);
         nameFrames.emplace_back(std::move(frameVars));
+        nameFrameIdentities.push_back(++nextNameFrameIdentity);
         pc = targetPc;
         return true;
     };
@@ -2393,6 +2505,119 @@ void PMachine::runInstructions(size_t instructionCount,
         return valid && objects.reconcile();
     };
     size_t steps = 0;
+    auto saveValue = [&](JsonArray target, const Value& value) -> bool {
+        target.add(static_cast<unsigned>(value.kind));
+        target.add(value.flags);
+        if (value.isString() || value.isDecimal()) {
+            const char* data = hostedStrings->data(value.handle);
+            if (!data) return false;
+            target.add(std::string(data, hostedStrings->size(value.handle)));
+            return true;
+        }
+        if (value.isReference()) {
+            const auto* entry = references->get(value);
+            if (!entry || frameIdentity(entry->frame) != entry->identity ||
+                !bindingInFrame(entry->frame, entry->name)) return false;
+            JsonDocument descriptor;
+            descriptor["frame"] = entry->frame;
+            descriptor["name"] = entry->name;
+            descriptor["offset"] = entry->offset;
+            descriptor["length"] = entry->length;
+            std::string encoded;
+            serializeJson(descriptor, encoded);
+            target.add(encoded);
+            return true;
+        }
+        std::string encoded;
+        if (!encodeCheckpointScalar(value, encoded)) return false;
+        target.add(encoded);
+        return true;
+    };
+    std::map<std::string, uint16_t> restoredStrings;
+    auto restoreValue = [&](JsonVariantConst source, Value& value) -> bool {
+        if (!source.is<JsonArrayConst>() || source.size() != 3 ||
+            !source[0].is<unsigned>() || !source[1].is<uint8_t>() ||
+            !source[2].is<std::string>()) return false;
+        const unsigned kind = source[0].as<unsigned>();
+        if (kind > static_cast<unsigned>(ValueKind::Reference)) return false;
+        const std::string encoded = source[2].as<std::string>();
+        if (kind == static_cast<unsigned>(ValueKind::StringRef) ||
+            kind == static_cast<unsigned>(ValueKind::DecimalRef)) {
+            auto found = restoredStrings.find(encoded);
+            uint16_t handle = found == restoredStrings.end()
+                ? hostedStrings->store(encoded.data(), encoded.size()) : found->second;
+            if (handle == ManagedStringHeap::INVALID) return false;
+            if (found == restoredStrings.end()) restoredStrings.emplace(encoded, handle);
+            value = Value::makeString(handle);
+            value.kind = static_cast<ValueKind>(kind);
+        } else if (kind == static_cast<unsigned>(ValueKind::Reference)) {
+            JsonDocument descriptor;
+            if (deserializeJson(descriptor, encoded) || !descriptor.is<JsonObject>() ||
+                !descriptor["frame"].is<size_t>() || !descriptor["name"].is<std::string>() ||
+                !descriptor["offset"].is<int32_t>() || !descriptor["length"].is<int32_t>()) return false;
+            VariableReference entry;
+            entry.frame = descriptor["frame"].as<size_t>();
+            entry.name = descriptor["name"].as<std::string>();
+            entry.offset = descriptor["offset"].as<int32_t>();
+            entry.length = descriptor["length"].as<int32_t>();
+            if (entry.frame >= 32 || entry.name.empty() || entry.name.find('\0') != std::string::npos ||
+                entry.offset < -1 || entry.offset > 8192 || entry.length < 0 || entry.length > 8192 ||
+                !references->store(entry, value)) return false;
+        } else if (!decodeCheckpointScalar(static_cast<ValueKind>(kind), encoded, value)) return false;
+        value.flags = source[1].as<uint8_t>();
+        return true;
+    };
+    auto restoreContinuation = [&]() -> bool {
+        const JsonDocument& saved = *savedContinuation;
+        if (!hostedFrames || !continuationReply || saved["version"] != 1 ||
+            !saved["pc"].is<int>() || !saved["bp"].is<int>() || !saved["steps"].is<size_t>() ||
+            !saved["stack"].is<JsonArrayConst>() || saved["stack"].size() >= 256 ||
+            !saved["frames"].is<JsonArrayConst>() || saved["frames"].size() < 1 ||
+            saved["frames"].size() > 32 || !saved["line"].is<std::string>() ||
+            !saved["output"].is<JsonArrayConst>() || !saved["flow"].is<JsonObjectConst>()) return false;
+        pc = saved["pc"].as<int>();
+        bp = saved["bp"].as<int>();
+        steps = saved["steps"].as<size_t>();
+        if (pc < 0 || pc > static_cast<int>(instructionCount) || bp < 0 ||
+            bp > static_cast<int>(saved["stack"].size()) || steps > HOST_RUN_STEPS) return false;
+        for (JsonVariantConst item : saved["stack"].as<JsonArrayConst>()) {
+            if (!restoreValue(item, stack[sp])) return false;
+            ++sp;
+        }
+        hostedFrames->reset();
+        size_t depth = 0;
+        for (JsonVariantConst frame : saved["frames"].as<JsonArrayConst>()) {
+            if (!frame.is<JsonArrayConst>() || frame.size() != 2 || !frame[0].is<int>() ||
+                !frame[1].is<JsonArrayConst>()) return false;
+            const int returnPc = frame[0].as<int>();
+            if (returnPc < 0 || returnPc > static_cast<int>(instructionCount) ||
+                (depth && hostedFrames->push(returnPc))) return false;
+            for (JsonVariantConst binding : frame[1].as<JsonArrayConst>()) {
+                if (!binding.is<JsonArrayConst>() || binding.size() != 2 ||
+                    !binding[0].is<std::string>()) return false;
+                const std::string name = binding[0].as<std::string>();
+                Value value;
+                if (name.empty() || name.find('\0') != std::string::npos ||
+                    hostedFrames->containsLocal(name.c_str()) || !restoreValue(binding[1], value) ||
+                    hostedFrames->store(name.c_str(), value)) return false;
+            }
+            ++depth;
+        }
+        if (!references->restoreIdentities([&](const VariableReference& entry) -> uint64_t {
+            return bindingInFrame(entry.frame, entry.name) ? frameIdentity(entry.frame) : 0;
+        })) return false;
+        currentOutputLine = saved["line"].as<std::string>();
+        for (JsonVariantConst line : saved["output"].as<JsonArrayConst>()) {
+            if (!line.is<std::string>()) return false;
+            outputLines.push_back(line.as<std::string>());
+        }
+        for (JsonPairConst entry : saved["flow"].as<JsonObjectConst>()) {
+            if (!entry.value().is<std::string>()) return false;
+            gFlowState[entry.key().c_str()] = entry.value().as<std::string>();
+        }
+        pushString(*continuationReply);
+        return !hostedStorageError && !gFlowState.count("__runtime_error");
+    };
     gFlowState.clear();
     lastRunStepLimitHit = false;
     lastRunStepCount = 0;
@@ -2411,6 +2636,11 @@ void PMachine::runInstructions(size_t instructionCount,
             if (hostedStorageError) goto pmachineRunExit;
         } else assignName(name, Value(0));
     }
+    if (savedContinuation && !restoreContinuation()) {
+        gFlowState["__runtime_error"] = "Invalid or unsupported execution checkpoint";
+        goto pmachineRunExit;
+    }
+    try {
     while (pc < (int)instructionCount) {
         if (!reconcileObjects()) {
             gFlowState["__runtime_error"] = objectStorage->objects.error();
@@ -2544,6 +2774,49 @@ void PMachine::runInstructions(size_t instructionCount,
             ++pc;
             continue;
         }
+        case OP_PUSH_REF: {
+            if (sp >= STACK_SIZE) cobolvm::detail::fail("stack overflow");
+            VariableReference entry;
+            entry.name = instr.strOperand;
+            const size_t separator = entry.name.find_last_of('@');
+            if (separator != std::string::npos) {
+                const std::string slice = entry.name.substr(separator + 1);
+                std::istringstream operands(slice);
+                char colon = 0;
+                if (!(operands >> entry.offset >> colon >> entry.length) || colon != ':' ||
+                    entry.offset < 0 || entry.length < 0 || operands.peek() != std::char_traits<char>::eof())
+                    cobolvm::detail::fail("invalid reference slice: " + entry.name);
+                entry.name.resize(separator);
+            }
+            const size_t depth = hostedFrames ? hostedFrames->depth() : nameFrames.size();
+            bool found = false;
+            for (size_t frame = depth; frame > 0; --frame) {
+                if (bindingInFrame(frame - 1, entry.name)) {
+                    entry.frame = frame - 1;
+                    entry.identity = frameIdentity(entry.frame);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) cobolvm::detail::fail("P-code reference target not found: " + entry.name);
+            std::array<bool, ManagedReferences::CAPACITY> live{};
+            auto mark = [&](Value value) {
+                if (value.isReference() && value.handle < live.size()) live[value.handle] = true;
+            };
+            for (int index = 0; index < sp; ++index) mark(stack[index]);
+            if (hostedFrames) hostedFrames->forEachValue(mark);
+            for (const auto& frame : nameFrames) for (const auto& binding : frame) mark(binding.second);
+            if (objectStorage) objectStorage->objects.forEachValue(mark);
+            for (const auto& record : records) for (const auto& field : record.second) mark(field.second);
+            for (const auto& variable : extendableStorage)
+                for (size_t index = 0; index < variable.elementCount; ++index) mark(variable.slots[index].value);
+            references->sweep([&](uint16_t handle) { return live[handle]; });
+            Value reference;
+            if (!references->store(entry, reference)) cobolvm::detail::fail("variable reference capacity exceeded");
+            stack[sp++] = reference;
+            ++pc;
+            continue;
+        }
         case OP_GPIO_WRITE: {
 #if defined(ESP32)
             if (sp < 2) {
@@ -2619,6 +2892,156 @@ void PMachine::runInstructions(size_t instructionCount,
             ++pc;
             continue;
         }
+        case OP_PUSH_DEC: {
+            if (sp >= STACK_SIZE) {
+                gFlowState["__runtime_error"] = "stack overflow";
+                goto pmachineRunExit;
+            }
+            std::istringstream operands(instr.strOperand);
+            std::string unscaled;
+            int scale = 0;
+            if (!(operands >> unscaled >> scale) || scale < 0 || scale > 8191 ||
+                unscaled.find_first_not_of("+-0123456789") != std::string::npos ||
+                unscaled.find_first_of("+-", 1) != std::string::npos ||
+                unscaled == "+" || unscaled == "-") {
+                gFlowState["__runtime_error"] = "PUSH_DEC requires an unscaled integer and scale between 0 and 8191";
+                goto pmachineRunExit;
+            }
+            const auto decimal = cobolvm::detail::decimalFromUnscaled(unscaled, scale);
+            if (!pushDecimalText(cobolvm::detail::formatDecimal(decimal))) {
+                gFlowState["__runtime_error"] = "unable to allocate decimal literal";
+                goto pmachineRunExit;
+            }
+            ++pc;
+            continue;
+        }
+        case OP_DEC_STR: {
+            if (sp < 1) {
+                gFlowState["__runtime_error"] = "DEC_STR requires a value";
+                goto pmachineRunExit;
+            }
+            const cobolvm::detail::Decimal decimal =
+                cobolvm::detail::decimalFromString(valueAsDecimalText(stack[sp - 1]));
+            const std::string text = cobolvm::detail::formatDecimal(decimal);
+            const int stackBefore = sp;
+            pushString(text);
+            if (sp == stackBefore) goto pmachineRunExit;
+            stack[sp - 2] = stack[sp - 1];
+            --sp;
+            ++pc;
+            continue;
+        }
+        case OP_DEC_CONV: {
+            if (sp < 1) {
+                gFlowState["__runtime_error"] = "DEC_CONV requires a value";
+                goto pmachineRunExit;
+            }
+            const std::string text = valueAsDecimalText(stack[sp - 1]);
+            const cobolvm::detail::Decimal decimal = cobolvm::detail::decimalFromString(text);
+            if (!pushDecimalText(cobolvm::detail::formatDecimal(decimal))) {
+                gFlowState["__runtime_error"] = "unable to allocate decimal value";
+                goto pmachineRunExit;
+            }
+            stack[sp - 2] = stack[sp - 1];
+            --sp;
+            ++pc;
+            continue;
+        }
+        case OP_DEC_QUANT: {
+            if (sp < 1) {
+                gFlowState["__runtime_error"] = "DEC_QUANT requires a value";
+                goto pmachineRunExit;
+            }
+            std::istringstream operands(instr.strOperand);
+            int scale = 0;
+            std::string rounding;
+            if (!(operands >> scale) || scale < 0 || scale > 8191) {
+                gFlowState["__runtime_error"] = "DEC_QUANT requires a scale between 0 and 8191";
+                goto pmachineRunExit;
+            }
+            operands >> rounding;
+            const cobolvm::detail::Decimal decimal =
+                cobolvm::detail::rescaleDecimal(
+                    cobolvm::detail::decimalFromString(valueAsDecimalText(stack[sp - 1])),
+                    scale, rounding == "ROUNDED");
+            if (!pushDecimalText(cobolvm::detail::formatDecimal(decimal))) {
+                gFlowState["__runtime_error"] = "unable to allocate quantized decimal";
+                goto pmachineRunExit;
+            }
+            stack[sp - 2] = stack[sp - 1];
+            --sp;
+            ++pc;
+            continue;
+        }
+        case OP_DEC_DISPLAY: {
+            if (sp < 1) {
+                gFlowState["__runtime_error"] = "DEC_DISPLAY requires a value";
+                goto pmachineRunExit;
+            }
+            std::istringstream operands(instr.strOperand);
+            int precision = 0;
+            int scale = 0;
+            std::string sign;
+            if (!(operands >> precision >> scale) || precision < 0 || precision > 8191 ||
+                scale < 0 || scale > 8191) {
+                gFlowState["__runtime_error"] = "DEC_DISPLAY requires precision and scale between 0 and 8191";
+                goto pmachineRunExit;
+            }
+            operands >> sign;
+            const int signMode = sign == "LEADING_SEPARATE" ? 1 : sign == "TRAILING_SEPARATE" ? 2 : 0;
+            const std::string text = cobolvm::detail::formatCobolDisplay(
+                cobolvm::detail::decimalFromString(valueAsDecimalText(stack[sp - 1])),
+                precision, scale, signMode);
+            const int stackBefore = sp;
+            pushString(text);
+            if (sp == stackBefore) goto pmachineRunExit;
+            stack[sp - 2] = stack[sp - 1];
+            --sp;
+            ++pc;
+            continue;
+        }
+        case OP_DEC_EDIT: {
+            if (sp < 1) {
+                gFlowState["__runtime_error"] = "DEC_EDIT requires a value";
+                goto pmachineRunExit;
+            }
+            std::string mask;
+            const size_t quote = instr.strOperand.find_last_of('"');
+            if (!extractQuotedLiteral(instr.strOperand, mask) || quote == std::string::npos) {
+                gFlowState["__runtime_error"] = "DEC_EDIT requires a quoted mask and two flags";
+                goto pmachineRunExit;
+            }
+            std::istringstream operands(instr.strOperand.substr(quote + 1));
+            int decimalComma = 0;
+            int blankWhenZero = 0;
+            if (!(operands >> decimalComma >> blankWhenZero) || (decimalComma != 0 && decimalComma != 1) ||
+                (blankWhenZero != 0 && blankWhenZero != 1)) {
+                gFlowState["__runtime_error"] = "DEC_EDIT flags must be 0 or 1";
+                goto pmachineRunExit;
+            }
+            const std::string text = cobolvm::detail::formatCobolEdited(
+                cobolvm::detail::decimalFromString(valueAsDecimalText(stack[sp - 1])),
+                mask, decimalComma != 0, blankWhenZero != 0);
+            const int stackBefore = sp;
+            pushString(text);
+            if (sp == stackBefore) goto pmachineRunExit;
+            stack[sp - 2] = stack[sp - 1];
+            --sp;
+            ++pc;
+            continue;
+        }
+        case OP_DEC_FITS: {
+            if (sp < 1) {
+                gFlowState["__runtime_error"] = "DEC_FITS requires a value";
+                goto pmachineRunExit;
+            }
+            int digits = 0;
+            std::istringstream(instr.strOperand) >> digits;
+            const auto decimal = cobolvm::detail::decimalFromString(valueAsDecimalText(stack[--sp]));
+            stack[sp++] = digits > 0 && cobolvm::detail::decimalDigitCount(decimal) <= digits ? 1 : 0;
+            ++pc;
+            continue;
+        }
         case OP_RDIV: {
             if (sp >= 2) {
                 const Value rhs = stack[--sp];
@@ -2637,6 +3060,21 @@ void PMachine::runInstructions(size_t instructionCount,
             if (sp >= 2) {
                 const Value rhsValue = stack[--sp];
                 const Value lhsValue = stack[sp - 1];
+                if (lhsValue.isDecimal() || rhsValue.isDecimal()) {
+                    const auto lhs = cobolvm::detail::decimalFromString(valueAsDecimalText(lhsValue));
+                    const auto rhs = cobolvm::detail::decimalFromString(valueAsDecimalText(rhsValue));
+                    const char operation = instr.opcode == OP_ADD ? '+' : instr.opcode == OP_SUB ? '-' :
+                        instr.opcode == OP_MUL ? '*' : '/';
+                    if (!pushDecimalText(cobolvm::detail::formatDecimal(
+                        cobolvm::detail::decimalArithmetic(operation, lhs, rhs)))) {
+                        gFlowState["__runtime_error"] = "unable to allocate decimal result";
+                        goto pmachineRunExit;
+                    }
+                    stack[sp - 2] = stack[sp - 1];
+                    --sp;
+                    ++pc;
+                    continue;
+                }
                 // Either operand being real promotes the whole expression, Pascal-style.
                 if (rhsValue.isReal() || lhsValue.isReal()) {
                     const double lhs = lhsValue.asReal();
@@ -2684,6 +3122,14 @@ void PMachine::runInstructions(size_t instructionCount,
             if (sp >= 2) {
                 const Value rhsValue = stack[--sp];
                 const Value lhsValue = stack[sp - 1];
+                if (lhsValue.isDecimal() || rhsValue.isDecimal()) {
+                    const int order = cobolvm::detail::compareDecimals(
+                        cobolvm::detail::decimalFromString(valueAsDecimalText(lhsValue)),
+                        cobolvm::detail::decimalFromString(valueAsDecimalText(rhsValue)));
+                    stack[sp - 1] = compareOperands(instr.opcode, order, 0);
+                    ++pc;
+                    continue;
+                }
                 if (lhsValue.isObject() || rhsValue.isObject()) {
                     if (instr.opcode != OP_EQ && instr.opcode != OP_NEQ) {
                         gFlowState["__runtime_error"] = "objects only support equality comparisons";
@@ -2786,7 +3232,7 @@ void PMachine::runInstructions(size_t instructionCount,
                 Value value = 0;
                 bool foundValue = false;
                 if (const Value* found = hostedFrames->find(varName.c_str())) {
-                    value = *found;
+                    value = dereference(*found, 0);
                     foundValue = true;
                 }
                 if (!foundValue) {
@@ -2872,8 +3318,10 @@ void PMachine::runInstructions(size_t instructionCount,
                 }
                 allocationStage = "hosted-variable-store";
                 allocationBytes = 0;
-                if (const Value* found = hostedFrames->find(instr.strOperand.c_str()))
-                    *const_cast<Value*>(found) = stack[sp - 1];
+                if (const Value* found = hostedFrames->find(instr.strOperand.c_str())) {
+                    if (found->isReference()) assignReference(*found, stack[sp - 1], 0);
+                    else *const_cast<Value*>(found) = stack[sp - 1];
+                }
                 else hostedStorageError = hostedFrames->store(instr.strOperand.c_str(), stack[sp - 1]);
                 if (hostedStorageError) goto pmachineRunExit;
                 --sp;
@@ -2946,7 +3394,7 @@ void PMachine::runInstructions(size_t instructionCount,
         case OP_ARR_SET: {
             // Value is on top of stack, the zero-based index just below it; mirrors
             // OP_STORE_NAME's per-kind branching, then resolves the computed slot name.
-            if (isStringAtDepth(1)) {
+            if (isStringAtDepth(1) || (sp > 0 && stack[sp - 1].isDecimal())) {
                 Value value = stack[--sp];
                 if (sp < 1) { ++pc; continue; }
                 int idx = stack[--sp];
@@ -3054,6 +3502,71 @@ void PMachine::runInstructions(size_t instructionCount,
         }
         case OP_CALL_EXT: {
             const std::string symbol = trimCopy(instr.strOperand);
+            const int bindingId = cobolvm::detail::findBinding(symbol);
+            if (bindingId >= 0 && !cobolvm::detail::isDelegatedBinding(bindingId)) {
+                using namespace cobolvm::detail;
+                const BindingSpec& spec = bindingSpec(bindingId);
+                if (instr.value != spec.arity || sp < instr.value)
+                    fail("Invalid host binding call or stack underflow: " + symbol);
+                std::vector<BindingValue> args(spec.arity);
+                for (size_t index = 0; index < args.size(); ++index) {
+                    const Value value = stack[sp - instr.value + static_cast<int>(index)];
+                    if (spec.args[index] == ArgKind::String) {
+                        if (!value.isString()) fail("Invalid host argument: expected string for " + symbol);
+                        args[index].isString = true;
+                        args[index].text = utf8ToLatin1(stringAt(value));
+                    } else {
+                        if (spec.args[index] == ArgKind::Integer && value.kind != ValueKind::Integer)
+                            fail("Invalid host argument: expected integer for " + symbol);
+                        args[index].number = value.isDecimal() ? decimalToNumber(decimalFromString(stringAt(value)))
+                            : value.isString() ? jsStringToNumber(utf8ToLatin1(stringAt(value))) : value.asReal();
+                        if (!std::isfinite(args[index].number)) fail("Invalid host argument: expected finite number for " + symbol);
+                    }
+                }
+                BindingContext context{intrinsicRandom};
+                const BindingValue result = callBinding(bindingId, args, context);
+                sp -= instr.value;
+                if (sp >= STACK_SIZE) fail("stack overflow");
+                if (spec.result == ResultKind::String) {
+                    if (!result.isString) fail("Invalid host result: expected string for " + symbol);
+                    const int before = sp;
+                    pushString(latin1ToUtf8(result.text));
+                    if (sp == before) fail("unable to allocate host result");
+                } else {
+                    if (result.isString || !std::isfinite(result.number)) fail("Invalid host result: expected number for " + symbol);
+                    if (spec.result == ResultKind::Decimal) {
+                        if (!pushDecimalText(formatDecimal(decimalFromNumberText(jsNumberToString(result.number)))))
+                            fail("unable to allocate decimal host result");
+                    } else if (spec.result == ResultKind::Integer) {
+                        if (!isSafeInteger(result.number) || result.number < INT32_MIN || result.number > INT32_MAX)
+                            fail("Host integer result exceeds generic integer range: " + symbol);
+                        stack[sp++] = static_cast<int32_t>(result.number);
+                    } else stack[sp++] = Value::makeReal(static_cast<float>(result.number));
+                }
+                ++pc;
+                continue;
+            }
+            if (symbol.rfind("system.", 0) == 0) {
+                if (instr.value < 0 || instr.value > 3 || sp < instr.value) {
+                    gFlowState["__runtime_error"] = "invalid System argument count or stack underflow";
+                    goto pmachineRunExit;
+                }
+                SystemScalar args[3], result;
+                for (int index = 0; index < instr.value; ++index) {
+                    args[index].value = stack[sp - instr.value + index];
+                    if (args[index].value.isString()) args[index].text = stringAt(args[index].value);
+                }
+                std::string error;
+                if (!executeSystemIntrinsic(symbol, args, static_cast<size_t>(instr.value), result, error)) {
+                    gFlowState["__runtime_error"] = error;
+                    goto pmachineRunExit;
+                }
+                sp -= instr.value;
+                if (result.value.isString()) pushString(result.text);
+                else stack[sp++] = result.value;
+                ++pc;
+                continue;
+            }
             if (symbol.rfind("fortran.", 0) == 0) {
                 if (instr.value < 0 || instr.value > STACK_SIZE || sp < instr.value) {
                     gFlowState["__runtime_error"] = "invalid FORTRAN argument count or stack underflow";
@@ -3164,6 +3677,55 @@ void PMachine::runInstructions(size_t instructionCount,
                 auto& error = hostCallStorage.error;
                 allocationStage = "host-binding";
                 allocationBytes = 0;
+                if (symbol == "host.await_reply") {
+                    if (!suspendHook || args.size() != 1 || !args[0].isString || !hostedFrames ||
+                        debugRunStatus.load() || !extendableStorage.empty() || !mappingDefs.empty() ||
+                        !pendingOrchTasks.empty() || !queues.empty() || !stacks.empty() ||
+                        !priorityQueues.empty() || !records.empty() || !sets.empty() ||
+                        !tasks.empty() || !files.empty() || mapOutputActive ||
+                        (namedStringVariables.size() > 1 || (namedStringVariables.size() == 1 &&
+                            !namedStringVariables.count("src"))) ||
+                        !namedRealVariables.empty() || !namedEnumVariables.empty() || textOutputHook) {
+                        gFlowState["__runtime_error"] = "Invocation resources do not support durable suspension";
+                        goto pmachineRunExit;
+                    }
+                    JsonDocument saved;
+                    saved["version"] = 1;
+                    saved["pc"] = pc + 1;
+                    saved["bp"] = bp;
+                    saved["steps"] = steps;
+                    saved["line"] = currentOutputLine;
+                    JsonArray operands = saved["stack"].to<JsonArray>();
+                    bool valid = true;
+                    for (int index = 0; index < sp; ++index)
+                        if (!saveValue(operands.add<JsonArray>(), stack[index])) valid = false;
+                    JsonArray frames = saved["frames"].to<JsonArray>();
+                    for (size_t depth = 0; depth < hostedFrames->depth(); ++depth) {
+                        JsonArray frame = frames.add<JsonArray>();
+                        frame.add(hostedFrames->returnAddress(depth));
+                        JsonArray bindings = frame.add<JsonArray>();
+                        hostedFrames->forEachBinding(depth, [&](const char* name, const Value& value) {
+                            JsonArray binding = bindings.add<JsonArray>();
+                            binding.add(name);
+                            if (!saveValue(binding.add<JsonArray>(), value)) valid = false;
+                        });
+                    }
+                    JsonArray output = saved["output"].to<JsonArray>();
+                    for (const auto& line : outputLines) output.add(line);
+                    JsonObject flow = saved["flow"].to<JsonObject>();
+                    for (const auto& entry : gFlowState) flow[entry.first] = entry.second;
+                    if (!valid || saved.overflowed()) {
+                        gFlowState["__runtime_error"] = "Checkpoint contains unsupported values or exceeds storage";
+                        goto pmachineRunExit;
+                    }
+                    if (!suspendHook(args[0].text, saved, error)) {
+                        gFlowState["__runtime_error"] = error;
+                        goto pmachineRunExit;
+                    }
+                    lastRunSuspended = true;
+                    ++pc;
+                    goto pmachineRunExit;
+                }
                 if (!hostCallHook(symbol, args, result, error, hostCallContext)) {
                     gFlowState["__runtime_error"] = error;
                     goto pmachineRunExit;
@@ -3222,7 +3784,10 @@ void PMachine::runInstructions(size_t instructionCount,
                 NameCallFrame frame = nameCallStack.back();
                 nameCallStack.pop_back();
                 returnPc = frame.returnPc;
-                while (nameFrames.size() > frame.envDepth) nameFrames.pop_back();
+                while (nameFrames.size() > frame.envDepth) {
+                    nameFrames.pop_back();
+                    nameFrameIdentities.pop_back();
+                }
             }
             // If this RET returns from a mapper routine, commit the accumulated
             // output document as the new current message.
@@ -4121,13 +4686,21 @@ void PMachine::runInstructions(size_t instructionCount,
         }
     }
     }
+    } catch (const cobolvm::detail::VmError& failure) {
+        gFlowState["__runtime_error"] = failure.what();
+    }
     pmachineRunExit:
+        if (lastRunSuspended) {
+            this->pc = static_cast<uint16_t>(std::max(0, pc));
+            goto pmachineRunComplete;
+        }
         if (!reconcileObjects() && !gFlowState.count("__runtime_error"))
             gFlowState["__runtime_error"] = objectStorage->objects.error();
         // Invocation handles cannot persist in extended globals after this arena dies.
         for (auto& variable : extendableStorage)
             for (size_t index = 0; index < variable.elementCount; ++index)
-                if (variable.slots[index].value.isObject() || variable.slots[index].value.isString())
+                if (variable.slots[index].value.isObject() || variable.slots[index].value.isString() ||
+                    variable.slots[index].value.isDecimal() || variable.slots[index].value.isReference())
                     variable.slots[index].value = 0;
         this->pc = static_cast<uint16_t>(std::max(0, pc));
     running = false;
@@ -4143,7 +4716,7 @@ void PMachine::runInstructions(size_t instructionCount,
         for (const auto& binding : nameFrames.front()) {
             GlobalValue value;
             value.intValue = binding.second.isReal() ? 0 : static_cast<int>(binding.second);
-            if (binding.second.isString()) { value.isString = true; value.strValue = stringAt(binding.second); }
+            if (binding.second.isString() || binding.second.isDecimal()) { value.isString = true; value.strValue = stringAt(binding.second); }
             if (binding.second.isReal()) {
                 value.isReal = true;
                 value.isDouble = binding.second.isDouble();

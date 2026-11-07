@@ -46,11 +46,19 @@ use `PULSE INVENTORY` or link a Pascalish inventory library. Compile it with:
 
 ```js
 compileCobolishToPcode(source, {
+  sourceFormat: 'fixed',
   hostServices: true,
   nativeTarget: true,
   inventoryGateway: { address: '192.168.2.11', port: 4326 },
 });
 ```
+
+The inventory source uses standard fixed-format layout: sequence columns 1-6
+are blank, column 7 is the indicator, headers/level-01 entries start in Area A
+(columns 8-11), and statements start in Area B (columns 12-72). Long literals
+continue with `-` in column 7 and an opening quote in Area B. Use
+`sourceFormat: 'fixed'` to process cards before COPY expansion; the default
+(`'free'`) preserves existing free-format compilation.
 
 `inventoryGateway` supplies the `PULSE-INVENTORY-CONFIG` copybook with the
 address and port, never a credential. Both native and JS recovery run the same

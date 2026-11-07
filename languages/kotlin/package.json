@@ -1,0 +1,21 @@
+{
+  "name": "@pulse/kotlin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "exports": { ".": "./src/compile-kotlin-to-pcode.mjs" },
+  "scripts": {
+    "antlr:generate": "node scripts/generate-parser.mjs",
+    "compile": "node src/compile-kotlin-to-pcode.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "test:upstream": "node scripts/test-upstream.mjs --supported",
+    "audit:upstream": "node scripts/test-upstream.mjs",
+    "fetch:upstream": "node scripts/fetch-upstream.mjs",
+    "test:esp32": "node scripts/test-esp32.mjs",
+    "test:esp32:service": "node scripts/test-esp32-service.mjs"
+  },
+  "dependencies": {
+    "antlr4": "^4.13.2"
+  }
+}

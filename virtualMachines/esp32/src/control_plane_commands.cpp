@@ -7,6 +7,7 @@
 #include "main_globals.h"
 #include "udp_runtime.h"
 #include "wifi_provisioning.h"
+#include "https_service.h"
 
 namespace {
 
@@ -68,6 +69,24 @@ bool controlPlaneHandleLine(const String& rawLine, Stream& io, const char* chann
     if (line.isEmpty()) {
         return false;
     }
+
+#if defined(ENABLE_HTTPS) && defined(ESP32)
+    if (line == "TLS_BOOTSTRAP_ROTATE") {
+        if (&io != &Serial) {
+            printLine(io, channelTag, "TLS bootstrap rotation requires the physical serial console");
+            return false;
+        }
+        String token, error;
+        if (!rotateTlsBootstrapToken(token, error)) {
+            printLine(io, channelTag, error);
+            return false;
+        }
+        JsonDocument response;
+        response["bootstrapToken"] = token;
+        printResult(io, channelTag, "tls-bootstrap", response);
+        return true;
+    }
+#endif
 
     if (line.equalsIgnoreCase("PING")) {
         printLine(io, channelTag, "pong");

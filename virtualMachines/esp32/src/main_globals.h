@@ -13,8 +13,4 @@ extern ClusterConfig clusterConfig;
 extern FederatedFileSystem federatedFS;
 extern bool ffsUp;
 extern AsyncWebServer server;
-// DevicePin support
-#include "DevicePin.h"
-extern DevicePin* devicePin;
-extern int devicePinNumber;
 // Add more externs as needed

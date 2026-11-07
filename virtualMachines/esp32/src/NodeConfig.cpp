@@ -55,6 +55,10 @@ bool loadNodeConfig(NodeConfig& config) {
 }
 
 bool saveNodeConfig(const NodeConfig& config) {
+    if (!LittleFS.exists("/ffs") && !LittleFS.mkdir("/ffs")) {
+        Serial.println("[NODE-CONFIG] Failed to create configuration directory");
+        return false;
+    }
     JsonDocument doc;
     doc["nodeName"] = config.nodeName;
     doc["wifiSsid"] = config.wifiSsid;
@@ -78,8 +82,16 @@ bool saveNodeConfig(const NodeConfig& config) {
         c["udpPort"] = entry.siblingPort;
     }
     File f = LittleFS.open(NODE_CONFIG_PATH, "w");
-    if (!f) return false;
-    serializeJson(doc, f);
+    if (!f) {
+        Serial.println("[NODE-CONFIG] Failed to open configuration for writing");
+        return false;
+    }
+    const size_t expected = measureJson(doc);
+    const size_t written = serializeJson(doc, f);
     f.close();
+    if (doc.overflowed() || written != expected) {
+        Serial.println("[NODE-CONFIG] Failed to write complete configuration");
+        return false;
+    }
     return true;
 }

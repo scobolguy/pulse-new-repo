@@ -160,6 +160,7 @@ export const SERVICE_HOST_BINDINGS = Object.freeze({
   'host.event_method': { arity: 0, result: 'string' },
   'host.event_path': { arity: 0, result: 'string' },
   'host.event_query': { arity: 1, args: ['string'], result: 'string' },
+  'host.event_header': { arity: 1, args: ['string'], result: 'string' },
   'host.map_apply': { arity: 2, args: ['string', 'string'], result: 'string' },
   'host.text_header': { arity: 2, args: ['string', 'string'], result: 'string' },
   'host.text_lower': { arity: 1, args: ['string'], result: 'string' },
@@ -230,6 +231,10 @@ export const SERVICE_HOST_BINDINGS = Object.freeze({
   },
   'host.service_submit': {
     arity: 3, args: ['string', 'string', 'string'],
+    result: 'string', capability: 'service.transaction', nativeOnly: true
+  },
+  'host.await_reply': {
+    arity: 1, args: ['string'],
     result: 'string', capability: 'service.transaction', nativeOnly: true
   }
 });

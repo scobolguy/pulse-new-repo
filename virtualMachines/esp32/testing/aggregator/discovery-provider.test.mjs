@@ -226,11 +226,22 @@ test('local runtime owns UDP receipt, acknowledgements and port-aware bounded en
   try {
     await runtime.start();
     const acknowledgement = new Promise((resolve) => sender.once('message', (message, info) => resolve({ ...JSON.parse(message.toString()), from: info.port })));
-    const data = Buffer.from(JSON.stringify({ kind: 'nodeBeacon', nodeId: 'board', port: 8080, available: true }));
+    const data = Buffer.from(JSON.stringify({
+      kind: 'nodeBeacon',
+      nodeId: 'board',
+      port: 8080,
+      status: 'here',
+      available: true,
+      draining: false,
+      capabilities: ['pascalish-dag-v1'],
+      dagWorker: { protocol: 'pascalish-dag-v1', maxConcurrentTasks: 1 }
+    }));
     sender.send(data, runtime.getStatus().udpPort, '127.0.0.1');
     const node = await announced;
     assert.equal(node.nodeId, 'board');
     assert.equal(node.beacon.kind, 'nodeBeacon');
+    assert.deepEqual(node.availability, { available: true, draining: false, status: 'here' });
+    assert.equal(node.dagWorker.maxConcurrentTasks, 1);
     const ack = await acknowledgement;
     assert.equal(ack.kind, 'nodeBeaconAck');
     assert.equal(ack.nodeId, 'aggregator');

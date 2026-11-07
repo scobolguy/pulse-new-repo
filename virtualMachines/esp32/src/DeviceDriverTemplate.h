@@ -6,14 +6,18 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 #include <algorithm>
 #include "GpioPinSemaphore.h"
-#if __has_include(<DHT.h>)
+#if !defined(PULSE_LEAN_PMACHINE) && __has_include(<DHT.h>)
 #include <DHT.h>
 #endif
 #include "EventScheduler.h"
+#if defined(ESP32)
+#include <esp32-hal-rmt.h>
+#endif
 
 // Generic device-driver base that matches the repository's hardware abstraction pattern.
 class DeviceDriverBase {
@@ -511,6 +515,115 @@ private:
     bool currentState_ = false;
 };
 
+#if defined(ESP32)
+class AddressableLedDriver : public DeviceDriverBase {
+public:
+    AddressableLedDriver(const std::string& id, int pin) : id_(id), pin_(pin) {}
+    ~AddressableLedDriver() override {
+        if (transmitter_ && !rmtDeinit(transmitter_)) {
+            Serial.printf("[DEVICE] Failed to release RGB LED transmitter on GPIO%d\n", pin_);
+        }
+    }
+
+    bool begin() override {
+        if (transmitter_) return false;
+        transmitter_ = rmtInit(pin_, RMT_TX_MODE, RMT_MEM_64);
+        if (!transmitter_) return false;
+        if (rmtSetTick(transmitter_, 100) != 100) return false;
+        return write(false, color_, intensity_);
+    }
+    bool update() override { return isHealthy(); }
+    bool isHealthy() const override { return transmitter_ != nullptr; }
+    std::string getId() const override { return id_; }
+    std::string getDeviceType() const override { return "led"; }
+    std::string getDriverType() const override { return "ws2812"; }
+    std::map<std::string, std::string> getMetadata() const override {
+        return {{"kind", "actuator"}, {"protocol", "ws2812-grb"},
+                {"colorFormat", "#RRGGBB"}, {"intensityMin", "0"}, {"intensityMax", "255"}};
+    }
+    std::vector<std::string> getSupportedStates() const override { return {"power", "color", "intensity"}; }
+    std::vector<std::string> getSupportedActions() const override { return {"turnOn", "turnOff", "toggle"}; }
+    std::string getState(const std::string& state) const override {
+        if (state == "power") return on_ ? "on" : "off";
+        if (state == "color") return color_;
+        if (state == "intensity") return std::to_string(intensity_);
+        return "";
+    }
+    bool setState(const std::string& state, const std::string& value) override {
+        if (state == "power" && (value == "on" || value == "off")) {
+            return write(value == "on", color_, intensity_);
+        }
+        if (state == "color") {
+            if (value.size() != 7 || value[0] != '#') return false;
+            std::string color = value;
+            for (size_t i = 1; i < color.size(); ++i) {
+                if (hexDigit(color[i]) < 0) return false;
+                color[i] = static_cast<char>(std::toupper(static_cast<unsigned char>(color[i])));
+            }
+            return write(on_, color, intensity_);
+        }
+        if (state == "intensity") {
+            if (value.empty() || value.size() > 3) return false;
+            unsigned intensity = 0;
+            for (char digit : value) {
+                if (digit < '0' || digit > '9') return false;
+                intensity = intensity * 10 + static_cast<unsigned>(digit - '0');
+            }
+            if (intensity > 255) return false;
+            return write(on_, color_, static_cast<uint8_t>(intensity));
+        }
+        return false;
+    }
+    bool executeAction(const std::string& action,
+                       const std::map<std::string, std::string>& = {}) override {
+        if (action == "turnOn") return write(true, color_, intensity_);
+        if (action == "turnOff") return write(false, color_, intensity_);
+        if (action == "toggle") return write(!on_, color_, intensity_);
+        return false;
+    }
+
+private:
+    static int hexDigit(char digit) {
+        if (digit >= '0' && digit <= '9') return digit - '0';
+        if (digit >= 'a' && digit <= 'f') return digit - 'a' + 10;
+        if (digit >= 'A' && digit <= 'F') return digit - 'A' + 10;
+        return -1;
+    }
+
+    bool write(bool on, const std::string& color, uint8_t intensity) {
+        if (!transmitter_) return false;
+        rmt_data_t signal[25] = {};
+        const auto channel = [&](size_t offset) -> uint8_t {
+            const unsigned component = hexDigit(color[offset]) * 16 + hexDigit(color[offset + 1]);
+            return on ? static_cast<uint8_t>((component * intensity + 127) / 255) : 0;
+        };
+        const uint8_t grb[] = {channel(3), channel(1), channel(5)};
+        for (int bit = 0; bit < 24; ++bit) {
+            const bool high = (grb[bit / 8] & (0x80 >> (bit % 8))) != 0;
+            signal[bit].level0 = 1;
+            signal[bit].duration0 = high ? 8 : 4;
+            signal[bit].level1 = 0;
+            signal[bit].duration1 = high ? 4 : 8;
+        }
+        // A 300us low reset also accommodates newer WS2812 variants.
+        signal[24].duration0 = 3000;
+        signal[24].duration1 = 1;
+        if (!rmtWriteBlocking(transmitter_, signal, 25)) return false;
+        on_ = on;
+        color_ = color;
+        intensity_ = intensity;
+        return true;
+    }
+
+    std::string id_;
+    int pin_;
+    rmt_obj_t* transmitter_ = nullptr;
+    bool on_ = false;
+    std::string color_ = "#00FF00";
+    uint8_t intensity_ = 32;
+};
+#endif
+
 struct AnalogInputConfig {
     float minVoltage = 0.0f;
     float maxVoltage = 3.3f;
@@ -578,7 +691,7 @@ public:
     }
 };
 
-#if __has_include(<DHT.h>)
+#if !defined(PULSE_LEAN_PMACHINE) && __has_include(<DHT.h>)
 struct DHT11Config {
     int dataPin = 4;
     int powerPin = -1;
@@ -785,7 +898,20 @@ struct OpenDeviceDescriptor {
 
 class DeviceRuntime {
 public:
+    bool registerPersistent(const std::string& name, const std::string& type, int pin, std::string& error) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        if (registrations_.find(name) != registrations_.end()) {
+            error = "device is already registered";
+            return false;
+        }
+        const int handle = open(name, type, pin, error);
+        if (handle == 0) return false;
+        registrations_[name] = descriptors_.at(handle);
+        return close(handle);
+    }
+
     int open(const std::string& name, const std::string& type, int pin, std::string& error) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         if (name.empty() || type.empty() || pin < 0) {
             error = "device name, type, and non-negative pin are required";
             return 0;
@@ -795,9 +921,27 @@ public:
             return 0;
         }
 
-        std::unique_ptr<DeviceDriverBase> driver = createDriver(name, type, pin);
-        if (!driver) {
-            error = "unsupported device type: " + type;
+        const auto registration = registrations_.find(name);
+        if (registration != registrations_.end() &&
+            (registration->second.type != type || registration->second.pin != pin)) {
+            error = "device configuration does not match registered hardware";
+            return 0;
+        }
+        for (const auto& entry : descriptors_) {
+            if (entry.second.pin == pin) {
+                error = "GPIO pin belongs to another open device";
+                return 0;
+            }
+        }
+        for (const auto& entry : registrations_) {
+            if (entry.first != name && entry.second.pin == pin) {
+                error = "GPIO pin belongs to a registered device";
+                return 0;
+            }
+        }
+        const int handle = allocateHandle();
+        if (handle == 0) {
+            error = "device handle table is full";
             return 0;
         }
         GpioPinSemaphore pinSemaphore(pin);
@@ -805,15 +949,21 @@ public:
             error = "GPIO pin is busy";
             return 0;
         }
-        if (!driver->begin()) {
-            error = "device initialization failed";
-            return 0;
-        }
-
-        const int handle = allocateHandle();
-        if (handle == 0) {
-            error = "device handle table is full";
-            return 0;
+        std::unique_ptr<DeviceDriverBase> driver;
+        auto idle = idleDevices_.find(name);
+        if (idle != idleDevices_.end()) {
+            driver = std::move(idle->second);
+            idleDevices_.erase(idle);
+        } else {
+            driver = createDriver(name, type, pin);
+            if (!driver) {
+                error = "unsupported device type: " + type;
+                return 0;
+            }
+            if (!driver->begin()) {
+                error = "device initialization failed";
+                return 0;
+            }
         }
         const std::string driverType = driver->getDriverType();
         DeviceCapabilityRegistry::instance().registerDevice(name, type, driver.get(), "", "", pin);
@@ -832,6 +982,7 @@ public:
 
     bool operate(int handle, const std::string& operation, const std::string& state,
                  const std::string& value, std::string& result, std::string& error) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         auto found = devices_.find(handle);
         if (found == devices_.end()) {
             error = "invalid device handle";
@@ -879,12 +1030,17 @@ public:
     }
 
     bool close(int handle) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         auto found = devices_.find(handle);
         if (found == devices_.end()) return false;
         const auto descriptor = descriptors_.find(handle);
         if (descriptor != descriptors_.end()) {
             handlesByName_.erase(descriptor->second.name);
-            DeviceCapabilityRegistry::instance().unregisterDevice(descriptor->second.name);
+            if (registrations_.find(descriptor->second.name) != registrations_.end()) {
+                idleDevices_[descriptor->second.name] = std::move(found->second);
+            } else {
+                DeviceCapabilityRegistry::instance().unregisterDevice(descriptor->second.name);
+            }
             descriptors_.erase(descriptor);
         }
         devices_.erase(found);
@@ -892,6 +1048,7 @@ public:
     }
 
     std::vector<OpenDeviceDescriptor> openedDevices() const {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         std::vector<OpenDeviceDescriptor> result;
         result.reserve(descriptors_.size());
         for (const auto& entry : descriptors_) result.push_back(entry.second);
@@ -899,9 +1056,12 @@ public:
     }
 
 private:
+    mutable std::recursive_mutex mutex_;
     std::map<int, std::unique_ptr<DeviceDriverBase>> devices_;
     std::map<std::string, int> handlesByName_;
     std::map<int, OpenDeviceDescriptor> descriptors_;
+    std::map<std::string, OpenDeviceDescriptor> registrations_;
+    std::map<std::string, std::unique_ptr<DeviceDriverBase>> idleDevices_;
     int nextHandle_ = 1;
 
     int allocateHandle() {
@@ -915,6 +1075,12 @@ private:
         std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char ch) {
             return static_cast<char>(std::tolower(ch));
         });
+#if defined(ESP32)
+        if (normalized == "ws2812" || normalized == "rgb-led") {
+            if (!isGpioOutputCapablePin(pin)) return nullptr;
+            return std::unique_ptr<DeviceDriverBase>(new AddressableLedDriver(name, pin));
+        }
+#endif
         if (normalized == "led") {
             if (!isGpioOutputCapablePin(pin)) return nullptr;
             DigitalOutputConfig config;
@@ -929,7 +1095,7 @@ private:
         if (normalized == "sensor" || normalized == "analog" || normalized == "analog-input") {
             return std::unique_ptr<DeviceDriverBase>(new AnalogInputDriver(name, pin));
         }
-#if __has_include(<DHT.h>)
+#if !defined(PULSE_LEAN_PMACHINE) && __has_include(<DHT.h>)
         if (normalized == "temperature" || normalized == "dht11") {
             return std::unique_ptr<DeviceDriverBase>(new DHT11Driver(name, pin));
         }

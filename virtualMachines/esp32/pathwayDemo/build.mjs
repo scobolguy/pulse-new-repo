@@ -21,9 +21,9 @@ export async function compileStockService({ address, port }) {
 export async function buildArtifacts(config) {
   const artifacts = {
     'inventory-server': compileCobolishToPcode(await fs.readFile(path.join(root, 'application', 'inventory.cob'), 'utf8'),
-      { hostServices: true, nativeTarget: true, inventoryGateway: config.inventoryGateway }),
+      { sourceFormat: 'fixed', hostServices: true, nativeTarget: true, inventoryGateway: config.inventoryGateway }),
     'inventory-native-server': compileCobolishToPcode(await fs.readFile(path.join(root, 'application', 'inventory.cob'), 'utf8'),
-      { hostServices: true, nativeTarget: true, inventoryGateway: config.inventoryGateway }),
+      { sourceFormat: 'fixed', hostServices: true, nativeTarget: true, inventoryGateway: config.inventoryGateway }),
     'inventory-requester': compileScreenCobol(await fs.readFile(path.join(root, 'application', 'inventory.scob'), 'utf8')),
     'stock-service': await compileStockService(config.stockGateway),
     'stock-requester': compileScreenCobol(await fs.readFile(path.join(root, 'application', 'stock.scob'), 'utf8')),

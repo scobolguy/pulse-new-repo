@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { compileCobolishToPcode } from '../../../../languages/cobolish85/src/compile-cobolish-to-pcode.mjs';
+import { fixedToFree } from '../../../../languages/cobolish85/src/fixed-format.mjs';
 import { createStockGateway } from '../src/stock-gateway.mjs';
 import { createPascalishServiceHost } from '../../pmachines/javascript/src/service-host.mjs';
 import { encodeHostedImage } from '../../pmachines/shared/contracts/hosted-image.mjs';
@@ -10,9 +11,41 @@ import { createSqlFixture, sqlEnabled } from './sql-fixture.mjs';
 
 const source = await fs.readFile(new URL('../../pathwayDemo/application/inventory.cob', import.meta.url), 'utf8');
 const token = 'native-inventory-test-credential-123456789';
+test('COBOL inventory uses standard fixed-format Areas A and B', () => {
+  for (const [index, card] of source.split(/\r?\n/).entries()) {
+    if (!card.trim()) continue;
+    const label = `card ${index + 1}`;
+    assert.ok(card.length <= 72, `${label} exceeds column 72`);
+    assert.equal(card.slice(0, 6), '      ', `${label} sequence area`);
+    assert.ok([' ', '-'].includes(card[6]), `${label} indicator column`);
+    assert.doesNotMatch(card, /\t/, `${label} contains a tab`);
+    const areaA = /^(?:01 |[A-Z-]+ DIVISION\.|[A-Z-]+ SECTION\.|[A-Z-]+\.$|PROGRAM-ID\.|PULSE SERVICE )/.test(card.slice(7));
+    if (areaA) assert.notEqual(card[7], ' ', `${label} must start in Area A`);
+    else assert.equal(card.slice(7, 11), '    ', `${label} must start in Area B`);
+  }
+  assert.match(source, /^      - {4}"/m);
+  assert.match(fixedToFree(source), /Use INQUIRE sku, RESERVE sku quantity reservation-id, or RELEASE reservation-id/);
+});
+test('COBOL inventory separates parsing, dispatch and reply handling', () => {
+  const free = fixedToFree(source);
+  assert.match(free, /PROCEDURE DIVISION\.\s+PERFORM PARSE-COMMAND\s+PERFORM DISPATCH-COMMAND\s+PERFORM FINISH-REPLY\s+STOP RUN\./);
+  const sections = [...free.matchAll(/^([A-Z-]+) SECTION\./gm)].map(match => match[1]);
+  assert.deepEqual(sections, ['WORKING-STORAGE', 'COMMAND-PARSING', 'COMMAND-DISPATCH', 'REPLY-HANDLING']);
+  const parsing = free.split('COMMAND-PARSING SECTION.')[1].split('COMMAND-DISPATCH SECTION.')[0];
+  const dispatch = free.split('COMMAND-DISPATCH SECTION.')[1].split('REPLY-HANDLING SECTION.')[0];
+  const reply = free.split('REPLY-HANDLING SECTION.')[1];
+  assert.match(parsing, /PULSE RECEIVE INTO REQUEST-TEXT/);
+  assert.match(parsing, /UNSTRING REQUEST-TEXT DELIMITED BY ALL SPACE/);
+  assert.doesNotMatch(parsing, /WORDS-TEXT|WORD-BYTES/);
+  assert.match(parsing, /VALIDATE-RESERVATION\./);
+  assert.doesNotMatch(parsing, /PERFORM EXCHANGE-DATABASE/);
+  assert.match(dispatch, /IF HAS-REPLY = 0\s+PERFORM LOAD-SNAPSHOT\s+PERFORM APPLY-STOCK-RULES\s+PERFORM COMMIT-INVENTORY/);
+  assert.doesNotMatch(dispatch, /PULSE SEND/);
+  assert.match(reply, /PULSE SEND RESPONSE-TEXT AS JSON/);
+});
 async function fixture(store) {
   const gateway = await createStockGateway({ store, transactionToken: token, logger: { warn() {} } });
-  const options = { hostServices: true, nativeTarget: true, inventoryGateway: { address: '127.0.0.1', port: gateway.port } };
+  const options = { sourceFormat: 'fixed', hostServices: true, nativeTarget: true, inventoryGateway: { address: '127.0.0.1', port: gateway.port } };
   const compiled = compileCobolishToPcode(source, options);
   assert.deepEqual(compiled.programMap.targets, ['js', 'esp32']);
   assert.deepEqual(compiled.programMap.requiredHostCapabilities, []);
@@ -83,6 +116,31 @@ test('portable inventory rules build replies and row changes without calling a P
       assert.equal((await f.call(command, 'portable-invalid-id')).status, 400, command);
     }
     assert.equal(reads, 1);
+  } finally { await f.close(); }
+});
+test('UNSTRING preserves whitespace handling and rejects excess or truncated arguments', async () => {
+  let reads = 0;
+  const f = await fixture({ stock() {}, async exchange(query) {
+    reads++;
+    assert.deepEqual(JSON.parse(query.canonical), { operation: 'INQUIRE', item: 'WIDGET' });
+    return { status: 200, reply: 'WIDGET AVAILABLE 100 RESERVED 0' };
+  } });
+  try {
+    for (const command of ['INQUIRE WIDGET', '  inquire   widget  ', ' '.repeat(100) + 'INQUIRE WIDGET']) {
+      const reply = await f.call(command, 'unstring-valid-request');
+      assert.equal(reply.status, 200, command);
+      assert.equal(reply.body.data.trimEnd(), 'WIDGET AVAILABLE 100 RESERVED 0');
+    }
+    assert.equal(reads, 3);
+    for (const command of ['', '   ', 'INQUIRE', 'INQUIRE WIDGET EXTRA',
+      'RESERVE WIDGET 3 ORDER1 EXTRA', 'RESERVE WIDGET 3 ORDER1 EXTRA MORE',
+      'INQUIRE ABCDEFGHIJKLMNOPQ', 'RESERVE WIDGET 3 ABCDEFGHIJKLMNOPQ',
+      'RESERVE WIDGET 000003 ORDER1', 'INQUIRE WIDGET\t', 'INQUIRE WIDGET\n',
+      'INQUIRE'.padEnd(127, 'A') + ' WIDGET']) {
+      const reply = await f.call(command, 'unstring-invalid-request');
+      assert.equal(reply.status, 400, JSON.stringify({ command, reply }));
+    }
+    assert.equal(reads, 3);
   } finally { await f.close(); }
 });
 test('native-compatible COBOL mutations share SQL ledger with JS recovery after lost reply', {

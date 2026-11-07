@@ -1,0 +1,324 @@
+{
+  "version": 1,
+  "sourceLanguage": "screencobol",
+  "executionModel": "pathway-requester",
+  "requesterBindingsVersion": 1,
+  "entryLabel": null,
+  "screenCobol": {
+    "id": "INVENTORY-REQUESTER",
+    "fields": {
+      "REQUEST-TEXT": {
+        "width": 64,
+        "value": "INQUIRE WIDGET                                                  "
+      },
+      "REPLY-TEXT": {
+        "width": 96,
+        "value": "                                                                                                "
+      }
+    },
+    "screens": {
+      "INVENTORY-SCREEN": {
+        "rows": 20,
+        "columns": 120,
+        "fields": [
+          {
+            "label": "FILLER",
+            "row": 1,
+            "column": 2,
+            "width": 33,
+            "literal": "Pulse Pathway - durable inventory",
+            "binding": null,
+            "direction": "FROM"
+          },
+          {
+            "label": "FILLER",
+            "row": 3,
+            "column": 2,
+            "width": 8,
+            "literal": "Command:",
+            "binding": null,
+            "direction": "FROM"
+          },
+          {
+            "label": "COMMAND-FIELD",
+            "row": 3,
+            "column": 12,
+            "width": 64,
+            "literal": null,
+            "binding": "REQUEST-TEXT",
+            "direction": "USING"
+          },
+          {
+            "label": "FILLER",
+            "row": 5,
+            "column": 2,
+            "width": 6,
+            "literal": "Reply:",
+            "binding": null,
+            "direction": "FROM"
+          },
+          {
+            "label": "RESULT-FIELD",
+            "row": 5,
+            "column": 12,
+            "width": 96,
+            "literal": null,
+            "binding": "REPLY-TEXT",
+            "direction": "FROM"
+          },
+          {
+            "label": "FILLER",
+            "row": 8,
+            "column": 2,
+            "width": 14,
+            "literal": "INQUIRE WIDGET",
+            "binding": null,
+            "direction": "FROM"
+          },
+          {
+            "label": "FILLER",
+            "row": 9,
+            "column": 2,
+            "width": 23,
+            "literal": "RESERVE WIDGET 2 ORDER1",
+            "binding": null,
+            "direction": "FROM"
+          },
+          {
+            "label": "FILLER",
+            "row": 10,
+            "column": 2,
+            "width": 14,
+            "literal": "RELEASE ORDER1",
+            "binding": null,
+            "direction": "FROM"
+          },
+          {
+            "label": "FILLER",
+            "row": 12,
+            "column": 2,
+            "width": 60,
+            "literal": "Stock: WIDGET 100, SENSOR 25, RELAY 50 (initial values only)",
+            "binding": null,
+            "direction": "FROM"
+          },
+          {
+            "label": "FILLER",
+            "row": 14,
+            "column": 2,
+            "width": 76,
+            "literal": "Lost reply? Retry the saved request. Do not start a new reservation blindly.",
+            "binding": null,
+            "direction": "FROM"
+          }
+        ]
+      }
+    },
+    "initialScreen": "INVENTORY-SCREEN"
+  },
+  "sourceMap": {
+    "0": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 5,
+      "sourceText": "01 REQUEST-TEXT PIC X(64) VALUE \"INQUIRE WIDGET\".",
+      "instruction": "PUSH_STR \"INQUIRE WIDGET                                                  \""
+    },
+    "1": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 5,
+      "sourceText": "01 REQUEST-TEXT PIC X(64) VALUE \"INQUIRE WIDGET\".",
+      "instruction": "STORE REQUEST-TEXT"
+    },
+    "2": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 6,
+      "sourceText": "01 REPLY-TEXT PIC X(96).",
+      "instruction": "PUSH_STR \"                                                                                                \""
+    },
+    "3": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 6,
+      "sourceText": "01 REPLY-TEXT PIC X(96).",
+      "instruction": "STORE REPLY-TEXT"
+    },
+    "4": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 20,
+      "sourceText": "DISPLAY BASE INVENTORY-SCREEN.",
+      "instruction": "PUSH_STR \"REQUEST-TEXT\""
+    },
+    "5": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 20,
+      "sourceText": "DISPLAY BASE INVENTORY-SCREEN.",
+      "instruction": "LOAD REQUEST-TEXT"
+    },
+    "6": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 20,
+      "sourceText": "DISPLAY BASE INVENTORY-SCREEN.",
+      "instruction": "CALL_EXT screen.display 2"
+    },
+    "7": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 20,
+      "sourceText": "DISPLAY BASE INVENTORY-SCREEN.",
+      "instruction": "STORE __discard"
+    },
+    "8": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 20,
+      "sourceText": "DISPLAY BASE INVENTORY-SCREEN.",
+      "instruction": "PUSH_STR \"REPLY-TEXT\""
+    },
+    "9": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 20,
+      "sourceText": "DISPLAY BASE INVENTORY-SCREEN.",
+      "instruction": "LOAD REPLY-TEXT"
+    },
+    "10": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 20,
+      "sourceText": "DISPLAY BASE INVENTORY-SCREEN.",
+      "instruction": "CALL_EXT screen.display 2"
+    },
+    "11": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 20,
+      "sourceText": "DISPLAY BASE INVENTORY-SCREEN.",
+      "instruction": "STORE __discard"
+    },
+    "12": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 21,
+      "sourceText": "ACCEPT INVENTORY-SCREEN.",
+      "instruction": "PUSH_STR \"REQUEST-TEXT\""
+    },
+    "13": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 21,
+      "sourceText": "ACCEPT INVENTORY-SCREEN.",
+      "instruction": "CALL_EXT screen.accept 1"
+    },
+    "14": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 21,
+      "sourceText": "ACCEPT INVENTORY-SCREEN.",
+      "instruction": "STORE REQUEST-TEXT"
+    },
+    "15": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 22,
+      "sourceText": "SEND REQUEST-TEXT TO \"inventory-service\" REPLY CODE 0 YIELDS REPLY-TEXT.",
+      "instruction": "PUSH_STR \"inventory-service\""
+    },
+    "16": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 22,
+      "sourceText": "SEND REQUEST-TEXT TO \"inventory-service\" REPLY CODE 0 YIELDS REPLY-TEXT.",
+      "instruction": "LOAD REQUEST-TEXT"
+    },
+    "17": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 22,
+      "sourceText": "SEND REQUEST-TEXT TO \"inventory-service\" REPLY CODE 0 YIELDS REPLY-TEXT.",
+      "instruction": "PUSH_INT 0"
+    },
+    "18": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 22,
+      "sourceText": "SEND REQUEST-TEXT TO \"inventory-service\" REPLY CODE 0 YIELDS REPLY-TEXT.",
+      "instruction": "CALL_EXT pathway.send 3"
+    },
+    "19": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 22,
+      "sourceText": "SEND REQUEST-TEXT TO \"inventory-service\" REPLY CODE 0 YIELDS REPLY-TEXT.",
+      "instruction": "STORE REPLY-TEXT"
+    },
+    "20": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 23,
+      "sourceText": "DISPLAY INVENTORY-SCREEN.",
+      "instruction": "PUSH_STR \"REQUEST-TEXT\""
+    },
+    "21": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 23,
+      "sourceText": "DISPLAY INVENTORY-SCREEN.",
+      "instruction": "LOAD REQUEST-TEXT"
+    },
+    "22": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 23,
+      "sourceText": "DISPLAY INVENTORY-SCREEN.",
+      "instruction": "CALL_EXT screen.display 2"
+    },
+    "23": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 23,
+      "sourceText": "DISPLAY INVENTORY-SCREEN.",
+      "instruction": "STORE __discard"
+    },
+    "24": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 23,
+      "sourceText": "DISPLAY INVENTORY-SCREEN.",
+      "instruction": "PUSH_STR \"REPLY-TEXT\""
+    },
+    "25": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 23,
+      "sourceText": "DISPLAY INVENTORY-SCREEN.",
+      "instruction": "LOAD REPLY-TEXT"
+    },
+    "26": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 23,
+      "sourceText": "DISPLAY INVENTORY-SCREEN.",
+      "instruction": "CALL_EXT screen.display 2"
+    },
+    "27": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 23,
+      "sourceText": "DISPLAY INVENTORY-SCREEN.",
+      "instruction": "STORE __discard"
+    },
+    "28": {
+      "sourceFile": null,
+      "sourceLanguage": "screencobol",
+      "sourceLine": 24,
+      "sourceText": "STOP RUN.",
+      "instruction": "HALT"
+    }
+  }
+}

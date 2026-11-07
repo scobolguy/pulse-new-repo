@@ -15,6 +15,7 @@
 enum class FFSBackend {
     Unavailable,
     SD,
+    Flash,
     Remote
 };
 
@@ -90,6 +91,7 @@ public:
 
     // Basic file ops
     FFSStatus write(const String &logicalName, const uint8_t *data, size_t len);
+    FFSStatus replace(const String& temporaryName, const String& logicalName);
     FFSStatus read(const String &logicalName, std::vector<uint8_t> &outData);
     File openReadFile(const String &logicalName);
     // Truncates and opens for seekable read/write (used for p-machine heap swap).

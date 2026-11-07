@@ -11,6 +11,8 @@ export const LANGUAGE_EDITORS = [
     content: 'Program "hello"\nSub Main()\n  Print "Hello from VBish"\nEnd Sub\n' },
   { id: 'csharp', label: 'C# (ECMA-334 subset)', extension: '.cs',
     content: 'using System;\nclass Program\n{\n    static T Identity<T>(T value) { return value; }\n    static void Main()\n    {\n        Console.WriteLine(Identity("Hello from C#"));\n    }\n}\n' },
+  { id: 'kotlin', label: 'Kotlin (Pulse subset)', extension: '.kt',
+    content: 'fun <T> identity(value: T): T {\n    return value\n}\n\nfun main() {\n    println(identity("Hello from Kotlin"))\n}\n' },
   { id: 'fortranish', label: 'Fortranish (Minnesota FORTRAN)', extension: '.ftn',
     content: "      PROGRAM HELLO\n      PRINT, 'Hello from MNF'\n      END\n" },
   { id: 'wfl', label: 'WFL Workflow / Deployment', extension: '.wfl',

@@ -51,11 +51,6 @@ Op opFromMnemonic(const std::string& mnemonic) {
 
 const char* const COBOL_HEADER = "# Auto-generated from ANTLR Cobolish grammar";
 
-// Opcodes the generic native PMachine has no implementation for.
-bool isEngineOnlyMnemonic(const std::string& mnemonic) {
-    return mnemonic == "PUSH_DEC" || mnemonic == "PUSH_REF" || mnemonic.rfind("DEC_", 0) == 0;
-}
-
 }  // namespace
 
 // Compact instruction: operands live in the program pools so a 3000-line program stays small.
@@ -166,17 +161,6 @@ bool isCobolPcode(const std::string& text) {
     if (text.compare(0, 3, "\xEF\xBB\xBF") == 0) start = 3;
     while (start < text.size() && isAsciiSpace(text[start])) ++start;
     if (text.compare(start, std::strlen(COBOL_HEADER), COBOL_HEADER) == 0) return true;
-    size_t lineStart = 0;
-    while (lineStart < text.size()) {
-        size_t lineEnd = text.find('\n', lineStart);
-        if (lineEnd == std::string::npos) lineEnd = text.size();
-        size_t i = lineStart;
-        while (i < lineEnd && isAsciiSpace(text[i])) ++i;
-        size_t j = i;
-        while (j < lineEnd && !isAsciiSpace(text[j])) ++j;
-        if (j > i && isEngineOnlyMnemonic(text.substr(i, j - i))) return true;
-        lineStart = lineEnd + 1;
-    }
     return false;
 }
 

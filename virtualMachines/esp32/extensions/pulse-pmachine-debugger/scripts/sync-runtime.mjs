@@ -21,6 +21,7 @@ const pending = [
     'run-pascal-on-esp32-node.mjs',
   ].map(name => path.join(scripts, name)),
   path.join('languages', 'mapl', 'src', 'compile-mapl-antlr-to-pcode.mjs'),
+  path.join('languages', 'kotlin', 'src', 'compile-kotlin-to-pcode.mjs'),
   path.join('languages', 'wfl', 'src', 'compile-workflow-dsl.mjs'),
   path.join('languages', 'wfl', 'src', 'compile-workflow-to-pcode.mjs'),
   path.join(esp32, 'aggregator', 'src', 'backend', 'modules', 'javascriptPmachineDebugger.mjs'),

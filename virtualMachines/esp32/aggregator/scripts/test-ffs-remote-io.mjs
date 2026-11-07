@@ -73,6 +73,24 @@ test('remote FFS supports bounded binary, positioned reads/writes and directorie
     assert.equal(removed.status, 200);
     assert.deepEqual((await (await fetch(`${base}/list?path=nested`)).json()).files,
       [{ name: 'test.bin', type: 'file' }]);
+    response = await write('offset=0', Buffer.from('old checkpoint'));
+    assert.equal(response.status, 200);
+    const replacement = await fetch(`${base}/io?path=nested/pending.bin&offset=0&truncate=true`, {
+      method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: Buffer.from('new checkpoint'),
+    });
+    assert.equal(replacement.status, 200);
+    const replace = (source, destination) => fetch(`${base}/replace`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ source, destination }),
+    });
+    assert.equal((await replace('nested/pending.bin', 'nested/test.bin')).status, 200);
+    assert.equal(await fs.readFile(path.join(root, 'nested', 'test.bin'), 'utf8'), 'new checkpoint');
+    assert.equal((await fetch(`${base}/stat?path=nested/pending.bin`)).status, 404);
+    assert.equal((await replace('nested/missing.bin', 'nested/test.bin')).status, 404);
+    assert.equal(await fs.readFile(path.join(root, 'nested', 'test.bin'), 'utf8'), 'new checkpoint');
+    for (const [source, destination] of [
+      ['nested/test.bin', 'elsewhere/test.bin'], ['nested/test.bin', 'nested/test.bin'], ['', 'nested/test.bin'],
+    ]) assert.equal((await replace(source, destination)).status, 400);
   } finally {
     await new Promise(resolve => server.close(resolve));
     await fs.rm(root, { recursive: true, force: true });

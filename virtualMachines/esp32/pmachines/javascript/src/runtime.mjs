@@ -1726,7 +1726,15 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
   if (maxSteps !== null && (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > stepLimit)) {
     throw new Error(`maxSteps must be an integer between 1 and ${stepLimit}`);
   }
-  let pc = 0;
+  const startLabel = runtimeContext.startLabel;
+  const labels = instructions.__labels;
+  let pc = startLabel === undefined || startLabel === null || startLabel === ''
+    ? 0
+    : labels?.get(startLabel);
+  if (startLabel !== undefined && startLabel !== null && startLabel !== '' &&
+      typeof pc !== 'number') {
+    throw new Error(`P-code entry label not found: ${startLabel}`);
+  }
   let currentMessage = sourceMessage;
   // Run-local output document for the pcode-routine mapper. SRC_GET reads from
   // currentMessage; OUT_SET writes here; ROUTE_MAP_RUN commits it back.
@@ -1808,6 +1816,10 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
 
   let steps = 0;
   let stepLimitHit = false;
+  const executionSlot = runtimeContext.executionSlot;
+  const waitFor = (reason, operation) => executionSlot
+    ? executionSlot.wait(operation, { waitReason: reason, pc, stepCount: steps })
+    : operation();
   function reconcileObjects() {
     if (!objects.stats.liveHandles) return;
     const roots = [...stack];
@@ -1834,14 +1846,16 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     if (runtimeContext.signal?.aborted) throw new Error('PMachine execution cancelled');
     if (runtimeContext.maxStack && stack.length > runtimeContext.maxStack) throw new Error('PMachine operand stack capacity exceeded');
     if (runtimeContext.maxCallDepth && callStack.length > runtimeContext.maxCallDepth) throw new Error('PMachine call depth capacity exceeded');
-    if (runtimeContext.cooperative && steps % 256 === 0) {
+    if (executionSlot && steps > 1 && (steps - 1) % executionSlot.quantum === 0) {
+      await executionSlot.checkpoint({ pc, stepCount: steps - 1 });
+    } else if (!executionSlot && runtimeContext.cooperative && steps % 256 === 0) {
       await new Promise(resolve => setImmediate(resolve));
     }
     const instr = instructions[pc];
     const op = instr.mnemonic;
 
     if (typeof debugHooks.beforeInstruction === 'function') {
-      await debugHooks.beforeInstruction({
+      await waitFor('debugger', () => debugHooks.beforeInstruction({
         pc,
         instruction: instr,
         operandStack: [...stack],
@@ -1850,7 +1864,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
         runtimeState: { ...state },
         stdout: [...stdout],
         callStack: callStack.map(frame => ({ label: frame.label || '', pc: frame.pc ?? null }))
-      });
+      }));
     }
 
     if (op === 'NOP') {
@@ -1871,7 +1885,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
           ? { real: value.v, ...(value instanceof PDouble ? { double: true } : {}) } : value);
         const io = { emit: record => stdout.push(record), files: textFiles, stdin: consoleInput.lines.join('\n') };
         const result = isFortranIoIntrinsic(name)
-          ? await executeFortranIoIntrinsic(name, values, fortranState, io)
+          ? await waitFor(name, () => executeFortranIoIntrinsic(name, values, fortranState, io))
           : executeFortranIntrinsic(name, values, fortranState, io);
         const box = value => value && typeof value === 'object' && 'real' in value
           ? value.double ? new PDouble(value.real) : new PReal(value.real) : value;
@@ -1922,7 +1936,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
         binding.args?.[index] === 'number' ? numberOf(value) : value);
       const value = name === 'host.map_apply'
         ? runMappingById(hostArgs[0], hostArgs[1], mappingsById)
-        : await runtimeContext.callHost(name, hostArgs);
+        : await waitFor(name, () => runtimeContext.callHost(name, hostArgs));
       if (binding.result === 'string') {
         if (typeof value !== 'string') throw new Error(`Invalid host result for ${name}: expected string`);
         stack.push(value);
@@ -2304,7 +2318,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       const name = asStringValue(stack.pop()).trim();
       let handle = 0;
       if (name && (mode === 'r' || mode === 'w' || mode === 'a')) {
-        const existing = mode === 'w' ? null : await textFiles.read(name);
+        const existing = mode === 'w' ? null : await waitFor('file.read', () => textFiles.read(name));
         if (mode !== 'r' || existing !== null) {
           const rows = existing === null ? [] : splitTextRecords(existing);
           handle = nextFileHandle;
@@ -2336,7 +2350,8 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       const file = fileHandles.get(handle);
       if (file?.textFile) {
         fileHandles.delete(handle);
-        if (file.mode !== 'r') await textFiles.write(file.fileId, file.rows.map(row => `${row}\n`).join(''));
+        if (file.mode !== 'r') await waitFor('file.write', () =>
+          textFiles.write(file.fileId, file.rows.map(row => `${row}\n`).join('')));
       }
       pc += 1;
       continue;
@@ -2795,12 +2810,12 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       const reader = runtimeContext?.databaseReader;
       let row = null;
       if (typeof reader === 'function') {
-        row = await reader({
+        row = await waitFor('database.read', () => reader({
           database,
           table,
           columns,
           where: whereColumn ? { column: whereColumn, op: whereOp, value: whereValue } : null
-        });
+        }));
       } else {
         state.__db_error = `no database reader bound for ${database}`;
       }
@@ -2900,7 +2915,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
         ? runtimeContext.invokeService
         : async () => ({ success: true, response: payload, errorMessage: null });
 
-      const callResult = await invokeService({ serviceId, endpoint, payload });
+      const callResult = await waitFor('service.call', () => invokeService({ serviceId, endpoint, payload }));
       const responseValue = callResult?.response ?? payload;
       currentMessage = typeof responseValue === 'string' ? responseValue : JSON.stringify(responseValue);
       state.__last_service_call = {
@@ -2949,7 +2964,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
         ? runtimeContext.invokeSubflow
         : async () => ({ success: false, errorMessage: 'invokeSubflow not configured' });
 
-      const settled = await Promise.all(pendingOrchTasks.map(async (task) => {
+      const settled = await waitFor('orchestration.wait', () => Promise.all(pendingOrchTasks.map(async (task) => {
         try {
           const result = await invokeSubflow({
             subflowId: String(task.subflowId || '').trim(),
@@ -2989,7 +3004,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
             errorCode: 'invoke_exception'
           };
         }
-      }));
+      })));
 
       const failed = settled.find(item => item.success !== true);
       orchestrationSummary = {
@@ -3030,12 +3045,12 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
         ? runtimeContext.invokeSubflow
         : async () => ({ success: false, errorMessage: 'invokeSubflow not configured' });
       const payload = resolveVar(currentFrame, String(serviceConfig.input || '').trim());
-      const result = await invokeSubflow({
+      const result = await waitFor('orchestration.service', () => invokeSubflow({
         subflowId: String(serviceConfig.serviceId || '').trim(),
         nodeId: '',
         payload,
         timeoutMs: Number(serviceConfig.timeoutMs || 0) || 5000
-      });
+      }));
       if (result?.success === false) throw new Error(result.errorMessage || `Service '${serviceConfig.serviceId}' failed`);
       const rawValue = result?.response?.body ?? result?.response?.value ?? result?.response ?? null;
       const value = rawValue && typeof rawValue === 'object' ? JSON.stringify(rawValue) : rawValue;
@@ -3093,7 +3108,8 @@ async function readMessage(args) {
   return args.message;
 }
 
-async function executeSingleMessage(args, { printOutput = true } = {}) {
+async function executeSingleMessage(args, { printOutput = true, scheduler = null } = {}) {
+  if (scheduler !== null && typeof scheduler.execute !== 'function') throw new TypeError('Invalid pmachine scheduler');
   const pcodePath = path.resolve(args.pcode);
   const programMapPath = path.resolve(args.programMap);
   const pcodeText = await fs.readFile(pcodePath, 'utf-8');
@@ -3198,7 +3214,7 @@ async function executeSingleMessage(args, { printOutput = true } = {}) {
   };
 
   const startedAt = Date.now();
-  const result = await executeProgramImpl({
+  const executionOptions = {
     instructions,
     opcodeMap,
     mappingsById,
@@ -3211,7 +3227,10 @@ async function executeSingleMessage(args, { printOutput = true } = {}) {
       invokeService,
       serviceId: args.serviceId || ''
     }
-  });
+  };
+  const result = scheduler
+    ? await scheduler.execute(executionOptions, { name: runtimeUnit.id })
+    : await executeProgramImpl(executionOptions);
   const durationMs = Date.now() - startedAt;
   const fitness = buildFitnessReport({
     args,
@@ -3284,8 +3303,8 @@ export async function executeProgram(options) {
 
 export { parsePcode, parseProgramMapMappings };
 
-export async function runSingleMessageForEvolution(args) {
-  return executeSingleMessage(args, { printOutput: false });
+export async function runSingleMessageForEvolution(args, { scheduler = null } = {}) {
+  return executeSingleMessage(args, { printOutput: false, scheduler });
 }
 
 async function runSingleMessage(args) {
