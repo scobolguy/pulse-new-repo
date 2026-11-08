@@ -26,6 +26,14 @@ test('ESP32 executes library-backed message conversion opcodes and compiled mapp
         { sourcePath: 'date', targetPath: 'Document.date', ops: ['SRC', 'YYMMDD_TO_ISO'] },
       ] }] }, '{"amount":"1 234,50","date":"700102"}'],
   ];
+  const [, , mappedOutput, mappingProgramMap, mappingMessage] = cases.at(-1);
+  for (const quoted of [false, true]) {
+    const mapper = quoted ? '"payment"' : 'payment';
+    const queue = quoted ? '"library-output"' : 'library-output';
+    cases.push([`route mapping (${quoted ? 'quoted' : 'bare'} operands)`,
+      `ROUTE_MAP_RUN ${mapper}\nROUTE_GET_MESSAGE\nPRINT\nPRINT_NL\nROUTE_EMIT ${queue}\nHALT\n`,
+      mappedOutput, mappingProgramMap, mappingMessage]);
+  }
   for (const [name, pcode, expected, programMap = {}, message = ''] of cases) {
     const response = await requestEsp32(new URL('/pmachine/execute_json', target), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, timeoutMs: 25000,
@@ -40,6 +48,9 @@ test('ESP32 executes library-backed message conversion opcodes and compiled mapp
     assert.equal(result.ok, true, `${name}: ${text}`);
     assert.ok(result.instructionCount > 1);
     assert.deepEqual(result.stdout, expected, name);
+    if (name.startsWith('route mapping')) {
+      assert.deepEqual(result.deliveries, [{ queueName: 'library-output', message: expected[0] }], name);
+    }
   }
   const pcode = 'ROUTE_MAP_RUN missing-mapper\nROUTE_EMIT must-not-deliver\nHALT\n';
   const response = await requestEsp32(new URL('/pmachine/execute_json', target), {

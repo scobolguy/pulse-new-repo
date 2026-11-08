@@ -99,6 +99,19 @@ node --test testing\pmachines\message-libraries-device.test.mjs
 Device tests require an idle board with the current firmware and do not install
 services or change GPIO state.
 
+The native text loader accepts both quoted and bare route operands. Device
+message regressions check named queue deliveries and ensure a missing mapper
+fails before emitting any delivery. The FORTRAN device suite uses the shared
+non-persistent HTTP connection helper for large requests and responses.
+
+The updated library-backed runtime was flashed and verified on an ESP32-S3
+with 8 MB flash and 8 MB PSRAM using `esp32_s3_pmachine_n8r8`. The application-only
+upload retained the existing partition layout, and the filesystem partition
+matched byte-for-byte immediately before and after that upload. The FORTRAN
+FORMAT/file/console suite, generic decimal/reference suite, and message mapping
+suite passed on hardware, as did compiler-generated Kotlin and COBOL smoke
+programs. These checks do not certify the full language corpora on ESP32.
+
 From the ESP32 directory:
 
 ```powershell

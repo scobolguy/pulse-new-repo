@@ -1308,6 +1308,9 @@ static Instructions parseTextPCode(const std::string& text, bool hosted = false)
             if (extractQuotedLiteral(rest2, literal)) {
                 instr.strOperand = literal;
                 instr.type = pmachine::OperandType::STRING;
+            } else {
+                instr.strOperand = trimCopy(rest2);
+                instr.type = pmachine::OperandType::STRING;
             }
         } else if (opcode == pmachine::OP_JMP || opcode == pmachine::OP_JZ) {
             std::string targetLabel;

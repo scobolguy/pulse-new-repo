@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { compileMnfToPcode } from '../../../../languages/mnf/src/compile-mnf-to-pcode.mjs';
 import { executeProgram, loadOpcodeMap, parsePcode, parseProgramMapMappings } from '../../pmachines/javascript/index.mjs';
 import { attachPcodeSignature } from '../../aggregator/scripts/pcode-signing.mjs';
+import { requestEsp32 } from './esp32-http.mjs';
 
 const target = process.env.PULSE_FORTRAN_TEST_NODE;
 
@@ -12,9 +13,9 @@ test('physical ESP32 FORMAT and external-file RTL match JS across independent ex
   const base = new URL(target);
   assert.ok(['http:', 'https:'].includes(base.protocol));
   const execute = async (artifact, expectedError, stdin) => {
-    const response = await fetch(new URL('/pmachine/execute_json', base), {
+    const response = await requestEsp32(new URL('/pmachine/execute_json', base), {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      signal: AbortSignal.timeout(25000),
+      timeoutMs: 60000,
       body: JSON.stringify({
         pcode: artifact.pcodeText,
         programMapText: JSON.stringify(attachPcodeSignature(artifact.programMap, artifact.pcodeText)),
@@ -167,9 +168,9 @@ test('physical ESP32 FORMAT and external-file RTL match JS across independent ex
     "IF(K.GT.0) PRINT, 'LIMIT OK'", 'END',
   ]);
   assert.deepEqual((await execute(boundedInput, undefined, ' '.repeat(8193))).stdout, ['LIMIT OK']);
-  const invalidInput = await fetch(new URL('/pmachine/execute_json', base), {
+  const invalidInput = await requestEsp32(new URL('/pmachine/execute_json', base), {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    signal: AbortSignal.timeout(25000),
+    timeoutMs: 60000,
     body: JSON.stringify({ pcode: 'HALT', stdin: 42 }),
   });
   assert.equal(invalidInput.status, 400);
