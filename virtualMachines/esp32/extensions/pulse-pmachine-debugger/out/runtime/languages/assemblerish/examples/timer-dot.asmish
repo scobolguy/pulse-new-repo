@@ -1,0 +1,6 @@
+HANDLER timer_dot
+TARGET "/api/devices/timer-dot"
+TRIGGER TIMER 1000
+
+EVENT tick 1 1 0
+END

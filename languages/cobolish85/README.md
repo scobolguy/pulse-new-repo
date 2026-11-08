@@ -3,6 +3,44 @@
 The compiler uses the formal [Cobolish85 ANTLR grammar](grammar/Cobolish85.g4).
 Ordinary program compilation and its existing COBOL-85 behavior are unchanged.
 
+## VM core and optional host libraries
+
+The VM retains operand stacks, frames/references, exact decimals and the existing
+decimal/display/edited-format opcodes. Removing these would change emitted P-code
+semantics; this split does not change the opcode or compiler ABI.
+
+Text, date and intrinsic math helpers live outside the JavaScript interpreter in
+[`libraries/cobol`](../../virtualMachines/esp32/libraries/cobol). Its
+`createCobolHostLibrary(filesystem)` loader imports only the module first called;
+ISAM is a separate on-demand module backed by the existing
+[`libraries/isam`](../../virtualMachines/esp32/libraries/isam) P-code adapter.
+Service and editor/debug hosts use this loader. File grants, alternate keys,
+status codes, locking and durable storage remain owned by that adapter, not the VM.
+Dispose the library when its invocation/service owner ends to release ISAM locks.
+Missing modules, missing filesystem grants and calls after disposal are errors.
+The old `desktop-*-bindings.mjs` entrypoints remain compatibility exports.
+
+Native desktop and ESP32 builds keep signatures/type checking in
+`host_bindings.cpp`, with text/date/math implementations in the separate
+`cobol_host_library.cpp` translation unit. `PULSE_COBOL_HOST_LIBRARY=1` is the
+compatibility default. Build all runtime units with
+`-DPULSE_COBOL_HOST_LIBRARY=0` to omit optional utilities; standalone native
+builds can omit that source entirely. Native `PMachine::setHostCallHook` can then
+provide those calls through an application-owned module. ISAM calls are always
+delegated, even with utilities enabled. Unprovided calls fail explicitly.
+
+ESP32 uses an optional firmware-linked module, not desktop DLL loading. Disabling
+it does not automatically provide a remote service or grant indexed-file storage.
+No hardware certification or firmware flashing is implied by desktop tests.
+
+## Local validation
+
+Run `npm test` in this directory for compiler, nucleus and curated CCVS coverage.
+The CCVS filesystem fixture is a real loopback service in a separate process, so
+compiler execution cannot stall its readiness-probe event loop. It uses an
+isolated temporary data root and is stopped when the suite ends; production
+readiness gating remains enabled.
+
 ## Pathway server extension
 
 Compile with `compileCobolishToPcode(source, { hostServices: true })` to produce

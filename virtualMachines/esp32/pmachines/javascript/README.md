@@ -10,6 +10,34 @@
 
 Run the shared conformance suite from `aggregator` with `node scripts/test-pmachine-conformance.mjs --target js`. To compare against installed ESP32 firmware, set `ESP32_HOST` and run the same script with `--diff`.
 
+## Optional COBOL and ISAM host modules
+
+The interpreter does not own COBOL text/date/math helpers or indexed-file storage.
+Service and editor hosts use the on-demand
+[`createCobolHostLibrary`](../../libraries/cobol/host-library.mjs) loader.
+Each host owns its loaded ISAM adapter and disposes it to release file locks.
+Importing the loader does not import the utilities, compiler or ISAM adapter;
+only the first corresponding host call does. Filesystem grants are still required.
+Existing desktop binding imports remain supported as compatibility exports.
+
+## Hosted service readiness
+
+For serialized hosts, intrinsic readiness probes wait for the current invocation
+queue before starting their execution timeout. Queue contention is not a failed
+storage operation. The probe timeout and genuine dependency/storage-failure
+gating remain enabled. Standalone lifecycle integrations can provide an
+abort-aware `waitForIntrinsicProbe(signal)` when their probe shares an execution
+queue.
+
+An explicit lifecycle `refresh()` waits for an older in-flight probe and samples
+again, rather than returning observations taken before the request. Periodic
+probes still coalesce while a cycle is in progress.
+
+Direct filesystem-service calls close their HTTP connections after each request.
+They do not reuse a socket that may have expired while compiler work blocked the
+client event loop, and they do not retry potentially committed writes. Transport
+errors retain their underlying cause. Logical-service transactions are unchanged.
+
 ## C# and shared System bindings
 
 The initial [C# compiler](../../../../languages/csharp/README.md) targets this
@@ -129,3 +157,16 @@ ownership, and the pending broker receive/correlation ID. Recovery must restore
 that state and wait for the existing query's reply, never replay the send.
 Durable broker reply retention and checkpoint/acknowledgment ordering are also
 required; the current test deliberately uses isolated, nonpersistent queues.
+## Library-owned message conversion
+
+The interpreter dispatches message opcodes to `libraries/swift/messages.mjs`
+and `libraries/messages/mapping.mjs`. FIN parsing, conversion rules, namespace
+selection, XML rendering and PACS batch splitting are not interpreter logic.
+COBOL edited/display masks and scientific presentation are supplied by
+`libraries/formatting/presentation.mjs`; canonical decimal serialization remains
+a runtime primitive.
+
+For an unpackaged source checkout, restore the XML dependency declared by
+`libraries/swift/package.json` with `npm install --prefix libraries/swift`
+from the ESP32 directory. Packaged Pulse extensions declare this dependency and
+copy the library import closure into their portable runtime.

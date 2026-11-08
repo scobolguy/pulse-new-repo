@@ -108,6 +108,12 @@ export default class VbishVisitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by VbishParser#endpointDecl.
+	visitEndpointDecl(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by VbishParser#systemMember.
 	visitSystemMember(ctx) {
 	  return this.visitChildren(ctx);
@@ -290,6 +296,210 @@ export default class VbishVisitor extends antlr4.tree.ParseTreeVisitor {
 
 	// Visit a parse tree produced by VbishParser#stringOrIdentifier.
 	visitStringOrIdentifier(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbCompilationUnit.
+	visitVbCompilationUnit(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbOption.
+	visitVbOption(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbImport.
+	visitVbImport(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbModule.
+	visitVbModule(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbProcedure.
+	visitVbProcedure(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbTypeParameters.
+	visitVbTypeParameters(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbTypeArguments.
+	visitVbTypeArguments(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbParameters.
+	visitVbParameters(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbParameter.
+	visitVbParameter(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbType.
+	visitVbType(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbBlock.
+	visitVbBlock(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbStatement.
+	visitVbStatement(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbVariable.
+	visitVbVariable(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbIf.
+	visitVbIf(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbFor.
+	visitVbFor(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbWhile.
+	visitVbWhile(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbDo.
+	visitVbDo(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbExpression.
+	visitVbExpression(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbOr.
+	visitVbOr(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbXor.
+	visitVbXor(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbAnd.
+	visitVbAnd(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbNot.
+	visitVbNot(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbComparison.
+	visitVbComparison(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbConcat.
+	visitVbConcat(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbAdd.
+	visitVbAdd(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbMod.
+	visitVbMod(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbIntegerDivision.
+	visitVbIntegerDivision(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbMultiply.
+	visitVbMultiply(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbUnary.
+	visitVbUnary(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbPrimary.
+	visitVbPrimary(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbArguments.
+	visitVbArguments(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbQualifiedName.
+	visitVbQualifiedName(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbIdentifier.
+	visitVbIdentifier(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
+	// Visit a parse tree produced by VbishParser#vbEol.
+	visitVbEol(ctx) {
 	  return this.visitChildren(ctx);
 	}
 

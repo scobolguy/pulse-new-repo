@@ -75,6 +75,9 @@ bindings. COBOLish server callers can compile with `hostServices: true` and
 deploy it to ESP32. See the [native COBOLish guide](../../../../languages/cobolish85/README.md#native-cobolish-server-code)
 for typed host calls, integer/frame limits and JSON replies. This is a hosted
 server API, not an automatic database grant or a new console Run/F5 path.
+COBOL editor/run/debug hosts load text/date/math helpers and the ISAM adapter on
+demand from the bundled library modules. ISAM retains its filesystem grants and
+releases its locks when the run or debug owner is disposed.
 
 ### Assemblerish hardware handlers
 
@@ -152,6 +155,11 @@ before compiling; cancelling or failing to save prevents launch. They ignore
 inactive file arguments and do not fall back to a sample program. With no active
 source editor, they show a message and launch nothing. Explicit F5 launch
 configurations with an explicit program still debug that configured program.
+
+**Step Into Instruction** executes one P-code instruction, even when several
+instructions map to the same source line. Instruction-granularity Step Over
+stops after one instruction or after returning from a call. Regular Step Into
+and Step Over retain source-line stepping.
 
 Use **Pulse PMachine: Select Default Node** to choose local JavaScript, a
 discovered node, **Enter IP address...** for an ESP32, or **Enter JavaScript node

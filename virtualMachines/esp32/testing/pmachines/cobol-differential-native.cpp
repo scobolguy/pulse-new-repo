@@ -1,7 +1,5 @@
-#include "../../pmachines/arduino/src/cobol_vm_internal.h"
-#if defined(TEST_GENERIC_PMACHINE)
+#include "../../pmachines/arduino/src/scalar_runtime.h"
 #include "../../pmachines/arduino/src/pmachine.h"
-#endif
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -14,68 +12,40 @@ static std::string read(const char* file) {
 
 int main(int argc, char** argv) {
     if (argc != 3) return 2;
-    using namespace cobolvm;
-    namespace detail = cobolvm::detail;
+    namespace detail = pmachine::rtl::detail;
     detail::Json map;
     if (!detail::parseJson(detail::utf8ToLatin1(read(argv[2])), map)) return 3;
-    std::map<std::string, ProcedureInfo> procedures;
+    std::map<std::string, std::vector<std::string>> signatures;
     if (const auto* values = map.get("procedures")) {
         for (const auto& entry : values->members) {
-            ProcedureInfo info;
+            const std::string label = detail::latin1ToUtf8(entry.first);
             if (const auto* params = entry.second.get("params"))
-                for (const auto& name : params->items) info.params.push_back(detail::latin1ToUtf8(name.text));
+                for (const auto& name : params->items) signatures[label].push_back(detail::latin1ToUtf8(name.text));
             if (const auto* locals = entry.second.get("locals"))
-                for (const auto& name : locals->items) info.locals.push_back(detail::latin1ToUtf8(name.text));
-            procedures.emplace(detail::latin1ToUtf8(entry.first), info);
+                for (const auto& name : locals->items) signatures["@locals:" + label].push_back(detail::latin1ToUtf8(name.text));
         }
     }
-    std::vector<std::string> globals;
     if (const auto* names = map.get("globals"))
-        for (const auto& name : names->items) globals.push_back(detail::latin1ToUtf8(name.text));
-#if defined(TEST_GENERIC_PMACHINE)
+        for (const auto& name : names->items) signatures["@globals"].push_back(detail::latin1ToUtf8(name.text));
     pmachine::PMachine machine;
-    std::map<std::string, std::vector<std::string>> signatures;
-    signatures["@globals"] = globals;
-    for (const auto& entry : procedures) {
-        signatures[entry.first] = entry.second.params;
-        signatures["@locals:" + entry.first] = entry.second.locals;
-    }
     machine.setProcedureSignatures(signatures);
-    std::string code = read(argv[1]);
-    const auto header = code.find("# Auto-generated from ANTLR Cobolish grammar");
-    if (header != std::string::npos) code.replace(header,
-        std::string("# Auto-generated from ANTLR Cobolish grammar").size(), "# Generic COBOL conformance");
     if (const auto* input = map.get("__testInput"))
         machine.setRoutingContext("", detail::latin1ToUtf8(input->text));
-    const auto instructions = pmachine::loadTextPCode(code);
+    const auto instructions = pmachine::loadTextPCode(read(argv[1]));
+    if (instructions.size() < 2) return 5;
     machine.run(instructions);
-    RunResult result;
-    result.lines = machine.getLastRunTextOutput();
     const auto& flow = machine.getFlowState();
-    const auto error = flow.find("__runtime_error");
-    if (error != flow.end()) {
-        result.hasError = true;
-        result.error = error->second;
-    }
-    result.stepLimitHit = machine.didLastRunHitStepLimit();
-#else
-    RunOptions options;
-    options.procedures = &procedures;
-    options.globals = &globals;
-    if (const auto* input = map.get("__testInput")) {
-        options.hasSourceMessage = true;
-        options.sourceMessage = detail::latin1ToUtf8(input->text);
-    }
-    const RunResult result = runText(read(argv[1]), options);
-#endif
+    auto error = flow.find("__runtime_error");
+    if (error == flow.end()) error = flow.find("__thunk_error");
     std::cout << "{\"error\":";
-    if (result.hasError) std::cout << detail::jsonQuote(detail::utf8ToLatin1(result.error));
+    if (error != flow.end()) std::cout << detail::jsonQuote(detail::utf8ToLatin1(error->second));
     else std::cout << "null";
     std::cout << ",\"stdout\":[";
-    for (size_t index = 0; index < result.lines.size(); ++index) {
+    const auto& lines = machine.getLastRunTextOutput();
+    for (size_t index = 0; index < lines.size(); ++index) {
         if (index) std::cout << ',';
-        std::cout << detail::latin1ToUtf8(detail::jsonQuote(detail::utf8ToLatin1(result.lines[index])));
+        std::cout << detail::latin1ToUtf8(detail::jsonQuote(detail::utf8ToLatin1(lines[index])));
     }
     std::cout << "]}";
-    return result.stepLimitHit ? 4 : 0;
+    return machine.didLastRunHitStepLimit() ? 4 : 0;
 }

@@ -2,6 +2,11 @@
 
 This repository now supports native lifecycle/runtime declarations, generic type references, code librarian role governance, and language interop declarations directly in the Pascalish grammar.
 
+Functions support an implicit `Result` return variable without replacing an
+explicitly declared global, local, or parameter named `Result`. In particular,
+library receivers such as a `JSONDocument` named `result` retain their declared
+type in service endpoint handlers.
+
 ## ESP32 Validation
 
 From `languages/pascalish`, run:

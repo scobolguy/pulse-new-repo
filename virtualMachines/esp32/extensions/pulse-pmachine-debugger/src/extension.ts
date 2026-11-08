@@ -189,23 +189,17 @@ async function cobolRuntimeContext(root: string, projectDirectory: string, confi
     throw new Error(`COBOL debugger storage must be a real directory: ${dataDirectory}`);
   }
   const javascript = path.join(root, 'pmachines', 'javascript', 'src');
-  const [textBindings, dateBindings, intrinsicBindings, filesystemModule, isamModule] = await Promise.all([
-    import(pathToFileURL(path.join(javascript, 'desktop-text-bindings.mjs')).href),
-    import(pathToFileURL(path.join(javascript, 'desktop-date-bindings.mjs')).href),
-    import(pathToFileURL(path.join(javascript, 'desktop-intrinsic-bindings.mjs')).href),
+  const [libraryModule, filesystemModule] = await Promise.all([
+    import(pathToFileURL(path.join(root, 'libraries', 'cobol', 'host-library.mjs')).href),
     import(pathToFileURL(path.join(javascript, 'filesystem-bindings.mjs')).href),
-    import(pathToFileURL(path.join(javascript, 'isam-bindings.mjs')).href),
   ]);
   const filesystem = await filesystemModule.createFilesystemBindings({
     data: { path: dataDirectory, readOnly: false },
   });
-  const isamBindings = isamModule.createIsamBindings(filesystem.handlers);
+  const library = libraryModule.createCobolHostLibrary(filesystem.handlers);
   const bindings = {
-    ...textBindings.createDesktopTextBindings(),
-    ...dateBindings.createDesktopDateBindings(),
-    ...intrinsicBindings.createDesktopIntrinsicBindings(),
+    ...library.handlers,
     ...filesystem.handlers,
-    ...isamBindings,
   };
   return {
     callHost(name: string, args: unknown[]) {
@@ -214,7 +208,7 @@ async function cobolRuntimeContext(root: string, projectDirectory: string, confi
       return handler(...args);
     },
     dispose() {
-      isamBindings.dispose();
+      return library.dispose();
     },
   };
 }
@@ -339,6 +333,7 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
         this.respond(request, true, {
           supportsConfigurationDoneRequest: true,
           supportsStepOver: true,
+          supportsSteppingGranularity: true,
           supportsPauseRequest: path.extname(String(this.configuration.program || '')).toLowerCase() !== '.pcode',
           supportsTerminateRequest: true,
           supportsEvaluateForHovers: true,
@@ -404,13 +399,15 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
       case 'next':
         this.respond(request);
         if (this.nativePcode) await this.resumeNativePcode('step');
-        else if (this.remoteEsp32) await this.stepEsp32('step-over');
+        else if (this.remoteEsp32) await this.stepEsp32('step-over', request.arguments?.granularity === 'instruction');
+        else if (request.arguments?.granularity === 'instruction') await this.resumeUntilPause('step-over');
         else await this.stepToNextSource('step-over');
         return;
       case 'stepIn':
         this.respond(request);
         if (this.nativePcode) await this.resumeNativePcode('step');
-        else if (this.remoteEsp32) await this.stepEsp32('step-in');
+        else if (this.remoteEsp32) await this.stepEsp32('step-in', request.arguments?.granularity === 'instruction');
+        else if (request.arguments?.granularity === 'instruction') await this.resumeUntilPause('step-in');
         else await this.stepToNextSource('step-in');
         return;
       case 'stepOut':
@@ -1163,8 +1160,13 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
     throw new Error('Timed out waiting for the ESP32 PMachine step.');
   }
 
-  private async stepEsp32(mode: 'step-in' | 'step-over' | 'step-out'): Promise<void> {
-    if (this.bridge) {
+  private async stepEsp32(mode: 'step-in' | 'step-over' | 'step-out', instruction = false): Promise<void> {
+    if (instruction && mode === 'step-in') {
+      await this.advanceEsp32Instruction();
+      if (!this.terminated) this.event('stopped', { reason: 'step', threadId: this.threadId });
+      return;
+    }
+    if (this.bridge && !instruction) {
       await this.bridge.controlEsp32DebugSession({ host: this.debugApiHost, sessionId: this.remoteSessionId, action: `line-${mode}` });
       this.state = await this.readEsp32State();
       this.forwardOutput();
@@ -1213,7 +1215,7 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
       const stop = mode === 'step-out'
         ? nextDepth < depth || (depth === 0 && changedSource)
         : changedSource && (mode === 'step-in' || nextDepth <= depth);
-      if (stop) {
+      if (stop || instruction) {
         this.event('stopped', { reason: 'step', threadId: this.threadId });
         return;
       }
@@ -1717,7 +1719,7 @@ async function runOnLocalJsPmachine(document: vscode.TextDocument, pcodeText: st
         isoTypeIds: new Set(), sourceMessage: '', inputQueue: 'vscode.pmachine', runtimeContext,
       });
     } finally {
-      runtimeContext.dispose();
+      await runtimeContext.dispose();
     }
   }
   const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'pulse-vscode-run-'));

@@ -84,7 +84,7 @@ export function describeBoundHttpListener(address, config) {
 
 export async function createServiceLifecycleRuntime({
   config, logger = console, fetchImpl = fetch, intrinsicProbe = null,
-  usefulOperations = {}, policyFactory = createServiceInstancePolicy,
+  waitForIntrinsicProbe = null, usefulOperations = {}, policyFactory = createServiceInstancePolicy,
   discoveryFactory = async options => {
     const { createLanDiscovery } = await import('./service-lifecycle/lan-discovery.mjs');
     return createLanDiscovery(options);
@@ -165,6 +165,8 @@ export async function createServiceLifecycleRuntime({
     if (intrinsicProbe) {
       const probeAbort = new AbortController();
       try {
+        if (waitForIntrinsicProbe) await waitForIntrinsicProbe(abort.signal);
+        abort.signal.throwIfAborted();
         localObservation = await Promise.race([
           intrinsicProbe(),
           delay(transport.timeoutMs, null, { signal: AbortSignal.any([abort.signal, probeAbort.signal]) })
@@ -241,7 +243,10 @@ export async function createServiceLifecycleRuntime({
   return {
     config,
     getReadiness: () => ({ ...structuredClone(readiness), instanceId: config.instanceId }),
-    refresh,
+    async refresh() {
+      if (probing) await probing;
+      return refresh();
+    },
     reportNow,
     getReportUrls,
     getTransactionUrls,

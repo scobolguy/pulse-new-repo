@@ -15,11 +15,9 @@ import { createHostCacheStore } from './host-cache.mjs';
 import { createReplicatedCache } from './replicated-cache.mjs';
 import { tableSchema } from './distributed-datastore.mjs';
 import { createFilesystemBindings } from './filesystem-bindings.mjs';
-import { createIsamBindings } from './isam-bindings.mjs';
+import { createCobolHostLibrary } from '../../../libraries/cobol/host-library.mjs';
 import { createJsonCollectionBindings } from './json-collection-bindings.mjs';
 import { createJsonObjectBindings } from './json-object-bindings.mjs';
-import { createDesktopTextBindings } from './desktop-text-bindings.mjs';
-import { createDesktopDateBindings } from './desktop-date-bindings.mjs';
 import { createJsonValueBindings } from './json-value-bindings.mjs';
 import { createXmlBindings } from './xml-bindings.mjs';
 import { HOST_CAPABILITIES_VERSION, HOST_PROFILES, assertHostCapabilities } from '../../shared/contracts/host-capabilities.mjs';
@@ -118,7 +116,7 @@ export async function createPascalishServiceHost({
   const filesystem = await createFilesystemBindings(storageRoots, {
     maxFileBytes: Math.min(maxFileBytes, maxResponseBytes), maxPageBytes: maxResponseBytes
   });
-  const isamBindings = createIsamBindings({ ...filesystem.handlers, ...filesystemBindingOverrides });
+  const cobolLibrary = createCobolHostLibrary({ ...filesystem.handlers, ...filesystemBindingOverrides });
   const inventoryApply = inventoryGrant === null ? null : createInventoryClient(inventoryGrant);
   const capabilities = {
     version: HOST_CAPABILITIES_VERSION,
@@ -384,7 +382,7 @@ export async function createPascalishServiceHost({
           return bluetoothSource.status();
         },
         ...filesystem.handlers,
-        ...isamBindings,
+        ...cobolLibrary.handlers,
         ...filesystemBindingOverrides,
         ...createJsonCollectionBindings(),
         ...createJsonValueBindings(),
@@ -392,8 +390,6 @@ export async function createPascalishServiceHost({
         'host.text_hash': value => createHash('sha256').update(value, 'utf16le').digest('hex'),
         'host.text_hash_utf8': value => createHash('sha256').update(value, 'utf8').digest('hex'),
         'host.text_split_whitespace': value => JSON.stringify(value.split(/[ \t\r\n]+/).filter(Boolean)),
-        ...createDesktopTextBindings(),
-        ...createDesktopDateBindings(),
         'host.json_has': (json, key) => Object.hasOwn(objectJson(json), text(key, 'JSON key')) ? 1 : 0,
         'host.capabilities': () => JSON.stringify(capabilities),
         ...networkBindings,
@@ -630,7 +626,7 @@ export async function createPascalishServiceHost({
       await new Promise(resolve => server.close(resolve));
     }
     await Promise.all([...invocations]);
-    isamBindings.dispose();
+    await cobolLibrary.dispose();
     if (bluetoothSource) await bluetoothSource.stop();
     for (const replica of replicas.values()) await replica.stop();
     replicas.clear();
@@ -754,6 +750,8 @@ export async function createPascalishServiceHost({
       lifecycleRuntime = await createServiceLifecycleRuntime({
         config: lifecycleConfig, logger,
         intrinsicProbe: lifecycle?.intrinsicProbe || null,
+        // Waiting behind an invocation must not consume the local probe's execution budget.
+        waitForIntrinsicProbe: () => tail,
         usefulOperations: lifecycle?.usefulOperations || {},
       });
       const bound = server?.listening ? server.address() : sharedHttpListener?.();

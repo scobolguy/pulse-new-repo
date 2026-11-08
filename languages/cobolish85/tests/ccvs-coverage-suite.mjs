@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fork } from 'node:child_process';
 import { before, after } from 'node:test';
 import { test, traceProgram, traceCheck } from './support/trace.mjs';
 import { compileTandemCobol85ToPcode } from '../src/compile-tandem-cobol85-to-pcode.mjs';
@@ -14,29 +15,71 @@ import { createDesktopTextBindings } from '../../../virtualMachines/esp32/pmachi
 import { createDesktopDateBindings } from '../../../virtualMachines/esp32/pmachines/javascript/src/desktop-date-bindings.mjs';
 import { createDesktopIntrinsicBindings } from '../../../virtualMachines/esp32/pmachines/javascript/src/desktop-intrinsic-bindings.mjs';
 import { createIsamBindings } from '../../../virtualMachines/esp32/pmachines/javascript/src/isam-bindings.mjs';
-import { createFilesystemService } from '../../../virtualMachines/esp32/aggregator/filesystem-service.mjs';
 import { createFilesystemServiceClient } from '../../../virtualMachines/esp32/aggregator/src/librarian/filesystem-service-client.mjs';
 import { ccvsCases, ccvsModules, executableCases } from './ccvs/catalog.mjs';
 
-let filesystemService;
+let filesystemProcess;
 let filesystemClient;
 let dataRoot;
 
 before(async () => {
   dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cobol-ccvs-isam-'));
-  filesystemService = await createFilesystemService({
-    dataRoot, host: '127.0.0.1', httpPort: 0, lifecycleEnv: {},
-    logger: { log() {}, warn() {}, error() {} }
+  filesystemProcess = fork(new URL('./support/filesystem-service-fixture.mjs', import.meta.url), [dataRoot], {
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'], execArgv: [],
+  });
+  let diagnostics = '';
+  for (const stream of [filesystemProcess.stdout, filesystemProcess.stderr]) {
+    stream.on('data', chunk => { diagnostics = (diagnostics + chunk).slice(-8192); });
+  }
+  const port = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Filesystem fixture startup timed out: ${diagnostics}`));
+    }, 180000);
+    const cleanup = () => {
+      clearTimeout(timer);
+      filesystemProcess.off('message', message);
+      filesystemProcess.off('error', error);
+      filesystemProcess.off('exit', exit);
+    };
+    const message = payload => {
+      cleanup();
+      if (!Number.isInteger(payload?.port) || payload.port < 1 || payload.port > 65535) {
+        reject(new Error(`Invalid filesystem fixture port: ${JSON.stringify(payload)}`));
+      } else resolve(payload.port);
+    };
+    const error = failure => { cleanup(); reject(failure); };
+    const exit = code => { cleanup(); reject(new Error(`Filesystem fixture exited (${code}): ${diagnostics}`)); };
+    filesystemProcess.once('message', message);
+    filesystemProcess.once('error', error);
+    filesystemProcess.once('exit', exit);
   });
   filesystemClient = createFilesystemServiceClient(
-    `http://127.0.0.1:${filesystemService.getStatus().httpPort}`, { env: {} }
+    `http://127.0.0.1:${port}`, { env: {} }
   );
 });
 
 after(async () => {
-  await filesystemClient?.stop();
-  await filesystemService?.stop();
-  if (dataRoot) await fs.rm(dataRoot, { recursive: true, force: true });
+  try {
+    await filesystemClient?.stop();
+    if (filesystemProcess && filesystemProcess.exitCode === null && filesystemProcess.signalCode === null) {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          filesystemProcess.kill();
+          reject(new Error('Filesystem fixture stop timed out'));
+        }, 60000);
+        filesystemProcess.once('exit', code => {
+          clearTimeout(timer);
+          if (code === 0) resolve();
+          else reject(new Error(`Filesystem fixture exited (${code})`));
+        });
+        if (filesystemProcess.connected) filesystemProcess.send('stop');
+        else filesystemProcess.kill();
+      });
+    }
+  } finally {
+    if (dataRoot) await fs.rm(dataRoot, { recursive: true, force: true });
+  }
 });
 
 test('CCVS coverage catalog is well formed', () => {

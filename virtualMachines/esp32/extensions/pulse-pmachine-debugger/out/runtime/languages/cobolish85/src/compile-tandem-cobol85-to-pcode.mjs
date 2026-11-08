@@ -6,7 +6,7 @@ import { compileCobolishToPcode } from './compile-cobolish-to-pcode.mjs';
 export function compileTandemCobol85ToPcode(sourceText, options = {}) {
   const result = compileCobolishToPcode(sourceText, options);
   result.programMap.sourceLanguage = 'tandem-cobol85';
-  result.programMap.executionModel = 'tandem-cobol85-program';
+  result.programMap.executionModel = options.hostServices ? 'tandem-cobol85-hosted-server' : 'tandem-cobol85-program';
   if (result.programMap.sourceMap) {
     result.programMap.sourceMap.sourceLanguage = 'tandem-cobol85';
     for (const location of Object.values(result.programMap.sourceMap)) {

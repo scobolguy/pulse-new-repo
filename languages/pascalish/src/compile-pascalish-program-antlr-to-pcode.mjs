@@ -1572,7 +1572,11 @@ class Codegen {
     ]) {
       if (!routine.returnType || !routine.body) continue;
       routine.localDecls ||= [];
-      routine.localDecls.push({ name: 'Result', dataType: routine.returnType });
+      const declarations = [...(this.ast.variables || []), ...routine.localDecls,
+        ...(routine.paramDecls || routine.parameters || [])];
+      if (!declarations.some(item => item.name.toLowerCase() === 'result')) {
+        routine.localDecls.push({ name: 'Result', dataType: routine.returnType });
+      }
       routine.body.statements.push({ type: 'Return', expr: { type: 'Identifier', name: 'Result' } });
     }
     specializeGenerics(this.ast);

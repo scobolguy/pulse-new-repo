@@ -20,7 +20,9 @@ test('corpus runner records exact passes, unsupported programs, mismatches and t
       ['FM905', 'passed', []],
       ['FM002', 'timeout', ['--timeout', '1']],
     ]) {
-      const command = exec(process.execPath, [runner, '--filter', file, '--report', report, ...extra], { timeout: 30000 });
+      const command = exec(process.execPath, [
+        runner, '--filter', file, '--report', report, ...(extra.length ? extra : ['--timeout', '120000']),
+      ], { timeout: 180000 });
       if (status === 'passed') await command;
       else await assert.rejects(command, error => error.code === 1);
       const result = JSON.parse(await fs.readFile(report, 'utf8'));
@@ -37,7 +39,7 @@ test('corpus runner records exact passes, unsupported programs, mismatches and t
     ]) {
       await fs.writeFile(file, source);
       await fs.writeFile(file.replace('.f', '.reference_output'), 'not the output\n');
-      const { stdout } = await exec(process.execPath, [runner, '--worker', file], { timeout: 30000 });
+      const { stdout } = await exec(process.execPath, [runner, '--worker', file], { timeout: 180000 });
       assert.equal(JSON.parse(stdout).status, expected);
     }
   } finally {

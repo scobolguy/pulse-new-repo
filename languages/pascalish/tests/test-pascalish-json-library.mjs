@@ -6,6 +6,7 @@ const source = `
 use "JSON";
 service 'json-library-test';
 var document: JSONDocument;
+    result: JSONDocument;
 post '/roundtrip';
 begin
   document.load(host.event_body());
@@ -32,6 +33,12 @@ begin
   document.embed('value', host.event_body());
   return document.serialize()
 end
+post '/result-receiver';
+begin
+  result.load('{}');
+  result.setText('value', 'library');
+  return result.serialize()
+end
 end.`;
 
 const compiled = compilePascalishProgramWithAntlr(source, { hostServices: true });
@@ -47,6 +54,9 @@ const host = await createPascalishServiceHost({
 
 try {
   await host.start();
+  const declaredResult = await host.dispatch({ method: 'POST', path: '/result-receiver', body: '{}' });
+  assert.equal(declaredResult.status, 200);
+  assert.deepEqual(declaredResult.body, { value: 'library' });
   const response = await host.dispatch({
     method: 'POST',
     path: '/roundtrip',

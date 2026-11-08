@@ -33,14 +33,14 @@ export function createFilesystemServiceClient(baseUrl, { timeoutMs = 10000, env 
     try {
       response = await fetch(`${origin}${route}`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', connection: 'close' },
         body: JSON.stringify(payload),
         signal: context?.signal ? AbortSignal.any([context.signal, AbortSignal.timeout(timeoutMs)])
           : AbortSignal.timeout(timeoutMs)
       });
     } catch (error) {
       if (context?.signal?.aborted) throw error;
-      throw failure(`Filesystem service request failed: ${error.message}`);
+      throw Object.assign(failure(`Filesystem service request failed: ${error.message}`), { cause: error });
     }
     let body;
     try {

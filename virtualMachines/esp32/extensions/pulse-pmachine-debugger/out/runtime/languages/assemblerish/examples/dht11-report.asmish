@@ -1,0 +1,9 @@
+HANDLER room_climate
+TARGET "/api/devices/climate"
+TRIGGER TIMER 2000
+
+DHT11 room_sensor PIN 18
+
+DHT VALID TEMP_CENTI HUMIDITY_CENTI room_sensor
+EVENT climate VALID TEMP_CENTI HUMIDITY_CENTI
+END

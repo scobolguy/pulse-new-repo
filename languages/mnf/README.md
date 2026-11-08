@@ -30,6 +30,17 @@ The compiler writes p-code and a companion `.program.json` map. Tests execute
 the emitted instructions on the shared JavaScript p-machine, not a separate
 FORTRAN evaluator. ESP32 and native C++ MNF execution have not been certified.
 
+Native FORMAT editing, internal/external file records and file-unit operations
+are implemented in
+[`libraries/fortran`](../../virtualMachines/esp32/libraries/fortran). Runtime
+source files at the old FORMAT/file paths are only compatibility build adapters.
+The native regression links the library directly and compares its FORMAT output
+with the JavaScript library:
+
+```powershell
+node --test virtualMachines\esp32\testing\pmachines\fortran-runtime.test.mjs
+```
+
 The compiler accepts `standard: 'starter' | 'fortran77' | 'auto'` (default
 `auto`). Auto keeps the existing starter semantics when a whole program fits
 that subset, otherwise it uses the FORTRAN 77 parser/backend. Select

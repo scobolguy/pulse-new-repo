@@ -2,6 +2,7 @@ import antlr4 from 'antlr4';
 import VbishLexer from '../grammar/generated/VbishLexer.js';
 import VbishParser from '../grammar/generated/VbishParser.js';
 import VbishVisitor from '../grammar/generated/VbishVisitor.js';
+import { parseVb11 } from './compile-vb11.mjs';
 
 class CollectingErrorListener extends antlr4.error.ErrorListener {
   constructor() {
@@ -441,6 +442,21 @@ export class VbishToPascalishVisitor extends VbishVisitor {
 }
 
 export function compileVbishWithAntlr(sourceText, options = {}) {
+  if (options.profile === 'vb11') {
+    const result = {
+      language: 'vbish', version: 1, languageProfile: 'vb11-scalar', fileName: options.fileName || null,
+      valid: true, syntaxErrors: [], syntaxErrorCount: 0
+    };
+    try { parseVb11(sourceText, options); }
+    catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      result.valid = false;
+      result.syntaxErrors.push(error.message);
+      result.syntaxErrorCount = 1;
+    }
+    return result;
+  }
+  if (options.profile && options.profile !== 'pulse') throw new Error(`[VBISH] Unknown language profile '${options.profile}'`);
   const source = String(sourceText || '');
   const lexer = new VbishLexer(new antlr4.InputStream(source));
   const lexerErrors = new CollectingErrorListener();

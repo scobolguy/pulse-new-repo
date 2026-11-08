@@ -33,6 +33,20 @@ function TBox<T>.GetValue: T;
 begin Result := Value end;
 `;
 
+test('implicit function Result does not replace explicitly declared receivers and parameters', async () => {
+  await run(`program LibraryResult; ${boxes}
+    function Build: string;
+    var result: TBox<String>;
+    begin
+      result := TBox<String>.Create('library');
+      return result.GetValue()
+    end;
+    function Echo(result: string): string;
+    begin return result end;
+    begin Writeln(Build()); Writeln(Echo('parameter')) end.`,
+  ['library', 'parameter']);
+});
+
 test('generic classes alias; Free releases only that variable, including returned references', async () => {
   await run(`program Aliases; ${boxes}
     var A, B: TBox<Integer>;

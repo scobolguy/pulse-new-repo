@@ -11,6 +11,13 @@ const root = await findPmachineRoot(sourcePath, process.cwd());
 assert.equal(root, path.resolve(fileURLToPath(new URL('./extension/out/runtime/virtualMachines/esp32/', import.meta.url))));
 const load = relative => import(pathToFileURL(path.join(root, relative)).href);
 const runtime = await load('pmachines/javascript/index.mjs');
+const messages = await load('libraries/swift/messages.mjs');
+const mappings = await load('libraries/messages/mapping.mjs');
+assert.equal(messages.normalizeMtAmount('1 234,50'), '1234.50');
+assert.equal(mappings.execCompiledRule(['SRC', 'YYMMDD_TO_ISO'], '700102'), '1970-01-02');
+assert.match(messages.maybeConvertIsoDelivery('payments',
+  '{"Document":{"FIToFICstmrCdtTrf":{"GrpHdr":{"MsgId":"portable"}}}}',
+  new Map([['payments', 'pacs']])), /<hdr:BizMsgIdr>portable<\/hdr:BizMsgIdr>/);
 const debuggerModule = await load('aggregator/src/backend/modules/javascriptPmachineDebugger.mjs');
 await load('aggregator/src/backend/modules/esp32PmachineDebugBridge.mjs');
 const runner = await load('aggregator/scripts/run-pascal-on-esp32-node.mjs');
@@ -24,6 +31,27 @@ const compilers = {
   vbish: (await load(`${scripts}compile-interoperable-language.mjs`)).compileVbishToPmachine,
 };
 const artifacts = new Map();
+const cobolLibraryModule = await load('libraries/cobol/host-library.mjs');
+const files = new Map();
+const lazyCobolLibrary = cobolLibraryModule.createCobolHostLibrary({
+  'host.fs_exists': async (_root, name) => Number(files.has(name)),
+  'host.fs_read_text': async (_root, name) => {
+    if (!files.has(name)) throw new Error(`Missing packaged ISAM file: ${name}`);
+    return files.get(name);
+  },
+  'host.fs_write_text': async (_root, name, contents) => { files.set(name, contents); return 0; },
+});
+try {
+  assert.deepEqual(lazyCobolLibrary.loadedModules(), []);
+  const handle = await lazyCobolLibrary.callHost('host.isam_open', ['data', 'packaged.json', 'id', 'OUTPUT']);
+  assert.equal(await lazyCobolLibrary.callHost('host.isam_write', [handle, '1', 'packaged record']), 0);
+  assert.equal(await lazyCobolLibrary.callHost('host.isam_close', [handle]), 0);
+  const input = await lazyCobolLibrary.callHost('host.isam_open', ['data', 'packaged.json', 'id', 'INPUT']);
+  assert.equal(await lazyCobolLibrary.callHost('host.isam_read', [input, '1']), 'packaged record');
+  assert.deepEqual(lazyCobolLibrary.loadedModules(), ['isam']);
+} finally {
+  await lazyCobolLibrary.dispose();
+}
 const cobolCompiler = await load('../../languages/cobolish85/src/compile-cobolish-to-pcode.mjs');
 const cobolHostModule = await load('pmachines/javascript/src/service-host.mjs');
 const nativeCobol = cobolCompiler.compileCobolishToPcode(`IDENTIFICATION DIVISION.

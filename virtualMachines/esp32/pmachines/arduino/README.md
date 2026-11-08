@@ -16,6 +16,21 @@ Standalone scheduler and dynamic-library C++ tests are already consolidated unde
 
 ## Generic COBOL migration
 
+COBOL text/date/math host functions are implemented by the separate
+[`cobol_host_library.cpp`](src/cobol_host_library.cpp) optional module, rather than
+the interpreter's ABI dispatcher. They remain enabled by default. Set
+`-DPULSE_COBOL_HOST_LIBRARY=0` consistently for the runtime build to exclude them;
+decimal/opcode/reference semantics remain available. Missing host calls fail
+explicitly. ISAM remains delegated to a granted host and is never embedded in
+this module. Standalone native builds can supply utilities through
+`PMachine::setHostCallHook` and omit the optional source file entirely.
+
+Run the enabled/core-only regression without flashing hardware:
+
+```powershell
+node --test testing\pmachines\cobol-host-library.test.mjs
+```
+
 The generic interpreter supports exact decimal literals (`PUSH_DEC unscaled scale`),
 conversion, quantization (`DEC_QUANT scale ROUNDED`), display/edited formatting,
 digit-width checks, arithmetic and comparisons. Decimal payloads use the managed
@@ -28,10 +43,61 @@ returning from a procedure and reusing its frame cannot revive an expired alias.
 The reference table is bounded to 256 handles and 4096 name bytes. Continuations
 save target descriptors and rebind them to restored frames.
 
-Compiler-generated COBOL still uses the specialized interpreter while generic
-execution is being qualified. Do not remove that fallback based on build success
-alone. Headerless regression programs must report more than one instruction to
-prove the generic dispatch was exercised.
+Compiler-generated COBOL executes through the generic instruction dispatcher;
+there is no specialized COBOL interpreter or compiler-header bypass. The native
+conformance test loads the original compiler output and its globals/procedure
+metadata, and compares results with JavaScript.
+
+## Library-owned conversion and formatting
+
+Message parsing, field conversions, compiled mapping rules, nested transform
+expressions, ISO namespaces, XML rendering and PACS batch splitting live in
+[`libraries/messages`](../../libraries/messages) and
+[`libraries/swift`](../../libraries/swift). Existing message opcodes are thin
+library dispatchers. HTTP routes resolve persisted type metadata and perform
+transport; they delegate output conversion to the libraries.
+
+COBOL display/edit masks and scientific display live in
+[`libraries/formatting`](../../libraries/formatting). FORTRAN formatted I/O lives
+in [`libraries/fortran`](../../libraries/fortran), including file-unit handling,
+record padding and formatted/unformatted file conversion. The original format
+and file source files are compatibility build adapters for PlatformIO. Native validation builds
+link the implementation directly from the library directory.
+Exact decimal arithmetic, scalar storage and canonical numeric/JSON serialization
+remain runtime primitives. Native/Arduino modules are firmware-linked libraries,
+not dynamically downloaded binaries. Existing target-specific field-conversion
+differences are preserved.
+
+Managed-string exhaustion is reported as `__runtime_error` through both the
+flow-state accessor and its snapshot. A subsequent invocation clears the error
+and starts with reset execution storage.
+
+Run the local COBOL and FORTRAN runtime regressions from the ESP32 directory:
+
+```powershell
+node --test --test-concurrency=1 testing\pmachines\cobol-managed-variables.test.mjs testing\pmachines\cobol-generic-conformance.test.mjs testing\pmachines\cobol-host-library.test.mjs testing\pmachines\fortran-runtime.test.mjs
+```
+
+The native formatting regression compares library output with the JavaScript
+FORTRAN library, including the distinct FORMAT specifications in the validation
+corpus. Compiler and corpus suites are available through `npm test` in
+`languages/cobolish85` and `languages/mnf`; the complete local FORTRAN corpus
+runner is `npm run validate` in `languages/mnf`.
+
+Missing route mappings and invalid nested MAP expressions now stop generic
+execution with an explicit runtime diagnostic rather than silently delivering
+the original message.
+
+Run local and opt-in device library regressions from the ESP32 directory:
+
+```powershell
+node --test testing\pmachines\message-libraries.test.mjs
+$env:PULSE_MESSAGE_TEST_NODE = 'http://192.168.2.83'
+node --test testing\pmachines\message-libraries-device.test.mjs
+```
+
+Device tests require an idle board with the current firmware and do not install
+services or change GPIO state.
 
 From the ESP32 directory:
 

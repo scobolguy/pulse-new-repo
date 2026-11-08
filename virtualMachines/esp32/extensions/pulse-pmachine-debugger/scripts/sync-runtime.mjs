@@ -87,6 +87,7 @@ while (pending.length) {
 // These resources are read from disk rather than imported as modules.
 for (const relative of [
   path.join(esp32, 'pmachines', 'shared', 'contracts', 'pcode-opcodes.manifest.json'),
+  path.join(esp32, 'libraries', 'isam', 'isam.pas'),
   path.join('languages', 'pascalish', 'libraries'),
   path.join('languages', 'cobolish85', 'runtime'),
   path.join('languages', 'dotnet', 'libraries'),

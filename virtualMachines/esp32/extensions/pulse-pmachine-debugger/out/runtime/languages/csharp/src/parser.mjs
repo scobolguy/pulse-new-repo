@@ -1,307 +1,211 @@
-const KEYWORDS = new Set(`abstract as base bool break byte case catch char checked class const continue decimal
-default delegate do double else enum event explicit extern false finally fixed float for foreach goto if implicit in
-int interface internal is lock long namespace new null object operator out override params private protected public
-readonly ref return sbyte sealed short sizeof stackalloc static string struct switch this throw true try typeof
-uint ulong unchecked unsafe ushort using virtual void volatile while`.split(/\s+/));
+import antlr4 from 'antlr4';
+import CsharpLexer from '../grammar/generated/CsharpLexer.js';
+import CsharpParser from '../grammar/generated/CsharpParser.js';
+import { fail } from '../../dotnet/source-diagnostics.mjs';
+export { fail };
 
-export function fail(node, message) {
-  throw new SyntaxError(`C# ${node.fileName}:${node.line}:${node.column}: ${message}`);
+function decodeString(raw, location) {
+  if (raw.startsWith('@"')) return raw.slice(2, -1).replace(/""/g, '"');
+  const simple = { "'": "'", '"': '"', '\\': '\\', '0': '\0', a: '\x07', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v' };
+  let value = '';
+  for (let index = 1; index < raw.length - 1; index++) {
+    if (raw[index] !== '\\') { value += raw[index]; continue; }
+    const escape = raw[++index];
+    if (Object.hasOwn(simple, escape)) { value += simple[escape]; continue; }
+    if (!['x', 'u', 'U'].includes(escape)) fail(location, `Unsupported string escape \\${escape}`);
+    const size = escape === 'u' ? 4 : escape === 'U' ? 8 : 4;
+    let digits = '';
+    while (digits.length < size && /[0-9a-fA-F]/.test(raw[index + 1] || 'z')) digits += raw[++index];
+    if (!digits || escape !== 'x' && digits.length !== size) fail(location, 'Invalid Unicode escape');
+    const code = Number.parseInt(digits, 16);
+    if (code > 0x10ffff) fail(location, 'Unicode escape is out of range');
+    value += String.fromCodePoint(code);
+  }
+  return value;
 }
 
-export function tokenize(source, fileName) {
-  const tokens = [];
-  let offset = 0, line = 1, column = 1;
-  const advance = () => {
-    const char = source[offset++];
-    if (char === '\n') { line++; column = 1; } else column++;
-    return char;
+export function parseCsharp(source, { fileName = 'program.cs' } = {}) {
+  const location = item => {
+    const start = item.start && typeof item.start === 'object' ? item.start : item.symbol || item;
+    return { fileName, line: start.line, column: start.column + 1, value: start.text?.replace(/^@/, '') };
   };
-  while (offset < source.length) {
-    if (/\s/.test(source[offset])) { advance(); continue; }
-    const location = { fileName, line, column };
-    const rest = source.slice(offset);
-    if (rest.startsWith('//')) {
-      while (offset < source.length && source[offset] !== '\n') advance();
-      continue;
+  const lexer = new CsharpLexer(new antlr4.InputStream(source));
+  const tokens = new antlr4.CommonTokenStream(lexer);
+  tokens.fill();
+  for (const token of tokens.tokens) {
+    if (token.type === CsharpLexer.INVALID_CHARACTER) fail(location(token), `Unsupported character ${JSON.stringify(token.text)}`);
+    if (token.type === CsharpLexer.UNTERMINATED_COMMENT) fail(location(token), 'Unterminated block comment');
+    if (token.type === CsharpLexer.UNTERMINATED_STRING)
+      fail(location(token), /[\r\n]$/.test(token.text) ? 'Newline in regular string literal' : 'Unterminated string literal');
+    if (token.type === CsharpLexer.STRING_LITERAL) decodeString(token.text, location(token));
+  }
+  const parser = new CsharpParser(tokens);
+  const errors = [];
+  class Listener extends antlr4.error.ErrorListener {
+    syntaxError(recognizer, symbol, line, column, message) {
+      const expected = recognizer.getExpectedTokens().toString(recognizer.literalNames, recognizer.symbolicNames);
+      errors.push({ fileName, line, column: column + 1,
+        message: `Expected ${expected === 'IDENTIFIER' ? 'an identifier' : expected}, found ${JSON.stringify(symbol?.text)}: ${message}` });
     }
-    if (rest.startsWith('/*')) {
-      advance(); advance();
-      while (offset < source.length && !source.startsWith('*/', offset)) advance();
-      if (offset === source.length) fail(location, 'Unterminated block comment');
-      advance(); advance();
-      continue;
-    }
-    if (source[offset] === '"' || rest.startsWith('@"')) {
-      const verbatim = source[offset] === '@';
-      if (verbatim) advance();
-      advance();
-      let value = '', closed = false;
-      while (offset < source.length) {
-        const char = advance();
-        if (char === '"') {
-          if (verbatim && source[offset] === '"') { advance(); value += '"'; continue; }
-          closed = true;
-          break;
-        }
-        if (!verbatim && (char === '\r' || char === '\n')) fail(location, 'Newline in regular string literal');
-        if (!verbatim && char === '\\') {
-          const escape = advance();
-          const simple = { "'": "'", '"': '"', '\\': '\\', '0': '\0', a: '\x07', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v' };
-          if (Object.hasOwn(simple, escape)) value += simple[escape];
-          else if (['u', 'U', 'x'].includes(escape)) {
-            const size = escape === 'u' ? 4 : escape === 'U' ? 8 : 4;
-            let digits = '';
-            while (digits.length < size && /[0-9a-fA-F]/.test(source[offset] || 'z')) digits += advance();
-            if (!digits || (escape !== 'x' && digits.length !== size)) fail(location, 'Invalid Unicode escape');
-            const code = Number.parseInt(digits, 16);
-            if (code > 0x10ffff) fail(location, 'Unicode escape is out of range');
-            value += String.fromCodePoint(code);
-          } else fail(location, `Unsupported string escape \\${escape}`);
-        } else value += char;
-      }
-      if (!closed) fail(location, 'Unterminated string literal');
-      tokens.push({ ...location, kind: 'string', value });
-      continue;
-    }
-    const name = /^@?[A-Za-z_][A-Za-z0-9_]*/.exec(rest);
-    if (name) {
-      for (let i = 0; i < name[0].length; i++) advance();
-      const escaped = name[0][0] === '@', value = name[0].replace(/^@/, '');
-      tokens.push({ ...location, value, kind: !escaped && KEYWORDS.has(value) ? 'keyword' : 'identifier' });
-      continue;
-    }
-    const number = /^\d+/.exec(rest);
-    if (number) {
-      for (let i = 0; i < number[0].length; i++) advance();
-      tokens.push({ ...location, kind: 'number', value: number[0] });
-      continue;
-    }
-    const symbol = /^(?:==|!=|<=|>=|&&|\|\||\+\+|--|\+=|-=|\*=|\/=|%=|[{}()[\];,.<>+\-*/%!=?:])/.exec(rest);
-    if (!symbol) fail(location, `Unsupported character ${JSON.stringify(source[offset])}`);
-    for (let i = 0; i < symbol[0].length; i++) advance();
-    tokens.push({ ...location, kind: 'symbol', value: symbol[0] });
   }
-  tokens.push({ fileName, line, column, kind: 'eof', value: '<eof>' });
-  return tokens;
-}
-
-const PRECEDENCE = new Map([
-  ['=', 1], ['+=', 1], ['-=', 1], ['*=', 1], ['/=', 1], ['%=', 1],
-  ['||', 2], ['&&', 3], ['==', 4], ['!=', 4], ['<', 5], ['<=', 5], ['>', 5], ['>=', 5],
-  ['+', 6], ['-', 6], ['*', 7], ['/', 7], ['%', 7]
-]);
-
-export class Parser {
-  constructor(tokens) { this.tokens = tokens; this.index = 0; }
-  get token() { return this.tokens[this.index]; }
-  at(value) { return this.token.value === value && ['keyword', 'symbol', 'eof'].includes(this.token.kind); }
-  take(value) {
-    if (!this.at(value)) return false;
-    return this.tokens[this.index++];
-  }
-  expect(value) {
-    const token = this.take(value);
-    if (!token) fail(this.token, `Expected '${value}', found ${JSON.stringify(this.token.value)}`);
-    return token;
-  }
-  identifier() {
-    const token = this.token;
-    if (token.kind !== 'identifier') fail(token, 'Expected an identifier');
-    this.index++;
-    return token;
-  }
-  qualifiedName() {
-    let name = this.identifier().value;
-    while (this.take('.')) name += '.' + this.identifier().value;
-    return name;
-  }
-  type() {
-    const token = this.token;
-    if (!['int', 'bool', 'string', 'void'].some(value => this.at(value)) && token.kind !== 'identifier')
-      fail(token, 'Supported types are int, bool, string and method type parameters (void only for return types)');
-    this.index++;
-    return { ...token, name: token.value };
-  }
-  typeList(read) {
-    const items = [];
-    if (this.take('<')) {
-      do { items.push(read()); } while (this.take(','));
-      this.expect('>');
-    }
-    return items;
-  }
-  modifiers(allowed) {
+  parser.removeErrorListeners();
+  parser.addErrorListener(new Listener());
+  const tree = parser.compilationUnit();
+  if (errors.length) fail(errors[0], errors[0].message);
+  const identifier = ctx => location(ctx);
+  const qualified = ctx => ctx.identifier().map(item => identifier(item).value).join('.');
+  const readType = ctx => ({
+    ...location(ctx),
+    name: ctx.identifier() ? identifier(ctx.identifier()).value : ctx.getText(),
+    ...(ctx.typeArguments() ? {
+      typeArguments: ctx.typeArguments().type().map(readType)
+    } : {})
+  });
+  function modifiers(items) {
     const result = new Set();
-    let visibility = false;
-    while (allowed.some(value => this.at(value))) {
-      const token = this.tokens[this.index++];
-      if (result.has(token.value)) fail(token, `Duplicate modifier '${token.value}'`);
-      if (['public', 'internal', 'private'].includes(token.value)) {
-        if (visibility) fail(token, 'Conflicting accessibility modifiers');
-        visibility = true;
-      }
-      result.add(token.value);
+    for (const item of items) {
+      const value = item.getText();
+      if (result.has(value)) fail(location(item), `Duplicate modifier '${value}'`);
+      if (['public', 'private', 'internal'].includes(value) && [...result].some(value => ['public', 'private', 'internal'].includes(value)))
+        fail(location(item), 'Conflicting accessibility modifiers');
+      result.add(value);
     }
     return result;
   }
-  parse() {
-    const token = this.token;
-    this.usingSystem = false;
-    while (this.take('using')) {
-      const token = this.token;
-      if (this.qualifiedName() !== 'System') fail(token, 'Only using System is supported');
-      this.expect(';');
-      this.usingSystem = true;
-    }
-    let namespace = '';
-    if (this.take('namespace')) { namespace = this.qualifiedName(); this.expect('{'); }
-    const classes = [];
-    while (!this.at('<eof>') && !this.at('}')) {
-      this.modifiers(['public', 'internal', 'static']);
-      this.expect('class');
-      const token = this.identifier(), name = namespace ? `${namespace}.${token.value}` : token.value;
-      this.expect('{');
-      const methods = [];
-      while (!this.at('}')) {
-        if (this.at('<eof>')) fail(this.token, 'Unterminated class');
-        const modifiers = this.modifiers(['public', 'internal', 'private', 'static']);
-        if (!modifiers.has('static')) fail(this.token, 'Only static methods are supported; fields and instance members are not supported');
-        const returnType = this.type(), method = this.identifier();
-        const typeParams = this.typeList(() => this.identifier());
-        this.expect('(');
-        const params = [];
-        if (!this.at(')')) {
-          do { params.push({ type: this.type(), token: this.identifier() }); } while (this.take(','));
-        }
-        this.expect(')');
-        const body = this.block();
-        methods.push({ token: method, name: method.value, owner: name, returnType, typeParams, params, body, modifiers });
-      }
-      this.expect('}');
-      classes.push({ token, name, methods });
-    }
-    if (namespace) this.expect('}');
-    this.expect('<eof>');
-    return { token, classes, usingSystem: this.usingSystem };
+  function readClass(ctx, namespace) {
+    modifiers(ctx.classModifier());
+    const token = identifier(ctx.identifier()), name = namespace ? `${namespace}.${token.value}` : token.value;
+    const constructors = ctx.memberDeclaration().filter(member => member.constructorDeclaration()).map(member => {
+      const declaration = member.constructorDeclaration();
+      const flags = modifiers(declaration.methodModifier());
+      const name = identifier(declaration.identifier());
+      if (name.value !== token.value) fail(name, 'A constructor must have the same name as its containing class');
+      return {
+        token: name, name: name.value, params: declaration.parameters()?.parameter().map(parameter => ({
+          type: readType(parameter.type()), token: identifier(parameter.identifier())
+        })) || [], body: readBlock(declaration.block()), modifiers: flags
+      };
+    });
+    const methods = ctx.memberDeclaration().filter(member => !member.constructorDeclaration()).map(member => {
+      const flags = modifiers(member.methodModifier());
+      if (!member.type() || (!flags.has('static') && !ctx.classModifier().some(item => item.getText() === 'sealed')))
+        fail(location(member), 'Only static methods are supported; fields and instance members are not supported');
+      const method = identifier(member.identifier());
+      const attributes = member.attributeSection().map(attribute => ({
+        name: identifier(attribute.identifier()).value,
+        arguments: attribute.arguments()?.expressionList()?.expression().map(expression) || []
+      }));
+      return {
+        token: method, name: method.value, owner: name, returnType: readType(member.type()),
+        typeParams: member.typeParameters()?.identifier().map(identifier) || [],
+        async: Boolean(member.ASYNC()),
+        attributes,
+        params: member.parameters()?.parameter().map(parameter => ({
+          type: readType(parameter.type()), token: identifier(parameter.identifier())
+        })) || [],
+        body: readBlock(member.block()), modifiers: flags
+      };
+    });
+    return { token, name, methods, constructors,
+      modifiers: new Set(ctx.classModifier().map(item => item.getText())) };
   }
-  block() {
-    const token = this.expect('{'), statements = [];
-    while (!this.at('}')) {
-      if (this.at('<eof>')) fail(this.token, 'Unterminated block');
-      statements.push(this.statement());
-    }
-    this.expect('}');
-    return { kind: 'block', token, statements };
+  function readBlock(ctx) { return { kind: 'block', token: location(ctx), statements: ctx.statement().map(statement) }; }
+  function declaration(ctx) {
+    const type = readType(ctx.type());
+    return { kind: 'declare', token: type, type, declarations: ctx.variableDeclarator().map(item => ({
+      token: identifier(item.identifier()), value: item.expression() ? expression(item.expression()) : null
+    })) };
   }
-  isDeclaration() {
-    return ['int', 'bool', 'string'].some(value => this.at(value))
-      || this.token.kind === 'identifier' && this.tokens[this.index + 1]?.kind === 'identifier';
+  const expressionList = ctx => ctx ? ctx.expression().map(expression) : [];
+  const expressions = (values, ctx) => ({ kind: 'expressions', token: location(ctx), values });
+  function statement(ctx) {
+    const token = location(ctx);
+    if (ctx.block()) return ctx.CHECKED() || ctx.UNCHECKED()
+      ? { kind: 'overflow', token, checked: Boolean(ctx.CHECKED()), body: readBlock(ctx.block()) }
+      : readBlock(ctx.block());
+    if (ctx.IF()) return { kind: 'if', token, condition: expression(ctx.expression()),
+      then: statement(ctx.statement(0)), otherwise: ctx.ELSE() ? statement(ctx.statement(1)) : null };
+    if (ctx.FOR()) {
+      const init = ctx.forInitializer();
+      return {
+        kind: 'for', token,
+        init: !init ? null : init.declaration() ? declaration(init.declaration()) : expressions(expressionList(init.expressionList()), init),
+        condition: ctx.condition ? expression(ctx.condition) : null,
+        increment: expressionList(ctx.increment), body: statement(ctx.statement(0))
+      };
+    }
+    if (ctx.WHILE()) return { kind: ctx.DO() ? 'do' : 'while', token,
+      condition: expression(ctx.expression()), body: statement(ctx.statement(0)) };
+    if (ctx.RETURN()) return { kind: 'return', token, value: ctx.expression() ? expression(ctx.expression()) : null };
+    if (ctx.BREAK() || ctx.CONTINUE()) return { kind: ctx.BREAK() ? 'break' : 'continue', token };
+    if (ctx.declaration()) return declaration(ctx.declaration());
+    if (ctx.expression()) return expressions([expression(ctx.expression())], ctx);
+    return { kind: 'empty', token };
   }
-  declaration() {
-    const type = this.type(), declarations = [];
-    do {
-      const token = this.identifier();
-      const value = this.take('=') ? this.expression() : null;
-      declarations.push({ token, value });
-    } while (this.take(','));
-    return { kind: 'declare', token: type, type, declarations };
-  }
-  expressions() {
-    const values = [this.expression()];
-    while (this.take(',')) values.push(this.expression());
-    return values;
-  }
-  statement() {
-    const token = this.token;
-    if (this.at('{')) return this.block();
-    if (this.take(';')) return { kind: 'empty', token };
-    if (this.take('if')) {
-      this.expect('('); const condition = this.expression(); this.expect(')');
-      const then = this.statement(), otherwise = this.take('else') ? this.statement() : null;
-      return { kind: 'if', token, condition, then, otherwise };
-    }
-    if (this.take('while')) {
-      this.expect('('); const condition = this.expression(); this.expect(')');
-      return { kind: 'while', token, condition, body: this.statement() };
-    }
-    if (this.take('do')) {
-      const body = this.statement(); this.expect('while'); this.expect('(');
-      const condition = this.expression(); this.expect(')'); this.expect(';');
-      return { kind: 'do', token, condition, body };
-    }
-    if (this.take('for')) {
-      this.expect('(');
-      const init = this.at(';') ? null : this.isDeclaration() ? this.declaration()
-        : { kind: 'expressions', token: this.token, values: this.expressions() };
-      this.expect(';');
-      const condition = this.at(';') ? null : this.expression(); this.expect(';');
-      const increment = this.at(')') ? [] : this.expressions(); this.expect(')');
-      return { kind: 'for', token, init, condition, increment, body: this.statement() };
-    }
-    if (this.take('return')) {
-      const value = this.at(';') ? null : this.expression(); this.expect(';');
-      return { kind: 'return', token, value };
-    }
-    if (this.take('break') || this.take('continue')) {
-      this.expect(';');
-      return { kind: token.value, token };
-    }
-    if (this.isDeclaration()) { const node = this.declaration(); this.expect(';'); return node; }
-    const value = this.expression(); this.expect(';');
-    return { kind: 'expressions', token, values: [value] };
-  }
-  expression(minimum = 1) {
-    let left = this.unary();
-    while (this.token.kind === 'symbol' && (PRECEDENCE.get(this.token.value) || 0) >= minimum) {
-      const token = this.tokens[this.index++], precedence = PRECEDENCE.get(token.value);
-      const right = this.expression(precedence === 1 ? precedence : precedence + 1);
-      left = { kind: precedence === 1 ? 'assign' : 'binary', token, op: token.value, left, right };
-    }
-    if (minimum === 1 && this.take('?')) {
-      const yes = this.expression(); this.expect(':');
-      left = { kind: 'conditional', token: left.token, condition: left, yes, no: this.expression() };
+  function fold(ctx, items, read) {
+    let left = read(items[0]);
+    for (let index = 1; index < items.length; index++) {
+      const operator = ctx.getChild(index * 2 - 1);
+      left = { kind: 'binary', token: location(operator), op: operator.getText(), left, right: read(items[index]) };
     }
     return left;
   }
-  unary() {
-    if (['+', '-', '!', '++', '--'].some(value => this.at(value))) {
-      const token = this.tokens[this.index++];
-      return { kind: ['++', '--'].includes(token.value) ? 'increment' : 'unary', token, op: token.value, value: this.unary(), prefix: true };
-    }
-    let result = this.primary();
-    if (this.at('++') || this.at('--')) {
-      const token = this.tokens[this.index++];
-      result = { kind: 'increment', token, op: token.value, value: result, prefix: false };
-    }
-    return result;
+  const logicalOr = ctx => fold(ctx, ctx.logicalAnd(), logicalAnd);
+  const logicalAnd = ctx => fold(ctx, ctx.equality(), equality);
+  const equality = ctx => fold(ctx, ctx.relational(), relational);
+  const relational = ctx => fold(ctx, ctx.additive(), additive);
+  const additive = ctx => fold(ctx, ctx.multiplicative(), multiplicative);
+  const multiplicative = ctx => fold(ctx, ctx.unary(), unary);
+  function expression(ctx) { return assignment(ctx.assignmentExpression()); }
+  function assignment(ctx) {
+    const left = conditional(ctx.conditionalExpression());
+    return ctx.assignmentOperator() ? {
+      kind: 'assign', token: location(ctx.assignmentOperator()), op: ctx.assignmentOperator().getText(),
+      left, right: assignment(ctx.assignmentExpression())
+    } : left;
   }
-  primary() {
-    const token = this.token;
-    if (token.kind === 'number' || token.kind === 'string') {
-      this.index++;
-      return { kind: 'literal', token, literalType: token.kind === 'number' ? 'int' : 'string', value: token.value };
-    }
-    if (this.take('true') || this.take('false'))
-      return { kind: 'literal', token, literalType: 'bool', value: token.value === 'true' };
-    if (this.take('unchecked')) {
-      this.expect('('); const value = this.expression(); this.expect(')');
-      return { kind: 'unchecked', token, value };
-    }
-    if (this.take('(')) { const result = this.expression(); this.expect(')'); return result; }
-    if (token.kind !== 'identifier') fail(token, `Unsupported or invalid expression ${JSON.stringify(token.value)}`);
-    const name = this.qualifiedName();
-    let typeArgs = [];
-    if (this.at('<')) {
-      let cursor = this.index + 1;
-      while (this.tokens[cursor]?.kind === 'identifier' || ['int', 'bool', 'string', ','].includes(this.tokens[cursor]?.value)) cursor++;
-      if (this.tokens[cursor]?.value === '>' && this.tokens[cursor + 1]?.value === '(')
-        typeArgs = this.typeList(() => this.type());
-    }
-    if (this.take('(')) {
-      const args = this.at(')') ? [] : this.expressions();
-      this.expect(')');
-      return { kind: 'call', token, name, typeArgs, args };
-    }
-    return { kind: 'name', token, name };
+  function conditional(ctx) {
+    const condition = logicalOr(ctx.logicalOr());
+    return ctx.QUESTION() ? { kind: 'conditional', token: location(ctx), condition,
+      yes: expression(ctx.expression(0)), no: expression(ctx.expression(1)) } : condition;
   }
+  function unary(ctx) {
+    if (ctx.scalarCastType()) return {
+      kind: 'convert', token: location(ctx), targetType: ctx.scalarCastType().getText(), value: unary(ctx.unary())
+    };
+    if (ctx.primary()) {
+      const value = primary(ctx.primary());
+      return ctx.INC() || ctx.DEC() ? {
+        kind: 'increment', token: location(ctx.getChild(1)), op: ctx.getChild(1).getText(), value, prefix: false
+      } : value;
+    }
+    const op = ctx.getChild(0).getText();
+    return { kind: ['++', '--'].includes(op) ? 'increment' : 'unary',
+      token: location(ctx), op, value: unary(ctx.unary()), prefix: true };
+  }
+  function primary(ctx) {
+    const token = location(ctx);
+    if (ctx.INTEGER_LITERAL()) return { kind: 'literal', token, literalType: 'int', value: ctx.getText() };
+    if (ctx.STRING_LITERAL()) return { kind: 'literal', token, literalType: 'string', value: decodeString(ctx.getText(), token) };
+    if (ctx.TRUE() || ctx.FALSE()) return { kind: 'literal', token, literalType: 'bool', value: Boolean(ctx.TRUE()) };
+    if (ctx.CHECKED() || ctx.UNCHECKED())
+      return { kind: 'overflow', token, checked: Boolean(ctx.CHECKED()), value: expression(ctx.expression()) };
+    if (ctx.expression()) return expression(ctx.expression());
+    const name = qualified(ctx.qualifiedName());
+    return ctx.arguments() ? {
+      kind: 'call', token, name, args: expressionList(ctx.arguments().expressionList()),
+      typeArgs: ctx.typeArguments()?.type().map(readType) || []
+    } : { kind: 'name', token, name };
+  }
+  let usingSystem = false;
+  for (const item of tree.usingDirective()) {
+    if (qualified(item.qualifiedName()) !== 'System') fail(location(item), 'Only using System is supported');
+    usingSystem = true;
+  }
+  const namespace = tree.namespaceDeclaration();
+  return {
+    token: location(tree), usingSystem,
+    classes: (namespace ? namespace.classDeclaration() : tree.classDeclaration())
+      .map(item => readClass(item, namespace ? qualified(namespace.qualifiedName()) : ''))
+  };
 }

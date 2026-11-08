@@ -384,10 +384,6 @@ struct ExtendableStorageDiagnostics {
         return 0xFE;
     }
 
-// Not part of the shared opcode manifest: the parser emits one instruction carrying a
-// whole Tandem COBOL-85 program, which runInstructions hands to the cobolvm engine.
-constexpr uint8_t OP_COBOL_PROGRAM = 0xFD;
-
 struct RouteDelivery {
     std::string queueName;
     std::string message;
@@ -636,8 +632,8 @@ public:
             routingDeliveries = std::move(other.routingDeliveries);
             mappingDefs = std::move(other.mappingDefs);
             procedureParamsByLabel = std::move(other.procedureParamsByLabel);
-            cobolLocalsByLabel = std::move(other.cobolLocalsByLabel);
-            cobolGlobals = std::move(other.cobolGlobals);
+            procedureLocalsByLabel = std::move(other.procedureLocalsByLabel);
+            declaredGlobals = std::move(other.declaredGlobals);
             enumManager = other.enumManager;
             lastRunStepLimitHit = other.lastRunStepLimitHit;
             lastRunStepCount = other.lastRunStepCount;
@@ -825,8 +821,6 @@ private:
     void runInstructions(size_t instructionCount,
                          const std::function<PInstruction(size_t)>& instructionAt,
                          int startPc, HostExecutionStorage* storage = nullptr, const std::string& stdinText = {}, bool uartInput = false);
-    // Runs Tandem COBOL-85 P-code (OP_COBOL_PROGRAM) on the native decimal engine.
-    void runCobolProgram(const std::string& pcodeText, HostExecutionStorage& storage);
     ::FederatedFileSystem *ffs = nullptr;
     PCodeMap pcodeMap;
     MemoryMap memoryMap;
@@ -854,8 +848,8 @@ private:
     std::map<std::string, MappingDef> mappingDefs;
     std::map<std::string, std::vector<std::string>> procedureParamsByLabel;
     // COBOL program-map extras, passed as "@locals:LABEL" / "@globals" signature entries.
-    std::map<std::string, std::vector<std::string>> cobolLocalsByLabel;
-    std::vector<std::string> cobolGlobals;
+    std::map<std::string, std::vector<std::string>> procedureLocalsByLabel;
+    std::vector<std::string> declaredGlobals;
     ::EnumManager* enumManager = nullptr;
     bool lastRunStepLimitHit = false;
     size_t lastRunStepCount = 0;

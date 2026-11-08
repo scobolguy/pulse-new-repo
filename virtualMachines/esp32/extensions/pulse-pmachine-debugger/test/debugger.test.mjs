@@ -1026,6 +1026,43 @@ test('Kotlin service cannot be launched as a console program', async () => {
   }
 });
 
+test('Kotlin instruction DAP steps stop within a single source line', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'pulse-kotlin-instruction-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const sourcePath = path.join(directory, 'hello.kt');
+  await fs.writeFile(sourcePath, 'fun main() { println("Hello, World!") }\n');
+  for (const command of ['stepIn', 'next']) {
+    const { value, events } = adapter({ program: sourcePath });
+    try {
+      await value.handleRequest({ seq: 1, command: 'initialize' });
+      await value.launch({ program: sourcePath, runtime: 'js' });
+      await value.stopAtProgramEntry();
+      for (let index = 0; value.state.callStack.length === 0 && index < 10; index++) {
+        await value.resumeUntilPause('step-in');
+      }
+      assert.equal(value.state.callStack.length, 1);
+      const originPc = value.state.pc;
+      const originLine = value.state.sourceLocation.sourceLine;
+      const start = events.length;
+      await value.handleRequest({
+        seq: 2, command, arguments: { threadId: 1, granularity: 'instruction' },
+      });
+      assert.equal(value.state.status, 'paused', value.state.error);
+      assert.equal(value.state.pc, originPc + 1);
+      assert.equal(value.state.sourceLocation.sourceLine, originLine);
+      assert.deepEqual(value.state.stdout, []);
+      assert.equal(events.slice(start).filter(item => item.event === 'stopped').length, 1);
+      assert.equal(events.slice(start).filter(item => item.event === 'terminated').length, 0);
+      assert.equal(events.find(item => item.command === 'initialize').body.supportsSteppingGranularity, true);
+      await value.resumeUntilPause('continue');
+      assert.equal(value.state.status, 'completed', value.state.error);
+      assert.deepEqual(value.state.result.stdout, ['Hello, World!']);
+    } finally {
+      value.dispose();
+    }
+  }
+});
+
 test('C# generic source debugging resolves repository-root workspaces and steps out of a specialization', async () => {
   const sourcePath = path.resolve(root, '..', '..', 'languages', 'csharp', 'examples', 'generics.cs');
   const getFolder = vscode.workspace.getWorkspaceFolder;
@@ -1611,6 +1648,38 @@ test('remote source stepping respects depth and emits exactly one stop', async (
     assert.equal(value.state.callDepth, mode === 'step-in' ? 2 : mode === 'step-over' ? 1 : 0);
     assert.equal(events.filter(event => event.event === 'stopped').length, 1);
     value.dispose();
+  }
+});
+
+test('remote instruction DAP steps do not run to the next source line', async () => {
+  for (const command of ['stepIn', 'next']) {
+    for (const bridged of [false, true]) {
+      const { value, events } = adapter();
+      const calls = [];
+      value.remoteEsp32 = true;
+      value.remoteSessionId = 'instruction-test';
+      value.state = { pc: 0, callDepth: 1, status: 'paused', sourceLocation: { sourceLine: 1 } };
+      value.runtime = { artifact: { pcodeText: 'PUSH_STR "Hello, World!"\nPRINT\nHALT' } };
+      if (bridged) {
+        value.bridge = { controlEsp32DebugSession: async () => assert.fail('Instruction stepping must not use line stepping') };
+      }
+      value.remoteRequest = async endpoint => { calls.push(endpoint); };
+      value.readEsp32State = async () => ({ ...value.state, pc: 1 });
+      try {
+        await value.handleRequest({
+          seq: 1, command, arguments: { threadId: 1, granularity: 'instruction' },
+        });
+        assert.equal(calls.length, 1);
+        assert.match(calls[0], /\/step\?id=instruction-test$/);
+        assert.equal(value.state.pc, 1);
+        assert.equal(value.state.sourceLocation.sourceLine, 1);
+        assert.equal(events.filter(item => item.event === 'stopped').length, 1);
+        assert.equal(events.filter(item => item.event === 'terminated').length, 0);
+      } finally {
+        value.remoteSessionId = '';
+        value.dispose();
+      }
+    }
   }
 });
 

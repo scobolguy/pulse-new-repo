@@ -1,15 +1,20 @@
 {
   "id": "System",
-  "version": "0.1.0",
+  "version": "0.3.1",
   "languages": ["csharp", "vbish"],
-  "types": ["int", "bool", "string", "void"],
+  "types": ["sbyte", "byte", "short", "ushort", "int", "bool", "string", "void"],
   "members": [
-    { "name": "System.Console.Write", "parameters": ["int|bool|string"], "result": "void" },
-    { "name": "System.Console.WriteLine", "parameters": ["int|bool|string"], "result": "void" },
+    { "name": "System.Console.Write", "parameters": ["sbyte|byte|short|ushort|int|bool|string"], "result": "void" },
+    { "name": "System.Console.WriteLine", "parameters": ["sbyte|byte|short|ushort|int|bool|string"], "result": "void" },
     { "name": "System.Console.WriteLine", "parameters": [], "result": "void" }
   ],
   "intrinsics": {
-    "system.int32.divide": { "arity": 2, "result": "int", "targets": ["js"] },
-    "system.int32.remainder": { "arity": 2, "result": "int", "targets": ["js"] }
+    "system.int32.tostring": { "arity": 1, "result": "string", "targets": ["js", "esp32"] },
+    "system.integer.convert": { "arity": 3, "result": "integer", "targets": ["js", "esp32"] },
+    "system.int32.add": { "arity": 2, "result": "int", "targets": ["js", "esp32"] },
+    "system.int32.subtract": { "arity": 2, "result": "int", "targets": ["js", "esp32"] },
+    "system.int32.multiply": { "arity": 2, "result": "int", "targets": ["js", "esp32"] },
+    "system.int32.divide": { "arity": 2, "result": "int", "targets": ["js", "esp32"] },
+    "system.int32.remainder": { "arity": 2, "result": "int", "targets": ["js", "esp32"] }
   }
 }

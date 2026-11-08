@@ -14,12 +14,12 @@ import { createDesktopDateBindings } from '../../pmachines/javascript/src/deskto
 import { createDesktopIntrinsicBindings } from '../../pmachines/javascript/src/desktop-intrinsic-bindings.mjs';
 import { attachPcodeSignature } from '../../aggregator/scripts/pcode-signing.mjs';
 import { requestEsp32 } from './esp32-http.mjs';
+import { buildGenericNative } from './build-generic-native.mjs';
 
 const target = process.env.PULSE_COBOL_TEST_NODE;
-const genericNative = process.env.PULSE_COBOL_GENERIC_NATIVE === '1';
 const cases = [...ncCases, ...functionCases].filter(item => item.validation === 'execution');
 
-test('COBOL nucleus and intrinsic corpus agrees across JavaScript, legacy native, and optionally generic ESP32', {
+test('COBOL nucleus and intrinsic corpus agrees across JavaScript, generic native, and optionally ESP32', {
   timeout: 1800000,
 }, async () => {
   const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -27,22 +27,7 @@ test('COBOL nucleus and intrinsic corpus agrees across JavaScript, legacy native
   const bindings = { ...createDesktopTextBindings(), ...createDesktopDateBindings(), ...createDesktopIntrinsicBindings() };
   try {
     const executable = path.join(directory, 'reference.exe');
-    const names = ['cobol_vm.cpp', 'cobol_vm_text.cpp', 'cobol_vm_bindings.cpp'];
-    if (genericNative) names.push('pmachine.cpp', 'pmachine_opcodes_extended.cpp',
-      'pmachine_dynamic_library.cpp', 'pmachine_scheduler.cpp', 'hosted_image.cpp',
-      'fortran_runtime.cpp', 'fortran_format.cpp', 'fortran_files.cpp', 'system_runtime.cpp');
-    const sources = names
-      .map(name => path.join(root, 'pmachines', 'arduino', 'src', name));
-    if (genericNative) sources.push(path.join(root, 'src', 'StringPool.cpp'));
-    const flags = genericNative ? ['-DPLATFORM_RPIB=1', '-DTEST_GENERIC_PMACHINE=1',
-      '-I' + path.join(root, 'raspberry-pi', 'include'), '-I' + path.join(root, 'src'),
-      '-I' + path.join(root, 'pmachines', 'arduino', 'src'),
-      '-I' + path.join(root, '.pio', 'libdeps', 'esp32_s3_pmachine_n8r8', 'ArduinoJson', 'src')] : ['-Werror'];
-    const build = spawnSync('g++', ['-std=c++17', '-Wall', '-Wextra', ...flags,
-      fileURLToPath(new URL('./cobol-differential-native.cpp', import.meta.url)), ...sources, '-o', executable],
-    { encoding: 'utf8', windowsHide: true });
-    assert.ifError(build.error);
-    assert.equal(build.status, 0, build.stdout + build.stderr);
+    buildGenericNative(fileURLToPath(new URL('./cobol-differential-native.cpp', import.meta.url)), executable);
     if (target) {
       for (const route of ['/pmachine/status', '/pmachine/service_host/status']) {
         const response = await requestEsp32(new URL(route, target), { timeoutMs: 15000 });
@@ -73,8 +58,7 @@ test('COBOL nucleus and intrinsic corpus agrees across JavaScript, legacy native
       assert.equal(native.error, null, `${item.id}: ${native.error}`);
       assert.deepEqual(native.stdout, item.expected, item.id);
       if (target) {
-        // Bypass only the legacy compiler-header detector, not signature checking.
-        const pcode = artifact.pcodeText.replace(/^# Auto-generated from ANTLR Cobolish grammar[^\r\n]*/m, '# Generic COBOL conformance');
+        const pcode = artifact.pcodeText;
         const response = await requestEsp32(new URL('/pmachine/execute_json', target), {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, timeoutMs: 25000,
           body: JSON.stringify({
@@ -89,7 +73,7 @@ test('COBOL nucleus and intrinsic corpus agrees across JavaScript, legacy native
         assert.ok(actual.instructionCount > 1, 'Must exercise generic dispatch');
         assert.deepEqual(actual.stdout, item.expected, item.id);
       }
-      console.log(`PASS ${item.id} JS/${genericNative ? 'generic' : 'legacy'} native${target ? '/generic ESP32' : ''}`);
+      console.log(`PASS ${item.id} JS/generic native${target ? '/ESP32' : ''}`);
     }
   } finally {
     await rm(directory, { recursive: true, force: true });

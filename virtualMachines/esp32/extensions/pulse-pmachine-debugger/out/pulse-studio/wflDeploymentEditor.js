@@ -29,7 +29,7 @@ function compileOptions(environment, definesText) {
 async function compileDocument(vscode, document, options) {
   if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace before compiling referenced source.')
   const root = compilerRoot(vscode, document.uri)
-  const compiler = await import(pathToFileURL(path.join(root, 'aggregator', 'scripts', 'compile-workflow-dsl.mjs')).href)
+  const compiler = await import(pathToFileURL(path.join(root, '..', '..', 'languages', 'wfl', 'src', 'compile-workflow-dsl.mjs')).href)
   return { root, compiled: compiler.compileWorkflowDSL(document.getText(), options) }
 }
 

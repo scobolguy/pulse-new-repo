@@ -1,0 +1,9 @@
+{
+  "name": "@pulse/swift-messages",
+  "private": true,
+  "type": "module",
+  "exports": "./messages.mjs",
+  "dependencies": {
+    "fast-xml-parser": "^5.8.0"
+  }
+}

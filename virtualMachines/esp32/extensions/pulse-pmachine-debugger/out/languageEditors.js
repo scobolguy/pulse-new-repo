@@ -1,4 +1,8 @@
 export const LANGUAGE_EDITORS = [
+    { id: 'screencobol', label: 'SCREEN COBOL Requester', extension: '.scob',
+        content: 'IDENTIFICATION DIVISION.\nPROGRAM-ID. REQUESTER.\nDATA DIVISION.\nWORKING-STORAGE SECTION.\n01 REQUEST-TEXT PIC X(40).\n01 REPLY-TEXT PIC X(40).\nSCREEN SECTION.\n01 MAIN-SCREEN SIZE 24, 80.\n05 REQUEST-FIELD AT 3, 2 PIC X(40) USING REQUEST-TEXT.\n05 REPLY-FIELD AT 5, 2 PIC X(40) FROM REPLY-TEXT.\nPROCEDURE DIVISION.\nDISPLAY BASE MAIN-SCREEN.\nACCEPT MAIN-SCREEN.\nSEND REQUEST-TEXT TO "echo" REPLY CODE 0 YIELDS REPLY-TEXT.\nDISPLAY MAIN-SCREEN.\nSTOP RUN.\n' },
+    { id: 'assemblerish', label: 'Assemblerish Hardware Handler', extension: '.asmish',
+        content: 'HANDLER button\nTARGET "/api/devices/button"\nINPUT button PIN 14 PULLUP\nTRIGGER EDGE button FALLING DEBOUNCE 50\nREAD level button\nEVENT pressed 1 level 0\nEND\n' },
     { id: 'pascalish', label: 'Pascalish', extension: '.pas',
         content: "program Hello;\nbegin\n  writeln('Hello from Pascalish');\nend.\n" },
     { id: 'cobolish', label: 'COBOLish 85', extension: '.cob',
@@ -7,6 +11,8 @@ export const LANGUAGE_EDITORS = [
         content: 'Program "hello"\nSub Main()\n  Print "Hello from VBish"\nEnd Sub\n' },
     { id: 'csharp', label: 'C# (ECMA-334 subset)', extension: '.cs',
         content: 'using System;\nclass Program\n{\n    static T Identity<T>(T value) { return value; }\n    static void Main()\n    {\n        Console.WriteLine(Identity("Hello from C#"));\n    }\n}\n' },
+    { id: 'kotlin', label: 'Kotlin (Pulse subset)', extension: '.kt',
+        content: 'fun <T> identity(value: T): T {\n    return value\n}\n\nfun main() {\n    println(identity("Hello from Kotlin"))\n}\n' },
     { id: 'fortranish', label: 'Fortranish (Minnesota FORTRAN)', extension: '.ftn',
         content: "      PROGRAM HELLO\n      PRINT, 'Hello from MNF'\n      END\n" },
     { id: 'wfl', label: 'WFL Workflow / Deployment', extension: '.wfl',

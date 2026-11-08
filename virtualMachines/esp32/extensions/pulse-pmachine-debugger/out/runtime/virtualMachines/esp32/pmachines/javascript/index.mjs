@@ -8,3 +8,4 @@ export {
 
 export { loadOpcodeManifest, loadOpcodeMap } from './src/opcodes.mjs';
 export { PMachineMemory, PMachineMemoryError } from './src/memory.mjs';
+export { PMachineScheduler } from './src/scheduler.mjs';

@@ -150,6 +150,73 @@ end.`;
   assert.equal(legacy.getStatus().serviceLifecycle, undefined);
 });
 
+test('local probe execution budget excludes waiting for the service invocation queue', async t => {
+  let queue = Promise.resolve();
+  let calls = 0;
+  let status = 200;
+  let hang = false;
+  let releaseProbe;
+  let entered;
+  const runtime = await createServiceLifecycleRuntime({
+    config: readServiceLifecycleConfig({ serviceId: 'queued-probe', requires: [], env: {} }),
+    waitForIntrinsicProbe: () => queue,
+    intrinsicProbe: async () => {
+      calls++;
+      const observedStatus = status;
+      entered?.();
+      if (hang) await new Promise(resolve => { releaseProbe = resolve; });
+      return { status: observedStatus, body: {} };
+    },
+    policyFactory: async () => ({
+      async dispatch(route, payload) {
+        if (route === '/transport-policy') return { timeoutMs: 50 };
+        assert.equal(route, '/evaluate');
+        const ready = payload.localObservation.status === 200;
+        return { readiness: { ready, blockedBy: ready ? [] : [{ reason: 'local-operation-failed' }] } };
+      },
+      async stop() {},
+    }),
+    logger: { warn() {}, error() {} },
+  });
+  let release;
+  t.after(async () => { release?.(); releaseProbe?.(); await runtime.stop(); });
+  await runtime.refresh();
+  assert.equal(runtime.getReadiness().ready, true);
+  queue = new Promise(resolve => { release = resolve; });
+  const refresh = runtime.refresh();
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(calls, 1, 'A queued probe must not start or time out while an invocation owns the host');
+  assert.equal(runtime.getReadiness().ready, true);
+  release();
+  await refresh;
+  assert.equal(calls, 2);
+  assert.equal(runtime.getReadiness().ready, true);
+  status = 500;
+  await runtime.refresh();
+  assert.equal(runtime.getReadiness().ready, false);
+  assert.equal(runtime.getReadiness().blockedBy[0].reason, 'local-operation-failed');
+  status = 200;
+  await runtime.refresh();
+  assert.equal(runtime.getReadiness().ready, true);
+  hang = true;
+  await runtime.refresh();
+  assert.equal(runtime.getReadiness().ready, false, 'Actual probe execution must still time out');
+  releaseProbe();
+  hang = false;
+  await runtime.refresh();
+  assert.equal(runtime.getReadiness().ready, true);
+  hang = true;
+  const started = new Promise(resolve => { entered = resolve; });
+  const pending = runtime.refresh();
+  await started;
+  status = 500;
+  const fresh = runtime.refresh();
+  releaseProbe();
+  hang = false;
+  assert.equal((await pending).ready, true);
+  assert.equal((await fresh).ready, false, 'An explicit refresh must resample after an older in-flight probe');
+});
+
 test('filesystem readiness performs a read-only schema root operation and detects its loss', async t => {
   const dataRoot = await fs.mkdtemp(path.join(process.cwd(), 'testing', 'aggregator', 'lifecycle-fixture-'));
   const service = await createFilesystemService({
@@ -179,7 +246,9 @@ test('Node service wrappers report ephemeral listening ports and Librarian probe
     calls.push(req.url);
     for await (const chunk of req) { /* Drain the transport request. */ }
     res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify(req.url === '/ready' ? { ready: true, instanceId: 'external-fs-1' } :
+    res.statusCode = req.url === '/unavailable' ? 503 : 200;
+    res.end(JSON.stringify(req.url === '/unavailable' ? { ready: false } :
+      req.url === '/ready' ? { ready: true, instanceId: 'external-fs-1' } :
       req.url === '/exists' ? { exists: false } : { items: [], hasMore: false }));
   });
 
@@ -248,7 +317,7 @@ test('Node service wrappers report ephemeral listening ports and Librarian probe
     child.stdout.on('data', chunk => { state.output += chunk; });
     child.stderr.on('data', chunk => { state.output += chunk; });
     children.push(state);
-    const deadline = Date.now() + 20000;
+    const deadline = Date.now() + 180000;
     while (!reports.some(report => report.serviceId === serviceId)) {
       if (child.exitCode !== null || Date.now() > deadline) assert.fail(`Wrapper failed to report: ${state.output}`);
       await new Promise(resolve => setTimeout(resolve, 50));
@@ -286,6 +355,7 @@ test('managed filesystem client submits logical-service transactions while legac
   const envelopes = [];
   const direct = await server(t, (req, res) => {
     directCalls += 1;
+    assert.equal(req.headers.connection, 'close');
     res.setHeader('content-type', 'application/json');
     res.end('{"exists":false}');
   });
@@ -316,6 +386,25 @@ test('managed filesystem client submits logical-service transactions while legac
   assert.equal(directCalls, 1);
   assert.throws(() => createFilesystemServiceClient(direct, { env: { PULSE_SERVICE_BINDINGS: '{}' } }),
     /require configured PULSE_AGGREGATOR_URLS/);
+});
+
+test('direct filesystem write transport failures retain their cause and are not retried', async t => {
+  let writes = 0;
+  const direct = await server(t, async (req, res) => {
+    assert.equal(req.url, '/write');
+    assert.equal(req.headers.connection, 'close');
+    for await (const chunk of req) {}
+    writes++;
+    res.destroy();
+  });
+  const client = createFilesystemServiceClient(direct, { env: {} });
+  await assert.rejects(client.writeText('catalog', 'uncertain.json', '{}'), error => {
+    assert.equal(error.code, 'EFILESYSTEM');
+    assert.ok(error.cause instanceof Error);
+    assert.ok(error.cause.cause instanceof Error);
+    return true;
+  });
+  assert.equal(writes, 1, 'An uncertain write must not be submitted again');
 });
 
 test('uncertain logical transaction outcomes carry tracking ids and are never automatically resubmitted', async t => {

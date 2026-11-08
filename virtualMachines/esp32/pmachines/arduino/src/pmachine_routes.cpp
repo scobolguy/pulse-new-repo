@@ -1,3 +1,5 @@
+#include "../../../libraries/messages/arduino_mapping.h"
+#include "../../../libraries/swift/arduino_messages.h"
 
 #include <Arduino.h>
 #include "pmachine_routes.h"
@@ -770,202 +772,9 @@ String unquote(const String& text) {
     return s;
 }
 
-String getJsonPathValueAsString(JsonVariantConst root, const String& dotPath) {
-    JsonVariantConst cursor = root;
-    int start = 0;
-    while (start <= (int)dotPath.length()) {
-        int dot = dotPath.indexOf('.', start);
-        String key = (dot >= 0) ? dotPath.substring(start, dot) : dotPath.substring(start);
-        key = trimCopy(key);
-        if (key.length() == 0) {
-            if (dot < 0) break;
-            start = dot + 1;
-            continue;
-        }
-        if (!cursor.is<JsonObjectConst>()) return "";
-        JsonObjectConst obj = cursor.as<JsonObjectConst>();
-        if (!obj[key]) return "";
-        cursor = obj[key];
-        if (dot < 0) break;
-        start = dot + 1;
-    }
-
-    if (cursor.is<const char*>()) return String(cursor.as<const char*>());
-    if (cursor.is<bool>()) return cursor.as<bool>() ? "true" : "false";
-    if (cursor.is<long>()) return String(cursor.as<long>());
-    if (cursor.is<double>()) return String(cursor.as<double>(), 6);
-    if (cursor.is<JsonArrayConst>() || cursor.is<JsonObjectConst>()) {
-        String out;
-        serializeJson(cursor, out);
-        return out;
-    }
-    return "";
-}
-
-void setJsonPathValue(JsonDocument& doc, const String& dotPath, const String& value) {
-    if (!doc.is<JsonObject>()) doc.to<JsonObject>();
-    JsonObject root = doc.as<JsonObject>();
-
-    int start = 0;
-    JsonObject current = root;
-    while (start <= (int)dotPath.length()) {
-        int dot = dotPath.indexOf('.', start);
-        String key = (dot >= 0) ? dotPath.substring(start, dot) : dotPath.substring(start);
-        key = trimCopy(key);
-        if (key.length() == 0) {
-            if (dot < 0) break;
-            start = dot + 1;
-            continue;
-        }
-
-        if (dot < 0) {
-            current[key] = value;
-            break;
-        }
-
-        if (!current[key].is<JsonObject>()) {
-            current[key].to<JsonObject>();
-        }
-        current = current[key].as<JsonObject>();
-        start = dot + 1;
-    }
-}
-
-String normalizeMtAmount(const String& raw) {
-    String s = trimCopy(raw);
-    s.replace(" ", "");
-    s.replace(",", ".");
-    return s;
-}
-
-String normalizeChargeBearer(const String& raw) {
-    String s = toUpperCopy(trimCopy(raw));
-    if (s == "OUR" || s == "SHA" || s == "BEN") return s;
-    return trimCopy(raw);
-}
-
-String yymmddToIsoDate(const String& raw) {
-    String s = trimCopy(raw);
-    if (s.length() != 6) return s;
-    String yy = s.substring(0, 2);
-    String mm = s.substring(2, 4);
-    String dd = s.substring(4, 6);
-    int year = 2000 + yy.toInt();
-    if (mm.toInt() < 1 || mm.toInt() > 12 || dd.toInt() < 1 || dd.toInt() > 31) {
-        return s;
-    }
-    char out[11];
-    snprintf(out, sizeof(out), "%04d-%02d-%02d", year, mm.toInt(), dd.toInt());
-    return String(out);
-}
-
-String mtPartyName(const String& raw) {
-    String s = trimCopy(raw);
-    int nl = s.indexOf('\n');
-    if (nl < 0) return s;
-    String first = trimCopy(s.substring(0, nl));
-    if (first.startsWith("/")) {
-        return trimCopy(s.substring(nl + 1));
-    }
-    return s;
-}
-
-void parseMt103FinText(const String& text, JsonDocument& outDoc) {
-    outDoc.clear();
-    JsonObject root = outDoc.to<JsonObject>();
-    JsonObject block4 = root["block4"].to<JsonObject>();
-
-    String currentTag;
-    String currentValue;
-    auto commitTag = [&](const String& tag, const String& value) {
-        if (tag.length() == 0) return;
-        if (tag == "32A") {
-            JsonObject field32A = block4["32A"].to<JsonObject>();
-            String v = trimCopy(value);
-            if (v.length() >= 9) {
-                field32A["date"] = v.substring(0, 6);
-                field32A["currency"] = v.substring(6, 9);
-                field32A["amount"] = v.substring(9);
-            } else {
-                field32A["raw"] = v;
-            }
-            return;
-        }
-        if (tag == "33B") {
-            JsonObject field33B = block4["33B"].to<JsonObject>();
-            String v = trimCopy(value);
-            if (v.length() >= 3) {
-                field33B["currency"] = v.substring(0, 3);
-                field33B["amount"] = v.substring(3);
-            } else {
-                field33B["raw"] = v;
-            }
-            return;
-        }
-        block4[tag] = trimCopy(value);
-    };
-
-    int start = 0;
-    while (start <= (int)text.length()) {
-        int nl = text.indexOf('\n', start);
-        String line = (nl >= 0) ? text.substring(start, nl) : text.substring(start);
-        line.replace("\r", "");
-
-        if (line.startsWith(":")) {
-            int secondColon = line.indexOf(':', 1);
-            if (secondColon > 1) {
-                commitTag(currentTag, currentValue);
-                currentTag = line.substring(1, secondColon);
-                currentValue = line.substring(secondColon + 1);
-            } else if (currentTag.length() > 0) {
-                currentValue += "\n" + line;
-            }
-        } else if (currentTag.length() > 0) {
-            currentValue += "\n" + line;
-        }
-
-        if (nl < 0) break;
-        start = nl + 1;
-    }
-    commitTag(currentTag, currentValue);
-}
-
-String applyConversionRule(const String& conversionRule, const String& srcValue) {
-    String rule = toUpperCopy(trimCopy(conversionRule));
-    if (rule.length() == 0) return srcValue;
-
-    if (rule.indexOf("UPPER(SRC)") >= 0) return toUpperCopy(srcValue);
-    if (rule.indexOf("TRIM(SRC)") >= 0) return trimCopy(srcValue);
-    if (rule.indexOf("MTAMOUNTTODECIMAL(SRC)") >= 0) return normalizeMtAmount(srcValue);
-    if (rule.indexOf("YYMMDDTOISO(SRC)") >= 0) return yymmddToIsoDate(srcValue);
-    if (rule.indexOf("MTPARTYNAME(SRC)") >= 0) return mtPartyName(srcValue);
-    if (rule.indexOf("MTCHARGEBEARERTOISO(SRC)") >= 0) return normalizeChargeBearer(srcValue);
-    if (rule.indexOf("OUTPUT := SRC") >= 0) return srcValue;
-
-    return srcValue;
-}
-
 // Execute one compiled mapping rule (a flat opcode list) against a source value.
 // Stack-based: SRC pushes the value, native string ops transform it, and the top
 // of stack at the end is the mapped result. No string interpretation at runtime.
-String execCompiledRule(const JsonArrayConst& ops, const String& srcValue) {
-    std::vector<String> st;
-    for (JsonVariantConst v : ops) {
-        String op = toUpperCopy(trimCopy(String(v | "")));
-        if (op.length() == 0) continue;
-        if (op == "SRC") { st.push_back(srcValue); continue; }
-        if (op == "TRIM") { String a = st.empty() ? String("") : st.back(); if (!st.empty()) st.pop_back(); st.push_back(trimCopy(a)); continue; }
-        if (op == "UPPER") { String a = st.empty() ? String("") : st.back(); if (!st.empty()) st.pop_back(); st.push_back(toUpperCopy(a)); continue; }
-        if (op == "YYMMDD_TO_ISO") { String a = st.empty() ? String("") : st.back(); if (!st.empty()) st.pop_back(); st.push_back(yymmddToIsoDate(a)); continue; }
-        if (op == "MT_AMOUNT_TO_DECIMAL") { String a = st.empty() ? String("") : st.back(); if (!st.empty()) st.pop_back(); st.push_back(normalizeMtAmount(a)); continue; }
-        if (op == "MT_PARTY_NAME") { String a = st.empty() ? String("") : st.back(); if (!st.empty()) st.pop_back(); st.push_back(mtPartyName(a)); continue; }
-        if (op == "MT_CHARGE_TO_ISO") { String a = st.empty() ? String("") : st.back(); if (!st.empty()) st.pop_back(); st.push_back(normalizeChargeBearer(a)); continue; }
-        if (op.startsWith("PUSH_STR ")) { st.push_back(unquote(String(v | "").substring(9))); continue; }
-        if (op.startsWith("PUSH_INT ")) { st.push_back(String(v | "").substring(9)); continue; }
-        // DUP / OUTPUT / RET are structural no-ops here.
-    }
-    return st.empty() ? srcValue : st.back();
-}
 
 struct ProgramMapMetadata {
     String runtimeKind = "service";
@@ -1522,33 +1331,6 @@ bool evaluateWhenRule(const String& whenRule, const String& srcMessage) {
     return false;
 }
 
-String normalizeIngressMessage(const String& message) {
-    String normalized = message;
-    normalized.replace("\r\n", "\n");
-    normalized.replace("\r", "\n");
-    normalized.trim();
-    return normalized;
-}
-
-String detectIngressMessageType(const String& normalizedMessage) {
-    String upper = toUpperCopy(normalizedMessage);
-    if (upper.startsWith("MT202") || upper.indexOf(":21:") >= 0) {
-        return "MT202";
-    }
-    if (upper.startsWith("MT103") || upper.indexOf("\n:20:") >= 0 || upper.indexOf(":23B:") >= 0) {
-        return "MT103";
-    }
-    if (upper.indexOf("<DOCUMENT") >= 0 && upper.indexOf("PACS") >= 0) {
-        if (upper.indexOf("PACS.008") >= 0 || upper.indexOf("PACS008") >= 0) return "PACS008";
-        if (upper.indexOf("PACS.009") >= 0 || upper.indexOf("PACS009") >= 0) return "PACS009";
-        return "PACS";
-    }
-    if (normalizedMessage.startsWith("{") || normalizedMessage.startsWith("[")) {
-        return "JSON";
-    }
-    return "UNKNOWN";
-}
-
 String inferIngressQueueFromType(const String& detectedType, const String& providedInputQueue) {
     String provided = trimCopy(providedInputQueue);
     if (provided.length() > 0) return provided;
@@ -1559,16 +1341,6 @@ String inferIngressQueueFromType(const String& detectedType, const String& provi
     if (type == "PACS" || type == "PACS008" || type == "PACS009") return "pacs.inbound";
     if (type == "JSON") return "json.inbound";
     return "edge.unknown.inbound";
-}
-
-String xmlEscapeText(const String& value) {
-    String out = value;
-    out.replace("&", "&amp;");
-    out.replace("<", "&lt;");
-    out.replace(">", "&gt;");
-    out.replace("\"", "&quot;");
-    out.replace("'", "&apos;");
-    return out;
 }
 
 String resolveOutputDataTypeId(JsonObjectConst output) {
@@ -1585,109 +1357,6 @@ String resolveOutputDataTypeId(JsonObjectConst output) {
         }
     }
     return "";
-}
-
-void appendIndent(String& out, int indent) {
-    for (int i = 0; i < indent; i += 1) out += ' ';
-}
-
-void appendXmlNode(String& out, const String& name, JsonVariantConst value, int indent) {
-    appendIndent(out, indent);
-
-    if (value.isNull()) {
-        out += "<" + name + "></" + name + ">\n";
-        return;
-    }
-
-    if (value.is<const char*>()) {
-        out += "<" + name + ">" + xmlEscapeText(String(value.as<const char*>())) + "</" + name + ">\n";
-        return;
-    }
-    if (value.is<String>()) {
-        out += "<" + name + ">" + xmlEscapeText(value.as<String>()) + "</" + name + ">\n";
-        return;
-    }
-    if (value.is<long>() || value.is<unsigned long>() || value.is<float>() || value.is<double>() || value.is<bool>()) {
-        out += "<" + name + ">" + xmlEscapeText(value.as<String>()) + "</" + name + ">\n";
-        return;
-    }
-
-    if (value.is<JsonArrayConst>()) {
-        JsonArrayConst arr = value.as<JsonArrayConst>();
-        for (JsonVariantConst item : arr) {
-            appendXmlNode(out, name, item, indent);
-        }
-        return;
-    }
-
-    if (!value.is<JsonObjectConst>()) {
-        out += "<" + name + ">" + xmlEscapeText(value.as<String>()) + "</" + name + ">\n";
-        return;
-    }
-
-    JsonObjectConst obj = value.as<JsonObjectConst>();
-    std::vector<String> attrs;
-    String textValue = "";
-    int childCount = 0;
-
-    for (JsonPairConst pair : obj) {
-        String key = String(pair.key().c_str());
-        if (key.startsWith("@")) {
-            attrs.push_back(key.substring(1) + "=\"" + xmlEscapeText(pair.value().as<String>()) + "\"");
-        } else if (key == "#text") {
-            textValue = pair.value().as<String>();
-        } else {
-            childCount += 1;
-        }
-    }
-
-    out += "<" + name;
-    for (const auto& attr : attrs) {
-        out += " " + attr;
-    }
-
-    if (childCount == 0) {
-        out += ">" + xmlEscapeText(textValue) + "</" + name + ">\n";
-        return;
-    }
-
-    out += ">\n";
-    for (JsonPairConst pair : obj) {
-        String key = String(pair.key().c_str());
-        if (key.startsWith("@") || key == "#text") continue;
-        appendXmlNode(out, key, pair.value(), indent + 2);
-    }
-    appendIndent(out, indent);
-    out += "</" + name + ">\n";
-}
-
-String jsonObjectToXmlDocument(JsonObjectConst rootObj) {
-    String xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
-    for (JsonPairConst pair : rootObj) {
-        appendXmlNode(xml, String(pair.key().c_str()), pair.value(), 0);
-    }
-    return xml;
-}
-
-bool inferIsoTypeId(const String& dataTypeId) {
-    const String normalized = toLowerCopy(trimCopy(dataTypeId));
-    if (normalized.isEmpty()) return false;
-
-    static const char* kIsoPrefixes[] = {
-        "pacs", "camt", "pain", "head", "remt",
-        "acmt", "admi", "auth", "caaa", "caam",
-        "cain", "catm", "catp", "reda", "secl",
-        "seev", "semt", "tsin"
-    };
-
-    for (const char* prefix : kIsoPrefixes) {
-        const String p = String(prefix);
-        if (normalized == p || normalized.startsWith(p + ".") || normalized.startsWith(p + "-")) {
-            return true;
-        }
-    }
-
-    return false;
 }
 
 bool loadPersistedIsoTypeFlag(const String& dataTypeId, FederatedFileSystem* ffs, bool& isIsoOut) {
@@ -1717,7 +1386,7 @@ bool loadPersistedIsoTypeFlag(const String& dataTypeId, FederatedFileSystem* ffs
                 return true;
             }
 
-            isIsoOut = inferIsoTypeId(normalized);
+            isIsoOut = pulse::swift::arduino::inferIsoTypeId(normalized);
             return true;
         }
     }
@@ -1730,95 +1399,12 @@ bool isIsoDataTypeId(const String& dataTypeId, FederatedFileSystem* ffs) {
     if (loadPersistedIsoTypeFlag(dataTypeId, ffs, persistedValue)) {
         return persistedValue;
     }
-    return inferIsoTypeId(dataTypeId);
-}
-
-String resolveIsoXmlNamespace(const String& dataTypeId, JsonObjectConst document) {
-    const String normalized = toLowerCopy(trimCopy(dataTypeId));
-    if (normalized == "pacs" || normalized.startsWith("pacs")) {
-        if (document["FIToFICdtTrf"].is<JsonObject>()) {
-            return "urn:iso:std:iso:20022:tech:xsd:pacs.009.001.10";
-        }
-        return "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.10";
-    }
-    if (normalized == "camt" || normalized.startsWith("camt")) {
-        if (document["BkToCstmrAcctRpt"].is<JsonObject>()) {
-            return "urn:iso:std:iso:20022:tech:xsd:camt.052.001.14";
-        }
-        if (document["BkToCstmrDbtCdtNtfctn"].is<JsonObject>()) {
-            return "urn:iso:std:iso:20022:tech:xsd:camt.054.001.14";
-        }
-        return "urn:iso:std:iso:20022:tech:xsd:camt.053.001.14";
-    }
-    return "";
-}
-
-void ensureIsoNamespaces(const String& dataTypeId, JsonObject document) {
-    const String normalized = toLowerCopy(trimCopy(dataTypeId));
-    const String ns = resolveIsoXmlNamespace(normalized, document);
-    if (ns.length() > 0 && !document["@xmlns"].is<const char*>()) {
-        document["@xmlns"] = ns;
-    }
-    if (!document["@xmlns:xsi"].is<const char*>()) {
-        document["@xmlns:xsi"] = "http://www.w3.org/2001/XMLSchema-instance";
-    }
-
-    if (normalized == "pacs" || normalized.startsWith("pacs")) {
-        if (!document["@xmlns:hdr"].is<const char*>()) {
-            document["@xmlns:hdr"] = "urn:swift:xsd:head.001.001.02";
-        }
-
-        String msgId = "";
-        if (document["FIToFICstmrCdtTrf"].is<JsonObject>()) {
-            JsonObject tx = document["FIToFICstmrCdtTrf"].as<JsonObject>();
-            if (tx["GrpHdr"].is<JsonObject>()) {
-                JsonObject grp = tx["GrpHdr"].as<JsonObject>();
-                if (grp["MsgId"].is<const char*>()) {
-                    msgId = String(grp["MsgId"].as<const char*>());
-                }
-            }
-        }
-
-        if (msgId.length() > 0 && !document["hdr:AppHdr"].is<JsonObject>()) {
-            JsonObject appHdr = document["hdr:AppHdr"].to<JsonObject>();
-            appHdr["hdr:BizMsgIdr"] = msgId;
-        }
-    }
+    return pulse::swift::arduino::inferIsoTypeId(dataTypeId);
 }
 
 bool maybeShapeIsoToXml(const String& dataTypeId, const String& routedMessage, FederatedFileSystem* ffs, String& shapedOut, String& warningOut) {
-    shapedOut = routedMessage;
-    warningOut = "";
-
-    if (!isIsoDataTypeId(dataTypeId, ffs)) {
-        return false;
-    }
-
-    String trimmed = trimCopy(routedMessage);
-    if (!trimmed.startsWith("{")) {
-        warningOut = "iso output is not JSON object; left unchanged";
-        return false;
-    }
-
-    JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, trimmed);
-    if (err || !doc.is<JsonObject>()) {
-        warningOut = "iso output JSON parse failed; left unchanged";
-        return false;
-    }
-
-    JsonObject root = doc.as<JsonObject>();
-    if (!root["Document"].is<JsonObject>()) {
-        warningOut = "iso output missing Document object; left unchanged";
-        return false;
-    }
-
-    JsonObject document = root["Document"].as<JsonObject>();
-    ensureIsoNamespaces(dataTypeId, document);
-
-    JsonObjectConst rootConst = root;
-    shapedOut = jsonObjectToXmlDocument(rootConst);
-    return true;
+    return pulse::messages::arduino::maybeShapeIsoToXml(dataTypeId, routedMessage,
+        isIsoDataTypeId(dataTypeId, ffs), shapedOut, warningOut);
 }
 
 String requestMethodName(const AsyncWebServerRequest* request) {
@@ -1852,66 +1438,6 @@ bool ruleAllowsMethod(JsonObjectConst rule, const String& requestMethodUpper) {
     }
 
     return false;
-}
-
-String extractMtFieldLine(const String& message, const String& fieldTag) {
-    int idx = message.indexOf(fieldTag);
-    if (idx < 0) return "";
-    int start = idx + fieldTag.length();
-    int end = message.indexOf('\n', start);
-    if (end < 0) end = message.length();
-    String value = message.substring(start, end);
-    value.trim();
-    return value;
-}
-
-String buildPacsXmlFromMt(const String& normalizedMessage, const String& messageType) {
-    String txId = extractMtFieldLine(normalizedMessage, ":20:");
-    if (txId.length() == 0) {
-        txId = String("TX-") + String((unsigned long)millis());
-    }
-
-    String relRef = extractMtFieldLine(normalizedMessage, ":21:");
-    if (relRef.length() == 0) relRef = txId;
-
-    String amountField = extractMtFieldLine(normalizedMessage, ":32A:");
-    String ccy = "USD";
-    String amount = "0";
-    if (amountField.length() >= 9) {
-        ccy = amountField.substring(6, 9);
-        amount = amountField.substring(9);
-        ccy.trim();
-        amount.trim();
-    }
-    amount.replace(',', '.');
-
-    const bool isMt202 = (toUpperCopy(messageType) == "MT202");
-    const String pacsNs = isMt202
-        ? "urn:iso:std:iso:20022:tech:xsd:pacs.009.001.10"
-        : "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.10";
-
-    String xml;
-    xml.reserve(1200);
-    xml += "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
-    xml += "<Document xmlns=\"" + pacsNs + "\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:hdr=\"urn:swift:xsd:head.001.001.02\">\n";
-    xml += "  <hdr:AppHdr>\n";
-    xml += "    <hdr:BizMsgIdr>" + xmlEscapeText(txId) + "</hdr:BizMsgIdr>\n";
-    xml += "  </hdr:AppHdr>\n";
-    xml += "  <FIToFICstmrCdtTrf>\n";
-    xml += "    <GrpHdr>\n";
-    xml += "      <MsgId>" + xmlEscapeText(txId) + "</MsgId>\n";
-    xml += "    </GrpHdr>\n";
-    xml += "    <CdtTrfTxInf>\n";
-    xml += "      <PmtId>\n";
-    xml += "        <InstrId>" + xmlEscapeText(txId) + "</InstrId>\n";
-    xml += "        <EndToEndId>" + xmlEscapeText(isMt202 ? relRef : txId) + "</EndToEndId>\n";
-    xml += "        <TxId>" + xmlEscapeText(txId) + "</TxId>\n";
-    xml += "      </PmtId>\n";
-    xml += "      <IntrBkSttlmAmt Ccy=\"" + xmlEscapeText(ccy) + "\">" + xmlEscapeText(amount) + "</IntrBkSttlmAmt>\n";
-    xml += "    </CdtTrfTxInf>\n";
-    xml += "  </FIToFICstmrCdtTrf>\n";
-    xml += "</Document>";
-    return xml;
 }
 
 bool deserializeDocFromPath(const String& path, FederatedFileSystem* ffs, JsonDocument& doc) {
@@ -2601,291 +2127,6 @@ void indexMappings(RouterExecutionCache& cache) {
     }
 }
 
-bool runMappingById(
-    const String& mappingId,
-    const String& sourcePayload,
-    JsonArrayConst mappings,
-    String& mappedPayload,
-    String& error,
-    const std::map<String, JsonObjectConst>* mappingsById = nullptr
-) {
-    JsonObjectConst selected;
-    if (mappingsById != nullptr) {
-        auto found = mappingsById->find(mappingId);
-        if (found != mappingsById->end()) selected = found->second;
-    } else {
-        for (JsonObjectConst m : mappings) {
-            const char* id = m["id"] | "";
-            if (String(id) == mappingId) {
-                selected = m;
-                break;
-            }
-        }
-    }
-
-    if (selected.isNull()) {
-        error = "Mapping not found: " + mappingId;
-        return false;
-    }
-
-    JsonDocument sourceDoc;
-    DeserializationError srcErr = deserializeJson(sourceDoc, sourcePayload);
-    if (srcErr) {
-        String raw = trimCopy(sourcePayload);
-        if (startsWithUpper(raw, "MT103") || raw.indexOf(":20:") >= 0) {
-            parseMt103FinText(raw, sourceDoc);
-        } else {
-            sourceDoc.clear();
-            JsonObject srcObj = sourceDoc.to<JsonObject>();
-            srcObj["src"] = sourcePayload;
-        }
-    }
-
-    JsonDocument targetDoc;
-    targetDoc.to<JsonObject>();
-    JsonArrayConst items = selected["items"].as<JsonArrayConst>();
-    for (JsonObjectConst item : items) {
-        String sourcePath = item["sourcePath"] | "";
-        String targetPath = item["targetPath"] | "";
-        String srcValue = getJsonPathValueAsString(sourceDoc.as<JsonVariantConst>(), sourcePath);
-        // Prefer compiled opcodes; fall back to the legacy string rule only when
-        // no ops were compiled for this item.
-        JsonArrayConst ops = item["ops"].as<JsonArrayConst>();
-        String outValue = (!ops.isNull() && ops.size() > 0)
-            ? execCompiledRule(ops, srcValue)
-            : applyConversionRule(String(item["conversionRule"] | ""), srcValue);
-        setJsonPathValue(targetDoc, targetPath, outValue);
-    }
-
-    mappedPayload = "";
-    serializeJson(targetDoc, mappedPayload);
-    return true;
-}
-
-bool evaluateTransformExpr(
-    const String& exprText,
-    const String& srcMessage,
-    JsonArrayConst mappings,
-    int depth,
-    String& outValue,
-    String& error,
-    const std::map<String, JsonObjectConst>* mappingsById = nullptr
-) {
-    if (depth > 4) {
-        error = "Transform nesting too deep";
-        return false;
-    }
-
-    String expr = trimCopy(exprText);
-    if (expr.length() == 0) {
-        outValue = srcMessage;
-        return true;
-    }
-
-    String upperExpr = toUpperCopy(expr);
-    if (upperExpr == "SRC") {
-        outValue = srcMessage;
-        return true;
-    }
-
-    if ((expr[0] == '"' && expr[expr.length() - 1] == '"') || (expr[0] == '\'' && expr[expr.length() - 1] == '\'')) {
-        outValue = unquote(expr);
-        return true;
-    }
-
-    if (!upperExpr.startsWith("MAP")) {
-        outValue = srcMessage;
-        return true;
-    }
-
-    int openIdx = expr.indexOf('(');
-    int closeIdx = expr.lastIndexOf(')');
-    if (openIdx < 0 || closeIdx <= openIdx) {
-        error = "Invalid MAP expression";
-        return false;
-    }
-
-    String inside = trimCopy(expr.substring(openIdx + 1, closeIdx));
-    int commaIdx = findTopLevelComma(inside);
-    if (commaIdx < 0) {
-        error = "MAP requires two arguments";
-        return false;
-    }
-
-    String mapIdToken = trimCopy(inside.substring(0, commaIdx));
-    String payloadExpr = trimCopy(inside.substring(commaIdx + 1));
-    String mappingId = unquote(mapIdToken);
-    if (mappingId == mapIdToken) {
-        error = "MAP id must be a quoted string";
-        return false;
-    }
-
-    String payload;
-    if (!evaluateTransformExpr(payloadExpr, srcMessage, mappings, depth + 1, payload, error, mappingsById)) {
-        return false;
-    }
-
-    return runMappingById(mappingId, payload, mappings, outValue, error, mappingsById);
-}
-
-String applyTransformRule(
-    const String& transformRule,
-    const String& srcMessage,
-    JsonArrayConst mappings,
-    bool& transformApplied,
-    String& transformError,
-    const std::map<String, JsonObjectConst>* mappingsById = nullptr
-) {
-    String rule = trimCopy(normalizeDslEscapes(transformRule));
-    transformApplied = false;
-    transformError = "";
-
-    if (rule.length() == 0) {
-        transformApplied = true;
-        return srcMessage;
-    }
-
-    String upperRule = toUpperCopy(rule);
-    int assignIdx = upperRule.indexOf("OUTPUT :=");
-
-    // Compiled ROUTE_MAP_RUN passes a bare mapper id (no "OUTPUT :=", no call
-    // syntax). Dispatch straight into the compiled mapper.
-    if (assignIdx < 0 && rule.indexOf('(') < 0 && rule.indexOf(' ') < 0) {
-        String mapped;
-        String mapErr;
-        if (runMappingById(unquote(rule), srcMessage, mappings, mapped, mapErr, mappingsById)) {
-            transformApplied = true;
-            return mapped;
-        }
-        transformError = mapErr;
-        return srcMessage;
-    }
-
-    if (assignIdx < 0) {
-        transformApplied = true;
-        return srcMessage;
-    }
-
-    String rhs = trimCopy(rule.substring(assignIdx + 9));
-    int semicolon = rhs.indexOf(';');
-    if (semicolon >= 0) rhs = trimCopy(rhs.substring(0, semicolon));
-
-    String out;
-    if (!evaluateTransformExpr(rhs, srcMessage, mappings, 0, out, transformError, mappingsById)) {
-        return srcMessage;
-    }
-
-    transformApplied = true;
-    return out;
-}
-
-std::vector<String> splitPacsXmlBatchMessages(const String& message) {
-    std::vector<String> out;
-    String trimmed = trimCopy(message);
-    if (trimmed.length() == 0) return out;
-
-    int txProbe = trimmed.indexOf("<CdtTrfTxInf");
-    if (txProbe < 0) return out;
-
-    int docStart = trimmed.indexOf("<Document");
-    if (docStart < 0) return out;
-    int docOpenEnd = trimmed.indexOf('>', docStart);
-    if (docOpenEnd < 0) return out;
-    String documentOpenTag = trimmed.substring(docStart, docOpenEnd + 1);
-
-    int fiStart = trimmed.indexOf("<FIToFICstmrCdtTrf", docOpenEnd);
-    if (fiStart < 0) return out;
-    int fiOpenEnd = trimmed.indexOf('>', fiStart);
-    if (fiOpenEnd < 0) return out;
-    String fiOpenTag = trimmed.substring(fiStart, fiOpenEnd + 1);
-
-    int fiEndStart = trimmed.indexOf("</FIToFICstmrCdtTrf>", fiOpenEnd);
-    if (fiEndStart < 0) return out;
-
-    String fiInner = trimmed.substring(fiOpenEnd + 1, fiEndStart);
-    int grpStart = fiInner.indexOf("<GrpHdr");
-    String grpBlock = "";
-    if (grpStart >= 0) {
-        int grpOpenEnd = fiInner.indexOf('>', grpStart);
-        int grpCloseStart = fiInner.indexOf("</GrpHdr>", grpOpenEnd);
-        if (grpOpenEnd >= 0 && grpCloseStart > grpOpenEnd) {
-            grpBlock = fiInner.substring(grpStart, grpCloseStart + 9);
-        }
-    }
-
-    std::vector<String> txBlocks;
-    int cursor = 0;
-    while (cursor >= 0 && cursor < fiInner.length()) {
-        int txStart = fiInner.indexOf("<CdtTrfTxInf", cursor);
-        if (txStart < 0) break;
-        int txOpenEnd = fiInner.indexOf('>', txStart);
-        if (txOpenEnd < 0) break;
-        int txCloseStart = fiInner.indexOf("</CdtTrfTxInf>", txOpenEnd);
-        if (txCloseStart < 0) break;
-        txBlocks.push_back(fiInner.substring(txStart, txCloseStart + 14));
-        cursor = txCloseStart + 14;
-    }
-
-    if (txBlocks.size() <= 1) return out;
-
-    String xmlDecl = "";
-    if (trimmed.startsWith("<?xml")) {
-        int declEnd = trimmed.indexOf("?>");
-        if (declEnd > 0) {
-            xmlDecl = trimmed.substring(0, declEnd + 2);
-        }
-    }
-
-    for (const String& tx : txBlocks) {
-        String one;
-        if (xmlDecl.length() > 0) {
-            one += xmlDecl;
-        } else {
-            one += "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
-        }
-        one += "\n";
-        one += documentOpenTag;
-        one += fiOpenTag;
-        if (grpBlock.length() > 0) one += grpBlock;
-        one += tx;
-        one += "</FIToFICstmrCdtTrf></Document>";
-        out.push_back(one);
-    }
-
-    return out;
-}
-
-void expandFanoutMessages(const String& message, std::vector<String>& outMessages) {
-    outMessages.clear();
-
-    std::vector<String> xmlSplit = splitPacsXmlBatchMessages(message);
-    if (xmlSplit.size() > 1) {
-        outMessages = xmlSplit;
-        return;
-    }
-
-    String trimmed = trimCopy(message);
-    if (trimmed.startsWith("[")) {
-        JsonDocument arrDoc;
-        DeserializationError arrErr = deserializeJson(arrDoc, trimmed);
-        if (!arrErr && arrDoc.is<JsonArrayConst>()) {
-            JsonArrayConst arr = arrDoc.as<JsonArrayConst>();
-            for (JsonVariantConst item : arr) {
-                String one;
-                if (item.is<const char*>()) {
-                    one = String(item.as<const char*>());
-                } else {
-                    serializeJson(item, one);
-                }
-                outMessages.push_back(one);
-            }
-            if (!outMessages.empty()) return;
-        }
-    }
-
-    outMessages.push_back(message);
-}
-
 bool loadRouterRulesArray(const String& rulesFilePath, FederatedFileSystem* ffs, JsonDocument& doc, JsonArrayConst& rulesOut) {
     if (!deserializeDocFromPath(rulesFilePath, ffs, doc)) {
         return false;
@@ -3391,14 +2632,14 @@ EdgeIngressExecutionResult executeEdgeIngressStage(
     EdgeIngressExecutionResult result;
     evictIdleMapServiceEntries();
 
-    String normalized = messageAlreadyNormalized ? message : normalizeIngressMessage(message);
-    String messageType = detectIngressMessageType(normalized);
+    String normalized = messageAlreadyNormalized ? message : pulse::swift::arduino::normalizeIngressMessage(message);
+    String messageType = pulse::swift::arduino::detectIngressMessageType(normalized);
     bool conversionApplied = false;
     String conversionFormat = "original";
     if (convertMtToXml && (messageType == "MT103" || messageType == "MT202")) {
         String originalType = messageType;
-        normalized = buildPacsXmlFromMt(normalized, originalType);
-        messageType = detectIngressMessageType(normalized);
+        normalized = pulse::swift::arduino::buildPacsXmlFromMt(normalized, originalType);
+        messageType = pulse::swift::arduino::detectIngressMessageType(normalized);
         conversionApplied = true;
         conversionFormat = (originalType == "MT202") ? "mt202->pacs-xml" : "mt103->pacs-xml";
     }
@@ -3983,14 +3224,14 @@ RouterRunExecutionResult executeRouterRun(
             bool transformApplied = false;
             String transformRule = output["transformRule"] | "";
             String transformError;
-            String routed = applyTransformRule(transformRule, message, mappings, transformApplied, transformError, &mappingsById);
+            String routed = pulse::messages::arduino::applyTransformRule(transformRule, message, mappings, transformApplied, transformError, &mappingsById);
             String outputType = resolveOutputDataTypeId(output);
             String shapeWarning;
             String shaped = routed;
             const bool shapedToXml = maybeShapeIsoToXml(outputType, routed, ffs, shaped, shapeWarning);
 
             std::vector<String> emittedMessages;
-            expandFanoutMessages(shaped, emittedMessages);
+            pulse::swift::arduino::expandFanoutMessages(shaped, emittedMessages);
             for (size_t emitIndex = 0; emitIndex < emittedMessages.size(); emitIndex += 1) {
                 JsonObject d = deliveries.add<JsonObject>();
                 d["ruleId"] = rule["id"] | "";
@@ -6688,7 +5929,7 @@ void registerPMachineRoutes(
         const String rawMessageUpper = toUpperCopy(trimCopy(message));
         if (rawMessageUpper.startsWith("MT103") || rawMessageUpper.indexOf("\n:20:") >= 0 || rawMessageUpper.indexOf(":23B:") >= 0) {
             JsonDocument parsedMt103;
-            parseMt103FinText(message, parsedMt103);
+            pulse::swift::arduino::parseMt103FinText(message, parsedMt103);
             String parsedMessage;
             serializeJson(parsedMt103, parsedMessage);
             executionMessage = parsedMessage;
@@ -7282,8 +6523,8 @@ void registerPMachineRoutes(
             return;
         }
 
-        String normalized = normalizeIngressMessage(message);
-        String messageType = detectIngressMessageType(normalized);
+        String normalized = pulse::swift::arduino::normalizeIngressMessage(message);
+        String messageType = pulse::swift::arduino::detectIngressMessageType(normalized);
         String effectiveInputQueue = inferIngressQueueFromType(messageType, inputQueue);
 
         String runRouterUpper = toUpperCopy(trimCopy(runRouterParam));

@@ -1,4 +1,6 @@
-
+#include "../../../libraries/formatting/native_presentation.h"
+#include "../../../libraries/messages/native_mapping.h"
+#include "../../../libraries/swift/native_messages.h"
 
 #include <sstream>
 #include <algorithm>
@@ -20,8 +22,7 @@
 #include "fortran_runtime.h"
 #include "system_runtime.h"
 #include "fortran_format.h"
-#include "cobol_vm.h"
-#include "cobol_vm_internal.h"
+#include "scalar_runtime.h"
 #include "managed_references.h"
 #include "StringPool.h"
 #include "GpioPinSemaphore.h"
@@ -35,7 +36,6 @@
 #endif
 
 namespace pmachine {
-
 
 PMachine::PMachine() {
     init_handler_table();
@@ -370,141 +370,12 @@ namespace {
         return operands;
     }
 
-    std::string getJsonPathValueAsString(JsonVariantConst root, const std::string& dotPath) {
-        JsonVariantConst cursor = root;
-        size_t start = 0;
-        while (start <= dotPath.size()) {
-            size_t dot = dotPath.find('.', start);
-            const std::string key = trimCopy(dot == std::string::npos ? dotPath.substr(start) : dotPath.substr(start, dot - start));
-            if (key.empty()) {
-                if (dot == std::string::npos) break;
-                start = dot + 1;
-                continue;
-            }
-            if (!cursor.is<JsonObjectConst>()) return "";
-            JsonObjectConst obj = cursor.as<JsonObjectConst>();
-            // isNull() rather than truthiness, so 0/false/"" resolve instead of reading as absent.
-            if (obj[key.c_str()].isNull()) return "";
-            cursor = obj[key.c_str()];
-            if (dot == std::string::npos) break;
-            start = dot + 1;
-        }
-
-        if (cursor.is<const char*>()) return std::string(cursor.as<const char*>());
-        if (cursor.is<bool>()) return cursor.as<bool>() ? "true" : "false";
-        if (cursor.is<long>()) return std::to_string(cursor.as<long>());
-        if (cursor.is<double>()) {
-            char buf[48] = {0};
-            snprintf(buf, sizeof(buf), "%.6f", cursor.as<double>());
-            return std::string(buf);
-        }
-        if (cursor.is<JsonArrayConst>() || cursor.is<JsonObjectConst>()) {
-            std::string out;
-            serializeJson(cursor, out);
-            return out;
-        }
-        return "";
-    }
-
-    void setJsonPathValue(JsonDocument& doc, const std::string& dotPath, const std::string& value) {
-        const std::string effectivePath = dotPath;
-        if (!doc.is<JsonObject>()) doc.to<JsonObject>();
-        JsonObject root = doc.as<JsonObject>();
-        JsonObject current = root;
-
-        size_t start = 0;
-        while (start <= effectivePath.size()) {
-            size_t dot = effectivePath.find('.', start);
-            std::string key = trimCopy(dot == std::string::npos ? effectivePath.substr(start) : effectivePath.substr(start, dot - start));
-            if (key.empty()) {
-                if (dot == std::string::npos) break;
-                start = dot + 1;
-                continue;
-            }
-
-            if (dot == std::string::npos) {
-                current[key.c_str()] = value.c_str();
-                break;
-            }
-
-            // to<JsonObject>() binds a new child; assigning a bare JsonObject() stores null.
-            if (!current[key.c_str()].is<JsonObject>()) {
-                current[key.c_str()].to<JsonObject>();
-            }
-            current = current[key.c_str()].as<JsonObject>();
-            start = dot + 1;
-        }
-    }
-
-    std::string normalizeMtAmount(const std::string& raw) {
-        std::string s = trimCopy(raw);
-        s.erase(std::remove(s.begin(), s.end(), ' '), s.end());
-        std::replace(s.begin(), s.end(), ',', '.');
-        return s;
-    }
-
-    std::string applyConversionRule(const std::string& conversionRule, const std::string& srcValue) {
-        const std::string rule = toUpperCopy(trimCopy(conversionRule));
-        if (rule.empty()) return srcValue;
-
-        if (rule.find("UPPER(SRC)") != std::string::npos) return toUpperCopy(srcValue);
-        if (rule.find("TRIM(SRC)") != std::string::npos) return trimCopy(srcValue);
-        if (rule.find("MTAMOUNTTODECIMAL(SRC)") != std::string::npos) return normalizeMtAmount(srcValue);
-        if (rule.find("OUTPUT := SRC") != std::string::npos) return srcValue;
-        return srcValue;
-    }
-
     // Native mapping helpers (compiled-op runtime library). These mirror the JS
     // PMachine ops so a compiled mapper runs identically on-device.
-    std::string mapOpYymmddToIso(const std::string& raw) {
-        const std::string s = trimCopy(raw);
-        if (s.size() != 6) return s;
-        const int yy = std::stoi(s.substr(0, 2));
-        const int mm = std::stoi(s.substr(2, 2));
-        const int dd = std::stoi(s.substr(4, 2));
-        if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return s;
-        char out[11];
-        snprintf(out, sizeof(out), "%04d-%02d-%02d", (yy >= 70 ? 1900 + yy : 2000 + yy), mm, dd);
-        return std::string(out);
-    }
-
-    std::string mapOpMtPartyName(const std::string& raw) {
-        const std::string s = trimCopy(raw);
-        const size_t nl = s.find('\n');
-        if (nl == std::string::npos) return s;
-        const std::string first = trimCopy(s.substr(0, nl));
-        if (!first.empty() && first[0] == '/') return trimCopy(s.substr(nl + 1));
-        return s;
-    }
-
-    std::string mapOpMtChargeToIso(const std::string& raw) {
-        const std::string s = toUpperCopy(trimCopy(raw));
-        if (s == "OUR" || s == "SHA" || s == "BEN") return s;
-        return trimCopy(raw);
-    }
 
     // Execute one compiled mapping rule (a flat opcode list) against a source
     // value. Stack-based: SRC pushes the value, native string ops transform it,
     // and the top of stack at the end is the mapped result. No string parsing.
-    std::string execCompiledMappingOps(const std::vector<std::string>& ops, const std::string& srcValue) {
-        std::vector<std::string> st;
-        for (const auto& rawOp : ops) {
-            const std::string op = toUpperCopy(trimCopy(rawOp));
-            if (op.empty()) continue;
-            if (op == "SRC") { st.push_back(srcValue); continue; }
-            auto popOr = [&]() { std::string a = st.empty() ? std::string() : st.back(); if (!st.empty()) st.pop_back(); return a; };
-            if (op == "TRIM") { st.push_back(trimCopy(popOr())); continue; }
-            if (op == "UPPER") { st.push_back(toUpperCopy(popOr())); continue; }
-            if (op == "YYMMDD_TO_ISO") { st.push_back(mapOpYymmddToIso(popOr())); continue; }
-            if (op == "MT_AMOUNT_TO_DECIMAL") { st.push_back(normalizeMtAmount(popOr())); continue; }
-            if (op == "MT_PARTY_NAME") { st.push_back(mapOpMtPartyName(popOr())); continue; }
-            if (op == "MT_CHARGE_TO_ISO") { st.push_back(mapOpMtChargeToIso(popOr())); continue; }
-            if (op.rfind("PUSH_STR ", 0) == 0) { st.push_back(unquote(rawOp.substr(9))); continue; }
-            if (op.rfind("PUSH_INT ", 0) == 0) { st.push_back(rawOp.substr(9)); continue; }
-            // DUP / OUTPUT / RET are structural no-ops here.
-        }
-        return st.empty() ? srcValue : st.back();
-    }
 
     // Host-installed reader; absent on nodes with no SQL client, which makes
     // DB_SELECT yield empty columns and record a flow-state error.
@@ -536,173 +407,6 @@ namespace {
     }
 
     // MT103 FIN text detection and parsing
-
-    bool isMT103FinText(const std::string& text) {
-        // Detect :TAG: at start of any line, or FIN block delimiters
-        if (text.rfind("{1:", 0) == 0 || text.rfind("{2:", 0) == 0 || text.rfind("{4:", 0) == 0) return true;
-        for (size_t i = 0; i < text.size(); i += 1) {
-            if (text[i] != ':') continue;
-            if (i == 0 || text[i - 1] == '\n' || text[i - 1] == '\r') {
-                // Check if followed by 1-3 alnum chars then ':'
-                size_t j = i + 1;
-                size_t count = 0;
-                while (j < text.size() && (isalnum((unsigned char)text[j])) && count < 4) {
-                    j += 1;
-                    count += 1;
-                }
-                if (count >= 1 && count <= 3 && j < text.size() && text[j] == ':') return true;
-            }
-        }
-        return false;
-    }
-
-    void parseMT103FinText(const std::string& text, JsonDocument& result) {
-        result.to<JsonObject>();
-        JsonObject block4 = result["block4"].to<JsonObject>();
-
-        // Extract block 4 content if wrapped in FIN block delimiters
-        std::string block4Text = text;
-        const size_t b4Start = text.find("{4:");
-        if (b4Start != std::string::npos) {
-            const size_t b4End = text.find("-}", b4Start);
-            block4Text = (b4End != std::string::npos)
-                ? text.substr(b4Start + 3, b4End - b4Start - 3)
-                : text.substr(b4Start + 3);
-        }
-
-        // Parse tag:value pairs, tags start at line beginning with :XX:
-        std::string currentTag;
-        std::string currentValue;
-
-        auto flushField = [&]() {
-            if (currentTag.empty()) return;
-            const std::string val = trimCopy(currentValue);
-            if (currentTag == "32A" && val.size() >= 10) {
-                // YYMMDD + 3-char currency + amount
-                JsonObject f32a = block4["32A"].to<JsonObject>();
-                f32a["raw"] = val;
-                f32a["date"] = val.substr(0, 6);
-                f32a["currency"] = val.substr(6, 3);
-                f32a["amount"] = val.size() > 9 ? trimCopy(val.substr(9)) : "";
-            } else {
-                block4[currentTag.c_str()] = val;
-            }
-            currentTag.clear();
-            currentValue.clear();
-        };
-
-        std::istringstream ss(block4Text);
-        std::string line;
-        while (std::getline(ss, line)) {
-            // Strip trailing CR
-            if (!line.empty() && line.back() == '\r') line.pop_back();
-            if (line.size() >= 3 && line[0] == ':') {
-                // Find closing ':' for tag
-                const size_t tagEnd = line.find(':', 1);
-                if (tagEnd != std::string::npos && tagEnd >= 2 && tagEnd <= 4) {
-                    flushField();
-                    currentTag = line.substr(1, tagEnd - 1);
-                    currentValue = line.substr(tagEnd + 1);
-                    continue;
-                }
-            }
-            if (!currentTag.empty()) {
-                currentValue += '\n';
-                currentValue += line;
-            }
-        }
-        flushField();
-    }
-
-    bool runMappingById(const PMachine& vm, const std::string& mappingId, const std::string& sourcePayload, std::string& mappedPayload, std::string& error) {
-        const MappingDef* mapping = vm.getMappingById(mappingId);
-        if (mapping == nullptr) {
-            error = std::string("Mapping not found: ") + mappingId;
-            return false;
-        }
-
-        JsonDocument sourceDoc;
-        DeserializationError srcErr = deserializeJson(sourceDoc, sourcePayload.c_str());
-        if (srcErr) {
-            sourceDoc.clear();
-            JsonObject srcObj = sourceDoc.to<JsonObject>();
-            srcObj["src"] = sourcePayload.c_str();
-        }
-
-        JsonDocument targetDoc;
-        targetDoc.to<JsonObject>();
-        for (const auto& item : mapping->items) {
-            const std::string srcValue = getJsonPathValueAsString(sourceDoc.as<JsonVariantConst>(), item.sourcePath);
-            // Prefer compiled opcodes; fall back to the legacy string rule only
-            // when no ops were compiled for this item.
-            const std::string outValue = (!item.ops.empty())
-                ? execCompiledMappingOps(item.ops, srcValue)
-                : applyConversionRule(item.conversionRule, srcValue);
-            setJsonPathValue(targetDoc, item.targetPath, outValue);
-        }
-
-        mappedPayload.clear();
-        serializeJson(targetDoc, mappedPayload);
-        return true;
-    }
-
-    bool evaluateTransformExpr(const PMachine& vm, const std::string& exprText, const std::string& srcMessage, int depth, std::string& outValue, std::string& error) {
-        if (depth > 8) {
-            error = "Transform nesting too deep";
-            return false;
-        }
-
-        const std::string expr = trimCopy(exprText);
-        if (expr.empty()) {
-            outValue = srcMessage;
-            return true;
-        }
-
-        const std::string upperExpr = toUpperCopy(expr);
-        if (upperExpr == "SRC") {
-            outValue = srcMessage;
-            return true;
-        }
-
-        if ((expr.front() == '"' && expr.back() == '"') || (expr.front() == '\'' && expr.back() == '\'')) {
-            outValue = unquote(expr);
-            return true;
-        }
-
-        if (upperExpr.rfind("MAP", 0) != 0) {
-            outValue = srcMessage;
-            return true;
-        }
-
-        const size_t openIdx = expr.find('(');
-        const size_t closeIdx = expr.rfind(')');
-        if (openIdx == std::string::npos || closeIdx == std::string::npos || closeIdx <= openIdx) {
-            error = "Invalid MAP expression";
-            return false;
-        }
-
-        const std::string inside = trimCopy(expr.substr(openIdx + 1, closeIdx - openIdx - 1));
-        const int commaIdx = findTopLevelComma(inside);
-        if (commaIdx < 0) {
-            error = "MAP requires two arguments";
-            return false;
-        }
-
-        const std::string mapIdToken = trimCopy(inside.substr(0, static_cast<size_t>(commaIdx)));
-        const std::string payloadExpr = trimCopy(inside.substr(static_cast<size_t>(commaIdx + 1)));
-        const std::string mappingId = unquote(mapIdToken);
-        if (mappingId == mapIdToken) {
-            error = "MAP id must be a quoted string";
-            return false;
-        }
-
-        std::string payload;
-        if (!evaluateTransformExpr(vm, payloadExpr, srcMessage, depth + 1, payload, error)) {
-            return false;
-        }
-
-        return runMappingById(vm, mappingId, payload, outValue, error);
-    }
 
     bool evaluateWhenRuleText(
         const std::string& whenRule,
@@ -754,9 +458,9 @@ namespace {
                 JsonDocument parsed;
                 DeserializationError err = deserializeJson(parsed, message.c_str());
                 if (!err) {
-                    actual = getJsonPathValueAsString(parsed.as<JsonVariantConst>(), field);
+                    actual = pulse::messages::native::getJsonPathValueAsString(parsed.as<JsonVariantConst>(), field);
                     if (actual.empty() && field.rfind("message.", 0) == 0) {
-                        actual = getJsonPathValueAsString(parsed.as<JsonVariantConst>(), field.substr(8));
+                        actual = pulse::messages::native::getJsonPathValueAsString(parsed.as<JsonVariantConst>(), field.substr(8));
                     }
                 }
             }
@@ -817,51 +521,6 @@ namespace {
         outTimeoutMs = static_cast<uint32_t>(obj["timeoutMs"] | 0);
         outReason = std::string(obj["reason"] | "");
         return true;
-    }
-
-    std::string applyTransformRuleText(const PMachine& vm, const std::string& transformRule, const std::string& message) {
-        const std::string rule = trimCopy(normalizeDslEscapes(transformRule));
-        if (rule.empty()) return message;
-
-        const std::string upperRule = toUpperCopy(rule);
-        const size_t assignIdx = upperRule.find("OUTPUT :=");
-
-        // Compiled ROUTE_MAP_RUN passes a bare mapper id (no "OUTPUT :=", no
-        // call syntax). Dispatch straight into the compiled mapper.
-        if (assignIdx == std::string::npos && rule.find('(') == std::string::npos && rule.find(' ') == std::string::npos) {
-            std::string mapped;
-            std::string mapErr;
-            if (runMappingById(vm, unquote(rule), message, mapped, mapErr)) {
-                return mapped;
-            }
-            PMTRACE({
-                Serial.print("[ROUTE_MAP_RUN] Error: ");
-                Serial.println(mapErr.c_str());
-            });
-            return message;
-        }
-
-        if (assignIdx == std::string::npos) {
-            return message;
-        }
-
-        std::string rhs = trimCopy(rule.substr(assignIdx + 9));
-        const size_t semicolonIdx = rhs.find(';');
-        if (semicolonIdx != std::string::npos) {
-            rhs = trimCopy(rhs.substr(0, semicolonIdx));
-        }
-
-        std::string outValue;
-        std::string error;
-        if (!evaluateTransformExpr(vm, rhs, message, 0, outValue, error)) {
-            PMTRACE({
-                Serial.print("[ROUTE_TRANSFORM] Error: ");
-                Serial.println(error.c_str());
-            });
-            return message;
-        }
-
-        return outValue;
     }
 
     void handle_LIT(PMachine& vm, const PInstruction& instr, Value* stack, int& sp, int& bp, int& pc) {
@@ -1009,17 +668,17 @@ void PMachine::clearMappings() {
 }
 void PMachine::setProcedureSignatures(const std::map<std::string, std::vector<std::string>>& signatures) {
     procedureParamsByLabel.clear();
-    cobolLocalsByLabel.clear();
-    cobolGlobals.clear();
+    procedureLocalsByLabel.clear();
+    declaredGlobals.clear();
     for (const auto& entry : signatures) {
         const std::string rawLabel = trimCopy(entry.first);
         if (rawLabel.empty()) continue;
         if (rawLabel == "@globals") {
-            cobolGlobals = entry.second;
+            declaredGlobals = entry.second;
             continue;
         }
         if (rawLabel.rfind("@locals:", 0) == 0) {
-            cobolLocalsByLabel[rawLabel.substr(8)] = entry.second;
+            procedureLocalsByLabel[rawLabel.substr(8)] = entry.second;
             continue;
         }
 
@@ -1035,8 +694,8 @@ void PMachine::setProcedureSignatures(const std::map<std::string, std::vector<st
 }
 void PMachine::clearProcedureSignatures() {
     procedureParamsByLabel.clear();
-    cobolLocalsByLabel.clear();
-    cobolGlobals.clear();
+    procedureLocalsByLabel.clear();
+    declaredGlobals.clear();
 }
 void PMachine::setOrchestrationWaitHook(OrchestrationWaitHook hook, void* context) {
     orchestrationWaitHook = hook;
@@ -1140,7 +799,7 @@ const MappingDef* PMachine::getMappingById(const std::string& mappingId) const {
 }
 bool PMachine::applyMappingById(const std::string& mappingId, const std::string& sourcePayload,
                                 std::string& mappedPayload, std::string& error) const {
-    return runMappingById(*this, mappingId, sourcePayload, mappedPayload, error);
+    return pulse::messages::native::runMappingById(*this, mappingId, sourcePayload, mappedPayload, error);
 }
 int PMachine::openFile(const String& logicalName, const String& mode) {
     return ffs == nullptr ? -1 : ffs->openFile(logicalName, mode);
@@ -1535,14 +1194,6 @@ static void reserveInstructions(std::deque<PInstruction>&, size_t) {}
 template <typename Instructions>
 static Instructions parseTextPCode(const std::string& text, bool hosted = false) {
     Instructions instructions;
-    if (cobolvm::isCobolPcode(text)) {
-        PInstruction program;
-        program.opcode = OP_COBOL_PROGRAM;
-        program.type = OperandType::STRING;
-        program.strOperand = text;
-        instructions.push_back(std::move(program));
-        return instructions;
-    }
     std::map<std::string, size_t> labelToIndex;
     std::vector<std::pair<size_t, std::string>> unresolvedJumps;
     const size_t estimatedLineCount = 1 + static_cast<size_t>(
@@ -1848,13 +1499,6 @@ void PMachine::runInstructions(size_t instructionCount,
         return;
     }
     storage->reset();
-    if (instructionCount == 1) {
-        const PInstruction first = instructionAt(0);
-        if (first.opcode == OP_COBOL_PROGRAM) {
-            runCobolProgram(first.strOperand, *storage);
-            return;
-        }
-    }
     HostedFrameStorage* hostedFrames = hostCallHook ? &storage->frames : nullptr;
     ManagedStringHeap* hostedStrings = &storage->strings;
     auto& hostCallStorage = storage->calls;
@@ -2056,10 +1700,8 @@ void PMachine::runInstructions(size_t instructionCount,
             return getEnumValueName(value.handle, value.i);
         }
         if (value.isReal()) {
-            // Pascal-style scientific form; 7 significant digits matches float precision.
-            char buf[32] = {0};
-            snprintf(buf, sizeof(buf), value.isDouble() ? "%.16E" : "%.6E", value.asReal());
-            return std::string(buf);
+            return value.isDouble() ? pulse::formatting::formatRealE16(value.asReal())
+                : pulse::formatting::formatRealE6(static_cast<float>(value.asReal()));
         }
         return std::to_string(value.i);
     };
@@ -2181,30 +1823,30 @@ void PMachine::runInstructions(size_t instructionCount,
     };
     auto referenceTarget = [&](Value reference) -> Value* {
         const auto* entry = references->get(reference);
-        if (!entry) cobolvm::detail::fail("invalid variable reference handle");
+        if (!entry) pmachine::rtl::detail::fail("invalid variable reference handle");
         if (frameIdentity(entry->frame) != entry->identity)
-            cobolvm::detail::fail("P-code reference outlived its frame: " + entry->name);
+            pmachine::rtl::detail::fail("P-code reference outlived its frame: " + entry->name);
         Value* target = bindingInFrame(entry->frame, entry->name);
-        if (!target) cobolvm::detail::fail("P-code reference target not found: " + entry->name);
+        if (!target) pmachine::rtl::detail::fail("P-code reference target not found: " + entry->name);
         return target;
     };
     std::function<Value(Value, size_t)> dereference;
     dereference = [&](Value value, size_t depth) -> Value {
         if (!value.isReference()) return value;
-        if (depth >= ManagedReferences::CAPACITY) cobolvm::detail::fail("P-code reference chain is too deep");
+        if (depth >= ManagedReferences::CAPACITY) pmachine::rtl::detail::fail("P-code reference chain is too deep");
         const auto* entry = references->get(value);
         const Value target = dereference(*referenceTarget(value), depth + 1);
         if (entry->offset < 0) return target;
-        const std::string text = cobolvm::detail::utf8ToLatin1(stringAt(target));
+        const std::string text = pmachine::rtl::detail::utf8ToLatin1(stringAt(target));
         const size_t start = std::min(text.size(), static_cast<size_t>(entry->offset));
         const int before = sp;
-        pushString(cobolvm::detail::latin1ToUtf8(text.substr(start, static_cast<size_t>(entry->length))));
-        if (sp == before) cobolvm::detail::fail("unable to allocate reference slice");
+        pushString(pmachine::rtl::detail::latin1ToUtf8(text.substr(start, static_cast<size_t>(entry->length))));
+        if (sp == before) pmachine::rtl::detail::fail("unable to allocate reference slice");
         return stack[--sp];
     };
     std::function<void(Value, Value, size_t)> assignReference;
     assignReference = [&](Value reference, Value value, size_t depth) {
-        if (depth >= ManagedReferences::CAPACITY) cobolvm::detail::fail("P-code reference chain is too deep");
+        if (depth >= ManagedReferences::CAPACITY) pmachine::rtl::detail::fail("P-code reference chain is too deep");
         const auto* entry = references->get(reference);
         Value* target = referenceTarget(reference);
         if (entry->offset < 0) {
@@ -2213,18 +1855,18 @@ void PMachine::runInstructions(size_t instructionCount,
             return;
         }
         const Value original = dereference(*target, depth + 1);
-        std::string text = cobolvm::detail::utf8ToLatin1(stringAt(original));
+        std::string text = pmachine::rtl::detail::utf8ToLatin1(stringAt(original));
         const size_t offset = static_cast<size_t>(entry->offset);
         const size_t length = static_cast<size_t>(entry->length);
         if (offset > 8192 || length > 8192 - offset)
-            cobolvm::detail::fail("reference slice exceeds string capacity");
+            pmachine::rtl::detail::fail("reference slice exceeds string capacity");
         if (text.size() < offset + length) text.resize(offset + length, ' ');
-        std::string replacement = cobolvm::detail::utf8ToLatin1(stringAt(value)).substr(0, length);
+        std::string replacement = pmachine::rtl::detail::utf8ToLatin1(stringAt(value)).substr(0, length);
         replacement.resize(length, ' ');
         text.replace(offset, length, replacement);
         const int before = sp;
-        pushString(cobolvm::detail::latin1ToUtf8(text));
-        if (sp == before) cobolvm::detail::fail("unable to allocate reference assignment");
+        pushString(pmachine::rtl::detail::latin1ToUtf8(text));
+        if (sp == before) pmachine::rtl::detail::fail("unable to allocate reference assignment");
         const Value result = stack[--sp];
         if (target->isReference()) assignReference(*target, result, depth + 1);
         else *target = result;
@@ -2392,11 +2034,11 @@ void PMachine::runInstructions(size_t instructionCount,
                 }
             }
         }
-        auto localsIt = cobolLocalsByLabel.find(lookupLabel);
-        if (localsIt == cobolLocalsByLabel.end() && sigIt != procedureParamsByLabel.end())
-            localsIt = cobolLocalsByLabel.find(sigIt->first);
-        if (localsIt == cobolLocalsByLabel.end())
-            localsIt = cobolLocalsByLabel.find(instructionAt(targetPc).label);
+        auto localsIt = procedureLocalsByLabel.find(lookupLabel);
+        if (localsIt == procedureLocalsByLabel.end() && sigIt != procedureParamsByLabel.end())
+            localsIt = procedureLocalsByLabel.find(sigIt->first);
+        if (localsIt == procedureLocalsByLabel.end())
+            localsIt = procedureLocalsByLabel.find(instructionAt(targetPc).label);
         if (hostCallHook) {
             allocationStage = "hosted-call-frame";
             allocationBytes = 0;
@@ -2421,7 +2063,7 @@ void PMachine::runInstructions(size_t instructionCount,
                     return false;
                 }
             }
-            if (localsIt != cobolLocalsByLabel.end()) {
+            if (localsIt != procedureLocalsByLabel.end()) {
                 for (const auto& name : localsIt->second) {
                     if (hostedFrames->containsLocal(name.c_str())) continue;
                     hostedStorageError = hostedFrames->store(name.c_str(), Value(0));
@@ -2465,7 +2107,7 @@ void PMachine::runInstructions(size_t instructionCount,
             }
         }
 
-        if (localsIt != cobolLocalsByLabel.end()) {
+        if (localsIt != procedureLocalsByLabel.end()) {
             for (const auto& name : localsIt->second) {
                 bool exists = false;
                 for (const auto& binding : frameVars) if (binding.first == name) exists = true;
@@ -2629,7 +2271,7 @@ void PMachine::runInstructions(size_t instructionCount,
         gFlowState["__runtime_error"] = extendedAllocationError;
         goto pmachineRunExit;
     }
-    for (const auto& name : cobolGlobals) {
+    for (const auto& name : declaredGlobals) {
         if (extendedSlot(name)) continue;
         if (hostedFrames) {
             hostedStorageError = hostedFrames->store(name.c_str(), Value(0));
@@ -2775,7 +2417,7 @@ void PMachine::runInstructions(size_t instructionCount,
             continue;
         }
         case OP_PUSH_REF: {
-            if (sp >= STACK_SIZE) cobolvm::detail::fail("stack overflow");
+            if (sp >= STACK_SIZE) pmachine::rtl::detail::fail("stack overflow");
             VariableReference entry;
             entry.name = instr.strOperand;
             const size_t separator = entry.name.find_last_of('@');
@@ -2785,7 +2427,7 @@ void PMachine::runInstructions(size_t instructionCount,
                 char colon = 0;
                 if (!(operands >> entry.offset >> colon >> entry.length) || colon != ':' ||
                     entry.offset < 0 || entry.length < 0 || operands.peek() != std::char_traits<char>::eof())
-                    cobolvm::detail::fail("invalid reference slice: " + entry.name);
+                    pmachine::rtl::detail::fail("invalid reference slice: " + entry.name);
                 entry.name.resize(separator);
             }
             const size_t depth = hostedFrames ? hostedFrames->depth() : nameFrames.size();
@@ -2798,7 +2440,7 @@ void PMachine::runInstructions(size_t instructionCount,
                     break;
                 }
             }
-            if (!found) cobolvm::detail::fail("P-code reference target not found: " + entry.name);
+            if (!found) pmachine::rtl::detail::fail("P-code reference target not found: " + entry.name);
             std::array<bool, ManagedReferences::CAPACITY> live{};
             auto mark = [&](Value value) {
                 if (value.isReference() && value.handle < live.size()) live[value.handle] = true;
@@ -2812,7 +2454,7 @@ void PMachine::runInstructions(size_t instructionCount,
                 for (size_t index = 0; index < variable.elementCount; ++index) mark(variable.slots[index].value);
             references->sweep([&](uint16_t handle) { return live[handle]; });
             Value reference;
-            if (!references->store(entry, reference)) cobolvm::detail::fail("variable reference capacity exceeded");
+            if (!references->store(entry, reference)) pmachine::rtl::detail::fail("variable reference capacity exceeded");
             stack[sp++] = reference;
             ++pc;
             continue;
@@ -2907,8 +2549,8 @@ void PMachine::runInstructions(size_t instructionCount,
                 gFlowState["__runtime_error"] = "PUSH_DEC requires an unscaled integer and scale between 0 and 8191";
                 goto pmachineRunExit;
             }
-            const auto decimal = cobolvm::detail::decimalFromUnscaled(unscaled, scale);
-            if (!pushDecimalText(cobolvm::detail::formatDecimal(decimal))) {
+            const auto decimal = pmachine::rtl::detail::decimalFromUnscaled(unscaled, scale);
+            if (!pushDecimalText(pmachine::rtl::detail::formatDecimal(decimal))) {
                 gFlowState["__runtime_error"] = "unable to allocate decimal literal";
                 goto pmachineRunExit;
             }
@@ -2920,9 +2562,9 @@ void PMachine::runInstructions(size_t instructionCount,
                 gFlowState["__runtime_error"] = "DEC_STR requires a value";
                 goto pmachineRunExit;
             }
-            const cobolvm::detail::Decimal decimal =
-                cobolvm::detail::decimalFromString(valueAsDecimalText(stack[sp - 1]));
-            const std::string text = cobolvm::detail::formatDecimal(decimal);
+            const pmachine::rtl::detail::Decimal decimal =
+                pmachine::rtl::detail::decimalFromString(valueAsDecimalText(stack[sp - 1]));
+            const std::string text = pmachine::rtl::detail::formatDecimal(decimal);
             const int stackBefore = sp;
             pushString(text);
             if (sp == stackBefore) goto pmachineRunExit;
@@ -2937,8 +2579,8 @@ void PMachine::runInstructions(size_t instructionCount,
                 goto pmachineRunExit;
             }
             const std::string text = valueAsDecimalText(stack[sp - 1]);
-            const cobolvm::detail::Decimal decimal = cobolvm::detail::decimalFromString(text);
-            if (!pushDecimalText(cobolvm::detail::formatDecimal(decimal))) {
+            const pmachine::rtl::detail::Decimal decimal = pmachine::rtl::detail::decimalFromString(text);
+            if (!pushDecimalText(pmachine::rtl::detail::formatDecimal(decimal))) {
                 gFlowState["__runtime_error"] = "unable to allocate decimal value";
                 goto pmachineRunExit;
             }
@@ -2960,11 +2602,11 @@ void PMachine::runInstructions(size_t instructionCount,
                 goto pmachineRunExit;
             }
             operands >> rounding;
-            const cobolvm::detail::Decimal decimal =
-                cobolvm::detail::rescaleDecimal(
-                    cobolvm::detail::decimalFromString(valueAsDecimalText(stack[sp - 1])),
+            const pmachine::rtl::detail::Decimal decimal =
+                pmachine::rtl::detail::rescaleDecimal(
+                    pmachine::rtl::detail::decimalFromString(valueAsDecimalText(stack[sp - 1])),
                     scale, rounding == "ROUNDED");
-            if (!pushDecimalText(cobolvm::detail::formatDecimal(decimal))) {
+            if (!pushDecimalText(pmachine::rtl::detail::formatDecimal(decimal))) {
                 gFlowState["__runtime_error"] = "unable to allocate quantized decimal";
                 goto pmachineRunExit;
             }
@@ -2989,8 +2631,8 @@ void PMachine::runInstructions(size_t instructionCount,
             }
             operands >> sign;
             const int signMode = sign == "LEADING_SEPARATE" ? 1 : sign == "TRAILING_SEPARATE" ? 2 : 0;
-            const std::string text = cobolvm::detail::formatCobolDisplay(
-                cobolvm::detail::decimalFromString(valueAsDecimalText(stack[sp - 1])),
+            const std::string text = pulse::formatting::formatCobolDisplay(
+                pmachine::rtl::detail::decimalFromString(valueAsDecimalText(stack[sp - 1])),
                 precision, scale, signMode);
             const int stackBefore = sp;
             pushString(text);
@@ -3019,8 +2661,8 @@ void PMachine::runInstructions(size_t instructionCount,
                 gFlowState["__runtime_error"] = "DEC_EDIT flags must be 0 or 1";
                 goto pmachineRunExit;
             }
-            const std::string text = cobolvm::detail::formatCobolEdited(
-                cobolvm::detail::decimalFromString(valueAsDecimalText(stack[sp - 1])),
+            const std::string text = pulse::formatting::formatCobolEdited(
+                pmachine::rtl::detail::decimalFromString(valueAsDecimalText(stack[sp - 1])),
                 mask, decimalComma != 0, blankWhenZero != 0);
             const int stackBefore = sp;
             pushString(text);
@@ -3037,8 +2679,8 @@ void PMachine::runInstructions(size_t instructionCount,
             }
             int digits = 0;
             std::istringstream(instr.strOperand) >> digits;
-            const auto decimal = cobolvm::detail::decimalFromString(valueAsDecimalText(stack[--sp]));
-            stack[sp++] = digits > 0 && cobolvm::detail::decimalDigitCount(decimal) <= digits ? 1 : 0;
+            const auto decimal = pmachine::rtl::detail::decimalFromString(valueAsDecimalText(stack[--sp]));
+            stack[sp++] = digits > 0 && pmachine::rtl::detail::decimalDigitCount(decimal) <= digits ? 1 : 0;
             ++pc;
             continue;
         }
@@ -3061,12 +2703,12 @@ void PMachine::runInstructions(size_t instructionCount,
                 const Value rhsValue = stack[--sp];
                 const Value lhsValue = stack[sp - 1];
                 if (lhsValue.isDecimal() || rhsValue.isDecimal()) {
-                    const auto lhs = cobolvm::detail::decimalFromString(valueAsDecimalText(lhsValue));
-                    const auto rhs = cobolvm::detail::decimalFromString(valueAsDecimalText(rhsValue));
+                    const auto lhs = pmachine::rtl::detail::decimalFromString(valueAsDecimalText(lhsValue));
+                    const auto rhs = pmachine::rtl::detail::decimalFromString(valueAsDecimalText(rhsValue));
                     const char operation = instr.opcode == OP_ADD ? '+' : instr.opcode == OP_SUB ? '-' :
                         instr.opcode == OP_MUL ? '*' : '/';
-                    if (!pushDecimalText(cobolvm::detail::formatDecimal(
-                        cobolvm::detail::decimalArithmetic(operation, lhs, rhs)))) {
+                    if (!pushDecimalText(pmachine::rtl::detail::formatDecimal(
+                        pmachine::rtl::detail::decimalArithmetic(operation, lhs, rhs)))) {
                         gFlowState["__runtime_error"] = "unable to allocate decimal result";
                         goto pmachineRunExit;
                     }
@@ -3123,9 +2765,9 @@ void PMachine::runInstructions(size_t instructionCount,
                 const Value rhsValue = stack[--sp];
                 const Value lhsValue = stack[sp - 1];
                 if (lhsValue.isDecimal() || rhsValue.isDecimal()) {
-                    const int order = cobolvm::detail::compareDecimals(
-                        cobolvm::detail::decimalFromString(valueAsDecimalText(lhsValue)),
-                        cobolvm::detail::decimalFromString(valueAsDecimalText(rhsValue)));
+                    const int order = pmachine::rtl::detail::compareDecimals(
+                        pmachine::rtl::detail::decimalFromString(valueAsDecimalText(lhsValue)),
+                        pmachine::rtl::detail::decimalFromString(valueAsDecimalText(rhsValue)));
                     stack[sp - 1] = compareOperands(instr.opcode, order, 0);
                     ++pc;
                     continue;
@@ -3502,9 +3144,9 @@ void PMachine::runInstructions(size_t instructionCount,
         }
         case OP_CALL_EXT: {
             const std::string symbol = trimCopy(instr.strOperand);
-            const int bindingId = cobolvm::detail::findBinding(symbol);
-            if (bindingId >= 0 && !cobolvm::detail::isDelegatedBinding(bindingId)) {
-                using namespace cobolvm::detail;
+            const int bindingId = pmachine::rtl::detail::findBinding(symbol);
+            if (bindingId >= 0 && !pmachine::rtl::detail::isDelegatedBinding(bindingId)) {
+                using namespace pmachine::rtl::detail;
                 const BindingSpec& spec = bindingSpec(bindingId);
                 if (instr.value != spec.arity || sp < instr.value)
                     fail("Invalid host binding call or stack underflow: " + symbol);
@@ -4034,7 +3676,7 @@ void PMachine::runInstructions(size_t instructionCount,
                 srcDoc.clear();
                 srcDoc.to<JsonObject>()["src"] = currentMessage.c_str();
             }
-            pushString(getJsonPathValueAsString(srcDoc.as<JsonVariantConst>(), path));
+            pushString(pulse::messages::native::getJsonPathValueAsString(srcDoc.as<JsonVariantConst>(), path));
             ++pc;
             continue;
         }
@@ -4043,7 +3685,7 @@ void PMachine::runInstructions(size_t instructionCount,
             const std::string path = unquote(instr.strOperand);
             const std::string value = popString();
             if (!mapOutputActive) { mapOutputDoc.clear(); mapOutputDoc.to<JsonObject>(); mapOutputActive = true; }
-            setJsonPathValue(mapOutputDoc, path, value);
+            pulse::messages::native::setJsonPathValue(mapOutputDoc, path, value);
             ++pc;
             continue;
         }
@@ -4052,26 +3694,26 @@ void PMachine::runInstructions(size_t instructionCount,
             std::string v = popString(); pushString(toUpperCopy(v)); ++pc; continue;
         }
         case OP_YYMMDD_TO_ISO: {
-            std::string v = popString(); pushString(mapOpYymmddToIso(v)); ++pc; continue;
+            std::string v = popString(); pushString(pulse::swift::native::mapOpYymmddToIso(v)); ++pc; continue;
         }
         case OP_MT_AMOUNT_TO_DECIMAL: {
-            std::string v = popString(); pushString(normalizeMtAmount(v)); ++pc; continue;
+            std::string v = popString(); pushString(pulse::swift::native::normalizeMtAmount(v)); ++pc; continue;
         }
         case OP_MT_PARTY_NAME: {
-            std::string v = popString(); pushString(mapOpMtPartyName(v)); ++pc; continue;
+            std::string v = popString(); pushString(pulse::swift::native::mapOpMtPartyName(v)); ++pc; continue;
         }
         case OP_MT_CHARGE_TO_ISO: {
-            std::string v = popString(); pushString(mapOpMtChargeToIso(v)); ++pc; continue;
+            std::string v = popString(); pushString(pulse::swift::native::mapOpMtChargeToIso(v)); ++pc; continue;
         }
         case OP_ROUTE_TRANSFORM: {
-            currentMessage = applyTransformRuleText(*this, instr.strOperand, currentMessage);
+            currentMessage = pulse::messages::native::applyTransformRuleText(*this, instr.strOperand, currentMessage);
             ++pc;
             continue;
         }
         // ROUTE_MAP_RUN carries a bare mapper id; dispatch straight into the
         // compiled mapper via the same handler (no string interpretation).
         case OP_ROUTE_MAP_RUN: {
-            currentMessage = applyTransformRuleText(*this, instr.strOperand, currentMessage);
+            currentMessage = pulse::messages::native::applyTransformRuleText(*this, instr.strOperand, currentMessage);
             ++pc;
             continue;
         }
@@ -4187,7 +3829,7 @@ void PMachine::runInstructions(size_t instructionCount,
         }
         case OP_PARSE_FIN_TEXT: {
             JsonDocument parsed;
-            parseMT103FinText(currentMessage, parsed);
+            pulse::swift::native::parseMT103FinText(currentMessage, parsed);
             std::string asJson;
             serializeJson(parsed, asJson);
             currentMessage = asJson;
@@ -4350,7 +3992,7 @@ void PMachine::runInstructions(size_t instructionCount,
             const std::string mapId = unquote(args.size() > 1 ? args[1] : "");
             std::string mapped;
             std::string error;
-            if (!runMappingById(*this, mapId, payload, mapped, error)) {
+            if (!pulse::messages::native::runMappingById(*this, mapId, payload, mapped, error)) {
                 gFlowState["__map_error"] = error;
                 mapped = payload;
             }
@@ -4556,7 +4198,7 @@ void PMachine::runInstructions(size_t instructionCount,
             const std::string localMappingId = request.subflowId + ".MT103ToPACS008";
             std::string localResponse;
             std::string localError;
-            if (runMappingById(*this, localMappingId, payload, localResponse, localError)) {
+            if (pulse::messages::native::runMappingById(*this, localMappingId, payload, localResponse, localError)) {
                 OrchestrationTaskResult localResult;
                 localResult.handleRef = request.handleRef;
                 localResult.subflowId = request.subflowId;
@@ -4686,7 +4328,7 @@ void PMachine::runInstructions(size_t instructionCount,
         }
     }
     }
-    } catch (const cobolvm::detail::VmError& failure) {
+    } catch (const pmachine::rtl::detail::VmError& failure) {
         gFlowState["__runtime_error"] = failure.what();
     }
     pmachineRunExit:
@@ -4803,6 +4445,7 @@ void PMachine::runInstructions(size_t instructionCount,
         lastRunGlobals[setEntry.first] = value;
     }
     pmachineRunComplete:
+    if (hostedStorageError) gFlowState["__runtime_error"] = hostedStorageError;
     lastRunStepCount = steps;
     running = false;
     if (debugRunStatus.load() != 0) debugRunStatus.store(3);
@@ -4810,93 +4453,6 @@ void PMachine::runInstructions(size_t instructionCount,
         unloadUnit();
     }
     PMTRACE(Serial.println("[DEBUG] Execution finished."));
-}
-
-void PMachine::runCobolProgram(const std::string& pcodeText, HostExecutionStorage& storage) {
-    flowState.clear();
-    decltype(lastRunTextOutput)().swap(lastRunTextOutput);
-    decltype(lastRunTrace)().swap(lastRunTrace);
-    lastRunGlobals.clear();
-    lastRunStepLimitHit = false;
-    lastRunStepCount = 0;
-    running = true;
-    this->pc = 0;
-
-    std::map<std::string, cobolvm::ProcedureInfo> procedures;
-    for (const auto& entry : procedureParamsByLabel) procedures[entry.first].params = entry.second;
-    for (const auto& entry : cobolLocalsByLabel) procedures[entry.first].locals = entry.second;
-
-    cobolvm::RunOptions options;
-    options.variableArena = storage.objectArenaData();
-    options.variableArenaBytes = HostExecutionStorage::OBJECT_ARENA_BYTES;
-    options.procedures = &procedures;
-    options.globals = &cobolGlobals;
-    options.hasSourceMessage = !currentMessage.empty();
-    options.sourceMessage = currentMessage;
-    options.onLine = [this](const std::string& line) {
-        if (textOutputHook) {
-            textOutputHook(line, textOutputContext);
-        } else {
-            lastRunTextOutput.push_back(line);
-        }
-    };
-#if defined(ESP32)
-    options.onYield = [] {
-        esp_task_wdt_reset();
-        vTaskDelay(1);
-    };
-    options.random = [] { return static_cast<double>(esp_random()) / 4294967296.0; };
-#endif
-    if (hostCallHook) {
-        options.hostFallback = [this](const std::string& name, const std::vector<cobolvm::HostArg>& args,
-                                      cobolvm::HostArg& result, std::string& error) {
-            std::vector<HostValue> hostArgs;
-            hostArgs.reserve(args.size());
-            for (const auto& arg : args) {
-                HostValue value;
-                value.isString = arg.isString;
-                if (arg.isString) value.text = arg.text;
-                else value.integer = static_cast<int>(arg.number);
-                hostArgs.push_back(std::move(value));
-            }
-            HostValue hostResult;
-            if (!hostCallHook(name, hostArgs, hostResult, error, hostCallContext)) return false;
-            result.isString = hostResult.isString;
-            result.text = hostResult.text;
-            result.number = hostResult.integer;
-            return true;
-        };
-    }
-
-    allocationStage = "cobol-program";
-    cobolvm::RunResult result = cobolvm::runText(pcodeText, options);
-    for (auto& line : result.lines) lastRunTextOutput.push_back(std::move(line));
-    if (result.hasError) flowState["__runtime_error"] = result.error;
-    lastRunStepLimitHit = result.stepLimitHit;
-    lastRunStepCount = result.steps;
-    for (auto& entry : result.globals) {
-        GlobalValue value;
-        const cobolvm::GlobalOut& out = entry.second;
-        if (out.kind == cobolvm::GlobalOut::String) {
-            value.isString = true;
-            value.strValue = out.text;
-        } else if (out.kind == cobolvm::GlobalOut::Number && std::isfinite(out.number)
-                   && out.number == std::floor(out.number)
-                   && out.number >= std::numeric_limits<int>::min()
-                   && out.number <= std::numeric_limits<int>::max()) {
-            value.intValue = static_cast<int>(out.number);
-        } else {
-            value.isReal = true;
-            value.realValue = static_cast<float>(out.number);
-        }
-        lastRunGlobals[entry.first] = std::move(value);
-    }
-    allocationStage = "idle";
-    running = false;
-    if (debugRunStatus.load() != 0) debugRunStatus.store(3);
-    if (runtimeUnit.kind == RuntimeUnitKind::Program) {
-        unloadUnit();
-    }
 }
 
 bool PMachine::didLastRunHitStepLimit() const {

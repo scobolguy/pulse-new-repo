@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import * as vscode from 'vscode';
 import { HanoiPanel, looksLikeHanoi } from './hanoiPanel.js';
 import { ServicesViewProvider, openServiceEndpoint } from './servicesView.js';
+import { SwarmViewProvider } from './swarmView.js';
 import { registerDataMapper } from './dataMapperEditor.js';
 import { DataLibrarianViewProvider, openLibrarianSchema } from './dataLibrarianView.js';
 import { Esp32LibrarianViewProvider, openEsp32LibrarianSchema } from './esp32LibrarianView.js';
@@ -23,6 +24,8 @@ function defaultTargetHost(runtime) {
 }
 function languageForFile(filePath) {
     switch (path.extname(filePath).toLowerCase()) {
+        case '.kt':
+            return 'kotlin';
         case '.cs':
             return 'csharp';
         case '.ftn':
@@ -72,7 +75,7 @@ function wflCompileOptions(scope, overrides = {}) {
     };
 }
 async function compileWflSource(root, sourceText, fileName, options = {}) {
-    const scripts = path.join(root, 'aggregator', 'scripts');
+    const scripts = path.join(root, '..', '..', 'languages', 'wfl', 'src');
     const [dslCompiler, pcodeCompiler] = await Promise.all([
         import(pathToFileURL(path.join(scripts, 'compile-workflow-dsl.mjs')).href),
         import(pathToFileURL(path.join(scripts, 'compile-workflow-to-pcode.mjs')).href),
@@ -165,23 +168,17 @@ async function cobolRuntimeContext(root, projectDirectory, configuredDataDirecto
         throw new Error(`COBOL debugger storage must be a real directory: ${dataDirectory}`);
     }
     const javascript = path.join(root, 'pmachines', 'javascript', 'src');
-    const [textBindings, dateBindings, intrinsicBindings, filesystemModule, isamModule] = await Promise.all([
-        import(pathToFileURL(path.join(javascript, 'desktop-text-bindings.mjs')).href),
-        import(pathToFileURL(path.join(javascript, 'desktop-date-bindings.mjs')).href),
-        import(pathToFileURL(path.join(javascript, 'desktop-intrinsic-bindings.mjs')).href),
+    const [libraryModule, filesystemModule] = await Promise.all([
+        import(pathToFileURL(path.join(root, 'libraries', 'cobol', 'host-library.mjs')).href),
         import(pathToFileURL(path.join(javascript, 'filesystem-bindings.mjs')).href),
-        import(pathToFileURL(path.join(javascript, 'isam-bindings.mjs')).href),
     ]);
     const filesystem = await filesystemModule.createFilesystemBindings({
         data: { path: dataDirectory, readOnly: false },
     });
-    const isamBindings = isamModule.createIsamBindings(filesystem.handlers);
+    const library = libraryModule.createCobolHostLibrary(filesystem.handlers);
     const bindings = {
-        ...textBindings.createDesktopTextBindings(),
-        ...dateBindings.createDesktopDateBindings(),
-        ...intrinsicBindings.createDesktopIntrinsicBindings(),
+        ...library.handlers,
         ...filesystem.handlers,
-        ...isamBindings,
     };
     return {
         callHost(name, args) {
@@ -191,9 +188,22 @@ async function cobolRuntimeContext(root, projectDirectory, configuredDataDirecto
             return handler(...args);
         },
         dispose() {
-            isamBindings.dispose();
+            return library.dispose();
         },
     };
+}
+async function fortranRuntimeContext(root, program, configuration) {
+    const module = await import(pathToFileURL(path.join(root, 'pmachines', 'javascript', 'src', 'fortran-context.mjs')).href);
+    const folder = path.dirname(program);
+    const settings = vscode.workspace.getConfiguration('pulse-pmachine');
+    const inputFile = configuration?.fortranInputFile ?? settings.get('fortranInputFile', '');
+    const stdin = configuration?.stdin ?? settings.get('fortranInput', '');
+    return module.createFortranRuntimeContext({
+        dataDirectory: configuration?.fortranDataDirectory
+            ? path.resolve(folder, String(configuration.fortranDataDirectory))
+            : path.join(folder, '.pulse-debug', 'fortran-data'),
+        ...(inputFile ? { inputFile: path.resolve(folder, String(inputFile)) } : { stdin }),
+    });
 }
 class PulsePmachineAdapter {
     configuration;
@@ -301,6 +311,7 @@ class PulsePmachineAdapter {
                 this.respond(request, true, {
                     supportsConfigurationDoneRequest: true,
                     supportsStepOver: true,
+                    supportsSteppingGranularity: true,
                     supportsPauseRequest: path.extname(String(this.configuration.program || '')).toLowerCase() !== '.pcode',
                     supportsTerminateRequest: true,
                     supportsEvaluateForHovers: true,
@@ -372,7 +383,9 @@ class PulsePmachineAdapter {
                 if (this.nativePcode)
                     await this.resumeNativePcode('step');
                 else if (this.remoteEsp32)
-                    await this.stepEsp32('step-over');
+                    await this.stepEsp32('step-over', request.arguments?.granularity === 'instruction');
+                else if (request.arguments?.granularity === 'instruction')
+                    await this.resumeUntilPause('step-over');
                 else
                     await this.stepToNextSource('step-over');
                 return;
@@ -381,7 +394,9 @@ class PulsePmachineAdapter {
                 if (this.nativePcode)
                     await this.resumeNativePcode('step');
                 else if (this.remoteEsp32)
-                    await this.stepEsp32('step-in');
+                    await this.stepEsp32('step-in', request.arguments?.granularity === 'instruction');
+                else if (request.arguments?.granularity === 'instruction')
+                    await this.resumeUntilPause('step-in');
                 else
                     await this.stepToNextSource('step-in');
                 return;
@@ -469,7 +484,12 @@ class PulsePmachineAdapter {
             this.event('output', { category: 'console', output: `WFL environment: ${wfl.environment}\n` });
         }
         else {
-            if (language === 'csharp') {
+            if (language === 'kotlin') {
+                artifact = await compileKotlinSource(this.root, source, path.basename(program), configuration.runtime === 'esp32' ? 'esp32' : 'js');
+                rejectKotlinServiceForRun(artifact);
+                wflEntryLine = Number(artifact.programMap.sourceMap?.[0]?.sourceLine) || 1;
+            }
+            else if (language === 'csharp') {
                 const compiler = await import(pathToFileURL(path.join(this.root, 'aggregator', 'scripts', 'compile-csharp-to-pcode.mjs')).href);
                 artifact = compiler.compileCsharpToPcode(source, { fileName: path.basename(program) });
                 wflEntryLine = Number(artifact.programMap.sourceMap?.[0]?.sourceLine) || 1;
@@ -484,7 +504,7 @@ class PulsePmachineAdapter {
                 artifact = await compileCobolSource(this.root, source, path.basename(program), format);
             }
             else if (language === 'mapl') {
-                const compiler = await import(pathToFileURL(path.join(this.root, 'aggregator', 'scripts', 'compile-mapl-antlr-to-pcode.mjs')).href);
+                const compiler = await import(pathToFileURL(path.join(this.root, '..', '..', 'languages', 'mapl', 'src', 'compile-mapl-antlr-to-pcode.mjs')).href);
                 artifact = compiler.compileMaplWithAntlr(source);
             }
             else {
@@ -497,6 +517,10 @@ class PulsePmachineAdapter {
                     : compiler.compileVbishToPmachine;
                 artifact = compile(source, { fileName: path.basename(program) });
             }
+        }
+        if (artifact.programMap?.requiredRuntimeLibraries?.includes('fortran77')
+            && !['js', 'js-node', undefined].includes(configuration.runtime)) {
+            throw new Error('Extended FORTRAN 77 currently requires the JavaScript PMachine; ESP32/native runtimes are not supported.');
         }
         this.runtime = { program, language, artifact };
         this.animate = configuration.animate === true;
@@ -517,7 +541,8 @@ class PulsePmachineAdapter {
         }
         const runtimeContext = language === 'cobolish'
             ? await cobolRuntimeContext(this.root, projectDirectory, configuration.cobolDataDirectory)
-            : undefined;
+            : language === 'mnf' ? await fortranRuntimeContext(this.root, program, configuration)
+                : undefined;
         this.state = this.debug.createJavaScriptPmachineDebugSession({
             pcodeText: artifact.pcodeText,
             programMap: artifact.programMap,
@@ -1159,8 +1184,14 @@ class PulsePmachineAdapter {
         }
         throw new Error('Timed out waiting for the ESP32 PMachine step.');
     }
-    async stepEsp32(mode) {
-        if (this.bridge) {
+    async stepEsp32(mode, instruction = false) {
+        if (instruction && mode === 'step-in') {
+            await this.advanceEsp32Instruction();
+            if (!this.terminated)
+                this.event('stopped', { reason: 'step', threadId: this.threadId });
+            return;
+        }
+        if (this.bridge && !instruction) {
             await this.bridge.controlEsp32DebugSession({ host: this.debugApiHost, sessionId: this.remoteSessionId, action: `line-${mode}` });
             this.state = await this.readEsp32State();
             this.forwardOutput();
@@ -1215,7 +1246,7 @@ class PulsePmachineAdapter {
             const stop = mode === 'step-out'
                 ? nextDepth < depth || (depth === 0 && changedSource)
                 : changedSource && (mode === 'step-in' || nextDepth <= depth);
-            if (stop) {
+            if (stop || instruction) {
                 this.event('stopped', { reason: 'step', threadId: this.threadId });
                 return;
             }
@@ -1487,6 +1518,8 @@ async function defaultPmachine(output) {
 function pcodeLanguage(document) {
     const languageId = document.languageId.toLowerCase();
     const extension = path.extname(document.fileName).toLowerCase();
+    if (languageId === 'kotlin' || extension === '.kt')
+        return 'kotlin';
     if (languageId === 'csharp' || extension === '.cs')
         return 'csharp';
     if (languageId === 'cobolish' || ['.cob', '.cobol'].includes(extension))
@@ -1503,7 +1536,16 @@ function pcodeLanguage(document) {
         return 'mapl';
     return null;
 }
-async function compileDocumentToPcode(document, hostServices = false) {
+async function compileKotlinSource(root, source, fileName, target) {
+    const compiler = await import(pathToFileURL(path.join(root, '..', '..', 'languages', 'kotlin', 'src', 'compile-kotlin-to-pcode.mjs')).href);
+    return compiler.compileKotlinToPcode(source, { fileName, target });
+}
+function rejectKotlinServiceForRun(artifact) {
+    if (artifact.programMap.hostBindingsVersion) {
+        throw new Error('Kotlin hosted services require a service host; Run and Debug support Kotlin console programs only.');
+    }
+}
+async function compileDocumentToPcode(document, hostServices = false, target = 'js') {
     const language = pcodeLanguage(document);
     if (!language)
         throw new Error('This file is not a supported pcode language.');
@@ -1513,6 +1555,11 @@ async function compileDocumentToPcode(document, hostServices = false) {
     const scripts = path.join(runtimeRoot, 'aggregator', 'scripts');
     const sourceText = document.getText();
     const fileName = path.basename(document.fileName);
+    if (language === 'kotlin') {
+        const artifact = await compileKotlinSource(runtimeRoot, sourceText, fileName, target);
+        rejectKotlinServiceForRun(artifact);
+        return artifact;
+    }
     if (language === 'csharp') {
         const compiler = await import(pathToFileURL(path.join(scripts, 'compile-csharp-to-pcode.mjs')).href);
         return compiler.compileCsharpToPcode(sourceText, { fileName });
@@ -1538,7 +1585,7 @@ async function compileDocumentToPcode(document, hostServices = false) {
         const artifact = await compileWflSource(runtimeRoot, sourceText, fileName, wflCompileOptions(document.uri));
         return { pcodeText: artifact.pcodeText, programMap: artifact.programMap };
     }
-    const compiler = await import(pathToFileURL(path.join(scripts, 'compile-mapl-antlr-to-pcode.mjs')).href);
+    const compiler = await import(pathToFileURL(path.join(runtimeRoot, '..', '..', 'languages', 'mapl', 'src', 'compile-mapl-antlr-to-pcode.mjs')).href);
     const artifact = compiler.compileMaplWithAntlr(sourceText);
     return { pcodeText: artifact.pcodeText, programMap: artifact.programMap };
 }
@@ -1546,8 +1593,14 @@ async function compileForTarget(document, target) {
     if (pcodeLanguage(document) === 'csharp' && !['js', 'js-node'].includes(target.runtime)) {
         throw new Error('C# currently targets the JavaScript PMachine only.');
     }
-    if (!target.host || pcodeLanguage(document) !== 'pascalish')
-        return compileDocumentToPcode(document);
+    if (!target.host || pcodeLanguage(document) !== 'pascalish') {
+        const artifact = await compileDocumentToPcode(document, false, target.runtime === 'esp32' ? 'esp32' : 'js');
+        if (artifact.programMap.requiredRuntimeLibraries?.includes('fortran77')
+            && !['js', 'js-node'].includes(target.runtime)) {
+            throw new Error('Extended FORTRAN 77 currently requires the JavaScript PMachine; ESP32/native runtimes are not supported.');
+        }
+        return artifact;
+    }
     try {
         return await compileDocumentToPcode(document, true);
     }
@@ -1660,6 +1713,14 @@ async function runOnLocalJsPmachine(document, pcodeText, programMap) {
         || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
     const root = await findPmachineRoot(document.fileName, workspaceRoot);
     const runtime = await import(pathToFileURL(path.join(root, 'pmachines', 'javascript', 'index.mjs')).href);
+    if (pcodeLanguage(document) === 'mnf') {
+        return runtime.executeProgram({
+            instructions: runtime.parsePcode(pcodeText), opcodeMap: await runtime.loadOpcodeMap(),
+            mappingsById: runtime.parseProgramMapMappings(programMap), queueTypesByName: new Map(),
+            isoTypeIds: new Set(), sourceMessage: '', inputQueue: 'vscode.pmachine',
+            runtimeContext: await fortranRuntimeContext(root, document.fileName),
+        });
+    }
     if (pcodeLanguage(document) === 'cobolish') {
         const runtimeContext = await cobolRuntimeContext(root, workspaceRoot || path.dirname(document.fileName));
         try {
@@ -1670,7 +1731,7 @@ async function runOnLocalJsPmachine(document, pcodeText, programMap) {
             });
         }
         finally {
-            runtimeContext.dispose();
+            await runtimeContext.dispose();
         }
     }
     const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'pulse-vscode-run-'));
@@ -1776,6 +1837,10 @@ async function runCurrentFile(context, output, hanoiPanel) {
         void vscode.window.showWarningMessage('Open a Pulse language source file before running it.');
         return;
     }
+    if (document.languageId === 'assemblerish' || path.extname(document.fileName).toLowerCase() === '.asmish') {
+        void vscode.window.showWarningMessage('Use Pulse: Compile Assemblerish Handler, then the HAL deployment CLI with explicit pin grants. Hardware routines are not console programs.');
+        return;
+    }
     if (document.isDirty && !await document.save()) {
         void vscode.window.showErrorMessage('Save the active program before running it.');
         return;
@@ -1794,7 +1859,7 @@ async function runCurrentFile(context, output, hanoiPanel) {
         return;
     }
     if (!pcodeLanguage(document)) {
-        void vscode.window.showWarningMessage('Run on PMachine supports Pascalish, COBOLish, VBish, C#, MNF FORTRAN, WFL, and MAPL sources.');
+        void vscode.window.showWarningMessage('Run on PMachine supports Kotlin, Pascalish, COBOLish, VBish, C#, MNF FORTRAN, WFL, and MAPL sources.');
         return;
     }
     output.clear();
@@ -1902,6 +1967,11 @@ export function activate(context) {
     const hanoiPanel = new HanoiPanel();
     const services = new ServicesViewProvider(output);
     const servers = new ServicesViewProvider(output, 'servers');
+    const swarm = new SwarmViewProvider(output);
+    const swarmTree = vscode.window.createTreeView('pulseCatalogStudio.swarm', { treeDataProvider: swarm });
+    const swarmRefresh = setInterval(() => { if (swarmTree.visible)
+        swarm.refresh(); }, 15000);
+    swarmRefresh.unref();
     const librarian = new DataLibrarianViewProvider(output);
     const esp32Librarian = new Esp32LibrarianViewProvider(output);
     const createAutoExpandingTreeView = (viewId, provider) => {
@@ -1917,10 +1987,12 @@ export function activate(context) {
         return treeView;
     };
     registerDataMapper(context, output);
-    context.subscriptions.push(output, hanoiPanel, services, servers, librarian, esp32Librarian, createAutoExpandingTreeView('pulseCatalogStudio.sidebar', librarian), createAutoExpandingTreeView('pulseCatalogStudio.esp32Librarian', esp32Librarian), vscode.commands.registerCommand('pulse-pmachine.refreshEsp32Librarian', () => esp32Librarian.refresh()), vscode.commands.registerCommand('pulse-pmachine.openEsp32LibrarianSchema', (item) => openEsp32LibrarianSchema(item)), vscode.window.registerTreeDataProvider('pulse-pmachine.services', services), vscode.window.registerTreeDataProvider('pulse-pmachine.servers', servers), createAutoExpandingTreeView('pulse-pmachine.dataLibrarian', librarian), vscode.commands.registerCommand('pulse-pmachine.refreshLibrarian', () => librarian.refresh()), vscode.commands.registerCommand('pulse-pmachine.openLibrarianSchema', (item) => openLibrarianSchema(item, librarian)), vscode.commands.registerCommand('pulse-pmachine.showDataLibrarian', () => vscode.commands.executeCommand('pulse-pmachine.dataLibrarian.focus')), vscode.workspace.onDidGrantWorkspaceTrust(() => { librarian.refresh(); esp32Librarian.refresh(); }), vscode.commands.registerCommand('pulse-pmachine.refreshServices', () => services.refresh()), vscode.commands.registerCommand('pulse-pmachine.refreshServers', () => servers.refresh()), vscode.commands.registerCommand('pulse-pmachine.openServiceEndpoint', openServiceEndpoint), vscode.workspace.onDidChangeConfiguration(event => {
+    context.subscriptions.push(output, hanoiPanel, services, servers, swarm, swarmTree, { dispose: () => clearInterval(swarmRefresh) }, swarmTree.onDidChangeVisibility(event => { if (event.visible)
+        swarm.refresh(); }), vscode.commands.registerCommand('pulse-pmachine.refreshSwarm', () => swarm.refresh()), librarian, esp32Librarian, createAutoExpandingTreeView('pulseCatalogStudio.sidebar', librarian), createAutoExpandingTreeView('pulseCatalogStudio.esp32Librarian', esp32Librarian), vscode.commands.registerCommand('pulse-pmachine.refreshEsp32Librarian', () => esp32Librarian.refresh()), vscode.commands.registerCommand('pulse-pmachine.openEsp32LibrarianSchema', (item) => openEsp32LibrarianSchema(item)), vscode.window.registerTreeDataProvider('pulse-pmachine.services', services), vscode.window.registerTreeDataProvider('pulse-pmachine.servers', servers), createAutoExpandingTreeView('pulse-pmachine.dataLibrarian', librarian), vscode.commands.registerCommand('pulse-pmachine.refreshLibrarian', () => librarian.refresh()), vscode.commands.registerCommand('pulse-pmachine.openLibrarianSchema', (item) => openLibrarianSchema(item, librarian)), vscode.commands.registerCommand('pulse-pmachine.showDataLibrarian', () => vscode.commands.executeCommand('pulse-pmachine.dataLibrarian.focus')), vscode.workspace.onDidGrantWorkspaceTrust(() => { librarian.refresh(); esp32Librarian.refresh(); }), vscode.commands.registerCommand('pulse-pmachine.refreshServices', () => services.refresh()), vscode.commands.registerCommand('pulse-pmachine.refreshServers', () => servers.refresh()), vscode.commands.registerCommand('pulse-pmachine.openServiceEndpoint', openServiceEndpoint), vscode.workspace.onDidChangeConfiguration(event => {
         if (event.affectsConfiguration('pulse-pmachine.backendUrl')) {
             services.refresh();
             servers.refresh();
+            swarm.refresh();
             librarian.refresh();
             esp32Librarian.refresh();
         }
@@ -1937,6 +2009,63 @@ export function activate(context) {
             language: selected.editor.id, content: selected.editor.content,
         });
         await vscode.window.showTextDocument(document);
+    }), vscode.commands.registerCommand('pulse-pmachine.compileScreenRequester', async () => {
+        try {
+            const document = vscode.window.activeTextEditor?.document;
+            if (!document || document.languageId !== 'screencobol') {
+                throw new Error('Open a SCREEN COBOL requester before compiling it.');
+            }
+            const workspaceRoot = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath;
+            const root = await findPmachineRoot(document.fileName, workspaceRoot);
+            const compiler = await import(pathToFileURL(path.join(root, '..', '..', 'languages', 'screencobol', 'src', 'compiler.mjs')).href);
+            const artifact = compiler.compileScreenCobol(document.getText(), { fileName: path.basename(document.fileName) });
+            const destination = await vscode.window.showSaveDialog({
+                title: 'Save compiled SCREEN COBOL requester',
+                defaultUri: vscode.Uri.file(`${document.fileName}.pcode`),
+                filters: { 'PMachine P-code': ['pcode'] },
+            });
+            if (!destination)
+                return;
+            await fs.writeFile(destination.fsPath, artifact.pcodeText, 'utf8');
+            await fs.writeFile(`${destination.fsPath}.map.json`, `${JSON.stringify(artifact.programMap, null, 2)}\n`, 'utf8');
+            output.appendLine(`Compiled requester: ${destination.fsPath}`);
+            output.appendLine('Run this artifact with the Pathway requester host; it requires screen and server-class bindings.');
+            output.show(true);
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            output.appendLine(`SCREEN COBOL compilation failed: ${message}`);
+            void vscode.window.showErrorMessage(`SCREEN COBOL compilation failed: ${message}`);
+        }
+    }), vscode.commands.registerCommand('pulse-pmachine.compileHardwareHandler', async () => {
+        try {
+            const document = vscode.window.activeTextEditor?.document;
+            if (!document || document.languageId !== 'assemblerish') {
+                throw new Error('Open an Assemblerish handler before compiling it.');
+            }
+            const workspaceRoot = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath;
+            const root = await findPmachineRoot(document.fileName, workspaceRoot);
+            const compiler = await import(pathToFileURL(path.join(root, '..', '..', 'languages', 'assemblerish', 'src', 'compile-assemblerish-to-pcode.mjs')).href);
+            const artifact = compiler.compileAssemblerishToPcode(document.getText(), { fileName: path.basename(document.fileName) });
+            const destination = await vscode.window.showSaveDialog({
+                title: 'Save compiled Assemblerish handler',
+                defaultUri: vscode.Uri.file(`${document.fileName}.pcode`),
+                filters: { 'PMachine P-code': ['pcode'] },
+            });
+            if (!destination)
+                return;
+            await fs.writeFile(destination.fsPath, artifact.pcodeText, 'utf8');
+            await fs.writeFile(`${destination.fsPath}.map.json`, `${JSON.stringify(artifact.programMap, null, 2)}\n`, 'utf8');
+            output.appendLine(`Compiled hardware handler: ${destination.fsPath}`);
+            output.appendLine(`Program map: ${destination.fsPath}.map.json`);
+            output.appendLine('Not installed. Deploy the source with the Assemblerish CLI and explicit allowed pins.');
+            output.show(true);
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            output.appendLine(`Assemblerish compilation failed: ${message}`);
+            void vscode.window.showErrorMessage(`Assemblerish compilation failed: ${message}`);
+        }
     }), vscode.commands.registerCommand('pulse-pmachine.runCurrentFile', () => runCurrentFile(context, output, hanoiPanel)), vscode.commands.registerCommand('pulse-pmachine.showAnimation', () => hanoiPanel.show('Towers of Hanoi')), vscode.debug.onDidReceiveDebugSessionCustomEvent((event) => {
         if (event.session.type !== 'pulse-pmachine')
             return;
@@ -1961,6 +2090,7 @@ export function activate(context) {
         { language: 'mnf' },
         { language: 'fortranish' },
         { language: 'csharp' },
+        { language: 'kotlin' },
         { language: 'cobolish' },
         { language: 'wfl' },
         { language: 'mapl' },

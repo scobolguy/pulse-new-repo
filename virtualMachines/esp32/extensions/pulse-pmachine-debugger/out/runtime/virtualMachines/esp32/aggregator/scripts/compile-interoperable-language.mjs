@@ -1,8 +1,8 @@
 import { compileRouterMapperDSL } from './compile-pascal.mjs';
 import { compileCobolishWithAntlr } from './cobolish-antlr-compiler.mjs';
-import { compileVbishWithAntlr } from './vbish-antlr-compiler.mjs';
+import { compileVbishWithAntlr } from '../../../../languages/vbish/src/vbish-antlr-compiler.mjs';
 import { compileCobolishToPcode } from './compile-cobolish-to-pcode.mjs';
-import { compileVbishToPcode } from './compile-vbish-to-pcode.mjs';
+import { compileVbishToPcode } from '../../../../languages/vbish/src/compile-vbish-to-pcode.mjs';
 import { emitMapperRoutinePcode } from './compile-mapping-rule.mjs';
 import { dslDebug, dslError } from './dsl-debug.mjs';
 
@@ -221,6 +221,10 @@ export function compileCobolishToPmachine(sourceText, options = {}) {
 
 export function compileVbishToPmachine(sourceText, options = {}) {
   dslDebug('vbish', 'compile:start', { fileName: options.fileName || null, chars: String(sourceText || '').length });
+  if (options.profile === 'vb11') {
+    const result = compileVbishToPcode(sourceText, options);
+    return { ...result, interoperability: [], source: String(sourceText) };
+  }
   let native;
   try { native = compileVbishWithAntlr(sourceText, options); } catch (error) { throw dslError('vbish', 'antlr', error); }
   if (!native.valid) throw dslError('vbish', 'parse', new Error(native.syntaxErrors.join('\n')));

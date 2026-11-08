@@ -426,11 +426,11 @@ statement/clause combinations and Tandem NonStop system intrinsics still need
 implementation and independent conformance tests. Pulse-specific service and
 metadata clauses are extensions, not syntax defined by the HP manual.
 
-## ESP32 PMachine COBOL engine
+## Generic ESP32 PMachine COBOL execution
 
 COBOL semantics are implemented and tested on the JavaScript PMachine first.
-The ESP32 PMachine runs the same P-code on a native engine, `cobolvm`
-(`pmachines/arduino/src/cobol_vm*.cpp`), that reproduces `runtime.mjs`:
+The ESP32 PMachine runs the same P-code through the generic dispatcher in
+`pmachines/arduino/src/pmachine.cpp`, using shared `scalar_runtime` primitives:
 
 - `PUSH_DEC`/`DEC_*` arbitrary-precision decimal arithmetic (the scale-20
   division intermediate, ROUNDED, ON SIZE ERROR) and `DEC_DISPLAY`.
@@ -439,10 +439,8 @@ The ESP32 PMachine runs the same P-code on a native engine, `cobolvm`
 - The `host.string_*`, `host.math_*` and date bindings, implemented natively.
 - Quoted-string escape decoding (LOW-VALUE NUL bytes).
 
-`parseTextPCode` recognises COBOL P-code (compiler header or COBOL-only
-opcodes) and returns one `OP_COBOL_PROGRAM` (`0xFD`) instruction, which
-`runInstructions` hands to the engine. That marker is native-only and is
-deliberately not in the shared opcode manifest. Program maps pass COBOL
+There is no separate COBOL VM or compiler-header detection/delegation.
+The loader returns the actual instructions from compiler output. Program maps pass COBOL
 `globals` and procedure `locals` to the machine as `@globals` and
 `@locals:LABEL` signature entries. Output, `__runtime_error`, the step count
 and limit (200000), and globals are reported through the normal run results.
@@ -452,9 +450,11 @@ desktop. `host.isam_*` and `host.fs_*` calls are checked against the
 binding contract and then delegated to the machine's host-call hook; without
 one they fail with `Host binding unavailable`.
 
-Parity is checked by exporting every executable CCVS case that needs no file
-host (89 of 132) with its JavaScript output, then running the P-code through
-`cobolvm` built with desktop g++; all outputs match line for line.
+The generic native conformance test compiles executable nucleus/intrinsic CCVS
+cases, then compares original compiler output against the JavaScript and native
+generic P-machines. It does not strip compiler headers or allow legacy fallback.
+Display/edit masks are library-owned; exact decimals and reference semantics
+remain shared runtime primitives.
 
 `node scripts/check-pcode-compat.mjs` (from `aggregator`) still reports the
 pre-existing manifest gaps `OP_FSM`, `OP_GPIO_WRITE`, `OP_DELAY_MS` and

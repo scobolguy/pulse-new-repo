@@ -11,6 +11,33 @@ import { render, walk } from '../../../../languages/mnf/runtime/fortran-library.
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
+test('FORTRAN formatting is library-owned and native runtimes have no specialized COBOL VM', async () => {
+  const nativeRoot = path.join(root, 'pmachines', 'arduino', 'src');
+  const names = await readdir(nativeRoot);
+  assert.ok(!names.some(name => /cobol[_-]?vm/i.test(name)));
+  const [adapter, header, machine, jsMachine, library] = await Promise.all([
+    readFile(path.join(nativeRoot, 'fortran_format.cpp'), 'utf8'),
+    readFile(path.join(nativeRoot, 'fortran_format.h'), 'utf8'),
+    readFile(path.join(nativeRoot, 'pmachine.cpp'), 'utf8'),
+    readFile(path.join(root, 'pmachines', 'javascript', 'src', 'runtime.mjs'), 'utf8'),
+    readFile(path.join(root, 'libraries', 'fortran', 'fortran_format.cpp'), 'utf8'),
+  ]);
+  const withoutComments = text => text.replace(/\/\/[^\r\n]*|\/\*[\s\S]*?\*\//g, '')
+    .split(/\r?\n/).map(line => line.trim()).filter(Boolean).join('\n');
+  assert.equal(withoutComments(adapter), '#include "../../../libraries/fortran/fortran_format.cpp"');
+  assert.equal(withoutComments(header), '#pragma once\n#include "../../../libraries/fortran/fortran_format.h"');
+  const [fileAdapter, fileHeader] = await Promise.all([
+    readFile(path.join(nativeRoot, 'fortran_files.cpp'), 'utf8'),
+    readFile(path.join(nativeRoot, 'fortran_files.h'), 'utf8'),
+  ]);
+  assert.equal(withoutComments(fileAdapter), '#include "../../../libraries/fortran/fortran_files.cpp"');
+  assert.equal(withoutComments(fileHeader), '#pragma once\n#include "../../../libraries/fortran/fortran_files.h"');
+  assert.match(library, /bool renderFortranFormat\(/);
+  assert.doesNotMatch(machine, /bool (?:renderFortranFormat|parseFortranFormat)\(|FortranFormatRuntime::/);
+  assert.match(jsMachine, /import .*executeFortranIoIntrinsic.*fortran-io\.mjs/);
+  assert.doesNotMatch(machine + jsMachine, /cobol_vm|OP_COBOL_PROGRAM|runCobolProgram/);
+});
+
 async function compareFormats(executable) {
   const cases = [];
   const add = (format, items) => cases.push({ format, items });
@@ -78,8 +105,8 @@ test('Arduino FORTRAN RTL numeric, FORMAT input/output and bounded storage agree
       ['system', ['testing/pmachines/system-runtime.test.cpp', 'pmachines/arduino/src/system_runtime.cpp']],
       ['fortran', ['testing/pmachines/fortran-runtime.test.cpp', 'pmachines/arduino/src/fortran_runtime.cpp']],
       ['objects', ['testing/pmachines/managed-objects.test.cpp']],
-      ['format', ['testing/pmachines/fortran-format.test.cpp', 'pmachines/arduino/src/fortran_format.cpp', 'pmachines/arduino/src/fortran_files.cpp', 'pmachines/arduino/src/fortran_runtime.cpp']],
-      ['files', ['testing/pmachines/fortran-files.test.cpp', 'pmachines/arduino/src/fortran_format.cpp', 'pmachines/arduino/src/fortran_files.cpp', 'pmachines/arduino/src/fortran_runtime.cpp']],
+      ['format', ['testing/pmachines/fortran-format.test.cpp', 'libraries/fortran/fortran_format.cpp', 'libraries/fortran/fortran_files.cpp', 'pmachines/arduino/src/fortran_runtime.cpp']],
+      ['files', ['testing/pmachines/fortran-files.test.cpp', 'libraries/fortran/fortran_format.cpp', 'libraries/fortran/fortran_files.cpp', 'pmachines/arduino/src/fortran_runtime.cpp']],
     ]) {
       const executable = path.join(directory, `${name}${process.platform === 'win32' ? '.exe' : ''}`);
       const compiled = spawnSync(process.env.CXX || 'g++', [
